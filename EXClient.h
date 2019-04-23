@@ -55,6 +55,13 @@ public:
 
     Info info;
 
+    /// true if we are connected, have received a serverVersion, have received a height
+    bool isGood() const;
+    /// true if we are connected but haven't received any response in some time
+    bool isStale() const;
+    /// true if we got a malformed reply from the server
+    bool isBad() const { return status == Bad; }
+
 signals:
     void gotResponse(EXResponse);
     void newConnection();
@@ -76,19 +83,25 @@ protected:
         Bad
     };
 
-    Status status = NotConnected;
-    qint64 lastGood = 0LL; // timestamp in ms from Util::getTime() when the server was last good (last communicated a sensible message, pinged, etc)
+    std::atomic<Status> status = NotConnected;
+    std::atomic<qint64> lastGood = 0LL, ///< timestamp in ms from Util::getTime() when the server was last good (last communicated a sensible message, pinged, etc)
+                        lastConnectionAttempt = 0LL;  ///< the last time we tried to reconnect
+
+    static const qint64 reconnectTime = 10*60*1000; /// retry every 10 mins
 
     QThread thread;
 
     void start();
     void stop();
+    void restart() { stop(); start(); }
 
     QString host;
     quint16 tport = 0, sport = 0;
 
     std::atomic_int reqid = 0;
 private:
+    static const int pingtime_ms = 60*1000;  /// send server.ping every 1 min
+    static const qint64 stale_threshold = 5*pingtime_ms;
     EXMgr *mgr = nullptr;
     QTcpSocket *socket = nullptr;
     QMap<int, QString> idMethodMap;

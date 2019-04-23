@@ -26,6 +26,17 @@ QString EXClient::hostPrettyName() const
     return QString("%1 %2 %3%4").arg(type).arg(host).arg(ip).arg(port);
 }
 
+bool EXClient::isGood() const
+{
+    return thread.isRunning() && socket && socket->isOpen() && status == Connected
+            && !info.serverVersion[0].isEmpty() && !info.serverVersion[1].isEmpty() && info.height > 0;
+}
+
+bool EXClient::isStale() const
+{
+    return isGood() && Util::getTime() - lastGood > stale_threshold;
+}
+
 void EXClient::start()
 {
     if (thread.isRunning()) return;
@@ -77,6 +88,7 @@ void EXClient::killSocket()
 void EXClient::reconnect()
 {
     killSocket();
+    lastConnectionAttempt = Util::getTime();
     if (tport) {
         socket = new QTcpSocket(this);
         connect(socket, &QAbstractSocket::connected, this, [this]{
@@ -145,7 +157,7 @@ void EXClient::start_keepAlive()
     keepAliveTimer = new QTimer(this);
     keepAliveTimer->setSingleShot(false);
     connect(keepAliveTimer, SIGNAL(timeout()), this, SLOT(on_keepAlive()));
-    keepAliveTimer->start(1000*60);  // every minute
+    keepAliveTimer->start(pingtime_ms/* 1 minute */);
 }
 
 void EXClient::on_keepAlive()

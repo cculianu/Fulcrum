@@ -21,9 +21,13 @@ protected slots:
     void onLostConnection();
     void onResponse(EXResponse);
 
+private slots:
+    void checkClients();
+
 private:
     void loadServers();
     QList<EXClient *> clients;
+    QTimer *checkClientsTimer = nullptr;
 };
 
 #endif // ECMGR_H

@@ -46,6 +46,9 @@ void EXMgr::loadServers()
     if (clients.isEmpty()) {
         throw Exception("No ElectrumX servers! Cannot proceed.");
     }
+    checkClientsTimer = new QTimer(this); checkClientsTimer->setSingleShot(false);
+    connect(checkClientsTimer, SIGNAL(timeout()), this, SLOT(checkClients()));
+    checkClientsTimer->start(EXClient::reconnectTime/2);
     Log() << "ElectrumX Manager started, found " << clients.count() << " servers from compiled-in servers.json";
 }
 
@@ -68,7 +71,7 @@ void EXMgr::onLostConnection()
         Error() << __FUNCTION__ << ": no sender!";
         return;
     }
-    Debug () << "Connection lost for " << client->host;
+    Debug () << "Connection lost for " << client->host << ", status: " << client->status;
 }
 
 void EXMgr::onResponse(EXResponse r)
@@ -91,5 +94,28 @@ void EXMgr::onResponse(EXResponse r)
         // ignore...
     } else {
         Error() << "Unknown method \"" << r.method << "\" from " << client->host;
+    }
+}
+
+void EXMgr::checkClients() ///< called from the checkClientsTimer every 5 mins
+{
+    static const qint64 bad_timeout = 15*60*1000, ///< 15 mins
+                        stale_timeout = EXClient::reconnectTime;
+    Debug() << "Checking clients...";
+    for (EXClient *client : clients) {
+        const auto now = Util::getTime();
+        if (client->isGood() && !client->isStale())
+            continue;
+        qint64 elapsed = qMin(now-client->lastConnectionAttempt, now-client->lastGood);
+        if (client->isBad() && elapsed  > bad_timeout) {
+            Log() << "'Bad' EX host " << client->host << ", reconnecting...";
+            client->restart();
+        } else if (client->isStale() && elapsed > stale_timeout) {
+            Log() << "'Stale' EX host " << client->host << ", reconnecting...";
+            client->restart();
+        } else if (!client->isGood() && elapsed > stale_timeout) {
+            Log() << "EX host " << client->host << ", retrying...";
+            client->restart();
+        }
     }
 }
