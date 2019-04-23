@@ -11,7 +11,19 @@ public:
     virtual ~Exception();
 };
 
+class BadArgs : public Exception
+{
+public:
+    BadArgs(const QString & what = "Bad Arguments") : Exception(what) {}
+    ~BadArgs();
+};
+
 #define APPNAME "ShuffleUpServer"
 #define VERSION "1.0"
-
+#define DEFAULT_PORT 2641
+#ifdef QT_DEBUG
+#  define VERSION_EXTRA "(Debug)"
+#else
+#  define VERSION_EXTRA "(Release)"
+#endif
 #endif // EXCEPTIONS_H

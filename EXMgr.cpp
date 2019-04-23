@@ -1,7 +1,8 @@
 #include "EXMgr.h"
 #include "EXClient.h"
 #include "Util.h"
-EXMgr::EXMgr(QObject *parent) : QObject(parent)
+EXMgr::EXMgr(const QString & serversFile, QObject *parent)
+    : QObject(parent), serversFile(serversFile)
 {
     static bool initted_meta = false;
     if (!initted_meta) {
@@ -22,7 +23,7 @@ EXMgr::~EXMgr()
 
 void EXMgr::loadServers()
 {
-    auto v = Util::Json::parseFile(":/file/servers.json");
+    auto v = Util::Json::parseFile(serversFile);
     auto m = v.toMap();
     for (auto it = m.constBegin(); it != m.constEnd(); ++it) {
         auto smap = it.value().toMap();

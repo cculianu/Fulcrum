@@ -80,7 +80,7 @@ Log::~Log()
 {
     if (doprt) {
         s.flush(); // does nothing probably..
-        QString dateStr = QString("[") + QDateTime::currentDateTime().toString("yyyy.MM.dd hh:mm:ss.zzz") + QString("] ");
+        QString dateStr = app()->options.syslogMode ? "" : QString("[") + QDateTime::currentDateTime().toString("yyyy.MM.dd hh:mm:ss.zzz") + QString("] ");
         QString thrdStr = "";
 
         if (QThread *th = QThread::currentThread(); th && qApp && th != qApp->thread()) {
@@ -151,6 +151,8 @@ Debug::Debug(const char *fmt...)
 
 Debug::~Debug()
 {
+    doprt = app()->options.verboseDebug;
+    if (!doprt) return;
     if (!colorOverridden) color = Blue;
     str = QString("(Debug) ") + str;
 }

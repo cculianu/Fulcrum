@@ -10,7 +10,7 @@ class EXMgr : public QObject
 {
     Q_OBJECT
 public:
-    explicit EXMgr(QObject *parent = nullptr);
+    explicit EXMgr(const QString & serversFile, QObject *parent = nullptr);
     virtual ~EXMgr();
 signals:
 
@@ -25,6 +25,7 @@ private slots:
     void checkClients();
 
 private:
+    const QString serversFile;
     void loadServers();
     QList<EXClient *> clients;
     QTimer *checkClientsTimer = nullptr;
