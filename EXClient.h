@@ -102,7 +102,7 @@ private:
     QTcpSocket *socket = nullptr; ///< this should only ever be touched in our thread
     std::atomic_int reqid = 0;
     QMap<int, QString> idMethodMap;
-    QTimer *keepAliveTimer = nullptr;
+    QTimer *pingTimer = nullptr;
 
     /// returns utf-8 encoded JSON data for a request
     static QByteArray makeRequestData(int id, const QString &method, const QVariantList & params = QVariantList());
@@ -114,13 +114,13 @@ private:
     void killSocket();
     void reconnect();
     void on_connected();
-    void start_keepAlive();
-    void kill_keepAlive();
+    void start_pingTimer();
+    void kill_pingTimer();
 private slots:
     void on_readyRead();
     void on_error(QAbstractSocket::SocketError);
     void on_socketState(QAbstractSocket::SocketState);
-    void on_keepAlive();
+    void on_pingTimer();
 };
 
 #endif // EXCLIENT_H

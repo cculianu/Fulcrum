@@ -155,21 +155,21 @@ int EXClient::_sendRequest(const QString &method, const QVariantList &params)
     return id;
 }
 
-void EXClient::kill_keepAlive()
+void EXClient::kill_pingTimer()
 {
-    if (keepAliveTimer) { delete keepAliveTimer; keepAliveTimer = nullptr; }
+    if (pingTimer) { delete pingTimer; pingTimer = nullptr; }
 }
 
-void EXClient::start_keepAlive()
+void EXClient::start_pingTimer()
 {
-    kill_keepAlive();
-    keepAliveTimer = new QTimer(this);
-    keepAliveTimer->setSingleShot(false);
-    connect(keepAliveTimer, SIGNAL(timeout()), this, SLOT(on_keepAlive()));
-    keepAliveTimer->start(pingtime_ms/* 1 minute */);
+    kill_pingTimer();
+    pingTimer = new QTimer(this);
+    pingTimer->setSingleShot(false);
+    connect(pingTimer, SIGNAL(timeout()), this, SLOT(on_pingTimer()));
+    pingTimer->start(pingtime_ms/* 1 minute */);
 }
 
-void EXClient::on_keepAlive()
+void EXClient::on_pingTimer()
 {
     emit sendRequest("server.ping");
 }
@@ -181,13 +181,13 @@ void EXClient::on_connected()
     connect(socket, SIGNAL(readyRead()), this, SLOT(on_readyRead()));
     connect(socket, &QAbstractSocket::disconnected, this, [this]{
         Debug() << hostPrettyName() << " socket disconnected";
-        kill_keepAlive();
+        kill_pingTimer();
         emit lostConnection(this);
         idMethodMap.clear();
         // todo: put stuff to queue up a reconnect sometime later?
     });
     emit newConnection(this);
-    start_keepAlive();
+    start_pingTimer();
 }
 
 /* static */
