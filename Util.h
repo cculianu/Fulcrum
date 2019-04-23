@@ -8,6 +8,10 @@
 namespace Util {
     extern QString basename(const QString &);
 
+    qint64 getTime(); ///< returns a timestamp in milliseconds
+    qint64 getTimeNS(); ///< returns a timestamp in nanoseconds
+    double getTimeSecs(); ///< returns a timestamp in seconds
+
     namespace Json {
         class Error : public Exception {
         public:

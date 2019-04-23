@@ -2,7 +2,7 @@
 #include "App.h"
 #include "Logger.h"
 #include <iostream>
-
+#include <chrono>
 namespace Util {
     QString basename(const QString &s) {
         QRegExp re("[\\/]");
@@ -10,6 +10,20 @@ namespace Util {
         return toks.last();
     }
 
+    qint64 getTime() {
+        return getTimeNS() / 1000000LL;
+    }
+
+
+    static const std::chrono::time_point t0(std::chrono::high_resolution_clock::now());
+    qint64 getTimeNS() {
+        auto now = std::chrono::high_resolution_clock::now();
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(now - t0).count();
+    }
+
+    double getTimeSecs() {
+        return double(getTime()) / 1000.0;
+    }
 
     namespace Json {
         Error::Error(const QString &what)

@@ -12,6 +12,7 @@ App::App(int argc, char *argv[])
 
     setApplicationName(APPNAME);
     setApplicationVersion(VERSION);
+
     Log() << applicationName() << " " << applicationVersion() << " starting up ...";
 
     connect(this, &App::aboutToQuit, this, &App::cleanup);

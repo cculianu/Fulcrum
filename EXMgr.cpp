@@ -3,6 +3,11 @@
 #include "Util.h"
 EXMgr::EXMgr(QObject *parent) : QObject(parent)
 {
+    static bool initted_meta = false;
+    if (!initted_meta) {
+        qRegisterMetaType<EXResponse>();
+        initted_meta = true;
+    }
     loadServers();
 }
 
@@ -22,8 +27,8 @@ void EXMgr::loadServers()
     for (auto it = m.constBegin(); it != m.constEnd(); ++it) {
         auto smap = it.value().toMap();
         bool versionok = !smap.isEmpty() && smap.value("version", "").toString().startsWith("1.4");
-        int tport = versionok ? smap.value("t", 0).toInt() : 0;
-        int sport = versionok ? smap.value("s", 0).toInt() : 0;
+        quint16 tport = versionok ? quint16(smap.value("t", 0).toUInt()) : 0U;
+        quint16 sport = versionok ? quint16(smap.value("s", 0).toUInt()) : 0U;
         bool ok = versionok && (tport || sport);
         QString host = it.key();
         //Debug() << "Server: " << host << " s:" << sport << " t:" << tport << " " << (ok ? "ok" : "not ok");
