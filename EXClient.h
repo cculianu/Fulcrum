@@ -87,7 +87,7 @@ protected:
     std::atomic<qint64> lastGood = 0LL, ///< timestamp in ms from Util::getTime() when the server was last good (last communicated a sensible message, pinged, etc)
                         lastConnectionAttempt = 0LL;  ///< the last time we tried to reconnect
 
-    static const qint64 reconnectTime = 10*60*1000; /// retry every 10 mins
+    static const qint64 reconnectTime = 3*60*1000; /// retry every 3 mins
 
     QThread thread;
 
@@ -98,12 +98,12 @@ protected:
     QString host;
     quint16 tport = 0, sport = 0;
 
-    std::atomic_int reqid = 0;
 private:
     static const int pingtime_ms = 60*1000;  /// send server.ping every 1 min
-    static const qint64 stale_threshold = 5*pingtime_ms;
+    static const qint64 stale_threshold = reconnectTime;
     EXMgr *mgr = nullptr;
     QTcpSocket *socket = nullptr;
+    std::atomic_int reqid = 0;
     QMap<int, QString> idMethodMap;
     QTimer *keepAliveTimer = nullptr;
 

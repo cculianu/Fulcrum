@@ -97,10 +97,10 @@ void EXMgr::onResponse(EXResponse r)
     }
 }
 
-void EXMgr::checkClients() ///< called from the checkClientsTimer every 5 mins
+void EXMgr::checkClients() ///< called from the checkClientsTimer every 1.5 mins
 {
-    static const qint64 bad_timeout = 15*60*1000, ///< 15 mins
-                        stale_timeout = EXClient::reconnectTime;
+    static const qint64 bad_timeout = 15*60*1000, // 15 mins
+                        stale_timeout = EXClient::reconnectTime; // 3 mins
     Debug() << "Checking clients...";
     for (EXClient *client : clients) {
         const auto now = Util::getTime();

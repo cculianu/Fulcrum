@@ -141,6 +141,9 @@ int EXClient::_sendRequest(const QString &method, const QVariantList &params)
         return 0;
     }
     auto id = ++reqid;
+    while (idMethodMap.size() > 20000) {  // prevent memory leaks in case of misbehaving server
+        idMethodMap.erase(idMethodMap.begin());
+    }
     idMethodMap[id] = method;
     socket->write(makeRequestData(id, method, params));
     return id;
@@ -173,6 +176,7 @@ void EXClient::on_connected()
         Debug() << hostPrettyName() << " socket disconnected";
         kill_keepAlive();
         emit lostConnection();
+        idMethodMap.clear();
         // todo: put stuff to queue up a reconnect sometime later?
     });
     emit newConnection();
