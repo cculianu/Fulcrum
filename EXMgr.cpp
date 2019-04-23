@@ -52,40 +52,26 @@ void EXMgr::loadServers()
     Log() << "ElectrumX Manager started, found " << clients.count() << " servers from compiled-in servers.json";
 }
 
-void EXMgr::onNewConnection()
+void EXMgr::onNewConnection(EXClient *client)
 {
-    EXClient *client = sender() ? dynamic_cast<EXClient *>(sender()) : nullptr;
-    if (!client) {
-        Error() << __FUNCTION__ << ": no sender!";
-        return;
-    }
     Debug () << "New connection for " << client->host;
     emit client->sendRequest("server.version", QVariantList({QString("%1/%2").arg(APPNAME).arg(VERSION), QString("1.4")}));
     emit client->sendRequest("blockchain.headers.subscribe");
 }
 
-void EXMgr::onLostConnection()
+void EXMgr::onLostConnection(EXClient *client)
 {
-    EXClient *client = sender() ? dynamic_cast<EXClient *>(sender()) : nullptr;
-    if (!client) {
-        Error() << __FUNCTION__ << ": no sender!";
-        return;
-    }
     Debug () << "Connection lost for " << client->host << ", status: " << client->status;
+    client->info.clear();
 }
 
-void EXMgr::onResponse(EXResponse r)
+void EXMgr::onResponse(EXClient *client, EXResponse r)
 {
-    EXClient *client = sender() ? dynamic_cast<EXClient *>(sender()) : nullptr;
-    if (!client) {
-        Error() << __FUNCTION__ << ": no sender!";
-        return;
-    }
     Debug() << "(" << client->host << ") Got response in mgr to " << r.method;
     if (r.method == "server.version") {
-        client->info.serverVersion[0] = r.result.toList()[0].toString();
-        client->info.serverVersion[1] = r.result.toList()[1].toString();
-        Debug() << "Got server version: " << client->info.serverVersion[0] << " / " << client->info.serverVersion[1];
+        client->info.serverVersion.first = r.result.toList()[0].toString();
+        client->info.serverVersion.second = r.result.toList()[1].toString();
+        Debug() << "Got server version: " << client->info.serverVersion.first << " / " << client->info.serverVersion.second;
     } else if (r.method == "blockchain.headers.subscribe") {
         client->info.height = r.result.toMap().value("height", 0).toInt();
         client->info.header = r.result.toMap().value("hex", "").toString();

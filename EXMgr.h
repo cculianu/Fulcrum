@@ -17,9 +17,9 @@ signals:
 public slots:
 
 protected slots:
-    void onNewConnection();
-    void onLostConnection();
-    void onResponse(EXResponse);
+    void onNewConnection(EXClient *);
+    void onLostConnection(EXClient *);
+    void onResponse(EXClient *, EXResponse);
 
 private slots:
     void checkClients();

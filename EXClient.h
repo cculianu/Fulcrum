@@ -7,6 +7,7 @@
 #include <QVariant>
 #include <atomic>
 #include <QTimer>
+#include <QPair>
 #include "Common.h"
 
 class BadServerReply : public Exception {
@@ -45,15 +46,15 @@ public:
                       quint16 tcpPort, quint16 sslPort);
     ~EXClient();
 
-    QString hostPrettyName() const;
-
     struct Info {
-        QString serverVersion[2] = { "", "" };
+        QPair<QString, QString> serverVersion = { "", "" };
         int height = 0;
         QString header;
+        bool isValid() const { return !serverVersion.first.isEmpty() && !serverVersion.second.isEmpty() && height > 0; }
+        void clear() { serverVersion = { "", ""}; height = 0; header = ""; }
     };
 
-    Info info;
+    Info info; ///< this is managed by the main thread
 
     /// true if we are connected, have received a serverVersion, have received a height
     bool isGood() const;
@@ -63,14 +64,16 @@ public:
     bool isBad() const { return status == Bad; }
 
 signals:
-    void gotResponse(EXResponse);
-    void newConnection();
-    void lostConnection();
+    void gotResponse(EXClient *, EXResponse);
+    void newConnection(EXClient *);
+    void lostConnection(EXClient *);
+    /// call (emit) this to send a requesst to the server
     void sendRequest(const QString &method, const QVariantList & params = QVariantList());
 
 public slots:
 
 protected slots:
+    /// actual implentation that prepares the request. Is connected to sendRequest() above. Runs in thread.
     int _sendRequest(const QString &method, const QVariantList & params = QVariantList());
 
 protected:
@@ -91,9 +94,9 @@ protected:
 
     QThread thread;
 
-    void start();
-    void stop();
-    void restart() { stop(); start(); }
+    void start(); ///< call from main thread
+    void stop(); ///< call from main thread
+    void restart() { stop(); start(); } ///< call from main thread
 
     QString host;
     quint16 tport = 0, sport = 0;
@@ -102,13 +105,15 @@ private:
     static const int pingtime_ms = 60*1000;  /// send server.ping every 1 min
     static const qint64 stale_threshold = reconnectTime;
     EXMgr *mgr = nullptr;
-    QTcpSocket *socket = nullptr;
+    QTcpSocket *socket = nullptr; ///< this should only ever be touched in our thread
     std::atomic_int reqid = 0;
     QMap<int, QString> idMethodMap;
     QTimer *keepAliveTimer = nullptr;
 
     /// returns utf-8 encoded JSON data for a request
     static QByteArray makeRequestData(int id, const QString &method, const QVariantList & params = QVariantList());
+
+    QString hostPrettyName() const; ///< called only from our thread otherwise it may crash
 
     void on_started();
     void on_finished();

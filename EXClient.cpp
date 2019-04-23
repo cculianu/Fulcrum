@@ -18,6 +18,7 @@ EXClient::~EXClient()
     stop();
 }
 
+/// this should only be called from our thread, because it accesses socket which should only be touched from thread
 QString EXClient::hostPrettyName() const
 {
     QString type = socket ? (dynamic_cast<QSslSocket *>(socket) ? "SSL" : "TCP") : "(NoSocket)";
@@ -28,8 +29,7 @@ QString EXClient::hostPrettyName() const
 
 bool EXClient::isGood() const
 {
-    return thread.isRunning() && socket && socket->isOpen() && status == Connected
-            && !info.serverVersion[0].isEmpty() && !info.serverVersion[1].isEmpty() && info.height > 0;
+    return thread.isRunning() && status == Connected && info.isValid();
 }
 
 bool EXClient::isStale() const
@@ -170,16 +170,17 @@ void EXClient::on_keepAlive()
 
 void EXClient::on_connected()
 {
+    // runs in thread
     Debug() << __FUNCTION__;
     connect(socket, SIGNAL(readyRead()), this, SLOT(on_readyRead()));
     connect(socket, &QAbstractSocket::disconnected, this, [this]{
         Debug() << hostPrettyName() << " socket disconnected";
         kill_keepAlive();
-        emit lostConnection();
+        emit lostConnection(this);
         idMethodMap.clear();
         // todo: put stuff to queue up a reconnect sometime later?
     });
-    emit newConnection();
+    emit newConnection(this);
     start_keepAlive();
 }
 
@@ -271,7 +272,7 @@ void EXClient::on_readyRead()
             resp.validate(); // may throw, may modify resp
             Debug() << "Parsed response: " << resp.toString();
             lastGood = Util::getTime();
-            emit gotResponse(resp);
+            emit gotResponse(this, resp);
         }
     } catch (const Exception &e) {
         Error() << "Error reading/parsing response: " << e.what();
