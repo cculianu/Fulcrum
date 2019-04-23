@@ -11,7 +11,7 @@ public:
     virtual ~Exception();
 };
 
-#define APPNAME "Test Shuffle Up Server"
+#define APPNAME "ShuffleUpServer"
 #define VERSION "1.0"
 
 #endif // EXCEPTIONS_H
