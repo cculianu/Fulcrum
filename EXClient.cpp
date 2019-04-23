@@ -3,6 +3,12 @@
 #include "Util.h"
 #include <QtNetwork>
 
+class BadServerReply : public Exception {
+public:
+    BadServerReply(const QString &what) : Exception(what) {}
+    ~BadServerReply();
+};
+
 BadServerReply::~BadServerReply() {}
 
 EXClient::EXClient(EXMgr *mgr, const QString &host, quint16 tport, quint16 sport)

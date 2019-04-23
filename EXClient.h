@@ -10,12 +10,6 @@
 #include <QPair>
 #include "Common.h"
 
-class BadServerReply : public Exception {
-public:
-    BadServerReply(const QString &what) : Exception(what) {}
-    ~BadServerReply();
-};
-
 struct EXResponse
 {
     static EXResponse fromJson(const QString &json); ///< may throw Exception
