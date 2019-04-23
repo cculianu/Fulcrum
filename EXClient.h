@@ -6,6 +6,7 @@
 #include <QTcpSocket>
 #include <QVariant>
 #include <atomic>
+#include <QTimer>
 #include "Common.h"
 
 class BadServerReply : public Exception {
@@ -18,7 +19,7 @@ struct EXResponse
 {
     static EXResponse fromJson(const QString &json); ///< may throw Exception
 
-    void chkValid() const; ///< checks the QVariant is the expected format for each method. throws BadServerReply if it's not
+    void validate(); ///< checks the QVariant is the expected format for each method. throws BadServerReply if it's not
 
     QString toString() const;
 
@@ -46,7 +47,24 @@ public:
 
     QString hostPrettyName() const;
 
-    int sendRequest(const QString &method, const QVariantList & params = QVariantList());
+    struct Info {
+        QString serverVersion[2] = { "", "" };
+        int height = 0;
+        QString header;
+    };
+
+    Info info;
+
+signals:
+    void gotResponse(EXResponse);
+    void newConnection();
+    void lostConnection();
+    void sendRequest(const QString &method, const QVariantList & params = QVariantList());
+
+public slots:
+
+protected slots:
+    int _sendRequest(const QString &method, const QVariantList & params = QVariantList());
 
 protected:
     friend class EXMgr;
@@ -70,14 +88,11 @@ protected:
     quint16 tport = 0, sport = 0;
 
     std::atomic_int reqid = 0;
-signals:
-    void gotResponse(EXResponse);
-public slots:
-
 private:
     EXMgr *mgr = nullptr;
     QTcpSocket *socket = nullptr;
     QMap<int, QString> idMethodMap;
+    QTimer *keepAliveTimer = nullptr;
 
     /// returns utf-8 encoded JSON data for a request
     static QByteArray makeRequestData(int id, const QString &method, const QVariantList & params = QVariantList());
@@ -87,10 +102,13 @@ private:
     void killSocket();
     void reconnect();
     void on_connected();
+    void start_keepAlive();
+    void kill_keepAlive();
 private slots:
     void on_readyRead();
     void on_error(QAbstractSocket::SocketError);
     void on_socketState(QAbstractSocket::SocketState);
+    void on_keepAlive();
 };
 
 #endif // EXCLIENT_H

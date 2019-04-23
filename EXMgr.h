@@ -3,7 +3,7 @@
 
 #include <QObject>
 #include <QList>
-
+#include "EXClient.h"
 class EXClient;
 
 class EXMgr : public QObject
@@ -15,6 +15,12 @@ public:
 signals:
 
 public slots:
+
+protected slots:
+    void onNewConnection();
+    void onLostConnection();
+    void onResponse(EXResponse);
+
 private:
     void loadServers();
     QList<EXClient *> clients;

@@ -33,6 +33,7 @@ void EXClient::start()
     moveToThread(&thread);
     connect(&thread, &QThread::started, this, &EXClient::on_started);
     connect(&thread, &QThread::finished, this, &EXClient::on_finished);
+    connect(this, &EXClient::sendRequest, this, &EXClient::_sendRequest);
     thread.start();
 }
 
@@ -43,6 +44,7 @@ void EXClient::stop()
         thread.quit();
         thread.wait();
     }
+    disconnect(this, &EXClient::sendRequest, this, &EXClient::_sendRequest);
     disconnect(&thread, &QThread::started, this, &EXClient::on_started);
     disconnect(&thread, &QThread::finished, this, &EXClient::on_finished);
 }
@@ -83,6 +85,7 @@ void EXClient::reconnect()
         });
         connect(socket, SIGNAL(error(QAbstractSocket::SocketError)), this, SLOT(on_error(QAbstractSocket::SocketError)));
         connect(socket, SIGNAL(stateChanged(QAbstractSocket::SocketState)), this, SLOT(on_socketState(QAbstractSocket::SocketState)));
+        socket->setSocketOption(QAbstractSocket::KeepAliveOption, true);  // from Qt docs: required on Windows
         socket->connectToHost(host, static_cast<quint16>(tport));
     } else if (sport) {
         QSslSocket *ssl;
@@ -93,6 +96,7 @@ void EXClient::reconnect()
         });
         connect(socket, SIGNAL(error(QAbstractSocket::SocketError)), this, SLOT(on_error(QAbstractSocket::SocketError)));
         connect(socket, SIGNAL(stateChanged(QAbstractSocket::SocketState)), this, SLOT(on_socketState(QAbstractSocket::SocketState)));
+        socket->setSocketOption(QAbstractSocket::KeepAliveOption, true);  // from Qt docs: required on Windows
         ssl->connectToHostEncrypted(host, static_cast<quint16>(sport));
     } else {
         Error() << "No ssl port or tcp port defined for " << host << "!";
@@ -118,23 +122,49 @@ void EXClient::on_socketState(QAbstractSocket::SocketState s)
     }
 }
 
-int EXClient::sendRequest(const QString &method, const QVariantList &params)
+int EXClient::_sendRequest(const QString &method, const QVariantList &params)
 {
+    if (status != Connected) {
+        Error() << __FUNCTION__ << " method: " << method << "; Not connected!";
+        return 0;
+    }
     auto id = ++reqid;
     idMethodMap[id] = method;
     socket->write(makeRequestData(id, method, params));
     return id;
 }
 
+void EXClient::kill_keepAlive()
+{
+    if (keepAliveTimer) { delete keepAliveTimer; keepAliveTimer = nullptr; }
+}
+
+void EXClient::start_keepAlive()
+{
+    kill_keepAlive();
+    keepAliveTimer = new QTimer(this);
+    keepAliveTimer->setSingleShot(false);
+    connect(keepAliveTimer, SIGNAL(timeout()), this, SLOT(on_keepAlive()));
+    keepAliveTimer->start(1000*60);  // every minute
+}
+
+void EXClient::on_keepAlive()
+{
+    emit sendRequest("server.ping");
+}
+
 void EXClient::on_connected()
 {
     Debug() << __FUNCTION__;
+    connect(socket, SIGNAL(readyRead()), this, SLOT(on_readyRead()));
     connect(socket, &QAbstractSocket::disconnected, this, [this]{
         Debug() << hostPrettyName() << " socket disconnected";
+        kill_keepAlive();
+        emit lostConnection();
         // todo: put stuff to queue up a reconnect sometime later?
     });
-    connect(socket, SIGNAL(readyRead()), this, SLOT(on_readyRead()));
-    sendRequest("server.version");
+    emit newConnection();
+    start_keepAlive();
 }
 
 /* static */
@@ -145,7 +175,8 @@ EXResponse EXResponse::fromJson(const QString &json)
     if (jsonrpc != "2.0")
         throw BadServerReply(QString("Unexpected or missing jsonrpc version: \"%1\"").arg(jsonrpc));
     const int id = m.value("id", -1).toInt();
-    if (id < 0)
+    QString method = m.value("method", "").toString();
+    if (id < 0 && method.isEmpty())
         throw BadServerReply("Bad server reply, missing required id field in JSON");
     QVariantMap err = m.value("error", QVariantMap()).toMap();
     if (!err.isEmpty()) {
@@ -155,17 +186,19 @@ EXResponse EXResponse::fromJson(const QString &json)
         if (code == 123456789 || message.isEmpty())
             throw BadServerReply("Bad server reply, error field in JSON is not of the expected format");
         return EXResponse{
-            jsonrpc, id, "unknown", QVariant(), code, message
+            jsonrpc, id, method, QVariant(), code, message
         };
     }
-    if (m.value("result", QVariant()).isNull()) {
-        throw BadServerReply("Bad server reply, missing result field in JSON");
+    QVariant result = m.value("result", QVariant());
+    if (result.isNull()) {
+        result = m.value("params", QVariant());
     }
+
     return EXResponse{
         jsonrpc,
         id,
-        "unknown",
-        m["result"]
+        method,
+        result
     };
 }
 
@@ -177,17 +210,33 @@ EXResponse::toString() const
             .arg(errorCode).arg(errorMessage);
 }
 
-void EXResponse::chkValid() const
+void EXResponse::validate()
 {
     if (!errorMessage.isEmpty())
         return;
-    if (method == "server.version") {
+    if (method == "server.version" && !result.isNull()) {
         QVariantList l = result.toList();
         if (l.count() < 2 || l[0].toString().isNull() || l[1].toString().isNull())
             throw BadServerReply(QString("%1 expected string list of size 2").arg(method));
+        return; // ok
+    } else if (method == "blockchain.headers.subscribe" && !result.isNull()) {
+        QVariantMap m = result.toMap();
+        QVariantList l = result.toList();
+        if (m.isEmpty() && !l.isEmpty()) {
+            // spontaneous "subscribe" callbacks pass a list containing a dict rather than a straight up dict,
+            // so mogrify ourselves to always contain the dict
+            m = l.last().toMap();
+            result = m; // save back result as a map rather than a list
+        }
+        if (m.isEmpty() || m.count() < 2 || m.value("height", -1).toInt() < 0 || m.value("hex", "").toString().isEmpty()) {
+            throw BadServerReply(QString("%1 expected map with 'height' and 'hex'").arg(method));
+        }
+        return; // ok
+    } else if (method == "server.ping") {
+        // always accept
         return;
     }
-    throw BadServerReply(QString("Unknown or unexpected method \"%1\"").arg(method));
+    throw BadServerReply(QString("Unexpected method \"%1\", and/or incomplete/missing results").arg(method));
 }
 
 void EXClient::on_readyRead()
@@ -198,12 +247,12 @@ void EXClient::on_readyRead()
             auto line = socket->readLine().trimmed();
             Debug() << "Got: " << line;
             auto resp = EXResponse::fromJson(line);
-            auto meth = idMethodMap.take(resp.id);
+            auto meth = resp.id > 0 ? idMethodMap.take(resp.id) : resp.method;
             if (meth.isEmpty()) {
                 throw BadServerReply(QString("Unexpected/unknown message id (%1) in server reply").arg(resp.id));
             }
             resp.method = meth;
-            resp.chkValid(); // may throw
+            resp.validate(); // may throw, may modify resp
             Debug() << "Parsed response: " << resp.toString();
             lastGood = Util::getTime();
             emit gotResponse(resp);

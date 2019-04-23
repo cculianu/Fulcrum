@@ -2,7 +2,7 @@
 
 Logger::Logger(QObject *parent) : QObject(parent)
 {
-    connect(this, &Logger::log, [this](const QString &line){
+    connect(this, &Logger::log, this, [this](const QString &line){
         // we do it in a closure because in this c'tor gotLine isn't defined yet (pure virtual)
         gotLine(line);
     });
