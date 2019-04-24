@@ -32,8 +32,8 @@ EXClient::~EXClient()
 QString EXClient::hostPrettyName() const
 {
     QString type = socket ? (dynamic_cast<QSslSocket *>(socket) ? "SSL" : "TCP") : "(NoSocket)";
-    QString port = socket ? QString(":%1").arg(socket->peerPort()) : "";
-    QString ip = socket ? socket->peerAddress().toString() : "";
+    QString port = socket && socket->peerPort() ? QString(":%1").arg(socket->peerPort()) : "";
+    QString ip = socket && !socket->peerAddress().isNull() ? socket->peerAddress().toString() : "";
     return QString("%1 %2 %3%4").arg(type).arg(host).arg(ip).arg(port);
 }
 
@@ -99,29 +99,32 @@ void EXClient::reconnect()
 {
     killSocket();
     lastConnectionAttempt = Util::getTime();
-    if (tport) {
-        socket = new QTcpSocket(this);
-        connect(socket, &QAbstractSocket::connected, this, [this]{
-            Debug() << hostPrettyName() << " connected " << socket->peerAddress().toString();
-            on_connected();
-        });
-        connect(socket, SIGNAL(error(QAbstractSocket::SocketError)), this, SLOT(on_error(QAbstractSocket::SocketError)));
-        connect(socket, SIGNAL(stateChanged(QAbstractSocket::SocketState)), this, SLOT(on_socketState(QAbstractSocket::SocketState)));
-        socket->setSocketOption(QAbstractSocket::KeepAliveOption, true);  // from Qt docs: required on Windows
-        socket->connectToHost(host, static_cast<quint16>(tport));
-    } else if (sport) {
+    if (sport && QSslSocket::supportsSsl()) {
         QSslSocket *ssl;
         socket = ssl = new QSslSocket(this);
+        auto conf = ssl->sslConfiguration();
+        conf.setPeerVerifyMode(QSslSocket::VerifyNone);
+        ssl->setSslConfiguration(conf);
         connect(ssl, &QSslSocket::encrypted, this, [this]{
-            Debug() << hostPrettyName() << " encrypted " << socket->peerAddress().toString();
+            Debug() << hostPrettyName() << " connected encrypted";
             on_connected();
         });
         connect(socket, SIGNAL(error(QAbstractSocket::SocketError)), this, SLOT(on_error(QAbstractSocket::SocketError)));
         connect(socket, SIGNAL(stateChanged(QAbstractSocket::SocketState)), this, SLOT(on_socketState(QAbstractSocket::SocketState)));
         socket->setSocketOption(QAbstractSocket::KeepAliveOption, true);  // from Qt docs: required on Windows
         ssl->connectToHostEncrypted(host, static_cast<quint16>(sport));
+    } else if (tport) {
+        socket = new QTcpSocket(this);
+        connect(socket, &QAbstractSocket::connected, this, [this]{
+            Debug() << hostPrettyName() << " connected";
+            on_connected();
+        });
+        connect(socket, SIGNAL(error(QAbstractSocket::SocketError)), this, SLOT(on_error(QAbstractSocket::SocketError)));
+        connect(socket, SIGNAL(stateChanged(QAbstractSocket::SocketState)), this, SLOT(on_socketState(QAbstractSocket::SocketState)));
+        socket->setSocketOption(QAbstractSocket::KeepAliveOption, true);  // from Qt docs: required on Windows
+        socket->connectToHost(host, static_cast<quint16>(tport));
     } else {
-        Error() << "No ssl port or tcp port defined for " << host << "!";
+        Error() << "Cannot connect to " << host << "; no TCP port defined and SSL is disabled on this install";
     }
 }
 
@@ -213,7 +216,13 @@ void EXClient::on_connected()
     // runs in thread
     Debug() << __FUNCTION__;
     connect(socket, SIGNAL(readyRead()), this, SLOT(on_readyRead()));
-    connect(socket, SIGNAL(bytesWritten()), this, SLOT(on_bytesWritten()));
+    if (dynamic_cast<QSslSocket *>(socket)) {
+        // for some reason Qt can't find this old-style signal for QSslSocket so we do the below.
+        // Additionally, bytesWritten is never emitted for QSslSocket, violating OOP! Thanks Qt. :P
+        connect(socket, SIGNAL(encryptedBytesWritten(qint64)), this, SLOT(on_bytesWritten()));
+    } else {
+        connect(socket, SIGNAL(bytesWritten()), this, SLOT(on_bytesWritten()));
+    }
     connect(socket, &QAbstractSocket::disconnected, this, [this]{
         Debug() << hostPrettyName() << " socket disconnected";
         kill_pingTimer();
@@ -326,6 +335,7 @@ void EXClient::on_readyRead()
 
 void EXClient::on_bytesWritten()
 {
+    Debug() << __FUNCTION__;
     if (!writeBackLog.isEmpty() && status == Connected) {
         Debug() << "writeBackLog size: " << writeBackLog.length();
         do_write();
