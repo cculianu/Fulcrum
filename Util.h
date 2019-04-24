@@ -42,7 +42,7 @@ public:
 
     bool doprt = true;
 
-    explicit Log(const char *fmt...);
+    explicit Log(const char *fmt...) __attribute__((format(printf, 2, 3)));
     explicit Log(Color);
     Log();
     virtual ~Log();
@@ -80,7 +80,7 @@ class Debug : public Log
 public:
     Debug() : Log() {}
     explicit Debug(Color c) : Log(c) {}
-    explicit Debug(const char *fmt...);
+    explicit Debug(const char *fmt...) __attribute__((format(printf, 2, 3)));
     virtual ~Debug();
 };
 
@@ -95,7 +95,7 @@ class Error : public Log
 public:
     Error() : Log() {}
     explicit Error(Color c) : Log(c) {}
-    explicit Error(const char *fmt...);
+    explicit Error(const char *fmt...) __attribute__((format(printf, 2, 3)));
     virtual ~Error();
 };
 
@@ -111,7 +111,7 @@ class Warning : public Log
 public:
     Warning() : Log() {}
     explicit Warning(Color c) : Log(c) {}
-    explicit Warning(const char *fmt...);
+    explicit Warning(const char *fmt...) __attribute__((format(printf, 2, 3)));
     virtual ~Warning();
 };
 

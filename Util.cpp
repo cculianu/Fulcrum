@@ -79,17 +79,18 @@ Log::Log(const char *fmt...)
 Log::~Log()
 {
     if (doprt) {
+        App *ourApp = app();
         s.flush(); // does nothing probably..
-        QString dateStr = app()->options.syslogMode ? "" : QString("[") + QDateTime::currentDateTime().toString("yyyy.MM.dd hh:mm:ss.zzz") + QString("] ");
+        QString dateStr = ourApp && ourApp->options.syslogMode ? "" : QString("[") + QDateTime::currentDateTime().toString("yyyy.MM.dd hh:mm:ss.zzz") + QString("] ");
         QString thrdStr = "";
 
-        if (QThread *th = QThread::currentThread(); th && qApp && th != qApp->thread()) {
+        if (QThread *th = QThread::currentThread(); th && ourApp && th != ourApp->thread()) {
             QString thrdName = th->objectName();
             if (thrdName.trimmed().isEmpty()) thrdName = QString::asprintf("%p", reinterpret_cast<void *>(QThread::currentThreadId()));
             thrdStr = QString("<Thread: %1> ").arg(thrdName);
         }
 
-        Logger *logger = app() ? app()->logger() : nullptr;
+        Logger *logger = ourApp ? ourApp->logger() : nullptr;
 
         QString theString = dateStr + thrdStr + (logger && logger->isaTTY() ? colorify(str, color) : str);
 

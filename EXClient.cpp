@@ -198,12 +198,14 @@ void EXClient::start_pingTimer()
     pingTimer = new QTimer(this);
     pingTimer->setSingleShot(false);
     connect(pingTimer, SIGNAL(timeout()), this, SLOT(on_pingTimer()));
-    pingTimer->start(pingtime_ms/* 1 minute */);
+    pingTimer->start(pingtime_ms/* 1 minute */ / 2);
 }
 
 void EXClient::on_pingTimer()
 {
-    emit sendRequest(mgr->newReqId(), "server.ping");
+    if (Util::getTime() - lastGood > pingtime_ms)
+        // only ping if we've been idle for longer than 1 minute
+        emit sendRequest(mgr->newReqId(), "server.ping");
 }
 
 void EXClient::on_connected()

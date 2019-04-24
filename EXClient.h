@@ -99,7 +99,7 @@ protected:
     quint16 tport = 0, sport = 0;
 
 private:
-    static const int pingtime_ms = 60*1000;  /// send server.ping every 1 min
+    static const int pingtime_ms = 60*1000;  /// send server.ping if idle for >1 min
     static const qint64 stale_threshold = reconnectTime;
     EXMgr *mgr = nullptr;
     QTcpSocket *socket = nullptr; ///< this should only ever be touched in our thread

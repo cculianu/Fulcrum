@@ -42,6 +42,6 @@ private:
     void parseArgs();
 };
 
-inline App *app() { return dynamic_cast<App *>(qApp); }
+inline App *app() { return qApp ? dynamic_cast<App *>(qApp) : nullptr; }
 
 #endif // APP_H
