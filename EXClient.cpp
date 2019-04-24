@@ -165,7 +165,7 @@ qint64 EXClient::_sendRequest(const QString &method, const QVariantList &params)
 
 void EXClient::boilerplate_disconnect()
 {
-    status = NotConnected;
+    status = status == Bad ? Bad : NotConnected;  // try and keep Bad status around so EXMgr can decide when to reconnect based on it
     if (socket) socket->abort();  // this will set status too because state change, but we set it first above to be paranoid
 }
 
@@ -336,7 +336,6 @@ void EXClient::on_error(QAbstractSocket::SocketError err)
 {
     Warning() << hostPrettyName() << ": error " << err << " (" << (socket ? socket->errorString() : "(null)") << ")";
     boilerplate_disconnect();
-    status = NotConnected;
     // todo: put stuff to queue up a reconnect sometime later?
 }
 
