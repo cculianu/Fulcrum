@@ -21,7 +21,7 @@ namespace BTC
         Address() {}
         Address(const QString &legacyAddress);
         Address(const char *legacy) { *this = legacy; }
-        Address(const QByteArray &legacy) { if (legacy.length()) *this = legacy.constData(); }
+        Address(const QByteArray &legacy) { *this = legacy; }
 
         QByteArray hash160() const { return h160; }
 
@@ -44,13 +44,14 @@ namespace BTC
 
         Address & operator=(const QString &legacy) { return (*this = Address::fromString(legacy)); }
         Address & operator=(const char *legacy) { return (*this = QString(legacy)); }
+        Address & operator=(const QByteArray &legacy) { return (*this = QString(legacy)); }
 
         bool operator==(const Address & other) { return verByte == other.verByte && h160 == other.h160 && net == other.net; }
         bool operator<(const Address & o) { return verByte < o.verByte && h160 < o.h160 && net < o.net; }
 
     private:
         Net net = BTC::Invalid;
-        quint8 verByte=99;
+        quint8 verByte = 99;
         QByteArray h160;
         static Address fromString(const QString &legacy);
     public:
