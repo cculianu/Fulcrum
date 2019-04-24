@@ -3,6 +3,10 @@
 #include "Util.h"
 #include <QtNetwork>
 
+namespace  {
+    const qint64 MAX_BUFFER = 20000000LL;
+}
+
 class BadServerReply : public Exception {
 public:
     BadServerReply(const QString &what) : Exception(what) {}
@@ -85,7 +89,7 @@ void EXClient::killSocket()
 {
     if (socket && socket->state() != QAbstractSocket::UnconnectedState) {
         Debug() << host << " aborting connection";
-        socket->abort();
+        boilerplate_disconnect();
     }
     if (socket) { delete socket; socket = nullptr; }
     status = NotConnected;
@@ -140,19 +144,49 @@ void EXClient::on_socketState(QAbstractSocket::SocketState s)
     }
 }
 
-int EXClient::_sendRequest(const QString &method, const QVariantList &params)
+qint64 EXClient::_sendRequest(const QString &method, const QVariantList &params)
 {
     if (status != Connected) {
         Error() << __FUNCTION__ << " method: " << method << "; Not connected!";
         return 0;
     }
-    auto id = ++reqid;
+    auto id = ++reqid;  // FIXME -- this should come in as a param from EXMgr. We can still maintain the mapping but ID should come from manager class so it can track
     while (idMethodMap.size() > 20000) {  // prevent memory leaks in case of misbehaving server
         idMethodMap.erase(idMethodMap.begin());
     }
     idMethodMap[id] = method;
-    socket->write(makeRequestData(id, method, params));
-    return id;
+
+    if (do_write(makeRequestData(id, method, params))) {
+        return id;
+    } else {
+        return -1;
+    }
+}
+
+void EXClient::boilerplate_disconnect()
+{
+    status = NotConnected;
+    if (socket) socket->abort();  // this will set status too because state change, but we set it first above to be paranoid
+}
+
+bool EXClient::do_write(const QByteArray & data)
+{
+    auto data2write = writeBackLog + data;
+    qint64 written = socket->write(data2write);
+    if (written < 0) {
+        Error() << __FUNCTION__ << " error on write " << socket->error() << " (" << socket->errorString() << ") ";
+        boilerplate_disconnect();
+        return false;
+    } else if (written < data2write.length()) {
+        writeBackLog = data2write.mid(int(written));
+    }
+    nSent += written;
+    if (writeBackLog.length() > MAX_BUFFER) {
+        Error() << __FUNCTION__ << " MAX_BUFFER reached on write (" << MAX_BUFFER << ")";
+        boilerplate_disconnect();
+        return false;
+    }
+    return true;
 }
 
 void EXClient::kill_pingTimer()
@@ -179,6 +213,7 @@ void EXClient::on_connected()
     // runs in thread
     Debug() << __FUNCTION__;
     connect(socket, SIGNAL(readyRead()), this, SLOT(on_readyRead()));
+    connect(socket, SIGNAL(bytesWritten()), this, SLOT(on_bytesWritten()));
     connect(socket, &QAbstractSocket::disconnected, this, [this]{
         Debug() << hostPrettyName() << " socket disconnected";
         kill_pingTimer();
@@ -197,7 +232,7 @@ EXResponse EXResponse::fromJson(const QString &json)
     const auto jsonrpc = m.value("jsonrpc", "").toString();
     if (jsonrpc != "2.0")
         throw BadServerReply(QString("Unexpected or missing jsonrpc version: \"%1\"").arg(jsonrpc));
-    const int id = m.value("id", -1).toInt();
+    const qint64 id = m.value("id", -1).toLongLong();
     QString method = m.value("method", "").toString();
     if (id < 0 && method.isEmpty())
         throw BadServerReply("Bad server reply, missing required id field in JSON");
@@ -267,7 +302,9 @@ void EXClient::on_readyRead()
     Debug() << __FUNCTION__;
     try {
         while (socket->canReadLine()) {
-            auto line = socket->readLine().trimmed();
+            auto data = socket->readLine();
+            nReceived += data.length();
+            auto line = data.trimmed();
             Debug() << "Got: " << line;
             auto resp = EXResponse::fromJson(line);
             auto meth = resp.id > 0 ? idMethodMap.take(resp.id) : resp.method;
@@ -282,22 +319,29 @@ void EXClient::on_readyRead()
         }
     } catch (const Exception &e) {
         Error() << "Error reading/parsing response: " << e.what();
-        socket->abort();
+        boilerplate_disconnect();
         status = Bad;
+    }
+}
+
+void EXClient::on_bytesWritten()
+{
+    if (!writeBackLog.isEmpty() && status == Connected) {
+        Debug() << "writeBackLog size: " << writeBackLog.length();
+        do_write();
     }
 }
 
 void EXClient::on_error(QAbstractSocket::SocketError err)
 {
-
     Warning() << hostPrettyName() << ": error " << err << " (" << (socket ? socket->errorString() : "(null)") << ")";
-    if (socket) socket->abort();
+    boilerplate_disconnect();
     status = NotConnected;
     // todo: put stuff to queue up a reconnect sometime later?
 }
 
 /* static */
-QByteArray EXClient::makeRequestData(int id, const QString &method, const QVariantList &params)
+QByteArray EXClient::makeRequestData(qint64 id, const QString &method, const QVariantList &params)
 {
     QVariantMap m;
     m["id"] = id;

@@ -10,6 +10,7 @@
 #include <QPair>
 #include "Common.h"
 
+
 struct EXResponse
 {
     static EXResponse fromJson(const QString &json); ///< may throw Exception
@@ -19,7 +20,7 @@ struct EXResponse
     QString toString() const;
 
     QString jsonRpcVersion;
-    int id;
+    qint64 id;
     QString method;
     QVariant result;
 
@@ -68,7 +69,7 @@ public slots:
 
 protected slots:
     /// actual implentation that prepares the request. Is connected to sendRequest() above. Runs in thread.
-    int _sendRequest(const QString &method, const QVariantList & params = QVariantList());
+    qint64 _sendRequest(const QString &method, const QVariantList & params = QVariantList());
 
 protected:
     friend class EXMgr;
@@ -83,6 +84,8 @@ protected:
     std::atomic<Status> status = NotConnected;
     std::atomic<qint64> lastGood = 0LL, ///< timestamp in ms from Util::getTime() when the server was last good (last communicated a sensible message, pinged, etc)
                         lastConnectionAttempt = 0LL;  ///< the last time we tried to reconnect
+
+    std::atomic<qint64> nSent = 0ULL, nReceived = 0ULL;
 
     static const qint64 reconnectTime = 3*60*1000; /// retry every 3 mins
 
@@ -100,12 +103,13 @@ private:
     static const qint64 stale_threshold = reconnectTime;
     EXMgr *mgr = nullptr;
     QTcpSocket *socket = nullptr; ///< this should only ever be touched in our thread
-    std::atomic_int reqid = 0;
-    QMap<int, QString> idMethodMap;
+    std::atomic<qint64> reqid = 0;
+    QMap<qint64, QString> idMethodMap;
+    QByteArray writeBackLog = ""; ///< if this grows beyond a certain size, we should kill the connection
     QTimer *pingTimer = nullptr;
 
     /// returns utf-8 encoded JSON data for a request
-    static QByteArray makeRequestData(int id, const QString &method, const QVariantList & params = QVariantList());
+    static QByteArray makeRequestData(qint64 id, const QString &method, const QVariantList & params = QVariantList());
 
     QString hostPrettyName() const; ///< called only from our thread otherwise it may crash
 
@@ -116,8 +120,11 @@ private:
     void on_connected();
     void start_pingTimer();
     void kill_pingTimer();
+    bool do_write(const QByteArray & = "");
+    void boilerplate_disconnect();
 private slots:
     void on_readyRead();
+    void on_bytesWritten();
     void on_error(QAbstractSocket::SocketError);
     void on_socketState(QAbstractSocket::SocketState);
     void on_pingTimer();
