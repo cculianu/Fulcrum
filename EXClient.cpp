@@ -149,7 +149,7 @@ void EXClient::on_socketState(QAbstractSocket::SocketState s)
 
 qint64 EXClient::_sendRequest(const QString &method, const QVariantList &params)
 {
-    if (status != Connected) {
+    if (status != Connected || !socket) {
         Error() << __FUNCTION__ << " method: " << method << "; Not connected!";
         return 0;
     }
@@ -336,7 +336,7 @@ void EXClient::on_readyRead()
 void EXClient::on_bytesWritten()
 {
     Debug() << __FUNCTION__;
-    if (!writeBackLog.isEmpty() && status == Connected) {
+    if (!writeBackLog.isEmpty() && status == Connected && socket) {
         Debug() << "writeBackLog size: " << writeBackLog.length();
         do_write();
     }
