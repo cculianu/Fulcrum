@@ -326,6 +326,10 @@ void EXClient::on_readyRead()
             lastGood = Util::getTime();
             emit gotResponse(this, resp);
         }
+        if (socket->bytesAvailable() > MAX_BUFFER) {
+            // bad server.. sending us garbage data not containing newlines. Kill connection.
+            throw BadServerReply(QString("Server appers to have sent us more than %1 bytes without a newline! Bad server?").arg(MAX_BUFFER));
+        }
     } catch (const Exception &e) {
         Error() << "Error reading/parsing response: " << e.what();
         boilerplate_disconnect();
