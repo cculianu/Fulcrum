@@ -27,7 +27,7 @@ namespace BTC
 
         Kind kind() const;
 
-        bool isTestNet() { return net == TestNet; }
+        bool isTestNet() const { return net == TestNet; }
 
         bool isValid() const;
 
@@ -46,7 +46,7 @@ namespace BTC
         Address & operator=(const char *legacy) { return (*this = QString(legacy)); }
         Address & operator=(const QByteArray &legacy) { return (*this = QString(legacy)); }
 
-        bool operator==(const Address & other) { return verByte == other.verByte && h160 == other.h160 && net == other.net; }
+        bool operator==(const Address & o) { return verByte == o.verByte && h160 == o.h160 && net == o.net; }
         bool operator<(const Address & o) { return verByte < o.verByte && h160 < o.h160 && net < o.net; }
 
     private:
