@@ -16,6 +16,7 @@ DEFINES += QT_DEPRECATED_WARNINGS
 #DEFINES += QT_DISABLE_DEPRECATED_BEFORE=0x060000    # disables all the APIs deprecated before Qt 6.0.0
 
 SOURCES += \
+    BTC.cpp \
     main.cpp \
     App.cpp \
     Logger.cpp \
@@ -33,6 +34,7 @@ else: unix:!android: target.path = /opt/$${TARGET}/bin
 
 HEADERS += \
     App.h \
+    BTC.h \
     Logger.h \
     Util.h \
     EXMgr.h \
@@ -40,8 +42,8 @@ HEADERS += \
     EXClient.h \
     bitcoin/base58.h \
     bitcoin/bignum.h \
-    bitcoin/uint256.h \
-    bitcoin/util.h
+    bitcoin/bitcoin_util.h \
+    bitcoin/uint256.h
 
 RESOURCES += \
     resources.qrc

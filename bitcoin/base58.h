@@ -18,7 +18,7 @@
 #include <string>
 #include <vector>
 #include "bignum.h"
-#include "util.h"
+#include "bitcoin_util.h"
 //#include "key.h"
 
 #pragma clang diagnostic push

@@ -1,5 +1,5 @@
-#ifndef UTIL_H
-#define UTIL_H
+#ifndef BITCOIN_UTIL_H
+#define BITCOIN_UTIL_H
 
 /// parts taken from Bitcoin-Qt sourcecode circa 2011
 ///
@@ -18,6 +18,15 @@ typedef uint64_t  uint64;
 
 namespace bitcoin
 {
+
+template<typename T1>
+inline uint256 HashOnce(const T1 pbegin, const T1 pend)
+{
+    static unsigned char pblank[1];
+    uint256 hash1;
+    SHA256((pbegin == pend ? pblank : (unsigned char*)&pbegin[0]), (pend - pbegin) * sizeof(pbegin[0]), (unsigned char*)&hash1);
+    return hash1;
+}
 
 template<typename T1>
 inline uint256 Hash(const T1 pbegin, const T1 pend)
