@@ -22,7 +22,8 @@ SOURCES += \
     Util.cpp \
     EXMgr.cpp \
     Common.cpp \
-    EXClient.cpp
+    EXClient.cpp \
+    bitcoin/bignum.cpp
 
 # Default rules for deployment.
 qnx: target.path = /tmp/$${TARGET}/bin
@@ -35,7 +36,16 @@ HEADERS += \
     Util.h \
     EXMgr.h \
     Common.h \
-    EXClient.h
+    EXClient.h \
+    bitcoin/base58.h \
+    bitcoin/bignum.h \
+    bitcoin/uint256.h \
+    bitcoin/util.h
 
 RESOURCES += \
     resources.qrc
+
+# Needed for OpenSSL.  Modify this for your platform  FIXME: add Windows support
+unix: LIBS += -L/opt/local/lib/ -lssl -lcrypto
+INCLUDEPATH += /opt/local/include
+DEPENDPATH += /opt/local/include
