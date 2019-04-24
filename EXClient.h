@@ -63,13 +63,13 @@ signals:
     void newConnection(EXClient *);
     void lostConnection(EXClient *);
     /// call (emit) this to send a requesst to the server
-    void sendRequest(const QString &method, const QVariantList & params = QVariantList());
+    void sendRequest(qint64 reqid, const QString &method, const QVariantList & params = QVariantList());
 
 public slots:
 
 protected slots:
-    /// actual implentation that prepares the request. Is connected to sendRequest() above. Runs in thread.
-    qint64 _sendRequest(const QString &method, const QVariantList & params = QVariantList());
+    /// Actual implentation that prepares the request. Is connected to sendRequest() above. Runs in thread.
+    bool _sendRequest(qint64 reqid, const QString &method, const QVariantList & params = QVariantList());
 
 protected:
     friend class EXMgr;
@@ -103,7 +103,6 @@ private:
     static const qint64 stale_threshold = reconnectTime;
     EXMgr *mgr = nullptr;
     QTcpSocket *socket = nullptr; ///< this should only ever be touched in our thread
-    std::atomic<qint64> reqid = 0;
     QMap<qint64, QString> idMethodMap;
     QByteArray writeBackLog = ""; ///< if this grows beyond a certain size, we should kill the connection
     QTimer *pingTimer = nullptr;

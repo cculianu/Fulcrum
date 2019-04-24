@@ -56,8 +56,8 @@ void EXMgr::loadServers()
 void EXMgr::onNewConnection(EXClient *client)
 {
     Debug () << "New connection for " << client->host;
-    emit client->sendRequest("server.version", QVariantList({QString("%1/%2").arg(APPNAME).arg(VERSION), QString("1.4")}));
-    emit client->sendRequest("blockchain.headers.subscribe");
+    emit client->sendRequest(newReqId(), "server.version", QVariantList({QString("%1/%2").arg(APPNAME).arg(VERSION), QString("1.4")}));
+    emit client->sendRequest(newReqId(), "blockchain.headers.subscribe");
 }
 
 void EXMgr::onLostConnection(EXClient *client)

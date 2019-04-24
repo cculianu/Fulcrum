@@ -147,23 +147,18 @@ void EXClient::on_socketState(QAbstractSocket::SocketState s)
     }
 }
 
-qint64 EXClient::_sendRequest(const QString &method, const QVariantList &params)
+bool EXClient::_sendRequest(qint64 id, const QString &method, const QVariantList &params)
 {
     if (status != Connected || !socket) {
         Error() << __FUNCTION__ << " method: " << method << "; Not connected!";
-        return 0;
+        return false;
     }
-    auto id = ++reqid;  // FIXME -- this should come in as a param from EXMgr. We can still maintain the mapping but ID should come from manager class so it can track
     while (idMethodMap.size() > 20000) {  // prevent memory leaks in case of misbehaving server
         idMethodMap.erase(idMethodMap.begin());
     }
     idMethodMap[id] = method;
 
-    if (do_write(makeRequestData(id, method, params))) {
-        return id;
-    } else {
-        return -1;
-    }
+    return do_write(makeRequestData(id, method, params));
 }
 
 void EXClient::boilerplate_disconnect()
@@ -208,7 +203,7 @@ void EXClient::start_pingTimer()
 
 void EXClient::on_pingTimer()
 {
-    emit sendRequest("server.ping");
+    emit sendRequest(mgr->newReqId(), "server.ping");
 }
 
 void EXClient::on_connected()

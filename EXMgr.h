@@ -1,9 +1,10 @@
 #ifndef ECMGR_H
 #define ECMGR_H
 
+#include "EXClient.h"
 #include <QObject>
 #include <QList>
-#include "EXClient.h"
+#include <atomic>
 class EXClient;
 
 class EXMgr : public QObject
@@ -12,6 +13,9 @@ class EXMgr : public QObject
 public:
     explicit EXMgr(const QString & serversFile, QObject *parent = nullptr);
     virtual ~EXMgr();
+
+    qint64 newReqId() { return ++reqid; }
+
 signals:
 
 public slots:
@@ -27,6 +31,8 @@ private slots:
 private:
     const QString serversFile;
     void loadServers();
+    std::atomic<qint64> reqid = 0;
+
     QList<EXClient *> clients;
     QTimer *checkClientsTimer = nullptr;
 };
