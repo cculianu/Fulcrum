@@ -71,7 +71,7 @@ inline std::string EncodeBase58(const unsigned char* pbegin, const unsigned char
         str += pszBase58[0];
 
     // Convert little endian std::string to big endian
-    reverse(str.begin(), str.end());
+    std::reverse(str.begin(), str.end());
     return str;
 }
 
@@ -280,7 +280,7 @@ public:
         SCRIPT_ADDRESS_TEST = 196,
     };
 
-    static const int fTestNet = false; // hardcoded here by Calin as we adapt this code
+    int fTestNet = false; // placed here by Calin so we may adapt this code
 
     bool SetHash160(const uint160& hash160)
     {
@@ -416,6 +416,8 @@ public:
     }
 };
 */
+
+extern bool TestBase58();
 
 } // end namespace bitcoin
 #pragma clang diagnostic pop
