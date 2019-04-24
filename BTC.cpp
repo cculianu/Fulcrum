@@ -74,7 +74,7 @@ namespace BTC
         if (!isValid())
             return ret;
         // TODO: Refactor the below ...
-        std::vector<quint8> script, scriptEnd;
+        std::vector<quint8> script, scriptTail;
         if (kind() == P2PKH) {
             script = {
                 OP_DUP, OP_HASH160, quint8(h160.length())
@@ -82,8 +82,8 @@ namespace BTC
             auto oldsize = script.size();
             script.resize(oldsize + size_t(h160.length()));
             memcpy(&script[oldsize], h160.constData(), size_t(h160.length()));
-            scriptEnd = { OP_EQUALVERIFY, OP_CHECKSIG };
-            script.insert(script.end(), scriptEnd.begin(), scriptEnd.end());
+            scriptTail = { OP_EQUALVERIFY, OP_CHECKSIG };
+            script.insert(script.end(), scriptTail.begin(), scriptTail.end());
             bitcoin::uint256 hash = bitcoin::HashOnce(script.begin(), script.end());
             auto str = hash.GetHex();
             ret = str.c_str();
@@ -94,8 +94,8 @@ namespace BTC
             auto oldsize = script.size();
             script.resize(oldsize + size_t(h160.length()));
             memcpy(&script[oldsize], h160.constData(), size_t(h160.length()));
-            scriptEnd = { OP_EQUAL };
-            script.insert(script.end(), scriptEnd.begin(), scriptEnd.end());
+            scriptTail = { OP_EQUAL };
+            script.insert(script.end(), scriptTail.begin(), scriptTail.end());
             bitcoin::uint256 hash = bitcoin::HashOnce(script.begin(), script.end());
             auto str = hash.GetHex();
             ret = str.c_str();
