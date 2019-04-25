@@ -89,22 +89,24 @@ namespace BTC
         bool isValid() const;
 
 
-        /// returns the ElectrumX 'scripthash', hex encoded (which is reversed because of bitcoin's way)
-        /// the results of this function get cached
+        /// Returns the ElectrumX 'scripthash', bitcoin hex encoded.
+        /// (Which is reversed because of bitcoin's way of encoding hex).
+        /// The results of this function get cached.
         QByteArray toHashX() const;
 
-        /// returns the bitcoin script bytes as would be used in a spending transaction
-        /// the results of this function do not get cached
+        /// Returns the bitcoin script bytes as would be used in a spending transaction.
+        /// (not reversed)
+        /// The results of this function do not get cached.
         /// Note the return is a ByteArray and not a QByteArray.
         ByteArray toScript() const;
-        /// returns the bitcoin script bytes as would be used in a spending transaction,
-        /// hashed once with sha256
-        /// the results of this function do not get cached
+        /// Returns the bitcoin script bytes as would be used in a spending transaction,
+        /// hashed once with sha256. (not reversed)
+        /// The results of this function do not get cached
         /// Note the return is a ByteArray and not a QByteArray.
         ByteArray toScriptHash() const;
 
-        /// if isValid, returns the legacy address string, base58 encoded
-        /// returns null string on error.
+        /// If isValid, returns the legacy address string, base58 encoded
+        /// Returns null string on error.
         QString toString() const;
 
         /// test any string to see if it's a valid address for the specified network
