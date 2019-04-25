@@ -85,6 +85,11 @@ namespace BTC
         /// the results of this function do not get cached
         /// Note the return is a ByteArray and not a QByteArray.
         ByteArray toScript() const;
+        /// returns the bitcoin script bytes as would be used in a spending transaction,
+        /// hashed once with sha256
+        /// the results of this function do not get cached
+        /// Note the return is a ByteArray and not a QByteArray.
+        ByteArray toScriptHash() const;
 
         /// if isValid, returns the legacy address string, base58 encoded
         /// returns null string on error.

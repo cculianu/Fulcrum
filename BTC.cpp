@@ -85,6 +85,16 @@ namespace BTC
         return script;
     }
 
+    ByteArray Address::toScriptHash() const
+    {
+        ByteArray script(toScript()), ret;
+        if (!script.isEmpty()) {
+            auto hash = bitcoin::HashOnce(script.begin(), script.end());
+            ret.insert(ret.end(), hash.begin(), hash.end());
+        }
+        return ret;
+    }
+
     /// returns the ElectrumX 'scripthash_hex'
     QByteArray Address::toHashX() const
     {
@@ -93,8 +103,9 @@ namespace BTC
         QByteArray ret;
         auto script = toScript();
         if (!script.isEmpty()) {
+            // note as a performance tweak here we don't call toScriptHash() as that would do extra copying.
             bitcoin::uint256 hash = bitcoin::HashOnce(script.begin(), script.end());
-            auto str = hash.GetHex();
+            auto str = hash.GetHex(); /// this is reversed hex
             ret = str.c_str();
             cachedHashX = ret;
         }
