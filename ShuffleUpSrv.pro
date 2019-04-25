@@ -74,7 +74,3 @@ HEADERS += \
 RESOURCES += \
     resources.qrc
 
-# Needed for OpenSSL.  Modify this for your platform  FIXME: add Windows support
-#unix: LIBS += -L/opt/local/lib/ -lssl -lcrypto
-#INCLUDEPATH += /opt/local/include
-#DEPENDPATH += /opt/local/include
