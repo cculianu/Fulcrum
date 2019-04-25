@@ -103,7 +103,8 @@ namespace BTC
         QByteArray ret;
         auto script = toScript();
         if (!script.isEmpty()) {
-            // note as a performance tweak here we don't call toScriptHash() as that would do extra copying.
+            // Note as a performance tweak here we don't call toScriptHash() as that would do extra copying.
+            // Instead, we just reproduce some of its work here.
             bitcoin::uint256 hash = bitcoin::HashOnce(script.begin(), script.end());
             auto str = hash.GetHex(); /// this is reversed hex
             ret = str.c_str();
@@ -142,9 +143,10 @@ namespace BTC
         c = b;
         std::cout << "Decoded -> VerByte: " << int(a.verByte) <<  "  Hash160 (hex): " << a.h160.toHex().constData() << std::endl;
         ByteArray v = { 'a', ' ', 'b', 'c', 0 };
-        std::cout << "Vect: " << QByteArray(v).constData() << std::endl;
+        std::cout << "Init list test: " << v.charData() << std::endl;
         std::cout << "IsValid: " << a.isValid() << " kind: " << a.kind() << std::endl;
         std::cout << "Script Hex of: " << a.toString().toUtf8().constData() << " = " << a.toScript().toQHex().constData() << std::endl;
+        std::cout << "Script Hash (Hex) of: " << a.toString().toUtf8().constData() << " = " << a.toScriptHash().toQHex().constData() << std::endl;
         std::cout << "HashX of " << a.toString().toUtf8().constData() << " = " << a.toHashX().constData() << std::endl;
         c = a;
         std::cout << "HashX again " << c.toString().toUtf8().constData() << " = " << c.toHashX().constData() << std::endl;
@@ -161,16 +163,16 @@ namespace BTC
     ByteArray::ByteArray(const std::initializer_list<Byte> &il) : std::vector<Byte>(il) {}
     ByteArray::ByteArray(const QByteArray &a) { (*this) = a; } // leverage operator=
     ByteArray::ByteArray(const QString &s) { (*this) = s; } // leverage operator=
-    static Byte emptyByte[1] = {0};
+    static Byte emptyBytes[sizeof(long)] = {0}; ///< C++ init would have been zero anyway. We do it like this to illustrate the point to the casual observer.
     Byte *ByteArray::data()
     {
         if (!empty()) return &(*this)[0];
-        return emptyByte;
+        return emptyBytes;
     }
     const Byte* ByteArray::constData() const
     {
         if (!empty()) return &(*this)[0];
-        return emptyByte;
+        return emptyBytes;
     }
     ByteArray ByteArray::operator+(const std::vector<Byte> &b) const
     {

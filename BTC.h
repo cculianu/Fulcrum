@@ -22,6 +22,7 @@ namespace BTC
         ByteArray();
         ByteArray(const std::vector<Byte> &);
         ByteArray(std::vector<Byte> &&);
+        // TO DO: see about removing some of this boilerplate using either C++ subtleties or templates.
         ByteArray(const QByteArray &);
         ByteArray(const QString &);
         ByteArray(const char *s) { *this = s; }
@@ -30,14 +31,25 @@ namespace BTC
         ByteArray toHex() const; ///< returns Hex encoded (non-reversed)
         QByteArray toQHex() const; ///< returns Hex encoded (non-reversed)
         QString toHexStr() const { return QString(toQHex()); } ///< returns Hex encoded (non-reversed)
+
+        /// Convenienct to obtain a pointer to [0]. If not empty, points to the same
+        /// place as .begin().  If empty, will return a pointer to a static buffer
+        /// with a 0 in it. Thus, a valid pointer is always returned.
+        /// As such, don't rely on this to always == .begin() (it won't if empty)
         Byte *data(); ///< unsafe.
-        const Byte* constData() const;
+        const Byte* constData() const; ///< same notes as .data()
+
+        /// convenience interop
+        char *charData() { return reinterpret_cast<char *>(data()); }
+        /// convenience interop
+        const char *constCharData() const { return reinterpret_cast<const char *>(constData()); }
 
         // compat with Qt's int lengths
         int length() const { return int(size()); }
         // compat with QByteArray
         bool isEmpty() const { return empty(); }
 
+        // TO DO: see about removing some of this boilerplate using either C++ subtleties or templates.
         ByteArray operator+(const std::vector<Byte> & o) const;
         ByteArray operator+(const QByteArray & o) const;
         ByteArray operator+(const QString &) const;
@@ -53,7 +65,7 @@ namespace BTC
         ByteArray & operator=(const QString &);
         ByteArray & operator=(const std::initializer_list<Byte> &);
         ByteArray & operator=(const char *s) { return *this = QByteArray(s); }
-        operator QByteArray() const;
+        operator QByteArray() const; ///< convenienct cast to QByteArray. Involves a full copy.
     };
 
 
@@ -103,6 +115,7 @@ namespace BTC
         Address & operator=(const QByteArray &legacy) { return (*this = QString(legacy)); }
 
         bool operator==(const Address & o) { return verByte == o.verByte && h160 == o.h160 && net == o.net; }
+        /// less operator: for map support and also so that it sorts like the text address would.
         bool operator<(const Address & o) { return verByte < o.verByte && h160 < o.h160 && net < o.net; }
 
     private:
