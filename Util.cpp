@@ -152,7 +152,8 @@ Debug::Debug(const char *fmt...)
 
 Debug::~Debug()
 {
-    doprt = app()->options.verboseDebug;
+    auto ourApp = app();
+    doprt = !ourApp || ourApp->options.verboseDebug;
     if (!doprt) return;
     if (!colorOverridden) color = Blue;
     str = QString("(Debug) ") + str;
