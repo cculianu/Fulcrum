@@ -143,7 +143,10 @@ namespace BTC
         c = b;
         std::cout << "Decoded -> VerByte: " << int(a.verByte) <<  "  Hash160 (hex): " << a.h160.toHex().constData() << std::endl;
         ByteArray v = { 'a', ' ', 'b', 'c', 0 };
+        ByteArray v2 = "this is a test";
         std::cout << "Init list test: " << v.charData() << std::endl;
+        std::cout << "Init string test: " << v2.charData() << std::endl;
+        std::cout << "v < v2 : " << int(v < v2) << std::endl;
         std::cout << "IsValid: " << a.isValid() << " kind: " << a.kind() << std::endl;
         std::cout << "Script Hex of: " << a.toString().toUtf8().constData() << " = " << a.toScript().toQHex().constData() << std::endl;
         std::cout << "Script Hash (Hex) of: " << a.toString().toUtf8().constData() << " = " << a.toScriptHash().toQHex().constData() << std::endl;
