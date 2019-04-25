@@ -3,6 +3,7 @@
 
 #include <QByteArray>
 #include <QString>
+#include <vector>
 
 namespace BTC
 {
@@ -10,6 +11,39 @@ namespace BTC
         Invalid = 0,
         MainNet = 0x80,
         TestNet = 0xef
+    };
+
+    typedef unsigned char Byte;
+    struct ByteArray : public std::vector<Byte>
+    {
+        ByteArray();
+        ByteArray(const std::vector<Byte> &);
+        ByteArray(std::vector<Byte> &&);
+        ByteArray(const QByteArray &);
+        ByteArray(const QString &);
+        ByteArray(const std::initializer_list<Byte> &);
+
+        ByteArray toHex() const; ///< returns Hex encoded
+        QByteArray toQHex() const; ///< returns Hex encoded
+        QString toHexStr() const { return QString(toQHex()); } ///< returns Hex encoded
+        Byte *data(); ///< unsafe.
+        const Byte* constData() const;
+
+        // compat with Qt's int lengths
+        int length() const { return int(size()); }
+
+        ByteArray operator+(const std::vector<Byte> & o) const;
+        ByteArray operator+(const QByteArray & o) const;
+        ByteArray operator+(const QString &) const;
+        ByteArray operator+(const char *s) const { return *this + QByteArray(s); }
+        ByteArray & operator+=(const std::vector<Byte> & b);
+        ByteArray & operator+=(const QByteArray &);
+        ByteArray & operator+=(const QString &);
+        ByteArray & operator=(const ByteArray &);
+        ByteArray & operator=(const QByteArray &);
+        ByteArray & operator=(const QString &);
+        ByteArray & operator=(const char *s) { return *this = QByteArray(s); }
+        operator QByteArray() const;
     };
 
     struct Address
@@ -197,6 +231,6 @@ namespace BTC
         OP_CHECKDATASIG = 0xba,
         OP_CHECKDATASIGVERIFY = 0xbb,
     };
-}
+} // end namespace
 
 #endif // BTC_H

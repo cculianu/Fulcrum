@@ -7,6 +7,7 @@
 #include <QMap>
 #include <QSet>
 #include <QPair>
+#include <utility>
 namespace BTC
 {
     // Map of Net -> [Map of VerByte -> Kind]
@@ -15,6 +16,7 @@ namespace BTC
         { TestNet, { {111, Address::P2PKH },{196, Address::P2SH} } },
     };
 
+    /// -- Address --
 
     Address::Address(const QString &legacyAddress)
     {
@@ -141,5 +143,89 @@ namespace BTC
         std::cout << "HashX of " << a.toString().toUtf8().constData() << " = " << a.toHashX().constData() << std::endl;
         //std::cout << "Testnet: " << a.toString().toUtf8().constData() << std::endl;
         return a.isValid() && a.toString() == anAddress && a == b;
+    }
+
+    // -- ByteArray --
+    ByteArray::ByteArray() : std::vector<Byte>() {}
+    ByteArray::ByteArray(const std::vector<Byte> &b) : std::vector<Byte>(b) {}
+    ByteArray::ByteArray(std::vector<Byte> &&o) : std::vector<Byte>(std::move(o)) {}
+    ByteArray::ByteArray(const std::initializer_list<Byte> &il) : std::vector<Byte>(il) {}
+    ByteArray::ByteArray(const QByteArray &a) { (*this) = a; } // leverage operator=
+    ByteArray::ByteArray(const QString &s) { (*this) = s; } // leverage operator=
+    static Byte emptyByte[1] = {0};
+    Byte *ByteArray::data()
+    {
+        if (!empty()) return &(*this)[0];
+        return emptyByte;
+    }
+    const Byte* ByteArray::constData() const
+    {
+        if (!empty()) return &(*this)[0];
+        return emptyByte;
+    }
+    ByteArray ByteArray::operator+(const std::vector<Byte> &b) const
+    {
+        ByteArray ret(*this);
+        ret += b;
+        return ret;
+    }
+    ByteArray ByteArray::operator+(const QByteArray & o) const
+    {
+        ByteArray ret(*this);
+        ret += o;
+        return ret;
+    }
+    ByteArray ByteArray::operator+(const QString &s) const
+    {
+        ByteArray ret(*this);
+        ret += s;
+        return ret;
+    }
+    ByteArray & ByteArray::operator+=(const std::vector<Byte> & b)
+    {
+        if (!b.empty())
+            insert(end(), b.begin(), b.end());
+        return *this;
+    }
+    ByteArray & ByteArray::operator+=(const QByteArray &b)
+    {
+        if (!b.isEmpty())
+            insert(end(), b.begin(), b.end());
+        return *this;
+    }
+    ByteArray & ByteArray::operator+=(const QString &s)
+    {
+        return (*this) += s.toUtf8();
+    }
+    ByteArray & ByteArray::operator=(const ByteArray &a)
+    {
+        clear();
+        return (*this) += a;
+    }
+    ByteArray & ByteArray::operator=(const QByteArray &a)
+    {
+        clear();
+        return (*this) += a;
+    }
+    ByteArray & ByteArray::operator=(const QString &a)
+    {
+        clear();
+        return (*this) += a;
+    }
+    ByteArray::operator QByteArray() const
+    {
+        QByteArray ret;
+        if (!empty())
+            ret.append(reinterpret_cast<const char *>(constData()), length());
+        return ret;
+    }
+    ByteArray ByteArray::toHex() const
+    {
+        return ByteArray(toQHex());
+    }
+    QByteArray ByteArray::toQHex() const
+    {
+        QByteArray qba = *this;
+        return qba.toHex();
     }
 }
