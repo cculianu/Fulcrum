@@ -9,6 +9,11 @@
 #include <QSet>
 #include <QPair>
 #include <utility>
+
+#pragma clang diagnostic push
+// we get warnings using bitcoin templates but they compile and work anyway.
+#pragma clang diagnostic ignored "-Wundefined-func-template"
+
 namespace BTC
 {
     // Map of Net -> [Map of VerByte -> Kind]
@@ -272,3 +277,5 @@ namespace BTC
         return qba.toHex();
     }
 }
+
+#pragma clang diagnostic pop
