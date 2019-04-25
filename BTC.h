@@ -39,9 +39,9 @@ namespace BTC
         Byte *data(); ///< unsafe.
         const Byte* constData() const; ///< same notes as .data()
 
-        /// convenience interop
+        /// convenience interop -- note that there may not be a nul byte at the end!
         char *charData() { return reinterpret_cast<char *>(data()); }
-        /// convenience interop
+        /// convenience interop -- note that there may not be a nul byte at the end!
         const char *constCharData() const { return reinterpret_cast<const char *>(constData()); }
 
         // compat with Qt's int lengths

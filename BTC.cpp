@@ -144,8 +144,14 @@ namespace BTC
         std::cout << "Decoded -> VerByte: " << int(a.verByte) <<  "  Hash160 (hex): " << a.h160.toHex().constData() << std::endl;
         ByteArray v = { 'a', ' ', 'b', 'c', 0 };
         ByteArray v2 = "this is a test";
-        std::cout << "Init list test: " << v.charData() << std::endl;
+        auto vcat = ByteArray({'a','b','c',' '}) + v2;
+        std::vector<Byte> v3(v2); // support construction from ByteArray to vector
+        ByteArray v4(v3); // support construction from vector to ByteArray
+        std::cout << "Init list test: " << v.data() << std::endl;
         std::cout << "Init string test: " << v2.charData() << std::endl;
+        std::cout << "Chained c'tor string test: " << v4.charData() << std::endl;
+        std::cout << "Concat test: " << (vcat + ByteArray({0})).charData() << std::endl;
+        std::cout << "Concat test 2: " << ((vcat+"..more stuff")+ByteArray({'z','z','z',0})).charData() << std::endl;
         std::cout << "v < v2 : " << int(v < v2) << std::endl;
         std::cout << "IsValid: " << a.isValid() << " kind: " << a.kind() << std::endl;
         std::cout << "Script Hex of: " << a.toString().toUtf8().constData() << " = " << a.toScript().toQHex().constData() << std::endl;
