@@ -70,35 +70,34 @@ namespace BTC
         return Invalid;
     }
 
-    /// returns the ElectrumX 'scripthash_hex'
-    QByteArray Address::toHashX() const {
+    ByteArray Address::toScript() const
+    {
+        ByteArray script;
+        if (kind() == P2PKH) { // kind() checks for validity
+            script = ByteArray({
+                OP_DUP, OP_HASH160, Byte(h160.length())
+            }) + h160 + ByteArray({ OP_EQUALVERIFY, OP_CHECKSIG });
+        } else if (kind() == P2SH) {
+            script = ByteArray({
+                OP_HASH160, quint8(h160.length())
+            }) + h160 + ByteArray({ OP_EQUAL });
+        }
+        return script;
+    }
 
-        if (!isValid())
-            return QByteArray();
+    /// returns the ElectrumX 'scripthash_hex'
+    QByteArray Address::toHashX() const
+    {
         if (!cachedHashX.isEmpty())
             return cachedHashX;
         QByteArray ret;
-        ByteArray script;
-        if (kind() == P2PKH) {
-            script = {
-                OP_DUP, OP_HASH160, Byte(h160.length())
-            };
-            script += h160;
-            script += { OP_EQUALVERIFY, OP_CHECKSIG };
+        auto script = toScript();
+        if (!script.isEmpty()) {
             bitcoin::uint256 hash = bitcoin::HashOnce(script.begin(), script.end());
             auto str = hash.GetHex();
             ret = str.c_str();
-        } else if (kind() == P2SH) {
-            script = {
-                OP_HASH160, quint8(h160.length())
-            };
-            script += h160;
-            script += { OP_EQUAL };
-            bitcoin::uint256 hash = bitcoin::HashOnce(script.begin(), script.end());
-            auto str = hash.GetHex();
-            ret = str.c_str();
+            cachedHashX = ret;
         }
-        cachedHashX = ret;
         return ret;
     }
 
@@ -134,6 +133,7 @@ namespace BTC
         ByteArray v = { 'a', ' ', 'b', 'c', 0 };
         std::cout << "Vect: " << QByteArray(v).constData() << std::endl;
         std::cout << "IsValid: " << a.isValid() << " kind: " << a.kind() << std::endl;
+        std::cout << "Script Hex of: " << a.toString().toUtf8().constData() << " = " << a.toScript().toQHex().constData() << std::endl;
         std::cout << "HashX of " << a.toString().toUtf8().constData() << " = " << a.toHashX().constData() << std::endl;
         c = a;
         std::cout << "HashX again " << c.toString().toUtf8().constData() << " = " << c.toHashX().constData() << std::endl;

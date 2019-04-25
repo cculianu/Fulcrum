@@ -13,6 +13,49 @@ namespace BTC
         TestNet = 0xef
     };
 
+    /// Helper class to glue QByteArray (which is very fast and efficient due to copy-on-write)
+    /// to bitcoin's std::vector usage.
+    /// This class also allows expressions like ByteArray a = { opcode1, opcode2 } + somebytearray + { moreopcodes };
+    typedef unsigned char Byte;
+    struct ByteArray : public std::vector<Byte>
+    {
+        ByteArray();
+        ByteArray(const std::vector<Byte> &);
+        ByteArray(std::vector<Byte> &&);
+        ByteArray(const QByteArray &);
+        ByteArray(const QString &);
+        ByteArray(const char *s) { *this = s; }
+        ByteArray(const std::initializer_list<Byte> &);
+
+        ByteArray toHex() const; ///< returns Hex encoded (non-reversed)
+        QByteArray toQHex() const; ///< returns Hex encoded (non-reversed)
+        QString toHexStr() const { return QString(toQHex()); } ///< returns Hex encoded (non-reversed)
+        Byte *data(); ///< unsafe.
+        const Byte* constData() const;
+
+        // compat with Qt's int lengths
+        int length() const { return int(size()); }
+        // compat with QByteArray
+        bool isEmpty() const { return empty(); }
+
+        ByteArray operator+(const std::vector<Byte> & o) const;
+        ByteArray operator+(const QByteArray & o) const;
+        ByteArray operator+(const QString &) const;
+        ByteArray operator+(const char *s) const { return *this + QByteArray(s); }
+        ByteArray operator+(const std::initializer_list<Byte> &) const;
+        ByteArray & operator+=(const std::vector<Byte> & b);
+        ByteArray & operator+=(const QByteArray &);
+        ByteArray & operator+=(const QString &);
+        ByteArray & operator+=(const std::initializer_list<Byte> &);
+        ByteArray & operator+=(const char *s) { return *this += QByteArray(s); }
+        ByteArray & operator=(const std::vector<Byte> &o);
+        ByteArray & operator=(const QByteArray &);
+        ByteArray & operator=(const QString &);
+        ByteArray & operator=(const std::initializer_list<Byte> &);
+        ByteArray & operator=(const char *s) { return *this = QByteArray(s); }
+        operator QByteArray() const;
+    };
+
 
     struct Address
     {
@@ -35,7 +78,13 @@ namespace BTC
 
 
         /// returns the ElectrumX 'scripthash', hex encoded (which is reversed because of bitcoin's way)
+        /// the results of this function get cached
         QByteArray toHashX() const;
+
+        /// returns the bitcoin script bytes as would be used in a spending transaction
+        /// the results of this function do not get cached
+        /// Note the return is a ByteArray and not a QByteArray.
+        ByteArray toScript() const;
 
         /// if isValid, returns the legacy address string, base58 encoded
         /// returns null string on error.
@@ -59,47 +108,6 @@ namespace BTC
         static Address fromString(const QString &legacy);
     public:
         static bool test();
-    };
-
-    /// Helper class to glue QByteArray (which is very fast and efficient due to copy-on-write)
-    /// to bitcoin's std::vector usage.
-    /// This class also allows expressions like ByteArray a = { opcode1, opcode2 } + somebytearray + { moreopcodes };
-    typedef unsigned char Byte;
-    struct ByteArray : public std::vector<Byte>
-    {
-        ByteArray();
-        ByteArray(const std::vector<Byte> &);
-        ByteArray(std::vector<Byte> &&);
-        ByteArray(const QByteArray &);
-        ByteArray(const QString &);
-        ByteArray(const char *s) { *this = s; }
-        ByteArray(const std::initializer_list<Byte> &);
-
-        ByteArray toHex() const; ///< returns Hex encoded (non-reversed)
-        QByteArray toQHex() const; ///< returns Hex encoded (non-reversed)
-        QString toHexStr() const { return QString(toQHex()); } ///< returns Hex encoded (non-reversed)
-        Byte *data(); ///< unsafe.
-        const Byte* constData() const;
-
-        // compat with Qt's int lengths
-        int length() const { return int(size()); }
-
-        ByteArray operator+(const std::vector<Byte> & o) const;
-        ByteArray operator+(const QByteArray & o) const;
-        ByteArray operator+(const QString &) const;
-        ByteArray operator+(const char *s) const { return *this + QByteArray(s); }
-        ByteArray operator+(const std::initializer_list<Byte> &) const;
-        ByteArray & operator+=(const std::vector<Byte> & b);
-        ByteArray & operator+=(const QByteArray &);
-        ByteArray & operator+=(const QString &);
-        ByteArray & operator+=(const std::initializer_list<Byte> &);
-        ByteArray & operator+=(const char *s) { return *this += QByteArray(s); }
-        ByteArray & operator=(const std::vector<Byte> &o);
-        ByteArray & operator=(const QByteArray &);
-        ByteArray & operator=(const QString &);
-        ByteArray & operator=(const std::initializer_list<Byte> &);
-        ByteArray & operator=(const char *s) { return *this = QByteArray(s); }
-        operator QByteArray() const;
     };
 
     enum OpCodes {
