@@ -27,7 +27,7 @@ namespace BTC
     Address Address::fromString(const QString &legacyAddress)
     {
         Address a;
-        std::vector<unsigned char> dec;
+        ByteArray dec;
         try {
             if (!bitcoin::DecodeBase58Check(legacyAddress.toUtf8().constData(), dec)) {
                 Debug() << __FUNCTION__ << ": got bad address " << legacyAddress;
@@ -76,16 +76,13 @@ namespace BTC
         if (!isValid())
             return ret;
         // TODO: Refactor the below ...
-        ByteArray script, scriptTail;
+        ByteArray script;
         if (kind() == P2PKH) {
             script = {
-                OP_DUP, OP_HASH160, quint8(h160.length())
+                OP_DUP, OP_HASH160, Byte(h160.length())
             };
-            auto oldsize = script.size();
-            script.resize(oldsize + size_t(h160.length()));
-            memcpy(&script[oldsize], h160.constData(), size_t(h160.length()));
-            scriptTail = { OP_EQUALVERIFY, OP_CHECKSIG };
-            script.insert(script.end(), scriptTail.begin(), scriptTail.end());
+            script += h160;
+            script += { OP_EQUALVERIFY, OP_CHECKSIG };
             bitcoin::uint256 hash = bitcoin::HashOnce(script.begin(), script.end());
             auto str = hash.GetHex();
             ret = str.c_str();
@@ -93,11 +90,8 @@ namespace BTC
             script = {
                 OP_HASH160, quint8(h160.length())
             };
-            auto oldsize = script.size();
-            script.resize(oldsize + size_t(h160.length()));
-            memcpy(&script[oldsize], h160.constData(), size_t(h160.length()));
-            scriptTail = { OP_EQUAL };
-            script.insert(script.end(), scriptTail.begin(), scriptTail.end());
+            script += h160;
+            script += { OP_EQUAL };
             bitcoin::uint256 hash = bitcoin::HashOnce(script.begin(), script.end());
             auto str = hash.GetHex();
             ret = str.c_str();
@@ -109,10 +103,7 @@ namespace BTC
     QString Address::toString() const {
         QString ret;
         if (isValid()) {
-            std::vector<unsigned char> vch;
-            vch.resize(size_t(h160.size()+1));
-            vch[0] = verByte;
-            memcpy(&vch[1], h160.constData(), size_t(h160.size()));
+            ByteArray vch = ByteArray({verByte}) + h160;
             auto str = bitcoin::EncodeBase58Check(vch);
             ret = QString::fromUtf8(str.c_str());
         }
@@ -208,7 +199,7 @@ namespace BTC
         return (*this) += ByteArray(il);
     }
 
-    ByteArray & ByteArray::operator=(const ByteArray &a)
+    ByteArray & ByteArray::operator=(const std::vector<Byte> &a)
     {
         clear();
         return (*this) += a;

@@ -13,6 +13,9 @@ namespace BTC
         TestNet = 0xef
     };
 
+    /// Helper class to glue QByteArray (which is very fast and efficient due to copy-on-write)
+    /// to bitcoin's std::vector usage.
+    /// This class also allows expressions like ByteArray a = { opcode1, opcode2 } + somebytearray + { moreopcodes };
     typedef unsigned char Byte;
     struct ByteArray : public std::vector<Byte>
     {
@@ -21,11 +24,12 @@ namespace BTC
         ByteArray(std::vector<Byte> &&);
         ByteArray(const QByteArray &);
         ByteArray(const QString &);
+        ByteArray(const char *s) { *this = s; }
         ByteArray(const std::initializer_list<Byte> &);
 
-        ByteArray toHex() const; ///< returns Hex encoded
-        QByteArray toQHex() const; ///< returns Hex encoded
-        QString toHexStr() const { return QString(toQHex()); } ///< returns Hex encoded
+        ByteArray toHex() const; ///< returns Hex encoded (non-reversed)
+        QByteArray toQHex() const; ///< returns Hex encoded (non-reversed)
+        QString toHexStr() const { return QString(toQHex()); } ///< returns Hex encoded (non-reversed)
         Byte *data(); ///< unsafe.
         const Byte* constData() const;
 
@@ -41,7 +45,8 @@ namespace BTC
         ByteArray & operator+=(const QByteArray &);
         ByteArray & operator+=(const QString &);
         ByteArray & operator+=(const std::initializer_list<Byte> &);
-        ByteArray & operator=(const ByteArray &);
+        ByteArray & operator+=(const char *s) { return *this += QByteArray(s); }
+        ByteArray & operator=(const std::vector<Byte> &o);
         ByteArray & operator=(const QByteArray &);
         ByteArray & operator=(const QString &);
         ByteArray & operator=(const std::initializer_list<Byte> &);
@@ -69,7 +74,7 @@ namespace BTC
         bool isValid() const;
 
 
-        /// returns the ElectrumX 'scripthash', hex encoded
+        /// returns the ElectrumX 'scripthash', hex encoded (which is reversed because of bitcoin's way)
         QByteArray toHashX() const;
 
         /// if isValid, returns the legacy address string, base58 encoded
