@@ -1,5 +1,6 @@
 #include "BTC.h"
 #include "bitcoin/base58.h"
+#include "bitcoin/hash.h"
 #include "Util.h"
 #include <QString>
 #include <string.h>

@@ -17,15 +17,28 @@ DEFINES += QT_DEPRECATED_WARNINGS
 
 SOURCES += \
     BTC.cpp \
+    bitcoin/base58.cpp \
+    bitcoin/crypto/aes.cpp \
+    bitcoin/crypto/chacha20.cpp \
+    bitcoin/crypto/ctaes/ctaes.c \
+    bitcoin/crypto/hmac_sha256.cpp \
+    bitcoin/crypto/hmac_sha512.cpp \
+    bitcoin/crypto/ripemd160.cpp \
+    bitcoin/crypto/sha1.cpp \
+    bitcoin/crypto/sha256.cpp \
+    bitcoin/crypto/sha256_sse4.cpp \
+    bitcoin/crypto/sha512.cpp \
+    bitcoin/hash.cpp \
+    bitcoin/test.cpp \
+    bitcoin/uint256.cpp \
+    bitcoin/utilstrencodings.cpp \
     main.cpp \
     App.cpp \
     Logger.cpp \
     Util.cpp \
     EXMgr.cpp \
     Common.cpp \
-    EXClient.cpp \
-    bitcoin/bignum.cpp \
-    bitcoin/test.cpp
+    EXClient.cpp
 
 # Default rules for deployment.
 qnx: target.path = /tmp/$${TARGET}/bin
@@ -41,14 +54,27 @@ HEADERS += \
     Common.h \
     EXClient.h \
     bitcoin/base58.h \
-    bitcoin/bignum.h \
-    bitcoin/bitcoin_util.h \
-    bitcoin/uint256.h
+    bitcoin/crypto/byteswap.h \
+    bitcoin/crypto/endian.h \
+    bitcoin/crypto/aes.h \
+    bitcoin/crypto/chacha20.h \
+    bitcoin/crypto/common.h \
+    bitcoin/crypto/ctaes/ctaes.h \
+    bitcoin/crypto/hmac_sha256.h \
+    bitcoin/crypto/hmac_sha512.h \
+    bitcoin/crypto/ripemd160.h \
+    bitcoin/crypto/sha1.h \
+    bitcoin/crypto/sha256.h \
+    bitcoin/crypto/sha512.h \
+    bitcoin/hash.h \
+    bitcoin/tinyformat.h \
+    bitcoin/uint256.h \
+    bitcoin/utilstrencodings.h
 
 RESOURCES += \
     resources.qrc
 
 # Needed for OpenSSL.  Modify this for your platform  FIXME: add Windows support
-unix: LIBS += -L/opt/local/lib/ -lssl -lcrypto
-INCLUDEPATH += /opt/local/include
-DEPENDPATH += /opt/local/include
+#unix: LIBS += -L/opt/local/lib/ -lssl -lcrypto
+#INCLUDEPATH += /opt/local/include
+#DEPENDPATH += /opt/local/include
