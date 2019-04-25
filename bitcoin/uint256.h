@@ -17,6 +17,7 @@
 
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wold-style-cast"
+#pragma clang diagnostic ignored "-Wundefined-func-template"
 
 namespace bitcoin {
 
@@ -107,6 +108,7 @@ public:
         s.read((char *)data, sizeof(data));
     }
 };
+
 
 /**
  * 160-bit opaque blob.
