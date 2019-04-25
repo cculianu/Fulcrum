@@ -72,10 +72,12 @@ namespace BTC
 
     /// returns the ElectrumX 'scripthash_hex'
     QByteArray Address::toHashX() const {
-        QByteArray ret;
+
         if (!isValid())
-            return ret;
-        // TODO: Refactor the below ...
+            return QByteArray();
+        if (!cachedHashX.isEmpty())
+            return cachedHashX;
+        QByteArray ret;
         ByteArray script;
         if (kind() == P2PKH) {
             script = {
@@ -96,6 +98,7 @@ namespace BTC
             auto str = hash.GetHex();
             ret = str.c_str();
         }
+        cachedHashX = ret;
         return ret;
     }
 
@@ -128,10 +131,14 @@ namespace BTC
         Address c(a);
         c = b;
         std::cout << "Decoded -> VerByte: " << int(a.verByte) <<  "  Hash160 (hex): " << a.h160.toHex().constData() << std::endl;
-        std::vector<char> v = { 'a', ' ', 'b', 'c', 0 };
-        std::cout << "Vect: " << (&v[0]) << std::endl;
+        ByteArray v = { 'a', ' ', 'b', 'c', 0 };
+        std::cout << "Vect: " << QByteArray(v).constData() << std::endl;
         std::cout << "IsValid: " << a.isValid() << " kind: " << a.kind() << std::endl;
         std::cout << "HashX of " << a.toString().toUtf8().constData() << " = " << a.toHashX().constData() << std::endl;
+        c = a;
+        std::cout << "HashX again " << c.toString().toUtf8().constData() << " = " << c.toHashX().constData() << std::endl;
+        std::cout << "c==a : " << int(c==a) << std::endl;
+        std::cout << "c==b : " << int(c==b) << " (cached?,cached?): (" << int(!c.cachedHashX.isEmpty()) << "," << int(!b.cachedHashX.isEmpty()) << ")" << std::endl;
         //std::cout << "Testnet: " << a.toString().toUtf8().constData() << std::endl;
         return a.isValid() && a.toString() == anAddress && a == b;
     }
