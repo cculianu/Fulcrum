@@ -76,7 +76,7 @@ namespace BTC
         if (!isValid())
             return ret;
         // TODO: Refactor the below ...
-        std::vector<quint8> script, scriptTail;
+        ByteArray script, scriptTail;
         if (kind() == P2PKH) {
             script = {
                 OP_DUP, OP_HASH160, quint8(h160.length())
@@ -181,6 +181,12 @@ namespace BTC
         ret += s;
         return ret;
     }
+    ByteArray ByteArray::operator+(const std::initializer_list<Byte> &il) const
+    {
+        ByteArray ret(*this);
+        ret += il;
+        return ret;
+    }
     ByteArray & ByteArray::operator+=(const std::vector<Byte> & b)
     {
         if (!b.empty())
@@ -197,6 +203,11 @@ namespace BTC
     {
         return (*this) += s.toUtf8();
     }
+    ByteArray & ByteArray::operator+=(const std::initializer_list<Byte> &il)
+    {
+        return (*this) += ByteArray(il);
+    }
+
     ByteArray & ByteArray::operator=(const ByteArray &a)
     {
         clear();
@@ -211,6 +222,11 @@ namespace BTC
     {
         clear();
         return (*this) += a;
+    }
+    ByteArray & ByteArray::operator=(const std::initializer_list<Byte> &il)
+    {
+        clear();
+        return *this += il;
     }
     ByteArray::operator QByteArray() const
     {

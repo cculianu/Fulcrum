@@ -36,12 +36,15 @@ namespace BTC
         ByteArray operator+(const QByteArray & o) const;
         ByteArray operator+(const QString &) const;
         ByteArray operator+(const char *s) const { return *this + QByteArray(s); }
+        ByteArray operator+(const std::initializer_list<Byte> &) const;
         ByteArray & operator+=(const std::vector<Byte> & b);
         ByteArray & operator+=(const QByteArray &);
         ByteArray & operator+=(const QString &);
+        ByteArray & operator+=(const std::initializer_list<Byte> &);
         ByteArray & operator=(const ByteArray &);
         ByteArray & operator=(const QByteArray &);
         ByteArray & operator=(const QString &);
+        ByteArray & operator=(const std::initializer_list<Byte> &);
         ByteArray & operator=(const char *s) { return *this = QByteArray(s); }
         operator QByteArray() const;
     };
