@@ -141,14 +141,20 @@ namespace BTC
         b = a;
         Address c(a);
         c = b;
+        // NOTE: the below tests are unsafe because they access charData() which may not have a nul byte at the end.
+        // If this crashes, then modify the code below to read into QStrings or something like that.
+        // On my platform it just happened to work and I was testing things quickly so I didn't bother to
+        // do the below the correct way.
         std::cout << "Decoded -> VerByte: " << int(a.verByte) <<  "  Hash160 (hex): " << a.h160.toHex().constData() << std::endl;
         ByteArray v = { 'a', ' ', 'b', 'c', 0 };
         ByteArray v2 = "this is a test";
         auto vcat = ByteArray({'a','b','c',' '}) + v2;
         std::vector<Byte> v3(v2); // support construction from ByteArray to vector
         ByteArray v4(v3); // support construction from vector to ByteArray
-        std::cout << "Init list test: " << v.data() << std::endl;
-        std::cout << "Init string test: " << v2.charData() << std::endl;
+        std::cout << "Init list test: " << v.charData() << " .length() = " << v.length() << std::endl;
+        ByteArray inl("12345");
+        std::cout << "Inline string: " << inl.charData() << " .length() = " << inl.length() << std::endl;
+        std::cout << "Init string test: " << v2.charData() << " .length() = " << v2.length() << std::endl;
         std::cout << "Chained c'tor string test: " << v4.charData() << std::endl;
         std::cout << "Concat test: " << (vcat + ByteArray({0})).charData() << std::endl;
         std::cout << "Concat test 2: " << ((vcat+"..more stuff")+ByteArray({'z','z','z',0})).charData() << std::endl;

@@ -16,6 +16,8 @@ namespace BTC
     /// Helper class to glue QByteArray (which is very fast and efficient due to copy-on-write)
     /// to bitcoin's std::vector usage.
     /// This class also allows expressions like ByteArray a = { opcode1, opcode2 } + somebytearray + { moreopcodes };
+    /// NB: Do not use this to operate on C strings as they may not always be nul terminated. For that,
+    /// use QByteArray or QString.
     typedef unsigned char Byte;
     struct ByteArray : public std::vector<Byte>
     {
@@ -25,7 +27,7 @@ namespace BTC
         // TO DO: see about removing some of this boilerplate using either C++ subtleties or templates.
         ByteArray(const QByteArray &);
         ByteArray(const QString &);
-        ByteArray(const char *s) { *this = s; }
+        ByteArray(const char *s) { *this = s; } ///< Note: the nul byte is NOT copied into the buffer.
         ByteArray(const std::initializer_list<Byte> &);
 
         ByteArray toHex() const; ///< returns Hex encoded (non-reversed)
@@ -59,7 +61,7 @@ namespace BTC
         ByteArray & operator+=(const QByteArray &);
         ByteArray & operator+=(const QString &);
         ByteArray & operator+=(const std::initializer_list<Byte> &);
-        ByteArray & operator+=(const char *s) { return *this += QByteArray(s); }
+        ByteArray & operator+=(const char *s) { return *this += QByteArray(s); } ///< C-string terminating nul byte is NOT copied into the buffer!
         ByteArray & operator=(const std::vector<Byte> &o);
         ByteArray & operator=(const QByteArray &);
         ByteArray & operator=(const QString &);
