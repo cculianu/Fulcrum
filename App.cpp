@@ -13,12 +13,7 @@
 App::App(int argc, char *argv[])
     : QCoreApplication (argc, argv)
 {
-#ifdef QT_DEBUG
-    options.verboseDebug = true;
-#else
-    options.verboseDebug = false;
-#endif
-    options.interfaces = {{QHostAddress("0.0.0.0"), DEFAULT_PORT}};
+    options.interfaces = {{QHostAddress("0.0.0.0"), Options::DEFAULT_PORT}};
     setApplicationName(APPNAME);
     setApplicationVersion(QString("%1 %2").arg(VERSION).arg(VERSION_EXTRA));
 
@@ -85,7 +80,7 @@ void App::parseArgs()
     parser.addOptions({
         { { "i", "interface" },
           QString("Specify which <interface:port> to listen for connections on, defaults to 0.0.0.0:%1 (all interfaces,"
-                  " port %1). This option may be specified more than once to bind to multiple interfaces.").arg(DEFAULT_PORT),
+                  " port %1). This option may be specified more than once to bind to multiple interfaces and/or ports.").arg(Options::DEFAULT_PORT),
           QString("interface:port")
         },
         { { "f", "servers" },

@@ -8,7 +8,14 @@
 #include <QList>
 
 struct Options {
-    std::atomic_bool verboseDebug = false; ///< gets set to true on debug builds
+    static const quint16 DEFAULT_PORT = 2641;
+
+    std::atomic_bool verboseDebug =
+#ifdef QT_DEBUG
+        true; ///< gets set to true on debug builds
+#else
+        false; ///< gets set to false on release builds
+#endif
     std::atomic_bool syslogMode = false; ///< if true, suppress printing of timestamps to logger
 
     typedef QPair<QHostAddress, quint16> Interface;

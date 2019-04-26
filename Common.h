@@ -20,7 +20,6 @@ public:
 
 #define APPNAME "ShuffleUpServer"
 #define VERSION "1.0"
-#define DEFAULT_PORT 2641
 #ifdef QT_DEBUG
 #  define VERSION_EXTRA "(Debug)"
 #else
