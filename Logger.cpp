@@ -21,7 +21,7 @@ Logger::~Logger() {}
 #  define ISATTY isatty
 #  define FILENO fileno
 #endif
-ConsoleLogger::ConsoleLogger(QObject *p,bool stdOut)
+ConsoleLogger::ConsoleLogger(QObject *p, bool stdOut)
     : Logger(p), stdOut(stdOut)
 {}
 

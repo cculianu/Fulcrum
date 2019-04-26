@@ -1,8 +1,9 @@
 #ifndef UTIL_H
 #define UTIL_H
 
-#include <QtCore>
 #include "Common.h"
+#include <QtCore>
+#include <atomic>
 #define Q2C(qstr) qstr.toUtf8().constData()
 
 namespace Util {
@@ -38,7 +39,7 @@ namespace Util {
             if (killed) return ret;
             QMutexLocker ml(&mut);
             bool timedOut = true;
-            if (data.isEmpty() && timeout_ms > 0)
+            if (!killed && data.isEmpty() && timeout_ms > 0)
                 timedOut = !cond.wait(&mut, timeout_ms);
             if (!timedOut && !killed && !data.isEmpty()) {
                 ret = data.front();  data.pop_front();
@@ -54,7 +55,7 @@ namespace Util {
         void clear() { QMutexLocker ml(&mut); data.clear(); }
         void close() { QMutexLocker ml(&mut); killed = true; cond.wakeAll(); }
     private:
-        volatile bool killed = false;
+        std::atomic_bool killed = false;
         QList<T> data;
         QMutex mut;
         QWaitCondition cond;
