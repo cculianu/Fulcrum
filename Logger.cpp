@@ -12,14 +12,8 @@ Logger::~Logger() {}
 
 #include <iostream>
 #include <stdio.h>
-#ifdef Q_OS_WIN
-#  include <io.h>
-#  define ISATTY _isatty
-#  define FILENO _fileno
-#else
+#ifndef Q_OS_WIN
 #  include <unistd.h>
-#  define ISATTY isatty
-#  define FILENO fileno
 #endif
 ConsoleLogger::ConsoleLogger(QObject *p, bool stdOut)
     : Logger(p), stdOut(stdOut)
@@ -33,9 +27,9 @@ void ConsoleLogger::gotLine(const QString &l) {
 
 bool ConsoleLogger::isaTTY() const {
 #ifdef Q_OS_WIN
-    return false;
+    return false; // console control chars don't reliably work on windows. disable color always
 #else
-    int fd = FILENO(stdOut ? stdout : stderr);
-    return ISATTY(fd);
+    int fd = fileno(stdOut ? stdout : stderr);
+    return isatty(fd);
 #endif
 }
