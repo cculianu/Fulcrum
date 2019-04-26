@@ -8,10 +8,12 @@
 #include "crypto/hmac_sha512.h"
 //#include <pubkey.h>
 
+#ifdef __clang__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wold-style-cast"
 #pragma clang diagnostic ignored "-Wsign-conversion"
 #pragma clang diagnostic ignored "-Wshorten-64-to-32"
+#endif
 
 namespace bitcoin {
 
@@ -98,4 +100,6 @@ void BIP32Hash(const ChainCode &chainCode, uint32_t nChild, uint8_t header,
 
 } // end namespace bitcoin
 
+#ifdef __clang__
 #pragma clang diagnostic pop
+#endif

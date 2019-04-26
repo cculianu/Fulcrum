@@ -14,10 +14,12 @@
 
 #include "endian.h"
 
+#ifdef __clang__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunused-function"
 #pragma clang diagnostic ignored "-Wold-style-cast"
 #pragma clang diagnostic ignored "-Wsign-conversion"
+#endif
 
 namespace bitcoin {
 static inline uint16_t ReadLE16(const uint8_t *ptr) {
@@ -100,6 +102,8 @@ uint64_t static inline CountBits(uint64_t x) {
 
 } // end namespace bitcoin
 
+#ifdef __clang__
 #pragma clang diagnostic pop
+#endif
 
 #endif // BITCOIN_CRYPTO_COMMON_H

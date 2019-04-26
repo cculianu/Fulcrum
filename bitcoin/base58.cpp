@@ -14,9 +14,11 @@
 #include <string>
 #include <vector>
 
+#ifdef __clang__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wconversion"
 #pragma clang diagnostic ignored "-Wold-style-cast"
+#endif
 
 namespace bitcoin {
 /** All alphanumeric characters except for "0", "I", "O", and "l" */
@@ -159,4 +161,6 @@ bool DecodeBase58Check(const std::string &str, std::vector<uint8_t> &vchRet) {
 
 } // end namespace bitcoin
 
+#ifdef __clang__
 #pragma clang diagnostic pop
+#endif

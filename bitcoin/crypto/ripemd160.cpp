@@ -8,9 +8,11 @@
 
 #include <cstring>
 
+#ifdef __clang__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wsign-conversion"
 #pragma clang diagnostic ignored "-Wunused-parameter"
+#endif
 
 namespace bitcoin {
 
@@ -335,4 +337,6 @@ CRIPEMD160 &CRIPEMD160::Reset() {
 
 } // end namespace bitcoin
 
+#ifdef __clang__
 #pragma clang diagnostic pop
+#endif

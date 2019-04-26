@@ -10,9 +10,11 @@
 #include <cstdio>
 #include <cstring>
 
+#ifdef __clang__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wold-style-cast"
 #pragma clang diagnostic ignored "-Wsign-conversion"
+#endif
 
 namespace bitcoin {
 
@@ -79,5 +81,7 @@ template void base_blob<256>::SetHex(const std::string &);
 
 } // end namespace bitcoin
 
+#ifdef __clang__
 #pragma clang diagnostic pop
+#endif
 

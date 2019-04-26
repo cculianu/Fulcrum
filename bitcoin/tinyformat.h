@@ -137,10 +137,12 @@ namespace tfm = tinyformat;
 #include <sstream>
 #include <stdexcept>
 
+#ifdef __clang__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunreachable-code-return"
 #pragma clang diagnostic ignored "-Wunreachable-code-break"
 #pragma clang diagnostic ignored "-Wzero-as-null-pointer-constant"
+#endif
 
 #ifndef TINYFORMAT_ERROR
 #define TINYFORMAT_ERROR(reason) assert(0 && reason)
@@ -1083,6 +1085,8 @@ std::string format(const std::string &fmt, const Args &... args) {
 
 #define strprintf tfm::format
 
+#ifdef __clang__
 #pragma clang diagnostic pop
+#endif
 
 #endif // TINYFORMAT_H_INCLUDED

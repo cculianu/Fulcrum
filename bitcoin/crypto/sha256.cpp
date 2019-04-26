@@ -9,9 +9,11 @@
 #include <cassert>
 #include <cstring>
 
+#ifdef __clang__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wsign-conversion"
 #pragma clang diagnostic ignored "-Wunused-template"
+#endif
 
 #if defined(__x86_64__) || defined(__amd64__) || defined(__i386__)
 #if defined(USE_ASM)
@@ -907,4 +909,6 @@ void SHA256D64(uint8_t *out, const uint8_t *in, size_t blocks) {
 
 } // end namespace bitcoin
 
+#ifdef __clang__
 #pragma clang diagnostic pop
+#endif

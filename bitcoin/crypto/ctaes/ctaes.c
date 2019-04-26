@@ -14,9 +14,11 @@
 
 #include "ctaes.h"
 
+#ifdef __clang__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wconversion"
 #pragma clang diagnostic ignored "-Wsign-conversion"
+#endif
 
 /* Slice variable slice_i contains the i'th bit of the 16 state variables in
  * this order:
@@ -585,4 +587,6 @@ void AES256_decrypt(const AES256_ctx *ctx, size_t blocks, uint8_t *plain16,
     }
 }
 
+#ifdef __clang__
 #pragma clang diagnostic pop
+#endif

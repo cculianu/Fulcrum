@@ -13,11 +13,13 @@
 #include <cstring>
 #include <limits>
 
+#ifdef __clang__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wsign-conversion"
 #pragma clang diagnostic ignored "-Wold-style-cast"
 #pragma clang diagnostic ignored "-Wconversion"
 #pragma clang diagnostic ignored "-Wtautological-type-limit-compare"
+#endif
 
 namespace bitcoin {
 
@@ -826,4 +828,6 @@ std::string Capitalize(std::string str) {
 
 } // end namespace bitcoin
 
+#ifdef __clang__
 #pragma clang diagnostic pop
+#endif
