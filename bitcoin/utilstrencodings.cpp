@@ -13,7 +13,7 @@
 #include <cstring>
 #include <limits>
 
-#if defined(__clang__) || defined(__GNUC__)
+#if defined(__clang__) || defined(GCC)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wsign-conversion"
 #pragma GCC diagnostic ignored "-Wold-style-cast"
@@ -828,6 +828,6 @@ std::string Capitalize(std::string str) {
 
 } // end namespace bitcoin
 
-#if defined(__clang__) || defined(__GNUC__)
+#if defined(__clang__) || defined(GCC)
 #pragma GCC diagnostic pop
 #endif

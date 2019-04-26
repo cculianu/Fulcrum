@@ -14,7 +14,7 @@
 #include <string>
 #include <vector>
 
-#if defined(__clang__) || defined(__GNUC__)
+#if defined(__clang__) || defined(GCC)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wconversion"
 #pragma GCC diagnostic ignored "-Wold-style-cast"
@@ -161,6 +161,6 @@ bool DecodeBase58Check(const std::string &str, std::vector<uint8_t> &vchRet) {
 
 } // end namespace bitcoin
 
-#if defined(__clang__) || defined(__GNUC__)
+#if defined(__clang__) || defined(GCC)
 #pragma GCC diagnostic pop
 #endif

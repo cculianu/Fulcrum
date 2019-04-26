@@ -19,7 +19,7 @@
 #include <sys/endian.h>
 #endif
 
-#if defined(__clang__) || defined(__GNUC__)
+#if defined(__clang__) || defined(GCC)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wundef"
 #endif
@@ -177,7 +177,7 @@ inline uint64_t le64toh(uint64_t little_endian_64bits) {
 
 } // namespace bitcoin
 
-#if defined(__clang__) || defined(__GNUC__)
+#if defined(__clang__) || defined(GCC)
 #pragma GCC diagnostic pop
 #endif
 

@@ -8,7 +8,7 @@
 
 #include <cstring>
 
-#if defined(__clang__) || defined(__GNUC__)
+#if defined(__clang__) || defined(GCC)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wsign-conversion"
 #pragma GCC diagnostic ignored "-Wunused-parameter"
@@ -337,6 +337,6 @@ CRIPEMD160 &CRIPEMD160::Reset() {
 
 } // end namespace bitcoin
 
-#if defined(__clang__) || defined(__GNUC__)
+#if defined(__clang__) || defined(GCC)
 #pragma GCC diagnostic pop
 #endif

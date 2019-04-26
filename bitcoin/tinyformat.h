@@ -137,7 +137,7 @@ namespace tfm = tinyformat;
 #include <sstream>
 #include <stdexcept>
 
-#if defined(__clang__) || defined(__GNUC__)
+#if defined(__clang__) || defined(GCC)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunreachable-code-return"
 #pragma GCC diagnostic ignored "-Wunreachable-code-break"
@@ -1085,7 +1085,7 @@ std::string format(const std::string &fmt, const Args &... args) {
 
 #define strprintf tfm::format
 
-#if defined(__clang__) || defined(__GNUC__)
+#if defined(__clang__) || defined(GCC)
 #pragma GCC diagnostic pop
 #endif
 

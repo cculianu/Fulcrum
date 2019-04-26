@@ -15,7 +15,7 @@
 #include <string>
 #include <vector>
 
-#if defined(__clang__) || defined(__GNUC__)
+#if defined(__clang__) || defined(GCC)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wold-style-cast"
 #pragma GCC diagnostic ignored "-Wundefined-func-template"
@@ -181,7 +181,7 @@ inline uint160 uint160S(const std::string &str) {
 
 } // end namespace bitcoin
 
-#if defined(__clang__) || defined(__GNUC__)
+#if defined(__clang__) || defined(GCC)
 #pragma GCC diagnostic pop
 #endif
 
