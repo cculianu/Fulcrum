@@ -65,12 +65,15 @@ void EXClient::start()
 
 void EXClient::stop()
 {
+    /// Disconnect this externally originating signal before stopping to
+    /// ensure no new signals get sent to us after we switch back to the
+    /// main thread.
+    disconnect(this, &EXClient::sendRequest, this, &EXClient::_sendRequest);
     if (_thread.isRunning()) {
         Debug() << host << " thread is running, joining thread";
         _thread.quit();
         _thread.wait();
     }
-    disconnect(this, &EXClient::sendRequest, this, &EXClient::_sendRequest);
     disconnect(&_thread, &QThread::started, this, &EXClient::on_started);
     disconnect(&_thread, &QThread::finished, this, &EXClient::on_finished);
 }
