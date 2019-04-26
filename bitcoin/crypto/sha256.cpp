@@ -9,7 +9,7 @@
 #include <cassert>
 #include <cstring>
 
-#if defined(__clang__) || defined(GCC)
+#if defined(__clang__) || defined(__GNUC__)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wsign-conversion"
 #pragma GCC diagnostic ignored "-Wunused-template"
@@ -909,6 +909,6 @@ void SHA256D64(uint8_t *out, const uint8_t *in, size_t blocks) {
 
 } // end namespace bitcoin
 
-#if defined(__clang__) || defined(GCC)
+#if defined(__clang__) || defined(__GNUC__)
 #pragma GCC diagnostic pop
 #endif

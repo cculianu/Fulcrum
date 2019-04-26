@@ -8,7 +8,7 @@
 #include "crypto/hmac_sha512.h"
 //#include <pubkey.h>
 
-#if defined(__clang__) || defined(GCC)
+#if defined(__clang__) || defined(__GNUC__)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wold-style-cast"
 #pragma GCC diagnostic ignored "-Wsign-conversion"
@@ -100,6 +100,6 @@ void BIP32Hash(const ChainCode &chainCode, uint32_t nChild, uint8_t header,
 
 } // end namespace bitcoin
 
-#if defined(__clang__) || defined(GCC)
+#if defined(__clang__) || defined(__GNUC__)
 #pragma GCC diagnostic pop
 #endif

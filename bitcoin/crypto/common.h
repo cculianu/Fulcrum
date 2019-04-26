@@ -14,7 +14,7 @@
 
 #include "endian.h"
 
-#if defined(__clang__) || defined(GCC)
+#if defined(__clang__) || defined(__GNUC__)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-function"
 #pragma GCC diagnostic ignored "-Wold-style-cast"
@@ -102,7 +102,7 @@ uint64_t static inline CountBits(uint64_t x) {
 
 } // end namespace bitcoin
 
-#if defined(__clang__) || defined(GCC)
+#if defined(__clang__) || defined(__GNUC__)
 #pragma GCC diagnostic pop
 #endif
 

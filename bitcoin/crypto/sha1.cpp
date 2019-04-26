@@ -8,7 +8,7 @@
 
 #include <cstring>
 
-#if defined(__clang__) || defined(GCC)
+#if defined(__clang__) || defined(__GNUC__)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 #pragma GCC diagnostic ignored "-Wsign-conversion"
@@ -205,6 +205,6 @@ CSHA1 &CSHA1::Reset() {
 
 } // end namespace bitcoin
 
-#if defined(__clang__) || defined(GCC)
+#if defined(__clang__) || defined(__GNUC__)
 #pragma GCC diagnostic pop
 #endif

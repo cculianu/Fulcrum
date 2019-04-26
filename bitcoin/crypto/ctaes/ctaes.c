@@ -14,7 +14,7 @@
 
 #include "ctaes.h"
 
-#if defined(__clang__) || defined(GCC)
+#if defined(__clang__) || defined(__GNUC__)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wconversion"
 #pragma GCC diagnostic ignored "-Wsign-conversion"
@@ -587,6 +587,6 @@ void AES256_decrypt(const AES256_ctx *ctx, size_t blocks, uint8_t *plain16,
     }
 }
 
-#if defined(__clang__) || defined(GCC)
+#if defined(__clang__) || defined(__GNUC__)
 #pragma GCC diagnostic pop
 #endif

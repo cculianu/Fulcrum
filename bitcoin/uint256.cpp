@@ -10,7 +10,7 @@
 #include <cstdio>
 #include <cstring>
 
-#if defined(__clang__) || defined(GCC)
+#if defined(__clang__) || defined(__GNUC__)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wold-style-cast"
 #pragma GCC diagnostic ignored "-Wsign-conversion"
@@ -81,7 +81,7 @@ template void base_blob<256>::SetHex(const std::string &);
 
 } // end namespace bitcoin
 
-#if defined(__clang__) || defined(GCC)
+#if defined(__clang__) || defined(__GNUC__)
 #pragma GCC diagnostic pop
 #endif
 
