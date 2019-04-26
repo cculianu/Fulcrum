@@ -89,7 +89,7 @@ protected:
 
     static const qint64 reconnectTime = 2*60*1000; /// retry every 2 mins
 
-    QThread thread;
+    QThread _thread;
 
     void start(); ///< call from main thread
     void stop(); ///< call from main thread
@@ -110,7 +110,7 @@ private:
     /// returns utf-8 encoded JSON data for a request
     static QByteArray makeRequestData(qint64 id, const QString &method, const QVariantList & params = QVariantList());
 
-    QString hostPrettyName() const; ///< called only from our thread otherwise it may crash
+    QString prettyName() const; ///< called only from our thread otherwise it may crash because it touches 'socket'
 
     void on_started();
     void on_finished();

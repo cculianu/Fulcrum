@@ -26,9 +26,7 @@ namespace Util {
     }
 
     namespace Json {
-        Error::Error(const QString &what)
-            : Exception(Q2C(what))
-        {}
+        Error::~Error() {} // for vtable
 
         QVariant parseString(const QString &str, bool expectMap) {
             QJsonParseError e;

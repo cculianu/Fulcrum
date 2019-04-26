@@ -2,6 +2,7 @@
 #include "Logger.h"
 #include "Util.h"
 #include "EXMgr.h"
+#include "SrvMgr.h"
 #ifdef Q_OS_UNIX
 #include <signal.h>
 #endif
@@ -38,6 +39,7 @@ App::App(int argc, char *argv[])
 App::~App()
 {
     Debug() << "App d'tor";
+    Log() << "Shudown complete";
     /// child objects will be auto-deleted
 }
 
@@ -48,14 +50,17 @@ void App::startup()
     try {
 #ifdef Q_OS_UNIX
         auto gotsig = [](int sig) {
-            Log() << "Got signal: " << sig << ", exiting";
+            Log() << "Got signal: " << sig << ", exiting ...";
+            app()->cleanup();
             app()->exit(sig);
         };
         ::signal(SIGINT, gotsig);
         ::signal(SIGTERM, gotsig);
 #endif
+        srvmgr = new SrvMgr(options.interfaces, this);
         exmgr = new EXMgr(options.serversFile, this);
 
+        srvmgr->startup(); // may throw Exception
         exmgr->startup(); // may throw Exception
     } catch (const Exception & e) {
         Error () << "Caught exception: " << e.what();
@@ -66,7 +71,8 @@ void App::startup()
 void App::cleanup()
 {
     Debug() << __PRETTY_FUNCTION__ ;
-    if (exmgr) { exmgr->cleanup(); delete exmgr; exmgr = nullptr; }
+    if (srvmgr) { Log() << "Stopping SrvMgr ... "; srvmgr->cleanup(); delete srvmgr; srvmgr = nullptr; }
+    if (exmgr) { Log() << "Stopping EXMgr ... "; exmgr->cleanup(); delete exmgr; exmgr = nullptr; }
 }
 
 void App::parseArgs()
@@ -111,7 +117,7 @@ void App::parseArgs()
         for (auto s : l) {
             auto toks = s.split(":");
             if (toks.length() < 2)
-                throw BadArgs("Malformed interface spec. Please pass an IPv4 address of the form 1.2.3.4:123.");
+                throw BadArgs("Malformed interface spec. Please pass a address of the form 1.2.3.4:123 for IPv4 or ::1:123 for IPv6.");
             QString portStr = toks.last();
             toks.removeLast();
             QString hostStr = toks.join(":");

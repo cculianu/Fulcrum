@@ -15,7 +15,8 @@ namespace Util {
     namespace Json {
         class Error : public Exception {
         public:
-            Error(const QString &what = "Json Error");
+            using Exception::Exception;
+            ~Error();
         };
 
         /// if expectmap, then throw if not a dict. Otherwise throw if not a list.
@@ -23,6 +24,41 @@ namespace Util {
         extern QVariant parseFile(const QString &file, bool expectMap = true); ///< throws Error
         extern QString toString(const QVariant &, bool compact = false); ///< throws Error
     }
+
+    // Go channel work-alike for sharing data across threads
+    // T must be copy constructible and copyable, also default constructible
+    template <typename T> class Channel
+    {
+    public:
+        Channel() {}
+        ~Channel() { close(); }
+        // returns T() on fail
+        T get(unsigned long timeout_ms = ULONG_MAX) {
+            T ret;
+            if (killed) return ret;
+            QMutexLocker ml(&mut);
+            bool timedOut = true;
+            if (data.isEmpty() && timeout_ms > 0)
+                timedOut = !cond.wait(&mut, timeout_ms);
+            if (!timedOut && !killed && !data.isEmpty()) {
+                ret = data.front();  data.pop_front();
+            }
+            return ret;
+        }
+        void put(const T & t) {
+            if (killed) return;
+            QMutexLocker ml(&mut);
+            data.push_back(t);
+            cond.wakeOne();
+        }
+        void clear() { QMutexLocker ml(&mut); data.clear(); }
+        void close() { QMutexLocker ml(&mut); killed = true; cond.wakeAll(); }
+    private:
+        volatile bool killed = false;
+        QList<T> data;
+        QMutex mut;
+        QWaitCondition cond;
+    };
 }
 
 /// Super class of Debug, Warning, Error classes.

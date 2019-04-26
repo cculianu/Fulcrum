@@ -1,6 +1,7 @@
 #ifndef APP_H
 #define APP_H
 
+#include "Options.h"
 #include <QCoreApplication>
 #include <atomic>
 #include <QHostAddress>
@@ -8,6 +9,7 @@
 
 class Logger;
 class EXMgr;
+class SrvMgr;
 
 class App : public QCoreApplication
 {
@@ -18,14 +20,6 @@ public:
 
     Logger *logger() { return _logger; }
 
-    struct Options {
-        std::atomic_bool verboseDebug = false; ///< gets set to true on debug builds
-        std::atomic_bool syslogMode = false; ///< if true, suppress printing of timestamps to logger
-
-        typedef QPair<QHostAddress, quint16> Interface;
-        QList<Interface> interfaces; ///< interfaces to use for binding, defaults to 0.0.0.0 DEFAULT_PORT
-        QString serversFile = ":/file/servers.json";
-    };
     Options options;
 
 signals:
@@ -34,6 +28,7 @@ public slots:
 
 private:
     Logger *_logger = nullptr;
+    SrvMgr *srvmgr = nullptr; // TODO: implement multiple servers, 1 per socket
     EXMgr *exmgr = nullptr;
 
     void startup();

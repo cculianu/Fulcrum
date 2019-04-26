@@ -18,6 +18,9 @@ DEFINES += QT_DEPRECATED_WARNINGS
 SOURCES += \
     BTC.cpp \
     Controller.cpp \
+    Options.cpp \
+    SrvMgr.cpp \
+    TcpServer.cpp \
     bitcoin/base58.cpp \
     bitcoin/crypto/aes.cpp \
     bitcoin/crypto/chacha20.cpp \
@@ -51,6 +54,9 @@ HEADERS += \
     BTC.h \
     Controller.h \
     Logger.h \
+    Options.h \
+    SrvMgr.h \
+    TcpServer.h \
     Util.h \
     EXMgr.h \
     Common.h \

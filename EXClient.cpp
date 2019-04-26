@@ -9,17 +9,17 @@ namespace  {
 
 class BadServerReply : public Exception {
 public:
-    BadServerReply(const QString &what) : Exception(what) {}
+    using Exception::Exception; /// bring in c'tor
     ~BadServerReply();
 };
 
-BadServerReply::~BadServerReply() {}
+BadServerReply::~BadServerReply() {} // for vtable
 
 EXClient::EXClient(EXMgr *mgr, const QString &host, quint16 tport, quint16 sport)
     : QObject(nullptr), host(host), tport(tport), sport(sport), mgr(mgr)
 {
     Debug() << __FUNCTION__ << " host:" << host << " t:" << tport << " s:" << sport;
-    thread.setObjectName(QString("%1 %2").arg("EXClient").arg(host));
+    _thread.setObjectName(QString("%1 %2").arg("EXClient").arg(host));
 }
 
 EXClient::~EXClient()
@@ -29,17 +29,22 @@ EXClient::~EXClient()
 }
 
 /// this should only be called from our thread, because it accesses socket which should only be touched from thread
-QString EXClient::hostPrettyName() const
+QString EXClient::prettyName() const
 {
-    QString type = socket ? (dynamic_cast<QSslSocket *>(socket) ? "SSL" : "TCP") : "(NoSocket)";
-    QString port = socket && socket->peerPort() ? QString(":%1").arg(socket->peerPort()) : "";
-    QString ip = socket && !socket->peerAddress().isNull() ? socket->peerAddress().toString() : "";
+    bool dontTouchSocket = false;
+    if (_thread.isRunning() && QThread::currentThread() != &_thread) {
+        Warning() << __PRETTY_FUNCTION__ << " called from another thread! FIXME!";
+        dontTouchSocket = true;
+    }
+    QString type = socket && !dontTouchSocket ? (dynamic_cast<QSslSocket *>(socket) ? "SSL" : "TCP") : "(NoSocket)";
+    QString port = socket && !dontTouchSocket && socket->peerPort() ? QString(":%1").arg(socket->peerPort()) : "";
+    QString ip = socket && !dontTouchSocket && !socket->peerAddress().isNull() ? socket->peerAddress().toString() : "";
     return QString("%1 %2 %3%4").arg(type).arg(host).arg(ip).arg(port);
 }
 
 bool EXClient::isGood() const
 {
-    return thread.isRunning() && status == Connected && info.isValid();
+    return _thread.isRunning() && status == Connected && info.isValid();
 }
 
 bool EXClient::isStale() const
@@ -49,25 +54,25 @@ bool EXClient::isStale() const
 
 void EXClient::start()
 {
-    if (thread.isRunning()) return;
+    if (_thread.isRunning()) return;
     Debug() << host << " starting thread";
-    moveToThread(&thread);
-    connect(&thread, &QThread::started, this, &EXClient::on_started);
-    connect(&thread, &QThread::finished, this, &EXClient::on_finished);
+    moveToThread(&_thread);
+    connect(&_thread, &QThread::started, this, &EXClient::on_started);
+    connect(&_thread, &QThread::finished, this, &EXClient::on_finished);
     connect(this, &EXClient::sendRequest, this, &EXClient::_sendRequest);
-    thread.start();
+    _thread.start();
 }
 
 void EXClient::stop()
 {
-    if (thread.isRunning()) {
+    if (_thread.isRunning()) {
         Debug() << host << " thread is running, joining thread";
-        thread.quit();
-        thread.wait();
+        _thread.quit();
+        _thread.wait();
     }
     disconnect(this, &EXClient::sendRequest, this, &EXClient::_sendRequest);
-    disconnect(&thread, &QThread::started, this, &EXClient::on_started);
-    disconnect(&thread, &QThread::finished, this, &EXClient::on_finished);
+    disconnect(&_thread, &QThread::started, this, &EXClient::on_started);
+    disconnect(&_thread, &QThread::finished, this, &EXClient::on_finished);
 }
 
 // runs in thread
@@ -106,7 +111,7 @@ void EXClient::reconnect()
         conf.setPeerVerifyMode(QSslSocket::VerifyNone);
         ssl->setSslConfiguration(conf);
         connect(ssl, &QSslSocket::encrypted, this, [this]{
-            Debug() << hostPrettyName() << " connected encrypted";
+            Debug() << prettyName() << " connected encrypted";
             on_connected();
         });
         connect(socket, SIGNAL(error(QAbstractSocket::SocketError)), this, SLOT(on_error(QAbstractSocket::SocketError)));
@@ -116,7 +121,7 @@ void EXClient::reconnect()
     } else if (tport) {
         socket = new QTcpSocket(this);
         connect(socket, &QAbstractSocket::connected, this, [this]{
-            Debug() << hostPrettyName() << " connected";
+            Debug() << prettyName() << " connected";
             on_connected();
         });
         connect(socket, SIGNAL(error(QAbstractSocket::SocketError)), this, SLOT(on_error(QAbstractSocket::SocketError)));
@@ -130,7 +135,7 @@ void EXClient::reconnect()
 
 void EXClient::on_socketState(QAbstractSocket::SocketState s)
 {
-    Debug() << hostPrettyName() << " socket state: " << s;
+    Debug() << prettyName() << " socket state: " << s;
     switch (s) {
     case QAbstractSocket::ConnectedState:
         status = Connected;
@@ -221,7 +226,7 @@ void EXClient::on_connected()
         connect(socket, SIGNAL(bytesWritten()), this, SLOT(on_bytesWritten()));
     }
     connect(socket, &QAbstractSocket::disconnected, this, [this]{
-        Debug() << hostPrettyName() << " socket disconnected";
+        Debug() << prettyName() << " socket disconnected";
         kill_pingTimer();
         emit lostConnection(this);
         idMethodMap.clear();
@@ -345,7 +350,7 @@ void EXClient::on_bytesWritten()
 
 void EXClient::on_error(QAbstractSocket::SocketError err)
 {
-    Warning() << hostPrettyName() << ": error " << err << " (" << (socket ? socket->errorString() : "(null)") << ")";
+    Warning() << prettyName() << ": error " << err << " (" << (socket ? socket->errorString() : "(null)") << ")";
     boilerplate_disconnect();
     // todo: put stuff to queue up a reconnect sometime later?
 }
