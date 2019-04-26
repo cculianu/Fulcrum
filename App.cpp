@@ -55,6 +55,8 @@ void App::startup()
         ::signal(SIGTERM, gotsig);
 #endif
         exmgr = new EXMgr(options.serversFile, this);
+
+        exmgr->startup(); // may throw Exception
     } catch (const Exception & e) {
         Error () << "Caught exception: " << e.what();
         this->exit(1);
@@ -64,7 +66,7 @@ void App::startup()
 void App::cleanup()
 {
     Debug() << __PRETTY_FUNCTION__ ;
-    if (exmgr) { delete exmgr; exmgr = nullptr; }
+    if (exmgr) { exmgr->cleanup(); delete exmgr; exmgr = nullptr; }
 }
 
 void App::parseArgs()

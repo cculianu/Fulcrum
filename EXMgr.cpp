@@ -2,21 +2,34 @@
 #include "EXClient.h"
 #include "Util.h"
 EXMgr::EXMgr(const QString & serversFile, QObject *parent)
-    : QObject(parent), serversFile(serversFile)
+    : Controller(parent), serversFile(serversFile)
 {
     static bool initted_meta = false;
     if (!initted_meta) {
         qRegisterMetaType<EXResponse>();
         initted_meta = true;
     }
-    loadServers();
 }
 
 EXMgr::~EXMgr()
 {
     Debug() << __FUNCTION__ ;
+    cleanup();
+}
+
+void EXMgr::startup()
+{
+    if (clients.isEmpty()) {
+        loadServers();
+    } else {
+        Error() << __PRETTY_FUNCTION__ << " called with EXClients already active! FIXME!";
+    }
+}
+
+void EXMgr::cleanup()
+{
     for (auto ex : clients) {
-        delete ex;
+        delete ex; // will wait for threads to finish
     }
     clients.clear();
 }
@@ -49,7 +62,7 @@ void EXMgr::loadServers()
     }
     checkClientsTimer = new QTimer(this); checkClientsTimer->setSingleShot(false);
     connect(checkClientsTimer, SIGNAL(timeout()), this, SLOT(checkClients()));
-    checkClientsTimer->start(EXClient::reconnectTime/2);
+    checkClientsTimer->start(EXClient::reconnectTime/2); // 1 minute
     Log() << "ElectrumX Manager started, found " << clients.count() << " servers from compiled-in servers.json";
 }
 
@@ -84,10 +97,10 @@ void EXMgr::onResponse(EXClient *client, EXResponse r)
     }
 }
 
-void EXMgr::checkClients() ///< called from the checkClientsTimer every 1.5 mins
+void EXMgr::checkClients() ///< called from the checkClientsTimer every 1 mins
 {
     static const qint64 bad_timeout = 15*60*1000, // 15 mins
-                        stale_timeout = EXClient::reconnectTime; // 3 mins
+                        stale_timeout = EXClient::reconnectTime; // 2 mins
     Debug() << "EXMgr: Checking clients...";
     for (EXClient *client : clients) {
         const auto now = Util::getTime();

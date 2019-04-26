@@ -87,7 +87,7 @@ protected:
 
     std::atomic<qint64> nSent = 0ULL, nReceived = 0ULL;
 
-    static const qint64 reconnectTime = 3*60*1000; /// retry every 3 mins
+    static const qint64 reconnectTime = 2*60*1000; /// retry every 2 mins
 
     QThread thread;
 

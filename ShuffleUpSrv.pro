@@ -17,6 +17,7 @@ DEFINES += QT_DEPRECATED_WARNINGS
 
 SOURCES += \
     BTC.cpp \
+    Controller.cpp \
     bitcoin/base58.cpp \
     bitcoin/crypto/aes.cpp \
     bitcoin/crypto/chacha20.cpp \
@@ -48,6 +49,7 @@ else: unix:!android: target.path = /opt/$${TARGET}/bin
 HEADERS += \
     App.h \
     BTC.h \
+    Controller.h \
     Logger.h \
     Util.h \
     EXMgr.h \

@@ -1,18 +1,22 @@
 #ifndef ECMGR_H
 #define ECMGR_H
 
+#include "Controller.h"
 #include "EXClient.h"
 #include <QObject>
 #include <QList>
 #include <atomic>
 class EXClient;
 
-class EXMgr : public QObject
+class EXMgr : public Controller
 {
     Q_OBJECT
 public:
     explicit EXMgr(const QString & serversFile, QObject *parent = nullptr);
-    virtual ~EXMgr();
+    virtual ~EXMgr() override;
+
+    void startup() override;
+    void cleanup() override;
 
     qint64 newReqId() { return ++reqid; }
 
