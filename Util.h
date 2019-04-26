@@ -62,6 +62,13 @@ namespace Util {
     };
 }
 
+#if !defined(_MSC_VER) && (defined(__clang__) || defined(__GNUC__))
+#define ATTR_PRINTF(fmt, arg) __attribute__((format(printf, fmt, arg)))
+#else
+#define ATTR_PRINTF(fmt, arg)
+#define __PRETTY_FUNCTION__ __FUNCTION__
+#endif
+
 /// Super class of Debug, Warning, Error classes.
 class Log
 {
@@ -79,7 +86,7 @@ public:
 
     bool doprt = true;
 
-    explicit Log(const char *fmt...) __attribute__((format(printf, 2, 3)));
+    explicit Log(const char *fmt...) ATTR_PRINTF(2,3);
     explicit Log(Color);
     Log();
     virtual ~Log();
@@ -103,6 +110,7 @@ protected:
     QTextStream s = QTextStream(&str, QIODevice::WriteOnly);
 };
 
+
 // specialization to set the color.
 template <> Log & Log::operator<<(const Color &);
 
@@ -117,7 +125,7 @@ class Debug : public Log
 public:
     Debug() : Log() {}
     explicit Debug(Color c) : Log(c) {}
-    explicit Debug(const char *fmt...) __attribute__((format(printf, 2, 3)));
+    explicit Debug(const char *fmt...) ATTR_PRINTF(2,3);
     virtual ~Debug();
 };
 
@@ -132,7 +140,7 @@ class Error : public Log
 public:
     Error() : Log() {}
     explicit Error(Color c) : Log(c) {}
-    explicit Error(const char *fmt...) __attribute__((format(printf, 2, 3)));
+    explicit Error(const char *fmt...) ATTR_PRINTF(2,3);
     virtual ~Error();
 };
 
@@ -148,7 +156,7 @@ class Warning : public Log
 public:
     Warning() : Log() {}
     explicit Warning(Color c) : Log(c) {}
-    explicit Warning(const char *fmt...) __attribute__((format(printf, 2, 3)));
+    explicit Warning(const char *fmt...) ATTR_PRINTF(2,3);
     virtual ~Warning();
 };
 

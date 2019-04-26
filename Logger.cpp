@@ -32,6 +32,10 @@ void ConsoleLogger::gotLine(const QString &l) {
 }
 
 bool ConsoleLogger::isaTTY() const {
+#ifdef Q_OS_WIN
+    return false;
+#else
     int fd = FILENO(stdOut ? stdout : stderr);
     return ISATTY(fd);
+#endif
 }
