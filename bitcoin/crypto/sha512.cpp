@@ -8,9 +8,9 @@
 
 #include <cstring>
 
-#ifdef __clang__
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wsign-conversion"
+#if defined(__clang__) || defined(GCC)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wsign-conversion"
 #endif
 
 namespace bitcoin {
@@ -302,6 +302,6 @@ CSHA512 &CSHA512::Reset() {
 
 } // end namespace bitcoin
 
-#ifdef __clang__
-#pragma clang diagnostic pop
+#if defined(__clang__) || defined(GCC)
+#pragma GCC diagnostic pop
 #endif
