@@ -8,10 +8,10 @@
 
 #include <cstring>
 
-#if defined(__clang__) || defined(GCC)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-parameter"
-#pragma GCC diagnostic ignored "-Wsign-conversion"
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-parameter"
+#pragma clang diagnostic ignored "-Wsign-conversion"
 #endif
 
 namespace bitcoin {
@@ -23,6 +23,7 @@ namespace sha1 {
     /** One round of SHA-1. */
     inline void Round(uint32_t a, uint32_t &b, uint32_t c, uint32_t d,
                       uint32_t &e, uint32_t f, uint32_t k, uint32_t w) {
+        (void)c; (void)d;
         e += ((a << 5) | (a >> 27)) + f + k + w;
         b = (b << 30) | (b >> 2);
     }
@@ -205,6 +206,6 @@ CSHA1 &CSHA1::Reset() {
 
 } // end namespace bitcoin
 
-#if defined(__clang__) || defined(GCC)
-#pragma GCC diagnostic pop
+#ifdef __clang__
+#pragma clang diagnostic pop
 #endif

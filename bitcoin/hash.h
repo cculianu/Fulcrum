@@ -13,10 +13,10 @@
 
 #include <vector>
 
-#if defined(__clang__) || defined(GCC)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wold-style-cast"
-#pragma GCC diagnostic ignored "-Wsign-conversion"
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wold-style-cast"
+#pragma clang diagnostic ignored "-Wsign-conversion"
 #endif
 
 namespace bitcoin {
@@ -236,8 +236,8 @@ void BIP32Hash(const ChainCode &chainCode, uint32_t nChild, uint8_t header,
 */
 } // end namespace bitcoin
 
-#if defined(__clang__) || defined(GCC)
-#pragma GCC diagnostic pop
+#ifdef __clang__
+#pragma clang diagnostic pop
 #endif
 
 #endif // BITCOIN_HASH_H

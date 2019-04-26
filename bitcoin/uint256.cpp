@@ -10,10 +10,10 @@
 #include <cstdio>
 #include <cstring>
 
-#if defined(__clang__) || defined(GCC)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wold-style-cast"
-#pragma GCC diagnostic ignored "-Wsign-conversion"
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wold-style-cast"
+#pragma clang diagnostic ignored "-Wsign-conversion"
 #endif
 
 namespace bitcoin {
@@ -81,7 +81,7 @@ template void base_blob<256>::SetHex(const std::string &);
 
 } // end namespace bitcoin
 
-#if defined(__clang__) || defined(GCC)
-#pragma GCC diagnostic pop
+#ifdef __clang__
+#pragma clang diagnostic pop
 #endif
 

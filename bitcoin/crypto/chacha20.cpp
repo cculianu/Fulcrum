@@ -10,9 +10,9 @@
 
 #include <cstring>
 
-#if defined(__clang__) || defined(GCC)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wshorten-64-to-32"
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wshorten-64-to-32"
 #endif
 
 namespace bitcoin {
@@ -198,6 +198,6 @@ void ChaCha20::Output(uint8_t *c, size_t bytes) {
 
 } // end namespace bitcoin
 
-#if defined(__clang__) || defined(GCC)
-#pragma GCC diagnostic pop
+#ifdef __clang__
+#pragma clang diagnostic pop
 #endif

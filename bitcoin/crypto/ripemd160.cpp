@@ -8,10 +8,10 @@
 
 #include <cstring>
 
-#if defined(__clang__) || defined(GCC)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wsign-conversion"
-#pragma GCC diagnostic ignored "-Wunused-parameter"
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wsign-conversion"
+#pragma clang diagnostic ignored "-Wunused-parameter"
 #endif
 
 namespace bitcoin {
@@ -49,6 +49,7 @@ namespace ripemd160 {
 
     inline void Round(uint32_t &a, uint32_t b, uint32_t &c, uint32_t d,
                       uint32_t e, uint32_t f, uint32_t x, uint32_t k, int r) {
+        (void)b; (void)d;
         a = rol(a + f + x + k, r) + e;
         c = rol(c, 10);
     }
@@ -337,6 +338,6 @@ CRIPEMD160 &CRIPEMD160::Reset() {
 
 } // end namespace bitcoin
 
-#if defined(__clang__) || defined(GCC)
-#pragma GCC diagnostic pop
+#ifdef __clang__
+#pragma clang diagnostic pop
 #endif

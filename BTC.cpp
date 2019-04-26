@@ -10,10 +10,10 @@
 #include <QPair>
 #include <utility>
 
-#if defined(__clang__) || defined(GCC)
-#pragma GCC diagnostic push
+#ifdef __clang__
+#pragma clang diagnostic push
 // we get warnings using bitcoin templates but they compile and work anyway.
-#pragma GCC diagnostic ignored "-Wundefined-func-template"
+#pragma clang diagnostic ignored "-Wundefined-func-template"
 #endif
 
 namespace BTC
@@ -280,6 +280,6 @@ namespace BTC
     }
 }
 
-#if defined(__clang__) || defined(GCC)
-#pragma GCC diagnostic pop
+#ifdef __clang__
+#pragma clang diagnostic pop
 #endif

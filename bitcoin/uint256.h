@@ -15,10 +15,10 @@
 #include <string>
 #include <vector>
 
-#if defined(__clang__) || defined(GCC)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wold-style-cast"
-#pragma GCC diagnostic ignored "-Wundefined-func-template"
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wold-style-cast"
+#pragma clang diagnostic ignored "-Wundefined-func-template"
 #endif
 
 namespace bitcoin {
@@ -181,8 +181,8 @@ inline uint160 uint160S(const std::string &str) {
 
 } // end namespace bitcoin
 
-#if defined(__clang__) || defined(GCC)
-#pragma GCC diagnostic pop
+#ifdef __clang__
+#pragma clang diagnostic pop
 #endif
 
 #endif // BITCOIN_UINT256_H
