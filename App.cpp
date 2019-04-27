@@ -49,7 +49,7 @@ void App::startup()
             } else if (ct < 5) {
                 std::printf("Duplicate signal %d already being handled, ignoring\n", sig);
             } else {
-                std::printf("Signal %d caught more than 5 times, aborting\n",sig);
+                std::printf("Signal %d caught more than 5 times, aborting\n", sig);
                 std::abort();
             }
         };
