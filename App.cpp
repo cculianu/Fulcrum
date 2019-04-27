@@ -3,9 +3,7 @@
 #include "Util.h"
 #include "EXMgr.h"
 #include "SrvMgr.h"
-#ifdef Q_OS_UNIX
 #include <signal.h>
-#endif
 #include <QCommandLineParser>
 #include <QFile>
 #include <cstdlib>
@@ -43,7 +41,6 @@ void App::startup()
     Log() << applicationName() << " " << applicationVersion() << " starting up ...";
 
     try {
-#ifdef Q_OS_UNIX
         auto gotsig = [](int sig) {
             static int ct = 0;
             if (!ct++) {
@@ -58,6 +55,7 @@ void App::startup()
         };
         ::signal(SIGINT, gotsig);
         ::signal(SIGTERM, gotsig);
+#ifdef Q_OS_UNIX
         ::signal(SIGQUIT, gotsig);
         ::signal(SIGHUP, SIG_IGN);
 #endif
