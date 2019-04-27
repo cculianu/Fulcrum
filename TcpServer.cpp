@@ -1,4 +1,5 @@
 #include "TcpServer.h"
+#include "App.h"
 #include <QCoreApplication>
 #include <QtNetwork>
 
@@ -15,6 +16,8 @@ TcpServer::~TcpServer()
     Debug() << __FUNCTION__;
     stop();
 }
+
+inline qint64 TcpServer::newId() const { return app()->newId(); }
 
 QString TcpServer::hostPort() const
 {
@@ -97,4 +100,52 @@ void TcpServer::on_newConnection()
     } else {
         Warning() << __FUNCTION__ << ": nextPendingConnection returned a nullptr! Called at the wrong time? FIXME!";
     }
+}
+
+Client *
+TcpServer::newClient(QTcpSocket *sock)
+{
+    const auto id = newId();
+    auto ret = clientsById[id] = new Client(id, this, sock);
+    // if deleted, we need to purge it from map
+    auto on_destroyed = [id, this](QObject *o) {
+        // this whole call is here so that delete client->sock ends up auto-removing the map entry
+        // as a convenience.
+        Debug() << __PRETTY_FUNCTION__ << " called";
+        auto client = clientsById.take(id);
+        if (client) {
+            if (client != o) {
+                Error() << " client != passed-in pointer to on_destroy in " << __FILE__ << " line " << __LINE__  << ". FIXME!";
+            }
+            Debug("client id %lld purged from map", id);
+        }
+    };
+    connect(ret, &QObject::destroyed, this, on_destroyed);
+    return ret;
+}
+
+void TcpServer::killClient(Client *client)
+{
+    if (!client)
+        return;
+    clientsById.remove(client->id); // ensure gone from map asap so future lookups fail
+    if (client->sock->state() != QTcpSocket::UnconnectedState)
+        client->sock->abort();
+    client->sock->deleteLater(); // will implicitly delete client because client is a child of the socket
+}
+void TcpServer::killClient(qint64 id)
+{
+    killClient(clientsById.take(id));
+}
+
+
+Client::Client(qint64 id, TcpServer *srv, QTcpSocket *sock)
+    : QObject(sock), id(id), srv(srv)
+{
+    Debug() << __PRETTY_FUNCTION__;
+}
+
+Client::~Client()
+{
+    Debug() << __PRETTY_FUNCTION__;
 }

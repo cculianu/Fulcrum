@@ -1,10 +1,13 @@
 #ifndef TCPSERVER_H
 #define TCPSERVER_H
 
-#include <QTcpServer>
-#include <QThread>
 #include "Common.h"
 #include "Util.h"
+#include <QTcpServer>
+#include <QThread>
+#include <QMap>
+
+class Client;
 
 struct TcpServerError : public Exception
 {
@@ -21,6 +24,8 @@ class TcpServer : public QTcpServer
 public:
     TcpServer(const QHostAddress & address, quint16 port);
     virtual ~TcpServer() override;
+
+    qint64 newId() const;
 
     QString prettyName() const;
     QString hostPort() const;
@@ -44,6 +49,36 @@ private:
     QHostAddress addr;
     quint16 port;
     Util::Channel<QString> chan;
+
+    Client * newClient(QTcpSocket *);
+    inline Client * getClient(qint64 id) {
+        if (auto it = clientsById.find(id); it != clientsById.end())
+            return it.value();
+        return nullptr;
+    }
+    void killClient(Client *);
+    void killClient(qint64 id);
+    QMap<qint64, Client *> clientsById;
+};
+
+
+/// These run and live in TcpServer's thread
+/// Note that their parent QObject is the sock (for now)!
+/// (grandparent is TcpServer) .. do they will be destroyed
+/// when the server goes away or the socket is deleted.
+class Client : public QObject
+{
+    Q_OBJECT
+public:
+    explicit Client(qint64 id, TcpServer *srv, QTcpSocket *sock);
+    ~Client() override;
+
+    const qint64 id;
+
+protected:
+    TcpServer *srv;
+    QTcpSocket *sock;
+    friend class TcpServer;
 };
 
 #endif // TCPSERVER_H
