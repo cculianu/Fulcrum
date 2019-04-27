@@ -53,10 +53,10 @@ protected:
     std::atomic<qint64> nSent = 0ULL, ///< this get updated in this class in do_write()
                         nReceived = 0ULL;  ///< update this in derived classes in your on_readyRead()
 
-    static const qint64 reconnectTime = 2*60*1000; /// retry every 2 mins
+    static constexpr qint64 reconnectTime = 2*60*1000; /// retry every 2 mins
 
-    static const int pingtime_ms = 60*1000;  /// send server.ping if idle for >1 min
-    static const qint64 stale_threshold = reconnectTime;
+    static constexpr int pingtime_ms = 60*1000;  /// send server.ping if idle for >1 min
+    static constexpr qint64 stale_threshold = reconnectTime;
     QTcpSocket *socket = nullptr; ///< this should only ever be touched in our thread
     QByteArray writeBackLog = ""; ///< if this grows beyond a certain size, we should kill the connection
     QTimer *pingTimer = nullptr;

@@ -26,6 +26,7 @@ SOURCES += \
     Options.cpp \
     SrvMgr.cpp \
     TcpServer.cpp \
+    ThreadObject.cpp \
     bitcoin/base58.cpp \
     bitcoin/crypto/aes.cpp \
     bitcoin/crypto/chacha20.cpp \
@@ -63,6 +64,7 @@ HEADERS += \
     Options.h \
     SrvMgr.h \
     TcpServer.h \
+    ThreadObject.h \
     Util.h \
     EXMgr.h \
     Common.h \
