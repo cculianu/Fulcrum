@@ -24,6 +24,10 @@ App::App(int argc, char *argv[])
         Error() << e.what();
         std::exit(1);
     }
+    if (options.syslogMode) {
+        delete _logger;
+        _logger = new SysLogger(this);
+    }
 
     connect(this, &App::aboutToQuit, this, &App::cleanup);
     QTimer::singleShot(10, this, &App::startup); // register to run after app event loop start
@@ -119,7 +123,7 @@ void App::parseArgs()
           QString("Suppress debug output. This is the default on release builds. This is the opposite of -d.")
         },
         { { "S", "syslog" },
-          QString("Syslog mode. Suppress printing of timestamps to the stdout log.")
+          QString("Syslog mode. Suppress printing of timestamps to the log, and if on Unix, use the syslog() facility to produce log messages.")
         },
 
     });

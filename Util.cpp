@@ -169,7 +169,7 @@ Log::~Log()
         QString theString = dateStr + thrdStr + (logger && logger->isaTTY() ? colorify(str, color) : str);
 
         if (logger) {
-            emit logger->log(theString);
+            emit logger->log(level, theString);
         } else {
             // just print to console for now..
             std::cerr << Q2C(theString) << std::endl << std::flush;
@@ -226,6 +226,7 @@ Debug::Debug(const char *fmt...)
 
 Debug::~Debug()
 {
+    level = Logger::Debug;
     auto ourApp = app();
     doprt = !ourApp || ourApp->options.verboseDebug;
     if (!doprt) return;
@@ -248,6 +249,7 @@ Error::Error(const char *fmt...)
 
 Error::~Error()
 {
+    level = Logger::Critical;
     if (!colorOverridden) color = Red;
 }
 
@@ -263,6 +265,7 @@ Warning::Warning(const char *fmt...)
 
 Warning::~Warning()
 {
+    level = Logger::Warning;
     if (!colorOverridden) color = Yellow;
 }
 

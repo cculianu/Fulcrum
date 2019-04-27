@@ -60,6 +60,7 @@ protected:
     QString colorify(const QString &, Color c);
 
     bool colorOverridden = false, useColor = true;
+    int level = 0;
     Color color = Normal;
     QString str = "";
     QTextStream s = QTextStream(&str, QIODevice::WriteOnly);
