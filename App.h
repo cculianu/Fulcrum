@@ -4,8 +4,6 @@
 #include "Options.h"
 #include <QCoreApplication>
 #include <atomic>
-#include <QHostAddress>
-#include <QList>
 
 class Logger;
 class EXMgr;
@@ -22,11 +20,16 @@ public:
 
     Options options;
 
+    /// app-global ids used for everything from ElectrumX methods
+    /// to client id's, etc.
+    inline qint64 newId() { return ++globalId; }
+
 signals:
 
 public slots:
 
 private:
+    std::atomic<qint64> globalId = 0;
     Logger *_logger = nullptr;
     SrvMgr *srvmgr = nullptr; // TODO: implement multiple servers, 1 per socket
     EXMgr *exmgr = nullptr;
@@ -39,6 +42,10 @@ private:
     void parseArgs();
 };
 
-inline App *app() { return qApp ? dynamic_cast<App *>(qApp) : nullptr; }
+inline App *app() {
+    if (auto app  = qApp ; app)
+        return dynamic_cast<App *>(app);
+    return nullptr;
+}
 
 #endif // APP_H

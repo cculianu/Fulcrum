@@ -1,6 +1,7 @@
 #include "EXMgr.h"
 #include "EXClient.h"
 #include "Util.h"
+#include "App.h"
 #include <vector>
 
 EXMgr::EXMgr(const QString & serversFile, QObject *parent)
@@ -18,6 +19,8 @@ EXMgr::~EXMgr()
     Debug() << __FUNCTION__ ;
     cleanup();
 }
+
+inline qint64 EXMgr::newId() const { return app()->newId(); }
 
 void EXMgr::startup()
 {

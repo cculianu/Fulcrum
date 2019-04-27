@@ -6,7 +6,6 @@
 #include <QObject>
 #include <QList>
 #include <QSet>
-#include <atomic>
 class EXClient;
 
 class EXMgr : public Mgr
@@ -19,7 +18,7 @@ public:
     void startup() override;
     void cleanup() override;
 
-    qint64 newId() { return ++curid; }
+    qint64 newId() const; /// alias for app()->newId()
 
     /// Picks a client that is up-to-date in a random fashion. Subsequent
     /// calls to this function will return a new EXClient each time until the
@@ -44,7 +43,6 @@ private slots:
 private:
     const QString serversFile;
     void loadServers();
-    std::atomic<qint64> curid = 0;
 
     QList<EXClient *> clients;
     QMap<qint64, EXClient *> clientsById; ///< note to self: always maintain this map to be synched to above list
