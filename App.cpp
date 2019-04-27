@@ -73,12 +73,24 @@ void App::startup()
 void App::cleanup()
 {
     Debug() << __PRETTY_FUNCTION__ ;
-    if (!Util::RunInThread::waitForAll(5000, "Waiting for extant worker threads ...")) {
-        Warning() << "After 5 seconds, workers still active. App will likely abort with an error.";
-    }
-    if (srvmgr) { Log() << "Stopping SrvMgr ... "; srvmgr->cleanup(); delete srvmgr; srvmgr = nullptr; }
-    if (exmgr) { Log() << "Stopping EXMgr ... "; exmgr->cleanup(); delete exmgr; exmgr = nullptr; }
+    cleanup_RunInThreads();
+    if (srvmgr) { Log("Stopping SrvMgr ... "); srvmgr->cleanup(); delete srvmgr; srvmgr = nullptr; }
+    if (exmgr) { Log("Stopping EXMgr ... "); exmgr->cleanup(); delete exmgr; exmgr = nullptr; }
 }
+
+void App::cleanup_RunInThreads()
+{
+    static const int timeout = 5000;
+    QElapsedTimer t0; t0.start();
+    Util::RunInThread::setShuttingDown(true);
+    int nWorkersRunning = 0;
+    if (!Util::RunInThread::waitForAll(timeout, "Waiting for extant worker threads ...", &nWorkersRunning)) {
+        Warning("After %d seconds, %d worker(s) were still active. App will likely abort with an error.", qRound(double(t0.elapsed())/1e3), nWorkersRunning);
+    } else if (nWorkersRunning) {
+        Debug("%d worker(s) successfully waited for (elapsed: %0.3f secs)", nWorkersRunning, t0.elapsed()/1e3);
+    }
+}
+
 
 void App::parseArgs()
 {

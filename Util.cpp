@@ -63,7 +63,7 @@ namespace Util {
             if (completion) completion();
             deleteLater();
         });
-        if (!QCoreApplication::closingDown()) {
+        if (!blockNew) {
             {
                 QMutexLocker ml(&mut);
                 extant.insert(this);
@@ -83,6 +83,7 @@ namespace Util {
     }
 
     /// app exit cleanup handling
+    /*static*/ std::atomic_bool RunInThread::blockNew = false;
     /*static*/ QSet<RunInThread *> RunInThread::extant;
     /*static*/ QMutex RunInThread::mut;
     /*static*/ QWaitCondition RunInThread::cond;
@@ -96,13 +97,19 @@ namespace Util {
         }
     }
     // static
-    bool RunInThread::waitForAll(unsigned long timeout, const QString &msg)
+    bool RunInThread::waitForAll(unsigned long timeout, const QString &msg, int *num)
     {
         QMutexLocker ml(&mut);
         if (!extant.isEmpty()) {
             Log() << msg;
-            return cond.wait(&mut, timeout);
-        }
+            if (num) *num = extant.count();
+            auto notTimedOut = cond.wait(&mut, timeout);
+            if (!notTimedOut && num) {
+                // if we timed out, tell caller how many were still running
+                *num = extant.count();
+            }
+            return notTimedOut;
+        } else if (num) *num = 0;
         return true;
     }
     // static
@@ -113,8 +120,8 @@ namespace Util {
             for (int i = 0; i < 100; ++i) {
                 Debug() << "Worker thread...";
                 QThread::msleep(100);
-                if (QCoreApplication::closingDown())
-                    return;
+                //if (blockNew)
+                //    return;
             }
         }, receiver, []{
            Debug() << "COMPLETION!";

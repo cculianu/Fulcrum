@@ -10,6 +10,8 @@
 #include <chrono>
 #define Q2C(qstr) qstr.toUtf8().constData()
 
+class App;
+
 /****
  * Loggers.
  * Declared first as some templates in Util use these.
@@ -232,11 +234,16 @@ namespace Util {
              const QString & threadName = QString())
         { return new RunInThread(work, nullptr, completion, threadName); }
 
-        /// called by App on exit to wait for all work to complete.
-        static bool waitForAll(unsigned long timeout_ms = ULONG_MAX, const QString &logMsgIfNeedsToWait=QString());
-
     protected:
         void run() override;
+
+        friend class ::App;
+        /// called by App on exit to indicate shutting down (blocks new threads from executing)
+        static void setShuttingDown(bool b) { blockNew = b; }
+        /// called by App on exit to wait for all work to complete.
+        static bool waitForAll(unsigned long timeout_ms = ULONG_MAX, const QString &logMsgIfNeedsToWait=QString(),
+                               int *numWorkers = nullptr);
+
     signals:
         void onCompletion();
     private:
@@ -247,6 +254,7 @@ namespace Util {
                     const VoidFunc &completion = VoidFunc(),
                     const QString & threadName = QString());
         /// app exit cleanup handling
+        static std::atomic_bool blockNew;
         static QSet<RunInThread *> extant;
         static QMutex mut;
         static QWaitCondition cond;

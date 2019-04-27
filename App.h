@@ -34,6 +34,8 @@ private:
     void startup();
     void cleanup();
 
+    void cleanup_RunInThreads();
+
     void parseArgs();
 };
 
