@@ -35,7 +35,7 @@ void SrvMgr::cleanup()
 // throw Exception on error
 void SrvMgr::startServers()
 {
-    Log() << "SrvMgr: starting " << interfaces.length() << " services ...";
+    Log() << "SrvMgr: starting " << interfaces.length() << " service(s) ...";
     for (auto iface : interfaces) {
         auto srv = new TcpServer(iface.first, iface.second);
         servers.push_back(srv); // save server in list unconditionally so we may delete later because tryStart may throw
