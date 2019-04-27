@@ -117,7 +117,7 @@ TcpServer::newClient(QTcpSocket *sock)
             if (client != o) {
                 Error() << " client != passed-in pointer to on_destroy in " << __FILE__ << " line " << __LINE__  << ". FIXME!";
             }
-            Debug("client id %lld purged from map", id);
+            Debug("client id %ld purged from map", long(id));
         }
     };
     connect(ret, &QObject::destroyed, this, on_destroyed);
