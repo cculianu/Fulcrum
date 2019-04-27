@@ -14,11 +14,11 @@ class AbstractClient : public QObject
 public:
     explicit AbstractClient(qint64 id, QObject *parent = nullptr);
 
-    static const qint64 MAX_BUFFER; // 20MB
+    const qint64 MAX_BUFFER = 20000000; // 20MB, may override this in derived classes
 
     const qint64 id;
 
-    /// true if we are connected, have received a serverVersion, have received a height
+    /// true if we are connected
     virtual bool isGood() const;
     /// true if we are connected but haven't received any response in some time
     virtual bool isStale() const;
@@ -31,9 +31,8 @@ signals:
     /// subclasses should create their own high-level protocol-level signals.
     void send(QByteArray);
 
-public slots:
-
 protected slots:
+    virtual void on_readyRead() = 0; /**< Implement in subclasses -- required to read data */
 
 protected:
 
@@ -44,10 +43,15 @@ protected:
         Bad
     };
 
-    std::atomic<Status> status = NotConnected;
-    std::atomic<qint64> lastGood = 0LL; ///< timestamp in ms from Util::getTime() when the server was last good (last communicated a sensible message, pinged, etc)
+    void socketConnectSignals(); ///< call this from derived classes to connect socket error and stateChanged to this
 
-    std::atomic<qint64> nSent = 0ULL, nReceived = 0ULL;
+    std::atomic<Status> status = NotConnected;
+    /// timestamp in ms from Util::getTime() when the server was last good
+    /// (last communicated a sensible message, pinged, etc)
+    std::atomic<qint64> lastGood = 0LL; ///< update this in derived classes.
+
+    std::atomic<qint64> nSent = 0ULL, ///< this get updated in this class in do_write()
+                        nReceived = 0ULL;  ///< update this in derived classes in your on_readyRead()
 
     static const qint64 reconnectTime = 2*60*1000; /// retry every 2 mins
 
@@ -63,18 +67,17 @@ protected:
 
     virtual void on_connected(); ///< overrides should call this base implementation and chain to it
 
-    void start_pingTimer();
-    void kill_pingTimer();
     bool do_write(const QByteArray & = "");
-protected slots:
-    virtual void on_readyRead() = 0; /**< Implement in subclasses -- required to read data */
+    void boilerplate_disconnect(); /// does a socket->abort, sets status
+
+private slots:
+    void on_pingTimer();
     void on_bytesWritten();
     void on_error(QAbstractSocket::SocketError);
     void on_socketState(QAbstractSocket::SocketState);
-private slots:
-    void on_pingTimer();
 private:
-    void boilerplate_disconnect();
+    void start_pingTimer();
+    void kill_pingTimer();
 };
 
 #endif // ABSTRACTCLIENT_H

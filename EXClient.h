@@ -9,7 +9,7 @@
 #include <QTimer>
 #include <QPair>
 #include "Common.h"
-
+#include "AbstractClient.h"
 
 struct EXResponse
 {
@@ -32,18 +32,14 @@ Q_DECLARE_METATYPE(EXResponse);
 
 class EXMgr;
 
-class EXClient : public QObject
+class EXClient : public AbstractClient
 {
     Q_OBJECT
 public:
     explicit EXClient(EXMgr *mgr,  qint64 id,
                       const QString & host,
                       quint16 tcpPort, quint16 sslPort);
-    ~EXClient();
-
-    const qint64 id;
-
-    static const qint64 MAX_BUFFER; // 20MB
+    ~EXClient() override;
 
     struct Info {
         QPair<QString, QString> serverVersion = { "", "" };
@@ -56,42 +52,25 @@ public:
     Info info; ///< this is managed by the main thread
 
     /// true if we are connected, have received a serverVersion, have received a height
-    bool isGood() const;
-    /// true if we are connected but haven't received any response in some time
-    bool isStale() const;
-    /// true if we got a malformed reply from the server
-    bool isBad() const { return status == Bad; }
+    bool isGood() const override;
 
 signals:
     void gotResponse(EXClient *, EXResponse);
     void newConnection(EXClient *);
-    void lostConnection(EXClient *);
+    void lostConnection(EXClient *); ///< overrides lostConnection(AbstractClient *) by dynamic_casting it down and re-emitting
     /// call (emit) this to send a requesst to the server
     void sendRequest(qint64 reqid, const QString &method, const QVariantList & params = QVariantList());
-
-public slots:
 
 protected slots:
     /// Actual implentation that prepares the request. Is connected to sendRequest() above. Runs in thread.
     bool _sendRequest(qint64 reqid, const QString &method, const QVariantList & params = QVariantList());
 
+    /// called from socket connection
+    void on_readyRead() override;
 protected:
     friend class EXMgr;
 
-    enum Status {
-        NotConnected = 0,
-        Connecting,
-        Connected,
-        Bad
-    };
-
-    std::atomic<Status> status = NotConnected;
-    std::atomic<qint64> lastGood = 0LL, ///< timestamp in ms from Util::getTime() when the server was last good (last communicated a sensible message, pinged, etc)
-                        lastConnectionAttempt = 0LL;  ///< the last time we tried to reconnect
-
-    std::atomic<qint64> nSent = 0ULL, nReceived = 0ULL;
-
-    static const qint64 reconnectTime = 2*60*1000; /// retry every 2 mins
+    std::atomic<qint64> lastConnectionAttempt = 0LL;  ///< the last time we tried to reconnect
 
     QThread _thread;
 
@@ -102,35 +81,21 @@ protected:
     QString host;
     quint16 tport = 0, sport = 0;
 
+    QString prettyName(bool dontTouchSocket = false) const override;
+    void do_ping() override;
+    void on_connected() override;
+
 private:
-    static const int pingtime_ms = 60*1000;  /// send server.ping if idle for >1 min
-    static const qint64 stale_threshold = reconnectTime;
     EXMgr *mgr = nullptr;
-    QTcpSocket *socket = nullptr; ///< this should only ever be touched in our thread
     QMap<qint64, QString> idMethodMap;
-    QByteArray writeBackLog = ""; ///< if this grows beyond a certain size, we should kill the connection
-    QTimer *pingTimer = nullptr;
 
     /// returns utf-8 encoded JSON data for a request
     static QByteArray makeRequestData(qint64 id, const QString &method, const QVariantList & params = QVariantList());
-
-    QString prettyName() const; ///< called only from our thread otherwise it may crash because it touches 'socket'
 
     void on_started();
     void on_finished();
     void killSocket();
     void reconnect();
-    void on_connected();
-    void start_pingTimer();
-    void kill_pingTimer();
-    bool do_write(const QByteArray & = "");
-    void boilerplate_disconnect();
-private slots:
-    void on_readyRead();
-    void on_bytesWritten();
-    void on_error(QAbstractSocket::SocketError);
-    void on_socketState(QAbstractSocket::SocketState);
-    void on_pingTimer();
 };
 
 #endif // EXCLIENT_H

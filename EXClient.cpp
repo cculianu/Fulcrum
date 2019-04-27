@@ -4,8 +4,6 @@
 #include <QtNetwork>
 
 
-/*static*/ const qint64 EXClient::MAX_BUFFER = 20000000LL;
-
 class BadServerReply : public Exception {
 public:
     using Exception::Exception; /// bring in c'tor
@@ -15,11 +13,14 @@ public:
 BadServerReply::~BadServerReply() {} // for vtable
 
 EXClient::EXClient(EXMgr *mgr, qint64 id, const QString &host, quint16 tport, quint16 sport)
-    : QObject(nullptr), id(id), host(host), tport(tport), sport(sport), mgr(mgr)
+    : AbstractClient(id, nullptr), host(host), tport(tport), sport(sport), mgr(mgr)
 {
     Debug() << __FUNCTION__ << " host:" << host << " t:" << tport << " s:" << sport;
     _thread.setObjectName(QString("%1 %2").arg("EXClient").arg(host));
     setObjectName(host);
+    connect(this, &AbstractClient::lostConnection, this, [this](AbstractClient *){
+         emit lostConnection(this); /// re-emits as EXClient * signal (different method in C++)
+    });
 }
 
 EXClient::~EXClient()
@@ -29,27 +30,18 @@ EXClient::~EXClient()
 }
 
 /// this should only be called from our thread, because it accesses socket which should only be touched from thread
-QString EXClient::prettyName() const
+QString EXClient::prettyName(bool dontTouchSocket) const
 {
-    bool dontTouchSocket = false;
     if (_thread.isRunning() && QThread::currentThread() != &_thread) {
         Warning() << __PRETTY_FUNCTION__ << " called from another thread! FIXME!";
         dontTouchSocket = true;
     }
-    QString type = socket && !dontTouchSocket ? (dynamic_cast<QSslSocket *>(socket) ? "SSL" : "TCP") : "(NoSocket)";
-    QString port = socket && !dontTouchSocket && socket->peerPort() ? QString(":%1").arg(socket->peerPort()) : "";
-    QString ip = socket && !dontTouchSocket && !socket->peerAddress().isNull() ? socket->peerAddress().toString() : "";
-    return QString("%1 %2 %3%4").arg(type).arg(host).arg(ip).arg(port);
+    return AbstractClient::prettyName(dontTouchSocket);
 }
 
 bool EXClient::isGood() const
 {
-    return _thread.isRunning() && status == Connected && info.isValid();
-}
-
-bool EXClient::isStale() const
-{
-    return isGood() && Util::getTime() - lastGood > stale_threshold;
+    return AbstractClient::isGood() && _thread.isRunning() && info.isValid();
 }
 
 void EXClient::start()
@@ -117,9 +109,7 @@ void EXClient::reconnect()
             Debug() << prettyName() << " connected encrypted";
             on_connected();
         });
-        connect(socket, SIGNAL(error(QAbstractSocket::SocketError)), this, SLOT(on_error(QAbstractSocket::SocketError)));
-        connect(socket, SIGNAL(stateChanged(QAbstractSocket::SocketState)), this, SLOT(on_socketState(QAbstractSocket::SocketState)));
-        socket->setSocketOption(QAbstractSocket::KeepAliveOption, true);  // from Qt docs: required on Windows
+        socketConnectSignals();
         ssl->connectToHostEncrypted(host, static_cast<quint16>(sport));
     } else if (tport) {
         socket = new QTcpSocket(this);
@@ -127,33 +117,13 @@ void EXClient::reconnect()
             Debug() << prettyName() << " connected";
             on_connected();
         });
-        connect(socket, SIGNAL(error(QAbstractSocket::SocketError)), this, SLOT(on_error(QAbstractSocket::SocketError)));
-        connect(socket, SIGNAL(stateChanged(QAbstractSocket::SocketState)), this, SLOT(on_socketState(QAbstractSocket::SocketState)));
-        socket->setSocketOption(QAbstractSocket::KeepAliveOption, true);  // from Qt docs: required on Windows
+        socketConnectSignals();
         socket->connectToHost(host, static_cast<quint16>(tport));
     } else {
         Error() << "Cannot connect to " << host << "; no TCP port defined and SSL is disabled on this install";
     }
 }
 
-void EXClient::on_socketState(QAbstractSocket::SocketState s)
-{
-    Debug() << prettyName() << " socket state: " << s;
-    switch (s) {
-    case QAbstractSocket::ConnectedState:
-        status = Connected;
-        break;
-    case QAbstractSocket::HostLookupState:
-    case QAbstractSocket::ConnectingState:
-        status = Connecting;
-        break;
-    case QAbstractSocket::UnconnectedState:
-    case QAbstractSocket::ClosingState:
-    default:
-        status = NotConnected;
-        break;
-    }
-}
 
 bool EXClient::_sendRequest(qint64 id, const QString &method, const QVariantList &params)
 {
@@ -169,74 +139,20 @@ bool EXClient::_sendRequest(qint64 id, const QString &method, const QVariantList
     return do_write(makeRequestData(id, method, params));
 }
 
-void EXClient::boilerplate_disconnect()
-{
-    status = status == Bad ? Bad : NotConnected;  // try and keep Bad status around so EXMgr can decide when to reconnect based on it
-    if (socket) socket->abort();  // this will set status too because state change, but we set it first above to be paranoid
-}
 
-bool EXClient::do_write(const QByteArray & data)
+void EXClient::do_ping()
 {
-    auto data2write = writeBackLog + data;
-    qint64 written = socket->write(data2write);
-    if (written < 0) {
-        Error() << __FUNCTION__ << " error on write " << socket->error() << " (" << socket->errorString() << ") ";
-        boilerplate_disconnect();
-        return false;
-    } else if (written < data2write.length()) {
-        writeBackLog = data2write.mid(int(written));
-    }
-    nSent += written;
-    if (writeBackLog.length() > MAX_BUFFER) {
-        Error() << __FUNCTION__ << " MAX_BUFFER reached on write (" << MAX_BUFFER << ")";
-        boilerplate_disconnect();
-        return false;
-    }
-    return true;
-}
-
-void EXClient::kill_pingTimer()
-{
-    if (pingTimer) { delete pingTimer; pingTimer = nullptr; }
-}
-
-void EXClient::start_pingTimer()
-{
-    kill_pingTimer();
-    pingTimer = new QTimer(this);
-    pingTimer->setSingleShot(false);
-    connect(pingTimer, SIGNAL(timeout()), this, SLOT(on_pingTimer()));
-    pingTimer->start(pingtime_ms/* 1 minute */ / 2);
-}
-
-void EXClient::on_pingTimer()
-{
-    if (Util::getTime() - lastGood > pingtime_ms)
-        // only ping if we've been idle for longer than 1 minute
-        emit sendRequest(mgr->newId(), "server.ping");
+    emit sendRequest(mgr->newId(), "server.ping");
 }
 
 void EXClient::on_connected()
 {
     // runs in thread
-    Debug() << __FUNCTION__;
-    connect(socket, SIGNAL(readyRead()), this, SLOT(on_readyRead()));
-    if (dynamic_cast<QSslSocket *>(socket)) {
-        // for some reason Qt can't find this old-style signal for QSslSocket so we do the below.
-        // Additionally, bytesWritten is never emitted for QSslSocket, violating OOP! Thanks Qt. :P
-        connect(socket, SIGNAL(encryptedBytesWritten(qint64)), this, SLOT(on_bytesWritten()));
-    } else {
-        connect(socket, SIGNAL(bytesWritten(qint64)), this, SLOT(on_bytesWritten()));
-    }
-    connect(socket, &QAbstractSocket::disconnected, this, [this]{
-        Debug() << prettyName() << " socket disconnected";
-        kill_pingTimer();
-        emit lostConnection(this);
+    AbstractClient::on_connected();
+    connect(this, &EXClient::lostConnection, this, [this](){
         idMethodMap.clear();
-        // todo: put stuff to queue up a reconnect sometime later?
     });
     emit newConnection(this);
-    start_pingTimer();
 }
 
 /* static */
@@ -342,21 +258,6 @@ void EXClient::on_readyRead()
     }
 }
 
-void EXClient::on_bytesWritten()
-{
-    Debug() << __FUNCTION__;
-    if (!writeBackLog.isEmpty() && status == Connected && socket) {
-        Debug() << "writeBackLog size: " << writeBackLog.length();
-        do_write();
-    }
-}
-
-void EXClient::on_error(QAbstractSocket::SocketError err)
-{
-    Warning() << prettyName() << ": error " << err << " (" << (socket ? socket->errorString() : "(null)") << ")";
-    boilerplate_disconnect();
-    // todo: put stuff to queue up a reconnect sometime later?
-}
 
 /* static */
 QByteArray EXClient::makeRequestData(qint64 id, const QString &method, const QVariantList &params)
