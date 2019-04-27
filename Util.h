@@ -5,7 +5,114 @@
 #include <QtCore>
 #include <atomic>
 #include <functional>
+#include <random>
+#include <algorithm>
+#include <chrono>
 #define Q2C(qstr) qstr.toUtf8().constData()
+
+/****
+ * Loggers.
+ * Declared first as some templates in Util use these.
+ * Scroll down in this file for namespace Util..
+ ****/
+#if !defined(_MSC_VER) && (defined(__clang__) || defined(__GNUC__))
+#define ATTR_PRINTF(fmt, arg) __attribute__((format(printf, fmt, arg)))
+#else
+#define ATTR_PRINTF(fmt, arg)
+#define __PRETTY_FUNCTION__ __FUNCTION__
+#endif
+
+/// Super class of Debug, Warning, Error classes.
+class Log
+{
+public:
+    enum Color {
+        Reset = 0,
+        Normal = Reset, // no color/reset
+        Black,
+        Red, Green, Yellow, Blue, Magenta, Cyan, White,
+        BrightBlack,
+        BrightRed, BrightGreen, BrightYellow, BrightBlue, BrightMagenta, BrightCyan, BrightWhite,
+        Color_N
+    };
+
+
+    bool doprt = true;
+
+    explicit Log(const char *fmt...) ATTR_PRINTF(2,3);
+    explicit Log(Color);
+    Log();
+    virtual ~Log();
+
+    template <class T> Log & operator<<(const T & t) {  s << t; return *this;  }
+
+
+    // the following specialization sets the color:
+    //  template <> Log & operator<<(const Color &c);
+
+    Log & setColor(Color c) { color = c; colorOverridden = true; return *this; }
+    Color getColor() const { return color; }
+
+protected:
+    static QString colorString(Color c);
+    QString colorify(const QString &, Color c);
+
+    bool colorOverridden = false, useColor = true;
+    Color color = Normal;
+    QString str = "";
+    QTextStream s = QTextStream(&str, QIODevice::WriteOnly);
+};
+
+
+// specialization to set the color.
+template <> Log & Log::operator<<(const Color &);
+
+/** \brief Stream-like class to print a debug message to the app's logging facility
+    Example:
+   \code
+        Debug() << "This is a debug message"; // would print a debug message to the logging facility
+   \endcode
+ */
+class Debug : public Log
+{
+public:
+    Debug() : Log() {}
+    explicit Debug(Color c) : Log(c) {}
+    explicit Debug(const char *fmt...) ATTR_PRINTF(2,3);
+    virtual ~Debug();
+};
+
+/** \brief Stream-like class to print an error message to the app's logging facility
+    Example:
+   \code
+        Error() << "This is an ERROR message!!"; // would print an error message to the logging facility
+   \endcode
+ */
+class Error : public Log
+{
+public:
+    Error() : Log() {}
+    explicit Error(Color c) : Log(c) {}
+    explicit Error(const char *fmt...) ATTR_PRINTF(2,3);
+    virtual ~Error();
+};
+
+/** \brief Stream-like class to print a warning message to the app's logging facility
+
+    Example:
+  \code
+        Warning() << "This is a warning message..."; // would print a warning message to the logging facility
+   \endcode
+*/
+class Warning : public Log
+{
+public:
+    Warning() : Log() {}
+    explicit Warning(Color c) : Log(c) {}
+    explicit Warning(const char *fmt...) ATTR_PRINTF(2,3);
+    virtual ~Warning();
+};
+
 
 namespace Util {
     extern QString basename(const QString &);
@@ -13,6 +120,27 @@ namespace Util {
     qint64 getTime(); ///< returns a timestamp in milliseconds
     qint64 getTimeNS(); ///< returns a timestamp in nanoseconds
     double getTimeSecs(); ///< returns a timestamp in seconds
+
+    template <typename Iterator>
+    void shuffle(Iterator begin, Iterator end)
+    {
+        try {
+            static std::random_device *rng = nullptr;
+            if (!rng) {
+                rng = new std::random_device();
+            }
+            std::shuffle(begin, end, *rng);
+        } catch (const std::exception &e) {
+            static bool didWarn = false;
+            if (!didWarn) {
+                Warning() << __FUNCTION__ << ": true random generator unavailable, proceeding with PRNG based on system clock (" << e.what() << ")";
+                didWarn = true;
+            }
+            // default pseudo rng
+            static unsigned seed = unsigned(std::chrono::system_clock::now().time_since_epoch().count());
+            std::shuffle(begin, end, std::default_random_engine(seed));
+        }
+    }
 
     namespace Json {
         class Error : public Exception {
@@ -127,103 +255,5 @@ namespace Util {
         static void test(QObject *receiver = nullptr);
     };
 }
-
-#if !defined(_MSC_VER) && (defined(__clang__) || defined(__GNUC__))
-#define ATTR_PRINTF(fmt, arg) __attribute__((format(printf, fmt, arg)))
-#else
-#define ATTR_PRINTF(fmt, arg)
-#define __PRETTY_FUNCTION__ __FUNCTION__
-#endif
-
-/// Super class of Debug, Warning, Error classes.
-class Log
-{
-public:
-    enum Color {
-        Reset = 0,
-        Normal = Reset, // no color/reset
-        Black,
-        Red, Green, Yellow, Blue, Magenta, Cyan, White,
-        BrightBlack,
-        BrightRed, BrightGreen, BrightYellow, BrightBlue, BrightMagenta, BrightCyan, BrightWhite,
-        Color_N
-    };
-
-
-    bool doprt = true;
-
-    explicit Log(const char *fmt...) ATTR_PRINTF(2,3);
-    explicit Log(Color);
-    Log();
-    virtual ~Log();
-
-    template <class T> Log & operator<<(const T & t) {  s << t; return *this;  }
-
-
-    // the following specialization sets the color:
-    //  template <> Log & operator<<(const Color &c);
-
-    Log & setColor(Color c) { color = c; colorOverridden = true; return *this; }
-    Color getColor() const { return color; }
-
-protected:
-    static QString colorString(Color c);
-    QString colorify(const QString &, Color c);
-
-    bool colorOverridden = false, useColor = true;
-    Color color = Normal;
-    QString str = "";
-    QTextStream s = QTextStream(&str, QIODevice::WriteOnly);
-};
-
-
-// specialization to set the color.
-template <> Log & Log::operator<<(const Color &);
-
-/** \brief Stream-like class to print a debug message to the app's logging facility
-    Example:
-   \code
-        Debug() << "This is a debug message"; // would print a debug message to the logging facility
-   \endcode
- */
-class Debug : public Log
-{
-public:
-    Debug() : Log() {}
-    explicit Debug(Color c) : Log(c) {}
-    explicit Debug(const char *fmt...) ATTR_PRINTF(2,3);
-    virtual ~Debug();
-};
-
-/** \brief Stream-like class to print an error message to the app's logging facility
-    Example:
-   \code
-        Error() << "This is an ERROR message!!"; // would print an error message to the logging facility
-   \endcode
- */
-class Error : public Log
-{
-public:
-    Error() : Log() {}
-    explicit Error(Color c) : Log(c) {}
-    explicit Error(const char *fmt...) ATTR_PRINTF(2,3);
-    virtual ~Error();
-};
-
-/** \brief Stream-like class to print a warning message to the app's logging facility
-
-    Example:
-  \code
-        Warning() << "This is a warning message..."; // would print a warning message to the logging facility
-   \endcode
-*/
-class Warning : public Log
-{
-public:
-    Warning() : Log() {}
-    explicit Warning(Color c) : Log(c) {}
-    explicit Warning(const char *fmt...) ATTR_PRINTF(2,3);
-    virtual ~Warning();
-};
 
 #endif // UTIL_H

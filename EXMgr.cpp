@@ -1,6 +1,8 @@
 #include "EXMgr.h"
 #include "EXClient.h"
 #include "Util.h"
+#include <vector>
+
 EXMgr::EXMgr(const QString & serversFile, QObject *parent)
     : Mgr(parent), serversFile(serversFile)
 {
@@ -152,19 +154,34 @@ EXClient * EXMgr::pick()
         throw InternalError(QString("%1 was called from a thread other than the main thread")
                             .arg(__PRETTY_FUNCTION__));
     }
-    EXClient *ret = nullptr;
     auto unpicked = height.seenBy - recentPicks;
     if (unpicked.isEmpty()) {
+        // reset picking
         recentPicks.clear();
         unpicked = height.seenBy - recentPicks;
     }
-    for (auto id : unpicked) {
+    std::vector<decltype(unpicked)::key_type> shuffled(unpicked.begin(), unpicked.end());
+    Util::shuffle(shuffled.begin(), shuffled.end());
+    for (auto id : shuffled) {
         EXClient *client = clientsById[id];
         if (client->status == EXClient::Connected) {
-            ret = client;
-            recentPicks.insert(ret->id);
-            return ret;
+            recentPicks.insert(client->id);
+            return client;
         }
     }
-    return ret;
+    return nullptr;
+}
+
+void EXMgr::pickTest()
+{
+    for (int i = 0; i < 100; ++i) {
+        auto client = pick();
+        if (client) {
+            Log() << "Picked " << client->id;
+        } else {
+            Warning() << "Pick found nothing!";
+        }
+        QThread::msleep(100);
+        if (qApp) qApp->processEvents();
+    }
 }

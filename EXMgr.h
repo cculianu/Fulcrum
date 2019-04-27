@@ -21,9 +21,9 @@ public:
 
     qint64 newId() { return ++curid; }
 
-    /// Picks a client that is up-to-date in a round-robin fashion. Subsequent
+    /// Picks a client that is up-to-date in a random fashion. Subsequent
     /// calls to this function will return a new EXClient each time until the
-    /// list has been exhausted, at which point the round-robin selection
+    /// list has been exhausted, at which point the randome selection
     /// starts again.  May return nullptr if no EXClients are up-to-date.
     /// Should be called from the main thread only, otherwise an Exception will
     /// be thrown.
@@ -60,6 +60,8 @@ private:
         QSet<qint64> seenBy; ///< the server ids reporting this latest height
     };
     Height height;
+
+    void pickTest();
 
 };
 
