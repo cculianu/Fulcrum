@@ -20,6 +20,7 @@ win32-msvc {
 }
 
 SOURCES += \
+    AbstractClient.cpp \
     BTC.cpp \
     Mgr.cpp \
     Options.cpp \
@@ -54,6 +55,7 @@ else: unix:!android: target.path = /opt/$${TARGET}/bin
 !isEmpty(target.path): INSTALLS += target
 
 HEADERS += \
+    AbstractClient.h \
     App.h \
     BTC.h \
     Logger.h \

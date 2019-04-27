@@ -3,9 +3,8 @@
 #include "Util.h"
 #include <QtNetwork>
 
-namespace  {
-    const qint64 MAX_BUFFER = 20000000LL;
-}
+
+/*static*/ const qint64 EXClient::MAX_BUFFER = 20000000LL;
 
 class BadServerReply : public Exception {
 public:
@@ -20,6 +19,7 @@ EXClient::EXClient(EXMgr *mgr, qint64 id, const QString &host, quint16 tport, qu
 {
     Debug() << __FUNCTION__ << " host:" << host << " t:" << tport << " s:" << sport;
     _thread.setObjectName(QString("%1 %2").arg("EXClient").arg(host));
+    setObjectName(host);
 }
 
 EXClient::~EXClient()

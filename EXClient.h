@@ -22,7 +22,7 @@ struct EXResponse
     QString jsonRpcVersion;
     qint64 id;
     QString method;
-    QVariant result;
+    QVariant result; // 'params' also gets put here
 
     int errorCode = 0;
     QString errorMessage = "";
@@ -42,6 +42,8 @@ public:
     ~EXClient();
 
     const qint64 id;
+
+    static const qint64 MAX_BUFFER; // 20MB
 
     struct Info {
         QPair<QString, QString> serverVersion = { "", "" };
