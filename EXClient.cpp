@@ -226,7 +226,7 @@ void EXClient::on_connected()
         // Additionally, bytesWritten is never emitted for QSslSocket, violating OOP! Thanks Qt. :P
         connect(socket, SIGNAL(encryptedBytesWritten(qint64)), this, SLOT(on_bytesWritten()));
     } else {
-        connect(socket, SIGNAL(bytesWritten()), this, SLOT(on_bytesWritten()));
+        connect(socket, SIGNAL(bytesWritten(qint64)), this, SLOT(on_bytesWritten()));
     }
     connect(socket, &QAbstractSocket::disconnected, this, [this]{
         Debug() << prettyName() << " socket disconnected";
