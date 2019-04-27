@@ -5,12 +5,12 @@
 #include <QMap>
 /// Abstract base class of all subsystem controllers such as EXMgr, etc.
 /// These get created by the App on startup, based on config.
-class Controller : public QObject
+class Mgr : public QObject
 {
     Q_OBJECT
 public:
-    explicit Controller(QObject *parent = nullptr);
-    virtual ~Controller();
+    explicit Mgr(QObject *parent = nullptr);
+    virtual ~Mgr();
     virtual void startup() = 0; ///< NB: controllers may throw Exception here, so catch it and abort if that happens.
     virtual void cleanup() = 0;
 

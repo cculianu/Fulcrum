@@ -1,13 +1,13 @@
 #ifndef SRVMGR_H
 #define SRVMGR_H
 
-#include "Controller.h"
+#include "Mgr.h"
 #include "Options.h"
 #include <QList>
 
 class TcpServer;
 
-class SrvMgr : public Controller
+class SrvMgr : public Mgr
 {
     Q_OBJECT
 public:

@@ -8,14 +8,19 @@ class Exception : public std::runtime_error
 {
 public:
     Exception(const QString & what = "Error") : std::runtime_error(what.toUtf8()) {}
-    virtual ~Exception();
+    ~Exception(); ///< for vtable
+};
+
+class InternalError : public Exception
+{
+public:
+    using Exception::Exception;
 };
 
 class BadArgs : public Exception
 {
 public:
-    BadArgs(const QString & what = "Bad Arguments") : Exception(what) {}
-    ~BadArgs();
+    using Exception::Exception;
 };
 
 #define APPNAME "ShuffleUpServer"

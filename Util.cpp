@@ -26,8 +26,6 @@ namespace Util {
     }
 
     namespace Json {
-        Error::~Error() {} // for vtable
-
         QVariant parseString(const QString &str, bool expectMap) {
             QJsonParseError e;
             QJsonDocument d = QJsonDocument::fromJson(str.toUtf8(), &e);
@@ -54,8 +52,79 @@ namespace Util {
                 throw Error("Bad QVariant pased to Json::toString");
             return d.toJson(compact ? QJsonDocument::Compact : QJsonDocument::Indented);
         }
+    } // end namespace Json
+
+    RunInThread::RunInThread(const VoidFunc & work, QObject *receiver, const VoidFunc & completion, const QString & name)
+        : QThread(receiver), work(work)
+    {
+        auto sigReceiver = receiver ? receiver : this;
+        if (!name.isNull()) setObjectName(name);
+        connect(this, &RunInThread::onCompletion, sigReceiver, [completion, this]{
+            if (completion) completion();
+            deleteLater();
+        });
+        if (!QCoreApplication::closingDown()) {
+            {
+                QMutexLocker ml(&mut);
+                extant.insert(this);
+            }
+            start();
+        } else {
+            Warning() << "App shutting down, will not start thread " << (name.isNull() ? "(RunInThread)" : name);
+        }
     }
-}
+
+    void RunInThread::run()
+    {
+        if (work)
+            work();
+        emit onCompletion(); // runs in receiver's thread or main thread if no receiver.
+        done();
+    }
+
+    /// app exit cleanup handling
+    /*static*/ QSet<RunInThread *> RunInThread::extant;
+    /*static*/ QMutex RunInThread::mut;
+    /*static*/ QWaitCondition RunInThread::cond;
+
+    void RunInThread::done()
+    {
+        QMutexLocker ml(&mut);
+        extant.remove(this);
+        if (extant.isEmpty()) {
+            cond.wakeAll();
+        }
+    }
+    // static
+    bool RunInThread::waitForAll(unsigned long timeout, const QString &msg)
+    {
+        QMutexLocker ml(&mut);
+        if (!extant.isEmpty()) {
+            Log() << msg;
+            return cond.wait(&mut, timeout);
+        }
+        return true;
+    }
+    // static
+    void RunInThread::test(QObject *receiver)
+    {
+        auto rit =
+        Util::RunInThread::Do([]{
+            for (int i = 0; i < 100; ++i) {
+                Debug() << "Worker thread...";
+                QThread::msleep(100);
+                if (QCoreApplication::closingDown())
+                    return;
+            }
+        }, receiver, []{
+           Debug() << "COMPLETION!";
+        }, "(RunInThread)");
+        connect(rit, &QObject::destroyed, receiver ? receiver : qApp, []{
+           Debug() << "DESTROYED!!";
+        });
+    }
+
+} // end namespace Util
 
 Log::Log() {}
 

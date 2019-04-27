@@ -36,10 +36,12 @@ class EXClient : public QObject
 {
     Q_OBJECT
 public:
-    explicit EXClient(EXMgr *mgr,
+    explicit EXClient(EXMgr *mgr,  qint64 id,
                       const QString & host,
                       quint16 tcpPort, quint16 sslPort);
     ~EXClient();
+
+    const qint64 id;
 
     struct Info {
         QPair<QString, QString> serverVersion = { "", "" };

@@ -4,6 +4,7 @@
 #include "Common.h"
 #include <QtCore>
 #include <atomic>
+#include <functional>
 #define Q2C(qstr) qstr.toUtf8().constData()
 
 namespace Util {
@@ -17,7 +18,6 @@ namespace Util {
         class Error : public Exception {
         public:
             using Exception::Exception;
-            ~Error();
         };
 
         /// if expectmap, then throw if not a dict. Otherwise throw if not a list.
@@ -59,6 +59,72 @@ namespace Util {
         QList<T> data;
         QMutex mut;
         QWaitCondition cond;
+    };
+
+    /** Run a lambda in a thread.
+     *
+     * `work' will be called in the thread context of this QThread's run()
+     * method. It should reference objects that remain alive until
+     * `completion' is called (or the work completes).
+     *
+     * `completion' (if specified) will be called in the thread context of
+     * the receiver's thread (or calling thread if receiver is nullptr) to
+     * notify of thread completion.
+     *
+     * This object auto-deletes itself on completion by calling deleteLater().
+     * As such, it is a programming error to allocate this object on the stack.
+     * Because of that, access to this mechanism is via the factory static
+     * function: 'Do' (all constructors have been made private to enforce
+     * this).
+     *
+     * Caveats: If you hit CTRL-C to shutdown this app and the work is not yet
+     * complete, the app wait for 5 seconds for all thrads and if they don't
+     * finish, it will call C abort() with message:
+     * 'QThread: Destroyed while thread is still running'.
+     *
+     */
+    class RunInThread : public QThread
+    {
+        Q_OBJECT
+    public:
+        typedef std::function<void(void)> VoidFunc;
+
+        /// Note work should remain alive for the duration of this task!
+        static RunInThread *
+        Do ( const VoidFunc &work,  ///< called in thread's context to do work
+             QObject *receiver = nullptr, ///< becomes this instance's parent.  If not nullptr, should remain alive until work completes.
+             const VoidFunc &completion = VoidFunc(), ///< called in receiver's thread on completion
+             const QString & threadName = QString()) ///< advisory thread name used in Debug() and Log() print for code executing within the thread
+        { return new RunInThread(work, receiver, completion, threadName); }
+
+        /// Convenience for above.  Sets the receiver to 'nullptr' which puts the completion() function execution
+        /// in the context of the calling thread.
+        static RunInThread *
+        Do ( const VoidFunc &work, const VoidFunc &completion = VoidFunc(),
+             const QString & threadName = QString())
+        { return new RunInThread(work, nullptr, completion, threadName); }
+
+        /// called by App on exit to wait for all work to complete.
+        static bool waitForAll(unsigned long timeout_ms = ULONG_MAX, const QString &logMsgIfNeedsToWait=QString());
+
+    protected:
+        void run() override;
+    signals:
+        void onCompletion();
+    private:
+        std::function<void(void)> work;
+        /// disabled public c'tor
+        RunInThread(const VoidFunc &work,
+                    QObject *receiver = nullptr,
+                    const VoidFunc &completion = VoidFunc(),
+                    const QString & threadName = QString());
+        /// app exit cleanup handling
+        static QSet<RunInThread *> extant;
+        static QMutex mut;
+        static QWaitCondition cond;
+        void done();
+    public:
+        static void test(QObject *receiver = nullptr);
     };
 }
 

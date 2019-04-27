@@ -2,7 +2,7 @@
 #include "EXClient.h"
 #include "Util.h"
 EXMgr::EXMgr(const QString & serversFile, QObject *parent)
-    : Controller(parent), serversFile(serversFile)
+    : Mgr(parent), serversFile(serversFile)
 {
     static bool initted_meta = false;
     if (!initted_meta) {
@@ -32,6 +32,7 @@ void EXMgr::cleanup()
         delete ex; // will wait for threads to finish
     }
     clients.clear();
+    clientsById.clear();
 }
 
 void EXMgr::loadServers()
@@ -47,8 +48,9 @@ void EXMgr::loadServers()
         QString host = it.key();
         //Debug() << "Server: " << host << " s:" << sport << " t:" << tport << " " << (ok ? "ok" : "not ok");
         if (ok) {
-            auto client = new EXClient(this, host, tport, sport);
+            auto client = new EXClient(this, newId(), host, tport, sport);
             clients.push_back(client);
+            clientsById[client->id] = client;
             connect(client, &EXClient::newConnection, this, &EXMgr::onNewConnection);
             connect(client, &EXClient::lostConnection, this, &EXMgr::onLostConnection);
             connect(client, &EXClient::gotResponse, this, &EXMgr::onResponse);
@@ -69,13 +71,14 @@ void EXMgr::loadServers()
 void EXMgr::onNewConnection(EXClient *client)
 {
     Debug () << "New connection for " << client->host;
-    emit client->sendRequest(newReqId(), "server.version", QVariantList({QString("%1/%2").arg(APPNAME).arg(VERSION), QString("1.4")}));
-    emit client->sendRequest(newReqId(), "blockchain.headers.subscribe");
+    emit client->sendRequest(newId(), "server.version", QVariantList({QString("%1/%2").arg(APPNAME).arg(VERSION), QString("1.4")}));
+    emit client->sendRequest(newId(), "blockchain.headers.subscribe");
 }
 
 void EXMgr::onLostConnection(EXClient *client)
 {
     Debug () << "Connection lost for " << client->host << ", status: " << client->status;
+    height.seenBy.remove(client->id);
     client->info.clear();
 }
 
@@ -87,11 +90,23 @@ void EXMgr::onResponse(EXClient *client, EXResponse r)
         client->info.serverVersion.second = r.result.toList()[1].toString();
         Debug() << "Got server version: " << client->info.serverVersion.first << " / " << client->info.serverVersion.second;
     } else if (r.method == "blockchain.headers.subscribe") {
-        client->info.height = r.result.toMap().value("height", 0).toInt();
-        client->info.header = r.result.toMap().value("hex", "").toString();
-        Debug() << "Got header subscribe: " << client->info.height << " / " << client->info.header;
+        int ht = r.result.toMap().value("height", 0).toInt();
+        QString hdr = r.result.toMap().value("hex", "").toString();
+        if (ht > 0) {
+            if (ht > height.height) {
+                height.height = ht;
+                height.ts = Util::getTime();
+                height.header = hdr;
+                height.seenBy.clear();
+            }
+            if (ht == height.height)
+                height.seenBy.insert(client->id);
+            client->info.height = ht;
+            client->info.header = hdr;
+        }
+        Debug() << "Got header subscribe: " << client->info.height << " / " << client->info.header << " (count for height = " << height.seenBy.count() << ")";
     } else if (r.method == "server.ping") {
-        // ignore...
+        // ignore; timestamps updated in EXClient
     } else {
         Error() << "Unknown method \"" << r.method << "\" from " << client->host;
     }
@@ -100,12 +115,18 @@ void EXMgr::onResponse(EXClient *client, EXResponse r)
 void EXMgr::checkClients() ///< called from the checkClientsTimer every 1 mins
 {
     static const qint64 bad_timeout = 15*60*1000, // 15 mins
-                        stale_timeout = EXClient::reconnectTime; // 2 mins
+                        low_server_timeout = checkClientsTimer->interval()/2; // 30 seconds
     Debug() << "EXMgr: Checking clients...";
+    int lagCt = 0;
+    const bool lowServers = height.seenBy.count() == 0;
+    const qint64 stale_timeout = lowServers ? low_server_timeout : EXClient::reconnectTime; // 1 or 2 mins
     for (EXClient *client : clients) {
         const auto now = Util::getTime();
-        if (client->isGood() && !client->isStale())
+        const bool lagging = client->info.height < height.height && client->info.isValid();
+        if (client->isGood() && !client->isStale()) {
+            if (lagging) ++lagCt;
             continue;
+        }
         qint64 elapsed = qMin(now-client->lastConnectionAttempt, now-client->lastGood);
         if (client->isBad() && elapsed  > bad_timeout) {
             Log() << "'Bad' EX host " << client->host << ", reconnecting...";
@@ -118,4 +139,32 @@ void EXMgr::checkClients() ///< called from the checkClientsTimer every 1 mins
             client->restart();
         }
     }
+    if (lagCt) {
+        Log() << lagCt << " servers are lagging behind the latest block height";
+    }
+}
+
+EXClient * EXMgr::pick()
+{
+    // defensive programming: enforce caller is in main thread
+    if (QThread::currentThread() != qApp->thread()) {
+        // crash the program
+        throw InternalError(QString("%1 was called from a thread other than the main thread")
+                            .arg(__PRETTY_FUNCTION__));
+    }
+    EXClient *ret = nullptr;
+    auto unpicked = height.seenBy - recentPicks;
+    if (unpicked.isEmpty()) {
+        recentPicks.clear();
+        unpicked = height.seenBy - recentPicks;
+    }
+    for (auto id : unpicked) {
+        EXClient *client = clientsById[id];
+        if (client->status == EXClient::Connected) {
+            ret = client;
+            recentPicks.insert(ret->id);
+            return ret;
+        }
+    }
+    return ret;
 }

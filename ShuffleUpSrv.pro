@@ -21,7 +21,7 @@ win32-msvc {
 
 SOURCES += \
     BTC.cpp \
-    Controller.cpp \
+    Mgr.cpp \
     Options.cpp \
     SrvMgr.cpp \
     TcpServer.cpp \
@@ -56,8 +56,8 @@ else: unix:!android: target.path = /opt/$${TARGET}/bin
 HEADERS += \
     App.h \
     BTC.h \
-    Controller.h \
     Logger.h \
+    Mgr.h \
     Options.h \
     SrvMgr.h \
     TcpServer.h \

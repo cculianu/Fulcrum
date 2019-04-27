@@ -6,8 +6,6 @@
 #include <string.h>
 #include <iostream>
 #include <QMap>
-#include <QSet>
-#include <QPair>
 #include <utility>
 
 #ifdef __clang__

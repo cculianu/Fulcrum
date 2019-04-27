@@ -1,14 +1,15 @@
 #ifndef ECMGR_H
 #define ECMGR_H
 
-#include "Controller.h"
+#include "Mgr.h"
 #include "EXClient.h"
 #include <QObject>
 #include <QList>
+#include <QSet>
 #include <atomic>
 class EXClient;
 
-class EXMgr : public Controller
+class EXMgr : public Mgr
 {
     Q_OBJECT
 public:
@@ -18,7 +19,15 @@ public:
     void startup() override;
     void cleanup() override;
 
-    qint64 newReqId() { return ++reqid; }
+    qint64 newId() { return ++curid; }
+
+    /// Picks a client that is up-to-date in a round-robin fashion. Subsequent
+    /// calls to this function will return a new EXClient each time until the
+    /// list has been exhausted, at which point the round-robin selection
+    /// starts again.  May return nullptr if no EXClients are up-to-date.
+    /// Should be called from the main thread only, otherwise an Exception will
+    /// be thrown.
+    EXClient *pick();
 
 signals:
 
@@ -35,10 +44,23 @@ private slots:
 private:
     const QString serversFile;
     void loadServers();
-    std::atomic<qint64> reqid = 0;
+    std::atomic<qint64> curid = 0;
 
     QList<EXClient *> clients;
+    QMap<qint64, EXClient *> clientsById; ///< note to self: always maintain this map to be synched to above list
+
     QTimer *checkClientsTimer = nullptr;
+
+    QSet<qint64> recentPicks;
+
+    struct Height {
+        int height = 0;  ///< the largest height seen
+        QString header; ///< the block header of height
+        qint64 ts = 0; ///< the ts of height, when first seen
+        QSet<qint64> seenBy; ///< the server ids reporting this latest height
+    };
+    Height height;
+
 };
 
 #endif // ECMGR_H

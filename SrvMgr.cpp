@@ -3,7 +3,7 @@
 #include "TcpServer.h"
 
 SrvMgr::SrvMgr(const QList<Options::Interface> & ifaces, QObject *parent)
-    : Controller(parent), interfaces(ifaces)
+    : Mgr(parent), interfaces(ifaces)
 {
 
 }

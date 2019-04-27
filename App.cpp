@@ -45,12 +45,21 @@ void App::startup()
     try {
 #ifdef Q_OS_UNIX
         auto gotsig = [](int sig) {
-            Log() << "Got signal: " << sig << ", exiting ...";
-            app()->cleanup();
-            app()->exit(sig);
+            static int ct = 0;
+            if (!ct++) {
+                Log() << "Got signal: " << sig << ", exiting ...";
+                app()->exit(sig);
+            } else if (ct < 5) {
+                std::printf("Duplicate signal %d already being handled, ignoring\n", sig);
+            } else {
+                std::printf("Signal %d caught more than 5 times, aborting\n",sig);
+                std::abort();
+            }
         };
         ::signal(SIGINT, gotsig);
         ::signal(SIGTERM, gotsig);
+        ::signal(SIGQUIT, gotsig);
+        ::signal(SIGHUP, SIG_IGN);
 #endif
         srvmgr = new SrvMgr(options.interfaces, this);
         exmgr = new EXMgr(options.serversFile, this);
@@ -66,6 +75,9 @@ void App::startup()
 void App::cleanup()
 {
     Debug() << __PRETTY_FUNCTION__ ;
+    if (!Util::RunInThread::waitForAll(5000, "Waiting for extant worker threads ...")) {
+        Warning() << "After 5 seconds, workers still active. App will likely abort with an error.";
+    }
     if (srvmgr) { Log() << "Stopping SrvMgr ... "; srvmgr->cleanup(); delete srvmgr; srvmgr = nullptr; }
     if (exmgr) { Log() << "Stopping EXMgr ... "; exmgr->cleanup(); delete exmgr; exmgr = nullptr; }
 }

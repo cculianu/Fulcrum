@@ -15,8 +15,8 @@ public:
 
 BadServerReply::~BadServerReply() {} // for vtable
 
-EXClient::EXClient(EXMgr *mgr, const QString &host, quint16 tport, quint16 sport)
-    : QObject(nullptr), host(host), tport(tport), sport(sport), mgr(mgr)
+EXClient::EXClient(EXMgr *mgr, qint64 id, const QString &host, quint16 tport, quint16 sport)
+    : QObject(nullptr), id(id), host(host), tport(tport), sport(sport), mgr(mgr)
 {
     Debug() << __FUNCTION__ << " host:" << host << " t:" << tport << " s:" << sport;
     _thread.setObjectName(QString("%1 %2").arg("EXClient").arg(host));
@@ -213,7 +213,7 @@ void EXClient::on_pingTimer()
 {
     if (Util::getTime() - lastGood > pingtime_ms)
         // only ping if we've been idle for longer than 1 minute
-        emit sendRequest(mgr->newReqId(), "server.ping");
+        emit sendRequest(mgr->newId(), "server.ping");
 }
 
 void EXClient::on_connected()
