@@ -149,6 +149,7 @@ void Client::on_readyRead()
         nReceived = line.size();
         line = line.trimmed();
         Debug() << "Got line: " << line;
+        lastGood = Util::getTime();
         send("Thanks fam.\n");
     }
     if (socket->bytesAvailable() > MAX_BUFFER) {
