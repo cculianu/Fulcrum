@@ -26,7 +26,7 @@ EXClient::EXClient(EXMgr *mgr, qint64 id, const QString &host, quint16 tport, qu
 EXClient::~EXClient()
 {
     Debug() << __FUNCTION__ << " host:" << host;
-    stop();
+    stop(); ///< need to be sure to call this here rather than rely on ThreadObjectMixin, as by the time it runs, we lost our vtable
 }
 
 /// this should only be called from our thread, because it accesses socket which should only be touched from thread
@@ -46,13 +46,8 @@ bool EXClient::isGood() const
 
 void EXClient::start()
 {
-    if (_thread.isRunning()) return;
-    Debug() << host << " starting thread";
-    moveToThread(&_thread);
-    connect(&_thread, &QThread::started, this, &EXClient::on_started);
-    connect(&_thread, &QThread::finished, this, &EXClient::on_finished);
+    ThreadObjectMixin::start();
     connect(this, &EXClient::sendRequest, this, &EXClient::_sendRequest);
-    _thread.start();
 }
 
 void EXClient::stop()
@@ -61,13 +56,7 @@ void EXClient::stop()
     /// ensure no new signals get sent to us after we switch back to the
     /// main thread.
     disconnect(this, &EXClient::sendRequest, this, &EXClient::_sendRequest);
-    if (_thread.isRunning()) {
-        Debug() << host << " thread is running, joining thread";
-        _thread.quit();
-        _thread.wait();
-    }
-    disconnect(&_thread, &QThread::started, this, &EXClient::on_started);
-    disconnect(&_thread, &QThread::finished, this, &EXClient::on_finished);
+    ThreadObjectMixin::stop();
 }
 
 // runs in thread
@@ -81,7 +70,7 @@ void EXClient::on_started()
 void EXClient::on_finished()
 {
     killSocket();
-    moveToThread(qApp->thread());
+    ThreadObjectMixin::on_finished(); // calls moveToThread
     Debug() << "finished.";
 }
 

@@ -122,14 +122,15 @@ void EXMgr::checkClients() ///< called from the checkClientsTimer every 1 mins
     static const qint64 bad_timeout = 15*60*1000, // 15 mins
                         low_server_timeout = checkClientsTimer->interval()/2; // 30 seconds
     Debug() << "EXMgr: Checking clients...";
-    int lagCt = 0;
     const bool lowServers = height.seenBy.count() == 0;
     const qint64 stale_timeout = lowServers ? low_server_timeout : EXClient::reconnectTime; // 1 or 2 mins
+    QStringList laggers;
     for (EXClient *client : clients) {
         const auto now = Util::getTime();
-        const bool lagging = client->info.height < height.height && client->info.isValid();
-        if (client->isGood() && !client->isStale()) {
-            if (lagging) ++lagCt;
+        if (const bool lagging = client->info.height < height.height && client->info.isValid();
+                client->isGood() && !client->isStale())
+        {
+            if (lagging) laggers += QString("%1 (%2)").arg(client->host).arg(client->info.height);
             continue;
         }
         qint64 elapsed = qMin(now-client->lastConnectionAttempt, now-client->lastGood);
@@ -144,8 +145,9 @@ void EXMgr::checkClients() ///< called from the checkClientsTimer every 1 mins
             client->restart();
         }
     }
-    if (lagCt) {
-        Log() << lagCt << " servers are lagging behind the latest block height";
+    if (int ct = laggers.count(); ct) {
+        QString s = ct == 1 ? " is" : "s are";
+        Log("%d server%s lagging behind the latest block height of %d: %s", ct, s.toUtf8().constData(), height.height, laggers.join(", ").toUtf8().constData());
     }
 }
 

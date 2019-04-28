@@ -16,7 +16,7 @@ QString AbstractClient::prettyName(bool dontTouchSocket) const
     QString type = socket && !dontTouchSocket ? (dynamic_cast<QSslSocket *>(socket) ? "SSL" : "TCP") : "(NoSocket)";
     QString port = socket && !dontTouchSocket && socket->peerPort() ? QString(":%1").arg(socket->peerPort()) : "";
     QString ip = socket && !dontTouchSocket && !socket->peerAddress().isNull() ? socket->peerAddress().toString() : "";
-    return QString("%1 %2 %3 %4%5").arg(id).arg(type).arg(!objectName().isNull()?objectName():"(AbstractSocket)").arg(ip).arg(port);
+    return QString("%1 %2 (id: %3) %4%5").arg(type).arg(!objectName().isNull()?objectName():"(AbstractSocket)").arg(id).arg(ip).arg(port);
 }
 
 

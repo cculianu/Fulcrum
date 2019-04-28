@@ -10,6 +10,7 @@
 #include <QPair>
 #include "Common.h"
 #include "AbstractClient.h"
+#include "ThreadObjectMixin.h"
 
 struct EXResponse
 {
@@ -32,7 +33,7 @@ Q_DECLARE_METATYPE(EXResponse);
 
 class EXMgr;
 
-class EXClient : public AbstractClient
+class EXClient : public AbstractClient, protected ThreadObjectMixin
 {
     Q_OBJECT
 public:
@@ -72,11 +73,8 @@ protected:
 
     std::atomic<qint64> lastConnectionAttempt = 0LL;  ///< the last time we tried to reconnect
 
-    QThread _thread;
-
-    void start(); ///< call from main thread
-    void stop(); ///< call from main thread
-    void restart() { stop(); start(); } ///< call from main thread
+    void start() override; ///< call from main thread
+    void stop() override; ///< call from main thread
 
     QString host;
     quint16 tport = 0, sport = 0;
@@ -92,8 +90,9 @@ private:
     /// returns utf-8 encoded JSON data for a request
     static QByteArray makeRequestData(qint64 id, const QString &method, const QVariantList & params = QVariantList());
 
-    void on_started();
-    void on_finished();
+    void on_started() override;
+    void on_finished() override;
+    QObject *qobj() override { return this; }
     void killSocket();
     void reconnect();
 };

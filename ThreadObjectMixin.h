@@ -1,5 +1,5 @@
-#ifndef THREADOBJECT_H
-#define THREADOBJECT_H
+#ifndef THREADOBJECT_MIXIN_H
+#define THREADOBJECT_MIXIN_H
 
 #include <QObject>
 #include <QThread>
@@ -12,21 +12,19 @@ class ThreadObjectMixin
 public:
     ThreadObjectMixin();
     virtual ~ThreadObjectMixin();
-    virtual QString prettyName() const;
-
-    QObject *qobj() const { return dynamic_cast<QObject *>(const_cast<ThreadObjectMixin *>(this)); }
 
 protected:
-    QThread _thread;
+    QThread _thread, *origThread = nullptr;
     Util::Channel<QString> chan;
     QList<QMetaObject::Connection> conns;
 
+    virtual QObject *qobj() = 0; ///< reimplement in subclasses to return the QObject pointer (this)
     virtual void start(); ///< derived classes should call super implementation
     virtual void stop(); ///< derived classes should call super implementation
     virtual void restart() { stop(); start(); }
 protected slots:
-    virtual void on_started(); ///< default impll does nothing
-    virtual void on_finished(); ///< be sure to chain to this if you override and call it.
+    virtual void on_started(); ///< default impl does nothing
+    virtual void on_finished(); ///< be sure to call this if you override. (does moveToThread(mainthread))
 };
 
-#endif // THREADOBJECT_H
+#endif // THREADOBJECT_MIXIN_H
