@@ -192,6 +192,13 @@ namespace Util {
         QWaitCondition cond;
     };
 
+    struct VariantChannel : public Channel<QVariant>
+    {
+        template <typename V>
+        inline QString get(unsigned long timeout_ms = ULONG_MAX)
+        { return Channel<QVariant>::get(timeout_ms).value<V>(); }
+    };
+
     /** Run a lambda in a thread.
      *
      * `work' will be called in the thread context of this QThread's run()

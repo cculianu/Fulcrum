@@ -19,35 +19,34 @@ struct TcpServerError : public Exception
 /// Custom implementation of QTcpServer, which has its own thread
 /// All new connections are in the thread context.
 /// TODO: Implement optional SSL.
-class TcpServer : public QTcpServer, public IdMixin
+class TcpServer : public QTcpServer, protected ThreadObjectMixin, public IdMixin
 {
     Q_OBJECT
 public:
     TcpServer(const QHostAddress & address, quint16 port);
-    virtual ~TcpServer() override;
+    ~TcpServer() override;
 
     QString prettyName() const;
     QString hostPort() const;
 
-    void tryStart(); /// may raise Exception if cannot bind, etc. Blocks waiting for thread to listen and return ok/error status.
-    void stop(); /// stop listening, kills all connections
+    void tryStart(); ///< may raise Exception if cannot bind, etc. Blocks waiting for thread to listen and return ok/error status.
+    using ThreadObjectMixin::stop; /// promote this back up to public
 
 signals:
 
 public slots:
 
-protected:
-    QThread _thread;
+private:
+    QObject* qobj() override { return this; }
+    void on_started() override;
+    void on_finished() override;
 
 private slots:
-    void on_finished();
-    void on_started();
     void on_newConnection();
 
 private:
     QHostAddress addr;
     quint16 port;
-    Util::Channel<QString> chan;
 
     Client * newClient(QTcpSocket *);
     inline Client * getClient(qint64 id) {

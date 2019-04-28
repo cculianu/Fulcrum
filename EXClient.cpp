@@ -25,7 +25,7 @@ EXClient::EXClient(EXMgr *mgr, qint64 id, const QString &host, quint16 tport, qu
 
 EXClient::~EXClient()
 {
-    Debug() << __FUNCTION__ << " host:" << host;
+    Debug() << __FUNCTION__ << " " << objectName();
     stop(); ///< need to be sure to call this here rather than rely on ThreadObjectMixin, as by the time it runs, we lost our vtable
 }
 

@@ -12,7 +12,7 @@ ThreadObjectMixin::ThreadObjectMixin()
 
 ThreadObjectMixin::~ThreadObjectMixin()
 {
-    stop(); // this is here for paranoia reasons. In normal app function derived class should make sure it's stopped before we get here. This should be a NO-OP!
+    stop(); // paranoia.  Ideally child classes call this on d'tor to call their derived stop() methods.
 }
 
 
@@ -22,23 +22,24 @@ void ThreadObjectMixin::start()
     Debug() << qobj()->objectName() << " starting thread";
     chan.clear();
     qobj()->moveToThread(&_thread);
-    conns.push_back(qobj()->connect(&_thread, &QThread::started, qobj(), [this](){on_started();}));
-    conns.push_back(qobj()->connect(&_thread, &QThread::finished, qobj(), [this](){on_finished();}));
+    conns.push_back(QObject::connect(&_thread, &QThread::started, qobj(), [this](){on_started();}));
+    conns.push_back(QObject::connect(&_thread, &QThread::finished, qobj(), [this](){on_finished();}));
     _thread.start();
 }
 
 void ThreadObjectMixin::stop()
 {
     if (_thread.isRunning()) {
-        Debug() << qobj()->objectName() << " thread is running, joining thread";
+        Debug() << _thread.objectName() << " thread is running, joining thread";
         _thread.quit();
         _thread.wait();
     }
     for (auto c : conns) {
-        qobj()->disconnect(c);
+        QObject::disconnect(c);
     }
     conns.clear();
 }
+
 
 void ThreadObjectMixin::on_started()
 {

@@ -30,13 +30,9 @@ QString TcpServer::prettyName() const
 void TcpServer::tryStart()
 {
     if (!_thread.isRunning()) {
-        chan.clear();
-        moveToThread(&_thread);
-        connect(&_thread, SIGNAL(started()), this, SLOT(on_started()));
-        connect(&_thread, SIGNAL(finished()), this, SLOT(on_finished()));
-        _thread.start();
+        ThreadObjectMixin::start(); // call super
         Log() << "Starting listener service for " << prettyName() << " ...";
-        if (auto result = chan.get(); result != "ok") {
+        if (auto result = chan.get<QString>(); result != "ok") {
             result = result.isEmpty() ? "Startup timed out!" : result;
             throw TcpServerError(result);
         }
@@ -44,17 +40,6 @@ void TcpServer::tryStart()
     } else {
         throw TcpServerError(prettyName() + " already started");
     }
-}
-
-void TcpServer::stop()
-{
-    if (_thread.isRunning()) {
-        Debug() << prettyName() << " thread is running, joining thread";
-        _thread.quit();
-        _thread.wait();
-    }
-    disconnect(&_thread, SIGNAL(started()), this, SLOT(on_started()));
-    disconnect(&_thread, SIGNAL(finished()), this, SLOT(on_finished()));
 }
 
 void TcpServer::on_started()
@@ -77,7 +62,7 @@ void TcpServer::on_finished()
     close(); /// stop listening
     chan.put("finished");
     Debug() << __FUNCTION__ << " finished.";
-    moveToThread(qApp->thread());
+    ThreadObjectMixin::on_finished();
 }
 
 static inline QString prettySock(QAbstractSocket *sock)
