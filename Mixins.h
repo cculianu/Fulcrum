@@ -1,5 +1,5 @@
-#ifndef THREADOBJECT_MIXIN_H
-#define THREADOBJECT_MIXIN_H
+#ifndef SHUFFLEUP_MIXINS_H
+#define SHUFFLEUP_MIXINS_H
 
 #include <QObject>
 #include <QThread>
@@ -27,4 +27,21 @@ protected slots:
     virtual void on_finished(); ///< be sure to call this if you override. (does moveToThread(mainthread))
 };
 
-#endif // THREADOBJECT_MIXIN_H
+
+/// Mixin for an object that has an app-global id associated with it.
+/// Used by the various AbstractClient subclasses because we need to keep
+/// track of who sent what when, and it's more useful to work with ids rather
+/// than direct pointers, for various reasons (also ElectrumX itself uses Ids to identify
+/// messages).
+class IdMixin
+{
+public:
+    //IdMixin() = delete; // <-- this is implicitly the case because we have a const data member.
+    inline IdMixin(const qint64 id) : id(id) {}
+
+    const qint64 id;  /// derived classes should set this at construction by calling our c'tor
+
+    static qint64 newId(); /// convenience method: calls app()->newId()
+};
+
+#endif // SHUFFLEUP_MIXINS_H

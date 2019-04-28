@@ -10,7 +10,7 @@
 #include <QPair>
 #include "Common.h"
 #include "AbstractClient.h"
-#include "ThreadObjectMixin.h"
+#include "Mixins.h"
 
 struct EXResponse
 {

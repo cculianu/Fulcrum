@@ -1,14 +1,14 @@
 #include "TcpServer.h"
-#include "App.h"
 #include <QCoreApplication>
 #include <QtNetwork>
 
 TcpServerError::~TcpServerError() {} // for vtable
 
 TcpServer::TcpServer(const QHostAddress &a, quint16 p)
-    : QTcpServer(nullptr), addr(a), port(p)
+    : QTcpServer(nullptr), IdMixin(newId()), addr(a), port(p)
 {
     _thread.setObjectName(prettyName());
+    setObjectName(prettyName());
 }
 
 TcpServer::~TcpServer()
@@ -17,8 +17,6 @@ TcpServer::~TcpServer()
     stop();
 }
 
-inline qint64 TcpServer::newId() const { return app()->newId(); }
-
 QString TcpServer::hostPort() const
 {
     return QString("%1:%2").arg(addr.toString()).arg(port);
@@ -26,7 +24,7 @@ QString TcpServer::hostPort() const
 
 QString TcpServer::prettyName() const
 {
-    return QString("Srv %1").arg(hostPort());
+    return QString("Srv %1 (id: %2)").arg(hostPort()).arg(id);
 }
 
 void TcpServer::tryStart()
@@ -37,7 +35,7 @@ void TcpServer::tryStart()
         connect(&_thread, SIGNAL(started()), this, SLOT(on_started()));
         connect(&_thread, SIGNAL(finished()), this, SLOT(on_finished()));
         _thread.start();
-        Log() << "Starting listener service for " << hostPort() << " ...";
+        Log() << "Starting listener service for " << prettyName() << " ...";
         if (auto result = chan.get(); result != "ok") {
             result = result.isEmpty() ? "Startup timed out!" : result;
             throw TcpServerError(result);

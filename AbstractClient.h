@@ -3,20 +3,18 @@
 
 #include <QObject>
 #include <atomic>
-#include "Common.h"
 #include <QTcpSocket>
-
+#include "Common.h"
+#include "Mixins.h"
 class QTimer;
 
-class AbstractClient : public QObject
+class AbstractClient : public QObject, public IdMixin
 {
     Q_OBJECT
 public:
     explicit AbstractClient(qint64 id, QObject *parent = nullptr);
 
     const qint64 MAX_BUFFER = 20000000; // 20MB, may override this in derived classes
-
-    const qint64 id;
 
     /// true if we are connected
     virtual bool isGood() const;

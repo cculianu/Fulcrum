@@ -23,10 +23,10 @@ SOURCES += \
     AbstractClient.cpp \
     BTC.cpp \
     Mgr.cpp \
+    Mixins.cpp \
     Options.cpp \
     SrvMgr.cpp \
     TcpServer.cpp \
-    ThreadObjectMixin.cpp \
     bitcoin/base58.cpp \
     bitcoin/crypto/aes.cpp \
     bitcoin/crypto/chacha20.cpp \
@@ -61,10 +61,10 @@ HEADERS += \
     BTC.h \
     Logger.h \
     Mgr.h \
+    Mixins.h \
     Options.h \
     SrvMgr.h \
     TcpServer.h \
-    ThreadObjectMixin.h \
     Util.h \
     EXMgr.h \
     Common.h \

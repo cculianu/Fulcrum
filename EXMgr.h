@@ -18,7 +18,7 @@ public:
     void startup() override;
     void cleanup() override;
 
-    qint64 newId() const; /// alias for app()->newId()
+    inline qint64 newId() const { return IdMixin::newId(); } /// alias for app()->newId()
 
     /// Picks a client that is up-to-date in a random fashion. Subsequent
     /// calls to this function will return a new EXClient each time until the

@@ -3,6 +3,7 @@
 
 #include "Common.h"
 #include "Util.h"
+#include "Mixins.h"
 #include <QTcpServer>
 #include <QThread>
 #include <QMap>
@@ -18,14 +19,12 @@ struct TcpServerError : public Exception
 /// Custom implementation of QTcpServer, which has its own thread
 /// All new connections are in the thread context.
 /// TODO: Implement optional SSL.
-class TcpServer : public QTcpServer
+class TcpServer : public QTcpServer, public IdMixin
 {
     Q_OBJECT
 public:
     TcpServer(const QHostAddress & address, quint16 port);
     virtual ~TcpServer() override;
-
-    qint64 newId() const;
 
     QString prettyName() const;
     QString hostPort() const;

@@ -1,4 +1,5 @@
-#include "ThreadObjectMixin.h"
+#include "Mixins.h"
+#include "App.h"
 
 ThreadObjectMixin::ThreadObjectMixin()
 {
@@ -47,3 +48,7 @@ void ThreadObjectMixin::on_finished()
 {
     qobj()->moveToThread(origThread);
 }
+
+
+/*static*/
+qint64 IdMixin::newId() { return app()->newId(); }

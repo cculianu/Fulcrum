@@ -6,7 +6,7 @@
 
 
 AbstractClient::AbstractClient(qint64 id, QObject *parent)
-    : QObject(parent), id(id)
+    : QObject(parent), IdMixin(id)
 {}
 
 
