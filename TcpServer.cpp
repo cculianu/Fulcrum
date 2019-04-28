@@ -77,9 +77,7 @@ void TcpServer::on_newConnection()
     QTcpSocket *sock = nextPendingConnection();
     if (sock) {
         Debug() << "Got connection from: " << prettySock(sock);
-        // Testing....
-        sock->abort();
-        sock->deleteLater();
+        newClient(sock);
     } else {
         Warning() << __FUNCTION__ << ": nextPendingConnection returned a nullptr! Called at the wrong time? FIXME!";
     }
@@ -104,6 +102,14 @@ TcpServer::newClient(QTcpSocket *sock)
         }
     };
     connect(ret, &QObject::destroyed, this, on_destroyed);
+    connect(ret, &AbstractClient::lostConnection, this, [this,id](AbstractClient *cl){
+        if (auto client = dynamic_cast<Client *>(cl) ; client) {
+            Debug() <<  client->prettyName() << " lost connection";
+            killClient(client);
+        } else {
+            Error() << "Internal error: lostConnection callback received null client! (expected client id: " << id << ")";
+        }
+    });
     return ret;
 }
 
@@ -111,10 +117,9 @@ void TcpServer::killClient(Client *client)
 {
     if (!client)
         return;
+    Debug() << __FUNCTION__ << " (id: " << client->id << ")";
     clientsById.remove(client->id); // ensure gone from map asap so future lookups fail
-    if (client->sock->state() != QTcpSocket::UnconnectedState)
-        client->sock->abort();
-    client->sock->deleteLater(); // will implicitly delete client because client is a child of the socket
+    client->boilerplate_disconnect();
 }
 void TcpServer::killClient(qint64 id)
 {
@@ -123,12 +128,44 @@ void TcpServer::killClient(qint64 id)
 
 
 Client::Client(qint64 id, TcpServer *srv, QTcpSocket *sock)
-    : QObject(sock), id(id), srv(srv)
+    : AbstractClient(id, sock, /*maxBuffer=1MB*/1000000), srv(srv)
 {
     Debug() << __PRETTY_FUNCTION__;
+    socket = sock;
+    on_connected();
 }
 
 Client::~Client()
 {
     Debug() << __PRETTY_FUNCTION__;
+    socket = nullptr; // NB: we are a child of socket. this line here is added in case some day I make AbstractClient delete socket on destruct.
+}
+
+void Client::on_readyRead()
+{
+    Debug() << prettyName() << " " << __FUNCTION__;
+    while (socket->canReadLine()) {
+        auto line = socket->readLine();
+        nReceived = line.size();
+        line = line.trimmed();
+        Debug() << "Got line: " << line;
+        send("Thanks fam.\n");
+    }
+    if (socket->bytesAvailable() > MAX_BUFFER) {
+        // bad server.. sending us garbage data not containing newlines. Kill connection.
+        Error() << QString("client has sent us more than %1 bytes without a newline! Bad client? (id: %2)").arg(MAX_BUFFER).arg(id);
+        boilerplate_disconnect();
+        status = Bad;
+    }
+}
+
+void Client::boilerplate_disconnect()
+{
+    AbstractClient::boilerplate_disconnect();
+    if (socket) socket->deleteLater(); // will implicitly delete this because we are a child of the socket
+}
+
+void Client::do_ping()
+{
+    send("Sup gee?\n");
 }

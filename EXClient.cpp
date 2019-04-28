@@ -80,7 +80,7 @@ void EXClient::killSocket()
         Debug() << host << " aborting connection";
         boilerplate_disconnect();
     }
-    if (socket) { delete socket; socket = nullptr; }
+    delete socket; socket = nullptr;  // delete of nullptr ok
     status = NotConnected;
 }
 

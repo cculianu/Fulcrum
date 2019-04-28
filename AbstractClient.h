@@ -12,9 +12,11 @@ class AbstractClient : public QObject, public IdMixin
 {
     Q_OBJECT
 public:
-    explicit AbstractClient(qint64 id, QObject *parent = nullptr);
+    static constexpr qint64 DEFAULT_MAX_BUFFER = 20000000; // 20MB, may change default in derived classes by setting maxBuffer in c'tor
 
-    const qint64 MAX_BUFFER = 20000000; // 20MB, may override this in derived classes
+    explicit AbstractClient(qint64 id, QObject *parent = nullptr, qint64 maxBuffer = DEFAULT_MAX_BUFFER);
+
+    const qint64 MAX_BUFFER;
 
     /// true if we are connected
     virtual bool isGood() const;
@@ -66,7 +68,7 @@ protected:
     virtual void on_connected(); ///< overrides should call this base implementation and chain to it
 
     bool do_write(const QByteArray & = "");
-    void boilerplate_disconnect(); /// does a socket->abort, sets status
+    virtual void boilerplate_disconnect(); /// does a socket->abort, sets status. Chain to this if you want on override.
 
 private slots:
     void on_pingTimer();

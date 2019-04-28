@@ -5,8 +5,8 @@
 #include <QHostAddress>
 
 
-AbstractClient::AbstractClient(qint64 id, QObject *parent)
-    : QObject(parent), IdMixin(id)
+AbstractClient::AbstractClient(qint64 id, QObject *parent, qint64 maxBuffer)
+    : QObject(parent), IdMixin(id), MAX_BUFFER(maxBuffer)
 {}
 
 
@@ -75,7 +75,7 @@ bool AbstractClient::do_write(const QByteArray & data)
 
 void AbstractClient::kill_pingTimer()
 {
-    if (pingTimer) { delete pingTimer; pingTimer = nullptr; }
+    delete pingTimer; pingTimer = nullptr; // delete of nullptr always ok
 }
 
 void AbstractClient::start_pingTimer()
@@ -147,7 +147,7 @@ void AbstractClient::on_bytesWritten()
 
 void AbstractClient::do_ping()
 {
-    Debug() << __FUNCTION__ << " stub ...";
+    Debug() << __FUNCTION__ << " " << prettyName() << " stub ...";
 }
 
 void AbstractClient::on_error(QAbstractSocket::SocketError err)

@@ -4,6 +4,7 @@
 #include "Common.h"
 #include "Util.h"
 #include "Mixins.h"
+#include "AbstractClient.h"
 #include <QTcpServer>
 #include <QThread>
 #include <QMap>
@@ -64,18 +65,22 @@ private:
 /// Note that their parent QObject is the sock (for now)!
 /// (grandparent is TcpServer) .. do they will be destroyed
 /// when the server goes away or the socket is deleted.
-class Client : public QObject
+class Client : public AbstractClient
 {
     Q_OBJECT
 public:
+    /// NB: sock should be in an already connected state.
     explicit Client(qint64 id, TcpServer *srv, QTcpSocket *sock);
     ~Client() override;
 
-    const qint64 id;
+protected slots:
+    void on_readyRead() override;
 
 protected:
+    void do_ping() override;
+    void boilerplate_disconnect() override;
+
     TcpServer *srv;
-    QTcpSocket *sock;
     friend class TcpServer;
 };
 
