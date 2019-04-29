@@ -25,6 +25,7 @@ SOURCES += \
     Mgr.cpp \
     Mixins.cpp \
     Options.cpp \
+    RPC.cpp \
     SrvMgr.cpp \
     TcpServer.cpp \
     bitcoin/base58.cpp \
@@ -63,6 +64,7 @@ HEADERS += \
     Mgr.h \
     Mixins.h \
     Options.h \
+    RPC.h \
     SrvMgr.h \
     TcpServer.h \
     Util.h \

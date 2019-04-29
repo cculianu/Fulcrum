@@ -34,7 +34,7 @@ void ThreadObjectMixin::stop()
         _thread.quit();
         _thread.wait();
     }
-    for (auto c : conns) {
+    for (const auto & c : conns) {
         QObject::disconnect(c);
     }
     conns.clear();

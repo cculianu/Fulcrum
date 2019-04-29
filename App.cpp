@@ -135,7 +135,7 @@ void App::parseArgs()
     auto l = parser.values("i");
     if (!l.isEmpty()) {
         options.interfaces.clear();
-        for (auto s : l) {
+        for (const auto & s : l) {
             auto toks = s.split(":");
             if (toks.length() < 2)
                 throw BadArgs("Malformed interface spec. Please pass a address of the form 1.2.3.4:123 for IPv4 or ::1:123 for IPv6.");
