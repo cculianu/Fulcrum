@@ -9,7 +9,7 @@
 #include <QTimer>
 #include <QPair>
 #include "Common.h"
-#include "AbstractClient.h"
+#include "AbstractConnection.h"
 #include "Mixins.h"
 
 struct EXResponse
@@ -33,7 +33,7 @@ Q_DECLARE_METATYPE(EXResponse);
 
 class EXMgr;
 
-class EXClient : public AbstractClient, protected ThreadObjectMixin
+class EXClient : public AbstractConnection, protected ThreadObjectMixin
 {
     Q_OBJECT
 public:

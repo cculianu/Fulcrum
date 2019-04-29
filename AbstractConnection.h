@@ -1,5 +1,5 @@
-#ifndef ABSTRACTCLIENT_H
-#define ABSTRACTCLIENT_H
+#ifndef ABSTRACTCONN_H
+#define ABSTRACTCONN_H
 
 #include <QObject>
 #include <atomic>
@@ -8,13 +8,13 @@
 #include "Mixins.h"
 class QTimer;
 
-class AbstractClient : public QObject, public IdMixin
+class AbstractConnection : public QObject, public IdMixin
 {
     Q_OBJECT
 public:
     static constexpr qint64 DEFAULT_MAX_BUFFER = 20000000; // 20MB, may change default in derived classes by setting maxBuffer in c'tor
 
-    explicit AbstractClient(qint64 id, QObject *parent = nullptr, qint64 maxBuffer = DEFAULT_MAX_BUFFER);
+    explicit AbstractConnection(qint64 id, QObject *parent = nullptr, qint64 maxBuffer = DEFAULT_MAX_BUFFER);
 
     const qint64 MAX_BUFFER;
 
@@ -26,7 +26,7 @@ public:
     virtual bool isBad() const { return status == Bad; }
 
 signals:
-    void lostConnection(AbstractClient *);
+    void lostConnection(AbstractConnection *);
     /// call (emit) this to send data to the other end. connected to do_write(). This is a low-level function
     /// subclasses should create their own high-level protocol-level signals.
     void send(QByteArray);
@@ -80,4 +80,4 @@ private:
     void kill_pingTimer();
 };
 
-#endif // ABSTRACTCLIENT_H
+#endif // ABSTRACTCONN_H

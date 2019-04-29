@@ -1,17 +1,17 @@
-#include "AbstractClient.h"
+#include "AbstractConnection.h"
 #include "Util.h"
 #include <QTcpSocket>
 #include <QSslSocket>
 #include <QHostAddress>
 
 
-AbstractClient::AbstractClient(qint64 id, QObject *parent, qint64 maxBuffer)
+AbstractConnection::AbstractConnection(qint64 id, QObject *parent, qint64 maxBuffer)
     : QObject(parent), IdMixin(id), MAX_BUFFER(maxBuffer)
 {}
 
 
 /// this should only be called from our thread, because it accesses socket which should only be touched from thread
-QString AbstractClient::prettyName(bool dontTouchSocket) const
+QString AbstractConnection::prettyName(bool dontTouchSocket) const
 {
     QString type = socket && !dontTouchSocket ? (dynamic_cast<QSslSocket *>(socket) ? "SSL" : "TCP") : "(NoSocket)";
     QString port = socket && !dontTouchSocket && socket->peerPort() ? QString(":%1").arg(socket->peerPort()) : "";
@@ -20,30 +20,30 @@ QString AbstractClient::prettyName(bool dontTouchSocket) const
 }
 
 
-bool AbstractClient::isGood() const
+bool AbstractConnection::isGood() const
 {
     return status == Connected;
 }
 
-bool AbstractClient::isStale() const
+bool AbstractConnection::isStale() const
 {
     return isGood() && Util::getTime() - lastGood > stale_threshold;
 }
 
-void AbstractClient::boilerplate_disconnect()
+void AbstractConnection::boilerplate_disconnect()
 {
     status = status == Bad ? Bad : NotConnected;  // try and keep Bad status around so EXMgr can decide when to reconnect based on it
     if (socket) socket->abort();  // this will set status too because state change, but we set it first above to be paranoid
 }
 
-void AbstractClient::socketConnectSignals()
+void AbstractConnection::socketConnectSignals()
 {
     connect(socket, SIGNAL(error(QAbstractSocket::SocketError)), this, SLOT(on_error(QAbstractSocket::SocketError)));
     connect(socket, SIGNAL(stateChanged(QAbstractSocket::SocketState)), this, SLOT(on_socketState(QAbstractSocket::SocketState)));
     socket->setSocketOption(QAbstractSocket::KeepAliveOption, true);  // from Qt docs: required on Windows
 }
 
-bool AbstractClient::do_write(const QByteArray & data)
+bool AbstractConnection::do_write(const QByteArray & data)
 {
     QString err = "";
     if (!socket) {
@@ -73,12 +73,12 @@ bool AbstractClient::do_write(const QByteArray & data)
     return true;
 }
 
-void AbstractClient::kill_pingTimer()
+void AbstractConnection::kill_pingTimer()
 {
     delete pingTimer; pingTimer = nullptr; // delete of nullptr always ok
 }
 
-void AbstractClient::start_pingTimer()
+void AbstractConnection::start_pingTimer()
 {
     kill_pingTimer();
     pingTimer = new QTimer(this);
@@ -87,18 +87,18 @@ void AbstractClient::start_pingTimer()
     pingTimer->start(pingtime_ms/* 1 minute */ / 2);
 }
 
-void AbstractClient::on_pingTimer()
+void AbstractConnection::on_pingTimer()
 {
     if (Util::getTime() - lastGood > pingtime_ms)
         // only ping if we've been idle for longer than 1 minute
         do_ping();
 }
 
-void AbstractClient::on_connected()
+void AbstractConnection::on_connected()
 {
     // runs in our thread's context
     Debug() << __FUNCTION__;
-    connect(this, &AbstractClient::send, this, &AbstractClient::do_write);
+    connect(this, &AbstractConnection::send, this, &AbstractConnection::do_write);
     connect(socket, SIGNAL(readyRead()), this, SLOT(on_readyRead()));
     if (dynamic_cast<QSslSocket *>(socket)) {
         // for some reason Qt can't find this old-style signal for QSslSocket so we do the below.
@@ -109,7 +109,7 @@ void AbstractClient::on_connected()
     }
     connect(socket, &QAbstractSocket::disconnected, this, [this]{
         Debug() << prettyName() << " socket disconnected";
-        disconnect(this, &AbstractClient::send, this, &AbstractClient::do_write);
+        disconnect(this, &AbstractConnection::send, this, &AbstractConnection::do_write);
         kill_pingTimer();
         emit lostConnection(this);
         // todo: put stuff to queue up a reconnect sometime later?
@@ -117,7 +117,7 @@ void AbstractClient::on_connected()
     start_pingTimer();
 }
 
-void AbstractClient::on_socketState(QAbstractSocket::SocketState s)
+void AbstractConnection::on_socketState(QAbstractSocket::SocketState s)
 {
     Debug() << prettyName() << " socket state: " << s;
     switch (s) {
@@ -136,7 +136,7 @@ void AbstractClient::on_socketState(QAbstractSocket::SocketState s)
     }
 }
 
-void AbstractClient::on_bytesWritten()
+void AbstractConnection::on_bytesWritten()
 {
     Debug() << __FUNCTION__;
     if (!writeBackLog.isEmpty() && status == Connected && socket) {
@@ -145,12 +145,12 @@ void AbstractClient::on_bytesWritten()
     }
 }
 
-void AbstractClient::do_ping()
+void AbstractConnection::do_ping()
 {
     Debug() << __FUNCTION__ << " " << prettyName() << " stub ...";
 }
 
-void AbstractClient::on_error(QAbstractSocket::SocketError err)
+void AbstractConnection::on_error(QAbstractSocket::SocketError err)
 {
     Warning() << prettyName() << ": error " << err << " (" << (socket ? socket->errorString() : "(null)") << ")";
     boilerplate_disconnect();

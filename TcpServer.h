@@ -4,7 +4,7 @@
 #include "Common.h"
 #include "Util.h"
 #include "Mixins.h"
-#include "AbstractClient.h"
+#include "AbstractConnection.h"
 #include <QTcpServer>
 #include <QThread>
 #include <QMap>
@@ -65,7 +65,7 @@ private:
 /// Note that their parent QObject is the sock (for now)!
 /// (grandparent is TcpServer) .. do they will be destroyed
 /// when the server goes away or the socket is deleted.
-class Client : public AbstractClient
+class Client : public AbstractConnection
 {
     Q_OBJECT
 public:

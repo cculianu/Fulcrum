@@ -13,12 +13,12 @@ public:
 BadServerReply::~BadServerReply() {} // for vtable
 
 EXClient::EXClient(EXMgr *mgr, qint64 id, const QString &host, quint16 tport, quint16 sport)
-    : AbstractClient(id, nullptr), host(host), tport(tport), sport(sport), mgr(mgr)
+    : AbstractConnection(id, nullptr), host(host), tport(tport), sport(sport), mgr(mgr)
 {
     Debug() << __FUNCTION__ << " host:" << host << " t:" << tport << " s:" << sport;
     _thread.setObjectName(QString("%1 %2").arg("EXClient").arg(host));
     setObjectName(host);
-    connect(this, &AbstractClient::lostConnection, this, [this](AbstractClient *){
+    connect(this, &AbstractConnection::lostConnection, this, [this](AbstractConnection *){
          emit lostConnection(this); /// re-emits as EXClient * signal (different method in C++)
     });
 }
@@ -36,12 +36,12 @@ QString EXClient::prettyName(bool dontTouchSocket) const
         Warning() << __PRETTY_FUNCTION__ << " called from another thread! FIXME!";
         dontTouchSocket = true;
     }
-    return AbstractClient::prettyName(dontTouchSocket);
+    return AbstractConnection::prettyName(dontTouchSocket);
 }
 
 bool EXClient::isGood() const
 {
-    return AbstractClient::isGood() && _thread.isRunning() && info.isValid();
+    return AbstractConnection::isGood() && _thread.isRunning() && info.isValid();
 }
 
 void EXClient::start()
@@ -137,7 +137,7 @@ void EXClient::do_ping()
 void EXClient::on_connected()
 {
     // runs in thread
-    AbstractClient::on_connected();
+    AbstractConnection::on_connected();
     connect(this, &EXClient::lostConnection, this, [this](){
         idMethodMap.clear();
     });

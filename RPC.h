@@ -43,7 +43,8 @@ namespace RPC {
         /// Use this test when parsing JSON RPC requests or replies as a filter against obviously bad
         /// messages.  (Further tests should then be used to check the sanity of the actual messages.)
         QVariantMap parseAndThrowIfNotMatch(const QString &json) const;
-        /// Alternatively, call this if you don't want to catch exceptions. Empty QVariantMap is returned on error.
+        /// Alternatively, call this if you don't want to catch exceptions. Empty QVariantMap is returned on error,
+        /// with optional errorString pointer set to the error message (if not nullptr).
         QVariantMap match(const QString &json, QString *errorString = nullptr) const;
 
         Schema &operator=(const Schema &other) { vmap = other.vmap; valid = other.valid; return *this; }

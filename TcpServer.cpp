@@ -102,7 +102,7 @@ TcpServer::newClient(QTcpSocket *sock)
         }
     };
     connect(ret, &QObject::destroyed, this, on_destroyed);
-    connect(ret, &AbstractClient::lostConnection, this, [this,id](AbstractClient *cl){
+    connect(ret, &AbstractConnection::lostConnection, this, [this,id](AbstractConnection *cl){
         if (auto client = dynamic_cast<Client *>(cl) ; client) {
             Debug() <<  client->prettyName() << " lost connection";
             killClient(client);
@@ -128,7 +128,7 @@ void TcpServer::killClient(qint64 id)
 
 
 Client::Client(qint64 id, TcpServer *srv, QTcpSocket *sock)
-    : AbstractClient(id, sock, /*maxBuffer=1MB*/1000000), srv(srv)
+    : AbstractConnection(id, sock, /*maxBuffer=1MB*/1000000), srv(srv)
 {
     Debug() << __PRETTY_FUNCTION__;
     socket = sock;
@@ -162,7 +162,7 @@ void Client::on_readyRead()
 
 void Client::boilerplate_disconnect()
 {
-    AbstractClient::boilerplate_disconnect();
+    AbstractConnection::boilerplate_disconnect();
     if (socket) socket->deleteLater(); // will implicitly delete this because we are a child of the socket
 }
 
