@@ -65,15 +65,39 @@ namespace RPC {
     /// Schema definition bases.  Protocol spec should start with these and do, eg:
     ///    mySchema = schemaMethod + '{ "method" : "my.method.bla" .. }' etc
     ///
-    extern const Schema schemaBase; ///< 'base' schema -- jsonrpc is only key
-    extern const Schema schemaError; ///< base + error keys
-    extern const Schema schemaResult; ///< 'result' schema ('result' : whatever, 'id' : int) (immediate reply from server)
-    extern const Schema schemaMethod; ///< 'method' (asynch event from peer) schema ( 'method' : 'methodname', 'params' : [params] )
+    extern const Schema schemaBase; ///< 'base' schema -- jsonrpc is only key ->  '{ "jsonrpc": "2.0!" }'
+    extern const Schema schemaError; ///< base + error keys : schemaBase + '{ "error..." ->   { "code" : 1, "message" : "astring" }, "*id" : 1, "method?" : "anystring"  }'
+    extern const Schema schemaResult; ///< 'result' schema ('result' : whatever, 'id' : int) (immediate reply from server) ->  schemaBase + ' { "id" : 1, "*result" : "*" }'
+    extern const Schema schemaMethod; ///< 'method' (asynch event from peer) schema ( 'method' : 'methodname', 'params' : [params] ) ->  schemaBase + ' { "method": "astring", "params" : [], "*id?" : 1 }'
 
+    /// this is used to lay out the protocol methods a class supports in code
     struct Method
     {
-        QString method;
+        QString method; // eg 'server.ping' or 'blockchain.headers.subscribe', etc
+        Schema schema = schemaMethod;
+        Schema resultSchema = RPC::schemaResult;
 
+        Method(const QString &method, const Schema &schema = schemaMethod, const Schema & resultSchema = RPC::schemaResult)
+            : method(method), schema(schema), resultSchema(resultSchema) {}
+        /// constructs an invalid ProtocolMethod
+        Method() {}
+        bool isValid() const { return !method.isEmpty() && schema.isValid() && resultSchema.isValid(); }
+    };
+
+
+    constexpr qint64 NO_ID = LONG_LONG_MIN;
+
+    /// this is used for in-flight method data
+    struct MethodData
+    {
+        QString method;
+        QVariantList params;
+        qint64 id = NO_ID; // NO_ID indicatess it was missing from the protocol cmd, otherwise it will be a positive integer
+
+        bool hasId() const { return id != NO_ID; }
+        inline const Method *spec() const { return find(method); }
+    private:
+        static const Method *find(const QString &name); ///< TODO: implement this.
     };
 
 }

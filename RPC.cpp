@@ -20,8 +20,8 @@ namespace RPC {
 
     Schema const schemaBase = "{ \"jsonrpc\": \"2.0!\" }";
     Schema const schemaError = schemaBase + "{ \"error\" : { \"code\" : 1, \"message\" : \"astring\" }, \"*id\" : 1, \"method?\" : \"anystring\"  }";
-    Schema const schemaResult = schemaBase + " { \"id\" : 1, \"result\" : \"*\" }";
-    Schema const schemaMethod = schemaBase + " { \"method\": \"astring\", \"params\" : [] }";
+    Schema const schemaResult = schemaBase + " { \"id\" : 1, \"*result\" : \"*\" }";
+    Schema const schemaMethod = schemaBase + " { \"method\": \"astring\", \"params\" : [], \"*id?\" : 1 }";
 
     QString Schema::toString() const {
         if (!isValid()) return QString();
@@ -182,7 +182,7 @@ namespace RPC {
                     } else if (stype == QMetaType::QString) {
                         QString ss = sval.toString();
                         if (ss == "*")
-                            continue; // accept anything, don't test mtype
+                            continue; // "*" means accept anything, don't test mtype
                         else if (throwIfTypeMismatch(stype, mtype, skey)) {} /// <-- require both QString after this point
                         // at this point we are sure stype and mtype are both QString
                         else if (ss.endsWith("!")) {
@@ -251,6 +251,8 @@ namespace RPC {
                 Error() << "Exception: " << e.what();
             }
         };
+        Method m("1"), m2("2"), m3 = { "1", "{\"2\":3}" };
+        m = m2 = m3;
         QVariant v = QVariant("1.25");
         Debug() << "Can convert? " << v.canConvert<qint64>() << " converted: " << v.value<qint64>();
         Debug() << "Can convert? " << v.canConvert<double>() << " converted: " << v.value<double>();
