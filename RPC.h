@@ -70,6 +70,8 @@ namespace RPC {
     extern const Schema schemaResult; ///< 'result' schema ('result' : whatever, 'id' : int) (immediate reply from server) ->  schemaBase + ' { "id" : 1, "*result" : "*" }'
     extern const Schema schemaMethod; ///< 'method' (asynch event from peer) schema ( 'method' : 'methodname', 'params' : [params] ) ->  schemaBase + ' { "method": "astring", "params" : [], "*id?" : 1 }'
 
+    struct MethodData;
+
     /// this is used to lay out the protocol methods a class supports in code
     struct Method
     {
@@ -87,17 +89,15 @@ namespace RPC {
 
     constexpr qint64 NO_ID = LONG_LONG_MIN;
 
-    /// this is used for in-flight method data
+    /// this is used for in-flight method data, sent to components that respond to method.
     struct MethodData
     {
+        QSharedPointer<const Method> spec; ///< pointer to always-around data that outlives the lifetime of this object, ideally. If not sharedptr takes care of it.
         QString method;
         QVariantList params;
         qint64 id = NO_ID; // NO_ID indicatess it was missing from the protocol cmd, otherwise it will be a positive integer
 
         bool hasId() const { return id != NO_ID; }
-        inline const Method *spec() const { return find(method); }
-    private:
-        static const Method *find(const QString &name); ///< TODO: implement this.
     };
 
 }
