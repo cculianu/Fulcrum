@@ -31,7 +31,7 @@ namespace RPC {
         void setFromString(const QString & json); ///< may throw Util::Json::Error
         Schema & updateFromString(const QString &json); ///< may throw Util::Json::Error
 
-        QString toString() const; ///< retuns null string if !isValid, otherwise returns json.
+        QString toString() const; ///< retuns null string if !isValid, otherwise returns json (control codes included in schema map keys).
         QVariantMap toMap() const; ///< returns null map if !isValid, otherwise returns the schema with control codes included
         QVariantMap toStrippedMap() const; ///< returns null map if !isValid, otherwise returns the schema's map with control codes stripped from keys
 

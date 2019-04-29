@@ -96,6 +96,8 @@ namespace RPC {
             return false;
         }
 
+        /// Note since the schema controls how far we recurse, this constant and check is likely unnecessary but we
+        /// add it here as a defensive programming technique. At most we expect to recurse 2-3 deep during normal use.
         static constexpr int MAX_RECURSION = 10;
 
         QVariantMap schemaMatchMap(int recursion_depth, const QVariantMap & sch, const QVariantMap & m, const QString &name = ""); ///< forward declaration
@@ -148,7 +150,7 @@ namespace RPC {
             QSet<QString> requiredKeySet, acceptedKeySet;
             // iterate over schema keys
             for (auto it = sch.cbegin(); it != sch.cend(); ++it) {
-                QString skey = it.key();
+                QString skey = it.key();  // skey is the stripped schema key (stripepd of * and ? symbols)
                 const bool nullOk = skey.startsWith('*');
                 if (nullOk) skey = skey.mid(1);
                 const bool requiredKey = !skey.endsWith('?');
@@ -204,10 +206,14 @@ namespace RPC {
             } // end for
 
             // forbid extra/unknown keys
-            if (auto extraKeys(requiredKeySet - acceptedKeySet) ; !extraKeys.isEmpty()) {
-                throw SchemaMismatch(QString("Dict%1 contains extra unexpected keys: (\"%2\")")
-                                     .arg( spacePlusQuotedNameOrNothing(name) )
-                                     .arg(extraKeys.toList().mid(0, 5).join("\", \"")));
+            if (m.size() != acceptedKeySet.size()) { // initial filter -- just check sizes, as a performance optimization since the below needs to build a keySet for error display.
+                // ok, size of accepted set != input map size -- figure out if keys are missing
+                if (auto extraKeys(m.keys().toSet() - acceptedKeySet) ; !extraKeys.isEmpty()) {
+                    throw SchemaMismatch(QString("Dict%1 contains extra unexpected key(s): (\"%2\"%3)")
+                                         .arg( spacePlusQuotedNameOrNothing(name) )
+                                         .arg(extraKeys.toList().mid(0, 5).join("\", \""))
+                                         .arg(extraKeys.count() > 5 ? ", ..." : ""));
+                }
             }
 
             // if we get here, everything was accepted and converted
@@ -264,5 +270,9 @@ namespace RPC {
         QString recurs = "{\"jsonrpc\": \"2.0\", \"result\": [[[[[[[[[[[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]]]]]]]]]], \"id\": 1}";
         tryCatchPrint(schemaResult + "{ \"result\": [[[[[[[[[[[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]  }", recurs);
         tryCatchPrint(schemaResult + "{ \"result\": [[[{ \"hi\" : [[[[[[[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]]]]]]}]]]  }", recurs);
+        test = "{\"jsonrpc\": \"2.0\", \"result\": [\"ElectronX 1.10.1\", \"1.4\", 123], \"id\": 1, \"extraKey1\" : 1, \"anotherExtra\" : 2, \"extraKey2\" : 3, \"anotherExtra2\" : 3, \"extraKey4\" : 4, \"anotherExtra3\" : 5}";
+        tryCatchPrint(schemaResult + "{ \"result\": []  }", test);
+        test = "{\"jsonrpc\": \"2.0\", \"result\": [\"ElectronX 1.10.1\", \"1.4\", 123], \"id\": 1, \"extraKey1\" : 1}";
+        tryCatchPrint(schemaResult + "{ \"result\": []  }", test);
     }
 }
