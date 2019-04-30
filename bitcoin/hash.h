@@ -9,7 +9,8 @@
 #include "crypto/ripemd160.h"
 #include "crypto/sha256.h"
 #include "uint256.h"
-//#include <version.h>
+#include "version.h"
+#include "serialize.h"
 
 #include <vector>
 
@@ -143,14 +144,14 @@ inline uint160 Hash160(const std::vector<uint8_t> &vch) {
 }
 
 /** Compute the 160-bit hash of a vector. */
-/*
+
 template <unsigned int N>
 inline uint160 Hash160(const prevector<N, uint8_t> &vch) {
     return Hash160(vch.begin(), vch.end());
 }
-*/
+
 /** A writer stream (for serialization) that computes a 256-bit hash. */
-/*
+
 class CHashWriter {
 private:
     CHash256 ctx;
@@ -178,15 +179,15 @@ public:
 
     template <typename T> CHashWriter &operator<<(const T &obj) {
         // Serialize to this stream
-        ::Serialize(*this, obj);
+        bitcoin::Serialize(*this, obj);
         return (*this);
     }
 };
-*/
+
 /**
  * Reads data from an underlying stream, while hashing the read data.
  */
-/*
+
 template <typename Source> class CHashVerifier : public CHashWriter {
 private:
     Source *source;
@@ -212,13 +213,13 @@ public:
 
     template <typename T> CHashVerifier<Source> &operator>>(T &obj) {
         // Unserialize from this stream
-        ::Unserialize(*this, obj);
+        bitcoin::Unserialize(*this, obj);
         return (*this);
     }
 };
-*/
+
 /** Compute the 256-bit hash of an object's serialization. */
-/*
+
 template <typename T>
 uint256 SerializeHash(const T &obj, int nType = SER_GETHASH,
                       int nVersion = PROTOCOL_VERSION) {
@@ -226,14 +227,14 @@ uint256 SerializeHash(const T &obj, int nType = SER_GETHASH,
     ss << obj;
     return ss.GetHash();
 }
-*/
+
 uint32_t MurmurHash3(uint32_t nHashSeed,
                      const std::vector<uint8_t> &vDataToHash);
 
-/*
+
 void BIP32Hash(const ChainCode &chainCode, uint32_t nChild, uint8_t header,
                const uint8_t data[32], uint8_t output[64]);
-*/
+
 } // end namespace bitcoin
 
 #ifdef __clang__

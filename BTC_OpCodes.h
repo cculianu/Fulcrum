@@ -2,6 +2,7 @@
 #define BTC_OPCODES_H
 
 namespace BTC {
+
     enum OpCode {
         // push value
         OP_0 = 0x00,

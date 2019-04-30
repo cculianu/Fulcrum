@@ -13,6 +13,7 @@
 #pragma clang diagnostic ignored "-Wold-style-cast"
 #pragma clang diagnostic ignored "-Wsign-conversion"
 #pragma clang diagnostic ignored "-Wshorten-64-to-32"
+#pragma clang diagnostic ignored "-Wunused-parameter"
 #endif
 
 namespace bitcoin {
@@ -57,9 +58,11 @@ uint32_t MurmurHash3(uint32_t nHashSeed,
         switch (vDataToHash.size() & 3) {
             case 3:
                 k1 ^= tail[2] << 16;
+            [[fallthrough]];
             // FALLTHROUGH
             case 2:
                 k1 ^= tail[1] << 8;
+            [[fallthrough]];
             // FALLTHROUGH
             case 1:
                 k1 ^= tail[0];
@@ -82,7 +85,7 @@ uint32_t MurmurHash3(uint32_t nHashSeed,
     return h1;
 }
 
-/*
+
 void BIP32Hash(const ChainCode &chainCode, uint32_t nChild, uint8_t header,
                const uint8_t data[32], uint8_t output[64]) {
     uint8_t num[4];
@@ -96,7 +99,7 @@ void BIP32Hash(const ChainCode &chainCode, uint32_t nChild, uint8_t header,
         .Write(num, 4)
         .Finalize(output);
 }
-*/
+
 
 } // end namespace bitcoin
 

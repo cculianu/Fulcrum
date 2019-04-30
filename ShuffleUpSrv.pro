@@ -28,6 +28,7 @@ SOURCES += \
     RPC.cpp \
     SrvMgr.cpp \
     TcpServer.cpp \
+    bitcoin/amount.cpp \
     bitcoin/base58.cpp \
     bitcoin/crypto/aes.cpp \
     bitcoin/crypto/chacha20.cpp \
@@ -39,8 +40,11 @@ SOURCES += \
     bitcoin/crypto/sha256.cpp \
     bitcoin/crypto/sha256_sse4.cpp \
     bitcoin/crypto/sha512.cpp \
+    bitcoin/feerate.cpp \
     bitcoin/hash.cpp \
+    bitcoin/script.cpp \
     bitcoin/test.cpp \
+    bitcoin/transaction.cpp \
     bitcoin/uint256.cpp \
     bitcoin/utilstrencodings.cpp \
     main.cpp \
@@ -72,7 +76,11 @@ HEADERS += \
     EXMgr.h \
     Common.h \
     EXClient.h \
+    bitcoin/amount.h \
     bitcoin/base58.h \
+    bitcoin/compat.h \
+    bitcoin/compat/byteswap.h \
+    bitcoin/compat/endian.h \
     bitcoin/crypto/byteswap.h \
     bitcoin/crypto/endian.h \
     bitcoin/crypto/aes.h \
@@ -85,10 +93,18 @@ HEADERS += \
     bitcoin/crypto/sha1.h \
     bitcoin/crypto/sha256.h \
     bitcoin/crypto/sha512.h \
+    bitcoin/feerate.h \
     bitcoin/hash.h \
+    bitcoin/prevector.h \
+    bitcoin/script.h \
+    bitcoin/script_flags.h \
+    bitcoin/serialize.h \
     bitcoin/tinyformat.h \
+    bitcoin/transaction.h \
+    bitcoin/txid.h \
     bitcoin/uint256.h \
-    bitcoin/utilstrencodings.h
+    bitcoin/utilstrencodings.h \
+    bitcoin/version.h
 
 RESOURCES += \
     resources.qrc
