@@ -1,11 +1,12 @@
 #ifndef SHUFFLEUP_RPC_H
 #define SHUFFLEUP_RPC_H
 
+#include "Util.h"
+#include "AbstractConnection.h"
 #include <QString>
 #include <QVariant>
 #include <QMap>
-#include "Util.h"
-#include "AbstractConnection.h"
+#include <QSharedPointer>
 
 namespace RPC {
 

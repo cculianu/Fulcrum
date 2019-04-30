@@ -8,7 +8,6 @@
 #include <QList>
 #include <QSet>
 #include <QMap>
-#include <QSharedPointer>
 
 class EXMgr : public Mgr
 {
