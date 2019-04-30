@@ -168,7 +168,7 @@ void Client::boilerplate_disconnect(bool graceful)
         /// delete the socket if we weren't connected or if !graceful.
         /// If graceful && connected, then a disconnect signal will be sent later and then we will
         /// reenter here and delete the socket.
-        socket->deleteLater(); // side-effecto: will implicitly delete 'this' because we are a child of the socket!
+        socket->deleteLater(); // side-effect: will implicitly delete 'this' because we are a child of the socket!
 }
 
 void Client::do_ping()
