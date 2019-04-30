@@ -60,6 +60,7 @@ HEADERS += \
     AbstractConnection.h \
     App.h \
     BTC.h \
+    BTC_OpCodes.h \
     Logger.h \
     Mgr.h \
     Mixins.h \

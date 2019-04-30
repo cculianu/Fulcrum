@@ -80,13 +80,9 @@ namespace BTC
     {
         ByteArray script;
         if (kind() == P2PKH) { // kind() checks for validity
-            script = ByteArray({
-                OP_DUP, OP_HASH160, Byte(h160.length())
-            }) + h160 + ByteArray({ OP_EQUALVERIFY, OP_CHECKSIG });
+            script << OP_DUP << OP_HASH160 << Byte(h160.length()) << h160 << OP_EQUALVERIFY << OP_CHECKSIG;
         } else if (kind() == P2SH) {
-            script = ByteArray({
-                OP_HASH160, quint8(h160.length())
-            }) + h160 + ByteArray({ OP_EQUAL });
+            script << OP_HASH160 << Byte(h160.length()) << h160 << OP_EQUAL;
         }
         return script;
     }
@@ -267,6 +263,13 @@ namespace BTC
             ret.append(reinterpret_cast<const char *>(constData()), length());
         return ret;
     }
+    ///< append a Byte to this array
+    ByteArray & ByteArray::operator<<(Byte b)
+    {
+        insert(end(), b);
+        return *this;
+    }
+
     ByteArray ByteArray::toHex() const
     {
         return ByteArray(toQHex());
