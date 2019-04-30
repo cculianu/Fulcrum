@@ -355,89 +355,86 @@ namespace RPC {
         test = "{\"jsonrpc\": \"2.0\", \"result\": [\"ElectronX 1.10.1\", \"1.4\", 123], \"id\": 1, \"extraKey1\" : 1}";
         tryCatchPrint(schemaResult + "{ \"result\": []  }", test);
 
-        ErrorResponse err;
-        err.code = 123; err.message = "Things went wrong";
-        Debug() << "Error Json: " << err.toJson();
-        tryCatchPrint(schemaError, err.toJson());
-
-
     }
 
-    /// ----------------------
-    /// Method - Request - Response - Error
-    /// ----------------------
-    Request Method::createRequest(qint64 id, const QVariantList &params) const
+    /* static */
+    Message Message::fromJsonData(const QVariantMap &jsonData, const Schema &schema)
     {
-        Request ret;
-        ret.id = id;
-        ret.method = strongSelf();
-        ret.params = params;
+        auto map = schema.parseAndThrowIfNotMatch(jsonData);
+        Message ret;
+        ret.jsonData = map;
+        ret.schema = schema;
+        ret.jsonRpcVersion = map.value("jsonrpc").toString();
+        if (auto var = map.value("id", QVariant()); !var.isNull()) {
+            bool ok;
+            ret.id = var.toLongLong(&ok);
+            if (!ok || ret.id < 0) ret.id = NO_ID;
+        }
+        if (auto var = map.value("method", QVariant()); !var.isNull() && var.canConvert<QString>()) {
+            ret.method = var.toString();
+        }
+        if (auto var = map.value("error", QVariant()); !var.isNull() && var.canConvert<QVariantMap>()) {
+            auto emap = var.toMap();
+            ret.errorCode = emap.value("code", 0).toInt();
+            ret.errorMessage = emap.value("message", "").toString();
+        }
+        if (auto var = map.value("params", QVariant()); !var.isNull() && var.canConvert<QVariantList>()) {
+            ret.data = var.toList();
+        } else {
+            ret.data = map.value("result");
+        }
         return ret;
     }
-    Result Method::createResult(qint64 id, const QVariant &arg) const
+
+    /* static */
+    Message Message::makeError(int code, const QString &message, qint64 id)
     {
-        Result ret;
+        Message ret;
+        ret.schema = schemaError;
+        auto map = ret.schema.toStrippedMap();
+        ret.errorCode = code;
+        ret.errorMessage = message;
         ret.id = id;
-        ret.method = strongSelf();
-        ret.result = arg;
+        if (id == NO_ID) map["id"] = QVariant(); // null
+        else map["id"] = id;
+        ret.jsonData = map;
+        ret.jsonRpcVersion = map.value("jsonrpc").toString();
         return ret;
     }
 
-    ReqResultBase::~ReqResultBase() {}
-
-    QString ReqResultBase::toJson() const {
-        auto m = toMap();
-        return Util::Json::toString(m, true);
-    }
-
-    QVariantMap ErrorResponse::toMap() const {
-        //if (!method)
-        //    throw Exception(QString("%1 : called with no methhod reference!").arg(__PRETTY_FUNCTION__));
-        QVariantMap m = schemaError.toStrippedMap();
-        m["error"] = QVariantMap({{"code" , code}, {"message" , message}});
-
-        m["id"] = hasId() ? id : QVariant();
-        if (!method)
-            m.remove("method");
-        else
-            m["method"] = method->method;
-        if (QString err; schemaError.match(m, &err).isEmpty()) {
-            Warning() << __PRETTY_FUNCTION__ << " error: " << err;
+    /* static */
+    Message Message::makeMethodRequest(qint64 id, const QString &methodName, const QVariantList &params, const Schema &sch)
+    {
+        Message ret;
+        ret.schema = sch;
+        auto map = sch.toStrippedMap();
+        map["id"] = ret.id = id;
+        map["method"] = ret.method = methodName; /// schema may have already set this but we set it again
+        ret.data = params;
+        map["params"] = params;
+        ret.jsonRpcVersion = map.value("jsonrpc").toString();
+#ifdef QT_DEBUG
+        QString err;
+        ret.jsonData = ret.schema.match(map, &err);
+        if (ret.jsonData.isEmpty()) {
+            Error() << __FUNCTION__ << " schema verify failure: " << err << "; FIXME!";
         }
-        return m;
-    }
-
-    QVariantMap Request::toMap() const {
-        if (!method)
-            throw Exception(QString("%1 : called with no methhod reference!").arg(__PRETTY_FUNCTION__));
-        QVariantMap m = method->outSchema.toStrippedMap();
-        m["params"] = params;
-        m["method"] = method->method;
-        if (!hasId())
-            m.remove("id");
-        else
-            m["id"] = id;
-        if (QString err; method->outSchema.match(m, &err).isEmpty()) {
-            Warning() << __PRETTY_FUNCTION__ << " error: " << err;
-        }
-        return m;
-    }
-
-    QVariantMap Result::toMap() const {
-        if (!method)
-            throw Exception(QString("%1 : called with no methhod reference!").arg(__PRETTY_FUNCTION__));
-        QVariantMap m = method->resultSchema.toStrippedMap();
-        m["id"] = hasId() ? id : QVariant();
-        m["result"] = result;
-        if (QString err; method->resultSchema.match(m, &err).isEmpty()) {
-            Warning() << __PRETTY_FUNCTION__ << " error: " << err;
-        }
-        return m;
+#else
+        ret.jsonData = map;
+#endif
+        return ret;
     }
 
     Connection::Connection(const MethodMap & methods, qint64 id, QObject *parent, qint64 maxBuffer)
         : AbstractConnection(id, parent, maxBuffer), methods(methods)
-    {}
+    {
+        static bool initted_meta = false;
+        if (!initted_meta) {
+            qRegisterMetaType<RPC::Message>();
+            initted_meta = true;
+        }
+    }
+
     Connection::~Connection() {}
 
     void Connection::on_connected()
@@ -446,11 +443,36 @@ namespace RPC {
         connectedConns.push_back(connect(this, &Connection::sendRequest, this, &Connection::_sendRequest)); // connection will be auto-disconnected on socket disconnect
     }
 
-    Connection::BadPeer::~BadPeer() {} // for vtable
+    void Connection::on_disconnected()
+    {
+        AbstractConnection::on_disconnected();
+        idMethodMap.clear();
+    }
 
     void Connection::_sendRequest(qint64 reqid, const QString &method, const QVariantList & params)
     {
-        /* TODO: implement */
+        if (status != Connected || !socket) {
+            Error() << __FUNCTION__ << " method: " << method << "; Not connected!";
+            return;
+        }
+        auto mptr = methods.value(method);
+        if (!mptr) {
+            Error() << __FUNCTION__ << " method: " << method << "; Unknown method! FIXME!";
+            return;
+        }
+        QString json = Message::makeMethodRequest(reqid, method, params, mptr->outSchema).toJsonString();
+        if (json.isEmpty()) {
+            Error() << __FUNCTION__ << " method: " << method << "; Unable to generate request JSON! FIXME!";
+            return;
+        }
+        while (idMethodMap.size() > 20000) {  // prevent memory leaks in case of misbehaving server
+            idMethodMap.erase(idMethodMap.begin());
+        }
+        idMethodMap[id] = method;
+
+        auto data = json.toUtf8();
+        Debug() << "Sending json: " << data;
+        emit send(data); // ends up calling do_write immediately (which is connected to send)
     }
 
     void Connection::on_readyRead()
@@ -462,22 +484,40 @@ namespace RPC {
                 nReceived += data.length();
                 auto line = data.trimmed();
                 Debug() << "Got: " << line;
-                QVariantMap jsonData( Util::Json::parseString(line, true).toMap() ); // may throw
+                const QVariantMap jsonData( Util::Json::parseString(line, true).toMap() ); // may throw
 
-                /* //TODO: implement
-                auto resp = EXResponse::fromJson(line);
-                auto meth = resp.id > 0 ? idMethodMap.take(resp.id) : resp.method;
-                if (meth.isEmpty()) {
-                    throw BadPeer(QString("Unexpected/unknown message id (%1) in server reply").arg(resp.id));
+                Message message;
+                if (!jsonData.value("error").isNull()) {
+                    // error message
+                    message = Message::fromJsonData(jsonData, schemaError); // may throw
+                } else {
+                    // either a 'id','result' or a 'method','params' message
+                    bool isResult = true;
+                    if (!jsonData.value("method").isNull()) {
+                        // 'method','params' message
+                        message = Message::fromJsonData(jsonData, schemaMethod); // may throw
+                        isResult = false;
+                    } else {
+                        // 'id','result' message -- find originating method in map -- if not found will throw.
+                        message = Message::fromJsonData(jsonData, schemaResult); // may throw
+                        QString meth = message.id > 0 ? idMethodMap.take(message.id) : message.method;
+                        if (meth.isEmpty()) {
+                            throw BadPeer(QString("Unexpected/unknown message id (%1) in server reply").arg(message.id));
+                        }
+                        message.method = meth;
+                    }
+                    auto mptr = methods.value(message.method);
+                    if (!mptr) {
+                        throw BadPeer(QString("Could not find method %1").arg(message.method));
+                    }
+                    const Schema & schema = isResult ? mptr->resultSchema : mptr->inSchema;
+                    // re-verify incoming message against more method-specific schema again
+                    message = Message::fromJsonData(jsonData, schema);
+                    message.method = mptr->method; // write to the method var again in case it was a result with no method name in the json
                 }
-                resp.method = meth;
-                resp.validate(); // may throw, may modify resp
-                Debug() << "Parsed response: " << resp.toString();
-                */
                 lastGood = Util::getTime();
-                /*
-                emit gotResponse(this, resp);
-                */
+                Debug() << "Re-parsed message: " << message.toJsonString();
+                emit gotMessage(this, message);
             }
             if (socket->bytesAvailable() > MAX_BUFFER) {
                 // bad server.. sending us garbage data not containing newlines. Kill connection.

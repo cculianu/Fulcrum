@@ -160,10 +160,10 @@ void Client::on_readyRead()
     }
 }
 
-void Client::boilerplate_disconnect()
+void Client::boilerplate_disconnect(bool graceful)
 {
-    AbstractConnection::boilerplate_disconnect();
-    if (socket) socket->deleteLater(); // will implicitly delete this because we are a child of the socket
+    AbstractConnection::boilerplate_disconnect(graceful);
+    if (socket && !graceful) socket->deleteLater(); // will implicitly delete this because we are a child of the socket
 }
 
 void Client::do_ping()

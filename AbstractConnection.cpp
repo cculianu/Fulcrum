@@ -30,10 +30,15 @@ bool AbstractConnection::isStale() const
     return isGood() && Util::getTime() - lastGood > stale_threshold;
 }
 
-void AbstractConnection::boilerplate_disconnect()
+void AbstractConnection::boilerplate_disconnect(bool graceful)
 {
     status = status == Bad ? Bad : NotConnected;  // try and keep Bad status around so EXMgr can decide when to reconnect based on it
-    if (socket) socket->abort();  // this will set status too because state change, but we set it first above to be paranoid
+    if (socket) {
+        if (!graceful)
+            socket->abort();  // this will set status too because state change, but we set it first above to be paranoid
+        else
+            socket->disconnectFromHost();
+    }
 }
 
 void AbstractConnection::socketConnectSignals()

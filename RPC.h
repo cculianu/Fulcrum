@@ -78,10 +78,6 @@ namespace RPC {
     extern const Schema schemaMethodOneParam; ///< 'method' (asynch event from peer) schema ( 'method' : 'methodname', 'params' : [params] ) ->  schemaBase + ' { "method": "astring", "params" : [\"=1\"], "*id?" : 1 }'
     extern const Schema schemaMethodTwoParams; ///< 'method' (asynch event from peer) schema ( 'method' : 'methodname', 'params' : [params] ) ->  schemaBase + ' { "method": "astring", "params" : [\"=2\"], "*id?" : 1 }'
 
-    struct Request;
-    struct Result;
-    struct ReqResultBase;
-
     /// this is used to lay out the protocol methods a class supports in code
     struct Method
     {
@@ -97,62 +93,38 @@ namespace RPC {
             : method(method), inSchema(inSchema), resultSchema(resultSchema), outSchema(outSchema) {}
         /// default c'tor for convenience
         Method() {}
-
-        inline void setSelf(const QSharedPointer<Method> & ptr) { self = ptr.toWeakRef(); }
-        inline void setSelf(const QSharedPointer<const Method> & ptr) { self = ptr.constCast<Method>().toWeakRef(); }
-        inline QSharedPointer<const Method> strongSelf() const { return self.toStrongRef().constCast<const Method>(); }
-
-        Request createRequest(qint64 id, const QVariantList & params) const; ///< will use outSchema, requires self ptr be set
-        Result createResult(qint64 id, const QVariant & arg) const; ///< will use resultSchema, requires self ptr be set
-
-        // TODO: add a match function here that uses schemas above to construct Error, Result or Request objects
-
-    private:
-        QWeakPointer<Method> self; ///< classes that construct Methods should use QSharedPointers and set this.
     };
 
 
     constexpr qint64 NO_ID = -1;
 
-    /// Base type for all in-flight method/request/etc data, sent to components that respond to methods, etc.
-    struct ReqResultBase
+
+    /// An RPC message.  A request, response, method call or error all use this generic struct.
+    struct Message
     {
+        /// may throw Exception. This factory method should be the way one constructs this object
+        static Message fromJsonData(const QVariantMap &jsonData, const Schema & schema);
+        /// uses schemaError -- will not throw exception
+        static Message makeError(int code, const QString & message, qint64 id = NO_ID);
+        /// uses provided schema -- will not throw exception
+        static Message makeMethodRequest(qint64 id, const QString &methodName, const QVariantList & params, const Schema & schema);
+
+        QVariantMap jsonData;
+        Schema schema;
+
+        QString toJsonString() const { try {return Util::Json::toString(jsonData, true);} catch (...) {} return QString(); }
+
+        QString jsonRpcVersion;
         qint64 id = NO_ID;
-        QSharedPointer<const Method> method; ///< may be nullptr if no method parsed or specified.
+        QString method;
+        QVariant data; // 'result' or 'params' get put here
 
-        virtual ~ReqResultBase();
+        int errorCode = 0;
+        QString errorMessage = "";
 
-        bool hasId() const { return id != NO_ID; }
-
-        /// return the map representing the json
-        /// derived classes may raise if method is nullptr
-        virtual QVariantMap toMap() const = 0;
-        QString toJson() const;
-    };
-
-    struct ErrorResponse : public ReqResultBase
-    {
-        int code = 0;
-        QString message;
-
-        QVariantMap toMap() const override;
-    };
-
-    struct Result : public ReqResultBase
-    {
-        QVariant result; // check .type() to determine if map or list
-
-        bool isList() const { return QMetaType::Type(result.type()) == QMetaType::QVariantList; }
-        bool isMap() const { return QMetaType::Type(result.type()) == QMetaType::QVariantMap; }
-
-        QVariantMap toMap() const override;
-    };
-
-    struct Request : public ReqResultBase
-    {
-        QVariantList params;
-
-        QVariantMap toMap() const override;
+        bool isError() const { return bool(errorCode); }
+        bool isList() const { return QMetaType::Type(data.type()) == QMetaType::QVariantList; }
+        QVariantList params() const { return isList() ? data.toList() : QVariantList(); }
     };
 
 
@@ -167,15 +139,14 @@ namespace RPC {
 
         const MethodMap methods;
 
-        class BadPeer : public Exception {
-        public:
+        struct BadPeer : public Exception {
             using Exception::Exception; /// bring in c'tor
-            ~BadPeer();
         };
 
     signals:
         /// call (emit) this to send a requesst to the server
         void sendRequest(qint64 reqid, const QString &method, const QVariantList & params = QVariantList());
+        void gotMessage(Connection *, Message m);
 
     protected slots:
         /// Actual implentation that prepares the request. Is connected to sendRequest() above. Runs in thread. Eventually calls send() -> do_write()
@@ -186,7 +157,13 @@ namespace RPC {
     protected:
         /// chains to base, connects sendRequest signal to _sendRequest slot
         void on_connected() override;
+        void on_disconnected() override;
+
+        /// map of requests that were generated via _sendRequest to method names to build a more meaningful Message object.
+        QMap<qint64, QString> idMethodMap;
     };
 }
+
+Q_DECLARE_METATYPE(RPC::Message);
 
 #endif // SHUFFLEUP_RPC_H

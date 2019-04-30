@@ -205,7 +205,6 @@ void EXMgr::initRPCMethods()
         RPC::schemaResult + QString(" { \"result\" : %1}").arg(d), // result schema (synch. server -> us)
         RPC::schemaMethod + QString(" { \"method\" : \"%1!\", \"params\" : [\"=0\"] }").arg(m) // out schema  (req. us -> server)
     )));
-    rpcMethods[m]->setSelf(rpcMethods[m]);
 
     m = "server.version";
     rpcMethods.insert(m, QSharedPointer<RPC::Method>(new RPC::Method(
@@ -214,7 +213,6 @@ void EXMgr::initRPCMethods()
         RPC::schemaResult + QString(" { \"result\" : [\"=2\"] }"), // result schema (synch. server -> us)
         RPC::schemaMethod + QString(" { \"method\" : \"%1!\", \"params\" : [\"=2\"] }").arg(m) // out schema  (req. us -> server)
     )));
-    rpcMethods[m]->setSelf(rpcMethods[m]);
 }
 
 void EXMgr::testCheckMethod(const QString &json) const

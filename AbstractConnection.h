@@ -70,7 +70,7 @@ protected:
     virtual void on_disconnected(); ///< overrides can chain to this as well
 
     bool do_write(const QByteArray & = "");
-    virtual void boilerplate_disconnect(); /// does a socket->abort, sets status. Chain to this if you want on override.
+    virtual void boilerplate_disconnect(bool graceful = false); /// does a socket->abort, sets status. Chain to this if you want on override.
 
 private slots:
     void on_pingTimer();
