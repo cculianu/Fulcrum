@@ -435,5 +435,58 @@ namespace RPC {
         return m;
     }
 
+    Connection::Connection(const MethodMap & methods, qint64 id, QObject *parent, qint64 maxBuffer)
+        : AbstractConnection(id, parent, maxBuffer), methods(methods)
+    {}
+    Connection::~Connection() {}
 
-}
+    void Connection::on_connected()
+    {
+        AbstractConnection::on_connected();
+        connectedConns.push_back(connect(this, &Connection::sendRequest, this, &Connection::_sendRequest)); // connection will be auto-disconnected on socket disconnect
+    }
+
+    Connection::BadPeer::~BadPeer() {} // for vtable
+
+    void Connection::_sendRequest(qint64 reqid, const QString &method, const QVariantList & params)
+    {
+        /* TODO: implement */
+    }
+
+    void Connection::on_readyRead()
+    {
+        Debug() << __FUNCTION__;
+        try {
+            while (socket->canReadLine()) {
+                auto data = socket->readLine();
+                nReceived += data.length();
+                auto line = data.trimmed();
+                Debug() << "Got: " << line;
+                QVariantMap jsonData( Util::Json::parseString(line, true).toMap() ); // may throw
+
+                /* //TODO: implement
+                auto resp = EXResponse::fromJson(line);
+                auto meth = resp.id > 0 ? idMethodMap.take(resp.id) : resp.method;
+                if (meth.isEmpty()) {
+                    throw BadPeer(QString("Unexpected/unknown message id (%1) in server reply").arg(resp.id));
+                }
+                resp.method = meth;
+                resp.validate(); // may throw, may modify resp
+                Debug() << "Parsed response: " << resp.toString();
+                */
+                lastGood = Util::getTime();
+                /*
+                emit gotResponse(this, resp);
+                */
+            }
+            if (socket->bytesAvailable() > MAX_BUFFER) {
+                // bad server.. sending us garbage data not containing newlines. Kill connection.
+                throw BadPeer(QString("Peer has sent us more than %1 bytes without a newline! Bad peer?").arg(MAX_BUFFER));
+            }
+        } catch (const std::exception &e) {
+            Error() << "Error reading/parsing data coming in: " << e.what();
+            boilerplate_disconnect();
+            status = Bad;
+        }
+    }
+} // end namespace RPC

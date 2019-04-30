@@ -63,7 +63,7 @@ signals:
     void sendRequest(qint64 reqid, const QString &method, const QVariantList & params = QVariantList());
 
 protected slots:
-    /// Actual implentation that prepares the request. Is connected to sendRequest() above. Runs in thread.
+    /// Actual implentation that prepares the request. Is connected to sendRequest() above. Runs in this object's thread.
     void _sendRequest(qint64 reqid, const QString &method, const QVariantList & params = QVariantList());
 
     /// called from socket connection

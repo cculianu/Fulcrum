@@ -157,7 +157,7 @@ namespace RPC {
 
 
     typedef QMap<QString, QSharedPointer<Method> > MethodMap;
-    /*
+
     class Connection : public AbstractConnection
     {
         Q_OBJECT
@@ -167,18 +167,26 @@ namespace RPC {
 
         const MethodMap methods;
 
+        class BadPeer : public Exception {
+        public:
+            using Exception::Exception; /// bring in c'tor
+            ~BadPeer();
+        };
+
     signals:
         /// call (emit) this to send a requesst to the server
         void sendRequest(qint64 reqid, const QString &method, const QVariantList & params = QVariantList());
 
     protected slots:
-        /// Actual implentation that prepares the request. Is connected to sendRequest() above. Runs in thread.
-        virtual bool _sendRequest(qint64 reqid, const QString &method, const QVariantList & params = QVariantList());
+        /// Actual implentation that prepares the request. Is connected to sendRequest() above. Runs in thread. Eventually calls send() -> do_write()
+        virtual void _sendRequest(qint64 reqid, const QString &method, const QVariantList & params = QVariantList());
 
-        void on_readyRead() override; /// parses RPC, implements pure virtual from base
+        /// parses RPC, implements pure virtual from base
+        void on_readyRead() override;
     protected:
-        void on_connected() override; /// chains to base, connects sendRequest signal to _sendRequest slot
-    };*/
+        /// chains to base, connects sendRequest signal to _sendRequest slot
+        void on_connected() override;
+    };
 }
 
 #endif // SHUFFLEUP_RPC_H
