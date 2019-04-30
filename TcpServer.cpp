@@ -119,7 +119,7 @@ void TcpServer::killClient(Client *client)
         return;
     Debug() << __FUNCTION__ << " (id: " << client->id << ")";
     clientsById.remove(client->id); // ensure gone from map asap so future lookups fail
-    client->disconnect();
+    client->do_disconnect();
 }
 void TcpServer::killClient(qint64 id)
 {
@@ -152,22 +152,22 @@ void Client::on_readyRead()
         lastGood = Util::getTime();
         if (line == "exit") {
             send("sayonara\n");
-            disconnect(true);
+            do_disconnect(true);
         } else
             send("Thanks fam.\n");
     }
     if (socket->bytesAvailable() > MAX_BUFFER) {
         // bad server.. sending us garbage data not containing newlines. Kill connection.
         Error() << QString("client has sent us more than %1 bytes without a newline! Bad client? (id: %2)").arg(MAX_BUFFER).arg(id);
-        disconnect();
+        do_disconnect();
         status = Bad;
     }
 }
 
-void Client::disconnect(bool graceful)
+void Client::do_disconnect(bool graceful)
 {
     const bool wasConnected = socket ? socket->state() == QAbstractSocket::ConnectedState : false;
-    AbstractConnection::disconnect(graceful); // if 'graceful' *AND* was connected, a disconnected state will be entered later at which point we will delete socket.
+    AbstractConnection::do_disconnect(graceful); // if 'graceful' *AND* was connected, a disconnected state will be entered later at which point we will delete socket.
     if (socket && (!graceful || !wasConnected))
         /// delete the socket if we weren't connected or if !graceful.
         /// If graceful && connected, then a disconnect signal will be sent later and then we will

@@ -413,15 +413,15 @@ namespace RPC {
         ret.data = params;
         map["params"] = params;
         ret.jsonRpcVersion = map.value("jsonrpc").toString();
-#ifdef QT_DEBUG
-        QString err;
-        ret.jsonData = ret.schema.match(map, &err);
-        if (ret.jsonData.isEmpty()) {
-            Error() << __FUNCTION__ << " schema verify failure: " << err << "; FIXME!";
-        }
-#else
+//#ifdef QT_DEBUG
+//        QString err;
+//        ret.jsonData = ret.schema.match(map, &err);
+//        if (ret.jsonData.isEmpty()) {
+//            Error() << __FUNCTION__ << " schema verify failure: " << err << "; FIXME!";
+//        }
+//#else
         ret.jsonData = map;
-#endif
+//#endif
         return ret;
     }
 
@@ -430,6 +430,8 @@ namespace RPC {
     {
         static bool initted_meta = false;
         if (!initted_meta) {
+            // finish registering RPC::Message metatype so that signals/slots work. This needs to only happen
+            // once in main thread at app init.
             qRegisterMetaType<RPC::Message>();
             initted_meta = true;
         }
@@ -440,12 +442,13 @@ namespace RPC {
     void Connection::on_connected()
     {
         AbstractConnection::on_connected();
-        connectedConns.push_back(connect(this, &Connection::sendRequest, this, &Connection::_sendRequest)); // connection will be auto-disconnected on socket disconnect
+        // connection will be auto-disconnected on socket disconnect
+        connectedConns.push_back(connect(this, &Connection::sendRequest, this, &Connection::_sendRequest));
     }
 
     void Connection::on_disconnected()
     {
-        AbstractConnection::on_disconnected();
+        AbstractConnection::on_disconnected(); // will auto-disconnect all QMetaObject::Connections appearing in connectedConns
         idMethodMap.clear();
     }
 
@@ -468,11 +471,12 @@ namespace RPC {
         while (idMethodMap.size() > 20000) {  // prevent memory leaks in case of misbehaving server
             idMethodMap.erase(idMethodMap.begin());
         }
-        idMethodMap[id] = method;
+        idMethodMap[reqid] = method; // remember method sent out to associate it back.
 
         auto data = json.toUtf8();
         Debug() << "Sending json: " << data;
-        emit send(data); // ends up calling do_write immediately (which is connected to send)
+        // below send() ends up calling do_write immediately (which is connected to send)
+        emit send( data + "\n" /* "\n" <-- is crucial! (Protocol is linefeed-based) */);
     }
 
     void Connection::on_readyRead()
@@ -515,8 +519,8 @@ namespace RPC {
                     message = Message::fromJsonData(jsonData, schema);
                     message.method = mptr->method; // write to the method var again in case it was a result with no method name in the json
                 }
-                lastGood = Util::getTime();
-                Debug() << "Re-parsed message: " << message.toJsonString();
+                lastGood = Util::getTime(); // update "lastGood" as this is used to determine if stale or not.
+                //Debug() << "Re-parsed message: " << message.toJsonString();
                 emit gotMessage(this, message);
             }
             if (socket->bytesAvailable() > MAX_BUFFER) {
@@ -525,7 +529,7 @@ namespace RPC {
             }
         } catch (const std::exception &e) {
             Error() << "Error reading/parsing data coming in: " << e.what();
-            disconnect();
+            do_disconnect();
             status = Bad;
         }
     }

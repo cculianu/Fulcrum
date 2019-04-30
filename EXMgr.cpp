@@ -7,11 +7,6 @@
 EXMgr::EXMgr(const QString & serversFile, QObject *parent)
     : Mgr(parent), serversFile(serversFile)
 {
-    static bool initted_meta = false;
-    if (!initted_meta) {
-        qRegisterMetaType<EXResponse>();
-        initted_meta = true;
-    }
 }
 
 EXMgr::~EXMgr()
@@ -37,7 +32,7 @@ void EXMgr::cleanup()
     }
     clients.clear();
     clientsById.clear();
-    rpcMethods.clear();
+    _rpcMethods.clear();
 }
 
 void EXMgr::loadServers()
@@ -58,7 +53,7 @@ void EXMgr::loadServers()
             clientsById[client->id] = client;
             connect(client, &EXClient::newConnection, this, &EXMgr::onNewConnection);
             connect(client, &EXClient::lostConnection, this, &EXMgr::onLostConnection);
-            connect(client, &EXClient::gotResponse, this, &EXMgr::onResponse);
+            connect(client, &EXClient::gotMessage, this, &EXMgr::onMessage);
             client->start();
         } else {
             Warning() << "Bad server entry: " << host;
@@ -78,9 +73,6 @@ void EXMgr::onNewConnection(EXClient *client)
     Debug () << "New connection for " << client->host;
     emit client->sendRequest(newId(), "server.version", QVariantList({QString("%1/%2").arg(APPNAME).arg(VERSION), QString("1.4")}));
     emit client->sendRequest(newId(), "blockchain.headers.subscribe");
-    // testing
-    //testComposeRequest(123, "blockchain.headers.subscribe");
-    //testComposeRequest(123, "server.version", QVariantList({QString("%1/%2").arg(APPNAME).arg(VERSION), QString("1.4")}));
 }
 
 void EXMgr::onLostConnection(EXClient *client)
@@ -90,17 +82,25 @@ void EXMgr::onLostConnection(EXClient *client)
     client->info.clear();
 }
 
-void EXMgr::onResponse(EXClient *client, EXResponse r)
+void EXMgr::onMessage(EXClient *client, const RPC::Message &m)
 {
-    Debug() << "(" << client->host << ") Got response in mgr to " << r.method;
-    if (r.method == "server.version") {
-        client->info.serverVersion.first = r.result.toList()[0].toString();
-        client->info.serverVersion.second = r.result.toList()[1].toString();
-        Debug() << "Got server version: " << client->info.serverVersion.first << " / " << client->info.serverVersion.second;
-    } else if (r.method == "blockchain.headers.subscribe") {
-        int ht = r.result.toMap().value("height", 0).toInt();
-        QString hdr = r.result.toMap().value("hex", "").toString();
-        if (ht > 0) {
+    Debug() << "(" << client->host << ") Got message in mgr, method: " << m.method;
+    if (m.method == "server.version") {
+        QVariantList l = m.data.toList();
+        if (l.size() == 2) {
+            client->info.serverVersion.first = l[0].toString();
+            client->info.serverVersion.second = l[1].toString();
+            Debug() << "Got server version: " << client->info.serverVersion.first << " / " << client->info.serverVersion.second;
+        } else {
+            Error() << "Bad server version reply! Schema should have handled this. FIXME! Json: " << m.toJsonString();
+        }
+    } else if (m.method == "blockchain.headers.subscribe") {
+        // list of dicts.. or a simple value.. handle either.  TODO: make this a more general mechanism.
+        const QVariantList list ( m.data.toList() );
+        const QVariantMap map ( list.isEmpty() ? m.data.toMap() : list.back().toMap() );
+        int ht = map.value("height", 0).toInt();
+        QString hdr = map.value("hex", "").toString();
+        if (ht > 0 && !hdr.isEmpty()) {
             if (ht > height.height) {
                 height.height = ht;
                 height.ts = Util::getTime();
@@ -111,12 +111,15 @@ void EXMgr::onResponse(EXClient *client, EXResponse r)
                 height.seenBy.insert(client->id);
             client->info.height = ht;
             client->info.header = hdr;
+        } else {
+            Error() << "Bad server headers reply! Schema should have handled this. FIXME! Json: " << m.toJsonString();
         }
         Debug() << "Got header subscribe: " << client->info.height << " / " << client->info.header << " (count for height = " << height.seenBy.count() << ")";
-    } else if (r.method == "server.ping") {
-        // ignore; timestamps updated in EXClient
+    } else if (m.method == "server.ping") {
+        // ignore; timestamps updated in EXClient and RPC::Connection
+        //Debug() << "server.ping reply... yay";
     } else {
-        Error() << "Unknown method \"" << r.method << "\" from " << client->host;
+        Error() << "Unknown method \"" << m.method << "\" from " << client->host;
     }
 }
 
@@ -180,6 +183,35 @@ EXClient * EXMgr::pick()
     return nullptr;
 }
 
+void EXMgr::initRPCMethods()
+{
+    QString m, d;
+    m = "blockchain.headers.subscribe";
+    d = "{\"hex\" : \"somestring\", \"height\" : 1}";
+    _rpcMethods.insert(m, QSharedPointer<RPC::Method>(new RPC::Method(
+        m,
+        RPC::schemaMethod + QString(" { \"method\" : \"%1!\", \"params\" : [%2] }").arg(m).arg(d), // in schema (asynch from server -> us)
+        RPC::schemaResult + QString(" { \"result\" : %1}").arg(d), // result schema (synch. server -> us)
+        RPC::schemaMethod + QString(" { \"method\" : \"%1!\", \"params\" : [\"=0\"] }").arg(m) // out schema  (req. us -> server)
+    )));
+
+    m = "server.version";
+    _rpcMethods.insert(m, QSharedPointer<RPC::Method>(new RPC::Method(
+        m,
+        RPC::Schema(), // in schema (asynch from server -> us) -- DISABLED for server.version
+        RPC::schemaResult + QString(" { \"result\" : [\"=2\"] }"), // result schema (synch. server -> us) -- enforce must have 2 string args
+        RPC::schemaMethod + QString(" { \"method\" : \"%1!\", \"params\" : [\"=2\"] }").arg(m) // out schema  (req. us -> server) -- enforce must have 2 string args
+    )));
+
+    m = "server.ping";
+    _rpcMethods.insert(m, QSharedPointer<RPC::Method>(new RPC::Method(
+        m,
+        RPC::Schema(), // in schema (asynch from server -> us) -- DISABLED for server.ping
+        RPC::schemaResult + QString(" { \"result\" : null }"), // result schema -- 'result' arg should be there and be null.
+        RPC::schemaMethodNoParams // out schema, ping to server takes no args
+    )));
+}
+
 void EXMgr::pickTest()
 {
     for (int i = 0; i < 100; ++i) {
@@ -192,65 +224,4 @@ void EXMgr::pickTest()
         QThread::msleep(100);
         if (qApp) qApp->processEvents();
     }
-}
-
-void EXMgr::initRPCMethods()
-{
-    QString m, d;
-    m = "blockchain.headers.subscribe";
-    d = "{\"hex\" : \"somestring\", \"height\" : 1}";
-    rpcMethods.insert(m, QSharedPointer<RPC::Method>(new RPC::Method(
-        m,
-        RPC::schemaMethod + QString(" { \"method\" : \"%1!\", \"params\" : [%2] }").arg(m).arg(d), // in schema (asynch from server -> us)
-        RPC::schemaResult + QString(" { \"result\" : %1}").arg(d), // result schema (synch. server -> us)
-        RPC::schemaMethod + QString(" { \"method\" : \"%1!\", \"params\" : [\"=0\"] }").arg(m) // out schema  (req. us -> server)
-    )));
-
-    m = "server.version";
-    rpcMethods.insert(m, QSharedPointer<RPC::Method>(new RPC::Method(
-        m,
-        RPC::Schema(), // in schema (asynch from server -> us) -- DISABLED for server.version
-        RPC::schemaResult + QString(" { \"result\" : [\"=2\"] }"), // result schema (synch. server -> us)
-        RPC::schemaMethod + QString(" { \"method\" : \"%1!\", \"params\" : [\"=2\"] }").arg(m) // out schema  (req. us -> server)
-    )));
-}
-
-void EXMgr::testCheckMethod(const QString &json) const
-{
-    try {
-        const auto m = Util::Json::parseString(json, true).toMap();
-        for (auto it = rpcMethods.cbegin(); it != rpcMethods.cend(); ++it) {
-            QList<const RPC::Schema *> schemas({&(it.value()->inSchema), &(it.value()->resultSchema)});
-            for (auto s : schemas) {
-                if (!s->isValid())
-                    // disabled schema
-                    continue;
-                QString err;
-                if (auto res = s->match(m, &err); !res.isEmpty()) {
-                    Debug() << "---> testCheckMethod on " << it.key() << ": parsed -> " << Util::Json::toString(res, true);
-                } else {
-                    Debug() << "---> testCheckMethod on " << it.key() << ": failed -> " << err;
-                }
-            }
-        }
-    } catch (const Exception &e) {
-        Warning() << "testCheckMethod: " << e.what() << " (" << json << ")";
-    }
-}
-
-QVariantMap EXMgr::testComposeRequest(qint64 id, const QString &method, const QVariantList &params) const
-{
-    QVariantMap ret;
-    if (auto it = rpcMethods.find(method); it != rpcMethods.end()) {
-        ret = it.value()->outSchema.toStrippedMap();
-        ret["id"] = id;
-        ret["params"] = params;
-        if (QString err; ! (ret = it.value()->outSchema.match(ret, &err)).isEmpty()) {
-            Debug() << method << " ---> compose --> matched, json = " << Util::Json::toString(ret, true);
-            return ret;
-        } else {
-            Debug() << method << " ---> compose error: " << err;
-        }
-    }
-    return ret;
 }

@@ -130,6 +130,32 @@ namespace RPC {
 
     typedef QMap<QString, QSharedPointer<Method> > MethodMap;
 
+    /// A concrete derived class of AbstractConnection implementing a JSON-RPC
+    /// based method<->result protocol similar to ElectrumX's protocol.  This
+    /// class is client/server agnostic and it just operates in terms of JSON
+    /// RPC methods and results.  It can be used for either a client or a
+    /// server.
+    ///
+    /// Methods invoked on the peer need an id, and this id is used to track
+    /// the reply back and associate it with the method that was invoked on
+    /// the peer (see idMethodMap instance var).
+    ///
+    /// We use this protocol on the client-facing side too to negotiate
+    /// shuffles, hence why this is abstracted out into a separate class. This
+    /// class is responsible for parsing the JSON and closing the connections
+    /// on malformed input that doesn't match the expected 'Schema'.  This
+    /// class is configured for which methods it supports and what the various
+    /// method schemas are via the 'MethodMap' passed to it at construction.
+    ///
+    /// See EXMgr for an example class that constructs a MethodMap and passes
+    /// it down.
+    ///
+    /// Classes that manage rpc methods should register for the gotMessage()
+    /// signal and process incoming messages further.  All incoming messages
+    /// are either errors (errorCode != 0) or have a valid message.method name.
+    ///
+    /// Both EXClient and TCPServer's 'Client' class derive from this.
+    ///
     class Connection : public AbstractConnection
     {
         Q_OBJECT
@@ -146,24 +172,33 @@ namespace RPC {
     signals:
         /// call (emit) this to send a requesst to the server
         void sendRequest(qint64 reqid, const QString &method, const QVariantList & params = QVariantList());
-        void gotMessage(Connection *, Message m);
+        /// this is emitted when a new message arrives that was successfully parsed and matches
+        /// a known method described in the 'methods' MethodMap. Unknown messages will result
+        /// in auto-disconnect.  (TODO: Implement error JSON replies to peer as well as tolerance for some malformed
+        /// data up until a threshold is reached?)
+        void gotMessage(RPC::Connection *, const RPC::Message & m);
 
     protected slots:
-        /// Actual implentation that prepares the request. Is connected to sendRequest() above. Runs in thread. Eventually calls send() -> do_write()
+        /// Actual implentation that prepares the request. Is connected to sendRequest() above. Runs in this object's
+        /// thread context. Eventually calls send() -> do_write() (from superclass).
         virtual void _sendRequest(qint64 reqid, const QString &method, const QVariantList & params = QVariantList());
 
-        /// parses RPC, implements pure virtual from base
-        void on_readyRead() override;
     protected:
+        /// parses RPC, implements pure virtual from super to handle line-based JSON.
+        void on_readyRead() override;
         /// chains to base, connects sendRequest signal to _sendRequest slot
         void on_connected() override;
+        /// Chains to base, clears idMethodMap
         void on_disconnected() override;
 
-        /// map of requests that were generated via _sendRequest to method names to build a more meaningful Message object.
+        /// map of requests that were generated via _sendRequest to method names to build a more meaningful Message
+        /// object (which has a .method defined even on 'result=' messages).  It is an error to receive a result=
+        /// message from the peer with its id= parameter not having an entry in this map.
         QMap<qint64, QString> idMethodMap;
     };
 }
 
+/// So that Qt signal/slots work with this type.
 Q_DECLARE_METATYPE(RPC::Message);
 
 #endif // SHUFFLEUP_RPC_H

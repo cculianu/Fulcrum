@@ -30,7 +30,7 @@ bool AbstractConnection::isStale() const
     return isGood() && Util::getTime() - lastGood > stale_threshold;
 }
 
-void AbstractConnection::disconnect(bool graceful)
+void AbstractConnection::do_disconnect(bool graceful)
 {
     status = status == Bad ? Bad : NotConnected;  // try and keep Bad status around so EXMgr can decide when to reconnect based on it
     if (socket) {
@@ -67,7 +67,7 @@ bool AbstractConnection::do_write(const QByteArray & data)
     qint64 written = socket->write(data2write);
     if (written < 0) {
         Error() << __FUNCTION__ << " error on write " << socket->error() << " (" << socket->errorString() << ") id=" << id;
-        disconnect();
+        do_disconnect();
         return false;
     } else if (written < data2write.length()) {
         writeBackLog = data2write.mid(int(written));
@@ -75,7 +75,7 @@ bool AbstractConnection::do_write(const QByteArray & data)
     nSent += written;
     if (writeBackLog.length() > MAX_BUFFER) {
         Error() << __FUNCTION__ << " MAX_BUFFER reached on write (" << MAX_BUFFER << ") id=" << id;
-        disconnect();
+        do_disconnect();
         return false;
     }
     return true;
@@ -102,12 +102,14 @@ void AbstractConnection::on_pingTimer()
         do_ping();
 }
 
+void AbstractConnection::slot_on_readyRead() { on_readyRead(); }
+
 void AbstractConnection::on_connected()
 {
     // runs in our thread's context
     Debug() << __FUNCTION__;
     connectedConns.push_back(connect(this, &AbstractConnection::send, this, &AbstractConnection::do_write));
-    connectedConns.push_back(connect(socket, SIGNAL(readyRead()), this, SLOT(on_readyRead())));
+    connectedConns.push_back(connect(socket, SIGNAL(readyRead()), this, SLOT(slot_on_readyRead())));
     if (dynamic_cast<QSslSocket *>(socket)) {
         // for some reason Qt can't find this old-style signal for QSslSocket so we do the below.
         // Additionally, bytesWritten is never emitted for QSslSocket, violating OOP! Thanks Qt. :P
@@ -119,8 +121,9 @@ void AbstractConnection::on_connected()
         connect(socket, &QAbstractSocket::disconnected, this, [this]{
             Debug() << prettyName() << " socket disconnected";
             for (const auto & connection : connectedConns) {
-                disconnect(connection);
+                QObject::disconnect(connection);
             }
+            connectedConns.clear(); // be sure to empty the list out when we are done!
             kill_pingTimer();
             on_disconnected();
             emit lostConnection(this);
@@ -132,7 +135,7 @@ void AbstractConnection::on_connected()
 
 void AbstractConnection::on_disconnected()
 {
-    /* nothing, here for derived classes */
+    /* nothing, here; for derived classes to override if they wish. */
 }
 
 void AbstractConnection::on_socketState(QAbstractSocket::SocketState s)
@@ -171,6 +174,6 @@ void AbstractConnection::do_ping()
 void AbstractConnection::on_error(QAbstractSocket::SocketError err)
 {
     Warning() << prettyName() << ": error " << err << " (" << (socket ? socket->errorString() : "(null)") << ")";
-    disconnect();
+    do_disconnect();
 }
 

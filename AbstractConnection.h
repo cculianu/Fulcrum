@@ -31,10 +31,9 @@ signals:
     /// This is a low-level function subclasses should create their own high-level protocol-level signals / methods;
     void send(QByteArray);
 
-protected slots:
-    virtual void on_readyRead() = 0; /**< Implement in subclasses -- required to read data */
-
 protected:
+
+    virtual void on_readyRead() = 0; /**< Implement in subclasses -- required to read data */
 
     enum Status {
         NotConnected = 0,
@@ -70,13 +69,15 @@ protected:
     virtual void on_disconnected(); ///< overrides can chain to this as well
 
     bool do_write(const QByteArray & = "");
-    virtual void disconnect(bool graceful = false); /// does a socket->abort, sets status. Chain to this if you want on override.
+    /// does a socket->abort, sets status. Chain to this if you want on override. Named this way so as not to clash with QObject::disconnect
+    virtual void do_disconnect(bool graceful = false);
 
 private slots:
     void on_pingTimer();
     void on_bytesWritten();
     void on_error(QAbstractSocket::SocketError);
     void on_socketState(QAbstractSocket::SocketState);
+    void slot_on_readyRead(); ///< calls virtual method on_readyRead for us -- I was paranoid about Qt signal/slot binding semantics and prefer to call from within a function explicitly, hence this redundant method.
 private:
     void start_pingTimer();
     void kill_pingTimer();

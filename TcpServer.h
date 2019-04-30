@@ -73,12 +73,11 @@ public:
     explicit Client(qint64 id, TcpServer *srv, QTcpSocket *sock);
     ~Client() override;
 
-protected slots:
+protected:
     void on_readyRead() override;
 
-protected:
     void do_ping() override;
-    void disconnect(bool graceful = false) override;
+    void do_disconnect(bool graceful = false) override;
 
     TcpServer *srv;
     friend class TcpServer;

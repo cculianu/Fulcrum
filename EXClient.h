@@ -11,29 +11,11 @@
 #include "Common.h"
 #include "AbstractConnection.h"
 #include "Mixins.h"
-
-struct EXResponse
-{
-    static EXResponse fromJson(const QString &json); ///< may throw Exception
-
-    void validate(); ///< checks the QVariant is the expected format for each method. throws BadServerReply if it's not
-
-    QString toString() const;
-
-    QString jsonRpcVersion;
-    qint64 id;
-    QString method;
-    QVariant result; // 'params' also gets put here
-
-    int errorCode = 0;
-    QString errorMessage = "";
-};
-
-Q_DECLARE_METATYPE(EXResponse);
+#include "RPC.h"
 
 class EXMgr;
 
-class EXClient : public AbstractConnection, protected ThreadObjectMixin
+class EXClient : public RPC::Connection, protected ThreadObjectMixin
 {
     Q_OBJECT
 public:
@@ -56,18 +38,10 @@ public:
     bool isGood() const override;
 
 signals:
-    void gotResponse(EXClient *, EXResponse);
     void newConnection(EXClient *);
-    void lostConnection(EXClient *); ///< overrides lostConnection(AbstractClient *) by dynamic_casting it down and re-emitting
-    /// call (emit) this to send a requesst to the server
-    void sendRequest(qint64 reqid, const QString &method, const QVariantList & params = QVariantList());
+    void lostConnection(EXClient *); ///< overrides lostConnection(AbstractConnection *) by dynamic_casting it down and re-emitting
+    void gotMessage(EXClient *, const RPC::Message &); ///< overrides gotMessage(RPC::Connection *..) by re-emitting with narrowed type.
 
-protected slots:
-    /// Actual implentation that prepares the request. Is connected to sendRequest() above. Runs in this object's thread.
-    void _sendRequest(qint64 reqid, const QString &method, const QVariantList & params = QVariantList());
-
-    /// called from socket connection
-    void on_readyRead() override;
 protected:
     friend class EXMgr;
 
@@ -83,10 +57,6 @@ protected:
 
 private:
     EXMgr *mgr = nullptr;
-    QMap<qint64, QString> idMethodMap;
-
-    /// returns utf-8 encoded JSON data for a request
-    static QByteArray makeRequestData(qint64 id, const QString &method, const QVariantList & params = QVariantList());
 
     void on_started() override;
     void on_finished() override;

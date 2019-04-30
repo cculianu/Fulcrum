@@ -30,9 +30,7 @@ public:
     EXClient *pick();
 
 
-    /// here for testing, thread-safe
-    void testCheckMethod(const QString &json) const;
-    QVariantMap testComposeRequest(qint64 id, const QString &method, const QVariantList &params = QVariantList()) const;
+    const RPC::MethodMap & rpcMethods() const { return _rpcMethods; }
 
 signals:
 
@@ -41,7 +39,7 @@ public slots:
 protected slots:
     void onNewConnection(EXClient *);
     void onLostConnection(EXClient *);
-    void onResponse(EXClient *, EXResponse);
+    void onMessage(EXClient *, const RPC::Message &);
 
 private slots:
     void checkClients();
@@ -68,7 +66,7 @@ private:
 
     void pickTest();
 
-    RPC::MethodMap rpcMethods;
+    RPC::MethodMap _rpcMethods;
 };
 
 #endif // ECMGR_H
