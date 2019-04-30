@@ -61,7 +61,7 @@ void EXClient::killSocket()
 {
     if (socket && socket->state() != QAbstractSocket::UnconnectedState) {
         Debug() << host << " aborting connection";
-        boilerplate_disconnect();
+        disconnect();
     }
     delete socket; socket = nullptr;  // delete of nullptr ok
     status = NotConnected;
@@ -232,7 +232,7 @@ void EXClient::on_readyRead()
         }
     } catch (const Exception &e) {
         Error() << "Error reading/parsing response: " << e.what();
-        boilerplate_disconnect();
+        disconnect();
         status = Bad;
     }
 }

@@ -525,7 +525,7 @@ namespace RPC {
             }
         } catch (const std::exception &e) {
             Error() << "Error reading/parsing data coming in: " << e.what();
-            boilerplate_disconnect();
+            disconnect();
             status = Bad;
         }
     }

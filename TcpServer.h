@@ -78,7 +78,7 @@ protected slots:
 
 protected:
     void do_ping() override;
-    void boilerplate_disconnect(bool graceful = false) override;
+    void disconnect(bool graceful = false) override;
 
     TcpServer *srv;
     friend class TcpServer;

@@ -30,7 +30,7 @@ bool AbstractConnection::isStale() const
     return isGood() && Util::getTime() - lastGood > stale_threshold;
 }
 
-void AbstractConnection::boilerplate_disconnect(bool graceful)
+void AbstractConnection::disconnect(bool graceful)
 {
     status = status == Bad ? Bad : NotConnected;  // try and keep Bad status around so EXMgr can decide when to reconnect based on it
     if (socket) {
@@ -67,7 +67,7 @@ bool AbstractConnection::do_write(const QByteArray & data)
     qint64 written = socket->write(data2write);
     if (written < 0) {
         Error() << __FUNCTION__ << " error on write " << socket->error() << " (" << socket->errorString() << ") id=" << id;
-        boilerplate_disconnect();
+        disconnect();
         return false;
     } else if (written < data2write.length()) {
         writeBackLog = data2write.mid(int(written));
@@ -75,7 +75,7 @@ bool AbstractConnection::do_write(const QByteArray & data)
     nSent += written;
     if (writeBackLog.length() > MAX_BUFFER) {
         Error() << __FUNCTION__ << " MAX_BUFFER reached on write (" << MAX_BUFFER << ") id=" << id;
-        boilerplate_disconnect();
+        disconnect();
         return false;
     }
     return true;
@@ -171,6 +171,6 @@ void AbstractConnection::do_ping()
 void AbstractConnection::on_error(QAbstractSocket::SocketError err)
 {
     Warning() << prettyName() << ": error " << err << " (" << (socket ? socket->errorString() : "(null)") << ")";
-    boilerplate_disconnect();
+    disconnect();
 }
 
