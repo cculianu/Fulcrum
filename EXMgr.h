@@ -3,10 +3,12 @@
 
 #include "Mgr.h"
 #include "EXClient.h"
+#include "RPC.h"
 #include <QObject>
 #include <QList>
 #include <QSet>
-class EXClient;
+#include <QMap>
+#include <QSharedPointer>
 
 class EXMgr : public Mgr
 {
@@ -28,6 +30,11 @@ public:
     /// be thrown.
     EXClient *pick();
 
+
+    /// here for testing, thread-safe
+    void testCheckMethod(const QString &json) const;
+    QVariantMap testComposeRequest(qint64 id, const QString &method, const QVariantList &params = QVariantList()) const;
+
 signals:
 
 public slots:
@@ -42,7 +49,8 @@ private slots:
 
 private:
     const QString serversFile;
-    void loadServers();
+    void loadServers(); // may throw
+    void initRPCMethods(); // may throw
 
     QList<EXClient *> clients;
     QMap<qint64, EXClient *> clientsById; ///< note to self: always maintain this map to be synched to above list
@@ -61,6 +69,7 @@ private:
 
     void pickTest();
 
+    RPC::MethodMap rpcMethods;
 };
 
 #endif // ECMGR_H

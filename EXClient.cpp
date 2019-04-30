@@ -18,9 +18,6 @@ EXClient::EXClient(EXMgr *mgr, qint64 id, const QString &host, quint16 tport, qu
     Debug() << __FUNCTION__ << " host:" << host << " t:" << tport << " s:" << sport;
     _thread.setObjectName(QString("%1 %2").arg("EXClient").arg(host));
     setObjectName(host);
-    connect(this, &AbstractConnection::lostConnection, this, [this](AbstractConnection *){
-         emit lostConnection(this); /// re-emits as EXClient * signal (different method in C++)
-    });
 }
 
 EXClient::~EXClient()
@@ -44,20 +41,6 @@ bool EXClient::isGood() const
     return AbstractConnection::isGood() && _thread.isRunning() && info.isValid();
 }
 
-void EXClient::start()
-{
-    ThreadObjectMixin::start();
-    connect(this, &EXClient::sendRequest, this, &EXClient::_sendRequest);
-}
-
-void EXClient::stop()
-{
-    /// Disconnect this externally originating signal before stopping to
-    /// ensure no new signals get sent to us after we switch back to the
-    /// main thread.
-    disconnect(this, &EXClient::sendRequest, this, &EXClient::_sendRequest);
-    ThreadObjectMixin::stop();
-}
 
 // runs in thread
 void EXClient::on_started()
@@ -114,18 +97,18 @@ void EXClient::reconnect()
 }
 
 
-bool EXClient::_sendRequest(qint64 id, const QString &method, const QVariantList &params)
+void EXClient::_sendRequest(qint64 id, const QString &method, const QVariantList &params)
 {
     if (status != Connected || !socket) {
         Error() << __FUNCTION__ << " method: " << method << "; Not connected!";
-        return false;
+        return;
     }
     while (idMethodMap.size() > 20000) {  // prevent memory leaks in case of misbehaving server
         idMethodMap.erase(idMethodMap.begin());
     }
     idMethodMap[id] = method;
 
-    return do_write(makeRequestData(id, method, params));
+    emit send(makeRequestData(id, method, params)); // ends up calling do_write immediately (which is connected to send)
 }
 
 
@@ -138,12 +121,16 @@ void EXClient::on_connected()
 {
     // runs in thread
     AbstractConnection::on_connected();
-    connect(this, &EXClient::lostConnection, this, [this](){
-        idMethodMap.clear();
-    });
+    connectedConns.push_back(connect(this, &EXClient::sendRequest, this, &EXClient::_sendRequest)); // connection will be auto-disconnected on socket disconnect
     emit newConnection(this);
 }
 
+void EXClient::on_disconnected()
+{
+    AbstractConnection::on_disconnected();
+    idMethodMap.clear();
+    emit lostConnection(this); /// re-emits as EXClient * signal (different method in C++)
+}
 /* static */
 EXResponse EXResponse::fromJson(const QString &json)
 {
@@ -225,6 +212,9 @@ void EXClient::on_readyRead()
             nReceived += data.length();
             auto line = data.trimmed();
             Debug() << "Got: " << line;
+            // testing
+            //mgr->testCheckMethod(line);
+            // /testing
             auto resp = EXResponse::fromJson(line);
             auto meth = resp.id > 0 ? idMethodMap.take(resp.id) : resp.method;
             if (meth.isEmpty()) {

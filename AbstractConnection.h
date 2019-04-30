@@ -27,8 +27,8 @@ public:
 
 signals:
     void lostConnection(AbstractConnection *);
-    /// call (emit) this to send data to the other end. connected to do_write(). This is a low-level function
-    /// subclasses should create their own high-level protocol-level signals.
+    /// call (emit) this to send data to the other end. connected to do_write() when socket is in the connected state.
+    /// This is a low-level function subclasses should create their own high-level protocol-level signals / methods;
     void send(QByteArray);
 
 protected slots:
@@ -60,12 +60,14 @@ protected:
     QTcpSocket *socket = nullptr; ///< this should only ever be touched in our thread
     QByteArray writeBackLog = ""; ///< if this grows beyond a certain size, we should kill the connection
     QTimer *pingTimer = nullptr;
+    QList<QMetaObject::Connection> connectedConns; /// signal/slot connections for the connected state. this gets populated when the socket connects in on_connected. signal connections will be disconnected on socket disconnect.
 
     virtual QString prettyName(bool dontTouchSocket=false) const; ///< called only from our thread otherwise it may crash because it touches 'socket'
 
     virtual void do_ping(); /**< Reimplement in subclasses to send a ping. Default impl. does nothing. */
 
-    virtual void on_connected(); ///< overrides should call this base implementation and chain to it
+    virtual void on_connected(); ///< overrides should call this base implementation and chain to it. It is required to chain as this method does important setup.
+    virtual void on_disconnected(); ///< overrides can chain to this as well
 
     bool do_write(const QByteArray & = "");
     virtual void boilerplate_disconnect(); /// does a socket->abort, sets status. Chain to this if you want on override.

@@ -64,7 +64,7 @@ signals:
 
 protected slots:
     /// Actual implentation that prepares the request. Is connected to sendRequest() above. Runs in thread.
-    bool _sendRequest(qint64 reqid, const QString &method, const QVariantList & params = QVariantList());
+    void _sendRequest(qint64 reqid, const QString &method, const QVariantList & params = QVariantList());
 
     /// called from socket connection
     void on_readyRead() override;
@@ -73,15 +73,13 @@ protected:
 
     std::atomic<qint64> lastConnectionAttempt = 0LL;  ///< the last time we tried to reconnect
 
-    void start() override; ///< call from main thread
-    void stop() override; ///< call from main thread
-
     QString host;
     quint16 tport = 0, sport = 0;
 
     QString prettyName(bool dontTouchSocket = false) const override;
     void do_ping() override;
     void on_connected() override;
+    void on_disconnected() override;
 
 private:
     EXMgr *mgr = nullptr;

@@ -145,6 +145,14 @@ namespace Util {
         }
     }
 
+    template <typename Map>
+    Map & updateMap(Map & map, const Map &updates) {
+        for (auto it = updates.cbegin(); it != updates.cend(); ++it) {
+            map.insert(it.key(), it.value());
+        }
+        return map;
+    }
+
     namespace Json {
         class Error : public Exception {
         public:

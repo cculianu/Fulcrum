@@ -98,23 +98,33 @@ void AbstractConnection::on_connected()
 {
     // runs in our thread's context
     Debug() << __FUNCTION__;
-    connect(this, &AbstractConnection::send, this, &AbstractConnection::do_write);
-    connect(socket, SIGNAL(readyRead()), this, SLOT(on_readyRead()));
+    connectedConns.push_back(connect(this, &AbstractConnection::send, this, &AbstractConnection::do_write));
+    connectedConns.push_back(connect(socket, SIGNAL(readyRead()), this, SLOT(on_readyRead())));
     if (dynamic_cast<QSslSocket *>(socket)) {
         // for some reason Qt can't find this old-style signal for QSslSocket so we do the below.
         // Additionally, bytesWritten is never emitted for QSslSocket, violating OOP! Thanks Qt. :P
-        connect(socket, SIGNAL(encryptedBytesWritten(qint64)), this, SLOT(on_bytesWritten()));
+        connectedConns.push_back(connect(socket, SIGNAL(encryptedBytesWritten(qint64)), this, SLOT(on_bytesWritten())));
     } else {
-        connect(socket, SIGNAL(bytesWritten(qint64)), this, SLOT(on_bytesWritten()));
+        connectedConns.push_back(connect(socket, SIGNAL(bytesWritten(qint64)), this, SLOT(on_bytesWritten())));
     }
-    connect(socket, &QAbstractSocket::disconnected, this, [this]{
-        Debug() << prettyName() << " socket disconnected";
-        disconnect(this, &AbstractConnection::send, this, &AbstractConnection::do_write);
-        kill_pingTimer();
-        emit lostConnection(this);
-        // todo: put stuff to queue up a reconnect sometime later?
-    });
+    connectedConns.push_back(
+        connect(socket, &QAbstractSocket::disconnected, this, [this]{
+            Debug() << prettyName() << " socket disconnected";
+            for (const auto & connection : connectedConns) {
+                disconnect(connection);
+            }
+            kill_pingTimer();
+            on_disconnected();
+            emit lostConnection(this);
+            // todo: put stuff to queue up a reconnect sometime later?
+        })
+    );
     start_pingTimer();
+}
+
+void AbstractConnection::on_disconnected()
+{
+    /* nothing, here for derived classes */
 }
 
 void AbstractConnection::on_socketState(QAbstractSocket::SocketState s)

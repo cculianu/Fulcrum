@@ -11,7 +11,7 @@ class Mgr : public QObject
 public:
     explicit Mgr(QObject *parent = nullptr);
     virtual ~Mgr();
-    virtual void startup() = 0; ///< NB: controllers may throw Exception here, so catch it and abort if that happens.
+    virtual void startup() = 0; ///< NB: mgrs may throw Exception here, so catch it and abort if that happens.
     virtual void cleanup() = 0;
 
     typedef QVariantMap Stats;

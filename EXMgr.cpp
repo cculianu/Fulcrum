@@ -1,6 +1,7 @@
 #include "EXMgr.h"
 #include "EXClient.h"
 #include "Util.h"
+#include "RPC.h"
 #include <vector>
 
 EXMgr::EXMgr(const QString & serversFile, QObject *parent)
@@ -22,6 +23,7 @@ EXMgr::~EXMgr()
 void EXMgr::startup()
 {
     if (clients.isEmpty()) {
+        initRPCMethods();
         loadServers();
     } else {
         Error() << __PRETTY_FUNCTION__ << " called with EXClients already active! FIXME!";
@@ -35,6 +37,7 @@ void EXMgr::cleanup()
     }
     clients.clear();
     clientsById.clear();
+    rpcMethods.clear();
 }
 
 void EXMgr::loadServers()
@@ -75,6 +78,9 @@ void EXMgr::onNewConnection(EXClient *client)
     Debug () << "New connection for " << client->host;
     emit client->sendRequest(newId(), "server.version", QVariantList({QString("%1/%2").arg(APPNAME).arg(VERSION), QString("1.4")}));
     emit client->sendRequest(newId(), "blockchain.headers.subscribe");
+    // testing
+    //testComposeRequest(123, "blockchain.headers.subscribe");
+    //testComposeRequest(123, "server.version", QVariantList({QString("%1/%2").arg(APPNAME).arg(VERSION), QString("1.4")}));
 }
 
 void EXMgr::onLostConnection(EXClient *client)
@@ -186,4 +192,67 @@ void EXMgr::pickTest()
         QThread::msleep(100);
         if (qApp) qApp->processEvents();
     }
+}
+
+void EXMgr::initRPCMethods()
+{
+    QString m, d;
+    m = "blockchain.headers.subscribe";
+    d = "{\"hex\" : \"somestring\", \"height\" : 1}";
+    rpcMethods.insert(m, QSharedPointer<RPC::Method>(new RPC::Method(
+        m,
+        RPC::schemaMethod + QString(" { \"method\" : \"%1!\", \"params\" : [%2] }").arg(m).arg(d), // in schema (asynch from server -> us)
+        RPC::schemaResult + QString(" { \"result\" : %1}").arg(d), // result schema (synch. server -> us)
+        RPC::schemaMethod + QString(" { \"method\" : \"%1!\", \"params\" : [\"=0\"] }").arg(m) // out schema  (req. us -> server)
+    )));
+    rpcMethods[m]->setSelf(rpcMethods[m]);
+
+    m = "server.version";
+    rpcMethods.insert(m, QSharedPointer<RPC::Method>(new RPC::Method(
+        m,
+        RPC::Schema(), // in schema (asynch from server -> us) -- DISABLED for server.version
+        RPC::schemaResult + QString(" { \"result\" : [\"=2\"] }"), // result schema (synch. server -> us)
+        RPC::schemaMethod + QString(" { \"method\" : \"%1!\", \"params\" : [\"=2\"] }").arg(m) // out schema  (req. us -> server)
+    )));
+    rpcMethods[m]->setSelf(rpcMethods[m]);
+}
+
+void EXMgr::testCheckMethod(const QString &json) const
+{
+    try {
+        const auto m = Util::Json::parseString(json, true).toMap();
+        for (auto it = rpcMethods.cbegin(); it != rpcMethods.cend(); ++it) {
+            QList<const RPC::Schema *> schemas({&(it.value()->inSchema), &(it.value()->resultSchema)});
+            for (auto s : schemas) {
+                if (!s->isValid())
+                    // disabled schema
+                    continue;
+                QString err;
+                if (auto res = s->match(m, &err); !res.isEmpty()) {
+                    Debug() << "---> testCheckMethod on " << it.key() << ": parsed -> " << Util::Json::toString(res, true);
+                } else {
+                    Debug() << "---> testCheckMethod on " << it.key() << ": failed -> " << err;
+                }
+            }
+        }
+    } catch (const Exception &e) {
+        Warning() << "testCheckMethod: " << e.what() << " (" << json << ")";
+    }
+}
+
+QVariantMap EXMgr::testComposeRequest(qint64 id, const QString &method, const QVariantList &params) const
+{
+    QVariantMap ret;
+    if (auto it = rpcMethods.find(method); it != rpcMethods.end()) {
+        ret = it.value()->outSchema.toStrippedMap();
+        ret["id"] = id;
+        ret["params"] = params;
+        if (QString err; ! (ret = it.value()->outSchema.match(ret, &err)).isEmpty()) {
+            Debug() << method << " ---> compose --> matched, json = " << Util::Json::toString(ret, true);
+            return ret;
+        } else {
+            Debug() << method << " ---> compose error: " << err;
+        }
+    }
+    return ret;
 }

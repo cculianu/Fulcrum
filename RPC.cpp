@@ -13,6 +13,7 @@ namespace RPC {
     ///     Value Modifiers:
     ///         "text!" : means the value must match the string "text" exactly
     ///                   keys if specific in a dict must match and all be present.
+    ///         ["=N"] (ex: ["=0"]) : means the value should be a list with exactly N strings
     ///         "*" : for a value means the value can be anything and any type (number, float, list, dict, null), but must be present.
     ///               anything else is taken as a type spec, so only the type of the thing must match.
     ///     A nested dict is analyzed for keys and keys must be present. An empty dict just means any dict. An
@@ -22,6 +23,9 @@ namespace RPC {
     Schema const schemaError = schemaBase + "{ \"error\" : { \"code\" : 1, \"message\" : \"astring\" }, \"*id\" : 1, \"method?\" : \"anystring\"  }";
     Schema const schemaResult = schemaBase + " { \"id\" : 1, \"*result\" : \"*\" }";
     Schema const schemaMethod = schemaBase + " { \"method\": \"astring\", \"params\" : [], \"*id?\" : 1 }";
+    Schema const schemaMethodNoParams = schemaBase + " { \"method\": \"astring\", \"params\" : [\"=0\"], \"*id?\" : 1 }";
+    Schema const schemaMethodOneParam = schemaBase + " { \"method\": \"astring\", \"params\" : [\"=1\"], \"*id?\" : 1 }";
+    Schema const schemaMethodTwoParams = schemaBase + " { \"method\": \"astring\", \"params\" : [\"=2\"], \"*id?\" : 1 }";
 
     QString Schema::toString() const {
         if (!isValid()) return QString();
@@ -33,24 +37,67 @@ namespace RPC {
         return vmap;
     }
 
-    static void stripKeyControlCodes(QString &key) {
-        if (key.startsWith("*")) key = key.mid(1);
-        if (key.endsWith("?")) key = key.left(key.length()-1);
-    }
+    namespace {
+        QString stripKeyControlCodes(const QString & key_in) {
+            QString key(key_in);
+            if (key.startsWith("*")) key = key.mid(1);
+            if (key.endsWith("?")) key.resize(key.length()-1);
+            return key;
+        }
+        QString stripValueControlCodes(const QString & s_in) {
+            QString s(s_in);
+            if (s.startsWith("=")) s = s.mid(1); // strip "=N" where N is some int
+            else if (s.endsWith("!")) s.resize(s.length()-1);
+            return s;
+        }
+        /// Note since the schema controls how far we recurse, this constant and check is likely unnecessary but we
+        /// add it here as a defensive programming technique. At most we expect to recurse 2-3 deep during normal use.
+        constexpr int MAX_RECURSION = 10;
+
+        QVariantMap stripMap(int recursion_depth, const QVariantMap &vmap);
+        QVariantList stripList(int recursion_depth, const QVariantList &vlist) {
+            if (recursion_depth > MAX_RECURSION)
+                throw RecursionLimitReached(QString("Recursion limit of %1 reached when parsing schema").arg(MAX_RECURSION));
+            QVariantList ret;
+            for (const auto & val : vlist ) {
+                auto vtype = QMetaType::Type(val.type());
+                if (vtype == QMetaType::QString) {
+                    ret.push_back(stripValueControlCodes(val.toString()));
+                } else if (vtype == QMetaType::QVariantList) {
+                    ret.push_back(stripList(recursion_depth+1, val.toList()));
+                } else if (vtype == QMetaType::QVariantMap) {
+                    ret.push_back(stripMap(recursion_depth+1, val.toMap()));
+                } else
+                    ret.push_back(ret);
+            }
+            return ret;
+        }
+        QVariantMap stripMap(int recursion_depth, const QVariantMap &vmap) {
+            if (recursion_depth > MAX_RECURSION)
+                throw RecursionLimitReached(QString("Recursion limit of %1 reached when parsing schema").arg(MAX_RECURSION));
+            QVariantMap ret;
+            for (auto it = vmap.begin(); it != vmap.end(); ++it) {
+                QString key ( stripKeyControlCodes(it.key()) );
+                if (auto vtype = QMetaType::Type(it.value().type()); vtype == QMetaType::QVariantMap) {
+                    // recursively strip
+                    ret[key] = stripMap(recursion_depth+1, it.value().toMap());
+                } else if (vtype == QMetaType::QVariantList) {
+                    // recursively strip
+                    ret[key] = stripList(recursion_depth+1, it.value().toList());
+                } else if (vtype == QMetaType::QString) {
+                    ret[key] = stripValueControlCodes(it.value().toString());
+                } else
+                    ret[key] = it.value();
+            }
+            return ret;
+        }
+    } // end anon namespace
 
     QVariantMap Schema::toStrippedMap() const {
         QVariantMap ret;
         if (!isValid())
             return ret;
-        for (auto it = vmap.begin(); it != vmap.end(); ++it) {
-            QString key = it.key();
-            stripKeyControlCodes(key);
-            if (QMetaType::Type(it.value().type()) == QMetaType::QVariantMap)
-                // recursively strip
-                ret[key] = Schema(Util::Json::toString(it.value(), true)).toStrippedMap();
-            else
-                ret[key] = it.value();
-        }
+        ret = stripMap(0, vmap);
         return ret;
     }
 
@@ -72,6 +119,7 @@ namespace RPC {
             key += "?"; vmap.remove(key);   // '*key?'
             key = key.mid(1); vmap.remove(key); // 'key?'
             // now add the original key with whatever * ? modifier it had (if any)
+            QVariant val ( it.value() );
             vmap[it.key()] = it.value();
         }
         valid = true;
@@ -95,10 +143,6 @@ namespace RPC {
                                      .arg(typeToName(testee)));
             return false;
         }
-
-        /// Note since the schema controls how far we recurse, this constant and check is likely unnecessary but we
-        /// add it here as a defensive programming technique. At most we expect to recurse 2-3 deep during normal use.
-        static constexpr int MAX_RECURSION = 10;
 
         QVariantMap schemaMatchMap(int recursion_depth, const QVariantMap & sch, const QVariantMap & m, const QString &name = ""); ///< forward declaration
         QVariantList schemaMatchList(int recursion_depth, const QVariantList & sch, const QVariantList &m, const QString &name = ""); ///< fwd decl
@@ -136,8 +180,23 @@ namespace RPC {
                 return m;
             QVariantList ret;
             auto & sval = sch.front(); // non-empty schema can only contain 1 item which is itself a schem spec (list, map, or simple item with a type)
+            int reqLen = -1;
+            const auto stype = QMetaType::Type(sval.type());
+            if (stype == QMetaType::QString) {
+                // check for special control code in lsst "=N", eg "=0" or "=3", etc to specify the required length of the list.
+                if (const auto sstr = sval.toString(); sstr.startsWith("=")) {
+                    bool ok;
+                    if (int tmp = sstr.mid(1).toInt(&ok); ok && tmp >= 0) {
+                        reqLen = tmp;
+                    }
+                }
+            }
+            if (reqLen > -1 && m.length() != reqLen) {
+                throw SchemaMismatch(QString("Schema specified a list of length %1, but got a list of length %2 for %3")
+                                     .arg(reqLen).arg(m.length()).arg(name));
+            }
             for (auto & mval : m) {
-                auto stype = QMetaType::Type(sval.type()), mtype = QMetaType::Type(mval.type());
+                const auto mtype = QMetaType::Type(mval.type());
                 ret.push_back( schemaInnerTest(recursion_depth, stype, mtype, sval, mval, name) );
             }
             // if we get here, every item in the list matches the template first item in the schema list.
@@ -173,7 +232,7 @@ namespace RPC {
                 } else {
                     acceptedKeySet.insert(skey);
                     accepted[skey] = it2.value(); // copy value into accepted map
-                    const QVariant & sval = it.value(), mval = it2.value();
+                    const QVariant & sval = it.value(), & mval = it2.value();
                     // next, extract the type of each QVariant. stype and mtype must match only if stype is not a "*" string.
                     if (auto stype = QMetaType::Type(sval.type()), mtype = QMetaType::Type(mval.type());
                             nullOk && mtype == QMetaType::Nullptr) {
@@ -223,7 +282,15 @@ namespace RPC {
 
     QVariantMap Schema::parseAndThrowIfNotMatch(const QString &json) const
     {
+        if (!isValid())
+            throw SchemaError("Invalid schema");
         QVariantMap data(Util::Json::parseString(json, true).toMap()); /// throws on json error
+        return schemaMatchMap(0, vmap, data); /// recursively examine schema. throws on error/mismatch, returns a modified map of accepted keys
+    }
+    QVariantMap Schema::parseAndThrowIfNotMatch(const QVariantMap &data) const
+    {
+        if (!isValid())
+            throw SchemaError("Invalid schema");
         return schemaMatchMap(0, vmap, data); /// recursively examine schema. throws on error/mismatch, returns a modified map of accepted keys
     }
     QVariantMap Schema::match(const QString &json, QString *errorString) const
@@ -231,6 +298,17 @@ namespace RPC {
         QVariantMap ret;
         try {
             ret = parseAndThrowIfNotMatch(json);
+            if (errorString) *errorString = QString();
+        } catch (const std::exception &e) { // we catch this very general exception in case we get some bad_alloc or something due to a json super recursion.
+            if (errorString) *errorString = e.what();
+        }
+        return ret;
+    }
+    QVariantMap Schema::match(const QVariantMap &data, QString *errorString) const
+    {
+        QVariantMap ret;
+        try {
+            ret = parseAndThrowIfNotMatch(data);
             if (errorString) *errorString = QString();
         } catch (const std::exception &e) { // we catch this very general exception in case we get some bad_alloc or something due to a json super recursion.
             if (errorString) *errorString = e.what();
@@ -251,7 +329,7 @@ namespace RPC {
                 Error() << "Exception: " << e.what();
             }
         };
-        Method m("1"), m2("2"), m3 = { "1", "{\"2\":3}" };
+        Method m("1"), m2("2"), m3 = { "1", "{\"2\":3}" }, m4;
         m = m2 = m3;
         QVariant v = QVariant("1.25");
         Debug() << "Can convert? " << v.canConvert<qint64>() << " converted: " << v.value<qint64>();
@@ -276,5 +354,86 @@ namespace RPC {
         tryCatchPrint(schemaResult + "{ \"result\": []  }", test);
         test = "{\"jsonrpc\": \"2.0\", \"result\": [\"ElectronX 1.10.1\", \"1.4\", 123], \"id\": 1, \"extraKey1\" : 1}";
         tryCatchPrint(schemaResult + "{ \"result\": []  }", test);
+
+        ErrorResponse err;
+        err.code = 123; err.message = "Things went wrong";
+        Debug() << "Error Json: " << err.toJson();
+        tryCatchPrint(schemaError, err.toJson());
+
+
     }
+
+    /// ----------------------
+    /// Method - Request - Response - Error
+    /// ----------------------
+    Request Method::createRequest(qint64 id, const QVariantList &params) const
+    {
+        Request ret;
+        ret.id = id;
+        ret.method = strongSelf();
+        ret.params = params;
+        return ret;
+    }
+    Result Method::createResult(qint64 id, const QVariant &arg) const
+    {
+        Result ret;
+        ret.id = id;
+        ret.method = strongSelf();
+        ret.result = arg;
+        return ret;
+    }
+
+    ReqResultBase::~ReqResultBase() {}
+
+    QString ReqResultBase::toJson() const {
+        auto m = toMap();
+        return Util::Json::toString(m, true);
+    }
+
+    QVariantMap ErrorResponse::toMap() const {
+        //if (!method)
+        //    throw Exception(QString("%1 : called with no methhod reference!").arg(__PRETTY_FUNCTION__));
+        QVariantMap m = schemaError.toStrippedMap();
+        m["error"] = QVariantMap({{"code" , code}, {"message" , message}});
+
+        m["id"] = hasId() ? id : QVariant();
+        if (!method)
+            m.remove("method");
+        else
+            m["method"] = method->method;
+        if (QString err; schemaError.match(m, &err).isEmpty()) {
+            Warning() << __PRETTY_FUNCTION__ << " error: " << err;
+        }
+        return m;
+    }
+
+    QVariantMap Request::toMap() const {
+        if (!method)
+            throw Exception(QString("%1 : called with no methhod reference!").arg(__PRETTY_FUNCTION__));
+        QVariantMap m = method->outSchema.toStrippedMap();
+        m["params"] = params;
+        m["method"] = method->method;
+        if (!hasId())
+            m.remove("id");
+        else
+            m["id"] = id;
+        if (QString err; method->outSchema.match(m, &err).isEmpty()) {
+            Warning() << __PRETTY_FUNCTION__ << " error: " << err;
+        }
+        return m;
+    }
+
+    QVariantMap Result::toMap() const {
+        if (!method)
+            throw Exception(QString("%1 : called with no methhod reference!").arg(__PRETTY_FUNCTION__));
+        QVariantMap m = method->resultSchema.toStrippedMap();
+        m["id"] = hasId() ? id : QVariant();
+        m["result"] = result;
+        if (QString err; method->resultSchema.match(m, &err).isEmpty()) {
+            Warning() << __PRETTY_FUNCTION__ << " error: " << err;
+        }
+        return m;
+    }
+
+
 }
