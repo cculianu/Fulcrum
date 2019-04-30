@@ -92,7 +92,7 @@ TcpServer::newClient(QTcpSocket *sock)
     auto on_destroyed = [id, this](QObject *o) {
         // this whole call is here so that delete client->sock ends up auto-removing the map entry
         // as a convenience.
-        Debug() << __PRETTY_FUNCTION__ << " called";
+        Debug() << "Client nested 'on_destroyed' called";
         auto client = clientsById.take(id);
         if (client) {
             if (client != o) {
@@ -162,8 +162,13 @@ void Client::on_readyRead()
 
 void Client::boilerplate_disconnect(bool graceful)
 {
-    AbstractConnection::boilerplate_disconnect(graceful);
-    if (socket && !graceful) socket->deleteLater(); // will implicitly delete this because we are a child of the socket
+    const bool wasConnected = socket ? socket->state() == QAbstractSocket::ConnectedState : false;
+    AbstractConnection::boilerplate_disconnect(graceful); // if 'graceful' *AND* was connected, a disconnected state will be entered later at which point we will delete socket.
+    if (socket && (!graceful || !wasConnected))
+        /// delete the socket if we weren't connected or if !graceful.
+        /// If graceful && connected, then a disconnect signal will be sent later and then we will
+        /// reenter here and delete the socket.
+        socket->deleteLater(); // side-effecto: will implicitly delete 'this' because we are a child of the socket!
 }
 
 void Client::do_ping()
