@@ -18,6 +18,9 @@ DEFINES += QT_DEPRECATED_WARNINGS
 win32-msvc {
     QMAKE_CXXFLAGS += /std:c++17
 }
+win32 {
+    CONFIG += warn_off
+}
 
 SOURCES += \
     AbstractConnection.cpp \
