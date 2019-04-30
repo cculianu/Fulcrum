@@ -150,7 +150,11 @@ void Client::on_readyRead()
         line = line.trimmed();
         Debug() << "Got line: " << line;
         lastGood = Util::getTime();
-        send("Thanks fam.\n");
+        if (line == "exit") {
+            send("sayonara\n");
+            boilerplate_disconnect(true);
+        } else
+            send("Thanks fam.\n");
     }
     if (socket->bytesAvailable() > MAX_BUFFER) {
         // bad server.. sending us garbage data not containing newlines. Kill connection.
@@ -169,6 +173,8 @@ void Client::boilerplate_disconnect(bool graceful)
         /// If graceful && connected, then a disconnect signal will be sent later and then we will
         /// reenter here and delete the socket.
         socket->deleteLater(); // side-effect: will implicitly delete 'this' because we are a child of the socket!
+    else if (socket && graceful)
+        Debug() << __FUNCTION__ << " (graceful); delayed socket delete (wait for disconnect) ...";
 }
 
 void Client::do_ping()

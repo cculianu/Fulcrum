@@ -34,10 +34,13 @@ void AbstractConnection::boilerplate_disconnect(bool graceful)
 {
     status = status == Bad ? Bad : NotConnected;  // try and keep Bad status around so EXMgr can decide when to reconnect based on it
     if (socket) {
-        if (!graceful)
+        if (!graceful) {
+            Debug() << __FUNCTION__ << " (abort)";
             socket->abort();  // this will set status too because state change, but we set it first above to be paranoid
-        else
+        } else {
             socket->disconnectFromHost();
+            Debug() << __FUNCTION__ << " (graceful)";
+        }
     }
 }
 
