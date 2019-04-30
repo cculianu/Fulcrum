@@ -12,6 +12,11 @@
 
 #include <type_traits>
 
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-parameter"
+#endif
+
 // GCC 4.8 is missing some C++11 type_traits,
 // https://www.gnu.org/software/gcc/gcc-5/changes.html
 #if defined(__GNUC__) && __GNUC__ < 5
@@ -93,6 +98,7 @@ typedef char *sockopt_arg_type;
 #endif
 
 static bool inline IsSelectableSocket(const SOCKET &s) {
+    (void)s;
 #ifdef WIN32
     return true;
 #else
@@ -100,4 +106,7 @@ static bool inline IsSelectableSocket(const SOCKET &s) {
 #endif
 }
 
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
 #endif // BITCOIN_COMPAT_H
