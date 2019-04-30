@@ -124,7 +124,6 @@ namespace RPC {
 
         bool isError() const { return bool(errorCode); }
         bool isList() const { return QMetaType::Type(data.type()) == QMetaType::QVariantList; }
-        QVariantList params() const { return isList() ? data.toList() : QVariantList(); }
     };
 
 

@@ -8,7 +8,7 @@
 #include <random>
 #include <algorithm>
 #include <chrono>
-#define Q2C(qstr) qstr.toUtf8().constData()
+#define Q2C(qstr) ((qstr).toUtf8().constData())
 
 class App;
 

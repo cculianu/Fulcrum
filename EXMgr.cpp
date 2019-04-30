@@ -84,6 +84,13 @@ void EXMgr::onLostConnection(EXClient *client)
 
 void EXMgr::onMessage(EXClient *client, const RPC::Message &m)
 {
+    if (m.isError()) {
+        // handle error replies -- for now just print yellow warning message to console log for debugging
+        // TODO: Figure out what to do about errors.
+        Warning("(%s) Got error reply: code: %d message: \"%s\"",
+                Q2C(client->host), m.errorCode, Q2C(m.errorMessage));
+        return;
+    }
     Debug() << "(" << client->host << ") Got message in mgr, method: " << m.method;
     if (m.method == "server.version") {
         QVariantList l = m.data.toList();
@@ -153,7 +160,7 @@ void EXMgr::checkClients() ///< called from the checkClientsTimer every 1 mins
     }
     if (int ct = laggers.count(); ct) {
         QString s = ct == 1 ? " is" : "s are";
-        Log("%d server%s lagging behind the latest block height of %d: %s", ct, s.toUtf8().constData(), height.height, laggers.join(", ").toUtf8().constData());
+        Log("%d server%s lagging behind the latest block height of %d: %s", ct, Q2C(s), height.height, Q2C(laggers.join(", ")));
     }
 }
 
