@@ -196,7 +196,8 @@ namespace RPC {
         /// message from the peer with its id= parameter not having an entry in this map.
         QMap<qint64, QString> idMethodMap;
     };
-}
+
+} // end namespace RPC
 
 /// So that Qt signal/slots work with this type.
 Q_DECLARE_METATYPE(RPC::Message);
