@@ -1,3 +1,4 @@
+
 QT -= gui
 QT += network
 
@@ -8,7 +9,16 @@ CONFIG -= app_bundle
 # any Qt feature that has been marked deprecated (the exact warnings
 # depend on your compiler). Please consult the documentation of the
 # deprecated API in order to know how to port your code away from it.
-DEFINES += QT_DEPRECATED_WARNINGS USE_QT_IN_BITCOIN
+DEFINES += QT_DEPRECATED_WARNINGS
+
+# I added some Qt-specific calls to stuff inside the bitcoin:: namespace.
+# This enables those functions.
+DEFINES += USE_QT_IN_BITCOIN
+
+### It is recommended you use Qt Creator to build, and that you set
+### your compiler to a clang variant for maximal benefit.
+### NOTE: If on a BIG ENDIAN architecture that isn't Linux, be sure to set this:
+# DEFINES += WORDS_BIGENDIAN
 
 # You can also make your code fail to compile if it uses deprecated APIs.
 # In order to do so, uncomment the following line.
@@ -20,6 +30,12 @@ win32-msvc {
 }
 win32 {
     CONFIG += warn_off
+}
+linux {
+    QMAKE_CXXFLAGS += -std=c++1z
+    DEFINES += HAVE_ENDIAN_H HAVE_DECL_HTOBE16 HAVE_DECL_HTOLE16 HAVE_DECL_BE16TOH HAVE_DECL_LE16TOH HAVE_DECL_HTOBE32 \
+               HAVE_DECL_HTOLE32 HAVE_DECL_BE32TOH HAVE_DECL_LE32TOH HAVE_DECL_HTOBE64 HAVE_DECL_HTOLE64 HAVE_DECL_BE64TOH \
+               HAVE_DECL_LE64TOH
 }
 
 SOURCES += \

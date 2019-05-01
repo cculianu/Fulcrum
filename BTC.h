@@ -8,6 +8,11 @@
 
 namespace BTC
 {
+
+    /// Checks that the bitcoin lib has the correct
+    /// endian settings for this platform. Will throw Exception on failure.
+    extern void CheckBitcoinEndiannessCompiledCorrectly();
+
     enum Net {
         Invalid = 0,
         MainNet = 0x80,

@@ -2,6 +2,8 @@
 #include "bitcoin/base58.h"
 #include "bitcoin/hash.h"
 #include "Util.h"
+#include "bitcoin/crypto/endian.h"
+#include "Common.h"
 #include <QString>
 #include <string.h>
 #include <iostream>
@@ -16,6 +18,22 @@
 
 namespace BTC
 {
+
+    void CheckBitcoinEndiannessCompiledCorrectly()
+    {
+        using namespace bitcoin;
+        constexpr quint32 magicWord = 0x01020304;
+
+        if (magicWord != le32toh(magicWord))
+        {
+            throw Exception(QString("Program compiled with incorred WORD_BIGENDIAN setting.\n\n")
+                            + "How to fix this:\n"
+                            + " 1. Adjust WORDS_BIGENDIAN in the qmake .pro file to match your architecture.\n"
+                            + " 2. Re-run qmake.\n"
+                            + " 3. Do a full clean recompile.\n\n");
+        }
+    }
+
     // Map of Net -> [Map of VerByte -> Kind]
     static QMap<Net, QMap<quint8, Address::Kind> > netVerByteKindMap = {
         { MainNet, { {0, Address::P2PKH },  {5, Address::P2SH} } },

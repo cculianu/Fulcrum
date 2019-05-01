@@ -3,6 +3,7 @@
 #include "Util.h"
 #include "EXMgr.h"
 #include "SrvMgr.h"
+#include "BTC.h"
 #include <signal.h>
 #include <QCommandLineParser>
 #include <QFile>
@@ -45,6 +46,8 @@ void App::startup()
     Log() << applicationName() << " " << applicationVersion() << " starting up ...";
 
     try {
+        BTC::CheckBitcoinEndiannessCompiledCorrectly();
+
         auto gotsig = [](int sig) {
             static int ct = 0;
             if (!ct++) {
