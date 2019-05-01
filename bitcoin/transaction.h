@@ -13,6 +13,10 @@
 #include "script.h"
 #include "serialize.h"
 
+#ifdef USE_QT_IN_BITCOIN
+#include <QString>
+#endif
+
 #ifdef __clang__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunused-function"
@@ -64,6 +68,18 @@ public:
     }
 
     std::string ToString() const;
+#ifdef USE_QT_IN_BITCOIN
+    /// construct it from a QString of "prevousHash:N" e.g.: "ab126fe4c....41ab6:3"
+    COutPoint(const QString &prevoutColonNString) { SetQString(prevoutColonNString); }
+    /// set this from a prevout:n string
+    COutPoint &SetQString(const QString &s);
+    /// construct from prevout:n string
+    static COutPoint FromQString(const QString &s) { return COutPoint(s); }
+    /// return prevoutHashHex:n string
+    QString ToQString() const;
+    /// support for *this = "prevouthash:n"
+    COutPoint &operator=(const QString &s) { SetQString(s); return *this; }
+#endif
 };
 
 /**

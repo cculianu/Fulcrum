@@ -9,6 +9,10 @@
 #include "tinyformat.h"
 #include "utilstrencodings.h"
 
+#ifdef USE_QT_IN_BITCOIN
+#include <QStringList>
+#endif
+
 #ifdef __clang__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunused-parameter"
@@ -20,6 +24,26 @@ namespace bitcoin {
 std::string COutPoint::ToString() const {
     return strprintf("COutPoint(%s, %u)", txid.ToString().substr(0, 10), n);
 }
+
+#ifdef USE_QT_IN_BITCOIN
+QString COutPoint::ToQString() const {
+    return QString("%1:%2").arg(txid.ToString().c_str()).arg(n);
+}
+COutPoint &COutPoint::SetQString(const QString &s)
+{
+    QStringList toks = s.split(":");
+    if (toks.length() == 2) {
+        bool ok;
+        auto tmp = toks[1].toUInt(&ok);
+        if (ok && toks[0].length() == (256/8)*2) {
+            n = tmp;
+            txid.SetHex(toks[0].toStdString());
+        }
+    }
+    return *this;
+}
+#endif
+
 
 std::string CTxIn::ToString() const {
     std::string str;
