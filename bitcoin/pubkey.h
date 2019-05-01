@@ -175,6 +175,14 @@ public:
         return CheckLowS(vchSig | boost::adaptors::sliced(0, vchSig.size()));
     }
     */
+    // added by Calin
+    static bool
+    CheckLowS(const std::vector<uint8_t> &vchSig);
+
+    /// this is slow because we lack array slicing (I didn't want boost) -Calin
+    template<typename Iter>
+    static bool
+    CheckLowS(const Iter begin, const Iter end) { std::vector<uint8_t> vec(begin, end); return CheckLowS(vec); }
 
     //! Recover a public key from a compact ECDSA signature.
     bool RecoverCompact(const uint256 &hash,

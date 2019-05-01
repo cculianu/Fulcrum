@@ -342,6 +342,18 @@ bool CPubKey::CheckLowS(
 }
 */
 
+/* static, added by Calin */
+bool CPubKey::CheckLowS(
+    const std::vector<uint8_t> &vchSig) {
+    secp256k1_ecdsa_signature sig;
+    if (!ecdsa_signature_parse_der_lax(secp256k1_context_verify, &sig,
+                                       &vchSig[0], vchSig.size())) {
+        return false;
+    }
+    return (!secp256k1_ecdsa_signature_normalize(secp256k1_context_verify,
+                                                 nullptr, &sig));
+}
+
 /* static */ int ECCVerifyHandle::refcount = 0;
 
 ECCVerifyHandle::ECCVerifyHandle() {
