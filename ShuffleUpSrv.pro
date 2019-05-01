@@ -45,6 +45,7 @@ SOURCES += \
     bitcoin/crypto/sha512.cpp \
     bitcoin/feerate.cpp \
     bitcoin/hash.cpp \
+    bitcoin/pubkey.cpp \
     bitcoin/script.cpp \
     bitcoin/test.cpp \
     bitcoin/transaction.cpp \
@@ -56,7 +57,8 @@ SOURCES += \
     Util.cpp \
     EXMgr.cpp \
     Common.cpp \
-    EXClient.cpp
+    EXClient.cpp \
+    bitcoin/secp256k1/secp256k1.c
 
 # Default rules for deployment.
 qnx: target.path = /tmp/$${TARGET}/bin
@@ -99,6 +101,7 @@ HEADERS += \
     bitcoin/feerate.h \
     bitcoin/hash.h \
     bitcoin/prevector.h \
+    bitcoin/pubkey.h \
     bitcoin/script.h \
     bitcoin/script_flags.h \
     bitcoin/serialize.h \
@@ -107,7 +110,47 @@ HEADERS += \
     bitcoin/txid.h \
     bitcoin/uint256.h \
     bitcoin/utilstrencodings.h \
-    bitcoin/version.h
+    bitcoin/version.h \
+    bitcoin/secp256k1/ecdsa.h \
+    bitcoin/secp256k1/ecdsa_impl.h \
+    bitcoin/secp256k1/eckey.h \
+    bitcoin/secp256k1/eckey_impl.h \
+    bitcoin/secp256k1/ecmult.h \
+    bitcoin/secp256k1/ecmult_const.h \
+    bitcoin/secp256k1/ecmult_const_impl.h \
+    bitcoin/secp256k1/ecmult_gen.h \
+    bitcoin/secp256k1/ecmult_gen_impl.h \
+    bitcoin/secp256k1/ecmult_impl.h \
+    bitcoin/secp256k1/field.h \
+    bitcoin/secp256k1/field_10x26.h \
+    bitcoin/secp256k1/field_10x26_impl.h \
+    bitcoin/secp256k1/field_5x52.h \
+    bitcoin/secp256k1/field_5x52_impl.h \
+    bitcoin/secp256k1/field_5x52_int128_impl.h \
+    bitcoin/secp256k1/field_impl.h \
+    bitcoin/secp256k1/group.h \
+    bitcoin/secp256k1/group_impl.h \
+    bitcoin/secp256k1/hash.h \
+    bitcoin/secp256k1/hash_impl.h \
+    bitcoin/secp256k1/libsecp256k1-config.h \
+    bitcoin/secp256k1/recovery_main_impl.h \
+    bitcoin/secp256k1/schnorr_main_impl.h \
+    bitcoin/secp256k1/schnorr.h \
+    bitcoin/secp256k1/schnorr_impl.h \
+    bitcoin/secp256k1/num.h \
+    bitcoin/secp256k1/num_impl.h \
+    bitcoin/secp256k1/scalar.h \
+    bitcoin/secp256k1/scalar_4x64.h \
+    bitcoin/secp256k1/scalar_4x64_impl.h \
+    bitcoin/secp256k1/scalar_8x32.h \
+    bitcoin/secp256k1/scalar_8x32_impl.h \
+    bitcoin/secp256k1/scalar_impl.h \
+    bitcoin/secp256k1/scalar_low.h \
+    bitcoin/secp256k1/scalar_low_impl.h \
+    bitcoin/secp256k1/secp256k1.h \
+    bitcoin/secp256k1/secp256k1_recovery.h \
+    bitcoin/secp256k1/secp256k1_schnorr.h \
+    bitcoin/secp256k1/util.h
 
 RESOURCES += \
     resources.qrc
