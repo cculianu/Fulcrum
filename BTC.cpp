@@ -16,12 +16,10 @@
 #pragma clang diagnostic ignored "-Wundefined-func-template"
 #endif
 
-namespace BTC
+namespace bitcoin
 {
-
-    void CheckBitcoinEndiannessCompiledCorrectly()
+    inline void Endian_Check_In_namespace_bitcoin()
     {
-        using namespace bitcoin;
         constexpr quint32 magicWord = 0x01020304;
 
         if (magicWord != le32toh(magicWord))
@@ -33,6 +31,12 @@ namespace BTC
                             + " 3. Do a full clean recompile.\n\n");
         }
     }
+}
+
+namespace BTC
+{
+
+    void CheckBitcoinEndiannessCompiledCorrectly() { bitcoin::Endian_Check_In_namespace_bitcoin(); }
 
     // Map of Net -> [Map of VerByte -> Kind]
     static QMap<Net, QMap<quint8, Address::Kind> > netVerByteKindMap = {
