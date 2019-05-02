@@ -169,18 +169,24 @@ namespace RPC {
         };
 
     signals:
-        /// call (emit) this to send a requesst to the server
+        /// call (emit) this to send a request to the server
         void sendRequest(qint64 reqid, const QString &method, const QVariantList & params = QVariantList());
+        /// call (emit) this to send a request to the server
+        void sendError(bool disconnectAfterSend, int errorCode, const QString &message, qint64 reqid = NO_ID);
         /// this is emitted when a new message arrives that was successfully parsed and matches
         /// a known method described in the 'methods' MethodMap. Unknown messages will result
         /// in auto-disconnect.  (TODO: Implement error JSON replies to peer as well as tolerance for some malformed
         /// data up until a threshold is reached?)
         void gotMessage(RPC::Connection *, const RPC::Message & m);
+        /// Same as a above, but for 'error' replies
+        void gotErrorMessage(RPC::Connection *, const RPC::Message &em);
 
     protected slots:
         /// Actual implentation that prepares the request. Is connected to sendRequest() above. Runs in this object's
         /// thread context. Eventually calls send() -> do_write() (from superclass).
         virtual void _sendRequest(qint64 reqid, const QString &method, const QVariantList & params = QVariantList());
+        /// Actual implementation of sendError, runs in our thread context.
+        virtual void _sendError(bool disconnect, int errorCode, const QString &message, qint64 reqid = NO_ID);
 
     protected:
         /// parses RPC, implements pure virtual from super to handle line-based JSON.

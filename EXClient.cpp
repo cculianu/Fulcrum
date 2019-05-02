@@ -106,6 +106,14 @@ void EXClient::on_connected()
                  else Error() << "this != c for gotMessage fwd! FIXME!";
             })
     ); // connection will be auto-disconnected on socket disconnect in superclass  on_disconnected impl.
+    connectedConns.push_back(
+        connect(this, &RPC::Connection::gotErrorMessage, this,
+                [this](RPC::Connection *c, const RPC::Message &m)
+            {
+                 if (this == c)  emit EXClient::gotErrorMessage(this, m); /// re-emits as EXClient * signal (different C++ signature)
+                 else Error() << "this != c for gotErrorMessage fwd! FIXME!";
+            })
+    ); // connection will be auto-disconnected on socket disconnect in superclass  on_disconnected impl.
     emit newConnection(this);
 }
 

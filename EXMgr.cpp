@@ -54,6 +54,7 @@ void EXMgr::loadServers()
             connect(client, &EXClient::newConnection, this, &EXMgr::onNewConnection);
             connect(client, &EXClient::lostConnection, this, &EXMgr::onLostConnection);
             connect(client, &EXClient::gotMessage, this, &EXMgr::onMessage);
+            connect(client, &EXClient::gotErrorMessage, this, &EXMgr::onErrorMessage);
             client->start();
         } else {
             Warning() << "Bad server entry: " << host;
@@ -82,15 +83,20 @@ void EXMgr::onLostConnection(EXClient *client)
     client->info.clear();
 }
 
-void EXMgr::onMessage(EXClient *client, const RPC::Message &m)
+void EXMgr::onErrorMessage(EXClient *client, const RPC::Message &m)
 {
-    if (m.isError()) {
-        // handle error replies -- for now just print yellow warning message to console log for debugging
-        // TODO: Figure out what to do about errors.
-        Warning("(%s) Got error reply: code: %d message: \"%s\"",
-                Q2C(client->host), m.errorCode, Q2C(m.errorMessage));
+    if (!m.isError()) {
+        Error() << "Non-error message sent to 'onErrorMessage', FIXME! Json: " << m.toJsonString();
         return;
     }
+    // handle error replies -- for now just print yellow warning message to console log for debugging
+    // TODO: Figure out what to do about errors.
+    Warning("(%s) Got error reply: code: %d message: \"%s\"",
+            Q2C(client->host), m.errorCode, Q2C(m.errorMessage));
+}
+
+void EXMgr::onMessage(EXClient *client, const RPC::Message &m)
+{
     Debug() << "(" << client->host << ") Got message in mgr, method: " << m.method;
     if (m.method == "server.version") {
         QVariantList l = m.data.toList();
@@ -126,7 +132,7 @@ void EXMgr::onMessage(EXClient *client, const RPC::Message &m)
         // ignore; timestamps updated in EXClient and RPC::Connection
         //Debug() << "server.ping reply... yay";
     } else {
-        Error() << "Unknown method \"" << m.method << "\" from " << client->host;
+        Error() << "Unknown method \"" << m.method << "\" from " << client->host << "; Json: " << m.toJsonString();
     }
 }
 

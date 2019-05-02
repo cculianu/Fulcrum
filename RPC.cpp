@@ -444,6 +444,8 @@ namespace RPC {
         AbstractConnection::on_connected();
         // connection will be auto-disconnected on socket disconnect
         connectedConns.push_back(connect(this, &Connection::sendRequest, this, &Connection::_sendRequest));
+        // connection will be auto-disconnected on socket disconnect
+        connectedConns.push_back(connect(this, &Connection::sendError, this, &Connection::_sendError));
     }
 
     void Connection::on_disconnected()
@@ -478,6 +480,21 @@ namespace RPC {
         // below send() ends up calling do_write immediately (which is connected to send)
         emit send( data + "\n" /* "\n" <-- is crucial! (Protocol is linefeed-based) */);
     }
+    void Connection::_sendError(bool disc, int code, const QString &msg, qint64 reqId)
+    {
+        if (status != Connected || !socket) {
+            Error() << __FUNCTION__ << "; Not connected!";
+            return;
+        }
+        QString json = Message::makeError(code, msg, reqId).toJsonString();
+        auto data = json.toUtf8();
+        Debug() << "Sending json: " << data;
+        // below send() ends up calling do_write immediately (which is connected to send)
+        emit send( data + "\n" /* "\n" <-- is crucial! (Protocol is linefeed-based) */);
+        if (disc) {
+            do_disconnect(true); // graceful disconnect
+        }
+    }
 
     void Connection::on_readyRead()
     {
@@ -494,6 +511,7 @@ namespace RPC {
                 if (!jsonData.value("error").isNull()) {
                     // error message
                     message = Message::fromJsonData(jsonData, schemaError); // may throw
+                    emit gotErrorMessage(this, message);
                 } else {
                     // either a 'id','result' or a 'method','params' message
                     bool isResult = true;
@@ -518,10 +536,10 @@ namespace RPC {
                     // re-verify incoming message against more method-specific schema again
                     message = Message::fromJsonData(jsonData, schema);
                     message.method = mptr->method; // write to the method var again in case it was a result with no method name in the json
+                    emit gotMessage(this, message);
                 }
                 lastGood = Util::getTime(); // update "lastGood" as this is used to determine if stale or not.
                 //Debug() << "Re-parsed message: " << message.toJsonString();
-                emit gotMessage(this, message);
             }
             if (socket->bytesAvailable() > MAX_BUFFER) {
                 // bad server.. sending us garbage data not containing newlines. Kill connection.

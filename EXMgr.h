@@ -40,6 +40,7 @@ protected slots:
     void onNewConnection(EXClient *);
     void onLostConnection(EXClient *);
     void onMessage(EXClient *, const RPC::Message &);
+    void onErrorMessage(EXClient *, const RPC::Message &);
 
 private slots:
     void checkClients();
