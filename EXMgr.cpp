@@ -186,8 +186,9 @@ EXClient * EXMgr::pick()
     }
     std::vector<decltype(unpicked)::key_type> shuffled(unpicked.begin(), unpicked.end());
     Util::shuffle(shuffled.begin(), shuffled.end());
-    for (auto id : shuffled) {
-        EXClient *client = clientsById[id];
+    for (auto clientId : shuffled) {
+        EXClient *client = clientsById[clientId];
+        Q_ASSERT(client && client->id == clientId);
         if (client->status == EXClient::Connected) {
             recentPicks.insert(client->id);
             return client;

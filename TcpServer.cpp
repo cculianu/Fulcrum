@@ -86,28 +86,28 @@ void TcpServer::on_newConnection()
 Client *
 TcpServer::newClient(QTcpSocket *sock)
 {
-    const auto id = newId();
-    auto ret = clientsById[id] = new Client(id, this, sock);
+    const auto clientId = newId();
+    auto ret = clientsById[clientId] = new Client(clientId, this, sock);
     // if deleted, we need to purge it from map
-    auto on_destroyed = [id, this](QObject *o) {
+    auto on_destroyed = [clientId, this](QObject *o) {
         // this whole call is here so that delete client->sock ends up auto-removing the map entry
         // as a convenience.
         Debug() << "Client nested 'on_destroyed' called";
-        auto client = clientsById.take(id);
+        auto client = clientsById.take(clientId);
         if (client) {
             if (client != o) {
                 Error() << " client != passed-in pointer to on_destroy in " << __FILE__ << " line " << __LINE__  << ". FIXME!";
             }
-            Debug("client id %ld purged from map", long(id));
+            Debug("client id %ld purged from map", long(clientId));
         }
     };
     connect(ret, &QObject::destroyed, this, on_destroyed);
-    connect(ret, &AbstractConnection::lostConnection, this, [this,id](AbstractConnection *cl){
+    connect(ret, &AbstractConnection::lostConnection, this, [this,clientId](AbstractConnection *cl){
         if (auto client = dynamic_cast<Client *>(cl) ; client) {
             Debug() <<  client->prettyName() << " lost connection";
             killClient(client);
         } else {
-            Error() << "Internal error: lostConnection callback received null client! (expected client id: " << id << ")";
+            Error() << "Internal error: lostConnection callback received null client! (expected client id: " << clientId << ")";
         }
     });
     return ret;
@@ -121,9 +121,9 @@ void TcpServer::killClient(Client *client)
     clientsById.remove(client->id); // ensure gone from map asap so future lookups fail
     client->do_disconnect();
 }
-void TcpServer::killClient(qint64 id)
+void TcpServer::killClient(qint64 clientId)
 {
-    killClient(clientsById.take(id));
+    killClient(clientsById.take(clientId));
 }
 
 

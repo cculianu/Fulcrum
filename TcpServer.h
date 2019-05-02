@@ -50,8 +50,8 @@ private:
     quint16 port;
 
     Client * newClient(QTcpSocket *);
-    inline Client * getClient(qint64 id) {
-        if (auto it = clientsById.find(id); it != clientsById.end())
+    inline Client * getClient(qint64 clientId) {
+        if (auto it = clientsById.find(clientId); it != clientsById.end())
             return it.value();
         return nullptr;
     }
