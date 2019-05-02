@@ -108,6 +108,8 @@ namespace RPC {
         static Message makeError(int code, const QString & message, qint64 id = NO_ID);
         /// uses provided schema -- will not throw exception
         static Message makeMethodRequest(qint64 id, const QString &methodName, const QVariantList & params, const Schema & schema);
+        /// uses provided schema -- will not throw exception
+        static Message makeResult(const QVariant & result, const Schema &schema, qint64 reqId=NO_ID);
 
         QVariantMap jsonData;
         Schema schema;
@@ -165,21 +167,31 @@ namespace RPC {
         const MethodMap methods;
 
         struct BadPeer : public Exception {
-            using Exception::Exception; /// bring in c'tor
+            using Exception::Exception;  // bring in c'tor
+        };
+
+        /// If this is thrown we unconditionally disconnect.
+        struct BadPeerAbort : public BadPeer {
+            using BadPeer::BadPeer;
         };
 
     signals:
-        /// call (emit) this to send a request to the server
+        /// call (emit) this to send a request to the peer
         void sendRequest(qint64 reqid, const QString &method, const QVariantList & params = QVariantList());
-        /// call (emit) this to send a request to the server
+        /// call (emit) this to send a request to the peer
         void sendError(bool disconnectAfterSend, int errorCode, const QString &message, qint64 reqid = NO_ID);
+        /// call (emit) this to send a result reply to the peer (result= message)
+        void sendResult(qint64 reqid, const QString &method, const QVariant & result = QVariant());
+
         /// this is emitted when a new message arrives that was successfully parsed and matches
         /// a known method described in the 'methods' MethodMap. Unknown messages will result
-        /// in auto-disconnect.  (TODO: Implement error JSON replies to peer as well as tolerance for some malformed
-        /// data up until a threshold is reached?)
-        void gotMessage(RPC::Connection *, const RPC::Message & m);
+        /// in auto-disconnect.
+        void gotMessage(qint64 thisId, const RPC::Message & m);
         /// Same as a above, but for 'error' replies
-        void gotErrorMessage(RPC::Connection *, const RPC::Message &em);
+        void gotErrorMessage(qint64 thisId, const RPC::Message &em);
+        /// This is emitted when the peer sent malformed data to us and we didn't disconnect
+        /// because errorPolicy is not ErrorPolicyDisconnect
+        void peerError(qint64 thisId, const QString &what);
 
     protected slots:
         /// Actual implentation that prepares the request. Is connected to sendRequest() above. Runs in this object's
@@ -187,6 +199,8 @@ namespace RPC {
         virtual void _sendRequest(qint64 reqid, const QString &method, const QVariantList & params = QVariantList());
         /// Actual implementation of sendError, runs in our thread context.
         virtual void _sendError(bool disconnect, int errorCode, const QString &message, qint64 reqid = NO_ID);
+        /// Actual implementation of sendResult, runs in our thread context.
+        virtual void _sendResult(qint64 reqid, const QString &method, const QVariant & result = QVariant());
 
     protected:
         /// parses RPC, implements pure virtual from super to handle line-based JSON.
@@ -200,6 +214,18 @@ namespace RPC {
         /// object (which has a .method defined even on 'result=' messages).  It is an error to receive a result=
         /// message from the peer with its id= parameter not having an entry in this map.
         QMap<qint64, QString> idMethodMap;
+
+        enum ErrorPolicy {
+            /// Send an error RPC message on protocol errors.
+            /// If this is set and ErrorPolicyDisconnect is set, the disconnect will be graceful.
+            ErrorPolicySendErrorMessage = 1,
+            /// Disconnect on RPC protocol errors. If this is set along with ErrorPolicySendErrorMessage,
+            /// the disconnect will be graceful.
+            ErrorPolicyDisconnect = 2,
+        };
+        /// derived classes can set this internally (bitwise or of ErrorPolicy*)
+        /// to affect on_readyRead()'s behavior on peer protocol error.
+        int errorPolicy = ErrorPolicyDisconnect;
     };
 
 } // end namespace RPC

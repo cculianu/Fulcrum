@@ -397,6 +397,27 @@ namespace RPC {
         ret.id = id;
         if (id == NO_ID) map["id"] = QVariant(); // null
         else map["id"] = id;
+        map.remove("method");
+        auto errMap = map["error"].toMap();
+        errMap["code"] = code;
+        errMap["message"] = message;
+        map["error"] = errMap;
+        ret.jsonData = map;
+        ret.jsonRpcVersion = map.value("jsonrpc").toString();
+        return ret;
+    }
+
+    /// uses provided schema -- will not throw exception
+    /*static*/
+    Message Message::makeResult(const QVariant & result, const Schema &schema, qint64 reqId)
+    {
+        Message ret;
+        ret.schema = schema;
+        auto map = ret.schema.toStrippedMap();
+        ret.data = result;
+        map["result"] = result;
+        if (reqId == NO_ID) map["id"] = QVariant(); // null
+        else map["id"] = reqId;
         ret.jsonData = map;
         ret.jsonRpcVersion = map.value("jsonrpc").toString();
         return ret;
@@ -446,6 +467,8 @@ namespace RPC {
         connectedConns.push_back(connect(this, &Connection::sendRequest, this, &Connection::_sendRequest));
         // connection will be auto-disconnected on socket disconnect
         connectedConns.push_back(connect(this, &Connection::sendError, this, &Connection::_sendError));
+        // connection will be auto-disconnected on socket disconnect
+        connectedConns.push_back(connect(this, &Connection::sendResult, this, &Connection::_sendResult));
     }
 
     void Connection::on_disconnected()
@@ -495,12 +518,35 @@ namespace RPC {
             do_disconnect(true); // graceful disconnect
         }
     }
+    void Connection::_sendResult(qint64 reqid, const QString &method, const QVariant & result)
+    {
+        if (status != Connected || !socket) {
+            Error() << __FUNCTION__ << " method: " << method << "; Not connected!";
+            return;
+        }
+        auto mptr = methods.value(method);
+        if (!mptr) {
+            Error() << __FUNCTION__ << " method: " << method << "; Unknown method! FIXME!";
+            return;
+        }
+        QString json = Message::makeResult(result, mptr->resultSchema, reqid).toJsonString();
+        if (json.isEmpty()) {
+            Error() << __FUNCTION__ << " method: " << method << "; Unable to generate result JSON! FIXME!";
+            return;
+        }
+        auto data = json.toUtf8();
+        Debug() << "Sending result json: " << data;
+        // below send() ends up calling do_write immediately (which is connected to send)
+        emit send( data + "\n" /* "\n" <-- is crucial! (Protocol is linefeed-based) */);
+    }
 
     void Connection::on_readyRead()
     {
         Debug() << __FUNCTION__;
+        qint64 lastMsgId = NO_ID;
         try {
             while (socket->canReadLine()) {
+                lastMsgId = NO_ID;
                 auto data = socket->readLine();
                 nReceived += data.length();
                 auto line = data.trimmed();
@@ -511,13 +557,14 @@ namespace RPC {
                 if (!jsonData.value("error").isNull()) {
                     // error message
                     message = Message::fromJsonData(jsonData, schemaError); // may throw
-                    emit gotErrorMessage(this, message);
+                    emit gotErrorMessage(id, message);
                 } else {
                     // either a 'id','result' or a 'method','params' message
                     bool isResult = true;
                     if (!jsonData.value("method").isNull()) {
                         // 'method','params' message
                         message = Message::fromJsonData(jsonData, schemaMethod); // may throw
+                        lastMsgId = message.id;
                         isResult = false;
                     } else {
                         // 'id','result' message -- find originating method in map -- if not found will throw.
@@ -536,19 +583,32 @@ namespace RPC {
                     // re-verify incoming message against more method-specific schema again
                     message = Message::fromJsonData(jsonData, schema);
                     message.method = mptr->method; // write to the method var again in case it was a result with no method name in the json
-                    emit gotMessage(this, message);
+                    emit gotMessage(id, message);
                 }
                 lastGood = Util::getTime(); // update "lastGood" as this is used to determine if stale or not.
                 //Debug() << "Re-parsed message: " << message.toJsonString();
             }
             if (socket->bytesAvailable() > MAX_BUFFER) {
                 // bad server.. sending us garbage data not containing newlines. Kill connection.
-                throw BadPeer(QString("Peer has sent us more than %1 bytes without a newline! Bad peer?").arg(MAX_BUFFER));
+                throw BadPeerAbort(QString("Peer has sent us more than %1 bytes without a newline! Bad peer?").arg(MAX_BUFFER));
             }
-        } catch (const std::exception &e) {
-            Error() << "Error reading/parsing data coming in: " << e.what();
+        } catch (const BadPeerAbort & e) {
+            Error() << prettyName() << " fatal error: " << e.what();
             do_disconnect();
             status = Bad;
+        } catch (const std::exception &e) {
+            bool doDisconnect = errorPolicy & ErrorPolicyDisconnect;
+            if (errorPolicy & ErrorPolicySendErrorMessage) {
+                emit sendError(doDisconnect, -123, e.what(), lastMsgId);
+                if (!doDisconnect)
+                    emit peerError(id, e.what());
+                doDisconnect = false; // if was true, already enqueued graceful disconnect after error reply, if was false, no-op here
+            }
+            if (doDisconnect) {
+                Error() << "Error reading/parsing data coming in: " << e.what();
+                do_disconnect();
+                status = Bad;
+            }
         }
     }
 } // end namespace RPC

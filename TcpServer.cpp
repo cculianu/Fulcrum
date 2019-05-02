@@ -9,6 +9,7 @@ TcpServer::TcpServer(const QHostAddress &a, quint16 p)
 {
     _thread.setObjectName(prettyName());
     setObjectName(prettyName());
+    setupMethods();
 }
 
 TcpServer::~TcpServer()
@@ -87,7 +88,7 @@ Client *
 TcpServer::newClient(QTcpSocket *sock)
 {
     const auto clientId = newId();
-    auto ret = clientsById[clientId] = new Client(clientId, this, sock);
+    auto ret = clientsById[clientId] = new Client(_rpcMethods, clientId, this, sock);
     // if deleted, we need to purge it from map
     auto on_destroyed = [clientId, this](QObject *o) {
         // this whole call is here so that delete client->sock ends up auto-removing the map entry
@@ -110,6 +111,9 @@ TcpServer::newClient(QTcpSocket *sock)
             Error() << "Internal error: lostConnection callback received null client! (expected client id: " << clientId << ")";
         }
     });
+    connect(ret, &RPC::Connection::gotMessage, this, &TcpServer::onMessage);
+    connect(ret, &RPC::Connection::gotErrorMessage, this, &TcpServer::onErrorMessage);
+    connect(ret, &RPC::Connection::peerError, this, &TcpServer::onPeerError);
     return ret;
 }
 
@@ -127,41 +131,86 @@ void TcpServer::killClient(qint64 clientId)
 }
 
 
-Client::Client(qint64 id, TcpServer *srv, QTcpSocket *sock)
-    : AbstractConnection(id, sock, /*maxBuffer=1MB*/1000000), srv(srv)
+void TcpServer::setupMethods()
 {
-    Debug() << __PRETTY_FUNCTION__;
+    QString m;
+    m = "server.version";
+    _rpcMethods.insert(m, QSharedPointer<RPC::Method>(new RPC::Method(
+        m,
+        RPC::schemaMethod + QString(" { \"method\" : \"%1!\", \"params\" : [\"=2\"] }").arg(m), // in schema  (asynch req. client -> us) -- enforce must have 2 string args
+        RPC::schemaResult + QString(" { \"result\" : [\"=2\"] }"), // result schema (synch. us -> client) -- we send them results.. enforce must have 2 string args
+        RPC::Schema() // out schema  -- we never invoke this on the client so disable.
+    )));
+
+    m = "server.ping";
+    _rpcMethods.insert(m, QSharedPointer<RPC::Method>(new RPC::Method(
+        m,
+        RPC::schemaMethodNoParams, // in schema, ping from client to us
+        RPC::schemaResult + QString(" { \"result\" : null }"), // result schema -- 'result' arg should be there and be null.
+        RPC::schemaMethodNoParams // out schema, ping to client takes no args
+    )));
+}
+
+void TcpServer::onMessage(qint64 clientId, const RPC::Message &m)
+{
+    Debug() << "onMessage: " << clientId << " json: " << m.toJsonString();
+    if (Client *c = getClient(clientId); c) {
+        if (m.method == "server.version") {
+            QVariantList l = m.data.toList();
+            if (l.size() == 2) {
+                c->info.userAgent = l[0].toString();
+                c->info.protocolVersion = l[1].toString();
+                Debug() << "Client (id: " << c->id << ") sent version: \"" << c->info.userAgent << "\" / \"" << c->info.protocolVersion << "\"";
+            } else {
+                Error() << "Bad server version message! Schema should have handled this. FIXME! Json: " << m.toJsonString();
+            }
+            emit c->sendResult(m.id, m.method, QStringList({QString("%1/%2").arg(APPNAME).arg(VERSION), QString("1.4")}));
+        } else if (m.method == "server.ping") {
+            if (m.jsonData.count("result")) {
+                Debug() << "Got ping reply from client (id: " << c->id << ")";
+            } else if (m.jsonData.count("params")) {
+                Debug() << "Got ping from client (id: " << c->id << "), responding...";
+                emit c->sendResult(m.id, m.method);
+            } else {
+                Error() << "Bad client ping message! Schema should have handled this. FIXME! Json: " << m.toJsonString();
+            }
+        }
+    } else {
+        Debug() << "Unknown client: " << clientId;
+    }
+}
+void TcpServer::onErrorMessage(qint64 clientId, const RPC::Message &m)
+{
+    Debug() << "onErrorMessage: " << clientId << " json: " << m.toJsonString();
+}
+void TcpServer::onPeerError(qint64 clientId, const QString &what)
+{
+    Debug() << "onPeerError, client " << clientId << " error: " << what;
+    if (Client *c = getClient(clientId); c) {
+        if (++c->info.errCt >= 5) {
+            Warning() << "Excessive errors (5) for: " << c->prettyName() << ", disconnecting";
+            killClient(c);
+            return;
+        }
+    }
+}
+
+Client::Client(const RPC::MethodMap & mm, qint64 id, TcpServer *srv, QTcpSocket *sock)
+    : RPC::Connection(mm, id, sock, /*maxBuffer=1MB*/1000000), srv(srv)
+{
     socket = sock;
+    Q_ASSERT(socket->state() == QAbstractSocket::ConnectedState);
+    status = Connected ; // we are always connected at construction time.
+    errorPolicy = ErrorPolicySendErrorMessage;
+    setObjectName("Client");
     on_connected();
+    Debug() << prettyName() << " new client";
 }
 
 Client::~Client()
 {
     Debug() << __PRETTY_FUNCTION__;
     socket = nullptr; // NB: we are a child of socket. this line here is added in case some day I make AbstractClient delete socket on destruct.
-}
-
-void Client::on_readyRead()
-{
-    Debug() << prettyName() << " " << __FUNCTION__;
-    while (socket->canReadLine()) {
-        auto line = socket->readLine();
-        nReceived = line.size();
-        line = line.trimmed();
-        Debug() << "Got line: " << line;
-        lastGood = Util::getTime();
-        if (line == "exit") {
-            send("sayonara\n");
-            do_disconnect(true);
-        } else
-            send("Thanks fam.\n");
-    }
-    if (socket->bytesAvailable() > MAX_BUFFER) {
-        // bad server.. sending us garbage data not containing newlines. Kill connection.
-        Error() << QString("client has sent us more than %1 bytes without a newline! Bad client? (id: %2)").arg(MAX_BUFFER).arg(id);
-        do_disconnect();
-        status = Bad;
-    }
 }
 
 void Client::do_disconnect(bool graceful)
@@ -179,5 +228,10 @@ void Client::do_disconnect(bool graceful)
 
 void Client::do_ping()
 {
-    send("Sup gee?\n");
+    if (Util::getTime() - lastGood >= pingtime_ms * 2) {
+        Debug() << prettyName() << ": idle timeout after " << ((pingtime_ms*2.0)/1e3) << " sec., will close connection";
+        emit sendError(true, -300, "Idle time exceeded");
+        return;
+    }
+    emit sendRequest(srv->newId(), "server.ping");
 }

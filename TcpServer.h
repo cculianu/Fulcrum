@@ -4,7 +4,7 @@
 #include "Common.h"
 #include "Util.h"
 #include "Mixins.h"
-#include "AbstractConnection.h"
+#include "RPC.h"
 #include <QTcpServer>
 #include <QThread>
 #include <QMap>
@@ -33,9 +33,14 @@ public:
     void tryStart(); ///< may raise Exception if cannot bind, etc. Blocks waiting for thread to listen and return ok/error status.
     using ThreadObjectMixin::stop; /// promote this back up to public
 
+    const RPC::MethodMap & rpcMethods() const { return _rpcMethods; }
+
 signals:
 
 public slots:
+    void onMessage(qint64 clientId, const RPC::Message &m);
+    void onErrorMessage(qint64 clientId, const RPC::Message &m);
+    void onPeerError(qint64 clientId, const QString &what);
 
 private:
     QObject* qobj() override { return this; }
@@ -58,23 +63,32 @@ private:
     void killClient(Client *);
     void killClient(qint64 id);
     QMap<qint64, Client *> clientsById;
+
+    RPC::MethodMap _rpcMethods;
+    void setupMethods();
 };
 
 
 /// These run and live in TcpServer's thread
 /// Note that their parent QObject is the sock (for now)!
-/// (grandparent is TcpServer) .. do they will be destroyed
+/// (grandparent is TcpServer) .. so they will be destroyed
 /// when the server goes away or the socket is deleted.
-class Client : public AbstractConnection
+class Client : public RPC::Connection
 {
     Q_OBJECT
 public:
     /// NB: sock should be in an already connected state.
-    explicit Client(qint64 id, TcpServer *srv, QTcpSocket *sock);
+    explicit Client(const RPC::MethodMap & methods, qint64 id, TcpServer *srv, QTcpSocket *sock);
     ~Client() override;
 
+    struct Info {
+        int errCt = 0;
+        QString userAgent, protocolVersion;
+    };
+
+    Info info;
+
 protected:
-    void on_readyRead() override;
 
     void do_ping() override;
     void do_disconnect(bool graceful = false) override;

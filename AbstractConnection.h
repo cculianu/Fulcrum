@@ -54,7 +54,8 @@ protected:
 
     static constexpr qint64 reconnectTime = 2*60*1000; /// retry every 2 mins
 
-    static constexpr int pingtime_ms = 60*1000;  /// send server.ping if idle for >1 min
+    /// send server.ping if idle for >1 min
+    static constexpr int pingtime_ms = 60*1000;
     static constexpr qint64 stale_threshold = reconnectTime;
     QTcpSocket *socket = nullptr; ///< this should only ever be touched in our thread
     QByteArray writeBackLog = ""; ///< if this grows beyond a certain size, we should kill the connection
