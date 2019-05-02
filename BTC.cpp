@@ -20,11 +20,13 @@ namespace bitcoin
 {
     inline void Endian_Check_In_namespace_bitcoin()
     {
-        constexpr quint32 magicWord = 0x01020304;
+        constexpr uint32_t magicWord = 0x01020304;
+        const uint8_t wordBytes[4] = {0x01, 0x02, 0x03, 0x04}; // represent above as big endian
+        const uint32_t bytesAsNum = *reinterpret_cast<const uint32_t *>(wordBytes);
 
-        if (magicWord != le32toh(magicWord))
+        if (magicWord != be32toh(bytesAsNum))
         {
-            throw Exception(QString("Program compiled with incorred WORD_BIGENDIAN setting.\n\n")
+            throw Exception(QString("Program compiled with incorrect WORDS_BIGENDIAN setting.\n\n")
                             + "How to fix this:\n"
                             + " 1. Adjust WORDS_BIGENDIAN in the qmake .pro file to match your architecture.\n"
                             + " 2. Re-run qmake.\n"
