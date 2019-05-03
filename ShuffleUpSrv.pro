@@ -75,7 +75,8 @@ SOURCES += \
     EXMgr.cpp \
     Common.cpp \
     EXClient.cpp \
-    bitcoin/secp256k1/secp256k1.c
+    bitcoin/secp256k1/secp256k1.c \
+    register_MetaTypes.cpp
 
 # Default rules for deployment.
 qnx: target.path = /tmp/$${TARGET}/bin

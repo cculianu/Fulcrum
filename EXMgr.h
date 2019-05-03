@@ -4,6 +4,7 @@
 #include "Mgr.h"
 #include "EXClient.h"
 #include "RPC.h"
+#include "BTC.h"
 #include <QObject>
 #include <QList>
 #include <QSet>
@@ -33,6 +34,9 @@ public:
     const RPC::MethodMap & rpcMethods() const { return _rpcMethods; }
 
 signals:
+    /// Call (emit) these signals from outside this class to enqueue a request to this class
+    /// in its thread.
+    void listUnspent(const BTC::Address &);
 
 public slots:
 
@@ -44,6 +48,8 @@ protected slots:
 
 private slots:
     void checkClients();
+
+    void _listUnspent(const BTC::Address &);
 
 private:
     const QString serversFile;

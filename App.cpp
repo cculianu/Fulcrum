@@ -47,6 +47,7 @@ void App::startup()
 
     try {
         BTC::CheckBitcoinEndiannessCompiledCorrectly();
+        register_MetaTypes();
 
         auto gotsig = [](int sig) {
             static int ct = 0;

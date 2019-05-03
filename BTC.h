@@ -7,6 +7,7 @@
 #include <QByteArray>
 #include <QString>
 #include <vector>
+#include <QMetaType>
 
 namespace BTC
 {
@@ -132,6 +133,7 @@ namespace BTC
         Address & operator=(const QByteArray &legacy) { return (*this = QString(legacy)); }
 
         bool operator==(const Address & o) const { return net == o.net && verByte == o.verByte && h160 == o.h160; }
+        bool operator!=(const Address & o) const { return !(*this == o); }
         /// less operator: for map support and also so that it sorts like the text address would.
         bool operator<(const Address & o) const { return net <= o.net && verByte <= o.verByte && h160 < o.h160; }
         bool operator<=(const Address & o) const { return *this < o || *this == o; }
@@ -145,6 +147,13 @@ namespace BTC
     public:
         static bool test();
     };
+
+    /// for Qt QSet support of type Address
+    inline uint qHash(const Address &key) {
+        if (key.isValid())
+            return key.hash160().left(8).toUInt(nullptr, 16);
+        return 0;
+    }
 
     struct UTXO {
         static constexpr int validTxidLength = (256/8)*2; ///< any txid not of this length (64) is immediately invalid.
@@ -173,6 +182,7 @@ namespace BTC
         inline bool operator<(const UTXO &b) const { return _txid <= b._txid && _n < b._n; }
         inline bool operator<=(const UTXO &b) const { return *this < b || *this == b; }
         inline bool operator==(const UTXO &o) const { return _n == o._n && _txid == o._txid; }
+        inline bool operator!=(const UTXO &o) const { return !(*this == o); }
 
         /// will only accept if the hash is valid hex, otherwise will leave this class in "Invalid" state
         UTXO & setCheck(const QString &prevoutHash, quint32 n);
@@ -185,6 +195,16 @@ namespace BTC
         static void test();
     };
 
+    /// for Qt QSet support of type UTXO
+    inline uint qHash(const UTXO &key) {
+        if (key.isValid())
+            return key.txid().left(8).toUInt(nullptr, 16) + key.n();
+        return 0;
+    }
+
+
 } // end namespace
+
+Q_DECLARE_METATYPE(BTC::Address);
 
 #endif // BTC_H

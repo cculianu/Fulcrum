@@ -449,13 +449,6 @@ namespace RPC {
     Connection::Connection(const MethodMap & methods, qint64 id, QObject *parent, qint64 maxBuffer)
         : AbstractConnection(id, parent, maxBuffer), methods(methods)
     {
-        static bool initted_meta = false;
-        if (!initted_meta) {
-            // finish registering RPC::Message metatype so that signals/slots work. This needs to only happen
-            // once in main thread at app init.
-            qRegisterMetaType<RPC::Message>();
-            initted_meta = true;
-        }
     }
 
     Connection::~Connection() {}

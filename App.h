@@ -40,6 +40,9 @@ private:
     void cleanup_RunInThreads();
 
     void parseArgs();
+
+    /// This is defined in register_MetaTypes.cpp
+    void register_MetaTypes();
 };
 
 inline App *app() {

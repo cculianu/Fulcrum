@@ -1,4 +1,5 @@
 #include "TcpServer.h"
+#include "Controller.h"
 #include <QCoreApplication>
 #include <QtNetwork>
 
@@ -133,7 +134,7 @@ void TcpServer::killClient(qint64 clientId)
 
 void TcpServer::setupMethods()
 {
-    QString m;
+    QString m, p;
     m = "server.version";
     _rpcMethods.insert(m, QSharedPointer<RPC::Method>(new RPC::Method(
         m,
@@ -149,6 +150,16 @@ void TcpServer::setupMethods()
         RPC::schemaResult + QString(" { \"result\" : null }"), // result schema -- 'result' arg should be there and be null.
         RPC::schemaMethodNoParams // out schema, ping to client takes no args
     )));
+
+    p = "{ \"amounts\" : [1], \"utxos\" : [{\"addr\" : \"x\", \"utxo\" : \"x\"}], \"shuffleAddr\" : \"x\", \"changeAddr\" : \"x\" }";
+    m = "shuffle.spec";
+    _rpcMethods.insert(m, QSharedPointer<RPC::Method>(new RPC::Method(
+        m,
+        RPC::schemaMethod + QString(" { \"method\" : \"%1!\", \"params\" : [%2] }").arg(m).arg(p), // in schema (asynch req)
+        RPC::schemaResult + QString(" { \"result\" : \"ok!\" }"), // result schema -- 'result' arg should be there and be the string "ok". On error we send an error response
+        RPC::Schema() // we never invoke this on client
+    )));
+
 }
 
 void TcpServer::onMessage(qint64 clientId, const RPC::Message &m)
@@ -173,6 +184,13 @@ void TcpServer::onMessage(qint64 clientId, const RPC::Message &m)
             } else {
                 Error() << "Bad client ping message! Schema should have handled this. FIXME! Json: " << m.toJsonString();
             }
+        } else if (m.method == "shuffle.spec") {
+            if (QString errMsg; !processSpec(clientId, m, errMsg)) {
+                Debug() << "Got bad spec from client (id: " << c->id << "), sending error reply";
+                emit c->sendError(false, -290, errMsg, m.id);
+            } else {
+                c->sendResult(m.id, m.method, "ok");
+            }
         } else {
             Error() << "Unknown method: \"" << m.method << "\". Schema should have handled this. FIXME! Json: " << m.toJsonString();
         }
@@ -194,6 +212,67 @@ void TcpServer::onPeerError(qint64 clientId, const QString &what)
             return;
         }
     }
+}
+
+bool TcpServer::processSpec(qint64 clientId, const RPC::Message &m, QString & errMsg)
+{
+    /* sample json for testing:
+      {"id":64,"jsonrpc":"2.0","method":"shuffle.spec","params":[{"amounts":[10000,100000,1000000,10000000],"utxos":[{"addr":"1NNi1ac2f7wQQ1qoYq8AwPZUfL71RqmWYP","utxo":"932e34ad34d2b3c44c7e01247611dc8fbd3cb0fedf230a5c30b230ecaa9be335:7"},{"addr":"1C3SoftYBC2bbDzCadZxDrfbnobEXLBLQZ","utxo":"f6b0fc46aa9abb446b3817f9f5898f45233b274692d110203e2fe38c2f9e9ee3:12"}], "shuffleAddr" : "15YiSmUtzKXicZWxoGEKvFruQRDov7duTx", "changeAddr" : "1C3SoftYBC2bbDzCadZxDrfbnobEXLBLQZ"}]}
+    */
+    struct ErrorOut : public Exception { using Exception::Exception; };
+
+    try {
+        if (!m.isRequest() && !m.isList())
+            throw ErrorOut("Bad shuffle spec");
+        ShuffleSpec spec;
+        spec.clientId = clientId;
+        spec.refId = m.id;
+        auto list = m.data.toList();
+        if (list.length() != 1)
+            throw ErrorOut("Bad shuffle spec");
+        auto map = list.front().toMap();
+        QVariantList amounts = map.value("amounts").toList(), utxos = map.value("utxos").toList();
+        if (amounts.isEmpty() || utxos.isEmpty())
+            throw ErrorOut("Amounts or utxos empty");
+        spec.shuffleAddr = map.value("shuffleAddr").toString();
+        spec.changeAddr = map.value("changeAddr").toString();
+        if (!spec.shuffleAddr.isValid() || !spec.changeAddr.isValid())
+            throw ErrorOut("Bad change or shuffle address");
+        if (spec.shuffleAddr == spec.changeAddr)
+            throw ErrorOut("Shuffle and change address must be different addresses!");
+        for (const auto & var : amounts) {
+            bool ok;
+            quint64 amt;
+            amt = var.toULongLong(&ok);
+            if (!ok)
+                throw ErrorOut(QString("Bad amount \"%1\"").arg(var.toString()));
+            if (spec.amounts.contains(amt))
+                throw ErrorOut(QString("Dupe amount \"%1\"").arg(amt));
+            spec.amounts.insert(amt);
+        }
+        for (const auto & var : utxos) {
+            auto umap = var.toMap();
+            BTC::Address addr(umap.value("addr").toString());
+            if (!addr.isValid())
+                throw ErrorOut("Bad or missing address in nested utxo dict");
+            if (addr == spec.shuffleAddr)
+                throw ErrorOut("Shuffle output address cannot be in utxo list. It should be a new address.");
+            BTC::UTXO utxo(umap.value("utxo").toString());
+            if (!utxo.isValid())
+                throw ErrorOut("Bad or missing utxo in nested utxo dict");
+            if (spec.addrUtxo[addr].contains(utxo))
+                throw ErrorOut(QString("Dupe utxo: \"%1\"").arg(utxo.toString()));
+            spec.addrUtxo[addr].insert(utxo);
+        }
+        if (!spec.isValid())
+            throw ErrorOut("Spec evaluates to invalid");
+        Debug() << "Got Spec -----> " << spec.toDebugString();
+    } catch (const std::exception & e) {
+        errMsg = e.what();
+        return false;
+    }
+    errMsg = "";
+    return true;
 }
 
 Client::Client(const RPC::MethodMap & mm, qint64 id, TcpServer *srv, QTcpSocket *sock)

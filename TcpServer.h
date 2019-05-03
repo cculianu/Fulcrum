@@ -66,6 +66,8 @@ private:
 
     RPC::MethodMap _rpcMethods;
     void setupMethods();
+
+    bool processSpec(qint64 clientId, const RPC::Message &m, QString & errMsg);
 };
 
 

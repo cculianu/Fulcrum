@@ -238,3 +238,9 @@ void EXMgr::pickTest()
         if (qApp) qApp->processEvents();
     }
 }
+
+void EXMgr::_listUnspent(const BTC::Address &)
+{
+    Debug() << __FUNCTION__;
+    // TODO....
+}

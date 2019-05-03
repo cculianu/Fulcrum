@@ -96,9 +96,6 @@ namespace RPC {
     };
 
 
-    constexpr qint64 NO_ID = -1;
-
-
     /// An RPC message.  A request, response, method call or error all use this generic struct.
     struct Message
     {
@@ -232,7 +229,7 @@ namespace RPC {
 
 } // end namespace RPC
 
-/// So that Qt signal/slots work with this type.
+/// So that Qt signal/slots work with this type.  Metatypes are also registered at startup via qRegisterMetatype
 Q_DECLARE_METATYPE(RPC::Message);
 
 #endif // SHUFFLEUP_RPC_H
