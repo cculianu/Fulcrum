@@ -156,8 +156,7 @@ void TcpServer::onMessage(qint64 clientId, const RPC::Message &m)
     Debug() << "onMessage: " << clientId << " json: " << m.toJsonString();
     if (Client *c = getClient(clientId); c) {
         if (m.method == "server.version") {
-            QVariantList l = m.data.toList();
-            if (l.size() == 2) {
+            if (QVariantList l = m.data.toList(); m.isRequest() && l.size() == 2) {
                 c->info.userAgent = l[0].toString();
                 c->info.protocolVersion = l[1].toString();
                 Debug() << "Client (id: " << c->id << ") sent version: \"" << c->info.userAgent << "\" / \"" << c->info.protocolVersion << "\"";
@@ -166,14 +165,16 @@ void TcpServer::onMessage(qint64 clientId, const RPC::Message &m)
             }
             emit c->sendResult(m.id, m.method, QStringList({QString("%1/%2").arg(APPNAME).arg(VERSION), QString("1.4")}));
         } else if (m.method == "server.ping") {
-            if (m.jsonData.count("result")) {
+            if (m.isResult()) {
                 Debug() << "Got ping reply from client (id: " << c->id << ")";
-            } else if (m.jsonData.count("params")) {
+            } else if (m.isRequest()) {
                 Debug() << "Got ping from client (id: " << c->id << "), responding...";
                 emit c->sendResult(m.id, m.method);
             } else {
                 Error() << "Bad client ping message! Schema should have handled this. FIXME! Json: " << m.toJsonString();
             }
+        } else {
+            Error() << "Unknown method: \"" << m.method << "\". Schema should have handled this. FIXME! Json: " << m.toJsonString();
         }
     } else {
         Debug() << "Unknown client: " << clientId;

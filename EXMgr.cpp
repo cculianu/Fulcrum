@@ -99,8 +99,7 @@ void EXMgr::onMessage(EXClient *client, const RPC::Message &m)
 {
     Debug() << "(" << client->host << ") Got message in mgr, method: " << m.method;
     if (m.method == "server.version") {
-        QVariantList l = m.data.toList();
-        if (l.size() == 2) {
+        if (QVariantList l = m.data.toList(); m.isResult() && l.size() == 2) {
             client->info.serverVersion.first = l[0].toString();
             client->info.serverVersion.second = l[1].toString();
             Debug() << "Got server version: " << client->info.serverVersion.first << " / " << client->info.serverVersion.second;

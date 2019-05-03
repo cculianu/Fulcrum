@@ -599,7 +599,7 @@ namespace RPC {
         } catch (const std::exception &e) {
             bool doDisconnect = errorPolicy & ErrorPolicyDisconnect;
             if (errorPolicy & ErrorPolicySendErrorMessage) {
-                emit sendError(doDisconnect, -123, e.what(), lastMsgId);
+                emit sendError(doDisconnect, -123, QString(e.what()).left(80), lastMsgId);
                 if (!doDisconnect)
                     emit peerError(id, e.what());
                 doDisconnect = false; // if was true, already enqueued graceful disconnect after error reply, if was false, no-op here

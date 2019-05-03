@@ -125,6 +125,8 @@ namespace RPC {
         QString errorMessage = "";
 
         bool isError() const { return bool(errorCode); }
+        bool isResult() const { return bool(jsonData.count("result")); }
+        bool isRequest() const { return bool(jsonData.count("params")); }
         bool isList() const { return QMetaType::Type(data.type()) == QMetaType::QVariantList; }
     };
 
