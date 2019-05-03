@@ -17,6 +17,8 @@ struct AddressUnspentEntry
     QSet<qint64> clientSet; ///< basically of reference counts of client ids that refer to this entry. as clients die, they get removed from this set
     int heightVerified = 0;
     qint64 tsVerified = 0;
+
+    QString toDebugString() const;
 };
 
 Q_DECLARE_METATYPE(AddressUnspentEntry);

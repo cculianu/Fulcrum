@@ -255,13 +255,13 @@ void EXMgr::pickTest()
 void EXMgr::_listUnspent(const BTC::Address &a)
 {
     Debug() << __FUNCTION__;
+    if (!a.isValid()) {
+        Error() << "_listUnspent fail, invalid address! FIXME!";
+        return;
+    }
     EXClient *client = pick();
     if (!client) {
         Error() << "No clients -- _listUnspent fail. TODO: Handle this case and queue it up later!  FIXME!";
-        return;
-    }
-    if (!a.isValid()) {
-        Error() << "_listUnspent fail, invalid address! FIXME!";
         return;
     }
     QString method = "blockchain.scripthash.listunspent";
@@ -284,27 +284,29 @@ void EXMgr::processListUnspentResults(EXClient *client, const RPC::Message &m)
         AddressUnspentEntry entry;
         entry.address = pend.address;
         entry.tsVerified = Util::getTime();
-        Debug() << "( " << client->host << ") pending list unspent took " << (entry.tsVerified - pend.ts) << " msec round-trip";
+        Debug() << "(" << client->host << ") pending list unspent took " << (entry.tsVerified - pend.ts) << " msec round-trip";
         entry.heightVerified = client->info.height;
         auto l = m.data.toList();
         if (l.isEmpty())
             throw Err("Empty results");
         for (const auto & var : l) {
-            auto m (var.toMap());
-            if (m.isEmpty()) throw("Empty map in results list");
-            QString tx_hash = m.value("tx_hash").toString();
+            const auto map (var.toMap());
+            if (map.isEmpty()) throw("Empty map in results list");
+            QString tx_hash = map.value("tx_hash").toString();
             bool ok;
-            quint32 tx_pos = m.value("tx_pos").toUInt(&ok);
+            quint32 tx_pos = map.value("tx_pos").toUInt(&ok);
             if (!ok) throw Err("Bad tx_pos in dict");
+            // TODO: deal with unconfirmed UTXOs...?
             //quint32 height = m.value("height").toUInt(&ok);
             //if (!ok) throw Err("Bad height in dict");
-            quint64 value = m.value("value").toULongLong(&ok);
+            quint64 value = map.value("value").toULongLong(&ok);
             if (!ok) throw Err("Bad value in dict");
             BTC::UTXO utxo(tx_hash, tx_pos);
             if (!utxo.isValid()) throw Err(QString("bad utxo: %1:%2").arg(tx_hash).arg(tx_pos));
             entry.utxoAmounts[utxo] = value;
         }
         Debug() << "Got " << entry.utxoAmounts.size() << " UTXOs in listunspent for address " << entry.address.toString();
+        Debug() << entry.toDebugString();
         emit gotListUnspentResults(entry);
     } catch (const std::exception & e) {
         Error() << __FUNCTION__ << ": " << e.what() << "; server: " << client->host << "; Json: " << m.toJsonString();

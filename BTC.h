@@ -11,6 +11,8 @@
 #include <QPair>
 #include <QHash>
 
+#include <cstring>
+
 namespace BTC
 {
 
@@ -137,7 +139,15 @@ namespace BTC
         bool operator==(const Address & o) const { return net == o.net && verByte == o.verByte && h160 == o.h160; }
         bool operator!=(const Address & o) const { return !(*this == o); }
         /// less operator: for map support and also so that it sorts like the text address would.
-        bool operator<(const Address & o) const { return net <= o.net && verByte <= o.verByte && h160 < o.h160; }
+        bool operator<(const Address & o) const {
+            if (isValid() && o.isValid()) {
+                if (int cmp = std::memcmp(h160.constData(), o.h160.constData(), size_t(h160.length())); cmp < 0)
+                    return true;
+                else if (0==cmp)
+                    return net < o.net ? true : (net==o.net ? verByte < o.verByte : false);
+            }
+            return false;
+        }
         bool operator<=(const Address & o) const { return *this < o || *this == o; }
 
     private:
@@ -181,7 +191,16 @@ namespace BTC
         /// parses prevouthash:N, if ok, sets class to valid state and saves values, otherwise class becomes invalid.
         inline UTXO & operator=(const QString &prevOutN) { return setCheck(prevOutN); }
 
-        inline bool operator<(const UTXO &b) const { return _txid <= b._txid && _n < b._n; }
+        inline bool operator<(const UTXO &b) const {
+            if (isValid() && b.isValid()) {
+                if (int cmp = _txid.compare(b._txid); cmp < 0)
+                    return true;
+                else if (0==cmp)
+                    return _n < b._n;
+                //else ...
+            }
+            return false;
+        }
         inline bool operator<=(const UTXO &b) const { return *this < b || *this == b; }
         inline bool operator==(const UTXO &o) const { return _n == o._n && _txid == o._txid; }
         inline bool operator!=(const UTXO &o) const { return !(*this == o); }
@@ -201,6 +220,7 @@ namespace BTC
     inline uint qHash(const UTXO &key, uint seed = 0) {
         if (key.isValid())
             return ::qHash(QPair<quint32, quint32>(key.txid().left(8).toUInt(nullptr, 16) , key.n()), seed);
+            //return key.txid().left(8).toUInt(nullptr, 16) + key.n();
         return 0;
     }
 

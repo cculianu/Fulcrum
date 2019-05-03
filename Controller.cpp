@@ -30,7 +30,25 @@ QString ShuffleSpec::toDebugString() const
             }
         }
         ts << ">)";
-        ts.flush();
+    }
+    return ret;
+}
+
+QString AddressUnspentEntry::toDebugString() const
+{
+    QString ret;
+    {
+        QTextStream ts(&ret);
+        ts << "(AddressUnspentEntry; address: " << address.toString() << "; heightVerified: " << heightVerified << "; tsVerified: " << tsVerified
+           << "; <clients: ";
+        for (const auto c : clientSet) {
+            ts << c << ", ";
+        }
+        ts << ">; <UTXO Amounts: ";
+        for (auto it = utxoAmounts.begin(); it != utxoAmounts.end(); ++it) {
+            ts << it.key().toString() << "=" << it.value() << " sats, ";
+        }
+        ts << ">)";
     }
     return ret;
 }
