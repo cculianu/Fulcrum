@@ -1,5 +1,5 @@
-#ifndef CONTROLLER_H
-#define CONTROLLER_H
+#ifndef MMMGR_H
+#define MMMGR_H
 
 #include <QObject>
 #include <QVariantMap>
@@ -22,4 +22,4 @@ public:
     virtual Stats stats() const;
 };
 
-#endif // CONTROLLER_H
+#endif // MMMGR_H

@@ -18,6 +18,7 @@
 #pragma clang diagnostic ignored "-Wunused-parameter"
 #pragma clang diagnostic ignored "-Wold-style-cast"
 #pragma clang diagnostic ignored "-Wshorten-64-to-32"
+#pragma clang diagnostic ignored "-Wundefined-func-template"
 #endif
 namespace bitcoin {
 
@@ -37,7 +38,7 @@ COutPoint &COutPoint::SetQString(const QString &s)
         auto tmp = toks[1].toUInt(&ok);
         if (ok && toks[0].length() == (256/8)*2) {
             n = tmp;
-            txid.SetHex(toks[0].toStdString());
+            txid.SetHex(toks[0].toUtf8());
         }
     }
     return *this;

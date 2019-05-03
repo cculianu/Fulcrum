@@ -166,6 +166,9 @@ namespace BTC
         Address a = anAddress, b; //bad(badAddress);
         b = a;
         Address c(a);
+        std::cout << "a < b? " << int(a < b) << std::endl;
+        std::cout << "a <= b? " << int(a <= b) << std::endl;
+        std::cout << "a == b? " << int(a == b) << std::endl;
         c = b;
         // NOTE: the below tests are unsafe because they access charData() which may not have a nul byte at the end.
         // If this crashes, then modify the code below to read into QStrings or something like that.
@@ -302,6 +305,62 @@ namespace BTC
     {
         QByteArray qba = *this;
         return qba.toHex();
+    }
+
+    /// UTXO
+    QString UTXO::toString() const {
+        QString ret;
+        if (isValid()) {
+            ret = QString("%1:%2").arg(_txid).arg(_n);
+        }
+        return ret;
+    }
+
+    bitcoin::COutPoint UTXO::toOutPoint() const
+    {
+        return bitcoin::COutPoint(toString());
+    }
+
+    /// will only accept if the hash is valid hex, otherwise will leave this class in "Invalid" state
+    UTXO & UTXO::setCheck(const QString &prevoutHash, quint32 n)
+    {
+        bitcoin::uint256 h;
+        QString trimd(prevoutHash.trimmed());
+        h.SetHex(trimd.toUtf8());
+        if (h.GetHex() == trimd.toStdString()) {
+            _txid = trimd;
+            _n = n;
+        } else
+            clear();
+        return *this;
+    }
+    UTXO & UTXO::setCheck(const QString &prevoutN)
+    {
+        auto l = prevoutN.split(":");
+        bool ok;
+        unsigned N = 0;
+        if (l.length() == 2 && ((N = l.back().toUInt(&ok)) || ok)) {
+            setCheck(l.front(), N);
+        } else
+            clear();
+        return *this;
+    }
+
+    /* static */
+    void UTXO::test()
+    {
+        UTXO u("0a4bd:13"), u2;
+        u2 = u;
+        qInfo("u isValid? %d str=%s", int(u.isValid()), Q2C(u.toString()));
+        u = "f6b0fc46aa9abb446b3817f9f5898f45233b274692d110203e2fe38c2f9e9ee3:56";
+        qInfo("u isValid? %d str=%s", int(u.isValid()), Q2C(u.toString()));
+        auto outpt = u.toOutPoint();
+        qInfo("U hex:%s N:%u", outpt.GetTxId().ToString().c_str(), outpt.GetN());
+        u2 = u;
+        qInfo("u == u2 ? %d", int(u == u2));
+        u2.setCheck(u.txid(), u.n()+4);
+        qInfo("u2: %s ... u == u2 ? %d  u < u2 ? %d  u <= u2 ? %d", Q2C(u2.toString()), int(u == u2), int(u < u2), int(u <= u2));
+        qInfo("u: %s ... u == u2 ? %d  u2 < u ? %d", Q2C(u.toString()), int(u == u2), int(u2 < u));
     }
 }
 

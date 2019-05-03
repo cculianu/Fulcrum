@@ -1,10 +1,12 @@
 #ifndef BTC_H
 #define BTC_H
 
+#include "BTC_OpCodes.h"
+#include "bitcoin/transaction.h"
+
 #include <QByteArray>
 #include <QString>
 #include <vector>
-#include "BTC_OpCodes.h"
 
 namespace BTC
 {
@@ -129,9 +131,10 @@ namespace BTC
         Address & operator=(const char *legacy) { return (*this = QString(legacy)); }
         Address & operator=(const QByteArray &legacy) { return (*this = QString(legacy)); }
 
-        bool operator==(const Address & o) { return verByte == o.verByte && h160 == o.h160 && net == o.net; }
+        bool operator==(const Address & o) const { return net == o.net && verByte == o.verByte && h160 == o.h160; }
         /// less operator: for map support and also so that it sorts like the text address would.
-        bool operator<(const Address & o) { return verByte < o.verByte && h160 < o.h160 && net < o.net; }
+        bool operator<(const Address & o) const { return net <= o.net && verByte <= o.verByte && h160 < o.h160; }
+        bool operator<=(const Address & o) const { return *this < o || *this == o; }
 
     private:
         Net net = BTC::Invalid;
@@ -141,6 +144,45 @@ namespace BTC
         static Address fromString(const QString &legacy);
     public:
         static bool test();
+    };
+
+    struct UTXO {
+        static constexpr int validTxidLength = (256/8)*2; ///< any txid not of this length (64) is immediately invalid.
+        static constexpr quint32 invalidN = 0xffffffff;
+    protected:
+        /// hex encoded uint256 hash of its tx. (64 characters). Do not set these directly, instead use operator= etc below.
+        QString _txid;
+        quint32 _n = invalidN;
+    public:
+        inline const QString & txid() const { return _txid; }
+        inline quint32 n() const { return _n; }
+
+        /// construct an invalid utxo
+        UTXO() {}
+        /// if hash is not 256 bit encoded hex, will be inValid()
+        UTXO(const QString & prevoutHash, quint32 prevoutN) { setCheck(prevoutHash, prevoutN); }
+        /// if "hash:N" is not "256 bit encoded hex:UInt", will be inValid()
+        UTXO(const QString & prevoutHash_Colon_N) { setCheck(prevoutHash_Colon_N); }
+
+        inline bool isValid() const { return _txid.length() == validTxidLength && _n != invalidN; }
+        inline UTXO & clear() { _txid = QString(); _n = invalidN; return *this; }
+
+        /// parses prevouthash:N, if ok, sets class to valid state and saves values, otherwise class becomes invalid.
+        inline UTXO & operator=(const QString &prevOutN) { return setCheck(prevOutN); }
+
+        inline bool operator<(const UTXO &b) const { return _txid <= b._txid && _n < b._n; }
+        inline bool operator<=(const UTXO &b) const { return *this < b || *this == b; }
+        inline bool operator==(const UTXO &o) const { return _n == o._n && _txid == o._txid; }
+
+        /// will only accept if the hash is valid hex, otherwise will leave this class in "Invalid" state
+        UTXO & setCheck(const QString &prevoutHash, quint32 n);
+        UTXO & setCheck(const QString &prevoutHash_Colon_N);
+
+        bitcoin::COutPoint toOutPoint() const;
+        /// convert to prevouthash:N, returns a null string if !isValid()
+        QString toString() const;
+
+        static void test();
     };
 
 } // end namespace
