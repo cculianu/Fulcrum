@@ -5,10 +5,12 @@
 #include "EXClient.h"
 #include "RPC.h"
 #include "BTC.h"
+#include "Controller.h"
 #include <QObject>
 #include <QList>
 #include <QSet>
 #include <QMap>
+#include <QPair>
 
 class EXMgr : public Mgr
 {
@@ -34,9 +36,14 @@ public:
     const RPC::MethodMap & rpcMethods() const { return _rpcMethods; }
 
 signals:
-    /// Call (emit) these signals from outside this class to enqueue a request to this class
-    /// in its thread.
+    /// Call (emit) these signals from outside this class in any thread to enqueue a request to this class
+    /// in its thread.  (These "signal()" correspond to "_signal()" private slots in this class)
     void listUnspent(const BTC::Address &);
+
+    /// -
+
+    /// Emitted by this class when listunspent results become available from one of the EX servers.
+    void gotListUnspentResults(const AddressUnspentEntry &);
 
 public slots:
 
@@ -49,6 +56,7 @@ protected slots:
 private slots:
     void checkClients();
 
+    /// connected to listUnspent above, runs in our thread
     void _listUnspent(const BTC::Address &);
 
 private:
@@ -74,6 +82,18 @@ private:
     void pickTest();
 
     RPC::MethodMap _rpcMethods;
+
+    /// listunspent handling...
+    struct PendingLUSReq {
+        BTC::Address address;
+        qint64 clientId = NO_ID; // EXClient *-> id
+        qint64 ts = 0; // timestamp sent from Util::getTime()
+        bool isValid() const { return clientId > NO_ID && ts > 0 && address.isValid(); }
+    };
+    /// map of message.id -> PendingLUSReq struct
+    QMap<qint64, PendingLUSReq> pendingListUnspentReqs;
+    void processListUnspentResults(EXClient *, const RPC::Message &m);
+    /// /end listunspent handling.
 };
 
 #endif // ECMGR_H

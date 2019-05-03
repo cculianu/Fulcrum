@@ -8,6 +8,8 @@
 #include <QString>
 #include <vector>
 #include <QMetaType>
+#include <QPair>
+#include <QHash>
 
 namespace BTC
 {
@@ -151,7 +153,7 @@ namespace BTC
     /// for Qt QSet support of type Address
     inline uint qHash(const Address &key) {
         if (key.isValid())
-            return key.hash160().left(8).toUInt(nullptr, 16);
+            return key.hash160().left(8).toUInt(nullptr, 16); // just take the first 4 bytes and convert them to uint
         return 0;
     }
 
@@ -196,9 +198,9 @@ namespace BTC
     };
 
     /// for Qt QSet support of type UTXO
-    inline uint qHash(const UTXO &key) {
+    inline uint qHash(const UTXO &key, uint seed = 0) {
         if (key.isValid())
-            return key.txid().left(8).toUInt(nullptr, 16) + key.n();
+            return ::qHash(QPair<quint32, quint32>(key.txid().left(8).toUInt(nullptr, 16) , key.n()), seed);
         return 0;
     }
 

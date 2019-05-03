@@ -2,6 +2,7 @@
 #include "EXClient.h"
 #include "Util.h"
 #include "RPC.h"
+#include "Controller.h"
 #include <vector>
 
 EXMgr::EXMgr(const QString & serversFile, QObject *parent)
@@ -66,6 +67,7 @@ void EXMgr::loadServers()
     checkClientsTimer = new QTimer(this); checkClientsTimer->setSingleShot(false);
     connect(checkClientsTimer, SIGNAL(timeout()), this, SLOT(checkClients()));
     checkClientsTimer->start(EXClient::reconnectTime/2); // 1 minute
+    connect(this, SIGNAL(listUnspent(const BTC::Address &)), this, SLOT(_listUnspent(const BTC::Address &)));
     Log() << "ElectrumX Manager started, found " << clients.count() << " servers from compiled-in servers.json";
 }
 
@@ -130,6 +132,8 @@ void EXMgr::onMessage(EXClient *client, const RPC::Message &m)
     } else if (m.method == "server.ping") {
         // ignore; timestamps updated in EXClient and RPC::Connection
         //Debug() << "server.ping reply... yay";
+    } else if (m.method == "blockchain.scripthash.listunspent" && m.isResult()) {
+        processListUnspentResults(client, m);
     } else {
         Error() << "Unknown method \"" << m.method << "\" from " << client->host << "; Json: " << m.toJsonString();
     }
@@ -223,6 +227,15 @@ void EXMgr::initRPCMethods()
         RPC::schemaResult + QString(" { \"result\" : null }"), // result schema -- 'result' arg should be there and be null.
         RPC::schemaMethodNoParams // out schema, ping to server takes no args
     )));
+
+    m = "blockchain.scripthash.listunspent";
+    d = "{\"tx_hash\": \"xx\", \"tx_pos\": 1, \"height\": 999, \"value\": 123456}";
+    _rpcMethods.insert(m, QSharedPointer<RPC::Method>(new RPC::Method(
+        m,
+        RPC::Schema(), // asynch. schema from server to us (DISBALED)
+        RPC::schemaResult + QString(" { \"result\" : [%1] }").arg(d), // RESULT schema (synch. server -> us)
+        RPC::schemaMethodOneParam + QString("{ \"method\" : \"%1!\" }").arg(m) // OUT (req. from us -> server). Param is a scripthashX
+    )));
 }
 
 void EXMgr::pickTest()
@@ -239,8 +252,62 @@ void EXMgr::pickTest()
     }
 }
 
-void EXMgr::_listUnspent(const BTC::Address &)
+void EXMgr::_listUnspent(const BTC::Address &a)
 {
     Debug() << __FUNCTION__;
-    // TODO....
+    EXClient *client = pick();
+    if (!client) {
+        Error() << "No clients -- _listUnspent fail. TODO: Handle this case and queue it up later!  FIXME!";
+        return;
+    }
+    if (!a.isValid()) {
+        Error() << "_listUnspent fail, invalid address! FIXME!";
+        return;
+    }
+    QString method = "blockchain.scripthash.listunspent";
+    QVariantList params({QString(a.toHashX())});
+    const auto reqid = newId();
+    auto & pending = pendingListUnspentReqs[reqid];
+    pending.address = a;
+    pending.ts = Util::getTime();
+    pending.clientId = client->id;
+    client->sendRequest(reqid, method, params);
+}
+
+void EXMgr::processListUnspentResults(EXClient *client, const RPC::Message &m)
+{
+    struct Err : public Exception { using Exception::Exception; };
+    try {
+        const auto pend ( pendingListUnspentReqs.take(m.id) );
+        if (!pend.isValid())
+            throw Err("No pending request matching req.id was found in map! FIXME!");
+        AddressUnspentEntry entry;
+        entry.address = pend.address;
+        entry.tsVerified = Util::getTime();
+        Debug() << "( " << client->host << ") pending list unspent took " << (entry.tsVerified - pend.ts) << " msec round-trip";
+        entry.heightVerified = client->info.height;
+        auto l = m.data.toList();
+        if (l.isEmpty())
+            throw Err("Empty results");
+        for (const auto & var : l) {
+            auto m (var.toMap());
+            if (m.isEmpty()) throw("Empty map in results list");
+            QString tx_hash = m.value("tx_hash").toString();
+            bool ok;
+            quint32 tx_pos = m.value("tx_pos").toUInt(&ok);
+            if (!ok) throw Err("Bad tx_pos in dict");
+            //quint32 height = m.value("height").toUInt(&ok);
+            //if (!ok) throw Err("Bad height in dict");
+            quint64 value = m.value("value").toULongLong(&ok);
+            if (!ok) throw Err("Bad value in dict");
+            BTC::UTXO utxo(tx_hash, tx_pos);
+            if (!utxo.isValid()) throw Err(QString("bad utxo: %1:%2").arg(tx_hash).arg(tx_pos));
+            entry.utxoAmounts[utxo] = value;
+        }
+        Debug() << "Got " << entry.utxoAmounts.size() << " UTXOs in listunspent for address " << entry.address.toString();
+        emit gotListUnspentResults(entry);
+    } catch (const std::exception & e) {
+        Error() << __FUNCTION__ << ": " << e.what() << "; server: " << client->host << "; Json: " << m.toJsonString();
+        return;
+    }
 }

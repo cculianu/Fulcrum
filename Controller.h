@@ -7,6 +7,7 @@
 #include <QObject>
 #include <QMap>
 #include <QSet>
+#include <QMetaType>
 
 
 struct AddressUnspentEntry
@@ -17,6 +18,8 @@ struct AddressUnspentEntry
     int heightVerified = 0;
     qint64 tsVerified = 0;
 };
+
+Q_DECLARE_METATYPE(AddressUnspentEntry);
 
 /*
 struct ClientDesc

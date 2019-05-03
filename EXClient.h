@@ -40,8 +40,8 @@ public:
 signals:
     void newConnection(EXClient *);
     void lostConnection(EXClient *); ///< overrides lostConnection(AbstractConnection *) by dynamic_casting it down and re-emitting
-    void gotMessage(EXClient *, const RPC::Message &); ///< overrides gotMessage(RPC::Connection *..) by re-emitting with narrowed type.
-    void gotErrorMessage(EXClient *, const RPC::Message &); ///< overrides gotErrorMessage(RPC::Connection *..) by re-emitting with narrowed type.
+    void gotMessage(EXClient *, const RPC::Message &); ///< overrides gotMessage(id,..) by re-emitting with ptr type (this is safe here becase EXClients live for lifetime of app)
+    void gotErrorMessage(EXClient *, const RPC::Message &); ///< overrides gotErrorMessage(id,..) by re-emitting with ptr type
 
 protected:
     friend class EXMgr;
