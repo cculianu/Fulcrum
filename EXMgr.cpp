@@ -296,16 +296,17 @@ void EXMgr::processListUnspentResults(EXClient *client, const RPC::Message &m)
             bool ok;
             quint32 tx_pos = map.value("tx_pos").toUInt(&ok);
             if (!ok) throw Err("Bad tx_pos in dict");
-            // TODO: deal with unconfirmed UTXOs...?
-            //quint32 height = m.value("height").toUInt(&ok);
-            //if (!ok) throw Err("Bad height in dict");
+            // TODO: filter out unmatured coinbase...? Is that even possible from here?
+            int height = map.value("height").toInt(&ok);
+            if (!ok) throw Err("Bad height in dict");
+            auto & whichUtxoMap = height > 0 ? entry.utxoAmounts : entry.utxoUnconfAmounts;
             quint64 value = map.value("value").toULongLong(&ok);
             if (!ok) throw Err("Bad value in dict");
             BTC::UTXO utxo(tx_hash, tx_pos);
             if (!utxo.isValid()) throw Err(QString("bad utxo: %1:%2").arg(tx_hash).arg(tx_pos));
-            entry.utxoAmounts[utxo] = value;
+            whichUtxoMap[utxo] = value;
         }
-        Debug() << "Got " << entry.utxoAmounts.size() << " UTXOs in listunspent for address " << entry.address.toString();
+        Debug() << "Got " << entry.utxoAmounts.size() << " confirmed, " << entry.utxoUnconfAmounts.size() << " unconfirmed UTXOs in listunspent for address " << entry.address.toString();
         Debug() << entry.toDebugString();
         emit gotListUnspentResults(entry);
     } catch (const std::exception & e) {

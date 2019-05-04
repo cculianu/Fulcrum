@@ -48,6 +48,10 @@ QString AddressUnspentEntry::toDebugString() const
         for (auto it = utxoAmounts.begin(); it != utxoAmounts.end(); ++it) {
             ts << it.key().toString() << "=" << it.value() << " sats, ";
         }
+        ts << ">; <UTXO Unconf. Amounts: ";
+        for (auto it = utxoUnconfAmounts.begin(); it != utxoUnconfAmounts.end(); ++it) {
+            ts << it.key().toString() << "=" << it.value() << " sats, ";
+        }
         ts << ">)";
     }
     return ret;

@@ -13,7 +13,7 @@
 struct AddressUnspentEntry
 {
     BTC::Address address;
-    QMap<BTC::UTXO, quint64> utxoAmounts;
+    QMap<BTC::UTXO, quint64> utxoAmounts, utxoUnconfAmounts;
     QSet<qint64> clientSet; ///< basically of reference counts of client ids that refer to this entry. as clients die, they get removed from this set
     int heightVerified = 0;
     qint64 tsVerified = 0;
