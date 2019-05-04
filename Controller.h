@@ -25,7 +25,8 @@ struct AddressUnspentEntry
     QString toDebugString() const;
 };
 
-Q_DECLARE_METATYPE(AddressUnspentEntry); // see register_MetaTypes.cpp for run-time registration with metatype system.
+// see register_MetaTypes.cpp for run-time registration with metatype system.
+Q_DECLARE_METATYPE(AddressUnspentEntry);
 
 /*
 struct ClientDesc
@@ -54,6 +55,7 @@ struct ShuffleSpec
     }
 };
 
+// see register_MetaTypes.cpp for run-time registration with metatype system.
 Q_DECLARE_METATYPE(ShuffleSpec);
 
 class Controller : public Mgr, public ThreadObjectMixin
@@ -76,10 +78,14 @@ private slots:
     void onNewTcpServer(TcpServer *);
     void onClientDisconnected(qint64 clientId);
     void onNewShuffleSpec(const ShuffleSpec &);
+    // connected by us to exMgr's "gotListUnspentResults" signal. Again, assumption is exMgr lives for lifetime of this object
+    void onListUnspentResults(const AddressUnspentEntry &);
+    // connected by us to exMgr's "gotNewBlockHeight" signal.
+    void onNewBlockHeight(int);
 private:
     SrvMgr *srvMgr = nullptr;
     EXMgr *exMgr = nullptr;
-    QMap<BTC::Address, AddressUnspentEntry> addessUnspentCache;
+    QMap<BTC::Address, AddressUnspentEntry> addressUnspentCache;
     QMap<qint64, TcpServer *> clientIdToServerMap; ///< advisory map of client ids to servers
 };
 

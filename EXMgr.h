@@ -44,6 +44,8 @@ signals:
 
     /// Emitted by this class when listunspent results become available from one of the EX servers.
     void gotListUnspentResults(const AddressUnspentEntry &);
+    /// Emitted by class when a new server height is first seen
+    void gotNewBlockHeight(int height);
 
 public slots:
 

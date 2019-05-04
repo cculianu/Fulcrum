@@ -121,8 +121,11 @@ void EXMgr::onMessage(EXClient *client, const RPC::Message &m)
                 height.header = hdr;
                 height.seenBy.clear();
             }
-            if (ht == height.height)
+            if (ht == height.height) {
                 height.seenBy.insert(client->id);
+                if (height.seenBy.size() == 1) // emit when first seen but after we insert a client into the set.
+                    emit gotNewBlockHeight(height.height);
+            }
             client->info.height = ht;
             client->info.header = hdr;
         } else {

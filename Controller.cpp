@@ -8,7 +8,9 @@ Controller::Controller(SrvMgr *srv, EXMgr *ex)
 {
     setObjectName("Controller");
     _thread.setObjectName(objectName());
-    connect(srv, SIGNAL(newTcpServer(TcpServer *)), this, SLOT(onNewTcpServer(TcpServer *)));
+    connect(srvMgr, SIGNAL(newTcpServer(TcpServer *)), this, SLOT(onNewTcpServer(TcpServer *)));
+    connect(exMgr, SIGNAL(gotListUnspentResults(const AddressUnspentEntry &)), this, SLOT(onListUnspentResults(const AddressUnspentEntry &)));
+    connect(exMgr, SIGNAL(gotNewBlockHeight(int)), this, SLOT(onNewBlockHeight(int)));
 }
 
 Controller::~Controller()
@@ -71,26 +73,50 @@ void Controller::onClientDisconnected(qint64 clientId)
     server_boilerplate
     Debug() << __FUNCTION__ << ": clientid: " << clientId << ", server: " << server->objectName();
 
+    int flushCt = 0;
     if (auto mapServer = clientIdToServerMap.take(clientId) /*client is dead, remove entry from map*/;
             mapServer && mapServer != server) {
         // mapServer may be null and that's ok, if client never sent a spec.
         // more defensive programming
         Warning() << __FUNCTION__ << " clientId: " << clientId << " had server: " << mapServer->objectName()
                   << " in map, but sender was: " << server->objectName();
-    }
+    } else if (mapServer)
+        ++flushCt;
+    // remove client from cache, if any
+    for (auto it = addressUnspentCache.begin(); it != addressUnspentCache.end(); ++it)
+        if (it.value().clientSet.remove(clientId))
+            ++flushCt;
+    if (flushCt)
+        Debug("Record of client %lld removed from %d internal data structures", clientId, flushCt);
 }
 void Controller::onNewShuffleSpec(const ShuffleSpec &spec)
 {
     server_boilerplate
     Debug() << __FUNCTION__ << "; got spec: " << spec.toDebugString() << ", server: " << server->objectName();
-    if (server && spec.clientId >= 0)
+    if (spec.isValid())
         // remember which server this client came from.
         clientIdToServerMap[spec.clientId] = server;
+    else {
+        Warning() << "Ignoring invalid ShuffleSpec! FIXME!";
+        return;
+    }
 
     // TODO: here we will need to run through spec, check cache, update from listunspent in EX for any unknown UTXOs, etc...
 }
 #undef server_boilerplate
+void Controller::onNewBlockHeight(int height)
+{
+    // from exMgr
+    Debug() << __FUNCTION__ << "; got new block height: " << height;
 
+    // TODO: use this information towards seeing if addressUnspentCache needs refreshing, etc
+}
+void Controller::onListUnspentResults(const AddressUnspentEntry &entry)
+{
+    // from exMgr
+    Debug() << __FUNCTION__ <<"; got list unspent results: " << entry.toDebugString();
+    // TODO: handle, process, etc
+}
 
 QString ShuffleSpec::toDebugString() const
 {
