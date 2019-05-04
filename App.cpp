@@ -4,6 +4,7 @@
 #include "EXMgr.h"
 #include "SrvMgr.h"
 #include "BTC.h"
+#include "Controller.h"
 #include <signal.h>
 #include <QCommandLineParser>
 #include <QFile>
@@ -69,9 +70,11 @@ void App::startup()
 #endif
         srvmgr = new SrvMgr(options.interfaces, this);
         exmgr = new EXMgr(options.serversFile, this);
+        controller = new Controller(srvmgr, exmgr);
 
-        srvmgr->startup(); // may throw Exception
-        exmgr->startup(); // may throw Exception
+        controller->startup(); // may throw Exception, waits for thread to start
+        srvmgr->startup(); // may throw Exception, waits for servers to bind
+        exmgr->startup(); // may throw Exception, returns immediately
     } catch (const Exception & e) {
         Error () << "Caught exception: " << e.what();
         this->exit(1);
@@ -82,6 +85,7 @@ void App::cleanup()
 {
     Debug() << __PRETTY_FUNCTION__ ;
     cleanup_RunInThreads();
+    if (controller) { Log("Stopping Controller ... "); controller->cleanup(); delete controller; controller = nullptr; }
     if (srvmgr) { Log("Stopping SrvMgr ... "); srvmgr->cleanup(); delete srvmgr; srvmgr = nullptr; }
     if (exmgr) { Log("Stopping EXMgr ... "); exmgr->cleanup(); delete exmgr; exmgr = nullptr; }
 }
@@ -127,7 +131,7 @@ void App::parseArgs()
           QString("Suppress debug output. This is the default on release builds. This is the opposite of -d.")
         },
         { { "S", "syslog" },
-          QString("Syslog mode. Suppress printing of timestamps to the log, and if on Unix, use the syslog() facility to produce log messages.")
+          QString("Syslog mode. If on Unix, use the syslog() facility to produce log messages. This option currently has no effect on Windows.")
         },
 
     });

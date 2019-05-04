@@ -3,12 +3,15 @@
 
 #include "BTC.h"
 #include "Mixins.h"
+#include "Mgr.h"
 
 #include <QObject>
 #include <QMap>
 #include <QSet>
 #include <QMetaType>
 
+class SrvMgr;
+class EXMgr;
 
 struct AddressUnspentEntry
 {
@@ -21,7 +24,7 @@ struct AddressUnspentEntry
     QString toDebugString() const;
 };
 
-Q_DECLARE_METATYPE(AddressUnspentEntry);
+Q_DECLARE_METATYPE(AddressUnspentEntry); // see register_MetaTypes.cpp for run-time registration with metatype system.
 
 /*
 struct ClientDesc
@@ -50,17 +53,24 @@ struct ShuffleSpec
     }
 };
 
-class Controller : public QObject, public ThreadObjectMixin
+class Controller : public Mgr, public ThreadObjectMixin
 {
     Q_OBJECT
 public:
-    Controller();
+    Controller(SrvMgr *srvMgr, EXMgr *exMgr);
     ~Controller() override;
 
+    void startup() override; // from Mgr
+    void cleanup() override; // from Mgr
+
 protected:
-    virtual QObject *qobj() override;
+    virtual QObject *qobj() override; // from ThreadObjectMixin
+    virtual void on_started() override; // from ThreadObjectMixin
+    virtual void on_finished() override; // from ThreadObjectMixin
 
 private:
+    SrvMgr *srvMgr = nullptr;
+    EXMgr *exMgr = nullptr;
     QMap<BTC::Address, AddressUnspentEntry> addessUnspentCache;
 };
 

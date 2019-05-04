@@ -46,7 +46,7 @@ void EXClient::on_finished()
 {
     killSocket();
     ThreadObjectMixin::on_finished(); // calls moveToThread
-    Debug() << "finished.";
+    Debug() << objectName() << " finished.";
 }
 
 void EXClient::killSocket()

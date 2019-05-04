@@ -8,6 +8,7 @@
 class Logger;
 class EXMgr;
 class SrvMgr;
+class Controller;
 
 class App : public QCoreApplication
 {
@@ -31,8 +32,9 @@ public slots:
 private:
     std::atomic<qint64> globalId = 0;
     Logger *_logger = nullptr;
-    SrvMgr *srvmgr = nullptr; // TODO: implement multiple servers, 1 per socket
+    SrvMgr *srvmgr = nullptr;
     EXMgr *exmgr = nullptr;
+    Controller *controller = nullptr;
 
     void startup();
     void cleanup();

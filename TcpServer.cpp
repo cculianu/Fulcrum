@@ -63,7 +63,7 @@ void TcpServer::on_finished()
     disconnect(this, SIGNAL(newConnection()), this, SLOT(on_newConnection()));
     close(); /// stop listening
     chan.put("finished");
-    Debug() << __FUNCTION__ << " finished.";
+    Debug() << objectName() << " finished.";
     ThreadObjectMixin::on_finished();
 }
 

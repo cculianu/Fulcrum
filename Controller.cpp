@@ -1,17 +1,45 @@
 #include "Controller.h"
+#include "SrvMgr.h"
+#include "EXMgr.h"
 
-Controller::Controller()
+Controller::Controller(SrvMgr *srv, EXMgr *ex)
+    : Mgr(nullptr/* top-level because thread*/), srvMgr(srv), exMgr(ex)
 {
-
+    setObjectName("Controller");
+    _thread.setObjectName(objectName());
 }
 
 Controller::~Controller()
 {
+    cleanup();
+}
 
+void Controller::cleanup()
+{
+    stop(); // no-op if not running
+}
+
+void Controller::startup()
+{
+    start(); // start thread
+    if (chan.get<QString>(10000).isEmpty())
+        throw Exception("Controller startup timed out after 10 seconds");
 }
 
 QObject *Controller::qobj() { return this; }
 
+void Controller::on_started()
+{
+    ThreadObjectMixin::on_started();
+    Log() << objectName() << " started";
+    chan.put("ok");
+}
+
+void Controller::on_finished()
+{
+    ThreadObjectMixin::on_finished();
+    Debug() << objectName() << " finished.";
+}
 
 QString ShuffleSpec::toDebugString() const
 {

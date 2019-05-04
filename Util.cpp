@@ -155,7 +155,11 @@ Log::~Log()
     if (doprt) {
         App *ourApp = app();
         s.flush(); // does nothing probably..
-        QString dateStr = ourApp && ourApp->options.syslogMode ? "" : QString("[") + QDateTime::currentDateTime().toString("yyyy.MM.dd hh:mm:ss.zzz") + QString("] ");
+        // note: we always want to log the timestamp, even in syslog mode.
+        // this is because if logging from a thread, log lines be out-of-order.
+        // The timestamp is the only record of the actual order in which things
+        // occurred, hence why I commented the below conditional out.
+        QString dateStr = /*ourApp && ourApp->options.syslogMode ? "" :*/ QString("[") + QDateTime::currentDateTime().toString("yyyy.MM.dd hh:mm:ss.zzz") + QString("] ");
         QString thrdStr = "";
 
         if (QThread *th = QThread::currentThread(); th && ourApp && th != ourApp->thread()) {
