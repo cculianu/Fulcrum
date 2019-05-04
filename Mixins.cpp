@@ -53,3 +53,26 @@ void ThreadObjectMixin::on_finished()
 
 /*static*/
 qint64 IdMixin::newId() { return app()->newId(); }
+
+
+TimersByNameMixin::TimersByNameMixin() {}
+TimersByNameMixin::~TimersByNameMixin() {}
+
+void TimersByNameMixin::callOnTimerSoon(int ms, const QString &name, const std::function<bool ()> &func)
+{
+    if (_timerMap.contains(name))
+        // timer already active
+        return;
+    QSharedPointer<QTimer> timer(new QTimer(qobj()), [](QTimer *t){ t->deleteLater(); });
+    timer->setSingleShot(false);
+    QObject::connect(timer.get(), &QTimer::timeout, qobj(), [this, func, name]{
+         const bool keepGoing = func();
+         if (!keepGoing) {
+             auto timer =  _timerMap.take(name);
+             if (timer) timer->stop();
+             // timer will go out of scope here and deleteLater() will be called.
+         }
+    });
+    _timerMap[name] = timer;
+    timer->start(ms);
+}
