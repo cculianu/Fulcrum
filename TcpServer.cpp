@@ -49,6 +49,9 @@ void TcpServer::on_started()
     QString result = "ok";
     connect(this, SIGNAL(newConnection()), this, SLOT(on_newConnection()));
     connect(this, SIGNAL(acceptError(QAbstractSocket::SocketError)), this, SLOT(on_acceptError(QAbstractSocket::SocketError)));
+    connect(this, &TcpServer::tellClientSpecRejected, this, &TcpServer::_tellClientSpecRejected);
+    connect(this, &TcpServer::tellClientSpecAccepted, this, &TcpServer::_tellClientSpecAccepted);
+    connect(this, &TcpServer::tellClientSpecPending, this, &TcpServer::_tellClientSpecPending);
     if (!listen(addr, port)) {
         result = errorString();
         result = result.isEmpty() ? "Error binding/listening for connections" : result;
@@ -61,7 +64,11 @@ void TcpServer::on_started()
 
 void TcpServer::on_finished()
 {
+    disconnect(this, &TcpServer::tellClientSpecRejected, this, &TcpServer::_tellClientSpecRejected);
+    disconnect(this, &TcpServer::tellClientSpecAccepted, this, &TcpServer::_tellClientSpecAccepted);
+    disconnect(this, &TcpServer::tellClientSpecPending, this, &TcpServer::_tellClientSpecPending);
     disconnect(this, SIGNAL(newConnection()), this, SLOT(on_newConnection()));
+    disconnect(this, SIGNAL(acceptError(QAbstractSocket::SocketError)), this, SLOT(on_acceptError(QAbstractSocket::SocketError)));
     close(); /// stop listening
     chan.put("finished");
     Debug() << objectName() << " finished.";
@@ -196,7 +203,8 @@ void TcpServer::onMessage(qint64 clientId, const RPC::Message &m)
                 Debug() << "Got bad spec from client (id: " << c->id << "), sending error reply";
                 emit c->sendError(false, -290, errMsg, m.id);
             } else {
-                c->sendResult(m.id, m.method, "ok");
+                // don't tell client anything yet -- wait for Controller to return a response.
+                //c->sendResult(m.id, m.method, "ok");
             }
         } else {
             Error() << "Unknown method: \"" << m.method << "\". Schema should have handled this. FIXME! Json: " << m.toJsonString();
@@ -251,7 +259,7 @@ bool TcpServer::processSpec(qint64 clientId, const RPC::Message &m, QString & er
             bool ok;
             quint64 amt;
             amt = var.toULongLong(&ok);
-            if (!ok)
+            if (!ok || !amt)
                 throw ErrorOut(QString("Bad amount \"%1\"").arg(var.toString()));
             if (spec.amounts.contains(amt))
                 throw ErrorOut(QString("Dupe amount \"%1\"").arg(amt));
@@ -281,6 +289,29 @@ bool TcpServer::processSpec(qint64 clientId, const RPC::Message &m, QString & er
     }
     errMsg = "";
     return true;
+}
+
+void TcpServer::_tellClientSpecRejected(qint64 clientId, qint64 refId, const QString & reason)
+{
+    if (Client *client = getClient(clientId); client) {
+        client->sendError(false, -290, reason, refId);
+    } else {
+        Debug() << "ClientId: " << clientId << " not found.";
+    }
+}
+void TcpServer::_tellClientSpecAccepted(qint64 clientId, qint64 refId) {
+    if (Client *client = getClient(clientId); client) {
+        client->sendResult(refId, "shuffle.spec", "accepted");
+    } else {
+        Debug() << "ClientId: " << clientId << " not found.";
+    }
+}
+void TcpServer::_tellClientSpecPending(qint64 clientId, qint64 refId) {
+    if (Client *client = getClient(clientId); client) {
+        client->sendResult(refId, "shuffle.spec", "pending");
+    } else {
+        Debug() << "ClientId: " << clientId << " not found.";
+    }
 }
 
 Client::Client(const RPC::MethodMap & mm, qint64 id, TcpServer *srv, QTcpSocket *sock)
@@ -321,5 +352,7 @@ void Client::do_ping()
         emit sendError(true, -300, "Idle time exceeded");
         return;
     }
-    emit sendRequest(srv->newId(), "server.ping");
+    // Don't send clients pings, because the reqId we send them may clash with one
+    // they sent us. Instead, rely on them to ping us else disconnect them if idle for too long.
+    //emit sendRequest(srv->newId(), "server.ping");
 }

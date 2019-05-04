@@ -34,6 +34,8 @@ void EXMgr::cleanup()
     clients.clear();
     clientsById.clear();
     _rpcMethods.clear();
+    delete checkClientsTimer; checkClientsTimer = nullptr;
+    delete listUnspentPendingSoonTimer; listUnspentPendingSoonTimer = nullptr;
 }
 
 void EXMgr::loadServers()
@@ -67,7 +69,9 @@ void EXMgr::loadServers()
     checkClientsTimer = new QTimer(this); checkClientsTimer->setSingleShot(false);
     connect(checkClientsTimer, SIGNAL(timeout()), this, SLOT(checkClients()));
     checkClientsTimer->start(EXClient::reconnectTime/2); // 1 minute
-    connect(this, SIGNAL(listUnspent(const BTC::Address &)), this, SLOT(_listUnspent(const BTC::Address &)));
+    connect(this, &EXMgr::listUnspent, this, [this](const BTC::Address &a){
+        _listUnspent(a, newId());
+    });
     Log() << "ElectrumX Manager started, found " << clients.count() << " servers from compiled-in servers.json";
 }
 
@@ -83,6 +87,19 @@ void EXMgr::onLostConnection(EXClient *client)
     Debug () << "Connection lost for " << client->host << ", status: " << client->status;
     height.seenBy.remove(client->id);
     client->info.clear();
+    // now, if there happend to be pending listunspent requests for this ex server ("client") right
+    // as it disconnected, remember those by setting their clientId to the special '0' value
+    // and enqueue a "re-pend" later...
+    int pends = 0;
+    for (auto & req : pendingListUnspentReqs) {
+        if (req.isValid() && req.clientId == client->id) {
+            req.clientId = 0;
+            Debug() << "listUnspent request for address \"" << req.address.toString() << "\" for this client is now pending (will be sent to other clients soonish)";
+            ++pends;
+        }
+    }
+    if (pends)
+        checkListUnspentPendingSoon();
 }
 
 void EXMgr::onErrorMessage(EXClient *client, const RPC::Message &m)
@@ -172,7 +189,7 @@ void EXMgr::checkClients() ///< called from the checkClientsTimer every 1 mins
     }
     if (int ct = laggers.count(); ct) {
         QString s = ct == 1 ? " is" : "s are";
-        Log("%d server%s lagging behind the latest block height of %d: %s", ct, Q2C(s), height.height, Q2C(laggers.join(", ")));
+        Log("%d server%s lagging behind the latest block height of %d: %s", ct, Q2C(s), int(height.height), Q2C(laggers.join(", ")));
     }
 }
 
@@ -255,7 +272,7 @@ void EXMgr::pickTest()
     }
 }
 
-void EXMgr::_listUnspent(const BTC::Address &a)
+void EXMgr::_listUnspent(const BTC::Address &a, qint64 reqid)
 {
     Debug() << __FUNCTION__;
     if (!a.isValid()) {
@@ -264,17 +281,67 @@ void EXMgr::_listUnspent(const BTC::Address &a)
     }
     EXClient *client = pick();
     if (!client) {
-        Error() << "No clients -- _listUnspent fail. TODO: Handle this case and queue it up later!  FIXME!";
-        return;
+        Warning() << "No clients -- _listUnspent will be pending until we get a healthy EX server.";
     }
     QString method = "blockchain.scripthash.listunspent";
     QVariantList params({QString(a.toHashX())});
-    const auto reqid = newId();
     auto & pending = pendingListUnspentReqs[reqid];
     pending.address = a;
     pending.ts = Util::getTime();
-    pending.clientId = client->id;
-    client->sendRequest(reqid, method, params);
+    pending.clientId = client ? client->id : 0 /* 0 has special meaning: it means no client was found, so pending */;
+    if (client)
+        client->sendRequest(reqid, method, params);
+    else
+        checkListUnspentPendingSoon(); // no-op if timer already active. if no timer, start it and check for a server every 1 second
+}
+
+void EXMgr::checkListUnspentPendingSoon()
+{
+    if (listUnspentPendingSoonTimer)
+        return;
+
+    auto doCheck = [this] {
+        decltype(pendingListUnspentReqs) toRedo;
+        bool dontKill = false;
+        int redone = 0, expired = 0;
+        for (auto it = pendingListUnspentReqs.begin(); it != pendingListUnspentReqs.end(); ++it) {
+            // first run through and remember all the pending ones (clientId == 0)
+            const auto & req = it.value();
+            if (req.clientId == 0) {
+                toRedo[it.key()] = req;
+            }
+        }
+        for (auto it = toRedo.begin(); it != toRedo.end(); ++it) {
+            // next, remove them from the pendingListUnspentReqs list...
+            pendingListUnspentReqs.remove(it.key());
+        }
+        for (auto it = toRedo.begin(); it != toRedo.end(); ++it) {
+            // now, for each of the toRedo reqs that are not expired and valid, re-enqueue them using _listUnspent
+            const auto reqId = it.key(); const auto & req = it.value();
+            if (Util::getTime() - req.ts < 30000 && req.isValid()) {
+                // next, re-enqueue them only if they are newer than 30 seconds old... TODO: make this a tuneable param??
+                this->_listUnspent(req.address, reqId); // this will update the old pending entry, with a possibly new picked client and send the request
+                ++redone;
+                pendingListUnspentReqs[reqId].ts = req.ts; // save back old ts
+                // dontKill flag indicates don't kill the timer in this callback -- this is set
+                // if the NEW pending request couldn't find a client (no clients available)
+                dontKill = dontKill || pendingListUnspentReqs[reqId].clientId == 0;
+            } else
+                // TODO here: inform controller of expired/timed-out requests
+                ++expired;
+        }
+
+        if (!dontKill) {
+            if (listUnspentPendingSoonTimer)
+                listUnspentPendingSoonTimer->deleteLater();
+            listUnspentPendingSoonTimer = nullptr;
+        }
+        Debug() << "checked pending list unspent reqs, re-enqueued " << redone << ", expired " << expired << ", 'dontKill' = " << int(dontKill);
+    };
+    listUnspentPendingSoonTimer = new QTimer(this);
+    listUnspentPendingSoonTimer->setSingleShot(false);
+    connect(listUnspentPendingSoonTimer, &QTimer::timeout, this, doCheck);
+    listUnspentPendingSoonTimer->start(1000); // For now it runs once per second: TODO: tune this or something..?
 }
 
 void EXMgr::processListUnspentResults(EXClient *client, const RPC::Message &m)
@@ -290,8 +357,9 @@ void EXMgr::processListUnspentResults(EXClient *client, const RPC::Message &m)
         Debug() << "(" << client->host << ") pending list unspent took " << (entry.tsVerified - pend.ts) << " msec round-trip";
         entry.heightVerified = client->info.height;
         auto l = m.data.toList();
-        if (l.isEmpty())
-            throw Err("Empty results");
+        if (l.isEmpty()) {
+            Debug("%s: Empty results for %s", __FUNCTION__, Q2C(entry.address.toString()));
+        }
         for (const auto & var : l) {
             const auto map (var.toMap());
             if (map.isEmpty()) throw("Empty map in results list");

@@ -40,6 +40,11 @@ signals:
     void newShuffleSpec(const ShuffleSpec &);
     void clientDisconnected(qint64 clientId);
 
+    /// these are emitted from Controller and are connected to private slots we handle in our thread.
+    void tellClientSpecRejected(qint64 clientId, qint64 refId, const QString & reason); // results in error sent to client with message reason
+    void tellClientSpecAccepted(qint64 clientId, qint64 refId); // results in "accepted" sent to client as result
+    void tellClientSpecPending(qint64 clientId, qint64 refId); // results in "pending" sent to client as result
+
 public slots:
     void onMessage(qint64 clientId, const RPC::Message &m);
     void onErrorMessage(qint64 clientId, const RPC::Message &m);
@@ -53,6 +58,11 @@ private:
 private slots:
     void on_newConnection();
     void on_acceptError(QAbstractSocket::SocketError);
+
+    // connected to signals above, runs in our thread
+    void _tellClientSpecRejected(qint64 clientId, qint64 refId, const QString & reason);
+    void _tellClientSpecAccepted(qint64 clientId, qint64 refId);
+    void _tellClientSpecPending(qint64 clientId, qint64 refId);
 
 private:
     QHostAddress addr;

@@ -9,6 +9,7 @@
 #include <QMap>
 #include <QSet>
 #include <QMetaType>
+#include <algorithm>
 
 class SrvMgr;
 class EXMgr;
@@ -28,15 +29,6 @@ struct AddressUnspentEntry
 // see register_MetaTypes.cpp for run-time registration with metatype system.
 Q_DECLARE_METATYPE(AddressUnspentEntry);
 
-/*
-struct ClientDesc
-{
-    qint64 clientId = -1;
-    QSet<quint64> amountsReq; /// shuffle output amounts requested
-    BTC::Address shuffleAddr, changeAddr;
-    QMap<BTC::Address, QMap<BTC::UTXO, quint64> > addrUtxoAmts;
-};
-*/
 
 struct ShuffleSpec
 {
@@ -50,6 +42,7 @@ struct ShuffleSpec
     void clear() { clientId = refId = NO_ID; amounts.clear(); shuffleAddr = changeAddr = BTC::Address(); addrUtxo.clear(); }
     bool isValid() const {
         return clientId > NO_ID && refId > NO_ID && !amounts.isEmpty()
+                && std::all_of(amounts.begin(), amounts.end(), [](quint64 amt) -> bool { return amt > 0; })
                 && !addrUtxo.isEmpty() && shuffleAddr.isValid() && changeAddr.isValid()
                 && shuffleAddr != changeAddr && !addrUtxo.contains(shuffleAddr);
     }
@@ -57,6 +50,40 @@ struct ShuffleSpec
 
 // see register_MetaTypes.cpp for run-time registration with metatype system.
 Q_DECLARE_METATYPE(ShuffleSpec);
+
+
+struct ClientStateException : public Exception
+{ using Exception::Exception; ~ClientStateException() override; };
+
+/// Client state managed by the controller, stored in controller's clientStates map
+struct ClientState
+{
+    qint64 clientId = NO_ID; // redundant. this field also exists in .spec ..
+    ShuffleSpec spec;
+    // handle to server -- assumption is all TcpServer objects live for lifetime of the Controller
+    TcpServer *server = nullptr;
+    enum SpecState {
+        None = 0, Pending, InProcess, Rejected, Accepted
+    };
+    SpecState specState = None;
+
+    // possibly more here...
+
+    // throws ClientStateException on error
+    inline void gotNewSpec(TcpServer *srv, const ShuffleSpec & sp)
+    {
+        if (!srv)
+            throw ClientStateException(QString("TcpServer is null! (clientId: %1)").arg(sp.clientId));
+        if (!sp.isValid())
+            throw ClientStateException(QString("Bad or invalid spec: %1").arg(sp.toDebugString()));
+        server = srv;
+        spec = sp; // copy is cheap (copy-on-write for Qt containers)
+        clientId = sp.clientId;
+        specState = Pending;
+    }
+};
+
+
 
 class Controller : public Mgr, public ThreadObjectMixin
 {
@@ -86,7 +113,13 @@ private:
     SrvMgr *srvMgr = nullptr;
     EXMgr *exMgr = nullptr;
     QMap<BTC::Address, AddressUnspentEntry> addressUnspentCache;
-    QMap<qint64, TcpServer *> clientIdToServerMap; ///< advisory map of client ids to servers
+    QMap<qint64, ClientState> clientStates; ///< map of client ids to ClientState
+
+    int removeClientFromAllUnspentCache(qint64 clientId);
+    void refClientToAllUnspentCache(const ShuffleSpec &spec);
+    void lookupAddresses(const QSet<BTC::Address> &);
+
+    QSet<BTC::Address> analyzeShuffleSpec(const ShuffleSpec &) const; // may throw Exception on rejection of spec
 };
 
 

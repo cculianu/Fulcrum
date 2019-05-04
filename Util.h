@@ -278,6 +278,39 @@ namespace Util {
     public:
         static void test(QObject *receiver = nullptr);
     };
+
+    /// Stringify any 1D container's values (typically QSet or QList) by calling 'ToStringFunc'
+    /// on each item, and producing a comma-separate string result, e.g.: "item1, item2, someotheritem" etc...
+    template <typename CONTAINER>
+    QString Stringify(const CONTAINER &cont,
+                      const std::function<QString(const typename CONTAINER::value_type &)> & ToStringFunc,
+                      const QString & sep = ", ")
+    {
+        QString ret;
+        {
+            QTextStream ss(&ret);
+            int ct = 0;
+            std::for_each(cont.begin(), cont.end(), [&](const typename CONTAINER::value_type & v){
+                ss << (ct++ ? sep : "") << ToStringFunc(v);
+            });
+        }
+        return ret;
+    }
+    /// Convenience for above -- call Stringify using a method pointer instead.
+    /// Method signature is QString method() const;
+    /// Defaults to 'toString()'
+    template <typename CONTAINER>
+    QString Stringify(const CONTAINER &cont,
+                      // Pass any method pointer -- by default it's &value_type::toString (for BTC::Address and BTC::UTXO)
+                      // but anything else works here if it matches the type signature.
+                      QString (CONTAINER::value_type::*ToStringMethodPtr)() const = &CONTAINER::value_type::toString,
+                      const QString & sep = ", ")
+    {
+        return Stringify(cont, [ToStringMethodPtr](const typename CONTAINER::value_type &v) -> QString {
+            return (v.*ToStringMethodPtr)();
+        }, sep);
+    }
+
 }
 
 #endif // UTIL_H

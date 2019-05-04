@@ -11,6 +11,7 @@
 #include <QSet>
 #include <QMap>
 #include <QPair>
+#include <atomic>
 
 class EXMgr : public Mgr
 {
@@ -23,6 +24,8 @@ public:
     void cleanup() override;
 
     inline qint64 newId() const { return IdMixin::newId(); } /// alias for app()->newId()
+
+    inline int latestHeight() const { return height.height; }
 
     /// Picks a client that is up-to-date in a random fashion. Subsequent
     /// calls to this function will return a new EXClient each time until the
@@ -59,7 +62,7 @@ private slots:
     void checkClients();
 
     /// connected to listUnspent above, runs in our thread
-    void _listUnspent(const BTC::Address &);
+    void _listUnspent(const BTC::Address &, qint64 reqId);
 
 private:
     const QString serversFile;
@@ -69,12 +72,12 @@ private:
     QList<EXClient *> clients;
     QMap<qint64, EXClient *> clientsById; ///< note to self: always maintain this map to be synched to above list
 
-    QTimer *checkClientsTimer = nullptr;
+    QTimer *checkClientsTimer = nullptr, *listUnspentPendingSoonTimer = nullptr;
 
     QSet<qint64> recentPicks;
 
     struct Height {
-        int height = 0;  ///< the largest height seen
+        std::atomic_int height = 0;  ///< the largest height seen
         QString header; ///< the block header of height
         qint64 ts = 0; ///< the ts of height, when first seen
         QSet<qint64> seenBy; ///< the server ids reporting this latest height
@@ -88,13 +91,18 @@ private:
     /// listunspent handling...
     struct PendingLUSReq {
         BTC::Address address;
-        qint64 clientId = NO_ID; // EXClient *-> id
+        qint64 clientId = NO_ID; // EXClient *-> id  NB: 0 here has special meaning: 'pending' (couldn't find a EXClient* immediately)
         qint64 ts = 0; // timestamp sent from Util::getTime()
         bool isValid() const { return clientId > NO_ID && ts > 0 && address.isValid(); }
     };
     /// map of message.id -> PendingLUSReq struct
     QMap<qint64, PendingLUSReq> pendingListUnspentReqs;
     void processListUnspentResults(EXClient *, const RPC::Message &m);
+    /// Below informs this class that there may be pending list unspent requests
+    /// (ones that didn't immediately find a client). A timer will be set up and
+    /// the pendingListUnspentReqs will be checked once per second until no
+    /// more un-cliented-reqs exist.
+    void checkListUnspentPendingSoon();
     /// /end listunspent handling.
 };
 

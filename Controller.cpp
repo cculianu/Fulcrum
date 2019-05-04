@@ -3,6 +3,8 @@
 #include "EXMgr.h"
 #include "TcpServer.h"
 
+ClientStateException::~ClientStateException() {} // for vtable
+
 Controller::Controller(SrvMgr *srv, EXMgr *ex)
     : Mgr(nullptr/* top-level because thread*/), srvMgr(srv), exMgr(ex)
 {
@@ -74,7 +76,7 @@ void Controller::onClientDisconnected(qint64 clientId)
     Debug() << __FUNCTION__ << ": clientid: " << clientId << ", server: " << server->objectName();
 
     int flushCt = 0;
-    if (auto mapServer = clientIdToServerMap.take(clientId) /*client is dead, remove entry from map*/;
+    if (auto mapServer = clientStates.take(clientId).server /*client is dead, remove entry from map*/;
             mapServer && mapServer != server) {
         // mapServer may be null and that's ok, if client never sent a spec.
         // more defensive programming
@@ -83,39 +85,175 @@ void Controller::onClientDisconnected(qint64 clientId)
     } else if (mapServer)
         ++flushCt;
     // remove client from cache, if any
-    for (auto it = addressUnspentCache.begin(); it != addressUnspentCache.end(); ++it)
-        if (it.value().clientSet.remove(clientId))
-            ++flushCt;
+    flushCt += removeClientFromAllUnspentCache(clientId);
     if (flushCt)
         Debug("Record of client %lld removed from %d internal data structures", clientId, flushCt);
 }
-void Controller::onNewShuffleSpec(const ShuffleSpec &spec)
+int Controller::removeClientFromAllUnspentCache(qint64 clientId)
+{
+    int ct = 0;
+    // remove client from cache, if any
+    for (auto it = addressUnspentCache.begin(); it != addressUnspentCache.end(); ++it)
+        if (it.value().clientSet.remove(clientId))
+            ++ct;
+    return ct;
+}
+// call this once client's utxo's are all fully verified...
+void Controller::refClientToAllUnspentCache(const ShuffleSpec &spec)
+{
+    if (!spec.isValid()) {
+        Error() << __FUNCTION__ << " invalid spec! FIXME! Spec: " << spec.toDebugString();
+        return;
+    }
+    for (auto it = spec.addrUtxo.begin(); it != spec.addrUtxo.end(); ++it) {
+        const auto & addr = it.key(); const auto & utxos = it.value();
+        if (auto it2 = addressUnspentCache.find(addr); it2 != addressUnspentCache.end()) {
+            auto & entry = it2.value();
+            if (entry.clientSet.contains(spec.clientId))
+                continue;
+            for (auto it3 = utxos.begin(); it3 != utxos.end(); ++it3) {
+                if (entry.utxoAmounts.contains(*it3)) {
+                    entry.clientSet.insert(spec.clientId);
+                    break; // client has a utxo in this set, add ref and break out of inner loop
+                }
+            }
+        }
+        // proceed to next addr in client spec...
+    }
+}
+void Controller::onNewShuffleSpec(const ShuffleSpec &spec_in)
 {
     server_boilerplate
-    Debug() << __FUNCTION__ << "; got spec: " << spec.toDebugString() << ", server: " << server->objectName();
-    if (spec.isValid())
-        // remember which server this client came from.
-        clientIdToServerMap[spec.clientId] = server;
-    else {
-        Warning() << "Ignoring invalid ShuffleSpec! FIXME!";
+    Debug() << __FUNCTION__ << "; got spec: " << spec_in.toDebugString() << ", server: " << server->objectName();
+    ClientState *state = nullptr;
+    try {
+        if (spec_in.clientId < 0) throw ClientStateException("Spec has invalid clientId!");
+        state = &(clientStates[spec_in.clientId]); // create new on not exist, or return existing ref.
+        state->gotNewSpec(server, spec_in); // saves server pointer as well as other info from spec, throws on error
+    } catch (const std::exception &e) {
+        Error() << __FUNCTION__ << ": " << e.what();
+        state = nullptr;
+        clientStates.remove(spec_in.clientId); // state is now inconsistent. remove from map.
         return;
     }
 
-    // TODO: here we will need to run through spec, check cache, update from listunspent in EX for any unknown UTXOs, etc...
+    ShuffleSpec & spec = state->spec;
+    Q_ASSERT(spec.clientId == state->clientId);
+    // here we will need to run through spec, check cache, update from listunspent in EX for any unknown UTXOs, etc...
+    removeClientFromAllUnspentCache(state->clientId); // since new spec, remove from clientId from all cache entries
+    try {
+        QSet<BTC::Address> addrsNeedLookup ( analyzeShuffleSpec(spec) );
+        if (addrsNeedLookup.isEmpty()) {
+            // if we get here it means they all checked out -- tell client everything was accepted
+            state->specState = ClientState::Accepted;
+            refClientToAllUnspentCache(state->spec);
+            emit state->server->tellClientSpecAccepted(spec.clientId, spec.refId);
+        } else {
+            // no outright rejections, but we still need to do some lookups to verify the utxos they claim exist.
+            state->specState = ClientState::InProcess;
+            emit state->server->tellClientSpecPending(spec.clientId, spec.refId);
+            lookupAddresses(addrsNeedLookup);
+        }
+    } catch (const std::exception &e) {
+        Debug() << "Client spec verification failed: " << e.what();
+        state->specState = ClientState::Rejected;
+        emit state->server->tellClientSpecRejected(spec.clientId, spec.refId, e.what());
+    }
 }
 #undef server_boilerplate
+QSet<BTC::Address> Controller::analyzeShuffleSpec(const ShuffleSpec &spec) const
+{
+    QSet<BTC::Address> addrsNeedLookup;
+    for (auto it = spec.addrUtxo.begin(); it != spec.addrUtxo.end(); ++it) {
+        const auto & addr = it.key(); const auto & utxos = it.value();
+        if (const auto it2 = addressUnspentCache.find(addr); it2 != addressUnspentCache.end()) {
+            // address does exist in cache, check each utxo from client spec
+            const auto & entry = it2.value();
+            const bool isEntryCurrent = entry.heightVerified >= exMgr->latestHeight(),
+                       // >1 min old cache entries are considered too old. expire.
+                       // TODO: make this tuneable, also make the cache entries auto-clean
+                       // and/or auto-refresh if they have clients subscribed to them
+                       isEntryOld = Util::getTime() - entry.tsVerified >= 60000;
+            if (isEntryOld && !isEntryCurrent) {
+                addrsNeedLookup.insert(addr);
+                continue;
+            }
+            for (const auto & utxo : utxos) {
+                if (!entry.utxoAmounts.contains(utxo)) {
+                    if (entry.utxoUnconfAmounts.contains(utxo) && isEntryCurrent) {
+                        // they specified an unconfirmed utxo
+                        // TODO HERE: break out everything, report error to clientId
+                        throw Exception(QString("Unconfirmed UTXO %1; please try again later or with a different utxo").arg(utxo.toString()));
+                    } else if (isEntryCurrent) {
+                        // utxo is unknown and yet we have a fresh cache entry..
+                        // also break out everything here, report error to clientId
+                        throw Exception(QString("Unknown UTXO %1 (for address %2); please try again later or with a different utxo").arg(utxo.toString()).arg(addr.toString()));
+                    }
+                    // else... require refresh
+                    addrsNeedLookup.insert(addr);
+                    break; // no need to continue scanning all utxos in spec, address itself needs a refresh
+                }
+                // else.. was in cache, proceed
+            }
+        } else {
+            // address does not exist in cache, add to lookup set
+            addrsNeedLookup.insert(addr);
+        }
+    }
+    return addrsNeedLookup;
+}
 void Controller::onNewBlockHeight(int height)
 {
     // from exMgr
     Debug() << __FUNCTION__ << "; got new block height: " << height;
 
-    // TODO: use this information towards seeing if addressUnspentCache needs refreshing, etc
+    // TODO: use this information towards seeing if addressUnspentCache needs refreshing, expiring, etc
 }
 void Controller::onListUnspentResults(const AddressUnspentEntry &entry)
 {
     // from exMgr
     Debug() << __FUNCTION__ <<"; got list unspent results: " << entry.toDebugString();
     // TODO: handle, process, etc
+    {   // first, update cache, preserving old client id set refs
+        const auto oldSetIfAnyCopy ( addressUnspentCache.take(entry.address).clientSet );
+        addressUnspentCache[entry.address] = entry;
+        addressUnspentCache[entry.address].clientSet += oldSetIfAnyCopy;
+    }
+    for (auto it = clientStates.begin(); it != clientStates.end(); ++it) {
+        ClientState & state = it.value();
+        if (state.specState != ClientState::InProcess)
+            continue;
+        if (!state.spec.addrUtxo.contains(entry.address))
+            continue;
+        // TODO here -- possibly store in the state the set of addresses this client needs to avoid redundancy
+        // or inconsistency here? To be investigated later... -Calin
+        try {
+            auto addrSet = analyzeShuffleSpec(state.spec);
+            if (addrSet.isEmpty()) {
+                // yay! accepted!
+                state.specState = ClientState::Accepted;
+                refClientToAllUnspentCache(state.spec);
+                emit state.server->tellClientSpecAccepted(state.spec.clientId, state.spec.refId);
+            } else if (addrSet.contains(entry.address)) {
+                // ruh-roh -- they may have extra UTXOs in their spec that aren't in the unspent list.
+                throw Exception(QString("Could not verify UTXOs for address \"%1\"").arg(entry.address.toString()));
+            }
+        } catch (const std::exception & e) {
+            state.specState = ClientState::Rejected;
+            removeClientFromAllUnspentCache(state.clientId);
+            emit state.server->tellClientSpecRejected(state.spec.clientId, state.spec.refId, e.what());
+        }
+    }
+}
+
+void Controller::lookupAddresses(const QSet<BTC::Address> &addrs)
+{
+    Debug() << __FUNCTION__ << "; addrs = " << Util::Stringify(addrs);
+
+    // TODO: rate limit this or collate them... for now we just send them all out immediately
+    for (const auto & addr : addrs) {
+        emit exMgr->listUnspent(addr);
+    }
 }
 
 QString ShuffleSpec::toDebugString() const
@@ -128,11 +266,10 @@ QString ShuffleSpec::toDebugString() const
         for (const auto amt : amounts)
             ts << amt << ", ";
         ts << ">; shuffleAddr: " << shuffleAddr.toString() << "; changeAddr: " << changeAddr.toString();
-        ts << "; <utxos: ";
+        ts << "; <addrs->utxos: ";
         for (auto it = addrUtxo.begin(); it != addrUtxo.end(); ++it) {
-            for (const auto & utxo : it.value()) {
-                ts << it.key().toString() << "/" << utxo.toString() << ", ";
-            }
+            ts << "[addr: " << it.key().toString() << " utxos: ";
+            ts << Util::Stringify(it.value()) << "], ";
         }
         ts << ">)";
     }
