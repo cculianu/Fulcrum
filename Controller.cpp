@@ -216,8 +216,11 @@ void Controller::onListUnspentResults(const AddressUnspentEntry &entry)
     // TODO: handle, process, etc
     {   // first, update cache, preserving old client id set refs
         const auto oldSetIfAnyCopy ( addressUnspentCache.take(entry.address).clientSet );
+        const int oldSetSize = oldSetIfAnyCopy.size();
         addressUnspentCache[entry.address] = entry;
-        addressUnspentCache[entry.address].clientSet += oldSetIfAnyCopy;
+        const int newSetSize = ( addressUnspentCache[entry.address].clientSet += oldSetIfAnyCopy ).size();
+        if (oldSetSize)
+            Debug() << "Replaced/freshened existing unspent cache entry for address \"" << entry.address.toString() << "\", total refCt now: " << newSetSize;
     }
     for (auto it = clientStates.begin(); it != clientStates.end(); ++it) {
         ClientState & state = it.value();
