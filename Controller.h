@@ -12,6 +12,7 @@
 
 class SrvMgr;
 class EXMgr;
+class TcpServer;
 
 struct AddressUnspentEntry
 {
@@ -39,7 +40,7 @@ struct ClientDesc
 struct ShuffleSpec
 {
     qint64 clientId = NO_ID, ///< id of the Client * object asking for this spec
-           refId = NO_ID; ///< id passed in to the method request
+           refId = NO_ID; ///< id passed in to the method request from remote client
     QSet<quint64> amounts; /// shuffle output amounts requested in satoshis
     BTC::Address shuffleAddr, changeAddr;
     QMap<BTC::Address, QSet<BTC::UTXO> > addrUtxo;
@@ -52,6 +53,8 @@ struct ShuffleSpec
                 && shuffleAddr != changeAddr;
     }
 };
+
+Q_DECLARE_METATYPE(ShuffleSpec);
 
 class Controller : public Mgr, public ThreadObjectMixin
 {
@@ -68,10 +71,16 @@ protected:
     virtual void on_started() override; // from ThreadObjectMixin
     virtual void on_finished() override; // from ThreadObjectMixin
 
+private slots:
+    // NB: assumption is TcpServer lives for lifetime of this object. If this invariant changes,  please update this code.
+    void onNewTcpServer(TcpServer *);
+    void onClientDisconnected(qint64 clientId);
+    void onNewShuffleSpec(const ShuffleSpec &);
 private:
     SrvMgr *srvMgr = nullptr;
     EXMgr *exMgr = nullptr;
     QMap<BTC::Address, AddressUnspentEntry> addessUnspentCache;
+    QMap<qint64, TcpServer *> clientIdToServerMap; ///< advisory map of client ids to servers
 };
 
 

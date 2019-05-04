@@ -10,6 +10,7 @@
 #include <QMap>
 
 class Client;
+struct ShuffleSpec;
 
 struct TcpServerError : public Exception
 {
@@ -36,6 +37,8 @@ public:
     const RPC::MethodMap & rpcMethods() const { return _rpcMethods; }
 
 signals:
+    void newShuffleSpec(const ShuffleSpec &);
+    void clientDisconnected(qint64 clientId);
 
 public slots:
     void onMessage(qint64 clientId, const RPC::Message &m);
@@ -49,6 +52,7 @@ private:
 
 private slots:
     void on_newConnection();
+    void on_acceptError(QAbstractSocket::SocketError);
 
 private:
     QHostAddress addr;

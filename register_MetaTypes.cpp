@@ -17,6 +17,7 @@ void App::register_MetaTypes()
         qRegisterMetaType<BTC::Address>();
         // ditto for AddressUnspentEntry
         qRegisterMetaType<AddressUnspentEntry>();
+        qRegisterMetaType<ShuffleSpec>();
 
         registered = true;
     }

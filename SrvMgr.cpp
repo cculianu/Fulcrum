@@ -40,5 +40,6 @@ void SrvMgr::startServers()
         auto srv = new TcpServer(iface.first, iface.second);
         servers.push_back(srv); // save server in list unconditionally so we may delete later because tryStart may throw
         srv->tryStart();
+        emit newTcpServer(srv);
     }
 }

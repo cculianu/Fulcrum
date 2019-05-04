@@ -1,12 +1,14 @@
 #include "Controller.h"
 #include "SrvMgr.h"
 #include "EXMgr.h"
+#include "TcpServer.h"
 
 Controller::Controller(SrvMgr *srv, EXMgr *ex)
     : Mgr(nullptr/* top-level because thread*/), srvMgr(srv), exMgr(ex)
 {
     setObjectName("Controller");
     _thread.setObjectName(objectName());
+    connect(srv, SIGNAL(newTcpServer(TcpServer *)), this, SLOT(onNewTcpServer(TcpServer *)));
 }
 
 Controller::~Controller()
@@ -40,6 +42,55 @@ void Controller::on_finished()
     ThreadObjectMixin::on_finished();
     Debug() << objectName() << " finished.";
 }
+
+void Controller::onNewTcpServer(TcpServer *srv)
+{
+    // NB: assumption is TcpServer lives for lifetime of this object. If this invariant changes,
+    // please update this code.
+    Debug() << __FUNCTION__ << ": " << srv->objectName();
+
+    // attach signals to our slots so we get informed of relevant state changes
+    connect(srv, &TcpServer::newShuffleSpec, this, &Controller::onNewShuffleSpec);
+    connect(srv, &TcpServer::clientDisconnected, this, &Controller::onClientDisconnected);
+    const QString srvName(srv->objectName());
+    connect(srv, &QObject::destroyed, this, [srvName]{
+        /// defensive programming reminder if invariant is violated by future code changes.
+        /// this won't normally ever be reached, as assumption is the controller always dies first.
+        Error() << "TcpServer \"" << srvName << "\" destroyed while Controller still alive! FIXME!";
+    });
+}
+
+#define server_boilerplate \
+    TcpServer *server = dynamic_cast<TcpServer *>(sender()); \
+    if (!server) { \
+        Error() << __FUNCTION__ << " sender() is either NULL or not a TcpServer! FIXME!"; \
+        return; \
+    }
+void Controller::onClientDisconnected(qint64 clientId)
+{
+    server_boilerplate
+    Debug() << __FUNCTION__ << ": clientid: " << clientId << ", server: " << server->objectName();
+
+    if (auto mapServer = clientIdToServerMap.take(clientId) /*client is dead, remove entry from map*/;
+            mapServer && mapServer != server) {
+        // mapServer may be null and that's ok, if client never sent a spec.
+        // more defensive programming
+        Warning() << __FUNCTION__ << " clientId: " << clientId << " had server: " << mapServer->objectName()
+                  << " in map, but sender was: " << server->objectName();
+    }
+}
+void Controller::onNewShuffleSpec(const ShuffleSpec &spec)
+{
+    server_boilerplate
+    Debug() << __FUNCTION__ << "; got spec: " << spec.toDebugString() << ", server: " << server->objectName();
+    if (server && spec.clientId >= 0)
+        // remember which server this client came from.
+        clientIdToServerMap[spec.clientId] = server;
+
+    // TODO: here we will need to run through spec, check cache, update from listunspent in EX for any unknown UTXOs, etc...
+}
+#undef server_boilerplate
+
 
 QString ShuffleSpec::toDebugString() const
 {

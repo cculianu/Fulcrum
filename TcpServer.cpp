@@ -48,6 +48,7 @@ void TcpServer::on_started()
 {
     QString result = "ok";
     connect(this, SIGNAL(newConnection()), this, SLOT(on_newConnection()));
+    connect(this, SIGNAL(acceptError(QAbstractSocket::SocketError)), this, SLOT(on_acceptError(QAbstractSocket::SocketError)));
     if (!listen(addr, port)) {
         result = errorString();
         result = result.isEmpty() ? "Error binding/listening for connections" : result;
@@ -85,6 +86,11 @@ void TcpServer::on_newConnection()
     }
 }
 
+void TcpServer::on_acceptError(QAbstractSocket::SocketError e)
+{
+    Error() << objectName() << "; error acceptError, code: " << int(e);
+}
+
 Client *
 TcpServer::newClient(QTcpSocket *sock)
 {
@@ -107,6 +113,7 @@ TcpServer::newClient(QTcpSocket *sock)
     connect(ret, &AbstractConnection::lostConnection, this, [this,clientId](AbstractConnection *cl){
         if (auto client = dynamic_cast<Client *>(cl) ; client) {
             Debug() <<  client->prettyName() << " lost connection";
+            emit clientDisconnected(client->id);
             killClient(client);
         } else {
             Error() << "Internal error: lostConnection callback received null client! (expected client id: " << clientId << ")";
@@ -267,6 +274,7 @@ bool TcpServer::processSpec(qint64 clientId, const RPC::Message &m, QString & er
         if (!spec.isValid())
             throw ErrorOut("Spec evaluates to invalid");
         Debug() << "Got Spec -----> " << spec.toDebugString();
+        emit newShuffleSpec(spec);
     } catch (const std::exception & e) {
         errMsg = e.what();
         return false;
