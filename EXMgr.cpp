@@ -16,6 +16,8 @@ EXMgr::~EXMgr()
     cleanup();
 }
 
+QObject *EXMgr::qobj() { return this; }
+
 void EXMgr::startup()
 {
     if (clients.isEmpty()) {
@@ -35,7 +37,7 @@ void EXMgr::cleanup()
     clientsById.clear();
     _rpcMethods.clear();
     delete checkClientsTimer; checkClientsTimer = nullptr;
-    delete listUnspentPendingSoonTimer; listUnspentPendingSoonTimer = nullptr;
+    _timerMap.clear(); // paranoia -- this is the map from TimersByNameMixin
 }
 
 void EXMgr::loadServers()
@@ -297,10 +299,12 @@ void EXMgr::_listUnspent(const BTC::Address &a, qint64 reqid)
 
 void EXMgr::checkListUnspentPendingSoon()
 {
-    if (listUnspentPendingSoonTimer)
+    if (isTimerByNameActive(__FUNCTION__))
+        // short-circuit return; this is unnecessary as the callOnTimerSoon below checks this, but we
+        // do it here too to keep the code readable
         return;
 
-    auto doCheck = [this] {
+    auto doCheck = [this]() -> bool {
         decltype(pendingListUnspentReqs) toRedo;
         bool dontKill = false;
         int redone = 0, expired = 0;
@@ -331,17 +335,12 @@ void EXMgr::checkListUnspentPendingSoon()
                 ++expired;
         }
 
-        if (!dontKill) {
-            if (listUnspentPendingSoonTimer)
-                listUnspentPendingSoonTimer->deleteLater();
-            listUnspentPendingSoonTimer = nullptr;
-        }
         Debug() << "checked pending list unspent reqs, re-enqueued " << redone << ", expired " << expired << ", 'dontKill' = " << int(dontKill);
+        return dontKill;
     };
-    listUnspentPendingSoonTimer = new QTimer(this);
-    listUnspentPendingSoonTimer->setSingleShot(false);
-    connect(listUnspentPendingSoonTimer, &QTimer::timeout, this, doCheck);
-    listUnspentPendingSoonTimer->start(1000); // For now it runs once per second: TODO: tune this or something..?
+
+    // For now it runs once per second: TODO: tune this or something..?
+    callOnTimerSoon(1000, __FUNCTION__, doCheck);
 }
 
 void EXMgr::processListUnspentResults(EXClient *client, const RPC::Message &m)

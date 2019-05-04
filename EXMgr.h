@@ -6,6 +6,7 @@
 #include "RPC.h"
 #include "BTC.h"
 #include "Controller.h"
+#include "Mixins.h"
 #include <QObject>
 #include <QList>
 #include <QSet>
@@ -13,7 +14,7 @@
 #include <QPair>
 #include <atomic>
 
-class EXMgr : public Mgr
+class EXMgr : public Mgr, protected TimersByNameMixin
 {
     Q_OBJECT
 public:
@@ -64,6 +65,9 @@ private slots:
     /// connected to listUnspent above, runs in our thread
     void _listUnspent(const BTC::Address &, qint64 reqId);
 
+protected:
+    QObject *qobj() override;
+
 private:
     const QString serversFile;
     void loadServers(); // may throw
@@ -72,7 +76,7 @@ private:
     QList<EXClient *> clients;
     QMap<qint64, EXClient *> clientsById; ///< note to self: always maintain this map to be synched to above list
 
-    QTimer *checkClientsTimer = nullptr, *listUnspentPendingSoonTimer = nullptr;
+    QTimer *checkClientsTimer = nullptr;
 
     QSet<qint64> recentPicks;
 

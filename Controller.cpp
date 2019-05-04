@@ -253,10 +253,16 @@ void Controller::lookupAddresses(const QSet<BTC::Address> &addrs)
 {
     Debug() << __FUNCTION__ << "; addrs = " << Util::Stringify(addrs);
 
-    // TODO: rate limit this or collate them... for now we just send them all out immediately
-    for (const auto & addr : addrs) {
-        emit exMgr->listUnspent(addr);
-    }
+    pendingAddressLookups += addrs;
+
+    // for now we queue these up and do them in batckes on a timer that won't run more often than once every 250ms
+    // TODO: tweak this or maybe remove if it's not needed.
+    callOnTimerSoonNoRepeat(250, "AddressLookups", [this]() {
+        for (const auto & addr : pendingAddressLookups) {
+            emit exMgr->listUnspent(addr);
+        }
+        pendingAddressLookups.clear();
+    });
 }
 
 QString ShuffleSpec::toDebugString() const

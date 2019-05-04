@@ -77,6 +77,14 @@ protected:
         const QString & timerName, ///< timer name. these should be unique. If same named timer is active, function will return immediately, func will be discarded.
         const std::function<bool(void)> & func ///< function to call on timeout. If function returns true, timer is not stopped. Otherwise, it is removed from the map, stopped, and deleted later.
     );
+    /// Identical to above, except takes a pure voidfunc. It's as if the above returned false (so will not keep going).
+    void callOnTimerSoonNoRepeat(
+        int timeout_milliseconds,
+        const QString & timerName,
+        const std::function<void(void)> & singleShotFunc
+    );
+
+    inline bool isTimerByNameActive(const QString & name) const { return _timerMap.contains(name); }
 };
 
 #endif // SHUFFLEUP_MIXINS_H

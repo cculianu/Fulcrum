@@ -58,7 +58,7 @@ qint64 IdMixin::newId() { return app()->newId(); }
 TimersByNameMixin::TimersByNameMixin() {}
 TimersByNameMixin::~TimersByNameMixin() {}
 
-void TimersByNameMixin::callOnTimerSoon(int ms, const QString &name, const std::function<bool ()> &func)
+void TimersByNameMixin::callOnTimerSoon(int ms, const QString &name, const std::function<bool (void)> &func)
 {
     if (_timerMap.contains(name))
         // timer already active
@@ -66,13 +66,21 @@ void TimersByNameMixin::callOnTimerSoon(int ms, const QString &name, const std::
     QSharedPointer<QTimer> timer(new QTimer(qobj()), [](QTimer *t){ t->deleteLater(); });
     timer->setSingleShot(false);
     QObject::connect(timer.get(), &QTimer::timeout, qobj(), [this, func, name]{
-         const bool keepGoing = func();
-         if (!keepGoing) {
-             auto timer =  _timerMap.take(name);
-             if (timer) timer->stop();
-             // timer will go out of scope here and deleteLater() will be called.
-         }
+        const bool keepGoing = func();
+        if (!keepGoing) {
+            auto timer =  _timerMap.take(name);
+            if (timer)
+                timer->stop();
+            // timer will go out of scope here and deleteLater() will be called.
+        }
     });
     _timerMap[name] = timer;
     timer->start(ms);
+    //Debug() << "timerByName: " << name << " started, ms = " << ms;
+}
+
+/// Identical to above, except takes a pure voidfunc. It's as if the above returned false (so will not keep going).
+void TimersByNameMixin::callOnTimerSoonNoRepeat(int ms, const QString &name, const std::function<void (void)> & fn)
+{
+    callOnTimerSoon(ms, name, [fn]() -> bool { fn(); return false; });
 }

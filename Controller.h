@@ -85,7 +85,7 @@ struct ClientState
 
 
 
-class Controller : public Mgr, public ThreadObjectMixin
+class Controller : public Mgr, public ThreadObjectMixin, protected TimersByNameMixin
 {
     Q_OBJECT
 public:
@@ -96,7 +96,7 @@ public:
     void cleanup() override; // from Mgr
 
 protected:
-    virtual QObject *qobj() override; // from ThreadObjectMixin
+    virtual QObject *qobj() override; // from ThreadObjectMixin & TimersByNameMixin
     virtual void on_started() override; // from ThreadObjectMixin
     virtual void on_finished() override; // from ThreadObjectMixin
 
@@ -114,6 +114,7 @@ private:
     EXMgr *exMgr = nullptr;
     QMap<BTC::Address, AddressUnspentEntry> addressUnspentCache;
     QMap<qint64, ClientState> clientStates; ///< map of client ids to ClientState
+    QSet<BTC::Address> pendingAddressLookups;
 
     int removeClientFromAllUnspentCache(qint64 clientId);
     void refClientToAllUnspentCache(const ShuffleSpec &spec);
