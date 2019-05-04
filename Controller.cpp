@@ -213,7 +213,6 @@ void Controller::onListUnspentResults(const AddressUnspentEntry &entry)
 {
     // from exMgr
     Debug() << __FUNCTION__ <<"; got list unspent results: " << entry.toDebugString();
-    // TODO: handle, process, etc
     {   // first, update cache, preserving old client id set refs
         const auto oldSetIfAnyCopy ( addressUnspentCache.take(entry.address).clientSet );
         const int oldSetSize = oldSetIfAnyCopy.size();
@@ -222,6 +221,7 @@ void Controller::onListUnspentResults(const AddressUnspentEntry &entry)
         if (oldSetSize)
             Debug() << "Replaced/freshened existing unspent cache entry for address \"" << entry.address.toString() << "\", total refCt now: " << newSetSize;
     }
+    // next, search for clients still "in process" and check if they are now 100% verified
     for (auto it = clientStates.begin(); it != clientStates.end(); ++it) {
         ClientState & state = it.value();
         if (state.specState != ClientState::InProcess)

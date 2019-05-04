@@ -8,6 +8,7 @@
 #include <random>
 #include <algorithm>
 #include <chrono>
+#include <utility>
 #define Q2C(qstr) ((qstr).toUtf8().constData())
 
 class App;
@@ -311,6 +312,33 @@ namespace Util {
         }, sep);
     }
 
+    /// This is an alternative to creating signal/slot pairs
+    /// for calling a method on an object that runs in another thread.
+    ///
+    /// I got tired of repeating that pattern over and over again (e.g.
+    /// creating myMethod() as a signal connected to a private slot
+    /// _myMethod()).
+    ///
+    /// To save typing, this template can just allow you to directly call
+    /// a method on an object in its thread (uses QTimer::singleShot).
+    ///
+    /// Basically, it directly check the current thread versus object
+    /// thread, and if they match, calls 'method' immediately.  If they do not
+    /// match, enqeues the call using argument forwarding on a timer.
+    /// Example usage:
+    ///       Util::CallOnObject(myObj, &MyObj::doSomething, arg1, arg2, arg3)
+    template <typename QOBJ, typename METHOD, typename ... Args>
+    void CallOnObject(QOBJ obj, METHOD method, Args && ...args) {
+        if (QThread::currentThread() == obj->thread()) {
+            // direct call to save on a copy c'tor
+            (obj->*method)(std::forward<Args>(args)...);
+        } else {
+            QTimer::singleShot(0, obj, [obj,method,args...] {
+                // argument pack is captured here in closure using copy c'tor for each object. yay.
+                (obj->*method)(args...);
+            });
+        }
+    }
 }
 
 #endif // UTIL_H
