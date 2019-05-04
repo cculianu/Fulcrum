@@ -51,7 +51,7 @@ struct ShuffleSpec
     bool isValid() const {
         return clientId > NO_ID && refId > NO_ID && !amounts.isEmpty()
                 && !addrUtxo.isEmpty() && shuffleAddr.isValid() && changeAddr.isValid()
-                && shuffleAddr != changeAddr;
+                && shuffleAddr != changeAddr && !addrUtxo.contains(shuffleAddr);
     }
 };
 
