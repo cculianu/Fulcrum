@@ -58,11 +58,14 @@ qint64 IdMixin::newId() { return app()->newId(); }
 TimersByNameMixin::TimersByNameMixin() {}
 TimersByNameMixin::~TimersByNameMixin() {}
 
-void TimersByNameMixin::callOnTimerSoon(int ms, const QString &name, const std::function<bool (void)> &func)
+void TimersByNameMixin::callOnTimerSoon(int ms, const QString &name, const std::function<bool (void)> &func, bool force)
 {
-    if (_timerMap.contains(name))
-        // timer already active
+    if (auto it = _timerMap.find(name); it != _timerMap.end()) {
+        if (force)
+            it.value()->start(it.value()->interval()); // don't enqueue functor, just restart timer from this point forward
+        // timer already active, abort now
         return;
+    }
     QSharedPointer<QTimer> timer(new QTimer(qobj()), [](QTimer *t){ t->deleteLater(); });
     timer->setSingleShot(false);
     QObject::connect(timer.get(), &QTimer::timeout, qobj(), [this, func, name]{
@@ -80,7 +83,7 @@ void TimersByNameMixin::callOnTimerSoon(int ms, const QString &name, const std::
 }
 
 /// Identical to above, except takes a pure voidfunc. It's as if the above returned false (so will not keep going).
-void TimersByNameMixin::callOnTimerSoonNoRepeat(int ms, const QString &name, const std::function<void (void)> & fn)
+void TimersByNameMixin::callOnTimerSoonNoRepeat(int ms, const QString &name, const std::function<void (void)> & fn, bool force)
 {
-    callOnTimerSoon(ms, name, [fn]() -> bool { fn(); return false; });
+    callOnTimerSoon(ms, name, [fn]() -> bool { fn(); return false; }, force);
 }

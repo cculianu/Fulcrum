@@ -23,6 +23,12 @@ struct AddressUnspentEntry
     int heightVerified = 0;
     qint64 tsVerified = 0;
 
+    mutable qint64 tsLastCacheHit = 0;
+    mutable int cacheHitCt = 0;
+
+    inline void cacheHit() const { tsLastCacheHit = Util::getTime(); ++cacheHitCt; }
+    inline qint64 elapsedLastCacheHit() const { return Util::getTime() - tsLastCacheHit; }
+    inline qint64 age() const { return Util::getTime() - tsVerified; }
     QString toDebugString() const;
 };
 
@@ -95,6 +101,12 @@ public:
     void startup() override; // from Mgr
     void cleanup() override; // from Mgr
 
+signals:
+    /// it's advised to always connect to this via QueuedConnection. This is emitted when a client that
+    /// was in the "Accepted" spec state went to "Rejected" due to missing UTXOs that were previously
+    /// verified.  Also connected to internal onClientDoubleSpend() via a QueuedConnection.
+    void clientDoubleSpendDetected(qint64 clientId);
+
 protected:
     virtual QObject *qobj() override; // from ThreadObjectMixin & TimersByNameMixin
     virtual void on_started() override; // from ThreadObjectMixin
@@ -109,6 +121,8 @@ private slots:
     void onListUnspentResults(const AddressUnspentEntry &);
     // connected by us to exMgr's "gotNewBlockHeight" signal.
     void onNewBlockHeight(int);
+    // connected to our own clientDoubleSpendDetected signal via a QueuedConnection
+    void onClientDoubleSpendDetected(qint64 clientId);
 private:
     SrvMgr *srvMgr = nullptr;
     EXMgr *exMgr = nullptr;

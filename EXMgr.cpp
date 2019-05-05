@@ -80,7 +80,9 @@ void EXMgr::loadServers()
 void EXMgr::onNewConnection(EXClient *client)
 {
     Debug () << "New connection for " << client->host;
-    emit client->sendRequest(newId(), "server.version", QVariantList({QString("%1/%2").arg(APPNAME).arg(VERSION), QString("1.4")}));
+    // NB: we pass our protocol version as 101.0, etc. this is to prevent EX server from thinking we are
+    // an ancient Electron Cash version.
+    emit client->sendRequest(newId(), "server.version", QVariantList({QString("%1/10%2").arg(APPNAME).arg(VERSION), QString("1.4")}));
     emit client->sendRequest(newId(), "blockchain.headers.subscribe");
 }
 

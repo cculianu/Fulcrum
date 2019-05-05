@@ -10,9 +10,6 @@ Controller::Controller(SrvMgr *srv, EXMgr *ex)
 {
     setObjectName("Controller");
     _thread.setObjectName(objectName());
-    connect(srvMgr, SIGNAL(newTcpServer(TcpServer *)), this, SLOT(onNewTcpServer(TcpServer *)));
-    connect(exMgr, SIGNAL(gotListUnspentResults(const AddressUnspentEntry &)), this, SLOT(onListUnspentResults(const AddressUnspentEntry &)));
-    connect(exMgr, SIGNAL(gotNewBlockHeight(int)), this, SLOT(onNewBlockHeight(int)));
 }
 
 Controller::~Controller()
@@ -28,6 +25,11 @@ void Controller::cleanup()
 void Controller::startup()
 {
     start(); // start thread
+    // these conns get auto-cleaned on stop() call
+    conns.push_back(connect(srvMgr, SIGNAL(newTcpServer(TcpServer *)), this, SLOT(onNewTcpServer(TcpServer *))));
+    conns.push_back(connect(exMgr, SIGNAL(gotListUnspentResults(const AddressUnspentEntry &)), this, SLOT(onListUnspentResults(const AddressUnspentEntry &))));
+    conns.push_back(connect(exMgr, SIGNAL(gotNewBlockHeight(int)), this, SLOT(onNewBlockHeight(int))));
+    conns.push_back(connect(this, SIGNAL(clientDoubleSpendDetected(qint64)), this, SLOT(onClientDoubleSpendDetected(qint64)), Qt::QueuedConnection));
     if (chan.get<QString>(10000).isEmpty())
         throw Exception("Controller startup timed out after 10 seconds");
 }
@@ -54,14 +56,14 @@ void Controller::onNewTcpServer(TcpServer *srv)
     Debug() << __FUNCTION__ << ": " << srv->objectName();
 
     // attach signals to our slots so we get informed of relevant state changes
-    connect(srv, &TcpServer::newShuffleSpec, this, &Controller::onNewShuffleSpec);
-    connect(srv, &TcpServer::clientDisconnected, this, &Controller::onClientDisconnected);
+    conns.push_back(connect(srv, &TcpServer::newShuffleSpec, this, &Controller::onNewShuffleSpec));
+    conns.push_back(connect(srv, &TcpServer::clientDisconnected, this, &Controller::onClientDisconnected));
     const QString srvName(srv->objectName());
-    connect(srv, &QObject::destroyed, this, [srvName]{
+    conns.push_back(connect(srv, &QObject::destroyed, this, [srvName]{
         /// defensive programming reminder if invariant is violated by future code changes.
         /// this won't normally ever be reached, as assumption is the controller always dies first.
         Error() << "TcpServer \"" << srvName << "\" destroyed while Controller still alive! FIXME!";
-    });
+    }));
 }
 
 #define server_boilerplate \
@@ -93,9 +95,12 @@ int Controller::removeClientFromAllUnspentCache(qint64 clientId)
 {
     int ct = 0;
     // remove client from cache, if any
-    for (auto it = addressUnspentCache.begin(); it != addressUnspentCache.end(); ++it)
-        if (it.value().clientSet.remove(clientId))
+    for (auto it = addressUnspentCache.begin(); it != addressUnspentCache.end(); ++it) {
+        if (it.value().clientSet.remove(clientId)) {
             ++ct;
+            it.value().cacheHit(); // mark this as a "cache hit" on unref to keep this cache entry around for a while even if clientset is empty. see onNewBlockHeight()
+        }
+    }
     return ct;
 }
 // call this once client's utxo's are all fully verified...
@@ -173,7 +178,7 @@ QSet<BTC::Address> Controller::analyzeShuffleSpec(const ShuffleSpec &spec) const
                        // >1 min old cache entries are considered too old. expire.
                        // TODO: make this tuneable, also make the cache entries auto-clean
                        // and/or auto-refresh if they have clients subscribed to them
-                       isEntryOld = Util::getTime() - entry.tsVerified >= 60000;
+                       isEntryOld = entry.age() >= 60000;
             if (isEntryOld && !isEntryCurrent) {
                 addrsNeedLookup.insert(addr);
                 continue;
@@ -181,6 +186,7 @@ QSet<BTC::Address> Controller::analyzeShuffleSpec(const ShuffleSpec &spec) const
             for (const auto & utxo : utxos) {
                 if (!entry.utxoAmounts.contains(utxo)) {
                     if (entry.utxoUnconfAmounts.contains(utxo) && isEntryCurrent) {
+                        entry.cacheHit();
                         // they specified an unconfirmed utxo
                         // TODO HERE: break out everything, report error to clientId
                         throw Exception(QString("Unconfirmed UTXO %1; please try again later or with a different utxo").arg(utxo.toString()));
@@ -192,8 +198,10 @@ QSet<BTC::Address> Controller::analyzeShuffleSpec(const ShuffleSpec &spec) const
                     // else... require refresh
                     addrsNeedLookup.insert(addr);
                     break; // no need to continue scanning all utxos in spec, address itself needs a refresh
+                } else {
+                    // else.. was in cache, proceed
+                    entry.cacheHit(); // mark the cache hit.
                 }
-                // else.. was in cache, proceed
             }
         } else {
             // address does not exist in cache, add to lookup set
@@ -206,27 +214,87 @@ void Controller::onNewBlockHeight(int height)
 {
     // from exMgr
     Debug() << __FUNCTION__ << "; got new block height: " << height;
+    static constexpr int COOLDOWN = 15000; // 15 seconds
 
-    // TODO: use this information towards seeing if addressUnspentCache needs refreshing, expiring, etc
+    /// we wait 15 seconds to do this to give more servers a chance to catch up to the new height
+    /// as well as avoid the situation where multiple blocks come in 1 after another.  note the force=true
+    /// arg which restarts the timer each time.  This is ok here since this signal arrives only once
+    /// per new block height detected.
+    callOnTimerSoonNoRepeat(COOLDOWN, "onNewBlockHeight", [this]{
+        Debug() << "onNewBlockHeight: new height callback fired... height: " << this->exMgr->latestHeight();
+        QSet<BTC::Address> addrsToRemove, addrsToRefresh;
+        // loop through entire cache, either marking entries as "for removal" or queueing up a refresh.
+        for (auto it = addressUnspentCache.begin(); it != addressUnspentCache.end(); ++it) {
+            const auto & addr = it.key();  const auto & entry = it.value();
+            // NB: isHeightCurrent has fuzzy race conditions here -- exMgr->latestHeight(), while thread-safe
+            // can still get updated at any time. But that's ok.  This is just a cache cleanup & refresh
+            // routine and it's ok if it sometimes decides incorrectly (as it's only a cache and not app-logic here).
+            const bool isHeightCurrent = entry.heightVerified >= this->exMgr->latestHeight();
+            if ( !isHeightCurrent
+                    && entry.clientSet.isEmpty()
+                    && entry.elapsedLastCacheHit() > COOLDOWN)
+            {
+                // height is old, has no ref'ing clients, and it hasn't had a cache hit in COOLDOWN msec,
+                // so flag for removal
+                addrsToRemove.insert(addr);
+                continue;
+            }
+            /// at this point it's either got refing clients or is a reasonably new entry that had a cache hit recently
+            /// even if clientset is empty.. so check it if needs update. Usually this branch always is true.
+            if ( !isHeightCurrent )
+                // verified height is behind, flag for refresh
+                addrsToRefresh.insert(addr);
+        }
+        if (!addrsToRemove.isEmpty()) {
+            Debug() << "onNewBlockHeight: removing " << addrsToRemove.size() << " defunct address-unspent cache entries";
+            std::for_each(addrsToRemove.begin(), addrsToRemove.end(), [this](const BTC::Address &addr){
+                addressUnspentCache.remove(addr);
+            });
+        }
+        if (!addrsToRefresh.isEmpty()) {
+            Debug() << "onNewBlockHeight: refreshing " << addrsToRefresh.size() << " still-relevant address-unspent cache entries";
+            lookupAddresses(addrsToRefresh);
+        }
+    }, true);
 }
 void Controller::onListUnspentResults(const AddressUnspentEntry &entry)
 {
     // from exMgr
     Debug() << __FUNCTION__ <<"; got list unspent results: " << entry.toDebugString();
+    AddressUnspentEntry *entryPtr = nullptr; ///< this will point to entry in map after below block executes
+    bool wasRefresh = false;
     {   // first, update cache, preserving old client id set refs
-        const auto oldSetIfAnyCopy ( addressUnspentCache.take(entry.address).clientSet );
+        const auto oldEntryCopy ( addressUnspentCache.take(entry.address) );
+        const auto & oldSetIfAnyCopy ( oldEntryCopy.clientSet );
         const int oldSetSize = oldSetIfAnyCopy.size();
-        addressUnspentCache[entry.address] = entry;
-        const int newSetSize = ( addressUnspentCache[entry.address].clientSet += oldSetIfAnyCopy ).size();
-        if (oldSetSize)
+        wasRefresh = oldSetSize;
+        if (oldEntryCopy.heightVerified > entry.heightVerified) { // <-- unlikely branch
+            // this is an old result that came in later than our current one. put back.
+            addressUnspentCache[entry.address] = oldEntryCopy;
+            Debug() << "Stale/old listunspent result came in for address \"" << entry.address.toString() << "\""
+                    << "; our cached height: " << oldEntryCopy.heightVerified
+                    << ", incoming entry height: " << entry.heightVerified << "; ignoring this result!";
+            return;
+        }
+        auto & newEntry = ( addressUnspentCache[entry.address] = entry /* <-- copy it in */ );
+        entryPtr = &newEntry;
+        newEntry.tsLastCacheHit = oldEntryCopy.tsLastCacheHit; // restore old stats, if any
+        newEntry.cacheHitCt = oldEntryCopy.cacheHitCt; // restore old stats, if any
+        const int newSetSize = ( newEntry.clientSet += oldSetIfAnyCopy /* restore old client set */).size();
+        if (wasRefresh)
             Debug() << "Replaced/freshened existing unspent cache entry for address \"" << entry.address.toString() << "\", total refCt now: " << newSetSize;
     }
+    Q_ASSERT(entryPtr);
     // next, search for clients still "in process" and check if they are now 100% verified
     for (auto it = clientStates.begin(); it != clientStates.end(); ++it) {
         ClientState & state = it.value();
-        if (state.specState != ClientState::InProcess)
+        const auto & entry = *entryPtr; // shadows in-param of same name, but this one points to the actual entry in our cache map.
+        const bool clientLevelRefreshForAcceptedClient = wasRefresh && state.specState == ClientState::Accepted && entry.clientSet.contains(state.clientId);
+        if (state.specState != ClientState::InProcess && !clientLevelRefreshForAcceptedClient)
+            // client not in "InProcess" state and/or not a clientLevelRefresh for old cache entry
             continue;
         if (!state.spec.addrUtxo.contains(entry.address))
+            // address not relevant to this client
             continue;
         // TODO here -- possibly store in the state the set of addresses this client needs to avoid redundancy
         // or inconsistency here? To be investigated later... -Calin
@@ -234,17 +302,30 @@ void Controller::onListUnspentResults(const AddressUnspentEntry &entry)
             auto addrSet = analyzeShuffleSpec(state.spec);
             if (addrSet.isEmpty()) {
                 // yay! accepted!
-                state.specState = ClientState::Accepted;
-                refClientToAllUnspentCache(state.spec);
-                emit state.server->tellClientSpecAccepted(state.spec.clientId, state.spec.refId);
+                if (!clientLevelRefreshForAcceptedClient) {
+                    // only notify of "we are good now"  if the previous state was not Accepted (eg not a clientLevelRefresh)
+                    state.specState = ClientState::Accepted;
+                    refClientToAllUnspentCache(state.spec);
+                    emit state.server->tellClientSpecAccepted(state.spec.clientId, state.spec.refId);
+                } else {
+                    Debug() << "address \"" << entry.address.toString() << "\" refreshed for clientId: " << state.spec.clientId;
+                }
             } else if (addrSet.contains(entry.address)) {
                 // ruh-roh -- they may have extra UTXOs in their spec that aren't in the unspent list.
                 throw Exception(QString("Could not verify UTXOs for address \"%1\"").arg(entry.address.toString()));
             }
         } catch (const std::exception & e) {
+            // note it's possible for a client that was previously in the accepted state to end up here
+            // if they spent their UTXOs that were previously accepted.  They must always be ready to
+            // accept events on the save refId they used to create the shuffle spec in that case they
+            // will have gotten:
+            //    "pending" -> "accepted" -> "rejected" on the same refId if it was a double-spend.
+            const bool doubleSpend = state.specState == ClientState::Accepted;
             state.specState = ClientState::Rejected;
             removeClientFromAllUnspentCache(state.clientId);
             emit state.server->tellClientSpecRejected(state.spec.clientId, state.spec.refId, e.what());
+            if (doubleSpend)
+                emit clientDoubleSpendDetected(state.clientId);
         }
     }
 }
@@ -253,6 +334,7 @@ void Controller::lookupAddresses(const QSet<BTC::Address> &addrs)
 {
     Debug() << __FUNCTION__ << "; addrs = " << Util::Stringify(addrs);
 
+    if (addrs.isEmpty()) return;
     pendingAddressLookups += addrs;
 
     // for now we queue these up and do them in batckes on a timer that won't run more often than once every 250ms
@@ -263,6 +345,12 @@ void Controller::lookupAddresses(const QSet<BTC::Address> &addrs)
         }
         pendingAddressLookups.clear();
     });
+}
+
+void Controller::onClientDoubleSpendDetected(qint64 clientId)
+{
+    Debug() << __FUNCTION__ << ": clientId: " << clientId;
+    // todo: implement some sort of mitigation and/or penalty and/or cancel extant shuffles, etc...
 }
 
 QString ShuffleSpec::toDebugString() const

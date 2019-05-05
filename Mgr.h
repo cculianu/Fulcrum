@@ -16,9 +16,18 @@ public:
 
     typedef QVariantMap Stats;
 
+    /// thread-safe wrapper around stats().
+    Stats statsSafe() const;
+
+protected:
     /// Return controller-specific stats -- to be used later if we implement some sort of query mechanism
     /// for showing stats to clients and/or server admins.
     /// For now stub implementation returns an empty map.
+    /// Note this function is unsafe and meant to be called within the Mgr's thread.
+    /// Outside client code should use public statsSafe(), which wraps the below call in a
+    /// thread-safe call, so that derived classes don't have to worry about thread safety and
+    /// can just implement this function by examining their own private data to populate the map
+    /// without locks.
     virtual Stats stats() const;
 };
 
