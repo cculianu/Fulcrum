@@ -5,6 +5,10 @@
 #include "bitcoin/crypto/endian.h"
 #include "Common.h"
 #include "bitcoin/pubkey.h"
+#include "bitcoin/script_error.h"
+#include "bitcoin/interpreter.h"
+#include "bitcoin/script.h"
+#include "bitcoin/utilstrencodings.h"
 #include <QString>
 #include <string.h>
 #include <iostream>
@@ -34,6 +38,7 @@ namespace bitcoin
                             + " 3. Do a full clean recompile.\n\n");
         }
     }
+    extern bool TestBase58();
 }
 
 namespace BTC
@@ -85,6 +90,18 @@ namespace BTC
         return a;
     }
 
+    /* static */
+    Address Address::fromPubKey(const Byte *pbegin, const Byte *pend, Net net)
+    {
+        Address ret;
+        const auto hash160 = bitcoin::Hash160(pbegin, pend);
+        ret.h160 = QByteArray(reinterpret_cast<const char *>(hash160.begin()), int(hash160.size()));
+        ret.verByte = 0;
+        ret.net = net;
+        if (auto map = netVerByteKindMap.value(net); !map.isEmpty())
+            ret.verByte = map.begin().key(); // P2PKH verbyte
+        return ret;
+    }
 
     bool Address::isValid() const
     {
@@ -221,6 +238,11 @@ namespace BTC
     ByteArray::ByteArray(const QByteArray &a) { (*this) = a; } // leverage operator=
     ByteArray::ByteArray(const QString &s) { (*this) = s; } // leverage operator=
     static Byte emptyBytes[sizeof(long)] = {0}; ///< C++ init would have been zero anyway. We do it like this to illustrate the point to the casual observer.
+    /* static */
+    ByteArray ByteArray::fromHex(const QString &s)
+    {
+        return ByteArray(bitcoin::ParseHex(s.toUtf8().constData()));
+    }
     Byte *ByteArray::data()
     {
         if (!empty()) return &(*this)[0];
@@ -422,6 +444,90 @@ namespace BTC
         return ret;
     }
 
+    namespace Tests {
+        void SigCheck()
+        {
+            using namespace bitcoin;
+
+            static const auto BuildCreditingTransaction =
+                    [] (const CScript &scriptPubKey, const Amount nValue) -> CMutableTransaction {
+                CMutableTransaction txCredit;
+                txCredit.nVersion = 1;
+                txCredit.nLockTime = 0;
+                txCredit.vin.resize(1);
+                txCredit.vout.resize(1);
+                txCredit.vin[0].prevout = COutPoint();
+                txCredit.vin[0].scriptSig = CScript() << CScriptNum(0) << CScriptNum(0);
+                txCredit.vin[0].nSequence = CTxIn::SEQUENCE_FINAL;
+                txCredit.vout[0].scriptPubKey = scriptPubKey;
+                txCredit.vout[0].nValue = nValue;
+
+                return txCredit;
+            };
+
+            static const auto BuildSpendingTransaction =
+                    [](const CScript &scriptSig, const CMutableTransaction &txCredit) -> CMutableTransaction {
+                CMutableTransaction txSpend;
+                txSpend.nVersion = 1;
+                txSpend.nLockTime = 0;
+                txSpend.vin.resize(1);
+                txSpend.vout.resize(1);
+                txSpend.vin[0].prevout = COutPoint(txCredit.GetId(), 0);
+                txSpend.vin[0].scriptSig = scriptSig;
+                txSpend.vin[0].nSequence = CTxIn::SEQUENCE_FINAL;
+                txSpend.vout[0].scriptPubKey = CScript();
+                txSpend.vout[0].nValue = txCredit.vout[0].nValue;
+
+                return txSpend;
+            };
+            static const auto VerifyTx =
+                    [](const QString & pubKeyHex, const QString &sigHex, int64_t nValue=0, uint32_t flags=0,
+                       uint32_t nLockTime=0, uint32_t sequence=CTxIn::SEQUENCE_FINAL, const QString & prevOutOverride = "",
+                    const QString & outAddr = "", int64_t spendVal = -1)
+            {
+                const auto pubKeyData = ByteArray::fromHex(pubKeyHex);
+                const auto sigData = ByteArray::fromHex(sigHex);
+                Address addr = Address::fromPubKey(pubKeyData);
+                CScript scriptSig;
+                scriptSig << sigData << pubKeyData;
+                auto scriptSigHex = QByteArray(reinterpret_cast<char *>(scriptSig.data()), int(scriptSig.size())).toHex();
+                Log() << "Address is: " << addr.toString() << " pubKey: " << pubKeyData.toHex() << " scriptPubKey: " << addr.toScriptHash().toHexStr() << " hash160: " << addr.hash160().toHex() << " scriptSig: " << scriptSigHex;
+
+                ScriptError err;
+                auto scriptPubKey = addr.toCScript();
+                CMutableTransaction txCredit =
+                    BuildCreditingTransaction(scriptPubKey, nValue*SATOSHI);
+                CMutableTransaction tx = BuildSpendingTransaction(scriptSig, txCredit);
+                CMutableTransaction tx2 = tx;
+                tx.nLockTime = nLockTime;
+                tx.vin[0].nSequence = sequence;
+                if (!prevOutOverride.isEmpty())
+                    tx.vin[0].prevout.SetQString(prevOutOverride);
+                if (!outAddr.isEmpty())
+                    tx.vout[0].scriptPubKey = Address(outAddr).toCScript();
+                if (spendVal > 0)
+                    tx.vout[0].nValue = spendVal*SATOSHI;
+                bool ret = VerifyScript
+                        (
+                            scriptSig,
+                            scriptPubKey,
+                            flags,
+                            MutableTransactionSignatureChecker(&tx, 0, txCredit.vout[0].nValue),
+                            &err
+                        );
+                Log() << "Verify: " << int(ret) << " err: " << ScriptErrorString(err);
+            };
+            VerifyTx("038282263212c609d9ea2a6e3e172de238d8c39cabd5ac1ca10646e23fd5f51508",
+                     "304402201e0ec3c6c263f34049c93e0bc646d7287ca2cc6571d658e4e7269daebc96ef35022009841f101e6dcaba8993d0259e5732a871e253be807556bf5618bf0bc3e84af001");
+            VerifyTx("0277b926d8fd088be302ed207d7d35ca6e7b78005c415bdf9873b45337939704cd",
+                     "30440220757c81c9aea06f19ce8bcf3ca088e28f0659273e8deb6dabc8e7fdeb7d235f6c0220688fa0ba75debf36b1a45a2d10ee18c9f546eb1aa6a8e08d1a96d9c08b95a21c41",
+                     1111, SCRIPT_ENABLE_SIGHASH_FORKID|SCRIPT_VERIFY_STRICTENC|SCRIPT_VERIFY_LOW_S, 577472, 4294967294,
+                     "4058a690de126e5b696dba53c9e63d0344adf5487ba1e0124322ba2735c74bd1:0",
+                     "1Ca1inCimwRhhcpFX84TPRrPQSryTgKW6N", 919);
+
+        }
+        bool Base58() { return bitcoin::TestBase58(); }
+    } // end namespace Tests
 
 } // end namespace BTC
 

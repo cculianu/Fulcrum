@@ -47,6 +47,7 @@ namespace BTC
         ByteArray toHex() const; ///< returns Hex encoded (non-reversed)
         QByteArray toQHex() const; ///< returns Hex encoded (non-reversed)
         QString toHexStr() const { return QString(toQHex()); } ///< returns Hex encoded (non-reversed)
+        static ByteArray fromHex(const QString &); ///< construct from Hex encoded (non-reversed)
 
         /// Convenienct to obtain a pointer to [0]. If not empty, points to the same
         /// place as .begin().  If empty, will return a pointer to a static buffer
@@ -99,6 +100,14 @@ namespace BTC
         Address(const QString &legacyAddress);
         Address(const char *legacy) { *this = legacy; }
         Address(const QByteArray &legacy) { *this = legacy; }
+
+    private:
+        static Address fromPubKey(const Byte *pbegin, const Byte *pend, Net = MainNet);
+        template <typename iter>
+        static Address fromPubKey(const iter & begin, const iter & end, Net net = MainNet) { return fromPubKey(reinterpret_cast<const Byte *>(&(*begin)), reinterpret_cast<const Byte *>(&(*end)), net); }
+    public:
+        static Address fromPubKey(const QByteArray &pubKey, Net net = MainNet) { return fromPubKey(pubKey.begin(), pubKey.end(), net); }
+        static Address fromPubKey(const std::vector<Byte> &pubKey, Net net = MainNet) { return fromPubKey(pubKey.begin(), pubKey.end(), net); }
 
         QByteArray hash160() const { return h160; }
 
@@ -240,6 +249,10 @@ namespace BTC
                                     const QList<UTXO> & inputs, const QList<QPair<Address, quint64> > & outputs,
                                     quint32 nLockTime = 0);
 
+    namespace Tests {
+        void SigCheck();
+        bool Base58();
+    }
 
 } // end namespace
 
