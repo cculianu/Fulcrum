@@ -16,7 +16,13 @@
 
 #include "compat.h"
 
-#pragma pack(push, 1)
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wold-style-cast"
+#pragma clang diagnostic ignored "-Wgnu-anonymous-struct"
+#endif
+
+#pragma pack(push,1) // push alignment 1 onto alignment stack
 /**
  * Implements a drop-in replacement for std::vector<T> which stores up to N
  * elements directly (without heap allocation). The types Size and Diff are used
@@ -600,6 +606,9 @@ public:
 
     const value_type *data() const { return item_ptr(0); }
 };
-#pragma pack(pop)
+#pragma pack(pop) // pop back previous alignment
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
 
 #endif // BITCOIN_PREVECTOR_H

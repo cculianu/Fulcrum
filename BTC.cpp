@@ -37,7 +37,6 @@ namespace bitcoin
 
 namespace BTC
 {
-
     void CheckBitcoinEndiannessCompiledCorrectly() { bitcoin::Endian_Check_In_namespace_bitcoin(); }
 
     // Map of Net -> [Map of VerByte -> Kind]
@@ -103,12 +102,19 @@ namespace BTC
     ByteArray Address::toScript() const
     {
         ByteArray script;
+        using bitcoin::OP_DUP, bitcoin::OP_HASH160, bitcoin::OP_EQUALVERIFY, bitcoin::OP_CHECKSIG, bitcoin::OP_EQUAL;
         if (kind() == P2PKH) { // kind() checks for validity
             script << OP_DUP << OP_HASH160 << Byte(h160.length()) << h160 << OP_EQUALVERIFY << OP_CHECKSIG;
         } else if (kind() == P2SH) {
             script << OP_HASH160 << Byte(h160.length()) << h160 << OP_EQUAL;
         }
         return script;
+    }
+
+    bitcoin::CScript Address::toCScript() const
+    {
+        auto ba = toScript();
+        return bitcoin::CScript(ba.begin(), ba.end());
     }
 
     ByteArray Address::toScriptHash() const
@@ -316,7 +322,7 @@ namespace BTC
         return ret;
     }
 
-    bitcoin::COutPoint UTXO::toOutPoint() const
+    bitcoin::COutPoint UTXO::toCOutPoint() const
     {
         return bitcoin::COutPoint(toString());
     }
@@ -354,7 +360,7 @@ namespace BTC
         qInfo("u isValid? %d str=%s", int(u.isValid()), Q2C(u.toString()));
         u = "f6b0fc46aa9abb446b3817f9f5898f45233b274692d110203e2fe38c2f9e9ee3:56";
         qInfo("u isValid? %d str=%s", int(u.isValid()), Q2C(u.toString()));
-        auto outpt = u.toOutPoint();
+        auto outpt = u.toCOutPoint();
         qInfo("U hex:%s N:%u", outpt.GetTxId().ToString().c_str(), outpt.GetN());
         u2 = u;
         qInfo("u == u2 ? %d", int(u == u2));
@@ -362,7 +368,55 @@ namespace BTC
         qInfo("u2: %s ... u == u2 ? %d  u < u2 ? %d  u <= u2 ? %d", Q2C(u2.toString()), int(u == u2), int(u < u2), int(u <= u2));
         qInfo("u: %s ... u == u2 ? %d  u2 < u ? %d", Q2C(u.toString()), int(u == u2), int(u2 < u));
     }
-}
+
+    quint64 MakeUnsignedTransaction(bitcoin::CMutableTransaction & tx,
+                                    const QList<UTXO> & inputs, const QList<QPair<Address, quint64> > & outputs,
+                                    quint32 nLockTime)
+    {
+        quint64 ret = 0;
+        static const auto clearTx = [](bitcoin::CMutableTransaction & tx, int resrv_in = 0, int resrv_out = 0) {
+            tx.vin.clear();
+            tx.vout.clear();
+            tx.nVersion = bitcoin::CTransaction::CURRENT_VERSION;
+            tx.nLockTime = 0;
+            if (resrv_in >= 0) tx.vin.reserve(size_t(resrv_in));
+            if (resrv_out >= 0) tx.vout.reserve(size_t(resrv_out));
+        };
+        clearTx(tx, inputs.size(), outputs.size());
+        tx.nLockTime = nLockTime;
+        try {
+            int n = 0;
+            for (const auto & utxo : inputs) {
+                tx.vin.emplace_back(bitcoin::CTxIn(utxo.toCOutPoint()));
+                if (!utxo.isValid())
+                    throw Exception(QString("Bad utxo specified in tx for input: %1").arg(n));
+                ++n;
+            }
+            if (!n) throw Exception("No inputs specified for tx");
+            n = 0;
+            for (const auto & adrAmt : outputs) {
+                auto & addr = adrAmt.first;
+                const auto amt = int64_t(adrAmt.second)*bitcoin::SATOSHI;
+                constexpr auto DUST_THRESHOLD = 546*bitcoin::SATOSHI;
+                if (!addr.isValid())
+                    throw Exception(QString("Bad address specified in tx for output %1").arg(n));
+                if (amt < DUST_THRESHOLD)
+                    throw Exception(QString("Bad amount specified in tx for output %1: %2 < %3").arg(n).arg(amt.ToString().c_str()).arg(DUST_THRESHOLD.ToString().c_str()));
+                ret += adrAmt.second;
+                tx.vout.emplace_back(bitcoin::CTxOut(amt, addr.toCScript()));
+                ++n;
+            }
+            if (!n) throw Exception("No outputs specified for tx");
+        } catch (const std::exception & e) {
+            Warning() << e.what();
+            clearTx(tx);
+            ret = 0;
+        }
+        return ret;
+    }
+
+
+} // end namespace BTC
 
 #ifdef __clang__
 #pragma clang diagnostic pop

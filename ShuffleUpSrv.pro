@@ -87,7 +87,6 @@ HEADERS += \
     AbstractConnection.h \
     App.h \
     BTC.h \
-    BTC_OpCodes.h \
     Controller.h \
     Logger.h \
     Mgr.h \

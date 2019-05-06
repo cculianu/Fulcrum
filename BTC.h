@@ -1,8 +1,8 @@
 #ifndef BTC_H
 #define BTC_H
 
-#include "BTC_OpCodes.h"
 #include "bitcoin/transaction.h"
+#include "bitcoin/script.h"
 
 #include <QByteArray>
 #include <QString>
@@ -83,7 +83,7 @@ namespace BTC
         ByteArray & operator=(const char *s) { return *this = QByteArray(s); }
         template <typename T>
         ByteArray & operator<<(const T &t) { return (*this) += t; }
-        ByteArray & operator<<(OpCode c) { return (*this) << Byte(c); } ///< append an op-code to this array
+        ByteArray & operator<<(bitcoin::opcodetype c) { return (*this) << Byte(c); } ///< append an op-code to this array
         ByteArray & operator<<(Byte c); ///< append any byte to this array
         operator QByteArray() const; ///< convenienct cast to QByteArray. Involves a full copy.
     };
@@ -119,6 +119,9 @@ namespace BTC
         /// The results of this function do not get cached.
         /// Note the return is a ByteArray and not a QByteArray.
         ByteArray toScript() const;
+        /// Same as toScript(), but returns the data as a CScript object (bitcoin data structure
+        /// for use with CTransaction et al in the txOut )
+        bitcoin::CScript toCScript() const;
         /// Returns the bitcoin script bytes as would be used in a spending transaction,
         /// hashed once with sha256. (not reversed)
         /// The results of this function do not get cached
@@ -180,6 +183,8 @@ namespace BTC
 
         /// construct an invalid utxo
         UTXO() {}
+        /// construct a UTXO from a bitcoin::COutPoint
+        UTXO(const bitcoin::COutPoint &cop) { *this = cop; }
         /// if hash is not 256 bit encoded hex, will be inValid()
         UTXO(const QString & prevoutHash, quint32 prevoutN) { setCheck(prevoutHash, prevoutN); }
         /// if "hash:N" is not "256 bit encoded hex:UInt", will be inValid()
@@ -188,6 +193,8 @@ namespace BTC
         inline bool isValid() const { return _txid.length() == validTxidLength && _n != invalidN; }
         inline UTXO & clear() { _txid = QString(); _n = invalidN; return *this; }
 
+        /// assign from a bitcoin::COutPoint. Not terribly efficient but fast enough for now.
+        inline UTXO & operator=(const bitcoin::COutPoint & c) { return *this = c.ToQString(); }
         /// parses prevouthash:N, if ok, sets class to valid state and saves values, otherwise class becomes invalid.
         inline UTXO & operator=(const QString &prevOutN) { return setCheck(prevOutN); }
 
@@ -209,7 +216,7 @@ namespace BTC
         UTXO & setCheck(const QString &prevoutHash, quint32 n);
         UTXO & setCheck(const QString &prevoutHash_Colon_N);
 
-        bitcoin::COutPoint toOutPoint() const;
+        bitcoin::COutPoint toCOutPoint() const;
         /// convert to prevouthash:N, returns a null string if !isValid()
         QString toString() const;
 
@@ -223,6 +230,15 @@ namespace BTC
             //return key.txid().left(8).toUInt(nullptr, 16) + key.n();
         return 0;
     }
+
+    /// Make a bitcoin unsigned tx. Returns the total amount sent (sum of outputs). Note that
+    /// no enforcement is done to make sure the tx is sane, so be sure to pass valid UTXO and Address values,
+    /// as well as amounts >= 546 sats.  If any of the UTXOs !.isValid or any of the addresses !.isValid,
+    /// or any of the outputs are below 546 sats, the resulting tx is empty and 0 is returned.
+    extern
+    quint64 MakeUnsignedTransaction(bitcoin::CMutableTransaction & tx,
+                                    const QList<UTXO> & inputs, const QList<QPair<Address, quint64> > & outputs,
+                                    quint32 nLockTime = 0);
 
 
 } // end namespace
