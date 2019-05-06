@@ -162,7 +162,7 @@ void TcpServer::setupMethods()
         m,
         RPC::schemaMethodOptionalParams + QString(" { \"method\" : \"%1!\" } ").arg(m), // in schema, ping from client to us
         RPC::schemaResult + QString(" { \"result\" : null }"), // result schema -- 'result' arg should be there and be null.
-        RPC::Schema() /* for now we never ping clients. */ //RPC::schemaMethodNoParams // out schema, ping to client takes no args
+        RPC::Schema() /* for now we never ping clients. */
     )));
 
     p = "{ \"amounts\" : [1], \"utxos\" : [{\"addr\" : \"x\", \"utxo\" : \"x\"}], \"shuffleAddr\" : \"x\", \"changeAddr\" : \"x\" }";
@@ -357,12 +357,12 @@ void Client::do_disconnect(bool graceful)
 
 void Client::do_ping()
 {
+    // Don't send clients pings, because it's more trouble than it's worth.
+    // Instead, rely on them to ping us else disconnect them if idle for too long.
+    // The below just checks idle.
     if (Util::getTime() - lastGood >= pingtime_ms * 2) {
         Debug() << prettyName() << ": idle timeout after " << ((pingtime_ms*2.0)/1e3) << " sec., will close connection";
         emit sendError(true, -300, "Idle time exceeded");
         return;
     }
-    // Don't send clients pings, because the reqId we send them may clash with one
-    // they sent us. Instead, rely on them to ping us else disconnect them if idle for too long.
-    //emit sendRequest(srv->newId(), "server.ping");
 }

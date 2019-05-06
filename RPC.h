@@ -126,9 +126,9 @@ namespace RPC {
         QString errorMessage = "";
 
         bool isError() const { return bool(errorCode); }
-        bool isResult() const { return bool(jsonData.count("result")); }
-        bool isRequest() const { return !isResult() && bool(jsonData.count("id")) && bool(jsonData.count("method")); }
-        bool isNotif() const { return !isResult() && bool(jsonData.count("method")) && !isRequest(); }
+        bool isResult() const { return jsonData.contains("result"); }
+        bool isRequest() const { return !isResult() && jsonData.contains("id") && jsonData.contains("method"); }
+        bool isNotif() const { return !isResult() && jsonData.contains("method") && !isRequest(); }
         bool isList() const { return QMetaType::Type(data.type()) == QMetaType::QVariantList; }
     };
 

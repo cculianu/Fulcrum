@@ -25,7 +25,7 @@ namespace RPC {
     Schema const schemaMethod = schemaBase + " { \"method\": \"astring\", \"params\" : [], \"*id?\" : 1 }";
     Schema const schemaMethodOptionalParams = schemaBase + " { \"method\": \"astring\", \"params?\" : [], \"*id?\" : 1 }";
     Schema const schemaNotif = schemaBase + " { \"method\": \"astring\", \"params?\" : [] }";
-    Schema const schemaMethodNoParams = schemaBase + " { \"method\": \"astring\", \"params\" : [\"=0\"], \"*id?\" : 1 }";
+    Schema const schemaMethodNoParams = schemaBase + " { \"method\": \"astring\", \"*id?\" : 1 }";
     Schema const schemaMethodOneParam = schemaBase + " { \"method\": \"astring\", \"params\" : [\"=1\"], \"*id?\" : 1 }";
     Schema const schemaMethodTwoParams = schemaBase + " { \"method\": \"astring\", \"params\" : [\"=2\"], \"*id?\" : 1 }";
 
@@ -434,7 +434,8 @@ namespace RPC {
         map["id"] = ret.id = id;
         map["method"] = ret.method = methodName; /// schema may have already set this but we set it again
         ret.data = params;
-        map["params"] = params;
+        if (map.contains("params") || !params.isEmpty())
+            map["params"] = params;
         ret.jsonRpcVersion = map.value("jsonrpc").toString();
 //#ifdef QT_DEBUG
 //        QString err;
