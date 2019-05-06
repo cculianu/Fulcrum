@@ -62,8 +62,11 @@ SOURCES += \
     bitcoin/crypto/sha512.cpp \
     bitcoin/feerate.cpp \
     bitcoin/hash.cpp \
+    bitcoin/interpreter.cpp \
     bitcoin/pubkey.cpp \
     bitcoin/script.cpp \
+    bitcoin/script_error.cpp \
+    bitcoin/sigencoding.cpp \
     bitcoin/test.cpp \
     bitcoin/transaction.cpp \
     bitcoin/uint256.cpp \
@@ -118,11 +121,15 @@ HEADERS += \
     bitcoin/crypto/sha512.h \
     bitcoin/feerate.h \
     bitcoin/hash.h \
+    bitcoin/interpreter.h \
     bitcoin/prevector.h \
     bitcoin/pubkey.h \
     bitcoin/script.h \
+    bitcoin/script_error.h \
     bitcoin/script_flags.h \
     bitcoin/serialize.h \
+    bitcoin/sigencoding.h \
+    bitcoin/sighashtype.h \
     bitcoin/tinyformat.h \
     bitcoin/transaction.h \
     bitcoin/txid.h \

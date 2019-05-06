@@ -7,6 +7,8 @@
 #ifndef BITCOIN_SCRIPT_SCRIPTFLAGS_H
 #define BITCOIN_SCRIPT_SCRIPTFLAGS_H
 
+namespace bitcoin {
+
 /** Script verification flags */
 enum {
     SCRIPT_VERIFY_NONE = 0,
@@ -107,5 +109,7 @@ enum {
     // Allows the recovery of coins sent to p2sh segwit addresses
     SCRIPT_ALLOW_SEGWIT_RECOVERY = (1U << 20),
 };
+
+} // end namespace bitcoin
 
 #endif // BITCOIN_SCRIPT_SCRIPTFLAGS_H

@@ -1,0 +1,115 @@
+// Copyright (c) 2009-2010 Satoshi Nakamoto
+// Copyright (c) 2009-2016 The Bitcoin Core developers
+// Distributed under the MIT software license, see the accompanying
+// file COPYING or http://www.opensource.org/licenses/mit-license.php.
+
+#ifndef BITCOIN_SCRIPT_SCRIPT_ERROR_H
+#define BITCOIN_SCRIPT_SCRIPT_ERROR_H
+
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-function"
+#endif
+
+namespace bitcoin {
+
+typedef enum ScriptError_t {
+    SCRIPT_ERR_OK = 0,
+    SCRIPT_ERR_UNKNOWN_ERROR,
+    SCRIPT_ERR_EVAL_FALSE,
+    SCRIPT_ERR_OP_RETURN,
+
+    /* Max sizes */
+    SCRIPT_ERR_SCRIPT_SIZE,
+    SCRIPT_ERR_PUSH_SIZE,
+    SCRIPT_ERR_OP_COUNT,
+    SCRIPT_ERR_STACK_SIZE,
+    SCRIPT_ERR_SIG_COUNT,
+    SCRIPT_ERR_PUBKEY_COUNT,
+
+    /* Operands checks */
+    SCRIPT_ERR_INVALID_OPERAND_SIZE,
+    SCRIPT_ERR_INVALID_NUMBER_RANGE,
+    SCRIPT_ERR_IMPOSSIBLE_ENCODING,
+    SCRIPT_ERR_INVALID_SPLIT_RANGE,
+
+    /* Failed verify operations */
+    SCRIPT_ERR_VERIFY,
+    SCRIPT_ERR_EQUALVERIFY,
+    SCRIPT_ERR_CHECKMULTISIGVERIFY,
+    SCRIPT_ERR_CHECKSIGVERIFY,
+    SCRIPT_ERR_CHECKDATASIGVERIFY,
+    SCRIPT_ERR_NUMEQUALVERIFY,
+
+    /* Logical/Format/Canonical errors */
+    SCRIPT_ERR_BAD_OPCODE,
+    SCRIPT_ERR_DISABLED_OPCODE,
+    SCRIPT_ERR_INVALID_STACK_OPERATION,
+    SCRIPT_ERR_INVALID_ALTSTACK_OPERATION,
+    SCRIPT_ERR_UNBALANCED_CONDITIONAL,
+
+    /* Divisor errors */
+    SCRIPT_ERR_DIV_BY_ZERO,
+    SCRIPT_ERR_MOD_BY_ZERO,
+
+    /* CHECKLOCKTIMEVERIFY and CHECKSEQUENCEVERIFY */
+    SCRIPT_ERR_NEGATIVE_LOCKTIME,
+    SCRIPT_ERR_UNSATISFIED_LOCKTIME,
+
+    /* Malleability */
+    SCRIPT_ERR_SIG_HASHTYPE,
+    SCRIPT_ERR_SIG_DER,
+    SCRIPT_ERR_MINIMALDATA,
+    SCRIPT_ERR_SIG_PUSHONLY,
+    SCRIPT_ERR_SIG_HIGH_S,
+    SCRIPT_ERR_SIG_NULLDUMMY,
+    SCRIPT_ERR_PUBKEYTYPE,
+    SCRIPT_ERR_CLEANSTACK,
+    SCRIPT_ERR_MINIMALIF,
+    SCRIPT_ERR_SIG_NULLFAIL,
+
+    /* Schnorr */
+    SCRIPT_ERR_SIG_BADLENGTH,
+
+    /* softfork safeness */
+    SCRIPT_ERR_DISCOURAGE_UPGRADABLE_NOPS,
+
+    /* misc */
+    SCRIPT_ERR_NONCOMPRESSED_PUBKEY,
+
+    /* anti replay */
+    SCRIPT_ERR_ILLEGAL_FORKID,
+    SCRIPT_ERR_MUST_USE_FORKID,
+
+    SCRIPT_ERR_ERROR_COUNT
+} ScriptError;
+
+#define SCRIPT_ERR_LAST SCRIPT_ERR_ERROR_COUNT
+
+const char *ScriptErrorString(const ScriptError error);
+
+namespace {
+
+inline bool set_success(ScriptError *ret) {
+    if (ret) {
+        *ret = SCRIPT_ERR_OK;
+    }
+    return true;
+}
+
+inline bool set_error(ScriptError *ret, const ScriptError serror) {
+    if (ret) {
+        *ret = serror;
+    }
+    return false;
+}
+
+} // namespace
+
+} // end namespace bitcoin
+
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
+
+#endif // BITCOIN_SCRIPT_SCRIPT_ERROR_H
