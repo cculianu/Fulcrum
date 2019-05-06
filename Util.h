@@ -155,9 +155,11 @@ namespace Util {
     }
 
     namespace Json {
-        class Error : public Exception {
-        public:
+        struct Error : public Exception {
             using Exception::Exception;
+        };
+        struct ParseError : public Error {
+            using Error::Error;
         };
 
         /// if expectmap, then throw if not a dict. Otherwise throw if not a list.

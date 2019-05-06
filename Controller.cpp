@@ -306,7 +306,7 @@ void Controller::onListUnspentResults(const AddressUnspentEntry &entry)
                     // only notify of "we are good now"  if the previous state was not Accepted (eg not a clientLevelRefresh)
                     state.specState = ClientState::Accepted;
                     refClientToAllUnspentCache(state.spec);
-                    emit state.server->tellClientSpecAccepted(state.spec.clientId, state.spec.refId);
+                    emit state.server->tellClientSpecAccepted(state.spec.clientId, NO_ID);
                 } else {
                     Debug() << "address \"" << entry.address.toString() << "\" refreshed for clientId: " << state.spec.clientId;
                 }
@@ -315,15 +315,22 @@ void Controller::onListUnspentResults(const AddressUnspentEntry &entry)
                 throw Exception(QString("Could not verify UTXOs for address \"%1\"").arg(entry.address.toString()));
             }
         } catch (const std::exception & e) {
-            // note it's possible for a client that was previously in the accepted state to end up here
-            // if they spent their UTXOs that were previously accepted.  They must always be ready to
-            // accept events on the save refId they used to create the shuffle spec in that case they
-            // will have gotten:
-            //    "pending" -> "accepted" -> "rejected" on the same refId if it was a double-spend.
+            // Note it's possible for a client that was previously in the accepted state to end up here
+            // if they spent their UTXOs that were previously accepted.  In this case they will get a 'notification'
+            // type message of method "shuffle.spec", with params=["message"] where message will be the error message
+            // explaining it's a double-spend.
+            // To recap:
+            // If it is immediately accepted, the { "result" : "accepted" } will be sent as a RESPONSE message.
+            // If it is pending, the { "result" : "pending" } will be the RESPONSE (result) message.
+            // Upon acceptance, a notification will be sent with: { "method" : "shuffle.spec", "params" : ["accepted"] }
+            // Additionally, on double-spend, a notification may later appear:
+            //    { "method" : "shuffle.spec", "params" : ["you double spent error message bla bla bla"] }
+            // So lifecycle can be:
+            //    "pending" -> "accepted" -> "rejected"
             const bool doubleSpend = state.specState == ClientState::Accepted;
             state.specState = ClientState::Rejected;
             removeClientFromAllUnspentCache(state.clientId);
-            emit state.server->tellClientSpecRejected(state.spec.clientId, state.spec.refId, e.what());
+            emit state.server->tellClientSpecRejected(state.spec.clientId, NO_ID, e.what());
             if (doubleSpend)
                 emit clientDoubleSpendDetected(state.clientId);
         }

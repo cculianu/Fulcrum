@@ -148,7 +148,7 @@ void TcpServer::killClient(qint64 clientId)
 
 void TcpServer::setupMethods()
 {
-    QString m, p;
+    QString m, p, p2;
     m = "server.version";
     _rpcMethods.insert(m, QSharedPointer<RPC::Method>(new RPC::Method(
         m,
@@ -160,18 +160,19 @@ void TcpServer::setupMethods()
     m = "server.ping";
     _rpcMethods.insert(m, QSharedPointer<RPC::Method>(new RPC::Method(
         m,
-        RPC::schemaMethodNoParams, // in schema, ping from client to us
+        RPC::schemaMethodOptionalParams + QString(" { \"method\" : \"%1!\" } ").arg(m), // in schema, ping from client to us
         RPC::schemaResult + QString(" { \"result\" : null }"), // result schema -- 'result' arg should be there and be null.
-        RPC::schemaMethodNoParams // out schema, ping to client takes no args
+        RPC::Schema() /* for now we never ping clients. */ //RPC::schemaMethodNoParams // out schema, ping to client takes no args
     )));
 
     p = "{ \"amounts\" : [1], \"utxos\" : [{\"addr\" : \"x\", \"utxo\" : \"x\"}], \"shuffleAddr\" : \"x\", \"changeAddr\" : \"x\" }";
+    p2 = "\"=1\""; // notification back to client is a single string -- either "pending" or "accepted" -- anything else is an error string.
     m = "shuffle.spec";
     _rpcMethods.insert(m, QSharedPointer<RPC::Method>(new RPC::Method(
         m,
         RPC::schemaMethod + QString(" { \"method\" : \"%1!\", \"params\" : [%2] }").arg(m).arg(p), // in schema (asynch req)
         RPC::schemaResult + QString(" { \"result\" : \"ok!\" }"), // result schema -- 'result' arg should be there and be the string "ok". On error we send an error response
-        RPC::Schema() // we never invoke this on client
+        RPC::schemaNotif + QString(" { \"method\" : \"%1!\", \"params\" : [%2] }").arg(m).arg(p2) // out schema (notification of status change)
     )));
 
 }
@@ -294,21 +295,30 @@ bool TcpServer::processSpec(qint64 clientId, const RPC::Message &m, QString & er
 void TcpServer::_tellClientSpecRejected(qint64 clientId, qint64 refId, const QString & reason)
 {
     if (Client *client = getClient(clientId); client) {
-        client->sendError(false, -290, reason, refId);
+        if (refId != NO_ID)
+            client->sendError(false, -290, reason, refId);
+        else
+            client->sendNotification("shuffle.spec", QVariantList({reason}));
     } else {
         Debug() << "ClientId: " << clientId << " not found.";
     }
 }
 void TcpServer::_tellClientSpecAccepted(qint64 clientId, qint64 refId) {
     if (Client *client = getClient(clientId); client) {
-        client->sendResult(refId, "shuffle.spec", "accepted");
+        if (refId != NO_ID)
+            client->sendResult(refId, "shuffle.spec", "accepted");
+        else
+            client->sendNotification("shuffle.spec", QVariantList({QString("accepted")}));
     } else {
         Debug() << "ClientId: " << clientId << " not found.";
     }
 }
 void TcpServer::_tellClientSpecPending(qint64 clientId, qint64 refId) {
     if (Client *client = getClient(clientId); client) {
-        client->sendResult(refId, "shuffle.spec", "pending");
+        if (refId != NO_ID)
+            client->sendResult(refId, "shuffle.spec", "pending");
+        else
+            client->sendNotification("shuffle.spec", QVariantList({QString("pending")}));
     } else {
         Debug() << "ClientId: " << clientId << " not found.";
     }

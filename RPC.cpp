@@ -23,6 +23,8 @@ namespace RPC {
     Schema const schemaError = schemaBase + "{ \"error\" : { \"code\" : 1, \"message\" : \"astring\" }, \"*id\" : 1, \"method?\" : \"anystring\"  }";
     Schema const schemaResult = schemaBase + " { \"id\" : 1, \"*result\" : \"*\" }";
     Schema const schemaMethod = schemaBase + " { \"method\": \"astring\", \"params\" : [], \"*id?\" : 1 }";
+    Schema const schemaMethodOptionalParams = schemaBase + " { \"method\": \"astring\", \"params?\" : [], \"*id?\" : 1 }";
+    Schema const schemaNotif = schemaBase + " { \"method\": \"astring\", \"params?\" : [] }";
     Schema const schemaMethodNoParams = schemaBase + " { \"method\": \"astring\", \"params\" : [\"=0\"], \"*id?\" : 1 }";
     Schema const schemaMethodOneParam = schemaBase + " { \"method\": \"astring\", \"params\" : [\"=1\"], \"*id?\" : 1 }";
     Schema const schemaMethodTwoParams = schemaBase + " { \"method\": \"astring\", \"params\" : [\"=2\"], \"*id?\" : 1 }";
@@ -446,6 +448,14 @@ namespace RPC {
         return ret;
     }
 
+    /* static */
+    Message Message::makeMethodNotification(const QString &methodName, const QVariantList &params, const Schema &sch)
+    {
+        auto ret = makeMethodRequest(NO_ID, methodName, params, sch);
+        ret.jsonData.remove("id");
+        return ret;
+    }
+
     Connection::Connection(const MethodMap & methods, qint64 id, QObject *parent, qint64 maxBuffer)
         : AbstractConnection(id, parent, maxBuffer), methods(methods)
     {
@@ -458,6 +468,8 @@ namespace RPC {
         AbstractConnection::on_connected();
         // connection will be auto-disconnected on socket disconnect
         connectedConns.push_back(connect(this, &Connection::sendRequest, this, &Connection::_sendRequest));
+        // connection will be auto-disconnected on socket disconnect
+        connectedConns.push_back(connect(this, &Connection::sendNotification, this, &Connection::_sendNotification));
         // connection will be auto-disconnected on socket disconnect
         connectedConns.push_back(connect(this, &Connection::sendError, this, &Connection::_sendError));
         // connection will be auto-disconnected on socket disconnect
@@ -491,6 +503,27 @@ namespace RPC {
         }
         idMethodMap[reqid] = method; // remember method sent out to associate it back.
 
+        auto data = json.toUtf8();
+        Debug() << "Sending json: " << data;
+        // below send() ends up calling do_write immediately (which is connected to send)
+        emit send( data + "\n" /* "\n" <-- is crucial! (Protocol is linefeed-based) */);
+    }
+    void Connection::_sendNotification(const QString &method, const QVariantList & params)
+    {
+        if (status != Connected || !socket) {
+            Error() << __FUNCTION__ << " method: " << method << "; Not connected!";
+            return;
+        }
+        auto mptr = methods.value(method);
+        if (!mptr) {
+            Error() << __FUNCTION__ << " method: " << method << "; Unknown method! FIXME!";
+            return;
+        }
+        QString json = Message::makeMethodNotification(method, params, mptr->outSchema).toJsonString();
+        if (json.isEmpty()) {
+            Error() << __FUNCTION__ << " method: " << method << "; Unable to generate request JSON! FIXME!";
+            return;
+        }
         auto data = json.toUtf8();
         Debug() << "Sending json: " << data;
         // below send() ends up calling do_write immediately (which is connected to send)
@@ -554,9 +587,11 @@ namespace RPC {
                 } else {
                     // either a 'id','result' or a 'method','params' message
                     bool isResult = true;
-                    if (!jsonData.value("method").isNull()) {
+                    if (!jsonData.contains("result")) {
                         // 'method','params' message
-                        message = Message::fromJsonData(jsonData, schemaMethod); // may throw
+                        message = Message::fromJsonData(jsonData, schemaMethodOptionalParams); // may throw
+                        if (message.jsonData.value("id").toInt() < 0)
+                            throw BadPeer("\"id\" < 0 is not supported by this implementation");
                         lastMsgId = message.id;
                         isResult = false;
                     } else {
@@ -590,9 +625,11 @@ namespace RPC {
             do_disconnect();
             status = Bad;
         } catch (const std::exception &e) {
+            const bool wasJsonParse = dynamic_cast<const Util::Json::ParseError *>(&e);
+            const int code = wasJsonParse ? -32700 : -123;
             bool doDisconnect = errorPolicy & ErrorPolicyDisconnect;
             if (errorPolicy & ErrorPolicySendErrorMessage) {
-                emit sendError(doDisconnect, -123, QString(e.what()).left(80), lastMsgId);
+                emit sendError(doDisconnect, code, QString(e.what()).left(80), lastMsgId);
                 if (!doDisconnect)
                     emit peerError(id, e.what());
                 doDisconnect = false; // if was true, already enqueued graceful disconnect after error reply, if was false, no-op here

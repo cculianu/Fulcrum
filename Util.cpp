@@ -30,7 +30,7 @@ namespace Util {
             QJsonParseError e;
             QJsonDocument d = QJsonDocument::fromJson(str.toUtf8(), &e);
             if (d.isNull())
-                throw Error(QString("Error parsing Json from string: %1").arg(e.errorString()));
+                throw ParseError(QString("Error parsing Json from string: %1").arg(e.errorString()));
             auto v = d.toVariant();
             if (expectMap && v.type() != QVariant::Map)
                 throw Error("Json Error, expected map, got a list instead");

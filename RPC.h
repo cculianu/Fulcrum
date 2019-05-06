@@ -73,10 +73,12 @@ namespace RPC {
     extern const Schema schemaBase; ///< 'base' schema -- jsonrpc is only key ->  '{ "jsonrpc": "2.0!" }'
     extern const Schema schemaError; ///< base + error keys : schemaBase + '{ "error..." ->   { "code" : 1, "message" : "astring" }, "*id" : 1, "method?" : "anystring"  }'
     extern const Schema schemaResult; ///< 'result' schema ('result' : whatever, 'id' : int) (immediate reply from server) ->  schemaBase + ' { "id" : 1, "*result" : "*" }'
-    extern const Schema schemaMethod; ///< 'method' (asynch event from peer) schema ( 'method' : 'methodname', 'params' : [params] ) ->  schemaBase + ' { "method": "astring", "params" : [], "*id?" : 1 }'
-    extern const Schema schemaMethodNoParams; ///< 'method' (asynch event from peer) schema ( 'method' : 'methodname', 'params' : [params] ) ->  schemaBase + ' { "method": "astring", "params" : [\"=0\"], "*id?" : 1 }'
-    extern const Schema schemaMethodOneParam; ///< 'method' (asynch event from peer) schema ( 'method' : 'methodname', 'params' : [params] ) ->  schemaBase + ' { "method": "astring", "params" : [\"=1\"], "*id?" : 1 }'
-    extern const Schema schemaMethodTwoParams; ///< 'method' (asynch event from peer) schema ( 'method' : 'methodname', 'params' : [params] ) ->  schemaBase + ' { "method": "astring", "params" : [\"=2\"], "*id?" : 1 }'
+    extern const Schema schemaMethod; ///< 'method' (request and/or notification) schema ( 'method' : 'methodname', 'params' : [params] ) ->  schemaBase + ' { "method": "astring", "params" : [], "*id?" : 1 }'
+    extern const Schema schemaMethodOptionalParams; ///< just like schemaMethod, except 'params' is optional ('params?')
+    extern const Schema schemaMethodNoParams; ///< 'method' (request/notification) schema ( 'method' : 'methodname', 'params' : [params] ) ->  schemaBase + ' { "method": "astring", "params" : [\"=0\"], "*id?" : 1 }'
+    extern const Schema schemaMethodOneParam; ///< 'method' (request/notification) schema ( 'method' : 'methodname', 'params' : [params] ) ->  schemaBase + ' { "method": "astring", "params" : [\"=1\"], "*id?" : 1 }'
+    extern const Schema schemaMethodTwoParams; ///< 'method' (request/notification) schema ( 'method' : 'methodname', 'params' : [params] ) ->  schemaBase + ' { "method": "astring", "params" : [\"=2\"], "*id?" : 1 }'
+    extern const Schema schemaNotif; ///< 'notification' just like schemaMethodOptionalParams except explicitly lacks an 'id'
 
     /// this is used to lay out the protocol methods a class supports in code
     struct Method
@@ -105,6 +107,8 @@ namespace RPC {
         static Message makeError(int code, const QString & message, qint64 id = NO_ID);
         /// uses provided schema -- will not throw exception
         static Message makeMethodRequest(qint64 id, const QString &methodName, const QVariantList & params, const Schema & schema);
+        /// identical to makeMethodRequest. A notification is just like a request but always lacking an 'id' member. This is used for asynch notifs.
+        static Message makeMethodNotification(const QString &methodName, const QVariantList & params, const Schema & schema);
         /// uses provided schema -- will not throw exception
         static Message makeResult(const QVariant & result, const Schema &schema, qint64 reqId=NO_ID);
 
@@ -123,7 +127,8 @@ namespace RPC {
 
         bool isError() const { return bool(errorCode); }
         bool isResult() const { return bool(jsonData.count("result")); }
-        bool isRequest() const { return bool(jsonData.count("params")); }
+        bool isRequest() const { return !isResult() && bool(jsonData.count("id")) && bool(jsonData.count("method")); }
+        bool isNotif() const { return !isResult() && bool(jsonData.count("method")) && !isRequest(); }
         bool isList() const { return QMetaType::Type(data.type()) == QMetaType::QVariantList; }
     };
 
@@ -135,6 +140,10 @@ namespace RPC {
     /// class is client/server agnostic and it just operates in terms of JSON
     /// RPC methods and results.  It can be used for either a client or a
     /// server.
+    ///
+    /// Note we implement a subset of JSON-RPC 2.0 which requires 'id' to
+    /// always be positive ints, or null.  We do not accept strings for id,
+    /// floats, or negative numbers.
     ///
     /// Methods invoked on the peer need an id, and this id is used to track
     /// the reply back and associate it with the method that was invoked on
@@ -177,6 +186,8 @@ namespace RPC {
     signals:
         /// call (emit) this to send a request to the peer
         void sendRequest(qint64 reqid, const QString &method, const QVariantList & params = QVariantList());
+        /// call (emit) this to send a notification to the peer
+        void sendNotification(const QString &method, const QVariantList & params = QVariantList());
         /// call (emit) this to send a request to the peer
         void sendError(bool disconnectAfterSend, int errorCode, const QString &message, qint64 reqid = NO_ID);
         /// call (emit) this to send a result reply to the peer (result= message)
@@ -196,6 +207,8 @@ namespace RPC {
         /// Actual implentation that prepares the request. Is connected to sendRequest() above. Runs in this object's
         /// thread context. Eventually calls send() -> do_write() (from superclass).
         virtual void _sendRequest(qint64 reqid, const QString &method, const QVariantList & params = QVariantList());
+        // ditto for notifications
+        virtual void _sendNotification(const QString &method, const QVariantList & params = QVariantList());
         /// Actual implementation of sendError, runs in our thread context.
         virtual void _sendError(bool disconnect, int errorCode, const QString &message, qint64 reqid = NO_ID);
         /// Actual implementation of sendResult, runs in our thread context.

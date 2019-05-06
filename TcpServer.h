@@ -41,9 +41,9 @@ signals:
     void clientDisconnected(qint64 clientId);
 
     /// these are emitted from Controller and are connected to private slots we handle in our thread.
-    void tellClientSpecRejected(qint64 clientId, qint64 refId, const QString & reason); // results in error sent to client with message reason
-    void tellClientSpecAccepted(qint64 clientId, qint64 refId); // results in "accepted" sent to client as result
-    void tellClientSpecPending(qint64 clientId, qint64 refId); // results in "pending" sent to client as result
+    void tellClientSpecRejected(qint64 clientId, qint64 refId, const QString & reason); // if refId != NO_ID, results in error sent to client with message reason.  Otherwise will be a 'notification' with the error message in the params
+    void tellClientSpecAccepted(qint64 clientId, qint64 refId); // results in "accepted" sent to client as result if refId != NO_ID, otherwise will be a notification with 'params : ["accepted"]'
+    void tellClientSpecPending(qint64 clientId, qint64 refId); // results in "pending" sent to client as result if refId != NO_ID, otherwise will be a notification with 'params : ["pending"]'
 
 public slots:
     void onMessage(qint64 clientId, const RPC::Message &m);
@@ -59,7 +59,7 @@ private slots:
     void on_newConnection();
     void on_acceptError(QAbstractSocket::SocketError);
 
-    // connected to signals above, runs in our thread
+    // connected to signals above, runs in our thread. Note refId == NO_ID sends JSON RPC notifications, not JSON RPC results/error.
     void _tellClientSpecRejected(qint64 clientId, qint64 refId, const QString & reason);
     void _tellClientSpecAccepted(qint64 clientId, qint64 refId);
     void _tellClientSpecPending(qint64 clientId, qint64 refId);
