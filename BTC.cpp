@@ -4,6 +4,7 @@
 #include "Util.h"
 #include "bitcoin/crypto/endian.h"
 #include "Common.h"
+#include "bitcoin/pubkey.h"
 #include <QString>
 #include <string.h>
 #include <iostream>
@@ -37,6 +38,12 @@ namespace bitcoin
 
 namespace BTC
 {
+    namespace InitData {
+        // setup the global secp verify context at app startup.
+        extern bitcoin::ECCVerifyHandle myVerifyHandle;
+        bitcoin::ECCVerifyHandle myVerifyHandle; // this singleton object allocates a secp handle. see bitcoin/pubkey.h
+    }
+
     void CheckBitcoinEndiannessCompiledCorrectly() { bitcoin::Endian_Check_In_namespace_bitcoin(); }
 
     // Map of Net -> [Map of VerByte -> Kind]
