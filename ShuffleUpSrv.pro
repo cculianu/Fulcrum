@@ -5,6 +5,14 @@ QT += network
 CONFIG += c++17 console
 CONFIG -= app_bundle
 
+macx {
+    # Note: This is required because we use advanced C++ features such as std::visit
+    # which requires newer Mojave+ C++ libs.  On a recent compiler SDK, this will
+    # compile ok even on High Sierra with latest Xcode for High Sierra, so this requirement
+    # isn't too bad.  It just affects what C++ runtime we link to on MacOS.
+    QMAKE_MACOSX_DEPLOYMENT_TARGET = 10.14
+}
+
 # The following define makes your compiler emit warnings if you use
 # any Qt feature that has been marked deprecated (the exact warnings
 # depend on your compiler). Please consult the documentation of the
@@ -50,6 +58,8 @@ SOURCES += \
     TcpServer.cpp \
     bitcoin/amount.cpp \
     bitcoin/base58.cpp \
+    bitcoin/cashaddr.cpp \
+    bitcoin/cashaddrenc.cpp \
     bitcoin/crypto/aes.cpp \
     bitcoin/crypto/chacha20.cpp \
     bitcoin/crypto/ctaes/ctaes.c \
@@ -66,6 +76,7 @@ SOURCES += \
     bitcoin/pubkey.cpp \
     bitcoin/script.cpp \
     bitcoin/script_error.cpp \
+    bitcoin/script_standard.cpp \
     bitcoin/sigencoding.cpp \
     bitcoin/test.cpp \
     bitcoin/transaction.cpp \
@@ -104,6 +115,8 @@ HEADERS += \
     EXClient.h \
     bitcoin/amount.h \
     bitcoin/base58.h \
+    bitcoin/cashaddr.h \
+    bitcoin/cashaddrenc.h \
     bitcoin/compat.h \
     bitcoin/compat/byteswap.h \
     bitcoin/compat/endian.h \
@@ -127,6 +140,7 @@ HEADERS += \
     bitcoin/script.h \
     bitcoin/script_error.h \
     bitcoin/script_flags.h \
+    bitcoin/script_standard.h \
     bitcoin/serialize.h \
     bitcoin/sigencoding.h \
     bitcoin/sighashtype.h \

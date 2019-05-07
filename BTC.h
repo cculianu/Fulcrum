@@ -97,9 +97,10 @@ namespace BTC
         };
 
         Address() {}
-        Address(const QString &legacyAddress);
-        Address(const char *legacy) { *this = legacy; }
-        Address(const QByteArray &legacy) { *this = legacy; }
+        /// for the below 3 c'tors, the 'net' is auto-detected based on address.
+        Address(const QString &legacyOrCashAddress);
+        Address(const char *legacyOrCashAddress) { *this = legacyOrCashAddress; }
+        Address(const QByteArray &legacyOrCashAddress) { *this = legacyOrCashAddress; }
 
     private:
         static Address fromPubKey(const Byte *pbegin, const Byte *pend, Net = MainNet);
@@ -142,11 +143,11 @@ namespace BTC
         QString toString() const;
 
         /// test any string to see if it's a valid address for the specified network
-        static bool isValid(const QString &legacyAddress, Net = MainNet);
+        static bool isValid(const QString &legacyOrCashAddress, Net = MainNet);
 
-        Address & operator=(const QString &legacy) { return (*this = Address::fromString(legacy)); }
-        Address & operator=(const char *legacy) { return (*this = QString(legacy)); }
-        Address & operator=(const QByteArray &legacy) { return (*this = QString(legacy)); }
+        Address & operator=(const QString &legacyOrCash) { return (*this = Address::fromString(legacyOrCash)); }
+        Address & operator=(const char *legacyOrCash) { return (*this = QString(legacyOrCash)); }
+        Address & operator=(const QByteArray &legacyOrCash) { return (*this = QString(legacyOrCash)); }
 
         bool operator==(const Address & o) const { return net == o.net && verByte == o.verByte && h160 == o.h160; }
         bool operator!=(const Address & o) const { return !(*this == o); }
@@ -167,7 +168,7 @@ namespace BTC
         quint8 verByte = 99;
         QByteArray h160;
         mutable QByteArray cachedHashX;
-        static Address fromString(const QString &legacy);
+        static Address fromString(const QString &legacyOrCash);
     public:
         static bool test();
     };
@@ -265,6 +266,7 @@ namespace BTC
     namespace Tests {
         void SigCheck();
         bool Base58();
+        void CashAddr();
     }
 
 } // end namespace

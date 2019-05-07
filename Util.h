@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <chrono>
 #include <utility>
+#include <string>
 #define Q2C(qstr) ((qstr).toUtf8().constData())
 
 class App;
@@ -49,10 +50,6 @@ public:
 
     template <class T> Log & operator<<(const T & t) {  s << t; return *this;  }
 
-
-    // the following specialization sets the color:
-    //  template <> Log & operator<<(const Color &c);
-
     Log & setColor(Color c) { color = c; colorOverridden = true; return *this; }
     Color getColor() const { return color; }
 
@@ -70,6 +67,8 @@ protected:
 
 // specialization to set the color.
 template <> Log & Log::operator<<(const Color &);
+// specialization for std::string
+template <> inline Log& Log::operator<<(const std::string &t) { s << t.c_str(); return *this; }
 
 /** \brief Stream-like class to print a debug message to the app's logging facility
     Example:

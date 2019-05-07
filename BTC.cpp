@@ -9,6 +9,7 @@
 #include "bitcoin/interpreter.h"
 #include "bitcoin/script.h"
 #include "bitcoin/utilstrencodings.h"
+#include "bitcoin/cashaddrenc.h"
 #include <QString>
 #include <string.h>
 #include <iostream>
@@ -59,23 +60,50 @@ namespace BTC
 
     /// -- Address --
 
-    Address::Address(const QString &legacyAddress)
+    Address::Address(const QString &legacyOrCash)
     {
-        *this = Address::fromString(legacyAddress);
+        *this = Address::fromString(legacyOrCash);
     }
 
     /*static*/
-    Address Address::fromString(const QString &legacyAddress)
+    Address Address::fromString(const QString &legacyOrCash)
     {
+        static const auto DecodeCash = [] (Address & a, const QString &s) -> bool {
+            const auto & ss = s.toStdString();
+            auto content = bitcoin::DecodeCashAddrContent(ss, bitcoin::MainNetChainParams.CashAddrPrefix());
+            bool isTestnet = false;
+            if (content.hash.empty()) {
+                // try testnet
+                content = bitcoin::DecodeCashAddrContent(ss, bitcoin::TestNetChainParams.CashAddrPrefix());
+                isTestnet = !content.hash.empty();
+            }
+            if (!content.hash.empty()) {
+                const auto whichNet = isTestnet ? TestNet : MainNet;
+                auto & map = netVerByteKindMap[whichNet];
+                if (content.type == bitcoin::PUBKEY_TYPE && !map.isEmpty()) {
+                    a.verByte = map.firstKey();
+                } else if (content.type == bitcoin::SCRIPT_TYPE && !map.isEmpty()) {
+                    a.verByte = map.lastKey();
+                } else
+                    // Defensive programming.. we should never reach this branch.
+                    throw Exception("unknown type or other missing data on cash addr decode attempt");
+                a.h160.clear();
+                a.h160.insert(0, reinterpret_cast<const char *>(content.hash.data()), int(content.hash.size()));
+                a.net = whichNet;
+                return true;
+            }
+            return false;
+        };
         Address a;
         ByteArray dec;
         try {
-            if (!bitcoin::DecodeBase58Check(legacyAddress.toUtf8().constData(), dec)) {
-                Debug() << __FUNCTION__ << ": got bad address " << legacyAddress;
-                return a;
+            if (!bitcoin::DecodeBase58Check(legacyOrCash.toUtf8().constData(), dec)) {
+                if (!DecodeCash(a, legacyOrCash))
+                    Debug() << __FUNCTION__ << ": got bad address " << legacyOrCash;
+                return a; // a is either valid or invalid here, depending on return value of DecodeCash in line above.
             }
         } catch (const std::runtime_error &e) {
-            Error() << "Internal error decoding address " << legacyAddress << ": " << e.what();
+            Error() << "Internal error decoding address " << legacyOrCash << ": " << e.what();
             return a;
         }
         a.verByte = dec[0];
@@ -181,9 +209,9 @@ namespace BTC
     }
 
     /*static*/
-    bool Address::isValid(const QString &legacyAddress, Net net)
+    bool Address::isValid(const QString &legacyOrCashAddress, Net net)
     {
-        Address a(legacyAddress);
+        Address a(legacyOrCashAddress);
         return a.isValid() && a.net == net;
     }
 
@@ -566,6 +594,18 @@ namespace BTC
             Log() << "VerifyTxSignature: " << int(b) << " errStr: " << errStr;
         }
         bool Base58() { return bitcoin::TestBase58(); }
+
+        void CashAddr() {
+            using namespace bitcoin;
+            auto content = DecodeCashAddrContent("bitcoincash:qphaxewltpcd5pcwr074tmrn7ged4h9ayuxp49h7nh","bitcoincash");
+            Log() << "Decoded type: " << content.type << ", bytes (hex): " << (content.hash.empty() ? "" :  HexStr(content.hash));
+            content = DecodeCashAddrContent("qphaxewltpcd5pcwr074tmrn7ged4h9ayuxp49h7nh","bitcoincash");
+            Log() << "Decoded type: " << content.type << ", bytes (hex): " << (content.hash.empty() ? "" :  HexStr(content.hash));
+            content = DecodeCashAddrContent("qphaxewltpcd5pcwr074tmrn7ged4h9ayuxp49h7nh","bchtest");
+            Log() << "Decoded type: " << content.type << ", bytes (hex): " << (content.hash.empty() ? "" :  HexStr(content.hash));
+            Address a("qphaxewltpcd5pcwr074tmrn7ged4h9ayuxp49h7nh");
+            Log() << "Address as legacy: " << a.toString();
+        }
     } // end namespace Tests
 
 } // end namespace BTC
