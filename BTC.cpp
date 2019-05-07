@@ -400,13 +400,13 @@ namespace BTC
 
     quint64 MakeUnsignedTransaction(bitcoin::CMutableTransaction & tx,
                                     const QList<UTXO> & inputs, const QList<QPair<Address, quint64> > & outputs,
-                                    quint32 nLockTime)
+                                    quint32 nLockTime, int nVersion)
     {
         quint64 ret = 0;
-        static const auto clearTx = [](bitcoin::CMutableTransaction & tx, int resrv_in = 0, int resrv_out = 0) {
+        static const auto clearTx = [nVersion](bitcoin::CMutableTransaction & tx, int resrv_in = 0, int resrv_out = 0) {
             tx.vin.clear();
             tx.vout.clear();
-            tx.nVersion = bitcoin::CTransaction::CURRENT_VERSION;
+            tx.nVersion = nVersion > 0 ? nVersion : bitcoin::CTransaction::CURRENT_VERSION;
             tx.nLockTime = 0;
             if (resrv_in >= 0) tx.vin.reserve(size_t(resrv_in));
             if (resrv_out >= 0) tx.vout.reserve(size_t(resrv_out));
@@ -417,6 +417,8 @@ namespace BTC
             int n = 0;
             for (const auto & utxo : inputs) {
                 tx.vin.emplace_back(bitcoin::CTxIn(utxo.toCOutPoint()));
+                if (nLockTime)
+                    tx.vin.back().nSequence = 0xfffffffe; ///< if they set nLockTime, we must specify a sequence that is not SEQUENCE_FINAL
                 if (!utxo.isValid())
                     throw Exception(QString("Bad utxo specified in tx for input: %1").arg(n));
                 ++n;
@@ -441,6 +443,31 @@ namespace BTC
             clearTx(tx);
             ret = 0;
         }
+        return ret;
+    }
+
+    bool VerifyTxSignature(const bitcoin::CMutableTransaction &tx,
+                           const ByteArray & sigData, const ByteArray & pubKeyData,
+                           uint nInput, quint64 inputValSatoshis,
+                           QString *errIn)
+    {
+        QString dummy, &errStr = (errIn ? *errIn : dummy);
+        bitcoin::CScript scriptSig;
+        scriptSig << sigData << pubKeyData;
+        bitcoin::ScriptError err;
+        const auto & scriptPubKey = Address::fromPubKey(pubKeyData).toCScript();
+        bool ret = bitcoin::VerifyScript
+        (
+            scriptSig,
+            scriptPubKey,
+            bitcoin::SCRIPT_ENABLE_SIGHASH_FORKID
+                | bitcoin::SCRIPT_VERIFY_STRICTENC
+                | bitcoin::SCRIPT_VERIFY_LOW_S
+                | bitcoin::SCRIPT_VERIFY_DERSIG,
+            bitcoin::MutableTransactionSignatureChecker(&tx, nInput, int64_t(inputValSatoshis) * bitcoin::SATOSHI),
+            &err
+        );
+        errStr = bitcoin::ScriptErrorString(err);
         return ret;
     }
 
@@ -524,7 +551,19 @@ namespace BTC
                      1111, SCRIPT_ENABLE_SIGHASH_FORKID|SCRIPT_VERIFY_STRICTENC|SCRIPT_VERIFY_LOW_S, 577472, 4294967294,
                      "4058a690de126e5b696dba53c9e63d0344adf5487ba1e0124322ba2735c74bd1:0",
                      "1Ca1inCimwRhhcpFX84TPRrPQSryTgKW6N", 919);
-
+            CMutableTransaction tx3;
+            MakeUnsignedTransaction(
+                tx3,
+                { UTXO("4058a690de126e5b696dba53c9e63d0344adf5487ba1e0124322ba2735c74bd1:0") },
+                { { Address("1Ca1inCimwRhhcpFX84TPRrPQSryTgKW6N"), 919} },
+                577472
+            );
+            QString errStr;
+            auto b = VerifyTxSignature(tx3,
+                                       ByteArray::fromHex("30440220757c81c9aea06f19ce8bcf3ca088e28f0659273e8deb6dabc8e7fdeb7d235f6c0220688fa0ba75debf36b1a45a2d10ee18c9f546eb1aa6a8e08d1a96d9c08b95a21c41"),
+                                       ByteArray::fromHex("0277b926d8fd088be302ed207d7d35ca6e7b78005c415bdf9873b45337939704cd"),
+                                       0, 1111, &errStr);
+            Log() << "VerifyTxSignature: " << int(b) << " errStr: " << errStr;
         }
         bool Base58() { return bitcoin::TestBase58(); }
     } // end namespace Tests

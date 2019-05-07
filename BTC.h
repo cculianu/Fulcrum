@@ -247,7 +247,20 @@ namespace BTC
     extern
     quint64 MakeUnsignedTransaction(bitcoin::CMutableTransaction & tx,
                                     const QList<UTXO> & inputs, const QList<QPair<Address, quint64> > & outputs,
-                                    quint32 nLockTime = 0);
+                                    quint32 nLockTime = 0, ///< if nLockTime is set, sequence will be 0xfffffffe
+                                    int nVersion = 1); // nVersion will be set to this. 1=pre-may fork, 2=post may fork (schnorr sigs)
+
+    /// Verify a tx's signatures.  Returns true on verification success, false otherwise.
+    /// *errorString is set to explain what went wrong (if not nullptr).
+    /// Note the tx's signature script is not inspected, but rather a signature script is
+    /// constructed from the signature data and the pubKey passed-in.
+    /// `nInput` is which input to apply the check to (0, 1, 2, etc), and
+    /// `inputValSatoshis` is required; it is the original UTXO value of the coin in question.
+    extern
+    bool VerifyTxSignature(const bitcoin::CMutableTransaction & tx,
+                           const ByteArray & signature, const ByteArray & pubKey,
+                           uint nInput, quint64 inputValSatoshis,
+                           QString *errorString = nullptr);
 
     namespace Tests {
         void SigCheck();
