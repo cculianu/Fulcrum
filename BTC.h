@@ -252,17 +252,26 @@ namespace BTC
                                     int nVersion = 1,// nVersion will be set to this. 1=most tx's in the universe 2=some bip68 stuff i don't understand. we'll do nVersion=1 to be compatible with EC CashShuffle
                                     quint32 nSequence = 0xfffffffe);  // cashshuffle has this as nSequence. This will be our default too
 
-    /// Verify a tx's signatures.  Returns true on verification success, false otherwise.
+    /// Verify a tx signature for a specific input.  Returns true on verification success, false otherwise.
     /// *errorString is set to explain what went wrong (if not nullptr).
-    /// Note the tx's signature script is not inspected, but rather a signature script is
-    /// constructed from the signature data and the pubKey passed-in.
+    ///
+    /// Note the tx's signature script (if any) for the specified input is not at all inspected.
+    ///
+    /// Instead, a new signature script is constructed from the signature and the
+    /// passed-in pubKey.  It is assumed later, after VerifyTxSignature succeeds, that callers of this
+    /// function will use the signature that passed to generate a new valid signature script.
+    ///
+    /// As a convenience, the last parameter, `sigScript_out` may be passed-in to receive the valid
+    /// signature script.  (Is only set if this function returns true, however.)
+    ///
     /// `nInput` is which input to apply the check to (0, 1, 2, etc), and
     /// `inputValSatoshis` is required; it is the original UTXO value of the coin in question.
     extern
     bool VerifyTxSignature(const bitcoin::CMutableTransaction & tx,
                            const ByteArray & signature, const ByteArray & pubKey,
                            uint nInput, int64_t inputValSatoshis,
-                           QString *errorString = nullptr);
+                           QString *errorString = nullptr,
+                           bitcoin::CScript * scriptSig_out = nullptr);
 
     namespace Tests {
         void SigCheck();

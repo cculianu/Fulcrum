@@ -477,7 +477,7 @@ namespace BTC
     bool VerifyTxSignature(const bitcoin::CMutableTransaction &tx,
                            const ByteArray & sigData, const ByteArray & pubKeyData,
                            uint nInput, int64_t inputValSatoshis,
-                           QString *errIn)
+                           QString *errIn, bitcoin::CScript *scriptSig_out)
     {
         QString dummy, &errStr = (errIn ? *errIn : dummy);
         bitcoin::CScript scriptSig;
@@ -496,6 +496,9 @@ namespace BTC
             &err
         );
         errStr = bitcoin::ScriptErrorString(err);
+        if (ret && scriptSig_out)
+            // caller wants the valid script, so swap the buffers to provide it
+            scriptSig_out->swap(scriptSig);
         return ret;
     }
 
