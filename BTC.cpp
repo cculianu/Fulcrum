@@ -428,7 +428,7 @@ namespace BTC
 
     int64_t MakeUnsignedTransaction(bitcoin::CMutableTransaction & tx,
                                     const QList<UTXO> & inputs, const QList<QPair<Address, int64_t> > & outputs,
-                                    quint32 nLockTime, int nVersion)
+                                    quint32 nLockTime, int nVersion, quint32 nSequence)
     {
         int64_t ret = 0;
         static const auto clearTx = [nVersion](bitcoin::CMutableTransaction & tx, int resrv_in = 0, int resrv_out = 0) {
@@ -445,8 +445,7 @@ namespace BTC
             int n = 0;
             for (const auto & utxo : inputs) {
                 tx.vin.emplace_back(bitcoin::CTxIn(utxo.toCOutPoint()));
-                if (nLockTime)
-                    tx.vin.back().nSequence = 0xfffffffe; ///< if they set nLockTime, we must specify a sequence that is not SEQUENCE_FINAL
+                tx.vin.back().nSequence = nSequence;
                 if (!utxo.isValid())
                     throw Exception(QString("Bad utxo specified in tx for input: %1").arg(n));
                 ++n;

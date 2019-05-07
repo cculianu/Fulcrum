@@ -248,8 +248,9 @@ namespace BTC
     extern
     int64_t MakeUnsignedTransaction(bitcoin::CMutableTransaction & tx,
                                     const QList<UTXO> & inputs, const QList<QPair<Address, int64_t> > & outputs,
-                                    quint32 nLockTime = 0, ///< if nLockTime is set, sequence will be 0xfffffffe
-                                    int nVersion = 1); // nVersion will be set to this. 1=pre-may fork, 2=post may fork (schnorr sigs)
+                                    quint32 nLockTime = 0, ///< nLockTime should always be 0 to be compat. with cashshuffle.  nSequence should be 0xfffffffe for that same reason.
+                                    int nVersion = 1,// nVersion will be set to this. 1=most tx's in the universe 2=some bip68 stuff i don't understand. we'll do nVersion=1 to be compatible with EC CashShuffle
+                                    quint32 nSequence = 0xfffffffe);  // cashshuffle has this as nSequence. This will be our default too
 
     /// Verify a tx's signatures.  Returns true on verification success, false otherwise.
     /// *errorString is set to explain what went wrong (if not nullptr).
