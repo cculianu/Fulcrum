@@ -18,7 +18,7 @@ class TcpServer;
 struct AddressUnspentEntry
 {
     BTC::Address address;
-    QMap<BTC::UTXO, quint64> utxoAmounts, utxoUnconfAmounts;
+    QMap<BTC::UTXO, qint64> utxoAmounts, utxoUnconfAmounts;
     QSet<qint64> clientSet; ///< basically of reference counts of client ids that refer to this entry. as clients die, they get removed from this set
     int heightVerified = 0;
     qint64 tsVerified = 0;
@@ -40,7 +40,7 @@ struct ShuffleSpec
 {
     qint64 clientId = NO_ID, ///< id of the Client * object asking for this spec
            refId = NO_ID; ///< id passed in to the method request from remote client
-    QSet<quint64> amounts; /// shuffle output amounts requested in satoshis
+    QSet<qint64> amounts; /// shuffle output amounts requested in satoshis
     BTC::Address shuffleAddr, changeAddr;
     QMap<BTC::Address, QSet<BTC::UTXO> > addrUtxo;
 
@@ -48,7 +48,7 @@ struct ShuffleSpec
     void clear() { clientId = refId = NO_ID; amounts.clear(); shuffleAddr = changeAddr = BTC::Address(); addrUtxo.clear(); }
     bool isValid() const {
         return clientId > NO_ID && refId > NO_ID && !amounts.isEmpty()
-                && std::all_of(amounts.begin(), amounts.end(), [](quint64 amt) -> bool { return amt > 0; })
+                && std::all_of(amounts.begin(), amounts.end(), [](qint64 amt) -> bool { return amt > 0; })
                 && !addrUtxo.isEmpty() && shuffleAddr.isValid() && changeAddr.isValid()
                 && shuffleAddr != changeAddr && !addrUtxo.contains(shuffleAddr);
     }

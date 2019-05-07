@@ -246,8 +246,8 @@ namespace BTC
     /// as well as amounts >= 546 sats.  If any of the UTXOs !.isValid or any of the addresses !.isValid,
     /// or any of the outputs are below 546 sats, the resulting tx is empty and 0 is returned.
     extern
-    quint64 MakeUnsignedTransaction(bitcoin::CMutableTransaction & tx,
-                                    const QList<UTXO> & inputs, const QList<QPair<Address, quint64> > & outputs,
+    int64_t MakeUnsignedTransaction(bitcoin::CMutableTransaction & tx,
+                                    const QList<UTXO> & inputs, const QList<QPair<Address, int64_t> > & outputs,
                                     quint32 nLockTime = 0, ///< if nLockTime is set, sequence will be 0xfffffffe
                                     int nVersion = 1); // nVersion will be set to this. 1=pre-may fork, 2=post may fork (schnorr sigs)
 
@@ -260,7 +260,7 @@ namespace BTC
     extern
     bool VerifyTxSignature(const bitcoin::CMutableTransaction & tx,
                            const ByteArray & signature, const ByteArray & pubKey,
-                           uint nInput, quint64 inputValSatoshis,
+                           uint nInput, int64_t inputValSatoshis,
                            QString *errorString = nullptr);
 
     namespace Tests {

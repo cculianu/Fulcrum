@@ -372,8 +372,8 @@ void EXMgr::processListUnspentResults(EXClient *client, const RPC::Message &m)
             int height = map.value("height").toInt(&ok);
             if (!ok) throw Err("Bad height in dict");
             auto & whichUtxoMap = height > 0 ? entry.utxoAmounts : entry.utxoUnconfAmounts;
-            quint64 value = map.value("value").toULongLong(&ok);
-            if (!ok) throw Err("Bad value in dict");
+            qint64 value = map.value("value").toLongLong(&ok);
+            if (!ok || value <= 0) throw Err("Bad value in dict");
             BTC::UTXO utxo(tx_hash, tx_pos);
             if (!utxo.isValid()) throw Err(QString("bad utxo: %1:%2").arg(tx_hash).arg(tx_pos));
             whichUtxoMap[utxo] = value;

@@ -426,11 +426,11 @@ namespace BTC
         qInfo("u: %s ... u == u2 ? %d  u2 < u ? %d", Q2C(u.toString()), int(u == u2), int(u2 < u));
     }
 
-    quint64 MakeUnsignedTransaction(bitcoin::CMutableTransaction & tx,
-                                    const QList<UTXO> & inputs, const QList<QPair<Address, quint64> > & outputs,
+    int64_t MakeUnsignedTransaction(bitcoin::CMutableTransaction & tx,
+                                    const QList<UTXO> & inputs, const QList<QPair<Address, int64_t> > & outputs,
                                     quint32 nLockTime, int nVersion)
     {
-        quint64 ret = 0;
+        int64_t ret = 0;
         static const auto clearTx = [nVersion](bitcoin::CMutableTransaction & tx, int resrv_in = 0, int resrv_out = 0) {
             tx.vin.clear();
             tx.vout.clear();
@@ -455,8 +455,8 @@ namespace BTC
             n = 0;
             for (const auto & adrAmt : outputs) {
                 auto & addr = adrAmt.first;
-                const auto amt = int64_t(adrAmt.second)*bitcoin::SATOSHI;
-                constexpr auto DUST_THRESHOLD = 546*bitcoin::SATOSHI;
+                const auto amt = adrAmt.second*bitcoin::SATOSHI;
+                constexpr auto DUST_THRESHOLD = int64_t(546)*bitcoin::SATOSHI;
                 if (!addr.isValid())
                     throw Exception(QString("Bad address specified in tx for output %1").arg(n));
                 if (amt < DUST_THRESHOLD)
@@ -471,12 +471,13 @@ namespace BTC
             clearTx(tx);
             ret = 0;
         }
+        Q_ASSERT(ret >= 0);
         return ret;
     }
 
     bool VerifyTxSignature(const bitcoin::CMutableTransaction &tx,
                            const ByteArray & sigData, const ByteArray & pubKeyData,
-                           uint nInput, quint64 inputValSatoshis,
+                           uint nInput, int64_t inputValSatoshis,
                            QString *errIn)
     {
         QString dummy, &errStr = (errIn ? *errIn : dummy);
@@ -492,7 +493,7 @@ namespace BTC
                 | bitcoin::SCRIPT_VERIFY_STRICTENC
                 | bitcoin::SCRIPT_VERIFY_LOW_S
                 | bitcoin::SCRIPT_VERIFY_DERSIG,
-            bitcoin::MutableTransactionSignatureChecker(&tx, nInput, int64_t(inputValSatoshis) * bitcoin::SATOSHI),
+            bitcoin::MutableTransactionSignatureChecker(&tx, nInput, inputValSatoshis*bitcoin::SATOSHI),
             &err
         );
         errStr = bitcoin::ScriptErrorString(err);

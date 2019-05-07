@@ -258,9 +258,9 @@ bool TcpServer::processSpec(qint64 clientId, const RPC::Message &m, QString & er
             throw ErrorOut("Shuffle and change address must be different addresses!");
         for (const auto & var : amounts) {
             bool ok;
-            quint64 amt;
-            amt = var.toULongLong(&ok);
-            if (!ok || !amt)
+            qint64 amt;
+            amt = var.toLongLong(&ok);
+            if (!ok || amt <= 0)
                 throw ErrorOut(QString("Bad amount \"%1\"").arg(var.toString()));
             if (spec.amounts.contains(amt))
                 throw ErrorOut(QString("Dupe amount \"%1\"").arg(amt));
