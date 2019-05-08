@@ -5,6 +5,7 @@
 #include "SrvMgr.h"
 #include "BTC.h"
 #include "Controller.h"
+#include "TcpServer.h"
 #include <signal.h>
 #include <QCommandLineParser>
 #include <QFile>
@@ -75,6 +76,14 @@ void App::startup()
         controller->startup(); // may throw Exception, waits for thread to start
         srvmgr->startup(); // may throw Exception, waits for servers to bind
         exmgr->startup(); // may throw Exception, returns immediately
+
+        if (!options.statsInterfaces.isEmpty()) {
+            Log() << "Stats HTTP: starting " << options.interfaces.count() << " server(s) ...";
+            // start 'stats' http servers, if any
+            for (const auto & i : options.statsInterfaces)
+                start_httpServer(i); // may throw
+        }
+
     } catch (const Exception & e) {
         Error () << "Caught exception: " << e.what();
         this->exit(1);
@@ -85,6 +94,11 @@ void App::cleanup()
 {
     Debug() << __PRETTY_FUNCTION__ ;
     cleanup_RunInThreads();
+    if (!httpServers.isEmpty()) {
+        Log("Stopping Stats HTTP Servers ...");
+        for (auto h : httpServers) { h->stop(); }
+        httpServers.clear(); // deletes shared pointers
+    }
     if (controller) { Log("Stopping Controller ... "); controller->cleanup(); delete controller; controller = nullptr; }
     if (srvmgr) { Log("Stopping SrvMgr ... "); srvmgr->cleanup(); delete srvmgr; srvmgr = nullptr; }
     if (exmgr) { Log("Stopping EXMgr ... "); exmgr->cleanup(); delete exmgr; exmgr = nullptr; }
@@ -117,6 +131,12 @@ void App::parseArgs()
                   " port %1). This option may be specified more than once to bind to multiple interfaces and/or ports.").arg(Options::DEFAULT_PORT),
           QString("interface:port")
         },
+        { { "z", "stats" },
+          QString("Specify listen address and port for the stats HTTP server. Format is same as the interface option, "
+                  "e.g.: <interface:port>. Default is to not start any starts HTTP servers. "
+                  "This option may be specified more than once to bind to multiple interfaces and/or ports."),
+          QString("interface:port")
+        },
         { { "f", "servers" },
           QString("Specify a <server.json> file to use for the master list of servers to connect to. The format for "
                   "this file should be identical to the Electron Cash servers.json format. Defaults to an internal "
@@ -133,16 +153,15 @@ void App::parseArgs()
         { { "S", "syslog" },
           QString("Syslog mode. If on Unix, use the syslog() facility to produce log messages. This option currently has no effect on Windows.")
         },
-
     });
     parser.process(*this);
 
     if (parser.isSet("v")) options.verboseDebug = true;
     if (parser.isSet("q")) options.verboseDebug = false;
     if (parser.isSet("S")) options.syslogMode = true;
-    auto l = parser.values("i");
-    if (!l.isEmpty()) {
-        options.interfaces.clear();
+    static const auto parseInterfaces = [](decltype(Options::interfaces) & interfaces, const QStringList & l) {
+        // functor parses -i and -z options, puts results in 'interfaces' passed-in reference.
+        interfaces.clear();
         for (const auto & s : l) {
             auto toks = s.split(":");
             if (toks.length() < 2)
@@ -157,9 +176,14 @@ void App::parseArgs()
             quint16 port = portStr.toUShort(&ok);
             if (!ok)
                 throw BadArgs(QString("Bad port: %1").arg(portStr));
-            options.interfaces.push_back({h, port});
+            interfaces.push_back({h, port});
         }
+    };
+    if (auto l = parser.values("i"); !l.isEmpty()) {
+        parseInterfaces(options.interfaces, l);
     }
+    parseInterfaces(options.statsInterfaces, parser.values("z"));
+
     auto f = parser.value("f");
     if (!f.isEmpty()) {
         QFile file(f);
@@ -168,4 +192,17 @@ void App::parseArgs()
         }
         options.serversFile = f;
     }
+}
+
+void App::start_httpServer(const Options::Interface &iface)
+{
+    QSharedPointer<SimpleHttpServer> server(new SimpleHttpServer(iface.first, iface.second, 16384));
+    httpServers.push_back(server);
+    server->tryStart(); // may throw, waits for server to start
+    server->set404Message("Error: Unknown endpoint. /stats is the only valid endpoint I understand.\r\n");
+    server->addEndpoint("/stats",[this](SimpleHttpServer::Request &req){
+        req.response.contentType = "application/json; charset=utf-8";
+        auto stats = controller->statsSafe();
+        req.response.data = QString("%1\r\n").arg(Util::Json::toString(stats, false)).toUtf8();
+    });
 }

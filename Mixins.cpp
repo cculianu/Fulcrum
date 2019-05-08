@@ -34,10 +34,14 @@ void ThreadObjectMixin::stop()
         _thread.quit();
         _thread.wait();
     }
+    int ct = 0;
     for (const auto & c : conns) {
         QObject::disconnect(c);
+        ++ct;
     }
     conns.clear();
+    if (ct)
+        Debug() << _thread.objectName() << " cleaned up " << ct << " signsl/slot connections";
 }
 
 

@@ -360,6 +360,14 @@ void Controller::onClientDoubleSpendDetected(qint64 clientId)
     // todo: implement some sort of mitigation and/or penalty and/or cancel extant shuffles, etc...
 }
 
+Mgr::Stats Controller::stats() const
+{
+    Stats ret;
+    ret["ElectrumX_Mgr"] = exMgr->statsSafe();
+    ret["TCPSrv"] = srvMgr->statsSafe();
+    return ret;
+}
+
 QString ShuffleSpec::toDebugString() const
 {
     QString ret;

@@ -2,34 +2,37 @@
 #include "Controller.h"
 #include <QCoreApplication>
 #include <QtNetwork>
+#include <QString>
+#include <QTextStream>
+#include <QByteArray>
+#include <QTextCodec>
 
 TcpServerError::~TcpServerError() {} // for vtable
 
-TcpServer::TcpServer(const QHostAddress &a, quint16 p)
+AbstractTcpServer::AbstractTcpServer(const QHostAddress &a, quint16 p)
     : QTcpServer(nullptr), IdMixin(newId()), addr(a), port(p)
 {
     _thread.setObjectName(prettyName());
     setObjectName(prettyName());
-    setupMethods();
 }
 
-TcpServer::~TcpServer()
+AbstractTcpServer::~AbstractTcpServer()
 {
     Debug() << __FUNCTION__;
     stop();
 }
 
-QString TcpServer::hostPort() const
+QString AbstractTcpServer::hostPort() const
 {
     return QString("%1:%2").arg(addr.toString()).arg(port);
 }
 
-QString TcpServer::prettyName() const
+QString AbstractTcpServer::prettyName() const
 {
     return QString("Srv %1 (id: %2)").arg(hostPort()).arg(id);
 }
 
-void TcpServer::tryStart()
+void AbstractTcpServer::tryStart()
 {
     if (!_thread.isRunning()) {
         ThreadObjectMixin::start(); // call super
@@ -44,14 +47,11 @@ void TcpServer::tryStart()
     }
 }
 
-void TcpServer::on_started()
+void AbstractTcpServer::on_started()
 {
     QString result = "ok";
-    connect(this, SIGNAL(newConnection()), this, SLOT(on_newConnection()));
-    connect(this, SIGNAL(acceptError(QAbstractSocket::SocketError)), this, SLOT(on_acceptError(QAbstractSocket::SocketError)));
-    connect(this, &TcpServer::tellClientSpecRejected, this, &TcpServer::_tellClientSpecRejected);
-    connect(this, &TcpServer::tellClientSpecAccepted, this, &TcpServer::_tellClientSpecAccepted);
-    connect(this, &TcpServer::tellClientSpecPending, this, &TcpServer::_tellClientSpecPending);
+    conns.push_back(connect(this, SIGNAL(newConnection()), this,SLOT(pvt_on_newConnection())));
+    conns.push_back(connect(this, &QTcpServer::acceptError, this, [this](QAbstractSocket::SocketError e){ on_acceptError(e);}));
     if (!listen(addr, port)) {
         result = errorString();
         result = result.isEmpty() ? "Error binding/listening for connections" : result;
@@ -62,41 +62,198 @@ void TcpServer::on_started()
     chan.put(result);
 }
 
-void TcpServer::on_finished()
+void AbstractTcpServer::on_finished()
 {
-    disconnect(this, &TcpServer::tellClientSpecRejected, this, &TcpServer::_tellClientSpecRejected);
-    disconnect(this, &TcpServer::tellClientSpecAccepted, this, &TcpServer::_tellClientSpecAccepted);
-    disconnect(this, &TcpServer::tellClientSpecPending, this, &TcpServer::_tellClientSpecPending);
-    disconnect(this, SIGNAL(newConnection()), this, SLOT(on_newConnection()));
-    disconnect(this, SIGNAL(acceptError(QAbstractSocket::SocketError)), this, SLOT(on_acceptError(QAbstractSocket::SocketError)));
     close(); /// stop listening
     chan.put("finished");
     Debug() << objectName() << " finished.";
     ThreadObjectMixin::on_finished();
 }
 
-static inline QString prettySock(QAbstractSocket *sock)
+void AbstractTcpServer::on_acceptError(QAbstractSocket::SocketError e)
+{
+    Error() << objectName() << "; error acceptError, code: " << int(e);
+}
+
+/*static*/
+QString AbstractTcpServer::prettySock(QAbstractSocket *sock)
 {
     return QString("%1:%2")
             .arg(sock ? sock->peerAddress().toString() : "(null)")
             .arg(sock ? sock->peerPort() : 0);
 }
 
-void TcpServer::on_newConnection()
+void AbstractTcpServer::pvt_on_newConnection()
 {
     QTcpSocket *sock = nextPendingConnection();
     if (sock) {
         Debug() << "Got connection from: " << prettySock(sock);
-        newClient(sock);
+        on_newConnection(sock);
     } else {
         Warning() << __FUNCTION__ << ": nextPendingConnection returned a nullptr! Called at the wrong time? FIXME!";
     }
 }
 
-void TcpServer::on_acceptError(QAbstractSocket::SocketError e)
+
+SimpleHttpServer::SimpleHttpServer(const QHostAddress &listenAddr, quint16 listenPort, qint64 maxBuffer, qint64 timeLimit)
+    : AbstractTcpServer(listenAddr, listenPort), MAX_BUFFER(maxBuffer > 0 ? maxBuffer : DEFAULT_MAX_BUFFER),
+      TIME_LIMIT(timeLimit)
 {
-    Error() << objectName() << "; error acceptError, code: " << int(e);
+    // re-set name for debug/logging
+    _thread.setObjectName(prettyName());
+    setObjectName(prettyName());
 }
+
+QString SimpleHttpServer::prettyName() const
+{
+    return QString("Http%1").arg(AbstractTcpServer::prettyName());
+}
+
+void SimpleHttpServer::on_newConnection(QTcpSocket *sock)
+{
+    sock->setReadBufferSize(MAX_BUFFER);
+    const QString sockName(prettySock(sock));
+    connect(sock, &QAbstractSocket::disconnected, this, [sock,sockName] {
+        Debug() << sockName << " disconnected";
+        sock->deleteLater();
+    });
+    connect(sock, &QObject::destroyed, this, [sockName](QObject *){
+        Debug() << sockName << " destroyed";
+    });
+    connect(sock, &QAbstractSocket::readyRead, this, [sock,sockName,this] {
+        try {
+            while(sock->canReadLine()) {
+                auto line = QString(sock->readLine()).trimmed();
+                //Debug() << sockName << " Got line: " << line;
+                if (QString loc = sock->property("req-loc").toString(); loc.isEmpty()) {
+                    auto toks = line.split(" ");
+                    if (toks.length() != 3 || (toks[0] != "GET" && toks[1] != "POST") || toks[2] != "HTTP/1.1")
+                        throw Exception(QString("Invalid request: %1").arg(line));
+                    Debug() << sockName << " " << line;
+                    sock->setProperty("req-loc", toks[1]);
+                    sock->setProperty("req-meth", toks[0]);
+                    sock->setProperty("req-ver", toks[2]);
+                } else if (auto loc = sock->property("req-loc").toString(),
+                                meth = sock->property("req-meth").toString(),
+                                ver = sock->property("req-ver").toString();
+                            line.isEmpty() && !loc.isEmpty() && !meth.isEmpty() && !ver.isEmpty()) {
+                    // got line by itself, prepare response
+                    Request req;
+                    auto & response = req.response;
+                    req.httpVersion = ver;
+                    req.method = meth == "GET" ? Method::GET : Method::POST;
+                    auto vmap = sock->property("req-header").toMap();
+                    for (auto it = vmap.begin(); it != vmap.end(); ++it)
+                        // save header
+                        req.header[it.key()] = it.value().toString();
+                    if (auto i = loc.indexOf('?'); i > -1) {
+                        req.queryString = loc.mid(i+1);
+                        req.endPoint = loc.left(i);
+                    } else
+                        req.endPoint = loc;
+                    if (auto it = endPoints.find(req.endPoint); it != endPoints.end() || (it=endPoints.find("*")) != endPoints.end()) {
+                        it.value()(req); // call lambda
+                    } else {
+                        // could not find any enpoints that match, set up a 404 response
+                        response.status = 404;
+                        response.statusText = "Unknown resource";
+                        response.data = err404Msg.toUtf8();
+                    }
+                    // setup header
+                    QByteArray responseHeader;
+                    {
+                        QTextStream ss(&responseHeader, QIODevice::WriteOnly);
+                        ss.setCodec(QTextCodec::codecForName("UTF-8"));
+                        ss << "HTTP/1.1 " << response.status << " " << req.response.statusText.trimmed() << "\r\n";
+                        ss << "Content-Type: " << response.contentType.trimmed() << "\r\n";
+                        ss << "Content-Length: " << response.data.length() << "\r\n";
+                        ss << response.headerExtra;
+                        ss << "\r\n";
+                    }
+                    const qint64 respTotalLen = responseHeader.length() + response.data.length();
+                    sock->setProperty("resp-len", respTotalLen);
+                    // write out header
+                    sock->write(responseHeader);
+                    if (response.data.length())
+                        // write out response data
+                        sock->write(response.data);
+                } else {
+                    // save params
+                    auto vmap = sock->property("req-header").toMap();
+                    auto toks = line.split(": ");
+                    if (toks.length() >= 2) {
+                        auto name = toks.front(); toks.pop_front();
+                        auto value = toks.join(": ");
+                        vmap[name] = value;
+                        sock->setProperty("req-header", vmap);
+                    } else
+                        throw Exception("garbage data, closing connection");
+                }
+            }
+
+            if (sock->bytesAvailable() > MAX_BUFFER)
+                throw Exception("too much data, closing connection");
+
+        } catch (const std::exception &e) {
+            Warning() << "Client: " << sockName << "; " << e.what();
+            sock->abort();
+            sock->deleteLater();
+        }
+    });
+    connect(sock, &QAbstractSocket::bytesWritten, this, [sock, sockName](qint64 bytes) {
+        qint64 nWrit = sock->property("resp-written").toLongLong() + bytes;
+        sock->setProperty("resp-written", nWrit);
+        auto var = sock->property("resp-len");
+        if (const auto n2write = var.toLongLong(); !var.isNull() && nWrit >= n2write) {
+            // graceful disconnect
+            Debug() << sockName << " wrote " << nWrit << "/" << n2write << " bytes, disconnecting";
+            sock->disconnectFromHost();
+        } else {
+            Debug() << sockName << " wrote: " << bytes << " bytes";
+        }
+    });
+    if (TIME_LIMIT > 0) {
+        QTimer::singleShot(TIME_LIMIT, sock, [sock, sockName, this]{
+            Debug() << sockName << " killing connection after " << (TIME_LIMIT/1e3) << " seconds";
+            sock->abort();
+            sock->deleteLater();
+        });
+    }
+}
+
+void SimpleHttpServer::addEndpoint(const QString &endPoint, const Lambda &callback)
+{
+    if (!endPoint.startsWith("/") && endPoint != "*")
+        Warning() << __FUNCTION__ << " endPoint " << endPoint << " does not start with '/' -- it will never be reached!  FIXME!";
+    endPoints[endPoint] = callback;
+}
+
+TcpServer::TcpServer(const QHostAddress &a, quint16 p)
+    : AbstractTcpServer(a, p)
+{
+    // re-set name for debug/logging
+    _thread.setObjectName(prettyName());
+    setObjectName(prettyName());
+
+    setupMethods();
+}
+
+TcpServer::~TcpServer() { stop(); } // paranoia about pure virtual, and vtable consistency, etc
+
+QString TcpServer::prettyName() const
+{
+    return QString("Tcp%1").arg(AbstractTcpServer::prettyName());
+}
+
+void TcpServer::on_started()
+{
+    AbstractTcpServer::on_started();
+    conns.push_back(connect(this, &TcpServer::tellClientSpecRejected, this, &TcpServer::_tellClientSpecRejected));
+    conns.push_back(connect(this, &TcpServer::tellClientSpecAccepted, this, &TcpServer::_tellClientSpecAccepted));
+    conns.push_back(connect(this, &TcpServer::tellClientSpecPending, this, &TcpServer::_tellClientSpecPending));
+}
+
+void TcpServer::on_newConnection(QTcpSocket *sock) { newClient(sock); }
 
 Client *
 TcpServer::newClient(QTcpSocket *sock)

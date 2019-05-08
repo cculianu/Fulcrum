@@ -111,6 +111,7 @@ protected:
     virtual QObject *qobj() override; // from ThreadObjectMixin & TimersByNameMixin
     virtual void on_started() override; // from ThreadObjectMixin
     virtual void on_finished() override; // from ThreadObjectMixin
+    virtual Stats stats() const override; // from Mgr
 
 private slots:
     // NB: assumption is TcpServer lives for lifetime of this object. If this invariant changes,  please update this code.

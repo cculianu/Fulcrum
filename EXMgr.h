@@ -67,6 +67,7 @@ private slots:
 
 protected:
     QObject *qobj() override;
+    Stats stats() const override; // from Mgr
 
 private:
     const QString serversFile;

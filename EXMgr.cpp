@@ -386,3 +386,35 @@ void EXMgr::processListUnspentResults(EXClient *client, const RPC::Message &m)
         return;
     }
 }
+
+Mgr::Stats EXMgr::stats() const
+{
+    Stats ret;
+    qint64 bytesSent = 0, bytesReceived = 0;
+    ret["latest_block"] = QVariantMap({
+        { "height", QVariant(height.height) },
+        { "header", QVariant(height.header) },
+        { "seenBy", QVariant(height.seenBy.count()) },
+        { "age_secs", QVariant((Util::getTime()-height.ts)/1e3) }
+    });
+    QVariantMap servers;
+    for (auto it = clientsById.begin(); it != clientsById.end(); ++it) {
+        EXClient *client = it.value();
+        if (!client->isGood()) continue;
+        servers[QString("%1").arg(it.key())] = QVariantMap({
+            { "host" , QVariant(client->host) },
+            { "height" , QVariant(client->info.height) },
+            { "version", QVariant(client->info.serverVersion.first) },
+            { "protocol_version", QVariant(client->info.serverVersion.second) },
+            { "is_stale", QVariant(client->isStale()) },
+            { "bytes_sent", QVariant(client->nSent) },
+            { "bytes_received", QVariant(client->nReceived) },
+        });
+        bytesReceived += client->nReceived;
+        bytesSent += client->nSent;
+    }
+    ret["servers"] = servers;
+    ret["bytes_sent"] = bytesSent;
+    ret["bytes_received"] = bytesReceived;
+    return ret;
+}

@@ -9,6 +9,7 @@ class Logger;
 class EXMgr;
 class SrvMgr;
 class Controller;
+class SimpleHttpServer;
 
 class App : public QCoreApplication
 {
@@ -35,6 +36,7 @@ private:
     SrvMgr *srvmgr = nullptr;
     EXMgr *exmgr = nullptr;
     Controller *controller = nullptr;
+    QList<QSharedPointer<SimpleHttpServer> > httpServers;
 
     void startup();
     void cleanup();
@@ -45,6 +47,7 @@ private:
 
     /// This is defined in register_MetaTypes.cpp
     void register_MetaTypes();
+    void start_httpServer(const Options::Interface &iface); // may throw
 };
 
 inline App *app() {

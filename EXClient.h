@@ -32,7 +32,7 @@ public:
         void clear() { serverVersion = { "", ""}; height = 0; header = ""; }
     };
 
-    Info info; ///< this is managed by the main thread
+    Info info; ///< this is managed by the EXMgr thread (which is currently the main thread)
 
     /// true if we are connected, have received a serverVersion, have received a height
     bool isGood() const override;
