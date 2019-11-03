@@ -121,7 +121,7 @@ void App::cleanup_RunInThreads()
 void App::parseArgs()
 {
     QCommandLineParser parser;
-    parser.setApplicationDescription("A CashShuffle shuffle-up server with an integrated ElectrumX validation client.");
+    parser.setApplicationDescription("A Bitcoin Cash Blockchain SPV Server.");
     parser.addHelpOption();
     parser.addVersionOption();
 

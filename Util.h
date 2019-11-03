@@ -342,4 +342,39 @@ namespace Util {
     }
 }
 
+/// Kind of like Go's "defer" statement. Call a functor (for clean-up code) at scope end.
+struct Defer
+{
+    typedef std::function<void(void)> VoidFunc;
+    VoidFunc func;
+
+    Defer(const VoidFunc & f) : func(f) {}
+    Defer(VoidFunc && f) : func(std::move(f)) {}
+    Defer() {} ///< essentially a no-op. Intended for possibly specifying the function via `.func =` later.
+
+    ~Defer() { if (func) func(); }
+};
+
+/// Like `Defer`, except you specify a function to be called at creation (immediately). Intended to be used for code
+/// clarity so that it's obvious to readers of code what initialization code goes with what cleanup code.
+///
+/// E.g.:
+///
+///     RAII r1 {
+///         [&]{ someUniqPtr = foo(); },  // called immediately
+///         [&]{ someUniqPtr.reset(); }   // called at r1 destruction
+///     };
+///
+/// Is equivalient to:
+///
+///     someUniqPtr = foo();
+///     Defer d1( [&]{ someUniqPtr.reset(); } );
+///
+/// But the RAII version above is more explicit about what code goes with what cleanup.
+struct RAII : public Defer {
+    /// initFunc called immediately, cleanupFunc called in this instance's destructor
+    RAII(const VoidFunc & initFunc, const VoidFunc &cleanupFunc) : Defer(cleanupFunc) { if (initFunc) initFunc(); }
+    /// initFunc called immediately, cleanupFunc called in this instance's destructor
+    RAII(const VoidFunc & initFunc, VoidFunc && cleanupFunc) : Defer(std::move(cleanupFunc)) { if (initFunc) initFunc(); }
+};
 #endif // UTIL_H

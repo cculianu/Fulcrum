@@ -23,7 +23,7 @@ public:
     using Exception::Exception;
 };
 
-#define APPNAME "ShuffleUpServer"
+#define APPNAME "Fulcrum"
 #define VERSION "1.0"
 #ifdef QT_DEBUG
 #  define VERSION_EXTRA "(Debug)"

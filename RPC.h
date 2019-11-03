@@ -1,5 +1,5 @@
-#ifndef SHUFFLEUP_RPC_H
-#define SHUFFLEUP_RPC_H
+#ifndef FULCRUM_RPC_H
+#define FULCRUM_RPC_H
 
 #include "Util.h"
 #include "AbstractConnection.h"
@@ -149,8 +149,8 @@ namespace RPC {
     /// the reply back and associate it with the method that was invoked on
     /// the peer (see idMethodMap instance var).
     ///
-    /// We use this protocol on the client-facing side too to negotiate
-    /// shuffles, hence why this is abstracted out into a separate class. This
+    /// We use this protocol on the client-facing side too to serve clients,
+    /// hence why this is abstracted out into a separate class. This
     /// class is responsible for parsing the JSON and closing the connections
     /// on malformed input that doesn't match the expected 'Schema'.  This
     /// class is configured for which methods it supports and what the various
@@ -245,4 +245,4 @@ namespace RPC {
 /// So that Qt signal/slots work with this type.  Metatypes are also registered at startup via qRegisterMetatype
 Q_DECLARE_METATYPE(RPC::Message);
 
-#endif // SHUFFLEUP_RPC_H
+#endif // FULCRUM_RPC_H
