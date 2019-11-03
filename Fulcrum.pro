@@ -1,9 +1,15 @@
-
 QT -= gui
-QT += network
+QT += network testlib websockets
 
 CONFIG += c++17 console
 CONFIG -= app_bundle
+
+# Test for ability to use c++latest; requires Qt 5.12.0 or above
+greaterThan(QT_MAJOR_VERSION, 4):greaterThan(QT_MINOR_VERSION, 12) {
+    # Qt 5.13+ supports "c++latest"
+    CONFIG -= c++17
+    CONFIG += c++latest
+}
 
 macx {
     # Note: This is required because we use advanced C++ features such as std::visit
@@ -56,6 +62,42 @@ SOURCES += \
     RPC.cpp \
     SrvMgr.cpp \
     TcpServer.cpp \
+    main.cpp \
+    App.cpp \
+    Logger.cpp \
+    Util.cpp \
+    EXMgr.cpp \
+    Common.cpp \
+    EXClient.cpp \
+    register_MetaTypes.cpp
+
+# Default rules for deployment.
+qnx: target.path = /tmp/$${TARGET}/bin
+else: unix:!android: target.path = /opt/$${TARGET}/bin
+!isEmpty(target.path): INSTALLS += target
+
+HEADERS += \
+    AbstractConnection.h \
+    App.h \
+    BTC.h \
+    Controller.h \
+    Logger.h \
+    Mgr.h \
+    Mixins.h \
+    Options.h \
+    RPC.h \
+    SrvMgr.h \
+    TcpServer.h \
+    Util.h \
+    EXMgr.h \
+    Common.h \
+    EXClient.h
+
+RESOURCES += \
+    resources.qrc
+
+# Bitcoin related stuff
+SOURCES += \
     bitcoin/amount.cpp \
     bitcoin/base58.cpp \
     bitcoin/cashaddr.cpp \
@@ -82,37 +124,9 @@ SOURCES += \
     bitcoin/transaction.cpp \
     bitcoin/uint256.cpp \
     bitcoin/utilstrencodings.cpp \
-    main.cpp \
-    App.cpp \
-    Logger.cpp \
-    Util.cpp \
-    EXMgr.cpp \
-    Common.cpp \
-    EXClient.cpp \
-    bitcoin/secp256k1/secp256k1.c \
-    register_MetaTypes.cpp
-
-# Default rules for deployment.
-qnx: target.path = /tmp/$${TARGET}/bin
-else: unix:!android: target.path = /opt/$${TARGET}/bin
-!isEmpty(target.path): INSTALLS += target
+    bitcoin/secp256k1/secp256k1.c
 
 HEADERS += \
-    AbstractConnection.h \
-    App.h \
-    BTC.h \
-    Controller.h \
-    Logger.h \
-    Mgr.h \
-    Mixins.h \
-    Options.h \
-    RPC.h \
-    SrvMgr.h \
-    TcpServer.h \
-    Util.h \
-    EXMgr.h \
-    Common.h \
-    EXClient.h \
     bitcoin/amount.h \
     bitcoin/base58.h \
     bitcoin/cashaddr.h \
@@ -190,7 +204,4 @@ HEADERS += \
     bitcoin/secp256k1/secp256k1_recovery.h \
     bitcoin/secp256k1/secp256k1_schnorr.h \
     bitcoin/secp256k1/util.h
-
-RESOURCES += \
-    resources.qrc
 
