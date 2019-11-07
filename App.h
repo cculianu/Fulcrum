@@ -4,11 +4,10 @@
 #include "Options.h"
 #include <QCoreApplication>
 #include <atomic>
+#include <memory>
 
 class Logger;
-class EXMgr;
 class SrvMgr;
-class Controller;
 class SimpleHttpServer;
 
 class App : public QCoreApplication
@@ -34,9 +33,7 @@ private:
     std::atomic<qint64> globalId = 0;
     Logger *_logger = nullptr;
     SrvMgr *srvmgr = nullptr;
-    EXMgr *exmgr = nullptr;
-    Controller *controller = nullptr;
-    QList<QSharedPointer<SimpleHttpServer> > httpServers;
+    QList<std::shared_ptr<SimpleHttpServer> > httpServers;
 
     void startup();
     void cleanup();

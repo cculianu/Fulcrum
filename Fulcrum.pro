@@ -55,7 +55,6 @@ linux {
 SOURCES += \
     AbstractConnection.cpp \
     BTC.cpp \
-    Controller.cpp \
     Mgr.cpp \
     Mixins.cpp \
     Options.cpp \
@@ -66,9 +65,7 @@ SOURCES += \
     App.cpp \
     Logger.cpp \
     Util.cpp \
-    EXMgr.cpp \
     Common.cpp \
-    EXClient.cpp \
     register_MetaTypes.cpp
 
 # Default rules for deployment.
@@ -80,7 +77,6 @@ HEADERS += \
     AbstractConnection.h \
     App.h \
     BTC.h \
-    Controller.h \
     Logger.h \
     Mgr.h \
     Mixins.h \
@@ -89,9 +85,7 @@ HEADERS += \
     SrvMgr.h \
     TcpServer.h \
     Util.h \
-    EXMgr.h \
-    Common.h \
-    EXClient.h
+    Common.h
 
 RESOURCES += \
     resources.qrc

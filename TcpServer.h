@@ -100,25 +100,23 @@ protected:
     QMap<QString, Lambda> endPoints;
 };
 
+/// Implements the ElectrumX/ElectronX protocol
 /// TODO: Implement optional SSL.
-class TcpServer : public AbstractTcpServer
+class Server : public AbstractTcpServer
 {
     Q_OBJECT
 public:
-    TcpServer(const QHostAddress & address, quint16 port);
-    ~TcpServer() override;
+    Server(const QHostAddress & address, quint16 port);
+    ~Server() override;
 
     virtual QString prettyName() const override;
     const RPC::MethodMap & rpcMethods() const { return _rpcMethods; }
 
 signals:
-    void newShuffleSpec(const ShuffleSpec &);
     void clientDisconnected(qint64 clientId);
 
     /// these are emitted from Controller and are connected to private slots we handle in our thread.
-    void tellClientSpecRejected(qint64 clientId, qint64 refId, const QString & reason); // if refId != NO_ID, results in error sent to client with message reason.  Otherwise will be a 'notification' with the error message in the params
-    void tellClientSpecAccepted(qint64 clientId, qint64 refId); // results in "accepted" sent to client as result if refId != NO_ID, otherwise will be a notification with 'params : ["accepted"]'
-    void tellClientSpecPending(qint64 clientId, qint64 refId); // results in "pending" sent to client as result if refId != NO_ID, otherwise will be a notification with 'params : ["pending"]'
+    void tellClientScriptHashStatus(qint64 clientId, qint64 refId, QByteArray status, QByteArray scriptHash = QByteArray());
 
 public slots:
     void onMessage(qint64 clientId, const RPC::Message &m);
@@ -132,9 +130,7 @@ private:
 private slots:
 
     // connected to signals above, runs in our thread. Note refId == NO_ID sends JSON RPC notifications, not JSON RPC results/error.
-    void _tellClientSpecRejected(qint64 clientId, qint64 refId, const QString & reason);
-    void _tellClientSpecAccepted(qint64 clientId, qint64 refId);
-    void _tellClientSpecPending(qint64 clientId, qint64 refId);
+    void _tellClientScriptHashStatus(qint64 clientId, qint64 refId, QByteArray status, QByteArray scriptHash = QByteArray());
 
 private:
     Client * newClient(QTcpSocket *);
@@ -149,12 +145,11 @@ private:
 
     RPC::MethodMap _rpcMethods;
     void setupMethods();
-
-    bool processSpec(qint64 clientId, const RPC::Message &m, QString & errMsg);
 };
 
 
-/// These run and live in TcpServer's thread
+/// Encapsulates an EXClient
+/// These run and live in EXServer's thread
 /// Note that their parent QObject is the sock (for now)!
 /// (grandparent is TcpServer) .. so they will be destroyed
 /// when the server goes away or the socket is deleted.
@@ -163,7 +158,7 @@ class Client : public RPC::Connection
     Q_OBJECT
 public:
     /// NB: sock should be in an already connected state.
-    explicit Client(const RPC::MethodMap & methods, qint64 id, TcpServer *srv, QTcpSocket *sock);
+    explicit Client(const RPC::MethodMap & methods, qint64 id, Server *srv, QTcpSocket *sock);
     ~Client() override;
 
     struct Info {
@@ -178,8 +173,8 @@ protected:
     void do_ping() override;
     void do_disconnect(bool graceful = false) override;
 
-    TcpServer *srv;
-    friend class TcpServer;
+    Server *srv;
+    friend class Server;
 };
 
 #endif // TCPSERVER_H

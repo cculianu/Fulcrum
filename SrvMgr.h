@@ -5,7 +5,7 @@
 #include "Options.h"
 #include <QList>
 
-class TcpServer;
+class Server;
 
 class SrvMgr : public Mgr
 {
@@ -19,14 +19,14 @@ signals:
     // NB: assumption is TcpServer lives for lifetime of this object. If this invariant changes,  please update this code.
     // This signal is emitted when a new server is created. The "Controller" object hooks into this to attach its slots
     // to each server it sees.
-    void newTcpServer(TcpServer *);
+    void newTcpServer(Server *);
 
 public slots:
 
 private:
     void startServers();
     QList<Options::Interface> interfaces;
-    QList<TcpServer *> servers;
+    QList<Server *> servers;
 };
 
 #endif // SRVMGR_H

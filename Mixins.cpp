@@ -70,7 +70,7 @@ void TimersByNameMixin::callOnTimerSoon(int ms, const QString &name, const std::
         // timer already active, abort now
         return;
     }
-    QSharedPointer<QTimer> timer(new QTimer(qobj()), [](QTimer *t){ t->deleteLater(); });
+    std::shared_ptr<QTimer> timer(new QTimer(qobj()), [](QTimer *t){ t->deleteLater(); });
     timer->setSingleShot(false);
     QObject::connect(timer.get(), &QTimer::timeout, qobj(), [this, func, name]{
         const bool keepGoing = func();

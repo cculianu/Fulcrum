@@ -369,8 +369,9 @@ namespace RPC {
         ret.jsonRpcVersion = map.value("jsonrpc").toString();
         if (auto var = map.value("id", QVariant()); !var.isNull()) {
             bool ok;
-            ret.id = var.toLongLong(&ok);
-            if (!ok || ret.id < 0) ret.id = NO_ID;
+            qint64 id_ll = var.toLongLong(&ok);
+            if (ok && id_ll >= 0)
+                ret.id = id_ll;
         }
         if (auto var = map.value("method", QVariant()); !var.isNull() && var.canConvert<QString>()) {
             ret.method = var.toString();

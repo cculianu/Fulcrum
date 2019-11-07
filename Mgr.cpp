@@ -2,6 +2,7 @@
 #include "Util.h"
 #include <QTimer>
 #include <QThread>
+#include <memory>
 
 Mgr::Mgr(QObject *parent)
     : QObject(parent)
@@ -31,14 +32,14 @@ Mgr::Stats Mgr::statsSafe() const
             Util::VariantChannel chan;
             Stats stats;
         };
-        QSharedPointer<Shared> shared(new Shared, [](Shared *p){
+        std::shared_ptr<Shared> shared(new Shared, [](Shared *p){
             delete p;
             Debug() << "statsSafe shared ptr deleted ok!";
         });
         Util::VariantChannel & chan ( shared->chan );
-        auto weak = shared.toWeakRef();
+        auto weak = std::weak_ptr<Shared>(shared);
         QTimer::singleShot(0, this, [this,weak] {
-            auto shared = weak.toStrongRef();
+            auto shared = weak.lock();
             if (shared) {
                 shared->stats = stats();
                 shared->chan.put("ok");

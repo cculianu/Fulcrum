@@ -8,7 +8,7 @@
 #include <QList>
 
 struct Options {
-    static const quint16 DEFAULT_PORT = 2641;
+    static const quint16 DEFAULT_PORT = 50001;
 
     std::atomic_bool verboseDebug =
 #ifdef QT_DEBUG
@@ -21,7 +21,8 @@ struct Options {
     typedef QPair<QHostAddress, quint16> Interface;
     QList<Interface> interfaces; ///< interfaces to use for binding, defaults to 0.0.0.0 DEFAULT_PORT
     QList<Interface> statsInterfaces; ///< ditto for 'stats' server, defaults empty (no stats server)
-    QString serversFile = ":/file/servers.json";
+    Interface bitcoind;
+    QString rpcuser, rpcpassword;
 };
 
 #endif // OPTIONS_H

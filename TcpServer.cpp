@@ -1,5 +1,4 @@
 #include "TcpServer.h"
-#include "Controller.h"
 #include <QCoreApplication>
 #include <QtNetwork>
 #include <QString>
@@ -228,7 +227,7 @@ void SimpleHttpServer::addEndpoint(const QString &endPoint, const Lambda &callba
     endPoints[endPoint] = callback;
 }
 
-TcpServer::TcpServer(const QHostAddress &a, quint16 p)
+Server::Server(const QHostAddress &a, quint16 p)
     : AbstractTcpServer(a, p)
 {
     // re-set name for debug/logging
@@ -238,25 +237,23 @@ TcpServer::TcpServer(const QHostAddress &a, quint16 p)
     setupMethods();
 }
 
-TcpServer::~TcpServer() { stop(); } // paranoia about pure virtual, and vtable consistency, etc
+Server::~Server() { stop(); } // paranoia about pure virtual, and vtable consistency, etc
 
-QString TcpServer::prettyName() const
+QString Server::prettyName() const
 {
     return QString("Tcp%1").arg(AbstractTcpServer::prettyName());
 }
 
-void TcpServer::on_started()
+void Server::on_started()
 {
     AbstractTcpServer::on_started();
-    conns.push_back(connect(this, &TcpServer::tellClientSpecRejected, this, &TcpServer::_tellClientSpecRejected));
-    conns.push_back(connect(this, &TcpServer::tellClientSpecAccepted, this, &TcpServer::_tellClientSpecAccepted));
-    conns.push_back(connect(this, &TcpServer::tellClientSpecPending, this, &TcpServer::_tellClientSpecPending));
+    conns.push_back(connect(this, &Server::tellClientScriptHashStatus, this, &Server::_tellClientScriptHashStatus));
 }
 
-void TcpServer::on_newConnection(QTcpSocket *sock) { newClient(sock); }
+void Server::on_newConnection(QTcpSocket *sock) { newClient(sock); }
 
 Client *
-TcpServer::newClient(QTcpSocket *sock)
+Server::newClient(QTcpSocket *sock)
 {
     const auto clientId = newId();
     auto ret = clientsById[clientId] = new Client(_rpcMethods, clientId, this, sock);
@@ -283,13 +280,13 @@ TcpServer::newClient(QTcpSocket *sock)
             Error() << "Internal error: lostConnection callback received null client! (expected client id: " << clientId << ")";
         }
     });
-    connect(ret, &RPC::Connection::gotMessage, this, &TcpServer::onMessage);
-    connect(ret, &RPC::Connection::gotErrorMessage, this, &TcpServer::onErrorMessage);
-    connect(ret, &RPC::Connection::peerError, this, &TcpServer::onPeerError);
+    connect(ret, &RPC::Connection::gotMessage, this, &Server::onMessage);
+    connect(ret, &RPC::Connection::gotErrorMessage, this, &Server::onErrorMessage);
+    connect(ret, &RPC::Connection::peerError, this, &Server::onPeerError);
     return ret;
 }
 
-void TcpServer::killClient(Client *client)
+void Server::killClient(Client *client)
 {
     if (!client)
         return;
@@ -297,17 +294,17 @@ void TcpServer::killClient(Client *client)
     clientsById.remove(client->id); // ensure gone from map asap so future lookups fail
     client->do_disconnect();
 }
-void TcpServer::killClient(qint64 clientId)
+void Server::killClient(qint64 clientId)
 {
     killClient(clientsById.take(clientId));
 }
 
 
-void TcpServer::setupMethods()
+void Server::setupMethods()
 {
-    QString m, p, p2;
+    QString m;
     m = "server.version";
-    _rpcMethods.insert(m, QSharedPointer<RPC::Method>(new RPC::Method(
+    _rpcMethods.insert(m, std::shared_ptr<RPC::Method>(new RPC::Method(
         m,
         RPC::schemaMethod + QString(" { \"method\" : \"%1!\", \"params\" : [\"=2\"] }").arg(m), // in schema  (asynch req. client -> us) -- enforce must have 2 string args
         RPC::schemaResult + QString(" { \"result\" : [\"=2\"] }"), // result schema (synch. us -> client) -- we send them results.. enforce must have 2 string args
@@ -315,26 +312,15 @@ void TcpServer::setupMethods()
     )));
 
     m = "server.ping";
-    _rpcMethods.insert(m, QSharedPointer<RPC::Method>(new RPC::Method(
+    _rpcMethods.insert(m, std::shared_ptr<RPC::Method>(new RPC::Method(
         m,
         RPC::schemaMethodOptionalParams + QString(" { \"method\" : \"%1!\" } ").arg(m), // in schema, ping from client to us
         RPC::schemaResult + QString(" { \"result\" : null }"), // result schema -- 'result' arg should be there and be null.
         RPC::Schema() /* for now we never ping clients. */
     )));
-
-    p = "{ \"amounts\" : [1], \"utxos\" : [{\"addr\" : \"x\", \"utxo\" : \"x\"}], \"shuffleAddr\" : \"x\", \"changeAddr\" : \"x\" }";
-    p2 = "\"=1\""; // notification back to client is a single string -- either "pending" or "accepted" -- anything else is an error string.
-    m = "shuffle.spec";
-    _rpcMethods.insert(m, QSharedPointer<RPC::Method>(new RPC::Method(
-        m,
-        RPC::schemaMethod + QString(" { \"method\" : \"%1!\", \"params\" : [%2] }").arg(m).arg(p), // in schema (asynch req)
-        RPC::schemaResult + QString(" { \"result\" : \"ok!\" }"), // result schema -- 'result' arg should be there and be the string "ok". On error we send an error response
-        RPC::schemaNotif + QString(" { \"method\" : \"%1!\", \"params\" : [%2] }").arg(m).arg(p2) // out schema (notification of status change)
-    )));
-
 }
 
-void TcpServer::onMessage(qint64 clientId, const RPC::Message &m)
+void Server::onMessage(qint64 clientId, const RPC::Message &m)
 {
     Debug() << "onMessage: " << clientId << " json: " << m.toJsonString();
     if (Client *c = getClient(clientId); c) {
@@ -356,14 +342,6 @@ void TcpServer::onMessage(qint64 clientId, const RPC::Message &m)
             } else {
                 Error() << "Bad client ping message! Schema should have handled this. FIXME! Json: " << m.toJsonString();
             }
-        } else if (m.method == "shuffle.spec") {
-            if (QString errMsg; !processSpec(clientId, m, errMsg)) {
-                Debug() << "Got bad spec from client (id: " << c->id << "), sending error reply";
-                emit c->sendError(false, -290, errMsg, m.id);
-            } else {
-                // don't tell client anything yet -- wait for Controller to return a response.
-                //c->sendResult(m.id, m.method, "ok");
-            }
         } else {
             Error() << "Unknown method: \"" << m.method << "\". Schema should have handled this. FIXME! Json: " << m.toJsonString();
         }
@@ -371,11 +349,11 @@ void TcpServer::onMessage(qint64 clientId, const RPC::Message &m)
         Debug() << "Unknown client: " << clientId;
     }
 }
-void TcpServer::onErrorMessage(qint64 clientId, const RPC::Message &m)
+void Server::onErrorMessage(qint64 clientId, const RPC::Message &m)
 {
     Debug() << "onErrorMessage: " << clientId << " json: " << m.toJsonString();
 }
-void TcpServer::onPeerError(qint64 clientId, const QString &what)
+void Server::onPeerError(qint64 clientId, const QString &what)
 {
     Debug() << "onPeerError, client " << clientId << " error: " << what;
     if (Client *c = getClient(clientId); c) {
@@ -387,102 +365,32 @@ void TcpServer::onPeerError(qint64 clientId, const QString &what)
     }
 }
 
-bool TcpServer::processSpec(qint64 clientId, const RPC::Message &m, QString & errMsg)
+
+void Server::_tellClientScriptHashStatus(qint64 clientId, qint64 refId, QByteArray status, QByteArray scriptHash)
 {
-    /* sample json for testing:
-      {"id":64,"jsonrpc":"2.0","method":"shuffle.spec","params":[{"amounts":[10000,100000,1000000,10000000],"utxos":[{"addr":"1NNi1ac2f7wQQ1qoYq8AwPZUfL71RqmWYP","utxo":"932e34ad34d2b3c44c7e01247611dc8fbd3cb0fedf230a5c30b230ecaa9be335:7"},{"addr":"1C3SoftYBC2bbDzCadZxDrfbnobEXLBLQZ","utxo":"f6b0fc46aa9abb446b3817f9f5898f45233b274692d110203e2fe38c2f9e9ee3:12"}], "shuffleAddr" : "15YiSmUtzKXicZWxoGEKvFruQRDov7duTx", "changeAddr" : "1C3SoftYBC2bbDzCadZxDrfbnobEXLBLQZ"}]}
-    */
-    struct ErrorOut : public Exception { using Exception::Exception; };
-
-    try {
-        if (!m.isRequest() && !m.isList())
-            throw ErrorOut("Bad shuffle spec");
-        ShuffleSpec spec;
-        spec.clientId = clientId;
-        spec.refId = m.id;
-        auto list = m.data.toList();
-        if (list.length() != 1)
-            throw ErrorOut("Bad shuffle spec");
-        auto map = list.front().toMap();
-        QVariantList amounts = map.value("amounts").toList(), utxos = map.value("utxos").toList();
-        if (amounts.isEmpty() || utxos.isEmpty())
-            throw ErrorOut("Amounts or utxos empty");
-        spec.shuffleAddr = map.value("shuffleAddr").toString();
-        spec.changeAddr = map.value("changeAddr").toString();
-        if (!spec.shuffleAddr.isValid() || !spec.changeAddr.isValid())
-            throw ErrorOut("Bad change or shuffle address");
-        if (spec.shuffleAddr == spec.changeAddr)
-            throw ErrorOut("Shuffle and change address must be different addresses!");
-        for (const auto & var : amounts) {
-            bool ok;
-            qint64 amt;
-            amt = var.toLongLong(&ok);
-            if (!ok || amt <= 0)
-                throw ErrorOut(QString("Bad amount \"%1\"").arg(var.toString()));
-            if (spec.amounts.contains(amt))
-                throw ErrorOut(QString("Dupe amount \"%1\"").arg(amt));
-            spec.amounts.insert(amt);
+    const QString statusHex(status.toHex()), shHex(scriptHash.toHex());
+    QVariantList res;
+    if (!shHex.isEmpty())
+        res.push_back(shHex);
+    res.push_back(statusHex);
+    if (Client *client = getClient(clientId); client) {
+        if (refId != NO_ID)
+            // immediate scripthash status result
+            client->sendResult(refId, "blockchain.scripthash.subscribe", res.back());
+        else {
+            if (res.count() != 2)
+                // defensive programming
+                Error() << "INTERNAL ERROR: scripthash notification had only 1 parameter! Requires 2. FIXME!";
+            // notification, no id.
+            client->sendNotification("blockchain.scripthash.subscribe", res);
         }
-        for (const auto & var : utxos) {
-            auto umap = var.toMap();
-            BTC::Address addr(umap.value("addr").toString());
-            if (!addr.isValid())
-                throw ErrorOut("Bad or missing address in nested utxo dict");
-            if (addr == spec.shuffleAddr)
-                throw ErrorOut("Shuffle output address cannot be in utxo list. It should be a new address.");
-            BTC::UTXO utxo(umap.value("utxo").toString());
-            if (!utxo.isValid())
-                throw ErrorOut("Bad or missing utxo in nested utxo dict");
-            if (spec.addrUtxo[addr].contains(utxo))
-                throw ErrorOut(QString("Dupe utxo: \"%1\"").arg(utxo.toString()));
-            spec.addrUtxo[addr].insert(utxo);
-        }
-        if (!spec.isValid())
-            throw ErrorOut("Spec evaluates to invalid");
-        Debug() << "Got Spec -----> " << spec.toDebugString();
-        emit newShuffleSpec(spec);
-    } catch (const std::exception & e) {
-        errMsg = e.what();
-        return false;
-    }
-    errMsg = "";
-    return true;
-}
-
-void TcpServer::_tellClientSpecRejected(qint64 clientId, qint64 refId, const QString & reason)
-{
-    if (Client *client = getClient(clientId); client) {
-        if (refId != NO_ID)
-            client->sendError(false, -290, reason, refId);
-        else
-            client->sendNotification("shuffle.spec", QVariantList({reason}));
-    } else {
-        Debug() << "ClientId: " << clientId << " not found.";
-    }
-}
-void TcpServer::_tellClientSpecAccepted(qint64 clientId, qint64 refId) {
-    if (Client *client = getClient(clientId); client) {
-        if (refId != NO_ID)
-            client->sendResult(refId, "shuffle.spec", "accepted");
-        else
-            client->sendNotification("shuffle.spec", QVariantList({QString("accepted")}));
-    } else {
-        Debug() << "ClientId: " << clientId << " not found.";
-    }
-}
-void TcpServer::_tellClientSpecPending(qint64 clientId, qint64 refId) {
-    if (Client *client = getClient(clientId); client) {
-        if (refId != NO_ID)
-            client->sendResult(refId, "shuffle.spec", "pending");
-        else
-            client->sendNotification("shuffle.spec", QVariantList({QString("pending")}));
     } else {
         Debug() << "ClientId: " << clientId << " not found.";
     }
 }
 
-Client::Client(const RPC::MethodMap & mm, qint64 id, TcpServer *srv, QTcpSocket *sock)
-    : RPC::Connection(mm, id, sock, /*maxBuffer=1MB*/1000000), srv(srv)
+Client::Client(const RPC::MethodMap & mm, qint64 id_in, Server *srv, QTcpSocket *sock)
+    : RPC::Connection(mm, id_in, sock, /*maxBuffer=1MB*/1000000), srv(srv)
 {
     socket = sock;
     Q_ASSERT(socket->state() == QAbstractSocket::ConnectedState);

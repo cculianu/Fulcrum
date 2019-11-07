@@ -1,15 +1,15 @@
 #include "App.h"
 #include "Logger.h"
 #include "Util.h"
-#include "EXMgr.h"
 #include "SrvMgr.h"
 #include "BTC.h"
-#include "Controller.h"
 #include "TcpServer.h"
-#include <signal.h>
 #include <QCommandLineParser>
 #include <QFile>
+#include <QList>
+#include <QPair>
 #include <cstdlib>
+#include <csignal>
 
 App::App(int argc, char *argv[])
     : QCoreApplication (argc, argv)
@@ -63,19 +63,15 @@ void App::startup()
                 std::abort();
             }
         };
-        ::signal(SIGINT, gotsig);
-        ::signal(SIGTERM, gotsig);
+        std::signal(SIGINT, gotsig);
+        std::signal(SIGTERM, gotsig);
 #ifdef Q_OS_UNIX
-        ::signal(SIGQUIT, gotsig);
-        ::signal(SIGHUP, SIG_IGN);
+        std::signal(SIGQUIT, gotsig);
+        std::signal(SIGHUP, SIG_IGN);
 #endif
         srvmgr = new SrvMgr(options.interfaces, this);
-        exmgr = new EXMgr(options.serversFile, this);
-        controller = new Controller(srvmgr, exmgr);
 
-        controller->startup(); // may throw Exception, waits for thread to start
         srvmgr->startup(); // may throw Exception, waits for servers to bind
-        exmgr->startup(); // may throw Exception, returns immediately
 
         if (!options.statsInterfaces.isEmpty()) {
             Log() << "Stats HTTP: starting " << options.interfaces.count() << " server(s) ...";
@@ -99,9 +95,7 @@ void App::cleanup()
         for (auto h : httpServers) { h->stop(); }
         httpServers.clear(); // deletes shared pointers
     }
-    if (controller) { Log("Stopping Controller ... "); controller->cleanup(); delete controller; controller = nullptr; }
     if (srvmgr) { Log("Stopping SrvMgr ... "); srvmgr->cleanup(); delete srvmgr; srvmgr = nullptr; }
-    if (exmgr) { Log("Stopping EXMgr ... "); exmgr->cleanup(); delete exmgr; exmgr = nullptr; }
 }
 
 void App::cleanup_RunInThreads()
@@ -137,11 +131,23 @@ void App::parseArgs()
                   "This option may be specified more than once to bind to multiple interfaces and/or ports."),
           QString("interface:port")
         },
-        { { "f", "servers" },
-          QString("Specify a <server.json> file to use for the master list of servers to connect to. The format for "
-                  "this file should be identical to the Electron Cash servers.json format. Defaults to an internal "
-                  "compiled-in servers.json."),
-          QString("servers.json")
+        { { "b", "bitcoind" },
+          QString("Specify a <hostname:port> to connect to the bitcoind rpc service. This is a required option, along "
+                  "with -u and -p. This hostname:port should be the same as you specified in your bitcoin.conf file "
+                  "under rpcbind= and rpcport=."),
+          QString("interface:port")
+        },
+        { { "u", "rpcuser" },
+          QString("Specify a username to use for authenticating to bitcoind. This is a required option, along "
+                  "with -b and -p.  This opton should be the same username you specified in your bitcoind.conf file "
+                  "under rpcuser=."),
+          QString("username")
+        },
+        { { "p", "rpcpassword" },
+          QString("Specify a password to use for authenticating to bitcoind. This is a required option, along "
+                  "with -b and -u.  This opton should be the same password you specified in your bitcoind.conf file "
+                  "under rpcpassword=."),
+          QString("password")
         },
         { { "d", "debug" },
           QString("Print extra verbose debug output. This is the default on debug builds. This is the opposite of -q.")
@@ -159,50 +165,58 @@ void App::parseArgs()
     if (parser.isSet("v")) options.verboseDebug = true;
     if (parser.isSet("q")) options.verboseDebug = false;
     if (parser.isSet("S")) options.syslogMode = true;
+    // make sure -b -p and -u all present and specified exactly once
+    for (const auto & opt : QList<QPair<QString, QString>>({{"b", "bitcoind"},  {"u", "rpcuser"}, {"p", "rpcpassword"}})) {
+        const auto & [s, l] = opt;
+        if (!parser.isSet(s) || parser.value(s).isEmpty())
+            throw BadArgs(QString("Required option missing or empty: -%1 (--%2)").arg(s).arg(l));
+        else if (parser.values(s).count() != 1)
+            throw BadArgs(QString("Option specified multiple times: -%1 (--%2)").arg(s).arg(l));
+    }
+    static const auto parseInterface = [](const QString &s) -> Options::Interface {
+        auto toks = s.split(":");
+        if (toks.length() < 2)
+            throw BadArgs("Malformed interface spec. Please pass a address of the form 1.2.3.4:123 for IPv4 or ::1:123 for IPv6.");
+        QString portStr = toks.last();
+        toks.removeLast();
+        QString hostStr = toks.join(":");
+        QHostAddress h(hostStr);
+        if (h.isNull())
+            throw BadArgs(QString("Bad interface address: %1").arg(hostStr));
+        bool ok;
+        quint16 port = portStr.toUShort(&ok);
+        if (!ok || port == 0)
+            throw BadArgs(QString("Bad port: %1").arg(portStr));
+        return {h, port};
+    };
     static const auto parseInterfaces = [](decltype(Options::interfaces) & interfaces, const QStringList & l) {
         // functor parses -i and -z options, puts results in 'interfaces' passed-in reference.
         interfaces.clear();
-        for (const auto & s : l) {
-            auto toks = s.split(":");
-            if (toks.length() < 2)
-                throw BadArgs("Malformed interface spec. Please pass a address of the form 1.2.3.4:123 for IPv4 or ::1:123 for IPv6.");
-            QString portStr = toks.last();
-            toks.removeLast();
-            QString hostStr = toks.join(":");
-            QHostAddress h(hostStr);
-            if (h.isNull())
-                throw BadArgs(QString("Bad interface address: %1").arg(hostStr));
-            bool ok;
-            quint16 port = portStr.toUShort(&ok);
-            if (!ok)
-                throw BadArgs(QString("Bad port: %1").arg(portStr));
-            interfaces.push_back({h, port});
-        }
+        for (const auto & s : l)
+            interfaces.push_back(parseInterface(s));
     };
+    // parse bitcoind
+    options.bitcoind = parseInterface(parser.value("b"));
+    // grab rpcuser
+    options.rpcuser = parser.value("u");
+    // grab rpcpass
+    options.rpcpassword = parser.value("p");
+    // grab bind (listen) interfaces
     if (auto l = parser.values("i"); !l.isEmpty()) {
         parseInterfaces(options.interfaces, l);
     }
     parseInterfaces(options.statsInterfaces, parser.values("z"));
-
-    auto f = parser.value("f");
-    if (!f.isEmpty()) {
-        QFile file(f);
-        if (!file.open(QFile::ReadOnly) || !file.size()) {
-            throw BadArgs(QString("Bad servers.json file specified: %1").arg(f));
-        }
-        options.serversFile = f;
-    }
 }
 
 void App::start_httpServer(const Options::Interface &iface)
 {
-    QSharedPointer<SimpleHttpServer> server(new SimpleHttpServer(iface.first, iface.second, 16384));
+    std::shared_ptr<SimpleHttpServer> server(new SimpleHttpServer(iface.first, iface.second, 16384));
     httpServers.push_back(server);
     server->tryStart(); // may throw, waits for server to start
     server->set404Message("Error: Unknown endpoint. /stats is the only valid endpoint I understand.\r\n");
     server->addEndpoint("/stats",[this](SimpleHttpServer::Request &req){
         req.response.contentType = "application/json; charset=utf-8";
-        auto stats = controller->statsSafe();
+        auto stats = QVariant("** UNIMPLEMENTED ** No stats yet");
         req.response.data = QString("%1\r\n").arg(Util::Json::toString(stats, false)).toUtf8();
     });
 }

@@ -6,7 +6,7 @@
 #include <QString>
 #include <QVariant>
 #include <QMap>
-#include <QSharedPointer>
+#include <memory>
 
 namespace RPC {
 
@@ -133,7 +133,7 @@ namespace RPC {
     };
 
 
-    typedef QMap<QString, QSharedPointer<Method> > MethodMap;
+    typedef QMap<QString, std::shared_ptr<Method> > MethodMap;
 
     /// A concrete derived class of AbstractConnection implementing a JSON-RPC
     /// based method<->result protocol similar to ElectrumX's protocol.  This
@@ -156,14 +156,14 @@ namespace RPC {
     /// class is configured for which methods it supports and what the various
     /// method schemas are via the 'MethodMap' passed to it at construction.
     ///
-    /// See EXMgr for an example class that constructs a MethodMap and passes
-    /// it down.
+    /// See class Server for an example class that constructs a MethodMap and
+    /// passes it down.
     ///
     /// Classes that manage rpc methods should register for the gotMessage()
     /// signal and process incoming messages further.  All incoming messages
     /// are either errors (errorCode != 0) or have a valid message.method name.
     ///
-    /// Both EXClient and TCPServer's 'Client' class derive from this.
+    /// Server's 'Client' class derives from this.
     ///
     class Connection : public AbstractConnection
     {

@@ -6,9 +6,9 @@
 #include <QObject>
 #include <QThread>
 #include <QMap>
-#include <QSharedPointer>
 #include <QTimer>
 #include <functional>
+#include <memory>
 
 /// To *only* be used with QObject derived classes as a pure mixin.
 /// Provides a thread, a channel, and a standard interface
@@ -68,7 +68,7 @@ public:
 protected:
     virtual QObject *qobj() = 0;
 
-    typedef QMap<QString, QSharedPointer<QTimer> > _TimerMap;
+    typedef QMap<QString, std::shared_ptr<QTimer> > _TimerMap;
     _TimerMap _timerMap;
 
     /// the utility function that is the point of this class.

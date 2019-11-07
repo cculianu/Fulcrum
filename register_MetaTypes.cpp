@@ -2,7 +2,6 @@
 #include "App.h"
 #include "RPC.h"
 #include "BTC.h"
-#include "Controller.h"
 #include <QMetaType>
 
 void App::register_MetaTypes()
@@ -15,9 +14,6 @@ void App::register_MetaTypes()
         qRegisterMetaType<RPC::Message>();
         // ditto for BTC::Address
         qRegisterMetaType<BTC::Address>();
-        // ditto for AddressUnspentEntry
-        qRegisterMetaType<AddressUnspentEntry>();
-        qRegisterMetaType<ShuffleSpec>();
 
         registered = true;
     }
