@@ -101,16 +101,18 @@ namespace RPC {
     /// An RPC message.  A request, response, method call or error all use this generic struct.
     struct Message
     {
+        using Id = QVariant; ///< RPC id, may be one of long long, QString, or null
+
         /// may throw Exception. This factory method should be the way one constructs this object
         static Message fromJsonData(const QVariantMap &jsonData, const Schema & schema);
         /// uses schemaError -- will not throw exception
-        static Message makeError(int code, const QString & message, qint64 id = NO_ID);
+        static Message makeError(int code, const QString & message, const Id & id = Id());
         /// uses provided schema -- will not throw exception
-        static Message makeMethodRequest(qint64 id, const QString &methodName, const QVariantList & params, const Schema & schema);
+        static Message makeMethodRequest(const Id & id, const QString &methodName, const QVariantList & params, const Schema & schema);
         /// identical to makeMethodRequest. A notification is just like a request but always lacking an 'id' member. This is used for asynch notifs.
         static Message makeMethodNotification(const QString &methodName, const QVariantList & params, const Schema & schema);
         /// uses provided schema -- will not throw exception
-        static Message makeResult(const QVariant & result, const Schema &schema, qint64 reqId=NO_ID);
+        static Message makeResult(const QVariant & result, const Schema &schema, const Id & reqId = Id());
 
         QVariantMap jsonData;
         Schema schema;
@@ -118,7 +120,7 @@ namespace RPC {
         QString toJsonString() const { try {return Util::Json::toString(jsonData, true);} catch (...) {} return QString(); }
 
         QString jsonRpcVersion;
-        qint64 id = NO_ID;
+        Id id;
         QString method;
         QVariant data; // 'result' or 'params' get put here
 
@@ -179,19 +181,23 @@ namespace RPC {
         };
 
         /// If this is thrown we unconditionally disconnect.
-        struct BadPeerAbort : public BadPeer {
-            using BadPeer::BadPeer;
-        };
+        struct BadPeerAbort : public BadPeer { using BadPeer::BadPeer; };
+
+        /// if peer asked for an unknown method
+        struct UnknownMethod : public Exception { using Exception::Exception; };
+
+        /// If peer request object was not JSON-RPC 2.0
+        struct InvalidRequest : public BadPeer { using BadPeer::BadPeer; };
 
     signals:
         /// call (emit) this to send a request to the peer
-        void sendRequest(qint64 reqid, const QString &method, const QVariantList & params = QVariantList());
+        void sendRequest(const Message::Id & reqid, const QString &method, const QVariantList & params = QVariantList());
         /// call (emit) this to send a notification to the peer
         void sendNotification(const QString &method, const QVariantList & params = QVariantList());
         /// call (emit) this to send a request to the peer
-        void sendError(bool disconnectAfterSend, int errorCode, const QString &message, qint64 reqid = NO_ID);
+        void sendError(bool disconnectAfterSend, int errorCode, const QString &message, const Message::Id & reqid = Message::Id());
         /// call (emit) this to send a result reply to the peer (result= message)
-        void sendResult(qint64 reqid, const QString &method, const QVariant & result = QVariant());
+        void sendResult(const Message::Id & reqid, const QString &method, const QVariant & result = QVariant());
 
         /// this is emitted when a new message arrives that was successfully parsed and matches
         /// a known method described in the 'methods' MethodMap. Unknown messages will result
@@ -206,13 +212,13 @@ namespace RPC {
     protected slots:
         /// Actual implentation that prepares the request. Is connected to sendRequest() above. Runs in this object's
         /// thread context. Eventually calls send() -> do_write() (from superclass).
-        virtual void _sendRequest(qint64 reqid, const QString &method, const QVariantList & params = QVariantList());
+        virtual void _sendRequest(const Message::Id & reqid, const QString &method, const QVariantList & params = QVariantList());
         // ditto for notifications
         virtual void _sendNotification(const QString &method, const QVariantList & params = QVariantList());
         /// Actual implementation of sendError, runs in our thread context.
-        virtual void _sendError(bool disconnect, int errorCode, const QString &message, qint64 reqid = NO_ID);
+        virtual void _sendError(bool disconnect, int errorCode, const QString &message, const Message::Id &reqid = Message::Id());
         /// Actual implementation of sendResult, runs in our thread context.
-        virtual void _sendResult(qint64 reqid, const QString &method, const QVariant & result = QVariant());
+        virtual void _sendResult(const Message::Id & reqid, const QString &method, const QVariant & result = QVariant());
 
     protected:
         /// parses RPC, implements pure virtual from super to handle line-based JSON.
@@ -225,7 +231,7 @@ namespace RPC {
         /// map of requests that were generated via _sendRequest to method names to build a more meaningful Message
         /// object (which has a .method defined even on 'result=' messages).  It is an error to receive a result=
         /// message from the peer with its id= parameter not having an entry in this map.
-        QMap<qint64, QString> idMethodMap;
+        QMap<Message::Id, QString> idMethodMap;
 
         enum ErrorPolicy {
             /// Send an error RPC message on protocol errors.
@@ -244,5 +250,6 @@ namespace RPC {
 
 /// So that Qt signal/slots work with this type.  Metatypes are also registered at startup via qRegisterMetatype
 Q_DECLARE_METATYPE(RPC::Message);
+Q_DECLARE_METATYPE(RPC::Message::Id);
 
 #endif // FULCRUM_RPC_H

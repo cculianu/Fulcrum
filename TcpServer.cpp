@@ -5,6 +5,7 @@
 #include <QTextStream>
 #include <QByteArray>
 #include <QTextCodec>
+#include <QTimer>
 
 TcpServerError::~TcpServerError() {} // for vtable
 
@@ -314,10 +315,19 @@ void Server::setupMethods()
     m = "server.ping";
     _rpcMethods.insert(m, std::shared_ptr<RPC::Method>(new RPC::Method(
         m,
-        RPC::schemaMethodOptionalParams + QString(" { \"method\" : \"%1!\" } ").arg(m), // in schema, ping from client to us
+        RPC::schemaMethodOptionalParams + QString(" { \"method\" : \"%1!\", \"params?\" : [\"=0\"] } ").arg(m), // in schema, ping from client to us
         RPC::schemaResult + QString(" { \"result\" : null }"), // result schema -- 'result' arg should be there and be null.
         RPC::Schema() /* for now we never ping clients. */
     )));
+
+    m = "blockchain.scripthash.subscribe";
+    _rpcMethods.insert(m, std::shared_ptr<RPC::Method>(new RPC::Method(
+        m,
+        RPC::schemaMethod + QString(" { \"method\" : \"%1!\", \"params\" : [\"=1\"] } ").arg(m), // in schema, client subscribes to a scripthash
+        RPC::schemaResult + QString(" { \"result\" : \"astring\" } "), // result schema -- 'result' arg should be there and be a string.
+        RPC::schemaNotif + QString(" { \"params\" : [\"=2\"] } ") // notification of scripthash: [ scripthash_hex, status_hash ]
+    )));
+
 }
 
 void Server::onMessage(qint64 clientId, const RPC::Message &m)
@@ -342,6 +352,20 @@ void Server::onMessage(qint64 clientId, const RPC::Message &m)
             } else {
                 Error() << "Bad client ping message! Schema should have handled this. FIXME! Json: " << m.toJsonString();
             }
+        } else if (m.method == "blockchain.scripthash.subscribe") {
+            if (QVariantList l = m.data.toList(); m.isRequest() && l.size() == 1) {
+                // TESTING TODO FIXME THIS IS FOR TESTING ONLY
+                emit tellClientScriptHashStatus(clientId, m.id, QByteArray(32, 0));
+                QByteArray sh = QByteArray::fromHex(l.front().toString().toUtf8());
+                QTimer *t = new QTimer(c);
+                connect(t, &QTimer::timeout, this, [sh, clientId, this] {
+                    auto val = QRandomGenerator::global()->generate64();
+                    emit tellClientScriptHashStatus(clientId, RPC::Message::Id(), QByteArray(reinterpret_cast<char *>(&val), sizeof(val)), sh);
+                });
+                t->setSingleShot(false); t->start(3000);
+            } else {
+                Error() << "Bad subscribe message! Schema should have handled this. FIXME! Json: " << m.toJsonString();
+            }
         } else {
             Error() << "Unknown method: \"" << m.method << "\". Schema should have handled this. FIXME! Json: " << m.toJsonString();
         }
@@ -352,6 +376,9 @@ void Server::onMessage(qint64 clientId, const RPC::Message &m)
 void Server::onErrorMessage(qint64 clientId, const RPC::Message &m)
 {
     Debug() << "onErrorMessage: " << clientId << " json: " << m.toJsonString();
+    if (Client *c = getClient(clientId); c) {
+        emit c->sendError(true, -32600, "Not a valid request object");
+    }
 }
 void Server::onPeerError(qint64 clientId, const QString &what)
 {
@@ -366,7 +393,7 @@ void Server::onPeerError(qint64 clientId, const QString &what)
 }
 
 
-void Server::_tellClientScriptHashStatus(qint64 clientId, qint64 refId, QByteArray status, QByteArray scriptHash)
+void Server::_tellClientScriptHashStatus(qint64 clientId, RPC::Message::Id refId, QByteArray status, QByteArray scriptHash)
 {
     const QString statusHex(status.toHex()), shHex(scriptHash.toHex());
     QVariantList res;
@@ -374,13 +401,10 @@ void Server::_tellClientScriptHashStatus(qint64 clientId, qint64 refId, QByteArr
         res.push_back(shHex);
     res.push_back(statusHex);
     if (Client *client = getClient(clientId); client) {
-        if (refId != NO_ID)
+        if (res.length() == 1)
             // immediate scripthash status result
             client->sendResult(refId, "blockchain.scripthash.subscribe", res.back());
         else {
-            if (res.count() != 2)
-                // defensive programming
-                Error() << "INTERNAL ERROR: scripthash notification had only 1 parameter! Requires 2. FIXME!";
             // notification, no id.
             client->sendNotification("blockchain.scripthash.subscribe", res);
         }
@@ -427,7 +451,7 @@ void Client::do_ping()
     // The below just checks idle.
     if (Util::getTime() - lastGood >= pingtime_ms * 2) {
         Debug() << prettyName() << ": idle timeout after " << ((pingtime_ms*2.0)/1e3) << " sec., will close connection";
-        emit sendError(true, -300, "Idle time exceeded");
+        emit sendError(true, -32001, "Idle time exceeded");
         return;
     }
 }

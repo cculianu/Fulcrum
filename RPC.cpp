@@ -20,14 +20,14 @@ namespace RPC {
     ///     empty list just means any list.
 
     Schema const schemaBase = "{ \"jsonrpc\": \"2.0!\" }";
-    Schema const schemaError = schemaBase + "{ \"error\" : { \"code\" : 1, \"message\" : \"astring\" }, \"*id\" : 1, \"method?\" : \"anystring\"  }";
-    Schema const schemaResult = schemaBase + " { \"id\" : 1, \"*result\" : \"*\" }";
-    Schema const schemaMethod = schemaBase + " { \"method\": \"astring\", \"params\" : [], \"*id?\" : 1 }";
-    Schema const schemaMethodOptionalParams = schemaBase + " { \"method\": \"astring\", \"params?\" : [], \"*id?\" : 1 }";
+    Schema const schemaError = schemaBase + "{ \"error\" : { \"code\" : 1, \"message\" : \"astring\" }, \"*id\" : \"*\", \"method?\" : \"anystring\"  }";
+    Schema const schemaResult = schemaBase + " { \"id\" : \"*\", \"*result\" : \"*\" }";
+    Schema const schemaMethod = schemaBase + " { \"method\": \"astring\", \"params\" : [], \"id\" : \"*\" }";
+    Schema const schemaMethodOptionalParams = schemaBase + " { \"method\": \"astring\", \"params?\" : [], \"id\" : \"*\" }";
     Schema const schemaNotif = schemaBase + " { \"method\": \"astring\", \"params?\" : [] }";
-    Schema const schemaMethodNoParams = schemaBase + " { \"method\": \"astring\", \"*id?\" : 1 }";
-    Schema const schemaMethodOneParam = schemaBase + " { \"method\": \"astring\", \"params\" : [\"=1\"], \"*id?\" : 1 }";
-    Schema const schemaMethodTwoParams = schemaBase + " { \"method\": \"astring\", \"params\" : [\"=2\"], \"*id?\" : 1 }";
+    Schema const schemaMethodNoParams = schemaBase + " { \"method\": \"astring\", \"id\" : \"*\" }";
+    Schema const schemaMethodOneParam = schemaBase + " { \"method\": \"astring\", \"params\" : [\"=1\"], \"id\" : \"*\" }";
+    Schema const schemaMethodTwoParams = schemaBase + " { \"method\": \"astring\", \"params\" : [\"=2\"], \"id\" : \"*\" }";
 
     QString Schema::toString() const {
         if (!isValid()) return QString();
@@ -133,8 +133,12 @@ namespace RPC {
             return name.isEmpty() ? "" : QString(" \"") + name + "\"";
         }
         QString typeToName(QMetaType::Type t) {
-            const char *ret = QMetaType::typeName(t);
-            if (!ret) ret = "(Unknown)";
+            QString ret(QByteArray(QMetaType::typeName(t)));
+            if (ret.isEmpty()) ret = "(Unknown)";
+            else if (ret.startsWith("QVariant")) ret = ret.mid(8);
+            else if (ret.startsWith("Q")) ret = ret.mid(1);
+            else if (ret.startsWith("std::")) ret = ret.mid(5);
+            if (ret.endsWith("ptr_t")) ret = ret.left(ret.length()-5);
             return ret;
         }
         bool throwIfTypeMismatch(QMetaType::Type expected, QMetaType::Type testee, const QString & key) {
@@ -194,8 +198,8 @@ namespace RPC {
                 }
             }
             if (reqLen > -1 && m.length() != reqLen) {
-                throw SchemaMismatch(QString("Schema specified a list of length %1, but got a list of length %2 for %3")
-                                     .arg(reqLen).arg(m.length()).arg(name));
+                throw SchemaMismatch(QString("Expected %1 item%4, but got %2 for %3")
+                                     .arg(reqLen).arg(m.length()).arg(name).arg(reqLen != 1 ? "s" : ""));
             }
             for (auto & mval : m) {
                 const auto mtype = QMetaType::Type(mval.type());
@@ -369,9 +373,10 @@ namespace RPC {
         ret.jsonRpcVersion = map.value("jsonrpc").toString();
         if (auto var = map.value("id", QVariant()); !var.isNull()) {
             bool ok;
-            qint64 id_ll = var.toLongLong(&ok);
-            if (ok && id_ll >= 0)
+            if (qint64 id_ll = var.toLongLong(&ok); ok)
                 ret.id = id_ll;
+            else if (QMetaType::Type(var.type()) == QMetaType::QString)
+                ret.id = var.toString();
         }
         if (auto var = map.value("method", QVariant()); !var.isNull() && var.canConvert<QString>()) {
             ret.method = var.toString();
@@ -390,7 +395,7 @@ namespace RPC {
     }
 
     /* static */
-    Message Message::makeError(int code, const QString &message, qint64 id)
+    Message Message::makeError(int code, const QString &message, const Id & id)
     {
         Message ret;
         ret.schema = schemaError;
@@ -398,8 +403,7 @@ namespace RPC {
         ret.errorCode = code;
         ret.errorMessage = message;
         ret.id = id;
-        if (id == NO_ID) map["id"] = QVariant(); // null
-        else map["id"] = id;
+        map["id"] = id;
         map.remove("method");
         auto errMap = map["error"].toMap();
         errMap["code"] = code;
@@ -412,22 +416,21 @@ namespace RPC {
 
     /// uses provided schema -- will not throw exception
     /*static*/
-    Message Message::makeResult(const QVariant & result, const Schema &schema, qint64 reqId)
+    Message Message::makeResult(const QVariant & result, const Schema &schema, const Id & reqId)
     {
         Message ret;
         ret.schema = schema;
         auto map = ret.schema.toStrippedMap();
         ret.data = result;
         map["result"] = result;
-        if (reqId == NO_ID) map["id"] = QVariant(); // null
-        else map["id"] = reqId;
+        map["id"] = reqId;
         ret.jsonData = map;
         ret.jsonRpcVersion = map.value("jsonrpc").toString();
         return ret;
     }
 
     /* static */
-    Message Message::makeMethodRequest(qint64 id, const QString &methodName, const QVariantList &params, const Schema &sch)
+    Message Message::makeMethodRequest(const Id & id, const QString &methodName, const QVariantList &params, const Schema &sch)
     {
         Message ret;
         ret.schema = sch;
@@ -453,13 +456,13 @@ namespace RPC {
     /* static */
     Message Message::makeMethodNotification(const QString &methodName, const QVariantList &params, const Schema &sch)
     {
-        auto ret = makeMethodRequest(NO_ID, methodName, params, sch);
+        auto ret = makeMethodRequest(Id(), methodName, params, sch);
         ret.jsonData.remove("id");
         return ret;
     }
 
-    Connection::Connection(const MethodMap & methods, qint64 id, QObject *parent, qint64 maxBuffer)
-        : AbstractConnection(id, parent, maxBuffer), methods(methods)
+    Connection::Connection(const MethodMap & methods, qint64 id_in, QObject *parent, qint64 maxBuffer)
+        : AbstractConnection(id_in, parent, maxBuffer), methods(methods)
     {
     }
 
@@ -484,7 +487,7 @@ namespace RPC {
         idMethodMap.clear();
     }
 
-    void Connection::_sendRequest(qint64 reqid, const QString &method, const QVariantList & params)
+    void Connection::_sendRequest(const Message::Id & reqid, const QString &method, const QVariantList & params)
     {
         if (status != Connected || !socket) {
             Error() << __FUNCTION__ << " method: " << method << "; Not connected!";
@@ -531,7 +534,7 @@ namespace RPC {
         // below send() ends up calling do_write immediately (which is connected to send)
         emit send( data + "\n" /* "\n" <-- is crucial! (Protocol is linefeed-based) */);
     }
-    void Connection::_sendError(bool disc, int code, const QString &msg, qint64 reqId)
+    void Connection::_sendError(bool disc, int code, const QString &msg, const Message::Id & reqId)
     {
         if (status != Connected || !socket) {
             Error() << __FUNCTION__ << "; Not connected!";
@@ -546,7 +549,7 @@ namespace RPC {
             do_disconnect(true); // graceful disconnect
         }
     }
-    void Connection::_sendResult(qint64 reqid, const QString &method, const QVariant & result)
+    void Connection::_sendResult(const Message::Id & reqid, const QString &method, const QVariant & result)
     {
         if (status != Connected || !socket) {
             Error() << __FUNCTION__ << " method: " << method << "; Not connected!";
@@ -571,10 +574,10 @@ namespace RPC {
     void Connection::on_readyRead()
     {
         Debug() << __FUNCTION__;
-        qint64 lastMsgId = NO_ID;
+        Message::Id lastMsgId;
         try {
             while (socket->canReadLine()) {
-                lastMsgId = NO_ID;
+                lastMsgId = Message::Id();
                 auto data = socket->readLine();
                 nReceived += data.length();
                 auto line = data.trimmed();
@@ -589,25 +592,30 @@ namespace RPC {
                 } else {
                     // either a 'id','result' or a 'method','params' message
                     bool isResult = true;
-                    if (!jsonData.contains("result")) {
-                        // 'method','params' message
-                        message = Message::fromJsonData(jsonData, schemaMethodOptionalParams); // may throw
-                        if (message.jsonData.value("id").toInt() < 0)
-                            throw BadPeer("\"id\" < 0 is not supported by this implementation");
+                    if (!jsonData.contains("request") && jsonData.contains("method")) {
+                        // 'method','params','id' message
+                        if (jsonData.contains("id"))
+                            message = Message::fromJsonData(jsonData, schemaMethodOptionalParams); // may throw
+                        else {
+                            throw BadPeer("Request missing 'id' (notifications are not supported)");
+                        }
                         lastMsgId = message.id;
                         isResult = false;
-                    } else {
+                    } else if (jsonData.contains("result")) {
                         // 'id','result' message -- find originating method in map -- if not found will throw.
                         message = Message::fromJsonData(jsonData, schemaResult); // may throw
-                        QString meth = message.id > 0 ? idMethodMap.take(message.id) : message.method;
+                        QString meth = idMethodMap.take(message.id);
                         if (meth.isEmpty()) {
-                            throw BadPeer(QString("Unexpected/unknown message id (%1) in server reply").arg(message.id));
+                            throw BadPeer(QString("Unexpected response (id: %1)").arg(message.id.toString()));
                         }
                         message.method = meth;
+                    } else {
+                        // Not a Request and not a Response or Notification. Not JSON-RPC 2.0.
+                        throw InvalidRequest("Invalid JSON");
                     }
                     auto mptr = methods.value(message.method);
                     if (!mptr) {
-                        throw BadPeer(QString("Could not find method %1").arg(message.method));
+                        throw UnknownMethod(QString("Unknown method %1").arg(message.method));
                     }
                     const Schema & schema = isResult ? mptr->resultSchema : mptr->inSchema;
                     // re-verify incoming message against more method-specific schema again
@@ -628,7 +636,12 @@ namespace RPC {
             status = Bad;
         } catch (const std::exception &e) {
             const bool wasJsonParse = dynamic_cast<const Util::Json::ParseError *>(&e);
-            const int code = wasJsonParse ? -32700 : -123;
+            const bool wasUnk = dynamic_cast<const UnknownMethod *>(&e);
+            const bool wasInv = dynamic_cast<const InvalidRequest *>(&e);
+            int code = -32000;
+            if (wasJsonParse) code = -32700;
+            else if (wasUnk) code = -32601;
+            else if (wasInv) code = -32600;
             bool doDisconnect = errorPolicy & ErrorPolicyDisconnect;
             if (errorPolicy & ErrorPolicySendErrorMessage) {
                 emit sendError(doDisconnect, code, QString(e.what()).left(80), lastMsgId);

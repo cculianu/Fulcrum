@@ -12,6 +12,7 @@ void App::register_MetaTypes()
         // finish registering RPC::Message metatype so that signals/slots work. This needs to only happen
         // once in main thread at app init.
         qRegisterMetaType<RPC::Message>();
+        qRegisterMetaType<RPC::Message::Id>();
         // ditto for BTC::Address
         qRegisterMetaType<BTC::Address>();
 
