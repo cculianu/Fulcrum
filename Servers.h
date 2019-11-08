@@ -8,8 +8,7 @@
 #include <QTcpServer>
 #include <QThread>
 #include <QMap>
-
-class Client;
+#include <QVector>
 
 struct TcpServerError : public Exception
 {
@@ -99,6 +98,8 @@ protected:
     QMap<QString, Lambda> endPoints;
 };
 
+
+class Client;
 /// Implements the ElectrumX/ElectronX protocol
 /// TODO: Implement optional SSL.
 class Server : public AbstractTcpServer
@@ -151,17 +152,21 @@ private:
 
     using RpcMember_t = void (Server::*)(Client *, const RPC::Message &); ///< ptr to member function
 
-    static const QMap<QString, RpcMember_t> rpc_method_dispatch;
-    static const RPC::MethodMap rpc_methods;
+    struct RpcMethodRegistration : public RPC::Method { RpcMember_t member = nullptr; };
+    static const QVector<RpcMethodRegistration> rpc_method_registry;
 
-    void assertRpcTablesOk(); // will call std::_Exit if above tables are not self-consistent
+    // these get populated at app init by the above rpc_method_registry table
+    static QMap<QString, RpcMember_t> rpc_method_dispatch;
+    static RPC::MethodMap rpc_methods;
+
+    void initStaticRpcTables(); ///< called from class c'tor. Only does something on first call.
 };
 
 
 /// Encapsulates an EXClient
-/// These run and live in EXServer's thread
+/// These run and live in 'Server' instance thread
 /// Note that their parent QObject is the sock (for now)!
-/// (grandparent is TcpServer) .. so they will be destroyed
+/// (grandparent is Server) .. so they will be destroyed
 /// when the server goes away or the socket is deleted.
 class Client : public RPC::Connection
 {

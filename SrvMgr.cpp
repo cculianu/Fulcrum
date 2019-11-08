@@ -1,6 +1,6 @@
 #include "SrvMgr.h"
 #include "Util.h"
-#include "TcpServer.h"
+#include "Servers.h"
 
 SrvMgr::SrvMgr(const QList<Options::Interface> & ifaces, QObject *parent)
     : Mgr(parent), interfaces(ifaces)

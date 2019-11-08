@@ -1,4 +1,4 @@
-#include "TcpServer.h"
+#include "Servers.h"
 #include <QCoreApplication>
 #include <QtNetwork>
 #include <QString>
@@ -236,7 +236,7 @@ Server::Server(const QHostAddress &a, quint16 p)
     // re-set name for debug/logging
     _thread.setObjectName(prettyName());
     setObjectName(prettyName());
-    assertRpcTablesOk();
+    initStaticRpcTables();
 }
 
 Server::~Server() { stop(); } // paranoia about pure virtual, and vtable consistency, etc
@@ -334,33 +334,19 @@ void Server::onPeerError(qint64 clientId, const QString &what)
 }
 
 // --- RPC METHODS ---
-// First set up the dispatch tables and the methods we support
-/*static*/ const QMap<QString, Server::RpcMember_t> Server::rpc_method_dispatch = {
-    { "server.ping",                     &Server::rpc_server_ping                     },
-    { "server.version",                  &Server::rpc_server_version                  },
-    { "blockchain.scripthash.subscribe", &Server::rpc_blockchain_scripthash_subscribe },
-};
-
-/*static*/ const RPC::MethodMap Server::rpc_methods = {
-    { "server.ping",                     {"server.ping", true, false, 0}                     },
-    { "server.version",                  {"server.version", true, false, 2}                  },
-    { "blockchain.scripthash.subscribe", {"blockchain.scripthash.subscribe", true, false, 1} },
-};
-
 // checks to make sure we didn't make a typo inputting the above tables... called at class c'tor once globally.
-void Server::assertRpcTablesOk()
+void Server::initStaticRpcTables()
 {
-    static volatile bool checked = false;
-    if (!checked) {
-        checked = true;
-        for (auto it = rpc_methods.begin(); it != rpc_methods.end(); ++it) {
-            const auto & name = it.key();
-            const auto & meth = it.value();
-            if (name != meth.method || !rpc_method_dispatch.contains(name)) {
-                Error() << "Runtime check failed: RPC Method " << name << " has inconsistent internal dispatch tables! See Server class! FIXME!";
-                std::_Exit(EXIT_FAILURE);
-            }
+    static volatile bool initted = false;
+    if (initted) return;
+    initted = true;
+    for (const auto & r : rpc_method_registry) {
+        if (!r.member) {
+            Error() << "Runtime check failed: RPC Method " << r.method << " has a nullptr for its .member! See Server class! FIXME!";
+            std::_Exit(EXIT_FAILURE);
         }
+        rpc_methods[r.method] = r;
+        rpc_method_dispatch[r.method] = r.member;
     }
 }
 
@@ -401,6 +387,16 @@ void Server::rpc_blockchain_scripthash_subscribe(Client *c, const RPC::Message &
         Error() << "Bad subscribe message! This shouldn't happen. FIXME! Json: " << m.toJsonString();
     }
 }
+/// Dispatch tables and the methods we support
+/*static*/ const QVector<Server::RpcMethodRegistration> Server::rpc_method_registry{
+ // { {"rpc.name",              allow_requests, allow_notifications, nArgs}, &method_to_call }
+    { {"server.ping",                     true,               false,     0}, &Server::rpc_server_ping },
+    { {"server.version",                  true,               false,     2}, &Server::rpc_server_version },
+    { {"blockchain.scripthash.subscribe", true,               false,     1}, &Server::rpc_blockchain_scripthash_subscribe },
+};
+// the below two get populated with the data from above at app init in initStaticRpcTables()
+/*static*/ QMap<QString, Server::RpcMember_t> Server::rpc_method_dispatch;
+/*static*/ RPC::MethodMap Server::rpc_methods;
 // --- /RPC METHODS ---
 
 

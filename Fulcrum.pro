@@ -59,8 +59,8 @@ SOURCES += \
     Mixins.cpp \
     Options.cpp \
     RPC.cpp \
+    Servers.cpp \
     SrvMgr.cpp \
-    TcpServer.cpp \
     main.cpp \
     App.cpp \
     Logger.cpp \
@@ -82,8 +82,8 @@ HEADERS += \
     Mixins.h \
     Options.h \
     RPC.h \
+    Servers.h \
     SrvMgr.h \
-    TcpServer.h \
     Util.h \
     Common.h
 

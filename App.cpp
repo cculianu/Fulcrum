@@ -3,7 +3,7 @@
 #include "Util.h"
 #include "SrvMgr.h"
 #include "BTC.h"
-#include "TcpServer.h"
+#include "Servers.h"
 #include <QCommandLineParser>
 #include <QFile>
 #include <QList>

@@ -16,8 +16,8 @@ public:
     void startup() override; // may throw on error
     void cleanup() override;
 signals:
-    // NB: assumption is TcpServer lives for lifetime of this object. If this invariant changes,  please update this code.
-    // This signal is emitted when a new server is created. The "Controller" object hooks into this to attach its slots
+    // NB: assumption is Server instance lives for lifetime of this object. If this invariant changes,  please update this code.
+    // This signal is emitted when a new server is created. The future "Controller" object may hook into this to attach its slots
     // to each server it sees.
     void newServer(Server *);
 
