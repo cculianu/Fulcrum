@@ -236,6 +236,8 @@ namespace RPC {
         Debug() << __FUNCTION__;
         Message::Id lastMsgId;
         try {
+            // TODO: need to see about how this meshes with bitcoind's large, possibly multiline(?) responses.
+            // We may want to not be line-based.  Also this may be slow for large loads.
             while (socket->canReadLine()) {
                 lastMsgId.clear();
                 auto data = socket->readLine();
