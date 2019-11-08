@@ -109,7 +109,7 @@ public:
     ~Server() override;
 
     virtual QString prettyName() const override;
-    const RPC::MethodMap & rpcMethods() const { return _rpcMethods; }
+    const RPC::MethodMap & rpcMethods() const { return rpc_methods; }
 
 signals:
     void clientDisconnected(qint64 clientId);
@@ -143,8 +143,18 @@ private:
     void killClient(qint64 id);
     QMap<qint64, Client *> clientsById;
 
-    RPC::MethodMap _rpcMethods;
-    void setupMethods();
+private:
+    // RPC methods below
+    void rpc_server_ping(Client *, const RPC::Message &);
+    void rpc_server_version(Client *, const RPC::Message &);
+    void rpc_blockchain_scripthash_subscribe(Client *, const RPC::Message &);
+
+    using RpcMember_t = void (Server::*)(Client *, const RPC::Message &); ///< ptr to member function
+
+    static const QMap<QString, RpcMember_t> rpc_method_dispatch;
+    static const RPC::MethodMap rpc_methods;
+
+    void assertRpcTablesOk(); // will call std::_Exit if above tables are not self-consistent
 };
 
 

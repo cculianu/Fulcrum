@@ -7,6 +7,8 @@
 #include <QTextCodec>
 #include <QTimer>
 
+#include <cstdlib>
+
 TcpServerError::~TcpServerError() {} // for vtable
 
 AbstractTcpServer::AbstractTcpServer(const QHostAddress &a, quint16 p)
@@ -234,8 +236,7 @@ Server::Server(const QHostAddress &a, quint16 p)
     // re-set name for debug/logging
     _thread.setObjectName(prettyName());
     setObjectName(prettyName());
-
-    setupMethods();
+    assertRpcTablesOk();
 }
 
 Server::~Server() { stop(); } // paranoia about pure virtual, and vtable consistency, etc
@@ -257,7 +258,7 @@ Client *
 Server::newClient(QTcpSocket *sock)
 {
     const auto clientId = newId();
-    auto ret = clientsById[clientId] = new Client(_rpcMethods, clientId, this, sock);
+    auto ret = clientsById[clientId] = new Client(rpc_methods, clientId, this, sock);
     // if deleted, we need to purge it from map
     auto on_destroyed = [clientId, this](QObject *o) {
         // this whole call is here so that delete client->sock ends up auto-removing the map entry
@@ -299,58 +300,16 @@ void Server::killClient(qint64 clientId)
 {
     killClient(clientsById.take(clientId));
 }
-
-
-void Server::setupMethods()
-{
-    QString m;
-    m = "server.version";
-    _rpcMethods.insert(m, {m, true, false, 2});
-
-    m = "server.ping";
-    _rpcMethods.insert(m, {m, true, false, 0});
-
-    m = "blockchain.scripthash.subscribe";
-    _rpcMethods.insert(m, {m, true, false, 1});
-}
-
 void Server::onMessage(qint64 clientId, const RPC::Message &m)
 {
     Debug() << "onMessage: " << clientId << " json: " << m.toJsonString();
     if (Client *c = getClient(clientId); c) {
-        if (m.method == "server.version") {
-            if (QVariantList l = m.params(); m.isRequest() && l.size() == 2) {
-                c->info.userAgent = l[0].toString();
-                c->info.protocolVersion = l[1].toString();
-                Debug() << "Client (id: " << c->id << ") sent version: \"" << c->info.userAgent << "\" / \"" << c->info.protocolVersion << "\"";
-            } else {
-                Error() << "Bad server version message! Other code should have handled this. FIXME! Json: " << m.toJsonString();
-            }
-            emit c->sendResult(m.id, m.method, QStringList({QString("%1/%2").arg(APPNAME).arg(VERSION), QString("1.4")}));
-        } else if (m.method == "server.ping") {
-            if (m.isRequest()) {
-                Debug() << "Got ping from client (id: " << c->id << "), responding...";
-                emit c->sendResult(m.id, m.method);
-            } else {
-                Error() << "Bad client ping message! Schema should have handled this. FIXME! Json: " << m.toJsonString();
-            }
-        } else if (m.method == "blockchain.scripthash.subscribe") {
-            if (QVariantList l = m.params(); m.isRequest() && l.size() == 1) {
-                // TESTING TODO FIXME THIS IS FOR TESTING ONLY
-                emit tellClientScriptHashStatus(clientId, m.id, QByteArray(32, 0));
-                QByteArray sh = QByteArray::fromHex(l.front().toString().toUtf8());
-                QTimer *t = new QTimer(c);
-                connect(t, &QTimer::timeout, this, [sh, clientId, this] {
-                    auto val = QRandomGenerator::global()->generate64();
-                    emit tellClientScriptHashStatus(clientId, RPC::Message::Id(), QByteArray(reinterpret_cast<char *>(&val), sizeof(val)), sh);
-                });
-                t->setSingleShot(false); t->start(3000);
-            } else {
-                Error() << "Bad subscribe message! Schema should have handled this. FIXME! Json: " << m.toJsonString();
-            }
-        } else {
-            Error() << "Unknown method: \"" << m.method << "\". Schema should have handled this. FIXME! Json: " << m.toJsonString();
-        }
+        auto member = rpc_method_dispatch.value(m.method);
+        if (!member)
+            Error() << "Unknown method: \"" << m.method << "\". This shouldn't happen. FIXME! Json: " << m.toJsonString();
+        else
+            // call ptr to member
+            (this->*member)(c, m);
     } else {
         Debug() << "Unknown client: " << clientId;
     }
@@ -373,6 +332,76 @@ void Server::onPeerError(qint64 clientId, const QString &what)
         }
     }
 }
+
+// --- RPC METHODS ---
+// First set up the dispatch tables and the methods we support
+/*static*/ const QMap<QString, Server::RpcMember_t> Server::rpc_method_dispatch = {
+    { "server.ping",                     &Server::rpc_server_ping                     },
+    { "server.version",                  &Server::rpc_server_version                  },
+    { "blockchain.scripthash.subscribe", &Server::rpc_blockchain_scripthash_subscribe },
+};
+
+/*static*/ const RPC::MethodMap Server::rpc_methods = {
+    { "server.ping",                     {"server.ping", true, false, 0}                     },
+    { "server.version",                  {"server.version", true, false, 2}                  },
+    { "blockchain.scripthash.subscribe", {"blockchain.scripthash.subscribe", true, false, 1} },
+};
+
+// checks to make sure we didn't make a typo inputting the above tables... called at class c'tor once globally.
+void Server::assertRpcTablesOk()
+{
+    static volatile bool checked = false;
+    if (!checked) {
+        checked = true;
+        for (auto it = rpc_methods.begin(); it != rpc_methods.end(); ++it) {
+            const auto & name = it.key();
+            const auto & meth = it.value();
+            if (name != meth.method || !rpc_method_dispatch.contains(name)) {
+                Error() << "Runtime check failed: RPC Method " << name << " has inconsistent internal dispatch tables! See Server class! FIXME!";
+                std::_Exit(EXIT_FAILURE);
+            }
+        }
+    }
+}
+
+void Server::rpc_server_version(Client *c, const RPC::Message &m)
+{
+    if (QVariantList l = m.params(); m.isRequest() && l.size() == 2) {
+        c->info.userAgent = l[0].toString();
+        c->info.protocolVersion = l[1].toString();
+        Debug() << "Client (id: " << c->id << ") sent version: \"" << c->info.userAgent << "\" / \"" << c->info.protocolVersion << "\"";
+    } else {
+        Error() << "Bad server version message! Other code should have handled this. FIXME! Json: " << m.toJsonString();
+    }
+    emit c->sendResult(m.id, m.method, QStringList({QString("%1/%2").arg(APPNAME).arg(VERSION), QString("1.4")}));
+}
+void Server::rpc_server_ping(Client *c, const RPC::Message &m)
+{
+    if (m.isRequest()) {
+        Debug() << "Got ping from client (id: " << c->id << "), responding...";
+        emit c->sendResult(m.id, m.method);
+    } else {
+        Error() << "Bad client ping message! This shouldn't happen. FIXME! Json: " << m.toJsonString();
+    }
+}
+void Server::rpc_blockchain_scripthash_subscribe(Client *c, const RPC::Message &m)
+{
+    if (QVariantList l = m.params(); m.isRequest() && l.size() == 1) {
+        // TESTING TODO FIXME THIS IS FOR TESTING ONLY
+        const auto clientId = c->id;
+        emit tellClientScriptHashStatus(clientId, m.id, QByteArray(32, 0));
+        QByteArray sh = QByteArray::fromHex(l.front().toString().toUtf8());
+        QTimer *t = new QTimer(c);
+        connect(t, &QTimer::timeout, this, [sh, clientId, this] {
+            auto val = QRandomGenerator::global()->generate64();
+            emit tellClientScriptHashStatus(clientId, RPC::Message::Id(), QByteArray(reinterpret_cast<char *>(&val), sizeof(val)), sh);
+        });
+        t->setSingleShot(false); t->start(3000);
+    } else {
+        Error() << "Bad subscribe message! This shouldn't happen. FIXME! Json: " << m.toJsonString();
+    }
+}
+// --- /RPC METHODS ---
 
 
 void Server::_tellClientScriptHashStatus(qint64 clientId, const RPC::Message::Id & refId, const QByteArray & status, const QByteArray & scriptHash)
