@@ -170,13 +170,16 @@ namespace RPC {
             Error() << __FUNCTION__ << " method: " << method << "; Unable to generate request JSON! FIXME!";
             return;
         }
-        while (idMethodMap.size() > 20000) {  // prevent memory leaks in case of misbehaving server
-            idMethodMap.erase(idMethodMap.begin());
+        if (idMethodMap.size() >= MAX_UNANSWERED_REQUESTS) {  // prevent memory leaks in case of misbehaving peer
+            Error() << "Closing connection because too many unanswered requests for: " << prettyName();
+            do_disconnect();
+            return;
         }
+
         idMethodMap[reqid] = method; // remember method sent out to associate it back.
 
         const auto data = json.toUtf8();
-        Debug() << "Sending json: " << ( data.size() > 100 ? data.left(100) + "..." : data);
+        Debug() << "Sending json: " << Util::Ellipsify(data);
         // below send() ends up calling do_write immediately (which is connected to send)
         emit send( data + "\n" /* "\n" <-- is crucial! (Protocol is linefeed-based) */);  // FIXME for bitcoind!
     }
@@ -192,7 +195,7 @@ namespace RPC {
             return;
         }
         const auto data = json.toUtf8();
-        Debug() << "Sending json: " << ( data.size() > 100 ? data.left(100) + "..." : data);
+        Debug() << "Sending json: " << Util::Ellipsify(data);
         // below send() ends up calling do_write immediately (which is connected to send)
         emit send( data + "\n" /* "\n" <-- is crucial! (Protocol is linefeed-based) */); // FIXME for bitcoind!
     }
@@ -204,7 +207,7 @@ namespace RPC {
         }
         QString json = Message::makeError(code, msg, reqId).toJsonString();
         const auto data = json.toUtf8();
-        Debug() << "Sending json: " << ( data.size() > 100 ? data.left(100) + "..." : data);
+        Debug() << "Sending json: " << Util::Ellipsify(data);
         // below send() ends up calling do_write immediately (which is connected to send)
         emit send( data + "\n" /* "\n" <-- is crucial! (Protocol is linefeed-based) */); // FIXME for bitcoind!
         if (disc) {
@@ -223,7 +226,7 @@ namespace RPC {
             return;
         }
         const auto data = json.toUtf8();
-        Debug() << "Sending result json: " << ( data.size() > 100 ? data.left(100) + "..." : data);
+        Debug() << "Sending result json: " << Util::Ellipsify(data);
         // below send() ends up calling do_write immediately (which is connected to send)
         emit send( data + "\n" /* "\n" <-- is crucial! (Protocol is linefeed-based) */); // FIXME for bitcoind!
     }

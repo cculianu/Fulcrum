@@ -313,6 +313,13 @@ namespace Util {
         }, sep);
     }
 
+    template <typename StringLike>
+    StringLike Ellipsify(const StringLike &s, int limit = 100)
+    {
+        if (limit < 0) return s;
+        return s.length() > limit ? s.left(limit) + "..." : s;
+    }
+
     /// This is an alternative to creating signal/slot pairs
     /// for calling a method on an object that runs in another thread.
     ///

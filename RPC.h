@@ -138,6 +138,9 @@ namespace RPC {
         /// If peer request object has invalid number of params
         struct InvalidParameters : public BadPeer { using BadPeer::BadPeer; };
 
+
+        static constexpr int MAX_UNANSWERED_REQUESTS = 20000;
+
     signals:
         /// call (emit) this to send a request to the peer
         void sendRequest(const Message::Id & reqid, const QString &method, const QVariantList & params = QVariantList());
@@ -149,7 +152,7 @@ namespace RPC {
         void sendResult(const Message::Id & reqid, const QString &method, const QVariant & result = QVariant());
 
         /// this is emitted when a new message arrives that was successfully parsed and matches
-        /// a known method described in the 'methods' MethodMap. Unknown messages will result
+        /// a known method described in the 'methods' MethodMap. Unknown messages will eventually result
         /// in auto-disconnect.
         void gotMessage(qint64 thisId, const RPC::Message & m);
         /// Same as a above, but for 'error' replies
