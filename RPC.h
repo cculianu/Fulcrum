@@ -45,6 +45,10 @@ namespace RPC {
         /// will not throw exceptions
         static Message makeResponse(const Id & reqId, const QVariant & result);
 
+        /// As per JSON RPC spec, id must be integer (no fractional part), string, or null. Returns true if that's
+        /// the case, false otherwise.
+        static bool isValidId(const Id & id, bool throwIfInvalid = false);
+
 
         Id id; ///< If !isNull() here, guaranteed to be either string or long long (iff constructed with factory methods).
         QString method; /**< methodName extracted from data['method'] if it was present. If this is empty then no

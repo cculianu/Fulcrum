@@ -1,10 +1,29 @@
 #include "RPC.h"
 #include <QtCore>
 
+#include <cassert>
 
 namespace RPC {
 
     const QString jsonRpcVersion("2.0");
+
+    /// As per JSON RPC spec, id must be integer (no fractional part), string, or null. Returns true if that's
+    /// the case, false otherwise.
+    bool Message::isValidId(const Id & id, bool throwIfInvalid)
+    {
+        bool ok;
+        if (id.isNull())
+            return true;
+        else if (QMetaType::Type(id.type()) == QMetaType::QString)
+            return true;
+        else if (qint64 id_ll = id.toLongLong(&ok); ok && id.toString() == QString::number(id_ll)) // this checks that fractional part not present
+            return true;
+        // invalid
+        if (throwIfInvalid)
+            // if we get here, id is not a valid type as per JSON RPC 2.0
+            throw InvalidError("id must be a string, a non-fractonal number, or null");
+        return false;
+    }
 
     /* static */
     Message Message::fromString(const QString &s)
@@ -30,14 +49,8 @@ namespace RPC {
         if (auto var = map.value("id"); !var.isNull()) {
             // note as per JSON-RPC 2.0 spec, we squash floats down to ints, discarding the fractional part
             // we will raise if the id is not a string, integer, or null
-            bool ok;
-            if (qint64 id_ll = var.toLongLong(&ok); ok && var.toString() == QString::number(id_ll)) {
-                ret.id = id_ll;
-            } else if (QMetaType::Type(var.type()) == QMetaType::QString)
-                ret.id = var.toString();
-            else
-                // if we get here, id is not a valid type as per JSON RPC 2.0
-                throw InvalidError("id must be a string, a non-fractonal number, or null");
+            isValidId(var, true); // throws if not valid
+            ret.id = var;
         }
 
         // todo: see if the below validation needs optimization
@@ -93,6 +106,7 @@ namespace RPC {
         Message ret;
         auto & map = ret.data;
         map["jsonrpc"] = RPC::jsonRpcVersion;
+        assert(isValidId(id)); // defensive programming
         map["id"] = id; // may be "null"
         QVariantMap errMap;
         errMap["code"] = code;
@@ -108,6 +122,7 @@ namespace RPC {
         Message ret;
         auto & map = ret.data;
         map["jsonrpc"] = RPC::jsonRpcVersion;
+        assert(isValidId(reqId)); // defensive programming
         map["id"] = reqId;
         map["result"] = result;
         return ret;
@@ -118,6 +133,7 @@ namespace RPC {
     {
         Message ret = makeNotification(methodName, params);
         auto & map = ret.data;
+        assert(isValidId(id)); // defensive programming
         map["id"] = id;
         return ret;
     }
