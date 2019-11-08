@@ -260,9 +260,8 @@ namespace RPC {
                 nReceived += data.length();
                 auto line = data.trimmed();
                 Debug() << "Got: " << line;
-                const QVariantMap jsonData( Util::Json::parseString(line, true).toMap() ); // may throw
 
-                Message message = Message::fromJsonData(jsonData); // may throw
+                Message message = Message::fromJsonData( Util::Json::parseString(line, true).toMap() ); // may throw
 
                 static const auto ValidateParams = [](const Message &msg, const Method &m) {
                     if (m.numReqParams == Method::ANY_PARAMS)
