@@ -234,7 +234,7 @@ Debug::~Debug()
     auto ourApp = app();
     doprt = !ourApp || ourApp->options.verboseDebug;
     if (!doprt) return;
-    if (!colorOverridden) color = Blue;
+    if (!colorOverridden) color = Cyan;
     str = QString("(Debug) ") + str;
 }
 
@@ -254,7 +254,7 @@ Error::Error(const char *fmt...)
 Error::~Error()
 {
     level = Logger::Critical;
-    if (!colorOverridden) color = Red;
+    if (!colorOverridden) color = BrightRed;
 }
 
 Warning::Warning(const char *fmt...)

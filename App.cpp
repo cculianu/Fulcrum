@@ -33,7 +33,7 @@ App::App(int argc, char *argv[])
     }
 
     connect(this, &App::aboutToQuit, this, &App::cleanup);
-    QTimer::singleShot(10, this, &App::startup); // register to run after app event loop start
+    QTimer::singleShot(0, this, &App::startup); // register to run after app event loop start
 }
 
 App::~App()

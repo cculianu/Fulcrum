@@ -7,6 +7,8 @@
 #include <QVariant>
 #include <QMap>
 
+#include <variant>
+
 namespace RPC {
 
     /// Thrown on json that is a json object but doesn't match JSON-RPC 2.0 spec.
@@ -29,7 +31,17 @@ namespace RPC {
     /// An RPC message.  A request, response, method call or error all use this generic struct.
     struct Message
     {
-        using Id = QVariant; ///< RPC id, may be one of long long, QString, or null.
+        using IdBase = std::variant<std::nullptr_t, qint64, QString>;
+        struct Id : public IdBase {
+            using IdBase::variant;
+            using IdBase::operator=;
+            Id & operator=(const QVariant &); // will throw InvalidError if type of QVariant is not one of: qint64, QString, or isNull()
+            operator QVariant() const; // will return a QVariant whose type is either: qint64, QString, or isNull()
+            void clear() { *this = nullptr; }
+            bool isNull() const { return index() == 0; }
+            QString toString() const { return static_cast<QVariant>(*this).toString(); }
+            bool operator<(const Id & other) const;
+        };
 
         /// may throw Exception. This factory method should be the way one of the 6 ways one constructs this object
         static Message fromString(const QString &);
@@ -45,12 +57,7 @@ namespace RPC {
         /// will not throw exceptions
         static Message makeResponse(const Id & reqId, const QVariant & result);
 
-        /// As per JSON RPC spec, id must be integer (no fractional part), string, or null. Returns true if that's
-        /// the case, false otherwise.
-        static bool isValidId(const Id & id, bool throwIfInvalid = false);
-
-
-        Id id; ///< If !isNull() here, guaranteed to be either string or long long (iff constructed with factory methods).
+        Id id; ///< guaranteed to be either string, qint64, or nullptr
         QString method; /**< methodName extracted from data['method'] if it was present. If this is empty then no
                              'method' key was present in JSON. May also contain the "matched" method on a response
                              object where we matched the id to a method we knew about in Connection::idMethodMap. */

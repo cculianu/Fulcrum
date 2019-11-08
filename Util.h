@@ -3,13 +3,15 @@
 
 #include "Common.h"
 #include <QtCore>
+
+#include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <functional>
 #include <random>
-#include <algorithm>
-#include <chrono>
-#include <utility>
 #include <string>
+#include <utility>
+
 #define Q2C(qstr) ((qstr).toUtf8().constData())
 
 class App;
@@ -384,4 +386,9 @@ struct RAII : public Defer {
     /// initFunc called immediately, cleanupFunc called in this instance's destructor
     RAII(const VoidFunc & initFunc, VoidFunc && cleanupFunc) : Defer(std::move(cleanupFunc)) { if (initFunc) initFunc(); }
 };
+
+// helper type for std::visit (see RPC.cpp where we use this crazy C++17 thing)
+template<class... Ts> struct Overloaded : Ts... { using Ts::operator()...; };
+template<class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
+
 #endif // UTIL_H
