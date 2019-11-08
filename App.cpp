@@ -216,7 +216,7 @@ void App::start_httpServer(const Options::Interface &iface)
     server->set404Message("Error: Unknown endpoint. /stats is the only valid endpoint I understand.\r\n");
     server->addEndpoint("/stats",[this](SimpleHttpServer::Request &req){
         req.response.contentType = "application/json; charset=utf-8";
-        auto stats = QVariant("** UNIMPLEMENTED ** No stats yet");
+        auto stats = QVariantMap{{"unimplemented", "** UNIMPLEMENTED ** No stats yet"}};
         req.response.data = QString("%1\r\n").arg(Util::Json::toString(stats, false)).toUtf8();
     });
 }

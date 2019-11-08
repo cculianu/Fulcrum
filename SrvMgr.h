@@ -19,7 +19,7 @@ signals:
     // NB: assumption is TcpServer lives for lifetime of this object. If this invariant changes,  please update this code.
     // This signal is emitted when a new server is created. The "Controller" object hooks into this to attach its slots
     // to each server it sees.
-    void newTcpServer(Server *);
+    void newServer(Server *);
 
 public slots:
 
