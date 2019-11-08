@@ -305,29 +305,13 @@ void Server::setupMethods()
 {
     QString m;
     m = "server.version";
-    _rpcMethods.insert(m, std::shared_ptr<RPC::Method>(new RPC::Method(
-        m,
-        RPC::schemaMethod + QString(" { \"method\" : \"%1!\", \"params\" : [\"=2\"] }").arg(m), // in schema  (asynch req. client -> us) -- enforce must have 2 string args
-        RPC::schemaResult + QString(" { \"result\" : [\"=2\"] }"), // result schema (synch. us -> client) -- we send them results.. enforce must have 2 string args
-        RPC::Schema() // out schema  -- we never invoke this on the client so disable.
-    )));
+    _rpcMethods.insert(m, {m, true, false, 2});
 
     m = "server.ping";
-    _rpcMethods.insert(m, std::shared_ptr<RPC::Method>(new RPC::Method(
-        m,
-        RPC::schemaMethodOptionalParams + QString(" { \"method\" : \"%1!\", \"params?\" : [\"=0\"] } ").arg(m), // in schema, ping from client to us
-        RPC::schemaResult + QString(" { \"result\" : null }"), // result schema -- 'result' arg should be there and be null.
-        RPC::Schema() /* for now we never ping clients. */
-    )));
+    _rpcMethods.insert(m, {m, true, false, 0});
 
     m = "blockchain.scripthash.subscribe";
-    _rpcMethods.insert(m, std::shared_ptr<RPC::Method>(new RPC::Method(
-        m,
-        RPC::schemaMethod + QString(" { \"method\" : \"%1!\", \"params\" : [\"=1\"] } ").arg(m), // in schema, client subscribes to a scripthash
-        RPC::schemaResult + QString(" { \"result\" : \"astring\" } "), // result schema -- 'result' arg should be there and be a string.
-        RPC::schemaNotif + QString(" { \"params\" : [\"=2\"] } ") // notification of scripthash: [ scripthash_hex, status_hash ]
-    )));
-
+    _rpcMethods.insert(m, {m, true, false, 1});
 }
 
 void Server::onMessage(qint64 clientId, const RPC::Message &m)
@@ -335,25 +319,23 @@ void Server::onMessage(qint64 clientId, const RPC::Message &m)
     Debug() << "onMessage: " << clientId << " json: " << m.toJsonString();
     if (Client *c = getClient(clientId); c) {
         if (m.method == "server.version") {
-            if (QVariantList l = m.data.toList(); m.isRequest() && l.size() == 2) {
+            if (QVariantList l = m.params(); m.isRequest() && l.size() == 2) {
                 c->info.userAgent = l[0].toString();
                 c->info.protocolVersion = l[1].toString();
                 Debug() << "Client (id: " << c->id << ") sent version: \"" << c->info.userAgent << "\" / \"" << c->info.protocolVersion << "\"";
             } else {
-                Error() << "Bad server version message! Schema should have handled this. FIXME! Json: " << m.toJsonString();
+                Error() << "Bad server version message! Other code should have handled this. FIXME! Json: " << m.toJsonString();
             }
             emit c->sendResult(m.id, m.method, QStringList({QString("%1/%2").arg(APPNAME).arg(VERSION), QString("1.4")}));
         } else if (m.method == "server.ping") {
-            if (m.isResult()) {
-                Debug() << "Got ping reply from client (id: " << c->id << ")";
-            } else if (m.isRequest()) {
+            if (m.isRequest()) {
                 Debug() << "Got ping from client (id: " << c->id << "), responding...";
                 emit c->sendResult(m.id, m.method);
             } else {
                 Error() << "Bad client ping message! Schema should have handled this. FIXME! Json: " << m.toJsonString();
             }
         } else if (m.method == "blockchain.scripthash.subscribe") {
-            if (QVariantList l = m.data.toList(); m.isRequest() && l.size() == 1) {
+            if (QVariantList l = m.params(); m.isRequest() && l.size() == 1) {
                 // TESTING TODO FIXME THIS IS FOR TESTING ONLY
                 emit tellClientScriptHashStatus(clientId, m.id, QByteArray(32, 0));
                 QByteArray sh = QByteArray::fromHex(l.front().toString().toUtf8());
