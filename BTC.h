@@ -3,6 +3,7 @@
 
 #include "bitcoin/transaction.h"
 #include "bitcoin/script.h"
+#include "bitcoin/block.h"
 
 #include <QByteArray>
 #include <QString>
@@ -277,6 +278,7 @@ namespace BTC
         void SigCheck();
         bool Base58();
         void CashAddr();
+        void TestBlock();
     }
 
 } // end namespace

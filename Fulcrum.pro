@@ -77,6 +77,7 @@ HEADERS += \
     AbstractConnection.h \
     App.h \
     BTC.h \
+    Common.h \
     Logger.h \
     Mgr.h \
     Mixins.h \
@@ -84,8 +85,7 @@ HEADERS += \
     RPC.h \
     Servers.h \
     SrvMgr.h \
-    Util.h \
-    Common.h
+    Util.h
 
 RESOURCES += \
     resources.qrc
@@ -94,6 +94,8 @@ RESOURCES += \
 SOURCES += \
     bitcoin/amount.cpp \
     bitcoin/base58.cpp \
+    bitcoin/block.cpp \
+    bitcoin/support/cleanse.cpp \
     bitcoin/cashaddr.cpp \
     bitcoin/cashaddrenc.cpp \
     bitcoin/crypto/aes.cpp \
@@ -113,16 +115,17 @@ SOURCES += \
     bitcoin/script.cpp \
     bitcoin/script_error.cpp \
     bitcoin/script_standard.cpp \
+    bitcoin/secp256k1/secp256k1.c \
     bitcoin/sigencoding.cpp \
     bitcoin/test.cpp \
     bitcoin/transaction.cpp \
     bitcoin/uint256.cpp \
-    bitcoin/utilstrencodings.cpp \
-    bitcoin/secp256k1/secp256k1.c
+    bitcoin/utilstrencodings.cpp
 
 HEADERS += \
     bitcoin/amount.h \
     bitcoin/base58.h \
+    bitcoin/block.h \
     bitcoin/cashaddr.h \
     bitcoin/cashaddrenc.h \
     bitcoin/compat.h \
@@ -197,5 +200,8 @@ HEADERS += \
     bitcoin/secp256k1/secp256k1.h \
     bitcoin/secp256k1/secp256k1_recovery.h \
     bitcoin/secp256k1/secp256k1_schnorr.h \
-    bitcoin/secp256k1/util.h
+    bitcoin/secp256k1/util.h \
+    bitcoin/streams.h \
+    bitcoin/support/cleanse.h \
+    bitcoin/support/zeroafterfree.h
 
