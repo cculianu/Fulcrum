@@ -10,7 +10,6 @@
 #include <QMap>
 
 class Client;
-struct ShuffleSpec;
 
 struct TcpServerError : public Exception
 {

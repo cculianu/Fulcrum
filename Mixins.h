@@ -1,5 +1,5 @@
-#ifndef SHUFFLEUP_MIXINS_H
-#define SHUFFLEUP_MIXINS_H
+#ifndef MIXINS_H
+#define MIXINS_H
 
 #include "Util.h"
 
@@ -89,4 +89,4 @@ protected:
     inline bool isTimerByNameActive(const QString & name) const { return _timerMap.contains(name); }
 };
 
-#endif // SHUFFLEUP_MIXINS_H
+#endif // MIXINS_H
