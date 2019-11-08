@@ -236,7 +236,7 @@ Server::Server(const QHostAddress &a, quint16 p)
     // re-set name for debug/logging
     _thread.setObjectName(prettyName());
     setObjectName(prettyName());
-    initStaticRpcTables();
+    StaticData::init(); // only does something first time it's called, otherwise a no-op
 }
 
 Server::~Server() { stop(); } // paranoia about pure virtual, and vtable consistency, etc
@@ -258,7 +258,7 @@ Client *
 Server::newClient(QTcpSocket *sock)
 {
     const auto clientId = newId();
-    auto ret = clientsById[clientId] = new Client(rpc_methods, clientId, this, sock);
+    auto ret = clientsById[clientId] = new Client(rpcMethods(), clientId, this, sock);
     // if deleted, we need to purge it from map
     auto on_destroyed = [clientId, this](QObject *o) {
         // this whole call is here so that delete client->sock ends up auto-removing the map entry
@@ -304,7 +304,7 @@ void Server::onMessage(qint64 clientId, const RPC::Message &m)
 {
     Debug() << "onMessage: " << clientId << " json: " << m.toJsonString();
     if (Client *c = getClient(clientId); c) {
-        auto member = rpc_method_dispatch.value(m.method);
+        auto member = StaticData::dispatchTable.value(m.method);
         if (!member)
             Error() << "Unknown method: \"" << m.method << "\". This shouldn't happen. FIXME! Json: " << m.toJsonString();
         else
@@ -335,21 +335,6 @@ void Server::onPeerError(qint64 clientId, const QString &what)
 
 // --- RPC METHODS ---
 // checks to make sure we didn't make a typo inputting the above tables... called at class c'tor once globally.
-void Server::initStaticRpcTables()
-{
-    static volatile bool initted = false;
-    if (initted) return;
-    initted = true;
-    for (const auto & r : rpc_method_registry) {
-        if (!r.member) {
-            Error() << "Runtime check failed: RPC Method " << r.method << " has a nullptr for its .member! See Server class! FIXME!";
-            std::_Exit(EXIT_FAILURE);
-        }
-        rpc_methods[r.method] = r;
-        rpc_method_dispatch[r.method] = r.member;
-    }
-}
-
 void Server::rpc_server_version(Client *c, const RPC::Message &m)
 {
     if (QVariantList l = m.params(); m.isRequest() && l.size() == 2) {
@@ -387,16 +372,33 @@ void Server::rpc_blockchain_scripthash_subscribe(Client *c, const RPC::Message &
         Error() << "Bad subscribe message! This shouldn't happen. FIXME! Json: " << m.toJsonString();
     }
 }
-/// Dispatch tables and the methods we support
-/*static*/ const QVector<Server::RpcMethodRegistration> Server::rpc_method_registry{
- // { {"rpc.name",              allow_requests, allow_notifications, nArgs}, &method_to_call }
+// --- Server::StaticData Definitions ---
+#define HEY_COMPILER_PUT_STATIC_HERE(x) decltype(x) x
+HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::dispatchTable);
+HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::methodMap);
+HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
+/*  ==> Note: Add stuff to this table when adding new RPC methods.
+    { {"rpc.name",              allow_requests, allow_notifications, nArgs}, &method_to_call }     */
     { {"server.ping",                     true,               false,     0}, &Server::rpc_server_ping },
     { {"server.version",                  true,               false,     2}, &Server::rpc_server_version },
     { {"blockchain.scripthash.subscribe", true,               false,     1}, &Server::rpc_blockchain_scripthash_subscribe },
 };
-// the below two get populated with the data from above at app init in initStaticRpcTables()
-/*static*/ QMap<QString, Server::RpcMember_t> Server::rpc_method_dispatch;
-/*static*/ RPC::MethodMap Server::rpc_methods;
+#undef HEY_COMPILER_PUT_STATIC_HERE
+/*static*/
+void Server::StaticData::init()
+{
+    if (!dispatchTable.empty())
+        return;
+    for (const auto & r : registry) {
+        if (!r.member) {
+            Error() << "Runtime check failed: RPC Method " << r.method << " has a nullptr for its .member! See Server class! FIXME!";
+            std::_Exit(EXIT_FAILURE);
+        }
+        methodMap[r.method] = r;
+        dispatchTable[r.method] = r.member;
+    }
+}
+// --- /Server::StaticData Definitions ---
 // --- /RPC METHODS ---
 
 

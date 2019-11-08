@@ -110,7 +110,7 @@ public:
     ~Server() override;
 
     virtual QString prettyName() const override;
-    const RPC::MethodMap & rpcMethods() const { return rpc_methods; }
+    static const RPC::MethodMap & rpcMethods() { return StaticData::methodMap; }
 
 signals:
     void clientDisconnected(qint64 clientId);
@@ -150,16 +150,23 @@ private:
     void rpc_server_version(Client *, const RPC::Message &);
     void rpc_blockchain_scripthash_subscribe(Client *, const RPC::Message &);
 
-    using RpcMember_t = void (Server::*)(Client *, const RPC::Message &); ///< ptr to member function
+    /// Basically a namespace for our rpc dispatch tables, etc
+    struct StaticData {
+        using Member_t = void (Server::*)(Client *, const RPC::Message &); ///< ptr to member function
 
-    struct RpcMethodRegistration : public RPC::Method { RpcMember_t member = nullptr; };
-    static const QVector<RpcMethodRegistration> rpc_method_registry;
+        struct MethodMember : public RPC::Method { Member_t member = nullptr; }; ///< used to associate the method spec with a pointer to member
 
-    // these get populated at app init by the above rpc_method_registry table
-    static QMap<QString, RpcMember_t> rpc_method_dispatch;
-    static RPC::MethodMap rpc_methods;
+        // the below two get populated at app init by the above rpc_method_registry table
+        /// Dispatch tables of "rpc.method.name" -> pointer to method
+        static QMap<QString, Member_t> dispatchTable;
+        /// method spec for RPC::Connection class interface to know what to accept/reject
+        static RPC::MethodMap methodMap;
+        /// This static data is used to build the above two static tables at app init
+        static const QVector<MethodMember> registry;
 
-    void initStaticRpcTables(); ///< called from class c'tor. Only does something on first call.
+        static void init(); ///< called by Server c'tor. (First time it's called it populates the above tables from the 'registry' table)
+        StaticData() = delete; ///< unconstructible class! :D
+    };
 };
 
 
