@@ -171,7 +171,7 @@ namespace RPC {
             return;
         }
         if (idMethodMap.size() >= MAX_UNANSWERED_REQUESTS) {  // prevent memory leaks in case of misbehaving peer
-            Error() << "Closing connection because too many unanswered requests for: " << prettyName();
+            Warning() << "Closing connection because too many unanswered requests for: " << prettyName();
             do_disconnect();
             return;
         }
