@@ -116,7 +116,7 @@ signals:
     void clientDisconnected(qint64 clientId);
 
     /// these are emitted from Controller and are connected to private slots we handle in our thread.
-    void tellClientScriptHashStatus(qint64 clientId, RPC::Message::Id refId, QByteArray status, QByteArray scriptHash = QByteArray());
+    void tellClientScriptHashStatus(qint64 clientId, const RPC::Message::Id & refId, const QByteArray & status, const QByteArray & scriptHash = QByteArray());
 
 public slots:
     void onMessage(qint64 clientId, const RPC::Message &m);
@@ -131,7 +131,7 @@ private slots:
 
     // connected to signals above, runs in our thread. Note if not scriptHash.isNull(), will send a notification
     // (without including refId), otherwise sends a response with refId included.
-    void _tellClientScriptHashStatus(qint64 clientId, RPC::Message::Id refId, QByteArray status, QByteArray scriptHash = QByteArray());
+    void _tellClientScriptHashStatus(qint64 clientId, const RPC::Message::Id & refId, const QByteArray & status, const QByteArray & scriptHash = QByteArray());
 
 private:
     Client * newClient(QTcpSocket *);

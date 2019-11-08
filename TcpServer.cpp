@@ -393,20 +393,15 @@ void Server::onPeerError(qint64 clientId, const QString &what)
 }
 
 
-void Server::_tellClientScriptHashStatus(qint64 clientId, RPC::Message::Id refId, QByteArray status, QByteArray scriptHash)
+void Server::_tellClientScriptHashStatus(qint64 clientId, const RPC::Message::Id & refId, const QByteArray & status, const QByteArray & scriptHash)
 {
-    const QString statusHex(status.toHex()), shHex(scriptHash.toHex());
-    QVariantList res;
-    if (!shHex.isEmpty())
-        res.push_back(shHex);
-    res.push_back(statusHex);
     if (Client *client = getClient(clientId); client) {
-        if (res.length() == 1)
+        if (scriptHash.isEmpty())
             // immediate scripthash status result
-            client->sendResult(refId, "blockchain.scripthash.subscribe", res.back());
+            client->sendResult(refId, "blockchain.scripthash.subscribe", status.toHex());
         else {
             // notification, no id.
-            client->sendNotification("blockchain.scripthash.subscribe", res);
+            client->sendNotification("blockchain.scripthash.subscribe", {scriptHash.toHex(), status.toHex()});
         }
     } else {
         Debug() << "ClientId: " << clientId << " not found.";
