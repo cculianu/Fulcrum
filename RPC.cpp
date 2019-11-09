@@ -61,10 +61,24 @@ namespace RPC {
     }
 
     /* static */
-    Message Message::fromJsonData(const QVariantMap & map)
+    Message Message::fromJsonData(const QVariantMap & map, Id * id_out)
     {
         Message ret;
         ret.data = map;
+
+        if (id_out)
+            id_out->clear();
+
+        // Grab the id first in case later processing fails.
+        if (auto var = map.value("id"); !var.isNull()) {
+            // note as per JSON-RPC 2.0 spec, we squash floats down to ints, discarding the fractional part
+            // we will throw if the id is not a string, integer, or null
+            ret.id = var;
+            // inform caller of parsed id asap in case we later throw
+            if (id_out)
+                *id_out = ret.id;
+        }
+
 
         if (ret.jsonRpcVersion() != RPC::jsonRpcVersion)
             throw InvalidError("Expected jsonrpc version 2.0");
@@ -74,12 +88,6 @@ namespace RPC {
                                            || (ret.method = var.toString()).isEmpty()
                                            || ret.method.startsWith("rpc.")))
             throw InvalidError("Invalid method");
-
-        if (auto var = map.value("id"); !var.isNull()) {
-            // note as per JSON-RPC 2.0 spec, we squash floats down to ints, discarding the fractional part
-            // we will throw if the id is not a string, integer, or null
-            ret.id = var;
-        }
 
         // todo: see if the below validation needs optimization
 
@@ -308,7 +316,7 @@ namespace RPC {
                 auto line = data.trimmed();
                 Debug() << "Got: " << line;
 
-                Message message = Message::fromJsonData( Util::Json::parseString(line, true).toMap() ); // may throw
+                Message message = Message::fromJsonData( Util::Json::parseString(line, true).toMap() , &lastMsgId); // may throw
 
                 static const auto ValidateParams = [](const Message &msg, const Method &m) {
                     if (!msg.hasParams()) {
@@ -371,7 +379,6 @@ namespace RPC {
                     if (!m || !m->allowsRequests)
                         throw UnknownMethod(QString("Unsupported request: %1").arg(message.method));
                     ValidateParams(message, *m);
-                    lastMsgId = message.id;
                     emit gotMessage(id, message);
                 } else if (message.isResponse()) {
                     QString meth = idMethodMap.take(message.id);
@@ -418,6 +425,6 @@ namespace RPC {
                 do_disconnect();
                 status = Bad;
             }
-        }
-    }
+        } // end try/catch
+    } // end function
 } // end namespace RPC

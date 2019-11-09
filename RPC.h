@@ -92,7 +92,7 @@ namespace RPC {
         /// may throw Exception. This factory method should be the way one of the 6 ways one constructs this object
         static Message fromString(const QString &);
         /// may throw Exception. This factory method should be the way one of the 6 ways one constructs this object
-        static Message fromJsonData(const QVariantMap &jsonData);
+        static Message fromJsonData(const QVariantMap &jsonData, Id *id_parsed_even_if_failed = nullptr);
         // 4 more factories below..
         /// will not throw exceptions
         static Message makeError(int code, const QString & message, const Id & id = Id());
