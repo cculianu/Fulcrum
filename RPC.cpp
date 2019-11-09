@@ -349,10 +349,11 @@ namespace RPC {
                     // error message
                     emit gotErrorMessage(id, message);
                 } else if (message.isNotif()) {
-                    const Method & m = methods[message.method];
                     try {
-                        if (m.method != message.method)
+                        const auto it = methods.find(message.method);
+                        if (it == methods.end())
                             throw UnknownMethod("Unknown method");
+                        const Method & m = it.value();
                         if (m.allowsNotifications) {
                             ValidateParams(message, m);
                             emit gotMessage(id, message);
@@ -365,10 +366,11 @@ namespace RPC {
                         emit peerError(this->id, QString("Error processing notification '%1' from %2: %3").arg(message.method, prettyName(), e.what()));
                     }
                 } else if (message.isRequest()) {
-                    const Method & m = methods[message.method];
-                    if (m.method != message.method || !m.allowsRequests)
+                    const auto it = methods.find(message.method);
+                    const Method *m = it != methods.end() ? &it.value() : nullptr;
+                    if (!m || !m->allowsRequests)
                         throw UnknownMethod(QString("Unsupported request: %1").arg(message.method));
-                    ValidateParams(message, m);
+                    ValidateParams(message, *m);
                     lastMsgId = message.id;
                     emit gotMessage(id, message);
                 } else if (message.isResponse()) {

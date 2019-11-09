@@ -172,7 +172,7 @@ namespace RPC {
         Connection(const MethodMap & methods, qint64 id, QObject *parent = nullptr, qint64 maxBuffer = DEFAULT_MAX_BUFFER);
         ~Connection() override;
 
-        const MethodMap methods;
+        const MethodMap & methods; //< Note: this map needs to remain alive for the lifetime of this connection (and all connections) .. so it should point to static or long-lived data, ideally
 
         struct BadPeer : public Exception {
             using Exception::Exception;  // bring in c'tor
