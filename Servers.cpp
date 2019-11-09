@@ -282,9 +282,9 @@ Server::newClient(QTcpSocket *sock)
             Error() << "Internal error: lostConnection callback received null client! (expected client id: " << clientId << ")";
         }
     });
-    connect(ret, &RPC::Connection::gotMessage, this, &Server::onMessage);
-    connect(ret, &RPC::Connection::gotErrorMessage, this, &Server::onErrorMessage);
-    connect(ret, &RPC::Connection::peerError, this, &Server::onPeerError);
+    connect(ret, &RPC::ConnectionBase::gotMessage, this, &Server::onMessage);
+    connect(ret, &RPC::ConnectionBase::gotErrorMessage, this, &Server::onErrorMessage);
+    connect(ret, &RPC::ConnectionBase::peerError, this, &Server::onPeerError);
     return ret;
 }
 
@@ -423,7 +423,7 @@ void Server::_tellClientScriptHashStatus(qint64 clientId, const RPC::Message::Id
 }
 
 Client::Client(const RPC::MethodMap & mm, qint64 id_in, Server *srv, QTcpSocket *sock)
-    : RPC::Connection(mm, id_in, sock, /*maxBuffer=1MB*/1000000), srv(srv)
+    : RPC::LinefeedConnection(mm, id_in, sock, /*maxBuffer=4MB*/4000000), srv(srv)
 {
     socket = sock;
     Q_ASSERT(socket->state() == QAbstractSocket::ConnectedState);

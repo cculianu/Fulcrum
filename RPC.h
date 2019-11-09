@@ -137,11 +137,23 @@ namespace RPC {
 
     using MethodMap = QMap<QString, Method>;
 
-    /// A concrete derived class of AbstractConnection implementing a JSON-RPC
-    /// based method<->result protocol similar to ElectrumX's protocol.  This
-    /// class is client/server agnostic and it just operates in terms of JSON
-    /// RPC methods and results.  It can be used for either a client or a
-    /// server.
+    /// A semi-concrete derived class of AbstractConnection implementing a
+    /// JSON-RPC based method<->result protocol.  This class is client/server
+    /// agnostic and it just operates in terms of JSON RPC methods and results.
+    /// It can be used for either a client or a server.
+    ///
+    /// Note that this class is somewhat transport agnostic and is intended to
+    /// be re-used for either HTTP or line-based (as in ElectrumX) JSON-RPC via
+    /// subclassing.
+    ///
+    /// Concrete subclasses should implement on_readyRead() and wrapForSend().
+    ///
+    /// This class just processes JSON. Subclasses implementing on_readyRead()
+    /// should call processJson() in this base to process the potential JSON
+    /// further. processJson() does validation and may implicitly close the
+    /// connection, etc if it doesn't like the data it received.  processJson()
+    /// is intended to be called when the subclass things the client has sent it a
+    /// full "packet" of a JSON RPC message.
     ///
     /// Note we implement a subset of JSON-RPC 2.0 which requires 'id' to
     /// always be ints, strings, or null.  We do not accept floats for id (the
@@ -167,12 +179,31 @@ namespace RPC {
     ///
     /// Server's 'Client' class derives from this.
     ///
-    class Connection : public AbstractConnection
+    class ConnectionBase : public AbstractConnection
     {
         Q_OBJECT
+    protected:
+        /// subclasses should call processJson to process what they think may be a complete json rpc message.
+        void processJson(const QByteArray &);
+
+        /* --
+         * -- Stuff subclasses must implement to make use of this class as base:
+         * --
+         */
+
+        /// subclasses must implement this to wrap outgoing data for sending.
+        virtual QByteArray wrapForSend(const QByteArray &) = 0;
+
+        /* subclasses must also implement this pure virtual inherited from base:
+             void on_readyRead() override; */
+
+        /*
+         * /end
+         */
+
     public:
-        Connection(const MethodMap & methods, qint64 id, QObject *parent = nullptr, qint64 maxBuffer = DEFAULT_MAX_BUFFER);
-        ~Connection() override;
+        ConnectionBase(const MethodMap & methods, qint64 id, QObject *parent = nullptr, qint64 maxBuffer = DEFAULT_MAX_BUFFER);
+        ~ConnectionBase() override;
 
         const MethodMap & methods; //< Note: this map needs to remain alive for the lifetime of this connection (and all connections) .. so it should point to static or long-lived data, ideally
 
@@ -226,8 +257,6 @@ namespace RPC {
         virtual void _sendResult(const Message::Id & reqid, const QString &method, const QVariant & result = QVariant());
 
     protected:
-        /// parses RPC, implements pure virtual from super to handle line-based JSON.
-        void on_readyRead() override;
         /// chains to base, connects sendRequest signal to _sendRequest slot
         void on_connected() override;
         /// Chains to base, clears idMethodMap
@@ -249,6 +278,17 @@ namespace RPC {
         /// derived classes can set this internally (bitwise or of ErrorPolicy*)
         /// to affect on_readyRead()'s behavior on peer protocol error.
         int errorPolicy = ErrorPolicyDisconnect;
+    };
+
+    /// Concrete class. For ElectrumX/ElectronX style JSON RPC where newlines delimit RPC messages.
+    class LinefeedConnection : public ConnectionBase {
+    public:
+        using ConnectionBase::ConnectionBase;
+        ~LinefeedConnection() override; ///< for vtable
+    protected:
+        /// implements pure virtual from super to handle linefeed-based JSON. When a full line arrives, calls ConnectionBase::processJson
+        void on_readyRead() override;
+        QByteArray wrapForSend(const QByteArray &) override;
     };
 
 } // end namespace RPC

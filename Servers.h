@@ -175,7 +175,7 @@ private:
 /// Note that their parent QObject is the sock (for now)!
 /// (grandparent is Server) .. so they will be destroyed
 /// when the server goes away or the socket is deleted.
-class Client : public RPC::Connection
+class Client : public RPC::LinefeedConnection
 {
     Q_OBJECT
 public:

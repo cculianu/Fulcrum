@@ -204,33 +204,33 @@ namespace RPC {
         return ret;
     }
 
-    Connection::Connection(const MethodMap & methods, qint64 id_in, QObject *parent, qint64 maxBuffer)
+    ConnectionBase::ConnectionBase(const MethodMap & methods, qint64 id_in, QObject *parent, qint64 maxBuffer)
         : AbstractConnection(id_in, parent, maxBuffer), methods(methods)
     {
     }
 
-    Connection::~Connection() {}
+    ConnectionBase::~ConnectionBase() {}
 
-    void Connection::on_connected()
+    void ConnectionBase::on_connected()
     {
         AbstractConnection::on_connected();
         // connection will be auto-disconnected on socket disconnect
-        connectedConns.push_back(connect(this, &Connection::sendRequest, this, &Connection::_sendRequest));
+        connectedConns.push_back(connect(this, &ConnectionBase::sendRequest, this, &ConnectionBase::_sendRequest));
         // connection will be auto-disconnected on socket disconnect
-        connectedConns.push_back(connect(this, &Connection::sendNotification, this, &Connection::_sendNotification));
+        connectedConns.push_back(connect(this, &ConnectionBase::sendNotification, this, &ConnectionBase::_sendNotification));
         // connection will be auto-disconnected on socket disconnect
-        connectedConns.push_back(connect(this, &Connection::sendError, this, &Connection::_sendError));
+        connectedConns.push_back(connect(this, &ConnectionBase::sendError, this, &ConnectionBase::_sendError));
         // connection will be auto-disconnected on socket disconnect
-        connectedConns.push_back(connect(this, &Connection::sendResult, this, &Connection::_sendResult));
+        connectedConns.push_back(connect(this, &ConnectionBase::sendResult, this, &ConnectionBase::_sendResult));
     }
 
-    void Connection::on_disconnected()
+    void ConnectionBase::on_disconnected()
     {
         AbstractConnection::on_disconnected(); // will auto-disconnect all QMetaObject::Connections appearing in connectedConns
         idMethodMap.clear();
     }
 
-    void Connection::_sendRequest(const Message::Id & reqid, const QString &method, const QVariantList & params)
+    void ConnectionBase::_sendRequest(const Message::Id & reqid, const QString &method, const QVariantList & params)
     {
         if (status != Connected || !socket) {
             Error() << __FUNCTION__ << " method: " << method << "; Not connected!";
@@ -252,9 +252,9 @@ namespace RPC {
         const auto data = json.toUtf8();
         Debug() << "Sending json: " << Util::Ellipsify(data);
         // below send() ends up calling do_write immediately (which is connected to send)
-        emit send( data + "\n" /* "\n" <-- is crucial! (Protocol is linefeed-based) */);  // FIXME for bitcoind!
+        emit send( wrapForSend(data) );
     }
-    void Connection::_sendNotification(const QString &method, const QVariantList & params)
+    void ConnectionBase::_sendNotification(const QString &method, const QVariantList & params)
     {
         if (status != Connected || !socket) {
             Error() << __FUNCTION__ << " method: " << method << "; Not connected!";
@@ -268,9 +268,9 @@ namespace RPC {
         const auto data = json.toUtf8();
         Debug() << "Sending json: " << Util::Ellipsify(data);
         // below send() ends up calling do_write immediately (which is connected to send)
-        emit send( data + "\n" /* "\n" <-- is crucial! (Protocol is linefeed-based) */); // FIXME for bitcoind!
+        emit send( wrapForSend(data) );
     }
-    void Connection::_sendError(bool disc, int code, const QString &msg, const Message::Id & reqId)
+    void ConnectionBase::_sendError(bool disc, int code, const QString &msg, const Message::Id & reqId)
     {
         if (status != Connected || !socket) {
             Error() << __FUNCTION__ << "; Not connected!";
@@ -280,12 +280,12 @@ namespace RPC {
         const auto data = json.toUtf8();
         Debug() << "Sending json: " << Util::Ellipsify(data);
         // below send() ends up calling do_write immediately (which is connected to send)
-        emit send( data + "\n" /* "\n" <-- is crucial! (Protocol is linefeed-based) */); // FIXME for bitcoind!
+        emit send( wrapForSend(data) );
         if (disc) {
             do_disconnect(true); // graceful disconnect
         }
     }
-    void Connection::_sendResult(const Message::Id & reqid, const QString &method, const QVariant & result)
+    void ConnectionBase::_sendResult(const Message::Id & reqid, const QString &method, const QVariant & result)
     {
         if (status != Connected || !socket) {
             Error() << __FUNCTION__ << " method: " << method << "; Not connected!";
@@ -299,109 +299,89 @@ namespace RPC {
         const auto data = json.toUtf8();
         Debug() << "Sending result json: " << Util::Ellipsify(data);
         // below send() ends up calling do_write immediately (which is connected to send)
-        emit send( data + "\n" /* "\n" <-- is crucial! (Protocol is linefeed-based) */); // FIXME for bitcoind!
+        emit send( wrapForSend(data) );
     }
 
-    void Connection::on_readyRead()
+    void ConnectionBase::processJson(const QByteArray &json)
     {
-        Debug() << __FUNCTION__;
-        Message::Id lastMsgId;
+        Message::Id msgId;
         try {
-            // TODO: need to see about how this meshes with bitcoind's large, possibly multiline(?) responses.
-            // We may want to not be line-based.  Also this may be slow for large loads.
-            while (socket->canReadLine()) {
-                lastMsgId.clear();
-                auto data = socket->readLine();
-                nReceived += data.length();
-                auto line = data.trimmed();
-                Debug() << "Got: " << line;
+            Message message = Message::fromJsonData( Util::Json::parseString(json, true).toMap() , &msgId); // may throw
 
-                Message message = Message::fromJsonData( Util::Json::parseString(line, true).toMap() , &lastMsgId); // may throw
-
-                static const auto ValidateParams = [](const Message &msg, const Method &m) {
-                    if (!msg.hasParams()) {
-                        if ( (m.opt_kwParams.has_value() && !m.opt_kwParams->isEmpty())
-                             || (m.opt_nPosParams.has_value() && *m.opt_nPosParams != 0
-                                 && *m.opt_nPosParams != Method::ANY_POS_PARAMS) )
-                            throw InvalidParameters("Missing required params");
-                    } else if (msg.isParamsList()) {
-                        // positional args specified
-                        if (!m.opt_nPosParams.has_value())
-                            throw InvalidParameters("Postional params are not supported for this method");
-                        const int num = msg.paramsList().count();
-                        const int nPosParams = *m.opt_nPosParams;
-                        if (nPosParams == Method::ANY_POS_PARAMS)
-                            return;
-                        if (nPosParams >= 0 && num != nPosParams) {
-                            throw InvalidParameters(QString("Expected %1 parameters for %2, got %3 instead").arg(nPosParams).arg(m.method).arg(num));
-                        } else if (nPosParams < 0 && num < -nPosParams) {
-                            throw InvalidParameters(QString("Expected at least %1 parameters for %2, got %3 instead").arg(-nPosParams).arg(m.method).arg(num));
-                        }
-                    } else if (msg.isParamsMap()) {
-                        // named args specified
-                        if (!m.opt_kwParams.has_value())
-                            throw InvalidParameters("Named params are not supported for this method");
-                        const auto nameset = KeySet::fromList(msg.paramsMap().keys());
-                        const auto & kwSet = *m.opt_kwParams;
-                        if (m.allowUnknownNamedParams) {
-                            if (!(kwSet - nameset).isEmpty())
-                                throw InvalidParameters("Required parameters missing");
-                        } else {
-                            if (nameset != kwSet)
-                                throw InvalidParameters("Unknown or missing parameters");
-                        }
+            static const auto ValidateParams = [](const Message &msg, const Method &m) {
+                if (!msg.hasParams()) {
+                    if ( (m.opt_kwParams.has_value() && !m.opt_kwParams->isEmpty())
+                         || (m.opt_nPosParams.has_value() && *m.opt_nPosParams != 0
+                             && *m.opt_nPosParams != Method::ANY_POS_PARAMS) )
+                        throw InvalidParameters("Missing required params");
+                } else if (msg.isParamsList()) {
+                    // positional args specified
+                    if (!m.opt_nPosParams.has_value())
+                        throw InvalidParameters("Postional params are not supported for this method");
+                    const int num = msg.paramsList().count();
+                    const int nPosParams = *m.opt_nPosParams;
+                    if (nPosParams == Method::ANY_POS_PARAMS)
+                        return;
+                    if (nPosParams >= 0 && num != nPosParams) {
+                        throw InvalidParameters(QString("Expected %1 parameters for %2, got %3 instead").arg(nPosParams).arg(m.method).arg(num));
+                    } else if (nPosParams < 0 && num < -nPosParams) {
+                        throw InvalidParameters(QString("Expected at least %1 parameters for %2, got %3 instead").arg(-nPosParams).arg(m.method).arg(num));
                     }
-                };
-
-                if (message.isError()) {
-                    // error message
-                    emit gotErrorMessage(id, message);
-                } else if (message.isNotif()) {
-                    try {
-                        const auto it = methods.find(message.method);
-                        if (it == methods.end())
-                            throw UnknownMethod("Unknown method");
-                        const Method & m = it.value();
-                        if (m.allowsNotifications) {
-                            ValidateParams(message, m);
-                            emit gotMessage(id, message);
-                        } else {
-                            throw Exception(QString("Ignoring unexpected notification"));
-                        }
-                    } catch (const std::exception & e) {
-                        // Note: we emit peerError here so that the tally of number of errors goes up and we eventually disconnect the offending peer.
-                        // This should not cause an error message to be sent to the peer.
-                        emit peerError(this->id, QString("Error processing notification '%1' from %2: %3").arg(message.method, prettyName(), e.what()));
+                } else if (msg.isParamsMap()) {
+                    // named args specified
+                    if (!m.opt_kwParams.has_value())
+                        throw InvalidParameters("Named params are not supported for this method");
+                    const auto nameset = KeySet::fromList(msg.paramsMap().keys());
+                    const auto & kwSet = *m.opt_kwParams;
+                    if (m.allowUnknownNamedParams) {
+                        if (!(kwSet - nameset).isEmpty())
+                            throw InvalidParameters("Required parameters missing");
+                    } else {
+                        if (nameset != kwSet)
+                            throw InvalidParameters("Unknown or missing parameters");
                     }
-                } else if (message.isRequest()) {
-                    const auto it = methods.find(message.method);
-                    const Method *m = it != methods.end() ? &it.value() : nullptr;
-                    if (!m || !m->allowsRequests)
-                        throw UnknownMethod(QString("Unsupported request: %1").arg(message.method));
-                    ValidateParams(message, *m);
-                    emit gotMessage(id, message);
-                } else if (message.isResponse()) {
-                    QString meth = idMethodMap.take(message.id);
-                    if (meth.isEmpty()) {
-                        throw BadPeer(QString("Unexpected response (id: %1)").arg(message.id.toString()));
-                    }
-                    message.method = meth;
-                    emit gotMessage(id, message);
-                } else {
-                    // Not a Request and not a Response or Notification or Error. Not JSON-RPC 2.0.
-                    throw InvalidRequest("Invalid JSON");
                 }
-                lastGood = Util::getTime(); // update "lastGood" as this is used to determine if stale or not.
-                //Debug() << "Re-parsed message: " << message.toJsonString();
-            } // end while
-            if (socket->bytesAvailable() > MAX_BUFFER) {
-                // bad server.. sending us garbage data not containing newlines. Kill connection.
-                throw BadPeerAbort(QString("Peer has sent us more than %1 bytes without a newline! Bad peer?").arg(MAX_BUFFER));
+            };
+
+            if (message.isError()) {
+                // error message
+                emit gotErrorMessage(id, message);
+            } else if (message.isNotif()) {
+                try {
+                    const auto it = methods.find(message.method);
+                    if (it == methods.end())
+                        throw UnknownMethod("Unknown method");
+                    const Method & m = it.value();
+                    if (m.allowsNotifications) {
+                        ValidateParams(message, m);
+                        emit gotMessage(id, message);
+                    } else {
+                        throw Exception(QString("Ignoring unexpected notification"));
+                    }
+                } catch (const std::exception & e) {
+                    // Note: we emit peerError here so that the tally of number of errors goes up and we eventually disconnect the offending peer.
+                    // This should not cause an error message to be sent to the peer.
+                    emit peerError(this->id, QString("Error processing notification '%1' from %2: %3").arg(message.method, prettyName(), e.what()));
+                }
+            } else if (message.isRequest()) {
+                const auto it = methods.find(message.method);
+                const Method *m = it != methods.end() ? &it.value() : nullptr;
+                if (!m || !m->allowsRequests)
+                    throw UnknownMethod(QString("Unsupported request: %1").arg(message.method));
+                ValidateParams(message, *m);
+                emit gotMessage(id, message);
+            } else if (message.isResponse()) {
+                QString meth = idMethodMap.take(message.id);
+                if (meth.isEmpty()) {
+                    throw BadPeer(QString("Unexpected response (id: %1)").arg(message.id.toString()));
+                }
+                message.method = meth;
+                emit gotMessage(id, message);
+            } else {
+                // Not a Request and not a Response or Notification or Error. Not JSON-RPC 2.0.
+                throw InvalidRequest("Invalid JSON");
             }
-        } catch (const BadPeerAbort & e) {
-            Error() << prettyName() << " fatal error: " << e.what();
-            do_disconnect();
-            status = Bad;
+            lastGood = Util::getTime(); // update "lastGood" as this is used to determine if stale or not.
         } catch (const Exception &e) {
             // TODO: clean this up. It's rather inelegant. :/
             const bool wasJsonParse = dynamic_cast<const Util::Json::ParseError *>(&e);
@@ -415,7 +395,7 @@ namespace RPC {
             else if (wasInv) code = Code_InvalidRequest;
             bool doDisconnect = errorPolicy & ErrorPolicyDisconnect;
             if (errorPolicy & ErrorPolicySendErrorMessage) {
-                emit sendError(doDisconnect, code, QString(e.what()).left(80), lastMsgId);
+                emit sendError(doDisconnect, code, QString(e.what()).left(80), msgId);
                 if (!doDisconnect)
                     emit peerError(id, e.what());
                 doDisconnect = false; // if was true, already enqueued graceful disconnect after error reply, if was false, no-op here
@@ -426,5 +406,36 @@ namespace RPC {
                 status = Bad;
             }
         } // end try/catch
-    } // end function
+    }
+
+    LinefeedConnection::~LinefeedConnection() {} ///< for vtable
+
+    void LinefeedConnection::on_readyRead()
+    {
+        Debug() << __FUNCTION__;
+        // TODO: need to see about how this meshes with bitcoind's large, possibly multiline(?) responses.
+        // We may want to not be line-based.  Also this may be slow for large loads.
+        while (socket->canReadLine()) {
+            auto data = socket->readLine();
+            nReceived += data.length();
+#ifdef QT_DEBUG
+            {
+                auto line = data.trimmed();  // todo -- remove -- may be too slow
+                Debug() << "Got: " << line;  // todo -- remove -- may be too slow
+            }
+#endif
+            processJson(data);
+            //Debug() << "Re-parsed message: " << message.toJsonString();
+        }
+        if (socket->bytesAvailable() > MAX_BUFFER) {
+            Error() << prettyName() << " fatal error: " << QString("Peer has sent us more than %1 bytes without a newline! Bad peer?").arg(MAX_BUFFER);
+            do_disconnect();
+            status = Bad;
+        }
+    }
+
+    QByteArray LinefeedConnection::wrapForSend(const QByteArray &d)
+    {
+        return d + "\r\n";
+    }
 } // end namespace RPC
