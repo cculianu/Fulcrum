@@ -1,12 +1,15 @@
 #ifndef FULCRUM_RPC_H
 #define FULCRUM_RPC_H
 
-#include "Util.h"
 #include "AbstractConnection.h"
+#include "Util.h"
+
+#include <QMap>
+#include <QSet>
 #include <QString>
 #include <QVariant>
-#include <QMap>
 
+#include <optional>
 #include <variant>
 
 namespace RPC {
@@ -31,15 +34,30 @@ namespace RPC {
         Code_Custom = -32000,
     };
 
+    using KeySet = QSet<QString>;
+
     /// this is used to lay out the protocol methods a class supports in code
     /// Trivially constructible and copyable
     struct Method
     {
         QString method; // eg 'server.ping' or 'blockchain.headers.subscribe', etc
+        /// If allowsRequests is false, requests for this method will return an error.
+        /// If allowsNotifications is false, notifications for this method will be silently ignored.
         bool allowsRequests = true, allowsNotifications = false;
-        static constexpr int ANY_PARAMS = 0x7fffffff;
-        int numReqParams = ANY_PARAMS; // -N meaning N or more params, 0 = no params expected, positive N == EXACTLY N params, ANY_PARAMS means we accept anything.
-        // TODO: Support also specifying keyword arguments for params here.
+        static constexpr int ANY_POS_PARAMS = 0x7fffffff; ///< specify this to accept any number of positional (list) args
+        /// If this optional !has_value, then positional arguments (list for "params") are rejected.
+        /// Otherwise, specify an int of the form:
+        /// -N meaning N or more params, 0 = no params expected, positive N == EXACTLY N params, ANY_POS_PARAMS means we
+        /// accept any number of arguments.
+        std::optional<int> opt_nPosParams = ANY_POS_PARAMS;
+        /// If this optional !has_value, then named arguments (dict for "params") are rejected.
+        /// If this optional has_value, we also accept kwargs (named args) appearing in the specified set
+        /// (case sensitive). (Note that a method can theoretically accept both position and kwargs if so configured).
+        std::optional<KeySet> opt_kwParams = {}; // '= {}' is how you specify undefined (!has_value)
+        /// If true, and if opt_kwParams.has_value, then we are ok with extra 'params' coming in that are not in
+        /// *opt_kwParams (but we still reject if keys in *opt_kwParams are missing from incoming 'params', thus
+        /// *opt_kwParams becomes a set of minimally required params, and we ignore everything extra if this is true).
+        bool allowUnknownNamedParams = false;
     };
 
     extern const QString jsonRpcVersion; ///< always "2.0"
@@ -77,11 +95,11 @@ namespace RPC {
         /// will not throw exceptions
         static Message makeError(int code, const QString & message, const Id & id = Id());
         /// will not throw exceptions
-        static Message makeRequest(const Id & id, const QString &methodName, const QVariantList & params = QVariantList());
-        static Message makeRequest(const Id & id, const QString &methodName, const QVariantMap & params = QVariantMap());
+        static Message makeRequest(const Id & id, const QString &methodName, const QVariantList & paramsList = QVariantList());
+        static Message makeRequest(const Id & id, const QString &methodName, const QVariantMap & paramsList = QVariantMap());
         /// similar to makeRequest. A notification is just like a request but always lacking an 'id' member. This is used for asynch notifs.
-        static Message makeNotification(const QString &methodName, const QVariantList & params = QVariantList());
-        static Message makeNotification(const QString &methodName, const QVariantMap & params = QVariantMap());
+        static Message makeNotification(const QString &methodName, const QVariantList & paramsList = QVariantList());
+        static Message makeNotification(const QString &methodName, const QVariantMap & paramsList = QVariantMap());
         /// will not throw exceptions
         static Message makeResponse(const Id & reqId, const QVariant & result);
 
@@ -101,8 +119,9 @@ namespace RPC {
         bool hasParams() const { return data.contains("params"); }
         bool isParamsList() const { return QMetaType::Type(data.value("params").type()) == QMetaType::QVariantList; }
         bool isParamsMap() const { return QMetaType::Type(data.value("params").type()) == QMetaType::QVariantMap; }
-        QVariantList params() const { return data.value("params").toList(); }
-        QVariantMap paramsMap() const { return data.value("params").toMap(); }
+        QVariant params() const { return data.value("params"); }
+        QVariantList paramsList() const { return params().toList(); }
+        QVariantMap paramsMap() const { return params().toMap(); }
 
 
         bool hasResult() const { return data.contains("result"); }
@@ -114,7 +133,7 @@ namespace RPC {
     };
 
 
-    typedef QMap<QString, Method > MethodMap;
+    using MethodMap = QMap<QString, Method>;
 
     /// A concrete derived class of AbstractConnection implementing a JSON-RPC
     /// based method<->result protocol similar to ElectrumX's protocol.  This

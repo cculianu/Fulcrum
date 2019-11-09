@@ -349,7 +349,7 @@ namespace Util {
             });
         }
     }
-}
+} // end namespace Util
 
 /// Kind of like Go's "defer" statement. Call a functor (for clean-up code) at scope end.
 struct Defer

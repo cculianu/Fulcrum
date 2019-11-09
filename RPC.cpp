@@ -94,25 +94,27 @@ namespace RPC {
                 throw InvalidError("Unexpected keys in error object");
             bool ok;
             if (int code = errmap.value("code").toInt(&ok); !ok || errmap.value("code").toString() != QString::number(code))
-                throw InvalidError("Expected error code to be a numeric integer");
-            static const QSet<QString> required = { "id", "error", "jsonrpc" };
-            if (ret.data.count() != required.count())
+                throw InvalidError("Expected error code to be an integer");
+            static const KeySet required = { "id", "error", "jsonrpc" };
+            if (KeySet::fromList(ret.data.keys()) != required)
                 throw InvalidError("Error response not valid");
-            for (const QString & r : required) {
-                if (!ret.data.contains(r))
-                    throw InvalidError("Error response not valid");
-            }
         }
         // validate request as per JSON RPC 2.0
         else if (ret.isRequest()) {
-            const int n_ok = ret.hasParams() ? 4 : 3;
+            const bool hasParams = ret.hasParams();
+            const int n_ok = hasParams ? 4 : 3;
             if (ret.data.count() != n_ok)
                 throw InvalidError("Invalid request");
+            if (hasParams && !ret.isParamsMap() && !ret.isParamsList())
+                throw InvalidError("Invalid params");
         }
         else if (ret.isNotif()) {
-            const int n_ok = ret.hasParams() ? 3 : 2;
+            const bool hasParams = ret.hasParams();
+            const int n_ok = hasParams ? 3 : 2;
             if (ret.data.count() != n_ok)
                 throw InvalidError("Invalid notification");
+            if (hasParams && !ret.isParamsMap() && !ret.isParamsList())
+                throw InvalidError("Invalid params");
         }
         else if (ret.isResponse()) {
             const int n_ok = 3;
@@ -309,16 +311,37 @@ namespace RPC {
                 Message message = Message::fromJsonData( Util::Json::parseString(line, true).toMap() ); // may throw
 
                 static const auto ValidateParams = [](const Message &msg, const Method &m) {
-                    if (m.numReqParams == Method::ANY_PARAMS)
-                        return;
-                    // TODO: support keyword parameters for params in the Method spec
-                    if (m.numReqParams != 0 && !msg.isParamsList())
-                        throw InvalidParameters("Expected params to be a list");
-                    const int num = msg.params().count();
-                    if (m.numReqParams >= 0 && num != m.numReqParams) {
-                        throw InvalidParameters(QString("Expected %1 parameters for %2, got %3 instead").arg(m.numReqParams).arg(m.method).arg(num));
-                    } else if (m.numReqParams < 0 && num < -m.numReqParams) {
-                        throw InvalidParameters(QString("Expected at least %1 parameters for %2, got %3 instead").arg(-m.numReqParams).arg(m.method).arg(num));
+                    if (!msg.hasParams()) {
+                        if ( (m.opt_kwParams.has_value() && !m.opt_kwParams->isEmpty())
+                             || (m.opt_nPosParams.has_value() && *m.opt_nPosParams != 0
+                                 && *m.opt_nPosParams != Method::ANY_POS_PARAMS) )
+                            throw InvalidParameters("Missing required params");
+                    } else if (msg.isParamsList()) {
+                        // positional args specified
+                        if (!m.opt_nPosParams.has_value())
+                            throw InvalidParameters("Postional params are not supported for this method");
+                        const int num = msg.paramsList().count();
+                        const int nPosParams = *m.opt_nPosParams;
+                        if (nPosParams == Method::ANY_POS_PARAMS)
+                            return;
+                        if (nPosParams >= 0 && num != nPosParams) {
+                            throw InvalidParameters(QString("Expected %1 parameters for %2, got %3 instead").arg(nPosParams).arg(m.method).arg(num));
+                        } else if (nPosParams < 0 && num < -nPosParams) {
+                            throw InvalidParameters(QString("Expected at least %1 parameters for %2, got %3 instead").arg(-nPosParams).arg(m.method).arg(num));
+                        }
+                    } else if (msg.isParamsMap()) {
+                        // named args specified
+                        if (!m.opt_kwParams.has_value())
+                            throw InvalidParameters("Named params are not supported for this method");
+                        const auto nameset = KeySet::fromList(msg.paramsMap().keys());
+                        const auto & kwSet = *m.opt_kwParams;
+                        if (m.allowUnknownNamedParams) {
+                            if (!(kwSet - nameset).isEmpty())
+                                throw InvalidParameters("Required parameters missing");
+                        } else {
+                            if (nameset != kwSet)
+                                throw InvalidParameters("Unknown or missing parameters");
+                        }
                     }
                 };
 

@@ -338,7 +338,7 @@ void Server::onPeerError(qint64 clientId, const QString &what)
 // checks to make sure we didn't make a typo inputting the above tables... called at class c'tor once globally.
 void Server::rpc_server_version(Client *c, const RPC::Message &m)
 {
-    if (QVariantList l = m.params(); m.isRequest() && l.size() == 2) {
+    if (QVariantList l = m.paramsList(); m.isRequest() && l.size() == 2) {
         c->info.userAgent = l[0].toString();
         c->info.protocolVersion = l[1].toString();
         Debug() << "Client (id: " << c->id << ") sent version: \"" << c->info.userAgent << "\" / \"" << c->info.protocolVersion << "\"";
@@ -358,11 +358,15 @@ void Server::rpc_server_ping(Client *c, const RPC::Message &m)
 }
 void Server::rpc_blockchain_scripthash_subscribe(Client *c, const RPC::Message &m)
 {
-    if (QVariantList l = m.params(); m.isRequest() && l.size() == 1) {
+    if (QVariantList l = m.paramsList(); m.isRequest() && l.size() == 1) {
         // TESTING TODO FIXME THIS IS FOR TESTING ONLY
         const auto clientId = c->id;
-        emit tellClientScriptHashStatus(clientId, m.id, QByteArray(32, 0));
         QByteArray sh = QByteArray::fromHex(l.front().toString().toUtf8());
+        if (sh.length() != 32) {
+            emit c->sendError(false, RPC::Code_InvalidParams, "Invalid scripthash", m.id);
+            return;
+        }
+        emit tellClientScriptHashStatus(clientId, m.id, QByteArray(32, 0));
         QTimer *t = new QTimer(c);
         connect(t, &QTimer::timeout, this, [sh, clientId, this] {
             auto val = QRandomGenerator::global()->generate64();
@@ -379,10 +383,10 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::dispatchTable);
 HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::methodMap);
 HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
 /*  ==> Note: Add stuff to this table when adding new RPC methods.
-    { {"rpc.name",              allow_requests, allow_notifications, nArgs}, &method_to_call }     */
-    { {"server.ping",                     true,               false,     0}, &Server::rpc_server_ping },
-    { {"server.version",                  true,               false,     2}, &Server::rpc_server_version },
-    { {"blockchain.scripthash.subscribe", true,               false,     1}, &Server::rpc_blockchain_scripthash_subscribe },
+    { {"rpc.name",              allow_requests, allow_notifications, nPosArgs, (QSet<QString> note: {} means undefined optional)}, &method_to_call }     */
+    { {"server.ping",                     true,               false,        0,      RPC::KeySet{} },          &Server::rpc_server_ping },
+    { {"server.version",                  true,               false,        2,                    },          &Server::rpc_server_version },
+    { {"blockchain.scripthash.subscribe", true,               false,        1,                    },          &Server::rpc_blockchain_scripthash_subscribe },
 };
 #undef HEY_COMPILER_PUT_STATIC_HERE
 /*static*/
