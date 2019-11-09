@@ -358,7 +358,7 @@ namespace RPC {
                     } else {
                         throw Exception(QString("Ignoring unexpected notification"));
                     }
-                } catch (const std::exception & e) {
+                } catch (const Exception & e) {
                     // Note: we emit peerError here so that the tally of number of errors goes up and we eventually disconnect the offending peer.
                     // This should not cause an error message to be sent to the peer.
                     emit peerError(this->id, QString("Error processing notification '%1' from %2: %3").arg(message.method, prettyName(), e.what()));
@@ -413,8 +413,7 @@ namespace RPC {
     void LinefeedConnection::on_readyRead()
     {
         Debug() << __FUNCTION__;
-        // TODO: need to see about how this meshes with bitcoind's large, possibly multiline(?) responses.
-        // We may want to not be line-based.  Also this may be slow for large loads.
+        // TODO: This may be slow for large loads.
         while (socket->canReadLine()) {
             auto data = socket->readLine();
             nReceived += data.length();

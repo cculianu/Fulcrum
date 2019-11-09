@@ -211,9 +211,6 @@ namespace RPC {
             using Exception::Exception;  // bring in c'tor
         };
 
-        /// If this is thrown we unconditionally disconnect.
-        struct BadPeerAbort : public BadPeer { using BadPeer::BadPeer; };
-
         /// if peer asked for an unknown method
         struct UnknownMethod : public Exception { using Exception::Exception; };
 
