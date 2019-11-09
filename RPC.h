@@ -24,6 +24,7 @@ namespace RPC {
         bool allowsRequests = true, allowsNotifications = false;
         static constexpr int ANY_PARAMS = 0x7fffffff;
         int numReqParams = ANY_PARAMS; // -N meaning N or more params, 0 = no params expected, positive N == EXACTLY N params, ANY_PARAMS means we accept anything.
+        // TODO: Support also specifying keyword arguments for params here.
     };
 
     extern const QString jsonRpcVersion; ///< always "2.0"
@@ -52,8 +53,10 @@ namespace RPC {
         static Message makeError(int code, const QString & message, const Id & id = Id());
         /// will not throw exceptions
         static Message makeRequest(const Id & id, const QString &methodName, const QVariantList & params = QVariantList());
+        static Message makeRequest(const Id & id, const QString &methodName, const QVariantMap & params = QVariantMap());
         /// similar to makeRequest. A notification is just like a request but always lacking an 'id' member. This is used for asynch notifs.
         static Message makeNotification(const QString &methodName, const QVariantList & params = QVariantList());
+        static Message makeNotification(const QString &methodName, const QVariantMap & params = QVariantMap());
         /// will not throw exceptions
         static Message makeResponse(const Id & reqId, const QVariant & result);
 
@@ -79,9 +82,9 @@ namespace RPC {
 
         bool hasParams() const { return data.contains("params"); }
         bool isParamsList() const { return QMetaType::Type(data.value("params").type()) == QMetaType::QVariantList; }
-        //bool isParamsMap() const { return QMetaType::Type(data.value("params").type()) == QMetaType::QVariantMap; }
+        bool isParamsMap() const { return QMetaType::Type(data.value("params").type()) == QMetaType::QVariantMap; }
         QVariantList params() const { return data.value("params").toList(); }
-        //QVariantMap paramsMap() const { return data.value("params").toMap(); }
+        QVariantMap paramsMap() const { return data.value("params").toMap(); }
 
 
         bool hasResult() const { return data.contains("result"); }

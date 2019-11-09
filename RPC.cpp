@@ -164,7 +164,27 @@ namespace RPC {
     }
 
     /* static */
+    Message Message::makeRequest(const Id & id, const QString &methodName, const QVariantMap & params)
+    {
+        Message ret = makeNotification(methodName, params);
+        auto & map = ret.data;
+        map["id"] = id;
+        return ret;
+    }
+
+    /* static */
     Message Message::makeNotification(const QString &methodName, const QVariantList & params)
+    {
+        Message ret;
+        auto & map = ret.data;
+        map["jsonrpc"] = RPC::jsonRpcVersion;
+        map["method"] = methodName;
+        map["params"] = params;
+        return ret;
+    }
+
+    /* static */
+    Message Message::makeNotification(const QString &methodName, const QVariantMap & params)
     {
         Message ret;
         auto & map = ret.data;
@@ -291,6 +311,9 @@ namespace RPC {
                 static const auto ValidateParams = [](const Message &msg, const Method &m) {
                     if (m.numReqParams == Method::ANY_PARAMS)
                         return;
+                    // TODO: support keyword parameters for params in the Method spec
+                    if (m.numReqParams != 0 && !msg.isParamsList())
+                        throw InvalidParameters("Expected params to be a list");
                     const int num = msg.params().count();
                     if (m.numReqParams >= 0 && num != m.numReqParams) {
                         throw InvalidParameters(QString("Expected %1 parameters for %2, got %3 instead").arg(m.numReqParams).arg(m.method).arg(num));
@@ -305,10 +328,19 @@ namespace RPC {
                 } else if (message.isNotif()) {
                     // todo fixme
                     const Method & m = methods[message.method];
-                    if (m.method != message.method  || !m.allowsNotifications)
-                        throw UnknownMethod(QString("Unsupported notification: %1").arg(message.method));
-                    ValidateParams(message, m);
-                    emit gotMessage(id, message);
+                    try {
+                        if (m.method != message.method)
+                            throw UnknownMethod("Unknown method");
+                        if (m.allowsNotifications) {
+                            ValidateParams(message, m);
+                            emit gotMessage(id, message);
+                        } else {
+                            throw Exception(QString("Ignoring unexpected notification"));
+                        }
+                    } catch (const std::exception & e) {
+                        // Note: we emit peerError here so that the tally of number of errors goes up and we eventually disconnect the offending peer
+                        emit peerError(this->id, QString("Error processing notification '%1' from %2: %3").arg(message.method, prettyName(), e.what()));
+                    }
                 } else if (message.isRequest()) {
                     const Method & m = methods[message.method];
                     if (m.method != message.method || !m.allowsRequests)
