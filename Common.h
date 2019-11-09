@@ -1,8 +1,12 @@
-#ifndef EXCEPTIONS_H
-#define EXCEPTIONS_H
+#ifndef COMMON_H
+#define COMMON_H
 
 #include <exception>
 #include <QString>
+
+#ifdef __clang__
+#pragma clang diagnostic ignored "-Wpadded"
+#endif
 
 class Exception : public std::runtime_error
 {
@@ -30,4 +34,4 @@ public:
 #else
 #  define VERSION_EXTRA "(Release)"
 #endif
-#endif // EXCEPTIONS_H
+#endif // COMMON_H

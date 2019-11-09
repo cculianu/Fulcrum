@@ -1,5 +1,5 @@
-#ifndef TCPSERVER_H
-#define TCPSERVER_H
+#ifndef SERVERS_H
+#define SERVERS_H
 
 #include "Common.h"
 #include "Util.h"
@@ -9,11 +9,6 @@
 #include <QThread>
 #include <QMap>
 #include <QVector>
-
-#ifdef __clang__
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wpadded"
-#endif
 
 struct TcpServerError : public Exception
 {
@@ -207,8 +202,4 @@ protected:
     friend class Server;
 };
 
-#ifdef __clang__
-#pragma clang diagnostic pop
-#endif
-
-#endif // TCPSERVER_H
+#endif // SERVERS_H

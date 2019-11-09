@@ -288,6 +288,23 @@ namespace RPC {
         QByteArray wrapForSend(const QByteArray &) override;
     };
 
+    /// JSON RPC over HTTP.  Wraps the data in headers and can also parse incoming headers.
+    class HttpConnection : public ConnectionBase {
+    public:
+        using ConnectionBase::ConnectionBase;
+        ~HttpConnection() override; ///< for vtable
+
+        void setAuth(const QString & username, const QString & password);
+        void clearAuth() { authCookie.clear(); }
+
+    protected:
+        void on_readyRead() override;
+        QByteArray wrapForSend(const QByteArray &) override;
+
+    private:
+        QByteArray authCookie;
+    };
+
 } // end namespace RPC
 
 /// So that Qt signal/slots work with this type.  Metatypes are also registered at startup via qRegisterMetatype

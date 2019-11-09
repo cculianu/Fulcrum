@@ -408,6 +408,7 @@ namespace RPC {
         } // end try/catch
     }
 
+    /* --- LinefeedConnection --- */
     LinefeedConnection::~LinefeedConnection() {} ///< for vtable
 
     void LinefeedConnection::on_readyRead()
@@ -437,4 +438,35 @@ namespace RPC {
     {
         return d + "\r\n";
     }
+
+    /* --- HttpConnection --- */
+    // Very much a work in progress -- TODO: Implement
+    HttpConnection::~HttpConnection() {} ///< for vtable
+    void HttpConnection::setAuth(const QString &username, const QString &password)
+    {
+        authCookie = QString("%1:%2").arg(username).arg(password).toUtf8().toBase64();
+    }
+    void HttpConnection::on_readyRead()
+    {
+        // TODO...
+    }
+    QByteArray HttpConnection::wrapForSend(const QByteArray &data)
+    {
+        static const QByteArray NL("\r\n");
+        QByteArray responseHeader;
+        const QByteArray suffix = !data.endsWith("\n") ? NL : "";
+        {
+            QTextStream ss(&responseHeader, QIODevice::WriteOnly);
+            ss.setCodec(QTextCodec::codecForName("UTF-8"));
+            ss << "POST / HTTP/1.1" << NL;
+            ss << "Content-Type: application/json-rpc" << NL;
+            if (!authCookie.isEmpty())
+                ss << "Authorization: Basic " << authCookie << NL;
+            ss << "Content-Length: " << (data.length()+suffix.length()) << NL;
+            ss << NL;
+        }
+        return responseHeader + data + suffix;
+    }
+
+
 } // end namespace RPC
