@@ -31,7 +31,9 @@ namespace RPC {
         /// "Internal error" ; Internal JSON-RPC error.
         Code_InternalError = -32603,
         /// "Server error" 100 error codes that are reserved for implementation-defined server-errors.
-        Code_Custom = -32000,
+        Code_ReservedError = -32000,
+        /// Anything above this number is ok for us to use for application-specific errors.
+        Code_Custom = -31999,
     };
 
     using KeySet = QSet<QString>;
@@ -190,7 +192,7 @@ namespace RPC {
         struct InvalidParameters : public BadPeer { using BadPeer::BadPeer; };
 
 
-        static constexpr int MAX_UNANSWERED_REQUESTS = 20000;
+        static constexpr int MAX_UNANSWERED_REQUESTS = 20000; ///< TODO: tune this down. For testing we leave this high for now.
 
     signals:
         /// call (emit) this to send a request to the peer

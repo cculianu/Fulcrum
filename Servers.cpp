@@ -455,12 +455,12 @@ void Client::do_disconnect(bool graceful)
 
 void Client::do_ping()
 {
-    // Don't send clients pings, because it's more trouble than it's worth.
+    // Don't send clients pings.
     // Instead, rely on them to ping us else disconnect them if idle for too long.
     // The below just checks idle.
-    if (Util::getTime() - lastGood >= pingtime_ms * 2) {
-        Debug() << prettyName() << ": idle timeout after " << ((pingtime_ms*2.0)/1e3) << " sec., will close connection";
-        emit sendError(true, RPC::Code_Custom-1, "Idle time exceeded");
+    if (Util::getTime() - lastGood >= stale_threshold) {
+        Debug() << prettyName() << ": idle timeout after " << ((stale_threshold)/1e3) << " sec., will close connection";
+        emit sendError(true, RPC::Code_Custom+1, "Idle time exceeded");
         return;
     }
 }

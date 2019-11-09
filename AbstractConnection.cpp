@@ -98,7 +98,7 @@ void AbstractConnection::start_pingTimer()
 void AbstractConnection::on_pingTimer()
 {
     if (Util::getTime() - lastGood > pingtime_ms)
-        // only ping if we've been idle for longer than 1 minute
+        // only call do_ping if we've been idle for longer than 1 minute
         do_ping();
 }
 
