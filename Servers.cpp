@@ -318,7 +318,8 @@ void Server::onErrorMessage(qint64 clientId, const RPC::Message &m)
 {
     Debug() << "onErrorMessage: " << clientId << " json: " << m.toJsonString();
     if (Client *c = getClient(clientId); c) {
-        emit c->sendError(true, -32600, "Not a valid request object");
+        // we never expect client to send us errors. Always return invalid request.
+        emit c->sendError(true, RPC::Code_InvalidRequest, "Not a valid request object");
     }
 }
 void Server::onPeerError(qint64 clientId, const QString &what)
@@ -455,7 +456,7 @@ void Client::do_ping()
     // The below just checks idle.
     if (Util::getTime() - lastGood >= pingtime_ms * 2) {
         Debug() << prettyName() << ": idle timeout after " << ((pingtime_ms*2.0)/1e3) << " sec., will close connection";
-        emit sendError(true, -32001, "Idle time exceeded");
+        emit sendError(true, RPC::Code_Custom-1, "Idle time exceeded");
         return;
     }
 }

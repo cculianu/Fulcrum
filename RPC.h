@@ -16,6 +16,21 @@ namespace RPC {
         using Util::Json::Error::Error;
     };
 
+    enum ErrorCodes {
+        /// "Parse error" ; Invalid JSON was received by the server. An error occurred on the server while parsing the JSON text.
+        Code_ParseError = -32700,
+        /// "Invalid Request" ; The JSON sent is not a valid Request object.
+        Code_InvalidRequest = -32600,
+        /// "Method not found" ; The method does not exist / is not available.
+        Code_MethodNotFOund = -32601,
+        /// "Invalid params" ; Invalid method parameter(s).
+        Code_InvalidParams = -32602,
+        /// "Internal error" ; Internal JSON-RPC error.
+        Code_InternalError = -32603,
+        /// "Server error" 100 error codes that are reserved for implementation-defined server-errors.
+        Code_Custom = -32000,
+    };
+
     /// this is used to lay out the protocol methods a class supports in code
     /// Trivially constructible and copyable
     struct Method
@@ -44,6 +59,16 @@ namespace RPC {
             bool operator<(const Id & other) const;
         };
 
+        // -- DATA --
+
+        Id id; ///< guaranteed to be either string, qint64, or nullptr
+        QString method; /**< methodName extracted from data['method'] if it was present. If this is empty then no
+                             'method' key was present in JSON. May also contain the "matched" method on a response
+                             object where we matched the id to a method we knew about in Connection::idMethodMap. */
+        QVariantMap data; ///< parsed json. 'method', 'jsonrpc', 'id', 'error', 'result', and/or 'params' get put here
+
+        // -- METHODS --
+
         /// may throw Exception. This factory method should be the way one of the 6 ways one constructs this object
         static Message fromString(const QString &);
         /// may throw Exception. This factory method should be the way one of the 6 ways one constructs this object
@@ -60,12 +85,6 @@ namespace RPC {
         /// will not throw exceptions
         static Message makeResponse(const Id & reqId, const QVariant & result);
 
-        Id id; ///< guaranteed to be either string, qint64, or nullptr
-        QString method; /**< methodName extracted from data['method'] if it was present. If this is empty then no
-                             'method' key was present in JSON. May also contain the "matched" method on a response
-                             object where we matched the id to a method we knew about in Connection::idMethodMap. */
-        QVariantMap data; ///< parsed json. 'method', 'jsonrpc', 'id', 'error', 'result', and/or 'params' get put here
-
         QString toJsonString() const { try {return Util::Json::toString(data, true);} catch (...) {} return QString(); }
 
         bool isError() const { return data.contains("error"); }
@@ -76,7 +95,6 @@ namespace RPC {
         bool isRequest() const { return !isError() && hasMethod() && hasId() && !hasResult(); }
         bool isResponse() const { return !isError() && hasResult() && hasId(); }
         bool isNotif() const { return !isError() && !hasId() && !hasResult() && hasMethod(); }
-
 
         bool hasId() const { return data.contains("id"); }
 

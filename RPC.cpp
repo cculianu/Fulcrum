@@ -326,7 +326,6 @@ namespace RPC {
                     // error message
                     emit gotErrorMessage(id, message);
                 } else if (message.isNotif()) {
-                    // todo fixme
                     const Method & m = methods[message.method];
                     try {
                         if (m.method != message.method)
@@ -338,7 +337,8 @@ namespace RPC {
                             throw Exception(QString("Ignoring unexpected notification"));
                         }
                     } catch (const std::exception & e) {
-                        // Note: we emit peerError here so that the tally of number of errors goes up and we eventually disconnect the offending peer
+                        // Note: we emit peerError here so that the tally of number of errors goes up and we eventually disconnect the offending peer.
+                        // This should not cause an error message to be sent to the peer.
                         emit peerError(this->id, QString("Error processing notification '%1' from %2: %3").arg(message.method, prettyName(), e.what()));
                     }
                 } else if (message.isRequest()) {
@@ -376,11 +376,11 @@ namespace RPC {
             const bool wasUnk = dynamic_cast<const UnknownMethod *>(&e);
             const bool wasInv = dynamic_cast<const InvalidRequest *>(&e) || dynamic_cast<const InvalidError *>(&e);
             const bool wasInvParms = dynamic_cast<const InvalidParameters *>(&e);
-            int code = -32000;
-            if (wasJsonParse) code = -32700;
-            else if (wasInvParms) code = -32602;
-            else if (wasUnk) code = -32601;
-            else if (wasInv) code = -32600;
+            int code = Code_Custom;
+            if (wasJsonParse) code = Code_ParseError;
+            else if (wasInvParms) code = Code_InvalidParams;
+            else if (wasUnk) code = Code_MethodNotFOund;
+            else if (wasInv) code = Code_InvalidRequest;
             bool doDisconnect = errorPolicy & ErrorPolicyDisconnect;
             if (errorPolicy & ErrorPolicySendErrorMessage) {
                 emit sendError(doDisconnect, code, QString(e.what()).left(80), lastMsgId);
