@@ -144,26 +144,26 @@ namespace RPC {
     /// server.
     ///
     /// Note we implement a subset of JSON-RPC 2.0 which requires 'id' to
-    /// always be positive ints, or null.  We do not accept strings for id,
-    /// floats, or negative numbers.
+    /// always be ints, strings, or null.  We do not accept floats for id (the
+    /// JSON-RPC 2.0 spec strongly recommends against floats anyway, we are just
+    /// slighlty more strict than the spec).
     ///
     /// Methods invoked on the peer need an id, and this id is used to track
     /// the reply back and associate it with the method that was invoked on
     /// the peer (see idMethodMap instance var).
-    ///
-    /// We use this protocol on the client-facing side too to serve clients,
-    /// hence why this is abstracted out into a separate class. This
-    /// class is responsible for parsing the JSON and closing the connections
-    /// on malformed input that doesn't match the expected 'Schema'.  This
-    /// class is configured for which methods it supports and what the various
-    /// method schemas are via the 'MethodMap' passed to it at construction.
     ///
     /// See class Server for an example class that constructs a MethodMap and
     /// passes it down.
     ///
     /// Classes that manage rpc methods should register for the gotMessage()
     /// signal and process incoming messages further.  All incoming messages
-    /// are either errors (errorCode != 0) or have a valid message.method name.
+    /// are either requests or notifications.
+    ///
+    /// gotErrorMessage can be used to receive error messages.
+    ///
+    /// Note that gotMessage() won't always be emitted if the message was
+    /// filtered out (eg, a notification received but no "method" defined for
+    /// it, or a result received without a known id in idMethodMap, etc).
     ///
     /// Server's 'Client' class derives from this.
     ///
