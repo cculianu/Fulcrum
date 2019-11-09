@@ -207,9 +207,11 @@ namespace Util {
     struct VariantChannel : public Channel<QVariant>
     {
         template <typename V>
-        inline QString get(unsigned long timeout_ms = ULONG_MAX)
+        inline V get(unsigned long timeout_ms = ULONG_MAX)
         { return Channel<QVariant>::get(timeout_ms).value<V>(); }
     };
+
+    typedef std::function<void(void)> VoidFunc;
 
     /** Run a lambda in a thread.
      *
@@ -237,12 +239,11 @@ namespace Util {
     {
         Q_OBJECT
     public:
-        typedef std::function<void(void)> VoidFunc;
 
         /// Note work should remain alive for the duration of this task!
         static RunInThread *
         Do ( const VoidFunc &work,  ///< called in thread's context to do work
-             QObject *receiver = nullptr, ///< becomes this instance's parent.  If not nullptr, should remain alive until work completes.
+             QObject *receiver = nullptr, ///< becomes this instance's child.  If not nullptr, should remain alive until work completes.
              const VoidFunc &completion = VoidFunc(), ///< called in receiver's thread on completion
              const QString & threadName = QString()) ///< advisory thread name used in Debug() and Log() print for code executing within the thread
         { return new RunInThread(work, receiver, completion, threadName); }
@@ -349,6 +350,12 @@ namespace Util {
             });
         }
     }
+
+    /// Call lambda() in the thread context of obj's thread. Will block until completed.
+    /// If timeout_ms is not specified, will block forever until lambda returns, otherwise
+    /// will block for timeout_ms ms.  Will return false on timeout or if the target object's thread
+    /// is not running.
+    bool LambdaOnObject(const QObject *obj, const VoidFunc & lambda, quint64 timeout_ms = ULONG_MAX);
 } // end namespace Util
 
 /// Kind of like Go's "defer" statement. Call a functor (for clean-up code) at scope end.

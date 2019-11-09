@@ -10,6 +10,11 @@
 #include <QMap>
 #include <QVector>
 
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wpadded"
+#endif
+
 struct TcpServerError : public Exception
 {
     using Exception::Exception; /// bring in c'tor
@@ -112,6 +117,9 @@ public:
     virtual QString prettyName() const override;
     static const RPC::MethodMap & rpcMethods() { return StaticData::methodMap; }
 
+    // this must be called in the thread context of this thread
+    QVariantMap stats() const;
+
 signals:
     void clientDisconnected(qint64 clientId);
 
@@ -198,5 +206,9 @@ protected:
     Server *srv;
     friend class Server;
 };
+
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
 
 #endif // TCPSERVER_H

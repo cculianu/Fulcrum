@@ -131,6 +131,38 @@ namespace Util {
         });
     }
 
+
+    bool LambdaOnObject(const QObject *obj, const VoidFunc & lambda, quint64 timeout_ms)
+    {
+        if (!lambda) {
+            Debug() << __FUNCTION__ << ": Target object: " << obj->objectName() << " lambda is null. FIXME.";
+            return true;
+        }
+        if (QThread::currentThread() == obj->thread()) {
+            lambda();
+            return true;
+        } else {
+            if (!obj->thread()->isRunning()) {
+                Debug() << __FUNCTION__ << ": Target object: " << obj->objectName() << " thread not running! Will return without calling lambda... FIXME.";
+                return false;
+            }
+            struct SharedState {
+                VoidFunc lambda;
+                VariantChannel chan;
+            };
+            auto shared = std::make_shared<SharedState>();
+            shared->lambda = lambda;
+            decltype(shared)::weak_type weakShared = shared;
+            QTimer::singleShot(0, obj, [weakShared] {
+                if (auto shared = weakShared.lock(); shared) {
+                    shared->lambda();
+                    shared->chan.put(true);
+                }
+            });
+            return shared->chan.get<bool>(timeout_ms);
+        }
+    }
+
 } // end namespace Util
 
 Log::Log() {}

@@ -43,3 +43,22 @@ void SrvMgr::startServers()
         emit newServer(srv);
     }
 }
+
+auto SrvMgr::stats() const -> Stats
+{
+    Stats ret;
+    QVariantList serverList;
+    auto servers = this->servers; // copy
+    for (auto server : servers) {
+        auto m = std::make_shared<QVariantMap>();
+        auto weak = decltype(m)::weak_type(m);
+        Util::LambdaOnObject(server, [weak, server]{
+            if (auto m = weak.lock(); m) {
+                (*m)[server->prettyName()] = server->stats();
+            }
+        }, 1000); // <-- limited timeout just in case
+        serverList.push_back(*m);
+    }
+    ret["servers"] = serverList;
+    return ret;
+}

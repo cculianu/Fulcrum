@@ -246,6 +246,14 @@ QString Server::prettyName() const
     return QString("Tcp%1").arg(AbstractTcpServer::prettyName());
 }
 
+// this must be called in the thread context of this thread
+QVariantMap Server::stats() const
+{
+    QVariantMap ret;
+    ret["num_clients"] = clientsById.count();
+    return ret;
+}
+
 void Server::on_started()
 {
     AbstractTcpServer::on_started();
