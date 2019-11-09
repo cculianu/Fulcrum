@@ -318,7 +318,7 @@ void Server::onErrorMessage(qint64 clientId, const RPC::Message &m)
 {
     Debug() << "onErrorMessage: " << clientId << " json: " << m.toJsonString();
     if (Client *c = getClient(clientId); c) {
-        // we never expect client to send us errors. Always return invalid request.
+        // we never expect client to send us errors. Always return invalid request, disconnect client.
         emit c->sendError(true, RPC::Code_InvalidRequest, "Not a valid request object");
     }
 }
