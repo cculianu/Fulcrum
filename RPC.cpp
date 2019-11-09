@@ -402,7 +402,7 @@ namespace RPC {
             Error() << prettyName() << " fatal error: " << e.what();
             do_disconnect();
             status = Bad;
-        } catch (const std::exception &e) {
+        } catch (const Exception &e) {
             // TODO: clean this up. It's rather inelegant. :/
             const bool wasJsonParse = dynamic_cast<const Util::Json::ParseError *>(&e);
             const bool wasUnk = dynamic_cast<const UnknownMethod *>(&e);
