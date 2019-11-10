@@ -516,6 +516,8 @@ namespace RPC {
                     if (sm->status != 200 && sm->status != 500) { // bitcoind sends 200 on results= and 500 on error= RPC messages. Everything else is unexpected.
                         Warning() << "Got HTTP status " << sm->status << " " << msg << (!Trace::isEnabled() ? "; will log the rest of this HTTP response" : "");
                         sm->logBad = true;
+                        if (sm->status == 401) // 401 status indicates other side didn't like our auth cookie or we need an auth cookie.
+                            emit authFailure(this);
                     }
                     sm->statusMsg = QString::fromUtf8(msg);
                     Trace() << "Status message: " << sm->statusMsg;
@@ -576,9 +578,9 @@ namespace RPC {
                     // just as a sanity check.
                     Error() << "Content buffer has extra stuff at the end. Bug in code. FIXME! Crud was: '" << sm->content.mid(sm->contentLength) << "'";
                 }
-                if (sm->logBad && !Trace::isEnabled()) {
+                if (sm->logBad && !Trace::isEnabled())
                     Warning() << sm->status << " (content): " << json.trimmed();
-                } else if (Trace::isEnabled())
+                else if (Trace::isEnabled())
                     Trace() << "cl: " << sm->contentLength << " inbound JSON: " << json.trimmed();
                 sm->clear(); // reset back to BEGIN state, empty buffers, clean slate.
                 processJson(json);

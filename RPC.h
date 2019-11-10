@@ -313,6 +313,7 @@ namespace RPC {
     /// JSON RPC over HTTP.  Wraps the outgoing data in headers and can also parse incoming headers.
     /// For use by the bitcoind rpc mechanism.
     class HttpConnection : public ConnectionBase {
+        Q_OBJECT
     public:
         using ConnectionBase::ConnectionBase;
         ~HttpConnection() override; ///< for vtable
@@ -321,6 +322,9 @@ namespace RPC {
         void clearAuth() { authCookie.clear(); }
 
         //static void Test();
+    signals:
+        /// emitted when the other side (usually bitcoind) didn't accept our auth cookie.
+        void authFailure(HttpConnection *me);
 
     protected:
         void on_readyRead() override;
