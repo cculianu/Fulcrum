@@ -250,38 +250,33 @@ QString Log::colorify(const QString &str, Color c) {
 
 template <> Log & Log::operator<<(const Color &c) { setColor(c); return *this; }
 
-Debug::Debug(const char *fmt...)
-    : Log()
-{
-    va_list ap;
-    va_start(ap,fmt);
-    str = QString::vasprintf(fmt,ap);
-    va_end(ap);
-    s.setString(&str, QIODevice::WriteOnly|QIODevice::Append);
-}
-
 Debug::~Debug()
 {
     level = Logger::Debug;
-    auto ourApp = app();
-    doprt = !ourApp || ourApp->options.verboseDebug;
+    doprt = isEnabled();
     if (!doprt) return;
     if (!colorOverridden) color = Cyan;
     str = QString("(Debug) ") + str;
 }
 
-
-Error::Error(const char *fmt...)
-    :  Log()
-{
-    va_list ap;
-    va_start(ap,fmt);
-    str = QString::vasprintf(fmt,ap);
-    va_end(ap);
-    s.setString(&str, QIODevice::WriteOnly|QIODevice::Append);
+bool Debug::isEnabled() {
+    auto ourApp = app();
+    return !ourApp || ourApp->options.verboseDebug;
 }
 
+Trace::~Trace()
+{
+    level = Logger::Debug;
+    doprt = isEnabled();
+    if (!doprt) return;
+    if (!colorOverridden) color = Green;
+    str = QString("(Trace) ") + str;
+}
 
+bool Trace::isEnabled() {
+    auto ourApp = app();
+    return ourApp && ourApp->options.verboseTrace && Debug::isEnabled();
+}
 
 Error::~Error()
 {
@@ -289,15 +284,6 @@ Error::~Error()
     if (!colorOverridden) color = BrightRed;
 }
 
-Warning::Warning(const char *fmt...)
-    :  Log()
-{
-    va_list ap;
-    va_start(ap,fmt);
-    str = QString::vasprintf(fmt,ap);
-    va_end(ap);
-    s.setString(&str, QIODevice::WriteOnly|QIODevice::Append);
-}
 
 Warning::~Warning()
 {

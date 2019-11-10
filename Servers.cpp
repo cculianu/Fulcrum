@@ -131,7 +131,7 @@ void SimpleHttpServer::on_newConnection(QTcpSocket *sock)
                     auto toks = line.split(" ");
                     if (toks.length() != 3 || (toks[0] != "GET" && toks[1] != "POST") || toks[2] != "HTTP/1.1")
                         throw Exception(QString("Invalid request: %1").arg(line));
-                    Debug() << sockName << " " << line;
+                    Trace() << sockName << " " << line;
                     sock->setProperty("req-loc", toks[1]);
                     sock->setProperty("req-meth", toks[0]);
                     sock->setProperty("req-ver", toks[2]);
@@ -211,7 +211,7 @@ void SimpleHttpServer::on_newConnection(QTcpSocket *sock)
             Debug() << sockName << " wrote " << nWrit << "/" << n2write << " bytes, disconnecting";
             sock->disconnectFromHost();
         } else {
-            Debug() << sockName << " wrote: " << bytes << " bytes";
+            Trace() << sockName << " wrote: " << bytes << " bytes";
         }
     });
     if (TIME_LIMIT > 0) {
@@ -310,7 +310,7 @@ void Server::killClient(qint64 clientId)
 }
 void Server::onMessage(qint64 clientId, const RPC::Message &m)
 {
-    Debug() << "onMessage: " << clientId << " json: " << m.toJsonString();
+    Trace() << "onMessage: " << clientId << " json: " << m.toJsonString();
     if (Client *c = getClient(clientId); c) {
         auto member = StaticData::dispatchTable.value(m.method);
         if (!member)
@@ -324,7 +324,7 @@ void Server::onMessage(qint64 clientId, const RPC::Message &m)
 }
 void Server::onErrorMessage(qint64 clientId, const RPC::Message &m)
 {
-    Debug() << "onErrorMessage: " << clientId << " json: " << m.toJsonString();
+    Trace() << "onErrorMessage: " << clientId << " json: " << m.toJsonString();
     if (Client *c = getClient(clientId); c) {
         // we never expect client to send us errors. Always return invalid request, disconnect client.
         emit c->sendError(true, RPC::Code_InvalidRequest, "Not a valid request object");
@@ -349,7 +349,7 @@ void Server::rpc_server_version(Client *c, const RPC::Message &m)
     if (QVariantList l = m.paramsList(); m.isRequest() && l.size() == 2) {
         c->info.userAgent = l[0].toString();
         c->info.protocolVersion = l[1].toString();
-        Debug() << "Client (id: " << c->id << ") sent version: \"" << c->info.userAgent << "\" / \"" << c->info.protocolVersion << "\"";
+        Trace() << "Client (id: " << c->id << ") sent version: \"" << c->info.userAgent << "\" / \"" << c->info.protocolVersion << "\"";
     } else {
         Error() << "Bad server version message! Other code should have handled this. FIXME! Json: " << m.toJsonString();
     }
@@ -358,7 +358,7 @@ void Server::rpc_server_version(Client *c, const RPC::Message &m)
 void Server::rpc_server_ping(Client *c, const RPC::Message &m)
 {
     if (m.isRequest()) {
-        Debug() << "Got ping from client (id: " << c->id << "), responding...";
+        Trace() << "Got ping from client (id: " << c->id << "), responding...";
         emit c->sendResult(m.id, m.method);
     } else {
         Error() << "Bad client ping message! This shouldn't happen. FIXME! Json: " << m.toJsonString();

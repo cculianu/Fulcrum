@@ -272,7 +272,7 @@ namespace RPC {
         idMethodMap[reqid] = method; // remember method sent out to associate it back.
 
         const auto data = json.toUtf8();
-        Debug() << "Sending json: " << Util::Ellipsify(data);
+        if (Trace::isEnabled()) Trace() << "Sending json: " << Util::Ellipsify(data);
         // below send() ends up calling do_write immediately (which is connected to send)
         emit send( wrapForSend(data) );
     }
@@ -288,7 +288,7 @@ namespace RPC {
             return;
         }
         const auto data = json.toUtf8();
-        Debug() << "Sending json: " << Util::Ellipsify(data);
+        if (Trace::isEnabled()) Trace() << "Sending json: " << Util::Ellipsify(data);
         // below send() ends up calling do_write immediately (which is connected to send)
         emit send( wrapForSend(data) );
     }
@@ -300,7 +300,7 @@ namespace RPC {
         }
         QString json = Message::makeError(code, msg, reqId, v1).toJsonString();
         const auto data = json.toUtf8();
-        Debug() << "Sending json: " << Util::Ellipsify(data);
+        if (Trace::isEnabled()) Trace() << "Sending json: " << Util::Ellipsify(data);
         // below send() ends up calling do_write immediately (which is connected to send)
         emit send( wrapForSend(data) );
         if (disc) {
@@ -319,7 +319,7 @@ namespace RPC {
             return;
         }
         const auto data = json.toUtf8();
-        Debug() << "Sending result json: " << Util::Ellipsify(data);
+        if (Trace::isEnabled()) Trace() << "Sending result json: " << Util::Ellipsify(data);
         // below send() ends up calling do_write immediately (which is connected to send)
         emit send( wrapForSend(data) );
     }
@@ -435,19 +435,17 @@ namespace RPC {
 
     void LinefeedConnection::on_readyRead()
     {
-        Debug() << __FUNCTION__;
+        Trace() << __FUNCTION__;
         // TODO: This may be slow for large loads.
         while (socket->canReadLine()) {
             auto data = socket->readLine();
             nReceived += data.length();
-#ifdef QT_DEBUG
+            if (Trace::isEnabled()) // may be slow, so conditional on trace mode
             {
-                auto line = data.trimmed();  // todo -- remove -- may be too slow
-                Debug() << "Got: " << line;  // todo -- remove -- may be too slow
+                auto line = data.trimmed();
+                Trace() << "Got: " << line;
             }
-#endif
             processJson(data);
-            //Debug() << "Re-parsed message: " << message.toJsonString();
         }
         if (socket->bytesAvailable() > MAX_BUFFER) {
             Error() << prettyName() << " fatal error: " << QString("Peer has sent us more than %1 bytes without a newline! Bad peer?").arg(MAX_BUFFER);
@@ -462,15 +460,144 @@ namespace RPC {
     }
 
     /* --- HttpConnection --- */
-    // Very much a work in progress -- TODO: Implement
     HttpConnection::~HttpConnection() {} ///< for vtable
     void HttpConnection::setAuth(const QString &username, const QString &password)
     {
         authCookie = QString("%1:%2").arg(username).arg(password).toUtf8().toBase64();
     }
+    struct HttpConnection::StateMachine
+    {
+        enum State {
+            BEGIN=0, HEADER, READING_CONTENT
+        };
+        State state = BEGIN;
+        int status = 0;
+        QString statusMsg;
+        QString contentType;
+        int contentLength = 0;
+        QByteArray content = "";
+        bool logBad = false;
+        bool gotLength = false;
+        void clear() { *this = StateMachine(); }
+    };
+
     void HttpConnection::on_readyRead()
     {
-        // TODO...
+        if (!sm) sm = std::make_unique<StateMachine>(); // lazy construction first time we need this object.
+        if (!socket) {
+            // this should never happen. here for paranoia.
+            Error() << "on_readyRead with socket == nullptr -- were we called from a defunct timer? FIXME";
+            return;
+        }
+        using St = StateMachine::State;
+        try {
+            while (sm->state < St::READING_CONTENT  && socket->canReadLine()) {
+                // states BEGIN and HEADER are linefeed-based
+                QByteArray data = socket->readLine();
+                nReceived += data.size();
+                data = data.simplified();
+                Trace() << __FUNCTION__ << " Got: " << data;
+                if (sm->state == St::BEGIN) {
+                    // read "HTTP/1.1 200 OK" line
+                    auto toks = data.split(' ');
+                    if (toks.size() < 3) {
+                        // ERROR HERE. Expected eg HTTP/1.1 200 OK, or HTTP/1.1 400 Bad request or HTTP/1.1 500 Internal Server Error
+                        throw Exception(QString("Expected HTTP/1.1 line, instead got: %1").arg(QString(data)));
+                    }
+                    auto proto = toks[0], code = toks[1], msg = toks.mid(2).join(' ');
+                    if (proto.toUpper() != "HTTP/1.1") {
+                        // ERROR HERE. Expected HTTP/1.1
+                        throw Exception(QString("Protocol not HTTP/1.1: %1").arg(QString(proto)));
+                    }
+                    if ( (sm->status=code.toInt()) == 0) {
+                        // ERROR here, expected integer code
+                        throw Exception(QString("Could not parse status code: %1").arg(QString(code)));
+                    }
+                    if (sm->status != 200 && sm->status != 500) { // bitcoind sends 200 on results= and 500 on error= RPC messages. Everything else is unexpected.
+                        Warning() << "Got HTTP status " << sm->status << " " << msg << (!Trace::isEnabled() ? "; will log the rest of this HTTP response" : "");
+                        sm->logBad = true;
+                    }
+                    sm->statusMsg = QString::fromUtf8(msg);
+                    Trace() << "Status message: " << sm->statusMsg;
+                    sm->state = St::HEADER;
+                } else if (sm->state == St::HEADER) {
+                    // read header, line by line
+                    if (sm->logBad && !Trace::isEnabled()) {
+                        Warning() << sm->status << " (header): " << data;
+                    }
+                    if (data != "") {
+                        // process non-empty HEADER lines...
+                        auto toks = data.split(':');
+                        if (toks.size() < 2) {
+                            // ERROR HERE. Expected header. got non-header.
+                            throw Exception(QString("Expected header line: %1").arg(QString(data)));
+                        }
+                        auto name = toks[0].simplified(), value = toks.mid(1).join(" ").simplified();
+                        if (name.toLower() == "content-type") {
+                            sm->contentType = QString::fromUtf8(value);
+                            if (sm->contentType.compare("application/json", Qt::CaseInsensitive) != 0) {
+                                Warning() << "Got unexpected content type: " << sm->contentType << (!Trace::isEnabled() ? "; will log the rest of this HTTP response" : "");
+                                sm->logBad = true;
+                            }
+                        } else if (name.toLower() == "content-length") {
+                            bool ok = false;
+                            sm->contentLength = value.toInt(&ok);
+                            if (!ok || sm->contentLength < 0) {
+                                // ERROR HERE. Expected numeric length, got nonsense
+                                throw Exception(QString("Could not parse content-length: %1").arg(QString(data)));
+                            } else if (sm->contentLength > MAX_BUFFER) {
+                                // ERROR, defend against memory exhaustion attack
+                                throw Exception(QString("Peer wants to send us more than %1 bytes of data, exceeding our buffer limit!").arg(MAX_BUFFER));
+                            }
+                            sm->gotLength = true;
+                            Trace() << "Content length: " << sm->contentLength;
+                        }
+                    } else {
+                        // caught EMPTY line -- this signifies end of header
+                        // empty line, advance state
+                        if (sm->contentType.isEmpty() || !sm->gotLength) { // enforce server must send us both content-type and content-length, otherwise throw
+                            // this is an error condition
+                            throw Exception("Premature header end; did not receive BOTH content-type and content-length");
+                        }
+                        sm->state = St::READING_CONTENT;
+                    }
+                } // end if state == St::HEADER
+            } // end while
+            while (sm->state == St::READING_CONTENT && socket->bytesAvailable() > 0 && sm->content.length() < sm->contentLength ) {
+                // state READING_CONTENT is not linefeed based but expects sm->contentLenght bytes. read at most that many bytes.
+                const qint64 n2read = qMin(socket->bytesAvailable(), qint64(sm->contentLength - sm->content.length()));
+                sm->content += socket->read(n2read);
+            }
+            if (sm->state == St::READING_CONTENT && sm->content.length() >= sm->contentLength) {
+                // got a full content packet!
+                const QByteArray json = sm->content;
+                if (sm->content.length() > sm->contentLength) {
+                    // this shouldn't happen. if we get here, likely below code will fail with nonsense and connection will be killed. this is here
+                    // just as a sanity check.
+                    Error() << "Content buffer has extra stuff at the end. Bug in code. FIXME! Crud was: '" << sm->content.mid(sm->contentLength) << "'";
+                }
+                if (sm->logBad && !Trace::isEnabled()) {
+                    Warning() << sm->status << " (content): " << json.trimmed();
+                } else if (Trace::isEnabled())
+                    Trace() << "cl: " << sm->contentLength << " inbound JSON: " << json.trimmed();
+                sm->clear(); // reset back to BEGIN state, empty buffers, clean slate.
+                processJson(json);
+                // If bytesAvailable .. schedule a callback to this function again since we did a partial read just now,
+                // and the socket's buffers still have data.
+                if (auto avail = socket->bytesAvailable(); avail > 0 && avail <= MAX_BUFFER) {
+                    // callback is on socket as receiver this way if socket dies and is deleted, callback never happens.
+                    // *taps forehead*
+                    QTimer::singleShot(0, socket, [this]{on_readyRead();});
+                }
+            }
+            if (socket->bytesAvailable() > MAX_BUFFER) {
+                throw Exception( QString("Peer backbuffer exceeded %1 bytes! Bad peer?").arg(MAX_BUFFER) );
+            }
+        } catch (const Exception & e) {
+            Error() << prettyName() << " fatal error: " << e.what();
+            do_disconnect();
+            status = Bad;
+        }
     }
     QByteArray HttpConnection::wrapForSend(const QByteArray &data)
     {
@@ -493,17 +620,67 @@ namespace RPC {
 
 } // end namespace RPC
 
-/*
+#if 0
 // TESTING
 #include <iostream>
 namespace RPC {
-    void HttpConnection::Test()
+    /* static */ void HttpConnection::Test()
     {
-        setAuth("PUTLOGINHERE", "PUTPASSHERE");
-        Message m = Message::makeRequest("anid", "getblockcount", QVariantList(), true);
-        std::cout << wrapForSend(m.toJsonString().toUtf8()).data();
-        m = Message::makeResponse("anid2", "this is a result", true);
-        std::cout << wrapForSend(m.toJsonString().toUtf8()).data();
+        std::shared_ptr<HttpConnection> h(new HttpConnection(MethodMap{}, 1), [](HttpConnection *h){
+            Debug() << "Calling h->deleteLater...";
+            h->deleteLater();
+        });
+        connect(h.get(), &QObject::destroyed, qApp, [](QObject*){Debug() << "HttpConnection deleted! yay!";});
+        h->setV1(true);
+        h->errorPolicy = ErrorPolicyDisconnect;
+        h->setAuth("CalinsNads", "PASSWORDHERE");
+        h->socket = new QTcpSocket(h.get());
+        // below will create circular refs until socket is deleted...
+        connect(h->socket, &QAbstractSocket::connected, h.get(), [h]{
+            Debug() << h->prettyName() << " connected";
+            h->on_connected();
+            h->connectedConns.push_back(
+                connect(h.get(), &RPC::ConnectionBase::gotMessage, h.get(),
+                        [](qint64 id_in, const RPC::Message &m)
+                    {
+                            Debug() << "Got message from server: id: " << id_in << " json: " << m.toJsonString();
+                    })
+            ); // connection will be auto-disconnected on socket disconnect in superclass  on_disconnected impl.
+            h->connectedConns.push_back(
+                connect(h.get(), &RPC::ConnectionBase::gotErrorMessage, h.get(),
+                        [](qint64 id_in, const RPC::Message &m)
+                    {
+                            Debug() << "Got ERROR message from server: id: " << id_in << " json: " << m.toJsonString();
+                    })
+            ); // connection will be auto-disconnected on socket disconnect in superclass  on_disconnected impl.
+            connect(h.get(), &AbstractConnection::lostConnection, h.get(),
+                    [](AbstractConnection *a)
+            {
+                if (auto h = dynamic_cast<HttpConnection *>(a)) {
+                    Debug() << "lost connection, deleting socket. We should also die sometime later...";
+                    if (h->socket) { h->socket->deleteLater(); h->socket = nullptr; }
+                }
+            }, Qt::QueuedConnection);
+
+            auto rgen = QRandomGenerator::securelySeeded();
+            const int N = 1000;
+            for (int i = 1; i <= N; ++i) {
+               // queue up messages
+               QTimer::singleShot(0, h.get(), [h]{
+                   emit h->sendRequest(newId(), "getblockcount", {});
+               });
+               QTimer::singleShot(0, h.get(), [h]{
+                   emit h->sendRequest(newId(), "getblockchaininfo", {});
+               });
+               const auto randHeight = rgen.bounded(1, 1000000);
+               QTimer::singleShot(0, h.get(), [h, randHeight]{
+                   Debug() << "Sending getblockstats " << randHeight << "...";
+                   emit h->sendRequest(newId(), "getblockstats", {randHeight});
+               });
+            }
+        });
+        h->socketConnectSignals();
+        h->socket->connectToHost("192.168.0.15", static_cast<quint16>(8332));
     }
 }
-*/
+#endif

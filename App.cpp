@@ -150,8 +150,8 @@ void App::parseArgs()
           QString("password")
         },
         { { "d", "debug" },
-          QString("Print extra verbose debug output. This is the default on debug builds. This is the opposite of -q.")
-
+          QString("Print extra verbose debug output. This is the default on debug builds. This is the opposite of -q. "
+                  "(Specify this options twice to get network-level trace debug output.)")
         },
         { { "q", "quiet" },
           QString("Suppress debug output. This is the default on release builds. This is the opposite of -d.")
@@ -162,7 +162,10 @@ void App::parseArgs()
     });
     parser.process(*this);
 
-    if (parser.isSet("v")) options.verboseDebug = true;
+    if (parser.isSet("d")) options.verboseDebug = true;
+    // check for -d -d
+    if (auto found = parser.optionNames(); found.count("d") + found.count("debug") > 1)
+        options.verboseTrace = true;
     if (parser.isSet("q")) options.verboseDebug = false;
     if (parser.isSet("S")) options.syslogMode = true;
     // make sure -b -p and -u all present and specified exactly once

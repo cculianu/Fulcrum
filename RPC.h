@@ -9,6 +9,7 @@
 #include <QString>
 #include <QVariant>
 
+#include <memory>
 #include <optional>
 #include <variant>
 
@@ -309,7 +310,8 @@ namespace RPC {
         QByteArray wrapForSend(const QByteArray &) override;
     };
 
-    /// JSON RPC over HTTP.  Wraps the data in headers and can also parse incoming headers.
+    /// JSON RPC over HTTP.  Wraps the outgoing data in headers and can also parse incoming headers.
+    /// For use by the bitcoind rpc mechanism.
     class HttpConnection : public ConnectionBase {
     public:
         using ConnectionBase::ConnectionBase;
@@ -318,12 +320,16 @@ namespace RPC {
         void setAuth(const QString & username, const QString & password);
         void clearAuth() { authCookie.clear(); }
 
+        //static void Test();
+
     protected:
         void on_readyRead() override;
         QByteArray wrapForSend(const QByteArray &) override;
 
     private:
         QByteArray authCookie;
+        struct StateMachine;
+        std::unique_ptr<StateMachine> sm;
     };
 
 } // end namespace RPC

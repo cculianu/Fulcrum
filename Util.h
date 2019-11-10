@@ -28,7 +28,7 @@ class App;
 #define __PRETTY_FUNCTION__ __FUNCTION__
 #endif
 
-/// Super class of Debug, Warning, Error classes.
+/// Super class of Debug, Warning, Error classes.  Can be instantiated for regular log messages.
 class Log
 {
 public:
@@ -81,11 +81,27 @@ template <> inline Log& Log::operator<<(const std::string &t) { s << t.c_str(); 
 class Debug : public Log
 {
 public:
-    Debug() : Log() {}
-    explicit Debug(Color c) : Log(c) {}
-    explicit Debug(const char *fmt...) ATTR_PRINTF(2,3);
+    using Log::Log; // inherit c'tor
     virtual ~Debug();
+
+    static bool isEnabled();
 };
+
+/** \brief Stream-like class to print a trace message to the app's logging facility
+    Example:
+   \code
+        Trace() << "This is a trace debug message"; // would print a trace message to the logging facility
+   \endcode
+ */
+class Trace : public Log
+{
+public:
+    using Log::Log; // inherit c'tor
+    virtual ~Trace();
+
+    static bool isEnabled();
+};
+
 
 /** \brief Stream-like class to print an error message to the app's logging facility
     Example:
@@ -96,9 +112,7 @@ public:
 class Error : public Log
 {
 public:
-    Error() : Log() {}
-    explicit Error(Color c) : Log(c) {}
-    explicit Error(const char *fmt...) ATTR_PRINTF(2,3);
+    using Log::Log; // inherit c'tor
     virtual ~Error();
 };
 
@@ -112,9 +126,7 @@ public:
 class Warning : public Log
 {
 public:
-    Warning() : Log() {}
-    explicit Warning(Color c) : Log(c) {}
-    explicit Warning(const char *fmt...) ATTR_PRINTF(2,3);
+    using Log::Log; // inherit c'tor
     virtual ~Warning();
 };
 

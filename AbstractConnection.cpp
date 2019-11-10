@@ -159,7 +159,7 @@ void AbstractConnection::on_socketState(QAbstractSocket::SocketState s)
 
 void AbstractConnection::on_bytesWritten()
 {
-    Debug() << __FUNCTION__;
+    Trace() << __FUNCTION__;
     if (!writeBackLog.isEmpty() && status == Connected && socket) {
         Debug() << prettyName() << " writeBackLog size: " << writeBackLog.length();
         do_write();

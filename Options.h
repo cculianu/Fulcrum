@@ -16,6 +16,7 @@ struct Options {
 #else
         false; ///< gets set to false on release builds
 #endif
+    std::atomic_bool verboseTrace = false; ///< this gets set if -d -d specified
     std::atomic_bool syslogMode = false; ///< if true, suppress printing of timestamps to logger
 
     typedef QPair<QHostAddress, quint16> Interface;
