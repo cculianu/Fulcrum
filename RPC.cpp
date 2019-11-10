@@ -635,7 +635,7 @@ namespace RPC {
         connect(h.get(), &QObject::destroyed, qApp, [](QObject*){Debug() << "HttpConnection deleted! yay!";});
         h->setV1(true);
         h->errorPolicy = ErrorPolicyDisconnect;
-        h->setAuth("CalinsNads", "PASSWORDHERE");
+        h->setAuth("CalinsNads", "ENTER PASSWORD HERE");
         h->socket = new QTcpSocket(h.get());
         // below will create circular refs until socket is deleted...
         connect(h->socket, &QAbstractSocket::connected, h.get(), [h]{
@@ -643,16 +643,16 @@ namespace RPC {
             h->on_connected();
             h->connectedConns.push_back(
                 connect(h.get(), &RPC::ConnectionBase::gotMessage, h.get(),
-                        [](qint64 id_in, const RPC::Message &m)
+                        [h](qint64 id_in, const RPC::Message &m)
                     {
-                            Debug() << "Got message from server: id: " << id_in << " json: " << m.toJsonString();
+                        Debug() << "Got message from server: id: " << id_in << " json: " << m.toJsonString();
                     })
             ); // connection will be auto-disconnected on socket disconnect in superclass  on_disconnected impl.
             h->connectedConns.push_back(
                 connect(h.get(), &RPC::ConnectionBase::gotErrorMessage, h.get(),
                         [](qint64 id_in, const RPC::Message &m)
                     {
-                            Debug() << "Got ERROR message from server: id: " << id_in << " json: " << m.toJsonString();
+                        Debug() << "Got ERROR message from server: id: " << id_in << " json: " << m.toJsonString();
                     })
             ); // connection will be auto-disconnected on socket disconnect in superclass  on_disconnected impl.
             connect(h.get(), &AbstractConnection::lostConnection, h.get(),

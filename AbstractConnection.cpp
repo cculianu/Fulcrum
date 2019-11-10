@@ -44,11 +44,21 @@ void AbstractConnection::do_disconnect(bool graceful)
     }
 }
 
+namespace {
+void setSockOpts(QAbstractSocket *socket) {
+    if (socket) {
+        // don't we want to disable KeepAliveOption ?  it appears to eat some bandwidth .. 1 packet per second on Windows.
+        //socket->setSocketOption(QAbstractSocket::KeepAliveOption, 1);  // from Qt docs: required on Windows before connection
+        socket->setSocketOption(QAbstractSocket::SocketOption::LowDelayOption, 1); // disable Nagling for lower latency
+    }
+}
+}
+
 void AbstractConnection::socketConnectSignals()
 {
     connect(socket, SIGNAL(error(QAbstractSocket::SocketError)), this, SLOT(on_error(QAbstractSocket::SocketError)));
     connect(socket, SIGNAL(stateChanged(QAbstractSocket::SocketState)), this, SLOT(on_socketState(QAbstractSocket::SocketState)));
-    socket->setSocketOption(QAbstractSocket::KeepAliveOption, true);  // from Qt docs: required on Windows
+    setSockOpts(socket);  // from Qt docs: required on Windows before connection
 }
 
 bool AbstractConnection::do_write(const QByteArray & data)
@@ -108,6 +118,7 @@ void AbstractConnection::on_connected()
 {
     // runs in our thread's context
     Debug() << __FUNCTION__;
+    setSockOpts(socket); // ensure nagling disabled
     connectedConns.push_back(connect(this, &AbstractConnection::send, this, &AbstractConnection::do_write));
     connectedConns.push_back(connect(socket, SIGNAL(readyRead()), this, SLOT(slot_on_readyRead())));
     if (dynamic_cast<QSslSocket *>(socket)) {
