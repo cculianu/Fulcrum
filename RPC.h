@@ -65,6 +65,10 @@ namespace RPC {
     extern const QString jsonRpcVersion; ///< always "2.0"
 
     /// An RPC message.  A request, response, method call or error all use this generic struct.
+    /// Note this struct is cheap to copy because it uses Qt's copy-on-write containers which are fast on copy
+    /// because they update a shared data pointer and refct.  So we don't bother wrapping this
+    /// in a shared_ptr or other stuff when passing it across threads, emitting it in signals, etc.
+    /// TODO: see if performance benefit can be gained by wrapping in shared_ptr anyway..
     struct Message
     {
         using IdBase = std::variant<std::nullptr_t, qint64, QString>;
@@ -86,35 +90,45 @@ namespace RPC {
                              'method' key was present in JSON. May also contain the "matched" method on a response
                              object where we matched the id to a method we knew about in Connection::idMethodMap. */
         QVariantMap data; ///< parsed json. 'method', 'jsonrpc', 'id', 'error', 'result', and/or 'params' get put here
-
+        bool v1 = false; ///< iff true, we parse/validate/generate based on JSON-RPC 1.0 rules, otherwise we enforce 2.0.
         // -- METHODS --
 
         /// may throw Exception. This factory method should be the way one of the 6 ways one constructs this object
-        static Message fromString(const QString &);
+        static Message fromString(const QString &, Id *id_out = nullptr, bool v1 = false);
         /// may throw Exception. This factory method should be the way one of the 6 ways one constructs this object
-        static Message fromJsonData(const QVariantMap &jsonData, Id *id_parsed_even_if_failed = nullptr);
+        static Message fromJsonData(const QVariantMap &jsonData, Id *id_parsed_even_if_failed = nullptr, bool v1 = false);
         // 4 more factories below..
         /// will not throw exceptions
-        static Message makeError(int code, const QString & message, const Id & id = Id());
+        static Message makeError(int code, const QString & message, const Id & id = Id(), bool v1 = false);
         /// will not throw exceptions
-        static Message makeRequest(const Id & id, const QString &methodName, const QVariantList & paramsList = QVariantList());
-        static Message makeRequest(const Id & id, const QString &methodName, const QVariantMap & paramsList = QVariantMap());
+        static Message makeRequest(const Id & id, const QString &methodName, const QVariantList & paramsList = QVariantList(), bool v1 = false);
+        static Message makeRequest(const Id & id, const QString &methodName, const QVariantMap & paramsList = QVariantMap(), bool v1 = false);
         /// similar to makeRequest. A notification is just like a request but always lacking an 'id' member. This is used for asynch notifs.
-        static Message makeNotification(const QString &methodName, const QVariantList & paramsList = QVariantList());
-        static Message makeNotification(const QString &methodName, const QVariantMap & paramsList = QVariantMap());
+        static Message makeNotification(const QString &methodName, const QVariantList & paramsList = QVariantList(), bool v1 = false);
+        static Message makeNotification(const QString &methodName, const QVariantMap & paramsList = QVariantMap(), bool v1 = false);
         /// will not throw exceptions
-        static Message makeResponse(const Id & reqId, const QVariant & result);
+        static Message makeResponse(const Id & reqId, const QVariant & result, bool v1 = false);
 
         QString toJsonString() const { try {return Util::Json::toString(data, true);} catch (...) {} return QString(); }
 
-        bool isError() const { return data.contains("error"); }
+        bool isError() const {
+            if (!v1)
+                return data.contains("error"); // v2, error= key missing unless is an actual error result.
+            else
+                return !data.value("error").isNull(); // v1, error=null may always be there. is error if it's not null
+        }
         int  errorCode() const { return data.value("error").toMap().value("code").toInt(); }
         QString  errorMessage() const { return data.value("error").toMap().value("message").toString(); }
         QVariant errorData() const { return data.value("error").toMap().value("data"); }
 
-        bool isRequest() const { return !isError() && hasMethod() && hasId() && !hasResult(); }
+        bool isRequest() const { return !isError() && hasMethod() && (hasId() && (!v1 || !id.isNull())) && !hasResult(); }
         bool isResponse() const { return !isError() && hasResult() && hasId(); }
-        bool isNotif() const { return !isError() && !hasId() && !hasResult() && hasMethod(); }
+        bool isNotif() const {
+            if (!v1)
+                return !isError() && !hasId() && !hasResult() && hasMethod(); // v2 notifs -- NO ID present
+            else
+                return !isError() && hasId() && id.isNull() && !hasResult() && hasMethod(); // v1 notifs..  ID present, but must be null.
+        }
 
         bool hasId() const { return data.contains("id"); }
 
@@ -182,6 +196,8 @@ namespace RPC {
     class ConnectionBase : public AbstractConnection
     {
         Q_OBJECT
+
+        Q_PROPERTY(bool v1 READ isV1 WRITE setV1)
     protected:
         /// subclasses should call processJson to process what they think may be a complete json rpc message.
         void processJson(const QByteArray &);
@@ -221,6 +237,9 @@ namespace RPC {
 
 
         static constexpr int MAX_UNANSWERED_REQUESTS = 20000; ///< TODO: tune this down. For testing we leave this high for now.
+
+        bool isV1() const { return v1; }
+        void setV1(bool b) { v1 = b; }
 
     signals:
         /// call (emit) this to send a request to the peer
@@ -275,6 +294,8 @@ namespace RPC {
         /// derived classes can set this internally (bitwise or of ErrorPolicy*)
         /// to affect on_readyRead()'s behavior on peer protocol error.
         int errorPolicy = ErrorPolicyDisconnect;
+
+        bool v1 = false; // if true, will generate v1 style messages and respond to v1 only
     };
 
     /// Concrete class. For ElectrumX/ElectronX style JSON RPC where newlines delimit RPC messages.

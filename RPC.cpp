@@ -55,15 +55,16 @@ namespace RPC {
     }
 
     /* static */
-    Message Message::fromString(const QString &s)
+    Message Message::fromString(const QString &s, Id *id_out, bool v1)
     {
-        return fromJsonData(Util::Json::parseString(s, true).toMap()); // may throw
+        return fromJsonData(Util::Json::parseString(s, true).toMap(), id_out, v1); // may throw
     }
 
     /* static */
-    Message Message::fromJsonData(const QVariantMap & map, Id * id_out)
+    Message Message::fromJsonData(const QVariantMap & map, Id * id_out, bool v1)
     {
         Message ret;
+        ret.v1 = v1;
         ret.data = map;
 
         if (id_out)
@@ -80,7 +81,7 @@ namespace RPC {
         }
 
 
-        if (ret.jsonRpcVersion() != RPC::jsonRpcVersion)
+        if (!v1 && ret.jsonRpcVersion() != RPC::jsonRpcVersion) // we ignore this key in v1
             throw InvalidError("Expected jsonrpc version 2.0");
 
         if (auto var = map.value("method");
@@ -91,43 +92,50 @@ namespace RPC {
 
         // todo: see if the below validation needs optimization
 
-
-        // validate error as per JSON RPC 2.0
+        // validate error as per JSON RPC 2.0  -- TODO: See if this is kosher for 1.0 -- it seems to be on first glance
         if (ret.isError()) {
             auto errmap = ret.data.value("error").toMap();
             if (!errmap.contains("code") || !errmap.contains("message"))
                 throw InvalidError("Expected error object to contain code and message");
-            int n_req = errmap.contains("data") ? 3 : 2;
-            if (errmap.count() != n_req)
-                throw InvalidError("Unexpected keys in error object");
-            bool ok;
-            if (int code = errmap.value("code").toInt(&ok); !ok || errmap.value("code").toString() != QString::number(code))
-                throw InvalidError("Expected error code to be an integer");
-            static const KeySet required = { "id", "error", "jsonrpc" };
-            if (KeySet::fromList(ret.data.keys()) != required)
-                throw InvalidError("Error response not valid");
+            if (!v1) { // we are more lax for v1
+                int n_req = errmap.contains("data") ? 3 : 2;
+                if (errmap.count() != n_req)
+                    throw InvalidError("Unexpected keys in error object");
+                bool ok;
+                if (int code = errmap.value("code").toInt(&ok); !ok || errmap.value("code").toString() != QString::number(code))
+                    throw InvalidError("Expected error code to be an integer");
+                static const KeySet required = { "id", "error", "jsonrpc" };
+                if (KeySet::fromList(ret.data.keys()) != required)
+                    throw InvalidError("Error response not valid");
+            }
         }
         // validate request as per JSON RPC 2.0
         else if (ret.isRequest()) {
             const bool hasParams = ret.hasParams();
-            const int n_ok = hasParams ? 4 : 3;
-            if (ret.data.count() != n_ok)
-                throw InvalidError("Invalid request");
+            if (!v1) {
+                const int n_ok = hasParams ? 4 : 3;
+                if (ret.data.count() != n_ok)
+                    throw InvalidError("Invalid request");
+            }
             if (hasParams && !ret.isParamsMap() && !ret.isParamsList())
                 throw InvalidError("Invalid params");
         }
         else if (ret.isNotif()) {
             const bool hasParams = ret.hasParams();
-            const int n_ok = hasParams ? 3 : 2;
-            if (ret.data.count() != n_ok)
-                throw InvalidError("Invalid notification");
+            if (!v1) {
+                const int n_ok = hasParams ? 3 : 2;
+                if (ret.data.count() != n_ok)
+                    throw InvalidError("Invalid notification");
+            }
             if (hasParams && !ret.isParamsMap() && !ret.isParamsList())
                 throw InvalidError("Invalid params");
         }
         else if (ret.isResponse()) {
-            const int n_ok = 3;
-            if (ret.data.count() != n_ok)
-                throw InvalidError("Invalid response");
+            if (!v1) {
+                const int n_ok = 3;
+                if (ret.data.count() != n_ok)
+                    throw InvalidError("Invalid response");
+            }
         }
         else {
             throw InvalidError("Invalid JSON RPC object");
@@ -139,11 +147,13 @@ namespace RPC {
     }
 
     /* static */
-    Message Message::makeError(int code, const QString &message, const Id & id)
+    Message Message::makeError(int code, const QString &message, const Id & id, bool v1)
     {
         Message ret;
         auto & map = ret.data;
-        map["jsonrpc"] = RPC::jsonRpcVersion;
+        if (!v1)
+            map["jsonrpc"] = RPC::jsonRpcVersion;
+        ret.v1 = v1;
         map["id"] = id; // may be "null"
         QVariantMap errMap;
         errMap["code"] = code;
@@ -154,51 +164,63 @@ namespace RPC {
 
     /// uses provided schema -- will not throw exception
     /*static*/
-    Message Message::makeResponse(const Id & reqId, const QVariant & result)
+    Message Message::makeResponse(const Id & reqId, const QVariant & result, bool v1)
     {
         Message ret;
+        ret.v1 = v1;
         auto & map = ret.data;
-        map["jsonrpc"] = RPC::jsonRpcVersion;
+        if (!v1)
+            map["jsonrpc"] = RPC::jsonRpcVersion;
+        else
+            map["error"] = QVariant(); // v1: always set the "error" key to null
         map["id"] = reqId;
         map["result"] = result;
         return ret;
     }
 
     /* static */
-    Message Message::makeRequest(const Id & id, const QString &methodName, const QVariantList & params)
+    Message Message::makeRequest(const Id & id, const QString &methodName, const QVariantList & params, bool v1)
     {
-        Message ret = makeNotification(methodName, params);
+        Message ret = makeNotification(methodName, params, v1);
         auto & map = ret.data;
         map["id"] = id;
         return ret;
     }
 
     /* static */
-    Message Message::makeRequest(const Id & id, const QString &methodName, const QVariantMap & params)
+    Message Message::makeRequest(const Id & id, const QString &methodName, const QVariantMap & params, bool v1)
     {
-        Message ret = makeNotification(methodName, params);
+        Message ret = makeNotification(methodName, params, v1);
         auto & map = ret.data;
         map["id"] = id;
         return ret;
     }
 
     /* static */
-    Message Message::makeNotification(const QString &methodName, const QVariantList & params)
+    Message Message::makeNotification(const QString &methodName, const QVariantList & params, bool v1)
     {
         Message ret;
+        ret.v1 = v1;
         auto & map = ret.data;
-        map["jsonrpc"] = RPC::jsonRpcVersion;
+        if (!v1)
+            map["jsonrpc"] = RPC::jsonRpcVersion;
+        else
+            map["id"] = QVariant(); // v1: always has the "id" key as null for a notif
         map["method"] = methodName;
         map["params"] = params;
         return ret;
     }
 
     /* static */
-    Message Message::makeNotification(const QString &methodName, const QVariantMap & params)
+    Message Message::makeNotification(const QString &methodName, const QVariantMap & params, bool v1)
     {
         Message ret;
+        ret.v1 = v1;
         auto & map = ret.data;
-        map["jsonrpc"] = RPC::jsonRpcVersion;
+        if (!v1)
+            map["jsonrpc"] = RPC::jsonRpcVersion;
+        else
+            map["id"] = QVariant(); // v1: always has the "id" key as null for a notif
         map["method"] = methodName;
         map["params"] = params;
         return ret;
@@ -236,7 +258,7 @@ namespace RPC {
             Error() << __FUNCTION__ << " method: " << method << "; Not connected!";
             return;
         }
-        QString json = Message::makeRequest(reqid, method, params).toJsonString();
+        QString json = Message::makeRequest(reqid, method, params, v1).toJsonString();
         if (json.isEmpty()) {
             Error() << __FUNCTION__ << " method: " << method << "; Unable to generate request JSON! FIXME!";
             return;
@@ -260,7 +282,7 @@ namespace RPC {
             Error() << __FUNCTION__ << " method: " << method << "; Not connected!";
             return;
         }
-        QString json = Message::makeNotification(method, params).toJsonString();
+        QString json = Message::makeNotification(method, params, v1).toJsonString();
         if (json.isEmpty()) {
             Error() << __FUNCTION__ << " method: " << method << "; Unable to generate request JSON! FIXME!";
             return;
@@ -276,7 +298,7 @@ namespace RPC {
             Error() << __FUNCTION__ << "; Not connected!";
             return;
         }
-        QString json = Message::makeError(code, msg, reqId).toJsonString();
+        QString json = Message::makeError(code, msg, reqId, v1).toJsonString();
         const auto data = json.toUtf8();
         Debug() << "Sending json: " << Util::Ellipsify(data);
         // below send() ends up calling do_write immediately (which is connected to send)
@@ -291,7 +313,7 @@ namespace RPC {
             Error() << __FUNCTION__ << " method: " << method << "; Not connected!";
             return;
         }
-        QString json = Message::makeResponse(reqid, result).toJsonString();
+        QString json = Message::makeResponse(reqid, result, v1).toJsonString();
         if (json.isEmpty()) {
             Error() << __FUNCTION__ << " method: " << method << "; Unable to generate result JSON! FIXME!";
             return;
@@ -306,7 +328,7 @@ namespace RPC {
     {
         Message::Id msgId;
         try {
-            Message message = Message::fromJsonData( Util::Json::parseString(json, true).toMap() , &msgId); // may throw
+            Message message = Message::fromJsonData( Util::Json::parseString(json, true).toMap() , &msgId, v1); // may throw
 
             static const auto ValidateParams = [](const Message &msg, const Method &m) {
                 if (!msg.hasParams()) {
@@ -470,3 +492,18 @@ namespace RPC {
 
 
 } // end namespace RPC
+
+/*
+// TESTING
+#include <iostream>
+namespace RPC {
+    void HttpConnection::Test()
+    {
+        setAuth("PUTLOGINHERE", "PUTPASSHERE");
+        Message m = Message::makeRequest("anid", "getblockcount", QVariantList(), true);
+        std::cout << wrapForSend(m.toJsonString().toUtf8()).data();
+        m = Message::makeResponse("anid2", "this is a result", true);
+        std::cout << wrapForSend(m.toJsonString().toUtf8()).data();
+    }
+}
+*/
