@@ -28,6 +28,12 @@ class App;
 #define __PRETTY_FUNCTION__ __FUNCTION__
 #endif
 
+#ifdef __clang__
+#define EXPECT(expr, constant) __builtin_expect(expr, constant)
+#else
+#define EXPECT(expr, constant) (expr)
+#endif
+
 /// Super class of Debug, Warning, Error classes.  Can be instantiated for regular log messages.
 class Log
 {
