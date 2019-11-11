@@ -62,7 +62,7 @@ qint64 IdMixin::newId() { return app()->newId(); }
 TimersByNameMixin::TimersByNameMixin() {}
 TimersByNameMixin::~TimersByNameMixin() {}
 
-void TimersByNameMixin::callOnTimerSoon(int ms, const QString &name, const std::function<bool (void)> &func, bool force)
+void TimersByNameMixin::callOnTimerSoon(int ms, const QString &name, const std::function<bool()> &func, bool force)
 {
     if (auto it = _timerMap.find(name); it != _timerMap.end()) {
         if (force)
@@ -87,7 +87,7 @@ void TimersByNameMixin::callOnTimerSoon(int ms, const QString &name, const std::
 }
 
 /// Identical to above, except takes a pure voidfunc. It's as if the above returned false (so will not keep going).
-void TimersByNameMixin::callOnTimerSoonNoRepeat(int ms, const QString &name, const std::function<void (void)> & fn, bool force)
+void TimersByNameMixin::callOnTimerSoonNoRepeat(int ms, const QString &name, const std::function<void()> & fn, bool force)
 {
     callOnTimerSoon(ms, name, [fn]() -> bool { fn(); return false; }, force);
 }

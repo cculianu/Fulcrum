@@ -75,14 +75,14 @@ protected:
     void callOnTimerSoon(
         int timeout_milliseconds, ///< what interval to set for the timer. If timer is already active, nothing will change.
         const QString & timerName, ///< timer name. these should be unique. If same named timer is active, function will return immediately, func will be discarded.
-        const std::function<bool(void)> & func, ///< function to call on timeout. If function returns true, timer is not stopped. Otherwise, it is removed from the map, stopped, and deleted later.
+        const std::function<bool()> & func, ///< function to call on timeout. If function returns true, timer is not stopped. Otherwise, it is removed from the map, stopped, and deleted later.
         bool forceTimerRestart = false ///< if true, will force the timer to immediately be restarted now. This will *not* enqueue the new functor if a timer exited, just restart the timer on the pre-existing functor.
     );
     /// Identical to above, except takes a pure voidfunc. It's as if the above returned false (so will not keep going).
     void callOnTimerSoonNoRepeat(
         int timeout_milliseconds,
         const QString & timerName,
-        const std::function<void(void)> & singleShotFunc,
+        const std::function<void()> & singleShotFunc,
         bool forceTimerRestart = false
     );
 

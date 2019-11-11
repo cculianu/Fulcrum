@@ -28,7 +28,7 @@ class App;
 #define __PRETTY_FUNCTION__ __FUNCTION__
 #endif
 
-#ifdef __clang__
+#if (defined(__clang__) && __has_builtin(__builtin_expect)) || defined(__GNUC__)
 #define EXPECT(expr, constant) __builtin_expect(expr, constant)
 #else
 #define EXPECT(expr, constant) (expr)
@@ -230,7 +230,7 @@ namespace Util {
         { return Channel<QVariant>::get(timeout_ms).value<V>(); }
     };
 
-    typedef std::function<void(void)> VoidFunc;
+    using VoidFunc = std::function<void()>;
 
     /** Run a lambda in a thread.
      *
@@ -287,7 +287,7 @@ namespace Util {
     signals:
         void onCompletion();
     private:
-        std::function<void(void)> work;
+        VoidFunc work;
         /// disabled public c'tor
         RunInThread(const VoidFunc &work,
                     QObject *receiver = nullptr,
@@ -380,7 +380,7 @@ namespace Util {
 /// Kind of like Go's "defer" statement. Call a functor (for clean-up code) at scope end.
 struct Defer
 {
-    typedef std::function<void(void)> VoidFunc;
+    using VoidFunc = std::function<void()>;
     VoidFunc func;
 
     Defer(const VoidFunc & f) : func(f) {}
