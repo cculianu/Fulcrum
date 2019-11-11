@@ -118,6 +118,7 @@ void AbstractConnection::on_connected()
 {
     // runs in our thread's context
     Debug() << __FUNCTION__;
+    connectedTS = Util::getTime();
     setSockOpts(socket); // ensure nagling disabled
     connectedConns.push_back(connect(this, &AbstractConnection::send, this, &AbstractConnection::do_write));
     connectedConns.push_back(connect(socket, SIGNAL(readyRead()), this, SLOT(slot_on_readyRead())));

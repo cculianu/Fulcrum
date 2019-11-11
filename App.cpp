@@ -45,7 +45,13 @@ App::~App()
 
 void App::startup()
 {
-    Log() << applicationName() << " " << applicationVersion() << " starting up ...";
+    Log() << applicationName() << " " << applicationVersion() << " - " << QDateTime::currentDateTime().toString("ddd MMM d, yyyy hh:mm:ss.zzz t") << " - starting up ...";
+
+    if ( ! Util::isClockSteady() ) {
+        Warning() << "High resolution clock provided by the std C++ library is not 'steady'. Timestamps may drift.";
+    } else {
+        Debug() << "High resolution clock: isSteady = true";
+    }
 
     try {
         BTC::CheckBitcoinEndiannessCompiledCorrectly();

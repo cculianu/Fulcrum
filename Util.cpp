@@ -1,8 +1,10 @@
-#include "Util.h"
 #include "App.h"
 #include "Logger.h"
-#include <iostream>
+#include "Util.h"
+
 #include <chrono>
+#include <iostream>
+
 namespace Util {
     QString basename(const QString &s) {
         QRegExp re("[\\/]");
@@ -10,19 +12,24 @@ namespace Util {
         return toks.last();
     }
 
+    static const auto t0 = std::chrono::high_resolution_clock::now();
+
     qint64 getTime() {
-        return getTimeNS() / 1000000LL;
+        const auto now = std::chrono::high_resolution_clock::now();
+        return std::chrono::duration_cast<std::chrono::milliseconds>(now - t0).count();
     }
 
-
-    static const std::chrono::time_point t0(std::chrono::high_resolution_clock::now());
     qint64 getTimeNS() {
-        auto now = std::chrono::high_resolution_clock::now();
+        const auto now = std::chrono::high_resolution_clock::now();
         return std::chrono::duration_cast<std::chrono::nanoseconds>(now - t0).count();
     }
 
     double getTimeSecs() {
         return double(getTime()) / 1000.0;
+    }
+
+    bool isClockSteady() {
+        return std::chrono::high_resolution_clock::is_steady;
     }
 
     namespace Json {
@@ -190,8 +197,9 @@ Log::~Log()
         // note: we always want to log the timestamp, even in syslog mode.
         // this is because if logging from a thread, log lines be out-of-order.
         // The timestamp is the only record of the actual order in which things
-        // occurred, hence why I commented the below conditional out.
-        QString dateStr = /*ourApp && ourApp->options.syslogMode ? "" :*/ QString("[") + QDateTime::currentDateTime().toString("yyyy.MM.dd hh:mm:ss.zzz") + QString("] ");
+        // occurred.
+        const auto now = Util::getTime();
+        const QString tsStr = QString::asprintf("[%lld.%03d] ", now/1000LL, int(now%1000));
         QString thrdStr = "";
 
         if (QThread *th = QThread::currentThread(); th && ourApp && th != ourApp->thread()) {
@@ -202,7 +210,7 @@ Log::~Log()
 
         Logger *logger = ourApp ? ourApp->logger() : nullptr;
 
-        QString theString = dateStr + thrdStr + (logger && logger->isaTTY() ? colorify(str, color) : str);
+        QString theString = tsStr + thrdStr + (logger && logger->isaTTY() ? colorify(str, color) : str);
 
         if (logger) {
             emit logger->log(level, theString);

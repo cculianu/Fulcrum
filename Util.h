@@ -137,6 +137,7 @@ namespace Util {
     qint64 getTime(); ///< returns a timestamp in milliseconds
     qint64 getTimeNS(); ///< returns a timestamp in nanoseconds
     double getTimeSecs(); ///< returns a timestamp in seconds
+    bool isClockSteady(); ///< returns true if the above timestamp clock is steady (monotonic).
 
     template <typename Iterator>
     void shuffle(Iterator begin, Iterator end)

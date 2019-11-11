@@ -1,11 +1,14 @@
 #ifndef ABSTRACTCONN_H
 #define ABSTRACTCONN_H
 
-#include <QObject>
-#include <atomic>
-#include <QTcpSocket>
 #include "Common.h"
 #include "Mixins.h"
+
+#include <QObject>
+#include <QTcpSocket>
+
+#include <atomic>
+
 class QTimer;
 
 class AbstractConnection : public QObject, public IdMixin
@@ -47,7 +50,8 @@ protected:
     std::atomic<Status> status = NotConnected;
     /// timestamp in ms from Util::getTime() when the server was last good
     /// (last communicated a sensible message, pinged, etc)
-    std::atomic<qint64> lastGood = 0LL; ///< update this in derived classes.
+    std::atomic<qint64> connectedTS = 0LL, ///< timestamp in ms when this connection called on_connected()
+                        lastGood = 0LL; ///< update this in derived classes. Represents the "last good" communication
 
     std::atomic<qint64> nSent = 0ULL, ///< this get updated in this class in do_write()
                         nReceived = 0ULL;  ///< update this in derived classes in your on_readyRead()
