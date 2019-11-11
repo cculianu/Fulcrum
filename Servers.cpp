@@ -343,12 +343,20 @@ void Server::onPeerError(qint64 clientId, const QString &what)
 }
 
 // --- RPC METHODS ---
-// checks to make sure we didn't make a typo inputting the above tables... called at class c'tor once globally.
+namespace {
+    // TODO: maybe move these to a more global place? For now here is fine.
+    namespace Constants {
+        constexpr int kMaxServerVersion = 80,  ///< the maximum server version length we accept to prevent memory exhaustion attacks
+                      kScriptHashLength = 256/8, ///< the length of a scripthash in bytes. sha256 = 32 bytes.
+                      kMaxBuffer = 4*1000*1000; ///< =4MB. The max buffer we use in Client (ElectronX client). TODO: Make this tune-able and configurable!
+    }
+    using namespace Constants;
+}
 void Server::rpc_server_version(Client *c, const RPC::Message &m)
 {
     if (QVariantList l = m.paramsList(); m.isRequest() && l.size() == 2) {
-        c->info.userAgent = l[0].toString();
-        c->info.protocolVersion = l[1].toString();
+        c->info.userAgent = l[0].toString().left(kMaxServerVersion);
+        c->info.protocolVersion = l[1].toString().left(kMaxServerVersion);
         Trace() << "Client (id: " << c->id << ") sent version: \"" << c->info.userAgent << "\" / \"" << c->info.protocolVersion << "\"";
     } else {
         Error() << "Bad server version message! Other code should have handled this. FIXME! Json: " << m.toJsonString();
@@ -369,12 +377,12 @@ void Server::rpc_blockchain_scripthash_subscribe(Client *c, const RPC::Message &
     if (QVariantList l = m.paramsList(); m.isRequest() && l.size() == 1) {
         // TESTING TODO FIXME THIS IS FOR TESTING ONLY
         const auto clientId = c->id;
-        QByteArray sh = QByteArray::fromHex(l.front().toString().toUtf8());
-        if (sh.length() != 32) {
+        QByteArray sh = QByteArray::fromHex(l.front().toString().trimmed().left(kScriptHashLength*2).toUtf8());
+        if (sh.length() != kScriptHashLength) {
             emit c->sendError(false, RPC::Code_InvalidParams, "Invalid scripthash", m.id);
             return;
         }
-        emit tellClientScriptHashStatus(clientId, m.id, QByteArray(32, 0));
+        emit tellClientScriptHashStatus(clientId, m.id, QByteArray(kScriptHashLength, 0));
         QTimer *t = new QTimer(c);
         connect(t, &QTimer::timeout, this, [sh, clientId, this] {
             auto val = QRandomGenerator::global()->generate64();
@@ -431,7 +439,7 @@ void Server::_tellClientScriptHashStatus(qint64 clientId, const RPC::Message::Id
 }
 
 Client::Client(const RPC::MethodMap & mm, qint64 id_in, Server *srv, QTcpSocket *sock)
-    : RPC::LinefeedConnection(mm, id_in, sock, /*maxBuffer=4MB*/4000000), srv(srv)
+    : RPC::LinefeedConnection(mm, id_in, sock, kMaxBuffer), srv(srv)
 {
     socket = sock;
     Q_ASSERT(socket->state() == QAbstractSocket::ConnectedState);
