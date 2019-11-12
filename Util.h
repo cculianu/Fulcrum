@@ -212,17 +212,15 @@ namespace Util {
 
         /// returns T() on fail (unless either throwsIfClosed=true or throwsOnTimeout=true, in which case it throws on failure)
         T get(unsigned long timeout_ms = ULONG_MAX) {
-            ChkDelParanoia(); // TODO: remove when testing complete
             T ret{};
             QMutexLocker ml(&mut);
-            if (!killed && data.isEmpty() && timeout_ms > 0) {
+            if (!killed && !ct && timeout_ms > 0) {
                 cond.wait(&mut, timeout_ms);
-                ChkDelParanoia(); // TODO: remove when testing complete
             }
-            if (!data.isEmpty()) {
-                ret = data.front(); data.pop_front();
+            if (EXPECT(bool(ct), 1)) {
+                ret = data.takeFirst(); ct -= 1;
             }
-            else if (killed && throwsIfClosed)
+            else if (EXPECT(killed && throwsIfClosed, 0))
                 throw ChannelClosed("Cannot read from closed Channel");
             else if (throwsOnTimeout)
                 throw TimeoutException(QString("Timed out waiting for channel with timeout_ms = %1").arg(long(timeout_ms)));
@@ -231,30 +229,32 @@ namespace Util {
         /// Put to the queue.  Note that if you specified a sizeLimit > 0 it will potentially throw ChannelFull if
         /// the queue is full.  Also may throw ChannelClosed if throwsIfClosed and the channel was closed.
         void put(const T & t) {
-            ChkDelParanoia(); // TODO: remove when testing complete
-            if (killed) {
+            if (EXPECT(killed, 0)) {
                 if (throwsIfClosed)
                     throw ChannelClosed("Cannot write to closed Channel");
                 return;
             }
             QMutexLocker ml(&mut);
-            if (sizeLimit > 0 && data.size() >= sizeLimit)
-                throw ChannelFull(QString("The channel is full (size = %1)").arg(data.size()));
+            if (EXPECT(sizeLimit > 0 && ct >= sizeLimit, 0))
+                throw ChannelFull(QString("The channel is full (size = %1)").arg(ct));
             data.push_back(t);
+            ct += 1;
             cond.wakeOne();
         }
 
+        int count() const { return ct; }
+
         bool isClosed() const { return killed; }
 
-        void clear() { QMutexLocker ml(&mut); data.clear(); }
-        void close() { QMutexLocker ml(&mut); killed = true; if (clearsOnClose) { data.clear(); } cond.wakeAll(); }
+        void clear() { QMutexLocker ml(&mut); _clear(); }
+        void close() { QMutexLocker ml(&mut); killed = true; if (clearsOnClose) { _clear(); } cond.wakeAll(); }
     private:
+        void _clear() { ct = 0; data.clear(); } ///< like clear() but caller must already hold mutex.
         std::atomic_bool killed = false, deleted = false;
+        std::atomic_int ct = 0; ///< we keep track of the size of the queue because QList<>.count isn't always constant time.
         QList<T> data;
         QMutex mut;
         QWaitCondition cond;
-        /// This is here for debugging/testing purposes. To be removed from this class once we are sure all usages are kosher.
-        inline void ChkDelParanoia() const { if (EXPECT(!!deleted, 0)) throw InternalError("Attempt to access a deleted channel. This will lead to crashes. FIXME!!"); }
     };
 
     struct VariantChannel : public Channel<QVariant>
