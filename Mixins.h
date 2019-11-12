@@ -87,6 +87,9 @@ protected:
     );
 
     inline bool isTimerByNameActive(const QString & name) const { return _timerMap.contains(name); }
+
+    /// Stops the named timer and immediately deletes it.
+    inline bool stopTimer(const QString &name) { auto timer = _timerMap.take(name); return bool(timer); }
 };
 
 #endif // MIXINS_H

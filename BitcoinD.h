@@ -11,7 +11,7 @@
 
 class BitcoinD;
 
-class BitcoinDMgr : public Mgr, public ThreadObjectMixin, protected TimersByNameMixin, public IdMixin
+class BitcoinDMgr : public Mgr, public ThreadObjectMixin, public IdMixin, protected TimersByNameMixin
 {
     Q_OBJECT
 public:
@@ -24,7 +24,7 @@ public:
     static constexpr int N_CLIENTS = 2;
 
 protected:
-    QObject *qobj() override; // from TimersByNameMixin & ThreadObjectMixin
+    QObject *qobj() override; // from ThreadObjectMixin & TimersByNameMixin
     Stats stats() const override; // from Mgr
 
     void on_started() override; // from ThreadObjectMixin
@@ -38,7 +38,7 @@ private:
     std::unique_ptr<BitcoinD> clients[N_CLIENTS];
 };
 
-class BitcoinD : public RPC::HttpConnection, public ThreadObjectMixin
+class BitcoinD : public RPC::HttpConnection, public ThreadObjectMixin, protected TimersByNameMixin
 {
     Q_OBJECT
 public:
@@ -58,11 +58,10 @@ protected:
 
     void reconnect();
 
-    QObject * qobj() override; ///< from ThreadObjectMixin
+    QObject * qobj() override; ///< from ThreadObjectMixin & TimersByNameMixin
 private:
     const QHostAddress host;
     const quint16 port;
-    QTimer *reconnectTimer = nullptr;
 };
 
 

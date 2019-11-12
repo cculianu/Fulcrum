@@ -73,6 +73,32 @@ QObject * BitcoinD::qobj() { return this; }
 void BitcoinD::on_started()
 {
     ThreadObjectMixin::on_started();
+
+    if (!property("inittedReconnectTimer").value<bool>()) {
+        // setup the "reconnect timer"
+        setProperty("inittedReconnectTimer", true);
+        const auto SetTimer = [this] {
+            callOnTimerSoon(5000, "reconnectTimer", [this]{
+                if (!isGood()) {
+                    Debug() << prettyName() << " reconnecting...";
+                    reconnect();
+                    return true;
+                }
+                return false;
+            });
+        };
+        connect(this, &BitcoinD::lostConnection, this, [SetTimer]{
+            Log() << "Lost connection to bitcoind, will retry every 5 seconds ...";
+            SetTimer();
+        });
+        connect(this, &BitcoinD::authFailure, this, [SetTimer] {
+            Error() << "Authentication to bitcoind rpc failed. Please check the rpcuser and rpcpass are correct and restart!";
+            SetTimer();
+        });
+        connect(this, &BitcoinD::connected, this, [this] { stopTimer("reconnectTimer"); });
+        SetTimer();
+    }
+
     reconnect();
 }
 
@@ -81,28 +107,6 @@ void BitcoinD::reconnect()
     if (socket) delete socket;
     socket = new QTcpSocket(this);
     socketConnectSignals();
-
-    if (!reconnectTimer) {
-        reconnectTimer = new QTimer(this);
-        reconnectTimer->setSingleShot(false);
-        reconnectTimer->setInterval(10000);
-        connect(this, &BitcoinD::lostConnection, this, [t=reconnectTimer]{
-            Log() << "Lost connection to bitcoind, will retry in 10 seconds ...";
-            if (!t->isActive()) t->start();
-        });
-        connect(this, &BitcoinD::authFailure, this, [t=reconnectTimer]{
-            Error() << "Authentication to bitcoind rpc failed. Please check the rpcuser and rpcpass are correct and restart!";
-            if (!t->isActive()) t->start();
-        });
-        connect(reconnectTimer, &QTimer::timeout, this, [this] {
-            if (!isGood()) {
-                Debug() << prettyName() << " reconnecting...";
-                reconnect();
-            }
-        });
-        connect(this, &BitcoinD::connected, reconnectTimer, [t=reconnectTimer] {t->stop(); });
-    }
-
     socket->connectToHost(host, port);
 }
 
