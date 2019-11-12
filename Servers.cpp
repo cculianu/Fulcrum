@@ -34,12 +34,12 @@ QString AbstractTcpServer::prettyName() const
     return QString("Srv %1 (id: %2)").arg(hostPort()).arg(id);
 }
 
-void AbstractTcpServer::tryStart()
+void AbstractTcpServer::tryStart(ulong timeout_ms)
 {
     if (!_thread.isRunning()) {
         ThreadObjectMixin::start(); // call super
         Log() << "Starting listener service for " << prettyName() << " ...";
-        if (auto result = chan.get<QString>(); result != "ok") {
+        if (auto result = chan.get<QString>(timeout_ms); result != "ok") {
             result = result.isEmpty() ? "Startup timed out!" : result;
             throw TcpServerError(result);
         }

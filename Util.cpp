@@ -58,6 +58,7 @@ namespace Util {
                 throw Error("Bad QVariant pased to Json::toString");
             return d.toJson(compact ? QJsonDocument::Compact : QJsonDocument::Indented);
         }
+
     } // end namespace Json
 
     RunInThread::RunInThread(const VoidFunc & work, QObject *receiver, const VoidFunc & completion, const QString & name)

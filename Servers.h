@@ -26,7 +26,7 @@ public:
     AbstractTcpServer(const QHostAddress & listenAddress, quint16 port);
     virtual ~AbstractTcpServer() override;
 
-    void tryStart(); ///< may raise Exception if cannot bind, etc. Blocks waiting for thread to listen and return ok/error status.
+    void tryStart(ulong timeout_ms = ULONG_MAX); ///< may raise Exception if cannot bind, etc. Blocks waiting for thread to listen and return ok/error status.
     using ThreadObjectMixin::stop; /// promote this back up to public
 
     virtual QString prettyName() const;

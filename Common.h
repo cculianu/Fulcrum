@@ -8,24 +8,15 @@
 #pragma clang diagnostic ignored "-Wpadded"
 #endif
 
-class Exception : public std::runtime_error
+/// All of the custom exceptions we define in this app inherit from this base.
+struct Exception : public std::runtime_error
 {
-public:
     Exception(const QString & what = "Error") : std::runtime_error(what.toUtf8()) {}
-    ~Exception(); ///< for vtable
+    ~Exception() override; ///< for vtable
 };
 
-class InternalError : public Exception
-{
-public:
-    using Exception::Exception;
-};
-
-class BadArgs : public Exception
-{
-public:
-    using Exception::Exception;
-};
+struct InternalError : public Exception { using Exception::Exception; };
+struct BadArgs : public Exception { using Exception::Exception; };
 
 #define APPNAME "Fulcrum"
 #define VERSION "1.0"

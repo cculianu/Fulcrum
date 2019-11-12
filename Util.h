@@ -178,18 +178,26 @@ namespace Util {
     }
 
     namespace Json {
-        struct Error : public Exception {
-            using Exception::Exception;
-        };
-        struct ParseError : public Error {
-            using Error::Error;
-        };
+        /// Generic Json error (usually if expectMap is violated)
+        struct Error : public Exception { using Exception::Exception; };
+        /// More specific Json error -- usually if trying to parse malformed JSON text.
+        struct ParseError : public Error { using Error::Error; };
 
-        /// if expectmap, then throw if not a dict. Otherwise throw if not a list.
+        /// if expectmap, throws Error if not a dict. Otherwise throws Error if not a list.
         extern QVariant parseString(const QString &str, bool expectMap = true); ///< throws Error
         extern QVariant parseFile(const QString &file, bool expectMap = true); ///< throws Error
         extern QString toString(const QVariant &, bool compact = false); ///< throws Error
     }
+
+    /// Thrown by Channel.get (if throwsOnTimeout=true), and also CallOnObjectWithTimeout if the method didn't get to
+    /// execute before the timeout specified.
+    struct TimeoutException : public Exception { using Exception::Exception; };
+    /// May be thrown by CallOnObjectWithTimeout if target object's thread is not running.
+    struct ThreadNotRunning : public Exception { using Exception::Exception; };
+    /// Thrown from Channel if throwsIfClosed = true and if the channel is closed and no more data is available.
+    struct ChannelClosed : public Exception { using Exception::Exception; };
+    /// Thrown if attempting to put to a channel that has a sizeLimit > 0 and it is full.
+    struct ChannelFull : public Exception { using Exception::Exception;  };
 
     // Go channel work-alike for sharing data across threads
     // T must be copy constructible and copyable, also default constructible
@@ -198,26 +206,42 @@ namespace Util {
     public:
         Channel() {}
         ~Channel() { close(); }
+
+        std::atomic_bool throwsOnTimeout = false, throwsIfClosed = false, clearsOnClose = true;
+        std::atomic_int sizeLimit = 0; ///< set this to > 0 to specify a limit on the number of elements the channel accepts before put() throws ChannelFull.
+
         // returns T() on fail
         T get(unsigned long timeout_ms = ULONG_MAX) {
-            T ret;
+            T ret{};
             QMutexLocker ml(&mut);
-            bool timedOut = true;
             if (!killed && data.isEmpty() && timeout_ms > 0)
-                timedOut = !cond.wait(&mut, timeout_ms);
-            if (!timedOut && !killed && !data.isEmpty()) {
-                ret = data.front();  data.pop_front();
+                cond.wait(&mut, timeout_ms);
+            if (!data.isEmpty()) {
+                ret = data.front(); data.pop_front();
             }
+            else if (killed && throwsIfClosed)
+                throw ChannelClosed("Cannot read from closed Channel");
+            else if (throwsOnTimeout)
+                throw TimeoutException(QString("Timed out waiting for channel with timeout_ms = %1").arg(long(timeout_ms)));
             return ret;
         }
         void put(const T & t) {
-            if (killed) return;
+            if (killed) {
+                if (throwsIfClosed)
+                    throw ChannelClosed("Cannot write to closed Channel");
+                return;
+            }
             QMutexLocker ml(&mut);
+            if (sizeLimit > 0 && data.size() >= sizeLimit)
+                throw ChannelFull(QString("The channel is full (size = %1)").arg(data.size()));
             data.push_back(t);
             cond.wakeOne();
         }
+
+        bool isClosed() const { return killed; }
+
         void clear() { QMutexLocker ml(&mut); data.clear(); }
-        void close() { QMutexLocker ml(&mut); killed = true; cond.wakeAll(); }
+        void close() { QMutexLocker ml(&mut); killed = true; if (clearsOnClose) { data.clear(); } cond.wakeAll(); }
     private:
         std::atomic_bool killed = false;
         QList<T> data;
@@ -343,12 +367,6 @@ namespace Util {
         if (limit < 0) return s;
         return s.length() > limit ? s.left(limit) + "..." : s;
     }
-
-    /// Thrown by CallOnObjectWithTimeout if the method didn't get to execute before returning.
-    /// Note that it may still execute in the future but its return value will be discarded.
-    class TimeoutException : public Exception { using Exception::Exception; };
-    /// May be thrown by CallOnObjectWithTimeout if target object's thread is not running.
-    class ThreadNotRunning : public Exception { using Exception::Exception; };
 
     /// Call lambda() in the thread context of obj's thread. Will block until completed.
     /// If timeout_ms is not specified or negative, will block forever until lambda returns,
