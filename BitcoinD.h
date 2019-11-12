@@ -11,7 +11,7 @@
 
 class BitcoinD;
 
-class BitcoinDMgr : public Mgr, public ThreadObjectMixin, public IdMixin, protected TimersByNameMixin
+class BitcoinDMgr : public Mgr, public IdMixin, public ThreadObjectMixin, protected TimersByNameMixin
 {
     Q_OBJECT
 public:
@@ -24,11 +24,9 @@ public:
     static constexpr int N_CLIENTS = 2;
 
 protected:
-    QObject *qobj() override; // from ThreadObjectMixin & TimersByNameMixin
     Stats stats() const override; // from Mgr
 
-    void on_started() override; // from ThreadObjectMixin
-    void on_finished() override;  // from ThreadObjectMixiun
+    QObject * qobj() override; ///< from ThreadObjectMixin & TimersByNameMixin
 
 private:
     const QHostAddress host;
@@ -41,12 +39,16 @@ private:
 class BitcoinD : public RPC::HttpConnection, public ThreadObjectMixin, protected TimersByNameMixin
 {
     Q_OBJECT
+
 public:
     explicit BitcoinD(const QHostAddress &host, quint16 port, const QString & user, const QString &pass);
     ~BitcoinD() override;
 
     using ThreadObjectMixin::start;
     using ThreadObjectMixin::stop;
+
+    /// Not thread safe. Be sure to call this in this object's thread.
+    QVariantMap getStats() const;
 
 signals:
     void connected(BitcoinD *me);
@@ -64,6 +66,7 @@ protected:
 private:
     const QHostAddress host;
     const quint16 port;
+    std::atomic_bool badAuth = false;
 };
 
 

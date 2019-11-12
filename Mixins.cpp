@@ -24,7 +24,7 @@ void ThreadObjectMixin::start()
     });
     qobj()->moveToThread(&_thread);
     conns += QObject::connect(&_thread, &QThread::started, qobj(), [this]{on_started();});
-    conns += QObject::connect(&_thread, &QThread::finished, qobj(), [this]{Debug("calling on_finished"); on_finished();});
+    conns += QObject::connect(&_thread, &QThread::finished, qobj(), [this]{on_finished();});
     _thread.start();
 }
 

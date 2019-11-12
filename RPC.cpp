@@ -383,7 +383,7 @@ namespace RPC {
                 } catch (const Exception & e) {
                     // Note: we emit peerError here so that the tally of number of errors goes up and we eventually disconnect the offending peer.
                     // This should not cause an error message to be sent to the peer.
-                    emit peerError(this->id, QString("Error processing notification '%1' from %2: %3").arg(message.method, prettyName(), e.what()));
+                    emit peerError(this->id, lastPeerError=QString("Error processing notification '%1' from %2: %3").arg(message.method, prettyName(), e.what()));
                 }
             } else if (message.isRequest()) {
                 const auto it = methods.find(message.method);
@@ -419,11 +419,11 @@ namespace RPC {
             if (errorPolicy & ErrorPolicySendErrorMessage) {
                 emit sendError(doDisconnect, code, QString(e.what()).left(80), msgId);
                 if (!doDisconnect)
-                    emit peerError(id, e.what());
+                    emit peerError(id, lastPeerError=e.what());
                 doDisconnect = false; // if was true, already enqueued graceful disconnect after error reply, if was false, no-op here
             }
             if (doDisconnect) {
-                Error() << "Error reading/parsing data coming in: " << e.what();
+                Error() << "Error reading/parsing data coming in: " << (lastPeerError=e.what());
                 do_disconnect();
                 status = Bad;
             }

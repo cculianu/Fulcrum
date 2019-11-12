@@ -29,7 +29,9 @@ protected:
     virtual void restart() { stop(); start(); }
 
     virtual void on_started(); ///< default impl does nothing
-    virtual void on_finished(); ///< be sure to call this if you override. (does moveToThread(mainthread))
+    /// Below is not always called if app is exiting, unfortunately, but is called if thread is stoppped while app is
+    /// still running. Be sure to call this if you override. (does moveToThread(mainthread))
+    virtual void on_finished();
 };
 
 

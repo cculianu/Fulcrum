@@ -297,6 +297,8 @@ namespace RPC {
         int errorPolicy = ErrorPolicyDisconnect;
 
         bool v1 = false; // if true, will generate v1 style messages and respond to v1 only
+
+        QString lastPeerError;
     };
 
     /// Concrete class. For ElectrumX/ElectronX style JSON RPC where newlines delimit RPC messages.

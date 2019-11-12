@@ -4,14 +4,19 @@ BitcoinDMgr::BitcoinDMgr(const QHostAddress &host, quint16 port,
                          const QString &user, const QString &pass)
     : Mgr(nullptr), IdMixin(newId()), host(host), port(port), user(user), pass(pass)
 {
-    _thread.setObjectName("BitcoinDMgr");
     setObjectName("BitcoinDMgr");
+    _thread.setObjectName(objectName());
 }
 
 BitcoinDMgr::~BitcoinDMgr() {  cleanup(); }
 
 void BitcoinDMgr::startup() {
     Log() << objectName() << ": starting " << N_CLIENTS << " bitcoin rpc clients ...";
+
+    for (auto & client : clients) {
+        client = std::make_unique<BitcoinD>(host, port, user, pass);
+        client->start();
+    }
 
     start();
 
@@ -20,40 +25,46 @@ void BitcoinDMgr::startup() {
 
 void BitcoinDMgr::cleanup() {
     stop();
-}
 
-void BitcoinDMgr::on_started()
-{
-    ThreadObjectMixin::on_started();
-    for (auto & client : clients) {
-        client = std::make_unique<BitcoinD>(host, port, user, pass);
-        client->start();
-    }
-}
-
-void BitcoinDMgr::on_finished()
-{
-    ThreadObjectMixin::on_finished();
     for (auto & client : clients) {
         client.reset(); /// implicitly calls client->stop()
     }
+    Debug() << "BitcoinDMgr cleaned up";
 }
 
-QObject * BitcoinDMgr::qobj() { return this; }
+QObject *BitcoinDMgr::qobj() { return this; }
 
 auto BitcoinDMgr::stats() const -> Stats
 {
     Stats ret;
-    ret["Bitcoin Daemon"] = "** Stats Unimplemented -- TODO! **";
+    QVariantList l;
+    for (const auto & client : clients) {
+        if (!client) continue;
+        l += Util::LambdaOnObjectNoThrow<QVariantMap>(client.get(), [c=client.get()]{ return c->getStats(); }, 250).value_or(QVariantMap());
+    }
+    ret["Bitcoin Daemon"] = l;
     return ret;
 }
 
+QVariantMap BitcoinD::getStats() const
+{
+    QVariantMap ret, m;
+    m["connectedTime"] = isGood() ? QVariant(double(Util::getTime() - connectedTS)/1e3) : QVariant();
+    m["nBytesSent"] = nSent.load();
+    m["nBytesReceived"] = nReceived.load();
+    m["host:port"] = QString("%1:%2").arg(host.toString()).arg(port);
+    m["idleTime"] = isGood() ? QVariant(double(Util::getTime() - lastGood)/1e3) : QVariant();
+    m["lastPeerError"] = badAuth ? "Auth Failure" : lastPeerError;
+    m["lastSocketError"] = lastSocketError;
+    ret[objectName()] = m;
+    return ret;
+}
 
 BitcoinD::BitcoinD(const QHostAddress &host, quint16 port, const QString & user, const QString &pass)
     : RPC::HttpConnection(RPC::MethodMap{}, newId(), nullptr), host(host), port(port)
 {
     static int N = 1;
-    setObjectName(QString("BitcoinD %1").arg(N++));
+    setObjectName(QString("BitcoinD.%1").arg(N++));
     _thread.setObjectName(objectName());
 
     setAuth(user, pass);
@@ -89,8 +100,9 @@ void BitcoinD::on_started()
             Log() << "Lost connection to bitcoind, will retry every 5 seconds ...";
             SetTimer();
         });
-        conns += connect(this, &BitcoinD::authFailure, this, [SetTimer] {
+        conns += connect(this, &BitcoinD::authFailure, this, [SetTimer, this] {
             Error() << "Authentication to bitcoind rpc failed. Please check the rpcuser and rpcpass are correct and restart!";
+            badAuth = true;
             SetTimer();
         });
         conns += connect(this, &BitcoinD::connected, this, [this] { stopTimer("reconnectTimer"); });
@@ -112,6 +124,10 @@ void BitcoinD::on_connected()
 {
     RPC::HttpConnection::on_connected();
     lastGood = Util::getTime();
+    nSent = nReceived = 0;
+    lastPeerError.clear();
+    lastSocketError.clear();
+    badAuth = false;
     emit connected(this);
     do_ping();
 }
