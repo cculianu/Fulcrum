@@ -15,6 +15,10 @@ void BitcoinDMgr::startup() {
 
     for (auto & client : clients) {
         client = std::make_unique<BitcoinD>(host, port, user, pass);
+        { // connect client to us -- TODO: figure out workflow: how requests for work and results will get dispatched
+            connect(client.get(), &BitcoinD::gotMessage, this, &BitcoinDMgr::on_Message);
+            connect(client.get(), &BitcoinD::gotErrorMessage, this, &BitcoinDMgr::on_ErrorMessage);
+        }
         client->start();
     }
 
@@ -33,6 +37,16 @@ void BitcoinDMgr::cleanup() {
 }
 
 QObject *BitcoinDMgr::qobj() { return this; }
+
+void BitcoinDMgr::on_Message(quint64 bid, const RPC::Message &msg)
+{
+    Debug() << "Msg from: " << bid << " method=" << msg.method;
+}
+void BitcoinDMgr::on_ErrorMessage(quint64 bid, const RPC::Message &msg)
+{
+    Debug() << "ErrMsg from: " << bid << " error=" << msg.errorMessage();
+}
+
 
 auto BitcoinDMgr::stats() const -> Stats
 {

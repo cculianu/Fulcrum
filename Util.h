@@ -419,6 +419,10 @@ namespace Util {
         return ret;
     }
 
+    /// Like the above but for VoidFunc lambdas.  Returns true if the lambda was called before timeout,
+    /// false otherwise. (Note lambda may still run later asynchronously).
+    bool VoidFuncOnObjectNoThrow(const QObject *obj, const std::function<void()> & lambda, int timeout_ms=-1);
+
     /// This is an alternative to creating signal/slot pairs
     /// for calling a method on an object that runs in another thread.
     ///

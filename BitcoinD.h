@@ -28,6 +28,12 @@ protected:
 
     QObject * qobj() override; ///< from ThreadObjectMixin & TimersByNameMixin
 
+protected slots:
+    // connected to BitcoinD gotMessage signal
+    void on_Message(quint64 bitcoindId, const RPC::Message &msg);
+    // connected to BitcoinD gotErrorMessage signal
+    void on_ErrorMessage(quint64 bitcoindId, const RPC::Message &msg);
+
 private:
     const QHostAddress host;
     const quint16 port;

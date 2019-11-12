@@ -138,6 +138,18 @@ namespace Util {
         });
     }
 
+    /// Like the above but for VoidFunc lambdas.  Returns true if the lambda was called before timeout,
+    /// false otherwise. (Note lambda may still run later asynchronously).
+    bool VoidFuncOnObjectNoThrow(const QObject *obj, const std::function<void()> & lambda, int timeout_ms)
+    {
+        try {
+            LambdaOnObject<void>(obj, lambda, timeout_ms);
+            return true;
+        } catch (const Exception &) {}
+        return false;
+    }
+
+
 } // end namespace Util
 
 Log::Log() {}
