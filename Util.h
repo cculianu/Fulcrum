@@ -8,6 +8,7 @@
 #include <atomic>
 #include <chrono>
 #include <functional>
+#include <future>
 #include <random>
 #include <string>
 #include <utility>
@@ -342,6 +343,12 @@ namespace Util {
         return s.length() > limit ? s.left(limit) + "..." : s;
     }
 
+    /// Thrown by CallOnObjectWithTimeout if the method didn't get to execute before returning.
+    /// Note that it may still execute in the future but its return value will be discarded.
+    class TimeoutException : public Exception { using Exception::Exception; };
+    /// May be thrown by CallOnObjectWithTimeout if target object's thread is not running.
+    class ThreadNotRunning : public Exception { using Exception::Exception; };
+
     /// This is an alternative to creating signal/slot pairs
     /// for calling a method on an object that runs in another thread.
     ///
@@ -352,29 +359,84 @@ namespace Util {
     /// To save typing, this template can just allow you to directly call
     /// a method on an object in its thread (uses QTimer::singleShot).
     ///
+    /// Arguments are capture-copied.
+    ///
     /// Basically, it directly check the current thread versus object
     /// thread, and if they match, calls 'method' immediately.  If they do not
     /// match, enqeues the call using argument forwarding on a timer.
+    ///
     /// Example usage:
-    ///       Util::CallOnObject(myObj, &MyObj::doSomething, arg1, arg2, arg3)
-    template <typename QOBJ, typename METHOD, typename ... Args>
-    void CallOnObject(QOBJ obj, METHOD method, Args && ...args) {
+    ///
+    ///       // if timeout is negative, no timeout used and will block forever until method executes and return result
+    ///       int res = Util::CallOnObjectWithTimeout<int>(-1, myObj, &MyObj::doSomething, arg1, arg2, arg3)
+    ///
+    ///       // with timeout, will throw TimeoutException if timeout_ms expires before method returns
+    ///       double res = Util::CallOnObjectWithTimeout<double>(500, myObj, &MyObj::getSum, 1.2, 3.4);
+    ///
+    ///       // void return type usage
+    ///       Util::CallOnObjectWithTimeout<void>(250, myObj, &MyObj::noReturnVal, arg1)
+    ///
+    /// Exceptions thrown:
+    ///    TimeoutException -- The method did not return a result in the timeout period specified.
+    ///    ThreadNotRunning -- The target object's thred is not running.
+    template <typename RET=void, typename QOBJ, typename METHOD, typename ... Args>
+    RET CallOnObjectWithTimeout(int timeout_ms, QOBJ obj, METHOD method, Args && ...args) {
         if (QThread::currentThread() == obj->thread()) {
             // direct call to save on a copy c'tor
-            (obj->*method)(std::forward<Args>(args)...);
+            return (obj->*method)(std::forward<Args>(args)...);
+        } else if (EXPECT(!obj->thread()->isRunning(), 0)) {
+            throw ThreadNotRunning("Target object's thread is not running");
         } else {
-            QTimer::singleShot(0, obj, [obj,method,args...] {
-                // argument pack is captured here in closure using copy c'tor for each object. yay.
-                (obj->*method)(args...);
+            auto taskp = std::make_shared< std::packaged_task<RET()> >([obj, method, args...]() -> RET {
+                return (obj->*method)(args...);
             });
+            auto future = taskp->get_future();
+            QTimer::singleShot(0, obj, [taskp] { (*taskp)(); });
+            if (timeout_ms >= 0) {
+                if (auto status = future.wait_for(std::chrono::milliseconds(timeout_ms));
+                        status != std::future_status::ready) {
+                    throw TimeoutException("Method did not return a result within the time period specified");
+                }
+            }
+            return future.get();
         }
     }
+    /// Convenience method -- Identical to above except uses an infinite timeout, so a valid result is always returned.
+    /// Note: May still throw ThreadNotRunning (if thread for target object is not running).
+    template <typename RET=void, typename QOBJ, typename METHOD, typename ... Args>
+    RET CallOnObject(QOBJ obj, METHOD method, Args && ...args) {
+        return CallOnObjectWithTimeout<RET>(-1, obj, method, std::forward<Args>(args)...);
+    }
+
+    /*
+    template <typename RET=void>
+    RET LambdaOnObject(const QObject *obj, const std::function<RET()> & lambda, int timeout_ms)
+    {
+        if (QThread::currentThread() == obj->thread()) {
+            // direct call to save on a copy c'tor
+            return lambda();
+        } else if (EXPECT(!obj->thread()->isRunning(), 0)) {
+            throw ThreadNotRunning("Target object's thread is not running");
+        } else {
+            auto taskp = std::make_shared< std::packaged_task<RET()> >(lambda);
+            auto future = taskp->get_future();
+            QTimer::singleShot(0, obj, [taskp] { (*taskp)(); });
+            if (timeout_ms >= 0) {
+                if (auto status = future.wait_for(std::chrono::milliseconds(timeout_ms));
+                        status != std::future_status::ready) {
+                    throw TimeoutException("Unable to obtain a result within the time period specified");
+                }
+            }
+            return future.get();
+        }
+    }
+    */
 
     /// Call lambda() in the thread context of obj's thread. Will block until completed.
-    /// If timeout_ms is not specified, will block forever until lambda returns, otherwise
-    /// will block for timeout_ms ms.  Will return false on timeout or if the target object's thread
-    /// is not running.
-    bool LambdaOnObject(const QObject *obj, const VoidFunc & lambda, quint64 timeout_ms = ULONG_MAX);
+    /// If timeout_ms is not specified or negative, will block forever until lambda returns,
+    /// otherwise will block for timeout_ms ms.  Will return false on timeout or if the target object's
+    /// thread is not running.
+    bool LambdaOnObject(const QObject *obj, const VoidFunc & lambda, int timeout_ms = -1);
 } // end namespace Util
 
 /// Kind of like Go's "defer" statement. Call a functor (for clean-up code) at scope end.

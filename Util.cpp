@@ -2,7 +2,6 @@
 #include "Logger.h"
 #include "Util.h"
 
-#include <chrono>
 #include <iostream>
 
 namespace Util {
@@ -138,10 +137,9 @@ namespace Util {
         });
     }
 
-
-    bool LambdaOnObject(const QObject *obj, const VoidFunc & lambda, quint64 timeout_ms)
+    bool LambdaOnObject(const QObject *obj, const VoidFunc & lambda, int timeout_ms)
     {
-        if (!lambda) {
+        if (EXPECT(!lambda, 0)) {
             Debug() << __FUNCTION__ << ": Target object: " << obj->objectName() << " lambda is null. FIXME.";
             return true;
         }
@@ -153,20 +151,19 @@ namespace Util {
                 Debug() << __FUNCTION__ << ": Target object: " << obj->objectName() << " thread not running! Will return without calling lambda... FIXME.";
                 return false;
             }
-            struct SharedState {
-                VoidFunc lambda;
-                VariantChannel chan;
-            };
-            auto shared = std::make_shared<SharedState>();
-            shared->lambda = lambda;
-            decltype(shared)::weak_type weakShared = shared;
-            QTimer::singleShot(0, obj, [weakShared] {
-                if (auto shared = weakShared.lock(); shared) {
-                    shared->lambda();
-                    shared->chan.put(true);
-                }
-            });
-            return shared->chan.get<bool>(timeout_ms);
+            // Package the lambda in a task, and grab its future, which provides us with the
+            // timed wait facility.
+            // We wrap the task in a shared pointer so it gets put on the heap --
+            // it needs to live on the heap since we may return before the lambda is finished executing.
+            auto task = std::make_shared<std::packaged_task<void()>>(lambda);
+            auto future = task->get_future();
+            QTimer::singleShot(0, obj, [task]{ (*task)(); });
+            if (timeout_ms >= 0)
+                return future.wait_for(std::chrono::microseconds(timeout_ms)) == std::future_status::ready;
+            else {
+                future.wait();
+                return true;
+            }
         }
     }
 

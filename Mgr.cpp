@@ -23,12 +23,11 @@ auto Mgr::stats() const -> Stats
 // thread-safe
 Mgr::Stats Mgr::statsSafe() const
 {
-    auto ret = std::make_shared<Stats>();
-    auto weak = decltype(ret)::weak_type(ret);
-    Util::LambdaOnObject(this, [weak, this]{
-        auto ret = weak.lock();
-        if (ret)
-            *ret = stats();
-    }, 1000);
-    return *ret;
+    Stats ret;
+    try {
+        ret = Util::CallOnObject/*WithTimeout*/<Stats>(/*1000,*/ this, &Mgr::stats); // NB: this will actually call the subclass's virtual function because C++ is awesome.
+    } catch (const std::exception & e) {
+        Debug() << "Safe stats get failed: " << e.what();
+    }
+    return ret;
 }
