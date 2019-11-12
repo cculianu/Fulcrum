@@ -15,10 +15,11 @@ void BitcoinDMgr::startup() {
 
     for (auto & client : clients) {
         client = std::make_unique<BitcoinD>(host, port, user, pass);
-        { // connect client to us -- TODO: figure out workflow: how requests for work and results will get dispatched
-            connect(client.get(), &BitcoinD::gotMessage, this, &BitcoinDMgr::on_Message);
-            connect(client.get(), &BitcoinD::gotErrorMessage, this, &BitcoinDMgr::on_ErrorMessage);
-        }
+
+        // connect client to us -- TODO: figure out workflow: how requests for work and results will get dispatched
+        connect(client.get(), &BitcoinD::gotMessage, this, &BitcoinDMgr::on_Message);
+        connect(client.get(), &BitcoinD::gotErrorMessage, this, &BitcoinDMgr::on_ErrorMessage);
+
         client->start();
     }
 
@@ -62,7 +63,7 @@ auto BitcoinDMgr::stats() const -> Stats
 
 QVariantMap BitcoinD::getStats() const
 {
-    QVariantMap ret, m;
+    QVariantMap m;
     m["connectedTime"] = isGood() ? QVariant(double(Util::getTime() - connectedTS)/1e3) : QVariant();
     m["nBytesSent"] = nSent.load();
     m["nBytesReceived"] = nReceived.load();
@@ -72,8 +73,7 @@ QVariantMap BitcoinD::getStats() const
     m["lastSocketError"] = lastSocketError;
     m["nDisconnects"] = nDisconnects.load();
     m["nSocketErrors"] = nSocketErrors.load();
-    ret[objectName()] = m;
-    return ret;
+    return QVariantMap{ {objectName(), m} };
 }
 
 BitcoinD::BitcoinD(const QHostAddress &host, quint16 port, const QString & user, const QString &pass)
