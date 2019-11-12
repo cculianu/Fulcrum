@@ -205,17 +205,20 @@ namespace Util {
     {
     public:
         Channel() {}
-        ~Channel() { close(); }
+        ~Channel() { deleted = true; close(); }
 
         std::atomic_bool throwsOnTimeout = false, throwsIfClosed = false, clearsOnClose = true;
         std::atomic_int sizeLimit = 0; ///< set this to > 0 to specify a limit on the number of elements the channel accepts before put() throws ChannelFull.
 
-        // returns T() on fail
+        /// returns T() on fail (unless either throwsIfClosed=true or throwsOnTimeout=true, in which case it throws on failure)
         T get(unsigned long timeout_ms = ULONG_MAX) {
+            ChkDelParanoia(); // TODO: remove when testing complete
             T ret{};
             QMutexLocker ml(&mut);
-            if (!killed && data.isEmpty() && timeout_ms > 0)
+            if (!killed && data.isEmpty() && timeout_ms > 0) {
                 cond.wait(&mut, timeout_ms);
+                ChkDelParanoia(); // TODO: remove when testing complete
+            }
             if (!data.isEmpty()) {
                 ret = data.front(); data.pop_front();
             }
@@ -225,7 +228,10 @@ namespace Util {
                 throw TimeoutException(QString("Timed out waiting for channel with timeout_ms = %1").arg(long(timeout_ms)));
             return ret;
         }
+        /// Put to the queue.  Note that if you specified a sizeLimit > 0 it will potentially throw ChannelFull if
+        /// the queue is full.  Also may throw ChannelClosed if throwsIfClosed and the channel was closed.
         void put(const T & t) {
+            ChkDelParanoia(); // TODO: remove when testing complete
             if (killed) {
                 if (throwsIfClosed)
                     throw ChannelClosed("Cannot write to closed Channel");
@@ -243,10 +249,12 @@ namespace Util {
         void clear() { QMutexLocker ml(&mut); data.clear(); }
         void close() { QMutexLocker ml(&mut); killed = true; if (clearsOnClose) { data.clear(); } cond.wakeAll(); }
     private:
-        std::atomic_bool killed = false;
+        std::atomic_bool killed = false, deleted = false;
         QList<T> data;
         QMutex mut;
         QWaitCondition cond;
+        /// This is here for debugging/testing purposes. To be removed from this class once we are sure all usages are kosher.
+        inline void ChkDelParanoia() const { if (EXPECT(!!deleted, 0)) throw InternalError("Attempt to access a deleted channel. This will lead to crashes. FIXME!!"); }
     };
 
     struct VariantChannel : public Channel<QVariant>
