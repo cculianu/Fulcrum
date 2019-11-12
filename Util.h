@@ -201,7 +201,6 @@ namespace Util {
         // returns T() on fail
         T get(unsigned long timeout_ms = ULONG_MAX) {
             T ret;
-            if (killed) return ret;
             QMutexLocker ml(&mut);
             bool timedOut = true;
             if (!killed && data.isEmpty() && timeout_ms > 0)
