@@ -447,7 +447,7 @@ namespace RPC {
             }
             processJson(data);
         }
-        if (EXPECT(socket->bytesAvailable() > MAX_BUFFER, 0)) {
+        if (UNLIKELY(socket->bytesAvailable() > MAX_BUFFER)) {
             // this branch normally can't be taken because super class calls setReadBufferSize() on the socket
             // in on_connected, but we leave this code here in the interests of defensive programming.
             Error() << prettyName() << " fatal error: " << QString("Peer has sent us more than %1 bytes without a newline! Bad peer?").arg(MAX_BUFFER);
@@ -549,7 +549,7 @@ namespace RPC {
                             if (!ok || sm->contentLength < 0) {
                                 // ERROR HERE. Expected numeric length, got nonsense
                                 throw Exception(QString("Could not parse content-length: %1").arg(QString(data)));
-                            } else if (EXPECT(sm->contentLength > MAX_BUFFER, 0)) {
+                            } else if (UNLIKELY(sm->contentLength > MAX_BUFFER)) {
                                 // ERROR, defend against memory exhaustion attack.
                                 throw Exception(QString("Peer wants to send us more than %1 bytes of data, exceeding our buffer limit!").arg(MAX_BUFFER));
                             }
@@ -594,7 +594,7 @@ namespace RPC {
                     QTimer::singleShot(0, socket, [this]{on_readyRead();});
                 }
             }
-            if (EXPECT(socket->bytesAvailable() > MAX_BUFFER, 0)) {
+            if (UNLIKELY(socket->bytesAvailable() > MAX_BUFFER)) {
                 // this branch normally can't be taken because super class calls setReadBufferSize() on the socket
                 // in on_connected, but we leave this code here in the interests of defensive programming.
                 throw Exception( QString("Peer backbuffer exceeded %1 bytes! Bad peer?").arg(MAX_BUFFER) );
