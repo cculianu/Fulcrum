@@ -55,6 +55,7 @@ linux {
 SOURCES += \
     AbstractConnection.cpp \
     BTC.cpp \
+    BitcoinD.cpp \
     Mgr.cpp \
     Mixins.cpp \
     Options.cpp \
@@ -77,6 +78,7 @@ HEADERS += \
     AbstractConnection.h \
     App.h \
     BTC.h \
+    BitcoinD.h \
     Common.h \
     Logger.h \
     Mgr.h \

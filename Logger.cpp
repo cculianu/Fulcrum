@@ -21,7 +21,7 @@ ConsoleLogger::ConsoleLogger(QObject *p, bool stdOut)
 {}
 
 void ConsoleLogger::gotLine(int level_ignored, const QString &l) {
-    Q_UNUSED(level_ignored);
+    Q_UNUSED(level_ignored)
     (stdOut ? std::cout : std::cerr)
             << l.toUtf8().constData()
             << std::endl << std::flush;

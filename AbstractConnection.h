@@ -17,7 +17,7 @@ class AbstractConnection : public QObject, public IdMixin
 public:
     static constexpr qint64 DEFAULT_MAX_BUFFER = 20000000; ///< 20MB, may change default in derived classes by setting maxBuffer in c'tor TODO: tune this.
 
-    explicit AbstractConnection(qint64 id, QObject *parent = nullptr, qint64 maxBuffer = DEFAULT_MAX_BUFFER);
+    explicit AbstractConnection(quint64 id, QObject *parent = nullptr, qint64 maxBuffer = DEFAULT_MAX_BUFFER);
 
     const qint64 MAX_BUFFER;
 
@@ -56,8 +56,10 @@ protected:
     std::atomic<qint64> nSent = 0ULL, ///< this get updated in this class in do_write()
                         nReceived = 0ULL;  ///< update this in derived classes in your on_readyRead()
 
-    static constexpr int pingtime_ms = 60*1000;  ///< this is the period of the pingTimer which calls do_ping() every minute.
-    static constexpr qint64 stale_threshold = 2*60*1000; /// connection considered stale if no activity for 2 mins
+    static constexpr int default_pingtime_ms = 60*1000;  ///< this is the period of the pingTimer which calls do_ping() every minute.
+    static constexpr qint64 default_stale_threshold = 2*60*1000; /// connection considered stale if no activity for 2 mins
+    int pingtime_ms = default_pingtime_ms;
+    qint64 stale_threshold = default_stale_threshold;
     QTcpSocket *socket = nullptr; ///< this should only ever be touched in our thread
     QByteArray writeBackLog = ""; ///< if this grows beyond a certain size, we should kill the connection
     QTimer *pingTimer = nullptr;

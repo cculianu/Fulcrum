@@ -1,13 +1,16 @@
 #include "App.h"
-#include "Logger.h"
-#include "Util.h"
-#include "SrvMgr.h"
+#include "BitcoinD.h"
 #include "BTC.h"
+#include "Logger.h"
 #include "Servers.h"
+#include "SrvMgr.h"
+#include "Util.h"
+
 #include <QCommandLineParser>
 #include <QFile>
 #include <QList>
 #include <QPair>
+
 #include <cstdlib>
 #include <csignal>
 
@@ -75,9 +78,13 @@ void App::startup()
         std::signal(SIGQUIT, gotsig);
         std::signal(SIGHUP, SIG_IGN);
 #endif
-        srvmgr = new SrvMgr(options.interfaces, this);
 
+        bitcoindmgr = std::make_unique<BitcoinDMgr>(options.bitcoind.first, options.bitcoind.second, options.rpcuser, options.rpcpassword);
+        bitcoindmgr->startup(); // may throw
+
+        srvmgr = std::make_unique<SrvMgr>(options.interfaces, this);
         srvmgr->startup(); // may throw Exception, waits for servers to bind
+
 
         if (!options.statsInterfaces.isEmpty()) {
             Log() << "Stats HTTP: starting " << options.interfaces.count() << " server(s) ...";
@@ -101,7 +108,8 @@ void App::cleanup()
         for (auto h : httpServers) { h->stop(); }
         httpServers.clear(); // deletes shared pointers
     }
-    if (srvmgr) { Log("Stopping SrvMgr ... "); srvmgr->cleanup(); delete srvmgr; srvmgr = nullptr; }
+    if (srvmgr) { Log("Stopping SrvMgr ... "); srvmgr->cleanup(); srvmgr.reset(); }
+    if (bitcoindmgr) { Log("Stopping BitcoinDMgr ... "); bitcoindmgr->cleanup(); bitcoindmgr.reset(); }
 }
 
 void App::cleanup_RunInThreads()
@@ -226,6 +234,7 @@ void App::start_httpServer(const Options::Interface &iface)
     server->addEndpoint("/stats",[this](SimpleHttpServer::Request &req){
         req.response.contentType = "application/json; charset=utf-8";
         auto stats = srvmgr->statsSafe();
+        Util::updateMap(stats, bitcoindmgr->statsSafe());
         req.response.data = QString("%1\r\n").arg(Util::Json::toString(stats, false)).toUtf8();
     });
 }

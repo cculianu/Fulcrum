@@ -3,7 +3,7 @@
 
 #include <QObject>
 #include <QVariantMap>
-/// Abstract base class of all subsystem controllers such as EXMgr, etc.
+/// Abstract base class of all subsystem controllers such as SrvMgr, BitcoinDMgr, etc.
 /// These get created by the App on startup, based on config.
 class Mgr : public QObject
 {

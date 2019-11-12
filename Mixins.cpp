@@ -4,8 +4,8 @@
 ThreadObjectMixin::ThreadObjectMixin()
 {
     origThread = QThread::currentThread();
-    origThread->connect(origThread, &QThread::finished, [this]{
-        Warning() << "ThreadObjectMixin " << qobj()->objectName() << ": original thread ended! Settings original thread to main thread! FIXME!";
+    origThread->connect(origThread, &QThread::finished, [this] {
+        Warning() << "ThreadObjectMixin: original thread ended! Settings original thread to main thread! FIXME!";
         origThread = qApp->thread();
     });
 }
@@ -23,7 +23,7 @@ void ThreadObjectMixin::start()
     chan.clear();
     qobj()->moveToThread(&_thread);
     conns.push_back(QObject::connect(&_thread, &QThread::started, qobj(), [this]{on_started();}));
-    conns.push_back(QObject::connect(&_thread, &QThread::finished, qobj(), [this]{on_finished();}));
+    conns.push_back(QObject::connect(&_thread, &QThread::finished, qobj(), [this]{Debug("calling on_finished"); on_finished();}));
     _thread.start();
 }
 
@@ -56,7 +56,7 @@ void ThreadObjectMixin::on_finished()
 
 
 /*static*/
-qint64 IdMixin::newId() { return app()->newId(); }
+quint64 IdMixin::newId() { return app()->newId(); }
 
 
 TimersByNameMixin::TimersByNameMixin() {}

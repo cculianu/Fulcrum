@@ -5,8 +5,8 @@
 #include <QHostAddress>
 
 
-AbstractConnection::AbstractConnection(qint64 id, QObject *parent, qint64 maxBuffer)
-    : QObject(parent), IdMixin(id), MAX_BUFFER(maxBuffer)
+AbstractConnection::AbstractConnection(quint64 id_in, QObject *parent, qint64 maxBuffer)
+    : QObject(parent), IdMixin(id_in), MAX_BUFFER(maxBuffer)
 {}
 
 
@@ -58,6 +58,7 @@ void AbstractConnection::socketConnectSignals()
 {
     connect(socket, SIGNAL(error(QAbstractSocket::SocketError)), this, SLOT(on_error(QAbstractSocket::SocketError)));
     connect(socket, SIGNAL(stateChanged(QAbstractSocket::SocketState)), this, SLOT(on_socketState(QAbstractSocket::SocketState)));
+    connect(socket, &QAbstractSocket::connected, this, [this]{on_connected();});
     setSockOpts(socket);  // from Qt docs: required on Windows before connection
 }
 

@@ -33,7 +33,7 @@ protected:
 };
 
 
-constexpr qint64 NO_ID = -1;
+constexpr quint64 NO_ID = 0;
 
 /// Mixin for an object that has an app-global id associated with it.
 /// Used by the various AbstractClient subclasses because we need to keep
@@ -44,11 +44,11 @@ class IdMixin
 {
 public:
     //IdMixin() = delete; // <-- this is implicitly the case because we have a const data member.
-    inline IdMixin(const qint64 id) : id(id) {}
+    inline IdMixin(const quint64 id) : id(id) {}
 
-    const qint64 id;  /// derived classes should set this at construction by calling our c'tor
+    const quint64 id;  /// derived classes should set this at construction by calling our c'tor
 
-    static qint64 newId(); /// convenience method: calls app()->newId()
+    static quint64 newId(); /// convenience method: calls app()->newId()
 };
 
 

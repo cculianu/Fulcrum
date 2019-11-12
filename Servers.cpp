@@ -304,11 +304,11 @@ void Server::killClient(Client *client)
     clientsById.remove(client->id); // ensure gone from map asap so future lookups fail
     client->do_disconnect();
 }
-void Server::killClient(qint64 clientId)
+void Server::killClient(quint64 clientId)
 {
     killClient(clientsById.take(clientId));
 }
-void Server::onMessage(qint64 clientId, const RPC::Message &m)
+void Server::onMessage(quint64 clientId, const RPC::Message &m)
 {
     Trace() << "onMessage: " << clientId << " json: " << m.toJsonString();
     if (Client *c = getClient(clientId); c) {
@@ -322,7 +322,7 @@ void Server::onMessage(qint64 clientId, const RPC::Message &m)
         Debug() << "Unknown client: " << clientId;
     }
 }
-void Server::onErrorMessage(qint64 clientId, const RPC::Message &m)
+void Server::onErrorMessage(quint64 clientId, const RPC::Message &m)
 {
     Trace() << "onErrorMessage: " << clientId << " json: " << m.toJsonString();
     if (Client *c = getClient(clientId); c) {
@@ -330,7 +330,7 @@ void Server::onErrorMessage(qint64 clientId, const RPC::Message &m)
         emit c->sendError(true, RPC::Code_InvalidRequest, "Not a valid request object");
     }
 }
-void Server::onPeerError(qint64 clientId, const QString &what)
+void Server::onPeerError(quint64 clientId, const QString &what)
 {
     Debug() << "onPeerError, client " << clientId << " error: " << what;
     if (Client *c = getClient(clientId); c) {
@@ -423,7 +423,7 @@ void Server::StaticData::init()
 // --- /RPC METHODS ---
 
 
-void Server::_tellClientScriptHashStatus(qint64 clientId, const RPC::Message::Id & refId, const QByteArray & status, const QByteArray & scriptHash)
+void Server::_tellClientScriptHashStatus(quint64 clientId, const RPC::Message::Id & refId, const QByteArray & status, const QByteArray & scriptHash)
 {
     if (Client *client = getClient(clientId); client) {
         if (scriptHash.isEmpty())
@@ -438,7 +438,7 @@ void Server::_tellClientScriptHashStatus(qint64 clientId, const RPC::Message::Id
     }
 }
 
-Client::Client(const RPC::MethodMap & mm, qint64 id_in, Server *srv, QTcpSocket *sock)
+Client::Client(const RPC::MethodMap & mm, quint64 id_in, Server *srv, QTcpSocket *sock)
     : RPC::LinefeedConnection(mm, id_in, sock, kMaxBuffer), srv(srv)
 {
     socket = sock;

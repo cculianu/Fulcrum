@@ -226,7 +226,7 @@ namespace RPC {
         return ret;
     }
 
-    ConnectionBase::ConnectionBase(const MethodMap & methods, qint64 id_in, QObject *parent, qint64 maxBuffer)
+    ConnectionBase::ConnectionBase(const MethodMap & methods, quint64 id_in, QObject *parent, qint64 maxBuffer)
         : AbstractConnection(id_in, parent, maxBuffer), methods(methods)
     {
     }
@@ -467,21 +467,6 @@ namespace RPC {
     {
         authCookie = QString("%1:%2").arg(username).arg(password).toUtf8().toBase64();
     }
-    struct HttpConnection::StateMachine
-    {
-        enum State {
-            BEGIN=0, HEADER, READING_CONTENT
-        };
-        State state = BEGIN;
-        int status = 0;
-        QString statusMsg;
-        QString contentType;
-        int contentLength = 0;
-        QByteArray content = "";
-        bool logBad = false;
-        bool gotLength = false;
-        void clear() { *this = StateMachine(); }
-    };
 
     void HttpConnection::on_readyRead()
     {
@@ -644,7 +629,6 @@ namespace RPC {
         // below will create circular refs until socket is deleted...
         connect(h->socket, &QAbstractSocket::connected, h.get(), [h]{
             Debug() << h->prettyName() << " connected";
-            h->on_connected();
             h->connectedConns.push_back(
                 connect(h.get(), &RPC::ConnectionBase::gotMessage, h.get(),
                         [h](qint64 id_in, const RPC::Message &m)

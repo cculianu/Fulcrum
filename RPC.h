@@ -219,7 +219,7 @@ namespace RPC {
          */
 
     public:
-        ConnectionBase(const MethodMap & methods, qint64 id, QObject *parent = nullptr, qint64 maxBuffer = DEFAULT_MAX_BUFFER);
+        ConnectionBase(const MethodMap & methods, quint64 id, QObject *parent = nullptr, qint64 maxBuffer = DEFAULT_MAX_BUFFER);
         ~ConnectionBase() override;
 
         const MethodMap & methods; //< Note: this map needs to remain alive for the lifetime of this connection (and all connections) .. so it should point to static or long-lived data, ideally
@@ -255,12 +255,12 @@ namespace RPC {
         /// this is emitted when a new message arrives that was successfully parsed and matches
         /// a known method described in the 'methods' MethodMap. Unknown messages will eventually result
         /// in auto-disconnect.
-        void gotMessage(qint64 thisId, const RPC::Message & m);
+        void gotMessage(quint64 thisId, const RPC::Message & m);
         /// Same as a above, but for 'error' replies
-        void gotErrorMessage(qint64 thisId, const RPC::Message &em);
+        void gotErrorMessage(quint64 thisId, const RPC::Message &em);
         /// This is emitted when the peer sent malformed data to us and we didn't disconnect
         /// because errorPolicy is not ErrorPolicyDisconnect
-        void peerError(qint64 thisId, const QString &what);
+        void peerError(quint64 thisId, const QString &what);
 
     protected slots:
         /// Actual implentation that prepares the request. Is connected to sendRequest() above. Runs in this object's
@@ -332,7 +332,21 @@ namespace RPC {
 
     private:
         QByteArray authCookie;
-        struct StateMachine;
+        struct StateMachine
+        {
+            enum State {
+                BEGIN=0, HEADER, READING_CONTENT
+            };
+            State state = BEGIN;
+            int status = 0;
+            QString statusMsg;
+            QString contentType;
+            int contentLength = 0;
+            QByteArray content = "";
+            bool logBad = false;
+            bool gotLength = false;
+            void clear() { *this = StateMachine(); }
+        };
         std::unique_ptr<StateMachine> sm;
     };
 

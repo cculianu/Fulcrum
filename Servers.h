@@ -116,15 +116,15 @@ public:
     QVariantMap stats() const;
 
 signals:
-    void clientDisconnected(qint64 clientId);
+    void clientDisconnected(quint64 clientId);
 
     /// these are emitted from Controller and are connected to private slots we handle in our thread.
-    void tellClientScriptHashStatus(qint64 clientId, const RPC::Message::Id & refId, const QByteArray & status, const QByteArray & scriptHash = QByteArray());
+    void tellClientScriptHashStatus(quint64 clientId, const RPC::Message::Id & refId, const QByteArray & status, const QByteArray & scriptHash = QByteArray());
 
 public slots:
-    void onMessage(qint64 clientId, const RPC::Message &m);
-    void onErrorMessage(qint64 clientId, const RPC::Message &m);
-    void onPeerError(qint64 clientId, const QString &what);
+    void onMessage(quint64 clientId, const RPC::Message &m);
+    void onErrorMessage(quint64 clientId, const RPC::Message &m);
+    void onPeerError(quint64 clientId, const QString &what);
 
 private:
     void on_started() override;
@@ -134,18 +134,18 @@ private slots:
 
     // connected to signals above, runs in our thread. Note if not scriptHash.isNull(), will send a notification
     // (without including refId), otherwise sends a response with refId included.
-    void _tellClientScriptHashStatus(qint64 clientId, const RPC::Message::Id & refId, const QByteArray & status, const QByteArray & scriptHash = QByteArray());
+    void _tellClientScriptHashStatus(quint64 clientId, const RPC::Message::Id & refId, const QByteArray & status, const QByteArray & scriptHash = QByteArray());
 
 private:
     Client * newClient(QTcpSocket *);
-    inline Client * getClient(qint64 clientId) {
+    inline Client * getClient(quint64 clientId) {
         if (auto it = clientsById.find(clientId); it != clientsById.end())
             return it.value();
         return nullptr;
     }
     void killClient(Client *);
-    void killClient(qint64 id);
-    QMap<qint64, Client *> clientsById;
+    void killClient(quint64 id);
+    QMap<quint64, Client *> clientsById;
 
 private:
     // RPC methods below
@@ -183,7 +183,7 @@ class Client : public RPC::LinefeedConnection
     Q_OBJECT
 public:
     /// NB: sock should be in an already connected state.
-    explicit Client(const RPC::MethodMap & methods, qint64 id, Server *srv, QTcpSocket *sock);
+    explicit Client(const RPC::MethodMap & methods, quint64 id, Server *srv, QTcpSocket *sock);
     ~Client() override;
 
     struct Info {

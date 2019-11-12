@@ -9,6 +9,7 @@
 class Logger;
 class SrvMgr;
 class SimpleHttpServer;
+class BitcoinDMgr;
 
 class App : public QCoreApplication
 {
@@ -23,16 +24,17 @@ public:
 
     /// app-global ids used for everything from ElectrumX methods
     /// to client id's, etc.
-    inline qint64 newId() { return ++globalId; }
+    inline quint64 newId() { return ++globalId; }
 
 signals:
 
 public slots:
 
 private:
-    std::atomic<qint64> globalId = 0;
+    std::atomic<quint64> globalId = 0;
     Logger *_logger = nullptr;
-    SrvMgr *srvmgr = nullptr;
+    std::unique_ptr<SrvMgr> srvmgr;
+    std::unique_ptr<BitcoinDMgr> bitcoindmgr;
     QList<std::shared_ptr<SimpleHttpServer> > httpServers;
 
     void startup();
