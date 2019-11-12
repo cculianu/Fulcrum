@@ -3,11 +3,6 @@
 
 ThreadObjectMixin::ThreadObjectMixin()
 {
-    origThread = QThread::currentThread();
-    origThread->connect(origThread, &QThread::finished, [this] {
-        Warning() << "ThreadObjectMixin: original thread ended! Settings original thread to main thread! FIXME!";
-        origThread = qApp->thread();
-    });
 }
 
 ThreadObjectMixin::~ThreadObjectMixin()
@@ -21,9 +16,14 @@ void ThreadObjectMixin::start()
     if (_thread.isRunning())  return;
     Debug() << qobj()->objectName() << " starting thread";
     chan.clear();
+    origThread = QThread::currentThread();
+    conns += origThread->connect(origThread, &QThread::finished, qApp, [this] {
+        Warning() << "ThreadObjectMixin: original thread ended! Setting original thread to main thread! FIXME!";
+        origThread = qApp->thread();
+    });
     qobj()->moveToThread(&_thread);
-    conns.push_back(QObject::connect(&_thread, &QThread::started, qobj(), [this]{on_started();}));
-    conns.push_back(QObject::connect(&_thread, &QThread::finished, qobj(), [this]{Debug("calling on_finished"); on_finished();}));
+    conns += QObject::connect(&_thread, &QThread::started, qobj(), [this]{on_started();});
+    conns += QObject::connect(&_thread, &QThread::finished, qobj(), [this]{Debug("calling on_finished"); on_finished();});
     _thread.start();
 }
 

@@ -50,6 +50,7 @@ public:
 
 signals:
     void connected(BitcoinD *me);
+
 protected:
     void on_started() override;
     void on_connected() override;
@@ -59,6 +60,7 @@ protected:
     void reconnect();
 
     QObject * qobj() override; ///< from ThreadObjectMixin & TimersByNameMixin
+
 private:
     const QHostAddress host;
     const quint16 port;

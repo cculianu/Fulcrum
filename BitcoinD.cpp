@@ -74,9 +74,7 @@ void BitcoinD::on_started()
 {
     ThreadObjectMixin::on_started();
 
-    if (!property("inittedReconnectTimer").value<bool>()) {
-        // setup the "reconnect timer"
-        setProperty("inittedReconnectTimer", true);
+    { // setup the "reconnect timer"
         const auto SetTimer = [this] {
             callOnTimerSoon(5000, "reconnectTimer", [this]{
                 if (!isGood()) {
@@ -87,15 +85,15 @@ void BitcoinD::on_started()
                 return false;
             });
         };
-        connect(this, &BitcoinD::lostConnection, this, [SetTimer]{
+        conns += connect(this, &BitcoinD::lostConnection, this, [SetTimer]{
             Log() << "Lost connection to bitcoind, will retry every 5 seconds ...";
             SetTimer();
         });
-        connect(this, &BitcoinD::authFailure, this, [SetTimer] {
+        conns += connect(this, &BitcoinD::authFailure, this, [SetTimer] {
             Error() << "Authentication to bitcoind rpc failed. Please check the rpcuser and rpcpass are correct and restart!";
             SetTimer();
         });
-        connect(this, &BitcoinD::connected, this, [this] { stopTimer("reconnectTimer"); });
+        conns += connect(this, &BitcoinD::connected, this, [this] { stopTimer("reconnectTimer"); });
         SetTimer();
     }
 
