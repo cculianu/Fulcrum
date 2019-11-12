@@ -149,7 +149,7 @@ void AbstractConnection::on_connected()
 
 void AbstractConnection::on_disconnected()
 {
-    /* nothing, here; for derived classes to override if they wish. */
+    ++nDisconnects;
 }
 
 void AbstractConnection::on_socketState(QAbstractSocket::SocketState s)
@@ -188,6 +188,7 @@ void AbstractConnection::do_ping()
 void AbstractConnection::on_error(QAbstractSocket::SocketError err)
 {
     Warning() << prettyName() << ": error " << err << " (" << (lastSocketError = (socket ? socket->errorString() : "(null)")) << ")";
+    ++nSocketErrors;
     do_disconnect();
 }
 

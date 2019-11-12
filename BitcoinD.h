@@ -66,7 +66,7 @@ protected:
 private:
     const QHostAddress host;
     const quint16 port;
-    std::atomic_bool badAuth = false;
+    bool badAuth = false;
 };
 
 

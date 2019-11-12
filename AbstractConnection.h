@@ -56,6 +56,8 @@ protected:
     std::atomic<qint64> nSent = 0ULL, ///< this get updated in this class in do_write()
                         nReceived = 0ULL;  ///< update this in derived classes in your on_readyRead()
 
+    std::atomic<int> nDisconnects = 0, nSocketErrors = 0;
+
     static constexpr int default_pingtime_ms = 60*1000;  ///< this is the period of the pingTimer which calls do_ping() every minute.
     static constexpr qint64 default_stale_threshold = 2*60*1000; /// connection considered stale if no activity for 2 mins
     int pingtime_ms = default_pingtime_ms;

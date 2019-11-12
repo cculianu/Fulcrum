@@ -56,6 +56,8 @@ QVariantMap BitcoinD::getStats() const
     m["idleTime"] = isGood() ? QVariant(double(Util::getTime() - lastGood)/1e3) : QVariant();
     m["lastPeerError"] = badAuth ? "Auth Failure" : lastPeerError;
     m["lastSocketError"] = lastSocketError;
+    m["nDisconnects"] = nDisconnects.load();
+    m["nSocketErrors"] = nSocketErrors.load();
     ret[objectName()] = m;
     return ret;
 }
