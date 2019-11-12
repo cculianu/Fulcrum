@@ -137,36 +137,6 @@ namespace Util {
         });
     }
 
-    bool LambdaOnObject(const QObject *obj, const VoidFunc & lambda, int timeout_ms)
-    {
-        if (EXPECT(!lambda, 0)) {
-            Debug() << __FUNCTION__ << ": Target object: " << obj->objectName() << " lambda is null. FIXME.";
-            return true;
-        }
-        if (QThread::currentThread() == obj->thread()) {
-            lambda();
-            return true;
-        } else {
-            if (!obj->thread()->isRunning()) {
-                Debug() << __FUNCTION__ << ": Target object: " << obj->objectName() << " thread not running! Will return without calling lambda... FIXME.";
-                return false;
-            }
-            // Package the lambda in a task, and grab its future, which provides us with the
-            // timed wait facility.
-            // We wrap the task in a shared pointer so it gets put on the heap --
-            // it needs to live on the heap since we may return before the lambda is finished executing.
-            auto task = std::make_shared<std::packaged_task<void()>>(lambda);
-            auto future = task->get_future();
-            QTimer::singleShot(0, obj, [task]{ (*task)(); });
-            if (timeout_ms >= 0)
-                return future.wait_for(std::chrono::microseconds(timeout_ms)) == std::future_status::ready;
-            else {
-                future.wait();
-                return true;
-            }
-        }
-    }
-
 } // end namespace Util
 
 Log::Log() {}

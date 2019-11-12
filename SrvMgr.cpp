@@ -2,6 +2,8 @@
 #include "Util.h"
 #include "Servers.h"
 
+#include <utility>
+
 SrvMgr::SrvMgr(const QList<Options::Interface> & ifaces, QObject *parent)
     : Mgr(parent), interfaces(ifaces)
 {
@@ -50,14 +52,15 @@ auto SrvMgr::stats() const -> Stats
     QVariantList serverList;
     auto servers = this->servers; // copy
     for (auto server : servers) {
-        auto m = std::make_shared<QVariantMap>();
-        auto weak = decltype(m)::weak_type(m);
-        Util::LambdaOnObject(server, [weak, server]{
-            if (auto m = weak.lock(); m) {
-                (*m)[server->prettyName()] = server->stats();
-            }
+        using Pair = std::pair<QString, QVariant>;
+        auto result = Util::LambdaOnObjectNoThrow<Pair>(server, [server] {
+            return Pair(server->prettyName(), server->stats());
         }, 1000); // <-- limited timeout just in case
-        serverList.push_back(*m);
+        if (result) {
+            QVariantMap m;
+            m[result->first] = result->second;
+            serverList.push_back(m);
+        }
     }
     ret["servers"] = serverList;
     return ret;

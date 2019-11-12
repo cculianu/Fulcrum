@@ -9,8 +9,10 @@
 #include <chrono>
 #include <functional>
 #include <future>
+#include <optional>
 #include <random>
 #include <string>
+#include <tuple>
 #include <utility>
 
 #define Q2C(qstr) ((qstr).toUtf8().constData())
@@ -349,6 +351,46 @@ namespace Util {
     /// May be thrown by CallOnObjectWithTimeout if target object's thread is not running.
     class ThreadNotRunning : public Exception { using Exception::Exception; };
 
+    /// Call lambda() in the thread context of obj's thread. Will block until completed.
+    /// If timeout_ms is not specified or negative, will block forever until lambda returns,
+    /// otherwise will block for timeout_ms ms.  Will throw TimeoutException if the timeout
+    /// elapsed without lambda() having a result ready. Will throw ThreadNotRunning if the target
+    /// object's thread is not running.
+    template <typename RET>
+    RET LambdaOnObject(const QObject *obj, const std::function<RET()> & lambda, int timeout_ms=-1)
+    {
+        if (QThread::currentThread() == obj->thread()) {
+            // direct call to save on a copy c'tor
+            return lambda();
+        } else if (EXPECT(!obj->thread()->isRunning(), 0)) {
+            throw ThreadNotRunning("Target object's thread is not running");
+        } else {
+            auto taskp = std::make_shared< std::packaged_task<RET()> >(lambda);
+            auto future = taskp->get_future();
+            QTimer::singleShot(0, obj, [taskp] { (*taskp)(); });
+            if (timeout_ms >= 0) {
+                if (auto status = future.wait_for(std::chrono::milliseconds(timeout_ms));
+                        status != std::future_status::ready) {
+                    throw TimeoutException("Unable to obtain a result within the time period specified");
+                }
+            }
+            return future.get();
+        }
+    }
+
+    /// Like the above but doesn't throw, instead wraps the result in a std::optional and if the optional
+    /// not has_value, you know there was an error or a timeout.
+    /// Does not work if the RET type is void (optional<void> is disallowed).
+    template <typename RET>
+    std::optional<RET> LambdaOnObjectNoThrow(const QObject *obj, const std::function<RET()> & lambda, int timeout_ms=-1)
+    {
+        std::optional<RET> ret;
+        try {
+            ret = LambdaOnObject<RET>(obj, lambda, timeout_ms);
+        } catch (const Exception &) {}
+        return ret;
+    }
+
     /// This is an alternative to creating signal/slot pairs
     /// for calling a method on an object that runs in another thread.
     ///
@@ -384,59 +426,43 @@ namespace Util {
         if (QThread::currentThread() == obj->thread()) {
             // direct call to save on a copy c'tor
             return (obj->*method)(std::forward<Args>(args)...);
-        } else if (EXPECT(!obj->thread()->isRunning(), 0)) {
-            throw ThreadNotRunning("Target object's thread is not running");
         } else {
-            auto taskp = std::make_shared< std::packaged_task<RET()> >([obj, method, args...]() -> RET {
-                return (obj->*method)(args...);
-            });
-            auto future = taskp->get_future();
-            QTimer::singleShot(0, obj, [taskp] { (*taskp)(); });
-            if (timeout_ms >= 0) {
-                if (auto status = future.wait_for(std::chrono::milliseconds(timeout_ms));
-                        status != std::future_status::ready) {
-                    throw TimeoutException("Method did not return a result within the time period specified");
-                }
-            }
-            return future.get();
+            auto lambda = [method, args = std::make_tuple(obj, std::forward<Args>(args)...)]() -> RET {
+                return std::apply(method, args);
+            };
+            return LambdaOnObject<RET>(obj, lambda, timeout_ms);
         }
     }
-    /// Convenience method -- Identical to above except uses an infinite timeout, so a valid result is always returned.
+
+    /// Convenience method -- Identical CallOnObjectWithTimeout above except doesn't ever throw, instead returns an
+    /// optional with no value on failure/timeout.  Does not work if the RET type is void (optional<void> is disallowed).
+    template <typename RET=void, typename QOBJ, typename METHOD, typename ... Args>
+    std::optional<RET> CallOnObjectWithTimeoutNoThrow(int timeout_ms, QOBJ obj, METHOD method, Args && ...args) {
+        std::optional<RET> ret;
+        try {
+            ret = CallOnObjectWithTimeout<RET>(timeout_ms, obj, method, std::forward<Args>(args)...);
+        } catch (const Exception &) {}
+        return ret;
+    }
+
+    /// Convenience method -- Identical CallOnObjectWithTimeout  except uses an infinite timeout, so a valid result is always returned.
     /// Note: May still throw ThreadNotRunning (if thread for target object is not running).
     template <typename RET=void, typename QOBJ, typename METHOD, typename ... Args>
     RET CallOnObject(QOBJ obj, METHOD method, Args && ...args) {
         return CallOnObjectWithTimeout<RET>(-1, obj, method, std::forward<Args>(args)...);
     }
 
-    /*
-    template <typename RET=void>
-    RET LambdaOnObject(const QObject *obj, const std::function<RET()> & lambda, int timeout_ms)
-    {
-        if (QThread::currentThread() == obj->thread()) {
-            // direct call to save on a copy c'tor
-            return lambda();
-        } else if (EXPECT(!obj->thread()->isRunning(), 0)) {
-            throw ThreadNotRunning("Target object's thread is not running");
-        } else {
-            auto taskp = std::make_shared< std::packaged_task<RET()> >(lambda);
-            auto future = taskp->get_future();
-            QTimer::singleShot(0, obj, [taskp] { (*taskp)(); });
-            if (timeout_ms >= 0) {
-                if (auto status = future.wait_for(std::chrono::milliseconds(timeout_ms));
-                        status != std::future_status::ready) {
-                    throw TimeoutException("Unable to obtain a result within the time period specified");
-                }
-            }
-            return future.get();
-        }
+    /// Convenience method -- Identical CallOnObject above except doesn't ever throw, instead returns an optional with
+    /// no value on failure/timeout.  Does not work if the RET type is void (optional<void> is disallowed).
+    template <typename RET=void, typename QOBJ, typename METHOD, typename ... Args>
+    std::optional<RET> CallOnObjectNoThrow(QOBJ obj, METHOD method, Args && ...args) {
+        std::optional<RET> ret;
+        try {
+            ret = CallOnObject<RET>(obj, method, std::forward<Args>(args)...);
+        } catch (const Exception &) {}
+        return ret;
     }
-    */
 
-    /// Call lambda() in the thread context of obj's thread. Will block until completed.
-    /// If timeout_ms is not specified or negative, will block forever until lambda returns,
-    /// otherwise will block for timeout_ms ms.  Will return false on timeout or if the target object's
-    /// thread is not running.
-    bool LambdaOnObject(const QObject *obj, const VoidFunc & lambda, int timeout_ms = -1);
 } // end namespace Util
 
 /// Kind of like Go's "defer" statement. Call a functor (for clean-up code) at scope end.

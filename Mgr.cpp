@@ -25,7 +25,7 @@ Mgr::Stats Mgr::statsSafe() const
 {
     Stats ret;
     try {
-        ret = Util::CallOnObject/*WithTimeout*/<Stats>(/*1000,*/ this, &Mgr::stats); // NB: this will actually call the subclass's virtual function because C++ is awesome.
+        ret = Util::CallOnObjectWithTimeout<Stats>(1000, this, &Mgr::stats); // NB: this will actually call the subclass's virtual function because C++ is awesome.
     } catch (const std::exception & e) {
         Debug() << "Safe stats get failed: " << e.what();
     }
