@@ -386,7 +386,7 @@ namespace Util {
     {
         std::optional<RET> ret;
         try {
-            ret = LambdaOnObject<RET>(obj, lambda, timeout_ms);
+            ret.emplace( LambdaOnObject<RET>(obj, lambda, timeout_ms) );
         } catch (const Exception &) {}
         return ret;
     }
@@ -436,11 +436,11 @@ namespace Util {
 
     /// Convenience method -- Identical CallOnObjectWithTimeout above except doesn't ever throw, instead returns an
     /// optional with no value on failure/timeout.  Does not work if the RET type is void (optional<void> is disallowed).
-    template <typename RET=void, typename QOBJ, typename METHOD, typename ... Args>
+    template <typename RET, typename QOBJ, typename METHOD, typename ... Args>
     std::optional<RET> CallOnObjectWithTimeoutNoThrow(int timeout_ms, QOBJ obj, METHOD method, Args && ...args) {
         std::optional<RET> ret;
         try {
-            ret = CallOnObjectWithTimeout<RET>(timeout_ms, obj, method, std::forward<Args>(args)...);
+            ret.emplace( CallOnObjectWithTimeout<RET>(timeout_ms, obj, method, std::forward<Args>(args)...) );
         } catch (const Exception &) {}
         return ret;
     }
@@ -454,11 +454,11 @@ namespace Util {
 
     /// Convenience method -- Identical CallOnObject above except doesn't ever throw, instead returns an optional with
     /// no value on failure/timeout.  Does not work if the RET type is void (optional<void> is disallowed).
-    template <typename RET=void, typename QOBJ, typename METHOD, typename ... Args>
+    template <typename RET, typename QOBJ, typename METHOD, typename ... Args>
     std::optional<RET> CallOnObjectNoThrow(QOBJ obj, METHOD method, Args && ...args) {
         std::optional<RET> ret;
         try {
-            ret = CallOnObject<RET>(obj, method, std::forward<Args>(args)...);
+            ret.emplace( CallOnObject<RET>(obj, method, std::forward<Args>(args)...) );
         } catch (const Exception &) {}
         return ret;
     }
