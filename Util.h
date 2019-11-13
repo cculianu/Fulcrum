@@ -31,7 +31,7 @@ class App;
 #define __PRETTY_FUNCTION__ __FUNCTION__
 #endif
 
-#if (defined(__clang__) && __has_builtin(__builtin_expect)) || (!defined(__clang__) && defined(__GNUC__))
+#if defined(__clang__) || defined(__GNUC__)
 #define EXPECT(expr, constant) __builtin_expect(expr, constant)
 #else
 #define EXPECT(expr, constant) (expr)
