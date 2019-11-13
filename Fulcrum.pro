@@ -1,5 +1,5 @@
 QT -= gui
-QT += network testlib websockets
+QT += network
 
 CONFIG += c++17 console
 CONFIG -= app_bundle
