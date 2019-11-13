@@ -5,7 +5,18 @@
 #include <QString>
 
 #ifdef __clang__
+// turn off the dreaded "warning: class padded with xx bytes, etc" since we aren't writing wire protocols using structs..
 #pragma clang diagnostic ignored "-Wpadded"
+// We developed this on Apple's LLVM 11.0 which has all the C++. Later found out Linux
+// and other installs of the compiler break. So we need to conditionally compile 2 versions of things.
+// This flag is used to conditionally compile certain esoteric C++ features that appear to fail on clang 8.
+#  if __clang_major__ >= 8 && defined(__APPLE__)
+#    define CLANG_11 1
+#  else
+#    define CLANG_11 0
+#  endif
+#else /* !clang */
+#  define CLANG_11 0
 #endif
 
 /// All of the custom exceptions we define in this app inherit from this base.

@@ -7,6 +7,7 @@ namespace RPC {
 
     const QString jsonRpcVersion("2.0");
 
+#if CLANG_11
     /// As per JSON RPC spec, id must be integer (no fractional part), string, or null.
     /// Will throw if that's not the case.
     auto Message::Id::operator=(const QVariant &v) -> Id &
@@ -53,6 +54,7 @@ namespace RPC {
         }, *this);
         return ret;
     }
+#endif
 
     /* static */
     Message Message::fromString(const QString &s, Id *id_out, bool v1)
@@ -72,12 +74,25 @@ namespace RPC {
 
         // Grab the id first in case later processing fails.
         if (auto var = map.value("id"); !var.isNull()) {
+#if CLANG_11
             // note as per JSON-RPC 2.0 spec, we squash floats down to ints, discarding the fractional part
             // we will throw if the id is not a string, integer, or null
             ret.id = var;
             // inform caller of parsed id asap in case we later throw
             if (id_out)
                 *id_out = ret.id;
+#else
+            bool ok;
+            if (QMetaType::Type(var.type()) == QMetaType::QString)
+                ret.id = var;
+            else if (qint64 id_ll = var.toLongLong(&ok); ok && var.toString() == QString::number(id_ll)) // this checks that fractional part not present
+                ret.id = id_ll;
+            else
+                // if we get here, id is not a valid type as per JSON RPC 2.0
+                throw InvalidError("id must be a string, a non-fractonal number, or null");
+            if (id_out)
+                *id_out = ret.id;
+#endif
         }
 
 

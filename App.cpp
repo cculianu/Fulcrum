@@ -14,6 +14,13 @@
 #include <cstdlib>
 #include <csignal>
 
+#ifndef __clang__
+#ifndef _MSC_VER
+// GCC fails for mysterious reasons on Linux. Warn user to try clang.
+#warning "Compilation on non-clang compiler may fail. If so, please try using clang >= 8.0 as the compiler!"
+#endif
+#endif
+
 App::App(int argc, char *argv[])
     : QCoreApplication (argc, argv)
 {

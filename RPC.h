@@ -72,6 +72,7 @@ namespace RPC {
     /// TODO: see if performance benefit can be gained by wrapping in shared_ptr anyway..
     struct Message
     {
+#if CLANG_11
         using IdBase = std::variant<std::nullptr_t, qint64, QString>;
         struct Id : public IdBase {
             using IdBase::variant;
@@ -83,6 +84,9 @@ namespace RPC {
             QString toString() const { return static_cast<QVariant>(*this).toString(); }
             bool operator<(const Id & other) const;
         };
+#else
+        using Id = QVariant;
+#endif
 
         // -- DATA --
 
@@ -356,6 +360,8 @@ namespace RPC {
 
 /// So that Qt signal/slots work with this type.  Metatypes are also registered at startup via qRegisterMetatype
 Q_DECLARE_METATYPE(RPC::Message);
+#if CLANG_11
 Q_DECLARE_METATYPE(RPC::Message::Id);
+#endif
 
 #endif // FULCRUM_RPC_H

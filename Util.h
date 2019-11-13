@@ -97,6 +97,12 @@ public:
     virtual ~Debug();
 
     static bool isEnabled();
+
+#if defined(__GNUC__) && !defined(__clang__)
+    // Grr.. GCC doesn't fully implement C++ 17 so we must do this. :(
+    template <typename ...Args>
+    explicit Debug(Args && ...args) : Log(std::forward<Args>(args)...) {}
+#endif
 };
 
 /** \brief Stream-like class to print a trace message to the app's logging facility
@@ -112,6 +118,12 @@ public:
     virtual ~Trace();
 
     static bool isEnabled();
+
+#if defined(__GNUC__) && !defined(__clang__)
+    // Grr.. GCC doesn't fully implement C++ 17 so we must do this. :(
+    template <typename ...Args>
+    explicit Trace(Args && ...args) : Log(std::forward<Args>(args)...) {}
+#endif
 };
 
 
@@ -126,6 +138,12 @@ class Error : public Log
 public:
     using Log::Log; // inherit c'tor
     virtual ~Error();
+
+#if defined(__GNUC__) && !defined(__clang__)
+    // Grr.. GCC doesn't fully implement C++ 17 so we must do this. :(
+    template <typename ...Args>
+    explicit Error(Args && ...args) : Log(std::forward<Args>(args)...) {}
+#endif
 };
 
 /** \brief Stream-like class to print a warning message to the app's logging facility
@@ -140,6 +158,12 @@ class Warning : public Log
 public:
     using Log::Log; // inherit c'tor
     virtual ~Warning();
+
+#if defined(__GNUC__) && !defined(__clang__)
+    // Grr.. GCC doesn't fully implement C++ 17 so we must do this. :(
+    template <typename ...Args>
+    explicit Warning(Args && ...args) : Log(std::forward<Args>(args)...) {}
+#endif
 };
 
 

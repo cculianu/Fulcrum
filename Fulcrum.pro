@@ -5,10 +5,14 @@ CONFIG += c++17 console
 CONFIG -= app_bundle
 
 # Test for ability to use c++latest; requires Qt 5.12.0 or above
-greaterThan(QT_MAJOR_VERSION, 4):greaterThan(QT_MINOR_VERSION, 12) {
+greaterThan(QT_MAJOR_VERSION, 4):greaterThan(QT_MINOR_VERSION, 12):!win32-g++ {
     # Qt 5.13+ supports "c++latest"
     CONFIG -= c++17
     CONFIG += c++latest
+}
+
+!clang {
+    warning("Compilation on non-clang compiler may fail. If so, please try using clang >= 8.0 as the compiler!")
 }
 
 macx {
