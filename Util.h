@@ -178,22 +178,10 @@ namespace Util {
     template <typename Iterator>
     void shuffle(Iterator begin, Iterator end)
     {
-        try {
-            static std::random_device *rng = nullptr;
-            if (!rng) {
-                rng = new std::random_device();
-            }
-            std::shuffle(begin, end, *rng);
-        } catch (const std::exception &e) {
-            static bool didWarn = false;
-            if (!didWarn) {
-                Warning() << __FUNCTION__ << ": true random generator unavailable, proceeding with PRNG based on system clock (" << e.what() << ")";
-                didWarn = true;
-            }
-            // default pseudo rng
-            static unsigned seed = unsigned(std::chrono::system_clock::now().time_since_epoch().count());
-            std::shuffle(begin, end, std::default_random_engine(seed));
-        }
+        // We use Qt's implementation here because apparently MinGW on Windows using GCC before 9.2 uses a deterministic
+        // RNG even if using std::random_device.  Qt's RNG does not have this problem.
+        auto seed = QRandomGenerator::global()->generate();
+        std::shuffle(begin, end, std::default_random_engine(seed));
     }
 
     template <typename Map>
