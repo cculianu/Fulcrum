@@ -4,7 +4,6 @@
 #include <QSslSocket>
 #include <QHostAddress>
 
-
 AbstractConnection::AbstractConnection(quint64 id_in, QObject *parent, qint64 maxBuffer)
     : QObject(parent), IdMixin(id_in), MAX_BUFFER(maxBuffer)
 {}
@@ -19,6 +18,7 @@ QString AbstractConnection::prettyName(bool dontTouchSocket) const
     return QString("%1 %2 (id: %3) %4%5").arg(type).arg(!objectName().isNull()?objectName():"(AbstractSocket)").arg(id).arg(ip).arg(port);
 }
 
+QObject * AbstractConnection::qobj() { return this; }
 
 bool AbstractConnection::isGood() const
 {
@@ -92,27 +92,6 @@ bool AbstractConnection::do_write(const QByteArray & data)
     return true;
 }
 
-void AbstractConnection::kill_pingTimer()
-{
-    delete pingTimer; pingTimer = nullptr; // delete of nullptr always ok
-}
-
-void AbstractConnection::start_pingTimer()
-{
-    kill_pingTimer();
-    pingTimer = new QTimer(this);
-    pingTimer->setSingleShot(false);
-    connect(pingTimer, SIGNAL(timeout()), this, SLOT(on_pingTimer()));
-    pingTimer->start(pingtime_ms/* 1 minute */ / 2);
-}
-
-void AbstractConnection::on_pingTimer()
-{
-    if (Util::getTime() - lastGood > pingtime_ms)
-        // only call do_ping if we've been idle for longer than 1 minute
-        do_ping();
-}
-
 void AbstractConnection::slot_on_readyRead() { on_readyRead(); }
 
 void AbstractConnection::on_connected()
@@ -138,13 +117,22 @@ void AbstractConnection::on_connected()
                 QObject::disconnect(connection);
             }
             connectedConns.clear(); // be sure to empty the list out when we are done!
-            kill_pingTimer();
+            stopTimer(pingTimer); // kill the ping timer (method from TimersByNameMixin)
             on_disconnected();
             emit lostConnection(this);
             // todo: put stuff to queue up a reconnect sometime later?
         })
     );
-    start_pingTimer();
+    {  // set up the "pingTimer"
+        auto on_pingTimer = [this]{
+            if (Util::getTime() - lastGood > pingtime_ms)
+                // only call do_ping if we've been idle for longer than pingtime_ms
+                do_ping();
+            return true;
+        };
+        const int period_ms = pingtime_ms/* 1 minute */ / 2;
+        callOnTimerSoon(period_ms, pingTimer, on_pingTimer, true, Qt::TimerType::VeryCoarseTimer); // method inherited from TimersByNameMixin
+    }
 }
 
 void AbstractConnection::on_disconnected()
@@ -192,3 +180,35 @@ void AbstractConnection::on_error(QAbstractSocket::SocketError err)
     do_disconnect();
 }
 
+/// call this only from this object's thread
+QVariantMap AbstractConnection::getStats() const
+{
+    QVariantMap m;
+    m["name"] = objectName();
+    m["id"] = id;
+    m["connectedTime"] = isGood() ? QVariant(double(Util::getTime() - connectedTS)/1e3) : QVariant();
+    m["nBytesSent"] = nSent.load();
+    m["nBytesReceived"] = nReceived.load();
+    m["idleTime"] = isGood() ? QVariant(double(Util::getTime() - lastGood)/1e3) : QVariant();
+    m["lastSocketError"] = lastSocketError;
+    m["nDisconnects"] = nDisconnects.load();
+    m["nSocketErrors"] = nSocketErrors.load();
+    auto atl = activeTimers();
+    QVariantMap timerMap;
+    for (const auto & name : atl)
+        timerMap[name] = timerInterval(name);
+    m["activeTimers"] = timerMap;
+    m["remote"] = [this]() -> QVariant {
+        if (QString addr; socket && !(addr=socket->peerAddress().toString()).isNull()) {
+            return QString("%1:%2").arg(addr).arg(socket->peerPort());
+        }
+        return QVariant(); // null
+    }();
+    m["local"] = [this]() -> QVariant {
+        if (QString addr; socket && !(addr=socket->localAddress().toString()).isNull()) {
+            return QString("%1:%2").arg(addr).arg(socket->localPort());
+        }
+        return QVariant(); // null
+    }();
+    return m;
+}

@@ -4,6 +4,7 @@
 #include "Common.h"
 #include "Mixins.h"
 
+#include <QVariantMap>
 #include <QObject>
 #include <QTcpSocket>
 
@@ -11,7 +12,7 @@
 
 class QTimer;
 
-class AbstractConnection : public QObject, public IdMixin
+class AbstractConnection : public QObject, public IdMixin, protected TimersByNameMixin
 {
     Q_OBJECT
 public:
@@ -28,6 +29,9 @@ public:
     /// true if we got a malformed reply from the server
     virtual bool isBad() const { return status == Bad; }
 
+    /// call this only from this object's thread
+    virtual QVariantMap getStats() const;
+
 signals:
     void lostConnection(AbstractConnection *);
     /// call (emit) this to send data to the other end. connected to do_write() when socket is in the connected state.
@@ -35,6 +39,7 @@ signals:
     void send(QByteArray);
 
 protected:
+    QObject * qobj() override; ///< from TimersByNameMixin
 
     virtual void on_readyRead() = 0; /**< Implement in subclasses -- required to read data */
 
@@ -64,7 +69,6 @@ protected:
     qint64 stale_threshold = default_stale_threshold;
     QTcpSocket *socket = nullptr; ///< this should only ever be touched in our thread
     QByteArray writeBackLog = ""; ///< if this grows beyond a certain size, we should kill the connection
-    QTimer *pingTimer = nullptr;
     QString lastSocketError; ///< the last socket error seen.
     QList<QMetaObject::Connection> connectedConns; /// signal/slot connections for the connected state. this gets populated when the socket connects in on_connected. signal connections will be disconnected on socket disconnect.
 
@@ -79,15 +83,13 @@ protected:
     /// does a socket->abort, sets status. Chain to this if you want on override. Named this way so as not to clash with QObject::disconnect
     virtual void do_disconnect(bool graceful = false);
 
+    static constexpr auto pingTimer = "+Ping Timer";  ///< this is the internal pingTimer which calls do_ping() periodically.
+
 private slots:
-    void on_pingTimer();
     void on_bytesWritten();
     void on_error(QAbstractSocket::SocketError);
     void on_socketState(QAbstractSocket::SocketState);
     void slot_on_readyRead(); ///< calls virtual method on_readyRead for us -- I was paranoid about Qt signal/slot binding semantics and prefer to call from within a function explicitly, hence this redundant method.
-private:
-    void start_pingTimer();
-    void kill_pingTimer();
 };
 
 #endif // ABSTRACTCONN_H

@@ -42,7 +42,7 @@ private:
     std::unique_ptr<BitcoinD> clients[N_CLIENTS];
 };
 
-class BitcoinD : public RPC::HttpConnection, public ThreadObjectMixin, protected TimersByNameMixin
+class BitcoinD : public RPC::HttpConnection, public ThreadObjectMixin /* NB: also inherits TimersByNameMixin via AbstractConnection base */
 {
     Q_OBJECT
 
@@ -54,7 +54,7 @@ public:
     using ThreadObjectMixin::stop;
 
     /// Not thread safe. Be sure to call this in this object's thread.
-    QVariantMap getStats() const;
+    QVariantMap getStats() const override;
 
     bool isGood() const override; ///< from AbstractConnection -- returns true iff Status==Connected AND auth confirmed ok.
 
@@ -73,7 +73,7 @@ protected:
 
     void reconnect();
 
-    QObject * qobj() override; ///< from ThreadObjectMixin & TimersByNameMixin
+    QObject * qobj() override; ///< from ThreadObjectMixin
 
 private:
     void connectMiscSignals(); ///< some signals/slots to self to do bookkeeping

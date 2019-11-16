@@ -250,7 +250,14 @@ QString Server::prettyName() const
 QVariantMap Server::stats() const
 {
     QVariantMap ret;
-    ret["num_clients"] = clientsById.count();
+    ret["numClients"] = clientsById.count();
+    QVariantList clientList;
+    for (const auto & client : clientsById) {
+        auto map = Util::CallOnObjectWithTimeoutNoThrow<QVariantMap>(250, client, &Client::getStats).value_or(QVariantMap());
+        auto name = map.take("name").toString();
+        clientList.append(QVariantMap({{name, map}}));
+    }
+    ret["clients"] = clientList;
     return ret;
 }
 
@@ -445,7 +452,7 @@ Client::Client(const RPC::MethodMap & mm, quint64 id_in, Server *srv, QTcpSocket
     Q_ASSERT(socket->state() == QAbstractSocket::ConnectedState);
     status = Connected ; // we are always connected at construction time.
     errorPolicy = ErrorPolicySendErrorMessage;
-    setObjectName("Client");
+    setObjectName(QString("Client.%1").arg(id_in));
     on_connected();
     Debug() << prettyName() << " new client";
 }

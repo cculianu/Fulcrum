@@ -55,7 +55,9 @@ auto BitcoinDMgr::stats() const -> Stats
     QVariantList l;
     for (const auto & client : clients) {
         if (!client) continue;
-        l += Util::LambdaOnObjectNoThrow<QVariantMap>(client.get(), [c=client.get()]{ return c->getStats(); }, 250).value_or(QVariantMap());
+        auto map = Util::CallOnObjectWithTimeoutNoThrow<QVariantMap>(250, client.get(), &BitcoinD::getStats).value_or(QVariantMap());
+        auto name = map.take("name").toString();
+        l += QVariantMap({{ name, map }});
     }
     ret["Bitcoin Daemon"] = l;
     return ret;
@@ -63,18 +65,9 @@ auto BitcoinDMgr::stats() const -> Stats
 
 QVariantMap BitcoinD::getStats() const
 {
-    QVariantMap m;
-    m["connectedTime"] = isGood() ? QVariant(double(Util::getTime() - connectedTS)/1e3) : QVariant();
-    m["nBytesSent"] = nSent.load();
-    m["nBytesReceived"] = nReceived.load();
-    m["host:port"] = QString("%1:%2").arg(host.toString()).arg(port);
-    m["idleTime"] = isGood() ? QVariant(double(Util::getTime() - lastGood)/1e3) : QVariant();
+    QVariantMap m = RPC::HttpConnection::getStats();
     m["lastPeerError"] = badAuth ? "Auth Failure" : lastPeerError;
-    m["lastSocketError"] = lastSocketError;
-    m["nDisconnects"] = nDisconnects.load();
-    m["nSocketErrors"] = nSocketErrors.load();
-    m["activeTimers"] = activeTimers();
-    return QVariantMap{ {objectName(), m} };
+    return m;
 }
 
 BitcoinD::BitcoinD(const QHostAddress &host, quint16 port, const QString & user, const QString &pass)

@@ -403,7 +403,7 @@ namespace Util {
             // direct call to save on a copy c'tor
             return lambda();
         } else if (UNLIKELY(!obj->thread()->isRunning())) {
-            throw ThreadNotRunning("Target object's thread is not running");
+            throw ThreadNotRunning(QString("Target object's thread is not running (objectName: '%1')").arg(obj->objectName()));
         } else {
             auto taskp = std::make_shared< std::packaged_task<RET()> >(lambda);
             auto future = taskp->get_future();
@@ -427,6 +427,8 @@ namespace Util {
         std::optional<RET> ret;
         try {
             ret.emplace( LambdaOnObject<RET>(obj, lambda, timeout_ms) );
+        } catch (const ThreadNotRunning & e) {
+            Warning() << __FUNCTION__ << ": " << e.what();
         } catch (const Exception &) {}
         return ret;
     }
@@ -485,6 +487,8 @@ namespace Util {
         std::optional<RET> ret;
         try {
             ret.emplace( CallOnObjectWithTimeout<RET>(timeout_ms, obj, method, std::forward<Args>(args)...) );
+        } catch (const ThreadNotRunning & e) {
+            Warning() << __FUNCTION__ << ": " << e.what();
         } catch (const Exception &) {}
         return ret;
     }
@@ -503,6 +507,8 @@ namespace Util {
         std::optional<RET> ret;
         try {
             ret.emplace( CallOnObject<RET>(obj, method, std::forward<Args>(args)...) );
+        } catch (const ThreadNotRunning & e) {
+            Warning() << __FUNCTION__ << ": " << e.what();
         } catch (const Exception &) {}
         return ret;
     }

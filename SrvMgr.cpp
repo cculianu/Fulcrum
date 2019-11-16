@@ -62,6 +62,6 @@ auto SrvMgr::stats() const -> Stats
             serverList.push_back(m);
         }
     }
-    ret["servers"] = serverList;
+    ret["Servers"] = serverList;
     return ret;
 }

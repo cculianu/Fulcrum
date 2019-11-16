@@ -79,17 +79,34 @@ protected:
         int timeout_milliseconds, ///< what interval to set for the timer. If timer is already active, nothing will change.
         const QString & timerName, ///< timer name. these should be unique. If same named timer is active, function will return immediately, func will be discarded.
         const std::function<bool()> & func, ///< function to call on timeout. If function returns true, timer is not stopped. Otherwise, it is removed from the map, stopped, and deleted later.
-        bool forceTimerRestart = false ///< if true, will force the timer to immediately be restarted now. This will *not* enqueue the new functor if a timer exited, just restart the timer on the pre-existing functor.
+        bool forceTimerRestart = false, ///< if true, will force the timer to immediately be restarted now. This will *not* enqueue the new functor if a timer exited, just restart the timer on the pre-existing functor.
+        Qt::TimerType = Qt::TimerType::CoarseTimer
     );
     /// Identical to above, except takes a pure voidfunc. It's as if the above returned false (so will not keep going).
     void callOnTimerSoonNoRepeat(
         int timeout_milliseconds,
         const QString & timerName,
         const std::function<void()> & singleShotFunc,
-        bool forceTimerRestart = false
+        bool forceTimerRestart = false,
+        Qt::TimerType = Qt::TimerType::CoarseTimer
     );
 
+    /// Returns true iff timer `name` exists
     inline bool isTimerByNameActive(const QString & name) const { return _timerMap.contains(name); }
+    /// Calls setInterval for you on the named timer, if it exists, and returns true. Returns false otherwise.
+    inline bool resetTimerInterval(const QString & name, int interval_ms) {
+        if (auto timer = _timerMap.value(name); timer) {
+            timer->setInterval(interval_ms);
+            return true;
+        }
+        return false;
+    }
+    inline int timerInterval(const QString & name) const {
+        if (auto timer = _timerMap.value(name); timer) {
+            return timer->interval();
+        }
+        return -1;
+    }
     /// provided for stats/debug
     QStringList activeTimers() const { return _timerMap.keys(); }
 
