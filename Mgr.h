@@ -14,10 +14,10 @@ public:
     virtual void startup() = 0; ///< NB: mgrs may throw Exception here, so catch it and abort if that happens.
     virtual void cleanup() = 0;
 
-    typedef QVariantMap Stats;
+    using Stats = QVariantMap;
 
     /// thread-safe wrapper around stats().
-    Stats statsSafe() const;
+    Stats statsSafe(int timeout_ms = 1000) const;
 
 protected:
     /// Return controller-specific stats -- to be used later if we implement some sort of query mechanism
