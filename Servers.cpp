@@ -230,6 +230,21 @@ void SimpleHttpServer::addEndpoint(const QString &endPoint, const Lambda &callba
     endPoints[endPoint] = callback;
 }
 
+
+// ---- Classes Server & Client ----
+
+// class Server constants
+namespace {
+    // TODO: maybe move these to a more global place? For now here is fine.
+    namespace Constants {
+        constexpr int kMaxServerVersion = 80,  ///< the maximum server version length we accept to prevent memory exhaustion attacks
+                      kScriptHashLength = 256/8, ///< the length of a scripthash in bytes. sha256 = 32 bytes.
+                      kMaxBuffer = 4*1000*1000, ///< =4MB. The max buffer we use in Client (ElectronX client). TODO: Make this tune-able and configurable!
+                      kMaxErrorCount = 10; ///< The maximum number of errors we tolerate from a Client before disconnecting them.
+    }
+    using namespace Constants;
+}
+
 Server::Server(const QHostAddress &a, quint16 p)
     : AbstractTcpServer(a, p)
 {
@@ -253,8 +268,15 @@ QVariantMap Server::stats() const
     ret["numClients"] = clientsById.count();
     QVariantList clientList;
     for (const auto & client : clientsById) {
-        auto map = Util::CallOnObjectWithTimeoutNoThrow<QVariantMap>(250, client, &Client::getStats).value_or(QVariantMap());
+        auto map = client->getStats(); // note: client *must* run in the same thread as us for this to not crash. If this changes in the future please change this.
         auto name = map.take("name").toString();
+        map["version"] = QVariantList({client->info.userAgent, client->info.protocolVersion});
+        map["errCt"] = client->info.errCt;
+        map["nRequests"] = client->info.nRequests;
+        // the below don't really make much sense for this class (they are always 0 or empty)
+        map.remove("nDisconnects");
+        map.remove("nSocketErrors");
+        map.remove("lastSocketError");
         clientList.append(QVariantMap({{name, map}}));
     }
     ret["clients"] = clientList;
@@ -322,9 +344,12 @@ void Server::onMessage(quint64 clientId, const RPC::Message &m)
         auto member = StaticData::dispatchTable.value(m.method);
         if (!member)
             Error() << "Unknown method: \"" << m.method << "\". This shouldn't happen. FIXME! Json: " << m.toJsonString();
-        else
+        else {
+            // indicate a good request, accepted request
+            ++c->info.nRequests;
             // call ptr to member
             (this->*member)(c, m);
+        }
     } else {
         Debug() << "Unknown client: " << clientId;
     }
@@ -341,8 +366,8 @@ void Server::onPeerError(quint64 clientId, const QString &what)
 {
     Debug() << "onPeerError, client " << clientId << " error: " << what;
     if (Client *c = getClient(clientId); c) {
-        if (++c->info.errCt >= 5) {
-            Warning() << "Excessive errors (5) for: " << c->prettyName() << ", disconnecting";
+        if (++c->info.errCt - c->info.nRequests >= kMaxErrorCount) {
+            Warning() << "Excessive errors (" << kMaxErrorCount << ") for: " << c->prettyName() << ", disconnecting";
             killClient(c);
             return;
         }
@@ -350,15 +375,6 @@ void Server::onPeerError(quint64 clientId, const QString &what)
 }
 
 // --- RPC METHODS ---
-namespace {
-    // TODO: maybe move these to a more global place? For now here is fine.
-    namespace Constants {
-        constexpr int kMaxServerVersion = 80,  ///< the maximum server version length we accept to prevent memory exhaustion attacks
-                      kScriptHashLength = 256/8, ///< the length of a scripthash in bytes. sha256 = 32 bytes.
-                      kMaxBuffer = 4*1000*1000; ///< =4MB. The max buffer we use in Client (ElectronX client). TODO: Make this tune-able and configurable!
-    }
-    using namespace Constants;
-}
 void Server::rpc_server_version(Client *c, const RPC::Message &m)
 {
     if (QVariantList l = m.paramsList(); m.isRequest() && l.size() == 2) {

@@ -175,7 +175,7 @@ private:
 
 /// Encapsulates an EXClient
 /// These run and live in 'Server' instance thread
-/// Note that their parent QObject is the sock (for now)!
+/// Note that their parent QObject is the socket!
 /// (grandparent is Server) .. so they will be destroyed
 /// when the server goes away or the socket is deleted.
 class Client : public RPC::LinefeedConnection
@@ -187,8 +187,9 @@ public:
     ~Client() override;
 
     struct Info {
-        int errCt = 0;
-        QString userAgent, protocolVersion;
+        int errCt = 0; ///< this gets incremented for each peerError. If errCt - nRequests >= 10, then we disconnect the client.
+        int nRequests = 0; ///< the number of request messages that were non-errors that the client sent us
+        QString userAgent = "Unknown", protocolVersion = "";
     };
 
     Info info;
