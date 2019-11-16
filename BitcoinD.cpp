@@ -73,6 +73,7 @@ QVariantMap BitcoinD::getStats() const
     m["lastSocketError"] = lastSocketError;
     m["nDisconnects"] = nDisconnects.load();
     m["nSocketErrors"] = nSocketErrors.load();
+    m["activeTimers"] = activeTimers();
     return QVariantMap{ {objectName(), m} };
 }
 
@@ -87,6 +88,8 @@ BitcoinD::BitcoinD(const QHostAddress &host, quint16 port, const QString & user,
     setV1(true); // bitcoind uses jsonrpc v1
     pingtime_ms = 10000;
     stale_threshold = pingtime_ms * 2;
+
+    connectMiscSignals();
 }
 
 
@@ -97,19 +100,36 @@ BitcoinD::~BitcoinD()
 
 QObject * BitcoinD::qobj() { return this; }
 
+void BitcoinD::connectMiscSignals()
+{
+    connect(this, &BitcoinD::gotMessage, this, [this]{
+        // this hook emits "authenticated" as soon as we get a good result message via 'do_ping' initiated from 'on_connected' below
+        if (needAuth || badAuth) {
+            needAuth = badAuth = false;
+            emit authenticated(this);
+        }
+    });
+}
+
+bool BitcoinD::isGood() const
+{
+    return !badAuth && !needAuth && RPC::HttpConnection::isGood();
+}
+
 void BitcoinD::on_started()
 {
     ThreadObjectMixin::on_started();
 
     { // setup the "reconnect timer"
+        static constexpr auto reconnectTimer = "reconnectTimer";
         const auto SetTimer = [this] {
-            callOnTimerSoon(5000, "reconnectTimer", [this]{
+            callOnTimerSoon(5000, reconnectTimer, [this]{
                 if (!isGood()) {
                     Debug() << prettyName() << " reconnecting...";
                     reconnect();
-                    return true;
+                    return true; // keep the timer alive
                 }
-                return false;
+                return false; // kill timer
             });
         };
         conns += connect(this, &BitcoinD::lostConnection, this, [SetTimer]{
@@ -121,7 +141,8 @@ void BitcoinD::on_started()
             badAuth = true;
             SetTimer();
         });
-        conns += connect(this, &BitcoinD::connected, this, [this] { stopTimer("reconnectTimer"); });
+        conns += connect(this, &BitcoinD::authenticated, this, [this] { stopTimer(reconnectTimer); });
+
         SetTimer();
     }
 
@@ -144,7 +165,9 @@ void BitcoinD::on_connected()
     lastPeerError.clear();
     lastSocketError.clear();
     badAuth = false;
+    needAuth = true;
     emit connected(this);
+    // note that the 'authenticated' signal is only emitted after good auth is confirmed via the reply from the do_ping below
     do_ping();
 }
 

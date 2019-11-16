@@ -56,8 +56,14 @@ public:
     /// Not thread safe. Be sure to call this in this object's thread.
     QVariantMap getStats() const;
 
+    bool isGood() const override; ///< from AbstractConnection -- returns true iff Status==Connected AND auth confirmed ok.
+
 signals:
+    /// This is emitted immediately after successful socket connect but before auth. After this signal, client code
+    /// can expect either one of the two following signals to be emitted: either the authenticated() signal below,
+    /// or the base class's authFailure() signal.
     void connected(BitcoinD *me);
+    void authenticated(BitcoinD *me); ///< This is emitted after we have successfully connected and auth'd.
 
 protected:
     void on_started() override;
@@ -70,9 +76,11 @@ protected:
     QObject * qobj() override; ///< from ThreadObjectMixin & TimersByNameMixin
 
 private:
+    void connectMiscSignals(); ///< some signals/slots to self to do bookkeeping
+
     const QHostAddress host;
     const quint16 port;
-    bool badAuth = false;
+    bool badAuth = false, needAuth = true;
 };
 
 
