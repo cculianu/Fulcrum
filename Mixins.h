@@ -114,4 +114,31 @@ protected:
     inline bool stopTimer(const QString &name) { auto timer = _timerMap.take(name); return bool(timer); }
 };
 
+
+/// A mixin for Mgr and AbstractConnection and other classes that can return stats.
+class StatsMixin
+{
+public:
+    virtual ~StatsMixin();
+
+    using Stats = QVariantMap;
+
+    /// thread-safe wrapper around stats().
+    Stats statsSafe(int timeout_ms = 1000) const;
+
+protected:
+    virtual QObject *qobj() = 0; ///< reimplement in subclasses to return a pointer to 'this' of type QObject.
+
+    /// Return object-specific stats -- to be used by subsystems such as the /stats HTTP endpoint.
+    /// This base class implementation returns an empty map, so you should override it.
+    ///
+    /// Note this function is unsafe and meant to be called within the Mgr's thread.
+    /// Outside client code should use public statsSafe(), which wraps the below call in a
+    /// thread-safe call, so that derived classes don't have to worry about thread safety and
+    /// can just implement this function by examining their own private data to populate the map
+    /// without locks.
+    virtual Stats stats() const;
+};
+
+
 #endif // MIXINS_H

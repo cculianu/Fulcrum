@@ -55,7 +55,7 @@ auto BitcoinDMgr::stats() const -> Stats
     QVariantList l;
     for (const auto & client : clients) {
         if (!client) continue;
-        auto map = Util::CallOnObjectWithTimeoutNoThrow<QVariantMap>(250, client.get(), &BitcoinD::getStats).value_or(QVariantMap());
+        auto map = client->statsSafe(250);
         auto name = map.take("name").toString();
         l += QVariantMap({{ name, map }});
     }
@@ -63,9 +63,9 @@ auto BitcoinDMgr::stats() const -> Stats
     return ret;
 }
 
-QVariantMap BitcoinD::getStats() const
+auto BitcoinD::stats() const -> Stats
 {
-    QVariantMap m = RPC::HttpConnection::getStats();
+    Stats m = RPC::HttpConnection::stats();
     m["lastPeerError"] = badAuth ? "Auth Failure" : lastPeerError;
     return m;
 }

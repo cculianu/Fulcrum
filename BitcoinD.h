@@ -53,9 +53,6 @@ public:
     using ThreadObjectMixin::start;
     using ThreadObjectMixin::stop;
 
-    /// Not thread safe. Be sure to call this in this object's thread.
-    QVariantMap getStats() const override;
-
     bool isGood() const override; ///< from AbstractConnection -- returns true iff Status==Connected AND auth confirmed ok.
 
 signals:
@@ -74,6 +71,9 @@ protected:
     void reconnect();
 
     QObject * qobj() override; ///< from ThreadObjectMixin
+
+    /// Not thread safe. Be sure to call this in this object's thread. Override from StatsMixin
+    Stats stats() const override;
 
 private:
     void connectMiscSignals(); ///< some signals/slots to self to do bookkeeping

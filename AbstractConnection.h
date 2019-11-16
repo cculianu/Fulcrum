@@ -12,7 +12,7 @@
 
 class QTimer;
 
-class AbstractConnection : public QObject, public IdMixin, protected TimersByNameMixin
+class AbstractConnection : public QObject, public IdMixin, protected TimersByNameMixin, public StatsMixin
 {
     Q_OBJECT
 public:
@@ -29,9 +29,6 @@ public:
     /// true if we got a malformed reply from the server
     virtual bool isBad() const { return status == Bad; }
 
-    /// call this only from this object's thread
-    virtual QVariantMap getStats() const;
-
 signals:
     void lostConnection(AbstractConnection *);
     /// call (emit) this to send data to the other end. connected to do_write() when socket is in the connected state.
@@ -39,7 +36,10 @@ signals:
     void send(QByteArray);
 
 protected:
-    QObject * qobj() override; ///< from TimersByNameMixin
+    QObject * qobj() override; ///< from TimersByNameMixin, StatsMixin
+
+    /// this should be called only from this object's thread. Outside code should use statsSafe() (inherited from StatsMixin)
+    Stats stats() const override; // (override from StatsMixin)
 
     virtual void on_readyRead() = 0; /**< Implement in subclasses -- required to read data */
 

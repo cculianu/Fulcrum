@@ -268,7 +268,9 @@ QVariantMap Server::stats() const
     ret["numClients"] = clientsById.count();
     QVariantList clientList;
     for (const auto & client : clientsById) {
-        auto map = client->getStats(); // note: client *must* run in the same thread as us for this to not crash. If this changes in the future please change this.
+        // note we call this thread-unsafe function stats() here because client lives in our thread. but if that design
+        // changes, update this to call client->statsSafe(100) instead
+        auto map = client->stats();
         auto name = map.take("name").toString();
         map["version"] = QVariantList({client->info.userAgent, client->info.protocolVersion});
         map["errCt"] = client->info.errCt;

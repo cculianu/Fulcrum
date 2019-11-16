@@ -1,5 +1,5 @@
-#include "Mixins.h"
 #include "App.h"
+#include "Mixins.h"
 
 ThreadObjectMixin::ThreadObjectMixin()
 {
@@ -93,4 +93,23 @@ void TimersByNameMixin::callOnTimerSoon(int ms, const QString &name, const std::
 void TimersByNameMixin::callOnTimerSoonNoRepeat(int ms, const QString &name, const std::function<void()> & fn, bool force, Qt::TimerType ttype)
 {
     callOnTimerSoon(ms, name, [fn]() -> bool { fn(); return false; }, force, ttype);
+}
+
+
+/// --- StatsMixin
+StatsMixin::~StatsMixin() {}
+
+// unsafe in subclasses (safe here)
+auto StatsMixin::stats() const -> Stats { return Stats(); }
+
+// thread-safe
+auto StatsMixin::statsSafe(int timeout_ms) const -> Stats
+{
+    Stats ret;
+    try {
+        ret = Util::LambdaOnObject<Stats>(const_cast<StatsMixin *>(this)->qobj(), [this]{ return stats(); }, timeout_ms);
+    } catch (const std::exception & e) {
+        Debug() << "Safe stats get failed: " << e.what();
+    }
+    return ret;
 }

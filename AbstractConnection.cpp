@@ -181,9 +181,9 @@ void AbstractConnection::on_error(QAbstractSocket::SocketError err)
 }
 
 /// call this only from this object's thread
-QVariantMap AbstractConnection::getStats() const
+auto AbstractConnection::stats() const -> Stats
 {
-    QVariantMap m;
+    Stats m;
     m["name"] = objectName();
     m["id"] = id;
     m["connectedTime"] = isGood() ? QVariant(double(Util::getTime() - connectedTS)/1e3) : QVariant();
