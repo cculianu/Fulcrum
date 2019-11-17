@@ -6,7 +6,7 @@ Controller::Controller(const std::shared_ptr<Options> &o, QObject *parent)
 
 }
 
-Controller::~Controller() {}
+Controller::~Controller() { Debug(__FUNCTION__); cleanup(); }
 
 auto Controller::stats() const -> Stats
 {
@@ -22,7 +22,6 @@ void Controller::startup()
 
     srvmgr = std::make_unique<SrvMgr>(options->interfaces, this);
     srvmgr->startup(); // may throw Exception, waits for servers to bind
-
 }
 
 void Controller::cleanup()
