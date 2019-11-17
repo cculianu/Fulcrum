@@ -92,7 +92,7 @@ public:
 
 protected:
 
-    typedef QMap<QString, std::shared_ptr<QTimer> > _TimerMap;
+    using _TimerMap = QMap<QString, std::shared_ptr<QTimer> >;
     _TimerMap _timerMap;
 
     /// the utility function that is the point of this class.
@@ -141,6 +141,7 @@ protected:
 
     /// Stops the named timer and immediately deletes it.
     inline bool stopTimer(const QString &name) { auto timer = _timerMap.take(name); return bool(timer); }
+
 };
 
 

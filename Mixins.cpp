@@ -78,10 +78,13 @@ void TimersByNameMixin::callOnTimerSoon(int ms, const QString &name, const std::
 {
     if (auto it = _timerMap.find(name); it != _timerMap.end()) {
         if (force) {
-            it.value()->setTimerType(ttype);
-            it.value()->start(ms); // don't enqueue functor, just restart timer from this point forward
+            it->get()->stop(); // immediately stop timer
+            _timerMap.erase(it);
+            it = _timerMap.end(); // force delete QTimer since refs will go away
+            callOnTimerSoon(ms, name, func, false, ttype); // immediately call self recursively once to re-enqueue timer
         }
-        // timer already active, abort now
+        // timer was already active with force=false.. or was just re-enqueued with force=true.
+        // return right away in either case
         return;
     }
     std::shared_ptr<QTimer> timer(new QTimer(qobj()), [](QTimer *t){ t->deleteLater(); });
