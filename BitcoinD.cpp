@@ -65,6 +65,9 @@ auto BitcoinD::stats() const -> Stats
 {
     Stats m = RPC::HttpConnection::stats();
     m["lastPeerError"] = badAuth ? "Auth Failure" : lastPeerError;
+    m.remove("nErrorsSent"); // should always be 0
+    m.remove("nNotificationsSent"); // again, 0
+    m.remove("nResultsSent"); // again, 0
     return m;
 }
 

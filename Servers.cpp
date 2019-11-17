@@ -276,11 +276,13 @@ QVariantMap Server::stats() const
         auto name = map.take("name").toString();
         map["version"] = QVariantList({client->info.userAgent, client->info.protocolVersion});
         map["errCt"] = client->info.errCt;
-        map["nRequests"] = client->info.nRequests;
+        map["nRequestsRcv"] = client->info.nRequestsRcv;
         // the below don't really make much sense for this class (they are always 0 or empty)
         map.remove("nDisconnects");
         map.remove("nSocketErrors");
         map.remove("lastSocketError");
+        map.remove("nUnansweredRequests");
+        map.remove("nRequestsSent");
         clientList.append(QVariantMap({{name, map}}));
     }
     ret["clients"] = clientList;
@@ -350,7 +352,7 @@ void Server::onMessage(quint64 clientId, const RPC::Message &m)
             Error() << "Unknown method: \"" << m.method << "\". This shouldn't happen. FIXME! Json: " << m.toJsonString();
         else {
             // indicate a good request, accepted request
-            ++c->info.nRequests;
+            ++c->info.nRequestsRcv;
             // call ptr to member
             (this->*member)(c, m);
         }
@@ -370,7 +372,7 @@ void Server::onPeerError(quint64 clientId, const QString &what)
 {
     Debug() << "onPeerError, client " << clientId << " error: " << what;
     if (Client *c = getClient(clientId); c) {
-        if (++c->info.errCt - c->info.nRequests >= kMaxErrorCount) {
+        if (++c->info.errCt - c->info.nRequestsRcv >= kMaxErrorCount) {
             Warning() << "Excessive errors (" << kMaxErrorCount << ") for: " << c->prettyName() << ", disconnecting";
             killClient(c);
             return;

@@ -283,6 +283,9 @@ namespace RPC {
         /// Chains to base, clears idMethodMap
         void on_disconnected() override;
 
+        /// adds the nRequestsSent, etc stats
+        Stats stats() const override;
+
         /// map of requests that were generated via _sendRequest to method names to build a more meaningful Message
         /// object (which has a .method defined even on 'result=' messages).  It is an error to receive a result=
         /// message from the peer with its id= parameter not having an entry in this map.
@@ -303,6 +306,7 @@ namespace RPC {
         bool v1 = false; // if true, will generate v1 style messages and respond to v1 only
 
         QString lastPeerError;
+        quint64 nRequestsSent = 0, nNotificationsSent = 0, nResultsSent = 0, nErrorsSent = 0;
     };
 
     /// Concrete class. For ElectrumX/ElectronX style JSON RPC where newlines delimit RPC messages.

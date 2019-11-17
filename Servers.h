@@ -186,7 +186,7 @@ public:
 
     struct Info {
         int errCt = 0; ///< this gets incremented for each peerError. If errCt - nRequests >= 10, then we disconnect the client.
-        int nRequests = 0; ///< the number of request messages that were non-errors that the client sent us
+        int nRequestsRcv = 0; ///< the number of request messages that were non-errors that the client sent us
         QString userAgent = "Unknown", protocolVersion = "";
     };
 
