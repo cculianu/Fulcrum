@@ -14,6 +14,8 @@ TcpServerError::~TcpServerError() {} // for vtable
 AbstractTcpServer::AbstractTcpServer(const QHostAddress &a, quint16 p)
     : QTcpServer(nullptr), IdMixin(newId()), addr(a), port(p)
 {
+    assert(qobj()); // Runtime check that derived class followed the rules outlined at the top of Mixins.h
+
     _thread.setObjectName(prettyName());
     setObjectName(prettyName());
 }

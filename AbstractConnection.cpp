@@ -4,9 +4,13 @@
 #include <QSslSocket>
 #include <QHostAddress>
 
+#include <cassert>
+
 AbstractConnection::AbstractConnection(quint64 id_in, QObject *parent, qint64 maxBuffer)
     : QObject(parent), IdMixin(id_in), MAX_BUFFER(maxBuffer)
-{}
+{
+    assert(qobj()); // Runtime check that derived class followed the rules outlined at the top of Mixins.h
+}
 
 
 /// this should only be called from our thread, because it accesses socket which should only be touched from thread

@@ -15,6 +15,11 @@ greaterThan(QT_MAJOR_VERSION, 4):greaterThan(QT_MINOR_VERSION, 12):!win32-g++ {
     warning("Compilation on non-clang compiler may fail. If so, please try using clang >= 8.0 as the compiler!")
 }
 
+release {
+    QMAKE_CXXFLAGS += -DNDEBUG
+    QMAKE_CFLAGS += -DNDEBUG
+}
+
 macx {
     # Note: This is required because we use advanced C++ features such as std::visit
     # which requires newer Mojave+ C++ libs.  On a recent compiler SDK, this will
