@@ -28,7 +28,7 @@ App::App(int argc, char *argv[])
     setApplicationName(APPNAME);
     setApplicationVersion(QString("%1 %2").arg(VERSION).arg(VERSION_EXTRA));
 
-    _logger = new ConsoleLogger(this);
+    _logger = std::make_unique<ConsoleLogger>(this);
 
     try {
         parseArgs();
@@ -38,8 +38,7 @@ App::App(int argc, char *argv[])
         std::exit(1);
     }
     if (options.syslogMode) {
-        delete _logger;
-        _logger = new SysLogger(this);
+        _logger = std::make_unique<SysLogger>(this);
     }
 
     connect(this, &App::aboutToQuit, this, &App::cleanup);

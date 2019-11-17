@@ -16,9 +16,9 @@ class App : public QCoreApplication
     Q_OBJECT
 public:
     explicit App(int argc, char *argv[]);
-    ~App();
+    ~App() override;
 
-    Logger *logger() { return _logger; }
+    Logger *logger() { return _logger.get(); }
 
     Options options;
 
@@ -32,7 +32,7 @@ public slots:
 
 private:
     std::atomic<quint64> globalId = 0;
-    Logger *_logger = nullptr;
+    std::unique_ptr<Logger> _logger;
     std::unique_ptr<SrvMgr> srvmgr;
     std::unique_ptr<BitcoinDMgr> bitcoindmgr;
     QList<std::shared_ptr<SimpleHttpServer> > httpServers;
@@ -49,10 +49,6 @@ private:
     void start_httpServer(const Options::Interface &iface); // may throw
 };
 
-inline App *app() {
-    if (auto app  = qApp ; app)
-        return dynamic_cast<App *>(app);
-    return nullptr;
-}
+inline App *app() {  return dynamic_cast<App *>(qApp); }
 
 #endif // APP_H

@@ -8,7 +8,7 @@
 #include <QList>
 
 struct Options {
-    static const quint16 DEFAULT_PORT = 50001;
+    static constexpr quint16 DEFAULT_PORT = 50001;
 
     std::atomic_bool verboseDebug =
 #ifdef QT_DEBUG
