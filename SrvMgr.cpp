@@ -51,11 +51,12 @@ auto SrvMgr::stats() const -> Stats
     Stats ret;
     QVariantList serverList;
     auto servers = this->servers; // copy
+    const int timeout = kDefaultTimeout / qMax(servers.size(), 1);
     for (auto server : servers) {
         using Pair = std::pair<QString, QVariant>;
         auto result = Util::LambdaOnObjectNoThrow<Pair>(server, [server] {
             return Pair(server->prettyName(), server->stats());
-        }, 1000); // <-- limited timeout just in case
+        }, timeout); // <-- limited timeout just in case
         if (result) {
             QVariantMap m;
             m[result->first] = result->second;

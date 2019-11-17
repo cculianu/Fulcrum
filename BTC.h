@@ -1,9 +1,9 @@
 #ifndef BTC_H
 #define BTC_H
 
-#include "bitcoin/transaction.h"
-#include "bitcoin/script.h"
 #include "bitcoin/block.h"
+#include "bitcoin/script.h"
+#include "bitcoin/transaction.h"
 
 #include <QByteArray>
 #include <QString>
@@ -17,9 +17,9 @@
 namespace BTC
 {
 
-    /// Checks that the bitcoin lib has the correct
-    /// endian settings for this platform. Will throw Exception on failure.
-    extern void CheckBitcoinEndiannessCompiledCorrectly();
+    /// Checks that the bitcoin lib has the correct endian settings for this platform. Will throw InternalError on
+    /// failure. Also does other sanity checks, as well.
+    extern void CheckBitcoinEndiannessAndOtherSanityChecks();
 
     enum Net {
         Invalid = 0,
@@ -276,7 +276,7 @@ namespace BTC
 
     namespace Tests {
         void SigCheck();
-        bool Base58();
+        bool Base58(bool silent = false, bool throws = false);
         void CashAddr();
         void TestBlock();
     }

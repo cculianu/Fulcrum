@@ -51,9 +51,10 @@ auto BitcoinDMgr::stats() const -> Stats
 {
     Stats ret;
     QVariantList l;
+    static constexpr int timeout = kDefaultTimeout/qMax(N_CLIENTS,1);
     for (const auto & client : clients) {
         if (!client) continue;
-        auto map = client->statsSafe(250);
+        auto map = client->statsSafe(timeout);
         auto name = map.take("name").toString();
         l += QVariantMap({{ name, map }});
     }

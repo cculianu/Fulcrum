@@ -1,9 +1,8 @@
 #include "App.h"
-#include "BitcoinD.h"
 #include "BTC.h"
+#include "Controller.h"
 #include "Logger.h"
 #include "Servers.h"
-#include "SrvMgr.h"
 #include "Util.h"
 
 #include <QCommandLineParser>
@@ -24,7 +23,8 @@
 App::App(int argc, char *argv[])
     : QCoreApplication (argc, argv)
 {
-    options.interfaces = {{QHostAddress("0.0.0.0"), Options::DEFAULT_PORT}};
+    options = std::make_shared<Options>();
+    options->interfaces = {{QHostAddress("0.0.0.0"), Options::DEFAULT_PORT}}; // start with default, will be cleared if -i specified
     setApplicationName(APPNAME);
     setApplicationVersion(QString("%1 %2").arg(VERSION).arg(VERSION_EXTRA));
 
@@ -33,11 +33,11 @@ App::App(int argc, char *argv[])
     try {
         parseArgs();
     } catch (const BadArgs &e) {
-        options.syslogMode = true; // suppress timestamp stuff
+        options->syslogMode = true; // suppress timestamp stuff
         Error() << e.what();
         std::exit(1);
     }
-    if (options.syslogMode) {
+    if (options->syslogMode) {
         _logger = std::make_unique<SysLogger>(this);
     }
 
@@ -63,7 +63,7 @@ void App::startup()
     }
 
     try {
-        BTC::CheckBitcoinEndiannessCompiledCorrectly();
+        BTC::CheckBitcoinEndiannessAndOtherSanityChecks();
         register_MetaTypes();
 
         auto gotsig = [](int sig) {
@@ -85,17 +85,13 @@ void App::startup()
         std::signal(SIGHUP, SIG_IGN);
 #endif
 
-        bitcoindmgr = std::make_unique<BitcoinDMgr>(options.bitcoind.first, options.bitcoind.second, options.rpcuser, options.rpcpassword);
-        bitcoindmgr->startup(); // may throw
+        controller = std::make_unique<Controller>(options, this);
+        controller->startup(); // may throw
 
-        srvmgr = std::make_unique<SrvMgr>(options.interfaces, this);
-        srvmgr->startup(); // may throw Exception, waits for servers to bind
-
-
-        if (!options.statsInterfaces.isEmpty()) {
-            Log() << "Stats HTTP: starting " << options.interfaces.count() << " server(s) ...";
+        if (!options->statsInterfaces.isEmpty()) {
+            Log() << "Stats HTTP: starting " << options->interfaces.count() << " server(s) ...";
             // start 'stats' http servers, if any
-            for (const auto & i : options.statsInterfaces)
+            for (const auto & i : options->statsInterfaces)
                 start_httpServer(i); // may throw
         }
 
@@ -114,8 +110,7 @@ void App::cleanup()
         for (auto h : httpServers) { h->stop(); }
         httpServers.clear(); // deletes shared pointers
     }
-    if (srvmgr) { Log("Stopping SrvMgr ... "); srvmgr->cleanup(); srvmgr.reset(); }
-    if (bitcoindmgr) { Log("Stopping BitcoinDMgr ... "); bitcoindmgr->cleanup(); bitcoindmgr.reset(); }
+    if (controller) { Log("Stopping Controller ... "); controller->cleanup(); controller.reset(); }
 }
 
 void App::cleanup_RunInThreads()
@@ -182,12 +177,12 @@ void App::parseArgs()
     });
     parser.process(*this);
 
-    if (parser.isSet("d")) options.verboseDebug = true;
+    if (parser.isSet("d")) options->verboseDebug = true;
     // check for -d -d
     if (auto found = parser.optionNames(); found.count("d") + found.count("debug") > 1)
-        options.verboseTrace = true;
-    if (parser.isSet("q")) options.verboseDebug = false;
-    if (parser.isSet("S")) options.syslogMode = true;
+        options->verboseTrace = true;
+    if (parser.isSet("q")) options->verboseDebug = false;
+    if (parser.isSet("S")) options->syslogMode = true;
     // make sure -b -p and -u all present and specified exactly once
     for (const auto & opt : QList<QPair<QString, QString>>({{"b", "bitcoind"},  {"u", "rpcuser"}, {"p", "rpcpassword"}})) {
         const auto & [s, l] = opt;
@@ -219,16 +214,16 @@ void App::parseArgs()
             interfaces.push_back(parseInterface(s));
     };
     // parse bitcoind
-    options.bitcoind = parseInterface(parser.value("b"));
+    options->bitcoind = parseInterface(parser.value("b"));
     // grab rpcuser
-    options.rpcuser = parser.value("u");
+    options->rpcuser = parser.value("u");
     // grab rpcpass
-    options.rpcpassword = parser.value("p");
+    options->rpcpassword = parser.value("p");
     // grab bind (listen) interfaces
     if (auto l = parser.values("i"); !l.isEmpty()) {
-        parseInterfaces(options.interfaces, l);
+        parseInterfaces(options->interfaces, l);
     }
-    parseInterfaces(options.statsInterfaces, parser.values("z"));
+    parseInterfaces(options->statsInterfaces, parser.values("z"));
 }
 
 void App::start_httpServer(const Options::Interface &iface)
@@ -239,8 +234,7 @@ void App::start_httpServer(const Options::Interface &iface)
     server->set404Message("Error: Unknown endpoint. /stats is the only valid endpoint I understand.\r\n");
     server->addEndpoint("/stats",[this](SimpleHttpServer::Request &req){
         req.response.contentType = "application/json; charset=utf-8";
-        auto stats = srvmgr->statsSafe();
-        Util::updateMap(stats, bitcoindmgr->statsSafe());
+        auto stats = controller->statsSafe();
         req.response.data = QString("%1\r\n").arg(Util::Json::toString(stats, false)).toUtf8();
     });
 }

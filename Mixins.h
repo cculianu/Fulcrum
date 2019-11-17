@@ -153,8 +153,10 @@ public:
 
     using Stats = QVariantMap;
 
+    static constexpr int kDefaultTimeout = 1000; ///< in milliseconds
+
     /// thread-safe wrapper around stats().
-    Stats statsSafe(int timeout_ms = 1000) const;
+    Stats statsSafe(int timeout_ms = kDefaultTimeout) const;
 
 protected:
     /// Return object-specific stats -- to be used by subsystems such as the /stats HTTP endpoint.

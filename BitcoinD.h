@@ -7,6 +7,7 @@
 
 #include <QHostAddress>
 
+#include <array>
 #include <memory>
 
 class BitcoinD;

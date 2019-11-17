@@ -25,6 +25,8 @@ public:
     CSHA256 &Write(const uint8_t *data, size_t len);
     void Finalize(uint8_t hash[OUTPUT_SIZE]);
     CSHA256 &Reset();
+
+    static bool SelfTest();  ///< added by Calin -- self test is performed for sanity even in release builds.
 };
 
 /**

@@ -65,6 +65,7 @@ SOURCES += \
     AbstractConnection.cpp \
     BTC.cpp \
     BitcoinD.cpp \
+    Controller.cpp \
     Mgr.cpp \
     Mixins.cpp \
     Options.cpp \
@@ -89,6 +90,7 @@ HEADERS += \
     BTC.h \
     BitcoinD.h \
     Common.h \
+    Controller.h \
     Logger.h \
     Mgr.h \
     Mixins.h \

@@ -249,7 +249,7 @@ Debug::~Debug()
 
 bool Debug::isEnabled() {
     auto ourApp = app();
-    return !ourApp || ourApp->options.verboseDebug;
+    return !ourApp || !ourApp->options || ourApp->options->verboseDebug;
 }
 
 Trace::~Trace()
@@ -263,7 +263,7 @@ Trace::~Trace()
 
 bool Trace::isEnabled() {
     auto ourApp = app();
-    return ourApp && ourApp->options.verboseTrace && Debug::isEnabled();
+    return ourApp && ourApp->options && ourApp->options->verboseTrace && Debug::isEnabled();
 }
 
 Error::~Error()

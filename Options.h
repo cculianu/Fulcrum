@@ -19,7 +19,7 @@ struct Options {
     std::atomic_bool verboseTrace = false; ///< this gets set if -d -d specified
     std::atomic_bool syslogMode = false; ///< if true, suppress printing of timestamps to logger
 
-    typedef QPair<QHostAddress, quint16> Interface;
+    using Interface = QPair<QHostAddress, quint16>;
     QList<Interface> interfaces; ///< interfaces to use for binding, defaults to 0.0.0.0 DEFAULT_PORT
     QList<Interface> statsInterfaces; ///< ditto for 'stats' server, defaults empty (no stats server)
     Interface bitcoind;

@@ -16,7 +16,7 @@ public:
     void startup() override; // may throw on error
     void cleanup() override;
 
-    Stats stats() const override;
+    int nServers() const { return servers.size(); }
 
 signals:
     // NB: assumption is Server instance lives for lifetime of this object. If this invariant changes,  please update this code.
@@ -25,6 +25,9 @@ signals:
     void newServer(Server *);
 
 public slots:
+
+protected:
+    Stats stats() const override;
 
 private:
     void startServers();

@@ -1,17 +1,3 @@
-#include "BTC.h"
-#include "bitcoin/base58.h"
-#include "bitcoin/hash.h"
-#include "Util.h"
-#include "bitcoin/crypto/endian.h"
-#include "Common.h"
-#include "bitcoin/pubkey.h"
-#include "bitcoin/script_error.h"
-#include "bitcoin/interpreter.h"
-#include "bitcoin/script.h"
-#include "bitcoin/utilstrencodings.h"
-#include "bitcoin/cashaddrenc.h"
-#include "bitcoin/streams.h"
-#include "bitcoin/version.h"
 #include <QMap>
 #include <QString>
 
@@ -19,6 +5,23 @@
 #include <string.h>
 #include <sstream>
 #include <utility>
+
+#include "bitcoin/base58.h"
+#include "bitcoin/hash.h"
+#include "bitcoin/interpreter.h"
+#include "bitcoin/cashaddrenc.h"
+#include "bitcoin/crypto/endian.h"
+#include "bitcoin/crypto/sha256.h"
+#include "bitcoin/pubkey.h"
+#include "bitcoin/script.h"
+#include "bitcoin/script_error.h"
+#include "bitcoin/streams.h"
+#include "bitcoin/utilstrencodings.h"
+#include "bitcoin/version.h"
+
+#include "BTC.h"
+#include "Common.h"
+#include "Util.h"
 
 #ifdef __clang__
 #pragma clang diagnostic push
@@ -43,7 +46,7 @@ namespace bitcoin
                             + " 3. Do a full clean recompile.\n\n");
         }
     }
-    extern bool TestBase58();
+    extern bool TestBase58(bool silent, bool throws);
 }
 
 namespace BTC
@@ -54,7 +57,13 @@ namespace BTC
         bitcoin::ECCVerifyHandle myVerifyHandle; // this singleton object allocates a secp handle. see bitcoin/pubkey.h
     }
 
-    void CheckBitcoinEndiannessCompiledCorrectly() { bitcoin::Endian_Check_In_namespace_bitcoin(); }
+    void CheckBitcoinEndiannessAndOtherSanityChecks() {
+        bitcoin::Endian_Check_In_namespace_bitcoin();
+        if ( ! bitcoin::CSHA256::SelfTest() )
+            throw InternalError("sha256 self-test failed. Cannot proceed.");
+        Tests::Base58(true, true);
+        Debug() << "Using sha256 algorithm: " << bitcoin::SHA256AutoDetect();
+    }
 
     // Map of Net -> [Map of VerByte -> Kind]
     static QMap<Net, QMap<quint8, Address::Kind> > netVerByteKindMap = {
@@ -600,7 +609,8 @@ namespace BTC
                                        0, 1111, &errStr);
             Log() << "VerifyTxSignature: " << int(b) << " errStr: " << errStr;
         }
-        bool Base58() { return bitcoin::TestBase58(); }
+
+        bool Base58(bool silent, bool throws) { return bitcoin::TestBase58(silent, throws); }
 
         void CashAddr() {
             using namespace bitcoin;

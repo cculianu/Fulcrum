@@ -1,15 +1,15 @@
 #ifndef APP_H
 #define APP_H
 
-#include "Options.h"
 #include <QCoreApplication>
 #include <atomic>
 #include <memory>
 
+#include "Options.h"
+
+class Controller;
 class Logger;
-class SrvMgr;
 class SimpleHttpServer;
-class BitcoinDMgr;
 
 class App : public QCoreApplication
 {
@@ -20,7 +20,7 @@ public:
 
     Logger *logger() { return _logger.get(); }
 
-    Options options;
+    std::shared_ptr<Options> options;
 
     /// app-global ids used for everything from ElectrumX methods
     /// to client id's, etc.
@@ -33,8 +33,7 @@ public slots:
 private:
     std::atomic<quint64> globalId = 0;
     std::unique_ptr<Logger> _logger;
-    std::unique_ptr<SrvMgr> srvmgr;
-    std::unique_ptr<BitcoinDMgr> bitcoindmgr;
+    std::unique_ptr<Controller> controller;
     QList<std::shared_ptr<SimpleHttpServer> > httpServers;
 
     void startup();
