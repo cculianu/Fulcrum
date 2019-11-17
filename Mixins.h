@@ -27,7 +27,10 @@ class QObjectMixin
 {
 public:
     virtual ~QObjectMixin();
-    virtual QObject *qobj(); ///< returns a dynamic_cast ptr to this, cast to QObject. WARNING: Will return nullptr if instance is not a QObject subclass.
+    /// returns a dynamic_cast ptr to this, cast to QObject.
+    /// WARNING: Will return nullptr if instance is not a QObject subclass.
+    /// WARNING 2: See the notes above about how to inherit in order for this to work.
+    virtual QObject *qobj() const;
 };
 
 /// To *only* be used with QObject derived classes as a pure mixin.

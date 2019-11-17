@@ -2,9 +2,9 @@
 #include "Mixins.h"
 
 QObjectMixin::~QObjectMixin() {}
-QObject *QObjectMixin::qobj()
+QObject *QObjectMixin::qobj() const
 {
-    QObject *ret = dynamic_cast<QObject *>(this);
+    QObject *ret = dynamic_cast<QObject *>(const_cast<QObjectMixin *>(this));
     if (!ret) {
         Error() << __PRETTY_FUNCTION__ << ": Cannot cast this to QObject! App will likely crash now!";
     }
@@ -117,7 +117,7 @@ auto StatsMixin::statsSafe(int timeout_ms) const -> Stats
 {
     Stats ret;
     try {
-        ret = Util::LambdaOnObject<Stats>(const_cast<StatsMixin *>(this)->qobj(), [this]{ return stats(); }, timeout_ms);
+        ret = Util::LambdaOnObject<Stats>(qobj(), [this]{ return stats(); }, timeout_ms);
     } catch (const std::exception & e) {
         Debug() << "Safe stats get failed: " << e.what();
     }
