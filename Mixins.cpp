@@ -77,8 +77,10 @@ TimersByNameMixin::~TimersByNameMixin() {}
 void TimersByNameMixin::callOnTimerSoon(int ms, const QString &name, const std::function<bool()> &func, bool force, Qt::TimerType ttype)
 {
     if (auto it = _timerMap.find(name); it != _timerMap.end()) {
-        if (force)
-            it.value()->start(it.value()->interval()); // don't enqueue functor, just restart timer from this point forward
+        if (force) {
+            it.value()->setTimerType(ttype);
+            it.value()->start(ms); // don't enqueue functor, just restart timer from this point forward
+        }
         // timer already active, abort now
         return;
     }

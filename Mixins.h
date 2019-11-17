@@ -122,6 +122,14 @@ protected:
         }
         return false;
     }
+    /// Calls setTimerType for you on the named timer, if it exists, and returns true. Returns false otherwise.
+    inline bool resetTimerType(const QString & name, Qt::TimerType tt) {
+        if (auto timer = _timerMap.value(name); timer) {
+            timer->setTimerType(tt);
+            return true;
+        }
+        return false;
+    }
     inline int timerInterval(const QString & name) const {
         if (auto timer = _timerMap.value(name); timer) {
             return timer->interval();
