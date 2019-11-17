@@ -11,7 +11,7 @@
 
 class BitcoinD;
 
-class BitcoinDMgr : public Mgr, public IdMixin, public ThreadObjectMixin, protected TimersByNameMixin
+class BitcoinDMgr : public Mgr, public IdMixin, public ThreadObjectMixin, public TimersByNameMixin
 {
     Q_OBJECT
 public:
@@ -25,8 +25,6 @@ public:
 
 protected:
     Stats stats() const override; // from Mgr
-
-    QObject * qobj() override; ///< from ThreadObjectMixin & TimersByNameMixin
 
 protected slots:
     // connected to BitcoinD gotMessage signal
@@ -69,8 +67,6 @@ protected:
     void do_ping() override; // testing
 
     void reconnect();
-
-    QObject * qobj() override; ///< from ThreadObjectMixin
 
     /// Not thread safe. Be sure to call this in this object's thread. Override from StatsMixin
     Stats stats() const override;

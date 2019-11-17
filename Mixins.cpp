@@ -1,6 +1,16 @@
 #include "App.h"
 #include "Mixins.h"
 
+QObjectMixin::~QObjectMixin() {}
+QObject *QObjectMixin::qobj()
+{
+    QObject *ret = dynamic_cast<QObject *>(this);
+    if (!ret) {
+        Error() << __PRETTY_FUNCTION__ << ": Cannot cast this to QObject! App will likely crash now!";
+    }
+    return ret;
+}
+
 ThreadObjectMixin::ThreadObjectMixin()
 {
 }

@@ -10,9 +10,26 @@
 #include <functional>
 #include <memory>
 
+/// This helper mixin just returns a pointer to the qobject subclass at runtime, leveraging RTTI. Used by
+/// ThreadObjectMixin, TimersByNameMixin, and StatsMixin below.
+///
+/// A note about C++ multiple inheritence, regarding dynamic_cast *down* (which we need here for qobj()):
+///
+/// 1. In order for the qobj() virtual function below to not fail, all direct derived classes of this base should
+///    inherit from this class via virtual inheritence. This ensures only 1 implementation of this base will be attached
+///    to all concrete derived classes.
+/// 2. In addition, all inheritence to derived classes must be public otherwise dynamic_cast<QObject *>(this) will fail.
+///    See: https://en.cppreference.com/w/cpp/language/dynamic_cast#Explanation.
+class QObjectMixin
+{
+public:
+    virtual ~QObjectMixin();
+    virtual QObject *qobj(); ///< returns a dynamic_cast ptr to this, cast to QObject. WARNING: Will return nullptr if instance is not a QObject subclass.
+};
+
 /// To *only* be used with QObject derived classes as a pure mixin.
 /// Provides a thread, a channel, and a standard interface
-class ThreadObjectMixin
+class ThreadObjectMixin : public virtual QObjectMixin
 {
 public:
     ThreadObjectMixin();
@@ -23,7 +40,6 @@ protected:
     Util::VariantChannel chan;
     QList<QMetaObject::Connection> conns;
 
-    virtual QObject *qobj() = 0; ///< reimplement in subclasses to return the QObject pointer (this)
     virtual void start(); ///< derived classes should call super implementation
     virtual void stop(); ///< derived classes should call super implementation
     virtual void restart() { stop(); start(); }
@@ -62,14 +78,13 @@ public:
 /// using deleteLater.  The typical pattern for this is to queue up a maintenance task
 /// on a named timer -- a task that may be queued up many times rapidly but you only
 /// need it to run periodically (eg expiring a cache, etc).  See EXMgr.cpp and Controller.cpp
-class TimersByNameMixin
+class TimersByNameMixin : public virtual QObjectMixin
 {
 public:
     TimersByNameMixin();
     virtual ~TimersByNameMixin();
 
 protected:
-    virtual QObject *qobj() = 0;
 
     typedef QMap<QString, std::shared_ptr<QTimer> > _TimerMap;
     _TimerMap _timerMap;
@@ -116,7 +131,7 @@ protected:
 
 
 /// A mixin for Mgr and AbstractConnection and other classes that can return stats.
-class StatsMixin
+class StatsMixin : public virtual QObjectMixin
 {
 public:
     virtual ~StatsMixin();
@@ -127,8 +142,6 @@ public:
     Stats statsSafe(int timeout_ms = 1000) const;
 
 protected:
-    virtual QObject *qobj() = 0; ///< reimplement in subclasses to return a pointer to 'this' of type QObject.
-
     /// Return object-specific stats -- to be used by subsystems such as the /stats HTTP endpoint.
     /// This base class implementation returns an empty map, so you should override it.
     ///

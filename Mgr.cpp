@@ -12,6 +12,3 @@ Mgr::Mgr(QObject *parent)
 Mgr::~Mgr()
 {
 }
-
-
-QObject * Mgr::qobj() { return this; }

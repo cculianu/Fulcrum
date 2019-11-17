@@ -17,9 +17,6 @@ public:
 
     virtual void startup() = 0; ///< NB: mgrs may throw Exception here, so catch it and abort if that happens.
     virtual void cleanup() = 0;
-
-protected:
-    QObject *qobj() override; // from StatsMixin
 };
 
 #endif // MMMGR_H

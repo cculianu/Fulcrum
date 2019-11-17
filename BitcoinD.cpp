@@ -37,8 +37,6 @@ void BitcoinDMgr::cleanup() {
     Debug() << "BitcoinDMgr cleaned up";
 }
 
-QObject *BitcoinDMgr::qobj() { return this; }
-
 void BitcoinDMgr::on_Message(quint64 bid, const RPC::Message &msg)
 {
     Debug() << "Msg from: " << bid << " method=" << msg.method;
@@ -90,8 +88,6 @@ BitcoinD::~BitcoinD()
 {
     stop();
 }
-
-QObject * BitcoinD::qobj() { return this; }
 
 void BitcoinD::connectMiscSignals()
 {

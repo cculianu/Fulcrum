@@ -19,7 +19,7 @@ struct TcpServerError : public Exception
 /// Custom implementation of QTcpServer, which has its own thread
 /// All new connections are in the thread context.
 /// (minimally, override on_newConnection to handle new connections)
-class AbstractTcpServer : public QTcpServer, protected ThreadObjectMixin, public IdMixin
+class AbstractTcpServer : public QTcpServer, public ThreadObjectMixin, public IdMixin
 {
     Q_OBJECT
 public:
@@ -38,8 +38,6 @@ protected:
     /// derived classes must minimally implement this pure virtual to handle connections
     virtual void on_newConnection(QTcpSocket *) = 0;
     virtual void on_acceptError(QAbstractSocket::SocketError);
-    // from ThreadObjectMixin
-    QObject* qobj() override { return this; }
     void on_started() override;
     void on_finished() override;
 

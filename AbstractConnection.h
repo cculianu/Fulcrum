@@ -12,7 +12,7 @@
 
 class QTimer;
 
-class AbstractConnection : public QObject, public IdMixin, protected TimersByNameMixin, public StatsMixin
+class AbstractConnection : public QObject, public IdMixin, public TimersByNameMixin, public StatsMixin
 {
     Q_OBJECT
 public:
@@ -36,8 +36,6 @@ signals:
     void send(QByteArray);
 
 protected:
-    QObject * qobj() override; ///< from TimersByNameMixin, StatsMixin
-
     /// this should be called only from this object's thread. Outside code should use statsSafe() (inherited from StatsMixin)
     Stats stats() const override; // (override from StatsMixin)
 

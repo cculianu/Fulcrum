@@ -18,8 +18,6 @@ QString AbstractConnection::prettyName(bool dontTouchSocket) const
     return QString("%1 %2 (id: %3) %4%5").arg(type).arg(!objectName().isNull()?objectName():"(AbstractSocket)").arg(id).arg(ip).arg(port);
 }
 
-QObject * AbstractConnection::qobj() { return this; }
-
 bool AbstractConnection::isGood() const
 {
     return status == Connected;
