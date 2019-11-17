@@ -18,12 +18,6 @@ public:
 
     int nServers() const { return servers.size(); }
 
-signals:
-    // NB: assumption is Server instance lives for lifetime of this object. If this invariant changes,  please update this code.
-    // This signal is emitted when a new server is created. The future "Controller" object may hook into this to attach its slots
-    // to each server it sees.
-    void newServer(Server *);
-
 public slots:
 
 protected:
