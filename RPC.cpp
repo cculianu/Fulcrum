@@ -497,9 +497,26 @@ namespace RPC {
         authCookie = QString("%1:%2").arg(username).arg(password).toUtf8().toBase64();
     }
 
+    struct HttpConnection::StateMachine
+    {
+        enum State {
+            BEGIN=0, HEADER, READING_CONTENT
+        };
+        State state = BEGIN;
+        int status = 0;
+        QString statusMsg;
+        QString contentType;
+        int contentLength = 0;
+        QByteArray content = "";
+        bool logBad = false;
+        bool gotLength = false;
+        void clear() { *this = StateMachine(); }
+    };
     void HttpConnection::on_readyRead()
     {
-        if (!sm) sm = std::make_unique<StateMachine>(); // lazy construction first time we need this object.
+        if (!sm)
+            // lazy construction first time we need this object. Can't use make_unqiue because we need to specify a deleter.
+            sm = std::unique_ptr<StateMachine, SMDel>(new StateMachine, [](StateMachine *sm) { delete sm; });
         if (!socket) {
             // this should never happen. here for paranoia.
             Error() << "on_readyRead with socket == nullptr -- were we called from a defunct timer? FIXME";

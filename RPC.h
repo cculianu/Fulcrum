@@ -342,22 +342,9 @@ namespace RPC {
 
     private:
         QByteArray authCookie;
-        struct StateMachine
-        {
-            enum State {
-                BEGIN=0, HEADER, READING_CONTENT
-            };
-            State state = BEGIN;
-            int status = 0;
-            QString statusMsg;
-            QString contentType;
-            int contentLength = 0;
-            QByteArray content = "";
-            bool logBad = false;
-            bool gotLength = false;
-            void clear() { *this = StateMachine(); }
-        };
-        std::unique_ptr<StateMachine> sm;
+        struct StateMachine;
+        using SMDel = std::function<void(StateMachine *)>;
+        std::unique_ptr<StateMachine, SMDel> sm; ///< we need to declare this with a deleter otherwise subclasses won't be able to inherit from us because StateMachine is a private, opaque struct; the need for a deleter is due to implementation details of how unique_ptr works with opaque types.
     };
 
 } // end namespace RPC
