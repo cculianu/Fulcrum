@@ -23,6 +23,8 @@
 App::App(int argc, char *argv[])
     : QCoreApplication (argc, argv)
 {
+    register_MetaTypes();
+
     options = std::make_shared<Options>();
     options->interfaces = {{QHostAddress("0.0.0.0"), Options::DEFAULT_PORT}}; // start with default, will be cleared if -i specified
     setApplicationName(APPNAME);
@@ -64,7 +66,6 @@ void App::startup()
 
     try {
         BTC::CheckBitcoinEndiannessAndOtherSanityChecks();
-        register_MetaTypes();
 
         auto gotsig = [](int sig) {
             static int ct = 0;
