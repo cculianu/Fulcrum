@@ -106,7 +106,7 @@ private:
 
     const QHostAddress host;
     const quint16 port;
-    bool badAuth = false, needAuth = true;
+    std::atomic_bool badAuth = false, needAuth = true;
 };
 
 
