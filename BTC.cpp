@@ -192,6 +192,16 @@ namespace BTC
         return ret;
     }
 
+    QByteArray Address::toScriptHashQ() const
+    {
+        ByteArray script(toScript());
+        QByteArray ret;
+        if (!script.isEmpty()) {
+            auto hash = bitcoin::HashOnce(script.begin(), script.end());
+            ret.insert(0, reinterpret_cast<char *>(hash.begin()), int(hash.end()-hash.begin()));
+        }
+        return ret;
+    }
     /// returns the ElectrumX 'scripthash_hex'
     QByteArray Address::toHashX() const
     {
@@ -262,6 +272,7 @@ namespace BTC
         std::cout << "IsValid: " << a.isValid() << " kind: " << a.kind() << std::endl;
         std::cout << "Script Hex of: " << a.toString().toUtf8().constData() << " = " << a.toScript().toQHex().constData() << std::endl;
         std::cout << "Script Hash (Hex) of: " << a.toString().toUtf8().constData() << " = " << a.toScriptHash().toQHex().constData() << std::endl;
+        std::cout << "Script Hash (Qt, Hex) of: " << a.toString().toUtf8().constData() << " = " << a.toScriptHashQ().toHex().constData() << std::endl;
         std::cout << "HashX of " << a.toString().toUtf8().constData() << " = " << a.toHashX().constData() << std::endl;
         c = a;
         std::cout << "HashX again " << c.toString().toUtf8().constData() << " = " << c.toHashX().constData() << std::endl;
@@ -668,7 +679,56 @@ namespace BTC
             */
         }
 
+        bool Addr() { return BTC::Address::test(); }
+
     } // end namespace Tests
+
+    // BLOCK deser
+    bitcoin::CBlock DeserializeBlockHex(const QString &hex)
+    {
+        return DeserializeBlockHex(hex.toUtf8());
+    }
+    bitcoin::CBlock DeserializeBlockHex(const QByteArray &hex)
+    {
+        auto vec = bitcoin::ParseHex(hex.constData());
+        auto tmpba = QByteArray::fromRawData(reinterpret_cast<char *>(&vec[0]), int(vec.size())); // shallow copy of vec
+        return DeserializeBlock(tmpba);
+    }
+    bitcoin::CBlock DeserializeBlock(const QByteArray &bytes)
+    {
+        bitcoin::CDataStream cd(bytes.cbegin(),
+                                bytes.cend(),
+                                bitcoin::SER_NETWORK,
+                                bitcoin::PROTOCOL_VERSION);
+
+        bitcoin::CBlock bl;
+        bl.Unserialize(cd);
+        return bl;
+    }
+    bitcoin::CBlock DeserializeBlock(const std::vector<uint8_t> &bytes, size_t pos)
+    {
+        bitcoin::VectorReader vr(bitcoin::SER_NETWORK, bitcoin::PROTOCOL_VERSION, bytes, pos);
+        bitcoin::CBlock bl;
+        bl.Unserialize(vr);
+        return bl;
+    }
+
+    // TX deser
+    bitcoin::CTransaction DeserializeTxHex(const QByteArray &hex);
+    bitcoin::CTransaction DeserializeTxHex(const QString &hex);
+    bitcoin::CTransaction DeserializeTx(const QByteArray &bytes)
+    {
+        bitcoin::CDataStream cd(bytes.cbegin(),
+                                bytes.cend(),
+                                bitcoin::SER_NETWORK,
+                                bitcoin::PROTOCOL_VERSION);
+        return bitcoin::CTransaction(bitcoin::deserialize, cd);
+    }
+    bitcoin::CTransaction DeserializeTx(const std::vector<uint8_t> &bytes, size_t pos)
+    {
+        bitcoin::VectorReader vr(bitcoin::SER_NETWORK, bitcoin::PROTOCOL_VERSION, bytes, pos);
+        return bitcoin::CTransaction(bitcoin::deserialize, vr);
+    }
 
 } // end namespace BTC
 

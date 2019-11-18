@@ -138,6 +138,8 @@ namespace BTC
         /// The results of this function do not get cached
         /// Note the return is a ByteArray and not a QByteArray.
         ByteArray toScriptHash() const;
+        /// Same as above but returns QByteArray
+        QByteArray toScriptHashQ() const;
 
         /// If isValid, returns the legacy address string, base58 encoded
         /// Returns null string on error.
@@ -274,10 +276,22 @@ namespace BTC
                            QString *errorString = nullptr,
                            bitcoin::CScript * scriptSig_out = nullptr);
 
+    /// some helpful Block deserialization utility methods
+    extern bitcoin::CBlock DeserializeBlockHex(const QByteArray &hex);
+    extern bitcoin::CBlock DeserializeBlockHex(const QString &hex);
+    extern bitcoin::CBlock DeserializeBlock(const QByteArray &bytes); ///< NOT done in-place (Note to self: if we end up using this a lot, we need to implement this in-place in bitcoin namespace via a VectorReader)
+    extern bitcoin::CBlock DeserializeBlock(const std::vector<uint8_t> &bytes, size_t pos = 0); ///< this is the fastest --  IN-PLACE
+    /// some helpful Transaction deserialization utility methods
+    extern bitcoin::CTransaction DeserializeTxHex(const QByteArray &hex);
+    extern bitcoin::CTransaction DeserializeTxHex(const QString &hex);
+    extern bitcoin::CTransaction DeserializeTx(const QByteArray &bytes); ///< not as fast. NOT done in-place (Note to self: if we use this a lot can implement an in-place version)
+    extern bitcoin::CTransaction DeserializeTx(const std::vector<uint8_t> &bytes, size_t pos = 0); ///< this is the fastest --  IN-PLACE
+
     namespace Tests {
         void SigCheck();
         bool Base58(bool silent = false, bool throws = false);
         void CashAddr();
+        bool Addr();
         void TestBlock();
     }
 
