@@ -351,8 +351,6 @@ namespace RPC {
 
 /// So that Qt signal/slots work with this type.  Metatypes are also registered at startup via qRegisterMetatype
 Q_DECLARE_METATYPE(RPC::Message);
-#if CLANG_11
 Q_DECLARE_METATYPE(RPC::Message::Id);
-#endif
 
 #endif // FULCRUM_RPC_H
