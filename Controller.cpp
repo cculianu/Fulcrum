@@ -65,7 +65,7 @@ void Controller::cleanup()
 struct Controller::StateMachine
 {
     enum State {
-        Begin, GetBlockHashes, End
+        Begin, GetBlockHashes, End, Finished
     };
     State state = Begin;
     int bl = 0;
@@ -96,11 +96,19 @@ void Controller::process()
             QVariant var = resp.result();
             Trace() << resp.method << ": result reply: " << var.toInt();
             if (var.canConvert<int>()) {
-                sm->ht = var.toInt();
-                sm->state = S::GetBlockHashes;
-                while (sm->cur < BitcoinDMgr::N_CLIENTS) { // fixme: should be ngoodclients
-                    sm->AGAIN();
-                    ++sm->cur;
+                int oldVal = sm->ht;
+                const int newVal = var.toInt();
+                if (newVal != oldVal) {
+                    sm->ht = newVal;
+                    sm->state = S::GetBlockHashes;
+                    while (sm->cur < BitcoinDMgr::N_CLIENTS && oldVal++ < newVal) { // fixme: should be ngoodclients
+                        sm->AGAIN();
+                        ++sm->cur;
+                    }
+                } else {
+                    Log() << "Headers up to date at height: " << sm->ht;
+                    sm->state = S::Finished;
+                    return;
                 }
             } else {
                 Warning() << resp.method << ": response not int!";
@@ -125,7 +133,7 @@ void Controller::process()
                 if (sm->blockHashes.size() < bnum+1)
                     sm->blockHashes.resize(bnum+1);
                 sm->blockHashes[bnum] = res;
-                while (sm->cur < BitcoinDMgr::N_CLIENTS) { // fixme: should be ngoodclients
+                while (sm->cur < BitcoinDMgr::N_CLIENTS && sm->bl + sm->cur < sm->ht) { // fixme: should be ngoodclients
                     sm->AGAIN();
                     ++sm->cur;
                 }
@@ -134,7 +142,22 @@ void Controller::process()
             }
         }, BOILERPLATE_ERR, BOILERPLATE_FAIL);
     } else if (sm->state == S::End) {
-        Log() << "Downloaded " << sm->blockHashes.size() << " headers";
+        Log() << "Downloaded " << sm->blockHashes.size() << " headers, verifying...";
+        QTimer::singleShot(0, this, [this]{
+            int bad = 0;
+            for (const auto & ba : sm->blockHashes) {
+                if (ba.length() != bitcoin::uint256::width()) {
+                    ++bad;
+                }
+            }
+            // TESTING
+            if (!bad)
+                Log() << "All headers ok";
+            else
+                Log() << bad << " headers have the wrong length";
+            sm->state = S::Begin;
+            sm->AGAIN();
+        });
     }
 
     /*
