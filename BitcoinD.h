@@ -23,7 +23,7 @@ public:
     void startup() override; ///< from Mgr
     void cleanup() override; ///< from Mgr
 
-    static constexpr int N_CLIENTS = 2;
+    static constexpr int N_CLIENTS = 3;
 
     using ResultsF = std::function<void(const RPC::Message &response)>;
     using ErrorF = ResultsF; // identical to ResultsF above except the message passed in is an error="" message.
@@ -66,7 +66,6 @@ private:
 
     std::unique_ptr<BitcoinD> clients[N_CLIENTS];
 
-    quint64 lastBitcoinDUsed = NO_ID;
     BitcoinD *getBitcoinD(); ///< may return nullptr if none are up. Otherwise does a round-robin of the ones present to grab one. to be called only in this thread.
 };
 

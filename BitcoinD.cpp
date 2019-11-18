@@ -95,14 +95,15 @@ auto BitcoinDMgr::stats() const -> Stats
 BitcoinD *BitcoinDMgr::getBitcoinD()
 {
     BitcoinD *ret = nullptr;
-    if (goodSet.size() <= 1)
-        lastBitcoinDUsed = NO_ID;
+    unsigned which = 0;
+    if (unsigned n = quint32(goodSet.size()); n > 1)
+        which = QRandomGenerator::system()->bounded(n); // pick a random client in the set (which is an index of the "good clients")
     if (!goodSet.empty()) {
         // linear search for a bitcoind that is not lastBitcoinDUsed
+        unsigned i = 0;
         for (auto & client : clients) {
-            if (goodSet.count(client->id) && lastBitcoinDUsed != client->id && client->isGood()) {
+            if (goodSet.count(client->id) && i++ == which && client->isGood()) {
                 ret = client.get();
-                lastBitcoinDUsed = ret->id;
                 break;
             }
         }

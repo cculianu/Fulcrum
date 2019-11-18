@@ -71,7 +71,7 @@ struct Controller::StateMachine
     int bl = 0;
     int ht = -1;
     int cur = 0;
-    static constexpr int maxcur = BitcoinDMgr::N_CLIENTS+1; // fixme: tune this
+    static constexpr int maxcur = 16;//BitcoinDMgr::N_CLIENTS*4; // fixme: tune this
     Util::VoidFunc AGAIN;
     std::vector<QByteArray> blockHashes;
 };

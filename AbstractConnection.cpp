@@ -195,6 +195,8 @@ auto AbstractConnection::stats() const -> Stats
     m["lastSocketError"] = lastSocketError;
     m["nDisconnects"] = nDisconnects.load();
     m["nSocketErrors"] = nSocketErrors.load();
+    m["writeBackLog"] = writeBackLog.size();
+    m["readBytesAvailable"] = socket ? socket->bytesAvailable() : 0;
     auto atl = activeTimers();
     QVariantMap timerMap;
     for (const auto & name : atl)
