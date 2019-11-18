@@ -71,4 +71,11 @@ void Controller::process()
     Debug() << "Process called...";
     if (!sm) sm = std::make_unique<StateMachine>(); // create statemachine if doest not exist
 
+    bitcoindmgr->submitRequest(this, IdMixin::newId(), "getmempoolinfo", {}, [](auto resp){ // testing
+        Trace() << resp.id.toString() << ": result reply: " << resp.toJsonString();
+    }, [](auto resp){
+        Trace() << resp.id.toString() << ": error response: " << resp.toJsonString();
+    }, [](auto id, auto msg) {
+        Warning() << id.toString() << ": FAIL: " << msg;
+    });
 }

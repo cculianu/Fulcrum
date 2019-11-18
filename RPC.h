@@ -248,13 +248,13 @@ namespace RPC {
 
     signals:
         /// call (emit) this to send a request to the peer
-        void sendRequest(const Message::Id & reqid, const QString &method, const QVariantList & params = QVariantList());
+        void sendRequest(const RPC::Message::Id & reqid, const QString &method, const QVariantList & params = QVariantList());
         /// call (emit) this to send a notification to the peer
         void sendNotification(const QString &method, const QVariantList & params = QVariantList());
         /// call (emit) this to send a request to the peer
-        void sendError(bool disconnectAfterSend, int errorCode, const QString &message, const Message::Id & reqid = Message::Id());
+        void sendError(bool disconnectAfterSend, int errorCode, const QString &message, const RPC::Message::Id & reqid = Message::Id());
         /// call (emit) this to send a result reply to the peer (result= message)
-        void sendResult(const Message::Id & reqid, const QString &method, const QVariant & result = QVariant());
+        void sendResult(const RPC::Message::Id & reqid, const QString &method, const QVariant & result = QVariant());
 
         /// this is emitted when a new message arrives that was successfully parsed and matches
         /// a known method described in the 'methods' MethodMap. Unknown messages will eventually result
@@ -269,13 +269,13 @@ namespace RPC {
     protected slots:
         /// Actual implentation that prepares the request. Is connected to sendRequest() above. Runs in this object's
         /// thread context. Eventually calls send() -> do_write() (from superclass).
-        virtual void _sendRequest(const Message::Id & reqid, const QString &method, const QVariantList & params = QVariantList());
+        virtual void _sendRequest(const RPC::Message::Id & reqid, const QString &method, const QVariantList & params = QVariantList());
         // ditto for notifications
         virtual void _sendNotification(const QString &method, const QVariantList & params = QVariantList());
         /// Actual implementation of sendError, runs in our thread context.
-        virtual void _sendError(bool disconnect, int errorCode, const QString &message, const Message::Id &reqid = Message::Id());
+        virtual void _sendError(bool disconnect, int errorCode, const QString &message, const RPC::Message::Id &reqid = Message::Id());
         /// Actual implementation of sendResult, runs in our thread context.
-        virtual void _sendResult(const Message::Id & reqid, const QString &method, const QVariant & result = QVariant());
+        virtual void _sendResult(const RPC::Message::Id & reqid, const QString &method, const QVariant & result = QVariant());
 
     protected:
         /// chains to base, connects sendRequest signal to _sendRequest slot

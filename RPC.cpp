@@ -169,6 +169,7 @@ namespace RPC {
         if (!v1)
             map["jsonrpc"] = RPC::jsonRpcVersion;
         ret.v1 = v1;
+        ret.id = id;
         map["id"] = id; // may be "null"
         QVariantMap errMap;
         errMap["code"] = code;
@@ -190,6 +191,7 @@ namespace RPC {
             map["error"] = QVariant(); // v1: always set the "error" key to null
         map["id"] = reqId;
         map["result"] = result;
+        ret.id = reqId;
         return ret;
     }
 
@@ -199,6 +201,7 @@ namespace RPC {
         Message ret = makeNotification(methodName, params, v1);
         auto & map = ret.data;
         map["id"] = id;
+        ret.id = id;
         return ret;
     }
 
@@ -208,6 +211,7 @@ namespace RPC {
         Message ret = makeNotification(methodName, params, v1);
         auto & map = ret.data;
         map["id"] = id;
+        ret.id = id;
         return ret;
     }
 
@@ -223,6 +227,7 @@ namespace RPC {
             map["id"] = QVariant(); // v1: always has the "id" key as null for a notif
         map["method"] = methodName;
         map["params"] = params;
+        ret.method = methodName;
         return ret;
     }
 
@@ -238,6 +243,7 @@ namespace RPC {
             map["id"] = QVariant(); // v1: always has the "id" key as null for a notif
         map["method"] = methodName;
         map["params"] = params;
+        ret.method = methodName;
         return ret;
     }
 

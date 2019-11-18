@@ -1,3 +1,5 @@
+#include <QPointer>
+
 #include "BitcoinD.h"
 
 BitcoinDMgr::BitcoinDMgr(const QHostAddress &host, quint16 port,
@@ -14,8 +16,6 @@ void BitcoinDMgr::startup() {
     Log() << objectName() << ": starting " << N_CLIENTS << " bitcoin rpc clients ...";
 
     for (auto & client : clients) {
-        constexpr int miniTimeout = 333;
-
         client = std::make_unique<BitcoinD>(host, port, user, pass);
 
         // connect client to us -- TODO: figure out workflow: how requests for work and results will get dispatched
@@ -27,8 +27,8 @@ void BitcoinDMgr::startup() {
                 Debug() << "got authenticated for id:" << b->id << " but isGood() is false!";
                 return; // false/stale signal
             }
-            const bool wasEmpty = goodBitcoinDs.empty();
-            goodBitcoinDs.insert(b->id);
+            const bool wasEmpty = goodSet.empty();
+            goodSet.insert(b->id);
             if (wasEmpty)
                 emit gotFirstGoodConnection(b->id);
         });
@@ -38,11 +38,11 @@ void BitcoinDMgr::startup() {
                 Debug() << "got lostConnection for id:" << c->id << " but isGood() is true!";
                 return; // false/stale signal
             }
-            goodBitcoinDs.erase(c->id);
+            goodSet.erase(c->id);
             auto constexpr chkTimer = "checkNoMoreBitcoinDs";
             // we throttle the spamming of the allConnectionsLost signal via this mechanism
             callOnTimerSoonNoRepeat(miniTimeout, chkTimer, [this]{
-                if (goodBitcoinDs.empty())
+                if (goodSet.empty())
                     emit allConnectionsLost();
             }, true);
         });
@@ -61,7 +61,7 @@ void BitcoinDMgr::cleanup() {
     for (auto & client : clients) {
         client.reset(); /// implicitly calls client->stop()
     }
-    goodBitcoinDs.clear();
+    goodSet.clear();
 
     Debug() << "BitcoinDMgr cleaned up";
 }
@@ -91,6 +91,100 @@ auto BitcoinDMgr::stats() const -> Stats
     return ret;
 }
 
+
+BitcoinD *BitcoinDMgr::getBitcoinD()
+{
+    BitcoinD *ret = nullptr;
+    if (goodSet.size() <= 1)
+        lastBitcoinDUsed = NO_ID;
+    if (!goodSet.empty()) {
+        // linear search for a bitcoind that is not lastBitcoinDUsed
+        for (auto & client : clients) {
+            if (goodSet.count(client->id) && lastBitcoinDUsed != client->id
+                    // fixme here: will tinyTimeout expire easily under load? tune this.
+                    && Util::CallOnObjectWithTimeoutNoThrow<bool>(tinyTimeout, client.get(), &BitcoinD::isGood).value_or(false)) {
+                ret = client.get();
+                break;
+            }
+        }
+    }
+    if (ret) lastBitcoinDUsed = ret->id;
+    return ret;
+}
+
+/// this is safe to call from any thread. internally it dispatches messages to this obejct's thread.
+/// may throw (TODO list exceptions it may throw). Results/Error/Fail functions are called in the context of the sender's thread.
+/// Returns the BitcoinD->id that was given the message.
+void BitcoinDMgr::submitRequest(QObject *sender, const RPC::Message::Id &rid, const QString & method, const QVariantList & params,
+                                const ResultsF & resf, const ErrorF & errf, const FailF & failf)
+{
+    QPointer<QObject> context(new QObject(sender)); // this is a weak ref that gets killed when sender is killed. This way stuff just "goes away" if sender dies.
+    context->setObjectName(QString("context for '%1' request id: %2").arg(sender ? sender->objectName() : "").arg(rid.toString()));
+    auto killContext = [context, this] {
+        if (LIKELY(context)) { // need to check context because race conditions
+            Util::VoidFuncOnObjectNoThrow(this, [context, this] { if (LIKELY(context)) disconnect(this, &QObject::destroyed, context, nullptr);  }, 0);
+            Util::VoidFuncOnObjectNoThrow(context, [context] { if (LIKELY(context)) context->deleteLater(); }, 0);
+        }
+    };
+    connect(this, &QObject::destroyed, context, killContext);  // make sure that if we die, to kill the context too to clean up resources.
+
+    // schedule this ASAP
+    QTimer::singleShot(0, this, [this, context, resf, errf, failf, rid, method, params, killContext] {
+        auto replied = std::make_shared<std::atomic_bool>(false); // guards against spurious lostConnection arriving after reply msg
+        auto do_fail = [failf, context, killContext, rid, replied](const QString & reason){
+            if (LIKELY(failf && context && !replied->exchange(true))) {
+                Util::VoidFuncOnObjectNoThrow(context, [context, failf, rid, reason]{
+                    if (LIKELY(context)) // need to check context again because race conditions
+                        failf(rid, reason);
+                }); // fixme: this has an infinite timeout
+            }
+            killContext();
+        };
+        auto do_res = [resf, context, killContext, replied](const RPC::Message &resp){
+            if (LIKELY(resf && context && !replied->exchange(true))) {
+                Util::VoidFuncOnObjectNoThrow(context, [context, resf, resp]{
+                    if (LIKELY(context)) // need to check context again because race conditions
+                        resf(resp);
+                }); // fixme: this has an infinite timeout
+            }
+            killContext();
+        };
+        auto do_err = [errf, context, killContext, replied](const RPC::Message &resp){
+            if (LIKELY(errf && context && !replied->exchange(true))) {
+                Util::VoidFuncOnObjectNoThrow(context.data(), [context, errf, resp]{
+                    if (LIKELY(context)) // need to check context again because race conditions
+                        errf(resp);
+                }); // fixmne: this has an infinite timeout
+            }
+            killContext();
+        };
+        if (UNLIKELY(!context))
+            // sender parent must have been deleted before we got a chance to run
+            return;
+        auto bd = getBitcoinD();
+        if (UNLIKELY(!bd)) {
+            do_fail("Unable to find a good BitcoinD connection");
+            return;
+        }
+        connect(bd, &BitcoinD::gotMessage, context, [do_res, rid](quint64, const RPC::Message &reply){
+             if (reply.id == rid) // filter out messages not for us
+                 do_res(reply);
+        });
+        connect(bd, &BitcoinD::gotErrorMessage, context, [do_err, rid](quint64, const RPC::Message &errMsg){
+             if (errMsg.id == rid) // filter out error messages not for us
+                 do_err(errMsg);
+        });
+        connect(bd, &BitcoinD::lostConnection, context, [do_fail, rid](AbstractConnection *){
+            do_fail("connection lost");
+        });
+
+        bd->sendRequest(rid, method, params);
+    });
+
+    // .. aand.. return right away
+}
+
+/* --- BitcoinD --- */
 auto BitcoinD::stats() const -> Stats
 {
     Stats m = RPC::HttpConnection::stats();
@@ -199,5 +293,5 @@ void BitcoinD::do_ping()
         Debug() << "Stale connection, reconnecting.";
         reconnect();
     } else
-        emit sendRequest(newId(), "getblockcount");
+        emit sendRequest(newId(), "ping");
 }
