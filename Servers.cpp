@@ -58,7 +58,7 @@ void AbstractTcpServer::on_started()
     conns.push_back(connect(this, &QTcpServer::acceptError, this, [this](QAbstractSocket::SocketError e){ on_acceptError(e);}));
     if (!listen(addr, port)) {
         result = errorString();
-        result = result.isEmpty() ? "Error binding/listening for connections" : result;
+        result = result.isEmpty() ? "Error binding/listening for connections" : QString("Could not bind to %1: %2").arg(hostPort()).arg(result);
         Debug() << __FUNCTION__ << " listen failed";
     } else {
         Debug() << "started ok";

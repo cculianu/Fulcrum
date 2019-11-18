@@ -1,5 +1,23 @@
-#include "Logger.h"
+#include <QCoreApplication>
+#include <QTimer>
+
+#include <cstdlib>
+
 #include "Common.h"
+#include "Logger.h"
+
+namespace {
+    void loggerCommon(int level, const QString &)
+    {
+        if (level == Logger::Fatal) {
+            if (qApp && !QCoreApplication::startingUp())
+                QTimer::singleShot(0, qApp, []{qApp->exit(1);});
+            else
+                std::exit(1);
+        }
+    }
+}
+
 Logger::Logger(QObject *parent) : QObject(parent)
 {
     connect(this, &Logger::log, this, [this](int level, const QString &line){
@@ -20,11 +38,11 @@ ConsoleLogger::ConsoleLogger(QObject *p, bool stdOut)
     : Logger(p), stdOut(stdOut)
 {}
 
-void ConsoleLogger::gotLine(int level_ignored, const QString &l) {
-    Q_UNUSED(level_ignored)
+void ConsoleLogger::gotLine(int level, const QString &l) {
     (stdOut ? std::cout : std::cerr)
             << l.toUtf8().constData()
             << std::endl << std::flush;
+    loggerCommon(level, l);
 }
 
 bool ConsoleLogger::isaTTY() const {
@@ -56,9 +74,11 @@ void SysLogger::gotLine(int level, const QString &l)
     int ulevel = LOG_NOTICE;
     switch (level) {
     case Warning: ulevel = LOG_WARNING; break;
+    case Fatal:
     case Critical: ulevel = LOG_CRIT; break;
     case Debug: ulevel = LOG_DEBUG; break;
     }
     syslog(ulevel, "%s", l.toUtf8().constData());
+    loggerCommon(level, l);
 }
 #endif

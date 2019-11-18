@@ -240,7 +240,7 @@ template <> Log & Log::operator<<(const Color &c) { setColor(c); return *this; }
 
 Debug::~Debug()
 {
-    level = Logger::Debug;
+    level = Logger::Level::Debug;
     doprt = isEnabled();
     if (!doprt) return;
     if (!colorOverridden) color = Cyan;
@@ -254,7 +254,7 @@ bool Debug::isEnabled() {
 
 Trace::~Trace()
 {
-    level = Logger::Debug;
+    level = Logger::Level::Debug;
     doprt = isEnabled();
     if (!doprt) return;
     if (!colorOverridden) color = Green;
@@ -268,14 +268,20 @@ bool Trace::isEnabled() {
 
 Error::~Error()
 {
-    level = Logger::Critical;
+    level = Logger::Level::Critical;
     if (!colorOverridden) color = BrightRed;
 }
 
 
 Warning::~Warning()
 {
-    level = Logger::Warning;
+    level = Logger::Level::Warning;
     if (!colorOverridden) color = Yellow;
 }
 
+Fatal::~Fatal()
+{
+    level = Logger::Level::Fatal;
+    str = QString("FATAL: ") + str;
+    if (!colorOverridden) color = BrightRed;
+}

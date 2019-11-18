@@ -85,7 +85,7 @@ void App::startup()
         std::signal(SIGHUP, SIG_IGN);
 #endif
 
-        controller = std::make_unique<Controller>(options, this);
+        controller = std::make_unique<Controller>(options);
         controller->startup(); // may throw
 
         if (!options->statsInterfaces.isEmpty()) {
@@ -96,8 +96,7 @@ void App::startup()
         }
 
     } catch (const Exception & e) {
-        Error () << "Caught exception: " << e.what();
-        this->exit(1);
+        Fatal() << "Caught exception: " << e.what();
     }
 }
 

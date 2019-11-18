@@ -24,6 +24,9 @@ public:
 
     static constexpr int N_CLIENTS = 2;
 
+signals:
+    void authenticated(quint64 bitcoindId);
+
 protected:
     Stats stats() const override; // from Mgr
 

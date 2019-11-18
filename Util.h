@@ -166,6 +166,19 @@ public:
 #endif
 };
 
+/// Like Error(), except it will enqueue a qApp->exit(1) after logging the message
+class Fatal : public Log
+{
+public:
+    using Log::Log;
+    virtual ~Fatal();
+
+#if defined(__GNUC__) && !defined(__clang__)
+    // Grr.. GCC doesn't fully implement C++ 17 so we must do this. :(
+    template <typename ...Args>
+    explicit Fatal(Args && ...args) : Log(std::forward<Args>(args)...) {}
+#endif
+};
 
 namespace Util {
     extern QString basename(const QString &);

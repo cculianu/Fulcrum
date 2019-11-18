@@ -13,7 +13,7 @@ public:
     virtual ~Logger();
 
     enum Level {
-        Info = 0, Warning, Critical, Debug
+        Info = 0, Warning, Critical, Fatal, Debug
     };
 
     /// returns true if the logger is logging to a tty (and thus supports ANSI color codes, etc)

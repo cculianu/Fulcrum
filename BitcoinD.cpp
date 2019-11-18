@@ -19,6 +19,7 @@ void BitcoinDMgr::startup() {
         // connect client to us -- TODO: figure out workflow: how requests for work and results will get dispatched
         connect(client.get(), &BitcoinD::gotMessage, this, &BitcoinDMgr::on_Message);
         connect(client.get(), &BitcoinD::gotErrorMessage, this, &BitcoinDMgr::on_ErrorMessage);
+        connect(client.get(), &BitcoinD::authenticated, this, [this](BitcoinD *b){ emit authenticated(b->id);});
 
         client->start();
     }
