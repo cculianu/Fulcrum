@@ -133,7 +133,7 @@ void Controller::process()
                 if (sm->blockHashes.size() < bnum+1)
                     sm->blockHashes.resize(bnum+1);
                 sm->blockHashes[bnum] = res;
-                while (sm->cur < BitcoinDMgr::N_CLIENTS && sm->bl + sm->cur < sm->ht) { // fixme: should be ngoodclients
+                while (sm->cur < BitcoinDMgr::N_CLIENTS && sm->bl + sm->cur <= sm->ht) { // fixme: should be ngoodclients
                     sm->AGAIN();
                     ++sm->cur;
                 }
