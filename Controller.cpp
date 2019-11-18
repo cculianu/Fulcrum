@@ -80,6 +80,9 @@ void Controller::process()
     Debug() << "Process called...";
 
     // TESTING...
+    // TODO: This doesn't deal at all well with failures. After tuning this, figure out a
+    // better way to recover from failure and keep retrying, etc.  This is just a first
+    // stab to test communication, really.
     using S = StateMachine::State;
     if (!sm) {
         sm = std::make_unique<StateMachine>(); // create statemachine if doest not exist

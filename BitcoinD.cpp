@@ -102,7 +102,7 @@ BitcoinD *BitcoinDMgr::getBitcoinD()
         for (auto & client : clients) {
             if (goodSet.count(client->id) && lastBitcoinDUsed != client->id
                     // fixme here: will tinyTimeout expire easily under load? tune this.
-                    && Util::CallOnObjectWithTimeoutNoThrow<bool>(tinyTimeout, client.get(), &BitcoinD::isGood).value_or(false)) {
+                    && Util::CallOnObjectWithTimeoutNoThrow<bool>(longTimeout, client.get(), &BitcoinD::isGood).value_or(false)) {
                 ret = client.get();
                 break;
             }

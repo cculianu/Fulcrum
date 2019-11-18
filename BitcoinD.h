@@ -60,7 +60,7 @@ private:
     const quint16 port;
     const QString user, pass;
 
-    static constexpr int miniTimeout = 333, tinyTimeout = 167;
+    static constexpr int miniTimeout = 333, tinyTimeout = 167, medTimeout = 500, longTimeout = 1000;
 
     std::set<quint64> goodSet; ///< set of bitcoind's (by id) that are `isGood` (connected, authed). This set is updated as we get signaled from BitcoinD objects. May be empty. Has at most N_CLIENTS elements.
 
