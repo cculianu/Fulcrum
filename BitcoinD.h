@@ -9,6 +9,7 @@
 
 #include <array>
 #include <memory>
+#include <set>
 
 class BitcoinD;
 
@@ -25,7 +26,8 @@ public:
     static constexpr int N_CLIENTS = 2;
 
 signals:
-    void authenticated(quint64 bitcoindId);
+    void gotFirstGoodConnection(quint64 bitcoindId); // emitted whenever the first bitcoind after a "down" state (or after startup) gets its first good status (after successful authentication)
+    void allConnectionsLost(); // emitted whenever all bitcoind rpc connections are down.
 
 protected:
     Stats stats() const override; // from Mgr
@@ -40,6 +42,8 @@ private:
     const QHostAddress host;
     const quint16 port;
     const QString user, pass;
+
+    std::set<quint64> goodBitcoinDs;
 
     std::unique_ptr<BitcoinD> clients[N_CLIENTS];
 };

@@ -14,12 +14,38 @@ void BitcoinDMgr::startup() {
     Log() << objectName() << ": starting " << N_CLIENTS << " bitcoin rpc clients ...";
 
     for (auto & client : clients) {
+        constexpr int miniTimeout = 333;
+
         client = std::make_unique<BitcoinD>(host, port, user, pass);
 
         // connect client to us -- TODO: figure out workflow: how requests for work and results will get dispatched
         connect(client.get(), &BitcoinD::gotMessage, this, &BitcoinDMgr::on_Message);
         connect(client.get(), &BitcoinD::gotErrorMessage, this, &BitcoinDMgr::on_ErrorMessage);
-        connect(client.get(), &BitcoinD::authenticated, this, [this](BitcoinD *b){ emit authenticated(b->id);});
+        connect(client.get(), &BitcoinD::authenticated, this, [this](BitcoinD *b){
+            // guard against stale/old signal
+            if (!Util::CallOnObjectWithTimeoutNoThrow<bool>(miniTimeout, b, &BitcoinD::isGood).value_or(false)) {
+                Debug() << "got authenticated for id:" << b->id << " but isGood() is false!";
+                return; // false/stale signal
+            }
+            const bool wasEmpty = goodBitcoinDs.empty();
+            goodBitcoinDs.insert(b->id);
+            if (wasEmpty)
+                emit gotFirstGoodConnection(b->id);
+        });
+        connect(client.get(), &BitcoinD::lostConnection, this, [this](AbstractConnection *c){
+            // guard against stale/old signal
+            if (Util::CallOnObjectWithTimeoutNoThrow<bool>(miniTimeout, c, &AbstractConnection::isGood).value_or(false)) {
+                Debug() << "got lostConnection for id:" << c->id << " but isGood() is true!";
+                return; // false/stale signal
+            }
+            goodBitcoinDs.erase(c->id);
+            auto constexpr chkTimer = "checkNoMoreBitcoinDs";
+            // we throttle the spamming of the allConnectionsLost signal via this mechanism
+            callOnTimerSoonNoRepeat(miniTimeout, chkTimer, [this]{
+                if (goodBitcoinDs.empty())
+                    emit allConnectionsLost();
+            }, true);
+        });
 
         client->start();
     }
@@ -35,6 +61,8 @@ void BitcoinDMgr::cleanup() {
     for (auto & client : clients) {
         client.reset(); /// implicitly calls client->stop()
     }
+    goodBitcoinDs.clear();
+
     Debug() << "BitcoinDMgr cleaned up";
 }
 
@@ -52,7 +80,7 @@ auto BitcoinDMgr::stats() const -> Stats
 {
     Stats ret;
     QVariantList l;
-    static constexpr int timeout = kDefaultTimeout/qMax(N_CLIENTS,1);
+    constexpr int timeout = kDefaultTimeout/qMax(N_CLIENTS,1);
     for (const auto & client : clients) {
         if (!client) continue;
         auto map = client->statsSafe(timeout);
@@ -115,7 +143,7 @@ void BitcoinD::on_started()
     ThreadObjectMixin::on_started();
 
     { // setup the "reconnect timer"
-        static constexpr auto reconnectTimer = "reconnectTimer";
+        constexpr auto reconnectTimer = "reconnectTimer";
         const auto SetTimer = [this] {
             callOnTimerSoon(5000, reconnectTimer, [this]{
                 if (!isGood()) {
