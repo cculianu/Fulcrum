@@ -71,6 +71,7 @@ struct Controller::StateMachine
     int bl = 0;
     int ht = -1;
     int cur = 0;
+    static constexpr int maxcur = BitcoinDMgr::N_CLIENTS+1; // fixme: tune this
     Util::VoidFunc AGAIN;
     std::vector<QByteArray> blockHashes;
 };
@@ -104,7 +105,7 @@ void Controller::process()
                 if (newVal != oldVal) {
                     sm->ht = newVal;
                     sm->state = S::GetBlockHashes;
-                    while (sm->cur < BitcoinDMgr::N_CLIENTS && oldVal++ < newVal) { // fixme: should be ngoodclients
+                    while (sm->cur < sm->maxcur && oldVal++ < newVal) { // fixme: should be ngoodclients
                         sm->AGAIN();
                         ++sm->cur;
                     }
@@ -136,7 +137,7 @@ void Controller::process()
                 if (sm->blockHashes.size() < bnum+1)
                     sm->blockHashes.resize(bnum+1);
                 sm->blockHashes[bnum] = res;
-                while (sm->cur < BitcoinDMgr::N_CLIENTS && sm->bl + sm->cur <= sm->ht) { // fixme: should be ngoodclients
+                while (sm->cur < sm->maxcur && sm->bl + sm->cur <= sm->ht) { // fixme: should be ngoodclients? maybe?
                     sm->AGAIN();
                     ++sm->cur;
                 }
