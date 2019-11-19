@@ -246,7 +246,7 @@ namespace Util {
                 cond.wait(&mut, timeout_ms);
             }
             if (LIKELY(ct != 0)) {
-                ret = data.takeFirst(); ct -= 1;
+                ret = data.takeFirst(); --ct;
             }
             else if (UNLIKELY(killed && throwsIfClosed))
                 throw ChannelClosed("Cannot read from closed Channel");
@@ -266,7 +266,7 @@ namespace Util {
             if (UNLIKELY(sizeLimit > 0 && ct >= sizeLimit))
                 throw ChannelFull(QString("The channel is full (size = %1)").arg(ct));
             data.push_back(t);
-            ct += 1;
+            ++ct;
             cond.wakeOne();
         }
 

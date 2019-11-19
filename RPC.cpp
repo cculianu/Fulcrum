@@ -281,6 +281,7 @@ namespace RPC {
         m["nErrorsSent"] = nErrorsSent;
         m["nNotificationsSent"] = nNotificationsSent;
         m["nUnansweredRequests"] = idMethodMap.size(); // we may care about this
+        m["nErrorReplies"] = nErrorReplies;
         return m;
     }
 
@@ -304,7 +305,7 @@ namespace RPC {
 
         const auto data = json.toUtf8();
         if (Trace::isEnabled()) Trace() << "Sending json: " << Util::Ellipsify(data);
-        nRequestsSent += 1;
+        ++nRequestsSent;
         // below send() ends up calling do_write immediately (which is connected to send)
         emit send( wrapForSend(data) );
     }
@@ -321,7 +322,7 @@ namespace RPC {
         }
         const auto data = json.toUtf8();
         if (Trace::isEnabled()) Trace() << "Sending json: " << Util::Ellipsify(data);
-        nNotificationsSent += 1;
+        ++nNotificationsSent;
         // below send() ends up calling do_write immediately (which is connected to send)
         emit send( wrapForSend(data) );
     }
@@ -334,7 +335,7 @@ namespace RPC {
         QString json = Message::makeError(code, msg, reqId, v1).toJsonString();
         const auto data = json.toUtf8();
         if (Trace::isEnabled()) Trace() << "Sending json: " << Util::Ellipsify(data);
-        nErrorsSent += 1;
+        ++nErrorsSent;
         // below send() ends up calling do_write immediately (which is connected to send)
         emit send( wrapForSend(data) );
         if (disc) {
@@ -354,7 +355,7 @@ namespace RPC {
         }
         const auto data = json.toUtf8();
         if (Trace::isEnabled()) Trace() << "Sending result json: " << Util::Ellipsify(data);
-        nResultsSent += 1;
+        ++nResultsSent;
         // below send() ends up calling do_write immediately (which is connected to send)
         emit send( wrapForSend(data) );
     }
@@ -402,6 +403,7 @@ namespace RPC {
 
             if (message.isError()) {
                 // error message
+                ++nErrorReplies;
                 emit gotErrorMessage(id, message);
             } else if (message.isNotif()) {
                 try {

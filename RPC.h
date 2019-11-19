@@ -307,6 +307,7 @@ namespace RPC {
 
         QString lastPeerError;
         quint64 nRequestsSent = 0, nNotificationsSent = 0, nResultsSent = 0, nErrorsSent = 0;
+        quint64 nErrorReplies = 0;
     };
 
     /// Concrete class. For ElectrumX/ElectronX style JSON RPC where newlines delimit RPC messages.
