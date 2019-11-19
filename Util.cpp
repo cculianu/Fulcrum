@@ -177,9 +177,9 @@ Log::~Log()
         // note: we always want to log the timestamp, even in syslog mode.
         // this is because if logging from a thread, log lines be out-of-order.
         // The timestamp is the only record of the actual order in which things
-        // occurred.
-        const auto now = Util::getTime();
-        const QString tsStr = QString::asprintf("[%lld.%03d] ", now/1000LL, int(now%1000));
+        // occurred. Currently the timestamp is to 4 decimal places (hundreds of micros)
+        const auto unow = Util::getTimeNS()/1000LL;
+        const QString tsStr = QString::asprintf("[%lld.%04d] ", unow/1000000LL, int((unow/100LL)%10000));
         QString thrdStr = "";
 
         if (QThread *th = QThread::currentThread(); th && ourApp && th != ourApp->thread()) {

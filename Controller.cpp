@@ -119,17 +119,19 @@ void Controller::process()
             }
         }, BOILERPLATE_ERR, BOILERPLATE_FAIL);
     } else if (sm->state == S::GetBlockHashes) {
-        if (sm->bl >= sm->ht) {
+        if (sm->bl > sm->ht) {
+            // fixme: this ending condition may be triggered before we actually RECEIVE all the blocks we expected!
             sm->state = S::End;
             sm->cur = 0;
             sm->AGAIN();
+            return;
         }
         unsigned bnum = unsigned(sm->bl);
         bitcoindmgr->submitRequest(this, IdMixin::newId(), "getblockhash", {sm->bl++}, [this, bnum](const RPC::Message & resp){ // testing
             sm->cur = qMax(0, sm->cur-1); // decrement current q ct
             QVariant var = resp.result();
             auto res = QByteArray::fromHex(var.toByteArray());
-            if (var.canConvert<QByteArray>() && res.length() == bitcoin::uint256::width()) {
+            if (res.length() == bitcoin::uint256::width()) {
                 if (bnum && !(bnum % 1000)) {
                     Log("Processed block %u", bnum);
                 }
@@ -137,7 +139,7 @@ void Controller::process()
                 if (sm->blockHashes.size() < bnum+1)
                     sm->blockHashes.resize(bnum+1);
                 sm->blockHashes[bnum] = res;
-                while (sm->cur < sm->maxcur && sm->bl + sm->cur <= sm->ht) { // fixme: should be ngoodclients? maybe?
+                while (sm->cur < sm->maxcur && sm->bl + sm->cur <= sm->ht+1) { // fixme: should be ngoodclients? maybe?
                     sm->AGAIN();
                     ++sm->cur;
                 }
@@ -146,7 +148,7 @@ void Controller::process()
             }
         }, BOILERPLATE_ERR, BOILERPLATE_FAIL);
     } else if (sm->state == S::End) {
-        Log() << "Downloaded " << sm->blockHashes.size() << " headers, verifying...";
+        Log() << "Downloaded " << sm->blockHashes.size() << " headers (for height: " << sm->ht << "), verifying...";
         QTimer::singleShot(0, this, [this]{
             int bad = 0;
             for (const auto & ba : sm->blockHashes) {

@@ -13,15 +13,17 @@ namespace RPC {
     auto Message::Id::operator=(const QVariant &v) -> Id &
     {
         bool ok;
+        qint64 id_ll{};
         if (v.isNull())
             *this = nullptr;
         else if (QMetaType::Type(v.type()) == QMetaType::QString)
             *this = v.toString();
-        else if (qint64 id_ll = v.toLongLong(&ok); ok && v.toString() == QString::number(id_ll)) // this checks that fractional part not present
+        // note the below will fail at non-fractional integers > 2^53 (or 9 quadrillion)
+        else if (double id_dbl = v.toDouble(&ok); ok && qAbs(double(id_ll=qint64(id_dbl)) - id_dbl) <= 0.0) // this checks that fractional part not present
             *this = id_ll;
         else
-            // if we get here, id is not a valid type as per JSON RPC 2.0
-            throw InvalidError("id must be a string, a non-fractonal number, or null");
+            // if we get here, id is not a valid type as per our restricted JSON RPC 2.0 (we don't accept fractional parts for id)
+            throw InvalidError(QString("id must be a string, a non-fractional number, or null (got: %1 [%2])").arg(v.toString()).arg(v.typeName()));
         return *this;
     }
 
@@ -83,13 +85,15 @@ namespace RPC {
                 *id_out = ret.id;
 #else
             bool ok;
+            qint64 id_ll{};
             if (QMetaType::Type(var.type()) == QMetaType::QString)
                 ret.id = var;
-            else if (qint64 id_ll = var.toLongLong(&ok); ok && var.toString() == QString::number(id_ll)) // this checks that fractional part not present
+            // note the below will fail at non-fractional integers > 2^53 (or 9 quadrillion)
+            else if (double id_dbl = var.toDouble(&ok); ok && qAbs(double(id_ll=qint64(id_dbl)) - id_dbl) <= 0.0) // this checks that fractional part not present
                 ret.id = id_ll;
             else
-                // if we get here, id is not a valid type as per JSON RPC 2.0
-                throw InvalidError("id must be a string, a non-fractonal number, or null");
+                // if we get here, id is not a valid type as per our restricted JSON RPC 2.0 (we don't accept fractional parts for id)
+                throw InvalidError(QString("id must be a string, a non-fractional number, or null (got: %1 [%2])").arg(var.toString()).arg(var.typeName()));
             if (id_out)
                 *id_out = ret.id;
 #endif
