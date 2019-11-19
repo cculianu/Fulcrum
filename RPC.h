@@ -72,21 +72,7 @@ namespace RPC {
     /// TODO: see if performance benefit can be gained by wrapping in shared_ptr anyway..
     struct Message
     {
-#if CLANG_11
-        using IdBase = std::variant<std::nullptr_t, qint64, QString>;
-        struct Id : public IdBase {
-            using IdBase::variant;
-            using IdBase::operator=;
-            Id & operator=(const QVariant &); // will throw InvalidError if type of QVariant is not one of: qint64, QString, or isNull()
-            operator QVariant() const; // will return a QVariant whose type is either: qint64, QString, or isNull()
-            void clear() { *this = nullptr; }
-            bool isNull() const { return index() == 0; }
-            QString toString() const { return static_cast<QVariant>(*this).toString(); }
-            bool operator<(const Id & other) const;
-        };
-#else
         using Id = QVariant;
-#endif
 
         // -- DATA --
 

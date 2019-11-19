@@ -18,6 +18,7 @@ greaterThan(QT_MAJOR_VERSION, 4):greaterThan(QT_MINOR_VERSION, 12):!win32-g++ {
 release {
     QMAKE_CXXFLAGS += -DNDEBUG
     QMAKE_CFLAGS += -DNDEBUG
+    CONFIG += optimize_full
 }
 
 macx {

@@ -48,6 +48,6 @@ private:
     void start_httpServer(const Options::Interface &iface); // may throw
 };
 
-inline App *app() {  return dynamic_cast<App *>(qApp); }
+inline App *app() { return dynamic_cast<App *>(qApp); }
 
 #endif // APP_H
