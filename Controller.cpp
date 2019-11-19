@@ -132,7 +132,7 @@ void Controller::process()
                 if (bnum && !(bnum % 1000)) {
                     Log("Processed block %u", bnum);
                 }
-                Trace() << resp.method << ": result for height: " << bnum << " len: " << res.length();
+                if (Trace::isEnabled()) Trace() << resp.method << ": result for height: " << bnum << " len: " << res.length();
                 if (sm->blockHashes.size() < bnum+1)
                     sm->blockHashes.resize(bnum+1);
                 sm->blockHashes[bnum] = res;

@@ -68,7 +68,7 @@ void BitcoinDMgr::cleanup() {
 
 void BitcoinDMgr::on_Message(quint64 bid, const RPC::Message &msg)
 {
-    Debug() << "Msg from: " << bid << " method=" << msg.method;
+    if (Debug::isEnabled()) Debug() << "Msg from: " << bid << " method=" << msg.method;
 }
 void BitcoinDMgr::on_ErrorMessage(quint64 bid, const RPC::Message &msg)
 {

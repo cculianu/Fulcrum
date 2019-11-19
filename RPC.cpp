@@ -483,7 +483,7 @@ namespace RPC {
                 QByteArray data = socket->readLine();
                 nReceived += data.size();
                 data = data.simplified();
-                Trace() << __FUNCTION__ << " Got: " << data;
+                if (Trace::isEnabled()) Trace() << __FUNCTION__ << " Got: " << data;
                 if (sm->state == St::BEGIN) {
                     // read "HTTP/1.1 200 OK" line
                     auto toks = data.split(' ');
@@ -507,7 +507,7 @@ namespace RPC {
                             emit authFailure(this);
                     }
                     sm->statusMsg = QString::fromUtf8(msg);
-                    Trace() << "Status message: " << sm->statusMsg;
+                    if (Trace::isEnabled()) Trace() << "Status message: " << sm->statusMsg;
                     sm->state = St::HEADER;
                 } else if (sm->state == St::HEADER) {
                     // read header, line by line
@@ -539,7 +539,7 @@ namespace RPC {
                                 throw Exception(QString("Peer wants to send us more than %1 bytes of data, exceeding our buffer limit!").arg(MAX_BUFFER));
                             }
                             sm->gotLength = true;
-                            Trace() << "Content length: " << sm->contentLength;
+                            if (Trace::isEnabled()) Trace() << "Content length: " << sm->contentLength;
                         }
                     } else {
                         // caught EMPTY line -- this signifies end of header
@@ -565,9 +565,9 @@ namespace RPC {
                     // just as a sanity check.
                     Error() << "Content buffer has extra stuff at the end. Bug in code. FIXME! Crud was: '" << sm->content.mid(sm->contentLength) << "'";
                 }
-                if (sm->logBad && !Trace::isEnabled())
+                if (bool trace = Trace::isEnabled(); sm->logBad && !trace)
                     Warning() << sm->status << " (content): " << json.trimmed();
-                else if (Trace::isEnabled())
+                else if (trace)
                     Trace() << "cl: " << sm->contentLength << " inbound JSON: " << json.trimmed();
                 sm->clear(); // reset back to BEGIN state, empty buffers, clean slate.
                 processJson(json);
