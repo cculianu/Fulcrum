@@ -120,10 +120,7 @@ void Controller::process()
         }, BOILERPLATE_ERR, BOILERPLATE_FAIL);
     } else if (sm->state == S::GetBlockHashes) {
         if (sm->bl > sm->ht) {
-            // fixme: this ending condition may be triggered before we actually RECEIVE all the blocks we expected!
-            sm->state = S::End;
-            sm->cur = 0;
-            sm->AGAIN();
+            // it's nonsensical to request block past known height -- todo: find out if this conditional is even needed. ideally it would never happen
             return;
         }
         unsigned bnum = unsigned(sm->bl);
@@ -139,9 +136,15 @@ void Controller::process()
                 if (sm->blockHashes.size() < bnum+1)
                     sm->blockHashes.resize(bnum+1);
                 sm->blockHashes[bnum] = res;
-                while (sm->cur < sm->maxcur && sm->bl + sm->cur <= sm->ht+1) { // fixme: should be ngoodclients? maybe?
+                while (sm->cur < sm->maxcur && sm->bl + sm->cur <= sm->ht) { // fixme: should be ngoodclients? maybe?
+                    // queue up more requests
                     sm->AGAIN();
                     ++sm->cur;
+                }
+                if (sm->bl > sm->ht && sm->cur == 0) {
+                    // we just got the last reply -- flag state to "end" to check headers received
+                    sm->state = S::End;
+                    sm->AGAIN();
                 }
             } else {
                 Warning() << resp.method << ": at height " << bnum << " response not valid (decoded size: " << res.length() << ")";
@@ -161,6 +164,9 @@ void Controller::process()
                 Log() << "All headers ok";
             else
                 Log() << bad << " headers have the wrong length";
+            // trigger one last check for last few headers that may have come in -- this is still for testing.
+            // ideally these two processes (height check & header dl) will be separated and signal each other.
+            // on their progress and as information comes in, etc.
             sm->state = S::Begin;
             sm->AGAIN();
         });
