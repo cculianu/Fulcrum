@@ -1,7 +1,7 @@
-
 #include "App.h"
-#include "RPC.h"
 #include "BTC.h"
+#include "RPC.h"
+
 #include <QMetaType>
 
 void App::register_MetaTypes()
