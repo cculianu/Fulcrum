@@ -126,7 +126,7 @@ void BitcoinDMgr::submitRequest(QObject *sender, const RPC::Message::Id &rid, co
             Util::VoidFuncOnObjectNoThrow(context, [context] { if (LIKELY(context)) context->deleteLater(); }, 0);
         }
     };
-     // make sure that if we die, to kill the context too to clean up resources.
+     // paranoia: make sure that if we die, to kill the context ASAP too to clean up resources
     connect(this, &QObject::destroyed, context, [killContext]{killContext(true);}, Qt::DirectConnection);
 
     // schedule this ASAP
