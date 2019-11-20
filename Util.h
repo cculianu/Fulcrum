@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cassert>
 #include <chrono>
 #include <functional>
 #include <future>
@@ -412,10 +413,11 @@ namespace Util {
     template <typename RET>
     RET LambdaOnObject(const QObject *obj, const std::function<RET()> & lambda, int timeout_ms=-1)
     {
-        if (QThread::currentThread() == obj->thread()) {
+        assert(obj);
+        if (auto const objThr = obj->thread(); QThread::currentThread() == objThr) {
             // direct call to save on a copy c'tor
             return lambda();
-        } else if (UNLIKELY(!obj->thread()->isRunning())) {
+        } else if (UNLIKELY(!objThr->isRunning())) {
             throw ThreadNotRunning(QString("Target object's thread is not running (objectName: '%1')").arg(obj->objectName()));
         } else {
             auto taskp = std::make_shared< std::packaged_task<RET()> >(lambda);
@@ -482,6 +484,7 @@ namespace Util {
     ///    ThreadNotRunning -- The target object's thred is not running.
     template <typename RET=void, typename QOBJ, typename METHOD, typename ... Args>
     RET CallOnObjectWithTimeout(int timeout_ms, QOBJ obj, METHOD method, Args && ...args) {
+        assert(obj);
         if (QThread::currentThread() == obj->thread()) {
             // direct call to save on a copy c'tor
             return (obj->*method)(std::forward<Args>(args)...);
