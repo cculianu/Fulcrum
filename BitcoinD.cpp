@@ -119,13 +119,15 @@ void BitcoinDMgr::submitRequest(QObject *sender, const RPC::Message::Id &rid, co
 {
     QPointer<QObject> context(new QObject(sender)); // this is a weak ref that gets killed when sender is killed. This way stuff just "goes away" if sender dies.
     context->setObjectName(QString("context for '%1' request id: %2").arg(sender ? sender->objectName() : "").arg(rid.toString()));
-    auto killContext = [context, this] {
+    auto killContext = [context, this](bool thisDestroyed=false) {
         if (LIKELY(context)) { // need to check context because race conditions
-            Util::VoidFuncOnObjectNoThrow(this, [context, this] { if (LIKELY(context)) disconnect(this, &QObject::destroyed, context, nullptr);  }, 0);
+            if (LIKELY(!thisDestroyed))
+                Util::VoidFuncOnObjectNoThrow(this, [context, this] { if (LIKELY(context)) disconnect(this, &QObject::destroyed, context, nullptr);  }, 0);
             Util::VoidFuncOnObjectNoThrow(context, [context] { if (LIKELY(context)) context->deleteLater(); }, 0);
         }
     };
-    connect(this, &QObject::destroyed, context, killContext);  // make sure that if we die, to kill the context too to clean up resources.
+     // make sure that if we die, to kill the context too to clean up resources.
+    connect(this, &QObject::destroyed, context, [killContext]{killContext(true);}, Qt::DirectConnection);
 
     // schedule this ASAP
     QTimer::singleShot(0, this, [this, context, resf, errf, failf, rid, method, params, killContext] {
@@ -139,7 +141,8 @@ void BitcoinDMgr::submitRequest(QObject *sender, const RPC::Message::Id &rid, co
                 Util::VoidFuncOnObjectNoThrow(context, [context, failf, rid, reason]{
                     if (LIKELY(context)) // need to check context again because race conditions
                         failf(rid, reason);
-                }); // fixme: this has an infinite timeout
+                }); // fixme: this has an infinite timeout -- HOWEVER, it's usually called from 'context' thread which means it's a direct function call. USUALLY.
+                // ^ fixme2: also -- the above can theoretically hang forever if context gets deleted or its thread is stopped during this call.
             }
             killContext();
         };
