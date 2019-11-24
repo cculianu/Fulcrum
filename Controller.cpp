@@ -113,6 +113,7 @@ void Controller::process()
                 if (newVal != oldVal) {
                     sm->ht = newVal;
                     sm->state = S::GetBlockHashes;
+                    sm->blockHashes.reserve(size_t(sm->ht+1)); // make sure there is space in our vector as we prepare to dl headers
                     while (sm->cur < sm->maxcur && oldVal++ < newVal) { // fixme: should be ngoodclients
                         sm->AGAIN();
                         ++sm->cur;
@@ -172,6 +173,7 @@ void Controller::process()
                 Log() << "All headers ok";
             else
                 Log() << bad << " headers have the wrong length";
+            sm->blockHashes.reserve(sm->blockHashes.size()); // tighten the vector back down against the data in case
             // trigger one last check for last few headers that may have come in -- this is still for testing.
             // ideally these two processes (height check & header dl) will be separated and signal each other.
             // on their progress and as information comes in, etc.
