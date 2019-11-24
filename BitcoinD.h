@@ -45,6 +45,9 @@ public:
 signals:
     void gotFirstGoodConnection(quint64 bitcoindId); // emitted whenever the first bitcoind after a "down" state (or after startup) gets its first good status (after successful authentication)
     void allConnectionsLost(); // emitted whenever all bitcoind rpc connections are down.
+    /// emitted if bitcoind is telling us it's still warming up (RPC error code -28). The actual warmup message is
+    /// the argument.
+    void inWarmUp(const QString &);
 
 protected:
     Stats stats() const override; // from Mgr

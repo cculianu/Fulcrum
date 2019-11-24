@@ -162,19 +162,11 @@ HEADERS += \
     bitcoin/interpreter.h \
     bitcoin/prevector.h \
     bitcoin/pubkey.h \
+    bitcoin/rpc/protocol.h \
     bitcoin/script.h \
     bitcoin/script_error.h \
     bitcoin/script_flags.h \
     bitcoin/script_standard.h \
-    bitcoin/serialize.h \
-    bitcoin/sigencoding.h \
-    bitcoin/sighashtype.h \
-    bitcoin/tinyformat.h \
-    bitcoin/transaction.h \
-    bitcoin/txid.h \
-    bitcoin/uint256.h \
-    bitcoin/utilstrencodings.h \
-    bitcoin/version.h \
     bitcoin/secp256k1/ecdsa.h \
     bitcoin/secp256k1/ecdsa_impl.h \
     bitcoin/secp256k1/eckey.h \
@@ -217,5 +209,13 @@ HEADERS += \
     bitcoin/secp256k1/util.h \
     bitcoin/streams.h \
     bitcoin/support/cleanse.h \
-    bitcoin/support/zeroafterfree.h
-
+    bitcoin/support/zeroafterfree.h \
+    bitcoin/serialize.h \
+    bitcoin/sigencoding.h \
+    bitcoin/sighashtype.h \
+    bitcoin/tinyformat.h \
+    bitcoin/transaction.h \
+    bitcoin/txid.h \
+    bitcoin/uint256.h \
+    bitcoin/utilstrencodings.h \
+    bitcoin/version.h

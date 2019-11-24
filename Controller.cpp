@@ -42,6 +42,14 @@ void Controller::startup()
         };
         waitForBitcoinD();
         conns += connect(bitcoindmgr.get(), &BitcoinDMgr::allConnectionsLost, this, waitForBitcoinD);
+        conns += connect(bitcoindmgr.get(), &BitcoinDMgr::inWarmUp, this, [last = -1.0](const QString &msg) mutable {
+            // just print a message to the log as to why we keep dropping conn. -- if bitcoind is still warming up
+            auto now = Util::getTimeSecs();
+            if (now-last >= 1.0) { // throttled to not spam log
+                last = now;
+                Log() << "bitcoind is still warming up: " << msg;
+            }
+        });
     }
 
     bitcoindmgr->startup(); // may throw
