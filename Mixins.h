@@ -10,10 +10,10 @@
 #include <functional>
 #include <memory>
 
-/// This helper mixin just returns a pointer to the qobject subclass at runtime, leveraging RTTI. Used by
+/// This helper mixin just returns a pointer to the QObject subclass at runtime, leveraging RTTI. Used by
 /// ThreadObjectMixin, TimersByNameMixin, and StatsMixin below.
 ///
-/// A note about C++ multiple inheritence, regarding dynamic_cast *down* (which we need here for qobj()):
+/// A note about C++ multiple inheritance, regarding dynamic_cast *down* (which we need here for qobj()):
 ///
 /// 1. In order for the qobj() virtual function below to not fail, all direct derived classes of this base should
 ///    inherit from this class via virtual inheritence. This ensures only 1 implementation of this base will be attached
