@@ -69,65 +69,71 @@ template <typename S> OverrideStream<S> WithOrVersion(S *s, int nVersionFlag) {
  * Minimal stream for overwriting and/or appending to an existing byte vector.
  *
  * The referenced vector will grow as necessary.
+ *
+ * This was made into a template by Calin in anticipation of also using this with QByteArray.
  */
-class CVectorWriter {
+template <typename ByteVectorT>
+class GenericVectorWriter {
+    const int nType;
+    const int nVersion;
+    ByteVectorT &m_data;
+    using size_type = typename ByteVectorT::size_type;
+    size_type nPos;
+
 public:
     /**
      * @param[in]  nTypeIn Serialization Type
      * @param[in]  nVersionIn Serialization Version (including any flags)
-     * @param[in]  vchDataIn  Referenced byte vector to overwrite/append
+     * @param[in]  dataIn  Referenced byte vector to overwrite/append
      * @param[in]  nPosIn Starting position. Vector index where writes should
      * start. The vector will initially grow as necessary to  max(nPosIn,
      * vec.size()). So to append, use vec.size().
      */
-    CVectorWriter(int nTypeIn, int nVersionIn, std::vector<uint8_t> &vchDataIn,
-                  size_t nPosIn)
-        : nType(nTypeIn), nVersion(nVersionIn), vchData(vchDataIn),
+    GenericVectorWriter(int nTypeIn, int nVersionIn, ByteVectorT &dataIn,
+                        size_type nPosIn)
+        : nType(nTypeIn), nVersion(nVersionIn), m_data(dataIn),
           nPos(nPosIn) {
-        if (nPos > vchData.size()) vchData.resize(nPos);
+        if (nPos > m_data.size()) m_data.resize(nPos);
     }
     /**
      * (other params same as above)
      * @param[in]  args  A list of items to serialize starting at nPosIn.
      */
     template <typename... Args>
-    CVectorWriter(int nTypeIn, int nVersionIn, std::vector<uint8_t> &vchDataIn,
-                  size_t nPosIn, Args &&... args)
-        : CVectorWriter(nTypeIn, nVersionIn, vchDataIn, nPosIn) {
+    GenericVectorWriter(int nTypeIn, int nVersionIn, ByteVectorT & dataIn,
+                        size_type nPosIn, Args &&... args)
+        : GenericVectorWriter(nTypeIn, nVersionIn, dataIn, nPosIn) {
         bitcoin::SerializeMany(*this, std::forward<Args>(args)...);
     }
     void write(const char *pch, size_t nSize) {
-        assert(nPos <= vchData.size());
-        size_t nOverwrite = std::min(nSize, vchData.size() - nPos);
+        assert(size_type(nPos) <= m_data.size());
+        size_t nOverwrite = size_t(std::min(size_type(nSize), m_data.size() - nPos));
         if (nOverwrite) {
-            memcpy(vchData.data() + nPos,
+            memcpy(m_data.data() + nPos,
                    reinterpret_cast<const uint8_t *>(pch), nOverwrite);
         }
         if (nOverwrite < nSize) {
-            vchData.insert(vchData.end(),
+            m_data.insert(m_data.end(),
                            reinterpret_cast<const uint8_t *>(pch) + nOverwrite,
                            reinterpret_cast<const uint8_t *>(pch) + nSize);
         }
-        nPos += nSize;
+        nPos += size_type(nSize);
     }
-    template <typename T> CVectorWriter &operator<<(const T &obj) {
+    template <typename T> GenericVectorWriter &operator<<(const T &obj) {
         // Serialize to this stream
         bitcoin::Serialize(*this, obj);
         return (*this);
     }
     int GetVersion() const { return nVersion; }
     int GetType() const { return nType; }
-    void seek(size_t nSize) {
+    void seek(size_type nSize) {
         nPos += nSize;
-        if (nPos > vchData.size()) vchData.resize(nPos);
+        if (nPos > m_data.size()) m_data.resize(nPos);
     }
-
-private:
-    const int nType;
-    const int nVersion;
-    std::vector<uint8_t> &vchData;
-    size_t nPos;
 };
+
+using VectorWriter = GenericVectorWriter<std::vector<uint8_t>>;
+using CVectorWriter = VectorWriter; ///< compatibility with existing bitcoin code.
 
 /**
  * Minimal stream for reading from an existing vector by reference.
