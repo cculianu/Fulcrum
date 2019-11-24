@@ -111,8 +111,8 @@ public:
         size_t nOverwrite = size_t(std::min(size_type(nSize), m_data.size() - nPos));
         if (nOverwrite) {
             std::memcpy(m_data.data() + nPos, pch, nOverwrite);
+            nPos += size_type(nOverwrite);
         }
-        nPos += size_type(nOverwrite);
         if (nOverwrite < nSize) {
             const auto nLeftOver = size_type(nSize-nOverwrite);
             m_data.resize(nPos + nLeftOver);
