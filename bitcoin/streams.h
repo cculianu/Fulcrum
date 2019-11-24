@@ -139,7 +139,8 @@ private:
     const int m_type;
     const int m_version;
     const ByteVectorT &m_data;
-    size_t m_pos = 0;
+    using size_type = typename ByteVectorT::size_type;
+    size_type m_pos = 0;
 
 public:
     /**
@@ -149,9 +150,9 @@ public:
      * @param[in]  pos Starting position. Vector index where reads should start.
      */
     GenericVectorReader(int type, int version, const ByteVectorT &data,
-                        size_t pos)
+                        size_type pos)
         : m_type(type), m_version(version), m_data(data), m_pos(pos) {
-        if (m_pos > size_t(m_data.size())) {
+        if (m_pos > m_data.size()) {
             throw std::ios_base::failure(
                 "VectorReader(...): end of data (m_pos > m_data.size())");
         }
@@ -163,7 +164,7 @@ public:
      */
     template <typename... Args>
     GenericVectorReader(int type, int version, const ByteVectorT &data,
-                        size_t pos, Args &&... args)
+                        size_type pos, Args &&... args)
         : GenericVectorReader(type, version, data, pos) {
         bitcoin::UnserializeMany(*this, std::forward<Args>(args)...);
     }
@@ -177,8 +178,8 @@ public:
     int GetVersion() const { return m_version; }
     int GetType() const { return m_type; }
 
-    size_t size() const { return size_t(m_data.size()) - m_pos; }
-    bool empty() const { return size_t(m_data.size()) == m_pos; }
+    size_type size() const { return m_data.size() - m_pos; }
+    bool empty() const { return m_data.size() == m_pos; }
 
     void read(char *dst, size_t n) {
         if (n == 0) {
@@ -186,8 +187,8 @@ public:
         }
 
         // Read from the beginning of the buffer
-        size_t pos_next = m_pos + n;
-        if (pos_next > size_t(m_data.size())) {
+        size_type pos_next = m_pos + n;
+        if (pos_next > m_data.size()) {
             throw std::ios_base::failure("VectorReader::read(): end of data");
         }
         memcpy(dst, m_data.data() + m_pos, n);
