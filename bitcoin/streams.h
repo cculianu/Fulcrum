@@ -106,18 +106,19 @@ public:
         bitcoin::SerializeMany(*this, std::forward<Args>(args)...);
     }
     void write(const char *pch, size_t nSize) {
-        assert(size_type(nPos) <= m_data.size());
+        // this method was re-written by Calin to also work with QByteArray potentially.
+        assert(nPos <= m_data.size());
         size_t nOverwrite = size_t(std::min(size_type(nSize), m_data.size() - nPos));
         if (nOverwrite) {
-            memcpy(m_data.data() + nPos,
-                   reinterpret_cast<const uint8_t *>(pch), nOverwrite);
+            std::memcpy(m_data.data() + nPos, pch, nOverwrite);
         }
+        nPos += size_type(nOverwrite);
         if (nOverwrite < nSize) {
-            m_data.insert(m_data.end(),
-                           reinterpret_cast<const uint8_t *>(pch) + nOverwrite,
-                           reinterpret_cast<const uint8_t *>(pch) + nSize);
+            const auto nLeftOver = size_type(nSize-nOverwrite);
+            m_data.resize(nPos + nLeftOver);
+            std::memcpy(m_data.data() + nPos, pch + nOverwrite, size_t(nLeftOver));
+            nPos += nLeftOver;
         }
-        nPos += size_type(nSize);
     }
     template <typename T> GenericVectorWriter &operator<<(const T &obj) {
         // Serialize to this stream
@@ -126,8 +127,8 @@ public:
     }
     int GetVersion() const { return nVersion; }
     int GetType() const { return nType; }
-    void seek(size_type nSize) {
-        nPos += nSize;
+    void seek(size_t nSize) {
+        nPos += size_type(nSize);
         if (nPos > m_data.size()) m_data.resize(nPos);
     }
 };
@@ -197,7 +198,7 @@ public:
         if (pos_next > m_data.size()) {
             throw std::ios_base::failure("VectorReader::read(): end of data");
         }
-        memcpy(dst, m_data.data() + m_pos, n);
+        std::memcpy(dst, m_data.data() + m_pos, n);
         m_pos = pos_next;
     }
 };
@@ -330,7 +331,7 @@ public:
             (unsigned int)(last - first) <= nReadPos) {
             // special case for inserting at the front when there's room
             nReadPos -= (last - first);
-            memcpy(&vch[nReadPos], &first[0], last - first);
+            std::memcpy(&vch[nReadPos], &first[0], last - first);
         } else {
             vch.insert(it, first, last);
         }
@@ -346,7 +347,7 @@ public:
             (unsigned int)(last - first) <= nReadPos) {
             // special case for inserting at the front when there's room
             nReadPos -= (last - first);
-            memcpy(&vch[nReadPos], &first[0], last - first);
+            std::memcpy(&vch[nReadPos], &first[0], last - first);
         } else {
             vch.insert(it, first, last);
         }
@@ -415,7 +416,7 @@ public:
         if (nReadPosNext > vch.size()) {
             throw std::ios_base::failure("CDataStream::read(): end of data");
         }
-        memcpy(pch, &vch[nReadPos], nSize);
+        std::memcpy(pch, &vch[nReadPos], nSize);
         if (nReadPosNext == vch.size()) {
             nReadPos = 0;
             vch.clear();
@@ -786,7 +787,7 @@ public:
             size_t nNow = nSize;
             if (nNow + pos > vchBuf.size()) nNow = vchBuf.size() - pos;
             if (nNow + nReadPos > nSrcPos) nNow = nSrcPos - nReadPos;
-            memcpy(pch, &vchBuf[pos], nNow);
+            std::memcpy(pch, &vchBuf[pos], nNow);
             nReadPos += nNow;
             pch += nNow;
             nSize -= nNow;
