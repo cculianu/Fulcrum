@@ -287,6 +287,23 @@ namespace BTC
     extern bitcoin::CTransaction DeserializeTx(const QByteArray &bytes); ///< not as fast. NOT done in-place (Note to self: if we use this a lot can implement an in-place version)
     extern bitcoin::CTransaction DeserializeTx(const std::vector<uint8_t> &bytes, size_t pos = 0); ///< this is the fastest --  IN-PLACE
 
+
+    /// Helper -- returns the size of a block header. Should always be 80.
+    extern size_t GetBlockHeaderSize();
+
+    /// Returns the sha256 double hash (not reveresed) of the input QByteArray. The results are copied once from the
+    /// hasher into the returned QByteArray.  This is faster than obtaining a uint256 from bitcoin::Hash then converting
+    /// to a QByteArray manually.
+    /// Optionally, can hash once (a-la ElectrumX) if once=true
+    extern QByteArray Hash(const QByteArray &, bool once = false);
+    /// Identical to the above except it returns the REVERSED hash (which is what bitcoind gives you via JSON RPC or
+    /// when doing uint256.ToString()).
+    extern QByteArray HashRev(const QByteArray &, bool once = false);
+    /// Convenient alias for Hash(b, true)
+    inline QByteArray HashOnce(const QByteArray &b) { return Hash(b, true); }
+    /// Like the Hash() function above, except does hash160 once. (not reversed).
+    extern QByteArray Hash160(const QByteArray &);
+
     namespace Tests {
         void SigCheck();
         bool Base58(bool silent = false, bool throws = false);

@@ -1,17 +1,18 @@
 #include <QMap>
 #include <QString>
 
+#include <algorithm>
 #include <iostream>
 #include <string.h>
 #include <sstream>
 #include <utility>
 
 #include "bitcoin/base58.h"
-#include "bitcoin/hash.h"
-#include "bitcoin/interpreter.h"
 #include "bitcoin/cashaddrenc.h"
 #include "bitcoin/crypto/endian.h"
 #include "bitcoin/crypto/sha256.h"
+#include "bitcoin/hash.h"
+#include "bitcoin/interpreter.h"
 #include "bitcoin/pubkey.h"
 #include "bitcoin/script.h"
 #include "bitcoin/script_error.h"
@@ -728,6 +729,45 @@ namespace BTC
     {
         bitcoin::VectorReader vr(bitcoin::SER_NETWORK, bitcoin::PROTOCOL_VERSION, bytes, pos);
         return bitcoin::CTransaction(bitcoin::deserialize, vr);
+    }
+
+    /// Helper -- returns the size of a block header. Should always be 80.
+    size_t GetBlockHeaderSize()
+    {
+        static std::atomic<size_t> sz = 0;
+        if (!sz) {
+            bitcoin::CSizeComputer comp(bitcoin::SER_NETWORK, bitcoin::PROTOCOL_VERSION);
+            bitcoin::CBlockHeader h;
+            h.Serialize(comp);
+            sz = comp.size();
+        }
+        return sz;
+    }
+
+    QByteArray Hash(const QByteArray &b, bool once)
+    {
+        bitcoin::CHash256 h(once);
+        QByteArray ret;
+        ret.resize(h.OUTPUT_SIZE);
+        h.Write(reinterpret_cast<const uint8_t *>(b.constData()), size_t(b.length()));
+        h.Finalize(reinterpret_cast<uint8_t *>(ret.data()));
+        return ret;
+    }
+
+    QByteArray HashRev(const QByteArray &b, bool once)
+    {
+        QByteArray ret = Hash(b, once);
+        std::reverse(std::begin(ret), std::end(ret));
+        return ret;
+    }
+
+    QByteArray Hash160(const QByteArray &b) {
+        bitcoin::CHash160 h;
+        QByteArray ret;
+        ret.resize(h.OUTPUT_SIZE);
+        h.Write(reinterpret_cast<const uint8_t *>(b.constData()), size_t(b.length()));
+        h.Finalize(reinterpret_cast<uint8_t *>(ret.data()));
+        return ret;
     }
 
 } // end namespace BTC

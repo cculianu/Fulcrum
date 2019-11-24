@@ -68,8 +68,6 @@ void Controller::cleanup()
     sm.reset();
 }
 
-
-
 struct Controller::StateMachine
 {
     enum State {
@@ -81,12 +79,14 @@ struct Controller::StateMachine
     int cur = 0;
     static constexpr int maxcur = 16;//BitcoinDMgr::N_CLIENTS*4; // fixme: tune this
     Util::VoidFunc AGAIN;
-    std::vector<QByteArray> blockHashes;
+    std::vector<QByteArray> blockHeaders;
 };
 
 void Controller::process()
 {
     Debug() << "Process called...";
+
+    static const int HEADER_SIZE = int(BTC::GetBlockHeaderSize());
 
     // TESTING...
     // TODO: This doesn't deal at all well with failures. After tuning this, figure out a
@@ -113,7 +113,7 @@ void Controller::process()
                 if (newVal != oldVal) {
                     sm->ht = newVal;
                     sm->state = S::GetBlockHashes;
-                    sm->blockHashes.reserve(size_t(sm->ht+1)); // make sure there is space in our vector as we prepare to dl headers
+                    sm->blockHeaders.reserve(size_t(sm->ht+1)); // make sure there is space in our vector as we prepare to dl headers
                     while (sm->cur < sm->maxcur && oldVal++ < newVal) { // fixme: should be ngoodclients
                         sm->AGAIN();
                         ++sm->cur;
@@ -132,48 +132,59 @@ void Controller::process()
             // it's nonsensical to request block past known height -- todo: find out if this conditional is even needed. ideally it would never happen
             return;
         }
-        unsigned bnum = unsigned(sm->bl);
-        bitcoindmgr->submitRequest(this, IdMixin::newId(), "getblockhash", {sm->bl++}, [this, bnum](const RPC::Message & resp){ // testing
-            sm->cur = qMax(0, sm->cur-1); // decrement current q ct
+        unsigned bnum = unsigned(sm->bl++);
+        bitcoindmgr->submitRequest(this, IdMixin::newId(), "getblockhash", {bnum}, [this, bnum](const RPC::Message & resp){ // testing
             QVariant var = resp.result();
-            auto res = QByteArray::fromHex(var.toByteArray());
-            if (res.length() == bitcoin::uint256::width()) {
-                if (bnum && !(bnum % 1000)) {
-                    Log("Processed block %u", bnum);
-                }
-                if (Trace::isEnabled()) Trace() << resp.method << ": result for height: " << bnum << " len: " << res.length();
-                if (sm->blockHashes.size() < bnum+1)
-                    sm->blockHashes.resize(bnum+1);
-                sm->blockHashes[bnum] = res;
-                while (sm->cur < sm->maxcur && sm->bl + sm->cur <= sm->ht) { // fixme: should be ngoodclients? maybe?
-                    // queue up more requests
-                    sm->AGAIN();
-                    ++sm->cur;
-                }
-                if (sm->bl > sm->ht && sm->cur == 0) {
-                    // we just got the last reply -- flag state to "end" to check headers received
-                    sm->state = S::End;
-                    sm->AGAIN();
-                }
+            const auto hash = QByteArray::fromHex(var.toByteArray());
+            if (hash.length() == bitcoin::uint256::width()) {
+                bitcoindmgr->submitRequest(this, IdMixin::newId(), "getblockheader", {var, false}, [this, bnum, hash](const RPC::Message & resp){ // testing
+                    sm->cur = qMax(0, sm->cur-1); // decrement current q ct
+                    QVariant var = resp.result();
+                    const auto header = QByteArray::fromHex(var.toByteArray());
+                    QByteArray chkHash;
+                    if (bool sizeOk = header.length() == HEADER_SIZE; sizeOk && (chkHash = BTC::HashRev(header)) == hash) {
+                        if (bnum && !(bnum % 1000)) {
+                            Log("Processed block %u", bnum);
+                        }
+                        if (Trace::isEnabled()) Trace() << resp.method << ": header for height: " << bnum << " len: " << header.length();
+                        // save header and hash when both are correct
+                        if (sm->blockHeaders.size() < bnum+1)
+                            sm->blockHeaders.resize(bnum+1);
+                        sm->blockHeaders[bnum] = header;
+                        while (sm->cur < sm->maxcur && sm->bl + sm->cur <= sm->ht) { // fixme: should be ngoodclients? maybe?
+                            // queue up more requests
+                            sm->AGAIN();
+                            ++sm->cur;
+                        }
+                        if (sm->bl > sm->ht && sm->cur == 0) {
+                            // we just got the last reply -- flag state to "end" to check headers received
+                            sm->state = S::End;
+                            sm->AGAIN();
+                        }
+                    } else if (!sizeOk) {
+                        Warning() << resp.method << ": at height " << bnum << " header not valid (decoded size: " << header.length() << ")";
+                    } else {
+                        Warning() << resp.method << ": at height " << bnum << " header not valid (expected hash: " << hash.toHex() << ", got hash: " << chkHash.toHex() << ")";
+                    }
+                }, BOILERPLATE_ERR, BOILERPLATE_FAIL);
             } else {
-                Warning() << resp.method << ": at height " << bnum << " response not valid (decoded size: " << res.length() << ")";
+                Warning() << resp.method << ": at height " << bnum << " hash not valid (decoded size: " << hash.length() << ")";
             }
         }, BOILERPLATE_ERR, BOILERPLATE_FAIL);
     } else if (sm->state == S::End) {
-        Log() << "Downloaded " << sm->blockHashes.size() << " headers (for height: " << sm->ht << "), verifying...";
+        Log() << "Downloaded " << sm->blockHeaders.size() << " headers (for height: " << sm->ht << "), verifying...";
         QTimer::singleShot(0, this, [this]{
             int bad = 0;
-            for (const auto & ba : sm->blockHashes) {
-                if (ba.length() != bitcoin::uint256::width()) {
+            for (const auto & ba : sm->blockHeaders) {
+                if (ba.length() != HEADER_SIZE)
                     ++bad;
-                }
             }
             // TESTING
-            if (!bad)
-                Log() << "All headers ok";
+            if (bad)
+                Log() << bad << " headers have the wrong length on either hash or header";
             else
-                Log() << bad << " headers have the wrong length";
-            sm->blockHashes.reserve(sm->blockHashes.size()); // tighten the vector back down against the data in case
+                Log() << "All headers ok";
+            sm->blockHeaders.reserve(sm->blockHeaders.size()); // tighten the vector back down against the data in case
             // trigger one last check for last few headers that may have come in -- this is still for testing.
             // ideally these two processes (height check & header dl) will be separated and signal each other.
             // on their progress and as information comes in, etc.

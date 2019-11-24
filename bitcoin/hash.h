@@ -28,10 +28,10 @@ typedef uint256 ChainCode;
 class CHash256 {
 private:
     CSHA256 sha;
-    bool once = false;
+    const bool once = false;
 public:
     CHash256(bool once = false) : once(once) {}
-    static const size_t OUTPUT_SIZE = CSHA256::OUTPUT_SIZE;
+    static constexpr size_t OUTPUT_SIZE = CSHA256::OUTPUT_SIZE;
 
     void Finalize(uint8_t hash[OUTPUT_SIZE]) {
         if (!once) {
@@ -60,7 +60,7 @@ private:
     CSHA256 sha;
 
 public:
-    static const size_t OUTPUT_SIZE = CRIPEMD160::OUTPUT_SIZE;
+    static constexpr size_t OUTPUT_SIZE = CRIPEMD160::OUTPUT_SIZE;
 
     void Finalize(uint8_t hash[OUTPUT_SIZE]) {
         uint8_t buf[CSHA256::OUTPUT_SIZE];
