@@ -23,7 +23,7 @@ public:
     void startup() override; ///< from Mgr
     void cleanup() override; ///< from Mgr
 
-    static constexpr int N_CLIENTS = 3;
+    static constexpr int N_CLIENTS = 4;
 
     using ResultsF = std::function<void(const RPC::Message &response)>;
     using ErrorF = ResultsF; // identical to ResultsF above except the message passed in is an error="" message.

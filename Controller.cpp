@@ -98,6 +98,8 @@ struct DownloadHeadersTask : public CtlTask
     const unsigned from = 0, to = 0;
     unsigned next = 0;
     unsigned goodCt = 0;
+    int q_ct = 0;
+    static constexpr int max_q = BitcoinDMgr::N_CLIENTS;
     std::vector<QByteArray> headers;
 
     static constexpr int maxRetry = 3;
@@ -160,6 +162,7 @@ void DownloadHeadersTask::do_get(unsigned int bnum)
                     const auto expectedCt = (to-from)+1;
                     const size_t index = bnum - from;
                     ++goodCt;
+                    q_ct = qMax(q_ct-1, 0);
                     if (index && !(index % 1000)) {
                         emit progress(double(bnum-from) / double(expectedCt));
                     }
@@ -171,8 +174,14 @@ void DownloadHeadersTask::do_get(unsigned int bnum)
                     if (goodCt >= expectedCt) {
                         // flag state to maybeDone to do checks when process() called again
                         maybeDone = true;
+                        AGAIN();
+                        return;
                     }
-                    AGAIN();
+                    while (goodCt + unsigned(q_ct) < expectedCt && q_ct < max_q) {
+                        // queue multiple at once
+                        AGAIN();
+                        ++q_ct;
+                    }
                 } else if (!sizeOk) {
                     Warning() << resp.method << ": at height " << bnum << " header not valid (decoded size: " << header.length() << ")";
                     errorCode = int(bnum);
