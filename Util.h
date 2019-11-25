@@ -189,6 +189,11 @@ namespace Util {
     double getTimeSecs(); ///< returns a timestamp in seconds
     bool isClockSteady(); ///< returns true if the above timestamp clock is steady (monotonic).
 
+    /// returns the number of virtual processors on the system
+    unsigned getNVirtualProcessors();
+    /// returns the number of physical (real) processors on the system
+    unsigned getNPhysicalProcessors();
+
     template <typename Iterator>
     void shuffle(Iterator begin, Iterator end)
     {

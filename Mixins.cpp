@@ -100,6 +100,7 @@ void TimersByNameMixin::callOnTimerSoon(int ms, const QString &name, const std::
         }
     });
     _timerMap[name] = timer;
+    timer->setObjectName(name);
     timer->start(ms);
     //Debug() << "timerByName: " << name << " started, ms = " << ms;
 }
@@ -128,3 +129,5 @@ auto StatsMixin::statsSafe(int timeout_ms) const -> Stats
     }
     return ret;
 }
+
+ProcessAgainMixin::~ProcessAgainMixin() {}

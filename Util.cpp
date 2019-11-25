@@ -2,7 +2,19 @@
 #include "Logger.h"
 #include "Util.h"
 
+// below headers are for getN*Processors, etc.
+#if defined(Q_OS_DARWIN)
+#  include <sys/types.h>
+#  include <sys/sysctl.h>
+#  include <mach/mach_time.h>
+#elif defined(Q_OS_WIN)
+#  include <Windows.h>
+#elif defined(Q_OS_LINUX)
+#  include <unistd.h>
+#endif
+
 #include <iostream>
+#include <thread>
 
 namespace Util {
     QString basename(const QString &s) {
@@ -149,6 +161,57 @@ namespace Util {
         return false;
     }
 
+#if defined(Q_OS_DARWIN)
+    unsigned getNVirtualProcessors()
+    {
+        static std::atomic<unsigned> nVProcs = 0;
+        if (!nVProcs) {
+            int a = 0;
+            size_t b = sizeof(a);
+            if (0 == sysctlbyname("hw.ncpu",&a, &b, nullptr, 0)) {
+                nVProcs = unsigned(a); // this returns virtual CPUs which isn't always what we want..
+            }
+        }
+        return nVProcs.load() ? nVProcs.load() : 1;
+    }
+
+    unsigned getNPhysicalProcessors()
+    {
+        static std::atomic<unsigned> nProcs = 0;
+        if (!nProcs) {
+            int a = 0;
+            size_t b = sizeof(a);
+            if (0 == sysctlbyname("hw.physicalcpu",&a,&b,nullptr,0)) {
+                nProcs = unsigned(a);
+            }
+            //Debug() << "nProcs = " << nProcs;//  << " a:" << a << "  b:" << b;
+        }
+        return nProcs.load() ? nProcs.load() : 1;
+    }
+#elif defined(Q_OS_WIN)
+    unsigned getNVirtualProcessors() { return std::thread::hardware_concurrency(); }
+    unsigned getNPhysicalProcessors() {
+        static std::atomic<unsigned> nProcs = 0;
+        if (!nProcs) {
+            SYSTEM_INFO sysinfo;
+            GetSystemInfo(&sysinfo);
+            nProcs = unsigned(sysinfo.dwNumberOfProcessors);
+        }
+        return nProcs.load() ? nProcs.load() : 1;
+    }
+#elif defined(Q_OS_LINUX)
+    unsigned getNVirtualProcessors() { return std::thread::hardware_concurrency(); }
+    unsigned getNPhysicalProcessors() {
+        static std::atomic<unsigned> nProcs = 0;
+        if (!nProcs) {
+            nProcs = unsigned(sysconf(_SC_NPROCESSORS_ONLN));
+        }
+        return nProcs.load() ? nProcs.load() : 1;
+    }
+#else
+    unsigned getNVirtualProcessors() { return std::thread::hardware_concurrency(); }
+    unsigned getNPhysicalProcessors() { return std::thread::hardware_concurrency(); }
+#endif
 
 } // end namespace Util
 

@@ -171,4 +171,17 @@ protected:
 };
 
 
+/// A mixin for a QObject that may need to call process() on itself repeatedly.
+/// The utility function AGAIN() is provided to schedule process() to run in the
+/// event loop ASAP.
+/// Used in Controller.h
+class ProcessAgainMixin : virtual public QObjectMixin
+{
+public:
+    virtual ~ProcessAgainMixin() override;
+protected:
+    virtual void process() = 0;
+    void AGAIN() { QTimer::singleShot(0, qobj(), [this]{process();}); }
+};
+
 #endif // MIXINS_H
