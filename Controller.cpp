@@ -95,17 +95,17 @@ struct DownloadHeadersTask : public CtlTask
     DownloadHeadersTask(unsigned from, unsigned to, Controller *ctl);
     void process() override;
 
+
     const unsigned from = 0, to = 0;
     unsigned next = 0;
     unsigned goodCt = 0;
-    int q_ct = 0;
-    static constexpr int max_q = BitcoinDMgr::N_CLIENTS;
+    bool maybeDone = false;
     std::vector<QByteArray> headers;
 
-    static constexpr int maxRetry = 3;
-    static const int HEADER_SIZE;
+    int q_ct = 0;
+    static constexpr int max_q = BitcoinDMgr::N_CLIENTS+1; // todo: tune this
 
-    bool maybeDone = false;
+    static const int HEADER_SIZE;
 
     void do_get(unsigned height);
 
@@ -214,7 +214,9 @@ struct Controller::StateMachine
     std::map<unsigned, std::vector<QByteArray> > blockHeaders; // mapping of from_height -> headers
     std::map<std::pair<unsigned, unsigned>, unsigned> failures; // mapping of from,to -> failCt
 
-    const size_t DL_CONCURRENCY = size_t(qMax(int(Util::getNPhysicalProcessors()), BitcoinDMgr::N_CLIENTS));
+    // todo: tune this
+    const size_t DL_CONCURRENCY = size_t(qMin(qMax(int(Util::getNPhysicalProcessors())-BitcoinDMgr::N_CLIENTS, BitcoinDMgr::N_CLIENTS), 32));
+
     static constexpr unsigned maxErrCt = 3;
 
     const char * stateStr() const {
