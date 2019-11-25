@@ -14,6 +14,7 @@
 #include <random>
 #include <string>
 #include <tuple>
+#include <type_traits>
 #include <utility>
 
 #define Q2C(qstr) ((qstr).toUtf8().constData())
@@ -408,6 +409,21 @@ namespace Util {
     {
         if (limit < 0) return s;
         return s.length() > limit ? s.left(limit) + "..." : s;
+    }
+
+    template <typename Numeric,
+              std::enable_if_t<std::is_arithmetic<Numeric>::value, int> = 0>
+    QString Pluralize(const QString &word, Numeric n) {
+        QString ret;
+        {
+            QTextStream s(&ret);
+            s << word;
+            if (qAbs(int(n)) != 1) {
+                if (word.endsWith('s')) s << "es";
+                else s << "s";
+            }
+        }
+        return ret;
     }
 
     /// Call lambda() in the thread context of obj's thread. Will block until completed.

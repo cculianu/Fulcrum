@@ -298,7 +298,7 @@ void Controller::process(bool beSilentIfUpToDate)
         for (const auto & pair : sm->blockHeaders) {
             ctr += pair.second.size();
         }
-        Log() << "Downloaded " << ctr << " headers, verifying ...";
+        Log() << "Downloaded " << ctr << " new " << Util::Pluralize("header", ctr) << ", verifying ...";
         ctr = 0;
         for (auto & [num, hdrs] : sm->blockHeaders) {
             Log() << "Verifying from " << num << " ...";
@@ -319,11 +319,11 @@ void Controller::process(bool beSilentIfUpToDate)
             ctr += hdrs.size();
             hdrs.clear();
         }
-        Log() << "Verified & copied " << ctr << " headers ok";
+        Log() << "Verified & copied " << ctr << " new " << Util::Pluralize("header", ctr) << " ok";
         sm.reset(); // go back to "Begin" state to check if any new headers arrived in the meantime
         AGAIN();
     } else if (sm->state == State::Failure) {
-        // TODO: handle this ? what now?
+        // We will try again later via the pollTimer
         Error() << "Failed to download headers";
         sm.reset();
         enablePollTimer = true;
