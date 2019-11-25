@@ -7,8 +7,6 @@
 #  include <sys/types.h>
 #  include <sys/sysctl.h>
 #  include <mach/mach_time.h>
-#elif defined(Q_OS_WIN)
-#  include <Windows.h>
 #elif defined(Q_OS_LINUX)
 #  include <unistd.h>
 #endif
@@ -185,17 +183,6 @@ namespace Util {
                 nProcs = unsigned(a);
             }
             //Debug() << "nProcs = " << nProcs;//  << " a:" << a << "  b:" << b;
-        }
-        return nProcs.load() ? nProcs.load() : 1;
-    }
-#elif defined(Q_OS_WIN)
-    unsigned getNVirtualProcessors() { return std::thread::hardware_concurrency(); }
-    unsigned getNPhysicalProcessors() {
-        static std::atomic<unsigned> nProcs = 0;
-        if (!nProcs) {
-            SYSTEM_INFO sysinfo;
-            GetSystemInfo(&sysinfo);
-            nProcs = unsigned(sysinfo.dwNumberOfProcessors);
         }
         return nProcs.load() ? nProcs.load() : 1;
     }
