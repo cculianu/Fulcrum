@@ -56,7 +56,7 @@ private:
     size_t nHeadersDownloadedSoFar() const; ///< not 100% accurate. call this only from this thread
 };
 
-class CtlTask : public QObject, public ThreadObjectMixin, public TimersByNameMixin, public ProcessAgainMixin
+class CtlTask : public QObject, public ThreadObjectMixin, public ProcessAgainMixin
 {
     Q_OBJECT
 public:
