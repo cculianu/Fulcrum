@@ -607,9 +607,9 @@ namespace RPC {
     }
     QByteArray HttpConnection::wrapForSend(const QByteArray &data)
     {
-        static const QByteArray NL("\r\n");
+        static const QByteArray NL("\r\n"), SLASHN("\n"), EMPTY("");
         QByteArray responseHeader;
-        const QByteArray suffix = !data.endsWith("\n") ? NL : "";
+        const QByteArray suffix = !data.endsWith(SLASHN) ? NL : EMPTY;
         {
             QTextStream ss(&responseHeader, QIODevice::WriteOnly);
             ss.setCodec(QTextCodec::codecForName("UTF-8"));
