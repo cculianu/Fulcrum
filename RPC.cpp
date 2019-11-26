@@ -6,6 +6,18 @@
 namespace RPC {
 
     const QString jsonRpcVersion("2.0");
+    namespace { const QString rpcDot("rpc."); } // "static"
+
+    /*static*/ const QString Message::s_code("code");
+    /*static*/ const QString Message::s_data("data");
+    /*static*/ const QString Message::s_error("error");
+    /*static*/ const QString Message::s_id("id");
+    /*static*/ const QString Message::s_jsonrpc("jsonrpc");
+    /*static*/ const QString Message::s_message("message");
+    /*static*/ const QString Message::s_method("method");
+    /*static*/ const QString Message::s_params("params");
+    /*static*/ const QString Message::s_result("result");
+
 
     /* static */
     Message Message::fromString(const QString &s, Id *id_out, bool v1)
@@ -24,7 +36,7 @@ namespace RPC {
             id_out->clear();
 
         // Grab the id first in case later processing fails.
-        if (auto var = map.value("id"); !var.isNull()) {
+        if (auto var = map.value(s_id); !var.isNull()) {
             // note as per JSON-RPC 2.0 spec, we squash floats down to ints, discarding the fractional part
             // we will throw if the id is not a string, integer, or null
             bool ok;
@@ -43,29 +55,29 @@ namespace RPC {
 
 
         if (!v1 && ret.jsonRpcVersion() != RPC::jsonRpcVersion) // we ignore this key in v1
-            throw InvalidError("Expected jsonrpc version 2.0");
+            throw InvalidError(QString("Expected jsonrpc version %1").arg(RPC::jsonRpcVersion));
 
-        if (auto var = map.value("method");
-                map.contains("method") && (QMetaType::Type(var.type()) != QMetaType::QString
+        if (auto var = map.value(s_method);
+                map.contains(s_method) && (QMetaType::Type(var.type()) != QMetaType::QString
                                            || (ret.method = var.toString()).isEmpty()
-                                           || ret.method.startsWith("rpc.")))
+                                           || ret.method.startsWith(rpcDot/*="rpc."*/)))
             throw InvalidError("Invalid method");
 
         // todo: see if the below validation needs optimization
 
         // validate error as per JSON RPC 2.0  -- TODO: See if this is kosher for 1.0 -- it seems to be on first glance
         if (ret.isError()) {
-            auto errmap = ret.data.value("error").toMap();
-            if (!errmap.contains("code") || !errmap.contains("message"))
+            auto errmap = ret.data.value(s_error).toMap();
+            if (!errmap.contains(s_code) || !errmap.contains(s_message))
                 throw InvalidError("Expected error object to contain code and message");
             if (!v1) { // we are more lax for v1
-                int n_req = errmap.contains("data") ? 3 : 2;
+                int n_req = errmap.contains(s_data) ? 3 : 2;
                 if (errmap.count() != n_req)
                     throw InvalidError("Unexpected keys in error object");
                 bool ok;
-                if (int code = errmap.value("code").toInt(&ok); !ok || errmap.value("code").toString() != QString::number(code))
+                if (int code = errmap.value(s_code).toInt(&ok); !ok || errmap.value(s_code).toString() != QString::number(code))
                     throw InvalidError("Expected error code to be an integer");
-                static const KeySet required = { "id", "error", "jsonrpc" };
+                static const KeySet required{ s_id, s_error, s_jsonrpc };
                 if (KeySet::fromList(ret.data.keys()) != required)
                     throw InvalidError("Error response not valid");
             }
@@ -113,14 +125,14 @@ namespace RPC {
         Message ret;
         auto & map = ret.data;
         if (!v1)
-            map["jsonrpc"] = RPC::jsonRpcVersion;
+            map[s_jsonrpc] = RPC::jsonRpcVersion;
         ret.v1 = v1;
         ret.id = id;
-        map["id"] = id; // may be "null"
+        map[s_id] = id; // may be "null"
         QVariantMap errMap;
-        errMap["code"] = code;
-        errMap["message"] = message;
-        map["error"] = errMap;
+        errMap[s_code] = code;
+        errMap[s_message] = message;
+        map[s_error] = errMap;
         return ret;
     }
 
@@ -132,11 +144,11 @@ namespace RPC {
         ret.v1 = v1;
         auto & map = ret.data;
         if (!v1)
-            map["jsonrpc"] = RPC::jsonRpcVersion;
+            map[s_jsonrpc] = RPC::jsonRpcVersion;
         else
-            map["error"] = QVariant(); // v1: always set the "error" key to null
-        map["id"] = reqId;
-        map["result"] = result;
+            map[s_error] = QVariant(); // v1: always set the "error" key to null
+        map[s_id] = reqId;
+        map[s_result] = result;
         ret.id = reqId;
         return ret;
     }
@@ -146,7 +158,7 @@ namespace RPC {
     {
         Message ret = makeNotification(methodName, params, v1);
         auto & map = ret.data;
-        map["id"] = id;
+        map[s_id] = id;
         ret.id = id;
         return ret;
     }
@@ -156,7 +168,7 @@ namespace RPC {
     {
         Message ret = makeNotification(methodName, params, v1);
         auto & map = ret.data;
-        map["id"] = id;
+        map[s_id] = id;
         ret.id = id;
         return ret;
     }
@@ -168,11 +180,11 @@ namespace RPC {
         ret.v1 = v1;
         auto & map = ret.data;
         if (!v1)
-            map["jsonrpc"] = RPC::jsonRpcVersion;
+            map[s_jsonrpc] = RPC::jsonRpcVersion;
         else
-            map["id"] = QVariant(); // v1: always has the "id" key as null for a notif
-        map["method"] = methodName;
-        map["params"] = params;
+            map[s_id] = QVariant(); // v1: always has the "id" key as null for a notif
+        map[s_method] = methodName;
+        map[s_params] = params;
         ret.method = methodName;
         return ret;
     }
@@ -184,11 +196,11 @@ namespace RPC {
         ret.v1 = v1;
         auto & map = ret.data;
         if (!v1)
-            map["jsonrpc"] = RPC::jsonRpcVersion;
+            map[s_jsonrpc] = RPC::jsonRpcVersion;
         else
-            map["id"] = QVariant(); // v1: always has the "id" key as null for a notif
-        map["method"] = methodName;
-        map["params"] = params;
+            map[s_id] = QVariant(); // v1: always has the "id" key as null for a notif
+        map[s_method] = methodName;
+        map[s_params] = params;
         ret.method = methodName;
         return ret;
     }
@@ -492,7 +504,8 @@ namespace RPC {
                         throw Exception(QString("Expected HTTP/1.1 line, instead got: %1").arg(QString(data)));
                     }
                     auto proto = toks[0], code = toks[1], msg = toks.mid(2).join(' ');
-                    if (proto.toUpper() != "HTTP/1.1") {
+                    static const QByteArray s_HTTP11("HTTP/1.1");
+                    if (proto.toUpper() != s_HTTP11) {
                         // ERROR HERE. Expected HTTP/1.1
                         throw Exception(QString("Protocol not HTTP/1.1: %1").arg(QString(proto)));
                     }
@@ -522,13 +535,15 @@ namespace RPC {
                             throw Exception(QString("Expected header line: %1").arg(QString(data)));
                         }
                         auto name = toks[0].simplified(), value = toks.mid(1).join(" ").simplified();
-                        if (name.toLower() == "content-type") {
+                        static const QByteArray s_content_type("content-type"), s_content_length("content-length"),
+                                                s_application_json("application/json");
+                        if (name.toLower() == s_content_type) {
                             sm->contentType = QString::fromUtf8(value);
-                            if (sm->contentType.compare("application/json", Qt::CaseInsensitive) != 0) {
+                            if (sm->contentType.compare(s_application_json, Qt::CaseInsensitive) != 0) {
                                 Warning() << "Got unexpected content type: " << sm->contentType << (!Trace::isEnabled() ? "; will log the rest of this HTTP response" : "");
                                 sm->logBad = true;
                             }
-                        } else if (name.toLower() == "content-length") {
+                        } else if (name.toLower() == s_content_length) {
                             bool ok = false;
                             sm->contentLength = value.toInt(&ok);
                             if (!ok || sm->contentLength < 0) {

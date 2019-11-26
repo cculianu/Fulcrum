@@ -102,15 +102,29 @@ namespace RPC {
 
         QString toJsonString() const { try {return Util::Json::toString(data, true);} catch (...) {} return QString(); }
 
+        // -- PERFORMANCE OPTIMIZATION --
+        // It turns out QString::QString(const char *) is called a lot in typical usase of this class, so we pre-create
+        // the strings we will need as static data, app-wide.
+        static const QString s_code;    ///< "code"
+        static const QString s_data;    ///< "data"
+        static const QString s_error;   ///< "error"
+        static const QString s_id;      ///< "id"
+        static const QString s_jsonrpc; ///< "jsonrpc"
+        static const QString s_message; ///< "message"
+        static const QString s_method;  ///< "method"
+        static const QString s_params;  ///< "params"
+        static const QString s_result;  ///< "result"
+        // ./
+
         bool isError() const {
             if (!v1)
-                return data.contains("error"); // v2, error= key missing unless is an actual error result.
+                return data.contains(s_error); // v2, error= key missing unless is an actual error result.
             else
-                return !data.value("error").isNull(); // v1, error=null may always be there. is error if it's not null
+                return !data.value(s_error).isNull(); // v1, error=null may always be there. is error if it's not null
         }
-        int  errorCode() const { return data.value("error").toMap().value("code").toInt(); }
-        QString  errorMessage() const { return data.value("error").toMap().value("message").toString(); }
-        QVariant errorData() const { return data.value("error").toMap().value("data"); }
+        int  errorCode() const { return data.value(s_error).toMap().value(s_code).toInt(); }
+        QString  errorMessage() const { return data.value(s_error).toMap().value(s_message).toString(); }
+        QVariant errorData() const { return data.value(s_error).toMap().value(s_data); }
 
         bool isRequest() const { return !isError() && hasMethod() && (hasId() && (!v1 || !id.isNull())) && !hasResult(); }
         bool isResponse() const { return !isError() && hasResult() && hasId(); }
@@ -121,22 +135,22 @@ namespace RPC {
                 return !isError() && hasId() && id.isNull() && !hasResult() && hasMethod(); // v1 notifs..  ID present, but must be null.
         }
 
-        bool hasId() const { return data.contains("id"); }
+        bool hasId() const { return data.contains(s_id); }
 
-        bool hasParams() const { return data.contains("params"); }
-        bool isParamsList() const { return QMetaType::Type(data.value("params").type()) == QMetaType::QVariantList; }
-        bool isParamsMap() const { return QMetaType::Type(data.value("params").type()) == QMetaType::QVariantMap; }
-        QVariant params() const { return data.value("params"); }
+        bool hasParams() const { return data.contains(s_params); }
+        bool isParamsList() const { return QMetaType::Type(data.value(s_params).type()) == QMetaType::QVariantList; }
+        bool isParamsMap() const { return QMetaType::Type(data.value(s_params).type()) == QMetaType::QVariantMap; }
+        QVariant params() const { return data.value(s_params); }
         QVariantList paramsList() const { return params().toList(); }
         QVariantMap paramsMap() const { return params().toMap(); }
 
 
-        bool hasResult() const { return data.contains("result"); }
-        QVariant result() const { return data.value("result"); }
+        bool hasResult() const { return data.contains(s_result); }
+        QVariant result() const { return data.value(s_result); }
 
-        bool hasMethod() const { return data.contains("method"); }
+        bool hasMethod() const { return data.contains(s_method); }
 
-        QString jsonRpcVersion() const { return data.value("jsonrpc").toString(); }
+        QString jsonRpcVersion() const { return data.value(s_jsonrpc).toString(); }
     };
 
 
