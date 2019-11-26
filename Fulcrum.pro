@@ -53,6 +53,7 @@ win32-msvc {
     QMAKE_CXXFLAGS += /std:c++17
 }
 win32 {
+    # Windows MSVC & mingw-g++ both have too many warnings due to bitcoin sources, so just disable warnings
     CONFIG += warn_off
 }
 linux {
@@ -60,6 +61,10 @@ linux {
     DEFINES += HAVE_ENDIAN_H HAVE_DECL_HTOBE16 HAVE_DECL_HTOLE16 HAVE_DECL_BE16TOH HAVE_DECL_LE16TOH HAVE_DECL_HTOBE32 \
                HAVE_DECL_HTOLE32 HAVE_DECL_BE32TOH HAVE_DECL_LE32TOH HAVE_DECL_HTOBE64 HAVE_DECL_HTOLE64 HAVE_DECL_BE64TOH \
                HAVE_DECL_LE64TOH
+}
+linux-g++ {
+    # Linux g++ has too many warnings due to bitcoin sources, so just disable warnings
+    CONFIG += warn_off
 }
 
 SOURCES += \
