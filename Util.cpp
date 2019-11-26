@@ -200,6 +200,50 @@ namespace Util {
     unsigned getNPhysicalProcessors() { return std::thread::hardware_concurrency(); }
 #endif
 
+    QByteArray ParseHexFast(const QByteArray &hex, bool checkDigits)
+    {
+        QByteArray ret;
+        const int size = hex.size();
+        if (UNLIKELY(size % 2))
+            // bad / not hex because not even number of chars.
+            return ret;
+        ret.resize(size / 2);
+        const char *d = hex.constData(), *dend = d + size;
+        for (char c1, c2, *out = ret.data(); d < dend; d += 2, ++out) {
+            static constexpr char offset_A = 'A' - 0xa,
+                                  offset_a = 'a' - 0xa,
+                                  offset_0 = '0';
+            // slightly unrolled loop, does 2 chars at a time
+            c1 = d[0];
+            c2 = d[1];
+
+            // c1
+            if (c1 <= '9') // this is the most likely for any random digit, so we check this first
+                c1 -= offset_0;
+            else if (c1 >= 'a') // next, we anticipate lcase, so we do this check first
+                c1 -= offset_a;
+            else // c1 >= 'A'
+                c1 -= offset_A;
+            // c2
+            if (c2 <= '9') // this is the most likely for any random digit, so we check this first
+                c2 -= offset_0;
+            else if (c2 >= 'a') // next, we anticipate lcase, so we do this check first
+                c2 -= offset_a;
+            else // c2 >= 'A'
+                c2 -= offset_A;
+
+
+            // The below is slowish... we can just accept bad hex data as 'corrupt' ...
+            // checkDigit = false allows us to skip this check, making this function >5x faster!
+            if (UNLIKELY(checkDigits && (c1 < 0 || c1 > 0xf || c2 < 0 || c2 > 0xf))) { // ensure data was actually in range
+                ret.clear();
+                break;
+            }
+            *out = char(c1 << 4) | c2;
+        }
+        return ret;
+    }
+
 } // end namespace Util
 
 Log::Log() {}

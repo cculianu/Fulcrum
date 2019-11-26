@@ -426,6 +426,24 @@ namespace Util {
         return ret;
     }
 
+    /// -- Fast Hex Parser --
+    /// Much faster than either bitcoin-abc's or Qt's hex parsers, especially if checkDigits=false.
+    /// This function is about 6x faster than Qt's hex parser and 5x faster than abc's (iff checkDigits=false).
+    /// Note that with checkDigits=true it's still faster than Qt's, and will detect errors in that case
+    /// and return an empty string if non-hex digits are encountered. Unlike Qt's version it will not skip whitespace
+    /// or skip invalid characters and it *will* fail in that case (whereas with checkDigits=false, it's blazingly
+    /// fast but may return garbage data if non-hex digits are encountered).
+    ///
+    /// Does not throw any exceptions.  Returns an empty QByteArray on error, or a QByteArray that is
+    /// the hex decoded version of its input on success.
+    ///
+    /// Note 1: If checkDigits=true this function is about 5x slower but it does detect invalid characters and returns
+    ///         an empty QByteArray on malformed input.
+    /// Note 2: If checkDigits=false, this function is blazingly fast. However it may return garbage/nonsense
+    ///         data if the input contains any non-hex digits (including spaces!).
+    /// Note 3: Whitespace is *never* skipped -- the input data must be nothing but hex digits, lower or upprcase is ok.
+    QByteArray ParseHexFast(const QByteArray &, bool checkDigits = false);
+
     /// Call lambda() in the thread context of obj's thread. Will block until completed.
     /// If timeout_ms is not specified or negative, will block forever until lambda returns,
     /// otherwise will block for timeout_ms ms.  Will throw TimeoutException if the timeout

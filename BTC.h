@@ -316,6 +316,7 @@ namespace BTC
         void CashAddr();
         bool Addr();
         void TestBlock();
+        void HexParsers(const QString &jsonDataFileName);
     }
 
 } // end namespace
