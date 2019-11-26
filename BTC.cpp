@@ -865,8 +865,7 @@ namespace BTC
     QByteArray Hash(const QByteArray &b, bool once)
     {
         bitcoin::CHash256 h(once);
-        QByteArray ret;
-        ret.resize(h.OUTPUT_SIZE);
+        QByteArray ret(int(h.OUTPUT_SIZE), Qt::Initialization::Uninitialized);
         h.Write(reinterpret_cast<const uint8_t *>(b.constData()), size_t(b.length()));
         h.Finalize(reinterpret_cast<uint8_t *>(ret.data()));
         return ret;
@@ -881,8 +880,7 @@ namespace BTC
 
     QByteArray Hash160(const QByteArray &b) {
         bitcoin::CHash160 h;
-        QByteArray ret;
-        ret.resize(h.OUTPUT_SIZE);
+        QByteArray ret(int(h.OUTPUT_SIZE), Qt::Initialization::Uninitialized);
         h.Write(reinterpret_cast<const uint8_t *>(b.constData()), size_t(b.length()));
         h.Finalize(reinterpret_cast<uint8_t *>(ret.data()));
         return ret;

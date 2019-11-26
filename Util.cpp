@@ -202,12 +202,13 @@ namespace Util {
 
     QByteArray ParseHexFast(const QByteArray &hex, bool checkDigits)
     {
-        QByteArray ret;
         const int size = hex.size();
-        if (UNLIKELY(size % 2))
+        QByteArray ret(size / 2, Qt::Initialization::Uninitialized);
+        if (UNLIKELY(size % 2)) {
             // bad / not hex because not even number of chars.
+            ret.clear();
             return ret;
-        ret.resize(size / 2); // uninitialized as per Qt docs
+        }
         const char *d = hex.constData(), * const dend = d + size;
         for (char c1, c2, *out = ret.data(); d < dend; d += 2, ++out) {
             static constexpr char offset_A = 'A' - 0xa,
@@ -247,7 +248,7 @@ namespace Util {
     QByteArray ToHexFast(const QByteArray &ba)
     {
         const int size = ba.size();
-        QByteArray ret(size*2, Qt::Uninitialized);
+        QByteArray ret(size*2, Qt::Initialization::Uninitialized);
         const char *cur = ba.constData(), * const end = cur + size;
         for (char c1, c2, *out = ret.data(); cur < end; ++cur, out += 2) {
             static constexpr char dist_from_9_to_a = ('a'-'9')-1;
