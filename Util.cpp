@@ -207,8 +207,8 @@ namespace Util {
         if (UNLIKELY(size % 2))
             // bad / not hex because not even number of chars.
             return ret;
-        ret.resize(size / 2);
-        const char *d = hex.constData(), *dend = d + size;
+        ret.resize(size / 2); // uninitialized as per Qt docs
+        const char *d = hex.constData(), * const dend = d + size;
         for (char c1, c2, *out = ret.data(); d < dend; d += 2, ++out) {
             static constexpr char offset_A = 'A' - 0xa,
                                   offset_a = 'a' - 0xa,
@@ -243,6 +243,24 @@ namespace Util {
         }
         return ret;
     }
+
+    QByteArray ToHexFast(const QByteArray &ba)
+    {
+        const int size = ba.size();
+        QByteArray ret(size*2, Qt::Uninitialized);
+        const char *cur = ba.constData(), * const end = cur + size;
+        for (char c1, c2, *out = ret.data(); cur < end; ++cur, out += 2) {
+            static constexpr char dist_from_9_to_a = ('a'-'9')-1;
+            c1 = ((*cur >> 4) & 0xf) + '0';
+            c2 = (*cur & 0xf) + '0';
+            if (c1 > '9') c1 += dist_from_9_to_a;
+            if (c2 > '9') c2 += dist_from_9_to_a;
+            out[0] = c1;
+            out[1] = c2;
+        }
+        return ret;
+    }
+
 
 } // end namespace Util
 

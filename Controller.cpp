@@ -152,11 +152,11 @@ void DownloadHeadersTask::do_get(unsigned int bnum)
 {
     submitRequest("getblockhash", {bnum}, [this, bnum](const RPC::Message & resp){ // testing
         QVariant var = resp.result();
-        const auto hash = QByteArray::fromHex(var.toByteArray());
+        const auto hash = Util::ParseHexFast(var.toByteArray());
         if (hash.length() == bitcoin::uint256::width()) {
             submitRequest("getblockheader", {var, false}, [this, bnum, hash](const RPC::Message & resp){ // testing
                 QVariant var = resp.result();
-                const auto header = QByteArray::fromHex(var.toByteArray());
+                const auto header = Util::ParseHexFast(var.toByteArray());
                 QByteArray chkHash;
                 if (bool sizeOk = header.length() == HEADER_SIZE; sizeOk && (chkHash = BTC::HashRev(header)) == hash) {
                     const auto expectedCt = (to-from)+1;

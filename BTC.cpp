@@ -766,6 +766,26 @@ namespace BTC
                     throw Exception(QString("The abc method hex string %1 does not match").arg(i));
             }
             Log() << "The abc method data matches the other two data sets ok";
+
+            Log() << "Checking ToHexFast vs. Qt ...";
+            for (const auto & ba : vec1) {
+                if (Util::ToHexFast(ba) != ba.toHex())
+                    throw Exception("ToHexFast and Qt toHex produced different hex strings!");
+            }
+            BVec res; res.reserve(vec1.size());
+            auto t0 = Util::getTimeNS();
+            for (const auto & ba : vec1) {
+                res.emplace_back(Util::ToHexFast(ba));
+            }
+            auto elapsed = (Util::getTimeNS() - t0)/1000LL;
+            Log() << "Util::ToHexFast took: " << elapsed << " usec";
+            res.clear(); res.reserve(vec1.size());
+            t0 = Util::getTimeNS();
+            for (const auto & ba : vec1) {
+                res.emplace_back(ba.toHex());
+            }
+            elapsed = (Util::getTimeNS() - t0)/1000LL;
+            Log() << "Qt toHex took: " << elapsed << " usec";
         }
 
     } // end namespace Tests

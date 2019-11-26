@@ -443,6 +443,8 @@ namespace Util {
     ///         data if the input contains any non-hex digits (including spaces!).
     /// Note 3: Whitespace is *never* skipped -- the input data must be nothing but hex digits, lower or upprcase is ok.
     QByteArray ParseHexFast(const QByteArray &, bool checkDigits = false);
+    /// Identical to Qt's toHex, but 60% faster (returned string is lcase hex encoded).
+    QByteArray ToHexFast(const QByteArray &);
 
     /// Call lambda() in the thread context of obj's thread. Will block until completed.
     /// If timeout_ms is not specified or negative, will block forever until lambda returns,
