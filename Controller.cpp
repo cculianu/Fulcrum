@@ -323,6 +323,8 @@ void Controller::process(bool beSilentIfUpToDate)
                 ++ctr;
             }
         }
+        if (const auto size = storage.headers.size(); size + ctr < storage.headers.capacity())
+            storage.headers.reserve(size + ctr); // reserve space for new headers in 1 go to save on copying
         ctr = 0;
         for (auto & [num, hdrs] : sm->blockHeaders) {
             Debug() << "Copying from " << num << " ...";
@@ -330,6 +332,7 @@ void Controller::process(bool beSilentIfUpToDate)
             ctr += hdrs.size();
             hdrs.clear();
         }
+        storage.headers.shrink_to_fit(); // make sure no memory is wasted since we don't push_back but rather reserve ahead of time each time.
         Log() << "Verified & copied " << ctr << " new " << Util::Pluralize("header", ctr) << " ok";
         sm.reset(); // go back to "Begin" state to check if any new headers arrived in the meantime
         AGAIN();
