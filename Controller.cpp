@@ -55,7 +55,9 @@ void Controller::startup()
 
     // We defer listening for connections until we hit the "upToDate" state at least once, to prevent problems
     // for clients.
-    connect(this, &Controller::upToDate, this, [this]{
+    auto connPtr = std::make_shared<QMetaObject::Connection>();
+    *connPtr = connect(this, &Controller::upToDate, this, [this, connPtr] {
+        if (connPtr) disconnect(*connPtr);
         if (!srvmgr) {
             if (!origThread) {
                 Fatal() << "INTERNAL ERROR: Controller's creation thread is null; cannot start SrvMgr, exiting!";
