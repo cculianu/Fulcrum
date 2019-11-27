@@ -340,7 +340,7 @@ bool Controller::isTaskDeleted(CtlTask *t) const { return tasks.count(t) == 0; }
 
 void Controller::add_DLHeaderTask(unsigned int from, unsigned int to, size_t nTasks)
 {
-    DownloadHeadersTask *t = new DownloadHeadersTask(unsigned(from), unsigned(to), this);
+    DownloadHeadersTask *t = newTask<DownloadHeadersTask>(false, unsigned(from), unsigned(to), this);
     connect(t, &CtlTask::success, this, [t, this, nTasks]{
         if (UNLIKELY(!sm || isTaskDeleted(t))) return; // task was stopped from underneath us, this is stale.. abort.
         Debug() << "Got all headers from: " << t->objectName() << " headerCt: "  << t->headers.size();
@@ -366,8 +366,6 @@ void Controller::add_DLHeaderTask(unsigned int from, unsigned int to, size_t nTa
         if (UNLIKELY(!sm || isTaskDeleted(t))) return; // task was stopped from underneath us, this is stale.. abort.
         Log() << "Downloaded height: " << t->from + unsigned(qRound(prog*((t->to-t->from)+1))) << ", " << QString::number(prog*1e2, 'f', 1) << "%";
     }, Qt::DirectConnection);
-    tasks.emplace(t, t);
-    t->start();
 }
 
 void Controller::genericTaskErrored()
@@ -376,6 +374,20 @@ void Controller::genericTaskErrored()
         sm->state = StateMachine::State::Failure;
         AGAIN();
     }
+}
+
+template <typename CtlTaskT, typename ...Args, typename /* enable_if... */>
+CtlTaskT *Controller::newTask(bool connectErroredSignal, Args && ...args)
+{
+    CtlTaskT *task = new CtlTaskT(std::forward<Args>(args)...);
+    tasks.emplace(task, task);
+    if (connectErroredSignal)
+        connect(task, &CtlTask::errored, this, &Controller::genericTaskErrored);
+    QTimer::singleShot(0, this, [task, this] {
+        if (!isTaskDeleted(task))
+            task->start();
+    });
+    return task;
 }
 
 void Controller::process(bool beSilentIfUpToDate)
@@ -387,7 +399,7 @@ void Controller::process(bool beSilentIfUpToDate)
     if (!sm) sm = std::make_unique<StateMachine>();
     using State = StateMachine::State;
     if (sm->state == State::Begin) {
-        auto task = new GetChainInfoTask(this);
+        auto task = newTask<GetChainInfoTask>(true, this);
         connect(task, &CtlTask::success, this, [this, task, beSilentIfUpToDate]{
             if (UNLIKELY(!sm || isTaskDeleted(task))) return; // task was stopped from underneath us, this is stale.. abort.
             if (task->info.initialBlockDownload) {
@@ -411,9 +423,6 @@ void Controller::process(bool beSilentIfUpToDate)
             }
             AGAIN();
         });
-        connect(task, &CtlTask::errored, this, &Controller::genericTaskErrored);
-        tasks.emplace(task, task);
-        task->start();
     } else if (sm->state == State::GetBlockHeaders) {
         const size_t base = storage.headers.size();
         const size_t num = size_t(sm->ht+1) - base;

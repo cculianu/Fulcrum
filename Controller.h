@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <memory>
+#include <type_traits>
 #include <unordered_map>
 #include <vector>
 
@@ -45,8 +46,23 @@ protected slots:
 
 private:
     friend class CtlTask;
+    /// \brief newTask - Create a specific task using this template factory function. The task will be auto-started the
+    ///        next time this thread enters the event loop, via a QTimer::singleShot(0,...).
+    ///
+    /// \param connectErroredSignal If true, auto-connect signal CtlTask::errored() to this->genericTaskErrored()
+    /// \param args The rest of the args get passed to the c'tor of the concrete class specified (in the template arg).
+    /// \return Returns the newly constructed CtrlTask* subclass. Note the task will start as soon as control returns
+    ///         to this thread's event loop, and the task is already emplaced into the `tasks` map when this function
+    ///         returns.
+    template <typename CtlTaskT, typename ...Args,
+              typename = std::enable_if_t<std::is_base_of_v<CtlTask, CtlTaskT>> >
+    CtlTaskT *newTask(bool connectErroredSignal, Args && ...args);
+    /// remove and stop a task (called after task finished() signal fires)
     void rmTask(CtlTask *);
+    /// returns true iff t is not in the tasks list
     bool isTaskDeleted(CtlTask *t) const;
+
+    /// The default 'errored' handler used if a task was created with connectErroredSignal=true in newTask above.
     void genericTaskErrored();
     static constexpr auto pollTimerName = "pollForNewHeaders";
 
@@ -59,7 +75,7 @@ private:
 
     struct Storage {
         std::vector<QByteArray> headers;
-    } storage;  /// temp data store. to be replaced by data model / and/or database
+    } storage;  ///< temp data store. to be replaced by data model / and/or database
 
     std::unordered_map<CtlTask *, std::unique_ptr<CtlTask>> tasks;
 
@@ -68,6 +84,7 @@ private:
     size_t nHeadersDownloadedSoFar() const; ///< not 100% accurate. call this only from this thread
 };
 
+/// Abstract base class for our private internal tasks. Concrete implementations are in Controller.cpp.
 class CtlTask : public QObject, public ThreadObjectMixin, public ProcessAgainMixin
 {
     Q_OBJECT
