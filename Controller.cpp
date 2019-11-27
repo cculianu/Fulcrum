@@ -67,10 +67,10 @@ void Controller::cleanup()
     sm.reset();
 }
 
-struct GetChainInfoTask : public CtlTask
-{
-    GetChainInfoTask(Controller *ctl_) : CtlTask(ctl_, "Task.GetChainInfo") {}
-    void process() override;
+/// Encapsulates basically the data returned from bitcoind by the getblockchaininfo RPC method.
+/// This has been separated out into its own struct for future use to detect blockchain changes.
+/// TODO: Refactor this out to storage, etc to detect when blockchain changed.
+struct ChainInfo {
     QString toString() const;
 
     QString chain = "";
@@ -84,6 +84,14 @@ struct GetChainInfoTask : public CtlTask
     size_t sizeOnDisk = 0;
     bool pruned = false;
     QString warnings;
+};
+
+struct GetChainInfoTask : public CtlTask
+{
+    GetChainInfoTask(Controller *ctl_) : CtlTask(ctl_, "Task.GetChainInfo") {}
+    void process() override;
+
+    ChainInfo info;
 };
 
 void GetChainInfoTask::process()
@@ -101,32 +109,32 @@ void GetChainInfoTask::process()
 
             if (map.isEmpty()) Err("response; expected map");
 
-            blocks = map.value("blocks").toInt(&ok);
-            if (!ok || blocks < 0) Err("blocks"); // enforce positive blocks number
+            info.blocks = map.value("blocks").toInt(&ok);
+            if (!ok || info.blocks < 0) Err("blocks"); // enforce positive blocks number
 
-            chain = map.value("chain").toString();
-            if (chain.isEmpty()) Err("chain");
+            info.chain = map.value("chain").toString();
+            if (info.chain.isEmpty()) Err("chain");
 
-            headers = map.value("headers").toInt(); // error ignored here
+            info.headers = map.value("headers").toInt(); // error ignored here
 
-            bestBlockhash = Util::ParseHexFast(map.value("bestblockhash").toByteArray());
-            if (bestBlockhash.size() != bitcoin::uint256::width()) Err("bestblockhash");
+            info.bestBlockhash = Util::ParseHexFast(map.value("bestblockhash").toByteArray());
+            if (info.bestBlockhash.size() != bitcoin::uint256::width()) Err("bestblockhash");
 
-            difficulty = map.value("difficulty").toDouble(); // error ignored here
-            mtp = map.value("mediantime").toLongLong(); // error ok
-            verificationProgress = map.value("verificationprogress").toDouble(); // error ok
+            info.difficulty = map.value("difficulty").toDouble(); // error ignored here
+            info.mtp = map.value("mediantime").toLongLong(); // error ok
+            info.verificationProgress = map.value("verificationprogress").toDouble(); // error ok
 
             if (auto v = map.value("initialblockdownload"); v.canConvert<bool>())
-                initialBlockDownload = v.toBool();
+                info.initialBlockDownload = v.toBool();
             else
                 Err("initialblockdownload");
 
-            chainWork = Util::ParseHexFast(map.value("chainwork").toByteArray()); // error ok
-            sizeOnDisk = map.value("size_on_disk").toULongLong(); // error ok
-            pruned = map.value("pruned").toBool(); // error ok
-            warnings = map.value("warnings").toString(); // error ok
+            info.chainWork = Util::ParseHexFast(map.value("chainwork").toByteArray()); // error ok
+            info.sizeOnDisk = map.value("size_on_disk").toULongLong(); // error ok
+            info.pruned = map.value("pruned").toBool(); // error ok
+            info.warnings = map.value("warnings").toString(); // error ok
 
-            if (Trace::isEnabled()) Trace() << toString();
+            if (Trace::isEnabled()) Trace() << info.toString();
 
             emit success();
         } catch (const Exception & e) {
@@ -136,12 +144,12 @@ void GetChainInfoTask::process()
     });
 }
 
-QString GetChainInfoTask::toString() const
+QString ChainInfo::toString() const
 {
     QString ret;
     {
         QTextStream ts(&ret, QIODevice::WriteOnly|QIODevice::Truncate);
-        ts << "(GetChainInfoTask"
+        ts << "(ChainInfo"
            << " chain: \"" << chain << "\""
            << " blocks: " << blocks
            << " headers: " << headers
@@ -359,14 +367,14 @@ void Controller::process(bool beSilentIfUpToDate)
         auto task = new GetChainInfoTask(this);
         connect(task, &CtlTask::success, this, [this, task, beSilentIfUpToDate]{
             if (UNLIKELY(!sm || isTaskDeleted(task))) return; // task was stopped from underneath us, this is stale.. abort.
-            if (task->initialBlockDownload) {
+            if (task->info.initialBlockDownload) {
                 sm->state = State::IBD;
                 AGAIN();
                 return;
             }
             // TODO: detect reorgs here -- to be implemented later after we figure out data model more, etc.
             const auto old = int(storage.headers.size())-1;
-            sm->ht = task->blocks;
+            sm->ht = task->info.blocks;
             if (old == sm->ht) {
                 if (!beSilentIfUpToDate) Log() << "Block height " << sm->ht << ", up-to-date";
                 sm->state = State::End;
