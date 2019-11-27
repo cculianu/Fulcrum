@@ -526,7 +526,7 @@ namespace Util {
     template <typename RET=void, typename QOBJ, typename METHOD, typename ... Args>
     RET CallOnObjectWithTimeout(int timeout_ms, QOBJ obj, METHOD method, Args && ...args) {
         assert(obj);
-        static_assert(std::is_convertible<QOBJ, QObject *>::value, "Not a QObject subclass");
+        static_assert(std::is_base_of<QObject, typename std::remove_pointer<QOBJ>::type>::value, "Not a QObject subclass");
         static_assert(std::is_member_function_pointer<METHOD>::value, "Not a member function pointer");
         if (QThread::currentThread() == obj->thread()) {
             // direct call to save on a copy c'tor
