@@ -5,13 +5,14 @@
 #include <atomic>
 #include <memory>
 
+#include "Mixins.h"
 #include "Options.h"
 
 class Controller;
 class Logger;
 class SimpleHttpServer;
 
-class App : public QCoreApplication
+class App final : public QCoreApplication, public TimersByNameMixin
 {
     Q_OBJECT
 public:

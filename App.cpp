@@ -56,7 +56,16 @@ App::~App()
 
 void App::startup()
 {
-    Log() << applicationName() << " " << applicationVersion() << " - " << QDateTime::currentDateTime().toString("ddd MMM d, yyyy hh:mm:ss.zzz t") << " - starting up ...";
+    static const auto getBannerWithTimeStamp = [] {
+        QString ret; {
+            QTextStream ts(&ret, QIODevice::WriteOnly|QIODevice::Truncate);
+            ts << applicationName() << " " << applicationVersion() << " - " << QDateTime::currentDateTime().toString("ddd MMM d, yyyy hh:mm:ss.zzz t");
+        } return ret;
+    };
+    // print banner to log now
+    Log() << getBannerWithTimeStamp() << " - starting up ...";
+    // schedule print banner to log every hour
+    callOnTimerSoon(60*60*1000, "printTimeStamp", []{ Log() << getBannerWithTimeStamp(); return true; }, Qt::TimerType::VeryCoarseTimer);
 
     if ( ! Util::isClockSteady() ) {
         Warning() << "High resolution clock provided by the std C++ library is not 'steady'. Timestamps may drift.";
