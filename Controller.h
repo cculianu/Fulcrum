@@ -7,8 +7,8 @@
 #include "SrvMgr.h"
 
 #include <atomic>
-#include <map>
 #include <memory>
+#include <unordered_map>
 #include <vector>
 
 class CtlTask;
@@ -49,7 +49,7 @@ private:
         std::vector<QByteArray> headers;
     } storage;  /// temp data store. to be replaced by data model / and/or database
 
-    std::map<CtlTask *, std::unique_ptr<CtlTask>> tasks;
+    std::unordered_map<CtlTask *, std::unique_ptr<CtlTask>> tasks;
 
     void add_DLHeaderTask(unsigned from, unsigned to, size_t nTasks);
 

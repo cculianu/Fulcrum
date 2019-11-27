@@ -4,6 +4,7 @@
 #include <cassert>
 #include <iterator>
 #include <list>
+#include <map>
 
 Controller::Controller(const std::shared_ptr<Options> &o)
     : Mgr(nullptr), options(o)
@@ -163,7 +164,7 @@ void DownloadHeadersTask::do_get(unsigned int bnum)
                     const size_t index = bnum - from;
                     ++goodCt;
                     q_ct = qMax(q_ct-1, 0);
-                    if (index && !(index % 1000)) {
+                    if (!(index % 1000) && index) {
                         emit progress(double(bnum-from) / double(expectedCt));
                     }
                     if (Trace::isEnabled()) Trace() << resp.method << ": header for height: " << bnum << " len: " << header.length();
@@ -264,9 +265,9 @@ void Controller::add_DLHeaderTask(unsigned int from, unsigned int to, size_t nTa
     });
     connect(t, &CtlTask::progress, t, [t, this](double prog){
         if (UNLIKELY(!sm || isTaskDeleted(t))) return; // task was stopped from underneath us, this is stale.. abort.
-        Log() << "Downloaded header: " << t->from + unsigned(qRound(prog*((t->to-t->from)+1)));
+        Log() << "Downloaded height: " << t->from + unsigned(qRound(prog*((t->to-t->from)+1))) << ", " << QString::number(prog*1e2, 'f', 1) << "%";
     }, Qt::DirectConnection);
-    tasks.emplace(decltype(tasks)::value_type(t, t));
+    tasks.emplace(t, t);
     t->start();
 }
 
@@ -292,7 +293,7 @@ void Controller::process(bool beSilentIfUpToDate)
             }
             AGAIN();
         });
-        tasks.emplace(decltype(tasks)::value_type(task, task));
+        tasks.emplace(task, task);
         task->start();
     } else if (sm->state == State::GetBlockHeaders) {
         const size_t base = storage.headers.size();
@@ -436,7 +437,8 @@ auto Controller::stats() const -> Stats
     QVariantList l;
     { // task list
         const auto now = Util::getTime();
-        for (const auto & [task, ignored] : tasks) {
+        for (const auto & [task, ign] : tasks) {
+            Q_UNUSED(ign)
             l.push_back(
                 QVariantMap{
                 { task->objectName(),
@@ -456,8 +458,8 @@ auto Controller::stats() const -> Stats
 size_t Controller::nHeadersDownloadedSoFar() const
 {
     size_t ret = 0;
-    for (const auto & [task, uniqptr] : tasks) {
-        (void)uniqptr;
+    for (const auto & [task, ign] : tasks) {
+        Q_UNUSED(ign)
         auto t = dynamic_cast<DownloadHeadersTask *>(task);
         if (t)
             ret += t->nSoFar();
