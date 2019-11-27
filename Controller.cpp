@@ -67,28 +67,96 @@ void Controller::cleanup()
     sm.reset();
 }
 
-struct GetBlockCountTask : public CtlTask
+struct GetChainInfoTask : public CtlTask
 {
-    GetBlockCountTask(Controller *ctl_) : CtlTask(ctl_, "Task.GetBlockCount") {}
+    GetChainInfoTask(Controller *ctl_) : CtlTask(ctl_, "Task.GetChainInfo") {}
     void process() override;
+    QString toString() const;
 
-    unsigned blockHeight = 0;
+    QString chain = "";
+    int blocks = 0, headers = -1;
+    QByteArray bestBlockhash; ///< decoded bytes
+    double difficulty = 0.0;
+    int64_t mtp = 0;
+    double verificationProgress = 0.0;
+    bool initialBlockDownload = false;
+    QByteArray chainWork; ///< decoded bytes
+    size_t sizeOnDisk = 0;
+    bool pruned = false;
+    QString warnings;
 };
 
-void GetBlockCountTask::process()
+void GetChainInfoTask::process()
 {
-    submitRequest("getblockcount", {}, [this](const RPC::Message & resp){
-        bool ok = false;
-        blockHeight = resp.result().toUInt(&ok);
-        if (!ok) {
-            Error() << "INTERNAL ERROR: Failed to parse result as int: " << resp.result().toString();
-            errorCode = resp.id.toInt();
-            errorMessage = "Failed to parse result";
-            emit errored();
-        } else {
+    submitRequest("getblockchaininfo", {}, [this](const RPC::Message & resp){
+        const auto Err = [this, id=resp.id.toInt()](const QString &thing) {
+            const auto msg = QString("Failed to parse %1").arg(thing);
+            errorCode = id;
+            errorMessage = msg;
+            throw Exception(msg);
+        };
+        try {
+            bool ok = false;
+            const auto map = resp.result().toMap();
+
+            if (map.isEmpty()) Err("response; expected map");
+
+            blocks = map.value("blocks").toInt(&ok);
+            if (!ok || blocks < 0) Err("blocks"); // enforce positive blocks number
+
+            chain = map.value("chain").toString();
+            if (chain.isEmpty()) Err("chain");
+
+            headers = map.value("headers").toInt(); // error ignored here
+
+            bestBlockhash = Util::ParseHexFast(map.value("bestblockhash").toByteArray());
+            if (bestBlockhash.size() != bitcoin::uint256::width()) Err("bestblockhash");
+
+            difficulty = map.value("difficulty").toDouble(); // error ignored here
+            mtp = map.value("mediantime").toLongLong(); // error ok
+            verificationProgress = map.value("verificationprogress").toDouble(); // error ok
+
+            if (auto v = map.value("initialblockdownload"); v.canConvert<bool>())
+                initialBlockDownload = v.toBool();
+            else
+                Err("initialblockdownload");
+
+            chainWork = Util::ParseHexFast(map.value("chainwork").toByteArray()); // error ok
+            sizeOnDisk = map.value("size_on_disk").toULongLong(); // error ok
+            pruned = map.value("pruned").toBool(); // error ok
+            warnings = map.value("warnings").toString(); // error ok
+
+            if (Trace::isEnabled()) Trace() << toString();
+
             emit success();
+        } catch (const Exception & e) {
+            Error() << "INTERNAL ERROR: " << e.what();
+            emit errored();
         }
     });
+}
+
+QString GetChainInfoTask::toString() const
+{
+    QString ret;
+    {
+        QTextStream ts(&ret, QIODevice::WriteOnly|QIODevice::Truncate);
+        ts << "(GetChainInfoTask"
+           << " chain: \"" << chain << "\""
+           << " blocks: " << blocks
+           << " headers: " << headers
+           << " bestBlockHash: " << bestBlockhash.toHex()
+           << " difficulty: " << QString::number(difficulty, 'f', 9)
+           << " mtp: " << mtp
+           << " verificationProgress: " << QString::number(verificationProgress, 'f', 6)
+           << " ibd: " << initialBlockDownload
+           << " chainWork: " << chainWork.toHex()
+           << " sizeOnDisk: " << sizeOnDisk
+           << " pruned: " << pruned
+           << " warnings: \"" << warnings << "\""
+           << ")";
+    }
+    return ret;
 }
 
 struct DownloadHeadersTask : public CtlTask
@@ -208,7 +276,7 @@ void DownloadHeadersTask::do_get(unsigned int bnum)
 struct Controller::StateMachine
 {
     enum State {
-        Begin=0, GetBlockHeaders, FinishedDL, End, Failure
+        Begin=0, GetBlockHeaders, FinishedDL, End, Failure, IBD
     };
     State state = Begin;
     int ht = -1;
@@ -221,7 +289,7 @@ struct Controller::StateMachine
     static constexpr unsigned maxErrCt = 3;
 
     const char * stateStr() const {
-        static constexpr const char *stateStrings[] = { "Begin", "GetBlockHeaders", "FinishedDL", "End", "Failure",
+        static constexpr const char *stateStrings[] = { "Begin", "GetBlockHeaders", "FinishedDL", "End", "Failure", "IBD",
                                                         "Unknown" /* this should always be last */ };
         auto idx = qMin(size_t(state), std::size(stateStrings)-1);
         return stateStrings[idx];
@@ -253,14 +321,14 @@ void Controller::add_DLHeaderTask(unsigned int from, unsigned int to, size_t nTa
     });
     connect(t, &CtlTask::errored, this, [t, this, nTasks]{
         if (UNLIKELY(!sm || isTaskDeleted(t))) return; // task was stopped from underneath us, this is stale.. abort.
+        if (sm->state == StateMachine::State::Failure) return; // silently ignore if we are already in failure
         // Handle failures with retries for the specific task -- failures are unlikely so it's ok to do it on this level
         if (auto ct = ++sm->failures[std::make_pair(t->from, t->to)]; ct < sm->maxErrCt) {
             Warning() << "Task errored: " << t->objectName() << ", error: " << t->errorMessage << ", retrying # " << ct << " ...";
             add_DLHeaderTask(t->from, t->to, nTasks);
         } else {
-            Error() << "Task errored: " << t->objectName() << ", error: " << t->errorMessage << ", retrying # " << ct << " failed, giving up";
-            sm->state = StateMachine::State::Failure;
-            AGAIN();
+            Error() << "Task errored: " << t->objectName() << ", error: " << t->errorMessage << ", failed after " << ct << " tries, giving up";
+            genericTaskErrored();
         }
     });
     connect(t, &CtlTask::progress, t, [t, this](double prog){
@@ -271,19 +339,34 @@ void Controller::add_DLHeaderTask(unsigned int from, unsigned int to, size_t nTa
     t->start();
 }
 
+void Controller::genericTaskErrored()
+{
+    if (sm && sm->state != StateMachine::State::Failure) {
+        sm->state = StateMachine::State::Failure;
+        AGAIN();
+    }
+}
+
 void Controller::process(bool beSilentIfUpToDate)
 {
     bool enablePollTimer = false;
+    auto polltimeout = polltime_ms;
     stopTimer(pollTimerName);
     Debug() << "Process called...";
     if (!sm) sm = std::make_unique<StateMachine>();
     using State = StateMachine::State;
     if (sm->state == State::Begin) {
-        auto task = new GetBlockCountTask(this);
+        auto task = new GetChainInfoTask(this);
         connect(task, &CtlTask::success, this, [this, task, beSilentIfUpToDate]{
             if (UNLIKELY(!sm || isTaskDeleted(task))) return; // task was stopped from underneath us, this is stale.. abort.
+            if (task->initialBlockDownload) {
+                sm->state = State::IBD;
+                AGAIN();
+                return;
+            }
+            // TODO: detect reorgs here -- to be implemented later after we figure out data model more, etc.
             const auto old = int(storage.headers.size())-1;
-            sm->ht = int(task->blockHeight);
+            sm->ht = task->blocks;
             if (old == sm->ht) {
                 if (!beSilentIfUpToDate) Log() << "Block height " << sm->ht << ", up-to-date";
                 sm->state = State::End;
@@ -293,6 +376,7 @@ void Controller::process(bool beSilentIfUpToDate)
             }
             AGAIN();
         });
+        connect(task, &CtlTask::errored, this, &Controller::genericTaskErrored);
         tasks.emplace(task, task);
         task->start();
     } else if (sm->state == State::GetBlockHeaders) {
@@ -345,10 +429,15 @@ void Controller::process(bool beSilentIfUpToDate)
     } else if (sm->state == State::End) {
         sm.reset();  // great success!
         enablePollTimer = true;
+    } else if (sm->state == State::IBD) {
+        sm.reset();
+        enablePollTimer = true;
+        Warning() << "bitcoind is in initial block download, will try again in 1 minute";
+        polltimeout = 60 * 1000; // try again every minute
     }
 
     if (enablePollTimer)
-        callOnTimerSoonNoRepeat(polltime_ms, pollTimerName, [this]{if (!sm) process(true);});
+        callOnTimerSoonNoRepeat(polltimeout, pollTimerName, [this]{if (!sm) process(true);});
 }
 
 

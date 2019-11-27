@@ -36,6 +36,7 @@ private:
     friend class CtlTask;
     void rmTask(CtlTask *);
     bool isTaskDeleted(CtlTask *t) const;
+    void genericTaskErrored();
     static constexpr auto pollTimerName = "pollForNewHeaders";
 
     const std::shared_ptr<Options> options;
