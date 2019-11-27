@@ -151,7 +151,7 @@ class StatsMixin : public virtual QObjectMixin
 public:
     virtual ~StatsMixin();
 
-    using Stats = QVariantMap;
+    using Stats = QVariant;
 
     static constexpr int kDefaultTimeout = 1000; ///< in milliseconds
 

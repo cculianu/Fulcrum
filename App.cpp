@@ -90,7 +90,8 @@ void App::startup()
         controller->startup(); // may throw
 
         if (!options->statsInterfaces.isEmpty()) {
-            Log() << "Stats HTTP: starting " << options->interfaces.count() << " server(s) ...";
+            const auto num = options->interfaces.count();
+            Log() << "Stats HTTP: starting " << num << " " << Util::Pluralize("server", num) << " ...";
             // start 'stats' http servers, if any
             for (const auto & i : options->statsInterfaces)
                 start_httpServer(i); // may throw

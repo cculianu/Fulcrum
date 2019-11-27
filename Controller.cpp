@@ -53,8 +53,29 @@ void Controller::startup()
 
     bitcoindmgr->startup(); // may throw
 
-    srvmgr = std::make_unique<SrvMgr>(options->interfaces, nullptr /* we are not parent so it won't follow us to our thread*/);
-    srvmgr->startup(); // may throw Exception, waits for servers to bind
+    // We defer listening for connections until we hit the "upToDate" state at least once, to prevent problems
+    // for clients.
+    connect(this, &Controller::upToDate, this, [this]{
+        if (!srvmgr) {
+            if (!origThread) {
+                Fatal() << "INTERNAL ERROR: Controller's creation thread is null; cannot start SrvMgr, exiting!";
+                return;
+            }
+            srvmgr = std::make_unique<SrvMgr>(options->interfaces);
+            // this object will live on our creation thread (normally the main thread)
+            srvmgr->moveToThread(origThread);
+            // now, start it up on our creation thread (normally the main thread)
+            Util::VoidFuncOnObjectNoThrow(srvmgr.get(), [this]{
+                // creation thread (normally the main thread)
+                try {
+                    srvmgr->startup(); // may throw Exception, waits for servers to bind
+                } catch (const Exception & e) {
+                    // exit app on bind/listen failure.
+                    Fatal() << e.what();
+                }
+            }); // wait for srvmgr's thread (usually the main thread)
+        }
+    }, Qt::QueuedConnection);
 
     start();  // start our thread
 }
@@ -376,10 +397,14 @@ void Controller::process(bool beSilentIfUpToDate)
             const auto old = int(storage.headers.size())-1;
             sm->ht = task->info.blocks;
             if (old == sm->ht) {
-                if (!beSilentIfUpToDate) Log() << "Block height " << sm->ht << ", up-to-date";
+                if (!beSilentIfUpToDate) {
+                    Log() << "Block height " << sm->ht << ", up-to-date";
+                    emit upToDate();
+                }
                 sm->state = State::End;
             } else {
                 Log() << "Block height " << sm->ht << ", downloading new headers ...";
+                emit synchronizing();
                 sm->state = State::GetBlockHeaders;
             }
             AGAIN();
@@ -434,6 +459,7 @@ void Controller::process(bool beSilentIfUpToDate)
         Error() << "Failed to download headers";
         sm.reset();
         enablePollTimer = true;
+        emit synchFailure();
     } else if (sm->state == State::End) {
         sm.reset();  // great success!
         enablePollTimer = true;
@@ -442,6 +468,7 @@ void Controller::process(bool beSilentIfUpToDate)
         enablePollTimer = true;
         Warning() << "bitcoind is in initial block download, will try again in 1 minute";
         polltimeout = 60 * 1000; // try again every minute
+        emit synchFailure();
     }
 
     if (enablePollTimer)
@@ -509,10 +536,10 @@ quint64 CtlTask::submitRequest(const QString &method, const QVariantList &params
 auto Controller::stats() const -> Stats
 {
     // "Servers"
-    auto st = srvmgr->statsSafe();
+    auto st = QVariantMap{{ "Servers", srvmgr ? srvmgr->statsSafe() : QVariant() }};
 
     // "BitcoinD's"
-    Util::updateMap(st, bitcoindmgr->statsSafe());
+    st["Bitcoin Daemon"] = bitcoindmgr->statsSafe();
 
     // "Controller" (self)
     QVariantMap m;
@@ -536,15 +563,10 @@ auto Controller::stats() const -> Stats
         const auto now = Util::getTime();
         for (const auto & [task, ign] : tasks) {
             Q_UNUSED(ign)
-            l.push_back(
-                QVariantMap{
-                { task->objectName(),
-                    QVariantMap{
-                        {"age", QString("%1 sec").arg(double((now-task->ts)/1e3))} ,
-                        {"progress" , QString("%1%").arg(QString::number(task->lastProgress*100.0, 'f', 1)) }
-                    }
-                }
-            });
+            l.push_back(QVariantMap{{ task->objectName(), QVariantMap{
+                {"age", QString("%1 sec").arg(double((now-task->ts)/1e3))} ,
+                {"progress" , QString("%1%").arg(QString::number(task->lastProgress*100.0, 'f', 1)) }}
+            }});
         }
         Util::updateMap(m, QVariantMap{{"tasks" , l}});
     }

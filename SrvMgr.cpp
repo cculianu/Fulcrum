@@ -37,7 +37,8 @@ void SrvMgr::cleanup()
 // throw Exception on error
 void SrvMgr::startServers()
 {
-    Log() << "SrvMgr: starting " << interfaces.length() << " service(s) ...";
+    const auto num = interfaces.length();
+    Log() << "SrvMgr: starting " << num << " " << Util::Pluralize("service", num) << " ...";
     for (auto iface : interfaces) {
         auto srv = new Server(iface.first, iface.second);
         servers.push_back(srv); // save server in list unconditionally so we may delete later because tryStart may throw
@@ -47,7 +48,6 @@ void SrvMgr::startServers()
 
 auto SrvMgr::stats() const -> Stats
 {
-    Stats ret;
     QVariantList serverList;
     auto servers = this->servers; // copy
     const int timeout = kDefaultTimeout / qMax(servers.size(), 1);
@@ -62,6 +62,5 @@ auto SrvMgr::stats() const -> Stats
             serverList.push_back(m);
         }
     }
-    ret["Servers"] = serverList;
-    return ret;
+    return serverList;
 }

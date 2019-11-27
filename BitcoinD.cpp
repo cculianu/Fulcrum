@@ -15,7 +15,7 @@ BitcoinDMgr::BitcoinDMgr(const QHostAddress &host, quint16 port,
 BitcoinDMgr::~BitcoinDMgr() {  cleanup(); }
 
 void BitcoinDMgr::startup() {
-    Log() << objectName() << ": starting " << N_CLIENTS << " bitcoin rpc clients ...";
+    Log() << objectName() << ": starting " << N_CLIENTS << " " << Util::Pluralize("bitcoin rpc client", N_CLIENTS) << " ...";
 
     for (auto & client : clients) {
         client = std::make_unique<BitcoinD>(host, port, user, pass);
@@ -83,17 +83,15 @@ void BitcoinDMgr::on_ErrorMessage(quint64 bid, const RPC::Message &msg)
 
 auto BitcoinDMgr::stats() const -> Stats
 {
-    Stats ret;
     QVariantList l;
     constexpr int timeout = kDefaultTimeout/qMax(N_CLIENTS,1);
     for (const auto & client : clients) {
         if (!client) continue;
-        auto map = client->statsSafe(timeout);
+        auto map = client->statsSafe(timeout).toMap();
         auto name = map.take("name").toString();
         l += QVariantMap({{ name, map }});
     }
-    ret["Bitcoin Daemon"] = l;
-    return ret;
+    return l;
 }
 
 
@@ -183,7 +181,7 @@ void BitcoinDMgr::submitRequest(QObject *sender, const RPC::Message::Id &rid, co
 /* --- BitcoinD --- */
 auto BitcoinD::stats() const -> Stats
 {
-    Stats m = RPC::HttpConnection::stats();
+    auto m = RPC::HttpConnection::stats().toMap();
     m["lastPeerError"] = badAuth ? "Auth Failure" : lastPeerError;
     m.remove("nErrorsSent"); // should always be 0
     m.remove("nNotificationsSent"); // again, 0

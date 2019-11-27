@@ -233,7 +233,7 @@ namespace RPC {
 
     auto ConnectionBase::stats() const -> Stats
     {
-        auto m = AbstractConnection::stats();
+        auto m = AbstractConnection::stats().toMap();
         m["nRequestsSent"] = nRequestsSent;
         m["nResultsSent"] = nResultsSent;
         m["nErrorsSent"] = nErrorsSent;

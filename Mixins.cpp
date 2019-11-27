@@ -27,8 +27,8 @@ void ThreadObjectMixin::start()
     Debug() << qobj()->objectName() << " starting thread";
     chan.clear();
     origThread = qobj()->thread();
-    conns += origThread->connect(origThread, &QThread::finished, qApp, [this, which=conns.size()] {
-        Warning() << "ThreadObjectMixin: original thread for " << qobj()->objectName() << " ended! Setting 'original thread' to main thread! FIXME!";
+    conns += origThread->connect(origThread, &QThread::finished, qobj(), [this, qo=qobj(), which=conns.size()] {
+        Warning() << "ThreadObjectMixin: original thread for " << qo->objectName() << " ended! Setting 'original thread' to main thread! FIXME!";
         origThread = qApp->thread();
         QObject::disconnect(conns.takeAt(which));
     });

@@ -25,6 +25,17 @@ public:
 
     int polltime_ms = 5 * 1000; ///< the default amount of time for polling bitcoind for new headers
 
+signals:
+    /// Emitted whenever bitcoind is detected to be up-to-date, and everything is synched up.
+    /// note this is not emitted during regular polling, but only after `synchronizing` was emitted previously.
+    void upToDate();
+    /// Emitted whenever we begin synching to bitcoind. After this completes successfully, upToDate will be emitted
+    /// exactly once.
+    /// This signal may be emitted multiple times if there were errors and we are periodically retrying.
+    void synchronizing();
+    /// Emitted whenever we failed to synchronize to bitcoind.
+    void synchFailure();
+
 protected:
     Stats stats() const override;
 
@@ -40,7 +51,7 @@ private:
     static constexpr auto pollTimerName = "pollForNewHeaders";
 
     const std::shared_ptr<Options> options;
-    std::unique_ptr<SrvMgr> srvmgr;
+    std::unique_ptr<SrvMgr> srvmgr; ///< NB: this may be nullptr if we haven't yet synched up and started listening.
     std::unique_ptr<BitcoinDMgr> bitcoindmgr;
 
     struct StateMachine;
