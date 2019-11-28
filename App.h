@@ -2,6 +2,7 @@
 #define APP_H
 
 #include <QCoreApplication>
+
 #include <atomic>
 #include <memory>
 
@@ -23,8 +24,7 @@ public:
 
     std::shared_ptr<Options> options;
 
-    /// app-global ids used for everything from ElectrumX methods
-    /// to client id's, etc.
+    /// app-global ids used for JSON-RPC 'id', as well as app-level objects we wish to track by id rather than pointer
     inline quint64 newId() { return ++globalId; }
 
 signals:

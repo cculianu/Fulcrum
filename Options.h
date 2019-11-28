@@ -1,11 +1,12 @@
 #ifndef OPTIONS_H
 #define OPTIONS_H
 
-#include <atomic>
-#include <QPair>
 #include <QHostAddress>
-#include <QString>
 #include <QList>
+#include <QPair>
+#include <QString>
+
+#include <atomic>
 
 struct Options {
     static constexpr quint16 DEFAULT_PORT = 50001;
@@ -24,6 +25,7 @@ struct Options {
     QList<Interface> statsInterfaces; ///< ditto for 'stats' server, defaults empty (no stats server)
     Interface bitcoind;
     QString rpcuser, rpcpassword;
+    QString datadir; ///< The directory to store the database. It exists and has appropriate permissions (otherwise the app would have quit on startup).
 };
 
 #endif // OPTIONS_H

@@ -6,12 +6,14 @@
 #include "Util.h"
 
 #include <QCommandLineParser>
+#include <QDir>
 #include <QFile>
-#include <QList>
-#include <QPair>
+#include <QFileInfo>
 
-#include <cstdlib>
 #include <csignal>
+#include <cstdlib>
+#include <list>
+#include <tuple>
 
 #ifndef __clang__
 #ifndef _MSC_VER
@@ -144,47 +146,58 @@ void App::parseArgs()
     parser.addHelpOption();
     parser.addVersionOption();
 
-    parser.addOptions({
-        { { "i", "interface" },
-          QString("Specify which <interface:port> to listen for connections on, defaults to 0.0.0.0:%1 (all interfaces,"
-                  " port %1). This option may be specified more than once to bind to multiple interfaces and/or ports.").arg(Options::DEFAULT_PORT),
-          QString("interface:port")
-        },
-        { { "z", "stats" },
-          QString("Specify listen address and port for the stats HTTP server. Format is same as the interface option, "
-                  "e.g.: <interface:port>. Default is to not start any starts HTTP servers. "
-                  "This option may be specified more than once to bind to multiple interfaces and/or ports."),
-          QString("interface:port")
-        },
-        { { "b", "bitcoind" },
-          QString("Specify a <hostname:port> to connect to the bitcoind rpc service. This is a required option, along "
-                  "with -u and -p. This hostname:port should be the same as you specified in your bitcoin.conf file "
-                  "under rpcbind= and rpcport=."),
-          QString("interface:port")
-        },
-        { { "u", "rpcuser" },
-          QString("Specify a username to use for authenticating to bitcoind. This is a required option, along "
-                  "with -b and -p.  This opton should be the same username you specified in your bitcoind.conf file "
-                  "under rpcuser=."),
-          QString("username")
-        },
-        { { "p", "rpcpassword" },
-          QString("Specify a password to use for authenticating to bitcoind. This is a required option, along "
-                  "with -b and -u.  This opton should be the same password you specified in your bitcoind.conf file "
-                  "under rpcpassword=."),
-          QString("password")
-        },
-        { { "d", "debug" },
-          QString("Print extra verbose debug output. This is the default on debug builds. This is the opposite of -q. "
-                  "(Specify this options twice to get network-level trace debug output.)")
-        },
-        { { "q", "quiet" },
-          QString("Suppress debug output. This is the default on release builds. This is the opposite of -d.")
-        },
-        { { "S", "syslog" },
-          QString("Syslog mode. If on Unix, use the syslog() facility to produce log messages. This option currently has no effect on Windows.")
-        },
-    });
+    static constexpr auto RPCUSER = "RPCUSER", RPCPASSWORD = "RPCPASSWORD"; // optional env vars we use below
+
+    parser.addOptions
+    ({
+         { { "D", "datadir" },
+           QString("Specify a directory in which to store the database and other assorted data files. This is a "
+           "required options. If the specified path does not exist, it will be created. Note that the directory in "
+           "question should live on a fast drive such as an SSD and it should have plenty of free space available."),
+           QString("path")
+         },
+         { { "i", "interface" },
+           QString("Specify which <interface:port> to listen for connections on, defaults to 0.0.0.0:%1 (all interfaces,"
+           " port %1). This option may be specified more than once to bind to multiple interfaces and/or ports.").arg(Options::DEFAULT_PORT),
+           QString("interface:port")
+         },
+         { { "z", "stats" },
+           QString("Specify listen address and port for the stats HTTP server. Format is same as the interface option, "
+           "e.g.: <interface:port>. Default is to not start any starts HTTP servers. "
+           "This option may be specified more than once to bind to multiple interfaces and/or ports."),
+           QString("interface:port")
+         },
+         { { "b", "bitcoind" },
+           QString("Specify a <hostname:port> to connect to the bitcoind rpc service. This is a required option, along "
+           "with -u and -p. This hostname:port should be the same as you specified in your bitcoin.conf file "
+           "under rpcbind= and rpcport=."),
+           QString("interface:port")
+         },
+         { { "u", "rpcuser" },
+           QString("Specify a username to use for authenticating to bitcoind. This is a required option, along "
+           "with -b and -p.  This opton should be the same username you specified in your bitcoind.conf file "
+           "under rpcuser=. For security, you may omit this option from the command-line and use the %1 "
+           "environment variable instead (the CLI arg takes precedence if both are present).").arg(RPCUSER),
+           QString("username")
+         },
+         { { "p", "rpcpassword" },
+           QString("Specify a password to use for authenticating to bitcoind. This is a required option, along "
+           "with -b and -u.  This opton should be the same password you specified in your bitcoind.conf file "
+           "under rpcpassword=. For security, you may omit this option from the command-line and use the "
+           "%1 environment variable instead (the CLI arg takes precedence if both are present).").arg(RPCPASSWORD),
+           QString("password")
+         },
+         { { "d", "debug" },
+           QString("Print extra verbose debug output. This is the default on debug builds. This is the opposite of -q. "
+           "(Specify this options twice to get network-level trace debug output.)")
+         },
+         { { "q", "quiet" },
+           QString("Suppress debug output. This is the default on release builds. This is the opposite of -d.")
+         },
+         { { "S", "syslog" },
+           QString("Syslog mode. If on Unix, use the syslog() facility to produce log messages. This option currently has no effect on Windows.")
+         },
+     });
     parser.process(*this);
 
     if (parser.isSet("d")) options->verboseDebug = true;
@@ -194,11 +207,20 @@ void App::parseArgs()
     if (parser.isSet("q")) options->verboseDebug = false;
     if (parser.isSet("S")) options->syslogMode = true;
     // make sure -b -p and -u all present and specified exactly once
-    for (const auto & opt : QList<QPair<QString, QString>>({{"b", "bitcoind"},  {"u", "rpcuser"}, {"p", "rpcpassword"}})) {
-        const auto & [s, l] = opt;
-        if (!parser.isSet(s) || parser.value(s).isEmpty())
-            throw BadArgs(QString("Required option missing or empty: -%1 (--%2)").arg(s).arg(l));
-        else if (parser.values(s).count() != 1)
+    using ReqOptsList = std::list<std::tuple<QString, QString, const char *>>;
+    for (const auto & opt : ReqOptsList({{"D", "datadir", nullptr},
+                                         {"b", "bitcoind", nullptr},
+                                         {"u", "rpcuser", RPCUSER},
+                                         {"p", "rpcpassword", RPCPASSWORD},}))
+    {
+        const auto & [s, l, env] = opt;
+        const bool cliIsSet = parser.isSet(s);
+        const auto envVar = env ? std::getenv(env) : nullptr;
+        if (cliIsSet && envVar)
+            Warning() << "Warning: -" << s <<  " is specified both via the CLI and the environement (as " << env << "). The CLI arg will take precendence.";
+        if ((!parser.isSet(s) || parser.value(s).isEmpty()) && (!env || !envVar))
+            throw BadArgs(QString("Required option missing or empty: -%1 (--%2)%3").arg(s).arg(l).arg(env ? QString(" (or env var: %1)").arg(env) : ""));
+        else if (parser.values(s).count() > 1)
             throw BadArgs(QString("Option specified multiple times: -%1 (--%2)").arg(s).arg(l));
     }
     static const auto parseInterface = [](const QString &s) -> Options::Interface {
@@ -223,12 +245,29 @@ void App::parseArgs()
         for (const auto & s : l)
             interfaces.push_back(parseInterface(s));
     };
+
+    // grab datadir, check it's good, create it if needed
+    options->datadir = parser.value("D");
+    QFileInfo fi(options->datadir);
+    if (auto path = fi.canonicalFilePath(); fi.exists()) {
+        if (!fi.isDir()) // was a file and not a directory
+            throw BadArgs(QString("The specified path \"%1\" already exists but is not a directory").arg(path));
+        if (!fi.isReadable() || !fi.isExecutable() || !fi.isWritable())
+            throw BadArgs(QString("Bad permissions for path \"%1\" (must be readable, writable, and executable)").arg(path));
+        Debug() << "datadir: " << path;
+    } else { // !exists
+        if (!QDir().mkpath(options->datadir))
+            throw BadArgs(QString("Unable to create directory: %1").arg(options->datadir));
+        path = QFileInfo(options->datadir).canonicalFilePath();
+        Debug() << "datadir: Created directory " << path;
+    }
+
     // parse bitcoind
     options->bitcoind = parseInterface(parser.value("b"));
     // grab rpcuser
-    options->rpcuser = parser.value("u");
+    options->rpcuser = parser.isSet("u") ? parser.value("u") : std::getenv(RPCUSER);
     // grab rpcpass
-    options->rpcpassword = parser.value("p");
+    options->rpcpassword = parser.isSet("p") ? parser.value("p") : std::getenv(RPCPASSWORD);
     // grab bind (listen) interfaces
     if (auto l = parser.values("i"); !l.isEmpty()) {
         parseInterfaces(options->interfaces, l);
