@@ -53,7 +53,7 @@ win32-msvc {
     error("MSVC is not supported for this project. Please compile with MinGW G++ 7.3.0.")
 }
 win32 {
-    # Windows MSVC & mingw-g++ both have too many warnings due to bitcoin sources, so just disable warnings
+    # Windows MSVC & mingw-g++ both have too many warnings due to bitcoin sources, so just disable warnings.
     CONFIG += warn_off
 }
 linux {
@@ -67,7 +67,41 @@ linux-g++ {
     CONFIG += warn_off
 }
 
-# RocksDB
+# RocksDB Static Lib
+# ------------------
+#
+# Build information --
+#
+# Currently this was built from github sources:
+#     https://github.com/facebook/rocksdb.git
+# Commit hash (from Wed Nov 27 15:05:32 2019):
+#     e8f997ca597761087c46ad6657aebe7c73a45e38
+#
+# OSX:
+#   Built on Apple clang version 11.0.0 (clang-1100.0.33.12), from Xcode 11.
+#   command: PORTABLE=1 make static_lib -j4 V=1
+#   Annoyingly, the produced .a file has debug symbols which we strip with: strip -S.
+#
+# Linux:
+#   Built on Ubuntu 18.10, g++ (Ubuntu 8.2.0-7ubuntu1) 8.2.0.
+#   command: PORTABLE=1 make static_lib -j4 V=1
+#   Annoyingly, the produced .a file has debug symbols which we strip with: strip -g.
+#
+# Windows:
+#   Built using the MinGW G++ 7.3.0 (compiler that ships with Qt), from a cmd.exe prompt, via cmake.exe by following
+#   these steps:
+#   - Install a recent cmake into eg c:\cmake
+#   - Open up a Qt cmd.exe prompt that points to MinGW G++ 7.3.0 in the path (using the Start menu shortcut installed by
+#     Qt 5.13.2+ is easiest).
+#   - Put installed 'c:\cmake\bin' in the path so that 'cmake.exe' works from the cmd prompt, eg:
+#         set PATH=c:\cmake\bin;%PATH%
+#   - Checkout rocksdb, cd rocksdb, mkdir build, cd build
+#   - Run this command from within the rocksdb/build dir that you just created:
+#         cmake .. -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_SYSTEM_NAME=Windows -G"MinGW Makefiles"
+#   - Edit CMakeFiles\rocksdb.dir\flags.make and add -O3 to the flags to get maximal speed
+#   - Build with this command:
+#         mingw32-make -j4 V=1 rocksdb  <-- will build static lib only
+#   The generated librocksdb.a will be in the build/ directory you are currently in, ready to be put into the project.
 macx {
     LIBS += -L$$PWD/staticlibs/osx -lrocksdb -lz -lbz2
 }
@@ -81,7 +115,7 @@ win32 {
         error("This project lacks a pre-compiled static librocksdb.a for this compiler! Either add one to staticlib/win64/ or use MinGW G++ 7.3.0.")
     }
 }
-# /RocksDB
+# /RocksDB Static Lib
 
 SOURCES += \
     AbstractConnection.cpp \
@@ -100,11 +134,6 @@ SOURCES += \
     Util.cpp \
     Common.cpp \
     register_MetaTypes.cpp
-
-# Default rules for deployment.
-qnx: target.path = /tmp/$${TARGET}/bin
-else: unix:!android: target.path = /opt/$${TARGET}/bin
-!isEmpty(target.path): INSTALLS += target
 
 HEADERS += \
     AbstractConnection.h \
@@ -125,7 +154,12 @@ HEADERS += \
 RESOURCES += \
     resources.qrc
 
-# Bitcoin related stuff
+# Default rules for deployment.
+qnx: target.path = /tmp/$${TARGET}/bin
+else: unix:!android: target.path = /opt/$${TARGET}/bin
+!isEmpty(target.path): INSTALLS += target
+
+# Bitcoin related sources & headers
 SOURCES += \
     bitcoin/amount.cpp \
     bitcoin/base58.cpp \
@@ -241,7 +275,7 @@ HEADERS += \
     bitcoin/utilstrencodings.h \
     bitcoin/version.h
 
-# rocksdb
+# rocksdb related headers
 HEADERS += \
     rocksdb/advanced_options.h \
     rocksdb/c.h \
