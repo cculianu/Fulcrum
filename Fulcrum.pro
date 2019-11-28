@@ -50,7 +50,7 @@ DEFINES += USE_QT_IN_BITCOIN
 #DEFINES += QT_DISABLE_DEPRECATED_BEFORE=0x060000    # disables all the APIs deprecated before Qt 6.0.0
 
 win32-msvc {
-    QMAKE_CXXFLAGS += /std:c++17
+    error("MSVC is not supported for this project. Please compile with MinGW G++")
 }
 win32 {
     # Windows MSVC & mingw-g++ both have too many warnings due to bitcoin sources, so just disable warnings
@@ -73,6 +73,9 @@ macx {
 }
 linux {
     LIBS += -L$$PWD/staticlibs/linux -lrocksdb -lz -lbz2 -ldl
+}
+win32 {
+    LIBS += $$PWD/staticlibs/win64/librocksdb.a
 }
 # /RocksDB
 
