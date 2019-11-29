@@ -128,6 +128,7 @@ SOURCES += \
     RPC.cpp \
     Servers.cpp \
     SrvMgr.cpp \
+    Storage.cpp \
     main.cpp \
     App.cpp \
     Logger.cpp \
@@ -149,6 +150,7 @@ HEADERS += \
     RPC.h \
     Servers.h \
     SrvMgr.h \
+    Storage.h \
     Util.h
 
 RESOURCES += \

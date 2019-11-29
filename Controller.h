@@ -4,6 +4,7 @@
 #include "BitcoinD.h"
 #include "Mixins.h"
 #include "Options.h"
+#include "Storage.h"
 #include "SrvMgr.h"
 
 #include <atomic>
@@ -67,15 +68,12 @@ private:
     static constexpr auto pollTimerName = "pollForNewHeaders";
 
     const std::shared_ptr<Options> options;
+    std::unique_ptr<Storage> storage;
     std::unique_ptr<SrvMgr> srvmgr; ///< NB: this may be nullptr if we haven't yet synched up and started listening.
     std::unique_ptr<BitcoinDMgr> bitcoindmgr;
 
     struct StateMachine;
     std::unique_ptr<StateMachine> sm;
-
-    struct Storage {
-        std::vector<QByteArray> headers;
-    } storage;  ///< temp data store. to be replaced by data model / and/or database
 
     std::unordered_map<CtlTask *, std::unique_ptr<CtlTask>> tasks;
 

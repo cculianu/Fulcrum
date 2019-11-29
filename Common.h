@@ -33,7 +33,9 @@ struct BadArgs : public Exception { using Exception::Exception; };
 #define VERSION "1.0"
 #ifdef QT_DEBUG
 #  define VERSION_EXTRA "(Debug)"
+inline constexpr bool isReleaseBuild() { return false; }
 #else
 #  define VERSION_EXTRA "(Release)"
+inline constexpr bool isReleaseBuild() { return true; }
 #endif
 #endif // COMMON_H

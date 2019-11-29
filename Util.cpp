@@ -398,3 +398,18 @@ Fatal::~Fatal()
     str = QString("FATAL: ") + str;
     if (!colorOverridden) color = BrightRed;
 }
+
+FatalAssert::FatalAssert(bool expr)
+    : assertion(expr)
+{
+    doprt = !assertion;
+}
+
+FatalAssert::~FatalAssert()
+{
+    if ((doprt = !assertion)) {
+        level = Logger::Level::Fatal;
+        str = QString("ASSERTION FAILED: ") + str;
+        if (!colorOverridden) color = BrightRed;
+    }
+}

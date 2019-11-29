@@ -182,6 +182,18 @@ public:
 #endif
 };
 
+/// Like Fatal(), except it will not do anything if the c'tor expression is true, otherwise if expression is false,
+/// it will behave identically to Fatal().
+class FatalAssert : public Log
+{
+    const bool assertion;
+public:
+    FatalAssert(bool assertion);
+    virtual ~FatalAssert() override;
+
+    template <class T> FatalAssert & operator<<(const T & t) {  if (!assertion) s << t; return *this;  }
+};
+
 namespace Util {
     extern QString basename(const QString &);
 

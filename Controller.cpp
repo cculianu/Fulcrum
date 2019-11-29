@@ -17,6 +17,9 @@ Controller::~Controller() { Debug("%s", __FUNCTION__); cleanup(); }
 
 void Controller::startup()
 {
+    storage = std::make_unique<Storage>(options);
+    storage->startup(); // may throw here
+
     bitcoindmgr = std::make_unique<BitcoinDMgr>(options->bitcoind.first, options->bitcoind.second, options->rpcuser, options->rpcpassword);
     {
         // some setup code that waits for bitcoind to be ready before kicking off our "process" method
@@ -87,6 +90,7 @@ void Controller::cleanup()
     stop();
     if (srvmgr) { Log("Stopping SrvMgr ... "); srvmgr->cleanup(); srvmgr.reset(); }
     if (bitcoindmgr) { Log("Stopping BitcoinDMgr ... "); bitcoindmgr->cleanup(); bitcoindmgr.reset(); }
+    if (storage) { Log("Closing storage ..."); storage->cleanup(); storage.reset(); }
     sm.reset();
 }
 
@@ -408,7 +412,7 @@ void Controller::process(bool beSilentIfUpToDate)
                 return;
             }
             // TODO: detect reorgs here -- to be implemented later after we figure out data model more, etc.
-            const auto old = int(storage.headers.size())-1;
+            const auto old = int(storage->headers().first.size())-1;
             sm->ht = task->info.blocks;
             if (old == sm->ht) {
                 if (!beSilentIfUpToDate) {
@@ -424,7 +428,7 @@ void Controller::process(bool beSilentIfUpToDate)
             AGAIN();
         });
     } else if (sm->state == State::GetBlockHeaders) {
-        const size_t base = storage.headers.size();
+        const size_t base = storage->headers().first.size();
         const size_t num = size_t(sm->ht+1) - base;
         const size_t nTasks = qMax(size_t(1), num < 1000 ? size_t(1) : sm->DL_CONCURRENCY);
         const size_t headersPerTask = num / nTasks, rem = num % nTasks;
@@ -452,19 +456,21 @@ void Controller::process(bool beSilentIfUpToDate)
                 ++ctr;
             }
         }
-        if (const auto size = storage.headers.size(); size + ctr < storage.headers.capacity())
-            storage.headers.reserve(size + ctr); // reserve space for new headers in 1 go to save on copying
+        auto [headers, lock] = storage->mutableHeaders(); // write lock held until scope end
+        if (const auto size = headers.size(); size + ctr < headers.capacity())
+            headers.reserve(size + ctr); // reserve space for new headers in 1 go to save on copying
         ctr = 0;
         for (auto & [num, hdrs] : sm->blockHeaders) {
             Debug() << "Copying from " << num << " ...";
-            storage.headers.insert(storage.headers.end(), hdrs.begin(), hdrs.end());
+            headers.insert(headers.end(), hdrs.begin(), hdrs.end());
             ctr += hdrs.size();
             hdrs.clear();
         }
-        storage.headers.shrink_to_fit(); // make sure no memory is wasted since we don't push_back but rather reserve ahead of time each time.
+        headers.shrink_to_fit(); // make sure no memory is wasted since we don't push_back but rather reserve ahead of time each time.
         Log() << "Verified & copied " << ctr << " new " << Util::Pluralize("header", ctr) << " ok";
         sm.reset(); // go back to "Begin" state to check if any new headers arrived in the meantime
         AGAIN();
+        storage->save(Storage::SaveItem::Hdrs); // enqueue a header commit to db ...
     } else if (sm->state == State::Failure) {
         // We will try again later via the pollTimer
         Error() << "Failed to download headers";
@@ -554,7 +560,7 @@ auto Controller::stats() const -> Stats
 
     // "Controller" (self)
     QVariantMap m;
-    m["Headers"] = int(storage.headers.size());
+    m["Headers"] = int(storage->headers().first.size());
     if (sm) {
         QVariantMap m2;
         m2["State"] = sm->stateStr();
