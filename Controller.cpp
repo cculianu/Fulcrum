@@ -411,6 +411,14 @@ void Controller::process(bool beSilentIfUpToDate)
                 AGAIN();
                 return;
             }
+            if (const auto dbchain = storage->getChain(); dbchain.isEmpty() && !task->info.chain.isEmpty()) {
+                storage->setChain(task->info.chain);
+            } else if (dbchain != task->info.chain) {
+                Fatal() << "Bitcoind reports chain: \"" << task->info.chain << "\", which differs from our database: \""
+                        << dbchain << "\". You may have connected to the wrong bitcoind. To fix this issue either "
+                        << "connect to a different bitcoind or delete this program's datadir to resynch.";
+                return;
+            }
             // TODO: detect reorgs here -- to be implemented later after we figure out data model more, etc.
             const auto old = int(storage->headers().first.size())-1;
             sm->ht = task->info.blocks;
@@ -420,6 +428,11 @@ void Controller::process(bool beSilentIfUpToDate)
                     emit upToDate();
                 }
                 sm->state = State::End;
+            } else if (old > sm->ht) {
+                Fatal() << "We have height " << old << ", but bitcoind reports height " << sm->ht << ". "
+                        << "Possible reasons: A massive reorg, your node is acting funny, you are on the wrong chain "
+                        << "(testnet vs mainnet), or there is a bug in this program. Cowardly giving up and exiting...";
+                return;
             } else {
                 Log() << "Block height " << sm->ht << ", downloading new headers ...";
                 emit synchronizing();

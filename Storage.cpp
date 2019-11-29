@@ -19,6 +19,7 @@ namespace {
     /// Encapsulates the 'meta' db table
     struct Meta {
         uint32_t magic = 0xf33db33f, version = 0x1;
+        QString chain; ///< "test", "main", etc
     };
 
     // some database keys we use -- todo: if this grows large, move it elsewhere
@@ -54,6 +55,9 @@ namespace {
 
 struct Storage::Pvt
 {
+    Meta meta;
+    Lock metaLock;
+
     Headers headers;
     std::pair<unsigned, QByteArray> lastHeaderSaved; ///< remember the last header saved to disk, so subsequent saves leave off from this index
     RWLock headersLock;
@@ -106,21 +110,21 @@ void Storage::startup()
 
     // load/check meta
     {
-        Meta m_me, m_db;
+        Meta m_db;
         std::string data;
         if (auto status = p->db.meta->Get(rocksdb::ReadOptions(), p->db.meta->DefaultColumnFamily(), kMeta, &data);
                 !status.ok() && !status.IsNotFound()) {
             throw DatabaseError("Cannot read meta from db");
         } else if (status.IsNotFound()) {
-            // ok, did not exist write to db
-            status = p->db.meta->Put(rocksdb::WriteOptions(), kMeta, ToSlice(Serialize(m_me)));
-            Debug() << "Wrote new metadata to db";
+            // ok, did not exist .. write a new one to db
+            saveMeta_impl();
         } else {
             bool ok;
             m_db = Deserialize<Meta>(FromSlice(data), &ok);
-            if (!ok || m_db.magic != m_me.magic || m_db.version > m_me.version) {
+            if (!ok || m_db.magic != p->meta.magic || m_db.version > p->meta.version) {
                 throw DatabaseError("Incompatible database format -- delete the datadir and resynch");
             }
+            p->meta = m_db;
             Debug () << "Read meta from db ok";
         }
     }
@@ -161,6 +165,21 @@ auto Storage::headerVerifier() -> std::pair<BTC::HeaderVerifier &, LockGuard>
     return std::pair<BTC::HeaderVerifier &, LockGuard>( p->headerVerifier, p->headerVerifierLock );
 }
 
+QString Storage::getChain() const
+{
+    LockGuard l(p->metaLock);
+    return p->meta.chain;
+}
+
+void Storage::setChain(const QString &chain)
+{
+    {
+        LockGuard l(p->metaLock);
+        p->meta.chain = chain;
+    }
+    save(SaveItem::Meta);
+}
+
 void Storage::save(SaveSpec typed_spec)
 {
     using IntType = decltype(p->pendingSaves.load());
@@ -182,11 +201,24 @@ void Storage::save_impl()
                 const Headers copy = headers().first;
                 saveHeaders_impl(copy);
             }
-            //if (flags & SaveItem:Whatever) { // ... etc ...
+            if (flags & SaveItem::Meta) { // Meta
+                LockGuard l(p->metaLock);
+                saveMeta_impl();
+            }
         } catch (const std::exception & e) {
             Fatal() << e.what(); // will abort app...
         }
     }
+}
+
+void Storage::saveMeta_impl()
+{
+    if (!p->db.meta) return;
+    if (auto status = p->db.meta->Put(rocksdb::WriteOptions(), kMeta, ToSlice(Serialize(p->meta))); !status.ok()) {
+        throw DatabaseError("Failed to write meta to db");
+    }
+
+    Debug() << "Wrote new metadata to db";
 }
 
 void Storage::saveHeaders_impl(const Headers &h)
@@ -290,7 +322,7 @@ namespace {
         QByteArray ba;
         {
             QDataStream ds(&ba, QIODevice::WriteOnly|QIODevice::Truncate);
-            ds << m.magic << m.version;
+            ds << m.magic << m.version << m.chain;
         }
         return ba;
     }
@@ -302,7 +334,7 @@ namespace {
         Meta m;
         {
             QDataStream ds(ba);
-            ds >> m.magic >> m.version;
+            ds >> m.magic >> m.version >> m.chain;
             ok = ds.status() == QDataStream::Status::Ok;
         }
         return m;

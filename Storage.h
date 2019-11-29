@@ -48,8 +48,12 @@ public:
     /// How we read headers from our memory cache. The lock is locked in shared mode.
     std::pair<const Headers &, SharedLockGuard> headers() const;
 
+    QString getChain() const;
+    void setChain(const QString &); // implicitly calls db save of 'meta'
+
     enum class SaveItem : uint32_t {
-        Hdrs = 0x01,  ///< save headers
+        Hdrs = 0x1,  ///< save headers
+        Meta = 0x2, ///< save meta
 
         All = 0xffffffff, ///< save everything
         None = 0x00, ///< No-op
@@ -73,7 +77,8 @@ private:
     std::unique_ptr<Pvt> p;
 
     void save_impl(); ///< may abort app on database failure (unlikely).
-    void saveHeaders_impl(const Headers &); ///< caller should pass a copy of the headers or hold the lock. this may throw on database error.
+    void saveHeaders_impl(const Headers &); ///< This may throw on database error. Caller should pass a copy of the headers or hold the lock (if passing reference to p->headers).
+    void saveMeta_impl(); ///< This may throw if db error. Caller should hold locks or be in single-threaded mode.
 
     void loadHeadersFromDB(); // may throw -- called from startup()
 };
