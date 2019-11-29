@@ -65,8 +65,8 @@ private:
     struct Pvt;
     std::unique_ptr<Pvt> p;
 
-    void save_impl();
-    void saveHeaders_impl(const Headers &); ///< caller should hold the read lock of the headers
+    void save_impl(); ///< may abort app on database failure (unlikely).
+    void saveHeaders_impl(const Headers &); ///< caller should pass a copy of the headers or hold the lock. this may throw on database error.
 
     void loadHeadersFromDB(); // may throw -- called from startup()
 };
