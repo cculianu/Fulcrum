@@ -70,7 +70,7 @@ void App::startup()
     callOnTimerSoon(60*60*1000, "printTimeStamp", []{ Log() << getBannerWithTimeStamp(); return true; }, Qt::TimerType::VeryCoarseTimer);
 
     if ( ! Util::isClockSteady() ) {
-        Warning() << "High resolution clock provided by the std C++ library is not 'steady'. Timestamps may drift.";
+        Warning() << "High resolution clock provided by the std C++ library is not 'steady'. Log timestamps may drift.";
     } else {
         Debug() << "High resolution clock: isSteady = true";
     }
