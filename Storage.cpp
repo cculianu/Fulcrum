@@ -1,10 +1,6 @@
 #include "BTC.h"
 #include "Storage.h"
 
-#include "bitcoin/block.h"
-#include "bitcoin/streams.h"
-#include "bitcoin/version.h"
-
 #include "rocksdb/db.h"
 #include "rocksdb/options.h"
 #include "rocksdb/slice.h"
@@ -59,7 +55,7 @@ namespace {
 struct Storage::Pvt
 {
     Headers headers;
-    std::pair<size_t, QByteArray> lastHeaderSaved; ///< remember the last header saved to disk, so subsequent saves leave off from this index
+    std::pair<unsigned, QByteArray> lastHeaderSaved; ///< remember the last header saved to disk, so subsequent saves leave off from this index
     RWLock headersLock;
 
     std::atomic<std::underlying_type_t<SaveItem>> pendingSaves{0};
@@ -67,6 +63,9 @@ struct Storage::Pvt
     struct RocksDBs {
         std::unique_ptr<rocksdb::DB> meta, headers;
     } db;
+
+    BTC::HeaderVerifier headerVerifier;
+    Lock headerVerifierLock;
 };
 
 Storage::Storage(const std::shared_ptr<Options> & options)
@@ -156,6 +155,12 @@ auto Storage::headers() const -> std::pair<const Headers &, SharedLockGuard>
     return std::pair<const Headers &, SharedLockGuard>{ p->headers, p->headersLock };
 }
 
+// Keep returned LockGuard in scope while you use the HeaderVerifier
+auto Storage::headerVerifier() -> std::pair<BTC::HeaderVerifier &, LockGuard>
+{
+    return std::pair<BTC::HeaderVerifier &, LockGuard>( p->headerVerifier, p->headerVerifierLock );
+}
+
 void Storage::save(SaveSpec typed_spec)
 {
     using IntType = decltype(p->pendingSaves.load());
@@ -199,10 +204,12 @@ void Storage::saveHeaders_impl(const Headers &h)
             Debug() << "Saving from height " << start;
             rocksdb::WriteBatch batch;
             for (size_t i = start; i < h.size(); ++i) {
-                if (auto stat = batch.Put(ToSlice(Serialize(unsigned(i))), ToSlice(h[i])); !stat.ok())
+                // headers are keyed off of uint32_t index (height)
+                if (auto stat = batch.Put(ToSlice(Serialize(uint32_t(i))), ToSlice(h[i])); !stat.ok())
                     throw DatabaseError(QString("Error writing header %1: %2").arg(i).arg(stat.ToString().c_str()));
             }
-            if (auto stat = batch.Put(kNumHeaders, ToSlice(Serialize(unsigned(h.size())))); !stat.ok())
+            // save height to db *after* we successfully wrote all the headers
+            if (auto stat = batch.Put(kNumHeaders, ToSlice(Serialize(uint32_t(h.size())))); !stat.ok())
                 throw DatabaseError(QString("Error writing header size key: %1").arg(stat.ToString().c_str()));
             auto opts = rocksdb::WriteOptions();
             opts.sync = true;
@@ -226,7 +233,7 @@ void Storage::loadHeadersFromDB()
     FatalAssert(!!p->db.headers) << __FUNCTION__ << ": Headers db is not open";
 
     Debug() << "Loading headers ...";
-    unsigned num = 0;
+    uint32_t num = 0;
     const auto t0 = Util::getTimeNS();
     {
         auto & db = *(p->db.headers);
@@ -236,7 +243,7 @@ void Storage::loadHeadersFromDB()
                 s.IsNotFound()) { /* ignore .. */ }
         else if (!s.ok())
             throw DatabaseError(QString("Error reading %1: %2").arg(kNumHeaders.ToString().c_str()).arg(s.ToString().c_str()));
-        else if (num = Deserialize<unsigned>(FromSlice(datum), &ok); !ok)
+        else if (num = Deserialize<uint32_t>(FromSlice(datum), &ok); !ok)
             throw DatabaseError("Error reading header count from database");
         else if (num > MAX_HEADERS)
             throw DatabaseError("Header count in database exceeds MAX_HEADERS! FIXME!");
@@ -245,8 +252,8 @@ void Storage::loadHeadersFromDB()
         Headers h;
         h.reserve(num);
         // read db
-        for (unsigned i = 0; i < num; ++i, datum.Reset()) {
-            if (auto s = db.Get(rocksdb::ReadOptions(), db.DefaultColumnFamily(), ToSlice(Serialize(unsigned(i))), &datum); !s.ok())
+        for (uint32_t i = 0; i < num; ++i, datum.Reset()) {
+            if (auto s = db.Get(rocksdb::ReadOptions(), db.DefaultColumnFamily(), ToSlice(Serialize(uint32_t(i))), &datum); !s.ok())
                 throw DatabaseError(QString("Error reading header %1: ").arg(i).arg(s.ToString().c_str()));
             else if (datum.size() != BTC::GetBlockHeaderSize())
                 throw DatabaseError(QString("Error reading header %1, wrong size: %2").arg(i).arg(datum.size()));
@@ -255,18 +262,15 @@ void Storage::loadHeadersFromDB()
         // verify headers: hashPrevBlock must match what we actually read from db
         if (num) {
             Debug() << "Verifying " << num << " " << Util::Pluralize("header", num) << " ...";
-            bitcoin::CBlockHeader prevHdr, curHdr;
+            auto [verif, lock] = headerVerifier();
+            QString err;
             for (unsigned i = 0; i < num; ++i) {
-                bitcoin::GenericVectorReader<QByteArray> vr(bitcoin::SER_NETWORK, bitcoin::PROTOCOL_VERSION, h[i], 0);
-                curHdr.Unserialize(vr);
                 // verify headers hash chains match by checking hashPrevBlock versus actual previous hash.
-                if (i > 0 && curHdr.hashPrevBlock != prevHdr.GetHash())
-                    throw DatabaseError(QString("Header %1 'hashPrevBlock' does not match the previous block read from db. "
-                                                "Possible databaase corruption. Delete the datadir and resynch.")
-                                        .arg(i));
-                prevHdr = curHdr;
+                // we use the helper functor HeaderVerifier for this.
+                if (!verif(h[i], &err))
+                    throw DatabaseError(QString("%1. Possible databaase corruption. Delete the datadir and resynch.").arg(err));
             }
-            p->lastHeaderSaved = { h.size()-1, h.back() }; // remember last
+            p->lastHeaderSaved = verif.lastHeaderProcessed(); // remember last
         }
         // locked until scope end...
         auto [headers, lock] = mutableHeaders();

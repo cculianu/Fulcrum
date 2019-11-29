@@ -13,6 +13,8 @@
 #include <QHash>
 
 #include <cstring>
+#include <utility> // for pair, etc
+#include <vector>
 
 namespace BTC
 {
@@ -310,6 +312,30 @@ namespace BTC
     /// Like the Hash() function above, except does hash160 once. (not reversed).
     extern QByteArray Hash160(const QByteArray &);
 
+    /// Header Chain Verifier -
+    /// To use: Basically keep calling operator() on it with subsequent headers and it will make sure
+    /// hashPrevBlock of the current header matches the computed hash of the last header.
+    /// If that is ever not the case, operator() returns false. Returns true otherwise.
+    class HeaderVerifier {
+        QByteArray prev; // 80 byte header data or empty
+        long prevHeight = -1;
+    public:
+        HeaderVerifier() = default;
+        HeaderVerifier(unsigned fromHeight) : prevHeight(long(fromHeight)-1) {}
+
+        /// keep calling this from a loop. Returns false if current header's hashPrevBlock  != the last header's hash.
+        bool operator()(const QByteArray & header, QString *err = nullptr);
+        /// returns the height, 80 byte header of the last header seen
+        std::pair<unsigned, QByteArray> lastHeaderProcessed() const;
+
+        bool isValid() const { return prev.length() == int(GetBlockHeaderSize()); }
+        void reset(unsigned nextHeight = 0, QByteArray prevHeader = QByteArray()) { prevHeight = long(nextHeight)-1; prev = prevHeader; }
+    };
+
+
+
+
+    /// Tests
     namespace Tests {
         void SigCheck();
         bool Base58(bool silent = false, bool throws = false);

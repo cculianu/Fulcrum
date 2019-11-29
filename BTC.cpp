@@ -1,11 +1,6 @@
-#include <QMap>
-#include <QString>
-
-#include <algorithm>
-#include <iostream>
-#include <string.h>
-#include <sstream>
-#include <utility>
+#include "BTC.h"
+#include "Common.h"
+#include "Util.h"
 
 #include "bitcoin/base58.h"
 #include "bitcoin/cashaddrenc.h"
@@ -20,9 +15,14 @@
 #include "bitcoin/utilstrencodings.h"
 #include "bitcoin/version.h"
 
-#include "BTC.h"
-#include "Common.h"
-#include "Util.h"
+#include <QMap>
+#include <QString>
+
+#include <algorithm>
+#include <iostream>
+#include <string.h>
+#include <sstream>
+#include <utility>
 
 #ifdef __clang__
 #pragma clang diagnostic push
@@ -884,6 +884,35 @@ namespace BTC
         h.Write(reinterpret_cast<const uint8_t *>(b.constData()), size_t(b.length()));
         h.Finalize(reinterpret_cast<uint8_t *>(ret.data()));
         return ret;
+    }
+
+    // HeaderVerifier helper
+    bool HeaderVerifier::operator()(const QByteArray & header, QString *err)
+    {
+        const long height = prevHeight+1;
+        if (header.size() != int(BTC::GetBlockHeaderSize())) {
+            if (err) *err = QString("Header verification failed for header at height %1: wrong size").arg(height);
+            return false;
+        }
+        bitcoin::CBlockHeader curHdr;
+        bitcoin::GenericVectorReader<QByteArray> vr(bitcoin::SER_NETWORK, bitcoin::PROTOCOL_VERSION, header, 0);
+        curHdr.Unserialize(vr);
+        if (curHdr.IsNull()) {
+            if (err) *err = QString("Header verification failed for header at height %1: failed to deserialize").arg(height);
+            return false;
+        }
+        if (!prev.isEmpty() && QByteArray::fromRawData(reinterpret_cast<char *>(curHdr.hashPrevBlock.begin()), int(curHdr.hashPrevBlock.width())) != Hash(prev)) {
+            if (err) *err = QString("Header %1 'hashPrevBlock' does not match the contents of the previous block").arg(height);
+            return false;
+        }
+        prevHeight = height;
+        prev = header;
+        if (err) err->clear();
+        return true;
+    }
+    std::pair<unsigned, QByteArray> HeaderVerifier::lastHeaderProcessed() const
+    {
+        return { size_t(std::max(prevHeight, 0L)), prev };
     }
 
 } // end namespace BTC

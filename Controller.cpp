@@ -444,16 +444,25 @@ void Controller::process(bool beSilentIfUpToDate)
         }
         Log() << "Downloaded " << ctr << " new " << Util::Pluralize("header", ctr) << ", verifying ...";
         ctr = 0;
-        for (auto & [num, hdrs] : sm->blockHeaders) {
-            Log() << "Verifying from " << num << " ...";
-            for (const auto & hdr : hdrs) {
-                if (hdr.size() != DownloadHeadersTask::HEADER_SIZE) {
-                    Error() << "Header " << ctr << " has wrong length!";
-                    sm->state = State::Failure;
-                    AGAIN();
-                    return;
+        {
+            // Verify header chain makes sense (by checking hashes, using the shared header verifier)
+            QString verifErr;
+            auto [verif, lock] = storage->headerVerifier(); // lock needs to be held while we use this shared verifier
+            const auto verifUndo = verif; // keep a copy for undo purposes in case this fails
+            for (auto & [num, hdrs] : sm->blockHeaders) {
+                Log() << "Verifying from " << num << " ...";
+                for (const auto & hdr : hdrs) {
+                    if ( !verif(hdr, &verifErr) ) {
+                        // XXX possible reorg point. FIXME TODO
+                        // reorg here? TODO: deal with this better.
+                        Error() << verifErr;
+                        sm->state = State::Failure;
+                        verif = verifUndo; // undo header verifier state
+                        AGAIN();
+                        return;
+                    }
+                    ++ctr;
                 }
-                ++ctr;
             }
         }
         auto [headers, lock] = storage->mutableHeaders(); // write lock held until scope end

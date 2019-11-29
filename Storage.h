@@ -14,6 +14,8 @@
 #include <utility>
 #include <vector>
 
+namespace BTC { class HeaderVerifier; } // fwd decl used below. #include "BTC.h" to see this type
+
 struct DatabaseError : public Exception { using Exception::Exception; ~DatabaseError() override; };
 
 class Storage final : public Mgr, public ThreadObjectMixin
@@ -32,10 +34,12 @@ public:
     // some types
     using Headers = std::vector<QByteArray>; ///< each header is 80 bytes
     using RWLock = std::shared_mutex;
+    using Lock = std::mutex;
     using ExclusiveLockGuard = std::unique_lock<RWLock>;
     using SharedLockGuard = std::shared_lock<RWLock>;
+    using LockGuard = std::unique_lock<Lock>;
 
-    /// Returns a reference to the headers in our memory cahce, locked in exclusive mode.
+    /// Returns a reference to the headers in our memory cache, locked in exclusive mode.
     /// Be sure to keep the ExclusiveLockGuard in scope until the updates to the vector are complete in order to keep
     /// the data structure locked.
     /// This is howe we update the headers vector.
@@ -51,6 +55,9 @@ public:
         None = 0x00, ///< No-op
     };
     Q_DECLARE_FLAGS(SaveSpec, SaveItem)
+
+    /// Keep the returned LockGuard in scope while you use the HeaderVerifier
+    std::pair<BTC::HeaderVerifier &, LockGuard> headerVerifier();
 
     /// schedules updates to be written to disk immediately when control returns to this
     /// object's thread's event loop.
