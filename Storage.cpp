@@ -223,7 +223,7 @@ void Storage::saveHeaders_impl(const Headers &h)
 
 void Storage::loadHeadersFromDB()
 {
-    FatalAssert(!!p->db.headers) << __FUNCTION__ << ": Headers db is not opene";
+    FatalAssert(!!p->db.headers) << __FUNCTION__ << ": Headers db is not open";
 
     Debug() << "Loading headers ...";
     unsigned num = 0;
