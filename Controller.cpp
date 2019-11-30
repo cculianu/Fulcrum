@@ -484,8 +484,8 @@ void Controller::process(bool beSilentIfUpToDate)
         // figure out how many headers in total
         for (const auto & pair : sm->blockHeaders)
             N += pair.second.size();
-        Log() << "Processed " << N << " new " << Util::Pluralize("block", N) << " with " << sm->nTx << Util::Pluralize("tx", sm->nTx)
-              << " (" << sm->nIns << " " << Util::Pluralize("input", sm->nIns) << " & " << sm->nOuts << Util::Pluralize("output", sm->nOuts) << ")"
+        Log() << "Processed " << N << " new " << Util::Pluralize("block", N) << " with " << sm->nTx << " " << Util::Pluralize("tx", sm->nTx)
+              << " (" << sm->nIns << " " << Util::Pluralize("input", sm->nIns) << " & " << sm->nOuts << " " << Util::Pluralize("output", sm->nOuts) << ")"
               << ", verifying ...";
         std::vector<QByteArray> newHeaders;  // de-strided headers received
         newHeaders.reserve(N);
