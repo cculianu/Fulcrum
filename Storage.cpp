@@ -121,7 +121,7 @@ void Storage::startup()
         } else {
             bool ok;
             m_db = Deserialize<Meta>(FromSlice(data), &ok);
-            if (!ok || m_db.magic != p->meta.magic || m_db.version > p->meta.version) {
+            if (!ok || m_db.magic != p->meta.magic || m_db.version != p->meta.version) {
                 throw DatabaseError("Incompatible database format -- delete the datadir and resynch");
             }
             p->meta = m_db;
