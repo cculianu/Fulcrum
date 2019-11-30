@@ -196,7 +196,7 @@ QString ChainInfo::toString() const
 
 struct DownloadHeadersTask : public CtlTask
 {
-    DownloadHeadersTask(unsigned from, unsigned to, Controller *ctl);
+    DownloadHeadersTask(unsigned from, unsigned to, Controller *ctl, const QString &shortName = "Headers");
     void process() override;
 
 
@@ -211,16 +211,23 @@ struct DownloadHeadersTask : public CtlTask
 
     static const int HEADER_SIZE;
 
-    void do_get(unsigned height);
+    virtual void do_get(unsigned height);
 
     // thread safe, this is a rough estimate and not 100% accurate
     size_t nSoFar() const {  return size_t(qRound(((to-from)+1) * lastProgress)); }
 };
 
+struct DownloadBlocksTask : public DownloadHeadersTask
+{
+    DownloadBlocksTask(unsigned from_, unsigned to_, Controller *ctl_, const QString &shortName = "Blocks")
+        : DownloadHeadersTask(from_, to_, ctl_, shortName) {}
+    void do_get(unsigned height) override;
+};
+
 /*static*/ const int DownloadHeadersTask::HEADER_SIZE = int(BTC::GetBlockHeaderSize());
 
-DownloadHeadersTask::DownloadHeadersTask(unsigned from, unsigned to, Controller *ctl_)
-    : CtlTask(ctl_, QString("Task.Headers %1 -> %2").arg(from).arg(to)), from(from), to(to)
+DownloadHeadersTask::DownloadHeadersTask(unsigned from, unsigned to, Controller *ctl_, const QString &shortName)
+    : CtlTask(ctl_, QString("Task.%3 %1 -> %2").arg(from).arg(to).arg(shortName)), from(from), to(to)
 {
     assert(to >= from); assert(ctl_);
     next = from;
@@ -307,6 +314,64 @@ void DownloadHeadersTask::do_get(unsigned int bnum)
     });
 }
 
+void DownloadBlocksTask::do_get(unsigned int bnum)
+{
+    submitRequest("getblockhash", {bnum}, [this, bnum](const RPC::Message & resp){ // testing
+        QVariant var = resp.result();
+        const auto hash = Util::ParseHexFast(var.toByteArray());
+        if (hash.length() == bitcoin::uint256::width()) {
+            submitRequest("getblock", {var, false}, [this, bnum, hash](const RPC::Message & resp){ // testing
+                QVariant var = resp.result();
+                const auto rawblock = Util::ParseHexFast(var.toByteArray());
+                const auto header = rawblock.left(HEADER_SIZE); // we need a deep copy of this anyway so might as well take it now.
+                QByteArray chkHash;
+                if (bool sizeOk = header.length() == HEADER_SIZE; sizeOk && (chkHash = BTC::HashRev(header)) == hash) {
+                    bitcoin::CBlock block = BTC::DeserializeBlock(rawblock); // test deser speed
+                    if (Trace::isEnabled()) Trace() << "block " << bnum << " size: " << rawblock.size() << " nTx: " << block.vtx.size();
+                    const auto expectedCt = (to-from)+1;
+                    const size_t index = bnum - from;
+                    ++goodCt;
+                    q_ct = qMax(q_ct-1, 0);
+                    if (!(index % 1000) && index) {
+                        emit progress(double(bnum-from) / double(expectedCt));
+                    }
+                    if (Trace::isEnabled()) Trace() << resp.method << ": header for height: " << bnum << " len: " << header.length();
+                    // save header and hash when both are correct
+                    if (headers.size() < index+1)
+                        headers.resize(index+1);
+                    headers[index] = header;
+                    if (goodCt >= expectedCt) {
+                        // flag state to maybeDone to do checks when process() called again
+                        maybeDone = true;
+                        AGAIN();
+                        return;
+                    }
+                    while (goodCt + unsigned(q_ct) < expectedCt && q_ct < max_q) {
+                        // queue multiple at once
+                        AGAIN();
+                        ++q_ct;
+                    }
+                } else if (!sizeOk) {
+                    Warning() << resp.method << ": at height " << bnum << " header not valid (decoded size: " << header.length() << ")";
+                    errorCode = int(bnum);
+                    errorMessage = QString("bad size for height %1").arg(bnum);
+                    emit errored();
+                } else {
+                    Warning() << resp.method << ": at height " << bnum << " header not valid (expected hash: " << hash.toHex() << ", got hash: " << chkHash.toHex() << ")";
+                    errorCode = int(bnum);
+                    errorMessage = QString("hash mismatch for height %1").arg(bnum);
+                    emit errored();
+                }
+            });
+        } else {
+            Warning() << resp.method << ": at height " << bnum << " hash not valid (decoded size: " << hash.length() << ")";
+            errorCode = int(bnum);
+            errorMessage = QString("invalid hash for height %1").arg(bnum);
+            emit errored();
+        }
+    });
+}
+
 
 struct Controller::StateMachine
 {
@@ -319,7 +384,7 @@ struct Controller::StateMachine
     std::map<std::pair<unsigned, unsigned>, unsigned> failures; // mapping of from,to -> failCt
 
     // todo: tune this
-    const size_t DL_CONCURRENCY = size_t(qMin(qMax(int(Util::getNPhysicalProcessors())-BitcoinDMgr::N_CLIENTS, BitcoinDMgr::N_CLIENTS), 32));
+    const size_t DL_CONCURRENCY = Util::getNPhysicalProcessors();//size_t(qMin(qMax(int(Util::getNPhysicalProcessors())-BitcoinDMgr::N_CLIENTS, BitcoinDMgr::N_CLIENTS), 32));
 
     static constexpr unsigned maxErrCt = 3;
 
@@ -344,7 +409,7 @@ bool Controller::isTaskDeleted(CtlTask *t) const { return tasks.count(t) == 0; }
 
 void Controller::add_DLHeaderTask(unsigned int from, unsigned int to, size_t nTasks)
 {
-    DownloadHeadersTask *t = newTask<DownloadHeadersTask>(false, unsigned(from), unsigned(to), this);
+    DownloadBlocksTask *t = newTask<DownloadBlocksTask>(false, unsigned(from), unsigned(to), this);
     connect(t, &CtlTask::success, this, [t, this, nTasks]{
         if (UNLIKELY(!sm || isTaskDeleted(t))) return; // task was stopped from underneath us, this is stale.. abort.
         Debug() << "Got all headers from: " << t->objectName() << " headerCt: "  << t->headers.size();

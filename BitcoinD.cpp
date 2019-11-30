@@ -189,8 +189,8 @@ auto BitcoinD::stats() const -> Stats
     return m;
 }
 
-BitcoinD::BitcoinD(const QHostAddress &host, quint16 port, const QString & user, const QString &pass)
-    : RPC::HttpConnection(RPC::MethodMap{}, newId(), nullptr), host(host), port(port)
+BitcoinD::BitcoinD(const QHostAddress &host, quint16 port, const QString & user, const QString &pass, qint64 maxBuffer)
+    : RPC::HttpConnection(RPC::MethodMap{}, newId(), nullptr, maxBuffer), host(host), port(port)
 {
     static int N = 1;
     setObjectName(QString("BitcoinD.%1").arg(N++));

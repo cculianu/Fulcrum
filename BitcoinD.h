@@ -23,7 +23,7 @@ public:
     void startup() override; ///< from Mgr
     void cleanup() override; ///< from Mgr
 
-    static constexpr int N_CLIENTS = 4;
+    static constexpr int N_CLIENTS = 3;
 
     using ResultsF = std::function<void(const RPC::Message &response)>;
     using ErrorF = ResultsF; // identical to ResultsF above except the message passed in is an error="" message.
@@ -77,7 +77,12 @@ class BitcoinD : public RPC::HttpConnection, public ThreadObjectMixin /* NB: als
     Q_OBJECT
 
 public:
-    explicit BitcoinD(const QHostAddress &host, quint16 port, const QString & user, const QString &pass);
+    /// TODO: have this come from config. For now: support up to ~50MiB blocks (hex encoded) from bitcoind.
+    /// Note that Qt has a limitation for JSON document parsing at around 100MB anyway so .. it is what it is.
+    /// This should work for now since we are on 32MiB max block size on BCH anyway right now.
+    static constexpr qint64 BTCD_DEFAULT_MAX_BUFFER = 100*1000*1000;
+
+    explicit BitcoinD(const QHostAddress &host, quint16 port, const QString & user, const QString &pass, qint64 maxBuffer = BTCD_DEFAULT_MAX_BUFFER);
     ~BitcoinD() override;
 
     using ThreadObjectMixin::start;
