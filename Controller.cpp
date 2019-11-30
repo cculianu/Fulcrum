@@ -211,6 +211,8 @@ struct DownloadBlocksTask : public CtlTask
 
     static const int HEADER_SIZE;
 
+    std::atomic<size_t> nTx = 0;
+
     void do_get(unsigned height);
 
     // basically computes expectedCt. Use expectedCt member to get the actual expected ct. this is used only by c'tor as a utility function
@@ -267,16 +269,17 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
         QVariant var = resp.result();
         const auto hash = Util::ParseHexFast(var.toByteArray());
         if (hash.length() == bitcoin::uint256::width()) {
-            submitRequest(/*"getblock"*/"getblockheader", {var, false}, [this, bnum, hash](const RPC::Message & resp){ // testing
+            submitRequest("getblock"/*"getblockheader"*/, {var, false}, [this, bnum, hash](const RPC::Message & resp){ // testing
                 QVariant var = resp.result();
-                //const auto rawblock = Util::ParseHexFast(var.toByteArray());
-                //const auto header = rawblock.left(HEADER_SIZE); // we need a deep copy of this anyway so might as well take it now.
-                const auto header = Util::ParseHexFast(var.toByteArray());
+                const auto rawblock = Util::ParseHexFast(var.toByteArray());
+                const auto header = rawblock.left(HEADER_SIZE); // we need a deep copy of this anyway so might as well take it now.
+                //const auto header = Util::ParseHexFast(var.toByteArray());
                 QByteArray chkHash;
                 if (bool sizeOk = header.length() == HEADER_SIZE; sizeOk && (chkHash = BTC::HashRev(header)) == hash) {
                     // testing block deser speed, etc
-                    //bitcoin::CBlock block = BTC::DeserializeBlock(rawblock);
-                    //if (Trace::isEnabled()) Trace() << "block " << bnum << " size: " << rawblock.size() << " nTx: " << block.vtx.size();
+                    bitcoin::CBlock block = BTC::DeserializeBlock(rawblock);
+                    if (Trace::isEnabled()) Trace() << "block " << bnum << " size: " << rawblock.size() << " nTx: " << block.vtx.size();
+                    nTx += block.vtx.size();
                     // /
                     const size_t index = height2Index(bnum);
                     ++goodCt;
@@ -333,9 +336,11 @@ struct Controller::StateMachine
     std::map<unsigned, unsigned> failures; // mapping of from -> failCt
 
     // todo: tune this
-    const size_t DL_CONCURRENCY = /*Util::getNPhysicalProcessors();*/size_t(qMin(qMax(int(Util::getNPhysicalProcessors())-BitcoinDMgr::N_CLIENTS, BitcoinDMgr::N_CLIENTS), 32));
+    const size_t DL_CONCURRENCY = qMax(Util::getNPhysicalProcessors()-1, 1U);//size_t(qMin(qMax(int(Util::getNPhysicalProcessors())-BitcoinDMgr::N_CLIENTS, BitcoinDMgr::N_CLIENTS), 32));
 
     static constexpr unsigned maxErrCt = 3;
+
+    size_t nTx = 0;
 
     const char * stateStr() const {
         static constexpr const char *stateStrings[] = { "Begin", "GetBlockHeaders", "FinishedDL", "End", "Failure", "IBD",
@@ -361,7 +366,8 @@ void Controller::add_DLHeaderTask(unsigned int from, unsigned int to, size_t nTa
     DownloadBlocksTask *t = newTask<DownloadBlocksTask>(false, unsigned(from), unsigned(to), unsigned(nTasks), this);
     connect(t, &CtlTask::success, this, [t, this, nTasks]{
         if (UNLIKELY(!sm || isTaskDeleted(t))) return; // task was stopped from underneath us, this is stale.. abort.
-        Debug() << "Got all headers from: " << t->objectName() << " headerCt: "  << t->headers.size();
+        sm->nTx += t->nTx;
+        Debug() << "Got all headers from: " << t->objectName() << " headerCt: "  << t->headers.size() << " nTx: " << t->nTx << " nTxTotal: " << sm->nTx;
         sm->blockHeaders[t->from].swap(t->headers); // constant time copy
         if (sm->blockHeaders.size() == nTasks) {
             sm->state = StateMachine::State::FinishedDL;
@@ -467,7 +473,7 @@ void Controller::process(bool beSilentIfUpToDate)
         // figure out how many headers in total
         for (const auto & pair : sm->blockHeaders)
             N += pair.second.size();
-        Log() << "Downloaded " << N << " new " << Util::Pluralize("header", N) << ", verifying ...";
+        Log() << "Processed " << N << " new " << Util::Pluralize("block", N) << " with " << sm->nTx << Util::Pluralize("tx", sm->nTx) << ", verifying ...";
         std::vector<QByteArray> newHeaders;  // de-strided headers received
         newHeaders.reserve(N);
         {
@@ -603,7 +609,9 @@ auto Controller::stats() const -> Stats
         m2["State"] = sm->stateStr();
         m2["Height"] = sm->ht;
         if (const auto nDL = nHeadersDownloadedSoFar(); nDL > 0)
-            m2["Headers_Downloaded_This_Run"] = int(nDL);
+            m2["Headers_Downloaded_This_Run"] = qlonglong(nDL);
+        if (const auto ntx = nTxSoFar(); ntx > 0)
+            m2["Txs_Seen_This_Run"] = qlonglong(ntx);
         m["StateMachine"] = m2;
     } else
         m["StateMachine"] = QVariant(); // null
@@ -636,6 +644,18 @@ size_t Controller::nHeadersDownloadedSoFar() const
         auto t = dynamic_cast<DownloadBlocksTask *>(task);
         if (t)
             ret += t->nSoFar();
+    }
+    return ret;
+}
+
+size_t Controller::nTxSoFar() const
+{
+    size_t ret = 0;
+    for (const auto & [task, ign] : tasks) {
+        Q_UNUSED(ign)
+        auto t = dynamic_cast<DownloadBlocksTask *>(task);
+        if (t)
+            ret += t->nTx;
     }
     return ret;
 }
