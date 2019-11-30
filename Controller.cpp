@@ -88,6 +88,7 @@ void Controller::startup()
 void Controller::cleanup()
 {
     stop();
+    tasks.clear(); // deletes all tasks asap
     if (srvmgr) { Log("Stopping SrvMgr ... "); srvmgr->cleanup(); srvmgr.reset(); }
     if (bitcoindmgr) { Log("Stopping BitcoinDMgr ... "); bitcoindmgr->cleanup(); bitcoindmgr.reset(); }
     if (storage) { Log("Closing storage ..."); storage->cleanup(); storage.reset(); }
@@ -116,6 +117,7 @@ struct ChainInfo {
 struct GetChainInfoTask : public CtlTask
 {
     GetChainInfoTask(Controller *ctl_) : CtlTask(ctl_, "Task.GetChainInfo") {}
+    ~GetChainInfoTask() override { stop(); } // paranoia
     void process() override;
 
     ChainInfo info;
@@ -197,6 +199,7 @@ QString ChainInfo::toString() const
 struct DownloadBlocksTask : public CtlTask
 {
     DownloadBlocksTask(unsigned from, unsigned to, unsigned stride, Controller *ctl);
+    ~DownloadBlocksTask() override { stop(); } // paranoia
     void process() override;
 
 
@@ -211,7 +214,7 @@ struct DownloadBlocksTask : public CtlTask
 
     static const int HEADER_SIZE;
 
-    std::atomic<size_t> nTx = 0;
+    std::atomic<size_t> nTx = 0, nIns = 0, nOuts = 0;
 
     void do_get(unsigned height);
 
@@ -280,6 +283,10 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
                     bitcoin::CBlock block = BTC::DeserializeBlock(rawblock);
                     if (Trace::isEnabled()) Trace() << "block " << bnum << " size: " << rawblock.size() << " nTx: " << block.vtx.size();
                     nTx += block.vtx.size();
+                    for (const auto & tx : block.vtx) {
+                        nOuts += tx->vout.size();
+                        nIns += tx->vin.size();
+                    }
                     // /
                     const size_t index = height2Index(bnum);
                     ++goodCt;
@@ -328,7 +335,7 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
 struct Controller::StateMachine
 {
     enum State {
-        Begin=0, GetBlockHeaders, FinishedDL, End, Failure, IBD
+        Begin=0, GetBlocks, FinishedDL, End, Failure, IBD
     };
     State state = Begin;
     int ht = -1;
@@ -340,10 +347,10 @@ struct Controller::StateMachine
 
     static constexpr unsigned maxErrCt = 3;
 
-    size_t nTx = 0;
+    size_t nTx = 0, nIns = 0, nOuts = 0;
 
     const char * stateStr() const {
-        static constexpr const char *stateStrings[] = { "Begin", "GetBlockHeaders", "FinishedDL", "End", "Failure", "IBD",
+        static constexpr const char *stateStrings[] = { "Begin", "GetBlocks", "FinishedDL", "End", "Failure", "IBD",
                                                         "Unknown" /* this should always be last */ };
         auto idx = qMin(size_t(state), std::size(stateStrings)-1);
         return stateStrings[idx];
@@ -367,7 +374,11 @@ void Controller::add_DLHeaderTask(unsigned int from, unsigned int to, size_t nTa
     connect(t, &CtlTask::success, this, [t, this, nTasks]{
         if (UNLIKELY(!sm || isTaskDeleted(t))) return; // task was stopped from underneath us, this is stale.. abort.
         sm->nTx += t->nTx;
-        Debug() << "Got all headers from: " << t->objectName() << " headerCt: "  << t->headers.size() << " nTx: " << t->nTx << " nTxTotal: " << sm->nTx;
+        sm->nIns += t->nIns;
+        sm->nOuts += t->nOuts;
+        Debug() << "Got all headers from: " << t->objectName() << " headerCt: "  << t->headers.size()
+                << " nTx,nInp,nOutp: " << t->nTx << "," << t->nIns << "," << t->nOuts << " totals: "
+                << sm->nTx << "," << sm->nIns << "," << sm->nOuts;
         sm->blockHeaders[t->from].swap(t->headers); // constant time copy
         if (sm->blockHeaders.size() == nTasks) {
             sm->state = StateMachine::State::FinishedDL;
@@ -457,11 +468,11 @@ void Controller::process(bool beSilentIfUpToDate)
             } else {
                 Log() << "Block height " << sm->ht << ", downloading new headers ...";
                 emit synchronizing();
-                sm->state = State::GetBlockHeaders;
+                sm->state = State::GetBlocks;
             }
             AGAIN();
         });
-    } else if (sm->state == State::GetBlockHeaders) {
+    } else if (sm->state == State::GetBlocks) {
         const size_t base = storage->headers().first.size();
         const size_t num = size_t(sm->ht+1) - base;
         const size_t nTasks = qMin(num, sm->DL_CONCURRENCY);
@@ -610,8 +621,13 @@ auto Controller::stats() const -> Stats
         m2["Height"] = sm->ht;
         if (const auto nDL = nHeadersDownloadedSoFar(); nDL > 0)
             m2["Headers_Downloaded_This_Run"] = qlonglong(nDL);
-        if (const auto ntx = nTxSoFar(); ntx > 0)
-            m2["Txs_Seen_This_Run"] = qlonglong(ntx);
+        if (const auto [ntx, nin, nout] = nTxInOutSoFar(); ntx > 0) {
+            m2["Txs_Seen_This_Run"] = QVariantMap({
+                { "nTx" , qlonglong(ntx) },
+                { "nIns", qlonglong(nin) },
+                { "nOut", qlonglong(nout) }
+            });
+        }
         m["StateMachine"] = m2;
     } else
         m["StateMachine"] = QVariant(); // null
@@ -648,14 +664,17 @@ size_t Controller::nHeadersDownloadedSoFar() const
     return ret;
 }
 
-size_t Controller::nTxSoFar() const
+std::tuple<size_t, size_t, size_t> Controller::nTxInOutSoFar() const
 {
-    size_t ret = 0;
+    size_t nTx = 0, nIn = 0, nOut = 0;
     for (const auto & [task, ign] : tasks) {
         Q_UNUSED(ign)
         auto t = dynamic_cast<DownloadBlocksTask *>(task);
-        if (t)
-            ret += t->nTx;
+        if (t) {
+            nTx += t->nTx;
+            nIn += t->nIns;
+            nOut += t->nOuts;
+        }
     }
-    return ret;
+    return {nTx, nIn, nOut};
 }

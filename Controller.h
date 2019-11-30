@@ -12,6 +12,7 @@
 #include <type_traits>
 #include <unordered_map>
 #include <vector>
+#include <tuple>
 
 class CtlTask;
 
@@ -80,7 +81,7 @@ private:
     void add_DLHeaderTask(unsigned from, unsigned to, size_t nTasks);
 
     size_t nHeadersDownloadedSoFar() const; ///< not 100% accurate. call this only from this thread
-    size_t nTxSoFar() const; ///< not 100% accurate. call this only from this thread
+    std::tuple<size_t, size_t, size_t> nTxInOutSoFar() const; ///< not 100% accurate. call this only from this thread
 };
 
 /// Abstract base class for our private internal tasks. Concrete implementations are in Controller.cpp.
