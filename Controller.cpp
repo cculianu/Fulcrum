@@ -333,7 +333,7 @@ struct Controller::StateMachine
     std::map<unsigned, unsigned> failures; // mapping of from -> failCt
 
     // todo: tune this
-    const size_t DL_CONCURRENCY = Util::getNPhysicalProcessors();//size_t(qMin(qMax(int(Util::getNPhysicalProcessors())-BitcoinDMgr::N_CLIENTS, BitcoinDMgr::N_CLIENTS), 32));
+    const size_t DL_CONCURRENCY = /*Util::getNPhysicalProcessors();*/size_t(qMin(qMax(int(Util::getNPhysicalProcessors())-BitcoinDMgr::N_CLIENTS, BitcoinDMgr::N_CLIENTS), 32));
 
     static constexpr unsigned maxErrCt = 3;
 
