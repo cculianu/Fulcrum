@@ -267,16 +267,16 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
         QVariant var = resp.result();
         const auto hash = Util::ParseHexFast(var.toByteArray());
         if (hash.length() == bitcoin::uint256::width()) {
-            submitRequest("getblock"/*"getblockheader*/, {var, false}, [this, bnum, hash](const RPC::Message & resp){ // testing
+            submitRequest(/*"getblock"*/"getblockheader", {var, false}, [this, bnum, hash](const RPC::Message & resp){ // testing
                 QVariant var = resp.result();
-                //const auto header = Util::ParseHexFast(var.toByteArray());
-                const auto rawblock = Util::ParseHexFast(var.toByteArray());
-                const auto header = rawblock.left(HEADER_SIZE); // we need a deep copy of this anyway so might as well take it now.
+                //const auto rawblock = Util::ParseHexFast(var.toByteArray());
+                //const auto header = rawblock.left(HEADER_SIZE); // we need a deep copy of this anyway so might as well take it now.
+                const auto header = Util::ParseHexFast(var.toByteArray());
                 QByteArray chkHash;
                 if (bool sizeOk = header.length() == HEADER_SIZE; sizeOk && (chkHash = BTC::HashRev(header)) == hash) {
                     // testing block deser speed, etc
-                    bitcoin::CBlock block = BTC::DeserializeBlock(rawblock);
-                    if (Trace::isEnabled()) Trace() << "block " << bnum << " size: " << rawblock.size() << " nTx: " << block.vtx.size();
+                    //bitcoin::CBlock block = BTC::DeserializeBlock(rawblock);
+                    //if (Trace::isEnabled()) Trace() << "block " << bnum << " size: " << rawblock.size() << " nTx: " << block.vtx.size();
                     // /
                     const size_t index = height2Index(bnum);
                     ++goodCt;
@@ -491,7 +491,7 @@ void Controller::process(bool beSilentIfUpToDate)
                         AGAIN();
                         return;
                     }
-                    newHeaders.push_back(hdr); // cheap implicitly shared shallow copy
+                    newHeaders.emplace_back(std::move(hdr)); // move c'tor.. should be very fast
                 }
             }
             // de-alloc the sm->blockHeaders now that it's fully de-strided
