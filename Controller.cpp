@@ -194,55 +194,56 @@ QString ChainInfo::toString() const
     return ret;
 }
 
-struct DownloadHeadersTask : public CtlTask
+struct DownloadBlocksTask : public CtlTask
 {
-    DownloadHeadersTask(unsigned from, unsigned to, Controller *ctl, const QString &shortName = "Headers");
+    DownloadBlocksTask(unsigned from, unsigned to, unsigned stride, Controller *ctl);
     void process() override;
 
 
-    const unsigned from = 0, to = 0;
+    const unsigned from = 0, to = 0, stride = 1, expectedCt = 1;
     unsigned next = 0;
-    unsigned goodCt = 0;
+    std::atomic_uint goodCt = 0;
     bool maybeDone = false;
     std::vector<QByteArray> headers;
 
     int q_ct = 0;
-    static constexpr int max_q = BitcoinDMgr::N_CLIENTS+1; // todo: tune this
+    static constexpr int max_q = /*16;*/BitcoinDMgr::N_CLIENTS+1; // todo: tune this
 
     static const int HEADER_SIZE;
 
-    virtual void do_get(unsigned height);
+    void do_get(unsigned height);
 
+    // basically computes expectedCt. Use expectedCt member to get the actual expected ct. this is used only by c'tor as a utility function
+    static size_t nToDL(unsigned from, unsigned to, unsigned stride)  { return size_t( (((to-from)+1) + stride-1) / qMax(stride, 1U) ); }
     // thread safe, this is a rough estimate and not 100% accurate
-    size_t nSoFar() const {  return size_t(qRound(((to-from)+1) * lastProgress)); }
+    size_t nSoFar(double prog=-1) const { if (prog<0.) prog = lastProgress; return size_t(qRound(expectedCt * prog)); }
+    // given a position in the headers array, return the height
+    size_t index2Height(size_t index) { return size_t( from + (index * stride) ); }
+    // given a block height, return the index into our array
+    size_t height2Index(size_t h) { return size_t( ((h-from) + stride-1) / stride ); }
 };
 
-struct DownloadBlocksTask : public DownloadHeadersTask
-{
-    DownloadBlocksTask(unsigned from_, unsigned to_, Controller *ctl_, const QString &shortName = "Blocks")
-        : DownloadHeadersTask(from_, to_, ctl_, shortName) {}
-    void do_get(unsigned height) override;
-};
 
-/*static*/ const int DownloadHeadersTask::HEADER_SIZE = int(BTC::GetBlockHeaderSize());
+/*static*/ const int DownloadBlocksTask::HEADER_SIZE = int(BTC::GetBlockHeaderSize());
 
-DownloadHeadersTask::DownloadHeadersTask(unsigned from, unsigned to, Controller *ctl_, const QString &shortName)
-    : CtlTask(ctl_, QString("Task.%3 %1 -> %2").arg(from).arg(to).arg(shortName)), from(from), to(to)
+DownloadBlocksTask::DownloadBlocksTask(unsigned from, unsigned to, unsigned stride, Controller *ctl_)
+    : CtlTask(ctl_, QString("Task.DL %1 -> %2").arg(from).arg(to)), from(from), to(to), stride(stride), expectedCt(unsigned(nToDL(from, to, stride)))
 {
-    assert(to >= from); assert(ctl_);
+    FatalAssert( (to >= from) && (ctl_) && (stride > 0)) << "Invalid params to DonloadBlocksTask c'tor, FIXME!";
+
     next = from;
-    headers.reserve((to-from) + 1);
+    headers.reserve(expectedCt);
 }
 
-void DownloadHeadersTask::process()
+void DownloadBlocksTask::process()
 {
     if (next > to) {
         if (maybeDone) {
             int bad = 0;
-            for (size_t index = 0; index < headers.size(); ++index) {
+            for (size_t index = 0, N = expectedCt; index < N; ++index) {
                 if (headers[index].length() != HEADER_SIZE) {
                     ++bad;
-                    errorCode = int(index + from); // height
+                    errorCode = int(index2Height(index)); // height
                     break;
                 }
             }
@@ -256,62 +257,8 @@ void DownloadHeadersTask::process()
         return;
     }
 
-    do_get(next++);
-}
-
-void DownloadHeadersTask::do_get(unsigned int bnum)
-{
-    submitRequest("getblockhash", {bnum}, [this, bnum](const RPC::Message & resp){ // testing
-        QVariant var = resp.result();
-        const auto hash = Util::ParseHexFast(var.toByteArray());
-        if (hash.length() == bitcoin::uint256::width()) {
-            submitRequest("getblockheader", {var, false}, [this, bnum, hash](const RPC::Message & resp){ // testing
-                QVariant var = resp.result();
-                const auto header = Util::ParseHexFast(var.toByteArray());
-                QByteArray chkHash;
-                if (bool sizeOk = header.length() == HEADER_SIZE; sizeOk && (chkHash = BTC::HashRev(header)) == hash) {
-                    const auto expectedCt = (to-from)+1;
-                    const size_t index = bnum - from;
-                    ++goodCt;
-                    q_ct = qMax(q_ct-1, 0);
-                    if (!(index % 1000) && index) {
-                        emit progress(double(bnum-from) / double(expectedCt));
-                    }
-                    if (Trace::isEnabled()) Trace() << resp.method << ": header for height: " << bnum << " len: " << header.length();
-                    // save header and hash when both are correct
-                    if (headers.size() < index+1)
-                        headers.resize(index+1);
-                    headers[index] = header;
-                    if (goodCt >= expectedCt) {
-                        // flag state to maybeDone to do checks when process() called again
-                        maybeDone = true;
-                        AGAIN();
-                        return;
-                    }
-                    while (goodCt + unsigned(q_ct) < expectedCt && q_ct < max_q) {
-                        // queue multiple at once
-                        AGAIN();
-                        ++q_ct;
-                    }
-                } else if (!sizeOk) {
-                    Warning() << resp.method << ": at height " << bnum << " header not valid (decoded size: " << header.length() << ")";
-                    errorCode = int(bnum);
-                    errorMessage = QString("bad size for height %1").arg(bnum);
-                    emit errored();
-                } else {
-                    Warning() << resp.method << ": at height " << bnum << " header not valid (expected hash: " << hash.toHex() << ", got hash: " << chkHash.toHex() << ")";
-                    errorCode = int(bnum);
-                    errorMessage = QString("hash mismatch for height %1").arg(bnum);
-                    emit errored();
-                }
-            });
-        } else {
-            Warning() << resp.method << ": at height " << bnum << " hash not valid (decoded size: " << hash.length() << ")";
-            errorCode = int(bnum);
-            errorMessage = QString("invalid hash for height %1").arg(bnum);
-            emit errored();
-        }
-    });
+    do_get(next);
+    next += stride;
 }
 
 void DownloadBlocksTask::do_get(unsigned int bnum)
@@ -320,20 +267,23 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
         QVariant var = resp.result();
         const auto hash = Util::ParseHexFast(var.toByteArray());
         if (hash.length() == bitcoin::uint256::width()) {
-            submitRequest("getblock", {var, false}, [this, bnum, hash](const RPC::Message & resp){ // testing
+            submitRequest("getblock"/*"getblockheader*/, {var, false}, [this, bnum, hash](const RPC::Message & resp){ // testing
                 QVariant var = resp.result();
+                //const auto header = Util::ParseHexFast(var.toByteArray());
                 const auto rawblock = Util::ParseHexFast(var.toByteArray());
                 const auto header = rawblock.left(HEADER_SIZE); // we need a deep copy of this anyway so might as well take it now.
                 QByteArray chkHash;
                 if (bool sizeOk = header.length() == HEADER_SIZE; sizeOk && (chkHash = BTC::HashRev(header)) == hash) {
-                    bitcoin::CBlock block = BTC::DeserializeBlock(rawblock); // test deser speed
+                    // testing block deser speed, etc
+                    bitcoin::CBlock block = BTC::DeserializeBlock(rawblock);
                     if (Trace::isEnabled()) Trace() << "block " << bnum << " size: " << rawblock.size() << " nTx: " << block.vtx.size();
-                    const auto expectedCt = (to-from)+1;
-                    const size_t index = bnum - from;
+                    // /
+                    const size_t index = height2Index(bnum);
                     ++goodCt;
                     q_ct = qMax(q_ct-1, 0);
-                    if (!(index % 1000) && index) {
-                        emit progress(double(bnum-from) / double(expectedCt));
+                    lastProgress = double(index) / double(expectedCt);
+                    if (!(bnum % 1000) && bnum) {
+                        emit progress(lastProgress);
                     }
                     if (Trace::isEnabled()) Trace() << resp.method << ": header for height: " << bnum << " len: " << header.length();
                     // save header and hash when both are correct
@@ -371,7 +321,6 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
         }
     });
 }
-
 
 struct Controller::StateMachine
 {
@@ -381,7 +330,7 @@ struct Controller::StateMachine
     State state = Begin;
     int ht = -1;
     std::map<unsigned, std::vector<QByteArray> > blockHeaders; // mapping of from_height -> headers
-    std::map<std::pair<unsigned, unsigned>, unsigned> failures; // mapping of from,to -> failCt
+    std::map<unsigned, unsigned> failures; // mapping of from -> failCt
 
     // todo: tune this
     const size_t DL_CONCURRENCY = Util::getNPhysicalProcessors();//size_t(qMin(qMax(int(Util::getNPhysicalProcessors())-BitcoinDMgr::N_CLIENTS, BitcoinDMgr::N_CLIENTS), 32));
@@ -409,7 +358,7 @@ bool Controller::isTaskDeleted(CtlTask *t) const { return tasks.count(t) == 0; }
 
 void Controller::add_DLHeaderTask(unsigned int from, unsigned int to, size_t nTasks)
 {
-    DownloadBlocksTask *t = newTask<DownloadBlocksTask>(false, unsigned(from), unsigned(to), this);
+    DownloadBlocksTask *t = newTask<DownloadBlocksTask>(false, unsigned(from), unsigned(to), unsigned(nTasks), this);
     connect(t, &CtlTask::success, this, [t, this, nTasks]{
         if (UNLIKELY(!sm || isTaskDeleted(t))) return; // task was stopped from underneath us, this is stale.. abort.
         Debug() << "Got all headers from: " << t->objectName() << " headerCt: "  << t->headers.size();
@@ -423,7 +372,7 @@ void Controller::add_DLHeaderTask(unsigned int from, unsigned int to, size_t nTa
         if (UNLIKELY(!sm || isTaskDeleted(t))) return; // task was stopped from underneath us, this is stale.. abort.
         if (sm->state == StateMachine::State::Failure) return; // silently ignore if we are already in failure
         // Handle failures with retries for the specific task -- failures are unlikely so it's ok to do it on this level
-        if (auto ct = ++sm->failures[std::make_pair(t->from, t->to)]; ct < sm->maxErrCt) {
+        if (auto ct = ++sm->failures[t->from]; ct < sm->maxErrCt) {
             Warning() << "Task errored: " << t->objectName() << ", error: " << t->errorMessage << ", retrying # " << ct << " ...";
             add_DLHeaderTask(t->from, t->to, nTasks);
         } else {
@@ -431,10 +380,11 @@ void Controller::add_DLHeaderTask(unsigned int from, unsigned int to, size_t nTa
             genericTaskErrored();
         }
     });
-    connect(t, &CtlTask::progress, t, [t, this](double prog){
+    connect(t, &CtlTask::progress, this, [t, this](double prog){
         if (UNLIKELY(!sm || isTaskDeleted(t))) return; // task was stopped from underneath us, this is stale.. abort.
-        Log() << "Downloaded height: " << t->from + unsigned(qRound(prog*((t->to-t->from)+1))) << ", " << QString::number(prog*1e2, 'f', 1) << "%";
-    }, Qt::DirectConnection);
+        Log() << "Downloaded height: " << t->index2Height(unsigned(t->expectedCt*prog)) << ", "
+              << QString::number(prog*1e2, 'f', 1) << "%";
+    });
 }
 
 void Controller::genericTaskErrored()
@@ -508,28 +458,30 @@ void Controller::process(bool beSilentIfUpToDate)
     } else if (sm->state == State::GetBlockHeaders) {
         const size_t base = storage->headers().first.size();
         const size_t num = size_t(sm->ht+1) - base;
-        const size_t nTasks = qMax(size_t(1), num < 1000 ? size_t(1) : sm->DL_CONCURRENCY);
-        const size_t headersPerTask = num / nTasks, rem = num % nTasks;
+        const size_t nTasks = qMin(num, sm->DL_CONCURRENCY);
         for (size_t i = 0; i < nTasks; ++i) {
-            auto N = i+1 < nTasks ? headersPerTask : headersPerTask+rem;
-            auto from = unsigned(base + i*headersPerTask), to = unsigned((from + N) - 1);
-            add_DLHeaderTask(from, to, nTasks);
+            add_DLHeaderTask(unsigned(base + i), unsigned(sm->ht), nTasks);
         }
     } else if (sm->state == State::FinishedDL) {
-        size_t ctr = 0;
-        for (const auto & pair : sm->blockHeaders) {
-            ctr += pair.second.size();
-        }
-        Log() << "Downloaded " << ctr << " new " << Util::Pluralize("header", ctr) << ", verifying ...";
-        ctr = 0;
+        size_t N = 0;
+        // figure out how many headers in total
+        for (const auto & pair : sm->blockHeaders)
+            N += pair.second.size();
+        Log() << "Downloaded " << N << " new " << Util::Pluralize("header", N) << ", verifying ...";
+        std::vector<QByteArray> newHeaders;  // de-strided headers received
+        newHeaders.reserve(N);
         {
             // Verify header chain makes sense (by checking hashes, using the shared header verifier)
+            // We need to do this in a de-stride-ified fashion
             QString verifErr;
             auto [verif, lock] = storage->headerVerifier(); // lock needs to be held while we use this shared verifier
             const auto verifUndo = verif; // keep a copy for undo purposes in case this fails
-            for (auto & [num, hdrs] : sm->blockHeaders) {
-                Log() << "Verifying from " << num << " ...";
-                for (const auto & hdr : hdrs) {
+
+            for (size_t ctr = 0; ctr < N; ++ctr) {
+                for (auto & [num, hdrs] : sm->blockHeaders) {
+                    if (ctr >= hdrs.size())
+                        continue;
+                    const auto & hdr = hdrs[ctr];
                     if ( !verif(hdr, &verifErr) ) {
                         // XXX possible reorg point. FIXME TODO
                         // reorg here? TODO: deal with this better.
@@ -539,22 +491,21 @@ void Controller::process(bool beSilentIfUpToDate)
                         AGAIN();
                         return;
                     }
-                    ++ctr;
+                    newHeaders.push_back(hdr); // cheap implicitly shared shallow copy
                 }
             }
+            // de-alloc the sm->blockHeaders now that it's fully de-strided
+            sm->blockHeaders.clear();
         }
-        auto [headers, lock] = storage->mutableHeaders(); // write lock held until scope end
-        if (const auto size = headers.size(); size + ctr < headers.capacity())
-            headers.reserve(size + ctr); // reserve space for new headers in 1 go to save on copying
-        ctr = 0;
-        for (auto & [num, hdrs] : sm->blockHeaders) {
-            Debug() << "Copying from " << num << " ...";
-            headers.insert(headers.end(), hdrs.begin(), hdrs.end());
-            ctr += hdrs.size();
-            hdrs.clear();
+        {
+            // updated shared headers from storage while holding lock...
+            auto [headers, lock] = storage->mutableHeaders(); // write lock held until scope end
+            if (const auto size = headers.size(); size + newHeaders.size() < headers.capacity())
+                headers.reserve(size + newHeaders.size()); // reserve space for new headers in 1 go to save on copying
+            headers.insert(headers.end(), newHeaders.begin(), newHeaders.end());
+            headers.shrink_to_fit(); // make sure no memory is wasted since we don't push_back but rather reserve ahead of time each time.
         }
-        headers.shrink_to_fit(); // make sure no memory is wasted since we don't push_back but rather reserve ahead of time each time.
-        Log() << "Verified & copied " << ctr << " new " << Util::Pluralize("header", ctr) << " ok";
+        Log() << "Verified & copied " << newHeaders.size() << " new " << Util::Pluralize("header", newHeaders.size()) << " ok";
         sm.reset(); // go back to "Begin" state to check if any new headers arrived in the meantime
         AGAIN();
         storage->save(Storage::SaveItem::Hdrs); // enqueue a header commit to db ...
@@ -586,7 +537,6 @@ CtlTask::CtlTask(Controller *ctl, const QString &name)
 {
     setObjectName(name);
     _thread.setObjectName(name);
-    connect(this, &CtlTask::progress, this, [this](double prog) { lastProgress = prog; });
 }
 
 CtlTask::~CtlTask() {
@@ -683,7 +633,7 @@ size_t Controller::nHeadersDownloadedSoFar() const
     size_t ret = 0;
     for (const auto & [task, ign] : tasks) {
         Q_UNUSED(ign)
-        auto t = dynamic_cast<DownloadHeadersTask *>(task);
+        auto t = dynamic_cast<DownloadBlocksTask *>(task);
         if (t)
             ret += t->nSoFar();
     }
