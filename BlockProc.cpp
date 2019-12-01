@@ -11,6 +11,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
+
 /*static*/ const QByteArray PreProcessedBlock::staticnull;
 
 /// fill this struct's data with all the txdata, etc from a bitcoin CBlock. Alternative to using the second c'tor.
@@ -20,16 +21,7 @@ void PreProcessedBlock::fill(unsigned blockHeight, const bitcoin::CBlock &b) {
     height = blockHeight;
     header = b.GetBlockHeader();
     txInfos.reserve(b.vtx.size());
-    // trivial hasher for sha256 hashed QByteArrays
-    struct HashHasher {
-        [[maybe_unused]] std::size_t operator()(const QByteArray &b) const {
-            if (LIKELY(size_t(b.size()) >= sizeof(size_t)))
-                // common case, just return the first 8 bytes reinterpreted as size_t since this is already
-                // a random hash.
-                return *reinterpret_cast<const size_t *>(b.constData());
-            return qHash(b, 0xf1234567); // this should not normally be reached.
-        }
-    };
+    using HashHasher = BTC::QByteArrayHashHasher;
     std::unordered_map<QByteArray, unsigned, HashHasher> txHashToIndex;
     std::unordered_map<HashX, std::vector<unsigned>, HashHasher> hashXOuts, hashXIns;
     std::unordered_set<HashX, HashHasher> hashXsSeen;
@@ -37,17 +29,17 @@ void PreProcessedBlock::fill(unsigned blockHeight, const bitcoin::CBlock &b) {
     size_t txIdx = 0;
     for (const auto & tx : b.vtx) {
         // copy tx hash data for the tx
-        TxInfo info = { BTC::Hash2ByteArrayRev(tx->GetHash()), /*... initializd to 0...*/ };
+        TxInfo info;
+        info.hash = BTC::Hash2ByteArrayRev(tx->GetHash());
         info.nInputs = unsigned(tx->vin.size());
         info.nOutputs = unsigned(tx->vout.size());
-        info.input0Index = info.output0Index = -1;
         // remember the tx hash -> index association for use later in this function
         txHashToIndex[info.hash] = unsigned(txIdx); // cheap copy + cheap hash func. should make this fast.
 
         // process outputs for this tx
         if (!tx->vout.empty())
             // remember output0 index for this txindex
-            info.output0Index = int(outputs.size());
+            info.output0Index = unsigned(outputs.size());
 
         unsigned outN = 0;
         for (const auto & out : tx->vout) {
@@ -59,7 +51,7 @@ void PreProcessedBlock::fill(unsigned blockHeight, const bitcoin::CBlock &b) {
             if (const auto cscript = out.scriptPubKey;
                     !BTC::IsOpReturn(cscript))  ///< skip OP_RETURN
             {
-                const HashX hashX = BTC::HashXFromCScript(cscript);
+                const HashX hashX = cscript;
                 // add this output to the hashX -> outputs association for later
                 hashXOuts[ hashX ].emplace_back( outputIdx );
                 hashXsSeen.insert(hashX);
@@ -73,7 +65,7 @@ void PreProcessedBlock::fill(unsigned blockHeight, const bitcoin::CBlock &b) {
         // process inputs
         if (!tx->vin.empty())
             // remember input0Index position for this tx
-            info.input0Index = int(inputs.size());
+            info.input0Index = unsigned(inputs.size());
 
         unsigned inN = 0;
         for (const auto & in : tx->vin) {
@@ -81,7 +73,7 @@ void PreProcessedBlock::fill(unsigned blockHeight, const bitcoin::CBlock &b) {
                     unsigned(txIdx),
                     BTC::Hash2ByteArrayRev(in.prevout.GetTxId()),  // .prevoutHash
                     unsigned(in.prevout.GetN()), // .prevoutN
-                    -1, // .parentTxOutIdx
+                    {}, // .parentTxOutIdx (start out undefined)
             });
             ++inN;
         }
@@ -105,15 +97,16 @@ void PreProcessedBlock::fill(unsigned blockHeight, const bitcoin::CBlock &b) {
             assert(txIdx < txInfos.size() && txIdx < b.vtx.size());
             const TxInfo & info = txInfos[txIdx];
             inp.prevoutHash = info.hash; //<--- ensure shallow copy that points to same underlying data (saves memory)
-            assert(info.output0Index > -1);
-            inp.parentTxOutIdx = info.output0Index + int(inp.prevoutN); // save the index into the `outputs` array where the parent tx to this spend occurred
+            if (info.output0Index.has_value())
+                inp.parentTxOutIdx = info.output0Index.value() + inp.prevoutN; // save the index into the `outputs` array where the parent tx to this spend occurred
+            else { assert(0); }
             const auto & tx = b.vtx[txIdx];
             assert(inp.prevoutN < tx->vout.size());
             if (const auto cscript = tx->vout[inp.prevoutN].scriptPubKey;
                     !BTC::IsOpReturn(cscript))
             {
                 // mark this input as touching this hashX
-                const HashX hashX = BTC::HashXFromCScript(cscript);
+                const HashX hashX = cscript;
                 hashXIns[ hashX ].emplace_back(inIdx);
                 hashXsSeen.insert(hashX);
             }
@@ -156,9 +149,9 @@ QString PreProcessedBlock::toDebugString() const
             for (size_t j = 0; j < ag.ins.size(); ++j) {
                 const auto idx = ag.ins[j];
                 const auto & theInput [[maybe_unused]] = inputs[idx];
-                assert(theInput.parentTxOutIdx > -1 && txHashForOutputIdx(unsigned(theInput.parentTxOutIdx)) == theInput.prevoutHash);
+                assert(theInput.parentTxOutIdx.has_value() && txHashForOutputIdx(theInput.parentTxOutIdx.value()) == theInput.prevoutHash);
                 ts << " {in# " << j << " - " << inputs[idx].prevoutHash.toHex() << ":" << inputs[idx].prevoutN
-                   << ", spent in " << txHashForInputIdx(idx).toHex() << ":" << numForInputIdx(idx) << " }";
+                   << ", spent in " << txHashForInputIdx(idx).toHex() << ":" << numForInputIdx(idx).value_or(999999) << " }";
             }
             for (size_t j = 0; j < ag.outs.size(); ++j) {
                 const auto idx = ag.outs[j];

@@ -1,11 +1,15 @@
 #ifndef MY_BLOCKPROC_H
 #define MY_BLOCKPROC_H
 
+#include "HashX.h"
+
 #include "bitcoin/amount.h"
 #include "bitcoin/block.h"
 
 #include <QByteArray>
 
+#include <cassert>
+#include <optional>
 #include <vector>
 
 
@@ -21,7 +25,7 @@ struct PreProcessedBlock
     struct TxInfo {
         QByteArray hash; ///< 32 byte txid. These txid's are *reversed* from bitcoind's internal memory order. (so as to be closer to the final hex encoded format).
         unsigned nInputs = 0, nOutputs = 0; ///< the number of inputs and outputs in the tx
-        int input0Index = -1, output0Index = -1; ///< if either of these are positive, they point into the `inputs` and `outputs` arrays below, respectively
+        std::optional<unsigned> input0Index, output0Index; ///< if either of these have a value, they point into the `inputs` and `outputs` arrays below, respectively
     };
 
     /// The txids (32 bytes each) of all tx's in the block, in the order in which they appeared in the block.
@@ -29,10 +33,10 @@ struct PreProcessedBlock
     std::vector<TxInfo> txInfos;
 
     struct InputPt {
-        unsigned txIdx; ///< index into the `txInfos` vector above where this input appears
+        unsigned txIdx; ///< index into the `txInfos` vector above for the tx where this input appears
         QByteArray prevoutHash; ///< 32-byte prevoutHash.  In *reversed* memory order (hex-encoding ready!) (May be a shallow copy of a byte array in `txInfos` if the prevout tx was in this block.). May be empty if coinbase
         unsigned prevoutN; ///< the index in the prevout tx for this input
-        int parentTxOutIdx = -1; ///< if the input's prevout was in this block, the index into the `outputs` array declared below, otherwise -1.
+        std::optional<unsigned> parentTxOutIdx; ///< if the input's prevout was in this block, the index into the `outputs` array declared below, otherwise undefined.
     };
 
     struct OutPt {
@@ -44,7 +48,6 @@ struct PreProcessedBlock
     std::vector<InputPt> inputs; ///< all the inputs for *all* the tx's in this block, in the order they were encountered!
     std::vector<OutPt> outputs; ///< all the outpoints for *all* the tx's in this block, in the order they were encountered!
 
-    using HashX = QByteArray; ///< 32-byte *reversed* (can be verbatim encoded as hex) sha256_once of a CScript. TODO: refactor this typedef out to somewhere else
     struct HashXAggregated {
         HashX hashX;
         /// collection of all outputs in this block that are *TO* this HashX (data items are indices into the `outputs`
@@ -76,19 +79,23 @@ struct PreProcessedBlock
     PreProcessedBlock() = default;
     PreProcessedBlock(unsigned blockHeight, const bitcoin::CBlock &b) { fill(blockHeight, b); }
     /// reset this to empty
-    void clear() { *this = PreProcessedBlock(); }
+    inline void clear() { *this = PreProcessedBlock(); }
     /// fill this block with data from bitcoin's CBlock
     void fill(unsigned blockHeight, const bitcoin::CBlock &b);
 
     // misc helpers --
 
     /// returns the input# as the input appeared in its tx, given a particular `inputs` array index
-    inline unsigned numForInputIdx(unsigned inputIdx) const {
-        if (inputIdx < inputs.size())
-            return inputIdx - unsigned(qMax(txInfos[inputs[inputIdx].txIdx].input0Index, 0));
-        return 0;
+    inline std::optional<unsigned> numForInputIdx(unsigned inputIdx) const {
+        std::optional<unsigned> ret;
+        if (inputIdx < inputs.size()) {
+            if (const auto & opt = txInfos[inputs[inputIdx].txIdx].input0Index;
+                    opt.has_value() && inputIdx >= opt.value())
+                ret = inputIdx - opt.value();
+        }
+        return ret;
     }
-    /// returns the txHash given an index into the `inputs` array.
+    /// returns the txHash given an index into the `inputs` array (or a null QByteArray if index is out of range).
     inline const QByteArray &txHashForInputIdx(unsigned inputIdx) const {
         if (inputIdx < inputs.size()) {
             if (const auto txIdx = inputs[inputIdx].txIdx; txIdx < txInfos.size())
@@ -96,7 +103,7 @@ struct PreProcessedBlock
         }
         return staticnull;
     }
-    /// returns the txHash given an index into the `outputs` array.
+    /// returns the txHash given an index into the `outputs` array (or a null QByteArray if index is out of range).
     inline const QByteArray &txHashForOutputIdx(unsigned outputIdx) const {
         if (outputIdx < outputs.size()) {
             if (const auto txIdx = outputs[outputIdx].txIdx; txIdx < txInfos.size())

@@ -284,7 +284,7 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
                     bitcoin::CBlock block = BTC::Deserialize<bitcoin::CBlock>(rawblock);
                     PreProcessedBlock ppb(bnum, block); // this is here to test performance
                     // TESTING -- TODO: Remove this -- this is to keep the optimizer from removing the thing for now
-                    if (bnum == /*4087*/999999999) Debug() << ppb.toDebugString();
+                    if (bnum == /*60000*/999999999) Debug() << ppb.toDebugString();
 
                     if (Trace::isEnabled()) Trace() << "block " << bnum << " size: " << rawblock.size() << " nTx: " << block.vtx.size();
                     nTx += block.vtx.size();

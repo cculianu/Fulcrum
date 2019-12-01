@@ -1,6 +1,8 @@
 #ifndef BTC_H
 #define BTC_H
 
+#include "Util.h"
+
 #include "bitcoin/block.h"
 #include "bitcoin/script.h"
 #include "bitcoin/streams.h"
@@ -342,25 +344,17 @@ namespace BTC
     inline QByteArray HashOnce(const QByteArray &b) { return Hash(b, true); }
     /// Like the Hash() function above, except does hash160 once. (not reversed).
     extern QByteArray Hash160(const QByteArray &);
-    /// Compute the "HashX" (electrumx style hash) which is a sha256 hash, done once, and "pre-reversed" (that is, ready
-    /// to be converted to hex directly as-is).
-    inline QByteArray HashXFromCScript(const bitcoin::CScript & cs) {
-        // note: fromRawData is a cheap copy (shallow copy pointing to the same data as cs), which is ok since
-        // it's just a temporary.
-        return HashRev(QByteArray::fromRawData(reinterpret_cast<const char *>(cs.data()), int(cs.size())), true);
-    }
 
     /// Takes a hash in bitcoin memory order and returns a deep copy QByteArray of the data, reversed
     /// (this is intended to keep our representation of bitcoin data closer to how we will send it to clients down
     /// the wire -- we send all hex encoded hashes in reverse order as is customary when representing bitcoin
     /// hashes in hex). See BlockProc.cpp for an example of where this is used.
     template <class BitcoinHashT>
-    QByteArray Hash2ByteArrayRev(const BitcoinHashT &txhash) {
-        auto ret = QByteArray(reinterpret_cast<const char *>(txhash.begin()), txhash.width()); // deep copy
+    QByteArray Hash2ByteArrayRev(const BitcoinHashT &hash) {
+        QByteArray ret(reinterpret_cast<const char *>(hash.begin()), hash.width()); // deep copy
         std::reverse(ret.begin(), ret.end()); // reverse it
         return ret;
     };
-
 
     /// returns true iff cscript is OP_RETURN, false otherwise
     inline bool IsOpReturn(const bitcoin::CScript &cs) {
@@ -389,7 +383,27 @@ namespace BTC
         void reset(unsigned nextHeight = 0, QByteArray prevHeader = QByteArray()) { prevHeight = long(nextHeight)-1; prev = prevHeader; }
     };
 
+    /// Trivial hasher for sha256, rmd160, etc hashed byte arrays (for use with std::unordered_map,
+    /// std::unordered_set, etc) -- just returns the first 8 bytes reinterpreted as size_t since hashed data is
+    /// already randomized.
+    template <typename BytesT>
+    struct GenericTrivialHashHasher {
+        std::size_t operator()(const BytesT &b) const {
+            if (LIKELY(size_t(b.size()) >= sizeof(size_t))) {
+                // common case, just return the first 8 bytes reinterpreted as size_t since this is already
+                // a random hash.
+                static_assert (std::is_scalar_v<std::remove_pointer_t<decltype (b.begin())>>,
+                               "GenericTrivialHasher must be used with a container type where .begin() returns a pointer to its data." );
+                return *reinterpret_cast<const size_t *>(b.begin());
+            }
+            return qHash(b, 0xf1234567); // this should not normally be reached.
+        }
+    };
 
+    // useful type aliases to be passed as template args to eg std::unordered_map
+    using QByteArrayHashHasher = GenericTrivialHashHasher<QByteArray>;
+    using uint256HashHasher = GenericTrivialHashHasher<bitcoin::uint256>;
+    using uint160HashHasher = GenericTrivialHashHasher<bitcoin::uint160>;
 
 
     /// Tests
