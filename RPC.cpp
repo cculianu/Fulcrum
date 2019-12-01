@@ -575,7 +575,7 @@ namespace RPC {
                     sm->content += buf;
                 } else {
                     // read 0 bytes, but bytesAvailable was >0, must mean there was some sort of error
-                    throw Exception("Read 0 bytes from socke");
+                    throw Exception("Read 0 bytes from socket");
                 }
             }
             if (sm->state == St::READING_CONTENT && sm->content.length() >= sm->contentLength) {
