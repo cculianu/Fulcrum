@@ -3,7 +3,9 @@
 
 #include "bitcoin/block.h"
 #include "bitcoin/script.h"
+#include "bitcoin/streams.h"
 #include "bitcoin/transaction.h"
+#include "bitcoin/version.h"
 
 #include <QByteArray>
 #include <QString>
@@ -12,7 +14,9 @@
 #include <QPair>
 #include <QHash>
 
+#include <cassert>
 #include <cstring>
+#include <type_traits>
 #include <utility> // for pair, etc
 #include <vector>
 
@@ -279,24 +283,51 @@ namespace BTC
                            QString *errorString = nullptr,
                            bitcoin::CScript * scriptSig_out = nullptr);
 
-    /// some helpful Block deserialization utility methods
-    extern bitcoin::CBlock DeserializeBlockHex(const QByteArray &hex);
-    extern bitcoin::CBlock DeserializeBlockHexStr(const QString &hex);
-    extern bitcoin::CBlock DeserializeBlock(const QByteArray &bytes); ///< very fast. IN-PLACE (uses a custom VectorReader)
-    extern bitcoin::CBlock DeserializeBlock(const std::vector<uint8_t> &bytes, size_t pos = 0); ///< very fast --  IN-PLACE
-    /// some helpful Header deserialization utility methods
-    extern bitcoin::CBlockHeader DeserializeHeaderHex(const QByteArray &hex);
-    extern bitcoin::CBlockHeader DeserializeHeaderHexStr(const QString &hex);
-    extern bitcoin::CBlockHeader DeserializeHeader(const QByteArray &bytes); ///< very fast. IN-PLACE (uses a custom VectorReader)
-    extern bitcoin::CBlockHeader DeserializeHeader(const std::vector<uint8_t> &bytes, size_t pos = 0); ///< very fast --  IN-PLACE
-    /// some helpful Transaction deserialization utility methods
-    extern bitcoin::CTransaction DeserializeTxHex(const QByteArray &hex);
-    extern bitcoin::CTransaction DeserializeTxHexStr(const QString &hex);
-    extern bitcoin::CTransaction DeserializeTx(const QByteArray &bytes); ///< very fast. IN-PLACE (uses a custom VectorReader)
-    extern bitcoin::CTransaction DeserializeTx(const std::vector<uint8_t> &bytes, size_t pos = 0); ///< very fast --  IN-PLACE
 
+    /// -- Template Serialization / Deserialization methods to/from QByteArray --
 
-    /// Helper -- returns the size of a block header. Should always be 80.
+    /// Serialize to a passed-in buffer. from_pos should be the position in the buffer to overwrite the serialized data
+    /// into.  Note if from_pos is larger than the buffer, the buffer will be grown to encompass from_pos!
+    /// In any case, the buffer will always be grown to accomodate the data if it's not big enough to hold it.
+    /// Specify from_pos=-1 for appending at the end.  Returns a reference to the passed-in buffer.  This is very fast
+    /// and done in-place.
+    template <typename BitcoinObject>
+    QByteArray & Serialize(QByteArray &buf, const BitcoinObject &thing, int from_pos = -1)
+    {
+        if (from_pos < 0) from_pos = buf.size();
+        bitcoin::GenericVectorWriter<QByteArray> vw(bitcoin::SER_NETWORK, bitcoin::PROTOCOL_VERSION, buf, from_pos);
+        thing.Serialize(vw);
+        return buf;
+    }
+    /// Convenience for above -- serialize to a new QByteArray directly
+    template <typename BitcoinObject>
+    QByteArray Serialize(const BitcoinObject &thing)
+    {
+        QByteArray ret;
+        Serialize(ret, thing);
+        return ret;
+    }
+    /// Deserialize to a pre-allocated bitcoin object such as bitcoin::CBlock, bitcoin::CBlockHeader, bitcoin::CMutableTransaction, etc
+    template <typename BitcoinObject,
+              /// NB: This in-place Deserialization does *NOT* work with CTransaction because if has const-fields. (use the non-in-place specialization instead)
+              std::enable_if_t<!std::is_same_v<BitcoinObject, bitcoin::CTransaction>, int> = 0 >
+    void Deserialize(BitcoinObject &thing, const QByteArray &bytes, int pos = 0)
+    {
+        bitcoin::GenericVectorReader<QByteArray> vr(bitcoin::SER_NETWORK, bitcoin::PROTOCOL_VERSION, bytes, pos);
+        thing.Unserialize(vr);
+    }
+    /// Convenience for above.  Create an instance of object and deserialize to it
+    template <typename BitcoinObject>
+    BitcoinObject Deserialize(const QByteArray &bytes, int pos = 0)
+    {
+        BitcoinObject ret;
+        Deserialize(ret, bytes, pos);
+        return ret;
+    }
+    /// Template specialization for CTransaction which has const fields and works a little differently (impl. in BTC.cpp)
+    template <> bitcoin::CTransaction Deserialize(const QByteArray &, int pos);
+
+    /// Helper -- returns the size of a block header. Should always be 80.  Returns an internal constant after first call.
     extern size_t GetBlockHeaderSize();
 
     /// Returns the sha256 double hash (not reveresed) of the input QByteArray. The results are copied once from the

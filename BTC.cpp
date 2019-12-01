@@ -790,65 +790,13 @@ namespace BTC
 
     } // end namespace Tests
 
-    // BLOCK deser
-    bitcoin::CBlock DeserializeBlockHexStr(const QString &hex) { return DeserializeBlockHex(hex.toUtf8()); }
-    bitcoin::CBlock DeserializeBlockHex(const QByteArray &hex)
-    {
-        return DeserializeBlock(QByteArray::fromHex(hex));
-    }
-    bitcoin::CBlock DeserializeBlock(const QByteArray &bytes)
-    {
-        bitcoin::GenericVectorReader<QByteArray> vr(bitcoin::SER_NETWORK, bitcoin::PROTOCOL_VERSION, bytes, 0);
-        bitcoin::CBlock bl;
-        bl.Unserialize(vr);
-        return bl;
-    }
-    bitcoin::CBlock DeserializeBlock(const std::vector<uint8_t> &bytes, size_t pos)
-    {
-        bitcoin::VectorReader vr(bitcoin::SER_NETWORK, bitcoin::PROTOCOL_VERSION, bytes, pos);
-        bitcoin::CBlock bl;
-        bl.Unserialize(vr);
-        return bl;
-    }
 
-    // HEADER deser
-    bitcoin::CBlockHeader DeserializeHeaderHexStr(const QString &hex) { return DeserializeHeaderHex(hex.toUtf8()); }
-    bitcoin::CBlockHeader DeserializeHeaderHex(const QByteArray &hex)
+    /// specialization for CTransaction which works differently
+    template <> bitcoin::CTransaction Deserialize(const QByteArray &bytes, int pos)
     {
-        return DeserializeHeader(QByteArray::fromHex(hex));
-    }
-    bitcoin::CBlockHeader DeserializeHeader(const QByteArray &bytes)
-    {
-        bitcoin::GenericVectorReader<QByteArray> vr(bitcoin::SER_NETWORK, bitcoin::PROTOCOL_VERSION, bytes, 0);
-        bitcoin::CBlockHeader bh;
-        bh.Unserialize(vr);
-        return bh;
-    }
-    bitcoin::CBlockHeader DeserializeHeader(const std::vector<uint8_t> &bytes, size_t pos)
-    {
-        bitcoin::VectorReader vr(bitcoin::SER_NETWORK, bitcoin::PROTOCOL_VERSION, bytes, pos);
-        bitcoin::CBlockHeader bh;
-        bh.Unserialize(vr);
-        return bh;
-    }
-
-    // TX deser
-    bitcoin::CTransaction DeserializeTxHexStr(const QString &hex) { return DeserializeTxHex(hex.toUtf8()); }
-    bitcoin::CTransaction DeserializeTxHex(const QByteArray &hex)
-    {
-        return DeserializeTx(QByteArray::fromHex(hex));
-    }
-    bitcoin::CTransaction DeserializeTx(const QByteArray &bytes)
-    {
-        bitcoin::GenericVectorReader<QByteArray> vr(bitcoin::SER_NETWORK, bitcoin::PROTOCOL_VERSION, bytes, 0);
+        bitcoin::GenericVectorReader<QByteArray> vr(bitcoin::SER_NETWORK, bitcoin::PROTOCOL_VERSION, bytes, pos);
         return bitcoin::CTransaction(bitcoin::deserialize, vr);
     }
-    bitcoin::CTransaction DeserializeTx(const std::vector<uint8_t> &bytes, size_t pos)
-    {
-        bitcoin::VectorReader vr(bitcoin::SER_NETWORK, bitcoin::PROTOCOL_VERSION, bytes, pos);
-        return bitcoin::CTransaction(bitcoin::deserialize, vr);
-    }
-
     /// Helper -- returns the size of a block header. Should always be 80.
     size_t GetBlockHeaderSize()
     {

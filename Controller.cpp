@@ -280,7 +280,7 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
                 QByteArray chkHash;
                 if (bool sizeOk = header.length() == HEADER_SIZE; sizeOk && (chkHash = BTC::HashRev(header)) == hash) {
                     // testing block deser speed, etc
-                    bitcoin::CBlock block = BTC::DeserializeBlock(rawblock);
+                    bitcoin::CBlock block = BTC::Deserialize<bitcoin::CBlock>(rawblock);
                     if (Trace::isEnabled()) Trace() << "block " << bnum << " size: " << rawblock.size() << " nTx: " << block.vtx.size();
                     nTx += block.vtx.size();
                     for (const auto & tx : block.vtx) {
