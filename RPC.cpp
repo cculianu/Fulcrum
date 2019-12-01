@@ -570,7 +570,13 @@ namespace RPC {
             while (sm->state == St::READING_CONTENT && socket->bytesAvailable() > 0 && sm->content.length() < sm->contentLength ) {
                 // state READING_CONTENT is not linefeed based but expects sm->contentLenght bytes. read at most that many bytes.
                 const qint64 n2read = qMin(socket->bytesAvailable(), qint64(sm->contentLength - sm->content.length()));
-                sm->content += socket->read(n2read);
+                if (QByteArray buf = socket->read(n2read); !buf.isEmpty()) {
+                    nReceived += buf.size();
+                    sm->content += buf;
+                } else {
+                    // read 0 bytes, but bytesAvailable was >0, must mean there was some sort of error
+                    throw Exception("Read 0 bytes from socke");
+                }
             }
             if (sm->state == St::READING_CONTENT && sm->content.length() >= sm->contentLength) {
                 // got a full content packet!
