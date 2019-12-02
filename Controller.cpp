@@ -379,8 +379,9 @@ void Controller::add_DLHeaderTask(unsigned int from, unsigned int to, size_t nTa
     });
     connect(t, &CtlTask::progress, this, [t, this](double prog){
         if (UNLIKELY(!sm || isTaskDeleted(t))) return; // task was stopped from underneath us, this is stale.. abort.
-        Log() << "Downloaded height: " << t->index2Height(unsigned(t->expectedCt*prog)) << ", "
-              << QString::number(prog*1e2, 'f', 1) << "%";
+        const size_t ht = t->index2Height(unsigned(t->expectedCt*prog));
+        Log() << "Downloaded height: " << ht << ", "
+              << QString::number((ht*1e2) / qMax(t->to, 1U), 'f', 1) << "%";
     });
 }
 
@@ -507,7 +508,9 @@ void Controller::putBlock(CtlTask *task, PreProcessedBlockPtr p)
             return;
         }
         sm->ppBlocks[p->height] = p;
-        AGAIN(); // queue up, return right away
+        //AGAIN(); // queue up, return right away -- turns out this spams events. better to call the process function directly here.
+        if (sm->state == StateMachine::State::DownloadingBlocks)
+            process_DownloadingBlocks();
     });
 }
 
