@@ -249,7 +249,7 @@ void DownloadBlocksTask::process()
                 emit success();
             else {
                 errorCode = int(expectedCt - goodCt);
-                errorMessage = QString("missing %1 headers").arg(errorCode);
+                errorMessage = QString("missing %1 blocks").arg(errorCode);
                 emit errored();
             }
         }
@@ -371,7 +371,7 @@ void Controller::add_DLHeaderTask(unsigned int from, unsigned int to, size_t nTa
         sm->nTx += t->nTx;
         sm->nIns += t->nIns;
         sm->nOuts += t->nOuts;
-        Debug() << "Got all headers from: " << t->objectName() << " headerCt: "  << t->goodCt
+        Debug() << "Got all blocks from: " << t->objectName() << " blockCt: "  << t->goodCt
                 << " nTx,nInp,nOutp: " << t->nTx << "," << t->nIns << "," << t->nOuts << " totals: "
                 << sm->nTx << "," << sm->nIns << "," << sm->nOuts;
     });
@@ -456,7 +456,7 @@ void Controller::process(bool beSilentIfUpToDate)
                         << "(testnet vs mainnet), or there is a bug in this program. Cowardly giving up and exiting...";
                 return;
             } else {
-                Log() << "Block height " << sm->ht << ", downloading new headers ...";
+                Log() << "Block height " << sm->ht << ", downloading new blocks ...";
                 emit synchronizing();
                 sm->state = State::GetBlocks;
             }
@@ -486,7 +486,7 @@ void Controller::process(bool beSilentIfUpToDate)
         storage->save(Storage::SaveItem::Hdrs); // enqueue a header commit to db ...
     } else if (sm->state == State::Failure) {
         // We will try again later via the pollTimer
-        Error() << "Failed to download headers";
+        Error() << "Failed to download blocks";
         sm.reset();
         enablePollTimer = true;
         emit synchFailure();
