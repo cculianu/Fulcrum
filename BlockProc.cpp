@@ -72,6 +72,7 @@ void PreProcessedBlock::fill(unsigned blockHeight, size_t blockSize, const bitco
 
         unsigned inN = 0;
         for (const auto & in : tx->vin) {
+            // note we do place the coinbase tx here even though we ignore it later on -- we keep it to have accurate indices
             inputs.emplace_back(InputPt{
                     unsigned(txIdx),
                     BTC::Hash2ByteArrayRev(in.prevout.GetTxId()),  // .prevoutHash
@@ -134,10 +135,13 @@ void PreProcessedBlock::fill(unsigned blockHeight, size_t blockSize, const bitco
         hashXAggregated.emplace_back(std::move(ag));
     }
 
-    // sort hashXAggregated by outputIdx,inputIdx
-    std::sort(hashXAggregated.begin(), hashXAggregated.end(), [](const HashXAggregated &a, const HashXAggregated &b) -> bool {
-        return std::make_pair(a.outs.empty() ? 0 : a.outs.front()+1, a.ins.empty() ? 0 : a.ins.front()+1 )
-                < std::make_pair(b.outs.empty() ? 0 : b.outs.front()+1, b.ins.empty() ? 0 : b.ins.front()+1 );
+    // sort hashXAggregated by min(output_txid, input_txid) (basically earliest first)
+    std::sort(hashXAggregated.begin(), hashXAggregated.end(), [this](const HashXAggregated &a, const HashXAggregated &b) -> bool {
+        unsigned a_outTxid0 = a.outs.empty() ? UINT_MAX : outputs[a.outs.front()].txIdx,
+                 b_outTxid0 = b.outs.empty() ? UINT_MAX : outputs[b.outs.front()].txIdx,
+                 a_inTxid0 = a.ins.empty() ? UINT_MAX : inputs[a.ins.front()].txIdx,
+                 b_inTxid0 = b.ins.empty() ? UINT_MAX : inputs[b.ins.front()].txIdx;
+        return std::min(a_outTxid0, a_inTxid0) < std::min(b_outTxid0, b_inTxid0);
     });
 }
 
