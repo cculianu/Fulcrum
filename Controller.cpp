@@ -281,7 +281,7 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
                 QByteArray chkHash;
                 if (bool sizeOk = header.length() == HEADER_SIZE; sizeOk && (chkHash = BTC::HashRev(header)) == hash) {
                     // testing block deser speed, etc
-                    auto ppb = std::make_shared<PreProcessedBlock>(bnum, BTC::Deserialize<bitcoin::CBlock>(rawblock)); // this is here to test performance
+                    auto ppb = PreProcessedBlock::makeShared(bnum, BTC::Deserialize<bitcoin::CBlock>(rawblock)); // this is here to test performance
                     // TESTING --
                     //if (bnum == 60000) Debug() << ppb->toDebugString();
 

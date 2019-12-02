@@ -9,8 +9,12 @@
 #include <QByteArray>
 
 #include <cassert>
+#include <memory>
 #include <optional>
 #include <vector>
+
+struct PreProcessedBlock;
+using PreProcessedBlockPtr = std::shared_ptr<PreProcessedBlock>;  ///< For clarity/convenience
 
 
 /// Note all hashes below are in *reversed* order from bitcoind's internal memory order.
@@ -83,6 +87,9 @@ struct PreProcessedBlock
     /// fill this block with data from bitcoin's CBlock
     void fill(unsigned blockHeight, const bitcoin::CBlock &b);
 
+    /// convenience factory static method: given a block, return a shard_ptr instance of this struct
+    PreProcessedBlockPtr static makeShared(unsigned height, const bitcoin::CBlock &block);
+
     // misc helpers --
 
     /// returns the input# as the input appeared in its tx, given a particular `inputs` array index
@@ -126,6 +133,5 @@ private:
     static const QByteArray staticnull;
 };
 
-using PreProcessedBlockPtr = std::shared_ptr<PreProcessedBlock>;  ///< For clarity/convenience
 
 #endif // MY_BLOCKPROC_H

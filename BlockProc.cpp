@@ -171,3 +171,10 @@ QString PreProcessedBlock::toDebugString() const
     }
     return ret;
 }
+
+/// convenience factory static method: given a block, return a shard_ptr instance of this struct
+PreProcessedBlockPtr
+/*static*/ PreProcessedBlock::makeShared(unsigned height, const bitcoin::CBlock &block)
+{
+    return std::make_shared<PreProcessedBlock>(height, block);
+}
