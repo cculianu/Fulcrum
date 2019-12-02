@@ -503,7 +503,14 @@ namespace Util {
 
     /// Like the above but for VoidFunc lambdas.  Returns true if the lambda was called before timeout,
     /// false otherwise. (Note lambda may still run later asynchronously).
-    bool VoidFuncOnObjectNoThrow(const QObject *obj, const std::function<void()> & lambda, int timeout_ms=-1);
+    bool VoidFuncOnObjectNoThrow(const QObject *obj, const VoidFunc & lambda, int timeout_ms=-1);
+
+    /// Convenience for just setting up a QTimer::singleShot on an object, calling a lambda as the timeout.
+    /// By default if when_ms is 0, the object will have the lambda invoked in its thread as soon as it
+    /// returns to the event loop.  Always returns immediately.
+    inline void AsyncOnObject(const QObject *obj, const VoidFunc & lambda, unsigned when_ms=0) {
+        QTimer::singleShot(int(when_ms), obj, lambda);
+    }
 
     /// This is an alternative to creating signal/slot pairs
     /// for calling a method on an object that runs in another thread.

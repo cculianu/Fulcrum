@@ -2,6 +2,7 @@
 #define CONTROLLER_H
 
 #include "BitcoinD.h"
+#include "BlockProc.h"
 #include "Mixins.h"
 #include "Options.h"
 #include "Storage.h"
@@ -27,6 +28,10 @@ public:
     void cleanup() override;
 
     int polltime_ms = 5 * 1000; ///< the default amount of time for polling bitcoind for new headers
+
+    /// thread-safe -- call this from the slave task thread to submit a block
+    /// Note: we had to make this a public member but it's not really intended to be used from code outside this subsystem.
+    void putBlock(CtlTask *sender, PreProcessedBlockPtr);
 
 signals:
     /// Emitted whenever bitcoind is detected to be up-to-date, and everything is synched up.

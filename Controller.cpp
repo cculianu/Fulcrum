@@ -269,27 +269,26 @@ void DownloadBlocksTask::process()
 
 void DownloadBlocksTask::do_get(unsigned int bnum)
 {
-    submitRequest("getblockhash", {bnum}, [this, bnum](const RPC::Message & resp){ // testing
+    submitRequest("getblockhash", {bnum}, [this, bnum](const RPC::Message & resp){
         QVariant var = resp.result();
         const auto hash = Util::ParseHexFast(var.toByteArray());
         if (hash.length() == bitcoin::uint256::width()) {
-            submitRequest("getblock"/*"getblockheader"*/, {var, false}, [this, bnum, hash](const RPC::Message & resp){ // testing
+            submitRequest("getblock", {var, false}, [this, bnum, hash](const RPC::Message & resp){
                 QVariant var = resp.result();
                 const auto rawblock = Util::ParseHexFast(var.toByteArray());
                 const auto header = rawblock.left(HEADER_SIZE); // we need a deep copy of this anyway so might as well take it now.
-                //const auto header = Util::ParseHexFast(var.toByteArray());
                 QByteArray chkHash;
                 if (bool sizeOk = header.length() == HEADER_SIZE; sizeOk && (chkHash = BTC::HashRev(header)) == hash) {
-                    // testing block deser speed, etc
                     auto ppb = PreProcessedBlock::makeShared(bnum, BTC::Deserialize<bitcoin::CBlock>(rawblock)); // this is here to test performance
                     // TESTING --
                     //if (bnum == 60000) Debug() << ppb->toDebugString();
 
                     if (Trace::isEnabled()) Trace() << "block " << bnum << " size: " << rawblock.size() << " nTx: " << ppb->txInfos.size();
+                    // update some stats for /stats endpoint
                     nTx += ppb->txInfos.size();
                     nOuts += ppb->outputs.size();
                     nIns += ppb->inputs.size();
-                    // /
+
                     const size_t index = height2Index(bnum);
                     ++goodCt;
                     q_ct = qMax(q_ct-1, 0);
@@ -302,6 +301,7 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
                     if (headers.size() < index+1)
                         headers.resize(index+1);
                     headers[index] = header;
+                    ctl->putBlock(this, ppb); // send the block off to the Controller thread for further processing and for save to db
                     if (goodCt >= expectedCt) {
                         // flag state to maybeDone to do checks when process() called again
                         maybeDone = true;
@@ -343,6 +343,9 @@ struct Controller::StateMachine
     int ht = -1;
     std::map<unsigned, std::vector<QByteArray> > blockHeaders; // mapping of from_height -> headers
     std::map<unsigned, unsigned> failures; // mapping of from -> failCt
+
+    std::map<unsigned, PreProcessedBlockPtr> ppBlocks; // mapping of height -> PreProcessedBlock
+    unsigned ppBlkHtNext = 0;
 
     // todo: tune this
     const size_t DL_CONCURRENCY = qMax(Util::getNPhysicalProcessors()-1, 1U);//size_t(qMin(qMax(int(Util::getNPhysicalProcessors())-BitcoinDMgr::N_CLIENTS, BitcoinDMgr::N_CLIENTS), 32));
@@ -478,6 +481,7 @@ void Controller::process(bool beSilentIfUpToDate)
         const size_t base = storage->headers().first.size();
         const size_t num = size_t(sm->ht+1) - base;
         const size_t nTasks = qMin(num, sm->DL_CONCURRENCY);
+        sm->ppBlkHtNext = unsigned(base);
         for (size_t i = 0; i < nTasks; ++i) {
             add_DLHeaderTask(unsigned(base + i), unsigned(sm->ht), nTasks);
         }
@@ -551,6 +555,27 @@ void Controller::process(bool beSilentIfUpToDate)
         callOnTimerSoonNoRepeat(polltimeout, pollTimerName, [this]{if (!sm) process(true);});
 }
 
+void Controller::putBlock(CtlTask *task, PreProcessedBlockPtr p)
+{
+    Util::AsyncOnObject(this, [this, task, p]() mutable{
+        if (!sm || isTaskDeleted(task)) {
+            Debug() << "Ignoring block " << p->height << " for now-defunct task";
+            return;
+        }
+        sm->ppBlocks[p->height] = p;
+        p.reset(); // release ASAP
+        // TESTING...
+        unsigned ct = 0;
+        for (auto it = sm->ppBlocks.begin(); it != sm->ppBlocks.end() && it->first == sm->ppBlkHtNext; it = sm->ppBlocks.begin()) {
+            ++ct;
+            ++sm->ppBlkHtNext;
+            sm->ppBlocks.erase(it); // remove from q
+        }
+        if (auto backlog = sm->ppBlocks.size(); backlog < 100 || ct > 1) {
+            Debug() << "ppblk - processed: " << ct << ", backlog: " << backlog;
+        }
+    });
+}
 
 // -- CtlTask
 CtlTask::CtlTask(Controller *ctl, const QString &name)
