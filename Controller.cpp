@@ -7,6 +7,7 @@
 #include <iterator>
 #include <list>
 #include <map>
+#include <unordered_map>
 
 Controller::Controller(const std::shared_ptr<Options> &o)
     : Mgr(nullptr), options(o)
@@ -330,15 +331,18 @@ struct Controller::StateMachine
     State state = Begin;
     int ht = -1;
 
-    std::map<unsigned, PreProcessedBlockPtr> ppBlocks; // mapping of height -> PreProcessedBlock
+    std::unordered_map<unsigned, PreProcessedBlockPtr> ppBlocks; // mapping of height -> PreProcessedBlock (we use an unordered_map because it's faster for frequent updates)
     unsigned ppBlkHtNext = 0,  ///< the next unprocessed block height we need to process in series
              startheight = 0, ///< the height we started at
-             endHeight = 0; ///< the final block height we expect to receive to pronounce the synch done
+             endHeight = 0; ///< the final (inclusive) block height we expect to receive to pronounce the synch done
 
     // todo: tune this
     const size_t DL_CONCURRENCY = qMax(Util::getNPhysicalProcessors()-1, 1U);//size_t(qMin(qMax(int(Util::getNPhysicalProcessors())-BitcoinDMgr::N_CLIENTS, BitcoinDMgr::N_CLIENTS), 32));
 
     size_t nTx = 0, nIns = 0, nOuts = 0;
+
+    /// used to suppress progress log display if we get out-of-order heights
+    size_t lastProgHt = 0;
 
     const char * stateStr() const {
         static constexpr const char *stateStrings[] = { "Begin", "GetBlocks", "DownloadingBlocks", "FinishedDL", "End", "Failure", "IBD",
@@ -380,6 +384,11 @@ void Controller::add_DLHeaderTask(unsigned int from, unsigned int to, size_t nTa
     connect(t, &CtlTask::progress, this, [t, this](double prog){
         if (UNLIKELY(!sm || isTaskDeleted(t))) return; // task was stopped from underneath us, this is stale.. abort.
         const size_t ht = t->index2Height(unsigned(t->expectedCt*prog));
+        if (ht < sm->lastProgHt)
+            // suppress "backwards" progress displays. this can happen because we have multiple tasks sending us
+            // progress info and block heights arrive here out of order
+            return;
+        sm->lastProgHt = ht;
         Log() << "Downloaded height: " << ht << ", "
               << QString::number((ht*1e2) / qMax(t->to, 1U), 'f', 1) << "%";
     });
@@ -460,7 +469,7 @@ void Controller::process(bool beSilentIfUpToDate)
         FatalAssert(num > 0) << "Cannot download 0 blocks! FIXME!"; // more paranoia
         const size_t nTasks = qMin(num, sm->DL_CONCURRENCY);
         sm->ppBlkHtNext = sm->startheight = unsigned(base);
-        sm->endHeight = unsigned(base + num) - 1;
+        sm->endHeight = unsigned(sm->ht);
         for (size_t i = 0; i < nTasks; ++i) {
             add_DLHeaderTask(unsigned(base + i), unsigned(sm->ht), nTasks);
         }
@@ -468,7 +477,7 @@ void Controller::process(bool beSilentIfUpToDate)
     } else if (sm->state == State::DownloadingBlocks) {
         process_DownloadingBlocks();
     } else if (sm->state == State::FinishedDL) {
-        size_t N = sm->endHeight - sm->startheight;
+        size_t N = sm->endHeight - sm->startheight + 1;
         Log() << "Processed " << N << " new " << Util::Pluralize("block", N) << " with " << sm->nTx << " " << Util::Pluralize("tx", sm->nTx)
               << " (" << sm->nIns << " " << Util::Pluralize("input", sm->nIns) << " & " << sm->nOuts << " " << Util::Pluralize("output", sm->nOuts) << ")"
               << ", verified ok.";
@@ -509,15 +518,14 @@ void Controller::putBlock(CtlTask *task, PreProcessedBlockPtr p)
         }
         sm->ppBlocks[p->height] = p;
         //AGAIN(); // queue up, return right away -- turns out this spams events. better to call the process function directly here.
-        if (sm->state == StateMachine::State::DownloadingBlocks)
-            process_DownloadingBlocks();
+        process_DownloadingBlocks();
     });
 }
 
 void Controller::process_DownloadingBlocks()
 {
     unsigned ct = 0;
-    for (auto it = sm->ppBlocks.begin(); it != sm->ppBlocks.end() && it->first == sm->ppBlkHtNext; it = sm->ppBlocks.begin()) {
+    for (auto it = sm->ppBlocks.find(sm->ppBlkHtNext); it != sm->ppBlocks.end(); it = sm->ppBlocks.find(sm->ppBlkHtNext)) {
         auto ppb = it->second;
         FatalAssert(ppb->height == sm->ppBlkHtNext) << "INTERNAL ERROR: Retrieved block has the wrong height! FIXME!"; // paranoia
         ++ct;
@@ -529,17 +537,19 @@ void Controller::process_DownloadingBlocks()
         if ( ! process_VerifyAndAddBlock(ppb) )
             // error encountered.. abort!
             return;
+
+        if (sm->ppBlkHtNext > sm->endHeight) {
+            sm->state = StateMachine::State::FinishedDL;
+            AGAIN();
+            return;
+        }
+
     }
 
     // testing debug
     //if (auto backlog = sm->ppBlocks.size(); backlog < 100 || ct > 100) {
     //    Debug() << "ppblk - processed: " << ct << ", backlog: " << backlog;
     //}
-
-    if (sm->ppBlkHtNext >= sm->endHeight) {
-        sm->state = StateMachine::State::FinishedDL;
-        AGAIN();
-    }
 }
 
 bool Controller::process_VerifyAndAddBlock(PreProcessedBlockPtr ppb)
