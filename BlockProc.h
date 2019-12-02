@@ -86,6 +86,7 @@ struct PreProcessedBlock
     // misc helpers --
 
     /// returns the input# as the input appeared in its tx, given a particular `inputs` array index
+    /// We do it this way rather than store this information in the InputPt struct to save on memory
     inline std::optional<unsigned> numForInputIdx(unsigned inputIdx) const {
         std::optional<unsigned> ret;
         if (inputIdx < inputs.size()) {
@@ -110,6 +111,13 @@ struct PreProcessedBlock
                 return txInfos[txIdx].hash;
         }
         return staticnull;
+    }
+
+    /// Given an index into the `outputs` array, return a bool as to whether the output is a coinbase tx
+    inline bool isCoinbase(unsigned outputIdx) {
+        // since the outputs array is in blockchain order, just check the output is in the first tx. if it is, we
+        // know it's coinbase.
+        return outputIdx < outputs.size() && !txInfos.empty() && outputIdx < txInfos.front().nOutputs;
     }
 
     /// debug string

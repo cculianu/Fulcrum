@@ -281,17 +281,14 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
                 QByteArray chkHash;
                 if (bool sizeOk = header.length() == HEADER_SIZE; sizeOk && (chkHash = BTC::HashRev(header)) == hash) {
                     // testing block deser speed, etc
-                    bitcoin::CBlock block = BTC::Deserialize<bitcoin::CBlock>(rawblock);
-                    PreProcessedBlock ppb(bnum, block); // this is here to test performance
-                    // TESTING -- TODO: Remove this -- this is to keep the optimizer from removing the thing for now
-                    if (bnum == /*60000*/999999999) Debug() << ppb.toDebugString();
+                    auto ppb = std::make_shared<PreProcessedBlock>(bnum, BTC::Deserialize<bitcoin::CBlock>(rawblock)); // this is here to test performance
+                    // TESTING --
+                    //if (bnum == 60000) Debug() << ppb->toDebugString();
 
-                    if (Trace::isEnabled()) Trace() << "block " << bnum << " size: " << rawblock.size() << " nTx: " << block.vtx.size();
-                    nTx += block.vtx.size();
-                    for (const auto & tx : block.vtx) {
-                        nOuts += tx->vout.size();
-                        nIns += tx->vin.size();
-                    }
+                    if (Trace::isEnabled()) Trace() << "block " << bnum << " size: " << rawblock.size() << " nTx: " << ppb->txInfos.size();
+                    nTx += ppb->txInfos.size();
+                    nOuts += ppb->outputs.size();
+                    nIns += ppb->inputs.size();
                     // /
                     const size_t index = height2Index(bnum);
                     ++goodCt;
