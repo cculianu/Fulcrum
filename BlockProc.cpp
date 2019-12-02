@@ -15,11 +15,13 @@
 /*static*/ const QByteArray PreProcessedBlock::staticnull;
 
 /// fill this struct's data with all the txdata, etc from a bitcoin CBlock. Alternative to using the second c'tor.
-void PreProcessedBlock::fill(unsigned blockHeight, const bitcoin::CBlock &b) {
+void PreProcessedBlock::fill(unsigned blockHeight, size_t blockSize, const bitcoin::CBlock &b) {
     if (!header.IsNull() || !txInfos.empty())
         clear();
     height = blockHeight;
+    sizeBytes = blockSize;
     header = b.GetBlockHeader();
+    estimatedThisSizeBytes = sizeof(*this) + BTC::GetBlockHeaderSize();
     txInfos.reserve(b.vtx.size());
     using HashHasher = BTC::QByteArrayHashHasher;
     std::unordered_map<QByteArray, unsigned, HashHasher> txHashToIndex;
@@ -47,6 +49,7 @@ void PreProcessedBlock::fill(unsigned blockHeight, const bitcoin::CBlock &b) {
             outputs.emplace_back(
                 OutPt{ unsigned(txIdx), outN, out.nValue }
             );
+            estimatedThisSizeBytes += sizeof(OutPt);
             const size_t outputIdx = outputs.size()-1;
             if (const auto cscript = out.scriptPubKey;
                     !BTC::IsOpReturn(cscript))  ///< skip OP_RETURN
@@ -75,8 +78,10 @@ void PreProcessedBlock::fill(unsigned blockHeight, const bitcoin::CBlock &b) {
                     unsigned(in.prevout.GetN()), // .prevoutN
                     {}, // .parentTxOutIdx (start out undefined)
             });
+            estimatedThisSizeBytes += sizeof(InputPt);
             ++inN;
         }
+        estimatedThisSizeBytes += sizeof(info) + size_t(info.hash.size());
         txInfos.emplace_back(std::move(info));
         ++txIdx;
     }
@@ -125,6 +130,7 @@ void PreProcessedBlock::fill(unsigned blockHeight, const bitcoin::CBlock &b) {
 
         ag.ins.shrink_to_fit();
         ag.outs.shrink_to_fit();
+        estimatedThisSizeBytes += sizeof(ag) + size_t(ag.hashX.size()) + ag.ins.size() * sizeof(decltype(ag.ins)::value_type) + ag.outs.size() * sizeof(decltype(ag.outs)::value_type);
         hashXAggregated.emplace_back(std::move(ag));
     }
 
@@ -141,7 +147,7 @@ QString PreProcessedBlock::toDebugString() const
     {
         QTextStream ts(&ret, QIODevice::ReadOnly|QIODevice::Truncate|QIODevice::Text);
         ts << "<PreProcessedBlock --"
-           << " height: " << height << " header_nTime: " << header.nTime << " hash: " << header.GetHash().ToString().c_str()
+           << " height: " << height << " " << " size: " << sizeBytes << " header_nTime: " << header.nTime << " hash: " << header.GetHash().ToString().c_str()
            << " nTx: " << txInfos.size() << " nIns: " << inputs.size() << " nOuts: " << outputs.size() << " nScriptHash: " << hashXAggregated.size();
         int i = 0;
         for (const auto & ag : hashXAggregated) {
@@ -174,7 +180,7 @@ QString PreProcessedBlock::toDebugString() const
 
 /// convenience factory static method: given a block, return a shard_ptr instance of this struct
 PreProcessedBlockPtr
-/*static*/ PreProcessedBlock::makeShared(unsigned height, const bitcoin::CBlock &block)
+/*static*/ PreProcessedBlock::makeShared(unsigned height, size_t size, const bitcoin::CBlock &block)
 {
-    return std::make_shared<PreProcessedBlock>(height, block);
+    return std::make_shared<PreProcessedBlock>(height, size, block);
 }

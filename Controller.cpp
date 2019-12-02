@@ -2,6 +2,7 @@
 #include "BTC.h"
 #include "Controller.h"
 
+#include <algorithm>
 #include <cassert>
 #include <iterator>
 #include <list>
@@ -208,7 +209,6 @@ struct DownloadBlocksTask : public CtlTask
     unsigned next = 0;
     std::atomic_uint goodCt = 0;
     bool maybeDone = false;
-    std::vector<QByteArray> headers;
 
     int q_ct = 0;
     static constexpr int max_q = /*16;*/BitcoinDMgr::N_CLIENTS+1; // todo: tune this
@@ -238,25 +238,17 @@ DownloadBlocksTask::DownloadBlocksTask(unsigned from, unsigned to, unsigned stri
     FatalAssert( (to >= from) && (ctl_) && (stride > 0)) << "Invalid params to DonloadBlocksTask c'tor, FIXME!";
 
     next = from;
-    headers.reserve(expectedCt);
 }
 
 void DownloadBlocksTask::process()
 {
     if (next > to) {
         if (maybeDone) {
-            int bad = 0;
-            for (size_t index = 0, N = expectedCt; index < N; ++index) {
-                if (headers[index].length() != HEADER_SIZE) {
-                    ++bad;
-                    errorCode = int(index2Height(index)); // height
-                    break;
-                }
-            }
-            if (!bad) {
+            if (goodCt >= expectedCt)
                 emit success();
-            } else {
-                errorMessage = QString("header length incorrect for height %1").arg(errorCode);
+            else {
+                errorCode = int(expectedCt - goodCt);
+                errorMessage = QString("missing %1 headers").arg(errorCode);
                 emit errored();
             }
         }
@@ -279,7 +271,7 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
                 const auto header = rawblock.left(HEADER_SIZE); // we need a deep copy of this anyway so might as well take it now.
                 QByteArray chkHash;
                 if (bool sizeOk = header.length() == HEADER_SIZE; sizeOk && (chkHash = BTC::HashRev(header)) == hash) {
-                    auto ppb = PreProcessedBlock::makeShared(bnum, BTC::Deserialize<bitcoin::CBlock>(rawblock)); // this is here to test performance
+                    auto ppb = PreProcessedBlock::makeShared(bnum, size_t(rawblock.size()), BTC::Deserialize<bitcoin::CBlock>(rawblock)); // this is here to test performance
                     // TESTING --
                     //if (bnum == 60000) Debug() << ppb->toDebugString();
 
@@ -297,10 +289,6 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
                         emit progress(lastProgress);
                     }
                     if (Trace::isEnabled()) Trace() << resp.method << ": header for height: " << bnum << " len: " << header.length();
-                    // save header and hash when both are correct
-                    if (headers.size() < index+1)
-                        headers.resize(index+1);
-                    headers[index] = header;
                     ctl->putBlock(this, ppb); // send the block off to the Controller thread for further processing and for save to db
                     if (goodCt >= expectedCt) {
                         // flag state to maybeDone to do checks when process() called again
@@ -337,14 +325,15 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
 struct Controller::StateMachine
 {
     enum State {
-        Begin=0, GetBlocks, FinishedDL, End, Failure, IBD
+        Begin=0, GetBlocks, DownloadingBlocks, FinishedDL, End, Failure, IBD
     };
     State state = Begin;
     int ht = -1;
-    std::map<unsigned, std::vector<QByteArray> > blockHeaders; // mapping of from_height -> headers
 
     std::map<unsigned, PreProcessedBlockPtr> ppBlocks; // mapping of height -> PreProcessedBlock
-    unsigned ppBlkHtNext = 0;
+    unsigned ppBlkHtNext = 0,  ///< the next unprocessed block height we need to process in series
+             startheight = 0, ///< the height we started at
+             endHeight = 0; ///< the final block height we expect to receive to pronounce the synch done
 
     // todo: tune this
     const size_t DL_CONCURRENCY = qMax(Util::getNPhysicalProcessors()-1, 1U);//size_t(qMin(qMax(int(Util::getNPhysicalProcessors())-BitcoinDMgr::N_CLIENTS, BitcoinDMgr::N_CLIENTS), 32));
@@ -352,7 +341,7 @@ struct Controller::StateMachine
     size_t nTx = 0, nIns = 0, nOuts = 0;
 
     const char * stateStr() const {
-        static constexpr const char *stateStrings[] = { "Begin", "GetBlocks", "FinishedDL", "End", "Failure", "IBD",
+        static constexpr const char *stateStrings[] = { "Begin", "GetBlocks", "DownloadingBlocks", "FinishedDL", "End", "Failure", "IBD",
                                                         "Unknown" /* this should always be last */ };
         auto idx = qMin(size_t(state), std::size(stateStrings)-1);
         return stateStrings[idx];
@@ -373,19 +362,14 @@ bool Controller::isTaskDeleted(CtlTask *t) const { return tasks.count(t) == 0; }
 void Controller::add_DLHeaderTask(unsigned int from, unsigned int to, size_t nTasks)
 {
     DownloadBlocksTask *t = newTask<DownloadBlocksTask>(false, unsigned(from), unsigned(to), unsigned(nTasks), this);
-    connect(t, &CtlTask::success, this, [t, this, nTasks]{
+    connect(t, &CtlTask::success, this, [t, this]{
         if (UNLIKELY(!sm || isTaskDeleted(t))) return; // task was stopped from underneath us, this is stale.. abort.
         sm->nTx += t->nTx;
         sm->nIns += t->nIns;
         sm->nOuts += t->nOuts;
-        Debug() << "Got all headers from: " << t->objectName() << " headerCt: "  << t->headers.size()
+        Debug() << "Got all headers from: " << t->objectName() << " headerCt: "  << t->goodCt
                 << " nTx,nInp,nOutp: " << t->nTx << "," << t->nIns << "," << t->nOuts << " totals: "
                 << sm->nTx << "," << sm->nIns << "," << sm->nOuts;
-        sm->blockHeaders[t->from].swap(t->headers); // constant time copy
-        if (sm->blockHeaders.size() == nTasks) {
-            sm->state = StateMachine::State::FinishedDL;
-            AGAIN();
-        }
     });
     connect(t, &CtlTask::errored, this, [t, this]{
         if (UNLIKELY(!sm || isTaskDeleted(t))) return; // task was stopped from underneath us, this is stale.. abort.
@@ -427,7 +411,7 @@ void Controller::process(bool beSilentIfUpToDate)
     bool enablePollTimer = false;
     auto polltimeout = polltime_ms;
     stopTimer(pollTimerName);
-    Debug() << "Process called...";
+    //Debug() << "Process called...";
     if (!sm) sm = std::make_unique<StateMachine>();
     using State = StateMachine::State;
     if (sm->state == State::Begin) {
@@ -469,59 +453,24 @@ void Controller::process(bool beSilentIfUpToDate)
             AGAIN();
         });
     } else if (sm->state == State::GetBlocks) {
+        FatalAssert(sm->ht >= 0) << "Inconsistent state -- sm->ht cannot be negative in State::GetBlocks! FIXME!"; // paranoia
         const size_t base = storage->headers().first.size();
         const size_t num = size_t(sm->ht+1) - base;
+        FatalAssert(num > 0) << "Cannot download 0 blocks! FIXME!"; // more paranoia
         const size_t nTasks = qMin(num, sm->DL_CONCURRENCY);
-        sm->ppBlkHtNext = unsigned(base);
+        sm->ppBlkHtNext = sm->startheight = unsigned(base);
+        sm->endHeight = unsigned(base + num) - 1;
         for (size_t i = 0; i < nTasks; ++i) {
             add_DLHeaderTask(unsigned(base + i), unsigned(sm->ht), nTasks);
         }
+        sm->state = State::DownloadingBlocks; // advance state now. we will be called back by download task in putBlock()
+    } else if (sm->state == State::DownloadingBlocks) {
+        process_DownloadingBlocks();
     } else if (sm->state == State::FinishedDL) {
-        size_t N = 0;
-        // figure out how many headers in total
-        for (const auto & pair : sm->blockHeaders)
-            N += pair.second.size();
+        size_t N = sm->endHeight - sm->startheight;
         Log() << "Processed " << N << " new " << Util::Pluralize("block", N) << " with " << sm->nTx << " " << Util::Pluralize("tx", sm->nTx)
               << " (" << sm->nIns << " " << Util::Pluralize("input", sm->nIns) << " & " << sm->nOuts << " " << Util::Pluralize("output", sm->nOuts) << ")"
-              << ", verifying ...";
-        std::vector<QByteArray> newHeaders;  // de-strided headers received
-        newHeaders.reserve(N);
-        {
-            // Verify header chain makes sense (by checking hashes, using the shared header verifier)
-            // We need to do this in a de-stride-ified fashion
-            QString verifErr;
-            auto [verif, lock] = storage->headerVerifier(); // lock needs to be held while we use this shared verifier
-            const auto verifUndo = verif; // keep a copy for undo purposes in case this fails
-
-            for (size_t ctr = 0; ctr < N; ++ctr) {
-                for (auto & [num, hdrs] : sm->blockHeaders) {
-                    if (ctr >= hdrs.size())
-                        continue;
-                    const auto & hdr = hdrs[ctr];
-                    if ( !verif(hdr, &verifErr) ) {
-                        // XXX possible reorg point. FIXME TODO
-                        // reorg here? TODO: deal with this better.
-                        Error() << verifErr;
-                        sm->state = State::Failure;
-                        verif = verifUndo; // undo header verifier state
-                        AGAIN();
-                        return;
-                    }
-                    newHeaders.emplace_back(std::move(hdr)); // move c'tor.. should be very fast
-                }
-            }
-            // de-alloc the sm->blockHeaders now that it's fully de-strided
-            sm->blockHeaders.clear();
-        }
-        {
-            // updated shared headers from storage while holding lock...
-            auto [headers, lock] = storage->mutableHeaders(); // write lock held until scope end
-            if (const auto size = headers.size(); size + newHeaders.size() < headers.capacity())
-                headers.reserve(size + newHeaders.size()); // reserve space for new headers in 1 go to save on copying
-            headers.insert(headers.end(), newHeaders.begin(), newHeaders.end());
-            headers.shrink_to_fit(); // make sure no memory is wasted since we don't push_back but rather reserve ahead of time each time.
-        }
-        Log() << "Verified & copied " << newHeaders.size() << " new " << Util::Pluralize("header", newHeaders.size()) << " ok";
+              << ", verified ok.";
         sm.reset(); // go back to "Begin" state to check if any new headers arrived in the meantime
         AGAIN();
         storage->save(Storage::SaveItem::Hdrs); // enqueue a header commit to db ...
@@ -548,24 +497,87 @@ void Controller::process(bool beSilentIfUpToDate)
 
 void Controller::putBlock(CtlTask *task, PreProcessedBlockPtr p)
 {
-    Util::AsyncOnObject(this, [this, task, p]() mutable{
-        if (!sm || isTaskDeleted(task)) {
+    // returns right away
+    Util::AsyncOnObject(this, [this, task, p] {
+        if (!sm || isTaskDeleted(task) || sm->state == StateMachine::State::Failure) {
             Debug() << "Ignoring block " << p->height << " for now-defunct task";
+            return;
+        } else if (sm->state != StateMachine::State::DownloadingBlocks) {
+            Warning() << "Ignoring putBlocks request for block " << p->height << " -- state is not \"DownloadingBlocks\" but rather is: \"" << sm->stateStr() << "\"";
             return;
         }
         sm->ppBlocks[p->height] = p;
-        p.reset(); // release ASAP
-        // TESTING...
-        unsigned ct = 0;
-        for (auto it = sm->ppBlocks.begin(); it != sm->ppBlocks.end() && it->first == sm->ppBlkHtNext; it = sm->ppBlocks.begin()) {
-            ++ct;
-            ++sm->ppBlkHtNext;
-            sm->ppBlocks.erase(it); // remove from q
-        }
-        if (auto backlog = sm->ppBlocks.size(); backlog < 100 || ct > 1) {
-            Debug() << "ppblk - processed: " << ct << ", backlog: " << backlog;
-        }
+        AGAIN(); // queue up, return right away
     });
+}
+
+void Controller::process_DownloadingBlocks()
+{
+    unsigned ct = 0;
+    for (auto it = sm->ppBlocks.begin(); it != sm->ppBlocks.end() && it->first == sm->ppBlkHtNext; it = sm->ppBlocks.begin()) {
+        auto ppb = it->second;
+        FatalAssert(ppb->height == sm->ppBlkHtNext) << "INTERNAL ERROR: Retrieved block has the wrong height! FIXME!"; // paranoia
+        ++ct;
+        ++sm->ppBlkHtNext;
+
+        sm->ppBlocks.erase(it); // remove immediately from q
+
+        // process & add it if it's good
+        if ( ! process_VerifyAndAddBlock(ppb) )
+            // error encountered.. abort!
+            return;
+    }
+
+    // testing debug
+    //if (auto backlog = sm->ppBlocks.size(); backlog < 100 || ct > 100) {
+    //    Debug() << "ppblk - processed: " << ct << ", backlog: " << backlog;
+    //}
+
+    if (sm->ppBlkHtNext >= sm->endHeight) {
+        sm->state = StateMachine::State::FinishedDL;
+        AGAIN();
+    }
+}
+
+bool Controller::process_VerifyAndAddBlock(PreProcessedBlockPtr ppb)
+{
+    assert(sm);
+    // Verify header chain makes sense (by checking hashes, using the shared header verifier)
+    QByteArray rawHeader;
+    {
+        auto [verif, lock] = storage->headerVerifier(); // lock needs to be held while we use this shared verifier
+        const auto verifUndo = verif; // keep a copy for undo purposes in case this fails
+
+        if (QString verifErr; !verif(ppb->header, &verifErr) ) {
+            // XXX possible reorg point. FIXME TODO
+            // reorg here? TODO: deal with this better.
+            Error() << verifErr;
+            sm->state = StateMachine::State::Failure;
+            verif = verifUndo; // undo header verifier state
+            AGAIN();
+            return false;
+        }
+        // save raw header back to our buffer
+        rawHeader = verif.lastHeaderProcessed().second;
+    } // end lock context
+
+    FatalAssert(rawHeader.size() == int(BTC::GetBlockHeaderSize())) << "INTERNAL ERROR: raw header has the wrong size!";
+
+    const auto nLeft = qMax(sm->endHeight - (sm->ppBlkHtNext-1), 0U);
+    {
+        // updated shared headers from storage while holding lock...
+        auto [headers, lock] = storage->mutableHeaders(); // write lock held until scope end
+        if (const auto size = headers.size(); size + nLeft < headers.capacity())
+            headers.reserve(size + nLeft); // reserve space for new headers in 1 go to save on copying
+        headers.insert(headers.end(), rawHeader);
+
+    } // end lock context
+
+    // TESTING save every 10000 headers to db -- TODO: tune this or have this be configurable?
+    if (!(nLeft % 10000) && nLeft)
+        storage->save(Storage::SaveItem::Hdrs);
+
+    return true;
 }
 
 // -- CtlTask
@@ -647,6 +659,19 @@ auto Controller::stats() const -> Stats
                 { "nIns", qlonglong(nin) },
                 { "nOut", qlonglong(nout) }
             });
+        }
+        const size_t backlogBlocks = sm->ppBlocks.size();
+        m2["BackLog_Blocks"] = qulonglong(backlogBlocks);
+        if (backlogBlocks) {
+            size_t backlogBytes = 0, backlogTxs = 0, backlogInMemoryBytes = 0;
+            for (const auto & [height, ppb] : sm->ppBlocks) {
+                backlogBytes += ppb->sizeBytes;
+                backlogTxs += ppb->txInfos.size();
+                backlogInMemoryBytes += ppb->estimatedThisSizeBytes;
+            }
+            m2["BackLog_RawBlocksDataSize"] = QString("%1 MiB").arg(QString::number(double(backlogBytes) / 1e6, 'f', 3));
+            m2["BackLog_InMemoryDataSize"] = QString("%1 MiB").arg(QString::number(double(backlogInMemoryBytes) / 1e6, 'f', 3));
+            m2["BackLog_Txs"] = qulonglong(backlogTxs);
         }
         m["StateMachine"] = m2;
     } else

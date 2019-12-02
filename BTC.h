@@ -370,12 +370,15 @@ namespace BTC
     class HeaderVerifier {
         QByteArray prev; // 80 byte header data or empty
         long prevHeight = -1;
+
+        bool checkInner(long height, const bitcoin::CBlockHeader &, QString *err);
     public:
         HeaderVerifier() = default;
         HeaderVerifier(unsigned fromHeight) : prevHeight(long(fromHeight)-1) {}
 
         /// keep calling this from a loop. Returns false if current header's hashPrevBlock  != the last header's hash.
         bool operator()(const QByteArray & header, QString *err = nullptr);
+        bool operator()(const bitcoin::CBlockHeader & header, QString *err = nullptr);
         /// returns the height, 80 byte header of the last header seen
         std::pair<unsigned, QByteArray> lastHeaderProcessed() const;
 

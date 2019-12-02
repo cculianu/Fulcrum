@@ -23,6 +23,8 @@ using PreProcessedBlockPtr = std::shared_ptr<PreProcessedBlock>;  ///< For clari
 struct PreProcessedBlock
 {
     unsigned height = 0; ///< the height (block nunber) where this block appears
+    size_t sizeBytes = 0; ///< the size of the original serialized block in bytes (not the size of this data structure which is significantly smaller)
+    size_t estimatedThisSizeBytes = 0; ///< the estimated size of this data structure -- may be off by a bit but is useful for rough estimation of memory costs of block processing
     /// deserialized header as came in from bitcoind
     bitcoin::CBlockHeader header;
 
@@ -81,14 +83,14 @@ struct PreProcessedBlock
 
     // c'tors, etc... note this class is trivially copyable, move constructible, etc etc
     PreProcessedBlock() = default;
-    PreProcessedBlock(unsigned blockHeight, const bitcoin::CBlock &b) { fill(blockHeight, b); }
+    PreProcessedBlock(unsigned blockHeight, size_t sizeBytes, const bitcoin::CBlock &b) { fill(blockHeight, sizeBytes, b); }
     /// reset this to empty
     inline void clear() { *this = PreProcessedBlock(); }
     /// fill this block with data from bitcoin's CBlock
-    void fill(unsigned blockHeight, const bitcoin::CBlock &b);
+    void fill(unsigned blockHeight, size_t sizeBytes, const bitcoin::CBlock &b);
 
     /// convenience factory static method: given a block, return a shard_ptr instance of this struct
-    PreProcessedBlockPtr static makeShared(unsigned height, const bitcoin::CBlock &block);
+    PreProcessedBlockPtr static makeShared(unsigned height, size_t sizeBytes, const bitcoin::CBlock &block);
 
     // misc helpers --
 

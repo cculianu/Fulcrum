@@ -842,20 +842,40 @@ namespace BTC
             if (err) *err = QString("Header verification failed for header at height %1: wrong size").arg(height);
             return false;
         }
-        bitcoin::CBlockHeader curHdr;
-        bitcoin::GenericVectorReader<QByteArray> vr(bitcoin::SER_NETWORK, bitcoin::PROTOCOL_VERSION, header, 0);
-        curHdr.Unserialize(vr);
+        bitcoin::CBlockHeader curHdr = Deserialize<bitcoin::CBlockHeader>(header);
+        if (!checkInner(height, curHdr, err))
+            return false;
+        prevHeight = height;
+        prev = header;
+        if (err) err->clear();
+        return true;
+    }
+    bool HeaderVerifier::operator()(const bitcoin::CBlockHeader &curHdr, QString *err)
+    {
+        const long height = prevHeight+1;
+        QByteArray header = Serialize(curHdr);
+        if (header.size() != int(BTC::GetBlockHeaderSize())) {
+            if (err) *err = QString("Header verification failed for header at height %1: wrong size").arg(height);
+            return false;
+        }
+        if (!checkInner(height, curHdr, err))
+            return false;
+        prevHeight = height;
+        prev = header;
+        if (err) err->clear();
+        return true;
+    }
+
+    bool HeaderVerifier::checkInner(long height, const bitcoin::CBlockHeader &curHdr, QString *err)
+    {
         if (curHdr.IsNull()) {
             if (err) *err = QString("Header verification failed for header at height %1: failed to deserialize").arg(height);
             return false;
         }
-        if (!prev.isEmpty() && QByteArray::fromRawData(reinterpret_cast<char *>(curHdr.hashPrevBlock.begin()), int(curHdr.hashPrevBlock.width())) != Hash(prev)) {
+        if (!prev.isEmpty() && Hash(prev) != QByteArray::fromRawData(reinterpret_cast<const char *>(curHdr.hashPrevBlock.begin()), int(curHdr.hashPrevBlock.width())) ) {
             if (err) *err = QString("Header %1 'hashPrevBlock' does not match the contents of the previous block").arg(height);
             return false;
         }
-        prevHeight = height;
-        prev = header;
-        if (err) err->clear();
         return true;
     }
     std::pair<unsigned, QByteArray> HeaderVerifier::lastHeaderProcessed() const
