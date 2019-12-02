@@ -342,15 +342,12 @@ struct Controller::StateMachine
     State state = Begin;
     int ht = -1;
     std::map<unsigned, std::vector<QByteArray> > blockHeaders; // mapping of from_height -> headers
-    std::map<unsigned, unsigned> failures; // mapping of from -> failCt
 
     std::map<unsigned, PreProcessedBlockPtr> ppBlocks; // mapping of height -> PreProcessedBlock
     unsigned ppBlkHtNext = 0;
 
     // todo: tune this
     const size_t DL_CONCURRENCY = qMax(Util::getNPhysicalProcessors()-1, 1U);//size_t(qMin(qMax(int(Util::getNPhysicalProcessors())-BitcoinDMgr::N_CLIENTS, BitcoinDMgr::N_CLIENTS), 32));
-
-    static constexpr unsigned maxErrCt = 3;
 
     size_t nTx = 0, nIns = 0, nOuts = 0;
 
@@ -390,17 +387,11 @@ void Controller::add_DLHeaderTask(unsigned int from, unsigned int to, size_t nTa
             AGAIN();
         }
     });
-    connect(t, &CtlTask::errored, this, [t, this, nTasks]{
+    connect(t, &CtlTask::errored, this, [t, this]{
         if (UNLIKELY(!sm || isTaskDeleted(t))) return; // task was stopped from underneath us, this is stale.. abort.
         if (sm->state == StateMachine::State::Failure) return; // silently ignore if we are already in failure
-        // Handle failures with retries for the specific task -- failures are unlikely so it's ok to do it on this level
-        if (auto ct = ++sm->failures[t->from]; ct < sm->maxErrCt) {
-            Warning() << "Task errored: " << t->objectName() << ", error: " << t->errorMessage << ", retrying # " << ct << " ...";
-            add_DLHeaderTask(t->from, t->to, nTasks);
-        } else {
-            Error() << "Task errored: " << t->objectName() << ", error: " << t->errorMessage << ", failed after " << ct << " tries, giving up";
-            genericTaskErrored();
-        }
+        Error() << "Task errored: " << t->objectName() << ", error: " << t->errorMessage;
+        genericTaskErrored();
     });
     connect(t, &CtlTask::progress, this, [t, this](double prog){
         if (UNLIKELY(!sm || isTaskDeleted(t))) return; // task was stopped from underneath us, this is stale.. abort.
