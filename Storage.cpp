@@ -83,6 +83,41 @@ namespace {
     // specializations
     template <> QByteArray Serialize(const Meta &);
     template <> Meta Deserialize(const QByteArray &, bool *);
+
+    // DB read/write helpers -- these may throw DatabaseError
+    template <typename RetType>
+    std::optional<RetType> GenericDBGet(rocksdb::DB *db, const rocksdb::Slice & key, const QString & errorMsgPrefix = QString(), bool missingOk = false)
+    {
+        std::string datum;
+        std::optional<RetType> ret;
+        auto status = db->Get(rocksdb::ReadOptions(), db->DefaultColumnFamily(), key, &datum);
+        if (missingOk && status.IsNotFound()) {
+            return ret; // optional will not has_value() to indicate missing key
+        } else if (!status.ok()) {
+            throw DatabaseError(QString("%1: %2")
+                                .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : "Error reading a key from the db")
+                                .arg(status.ToString().c_str()));
+        } else {
+            // ok status
+            if constexpr (std::is_scalar_v<RetType> && !std::is_pointer_v<RetType>) {
+                bool ok;
+                ret = DeserializeScalar<RetType>(FromSlice(datum), &ok);
+                if (!ok) {
+                    throw DatabaseError(QString("%1: Key was retrieved ok, but data could not be deserialized as a scalar '%2'")
+                                        .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : "Error deserializing a scalar from db")
+                                        .arg(typeid (RetType).name()));
+                }
+            } else {
+                bool ok;
+                ret = Deserialize<RetType>(FromSlice(datum), &ok);
+                if (!ok) {
+                    throw DatabaseError(QString("%1: Key was retrieved ok, but data could not be deserialized")
+                                        .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : "Error deserializing an object from db"));
+                }
+            }
+        }
+        return ret;
+    }
 }
 
 struct Storage::Pvt
