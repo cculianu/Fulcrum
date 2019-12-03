@@ -9,11 +9,14 @@
 #include <QDir>
 
 #include <atomic>
+#include <optional>
 #include <shared_mutex>
 #include <type_traits>
 #include <vector>
 
-DatabaseError::~DatabaseError(){} // vtable
+DatabaseError::~DatabaseError(){} // weak vtable warning suppression
+DatabaseSerializationError::~DatabaseSerializationError() {} // weak vtable warning suppression
+DatabaseFormatError::~DatabaseFormatError() {} // weak vtable warning suppression
 
 namespace {
     /// Encapsulates the 'meta' db table
@@ -26,8 +29,9 @@ namespace {
     static const rocksdb::Slice kMeta{"meta"}, kNumHeaders{"num_headers"};
     static constexpr size_t MAX_HEADERS = 100000000; // 100 mln max headers for now.
 
-    /// the byte array should live as long as the slice does. slice is just a weak ref into the byte array
+    /// NOTE: the byte array should live as long as the slice does. slice is just a weak ref into the byte array
     inline rocksdb::Slice ToSlice(const QByteArray &ba) { return rocksdb::Slice(ba.constData(), size_t(ba.size())); }
+    /// NOTE: The slice should live as long as the returned QByteArray does.  The QByteArray is a weak pointer into the slice!
     inline QByteArray FromSlice(const rocksdb::Slice &s) { return QByteArray::fromRawData(s.data(), int(s.size())); }
 
     // serialize/deser -- for basic types we use QDataStream, but we also have specializations at the end of this file
@@ -84,13 +88,24 @@ namespace {
     template <> QByteArray Serialize(const Meta &);
     template <> Meta Deserialize(const QByteArray &, bool *);
 
-    // DB read/write helpers -- these may throw DatabaseError
-    template <typename RetType>
-    std::optional<RetType> GenericDBGet(rocksdb::DB *db, const rocksdb::Slice & key, const QString & errorMsgPrefix = QString(), bool missingOk = false)
+    /// DB read/write helpers
+    /// NOTE: these may throw DatabaseError
+    /// If missingOk=false, then the returned optional is guaranteed to have a value if this function returns without throwing.
+    /// If missingOk=true, then if there was no other database error and the key was not found, the returned optional !has_value()
+    ///
+    /// Template arg "safeScalar", if true, will deserialize even scalar int, float, etc data using the Deserialize<>
+    /// function (uses QDataStream, is platform neutral, but is slightly slower).  If false, we will use the
+    /// DeserializeScalar<> fast function for scalars such as ints. It's important to read from the DB in the same
+    /// 'safeScalar' mode as was written!
+    template <typename RetType, bool safeScalar = false>
+    std::optional<RetType> GenericDBGet(rocksdb::DB *db, const rocksdb::Slice & key, bool missingOk = false,
+                                        const QString & errorMsgPrefix = QString(),  ///< used to specify a custom error message in the thrown exception
+                                        bool acceptExtraBytesAtEndOfData = false) ///< if true, we are ok with extra unparsed bytes in data. otherwise we throw. (this check is only done for !safeScalar mode)
     {
-        std::string datum;
+        rocksdb::PinnableSlice datum;
         std::optional<RetType> ret;
-        auto status = db->Get(rocksdb::ReadOptions(), db->DefaultColumnFamily(), key, &datum);
+        if (UNLIKELY(!db)) throw InternalError("GenericDBGet was passed a null pointer!");
+        const auto status = db->Get(rocksdb::ReadOptions(), db->DefaultColumnFamily(), key, &datum);
         if (missingOk && status.IsNotFound()) {
             return ret; // optional will not has_value() to indicate missing key
         } else if (!status.ok()) {
@@ -99,24 +114,41 @@ namespace {
                                 .arg(status.ToString().c_str()));
         } else {
             // ok status
-            if constexpr (std::is_scalar_v<RetType> && !std::is_pointer_v<RetType>) {
+            if constexpr (std::is_base_of_v<QByteArray, std::remove_cv_t<RetType> >) {
+                // special compile-time case for QByteArray subclasses -- return a deep copy of the data bytes directly.
+                // TODO: figure out a way to do this without extra copies! (1 from db -> PinnableSlice, a second from PinnableSlice -> ret).
+                ret.emplace(reinterpret_cast<const char *>(datum.data()), QByteArray::size_type(datum.size()));
+            } else if constexpr (!safeScalar && std::is_scalar_v<RetType> && !std::is_pointer_v<RetType>) {
+                if (!acceptExtraBytesAtEndOfData && datum.size() > sizeof(RetType)) {
+                    // reject extra stuff at end of data stream
+                    throw DatabaseFormatError(QString("%1: Extra bytes at the end of data")
+                                              .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : "Database format error"));
+                }
                 bool ok;
                 ret = DeserializeScalar<RetType>(FromSlice(datum), &ok);
                 if (!ok) {
-                    throw DatabaseError(QString("%1: Key was retrieved ok, but data could not be deserialized as a scalar '%2'")
-                                        .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : "Error deserializing a scalar from db")
-                                        .arg(typeid (RetType).name()));
+                    throw DatabaseSerializationError(
+                                QString("%1: Key was retrieved ok, but data could not be deserialized as a scalar '%2'")
+                                .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : "Error deserializing a scalar from db")
+                                .arg(typeid (RetType).name()));
                 }
             } else {
                 bool ok;
                 ret = Deserialize<RetType>(FromSlice(datum), &ok);
                 if (!ok) {
-                    throw DatabaseError(QString("%1: Key was retrieved ok, but data could not be deserialized")
-                                        .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : "Error deserializing an object from db"));
+                    throw DatabaseSerializationError(
+                                QString("%1: Key was retrieved ok, but data could not be deserialized")
+                                .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : "Error deserializing an object from db"));
                 }
             }
         }
         return ret;
+    }
+    /// Conveneience for above with the missingOk flag set to false. Will always throw or return a real value.
+    template <typename RetType, bool safeScalar = false>
+    RetType GenericDBGetFailIfMissing(rocksdb::DB * db, const rocksdb::Slice &k, const QString &errMsgPrefix = QString(), bool extraDataOk = false)
+    {
+        return GenericDBGet<RetType, safeScalar>(db, k, false, errMsgPrefix, extraDataOk).value();
     }
 }
 
@@ -178,21 +210,19 @@ void Storage::startup()
     // load/check meta
     {
         Meta m_db;
-        std::string data;
-        if (auto status = p->db.meta->Get(rocksdb::ReadOptions(), p->db.meta->DefaultColumnFamily(), kMeta, &data);
-                !status.ok() && !status.IsNotFound()) {
-            throw DatabaseError("Cannot read meta from db");
-        } else if (status.IsNotFound()) {
-            // ok, did not exist .. write a new one to db
-            saveMeta_impl();
-        } else {
-            bool ok;
-            m_db = Deserialize<Meta>(FromSlice(data), &ok);
-            if (!ok || m_db.magic != p->meta.magic || m_db.version != p->meta.version) {
-                throw DatabaseError("Incompatible database format -- delete the datadir and resynch");
+        static const QString errMsg{"Incompatible database format -- delete the datadir and resynch. RocksDB error"};
+        if (auto opt = GenericDBGet<Meta>(p->db.meta.get(), kMeta, true, errMsg);
+                opt.has_value())
+        {
+            m_db = opt.value();
+            if (m_db.magic != p->meta.magic || m_db.version != p->meta.version) {
+                throw DatabaseFormatError(errMsg);
             }
             p->meta = m_db;
             Debug () << "Read meta from db ok";
+        } else {
+            // ok, did not exist .. write a new one to db
+            saveMeta_impl();
         }
     }
 
@@ -335,28 +365,23 @@ void Storage::loadHeadersFromDB()
     uint32_t num = 0;
     const auto t0 = Util::getTimeNS();
     {
-        auto & db = *(p->db.headers);
-        rocksdb::PinnableSlice datum;
-        bool ok;
-        if (auto s = db.Get(rocksdb::ReadOptions(), db.DefaultColumnFamily(), kNumHeaders, &datum);
-                s.IsNotFound()) { /* ignore .. */ }
-        else if (!s.ok())
-            throw DatabaseError(QString("Error reading %1: %2").arg(kNumHeaders.ToString().c_str()).arg(s.ToString().c_str()));
-        else if (num = Deserialize<uint32_t>(FromSlice(datum), &ok); !ok)
-            throw DatabaseError("Error reading header count from database");
-        else if (num > MAX_HEADERS)
-            throw DatabaseError("Header count in database exceeds MAX_HEADERS! FIXME!");
+        auto * const db = p->db.headers.get();
+        num = GenericDBGet<uint32_t, true>(db, kNumHeaders, true, "Error reading header count from database").value_or(0); // missing ok
+        if (num > MAX_HEADERS)
+            throw DatabaseFormatError(QString("Header count (%1) in database exceeds MAX_HEADERS! This is likely due to"
+                                              " a database format mistmatch. Delete the datadir and resynch it.")
+                                      .arg(num));
 
-        datum.Reset();
         Headers h;
         h.reserve(num);
         // read db
-        for (uint32_t i = 0; i < num; ++i, datum.Reset()) {
-            if (auto s = db.Get(rocksdb::ReadOptions(), db.DefaultColumnFamily(), ToSlice(SerializeScalar(uint32_t(i))), &datum); !s.ok())
-                throw DatabaseError(QString("Error reading header %1: %2").arg(i).arg(s.ToString().c_str()));
-            else if (datum.size() != BTC::GetBlockHeaderSize())
-                throw DatabaseError(QString("Error reading header %1, wrong size: %2").arg(i).arg(datum.size()));
-            h.emplace_back(datum.data(), int(datum.size()));
+        for (uint32_t i = 0; i < num; ++i) {
+            // guaranteed to return a value
+            const auto bytes = GenericDBGetFailIfMissing<QByteArray>(db, ToSlice(SerializeScalar<uint32_t>(i)),
+                                                                     QString("Error retrieving header %1").arg(i));
+            if (bytes.size() != int(BTC::GetBlockHeaderSize()))
+                throw DatabaseFormatError(QString("Error reading header %1, wrong size: %2").arg(i).arg(bytes.size()));
+            h.emplace_back(bytes);
         }
         // verify headers: hashPrevBlock must match what we actually read from db
         if (num) {

@@ -16,7 +16,13 @@
 
 namespace BTC { class HeaderVerifier; } // fwd decl used below. #include "BTC.h" to see this type
 
+/// Generic database error
 struct DatabaseError : public Exception { using Exception::Exception; ~DatabaseError() override; };
+/// Key was found but deserialization of key failed when reading from the db, or serializing to a db slice failed.
+struct DatabaseSerializationError : public DatabaseError { using DatabaseError::DatabaseError; ~DatabaseSerializationError() override; };
+/// The database appears to be of the wrong format / unrecognized.
+struct DatabaseFormatError : public DatabaseError { using DatabaseError::DatabaseError; ~DatabaseFormatError() override; };
+
 
 class Storage final : public Mgr, public ThreadObjectMixin
 {
