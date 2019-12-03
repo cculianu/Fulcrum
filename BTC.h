@@ -330,7 +330,8 @@ namespace BTC
     template <> bitcoin::CTransaction Deserialize(const QByteArray &, int pos);
 
     /// Helper -- returns the size of a block header. Should always be 80.  Returns an internal constant after first call.
-    extern size_t GetBlockHeaderSize();
+    /// (this returns an int because we mostly compare it to QByteArray.size() whose size_type is int)
+    extern int GetBlockHeaderSize();
 
     /// Returns the sha256 double hash (not reveresed) of the input QByteArray. The results are copied once from the
     /// hasher into the returned QByteArray.  This is faster than obtaining a uint256 from bitcoin::Hash then converting
@@ -382,7 +383,7 @@ namespace BTC
         /// returns the height, 80 byte header of the last header seen
         std::pair<unsigned, QByteArray> lastHeaderProcessed() const;
 
-        bool isValid() const { return prev.length() == int(GetBlockHeaderSize()); }
+        bool isValid() const { return prev.length() == GetBlockHeaderSize(); }
         void reset(unsigned nextHeight = 0, QByteArray prevHeader = QByteArray()) { prevHeight = long(nextHeight)-1; prev = prevHeader; }
     };
 

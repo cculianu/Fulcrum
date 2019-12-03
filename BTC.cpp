@@ -798,14 +798,15 @@ namespace BTC
         return bitcoin::CTransaction(bitcoin::deserialize, vr);
     }
     /// Helper -- returns the size of a block header. Should always be 80.
-    size_t GetBlockHeaderSize()
+    int GetBlockHeaderSize()
     {
-        static std::atomic<size_t> sz = 0;
+        static std::atomic_int sz = 0;
         if (!sz) {
             bitcoin::CSizeComputer comp(bitcoin::SER_NETWORK, bitcoin::PROTOCOL_VERSION);
             bitcoin::CBlockHeader h;
             h.Serialize(comp);
-            sz = comp.size();
+            sz = int(comp.size());
+            FatalAssert(sz > 0) << "Unable to determine header size. FIXME.";
         }
         return sz;
     }
@@ -838,7 +839,7 @@ namespace BTC
     bool HeaderVerifier::operator()(const QByteArray & header, QString *err)
     {
         const long height = prevHeight+1;
-        if (header.size() != int(BTC::GetBlockHeaderSize())) {
+        if (header.size() != BTC::GetBlockHeaderSize()) {
             if (err) *err = QString("Header verification failed for header at height %1: wrong size").arg(height);
             return false;
         }
@@ -854,7 +855,7 @@ namespace BTC
     {
         const long height = prevHeight+1;
         QByteArray header = Serialize(curHdr);
-        if (header.size() != int(BTC::GetBlockHeaderSize())) {
+        if (header.size() != BTC::GetBlockHeaderSize()) {
             if (err) *err = QString("Header verification failed for header at height %1: wrong size").arg(height);
             return false;
         }

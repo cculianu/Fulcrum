@@ -231,7 +231,7 @@ struct DownloadBlocksTask : public CtlTask
 };
 
 
-/*static*/ const int DownloadBlocksTask::HEADER_SIZE = int(BTC::GetBlockHeaderSize());
+/*static*/ const int DownloadBlocksTask::HEADER_SIZE = BTC::GetBlockHeaderSize();
 
 DownloadBlocksTask::DownloadBlocksTask(unsigned from, unsigned to, unsigned stride, Controller *ctl_)
     : CtlTask(ctl_, QString("Task.DL %1 -> %2").arg(from).arg(to)), from(from), to(to), stride(stride), expectedCt(unsigned(nToDL(from, to, stride)))
@@ -578,7 +578,7 @@ bool Controller::process_VerifyAndAddBlock(PreProcessedBlockPtr ppb)
         rawHeader = verif.lastHeaderProcessed().second;
     } // end lock context
 
-    FatalAssert(rawHeader.size() == int(BTC::GetBlockHeaderSize())) << "INTERNAL ERROR: raw header has the wrong size!";
+    FatalAssert(rawHeader.size() == BTC::GetBlockHeaderSize()) << "INTERNAL ERROR: raw header has the wrong size!";
 
     const auto nLeft = qMax(sm->endHeight - (sm->ppBlkHtNext-1), 0U);
     {

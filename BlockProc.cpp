@@ -21,7 +21,7 @@ void PreProcessedBlock::fill(unsigned blockHeight, size_t blockSize, const bitco
     height = blockHeight;
     sizeBytes = blockSize;
     header = b.GetBlockHeader();
-    estimatedThisSizeBytes = sizeof(*this) + BTC::GetBlockHeaderSize();
+    estimatedThisSizeBytes = sizeof(*this) + size_t(BTC::GetBlockHeaderSize());
     txInfos.reserve(b.vtx.size());
     using HashHasher = BTC::QByteArrayHashHasher;
     std::unordered_map<QByteArray, unsigned, HashHasher> txHashToIndex;

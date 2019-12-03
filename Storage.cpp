@@ -383,7 +383,7 @@ void Storage::loadHeadersFromDB()
         for (uint32_t i = 0; i < num; ++i) {
             // guaranteed to return a value
             auto bytes = GenericDBGetFailIfMissing<QByteArray>(db, ToSlice(SerializeScalar(uint32_t(i))), errMsg);
-            if (UNLIKELY(bytes.size() != int(BTC::GetBlockHeaderSize())))
+            if (UNLIKELY(bytes.size() != BTC::GetBlockHeaderSize()))
                 throw DatabaseFormatError(QString("Error reading header %1, wrong size: %2").arg(i).arg(bytes.size()));
             h.emplace_back(std::move(bytes));
         }
