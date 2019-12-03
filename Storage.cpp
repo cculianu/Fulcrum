@@ -115,6 +115,7 @@ namespace {
         } else {
             // ok status
             if constexpr (std::is_base_of_v<QByteArray, std::remove_cv_t<RetType> >) {
+                static_assert (!safeScalar, "safeScalar=true mode is not supported for QByteArrays (it only is useful for scalar types)" );
                 // special compile-time case for QByteArray subclasses -- return a deep copy of the data bytes directly.
                 // TODO: figure out a way to do this without the 1 extra copy! (PinnableSlice -> ret).
                 ret.emplace(reinterpret_cast<const char *>(datum.data()), QByteArray::size_type(datum.size()));
