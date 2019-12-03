@@ -379,11 +379,12 @@ void Storage::loadHeadersFromDB()
         Headers h;
         h.reserve(num);
         const QString errMsg("Error retrieving header from db");
+        const int hsz = BTC::GetBlockHeaderSize();
         // read db
         for (uint32_t i = 0; i < num; ++i) {
-            // guaranteed to return a value
+            // guaranteed to return a value or throw
             auto bytes = GenericDBGetFailIfMissing<QByteArray>(db, ToSlice(SerializeScalar(uint32_t(i))), errMsg);
-            if (UNLIKELY(bytes.size() != BTC::GetBlockHeaderSize()))
+            if (UNLIKELY(bytes.size() != hsz))
                 throw DatabaseFormatError(QString("Error reading header %1, wrong size: %2").arg(i).arg(bytes.size()));
             h.emplace_back(std::move(bytes));
         }
