@@ -41,7 +41,7 @@ void PreProcessedBlock::fill(unsigned blockHeight, size_t blockSize, const bitco
         // process outputs for this tx
         if (!tx->vout.empty())
             // remember output0 index for this txindex
-            info.output0Index = unsigned(outputs.size());
+            info.output0Index.emplace( unsigned(outputs.size()) );
 
         uint16_t outN = 0;
         for (const auto & out : tx->vout) {
@@ -68,7 +68,7 @@ void PreProcessedBlock::fill(unsigned blockHeight, size_t blockSize, const bitco
         // process inputs
         if (!tx->vin.empty())
             // remember input0Index position for this tx
-            info.input0Index = unsigned(inputs.size());
+            info.input0Index.emplace( unsigned(inputs.size()) );
 
         for (const auto & in : tx->vin) {
             // note we do place the coinbase tx here even though we ignore it later on -- we keep it to have accurate indices
@@ -102,7 +102,7 @@ void PreProcessedBlock::fill(unsigned blockHeight, size_t blockSize, const bitco
             const TxInfo & info = txInfos[txIdx];
             inp.prevoutHash = info.hash; //<--- ensure shallow copy that points to same underlying data (saves memory)
             if (info.output0Index.has_value())
-                inp.parentTxOutIdx = info.output0Index.value() + inp.prevoutN; // save the index into the `outputs` array where the parent tx to this spend occurred
+                inp.parentTxOutIdx.emplace( info.output0Index.value() + inp.prevoutN ); // save the index into the `outputs` array where the parent tx to this spend occurred
             else { assert(0); }
             const auto & tx = b.vtx[txIdx];
             assert(inp.prevoutN < tx->vout.size());

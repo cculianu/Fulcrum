@@ -100,7 +100,7 @@ namespace {
     template <typename RetType, bool safeScalar = false>
     std::optional<RetType> GenericDBGet(rocksdb::DB *db, const rocksdb::Slice & key, bool missingOk = false,
                                         const QString & errorMsgPrefix = QString(),  ///< used to specify a custom error message in the thrown exception
-                                        bool acceptExtraBytesAtEndOfData = false) ///< if true, we are ok with extra unparsed bytes in data. otherwise we throw. (this check is only done for !safeScalar mode)
+                                        bool acceptExtraBytesAtEndOfData = false) ///< if true, we are ok with extra unparsed bytes in data. otherwise we throw. (this check is only done for !safeScalar mode on basic types)
     {
         rocksdb::PinnableSlice datum;
         std::optional<RetType> ret;
@@ -118,7 +118,7 @@ namespace {
                 static_assert (!safeScalar, "safeScalar=true mode is not supported for QByteArrays (it only is useful for scalar types)" );
                 // special compile-time case for QByteArray subclasses -- return a deep copy of the data bytes directly.
                 // TODO: figure out a way to do this without the 1 extra copy! (PinnableSlice -> ret).
-                ret.emplace(reinterpret_cast<const char *>(datum.data()), QByteArray::size_type(datum.size()));
+                ret.emplace( reinterpret_cast<const char *>(datum.data()), QByteArray::size_type(datum.size()) );
             } else if constexpr (!safeScalar && std::is_scalar_v<RetType> && !std::is_pointer_v<RetType>) {
                 if (!acceptExtraBytesAtEndOfData && datum.size() > sizeof(RetType)) {
                     // reject extra stuff at end of data stream
@@ -126,7 +126,7 @@ namespace {
                                               .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : "Database format error"));
                 }
                 bool ok;
-                ret = DeserializeScalar<RetType>(FromSlice(datum), &ok);
+                ret.emplace( DeserializeScalar<RetType>(FromSlice(datum), &ok) );
                 if (!ok) {
                     throw DatabaseSerializationError(
                                 QString("%1: Key was retrieved ok, but data could not be deserialized as a scalar '%2'")
@@ -134,8 +134,11 @@ namespace {
                                 .arg(typeid (RetType).name()));
                 }
             } else {
+                if (UNLIKELY(acceptExtraBytesAtEndOfData))
+                    Debug() << "Warning:  Caller misuse of function '" << __FUNCTION__
+                            << "'. 'acceptExtraBytesAtEndOfData=true' is ignored when deserializing using QDataStream.";
                 bool ok;
-                ret = Deserialize<RetType>(FromSlice(datum), &ok);
+                ret.emplace( Deserialize<RetType>(FromSlice(datum), &ok) );
                 if (!ok) {
                     throw DatabaseSerializationError(
                                 QString("%1: Key was retrieved ok, but data could not be deserialized")
@@ -375,11 +378,11 @@ void Storage::loadHeadersFromDB()
 
         Headers h;
         h.reserve(num);
+        const QString errMsg("Error retrieving header from db");
         // read db
         for (uint32_t i = 0; i < num; ++i) {
             // guaranteed to return a value
-            const auto bytes = GenericDBGetFailIfMissing<QByteArray>(db, ToSlice(SerializeScalar<uint32_t>(i)),
-                                                                     QString("Error retrieving header %1").arg(i));
+            const auto bytes = GenericDBGetFailIfMissing<QByteArray>(db, ToSlice(SerializeScalar<uint32_t>(i)), errMsg);
             if (bytes.size() != int(BTC::GetBlockHeaderSize()))
                 throw DatabaseFormatError(QString("Error reading header %1, wrong size: %2").arg(i).arg(bytes.size()));
             h.emplace_back(bytes);

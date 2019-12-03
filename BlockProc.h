@@ -103,7 +103,7 @@ struct PreProcessedBlock
                     opt.has_value() && inputIdx >= opt.value()) {
                 const unsigned val = inputIdx - opt.value();
                 assert(val <= UINT16_MAX); // this should never happen -- all tx's are guaranteed to have <=65535 inputs or outputs currently and for the foreseeable future. If that changes, fixme.
-                ret = uint16_t(val);
+                ret.emplace( uint16_t(val) );
             }
         }
         return ret;
