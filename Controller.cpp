@@ -381,7 +381,7 @@ void Controller::add_DLHeaderTask(unsigned int from, unsigned int to, size_t nTa
         Error() << "Task errored: " << t->objectName() << ", error: " << t->errorMessage;
         genericTaskErrored();
     });
-    connect(t, &CtlTask::progress, this, [t, this](double prog){
+    connect(t, &CtlTask::progress, this, [t, this](double prog){ // this runs in "this" thread context
         if (UNLIKELY(!sm || isTaskDeleted(t))) return; // task was stopped from underneath us, this is stale.. abort.
         const size_t ht = t->index2Height(unsigned(t->expectedCt*prog));
         if (ht < sm->lastProgHt)
@@ -389,8 +389,13 @@ void Controller::add_DLHeaderTask(unsigned int from, unsigned int to, size_t nTa
             // progress info and block heights arrive here out of order
             return;
         sm->lastProgHt = ht;
+        QString extraInfo = "";
+        if (size_t backlog; ht == t->to && (backlog = sm->ppBlocks.size())) {
+            extraInfo = QString(", waiting for %1 out-of-order blocks to arrive ...").arg(backlog);
+        }
         Log() << "Downloaded height: " << ht << ", "
-              << QString::number((ht*1e2) / qMax(t->to, 1U), 'f', 1) << "%";
+              << QString::number((ht*1e2) / qMax(t->to, 1U), 'f', 1) << "%"
+              << extraInfo;
     });
 }
 

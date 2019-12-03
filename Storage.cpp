@@ -47,6 +47,38 @@ namespace {
             *ok = ds.status() == QDataStream::Status::Ok;
         return ret;
     }
+    /// Serialize a simple value such as an int directly, without using the space overhead that QDataStream imposes.
+    /// This is less safe but is more compact since the bytes of the passed-in value are written directly to the
+    /// returned QByteArray, without any encapsulation.  Note that use of this mechanism makes all data in the database
+    /// no longer platform-neutral, which is ok. The presumption is users can re-synch their DB if switching
+    /// architectures.
+    template <typename Scalar,
+              std::enable_if_t<std::is_scalar_v<Scalar> && !std::is_pointer_v<Scalar>, int> = 0>
+    QByteArray SerializeScalar(const Scalar & s) {
+        return QByteArray(reinterpret_cast<const char *>(&s), sizeof(s));
+    }
+    /// Inverse of above.  Pass in an optional 'pos' pointer if you wish to continue reading raw scalars from the same
+    /// QByteArray during subsequent calls to this template function.  *ok, if specified, is set to false if we ran off
+    /// the QByteArray's bounds, and a default-constructed value of 'Scalar' is returned.  No other safety checking is
+    /// done.  On successful deserialization of the scalar, *pos (if specified) is updated to point just past the
+    /// last byte of the successuflly converted item.  On failure, *pos is always set to point past the end of the
+    /// QByteArray.
+    template <typename Scalar,
+              std::enable_if_t<std::is_scalar_v<Scalar> && !std::is_pointer_v<Scalar>, int> = 0>
+    Scalar DeserializeScalar(const QByteArray &ba, bool *ok = nullptr, int *pos_out = nullptr) {
+        Scalar ret{};
+        int dummy = 0;
+        int & pos = pos_out ? *pos_out : dummy;
+        if (pos >= 0 && pos + int(sizeof(ret)) <= ba.size()) {
+            if (ok) *ok = true;
+            ret = *reinterpret_cast<const Scalar *>(ba.data() + pos);
+            pos += sizeof(ret);
+        } else {
+            if (ok) *ok = false;
+            pos = ba.size();
+        }
+        return ret;
+    }
 
     // specializations
     template <> QByteArray Serialize(const Meta &);
@@ -236,8 +268,8 @@ void Storage::saveHeaders_impl(const Headers &h)
             Debug() << "Saving from height " << start;
             rocksdb::WriteBatch batch;
             for (size_t i = start; i < h.size(); ++i) {
-                // headers are keyed off of uint32_t index (height)
-                if (auto stat = batch.Put(ToSlice(Serialize(uint32_t(i))), ToSlice(h[i])); !stat.ok())
+                // headers are keyed off of uint32_t index (height) -- note we save the raw int value here without any QDataStream encapsulation
+                if (auto stat = batch.Put(ToSlice(SerializeScalar(uint32_t(i))), ToSlice(h[i])); !stat.ok())
                     throw DatabaseError(QString("Error writing header %1: %2").arg(i).arg(stat.ToString().c_str()));
             }
             // save height to db *after* we successfully wrote all the headers
@@ -285,8 +317,8 @@ void Storage::loadHeadersFromDB()
         h.reserve(num);
         // read db
         for (uint32_t i = 0; i < num; ++i, datum.Reset()) {
-            if (auto s = db.Get(rocksdb::ReadOptions(), db.DefaultColumnFamily(), ToSlice(Serialize(uint32_t(i))), &datum); !s.ok())
-                throw DatabaseError(QString("Error reading header %1: ").arg(i).arg(s.ToString().c_str()));
+            if (auto s = db.Get(rocksdb::ReadOptions(), db.DefaultColumnFamily(), ToSlice(SerializeScalar(uint32_t(i))), &datum); !s.ok())
+                throw DatabaseError(QString("Error reading header %1: %2").arg(i).arg(s.ToString().c_str()));
             else if (datum.size() != BTC::GetBlockHeaderSize())
                 throw DatabaseError(QString("Error reading header %1, wrong size: %2").arg(i).arg(datum.size()));
             h.emplace_back(datum.data(), int(datum.size()));
@@ -322,7 +354,8 @@ namespace {
         QByteArray ba;
         {
             QDataStream ds(&ba, QIODevice::WriteOnly|QIODevice::Truncate);
-            ds << m.magic << m.version << m.chain;
+            // we serialize the 'magic' value as a simple scalar as a sort of endian check for the DB
+            ds << SerializeScalar(m.magic) << m.version << m.chain;
         }
         return ba;
     }
@@ -331,11 +364,18 @@ namespace {
         bool dummy;
         bool &ok (ok_ptr ? *ok_ptr : dummy);
         ok = false;
-        Meta m;
+        Meta m{0, 0, {}};
         {
             QDataStream ds(ba);
-            ds >> m.magic >> m.version >> m.chain;
-            ok = ds.status() == QDataStream::Status::Ok;
+            QByteArray magicBytes;
+            ds >> magicBytes; // read magic as raw bytes.
+            if ((ok = ds.status() == QDataStream::Status::Ok)) {
+                m.magic = DeserializeScalar<decltype (m.magic)>(magicBytes, &ok);
+                if (ok) {
+                    ds >> m.version >> m.chain;
+                    ok = ds.status() == QDataStream::Status::Ok;
+                }
+            }
         }
         return m;
     }
