@@ -22,7 +22,7 @@ using PreProcessedBlockPtr = std::shared_ptr<PreProcessedBlock>;  ///< For clari
 /// for later serving up to EX clients.
 struct PreProcessedBlock
 {
-    unsigned height = 0; ///< the height (block nunber) where this block appears
+    unsigned height = 0; ///< the height (block number) of the block
     size_t sizeBytes = 0; ///< the size of the original serialized block in bytes (not the size of this data structure which is significantly smaller)
     size_t estimatedThisSizeBytes = 0; ///< the estimated size of this data structure -- may be off by a bit but is useful for rough estimation of memory costs of block processing
     /// deserialized header as came in from bitcoind
@@ -34,8 +34,7 @@ struct PreProcessedBlock
         std::optional<unsigned> input0Index, output0Index; ///< if either of these have a value, they point into the `inputs` and `outputs` arrays below, respectively
     };
 
-    /// The txids (32 bytes each) of all tx's in the block, in the order in which they appeared in the block.
-    /// These txid's are in bitcoind's internal memory order (non-reversed) (copied from the tx's own GetHash())
+    /// The info for all the tx's in the block, in the order in which they appeared in the block.
     std::vector<TxInfo> txInfos;
 
     struct InputPt {
@@ -55,6 +54,7 @@ struct PreProcessedBlock
     std::vector<OutPt> outputs; ///< all the outpoints for *all* the tx's in this block, in the order they were encountered!
 
     struct HashXAggregated {
+        /// The 32-byte hashX -- in "hex-encode-ready" memory order (that is, reversed).
         HashX hashX;
         /// collection of all outputs in this block that are *TO* this HashX (data items are indices into the `outputs`
         /// array above)
@@ -65,7 +65,7 @@ struct PreProcessedBlock
         std::vector<unsigned> ins;
     };
 
-    /// The 32-byte hashX's of all scriptHashes appearing in all of the outputs in the txs in this block
+    /// scriptHashes appearing in all of the outputs (and possibly inputs) in the txs in this block
     std::vector<HashXAggregated> hashXAggregated;
 
     /*
