@@ -30,7 +30,7 @@ struct PreProcessedBlock
 
     struct TxInfo {
         QByteArray hash; ///< 32 byte txid. These txid's are *reversed* from bitcoind's internal memory order. (so as to be closer to the final hex encoded format).
-        unsigned nInputs = 0, nOutputs = 0; ///< the number of inputs and outputs in the tx
+        uint16_t nInputs = 0, nOutputs = 0; ///< the number of inputs and outputs in the tx -- all tx's are guaranteed to have <=65535 inputs or outputs currently and for the foreseeable future. If that changes, fixme.
         std::optional<unsigned> input0Index, output0Index; ///< if either of these have a value, they point into the `inputs` and `outputs` arrays below, respectively
     };
 
@@ -41,13 +41,13 @@ struct PreProcessedBlock
     struct InputPt {
         unsigned txIdx; ///< index into the `txInfos` vector above for the tx where this input appears
         QByteArray prevoutHash; ///< 32-byte prevoutHash.  In *reversed* memory order (hex-encoding ready!) (May be a shallow copy of a byte array in `txInfos` if the prevout tx was in this block.). May be empty if coinbase
-        unsigned prevoutN; ///< the index in the prevout tx for this input
+        uint16_t prevoutN; ///< the index in the prevout tx for this input (again, tx's can't have more than 65535 inputs -- if that changes, fixme!)
         std::optional<unsigned> parentTxOutIdx; ///< if the input's prevout was in this block, the index into the `outputs` array declared below, otherwise undefined.
     };
 
     struct OutPt {
         unsigned txIdx;  ///< this is an index into the `txInfos` vector declared above
-        unsigned outN; ///< this is an index into the tx's vout vector (*NOT* this class's `outputs`!)
+        uint16_t outN; ///< this is an index into the tx's vout vector (*NOT* this class's `outputs`!) (again, tx's can't have more than 65535 inputs -- if that changes, fixme!)
         bitcoin::Amount amount;
     };
 
@@ -96,12 +96,15 @@ struct PreProcessedBlock
 
     /// returns the input# as the input appeared in its tx, given a particular `inputs` array index
     /// We do it this way rather than store this information in the InputPt struct to save on memory
-    inline std::optional<unsigned> numForInputIdx(unsigned inputIdx) const {
+    inline std::optional<uint16_t> numForInputIdx(unsigned inputIdx) const {
         std::optional<unsigned> ret;
         if (inputIdx < inputs.size()) {
             if (const auto & opt = txInfos[inputs[inputIdx].txIdx].input0Index;
-                    opt.has_value() && inputIdx >= opt.value())
-                ret = inputIdx - opt.value();
+                    opt.has_value() && inputIdx >= opt.value()) {
+                const unsigned val = inputIdx - opt.value();
+                assert(val <= UINT16_MAX); // this should never happen -- all tx's are guaranteed to have <=65535 inputs or outputs currently and for the foreseeable future. If that changes, fixme.
+                ret = uint16_t(val);
+            }
         }
         return ret;
     }

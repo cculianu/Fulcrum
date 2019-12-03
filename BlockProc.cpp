@@ -33,8 +33,8 @@ void PreProcessedBlock::fill(unsigned blockHeight, size_t blockSize, const bitco
         // copy tx hash data for the tx
         TxInfo info;
         info.hash = BTC::Hash2ByteArrayRev(tx->GetHash());
-        info.nInputs = unsigned(tx->vin.size());
-        info.nOutputs = unsigned(tx->vout.size());
+        info.nInputs = uint16_t(tx->vin.size());
+        info.nOutputs = uint16_t(tx->vout.size());
         // remember the tx hash -> index association for use later in this function
         txHashToIndex[info.hash] = unsigned(txIdx); // cheap copy + cheap hash func. should make this fast.
 
@@ -43,7 +43,7 @@ void PreProcessedBlock::fill(unsigned blockHeight, size_t blockSize, const bitco
             // remember output0 index for this txindex
             info.output0Index = unsigned(outputs.size());
 
-        unsigned outN = 0;
+        uint16_t outN = 0;
         for (const auto & out : tx->vout) {
             // save the outputs seen
             outputs.emplace_back(
@@ -70,17 +70,15 @@ void PreProcessedBlock::fill(unsigned blockHeight, size_t blockSize, const bitco
             // remember input0Index position for this tx
             info.input0Index = unsigned(inputs.size());
 
-        unsigned inN = 0;
         for (const auto & in : tx->vin) {
             // note we do place the coinbase tx here even though we ignore it later on -- we keep it to have accurate indices
             inputs.emplace_back(InputPt{
                     unsigned(txIdx),
                     BTC::Hash2ByteArrayRev(in.prevout.GetTxId()),  // .prevoutHash
-                    unsigned(in.prevout.GetN()), // .prevoutN
+                    uint16_t(in.prevout.GetN()), // .prevoutN
                     {}, // .parentTxOutIdx (start out undefined)
             });
             estimatedThisSizeBytes += sizeof(InputPt);
-            ++inN;
         }
         estimatedThisSizeBytes += sizeof(info) + size_t(info.hash.size());
         txInfos.emplace_back(std::move(info));
