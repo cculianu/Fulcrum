@@ -390,12 +390,11 @@ void Controller::add_DLHeaderTask(unsigned int from, unsigned int to, size_t nTa
             return;
         sm->lastProgHt = ht;
         QString extraInfo = "";
-        if (size_t backlog; ht == t->to && (backlog = sm->ppBlocks.size())) {
-            extraInfo = QString(", waiting for %1 out-of-order blocks to arrive ...").arg(backlog);
+        QString pctDisplay = QString::number((ht*1e2) / qMax(t->to, 1U), 'f', 1) + "%";
+        if (size_t backlog=0; pctDisplay.startsWith("100") && (backlog = sm->ppBlocks.size())) {
+            extraInfo = QString(". Waiting for %1 out-of-order blocks to arrive ...").arg(backlog);
         }
-        Log() << "Downloaded height: " << ht << ", "
-              << QString::number((ht*1e2) / qMax(t->to, 1U), 'f', 1) << "%"
-              << extraInfo;
+        Log() << "Downloaded height: " << ht << ", " << pctDisplay << extraInfo;
     });
 }
 
