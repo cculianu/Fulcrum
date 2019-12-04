@@ -21,17 +21,17 @@
 
 using HashHasher = BTC::QByteArrayHashHasher;
 
+using TxNum = std::uint64_t;
+using BlockHeight = std::uint32_t;
+using IONum = std::uint16_t;
+using TxHash = QByteArray;
+
 
 /// Note all hashes below are in *reversed* order from bitcoind's internal memory order.
 /// The reason for that is so that we have this PreProcessedBlock ready with the right format for putting into the db
 /// for later serving up to EX clients.
 struct BlockProcBase
 {
-    using TxNum = std::uint64_t;
-    using BlockHeight = std::uint32_t;
-    using IONum = std::uint16_t;
-    using TxHash = QByteArray;
-
     BlockHeight height = 0; ///< the height (block number) of the block
     size_t sizeBytes = 0; ///< the size of the original serialized block in bytes (not the size of this data structure which is significantly smaller)
     size_t estimatedThisSizeBytes = 0; ///< the estimated size of this data structure -- may be off by a bit but is useful for rough estimation of memory costs of block processing
@@ -130,6 +130,7 @@ struct BlockProcBase
     void sortHashXAggregated(const std::vector<InputPt> & inputs) {
         // sort hashXAggregated by min(output_txid, input_txid) (basically earliest first)
         std::sort(hashXAggregated.begin(), hashXAggregated.end(), [this, &inputs](const HashXAggregated &a, const HashXAggregated &b) -> bool {
+            if (a.hashX == b.hashX) return false;
             unsigned a_outTxid0 = a.outs.empty() ? UINT_MAX : outputs[a.outs.front()].txIdx,
                      b_outTxid0 = b.outs.empty() ? UINT_MAX : outputs[b.outs.front()].txIdx,
                      a_inTxid0 = a.ins.empty() ? UINT_MAX : inputs[a.ins.front()].txIdx,

@@ -1,6 +1,7 @@
 #include "BlockProc.h"
 #include "BTC.h"
 #include "Controller.h"
+#include "TXO.h"
 
 #include <algorithm>
 #include <cassert>
@@ -350,6 +351,12 @@ struct Controller::StateMachine
         auto idx = qMin(size_t(state), std::size(stateStrings)-1);
         return stateStrings[idx];
     }
+
+    // TESTING UTXO SET
+    UTXOSet utxoset;
+    std::unordered_map <TxHash, TxNum, HashHasher> txHash2NumMap;
+    std::unordered_map <TxNum, TxHash> num2TxHashMap;
+    std::atomic<TxNum> txNumNext{0};
 };
 
 void Controller::rmTask(CtlTask *t)
@@ -579,6 +586,74 @@ bool Controller::process_VerifyAndAddBlock(PreProcessedBlockPtr ppb)
     } // end lock context
 
     FatalAssert(rawHeader.size() == BTC::GetBlockHeaderSize()) << "INTERNAL ERROR: raw header has the wrong size!";
+
+    { // UTXO set testing TESTING TESTING XXX
+        const auto resolverFunc = [this](const TxHash &h) -> std::optional<TxNum> {
+            std::optional<TxNum> ret;
+            if (auto it = sm->txHash2NumMap.find(h); it != sm->txHash2NumMap.end()) {
+                ret = it->second;
+            }
+            return ret;
+        };
+        const auto revResolverFunc = [this](TxNum n) -> std::optional<TxHash> {
+            std::optional<TxHash> ret;
+            if (auto it = sm->num2TxHashMap.find(n); it != sm->num2TxHashMap.end()) {
+                ret = it->second;
+            }
+            return ret;
+        };
+        try {
+            // add tx hash map
+            auto pb = ProcessedBlock::makeShared(sm->txNumNext, *ppb, resolverFunc, sm->utxoset);
+            TxNum i = pb->txNum0;
+            for (const auto & tx : pb->txInfos) {
+                sm->txHash2NumMap[tx.hash] = i;
+                sm->num2TxHashMap[i] = tx.hash;
+                ++i;
+            }
+            sm->txNumNext = i;
+
+            // add outputs
+            for (const auto & ag : pb->hashXAggregated) {
+                for (const auto oidx : ag.outs) {
+                    const auto & out = pb->outputs[oidx];
+                    TxNum num = pb->txIdx2Num(out.txIdx);
+                    TXOInfo info;
+                    info.hashX = ag.hashX;
+                    info.amount = out.amount;
+                    info.confirmedHeight = pb->height;
+                    TXO txo(num, out.outN);
+                    sm->utxoset[txo] = info;
+                    Debug() << "Added txo: " << txo.toString()
+                            << " (txid: " << pb->txInfos[out.txIdx].hash.toHex() << " height: " << pb->height << ") "
+                            << " amount: " << info.amount.ToString() << " for HashX: " << info.hashX.toHex();
+                }
+            }
+            // add spends (process inputs)
+            unsigned inum = 0;
+            for (const auto & in : pb->inputs) {
+                const auto dbgTxIdHex = pb->txHashForInputIdx(pb->inputs, inum).toHex();
+                if (pb->txInfos[in.txIdx].input0Index == inum && !in.prevOut.isValid()) {
+                    // coinbase.. skip
+                } else if (const auto it = sm->utxoset.find(in.prevOut); it != sm->utxoset.end()) {
+                    Debug() << "Spent " << it->first.toString() << " amount: " << it->second.amount.ToString()
+                            << " in txid: "  << dbgTxIdHex << " height: " << pb->height
+                            << " input number: " << pb->numForInputIdx(pb->inputs, inum).value_or(0xffff)
+                            << " HashX: " << it->second.hashX.toHex();
+                    sm->utxoset.erase(it);
+                } else {
+                    Debug() << "Failed to spend: " << in.prevOut.toString() << "(spending txid: " << dbgTxIdHex << ")";
+                }
+                ++inum;
+            }
+            Debug() << "utxoset size: " << sm->utxoset.size() << " block: " << pb->height;
+            //if (pb->height == 60000)
+                // DEBUG TEST PRT
+            //    pb->toDebugString(revResolverFunc, sm->utxoset);
+        } catch (const Exception &e) {
+            Fatal() << e.what();
+        }
+    }
 
     const auto nLeft = qMax(sm->endHeight - (sm->ppBlkHtNext-1), 0U);
     {

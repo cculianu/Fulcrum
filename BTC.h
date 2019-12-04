@@ -359,9 +359,7 @@ namespace BTC
 
     /// returns true iff cscript is OP_RETURN, false otherwise
     inline bool IsOpReturn(const bitcoin::CScript &cs) {
-        bitcoin::opcodetype op;
-        bitcoin::CScript::const_iterator it = cs.begin();
-        return cs.GetOp(it, op) && op == bitcoin::opcodetype::OP_RETURN;
+        return cs.size() > 0 && *cs.begin() == bitcoin::opcodetype::OP_RETURN;
     }
 
     /// Header Chain Verifier -

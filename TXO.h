@@ -4,6 +4,8 @@
 
 #include "bitcoin/amount.h"
 
+#include <QString>
+
 #include <cstdint>
 #include <functional> // for std::hash
 #include <optional>
@@ -11,6 +13,7 @@
 
 /// WIP
 struct TXO {
+    static constexpr std::uint64_t initval = ~0ULL;
     // pack paranoia -- not strictly needed since this packs anyway the way we want on gcc and/or clang.
 #   ifdef __GNUC__
 #   pragma pack(push, 1)
@@ -23,7 +26,7 @@ struct TXO {
             /// The the 'N' (output index) for the tx itself as per bitcoin tx format
             std::uint16_t n;
         } prevout;
-        std::uint64_t asU64 = 0;
+        std::uint64_t asU64 = initval;
     } u;
 #   ifdef __GNUC__
 #   pragma pack(pop)
@@ -32,6 +35,18 @@ struct TXO {
 
     std::uint64_t txNum() const noexcept { return u.prevout.txNum; }
     std::uint16_t N() const noexcept { return u.prevout.n; }
+
+    TXO() = default;
+    TXO(std::uint64_t txNum, std::uint16_t n) {
+        u.prevout.txNum = txNum;
+        u.prevout.n = n;
+    }
+    TXO(const TXO &o) { u.asU64 = o.u.asU64; }
+    TXO &operator=(const TXO &o) { u.asU64 = o.u.asU64; return *this; }
+
+    bool isValid() const { return u.asU64 != initval; }
+
+    QString toString() const { return isValid() ? QString("%1:%2").arg(txNum()).arg(N()) : "<txo_invalid>"; }
 };
 
 namespace std {

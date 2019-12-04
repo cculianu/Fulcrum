@@ -11,7 +11,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
-/* static */ const BlockProcBase::TxHash BlockProcBase::nullhash;
+/* static */ const TxHash BlockProcBase::nullhash;
 
 /// fill this struct's data with all the txdata, etc from a bitcoin CBlock. Alternative to using the second c'tor.
 void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bitcoin::CBlock &b) {
@@ -50,7 +50,7 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bi
             estimatedThisSizeBytes += sizeof(OutPt);
             const size_t outputIdx = outputs.size()-1;
             if (const auto cscript = out.scriptPubKey;
-                    !BTC::IsOpReturn(cscript))  ///< skip OP_RETURN
+                    cscript.size() && !BTC::IsOpReturn(cscript))  ///< skip OP_RETURN
             {
                 const HashX hashX = cscript;
                 // add this output to the hashX -> outputs association for later
@@ -200,7 +200,7 @@ ProcessedBlock::ProcessedBlock(TxNum txBaseNum, const PreProcessedBlock &ppb, co
     unsigned i = 0;
     // build hashX -> ag quick lookup map
     for (auto & ag: hashXAggregated) {
-        hashXRevMap[ag.hashX] = i;
+        hashXRevMap[ag.hashX] = i++;
     }
 
     // run through all of the inputs and resolve them to a HashX by consuling the utxo set and the resolverFunc
@@ -214,6 +214,9 @@ ProcessedBlock::ProcessedBlock(TxNum txBaseNum, const PreProcessedBlock &ppb, co
             const auto & prevout = outputs[inp.parentTxOutIdx.value()];
             txo.u.prevout.txNum = txIdx2Num(prevout.txIdx);
             // at this point we know the input in question was already pre-populated in the hashXAggregated structure,
+        } else if (i == 0) {
+            // coinbase input.. skip the scripthash stuff
+            txo = TXO(); // mark prevout as "invalid"
         } else {
             // prevout was not in this block, call the resolverFunc to figure out the 'txNum'
             auto opt = resolverFunc(inp.prevoutHash);
@@ -246,7 +249,7 @@ ProcessedBlock::ProcessedBlock(TxNum txBaseNum, const PreProcessedBlock &ppb, co
                         {}, // outs
                         {i}, // ins
                     });
-                    opt = hashXAggregated.size(); // mark new hashX in aggregated structure
+                    opt = hashXAggregated.size()-1; // mark new hashX in aggregated structure
                     estimatedThisSizeBytes += sizeof(HashXAggregated);
                 } else {
                     hashXAggregated[opt.value()].ins.push_back(i);
@@ -267,11 +270,14 @@ ProcessedBlock::ProcessedBlock(TxNum txBaseNum, const PreProcessedBlock &ppb, co
 
     // all inputs are pushed, we need to update the hashXAggregated structure by sorting it an making sure indices
     // are unique
+    hashXAggregated.shrink_to_fit(); // shrink capacity -> size
     for (auto & ag : hashXAggregated) {
         // sort each ag structure again
         std::sort(ag.ins.begin(), ag.ins.end());
         // make sure inputs are unique
-        std::unique(ag.ins.begin(), ag.ins.end());
+        auto last = std::unique(ag.ins.begin(), ag.ins.end());
+        ag.ins.erase(last, ag.ins.end());
+        ag.ins.shrink_to_fit(); // just in case we grew its capacity too large
     }
     sortHashXAggregated(inputs); // sort by txid/output
 }
@@ -310,7 +316,6 @@ QString ProcessedBlock::toDebugString(const Num2TxHashResolver &resolver, const 
             for (size_t j = 0; j < ag.ins.size(); ++j) {
                 const auto idx = ag.ins[j];
                 const auto & theInput [[maybe_unused]] = inputs[idx];
-                assert(theInput.parentTxOutIdx.has_value() && txHashForOutputIdx(theInput.parentTxOutIdx.value()) == theInput.prevoutHash);
                 const auto & inp = inputs[idx];
                 QByteArray h = resolver(inp.prevOut.txNum()).value_or("").toHex();
                 QString amt = "prevOutAmount: ???";
