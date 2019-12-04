@@ -392,13 +392,13 @@ namespace BTC
     /// already randomized.
     template <typename BytesT>
     struct GenericTrivialHashHasher {
-        std::size_t operator()(const BytesT &b) const {
-            if (LIKELY(size_t(b.size()) >= sizeof(size_t))) {
+        std::size_t operator()(const BytesT &b) const noexcept {
+            if (LIKELY(std::size_t(b.size()) >= sizeof(std::size_t))) {
                 // common case, just return the first 8 bytes reinterpreted as size_t since this is already
                 // a random hash.
                 static_assert (std::is_scalar_v<std::remove_pointer_t<decltype (b.begin())>>,
                                "GenericTrivialHasher must be used with a container type where .begin() returns a pointer to its data." );
-                return *reinterpret_cast<const size_t *>(b.begin());
+                return *reinterpret_cast<const std::size_t *>(b.begin());
             }
             return qHash(b, 0xf1234567); // this should not normally be reached.
         }

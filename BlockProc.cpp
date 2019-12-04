@@ -11,8 +11,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
-
-/*static*/ const QByteArray PreProcessedBlock::staticnull;
+namespace BlockProcStatics { const TxHash nullhash; };
 
 /// fill this struct's data with all the txdata, etc from a bitcoin CBlock. Alternative to using the second c'tor.
 void PreProcessedBlock::fill(unsigned blockHeight, size_t blockSize, const bitcoin::CBlock &b) {
@@ -23,7 +22,6 @@ void PreProcessedBlock::fill(unsigned blockHeight, size_t blockSize, const bitco
     header = b.GetBlockHeader();
     estimatedThisSizeBytes = sizeof(*this) + size_t(BTC::GetBlockHeaderSize());
     txInfos.reserve(b.vtx.size());
-    using HashHasher = BTC::QByteArrayHashHasher;
     std::unordered_map<QByteArray, unsigned, HashHasher> txHashToIndex;
     std::unordered_map<HashX, std::vector<unsigned>, HashHasher> hashXOuts, hashXIns;
     std::unordered_set<HashX, HashHasher> hashXsSeen;
@@ -185,4 +183,24 @@ PreProcessedBlockPtr
 /*static*/ PreProcessedBlock::makeShared(unsigned height, size_t size, const bitcoin::CBlock &block)
 {
     return std::make_shared<PreProcessedBlock>(height, size, block);
+}
+
+
+// very much a work in progress. this needs to also consult the UTXO set to be complete. For now we just
+// have this here for reference.
+std::vector<std::unordered_set<HashX, HashHasher>>
+ProcessedBlock::hashXTouchedByTx() const
+{
+    std::vector<std::unordered_set<HashX, HashHasher>> ret(txInfos.size());
+    for (const auto & ag : hashXAggregated) {
+        // scan all outputs and add this hashX
+        for (const auto outIdx : ag.outs) {
+            ret[outputs[outIdx].txIdx].insert(ag.hashX); // cheap shallow copy
+        }
+        // scan all inputs and add this hashX
+        for (const auto inIdx : ag.ins) {
+            ret[inputs[inIdx].txIdx].insert(ag.hashX);
+        }
+    }
+    return ret;
 }

@@ -157,6 +157,7 @@ HEADERS += \
     Servers.h \
     SrvMgr.h \
     Storage.h \
+    TXO.h \
     Util.h
 
 RESOURCES += \
