@@ -23,11 +23,15 @@ struct TXO {
             /// The the 'N' (output index) for the tx itself as per bitcoin tx format
             std::uint16_t n;
         } prevout;
-        std::uint64_t asU64;
+        std::uint64_t asU64 = 0;
     } u;
 #   ifdef __GNUC__
 #   pragma pack(pop)
 #   endif
+    bool operator==(const TXO &o) const noexcept { return u.asU64 == o.u.asU64; }
+
+    std::uint64_t txNum() const noexcept { return u.prevout.txNum; }
+    std::uint16_t N() const noexcept { return u.prevout.n; }
 };
 
 namespace std {

@@ -15,7 +15,7 @@ public:
     explicit Mgr(QObject *parent = nullptr);
     ~Mgr() override;
 
-    virtual void startup() = 0; ///< NB: mgrs may throw Exception here, so catch it and abort if that happens.
+    virtual void startup() noexcept(false) = 0; ///< NB: mgrs may throw Exception here, so catch it and abort if that happens.
     virtual void cleanup() = 0;
 };
 
