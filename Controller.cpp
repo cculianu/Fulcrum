@@ -359,7 +359,7 @@ struct Controller::StateMachine
     // TESTING UTXO SET
     UTXOSet utxoset;
     std::unordered_map <TxHash, TxNum, HashHasher> txHash2NumMap;
-    std::unordered_map <TxNum, TxHash> num2TxHashMap;
+    //std::unordered_map <TxNum, TxHash> num2TxHashMap;
     std::atomic<TxNum> txNumNext{0};
 };
 
@@ -617,7 +617,7 @@ bool Controller::process_VerifyAndAddBlock(PreProcessedBlockPtr ppb)
             TxNum i = pb->txNum0;
             for (const auto & tx : pb->txInfos) {
                 sm->txHash2NumMap[tx.hash] = i;
-                sm->num2TxHashMap[i] = tx.hash;
+                //sm->num2TxHashMap[i] = tx.hash;
                 ++i;
             }
             sm->txNumNext = i;
