@@ -41,7 +41,7 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bi
             // remember output0 index for this txindex
             info.output0Index.emplace( unsigned(outputs.size()) );
 
-        uint16_t outN = 0;
+        IONum outN = 0;
         for (const auto & out : tx->vout) {
             // save the outputs seen
             outputs.emplace_back(
@@ -50,13 +50,17 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bi
             estimatedThisSizeBytes += sizeof(OutPt);
             const size_t outputIdx = outputs.size()-1;
             if (const auto cscript = out.scriptPubKey;
-                    cscript.size() && !BTC::IsOpReturn(cscript))  ///< skip OP_RETURN
+                    !BTC::IsOpReturn(cscript))  ///< skip OP_RETURN
             {
-                const HashX hashX = cscript;
+                const HashX hashX = BTC::HashXFromCScript(cscript);
                 // add this output to the hashX -> outputs association for later
                 hashXOuts[ hashX ].emplace_back( outputIdx );
                 hashXsSeen.insert(hashX);
-            } /*else {
+            }
+            else {
+                ++nOpReturns;
+            }/*//use this clause if you want to actually save/process opreturn scripts:
+              else {
                 // OpReturn tracking...
                 opreturns.emplace_back(OpReturn{unsigned(outputIdx), cscript});
             }*/
@@ -108,7 +112,7 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bi
                     !BTC::IsOpReturn(cscript))
             {
                 // mark this input as touching this hashX
-                const HashX hashX = cscript;
+                const HashX hashX = BTC::HashXFromCScript(cscript);
                 hashXIns[ hashX ].emplace_back(inIdx);
                 hashXsSeen.insert(hashX);
             }

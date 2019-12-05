@@ -125,7 +125,6 @@ SOURCES += \
     BitcoinD.cpp \
     BlockProc.cpp \
     Controller.cpp \
-    HashX.cpp \
     Mgr.cpp \
     Mixins.cpp \
     Options.cpp \
@@ -146,9 +145,9 @@ HEADERS += \
     BTC.h \
     BitcoinD.h \
     BlockProc.h \
+    BlockProcTypes.h \
     Common.h \
     Controller.h \
-    HashX.h \
     Logger.h \
     Mgr.h \
     Mixins.h \

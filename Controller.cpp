@@ -21,6 +21,8 @@ Controller::~Controller() { Debug("%s", __FUNCTION__); cleanup(); }
 
 void Controller::startup()
 {
+    stopFlag = false;
+
     storage = std::make_unique<Storage>(options);
     storage->startup(); // may throw here
 
@@ -91,6 +93,7 @@ void Controller::startup()
 
 void Controller::cleanup()
 {
+    stopFlag = true;
     stop();
     tasks.clear(); // deletes all tasks asap
     if (srvmgr) { Log("Stopping SrvMgr ... "); srvmgr->cleanup(); srvmgr.reset(); }
@@ -263,6 +266,7 @@ void DownloadBlocksTask::process()
 
 void DownloadBlocksTask::do_get(unsigned int bnum)
 {
+    if (ctl->isStopping())  return; // short-circuit early return if controller is stopping
     submitRequest("getblockhash", {bnum}, [this, bnum](const RPC::Message & resp){
         QVariant var = resp.result();
         const auto hash = Util::ParseHexFast(var.toByteArray());
@@ -429,6 +433,7 @@ CtlTaskT *Controller::newTask(bool connectErroredSignal, Args && ...args)
 
 void Controller::process(bool beSilentIfUpToDate)
 {
+    if (stopFlag) return;
     bool enablePollTimer = false;
     auto polltimeout = polltime_ms;
     stopTimer(pollTimerName);
@@ -520,7 +525,7 @@ void Controller::putBlock(CtlTask *task, PreProcessedBlockPtr p)
 {
     // returns right away
     Util::AsyncOnObject(this, [this, task, p] {
-        if (!sm || isTaskDeleted(task) || sm->state == StateMachine::State::Failure) {
+        if (!sm || isTaskDeleted(task) || sm->state == StateMachine::State::Failure || stopFlag) {
             Debug() << "Ignoring block " << p->height << " for now-defunct task";
             return;
         } else if (sm->state != StateMachine::State::DownloadingBlocks) {
@@ -536,9 +541,9 @@ void Controller::putBlock(CtlTask *task, PreProcessedBlockPtr p)
 void Controller::process_DownloadingBlocks()
 {
     unsigned ct = 0;
-    for (auto it = sm->ppBlocks.find(sm->ppBlkHtNext); it != sm->ppBlocks.end(); it = sm->ppBlocks.find(sm->ppBlkHtNext)) {
+    for (auto it = sm->ppBlocks.find(sm->ppBlkHtNext); it != sm->ppBlocks.end() && !stopFlag; it = sm->ppBlocks.find(sm->ppBlkHtNext)) {
         auto ppb = it->second;
-        FatalAssert(ppb->height == sm->ppBlkHtNext) << "INTERNAL ERROR: Retrieved block has the wrong height! FIXME!"; // paranoia
+        assert(ppb->height == sm->ppBlkHtNext); // paranoia -- should never happen
         ++ct;
         ++sm->ppBlkHtNext;
 
@@ -587,7 +592,9 @@ bool Controller::process_VerifyAndAddBlock(PreProcessedBlockPtr ppb)
 
     FatalAssert(rawHeader.size() == BTC::GetBlockHeaderSize()) << "INTERNAL ERROR: raw header has the wrong size!";
 
-    { // UTXO set testing TESTING TESTING XXX
+    if constexpr (true) { // UTXO set testing TESTING TESTING XXX
+        static constexpr bool debugPrt = false;
+
         const auto resolverFunc = [this](const TxHash &h) -> std::optional<TxNum> {
             std::optional<TxNum> ret;
             if (auto it = sm->txHash2NumMap.find(h); it != sm->txHash2NumMap.end()) {
@@ -595,6 +602,7 @@ bool Controller::process_VerifyAndAddBlock(PreProcessedBlockPtr ppb)
             }
             return ret;
         };
+        /*
         const auto revResolverFunc = [this](TxNum n) -> std::optional<TxHash> {
             std::optional<TxHash> ret;
             if (auto it = sm->num2TxHashMap.find(n); it != sm->num2TxHashMap.end()) {
@@ -602,6 +610,7 @@ bool Controller::process_VerifyAndAddBlock(PreProcessedBlockPtr ppb)
             }
             return ret;
         };
+        */
         try {
             // add tx hash map
             auto pb = ProcessedBlock::makeShared(sm->txNumNext, *ppb, resolverFunc, sm->utxoset);
@@ -613,9 +622,13 @@ bool Controller::process_VerifyAndAddBlock(PreProcessedBlockPtr ppb)
             }
             sm->txNumNext = i;
 
+            std::unordered_set<unsigned> outsSeen; // DEBUG REMOVE ME
+
             // add outputs
+
             for (const auto & ag : pb->hashXAggregated) {
                 for (const auto oidx : ag.outs) {
+                    outsSeen.insert(oidx); // DEBUG REMOVE ME
                     const auto & out = pb->outputs[oidx];
                     TxNum num = pb->txIdx2Num(out.txIdx);
                     TXOInfo info;
@@ -624,11 +637,36 @@ bool Controller::process_VerifyAndAddBlock(PreProcessedBlockPtr ppb)
                     info.confirmedHeight = pb->height;
                     TXO txo(num, out.outN);
                     sm->utxoset[txo] = info;
-                    Debug() << "Added txo: " << txo.toString()
-                            << " (txid: " << pb->txInfos[out.txIdx].hash.toHex() << " height: " << pb->height << ") "
-                            << " amount: " << info.amount.ToString() << " for HashX: " << info.hashX.toHex();
+                    if constexpr (debugPrt)
+                        Debug() << "Added txo: " << txo.toString()
+                                << " (txid: " << pb->txInfos[out.txIdx].hash.toHex() << " height: " << pb->height << ") "
+                                << " amount: " << info.amount.ToString() << " for HashX: " << info.hashX.toHex();
                 }
             }
+            // SANITY CHECK
+            if (auto totalOuts = outsSeen.size() + pb->nOpReturns; totalOuts != pb->outputs.size()) {
+                std::unordered_set<unsigned> missing;
+                for (unsigned i = 0; i < unsigned(pb->outputs.size()); ++i)
+                    if (!outsSeen.count(i))
+                        missing.insert(i);
+
+                QString mstr;
+                {
+                    QTextStream ts(&mstr, QIODevice::WriteOnly|QIODevice::Truncate|QIODevice::Text);
+                    for (auto idx : missing) {
+                        const auto & out = pb->outputs[idx];
+                        auto txhash = pb->txInfos[out.txIdx].hash.toHex();
+                        auto N = out.outN;
+                        TXO txo(pb->txIdx2Num(out.txIdx), N);
+                        ts << "missing output #" << idx << " " << txhash << ":" << N << " (txo: " << txo.toString() << ")\n";
+                    }
+                }
+
+                Fatal() << "block: " << pb->height << " nouts (" << totalOuts << ") != outputs.size (" << pb->outputs.size() << ")  ppb outputs.size(): " << ppb->outputs.size()
+                        << "\n" << mstr;
+            }
+            // /SANITY CHECK
+
             // add spends (process inputs)
             unsigned inum = 0;
             for (const auto & in : pb->inputs) {
@@ -636,20 +674,22 @@ bool Controller::process_VerifyAndAddBlock(PreProcessedBlockPtr ppb)
                 if (pb->txInfos[in.txIdx].input0Index == inum && !in.prevOut.isValid()) {
                     // coinbase.. skip
                 } else if (const auto it = sm->utxoset.find(in.prevOut); it != sm->utxoset.end()) {
-                    Debug() << "Spent " << it->first.toString() << " amount: " << it->second.amount.ToString()
-                            << " in txid: "  << dbgTxIdHex << " height: " << pb->height
-                            << " input number: " << pb->numForInputIdx(pb->inputs, inum).value_or(0xffff)
-                            << " HashX: " << it->second.hashX.toHex();
+                    if constexpr (debugPrt)
+                        Debug() << "Spent " << it->first.toString() << " amount: " << it->second.amount.ToString()
+                                << " in txid: "  << dbgTxIdHex << " height: " << pb->height
+                                << " input number: " << pb->numForInputIdx(pb->inputs, inum).value_or(0xffff)
+                                << " HashX: " << it->second.hashX.toHex();
                     sm->utxoset.erase(it);
                 } else {
                     Debug() << "Failed to spend: " << in.prevOut.toString() << "(spending txid: " << dbgTxIdHex << ")";
                 }
                 ++inum;
             }
-            Debug() << "utxoset size: " << sm->utxoset.size() << " block: " << pb->height;
+            if constexpr (debugPrt)
+                Debug() << "utxoset size: " << sm->utxoset.size() << " block: " << pb->height;
             //if (pb->height == 60000)
                 // DEBUG TEST PRT
-            //    pb->toDebugString(revResolverFunc, sm->utxoset);
+            //    Debug() << pb->toDebugString(revResolverFunc, sm->utxoset);
         } catch (const Exception &e) {
             Fatal() << e.what();
         }

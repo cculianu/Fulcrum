@@ -1,8 +1,6 @@
 #pragma once
 
-#include "HashX.h"
-
-#include "bitcoin/amount.h"
+#include "BlockProcTypes.h"
 
 #include <QString>
 
@@ -11,9 +9,10 @@
 #include <optional>
 #include <unordered_map>
 
+
 /// WIP
 struct TXO {
-    static constexpr std::uint64_t initval = ~0ULL;
+    static constexpr std::uint64_t initval = ~0ULL; ///< indicates !isValid()
     // pack paranoia -- not strictly needed since this packs anyway the way we want on gcc and/or clang.
 #   ifdef __GNUC__
 #   pragma pack(push, 1)
@@ -31,9 +30,14 @@ struct TXO {
 #   ifdef __GNUC__
 #   pragma pack(pop)
 #   endif
+    /// for most container types
     bool operator==(const TXO &o) const noexcept { return u.asU64 == o.u.asU64; }
+    /// for ordered sets
+    bool operator<(const TXO &o) const noexcept  { return u.prevout.txNum < o.u.prevout.txNum && u.prevout.n < o.u.prevout.n; }
 
+    // convenience
     std::uint64_t txNum() const noexcept { return u.prevout.txNum; }
+    // convenience
     std::uint16_t N() const noexcept { return u.prevout.n; }
 
     TXO() = default;
@@ -42,7 +46,7 @@ struct TXO {
         u.prevout.n = n;
     }
     TXO(const TXO &o) { u.asU64 = o.u.asU64; }
-    TXO &operator=(const TXO &o) { u.asU64 = o.u.asU64; return *this; }
+    TXO &operator=(const TXO &o) noexcept  { u.asU64 = o.u.asU64; return *this; }
 
     bool isValid() const { return u.asU64 != initval; }
 
@@ -50,7 +54,7 @@ struct TXO {
 };
 
 namespace std {
-    // specialization of std::hash to be able to add struct UTXO to any unordered_set or unordered_map
+    /// specialization of std::hash to be able to add struct UTXO to any unordered_set or unordered_map
     template<> struct hash<TXO> {
         std::size_t operator()(const TXO &txo) const noexcept {
             static_assert (sizeof(txo.u.asU64) <= sizeof(std::size_t) && sizeof(txo.u.prevout) >= 8 && sizeof(txo.u.prevout) == sizeof(txo.u.asU64),

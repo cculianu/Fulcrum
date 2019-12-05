@@ -2,8 +2,8 @@
 #define MY_BLOCKPROC_H
 
 #include "BTC.h"
+#include "BlockProcTypes.h"
 #include "Common.h"
-#include "HashX.h"
 #include "TXO.h"
 
 #include "bitcoin/amount.h"
@@ -17,14 +17,6 @@
 #include <optional>
 #include <unordered_set>
 #include <vector>
-
-
-using HashHasher = BTC::QByteArrayHashHasher;
-
-using TxNum = std::uint64_t;
-using BlockHeight = std::uint32_t;
-using IONum = std::uint16_t;
-using TxHash = QByteArray;
 
 
 /// Note all hashes below are in *reversed* order from bitcoind's internal memory order.
@@ -80,6 +72,8 @@ struct BlockProcBase
     */
     // /OpReturn
     // -- /End Data
+
+    unsigned nOpReturns = 0; ///< just keep a count of the number of opreturn outputs encountered in the block (used by sanity checkers)
 
     // -- Methods:
 
@@ -200,9 +194,6 @@ struct ProcessedBlock : public BlockProcBase
 
     /// -- Exception thrown by constructor if it cannot resolve inputs given the passed-in utxo set
     struct CannotResolveInputError : public Exception { using Exception::Exception; ~CannotResolveInputError(); };
-
-    using TxHash2NumResolver = std::function< std::optional<TxNum>(const TxHash &) >;
-    using Num2TxHashResolver = std::function< std::optional<TxHash>(TxNum) >;
     // -- Methods:
 
     /// the only c'tor -- note this may throw CannotResolveInputError
