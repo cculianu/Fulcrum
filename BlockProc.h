@@ -60,9 +60,9 @@ struct BlockProcBase
         std::vector<unsigned> ins;
     };
 
-    /// We use a node map because we don't want std::vectors above to be copy-constructed over and over again
-    /// as we mutate this map by inserting new HashX's into it.
-    robin_hood::unordered_node_map<HashX, AggregatedOutsIns, HashHasher> hashXAggregated;
+    /// Flat map ok here, presumably robin_hood does move construction when moving objects around.
+    /// TODO: Verify that is the case with robin_hood, and if not, use an unordered_node_map here.
+    robin_hood::unordered_flat_map<HashX, AggregatedOutsIns, HashHasher> hashXAggregated;
 
     /*
     // If we decide to track OpReturn:
