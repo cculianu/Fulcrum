@@ -23,8 +23,6 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bi
     estimatedThisSizeBytes = sizeof(*this) + size_t(BTC::GetBlockHeaderSize());
     txInfos.reserve(b.vtx.size());
     robin_hood::unordered_flat_map<TxHash, unsigned, HashHasher> txHashToIndex;
-    robin_hood::unordered_flat_map<HashX, std::vector<unsigned>, HashHasher> hashXOuts, hashXIns;
-    std::unordered_set<HashX, HashHasher> hashXsSeen;
     // run through all tx's, build inputs and outputs lists
     size_t txIdx = 0;
     for (const auto & tx : b.vtx) {
@@ -54,8 +52,7 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bi
             {
                 const HashX hashX = BTC::HashXFromCScript(cscript);
                 // add this output to the hashX -> outputs association for later
-                hashXOuts[ hashX ].emplace_back( outputIdx );
-                hashXsSeen.insert(hashX);
+                hashXAggregated[ hashX ].outs.emplace_back( outputIdx );
             }
             else {
                 ++nOpReturns;
@@ -113,29 +110,20 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bi
             {
                 // mark this input as touching this hashX
                 const HashX hashX = BTC::HashXFromCScript(cscript);
-                hashXIns[ hashX ].emplace_back(inIdx);
-                hashXsSeen.insert(hashX);
+                hashXAggregated[ hashX ].ins.emplace_back(inIdx);
             }
         }
         ++inIdx;
     }
 
-    hashXAggregated.reserve(hashXsSeen.size());
-    for (const auto & hashX : hashXsSeen ) {
-        HashXAggregated ag;
-        ag.hashX = hashX;
-        if (auto it = hashXIns.find(hashX); it != hashXIns.end())
-            ag.ins.swap(it->second);
-        if (auto it = hashXOuts.find(hashX); it != hashXOuts.end())
-            ag.outs.swap(it->second);
-
+    for (auto & [hashX, ag] : hashXAggregated ) {
+        std::sort(ag.ins.begin(), ag.ins.end());
+        std::sort(ag.outs.begin(), ag.outs.end());
         ag.ins.shrink_to_fit();
         ag.outs.shrink_to_fit();
-        estimatedThisSizeBytes += sizeof(ag) + size_t(ag.hashX.size()) + ag.ins.size() * sizeof(decltype(ag.ins)::value_type) + ag.outs.size() * sizeof(decltype(ag.outs)::value_type);
-        hashXAggregated.emplace_back(std::move(ag));
+        // tally up space usage
+        estimatedThisSizeBytes += sizeof(ag) + size_t(hashX.size()) + ag.ins.size() * sizeof(decltype(ag.ins)::value_type) + ag.outs.size() * sizeof(decltype(ag.outs)::value_type);
     }
-
-    sortHashXAggregated(inputs);
 }
 
 QString PreProcessedBlock::toDebugString() const
@@ -147,8 +135,8 @@ QString PreProcessedBlock::toDebugString() const
            << " height: " << height << " " << " size: " << sizeBytes << " header_nTime: " << header.nTime << " hash: " << header.GetHash().ToString().c_str()
            << " nTx: " << txInfos.size() << " nIns: " << inputs.size() << " nOuts: " << outputs.size() << " nScriptHash: " << hashXAggregated.size();
         int i = 0;
-        for (const auto & ag : hashXAggregated) {
-            ts << " (#" << i << " - " << ag.hashX.toHex() << " - nIns: " << ag.ins.size() << " nOuts: " << ag.outs.size();
+        for (const auto & [hashX, ag] : hashXAggregated) {
+            ts << " (#" << i << " - " << hashX.toHex() << " - nIns: " << ag.ins.size() << " nOuts: " << ag.outs.size();
             for (size_t j = 0; j < ag.ins.size(); ++j) {
                 const auto idx = ag.ins[j];
                 const auto & theInput [[maybe_unused]] = inputs[idx];
@@ -199,16 +187,9 @@ ProcessedBlock::ProcessedBlock(TxNum txBaseNum, const PreProcessedBlock &ppb, co
 {
     inputs.reserve(ppb.inputs.size());
     estimatedThisSizeBytes -= ppb.inputs.size() * sizeof(PreProcessedBlock::InputPt); // reduce the size estimate because we will recompute it below
-    robin_hood::unordered_flat_map<HashX, std::optional<unsigned>, HashHasher> hashXRevMap; // index HashX -> its HashXAggregated index
-
-    unsigned i = 0;
-    // build hashX -> ag quick lookup map
-    for (auto & ag: hashXAggregated) {
-        hashXRevMap[ag.hashX] = i++;
-    }
 
     // run through all of the inputs and resolve them to a HashX by consuling the utxo set and the resolverFunc
-    i = 0;
+    unsigned i = 0;
     for (const auto & inp : ppb.inputs) {
         TXO txo;
         txo.u.prevout.n = inp.prevoutN;
@@ -245,18 +226,13 @@ ProcessedBlock::ProcessedBlock(TxNum txBaseNum, const PreProcessedBlock &ppb, co
                 // hashXAggregated structure now.  Either by pushing an 'ins' to the end of an existing struct's
                 // vector, or creating a new
                 const auto & info = it->second;
-                auto & opt = hashXRevMap[info.hashX];
-                if (!opt.has_value()) {
+                if (auto it = hashXAggregated.find(info.hashX); it == hashXAggregated.end()) {
                     // did not exist -- new hashX
-                    hashXAggregated.emplace_back(HashXAggregated{
-                        info.hashX, //
-                        {}, // outs
-                        {i}, // ins
-                    });
-                    opt = hashXAggregated.size()-1; // mark new hashX in aggregated structure
-                    estimatedThisSizeBytes += sizeof(HashXAggregated);
+                    hashXAggregated[info.hashX].ins.push_back(i);
+                    estimatedThisSizeBytes += sizeof(AggregatedOutsIns) + size_t(info.hashX.length());
                 } else {
-                    hashXAggregated[opt.value()].ins.push_back(i);
+                    // existed, use iterator above to push back to existing vector in map value (struct AggregatedOutsIns)
+                    it->second.ins.push_back(i);
                 }
                 estimatedThisSizeBytes += sizeof(i);
             }
@@ -272,18 +248,30 @@ ProcessedBlock::ProcessedBlock(TxNum txBaseNum, const PreProcessedBlock &ppb, co
         ++i;
     }
 
-    // all inputs are pushed, we need to update the hashXAggregated structure by sorting it an making sure indices
-    // are unique
-    hashXAggregated.shrink_to_fit(); // shrink capacity -> size
-    for (auto & ag : hashXAggregated) {
+    // all inputs are pushed, we need to update the hashXAggregated structure by sorting the inputs array by idx
+    // (and make sure all indices are unique -- TODO: remove this last check)
+    for (auto & [hashX, ag] : hashXAggregated) {
         // sort each ag structure again
         std::sort(ag.ins.begin(), ag.ins.end());
-        // make sure inputs are unique
-        auto last = std::unique(ag.ins.begin(), ag.ins.end());
-        ag.ins.erase(last, ag.ins.end());
+        static constexpr bool doUniqueCheck =
+#ifdef NDEBUG
+                false;
+#else
+                true;
+#endif
+        if constexpr (doUniqueCheck) {
+            // paranoia: make sure inputs are unique (this likely is not needed)
+            auto last = std::unique(ag.ins.begin(), ag.ins.end());
+            if (auto end = ag.ins.end(); UNLIKELY(last != end)) {
+                // TODO: remove this, and perhaps this whole unique enforcement, when we we convince ourselves it's not needed.
+                // So far it seems no matter what we're sane here and this is unnecessary.
+                Warning() << "Warning: duplicate output indices detected for hashX: " << hashX.toHex() << " height: " << height;
+                ag.ins.erase(last, ag.ins.end());
+            }
+        }
+
         ag.ins.shrink_to_fit(); // just in case we grew its capacity too large
     }
-    sortHashXAggregated(inputs); // sort by txid/output
 }
 
 // very much a work in progress. this needs to also consult the UTXO set to be complete. For now we just
@@ -292,14 +280,14 @@ std::vector<std::unordered_set<HashX, HashHasher>>
 ProcessedBlock::hashXTouchedByTx() const
 {
     std::vector<std::unordered_set<HashX, HashHasher>> ret(txInfos.size());
-    for (const auto & ag : hashXAggregated) {
+    for (const auto & [hashX, ag] : hashXAggregated) {
         // scan all outputs and add this hashX
         for (const auto outIdx : ag.outs) {
-            ret[outputs[outIdx].txIdx].insert(ag.hashX); // cheap shallow copy
+            ret[outputs[outIdx].txIdx].insert(hashX); // cheap shallow copy
         }
         // scan all inputs and add this hashX
         for (const auto inIdx : ag.ins) {
-            ret[inputs[inIdx].txIdx].insert(ag.hashX);
+            ret[inputs[inIdx].txIdx].insert(hashX);
         }
     }
     return ret;
@@ -315,8 +303,8 @@ QString ProcessedBlock::toDebugString(const Num2TxHashResolver &resolver, const 
            << " height: " << height << " " << " size: " << sizeBytes << " header_nTime: " << header.nTime << " hash: " << header.GetHash().ToString().c_str()
            << " nTx: " << txInfos.size() << " nIns: " << inputs.size() << " nOuts: " << outputs.size() << " nScriptHash: " << hashXAggregated.size();
         int i = 0;
-        for (const auto & ag : hashXAggregated) {
-            ts << " (#" << i << " - " << ag.hashX.toHex() << " - nIns: " << ag.ins.size() << " nOuts: " << ag.outs.size();
+        for (const auto & [hashX, ag] : hashXAggregated) {
+            ts << " (#" << i << " - " << hashX.toHex() << " - nIns: " << ag.ins.size() << " nOuts: " << ag.outs.size();
             for (size_t j = 0; j < ag.ins.size(); ++j) {
                 const auto idx = ag.ins[j];
                 const auto & theInput [[maybe_unused]] = inputs[idx];

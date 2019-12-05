@@ -47,20 +47,22 @@ struct BlockProcBase
 
     std::vector<OutPt> outputs; ///< all the outpoints for *all* the tx's in this block, in the order they were encountered!
 
-    struct HashXAggregated {
-        /// The 32-byte hashX -- in "hex-encode-ready" memory order (that is, reversed).
-        HashX hashX;
-        /// collection of all outputs in this block that are *TO* this HashX (data items are indices into the `outputs`
-        /// array above)
+    /// 'Value' type for the hashXAggregated map below. Contains 2 lists of output and input indices into the `outputs`
+    /// and `inputs` arrays present in concrete subclasses.
+    struct AggregatedOutsIns {
+        /// collection of all outputs in this block that are *TO* a particular HashX (data items are indices into the
+        /// `outputs`array above)
         std::vector<unsigned> outs;
-        /// collection of all inputs in this block that are *FROM* this HashX (data items are indices into the `inputs`
-        /// arrays above). Note this will only include inputs that were from prevout tx's also in this block.  More
-        /// processing is needed by the block processor to fill this array in completely for inputs outside this block.
+        /// collection of all inputs in this block that are *FROM* a particular HashX (data items are indices into the
+        /// `inputs` arrays in concrete subclasses). Note this will only include inputs that were from prevout tx's also
+        /// in this block for PreProcessedBlock instances -- however for ProcessedBlock instances the inputs will be
+        /// fully resolved (they require a complete UTXO set for resulution, basically).
         std::vector<unsigned> ins;
     };
 
-    /// scriptHashes appearing in all of the outputs (and possibly inputs) in the txs in this block
-    std::vector<HashXAggregated> hashXAggregated;
+    /// We use a node map because we don't want std::vectors above to be copy-constructed over and over again
+    /// as we mutate this map by inserting new HashX's into it.
+    robin_hood::unordered_node_map<HashX, AggregatedOutsIns, HashHasher> hashXAggregated;
 
     /*
     // If we decide to track OpReturn:
@@ -120,18 +122,6 @@ struct BlockProcBase
         return nullhash;
     }
 
-    template <typename InputPt>
-    void sortHashXAggregated(const std::vector<InputPt> & inputs) {
-        // sort hashXAggregated by min(output_txid, input_txid) (basically earliest first)
-        std::sort(hashXAggregated.begin(), hashXAggregated.end(), [this, &inputs](const HashXAggregated &a, const HashXAggregated &b) -> bool {
-            if (a.hashX == b.hashX) return false;
-            unsigned a_outTxid0 = a.outs.empty() ? UINT_MAX : outputs[a.outs.front()].txIdx,
-                     b_outTxid0 = b.outs.empty() ? UINT_MAX : outputs[b.outs.front()].txIdx,
-                     a_inTxid0 = a.ins.empty() ? UINT_MAX : inputs[a.ins.front()].txIdx,
-                     b_inTxid0 = b.ins.empty() ? UINT_MAX : inputs[b.ins.front()].txIdx;
-            return std::min(a_outTxid0, a_inTxid0) < std::min(b_outTxid0, b_inTxid0);
-        });
-    }
 protected:
     BlockProcBase() = default;
     static const TxHash nullhash;

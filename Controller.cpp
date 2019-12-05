@@ -627,13 +627,13 @@ bool Controller::process_VerifyAndAddBlock(PreProcessedBlockPtr ppb)
 
             // add outputs
 
-            for (const auto & ag : pb->hashXAggregated) {
+            for (const auto & [hashX, ag] : pb->hashXAggregated) {
                 for (const auto oidx : ag.outs) {
                     outsSeen.insert(oidx); // DEBUG REMOVE ME
                     const auto & out = pb->outputs[oidx];
                     TxNum num = pb->txIdx2Num(out.txIdx);
                     TXOInfo info;
-                    info.hashX = ag.hashX;
+                    info.hashX = hashX;
                     info.amount = out.amount;
                     info.confirmedHeight = pb->height;
                     TXO txo(num, out.outN);
