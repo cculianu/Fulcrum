@@ -159,6 +159,9 @@ HEADERS += \
     TXO.h \
     Util.h
 
+# Robin Hood unordered_flat_map implememntation (single header and MUCH more efficient than unordered_map!)
+HEADERS += robin_hood/robin_hood.h
+
 RESOURCES += \
     resources.qrc
 

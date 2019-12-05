@@ -3,12 +3,12 @@
 #include "Util.h"
 
 #include "bitcoin/transaction.h"
+#include "robin_hood/robin_hood.h"
 
 #include <QTextStream>
 
 #include <algorithm>
 #include <set>
-#include <unordered_map>
 #include <unordered_set>
 
 /* static */ const TxHash BlockProcBase::nullhash;
@@ -22,8 +22,8 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bi
     header = b.GetBlockHeader();
     estimatedThisSizeBytes = sizeof(*this) + size_t(BTC::GetBlockHeaderSize());
     txInfos.reserve(b.vtx.size());
-    std::unordered_map<TxHash, unsigned, HashHasher> txHashToIndex;
-    std::unordered_map<HashX, std::vector<unsigned>, HashHasher> hashXOuts, hashXIns;
+    robin_hood::unordered_flat_map<TxHash, unsigned, HashHasher> txHashToIndex;
+    robin_hood::unordered_flat_map<HashX, std::vector<unsigned>, HashHasher> hashXOuts, hashXIns;
     std::unordered_set<HashX, HashHasher> hashXsSeen;
     // run through all tx's, build inputs and outputs lists
     size_t txIdx = 0;
@@ -199,7 +199,7 @@ ProcessedBlock::ProcessedBlock(TxNum txBaseNum, const PreProcessedBlock &ppb, co
 {
     inputs.reserve(ppb.inputs.size());
     estimatedThisSizeBytes -= ppb.inputs.size() * sizeof(PreProcessedBlock::InputPt); // reduce the size estimate because we will recompute it below
-    std::unordered_map<HashX, std::optional<unsigned>, HashHasher> hashXRevMap; // index HashX -> its HashXAggregated index
+    robin_hood::unordered_flat_map<HashX, std::optional<unsigned>, HashHasher> hashXRevMap; // index HashX -> its HashXAggregated index
 
     unsigned i = 0;
     // build hashX -> ag quick lookup map

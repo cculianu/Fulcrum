@@ -8,11 +8,12 @@
 #include "Storage.h"
 #include "SrvMgr.h"
 
+#include "robin_hood/robin_hood.h"
+
 #include <atomic>
 #include <memory>
 #include <tuple>
 #include <type_traits>
-#include <unordered_map>
 #include <vector>
 
 class CtlTask;
@@ -83,7 +84,7 @@ private:
     struct StateMachine;
     std::unique_ptr<StateMachine> sm;
 
-    std::unordered_map<CtlTask *, std::unique_ptr<CtlTask>> tasks;
+    robin_hood::unordered_flat_map<CtlTask *, std::unique_ptr<CtlTask>> tasks;
 
     void add_DLHeaderTask(unsigned from, unsigned to, size_t nTasks);
     void process_DownloadingBlocks();

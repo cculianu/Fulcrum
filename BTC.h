@@ -406,7 +406,7 @@ namespace BTC
         }
     };
 
-    // useful type aliases to be passed as template args to eg std::unordered_map
+    // useful type aliases to be passed as template args to eg std::unordered_map, robin_hood::unordered_flat_map, etc
     using QByteArrayHashHasher = GenericTrivialHashHasher<QByteArray>;
     using uint256HashHasher = GenericTrivialHashHasher<bitcoin::uint256>;
     using uint160HashHasher = GenericTrivialHashHasher<bitcoin::uint160>;

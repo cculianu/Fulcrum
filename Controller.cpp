@@ -3,12 +3,13 @@
 #include "Controller.h"
 #include "TXO.h"
 
+#include "robin_hood/robin_hood.h"
+
 #include <algorithm>
 #include <cassert>
 #include <iterator>
 #include <list>
 #include <map>
-#include <unordered_map>
 
 Controller::Controller(const std::shared_ptr<Options> &o)
     : Mgr(nullptr), options(o)
@@ -336,7 +337,7 @@ struct Controller::StateMachine
     State state = Begin;
     int ht = -1;
 
-    std::unordered_map<unsigned, PreProcessedBlockPtr> ppBlocks; // mapping of height -> PreProcessedBlock (we use an unordered_map because it's faster for frequent updates)
+    robin_hood::unordered_flat_map<unsigned, PreProcessedBlockPtr> ppBlocks; // mapping of height -> PreProcessedBlock (we use an unordered_flat_map because it's faster for frequent updates)
     unsigned ppBlkHtNext = 0,  ///< the next unprocessed block height we need to process in series
              startheight = 0, ///< the height we started at
              endHeight = 0; ///< the final (inclusive) block height we expect to receive to pronounce the synch done
@@ -358,8 +359,8 @@ struct Controller::StateMachine
 
     // TESTING UTXO SET
     UTXOSet utxoset;
-    std::unordered_map <TxHash, TxNum, HashHasher> txHash2NumMap;
-    //std::unordered_map <TxNum, TxHash> num2TxHashMap;
+    robin_hood::unordered_flat_map <TxHash, TxNum, HashHasher> txHash2NumMap;
+    //robin_hood::unordered_flat_map <TxNum, TxHash> num2TxHashMap;
     std::atomic<TxNum> txNumNext{0};
 };
 

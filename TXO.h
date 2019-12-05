@@ -2,12 +2,13 @@
 
 #include "BlockProcTypes.h"
 
+#include "robin_hood/robin_hood.h"
+
 #include <QString>
 
 #include <cstdint>
 #include <functional> // for std::hash
 #include <optional>
-#include <unordered_map>
 
 
 /// WIP
@@ -72,4 +73,4 @@ struct TXOInfo {
 };
 
 
-using UTXOSet = std::unordered_map<TXO, TXOInfo>; ///< TXO -> Info
+using UTXOSet = robin_hood::unordered_flat_map<TXO, TXOInfo>; ///< TXO -> Info
