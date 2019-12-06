@@ -69,11 +69,12 @@ namespace LRU {
 
     /***
      *	The LRU Cache class templated by
-     *      threadSafe - a compile-time boolean that decides a real mutex will be used to guarantee thread
+     *      threadSafe - a compile-time boolean that decides whether a real mutex will be used to guarantee thread
      *                   safety if set to true, otherwise no locking is done in get/insert/remove, etc.
      *      Key        - key type (keys will be stored twice for each item in the cache so use a lightweight type or an
      *                   implicitly-shared, reference-counted type here)
      *      Value      - value type (values must be copy-constructible)
+     *      Hasher     - the hasher to use for Key. Defaults to robin_hood::hash<Key>.
      *
      * According to STL, order of templates has effect on throughput. That's why I've moved the boolean to the front.
      * https://www.reddit.com/r/cpp/comments/ahp6iu/compile_time_binary_size_reductions_and_cs_future/eeguck4/
