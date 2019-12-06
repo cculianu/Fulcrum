@@ -149,6 +149,7 @@ HEADERS += \
     Common.h \
     Controller.h \
     Logger.h \
+    LRUCache.h \
     Mgr.h \
     Mixins.h \
     Options.h \
