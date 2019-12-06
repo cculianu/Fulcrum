@@ -81,7 +81,7 @@ namespace LRU {
     template <bool threadSafe, typename Key, typename Value, typename Hasher = robin_hood::hash<Key>>
     class Cache {
         struct NullLock {};
-        struct NullGuard { NullGuard(const NullLock &) {} };
+        struct NullGuard { NullGuard(NullLock &) {} };
     public:
         // std-like member types
         using node_type = KeyValuePair<Key, Value>;
@@ -98,36 +98,36 @@ namespace LRU {
         }
 
         size_t size() const {
-            Guard g(lock_);
-            return cache_.size();
+            Guard g(lock);
+            return k_nodeit_map.size();
         }
         bool empty() const {
-            Guard g(lock_);
-            return cache_.empty();
+            Guard g(lock);
+            return k_nodeit_map.empty();
         }
         size_t maxSize() const { return maxSize_; }
         size_t elasticity() const { return elasticity_; }
         size_t maxAllowedSize() const { return maxSize_ + elasticity_; }
 
         void clear() {
-            Guard g(lock_);
-            cache_.clear();
-            keys_.clear();
+            Guard g(lock);
+            k_nodeit_map.clear();
+            nodes.clear();
         }
         /// Inserts a new item into the cache. If the specified key `k` was already in the cache, its associated value
         /// will be overwritten with `v` via operator=.  Returns true if a new item was inserted, or false if an
         /// existing item was overwritten.  In either case the new value `v` will be in the cache upon function return.
         bool insert(const Key & k, const Value & v) {
-            Guard g(lock_);
-            const auto iter = cache_.find(k);
-            if (iter != cache_.end()) {
+            Guard g(lock);
+            const auto iter = k_nodeit_map.find(k);
+            if (iter != k_nodeit_map.end()) {
                 iter->second->value = v; // overwrite existing value
-                keys_.splice(keys_.begin(), keys_, iter->second);
+                nodes.splice(nodes.begin(), nodes, iter->second);
                 return false;
             }
 
-            keys_.emplace_front(k, v);
-            cache_[k] = keys_.begin();
+            nodes.emplace_front(k, v);
+            k_nodeit_map[k] = nodes.begin();
             prune();
             return true;
         }
@@ -136,7 +136,7 @@ namespace LRU {
         std::optional<Value> tryGet(const Key & key) noexcept {
             std::optional<Value> ret;
             try {
-                Guard g(lock_);
+                Guard g(lock);
                 ret.emplace(get_nolock(key));
             } catch (const KeyNotFound &) {}
             return ret;
@@ -144,61 +144,64 @@ namespace LRU {
         /// Gets a copy-constructed version of the internally stored value.
         /// May throw KeyNotFound if the key is not in the cache.
         Value get(const Key & key) {
-            Guard g(lock_);
+            Guard g(lock);
             return get_nolock(key);
         }
-        /// Returns a reference to the internally stored value. Does not use any locks. Use this version only in
+        /// Returns a const reference to the internally stored value. Does not use any locks. Use this version only in
         /// code where threadSafe=false. Otherwise it will not be offered because SFINAE will exlcude it
         /// from being emitted.  May throw KeyNotFound if `key` is not found in the cache.
-        template <std::enable_if_t<std::is_same_v<Guard, NullGuard>, int> = 0>
-        const Value & getRef(const Key &key) { return get_nolock(key); }
+        /// Simplified function signature:
+        ///     auto getRef(const Key &) -> const Value &;
+        template <typename Ret = const Value &>
+        auto getRef(const Key &key) -> std::enable_if_t<std::is_same_v<Guard, NullGuard> && std::is_same_v<Ret, const Value &>, Ret>
+        { return get_nolock(key); }
 
         /// Removes an item from the cache. Returns true if an item was removed or false otherwise.
         bool remove(const Key & k) {
-            Guard g(lock_);
-            auto iter = cache_.find(k);
-            if (iter == cache_.end()) {
+            Guard g(lock);
+            auto iter = k_nodeit_map.find(k);
+            if (iter == k_nodeit_map.end()) {
                 return false;
             }
-            keys_.erase(iter->second);
-            cache_.erase(iter);
+            nodes.erase(iter->second);
+            k_nodeit_map.erase(iter);
             return true;
         }
 
         bool contains(const Key & k) const {
-            Guard g(lock_);
-            return cache_.find(k) != cache_.end();
+            Guard g(lock);
+            return k_nodeit_map.find(k) != k_nodeit_map.end();
         }
 
         /// Walk over every item in the cache. Pass a functor that will be called as: func(const KeyValuePair &) for
         /// every item in the cache. The lock will be held while this walk is doen if threadSafe=true
         template <typename F>
         void cwalk(const F & f) const {
-            Guard g(lock_);
-            std::for_each(keys_.begin(), keys_.end(), f);
+            Guard g(lock);
+            std::for_each(nodes.begin(), nodes.end(), f);
         }
 
     private:
         /// Caller must the lock. Returns the number of elements removed.
         size_t prune() {
             const size_t maxAllowed = maxSize_ + elasticity_;
-            if (cache_.size() < maxAllowed) {
+            if (k_nodeit_map.size() < maxAllowed) {
                 return 0;
             }
             size_t count = 0;
-            while (cache_.size() > maxSize_) {
-                cache_.erase(keys_.back().key);
-                keys_.pop_back();
+            while (k_nodeit_map.size() > maxSize_) {
+                k_nodeit_map.erase(nodes.back().key);
+                nodes.pop_back();
                 ++count;
             }
             return count;
         }
         /// Caller must hold the lock. Throws if not found.
         const Value & get_nolock(const Key & k) {
-            const auto iter = cache_.find(k);
-            if (iter == cache_.end())
+            const auto iter = k_nodeit_map.find(k);
+            if (iter == k_nodeit_map.end())
                 throw KeyNotFound();
-            keys_.splice(keys_.begin(), keys_, iter->second);
+            nodes.splice(nodes.begin(), nodes, iter->second);
             return iter->second->value;
         }
 
@@ -206,9 +209,9 @@ namespace LRU {
         Cache(const Cache &) = delete;
         Cache & operator=(const Cache &) = delete;
 
-        mutable lock_type lock_;
-        map_type cache_;
-        list_type keys_;
+        mutable lock_type lock;
+        map_type k_nodeit_map;
+        list_type nodes;
         const size_t maxSize_;
         const size_t elasticity_;
     };
