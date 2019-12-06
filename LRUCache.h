@@ -43,9 +43,7 @@
 #include <list>
 #include <mutex>
 #include <optional>
-#include <shared_mutex>
 #include <stdexcept>
-#include <thread>
 #include <type_traits>
 
 #ifdef __clang__
@@ -71,7 +69,7 @@ namespace LRU {
 
     /***
      *	The LRU Cache class templated by
-     *      threadSafe - a compile-time boolean that decides a real shared_mutex will be used to guarantee thread
+     *      threadSafe - a compile-time boolean that decides a real mutex will be used to guarantee thread
      *                   safety if set to true, otherwise no locking is done in get/insert/remove, etc.
      *      Key        - key type (keys will be stored twice for each item in the cache so use a lightweight type or an
      *                   implicitly-shared, reference-counted type here)
@@ -89,9 +87,8 @@ namespace LRU {
         using node_type = KeyValuePair<Key, Value>;
         using list_type = std::list<node_type>;
         using map_type = robin_hood::unordered_flat_map<Key, typename list_type::iterator, Hasher>;
-        using lock_type = typename std::conditional<threadSafe, std::shared_mutex, NullLock>::type;
-        using GuardExclusive = typename std::conditional<threadSafe, std::lock_guard<lock_type>, NullGuard>::type;
-        using GuardShared = typename std::conditional<threadSafe, std::shared_lock<lock_type>, NullGuard>::type;
+        using lock_type = typename std::conditional<threadSafe, std::mutex, NullLock>::type;
+        using Guard = typename std::conditional<threadSafe, std::lock_guard<lock_type>, NullGuard>::type;
 
         /// The maxSize is the soft limit of keys and (maxSize + elasticity) is the
         /// hard limit. The cache is allowed to grow until (maxSize + elasticity) and is pruned back
@@ -101,11 +98,11 @@ namespace LRU {
         }
 
         size_t size() const {
-            GuardShared g(lock_);
+            Guard g(lock_);
             return cache_.size();
         }
         bool empty() const {
-            GuardShared g(lock_);
+            Guard g(lock_);
             return cache_.empty();
         }
         size_t maxSize() const { return maxSize_; }
@@ -113,7 +110,7 @@ namespace LRU {
         size_t maxAllowedSize() const { return maxSize_ + elasticity_; }
 
         void clear() {
-            GuardExclusive g(lock_);
+            Guard g(lock_);
             cache_.clear();
             keys_.clear();
         }
@@ -121,7 +118,7 @@ namespace LRU {
         /// will be overwritten with `v` via operator=.  Returns true if a new item was inserted, or false if an
         /// existing item was overwritten.  In either case the new value `v` will be in the cache upon function return.
         bool insert(const Key & k, const Value & v) {
-            GuardExclusive g(lock_);
+            Guard g(lock_);
             const auto iter = cache_.find(k);
             if (iter != cache_.end()) {
                 iter->second->value = v; // overwrite existing value
@@ -139,7 +136,7 @@ namespace LRU {
         std::optional<Value> tryGet(const Key & key) noexcept {
             std::optional<Value> ret;
             try {
-                GuardShared g(lock_);
+                Guard g(lock_);
                 ret.emplace(get_nolock(key));
             } catch (const KeyNotFound &) {}
             return ret;
@@ -147,18 +144,18 @@ namespace LRU {
         /// Gets a copy-constructed version of the internally stored value.
         /// May throw KeyNotFound if the key is not in the cache.
         Value get(const Key & key) {
-            GuardShared g(lock_);
+            Guard g(lock_);
             return get_nolock(key);
         }
         /// Returns a reference to the internally stored value. Does not use any locks. Use this version only in
-        /// code where the lock_type is NullSharedLock. Otherwise it will not be offered because SFINAE will exlcude it
-        /// from being emitted.
-        template <std::enable_if_t<!std::is_same_v<lock_type, NullLock>, int> = 0>
+        /// code where threadSafe=false. Otherwise it will not be offered because SFINAE will exlcude it
+        /// from being emitted.  May throw KeyNotFound if `key` is not found in the cache.
+        template <std::enable_if_t<std::is_same_v<Guard, NullGuard>, int> = 0>
         const Value & getRef(const Key &key) { return get_nolock(key); }
 
         /// Removes an item from the cache. Returns true if an item was removed or false otherwise.
         bool remove(const Key & k) {
-            GuardExclusive g(lock_);
+            Guard g(lock_);
             auto iter = cache_.find(k);
             if (iter == cache_.end()) {
                 return false;
@@ -169,20 +166,20 @@ namespace LRU {
         }
 
         bool contains(const Key & k) const {
-            GuardShared g(lock_);
+            Guard g(lock_);
             return cache_.find(k) != cache_.end();
         }
 
         /// Walk over every item in the cache. Pass a functor that will be called as: func(const KeyValuePair &) for
-        /// every item in the cache. The shared lock will be held while this walk is doen if threadSafe=true
+        /// every item in the cache. The lock will be held while this walk is doen if threadSafe=true
         template <typename F>
         void cwalk(const F & f) const {
-            GuardShared g(lock_);
+            Guard g(lock_);
             std::for_each(keys_.begin(), keys_.end(), f);
         }
 
     private:
-        /// Caller must hold an exclusive lock. Returns the number of elements removed.
+        /// Caller must the lock. Returns the number of elements removed.
         size_t prune() {
             const size_t maxAllowed = maxSize_ + elasticity_;
             if (cache_.size() < maxAllowed) {
@@ -196,7 +193,7 @@ namespace LRU {
             }
             return count;
         }
-        /// Caller must hold at least the shared lock. Throws if not found.
+        /// Caller must hold the lock. Throws if not found.
         const Value & get_nolock(const Key & k) {
             const auto iter = cache_.find(k);
             if (iter == cache_.end())
