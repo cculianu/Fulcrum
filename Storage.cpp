@@ -2,6 +2,7 @@
 #include "Storage.h"
 
 #include "rocksdb/db.h"
+#include "rocksdb/iterator.h"
 #include "rocksdb/options.h"
 #include "rocksdb/slice.h"
 
@@ -269,6 +270,7 @@ void Storage::startup()
     Log() << "Loading database ...";
     // load headers -- may throw
     loadHeadersFromDB();
+    loadUTXOSetFromDB();
 
     start(); // starts our thread
 }
@@ -533,6 +535,85 @@ void Storage::loadHeadersFromDB()
         Debug() << "Read & verified " << num << " " << Util::Pluralize("header", num) << " from db in " << QString::number((elapsed-t0)/1e6, 'f', 3) << " msec";
     }
 }
+
+void Storage::loadUTXOSetFromDB()
+    {
+        FatalAssert(!!p->db.utxoset) << __FUNCTION__ << ": Utxo set db is not open";
+
+        Debug() << "Loading utxo set ...";
+
+        const auto t0 = Util::getTimeNS();
+        {
+            // the purpose of this map is to ensure that all txid's in app memory share the same implicitly shared QByteArray
+            std::unordered_set<HashX, HashHasher> hashXSeen;
+            robin_hood::unordered_flat_map<TxNum, TxHash> num2hash; // this also acts as a cache as well as ensuring all txhashes share the same QByteArray
+
+            const int currentHeight = latestTip().first;
+
+            std::unique_ptr<rocksdb::Iterator> iter(p->db.utxoset->NewIterator(rocksdb::ReadOptions()));
+            if (!iter) throw DatabaseError("Unable to obtain an iterator to the utxo set db");
+            iter->SeekToFirst();
+            unsigned ctr = 0;
+            size_t savings = 0, cost = 0;
+            for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
+                const auto ctxo = CompactTXO::fromBytes(FromSlice(iter->key()));
+                if (!ctxo.isValid()) {
+                    throw DatabaseSerializationError("Read an invalid txo from the utxo set database."
+                                                     " This may be due to a database format mismatch."
+                                                     " Delete the datadir and resynch it.");
+                }
+                TxHash hash;
+                if (auto it = num2hash.find(ctxo.txNum()); it != num2hash.end()) {
+                    hash = it->second; // ensure implicitly shared
+                    savings += size_t(hash.length());
+                } else {
+                    const auto ohash = hashForTxNum(ctxo.txNum(), false); // reads from db. db uses some caching hopefully
+                    if (!ohash.has_value())
+                        throw DatabaseFormatError("A txo is missing its txhash metadata in the db."
+                                                  " This may be due to a database format mismatch."
+                                                  " Delete the datadir and resynch it.");
+                    num2hash[ctxo.txNum()] = hash = ohash.value();
+                    cost += size_t(hash.length());
+                }
+                if (hash.length() != HashLen)
+                    throw DatabaseFormatError("A txo is missing has corrupted txhash metadata in the db."
+                                              " Delete the datadir and resynch it.");
+                auto info = TXOInfo::fromBytes(FromSlice(iter->value()));
+                if (!info.isValid())
+                    throw DatabaseSerializationError(QString("Txo %1:%2 has invalid metadata in the db."
+                                                            " This may be due to a database format mismatch."
+                                                            " Delete the datadir and resynch it.")
+                                                     .arg(QString(hash.toHex()))
+                                                     .arg(ctxo.N()));
+                if (info.confirmedHeight.has_value() && int(info.confirmedHeight.value()) > currentHeight) {
+                    // TODO: reorg? Inconsisent db?  FIXME
+                    Debug() << "Ignoring txo " << hash << ":" << ctxo.N() << " at height: "
+                            << info.confirmedHeight.value() << " > current height: " << currentHeight;
+                    continue;
+                }
+                if (auto it = hashXSeen.find(info.hashX); it != hashXSeen.end()) {
+                    info.hashX = *it; // make sure they all implicitly share the same hashx
+                    savings += size_t(info.hashX.length());
+                } else {
+                    hashXSeen.insert(info.hashX);
+                    cost += size_t(info.hashX.length());
+                }
+                p->utxoSet[TXO{hash, ctxo.N()}] = info;
+                cost += sizeof(TXO) + sizeof(TXOInfo);
+                if (0 == ++ctr % 100000) {
+                    *(0 == ctr % 2500000 ? std::make_unique<Log>() : std::make_unique<Debug>()) << "Read " << ctr << " utxos ...";
+                }
+            }
+            Log() << "UTXO set " << QString::number(cost/1e6, 'f', 3) << " MiB in " << p->utxoSet.size() << " txos";
+            Debug() << "Saved " << QString::number(savings/1e6, 'f', 3) << " MiB (num2hash: " << num2hash.size() << " hashXSeen: " << hashXSeen.size() << ")";
+        }
+        const auto num = p->utxoSet.size();
+        if (num) {
+            const auto elapsed = Util::getTimeNS();
+
+            Debug() << "Read " << num << " " << Util::Pluralize("utxo", num) << " from db in " << QString::number((elapsed-t0)/1e6, 'f', 3) << " msec";
+        }
+    }
 
 
 QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve)
