@@ -62,6 +62,7 @@ public:
     ///             (Empty if no headers yet).
     std::pair<int, QByteArray> latestTip() const;
 
+    /// eg 'main' or 'test' or may be empty string if new db
     QString getChain() const;
     void setChain(const QString &); // implicitly calls db save of 'meta'
 
