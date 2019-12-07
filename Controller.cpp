@@ -494,7 +494,7 @@ void Controller::process(bool beSilentIfUpToDate)
               << ", verified ok.";
         sm.reset(); // go back to "Begin" state to check if any new headers arrived in the meantime
         AGAIN();
-        storage->save(Storage::SaveItem::Hdrs); // enqueue a header commit to db ...
+        storage->save(Storage::SaveItem::Hdrs|Storage::SaveItem::UtxoSet); // enqueue a commit to db ...
     } else if (sm->state == State::Failure) {
         // We will try again later via the pollTimer
         Error() << "Failed to download blocks";
@@ -577,10 +577,6 @@ bool Controller::process_VerifyAndAddBlock(PreProcessedBlockPtr ppb)
         AGAIN(); // schedule us again to do cleanup
         return false;
     }
-
-    // TESTING save every 10000 headers to db -- TODO: tune this or have this be configurable? Maybe have db auto-do this?
-    if (!(nLeft % 10000) && nLeft)
-        storage->save(Storage::SaveItem::Hdrs);
 
     return true;
 }

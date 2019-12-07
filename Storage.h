@@ -71,6 +71,7 @@ public:
     enum class SaveItem : uint32_t {
         Hdrs = 0x1,  ///< save headers
         Meta = 0x2, ///< save meta
+        UtxoSet = 0x4, ///< save utxoset
 
         All = 0xffffffff, ///< save everything
         None = 0x00, ///< No-op
@@ -109,11 +110,14 @@ private:
     struct Pvt;
     std::unique_ptr<Pvt> p;
 
-    void save_impl(); ///< may abort app on database failure (unlikely).
+    void save_impl(SaveSpec override = SaveItem::None); ///< may abort app on database failure (unlikely).
     void saveHeaders_impl(const Headers &); ///< This may throw on database error. Caller should pass a copy of the headers or hold the lock (if passing reference to p->headers).
     void saveMeta_impl(); ///< This may throw if db error. Caller should hold locks or be in single-threaded mode.
+    /// This may throw if db error. Caller should pass a temporary copy of the utxoset as a snapshot captured with locks.
+    void saveUtxoUnsaved_impl(const UTXOSet &, const std::unordered_set<TXO> & additions, const std::unordered_set<TXO> & deletions);
 
     void loadHeadersFromDB(); // may throw -- called from startup()
+    void loadUTXOSetFromDB(); // may throw -- called from startup()
 
     // some helpers for TxNum -- these may throw DatabaseError
     std::optional<TxNum> txNumForHash(const TxHash &, bool throwIfMissing = false);

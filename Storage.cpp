@@ -89,6 +89,10 @@ namespace {
     // specializations
     template <> QByteArray Serialize(const Meta &);
     template <> Meta Deserialize(const QByteArray &, bool *);
+    template <> QByteArray Serialize(const CompactTXO &);
+    template <> CompactTXO Deserialize(const QByteArray &, bool *);
+    template <> QByteArray Serialize(const TXOInfo &);
+    template <> TXOInfo Deserialize(const QByteArray &, bool *);
 
     /// DB read/write helpers
     /// NOTE: these may throw DatabaseError
@@ -186,8 +190,11 @@ struct Storage::Pvt
 
     UTXOSet utxoSet;
     RWLock utxoSetLock;
+    std::unordered_set<TXO> utxoSetAdditionsUnsaved, utxoSetDeletionsUnsaved;
 
     std::vector<BlkInfo> blkInfos;
+
+    std::atomic<unsigned> unsavedCt = 0;
 };
 
 Storage::Storage(const std::shared_ptr<Options> & options)
@@ -270,7 +277,9 @@ void Storage::cleanup()
 {
     stop(); // joins our thread
 
-    save_impl(); // writes all "dirty" data immediately to disk
+    // if there is an unsavedCt, flag these as unsaved to check and save. Won't do much if they aren't really unsaved.
+    SaveSpec override = p->unsavedCt ? SaveItem::Hdrs|SaveItem::UtxoSet : SaveItem::None;
+    save_impl(override);
 }
 
 auto Storage::stats() const -> Stats
@@ -343,14 +352,35 @@ void Storage::save(SaveSpec typed_spec)
     // atomic variable is not 0).
     if (const auto spec = IntType(typed_spec); ! p->pendingSaves.fetch_or(spec))
     {
-        QTimer::singleShot(0, this, &Storage::save_impl);
+        QTimer::singleShot(0, this, [this]{save_impl();});
     }
 }
 
-void Storage::save_impl()
+void Storage::save_impl(SaveSpec override)
 {
-    if (const auto flags = SaveSpec(p->pendingSaves.exchange(0)); flags) { // atomic clear of flags, grab prev val
+    if (const auto flags = SaveSpec(p->pendingSaves.exchange(0))|override; flags) { // atomic clear of flags, grab prev val
         try {
+            if (flags & SaveItem::UtxoSet) { // utxo set
+                using Set = decltype (p->utxoSetAdditionsUnsaved);
+                Set unsavedAdditions, unsavedDeletions;
+                UTXOSet copy;
+                bool doSave = false;
+                {
+                    ExclusiveLockGuard g(p->utxoSetLock);
+                    unsavedAdditions.swap(p->utxoSetAdditionsUnsaved);
+                    unsavedDeletions.swap(p->utxoSetDeletionsUnsaved);
+                    p->unsavedCt = 0;
+                    if ((doSave = unsavedAdditions.size() || unsavedDeletions.size())) {
+                        const auto t0 = Util::getTimeNS(); // DEBUG REMOVE ME
+                        copy = p->utxoSet; // <-- this copy is inefficient (takes on the order of 1 second -- but it is preferable to holding the lock for potentially many seconds)
+                        // DEBUG REMOVE ME
+                        const auto elapsed = Util::getTimeNS() - t0;
+                        Debug() << "utxo copy took: " << QString::number(elapsed/1e6, 'f', 3) << " msec";
+                    }
+                }
+                if (doSave)
+                    saveUtxoUnsaved_impl(copy, unsavedAdditions, unsavedDeletions);
+            }
             if (flags & SaveItem::Hdrs) { // headers
                 // TODO: See if this copy is inefficient. So far it seems preferable to the alternative.
                 // We would rather do this here than hold the lock for the duration of the db save.
@@ -380,7 +410,7 @@ void Storage::saveMeta_impl()
 void Storage::saveHeaders_impl(const Headers &h)
 {
     if (!p->db.headers) return;
-    Debug() << "Saving headers ...";
+    //Debug() << "Saving headers ...";
     size_t start = 0;
     const auto t0 = Util::getTimeNS();
     {
@@ -412,9 +442,45 @@ void Storage::saveHeaders_impl(const Headers &h)
             p->lastHeaderSaved = { h.size()-1, h.back() }; // remember last
         }
     }
-    const auto elapsed = Util::getTimeNS();
+    const auto elapsed = Util::getTimeNS() - t0;
     const auto ct = (h.size()-start);
-    Debug() << "Wrote " << ct << " " << Util::Pluralize("header", ct) << " to db in " << QString::number((elapsed-t0)/1e6, 'f', 3) << " msec";
+    if (ct)
+        Debug() << "Wrote " << ct << " " << Util::Pluralize("header", ct) << " to db in " << QString::number(elapsed/1e6, 'f', 3) << " msec";
+}
+
+void Storage::saveUtxoUnsaved_impl(const UTXOSet &set, const std::unordered_set<TXO> &adds, const std::unordered_set<TXO> &dels)
+{
+    if (!p->db.utxoset || !(adds.size()+dels.size())) return;
+    //Debug() << "Saving utxo set ...";
+    const auto t0 = Util::getTimeNS();
+    rocksdb::DB *db = p->db.utxoset.get();
+    const auto wopts = rocksdb::WriteOptions();
+    // process deletions
+    for (const auto & txo : dels) {
+        const auto txNum = txNumForHash(txo.prevoutHash, true).value(); // may throw
+        CompactTXO ctxo(txNum, txo.prevoutN);
+        if (const auto st = db->Delete(wopts, ToSlice(ctxo.toBytesCpy()));
+                !st.ok() /*&& !st.IsNotFound()*/)
+            throw DatabaseError(QString("Error deleting a utxo from the db: %1").arg(QString::fromStdString(st.ToString())));
+    }
+    // process additions
+    {
+        rocksdb::WriteBatch batch;
+        for (const auto & txo : adds) {
+            const auto txNum = txNumForHash(txo.prevoutHash, true).value(); // may throw
+            CompactTXO ctxo(txNum, txo.prevoutN);
+            const auto it = set.find(txo);
+            if (it == set.end())
+                throw InternalError(QString("Missing txo %1 from utxo set .. cannot save!").arg(txo.toString()));
+            const auto & info = it->second;
+            if (const auto st = batch.Put(ToSlice(ctxo.toBytesCpy()), ToSlice(Serialize(info))); !st.ok())
+                throw DatabaseError(QString("Error in writeBatch for txo %1: %2").arg(txo.toString()).arg(QString::fromStdString(st.ToString())));
+        }
+        if (const auto st = db->Write(wopts, &batch); !st.ok())
+            throw DatabaseError(QString("Error writing batch txo additions: %1").arg(QString::fromStdString(st.ToString())));
+    }
+    const auto elapsed = Util::getTimeNS() - t0;
+    Debug() << "Wrote utxo set " << adds.size() << " adds, " << dels.size() << " dels to db in " << QString::number(elapsed/1e6, 'f', 3) << " msec";
 }
 
 void Storage::loadHeadersFromDB()
@@ -528,8 +594,9 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve)
                     info.hashX = hashX;
                     info.amount = out.amount;
                     info.confirmedHeight = ppb->height;
-                    TXO txo{ hash, out.outN };
+                    const TXO txo{ hash, out.outN };
                     p->utxoSet[txo] = info;
+                    p->utxoSetAdditionsUnsaved.insert(txo);
                     if constexpr (debugPrt)
                         Debug() << "Added txo: " << txo.toString()
                                 << " (txid: " << hash.toHex() << " height: " << ppb->height << ") "
@@ -558,7 +625,14 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve)
                                 << " input number: " << ppb->numForInputIdx(inum).value_or(0xffff)
                                 << " HashX: " << it->second.hashX.toHex();
                     }
-                    p->utxoSet.erase(it); // invalidate txo  (spend it)
+                    if (auto it2 = p->utxoSetAdditionsUnsaved.find(it->first); it2 != p->utxoSetAdditionsUnsaved.end()) {
+                        // was in unsaved additions, no need to add it to deletions
+                        p->utxoSetAdditionsUnsaved.erase(it2);
+                    } else {
+                        // was not in unsaved additions.. add it to deletions
+                        p->utxoSetDeletionsUnsaved.insert(it->first);
+                    }
+                    p->utxoSet.erase(it); // invalidate txo  (spend it) by removing from map
                 } else {
                     QString s;
                     {
@@ -602,9 +676,17 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve)
         // update txNum after everything checks out
         p->txNumNext += ppb->txInfos.size();
 
+        ++p->unsavedCt;
+
     } catch (const std::exception & e) {
         errRet = e.what();
         p->headerVerifier = verifUndo; // undo header verifier state
+    }
+
+    // enqueue a save every 10000 blocks
+    if (errRet.isEmpty() && p->unsavedCt > 10000) {
+        p->unsavedCt = 0;
+        save(SaveItem::Hdrs|SaveItem::UtxoSet);
     }
 
     return errRet;
@@ -655,5 +737,20 @@ namespace {
             }
         }
         return m;
+    }
+
+    template <> QByteArray Serialize [[maybe_unused]] (const CompactTXO &ctxo) { return ctxo.toBytesCpy(); }
+    template <> CompactTXO Deserialize [[maybe_unused]] (const QByteArray &ba, bool *ok) {
+        CompactTXO ret = CompactTXO::fromBytes(ba);
+        if (ok) *ok = ret.isValid();
+        return ret;
+    }
+
+    template <> QByteArray Serialize(const TXOInfo &inf) { return inf.toBytes(); }
+    template <> TXOInfo Deserialize [[maybe_unused]] (const QByteArray &ba, bool *ok)
+    {
+        TXOInfo ret = TXOInfo::fromBytes(ba);
+        if (ok) *ok = ret.isValid();
+        return ret;
     }
 }

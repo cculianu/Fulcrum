@@ -7,6 +7,7 @@
 #include <QString>
 
 #include <cstdint>
+#include <cstring> // for std::memcpy
 #include <functional> // for std::hash
 #include <optional>
 
@@ -41,6 +42,41 @@ struct TXOInfo {
     bitcoin::Amount amount;
     HashX hashX; ///< the scripthash this output is sent to.  Note in most cases this can be compactified to be a shallow-copy of existing data (such that dupes point to the same underlying data in eg UTXOSet).
     std::optional<unsigned> confirmedHeight; ///< if unset, is mempool tx
+
+    bool isValid() const { return amount / bitcoin::Amount::satoshi() >= 0 && hashX.length() == HashLen; }
+
+    QByteArray toBytes() const noexcept {
+        QByteArray ret;
+        if (!isValid()) return ret;
+        const auto amt_sats = amount / bitcoin::Amount::satoshi();
+        const int cheight = confirmedHeight.has_value() ? int(confirmedHeight.value()) : -1;
+        ret.resize(int(sizeof(amt_sats)) + int(sizeof(cheight)) + HashLen);
+        char *cur = ret.data();
+        std::memcpy(cur, &amt_sats, sizeof(amt_sats));
+        cur += sizeof(amt_sats);
+        std::memcpy(cur, &cheight, sizeof(cheight));
+        cur += sizeof(cheight);
+        std::memcpy(cur, hashX.constData(), size_t(hashX.length()));
+        return ret;
+    }
+    static TXOInfo fromBytes(const QByteArray &ba) {
+        TXOInfo ret;
+        if (size_t(ba.length()) != sizeof(int64_t) + sizeof(int) + HashLen) {
+            return ret;
+        }
+        int64_t amt;
+        int cheight;
+        const char *cur = ba.constData();
+        std::memcpy(&amt, cur, sizeof(amt));
+        cur += sizeof(amt);
+        std::memcpy(&cheight, cur, sizeof(cheight));
+        cur += sizeof(cheight);
+        ret.hashX = QByteArray(cur, HashLen);
+        ret.amount = amt * bitcoin::Amount::satoshi();
+        if (cheight > -1)
+            ret.confirmedHeight.emplace(unsigned(cheight));
+        return ret;
+    }
 };
 
 using UTXOSet = robin_hood::unordered_flat_map<TXO, TXOInfo, std::hash<TXO>>; ///< TXO -> Info
