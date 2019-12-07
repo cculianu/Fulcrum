@@ -9,8 +9,10 @@
 #include <QDir>
 
 #include <atomic>
+#include <list>
 #include <optional>
 #include <shared_mutex>
+#include <tuple>
 #include <type_traits>
 #include <vector>
 
@@ -154,6 +156,12 @@ namespace {
     {
         return GenericDBGet<RetType, safeScalar>(db, k, false, errMsgPrefix, extraDataOk).value();
     }
+
+    // some helper data structs
+    struct BlkInfo {
+        TxNum txNum0 = 0;
+        unsigned nTx = 0, nIns = 0, nOuts = 0;
+    };
 }
 
 struct Storage::Pvt
@@ -168,11 +176,18 @@ struct Storage::Pvt
     std::atomic<std::underlying_type_t<SaveItem>> pendingSaves{0};
 
     struct RocksDBs {
-        std::unique_ptr<rocksdb::DB> meta, headers;
+        std::unique_ptr<rocksdb::DB> meta, headers, txnums, blkinfo, utxoset, shist;
     } db;
 
     BTC::HeaderVerifier headerVerifier;
     Lock headerVerifierLock;
+
+    std::atomic<TxNum> txNumNext{0};
+
+    UTXOSet utxoSet;
+    RWLock utxoSetLock;
+
+    std::vector<BlkInfo> blkInfos;
 };
 
 Storage::Storage(const std::shared_ptr<Options> & options)
@@ -186,30 +201,44 @@ Storage::~Storage() { Debug("%s", __FUNCTION__); cleanup(); }
 
 void Storage::startup()
 {
-    rocksdb::Options opts;
-    // Optimize RocksDB. This is the easiest way to get RocksDB to perform well
-    opts.IncreaseParallelism();
-    opts.OptimizeLevelStyleCompaction();
-    // create the DB if it's not already present
-    opts.create_if_missing = true;
-    opts.error_if_exists = false;
-    opts.compression = rocksdb::CompressionType::kNoCompression; // for now we test without compression. TODO: characterize what is fastest and best..
+    {   // open all db's ...
 
-    QString metaPath = options->datadir + QDir::separator() + "meta",
-            headersPath = options->datadir + QDir::separator() + "headers";
+        rocksdb::Options opts;
+        // Optimize RocksDB. This is the easiest way to get RocksDB to perform well
+        opts.IncreaseParallelism();
+        opts.OptimizeLevelStyleCompaction();
+        // create the DB if it's not already present
+        opts.create_if_missing = true;
+        opts.error_if_exists = false;
+        opts.compression = rocksdb::CompressionType::kNoCompression; // for now we test without compression. TODO: characterize what is fastest and best..
 
-    rocksdb::DB *db = nullptr;
-    rocksdb::Status s;
-    // meta database
-    s = rocksdb::DB::Open(opts, metaPath.toStdString(), &db);
-    if (!s.ok() || !db)
-        throw DatabaseError(QString("Error opening meta database: %1 (path: %2)").arg(s.ToString().c_str()).arg(metaPath));
-    p->db.meta.reset(db); db = nullptr;
-    // headers database
-    s = rocksdb::DB::Open(opts, headersPath.toStdString(), &db);
-    if (!s.ok() || !db)
-        throw DatabaseError(QString("Error opening headers database: %1 (path: %2)").arg(s.ToString().c_str()).arg(headersPath));
-    p->db.headers.reset(db); db = nullptr;
+        using DBInfoTup = std::tuple<QString, std::unique_ptr<rocksdb::DB> &>;
+        const std::list<DBInfoTup> dbs2open = {
+            { "meta", p->db.meta },
+            { "headers", p->db.headers },
+            { "txnums" , p->db.txnums },
+            { "blkinfo" , p->db.blkinfo },
+            { "utxoset", p->db.utxoset },
+            { "scripthash_history", p->db.shist },
+        };
+        const auto OpenDB = [this, &opts](const DBInfoTup &tup) {
+            auto & [name, uptr] = tup;
+            rocksdb::DB *db = nullptr;
+            rocksdb::Status s;
+            // try and open database
+            const QString path = options->datadir + QDir::separator() + name;
+            s = rocksdb::DB::Open(opts, path.toStdString(), &db);
+            if (!s.ok() || !db)
+                throw DatabaseError(QString("Error opening %1 database: %2 (path: %3)")
+                                    .arg(name).arg(QString::fromStdString(s.ToString())).arg(path));
+            uptr.reset(db);
+        };
+
+        // open all db's defined above
+        for (auto & tup : dbs2open)
+            OpenDB(tup);
+
+    }  // /open db's
 
     // load/check meta
     {
@@ -266,6 +295,16 @@ auto Storage::headerVerifier() -> std::pair<BTC::HeaderVerifier &, LockGuard>
     return std::pair<BTC::HeaderVerifier &, LockGuard>( p->headerVerifier, p->headerVerifierLock );
 }
 
+auto Storage::mutableUtxoSet() -> std::pair<UTXOSet &, ExclusiveLockGuard>
+{
+    return std::pair<UTXOSet &, ExclusiveLockGuard>{ p->utxoSet, p->utxoSetLock };
+}
+
+auto Storage::utxoSet() const -> std::pair<const UTXOSet &, SharedLockGuard>
+{
+    return std::pair<const UTXOSet &, SharedLockGuard>{ p->utxoSet, p->utxoSetLock };
+}
+
 QString Storage::getChain() const
 {
     LockGuard l(p->metaLock);
@@ -280,6 +319,10 @@ void Storage::setChain(const QString &chain)
     }
     save(SaveItem::Meta);
 }
+
+/// returns the "next" TxNum
+TxNum Storage::getTxNum() const { return p->txNumNext.load(); }
+
 
 // should this come from headersVerifier() instead?
 std::pair<int, QByteArray> Storage::latestTip() const {
@@ -357,14 +400,15 @@ void Storage::saveHeaders_impl(const Headers &h)
             if (auto stat = batch.Put(kNumHeaders, ToSlice(Serialize(uint32_t(h.size())))); !stat.ok())
                 throw DatabaseError(QString("Error writing header size key: %1").arg(stat.ToString().c_str()));
             auto opts = rocksdb::WriteOptions();
-            opts.sync = true;
-            opts.low_pri = true;
+            // uncomment all this stuff if we want to do fsync and other paranoia. turned off for now.
+            //opts.sync = true;
+            //opts.low_pri = true;
             if (auto stat = p->db.headers->Write(opts, &batch); !stat.ok())
                 throw DatabaseError(QString("Error writing headers: %1").arg(stat.ToString().c_str()));
-            auto fopts = rocksdb::FlushOptions();
-            fopts.wait = true; fopts.allow_write_stall = true;
-            if (auto stat = p->db.headers->Flush(fopts); !stat.ok())
-                throw DatabaseError(QString("Flush error while writing headers: %1").arg(stat.ToString().c_str()));
+            //auto fopts = rocksdb::FlushOptions();
+            //fopts.wait = true; fopts.allow_write_stall = true;
+            //if (auto stat = p->db.headers->Flush(fopts); !stat.ok())
+            //    throw DatabaseError(QString("Flush error while writing headers: %1").arg(stat.ToString().c_str()));
             p->lastHeaderSaved = { h.size()-1, h.back() }; // remember last
         }
     }
@@ -423,6 +467,162 @@ void Storage::loadHeadersFromDB()
         Debug() << "Read & verified " << num << " " << Util::Pluralize("header", num) << " from db in " << QString::number((elapsed-t0)/1e6, 'f', 3) << " msec";
     }
 }
+
+
+QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve)
+{
+    assert(bool(ppb) && bool(p));
+
+    QString errRet;
+
+    std::scoped_lock guard(p->headerVerifierLock, p->headersLock, p->utxoSetLock); // take all locks now.. todo: add more locks here
+    const auto verifUndo = p->headerVerifier; // keep a copy for undo purposes in case this fails
+
+    try {
+        // Verify header chain makes sense (by checking hashes, using the shared header verifier)
+        QByteArray rawHeader;
+        {
+            QString errMsg;
+            if (!p->headerVerifier(ppb->header, &errMsg) ) {
+                // XXX possible reorg point. FIXME TODO
+                // reorg here? TODO: deal with this better.
+                throw Exception(errMsg);
+            }
+            // save raw header back to our buffer
+            rawHeader = p->headerVerifier.lastHeaderProcessed().second;
+        }
+
+
+        // set up batch update of txnums -- we update the p->nextTxNum after all of this succeeds..
+        //auto t0 = Util::getTimeNS();
+        {
+            rocksdb::WriteBatch batch;
+            const TxNum txNum0 = p->txNumNext;
+            for (size_t i = 0; i < ppb->txInfos.size(); ++i) {
+                const auto hashSlice = ToSlice(ppb->txInfos[i].hash);
+                const auto txNumBytes = SerializeScalar(TxNum(txNum0 + i));
+                // txnums are keyed off of uint64_t txNum -- note we save the raw uint64 value here without any QDataStream encapsulation
+                if (auto stat = batch.Put(ToSlice(txNumBytes), hashSlice); !stat.ok())
+                    throw DatabaseError(QString("Error writing txNum -> txHash for txNum %1: %2").arg(txNum0 + i).arg(QString::fromStdString(stat.ToString())));
+                if (auto stat = batch.Put(hashSlice, ToSlice(txNumBytes)); !stat.ok())
+                    throw DatabaseError(QString("Error writing txHash -> txNum for txNum %1: %2").arg(txNum0 + i).arg(QString::fromStdString(stat.ToString())));
+            }
+            if (auto stat = p->db.txnums->Write(rocksdb::WriteOptions(), &batch); !stat.ok())
+                throw DatabaseError(QString("Error writing txNums batch: %1").arg(QString::fromStdString(stat.ToString())));
+
+        }
+        //auto elapsed = Util::getTimeNS() - t0;
+        //Debug() << "Wrote " << ppb->txInfos.size() << " new TxNums to db in " << QString::number(elapsed/1e6, 'f', 3) << " msec";
+
+        static constexpr bool debugPrt = false;
+
+        // update utxoSet
+        {
+            // add outputs
+
+            for (const auto & [hashX, ag] : ppb->hashXAggregated) {
+                for (const auto oidx : ag.outs) {
+                    const auto & out = ppb->outputs[oidx];
+                    const TxHash & hash = ppb->txInfos[out.txIdx].hash;
+                    TXOInfo info;
+                    info.hashX = hashX;
+                    info.amount = out.amount;
+                    info.confirmedHeight = ppb->height;
+                    TXO txo{ hash, out.outN };
+                    p->utxoSet[txo] = info;
+                    if constexpr (debugPrt)
+                        Debug() << "Added txo: " << txo.toString()
+                                << " (txid: " << hash.toHex() << " height: " << ppb->height << ") "
+                                << " amount: " << info.amount.ToString() << " for HashX: " << info.hashX.toHex();
+                }
+            }
+
+            // add spends (process inputs)
+            std::unordered_set<HashX, HashHasher> newHashXInputsResolved;
+            unsigned inum = 0;
+            for (const auto & in : ppb->inputs) {
+                if (!inum) {
+                    // coinbase.. skip
+                } else if (const auto it = p->utxoSet.find(TXO{in.prevoutHash, in.prevoutN}); it != p->utxoSet.end()) {
+                    const auto & info = it->second;
+                    if (info.confirmedHeight.has_value() && info.confirmedHeight.value() != ppb->height) {
+                        // was a prevout from a previos block.. so the ppb didn't have it in the touched set..
+                        // mark the spend as having touched this hashX for this ppb now.
+                        ppb->hashXAggregated[info.hashX].ins.emplace_back(inum);
+                        newHashXInputsResolved.insert(info.hashX);
+                    }
+                    if constexpr (debugPrt) {
+                        const auto dbgTxIdHex = ppb->txHashForInputIdx(inum).toHex();
+                        Debug() << "Spent " << it->first.toString() << " amount: " << it->second.amount.ToString()
+                                << " in txid: "  << dbgTxIdHex << " height: " << ppb->height
+                                << " input number: " << ppb->numForInputIdx(inum).value_or(0xffff)
+                                << " HashX: " << it->second.hashX.toHex();
+                    }
+                    p->utxoSet.erase(it); // invalidate txo  (spend it)
+                } else {
+                    QString s;
+                    {
+                        const auto dbgTxIdHex = ppb->txHashForInputIdx(inum).toHex();
+                        QTextStream ts(&s);
+                        ts << "Failed to spend: " << in.prevoutHash.toHex() << ":" << in.prevoutN << " (spending txid: " << dbgTxIdHex << ")";
+                    }
+                    throw Exception(s);
+                }
+                ++inum;
+            }
+
+            // sort and shrink_to_fit new hashX inputs added
+            for (const auto & hashX : newHashXInputsResolved) {
+                auto & ag = ppb->hashXAggregated[hashX];
+                std::sort(ag.ins.begin(), ag.ins.end()); // make sure they are sorted
+                ag.ins.shrink_to_fit();
+            }
+
+            if constexpr (debugPrt)
+                Debug() << "utxoset size: " << p->utxoSet.size() << " block: " << ppb->height;
+        }
+
+        if (nReserve) {
+            if (const auto size = p->headers.size(); size + nReserve < p->headers.capacity())
+                p->headers.reserve(size + nReserve); // reserve space for new headers in 1 go to save on copying
+            if (const auto size = p->blkInfos.size(); size + nReserve < p->blkInfos.capacity())
+                p->blkInfos.reserve(size + nReserve); // reserve space for new blkinfos in 1 go to save on copying
+        }
+
+        // save blkInfos
+        p->blkInfos.emplace_back(BlkInfo{
+            p->txNumNext, // .txNum0
+            unsigned(ppb->txInfos.size()),
+            unsigned(ppb->inputs.size()),
+            unsigned(ppb->outputs.size())
+        });
+
+        // append header (todo: see about reserving suitable chunks)
+        p->headers.emplace_back(rawHeader);
+        // update txNum after everything checks out
+        p->txNumNext += ppb->txInfos.size();
+
+    } catch (const std::exception & e) {
+        errRet = e.what();
+        p->headerVerifier = verifUndo; // undo header verifier state
+    }
+
+    return errRet;
+}
+
+// some helpers for TxNum -- these may throw DatabaseError
+std::optional<TxNum> Storage::txNumForHash(const TxHash &h, bool throwIfMissing)
+{
+    static const QString kErrMsg ("Error reading txNumForHash from db");
+    return GenericDBGet<TxNum, false>(p->db.txnums.get(), ToSlice(h), !throwIfMissing, kErrMsg);
+}
+
+std::optional<TxHash> Storage::hashForTxNum(TxNum n, bool throwIfMissing)
+{
+    static const QString kErrMsg ("Error reading hashForTxNum from db");
+    return GenericDBGet<TxHash, false>(p->db.txnums.get(), ToSlice(SerializeScalar(n)), !throwIfMissing, kErrMsg);
+}
+
 
 namespace {
     // specializations of Serialize/Deserialize

@@ -356,12 +356,6 @@ struct Controller::StateMachine
         auto idx = qMin(size_t(state), std::size(stateStrings)-1);
         return stateStrings[idx];
     }
-
-    // TESTING UTXO SET
-    //UTXOSet utxoset;
-    //robin_hood::unordered_flat_map <TxHash, TxNum, HashHasher> txHash2NumMap;
-    //robin_hood::unordered_flat_map <TxNum, TxHash> num2TxHashMap;
-    //std::atomic<TxNum> txNumNext{0};
 };
 
 void Controller::rmTask(CtlTask *t)
@@ -572,142 +566,19 @@ void Controller::process_DownloadingBlocks()
 bool Controller::process_VerifyAndAddBlock(PreProcessedBlockPtr ppb)
 {
     assert(sm);
-    // Verify header chain makes sense (by checking hashes, using the shared header verifier)
-    QByteArray rawHeader;
-    {
-        auto [verif, lock] = storage->headerVerifier(); // lock needs to be held while we use this shared verifier
-        const auto verifUndo = verif; // keep a copy for undo purposes in case this fails
 
-        if (QString verifErr; !verif(ppb->header, &verifErr) ) {
-            // XXX possible reorg point. FIXME TODO
-            // reorg here? TODO: deal with this better.
-            Error() << verifErr;
-            sm->state = StateMachine::State::Failure;
-            verif = verifUndo; // undo header verifier state
-            AGAIN();
-            return false;
-        }
-        // save raw header back to our buffer
-        rawHeader = verif.lastHeaderProcessed().second;
-    } // end lock context
-
-    FatalAssert(rawHeader.size() == BTC::GetBlockHeaderSize()) << "INTERNAL ERROR: raw header has the wrong size!";
-
-#if 0
-    if constexpr (true) { // UTXO set testing TESTING TESTING XXX
-        static constexpr bool debugPrt = false;
-
-        const auto resolverFunc = [this](const TxHash &h) -> std::optional<TxNum> {
-            std::optional<TxNum> ret;
-            if (auto it = sm->txHash2NumMap.find(h); it != sm->txHash2NumMap.end()) {
-                ret = it->second;
-            }
-            return ret;
-        };
-        /*
-        const auto revResolverFunc = [this](TxNum n) -> std::optional<TxHash> {
-            std::optional<TxHash> ret;
-            if (auto it = sm->num2TxHashMap.find(n); it != sm->num2TxHashMap.end()) {
-                ret = it->second;
-            }
-            return ret;
-        };
-        */
-        try {
-            // add tx hash map
-            auto pb = ProcessedBlock::makeShared(sm->txNumNext, *ppb, resolverFunc, sm->utxoset);
-            TxNum i = pb->txNum0;
-            for (const auto & tx : pb->txInfos) {
-                sm->txHash2NumMap[tx.hash] = i;
-                //sm->num2TxHashMap[i] = tx.hash;
-                ++i;
-            }
-            sm->txNumNext = i;
-
-            std::unordered_set<unsigned> outsSeen; // DEBUG REMOVE ME
-
-            // add outputs
-
-            for (const auto & [hashX, ag] : pb->hashXAggregated) {
-                for (const auto oidx : ag.outs) {
-                    outsSeen.insert(oidx); // DEBUG REMOVE ME
-                    const auto & out = pb->outputs[oidx];
-                    TxNum num = pb->txIdx2Num(out.txIdx);
-                    TXOInfo info;
-                    info.hashX = hashX;
-                    info.amount = out.amount;
-                    info.confirmedHeight = pb->height;
-                    TXO txo(num, out.outN);
-                    sm->utxoset[txo] = info;
-                    if constexpr (debugPrt)
-                        Debug() << "Added txo: " << txo.toString()
-                                << " (txid: " << pb->txInfos[out.txIdx].hash.toHex() << " height: " << pb->height << ") "
-                                << " amount: " << info.amount.ToString() << " for HashX: " << info.hashX.toHex();
-                }
-            }
-            // SANITY CHECK
-            if (auto totalOuts = outsSeen.size() + pb->nOpReturns; totalOuts != pb->outputs.size()) {
-                std::unordered_set<unsigned> missing;
-                for (unsigned i = 0; i < unsigned(pb->outputs.size()); ++i)
-                    if (!outsSeen.count(i))
-                        missing.insert(i);
-
-                QString mstr;
-                {
-                    QTextStream ts(&mstr, QIODevice::WriteOnly|QIODevice::Truncate|QIODevice::Text);
-                    for (auto idx : missing) {
-                        const auto & out = pb->outputs[idx];
-                        auto txhash = pb->txInfos[out.txIdx].hash.toHex();
-                        auto N = out.outN;
-                        TXO txo(pb->txIdx2Num(out.txIdx), N);
-                        ts << "missing output #" << idx << " " << txhash << ":" << N << " (txo: " << txo.toString() << ")\n";
-                    }
-                }
-
-                Fatal() << "block: " << pb->height << " nouts (" << totalOuts << ") != outputs.size (" << pb->outputs.size() << ")  ppb outputs.size(): " << ppb->outputs.size()
-                        << "\n" << mstr;
-            }
-            // /SANITY CHECK
-
-            // add spends (process inputs)
-            unsigned inum = 0;
-            for (const auto & in : pb->inputs) {
-                const auto dbgTxIdHex = pb->txHashForInputIdx(pb->inputs, inum).toHex();
-                if (pb->txInfos[in.txIdx].input0Index == inum && !in.prevOut.isValid()) {
-                    // coinbase.. skip
-                } else if (const auto it = sm->utxoset.find(in.prevOut); it != sm->utxoset.end()) {
-                    if constexpr (debugPrt)
-                        Debug() << "Spent " << it->first.toString() << " amount: " << it->second.amount.ToString()
-                                << " in txid: "  << dbgTxIdHex << " height: " << pb->height
-                                << " input number: " << pb->numForInputIdx(pb->inputs, inum).value_or(0xffff)
-                                << " HashX: " << it->second.hashX.toHex();
-                    sm->utxoset.erase(it);
-                } else {
-                    Debug() << "Failed to spend: " << in.prevOut.toString() << "(spending txid: " << dbgTxIdHex << ")";
-                }
-                ++inum;
-            }
-            if constexpr (debugPrt)
-                Debug() << "utxoset size: " << sm->utxoset.size() << " block: " << pb->height;
-            //if (pb->height == 60000)
-                // DEBUG TEST PRT
-            //    Debug() << pb->toDebugString(revResolverFunc, sm->utxoset);
-        } catch (const Exception &e) {
-            Fatal() << e.what();
-        }
-    }
-#endif
     const auto nLeft = qMax(sm->endHeight - (sm->ppBlkHtNext-1), 0U);
-    {
-        // updated shared headers from storage while holding lock...
-        auto [headers, lock] = storage->mutableHeaders(); // write lock held until scope end
-        if (const auto size = headers.size(); size + nLeft < headers.capacity())
-            headers.reserve(size + nLeft); // reserve space for new headers in 1 go to save on copying
-        headers.insert(headers.end(), rawHeader);
 
-    } // end lock context
+    const QString err = storage->addBlock(ppb, nLeft);
 
-    // TESTING save every 10000 headers to db -- TODO: tune this or have this be configurable?
+    if (!err.isEmpty()) {
+        Fatal() << err; // TODO: see about more graceful error and not a fatal exit. (although if we do get an error here it's pretty non-recoverable!)
+        sm->state = StateMachine::State::Failure;
+        AGAIN(); // schedule us again to do cleanup
+        return false;
+    }
+
+    // TESTING save every 10000 headers to db -- TODO: tune this or have this be configurable? Maybe have db auto-do this?
     if (!(nLeft % 10000) && nLeft)
         storage->save(Storage::SaveItem::Hdrs);
 
@@ -781,33 +652,39 @@ auto Controller::stats() const -> Stats
     // "Controller" (self)
     QVariantMap m;
     const auto tipInfo = storage->latestTip();
-    m["Headers"] = tipInfo.first+1;
-    m["ChainTip"] = tipInfo.second.toHex();
+    m["Header count"] = tipInfo.first+1;
+    m["Chain tip"] = tipInfo.second.toHex();
+    m["UTXO set size"] = qlonglong(storage->utxoSet().first.size());
+    m["TxNum"] = qlonglong(storage->getTxNum());
     if (sm) {
         QVariantMap m2;
         m2["State"] = sm->stateStr();
         m2["Height"] = sm->ht;
         if (const auto nDL = nHeadersDownloadedSoFar(); nDL > 0)
-            m2["Headers_Downloaded_This_Run"] = qlonglong(nDL);
+            m2["Headers downloaded this run"] = qlonglong(nDL);
         if (const auto [ntx, nin, nout] = nTxInOutSoFar(); ntx > 0) {
-            m2["Txs_Seen_This_Run"] = QVariantMap({
+            m2["Txs seen this run"] = QVariantMap({
                 { "nTx" , qlonglong(ntx) },
                 { "nIns", qlonglong(nin) },
                 { "nOut", qlonglong(nout) }
             });
         }
         const size_t backlogBlocks = sm->ppBlocks.size();
-        m2["BackLog_Blocks"] = qulonglong(backlogBlocks);
         if (backlogBlocks) {
+            QVariantMap m3;
+            m3["numBlocks"] = qulonglong(backlogBlocks);
             size_t backlogBytes = 0, backlogTxs = 0, backlogInMemoryBytes = 0;
             for (const auto & [height, ppb] : sm->ppBlocks) {
                 backlogBytes += ppb->sizeBytes;
                 backlogTxs += ppb->txInfos.size();
                 backlogInMemoryBytes += ppb->estimatedThisSizeBytes;
             }
-            m2["BackLog_RawBlocksDataSize"] = QString("%1 MiB").arg(QString::number(double(backlogBytes) / 1e6, 'f', 3));
-            m2["BackLog_InMemoryDataSize"] = QString("%1 MiB").arg(QString::number(double(backlogInMemoryBytes) / 1e6, 'f', 3));
-            m2["BackLog_Txs"] = qulonglong(backlogTxs);
+            m3["in-memory (est.)"] = QString("%1 MiB").arg(QString::number(double(backlogInMemoryBytes) / 1e6, 'f', 3));
+            m3["block bytes"] = QString("%1 MiB").arg(QString::number(double(backlogBytes) / 1e6, 'f', 3));
+            m3["numTxs"] = qulonglong(backlogTxs);
+            m2["BackLog"] = m3;
+        } else {
+            m2["BackLog"] = QVariant(); // null
         }
         m["StateMachine"] = m2;
     } else

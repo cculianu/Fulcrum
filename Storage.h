@@ -5,12 +5,14 @@
 #include "Mgr.h"
 #include "Mixins.h"
 #include "Options.h"
+#include "TXO.h"
 
 #include <QByteArray>
 #include <QFlags>
 
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <shared_mutex>
 #include <utility>
 #include <vector>
@@ -62,9 +64,9 @@ public:
     ///             (Empty if no headers yet).
     std::pair<int, QByteArray> latestTip() const;
 
-    /// eg 'main' or 'test' or may be empty string if new db
+    /// eg 'main' or 'test' or may be empty string if new db (thread safe)
     QString getChain() const;
-    void setChain(const QString &); // implicitly calls db save of 'meta'
+    void setChain(const QString &); // implicitly calls db save of 'meta' (thread safe)
 
     enum class SaveItem : uint32_t {
         Hdrs = 0x1,  ///< save headers
@@ -86,12 +88,17 @@ public:
     // --- Block Processing (still a WIP)
 
     std::pair<UTXOSet &, ExclusiveLockGuard> mutableUtxoSet();
-    std::pair<const UTXOSet &, SharedLockGuard> utxoSet();
+    std::pair<const UTXOSet &, SharedLockGuard> utxoSet() const;
 
     /// Thread-safe. Call this from the controller thread or any thread. Returns the empty string on success,
     /// or a string containing an error message on failure.  A common failure reason would be a header verification
-    /// failure.  Also you can only add blocks in serial sequence from 0 -> lastest.
-    QString addBlock(PreProcessedBlockPtr ppb);
+    /// failure.  Note: you can only add blocks in serial sequence from 0 -> latest.
+    /// This function will mutate the pased-in pre-processed block and fill in all the inputs from the utxo set,
+    /// as well as modify the utxo set with spends / new outputs.
+    QString addBlock(PreProcessedBlockPtr ppb, unsigned num2ReserveAfter = 0);
+
+    /// returns the "next" TxNum (thread safe)
+    TxNum getTxNum() const;
 
 protected:
     virtual Stats stats() const override; ///< from StatsMixin
@@ -107,6 +114,11 @@ private:
     void saveMeta_impl(); ///< This may throw if db error. Caller should hold locks or be in single-threaded mode.
 
     void loadHeadersFromDB(); // may throw -- called from startup()
+
+    // some helpers for TxNum -- these may throw DatabaseError
+    std::optional<TxNum> txNumForHash(const TxHash &, bool throwIfMissing = false);
+    std::optional<TxHash> hashForTxNum(TxNum, bool throwIfMissng = false);
+
 };
 
 Q_DECLARE_OPERATORS_FOR_FLAGS(Storage::SaveSpec)
