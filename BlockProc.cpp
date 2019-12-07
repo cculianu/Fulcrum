@@ -11,7 +11,7 @@
 #include <set>
 #include <unordered_set>
 
-/* static */ const TxHash BlockProcBase::nullhash;
+/* static */ const TxHash PreProcessedBlock::nullhash;
 
 /// fill this struct's data with all the txdata, etc from a bitcoin CBlock. Alternative to using the second c'tor.
 void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bitcoin::CBlock &b) {
@@ -142,7 +142,7 @@ QString PreProcessedBlock::toDebugString() const
                 const auto & theInput [[maybe_unused]] = inputs[idx];
                 assert(theInput.parentTxOutIdx.has_value() && txHashForOutputIdx(theInput.parentTxOutIdx.value()) == theInput.prevoutHash);
                 ts << " {in# " << j << " - " << inputs[idx].prevoutHash.toHex() << ":" << inputs[idx].prevoutN
-                   << ", spent in " << txHashForInputIdx(inputs, idx).toHex() << ":" << numForInputIdx(inputs, idx).value_or(999999) << " }";
+                   << ", spent in " << txHashForInputIdx(idx).toHex() << ":" << numForInputIdx(idx).value_or(999999) << " }";
             }
             for (size_t j = 0; j < ag.outs.size(); ++j) {
                 const auto idx = ag.outs[j];
@@ -170,114 +170,11 @@ PreProcessedBlockPtr PreProcessedBlock::makeShared(unsigned height_, size_t size
     return std::make_shared<PreProcessedBlock>(height_, size, block);
 }
 
-/* ---- ProcessedBlock ---- */
-ProcessedBlock::CannotResolveInputError::~CannotResolveInputError() {} // for weak vtable warning
-
-
-/// convenience factory static method: given a block, return a shard_ptr instance of this struct
-/*static*/
-ProcessedBlockPtr ProcessedBlock::makeShared(TxNum txBaseNum, const PreProcessedBlock &ppb, const TxHash2NumResolver &resolverFunc, const UTXOSet &uset) // may throw
-{
-    auto rawPtr = new ProcessedBlock(txBaseNum, ppb, resolverFunc, uset); // may throw
-    return ProcessedBlockPtr(rawPtr); // didn't throw, return shared_ptr
-}
-
-ProcessedBlock::ProcessedBlock(TxNum txBaseNum, const PreProcessedBlock &ppb, const TxHash2NumResolver &resolverFunc, const UTXOSet &uset)
-    : BlockProcBase(ppb), txNum0(txBaseNum)
-{
-    inputs.reserve(ppb.inputs.size());
-    estimatedThisSizeBytes -= ppb.inputs.size() * sizeof(PreProcessedBlock::InputPt); // reduce the size estimate because we will recompute it below
-
-    // run through all of the inputs and resolve them to a HashX by consuling the utxo set and the resolverFunc
-    unsigned i = 0;
-    for (const auto & inp : ppb.inputs) {
-        TXO txo;
-        txo.u.prevout.n = inp.prevoutN;
-        if (inp.parentTxOutIdx.has_value()) {
-            assert(inp.parentTxOutIdx.value() < outputs.size());
-            // prevout was in this block, grab txNum quickly
-            const auto & prevout = outputs[inp.parentTxOutIdx.value()];
-            txo.u.prevout.txNum = txIdx2Num(prevout.txIdx);
-            // at this point we know the input in question was already pre-populated in the hashXAggregated structure,
-        } else if (i == 0) {
-            // coinbase input.. skip the scripthash stuff
-            txo = TXO(); // mark prevout as "invalid"
-        } else {
-            // prevout was not in this block, call the resolverFunc to figure out the 'txNum'
-            auto opt = resolverFunc(inp.prevoutHash);
-            if (UNLIKELY(!opt.has_value())) {
-                throw CannotResolveInputError(
-                    QString("Unable to resolve prevoutHash %1 for input# %2 of txid %3")
-                            .arg(QString(inp.prevoutHash.toHex()))
-                            .arg(ppb.numForInputIdx(ppb.inputs, i).value_or(9999))
-                            .arg(QString(ppb.txHashForInputIdx(ppb.inputs, i).toHex())));
-            }
-            txo.u.prevout.txNum = opt.value();
-            // look for utxo in utxo set to find the HashX and Amount.
-            if (auto it = uset.find(txo); UNLIKELY(it == uset.end())) {
-                throw CannotResolveInputError(
-                    QString("Unable to resolve utxo %1:%2 in utxo set for input# %3 of txid %4")
-                            .arg(QString(inp.prevoutHash.toHex()))
-                            .arg(txo.u.prevout.n)
-                            .arg(ppb.numForInputIdx(ppb.inputs, i).value_or(9999))
-                            .arg(QString(ppb.txHashForInputIdx(ppb.inputs, i).toHex())));
-            } else {
-                // at this point we know the input in question was from a previous block so we need to populate the
-                // hashXAggregated structure now.  Either by pushing an 'ins' to the end of an existing struct's
-                // vector, or creating a new
-                const auto & info = it->second;
-                if (auto it = hashXAggregated.find(info.hashX); it == hashXAggregated.end()) {
-                    // did not exist -- new hashX
-                    hashXAggregated[info.hashX].ins.push_back(i);
-                    estimatedThisSizeBytes += sizeof(AggregatedOutsIns) + size_t(info.hashX.length());
-                } else {
-                    // existed, use iterator above to push back to existing vector in map value (struct AggregatedOutsIns)
-                    it->second.ins.push_back(i);
-                }
-                estimatedThisSizeBytes += sizeof(i);
-            }
-        }
-
-        // now, push the input into our concrete class's inputs array
-        inputs.emplace_back(InputPt{
-            inp.txIdx, // .txIdx
-            txo, // .prevOut
-        });
-
-        estimatedThisSizeBytes += sizeof(InputPt);
-        ++i;
-    }
-
-    // all inputs are pushed, we need to update the hashXAggregated structure by sorting the inputs array by idx
-    // (and make sure all indices are unique -- TODO: remove this last check)
-    for (auto & [hashX, ag] : hashXAggregated) {
-        // sort each ag structure again
-        std::sort(ag.ins.begin(), ag.ins.end());
-        static constexpr bool doUniqueCheck =
-#ifdef NDEBUG
-                false;
-#else
-                true;
-#endif
-        if constexpr (doUniqueCheck) {
-            // paranoia: make sure inputs are unique (this likely is not needed)
-            auto last = std::unique(ag.ins.begin(), ag.ins.end());
-            if (auto end = ag.ins.end(); UNLIKELY(last != end)) {
-                // TODO: remove this, and perhaps this whole unique enforcement, when we we convince ourselves it's not needed.
-                // So far it seems no matter what we're sane here and this is unnecessary.
-                Warning() << "Warning: duplicate output indices detected for hashX: " << hashX.toHex() << " height: " << height;
-                ag.ins.erase(last, ag.ins.end());
-            }
-        }
-
-        ag.ins.shrink_to_fit(); // just in case we grew its capacity too large
-    }
-}
 
 // very much a work in progress. this needs to also consult the UTXO set to be complete. For now we just
 // have this here for reference.
 std::vector<std::unordered_set<HashX, HashHasher>>
-ProcessedBlock::hashXTouchedByTx() const
+PreProcessedBlock::hashXTouchedByTx() const
 {
     std::vector<std::unordered_set<HashX, HashHasher>> ret(txInfos.size());
     for (const auto & [hashX, ag] : hashXAggregated) {
@@ -289,52 +186,6 @@ ProcessedBlock::hashXTouchedByTx() const
         for (const auto inIdx : ag.ins) {
             ret[inputs[inIdx].txIdx].insert(hashX);
         }
-    }
-    return ret;
-}
-
-QString ProcessedBlock::toDebugString(const Num2TxHashResolver &resolver, const UTXOSet &uset) const
-{
-    // TODO: implement...
-    QString ret;
-    {
-        QTextStream ts(&ret, QIODevice::ReadOnly|QIODevice::Truncate|QIODevice::Text);
-        ts << "<ProcessedBlock --"
-           << " height: " << height << " " << " size: " << sizeBytes << " header_nTime: " << header.nTime << " hash: " << header.GetHash().ToString().c_str()
-           << " nTx: " << txInfos.size() << " nIns: " << inputs.size() << " nOuts: " << outputs.size() << " nScriptHash: " << hashXAggregated.size();
-        int i = 0;
-        for (const auto & [hashX, ag] : hashXAggregated) {
-            ts << " (#" << i << " - " << hashX.toHex() << " - nIns: " << ag.ins.size() << " nOuts: " << ag.outs.size();
-            for (size_t j = 0; j < ag.ins.size(); ++j) {
-                const auto idx = ag.ins[j];
-                const auto & theInput [[maybe_unused]] = inputs[idx];
-                const auto & inp = inputs[idx];
-                QByteArray h = resolver(inp.prevOut.txNum()).value_or("").toHex();
-                QString amt = "prevOutAmount: ???";
-                if (h.isEmpty()) {
-                    h = QString("<NOTFOUND TxNum: %1>").arg(inp.prevOut.txNum()).toUtf8();
-                }
-                if (auto it = uset.find(inp.prevOut); it != uset.end()) {
-                    amt = QString("prevOutAmount: %1 height: %2").arg(it->second.amount.ToString().c_str()).arg(int(it->second.confirmedHeight.value_or(0))-1);
-                }
-                ts << " {in# " << j << " - " << h << ":" << inp.prevOut.N()
-                   << ", spent in " << txHashForInputIdx(inputs, idx).toHex() << ":" << numForInputIdx(inputs, idx).value_or(999999) << " }";
-            }
-            for (size_t j = 0; j < ag.outs.size(); ++j) {
-                const auto idx = ag.outs[j];
-                ts << " {out# " << j << " - " << txHashForOutputIdx(idx).toHex() << ":" << outputs[idx].outN << " amt: " << outputs[idx].amount.ToString().c_str() << " }";
-            }
-            ts << ")";
-            ++i;
-        }
-        /*
-        ts << " opreturns: " << opreturns.size();
-        i = 0;
-        for (const auto & op : opreturns) {
-            ts << " (#" << i << " - " << txInfos[outputs[op.outIdx].txIdx].hash.toHex() << ")";
-            ++i;
-        }*/
-        ts << " >";
     }
     return ret;
 }

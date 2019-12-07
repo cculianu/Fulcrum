@@ -155,7 +155,7 @@ void GetChainInfoTask::process()
             info.headers = map.value("headers").toInt(); // error ignored here
 
             info.bestBlockhash = Util::ParseHexFast(map.value("bestblockhash").toByteArray());
-            if (info.bestBlockhash.size() != bitcoin::uint256::width()) Err("bestblockhash");
+            if (info.bestBlockhash.size() != HashLen) Err("bestblockhash");
 
             info.difficulty = map.value("difficulty").toDouble(); // error ignored here
             info.mtp = map.value("mediantime").toLongLong(); // error ok
@@ -271,7 +271,7 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
     submitRequest("getblockhash", {bnum}, [this, bnum](const RPC::Message & resp){
         QVariant var = resp.result();
         const auto hash = Util::ParseHexFast(var.toByteArray());
-        if (hash.length() == bitcoin::uint256::width()) {
+        if (hash.length() == HashLen) {
             submitRequest("getblock", {var, false}, [this, bnum, hash](const RPC::Message & resp){
                 QVariant var = resp.result();
                 const auto rawblock = Util::ParseHexFast(var.toByteArray());
@@ -358,10 +358,10 @@ struct Controller::StateMachine
     }
 
     // TESTING UTXO SET
-    UTXOSet utxoset;
-    robin_hood::unordered_flat_map <TxHash, TxNum, HashHasher> txHash2NumMap;
+    //UTXOSet utxoset;
+    //robin_hood::unordered_flat_map <TxHash, TxNum, HashHasher> txHash2NumMap;
     //robin_hood::unordered_flat_map <TxNum, TxHash> num2TxHashMap;
-    std::atomic<TxNum> txNumNext{0};
+    //std::atomic<TxNum> txNumNext{0};
 };
 
 void Controller::rmTask(CtlTask *t)
@@ -593,6 +593,7 @@ bool Controller::process_VerifyAndAddBlock(PreProcessedBlockPtr ppb)
 
     FatalAssert(rawHeader.size() == BTC::GetBlockHeaderSize()) << "INTERNAL ERROR: raw header has the wrong size!";
 
+#if 0
     if constexpr (true) { // UTXO set testing TESTING TESTING XXX
         static constexpr bool debugPrt = false;
 
@@ -695,7 +696,7 @@ bool Controller::process_VerifyAndAddBlock(PreProcessedBlockPtr ppb)
             Fatal() << e.what();
         }
     }
-
+#endif
     const auto nLeft = qMax(sm->endHeight - (sm->ppBlkHtNext-1), 0U);
     {
         // updated shared headers from storage while holding lock...
