@@ -1,6 +1,7 @@
 #ifndef STORAGE_H
 #define STORAGE_H
 
+#include "BlockProc.h"
 #include "Mgr.h"
 #include "Mixins.h"
 #include "Options.h"
@@ -54,6 +55,13 @@ public:
     /// How we read headers from our memory cache. The lock is locked in shared mode.
     std::pair<const Headers &, SharedLockGuard> headers() const;
 
+    /// Implicitly takes a lock to return this. Thread safe. Breakdown of info returned:
+    ///   .first - the latest valid height we have synched or -1 if no headers.
+    ///   .second - the latest valid chainTip 32-byte sha256 double hash of the header (the chainTip as it's called in
+    ///             bitcoind parlance), in bitcoind REVERSED memory order (that is, ready for json sending/receiving).
+    ///             (Empty if no headers yet).
+    std::pair<int, QByteArray> latestTip() const;
+
     QString getChain() const;
     void setChain(const QString &); // implicitly calls db save of 'meta'
 
@@ -72,6 +80,17 @@ public:
     /// schedules updates to be written to disk immediately when control returns to this
     /// object's thread's event loop.
     void save(SaveSpec = SaveItem::All);
+
+
+    // --- Block Processing (still a WIP)
+
+    std::pair<UTXOSet &, ExclusiveLockGuard> mutableUtxoSet();
+    std::pair<const UTXOSet &, SharedLockGuard> utxoSet();
+
+    /// Thread-safe. Call this from the controller thread or any thread. Returns the empty string on success,
+    /// or a string containing an error message on failure.  A common failure reason would be a header verification
+    /// failure.  Also you can only add blocks in serial sequence from 0 -> lastest.
+    QString addBlock(PreProcessedBlockPtr ppb);
 
 protected:
     virtual Stats stats() const override; ///< from StatsMixin

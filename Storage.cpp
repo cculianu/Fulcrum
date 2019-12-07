@@ -281,6 +281,18 @@ void Storage::setChain(const QString &chain)
     save(SaveItem::Meta);
 }
 
+// should this come from headersVerifier() instead?
+std::pair<int, QByteArray> Storage::latestTip() const {
+    std::pair<int, QByteArray> ret;
+    {
+        auto [hdrs, lock] = headers();
+        ret.first = int(hdrs.size())-1; // -1 if no headers
+        if (!hdrs.empty())
+            ret.second = BTC::HashRev(hdrs.back());
+    }
+    return ret;
+}
+
 void Storage::save(SaveSpec typed_spec)
 {
     using IntType = decltype(p->pendingSaves.load());

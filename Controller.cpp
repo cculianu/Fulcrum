@@ -459,7 +459,7 @@ void Controller::process(bool beSilentIfUpToDate)
                 return;
             }
             // TODO: detect reorgs here -- to be implemented later after we figure out data model more, etc.
-            const auto old = int(storage->headers().first.size())-1;
+            const auto old = storage->latestTip().first;
             sm->ht = task->info.blocks;
             if (old == sm->ht) {
                 if (!beSilentIfUpToDate) {
@@ -481,7 +481,7 @@ void Controller::process(bool beSilentIfUpToDate)
         });
     } else if (sm->state == State::GetBlocks) {
         FatalAssert(sm->ht >= 0) << "Inconsistent state -- sm->ht cannot be negative in State::GetBlocks! FIXME!"; // paranoia
-        const size_t base = storage->headers().first.size();
+        const size_t base = size_t(storage->latestTip().first+1);
         const size_t num = size_t(sm->ht+1) - base;
         FatalAssert(num > 0) << "Cannot download 0 blocks! FIXME!"; // more paranoia
         const size_t nTasks = qMin(num, sm->DL_CONCURRENCY);
@@ -780,7 +780,9 @@ auto Controller::stats() const -> Stats
 
     // "Controller" (self)
     QVariantMap m;
-    m["Headers"] = int(storage->headers().first.size());
+    const auto tipInfo = storage->latestTip();
+    m["Headers"] = tipInfo.first+1;
+    m["ChainTip"] = tipInfo.second.toHex();
     if (sm) {
         QVariantMap m2;
         m2["State"] = sm->stateStr();
