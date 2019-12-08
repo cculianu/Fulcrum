@@ -182,10 +182,17 @@ namespace LRU {
             std::for_each(nodes.begin(), nodes.end(), f);
         }
 
+        /// Shrink the down cache to maxSize() (eliminating the extra elasticity elements). Returns the number
+        /// of cache items deleted.
+        size_t shrink() {
+            Guard g(lock);
+            return prune(true);
+        }
+
     private:
         /// Caller must the lock. Returns the number of elements removed.
-        size_t prune() {
-            const size_t maxAllowed = maxSize_ + elasticity_;
+        size_t prune(bool shrink = false) {
+            const size_t maxAllowed = maxSize_ + (shrink ? 0 : elasticity_);
             if (k_nodeit_map.size() < maxAllowed) {
                 return 0;
             }

@@ -200,7 +200,7 @@ struct Storage::Pvt
 
     std::atomic<unsigned> unsavedCt = 0;
 
-    static constexpr size_t nCacheMax = 16000000, nCacheElasticity = 10000000;
+    static constexpr size_t nCacheMax = 1000000, nCacheElasticity = 20000000;
     LRU::Cache<true, TxNum, TxHash> lruNum2Hash{nCacheMax, nCacheElasticity};
     LRU::Cache<true, TxHash, TxNum, HashHasher> lruHash2Num{nCacheMax, nCacheElasticity};
 };
@@ -616,7 +616,9 @@ void Storage::loadUTXOSetFromDB()
                 }
             }
             Log() << "UTXO set " << QString::number(cost/1e6, 'f', 3) << " MiB in " << p->utxoSet.size() << " txos";
-            Debug() << "Saved " << QString::number(savings/1e6, 'f', 3) << " MiB (" << /*num2hash: " << num2hash.size() << " " << */"hashXSeen: " << hashXSeen.size() << ")";
+            Debug() << "Mem savings: " << QString::number(savings/1e6, 'f', 3) << " MiB (" << /*num2hash: " << num2hash.size() << " " << */"hashXSeen: " << hashXSeen.size() << ")";
+            const size_t nShrink1 = p->lruHash2Num.shrink(), nShrink2 = p->lruNum2Hash.shrink();
+            Debug() << "Purged cache: " << std::max(nShrink1, nShrink2) << " tx hashes, cache size now: " << std::max(p->lruHash2Num.size(), p->lruNum2Hash.size()) << " tx hashes";
         }
         const auto num = p->utxoSet.size();
         if (num) {
