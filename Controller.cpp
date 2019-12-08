@@ -269,6 +269,8 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
 {
     if (ctl->isStopping())  return; // short-circuit early return if controller is stopping
     if (unsigned msec = ctl->downloadTaskRecommendedThrottleTimeMsec(bnum); msec > 0) {
+        // Controller told us to back off because it is backlogged.
+        // Schedule ourselves to run again soon and return.
         Util::AsyncOnObject(this, [this, bnum]{
             do_get(bnum);
         }, msec);
