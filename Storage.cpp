@@ -198,9 +198,9 @@ struct Storage::Pvt
 
     std::vector<BlkInfo> blkInfos;
 
-    std::atomic<unsigned> unsavedCt = 0;
+    std::atomic<unsigned> unsavedCt = 0, uncompactedCt = 0;
 
-    static constexpr size_t nCacheMax = 3000000, nCacheElasticity = 20000000;
+    static constexpr size_t nCacheMax = 3000000, nCacheElasticity = 1000000;
     LRU::Cache<true, TxNum, TxHash> lruNum2Hash{nCacheMax, nCacheElasticity};
     LRU::Cache<true, TxHash, TxNum, HashHasher> lruHash2Num{nCacheMax, nCacheElasticity};
 };
@@ -289,7 +289,7 @@ void Storage::cleanup()
     stop(); // joins our thread
 
     // if there is an unsavedCt, flag these as unsaved to check and save. Won't do much if they aren't really unsaved.
-    SaveSpec override = p->unsavedCt ? SaveItem::Hdrs|SaveItem::UtxoSet : SaveItem::None;
+    SaveSpec override = p->unsavedCt ? SaveItem::Blocks : SaveItem::None;
     save_impl(override);
 }
 
@@ -371,33 +371,34 @@ void Storage::save_impl(SaveSpec override)
 {
     if (const auto flags = SaveSpec(p->pendingSaves.exchange(0))|override; flags) { // atomic clear of flags, grab prev val
         try {
-            if (flags & SaveItem::UtxoSet) { // utxo set
+            if (flags & SaveItem::Blocks) { // utxo set
                 using Set = decltype (p->utxoSetAdditionsUnsaved);
                 Set unsavedAdditions, unsavedDeletions;
-                UTXOSet copy;
-                bool doSave = false;
+                UTXOSet setCopy;
+                Headers hdrCopy;
                 {
-                    ExclusiveLockGuard g(p->utxoSetLock);
+                    std::scoped_lock guard(p->headersLock, p->utxoSetLock);
                     unsavedAdditions.swap(p->utxoSetAdditionsUnsaved);
                     unsavedDeletions.swap(p->utxoSetDeletionsUnsaved);
                     p->unsavedCt = 0;
-                    if ((doSave = unsavedAdditions.size() || unsavedDeletions.size())) {
+                    if (unsavedAdditions.size() || unsavedDeletions.size()) {
                         const auto t0 = Util::getTimeNS(); // DEBUG REMOVE ME
-                        copy = p->utxoSet; // <-- this copy is inefficient (takes on the order of 1 second -- but it is preferable to holding the lock for potentially many seconds)
+                        setCopy = p->utxoSet; // <-- this copy is inefficient (takes on the order of seconds -- but it is preferable to holding the lock for potentially many seconds)
                         // DEBUG REMOVE ME
                         const auto elapsed = Util::getTimeNS() - t0;
-                        Debug() << "utxo copy took: " << QString::number(elapsed/1e6, 'f', 3) << " msec size: " << copy.size();
+                        Debug() << "utxo copy took: " << QString::number(elapsed/1e6, 'f', 3) << " msec size: " << setCopy.size();
+                    }
+                    if (const auto idx = p->lastHeaderSaved.first; !idx || idx+1 < p->headers.size()) {
+                        hdrCopy = p->headers;
                     }
                 }
-                if (doSave)
-                    saveUtxoUnsaved_impl(copy, unsavedAdditions, unsavedDeletions);
-            }
-            if (flags & SaveItem::Hdrs) { // headers
-                // TODO: See if this copy is inefficient. So far it seems preferable to the alternative.
-                // We would rather do this here than hold the lock for the duration of the db save.
-                const Headers copy = headers().first;
-                saveHeaders_impl(copy);
-            }
+                if (!setCopy.empty()) {
+                    saveUtxoUnsaved_impl(setCopy, unsavedAdditions, unsavedDeletions);
+                }
+                if (!hdrCopy.empty()) {
+                    saveHeaders_impl(hdrCopy);
+                }
+             }
             if (flags & SaveItem::Meta) { // Meta
                 LockGuard l(p->metaLock);
                 saveMeta_impl();
@@ -614,7 +615,7 @@ void Storage::loadUTXOSetFromDB()
                 p->utxoSet[TXO{hash, ctxo.N()}] = info;
                 cost += sizeof(TXO) + sizeof(TXOInfo);
                 if (0 == ++ctr % 100000) {
-                    *(0 == ctr % 2500000 ? std::make_unique<Log>() : std::make_unique<Debug>()) << "Read " << ctr << " utxos ...";
+                    *(0 == ctr % 1000000 ? std::make_unique<Log>() : std::make_unique<Debug>()) << "Read " << ctr << " utxos ...";
                 }
             }
             Log() << "UTXO set " << QString::number(cost/1e6, 'f', 3) << " MiB in " << p->utxoSet.size() << " txos";
@@ -627,6 +628,8 @@ void Storage::loadUTXOSetFromDB()
             const auto elapsed = Util::getTimeNS();
 
             Debug() << "Read " << num << " " << Util::Pluralize("utxo", num) << " from db in " << QString::number((elapsed-t0)/1e6, 'f', 3) << " msec";
+            compactifyUtxoSet();
+            p->uncompactedCt = 0;
         }
     }
 
@@ -781,15 +784,25 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve)
 
         ++p->unsavedCt;
 
+        if (++p->uncompactedCt == 33000) {
+            // schedule a compaction -- but be sure to do it our storage thread.
+            // also.. we "own" the utxo set to it's probably safer to delegate the work to our thread.
+            Util::AsyncOnObject(this, [this] {
+                ExclusiveLockGuard g(p->utxoSetLock);
+                compactifyUtxoSet();
+                p->uncompactedCt = 0;
+            });
+        }
+
     } catch (const std::exception & e) {
         errRet = e.what();
         p->headerVerifier = verifUndo; // undo header verifier state
     }
 
     // enqueue a save every 10000 blocks
-    if (errRet.isEmpty() && p->unsavedCt > 10000) {
+    if (errRet.isEmpty() && p->unsavedCt == 10000) {
         p->unsavedCt = 0;
-        save(SaveItem::Hdrs|SaveItem::UtxoSet);
+        save(SaveItem::Blocks);
     }
 
     return errRet;
@@ -802,15 +815,19 @@ std::optional<TxNum> Storage::txNumForHash(const TxHash &h, bool throwIfMissing,
     if (ret.has_value()) {
         // save was cached flat
         if (wasCached) *wasCached = true;
+        // touch the other cache to refresh its lru list (if it still has the item. that is)
+        p->lruNum2Hash.tryGet(ret.value());
         return ret; // cached, return it
     } else if (wasCached) *wasCached = false; // save flag if caller is interested
 
     static const QString kErrMsg ("Error reading txNumForHash from db");
 
     ret = GenericDBGet<TxNum, false>(p->db.txnums.get(), ToSlice(h), !throwIfMissing, kErrMsg);
-    if (ret.has_value())
-        // save in cache
+    if (ret.has_value()) {
+        // save in caches
         p->lruHash2Num.insert(h, ret.value());
+        p->lruNum2Hash.insert(ret.value(), h);
+    }
     return ret;
 }
 
@@ -819,17 +836,55 @@ std::optional<TxHash> Storage::hashForTxNum(TxNum n, bool throwIfMissing, bool *
     std::optional<TxHash> ret = p->lruNum2Hash.tryGet(n);
     if (ret.has_value()) {
         if (wasCached) *wasCached = true;
+        // touch the other cache to refresh its lru list (if it still has the item, that is)
+        p->lruHash2Num.tryGet(ret.value());
         return ret;
     } else if (wasCached) *wasCached = false;
 
     static const QString kErrMsg ("Error reading hashForTxNum from db");
     ret = GenericDBGet<TxHash, false>(p->db.txnums.get(), ToSlice(SerializeScalar(n)), !throwIfMissing, kErrMsg);
-    if (ret.has_value())
-        // save in cache
+    if (ret.has_value()) {
+        // save in caches
         p->lruNum2Hash.insert(n, ret.value());
+        p->lruHash2Num.insert(ret.value(), n);
+    }
     return ret;
 }
 
+size_t Storage::compactifyUtxoSet()
+{
+    const auto t0 = Util::getTimeNS();
+    Debug() << "Compacting utxo set ...";
+    // the purpose of this map is to ensure that all txid's in app memory share the same implicitly shared QByteArray
+    std::unordered_set<HashX, HashHasher> hxSet;
+    std::unordered_set<TxHash, HashHasher> txSet;
+    size_t savings = 0;
+    //UTXOSet copy;
+    UTXOSet & set(p->utxoSet);
+    //copy.reserve(set.size());
+    for (auto it = set.begin(); it != set.end(); ++it) {
+        if (auto it2 = txSet.find(it->first.prevoutHash); it2 != txSet.end()) {
+            // found -- implicitly share TxHash
+            it->first.prevoutHash = *it2;
+            savings += size_t(it2->length());
+        } else {
+            // first instance, store
+            txSet.insert(it->first.prevoutHash);
+        }
+        if (auto it2 = hxSet.find(it->second.hashX); it2 != hxSet.end()) {
+            // found -- implicitly share HashX
+            it->second.hashX = *it2;
+            savings += size_t(it2->length());
+        } else {
+            // first instance, store
+            hxSet.insert(it->second.hashX);
+        }
+    }
+    set.rehash(set.size());
+    const auto elapsed = Util::getTimeNS() - t0;
+    Debug() << "Compatcted utxo set: maybe saved " << QString::number(savings/1e6, 'f', 3) << " MiB in " << QString::number(elapsed/1e6, 'f', 3) << " msec";
+    return savings;
+}
 
 namespace {
     // specializations of Serialize/Deserialize

@@ -136,10 +136,9 @@ namespace LRU {
         /// or not.  Note that this function will only work correctly if exceptions are enabled at compile-time.
         std::optional<Value> tryGet(const Key & key) noexcept {
             std::optional<Value> ret;
-            try {
-                Guard g(lock);
-                ret.emplace(get_nolock(key));
-            } catch (const KeyNotFound &) {}
+            Guard g(lock);
+            const auto ptr = get_nolock_nothrow(key);
+            if (ptr) ret.emplace(*ptr); // copy construct in place
             return ret;
         }
         /// Gets a copy-constructed version of the internally stored value.
@@ -206,11 +205,19 @@ namespace LRU {
         }
         /// Caller must hold the lock. Throws if not found.
         const Value & get_nolock(const Key & k) {
+            const auto retPtr = get_nolock_nothrow(k);
+            if (!retPtr)
+                throw KeyNotFound();
+            return *retPtr;
+        }
+
+        /// Caller must hold the lock. Throws if not found.
+        const Value *get_nolock_nothrow(const Key & k) noexcept {
             const auto iter = k_nodeit_map.find(k);
             if (iter == k_nodeit_map.end())
-                throw KeyNotFound();
+                return nullptr;
             nodes.splice(nodes.begin(), nodes, iter->second);
-            return iter->second->value;
+            return &(iter->second->value);
         }
 
         // Disallow copying.

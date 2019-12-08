@@ -494,7 +494,7 @@ void Controller::process(bool beSilentIfUpToDate)
               << ", verified ok.";
         sm.reset(); // go back to "Begin" state to check if any new headers arrived in the meantime
         AGAIN();
-        storage->save(Storage::SaveItem::Hdrs|Storage::SaveItem::UtxoSet); // enqueue a commit to db ...
+        storage->save(Storage::SaveItem::Blocks); // enqueue a commit to db ...
     } else if (sm->state == State::Failure) {
         // We will try again later via the pollTimer
         Error() << "Failed to download blocks";

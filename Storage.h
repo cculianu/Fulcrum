@@ -69,9 +69,8 @@ public:
     void setChain(const QString &); // implicitly calls db save of 'meta' (thread safe)
 
     enum class SaveItem : uint32_t {
-        Hdrs = 0x1,  ///< save headers
+        Blocks = 0x1,  ///< save headers + utxoset
         Meta = 0x2, ///< save meta
-        UtxoSet = 0x4, ///< save utxoset
 
         All = 0xffffffff, ///< save everything
         None = 0x00, ///< No-op
@@ -123,6 +122,9 @@ private:
     std::optional<TxNum> txNumForHash(const TxHash &, bool throwIfMissing = false, bool *wasCached = nullptr);
     std::optional<TxHash> hashForTxNum(TxNum, bool throwIfMissng = false, bool *wasCached = nullptr);
 
+    // should be called with the utxoset lock held if in multithreaded mode -- collapses all dupe QByteArrays down to
+    // sharing single instances via implicit sharing to save memory
+    size_t compactifyUtxoSet();
 };
 
 Q_DECLARE_OPERATORS_FOR_FLAGS(Storage::SaveSpec)
