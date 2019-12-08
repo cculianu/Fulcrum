@@ -89,14 +89,14 @@ using UTXOSet = robin_hood::unordered_flat_map<TXO, TXOInfo, std::hash<TXO>>; //
 // -------------------------------------------------------------------------------------------------------------------
 // ----- Some storage helper classes below.. (safe to ignore in rest of codebase outside of Storage.h / Storage.cpp)
 // -------------------------------------------------------------------------------------------------------------------
+#   ifdef __GNUC__
+#   pragma pack(push, 1)
+#   endif
 /// Stogage subsystem "compact txo"
 /// This is used internally by the "Storage" subsystem for storing TxNum <-> txhash associations on disk
 struct CompactTXO {
     static constexpr std::uint64_t initval = ~0ULL; ///< indicates !isValid()
     // pack paranoia -- not strictly needed since this packs anyway the way we want on gcc and/or clang.
-#   ifdef __GNUC__
-#   pragma pack(push, 1)
-#   endif
     union {
         struct {
             /// tx index in the global tx table. First tx in blockchain is txNum 0, and so on (mapping of unique number to a txid hash, stored in db).
@@ -107,9 +107,6 @@ struct CompactTXO {
         } prevout;
         std::uint64_t asU64 = initval;
     } u;
-#   ifdef __GNUC__
-#   pragma pack(pop)
-#   endif
     CompactTXO() = default;
     CompactTXO(TxNum txNum, IONum n) { u.prevout.txNum = txNum; u.prevout.n = n; }
     CompactTXO(const CompactTXO & o) { *this = o; }
@@ -133,14 +130,18 @@ struct CompactTXO {
         return ret;
     }
 };
+#   ifdef __GNUC__
+#   pragma pack(pop)
+#   endif
 
 namespace std {
 /// specialization of std::hash to be able to add struct CompactTXO to any unordered_set or unordered_map
 template<> struct hash<CompactTXO> {
         size_t operator()(const CompactTXO &txo) const noexcept {
-            static_assert (sizeof(txo.u.asU64) <= sizeof(size_t) && sizeof(txo.u.prevout) >= 8 && sizeof(txo.u.prevout) == sizeof(txo.u.asU64),
-                           "Possible non-64-bit platform detected or other struct packing weirdness on this compiler. Please compile with a 64-bit compiler.");
-            return txo.u.asU64; // just return the packed txNum:n value as this is guaranteed to be unique
+            if constexpr (sizeof(txo.u.asU64) <= sizeof(size_t) && sizeof(txo.u.prevout) >= 8
+                          && sizeof(txo.u.prevout) == sizeof(txo.u.asU64))
+                return txo.u.asU64; // just return the packed txNum:n value as this is guaranteed to be unique
+            return (txo.u.prevout.txNum<<16) | size_t(txo.u.prevout.n&0xffff);
         }
 };
 } // namespace std
