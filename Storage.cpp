@@ -198,7 +198,8 @@ struct Storage::Pvt
 
     std::vector<BlkInfo> blkInfos;
 
-    std::atomic<unsigned> unsavedCt = 0, uncompactedCt = 0;
+    std::atomic<unsigned> saveInterval = 100000, compactInterval = 30000,
+                          unsavedCt = 0, uncompactedCt = 0;
 
     static constexpr size_t nCacheMax = 3000000, nCacheElasticity = 1000000;
     LRU::Cache<true, TxNum, TxHash> lruNum2Hash{nCacheMax, nCacheElasticity};
@@ -292,6 +293,12 @@ void Storage::cleanup()
     SaveSpec override = p->unsavedCt ? SaveItem::Blocks : SaveItem::None;
     save_impl(override);
 }
+
+
+unsigned Storage::saveInterval() const { return p->saveInterval; }
+void Storage::setSaveInterval(unsigned blocks) { p->saveInterval = blocks; p->unsavedCt = p->unsavedCt ? 1 : 0;}
+unsigned Storage::compactionInterval() const { return p->compactInterval; }
+void Storage::setCompactionInterval(unsigned blocks) { p->compactInterval = blocks; p->uncompactedCt = p->uncompactedCt ? 1 : 0; }
 
 auto Storage::stats() const -> Stats
 {
@@ -557,7 +564,7 @@ void Storage::loadUTXOSetFromDB()
         {
             // the purpose of this map is to ensure that all txid's in app memory share the same implicitly shared QByteArray
             std::unordered_set<HashX, HashHasher> hashXSeen;
-            //robin_hood::unordered_flat_map<TxNum, TxHash> num2hash; // this also acts as a cache as well as ensuring all txhashes share the same QByteArray
+            robin_hood::unordered_flat_map<TxNum, TxHash> num2hash; // this also acts as a cache as well as ensuring all txhashes share the same QByteArray
 
             const int currentHeight = latestTip().first;
 
@@ -574,20 +581,19 @@ void Storage::loadUTXOSetFromDB()
                                                      " Delete the datadir and resynch it.");
                 }
                 TxHash hash;
-                //if (auto it = num2hash.find(ctxo.txNum()); it != num2hash.end()) {
-                //    hash = it->second; // ensure implicitly shared
-                //    savings += size_t(hash.length());
-                /*} else*/ {
-                    bool wasCached = false;
-                    const auto ohash = hashForTxNum(ctxo.txNum(), false, &wasCached); // reads from db. db uses some caching hopefully
+                if (auto it = num2hash.find(ctxo.txNum()); it != num2hash.end()) {
+                    hash = it->second; // ensure implicitly shared
+                    savings += size_t(hash.length());
+                } else {
+                    // below line reads data from the db. but we specify to not store the results in our lru cache..
+                    const auto ohash = hashForTxNum(ctxo.txNum(), false, nullptr, true);
                     if (!ohash.has_value())
                         throw DatabaseFormatError("A txo is missing its txhash metadata in the db."
                                                   " This may be due to a database format mismatch."
                                                   " Delete the datadir and resynch it.");
-                    //num2hash[ctxo.txNum()] = hash = ohash.value();
+                    num2hash.emplace(ctxo.txNum(), hash = ohash.value());
                     hash = ohash.value();
-                    if (wasCached) savings += size_t(hash.length());
-                    else cost += size_t(hash.length());
+                    cost += size_t(hash.length());
                 }
                 if (hash.length() != HashLen)
                     throw DatabaseFormatError("A txo is missing has corrupted txhash metadata in the db."
@@ -619,17 +625,14 @@ void Storage::loadUTXOSetFromDB()
                 }
             }
             Log() << "UTXO set " << QString::number(cost/1e6, 'f', 3) << " MiB in " << p->utxoSet.size() << " txos";
-            Debug() << "Mem savings: " << QString::number(savings/1e6, 'f', 3) << " MiB (" << /*num2hash: " << num2hash.size() << " " << */"hashXSeen: " << hashXSeen.size() << ")";
-            const size_t nShrink1 = p->lruHash2Num.shrink(), nShrink2 = p->lruNum2Hash.shrink();
-            Debug() << "Purged cache: " << std::max(nShrink1, nShrink2) << " tx hashes, cache size now: " << std::max(p->lruHash2Num.size(), p->lruNum2Hash.size()) << " tx hashes";
+            Debug() << "Mem savings: " << QString::number(savings/1e6, 'f', 3) << " MiB"
+                    << " (" << "num2hash: " << num2hash.size() << " " << " hashXSeen: " << hashXSeen.size() << ")";
         }
         const auto num = p->utxoSet.size();
         if (num) {
             const auto elapsed = Util::getTimeNS();
 
             Debug() << "Read " << num << " " << Util::Pluralize("utxo", num) << " from db in " << QString::number((elapsed-t0)/1e6, 'f', 3) << " msec";
-            compactifyUtxoSet();
-            p->uncompactedCt = 0;
         }
     }
 
@@ -782,9 +785,14 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve)
         // update txNum after everything checks out
         p->txNumNext += ppb->txInfos.size();
 
-        ++p->unsavedCt;
 
-        if (++p->uncompactedCt == 33000) {
+        // enqueue a save every saveInterval blocks
+        if (p->saveInterval && ++p->unsavedCt == p->saveInterval) {
+            save(SaveItem::Blocks);
+        }
+
+        // enqueue compaction of utxo set every compactInterval blocks
+        if (p->compactInterval && ++p->uncompactedCt == p->compactInterval) {
             // schedule a compaction -- but be sure to do it our storage thread.
             // also.. we "own" the utxo set to it's probably safer to delegate the work to our thread.
             Util::AsyncOnObject(this, [this] {
@@ -799,19 +807,14 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve)
         p->headerVerifier = verifUndo; // undo header verifier state
     }
 
-    // enqueue a save every 10000 blocks
-    if (errRet.isEmpty() && p->unsavedCt == 10000) {
-        p->unsavedCt = 0;
-        save(SaveItem::Blocks);
-    }
-
     return errRet;
 }
 
 // some helpers for TxNum -- these may throw DatabaseError
-std::optional<TxNum> Storage::txNumForHash(const TxHash &h, bool throwIfMissing, bool *wasCached)
+std::optional<TxNum> Storage::txNumForHash(const TxHash &h, bool throwIfMissing, bool *wasCached, bool skipCache)
 {
-    std::optional<TxNum> ret = p->lruHash2Num.tryGet(h);
+    std::optional<TxNum> ret;
+    if (!skipCache) ret = p->lruHash2Num.tryGet(h);
     if (ret.has_value()) {
         // save was cached flat
         if (wasCached) *wasCached = true;
@@ -823,7 +826,7 @@ std::optional<TxNum> Storage::txNumForHash(const TxHash &h, bool throwIfMissing,
     static const QString kErrMsg ("Error reading txNumForHash from db");
 
     ret = GenericDBGet<TxNum, false>(p->db.txnums.get(), ToSlice(h), !throwIfMissing, kErrMsg);
-    if (ret.has_value()) {
+    if (!skipCache && ret.has_value()) {
         // save in caches
         p->lruHash2Num.insert(h, ret.value());
         p->lruNum2Hash.insert(ret.value(), h);
@@ -831,9 +834,10 @@ std::optional<TxNum> Storage::txNumForHash(const TxHash &h, bool throwIfMissing,
     return ret;
 }
 
-std::optional<TxHash> Storage::hashForTxNum(TxNum n, bool throwIfMissing, bool *wasCached)
+std::optional<TxHash> Storage::hashForTxNum(TxNum n, bool throwIfMissing, bool *wasCached, bool skipCache)
 {
-    std::optional<TxHash> ret = p->lruNum2Hash.tryGet(n);
+    std::optional<TxHash> ret;
+    if (!skipCache) ret = p->lruNum2Hash.tryGet(n);
     if (ret.has_value()) {
         if (wasCached) *wasCached = true;
         // touch the other cache to refresh its lru list (if it still has the item, that is)
@@ -843,7 +847,7 @@ std::optional<TxHash> Storage::hashForTxNum(TxNum n, bool throwIfMissing, bool *
 
     static const QString kErrMsg ("Error reading hashForTxNum from db");
     ret = GenericDBGet<TxHash, false>(p->db.txnums.get(), ToSlice(SerializeScalar(n)), !throwIfMissing, kErrMsg);
-    if (ret.has_value()) {
+    if (!skipCache && ret.has_value()) {
         // save in caches
         p->lruNum2Hash.insert(n, ret.value());
         p->lruHash2Num.insert(ret.value(), n);

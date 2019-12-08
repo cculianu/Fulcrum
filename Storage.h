@@ -100,6 +100,13 @@ public:
     /// returns the "next" TxNum (thread safe)
     TxNum getTxNum() const;
 
+    unsigned saveInterval() const;
+    /// set to positive nonzero to save after addBlock() is called every X blocks
+    void setSaveInterval(unsigned blocks);
+
+    unsigned compactionInterval() const;
+    /// set to positive nonzero to compact utxo set every X blocks
+    void setCompactionInterval(unsigned blocks);
 protected:
     virtual Stats stats() const override; ///< from StatsMixin
 
@@ -119,8 +126,8 @@ private:
     void loadUTXOSetFromDB(); // may throw -- called from startup()
 
     // some helpers for TxNum -- these may throw DatabaseError
-    std::optional<TxNum> txNumForHash(const TxHash &, bool throwIfMissing = false, bool *wasCached = nullptr);
-    std::optional<TxHash> hashForTxNum(TxNum, bool throwIfMissng = false, bool *wasCached = nullptr);
+    std::optional<TxNum> txNumForHash(const TxHash &, bool throwIfMissing = false, bool *wasCached = nullptr, bool skipCache = false);
+    std::optional<TxHash> hashForTxNum(TxNum, bool throwIfMissng = false, bool *wasCached = nullptr, bool skipCache = false);
 
     // should be called with the utxoset lock held if in multithreaded mode -- collapses all dupe QByteArrays down to
     // sharing single instances via implicit sharing to save memory

@@ -370,9 +370,14 @@ struct Controller::StateMachine
 unsigned Controller::downloadTaskRecommendedThrottleTimeMsec(unsigned bnum) const
 {
     std::shared_lock g(smProgressLock);
-    const size_t maxBackLog = bnum < 100000 ? 1000 : 100; // <--- TODO: have this be a more dynamic value based on current average blocksize.
-    if (sm && bnum != sm->ppBlkHtNext && sm->ppBlocks.size() > maxBackLog) {
-        return 10; // TODO: also have this be tuneable.
+    if (sm) {
+        const unsigned maxBackLog = bnum < 100000 ? 1000 : 100; // <--- TODO: have this be a more dynamic value based on current average blocksize.
+        const int diff = int(bnum) - int(sm->ppBlkHtNext);
+        if ( diff > 0 && sm->ppBlocks.size() > maxBackLog) {
+            // make the backoff time be 10ms minimum up to 100ms, depending on how far ahead the request is of where
+            // we are.
+            return unsigned(std::min(std::max(10*(diff-8), 10)+diff, 100)); // TODO: also have this be tuneable.
+        }
     }
     return 0;
 }
@@ -500,6 +505,7 @@ void Controller::process(bool beSilentIfUpToDate)
         const size_t nTasks = qMin(num, sm->DL_CONCURRENCY);
         sm->ppBlkHtNext = sm->startheight = unsigned(base);
         sm->endHeight = unsigned(sm->ht);
+        storage->setSaveInterval(100000);
         for (size_t i = 0; i < nTasks; ++i) {
             add_DLHeaderTask(unsigned(base + i), unsigned(sm->ht), nTasks);
         }
@@ -532,6 +538,7 @@ void Controller::process(bool beSilentIfUpToDate)
             sm.reset();  // great success!
         }
         enablePollTimer = true;
+        storage->setSaveInterval(100);
     } else if (sm->state == State::IBD) {
         {
             std::lock_guard g(smProgressLock);
