@@ -200,7 +200,7 @@ struct Storage::Pvt
 
     std::atomic<unsigned> unsavedCt = 0;
 
-    static constexpr size_t nCacheMax = 1000000, nCacheElasticity = 20000000;
+    static constexpr size_t nCacheMax = 1000000, nCacheElasticity = 5000000;
     LRU::Cache<true, TxNum, TxHash> lruNum2Hash{nCacheMax, nCacheElasticity};
     LRU::Cache<true, TxHash, TxNum, HashHasher> lruHash2Num{nCacheMax, nCacheElasticity};
 };
