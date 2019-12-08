@@ -384,7 +384,7 @@ void Storage::save_impl(SaveSpec override)
                         copy = p->utxoSet; // <-- this copy is inefficient (takes on the order of 1 second -- but it is preferable to holding the lock for potentially many seconds)
                         // DEBUG REMOVE ME
                         const auto elapsed = Util::getTimeNS() - t0;
-                        Debug() << "utxo copy took: " << QString::number(elapsed/1e6, 'f', 3) << " msec";
+                        Debug() << "utxo copy took: " << QString::number(elapsed/1e6, 'f', 3) << " msec size: " << copy.size();
                     }
                 }
                 if (doSave)
