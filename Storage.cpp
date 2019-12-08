@@ -411,7 +411,7 @@ void Storage::save_impl(SaveSpec override)
                         // build it for us (as a performance saving measure)
                         unsavedDeletions.clear();
                         for (auto it = setCopy.cbegin(); it != setCopy.cend(); ++it) {
-                            unsavedAdditions.insert(it->first);
+                            unsavedAdditions.emplace(it->first);
                         }
                     }
                     saveUtxoUnsaved_impl(setCopy, unsavedAdditions, unsavedDeletions);
@@ -629,7 +629,7 @@ void Storage::loadUTXOSetFromDB()
                     info.hashX = *it; // make sure they all implicitly share the same hashx
                     savings += size_t(info.hashX.length());
                 } else {
-                    hashXSeen.insert(info.hashX);
+                    hashXSeen.emplace(info.hashX);
                     cost += size_t(info.hashX.length());
                 }
                 p->utxoSet[TXO{hash, ctxo.N()}] = info;
@@ -805,13 +805,13 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve)
         p->txNumNext += ppb->txInfos.size();
 
 
-        // enqueue a save every saveInterval blocks
-        if (p->saveInterval && ++p->unsavedCt == p->saveInterval) {
+        // enqueue a save every saveInterval blocks (note that if saveInterval is 0, we never auto-save)
+        if (++p->unsavedCt == p->saveInterval && p->saveInterval) {
             save(SaveItem::Blocks);
         }
 
-        // enqueue compaction of utxo set every compactInterval blocks
-        if (p->compactInterval && ++p->uncompactedCt == p->compactInterval) {
+        // enqueue compaction of utxo set every compactInterval blocks (if 0, do not auto-compact)
+        if (++p->uncompactedCt == p->compactInterval && p->compactInterval) {
             // schedule a compaction -- but be sure to do it our storage thread.
             // also.. we "own" the utxo set to it's probably safer to delegate the work to our thread.
             Util::AsyncOnObject(this, [this] {

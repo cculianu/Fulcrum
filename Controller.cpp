@@ -376,7 +376,7 @@ unsigned Controller::downloadTaskRecommendedThrottleTimeMsec(unsigned bnum) cons
         if ( diff > 0 && sm->ppBlocks.size() > maxBackLog) {
             // make the backoff time be 10ms minimum up to 100ms, depending on how far ahead the request is of where
             // we are.
-            return unsigned(std::min(std::max(10*(diff-8), 10)+diff, 100)); // TODO: also have this be tuneable.
+            return 10 + (diff > int(maxBackLog) ? 10 : 0); // TODO: also have this be tuneable.
         }
     }
     return 0;
@@ -505,7 +505,7 @@ void Controller::process(bool beSilentIfUpToDate)
         const size_t nTasks = qMin(num, sm->DL_CONCURRENCY);
         sm->ppBlkHtNext = sm->startheight = unsigned(base);
         sm->endHeight = unsigned(sm->ht);
-        storage->setSaveInterval(500000);
+        storage->setSaveInterval(0); // disable auto-save
         for (size_t i = 0; i < nTasks; ++i) {
             add_DLHeaderTask(unsigned(base + i), unsigned(sm->ht), nTasks);
         }
