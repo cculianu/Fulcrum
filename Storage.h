@@ -120,8 +120,8 @@ private:
     void loadUTXOSetFromDB(); // may throw -- called from startup()
 
     // some helpers for TxNum -- these may throw DatabaseError
-    std::optional<TxNum> txNumForHash(const TxHash &, bool throwIfMissing = false);
-    std::optional<TxHash> hashForTxNum(TxNum, bool throwIfMissng = false);
+    std::optional<TxNum> txNumForHash(const TxHash &, bool throwIfMissing = false, bool *wasCached = nullptr);
+    std::optional<TxHash> hashForTxNum(TxNum, bool throwIfMissng = false, bool *wasCached = nullptr);
 
 };
 

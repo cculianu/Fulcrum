@@ -1,4 +1,5 @@
 #include "BTC.h"
+#include "LRUCache.h"
 #include "Storage.h"
 
 #include "rocksdb/db.h"
@@ -107,12 +108,13 @@ namespace {
     template <typename RetType, bool safeScalar = false>
     std::optional<RetType> GenericDBGet(rocksdb::DB *db, const rocksdb::Slice & key, bool missingOk = false,
                                         const QString & errorMsgPrefix = QString(),  ///< used to specify a custom error message in the thrown exception
-                                        bool acceptExtraBytesAtEndOfData = false) ///< if true, we are ok with extra unparsed bytes in data. otherwise we throw. (this check is only done for !safeScalar mode on basic types)
+                                        bool acceptExtraBytesAtEndOfData = false,
+                                        const rocksdb::ReadOptions & ropts = rocksdb::ReadOptions()) ///< if true, we are ok with extra unparsed bytes in data. otherwise we throw. (this check is only done for !safeScalar mode on basic types)
     {
         rocksdb::PinnableSlice datum;
         std::optional<RetType> ret;
         if (UNLIKELY(!db)) throw InternalError("GenericDBGet was passed a null pointer!");
-        const auto status = db->Get(rocksdb::ReadOptions(), db->DefaultColumnFamily(), key, &datum);
+        const auto status = db->Get(ropts, db->DefaultColumnFamily(), key, &datum);
         if (missingOk && status.IsNotFound()) {
             return ret; // optional will not has_value() to indicate missing key
         } else if (!status.ok()) {
@@ -157,9 +159,10 @@ namespace {
     }
     /// Conveneience for above with the missingOk flag set to false. Will always throw or return a real value.
     template <typename RetType, bool safeScalar = false>
-    RetType GenericDBGetFailIfMissing(rocksdb::DB * db, const rocksdb::Slice &k, const QString &errMsgPrefix = QString(), bool extraDataOk = false)
+    RetType GenericDBGetFailIfMissing(rocksdb::DB * db, const rocksdb::Slice &k, const QString &errMsgPrefix = QString(), bool extraDataOk = false,
+                                      const rocksdb::ReadOptions & ropts = rocksdb::ReadOptions())
     {
-        return GenericDBGet<RetType, safeScalar>(db, k, false, errMsgPrefix, extraDataOk).value();
+        return GenericDBGet<RetType, safeScalar>(db, k, false, errMsgPrefix, extraDataOk, ropts).value();
     }
 
     // some helper data structs
@@ -196,6 +199,10 @@ struct Storage::Pvt
     std::vector<BlkInfo> blkInfos;
 
     std::atomic<unsigned> unsavedCt = 0;
+
+    static constexpr size_t nCacheMax = 16000000, nCacheElasticity = 10000000;
+    LRU::Cache<true, TxNum, TxHash> lruNum2Hash{nCacheMax, nCacheElasticity};
+    LRU::Cache<true, TxHash, TxNum, HashHasher> lruHash2Num{nCacheMax, nCacheElasticity};
 };
 
 Storage::Storage(const std::shared_ptr<Options> & options)
@@ -213,7 +220,7 @@ void Storage::startup()
 
         rocksdb::Options opts;
         // Optimize RocksDB. This is the easiest way to get RocksDB to perform well
-        opts.IncreaseParallelism();
+        opts.IncreaseParallelism(int(Util::getNPhysicalProcessors()));
         opts.OptimizeLevelStyleCompaction();
         // create the DB if it's not already present
         opts.create_if_missing = true;
@@ -494,6 +501,7 @@ void Storage::loadHeadersFromDB()
     const auto t0 = Util::getTimeNS();
     {
         auto * const db = p->db.headers.get();
+
         num = GenericDBGet<uint32_t, true>(db, kNumHeaders, true, "Error reading header count from database").value_or(0); // missing ok
         if (num > MAX_HEADERS)
             throw DatabaseFormatError(QString("Header count (%1) in database exceeds MAX_HEADERS! This is likely due to"
@@ -546,7 +554,7 @@ void Storage::loadUTXOSetFromDB()
         {
             // the purpose of this map is to ensure that all txid's in app memory share the same implicitly shared QByteArray
             std::unordered_set<HashX, HashHasher> hashXSeen;
-            robin_hood::unordered_flat_map<TxNum, TxHash> num2hash; // this also acts as a cache as well as ensuring all txhashes share the same QByteArray
+            //robin_hood::unordered_flat_map<TxNum, TxHash> num2hash; // this also acts as a cache as well as ensuring all txhashes share the same QByteArray
 
             const int currentHeight = latestTip().first;
 
@@ -563,17 +571,20 @@ void Storage::loadUTXOSetFromDB()
                                                      " Delete the datadir and resynch it.");
                 }
                 TxHash hash;
-                if (auto it = num2hash.find(ctxo.txNum()); it != num2hash.end()) {
-                    hash = it->second; // ensure implicitly shared
-                    savings += size_t(hash.length());
-                } else {
-                    const auto ohash = hashForTxNum(ctxo.txNum(), false); // reads from db. db uses some caching hopefully
+                //if (auto it = num2hash.find(ctxo.txNum()); it != num2hash.end()) {
+                //    hash = it->second; // ensure implicitly shared
+                //    savings += size_t(hash.length());
+                /*} else*/ {
+                    bool wasCached = false;
+                    const auto ohash = hashForTxNum(ctxo.txNum(), false, &wasCached); // reads from db. db uses some caching hopefully
                     if (!ohash.has_value())
                         throw DatabaseFormatError("A txo is missing its txhash metadata in the db."
                                                   " This may be due to a database format mismatch."
                                                   " Delete the datadir and resynch it.");
-                    num2hash[ctxo.txNum()] = hash = ohash.value();
-                    cost += size_t(hash.length());
+                    //num2hash[ctxo.txNum()] = hash = ohash.value();
+                    hash = ohash.value();
+                    if (wasCached) savings += size_t(hash.length());
+                    else cost += size_t(hash.length());
                 }
                 if (hash.length() != HashLen)
                     throw DatabaseFormatError("A txo is missing has corrupted txhash metadata in the db."
@@ -605,7 +616,7 @@ void Storage::loadUTXOSetFromDB()
                 }
             }
             Log() << "UTXO set " << QString::number(cost/1e6, 'f', 3) << " MiB in " << p->utxoSet.size() << " txos";
-            Debug() << "Saved " << QString::number(savings/1e6, 'f', 3) << " MiB (num2hash: " << num2hash.size() << " hashXSeen: " << hashXSeen.size() << ")";
+            Debug() << "Saved " << QString::number(savings/1e6, 'f', 3) << " MiB (" << /*num2hash: " << num2hash.size() << " " << */"hashXSeen: " << hashXSeen.size() << ")";
         }
         const auto num = p->utxoSet.size();
         if (num) {
@@ -646,13 +657,19 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve)
             rocksdb::WriteBatch batch;
             const TxNum txNum0 = p->txNumNext;
             for (size_t i = 0; i < ppb->txInfos.size(); ++i) {
-                const auto hashSlice = ToSlice(ppb->txInfos[i].hash);
-                const auto txNumBytes = SerializeScalar(TxNum(txNum0 + i));
+                const TxNum txnum = txNum0 + i;
+                const TxHash & hash = ppb->txInfos[i].hash;
+                const auto hashSlice = ToSlice(hash);
+                const auto txNumBytes = SerializeScalar(txnum);
                 // txnums are keyed off of uint64_t txNum -- note we save the raw uint64 value here without any QDataStream encapsulation
                 if (auto stat = batch.Put(ToSlice(txNumBytes), hashSlice); !stat.ok())
                     throw DatabaseError(QString("Error writing txNum -> txHash for txNum %1: %2").arg(txNum0 + i).arg(QString::fromStdString(stat.ToString())));
                 if (auto stat = batch.Put(hashSlice, ToSlice(txNumBytes)); !stat.ok())
                     throw DatabaseError(QString("Error writing txHash -> txNum for txNum %1: %2").arg(txNum0 + i).arg(QString::fromStdString(stat.ToString())));
+
+                // add to lru cache since these may be used immediately below..
+                p->lruHash2Num.insert(hash, txnum);
+                p->lruNum2Hash.insert(txnum, hash);
             }
             if (auto stat = p->db.txnums->Write(rocksdb::WriteOptions(), &batch); !stat.ok())
                 throw DatabaseError(QString("Error writing txNums batch: %1").arg(QString::fromStdString(stat.ToString())));
@@ -688,7 +705,7 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve)
             // add spends (process inputs)
             std::unordered_set<HashX, HashHasher> newHashXInputsResolved;
             unsigned inum = 0;
-            for (const auto & in : ppb->inputs) {
+            for (auto & in : ppb->inputs) {
                 if (!inum) {
                     // coinbase.. skip
                 } else if (const auto it = p->utxoSet.find(TXO{in.prevoutHash, in.prevoutN}); it != p->utxoSet.end()) {
@@ -697,6 +714,7 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve)
                         // was a prevout from a previos block.. so the ppb didn't have it in the touched set..
                         // mark the spend as having touched this hashX for this ppb now.
                         ppb->hashXAggregated[info.hashX].ins.emplace_back(inum);
+                        in.prevoutHash = it->first.prevoutHash; // ensure shallow/shared copy of QByteArray in inputs
                         newHashXInputsResolved.insert(info.hashX);
                     }
                     if constexpr (debugPrt) {
@@ -774,16 +792,38 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve)
 }
 
 // some helpers for TxNum -- these may throw DatabaseError
-std::optional<TxNum> Storage::txNumForHash(const TxHash &h, bool throwIfMissing)
+std::optional<TxNum> Storage::txNumForHash(const TxHash &h, bool throwIfMissing, bool *wasCached)
 {
+    std::optional<TxNum> ret = p->lruHash2Num.tryGet(h);
+    if (ret.has_value()) {
+        // save was cached flat
+        if (wasCached) *wasCached = true;
+        return ret; // cached, return it
+    } else if (wasCached) *wasCached = false; // save flag if caller is interested
+
     static const QString kErrMsg ("Error reading txNumForHash from db");
-    return GenericDBGet<TxNum, false>(p->db.txnums.get(), ToSlice(h), !throwIfMissing, kErrMsg);
+
+    ret = GenericDBGet<TxNum, false>(p->db.txnums.get(), ToSlice(h), !throwIfMissing, kErrMsg);
+    if (ret.has_value())
+        // save in cache
+        p->lruHash2Num.insert(h, ret.value());
+    return ret;
 }
 
-std::optional<TxHash> Storage::hashForTxNum(TxNum n, bool throwIfMissing)
+std::optional<TxHash> Storage::hashForTxNum(TxNum n, bool throwIfMissing, bool *wasCached)
 {
+    std::optional<TxHash> ret = p->lruNum2Hash.tryGet(n);
+    if (ret.has_value()) {
+        if (wasCached) *wasCached = true;
+        return ret;
+    } else if (wasCached) *wasCached = false;
+
     static const QString kErrMsg ("Error reading hashForTxNum from db");
-    return GenericDBGet<TxHash, false>(p->db.txnums.get(), ToSlice(SerializeScalar(n)), !throwIfMissing, kErrMsg);
+    ret = GenericDBGet<TxHash, false>(p->db.txnums.get(), ToSlice(SerializeScalar(n)), !throwIfMissing, kErrMsg);
+    if (ret.has_value())
+        // save in cache
+        p->lruNum2Hash.insert(n, ret.value());
+    return ret;
 }
 
 
