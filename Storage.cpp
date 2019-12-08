@@ -225,7 +225,7 @@ void Storage::startup()
         // create the DB if it's not already present
         opts.create_if_missing = true;
         opts.error_if_exists = false;
-        opts.max_open_files = 50; ///< testing -- seems this affects memory usage see: https://github.com/facebook/rocksdb/issues/4112
+        opts.max_open_files = 10; ///< testing -- seems this affects memory usage see: https://github.com/facebook/rocksdb/issues/4112
         opts.keep_log_file_num = 5; // ??
         opts.compression = rocksdb::CompressionType::kNoCompression; // for now we test without compression. TODO: characterize what is fastest and best..
 
