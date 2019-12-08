@@ -268,11 +268,10 @@ void DownloadBlocksTask::process()
 void DownloadBlocksTask::do_get(unsigned int bnum)
 {
     if (ctl->isStopping())  return; // short-circuit early return if controller is stopping
-    unsigned next = 0;
-    if (ctl->blocksInProcess(&next) > 1000 && next != bnum/* testing todo have this come from some tunable value*/) {
+    if (unsigned msec = ctl->downloadTaskRecommendedThrottleTimeMsec(bnum); msec > 0) {
         Util::AsyncOnObject(this, [this, bnum]{
             do_get(bnum);
-        }, 10);
+        }, msec);
         return;
     }
     submitRequest("getblockhash", {bnum}, [this, bnum](const RPC::Message & resp){
@@ -366,12 +365,12 @@ struct Controller::StateMachine
     }
 };
 
-unsigned Controller::blocksInProcess(unsigned *next) const
+unsigned Controller::downloadTaskRecommendedThrottleTimeMsec(unsigned bnum) const
 {
-    std::lock_guard g(smLock);
-    if (sm) {
-        if (next) *next = sm->ppBlkHtNext;
-        return unsigned(sm->ppBlocks.size());
+    std::shared_lock g(smProgressLock);
+    const size_t maxBackLog = bnum < 100000 ? 1000 : 100; // <--- TODO: have this be a more dynamic value based on current average blocksize.
+    if (sm && bnum != sm->ppBlkHtNext && sm->ppBlocks.size() > maxBackLog) {
+        return 10; // TODO: also have this be tuneable.
     }
     return 0;
 }
@@ -511,7 +510,7 @@ void Controller::process(bool beSilentIfUpToDate)
               << " (" << sm->nIns << " " << Util::Pluralize("input", sm->nIns) << " & " << sm->nOuts << " " << Util::Pluralize("output", sm->nOuts) << ")"
               << ", verified ok.";
         {
-            std::lock_guard g(smLock);
+            std::lock_guard g(smProgressLock);
             sm.reset(); // go back to "Begin" state to check if any new headers arrived in the meantime
         }
         AGAIN();
@@ -520,20 +519,20 @@ void Controller::process(bool beSilentIfUpToDate)
         // We will try again later via the pollTimer
         Error() << "Failed to download blocks";
         {
-            std::lock_guard g(smLock);
+            std::lock_guard g(smProgressLock);
             sm.reset();
         }
         enablePollTimer = true;
         emit synchFailure();
     } else if (sm->state == State::End) {
         {
-            std::lock_guard g(smLock);
+            std::lock_guard g(smProgressLock);
             sm.reset();  // great success!
         }
         enablePollTimer = true;
     } else if (sm->state == State::IBD) {
         {
-            std::lock_guard g(smLock);
+            std::lock_guard g(smProgressLock);
             sm.reset();  // great success!
         }
         enablePollTimer = true;
@@ -558,7 +557,7 @@ void Controller::putBlock(CtlTask *task, PreProcessedBlockPtr p)
             return;
         }
         {
-            std::lock_guard g(smLock);
+            std::lock_guard g(smProgressLock);
             sm->ppBlocks[p->height] = p;
         }
         //AGAIN(); // queue up, return right away -- turns out this spams events. better to call the process function directly here.
@@ -569,15 +568,19 @@ void Controller::putBlock(CtlTask *task, PreProcessedBlockPtr p)
 void Controller::process_DownloadingBlocks()
 {
     unsigned ct = 0;
-    std::lock_guard g(smLock);
 
     for (auto it = sm->ppBlocks.find(sm->ppBlkHtNext); it != sm->ppBlocks.end() && !stopFlag; it = sm->ppBlocks.find(sm->ppBlkHtNext)) {
         auto ppb = it->second;
         assert(ppb->height == sm->ppBlkHtNext); // paranoia -- should never happen
         ++ct;
-        ++sm->ppBlkHtNext;
 
-        sm->ppBlocks.erase(it); // remove immediately from q
+        {
+            std::lock_guard g(smProgressLock);
+
+            ++sm->ppBlkHtNext;
+
+            sm->ppBlocks.erase(it); // remove immediately from q
+        }
 
         // process & add it if it's good
         if ( ! process_VerifyAndAddBlock(ppb) )

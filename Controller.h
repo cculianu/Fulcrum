@@ -13,7 +13,7 @@
 #include <atomic>
 #include <memory>
 #include <tuple>
-#include <mutex>
+#include <shared_mutex>
 #include <type_traits>
 #include <vector>
 
@@ -37,8 +37,12 @@ public:
 
     inline bool isStopping() const { return stopFlag; }
 
-    /// the number of blocks in the process queue. used by the DownloadBlocksTask to decide if it needs to retry later or continue now.
-    unsigned blocksInProcess(unsigned *nextNeeded = nullptr) const;
+    /// Returns a positive nonzero value if the calling download task should throttle because the backlog is too large.
+    /// In that case the caller should try again in the returned value ms.
+    /// If the return value is 0, the caller may proceed immediately to continue downloading headers.
+    /// This function is not intended to be used by code outside this subsystem -- it is intended to be called by the
+    /// internal DownloadBlocksTask only.
+    unsigned downloadTaskRecommendedThrottleTimeMsec(unsigned forBlockHeight) const;
 
 signals:
     /// Emitted whenever bitcoind is detected to be up-to-date, and everything is synched up.
@@ -87,7 +91,7 @@ private:
 
     struct StateMachine;
     std::unique_ptr<StateMachine> sm;
-    mutable std::mutex smLock;
+    mutable std::shared_mutex smProgressLock;
 
     robin_hood::unordered_flat_map<CtlTask *, std::unique_ptr<CtlTask>> tasks;
 
