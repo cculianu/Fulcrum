@@ -200,7 +200,7 @@ struct Storage::Pvt
 
     std::atomic<unsigned> unsavedCt = 0;
 
-    static constexpr size_t nCacheMax = 1000000, nCacheElasticity = 5000000;
+    static constexpr size_t nCacheMax = 3000000, nCacheElasticity = 20000000;
     LRU::Cache<true, TxNum, TxHash> lruNum2Hash{nCacheMax, nCacheElasticity};
     LRU::Cache<true, TxHash, TxNum, HashHasher> lruHash2Num{nCacheMax, nCacheElasticity};
 };
@@ -225,7 +225,7 @@ void Storage::startup()
         // create the DB if it's not already present
         opts.create_if_missing = true;
         opts.error_if_exists = false;
-        opts.max_open_files = 10; ///< testing -- seems this affects memory usage see: https://github.com/facebook/rocksdb/issues/4112
+        //opts.max_open_files = 50; ///< testing -- seems this affects memory usage see: https://github.com/facebook/rocksdb/issues/4112
         opts.keep_log_file_num = 5; // ??
         opts.compression = rocksdb::CompressionType::kNoCompression; // for now we test without compression. TODO: characterize what is fastest and best..
 
