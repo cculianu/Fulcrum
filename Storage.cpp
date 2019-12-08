@@ -202,7 +202,7 @@ struct Storage::Pvt
     std::atomic<unsigned> saveInterval = 100000, compactInterval = 30000,
                           unsavedCt = 0, uncompactedCt = 0;
 
-    static constexpr size_t nCacheMax = 3000000, nCacheElasticity = 1000000;
+    static constexpr size_t nCacheMax = 2000000, nCacheElasticity = 1000000;
     LRU::Cache<true, TxNum, TxHash> lruNum2Hash{nCacheMax, nCacheElasticity};
     LRU::Cache<true, TxHash, TxNum, HashHasher> lruHash2Num{nCacheMax, nCacheElasticity};
 };
@@ -694,10 +694,6 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve)
                     throw DatabaseError(QString("Error writing txNum -> txHash for txNum %1: %2").arg(txNum0 + i).arg(QString::fromStdString(stat.ToString())));
                 if (auto stat = batch.Put(hashSlice, ToSlice(txNumBytes)); !stat.ok())
                     throw DatabaseError(QString("Error writing txHash -> txNum for txNum %1: %2").arg(txNum0 + i).arg(QString::fromStdString(stat.ToString())));
-
-                // add to lru cache since these may be used immediately below..
-                p->lruHash2Num.insert(hash, txnum);
-                p->lruNum2Hash.insert(txnum, hash);
             }
             if (auto stat = p->db.txnums->Write(rocksdb::WriteOptions(), &batch); !stat.ok())
                 throw DatabaseError(QString("Error writing txNums batch: %1").arg(QString::fromStdString(stat.ToString())));
@@ -846,9 +842,8 @@ std::optional<TxNum> Storage::txNumForHash(const TxHash &h, bool throwIfMissing,
 
     ret = GenericDBGet<TxNum, false>(p->db.txnums.get(), ToSlice(h), !throwIfMissing, kErrMsg);
     if (!skipCache && ret.has_value()) {
-        // save in caches
+        // save in cache
         p->lruHash2Num.insert(h, ret.value());
-        p->lruNum2Hash.insert(ret.value(), h);
     }
     return ret;
 }
@@ -867,9 +862,8 @@ std::optional<TxHash> Storage::hashForTxNum(TxNum n, bool throwIfMissing, bool *
     static const QString kErrMsg ("Error reading hashForTxNum from db");
     ret = GenericDBGet<TxHash, false>(p->db.txnums.get(), ToSlice(SerializeScalar(n)), !throwIfMissing, kErrMsg);
     if (!skipCache && ret.has_value()) {
-        // save in caches
+        // save in cache
         p->lruNum2Hash.insert(n, ret.value());
-        p->lruHash2Num.insert(ret.value(), n);
     }
     return ret;
 }
