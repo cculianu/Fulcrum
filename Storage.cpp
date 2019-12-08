@@ -195,6 +195,7 @@ struct Storage::Pvt
     UTXOSet utxoSet;
     RWLock utxoSetLock;
     std::unordered_set<TXO> utxoSetAdditionsUnsaved, utxoSetDeletionsUnsaved;
+    bool hasSavedUtxoSet = false;
 
     std::vector<BlkInfo> blkInfos;
 
@@ -383,14 +384,19 @@ void Storage::save_impl(SaveSpec override)
                 Set unsavedAdditions, unsavedDeletions;
                 UTXOSet setCopy;
                 Headers hdrCopy;
+                bool firstUtxoSave = false;
                 {
                     std::scoped_lock guard(p->headersLock, p->utxoSetLock);
                     unsavedAdditions.swap(p->utxoSetAdditionsUnsaved);
                     unsavedDeletions.swap(p->utxoSetDeletionsUnsaved);
                     p->unsavedCt = 0;
-                    if (unsavedAdditions.size() || unsavedDeletions.size()) {
+                    if (unsavedAdditions.size() || unsavedDeletions.size() || !p->hasSavedUtxoSet) {
                         const auto t0 = Util::getTimeNS(); // DEBUG REMOVE ME
                         setCopy = p->utxoSet; // <-- this copy is inefficient (takes on the order of seconds -- but it is preferable to holding the lock for potentially many seconds)
+                        if (!p->hasSavedUtxoSet) {
+                            p->hasSavedUtxoSet = true;
+                            firstUtxoSave = true;
+                        }
                         // DEBUG REMOVE ME
                         const auto elapsed = Util::getTimeNS() - t0;
                         Debug() << "utxo copy took: " << QString::number(elapsed/1e6, 'f', 3) << " msec size: " << setCopy.size();
@@ -400,6 +406,14 @@ void Storage::save_impl(SaveSpec override)
                     }
                 }
                 if (!setCopy.empty()) {
+                    if (firstUtxoSave) {
+                        // if first time save, we build the additions set manually here, since client code didn't
+                        // build it for us (as a performance saving measure)
+                        unsavedDeletions.clear();
+                        for (auto it = setCopy.cbegin(); it != setCopy.cend(); ++it) {
+                            unsavedAdditions.insert(it->first);
+                        }
+                    }
                     saveUtxoUnsaved_impl(setCopy, unsavedAdditions, unsavedDeletions);
                 }
                 if (!hdrCopy.empty()) {
@@ -632,6 +646,8 @@ void Storage::loadUTXOSetFromDB()
         if (num) {
             const auto elapsed = Util::getTimeNS();
 
+            p->hasSavedUtxoSet = true; // remember that we had a utxo set in db -- this affects how/if we build the "difference set"
+
             Debug() << "Read " << num << " " << Util::Pluralize("utxo", num) << " from db in " << QString::number((elapsed-t0)/1e6, 'f', 3) << " msec";
         }
     }
@@ -704,7 +720,8 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve)
                     info.confirmedHeight = ppb->height;
                     const TXO txo{ hash, out.outN };
                     p->utxoSet[txo] = info;
-                    p->utxoSetAdditionsUnsaved.insert(txo);
+                    if (p->hasSavedUtxoSet)
+                        p->utxoSetAdditionsUnsaved.insert(txo);
                     if constexpr (debugPrt)
                         Debug() << "Added txo: " << txo.toString()
                                 << " (txid: " << hash.toHex() << " height: " << ppb->height << ") "
@@ -734,12 +751,14 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve)
                                 << " input number: " << ppb->numForInputIdx(inum).value_or(0xffff)
                                 << " HashX: " << it->second.hashX.toHex();
                     }
-                    if (auto it2 = p->utxoSetAdditionsUnsaved.find(it->first); it2 != p->utxoSetAdditionsUnsaved.end()) {
-                        // was in unsaved additions, no need to add it to deletions
-                        p->utxoSetAdditionsUnsaved.erase(it2);
-                    } else {
-                        // was not in unsaved additions.. add it to deletions
-                        p->utxoSetDeletionsUnsaved.insert(it->first);
+                    if (p->hasSavedUtxoSet) {
+                        if (auto it2 = p->utxoSetAdditionsUnsaved.find(it->first); it2 != p->utxoSetAdditionsUnsaved.end()) {
+                            // was in unsaved additions, no need to add it to deletions
+                            p->utxoSetAdditionsUnsaved.erase(it2);
+                        } else {
+                            // was not in unsaved additions.. add it to deletions
+                            p->utxoSetDeletionsUnsaved.insert(it->first);
+                        }
                     }
                     p->utxoSet.erase(it); // invalidate txo  (spend it) by removing from map
                 } else {

@@ -505,7 +505,7 @@ void Controller::process(bool beSilentIfUpToDate)
         const size_t nTasks = qMin(num, sm->DL_CONCURRENCY);
         sm->ppBlkHtNext = sm->startheight = unsigned(base);
         sm->endHeight = unsigned(sm->ht);
-        storage->setSaveInterval(100000);
+        storage->setSaveInterval(500000);
         for (size_t i = 0; i < nTasks; ++i) {
             add_DLHeaderTask(unsigned(base + i), unsigned(sm->ht), nTasks);
         }
