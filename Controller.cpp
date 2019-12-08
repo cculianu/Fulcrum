@@ -268,6 +268,13 @@ void DownloadBlocksTask::process()
 void DownloadBlocksTask::do_get(unsigned int bnum)
 {
     if (ctl->isStopping())  return; // short-circuit early return if controller is stopping
+    unsigned next = 0;
+    if (ctl->blocksInProcess(&next) > 1000 && next != bnum/* testing todo have this come from some tunable value*/) {
+        Util::AsyncOnObject(this, [this, bnum]{
+            do_get(bnum);
+        }, 10);
+        return;
+    }
     submitRequest("getblockhash", {bnum}, [this, bnum](const RPC::Message & resp){
         QVariant var = resp.result();
         const auto hash = Util::ParseHexFast(var.toByteArray());
@@ -338,9 +345,10 @@ struct Controller::StateMachine
     int ht = -1;
 
     robin_hood::unordered_flat_map<unsigned, PreProcessedBlockPtr> ppBlocks; // mapping of height -> PreProcessedBlock (we use an unordered_flat_map because it's faster for frequent updates)
-    unsigned ppBlkHtNext = 0,  ///< the next unprocessed block height we need to process in series
-             startheight = 0, ///< the height we started at
+    unsigned startheight = 0, ///< the height we started at
              endHeight = 0; ///< the final (inclusive) block height we expect to receive to pronounce the synch done
+
+    std::atomic<unsigned> ppBlkHtNext = 0;  ///< the next unprocessed block height we need to process in series
 
     // todo: tune this
     const size_t DL_CONCURRENCY = qMax(Util::getNPhysicalProcessors()-1, 1U);//size_t(qMin(qMax(int(Util::getNPhysicalProcessors())-BitcoinDMgr::N_CLIENTS, BitcoinDMgr::N_CLIENTS), 32));
@@ -357,6 +365,16 @@ struct Controller::StateMachine
         return stateStrings[idx];
     }
 };
+
+unsigned Controller::blocksInProcess(unsigned *next) const
+{
+    std::lock_guard g(smLock);
+    if (sm) {
+        if (next) *next = sm->ppBlkHtNext;
+        return unsigned(sm->ppBlocks.size());
+    }
+    return 0;
+}
 
 void Controller::rmTask(CtlTask *t)
 {
@@ -492,20 +510,32 @@ void Controller::process(bool beSilentIfUpToDate)
         Log() << "Processed " << N << " new " << Util::Pluralize("block", N) << " with " << sm->nTx << " " << Util::Pluralize("tx", sm->nTx)
               << " (" << sm->nIns << " " << Util::Pluralize("input", sm->nIns) << " & " << sm->nOuts << " " << Util::Pluralize("output", sm->nOuts) << ")"
               << ", verified ok.";
-        sm.reset(); // go back to "Begin" state to check if any new headers arrived in the meantime
+        {
+            std::lock_guard g(smLock);
+            sm.reset(); // go back to "Begin" state to check if any new headers arrived in the meantime
+        }
         AGAIN();
         storage->save(Storage::SaveItem::Blocks); // enqueue a commit to db ...
     } else if (sm->state == State::Failure) {
         // We will try again later via the pollTimer
         Error() << "Failed to download blocks";
-        sm.reset();
+        {
+            std::lock_guard g(smLock);
+            sm.reset();
+        }
         enablePollTimer = true;
         emit synchFailure();
     } else if (sm->state == State::End) {
-        sm.reset();  // great success!
+        {
+            std::lock_guard g(smLock);
+            sm.reset();  // great success!
+        }
         enablePollTimer = true;
     } else if (sm->state == State::IBD) {
-        sm.reset();
+        {
+            std::lock_guard g(smLock);
+            sm.reset();  // great success!
+        }
         enablePollTimer = true;
         Warning() << "bitcoind is in initial block download, will try again in 1 minute";
         polltimeout = 60 * 1000; // try again every minute
@@ -527,7 +557,10 @@ void Controller::putBlock(CtlTask *task, PreProcessedBlockPtr p)
             Warning() << "Ignoring putBlocks request for block " << p->height << " -- state is not \"DownloadingBlocks\" but rather is: \"" << sm->stateStr() << "\"";
             return;
         }
-        sm->ppBlocks[p->height] = p;
+        {
+            std::lock_guard g(smLock);
+            sm->ppBlocks[p->height] = p;
+        }
         //AGAIN(); // queue up, return right away -- turns out this spams events. better to call the process function directly here.
         process_DownloadingBlocks();
     });
@@ -536,6 +569,8 @@ void Controller::putBlock(CtlTask *task, PreProcessedBlockPtr p)
 void Controller::process_DownloadingBlocks()
 {
     unsigned ct = 0;
+    std::lock_guard g(smLock);
+
     for (auto it = sm->ppBlocks.find(sm->ppBlkHtNext); it != sm->ppBlocks.end() && !stopFlag; it = sm->ppBlocks.find(sm->ppBlkHtNext)) {
         auto ppb = it->second;
         assert(ppb->height == sm->ppBlkHtNext); // paranoia -- should never happen

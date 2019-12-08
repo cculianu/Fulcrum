@@ -181,7 +181,7 @@ public:
     virtual ~ProcessAgainMixin() override;
 protected:
     virtual void process() = 0;
-    void AGAIN() { QTimer::singleShot(0, qobj(), [this]{process();}); }
+    void AGAIN(int when_ms=0) { QTimer::singleShot(qMax(0, when_ms), qobj(), [this]{process();}); }
 };
 
 #endif // MIXINS_H

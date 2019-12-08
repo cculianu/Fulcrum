@@ -13,6 +13,7 @@
 #include <atomic>
 #include <memory>
 #include <tuple>
+#include <mutex>
 #include <type_traits>
 #include <vector>
 
@@ -35,6 +36,9 @@ public:
     void putBlock(CtlTask *sender, PreProcessedBlockPtr);
 
     inline bool isStopping() const { return stopFlag; }
+
+    /// the number of blocks in the process queue. used by the DownloadBlocksTask to decide if it needs to retry later or continue now.
+    unsigned blocksInProcess(unsigned *nextNeeded = nullptr) const;
 
 signals:
     /// Emitted whenever bitcoind is detected to be up-to-date, and everything is synched up.
@@ -83,6 +87,7 @@ private:
 
     struct StateMachine;
     std::unique_ptr<StateMachine> sm;
+    mutable std::mutex smLock;
 
     robin_hood::unordered_flat_map<CtlTask *, std::unique_ptr<CtlTask>> tasks;
 
