@@ -290,9 +290,11 @@ void Storage::cleanup()
 {
     stop(); // joins our thread
 
-    // if there is an unsavedCt, flag these as unsaved to check and save. Won't do much if they aren't really unsaved.
-    SaveSpec override = p->unsavedCt ? SaveItem::Blocks : SaveItem::None;
-    save_impl(override);
+    if (p->unsavedCt) {
+        Log() << "Saving unsaved data, please wait ...";
+        // if there is an unsavedCt, flag these as unsaved to check and save. Won't do much if they aren't really unsaved.
+        save_impl(SaveItem::Blocks);
+    }
 }
 
 
