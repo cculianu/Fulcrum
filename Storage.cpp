@@ -871,8 +871,10 @@ std::optional<TxHash> Storage::hashForTxNum(TxNum n, bool throwIfMissing, bool *
 size_t Storage::compactifyUtxoSet()
 {
     // the purpose of this map is to ensure that all txid's in app memory share the same implicitly shared QByteArray
-    std::unordered_set<HashX, HashHasher> hxSet;
-    std::unordered_set<TxHash, HashHasher> txSet;
+    using Empty = int8_t;
+    constexpr Empty empty{};
+    robin_hood::unordered_flat_map<HashX, Empty, HashHasher> hxSet;
+    robin_hood::unordered_flat_map<TxHash, Empty, HashHasher> txSet;
     size_t savings = 0;
     qint64 t0 = 0, elapsed = 0;
     {
@@ -883,19 +885,19 @@ size_t Storage::compactifyUtxoSet()
         for (auto it = set.begin(); it != set.end(); ++it) {
             if (auto it2 = txSet.find(it->first.prevoutHash); it2 != txSet.end()) {
                 // found -- implicitly share TxHash
-                it->first.prevoutHash = *it2;
-                savings += size_t(it2->length());
+                it->first.prevoutHash = it2->first;
+                savings += size_t(it2->first.length());
             } else {
                 // first instance, store
-                txSet.insert(it->first.prevoutHash);
+                txSet.emplace(it->first.prevoutHash, empty);
             }
             if (auto it2 = hxSet.find(it->second.hashX); it2 != hxSet.end()) {
                 // found -- implicitly share HashX
-                it->second.hashX = *it2;
-                savings += size_t(it2->length());
+                it->second.hashX = it2->first;
+                savings += size_t(it2->first.length());
             } else {
                 // first instance, store
-                hxSet.insert(it->second.hashX);
+                hxSet.emplace(it->second.hashX, empty);
             }
         }
         set.rehash(set.size());
