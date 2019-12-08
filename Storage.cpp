@@ -868,8 +868,10 @@ std::optional<TxHash> Storage::hashForTxNum(TxNum n, bool throwIfMissing, bool *
     return ret;
 }
 
-size_t Storage::compactifyUtxoSet()
+size_t Storage::compactifyUtxoSet(bool force)
 {
+    if (!p->uncompactedCt && !force)
+        return 0;
     // the purpose of this map is to ensure that all txid's in app memory share the same implicitly shared QByteArray
     using Empty = int8_t;
     constexpr Empty empty{};

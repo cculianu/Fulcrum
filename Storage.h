@@ -102,7 +102,7 @@ public:
 
     /// Thead safe. Memory saving utility function, call this rarely.
     /// Collapses all QByteArrays down to sharing single instances via implicit sharing to save memory
-    size_t compactifyUtxoSet();
+    size_t compactifyUtxoSet(bool force=false);
 
     /// how often (in blocks) we auto-save
     unsigned saveInterval() const;
