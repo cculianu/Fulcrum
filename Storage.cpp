@@ -796,9 +796,7 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve)
             // schedule a compaction -- but be sure to do it our storage thread.
             // also.. we "own" the utxo set to it's probably safer to delegate the work to our thread.
             Util::AsyncOnObject(this, [this] {
-                ExclusiveLockGuard g(p->utxoSetLock);
                 compactifyUtxoSet();
-                p->uncompactedCt = 0;
             });
         }
 
@@ -857,35 +855,38 @@ std::optional<TxHash> Storage::hashForTxNum(TxNum n, bool throwIfMissing, bool *
 
 size_t Storage::compactifyUtxoSet()
 {
-    const auto t0 = Util::getTimeNS();
-    Debug() << "Compacting utxo set ...";
     // the purpose of this map is to ensure that all txid's in app memory share the same implicitly shared QByteArray
     std::unordered_set<HashX, HashHasher> hxSet;
     std::unordered_set<TxHash, HashHasher> txSet;
     size_t savings = 0;
-    //UTXOSet copy;
-    UTXOSet & set(p->utxoSet);
-    //copy.reserve(set.size());
-    for (auto it = set.begin(); it != set.end(); ++it) {
-        if (auto it2 = txSet.find(it->first.prevoutHash); it2 != txSet.end()) {
-            // found -- implicitly share TxHash
-            it->first.prevoutHash = *it2;
-            savings += size_t(it2->length());
-        } else {
-            // first instance, store
-            txSet.insert(it->first.prevoutHash);
+    qint64 t0 = 0, elapsed = 0;
+    {
+        ExclusiveLockGuard g(p->utxoSetLock);
+        Debug() << "Compacting utxo set ...";
+        t0 = Util::getTimeNS();
+        UTXOSet & set(p->utxoSet);
+        for (auto it = set.begin(); it != set.end(); ++it) {
+            if (auto it2 = txSet.find(it->first.prevoutHash); it2 != txSet.end()) {
+                // found -- implicitly share TxHash
+                it->first.prevoutHash = *it2;
+                savings += size_t(it2->length());
+            } else {
+                // first instance, store
+                txSet.insert(it->first.prevoutHash);
+            }
+            if (auto it2 = hxSet.find(it->second.hashX); it2 != hxSet.end()) {
+                // found -- implicitly share HashX
+                it->second.hashX = *it2;
+                savings += size_t(it2->length());
+            } else {
+                // first instance, store
+                hxSet.insert(it->second.hashX);
+            }
         }
-        if (auto it2 = hxSet.find(it->second.hashX); it2 != hxSet.end()) {
-            // found -- implicitly share HashX
-            it->second.hashX = *it2;
-            savings += size_t(it2->length());
-        } else {
-            // first instance, store
-            hxSet.insert(it->second.hashX);
-        }
+        set.rehash(set.size());
+        p->uncompactedCt = 0;
+        elapsed = Util::getTimeNS() - t0;
     }
-    set.rehash(set.size());
-    const auto elapsed = Util::getTimeNS() - t0;
     Debug() << "Compatcted utxo set: maybe saved " << QString::number(savings/1e6, 'f', 3) << " MiB in " << QString::number(elapsed/1e6, 'f', 3) << " msec";
     return savings;
 }

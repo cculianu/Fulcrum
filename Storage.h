@@ -100,12 +100,17 @@ public:
     /// returns the "next" TxNum (thread safe)
     TxNum getTxNum() const;
 
+    /// Thead safe. Memory saving utility function, call this rarely.
+    /// Collapses all QByteArrays down to sharing single instances via implicit sharing to save memory
+    size_t compactifyUtxoSet();
+
+    /// how often (in blocks) we auto-save
     unsigned saveInterval() const;
     /// set to positive nonzero to save after addBlock() is called every X blocks
     void setSaveInterval(unsigned blocks);
-
+    /// how often (in blocks) do we auto-compactify
     unsigned compactionInterval() const;
-    /// set to positive nonzero to compact utxo set every X blocks
+    /// set to positive nonzero to compact utxo set every X blocks (compactifyUtxoSet() called after addBlock())
     void setCompactionInterval(unsigned blocks);
 protected:
     virtual Stats stats() const override; ///< from StatsMixin
@@ -128,10 +133,6 @@ private:
     // some helpers for TxNum -- these may throw DatabaseError
     std::optional<TxNum> txNumForHash(const TxHash &, bool throwIfMissing = false, bool *wasCached = nullptr, bool skipCache = false);
     std::optional<TxHash> hashForTxNum(TxNum, bool throwIfMissng = false, bool *wasCached = nullptr, bool skipCache = false);
-
-    // should be called with the utxoset lock held if in multithreaded mode -- collapses all dupe QByteArrays down to
-    // sharing single instances via implicit sharing to save memory
-    size_t compactifyUtxoSet();
 };
 
 Q_DECLARE_OPERATORS_FOR_FLAGS(Storage::SaveSpec)

@@ -523,6 +523,7 @@ void Controller::process(bool beSilentIfUpToDate)
         }
         AGAIN();
         storage->save(Storage::SaveItem::Blocks); // enqueue a commit to db ...
+        Util::AsyncOnObject(storage.get(), [this] { storage->compactifyUtxoSet(); }, 10); // enqueue a compactification ...
     } else if (sm->state == State::Failure) {
         // We will try again later via the pollTimer
         Error() << "Failed to download blocks";
