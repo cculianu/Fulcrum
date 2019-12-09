@@ -369,10 +369,10 @@ struct Controller::StateMachine
 
 unsigned Controller::downloadTaskRecommendedThrottleTimeMsec(unsigned bnum) const
 {
-    std::shared_lock g(smProgressLock);
+    std::shared_lock g(smProgressLock); // this lock guarantees that 'sm' won't be deleted from underneath us
     if (sm) {
         constexpr int maxBackLog = 1000; // <--- TODO: have this be a more dynamic value based on current average blocksize.
-        const int diff = int(bnum) - int(sm->ppBlkHtNext);
+        const int diff = int(bnum) - int(sm->ppBlkHtNext.load()); // note: ppBlkHtNext is not guarded by the lock but it is an atomic value, so that's fine.
         if ( diff > maxBackLog ) {
             // make the backoff time be 10ms
             return 10; // TODO: also have this be tuneable.
@@ -582,13 +582,8 @@ void Controller::process_DownloadingBlocks()
         assert(ppb->height == sm->ppBlkHtNext); // paranoia -- should never happen
         ++ct;
 
-        {
-            std::lock_guard g(smProgressLock);
-
-            ++sm->ppBlkHtNext;
-
-            sm->ppBlocks.erase(it); // remove immediately from q
-        }
+        ++sm->ppBlkHtNext;
+        sm->ppBlocks.erase(it); // remove immediately from q
 
         // process & add it if it's good
         if ( ! process_VerifyAndAddBlock(ppb) )
