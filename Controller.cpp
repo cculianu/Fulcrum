@@ -374,7 +374,7 @@ unsigned Controller::downloadTaskRecommendedThrottleTimeMsec(unsigned bnum) cons
         const unsigned maxBackLog = bnum < 100000 ? 1000 : 100; // <--- TODO: have this be a more dynamic value based on current average blocksize.
         const int diff = int(bnum) - int(sm->ppBlkHtNext);
         if ( diff > 0 && sm->ppBlocks.size() > maxBackLog) {
-            // make the backoff time be 10ms minimum up to 100ms, depending on how far ahead the request is of where
+            // make the backoff time be 10ms minimum up to 20ms, depending on how far ahead the request is of where
             // we are.
             return 10 + (diff > int(maxBackLog) ? 10 : 0); // TODO: also have this be tuneable.
         }
