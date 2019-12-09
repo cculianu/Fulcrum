@@ -523,7 +523,6 @@ void Controller::process(bool beSilentIfUpToDate)
         }
         AGAIN();
         storage->save(Storage::SaveItem::Blocks); // enqueue a commit to db ...
-        Util::AsyncOnObject(storage.get(), [this] { storage->compactifyUtxoSet(); }, 10); // enqueue a compactification ...
     } else if (sm->state == State::Failure) {
         // We will try again later via the pollTimer
         Error() << "Failed to download blocks";
@@ -698,7 +697,8 @@ auto Controller::stats() const -> Stats
     const auto tipInfo = storage->latestTip();
     m["Header count"] = tipInfo.first+1;
     m["Chain tip"] = tipInfo.second.toHex();
-    m["UTXO set size"] = qlonglong(storage->utxoSet().first.size());
+    m["UTXO set"] = qlonglong(storage->utxoSetSize());
+    m["UTXO set bytes"] = QString::number(storage->utxoSetSizeMiB(), 'f', 3) + " MiB";
     m["TxNum"] = qlonglong(storage->getTxNum());
     if (sm) {
         QVariantMap m2;

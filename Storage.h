@@ -21,6 +21,8 @@ namespace BTC { class HeaderVerifier; } // fwd decl used below. #include "BTC.h"
 
 /// Generic database error
 struct DatabaseError : public Exception { using Exception::Exception; ~DatabaseError() override; };
+/// Key was not found in the database
+struct DatabaseKeyNotFound : public DatabaseError { using DatabaseError::DatabaseError; ~DatabaseKeyNotFound() override; };
 /// Key was found but deserialization of key failed when reading from the db, or serializing to a db slice failed.
 struct DatabaseSerializationError : public DatabaseError { using DatabaseError::DatabaseError; ~DatabaseSerializationError() override; };
 /// The database appears to be of the wrong format / unrecognized.
@@ -87,9 +89,6 @@ public:
 
     // --- Block Processing (still a WIP)
 
-    std::pair<UTXOSet &, ExclusiveLockGuard> mutableUtxoSet();
-    std::pair<const UTXOSet &, SharedLockGuard> utxoSet() const;
-
     /// Thread-safe. Call this from the controller thread or any thread. Returns the empty string on success,
     /// or a string containing an error message on failure.  A common failure reason would be a header verification
     /// failure.  Note: you can only add blocks in serial sequence from 0 -> latest.
@@ -100,20 +99,27 @@ public:
     /// returns the "next" TxNum (thread safe)
     TxNum getTxNum() const;
 
-    /// Thead safe. Memory saving utility function, call this rarely.
-    /// Collapses all QByteArrays down to sharing single instances via implicit sharing to save memory
-    size_t compactifyUtxoSet(bool force=false);
-
     /// how often (in blocks) we auto-save
     unsigned saveInterval() const;
     /// set to positive nonzero to save after addBlock() is called every X blocks
     void setSaveInterval(unsigned blocks);
-    /// how often (in blocks) do we auto-compactify
-    unsigned compactionInterval() const;
-    /// set to positive nonzero to compact utxo set every X blocks (compactifyUtxoSet() called after addBlock())
-    void setCompactionInterval(unsigned blocks);
+
+    /// Returns the known size of the utxo set (for now this is a signed value -- to debug underflow errors)
+    int64_t utxoSetSize() const;
+    /// Returns the known size of the utxo set in millions of bytes
+    double utxoSetSizeMiB() const;
+
 protected:
     virtual Stats stats() const override; ///< from StatsMixin
+
+    // -- the below are used inside addBlock to maintain the UTXO set
+
+    /// Thread-safe. Immediately save a UTXO to the db. May throw on database error.
+    void utxoAddToDB(const TXO &, const TXOInfo &);
+    /// Thread-safe. Query db for a UTXO, and return it if found.  May throw on database error.
+    std::optional<TXOInfo> utxoGetFromDB(const TXO &, bool throwIfMissing = false);
+    /// Delete a Utxo from the db. Will throw only on database error (but not if it was missing).
+    void utxoDeleteFromDB(const TXO &);
 
 private:
     const std::shared_ptr<Options> options;
@@ -124,11 +130,9 @@ private:
     void save_impl(SaveSpec override = SaveItem::None); ///< may abort app on database failure (unlikely).
     void saveHeaders_impl(const Headers &); ///< This may throw on database error. Caller should pass a copy of the headers or hold the lock (if passing reference to p->headers).
     void saveMeta_impl(); ///< This may throw if db error. Caller should hold locks or be in single-threaded mode.
-    /// This may throw if db error. Caller should pass a temporary copy of the utxoset as a snapshot captured with locks.
-    void saveUtxoUnsaved_impl(const UTXOSet &, const std::unordered_set<TXO> & additions, const std::unordered_set<TXO> & deletions);
 
     void loadHeadersFromDB(); // may throw -- called from startup()
-    void loadUTXOSetFromDB(); // may throw -- called from startup()
+    void loadCheckUTXOsInDB(); // may throw -- called from startup()
 
     // some helpers for TxNum -- these may throw DatabaseError
     std::optional<TxNum> txNumForHash(const TxHash &, bool throwIfMissing = false, bool *wasCached = nullptr, bool skipCache = false);

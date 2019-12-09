@@ -22,6 +22,28 @@ struct TXO {
 
     bool operator==(const TXO &o) const noexcept { return prevoutHash == o.prevoutHash && prevoutN == o.prevoutN; }
     bool operator<(const TXO &o) const noexcept { return prevoutHash < o.prevoutHash && prevoutN < o.prevoutN; }
+
+
+    // serialization/deserialization
+    QByteArray toBytes() const noexcept {
+        QByteArray ret;
+        if (!isValid()) return ret;
+        const int hlen = prevoutHash.length();
+        ret.resize(int(serSize()));
+        std::memcpy(ret.data(), prevoutHash.data(), size_t(hlen));
+        std::memcpy(ret.data() + hlen, &prevoutN, sizeof(prevoutN));
+        return ret;
+    }
+
+    static TXO fromBytes(const QByteArray &ba) noexcept {
+        TXO ret;
+        if (ba.length() != int(serSize())) return ret;
+        ret.prevoutHash = QByteArray(ba.data(), HashLen);
+        ret.prevoutN = *reinterpret_cast<const IONum *>(ba.data()+HashLen);
+        return ret;
+    }
+
+    static constexpr size_t serSize() noexcept { return HashLen + sizeof(IONum); }
 };
 
 namespace std {
@@ -50,7 +72,7 @@ struct TXOInfo {
         if (!isValid()) return ret;
         const auto amt_sats = amount / bitcoin::Amount::satoshi();
         const int cheight = confirmedHeight.has_value() ? int(confirmedHeight.value()) : -1;
-        ret.resize(int(sizeof(amt_sats)) + int(sizeof(cheight)) + HashLen);
+        ret.resize(int(serSize()));
         char *cur = ret.data();
         std::memcpy(cur, &amt_sats, sizeof(amt_sats));
         cur += sizeof(amt_sats);
@@ -61,7 +83,7 @@ struct TXOInfo {
     }
     static TXOInfo fromBytes(const QByteArray &ba) {
         TXOInfo ret;
-        if (size_t(ba.length()) != sizeof(int64_t) + sizeof(int) + HashLen) {
+        if (size_t(ba.length()) != serSize()) {
             return ret;
         }
         int64_t amt;
@@ -77,12 +99,9 @@ struct TXOInfo {
             ret.confirmedHeight.emplace(unsigned(cheight));
         return ret;
     }
+
+    static constexpr size_t serSize() noexcept { return sizeof(int64_t) + sizeof(int) + HashLen; }
 };
-
-using UTXOSet = robin_hood::unordered_flat_map<TXO, TXOInfo, std::hash<TXO>>; ///< TXO -> Info
-
-
-
 
 
 

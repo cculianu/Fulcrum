@@ -21,6 +21,7 @@
 DatabaseError::~DatabaseError(){} // weak vtable warning suppression
 DatabaseSerializationError::~DatabaseSerializationError() {} // weak vtable warning suppression
 DatabaseFormatError::~DatabaseFormatError() {} // weak vtable warning suppression
+DatabaseKeyNotFound::~DatabaseKeyNotFound() {} // weak vtable warning suppression
 
 namespace {
     /// Encapsulates the 'meta' db table
@@ -91,8 +92,8 @@ namespace {
     // specializations
     template <> QByteArray Serialize(const Meta &);
     template <> Meta Deserialize(const QByteArray &, bool *);
-    template <> QByteArray Serialize(const CompactTXO &);
-    template <> CompactTXO Deserialize(const QByteArray &, bool *);
+    template <> QByteArray Serialize(const TXO &);
+    template <> TXO Deserialize(const QByteArray &, bool *);
     template <> QByteArray Serialize(const TXOInfo &);
     template <> TXOInfo Deserialize(const QByteArray &, bool *);
 
@@ -101,7 +102,7 @@ namespace {
     /// If missingOk=false, then the returned optional is guaranteed to have a value if this function returns without throwing.
     /// If missingOk=true, then if there was no other database error and the key was not found, the returned optional !has_value()
     ///
-    /// Template arg "safeScalar", if true, will deserialize even scalar int, float, etc data using the Deserialize<>
+    /// Template arg "safeScalar", if true, will deserialize scalar int, float, etc data using the Deserialize<>
     /// function (uses QDataStream, is platform neutral, but is slightly slower).  If false, we will use the
     /// DeserializeScalar<> fast function for scalars such as ints. It's important to read from the DB in the same
     /// 'safeScalar' mode as was written!
@@ -115,12 +116,16 @@ namespace {
         std::optional<RetType> ret;
         if (UNLIKELY(!db)) throw InternalError("GenericDBGet was passed a null pointer!");
         const auto status = db->Get(ropts, db->DefaultColumnFamily(), key, &datum);
-        if (missingOk && status.IsNotFound()) {
-            return ret; // optional will not has_value() to indicate missing key
+        if (status.IsNotFound()) {
+            if (missingOk)
+                return ret; // optional will not has_value() to indicate missing key
+            throw DatabaseKeyNotFound(QString("%1: %2")
+                                      .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : "Key not found in db")
+                                      .arg(QString::fromStdString(status.ToString())));
         } else if (!status.ok()) {
             throw DatabaseError(QString("%1: %2")
                                 .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : "Error reading a key from the db")
-                                .arg(status.ToString().c_str()));
+                                .arg(QString::fromStdString(status.ToString())));
         } else {
             // ok status
             if constexpr (std::is_base_of_v<QByteArray, std::remove_cv_t<RetType> >) {
@@ -192,17 +197,14 @@ struct Storage::Pvt
 
     std::atomic<TxNum> txNumNext{0};
 
-    UTXOSet utxoSet;
-    RWLock utxoSetLock;
-    std::unordered_set<TXO> utxoSetAdditionsUnsaved, utxoSetDeletionsUnsaved;
-    bool hasSavedUtxoSet = false;
-
     std::vector<BlkInfo> blkInfos;
 
-    std::atomic<unsigned> saveInterval = 100000, compactInterval = 30000,
-                          unsavedCt = 0, uncompactedCt = 0;
+    std::atomic<unsigned> saveInterval = 100000,
+                          unsavedCt = 0;
 
-    static constexpr size_t nCacheMax = 2000000, nCacheElasticity = 1000000;
+    std::atomic<int64_t> utxoCt = 0;
+
+    static constexpr size_t nCacheMax = 100000, nCacheElasticity = 50000;
     LRU::Cache<true, TxNum, TxHash> lruNum2Hash{nCacheMax, nCacheElasticity};
     LRU::Cache<true, TxHash, TxNum, HashHasher> lruHash2Num{nCacheMax, nCacheElasticity};
 };
@@ -281,7 +283,8 @@ void Storage::startup()
     Log() << "Loading database ...";
     // load headers -- may throw
     loadHeadersFromDB();
-    loadUTXOSetFromDB();
+    // count utxos
+    loadCheckUTXOsInDB();
 
     start(); // starts our thread
 }
@@ -300,8 +303,6 @@ void Storage::cleanup()
 
 unsigned Storage::saveInterval() const { return p->saveInterval; }
 void Storage::setSaveInterval(unsigned blocks) { p->saveInterval = blocks; p->unsavedCt = p->unsavedCt ? 1 : 0;}
-unsigned Storage::compactionInterval() const { return p->compactInterval; }
-void Storage::setCompactionInterval(unsigned blocks) { p->compactInterval = blocks; p->uncompactedCt = p->uncompactedCt ? 1 : 0; }
 
 auto Storage::stats() const -> Stats
 {
@@ -323,16 +324,6 @@ auto Storage::headers() const -> std::pair<const Headers &, SharedLockGuard>
 auto Storage::headerVerifier() -> std::pair<BTC::HeaderVerifier &, LockGuard>
 {
     return std::pair<BTC::HeaderVerifier &, LockGuard>( p->headerVerifier, p->headerVerifierLock );
-}
-
-auto Storage::mutableUtxoSet() -> std::pair<UTXOSet &, ExclusiveLockGuard>
-{
-    return std::pair<UTXOSet &, ExclusiveLockGuard>{ p->utxoSet, p->utxoSetLock };
-}
-
-auto Storage::utxoSet() const -> std::pair<const UTXOSet &, SharedLockGuard>
-{
-    return std::pair<const UTXOSet &, SharedLockGuard>{ p->utxoSet, p->utxoSetLock };
 }
 
 QString Storage::getChain() const
@@ -382,42 +373,15 @@ void Storage::save_impl(SaveSpec override)
     if (const auto flags = SaveSpec(p->pendingSaves.exchange(0))|override; flags) { // atomic clear of flags, grab prev val
         try {
             if (flags & SaveItem::Blocks) { // utxo set
-                using Set = decltype (p->utxoSetAdditionsUnsaved);
-                Set unsavedAdditions, unsavedDeletions;
-                UTXOSet setCopy;
                 Headers hdrCopy;
-                bool firstUtxoSave = false;
                 {
-                    std::scoped_lock guard(p->headersLock, p->utxoSetLock);
-                    unsavedAdditions.swap(p->utxoSetAdditionsUnsaved);
-                    unsavedDeletions.swap(p->utxoSetDeletionsUnsaved);
+                    std::scoped_lock guard(p->headersLock);
                     p->unsavedCt = 0;
-                    if (unsavedAdditions.size() || unsavedDeletions.size() || !p->hasSavedUtxoSet) {
-                        const auto t0 = Util::getTimeNS(); // DEBUG REMOVE ME
-                        setCopy = p->utxoSet; // <-- this copy is inefficient (takes on the order of seconds -- but it is preferable to holding the lock for potentially many seconds)
-                        if (!p->hasSavedUtxoSet) {
-                            p->hasSavedUtxoSet = true;
-                            firstUtxoSave = true;
-                        }
-                        // DEBUG REMOVE ME
-                        const auto elapsed = Util::getTimeNS() - t0;
-                        Debug() << "utxo copy took: " << QString::number(elapsed/1e6, 'f', 3) << " msec size: " << setCopy.size();
-                    }
                     if (const auto idx = p->lastHeaderSaved.first; !idx || idx+1 < p->headers.size()) {
-                        hdrCopy = p->headers;
+                        hdrCopy = p->headers; // grab a copy to snapshot it with lock held
                     }
                 }
-                if (!setCopy.empty()) {
-                    if (firstUtxoSave) {
-                        // if first time save, we build the additions set manually here, since client code didn't
-                        // build it for us (as a performance saving measure)
-                        unsavedDeletions.clear();
-                        for (auto it = setCopy.cbegin(); it != setCopy.cend(); ++it) {
-                            unsavedAdditions.emplace(it->first);
-                        }
-                    }
-                    saveUtxoUnsaved_impl(setCopy, unsavedAdditions, unsavedDeletions);
-                }
+                // do save with no locks
                 if (!hdrCopy.empty()) {
                     saveHeaders_impl(hdrCopy);
                 }
@@ -459,21 +423,21 @@ void Storage::saveHeaders_impl(const Headers &h)
             for (size_t i = start; i < h.size(); ++i) {
                 // headers are keyed off of uint32_t index (height) -- note we save the raw int value here without any QDataStream encapsulation
                 if (auto stat = batch.Put(ToSlice(SerializeScalar(uint32_t(i))), ToSlice(h[i])); !stat.ok())
-                    throw DatabaseError(QString("Error writing header %1: %2").arg(i).arg(stat.ToString().c_str()));
+                    throw DatabaseError(QString("Error writing header %1: %2").arg(i).arg(QString::fromStdString(stat.ToString())));
             }
             // save height to db *after* we successfully wrote all the headers
             if (auto stat = batch.Put(kNumHeaders, ToSlice(Serialize(uint32_t(h.size())))); !stat.ok())
-                throw DatabaseError(QString("Error writing header size key: %1").arg(stat.ToString().c_str()));
+                throw DatabaseError(QString("Error writing header size key: %1").arg(QString::fromStdString(stat.ToString())));
             auto opts = rocksdb::WriteOptions();
             // uncomment all this stuff if we want to do fsync and other paranoia. turned off for now.
             //opts.sync = true;
             //opts.low_pri = true;
             if (auto stat = p->db.headers->Write(opts, &batch); !stat.ok())
-                throw DatabaseError(QString("Error writing headers: %1").arg(stat.ToString().c_str()));
+                throw DatabaseError(QString("Error writing headers: %1").arg(QString::fromStdString(stat.ToString())));
             //auto fopts = rocksdb::FlushOptions();
             //fopts.wait = true; fopts.allow_write_stall = true;
             //if (auto stat = p->db.headers->Flush(fopts); !stat.ok())
-            //    throw DatabaseError(QString("Flush error while writing headers: %1").arg(stat.ToString().c_str()));
+            //    throw DatabaseError(QString("Flush error while writing headers: %1").arg(QString::fromStdString(stat.ToString())));
             p->lastHeaderSaved = { h.size()-1, h.back() }; // remember last
         }
     }
@@ -483,46 +447,12 @@ void Storage::saveHeaders_impl(const Headers &h)
         Debug() << "Wrote " << ct << " " << Util::Pluralize("header", ct) << " to db in " << QString::number(elapsed/1e6, 'f', 3) << " msec";
 }
 
-void Storage::saveUtxoUnsaved_impl(const UTXOSet &set, const std::unordered_set<TXO> &adds, const std::unordered_set<TXO> &dels)
-{
-    if (!p->db.utxoset || !(adds.size()+dels.size())) return;
-    //Debug() << "Saving utxo set ...";
-    const auto t0 = Util::getTimeNS();
-    rocksdb::DB *db = p->db.utxoset.get();
-    const auto wopts = rocksdb::WriteOptions();
-    // process deletions
-    for (const auto & txo : dels) {
-        const auto txNum = txNumForHash(txo.prevoutHash, true).value(); // may throw
-        CompactTXO ctxo(txNum, txo.prevoutN);
-        if (const auto st = db->Delete(wopts, ToSlice(ctxo.toBytesCpy()));
-                !st.ok() /*&& !st.IsNotFound()*/)
-            throw DatabaseError(QString("Error deleting a utxo from the db: %1").arg(QString::fromStdString(st.ToString())));
-    }
-    // process additions
-    {
-        rocksdb::WriteBatch batch;
-        for (const auto & txo : adds) {
-            const auto txNum = txNumForHash(txo.prevoutHash, true).value(); // may throw
-            CompactTXO ctxo(txNum, txo.prevoutN);
-            const auto it = set.find(txo);
-            if (it == set.end())
-                throw InternalError(QString("Missing txo %1 from utxo set .. cannot save!").arg(txo.toString()));
-            const auto & info = it->second;
-            if (const auto st = batch.Put(ToSlice(ctxo.toBytesCpy()), ToSlice(Serialize(info))); !st.ok())
-                throw DatabaseError(QString("Error in writeBatch for txo %1: %2").arg(txo.toString()).arg(QString::fromStdString(st.ToString())));
-        }
-        if (const auto st = db->Write(wopts, &batch); !st.ok())
-            throw DatabaseError(QString("Error writing batch txo additions: %1").arg(QString::fromStdString(st.ToString())));
-    }
-    const auto elapsed = Util::getTimeNS() - t0;
-    Debug() << "Wrote utxo set " << adds.size() << " adds, " << dels.size() << " dels to db in " << QString::number(elapsed/1e6, 'f', 3) << " msec";
-}
 
 void Storage::loadHeadersFromDB()
 {
     FatalAssert(!!p->db.headers) << __FUNCTION__ << ": Headers db is not open";
 
-    Debug() << "Loading headers ...";
+    Log() << "Loading headers ...";
     uint32_t num = 0;
     const auto t0 = Util::getTimeNS();
     {
@@ -570,90 +500,95 @@ void Storage::loadHeadersFromDB()
     }
 }
 
-void Storage::loadUTXOSetFromDB()
+void Storage::loadCheckUTXOsInDB()
+{
+    FatalAssert(!!p->db.utxoset) << __FUNCTION__ << ": Utxo set db is not open";
+
+    Log() << "Verifying utxo set ...";
+
+    const auto t0 = Util::getTimeNS();
     {
-        FatalAssert(!!p->db.utxoset) << __FUNCTION__ << ": Utxo set db is not open";
+        const int currentHeight = latestTip().first;
 
-        Debug() << "Loading utxo set ...";
-
-        const auto t0 = Util::getTimeNS();
-        {
-            // the purpose of this map is to ensure that all txid's in app memory share the same implicitly shared QByteArray
-            std::unordered_set<HashX, HashHasher> hashXSeen;
-            robin_hood::unordered_flat_map<TxNum, TxHash> num2hash; // this also acts as a cache as well as ensuring all txhashes share the same QByteArray
-
-            const int currentHeight = latestTip().first;
-
-            std::unique_ptr<rocksdb::Iterator> iter(p->db.utxoset->NewIterator(rocksdb::ReadOptions()));
-            if (!iter) throw DatabaseError("Unable to obtain an iterator to the utxo set db");
-            iter->SeekToFirst();
-            unsigned ctr = 0;
-            size_t savings = 0, cost = 0;
-            for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
-                const auto ctxo = CompactTXO::fromBytes(FromSlice(iter->key()));
-                if (!ctxo.isValid()) {
-                    throw DatabaseSerializationError("Read an invalid txo from the utxo set database."
-                                                     " This may be due to a database format mismatch."
-                                                     " Delete the datadir and resynch it.");
-                }
-                TxHash hash;
-                if (auto it = num2hash.find(ctxo.txNum()); it != num2hash.end()) {
-                    hash = it->second; // ensure implicitly shared
-                    savings += size_t(hash.length());
-                } else {
-                    // below line reads data from the db. but we specify to not store the results in our lru cache..
-                    const auto ohash = hashForTxNum(ctxo.txNum(), false, nullptr, true);
-                    if (!ohash.has_value())
-                        throw DatabaseFormatError("A txo is missing its txhash metadata in the db."
-                                                  " This may be due to a database format mismatch."
-                                                  " Delete the datadir and resynch it.");
-                    num2hash.emplace(ctxo.txNum(), hash = ohash.value());
-                    hash = ohash.value();
-                    cost += size_t(hash.length());
-                }
-                if (hash.length() != HashLen)
-                    throw DatabaseFormatError("A txo is missing has corrupted txhash metadata in the db."
-                                              " Delete the datadir and resynch it.");
-                auto info = TXOInfo::fromBytes(FromSlice(iter->value()));
-                if (!info.isValid())
-                    throw DatabaseSerializationError(QString("Txo %1:%2 has invalid metadata in the db."
-                                                            " This may be due to a database format mismatch."
-                                                            " Delete the datadir and resynch it.")
-                                                     .arg(QString(hash.toHex()))
-                                                     .arg(ctxo.N()));
-                if (info.confirmedHeight.has_value() && int(info.confirmedHeight.value()) > currentHeight) {
-                    // TODO: reorg? Inconsisent db?  FIXME
-                    Debug() << "Ignoring txo " << hash << ":" << ctxo.N() << " at height: "
-                            << info.confirmedHeight.value() << " > current height: " << currentHeight;
-                    continue;
-                }
-                if (auto it = hashXSeen.find(info.hashX); it != hashXSeen.end()) {
-                    info.hashX = *it; // make sure they all implicitly share the same hashx
-                    savings += size_t(info.hashX.length());
-                } else {
-                    hashXSeen.emplace(info.hashX);
-                    cost += size_t(info.hashX.length());
-                }
-                p->utxoSet[TXO{hash, ctxo.N()}] = info;
-                cost += sizeof(TXO) + sizeof(TXOInfo);
-                if (0 == ++ctr % 100000) {
-                    *(0 == ctr % 1000000 ? std::make_unique<Log>() : std::make_unique<Debug>()) << "Read " << ctr << " utxos ...";
-                }
+        std::unique_ptr<rocksdb::Iterator> iter(p->db.utxoset->NewIterator(rocksdb::ReadOptions()));
+        if (!iter) throw DatabaseError("Unable to obtain an iterator to the utxo set db");
+        iter->SeekToFirst();
+        p->utxoCt = 0;
+        for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
+            // TODO: the below checks may be too slow. See about removing them and just counting the iter.
+            const auto txo = Deserialize<TXO>(FromSlice(iter->key()));
+            if (!txo.isValid()) {
+                throw DatabaseSerializationError("Read an invalid txo from the utxo set database."
+                                                 " This may be due to a database format mismatch."
+                                                 "\n\nDelete the datadir and resynch it.");
             }
-            Log() << "UTXO set " << QString::number(cost/1e6, 'f', 3) << " MiB in " << p->utxoSet.size() << " txos";
-            Debug() << "Mem savings: " << QString::number(savings/1e6, 'f', 3) << " MiB"
-                    << " (" << "num2hash: " << num2hash.size() << " " << " hashXSeen: " << hashXSeen.size() << ")";
+            auto info = Deserialize<TXOInfo>(FromSlice(iter->value()));
+            if (!info.isValid())
+                throw DatabaseSerializationError(QString("Txo %1 has invalid metadata in the db."
+                                                        " This may be due to a database format mismatch."
+                                                        "\n\nDelete the datadir and resynch it.")
+                                                 .arg(txo.toString()));
+            if (info.confirmedHeight.has_value() && int(info.confirmedHeight.value()) > currentHeight) {
+                // TODO: reorg? Inconsisent db?  FIXME
+                QString msg;
+                {
+                    QTextStream ts(&msg);
+                    ts << "Inconsistent database: txo " << txo.toString() << " at height: "
+                       << info.confirmedHeight.value() << " > current height: " << currentHeight << "."
+                       << "\n\nThe database has been corrupted. Please delete the datadir and resynch it.";
+                }
+                throw DatabaseError(msg);
+            }
+            if (0 == ++p->utxoCt % 100000) {
+                *(0 == p->utxoCt % 2500000 ? std::make_unique<Log>() : std::make_unique<Debug>()) << "Verified " << p->utxoCt << " utxos ...";
+            }
         }
-        const auto num = p->utxoSet.size();
-        if (num) {
-            const auto elapsed = Util::getTimeNS();
-
-            p->hasSavedUtxoSet = true; // remember that we had a utxo set in db -- this affects how/if we build the "difference set"
-
-            Debug() << "Read " << num << " " << Util::Pluralize("utxo", num) << " from db in " << QString::number((elapsed-t0)/1e6, 'f', 3) << " msec";
-        }
+        const auto ct = utxoSetSize();
+        if (ct)
+            Log() << "UTXO set: "  << ct << Util::Pluralize(" utxo", ct)
+                  << ", " << QString::number(utxoSetSizeMiB(), 'f', 3) << " MiB";
     }
+    const auto elapsed = Util::getTimeNS();
+    Debug() << "Read txos from db in " << QString::number((elapsed-t0)/1e6, 'f', 3) << " msec";
+}
 
+
+/// Thread-safe. Immediately save a UTXO to the db. May throw on database error.
+void Storage::utxoAddToDB(const TXO &txo, const TXOInfo &info)
+{
+    assert(bool(p->db.utxoset));
+    if (txo.isValid()) {
+        auto stat = p->db.utxoset->Put(rocksdb::WriteOptions(), ToSlice(Serialize(txo)), ToSlice(Serialize(info)));
+        if (!stat.ok()) {
+            throw DatabaseError(QString("Failed to write a utxo (%1:%2) to the db: %3")
+                                .arg(QString(txo.prevoutHash.toHex())).arg(txo.prevoutN).arg(QString::fromStdString(stat.ToString())));
+        }
+        ++p->utxoCt;
+    }
+}
+/// Thread-safe. Query db for a UTXO, and return it if found.  May throw on database error.
+std::optional<TXOInfo> Storage::utxoGetFromDB(const TXO &txo, bool throwIfMissing)
+{
+    assert(bool(p->db.utxoset));
+    return GenericDBGet<TXOInfo>(p->db.utxoset.get(), ToSlice(Serialize(txo)), !throwIfMissing);
+}
+/// Delete a Utxo from the db. Will throw only on database error (but not if it was missing).
+void Storage::utxoDeleteFromDB(const TXO &txo)
+{
+    assert(bool(p->db.utxoset));
+    auto stat = p->db.utxoset->Delete(rocksdb::WriteOptions(), ToSlice(Serialize(txo)));
+    if (!stat.ok()) {
+        throw DatabaseError(QString("Failed to delete a utxo (%1:%2) from the db: %3")
+                            .arg(QString(txo.prevoutHash.toHex())).arg(txo.prevoutN).arg(QString::fromStdString(stat.ToString())));
+    }
+    --p->utxoCt;
+}
+
+int64_t Storage::utxoSetSize() const { return p->utxoCt; }
+double Storage::utxoSetSizeMiB() const {
+    constexpr int64_t elemSize = TXO::serSize() + TXOInfo::serSize();
+    return (utxoSetSize()*elemSize) / 1e6;
+}
 
 QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve)
 {
@@ -661,7 +596,7 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve)
 
     QString errRet;
 
-    std::scoped_lock guard(p->headerVerifierLock, p->headersLock, p->utxoSetLock); // take all locks now.. todo: add more locks here
+    std::scoped_lock guard(p->headerVerifierLock, p->headersLock); // take all locks now.. todo: add more locks here
     const auto verifUndo = p->headerVerifier; // keep a copy for undo purposes in case this fails
 
     try {
@@ -727,9 +662,7 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve)
                     info.amount = out.amount;
                     info.confirmedHeight = ppb->height;
                     const TXO txo{ hash, out.outN };
-                    p->utxoSet[txo] = info;
-                    if (p->hasSavedUtxoSet)
-                        p->utxoSetAdditionsUnsaved.insert(txo);
+                    utxoAddToDB(txo, info); // add to db
                     if constexpr (debugPrt)
                         Debug() << "Added txo: " << txo.toString()
                                 << " (txid: " << hash.toHex() << " height: " << ppb->height << ") "
@@ -741,38 +674,30 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve)
             std::unordered_set<HashX, HashHasher> newHashXInputsResolved;
             unsigned inum = 0;
             for (auto & in : ppb->inputs) {
+                const TXO txo{in.prevoutHash, in.prevoutN};
                 if (!inum) {
                     // coinbase.. skip
                 } else if (in.parentTxOutIdx.has_value()) {
                     // was an input that was spent in this block so it's ok to skip.. we never added it to utxo set
                     if constexpr (debugPrt)
-                        Debug() << "Skipping input " << in.prevoutHash.toHex() << ":" << in.prevoutN << ", spent in this block (output # " << in.parentTxOutIdx.value() << ")";
-                } else if (const auto it = p->utxoSet.find(TXO{in.prevoutHash, in.prevoutN}); it != p->utxoSet.end()) {
-                    const auto & info = it->second;
+                        Debug() << "Skipping input " << txo.toString() << ", spent in this block (output # " << in.parentTxOutIdx.value() << ")";
+                } else if (const auto opt = utxoGetFromDB(txo); opt.has_value()) {
+                    const auto & info = opt.value();
                     if (info.confirmedHeight.has_value() && info.confirmedHeight.value() != ppb->height) {
                         // was a prevout from a previos block.. so the ppb didn't have it in the touched set..
                         // mark the spend as having touched this hashX for this ppb now.
                         ppb->hashXAggregated[info.hashX].ins.emplace_back(inum);
-                        in.prevoutHash = it->first.prevoutHash; // ensure shallow/shared copy of QByteArray in inputs
                         newHashXInputsResolved.insert(info.hashX);
                     }
                     if constexpr (debugPrt) {
                         const auto dbgTxIdHex = ppb->txHashForInputIdx(inum).toHex();
-                        Debug() << "Spent " << it->first.toString() << " amount: " << it->second.amount.ToString()
+                        Debug() << "Spent " << txo.toString() << " amount: " << info.amount.ToString()
                                 << " in txid: "  << dbgTxIdHex << " height: " << ppb->height
                                 << " input number: " << ppb->numForInputIdx(inum).value_or(0xffff)
-                                << " HashX: " << it->second.hashX.toHex();
+                                << " HashX: " << info.hashX.toHex();
                     }
-                    if (p->hasSavedUtxoSet) {
-                        if (auto it2 = p->utxoSetAdditionsUnsaved.find(it->first); it2 != p->utxoSetAdditionsUnsaved.end()) {
-                            // was in unsaved additions, no need to add it to deletions
-                            p->utxoSetAdditionsUnsaved.erase(it2);
-                        } else {
-                            // was not in unsaved additions.. add it to deletions
-                            p->utxoSetDeletionsUnsaved.insert(it->first);
-                        }
-                    }
-                    p->utxoSet.erase(it); // invalidate txo  (spend it) by removing from map
+                    // delete from db
+                    utxoDeleteFromDB(txo);
                 } else {
                     QString s;
                     {
@@ -793,7 +718,7 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve)
             }
 
             if constexpr (debugPrt)
-                Debug() << "utxoset size: " << p->utxoSet.size() << " block: " << ppb->height;
+                Debug() << "utxoset size: " << utxoSetSize() << " block: " << ppb->height;
         }
 
         if (nReserve) {
@@ -820,15 +745,6 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve)
         // enqueue a save every saveInterval blocks (note that if saveInterval is 0, we never auto-save)
         if (++p->unsavedCt == p->saveInterval && p->saveInterval) {
             save(SaveItem::Blocks);
-        }
-
-        // enqueue compaction of utxo set every compactInterval blocks (if 0, do not auto-compact)
-        if (++p->uncompactedCt == p->compactInterval && p->compactInterval) {
-            // schedule a compaction -- but be sure to do it our storage thread.
-            // also.. we "own" the utxo set to it's probably safer to delegate the work to our thread.
-            Util::AsyncOnObject(this, [this] {
-                compactifyUtxoSet();
-            });
         }
 
     } catch (const std::exception & e) {
@@ -882,47 +798,6 @@ std::optional<TxHash> Storage::hashForTxNum(TxNum n, bool throwIfMissing, bool *
     return ret;
 }
 
-size_t Storage::compactifyUtxoSet(bool force)
-{
-    if (!p->uncompactedCt && !force)
-        return 0;
-    // the purpose of this map is to ensure that all txid's in app memory share the same implicitly shared QByteArray
-    using Empty = int8_t;
-    constexpr Empty empty{};
-    robin_hood::unordered_flat_map<HashX, Empty, HashHasher> hxSet;
-    robin_hood::unordered_flat_map<TxHash, Empty, HashHasher> txSet;
-    size_t savings = 0;
-    qint64 t0 = 0, elapsed = 0;
-    {
-        ExclusiveLockGuard g(p->utxoSetLock);
-        Debug() << "Compacting utxo set ...";
-        t0 = Util::getTimeNS();
-        UTXOSet & set(p->utxoSet);
-        for (auto it = set.begin(); it != set.end(); ++it) {
-            if (auto it2 = txSet.find(it->first.prevoutHash); it2 != txSet.end()) {
-                // found -- implicitly share TxHash
-                it->first.prevoutHash = it2->first;
-                savings += size_t(it2->first.length());
-            } else {
-                // first instance, store
-                txSet.emplace(it->first.prevoutHash, empty);
-            }
-            if (auto it2 = hxSet.find(it->second.hashX); it2 != hxSet.end()) {
-                // found -- implicitly share HashX
-                it->second.hashX = it2->first;
-                savings += size_t(it2->first.length());
-            } else {
-                // first instance, store
-                hxSet.emplace(it->second.hashX, empty);
-            }
-        }
-        set.rehash(set.size());
-        p->uncompactedCt = 0;
-        elapsed = Util::getTimeNS() - t0;
-    }
-    Debug() << "Compatcted utxo set: maybe saved " << QString::number(savings/1e6, 'f', 3) << " MiB in " << QString::number(elapsed/1e6, 'f', 3) << " msec";
-    return savings;
-}
 
 namespace {
     // specializations of Serialize/Deserialize
@@ -957,15 +832,15 @@ namespace {
         return m;
     }
 
-    template <> QByteArray Serialize [[maybe_unused]] (const CompactTXO &ctxo) { return ctxo.toBytesCpy(); }
-    template <> CompactTXO Deserialize [[maybe_unused]] (const QByteArray &ba, bool *ok) {
-        CompactTXO ret = CompactTXO::fromBytes(ba);
+    template <> QByteArray Serialize (const TXO &txo) { return txo.toBytes(); }
+    template <> TXO Deserialize(const QByteArray &ba, bool *ok) {
+        TXO ret = TXO::fromBytes(ba);
         if (ok) *ok = ret.isValid();
         return ret;
     }
 
     template <> QByteArray Serialize(const TXOInfo &inf) { return inf.toBytes(); }
-    template <> TXOInfo Deserialize [[maybe_unused]] (const QByteArray &ba, bool *ok)
+    template <> TXOInfo Deserialize(const QByteArray &ba, bool *ok)
     {
         TXOInfo ret = TXOInfo::fromBytes(ba);
         if (ok) *ok = ret.isValid();
