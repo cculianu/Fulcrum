@@ -31,7 +31,7 @@ namespace {
     };
 
     // some database keys we use -- todo: if this grows large, move it elsewhere
-    static const rocksdb::Slice kMeta{"meta"}, kNumHeaders{"num_headers"};
+    static const rocksdb::Slice kMeta{"meta"}, kNumHeaders{"num_headers"}, kTxNumNext{"TxNumNext"};
     static constexpr size_t MAX_HEADERS = 100000000; // 100 mln max headers for now.
 
     /// NOTE: the byte array should live as long as the slice does. slice is just a weak ref into the byte array
@@ -43,17 +43,25 @@ namespace {
     template <typename Type>
     QByteArray Serialize(const Type & n) {
         QByteArray ba;
-        QDataStream ds(&ba, QIODevice::WriteOnly|QIODevice::Truncate);
-        ds << n;
+        if constexpr (std::is_same_v<Type, QByteArray>) {
+            ba = n;
+        } else {
+            QDataStream ds(&ba, QIODevice::WriteOnly|QIODevice::Truncate);
+            ds << n;
+        }
         return ba;
     }
     template <typename Type>
     Type Deserialize(const QByteArray &ba, bool *ok = nullptr) {
-        QDataStream ds(ba);
         Type ret{};
-        ds >> ret;
-        if (ok)
-            *ok = ds.status() == QDataStream::Status::Ok;
+        if constexpr (std::is_same_v<Type, QByteArray>) {
+            ret = ba;
+        } else {
+            QDataStream ds(ba);
+            ds >> ret;
+            if (ok)
+                *ok = ds.status() == QDataStream::Status::Ok;
+        }
         return ret;
     }
     /// Serialize a simple value such as an int directly, without using the space overhead that QDataStream imposes.
@@ -170,6 +178,40 @@ namespace {
         return GenericDBGet<RetType, safeScalar>(db, k, false, errMsgPrefix, extraDataOk, ropts).value();
     }
 
+    /// Throws on all errors. Otherwise writes to db.
+    template <bool safeScalar = false, typename KeyType, typename ValueType>
+    void GenericDBPut(rocksdb::DB *db, const KeyType & key, const ValueType & value,
+                      const QString & errorMsgPrefix = QString(),  ///< used to specify a custom error message in the thrown exception
+                      const rocksdb::WriteOptions & opts = rocksdb::WriteOptions())
+    {
+        if constexpr (safeScalar) {
+            auto st = db->Put(opts, ToSlice(Serialize(key)), ToSlice(Serialize(value)));
+            if (!st.ok()) {
+                throw DatabaseError(QString("%1: %2")
+                                    .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : "Error writing object to db")
+                                    .arg(QString::fromStdString(st.ToString())));
+            }
+        } else {
+            // raw/unsafe scalar
+            QByteArray serKey, serVal;
+            if constexpr (std::is_scalar_v<KeyType> && !std::is_pointer_v<KeyType>)
+                serKey = SerializeScalar(key);
+            else
+                serKey = Serialize(key);
+            if constexpr (std::is_scalar_v<ValueType> && !std::is_pointer_v<ValueType>)
+                serVal = SerializeScalar(value);
+            else
+                serVal = Serialize(value);
+            auto st = db->Put(opts, ToSlice(serKey), ToSlice(serVal));
+            if (!st.ok()) {
+                throw DatabaseError(QString("%1: %2")
+                                    .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : "Error writing object to db")
+                                    .arg(QString::fromStdString(st.ToString())));
+            }
+        }
+    }
+
+
     // some helper data structs
     struct BlkInfo {
         TxNum txNum0 = 0;
@@ -189,6 +231,9 @@ struct Storage::Pvt
     std::atomic<std::underlying_type_t<SaveItem>> pendingSaves{0};
 
     struct RocksDBs {
+        const rocksdb::ReadOptions defReadOpts; ///< avoid creating this each time
+        const rocksdb::WriteOptions defWriteOpts; ///< avoid creating this each time
+
         std::unique_ptr<rocksdb::DB> meta, headers, txnums, blkinfo, utxoset, shist;
     } db;
 
@@ -285,6 +330,8 @@ void Storage::startup()
     loadHeadersFromDB();
     // count utxos
     loadCheckUTXOsInDB();
+    // check txnums
+    loadCheckTxNumsInDB();
 
     start(); // starts our thread
 }
@@ -399,7 +446,7 @@ void Storage::save_impl(SaveSpec override)
 void Storage::saveMeta_impl()
 {
     if (!p->db.meta) return;
-    if (auto status = p->db.meta->Put(rocksdb::WriteOptions(), kMeta, ToSlice(Serialize(p->meta))); !status.ok()) {
+    if (auto status = p->db.meta->Put(p->db.defWriteOpts, kMeta, ToSlice(Serialize(p->meta))); !status.ok()) {
         throw DatabaseError("Failed to write meta to db");
     }
 
@@ -471,7 +518,7 @@ void Storage::loadHeadersFromDB()
         // read db
         for (uint32_t i = 0; i < num; ++i) {
             // guaranteed to return a value or throw
-            auto bytes = GenericDBGetFailIfMissing<QByteArray>(db, ToSlice(SerializeScalar(uint32_t(i))), errMsg);
+            auto bytes = GenericDBGetFailIfMissing<QByteArray>(db, ToSlice(SerializeScalar(uint32_t(i))), errMsg, false, p->db.defReadOpts);
             if (UNLIKELY(bytes.size() != hsz))
                 throw DatabaseFormatError(QString("Error reading header %1, wrong size: %2").arg(i).arg(bytes.size()));
             h.emplace_back(std::move(bytes));
@@ -510,7 +557,7 @@ void Storage::loadCheckUTXOsInDB()
     {
         const int currentHeight = latestTip().first;
 
-        std::unique_ptr<rocksdb::Iterator> iter(p->db.utxoset->NewIterator(rocksdb::ReadOptions()));
+        std::unique_ptr<rocksdb::Iterator> iter(p->db.utxoset->NewIterator(p->db.defReadOpts));
         if (!iter) throw DatabaseError("Unable to obtain an iterator to the utxo set db");
         iter->SeekToFirst();
         p->utxoCt = 0;
@@ -520,13 +567,13 @@ void Storage::loadCheckUTXOsInDB()
             if (!txo.isValid()) {
                 throw DatabaseSerializationError("Read an invalid txo from the utxo set database."
                                                  " This may be due to a database format mismatch."
-                                                 "\n\nDelete the datadir and resynch it.");
+                                                 "\n\nDelete the datadir and resynch to bitcoind.\n");
             }
             auto info = Deserialize<TXOInfo>(FromSlice(iter->value()));
             if (!info.isValid())
                 throw DatabaseSerializationError(QString("Txo %1 has invalid metadata in the db."
                                                         " This may be due to a database format mismatch."
-                                                        "\n\nDelete the datadir and resynch it.")
+                                                        "\n\nDelete the datadir and resynch to bitcoind.\n")
                                                  .arg(txo.toString()));
             if (info.confirmedHeight.has_value() && int(info.confirmedHeight.value()) > currentHeight) {
                 // TODO: reorg? Inconsisent db?  FIXME
@@ -535,7 +582,7 @@ void Storage::loadCheckUTXOsInDB()
                     QTextStream ts(&msg);
                     ts << "Inconsistent database: txo " << txo.toString() << " at height: "
                        << info.confirmedHeight.value() << " > current height: " << currentHeight << "."
-                       << "\n\nThe database has been corrupted. Please delete the datadir and resynch it.";
+                       << "\n\nThe database has been corrupted. Please delete the datadir and resynch to bitcoind.\n";
                 }
                 throw DatabaseError(msg);
             }
@@ -552,13 +599,29 @@ void Storage::loadCheckUTXOsInDB()
     Debug() << "Read txos from db in " << QString::number((elapsed-t0)/1e6, 'f', 3) << " msec";
 }
 
+void Storage::loadCheckTxNumsInDB()
+{
+    // read txNumNext from db. TODO: maybe some verification here to make sure it's not corrupted? Check counts?
+    // iterate over all txNums? etc?  FIXME
+    if (auto opt = GenericDBGet<TxNum, true>(p->db.txnums.get(), kTxNumNext, true,
+                                             "Error reading txNumNext from db", false, p->db.defReadOpts);
+            opt.has_value())
+    {
+        p->txNumNext = opt.value();
+        Debug() << "Read TxNumNext from db: " << p->txNumNext.load();
+    } else if (latestTip().first > -1) {
+        throw DatabaseFormatError("Database is missing the TxNumNext key.\n\nDelete the datadir and resynch to bitcoind.\n");
+    }
+}
+
+
 
 /// Thread-safe. Immediately save a UTXO to the db. May throw on database error.
 void Storage::utxoAddToDB(const TXO &txo, const TXOInfo &info)
 {
     assert(bool(p->db.utxoset));
     if (txo.isValid()) {
-        auto stat = p->db.utxoset->Put(rocksdb::WriteOptions(), ToSlice(Serialize(txo)), ToSlice(Serialize(info)));
+        auto stat = p->db.utxoset->Put(p->db.defWriteOpts, ToSlice(Serialize(txo)), ToSlice(Serialize(info)));
         if (!stat.ok()) {
             throw DatabaseError(QString("Failed to write a utxo (%1:%2) to the db: %3")
                                 .arg(QString(txo.prevoutHash.toHex())).arg(txo.prevoutN).arg(QString::fromStdString(stat.ToString())));
@@ -570,7 +633,7 @@ void Storage::utxoAddToDB(const TXO &txo, const TXOInfo &info)
 std::optional<TXOInfo> Storage::utxoGetFromDB(const TXO &txo, bool throwIfMissing)
 {
     assert(bool(p->db.utxoset));
-    return GenericDBGet<TXOInfo>(p->db.utxoset.get(), ToSlice(Serialize(txo)), !throwIfMissing);
+    return GenericDBGet<TXOInfo>(p->db.utxoset.get(), ToSlice(Serialize(txo)), !throwIfMissing, QString(), false, p->db.defReadOpts);
 }
 /// Delete a Utxo from the db. Will throw only on database error (but not if it was missing).
 void Storage::utxoDeleteFromDB(const TXO &txo)
@@ -617,22 +680,17 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve)
         // set up batch update of txnums -- we update the p->nextTxNum after all of this succeeds..
         //auto t0 = Util::getTimeNS();
         {
-            rocksdb::WriteBatch batch;
             const TxNum txNum0 = p->txNumNext;
             for (size_t i = 0; i < ppb->txInfos.size(); ++i) {
                 const TxNum txnum = txNum0 + i;
                 const TxHash & hash = ppb->txInfos[i].hash;
-                const auto hashSlice = ToSlice(hash);
-                const auto txNumBytes = SerializeScalar(txnum);
-                // txnums are keyed off of uint64_t txNum -- note we save the raw uint64 value here without any QDataStream encapsulation
-                if (auto stat = batch.Put(ToSlice(txNumBytes), hashSlice); !stat.ok())
-                    throw DatabaseError(QString("Error writing txNum -> txHash for txNum %1: %2").arg(txNum0 + i).arg(QString::fromStdString(stat.ToString())));
-                if (auto stat = batch.Put(hashSlice, ToSlice(txNumBytes)); !stat.ok())
-                    throw DatabaseError(QString("Error writing txHash -> txNum for txNum %1: %2").arg(txNum0 + i).arg(QString::fromStdString(stat.ToString())));
+                static const QString errMsg1("Error writing a txNum -> txHash entry to the db"),
+                                     errMsg2("Error writing a txHash -> txNum entry to the db");
+                // txnums are keyed off of uint64_t txNum -- note we save the raw uint64 value here without any
+                // QDataStream encapsulation -- note these may throw
+                GenericDBPut<false>(p->db.txnums.get(), txnum, hash, errMsg1, p->db.defWriteOpts);
+                GenericDBPut<false>(p->db.txnums.get(), hash, txnum, errMsg2, p->db.defWriteOpts);
             }
-            if (auto stat = p->db.txnums->Write(rocksdb::WriteOptions(), &batch); !stat.ok())
-                throw DatabaseError(QString("Error writing txNums batch: %1").arg(QString::fromStdString(stat.ToString())));
-
         }
         //auto elapsed = Util::getTimeNS() - t0;
         //Debug() << "Wrote " << ppb->txInfos.size() << " new TxNums to db in " << QString::number(elapsed/1e6, 'f', 3) << " msec";
@@ -741,6 +799,8 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve)
         // update txNum after everything checks out
         p->txNumNext += ppb->txInfos.size();
 
+        // save txNumNext to db so on next startup we have it from where we left off.
+        GenericDBPut<true>(p->db.txnums.get(), FromSlice(kTxNumNext), TxNum(p->txNumNext), "Error writing txNumNext to db", p->db.defWriteOpts);
 
         // enqueue a save every saveInterval blocks (note that if saveInterval is 0, we never auto-save)
         if (++p->unsavedCt == p->saveInterval && p->saveInterval) {

@@ -131,8 +131,9 @@ private:
     void saveHeaders_impl(const Headers &); ///< This may throw on database error. Caller should pass a copy of the headers or hold the lock (if passing reference to p->headers).
     void saveMeta_impl(); ///< This may throw if db error. Caller should hold locks or be in single-threaded mode.
 
-    void loadHeadersFromDB(); // may throw -- called from startup()
-    void loadCheckUTXOsInDB(); // may throw -- called from startup()
+    void loadHeadersFromDB(); ///< may throw -- called from startup()
+    void loadCheckUTXOsInDB(); ///< may throw -- called from startup()
+    void loadCheckTxNumsInDB(); ///< may throw -- called from startup()
 
     // some helpers for TxNum -- these may throw DatabaseError
     std::optional<TxNum> txNumForHash(const TxHash &, bool throwIfMissing = false, bool *wasCached = nullptr, bool skipCache = false);
