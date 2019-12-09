@@ -695,6 +695,7 @@ auto Controller::stats() const -> Stats
     QVariantMap m;
     const auto tipInfo = storage->latestTip();
     m["Header count"] = tipInfo.first+1;
+    m["Chain"] = storage->getChain();
     m["Chain tip"] = tipInfo.second.toHex();
     m["UTXO set"] = qlonglong(storage->utxoSetSize());
     m["UTXO set bytes"] = QString::number(storage->utxoSetSizeMiB(), 'f', 3) + " MiB";
