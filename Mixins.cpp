@@ -126,6 +126,7 @@ auto StatsMixin::statsSafe(int timeout_ms) const -> Stats
         ret = Util::LambdaOnObject<Stats>(qobj(), [this]{ return stats(); }, timeout_ms);
     } catch (const std::exception & e) {
         Debug() << "Safe stats get failed: " << e.what();
+        ret = QVariantMap{{"error" , e.what()}};
     }
     return ret;
 }
