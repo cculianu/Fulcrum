@@ -702,14 +702,24 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve)
         //auto elapsed = Util::getTimeNS() - t0;
         //Debug() << "Wrote " << ppb->txInfos.size() << " new TxNums to db in " << QString::number(elapsed/1e6, 'f', 3) << " msec";
 
-        static constexpr bool debugPrt = false;
+        constexpr bool debugPrt = false;
 
         // update utxoSet
         {
             // add outputs
 
             for (const auto & [hashX, ag] : ppb->hashXAggregated) {
+                std::unordered_set<unsigned> outputsSpentInSameBlock;
+                for (const auto iidx : ag.ins) {
+                    if (const auto & opt = ppb->inputs[iidx].parentTxOutIdx; opt.has_value())
+                        outputsSpentInSameBlock.insert(opt.value());
+                }
                 for (const auto oidx : ag.outs) {
+                    if (outputsSpentInSameBlock.count(oidx)) {
+                        if constexpr (debugPrt)
+                            Debug() << "Skipping output #: " << oidx << " (was spent in same block)";
+                        continue;
+                    }
                     const auto & out = ppb->outputs[oidx];
                     const TxHash & hash = ppb->txInfos[out.txIdx].hash;
                     TXOInfo info;
@@ -733,6 +743,10 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve)
             for (auto & in : ppb->inputs) {
                 if (!inum) {
                     // coinbase.. skip
+                } else if (in.parentTxOutIdx.has_value()) {
+                    // was an input that was spent in this block so it's ok to skip.. we never added it to utxo set
+                    if constexpr (debugPrt)
+                        Debug() << "Skipping input " << in.prevoutHash.toHex() << ":" << in.prevoutN << ", spent in this block (output # " << in.parentTxOutIdx.value() << ")";
                 } else if (const auto it = p->utxoSet.find(TXO{in.prevoutHash, in.prevoutN}); it != p->utxoSet.end()) {
                     const auto & info = it->second;
                     if (info.confirmedHeight.has_value() && info.confirmedHeight.value() != ppb->height) {
