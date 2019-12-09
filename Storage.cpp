@@ -679,7 +679,24 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve)
 
         // set up batch update of txnums -- we update the p->nextTxNum after all of this succeeds..
         //auto t0 = Util::getTimeNS();
-        {
+        constexpr bool useWriteBatch = true; // set this flag to test either codepath
+        if constexpr (useWriteBatch) {
+            rocksdb::WriteBatch batch;
+            const TxNum txNum0 = p->txNumNext;
+            for (size_t i = 0; i < ppb->txInfos.size(); ++i) {
+                const TxNum txnum = txNum0 + i;
+                const TxHash & hash = ppb->txInfos[i].hash;
+                const auto hashSlice = ToSlice(hash);
+                const auto txNumBytes = SerializeScalar(txnum);
+                // txnums are keyed off of uint64_t txNum -- note we save the raw uint64 value here without any QDataStream encapsulation
+                if (auto stat = batch.Put(ToSlice(txNumBytes), hashSlice); !stat.ok())
+                    throw DatabaseError(QString("Error writing txNum -> txHash for txNum %1: %2").arg(txNum0 + i).arg(QString::fromStdString(stat.ToString())));
+                if (auto stat = batch.Put(hashSlice, ToSlice(txNumBytes)); !stat.ok())
+                    throw DatabaseError(QString("Error writing txHash -> txNum for txNum %1: %2").arg(txNum0 + i).arg(QString::fromStdString(stat.ToString())));
+            }
+            if (auto stat = p->db.txnums->Write(p->db.defWriteOpts, &batch); !stat.ok())
+                throw DatabaseError(QString("Error writing txNums batch: %1").arg(QString::fromStdString(stat.ToString())));
+        } else {
             const TxNum txNum0 = p->txNumNext;
             for (size_t i = 0; i < ppb->txInfos.size(); ++i) {
                 const TxNum txnum = txNum0 + i;
