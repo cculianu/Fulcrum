@@ -221,12 +221,10 @@ namespace {
 
 struct Storage::Pvt
 {
+    const int blockHeaderSize = BTC::GetBlockHeaderSize();
+
     Meta meta;
     Lock metaLock;
-
-    Headers headers;
-    std::pair<unsigned, QByteArray> lastHeaderSaved; ///< remember the last header saved to disk, so subsequent saves leave off from this index
-    RWLock headersLock;
 
     std::atomic<std::underlying_type_t<SaveItem>> pendingSaves{0};
 
@@ -238,14 +236,11 @@ struct Storage::Pvt
     } db;
 
     BTC::HeaderVerifier headerVerifier;
-    Lock headerVerifierLock;
+    mutable RWLock headerVerifierLock;
 
     std::atomic<TxNum> txNumNext{0};
 
-    std::vector<BlkInfo> blkInfos;
-
-    std::atomic<unsigned> saveInterval = 100000,
-                          unsavedCt = 0;
+    //std::vector<BlkInfo> blkInfos; ///< not used (yet!)
 
     std::atomic<int64_t> utxoCt = 0;
 
@@ -327,7 +322,7 @@ void Storage::startup()
 
     Log() << "Loading database ...";
     // load headers -- may throw
-    loadHeadersFromDB();
+    loadCheckHeadersInDB();
     // count utxos
     loadCheckUTXOsInDB();
     // check txnums
@@ -340,16 +335,9 @@ void Storage::cleanup()
 {
     stop(); // joins our thread
 
-    if (p->unsavedCt) {
-        Log() << "Saving unsaved data, please wait ...";
-        // if there is an unsavedCt, flag these as unsaved to check and save. Won't do much if they aren't really unsaved.
-        save_impl(SaveItem::Blocks);
-    }
+    // TODO: unsaved/"dirty state" detection here -- and forced save, if needed.
 }
 
-
-unsigned Storage::saveInterval() const { return p->saveInterval; }
-void Storage::setSaveInterval(unsigned blocks) { p->saveInterval = blocks; p->unsavedCt = p->unsavedCt ? 1 : 0;}
 
 auto Storage::stats() const -> Stats
 {
@@ -357,21 +345,17 @@ auto Storage::stats() const -> Stats
     return Stats();
 }
 
-auto Storage::mutableHeaders() -> std::pair<Headers &, ExclusiveLockGuard>
-{
-    return std::pair<Headers &, ExclusiveLockGuard>{ p->headers, p->headersLock };
-}
-
-auto Storage::headers() const -> std::pair<const Headers &, SharedLockGuard>
-{
-    return std::pair<const Headers &, SharedLockGuard>{ p->headers, p->headersLock };
-}
-
 // Keep returned LockGuard in scope while you use the HeaderVerifier
-auto Storage::headerVerifier() -> std::pair<BTC::HeaderVerifier &, LockGuard>
+auto Storage::headerVerifier() -> std::pair<BTC::HeaderVerifier &, ExclusiveLockGuard>
 {
-    return std::pair<BTC::HeaderVerifier &, LockGuard>( p->headerVerifier, p->headerVerifierLock );
+    return std::pair<BTC::HeaderVerifier &, ExclusiveLockGuard>( p->headerVerifier, p->headerVerifierLock );
 }
+auto Storage::headerVerifier() const -> std::pair<const BTC::HeaderVerifier &, SharedLockGuard>
+{
+    return std::pair<const BTC::HeaderVerifier &, SharedLockGuard>( p->headerVerifier, p->headerVerifierLock );
+}
+
+
 
 QString Storage::getChain() const
 {
@@ -391,15 +375,15 @@ void Storage::setChain(const QString &chain)
 /// returns the "next" TxNum
 TxNum Storage::getTxNum() const { return p->txNumNext.load(); }
 
+auto Storage::latestTip() const -> std::pair<int, HeaderHash> {
+    std::pair<int, HeaderHash> ret = headerVerifier().first.lastHeaderProcessed(); // ok; lock stays locked until statement end.
 
-// should this come from headersVerifier() instead?
-std::pair<int, QByteArray> Storage::latestTip() const {
-    std::pair<int, QByteArray> ret;
-    {
-        auto [hdrs, lock] = headers();
-        ret.first = int(hdrs.size())-1; // -1 if no headers
-        if (!hdrs.empty())
-            ret.second = BTC::HashRev(hdrs.back());
+    if (ret.second.isEmpty() || ret.first < 0) {
+        ret.first = -1;
+        ret.second.clear();
+    } else {
+        // .ret now has the actual header but we want the hash
+        ret.second = BTC::HashRev(ret.second);
     }
     return ret;
 }
@@ -419,20 +403,6 @@ void Storage::save_impl(SaveSpec override)
 {
     if (const auto flags = SaveSpec(p->pendingSaves.exchange(0))|override; flags) { // atomic clear of flags, grab prev val
         try {
-            if (flags & SaveItem::Blocks) { // utxo set
-                Headers hdrCopy;
-                {
-                    std::scoped_lock guard(p->headersLock);
-                    p->unsavedCt = 0;
-                    if (const auto idx = p->lastHeaderSaved.first; !idx || idx+1 < p->headers.size()) {
-                        hdrCopy = p->headers; // grab a copy to snapshot it with lock held
-                    }
-                }
-                // do save with no locks
-                if (!hdrCopy.empty()) {
-                    saveHeaders_impl(hdrCopy);
-                }
-             }
             if (flags & SaveItem::Meta) { // Meta
                 LockGuard l(p->metaLock);
                 saveMeta_impl();
@@ -453,53 +423,67 @@ void Storage::saveMeta_impl()
     Debug() << "Wrote new metadata to db";
 }
 
-void Storage::saveHeaders_impl(const Headers &h)
+void Storage::appendHeader(const Header &h, unsigned int height)
 {
-    if (!p->db.headers) return;
-    //Debug() << "Saving headers ...";
-    size_t start = 0;
-    const auto t0 = Util::getTimeNS();
-    {
-        // figure out where to resume from
-        if (size_t idx = p->lastHeaderSaved.first; idx && idx < h.size() && p->lastHeaderSaved.second == h[idx]) {
-            start = idx + 1;
-        }
-        if (start < h.size()) {
-            Debug() << "Saving from height " << start;
-            rocksdb::WriteBatch batch;
-            for (size_t i = start; i < h.size(); ++i) {
-                // headers are keyed off of uint32_t index (height) -- note we save the raw int value here without any QDataStream encapsulation
-                if (auto stat = batch.Put(ToSlice(SerializeScalar(uint32_t(i))), ToSlice(h[i])); !stat.ok())
-                    throw DatabaseError(QString("Error writing header %1: %2").arg(i).arg(QString::fromStdString(stat.ToString())));
+    const auto targetHeight = GenericDBGet<uint32_t, true>(p->db.headers.get(), kNumHeaders, true, // missing ok
+                                                           "Error reading header count from database").value_or(0);
+    if (UNLIKELY(height != targetHeight))
+        throw InternalError(QString("Bad use of appendHeader -- expected height %1, got height %2").arg(targetHeight).arg(height));
+    rocksdb::WriteBatch batch;
+    if (auto stat = batch.Put(ToSlice(SerializeScalar(uint32_t(height))), ToSlice(h)); !stat.ok())
+        throw DatabaseError(QString("Error writing header %1: %2").arg(height).arg(QString::fromStdString(stat.ToString())));
+    if (auto stat = batch.Put(kNumHeaders, ToSlice(Serialize(uint32_t(height+1)))); !stat.ok())
+        throw DatabaseError(QString("Error writing header size key: %1").arg(QString::fromStdString(stat.ToString())));
+    if (auto stat = p->db.headers->Write(p->db.defWriteOpts, &batch); !stat.ok())
+        throw DatabaseError(QString("Error writing header %1: %2").arg(height).arg(QString::fromStdString(stat.ToString())));
+}
+
+auto Storage::headerForHeight(unsigned height, QString *err) -> std::optional<Header>
+{
+    std::optional<Header> ret;
+    if (int(height) <= latestTip().first) {
+        static const QString errMsg("Failed to retrieve header from db");
+        try {
+            ret.emplace(
+                GenericDBGetFailIfMissing<QByteArray>(
+                    p->db.headers.get(), ToSlice(SerializeScalar(uint32_t(height))), errMsg, false, p->db.defReadOpts));
+            if (UNLIKELY(ret.value().size() != p->blockHeaderSize)) {
+                ret.reset();
+                throw DatabaseSerializationError("Bad header read from db. Wrong size!"); // jumps to below catch
             }
-            // save height to db *after* we successfully wrote all the headers
-            if (auto stat = batch.Put(kNumHeaders, ToSlice(Serialize(uint32_t(h.size())))); !stat.ok())
-                throw DatabaseError(QString("Error writing header size key: %1").arg(QString::fromStdString(stat.ToString())));
-            auto opts = rocksdb::WriteOptions();
-            // uncomment all this stuff if we want to do fsync and other paranoia. turned off for now.
-            //opts.sync = true;
-            //opts.low_pri = true;
-            if (auto stat = p->db.headers->Write(opts, &batch); !stat.ok())
-                throw DatabaseError(QString("Error writing headers: %1").arg(QString::fromStdString(stat.ToString())));
-            //auto fopts = rocksdb::FlushOptions();
-            //fopts.wait = true; fopts.allow_write_stall = true;
-            //if (auto stat = p->db.headers->Flush(fopts); !stat.ok())
-            //    throw DatabaseError(QString("Flush error while writing headers: %1").arg(QString::fromStdString(stat.ToString())));
-            p->lastHeaderSaved = { h.size()-1, h.back() }; // remember last
+        } catch (const std::exception &e) {
+            if (err) *err = e.what();
         }
     }
-    const auto elapsed = Util::getTimeNS() - t0;
-    const auto ct = (h.size()-start);
-    if (ct)
-        Debug() << "Wrote " << ct << " " << Util::Pluralize("header", ct) << " to db in " << QString::number(elapsed/1e6, 'f', 3) << " msec";
+    return ret;
+}
+
+/// Convenient batched alias for above. Returns a set of headers starting at height. May return < count if not
+/// all headers were found. Thead safe.
+auto Storage::headersFromHeight(unsigned height, unsigned count, QString *err) -> std::vector<Header>
+{
+    std::vector<Header> ret;
+    int num = std::min(1 + latestTip().first - int(height), int(count));
+    if (num > 0) {
+        if (err) *err = "";
+        ret.reserve(unsigned(num));
+        for (int i = 0; i < num; ++i) {
+            auto opt = headerForHeight(height + unsigned(i), err);
+            if (!opt.has_value())
+                break;
+            ret.emplace_back(std::move(opt.value()));
+        }
+    } else if (err) *err = "No headers in the specified range";
+    ret.shrink_to_fit();
+    return ret;
 }
 
 
-void Storage::loadHeadersFromDB()
+void Storage::loadCheckHeadersInDB()
 {
     FatalAssert(!!p->db.headers) << __FUNCTION__ << ": Headers db is not open";
 
-    Log() << "Loading headers ...";
+    Log() << "Verifying headers ...";
     uint32_t num = 0;
     const auto t0 = Util::getTimeNS();
     {
@@ -510,35 +494,23 @@ void Storage::loadHeadersFromDB()
             throw DatabaseFormatError(QString("Header count (%1) in database exceeds MAX_HEADERS! This is likely due to"
                                               " a database format mistmatch. Delete the datadir and resynch it.")
                                       .arg(num));
-
-        Headers h;
-        h.reserve(num);
-        const QString errMsg("Error retrieving header from db");
-        const int hsz = BTC::GetBlockHeaderSize();
-        // read db
-        for (uint32_t i = 0; i < num; ++i) {
-            // guaranteed to return a value or throw
-            auto bytes = GenericDBGetFailIfMissing<QByteArray>(db, ToSlice(SerializeScalar(uint32_t(i))), errMsg, false, p->db.defReadOpts);
-            if (UNLIKELY(bytes.size() != hsz))
-                throw DatabaseFormatError(QString("Error reading header %1, wrong size: %2").arg(i).arg(bytes.size()));
-            h.emplace_back(std::move(bytes));
-        }
         // verify headers: hashPrevBlock must match what we actually read from db
         if (num) {
-            Debug() << "Verifying " << num << " " << Util::Pluralize("header", num) << " ...";
             auto [verif, lock] = headerVerifier();
+            Debug() << "Verifying " << num << " " << Util::Pluralize("header", num) << " ...";
+
+            const QString errMsg("Error retrieving header from db");
             QString err;
-            for (unsigned i = 0; i < num; ++i) {
-                // verify headers hash chains match by checking hashPrevBlock versus actual previous hash.
-                // we use the helper functor HeaderVerifier for this.
-                if (!verif(h[i], &err))
+            // read db
+            for (uint32_t i = 0; i < num; ++i) {
+                // guaranteed to return a value or throw
+                const auto bytes = GenericDBGetFailIfMissing<QByteArray>(db, ToSlice(SerializeScalar(uint32_t(i))), errMsg, false, p->db.defReadOpts);
+                if (UNLIKELY(bytes.size() != p->blockHeaderSize))
+                    throw DatabaseFormatError(QString("Error reading header %1, wrong size: %2").arg(i).arg(bytes.size()));
+                if (!verif(bytes, &err))
                     throw DatabaseError(QString("%1. Possible databaase corruption. Delete the datadir and resynch.").arg(err));
             }
-            p->lastHeaderSaved = verif.lastHeaderProcessed(); // remember last
         }
-        // locked until scope end...
-        auto [headers, lock] = mutableHeaders();
-        headers.swap(h);
     }
     if (num) {
         const auto elapsed = Util::getTimeNS();
@@ -653,13 +625,13 @@ double Storage::utxoSetSizeMiB() const {
     return (utxoSetSize()*elemSize) / 1e6;
 }
 
-QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve)
+QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve [[maybe_unused]])
 {
     assert(bool(ppb) && bool(p));
 
     QString errRet;
 
-    std::scoped_lock guard(p->headerVerifierLock, p->headersLock); // take all locks now.. todo: add more locks here
+    std::scoped_lock guard(p->headerVerifierLock); // take all locks now.. todo: add more locks here
     const auto verifUndo = p->headerVerifier; // keep a copy for undo purposes in case this fails
 
     try {
@@ -796,33 +768,28 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve)
                 Debug() << "utxoset size: " << utxoSetSize() << " block: " << ppb->height;
         }
 
+        // save blkInfos -- disabled for now since we aren't using it (yet!)
+        /*
         if (nReserve) {
-            if (const auto size = p->headers.size(); size + nReserve < p->headers.capacity())
-                p->headers.reserve(size + nReserve); // reserve space for new headers in 1 go to save on copying
             if (const auto size = p->blkInfos.size(); size + nReserve < p->blkInfos.capacity())
                 p->blkInfos.reserve(size + nReserve); // reserve space for new blkinfos in 1 go to save on copying
         }
 
-        // save blkInfos
         p->blkInfos.emplace_back(BlkInfo{
             p->txNumNext, // .txNum0
             unsigned(ppb->txInfos.size()),
             unsigned(ppb->inputs.size()),
             unsigned(ppb->outputs.size())
         });
+        */
 
-        // append header (todo: see about reserving suitable chunks)
-        p->headers.emplace_back(rawHeader);
         // update txNum after everything checks out
         p->txNumNext += ppb->txInfos.size();
 
+        appendHeader(rawHeader, ppb->height);
+
         // save txNumNext to db so on next startup we have it from where we left off.
         GenericDBPut<true>(p->db.txnums.get(), FromSlice(kTxNumNext), TxNum(p->txNumNext), "Error writing txNumNext to db", p->db.defWriteOpts);
-
-        // enqueue a save every saveInterval blocks (note that if saveInterval is 0, we never auto-save)
-        if (++p->unsavedCt == p->saveInterval && p->saveInterval) {
-            save(SaveItem::Blocks);
-        }
 
     } catch (const std::exception & e) {
         errRet = e.what();

@@ -879,9 +879,9 @@ namespace BTC
         }
         return true;
     }
-    std::pair<unsigned, QByteArray> HeaderVerifier::lastHeaderProcessed() const
+    std::pair<int, QByteArray> HeaderVerifier::lastHeaderProcessed() const
     {
-        return { size_t(std::max(prevHeight, 0L)), prev };
+        return { int(prevHeight), prev };
     }
 
 } // end namespace BTC

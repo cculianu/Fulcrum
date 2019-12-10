@@ -504,7 +504,6 @@ void Controller::process(bool beSilentIfUpToDate)
         const size_t nTasks = qMin(num, sm->DL_CONCURRENCY);
         sm->ppBlkHtNext = sm->startheight = unsigned(base);
         sm->endHeight = unsigned(sm->ht);
-        storage->setSaveInterval(0); // disable auto-save
         for (size_t i = 0; i < nTasks; ++i) {
             add_DLHeaderTask(unsigned(base + i), unsigned(sm->ht), nTasks);
         }
@@ -521,7 +520,6 @@ void Controller::process(bool beSilentIfUpToDate)
             sm.reset(); // go back to "Begin" state to check if any new headers arrived in the meantime
         }
         AGAIN();
-        storage->save(Storage::SaveItem::Blocks); // enqueue a commit to db ...
     } else if (sm->state == State::Failure) {
         // We will try again later via the pollTimer
         Error() << "Failed to download blocks";
@@ -537,7 +535,6 @@ void Controller::process(bool beSilentIfUpToDate)
             sm.reset();  // great success!
         }
         enablePollTimer = true;
-        storage->setSaveInterval(100);
     } else if (sm->state == State::IBD) {
         {
             std::lock_guard g(smProgressLock);

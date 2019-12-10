@@ -382,8 +382,8 @@ namespace BTC
         /// keep calling this from a loop. Returns false if current header's hashPrevBlock  != the last header's hash.
         bool operator()(const QByteArray & header, QString *err = nullptr);
         bool operator()(const bitcoin::CBlockHeader & header, QString *err = nullptr);
-        /// returns the height, 80 byte header of the last header seen
-        std::pair<unsigned, QByteArray> lastHeaderProcessed() const;
+        /// returns the height, 80 byte header of the last header seen. If no headers seen, returns (-1, Empty QByteArray)
+        std::pair<int, QByteArray> lastHeaderProcessed() const;
 
         bool isValid() const { return prev.length() == GetBlockHeaderSize(); }
         void reset(unsigned nextHeight = 0, QByteArray prevHeader = QByteArray()) { prevHeight = long(nextHeight)-1; prev = prevHeader; }

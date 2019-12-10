@@ -42,54 +42,43 @@ public:
 
     // Public interface -- unless otherwise specified all functions below are thread-safe
 
-    // some types
-    using Headers = std::vector<QByteArray>; ///< each header is 80 bytes
-    using RWLock = std::shared_mutex;
-    using Lock = std::mutex;
-    using ExclusiveLockGuard = std::unique_lock<RWLock>;
-    using SharedLockGuard = std::shared_lock<RWLock>;
-    using LockGuard = std::unique_lock<Lock>;
+    // -- Header-related
+    using Header = QByteArray;
+    using HeaderHash = QByteArray;
 
-    /// Returns a reference to the headers in our memory cache, locked in exclusive mode.
-    /// Be sure to keep the ExclusiveLockGuard in scope until the updates to the vector are complete in order to keep
-    /// the data structure locked.
-    /// This is howe we update the headers vector.
-    /// Be sure to call save(Hdrs) if you have mutated the headers and want the updates saved to disk.
-    std::pair<Headers &, ExclusiveLockGuard> mutableHeaders();
-    /// How we read headers from our memory cache. The lock is locked in shared mode.
-    std::pair<const Headers &, SharedLockGuard> headers() const;
+    /// Thread safe. May hit the database (or touch a cache).  Returns the header for the given height or nothing if
+    /// height > latestTip().first.  May also fail on low-level db error. Use the optional arg *err to see why if failed.
+    std::optional<Header> headerForHeight(unsigned height, QString *err = nullptr);
+    /// Convenient batched alias for above. Returns a set of headers starting at height. May return < count if not
+    /// all headers were found. Thead safe.
+    std::vector<Header> headersFromHeight(unsigned height, unsigned count, QString *err = nullptr);
 
     /// Implicitly takes a lock to return this. Thread safe. Breakdown of info returned:
     ///   .first - the latest valid height we have synched or -1 if no headers.
     ///   .second - the latest valid chainTip 32-byte sha256 double hash of the header (the chainTip as it's called in
     ///             bitcoind parlance), in bitcoind REVERSED memory order (that is, ready for json sending/receiving).
     ///             (Empty if no headers yet).
-    std::pair<int, QByteArray> latestTip() const;
+    std::pair<int, HeaderHash> latestTip() const;
 
     /// eg 'main' or 'test' or may be empty string if new db (thread safe)
     QString getChain() const;
     void setChain(const QString &); // implicitly calls db save of 'meta' (thread safe)
 
     enum class SaveItem : uint32_t {
-        Blocks = 0x1,  ///< save headers + utxoset
-        Meta = 0x2, ///< save meta
+        Meta = 0x1, ///< save meta
 
         All = 0xffffffff, ///< save everything
         None = 0x00, ///< No-op
     };
     Q_DECLARE_FLAGS(SaveSpec, SaveItem)
 
-    /// Keep the returned LockGuard in scope while you use the HeaderVerifier
-    std::pair<BTC::HeaderVerifier &, LockGuard> headerVerifier();
-
     /// schedules updates to be written to disk immediately when control returns to this
     /// object's thread's event loop.
     void save(SaveSpec = SaveItem::All);
 
-
     // --- Block Processing (still a WIP)
 
-    /// Thread-safe. Call this from the controller thread or any thread. Returns the empty string on success,
+    /// Thread-safe. Call this from the Controller thread or any thread. Returns the empty string on success,
     /// or a string containing an error message on failure.  A common failure reason would be a header verification
     /// failure.  Note: you can only add blocks in serial sequence from 0 -> latest.
     /// This function will mutate the pased-in pre-processed block and fill in all the inputs from the utxo set,
@@ -99,11 +88,6 @@ public:
     /// returns the "next" TxNum (thread safe)
     TxNum getTxNum() const;
 
-    /// how often (in blocks) we auto-save
-    unsigned saveInterval() const;
-    /// set to positive nonzero to save after addBlock() is called every X blocks
-    void setSaveInterval(unsigned blocks);
-
     /// Returns the known size of the utxo set (for now this is a signed value -- to debug underflow errors)
     int64_t utxoSetSize() const;
     /// Returns the known size of the utxo set in millions of bytes
@@ -112,7 +96,21 @@ public:
 protected:
     virtual Stats stats() const override; ///< from StatsMixin
 
-    // -- the below are used inside addBlock to maintain the UTXO set
+    // -- Header and misc
+    // some types
+    using RWLock = std::shared_mutex;
+    using Lock = std::mutex;
+    using ExclusiveLockGuard = std::unique_lock<RWLock>;
+    using SharedLockGuard = std::shared_lock<RWLock>;
+    using LockGuard = std::unique_lock<Lock>;
+
+    /// Keep the returned LockGuard in scope while you use the HeaderVerifier
+    std::pair<BTC::HeaderVerifier &, ExclusiveLockGuard> headerVerifier();
+    /// Keep the returned LockGuard in scope while you use the HeaderVerifier
+    std::pair<const BTC::HeaderVerifier &, SharedLockGuard> headerVerifier() const;
+
+
+    // -- the below are used inside addBlock to maintain the UTXO set & Headers
 
     /// Thread-safe. Immediately save a UTXO to the db. May throw on database error.
     void utxoAddToDB(const TXO &, const TXOInfo &);
@@ -121,6 +119,12 @@ protected:
     /// Delete a Utxo from the db. Will throw only on database error (but not if it was missing).
     void utxoDeleteFromDB(const TXO &);
 
+    /// Internally called by addBlock. Call this with the heaverVerifier lock held.
+    /// Appends header h to the database at height. Note that it is undefined to call this function
+    /// if height already exists in the database or if height is more than 1+ latestTip().first. For internal use
+    /// in addBlock, basically.
+    void appendHeader(const Header &h, unsigned height);
+
 private:
     const std::shared_ptr<Options> options;
 
@@ -128,10 +132,9 @@ private:
     std::unique_ptr<Pvt> p;
 
     void save_impl(SaveSpec override = SaveItem::None); ///< may abort app on database failure (unlikely).
-    void saveHeaders_impl(const Headers &); ///< This may throw on database error. Caller should pass a copy of the headers or hold the lock (if passing reference to p->headers).
     void saveMeta_impl(); ///< This may throw if db error. Caller should hold locks or be in single-threaded mode.
 
-    void loadHeadersFromDB(); ///< may throw -- called from startup()
+    void loadCheckHeadersInDB(); ///< may throw -- called from startup()
     void loadCheckUTXOsInDB(); ///< may throw -- called from startup()
     void loadCheckTxNumsInDB(); ///< may throw -- called from startup()
 
