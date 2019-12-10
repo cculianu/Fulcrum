@@ -273,7 +273,7 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
         // Schedule ourselves to run again soon and return.
         Util::AsyncOnObject(this, [this, bnum]{
             do_get(bnum);
-        }, msec);
+        }, msec, Qt::TimerType::PreciseTimer);
         return;
     }
     submitRequest("getblockhash", {bnum}, [this, bnum](const RPC::Message & resp){
@@ -344,6 +344,7 @@ struct Controller::StateMachine
     };
     State state = Begin;
     int ht = -1;
+    bool isMainNet = false;
 
     robin_hood::unordered_flat_map<unsigned, PreProcessedBlockPtr> ppBlocks; // mapping of height -> PreProcessedBlock (we use an unordered_flat_map because it's faster for frequent updates)
     unsigned startheight = 0, ///< the height we started at
@@ -368,14 +369,29 @@ unsigned Controller::downloadTaskRecommendedThrottleTimeMsec(unsigned bnum) cons
 {
     std::shared_lock g(smLock); // this lock guarantees that 'sm' won't be deleted from underneath us
     if (sm) {
-        constexpr int maxBackLog = 1000; // <--- TODO: have this be a more dynamic value based on current average blocksize.
+        int maxBackLog = 1000; // <--- TODO: have this be a more dynamic value based on current average blocksize.
+        if (sm->isMainNet) {
+            // mainnet
+            if (bnum > 150000) // beyond this height the blocks are starting to be big enough that we want to not eat memory.
+                maxBackLog = 250;
+            else if (bnum > 550000) // beyond this height we may start to see 32MB blocks in the future
+                maxBackLog = 100;
+        } else {
+            // testnet
+            if (bnum > 1300000) // beyond this height 32MB blocks may be common, esp. in the future
+                maxBackLog = 100;
+        }
+
         const int diff = int(bnum) - int(sm->ppBlkHtNext.load()); // note: ppBlkHtNext is not guarded by the lock but it is an atomic value, so that's fine.
         if ( diff > maxBackLog ) {
-            // make the backoff time be 10ms
-            return 10; // TODO: also have this be tuneable.
+            // Make the backoff time be from 10ms to 50ms, depending on how far in the future this block height is from
+            // what we are processing.  The hope is that this enforces some order on future block arrivals and also
+            // prevents excessive polling for blocks that are too far ahead of us.
+            return std::min(10u + 5*unsigned(diff - maxBackLog - 1), 50u); // TODO: also have this be tuneable.
         }
+
     }
-    return 0;
+    return 0u;
 }
 
 void Controller::rmTask(CtlTask *t)
@@ -460,6 +476,7 @@ void Controller::process(bool beSilentIfUpToDate)
                         << "connect to a different bitcoind or delete this program's datadir to resynch.";
                 return;
             }
+            sm->isMainNet = task->info.chain == "main";
             // TODO: detect reorgs here -- to be implemented later after we figure out data model more, etc.
             const auto old = storage->latestTip().first;
             sm->ht = task->info.blocks;

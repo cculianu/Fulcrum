@@ -508,8 +508,8 @@ namespace Util {
     /// Convenience for just setting up a QTimer::singleShot on an object, calling a lambda as the timeout.
     /// By default if when_ms is 0, the object will have the lambda invoked in its thread as soon as it
     /// returns to the event loop.  Always returns immediately.
-    inline void AsyncOnObject(const QObject *obj, const VoidFunc & lambda, unsigned when_ms=0) {
-        QTimer::singleShot(int(when_ms), obj, lambda);
+    inline void AsyncOnObject(const QObject *obj, const VoidFunc & lambda, unsigned when_ms=0, Qt::TimerType ttype = Qt::TimerType::CoarseTimer) {
+        QTimer::singleShot(int(when_ms), ttype, obj, lambda);
     }
 
     /// This is an alternative to creating signal/slot pairs
