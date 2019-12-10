@@ -356,9 +356,6 @@ struct Controller::StateMachine
 
     size_t nTx = 0, nIns = 0, nOuts = 0;
 
-    /// used to suppress progress log display if we get out-of-order heights
-    size_t lastProgHt = 0;
-
     const char * stateStr() const {
         static constexpr const char *stateStrings[] = { "Begin", "GetBlocks", "DownloadingBlocks", "FinishedDL", "End", "Failure", "IBD",
                                                         "Unknown" /* this should always be last */ };
@@ -369,7 +366,7 @@ struct Controller::StateMachine
 
 unsigned Controller::downloadTaskRecommendedThrottleTimeMsec(unsigned bnum) const
 {
-    std::shared_lock g(smProgressLock); // this lock guarantees that 'sm' won't be deleted from underneath us
+    std::shared_lock g(smLock); // this lock guarantees that 'sm' won't be deleted from underneath us
     if (sm) {
         constexpr int maxBackLog = 1000; // <--- TODO: have this be a more dynamic value based on current average blocksize.
         const int diff = int(bnum) - int(sm->ppBlkHtNext.load()); // note: ppBlkHtNext is not guarded by the lock but it is an atomic value, so that's fine.
@@ -410,21 +407,6 @@ void Controller::add_DLHeaderTask(unsigned int from, unsigned int to, size_t nTa
         Error() << "Task errored: " << t->objectName() << ", error: " << t->errorMessage;
         genericTaskErrored();
     });
-    connect(t, &CtlTask::progress, this, [t, this](double prog){ // this runs in "this" thread context
-        if (UNLIKELY(!sm || isTaskDeleted(t))) return; // task was stopped from underneath us, this is stale.. abort.
-        const size_t ht = t->index2Height(unsigned(t->expectedCt*prog));
-        if (ht < sm->lastProgHt)
-            // suppress "backwards" progress displays. this can happen because we have multiple tasks sending us
-            // progress info and block heights arrive here out of order
-            return;
-        sm->lastProgHt = ht;
-        QString extraInfo = "";
-        QString pctDisplay = QString::number((ht*1e2) / qMax(t->to, 1U), 'f', 1) + "%";
-        if (size_t backlog=0; pctDisplay.startsWith("100") && (backlog = sm->ppBlocks.size())) {
-            extraInfo = QString(". Waiting for %1 out-of-order blocks to arrive ...").arg(backlog);
-        }
-        Log() << "Downloaded height: " << ht << ", " << pctDisplay << extraInfo;
-    });
 }
 
 void Controller::genericTaskErrored()
@@ -456,7 +438,10 @@ void Controller::process(bool beSilentIfUpToDate)
     auto polltimeout = polltime_ms;
     stopTimer(pollTimerName);
     //Debug() << "Process called...";
-    if (!sm) sm = std::make_unique<StateMachine>();
+    if (!sm) {
+        std::lock_guard g(smLock);
+        sm = std::make_unique<StateMachine>();
+    }
     using State = StateMachine::State;
     if (sm->state == State::Begin) {
         auto task = newTask<GetChainInfoTask>(true, this);
@@ -516,7 +501,7 @@ void Controller::process(bool beSilentIfUpToDate)
               << " (" << sm->nIns << " " << Util::Pluralize("input", sm->nIns) << " & " << sm->nOuts << " " << Util::Pluralize("output", sm->nOuts) << ")"
               << ", verified ok.";
         {
-            std::lock_guard g(smProgressLock);
+            std::lock_guard g(smLock);
             sm.reset(); // go back to "Begin" state to check if any new headers arrived in the meantime
         }
         AGAIN();
@@ -524,20 +509,20 @@ void Controller::process(bool beSilentIfUpToDate)
         // We will try again later via the pollTimer
         Error() << "Failed to download blocks";
         {
-            std::lock_guard g(smProgressLock);
+            std::lock_guard g(smLock);
             sm.reset();
         }
         enablePollTimer = true;
         emit synchFailure();
     } else if (sm->state == State::End) {
         {
-            std::lock_guard g(smProgressLock);
+            std::lock_guard g(smLock);
             sm.reset();  // great success!
         }
         enablePollTimer = true;
     } else if (sm->state == State::IBD) {
         {
-            std::lock_guard g(smProgressLock);
+            std::lock_guard g(smLock);
             sm.reset();  // great success!
         }
         enablePollTimer = true;
@@ -561,13 +546,19 @@ void Controller::putBlock(CtlTask *task, PreProcessedBlockPtr p)
             Warning() << "Ignoring putBlocks request for block " << p->height << " -- state is not \"DownloadingBlocks\" but rather is: \"" << sm->stateStr() << "\"";
             return;
         }
-        {
-            std::lock_guard g(smProgressLock);
-            sm->ppBlocks[p->height] = p;
-        }
+        sm->ppBlocks[p->height] = p;
         //AGAIN(); // queue up, return right away -- turns out this spams events. better to call the process function directly here.
         process_DownloadingBlocks();
     });
+}
+
+void Controller::process_PrintProgress(unsigned height)
+{
+    if (UNLIKELY(!sm)) return; // paranaoia
+    if (height && !(height % 1000)) {
+        QString pctDisplay = QString::number((height*1e2) / std::max(sm->endHeight, 1U), 'f', 1) + "%";
+        Log() << "Processed height: " << height << ", " << pctDisplay;
+    }
 }
 
 void Controller::process_DownloadingBlocks()
@@ -586,6 +577,8 @@ void Controller::process_DownloadingBlocks()
         if ( ! process_VerifyAndAddBlock(ppb) )
             // error encountered.. abort!
             return;
+
+        process_PrintProgress(ppb->height);
 
         if (sm->ppBlkHtNext > sm->endHeight) {
             sm->state = StateMachine::State::FinishedDL;
