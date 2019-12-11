@@ -701,7 +701,9 @@ auto Controller::stats() const -> Stats
     m["Chain tip"] = tipInfo.second.toHex();
     m["UTXO set"] = qlonglong(storage->utxoSetSize());
     m["UTXO set bytes"] = QString::number(storage->utxoSetSizeMiB(), 'f', 3) + " MiB";
-    m["TxNum"] = qlonglong(storage->getTxNum());
+    const auto txnum = qlonglong(storage->getTxNum());
+    m["TxNum"] = txnum;
+    m["TxNum -> TxHash (latest)"] = txnum ? storage->hashForTxNum(TxNum(txnum-1), false, nullptr, true).value_or("").toHex() : QVariant();
     if (sm) {
         QVariantMap m2;
         m2["State"] = sm->stateStr();

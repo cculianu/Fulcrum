@@ -88,6 +88,9 @@ public:
     /// returns the "next" TxNum (thread safe)
     TxNum getTxNum() const;
 
+    /// Helper for TxNum. Resolve a 64-bit TxNum to a TxHash -- this may throw a DatabaseError if throwIfMissing=true (thread safe)
+    std::optional<TxHash> hashForTxNum(TxNum, bool throwIfMissng = false, bool *wasCached = nullptr, bool skipCache = false);
+
     /// Returns the known size of the utxo set (for now this is a signed value -- to debug underflow errors)
     int64_t utxoSetSize() const;
     /// Returns the known size of the utxo set in millions of bytes
@@ -137,9 +140,6 @@ private:
     void loadCheckHeadersInDB(); ///< may throw -- called from startup()
     void loadCheckUTXOsInDB(); ///< may throw -- called from startup()
     void loadCheckTxNumsFile(); ///< may throw -- called from startup()
-
-    /// helper for TxNum. Resolve a 64-bit TxNum to a TxHash -- this may throw DatabaseError (thread safe)
-    std::optional<TxHash> hashForTxNum(TxNum, bool throwIfMissng = false, bool *wasCached = nullptr, bool skipCache = false);
 };
 
 Q_DECLARE_OPERATORS_FOR_FLAGS(Storage::SaveSpec)
