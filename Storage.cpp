@@ -1,5 +1,6 @@
 #include "BTC.h"
 #include "LRUCache.h"
+#include "RecordFile.h"
 #include "Storage.h"
 
 #include "rocksdb/db.h"
@@ -31,7 +32,7 @@ namespace {
     };
 
     // some database keys we use -- todo: if this grows large, move it elsewhere
-    static const rocksdb::Slice kMeta{"meta"}, kNumHeaders{"num_headers"}, kTxNumNext{"TxNumNext"};
+    static const rocksdb::Slice kMeta{"meta"}, kNumHeaders{"num_headers"};
     static constexpr size_t MAX_HEADERS = 100000000; // 100 mln max headers for now.
 
     /// NOTE: the byte array should live as long as the slice does. slice is just a weak ref into the byte array
@@ -190,9 +191,10 @@ namespace {
 
     /// Throws on all errors. Otherwise writes to db.
     template <bool safeScalar = false, typename KeyType, typename ValueType>
-    void GenericDBPut(rocksdb::DB *db, const KeyType & key, const ValueType & value,
-                      const QString & errorMsgPrefix = QString(),  ///< used to specify a custom error message in the thrown exception
-                      const rocksdb::WriteOptions & opts = rocksdb::WriteOptions())
+    void GenericDBPut [[maybe_unused]]
+                (rocksdb::DB *db, const KeyType & key, const ValueType & value,
+                 const QString & errorMsgPrefix = QString(),  ///< used to specify a custom error message in the thrown exception
+                 const rocksdb::WriteOptions & opts = rocksdb::WriteOptions())
     {
         if constexpr (safeScalar) {
             auto st = db->Put(opts, ToSlice(Serialize(key)), ToSlice(Serialize(value)));
@@ -242,8 +244,10 @@ struct Storage::Pvt
         const rocksdb::ReadOptions defReadOpts; ///< avoid creating this each time
         const rocksdb::WriteOptions defWriteOpts; ///< avoid creating this each time
 
-        std::unique_ptr<rocksdb::DB> meta, headers, txnums, blkinfo, utxoset, shist;
+        std::unique_ptr<rocksdb::DB> meta, headers, blkinfo, utxoset, shist;
     } db;
+
+    std::unique_ptr<RecordFile> txNumsFile;
 
     BTC::HeaderVerifier headerVerifier;
     mutable RWLock headerVerifierLock;
@@ -286,7 +290,6 @@ void Storage::startup()
         const std::list<DBInfoTup> dbs2open = {
             { "meta", p->db.meta },
             { "headers", p->db.headers },
-            { "txnums" , p->db.txnums },
             { "blkinfo" , p->db.blkinfo },
             { "utxoset", p->db.utxoset },
             { "scripthash_history", p->db.shist },
@@ -335,7 +338,7 @@ void Storage::startup()
     // count utxos
     loadCheckUTXOsInDB();
     // check txnums
-    loadCheckTxNumsInDB();
+    loadCheckTxNumsFile();
 
     start(); // starts our thread
 }
@@ -580,21 +583,13 @@ void Storage::loadCheckUTXOsInDB()
     Debug() << "Read txos from db in " << QString::number((elapsed-t0)/1e6, 'f', 3) << " msec";
 }
 
-void Storage::loadCheckTxNumsInDB()
+void Storage::loadCheckTxNumsFile()
 {
-    // read txNumNext from db. TODO: maybe some verification here to make sure it's not corrupted? Check counts?
-    // iterate over all txNums? etc?  FIXME
-    if (auto opt = GenericDBGet<TxNum, true>(p->db.txnums.get(), kTxNumNext, true,
-                                             "Error reading txNumNext from db", false, p->db.defReadOpts);
-            opt.has_value())
-    {
-        p->txNumNext = opt.value();
-        Debug() << "Read TxNumNext from db: " << p->txNumNext.load();
-    } else if (latestTip().first > -1) {
-        throw DatabaseFormatError("Database is missing the TxNumNext key.\n\nDelete the datadir and resynch to bitcoind.\n");
-    }
+    // may throw.
+    p->txNumsFile = std::make_unique<RecordFile>(options->datadir + QDir::separator() + "TxNum2TxHash", HashLen, 0x000012e2);
+    p->txNumNext = p->txNumsFile->numRecords();
+    Debug() << "Read TxNumNext from file: " << p->txNumNext.load();
 }
-
 
 
 /// Thread-safe. Immediately save a UTXO to the db. May throw on database error.
@@ -644,6 +639,8 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve [[maybe_un
     const auto verifUndo = p->headerVerifier; // keep a copy for undo purposes in case this fails
 
     try {
+        //const auto blockTxNum0 = p->txNumNext.load();
+
         // Verify header chain makes sense (by checking hashes, using the shared header verifier)
         QByteArray rawHeader;
         {
@@ -657,35 +654,19 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve [[maybe_un
             rawHeader = p->headerVerifier.lastHeaderProcessed().second;
         }
 
-
-        // set up batch update of txnums -- we update the p->nextTxNum after all of this succeeds..
-        //auto t0 = Util::getTimeNS();
-        constexpr bool useWriteBatch = true; // set this flag to test either codepath
-        if constexpr (useWriteBatch) {
-            rocksdb::WriteBatch batch;
-            const TxNum txNum0 = p->txNumNext;
-            for (size_t i = 0; i < ppb->txInfos.size(); ++i) {
-                const TxNum txnum = txNum0 + i;
-                const TxHash & hash = ppb->txInfos[i].hash;
-                // txnums are keyed off of uint64_t txNum -- note we save the raw uint64 value here without any QDataStream encapsulation
-                if (auto stat = batch.Put(ScalarToSlice(txnum), ToSlice(hash)); !stat.ok())
-                    throw DatabaseError(QString("Error writing txNum -> txHash for txNum %1: %2").arg(txNum0 + i).arg(QString::fromStdString(stat.ToString())));
+        {  // add txnum -> txhash association to the TxNumsFile...
+            auto batch = p->txNumsFile->beginBatchAppend();
+            for (const auto & txInfo : ppb->txInfos) {
+                batch.append(txInfo.hash);
             }
-            if (auto stat = p->db.txnums->Write(p->db.defWriteOpts, &batch); !stat.ok())
-                throw DatabaseError(QString("Error writing txNums batch: %1").arg(QString::fromStdString(stat.ToString())));
-        } else {
-            const TxNum txNum0 = p->txNumNext;
-            for (size_t i = 0; i < ppb->txInfos.size(); ++i) {
-                const TxNum txnum = txNum0 + i;
-                const TxHash & hash = ppb->txInfos[i].hash;
-                static const QString errMsg("Error writing a txNum -> txHash entry to the db");
-                // txnums are keyed off of uint64_t txNum -- note we save the raw uint64 value here without any
-                // QDataStream encapsulation -- note these may throw
-                GenericDBPut<false>(p->db.txnums.get(), txnum, hash, errMsg, p->db.defWriteOpts);
-            }
+            // this may close the app on error here in batch d'tor if a low-level file error occurred.
         }
-        //auto elapsed = Util::getTimeNS() - t0;
-        //Debug() << "Wrote " << ppb->txInfos.size() << " new TxNums to db in " << QString::number(elapsed/1e6, 'f', 3) << " msec";
+
+        p->txNumNext += ppb->txInfos.size(); // update internal counter
+
+        if (p->txNumNext != p->txNumsFile->numRecords()) {
+            throw InternalError("TxNum file and internal txNumNext counter disagree! FIXME!");
+        }
 
         constexpr bool debugPrt = false;
 
@@ -779,20 +760,14 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve [[maybe_un
         }
 
         p->blkInfos.emplace_back(BlkInfo{
-            p->txNumNext, // .txNum0
+            blockTxNum0, // .txNum0
             unsigned(ppb->txInfos.size()),
             unsigned(ppb->inputs.size()),
             unsigned(ppb->outputs.size())
         });
         */
 
-        // update txNum after everything checks out
-        p->txNumNext += ppb->txInfos.size();
-
         appendHeader(rawHeader, ppb->height);
-
-        // save txNumNext to db so on next startup we have it from where we left off.
-        GenericDBPut<true>(p->db.txnums.get(), FromSlice(kTxNumNext), TxNum(p->txNumNext), "Error writing txNumNext to db", p->db.defWriteOpts);
 
     } catch (const std::exception & e) {
         errRet = e.what();
@@ -811,8 +786,17 @@ std::optional<TxHash> Storage::hashForTxNum(TxNum n, bool throwIfMissing, bool *
         return ret;
     } else if (wasCached) *wasCached = false;
 
-    static const QString kErrMsg ("Error reading hashForTxNum from db");
-    ret = GenericDBGet<TxHash, false>(p->db.txnums.get(), ScalarToSlice(n), !throwIfMissing, kErrMsg);
+    static const QString kErrMsg ("Error reading TxHash for TxNum %1: %2");
+    QString errStr;
+    const auto bytes = p->txNumsFile->readRecord(n, &errStr);
+    if (bytes.isEmpty()) {
+        errStr = kErrMsg.arg(n).arg(errStr);
+        if (throwIfMissing)
+            throw DatabaseError(errStr);
+        Warning() << errStr;
+    } else {
+        ret.emplace(bytes);
+    }
     if (!skipCache && ret.has_value()) {
         // save in cache
         p->lruNum2Hash.insert(n, ret.value());

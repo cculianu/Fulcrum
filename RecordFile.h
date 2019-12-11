@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <optional>
 #include <shared_mutex>
+#include <memory>
 
 /// A low-level class for reading/writing fixed-sized records indexed by an index number.  Basically, this is a
 /// file-backed array.  We do it this way to save some space in the DB when the key is just a sequential index
@@ -36,13 +37,38 @@ public:
     /// first record is recNum = 0, the second is recNum = 1. Each record is separated by recordSize() bytes in the
     /// file.
     /// Returns a QByteArray of size recsz or an empty QByteArray on error.
-    QByteArray readRecord(uint64_t recNum) const;
+    QByteArray readRecord(uint64_t recNum, QString *errStr = nullptr) const;
 
     /// Thread-safe, but it does take an exclusive lock.  Appends data to the file. The new record number is returned.
     /// Note that an error leads to an optional with no value being returned.  Data *must* be recordSize() bytes.
-    std::optional<uint64_t> appendRecord(const QByteArray &data, QString *errStr = nullptr);
+    /// Note: updateHeader is a performance optimization. If it's false, we don't write the new number of records
+    /// to the header this call. Use this in a loop and specify updateHeader = true for the last iteration as a
+    /// performance saving measaure.
+    std::optional<uint64_t> appendRecord(const QByteArray &data, bool updateHeader = true, QString *errStr = nullptr);
+
+    class BatchAppendContext {
+        std::unique_lock<std::shared_mutex> lock;
+        std::atomic<uint64_t> & nrecs; ///< ref into RecordFile nrecs
+        QFile & file; ///< ref into RecordFile file
+        const size_t recsz;
+    public:
+        /// do not call this constructor. Used by beginBatchAppend below...
+        BatchAppendContext(std::shared_mutex &mut, std::atomic<uint64_t> &nr, QFile & f, size_t recsz) : lock(mut), nrecs(nr), file(f), recsz(recsz) {
+            assert(file.size() == qint64(hdrsz + nrecs.load()*recsz));
+            file.seek(file.size()); // seek to end with lock held
+        }
+        ~BatchAppendContext(); // updates the header with the new count, releases lock
+        /// append record to the end of the file. does not write to file header until d'tor called to update counts.
+        /// Note that it is imperative that the passed-in data be sized recordSize(). No checks are done as a
+        /// performance shortcut!
+        bool append(const QByteArray &data, QString *errStr = nullptr);
+    };
+
+    BatchAppendContext beginBatchAppend();
+
 private:
     mutable std::shared_mutex rwlock;
+    friend class RecordFile::BatchAppendContext;
 
     const size_t recsz;
     const uint32_t magic;

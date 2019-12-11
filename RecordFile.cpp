@@ -41,8 +41,9 @@ RecordFile::RecordFile(const QString &fileName_, size_t recordSize_, uint32_t ma
     }
 }
 
+RecordFile::~RecordFile() {}
 
-QByteArray RecordFile::readRecord(uint64_t recNum) const
+QByteArray RecordFile::readRecord(uint64_t recNum, QString *errStr) const
 {
     std::shared_lock g(rwlock);
     QByteArray ret;
@@ -52,13 +53,16 @@ QByteArray RecordFile::readRecord(uint64_t recNum) const
                 && f.seek(offsetOfRec(recNum)) && (tmp = f.read(qint64(recsz))).length() == int(recsz)) {
             ret = tmp;
         } else {
-            Warning() << "Unable to open and/or read file " << fileName() << " for reading (error was: '" << f.errorString() << "') in " << __func__;
+            if (errStr) {
+                *errStr = QString("Unable to open and/or read file %1 for reading (error was: '%2')")
+                        .arg(fileName()).arg(f.errorString());
+            }
         }
     }
     return ret;
 }
 
-std::optional<uint64_t> RecordFile::appendRecord(const QByteArray &data, QString *errStr)
+std::optional<uint64_t> RecordFile::appendRecord(const QByteArray &data, bool updateHeader, QString *errStr)
 {
     std::lock_guard g(rwlock);
     std::optional<uint64_t> ret;
@@ -66,10 +70,10 @@ std::optional<uint64_t> RecordFile::appendRecord(const QByteArray &data, QString
         if (errStr) *errStr = QString("Expected data of length %1, instead got data of length %2").arg(recsz).arg(data.length());
     } else if (UNLIKELY(!file.isOpen())) {
         if (errStr) *errStr = "File not open";
-    } else if (!file.seek(offsetOfNRecs())) {
+    } else if (updateHeader && !file.seek(offsetOfNRecs())) {
         if (errStr) *errStr = "Cannot seek to write header";
     } else if (const auto newNRecs = ++nrecs;
-               !file.write(QByteArray::fromRawData(reinterpret_cast<const char *>(&newNRecs), sizeof(newNRecs)))) {
+               updateHeader && !file.write(QByteArray::fromRawData(reinterpret_cast<const char *>(&newNRecs), sizeof(newNRecs)))) {
         if (errStr) *errStr = file.errorString();
     } else if (!file.seek(offsetOfRec(newNRecs-1))) {
         if (errStr) *errStr = QString("Cannot seek to write record %1 (%2)").arg(newNRecs-1).arg(file.errorString());
@@ -82,3 +86,35 @@ std::optional<uint64_t> RecordFile::appendRecord(const QByteArray &data, QString
     return ret;
 }
 
+bool RecordFile::BatchAppendContext::append(const QByteArray &data, QString *errStr)
+{
+    if (file.write(data) != data.length()) {
+        if (errStr) *errStr = QString("Short write (%1)").arg(file.errorString());
+        return false;
+    }
+    ++nrecs;
+    return true;
+}
+
+auto RecordFile::beginBatchAppend() -> BatchAppendContext
+{
+    return BatchAppendContext(rwlock, nrecs, file, recsz);
+}
+
+RecordFile::BatchAppendContext::~BatchAppendContext()
+{ // updates the header with the new count, releases lock
+    QString errStr;
+    if (UNLIKELY(!file.isOpen()))
+        errStr = "File not open";
+    else if (!file.seek(offsetOfNRecs()))
+        errStr = QString("Cannot seek to write header for %1").arg(file.fileName());
+    else if (const auto newNRecs = nrecs.load();
+                !file.write(QByteArray::fromRawData(reinterpret_cast<const char *>(&newNRecs), sizeof(newNRecs))))
+        errStr = QString("Cannot write header for %1: %2").arg(file.fileName()).arg(file.errorString());
+    else if (size_t(file.size()) != hdrsz + recsz*nrecs) {
+        errStr = QString("File size mistmatch for %1, %2 is not a multiple of %3 + %4 header. File is now likely corrupted.")
+                .arg(file.fileName()).arg(file.size()).arg(recsz).arg(hdrsz);
+    }
+    if (!errStr.isEmpty())
+        Fatal() << errStr;
+}

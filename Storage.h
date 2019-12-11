@@ -136,7 +136,7 @@ private:
 
     void loadCheckHeadersInDB(); ///< may throw -- called from startup()
     void loadCheckUTXOsInDB(); ///< may throw -- called from startup()
-    void loadCheckTxNumsInDB(); ///< may throw -- called from startup()
+    void loadCheckTxNumsFile(); ///< may throw -- called from startup()
 
     /// helper for TxNum. Resolve a 64-bit TxNum to a TxHash -- this may throw DatabaseError (thread safe)
     std::optional<TxHash> hashForTxNum(TxNum, bool throwIfMissng = false, bool *wasCached = nullptr, bool skipCache = false);
