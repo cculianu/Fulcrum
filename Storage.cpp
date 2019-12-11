@@ -663,7 +663,7 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve [[maybe_un
                                                 "Database is now likely corrupted. Please delete the datadir and resynch.\n")
                                         .arg(errStr));
             }
-            // this may close the app on error here in batch d'tor if a low-level file error occurred as well.
+            // <-- the batch d'tor may close the app on error here if a low-level file error occurred (see RecordFile.cpp ~BatchAppendContext())
         }
 
         p->txNumNext += ppb->txInfos.size(); // update internal counter

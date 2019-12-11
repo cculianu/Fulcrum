@@ -43,7 +43,8 @@ public:
     /// Note that an error leads to an optional with no value being returned.  Data *must* be recordSize() bytes.
     /// Note: updateHeader is a performance optimization. If it's false, we don't write the new number of records
     /// to the header this call. Use this in a loop and specify updateHeader = true for the last iteration as a
-    /// performance saving measaure.
+    /// performance saving measaure.  For even better performance, consider using the beginBatchAppend() method
+    /// which cuts down further on redundant checks (deferring them until the very end when the batch context ends).
     std::optional<uint64_t> appendRecord(const QByteArray &data, bool updateHeader = true, QString *errStr = nullptr);
 
     class BatchAppendContext {
