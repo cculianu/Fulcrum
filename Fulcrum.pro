@@ -81,12 +81,12 @@ linux-g++ {
 #
 # OSX:
 #   Built on Apple clang version 11.0.0 (clang-1100.0.33.12), from Xcode 11.
-#   command: PORTABLE=1 make static_lib -j4 V=1
+#   command: USE_RTTI=1 PORTABLE=1 make static_lib -j4 V=1
 #   Annoyingly, the produced .a file has debug symbols which we strip with: strip -S.
 #
 # Linux:
 #   Built on Ubuntu 18.10, g++ (Ubuntu 8.2.0-7ubuntu1) 8.2.0.
-#   command: PORTABLE=1 make static_lib -j4 V=1
+#   command: USE_RTTI=1 PORTABLE=1 make static_lib -j4 V=1
 #   Annoyingly, the produced .a file has debug symbols which we strip with: strip -g.
 #
 # Windows:

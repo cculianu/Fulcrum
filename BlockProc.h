@@ -70,6 +70,10 @@ struct PreProcessedBlock
         /// `inputs` arrays above). Note this will only include inputs that were from prevout tx's also in this block
         /// for PreProcessedBlock instances before final processing (full resolution requires a utxo set).
         std::vector<unsigned> ins;
+
+        /// Tx indices, ordered. Initially it's just the txIdx into the txInfos array but gets transformed
+        /// down the block processing pipeline (in addBlock) to be a list of TxNums touched by this HashX.
+        std::vector<TxNum> txNumsTouchedByHashX;
     };
 
     /// Flat map ok here, presumably robin_hood does move construction when moving objects around.

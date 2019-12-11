@@ -52,7 +52,10 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bi
             {
                 const HashX hashX = BTC::HashXFromCScript(cscript);
                 // add this output to the hashX -> outputs association for later
-                hashXAggregated[ hashX ].outs.emplace_back( outputIdx );
+                auto & ag = hashXAggregated[ hashX ];
+                ag.outs.emplace_back( outputIdx );
+                if (auto & vec = ag.txNumsTouchedByHashX; vec.empty() || vec.back() != txIdx)
+                    vec.emplace_back(txIdx);
             }
             else {
                 ++nOpReturns;
@@ -112,7 +115,10 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bi
             {
                 // mark this input as touching this hashX
                 const HashX hashX = BTC::HashXFromCScript(cscript);
-                hashXAggregated[ hashX ].ins.emplace_back(inIdx);
+                auto & ag = hashXAggregated[ hashX ];
+                ag.ins.emplace_back(inIdx);
+                if (auto & vec = ag.txNumsTouchedByHashX; vec.empty() || vec.back() != txIdx)
+                    vec.emplace_back(txIdx);
             }
         }
         ++inIdx;
@@ -121,10 +127,17 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bi
     for (auto & [hashX, ag] : hashXAggregated ) {
         std::sort(ag.ins.begin(), ag.ins.end());
         std::sort(ag.outs.begin(), ag.outs.end());
+        std::sort(ag.txNumsTouchedByHashX.begin(), ag.txNumsTouchedByHashX.end());
+        auto last = std::unique(ag.txNumsTouchedByHashX.begin(), ag.txNumsTouchedByHashX.end());
+        ag.txNumsTouchedByHashX.erase(last, ag.txNumsTouchedByHashX.end());
         ag.ins.shrink_to_fit();
         ag.outs.shrink_to_fit();
+        ag.txNumsTouchedByHashX.shrink_to_fit();
         // tally up space usage
-        estimatedThisSizeBytes += sizeof(ag) + size_t(hashX.size()) + ag.ins.size() * sizeof(decltype(ag.ins)::value_type) + ag.outs.size() * sizeof(decltype(ag.outs)::value_type);
+        estimatedThisSizeBytes +=
+                sizeof(ag) + size_t(hashX.size()) + ag.ins.size() * sizeof(decltype(ag.ins)::value_type)
+                + ag.outs.size() * sizeof(decltype(ag.outs)::value_type)
+                + ag.txNumsTouchedByHashX.size() * sizeof(decltype(ag.txNumsTouchedByHashX)::value_type);
     }
 }
 

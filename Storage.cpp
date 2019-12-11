@@ -5,6 +5,7 @@
 
 #include "rocksdb/db.h"
 #include "rocksdb/iterator.h"
+#include "rocksdb/merge_operator.h"
 #include "rocksdb/options.h"
 #include "rocksdb/slice.h"
 
@@ -12,9 +13,11 @@
 #include <QDir>
 
 #include <atomic>
+#include <cstring> // for memcpy
 #include <list>
 #include <optional>
 #include <shared_mutex>
+#include <string>
 #include <tuple>
 #include <type_traits>
 #include <vector>
@@ -105,6 +108,12 @@ namespace {
     template <> TXO Deserialize(const QByteArray &, bool *);
     template <> QByteArray Serialize(const TXOInfo &);
     template <> TXOInfo Deserialize(const QByteArray &, bool *);
+
+    using TxNumVec = std::vector<TxNum>;
+    // this serializes a vector of TxNums to a compact representation (6 bytes, eg 48 bits per TxNum), in little endian byte order
+    template <> QByteArray Serialize(const TxNumVec &);
+    // this deserializes a vector of TxNums from a compact representation (6 bytes, eg 48 bits per TxNum), assuming little endian byte order
+    template <> TxNumVec Deserialize(const QByteArray &, bool *);
 
     /// NOTE: The slice should live as long as the returned QByteArray does.  The QByteArray is a weak pointer into the slice!
     inline QByteArray FromSlice(const rocksdb::Slice &s) { return QByteArray::fromRawData(s.data(), int(s.size())); }
@@ -231,7 +240,51 @@ namespace {
     // deserializes as raw bytes from struct
     template <> BlkInfo Deserialize(const QByteArray &, bool *);
 
+    // Associative merge operator used for scripthash history concatenation
+    // The simpler, associative merge operator.
+    class ConcatOperator : public rocksdb::AssociativeMergeOperator {
+    public:
+        using Slice = rocksdb::Slice;
+        using Logger = rocksdb::Logger;
+
+        ~ConcatOperator() override;
+
+        // Gives the client a way to express the read -> modify -> write semantics
+        // key:           (IN) The key that's associated with this merge operation.
+        // existing_value:(IN) null indicates the key does not exist before this op
+        // value:         (IN) the value to update/merge the existing_value with
+        // new_value:    (OUT) Client is responsible for filling the merge result
+        // here. The string that new_value is pointing to will be empty.
+        // logger:        (IN) Client could use this to log errors during merge.
+        //
+        // Return true on success.
+        // All values passed in will be client-specific values. So if this method
+        // returns false, it is because client specified bad data or there was
+        // internal corruption. The client should assume that this will be treated
+        // as an error by the library.
+        bool Merge(const rocksdb::Slice& key, const rocksdb::Slice* existing_value,
+                   const rocksdb::Slice& value, std::string* new_value,
+                   rocksdb::Logger* logger) const override;
+        const char* Name() const override { return "ConcatOperator"; /* NOTE: this must be the same for the same db each time it is opened! */ }
+    };
 }
+
+ConcatOperator::~ConcatOperator() {} // weak vtable warning prevention
+
+bool ConcatOperator::Merge(const rocksdb::Slice& key, const rocksdb::Slice* existing_value,
+                           const rocksdb::Slice& value, std::string* new_value, rocksdb::Logger* logger) const
+{
+    (void)key; (void)logger;
+    new_value->resize( (existing_value ? existing_value->size() : 0) + value.size() );
+    char *cur = new_value->data();
+    if (existing_value) {
+        std::memcpy(cur, existing_value->data(), existing_value->size());
+        cur += existing_value->size();
+    }
+    std::memcpy(cur, value.data(), value.size());
+    return true;
+}
+
 
 struct Storage::Pvt
 {
@@ -245,6 +298,8 @@ struct Storage::Pvt
     struct RocksDBs {
         const rocksdb::ReadOptions defReadOpts; ///< avoid creating this each time
         const rocksdb::WriteOptions defWriteOpts; ///< avoid creating this each time
+
+        rocksdb::Options opts, shistOpts;
 
         std::unique_ptr<rocksdb::DB> meta, headers, blkinfo, utxoset, shist;
     } db;
@@ -277,7 +332,7 @@ void Storage::startup()
 {
     {   // open all db's ...
 
-        rocksdb::Options opts;
+        rocksdb::Options & opts(p->db.opts), &shistOpts(p->db.shistOpts);
         // Optimize RocksDB. This is the easiest way to get RocksDB to perform well
         opts.IncreaseParallelism(int(Util::getNPhysicalProcessors()));
         opts.OptimizeLevelStyleCompaction();
@@ -287,22 +342,24 @@ void Storage::startup()
         //opts.max_open_files = 50; ///< testing -- seems this affects memory usage see: https://github.com/facebook/rocksdb/issues/4112
         opts.keep_log_file_num = 5; // ??
         opts.compression = rocksdb::CompressionType::kNoCompression; // for now we test without compression. TODO: characterize what is fastest and best..
+        shistOpts = opts; // copy what we just did
+        shistOpts.merge_operator = std::make_shared<ConcatOperator>(); // this set of options uses the concat merge operator (we use this to append to history entries in the db)
 
-        using DBInfoTup = std::tuple<QString, std::unique_ptr<rocksdb::DB> &>;
+        using DBInfoTup = std::tuple<QString, std::unique_ptr<rocksdb::DB> &, const rocksdb::Options &>;
         const std::list<DBInfoTup> dbs2open = {
-            { "meta", p->db.meta },
-            { "headers", p->db.headers },
-            { "blkinfo" , p->db.blkinfo },
-            { "utxoset", p->db.utxoset },
-            { "scripthash_history", p->db.shist },
+            { "meta", p->db.meta, opts },
+            { "headers", p->db.headers, opts },
+            { "blkinfo" , p->db.blkinfo , opts },
+            { "utxoset", p->db.utxoset, opts },
+            { "scripthash_history", p->db.shist, shistOpts },
         };
-        const auto OpenDB = [this, &opts](const DBInfoTup &tup) {
-            auto & [name, uptr] = tup;
+        const auto OpenDB = [this](const DBInfoTup &tup) {
+            auto & [name, uptr, opts] = tup;
             rocksdb::DB *db = nullptr;
             rocksdb::Status s;
             // try and open database
             const QString path = options->datadir + QDir::separator() + name;
-            s = rocksdb::DB::Open(opts, path.toStdString(), &db);
+            s = rocksdb::DB::Open( opts, path.toStdString(), &db);
             if (!s.ok() || !db)
                 throw DatabaseError(QString("Error opening %1 database: %2 (path: %3)")
                                     .arg(name).arg(QString::fromStdString(s.ToString())).arg(path));
@@ -737,8 +794,13 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve [[maybe_un
                     if (info.confirmedHeight.has_value() && info.confirmedHeight.value() != ppb->height) {
                         // was a prevout from a previos block.. so the ppb didn't have it in the touched set..
                         // mark the spend as having touched this hashX for this ppb now.
-                        ppb->hashXAggregated[info.hashX].ins.emplace_back(inum);
+                        auto & ag = ppb->hashXAggregated[info.hashX];
+                        ag.ins.emplace_back(inum);
                         newHashXInputsResolved.insert(info.hashX);
+                        // mark its txidx
+                        if (auto & vec = ag.txNumsTouchedByHashX; vec.empty() || vec.back() != in.txIdx)
+                            vec.emplace_back(in.txIdx);
+
                     }
                     if constexpr (debugPrt) {
                         const auto dbgTxIdHex = ppb->txHashForInputIdx(inum).toHex();
@@ -765,12 +827,45 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve [[maybe_un
             for (const auto & hashX : newHashXInputsResolved) {
                 auto & ag = ppb->hashXAggregated[hashX];
                 std::sort(ag.ins.begin(), ag.ins.end()); // make sure they are sorted
+                std::sort(ag.txNumsTouchedByHashX.begin(), ag.txNumsTouchedByHashX.end());
+                auto last = std::unique(ag.txNumsTouchedByHashX.begin(), ag.txNumsTouchedByHashX.end());
+                ag.txNumsTouchedByHashX.erase(last, ag.txNumsTouchedByHashX.end());
                 ag.ins.shrink_to_fit();
+                ag.txNumsTouchedByHashX.shrink_to_fit();
             }
 
             if constexpr (debugPrt)
                 Debug() << "utxoset size: " << utxoSetSize() << " block: " << ppb->height;
         }
+
+        {
+            // now.. update the txNumsTouchedByHashX to be offset from txNum0 for this block, and save history to db table
+            // history is hashX -> TxNumVec (serialized) as a serities of 6-bytes txNums in blockchain order as they appeared.
+            constexpr bool debugSh = false;
+            qint64 t0 = 0;
+            if constexpr (debugSh) t0 = Util::getTimeNS();
+            size_t ctr = 0;
+            rocksdb::WriteBatch batch;
+            for (auto & [hashX, ag] : ppb->hashXAggregated) {
+                for (auto & txNum : ag.txNumsTouchedByHashX) {
+                    txNum += blockTxNum0; // transform local txIdx to -> txNum (global mapping)
+                }
+                if (debugSh) ctr += ag.txNumsTouchedByHashX.size();
+                // save scripthash history for this hashX, by appending to existing history. Note that this uses
+                // the 'ConcatOperator' class we defined in this file, which requires rocksdb be compiled with RTTI.
+                if (auto st = batch.Merge(ToSlice(hashX), ToSlice(Serialize(ag.txNumsTouchedByHashX))); !st.ok())
+                    throw DatabaseError(QString("batch merge fail for hashX %1, block height %2: %3")
+                                        .arg(QString(hashX.toHex())).arg(ppb->height).arg(QString::fromStdString(st.ToString())));
+            }
+            if (auto st = p->db.shist->Write(p->db.defWriteOpts, &batch) ; !st.ok())
+                throw DatabaseError(QString("batch merge fail for block height %1: %2")
+                                    .arg(ppb->height).arg(QString::fromStdString(st.ToString())));
+            if constexpr (debugSh) {
+                auto elapsed = Util::getTimeNS() - t0;
+                Debug() << "Wrote " << ctr << " history entries in " << QString::number(elapsed/1e6, 'f', 3) << " msec";
+            }
+        }
+
 
         // save BlkInfo
         static const QString blkInfoErrMsg("Error writing BlkInfo to db");
@@ -891,4 +986,48 @@ namespace {
         }
         return ret;
     }
+
+    template <> QByteArray Serialize(const TxNumVec &v)
+    {
+        // this serializes a vector of TxNums to a compact representation (6 bytes, eg 48 bits per TxNum), in little endian byte order
+        QByteArray ret(int(v.size()*6), Qt::Uninitialized);
+        uint8_t *cur = reinterpret_cast<uint8_t *>(ret.data());
+        for (const auto num : v) {
+            cur[0] = (num >> 0) & 0xff;
+            cur[1] = (num >> 8) & 0xff;
+            cur[2] = (num >> 16) & 0xff;
+            cur[3] = (num >> 24) & 0xff;
+            cur[4] = (num >> 32) & 0xff;
+            cur[5] = (num >> 40) & 0xff;
+            cur += 6;
+        }
+        return ret;
+    }
+    // this deserializes a vector of TxNums from a compact representation (6 bytes, eg 48 bits per TxNum), assuming little endian byte order
+    template <> TxNumVec Deserialize [[maybe_unused]] (const QByteArray &ba, bool *ok)
+    {
+        const size_t blen = size_t(ba.length());
+        const size_t N = blen / 6;
+        TxNumVec ret;
+        if (N * 6 != blen) {
+            // wrong size, not multiple of 6; bail
+            if (ok) *ok = false;
+            return ret;
+        }
+        if (ok) *ok = true;
+        const uint8_t *cur = reinterpret_cast<const uint8_t *>(ba.begin()), *end = reinterpret_cast<const uint8_t *>(ba.end());
+        ret.reserve(N);
+        for ( ; cur < end; cur += 6) {
+            ret.emplace_back(
+                (TxNum(cur[0]) << 0)
+              | (TxNum(cur[1]) << 8)
+              | (TxNum(cur[2]) << 16)
+              | (TxNum(cur[3]) << 24)
+              | (TxNum(cur[4]) << 32)
+              | (TxNum(cur[5]) << 40)
+            );
+        }
+        return ret;
+    }
+
 }
