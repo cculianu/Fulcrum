@@ -112,7 +112,8 @@ RecordFile::BatchAppendContext::BatchAppendContext(std::shared_mutex &mut,
 }
 
 RecordFile::BatchAppendContext::~BatchAppendContext()
-{ // updates the header with the new count, releases lock
+{
+    // updates the header with the new count, does some checks, releases lock
     QString errStr;
     if (UNLIKELY(!file.isOpen()))
         errStr = "File not open";

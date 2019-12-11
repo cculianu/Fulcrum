@@ -52,10 +52,12 @@ public:
         std::atomic<uint64_t> & nrecs; ///< ref into RecordFile nrecs
         QFile & file; ///< ref into RecordFile file
         const size_t recsz;
-    public:
-        /// do not call this constructor. Used by beginBatchAppend below...
+        // internal use. Used by RecordFile::beginBatchAppend
         BatchAppendContext(std::shared_mutex &mut, std::atomic<uint64_t> &nr, QFile & f, size_t recsz);
-        ~BatchAppendContext(); // updates the header with the new count, releases lock
+        friend class ::RecordFile;
+    public:
+        /// updates the header with the new count, does some checks (may quit app with Fatal() if checks fail), releases lock
+        ~BatchAppendContext();
         /// Append a record to the end of the file. Does not write to the file header until d'tor is called (at which
         /// point the file's record count is updated in the header).
         /// Note that it is imperative that the passed-in data be sized recordSize(). No checks are done as a
