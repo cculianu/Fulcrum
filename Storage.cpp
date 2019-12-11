@@ -244,10 +244,9 @@ namespace {
     // The simpler, associative merge operator.
     class ConcatOperator : public rocksdb::AssociativeMergeOperator {
     public:
-        using Slice = rocksdb::Slice;
-        using Logger = rocksdb::Logger;
-
         ~ConcatOperator() override;
+
+        mutable std::atomic<uint64_t> merges = 0;
 
         // Gives the client a way to express the read -> modify -> write semantics
         // key:           (IN) The key that's associated with this merge operation.
@@ -275,6 +274,7 @@ bool ConcatOperator::Merge(const rocksdb::Slice& key, const rocksdb::Slice* exis
                            const rocksdb::Slice& value, std::string* new_value, rocksdb::Logger* logger) const
 {
     (void)key; (void)logger;
+    ++merges;
     new_value->resize( (existing_value ? existing_value->size() : 0) + value.size() );
     char *cur = new_value->data();
     if (existing_value) {
@@ -413,7 +413,11 @@ void Storage::cleanup()
 auto Storage::stats() const -> Stats
 {
     // TODO ...
-    return Stats();
+    auto & mop = p->db.shistOpts.merge_operator;
+    ConcatOperator *c = mop ? dynamic_cast<ConcatOperator *>(mop.get()) : nullptr;
+    QVariantMap ret;
+    ret["merge calls"] = c ? c->merges.load() : QVariant();
+    return ret;
 }
 
 // Keep returned LockGuard in scope while you use the HeaderVerifier

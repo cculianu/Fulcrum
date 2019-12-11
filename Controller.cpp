@@ -755,6 +755,7 @@ auto Controller::stats() const -> Stats
         Util::updateMap(m, QVariantMap{{"tasks" , l}});
     }
     st["Controller"] = m;
+    st["Storage"] = storage->statsSafe();
     return st;
 }
 
