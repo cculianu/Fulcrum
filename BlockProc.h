@@ -46,6 +46,7 @@ struct PreProcessedBlock
         unsigned txIdx = 0;  ///< this is an index into the `txInfos` vector declared above
         IONum outN = 0; ///< this is an index into the tx's vout vector (*NOT* this class's `outputs`!) (again, tx's can't have more than 65535 inputs -- if that changes, fixme!)
         bitcoin::Amount amount;
+        std::optional<unsigned> spentInInputIndex; ///< if has_value, the output was spent this block in input index (index into the `inputs` array)
     };
 
     struct InputPt {

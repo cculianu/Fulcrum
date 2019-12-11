@@ -103,6 +103,8 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bi
             if (info.output0Index.has_value())
                 inp.parentTxOutIdx.emplace( info.output0Index.value() + inp.prevoutN ); // save the index into the `outputs` array where the parent tx to this spend occurred
             else { assert(0); }
+            auto & outp = outputs[ inp.parentTxOutIdx.value() ];
+            outp.spentInInputIndex.emplace( inIdx ); // mark the output as spent by this index
             const auto & tx = b.vtx[txIdx];
             assert(inp.prevoutN < tx->vout.size());
             if (const auto cscript = tx->vout[inp.prevoutN].scriptPubKey;

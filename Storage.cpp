@@ -680,18 +680,13 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve [[maybe_un
             // add outputs
 
             for (const auto & [hashX, ag] : ppb->hashXAggregated) {
-                std::unordered_set<unsigned> outputsSpentInSameBlock;
-                for (const auto iidx : ag.ins) {
-                    if (const auto & opt = ppb->inputs[iidx].parentTxOutIdx; opt.has_value())
-                        outputsSpentInSameBlock.insert(opt.value());
-                }
                 for (const auto oidx : ag.outs) {
-                    if (outputsSpentInSameBlock.count(oidx)) {
+                    const auto & out = ppb->outputs[oidx];
+                    if (out.spentInInputIndex.has_value()) {
                         if constexpr (debugPrt)
-                            Debug() << "Skipping output #: " << oidx << " (was spent in same block)";
+                            Debug() << "Skipping output #: " << oidx << " for " << ppb->txInfos[out.txIdx].hash.toHex() << " (was spent in same block tx: " << ppb->txInfos[ppb->inputs[out.spentInInputIndex.value()].txIdx].hash.toHex() << ")";
                         continue;
                     }
-                    const auto & out = ppb->outputs[oidx];
                     const TxHash & hash = ppb->txInfos[out.txIdx].hash;
                     TXOInfo info;
                     info.hashX = hashX;
