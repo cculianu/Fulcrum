@@ -655,15 +655,16 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve [[maybe_un
         }
 
         {  // add txnum -> txhash association to the TxNumsFile...
-            auto batch = p->txNumsFile->beginBatchAppend();
+            auto batch = p->txNumsFile->beginBatchAppend(); // may throw if io error in c'tor here.
             QString errStr;
             for (const auto & txInfo : ppb->txInfos) {
-                if (!batch.append(txInfo.hash, &errStr))
+                if (!batch.append(txInfo.hash, &errStr)) // does not throw here, but we do.
                     throw InternalError(QString("Batch append for txNums failed: %1.\n\n"
                                                 "Database is now likely corrupted. Please delete the datadir and resynch.\n")
                                         .arg(errStr));
             }
-            // <-- the batch d'tor may close the app on error here if a low-level file error occurred (see RecordFile.cpp ~BatchAppendContext())
+            // <-- The batch d'tor may close the app on error here with Fatal() if a low-level file error occurs now
+            //     on header update (see: RecordFile.cpp, ~BatchAppendContext()).
         }
 
         p->txNumNext += ppb->txInfos.size(); // update internal counter

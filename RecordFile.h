@@ -22,8 +22,9 @@ public:
     struct FileFormatError : public FileError { using FileError::FileError; ~FileFormatError() override; };
     struct FileOpenError : public FileError { using FileError::FileError; ~FileOpenError() override; };
 
-    /// Throws Exception if it cannot open fileName, or if filename was opened but doesn't seem cromulent (bad magic, bad size, etc).
-    /// Note fileName will be created if it does not already exist and initialized with the magicBytes and header.
+    /// Throws Exception (typically one of the above Exceptions) if it cannot open fileName, or if filename was opened
+    /// but doesn't seem cromulent (bad magic, bad size, etc).
+    /// Note 'fileName' will be created if it does not already exist and initialized with the magicBytes and header.
     RecordFile(const QString &fileName, size_t recordSize, uint32_t magicBytes = 0x002367f0) noexcept(false);
     ~RecordFile();
 
@@ -39,6 +40,17 @@ public:
     /// Returns a QByteArray of size recsz or an empty QByteArray on error.
     QByteArray readRecord(uint64_t recNum, QString *errStr = nullptr) const;
 
+    /// Thread-safe. Like the above but does a batch read of count records sequantially starting at recNumStart.
+    /// If the returned vector is not 'count' sized, either not enough records exist in the file or an error occurred
+    /// (and *errStr will contain the error message).
+    std::vector<QByteArray> readRecords(uint64_t recNumStart, size_t count, QString *errStr = nullptr) const;
+
+    /// Thread-safe.  Implicitly opens a private copy of the file and reads recNums from the file. Under non-error
+    /// circumstances, the returned array will be of the same size as the recNums array, with corresponding indices
+    /// containing the data obtained per recNum.  On error the returned array will be shorter than anticipated
+    /// and *errStr (if specified) will be set appropriately.  Note that the recNums array is not "de-duplicated".
+    std::vector<QByteArray> readRandomRecords(const std::vector<uint64_t> & recNums, QString *errStr = nullptr) const;
+
     /// Thread-safe, but it does take an exclusive lock.  Appends data to the file. The new record number is returned.
     /// Note that an error leads to an optional with no value being returned.  Data *must* be recordSize() bytes.
     /// Note: updateHeader is a performance optimization. If it's false, we don't write the new number of records
@@ -47,13 +59,16 @@ public:
     /// which cuts down further on redundant checks (deferring them until the very end when the batch context ends).
     std::optional<uint64_t> appendRecord(const QByteArray &data, bool updateHeader = true, QString *errStr = nullptr);
 
+    /// Deletes every record from the file starting with newNumRecords until the end of the file. Updates the header
+    /// and internal counter to reflect the new count.  Returns the new numRecords() of the file (under non-error
+    /// circumstances this should be identical to the supplied argument, newNumRecords).
+    uint64_t truncate(uint64_t newNumRecords, QString *errStr = nullptr);
+
     class BatchAppendContext {
+        RecordFile & rf;
         std::unique_lock<std::shared_mutex> lock;
-        std::atomic<uint64_t> & nrecs; ///< ref into RecordFile nrecs
-        QFile & file; ///< ref into RecordFile file
-        const size_t recsz;
         // internal use. Used by RecordFile::beginBatchAppend
-        BatchAppendContext(std::shared_mutex &mut, std::atomic<uint64_t> &nr, QFile & f, size_t recsz);
+        BatchAppendContext(RecordFile &);
         friend class ::RecordFile;
     public:
         /// updates the header with the new count, does some checks (may quit app with Fatal() if checks fail), releases lock
@@ -66,6 +81,10 @@ public:
         bool append(const QByteArray &data, QString *errStr = nullptr);
     };
 
+    /// May throw Exception if the file is in an inconsistent state or if cannot seek (low-level IO error).
+    /// Otherwise returnes a locking context. Use context.append() to write batches of records to the end of the file.
+    /// The locked context is released on BatchAppendContext destruction (at which time the file's header is also updated
+    /// to reflect the new counts).
     BatchAppendContext beginBatchAppend();
 
 private:
@@ -83,5 +102,8 @@ private:
     static constexpr qint64 offset0() { return hdrsz; }
     static constexpr qint64 offsetOfNRecs() { return sizeof(magic); }
     qint64 offsetOfRec(uint64_t recNum) const { return qint64(offset0() + recNum*recsz); }
+
+    QByteArray readRandomCommon(QFile & f, uint64_t recNum, QString *errStr = nullptr) const;
+    bool writeNewSizeToHeader(QString *errStr = nullptr);
 };
 
