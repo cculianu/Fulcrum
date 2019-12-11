@@ -35,21 +35,11 @@ namespace {
     static const rocksdb::Slice kMeta{"meta"}, kNumHeaders{"num_headers"};
     static constexpr size_t MAX_HEADERS = 100000000; // 100 mln max headers for now.
 
-    /// NOTE: the byte array should live as long as the slice does. slice is just a weak ref into the byte array
-    inline rocksdb::Slice ToSlice(const QByteArray &ba) { return rocksdb::Slice(ba.constData(), size_t(ba.size())); }
-    /// NOTE: The slice should live as long as the returned QByteArray does.  The QByteArray is a weak pointer into the slice!
-    inline QByteArray FromSlice(const rocksdb::Slice &s) { return QByteArray::fromRawData(s.data(), int(s.size())); }
-    /// Turn a number eg uint64_t into a db slice directly by just pointing to its memory.
-    /// NOTE: The Scalar s should live at least as long as the Slice.
-    template <typename Scalar,
-              std::enable_if_t<std::is_scalar_v<Scalar> && !std::is_pointer_v<Scalar>, int> = 0>
-    inline rocksdb::Slice ScalarToSlice(const Scalar &s) { return rocksdb::Slice(reinterpret_cast<const char *>(&s), sizeof(s)); }
-
     // serialize/deser -- for basic types we use QDataStream, but we also have specializations at the end of this file
     template <typename Type>
     QByteArray Serialize(const Type & n) {
         QByteArray ba;
-        if constexpr (std::is_same_v<Type, QByteArray>) {
+        if constexpr (std::is_base_of_v<QByteArray, Type>) {
             ba = n;
         } else {
             QDataStream ds(&ba, QIODevice::WriteOnly|QIODevice::Truncate);
@@ -60,7 +50,7 @@ namespace {
     template <typename Type>
     Type Deserialize(const QByteArray &ba, bool *ok = nullptr) {
         Type ret{};
-        if constexpr (std::is_same_v<Type, QByteArray>) {
+        if constexpr (std::is_base_of_v<QByteArray, Type>) {
             ret = ba;
         } else {
             QDataStream ds(ba);
@@ -116,6 +106,39 @@ namespace {
     template <> QByteArray Serialize(const TXOInfo &);
     template <> TXOInfo Deserialize(const QByteArray &, bool *);
 
+    /// NOTE: The slice should live as long as the returned QByteArray does.  The QByteArray is a weak pointer into the slice!
+    inline QByteArray FromSlice(const rocksdb::Slice &s) { return QByteArray::fromRawData(s.data(), int(s.size())); }
+    /// Turn a number eg uint64_t into a db slice directly by just pointing to its memory.
+    /// NOTE: The Scalar s should live at least as long as the Slice.
+    template <typename Scalar,
+              std::enable_if_t<std::is_scalar_v<Scalar> && !std::is_pointer_v<Scalar>, int> = 0>
+    inline rocksdb::Slice ScalarToSlice(const Scalar &s) { return rocksdb::Slice(reinterpret_cast<const char *>(&s), sizeof(s)); }
+
+    /// Generic conversion from any type we operate on to a rocksdb::Slice. Note that the type in question should have
+    /// a conversion function written (eg Serialize) if it is anything other than a QByteArray or a scalar.
+    template<bool safeScalar=false, typename Thing>
+    auto ToSlice(const Thing &thing) {
+        if constexpr (std::is_base_of_v<rocksdb::Slice, Thing>) {
+            // same type, no-op, return ref to thing (const Slice &)
+            return static_cast<const rocksdb::Slice &>(thing);
+        } else if constexpr (std::is_base_of_v<QByteArray, Thing>) {
+            // QByteArray conversion, return reference to data in QByteArray
+            return rocksdb::Slice(thing.constData(), size_t(thing.size()));
+        } else if constexpr (!safeScalar && std::is_scalar_v<Thing> && !std::is_pointer_v<Thing>) {
+            return ScalarToSlice(thing); // returned slice points to raw scalar memory itself
+        } else {
+            // the purpose of this is to keep the temporary QByteArray alive for as long as the slice itself is alive
+            struct BagOfHolding {
+                QByteArray bytes;
+                rocksdb::Slice slice;
+                operator const rocksdb::Slice &() const { return slice; }
+            } h;
+            h.bytes = Serialize(thing);
+            h.slice = ToSlice(h.bytes);
+            return h; // this holder type "acts like" a Slice due to its operator const Slice &()
+        }
+    };
+
     /// DB read/write helpers
     /// NOTE: these may throw DatabaseError
     /// If missingOk=false, then the returned optional is guaranteed to have a value if this function returns without throwing.
@@ -125,8 +148,8 @@ namespace {
     /// function (uses QDataStream, is platform neutral, but is slightly slower).  If false, we will use the
     /// DeserializeScalar<> fast function for scalars such as ints. It's important to read from the DB in the same
     /// 'safeScalar' mode as was written!
-    template <typename RetType, bool safeScalar = false>
-    std::optional<RetType> GenericDBGet(rocksdb::DB *db, const rocksdb::Slice & key, bool missingOk = false,
+    template <typename RetType, bool safeScalar = false, typename KeyType>
+    std::optional<RetType> GenericDBGet(rocksdb::DB *db, const KeyType & keyIn, bool missingOk = false,
                                         const QString & errorMsgPrefix = QString(),  ///< used to specify a custom error message in the thrown exception
                                         bool acceptExtraBytesAtEndOfData = false,
                                         const rocksdb::ReadOptions & ropts = rocksdb::ReadOptions()) ///< if true, we are ok with extra unparsed bytes in data. otherwise we throw. (this check is only done for !safeScalar mode on basic types)
@@ -134,7 +157,7 @@ namespace {
         rocksdb::PinnableSlice datum;
         std::optional<RetType> ret;
         if (UNLIKELY(!db)) throw InternalError("GenericDBGet was passed a null pointer!");
-        const auto status = db->Get(ropts, db->DefaultColumnFamily(), key, &datum);
+        const auto status = db->Get(ropts, db->DefaultColumnFamily(), ToSlice<safeScalar>(keyIn), &datum);
         if (status.IsNotFound()) {
             if (missingOk)
                 return ret; // optional will not has_value() to indicate missing key
@@ -181,9 +204,10 @@ namespace {
         }
         return ret;
     }
+
     /// Conveneience for above with the missingOk flag set to false. Will always throw or return a real value.
-    template <typename RetType, bool safeScalar = false>
-    RetType GenericDBGetFailIfMissing(rocksdb::DB * db, const rocksdb::Slice &k, const QString &errMsgPrefix = QString(), bool extraDataOk = false,
+    template <typename RetType, bool safeScalar = false, typename KeyType>
+    RetType GenericDBGetFailIfMissing(rocksdb::DB * db, const KeyType &k, const QString &errMsgPrefix = QString(), bool extraDataOk = false,
                                       const rocksdb::ReadOptions & ropts = rocksdb::ReadOptions())
     {
         return GenericDBGet<RetType, safeScalar>(db, k, false, errMsgPrefix, extraDataOk, ropts).value();
@@ -191,43 +215,22 @@ namespace {
 
     /// Throws on all errors. Otherwise writes to db.
     template <bool safeScalar = false, typename KeyType, typename ValueType>
-    void GenericDBPut [[maybe_unused]]
+    void GenericDBPut
                 (rocksdb::DB *db, const KeyType & key, const ValueType & value,
                  const QString & errorMsgPrefix = QString(),  ///< used to specify a custom error message in the thrown exception
                  const rocksdb::WriteOptions & opts = rocksdb::WriteOptions())
     {
-        if constexpr (safeScalar) {
-            auto st = db->Put(opts, ToSlice(Serialize(key)), ToSlice(Serialize(value)));
-            if (!st.ok()) {
-                throw DatabaseError(QString("%1: %2")
-                                    .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : "Error writing object to db")
-                                    .arg(QString::fromStdString(st.ToString())));
-            }
-        } else {
-            // raw/unsafe scalar
-            QByteArray serKey, serVal;
-            if constexpr (std::is_scalar_v<KeyType> && !std::is_pointer_v<KeyType>)
-                serKey = SerializeScalarNoCopy(key);
-            else
-                serKey = Serialize(key);
-            if constexpr (std::is_scalar_v<ValueType> && !std::is_pointer_v<ValueType>)
-                serVal = SerializeScalarNoCopy(value);
-            else
-                serVal = Serialize(value);
-            auto st = db->Put(opts, ToSlice(serKey), ToSlice(serVal));
-            if (!st.ok()) {
-                throw DatabaseError(QString("%1: %2")
-                                    .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : "Error writing object to db")
-                                    .arg(QString::fromStdString(st.ToString())));
-            }
-        }
+        auto st = db->Put(opts, ToSlice<safeScalar>(key), ToSlice<safeScalar>(value));
+        if (!st.ok())
+            throw DatabaseError(QString("%1: %2")
+                                .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : "Error writing object to db")
+                                .arg(QString::fromStdString(st.ToString())));
     }
-
 
     // some helper data structs
     struct BlkInfo {
         TxNum txNum0 = 0;
-        unsigned nTx = 0, nIns = 0, nOuts = 0;
+        unsigned nTx = 0;
     };
 }
 
@@ -458,7 +461,7 @@ auto Storage::headerForHeight(unsigned height, QString *err) -> std::optional<He
         try {
             ret.emplace(
                 GenericDBGetFailIfMissing<QByteArray>(
-                    p->db.headers.get(), ScalarToSlice(uint32_t(height)), errMsg, false, p->db.defReadOpts));
+                    p->db.headers.get(), uint32_t(height), errMsg, false, p->db.defReadOpts));
             if (UNLIKELY(ret.value().size() != p->blockHeaderSize)) {
                 ret.reset();
                 throw DatabaseSerializationError("Bad header read from db. Wrong size!"); // jumps to below catch
@@ -516,7 +519,7 @@ void Storage::loadCheckHeadersInDB()
             // read db
             for (uint32_t i = 0; i < num; ++i) {
                 // guaranteed to return a value or throw
-                const auto bytes = GenericDBGetFailIfMissing<QByteArray>(db, ScalarToSlice(uint32_t(i)), errMsg, false, p->db.defReadOpts);
+                const auto bytes = GenericDBGetFailIfMissing<QByteArray>(db, uint32_t(i), errMsg, false, p->db.defReadOpts);
                 if (UNLIKELY(bytes.size() != p->blockHeaderSize))
                     throw DatabaseFormatError(QString("Error reading header %1, wrong size: %2").arg(i).arg(bytes.size()));
                 if (!verif(bytes, &err))
@@ -597,11 +600,8 @@ void Storage::utxoAddToDB(const TXO &txo, const TXOInfo &info)
 {
     assert(bool(p->db.utxoset));
     if (txo.isValid()) {
-        auto stat = p->db.utxoset->Put(p->db.defWriteOpts, ToSlice(Serialize(txo)), ToSlice(Serialize(info)));
-        if (!stat.ok()) {
-            throw DatabaseError(QString("Failed to write a utxo (%1:%2) to the db: %3")
-                                .arg(QString(txo.prevoutHash.toHex())).arg(txo.prevoutN).arg(QString::fromStdString(stat.ToString())));
-        }
+        static const QString errMsgPrefix("Failed to add a utxo to the utxo db");
+        GenericDBPut(p->db.utxoset.get(), txo, info, errMsgPrefix, p->db.defWriteOpts); // may throw on failure
         ++p->utxoCt;
     }
 }
@@ -609,7 +609,8 @@ void Storage::utxoAddToDB(const TXO &txo, const TXOInfo &info)
 std::optional<TXOInfo> Storage::utxoGetFromDB(const TXO &txo, bool throwIfMissing)
 {
     assert(bool(p->db.utxoset));
-    return GenericDBGet<TXOInfo>(p->db.utxoset.get(), ToSlice(Serialize(txo)), !throwIfMissing, QString(), false, p->db.defReadOpts);
+    static const QString errMsgPrefix("Failed to read a utxo to the utxo db");
+    return GenericDBGet<TXOInfo>(p->db.utxoset.get(), txo, !throwIfMissing, errMsgPrefix, false, p->db.defReadOpts);
 }
 /// Delete a Utxo from the db. Will throw only on database error (but not if it was missing).
 void Storage::utxoDeleteFromDB(const TXO &txo)
