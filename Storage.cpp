@@ -246,7 +246,7 @@ namespace {
     public:
         ~ConcatOperator() override;
 
-        mutable std::atomic<uint64_t> merges = 0;
+        mutable std::atomic<unsigned> merges = 0;
 
         // Gives the client a way to express the read -> modify -> write semantics
         // key:           (IN) The key that's associated with this merge operation.

@@ -475,7 +475,7 @@ namespace Util {
         } else {
             auto taskp = std::make_shared< std::packaged_task<RET()> >(lambda);
             auto future = taskp->get_future();
-            QTimer::singleShot(0, obj, [taskp] { (*taskp)(); });
+            QTimer::singleShot(0, const_cast<QObject *>(obj), [taskp] { (*taskp)(); });
             if (timeout_ms >= 0) {
                 if (auto status = future.wait_for(std::chrono::milliseconds(timeout_ms));
                         status != std::future_status::ready) {
@@ -509,7 +509,7 @@ namespace Util {
     /// By default if when_ms is 0, the object will have the lambda invoked in its thread as soon as it
     /// returns to the event loop.  Always returns immediately.
     inline void AsyncOnObject(const QObject *obj, const VoidFunc & lambda, unsigned when_ms=0, Qt::TimerType ttype = Qt::TimerType::CoarseTimer) {
-        QTimer::singleShot(int(when_ms), ttype, obj, lambda);
+        QTimer::singleShot(int(when_ms), ttype, const_cast<QObject *>(obj), lambda);
     }
 
     /// This is an alternative to creating signal/slot pairs
