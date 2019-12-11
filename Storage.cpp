@@ -108,11 +108,6 @@ namespace {
 
     /// NOTE: The slice should live as long as the returned QByteArray does.  The QByteArray is a weak pointer into the slice!
     inline QByteArray FromSlice(const rocksdb::Slice &s) { return QByteArray::fromRawData(s.data(), int(s.size())); }
-    /// Turn a number eg uint64_t into a db slice directly by just pointing to its memory.
-    /// NOTE: The Scalar s should live at least as long as the Slice.
-    template <typename Scalar,
-              std::enable_if_t<std::is_scalar_v<Scalar> && !std::is_pointer_v<Scalar>, int> = 0>
-    inline rocksdb::Slice ScalarToSlice(const Scalar &s) { return rocksdb::Slice(reinterpret_cast<const char *>(&s), sizeof(s)); }
 
     /// Generic conversion from any type we operate on to a rocksdb::Slice. Note that the type in question should have
     /// a conversion function written (eg Serialize) if it is anything other than a QByteArray or a scalar.
@@ -125,7 +120,7 @@ namespace {
             // QByteArray conversion, return reference to data in QByteArray
             return rocksdb::Slice(thing.constData(), size_t(thing.size()));
         } else if constexpr (!safeScalar && std::is_scalar_v<Thing> && !std::is_pointer_v<Thing>) {
-            return ScalarToSlice(thing); // returned slice points to raw scalar memory itself
+            return rocksdb::Slice(reinterpret_cast<const char *>(&thing), sizeof(thing)); // returned slice points to raw scalar memory itself
         } else {
             // the purpose of this is to keep the temporary QByteArray alive for as long as the slice itself is alive
             struct BagOfHolding {
@@ -445,9 +440,9 @@ void Storage::appendHeader(const Header &h, unsigned int height)
     if (UNLIKELY(height != targetHeight))
         throw InternalError(QString("Bad use of appendHeader -- expected height %1, got height %2").arg(targetHeight).arg(height));
     rocksdb::WriteBatch batch;
-    if (auto stat = batch.Put(ScalarToSlice(uint32_t(height)), ToSlice(h)); !stat.ok())
+    if (auto stat = batch.Put(ToSlice(uint32_t(height)), ToSlice(h)); !stat.ok())
         throw DatabaseError(QString("Error writing header %1: %2").arg(height).arg(QString::fromStdString(stat.ToString())));
-    if (auto stat = batch.Put(kNumHeaders, ToSlice(Serialize(uint32_t(height+1)))); !stat.ok())
+    if (auto stat = batch.Put(kNumHeaders, ToSlice<true>(uint32_t(height+1))); !stat.ok())
         throw DatabaseError(QString("Error writing header size key: %1").arg(QString::fromStdString(stat.ToString())));
     if (auto stat = p->db.headers->Write(p->db.defWriteOpts, &batch); !stat.ok())
         throw DatabaseError(QString("Error writing header %1: %2").arg(height).arg(QString::fromStdString(stat.ToString())));
