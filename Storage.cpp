@@ -586,7 +586,7 @@ void Storage::loadCheckUTXOsInDB()
 void Storage::loadCheckTxNumsFile()
 {
     // may throw.
-    p->txNumsFile = std::make_unique<RecordFile>(options->datadir + QDir::separator() + "TxNum2TxHash", HashLen, 0x000012e2);
+    p->txNumsFile = std::make_unique<RecordFile>(options->datadir + QDir::separator() + "txnum2txhash", HashLen, 0x000012e2);
     p->txNumNext = p->txNumsFile->numRecords();
     Debug() << "Read TxNumNext from file: " << p->txNumNext.load();
 }
