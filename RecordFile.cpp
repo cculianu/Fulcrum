@@ -1,6 +1,8 @@
 #include "RecordFile.h"
 #include "Util.h"
 
+#include <cassert>
+
 RecordFile::FileError::~FileError() {} // prevent weak vtable warning
 RecordFile::FileFormatError::~FileFormatError() {} // prevent weak vtable warning
 RecordFile::FileOpenError::~FileOpenError() {} // prevent weak vtable warning
@@ -101,6 +103,14 @@ auto RecordFile::beginBatchAppend() -> BatchAppendContext
     return BatchAppendContext(rwlock, nrecs, file, recsz);
 }
 
+RecordFile::BatchAppendContext::BatchAppendContext(std::shared_mutex &mut,
+                                                   std::atomic<uint64_t> &nr, QFile & f, size_t recsz)
+    : lock(mut), nrecs(nr), file(f), recsz(recsz)
+{
+    assert(file.isOpen() && file.size() == qint64(hdrsz + nrecs.load()*recsz));
+    file.seek(file.size()); // seek to end with lock held
+}
+
 RecordFile::BatchAppendContext::~BatchAppendContext()
 { // updates the header with the new count, releases lock
     QString errStr;
@@ -111,10 +121,10 @@ RecordFile::BatchAppendContext::~BatchAppendContext()
     else if (const auto newNRecs = nrecs.load();
                 !file.write(QByteArray::fromRawData(reinterpret_cast<const char *>(&newNRecs), sizeof(newNRecs))))
         errStr = QString("Cannot write header for %1: %2").arg(file.fileName()).arg(file.errorString());
-    else if (size_t(file.size()) != hdrsz + recsz*nrecs) {
-        errStr = QString("File size mistmatch for %1, %2 is not a multiple of %3 + %4 header. File is now likely corrupted.")
+    else if (size_t(file.size()) != hdrsz + recsz*newNRecs) {
+        errStr = QString("File size mistmatch for %1, %2 is not a multiple of %3 (+ %4 header). File is now likely corrupted.")
                 .arg(file.fileName()).arg(file.size()).arg(recsz).arg(hdrsz);
     }
     if (!errStr.isEmpty())
-        Fatal() << errStr;
+        Fatal() << errStr; // app will quit in main event loop after printing error.
 }

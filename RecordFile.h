@@ -53,14 +53,13 @@ public:
         const size_t recsz;
     public:
         /// do not call this constructor. Used by beginBatchAppend below...
-        BatchAppendContext(std::shared_mutex &mut, std::atomic<uint64_t> &nr, QFile & f, size_t recsz) : lock(mut), nrecs(nr), file(f), recsz(recsz) {
-            assert(file.size() == qint64(hdrsz + nrecs.load()*recsz));
-            file.seek(file.size()); // seek to end with lock held
-        }
+        BatchAppendContext(std::shared_mutex &mut, std::atomic<uint64_t> &nr, QFile & f, size_t recsz);
         ~BatchAppendContext(); // updates the header with the new count, releases lock
-        /// append record to the end of the file. does not write to file header until d'tor called to update counts.
+        /// Append a record to the end of the file. Does not write to the file header until d'tor is called (at which
+        /// point the file's record count is updated in the header).
         /// Note that it is imperative that the passed-in data be sized recordSize(). No checks are done as a
-        /// performance shortcut!
+        /// performance shortcut!  If you pass in data that is not recsz bytes, the file may be corrupted or the app
+        /// may quit with a fatal error.
         bool append(const QByteArray &data, QString *errStr = nullptr);
     };
 
