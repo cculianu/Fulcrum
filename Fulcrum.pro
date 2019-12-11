@@ -128,6 +128,7 @@ SOURCES += \
     Mgr.cpp \
     Mixins.cpp \
     Options.cpp \
+    RecordFile.cpp \
     RPC.cpp \
     Servers.cpp \
     SrvMgr.cpp \
@@ -153,6 +154,7 @@ HEADERS += \
     Mgr.h \
     Mixins.h \
     Options.h \
+    RecordFile.h \
     RPC.h \
     Servers.h \
     SrvMgr.h \
