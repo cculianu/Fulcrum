@@ -678,11 +678,10 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve [[maybe_un
             for (size_t i = 0; i < ppb->txInfos.size(); ++i) {
                 const TxNum txnum = txNum0 + i;
                 const TxHash & hash = ppb->txInfos[i].hash;
-                static const QString errMsg1("Error writing a txNum -> txHash entry to the db"),
-                                     errMsg2("Error writing a txHash -> txNum entry to the db");
+                static const QString errMsg("Error writing a txNum -> txHash entry to the db");
                 // txnums are keyed off of uint64_t txNum -- note we save the raw uint64 value here without any
                 // QDataStream encapsulation -- note these may throw
-                GenericDBPut<false>(p->db.txnums.get(), txnum, hash, errMsg1, p->db.defWriteOpts);
+                GenericDBPut<false>(p->db.txnums.get(), txnum, hash, errMsg, p->db.defWriteOpts);
             }
         }
         //auto elapsed = Util::getTimeNS() - t0;
