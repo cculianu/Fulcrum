@@ -122,14 +122,12 @@ namespace {
         } else if constexpr (!safeScalar && std::is_scalar_v<Thing> && !std::is_pointer_v<Thing>) {
             return rocksdb::Slice(reinterpret_cast<const char *>(&thing), sizeof(thing)); // returned slice points to raw scalar memory itself
         } else {
-            // the purpose of this is to keep the temporary QByteArray alive for as long as the slice itself is alive
+            // the purpose of this holder is to keep the temporary QByteArray alive for as long as the slice itself is alive
             struct BagOfHolding {
                 QByteArray bytes;
                 rocksdb::Slice slice;
                 operator const rocksdb::Slice &() const { return slice; }
-            } h;
-            h.bytes = Serialize(thing);
-            h.slice = ToSlice(h.bytes);
+            } h { Serialize(thing), ToSlice(h.bytes) };
             return h; // this holder type "acts like" a Slice due to its operator const Slice &()
         }
     };
