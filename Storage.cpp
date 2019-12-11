@@ -220,11 +220,17 @@ namespace {
                                 .arg(QString::fromStdString(st.ToString())));
     }
 
-    // some helper data structs
+    //// A helper data structs -- written to the blkinfo table. This helps localize a txnum to a specific position in
+    /// a block.  The table is keyed off of block_height(uint32_t) -> serialized BlkInfo (raw bytes)
     struct BlkInfo {
         TxNum txNum0 = 0;
         unsigned nTx = 0;
     };
+    // serializes as raw bytes from struct
+    template <> QByteArray Serialize(const BlkInfo &);
+    // deserializes as raw bytes from struct
+    template <> BlkInfo Deserialize(const QByteArray &, bool *);
+
 }
 
 struct Storage::Pvt
@@ -334,7 +340,7 @@ void Storage::startup()
     // count utxos
     loadCheckUTXOsInDB();
     // check txnums
-    loadCheckTxNumsFile();
+    loadCheckTxNumsFileAndBlkInfo();
 
     start(); // starts our thread
 }
@@ -579,12 +585,32 @@ void Storage::loadCheckUTXOsInDB()
     Debug() << "Read txos from db in " << QString::number((elapsed-t0)/1e6, 'f', 3) << " msec";
 }
 
-void Storage::loadCheckTxNumsFile()
+void Storage::loadCheckTxNumsFileAndBlkInfo()
 {
     // may throw.
     p->txNumsFile = std::make_unique<RecordFile>(options->datadir + QDir::separator() + "txnum2txhash", HashLen, 0x000012e2);
     p->txNumNext = p->txNumsFile->numRecords();
     Debug() << "Read TxNumNext from file: " << p->txNumNext.load();
+    TxNum ct = 0;
+    if (const int height = latestTip().first; height >= 0)
+    {
+        Log() << "Checking tx counts ...";
+        for (int i = 0; i <= height; ++i) {
+            static const QString errMsg("Failed to read a blkInfo from db, the database may be corrupted");
+            const auto blkInfo = GenericDBGetFailIfMissing<BlkInfo>(p->db.blkinfo.get(), uint32_t(i), errMsg, false, p->db.defReadOpts);
+            if (blkInfo.txNum0 != ct)
+                throw DatabaseFormatError(QString("BlkInfo for height %1 does not match computed txNum of %2."
+                                                  "\n\nThe database may be corrupted. Delete the datadir and resynch it.\n")
+                                          .arg(i).arg(ct));
+            ct += blkInfo.nTx;
+        }
+        Log() << ct << " total transactions";
+    }
+    if (ct != p->txNumNext) {
+        throw DatabaseFormatError(QString("BlkInfo txNums do not add up to expected value of %1 != %2."
+                                          "\n\nThe database may be corrupted. Delete the datadir and resynch it.\n")
+                                  .arg(ct).arg(p->txNumNext.load()));
+    }
 }
 
 
@@ -633,7 +659,7 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve [[maybe_un
     const auto verifUndo = p->headerVerifier; // keep a copy for undo purposes in case this fails
 
     try {
-        //const auto blockTxNum0 = p->txNumNext.load();
+        const auto blockTxNum0 = p->txNumNext.load();
 
         // Verify header chain makes sense (by checking hashes, using the shared header verifier)
         QByteArray rawHeader;
@@ -746,7 +772,13 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve [[maybe_un
                 Debug() << "utxoset size: " << utxoSetSize() << " block: " << ppb->height;
         }
 
-        // save blkInfos -- disabled for now since we aren't using it (yet!)
+        // save BlkInfo
+        static const QString blkInfoErrMsg("Error writing BlkInfo to db");
+        GenericDBPut(p->db.blkinfo.get(), uint32_t(ppb->height), BlkInfo{
+                blockTxNum0, // .txNum0
+                unsigned(ppb->txInfos.size()), // .nTx
+            }, blkInfoErrMsg, p->db.defWriteOpts);
+
         /*
         if (nReserve) {
             if (const auto size = p->blkInfos.size(); size + nReserve < p->blkInfos.capacity())
@@ -844,6 +876,19 @@ namespace {
     {
         TXOInfo ret = TXOInfo::fromBytes(ba);
         if (ok) *ok = ret.isValid();
+        return ret;
+    }
+
+    // deep copy, raw bytes
+    template <> QByteArray Serialize(const BlkInfo &b) { return QByteArray(reinterpret_cast<const char *>(&b), int(sizeof(b))); }
+    template <> BlkInfo Deserialize(const QByteArray &ba, bool *ok) {
+        BlkInfo ret;
+        if (ba.length() != sizeof(ret)) {
+            if (ok) *ok = false;
+        } else {
+            if (ok) *ok = true;
+            ret = *reinterpret_cast<const BlkInfo *>(ba.constData());
+        }
         return ret;
     }
 }

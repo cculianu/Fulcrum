@@ -139,7 +139,7 @@ private:
 
     void loadCheckHeadersInDB(); ///< may throw -- called from startup()
     void loadCheckUTXOsInDB(); ///< may throw -- called from startup()
-    void loadCheckTxNumsFile(); ///< may throw -- called from startup()
+    void loadCheckTxNumsFileAndBlkInfo(); ///< may throw -- called from startup()
 };
 
 Q_DECLARE_OPERATORS_FOR_FLAGS(Storage::SaveSpec)
