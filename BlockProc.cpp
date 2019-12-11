@@ -43,7 +43,7 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bi
         for (const auto & out : tx->vout) {
             // save the outputs seen
             outputs.emplace_back(
-                OutPt{ unsigned(txIdx), outN, out.nValue }
+                OutPt{ unsigned(txIdx), outN, out.nValue, {} }
             );
             estimatedThisSizeBytes += sizeof(OutPt);
             const size_t outputIdx = outputs.size()-1;
