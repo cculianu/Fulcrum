@@ -138,8 +138,7 @@ private:
     void loadCheckUTXOsInDB(); ///< may throw -- called from startup()
     void loadCheckTxNumsInDB(); ///< may throw -- called from startup()
 
-    // some helpers for TxNum -- these may throw DatabaseError
-    std::optional<TxNum> txNumForHash(const TxHash &, bool throwIfMissing = false, bool *wasCached = nullptr, bool skipCache = false);
+    /// helper for TxNum. Resolve a 64-bit TxNum to a TxHash -- this may throw DatabaseError (thread safe)
     std::optional<TxHash> hashForTxNum(TxNum, bool throwIfMissng = false, bool *wasCached = nullptr, bool skipCache = false);
 };
 

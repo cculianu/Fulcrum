@@ -38,6 +38,11 @@ namespace {
     inline rocksdb::Slice ToSlice(const QByteArray &ba) { return rocksdb::Slice(ba.constData(), size_t(ba.size())); }
     /// NOTE: The slice should live as long as the returned QByteArray does.  The QByteArray is a weak pointer into the slice!
     inline QByteArray FromSlice(const rocksdb::Slice &s) { return QByteArray::fromRawData(s.data(), int(s.size())); }
+    /// Turn a number eg uint64_t into a db slice directly by just pointing to its memory.
+    /// NOTE: The Scalar s should live at least as long as the Slice.
+    template <typename Scalar,
+              std::enable_if_t<std::is_scalar_v<Scalar> && !std::is_pointer_v<Scalar>, int> = 0>
+    inline rocksdb::Slice ScalarToSlice(const Scalar &s) { return rocksdb::Slice(reinterpret_cast<const char *>(&s), sizeof(s)); }
 
     // serialize/deser -- for basic types we use QDataStream, but we also have specializations at the end of this file
     template <typename Type>
@@ -71,8 +76,13 @@ namespace {
     /// architectures.
     template <typename Scalar,
               std::enable_if_t<std::is_scalar_v<Scalar> && !std::is_pointer_v<Scalar>, int> = 0>
-    QByteArray SerializeScalar(const Scalar & s) {
+    QByteArray SerializeScalar [[maybe_unused]] (const Scalar & s) {
         return QByteArray(reinterpret_cast<const char *>(&s), sizeof(s));
+    }
+    template <typename Scalar,
+              std::enable_if_t<std::is_scalar_v<Scalar> && !std::is_pointer_v<Scalar>, int> = 0>
+    QByteArray SerializeScalarNoCopy (const Scalar &s) {
+        return QByteArray::fromRawData(reinterpret_cast<const char *>(&s), sizeof(s));
     }
     /// Inverse of above.  Pass in an optional 'pos' pointer if you wish to continue reading raw scalars from the same
     /// QByteArray during subsequent calls to this template function.  *ok, if specified, is set to false if we ran off
@@ -195,11 +205,11 @@ namespace {
             // raw/unsafe scalar
             QByteArray serKey, serVal;
             if constexpr (std::is_scalar_v<KeyType> && !std::is_pointer_v<KeyType>)
-                serKey = SerializeScalar(key);
+                serKey = SerializeScalarNoCopy(key);
             else
                 serKey = Serialize(key);
             if constexpr (std::is_scalar_v<ValueType> && !std::is_pointer_v<ValueType>)
-                serVal = SerializeScalar(value);
+                serVal = SerializeScalarNoCopy(value);
             else
                 serVal = Serialize(value);
             auto st = db->Put(opts, ToSlice(serKey), ToSlice(serVal));
@@ -246,7 +256,6 @@ struct Storage::Pvt
 
     static constexpr size_t nCacheMax = 100000, nCacheElasticity = 50000;
     LRU::Cache<true, TxNum, TxHash> lruNum2Hash{nCacheMax, nCacheElasticity};
-    LRU::Cache<true, TxHash, TxNum, HashHasher> lruHash2Num{nCacheMax, nCacheElasticity};
 };
 
 Storage::Storage(const std::shared_ptr<Options> & options)
@@ -430,7 +439,7 @@ void Storage::appendHeader(const Header &h, unsigned int height)
     if (UNLIKELY(height != targetHeight))
         throw InternalError(QString("Bad use of appendHeader -- expected height %1, got height %2").arg(targetHeight).arg(height));
     rocksdb::WriteBatch batch;
-    if (auto stat = batch.Put(ToSlice(SerializeScalar(uint32_t(height))), ToSlice(h)); !stat.ok())
+    if (auto stat = batch.Put(ScalarToSlice(uint32_t(height)), ToSlice(h)); !stat.ok())
         throw DatabaseError(QString("Error writing header %1: %2").arg(height).arg(QString::fromStdString(stat.ToString())));
     if (auto stat = batch.Put(kNumHeaders, ToSlice(Serialize(uint32_t(height+1)))); !stat.ok())
         throw DatabaseError(QString("Error writing header size key: %1").arg(QString::fromStdString(stat.ToString())));
@@ -446,7 +455,7 @@ auto Storage::headerForHeight(unsigned height, QString *err) -> std::optional<He
         try {
             ret.emplace(
                 GenericDBGetFailIfMissing<QByteArray>(
-                    p->db.headers.get(), ToSlice(SerializeScalar(uint32_t(height))), errMsg, false, p->db.defReadOpts));
+                    p->db.headers.get(), ScalarToSlice(uint32_t(height)), errMsg, false, p->db.defReadOpts));
             if (UNLIKELY(ret.value().size() != p->blockHeaderSize)) {
                 ret.reset();
                 throw DatabaseSerializationError("Bad header read from db. Wrong size!"); // jumps to below catch
@@ -504,7 +513,7 @@ void Storage::loadCheckHeadersInDB()
             // read db
             for (uint32_t i = 0; i < num; ++i) {
                 // guaranteed to return a value or throw
-                const auto bytes = GenericDBGetFailIfMissing<QByteArray>(db, ToSlice(SerializeScalar(uint32_t(i))), errMsg, false, p->db.defReadOpts);
+                const auto bytes = GenericDBGetFailIfMissing<QByteArray>(db, ScalarToSlice(uint32_t(i)), errMsg, false, p->db.defReadOpts);
                 if (UNLIKELY(bytes.size() != p->blockHeaderSize))
                     throw DatabaseFormatError(QString("Error reading header %1, wrong size: %2").arg(i).arg(bytes.size()));
                 if (!verif(bytes, &err))
@@ -658,13 +667,9 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve [[maybe_un
             for (size_t i = 0; i < ppb->txInfos.size(); ++i) {
                 const TxNum txnum = txNum0 + i;
                 const TxHash & hash = ppb->txInfos[i].hash;
-                const auto hashSlice = ToSlice(hash);
-                const auto txNumBytes = SerializeScalar(txnum);
                 // txnums are keyed off of uint64_t txNum -- note we save the raw uint64 value here without any QDataStream encapsulation
-                if (auto stat = batch.Put(ToSlice(txNumBytes), hashSlice); !stat.ok())
+                if (auto stat = batch.Put(ScalarToSlice(txnum), ToSlice(hash)); !stat.ok())
                     throw DatabaseError(QString("Error writing txNum -> txHash for txNum %1: %2").arg(txNum0 + i).arg(QString::fromStdString(stat.ToString())));
-                if (auto stat = batch.Put(hashSlice, ToSlice(txNumBytes)); !stat.ok())
-                    throw DatabaseError(QString("Error writing txHash -> txNum for txNum %1: %2").arg(txNum0 + i).arg(QString::fromStdString(stat.ToString())));
             }
             if (auto stat = p->db.txnums->Write(p->db.defWriteOpts, &batch); !stat.ok())
                 throw DatabaseError(QString("Error writing txNums batch: %1").arg(QString::fromStdString(stat.ToString())));
@@ -678,7 +683,6 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve [[maybe_un
                 // txnums are keyed off of uint64_t txNum -- note we save the raw uint64 value here without any
                 // QDataStream encapsulation -- note these may throw
                 GenericDBPut<false>(p->db.txnums.get(), txnum, hash, errMsg1, p->db.defWriteOpts);
-                GenericDBPut<false>(p->db.txnums.get(), hash, txnum, errMsg2, p->db.defWriteOpts);
             }
         }
         //auto elapsed = Util::getTimeNS() - t0;
@@ -799,42 +803,17 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve [[maybe_un
     return errRet;
 }
 
-// some helpers for TxNum -- these may throw DatabaseError
-std::optional<TxNum> Storage::txNumForHash(const TxHash &h, bool throwIfMissing, bool *wasCached, bool skipCache)
-{
-    std::optional<TxNum> ret;
-    if (!skipCache) ret = p->lruHash2Num.tryGet(h);
-    if (ret.has_value()) {
-        // save was cached flat
-        if (wasCached) *wasCached = true;
-        // touch the other cache to refresh its lru list (if it still has the item. that is)
-        p->lruNum2Hash.tryGet(ret.value());
-        return ret; // cached, return it
-    } else if (wasCached) *wasCached = false; // save flag if caller is interested
-
-    static const QString kErrMsg ("Error reading txNumForHash from db");
-
-    ret = GenericDBGet<TxNum, false>(p->db.txnums.get(), ToSlice(h), !throwIfMissing, kErrMsg);
-    if (!skipCache && ret.has_value()) {
-        // save in cache
-        p->lruHash2Num.insert(h, ret.value());
-    }
-    return ret;
-}
-
 std::optional<TxHash> Storage::hashForTxNum(TxNum n, bool throwIfMissing, bool *wasCached, bool skipCache)
 {
     std::optional<TxHash> ret;
     if (!skipCache) ret = p->lruNum2Hash.tryGet(n);
     if (ret.has_value()) {
         if (wasCached) *wasCached = true;
-        // touch the other cache to refresh its lru list (if it still has the item, that is)
-        p->lruHash2Num.tryGet(ret.value());
         return ret;
     } else if (wasCached) *wasCached = false;
 
     static const QString kErrMsg ("Error reading hashForTxNum from db");
-    ret = GenericDBGet<TxHash, false>(p->db.txnums.get(), ToSlice(SerializeScalar(n)), !throwIfMissing, kErrMsg);
+    ret = GenericDBGet<TxHash, false>(p->db.txnums.get(), ScalarToSlice(n), !throwIfMissing, kErrMsg);
     if (!skipCache && ret.has_value()) {
         // save in cache
         p->lruNum2Hash.insert(n, ret.value());
@@ -851,7 +830,7 @@ namespace {
         {
             QDataStream ds(&ba, QIODevice::WriteOnly|QIODevice::Truncate);
             // we serialize the 'magic' value as a simple scalar as a sort of endian check for the DB
-            ds << SerializeScalar(m.magic) << m.version << m.chain;
+            ds << SerializeScalarNoCopy(m.magic) << m.version << m.chain;
         }
         return ba;
     }
