@@ -768,7 +768,7 @@ auto Controller::debug(const StatsParams &p) const -> Stats // from StatsMixin
         QVariantMap m;
         auto hash = storage->hashForTxNum(txnum).value_or(QByteArray());
         auto opt = storage->heightForTxNum(txnum);
-        m["tx_hash"] = hash.toHex();
+        m["tx_hash"] = Util::ToHexFast(hash);
         m["height"] = opt.has_value() ? int(opt.value()) : -1;
         ret["txnum_debug"] = m;
     }
@@ -778,7 +778,7 @@ auto Controller::debug(const StatsParams &p) const -> Stats // from StatsMixin
         auto items = storage->getHistory(sh);
         for (const auto & item : items) {
             QVariantMap m;
-            m["tx_hash"] = item.hash.toHex();
+            m["tx_hash"] = Util::ToHexFast(item.hash);
             m["height"] = item.height;
             l.push_back(m);
         }

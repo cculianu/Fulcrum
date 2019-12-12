@@ -324,7 +324,10 @@ struct Storage::Pvt
 
     std::atomic<int64_t> utxoCt = 0;
 
-    static constexpr size_t nCacheMax = 100000, nCacheElasticity = 50000;
+    /// TODO: Tune the cahce size. With the below settings it is approx. 50MB-60MB when totally filled
+    /// (each entry is ~40 bytes + overhead).  This cache is anticipated to see heavy use for get_history, so we may
+    /// wish to make it larger.
+    static constexpr size_t nCacheMax = 1000000, nCacheElasticity = 250000;
     LRU::Cache<true, TxNum, TxHash> lruNum2Hash{nCacheMax, nCacheElasticity};
 };
 
