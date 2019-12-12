@@ -236,9 +236,9 @@ namespace {
         unsigned nTx = 0;
         BlkInfo() = default;
         BlkInfo(const BlkInfo &) = default;
-        BlkInfo [[maybe_unused]] (TxNum txn, unsigned ntx) : txNum0(txn), nTx(ntx) {}
-        bool operator== [[maybe_unused]] (const BlkInfo &o) const { return txNum0 == o.txNum0 && nTx == o.nTx; }
-        bool operator< [[maybe_unused]] (const BlkInfo &o) const { return txNum0 == o.txNum0 ? nTx < o.nTx : txNum0 < o.txNum0; }
+        [[maybe_unused]] BlkInfo (TxNum txn, unsigned ntx) : txNum0(txn), nTx(ntx) {}
+        [[maybe_unused]] bool operator==(const BlkInfo &o) const { return txNum0 == o.txNum0 && nTx == o.nTx; }
+        [[maybe_unused]] bool operator<(const BlkInfo &o) const { return txNum0 == o.txNum0 ? nTx < o.nTx : txNum0 < o.txNum0; }
         BlkInfo &operator=(const BlkInfo &) = default;
     };
     // serializes as raw bytes from struct
