@@ -810,13 +810,13 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve [[maybe_un
                 } else if (const auto opt = utxoGetFromDB(txo); opt.has_value()) {
                     const auto & info = opt.value();
                     if (info.confirmedHeight.has_value() && info.confirmedHeight.value() != ppb->height) {
-                        // was a prevout from a previos block.. so the ppb didn't have it in the touched set..
-                        // mark the spend as having touched this hashX for this ppb now.
+                        // was a prevout from a previos block.. so the ppb didn't have it in the 'involving hashx' set..
+                        // mark the spend as having involved this hashX for this ppb now.
                         auto & ag = ppb->hashXAggregated[info.hashX];
                         ag.ins.emplace_back(inum);
                         newHashXInputsResolved.insert(info.hashX);
                         // mark its txidx
-                        if (auto & vec = ag.txNumsTouchedByHashX; vec.empty() || vec.back() != in.txIdx)
+                        if (auto & vec = ag.txNumsInvolvingHashX; vec.empty() || vec.back() != in.txIdx)
                             vec.emplace_back(in.txIdx);
 
                     }
@@ -845,11 +845,11 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve [[maybe_un
             for (const auto & hashX : newHashXInputsResolved) {
                 auto & ag = ppb->hashXAggregated[hashX];
                 std::sort(ag.ins.begin(), ag.ins.end()); // make sure they are sorted
-                std::sort(ag.txNumsTouchedByHashX.begin(), ag.txNumsTouchedByHashX.end());
-                auto last = std::unique(ag.txNumsTouchedByHashX.begin(), ag.txNumsTouchedByHashX.end());
-                ag.txNumsTouchedByHashX.erase(last, ag.txNumsTouchedByHashX.end());
+                std::sort(ag.txNumsInvolvingHashX.begin(), ag.txNumsInvolvingHashX.end());
+                auto last = std::unique(ag.txNumsInvolvingHashX.begin(), ag.txNumsInvolvingHashX.end());
+                ag.txNumsInvolvingHashX.erase(last, ag.txNumsInvolvingHashX.end());
                 ag.ins.shrink_to_fit();
-                ag.txNumsTouchedByHashX.shrink_to_fit();
+                ag.txNumsInvolvingHashX.shrink_to_fit();
             }
 
             if constexpr (debugPrt)
@@ -857,16 +857,16 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve [[maybe_un
         }
 
         {
-            // now.. update the txNumsTouchedByHashX to be offset from txNum0 for this block, and save history to db table
+            // now.. update the txNumsInvolvingHashX to be offset from txNum0 for this block, and save history to db table
             // history is hashX -> TxNumVec (serialized) as a serities of 6-bytes txNums in blockchain order as they appeared.
             rocksdb::WriteBatch batch;
             for (auto & [hashX, ag] : ppb->hashXAggregated) {
-                for (auto & txNum : ag.txNumsTouchedByHashX) {
+                for (auto & txNum : ag.txNumsInvolvingHashX) {
                     txNum += blockTxNum0; // transform local txIdx to -> txNum (global mapping)
                 }
                 // save scripthash history for this hashX, by appending to existing history. Note that this uses
                 // the 'ConcatOperator' class we defined in this file, which requires rocksdb be compiled with RTTI.
-                if (auto st = batch.Merge(ToSlice(hashX), ToSlice(Serialize(ag.txNumsTouchedByHashX))); !st.ok())
+                if (auto st = batch.Merge(ToSlice(hashX), ToSlice(Serialize(ag.txNumsInvolvingHashX))); !st.ok())
                     throw DatabaseError(QString("batch merge fail for hashX %1, block height %2: %3")
                                         .arg(QString(hashX.toHex())).arg(ppb->height).arg(QString::fromStdString(st.ToString())));
             }

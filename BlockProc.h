@@ -71,9 +71,10 @@ struct PreProcessedBlock
         /// for PreProcessedBlock instances before final processing (full resolution requires a utxo set).
         std::vector<unsigned> ins;
 
-        /// Tx indices, ordered. Initially it's just the txIdx into the txInfos array but gets transformed
-        /// down the block processing pipeline (in addBlock) to be a list of TxNums touched by this HashX.
-        std::vector<TxNum> txNumsTouchedByHashX;
+        /// Tx indices, always sorted. Initially it's just a list of txIdx into the txInfos array but gets transformed
+        /// down the block processing pipeline (in addBlock) to be a list of globally-mapped TxNums involving this
+        /// HashX.
+        std::vector<TxNum> txNumsInvolvingHashX;
     };
 
     /// Flat map ok here, presumably robin_hood does move construction when moving objects around.
@@ -155,7 +156,7 @@ struct PreProcessedBlock
     QString toDebugString() const;
 
     /// This is not totally complete until this class has consulted the UTXO set to fill in all inputs.
-    std::vector<std::unordered_set<HashX, HashHasher>> hashXTouchedByTx() const;
+    std::vector<std::unordered_set<HashX, HashHasher>> hashXsByTx() const;
 
 protected:
     static const TxHash nullhash;

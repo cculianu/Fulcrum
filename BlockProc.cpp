@@ -54,7 +54,7 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bi
                 // add this output to the hashX -> outputs association for later
                 auto & ag = hashXAggregated[ hashX ];
                 ag.outs.emplace_back( outputIdx );
-                if (auto & vec = ag.txNumsTouchedByHashX; vec.empty() || vec.back() != txIdx)
+                if (auto & vec = ag.txNumsInvolvingHashX; vec.empty() || vec.back() != txIdx)
                     vec.emplace_back(txIdx);
             }
             else {
@@ -113,11 +113,11 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bi
             if (const auto cscript = prevTx->vout[inp.prevoutN].scriptPubKey;  // grab prevOut address
                     !BTC::IsOpReturn(cscript))
             {
-                // mark this input as touching this hashX
+                // mark this input as involving this hashX
                 const HashX hashX = BTC::HashXFromCScript(cscript);
                 auto & ag = hashXAggregated[ hashX ];
                 ag.ins.emplace_back(inIdx);
-                if (auto & vec = ag.txNumsTouchedByHashX; vec.empty() || vec.back() != inp.txIdx)
+                if (auto & vec = ag.txNumsInvolvingHashX; vec.empty() || vec.back() != inp.txIdx)
                     vec.emplace_back(inp.txIdx);  // now that we resolved the input's spending address, mark this input's txIdx as having touched this hashX
             }
         }
@@ -127,17 +127,17 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bi
     for (auto & [hashX, ag] : hashXAggregated ) {
         std::sort(ag.ins.begin(), ag.ins.end());
         std::sort(ag.outs.begin(), ag.outs.end());
-        std::sort(ag.txNumsTouchedByHashX.begin(), ag.txNumsTouchedByHashX.end());
-        auto last = std::unique(ag.txNumsTouchedByHashX.begin(), ag.txNumsTouchedByHashX.end());
-        ag.txNumsTouchedByHashX.erase(last, ag.txNumsTouchedByHashX.end());
+        std::sort(ag.txNumsInvolvingHashX.begin(), ag.txNumsInvolvingHashX.end());
+        auto last = std::unique(ag.txNumsInvolvingHashX.begin(), ag.txNumsInvolvingHashX.end());
+        ag.txNumsInvolvingHashX.erase(last, ag.txNumsInvolvingHashX.end());
         ag.ins.shrink_to_fit();
         ag.outs.shrink_to_fit();
-        ag.txNumsTouchedByHashX.shrink_to_fit();
+        ag.txNumsInvolvingHashX.shrink_to_fit();
         // tally up space usage
         estimatedThisSizeBytes +=
                 sizeof(ag) + size_t(hashX.size()) + ag.ins.size() * sizeof(decltype(ag.ins)::value_type)
                 + ag.outs.size() * sizeof(decltype(ag.outs)::value_type)
-                + ag.txNumsTouchedByHashX.size() * sizeof(decltype(ag.txNumsTouchedByHashX)::value_type);
+                + ag.txNumsInvolvingHashX.size() * sizeof(decltype(ag.txNumsInvolvingHashX)::value_type);
     }
 }
 
@@ -189,7 +189,7 @@ PreProcessedBlockPtr PreProcessedBlock::makeShared(unsigned height_, size_t size
 // very much a work in progress. this needs to also consult the UTXO set to be complete. For now we just
 // have this here for reference.
 std::vector<std::unordered_set<HashX, HashHasher>>
-PreProcessedBlock::hashXTouchedByTx() const
+PreProcessedBlock::hashXsByTx() const
 {
     std::vector<std::unordered_set<HashX, HashHasher>> ret(txInfos.size());
     for (const auto & [hashX, ag] : hashXAggregated) {
