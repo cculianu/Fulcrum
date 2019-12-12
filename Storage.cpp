@@ -234,6 +234,12 @@ namespace {
     struct BlkInfo {
         TxNum txNum0 = 0;
         unsigned nTx = 0;
+        BlkInfo() = default;
+        BlkInfo(const BlkInfo &) = default;
+        BlkInfo [[maybe_unused]] (TxNum txn, unsigned ntx) : txNum0(txn), nTx(ntx) {}
+        bool operator== [[maybe_unused]] (const BlkInfo &o) const { return txNum0 == o.txNum0 && nTx == o.nTx; }
+        bool operator< [[maybe_unused]] (const BlkInfo &o) const { return txNum0 == o.txNum0 ? nTx < o.nTx : txNum0 < o.txNum0; }
+        BlkInfo &operator=(const BlkInfo &) = default;
     };
     // serializes as raw bytes from struct
     template <> QByteArray Serialize(const BlkInfo &);
@@ -241,7 +247,6 @@ namespace {
     template <> BlkInfo Deserialize(const QByteArray &, bool *);
 
     // Associative merge operator used for scripthash history concatenation
-    // The simpler, associative merge operator.
     class ConcatOperator : public rocksdb::AssociativeMergeOperator {
     public:
         ~ConcatOperator() override;
@@ -301,6 +306,8 @@ struct Storage::Pvt
 
         rocksdb::Options opts, shistOpts;
 
+        std::shared_ptr<ConcatOperator> concatOperator;
+
         std::unique_ptr<rocksdb::DB> meta, headers, blkinfo, utxoset, shist;
     } db;
 
@@ -311,7 +318,9 @@ struct Storage::Pvt
 
     std::atomic<TxNum> txNumNext{0};
 
-    //std::vector<BlkInfo> blkInfos; ///< not used (yet!)
+    std::vector<BlkInfo> blkInfos;
+    std::map<TxNum, unsigned> blkInfosByTxNum; ///< ordered map of TxNum0 for a block -> index into above blkInfo array
+    RWLock blkInfoLock; ///< locks blkInfos and blkInfosByTxNum
 
     std::atomic<int64_t> utxoCt = 0;
 
@@ -343,7 +352,7 @@ void Storage::startup()
         opts.keep_log_file_num = 5; // ??
         opts.compression = rocksdb::CompressionType::kNoCompression; // for now we test without compression. TODO: characterize what is fastest and best..
         shistOpts = opts; // copy what we just did
-        shistOpts.merge_operator = std::make_shared<ConcatOperator>(); // this set of options uses the concat merge operator (we use this to append to history entries in the db)
+        shistOpts.merge_operator = p->db.concatOperator = std::make_shared<ConcatOperator>(); // this set of options uses the concat merge operator (we use this to append to history entries in the db)
 
         using DBInfoTup = std::tuple<QString, std::unique_ptr<rocksdb::DB> &, const rocksdb::Options &>;
         const std::list<DBInfoTup> dbs2open = {
@@ -413,9 +422,8 @@ void Storage::cleanup()
 auto Storage::stats() const -> Stats
 {
     // TODO ...
-    auto & mop = p->db.shistOpts.merge_operator;
-    ConcatOperator *c = mop ? dynamic_cast<ConcatOperator *>(mop.get()) : nullptr;
     QVariantMap ret;
+    auto & c = p->db.concatOperator;
     ret["merge calls"] = c ? c->merges.load() : QVariant();
     return ret;
 }
@@ -655,6 +663,7 @@ void Storage::loadCheckTxNumsFileAndBlkInfo()
     TxNum ct = 0;
     if (const int height = latestTip().first; height >= 0)
     {
+        p->blkInfos.reserve(std::min(size_t(height+1), MAX_HEADERS));
         Log() << "Checking tx counts ...";
         for (int i = 0; i <= height; ++i) {
             static const QString errMsg("Failed to read a blkInfo from db, the database may be corrupted");
@@ -664,6 +673,8 @@ void Storage::loadCheckTxNumsFileAndBlkInfo()
                                                   "\n\nThe database may be corrupted. Delete the datadir and resynch it.\n")
                                           .arg(i).arg(ct));
             ct += blkInfo.nTx;
+            p->blkInfos.emplace_back(blkInfo);
+            p->blkInfosByTxNum[blkInfo.txNum0] = unsigned(p->blkInfos.size()-1);
         }
         Log() << ct << " total transactions";
     }
@@ -845,16 +856,11 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve [[maybe_un
         {
             // now.. update the txNumsTouchedByHashX to be offset from txNum0 for this block, and save history to db table
             // history is hashX -> TxNumVec (serialized) as a serities of 6-bytes txNums in blockchain order as they appeared.
-            constexpr bool debugSh = false;
-            qint64 t0 = 0;
-            if constexpr (debugSh) t0 = Util::getTimeNS();
-            size_t ctr = 0;
             rocksdb::WriteBatch batch;
             for (auto & [hashX, ag] : ppb->hashXAggregated) {
                 for (auto & txNum : ag.txNumsTouchedByHashX) {
                     txNum += blockTxNum0; // transform local txIdx to -> txNum (global mapping)
                 }
-                if (debugSh) ctr += ag.txNumsTouchedByHashX.size();
                 // save scripthash history for this hashX, by appending to existing history. Note that this uses
                 // the 'ConcatOperator' class we defined in this file, which requires rocksdb be compiled with RTTI.
                 if (auto st = batch.Merge(ToSlice(hashX), ToSlice(Serialize(ag.txNumsTouchedByHashX))); !st.ok())
@@ -864,33 +870,31 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve [[maybe_un
             if (auto st = p->db.shist->Write(p->db.defWriteOpts, &batch) ; !st.ok())
                 throw DatabaseError(QString("batch merge fail for block height %1: %2")
                                     .arg(ppb->height).arg(QString::fromStdString(st.ToString())));
-            if constexpr (debugSh) {
-                auto elapsed = Util::getTimeNS() - t0;
-                Debug() << "Wrote " << ctr << " history entries in " << QString::number(elapsed/1e6, 'f', 3) << " msec";
+        }
+
+
+        {
+            // update BlkInfo
+            ExclusiveLockGuard g(p->blkInfoLock);
+
+            if (nReserve) {
+                if (const auto size = p->blkInfos.size(); size + 1 > p->blkInfos.capacity())
+                    p->blkInfos.reserve(size + nReserve); // reserve space for new blkinfos in 1 go to save on copying
             }
-        }
 
-
-        // save BlkInfo
-        static const QString blkInfoErrMsg("Error writing BlkInfo to db");
-        GenericDBPut(p->db.blkinfo.get(), uint32_t(ppb->height), BlkInfo{
+            p->blkInfos.emplace_back(
                 blockTxNum0, // .txNum0
-                unsigned(ppb->txInfos.size()), // .nTx
-            }, blkInfoErrMsg, p->db.defWriteOpts);
+                unsigned(ppb->txInfos.size())
+            );
 
-        /*
-        if (nReserve) {
-            if (const auto size = p->blkInfos.size(); size + nReserve < p->blkInfos.capacity())
-                p->blkInfos.reserve(size + nReserve); // reserve space for new blkinfos in 1 go to save on copying
+            const auto & blkInfo = p->blkInfos.back();
+
+            p->blkInfosByTxNum[blkInfo.txNum0] = unsigned(p->blkInfos.size()-1);
+
+            // save BlkInfo to db
+            static const QString blkInfoErrMsg("Error writing BlkInfo to db");
+            GenericDBPut(p->db.blkinfo.get(), uint32_t(ppb->height), blkInfo, blkInfoErrMsg, p->db.defWriteOpts);
         }
-
-        p->blkInfos.emplace_back(BlkInfo{
-            blockTxNum0, // .txNum0
-            unsigned(ppb->txInfos.size()),
-            unsigned(ppb->inputs.size()),
-            unsigned(ppb->outputs.size())
-        });
-        */
 
         appendHeader(rawHeader, ppb->height);
 
@@ -902,7 +906,7 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve [[maybe_un
     return errRet;
 }
 
-std::optional<TxHash> Storage::hashForTxNum(TxNum n, bool throwIfMissing, bool *wasCached, bool skipCache)
+std::optional<TxHash> Storage::hashForTxNum(TxNum n, bool throwIfMissing, bool *wasCached, bool skipCache) const
 {
     std::optional<TxHash> ret;
     if (!skipCache) ret = p->lruNum2Hash.tryGet(n);
@@ -929,6 +933,41 @@ std::optional<TxHash> Storage::hashForTxNum(TxNum n, bool throwIfMissing, bool *
     return ret;
 }
 
+std::optional<unsigned> Storage::heightForTxNum(TxNum n) const
+{
+    SharedLockGuard g(p->blkInfoLock);
+    std::optional<unsigned> ret;
+    auto it = p->blkInfosByTxNum.upper_bound(n);  // O(logN) search; find the block *AFTER* n, then go backw on to find the block in range
+    if (it != p->blkInfosByTxNum.begin()) {
+        --it;
+        const auto & bi = p->blkInfos[it->second];
+        if (n >= bi.txNum0 && n < bi.txNum0+bi.nTx)
+            ret = it->second;
+    }
+    return ret;
+}
+
+
+auto Storage::getHistory(const HashX & hashx) const -> History
+{
+    History ret;
+    try {
+        static const QString err("Error retrieving history for a script hash");
+        auto nums_opt = GenericDBGet<TxNumVec>(p->db.shist.get(), hashx, true, err, false, p->db.defReadOpts);
+        if (nums_opt.has_value()) {
+            auto & nums = nums_opt.value();
+            ret.reserve(nums.size());
+            for (auto num : nums) {
+                auto hash = hashForTxNum(num).value(); // may throw, but that indicates some database inconsistency. we catch below
+                auto height = heightForTxNum(num).value(); // may throw, same deal
+                ret.emplace_back(HistoryItem{hash, height});
+            }
+        }
+    } catch (const std::exception &e) {
+        Warning() << __func__ << ": " << e.what();
+    }
+    return ret;
+}
 
 namespace {
     // specializations of Serialize/Deserialize

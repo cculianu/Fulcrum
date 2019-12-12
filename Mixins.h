@@ -152,12 +152,14 @@ public:
     virtual ~StatsMixin();
 
     using Stats = QVariant;
+    using StatsParams = QMap<QString, QString>;
 
-    static constexpr int kDefaultTimeout = 1000; ///< in milliseconds
+    static constexpr int kDefaultTimeout = 5000; ///< in milliseconds
 
     /// thread-safe wrapper around stats().
     Stats statsSafe(int timeout_ms = kDefaultTimeout) const;
-
+    /// thread-safe wrapper around debug()
+    Stats debugSafe(const StatsParams &, int timeout_ms = kDefaultTimeout) const;
 protected:
     /// Return object-specific stats -- to be used by subsystems such as the /stats HTTP endpoint.
     /// This base class implementation returns an empty map, so you should override it.
@@ -168,6 +170,7 @@ protected:
     /// can just implement this function by examining their own private data to populate the map
     /// without locks.
     virtual Stats stats() const;
+    virtual Stats debug(const StatsParams &) const;
 };
 
 

@@ -89,12 +89,24 @@ public:
     TxNum getTxNum() const;
 
     /// Helper for TxNum. Resolve a 64-bit TxNum to a TxHash -- this may throw a DatabaseError if throwIfMissing=true (thread safe)
-    std::optional<TxHash> hashForTxNum(TxNum, bool throwIfMissng = false, bool *wasCached = nullptr, bool skipCache = false);
+    std::optional<TxHash> hashForTxNum(TxNum, bool throwIfMissng = false, bool *wasCached = nullptr, bool skipCache = false) const;
+    /// Given a TxNum, returns the block height for the TxNum's block (if it exists).
+    /// Used to resolve scripthash_history -> block height for get_history. (thread safe)
+    std::optional<unsigned> heightForTxNum(TxNum) const;
 
     /// Returns the known size of the utxo set (for now this is a signed value -- to debug underflow errors)
     int64_t utxoSetSize() const;
     /// Returns the known size of the utxo set in millions of bytes
     double utxoSetSizeMiB() const;
+
+    //-- scritphash history (WIP)
+    struct HistoryItem {
+        TxHash hash;
+        unsigned height;
+    };
+    using History = std::vector<HistoryItem>;
+
+    History getHistory(const HashX &) const;
 
 protected:
     virtual Stats stats() const override; ///< from StatsMixin

@@ -275,15 +275,36 @@ void App::parseArgs()
     parseInterfaces(options->statsInterfaces, parser.values("z"));
 }
 
+namespace {
+    auto ParseParams(const SimpleHttpServer::Request &req) -> StatsMixin::StatsParams {
+        StatsMixin::StatsParams params;
+        const auto nvps = req.queryString.split("&");
+        for (const auto & nvp : nvps) {
+            auto nv = nvp.split("=");
+            if (nv.size() == 2)
+                params[nv.front()] = nv.back();
+        }
+        return params;
+    }
+}
+
 void App::start_httpServer(const Options::Interface &iface)
 {
     std::shared_ptr<SimpleHttpServer> server(new SimpleHttpServer(iface.first, iface.second, 16384));
     httpServers.push_back(server);
     server->tryStart(); // may throw, waits for server to start
-    server->set404Message("Error: Unknown endpoint. /stats is the only valid endpoint I understand.\r\n");
+    server->set404Message("Error: Unknown endpoint. /stats & /debug are the only valid endpoint I understand.\r\n");
     server->addEndpoint("/stats",[this](SimpleHttpServer::Request &req){
         req.response.contentType = "application/json; charset=utf-8";
         auto stats = controller->statsSafe(9000);
+        stats = stats.isNull() ? QVariantList{QVariant()} : stats;
+        req.response.data = QString("%1\r\n").arg(Util::Json::toString(stats, false)).toUtf8();
+    });
+    server->addEndpoint("/debug",[this](SimpleHttpServer::Request &req){
+        req.response.contentType = "application/json; charset=utf-8";
+        const auto params = ParseParams(req);
+        auto stats = controller->debugSafe(params, 9000);
+        stats = stats.isNull() ? QVariantList{QVariant()} : stats;
         req.response.data = QString("%1\r\n").arg(Util::Json::toString(stats, false)).toUtf8();
     });
 }

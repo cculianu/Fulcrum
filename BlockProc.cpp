@@ -99,26 +99,26 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bi
     for (auto & inp : inputs) {
         if (const auto it = txHashToIndex.find(inp.prevoutHash); it != txHashToIndex.end()) {
             // this input refers to a tx in this block!
-            const auto txIdx = it->second;
-            assert(txIdx < txInfos.size() && txIdx < b.vtx.size());
-            const TxInfo & info = txInfos[txIdx];
-            inp.prevoutHash = info.hash; //<--- ensure shallow copy that points to same underlying data (saves memory)
-            if (info.output0Index.has_value())
-                inp.parentTxOutIdx.emplace( info.output0Index.value() + inp.prevoutN ); // save the index into the `outputs` array where the parent tx to this spend occurred
+            const auto prevTxIdx = it->second;
+            assert(prevTxIdx < txInfos.size() && prevTxIdx < b.vtx.size());
+            const TxInfo & prevInfo = txInfos[prevTxIdx];
+            inp.prevoutHash = prevInfo.hash; //<--- ensure shallow copy that points to same underlying data (saves memory)
+            if (prevInfo.output0Index.has_value())
+                inp.parentTxOutIdx.emplace( prevInfo.output0Index.value() + inp.prevoutN ); // save the index into the `outputs` array where the parent tx to this spend occurred
             else { assert(0); }
             auto & outp = outputs[ inp.parentTxOutIdx.value() ];
             outp.spentInInputIndex.emplace( inIdx ); // mark the output as spent by this index
-            const auto & tx = b.vtx[txIdx];
-            assert(inp.prevoutN < tx->vout.size());
-            if (const auto cscript = tx->vout[inp.prevoutN].scriptPubKey;
+            const auto & prevTx = b.vtx[prevTxIdx];
+            assert(inp.prevoutN < prevTx->vout.size());
+            if (const auto cscript = prevTx->vout[inp.prevoutN].scriptPubKey;  // grab prevOut address
                     !BTC::IsOpReturn(cscript))
             {
                 // mark this input as touching this hashX
                 const HashX hashX = BTC::HashXFromCScript(cscript);
                 auto & ag = hashXAggregated[ hashX ];
                 ag.ins.emplace_back(inIdx);
-                if (auto & vec = ag.txNumsTouchedByHashX; vec.empty() || vec.back() != txIdx)
-                    vec.emplace_back(txIdx);
+                if (auto & vec = ag.txNumsTouchedByHashX; vec.empty() || vec.back() != inp.txIdx)
+                    vec.emplace_back(inp.txIdx);  // now that we resolved the input's spending address, mark this input's txIdx as having touched this hashX
             }
         }
         ++inIdx;

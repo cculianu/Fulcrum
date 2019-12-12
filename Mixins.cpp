@@ -118,6 +118,9 @@ StatsMixin::~StatsMixin() {}
 // unsafe in subclasses (safe here)
 auto StatsMixin::stats() const -> Stats { return Stats(); }
 
+// unsafe in subclasses (safe here)
+auto StatsMixin::debug(const StatsParams &) const -> Stats { return Stats(); }
+
 // thread-safe
 auto StatsMixin::statsSafe(int timeout_ms) const -> Stats
 {
@@ -126,6 +129,19 @@ auto StatsMixin::statsSafe(int timeout_ms) const -> Stats
         ret = Util::LambdaOnObject<Stats>(qobj(), [this]{ return stats(); }, timeout_ms);
     } catch (const std::exception & e) {
         Debug() << "Safe stats get failed: " << e.what();
+        ret = QVariantMap{{"error" , e.what()}};
+    }
+    return ret;
+}
+
+// thread-safe
+auto StatsMixin::debugSafe(const StatsParams &p, int timeout_ms) const -> Stats
+{
+    Stats ret;
+    try {
+        ret = Util::LambdaOnObject<Stats>(qobj(), [this, p]{ return debug(p); }, timeout_ms);
+    } catch (const std::exception & e) {
+        Debug() << "Safe debug get failed: " << e.what();
         ret = QVariantMap{{"error" , e.what()}};
     }
     return ret;

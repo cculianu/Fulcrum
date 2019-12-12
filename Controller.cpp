@@ -759,6 +759,36 @@ auto Controller::stats() const -> Stats
     return st;
 }
 
+auto Controller::debug(const StatsParams &p) const -> Stats // from StatsMixin
+{
+    QVariantMap ret;
+    bool ok;
+    const auto t0 = Util::getTimeNS();
+    if (const auto txnum = p.value("txnum").toULong(&ok); ok) {
+        QVariantMap m;
+        auto hash = storage->hashForTxNum(txnum).value_or(QByteArray());
+        auto opt = storage->heightForTxNum(txnum);
+        m["tx_hash"] = hash.toHex();
+        m["height"] = opt.has_value() ? int(opt.value()) : -1;
+        ret["txnum_debug"] = m;
+    }
+    if (const auto sh = QByteArray::fromHex(p.value("sh").toLatin1()); sh.length() == HashLen) {
+        QVariantList l;
+
+        auto items = storage->getHistory(sh);
+        for (const auto & item : items) {
+            QVariantMap m;
+            m["tx_hash"] = item.hash.toHex();
+            m["height"] = item.height;
+            l.push_back(m);
+        }
+        ret["sh_debug"] = l;
+    }
+    const auto elapsed = Util::getTimeNS() - t0;
+    ret["elapsed"] = QString::number(elapsed/1e6, 'f', 6) + " msec";
+    return ret;
+}
+
 size_t Controller::nHeadersDownloadedSoFar() const
 {
     size_t ret = 0;

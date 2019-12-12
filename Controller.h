@@ -44,6 +44,9 @@ public:
     /// internal DownloadBlocksTask only.
     unsigned downloadTaskRecommendedThrottleTimeMsec(unsigned forBlockHeight) const;
 
+
+    QVariantMap statsDebug(const QMap<QString, QString> & params) const;
+
 signals:
     /// Emitted whenever bitcoind is detected to be up-to-date, and everything is synched up.
     /// note this is not emitted during regular polling, but only after `synchronizing` was emitted previously.
@@ -56,7 +59,8 @@ signals:
     void synchFailure();
 
 protected:
-    Stats stats() const override;
+    Stats stats() const override; // from StatsMixin
+    Stats debug(const StatsParams &) const override; // from StatsMixin
 
 protected slots:
     void process(bool beSilentIfUpToDate); ///< generic callback to advance state
