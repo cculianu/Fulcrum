@@ -70,7 +70,7 @@ namespace {
     /// architectures.
     template <typename Scalar,
               std::enable_if_t<std::is_scalar_v<Scalar> && !std::is_pointer_v<Scalar>, int> = 0>
-    QByteArray SerializeScalar [[maybe_unused]] (const Scalar & s) {
+    [[maybe_unused]] QByteArray SerializeScalar (const Scalar & s) {
         return QByteArray(reinterpret_cast<const char *>(&s), sizeof(s));
     }
     template <typename Scalar,
@@ -108,12 +108,20 @@ namespace {
     template <> TXO Deserialize(const QByteArray &, bool *);
     template <> QByteArray Serialize(const TXOInfo &);
     template <> TXOInfo Deserialize(const QByteArray &, bool *);
-
+    // TxNumVec
     using TxNumVec = std::vector<TxNum>;
     // this serializes a vector of TxNums to a compact representation (6 bytes, eg 48 bits per TxNum), in little endian byte order
     template <> QByteArray Serialize(const TxNumVec &);
     // this deserializes a vector of TxNums from a compact representation (6 bytes, eg 48 bits per TxNum), assuming little endian byte order
     template <> TxNumVec Deserialize(const QByteArray &, bool *);
+
+    // CompactTXOVec
+    using CompactTXOVec = std::vector<CompactTXO>;
+    // this serializes a vector of CompactTXO to a compact representation (uses .toBytes(), 8 bytes each)
+    template <> QByteArray Serialize(const CompactTXOVec &);
+    // this deserializes a vector of CompactTXO from a compact representation (using .fromBytes(), 8 bytes each)
+    template <> CompactTXOVec Deserialize(const QByteArray &, bool *);
+
 
     /// NOTE: The slice should live as long as the returned QByteArray does.  The QByteArray is a weak pointer into the slice!
     inline QByteArray FromSlice(const rocksdb::Slice &s) { return QByteArray::fromRawData(s.data(), int(s.size())); }
@@ -724,7 +732,7 @@ double Storage::utxoSetSizeMiB() const {
     return (utxoSetSize()*elemSize) / 1e6;
 }
 
-QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve [[maybe_unused]])
+QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve)
 {
     assert(bool(ppb) && bool(p));
 
@@ -1050,7 +1058,7 @@ namespace {
         return ret;
     }
     // this deserializes a vector of TxNums from a compact representation (6 bytes, eg 48 bits per TxNum), assuming little endian byte order
-    template <> TxNumVec Deserialize [[maybe_unused]] (const QByteArray &ba, bool *ok)
+    template <> TxNumVec Deserialize (const QByteArray &ba, bool *ok)
     {
         const size_t blen = size_t(ba.length());
         const size_t N = blen / 6;
@@ -1075,5 +1083,32 @@ namespace {
         }
         return ret;
     }
-
+    template <> QByteArray Serialize(const CompactTXOVec &v)
+    {
+        QByteArray ret(int(v.size() * CompactTXO::serSize()), Qt::Uninitialized);
+        char *cur = ret.data();
+        for (const auto & c : v) {
+            cur += c.toBytesInPlace(cur, CompactTXO::serSize());
+        }
+        if (UNLIKELY(cur < ret.end()))
+            Warning() << "Failed to serialize a compact txo vector properly! Short conversion! FIXME!";
+        return ret;
+    }
+    template <> CompactTXOVec Deserialize(const QByteArray &b, bool *ok)
+    {
+        CompactTXOVec ret;
+        const size_t bsz = size_t(b.size());
+        const size_t N = bsz / CompactTXO::serSize();
+        if (CompactTXO::serSize() * N != bsz) { // we refuse if there are extra bytes at the end.
+            if (ok) *ok = false;
+            return ret;
+        }
+        if (ok) *ok = true;
+        ret.reserve(N);
+        const char *cur = b.data();
+        for (size_t i = 0; i < N; ++i, cur += CompactTXO::serSize()) {
+            ret.emplace_back(CompactTXO::fromBytes(cur, CompactTXO::serSize()));
+        }
+        return ret;
+    }
 }

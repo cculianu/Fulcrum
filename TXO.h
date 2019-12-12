@@ -139,13 +139,48 @@ struct CompactTXO {
     // convenience
     IONum N() const noexcept { return IONum(u.prevout.n); }
     bool isValid() const { return u.asU64 != initval; }
+    static size_t constexpr serSize() noexcept { return 8; }
     QString toString() const { return isValid() ? QString("%1:%2").arg(txNum()).arg(N()) : "<compact_txo_invalid>"; }
-    QByteArray toBytesTmp() const { return QByteArray::fromRawData(reinterpret_cast<const char *>(&u.asU64), int(sizeof(u.asU64))); }
-    QByteArray toBytesCpy() const { return QByteArray(reinterpret_cast<const char *>(&u.asU64), int(sizeof(u.asU64))); }
+    /// Low-level serialization to a byte buffer in place.  Note that bufsz must be >= serSize().
+    /// Number of bytes written is returned, or 0 if bufsz to small.
+   size_t toBytesInPlace(void *buf, size_t bufsz) const {
+        if (bufsz >= serSize()) {
+            uint8_t * cur = reinterpret_cast<uint8_t *>(buf);
+            cur[0] = (u.prevout.txNum >> 0) & 0xff;
+            cur[1] = (u.prevout.txNum >> 8) & 0xff;
+            cur[2] = (u.prevout.txNum >> 16) & 0xff;
+            cur[3] = (u.prevout.txNum >> 24) & 0xff;
+            cur[4] = (u.prevout.txNum >> 32) & 0xff;
+            cur[5] = (u.prevout.txNum >> 48) & 0xff;
+            cur[6] = (u.prevout.n >> 0) & 0xff;
+            cur[7] = (u.prevout.n >> 8) & 0xff;
+            return serSize();
+        }
+        return 0;
+    }
+    QByteArray toBytes() const {
+        // the below is excessively wordy but it forces 8 byte little-endian style serialization
+        QByteArray ret(serSize(), Qt::Uninitialized);
+        toBytesInPlace(ret.data(), size_t(ret.size())); // this should never fail
+        return ret;
+    }
+    static CompactTXO fromBytes(const void *buf, size_t bufsz) {
+        return fromBytes(QByteArray::fromRawData(reinterpret_cast<const char *>(buf),int(std::min(bufsz, serSize()))));
+    }
+    /// passed-in QByteArray must be exactly serSize() bytes else nothing is converted
     static CompactTXO fromBytes(const QByteArray &b) {
+        // the below is excessively wordy but it forces 8 byte little-endian style deserialization
         CompactTXO ret;
-        if (b.length() >= int(sizeof(ret.u.asU64)))
-            ret.u.asU64 = *reinterpret_cast<const uint64_t *>(b.constData());
+        if (b.size() == serSize()) {
+            const uint8_t * cur = reinterpret_cast<const uint8_t *>(b.data());
+            ret.u.prevout.txNum =     (TxNum(cur[0])<<0)
+                                    | (TxNum(cur[1])<<8)
+                                    | (TxNum(cur[2])<<16)
+                                    | (TxNum(cur[3])<<24)
+                                    | (TxNum(cur[4])<<32)
+                                    | (TxNum(cur[5])<<40);
+            ret.u.prevout.n = IONum(cur[6]) | IONum(IONum(cur[7]) << 8);
+        }
         return ret;
     }
 };
