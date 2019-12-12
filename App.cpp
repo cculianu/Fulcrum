@@ -296,14 +296,14 @@ void App::start_httpServer(const Options::Interface &iface)
     server->set404Message("Error: Unknown endpoint. /stats & /debug are the only valid endpoint I understand.\r\n");
     server->addEndpoint("/stats",[this](SimpleHttpServer::Request &req){
         req.response.contentType = "application/json; charset=utf-8";
-        auto stats = controller->statsSafe(9000);
+        auto stats = controller->statsSafe();
         stats = stats.isNull() ? QVariantList{QVariant()} : stats;
         req.response.data = QString("%1\r\n").arg(Util::Json::toString(stats, false)).toUtf8();
     });
     server->addEndpoint("/debug",[this](SimpleHttpServer::Request &req){
         req.response.contentType = "application/json; charset=utf-8";
         const auto params = ParseParams(req);
-        auto stats = controller->debugSafe(params, 9000);
+        auto stats = controller->debugSafe(params);
         stats = stats.isNull() ? QVariantList{QVariant()} : stats;
         req.response.data = QString("%1\r\n").arg(Util::Json::toString(stats, false)).toUtf8();
     });

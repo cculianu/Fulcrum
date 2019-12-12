@@ -102,11 +102,21 @@ public:
     //-- scritphash history (WIP)
     struct HistoryItem {
         TxHash hash;
-        unsigned height;
+        unsigned height = 0;
     };
     using History = std::vector<HistoryItem>;
 
+    // thread safe
     History getHistory(const HashX &) const;
+
+    struct UnspentItem : HistoryItem {
+        IONum tx_pos = 0;
+        bitcoin::Amount value;
+    };
+    using UnspentItems = std::vector<UnspentItem>;
+
+    // thread safe
+    UnspentItems listUnspent(const HashX &) const;
 
 protected:
     virtual Stats stats() const override; ///< from StatsMixin

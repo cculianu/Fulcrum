@@ -154,7 +154,7 @@ public:
     using Stats = QVariant;
     using StatsParams = QMap<QString, QString>;
 
-    static constexpr int kDefaultTimeout = 5000; ///< in milliseconds
+    static constexpr int kDefaultTimeout = 2000; ///< in milliseconds
 
     /// thread-safe wrapper around stats().
     Stats statsSafe(int timeout_ms = kDefaultTimeout) const;

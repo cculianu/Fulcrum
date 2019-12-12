@@ -784,6 +784,20 @@ auto Controller::debug(const StatsParams &p) const -> Stats // from StatsMixin
         }
         ret["sh_debug"] = l;
     }
+    if (const auto hashx = QByteArray::fromHex(p.value("unspent").toLatin1()); hashx.length() == HashLen) {
+        QVariantList l;
+
+        auto items = storage->listUnspent(hashx);
+        for (const auto & item : items) {
+            QVariantMap m;
+            m["tx_hash"] = Util::ToHexFast(item.hash);
+            m["height"] = item.height;
+            m["tx_pos"] = item.tx_pos;
+            m["value"] = item.value / item.value.satoshi();
+            l.push_back(m);
+        }
+        ret["unspent_debug"] = l;
+    }
     const auto elapsed = Util::getTimeNS() - t0;
     ret["elapsed"] = QString::number(elapsed/1e6, 'f', 6) + " msec";
     return ret;
