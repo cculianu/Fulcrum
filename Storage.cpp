@@ -254,7 +254,9 @@ namespace {
     // deserializes as raw bytes from struct
     template <> BlkInfo Deserialize(const QByteArray &, bool *);
 
-    // Associative merge operator used for scripthash history concatenation
+    /// Associative merge operator used for scripthash history concatenation
+    /// TODO: this needs to be made more efficient by implementing the real MergeOperator interface and combining
+    /// appends efficiently to reduce allocations.  Right now it's called for each append.
     class ConcatOperator : public rocksdb::AssociativeMergeOperator {
     public:
         ~ConcatOperator() override;
@@ -279,6 +281,23 @@ namespace {
                    rocksdb::Logger* logger) const override;
         const char* Name() const override { return "ConcatOperator"; /* NOTE: this must be the same for the same db each time it is opened! */ }
     };
+    /// Associative merge operator used for scripthash unspent adds/deletes
+    /// TODO: this needs to be made more efficient by implementing the real MergeOperator interface and combining
+    /// adds/deletes efficiently to reduce allocations.  Right now it's called for each op.
+    class ScripthashUnspentAddDeleteOperator : public rocksdb::AssociativeMergeOperator {
+    public:
+        ~ScripthashUnspentAddDeleteOperator() override;
+
+        mutable std::atomic<unsigned> adds = 0, deletes = 0;
+        mutable std::mutex lock;
+        mutable robin_hood::unordered_flat_map<CompactTXO, bool, std::hash<CompactTXO>> delayedAdds;
+
+        bool Merge(const rocksdb::Slice& key, const rocksdb::Slice* existing_value,
+                   const rocksdb::Slice& value, std::string* new_value,
+                   rocksdb::Logger* logger) const override;
+
+        const char* Name() const override { return "ScripthashUnspentAddDeleteOperator"; /* NOTE: this must be the same for the same db each time it is opened! */ }
+    };
 }
 
 ConcatOperator::~ConcatOperator() {} // weak vtable warning prevention
@@ -298,6 +317,101 @@ bool ConcatOperator::Merge(const rocksdb::Slice& key, const rocksdb::Slice* exis
     return true;
 }
 
+ScripthashUnspentAddDeleteOperator::~ScripthashUnspentAddDeleteOperator() {} // for no weak vtable warning
+bool ScripthashUnspentAddDeleteOperator::Merge(const rocksdb::Slice& key, const rocksdb::Slice* existing_value,
+                                               const rocksdb::Slice& value, std::string* new_value, rocksdb::Logger* logger [[maybe_unused]]) const
+{
+    constexpr bool debugPrt = false;
+    CompactTXOVec vec;
+    constexpr size_t itemSize = CompactTXO::serSize() + 1;
+    const size_t nItems = value.size() / itemSize;
+    static const auto vec2str = [](const CompactTXOVec &v) -> QString {
+        QString ret;
+        QTextStream ts(&ret);
+        int i = 0;
+        for (const auto & c : v) {
+            if (i) ts << ", ";
+            ts << c.toString();
+            ++i;
+        }
+        return ret;
+    };
+    if (existing_value && existing_value->size()) {
+        int offset = 0;
+        if (existing_value->size() == itemSize) {
+            const char first = existing_value->data()[0];
+            if (first == 'a') {
+                // existing was the 'add' op
+                ++offset;
+                ++adds; // tally the add
+            } else if (first == 'd') {
+                Warning(Log::Color::BrightGreen) << "'d' existing value for scripthash: " << FromSlice(key).toHex() << ", ctxo: "
+                                                 << CompactTXO::fromBytes(QByteArray::fromRawData(existing_value->data()+1, int(existing_value->size())-1)).toString() << ", skipping???";
+                offset = 9;
+            } else {
+                Fatal() << "itemSize == " << itemSize << " but first char is not 'a' or 'd'. Don't know what to do! FIXME!"
+                        << " Scriphash: " << FromSlice(key).toHex() << " data: " << FromSlice(*existing_value).toHex();
+                return false;
+            }
+        }
+        bool ok;
+        auto vectmp = Deserialize<CompactTXOVec>(QByteArray::fromRawData(existing_value->data()+offset, int(existing_value->size())-offset), &ok);
+        if (!ok || nItems * itemSize != value.size()) {
+            Fatal() << "In " << Name() << ": Deserialization for scripthash " << FromSlice(key).toHex() << " failed!  Returning false. FIXME!\n\nRaw data:\n" << FromSlice(*existing_value).toHex() << "\n";
+            return false;
+        }
+        vec.swap(vectmp);
+    } else if constexpr (debugPrt) {
+        Debug() << "No existing value for scripthash: " << FromSlice(key).toHex();
+    }
+
+    vec.reserve(vec.size() + itemSize*nItems); // make room for worst case where they are all adds...
+
+    // a value starting with an 'a' is an add
+    // a value starting with a 'd' is a delete
+    for (const char *cur = value.data(), *end = value.data() + value.size(); cur < end; cur += itemSize) {
+        const auto ctxo = CompactTXO::fromBytes(cur+1, itemSize-1); // grab the ctxo in question
+        if (cur[0] == 'a') {
+            // add
+            std::lock_guard g(lock);
+            if (auto it = delayedAdds.find(ctxo); it != delayedAdds.end()) {
+                Warning(Log::BrightMagenta) << "found delayed add for " << ctxo.toString() << ", scripthash: " << FromSlice(key).toHex() << ", skipping add!";
+                delayedAdds.erase(it);
+            } else {
+                vec.emplace_back(ctxo);
+            }
+            ++adds; // tally
+        } else if (cur[0] == 'd') {
+            // del
+            auto it = std::find(vec.begin(), vec.end(), ctxo);
+            if (it != vec.end()) {
+                vec.erase(it);
+            } else {
+                /*Fatal*/Warning(Log::Magenta) << "Failed to find ctxo in existing vector for " << ctxo.toString() << ", scripthash: " << FromSlice(key).toHex() << " existing ctxos are:\n\n" << vec2str(vec) << "\n";
+                //return false;
+                std::lock_guard g(lock);
+                delayedAdds.emplace(ctxo, false);
+            }
+            ++deletes; // tally
+        } else {
+            Fatal() << "Unknow op '" << cur[0] << "' in " << __PRETTY_FUNCTION__ << " for scripthash " << FromSlice(key).toHex() << ". Returning false. FIXME!";
+            return false;
+        }
+    }
+
+    // now, write new values to output vector
+    new_value->resize(CompactTXO::serSize() * vec.size());
+    char *cur = new_value->data();
+    for (const auto & c : vec) {
+        cur += c.toBytesInPlace(cur, CompactTXO::serSize());
+    }
+    if constexpr (debugPrt) {
+        Debug() << "Merged scripthash: " << FromSlice(key).toHex() << " output: "
+                << QByteArray(new_value->data(), int(new_value->size())).toHex();
+    }
+    assert(long(cur - new_value->data()) == long(new_value->size()));
+    return true;
+}
 
 struct Storage::Pvt
 {
@@ -312,11 +426,13 @@ struct Storage::Pvt
         const rocksdb::ReadOptions defReadOpts; ///< avoid creating this each time
         const rocksdb::WriteOptions defWriteOpts; ///< avoid creating this each time
 
-        rocksdb::Options opts, shistOpts;
+        rocksdb::Options opts, shistOpts, shunspentOpts;
 
         std::shared_ptr<ConcatOperator> concatOperator;
+        std::shared_ptr<ScripthashUnspentAddDeleteOperator> shunspentOperator;
 
-        std::unique_ptr<rocksdb::DB> meta, headers, blkinfo, utxoset, shist;
+        std::unique_ptr<rocksdb::DB> meta, headers, blkinfo, utxoset,
+                                     shist, shunspent; // scripthash_history and scripthash_unspent
     } db;
 
     std::unique_ptr<RecordFile> txNumsFile;
@@ -352,7 +468,7 @@ void Storage::startup()
 {
     {   // open all db's ...
 
-        rocksdb::Options & opts(p->db.opts), &shistOpts(p->db.shistOpts);
+        rocksdb::Options & opts(p->db.opts), &shistOpts(p->db.shistOpts), &shunspentOpts(p->db.shunspentOpts);
         // Optimize RocksDB. This is the easiest way to get RocksDB to perform well
         opts.IncreaseParallelism(int(Util::getNPhysicalProcessors()));
         opts.OptimizeLevelStyleCompaction();
@@ -364,6 +480,9 @@ void Storage::startup()
         opts.compression = rocksdb::CompressionType::kNoCompression; // for now we test without compression. TODO: characterize what is fastest and best..
         shistOpts = opts; // copy what we just did
         shistOpts.merge_operator = p->db.concatOperator = std::make_shared<ConcatOperator>(); // this set of options uses the concat merge operator (we use this to append to history entries in the db)
+        shunspentOpts = opts;
+        shunspentOpts.merge_operator = p->db.shunspentOperator = std::make_shared<ScripthashUnspentAddDeleteOperator>();
+
 
         using DBInfoTup = std::tuple<QString, std::unique_ptr<rocksdb::DB> &, const rocksdb::Options &>;
         const std::list<DBInfoTup> dbs2open = {
@@ -372,6 +491,7 @@ void Storage::startup()
             { "blkinfo" , p->db.blkinfo , opts },
             { "utxoset", p->db.utxoset, opts },
             { "scripthash_history", p->db.shist, shistOpts },
+            { "scripthash_unspent", p->db.shunspent, shunspentOpts },
         };
         const auto OpenDB = [this](const DBInfoTup &tup) {
             auto & [name, uptr, opts] = tup;
@@ -414,10 +534,10 @@ void Storage::startup()
     Log() << "Loading database ...";
     // load headers -- may throw
     loadCheckHeadersInDB();
-    // count utxos
-    loadCheckUTXOsInDB();
     // check txnums
     loadCheckTxNumsFileAndBlkInfo();
+    // count utxos -- note this depends on "blkInfos" being filled in so it much be called after loadCheckTxNumsFileAndBlkInfo()
+    loadCheckUTXOsInDB();
 
     start(); // starts our thread
 }
@@ -435,7 +555,10 @@ auto Storage::stats() const -> Stats
     // TODO ...
     QVariantMap ret;
     auto & c = p->db.concatOperator;
+    auto & s = p->db.shunspentOperator;
     ret["merge calls"] = c ? c->merges.load() : QVariant();
+    ret["add merge calls"] = s ? s->adds.load() : QVariant();
+    ret["del merge calls"] = s ? s->deletes.load() : QVariant();
     return ret;
 }
 
@@ -613,6 +736,7 @@ void Storage::loadCheckHeadersInDB()
     }
 }
 
+// this must be called *after* loadCheckTxNumsFileAndBlkInfo(), because it needs a valid p->txNumNext
 void Storage::loadCheckUTXOsInDB()
 {
     FatalAssert(!!p->db.utxoset) << __FUNCTION__ << ": Utxo set db is not open";
@@ -641,14 +765,21 @@ void Storage::loadCheckUTXOsInDB()
                                                         " This may be due to a database format mismatch."
                                                         "\n\nDelete the datadir and resynch to bitcoind.\n")
                                                  .arg(txo.toString()));
-            if (info.confirmedHeight.has_value() && int(info.confirmedHeight.value()) > currentHeight) {
+            if (bool fail1 = false, fail2 = false;
+                    (fail1 = (info.confirmedHeight.has_value() && int(info.confirmedHeight.value()) > currentHeight))
+                    || (fail2 = info.txNum >= p->txNumNext) ) {
                 // TODO: reorg? Inconsisent db?  FIXME
                 QString msg;
                 {
                     QTextStream ts(&msg);
                     ts << "Inconsistent database: txo " << txo.toString() << " at height: "
-                       << info.confirmedHeight.value() << " > current height: " << currentHeight << "."
-                       << "\n\nThe database has been corrupted. Please delete the datadir and resynch to bitcoind.\n";
+                       << info.confirmedHeight.value();
+                    if (fail1) {
+                        ts << " > current height: " << currentHeight << ".";
+                    } else if (fail2) {
+                        ts << ". TxNum: " << info.txNum << " >= " << p->txNumNext << ".";
+                    }
+                    ts << "\n\nThe database has been corrupted. Please delete the datadir and resynch to bitcoind.\n";
                 }
                 throw DatabaseError(msg);
             }
@@ -698,12 +829,29 @@ void Storage::loadCheckTxNumsFileAndBlkInfo()
 
 
 /// Thread-safe. Immediately save a UTXO to the db. May throw on database error.
-void Storage::utxoAddToDB(const TXO &txo, const TXOInfo &info)
+void Storage::utxoAddToDB(const TXO &txo, const TXOInfo &info, const CompactTXO &ctxo)
 {
     assert(bool(p->db.utxoset));
     if (txo.isValid()) {
         static const QString errMsgPrefix("Failed to add a utxo to the utxo db");
         GenericDBPut(p->db.utxoset.get(), txo, info, errMsgPrefix, p->db.defWriteOpts); // may throw on failure
+
+        {
+            constexpr bool debugPrt = false;
+
+            // now, add it to the scripthash_unspent table as well for quick list_unspent lookups
+            QByteArray buf(int(1 + CompactTXO::serSize()), Qt::Uninitialized);
+            buf[0] = 'a'; // add op at front ('a' == add)
+            if (auto s = ctxo.toBytesInPlace(buf.data()+1, size_t(buf.size()-1)); s != CompactTXO::serSize())
+                throw InternalError("Unexpected return value from CompactTXO::toBytesInPlace! FIXME!");
+            if (auto s = p->db.shunspent->Merge(p->db.defWriteOpts, ToSlice(info.hashX), ToSlice(buf)); !s.ok()) {
+                throw DatabaseError(QString("Failed to serialize CompactTXO %1 for hashX %2 to db: %3")
+                                    .arg(txo.toString()).arg(QString(info.hashX.toHex())).arg(QString::fromStdString(s.ToString())));
+            }
+
+            if constexpr (debugPrt) Debug() << "Adding ctxo: " << ctxo.toString();
+        }
+
         ++p->utxoCt;
     }
 }
@@ -715,13 +863,27 @@ std::optional<TXOInfo> Storage::utxoGetFromDB(const TXO &txo, bool throwIfMissin
     return GenericDBGet<TXOInfo>(p->db.utxoset.get(), txo, !throwIfMissing, errMsgPrefix, false, p->db.defReadOpts);
 }
 /// Delete a Utxo from the db. Will throw only on database error (but not if it was missing).
-void Storage::utxoDeleteFromDB(const TXO &txo)
+void Storage::utxoDeleteFromDB(const TXO &txo, const HashX &hashX, const CompactTXO &ctxo)
 {
     assert(bool(p->db.utxoset));
     auto stat = p->db.utxoset->Delete(rocksdb::WriteOptions(), ToSlice(Serialize(txo)));
     if (!stat.ok()) {
         throw DatabaseError(QString("Failed to delete a utxo (%1:%2) from the db: %3")
                             .arg(QString(txo.prevoutHash.toHex())).arg(txo.prevoutN).arg(QString::fromStdString(stat.ToString())));
+    }
+    {
+        // now, delete it from the scripthash_unspent table as well for quick list_unspent lookups
+        constexpr bool debugPrt = false;
+
+        QByteArray buf(int(1 + CompactTXO::serSize()), Qt::Uninitialized);
+        buf[0] = 'd'; // delete op at front ('d' == delete) -- merge op will run asynchronously some time later for max throughput
+        if (auto s = ctxo.toBytesInPlace(buf.data()+1, size_t(buf.size()-1)); s != CompactTXO::serSize())
+            throw InternalError("Unexpected return value from CompactTXO::toBytesInPlace! FIXME!");
+        if (auto s = p->db.shunspent->Merge(p->db.defWriteOpts, ToSlice(hashX), ToSlice(buf)); !s.ok()) {
+            throw DatabaseError(QString("Failed to serialize CompactTXO %1 for hashX %2 to db: %3")
+                                .arg(txo.toString()).arg(QString(hashX.toHex())).arg(QString::fromStdString(s.ToString())));
+        }
+        if constexpr (debugPrt) Debug() << "Removing ctxo: " << ctxo.toString();
     }
     --p->utxoCt;
 }
@@ -795,8 +957,9 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve)
                     info.hashX = hashX;
                     info.amount = out.amount;
                     info.confirmedHeight = ppb->height;
+                    info.txNum = blockTxNum0 + out.txIdx;
                     const TXO txo{ hash, out.outN };
-                    utxoAddToDB(txo, info); // add to db
+                    utxoAddToDB(txo, info, CompactTXO(blockTxNum0+out.txIdx, out.outN)); // add to db
                     if constexpr (debugPrt)
                         Debug() << "Added txo: " << txo.toString()
                                 << " (txid: " << hash.toHex() << " height: " << ppb->height << ") "
@@ -836,7 +999,7 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve)
                                 << " HashX: " << info.hashX.toHex();
                     }
                     // delete from db
-                    utxoDeleteFromDB(txo);
+                    utxoDeleteFromDB(txo, info.hashX, CompactTXO(info.txNum, txo.prevoutN)); // delete from db
                 } else {
                     QString s;
                     {
@@ -1047,12 +1210,7 @@ namespace {
         QByteArray ret(int(v.size()*6), Qt::Uninitialized);
         uint8_t *cur = reinterpret_cast<uint8_t *>(ret.data());
         for (const auto num : v) {
-            cur[0] = (num >> 0) & 0xff;
-            cur[1] = (num >> 8) & 0xff;
-            cur[2] = (num >> 16) & 0xff;
-            cur[3] = (num >> 24) & 0xff;
-            cur[4] = (num >> 32) & 0xff;
-            cur[5] = (num >> 40) & 0xff;
+            CompactTXO::txNumToCompactBytes(cur, num);
             cur += 6;
         }
         return ret;
@@ -1072,18 +1230,11 @@ namespace {
         const uint8_t *cur = reinterpret_cast<const uint8_t *>(ba.begin()), *end = reinterpret_cast<const uint8_t *>(ba.end());
         ret.reserve(N);
         for ( ; cur < end; cur += 6) {
-            ret.emplace_back(
-                (TxNum(cur[0]) << 0)
-              | (TxNum(cur[1]) << 8)
-              | (TxNum(cur[2]) << 16)
-              | (TxNum(cur[3]) << 24)
-              | (TxNum(cur[4]) << 32)
-              | (TxNum(cur[5]) << 40)
-            );
+            ret.emplace_back( CompactTXO::txNumFromCompactBytes(cur) );
         }
         return ret;
     }
-    template <> QByteArray Serialize(const CompactTXOVec &v)
+    template <> [[maybe_unused]] QByteArray Serialize(const CompactTXOVec &v)
     {
         QByteArray ret(int(v.size() * CompactTXO::serSize()), Qt::Uninitialized);
         char *cur = ret.data();

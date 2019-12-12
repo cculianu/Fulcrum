@@ -127,12 +127,12 @@ protected:
 
     // -- the below are used inside addBlock to maintain the UTXO set & Headers
 
-    /// Thread-safe. Immediately save a UTXO to the db. May throw on database error.
-    void utxoAddToDB(const TXO &, const TXOInfo &);
+    /// Thread-safe. Immediately save a UTXO to the db. May throw on database error. Also updates scripthash_unspent.
+    void utxoAddToDB(const TXO &, const TXOInfo &, const CompactTXO &);
     /// Thread-safe. Query db for a UTXO, and return it if found.  May throw on database error.
     std::optional<TXOInfo> utxoGetFromDB(const TXO &, bool throwIfMissing = false);
-    /// Delete a Utxo from the db. Will throw only on database error (but not if it was missing).
-    void utxoDeleteFromDB(const TXO &);
+    /// Delete a Utxo from the db. Will throw only on database error (but not if it was missing). Also deletes from scripthash_unspent.
+    void utxoDeleteFromDB(const TXO &, const HashX &, const CompactTXO &);
 
     /// Internally called by addBlock. Call this with the heaverVerifier lock held.
     /// Appends header h to the database at height. Note that it is undefined to call this function

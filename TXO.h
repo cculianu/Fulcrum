@@ -1,6 +1,7 @@
 #pragma once
 
 #include "BlockProcTypes.h"
+#include "TXO_Compact.h"
 
 #include "robin_hood/robin_hood.h"
 
@@ -10,7 +11,6 @@
 #include <cstring> // for std::memcpy
 #include <functional> // for std::hash
 #include <optional>
-
 
 /// WIP
 struct TXO {
@@ -64,6 +64,7 @@ struct TXOInfo {
     bitcoin::Amount amount;
     HashX hashX; ///< the scripthash this output is sent to.  Note in most cases this can be compactified to be a shallow-copy of existing data (such that dupes point to the same underlying data in eg UTXOSet).
     std::optional<unsigned> confirmedHeight; ///< if unset, is mempool tx
+    TxNum txNum = 0; ///< the globally mapped txNum (one for each TxHash). This is used to be able to delete the CompactTXO from the hashX's scripthash_unspent table
 
     bool isValid() const { return amount / bitcoin::Amount::satoshi() >= 0 && hashX.length() == HashLen; }
 
@@ -78,6 +79,8 @@ struct TXOInfo {
         cur += sizeof(amt_sats);
         std::memcpy(cur, &cheight, sizeof(cheight));
         cur += sizeof(cheight);
+        CompactTXO::txNumToCompactBytes(reinterpret_cast<uint8_t *>(cur), txNum);
+        cur += CompactTXO::compactTxNumSize();
         std::memcpy(cur, hashX.constData(), size_t(hashX.length()));
         return ret;
     }
@@ -93,6 +96,8 @@ struct TXOInfo {
         cur += sizeof(amt);
         std::memcpy(&cheight, cur, sizeof(cheight));
         cur += sizeof(cheight);
+        ret.txNum = CompactTXO::txNumFromCompactBytes(reinterpret_cast<const uint8_t *>(cur));
+        cur += CompactTXO::compactTxNumSize();
         ret.hashX = QByteArray(cur, HashLen);
         ret.amount = amt * bitcoin::Amount::satoshi();
         if (cheight > -1)
@@ -100,102 +105,6 @@ struct TXOInfo {
         return ret;
     }
 
-    static constexpr size_t serSize() noexcept { return sizeof(int64_t) + sizeof(int) + HashLen; }
+    static constexpr size_t serSize() noexcept { return sizeof(int64_t) + sizeof(int) + CompactTXO::compactTxNumSize() + HashLen; }
 };
 
-
-
-// -------------------------------------------------------------------------------------------------------------------
-// ----- Some storage helper classes below.. (safe to ignore in rest of codebase outside of Storage.h / Storage.cpp)
-// -------------------------------------------------------------------------------------------------------------------
-#   ifdef __GNUC__
-#   pragma pack(push, 1)
-#   endif
-/// Stogage subsystem "compact txo"
-/// This is used internally by the "Storage" subsystem for storing TxNum <-> txhash associations on disk
-struct CompactTXO {
-    static constexpr std::uint64_t initval = ~0ULL; ///< indicates !isValid()
-    // pack paranoia -- not strictly needed since this packs anyway the way we want on gcc and/or clang.
-    union {
-        struct {
-            /// tx index in the global tx table. First tx in blockchain is txNum 0, and so on (mapping of unique number to a txid hash, stored in db).
-            /// Note this is really a 48 bit value covering the range [0, 17592186044415]
-            std::uint64_t txNum : 48;
-            /// The the 'N' (output index) for the tx itself as per bitcoin tx format
-            std::uint16_t n;
-        } prevout;
-        std::uint64_t asU64 = initval;
-    } u;
-    CompactTXO() = default;
-    CompactTXO(TxNum txNum, IONum n) { u.prevout.txNum = txNum; u.prevout.n = n; }
-    CompactTXO(const CompactTXO & o) { *this = o; }
-    CompactTXO & operator=(const CompactTXO & o) noexcept { u.asU64 = o.u.asU64; return *this; }
-    /// for most container types
-    bool operator==(const CompactTXO &o) const noexcept { return u.asU64 == o.u.asU64; }
-    /// for ordered sets
-    bool operator<(const CompactTXO &o) const noexcept  { return u.prevout.txNum < o.u.prevout.txNum && u.prevout.n < o.u.prevout.n; }
-    // convenience
-    TxNum txNum() const noexcept { return TxNum(u.prevout.txNum); }
-    // convenience
-    IONum N() const noexcept { return IONum(u.prevout.n); }
-    bool isValid() const { return u.asU64 != initval; }
-    static size_t constexpr serSize() noexcept { return 8; }
-    QString toString() const { return isValid() ? QString("%1:%2").arg(txNum()).arg(N()) : "<compact_txo_invalid>"; }
-    /// Low-level serialization to a byte buffer in place.  Note that bufsz must be >= serSize().
-    /// Number of bytes written is returned, or 0 if bufsz to small.
-   size_t toBytesInPlace(void *buf, size_t bufsz) const {
-        if (bufsz >= serSize()) {
-            uint8_t * cur = reinterpret_cast<uint8_t *>(buf);
-            cur[0] = (u.prevout.txNum >> 0) & 0xff;
-            cur[1] = (u.prevout.txNum >> 8) & 0xff;
-            cur[2] = (u.prevout.txNum >> 16) & 0xff;
-            cur[3] = (u.prevout.txNum >> 24) & 0xff;
-            cur[4] = (u.prevout.txNum >> 32) & 0xff;
-            cur[5] = (u.prevout.txNum >> 48) & 0xff;
-            cur[6] = (u.prevout.n >> 0) & 0xff;
-            cur[7] = (u.prevout.n >> 8) & 0xff;
-            return serSize();
-        }
-        return 0;
-    }
-    QByteArray toBytes() const {
-        // the below is excessively wordy but it forces 8 byte little-endian style serialization
-        QByteArray ret(serSize(), Qt::Uninitialized);
-        toBytesInPlace(ret.data(), size_t(ret.size())); // this should never fail
-        return ret;
-    }
-    static CompactTXO fromBytes(const void *buf, size_t bufsz) {
-        return fromBytes(QByteArray::fromRawData(reinterpret_cast<const char *>(buf),int(std::min(bufsz, serSize()))));
-    }
-    /// passed-in QByteArray must be exactly serSize() bytes else nothing is converted
-    static CompactTXO fromBytes(const QByteArray &b) {
-        // the below is excessively wordy but it forces 8 byte little-endian style deserialization
-        CompactTXO ret;
-        if (b.size() == serSize()) {
-            const uint8_t * cur = reinterpret_cast<const uint8_t *>(b.data());
-            ret.u.prevout.txNum =     (TxNum(cur[0])<<0)
-                                    | (TxNum(cur[1])<<8)
-                                    | (TxNum(cur[2])<<16)
-                                    | (TxNum(cur[3])<<24)
-                                    | (TxNum(cur[4])<<32)
-                                    | (TxNum(cur[5])<<40);
-            ret.u.prevout.n = IONum(cur[6]) | IONum(IONum(cur[7]) << 8);
-        }
-        return ret;
-    }
-};
-#   ifdef __GNUC__
-#   pragma pack(pop)
-#   endif
-
-namespace std {
-/// specialization of std::hash to be able to add struct CompactTXO to any unordered_set or unordered_map
-template<> struct hash<CompactTXO> {
-        size_t operator()(const CompactTXO &txo) const noexcept {
-            if constexpr (sizeof(txo.u.asU64) <= sizeof(size_t) && sizeof(txo.u.prevout) >= 8
-                          && sizeof(txo.u.prevout) == sizeof(txo.u.asU64))
-                return txo.u.asU64; // just return the packed txNum:n value as this is guaranteed to be unique
-            return (txo.u.prevout.txNum<<16) | size_t(txo.u.prevout.n&0xffff);
-        }
-};
-} // namespace std

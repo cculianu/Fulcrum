@@ -160,6 +160,7 @@ HEADERS += \
     SrvMgr.h \
     Storage.h \
     TXO.h \
+    TXO_Compact.h \
     Util.h
 
 # Robin Hood unordered_flat_map implememntation (single header and MUCH more efficient than unordered_map!)
