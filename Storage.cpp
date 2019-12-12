@@ -115,6 +115,10 @@ namespace {
     // this deserializes a vector of TxNums from a compact representation (6 bytes, eg 48 bits per TxNum), assuming little endian byte order
     template <> TxNumVec Deserialize(const QByteArray &, bool *);
 
+    // CompactTXO
+    template <> QByteArray Serialize(const CompactTXO &);
+    template <> CompactTXO Deserialize(const QByteArray &, bool *);
+
     // CompactTXOVec
     using CompactTXOVec = std::vector<CompactTXO>;
     // this serializes a vector of CompactTXO to a compact representation (uses .toBytes(), 8 bytes each)
@@ -1262,4 +1266,12 @@ namespace {
         }
         return ret;
     }
+
+    template <> QByteArray Serialize(const CompactTXO &c) { return c.toBytes(); }
+    template <> CompactTXO Deserialize(const QByteArray &b, bool *ok) {
+        CompactTXO ret = CompactTXO::fromBytes(b);
+        if (ok) *ok = ret.isValid();
+        return ret;
+    }
+
 }
