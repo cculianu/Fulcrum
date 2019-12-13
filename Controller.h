@@ -108,6 +108,7 @@ private:
     std::tuple<size_t, size_t, size_t> nTxInOutSoFar() const; ///< not 100% accurate. call this only from this thread
 
     volatile bool stopFlag = false;
+    bool lostConn = true;
 };
 
 /// Abstract base class for our private internal tasks. Concrete implementations are in Controller.cpp.

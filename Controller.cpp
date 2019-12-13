@@ -29,28 +29,28 @@ void Controller::startup()
 
     bitcoindmgr = std::make_unique<BitcoinDMgr>(options->bitcoind.first, options->bitcoind.second, options->rpcuser, options->rpcpassword);
     {
+        auto constexpr waitTimer = "wait4bitcoind", callProcessTimer = "callProcess";
+        int constexpr msgPeriod = 10000, // 10sec
+                      smallDelay = 100;
+
         // some setup code that waits for bitcoind to be ready before kicking off our "process" method
         auto waitForBitcoinD = [this] {
-            auto constexpr waitTimer = "wait4bitcoind", callProcessTimer = "callProcess";
-            int constexpr msgPeriod = 10000, // 10sec
-                          smallDelay = 100;
+            lostConn = true;
             stopTimer(pollTimerName);
             stopTimer(callProcessTimer);
             callOnTimerSoon(msgPeriod, waitTimer, []{ Log("Waiting for bitcoind..."); return true; }, false, Qt::TimerType::VeryCoarseTimer);
-            // connection to kick off our 'process' method once the first auth is received
-            auto connPtr = std::make_shared<QMetaObject::Connection>();
-            *connPtr = connect(bitcoindmgr.get(), &BitcoinDMgr::gotFirstGoodConnection, this, [this, connPtr](quint64 id) mutable {
-                if (connPtr) {
-                    stopTimer(waitTimer);
-                    if (!disconnect(*connPtr)) Fatal() << "Failed to disconnect 'authenticated' signal! FIXME!"; // this should never happen but if it does, app quits.
-                    connPtr.reset(); // clear connPtr right away to 1. delte it asap and 2. so we are guaranteed not to reenter this block for this connection should there be a spurious signal emitted.
-                    Debug() << "Auth recvd from bicoind with id: " << id << ", proceeding with processing ...";
-                    callOnTimerSoonNoRepeat(smallDelay, callProcessTimer, [this]{process();}, true);
-                }
-            });
         };
         waitForBitcoinD();
         conns += connect(bitcoindmgr.get(), &BitcoinDMgr::allConnectionsLost, this, waitForBitcoinD);
+        conns += connect(bitcoindmgr.get(), &BitcoinDMgr::gotFirstGoodConnection, this, [this](quint64 id) {
+            // connection to kick off our 'process' method once the first auth is received
+            if (lostConn) {
+                lostConn = false;
+                stopTimer(waitTimer);
+                Debug() << "Auth recvd from bicoind with id: " << id << ", proceeding with processing ...";
+                callOnTimerSoonNoRepeat(smallDelay, callProcessTimer, [this]{process();}, true);
+            }
+        });
         conns += connect(bitcoindmgr.get(), &BitcoinDMgr::inWarmUp, this, [last = -1.0](const QString &msg) mutable {
             // just print a message to the log as to why we keep dropping conn. -- if bitcoind is still warming up
             auto now = Util::getTimeSecs();
