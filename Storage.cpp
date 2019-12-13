@@ -115,17 +115,9 @@ namespace {
     // this deserializes a vector of TxNums from a compact representation (6 bytes, eg 48 bits per TxNum), assuming little endian byte order
     template <> TxNumVec Deserialize(const QByteArray &, bool *);
 
-    // CompactTXO
+    // CompactTXO -- not currently used since we prefer toBytes() directly (TODO: remove if we end up never using this)
     template <> QByteArray Serialize(const CompactTXO &);
     template <> CompactTXO Deserialize(const QByteArray &, bool *);
-
-    // CompactTXOVec
-    using CompactTXOVec = std::vector<CompactTXO>;
-    // this serializes a vector of CompactTXO to a compact representation (uses .toBytes(), 8 bytes each)
-    template <> QByteArray Serialize(const CompactTXOVec &);
-    // this deserializes a vector of CompactTXO from a compact representation (using .fromBytes(), 8 bytes each)
-    template <> CompactTXOVec Deserialize(const QByteArray &, bool *);
-
 
     /// NOTE: The slice should live as long as the returned QByteArray does.  The QByteArray is a weak pointer into the slice!
     inline QByteArray FromSlice(const rocksdb::Slice &s) { return QByteArray::fromRawData(s.data(), int(s.size())); }
@@ -621,66 +613,6 @@ void Storage::loadCheckHeadersInDB()
     }
 }
 
-// this must be called *after* loadCheckTxNumsFileAndBlkInfo(), because it needs a valid p->txNumNext
-void Storage::loadCheckUTXOsInDB()
-{
-    FatalAssert(!!p->db.utxoset) << __FUNCTION__ << ": Utxo set db is not open";
-
-    Log() << "Verifying utxo set ...";
-
-    const auto t0 = Util::getTimeNS();
-    {
-        const int currentHeight = latestTip().first;
-
-        std::unique_ptr<rocksdb::Iterator> iter(p->db.utxoset->NewIterator(p->db.defReadOpts));
-        if (!iter) throw DatabaseError("Unable to obtain an iterator to the utxo set db");
-        iter->SeekToFirst();
-        p->utxoCt = 0;
-        for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
-            // TODO: the below checks may be too slow. See about removing them and just counting the iter.
-            const auto txo = Deserialize<TXO>(FromSlice(iter->key()));
-            if (!txo.isValid()) {
-                throw DatabaseSerializationError("Read an invalid txo from the utxo set database."
-                                                 " This may be due to a database format mismatch."
-                                                 "\n\nDelete the datadir and resynch to bitcoind.\n");
-            }
-            auto info = Deserialize<TXOInfo>(FromSlice(iter->value()));
-            if (!info.isValid())
-                throw DatabaseSerializationError(QString("Txo %1 has invalid metadata in the db."
-                                                        " This may be due to a database format mismatch."
-                                                        "\n\nDelete the datadir and resynch to bitcoind.\n")
-                                                 .arg(txo.toString()));
-            if (bool fail1 = false, fail2 = false;
-                    (fail1 = (info.confirmedHeight.has_value() && int(info.confirmedHeight.value()) > currentHeight))
-                    || (fail2 = info.txNum >= p->txNumNext) ) {
-                // TODO: reorg? Inconsisent db?  FIXME
-                QString msg;
-                {
-                    QTextStream ts(&msg);
-                    ts << "Inconsistent database: txo " << txo.toString() << " at height: "
-                       << info.confirmedHeight.value();
-                    if (fail1) {
-                        ts << " > current height: " << currentHeight << ".";
-                    } else if (fail2) {
-                        ts << ". TxNum: " << info.txNum << " >= " << p->txNumNext << ".";
-                    }
-                    ts << "\n\nThe database has been corrupted. Please delete the datadir and resynch to bitcoind.\n";
-                }
-                throw DatabaseError(msg);
-            }
-            if (0 == ++p->utxoCt % 100000) {
-                *(0 == p->utxoCt % 2500000 ? std::make_unique<Log>() : std::make_unique<Debug>()) << "Verified " << p->utxoCt << " utxos ...";
-            }
-        }
-        const auto ct = utxoSetSize();
-        if (ct)
-            Log() << "UTXO set: "  << ct << Util::Pluralize(" utxo", ct)
-                  << ", " << QString::number(utxoSetSizeMiB(), 'f', 3) << " MiB";
-    }
-    const auto elapsed = Util::getTimeNS();
-    Debug() << "Read txos from db in " << QString::number((elapsed-t0)/1e6, 'f', 3) << " msec";
-}
-
 void Storage::loadCheckTxNumsFileAndBlkInfo()
 {
     // may throw.
@@ -712,6 +644,73 @@ void Storage::loadCheckTxNumsFileAndBlkInfo()
     }
 }
 
+// NOTE: this must be called *after* loadCheckTxNumsFileAndBlkInfo(), because it needs a valid p->txNumNext
+void Storage::loadCheckUTXOsInDB()
+{
+    FatalAssert(!!p->db.utxoset) << __FUNCTION__ << ": Utxo set db is not open";
+
+    Log() << "Verifying utxo set ...";
+
+    const auto t0 = Util::getTimeNS();
+    {
+        const int currentHeight = latestTip().first;
+
+        std::unique_ptr<rocksdb::Iterator> iter(p->db.utxoset->NewIterator(p->db.defReadOpts));
+        if (!iter) throw DatabaseError("Unable to obtain an iterator to the utxo set db");
+        iter->SeekToFirst();
+        p->utxoCt = 0;
+        for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
+            // TODO: the below checks may be too slow. See about removing them and just counting the iter.
+            const auto txo = Deserialize<TXO>(FromSlice(iter->key()));
+            if (!txo.isValid()) {
+                throw DatabaseSerializationError("Read an invalid txo from the utxo set database."
+                                                 " This may be due to a database format mismatch."
+                                                 "\n\nDelete the datadir and resynch to bitcoind.\n");
+            }
+            auto info = Deserialize<TXOInfo>(FromSlice(iter->value()));
+            if (!info.isValid())
+                throw DatabaseSerializationError(QString("Txo %1 has invalid metadata in the db."
+                                                        " This may be due to a database format mismatch."
+                                                        "\n\nDelete the datadir and resynch to bitcoind.\n")
+                                                 .arg(txo.toString()));
+            // uncomment this to do a deep test: TODO: Make this configurable from the CLI -- this last check is very slow.
+            //const CompactTXO ctxo = CompactTXO(info.txNum, txo.prevoutN);
+            //const QByteArray shuKey = info.hashX + ctxo.toBytes();
+            //static const QString errPrefix("Error reading scripthash_unspent");
+            if (bool fail1 = false, fail2 = false/*, fail3 = false*/;
+                    (fail1 = (info.confirmedHeight.has_value() && int(info.confirmedHeight.value()) > currentHeight))
+                    || (fail2 = info.txNum >= p->txNumNext)
+                    /*|| (fail3 = !GenericDBGet<QByteArray>(p->db.shunspent.get(), shuKey, true, errPrefix, false, p->db.defReadOpts).has_value())*/) {
+                // TODO: reorg? Inconsisent db?  FIXME
+                QString msg;
+                {
+                    QTextStream ts(&msg);
+                    ts << "Inconsistent database: txo " << txo.toString() << " at height: "
+                       << info.confirmedHeight.value();
+                    if (fail1) {
+                        ts << " > current height: " << currentHeight << ".";
+                    } else if (fail2) {
+                        ts << ". TxNum: " << info.txNum << " >= " << p->txNumNext << ".";
+                    } /*else if (fail3) {
+                        ts << ". Failed to find ctxo " << ctxo.toString() << " in scripthash_unspent db.";
+                    }*/
+                    ts << "\n\nThe database has been corrupted. Please delete the datadir and resynch to bitcoind.\n";
+                }
+                throw DatabaseError(msg);
+            }
+            if (0 == ++p->utxoCt % 100000) {
+                *(0 == p->utxoCt % 2500000 ? std::make_unique<Log>() : std::make_unique<Debug>()) << "Verified " << p->utxoCt << " utxos ...";
+            }
+        }
+        const auto ct = utxoSetSize();
+        if (ct)
+            Log() << "UTXO set: "  << ct << Util::Pluralize(" utxo", ct)
+                  << ", " << QString::number(utxoSetSizeMiB(), 'f', 3) << " MiB";
+    }
+    const auto elapsed = Util::getTimeNS();
+    Debug() << "Read txos from db in " << QString::number((elapsed-t0)/1e6, 'f', 3) << " msec";
+}
+
 
 /// Thread-safe. Immediately save a UTXO to the db. May throw on database error.
 void Storage::utxoAddToDB(const TXO &txo, const TXOInfo &info, const CompactTXO &ctxo)
@@ -722,25 +721,15 @@ void Storage::utxoAddToDB(const TXO &txo, const TXOInfo &info, const CompactTXO 
         GenericDBPut(p->db.utxoset.get(), txo, info, errMsgPrefix, p->db.defWriteOpts); // may throw on failure
 
         {
-            // TODO: this read-modify-write would better be served by a rocksdb MergeOperator. The default AssociativeOperator
-            // doesn't quite work for us.  We would have to use the FullMergeV2 API (which I have yet to teach myself).
-            // So for now we do it this way.  This is slower than the ideal merge operator which can collapse reduntant
-            // allocations down to 1.  TODO!
-            constexpr bool debugPrt = false;
-            static const QByteArray empty;
-            static const QString errMsgPrefix("Error updating scripthash_unspent in utxoAddToDB");
-            QByteArray rawBytes = GenericDBGet<QByteArray>(p->db.shunspent.get(), info.hashX, true, errMsgPrefix, false, p->db.defReadOpts).value_or(empty); // may throw on DB error
-            // now, blindly (without doing any checks) append the ctxo to the end of the existing byte array (if any).
-            // This is fine for later deserialization of the CompactTXOVec.
-            const int oldSize = rawBytes.size();
-            rawBytes.resize(oldSize + int(ctxo.serSize()));
-            [[maybe_unused]] const auto res = ctxo.toBytesInPlace(rawBytes.data()+oldSize, ctxo.serSize());
-            assert(res == ctxo.serSize());
-            GenericDBPut(p->db.shunspent.get(), info.hashX, rawBytes, errMsgPrefix, p->db.defWriteOpts); // may throw on DB error
+            // Update the scripthash unspent. This is a very simple table which we scan by hashX prefix using
+            // an iterator in listUnspent.  Each entry's key is prefixed with the HashX bytes but suffixed with the
+            // serialized CompactTXO bytes. Each entry has no data for the value.
+            static const QString errMsgPrefix("Failed to add an entry to the scripthash_unspent db");
+            static const rocksdb::Slice empty;
+            const QByteArray key = info.hashX + ctxo.toBytes();
 
-            if constexpr (debugPrt) Debug() << "sh_unspent: added ctxo: " << ctxo.toString() << " for hashX: " << Util::ToHexFast(info.hashX) << " (new ser size: " << rawBytes.size() << ")";
+            GenericDBPut(p->db.shunspent.get(), key, empty, errMsgPrefix, p->db.defWriteOpts); // may throw, which is what we want
         }
-
         ++p->utxoCt;
     }
 }
@@ -748,52 +737,28 @@ void Storage::utxoAddToDB(const TXO &txo, const TXOInfo &info, const CompactTXO 
 std::optional<TXOInfo> Storage::utxoGetFromDB(const TXO &txo, bool throwIfMissing)
 {
     assert(bool(p->db.utxoset));
-    static const QString errMsgPrefix("Failed to read a utxo to the utxo db");
+    static const QString errMsgPrefix("Failed to read a utxo from the utxo db");
     return GenericDBGet<TXOInfo>(p->db.utxoset.get(), txo, !throwIfMissing, errMsgPrefix, false, p->db.defReadOpts);
 }
 /// Delete a Utxo from the db. Will throw only on database error (but not if it was missing).
 void Storage::utxoDeleteFromDB(const TXO &txo, const HashX &hashX, const CompactTXO &ctxo)
 {
     assert(bool(p->db.utxoset));
-    auto stat = p->db.utxoset->Delete(rocksdb::WriteOptions(), ToSlice(Serialize(txo)));
-    if (!stat.ok()) {
-        throw DatabaseError(QString("Failed to delete a utxo (%1:%2) from the db: %3")
-                            .arg(QString(txo.prevoutHash.toHex())).arg(txo.prevoutN).arg(QString::fromStdString(stat.ToString())));
+    {
+        // delete from utxoset db
+        auto stat = p->db.utxoset->Delete(rocksdb::WriteOptions(), ToSlice(Serialize(txo)));
+        if (!stat.ok()) {
+            throw DatabaseError(QString("Failed to delete from the utxo db (%1:%2): %3")
+                                .arg(QString(txo.prevoutHash.toHex())).arg(txo.prevoutN).arg(QString::fromStdString(stat.ToString())));
+        }
     }
     {
-        // TODO: this read-modify-write would better be served by a rocksdb MergeOperator. The default AssociativeOperator
-        // doesn't quite work for us.  We would have to use the FullMergeV2 API (which I have yet to teach myself).
-        // So for now we do it this way.  This is slower than the ideal merge operator which can collapse reduntant
-        // allocations down to 1.  TODO!
-        // now, delete it from the scripthash_unspent table as well for quick list_unspent lookups
-        constexpr bool debugPrt = false;
-        static const QString errMsgPrefix("Error deleting a scripthash_unspent in utxoAddDeleteFromDB (not found?)");
-
-
-        CompactTXOVec vec = GenericDBGetFailIfMissing<CompactTXOVec>(p->db.shunspent.get(), hashX, errMsgPrefix, false, p->db.defReadOpts);
-        QByteArray newSer;
-        bool deleted = false;
-        if (auto it = std::find(vec.begin(), vec.end(), ctxo); it != vec.end()) {
-            vec.erase(it);
-            if (vec.empty()) {
-                if (auto s = p->db.shunspent->Delete(p->db.defWriteOpts, ToSlice(hashX)); !s.ok()) {
-                    throw DatabaseError(QString("Failed to delete hashX %1 from db").arg(QString(hashX.toHex())));
-                }
-                if constexpr (debugPrt) deleted = true;
-            } else {
-                static const QString errMsgPrefix("Error re-saving a scripthash_unspent blob in utxoAddDeleteFromDB");
-                if constexpr (debugPrt) {
-                    newSer = Serialize(vec);
-                    GenericDBPut(p->db.shunspent.get(), hashX, newSer, errMsgPrefix, p->db.defWriteOpts);
-                } else {
-                    GenericDBPut(p->db.shunspent.get(), hashX, vec, errMsgPrefix, p->db.defWriteOpts);
-                }
-            }
-        } else {
-            throw InternalError(QString("Missing ctxo %1 from unspent list for hashX %2").arg(ctxo.toString()).arg(QString(hashX.toHex())));
+        // delete from scripthash_unspent db
+        const QByteArray key = hashX + ctxo.toBytes();
+        if (auto stat = p->db.shunspent->Delete(p->db.defWriteOpts, ToSlice(key)); !stat.ok()) {
+            throw DatabaseError(QString("Failed to delete a from the scripthash_unspent db (%1:%2): %3")
+                                .arg(QString(txo.prevoutHash.toHex())).arg(txo.prevoutN).arg(QString::fromStdString(stat.ToString())));
         }
-
-        if constexpr (debugPrt) Debug() << "Removed ctxo: " << ctxo.toString() << " for hashX: " << Util::ToHexFast(hashX) << " (new ser size: " << (deleted ? QString(" DELETED") : QString::number(newSer.size())) << ")";
     }
     --p->utxoCt;
 }
@@ -1057,27 +1022,63 @@ auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
 {
     UnspentItems ret;
     try {
-        static const QString err("Error retrieving unspent items for a script hash in listUnspent");
-        auto vec_opt = GenericDBGet<CompactTXOVec>(p->db.shunspent.get(), hashX, true, err, false, p->db.defReadOpts);
-        if (vec_opt.has_value()) {
-            const auto & vec = vec_opt.value();
-            ret.reserve(vec.size());
-            for (const auto & ctxo : vec) {
-                static const QString err("Error retrieving the utxo for an unspent item in listUnspent");
-                auto hash = hashForTxNum(ctxo.txNum()).value(); // may throw, but that indicates some database inconsistency. we catch below
-                auto height = heightForTxNum(ctxo.txNum()).value(); // may throw, same deal
-                auto info = GenericDBGetFailIfMissing<TXOInfo>(p->db.utxoset.get(), TXO{ hash, ctxo.N()}, err, false, p->db.defReadOpts); // may throw -- indicates db inconsistency
-                ret.emplace_back(UnspentItem{
-                    { hash, height }, // base HistoryItem
-                    ctxo.N(),  // .tx_pos
-                    info.amount
-                });
-            }
+        std::unique_ptr<rocksdb::Iterator> iter(p->db.shunspent->NewIterator(p->db.defReadOpts));
+        const rocksdb::Slice prefix = ToSlice(hashX); // points to data in hashX
+
+        // Search table for all keys that start with hashx's bytes. Note: the loop end-condition is strange.
+        // See: https://github.com/facebook/rocksdb/wiki/Prefix-Seek-API-Changes#transition-to-the-new-usage
+        rocksdb::Slice key;
+        for (iter->Seek(prefix); iter->Valid() && (key = iter->key()).starts_with(prefix); iter->Next()) {
+            if (key.size() != HashLen + CompactTXO::serSize())
+                // should never happen, indicates db corruption
+                throw InternalError("Key size for hashx is invalid");
+            const CompactTXO ctxo = CompactTXO::fromBytes(key.data() + HashLen, CompactTXO::serSize());
+            if (!ctxo.isValid())
+                // should never happen, indicates db corruption
+                throw InternalError("Deserialized CompactTXO is invalid");
+            static const QString err("Error retrieving the utxo for an unspent item in listUnspent");
+            auto hash = hashForTxNum(ctxo.txNum()).value(); // may throw, but that indicates some database inconsistency. we catch below
+            auto height = heightForTxNum(ctxo.txNum()).value(); // may throw, same deal
+            auto info = GenericDBGetFailIfMissing<TXOInfo>(p->db.utxoset.get(), TXO{ hash, ctxo.N()}, err, false, p->db.defReadOpts); // may throw -- indicates db inconsistency
+            ret.emplace_back(UnspentItem{
+                { hash, height }, // base HistoryItem
+                ctxo.N(),  // .tx_pos
+                info.amount, // .value
+                info.txNum, // .txNum
+            });
         }
+        std::sort(ret.begin(), ret.end());
+        ret.shrink_to_fit();
     } catch (const std::exception &e) {
         Warning(Log::Magenta) << __func__ << ": " << e.what();
     }
     return ret;
+}
+
+// HistoryItem & UnspentItem -- operator< and operator== -- for sort.
+bool Storage::HistoryItem::operator<(const HistoryItem &o) const noexcept {
+    return height == o.height ? hash < o.hash : height < o.height;
+}
+bool Storage::HistoryItem::operator==(const HistoryItem &o) const noexcept {
+    return height == o.height && hash == o.hash;
+}
+bool Storage::UnspentItem::operator<(const UnspentItem &o) const noexcept {
+    if (txNum == o.txNum) { // order by txNum
+        if (tx_pos == o.tx_pos) { // then by tx_pos
+            // next by tx_hash, height (this branch shouldn't normally be reached with real blockchain data since
+            // txNum:tx_pos defines an UnspentItem completed...
+            if (HistoryItem::operator<(o))
+                return true;
+            else if (HistoryItem::operator==(o))
+                return value < o.value;
+            return false;
+        }
+        return tx_pos < o.tx_pos;
+    }
+    return txNum < o.txNum;
+}
+bool Storage::UnspentItem::operator==(const UnspentItem &o) const noexcept {
+    return txNum == o.txNum && tx_pos == o.tx_pos && value == o.value && HistoryItem::operator==(o);
 }
 
 namespace {
@@ -1168,34 +1169,6 @@ namespace {
         ret.reserve(N);
         for ( ; cur < end; cur += 6) {
             ret.emplace_back( CompactTXO::txNumFromCompactBytes(cur) );
-        }
-        return ret;
-    }
-    template <> QByteArray Serialize(const CompactTXOVec &v)
-    {
-        QByteArray ret(int(v.size() * CompactTXO::serSize()), Qt::Uninitialized);
-        char *cur = ret.data();
-        for (const auto & c : v) {
-            cur += c.toBytesInPlace(cur, CompactTXO::serSize());
-        }
-        if (UNLIKELY(cur < ret.end()))
-            Warning() << "Failed to serialize a compact txo vector properly! Short conversion! FIXME!";
-        return ret;
-    }
-    template <> CompactTXOVec Deserialize(const QByteArray &b, bool *ok)
-    {
-        CompactTXOVec ret;
-        const size_t bsz = size_t(b.size());
-        const size_t N = bsz / CompactTXO::serSize();
-        if (CompactTXO::serSize() * N != bsz) { // we refuse if there are extra bytes at the end.
-            if (ok) *ok = false;
-            return ret;
-        }
-        if (ok) *ok = true;
-        ret.reserve(N);
-        const char *cur = b.data();
-        for (size_t i = 0; i < N; ++i, cur += CompactTXO::serSize()) {
-            ret.emplace_back(CompactTXO::fromBytes(cur, CompactTXO::serSize()));
         }
         return ret;
     }

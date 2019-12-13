@@ -103,6 +103,10 @@ public:
     struct HistoryItem {
         TxHash hash;
         unsigned height = 0;
+
+        // for sort & maps
+        bool operator<(const HistoryItem &o) const noexcept;
+        bool operator==(const HistoryItem &o) const noexcept;
     };
     using History = std::vector<HistoryItem>;
 
@@ -112,6 +116,11 @@ public:
     struct UnspentItem : HistoryItem {
         IONum tx_pos = 0;
         bitcoin::Amount value;
+        TxNum txNum = 0; ///< the global txNum. This + tx_pos defines the order
+
+        // for sort & maps
+        bool operator<(const UnspentItem &o) const noexcept;
+        bool operator==(const UnspentItem &o) const noexcept;
     };
     using UnspentItems = std::vector<UnspentItem>;
 
