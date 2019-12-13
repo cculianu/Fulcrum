@@ -411,6 +411,9 @@ namespace BTC
     using uint256HashHasher = GenericTrivialHashHasher<bitcoin::uint256>;
     using uint160HashHasher = GenericTrivialHashHasher<bitcoin::uint160>;
 
+    /// After Nov. 2018, reorgs beyond this depth can never occur. We use this constant to limit the depth of block
+    /// rollback/undo information we store in Controller.cpp and Storage.cpp.
+    static constexpr unsigned maxReorgDepth = 10;
 
     /// Tests
     namespace Tests {

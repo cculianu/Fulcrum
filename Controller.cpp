@@ -343,7 +343,7 @@ struct Controller::StateMachine
         Begin=0, GetBlocks, DownloadingBlocks, FinishedDL, End, Failure, IBD
     };
     State state = Begin;
-    int ht = -1;
+    int ht = -1; ///< the latest height bitcoind told us this run
     bool isMainNet = false;
 
     robin_hood::unordered_flat_map<unsigned, PreProcessedBlockPtr> ppBlocks; // mapping of height -> PreProcessedBlock (we use an unordered_flat_map because it's faster for frequent updates)
@@ -645,7 +645,8 @@ bool Controller::process_VerifyAndAddBlock(PreProcessedBlockPtr ppb)
 
     const auto nLeft = qMax(sm->endHeight - (sm->ppBlkHtNext-1), 0U);
 
-    const QString err = storage->addBlock(ppb, nLeft);
+    const bool saveUndoInfo = int(ppb->height) > (sm->ht - int(BTC::maxReorgDepth));
+    const QString err = storage->addBlock(ppb, saveUndoInfo, nLeft);
 
     if (!err.isEmpty()) {
         Fatal() << err; // TODO: see about more graceful error and not a fatal exit. (although if we do get an error here it's pretty non-recoverable!)

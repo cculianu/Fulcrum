@@ -14,5 +14,6 @@ using TxNum = std::uint64_t; ///< this is used by the storage subsystem and also
 using IONum = std::uint16_t;
 using TxHash = QByteArray;
 using HashX = QByteArray;
+using BlockHash = QByteArray;
 static constexpr int HashLen = bitcoin::uint256::width();
 

@@ -83,7 +83,7 @@ public:
     /// failure.  Note: you can only add blocks in serial sequence from 0 -> latest.
     /// This function will mutate the pased-in pre-processed block and fill in all the inputs from the utxo set,
     /// as well as modify the utxo set with spends / new outputs.
-    QString addBlock(PreProcessedBlockPtr ppb, unsigned num2ReserveAfter = 0);
+    QString addBlock(PreProcessedBlockPtr ppb, bool alsoSaveUnfoInfo, unsigned num2ReserveAfter = 0);
 
     /// returns the "next" TxNum (thread safe)
     TxNum getTxNum() const;

@@ -20,6 +20,7 @@
 #include <string>
 #include <tuple>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 DatabaseError::~DatabaseError(){} // weak vtable warning suppression
@@ -250,6 +251,36 @@ namespace {
     // deserializes as raw bytes from struct
     template <> BlkInfo Deserialize(const QByteArray &, bool *);
 
+    /// Block rewind/undo information. One of these is kept around in the db for the last 10 blocks.
+    /// It basically stores a record of all the UTXO's added and removed, as well as the set of
+    /// scripthashes.
+    struct UndoInfo {
+        using ScriptHashSet = std::unordered_set<HashX, HashHasher>;
+        using UTXOAddUndo = std::tuple<TXO, HashX, CompactTXO>;
+        using UTXODelUndo = std::tuple<TXO, TXOInfo>;
+
+        BlockHeight height; ///< we save a copy of this infomation as a sanity check
+        BlockHash hash; ///< we save a copy of this information as a sanity check. (bytes are in "reversed", bitcoind ToHex()-style memory order)
+        BlkInfo blkInfo; ///< we save a copy of this from the global value for convenience and as a sanity check.
+
+        // below is the actual critical undo information
+        ScriptHashSet scriptHashes;
+        std::vector<UTXOAddUndo> addUndos;
+        std::vector<UTXODelUndo> delUndos;
+
+        [[maybe_unused]] QString toDebugString() const;
+    };
+
+    QString UndoInfo::toDebugString() const {
+        QString ret;
+        QTextStream ts(&ret);
+        ts  << "<Undo info for height: " << height << " addUndos: " << addUndos.size() << " delUndos: " << delUndos.size()
+            << " scriptHashes: " << scriptHashes.size() << " nTx: " << blkInfo.nTx << " txNum0: " << blkInfo.txNum0
+            << " hash: " << hash.toHex() << ">";
+        return ret;
+    }
+
+
     /// Associative merge operator used for scripthash history concatenation
     /// TODO: this needs to be made more efficient by implementing the real MergeOperator interface and combining
     /// appends efficiently to reduce allocations.  Right now it's called for each append.
@@ -277,23 +308,24 @@ namespace {
                    rocksdb::Logger* logger) const override;
         const char* Name() const override { return "ConcatOperator"; /* NOTE: this must be the same for the same db each time it is opened! */ }
     };
-}
 
-ConcatOperator::~ConcatOperator() {} // weak vtable warning prevention
+    ConcatOperator::~ConcatOperator() {} // weak vtable warning prevention
 
-bool ConcatOperator::Merge(const rocksdb::Slice& key, const rocksdb::Slice* existing_value,
-                           const rocksdb::Slice& value, std::string* new_value, rocksdb::Logger* logger) const
-{
-    (void)key; (void)logger;
-    ++merges;
-    new_value->resize( (existing_value ? existing_value->size() : 0) + value.size() );
-    char *cur = new_value->data();
-    if (existing_value) {
-        std::memcpy(cur, existing_value->data(), existing_value->size());
-        cur += existing_value->size();
+    bool ConcatOperator::Merge(const rocksdb::Slice& key, const rocksdb::Slice* existing_value,
+                               const rocksdb::Slice& value, std::string* new_value, rocksdb::Logger* logger) const
+    {
+        (void)key; (void)logger;
+        ++merges;
+        new_value->resize( (existing_value ? existing_value->size() : 0) + value.size() );
+        char *cur = new_value->data();
+        if (existing_value) {
+            std::memcpy(cur, existing_value->data(), existing_value->size());
+            cur += existing_value->size();
+        }
+        std::memcpy(cur, value.data(), value.size());
+        return true;
     }
-    std::memcpy(cur, value.data(), value.size());
-    return true;
+
 }
 
 
@@ -769,9 +801,16 @@ double Storage::utxoSetSizeMiB() const {
     return (utxoSetSize()*elemSize) / 1e6;
 }
 
-QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve)
+QString Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserve)
 {
     assert(bool(ppb) && bool(p));
+
+    std::unique_ptr<UndoInfo> undo;
+
+    if (saveUndo) {
+        undo.reset(new UndoInfo);
+        undo->height = ppb->height;
+    }
 
     QString errRet;
 
@@ -817,6 +856,12 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve)
 
         // update utxoSet
         {
+            // reserve space in undo, if in saveUndo mode
+            if (undo) {
+                undo->addUndos.reserve(ppb->outputs.size());
+                undo->delUndos.reserve(ppb->inputs.size());
+            }
+
             // add outputs
 
             for (const auto & [hashX, ag] : ppb->hashXAggregated) {
@@ -834,7 +879,11 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve)
                     info.confirmedHeight = ppb->height;
                     info.txNum = blockTxNum0 + out.txIdx;
                     const TXO txo{ hash, out.outN };
-                    utxoAddToDB(txo, info, CompactTXO(blockTxNum0+out.txIdx, out.outN)); // add to db
+                    const CompactTXO ctxo(blockTxNum0+out.txIdx, out.outN);
+                    utxoAddToDB(txo, info, ctxo); // add to db
+                    if (undo) { // save undo info if we are in saveUndo mode
+                        undo->addUndos.emplace_back(txo, info.hashX, ctxo);
+                    }
                     if constexpr (debugPrt)
                         Debug() << "Added txo: " << txo.toString()
                                 << " (txid: " << hash.toHex() << " height: " << ppb->height << ") "
@@ -875,6 +924,9 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve)
                     }
                     // delete from db
                     utxoDeleteFromDB(txo, info.hashX, CompactTXO(info.txNum, txo.prevoutN)); // delete from db
+                    if (undo) { // save undo info, if we are in saveUndo mode
+                        undo->delUndos.emplace_back(txo, info);
+                    }
                 } else {
                     QString s;
                     {
@@ -943,6 +995,20 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, unsigned nReserve)
             // save BlkInfo to db
             static const QString blkInfoErrMsg("Error writing BlkInfo to db");
             GenericDBPut(p->db.blkinfo.get(), uint32_t(ppb->height), blkInfo, blkInfoErrMsg, p->db.defWriteOpts);
+
+            if (undo) {
+                // save blkInfo to undo information, if in saveUndo mode
+                undo->blkInfo = p->blkInfos.back();
+            }
+        }
+
+        // save teh last of the undo info, if in saveUndo mode
+        if (undo) {
+            undo->hash = BTC::HashRev(rawHeader);
+            undo->scriptHashes = Util::keySet<decltype (undo->scriptHashes)>(ppb->hashXAggregated);
+            if constexpr (debugPrt) {
+                Debug() << undo->toDebugString();
+            }
         }
 
         appendHeader(rawHeader, ppb->height);
@@ -1179,5 +1245,4 @@ namespace {
         if (ok) *ok = ret.isValid();
         return ret;
     }
-
 }
