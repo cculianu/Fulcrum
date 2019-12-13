@@ -12,6 +12,7 @@
 #include <future>
 #include <optional>
 #include <random>
+#include <set>
 #include <string>
 #include <tuple>
 #include <type_traits>
@@ -222,6 +223,51 @@ namespace Util {
             map.insert(it.key(), it.value());
         }
         return map;
+    }
+
+    /// Grab just the keys from a map, by copy construction.
+    /// If no Set template arg is specified, std::set<Map::key_type> is used.
+    /// Otherwise specify any set type such as std::unordered_set<type>, etc.
+    template <typename Set = void, typename Map> /* We do it this way so that Set is the first arg an Map is inferred from args. */
+    auto keySet(const Map &map) {
+        // lambda template
+        static const auto inner = [](const Map &map, auto & set) {
+            for (auto it = map.begin(); it != map.end(); ++it) {
+                set.insert(it->first);
+            }
+        };
+        // this lambda template is only here to assist in type deduction, it's never called.
+        constexpr auto deduceSet = [] {
+            if constexpr (std::is_void_v<Set>)
+                // default of void leads to std::set being used as the return type
+                return std::set<typename Map::mapped_type>();
+            else
+                return Set();
+        };
+        decltype(deduceSet()) ret;
+        inner(map, ret);
+        return ret;
+    }
+    /// Similar to keySet(), but instead grabs all the values from a map.
+    template <typename Set = void, typename Map>
+    auto valueSet(const Map &map) {
+        // lambda template
+        static const auto inner = [](const Map &map, auto & set) {
+            for (auto it = map.begin(); it != map.end(); ++it) {
+                set.insert(it->second);
+            }
+        };
+        // this lambda template is only here to assist in type deduction, it's never called.
+        constexpr auto deduceSet = [] {
+            if constexpr (std::is_void_v<Set>)
+                // default of void leads to std::set being used as the return type
+                return std::set<typename Map::mapped_type>();
+            else
+                return Set();
+        };
+        decltype(deduceSet()) ret;
+        inner(map, ret);
+        return ret;
     }
 
     namespace Json {
