@@ -1036,7 +1036,7 @@ auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
             if (!ctxo.isValid())
                 // should never happen, indicates db corruption
                 throw InternalError("Deserialized CompactTXO is invalid");
-            static const QString err("Error retrieving the utxo for an unspent item in listUnspent");
+            static const QString err("Error retrieving the utxo for an unspent item");
             auto hash = hashForTxNum(ctxo.txNum()).value(); // may throw, but that indicates some database inconsistency. we catch below
             auto height = heightForTxNum(ctxo.txNum()).value(); // may throw, same deal
             auto info = GenericDBGetFailIfMissing<TXOInfo>(p->db.utxoset.get(), TXO{ hash, ctxo.N()}, err, false, p->db.defReadOpts); // may throw -- indicates db inconsistency
