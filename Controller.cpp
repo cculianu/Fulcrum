@@ -363,6 +363,10 @@ struct Controller::StateMachine
         auto idx = qMin(size_t(state), std::size(stateStrings)-1);
         return stateStrings[idx];
     }
+
+    static constexpr unsigned progressIntervalBlocks = 1000;
+    size_t nProgBlocks = 0, nProgIOs = 0, nProgTx = 0;
+    double lastProgTs = 0.;
 };
 
 unsigned Controller::downloadTaskRecommendedThrottleTimeMsec(unsigned bnum) const
@@ -504,6 +508,7 @@ void Controller::process(bool beSilentIfUpToDate)
         const size_t num = size_t(sm->ht+1) - base;
         FatalAssert(num > 0) << "Cannot download 0 blocks! FIXME!"; // more paranoia
         const size_t nTasks = qMin(num, sm->DL_CONCURRENCY);
+        sm->lastProgTs = Util::getTimeSecs();
         sm->ppBlkHtNext = sm->startheight = unsigned(base);
         sm->endHeight = unsigned(sm->ht);
         for (size_t i = 0; i < nTasks; ++i) {
@@ -569,12 +574,35 @@ void Controller::putBlock(CtlTask *task, PreProcessedBlockPtr p)
     });
 }
 
-void Controller::process_PrintProgress(unsigned height)
+void Controller::process_PrintProgress(unsigned height, size_t nTx, size_t nIO)
 {
     if (UNLIKELY(!sm)) return; // paranaoia
-    if (height && !(height % 1000)) {
+    sm->nProgBlocks++;
+    sm->nProgTx += nTx;
+    sm->nProgIOs += nIO;
+    if (UNLIKELY(height && !(height % sm->progressIntervalBlocks))) {
+        static const auto formatRate = [](double rate, const QString & thing, bool addComma = true) {
+            QString unit = "sec";
+            if (rate < 1.0 && rate > 0.0) {
+                rate *= 60.0;
+                unit = "min";
+            }
+            if (rate < 1.0 && rate > 0.0) {
+                rate *= 60.0;
+                unit = "hour";
+            }
+            static const auto format = [](double rate) { return QString::number(rate, 'f', rate < 10. ? (rate < 1.0 ? 3 : 2) : 1); };
+            return rate > 0.0 ? QString("%1%2 %3/%4").arg(addComma ? ", " : "").arg(format(rate)).arg(thing).arg(unit) : QString();
+        };
+        const double now = Util::getTimeSecs();
+        const double elapsed = std::max(now - sm->lastProgTs, 0.00001); // ensure no division by zero
         QString pctDisplay = QString::number((height*1e2) / std::max(sm->endHeight, 1U), 'f', 1) + "%";
-        Log() << "Processed height: " << height << ", " << pctDisplay;
+        const double rateBlocks = sm->nProgBlocks / elapsed;
+        const double rateIO = sm->nProgIOs / elapsed;
+        Log() << "Processed height: " << height << ", " << pctDisplay << formatRate(rateBlocks, "blocks") << formatRate(rateIO, "ins & outs");
+        // update/reset ts and counters
+        sm->lastProgTs = now;
+        sm->nProgBlocks = sm->nProgTx = sm->nProgIOs = 0;
     }
 }
 
@@ -595,7 +623,7 @@ void Controller::process_DownloadingBlocks()
             // error encountered.. abort!
             return;
 
-        process_PrintProgress(ppb->height);
+        process_PrintProgress(ppb->height, ppb->txInfos.size(), ppb->inputs.size()+ppb->outputs.size());
 
         if (sm->ppBlkHtNext > sm->endHeight) {
             sm->state = StateMachine::State::FinishedDL;
@@ -708,8 +736,8 @@ auto Controller::stats() const -> Stats
         QVariantMap m2;
         m2["State"] = sm->stateStr();
         m2["Height"] = sm->ht;
-        if (const auto nDL = nHeadersDownloadedSoFar(); nDL > 0)
-            m2["Headers downloaded this run"] = qlonglong(nDL);
+        if (const auto nDL = nBlocksDownloadedSoFar(); nDL > 0)
+            m2["Blocks downloaded this run"] = qlonglong(nDL);
         if (const auto [ntx, nin, nout] = nTxInOutSoFar(); ntx > 0) {
             m2["Txs seen this run"] = QVariantMap({
                 { "nTx" , qlonglong(ntx) },
@@ -803,7 +831,7 @@ auto Controller::debug(const StatsParams &p) const -> Stats // from StatsMixin
     return ret;
 }
 
-size_t Controller::nHeadersDownloadedSoFar() const
+size_t Controller::nBlocksDownloadedSoFar() const
 {
     size_t ret = 0;
     for (const auto & [task, ign] : tasks) {
