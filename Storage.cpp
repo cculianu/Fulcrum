@@ -65,6 +65,28 @@ namespace {
         }
         return ret;
     }
+
+    /// Return a shallow, temporary copy of the memory of an object as a QByteArray. This reduces typing of
+    /// the boilerplate: "QByteArray::FromRawData(reinterpret_cast...." etc everywhere in this file.
+    /// Note: It is unsafe to use this function for anything other than obtaining a weak reference to the memory of an
+    /// object as a QByteArray for temporary purposes. The original object must live at least as long as this returned
+    /// QByteArray.  Note that even copy-constructing a new QByteArray from this returned QByteArray will lead to
+    /// dangling pointers. See: https://doc.qt.io/qt-5/qbytearray.html#fromRawData.
+    template <typename Object,
+              std::enable_if_t<!std::is_pointer_v<std::remove_cv_t<Object>>, int> = 0>
+    QByteArray ShallowTmp(const Object *mem, size_t size = sizeof(Object)) {
+        return QByteArray::fromRawData(reinterpret_cast<const char *>(mem), int(size));
+    }
+
+    /// Construct a QByteArray from a deep copy of any object's memory area. Slower than ShallowTmp above but 100% safe
+    /// to use after the original object expires since the returned QByteArray takes ownership of its private copy of
+    /// the memory it allocated.
+    template <typename Object,
+              std::enable_if_t<!std::is_pointer_v<std::remove_cv_t<Object>>, int> = 0>
+    QByteArray DeepCpy(const Object *mem, size_t size = sizeof(Object)) {
+        return QByteArray(reinterpret_cast<const char *>(mem), int(size));
+    }
+
     /// Serialize a simple value such as an int directly, without using the space overhead that QDataStream imposes.
     /// This is less safe but is more compact since the bytes of the passed-in value are written directly to the
     /// returned QByteArray, without any encapsulation.  Note that use of this mechanism makes all data in the database
@@ -72,14 +94,10 @@ namespace {
     /// architectures.
     template <typename Scalar,
               std::enable_if_t<std::is_scalar_v<Scalar> && !std::is_pointer_v<Scalar>, int> = 0>
-    [[maybe_unused]] QByteArray SerializeScalar (const Scalar & s) {
-        return QByteArray(reinterpret_cast<const char *>(&s), sizeof(s));
-    }
+    [[maybe_unused]] QByteArray SerializeScalar (const Scalar & s) { return DeepCpy(&s); }
     template <typename Scalar,
               std::enable_if_t<std::is_scalar_v<Scalar> && !std::is_pointer_v<Scalar>, int> = 0>
-    QByteArray SerializeScalarNoCopy (const Scalar &s) {
-        return QByteArray::fromRawData(reinterpret_cast<const char *>(&s), sizeof(s));
-    }
+    QByteArray SerializeScalarNoCopy (const Scalar &s) { return ShallowTmp(&s);  }
     /// Inverse of above.  Pass in an optional 'pos' pointer if you wish to continue reading raw scalars from the same
     /// QByteArray during subsequent calls to this template function.  *ok, if specified, is set to false if we ran off
     /// the QByteArray's bounds, and a default-constructed value of 'Scalar' is returned.  No other safety checking is
@@ -122,7 +140,7 @@ namespace {
     template <> CompactTXO Deserialize(const QByteArray &, bool *);
 
     /// NOTE: The slice should live as long as the returned QByteArray does.  The QByteArray is a weak pointer into the slice!
-    inline QByteArray FromSlice(const rocksdb::Slice &s) { return QByteArray::fromRawData(s.data(), int(s.size())); }
+    inline QByteArray FromSlice(const rocksdb::Slice &s) { return ShallowTmp(s.data(), s.size()); }
 
     /// Generic conversion from any type we operate on to a rocksdb::Slice. Note that the type in question should have
     /// a conversion function written (eg Serialize) if it is anything other than a QByteArray or a scalar.
@@ -1226,7 +1244,7 @@ namespace {
     }
 
     // deep copy, raw bytes
-    template <> QByteArray Serialize(const BlkInfo &b) { return QByteArray(reinterpret_cast<const char *>(&b), int(sizeof(b))); }
+    template <> QByteArray Serialize(const BlkInfo &b) { return DeepCpy(&b); }
     // will fail if extra bytes at the end
     template <> BlkInfo Deserialize(const QByteArray &ba, bool *ok) {
         BlkInfo ret;
@@ -1266,12 +1284,11 @@ namespace {
         hdr.nScriptHashes = uint32_t(u.scriptHashes.size());
         hdr.nAddUndos = uint32_t(u.addUndos.size());
         hdr.nDelUndos = uint32_t(u.delUndos.size());
-        const QByteArray blkInfoBytes = Serialize(u.blkInfo);
         hdr.len = uint32_t(hdr.computeTotalSize());
         QByteArray ret;
         ret.reserve(int(hdr.len));
         // 1. header
-        ret.append(QByteArray::fromRawData(reinterpret_cast<char *>(&hdr), int(sizeof(hdr))));
+        ret.append(ShallowTmp(&hdr));
         // 2. .height
         ret.append(SerializeScalarNoCopy(u.height));
         // 3. .hash
@@ -1286,6 +1303,7 @@ namespace {
         if (!chkHashLen(u.hash)) return ret;
         ret.append(u.hash);
         // 4. .blkInfo
+        const QByteArray blkInfoBytes = Serialize(u.blkInfo);
         ret.append(blkInfoBytes);
         // 5. .scriptHashes, 32 bytes each, for all in set
         for (const auto & sh : u.scriptHashes) {
@@ -1332,17 +1350,17 @@ namespace {
         const char *cur = ba.data() + sizeof(*hdr), *const end = ba.data() + ba.length();
         bool myok = false;
         // 2. .height
-        ret.height = DeserializeScalar<decltype(ret.height)>(QByteArray::fromRawData(cur, sizeof(ret.height)), &myok);
+        ret.height = DeserializeScalar<decltype(ret.height)>(ShallowTmp(cur, sizeof(ret.height)), &myok);
         if (!chkAssertion(myok && cur < end))
             return ret;
         cur += sizeof(ret.height);
         // 3. .hash
-        ret.hash = QByteArray(cur, HashLen); // deep copy
+        ret.hash = DeepCpy(cur, HashLen); // deep copy
         if (!chkAssertion(ret.hash.length() == HashLen && cur < end))
             return ret;
         cur += HashLen;
         // 4. .blkInfo
-        ret.blkInfo = Deserialize<BlkInfo>(QByteArray::fromRawData(cur, sizeof(BlkInfo)), &myok);
+        ret.blkInfo = Deserialize<BlkInfo>(ShallowTmp(cur, sizeof(BlkInfo)), &myok);
         if (!chkAssertion(myok && cur <= end))
             return ret;
         cur += sizeof(BlkInfo);
@@ -1350,20 +1368,20 @@ namespace {
         ret.scriptHashes.reserve(hdr->nScriptHashes);
         for (unsigned i = 0; i < hdr->nScriptHashes; ++i) {
             if (!chkAssertion(cur+HashLen <= end)) return ret;
-            ret.scriptHashes.insert(QByteArray(cur, HashLen)); // deep copy
+            ret.scriptHashes.insert(DeepCpy(cur, HashLen)); // deep copy
             cur += HashLen;
         }
         // 6. .addUndos, 64 bytes each * nAddUndos
         ret.addUndos.reserve(hdr->nAddUndos);
         for (unsigned i = 0; i < hdr->nAddUndos; ++i) {
             if (!chkAssertion(cur+TXO::serSize() <= end)) return ret;
-            TXO txo = Deserialize<TXO>(QByteArray::fromRawData(cur, TXO::serSize()), &myok);
+            TXO txo = Deserialize<TXO>(ShallowTmp(cur, TXO::serSize()), &myok);
             cur += TXO::serSize();
             if (!chkAssertion(myok && cur+HashLen <= end)) return ret;
-            QByteArray hashX = QByteArray(cur, HashLen); // deep copy
+            QByteArray hashX = DeepCpy(cur, HashLen); // deep copy
             cur += HashLen;
             if (!chkAssertion(cur+CompactTXO::serSize() <= end)) return ret;
-            CompactTXO ctxo = Deserialize<CompactTXO>(QByteArray::fromRawData(cur, CompactTXO::serSize()), &myok);
+            CompactTXO ctxo = Deserialize<CompactTXO>(ShallowTmp(cur, CompactTXO::serSize()), &myok);
             cur += CompactTXO::serSize();
             if (!chkAssertion(myok)) return ret;
             ret.addUndos.emplace_back(std::move(txo), std::move(hashX), std::move(ctxo));
@@ -1372,10 +1390,10 @@ namespace {
         ret.delUndos.reserve(hdr->nDelUndos);
         for (unsigned i = 0; i < hdr->nDelUndos; ++i) {
             if (!chkAssertion(cur+TXO::serSize() <= end)) return ret;
-            TXO txo = Deserialize<TXO>(QByteArray::fromRawData(cur, TXO::serSize()), &myok);
+            TXO txo = Deserialize<TXO>(ShallowTmp(cur, TXO::serSize()), &myok);
             cur += TXO::serSize();
             if (!chkAssertion(myok && cur+TXOInfo::serSize() <= end)) return ret;
-            TXOInfo info = Deserialize<TXOInfo>(QByteArray::fromRawData(cur, TXOInfo::serSize()), &myok);
+            TXOInfo info = Deserialize<TXOInfo>(ShallowTmp(cur, TXOInfo::serSize()), &myok);
             cur += TXOInfo::serSize();
             if (!chkAssertion(myok)) return ret;
             ret.delUndos.emplace_back(std::move(txo), std::move(info));
