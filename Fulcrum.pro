@@ -122,7 +122,6 @@ win32 {
 SOURCES += \
     AbstractConnection.cpp \
     BTC.cpp \
-    BTC_unused.cpp \
     BitcoinD.cpp \
     BlockProc.cpp \
     Controller.cpp \
@@ -145,7 +144,6 @@ HEADERS += \
     AbstractConnection.h \
     App.h \
     BTC.h \
-    BTC_unused.h \
     BitcoinD.h \
     BlockProc.h \
     BlockProcTypes.h \
