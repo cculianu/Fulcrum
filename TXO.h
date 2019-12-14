@@ -68,6 +68,10 @@ struct TXOInfo {
 
     bool isValid() const { return amount / bitcoin::Amount::satoshi() >= 0 && hashX.length() == HashLen; }
 
+    /// for debug, etc
+    bool operator==(const TXOInfo &o) const
+        { return amount == o.amount && hashX == o.hashX && confirmedHeight == o.confirmedHeight && txNum == o.txNum; }
+
     QByteArray toBytes() const noexcept {
         QByteArray ret;
         if (!isValid()) return ret;

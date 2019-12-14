@@ -260,7 +260,7 @@ namespace {
         using UTXOAddUndo = std::tuple<TXO, HashX, CompactTXO>;
         using UTXODelUndo = std::tuple<TXO, TXOInfo>;
 
-        BlockHeight height; ///< we save a copy of this infomation as a sanity check
+        BlockHeight height = 0; ///< we save a copy of this infomation as a sanity check
         BlockHash hash; ///< we save a copy of this information as a sanity check. (bytes are in "reversed", bitcoind ToHex()-style memory order)
         BlkInfo blkInfo; ///< we save a copy of this from the global value for convenience and as a sanity check.
 
@@ -270,6 +270,11 @@ namespace {
         std::vector<UTXODelUndo> delUndos;
 
         [[maybe_unused]] QString toDebugString() const;
+
+        [[maybe_unused]] bool operator==(const UndoInfo &) const; // for debug ser/deser
+
+        bool isValid() const { return hash.size() == HashLen; } ///< cheap, imperfect check for validity
+        void clear() { height = 0; hash.clear(); blkInfo = BlkInfo(); scriptHashes.clear(); addUndos.clear(); delUndos.clear(); }
     };
 
     QString UndoInfo::toDebugString() const {
@@ -280,6 +285,16 @@ namespace {
             << " hash: " << hash.toHex() << ">";
         return ret;
     }
+
+    bool UndoInfo::operator==(const UndoInfo &o) const {
+        return height == o.height && hash == o.hash && blkInfo == o.blkInfo && scriptHashes == o.scriptHashes
+                && addUndos == o.addUndos && delUndos == o.delUndos;
+    }
+
+    // serialize as raw bytes mostly (no QDataStream)
+    template <> QByteArray Serialize(const UndoInfo &);
+    // serialize from raw bytes mostly (no QDataStream)
+    template <> UndoInfo Deserialize(const QByteArray &, bool *);
 
 
     /// Associative merge operator used for scripthash history concatenation
@@ -1008,7 +1023,16 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nRes
             undo->hash = BTC::HashRev(rawHeader);
             undo->scriptHashes = Util::keySet<decltype (undo->scriptHashes)>(ppb->hashXAggregated);
             if constexpr (debugPrt) {
-                Debug() << undo->toDebugString();
+                // testing undo ser/deser
+                Debug() << "Undo info 1: " << undo->toDebugString();
+                QByteArray ba = Serialize(*undo);
+                Debug() << "Undo info 1 serSize: " << ba.length();
+                bool ok;
+                auto undo2 = Deserialize<UndoInfo>(ba, &ok);
+                ba.fill('z'); // ensure no shallow copies of buffer exist in deserialized object. if they do below tests will fail
+                FatalAssert(ok && undo2.isValid()) << "Deser of undo info failed!";
+                Debug() << "Undo info 2: " << undo2.toDebugString();
+                Debug() << "Undo info 1 == undo info 2: " << (*undo == undo2);
             }
         }
 
@@ -1188,7 +1212,7 @@ namespace {
 
     template <> QByteArray Serialize (const TXO &txo) { return txo.toBytes(); }
     template <> TXO Deserialize(const QByteArray &ba, bool *ok) {
-        TXO ret = TXO::fromBytes(ba);
+        TXO ret = TXO::fromBytes(ba); // requires exact size, fails if extra bytes at the end
         if (ok) *ok = ret.isValid();
         return ret;
     }
@@ -1196,13 +1220,14 @@ namespace {
     template <> QByteArray Serialize(const TXOInfo &inf) { return inf.toBytes(); }
     template <> TXOInfo Deserialize(const QByteArray &ba, bool *ok)
     {
-        TXOInfo ret = TXOInfo::fromBytes(ba);
+        TXOInfo ret = TXOInfo::fromBytes(ba); // will fail if extra bytes at the end
         if (ok) *ok = ret.isValid();
         return ret;
     }
 
     // deep copy, raw bytes
     template <> QByteArray Serialize(const BlkInfo &b) { return QByteArray(reinterpret_cast<const char *>(&b), int(sizeof(b))); }
+    // will fail if extra bytes at the end
     template <> BlkInfo Deserialize(const QByteArray &ba, bool *ok) {
         BlkInfo ret;
         if (ba.length() != sizeof(ret)) {
@@ -1211,6 +1236,152 @@ namespace {
             if (ok) *ok = true;
             ret = *reinterpret_cast<const BlkInfo *>(ba.constData());
         }
+        return ret;
+    }
+
+    struct UndoInfoSerHeader {
+        static constexpr uint16_t defMagic = 0xf12c, defVer = 0x1;
+        uint16_t magic = defMagic; ///< sanity check
+        uint16_t ver = defVer; ///< sanity check
+        uint32_t len = 0; ///< the length of the entire buffer, including this struct and all data to follow. A sanity check.
+        uint32_t nScriptHashes = 0, nAddUndos = 0, nDelUndos = 0; ///< the number of elements in each of the 3 arrays in question.
+
+        static constexpr size_t addUndoItemSerSize = TXO::serSize() + HashLen + CompactTXO::serSize();
+        static constexpr size_t delUndoItemSerSize = TXO::serSize() + TXOInfo::serSize();
+
+        /// computes the total size given the ser size of the blkInfo struct. Requires that nScriptHashes, nAddUndos, and nDelUndos be already filled-in.
+        size_t computeTotalSize() const {
+            const auto shSize = nScriptHashes * HashLen;
+            const auto addsSize = nAddUndos * addUndoItemSerSize;
+            const auto delsSize = nDelUndos * delUndoItemSerSize;
+            return sizeof(*this) + sizeof(UndoInfo::height) + HashLen + sizeof(BlkInfo) + shSize + addsSize + delsSize;
+        }
+        bool isLenSane() const { return size_t(len) == computeTotalSize(); }
+    };
+
+    // UndoInfo
+    template <> QByteArray Serialize(const UndoInfo &u) {
+        UndoInfoSerHeader hdr;
+        // fill these in now so that hdr.computeTotalSize works
+        hdr.nScriptHashes = uint32_t(u.scriptHashes.size());
+        hdr.nAddUndos = uint32_t(u.addUndos.size());
+        hdr.nDelUndos = uint32_t(u.delUndos.size());
+        const QByteArray blkInfoBytes = Serialize(u.blkInfo);
+        hdr.len = uint32_t(hdr.computeTotalSize());
+        QByteArray ret;
+        ret.reserve(int(hdr.len));
+        // 1. header
+        ret.append(QByteArray::fromRawData(reinterpret_cast<char *>(&hdr), int(sizeof(hdr))));
+        // 2. .height
+        ret.append(SerializeScalarNoCopy(u.height));
+        // 3. .hash
+        const auto chkHashLen = [&ret](const QByteArray & hash) -> bool {
+            if (hash.length() != HashLen) {
+                Warning() << "hash is not " << HashLen << " bytes. Serialize UndoInfo fail. FIXME!";
+                ret.clear();
+                return false;
+            }
+            return true;
+        };
+        if (!chkHashLen(u.hash)) return ret;
+        ret.append(u.hash);
+        // 4. .blkInfo
+        ret.append(blkInfoBytes);
+        // 5. .scriptHashes, 32 bytes each, for all in set
+        for (const auto & sh : u.scriptHashes) {
+            if (UNLIKELY(!chkHashLen(sh))) return ret;
+            ret.append(sh);
+        }
+        // 6. .addUndos, 64 bytes each * nAddUndos
+        for (const auto & [txo, hashX, ctxo] : u.addUndos) {
+            if (UNLIKELY(!chkHashLen(hashX))) return ret;
+            ret.append(Serialize(txo));
+            ret.append(hashX);
+            ret.append(Serialize(ctxo));
+        }
+        // 7. .delUndos, 50 bytes each * nDelUndos
+        for (const auto & [txo, txoInfo] : u.delUndos) {
+            ret.append(Serialize(txo));
+            if (UNLIKELY(!chkHashLen(txoInfo.hashX))) return ret;
+            ret.append(Serialize(txoInfo));
+        }
+        assert(ret.length() == int(hdr.len));
+        return ret;
+    }
+
+    // UndoInfo -- note this will fail if the byte array has extra bytes at the end
+    template <> UndoInfo Deserialize(const QByteArray &ba, bool *ok) {
+        UndoInfo ret;
+        const auto setOk = [&ok, &ret] (bool b) { if (ok) *ok = b; if (!b) ret.clear(); };
+        const auto chkAssertion = [&setOk] (bool assertion, const char *extra = "") {
+            if (UNLIKELY(!assertion)) {
+                Warning() << "Deserialize UndoInfo called with an invalid byte array! FIXME! " << extra;
+                setOk(false);
+            }
+            return assertion;
+        };
+        if (!chkAssertion(ba.size() > int(sizeof(UndoInfoSerHeader)), "Short byte count"))
+            return ret;
+
+        // 1. .header
+        const UndoInfoSerHeader *hdr = reinterpret_cast<decltype (hdr)>(ba.data());
+        if (!chkAssertion(int(hdr->len) == ba.size() && hdr->magic == hdr->defMagic && hdr->ver == hdr->defVer
+                          && hdr->isLenSane(), "Header sanity check fail"))
+            return ret;
+
+        const char *cur = ba.data() + sizeof(*hdr), *const end = ba.data() + ba.length();
+        bool myok = false;
+        // 2. .height
+        ret.height = DeserializeScalar<decltype(ret.height)>(QByteArray::fromRawData(cur, sizeof(ret.height)), &myok);
+        if (!chkAssertion(myok && cur < end))
+            return ret;
+        cur += sizeof(ret.height);
+        // 3. .hash
+        ret.hash = QByteArray(cur, HashLen); // deep copy
+        if (!chkAssertion(ret.hash.length() == HashLen && cur < end))
+            return ret;
+        cur += HashLen;
+        // 4. .blkInfo
+        ret.blkInfo = Deserialize<BlkInfo>(QByteArray::fromRawData(cur, sizeof(BlkInfo)), &myok);
+        if (!chkAssertion(myok && cur <= end))
+            return ret;
+        cur += sizeof(BlkInfo);
+        // 5. .scriptHashes, 32 bytes each * hdr->nScriptHashes
+        ret.scriptHashes.reserve(hdr->nScriptHashes);
+        for (unsigned i = 0; i < hdr->nScriptHashes; ++i) {
+            if (!chkAssertion(cur+HashLen <= end)) return ret;
+            ret.scriptHashes.insert(QByteArray(cur, HashLen)); // deep copy
+            cur += HashLen;
+        }
+        // 6. .addUndos, 64 bytes each * nAddUndos
+        ret.addUndos.reserve(hdr->nAddUndos);
+        for (unsigned i = 0; i < hdr->nAddUndos; ++i) {
+            if (!chkAssertion(cur+TXO::serSize() <= end)) return ret;
+            TXO txo = Deserialize<TXO>(QByteArray::fromRawData(cur, TXO::serSize()), &myok);
+            cur += TXO::serSize();
+            if (!chkAssertion(myok && cur+HashLen <= end)) return ret;
+            QByteArray hashX = QByteArray(cur, HashLen); // deep copy
+            cur += HashLen;
+            if (!chkAssertion(cur+CompactTXO::serSize() <= end)) return ret;
+            CompactTXO ctxo = Deserialize<CompactTXO>(QByteArray::fromRawData(cur, CompactTXO::serSize()), &myok);
+            cur += CompactTXO::serSize();
+            if (!chkAssertion(myok)) return ret;
+            ret.addUndos.emplace_back(std::move(txo), std::move(hashX), std::move(ctxo));
+        }
+        // 7. .delUndos, 50 bytes each * nDelUndos
+        ret.delUndos.reserve(hdr->nDelUndos);
+        for (unsigned i = 0; i < hdr->nDelUndos; ++i) {
+            if (!chkAssertion(cur+TXO::serSize() <= end)) return ret;
+            TXO txo = Deserialize<TXO>(QByteArray::fromRawData(cur, TXO::serSize()), &myok);
+            cur += TXO::serSize();
+            if (!chkAssertion(myok && cur+TXOInfo::serSize() <= end)) return ret;
+            TXOInfo info = Deserialize<TXOInfo>(QByteArray::fromRawData(cur, TXOInfo::serSize()), &myok);
+            cur += TXOInfo::serSize();
+            if (!chkAssertion(myok)) return ret;
+            ret.delUndos.emplace_back(std::move(txo), std::move(info));
+        }
+        chkAssertion(cur == end, "cur != end");
+        setOk(true);
         return ret;
     }
 
@@ -1245,8 +1416,8 @@ namespace {
         return ret;
     }
 
-    template <> [[maybe_unused]] QByteArray Serialize(const CompactTXO &c) { return c.toBytes(); }
-    template <> [[maybe_unused]] CompactTXO Deserialize(const QByteArray &b, bool *ok) {
+    template <> QByteArray Serialize(const CompactTXO &c) { return c.toBytes(); }
+    template <> CompactTXO Deserialize(const QByteArray &b, bool *ok) {
         CompactTXO ret = CompactTXO::fromBytes(b);
         if (ok) *ok = ret.isValid();
         return ret;
