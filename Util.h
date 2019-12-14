@@ -231,7 +231,7 @@ namespace Util {
     template <typename Set = void, typename Map> /* We do it this way so that Set is the first arg an Map is inferred from args. */
     auto keySet(const Map &map) {
         // lambda template
-        static const auto inner = [](const Map &map, auto & set) {
+        constexpr auto inner = [](const Map &map, auto & set) {
             for (auto it = map.begin(); it != map.end(); ++it) {
                 set.insert(it->first);
             }
@@ -252,7 +252,7 @@ namespace Util {
     template <typename Set = void, typename Map>
     auto valueSet(const Map &map) {
         // lambda template
-        static const auto inner = [](const Map &map, auto & set) {
+        constexpr auto inner = [](const Map &map, auto & set) {
             for (auto it = map.begin(); it != map.end(); ++it) {
                 set.insert(it->second);
             }
