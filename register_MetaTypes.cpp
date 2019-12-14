@@ -13,8 +13,6 @@ void App::register_MetaTypes()
         // once in main thread at app init.
         qRegisterMetaType<RPC::Message>();
         qRegisterMetaType<RPC::Message::Id>("RPC::Message::Id"); // for some reason when this is an alias for QVariant it needs this string here
-        // ditto for BTC::Address
-        qRegisterMetaType<BTC::Address>();
 
         registered = true;
     }

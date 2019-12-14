@@ -452,7 +452,7 @@ namespace Util {
     /// Defaults to 'toString()'
     template <typename CONTAINER>
     QString Stringify(const CONTAINER &cont,
-                      // Pass any method pointer -- by default it's &value_type::toString (for BTC::Address and BTC::UTXO)
+                      // Pass any method pointer -- by default it's &value_type::toString
                       // but anything else works here if it matches the type signature.
                       QString (CONTAINER::value_type::*ToStringMethodPtr)() const = &CONTAINER::value_type::toString,
                       const QString & sep = ", ")
