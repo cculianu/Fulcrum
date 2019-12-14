@@ -33,6 +33,7 @@ namespace {
     struct Meta {
         uint32_t magic = 0xf33db33f, version = 0x1;
         QString chain; ///< "test", "main", etc
+        uint16_t platformBits = sizeof(long)*8U; ///< we save the platform wordsize to the db
     };
 
     // some database keys we use -- todo: if this grows large, move it elsewhere
@@ -432,7 +433,7 @@ void Storage::startup()
                 opt.has_value())
         {
             m_db = opt.value();
-            if (m_db.magic != p->meta.magic || m_db.version != p->meta.version) {
+            if (m_db.magic != p->meta.magic || m_db.version != p->meta.version || m_db.platformBits != p->meta.platformBits) {
                 throw DatabaseFormatError(errMsg);
             }
             p->meta = m_db;
@@ -1155,7 +1156,7 @@ namespace {
         {
             QDataStream ds(&ba, QIODevice::WriteOnly|QIODevice::Truncate);
             // we serialize the 'magic' value as a simple scalar as a sort of endian check for the DB
-            ds << SerializeScalarNoCopy(m.magic) << m.version << m.chain;
+            ds << SerializeScalarNoCopy(m.magic) << m.version << m.chain << m.platformBits;
         }
         return ba;
     }
@@ -1173,6 +1174,11 @@ namespace {
                 m.magic = DeserializeScalar<decltype (m.magic)>(magicBytes, &ok);
                 if (ok) {
                     ds >> m.version >> m.chain;
+                    if (!ds.atEnd()) {
+                        // TODO: make this field non-optional. For now we tolerate it missing since we added this field
+                        // later and we want to be able to still test on our existing db's.
+                        ds >> m.platformBits;
+                    }
                     ok = ds.status() == QDataStream::Status::Ok;
                 }
             }
