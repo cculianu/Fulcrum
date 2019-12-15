@@ -28,6 +28,7 @@ DatabaseSerializationError::~DatabaseSerializationError() {} // weak vtable warn
 DatabaseFormatError::~DatabaseFormatError() {} // weak vtable warning suppression
 DatabaseKeyNotFound::~DatabaseKeyNotFound() {} // weak vtable warning suppression
 HeaderVerificationFailure::~HeaderVerificationFailure() {} // weak vtable warning suppression
+UndoInfoMissing::~UndoInfoMissing() {} // weak vtable warning suppression
 
 namespace {
     /// Encapsulates the 'meta' db table
@@ -275,7 +276,8 @@ namespace {
         BlkInfo() = default;
         BlkInfo(const BlkInfo &) = default;
         [[maybe_unused]] BlkInfo (TxNum txn, unsigned ntx) : txNum0(txn), nTx(ntx) {}
-        [[maybe_unused]] bool operator==(const BlkInfo &o) const { return txNum0 == o.txNum0 && nTx == o.nTx; }
+        bool operator==(const BlkInfo &o) const { return txNum0 == o.txNum0 && nTx == o.nTx; }
+        bool operator!=(const BlkInfo &o) const { return !(*this == o); }
         [[maybe_unused]] bool operator<(const BlkInfo &o) const { return txNum0 == o.txNum0 ? nTx < o.nTx : txNum0 < o.txNum0; }
         BlkInfo &operator=(const BlkInfo &) = default;
     };
@@ -603,7 +605,7 @@ void Storage::saveMeta_impl()
     Debug() << "Wrote new metadata to db";
 }
 
-void Storage::appendHeader(const Header &h, unsigned int height)
+void Storage::appendHeader(const Header &h, BlockHeight height)
 {
     const auto targetHeight = GenericDBGet<uint32_t, true>(p->db.headers.get(), kNumHeaders, true, // missing ok
                                                            "Error reading header count from database").value_or(0);
@@ -618,29 +620,52 @@ void Storage::appendHeader(const Header &h, unsigned int height)
         throw DatabaseError(QString("Error writing header %1: %2").arg(height).arg(QString::fromStdString(stat.ToString())));
 }
 
-auto Storage::headerForHeight(unsigned height, QString *err) -> std::optional<Header>
+void Storage::deleteHeadersPastHeight(BlockHeight height)
+{
+    auto numHdrs = GenericDBGetFailIfMissing<uint32_t, true>(p->db.headers.get(), kNumHeaders, "Error reading header count from database");
+    rocksdb::WriteBatch batch;
+    while (--numHdrs > height) {
+        if (auto stat = batch.Delete(ToSlice(uint32_t(numHdrs))); !stat.ok())
+            throw DatabaseError(QString("batch.Delete failed for %1 when deleting headers to height %2: %3")
+                                .arg(numHdrs).arg(height).arg(QString::fromStdString(stat.ToString())));
+    }
+    numHdrs = height + 1;
+    if (auto stat = batch.Put(kNumHeaders, ToSlice<true>(uint32_t(numHdrs))); !stat.ok())
+        throw DatabaseError(QString("batch.Put failed when for numHdrs %1: %2").arg(numHdrs).arg(QString::fromStdString(stat.ToString())));
+    if (auto stat = p->db.headers->Write(p->db.defWriteOpts, &batch); !stat.ok())
+        throw DatabaseError(QString("Write failed when deleting headers to height %1: %2").arg(height).arg(QString::fromStdString(stat.ToString())));
+}
+
+auto Storage::headerForHeight(BlockHeight height, QString *err) -> std::optional<Header>
 {
     std::optional<Header> ret;
     if (int(height) <= latestTip().first) {
-        static const QString errMsg("Failed to retrieve header from db");
-        try {
-            ret.emplace(
-                GenericDBGetFailIfMissing<QByteArray>(
-                    p->db.headers.get(), uint32_t(height), errMsg, false, p->db.defReadOpts));
-            if (UNLIKELY(ret.value().size() != p->blockHeaderSize)) {
-                ret.reset();
-                throw DatabaseSerializationError("Bad header read from db. Wrong size!"); // jumps to below catch
-            }
-        } catch (const std::exception &e) {
-            if (err) *err = e.what();
+        ret = headerForHeight_nolock(height, err);
+    } else if (err) { *err = "Invalid height specified"; }
+    return ret;
+}
+
+auto Storage::headerForHeight_nolock(BlockHeight height, QString *err) -> std::optional<Header>
+{
+    std::optional<Header> ret;
+    static const QString errMsg("Failed to retrieve header from db");
+    try {
+        ret.emplace(
+            GenericDBGetFailIfMissing<QByteArray>(
+                p->db.headers.get(), uint32_t(height), errMsg, false, p->db.defReadOpts));
+        if (UNLIKELY(ret.value().size() != p->blockHeaderSize)) {
+            ret.reset();
+            throw DatabaseSerializationError("Bad header read from db. Wrong size!"); // jumps to below catch
         }
+    } catch (const std::exception &e) {
+        if (err) *err = e.what();
     }
     return ret;
 }
 
 /// Convenient batched alias for above. Returns a set of headers starting at height. May return < count if not
 /// all headers were found. Thead safe.
-auto Storage::headersFromHeight(unsigned height, unsigned count, QString *err) -> std::vector<Header>
+auto Storage::headersFromHeight(BlockHeight height, unsigned count, QString *err) -> std::vector<Header>
 {
     std::vector<Header> ret;
     int num = std::min(1 + latestTip().first - int(height), int(count));
@@ -1125,8 +1150,67 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
 
         appendHeader(rawHeader, ppb->height);
 
-        undoVerifierOnScopeEnd.disable(); // indicate to the "Defer" object declared at the top of this function that it shouldn't undo anything anymore as we are happy now with the db state.
+        undoVerifierOnScopeEnd.disable(); // indicate to the "Defer" object declared at the top of this function that it shouldn't undo anything anymore as we are happy now with the db state now.
     }
+}
+
+BlockHeight Storage::undoLatestBlock()
+{
+    // take all locks now.. since this is a Big Deal. TODO: add more locks here?
+    std::scoped_lock guard(p->headerVerifierLock, p->blkInfoLock);
+
+    const auto t0 = Util::getTimeNS();
+
+    const auto [tip, header] = p->headerVerifier.lastHeaderProcessed();
+    if (tip <= 0 || header.length() != p->blockHeaderSize) throw UndoInfoMissing("No header to undo");
+    const BlockHeight prevHeight = unsigned(tip-1);
+    Header prevHeader;
+    {
+        // grab previous header now
+        QString err;
+        auto opt = headerForHeight_nolock(prevHeight, &err);
+        if (!opt.has_value()) throw UndoInfoMissing(err);
+        prevHeader = opt.value();
+    }
+    const QString errMsg1 = QString("Unable to retrieve undo info for %1").arg(tip);
+    const auto undoOpt = GenericDBGet<UndoInfo>(p->db.undo.get(), uint32_t(tip), true, errMsg1, false, p->db.defReadOpts);
+    if (!undoOpt.has_value())
+        throw UndoInfoMissing(errMsg1);
+    const auto & undo = undoOpt.value();
+
+    // ensure undo info sanity
+    if (!undo.isValid() || undo.height != unsigned(tip) || undo.hash != BTC::HashRev(header)
+        || prevHeight+1 >= p->blkInfos.size() || p->blkInfos.empty() || p->blkInfos.back() != undo.blkInfo)
+        throw DatabaseFormatError(QString("The undo information for height %1 was successfully retrieved from the "
+                                          "database, but it failed an internal consistency check.").arg(tip));
+    {
+        // all sanity check passed. Now, undo things in reverse order of what we did in addBlock above, rougly speaking
+
+        // first, undo the header
+        p->headerVerifier.reset(prevHeight, prevHeader);
+        deleteHeadersPastHeight(prevHeight); // commit change to db
+
+        // undo the blkInfo from the back
+        p->blkInfos.pop_back();
+        p->blkInfosByTxNum.erase(undo.blkInfo.txNum0);
+        GenericDBDelete(p->db.blkinfo.get(), uint32_t(undo.height), "Failed to delete blkInfo in undoLatestBlock");
+        // clear num2hash cache
+        p->lruNum2Hash.clear();
+
+
+        if (p->earliestUndoHeight >= undo.height)
+            // oops, we're out of undos now!
+            p->earliestUndoHeight = UINT_MAX;
+        GenericDBDelete(p->db.undo.get(), uint32_t(undo.height)); // make sure to delete this undo info since it was just applied.
+    }
+
+    const size_t nTx = undo.blkInfo.nTx, nSH = undo.scriptHashes.size();
+    const auto elapsedms = (Util::getTimeNS() - t0) / 1e6;
+    Log() << "Applied undo for block " << undo.height << ", " << nTx << " " << Util::Pluralize("transaction", nTx)
+          << " involving " << nSH << " " << Util::Pluralize("scripthash", nSH)
+          << ", in " << QString::number(elapsedms, 'f', 2) << " msec, new height now: " << prevHeight;
+
+    return prevHeight;
 }
 
 std::optional<TxHash> Storage::hashForTxNum(TxNum n, bool throwIfMissing, bool *wasCached, bool skipCache) const

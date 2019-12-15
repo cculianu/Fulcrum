@@ -31,6 +31,9 @@ struct DatabaseFormatError : public DatabaseError { using DatabaseError::Databas
 /// Thrown by addBlock if the block in question cannot be added because its prevoutHash does not match the latestTip.
 /// The caller should probably rewind the chain if this is thrown by calling Storage::undoLatestBlock().
 struct HeaderVerificationFailure : public Exception { using Exception::Exception; ~HeaderVerificationFailure() override; };
+/// Thrown by undoLatestBlock() if undo info is missing from the db for said block (this would indicate we tried to
+/// rewind too far back or some other unforeseen circumstance).
+struct UndoInfoMissing : public Exception { using Exception::Exception; ~UndoInfoMissing() override; };
 
 /// Manages the db and all storage-related facilities.  Most of its public methods are fully reentrant and thread-safe.
 class Storage final : public Mgr, public ThreadObjectMixin
@@ -52,10 +55,10 @@ public:
 
     /// Thread safe. May hit the database (or touch a cache).  Returns the header for the given height or nothing if
     /// height > latestTip().first.  May also fail on low-level db error. Use the optional arg *err to see why if failed.
-    std::optional<Header> headerForHeight(unsigned height, QString *err = nullptr);
+    std::optional<Header> headerForHeight(BlockHeight height, QString *err = nullptr);
     /// Convenient batched alias for above. Returns a set of headers starting at height. May return < count if not
     /// all headers were found. Thead safe.
-    std::vector<Header> headersFromHeight(unsigned height, unsigned count, QString *err = nullptr);
+    std::vector<Header> headersFromHeight(BlockHeight height, unsigned count, QString *err = nullptr);
 
     /// Implicitly takes a lock to return this. Thread safe. Breakdown of info returned:
     ///   .first - the latest valid height we have synched or -1 if no headers.
@@ -103,8 +106,9 @@ public:
     /// on low-level database error or if undo information has been exhausted and the latest tip cannot be rolled back.
     /// At that point it's a fatal error (and the app should probably quit?).
     ///
-    /// Returns the new latestTip().first (height)
-    int undoLatestBlock();
+    /// Returns the new BlockHeight .. which is the current height - 1 (after this call returns, this will be
+    ///  the same int value as latestTip().first).
+    BlockHeight undoLatestBlock();
 
     /// returns the "next" TxNum (thread safe)
     TxNum getTxNum() const;
@@ -178,7 +182,10 @@ protected:
     /// Appends header h to the database at height. Note that it is undefined to call this function
     /// if height already exists in the database or if height is more than 1+ latestTip().first. For internal use
     /// in addBlock, basically.
-    void appendHeader(const Header &h, unsigned height);
+    void appendHeader(const Header &h, BlockHeight height);
+    /// Internally called by undoLatestBlock. Call this with the headerVerifier lock held.
+    /// Rewinds the headers until the latest header is at the specified height.  May throw on error.
+    void deleteHeadersPastHeight(BlockHeight height);
 
 private:
     const std::shared_ptr<Options> options;
@@ -193,6 +200,8 @@ private:
     void loadCheckUTXOsInDB(); ///< may throw -- called from startup()
     void loadCheckTxNumsFileAndBlkInfo(); ///< may throw -- called from startup()
     void loadCheckEarliestUndo(); ///< may throw -- called from startup()
+
+    std::optional<Header> headerForHeight_nolock(BlockHeight height, QString *errMsg = nullptr);
 };
 
 Q_DECLARE_OPERATORS_FOR_FLAGS(Storage::SaveSpec)
