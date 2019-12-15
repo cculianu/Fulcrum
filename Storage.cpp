@@ -411,6 +411,8 @@ struct Storage::Pvt
 
     std::atomic<int64_t> utxoCt = 0;
 
+    std::atomic<uint32_t> earliestUndoHeight = UINT32_MAX; ///< the purpose of this is to control when we issue "delete" commands to the db for deleting expired undo infos from the undo db
+
     /// TODO: Tune the cahce size. With the below settings it is approx. 50MB-60MB when totally filled
     /// (each entry is ~40 bytes + overhead).  This cache is anticipated to see heavy use for get_history, so we may
     /// wish to make it larger.
@@ -499,6 +501,8 @@ void Storage::startup()
     loadCheckTxNumsFileAndBlkInfo();
     // count utxos -- note this depends on "blkInfos" being filled in so it much be called after loadCheckTxNumsFileAndBlkInfo()
     loadCheckUTXOsInDB();
+    // load check earliest undo to populate earliestUndoHeight
+    loadCheckEarliestUndo();
 
     start(); // starts our thread
 }
@@ -738,7 +742,6 @@ void Storage::loadCheckUTXOsInDB()
 
         std::unique_ptr<rocksdb::Iterator> iter(p->db.utxoset->NewIterator(p->db.defReadOpts));
         if (!iter) throw DatabaseError("Unable to obtain an iterator to the utxo set db");
-        iter->SeekToFirst();
         p->utxoCt = 0;
         for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
             // TODO: the below checks may be too slow. See about removing them and just counting the iter.
@@ -792,6 +795,29 @@ void Storage::loadCheckUTXOsInDB()
     Debug() << "Read txos from db in " << QString::number((elapsed-t0)/1e6, 'f', 3) << " msec";
 }
 
+void Storage::loadCheckEarliestUndo()
+{
+    FatalAssert(!!p->db.undo) << __FUNCTION__ << ": Undo db is not open";
+
+    const auto t0 = Util::getTimeNS();
+    int ctr = 0;
+    {
+        std::unique_ptr<rocksdb::Iterator> iter(p->db.undo->NewIterator(p->db.defReadOpts));
+        if (!iter) throw DatabaseError("Unable to obtain an iterator to the undo db");
+        for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
+            const auto keySlice = iter->key();
+            if (keySlice.size() != sizeof(uint32_t))
+                throw DatabaseFormatError("Unexpected key in undo database. We expect only 32-bit unsigned ints!");
+            const uint32_t height = DeserializeScalar<uint32_t>(FromSlice(keySlice));
+            if (height < p->earliestUndoHeight) p->earliestUndoHeight = height;
+            ++ctr;
+        }
+    }
+    if (ctr) {
+        Debug() << "Undo db contains " << ctr << " entries, earliest is " << p->earliestUndoHeight.load() << ", "
+                << QString::number((Util::getTimeNS() - t0)/1e6, 'f', 2) << " msec elapsed.";
+    }
+}
 
 /// Thread-safe. Immediately save a UTXO to the db. May throw on database error.
 void Storage::utxoAddToDB(const TXO &txo, const TXOInfo &info, const CompactTXO &ctxo)
@@ -1059,6 +1085,10 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nRes
             static const QString errPrefix("Error saving undo info to undo db");
 
             GenericDBPut(p->db.undo.get(), uint32_t(ppb->height), *undo, errPrefix, p->db.defWriteOpts); // save undo to db
+            if (ppb->height < p->earliestUndoHeight) {
+                // remember earliest for delete clause below...
+                p->earliestUndoHeight = ppb->height;
+            }
 
             if constexpr (debugPrt) {
                 // testing undo ser/deser
@@ -1080,14 +1110,14 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nRes
                         << ", in " << QString::number(elapsedms, 'f', 2) << " msec.";
             }
         }
-        {
-            // Unconditionally expire old undos >10 blocks ago to keep the db tidy. We need to do this for each block
-            // because we do not know what old undos may be lurking in the db.
-            // TODO: On startup, have the db scan and find the earliest undo and only take this branch if we know an old
-            // undo exists for a certain height!
+        // Expire old undos >10 blocks ago to keep the db tidy.  We only do this if we know there is an old
+        // undo for said height in db.
+        if (const auto expireUndoHeight = int(ppb->height) - int(BTC::maxReorgDepth);
+                expireUndoHeight >= 0 && unsigned(expireUndoHeight) >= p->earliestUndoHeight) {
             static const QString errPrefix("Error deleting old/stale undo info from undo db");
-            if (const auto expireUndoHeight = int(ppb->height) - int(BTC::maxReorgDepth); expireUndoHeight >= 0)
-                GenericDBDelete(p->db.undo.get(), uint32_t(expireUndoHeight), errPrefix, p->db.defWriteOpts);
+            GenericDBDelete(p->db.undo.get(), uint32_t(expireUndoHeight), errPrefix, p->db.defWriteOpts);
+            p->earliestUndoHeight = unsigned(expireUndoHeight + 1);
+            Debug() << "Deleted undo for block " << expireUndoHeight << ", earliest now " << p->earliestUndoHeight.load();
         }
 
         appendHeader(rawHeader, ppb->height);
