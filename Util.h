@@ -653,7 +653,6 @@ template <typename VoidFuncT,
 struct Defer
 {
     using VoidFunc = VoidFuncT;
-    Defer() = delete;
     Defer(VoidFunc && f) : func(std::move(f)) {}
     Defer(const VoidFunc & f) : func(f) {}
     ~Defer() { if (valid) func(); }
@@ -662,6 +661,7 @@ struct Defer
     /// function upon descruction.  This operation cannot be reversed.
     void disable() { valid = false; }
 protected:
+    Defer(const Defer &) = delete;
     VoidFunc func;
     bool valid = true;
 };
