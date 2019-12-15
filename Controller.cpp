@@ -656,6 +656,12 @@ void Controller::process_DownloadingBlocks()
     //}
 }
 
+namespace {
+    const QString inconsistentStateSorry("\n\nThe database is now likely in an inconsistent state. "
+                                         "To recover, you will need to delete the datadir and do a full resynch. "
+                                         "Sorry!\n");
+}
+
 bool Controller::process_VerifyAndAddBlock(PreProcessedBlockPtr ppb)
 {
     assert(sm);
@@ -672,9 +678,10 @@ bool Controller::process_VerifyAndAddBlock(PreProcessedBlockPtr ppb)
         process_DoUndoAndRetry();
         return false;
     } catch (const std::exception & e) {
-        Fatal() << e.what(); // TODO: see about more graceful error and not a fatal exit. (although if we do get an error here it's pretty non-recoverable!)
+        // TODO: see about more graceful error and not a fatal exit. (although if we do get an error here it's pretty non-recoverable!)
+        Fatal() << e.what() << inconsistentStateSorry;
         sm->state = StateMachine::State::Failure;
-        AGAIN(); // schedule us again to do cleanup
+        // app will shut down after return to event loop.
         return false;
     }
 
@@ -688,14 +695,13 @@ void Controller::process_DoUndoAndRetry()
         storage->undoLatestBlock();
         // . <-- If we get here, rollback was successful.
         // We flag the state to retry, which retries the full download right away
-        // (Note: this may trigger us to roll back again and again until we reorg to the sufficient depth).
+        // (Note: this may eventually lead us to roll back again and again until we reorg to the sufficient depth).
         sm->state = StateMachine::State::Retry;
         AGAIN(); // schedule us again to do cleanup
     } catch (const std::exception & e) {
-        Fatal() << "Failed to rewind: " << e.what() << "\n\nThe database is now likely in an inconsistent state."
-                << " You will need to delete the datadir and do a full resynch now. Sorry!\n";
+        Fatal() << "Failed to rewind: " << e.what() << inconsistentStateSorry;
         sm->state = StateMachine::State::Failure;
-        return; // return immediately from event loop -- app will shut down now. :/
+        // upon return to event loop, will shut down
     }
 }
 

@@ -944,9 +944,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
             QString errStr;
             for (const auto & txInfo : ppb->txInfos) {
                 if (!batch.append(txInfo.hash, &errStr)) // does not throw here, but we do.
-                    throw InternalError(QString("Batch append for txNums failed: %1.\n\n"
-                                                "Database is now likely corrupted. Please delete the datadir and resynch.\n")
-                                        .arg(errStr));
+                    throw InternalError(QString("Batch append for txNums failed: %1.").arg(errStr));
             }
             // <-- The batch d'tor may close the app on error here with Fatal() if a low-level file error occurs now
             //     on header update (see: RecordFile.cpp, ~BatchAppendContext()).
@@ -1040,7 +1038,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                         QTextStream ts(&s);
                         ts << "Failed to spend: " << in.prevoutHash.toHex() << ":" << in.prevoutN << " (spending txid: " << dbgTxIdHex << ")";
                     }
-                    throw Exception(s);
+                    throw InternalError(s);
                 }
                 ++inum;
             }
@@ -1245,7 +1243,7 @@ BlockHeight Storage::undoLatestBlock()
             p->earliestUndoHeight = UINT_MAX;
         GenericDBDelete(p->db.undo.get(), uint32_t(undo.height)); // make sure to delete this undo info since it was just applied.
 
-        // lastly, truncate the tx num file and re-set txNumNext to point to re-cycle this block's txNum0
+        // lastly, truncate the tx num file and re-set txNumNext to point to this block's txNum0 (thereby recycling it)
         assert(long(p->txNumNext) - long(txNum0) == long(undo.blkInfo.nTx));
         p->txNumNext = txNum0;
         if (QString err; p->txNumsFile->truncate(txNum0, &err) != txNum0 || !err.isEmpty()) {
