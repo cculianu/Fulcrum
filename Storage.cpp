@@ -141,6 +141,13 @@ namespace {
     template <> QByteArray Serialize(const CompactTXO &);
     template <> CompactTXO Deserialize(const QByteArray &, bool *);
 
+    // CompactTXOVec -- used in scripthash_history table
+    using CompactTXOVec = std::vector<CompactTXO>;
+    // this serializes a vector of CompactTXO to a compact representation (uses .toBytes(), 8 bytes each)
+    template <> QByteArray Serialize(const CompactTXOVec &);
+    // this deserializes a vector of CompactTXO from a compact representation (using .fromBytes(), 8 bytes each)
+    template <> CompactTXOVec Deserialize(const QByteArray &, bool *);
+
     /// NOTE: The slice should live as long as the returned QByteArray does.  The QByteArray is a weak pointer into the slice!
     inline QByteArray FromSlice(const rocksdb::Slice &s) { return ShallowTmp(s.data(), s.size()); }
 
@@ -1589,4 +1596,32 @@ namespace {
         if (ok) *ok = ret.isValid();
         return ret;
     }
-}
+    template <> QByteArray Serialize(const CompactTXOVec &v)
+    {
+        QByteArray ret(int(v.size() * CompactTXO::serSize()), Qt::Uninitialized);
+        char *cur = ret.data();
+        for (const auto & c : v) {
+            cur += c.toBytesInPlace(cur, CompactTXO::serSize());
+        }
+        if (UNLIKELY(cur < ret.end()))
+            Warning() << "Failed to serialize a compact txo vector properly! Short conversion! FIXME!";
+        return ret;
+    }
+    template <> CompactTXOVec Deserialize(const QByteArray &b, bool *ok)
+    {
+        CompactTXOVec ret;
+        const size_t bsz = size_t(b.size());
+        const size_t N = bsz / CompactTXO::serSize();
+        if (CompactTXO::serSize() * N != bsz) { // we refuse if there are extra bytes at the end.
+            if (ok) *ok = false;
+            return ret;
+        }
+        if (ok) *ok = true;
+        ret.reserve(N);
+        const char *cur = b.data();
+        for (size_t i = 0; i < N; ++i, cur += CompactTXO::serSize()) {
+            ret.emplace_back(CompactTXO::fromBytes(cur, CompactTXO::serSize()));
+        }
+        return ret;
+    }
+} // end anon namespace
