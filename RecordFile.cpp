@@ -187,7 +187,7 @@ bool RecordFile::BatchAppendContext::append(const QByteArray &data, QString *err
     return true;
 }
 
-bool RecordFile::writeNewSizeToHeader(QString *errStr)
+bool RecordFile::writeNewSizeToHeader(QString *errStr, bool flush)
 {
     bool ret = false;
     if (UNLIKELY(!file.isOpen())) {
@@ -201,15 +201,25 @@ bool RecordFile::writeNewSizeToHeader(QString *errStr)
         if (errStr)
             *errStr = QString("File size mistmatch for %1, %2 is not a multiple of %3 (+ %4 header). File is now likely corrupted.")
                       .arg(file.fileName()).arg(file.size()).arg(recsz).arg(hdrsz);
-    } else { ret = true; }
+    } else {
+        ret = true;
+        if (flush)
+            file.flush();
+    }
     return ret;
+}
+
+bool RecordFile::flush()
+{
+    std::lock_guard g(rwlock);
+    return file.flush();
 }
 
 RecordFile::BatchAppendContext::~BatchAppendContext()
 {
     // updates the header with the new count, does some checks, releases lock
     QString errStr;
-    rf.writeNewSizeToHeader(&errStr);
+    rf.writeNewSizeToHeader(&errStr, true);
     if (!errStr.isEmpty())
         Fatal() << errStr; // app will quit in main event loop after printing error.
 }

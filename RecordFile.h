@@ -87,6 +87,9 @@ public:
     /// to reflect the new counts).
     BatchAppendContext beginBatchAppend();
 
+    /// Flushes pending writes. Thread-safe. Returns true if the flush succeeds, false otherwise.
+    bool flush();
+
 private:
     mutable std::shared_mutex rwlock;
     friend class RecordFile::BatchAppendContext;
@@ -104,6 +107,6 @@ private:
     qint64 offsetOfRec(uint64_t recNum) const { return qint64(offset0() + recNum*recsz); }
 
     QByteArray readRandomCommon(QFile & f, uint64_t recNum, QString *errStr = nullptr) const;
-    bool writeNewSizeToHeader(QString *errStr = nullptr);
+    bool writeNewSizeToHeader(QString *errStr = nullptr, bool flush = false);
 };
 
