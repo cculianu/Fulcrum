@@ -141,12 +141,6 @@ namespace {
     template <> QByteArray Serialize(const CompactTXO &);
     template <> CompactTXO Deserialize(const QByteArray &, bool *);
 
-    // CompactTXOVec -- used in scripthash_history table
-    using CompactTXOVec = std::vector<CompactTXO>;
-    // this serializes a vector of CompactTXO to a compact representation (uses .toBytes(), 8 bytes each)
-    template <> QByteArray Serialize(const CompactTXOVec &);
-    // this deserializes a vector of CompactTXO from a compact representation (using .fromBytes(), 8 bytes each)
-    template <> CompactTXOVec Deserialize(const QByteArray &, bool *);
 
     /// NOTE: The slice should live as long as the returned QByteArray does.  The QByteArray is a weak pointer into the slice!
     inline QByteArray FromSlice(const rocksdb::Slice &s) { return ShallowTmp(s.data(), s.size()); }
@@ -991,7 +985,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                     info.confirmedHeight = ppb->height;
                     info.txNum = blockTxNum0 + out.txIdx;
                     const TXO txo{ hash, out.outN };
-                    const CompactTXO ctxo(blockTxNum0+out.txIdx, out.outN);
+                    const CompactTXO ctxo(info.txNum, txo.prevoutN);
                     utxoAddToDB(txo, info, ctxo); // add to db
                     if (undo) { // save undo info if we are in saveUndo mode
                         undo->addUndos.emplace_back(txo, info.hashX, ctxo);
@@ -1149,10 +1143,14 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
         // undo for said height in db.
         if (const auto expireUndoHeight = int(ppb->height) - int(BTC::maxReorgDepth);
                 expireUndoHeight >= 0 && unsigned(expireUndoHeight) >= p->earliestUndoHeight) {
+            // FIXME -- this runs for every block in between the last undo save and current tip.
+            // If the node was off for a while then restarted this just hits the db with useless deletes for non-existant
+            // keys as we catch up.  It's not the end of the world, as each call here is on the order of microseconds..
+            // but perhaps we need to see about fixing this to not do that.
             static const QString errPrefix("Error deleting old/stale undo info from undo db");
             GenericDBDelete(p->db.undo.get(), uint32_t(expireUndoHeight), errPrefix, p->db.defWriteOpts);
             p->earliestUndoHeight = unsigned(expireUndoHeight + 1);
-            Debug() << "Deleted undo for block " << expireUndoHeight << ", earliest now " << p->earliestUndoHeight.load();
+            if constexpr (debugPrt) Debug() << "Deleted undo for block " << expireUndoHeight << ", earliest now " << p->earliestUndoHeight.load();
         }
 
         appendHeader(rawHeader, ppb->height);
@@ -1194,7 +1192,7 @@ BlockHeight Storage::undoLatestBlock()
         // all sanity check passed. Now, undo things in reverse order of what we did in addBlock above, rougly speaking
 
         // first, undo the header
-        p->headerVerifier.reset(prevHeight, prevHeader);
+        p->headerVerifier.reset(prevHeight+1, prevHeader);
         deleteHeadersPastHeight(prevHeight); // commit change to db
 
         // undo the blkInfo from the back
@@ -1204,11 +1202,55 @@ BlockHeight Storage::undoLatestBlock()
         // clear num2hash cache
         p->lruNum2Hash.clear();
 
+        const auto txNum0 = undo.blkInfo.txNum0;
+
+        // undo the scripthash histories
+        for (const auto & sh : undo.scriptHashes) {
+            const QString shHex = Util::ToHexFast(sh);
+            const auto vec = GenericDBGetFailIfMissing<TxNumVec>(p->db.shist.get(), sh, QString("Undo failed because we failed to retrieve the scripthash history for %1").arg(shHex), false, p->db.defReadOpts);
+            TxNumVec newVec;
+            newVec.reserve(vec.size());
+            for (const auto txNum : vec) {
+                if (txNum < txNum0) {
+                    // accept only stuff in history that's before txNum0 for this block, filter out everything else
+                    newVec.push_back(txNum);
+                }
+            }
+            const QString errMsg = QString("Undo failed because we failed to write the new scripthash history for %1").arg(shHex);
+            if (!newVec.empty()) {
+                // the sh still has some history, write it to db
+                std::sort(newVec.begin(), newVec.end()); // this shouldn't be necessary but might as well.
+                GenericDBPut(p->db.shist.get(), sh, newVec, errMsg, p->db.defWriteOpts);
+            } else {
+                // the sh in question lost all its history as a result of undo, just delete it from db to save space
+                GenericDBDelete(p->db.shist.get(), sh, errMsg, p->db.defWriteOpts);
+            }
+        }
+
+        // now, undo the utxo deletions by re-adding them
+        for (const auto & [txo, info] : undo.delUndos) {
+            // note that deletions may have an info with a txnum before this block, for obvious reasons
+            utxoAddToDB(txo, info, CompactTXO(info.txNum, txo.prevoutN)); // may throw
+        }
+
+        // now, undo the utxo additions by deleting them
+        for (const auto & [txo, hashx, ctxo] : undo.addUndos) {
+            assert(ctxo.txNum() >= txNum0); // all of the additions must have been in this block or newer
+            utxoDeleteFromDB(txo, hashx, ctxo); // may throw
+        }
+
 
         if (p->earliestUndoHeight >= undo.height)
             // oops, we're out of undos now!
             p->earliestUndoHeight = UINT_MAX;
         GenericDBDelete(p->db.undo.get(), uint32_t(undo.height)); // make sure to delete this undo info since it was just applied.
+
+        // lastly, truncate the tx num file and re-set txNumNext to point to re-cycle this block's txNum0
+        assert(long(p->txNumNext) - long(txNum0) == long(undo.blkInfo.nTx));
+        p->txNumNext = txNum0;
+        if (QString err; p->txNumsFile->truncate(txNum0, &err) != txNum0 || !err.isEmpty()) {
+            throw InternalError(QString("Failed to truncate txNumsFile to %1: %2").arg(txNum0).arg(err));
+        }
     }
 
     const size_t nTx = undo.blkInfo.nTx, nSH = undo.scriptHashes.size();
@@ -1594,34 +1636,6 @@ namespace {
     template <> CompactTXO Deserialize(const QByteArray &b, bool *ok) {
         CompactTXO ret = CompactTXO::fromBytes(b);
         if (ok) *ok = ret.isValid();
-        return ret;
-    }
-    template <> QByteArray Serialize(const CompactTXOVec &v)
-    {
-        QByteArray ret(int(v.size() * CompactTXO::serSize()), Qt::Uninitialized);
-        char *cur = ret.data();
-        for (const auto & c : v) {
-            cur += c.toBytesInPlace(cur, CompactTXO::serSize());
-        }
-        if (UNLIKELY(cur < ret.end()))
-            Warning() << "Failed to serialize a compact txo vector properly! Short conversion! FIXME!";
-        return ret;
-    }
-    template <> CompactTXOVec Deserialize(const QByteArray &b, bool *ok)
-    {
-        CompactTXOVec ret;
-        const size_t bsz = size_t(b.size());
-        const size_t N = bsz / CompactTXO::serSize();
-        if (CompactTXO::serSize() * N != bsz) { // we refuse if there are extra bytes at the end.
-            if (ok) *ok = false;
-            return ret;
-        }
-        if (ok) *ok = true;
-        ret.reserve(N);
-        const char *cur = b.data();
-        for (size_t i = 0; i < N; ++i, cur += CompactTXO::serSize()) {
-            ret.emplace_back(CompactTXO::fromBytes(cur, CompactTXO::serSize()));
-        }
         return ret;
     }
 } // end anon namespace

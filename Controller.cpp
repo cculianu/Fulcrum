@@ -340,7 +340,7 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
 struct Controller::StateMachine
 {
     enum State {
-        Begin=0, GetBlocks, DownloadingBlocks, FinishedDL, End, Failure, IBD
+        Begin=0, GetBlocks, DownloadingBlocks, FinishedDL, End, Failure, IBD, Retry,
     };
     State state = Begin;
     int ht = -1; ///< the latest height bitcoind told us this run
@@ -358,7 +358,8 @@ struct Controller::StateMachine
     size_t nTx = 0, nIns = 0, nOuts = 0;
 
     const char * stateStr() const {
-        static constexpr const char *stateStrings[] = { "Begin", "GetBlocks", "DownloadingBlocks", "FinishedDL", "End", "Failure", "IBD",
+        static constexpr const char *stateStrings[] = { "Begin", "GetBlocks", "DownloadingBlocks", "FinishedDL", "End",
+                                                        "Failure", "IBD", "Retry",
                                                         "Unknown" /* this should always be last */ };
         auto idx = qMin(size_t(state), std::size(stateStrings)-1);
         return stateStrings[idx];
@@ -482,18 +483,26 @@ void Controller::process(bool beSilentIfUpToDate)
             }
             sm->isMainNet = task->info.chain == "main";
             // TODO: detect reorgs here -- to be implemented later after we figure out data model more, etc.
-            const auto old = storage->latestTip().first;
+            const auto [old, oldHash] = storage->latestTip();
             sm->ht = task->info.blocks;
             if (old == sm->ht) {
-                if (!beSilentIfUpToDate) {
-                    Log() << "Block height " << sm->ht << ", up-to-date";
-                    emit upToDate();
+                if (task->info.bestBlockhash == oldHash) { // no reorg
+                    if (!beSilentIfUpToDate) {
+                        Log() << "Block height " << sm->ht << ", up-to-date";
+                        emit upToDate();
+                    }
+                    sm->state = State::End;
+                } else {
+                    // height ok, but best block hash mismatch.. reorg
+                    Warning() << "We have bestBlock " << oldHash.toHex() << ", but bitcoind reports bestBlock " << task->info.bestBlockhash.toHex() << "."
+                              << " Possible reorg, will rewind back 1 block and try again ...";
+                    process_DoUndoAndRetry(); // attempt to undo 1 block and try again.
+                    return;
                 }
-                sm->state = State::End;
             } else if (old > sm->ht) {
-                Fatal() << "We have height " << old << ", but bitcoind reports height " << sm->ht << ". "
-                        << "Possible reasons: A massive reorg, your node is acting funny, you are on the wrong chain "
-                        << "(testnet vs mainnet), or there is a bug in this program. Cowardly giving up and exiting...";
+                Warning() << "We have height " << old << ", but bitcoind reports height " << sm->ht << "."
+                          << " Possible reorg, will rewind back 1 block and try again ...";
+                process_DoUndoAndRetry(); // attempt to undo 1 block and try again.
                 return;
             } else {
                 Log() << "Block height " << sm->ht << ", downloading new blocks ...";
@@ -525,6 +534,14 @@ void Controller::process(bool beSilentIfUpToDate)
         {
             std::lock_guard g(smLock);
             sm.reset(); // go back to "Begin" state to check if any new headers arrived in the meantime
+        }
+        AGAIN();
+    } else if (sm->state == State::Retry) {
+        // normally the result of Rewinding due to reorg, retry right away.
+        Debug() << "Retrying download again ...";
+        {
+            std::lock_guard g(smLock);
+            sm.reset();
         }
         AGAIN();
     } else if (sm->state == State::Failure) {
@@ -565,7 +582,7 @@ void Controller::putBlock(CtlTask *task, PreProcessedBlockPtr p)
             Debug() << "Ignoring block " << p->height << " for now-defunct task";
             return;
         } else if (sm->state != StateMachine::State::DownloadingBlocks) {
-            Warning() << "Ignoring putBlocks request for block " << p->height << " -- state is not \"DownloadingBlocks\" but rather is: \"" << sm->stateStr() << "\"";
+            Debug() << "Ignoring putBlocks request for block " << p->height << " -- state is not \"DownloadingBlocks\" but rather is: \"" << sm->stateStr() << "\"";
             return;
         }
         sm->ppBlocks[p->height] = p;
@@ -649,6 +666,11 @@ bool Controller::process_VerifyAndAddBlock(PreProcessedBlockPtr ppb)
 
         storage->addBlock(ppb, saveUndoInfo, nLeft);
 
+    } catch (const HeaderVerificationFailure & e) {
+        Debug() << "addBlock exception: " << e.what();
+        Log() << "Possible reorg detected at height " << ppb->height << ", rewinding 1 block and trying again ...";
+        process_DoUndoAndRetry();
+        return false;
     } catch (const std::exception & e) {
         Fatal() << e.what(); // TODO: see about more graceful error and not a fatal exit. (although if we do get an error here it's pretty non-recoverable!)
         sm->state = StateMachine::State::Failure;
@@ -657,6 +679,24 @@ bool Controller::process_VerifyAndAddBlock(PreProcessedBlockPtr ppb)
     }
 
     return true;
+}
+
+void Controller::process_DoUndoAndRetry()
+{
+    assert(sm);
+    try {
+        storage->undoLatestBlock();
+        // . <-- If we get here, rollback was successful.
+        // We flag the state to retry, which retries the full download right away
+        // (Note: this may trigger us to roll back again and again until we reorg to the sufficient depth).
+        sm->state = StateMachine::State::Retry;
+        AGAIN(); // schedule us again to do cleanup
+    } catch (const std::exception & e) {
+        Fatal() << "Failed to rewind: " << e.what() << "\n\nThe database is now likely in an inconsistent state."
+                << " You will need to delete the datadir and do a full resynch now. Sorry!\n";
+        sm->state = StateMachine::State::Failure;
+        return; // return immediately from event loop -- app will shut down now. :/
+    }
 }
 
 // -- CtlTask

@@ -103,6 +103,7 @@ private:
     void process_DownloadingBlocks();
     bool process_VerifyAndAddBlock(PreProcessedBlockPtr); ///< helper called from within DownloadingBlocks state -- makes sure block is sane and adds it to db
     void process_PrintProgress(unsigned height, size_t nTx, size_t nIO);
+    void process_DoUndoAndRetry(); ///< internal -- calls storage->undoLatestBlock() and schedules a task death and retry.
 
     size_t nBlocksDownloadedSoFar() const; ///< not 100% accurate. call this only from this thread
     std::tuple<size_t, size_t, size_t> nTxInOutSoFar() const; ///< not 100% accurate. call this only from this thread
