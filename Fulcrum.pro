@@ -21,7 +21,7 @@ QMAKE_CXXFLAGS_DEBUG -= -DNDEBUG
 QMAKE_CFLAGS_DEBUG -= -DNDEBUG
 release {
     CONFIG += optimize_full
-    clang|g++ {
+    clang|g++|win32-g++ {
         QMAKE_CXXFLAGS_RELEASE += -fomit-frame-pointer
         QMAKE_CFLAGS_RELEASE += -fomit-frame-pointer
     }
