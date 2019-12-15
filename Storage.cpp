@@ -27,6 +27,7 @@ DatabaseError::~DatabaseError(){} // weak vtable warning suppression
 DatabaseSerializationError::~DatabaseSerializationError() {} // weak vtable warning suppression
 DatabaseFormatError::~DatabaseFormatError() {} // weak vtable warning suppression
 DatabaseKeyNotFound::~DatabaseKeyNotFound() {} // weak vtable warning suppression
+HeaderVerificationFailure::~HeaderVerificationFailure() {} // weak vtable warning suppression
 
 namespace {
     /// Encapsulates the 'meta' db table
@@ -876,7 +877,7 @@ double Storage::utxoSetSizeMiB() const {
     return (utxoSetSize()*elemSize) / 1e6;
 }
 
-QString Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserve)
+void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserve)
 {
     assert(bool(ppb) && bool(p));
 
@@ -887,14 +888,16 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nRes
         undo->height = ppb->height;
     }
 
-    QString errRet;
-
     // take all locks now.. since this is a Big Deal. TODO: add more locks here?
     std::scoped_lock guard(p->headerVerifierLock, p->blkInfoLock);
 
-    const auto verifUndo = p->headerVerifier; // keep a copy for undo purposes in case this fails
+    const auto verifUndo = p->headerVerifier; // keep a copy of verifier state for undo purposes in case this fails
+    // This object ensures that if an exception is thrown while we are in the below code, we undo the header verifier
+    // and return it to its previous state.  Note the defer'd functor is called with the above scoped_lock held.
+    Defer undoVerifierOnScopeEnd([&verifUndo, this] { p->headerVerifier = verifUndo; });
 
-    try {
+    // code in the below block may throw -- exceptions are propagated out to caller.
+    {
         const auto blockTxNum0 = p->txNumNext.load();
 
         // Verify header chain makes sense (by checking hashes, using the shared header verifier)
@@ -902,11 +905,11 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nRes
         {
             QString errMsg;
             if (!p->headerVerifier(ppb->header, &errMsg) ) {
-                // XXX possible reorg point. FIXME TODO
-                // reorg here? TODO: deal with this better.
-                throw Exception(errMsg);
+                // XXX possible reorg point. Caller will/should roll back the db state via issuing calls to undoLatestBlock()
+                throw HeaderVerificationFailure(errMsg);
             }
-            // save raw header back to our buffer
+            // save raw header back to our buffer -- this will be used at the end of this function to add it to the db
+            // after everything completes successfully.
             rawHeader = p->headerVerifier.lastHeaderProcessed().second;
         }
 
@@ -1122,12 +1125,8 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nRes
 
         appendHeader(rawHeader, ppb->height);
 
-    } catch (const std::exception & e) {
-        errRet = e.what();
-        p->headerVerifier = verifUndo; // undo header verifier state
+        undoVerifierOnScopeEnd.disable(); // indicate to the "Defer" object declared at the top of this function that it shouldn't undo anything anymore as we are happy now with the db state.
     }
-
-    return errRet;
 }
 
 std::optional<TxHash> Storage::hashForTxNum(TxNum n, bool throwIfMissing, bool *wasCached, bool skipCache) const

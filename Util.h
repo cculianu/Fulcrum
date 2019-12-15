@@ -642,17 +642,28 @@ namespace Util {
 
 } // end namespace Util
 
-/// Kind of like Go's "defer" statement. Call a functor (for clean-up code) at scope end.
+/// Kind of like Go's "defer" statement. Call a lambda (for clean-up code) at scope end.
+/// Note for performance, we don't use a std::function wrapper but instead wrap any passed-in lambda directly.
+///
+/// This is a tiny performance optimization as it avoids a std::function wrapper. You can, however, also use a
+/// std::function, with this class -- just be sure it's valid (operator bool() == true), since we don't check for
+/// validity on std::function before invoking.
+template <typename VoidFuncT,
+          std::enable_if_t<std::is_invocable_v<VoidFuncT>, int> = 0>
 struct Defer
 {
-    using VoidFunc = std::function<void()>;
-    VoidFunc func;
-
-    Defer(const VoidFunc & f) : func(f) {}
+    using VoidFunc = VoidFuncT;
+    Defer() = delete;
     Defer(VoidFunc && f) : func(std::move(f)) {}
-    Defer() {} ///< essentially a no-op. Intended for possibly specifying the function via `.func =` later.
+    Defer(const VoidFunc & f) : func(f) {}
+    ~Defer() { if (valid) func(); }
 
-    ~Defer() { if (func) func(); }
+    /// Mark this instance as a no-op. After a call to disable, this Defer instance  will no longer call its wrapped
+    /// function upon descruction.  This operation cannot be reversed.
+    void disable() { valid = false; }
+protected:
+    VoidFunc func;
+    bool valid = true;
 };
 
 /// Like `Defer`, except you specify a function to be called at creation (immediately). Intended to be used for code
@@ -671,11 +682,11 @@ struct Defer
 ///     Defer d1( [&]{ someUniqPtr.reset(); } );
 ///
 /// But the RAII version above is more explicit about what code goes with what cleanup.
-struct RAII : public Defer {
+struct RAII : public Defer<std::function<void()>> {
     /// initFunc called immediately, cleanupFunc called in this instance's destructor
-    RAII(const VoidFunc & initFunc, const VoidFunc &cleanupFunc) : Defer(cleanupFunc) { if (initFunc) initFunc(); }
+    RAII(const VoidFunc & initFunc, const VoidFunc &cleanupFunc) : Defer(cleanupFunc) { if (initFunc) initFunc(); valid = bool(cleanupFunc); }
     /// initFunc called immediately, cleanupFunc called in this instance's destructor
-    RAII(const VoidFunc & initFunc, VoidFunc && cleanupFunc) : Defer(std::move(cleanupFunc)) { if (initFunc) initFunc(); }
+    RAII(const VoidFunc & initFunc, VoidFunc && cleanupFunc) : Defer(std::move(cleanupFunc)) { if (initFunc) initFunc(); valid = bool(cleanupFunc); }
 };
 
 // helper type for std::visit (see RPC.cpp where we use this crazy C++17 thing)

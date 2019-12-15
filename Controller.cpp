@@ -643,13 +643,14 @@ bool Controller::process_VerifyAndAddBlock(PreProcessedBlockPtr ppb)
 {
     assert(sm);
 
-    const auto nLeft = qMax(sm->endHeight - (sm->ppBlkHtNext-1), 0U);
+    try {
+        const auto nLeft = qMax(sm->endHeight - (sm->ppBlkHtNext-1), 0U);
+        const bool saveUndoInfo = int(ppb->height) > (sm->ht - int(BTC::maxReorgDepth));
 
-    const bool saveUndoInfo = int(ppb->height) > (sm->ht - int(BTC::maxReorgDepth));
-    const QString err = storage->addBlock(ppb, saveUndoInfo, nLeft);
+        storage->addBlock(ppb, saveUndoInfo, nLeft);
 
-    if (!err.isEmpty()) {
-        Fatal() << err; // TODO: see about more graceful error and not a fatal exit. (although if we do get an error here it's pretty non-recoverable!)
+    } catch (const std::exception & e) {
+        Fatal() << e.what(); // TODO: see about more graceful error and not a fatal exit. (although if we do get an error here it's pretty non-recoverable!)
         sm->state = StateMachine::State::Failure;
         AGAIN(); // schedule us again to do cleanup
         return false;

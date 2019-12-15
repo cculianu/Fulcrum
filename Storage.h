@@ -28,7 +28,11 @@ struct DatabaseSerializationError : public DatabaseError { using DatabaseError::
 /// The database appears to be of the wrong format / unrecognized.
 struct DatabaseFormatError : public DatabaseError { using DatabaseError::DatabaseError; ~DatabaseFormatError() override; };
 
+/// Thrown by addBlock if the block in question cannot be added because its prevoutHash does not match the latestTip.
+/// The caller should probably rewind the chain if this is thrown by calling Storage::undoLatestBlock().
+struct HeaderVerificationFailure : public Exception { using Exception::Exception; ~HeaderVerificationFailure() override; };
 
+/// Manages the db and all storage-related facilities.  Most of its public methods are fully reentrant and thread-safe.
 class Storage final : public Mgr, public ThreadObjectMixin
 {
 public:
@@ -78,12 +82,29 @@ public:
 
     // --- Block Processing (still a WIP)
 
-    /// Thread-safe. Call this from the Controller thread or any thread. Returns the empty string on success,
-    /// or a string containing an error message on failure.  A common failure reason would be a header verification
-    /// failure.  Note: you can only add blocks in serial sequence from 0 -> latest.
+    /// Thread-safe. Call this from the Controller thread or any thread. Will return on success, or throw on failure.
+    ///
+    /// The most likely failure reason would be a HeaderVerificationFailure (due to a reorg).  If
+    /// HeaderVerificationFailure is thrown, the db and Storage state is sane and the caller can/should proceed
+    /// to try and rewind the blocks in the db via successive calls to undoLatestBlock().
+    ///
+    /// If any other exception is thrown, the db and Storage state is not guaranteed to be in a sane state and the
+    /// user will probably have to resynch the entire chain. (TODO FIXME).
+    ///
     /// This function will mutate the pased-in pre-processed block and fill in all the inputs from the utxo set,
-    /// as well as modify the utxo set with spends / new outputs.
-    QString addBlock(PreProcessedBlockPtr ppb, bool alsoSaveUnfoInfo, unsigned num2ReserveAfter = 0);
+    /// as well as modify the utxo set with spends / new outputs, and generate undo info for the block in the db if
+    /// the block is accepted.  A successful return from this function without throwing indicates success.
+    ///
+    /// Note: you can only add blocks in serial sequence from 0 -> latest.
+    void addBlock(PreProcessedBlockPtr ppb, bool alsoSaveUnfoInfo, unsigned num2ReserveAfter = 0);
+
+    /// Thread-safe.  Will attempt to undo the latest block that was previously added via a successfully completed call
+    /// to addBlock().  This should be called if addBlock throws HeaderVerificationFailure. This function may throw
+    /// on low-level database error or if undo information has been exhausted and the latest tip cannot be rolled back.
+    /// At that point it's a fatal error (and the app should probably quit?).
+    ///
+    /// Returns the new latestTip().first (height)
+    int undoLatestBlock();
 
     /// returns the "next" TxNum (thread safe)
     TxNum getTxNum() const;
