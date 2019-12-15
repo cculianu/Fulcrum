@@ -656,7 +656,7 @@ struct Defer
     Defer(VoidFunc && f) : func(std::move(f)) {}
     Defer(const VoidFunc & f) : func(f) {}
     /// move c'tor -- invalidate other, take its function.
-    Defer(Defer && o) : func(std::move(o.func)) { o.valid = false; }
+    Defer(Defer && o) : func(std::move(o.func)), valid(o.valid) { o.valid = false; }
     /// d'tor -- call wrapped func. if we are still valid.
     ~Defer() { if (valid) func(); }
 
