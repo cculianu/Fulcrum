@@ -863,7 +863,9 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nRes
 
     QString errRet;
 
-    std::scoped_lock guard(p->headerVerifierLock); // take all locks now.. todo: add more locks here
+    // take all locks now.. since this is a Big Deal. TODO: add more locks here?
+    std::scoped_lock guard(p->headerVerifierLock, p->blkInfoLock);
+
     const auto verifUndo = p->headerVerifier; // keep a copy for undo purposes in case this fails
 
     try {
@@ -1025,8 +1027,6 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nRes
 
         {
             // update BlkInfo
-            ExclusiveLockGuard g(p->blkInfoLock);
-
             if (nReserve) {
                 if (const auto size = p->blkInfos.size(); size + 1 > p->blkInfos.capacity())
                     p->blkInfos.reserve(size + nReserve); // reserve space for new blkinfos in 1 go to save on copying
