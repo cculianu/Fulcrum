@@ -655,6 +655,9 @@ struct Defer
     using VoidFunc = VoidFuncT;
     Defer(VoidFunc && f) : func(std::move(f)) {}
     Defer(const VoidFunc & f) : func(f) {}
+    /// move c'tor -- invalidate other, take its function.
+    Defer(Defer && o) : func(std::move(o.func)) { o.valid = false; }
+    /// d'tor -- call wrapped func. if we are still valid.
     ~Defer() { if (valid) func(); }
 
     /// Mark this instance as a no-op. After a call to disable, this Defer instance  will no longer call its wrapped
