@@ -252,6 +252,19 @@ namespace {
                                 .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : "Error writing object to db")
                                 .arg(QString::fromStdString(st.ToString())));
     }
+    /// Throws on all errors. Otherwise deletes a key from db. It is not an error to delete a non-existing key.
+    template <bool safeScalar = false, typename KeyType>
+    void GenericDBDelete
+                (rocksdb::DB *db, const KeyType & key,
+                 const QString & errorMsgPrefix = QString(),  ///< used to specify a custom error message in the thrown exception
+                 const rocksdb::WriteOptions & opts = rocksdb::WriteOptions())
+    {
+        auto st = db->Delete(opts, ToSlice<safeScalar>(key));
+        if (!st.ok())
+            throw DatabaseError(QString("%1: %2")
+                                .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : "Error deleting a key from db")
+                                .arg(QString::fromStdString(st.ToString())));
+    }
 
     //// A helper data structs -- written to the blkinfo table. This helps localize a txnum to a specific position in
     /// a block.  The table is keyed off of block_height(uint32_t) -> serialized BlkInfo (raw bytes)
@@ -381,7 +394,8 @@ struct Storage::Pvt
         std::shared_ptr<ConcatOperator> concatOperator;
 
         std::unique_ptr<rocksdb::DB> meta, headers, blkinfo, utxoset,
-                                     shist, shunspent; // scripthash_history and scripthash_unspent
+                                     shist, shunspent, // scripthash_history and scripthash_unspent
+                                     undo; // undo (reorg rewind)
     } db;
 
     std::unique_ptr<RecordFile> txNumsFile;
@@ -438,6 +452,7 @@ void Storage::startup()
             { "utxoset", p->db.utxoset, opts },
             { "scripthash_history", p->db.shist, shistOpts },
             { "scripthash_unspent", p->db.shunspent, opts },
+            { "undo", p->db.undo, opts },
         };
         const auto OpenDB = [this](const DBInfoTup &tup) {
             auto & [name, uptr, opts] = tup;
@@ -1036,10 +1051,15 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nRes
             }
         }
 
-        // save teh last of the undo info, if in saveUndo mode
+        // save the last of the undo info, if in saveUndo mode
         if (undo) {
+            const auto t0 = Util::getTimeNS();
             undo->hash = BTC::HashRev(rawHeader);
             undo->scriptHashes = Util::keySet<decltype (undo->scriptHashes)>(ppb->hashXAggregated);
+            static const QString errPrefix("Error saving undo info to undo db");
+
+            GenericDBPut(p->db.undo.get(), uint32_t(ppb->height), *undo, errPrefix, p->db.defWriteOpts); // save undo to db
+
             if constexpr (debugPrt) {
                 // testing undo ser/deser
                 Debug() << "Undo info 1: " << undo->toDebugString();
@@ -1051,7 +1071,23 @@ QString Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nRes
                 FatalAssert(ok && undo2.isValid()) << "Deser of undo info failed!";
                 Debug() << "Undo info 2: " << undo2.toDebugString();
                 Debug() << "Undo info 1 == undo info 2: " << (*undo == undo2);
+            } else {
+                const auto elapsedms = (Util::getTimeNS() - t0)/1e6;
+                const size_t nTx = undo->blkInfo.nTx, nSH = undo->scriptHashes.size();
+                Debug() << "Saved undo for block " << undo->height << ", "
+                        << nTx << " " << Util::Pluralize("transaction", nTx)
+                        << " involving " << nSH << " " << Util::Pluralize("scripthash", nSH)
+                        << ", in " << QString::number(elapsedms, 'f', 2) << " msec.";
             }
+        }
+        {
+            // Unconditionally expire old undos >10 blocks ago to keep the db tidy. We need to do this for each block
+            // because we do not know what old undos may be lurking in the db.
+            // TODO: On startup, have the db scan and find the earliest undo and only take this branch if we know an old
+            // undo exists for a certain height!
+            static const QString errPrefix("Error deleting old/stale undo info from undo db");
+            if (const auto expireUndoHeight = int(ppb->height) - int(BTC::maxReorgDepth); expireUndoHeight >= 0)
+                GenericDBDelete(p->db.undo.get(), uint32_t(expireUndoHeight), errPrefix, p->db.defWriteOpts);
         }
 
         appendHeader(rawHeader, ppb->height);

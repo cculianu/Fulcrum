@@ -477,7 +477,10 @@ namespace Util {
             QTextStream s(&ret);
             s << word;
             if (qAbs(int(n)) != 1) {
-                if (word.endsWith('s')) s << "es";
+                const auto wordend = word.right(2);
+                // 's' or "sh" sound in English are pluralized with "es" rather than simple "s"
+                // TODO: suppored ALL CAPS? Not needed for now so we don't bother...
+                if (wordend.endsWith('s') || wordend == "sh") s << "es";
                 else s << "s";
             }
         }
