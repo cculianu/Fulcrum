@@ -376,7 +376,7 @@ namespace Util {
      * this).
      *
      * Caveats: If you hit CTRL-C to shutdown this app and the work is not yet
-     * complete, the app wait for 5 seconds for all thrads and if they don't
+     * complete, the app waits for 5 seconds for all threads and if they don't
      * finish, it will call C abort() with message:
      * 'QThread: Destroyed while thread is still running'.
      *
@@ -386,12 +386,19 @@ namespace Util {
         Q_OBJECT
     public:
 
-        /// Note work should remain alive for the duration of this task!
+        /// Note `receiver` (if specified) should remain alive for the duration of this task!
+        /// Args:
+        ///     `work`       - Called in thread's context to do work
+        ///     `receiver`   - The object context in which to call `completion`. If nullptr, `completion` will execute
+        ///                    in the calling thread's context.  If not nullptr, `receier` should remain alive until
+        ///                    work completes (it is also made the parent of this QThread instance!).
+        ///     `completion` - Called in `receiver`'s thread on completion.
+        ///     `threadName` - Advisory thread name used in Debug() and Log() print for code executing within the thread
         static RunInThread *
-        Do ( const VoidFunc &work,  ///< called in thread's context to do work
-             QObject *receiver = nullptr, ///< becomes this instance's child.  If not nullptr, should remain alive until work completes.
-             const VoidFunc &completion = VoidFunc(), ///< called in receiver's thread on completion
-             const QString & threadName = QString()) ///< advisory thread name used in Debug() and Log() print for code executing within the thread
+        Do ( const VoidFunc &work,
+             QObject *receiver = nullptr,
+             const VoidFunc &completion = VoidFunc(),
+             const QString & threadName = QString())
         { return new RunInThread(work, receiver, completion, threadName); }
 
         /// Convenience for above.  Sets the receiver to 'nullptr' which puts the completion() function execution
@@ -415,7 +422,7 @@ namespace Util {
         void onCompletion();
     private:
         VoidFunc work;
-        /// disabled public c'tor
+        /// non-public c'tor
         RunInThread(const VoidFunc &work,
                     QObject *receiver = nullptr,
                     const VoidFunc &completion = VoidFunc(),
@@ -561,21 +568,20 @@ namespace Util {
         QTimer::singleShot(int(when_ms), ttype, const_cast<QObject *>(obj), lambda);
     }
 
-    /// This is an alternative to creating signal/slot pairs
-    /// for calling a method on an object that runs in another thread.
+    /// This is an alternative to creating signal/slot pairs for calling a method on an object that runs in another
+    /// thread.
     ///
-    /// I got tired of repeating that pattern over and over again (e.g.
-    /// creating myMethod() as a signal connected to a private slot
-    /// _myMethod()).
+    /// I got tired of repeating that pattern over and over again (e.g. creating myMethod() as a signal connected to
+    /// a private slot _myMethod()).
     ///
-    /// To save typing, this template can just allow you to directly call
-    /// a method on an object in its thread (uses QTimer::singleShot).
+    /// To save typing, this template can just allow you to directly call a method on an object in its thread (uses
+    /// QTimer::singleShot).
     ///
     /// Arguments are capture-copied.
     ///
-    /// Basically, it directly check the current thread versus object
-    /// thread, and if they match, calls 'method' immediately.  If they do not
-    /// match, enqeues the call using argument forwarding on a timer.
+    /// Basically, it directly checks the current thread versus object thread, and if they match, calls 'method'
+    /// immediately.  If they do not match, enqeues the call using argument to the target's event loop, and returns
+    /// right away.
     ///
     /// Example usage:
     ///
@@ -608,7 +614,7 @@ namespace Util {
     }
 
     /// Convenience method -- Identical CallOnObjectWithTimeout above except doesn't ever throw, instead returns an
-    /// optional with no value on failure/timeout.  Does not work if the RET type is void (optional<void> is disallowed).
+    /// optional with no value on failure/timeout. Does not work if the RET type is void (optional<void> is disallowed).
     template <typename RET, typename QOBJ, typename METHOD, typename ... Args>
     std::optional<RET> CallOnObjectWithTimeoutNoThrow(int timeout_ms, QOBJ obj, METHOD method, Args && ...args) {
         std::optional<RET> ret;

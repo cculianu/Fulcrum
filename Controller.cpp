@@ -714,7 +714,7 @@ CtlTask::CtlTask(Controller *ctl, const QString &name)
 }
 
 CtlTask::~CtlTask() {
-    Debug("%s (%s)", __FUNCTION__, objectName().isEmpty() ? "" : objectName().toUtf8().constData());
+    Debug("%s (%s)", __FUNCTION__, objectName().isEmpty() ? "" : Q2C(objectName()));
     stop();
 }
 

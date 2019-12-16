@@ -95,7 +95,7 @@ namespace Util {
     {
         if (work)
             work();
-        emit onCompletion(); // runs in receiver's thread or main thread if no receiver.
+        emit onCompletion(); // runs in receiver's thread or caller/creator thread if no receiver.
         done();
     }
 
@@ -148,8 +148,6 @@ namespace Util {
         });
     }
 
-    /// Like the above but for VoidFunc lambdas.  Returns true if the lambda was called before timeout,
-    /// false otherwise. (Note lambda may still run later asynchronously).
     bool VoidFuncOnObjectNoThrow(const QObject *obj, const std::function<void()> & lambda, int timeout_ms)
     {
         try {
@@ -288,7 +286,7 @@ Log::~Log()
         App *ourApp = app();
         s.flush(); // does nothing probably..
         // note: we always want to log the timestamp, even in syslog mode.
-        // this is because if logging from a thread, log lines be out-of-order.
+        // this is because if logging from a thread, log lines may be out-of-order.
         // The timestamp is the only record of the actual order in which things
         // occurred. Currently the timestamp is to 4 decimal places (hundreds of micros)
         const auto unow = Util::getTimeNS()/1000LL;
