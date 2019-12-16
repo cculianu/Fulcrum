@@ -169,14 +169,32 @@ protected:
     std::pair<const BTC::HeaderVerifier &, SharedLockGuard> headerVerifier() const;
 
 
-    // -- the below are used inside addBlock to maintain the UTXO set & Headers
+    // -- the below are used inside addBlock (and undoLatestBlock) to maintain the UTXO set & Headers
 
-    /// Thread-safe. Immediately save a UTXO to the db. May throw on database error. Also updates scripthash_unspent.
-    void utxoAddToDB(const TXO &, const TXOInfo &, const CompactTXO &);
     /// Thread-safe. Query db for a UTXO, and return it if found.  May throw on database error.
     std::optional<TXOInfo> utxoGetFromDB(const TXO &, bool throwIfMissing = false);
-    /// Delete a Utxo from the db. Will throw only on database error (but not if it was missing). Also deletes from scripthash_unspent.
-    void utxoDeleteFromDB(const TXO &, const HashX &, const CompactTXO &);
+
+    /// Used to store (in an opaque fashion) the rocksdb::WriteBatch objects used for updating the db.
+    /// Called internally from addBlock and undoLatestBlock().
+    struct UTXOBatch {
+        UTXOBatch();
+        UTXOBatch(UTXOBatch &&);
+        /// Enqueue an add of a utxo -- does not take effect in db until Storage::issueUpdates() is called -- may throw.
+        void add(const TXO &, const TXOInfo &, const CompactTXO &);
+        /// Enqueue a removal -- does not take effect in db until Storage::issueUpdates() is called -- may throw.
+        void remove(const TXO &, const HashX &, const CompactTXO &);
+
+    private:
+        friend class Storage;
+        UTXOBatch(const UTXOBatch &) = delete;
+        UTXOBatch & operator=(const UTXOBatch &) = delete;
+        struct P;
+        std::unique_ptr<P> p;
+    };
+
+    /// Call this when finished to issue the updates queued up in the batch context to the db.
+    void issueUpdates(UTXOBatch &);
+
 
     /// Internally called by addBlock. Call this with the heaverVerifier lock held.
     /// Appends header h to the database at height. Note that it is undefined to call this function

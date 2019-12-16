@@ -260,7 +260,7 @@ namespace {
                                 .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : QString("Error writing to db %1").arg(DBName(db)))
                                 .arg(StatusString(st)));
     }
-    /// Throws on all errors. Otherwise writes to db.
+    /// Throws on all errors. Otherwise enqueues a write to the batch.
     template <bool safeScalar = false, typename KeyType, typename ValueType>
     void GenericBatchPut
                 (rocksdb::WriteBatch & batch, const KeyType & key, const ValueType & value,
@@ -272,8 +272,20 @@ namespace {
                                 .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : "Error from WriteBatch::Put")
                                 .arg(StatusString(st)));
     }
-    /// Just a convenient wrapper to db->Write(batch...) which throws on all errors.
-    void BatchWriteToDB(rocksdb::DB *db, rocksdb::WriteBatch & batch,
+    /// Throws on all errors. Otherwise enqueues a delete to the batch.
+    template <bool safeScalar = false, typename KeyType>
+    void GenericBatchDelete
+                (rocksdb::WriteBatch & batch, const KeyType & key,
+                 const QString & errorMsgPrefix = QString())  ///< used to specify a custom error message in the thrown exception
+    {
+        auto st = batch.Delete(ToSlice<safeScalar>(key));
+        if (!st.ok())
+            throw DatabaseError(QString("%1: %2")
+                                .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : "Error from WriteBatch::Delete")
+                                .arg(StatusString(st)));
+    }
+    /// A convenient wrapper to db->Write(batch...) which throws on all errors.
+    void GenericBatchWrite(rocksdb::DB *db, rocksdb::WriteBatch & batch,
                         const QString & errorMsgPrefix = QString(),
                         const rocksdb::WriteOptions & opts = rocksdb::WriteOptions())
     {
@@ -874,55 +886,82 @@ void Storage::loadCheckEarliestUndo()
     }
 }
 
-/// Thread-safe. Immediately save a UTXO to the db. May throw on database error.
-void Storage::utxoAddToDB(const TXO &txo, const TXOInfo &info, const CompactTXO &ctxo)
+struct Storage::UTXOBatch::P {
+    rocksdb::WriteBatch utxosetBatch; ///< batch writes/deletes end up in the utxoset db (keyed off TXO)
+    rocksdb::WriteBatch shunspentBatch; ///< batch writes/deletes end up in the shunspent db (keyed off HashX+CompactTXO)
+    int addCt = 0, rmCt = 0;
+    bool defunct = false;
+};
+
+Storage::UTXOBatch::UTXOBatch() : p(new P) {}
+Storage::UTXOBatch::UTXOBatch(UTXOBatch &&o) { p.swap(o.p); }
+
+void Storage::issueUpdates(UTXOBatch &b)
 {
-    assert(bool(p->db.utxoset));
-    if (txo.isValid()) {
-        static const QString errMsgPrefix("Failed to add a utxo to the utxo db");
-        GenericDBPut(p->db.utxoset.get(), txo, info, errMsgPrefix, p->db.defWriteOpts); // may throw on failure
+    static const QString errMsg1("Error issuing batch write to utxoset db for a utxo update"),
+                         errMsg2("Error issuing batch write to scripthash_unspent db for a utxo update");
+    if (UNLIKELY(b.p->defunct))
+        throw InternalError("Misuse of Storage::issueUpdates. Cannot issue the same updates using the same context more than once. FIXME!");
+    assert(bool(p->db.utxoset) && bool(p->db.shunspent));
+    GenericBatchWrite(p->db.utxoset.get(), b.p->utxosetBatch, errMsg1, p->db.defWriteOpts); // may throw
+    GenericBatchWrite(p->db.shunspent.get(), b.p->shunspentBatch, errMsg2, p->db.defWriteOpts); // may throw
+    p->utxoCt += b.p->addCt - b.p->rmCt; // tally up adds and deletes
+    b.p->defunct = true;
+}
 
-        {
-            // Update the scripthash unspent. This is a very simple table which we scan by hashX prefix using
-            // an iterator in listUnspent.  Each entry's key is prefixed with the HashX bytes but suffixed with the
-            // serialized CompactTXO bytes. Each entry has no data for the value.
-            static const QString errMsgPrefix("Failed to add an entry to the scripthash_unspent db");
-            static const rocksdb::Slice empty;
-            const QByteArray key = info.hashX + ctxo.toBytes();
-
-            GenericDBPut(p->db.shunspent.get(), key, empty, errMsgPrefix, p->db.defWriteOpts); // may throw, which is what we want
-        }
-        ++p->utxoCt;
+namespace {
+    inline QByteArray mkShunspentKey(const QByteArray & hashX, const CompactTXO &ctxo) {
+        // we do it this way for performance:
+        const int hxlen = hashX.length();
+        assert(hxLen == HashLen);
+        QByteArray key(hxlen + int(ctxo.serSize()), Qt::Uninitialized);
+        std::memcpy(key.data(), hashX.constData(), size_t(hxlen));
+        ctxo.toBytesInPlace(key.data()+hxlen, ctxo.serSize());
+        return key;
     }
 }
+
+void Storage::UTXOBatch::add(const TXO &txo, const TXOInfo &info, const CompactTXO &ctxo)
+{
+    {
+        // Update db utxoset, keyed off txo -> txoinfo
+        static const QString errMsgPrefix("Failed to add a utxo to the utxo batch");
+        GenericBatchPut(p->utxosetBatch, txo, info, errMsgPrefix); // may throw on failure
+    }
+
+    {
+        // Update the scripthash unspent. This is a very simple table which we scan by hashX prefix using
+        // an iterator in listUnspent.  Each entry's key is prefixed with the HashX bytes (32) but suffixed with the
+        // serialized CompactTXO bytes (8). Each entry has no data for the value.
+        static const QString errMsgPrefix("Failed to add an entry to the scripthash_unspent batch");
+        static const rocksdb::Slice empty;
+
+        GenericBatchPut(p->shunspentBatch, mkShunspentKey(info.hashX, ctxo), empty, errMsgPrefix); // may throw, which is what we want
+    }
+    ++p->addCt;
+}
+
+void Storage::UTXOBatch::remove(const TXO &txo, const HashX &hashX, const CompactTXO &ctxo)
+{
+    {
+        // enqueue delete from utxoset db -- may throw.
+        static const QString errMsgPrefix("Failed to issue a batch delete for a utxo");
+        GenericBatchDelete(p->utxosetBatch, txo, errMsgPrefix);
+    }
+    {
+        // enqueue delete from scripthash_unspent db
+        static const QString errMsgPrefix("Failed to issue a batch delete for a utxo to the scripthash_unspent db");
+        GenericBatchDelete(p->shunspentBatch, mkShunspentKey(hashX, ctxo), errMsgPrefix);
+    }
+    ++p->rmCt;
+}
+
 /// Thread-safe. Query db for a UTXO, and return it if found.  May throw on database error.
 std::optional<TXOInfo> Storage::utxoGetFromDB(const TXO &txo, bool throwIfMissing)
 {
     assert(bool(p->db.utxoset));
     static const QString errMsgPrefix("Failed to read a utxo from the utxo db");
     return GenericDBGet<TXOInfo>(p->db.utxoset.get(), txo, !throwIfMissing, errMsgPrefix, false, p->db.defReadOpts);
-}
-/// Delete a Utxo from the db. Will throw only on database error (but not if it was missing).
-void Storage::utxoDeleteFromDB(const TXO &txo, const HashX &hashX, const CompactTXO &ctxo)
-{
-    assert(bool(p->db.utxoset));
-    {
-        // delete from utxoset db
-        auto stat = p->db.utxoset->Delete(rocksdb::WriteOptions(), ToSlice(Serialize(txo)));
-        if (!stat.ok()) {
-            throw DatabaseError(QString("Failed to delete from the utxo db (%1:%2): %3")
-                                .arg(QString(txo.prevoutHash.toHex())).arg(txo.prevoutN).arg(StatusString(stat)));
-        }
-    }
-    {
-        // delete from scripthash_unspent db
-        const QByteArray key = hashX + ctxo.toBytes();
-        if (auto stat = p->db.shunspent->Delete(p->db.defWriteOpts, ToSlice(key)); !stat.ok()) {
-            throw DatabaseError(QString("Failed to delete a from the scripthash_unspent db (%1:%2): %3")
-                                .arg(QString(txo.prevoutHash.toHex())).arg(txo.prevoutN).arg(StatusString(stat)));
-        }
-    }
-    --p->utxoCt;
 }
 
 int64_t Storage::utxoSetSize() const { return p->utxoCt; }
@@ -986,89 +1025,98 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
 
         constexpr bool debugPrt = false;
 
-        // update utxoSet
+        // update utxoSet & scritphash history
         {
-            // reserve space in undo, if in saveUndo mode
-            if (undo) {
-                undo->addUndos.reserve(ppb->outputs.size());
-                undo->delUndos.reserve(ppb->inputs.size());
-            }
-
-            // add outputs
-
-            for (const auto & [hashX, ag] : ppb->hashXAggregated) {
-                for (const auto oidx : ag.outs) {
-                    const auto & out = ppb->outputs[oidx];
-                    if (out.spentInInputIndex.has_value()) {
-                        if constexpr (debugPrt)
-                            Debug() << "Skipping output #: " << oidx << " for " << ppb->txInfos[out.txIdx].hash.toHex() << " (was spent in same block tx: " << ppb->txInfos[ppb->inputs[out.spentInInputIndex.value()].txIdx].hash.toHex() << ")";
-                        continue;
-                    }
-                    const TxHash & hash = ppb->txInfos[out.txIdx].hash;
-                    TXOInfo info;
-                    info.hashX = hashX;
-                    info.amount = out.amount;
-                    info.confirmedHeight = ppb->height;
-                    info.txNum = blockTxNum0 + out.txIdx;
-                    const TXO txo{ hash, out.outN };
-                    const CompactTXO ctxo(info.txNum, txo.prevoutN);
-                    utxoAddToDB(txo, info, ctxo); // add to db
-                    if (undo) { // save undo info if we are in saveUndo mode
-                        undo->addUndos.emplace_back(txo, info.hashX, ctxo);
-                    }
-                    if constexpr (debugPrt)
-                        Debug() << "Added txo: " << txo.toString()
-                                << " (txid: " << hash.toHex() << " height: " << ppb->height << ") "
-                                << " amount: " << info.amount.ToString() << " for HashX: " << info.hashX.toHex();
-                }
-            }
-
-            // add spends (process inputs)
             std::unordered_set<HashX, HashHasher> newHashXInputsResolved;
-            unsigned inum = 0;
-            for (auto & in : ppb->inputs) {
-                const TXO txo{in.prevoutHash, in.prevoutN};
-                if (!inum) {
-                    // coinbase.. skip
-                } else if (in.parentTxOutIdx.has_value()) {
-                    // was an input that was spent in this block so it's ok to skip.. we never added it to utxo set
-                    if constexpr (debugPrt)
-                        Debug() << "Skipping input " << txo.toString() << ", spent in this block (output # " << in.parentTxOutIdx.value() << ")";
-                } else if (const auto opt = utxoGetFromDB(txo); opt.has_value()) {
-                    const auto & info = opt.value();
-                    if (info.confirmedHeight.has_value() && info.confirmedHeight.value() != ppb->height) {
-                        // was a prevout from a previos block.. so the ppb didn't have it in the 'involving hashx' set..
-                        // mark the spend as having involved this hashX for this ppb now.
-                        auto & ag = ppb->hashXAggregated[info.hashX];
-                        ag.ins.emplace_back(inum);
-                        newHashXInputsResolved.insert(info.hashX);
-                        // mark its txidx
-                        if (auto & vec = ag.txNumsInvolvingHashX; vec.empty() || vec.back() != in.txIdx)
-                            vec.emplace_back(in.txIdx);
 
-                    }
-                    if constexpr (debugPrt) {
-                        const auto dbgTxIdHex = ppb->txHashForInputIdx(inum).toHex();
-                        Debug() << "Spent " << txo.toString() << " amount: " << info.amount.ToString()
-                                << " in txid: "  << dbgTxIdHex << " height: " << ppb->height
-                                << " input number: " << ppb->numForInputIdx(inum).value_or(0xffff)
-                                << " HashX: " << info.hashX.toHex();
-                    }
-                    // delete from db
-                    utxoDeleteFromDB(txo, info.hashX, CompactTXO(info.txNum, txo.prevoutN)); // delete from db
-                    if (undo) { // save undo info, if we are in saveUndo mode
-                        undo->delUndos.emplace_back(txo, info);
-                    }
-                } else {
-                    QString s;
-                    {
-                        const auto dbgTxIdHex = ppb->txHashForInputIdx(inum).toHex();
-                        QTextStream ts(&s);
-                        ts << "Failed to spend: " << in.prevoutHash.toHex() << ":" << in.prevoutN << " (spending txid: " << dbgTxIdHex << ")";
-                    }
-                    throw InternalError(s);
+            {
+                // utxo batch block (updtes utxoset & scripthash_unspent tables)
+                UTXOBatch utxoBatch;
+
+                // reserve space in undo, if in saveUndo mode
+                if (undo) {
+                    undo->addUndos.reserve(ppb->outputs.size());
+                    undo->delUndos.reserve(ppb->inputs.size());
                 }
-                ++inum;
+
+                // add outputs
+                for (const auto & [hashX, ag] : ppb->hashXAggregated) {
+                    for (const auto oidx : ag.outs) {
+                        const auto & out = ppb->outputs[oidx];
+                        if (out.spentInInputIndex.has_value()) {
+                            if constexpr (debugPrt)
+                                Debug() << "Skipping output #: " << oidx << " for " << ppb->txInfos[out.txIdx].hash.toHex() << " (was spent in same block tx: " << ppb->txInfos[ppb->inputs[out.spentInInputIndex.value()].txIdx].hash.toHex() << ")";
+                            continue;
+                        }
+                        const TxHash & hash = ppb->txInfos[out.txIdx].hash;
+                        TXOInfo info;
+                        info.hashX = hashX;
+                        info.amount = out.amount;
+                        info.confirmedHeight = ppb->height;
+                        info.txNum = blockTxNum0 + out.txIdx;
+                        const TXO txo{ hash, out.outN };
+                        const CompactTXO ctxo(info.txNum, txo.prevoutN);
+                        utxoBatch.add(txo, info, ctxo); // add to db
+                        if (undo) { // save undo info if we are in saveUndo mode
+                            undo->addUndos.emplace_back(txo, info.hashX, ctxo);
+                        }
+                        if constexpr (debugPrt)
+                            Debug() << "Added txo: " << txo.toString()
+                                    << " (txid: " << hash.toHex() << " height: " << ppb->height << ") "
+                                    << " amount: " << info.amount.ToString() << " for HashX: " << info.hashX.toHex();
+                    }
+                }
+
+                // add spends (process inputs)
+                unsigned inum = 0;
+                for (auto & in : ppb->inputs) {
+                    const TXO txo{in.prevoutHash, in.prevoutN};
+                    if (!inum) {
+                        // coinbase.. skip
+                    } else if (in.parentTxOutIdx.has_value()) {
+                        // was an input that was spent in this block so it's ok to skip.. we never added it to utxo set
+                        if constexpr (debugPrt)
+                            Debug() << "Skipping input " << txo.toString() << ", spent in this block (output # " << in.parentTxOutIdx.value() << ")";
+                    } else if (const auto opt = utxoGetFromDB(txo); opt.has_value()) {
+                        const auto & info = opt.value();
+                        if (info.confirmedHeight.has_value() && info.confirmedHeight.value() != ppb->height) {
+                            // was a prevout from a previos block.. so the ppb didn't have it in the 'involving hashx' set..
+                            // mark the spend as having involved this hashX for this ppb now.
+                            auto & ag = ppb->hashXAggregated[info.hashX];
+                            ag.ins.emplace_back(inum);
+                            newHashXInputsResolved.insert(info.hashX);
+                            // mark its txidx
+                            if (auto & vec = ag.txNumsInvolvingHashX; vec.empty() || vec.back() != in.txIdx)
+                                vec.emplace_back(in.txIdx);
+
+                        }
+                        if constexpr (debugPrt) {
+                            const auto dbgTxIdHex = ppb->txHashForInputIdx(inum).toHex();
+                            Debug() << "Spent " << txo.toString() << " amount: " << info.amount.ToString()
+                                    << " in txid: "  << dbgTxIdHex << " height: " << ppb->height
+                                    << " input number: " << ppb->numForInputIdx(inum).value_or(0xffff)
+                                    << " HashX: " << info.hashX.toHex();
+                        }
+                        // delete from db
+                        utxoBatch.remove(txo, info.hashX, CompactTXO(info.txNum, txo.prevoutN)); // delete from db
+                        if (undo) { // save undo info, if we are in saveUndo mode
+                            undo->delUndos.emplace_back(txo, info);
+                        }
+                    } else {
+                        QString s;
+                        {
+                            const auto dbgTxIdHex = ppb->txHashForInputIdx(inum).toHex();
+                            QTextStream ts(&s);
+                            ts << "Failed to spend: " << in.prevoutHash.toHex() << ":" << in.prevoutN << " (spending txid: " << dbgTxIdHex << ")";
+                        }
+                        throw InternalError(s);
+                    }
+                    ++inum;
+                }
+
+                // commit the utxoset updates now.. this issues the writes to the db and also updates
+                // p->utxoCt. This may throw.
+                issueUpdates(utxoBatch);
             }
 
             // sort and shrink_to_fit new hashX inputs added
@@ -1253,18 +1301,24 @@ BlockHeight Storage::undoLatestBlock()
             }
         }
 
-        // now, undo the utxo deletions by re-adding them
-        for (const auto & [txo, info] : undo.delUndos) {
-            // note that deletions may have an info with a txnum before this block, for obvious reasons
-            utxoAddToDB(txo, info, CompactTXO(info.txNum, txo.prevoutN)); // may throw
-        }
+        {
+            // UTXO set update
+            UTXOBatch utxoBatch;
 
-        // now, undo the utxo additions by deleting them
-        for (const auto & [txo, hashx, ctxo] : undo.addUndos) {
-            assert(ctxo.txNum() >= txNum0); // all of the additions must have been in this block or newer
-            utxoDeleteFromDB(txo, hashx, ctxo); // may throw
-        }
+            // now, undo the utxo deletions by re-adding them
+            for (const auto & [txo, info] : undo.delUndos) {
+                // note that deletions may have an info with a txnum before this block, for obvious reasons
+                utxoBatch.add(txo, info, CompactTXO(info.txNum, txo.prevoutN)); // may throw
+            }
 
+            // now, undo the utxo additions by deleting them
+            for (const auto & [txo, hashx, ctxo] : undo.addUndos) {
+                assert(ctxo.txNum() >= txNum0); // all of the additions must have been in this block or newer
+                utxoBatch.remove(txo, hashx, ctxo); // may throw
+            }
+
+            issueUpdates(utxoBatch); // may throw, updates p->utxoCt and issues write to db.
+        }
 
         if (p->earliestUndoHeight >= undo.height)
             // oops, we're out of undos now!
