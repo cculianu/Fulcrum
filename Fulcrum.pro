@@ -11,10 +11,6 @@ greaterThan(QT_MAJOR_VERSION, 4):greaterThan(QT_MINOR_VERSION, 12):!win32-g++ {
     CONFIG += c++latest
 }
 
-!clang {
-    warning("Compilation on non-clang compiler may fail. If so, please try using clang >= 8.0 as the compiler!")
-}
-
 QMAKE_CXXFLAGS_RELEASE += -DNDEBUG
 QMAKE_CFLAGS_RELEASE += -DNDEBUG
 QMAKE_CXXFLAGS_DEBUG -= -DNDEBUG
