@@ -168,6 +168,11 @@ namespace {
         }
     };
 
+    /// Helper to get db name (basename of path)
+    QString DBName(const rocksdb::DB *db) { return QFileInfo(QString::fromStdString(db->GetName())).baseName(); }
+    /// Helper to just get the status error string as a QString
+    QString StatusString(const rocksdb::Status & status) { return QString::fromStdString(status.ToString()); }
+
     /// DB read/write helpers
     /// NOTE: these may throw DatabaseError
     /// If missingOk=false, then the returned optional is guaranteed to have a value if this function returns without throwing.
@@ -191,12 +196,12 @@ namespace {
             if (missingOk)
                 return ret; // optional will not has_value() to indicate missing key
             throw DatabaseKeyNotFound(QString("%1: %2")
-                                      .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : "Key not found in db")
-                                      .arg(QString::fromStdString(status.ToString())));
+                                      .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : QString("Key not found in db %1").arg(DBName(db)))
+                                      .arg(StatusString(status)));
         } else if (!status.ok()) {
             throw DatabaseError(QString("%1: %2")
-                                .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : "Error reading a key from the db")
-                                .arg(QString::fromStdString(status.ToString())));
+                                .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : QString("Error reading a key from db %1").arg(DBName(db)))
+                                .arg(StatusString(status)));
         } else {
             // ok status
             if constexpr (std::is_base_of_v<QByteArray, std::remove_cv_t<RetType> >) {
@@ -208,14 +213,14 @@ namespace {
                 if (!acceptExtraBytesAtEndOfData && datum.size() > sizeof(RetType)) {
                     // reject extra stuff at end of data stream
                     throw DatabaseFormatError(QString("%1: Extra bytes at the end of data")
-                                              .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : "Database format error"));
+                                              .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : QString("Database format error in db %1").arg(DBName(db))));
                 }
                 bool ok;
                 ret.emplace( DeserializeScalar<RetType>(FromSlice(datum), &ok) );
                 if (!ok) {
                     throw DatabaseSerializationError(
                                 QString("%1: Key was retrieved ok, but data could not be deserialized as a scalar '%2'")
-                                .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : "Error deserializing a scalar from db")
+                                .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : QString("Error deserializing a scalar from db %1").arg(DBName(db)))
                                 .arg(typeid (RetType).name()));
                 }
             } else {
@@ -227,7 +232,7 @@ namespace {
                 if (!ok) {
                     throw DatabaseSerializationError(
                                 QString("%1: Key was retrieved ok, but data could not be deserialized")
-                                .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : "Error deserializing an object from db"));
+                                .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : QString("Error deserializing an object from db %1").arg(DBName(db))));
                 }
             }
         }
@@ -252,8 +257,31 @@ namespace {
         auto st = db->Put(opts, ToSlice<safeScalar>(key), ToSlice<safeScalar>(value));
         if (!st.ok())
             throw DatabaseError(QString("%1: %2")
-                                .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : "Error writing object to db")
-                                .arg(QString::fromStdString(st.ToString())));
+                                .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : QString("Error writing to db %1").arg(DBName(db)))
+                                .arg(StatusString(st)));
+    }
+    /// Throws on all errors. Otherwise writes to db.
+    template <bool safeScalar = false, typename KeyType, typename ValueType>
+    void GenericBatchPut
+                (rocksdb::WriteBatch & batch, const KeyType & key, const ValueType & value,
+                 const QString & errorMsgPrefix = QString())  ///< used to specify a custom error message in the thrown exception
+    {
+        auto st = batch.Put(ToSlice<safeScalar>(key), ToSlice<safeScalar>(value));
+        if (!st.ok())
+            throw DatabaseError(QString("%1: %2")
+                                .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : "Error from WriteBatch::Put")
+                                .arg(StatusString(st)));
+    }
+    /// Just a convenient wrapper to db->Write(batch...) which throws on all errors.
+    void BatchWriteToDB(rocksdb::DB *db, rocksdb::WriteBatch & batch,
+                        const QString & errorMsgPrefix = QString(),
+                        const rocksdb::WriteOptions & opts = rocksdb::WriteOptions())
+    {
+        auto st = db->Write(opts, &batch);
+        if (!st.ok())
+            throw DatabaseError(QString("%1: %2")
+                                .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : QString("Error writing batch to db %1").arg(DBName(db)))
+                                .arg(StatusString(st)));
     }
     /// Throws on all errors. Otherwise deletes a key from db. It is not an error to delete a non-existing key.
     template <bool safeScalar = false, typename KeyType>
@@ -265,8 +293,8 @@ namespace {
         auto st = db->Delete(opts, ToSlice<safeScalar>(key));
         if (!st.ok())
             throw DatabaseError(QString("%1: %2")
-                                .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : "Error deleting a key from db")
-                                .arg(QString::fromStdString(st.ToString())));
+                                .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : QString("Error deleting a key from db %1").arg(DBName(db)))
+                                .arg(StatusString(st)));
     }
 
     //// A helper data structs -- written to the blkinfo table. This helps localize a txnum to a specific position in
@@ -469,7 +497,7 @@ void Storage::startup()
             s = rocksdb::DB::Open( opts, path.toStdString(), &db);
             if (!s.ok() || !db)
                 throw DatabaseError(QString("Error opening %1 database: %2 (path: %3)")
-                                    .arg(name).arg(QString::fromStdString(s.ToString())).arg(path));
+                                    .arg(name).arg(StatusString(s)).arg(path));
             uptr.reset(db);
         };
 
@@ -614,11 +642,11 @@ void Storage::appendHeader(const Header &h, BlockHeight height)
         throw InternalError(QString("Bad use of appendHeader -- expected height %1, got height %2").arg(targetHeight).arg(height));
     rocksdb::WriteBatch batch;
     if (auto stat = batch.Put(ToSlice(uint32_t(height)), ToSlice(h)); !stat.ok())
-        throw DatabaseError(QString("Error writing header %1: %2").arg(height).arg(QString::fromStdString(stat.ToString())));
+        throw DatabaseError(QString("Error writing header %1: %2").arg(height).arg(StatusString(stat)));
     if (auto stat = batch.Put(kNumHeaders, ToSlice<true>(uint32_t(height+1))); !stat.ok())
-        throw DatabaseError(QString("Error writing header size key: %1").arg(QString::fromStdString(stat.ToString())));
+        throw DatabaseError(QString("Error writing header size key: %1").arg(StatusString(stat)));
     if (auto stat = p->db.headers->Write(p->db.defWriteOpts, &batch); !stat.ok())
-        throw DatabaseError(QString("Error writing header %1: %2").arg(height).arg(QString::fromStdString(stat.ToString())));
+        throw DatabaseError(QString("Error writing header %1: %2").arg(height).arg(StatusString(stat)));
 }
 
 void Storage::deleteHeadersPastHeight(BlockHeight height)
@@ -628,13 +656,13 @@ void Storage::deleteHeadersPastHeight(BlockHeight height)
     while (--numHdrs > height) {
         if (auto stat = batch.Delete(ToSlice(uint32_t(numHdrs))); !stat.ok())
             throw DatabaseError(QString("batch.Delete failed for %1 when deleting headers to height %2: %3")
-                                .arg(numHdrs).arg(height).arg(QString::fromStdString(stat.ToString())));
+                                .arg(numHdrs).arg(height).arg(StatusString(stat)));
     }
     numHdrs = height + 1;
     if (auto stat = batch.Put(kNumHeaders, ToSlice<true>(uint32_t(numHdrs))); !stat.ok())
-        throw DatabaseError(QString("batch.Put failed when for numHdrs %1: %2").arg(numHdrs).arg(QString::fromStdString(stat.ToString())));
+        throw DatabaseError(QString("batch.Put failed when for numHdrs %1: %2").arg(numHdrs).arg(StatusString(stat)));
     if (auto stat = p->db.headers->Write(p->db.defWriteOpts, &batch); !stat.ok())
-        throw DatabaseError(QString("Write failed when deleting headers to height %1: %2").arg(height).arg(QString::fromStdString(stat.ToString())));
+        throw DatabaseError(QString("Write failed when deleting headers to height %1: %2").arg(height).arg(StatusString(stat)));
 }
 
 auto Storage::headerForHeight(BlockHeight height, QString *err) -> std::optional<Header>
@@ -883,7 +911,7 @@ void Storage::utxoDeleteFromDB(const TXO &txo, const HashX &hashX, const Compact
         auto stat = p->db.utxoset->Delete(rocksdb::WriteOptions(), ToSlice(Serialize(txo)));
         if (!stat.ok()) {
             throw DatabaseError(QString("Failed to delete from the utxo db (%1:%2): %3")
-                                .arg(QString(txo.prevoutHash.toHex())).arg(txo.prevoutN).arg(QString::fromStdString(stat.ToString())));
+                                .arg(QString(txo.prevoutHash.toHex())).arg(txo.prevoutN).arg(StatusString(stat)));
         }
     }
     {
@@ -891,7 +919,7 @@ void Storage::utxoDeleteFromDB(const TXO &txo, const HashX &hashX, const Compact
         const QByteArray key = hashX + ctxo.toBytes();
         if (auto stat = p->db.shunspent->Delete(p->db.defWriteOpts, ToSlice(key)); !stat.ok()) {
             throw DatabaseError(QString("Failed to delete a from the scripthash_unspent db (%1:%2): %3")
-                                .arg(QString(txo.prevoutHash.toHex())).arg(txo.prevoutN).arg(QString::fromStdString(stat.ToString())));
+                                .arg(QString(txo.prevoutHash.toHex())).arg(txo.prevoutN).arg(StatusString(stat)));
         }
     }
     --p->utxoCt;
@@ -1070,11 +1098,11 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                 // the 'ConcatOperator' class we defined in this file, which requires rocksdb be compiled with RTTI.
                 if (auto st = batch.Merge(ToSlice(hashX), ToSlice(Serialize(ag.txNumsInvolvingHashX))); !st.ok())
                     throw DatabaseError(QString("batch merge fail for hashX %1, block height %2: %3")
-                                        .arg(QString(hashX.toHex())).arg(ppb->height).arg(QString::fromStdString(st.ToString())));
+                                        .arg(QString(hashX.toHex())).arg(ppb->height).arg(StatusString(st)));
             }
             if (auto st = p->db.shist->Write(p->db.defWriteOpts, &batch) ; !st.ok())
                 throw DatabaseError(QString("batch merge fail for block height %1: %2")
-                                    .arg(ppb->height).arg(QString::fromStdString(st.ToString())));
+                                    .arg(ppb->height).arg(StatusString(st)));
         }
 
 
