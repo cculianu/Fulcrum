@@ -422,6 +422,8 @@ namespace {
 
 struct Storage::Pvt
 {
+    /* NOTE: If taking multiple locks, all locks should be taken in the order they are declared, to avoid deadlocks. */
+
     const int blockHeaderSize = BTC::GetBlockHeaderSize();
 
     Meta meta;
@@ -443,6 +445,13 @@ struct Storage::Pvt
     } db;
 
     std::unique_ptr<RecordFile> txNumsFile;
+
+    /// Big lock used for block/history updates. Public methods that read the history such as getHistory and listUnspent
+    /// take this as read-only (shared), and addBlock and undoLatestBlock take this as read/write (exclusively).
+    /// This is intended to be a coarse lock.  Currently the update code takes this along with headerVerifierLock and
+    /// blkInfoLock at the same time, so it's (as of now) equivalent to either of those two locks.
+    /// TODO: See about removing all the other locks and keeping one general RWLock for all updates?
+    mutable RWLock blocksLock;
 
     BTC::HeaderVerifier headerVerifier;
     mutable RWLock headerVerifierLock;
@@ -982,7 +991,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
     }
 
     // take all locks now.. since this is a Big Deal. TODO: add more locks here?
-    std::scoped_lock guard(p->headerVerifierLock, p->blkInfoLock);
+    std::scoped_lock guard(p->blocksLock, p->headerVerifierLock, p->blkInfoLock);
 
     const auto verifUndo = p->headerVerifier; // keep a copy of verifier state for undo purposes in case this fails
     // This object ensures that if an exception is thrown while we are in the below code, we undo the header verifier
@@ -1236,7 +1245,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
 BlockHeight Storage::undoLatestBlock()
 {
     // take all locks now.. since this is a Big Deal. TODO: add more locks here?
-    std::scoped_lock guard(p->headerVerifierLock, p->blkInfoLock);
+    std::scoped_lock guard(p->blocksLock, p->headerVerifierLock, p->blkInfoLock);
 
     const auto t0 = Util::getTimeNS();
 
@@ -1292,8 +1301,16 @@ BlockHeight Storage::undoLatestBlock()
             }
             const QString errMsg = QString("Undo failed because we failed to write the new scripthash history for %1").arg(shHex);
             if (!newVec.empty()) {
+                // The below is entirely unnecessary as the txnums should be already sorted and unique in the db data.
+                // We are doing this here to illustrate that this invariant in the data is very important.
+                // Block undo is intended to be an infrequent process (and thus not especially performance-critical),
+                // so this does no harm.
+                std::sort(newVec.begin(), newVec.end());
+                auto last = std::unique(newVec.begin(), newVec.end());
+                newVec.erase(last, newVec.end());
+            }
+            if (!newVec.empty()) {
                 // the sh still has some history, write it to db
-                std::sort(newVec.begin(), newVec.end()); // this shouldn't be necessary but might as well.
                 GenericDBPut(p->db.shist.get(), sh, newVec, errMsg, p->db.defWriteOpts);
             } else {
                 // the sh in question lost all its history as a result of undo, just delete it from db to save space
@@ -1388,6 +1405,7 @@ auto Storage::getHistory(const HashX & hashX) const -> History
 {
     History ret;
     try {
+        SharedLockGuard g(p->blocksLock);  // makes sure history doesn't mutate from underneath our feet
         static const QString err("Error retrieving history for a script hash");
         auto nums_opt = GenericDBGet<TxNumVec>(p->db.shist.get(), hashX, true, err, false, p->db.defReadOpts);
         if (nums_opt.has_value()) {
@@ -1409,33 +1427,48 @@ auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
 {
     UnspentItems ret;
     try {
-        std::unique_ptr<rocksdb::Iterator> iter(p->db.shunspent->NewIterator(p->db.defReadOpts));
-        const rocksdb::Slice prefix = ToSlice(hashX); // points to data in hashX
+        constexpr size_t iota = 10; // we initially reserve this many items in the returned array in order to prevent redundant allocations in the common case.
+        {
+            // take shared lock (ensure history doesn't mutate from underneath our feet)
+            SharedLockGuard g(p->blocksLock);
+            std::unique_ptr<rocksdb::Iterator> iter(p->db.shunspent->NewIterator(p->db.defReadOpts));
+            const rocksdb::Slice prefix = ToSlice(hashX); // points to data in hashX
 
-        // Search table for all keys that start with hashx's bytes. Note: the loop end-condition is strange.
-        // See: https://github.com/facebook/rocksdb/wiki/Prefix-Seek-API-Changes#transition-to-the-new-usage
-        rocksdb::Slice key;
-        for (iter->Seek(prefix); iter->Valid() && (key = iter->key()).starts_with(prefix); iter->Next()) {
-            if (key.size() != HashLen + CompactTXO::serSize())
-                // should never happen, indicates db corruption
-                throw InternalError("Key size for hashx is invalid");
-            const CompactTXO ctxo = CompactTXO::fromBytes(key.data() + HashLen, CompactTXO::serSize());
-            if (!ctxo.isValid())
-                // should never happen, indicates db corruption
-                throw InternalError("Deserialized CompactTXO is invalid");
-            static const QString err("Error retrieving the utxo for an unspent item");
-            auto hash = hashForTxNum(ctxo.txNum()).value(); // may throw, but that indicates some database inconsistency. we catch below
-            auto height = heightForTxNum(ctxo.txNum()).value(); // may throw, same deal
-            auto info = GenericDBGetFailIfMissing<TXOInfo>(p->db.utxoset.get(), TXO{ hash, ctxo.N()}, err, false, p->db.defReadOpts); // may throw -- indicates db inconsistency
-            ret.emplace_back(UnspentItem{
-                { hash, height }, // base HistoryItem
-                ctxo.N(),  // .tx_pos
-                info.amount, // .value
-                info.txNum, // .txNum
-            });
-        }
+            // Search table for all keys that start with hashx's bytes. Note: the loop end-condition is strange.
+            // See: https://github.com/facebook/rocksdb/wiki/Prefix-Seek-API-Changes#transition-to-the-new-usage
+            rocksdb::Slice key;
+            bool didReserveIota = false;
+            for (iter->Seek(prefix); iter->Valid() && (key = iter->key()).starts_with(prefix); iter->Next()) {
+                if (key.size() != HashLen + CompactTXO::serSize())
+                    // should never happen, indicates db corruption
+                    throw InternalError("Key size for hashx is invalid");
+                const CompactTXO ctxo = CompactTXO::fromBytes(key.data() + HashLen, CompactTXO::serSize());
+                if (!ctxo.isValid())
+                    // should never happen, indicates db corruption
+                    throw InternalError("Deserialized CompactTXO is invalid");
+                static const QString err("Error retrieving the utxo for an unspent item");
+                auto hash = hashForTxNum(ctxo.txNum()).value(); // may throw, but that indicates some database inconsistency. we catch below
+                auto height = heightForTxNum(ctxo.txNum()).value(); // may throw, same deal
+                auto info = GenericDBGetFailIfMissing<TXOInfo>(p->db.utxoset.get(), TXO{ hash, ctxo.N()}, err, false, p->db.defReadOpts); // may throw -- indicates db inconsistency
+                if (!didReserveIota) {
+                    // small performance tweak -- reserve iota (10) initially since most unspent lists are <10 in db.
+                    didReserveIota = true;
+                    ret.reserve(iota);
+                }
+                ret.emplace_back(UnspentItem{
+                    { hash, height }, // base HistoryItem
+                    ctxo.N(),  // .tx_pos
+                    info.amount, // .value
+                    info.txNum, // .txNum
+                });
+            }
+        } // release lock
         std::sort(ret.begin(), ret.end());
-        ret.shrink_to_fit();
+        if (const auto sz = ret.size(), cap = ret.capacity(); cap - sz > iota && double(cap)/double(sz) > 1.20)
+            // we only do this if we're wasting enough space (at least iota, and at least 20% space wasted),
+            // otherwise we don't bother since this returned object is fairly ephemeral and for smallish disparities
+            // between capacity and size, it's fine.
+            ret.shrink_to_fit();
     } catch (const std::exception &e) {
         Warning(Log::Magenta) << __func__ << ": " << e.what();
     }
