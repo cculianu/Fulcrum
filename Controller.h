@@ -89,7 +89,7 @@ private:
     static constexpr auto pollTimerName = "pollForNewHeaders";
 
     const std::shared_ptr<Options> options;
-    std::unique_ptr<Storage> storage;
+    std::shared_ptr<Storage> storage;
     std::unique_ptr<SrvMgr> srvmgr; ///< NB: this may be nullptr if we haven't yet synched up and started listening.
     std::unique_ptr<BitcoinDMgr> bitcoindmgr;
 

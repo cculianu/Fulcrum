@@ -327,22 +327,19 @@ namespace RPC {
             static const auto ValidateParams = [](const Message &msg, const Method &m) {
                 if (!msg.hasParams()) {
                     if ( (m.opt_kwParams.has_value() && !m.opt_kwParams->isEmpty())
-                         || (m.opt_nPosParams.has_value() && *m.opt_nPosParams != 0
-                             && *m.opt_nPosParams != Method::ANY_POS_PARAMS) )
+                         || (m.opt_nPosParams.has_value() && m.opt_nPosParams.value().first != 0) )
                         throw InvalidParameters("Missing required params");
                 } else if (msg.isParamsList()) {
                     // positional args specified
                     if (!m.opt_nPosParams.has_value())
                         throw InvalidParameters("Postional params are not supported for this method");
-                    const int num = msg.paramsList().count();
-                    const int nPosParams = *m.opt_nPosParams;
-                    if (nPosParams == Method::ANY_POS_PARAMS)
-                        return;
-                    if (nPosParams >= 0 && num != nPosParams) {
-                        throw InvalidParameters(QString("Expected %1 parameters for %2, got %3 instead").arg(nPosParams).arg(m.method).arg(num));
-                    } else if (nPosParams < 0 && num < -nPosParams) {
-                        throw InvalidParameters(QString("Expected at least %1 parameters for %2, got %3 instead").arg(-nPosParams).arg(m.method).arg(num));
-                    }
+                    const unsigned num = unsigned(msg.paramsList().count());
+                    auto [minParams, maxParams] = m.opt_nPosParams.value();
+                    if (maxParams < minParams) maxParams = minParams;
+                    if (num < minParams)
+                        throw InvalidParameters(QString("Expected at least %1 parameters for %2, got %3 instead").arg(minParams).arg(m.method).arg(num));
+                    if (num > maxParams)
+                        throw InvalidParameters(QString("Expected at most %1 parameters for %2, got %3 instead").arg(maxParams).arg(m.method).arg(num));
                 } else if (msg.isParamsMap()) {
                     // named args specified
                     if (!m.opt_kwParams.has_value())

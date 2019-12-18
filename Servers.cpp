@@ -1,13 +1,16 @@
 #include "Servers.h"
+#include "Storage.h"
+
+#include <QByteArray>
 #include <QCoreApplication>
 #include <QtNetwork>
 #include <QString>
-#include <QTextStream>
-#include <QByteArray>
 #include <QTextCodec>
+#include <QTextStream>
 #include <QTimer>
 
 #include <cstdlib>
+#include <utility>
 
 TcpServerError::~TcpServerError() {} // for vtable
 
@@ -247,8 +250,8 @@ namespace {
     using namespace Constants;
 }
 
-Server::Server(const QHostAddress &a, quint16 p)
-    : AbstractTcpServer(a, p)
+Server::Server(const QHostAddress &a, quint16 p, std::shared_ptr<Storage> s)
+    : AbstractTcpServer(a, p), storage(std::move(s))
 {
     // re-set name for debug/logging
     _thread.setObjectName(prettyName());
@@ -424,15 +427,18 @@ void Server::rpc_blockchain_scripthash_subscribe(Client *c, const RPC::Message &
 }
 // --- Server::StaticData Definitions ---
 #define HEY_COMPILER_PUT_STATIC_HERE(x) decltype(x) x
+#define PR RPC::Method::PosParamRange
 HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::dispatchTable);
 HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::methodMap);
 HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
 /*  ==> Note: Add stuff to this table when adding new RPC methods.
-    { {"rpc.name",              allow_requests, allow_notifications, nPosArgs, (QSet<QString> note: {} means undefined optional)}, &method_to_call }     */
-    { {"server.ping",                     true,               false,        0,      RPC::KeySet{} },          &Server::rpc_server_ping },
-    { {"server.version",                  true,               false,        2,                    },          &Server::rpc_server_version },
-    { {"blockchain.scripthash.subscribe", true,               false,        1,                    },          &Server::rpc_blockchain_scripthash_subscribe },
+    { {"rpc.name",              allow_requests, allow_notifications, PosParamRange, (QSet<QString> note: {} means undefined optional)}, &method_to_call }     */
+    { {"server.ping",                     true,               false,    PR{0,0},      RPC::KeySet{} },          &Server::rpc_server_ping },
+    { {"server.version",                  true,               false,    PR{2,2},                    },          &Server::rpc_server_version },
+    //{ {"blockchain.block.header",         true,               false,    PR{1,2},                    },          &Server::rpc_blockchain_scripthash_subscribe },
+    { {"blockchain.scripthash.subscribe", true,               false,    PR{1,1},                    },          &Server::rpc_blockchain_scripthash_subscribe },
 };
+#undef PR
 #undef HEY_COMPILER_PUT_STATIC_HERE
 /*static*/
 void Server::StaticData::init()

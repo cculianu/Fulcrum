@@ -24,7 +24,7 @@ void Controller::startup()
 {
     stopFlag = false;
 
-    storage = std::make_unique<Storage>(options);
+    storage = std::make_shared<Storage>(options);
     storage->startup(); // may throw here
 
     bitcoindmgr = std::make_unique<BitcoinDMgr>(options->bitcoind.first, options->bitcoind.second, options->rpcuser, options->rpcpassword);
@@ -73,7 +73,7 @@ void Controller::startup()
                 Fatal() << "INTERNAL ERROR: Controller's creation thread is null; cannot start SrvMgr, exiting!";
                 return;
             }
-            srvmgr = std::make_unique<SrvMgr>(options->interfaces);
+            srvmgr = std::make_unique<SrvMgr>(options->interfaces, storage);
             // this object will live on our creation thread (normally the main thread)
             srvmgr->moveToThread(origThread);
             // now, start it up on our creation thread (normally the main thread)

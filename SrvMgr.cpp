@@ -1,11 +1,13 @@
 #include "SrvMgr.h"
-#include "Util.h"
+
 #include "Servers.h"
+#include "Storage.h"
+#include "Util.h"
 
 #include <utility>
 
-SrvMgr::SrvMgr(const QList<Options::Interface> & ifaces, QObject *parent)
-    : Mgr(parent), interfaces(ifaces)
+SrvMgr::SrvMgr(const QList<Options::Interface> & ifaces, std::shared_ptr<Storage> s, QObject *parent)
+    : Mgr(parent), interfaces(ifaces), storage(std::move(s))
 {
 
 }
@@ -40,7 +42,7 @@ void SrvMgr::startServers()
     const auto num = interfaces.length();
     Log() << "SrvMgr: starting " << num << " " << Util::Pluralize("service", num) << " ...";
     for (auto iface : interfaces) {
-        auto srv = new Server(iface.first, iface.second);
+        auto srv = new Server(iface.first, iface.second, storage);
         servers.push_back(srv); // save server in list unconditionally so we may delete later because tryStart may throw
         srv->tryStart();
     }

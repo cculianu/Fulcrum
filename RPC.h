@@ -11,6 +11,7 @@
 
 #include <memory>
 #include <optional>
+#include <utility> // for std::pair
 #include <variant>
 
 namespace RPC {
@@ -47,12 +48,13 @@ namespace RPC {
         /// If allowsRequests is false, requests for this method will return an error.
         /// If allowsNotifications is false, notifications for this method will be silently ignored.
         bool allowsRequests = true, allowsNotifications = false;
-        static constexpr int ANY_POS_PARAMS = 0x7fffffff; ///< specify this to accept any number of positional (list) args
+        using PosParamRange = std::pair<unsigned, unsigned>;
+        static constexpr unsigned NO_POS_PARAM_LIMIT = UINT_MAX; ///< use this for PosParamsRange.second to specify no limit.
         /// If this optional !has_value, then positional arguments (list for "params") are rejected.
-        /// Otherwise, specify an int of the form:
-        /// -N meaning N or more params, 0 = no params expected, positive N == EXACTLY N params, ANY_POS_PARAMS means we
-        /// accept any number of arguments.
-        std::optional<int> opt_nPosParams = ANY_POS_PARAMS;
+        /// Otherwise, specify an unsigned int range where .first is the minimum and .second is the maximum number
+        /// of positional parameters accepted.  If .second is NO_POS_PARAM_LIMIT, then any number of parameters from
+        /// .first onward is accepted.
+        std::optional<PosParamRange> opt_nPosParams = PosParamRange{0, NO_POS_PARAM_LIMIT};
         /// If this optional !has_value, then named arguments (dict for "params") are rejected.
         /// If this optional has_value, we also accept kwargs (named args) appearing in the specified set
         /// (case sensitive). (Note that a method can theoretically accept both position and kwargs if so configured).

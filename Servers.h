@@ -10,6 +10,8 @@
 #include <QMap>
 #include <QVector>
 
+#include <memory> // for shared_ptr
+
 struct TcpServerError : public Exception
 {
     using Exception::Exception; /// bring in c'tor
@@ -98,13 +100,14 @@ protected:
 
 
 class Client;
+class Storage;
 /// Implements the ElectrumX/ElectronX protocol
 /// TODO: Implement optional SSL.
 class Server : public AbstractTcpServer
 {
     Q_OBJECT
 public:
-    Server(const QHostAddress & address, quint16 port);
+    Server(const QHostAddress & address, quint16 port, std::shared_ptr<Storage> storage);
     ~Server() override;
 
     virtual QString prettyName() const override;
@@ -168,6 +171,9 @@ private:
         static void init(); ///< called by Server c'tor. (First time it's called it populates the above tables from the 'registry' table)
         StaticData() = delete; ///< unconstructible class! :D
     };
+
+    // pointer to shared Storage object
+    std::shared_ptr<Storage> storage;
 };
 
 
