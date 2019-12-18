@@ -171,7 +171,7 @@ private:
 };
 
 
-/// Encapsulates an EXClient
+/// Encapsulates a Electron Cash (Electrum) Client
 /// These run and live in 'Server' instance thread
 /// Note that their parent QObject is the socket!
 /// (grandparent is Server) .. so they will be destroyed
