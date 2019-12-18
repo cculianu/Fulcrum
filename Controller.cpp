@@ -86,6 +86,9 @@ void Controller::startup()
                     Fatal() << e.what();
                 }
             }); // wait for srvmgr's thread (usually the main thread)
+
+            // connect the header subscribe signal
+            conns += connect(this, &Controller::newHeader, srvmgr.get(), &SrvMgr::newHeader);
         }
     }, Qt::QueuedConnection);
 
@@ -482,25 +485,27 @@ void Controller::process(bool beSilentIfUpToDate)
                 return;
             }
             sm->isMainNet = task->info.chain == "main";
+            QByteArray tipHeader;
             // TODO: detect reorgs here -- to be implemented later after we figure out data model more, etc.
-            const auto [old, oldHash] = storage->latestTip();
+            const auto [tip, tipHash] = storage->latestTip(&tipHeader);
             sm->ht = task->info.blocks;
-            if (old == sm->ht) {
-                if (task->info.bestBlockhash == oldHash) { // no reorg
+            if (tip == sm->ht) {
+                if (task->info.bestBlockhash == tipHash) { // no reorg
                     if (!beSilentIfUpToDate) {
                         Log() << "Block height " << sm->ht << ", up-to-date";
                         emit upToDate();
+                        emit newHeader(unsigned(tip), tipHeader);
                     }
                     sm->state = State::End;
                 } else {
                     // height ok, but best block hash mismatch.. reorg
-                    Warning() << "We have bestBlock " << oldHash.toHex() << ", but bitcoind reports bestBlock " << task->info.bestBlockhash.toHex() << "."
+                    Warning() << "We have bestBlock " << tipHash.toHex() << ", but bitcoind reports bestBlock " << task->info.bestBlockhash.toHex() << "."
                               << " Possible reorg, will rewind back 1 block and try again ...";
                     process_DoUndoAndRetry(); // attempt to undo 1 block and try again.
                     return;
                 }
-            } else if (old > sm->ht) {
-                Warning() << "We have height " << old << ", but bitcoind reports height " << sm->ht << "."
+            } else if (tip > sm->ht) {
+                Warning() << "We have height " << tip << ", but bitcoind reports height " << sm->ht << "."
                           << " Possible reorg, will rewind back 1 block and try again ...";
                 process_DoUndoAndRetry(); // attempt to undo 1 block and try again.
                 return;

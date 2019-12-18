@@ -122,6 +122,9 @@ signals:
     /// these are emitted from Controller and are connected to private slots we handle in our thread.
     void tellClientScriptHashStatus(quint64 clientId, const RPC::Message::Id & refId, const QByteArray & status, const QByteArray & scriptHash = QByteArray());
 
+    /// Connected to SrvMgr parent's "newHeader" signal (which itself is connected to Controller's newHeader).
+    /// Used to notify clients that are subscribed to headers that a new header has arrived.
+    void newHeader(unsigned height, const QByteArray &header);
 public slots:
     void onMessage(quint64 clientId, const RPC::Message &m);
     void onErrorMessage(quint64 clientId, const RPC::Message &m);
@@ -152,8 +155,13 @@ private:
     // RPC methods below
     void rpc_server_ping(Client *, const RPC::Message &);
     void rpc_server_version(Client *, const RPC::Message &);
-    void rpc_blockchain_block_header(Client *, const RPC::Message &);
-    void rpc_blockchain_block_headers(Client *, const RPC::Message &);
+    void rpc_blockchain_block_header(Client *, const RPC::Message &);  // todo: cp_height
+    void rpc_blockchain_block_headers(Client *, const RPC::Message &); // todo: cp_height
+    void rpc_blockchain_estimatefee(Client *, const RPC::Message &); // todo: this is a stub implementation
+    void rpc_blockchain_headers_subscribe(Client *, const RPC::Message &); // fully implemented
+    void rpc_blockchain_relayfee(Client *, const RPC::Message &); // todo: this is a stub implementation
+    void rpc_blockchain_scripthash_get_balance(Client *, const RPC::Message &); // partially implemented -- needs unconfirmed balance
+    void rpc_blockchain_scripthash_get_history(Client *, const RPC::Message &); // partially implemented -- needs mempool tx's
     void rpc_blockchain_scripthash_subscribe(Client *, const RPC::Message &);
 
     /// Basically a namespace for our rpc dispatch tables, etc
@@ -199,6 +207,8 @@ public:
     };
 
     Info info;
+
+    bool isSubscribedToHeaders = false;
 
 protected:
 

@@ -607,12 +607,13 @@ void Storage::setChain(const QString &chain)
 /// returns the "next" TxNum
 TxNum Storage::getTxNum() const { return p->txNumNext.load(); }
 
-auto Storage::latestTip() const -> std::pair<int, HeaderHash> {
+auto Storage::latestTip(Header *hdrOut) const -> std::pair<int, HeaderHash> {
     std::pair<int, HeaderHash> ret = headerVerifier().first.lastHeaderProcessed(); // ok; lock stays locked until statement end.
-
+    if (hdrOut) *hdrOut = ret.second; // this is not a hash but the actual block header
     if (ret.second.isEmpty() || ret.first < 0) {
         ret.first = -1;
         ret.second.clear();
+        if (hdrOut) hdrOut->clear();
     } else {
         // .ret now has the actual header but we want the hash
         ret.second = BTC::HashRev(ret.second);
@@ -689,9 +690,9 @@ void Storage::deleteHeadersPastHeight(BlockHeight height)
 auto Storage::headerForHeight(BlockHeight height, QString *err) -> std::optional<Header>
 {
     std::optional<Header> ret;
-    if (int(height) <= latestTip().first) {
+    if (int(height) <= latestTip().first && int(height) >= 0) {
         ret = headerForHeight_nolock(height, err);
-    } else if (err) { *err = "Invalid height specified"; }
+    } else if (err) { *err = QString("Height %1 is out of range").arg(height); }
     return ret;
 }
 
@@ -718,12 +719,13 @@ auto Storage::headerForHeight_nolock(BlockHeight height, QString *err) -> std::o
 auto Storage::headersFromHeight(BlockHeight height, unsigned count, QString *err) -> std::vector<Header>
 {
     std::vector<Header> ret;
-    int num = std::min(1 + latestTip().first - int(height), int(count));
+    SharedLockGuard g(p->blocksLock); // to ensure clients get a consistent view
+    int num = std::min(1 + latestTip().first - int(height), int(count)); // note this also takes a lock briefly so we need to do this after the lockguard above
     if (num > 0) {
         if (err) *err = "";
         ret.reserve(unsigned(num));
         for (int i = 0; i < num; ++i) {
-            auto opt = headerForHeight(height + unsigned(i), err);
+            auto opt = headerForHeight_nolock(height + unsigned(i), err);
             if (!opt.has_value())
                 break;
             ret.emplace_back(std::move(opt.value()));
@@ -941,11 +943,12 @@ void Storage::UTXOBatch::add(const TXO &txo, const TXOInfo &info, const CompactT
     {
         // Update the scripthash unspent. This is a very simple table which we scan by hashX prefix using
         // an iterator in listUnspent.  Each entry's key is prefixed with the HashX bytes (32) but suffixed with the
-        // serialized CompactTXO bytes (8). Each entry has no data for the value.
+        // serialized CompactTXO bytes (8). Each entry's data is a 8-byte int64_t of the amount of the utxo to save
+        // on lookup cost for getBalance().
         static const QString errMsgPrefix("Failed to add an entry to the scripthash_unspent batch");
-        static const rocksdb::Slice empty;
 
-        GenericBatchPut(p->shunspentBatch, mkShunspentKey(info.hashX, ctxo), empty, errMsgPrefix); // may throw, which is what we want
+        GenericBatchPut(p->shunspentBatch, mkShunspentKey(info.hashX, ctxo), int64_t(info.amount / info.amount.satoshi()),
+                        errMsgPrefix); // may throw, which is what we want
     }
     ++p->addCt;
 }
@@ -1404,6 +1407,8 @@ std::optional<unsigned> Storage::heightForTxNum(TxNum n) const
 auto Storage::getHistory(const HashX & hashX) const -> History
 {
     History ret;
+    if (hashX.length() != HashLen)
+        return ret;
     try {
         SharedLockGuard g(p->blocksLock);  // makes sure history doesn't mutate from underneath our feet
         static const QString err("Error retrieving history for a script hash");
@@ -1426,6 +1431,8 @@ auto Storage::getHistory(const HashX & hashX) const -> History
 auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
 {
     UnspentItems ret;
+    if (hashX.length() != HashLen)
+        return ret;
     try {
         constexpr size_t iota = 10; // we initially reserve this many items in the returned array in order to prevent redundant allocations in the common case.
         {
@@ -1469,6 +1476,47 @@ auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
             // otherwise we don't bother since this returned object is fairly ephemeral and for smallish disparities
             // between capacity and size, it's fine.
             ret.shrink_to_fit();
+    } catch (const std::exception &e) {
+        Warning(Log::Magenta) << __func__ << ": " << e.what();
+    }
+    return ret;
+}
+
+bitcoin::Amount Storage::getBalance(const HashX &hashX) const
+{
+    bitcoin::Amount ret;
+    if (hashX.length() != HashLen)
+        return ret;
+    try {
+        // take shared lock (ensure history doesn't mutate from underneath our feet)
+        SharedLockGuard g(p->blocksLock);
+        std::unique_ptr<rocksdb::Iterator> iter(p->db.shunspent->NewIterator(p->db.defReadOpts));
+        const rocksdb::Slice prefix = ToSlice(hashX); // points to data in hashX
+
+        // Search table for all keys that start with hashx's bytes. Note: the loop end-condition is strange.
+        // See: https://github.com/facebook/rocksdb/wiki/Prefix-Seek-API-Changes#transition-to-the-new-usage
+        rocksdb::Slice key;
+        for (iter->Seek(prefix); iter->Valid() && (key = iter->key()).starts_with(prefix); iter->Next()) {
+            if (key.size() != HashLen + CompactTXO::serSize())
+                // should never happen, indicates db corruption
+                throw InternalError(QString("Key size for scripthash %1 is invalid").arg(QString(hashX.toHex())));
+            const CompactTXO ctxo = CompactTXO::fromBytes(key.data() + HashLen, CompactTXO::serSize());
+            if (!ctxo.isValid())
+                // should never happen, indicates db corruption
+                throw InternalError(QString("Deserialized CompactTXO is invalid for scripthash %1").arg(QString(hashX.toHex())));
+            bool ok;
+            const auto amt = DeserializeScalar<int64_t>(FromSlice(iter->value()), &ok);
+            if (UNLIKELY(!ok))
+                throw InternalError(QString("Bad amount in db for ctxo %1 (%2)").arg(ctxo.toString()).arg(QString(hashX.toHex())));
+            const bitcoin::Amount amount = amt * bitcoin::Amount::satoshi();
+            if (UNLIKELY(!bitcoin::MoneyRange(amount)))
+                throw InternalError(QString("Out-of-range amount in db for ctxo %1: %2").arg(ctxo.toString()).arg(amt));
+            ret += amount; // tally the result
+        }
+        if (UNLIKELY(!bitcoin::MoneyRange(ret))) {
+            ret = ret.zero();
+            throw InternalError(QString("Out-of-range total in db for getBalance on scripthash: %1").arg(QString(hashX.toHex())));
+        }
     } catch (const std::exception &e) {
         Warning(Log::Magenta) << __func__ << ": " << e.what();
     }

@@ -36,6 +36,10 @@ namespace RPC {
         Code_ReservedError = -32000,
         /// Anything above this number is ok for us to use for application-specific errors.
         Code_Custom = -31999,
+        /// Application-level bad request, eg request a header out of range, etc
+        Code_App_BadRequest = 1,
+        /// Daemon problem
+        Code_App_DaemonError = 2,
     };
 
     using KeySet = QSet<QString>;
@@ -252,7 +256,7 @@ namespace RPC {
         /// call (emit) this to send a request to the peer
         void sendRequest(const RPC::Message::Id & reqid, const QString &method, const QVariantList & params = QVariantList());
         /// call (emit) this to send a notification to the peer
-        void sendNotification(const QString &method, const QVariantList & params = QVariantList());
+        void sendNotification(const QString &method, const QVariant & params);
         /// call (emit) this to send a request to the peer
         void sendError(bool disconnectAfterSend, int errorCode, const QString &message, const RPC::Message::Id & reqid = Message::Id());
         /// call (emit) this to send a result reply to the peer (result= message)
@@ -273,7 +277,7 @@ namespace RPC {
         /// thread context. Eventually calls send() -> do_write() (from superclass).
         virtual void _sendRequest(const RPC::Message::Id & reqid, const QString &method, const QVariantList & params = QVariantList());
         // ditto for notifications
-        virtual void _sendNotification(const QString &method, const QVariantList & params = QVariantList());
+        virtual void _sendNotification(const QString &method, const QVariant & params);
         /// Actual implementation of sendError, runs in our thread context.
         virtual void _sendError(bool disconnect, int errorCode, const QString &message, const RPC::Message::Id &reqid = Message::Id());
         /// Actual implementation of sendResult, runs in our thread context.

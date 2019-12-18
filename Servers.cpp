@@ -243,7 +243,7 @@ namespace {
     // TODO: maybe move these to a more global place? For now here is fine.
     namespace Constants {
         constexpr int kMaxServerVersion = 80,  ///< the maximum server version length we accept to prevent memory exhaustion attacks
-                      kScriptHashLength = 256/8, ///< the length of a scripthash in bytes. sha256 = 32 bytes.
+                      kScriptHashLength = HashLen, ///< the length of a scripthash in bytes. sha256 = 32 bytes.
                       kMaxBuffer = 4*1000*1000, ///< =4MB. The max buffer we use in Client (ElectronX client). TODO: Make this tune-able and configurable!
                       kMaxErrorCount = 10; ///< The maximum number of errors we tolerate from a Client before disconnecting them.
     }
@@ -280,6 +280,7 @@ QVariantMap Server::stats() const
         map["version"] = QVariantList({client->info.userAgent, client->info.protocolVersion});
         map["errCt"] = client->info.errCt;
         map["nRequestsRcv"] = client->info.nRequestsRcv;
+        map["isSubscribedToHeaders"] = client->isSubscribedToHeaders;
         // the below don't really make much sense for this class (they are always 0 or empty)
         map.remove("nDisconnects");
         map.remove("nSocketErrors");
@@ -391,6 +392,7 @@ void Server::rpc_server_version(Client *c, const RPC::Message &m)
         c->info.protocolVersion = l[1].toString().left(kMaxServerVersion);
         Trace() << "Client (id: " << c->id << ") sent version: \"" << c->info.userAgent << "\" / \"" << c->info.protocolVersion << "\"";
     } else {
+        // TODO: remove this soon as this should never be reached. It is just here to detect bugs in our own RPC code
         emit c->sendError(false, RPC::Code_InternalError, "internal error", m.id);
         Error() << "Bad server version message! Other code should have handled this. FIXME! Json: " << m.toJsonString();
         return;
@@ -403,10 +405,12 @@ void Server::rpc_server_ping(Client *c, const RPC::Message &m)
         Trace() << "Got ping from client (id: " << c->id << "), responding...";
         emit c->sendResult(m.id, m.method);
     } else {
+        // TODO: remove this soon as this should never be reached. It is just here to detect bugs in our own RPC code
         emit c->sendError(false, RPC::Code_InternalError, "internal error", m.id);
         Error() << "Bad client ping message! This shouldn't happen. FIXME! Json: " << m.toJsonString();
     }
 }
+
 void Server::rpc_blockchain_block_header(Client *c, const RPC::Message &m)
 {
     if (QVariantList l = m.paramsList(); m.isRequest() && l.size() >= 1 && l.size() <= 2) {
@@ -422,10 +426,14 @@ void Server::rpc_blockchain_block_header(Client *c, const RPC::Message &m)
             emit c->sendError(false, RPC::Code_InvalidParams, "cp_height not yet supported", m.id);
             return;
         }
-        const auto optHdr = storage->headerForHeight(height);
-        // EX doesn't seem to return error here if invalid height, so we will do same.
-        c->sendResult(m.id, m.method, Util::ToHexFast(optHdr.value_or(QByteArray())));
+        QString err;
+        const auto optHdr = storage->headerForHeight(height, &err);
+        if (QByteArray hdr; err.isEmpty() && optHdr.has_value() && !(hdr = optHdr.value()).isEmpty())
+            c->sendResult(m.id, m.method, hdr);
+        else
+            c->sendError(false, RPC::Code_App_BadRequest, err.isEmpty() ? "Unknown error" : err, m.id);
     } else {
+        // TODO: remove this soon as this should never be reached. It is just here to detect bugs in our own RPC code
         emit c->sendError(false, RPC::Code_InternalError, "internal error", m.id);
         Error() << "Bad block.header message! This shouldn't happen. FIXME! Json: " << m.toJsonString();
     }
@@ -471,10 +479,112 @@ void Server::rpc_blockchain_block_headers(Client *c, const RPC::Message &m)
             {"count", unsigned(hdrs.size())},
             {"max", MAX_HEADERS}
         };
+        if (hexHeaders.isEmpty()) {
+            // special-case: on empty results, prevent sending null (empty QByteArray ends up as null), but prefer
+            // sending "" so as to not confuse clients if they see null but are expecting only string "".
+            resp["hex"] = QString("");
+        }
         c->sendResult(m.id, m.method, resp);
     } else {
+        // TODO: remove this soon as this should never be reached. It is just here to detect bugs in our own RPC code
         Error() << "Bad block.headers message! This shouldn't happen. FIXME! Json: " << m.toJsonString();
         emit c->sendError(false, RPC::Code_InternalError, "internal error", m.id);
+    }
+}
+void Server::rpc_blockchain_estimatefee(Client *c, const RPC::Message &m)
+{
+    if (QVariantList l = m.paramsList(); m.isRequest() && l.size() == 1) {
+        // TODO: Implement this
+        Trace() << "Got estimatefee from client (id: " << c->id << "), responding...";
+        constexpr double dummyReply = 0.00001000;
+        emit c->sendResult(m.id, m.method, dummyReply);
+    } else {
+        // TODO: remove this soon as this should never be reached. It is just here to detect bugs in our own RPC code
+        emit c->sendError(false, RPC::Code_InternalError, "internal error", m.id);
+        Error() << "Bad client estimtefee message! This shouldn't happen. FIXME! Json: " << m.toJsonString();
+    }
+}
+void Server::rpc_blockchain_headers_subscribe(Client *c, const RPC::Message &m) // fully implemented
+{
+    if (QVariantList l = m.paramsList(); m.isRequest() && l.size() == 0) {
+        // helper used both for this response and for notifications
+        static const auto mkResp = [](unsigned height, const QByteArray & header) -> QVariantMap {
+            return QVariantMap{
+                { "height" , height },
+                { "hex" , Util::ToHexFast(header) }
+            };
+        };
+        Storage::Header hdr;
+        const auto [height, hhash] = storage->latestTip(&hdr);
+        // we assume everything is peachy and don't check header size, etc as we can't really get here until we have synched at least *some* headers.
+        if (!c->isSubscribedToHeaders) {
+            c->isSubscribedToHeaders = true;
+            // connect to signal. Will be emitted directly to object until it dies.
+            connect(this, &Server::newHeader, c, [c, meth=m.method](unsigned height, const QByteArray &header){
+                 c->sendNotification(meth, mkResp(height, header));
+            });
+            Debug() << c->prettyName() << " is now subscribed to headers";
+        } else {
+            Debug() << c->prettyName() << " was already subscribed to headers, ignoring duplicate subscribe request";
+        }
+        emit c->sendResult(m.id, m.method, mkResp(unsigned(std::max(0, height)), hdr));
+    } else {
+        // TODO: remove this soon as this should never be reached. It is just here to detect bugs in our own RPC code
+        emit c->sendError(false, RPC::Code_InternalError, "internal error", m.id);
+        Error() << "Bad client headers.subscribe message! This shouldn't happen. FIXME! Json: " << m.toJsonString();
+    }
+}
+void Server::rpc_blockchain_relayfee(Client *c, const RPC::Message &m)
+{
+    // TODO: Implement this
+    Trace() << "Got relayfee from client (id: " << c->id << "), responding...";
+    constexpr double dummyReply = 0.00001000;
+    emit c->sendResult(m.id, m.method, dummyReply);
+}
+void Server::rpc_blockchain_scripthash_get_balance(Client *c, const RPC::Message &m)
+{
+    if (QVariantList l = m.paramsList(); m.isRequest() && l.size() == 1) {
+        const QByteArray sh = QByteArray::fromHex(l.front().toString().trimmed().left(kScriptHashLength*2).toUtf8());
+        if (sh.length() != kScriptHashLength) {
+            emit c->sendError(false, RPC::Code_App_BadRequest, "Invalid scripthash", m.id);
+            return;
+        }
+        const bitcoin::Amount amt = storage->getBalance(sh);
+        /* Note: ElectrumX protocol docs are incorrect. They claim a string in coin units is returned here.
+         * It is not. Instead a number in satoshis is returned!
+         * Incorrect docs: https://electrumx.readthedocs.io/en/latest/protocol-methods.html#blockchain-scripthash-get-balance */
+        QVariantMap resp{
+          { "confirmed" , qlonglong(amt / amt.satoshi()) },
+          { "unconfirmed" , 0 }, /* TODO: unconfirmed */
+        };
+        emit c->sendResult(m.id, m.method, resp);
+    } else {
+        // TODO: remove this soon as this should never be reached. It is just here to detect bugs in our own RPC code
+        emit c->sendError(false, RPC::Code_InternalError, "internal error", m.id);
+        Error() << "Bad client get_balance message! This shouldn't happen. FIXME! Json: " << m.toJsonString();
+    }
+}
+void Server::rpc_blockchain_scripthash_get_history(Client *c, const RPC::Message &m)
+{
+    if (QVariantList l = m.paramsList(); m.isRequest() && l.size() == 1) {
+        const QByteArray sh = QByteArray::fromHex(l.front().toString().trimmed().left(kScriptHashLength*2).toUtf8());
+        if (sh.length() != kScriptHashLength) {
+            emit c->sendError(false, RPC::Code_App_BadRequest, "Invalid scripthash", m.id);
+            return;
+        }
+        QVariantList resp;
+        const auto items = storage->getHistory(sh); // these are already sorted
+        for (const auto & item : items) {
+            resp.push_back(QVariantMap{
+                { "tx_hash" , Util::ToHexFast(item.hash) },
+                { "height", item.height },
+            });
+        }
+        emit c->sendResult(m.id, m.method, resp);
+    } else {
+        // TODO: remove this soon as this should never be reached. It is just here to detect bugs in our own RPC code
+        emit c->sendError(false, RPC::Code_InternalError, "internal error", m.id);
+        Error() << "Bad client get_balance message! This shouldn't happen. FIXME! Json: " << m.toJsonString();
     }
 }
 void Server::rpc_blockchain_scripthash_subscribe(Client *c, const RPC::Message &m)
@@ -495,6 +605,7 @@ void Server::rpc_blockchain_scripthash_subscribe(Client *c, const RPC::Message &
         });
         t->setSingleShot(false); t->start(3000);
     } else {
+        // TODO: remove this soon as this should never be reached. It is just here to detect bugs in our own RPC code
         emit c->sendError(false, RPC::Code_InternalError, "internal error", m.id);
         Error() << "Bad subscribe message! This shouldn't happen. FIXME! Json: " << m.toJsonString();
     }
@@ -506,12 +617,17 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::dispatchTable);
 HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::methodMap);
 HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
 /*  ==> Note: Add stuff to this table when adding new RPC methods.
-    { {"rpc.name",              allow_requests, allow_notifications, PosParamRange, (QSet<QString> note: {} means undefined optional)}, &method_to_call }     */
-    { {"server.ping",                     true,               false,    PR{0,0},      RPC::KeySet{} },          &Server::rpc_server_ping },
-    { {"server.version",                  true,               false,    PR{2,2},                    },          &Server::rpc_server_version },
-    { {"blockchain.block.header",         true,               false,    PR{1,2},                    },          &Server::rpc_blockchain_block_header },
-    { {"blockchain.block.headers",        true,               false,    PR{2,3},                    },          &Server::rpc_blockchain_block_headers },
-    { {"blockchain.scripthash.subscribe", true,               false,    PR{1,1},                    },          &Server::rpc_blockchain_scripthash_subscribe },
+    { {"rpc.name",                allow_requests, allow_notifications, PosParamRange, (QSet<QString> note: {} means undefined optional)}, &method_to_call }     */
+    { {"server.ping",                       true,               false,    PR{0,0},      RPC::KeySet{} },          &Server::rpc_server_ping },
+    { {"server.version",                    true,               false,    PR{2,2},                    },          &Server::rpc_server_version },
+    { {"blockchain.block.header",           true,               false,    PR{1,2},                    },          &Server::rpc_blockchain_block_header },
+    { {"blockchain.block.headers",          true,               false,    PR{2,3},                    },          &Server::rpc_blockchain_block_headers },
+    { {"blockchain.estimatefee",            true,               false,    PR{1,1},                    },          &Server::rpc_blockchain_estimatefee },
+    { {"blockchain.headers.subscribe",      true,               false,    PR{0,0},                    },          &Server::rpc_blockchain_headers_subscribe },
+    { {"blockchain.relayfee",               true,               false,    PR{0,0},                    },          &Server::rpc_blockchain_relayfee },
+    { {"blockchain.scripthash.get_balance", true,               false,    PR{1,1},                    },          &Server::rpc_blockchain_scripthash_get_balance },
+    { {"blockchain.scripthash.get_history", true,               false,    PR{1,1},                    },          &Server::rpc_blockchain_scripthash_get_history },
+    { {"blockchain.scripthash.subscribe",   true,               false,    PR{1,1},                    },          &Server::rpc_blockchain_scripthash_subscribe },
 };
 #undef PR
 #undef HEY_COMPILER_PUT_STATIC_HERE
@@ -541,7 +657,7 @@ void Server::_tellClientScriptHashStatus(quint64 clientId, const RPC::Message::I
             client->sendResult(refId, "blockchain.scripthash.subscribe", status.toHex());
         else {
             // notification, no id.
-            client->sendNotification("blockchain.scripthash.subscribe", {scriptHash.toHex(), status.toHex()});
+            client->sendNotification("blockchain.scripthash.subscribe", QVariantList{scriptHash.toHex(), status.toHex()});
         }
     } else {
         Debug() << "ClientId: " << clientId << " not found.";
@@ -552,6 +668,8 @@ Client::Client(const RPC::MethodMap & mm, quint64 id_in, Server *srv, QTcpSocket
     : RPC::LinefeedConnection(mm, id_in, sock, kMaxBuffer), srv(srv)
 {
     socket = sock;
+    stale_threshold = 10 * 60 * 1000; // 10 mins stale threshold; after which clients get disconnected for being idle (for now... TODO: make this configurable)
+    pingtime_ms = int(stale_threshold); // this determines how often the pingtimer fires
     Q_ASSERT(socket->state() == QAbstractSocket::ConnectedState);
     status = Connected ; // we are always connected at construction time.
     errorPolicy = ErrorPolicySendErrorMessage;

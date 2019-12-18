@@ -57,6 +57,9 @@ signals:
     void synchronizing();
     /// Emitted whenever we failed to synchronize to bitcoind.
     void synchFailure();
+    /// Emitted wheneever upToDate() is emitted. This is identical except the header info is also sent. This is used by
+    /// blockchain.headers.subscribe system. See Servers.cpp.
+    void newHeader(unsigned height, const QByteArray & header);
 
 protected:
     Stats stats() const override; // from StatsMixin

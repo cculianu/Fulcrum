@@ -45,6 +45,9 @@ void SrvMgr::startServers()
         auto srv = new Server(iface.first, iface.second, storage);
         servers.push_back(srv); // save server in list unconditionally so we may delete later because tryStart may throw
         srv->tryStart();
+
+        // connet blockchain.headers.subscribe signal
+        connect(this, &SrvMgr::newHeader, srv, &Server::newHeader);
     }
 }
 

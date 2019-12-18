@@ -267,15 +267,23 @@ namespace RPC {
         // below send() ends up calling do_write immediately (which is connected to send)
         emit send( wrapForSend(data) );
     }
-    void ConnectionBase::_sendNotification(const QString &method, const QVariantList & params)
+    void ConnectionBase::_sendNotification(const QString &method, const QVariant & params)
     {
         if (status != Connected || !socket) {
             Error() << __FUNCTION__ << " method: " << method << "; Not connected!";
             return;
         }
-        QString json = Message::makeNotification(method, params, v1).toJsonString();
+        QString json;
+        if (params.canConvert<QVariantMap>()) {
+            json = Message::makeNotification(method, params.toMap(), v1).toJsonString();
+        } else if (params.canConvert<QVariantList>()) {
+            json = Message::makeNotification(method, params.toList(), v1).toJsonString();
+        } else {
+            Error() << __FUNCTION__ << " method: " << method << "; Notification requires either a QVarantList or a QVariantMap as its argument! FIXME!";
+            return;
+        }
         if (json.isEmpty()) {
-            Error() << __FUNCTION__ << " method: " << method << "; Unable to generate request JSON! FIXME!";
+            Error() << __FUNCTION__ << " method: " << method << "; Unable to generate notification JSON! FIXME!";
             return;
         }
         const auto data = json.toUtf8();

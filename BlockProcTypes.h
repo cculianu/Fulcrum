@@ -15,5 +15,5 @@ using IONum = std::uint16_t;
 using TxHash = QByteArray;
 using HashX = QByteArray;
 using BlockHash = QByteArray;
-static constexpr int HashLen = bitcoin::uint256::width();
+constexpr int HashLen = bitcoin::uint256::width();
 

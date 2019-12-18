@@ -7,6 +7,8 @@
 #include "Options.h"
 #include "TXO.h"
 
+#include "bitcoin/amount.h"
+
 #include <QByteArray>
 #include <QFlags>
 
@@ -65,7 +67,7 @@ public:
     ///   .second - the latest valid chainTip 32-byte sha256 double hash of the header (the chainTip as it's called in
     ///             bitcoind parlance), in bitcoind REVERSED memory order (that is, ready for json sending/receiving).
     ///             (Empty if no headers yet).
-    std::pair<int, HeaderHash> latestTip() const;
+    std::pair<int, HeaderHash> latestTip(Header *header = nullptr) const;
 
     /// eg 'main' or 'test' or may be empty string if new db (thread safe)
     QString getChain() const;
@@ -151,6 +153,9 @@ public:
 
     // thread safe
     UnspentItems listUnspent(const HashX &) const;
+
+    // thread safe
+    bitcoin::Amount getBalance(const HashX &) const;
 
 protected:
     virtual Stats stats() const override; ///< from StatsMixin

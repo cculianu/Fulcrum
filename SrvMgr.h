@@ -21,7 +21,10 @@ public:
 
     int nServers() const { return servers.size(); }
 
-public slots:
+signals:
+    /// Notifies all blockchain.headers.subscribe'd clients for the entire server about a new header.
+    /// (normally connected to the Controller::newHeader signal).
+    void newHeader(unsigned height, const QByteArray &header);
 
 protected:
     Stats stats() const override;
