@@ -7,7 +7,7 @@
 
 #include <QHostAddress>
 
-#include <array>
+#include <atomic>
 #include <memory>
 #include <set>
 
@@ -124,8 +124,15 @@ namespace BitcoinDMgrHelper {
         Q_OBJECT
 
         friend class ::BitcoinDMgr;
-        using QObject::QObject;
+        ReqCtxObj();
         ~ReqCtxObj() override;
+
+        // used internally by submitRequest
+        std::atomic_bool replied = false;
+        QList<QMetaObject::Connection> conns;
+
+        /// Mainly used for debugging the lifecycle of this class's instances.
+        static std::atomic_int extant;
 
     signals:
         /// emitted by bitcoindmgr submitRequest internally when results are ready
