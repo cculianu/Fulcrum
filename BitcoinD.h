@@ -23,7 +23,7 @@ public:
     void startup() override; ///< from Mgr
     void cleanup() override; ///< from Mgr
 
-    static constexpr int N_CLIENTS = 3;//4; //3;//4; //1;
+    static constexpr int N_CLIENTS = 3; ///< the number of simultaneous BitcoinD clients we spawn. TODO: make this configurable.
 
     using ResultsF = std::function<void(const RPC::Message &response)>;
     using ErrorF = ResultsF; // identical to ResultsF above except the message passed in is an error="" message.
@@ -117,4 +117,23 @@ private:
 };
 
 
+namespace BitcoinDMgrHelper {
+    /// Internal class used by the BitcoinDMgr submitRequest method. Not for use outside BitcoinD.cpp.
+    /// (We can't make this a nested class because QObjects with metaobjects/signals cannot be nested classes).
+    class ReqCtxObj : public QObject {
+        Q_OBJECT
+
+        friend class ::BitcoinDMgr;
+        using QObject::QObject;
+        ~ReqCtxObj() override;
+
+    signals:
+        /// emitted by bitcoindmgr submitRequest internally when results are ready
+        void results(const RPC::Message &response);
+        /// emitted by bitcoindmgr submitRequest internally when there is an error response
+        void error(const RPC::Message &response);
+        /// emitted by bitcoindmgr submitRequest internally when there is a failure to talk to bitcoind
+        void fail(const RPC::Message::Id &origId, const QString & failureReason);
+    };
+}
 #endif // BITCOIND_H

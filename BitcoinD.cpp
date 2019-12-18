@@ -120,69 +120,92 @@ BitcoinD *BitcoinDMgr::getBitcoinD()
 void BitcoinDMgr::submitRequest(QObject *sender, const RPC::Message::Id &rid, const QString & method, const QVariantList & params,
                                 const ResultsF & resf, const ErrorF & errf, const FailF & failf)
 {
-    //
-    // FIXME: This may have race conditions if the sender gets deleted while we are running (thus deleting context).
-    // In which case the QPointer will get updated at a random time and we may be dereferencing nullptr!
-    // This is not safe to use with Client * as sender, as a result! FIXME!!
-    //
-    // Also the CtlTask* instances that currently use this may die at any time as well. This needs redesign!
-    //
-    QPointer<QObject> context(new QObject(sender)); // this is a weak ref that gets killed when sender is killed. This way stuff just "goes away" if sender dies.
-    context->setObjectName(QString("context for '%1' request id: %2").arg(sender ? sender->objectName() : "").arg(rid.toString()));
-    auto killContext = [context, this](bool thisDestroyed=false) {
-        if (LIKELY(context)) { // need to check context because race conditions
-            if (LIKELY(!thisDestroyed))
-                Util::VoidFuncOnObjectNoThrow(this, [context, this] { if (LIKELY(context)) disconnect(this, &QObject::destroyed, context, nullptr);  }, 0);
-            Util::VoidFuncOnObjectNoThrow(context, [context] { if (LIKELY(context)) context->deleteLater(); }, 0);
+    using namespace BitcoinDMgrHelper;
+    constexpr bool debugDeletes = false; // set this to true to print debug messages tracking all the below object deletions (tested: no leaks!)
+    auto context = std::shared_ptr<ReqCtxObj>(new ReqCtxObj, [](ReqCtxObj *context){
+        if constexpr (debugDeletes) {
+            Debug() << context->objectName() << " shptr deleter";
+            connect(context, &QObject::destroyed, qApp, [n=context->objectName()]{ Debug() << n << " destroyed"; }, Qt::DirectConnection);
         }
-    };
-     // paranoia: make sure that if we die, to kill the context ASAP too to clean up resources
-    connect(this, &QObject::destroyed, context, [killContext]{killContext(true);}, Qt::DirectConnection);
+        context->deleteLater();
+    });
+    context->setObjectName(QString("context for '%1' request id: %2").arg(sender ? sender->objectName() : "").arg(rid.toString()));
+    auto replied = std::make_shared<std::atomic_bool>(false); // guards against spurious lostConnection arriving after reply msg
+    connect(context.get(), &ReqCtxObj::results, sender, [context, resf, replied](const RPC::Message &response) {
+        if (!replied->exchange(true) && resf)
+            resf(response);
+        context->disconnect(); // kills all lambdas and shared ptr, should cause deleter to execute
+    });
+    connect(context.get(), &ReqCtxObj::error, sender, [context, errf, replied](const RPC::Message &response) {
+        if (!replied->exchange(true) && errf)
+            errf(response);
+        context->disconnect(); // kills all lambdas and shared ptr, should cause deleter to execute
+    });
+    connect(context.get(), &ReqCtxObj::fail, sender, [context, failf, replied](const RPC::Message::Id &origId, const QString & failureReason) {
+        if (!replied->exchange(true) && failf)
+            failf(origId, failureReason);
+        context->disconnect(); // kills all lambdas and shared ptr, should cause deleter to execute
+    });
+    context->moveToThread(this->thread());
 
     // schedule this ASAP
-    QTimer::singleShot(0, this, [this, context, resf, errf, failf, rid, method, params, killContext] {
-        if (UNLIKELY(!context))
-            // sender parent must have been deleted before we got a chance to run
-            return;
-        auto replied = std::make_shared<std::atomic_bool>(false); // guards against spurious lostConnection arriving after reply msg
-        // this is called from either context thread or this thread
-        auto do_fail = [failf, context, killContext, rid, replied](const QString & reason){
-            if (LIKELY(!replied->exchange(true) && failf && context)) {
-                Util::VoidFuncOnObjectNoThrow(context, [context, failf, rid, reason]{
-                    if (LIKELY(context)) // need to check context again because race conditions
-                        failf(rid, reason);
-                }); // fixme: this has an infinite timeout -- HOWEVER, it's usually called from 'context' thread which means it's a direct function call. USUALLY.
-                // ^ fixme2: also -- the above can theoretically hang forever if context gets deleted or its thread is stopped during this call.
-            }
-            killContext();
-        };
+    QTimer::singleShot(0, this, [this, context, rid, method, params] {
         auto bd = getBitcoinD();
         if (UNLIKELY(!bd)) {
-            do_fail("Unable to find a good BitcoinD connection");
+            emit context->fail(rid, "Unable to find a good BitcoinD connection");
             return;
         }
-        connect(bd, &BitcoinD::gotMessage, context, [resf, replied, rid, killContext](quint64, const RPC::Message &reply){
+        using ConnList = QList<QMetaObject::Connection>;
+        constexpr auto mkConnsPtr = [](const QString &n) {
+            if constexpr (debugDeletes) {
+                return std::shared_ptr<ConnList>(new ConnList, [n](ConnList * p){
+                    Debug() << " list for " << n << " of size " << p->size() << " deleter";
+                    delete p;
+                });
+            } else {
+                return std::make_shared<ConnList>();
+            }
+        };
+        auto conns = mkConnsPtr(context->objectName());
+        static const auto killConns = [](decltype (conns) conns /* paranoia: pass by value just in case */) {
+            for (const auto & conn : *conns) {
+                QObject::disconnect(conn);
+            }
+            conns->clear();
+        };
+        *conns +=
+        connect(bd, &BitcoinD::gotMessage, context.get(), [context, rid, conns](quint64, const RPC::Message &reply){
              if (reply.id == rid) {// filter out messages not for us
-                 if (!replied->exchange(true) && resf)
-                     resf(reply);
-                 killContext();
+                emit context->results(reply);
+                killConns(conns); // to kill lambdas, shared ptr captures
              }
         });
-        connect(bd, &BitcoinD::gotErrorMessage, context, [errf, replied, rid, killContext](quint64, const RPC::Message &errMsg){
+        *conns +=
+        connect(bd, &BitcoinD::gotErrorMessage, context.get(), [context, rid, conns](quint64, const RPC::Message &errMsg){
              if (errMsg.id == rid) { // filter out error messages not for us
-                 if (!replied->exchange(true) && errf)
-                     errf(errMsg);
-                 killContext();
+                 emit context->error(errMsg);
+                 killConns(conns); // to kill lambdas, shared ptr captures
              }
         });
-        connect(bd, &BitcoinD::lostConnection, context, [do_fail, rid](AbstractConnection *){
-            do_fail("connection lost");
+        *conns +=
+        connect(bd, &BitcoinD::lostConnection, context.get(), [context, rid, conns](AbstractConnection *){
+            emit context->fail(rid, "connection lost");
+            killConns(conns); // to kill lambdas, shared ptr captures
+        });
+        *conns +=
+        connect(bd, &QObject::destroyed, context.get(), [context, rid, conns](QObject *){
+            emit context->fail(rid, "bitcoind client deleted");
+            killConns(conns); // to kill lambdas, shared ptr captures
         });
 
         bd->sendRequest(rid, method, params);
     });
 
     // .. aand.. return right away
+}
+
+namespace BitcoinDMgrHelper {
+    ReqCtxObj::~ReqCtxObj() {} /// weak vtable warning prevention
 }
 
 /* --- BitcoinD --- */
