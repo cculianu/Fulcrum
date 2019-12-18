@@ -152,6 +152,8 @@ private:
     // RPC methods below
     void rpc_server_ping(Client *, const RPC::Message &);
     void rpc_server_version(Client *, const RPC::Message &);
+    void rpc_blockchain_block_header(Client *, const RPC::Message &);
+    void rpc_blockchain_block_headers(Client *, const RPC::Message &);
     void rpc_blockchain_scripthash_subscribe(Client *, const RPC::Message &);
 
     /// Basically a namespace for our rpc dispatch tables, etc

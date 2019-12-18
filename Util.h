@@ -513,6 +513,10 @@ namespace Util {
     QByteArray ParseHexFast(const QByteArray &, bool checkDigits = false);
     /// Identical to Qt's toHex, but 60% faster (returned string is lcase hex encoded).
     QByteArray ToHexFast(const QByteArray &);
+    /// More efficient, if less convenient version of above. Operates on a buffer in-place.  Make sure bufsz is at least
+    /// 2x the length of bytes.
+    bool ToHexFastInPlace(const QByteArray & bytes, char *buf, size_t bufsz);
+
 
     /// Call lambda() in the thread context of obj's thread. Will block until completed.
     /// If timeout_ms is not specified or negative, will block forever until lambda returns,

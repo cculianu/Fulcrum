@@ -391,7 +391,9 @@ void Server::rpc_server_version(Client *c, const RPC::Message &m)
         c->info.protocolVersion = l[1].toString().left(kMaxServerVersion);
         Trace() << "Client (id: " << c->id << ") sent version: \"" << c->info.userAgent << "\" / \"" << c->info.protocolVersion << "\"";
     } else {
+        emit c->sendError(false, RPC::Code_InternalError, "internal error", m.id);
         Error() << "Bad server version message! Other code should have handled this. FIXME! Json: " << m.toJsonString();
+        return;
     }
     emit c->sendResult(m.id, m.method, QStringList({QString("%1/%2").arg(APPNAME).arg(VERSION), QString("1.4")}));
 }
@@ -401,7 +403,78 @@ void Server::rpc_server_ping(Client *c, const RPC::Message &m)
         Trace() << "Got ping from client (id: " << c->id << "), responding...";
         emit c->sendResult(m.id, m.method);
     } else {
+        emit c->sendError(false, RPC::Code_InternalError, "internal error", m.id);
         Error() << "Bad client ping message! This shouldn't happen. FIXME! Json: " << m.toJsonString();
+    }
+}
+void Server::rpc_blockchain_block_header(Client *c, const RPC::Message &m)
+{
+    if (QVariantList l = m.paramsList(); m.isRequest() && l.size() >= 1 && l.size() <= 2) {
+        bool ok;
+        const unsigned height = l.front().toUInt(&ok);
+        if (!ok) {
+            emit c->sendError(false, RPC::Code_InvalidParams, "Invalid height", m.id);
+            return;
+        }
+        const unsigned cp_height = l.size() > 1 ? l.back().toUInt(&ok) : 0;
+        // TODO SUPPORT CP_HEIGHT!
+        if (!ok || cp_height != 0) {
+            emit c->sendError(false, RPC::Code_InvalidParams, "cp_height not yet supported", m.id);
+            return;
+        }
+        const auto optHdr = storage->headerForHeight(height);
+        // EX doesn't seem to return error here if invalid height, so we will do same.
+        c->sendResult(m.id, m.method, Util::ToHexFast(optHdr.value_or(QByteArray())));
+    } else {
+        emit c->sendError(false, RPC::Code_InternalError, "internal error", m.id);
+        Error() << "Bad block.header message! This shouldn't happen. FIXME! Json: " << m.toJsonString();
+    }
+}
+void Server::rpc_blockchain_block_headers(Client *c, const RPC::Message &m)
+{
+    if (QVariantList l = m.paramsList(); m.isRequest() && l.size() >= 2 && l.size() <= 3) {
+        bool ok;
+        const unsigned height = l.front().toUInt(&ok);
+        if (!ok) {
+            emit c->sendError(false, RPC::Code_InvalidParams, "Invalid height", m.id);
+            return;
+        }
+        const unsigned count = l[1].toUInt(&ok);
+        if (!ok) {
+            emit c->sendError(false, RPC::Code_InvalidParams, "Invalid count", m.id);
+            return;
+        }
+        const unsigned cp_height = l.size() > 2 ? l.back().toUInt(&ok) : 0;
+        // TODO SUPPORT CP_HEIGHT!
+        if (!ok || cp_height != 0) {
+            emit c->sendError(false, RPC::Code_InvalidParams, "cp_height not yet supported", m.id);
+            return;
+        }
+        constexpr unsigned MAX_HEADERS = 2016; ///< TODO: make this cofigurable. this is the current electrumx limit, for now.
+        // EX doesn't seem to return error here if invalid height/no results, so we will do same.
+        const auto hdrs = storage->headersFromHeight(height, std::min(MAX_HEADERS, count));
+        const size_t nHdrs = hdrs.size(), hdrSz = size_t(BTC::GetBlockHeaderSize()), hdrHexSz = hdrSz*2;
+        QByteArray hexHeaders(int(nHdrs * hdrHexSz), Qt::Uninitialized);
+        for (size_t i = 0, offset = 0; i < nHdrs; ++i, offset += hdrHexSz) {
+            const auto & hdr = hdrs[i];
+            if (UNLIKELY(hdr.size() != int(hdrSz))) { // ensure header looks the right size
+                // this should never happen.
+                Error() << "Header size from db height " << i + height << " is not " << hdrSz << " bytes! Database corruption likely! FIXME!";
+                emit c->sendError(false, RPC::Code_InternalError, "server header store invalid", m.id);
+                return;
+            }
+            // fast, in-place conversion to hex
+            Util::ToHexFastInPlace(hdr, hexHeaders.data() + offset, hdrHexSz);
+        }
+        QVariantMap resp{
+            {"hex" , hexHeaders},
+            {"count", unsigned(hdrs.size())},
+            {"max", MAX_HEADERS}
+        };
+        c->sendResult(m.id, m.method, resp);
+    } else {
+        Error() << "Bad block.headers message! This shouldn't happen. FIXME! Json: " << m.toJsonString();
+        emit c->sendError(false, RPC::Code_InternalError, "internal error", m.id);
     }
 }
 void Server::rpc_blockchain_scripthash_subscribe(Client *c, const RPC::Message &m)
@@ -422,6 +495,7 @@ void Server::rpc_blockchain_scripthash_subscribe(Client *c, const RPC::Message &
         });
         t->setSingleShot(false); t->start(3000);
     } else {
+        emit c->sendError(false, RPC::Code_InternalError, "internal error", m.id);
         Error() << "Bad subscribe message! This shouldn't happen. FIXME! Json: " << m.toJsonString();
     }
 }
@@ -435,7 +509,8 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
     { {"rpc.name",              allow_requests, allow_notifications, PosParamRange, (QSet<QString> note: {} means undefined optional)}, &method_to_call }     */
     { {"server.ping",                     true,               false,    PR{0,0},      RPC::KeySet{} },          &Server::rpc_server_ping },
     { {"server.version",                  true,               false,    PR{2,2},                    },          &Server::rpc_server_version },
-    //{ {"blockchain.block.header",         true,               false,    PR{1,2},                    },          &Server::rpc_blockchain_scripthash_subscribe },
+    { {"blockchain.block.header",         true,               false,    PR{1,2},                    },          &Server::rpc_blockchain_block_header },
+    { {"blockchain.block.headers",        true,               false,    PR{2,3},                    },          &Server::rpc_blockchain_block_headers },
     { {"blockchain.scripthash.subscribe", true,               false,    PR{1,1},                    },          &Server::rpc_blockchain_scripthash_subscribe },
 };
 #undef PR

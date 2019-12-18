@@ -209,9 +209,9 @@ namespace Util {
         }
         const char *d = hex.constData(), * const dend = d + size;
         for (char c1, c2, *out = ret.data(); d < dend; d += 2, ++out) {
-            static constexpr char offset_A = 'A' - 0xa,
-                                  offset_a = 'a' - 0xa,
-                                  offset_0 = '0';
+            constexpr char offset_A = 'A' - 0xa,
+                           offset_a = 'a' - 0xa,
+                           offset_0 = '0';
             // slightly unrolled loop, does 2 chars at a time
             c1 = d[0];
             c2 = d[1];
@@ -245,11 +245,19 @@ namespace Util {
 
     QByteArray ToHexFast(const QByteArray &ba)
     {
+        QByteArray ret(ba.size()*2, Qt::Initialization::Uninitialized);
+        if (!ToHexFastInPlace(ba, ret.data(), size_t(ret.size())))
+            ret.clear();
+        return ret;
+    }
+    bool ToHexFastInPlace(const QByteArray &ba, char *out, size_t bufsz)
+    {
         const int size = ba.size();
-        QByteArray ret(size*2, Qt::Initialization::Uninitialized);
+        if (bufsz < size_t(size*2))
+            return false;
         const char *cur = ba.constData(), * const end = cur + size;
-        for (char c1, c2, *out = ret.data(); cur < end; ++cur, out += 2) {
-            static constexpr char dist_from_9_to_a = ('a'-'9')-1;
+        for (char c1, c2; cur < end; ++cur, out += 2) {
+            constexpr char dist_from_9_to_a = ('a'-'9')-1;
             c1 = ((*cur >> 4) & 0xf) + '0';
             c2 = (*cur & 0xf) + '0';
             if (c1 > '9') c1 += dist_from_9_to_a;
@@ -257,7 +265,7 @@ namespace Util {
             out[0] = c1;
             out[1] = c2;
         }
-        return ret;
+        return true;
     }
 
 
