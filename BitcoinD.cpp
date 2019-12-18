@@ -120,6 +120,13 @@ BitcoinD *BitcoinDMgr::getBitcoinD()
 void BitcoinDMgr::submitRequest(QObject *sender, const RPC::Message::Id &rid, const QString & method, const QVariantList & params,
                                 const ResultsF & resf, const ErrorF & errf, const FailF & failf)
 {
+    //
+    // FIXME: This may have race conditions if the sender gets deleted while we are running (thus deleting context).
+    // In which case the QPointer will get updated at a random time and we may be dereferencing nullptr!
+    // This is not safe to use with Client * as sender, as a result! FIXME!!
+    //
+    // Also the CtlTask* instances that currently use this may die at any time as well. This needs redesign!
+    //
     QPointer<QObject> context(new QObject(sender)); // this is a weak ref that gets killed when sender is killed. This way stuff just "goes away" if sender dies.
     context->setObjectName(QString("context for '%1' request id: %2").arg(sender ? sender->objectName() : "").arg(rid.toString()));
     auto killContext = [context, this](bool thisDestroyed=false) {
