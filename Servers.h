@@ -157,7 +157,7 @@ private:
     // server
     void rpc_server_ping(Client *, const RPC::Message &);
     void rpc_server_version(Client *, const RPC::Message &);
-    // blockchaing misc
+    // blockchain misc
     void rpc_blockchain_block_header(Client *, const RPC::Message &);  // todo: cp_height
     void rpc_blockchain_block_headers(Client *, const RPC::Message &); // todo: cp_height
     void rpc_blockchain_estimatefee(Client *, const RPC::Message &); // todo: this is a stub implementation
@@ -196,9 +196,9 @@ private:
         StaticData() = delete; ///< unconstructible class! :D
     };
 
-    // pointer to shared Storage object -- owned and controller by Controller
+    /// pointer to shared Storage object -- owned and controlled by the Controller instance
     std::shared_ptr<Storage> storage;
-    // pointer to shared BitcoinDMgr object -- owned and controller by Controller
+    /// pointer to shared BitcoinDMgr object -- owned and controlled by the Controller instance
     std::shared_ptr<BitcoinDMgr> bitcoindmgr;
 };
 
