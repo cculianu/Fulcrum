@@ -1,13 +1,15 @@
 #include "SrvMgr.h"
 
+#include "BitcoinD.h"
 #include "Servers.h"
 #include "Storage.h"
 #include "Util.h"
 
 #include <utility>
 
-SrvMgr::SrvMgr(const QList<Options::Interface> & ifaces, std::shared_ptr<Storage> s, QObject *parent)
-    : Mgr(parent), interfaces(ifaces), storage(std::move(s))
+SrvMgr::SrvMgr(const QList<Options::Interface> & ifaces, std::shared_ptr<Storage> s, std::shared_ptr<BitcoinDMgr> bdm,
+               QObject *parent)
+    : Mgr(parent), interfaces(ifaces), storage(std::move(s)), bitcoindmgr(std::move(bdm))
 {
 
 }
@@ -42,7 +44,7 @@ void SrvMgr::startServers()
     const auto num = interfaces.length();
     Log() << "SrvMgr: starting " << num << " " << Util::Pluralize("service", num) << " ...";
     for (auto iface : interfaces) {
-        auto srv = new Server(iface.first, iface.second, storage);
+        auto srv = new Server(iface.first, iface.second, storage, bitcoindmgr);
         servers.push_back(srv); // save server in list unconditionally so we may delete later because tryStart may throw
         srv->tryStart();
 

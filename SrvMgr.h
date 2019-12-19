@@ -7,6 +7,7 @@
 
 #include <memory>
 
+class BitcoinDMgr;
 class Server;
 class Storage;
 
@@ -14,7 +15,9 @@ class SrvMgr : public Mgr
 {
     Q_OBJECT
 public:
-    explicit SrvMgr(const QList<Options::Interface> &interfaces, std::shared_ptr<Storage> storage, QObject *parent = nullptr);
+    explicit SrvMgr(const QList<Options::Interface> &interfaces,
+                    std::shared_ptr<Storage> storage, std::shared_ptr<BitcoinDMgr> bitcoindmgr,
+                    QObject *parent = nullptr);
     ~SrvMgr() override;
     void startup() override; // may throw on error
     void cleanup() override;
@@ -34,6 +37,7 @@ private:
     QList<Options::Interface> interfaces;
     QList<Server *> servers;
     std::shared_ptr<Storage> storage;
+    std::shared_ptr<BitcoinDMgr> bitcoindmgr;
 };
 
 #endif // SRVMGR_H

@@ -99,6 +99,7 @@ protected:
 };
 
 
+class BitcoinDMgr;
 class Client;
 class Storage;
 /// Implements the ElectrumX/ElectronX protocol
@@ -107,7 +108,7 @@ class Server : public AbstractTcpServer
 {
     Q_OBJECT
 public:
-    Server(const QHostAddress & address, quint16 port, std::shared_ptr<Storage> storage);
+    Server(const QHostAddress & address, quint16 port, std::shared_ptr<Storage> storage, std::shared_ptr<BitcoinDMgr> bitcoindmgr);
     ~Server() override;
 
     virtual QString prettyName() const override;
@@ -170,8 +171,8 @@ private:
     void rpc_blockchain_scripthash_subscribe(Client *, const RPC::Message &); // not implemented yet
     void rpc_blockchain_scripthash_unsubscribe(Client *, const RPC::Message &); // not implemented yet -- stub impl. always returns true, requires suscribe to work first
     // transaction
-    void rpc_blockchain_transaction_broadcast(Client *, const RPC::Message &); // not implemented yet
-    void rpc_blockchain_transaction_get(Client *, const RPC::Message &); // not implemented yet
+    void rpc_blockchain_transaction_broadcast(Client *, const RPC::Message &); // fully implemented
+    void rpc_blockchain_transaction_get(Client *, const RPC::Message &); // fully implemented
     void rpc_blockchain_transaction_get_merkle(Client *, const RPC::Message &); // not implemented yet
     void rpc_blockchain_transaction_id_from_pos(Client *, const RPC::Message &); // partially implemented (no merkle=true)
     // mempool
@@ -195,8 +196,10 @@ private:
         StaticData() = delete; ///< unconstructible class! :D
     };
 
-    // pointer to shared Storage object
+    // pointer to shared Storage object -- owned and controller by Controller
     std::shared_ptr<Storage> storage;
+    // pointer to shared BitcoinDMgr object -- owned and controller by Controller
+    std::shared_ptr<BitcoinDMgr> bitcoindmgr;
 };
 
 

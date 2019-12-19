@@ -1,3 +1,4 @@
+#include "BitcoinD.h"
 #include "Servers.h"
 #include "Storage.h"
 
@@ -262,10 +263,43 @@ namespace {
             ret = {v.toBool(), true};
         return ret;
     }
+
+    QString formatBitcoinDErrorResponseToLookLikeDumbElectrumXPythonRepr(const RPC::Message &errResponse){
+        constexpr auto escapeSingleQuote = [](const QString &s) -> QString {
+            const QByteArray b = s.toUtf8();
+            QByteArray ret;
+            ret.reserve(int(b.length()*1.5));
+            bool inesc = false;
+            for (int i = 0; i < b.size(); ++i) {
+                const char c = b[i];
+                if (c == '\\')
+                    inesc = !inesc;
+                else if (c == '\'' && !inesc)
+                    ret.push_back('\\');
+                else
+                    inesc = false;
+                ret.push_back(c);
+            }
+            return QString::fromUtf8(ret);
+        };
+        return QString("daemon error: DaemonError({'code': %1, 'message': '%2'})")
+                .arg(errResponse.errorCode()).arg(escapeSingleQuote(errResponse.errorMessage()));
+    }
+
+    /// used internally by RPC methods. Given a hashHex, ensure it's 32 bytes (or DataLen) of hash data and nothing else.
+    /// Returns DataLen (default=32) bytes of valid hex decoded data or an empty QByteArray on failure.
+    QByteArray validateHashHex(const QString & hashHex, const int DataLen = HashLen) {
+        QByteArray ret = hashHex.trimmed().left(DataLen*2).toUtf8();
+        // ugh, QByteArray returns dummy bytes at the end if it can't fully parse. So we have to check the original
+        // hash byte length as well.
+        if (ret.length() != DataLen*2 || (ret = QByteArray::fromHex(ret)).length() != DataLen)
+            ret.clear();
+        return ret;
+    }
 }
 
-Server::Server(const QHostAddress &a, quint16 p, std::shared_ptr<Storage> s)
-    : AbstractTcpServer(a, p), storage(std::move(s))
+Server::Server(const QHostAddress &a, quint16 p, std::shared_ptr<Storage> s, std::shared_ptr<BitcoinDMgr> bdm)
+    : AbstractTcpServer(a, p), storage(std::move(s)), bitcoindmgr(std::move(bdm))
 {
     // re-set name for debug/logging
     _thread.setObjectName(prettyName());
@@ -558,7 +592,7 @@ void Server::rpc_blockchain_relayfee(Client *c, const RPC::Message &m)
 void Server::rpc_blockchain_scripthash_get_balance(Client *c, const RPC::Message &m)
 {
     if (QVariantList l = m.paramsList(); m.isRequest() && l.size() == 1) {
-        const QByteArray sh = QByteArray::fromHex(l.front().toString().trimmed().left(HashLen*2).toUtf8());
+        const QByteArray sh = validateHashHex( l.front().toString() );
         if (sh.length() != HashLen) {
             emit c->sendError(false, RPC::Code_App_BadRequest, "Invalid scripthash", m.id);
             return;
@@ -581,7 +615,7 @@ void Server::rpc_blockchain_scripthash_get_balance(Client *c, const RPC::Message
 void Server::rpc_blockchain_scripthash_get_history(Client *c, const RPC::Message &m)
 {
     if (QVariantList l = m.paramsList(); m.isRequest() && l.size() == 1) {
-        const QByteArray sh = QByteArray::fromHex(l.front().toString().trimmed().left(HashLen*2).toUtf8());
+        const QByteArray sh = validateHashHex( l.front().toString() );
         if (sh.length() != HashLen) {
             emit c->sendError(false, RPC::Code_App_BadRequest, "Invalid scripthash", m.id);
             return;
@@ -605,7 +639,7 @@ void Server::rpc_blockchain_scripthash_get_history(Client *c, const RPC::Message
 void Server::rpc_blockchain_scripthash_get_mempool(Client *c, const RPC::Message &m)
 {
     if (QVariantList l = m.paramsList(); m.isRequest() && l.size() == 1) {
-        const QByteArray sh = QByteArray::fromHex(l.front().toString().trimmed().left(HashLen*2).toUtf8());
+        const QByteArray sh = validateHashHex( l.front().toString() );
         if (sh.length() != HashLen) {
             emit c->sendError(false, RPC::Code_App_BadRequest, "Invalid scripthash", m.id);
             return;
@@ -633,7 +667,7 @@ void Server::rpc_blockchain_scripthash_get_mempool(Client *c, const RPC::Message
 void Server::rpc_blockchain_scripthash_listunspent(Client *c, const RPC::Message &m)
 {
     if (QVariantList l = m.paramsList(); m.isRequest() && l.size() == 1) {
-        const QByteArray sh = QByteArray::fromHex(l.front().toString().trimmed().left(HashLen*2).toUtf8());
+        const QByteArray sh = validateHashHex( l.front().toString() );
         if (sh.length() != HashLen) {
             emit c->sendError(false, RPC::Code_App_BadRequest, "Invalid scripthash", m.id);
             return;
@@ -664,7 +698,7 @@ void Server::rpc_blockchain_scripthash_subscribe(Client *c, const RPC::Message &
         } else {
             // TESTING TODO FIXME THIS IS FOR TESTING ONLY
             const auto clientId = c->id;
-            QByteArray sh = QByteArray::fromHex(l.front().toString().trimmed().left(HashLen*2).toUtf8());
+            QByteArray sh = validateHashHex( l.front().toString() );
             if (sh.length() != HashLen) {
                 emit c->sendError(false, RPC::Code_InvalidParams, "Invalid scripthash", m.id);
                 return;
@@ -687,7 +721,7 @@ void Server::rpc_blockchain_scripthash_unsubscribe(Client *c, const RPC::Message
 {
     if (QVariantList l = m.paramsList(); m.isRequest() && l.size() == 1) {
         // this isn't really implemented. this is a stub.
-        QByteArray sh = QByteArray::fromHex(l.front().toString().trimmed().left(HashLen*2).toUtf8());
+        QByteArray sh = validateHashHex( l.front().toString() );
         if (sh.length() != HashLen) {
             emit c->sendError(false, RPC::Code_InvalidParams, "Invalid scripthash", m.id);
             return;
@@ -702,11 +736,32 @@ void Server::rpc_blockchain_scripthash_unsubscribe(Client *c, const RPC::Message
 void Server::rpc_blockchain_transaction_broadcast(Client *c, const RPC::Message &m)
 {
     if (QVariantList l = m.paramsList(); m.isRequest() && l.size() == 1) {
-        // this isn't really implemented. this is a stub.
         QByteArray rawtxhex = l.front().toString().left(kMaxTxHex).toUtf8(); // limit raw hex to sane length.
-        // no need to validate hex here -- bitcoind does validation for us.
-        // TODO:.. implement this properly.... send to BitcoinD, wait for result, etc.
-        emit c->sendError(false, RPC::Code_InternalError, "not yet implemented", m.id);
+        // no need to validate hex here -- bitcoind does validation for us!
+        const auto internalReqId = newId();
+        bitcoindmgr->submitRequest(c, internalReqId, "sendrawtransaction", QVariantList{ rawtxhex },
+            // success callback
+            [c,id=m.id,method=m.method](const RPC::Message &response){
+                emit c->sendResult(id, method, response.result());
+            },
+            // error callback
+            [c,id=m.id](const RPC::Message &errResponse){
+                emit c->sendError(false, RPC::Code_App_BadRequest, /**< ex does this here.. inconsistent with transaction.get,
+                                                                    * so for now we emulate that until we verify that EC
+                                                                    * will be ok with us changing it to Code_App_DaemonError */
+                                  QString("the transaction was rejected by network rules.\n\n"
+                                          // Note: ElectrumX here would also spit back the [txhex] after the final newline.
+                                          // We do not do that, since it's a waste of bandwidth and also Electron Cash
+                                          // ignores that information anyway.
+                                          "%1\n").arg(errResponse.errorMessage()),
+                                  id);
+            },
+            // failure callback
+            [c,id=m.id](const RPC::Message::Id &, const QString & failureReason){
+                emit c->sendError(false, RPC::Code_InternalError, QString("internal error: %1").arg(failureReason), id);
+            }
+        );
+        // <-- do nothing right now, return without replying. Will respond when daemon calls us back in callbacks above.
     } else {
         // TODO: remove this soon as this should never be reached. It is just here to detect bugs in our own RPC code
         emit c->sendError(false, RPC::Code_InternalError, "internal error", m.id);
@@ -716,8 +771,7 @@ void Server::rpc_blockchain_transaction_broadcast(Client *c, const RPC::Message 
 void Server::rpc_blockchain_transaction_get(Client *c, const RPC::Message &m)
 {
     if (QVariantList l = m.paramsList(); m.isRequest() && l.size() >= 1 && l.size() <= 2) {
-        // this isn't really implemented. this is a stub
-        QByteArray txHash = QByteArray::fromHex(l.front().toString().trimmed().left(HashLen*2).toUtf8());
+        QByteArray txHash = validateHashHex( l.front().toString() );
         if (txHash.length() != HashLen) {
             emit c->sendError(false, RPC::Code_App_BadRequest, "Invalid tx hash", m.id);
             return;
@@ -731,8 +785,24 @@ void Server::rpc_blockchain_transaction_get(Client *c, const RPC::Message &m)
             }
             verbose = verbArg;
         }
-        // TODO:.. implement this properly.... send to BitcoinD, wait for result, etc.
-        emit c->sendError(false, RPC::Code_InternalError, "not yet implemented", m.id);
+        const auto internalReqId = newId();
+        bitcoindmgr->submitRequest(c, internalReqId, "getrawtransaction", QVariantList{ Util::ToHexFast(txHash), verbose },
+            // success callback
+            [c,id=m.id,method=m.method](const RPC::Message &response){
+                emit c->sendResult(id, method, response.result());
+            },
+            // error callback
+            [c,id=m.id](const RPC::Message &errResponse){
+                emit c->sendError(false, RPC::Code_App_DaemonError,
+                                  formatBitcoinDErrorResponseToLookLikeDumbElectrumXPythonRepr(errResponse),
+                                  id);
+            },
+            // failure callback
+            [c,id=m.id](const RPC::Message::Id &, const QString & failureReason){
+                emit c->sendError(false, RPC::Code_InternalError, QString("internal error: %1").arg(failureReason), id);
+            }
+        );
+        // <-- do nothing right now, return without replying. Will respond when daemon calls us back in callbacks above.
     } else {
         // TODO: remove this soon as this should never be reached. It is just here to detect bugs in our own RPC code
         emit c->sendError(false, RPC::Code_InternalError, "internal error", m.id);
@@ -743,7 +813,7 @@ void Server::rpc_blockchain_transaction_get_merkle(Client *c, const RPC::Message
 {
     if (QVariantList l = m.paramsList(); m.isRequest() && l.size() == 2) {
         // this isn't really implemented. this is a stub
-        QByteArray txHash = QByteArray::fromHex(l.front().toString().trimmed().left(HashLen*2).toUtf8());
+        QByteArray txHash = validateHashHex( l.front().toString() );
         if (txHash.length() != HashLen) {
             emit c->sendError(false, RPC::Code_App_BadRequest, "Invalid tx hash", m.id);
             return;
