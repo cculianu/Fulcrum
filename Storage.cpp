@@ -1403,6 +1403,23 @@ std::optional<unsigned> Storage::heightForTxNum(TxNum n) const
     return ret;
 }
 
+std::optional<TxHash> Storage::hashForHeightAndPos(BlockHeight height, unsigned posInBlock) const
+{
+    std::optional<TxHash> ret;
+    TxNum txNum = 0;
+    SharedLockGuard(p->blocksLock); // guarantee a consistent view (so that data doesn't mutate from underneath us)
+    {
+        SharedLockGuard g(p->blkInfoLock);
+        if (height >= p->blkInfos.size())
+            return ret;
+        const BlkInfo & bi = p->blkInfos[height];
+        if (posInBlock >= bi.nTx)
+            return ret;
+        txNum = bi.txNum0 + posInBlock;
+    }
+    ret = hashForTxNum(txNum);
+    return ret;
+}
 
 auto Storage::getHistory(const HashX & hashX) const -> History
 {

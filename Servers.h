@@ -153,16 +153,29 @@ private:
 
 private:
     // RPC methods below
+    // server
     void rpc_server_ping(Client *, const RPC::Message &);
     void rpc_server_version(Client *, const RPC::Message &);
+    // blockchaing misc
     void rpc_blockchain_block_header(Client *, const RPC::Message &);  // todo: cp_height
     void rpc_blockchain_block_headers(Client *, const RPC::Message &); // todo: cp_height
     void rpc_blockchain_estimatefee(Client *, const RPC::Message &); // todo: this is a stub implementation
     void rpc_blockchain_headers_subscribe(Client *, const RPC::Message &); // fully implemented
     void rpc_blockchain_relayfee(Client *, const RPC::Message &); // todo: this is a stub implementation
+    // scripthash
     void rpc_blockchain_scripthash_get_balance(Client *, const RPC::Message &); // partially implemented -- needs unconfirmed balance
     void rpc_blockchain_scripthash_get_history(Client *, const RPC::Message &); // partially implemented -- needs mempool tx's
-    void rpc_blockchain_scripthash_subscribe(Client *, const RPC::Message &);
+    void rpc_blockchain_scripthash_get_mempool(Client *, const RPC::Message &); // not yet implemented -- needs mempool subsystem
+    void rpc_blockchain_scripthash_listunspent(Client *, const RPC::Message &); // partially implemented -- needs mempool tx's
+    void rpc_blockchain_scripthash_subscribe(Client *, const RPC::Message &); // not implemented yet
+    void rpc_blockchain_scripthash_unsubscribe(Client *, const RPC::Message &); // not implemented yet -- stub impl. always returns true, requires suscribe to work first
+    // transaction
+    void rpc_blockchain_transaction_broadcast(Client *, const RPC::Message &); // not implemented yet
+    void rpc_blockchain_transaction_get(Client *, const RPC::Message &); // not implemented yet
+    void rpc_blockchain_transaction_get_merkle(Client *, const RPC::Message &); // not implemented yet
+    void rpc_blockchain_transaction_id_from_pos(Client *, const RPC::Message &); // partially implemented (no merkle=true)
+    // mempool
+    void rpc_mempool_get_fee_histogram(Client *, const RPC::Message &); // not implemented yet, returns empty list always
 
     /// Basically a namespace for our rpc dispatch tables, etc
     struct StaticData {

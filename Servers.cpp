@@ -243,11 +243,25 @@ namespace {
     // TODO: maybe move these to a more global place? For now here is fine.
     namespace Constants {
         constexpr int kMaxServerVersion = 80,  ///< the maximum server version length we accept to prevent memory exhaustion attacks
-                      kScriptHashLength = HashLen, ///< the length of a scripthash in bytes. sha256 = 32 bytes.
                       kMaxBuffer = 4*1000*1000, ///< =4MB. The max buffer we use in Client (ElectronX client). TODO: Make this tune-able and configurable!
+                      kMaxTxHex = 2*1024*1024, ///< >1MB raw tx max (over 1 MiB, 1 traditional PoT MB should be enough).
                       kMaxErrorCount = 10; ///< The maximum number of errors we tolerate from a Client before disconnecting them.
+
+        // types in a Message.params object that we accept as booleans
+        const std::set<QVariant::Type> acceptableBoolVariantTypes = {
+            QVariant::Type::Bool, QVariant::Type::Int, QVariant::Type::UInt, QVariant::Type::LongLong,
+            QVariant::Type::ULongLong, QVariant::Type::Double,
+        };
+
     }
     using namespace Constants;
+
+    std::pair<bool, bool> parseBoolSemiLooselyButNotTooLoosely(const QVariant &v) {
+        std::pair<bool, bool> ret{false, false};
+        if (acceptableBoolVariantTypes.count(v.type()))
+            ret = {v.toBool(), true};
+        return ret;
+    }
 }
 
 Server::Server(const QHostAddress &a, quint16 p, std::shared_ptr<Storage> s)
@@ -544,8 +558,8 @@ void Server::rpc_blockchain_relayfee(Client *c, const RPC::Message &m)
 void Server::rpc_blockchain_scripthash_get_balance(Client *c, const RPC::Message &m)
 {
     if (QVariantList l = m.paramsList(); m.isRequest() && l.size() == 1) {
-        const QByteArray sh = QByteArray::fromHex(l.front().toString().trimmed().left(kScriptHashLength*2).toUtf8());
-        if (sh.length() != kScriptHashLength) {
+        const QByteArray sh = QByteArray::fromHex(l.front().toString().trimmed().left(HashLen*2).toUtf8());
+        if (sh.length() != HashLen) {
             emit c->sendError(false, RPC::Code_App_BadRequest, "Invalid scripthash", m.id);
             return;
         }
@@ -567,8 +581,8 @@ void Server::rpc_blockchain_scripthash_get_balance(Client *c, const RPC::Message
 void Server::rpc_blockchain_scripthash_get_history(Client *c, const RPC::Message &m)
 {
     if (QVariantList l = m.paramsList(); m.isRequest() && l.size() == 1) {
-        const QByteArray sh = QByteArray::fromHex(l.front().toString().trimmed().left(kScriptHashLength*2).toUtf8());
-        if (sh.length() != kScriptHashLength) {
+        const QByteArray sh = QByteArray::fromHex(l.front().toString().trimmed().left(HashLen*2).toUtf8());
+        if (sh.length() != HashLen) {
             emit c->sendError(false, RPC::Code_App_BadRequest, "Invalid scripthash", m.id);
             return;
         }
@@ -578,6 +592,7 @@ void Server::rpc_blockchain_scripthash_get_history(Client *c, const RPC::Message
             resp.push_back(QVariantMap{
                 { "tx_hash" , Util::ToHexFast(item.hash) },
                 { "height", item.height },
+                // mempool tx's here would also have "fee"!  (basically the contents of get_mempool concatenated) <--- TODO
             });
         }
         emit c->sendResult(m.id, m.method, resp);
@@ -587,27 +602,218 @@ void Server::rpc_blockchain_scripthash_get_history(Client *c, const RPC::Message
         Error() << "Bad client get_balance message! This shouldn't happen. FIXME! Json: " << m.toJsonString();
     }
 }
+void Server::rpc_blockchain_scripthash_get_mempool(Client *c, const RPC::Message &m)
+{
+    if (QVariantList l = m.paramsList(); m.isRequest() && l.size() == 1) {
+        const QByteArray sh = QByteArray::fromHex(l.front().toString().trimmed().left(HashLen*2).toUtf8());
+        if (sh.length() != HashLen) {
+            emit c->sendError(false, RPC::Code_App_BadRequest, "Invalid scripthash", m.id);
+            return;
+        }
+        // NOT YET IMPLEMENTED. TODO: Implement!
+        emit c->sendError(false, RPC::Code_InternalError, "not yet implemented", m.id);
+        /* Not yet implemented.. this is what the possible implementation would look like
+        QVariantList resp;
+        const auto items = storage->getMempool(sh); // these are already sorted
+        for (const auto & item : items) {
+            resp.push_back(QVariantMap{
+                { "tx_hash" , Util::ToHexFast(item.hash) },
+                { "height", item.height },  // should be 0 for "no unconfirmed parent", -1 for "has unconfirmed parent"
+                { "fee", item.fee }, // fee (int64) in satoshis
+            });
+        }
+        emit c->sendResult(m.id, m.method, resp);
+        */
+    } else {
+        // TODO: remove this soon as this should never be reached. It is just here to detect bugs in our own RPC code
+        emit c->sendError(false, RPC::Code_InternalError, "internal error", m.id);
+        Error() << "Bad client get_mempool message! This shouldn't happen. FIXME! Json: " << m.toJsonString();
+    }
+}
+void Server::rpc_blockchain_scripthash_listunspent(Client *c, const RPC::Message &m)
+{
+    if (QVariantList l = m.paramsList(); m.isRequest() && l.size() == 1) {
+        const QByteArray sh = QByteArray::fromHex(l.front().toString().trimmed().left(HashLen*2).toUtf8());
+        if (sh.length() != HashLen) {
+            emit c->sendError(false, RPC::Code_App_BadRequest, "Invalid scripthash", m.id);
+            return;
+        }
+        QVariantList resp;
+        const auto items = storage->listUnspent(sh); // these are already sorted
+        for (const auto & item : items) {
+            resp.push_back(QVariantMap{
+                { "tx_hash" , Util::ToHexFast(item.hash) },
+                { "tx_pos"  , item.tx_pos },
+                { "height", item.height },  // confirmed height. TODO: should be 0 for mempool regardless of unconf. parent status. Note this differs from get_mempool or get_history
+                { "value", qlonglong(item.value / item.value.satoshi()) }, // amount (int64) in satoshis
+            });
+        }
+        emit c->sendResult(m.id, m.method, resp);
+    } else {
+        // TODO: remove this soon as this should never be reached. It is just here to detect bugs in our own RPC code
+        emit c->sendError(false, RPC::Code_InternalError, "internal error", m.id);
+        Error() << "Bad client listunspent message! This shouldn't happen. FIXME! Json: " << m.toJsonString();
+    }
+}
 void Server::rpc_blockchain_scripthash_subscribe(Client *c, const RPC::Message &m)
 {
     if (QVariantList l = m.paramsList(); m.isRequest() && l.size() == 1) {
-        // TESTING TODO FIXME THIS IS FOR TESTING ONLY
-        const auto clientId = c->id;
-        QByteArray sh = QByteArray::fromHex(l.front().toString().trimmed().left(kScriptHashLength*2).toUtf8());
-        if (sh.length() != kScriptHashLength) {
-            emit c->sendError(false, RPC::Code_InvalidParams, "Invalid scripthash", m.id);
-            return;
+        constexpr bool testTimer = false;
+        if constexpr (!testTimer) {
+            emit c->sendError(false, RPC::Code_InternalError, "not yet implemented", m.id);
+        } else {
+            // TESTING TODO FIXME THIS IS FOR TESTING ONLY
+            const auto clientId = c->id;
+            QByteArray sh = QByteArray::fromHex(l.front().toString().trimmed().left(HashLen*2).toUtf8());
+            if (sh.length() != HashLen) {
+                emit c->sendError(false, RPC::Code_InvalidParams, "Invalid scripthash", m.id);
+                return;
+            }
+            emit tellClientScriptHashStatus(clientId, m.id, QByteArray(HashLen, 0));
+            QTimer *t = new QTimer(c);
+            connect(t, &QTimer::timeout, this, [sh, clientId, this] {
+                auto val = QRandomGenerator::global()->generate64();
+                emit tellClientScriptHashStatus(clientId, RPC::Message::Id(), QByteArray(reinterpret_cast<char *>(&val), sizeof(val)), sh);
+            });
+            t->setSingleShot(false); t->start(3000);
         }
-        emit tellClientScriptHashStatus(clientId, m.id, QByteArray(kScriptHashLength, 0));
-        QTimer *t = new QTimer(c);
-        connect(t, &QTimer::timeout, this, [sh, clientId, this] {
-            auto val = QRandomGenerator::global()->generate64();
-            emit tellClientScriptHashStatus(clientId, RPC::Message::Id(), QByteArray(reinterpret_cast<char *>(&val), sizeof(val)), sh);
-        });
-        t->setSingleShot(false); t->start(3000);
     } else {
         // TODO: remove this soon as this should never be reached. It is just here to detect bugs in our own RPC code
         emit c->sendError(false, RPC::Code_InternalError, "internal error", m.id);
         Error() << "Bad subscribe message! This shouldn't happen. FIXME! Json: " << m.toJsonString();
+    }
+}
+void Server::rpc_blockchain_scripthash_unsubscribe(Client *c, const RPC::Message &m)
+{
+    if (QVariantList l = m.paramsList(); m.isRequest() && l.size() == 1) {
+        // this isn't really implemented. this is a stub.
+        QByteArray sh = QByteArray::fromHex(l.front().toString().trimmed().left(HashLen*2).toUtf8());
+        if (sh.length() != HashLen) {
+            emit c->sendError(false, RPC::Code_InvalidParams, "Invalid scripthash", m.id);
+            return;
+        }
+        emit c->sendResult(m.id, m.method, QVariant(true)); // dummy response. in future returns true if unsub'd (was sub'd), false otherwise.
+    } else {
+        // TODO: remove this soon as this should never be reached. It is just here to detect bugs in our own RPC code
+        emit c->sendError(false, RPC::Code_InternalError, "internal error", m.id);
+        Error() << "Bad unsubscribe message! This shouldn't happen. FIXME! Json: " << m.toJsonString();
+    }
+}
+void Server::rpc_blockchain_transaction_broadcast(Client *c, const RPC::Message &m)
+{
+    if (QVariantList l = m.paramsList(); m.isRequest() && l.size() == 1) {
+        // this isn't really implemented. this is a stub.
+        QByteArray rawtxhex = l.front().toString().left(kMaxTxHex).toUtf8(); // limit raw hex to sane length.
+        // no need to validate hex here -- bitcoind does validation for us.
+        // TODO:.. implement this properly.... send to BitcoinD, wait for result, etc.
+        emit c->sendError(false, RPC::Code_InternalError, "not yet implemented", m.id);
+    } else {
+        // TODO: remove this soon as this should never be reached. It is just here to detect bugs in our own RPC code
+        emit c->sendError(false, RPC::Code_InternalError, "internal error", m.id);
+        Error() << "Bad broadcast message! This shouldn't happen. FIXME! Json: " << m.toJsonString();
+    }
+}
+void Server::rpc_blockchain_transaction_get(Client *c, const RPC::Message &m)
+{
+    if (QVariantList l = m.paramsList(); m.isRequest() && l.size() >= 1 && l.size() <= 2) {
+        // this isn't really implemented. this is a stub
+        QByteArray txHash = QByteArray::fromHex(l.front().toString().trimmed().left(HashLen*2).toUtf8());
+        if (txHash.length() != HashLen) {
+            emit c->sendError(false, RPC::Code_App_BadRequest, "Invalid tx hash", m.id);
+            return;
+        }
+        bool verbose = false;
+        if (l.size() == 2) {
+            const auto [verbArg, verbArgOk] = parseBoolSemiLooselyButNotTooLoosely( l.back() );
+            if (!verbArgOk) {
+                emit c->sendError(false, RPC::Code_App_BadRequest, "Invalid verbose argument; expected boolean", m.id);
+                return;
+            }
+            verbose = verbArg;
+        }
+        // TODO:.. implement this properly.... send to BitcoinD, wait for result, etc.
+        emit c->sendError(false, RPC::Code_InternalError, "not yet implemented", m.id);
+    } else {
+        // TODO: remove this soon as this should never be reached. It is just here to detect bugs in our own RPC code
+        emit c->sendError(false, RPC::Code_InternalError, "internal error", m.id);
+        Error() << "Bad transaction.get message! This shouldn't happen. FIXME! Json: " << m.toJsonString();
+    }
+}
+void Server::rpc_blockchain_transaction_get_merkle(Client *c, const RPC::Message &m)
+{
+    if (QVariantList l = m.paramsList(); m.isRequest() && l.size() == 2) {
+        // this isn't really implemented. this is a stub
+        QByteArray txHash = QByteArray::fromHex(l.front().toString().trimmed().left(HashLen*2).toUtf8());
+        if (txHash.length() != HashLen) {
+            emit c->sendError(false, RPC::Code_App_BadRequest, "Invalid tx hash", m.id);
+            return;
+        }
+        bool ok = false;
+        [[maybe_unused]] unsigned height = l.back().toUInt(&ok);
+        if (!ok) {
+            emit c->sendError(false, RPC::Code_App_BadRequest, "Invalid height argument; expected numeric value", m.id);
+            return;
+        }
+        // TODO:.. implement this properly....
+        emit c->sendError(false, RPC::Code_InternalError, "not yet implemented", m.id);
+    } else {
+        // TODO: remove this soon as this should never be reached. It is just here to detect bugs in our own RPC code
+        emit c->sendError(false, RPC::Code_InternalError, "internal error", m.id);
+        Error() << "Bad get_merkle message! This shouldn't happen. FIXME! Json: " << m.toJsonString();
+    }
+}
+void Server::rpc_blockchain_transaction_id_from_pos(Client *c, const RPC::Message &m)
+{
+    if (QVariantList l = m.paramsList(); m.isRequest() && l.size() >= 2 && l.size() <= 3) {
+        // this is partialluy implemented for merkle=false TODO: fully implement
+        bool ok = false;
+        unsigned height = l.front().toUInt(&ok); // arg0
+        if (!ok) {
+            emit c->sendError(false, RPC::Code_App_BadRequest, "Invalid height argument; expected numeric value", m.id);
+            return;
+        }
+        unsigned pos = l.at(1).toUInt(&ok); // arg1
+        if (!ok) {
+            emit c->sendError(false, RPC::Code_App_BadRequest, "Invalid tx_pos argument; expected numeric value", m.id);
+            return;
+        }
+        bool merkle = false;
+        if (l.size() == 3) { //optional arg2
+            const auto [arg, argOk] = parseBoolSemiLooselyButNotTooLoosely( l.back() );
+            if (!argOk) {
+                emit c->sendError(false, RPC::Code_App_BadRequest, "Invalid merkle argument; expected boolean", m.id);
+                return;
+            }
+            merkle = arg;
+        }
+        if (merkle) {
+            // TODO:.. implement this properly for merkle=true ....
+            emit c->sendError(false, RPC::Code_InternalError, "not yet implemented", m.id);
+            return;
+        }
+        const auto opt = storage->hashForHeightAndPos(height, pos);
+        if (!opt.has_value() || opt.value().length() != HashLen) {
+            emit c->sendError(false, RPC::Code_App_BadRequest, QString("no tx for height %1 at position %2").arg(height).arg(pos), m.id);
+            return;
+        }
+        const auto txHashHex = Util::ToHexFast(opt.value());
+        // merkle=false is just the txHash. Merkle=true would be a dict, see: https://electrumx.readthedocs.io/en/latest/protocol-methods.html#blockchain-transaction-id-from-pos
+        emit c->sendResult(m.id, m.method, txHashHex);
+    } else {
+        // TODO: remove this soon as this should never be reached. It is just here to detect bugs in our own RPC code
+        emit c->sendError(false, RPC::Code_InternalError, "internal error", m.id);
+        Error() << "Bad id_from_pos message! This shouldn't happen. FIXME! Json: " << m.toJsonString();
+    }
+}
+void Server::rpc_mempool_get_fee_histogram(Client *c, const RPC::Message &m)
+{
+    if (QVariantList l = m.paramsList(); m.isRequest() && l.size() == 0) {
+        // this is a stub
+        emit c->sendResult(m.id, m.method, QVariantList());
+    } else {
+        // TODO: remove this soon as this should never be reached. It is just here to detect bugs in our own RPC code
+        emit c->sendError(false, RPC::Code_InternalError, "internal error", m.id);
+        Error() << "Bad get_fee_histogram message! This shouldn't happen. FIXME! Json: " << m.toJsonString();
     }
 }
 // --- Server::StaticData Definitions ---
@@ -620,14 +826,26 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
     { {"rpc.name",                allow_requests, allow_notifications, PosParamRange, (QSet<QString> note: {} means undefined optional)}, &method_to_call }     */
     { {"server.ping",                       true,               false,    PR{0,0},      RPC::KeySet{} },          &Server::rpc_server_ping },
     { {"server.version",                    true,               false,    PR{2,2},                    },          &Server::rpc_server_version },
+
     { {"blockchain.block.header",           true,               false,    PR{1,2},                    },          &Server::rpc_blockchain_block_header },
     { {"blockchain.block.headers",          true,               false,    PR{2,3},                    },          &Server::rpc_blockchain_block_headers },
     { {"blockchain.estimatefee",            true,               false,    PR{1,1},                    },          &Server::rpc_blockchain_estimatefee },
     { {"blockchain.headers.subscribe",      true,               false,    PR{0,0},                    },          &Server::rpc_blockchain_headers_subscribe },
     { {"blockchain.relayfee",               true,               false,    PR{0,0},                    },          &Server::rpc_blockchain_relayfee },
+
     { {"blockchain.scripthash.get_balance", true,               false,    PR{1,1},                    },          &Server::rpc_blockchain_scripthash_get_balance },
     { {"blockchain.scripthash.get_history", true,               false,    PR{1,1},                    },          &Server::rpc_blockchain_scripthash_get_history },
+    { {"blockchain.scripthash.get_mempool", true,               false,    PR{1,1},                    },          &Server::rpc_blockchain_scripthash_get_mempool },
+    { {"blockchain.scripthash.listunspent", true,               false,    PR{1,1},                    },          &Server::rpc_blockchain_scripthash_listunspent },
     { {"blockchain.scripthash.subscribe",   true,               false,    PR{1,1},                    },          &Server::rpc_blockchain_scripthash_subscribe },
+    { {"blockchain.scripthash.unsubscribe", true,               false,    PR{1,1},                    },          &Server::rpc_blockchain_scripthash_unsubscribe },
+
+    { {"blockchain.transaction.broadcast",  true,               false,    PR{1,1},                    },          &Server::rpc_blockchain_transaction_broadcast },
+    { {"blockchain.transaction.get",        true,               false,    PR{1,2},                    },          &Server::rpc_blockchain_transaction_get },
+    { {"blockchain.transaction.get_merkle", true,               false,    PR{2,2},                    },          &Server::rpc_blockchain_transaction_get_merkle },
+    { {"blockchain.transaction.id_from_pos",true,               false,    PR{2,3},                    },          &Server::rpc_blockchain_transaction_id_from_pos },
+
+    { {"mempool.get_fee_histogram",         true,               false,    PR{0,0},                    },          &Server::rpc_mempool_get_fee_histogram },
 };
 #undef PR
 #undef HEY_COMPILER_PUT_STATIC_HERE

@@ -115,11 +115,15 @@ public:
     /// returns the "next" TxNum (thread safe)
     TxNum getTxNum() const;
 
-    /// Helper for TxNum. Resolve a 64-bit TxNum to a TxHash -- this may throw a DatabaseError if throwIfMissing=true (thread safe)
+    /// Helper for TxNum. Resolve a 64-bit TxNum to a TxHash -- this may throw a DatabaseError if throwIfMissing=true (thread safe, takes no class-level locks)
     std::optional<TxHash> hashForTxNum(TxNum, bool throwIfMissng = false, bool *wasCached = nullptr, bool skipCache = false) const;
     /// Given a TxNum, returns the block height for the TxNum's block (if it exists).
-    /// Used to resolve scripthash_history -> block height for get_history. (thread safe)
+    /// Used to resolve scripthash_history -> block height for get_history. (thread safe, takes blkInfo lock)
     std::optional<unsigned> heightForTxNum(TxNum) const;
+    /// Given a block height and a position in the block (txIdx), return a TxHash.  Never throws. Returns !has_value if
+    /// height/posInBlock pair is not found (or in very unlikely cases, if there was an underlying low-level error).
+    /// Thread safe, takes class-level locks.
+    std::optional<TxHash> hashForHeightAndPos(BlockHeight height, unsigned posInBlock) const;
 
     /// Returns the known size of the utxo set (for now this is a signed value -- to debug underflow errors)
     int64_t utxoSetSize() const;
