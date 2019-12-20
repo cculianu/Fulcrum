@@ -581,7 +581,7 @@ auto Storage::stats() const -> Stats
     ret["merge calls"] = c ? c->merges.load() : QVariant();
     QVariantMap caches;
     {
-        const auto sz = p->lruNum2Hash.size(), bytes = sz * ( sizeof(TxNum) + sizeof(decltype(p->lruNum2Hash)::node_type) + HashLen );
+        const auto sz = p->lruNum2Hash.size(), bytes = sz * ( sizeof(TxNum) + sizeof(decltype(p->lruNum2Hash)::node_type) + HashLen + 1);
         caches["lruNum2Hash_Size"] = qlonglong(sz);
         caches["lruNum2Hash_SizeBytes"] = qlonglong(bytes);
     }
@@ -591,7 +591,7 @@ auto Storage::stats() const -> Stats
             nHashes += it.value.size();
             ++sz;
         });
-        const auto bytes = sz * (sizeof(BlockHeight) + sizeof(decltype(p->lruHeight2Hashes_BitcoindMemOrder)::node_type)) + nHashes*HashLen;
+        const auto bytes = sz * (sizeof(BlockHeight) + sizeof(decltype(p->lruHeight2Hashes_BitcoindMemOrder)::node_type)) + nHashes*(sizeof(TxHash)+HashLen+1);
         caches["lruHeight2Hash_Size"] = qlonglong(sz);
         caches["lruHeight2Hash_nHashes"] = qlonglong(nHashes);
         caches["lruHeight2Hash_SizeBytes"] = qlonglong(bytes);
