@@ -284,6 +284,10 @@ namespace Util {
     template <typename Container>
     void reverseEachItem(Container &c) { for (auto & item : c) std::reverse(item.begin(), item.end()); }
 
+    /// Copy constructs t, and returns a reversed version of it. T must have a bidirecitonal iterator for .begin() & .end().
+    template <typename T>
+    T reversedCopy(const T &t) { T ret(t); std::reverse(ret.begin(), ret.end()); return ret; }
+
     namespace Json {
         /// Generic Json error (usually if expectMap is violated)
         struct Error : public Exception { using Exception::Exception; };

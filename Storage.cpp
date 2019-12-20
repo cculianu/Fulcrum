@@ -472,9 +472,10 @@ struct Storage::Pvt
     static constexpr size_t nCacheMax = 1000000, nCacheElasticity = 250000;
     LRU::Cache<true, TxNum, TxHash> lruNum2Hash{nCacheMax, nCacheElasticity};
 
-    /// Cache BlockHeight -> vector of txHashes for the block. This gets cleared by undoLatestBlock.
-    /// This is used by the txHashesForBlock function only. (which is used by get_merkle and id_from_pos in protocol)
-    LRU::Cache<true, BlockHeight, std::vector<TxHash>> lruHeight2Hashes { 500, 150 };
+    /// Cache BlockHeight -> vector of txHashes for the block (in bitcoind memory order). This gets cleared by
+    /// undoLatestBlock.  This is used by the txHashesForBlock function only (which is used by get_merkle and
+    /// id_from_pos in the protocol).
+    LRU::Cache<true, BlockHeight, std::vector<TxHash>> lruHeight2Hashes_BitcoindMemOrder { 500, 150 };
 };
 
 Storage::Storage(const std::shared_ptr<Options> & options)
@@ -1292,7 +1293,7 @@ BlockHeight Storage::undoLatestBlock()
         // clear num2hash cache
         p->lruNum2Hash.clear();
         // remove block from txHashes cache
-        p->lruHeight2Hashes.remove(undo.height);
+        p->lruHeight2Hashes_BitcoindMemOrder.remove(undo.height);
 
         const auto txNum0 = undo.blkInfo.txNum0;
 
@@ -1427,14 +1428,15 @@ std::optional<TxHash> Storage::hashForHeightAndPos(BlockHeight height, unsigned 
     return ret;
 }
 
-std::vector<TxHash> Storage::txHashesForBlock(BlockHeight height) const
+// NOTE: the returned vector has hashes in bitcoind memory order (unlike every other function in this file!)
+std::vector<TxHash> Storage::txHashesForBlockInBitcoindMemoryOrder(BlockHeight height) const
 {
     std::vector<TxHash> ret;
     std::pair<TxNum, size_t> startCount{0,0};
     SharedLockGuard(p->blocksLock); // guarantee a consistent view (so that data doesn't mutate from underneath us)
     {
         // check cache
-        auto opt = p->lruHeight2Hashes.tryGet(height);
+        auto opt = p->lruHeight2Hashes_BitcoindMemOrder.tryGet(height);
         if (opt.has_value()) {
             // cache hit! return the cached item
             ret.swap(opt.value());
@@ -1454,10 +1456,11 @@ std::vector<TxHash> Storage::txHashesForBlock(BlockHeight height) const
         Warning() << "Failed to read " << startCount.second << " txNums for height " << height << ". " << err;
         return ret;
     }
+    Util::reverseEachItem(vec); // reverse each hash to make them all be in bitcoind memory order.
     ret.swap(vec);
     {
         // put result in cache
-        p->lruHeight2Hashes.insert(height, ret);
+        p->lruHeight2Hashes_BitcoindMemOrder.insert(height, ret);
     }
     return ret;
 }

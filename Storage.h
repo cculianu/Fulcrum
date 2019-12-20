@@ -125,10 +125,17 @@ public:
     /// Thread safe, takes class-level locks.
     std::optional<TxHash> hashForHeightAndPos(BlockHeight height, unsigned posInBlock) const;
 
-    /// Given a block height, return all of the TxHashes in a block.  Never throws. Returns an empty vector if
-    /// height is not found (or in very unlikely cases, if there was an underlying low-level error).
+    /// Given a block height, return all of the TxHashes in a block, in bitcoind memory order.
+    ///
+    /// NOTE: Unlike all of the other functions in this class, the returned hashes are in bitcoind memory order
+    /// (rather than reversed hex-encode-ready memory order as we use everywhere else).  This is because this function
+    /// is designed to be used with the "Merkle" set of functions directly.  It internally caches its results as well.
+    ///
+    /// Never throws. Returns an empty vector if height is not found (or in very unlikely cases, if there was an
+    /// underlying low-level error).
+    ///
     /// Thread safe, takes class-level locks.
-    std::vector<TxHash> txHashesForBlock(BlockHeight height) const;
+    std::vector<TxHash> txHashesForBlockInBitcoindMemoryOrder(BlockHeight height) const;
 
     /// Returns the known size of the utxo set (for now this is a signed value -- to debug underflow errors)
     int64_t utxoSetSize() const;

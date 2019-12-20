@@ -813,12 +813,12 @@ void Server::rpc_blockchain_transaction_get(Client *c, const RPC::Message &m)
 }
 
 namespace {
-    /// Note: no bounds checking is done. pos must be within the txHashes array!  txHashes is mutated in-place to turn
-    /// into bitcoind memory order!  Used by the below two _id_from_pos and _get_merkle rpc methods.
-    QVariantList getMerkleForTxHashes(std::vector<QByteArray> & txHashes, unsigned pos) {
+    /// Note: no bounds checking is done. pos must be within the txHashes array!
+    /// Input txHashes should be in bitcoind memory order.
+    /// Output is a QVariantList already reversed and hex encoded, suitable for putting into the results map as 'merkle'.
+    /// Used by the below two _id_from_pos and _get_merkle rpc methods.
+    QVariantList getMerkleForTxHashes(const std::vector<QByteArray> & txHashes, unsigned pos) {
         QVariantList branchList;
-        // the hashes are stored in hex-encode-ready memory order. Make sure to reverse them first to bitcoind memory order.
-        Util::reverseEachItem(txHashes);
 
         // next, compute the branch and root for the tx hashes which are now in bitcoind memory order
         auto pair = Merkle::branchAndRoot(txHashes, pos);
@@ -851,7 +851,8 @@ void Server::rpc_blockchain_transaction_get_merkle(Client *c, const RPC::Message
             return;
         }
 
-        auto txHashes = storage->txHashesForBlock(height);
+        auto txHashes = storage->txHashesForBlockInBitcoindMemoryOrder(height);
+        std::reverse(txHash.begin(), txHash.end()); // we need to compare to bitcoind memory order so reverse specified hash
         constexpr unsigned NO_POS = ~0U;
         unsigned pos = NO_POS;
         for (unsigned i = 0; i < txHashes.size(); ++i) {
@@ -912,14 +913,15 @@ void Server::rpc_blockchain_transaction_id_from_pos(Client *c, const RPC::Messag
             // merkle=true is a dict, see: https://electrumx.readthedocs.io/en/latest/protocol-methods.html#blockchain-transaction-id-from-pos
 
             // get all hashes for the block (we need them for merkle)
-            auto txHashes = storage->txHashesForBlock(height);
+            auto txHashes = storage->txHashesForBlockInBitcoindMemoryOrder(height);
             if (pos >= txHashes.size()) {
                 // out of range, or block not found
                 emit c->sendError(false, RPC::Code_App_BadRequest, missingErr.arg(pos).arg(height), m.id);
                 return;
             }
             // save the requested tx_hash now, which we will return as tx_hash of the response dictionary
-            const QByteArray txHashHex = Util::ToHexFast(txHashes[pos]);
+            // (we need to reverse it for outputting to hex since we received it in bitcoind internal memory order).
+            const QByteArray txHashHex = Util::ToHexFast(Util::reversedCopy(txHashes[pos]));
 
             const auto branchList = getMerkleForTxHashes(txHashes, pos);
 
