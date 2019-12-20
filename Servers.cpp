@@ -862,7 +862,7 @@ void Server::rpc_blockchain_transaction_get_merkle(Client *c, const RPC::Message
         }
         if (pos == NO_POS) {
             emit c->sendError(false, RPC::Code_App_BadRequest,
-                              QString("No transaction matching the requested tx_hash found at height %1").arg(height),
+                              QString("No transaction matching the requested hash found at height %1").arg(height),
                               m.id);
             return;
         }
@@ -907,7 +907,7 @@ void Server::rpc_blockchain_transaction_id_from_pos(Client *c, const RPC::Messag
             }
             merkle = arg;
         }
-        static const QString missingErr("no tx for height %1 at position %2");
+        static const QString missingErr("No transaction at position %1 for height %2");
         if (merkle) {
             // merkle=true is a dict, see: https://electrumx.readthedocs.io/en/latest/protocol-methods.html#blockchain-transaction-id-from-pos
 
@@ -915,7 +915,7 @@ void Server::rpc_blockchain_transaction_id_from_pos(Client *c, const RPC::Messag
             auto txHashes = storage->txHashesForBlock(height);
             if (pos >= txHashes.size()) {
                 // out of range, or block not found
-                emit c->sendError(false, RPC::Code_App_BadRequest, missingErr.arg(height).arg(pos), m.id);
+                emit c->sendError(false, RPC::Code_App_BadRequest, missingErr.arg(pos).arg(height), m.id);
                 return;
             }
             // save the requested tx_hash now, which we will return as tx_hash of the response dictionary
@@ -934,7 +934,7 @@ void Server::rpc_blockchain_transaction_id_from_pos(Client *c, const RPC::Messag
             // 1merkle, just return the tx_hash
             const auto opt = storage->hashForHeightAndPos(height, pos);
             if (!opt.has_value() || opt.value().length() != HashLen) {
-                emit c->sendError(false, RPC::Code_App_BadRequest, missingErr.arg(height).arg(pos), m.id);
+                emit c->sendError(false, RPC::Code_App_BadRequest, missingErr.arg(pos).arg(height), m.id);
                 return;
             }
             const auto txHashHex = Util::ToHexFast(opt.value());
