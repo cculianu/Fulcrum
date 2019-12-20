@@ -121,23 +121,24 @@ win32 {
 
 SOURCES += \
     AbstractConnection.cpp \
+    App.cpp \
     BTC.cpp \
     BitcoinD.cpp \
     BlockProc.cpp \
+    Common.cpp \
     Controller.cpp \
-    Mgr.cpp \
+    Logger.cpp \
+    main.cpp \
+    Merkle.cpp \
     Mixins.cpp \
+    Mgr.cpp \
     Options.cpp \
     RecordFile.cpp \
     RPC.cpp \
     Servers.cpp \
     SrvMgr.cpp \
     Storage.cpp \
-    main.cpp \
-    App.cpp \
-    Logger.cpp \
     Util.cpp \
-    Common.cpp \
     register_MetaTypes.cpp
 
 HEADERS += \
@@ -151,6 +152,7 @@ HEADERS += \
     Controller.h \
     Logger.h \
     LRUCache.h \
+    Merkle.h \
     Mgr.h \
     Mixins.h \
     Options.h \

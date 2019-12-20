@@ -10,6 +10,7 @@
 #include <chrono>
 #include <functional>
 #include <future>
+#include <list>
 #include <optional>
 #include <random>
 #include <set>
@@ -17,6 +18,7 @@
 #include <tuple>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 #define Q2C(qstr) ((qstr).toUtf8().constData())
 
@@ -269,6 +271,13 @@ namespace Util {
         inner(map, ret);
         return ret;
     }
+
+    /// Convert an iterable container (normally a vector) into a list.
+    template <typename ItCont, typename List = std::list<typename ItCont::value_type>>
+    List toList(const ItCont &vec) { return List(vec.begin(), vec.end()); }
+    /// Convert an iterable container (normally a list) into a vector.
+    template <typename ItCont, typename Vec = std::vector<typename ItCont::value_type>>
+    Vec toVec(const ItCont &list) { return Vec(list.begin(), list.end()); }
 
     namespace Json {
         /// Generic Json error (usually if expectMap is violated)

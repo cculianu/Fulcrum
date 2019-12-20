@@ -924,7 +924,7 @@ namespace {
     inline QByteArray mkShunspentKey(const QByteArray & hashX, const CompactTXO &ctxo) {
         // we do it this way for performance:
         const int hxlen = hashX.length();
-        assert(hxLen == HashLen);
+        assert(hxlen == HashLen);
         QByteArray key(hxlen + int(ctxo.serSize()), Qt::Uninitialized);
         std::memcpy(key.data(), hashX.constData(), size_t(hxlen));
         ctxo.toBytesInPlace(key.data()+hxlen, ctxo.serSize());
