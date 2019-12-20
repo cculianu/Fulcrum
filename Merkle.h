@@ -21,6 +21,8 @@ namespace Merkle
     using HashVec = std::vector<Hash>;
     using BranchAndRootPair = std::pair<HashVec, Hash>;
 
+    constexpr unsigned MaxDepth = 24; ///< the maximum depth of the merkle tree, which would be a tree of 16.7 million items.
+
     /// return the length of a merkle branch given a hash count (which must be >= 1!)
     constexpr unsigned branchLength(unsigned count) {
         return count < 1 ? 0 : unsigned(std::ceil(std::log2(count)));

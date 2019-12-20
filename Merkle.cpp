@@ -25,8 +25,8 @@ namespace Merkle {
         HashVec hashes;
         hashes.reserve(hvsz+1);
 
-        // copy all hashes to our working vector, which mutates as we iterate below
-        for (const auto & h : hashVec) hashes.emplace_back(h);
+        // Copy all hashVec to our working vector, to start. This vector mutates as we iterate below.
+        hashes.insert(hashes.end(), hashVec.begin(), hashVec.end());
 
         for (unsigned i = 0; i < length; ++i) {
             if (hashes.size() & 0x1) // is odd, add the end twice
@@ -73,8 +73,8 @@ namespace Merkle {
     HashVec level(const HashVec &hashes, unsigned depthHigher)
     {
         HashVec ret;
-        if (depthHigher >= 32) {
-            Error() << __PRETTY_FUNCTION__ << ": INTERNAL ERROR. depthHigher is too large " << depthHigher << " >= 32. FIXME!";
+        if (depthHigher > MaxDepth) {
+            Error() << __PRETTY_FUNCTION__ << ": INTERNAL ERROR. depthHigher is too large " << depthHigher << " > " << MaxDepth << ". FIXME!";
             return ret;
         }
         if (hashes.empty()) {
@@ -87,8 +87,7 @@ namespace Merkle {
         for (unsigned i = 0; i < hsz; i += size) {
             const auto endIndex = std::min(i+size, hsz); // ensure we don't go past end of array
             ret.emplace_back(
-                root(HashVec(hashes.begin()+i, hashes.begin()+endIndex), depthHigher)
-            );
+                root(HashVec(hashes.begin()+i, hashes.begin()+endIndex), depthHigher) );
         }
         return ret;
     }
@@ -96,7 +95,7 @@ namespace Merkle {
     BranchAndRootPair branchAndRootFromLevel(const HashVec & level, const HashVec & leafHashes, unsigned index, unsigned depthHigher)
     {
         BranchAndRootPair ret;
-        if (level.empty() || leafHashes.empty() || depthHigher >= 32) {
+        if (level.empty() || leafHashes.empty() || depthHigher > MaxDepth) {
             Error() << __PRETTY_FUNCTION__ << ": Invalid args";
             return ret;
         }

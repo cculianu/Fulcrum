@@ -471,6 +471,10 @@ struct Storage::Pvt
     /// wish to make it larger.
     static constexpr size_t nCacheMax = 1000000, nCacheElasticity = 250000;
     LRU::Cache<true, TxNum, TxHash> lruNum2Hash{nCacheMax, nCacheElasticity};
+
+    /// Cache BlockHeight -> vector of txHashes for the block. This gets cleared by undoLatestBlock.
+    /// This is used by the txHashesForBlock function only. (which is used by get_merkle and id_from_pos in protocol)
+    LRU::Cache<true, BlockHeight, std::vector<TxHash>> lruHeight2Hashes { 500, 150 };
 };
 
 Storage::Storage(const std::shared_ptr<Options> & options)
@@ -1287,6 +1291,8 @@ BlockHeight Storage::undoLatestBlock()
         GenericDBDelete(p->db.blkinfo.get(), uint32_t(undo.height), "Failed to delete blkInfo in undoLatestBlock");
         // clear num2hash cache
         p->lruNum2Hash.clear();
+        // remove block from txHashes cache
+        p->lruHeight2Hashes.remove(undo.height);
 
         const auto txNum0 = undo.blkInfo.txNum0;
 
@@ -1418,6 +1424,41 @@ std::optional<TxHash> Storage::hashForHeightAndPos(BlockHeight height, unsigned 
         txNum = bi.txNum0 + posInBlock;
     }
     ret = hashForTxNum(txNum);
+    return ret;
+}
+
+std::vector<TxHash> Storage::txHashesForBlock(BlockHeight height) const
+{
+    std::vector<TxHash> ret;
+    std::pair<TxNum, size_t> startCount{0,0};
+    SharedLockGuard(p->blocksLock); // guarantee a consistent view (so that data doesn't mutate from underneath us)
+    {
+        // check cache
+        auto opt = p->lruHeight2Hashes.tryGet(height);
+        if (opt.has_value()) {
+            // cache hit! return the cached item
+            ret.swap(opt.value());
+            return ret;
+        }
+    }
+    {
+        SharedLockGuard g(p->blkInfoLock);
+        if (height >= p->blkInfos.size())
+            return ret;
+        const BlkInfo & bi = p->blkInfos[height];
+        startCount = { bi.txNum0, bi.nTx };
+    }
+    QString err;
+    auto vec = p->txNumsFile->readRecords(startCount.first, startCount.second, &err);
+    if (vec.size() != startCount.second || !err.isEmpty()) {
+        Warning() << "Failed to read " << startCount.second << " txNums for height " << height << ". " << err;
+        return ret;
+    }
+    ret.swap(vec);
+    {
+        // put result in cache
+        p->lruHeight2Hashes.insert(height, ret);
+    }
     return ret;
 }
 

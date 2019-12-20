@@ -1,5 +1,7 @@
-#include "BitcoinD.h"
 #include "Servers.h"
+
+#include "BitcoinD.h"
+#include "Merkle.h"
 #include "Storage.h"
 
 #include <QByteArray>
@@ -809,10 +811,34 @@ void Server::rpc_blockchain_transaction_get(Client *c, const RPC::Message &m)
         Error() << "Bad transaction.get message! This shouldn't happen. FIXME! Json: " << m.toJsonString();
     }
 }
+
+namespace {
+    /// Note: no bounds checking is done. pos must be within the txHashes array!  txHashes is mutated in-place to turn
+    /// into bitcoind memory order!  Used by the below two _id_from_pos and _get_merkle rpc methods.
+    QVariantList getMerkleForTxHashes(std::vector<QByteArray> & txHashes, unsigned pos) {
+        QVariantList branchList;
+        // the hashes are stored in hex-encode-ready memory order. Make sure to reverse them first to bitcoind memory order.
+        Util::reverseEachItem(txHashes);
+
+        // next, compute the branch and root for the tx hashes which are now in bitcoind memory order
+        auto pair = Merkle::branchAndRoot(txHashes, pos);
+        auto & [branch, root] = pair;
+
+        // now, build our results for json as a QVariantList, reversing the memory back to hex memory order, and hex encoding it.
+        branchList.reserve(int(branch.size()));
+        for (auto & h : branch) {
+            // reverse each hash in place and then hex encode it, and pust it to branchList
+            std::reverse(h.begin(), h.end());
+            h = Util::ToHexFast(h);
+            branchList.push_back(h);
+        }
+        return branchList;
+    }
+}
+
 void Server::rpc_blockchain_transaction_get_merkle(Client *c, const RPC::Message &m)
 {
     if (QVariantList l = m.paramsList(); m.isRequest() && l.size() == 2) {
-        // this isn't really implemented. this is a stub
         QByteArray txHash = validateHashHex( l.front().toString() );
         if (txHash.length() != HashLen) {
             emit c->sendError(false, RPC::Code_App_BadRequest, "Invalid tx hash", m.id);
@@ -821,30 +847,61 @@ void Server::rpc_blockchain_transaction_get_merkle(Client *c, const RPC::Message
         bool ok = false;
         [[maybe_unused]] unsigned height = l.back().toUInt(&ok);
         if (!ok) {
-            emit c->sendError(false, RPC::Code_App_BadRequest, "Invalid height argument; expected numeric value", m.id);
+            emit c->sendError(false, RPC::Code_App_BadRequest, "Invalid height argument; expected non-negative numeric value", m.id);
             return;
         }
-        // TODO:.. implement this properly....
-        emit c->sendError(false, RPC::Code_InternalError, "not yet implemented", m.id);
+
+        auto txHashes = storage->txHashesForBlock(height);
+        constexpr unsigned NO_POS = ~0U;
+        unsigned pos = NO_POS;
+        for (unsigned i = 0; i < txHashes.size(); ++i) {
+            if (txHashes[i] == txHash) {
+                pos = i;
+                break;
+            }
+        }
+        if (pos == NO_POS) {
+            emit c->sendError(false, RPC::Code_App_BadRequest,
+                              QString("No transaction matching the requested tx_hash found at height %1").arg(height),
+                              m.id);
+            return;
+        }
+
+        const auto branchList = getMerkleForTxHashes(txHashes, pos);
+
+        if (branchList.isEmpty()) {
+            // this should never happen -- means there's a bug in the merkle code in Merkle.cpp. The log will contain some error info.
+            emit c->sendError(false, RPC::Code_InternalError, "internal error", m.id);
+            return;
+        }
+
+        QVariantMap resp = {
+            { "block_height" , height },
+            { "pos" , pos },
+            { "merkle" , branchList }
+        };
+
+        emit c->sendResult(m.id, m.method, resp);
+
     } else {
         // TODO: remove this soon as this should never be reached. It is just here to detect bugs in our own RPC code
         emit c->sendError(false, RPC::Code_InternalError, "internal error", m.id);
         Error() << "Bad get_merkle message! This shouldn't happen. FIXME! Json: " << m.toJsonString();
     }
 }
+
 void Server::rpc_blockchain_transaction_id_from_pos(Client *c, const RPC::Message &m)
 {
     if (QVariantList l = m.paramsList(); m.isRequest() && l.size() >= 2 && l.size() <= 3) {
-        // this is partialluy implemented for merkle=false TODO: fully implement
         bool ok = false;
         unsigned height = l.front().toUInt(&ok); // arg0
         if (!ok) {
-            emit c->sendError(false, RPC::Code_App_BadRequest, "Invalid height argument; expected numeric value", m.id);
+            emit c->sendError(false, RPC::Code_App_BadRequest, "Invalid height argument; expected non-negative numeric value", m.id);
             return;
         }
         unsigned pos = l.at(1).toUInt(&ok); // arg1
         if (!ok) {
-            emit c->sendError(false, RPC::Code_App_BadRequest, "Invalid tx_pos argument; expected numeric value", m.id);
+            emit c->sendError(false, RPC::Code_App_BadRequest, "Invalid tx_pos argument; expected non-negative numeric value", m.id);
             return;
         }
         bool merkle = false;
@@ -856,19 +913,45 @@ void Server::rpc_blockchain_transaction_id_from_pos(Client *c, const RPC::Messag
             }
             merkle = arg;
         }
+        static const QString missingErr("no tx for height %1 at position %2");
         if (merkle) {
-            // TODO:.. implement this properly for merkle=true ....
-            emit c->sendError(false, RPC::Code_InternalError, "not yet implemented", m.id);
+            // merkle=true is a dict, see: https://electrumx.readthedocs.io/en/latest/protocol-methods.html#blockchain-transaction-id-from-pos
+
+            // get all hashes for the block (we need them for merkle)
+            auto txHashes = storage->txHashesForBlock(height);
+            if (pos >= txHashes.size()) {
+                // out of range, or block not found
+                emit c->sendError(false, RPC::Code_App_BadRequest, missingErr.arg(height).arg(pos), m.id);
+                return;
+            }
+            // save the requested tx_hash now, which we will return as tx_hash of the response dictionary
+            const QByteArray txHashHex = Util::ToHexFast(txHashes[pos]);
+
+            const auto branchList = getMerkleForTxHashes(txHashes, pos);
+
+            if (branchList.isEmpty()) {
+                // this should never happen -- means there's a bug in the merkle code in Merkle.cpp. The log will contain some error info.
+                emit c->sendError(false, RPC::Code_InternalError, "internal error", m.id);
+                return;
+            }
+
+            QVariantMap res = {
+                { "tx_hash" , txHashHex },
+                { "merkle" , branchList },
+            };
+
+            emit c->sendResult(m.id, m.method, res);
             return;
+        } else {
+            // 1merkle, just return the tx_hash
+            const auto opt = storage->hashForHeightAndPos(height, pos);
+            if (!opt.has_value() || opt.value().length() != HashLen) {
+                emit c->sendError(false, RPC::Code_App_BadRequest, missingErr.arg(height).arg(pos), m.id);
+                return;
+            }
+            const auto txHashHex = Util::ToHexFast(opt.value());
+            emit c->sendResult(m.id, m.method, txHashHex);
         }
-        const auto opt = storage->hashForHeightAndPos(height, pos);
-        if (!opt.has_value() || opt.value().length() != HashLen) {
-            emit c->sendError(false, RPC::Code_App_BadRequest, QString("no tx for height %1 at position %2").arg(height).arg(pos), m.id);
-            return;
-        }
-        const auto txHashHex = Util::ToHexFast(opt.value());
-        // merkle=false is just the txHash. Merkle=true would be a dict, see: https://electrumx.readthedocs.io/en/latest/protocol-methods.html#blockchain-transaction-id-from-pos
-        emit c->sendResult(m.id, m.method, txHashHex);
     } else {
         // TODO: remove this soon as this should never be reached. It is just here to detect bugs in our own RPC code
         emit c->sendError(false, RPC::Code_InternalError, "internal error", m.id);

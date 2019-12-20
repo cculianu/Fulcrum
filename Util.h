@@ -528,8 +528,17 @@ namespace Util {
     /// Identical to Qt's toHex, but 60% faster (returned string is lcase hex encoded).
     QByteArray ToHexFast(const QByteArray &);
     /// More efficient, if less convenient version of above. Operates on a buffer in-place.  Make sure bufsz is at least
-    /// 2x the length of bytes.
+    /// 2x the length of bytes.  `buf` must not overlap with `bytes`.
     bool ToHexFastInPlace(const QByteArray & bytes, char *buf, size_t bufsz);
+
+    /// For each item in a QByteArray Container, hex encode each item using Util::ToHexFast().
+    template <typename Container,
+              std::enable_if_t<std::is_base_of_v<QByteArray, typename Container::value_type>, int> = 0>
+    void hexEncodeEachItem(Container &c) { for (auto & item : c) item = Util::ToHexFast(item); }
+    /// For each item in a QByteArray Container, hex decode each item using Util::ParseHexFast().
+    template <typename Container,
+              std::enable_if_t<std::is_base_of_v<QByteArray, typename Container::value_type>, int> = 0>
+    void hexDecodeEachItem(Container &c) { for (auto & item : c) item = Util::ParseHexFast(item); }
 
 
     /// Call lambda() in the thread context of obj's thread. Will block until completed.
