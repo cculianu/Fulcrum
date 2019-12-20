@@ -279,6 +279,11 @@ namespace Util {
     template <typename ItCont, typename Vec = std::vector<typename ItCont::value_type>>
     Vec toVec(const ItCont &list) { return Vec(list.begin(), list.end()); }
 
+    /// For each item in Container, reverse each item in-place using std::reverse(item.begin(), item.end()).
+    /// Note that each item in the container must have a bidirectional iterator returned from .begin()/.end().
+    template <typename Container>
+    void reverseEachItem(Container &c) { for (auto & item : c) std::reverse(item.begin(), item.end()); }
+
     namespace Json {
         /// Generic Json error (usually if expectMap is violated)
         struct Error : public Exception { using Exception::Exception; };
