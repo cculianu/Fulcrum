@@ -466,15 +466,15 @@ struct Storage::Pvt
 
     std::atomic<uint32_t> earliestUndoHeight = UINT32_MAX; ///< the purpose of this is to control when we issue "delete" commands to the db for deleting expired undo infos from the undo db
 
-    /// TODO: Tune the cahce size. With the below settings it is approx. 50MB-60MB when totally filled
+    /// TODO: Tune the cache size. With the below settings it is approx. 50MB-60MB when totally filled
     /// (each entry is ~40 bytes + overhead).  This cache is anticipated to see heavy use for get_history, so we may
-    /// wish to make it larger.
+    /// wish to make it larger. MAKE THIS CONFIGURABLE.
     static constexpr size_t nCacheMax = 1000000, nCacheElasticity = 250000;
     LRU::Cache<true, TxNum, TxHash> lruNum2Hash{nCacheMax, nCacheElasticity};
 
     /// Cache BlockHeight -> vector of txHashes for the block (in bitcoind memory order). This gets cleared by
     /// undoLatestBlock.  This is used by the txHashesForBlock function only (which is used by get_merkle and
-    /// id_from_pos in the protocol).
+    /// id_from_pos in the protocol). TODO: MAKE THIS CACHE SIZE CONFIGURABLE.
     LRU::Cache<true, BlockHeight, std::vector<TxHash>> lruHeight2Hashes_BitcoindMemOrder { 500, 150 };
 };
 
@@ -579,6 +579,24 @@ auto Storage::stats() const -> Stats
     QVariantMap ret;
     auto & c = p->db.concatOperator;
     ret["merge calls"] = c ? c->merges.load() : QVariant();
+    QVariantMap caches;
+    {
+        const auto sz = p->lruNum2Hash.size(), bytes = sz * ( sizeof(TxNum) + sizeof(decltype(p->lruNum2Hash)::node_type) + HashLen );
+        caches["lruNum2Hash_Size"] = qlonglong(sz);
+        caches["lruNum2Hash_SizeBytes"] = qlonglong(bytes);
+    }
+    {
+        size_t nHashes = 0, sz = 0;
+        p->lruHeight2Hashes_BitcoindMemOrder.cwalk([&nHashes, &sz](const auto & it){
+            nHashes += it.value.size();
+            ++sz;
+        });
+        const auto bytes = sz * (sizeof(BlockHeight) + sizeof(decltype(p->lruHeight2Hashes_BitcoindMemOrder)::node_type)) + nHashes*HashLen;
+        caches["lruHeight2Hash_Size"] = qlonglong(sz);
+        caches["lruHeight2Hash_nHashes"] = qlonglong(nHashes);
+        caches["lruHeight2Hash_SizeBytes"] = qlonglong(bytes);
+    }
+    ret["caches"] = caches;
     return ret;
 }
 
