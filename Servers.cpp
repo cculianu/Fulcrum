@@ -869,12 +869,6 @@ void Server::rpc_blockchain_transaction_get_merkle(Client *c, const RPC::Message
 
         const auto branchList = getMerkleForTxHashes(txHashes, pos);
 
-        if (branchList.isEmpty()) {
-            // this should never happen -- means there's a bug in the merkle code in Merkle.cpp. The log will contain some error info.
-            emit c->sendError(false, RPC::Code_InternalError, "internal error", m.id);
-            return;
-        }
-
         QVariantMap resp = {
             { "block_height" , height },
             { "pos" , pos },
@@ -928,12 +922,6 @@ void Server::rpc_blockchain_transaction_id_from_pos(Client *c, const RPC::Messag
             const QByteArray txHashHex = Util::ToHexFast(txHashes[pos]);
 
             const auto branchList = getMerkleForTxHashes(txHashes, pos);
-
-            if (branchList.isEmpty()) {
-                // this should never happen -- means there's a bug in the merkle code in Merkle.cpp. The log will contain some error info.
-                emit c->sendError(false, RPC::Code_InternalError, "internal error", m.id);
-                return;
-            }
 
             QVariantMap res = {
                 { "tx_hash" , txHashHex },
