@@ -561,8 +561,17 @@ void Server::rpc_blockchain_block_header(Client *c, const RPC::Message &m)
     ok = true;
     const unsigned cp_height = l.size() > 1 ? l.back().toUInt(&ok) : 0;
     // TODO SUPPORT CP_HEIGHT!
-    if (!ok || cp_height != 0)
-        throw RPCError("cp_height not yet supported", RPC::ErrorCodes::Code_InternalError);
+    if (!ok || cp_height >= Storage::MAX_HEADERS)
+        throw RPCError("Invalid cp_height");
+    if (cp_height) {
+        const auto tip = storage->latestTip().first;
+        if (tip < 0) throw InternalError("chaing height is negative");
+        if ( ! (height <= cp_height && cp_height <= unsigned(tip)) )
+            throw RPCError(QString("header height %1 must be <= cp_height %2 which must be <= chain height %3")
+                           .arg(height).arg(cp_height).arg(tip));
+
+        throw InternalError("cp_height not yet supported");
+    }
     generic_do_async(c, m.id, [height, cp_height, this] {
         Q_UNUSED(cp_height) // TODO SUPPORT CP_HEIGHT!
         QString err;
