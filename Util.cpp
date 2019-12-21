@@ -380,8 +380,10 @@ namespace Util {
                     work();
                 } catch (const std::exception &e) {
                     emit failed(e.what());
+                    return;
                 } catch (...) {
                     emit failed("Unknown exception");
+                    return;
                 }
             }
             emit completed();

@@ -308,15 +308,15 @@ namespace RPC {
             do_disconnect(true); // graceful disconnect
         }
     }
-    void ConnectionBase::_sendResult(const Message::Id & reqid, const QString &method, const QVariant & result)
+    void ConnectionBase::_sendResult(const Message::Id & reqid, const QVariant & result)
     {
         if (status != Connected || !socket) {
-            Error() << __FUNCTION__ << " method: " << method << "; Not connected!";
+            Error() << __FUNCTION__ << ":  Not connected!";
             return;
         }
         QString json = Message::makeResponse(reqid, result, v1).toJsonString();
         if (json.isEmpty()) {
-            Error() << __FUNCTION__ << " method: " << method << "; Unable to generate result JSON! FIXME!";
+            Error() << __FUNCTION__ << ": Unable to generate result JSON! FIXME!";
             return;
         }
         const auto data = json.toUtf8();
@@ -417,7 +417,7 @@ namespace RPC {
             else if (wasInv) code = Code_InvalidRequest;
             bool doDisconnect = errorPolicy & ErrorPolicyDisconnect;
             if (errorPolicy & ErrorPolicySendErrorMessage) {
-                emit sendError(doDisconnect, code, QString(e.what()).left(80), msgId);
+                emit sendError(doDisconnect, code, QString(e.what()).left(120), msgId);
                 if (!doDisconnect)
                     emit peerError(id, lastPeerError=e.what());
                 doDisconnect = false; // if was true, already enqueued graceful disconnect after error reply, if was false, no-op here

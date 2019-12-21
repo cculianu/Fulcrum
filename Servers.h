@@ -159,12 +159,22 @@ private:
         const int code;
         ~RPCError () override;
     };
+
+    using AsyncWorkFunc = std::function<QVariant()>;
+    using BitcoinDSuccessFunc = std::function<QVariant(const RPC::Message &)>;
+    using BitcoinDErrorFunc = std::function<void(const RPC::Message &)>; // errfunc should always throw RPCError to indicate the exact error it wants to send.
+
     /// used by some of the slower rpc methods to do work in a threadpool thread. this returns right away but schedules
     /// the work for later and handles sending the response (returned from work) to the client as well as sending
     /// any errors to the client. the `work` functor may throw RPCError, in which case code and message will be
     /// sent instead.  Note that all other exceptions also end up sent to the client as "internal error: MESSAGE".
-    void generic_do_async(Client *client, const RPC::Message::Id &reqId, const QString &method,
-                          const std::function<QVariant()> & work);
+    void generic_do_async(Client *client, const RPC::Message::Id &reqId,  const AsyncWorkFunc & work);
+    void generic_async_to_bitcoind(Client *client,
+                                   const RPC::Message::Id & reqId,  ///< the original client request id
+                                   const QString &method,
+                                   const QVariantList &params,
+                                   const BitcoinDSuccessFunc & successFunc,
+                                   const BitcoinDErrorFunc & errorFunc = BitcoinDErrorFunc());
     // RPC methods below
     // server
     void rpc_server_ping(Client *, const RPC::Message &);
@@ -178,9 +188,9 @@ private:
     // scripthash
     void rpc_blockchain_scripthash_get_balance(Client *, const RPC::Message &); // partially implemented -- needs unconfirmed balance
     void rpc_blockchain_scripthash_get_history(Client *, const RPC::Message &); // partially implemented -- needs mempool tx's
-    void rpc_blockchain_scripthash_get_mempool(Client *, const RPC::Message &); // not yet implemented -- needs mempool subsystem
+    [[noreturn]] void rpc_blockchain_scripthash_get_mempool(Client *, const RPC::Message &); // not yet implemented -- needs mempool subsystem
     void rpc_blockchain_scripthash_listunspent(Client *, const RPC::Message &); // partially implemented -- needs mempool tx's
-    void rpc_blockchain_scripthash_subscribe(Client *, const RPC::Message &); // not implemented yet
+    [[noreturn]] void rpc_blockchain_scripthash_subscribe(Client *, const RPC::Message &); // not implemented yet
     void rpc_blockchain_scripthash_unsubscribe(Client *, const RPC::Message &); // not implemented yet -- stub impl. always returns true, requires suscribe to work first
     // transaction
     void rpc_blockchain_transaction_broadcast(Client *, const RPC::Message &); // fully implemented

@@ -260,7 +260,7 @@ namespace RPC {
         /// call (emit) this to send a request to the peer
         void sendError(bool disconnectAfterSend, int errorCode, const QString &message, const RPC::Message::Id & reqid = Message::Id());
         /// call (emit) this to send a result reply to the peer (result= message)
-        void sendResult(const RPC::Message::Id & reqid, const QString &method, const QVariant & result = QVariant());
+        void sendResult(const RPC::Message::Id & reqid, const QVariant & result = QVariant());
 
         /// this is emitted when a new message arrives that was successfully parsed and matches
         /// a known method described in the 'methods' MethodMap. Unknown messages will eventually result
@@ -281,7 +281,7 @@ namespace RPC {
         /// Actual implementation of sendError, runs in our thread context.
         virtual void _sendError(bool disconnect, int errorCode, const QString &message, const RPC::Message::Id &reqid = Message::Id());
         /// Actual implementation of sendResult, runs in our thread context.
-        virtual void _sendResult(const RPC::Message::Id & reqid, const QString &method, const QVariant & result = QVariant());
+        virtual void _sendResult(const RPC::Message::Id & reqid, const QVariant & result = QVariant());
 
     protected:
         /// chains to base, connects sendRequest signal to _sendRequest slot

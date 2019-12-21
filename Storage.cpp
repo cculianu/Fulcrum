@@ -40,7 +40,6 @@ namespace {
 
     // some database keys we use -- todo: if this grows large, move it elsewhere
     static const rocksdb::Slice kMeta{"meta"}, kNumHeaders{"num_headers"};
-    static constexpr size_t MAX_HEADERS = 100000000; // 100 mln max headers for now.
 
     // serialize/deser -- for basic types we use QDataStream, but we also have specializations at the end of this file
     template <typename Type>

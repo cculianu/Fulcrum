@@ -55,6 +55,10 @@ public:
     using Header = QByteArray;
     using HeaderHash = QByteArray;
 
+    /// 100 mln max headers for now.
+    static constexpr size_t MAX_HEADERS = 100000000;
+
+
     /// Thread safe. May hit the database (or touch a cache).  Returns the header for the given height or nothing if
     /// height > latestTip().first.  May also fail on low-level db error. Use the optional arg *err to see why if failed.
     std::optional<Header> headerForHeight(BlockHeight height, QString *err = nullptr);
