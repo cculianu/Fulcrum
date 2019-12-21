@@ -136,6 +136,19 @@ namespace Merkle {
         Log() << "Branch: [ " << Util::Stringify(pair.first, ba2quoted) << " ]";
         Log() << "Root: '" << pair.second.toHex() << "'";
         Log() << "Level1: [ " << Util::Stringify(Merkle::level(txs, 1), ba2quoted) << " ]";
+
+        const size_t num = 64000;
+        Log() << "Testing performance, filling " << num << " hashes and computing merkle...";
+        // next, test perfromance -- by
+        Merkle::HashVec txs2(num);
+        for (size_t i = 0; i < txs2.size(); ++i) {
+            QByteArray & ba = txs2[i];
+            ba.resize(HashLen);
+            QRandomGenerator::securelySeeded().fillRange(reinterpret_cast<uint32_t *>(ba.data()), HashLen/sizeof(uint32_t));
+        }
+        const auto t0 = Util::getTimeNS();
+        auto pair2 = Merkle::branchAndRoot(txs2, 0);
+        Log() << "Merkle took: " << QString::number((Util::getTimeNS() - t0)/1e6, 'f', 4) << " msec";
     }
 
 } // end namespace Merkle
