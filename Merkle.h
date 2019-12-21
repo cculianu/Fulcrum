@@ -22,7 +22,7 @@ namespace Merkle
     using HashVec = std::vector<Hash>;
     using BranchAndRootPair = std::pair<HashVec, Hash>;
 
-    constexpr unsigned MaxDepth = 24; ///< the maximum depth of the merkle tree, which would be a tree of 16.7 million items.
+    constexpr unsigned MaxDepth = 28; ///< the maximum depth of the merkle tree, which would be a tree of ~134 million items.
 
     /// return the length of a merkle branch given a hash count (which must be >= 1!)
     constexpr unsigned branchLength(unsigned count) {
@@ -66,6 +66,7 @@ namespace Merkle
     BranchAndRootPair branchAndRootFromLevel(const HashVec & level, const HashVec & leafHashes, unsigned index, unsigned depthHigher);
 
     /// EX work-alike merkle cache. We do it this way because pretty much the protocol demands this approach.
+    /// The public methods of this class are all thread-safe (except for the constructor).
     class Cache {
     public:
         using GetHashesFunc = std::function<HashVec(unsigned, unsigned, QString *)>;
