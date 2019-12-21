@@ -377,83 +377,79 @@ namespace Util {
 
     using VoidFunc = std::function<void()>;
 
-    /** Run a lambda in a thread.
-     *
-     * `work' will be called in the thread context of this QThread's run()
-     * method. It should reference objects that remain alive until
-     * `completion' is called (or the work completes).
-     *
-     * `completion' (if specified) will be called in the thread context of
-     * the receiver's thread (or calling thread if receiver is nullptr) to
-     * notify of thread completion.
-     *
-     * This object auto-deletes itself on completion by calling deleteLater().
-     * As such, it is a programming error to allocate this object on the stack.
-     * Because of that, access to this mechanism is via the factory static
-     * function: 'Do' (all constructors have been made private to enforce
-     * this).
-     *
-     * Caveats: If you hit CTRL-C to shutdown this app and the work is not yet
-     * complete, the app waits for 5 seconds for all threads and if they don't
-     * finish, it will call C abort() with message:
-     * 'QThread: Destroyed while thread is still running'.
-     *
-     */
-    class RunInThread : public QThread
-    {
-        Q_OBJECT
-    public:
+    /// Helpers for performing work on the global thread pool.
+    namespace ThreadPool {
 
-        /// Note `receiver` (if specified) should remain alive for the duration of this task!
-        /// Args:
-        ///     `work`       - Called in thread's context to do work
-        ///     `receiver`   - The object context in which to call `completion`. If nullptr, `completion` will execute
-        ///                    in the calling thread's context.  If not nullptr, `receier` should remain alive until
-        ///                    work completes (it is also made the parent of this QThread instance!).
-        ///     `completion` - Called in `receiver`'s thread on completion.
-        ///     `threadName` - Advisory thread name used in Debug() and Log() print for code executing within the thread
-        static RunInThread *
-        Do ( const VoidFunc &work,
-             QObject *receiver = nullptr,
-             const VoidFunc &completion = VoidFunc(),
-             const QString & threadName = QString())
-        { return new RunInThread(work, receiver, completion, threadName); }
+        /// Callback used below to indicate an exception was thrown or other low-level unlikely failure.
+        using FailFunc = std::function<void(const QString &)>;
 
-        /// Convenience for above.  Sets the receiver to 'nullptr' which puts the completion() function execution
-        /// in the context of the calling thread.
-        static RunInThread *
-        Do ( const VoidFunc &work, const VoidFunc &completion = VoidFunc(),
-             const QString & threadName = QString())
-        { return new RunInThread(work, nullptr, completion, threadName); }
+        /// Submit work to be performed asynchronously from a thread pool thread.
+        ///
+        /// `work` is called in the context of one of the global QThreadPool::globalInstance() threads (it should
+        /// lambda-capture all data it needs to compute its results). It may throw, in which case `fail` (if specified)
+        /// is invoked with the exception.what() message.
+        ///
+        /// `completion` will be called in the context of `context`'s thread. If `context` dies before the work
+        /// is completed, completion will never be called.
+        ///
+        /// `fail` will be called in the context of `context`'s thread on failure such as an exception being thrown
+        /// by `work` .. *OR* if there is an excessive amount of work to be done and no room left in the queue (in which
+        /// case it is called immediately).  If unspecified, the default fail func simply prints an error message to the
+        /// error log.  In either case, if a failure occurs, `completion` will not be called.
+        ///
+        /// The intended client code usecase is that `work` and `completion` would share a shared_ptr to the same
+        /// result set, which `work` writes-to to produce results, and `completion` reads-from and acts upon within
+        /// the thread context of the caller. `completion` is guaranteed to be called *after* `work` returns (*if*
+        /// `context` was not deleted first -- if it was, then `completion` is never called. `completion` is also never
+        /// called if a failure occurs, in which case `fail`, if specified, is called instead).
+        ///
+        /// Using shared_ptr to share data between `work` and `completion` (via lambda-capture) is thus the intended
+        /// way to use this mechanism.
+        void SubmitWork(QObject *context, const VoidFunc & work, const VoidFunc & completion = VoidFunc(),
+                        const FailFunc & fail = FailFunc(), int priority = 0);
 
-    protected:
-        void run() override;
+        /// Call this on app shutdown to wait for extant jobs that may be running to complete. This prevents jobs that
+        /// are currently running from referencing data that may go away during shutdown, causing a segfault.  The app's
+        /// exit handler calls this on shutdown as the first thing it does, before deconstructing other objects.
+        ///
+        /// Returns true if the jobs completed before timeout_ms expired, or false otherwise.
+        /// Negative timeout_ms indicates "wait forever" for jobs to complete.
+        ///
+        /// This function should only ever be called once on app exit since it latches a boolean that permanently blocks
+        /// the creation of new jobs once called.  Note that after this function is called all extant jobs that may
+        /// begin to run will exit immediately as well (as a consequence of said "shutting down" boolean being true).
+        bool ShutdownWaitForJobs(int timeout_ms = -1);
 
-        friend class ::App;
-        /// called by App on exit to indicate shutting down (blocks new threads from executing)
-        static void setShuttingDown(bool b) { blockNew = b; }
-        /// called by App on exit to wait for all work to complete.
-        static bool waitForAll(unsigned long timeout_ms = ULONG_MAX, const QString &logMsgIfNeedsToWait=QString(),
-                               int *numWorkers = nullptr);
+        /// Returns the number of jobs currently running or scheduled to run.
+        int ExtantJobs();
+        /// Returns the maximum number of extant jobs before failure is unconditionally asserted on SubmitWork (currently 50)
+        int MaxExtantJobs();
 
-    signals:
-        void onCompletion();
-    private:
-        VoidFunc work;
-        /// non-public c'tor
-        RunInThread(const VoidFunc &work,
-                    QObject *receiver = nullptr,
-                    const VoidFunc &completion = VoidFunc(),
-                    const QString & threadName = QString());
-        /// app exit cleanup handling
-        static std::atomic_bool blockNew;
-        static QSet<RunInThread *> extant;
-        static QMutex mut;
-        static QWaitCondition cond;
-        void done();
-    public:
-        static void test(QObject *receiver = nullptr);
-    };
+        /// Returns the number of jobs that were ever successfilly submitted via SubmitWork
+        unsigned NumJobsSubmitted();
+
+        /// Semi-private class not intended to be constructed by client code, but used inside SubmitWork.
+        /// We put it here because the meta object compiler needs to see it for signal/slot glue code generation.
+        class Job : public QObject, public QRunnable {
+            Q_OBJECT
+
+            friend void Util::ThreadPool::SubmitWork(QObject *, const VoidFunc &, const VoidFunc &, const FailFunc &, int);
+
+            const VoidFunc work;
+
+            Job(QObject *context, const VoidFunc & work, const VoidFunc & completion = VoidFunc(), const FailFunc & = FailFunc());
+
+        public:
+            void run() override;
+            ~Job() override;
+
+        signals:
+            void started(); ///< emitted inside run() on job start
+            void completed(); ///< calls completion in QObject context via a signal emit
+            void failed(const QString &); ///< called if work() throws.
+        };
+    }
+
 
     /// Stringify any 1D container's values (typically QSet or QList) by calling 'ToStringFunc'
     /// on each item, and producing a comma-separate string result, e.g.: "item1, item2, someotheritem" etc...

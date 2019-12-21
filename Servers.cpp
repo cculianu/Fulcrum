@@ -435,19 +435,32 @@ void Server::onPeerError(quint64 clientId, const QString &what)
 }
 
 // --- RPC METHODS ---
+namespace {
+    Util::ThreadPool::FailFunc defaultTPFailFunc(Client *c, const RPC::Message::Id &id) {
+        return [c, id](const QString &what) {
+            emit c->sendError(false, RPC::Code_InternalError, QString("internal error: %1").arg(what), id);
+        };
+    }
+    BitcoinDMgr::FailF defaultBDFailFunc(Client *c, const RPC::Message::Id &id) {
+        return [c, id](const RPC::Message::Id &, const QString &what) {
+            emit c->sendError(false, RPC::Code_InternalError, QString("internal error: %1").arg(what), id);
+        };
+    }
+}
+
 void Server::rpc_server_version(Client *c, const RPC::Message &m)
 {
     if (QVariantList l = m.paramsList(); m.isRequest() && l.size() == 2) {
         c->info.userAgent = l[0].toString().left(kMaxServerVersion);
         c->info.protocolVersion = l[1].toString().left(kMaxServerVersion);
         Trace() << "Client (id: " << c->id << ") sent version: \"" << c->info.userAgent << "\" / \"" << c->info.protocolVersion << "\"";
+        emit c->sendResult(m.id, m.method, QStringList({QString("%1/%2").arg(APPNAME).arg(VERSION), QString("1.4")}));
     } else {
         // TODO: remove this soon as this should never be reached. It is just here to detect bugs in our own RPC code
         emit c->sendError(false, RPC::Code_InternalError, "internal error", m.id);
         Error() << "Bad server version message! Other code should have handled this. FIXME! Json: " << m.toJsonString();
         return;
     }
-    emit c->sendResult(m.id, m.method, QStringList({QString("%1/%2").arg(APPNAME).arg(VERSION), QString("1.4")}));
 }
 void Server::rpc_server_ping(Client *c, const RPC::Message &m)
 {
@@ -759,9 +772,7 @@ void Server::rpc_blockchain_transaction_broadcast(Client *c, const RPC::Message 
                                   id);
             },
             // failure callback
-            [c,id=m.id](const RPC::Message::Id &, const QString & failureReason){
-                emit c->sendError(false, RPC::Code_InternalError, QString("internal error: %1").arg(failureReason), id);
-            }
+            defaultBDFailFunc(c, m.id)
         );
         // <-- do nothing right now, return without replying. Will respond when daemon calls us back in callbacks above.
     } else {
@@ -800,9 +811,7 @@ void Server::rpc_blockchain_transaction_get(Client *c, const RPC::Message &m)
                                   id);
             },
             // failure callback
-            [c,id=m.id](const RPC::Message::Id &, const QString & failureReason){
-                emit c->sendError(false, RPC::Code_InternalError, QString("internal error: %1").arg(failureReason), id);
-            }
+            defaultBDFailFunc(c, m.id)
         );
         // <-- do nothing right now, return without replying. Will respond when daemon calls us back in callbacks above.
     } else {

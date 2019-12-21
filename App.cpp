@@ -116,7 +116,7 @@ void App::startup()
 void App::cleanup()
 {
     Debug() << __PRETTY_FUNCTION__ ;
-    cleanup_RunInThreads();
+    cleanup_WaitForThreadPoolWorkers();
     if (!httpServers.isEmpty()) {
         Log("Stopping Stats HTTP Servers ...");
         for (auto h : httpServers) { h->stop(); }
@@ -125,16 +125,21 @@ void App::cleanup()
     if (controller) { Log("Stopping Controller ... "); controller->cleanup(); controller.reset(); }
 }
 
-void App::cleanup_RunInThreads()
+void App::cleanup_WaitForThreadPoolWorkers()
 {
-    static const int timeout = 5000;
+    constexpr int timeout = 5000;
     QElapsedTimer t0; t0.start();
-    Util::RunInThread::setShuttingDown(true);
-    int nWorkersRunning = 0;
-    if (!Util::RunInThread::waitForAll(timeout, "Waiting for extant worker threads ...", &nWorkersRunning)) {
-        Warning("After %d seconds, %d worker(s) were still active. App will likely abort with an error.", qRound(double(t0.elapsed())/1e3), nWorkersRunning);
-    } else if (nWorkersRunning) {
-        Debug("%d worker(s) successfully waited for (elapsed: %0.3f secs)", nWorkersRunning, t0.elapsed()/1e3);
+    const int nJobs = Util::ThreadPool::ExtantJobs();
+    if (nJobs)
+        Log() << "Waiting for extant thread pool workers ...";
+    const bool res = Util::ThreadPool::ShutdownWaitForJobs(timeout);
+    if (!res) {
+        Warning("After %d seconds, %d thread pool %s %s still active. App may abort with an error.",
+                qRound(double(t0.elapsed())/1e3), nJobs, Util::Pluralize("worker", nJobs).toUtf8().constData(),
+                qAbs(nJobs) == 1 ? "is" : "are");
+    } else if (nJobs) {
+        Debug("Successfully waited for %d thread pool %s (elapsed: %0.3f secs)", nJobs,
+              Util::Pluralize("worker", nJobs).toUtf8().constData(), t0.elapsed()/1e3);
     }
 }
 

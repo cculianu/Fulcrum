@@ -71,83 +71,6 @@ namespace Util {
 
     } // end namespace Json
 
-    RunInThread::RunInThread(const VoidFunc & work, QObject *receiver, const VoidFunc & completion, const QString & name)
-        : QThread(receiver), work(work)
-    {
-        auto sigReceiver = receiver ? receiver : this;
-        if (!name.isNull()) setObjectName(name);
-        connect(this, &RunInThread::onCompletion, sigReceiver, [completion, this]{
-            if (completion) completion();
-            deleteLater();
-        });
-        if (!blockNew) {
-            {
-                QMutexLocker ml(&mut);
-                extant.insert(this);
-            }
-            start();
-        } else {
-            Warning() << "App shutting down, will not start thread " << (name.isNull() ? "(RunInThread)" : name);
-        }
-    }
-
-    void RunInThread::run()
-    {
-        if (work)
-            work();
-        emit onCompletion(); // runs in receiver's thread or caller/creator thread if no receiver.
-        done();
-    }
-
-    /// app exit cleanup handling
-    /*static*/ std::atomic_bool RunInThread::blockNew = false;
-    /*static*/ QSet<RunInThread *> RunInThread::extant;
-    /*static*/ QMutex RunInThread::mut;
-    /*static*/ QWaitCondition RunInThread::cond;
-
-    void RunInThread::done()
-    {
-        QMutexLocker ml(&mut);
-        extant.remove(this);
-        if (extant.isEmpty()) {
-            cond.wakeAll();
-        }
-    }
-    // static
-    bool RunInThread::waitForAll(unsigned long timeout, const QString &msg, int *num)
-    {
-        QMutexLocker ml(&mut);
-        if (!extant.isEmpty()) {
-            Log() << msg;
-            if (num) *num = extant.count();
-            auto notTimedOut = cond.wait(&mut, timeout);
-            if (!notTimedOut && num) {
-                // if we timed out, tell caller how many were still running
-                *num = extant.count();
-            }
-            return notTimedOut;
-        } else if (num) *num = 0;
-        return true;
-    }
-    // static
-    void RunInThread::test(QObject *receiver)
-    {
-        auto rit =
-        Util::RunInThread::Do([]{
-            for (int i = 0; i < 100; ++i) {
-                Debug() << "Worker thread...";
-                QThread::msleep(100);
-                //if (blockNew)
-                //    return;
-            }
-        }, receiver, []{
-           Debug() << "COMPLETION!";
-        }, "(RunInThread)");
-        connect(rit, &QObject::destroyed, receiver ? receiver : qApp, []{
-           Debug() << "DESTROYED!!";
-        });
-    }
-
     bool VoidFuncOnObjectNoThrow(const QObject *obj, const std::function<void()> & lambda, int timeout_ms)
     {
         try {
@@ -419,3 +342,99 @@ FatalAssert::~FatalAssert()
         if (!colorOverridden) color = BrightRed;
     }
 }
+
+/// ThreadPool work stuff
+#include <QThreadPool>
+namespace Util {
+    namespace ThreadPool {
+        namespace {
+            std::atomic_uint ctr = 0;
+            std::atomic_int extant = 0;
+            std::atomic_bool blockNewWork = false;
+            constexpr bool debugPrt = false;
+            constexpr int maxExtant = 50; // maximum number of extant jobs we allow before failing and not enqueuing more
+        }
+
+        Job::Job(QObject *context, const VoidFunc & work, const VoidFunc & completion, const FailFunc &fail)
+            : QObject(nullptr), work(work)
+        {
+            if (!context && (completion || fail))
+                Debug(Log::Magenta) << "Warning: use of ThreadPool jobs without a context is not recommended, FIXME!";
+            if (completion)
+                connect(this, &Job::completed, context ? context : qApp, [completion]{ completion(); });
+            if (fail)
+                connect(this, &Job::failed, context ? context : qApp, [fail](const QString &err){ fail(err); });
+        }
+        Job::~Job() {}
+
+        void Job::run() {
+            emit started();
+            if (blockNewWork) {
+                Debug() << objectName() << ": blockNewWork = true, exiting early without doing any work";
+                return;
+            }
+            if (work) {
+                try {
+                    work();
+                } catch (const std::exception &e) {
+                    emit failed(e.what());
+                } catch (...) {
+                    emit failed("Unknown exception");
+                }
+            }
+            emit completed();
+        }
+
+        void SubmitWork(QObject *context, const VoidFunc & work, const VoidFunc & completion, const FailFunc & fail, int priority)
+        {
+            if (blockNewWork) {
+                Debug() << __FUNCTION__ << ": Ignoring new work submitted because blockNewWork = true";
+                return;
+            }
+            static const FailFunc defaultFail = [](const QString &msg) {
+                    Warning() << "A ThreadPool job failed with the error message: " << msg;
+            };
+            const FailFunc & failFuncToUse (fail ? fail : defaultFail);
+            Job *job = new Job(context, work, completion, failFuncToUse);
+            QObject::connect(job, &QObject::destroyed, qApp, [](QObject *){ --extant;}, Qt::DirectConnection);
+            if (const auto njobs = ++extant; njobs > maxExtant) {
+                delete job; // will decrement extant on delete
+                failFuncToUse(QString("Job limit exceeded (%1)").arg(njobs));
+                return;
+            } else if (UNLIKELY(njobs < 0)) {
+                // should absolutely never happen.
+                Error() << "FIXME: njobs " << njobs << " < 0!";
+            }
+            job->setAutoDelete(true);
+            const unsigned num = ++ctr;
+            job->setObjectName(QString("Job %1 for '%2'").arg(num).arg( context ? context->objectName() : "<no context>"));
+            if constexpr (debugPrt) {
+                QObject::connect(job, &Job::started, qApp, [n=job->objectName()]{
+                    Debug() << n << " -- started";
+                }, Qt::DirectConnection);
+                QObject::connect(job, &Job::completed, qApp, [n=job->objectName()]{
+                    Debug() << n << " -- completed";
+                }, Qt::DirectConnection);
+                QObject::connect(job, &Job::failed, qApp, [n=job->objectName()](const QString &msg){
+                    Debug() << n << " -- failed: " << msg;
+                }, Qt::DirectConnection);
+            }
+            QThreadPool::globalInstance()->start(job, priority);
+        }
+
+        bool ShutdownWaitForJobs(int timeout_ms)
+        {
+            blockNewWork = true;
+            if constexpr (debugPrt) {
+                Debug() << __FUNCTION__ << ": waiting for jobs ...";
+            }
+            auto tp = QThreadPool::globalInstance();
+            return tp->waitForDone(timeout_ms);
+        }
+
+        int ExtantJobs() { return extant.load(); }
+        int MaxExtantJobs() { return maxExtant; }
+        unsigned NumJobsSubmitted() { return ctr.load(); }
+
+    } // end namespace ThreadPool
+} // end namespace Util
