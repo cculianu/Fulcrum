@@ -358,7 +358,7 @@ namespace Util {
         }
 
         Job::Job(QObject *context, const VoidFunc & work, const VoidFunc & completion, const FailFunc &fail)
-            : QObject(nullptr), work(work)
+            : QObject(nullptr), work(work), weakContextRef(context ? context : qApp)
         {
             if (!context && (completion || fail))
                 Debug(Log::Magenta) << "Warning: use of ThreadPool jobs without a context is not recommended, FIXME!";
@@ -371,11 +371,16 @@ namespace Util {
 
         void Job::run() {
             emit started();
-            if (blockNewWork) {
+            if (UNLIKELY(blockNewWork)) {
                 Debug() << objectName() << ": blockNewWork = true, exiting early without doing any work";
                 return;
+            } else if (UNLIKELY(!weakContextRef)) {
+                // this is here so we avoid doing any work in case work is costly when we know for a fact the
+                // interested/subscribed context object is already deleted.
+                Debug() << objectName() << ": context already deleted, exiting early without doing any work";
+                return;
             }
-            if (work) {
+            if (LIKELY(work)) {
                 try {
                     work();
                 } catch (const std::exception &e) {

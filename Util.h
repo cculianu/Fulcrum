@@ -436,6 +436,7 @@ namespace Util {
             friend void Util::ThreadPool::SubmitWork(QObject *, const VoidFunc &, const VoidFunc &, const FailFunc &, int);
 
             const VoidFunc work;
+            QPointer<QObject> weakContextRef;
 
             Job(QObject *context, const VoidFunc & work, const VoidFunc & completion = VoidFunc(), const FailFunc & = FailFunc());
 
