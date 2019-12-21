@@ -352,7 +352,9 @@ namespace Util {
             std::atomic_int extant = 0;
             std::atomic_bool blockNewWork = false;
             constexpr bool debugPrt = false;
-            constexpr int maxExtant = 50; // maximum number of extant jobs we allow before failing and not enqueuing more
+            /// maximum number of extant jobs we allow before failing and not enqueuing more.
+            /// TODO: make this configurable and/or tune this "magic" value
+            constexpr int maxExtant = 50;
         }
 
         Job::Job(QObject *context, const VoidFunc & work, const VoidFunc & completion, const FailFunc &fail)
