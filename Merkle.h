@@ -7,6 +7,7 @@
 
 #include <cmath>
 #include <optional>
+#include <shared_mutex>
 #include <utility>
 #include <vector>
 
@@ -63,6 +64,42 @@ namespace Merkle
      * index is the index in the full list of hashes of the hash whose merkle branch we want.
     */
     BranchAndRootPair branchAndRootFromLevel(const HashVec & level, const HashVec & leafHashes, unsigned index, unsigned depthHigher);
+
+    /// EX work-alike merkle cache. We do it this way because pretty much the protocol demands this approach.
+    class Cache {
+    public:
+        using GetHashesFunc = std::function<HashVec(unsigned, unsigned)>;
+
+        /// may throw BadArgs if !func
+        Cache(const GetHashesFunc & func);
+
+        bool isInitialized() const { return initialized; }
+
+        /// initialize the cache to length hashes
+        void initialize(unsigned length); ///< takes exclusive lock
+
+        BranchAndRootPair branchAndRoot(unsigned length, unsigned index); ///< takes exclusive lock, may throw
+
+        /// truncate the cache to at most length hashes
+        void truncate(unsigned length); ///< takes exclusive lock, may throw
+
+    private:
+        using RWLock = std::shared_mutex;
+        using SharedLockGuard = std::shared_lock<RWLock>;
+        using ExclusiveLockGuard = std::lock_guard<RWLock>;
+
+        mutable RWLock lock;
+        const GetHashesFunc getHashes;
+        unsigned length = 0, depthHigher = 0;
+        HashVec level;
+        std::atomic_bool initialized{false};
+
+        HashVec getLevel(const HashVec &) const; ///< takes no locks
+        inline unsigned segmentLength() const { return 1 << depthHigher; }
+        inline unsigned leafStart(unsigned index) const { return (index >> depthHigher) << depthHigher; }
+        void extendTo(unsigned length); ///< takes no locks
+        HashVec levelFor(unsigned length) const; ///< takes no locks, may throw
+    };
 
     // -- For Testing --
 
