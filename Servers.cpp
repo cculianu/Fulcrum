@@ -448,6 +448,48 @@ namespace {
     }
 }
 
+Server::RPCError::~RPCError() {}
+
+void Server::generic_do_async(Client *c, const RPC::Message::Id &id, const QString &meth, const std::function<QVariant ()> &work)
+{
+    if (LIKELY(work)) {
+        struct ResErr {
+            QVariant results;
+            bool error = false;
+            QString errMsg;
+            int errCode = 0;
+        };
+
+        auto reserr = std::make_shared<ResErr>();
+        Util::ThreadPool::SubmitWork(
+            c, // <--- all work done in client context, so if client is deleted, completion not called
+            // runs in worker thread, must not access anything other than reserr and work
+            [reserr,work]{
+                try {
+                    QVariant result = work();
+                    reserr->results.swap( result ); // constant-time copy
+                } catch (const RPCError & e) {
+                    reserr->error = true;
+                    reserr->errMsg = e.what();
+                    reserr->errCode = e.code;
+                }
+            },
+            // completion: runs in client thread (only called if client not already deleted)
+            [c, id, meth, reserr] {
+                if (reserr->error) {
+                    emit c->sendError(false, reserr->errCode, reserr->errMsg, id);
+                    return;
+                }
+                // no error, send results to client
+                emit c->sendResult(id, meth, reserr->results);
+            },
+            // default fail function just sends internal error: message
+            defaultTPFailFunc(c, id)
+        );
+    } else
+        Error() << "INTERNAL ERROR: work must be valid! FIXME!";
+}
+
 void Server::rpc_server_version(Client *c, const RPC::Message &m)
 {
     if (QVariantList l = m.paramsList(); m.isRequest() && l.size() == 2) {
@@ -476,51 +518,55 @@ void Server::rpc_server_ping(Client *c, const RPC::Message &m)
 
 void Server::rpc_blockchain_block_header(Client *c, const RPC::Message &m)
 {
-    if (QVariantList l = m.paramsList(); m.isRequest() && l.size() >= 1 && l.size() <= 2) {
-        bool ok;
-        const unsigned height = l.front().toUInt(&ok);
-        if (!ok) {
-            emit c->sendError(false, RPC::Code_InvalidParams, "Invalid height", m.id);
-            return;
-        }
-        const unsigned cp_height = l.size() > 1 ? l.back().toUInt(&ok) : 0;
-        // TODO SUPPORT CP_HEIGHT!
-        if (!ok || cp_height != 0) {
-            emit c->sendError(false, RPC::Code_InvalidParams, "cp_height not yet supported", m.id);
-            return;
-        }
+    QVariantList l = m.paramsList();
+    assert(!l.isEmpty());
+    bool ok;
+    const unsigned height = l.front().toUInt(&ok);
+    if (!ok) {
+        emit c->sendError(false, RPC::Code_InvalidParams, "Invalid height", m.id);
+        return;
+    }
+    const unsigned cp_height = l.size() > 1 ? l.back().toUInt(&ok) : 0;
+    // TODO SUPPORT CP_HEIGHT!
+    if (!ok || cp_height != 0) {
+        emit c->sendError(false, RPC::Code_InvalidParams, "cp_height not yet supported", m.id);
+        return;
+    }
+    generic_do_async(c, m.id, m.method, [height, cp_height, this] {
+        Q_UNUSED(cp_height) // TODO SUPPORT CP_HEIGHT!
         QString err;
         const auto optHdr = storage->headerForHeight(height, &err);
         if (QByteArray hdr; err.isEmpty() && optHdr.has_value() && !(hdr = optHdr.value()).isEmpty())
-            c->sendResult(m.id, m.method, hdr);
+            return QVariant(Util::ToHexFast(hdr));
         else
-            c->sendError(false, RPC::Code_App_BadRequest, err.isEmpty() ? "Unknown error" : err, m.id);
-    } else {
-        // TODO: remove this soon as this should never be reached. It is just here to detect bugs in our own RPC code
-        emit c->sendError(false, RPC::Code_InternalError, "internal error", m.id);
-        Error() << "Bad block.header message! This shouldn't happen. FIXME! Json: " << m.toJsonString();
-    }
+            throw RPCError(err.isEmpty() ? "Unknown error" : err);
+    });
 }
+
 void Server::rpc_blockchain_block_headers(Client *c, const RPC::Message &m)
 {
-    if (QVariantList l = m.paramsList(); m.isRequest() && l.size() >= 2 && l.size() <= 3) {
-        bool ok;
-        const unsigned height = l.front().toUInt(&ok);
-        if (!ok) {
-            emit c->sendError(false, RPC::Code_InvalidParams, "Invalid height", m.id);
-            return;
-        }
-        const unsigned count = l[1].toUInt(&ok);
-        if (!ok) {
-            emit c->sendError(false, RPC::Code_InvalidParams, "Invalid count", m.id);
-            return;
-        }
-        const unsigned cp_height = l.size() > 2 ? l.back().toUInt(&ok) : 0;
-        // TODO SUPPORT CP_HEIGHT!
-        if (!ok || cp_height != 0) {
-            emit c->sendError(false, RPC::Code_InvalidParams, "cp_height not yet supported", m.id);
-            return;
-        }
+    QVariantList l = m.paramsList();
+    assert(l.size() >= 2);
+    bool ok;
+    const unsigned height = l.front().toUInt(&ok);
+    if (!ok) {
+        emit c->sendError(false, RPC::Code_InvalidParams, "Invalid height", m.id);
+        return;
+    }
+    const unsigned count = l[1].toUInt(&ok);
+    if (!ok) {
+        emit c->sendError(false, RPC::Code_InvalidParams, "Invalid count", m.id);
+        return;
+    }
+    ok = true;
+    const unsigned cp_height = l.size() > 2 ? l.back().toUInt(&ok) : 0;
+    // TODO SUPPORT CP_HEIGHT!
+    if (!ok || cp_height != 0) {
+        emit c->sendError(false, RPC::Code_InvalidParams, "cp_height not yet supported", m.id);
+        return;
+    }
+    generic_do_async(c, m.id, m.method, [height, count, cp_height, this]{
+        Q_UNUSED(cp_height)// TODO SUPPORT CP_HEIGHT!
         constexpr unsigned MAX_HEADERS = 2016; ///< TODO: make this cofigurable. this is the current electrumx limit, for now.
         // EX doesn't seem to return error here if invalid height/no results, so we will do same.
         const auto hdrs = storage->headersFromHeight(height, std::min(MAX_HEADERS, count));
@@ -531,8 +577,7 @@ void Server::rpc_blockchain_block_headers(Client *c, const RPC::Message &m)
             if (UNLIKELY(hdr.size() != int(hdrSz))) { // ensure header looks the right size
                 // this should never happen.
                 Error() << "Header size from db height " << i + height << " is not " << hdrSz << " bytes! Database corruption likely! FIXME!";
-                emit c->sendError(false, RPC::Code_InternalError, "server header store invalid", m.id);
-                return;
+                throw RPCError("server header store invalid", RPC::Code_InternalError);
             }
             // fast, in-place conversion to hex
             Util::ToHexFastInPlace(hdr, hexHeaders.data() + offset, hdrHexSz);
@@ -547,12 +592,8 @@ void Server::rpc_blockchain_block_headers(Client *c, const RPC::Message &m)
             // sending "" so as to not confuse clients if they see null but are expecting only string "".
             resp["hex"] = QString("");
         }
-        c->sendResult(m.id, m.method, resp);
-    } else {
-        // TODO: remove this soon as this should never be reached. It is just here to detect bugs in our own RPC code
-        Error() << "Bad block.headers message! This shouldn't happen. FIXME! Json: " << m.toJsonString();
-        emit c->sendError(false, RPC::Code_InternalError, "internal error", m.id);
-    }
+        return resp;
+    });
 }
 void Server::rpc_blockchain_estimatefee(Client *c, const RPC::Message &m)
 {
@@ -606,12 +647,14 @@ void Server::rpc_blockchain_relayfee(Client *c, const RPC::Message &m)
 }
 void Server::rpc_blockchain_scripthash_get_balance(Client *c, const RPC::Message &m)
 {
-    if (QVariantList l = m.paramsList(); m.isRequest() && l.size() == 1) {
-        const QByteArray sh = validateHashHex( l.front().toString() );
-        if (sh.length() != HashLen) {
-            emit c->sendError(false, RPC::Code_App_BadRequest, "Invalid scripthash", m.id);
-            return;
-        }
+    QVariantList l(m.paramsList());
+    assert(!l.isEmpty());
+    const QByteArray sh = validateHashHex( l.front().toString() );
+    if (sh.length() != HashLen) {
+        emit c->sendError(false, RPC::Code_App_BadRequest, "Invalid scripthash", m.id);
+        return;
+    }
+    generic_do_async(c, m.id, m.method, [sh, this] {
         const bitcoin::Amount amt = storage->getBalance(sh);
         /* Note: ElectrumX protocol docs are incorrect. They claim a string in coin units is returned here.
          * It is not. Instead a number in satoshis is returned!
@@ -620,21 +663,19 @@ void Server::rpc_blockchain_scripthash_get_balance(Client *c, const RPC::Message
           { "confirmed" , qlonglong(amt / amt.satoshi()) },
           { "unconfirmed" , 0 }, /* TODO: unconfirmed */
         };
-        emit c->sendResult(m.id, m.method, resp);
-    } else {
-        // TODO: remove this soon as this should never be reached. It is just here to detect bugs in our own RPC code
-        emit c->sendError(false, RPC::Code_InternalError, "internal error", m.id);
-        Error() << "Bad client get_balance message! This shouldn't happen. FIXME! Json: " << m.toJsonString();
-    }
+        return resp;
+    });
 }
 void Server::rpc_blockchain_scripthash_get_history(Client *c, const RPC::Message &m)
 {
-    if (QVariantList l = m.paramsList(); m.isRequest() && l.size() == 1) {
-        const QByteArray sh = validateHashHex( l.front().toString() );
-        if (sh.length() != HashLen) {
-            emit c->sendError(false, RPC::Code_App_BadRequest, "Invalid scripthash", m.id);
-            return;
-        }
+    QVariantList l(m.paramsList());
+    assert(!l.isEmpty());
+    const QByteArray sh = validateHashHex( l.front().toString() );
+    if (sh.length() != HashLen) {
+        emit c->sendError(false, RPC::Code_App_BadRequest, "Invalid scripthash", m.id);
+        return;
+    }
+    generic_do_async(c, m.id, m.method, [sh, this] {
         QVariantList resp;
         const auto items = storage->getHistory(sh); // these are already sorted
         for (const auto & item : items) {
@@ -644,12 +685,8 @@ void Server::rpc_blockchain_scripthash_get_history(Client *c, const RPC::Message
                 // mempool tx's here would also have "fee"!  (basically the contents of get_mempool concatenated) <--- TODO
             });
         }
-        emit c->sendResult(m.id, m.method, resp);
-    } else {
-        // TODO: remove this soon as this should never be reached. It is just here to detect bugs in our own RPC code
-        emit c->sendError(false, RPC::Code_InternalError, "internal error", m.id);
-        Error() << "Bad client get_balance message! This shouldn't happen. FIXME! Json: " << m.toJsonString();
-    }
+        return resp;
+    });
 }
 void Server::rpc_blockchain_scripthash_get_mempool(Client *c, const RPC::Message &m)
 {
@@ -681,12 +718,14 @@ void Server::rpc_blockchain_scripthash_get_mempool(Client *c, const RPC::Message
 }
 void Server::rpc_blockchain_scripthash_listunspent(Client *c, const RPC::Message &m)
 {
-    if (QVariantList l = m.paramsList(); m.isRequest() && l.size() == 1) {
-        const QByteArray sh = validateHashHex( l.front().toString() );
-        if (sh.length() != HashLen) {
-            emit c->sendError(false, RPC::Code_App_BadRequest, "Invalid scripthash", m.id);
-            return;
-        }
+    QVariantList l = m.paramsList();
+    assert(!l.isEmpty());
+    const QByteArray sh = validateHashHex( l.front().toString() );
+    if (sh.length() != HashLen) {
+        emit c->sendError(false, RPC::Code_App_BadRequest, "Invalid scripthash", m.id);
+        return;
+    }
+    generic_do_async(c, m.id, m.method, [sh, this] {
         QVariantList resp;
         const auto items = storage->listUnspent(sh); // these are already sorted
         for (const auto & item : items) {
@@ -697,12 +736,8 @@ void Server::rpc_blockchain_scripthash_listunspent(Client *c, const RPC::Message
                 { "value", qlonglong(item.value / item.value.satoshi()) }, // amount (int64) in satoshis
             });
         }
-        emit c->sendResult(m.id, m.method, resp);
-    } else {
-        // TODO: remove this soon as this should never be reached. It is just here to detect bugs in our own RPC code
-        emit c->sendError(false, RPC::Code_InternalError, "internal error", m.id);
-        Error() << "Bad client listunspent message! This shouldn't happen. FIXME! Json: " << m.toJsonString();
-    }
+        return resp;
+    });
 }
 void Server::rpc_blockchain_scripthash_subscribe(Client *c, const RPC::Message &m)
 {
@@ -847,19 +882,20 @@ namespace {
 
 void Server::rpc_blockchain_transaction_get_merkle(Client *c, const RPC::Message &m)
 {
-    if (QVariantList l = m.paramsList(); m.isRequest() && l.size() == 2) {
-        QByteArray txHash = validateHashHex( l.front().toString() );
-        if (txHash.length() != HashLen) {
-            emit c->sendError(false, RPC::Code_App_BadRequest, "Invalid tx hash", m.id);
-            return;
-        }
-        bool ok = false;
-        [[maybe_unused]] unsigned height = l.back().toUInt(&ok);
-        if (!ok) {
-            emit c->sendError(false, RPC::Code_App_BadRequest, "Invalid height argument; expected non-negative numeric value", m.id);
-            return;
-        }
-
+    QVariantList l = m.paramsList();
+    assert(l.size() == 2);
+    QByteArray txHash = validateHashHex( l.front().toString() );
+    if (txHash.length() != HashLen) {
+        emit c->sendError(false, RPC::Code_App_BadRequest, "Invalid tx hash", m.id);
+        return;
+    }
+    bool ok = false;
+    unsigned height = l.back().toUInt(&ok);
+    if (!ok) {
+        emit c->sendError(false, RPC::Code_App_BadRequest, "Invalid height argument; expected non-negative numeric value", m.id);
+        return;
+    }
+    generic_do_async(c, m.id, m.method, [txHash, height, this] () mutable {
         auto txHashes = storage->txHashesForBlockInBitcoindMemoryOrder(height);
         std::reverse(txHash.begin(), txHash.end()); // we need to compare to bitcoind memory order so reverse specified hash
         constexpr unsigned NO_POS = ~0U;
@@ -870,12 +906,8 @@ void Server::rpc_blockchain_transaction_get_merkle(Client *c, const RPC::Message
                 break;
             }
         }
-        if (pos == NO_POS) {
-            emit c->sendError(false, RPC::Code_App_BadRequest,
-                              QString("No transaction matching the requested hash found at height %1").arg(height),
-                              m.id);
-            return;
-        }
+        if (pos == NO_POS)
+            throw RPCError(QString("No transaction matching the requested hash found at height %1").arg(height));
 
         const auto branchList = getMerkleForTxHashes(txHashes, pos);
 
@@ -885,48 +917,44 @@ void Server::rpc_blockchain_transaction_get_merkle(Client *c, const RPC::Message
             { "merkle" , branchList }
         };
 
-        emit c->sendResult(m.id, m.method, resp);
-
-    } else {
-        // TODO: remove this soon as this should never be reached. It is just here to detect bugs in our own RPC code
-        emit c->sendError(false, RPC::Code_InternalError, "internal error", m.id);
-        Error() << "Bad get_merkle message! This shouldn't happen. FIXME! Json: " << m.toJsonString();
-    }
+        return resp;
+    });
 }
 
 void Server::rpc_blockchain_transaction_id_from_pos(Client *c, const RPC::Message &m)
 {
-    if (QVariantList l = m.paramsList(); m.isRequest() && l.size() >= 2 && l.size() <= 3) {
-        bool ok = false;
-        unsigned height = l.front().toUInt(&ok); // arg0
-        if (!ok) {
-            emit c->sendError(false, RPC::Code_App_BadRequest, "Invalid height argument; expected non-negative numeric value", m.id);
-            return;
-        }
-        unsigned pos = l.at(1).toUInt(&ok); // arg1
-        if (!ok) {
-            emit c->sendError(false, RPC::Code_App_BadRequest, "Invalid tx_pos argument; expected non-negative numeric value", m.id);
-            return;
-        }
-        bool merkle = false;
-        if (l.size() == 3) { //optional arg2
-            const auto [arg, argOk] = parseBoolSemiLooselyButNotTooLoosely( l.back() );
-            if (!argOk) {
-                emit c->sendError(false, RPC::Code_App_BadRequest, "Invalid merkle argument; expected boolean", m.id);
-                return;
-            }
-            merkle = arg;
-        }
-        static const QString missingErr("No transaction at position %1 for height %2");
-        if (merkle) {
-            // merkle=true is a dict, see: https://electrumx.readthedocs.io/en/latest/protocol-methods.html#blockchain-transaction-id-from-pos
+    QVariantList l = m.paramsList();
+    assert(!l.isEmpty());
 
+    bool ok = false;
+    unsigned height = l.front().toUInt(&ok); // arg0
+    if (!ok) {
+        emit c->sendError(false, RPC::Code_App_BadRequest, "Invalid height argument; expected non-negative numeric value", m.id);
+        return;
+    }
+    unsigned pos = l.at(1).toUInt(&ok); // arg1
+    if (!ok) {
+        emit c->sendError(false, RPC::Code_App_BadRequest, "Invalid tx_pos argument; expected non-negative numeric value", m.id);
+        return;
+    }
+    bool merkle = false;
+    if (l.size() == 3) { //optional arg2
+        const auto [arg, argOk] = parseBoolSemiLooselyButNotTooLoosely( l.back() );
+        if (!argOk) {
+            emit c->sendError(false, RPC::Code_App_BadRequest, "Invalid merkle argument; expected boolean", m.id);
+            return;
+        }
+        merkle = arg;
+    }
+    static const QString missingErr("No transaction at position %1 for height %2");
+    if (merkle) {
+        // merkle=true is a dict, see: https://electrumx.readthedocs.io/en/latest/protocol-methods.html#blockchain-transaction-id-from-pos
+        generic_do_async(c, m.id, m.method, [height, pos, this] {
             // get all hashes for the block (we need them for merkle)
             auto txHashes = storage->txHashesForBlockInBitcoindMemoryOrder(height);
             if (pos >= txHashes.size()) {
                 // out of range, or block not found
-                emit c->sendError(false, RPC::Code_App_BadRequest, missingErr.arg(pos).arg(height), m.id);
-                return;
+                throw RPCError(missingErr.arg(pos).arg(height));
             }
             // save the requested tx_hash now, which we will return as tx_hash of the response dictionary
             // (we need to reverse it for outputting to hex since we received it in bitcoind internal memory order).
@@ -939,22 +967,17 @@ void Server::rpc_blockchain_transaction_id_from_pos(Client *c, const RPC::Messag
                 { "merkle" , branchList },
             };
 
-            emit c->sendResult(m.id, m.method, res);
-            return;
-        } else {
-            // 1merkle, just return the tx_hash
-            const auto opt = storage->hashForHeightAndPos(height, pos);
-            if (!opt.has_value() || opt.value().length() != HashLen) {
-                emit c->sendError(false, RPC::Code_App_BadRequest, missingErr.arg(pos).arg(height), m.id);
-                return;
-            }
-            const auto txHashHex = Util::ToHexFast(opt.value());
-            emit c->sendResult(m.id, m.method, txHashHex);
-        }
+            return res;
+        });
     } else {
-        // TODO: remove this soon as this should never be reached. It is just here to detect bugs in our own RPC code
-        emit c->sendError(false, RPC::Code_InternalError, "internal error", m.id);
-        Error() << "Bad id_from_pos message! This shouldn't happen. FIXME! Json: " << m.toJsonString();
+        // no merkle, just return the tx_hash immediately without going async
+        const auto opt = storage->hashForHeightAndPos(height, pos);
+        if (!opt.has_value() || opt.value().length() != HashLen) {
+            emit c->sendError(false, RPC::Code_App_BadRequest, missingErr.arg(pos).arg(height), m.id);
+            return;
+        }
+        const auto txHashHex = Util::ToHexFast(opt.value());
+        emit c->sendResult(m.id, m.method, txHashHex);
     }
 }
 void Server::rpc_mempool_get_fee_histogram(Client *c, const RPC::Message &m)

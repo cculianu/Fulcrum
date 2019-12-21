@@ -153,6 +153,18 @@ private:
     QMap<quint64, Client *> clientsById;
 
 private:
+    struct RPCError : public Exception {
+        RPCError(const QString & message, int code = RPC::ErrorCodes::Code_App_BadRequest)
+            : Exception(message), code(code) {}
+        const int code;
+        ~RPCError () override;
+    };
+    /// used by some of the slower rpc methods to do work in a threadpool thread. this returns right away but schedules
+    /// the work for later and handles sending the response (returned from work) to the client as well as sending
+    /// any errors to the client. the `work` functor may throw RPCError, in which case code and message will be
+    /// sent instead.  Note that all other exceptions also end up sent to the client as "internal error: MESSAGE".
+    void generic_do_async(Client *client, const RPC::Message::Id &reqId, const QString &method,
+                          const std::function<QVariant()> & work);
     // RPC methods below
     // server
     void rpc_server_ping(Client *, const RPC::Message &);

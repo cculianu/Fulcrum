@@ -426,7 +426,7 @@ namespace Util {
         int MaxExtantJobs();
 
         /// Returns the number of jobs that were ever successfilly submitted via SubmitWork
-        unsigned NumJobsSubmitted();
+        uint64_t NumJobsSubmitted();
 
         /// Semi-private class not intended to be constructed by client code, but used inside SubmitWork.
         /// We put it here because the meta object compiler needs to see it for signal/slot glue code generation.

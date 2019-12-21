@@ -839,7 +839,7 @@ auto Controller::stats() const -> Stats
     st["Storage"] = storage->statsSafe();
     QVariantMap misc;
     misc["extant thread pool jobs"] = Util::ThreadPool::ExtantJobs();
-    misc["thread pool jobs (lifetime)"] = Util::ThreadPool::NumJobsSubmitted();
+    misc["thread pool jobs (lifetime)"] = qulonglong(Util::ThreadPool::NumJobsSubmitted());
     st["Misc"] = misc;
     return st;
 }

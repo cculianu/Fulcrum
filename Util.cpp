@@ -348,7 +348,7 @@ FatalAssert::~FatalAssert()
 namespace Util {
     namespace ThreadPool {
         namespace {
-            std::atomic_uint ctr = 0;
+            std::atomic_uint64_t ctr = 0;
             std::atomic_int extant = 0;
             std::atomic_bool blockNewWork = false;
             constexpr bool debugPrt = false;
@@ -406,7 +406,7 @@ namespace Util {
                 Error() << "FIXME: njobs " << njobs << " < 0!";
             }
             job->setAutoDelete(true);
-            const unsigned num = ++ctr;
+            const auto num = ++ctr;
             job->setObjectName(QString("Job %1 for '%2'").arg(num).arg( context ? context->objectName() : "<no context>"));
             if constexpr (debugPrt) {
                 QObject::connect(job, &Job::started, qApp, [n=job->objectName()]{
@@ -434,7 +434,7 @@ namespace Util {
 
         int ExtantJobs() { return extant.load(); }
         int MaxExtantJobs() { return maxExtant; }
-        unsigned NumJobsSubmitted() { return ctr.load(); }
+        uint64_t NumJobsSubmitted() { return ctr.load(); }
 
     } // end namespace ThreadPool
 } // end namespace Util
