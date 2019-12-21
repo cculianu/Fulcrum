@@ -20,6 +20,7 @@
 #include <vector>
 
 namespace BTC { class HeaderVerifier; } // fwd decl used below. #include "BTC.h" to see this type
+namespace Merkle { class Cache; }
 
 /// Generic database error
 struct DatabaseError : public Exception { using Exception::Exception; ~DatabaseError() override; };
@@ -177,6 +178,12 @@ public:
     // thread safe
     bitcoin::Amount getBalance(const HashX &) const;
 
+    /// this object is thread safe -- but Controller should check it is initialized and initialize it as soon as it can before allowing client connections.
+    std::unique_ptr<Merkle::Cache> merkleCache;
+
+    // thread safe, called from controller when we are up-to-date
+    void updateMerkleCache(unsigned height);
+
 protected:
     virtual Stats stats() const override; ///< from StatsMixin
 
@@ -245,6 +252,9 @@ private:
     void loadCheckEarliestUndo(); ///< may throw -- called from startup()
 
     std::optional<Header> headerForHeight_nolock(BlockHeight height, QString *errMsg = nullptr);
+
+    /// thread-safe helper that returns hashed headers starting from start up until count (hashes are in bitcoin memory order)
+    std::vector<QByteArray> merkleCacheHelperFunc(unsigned start, unsigned count, QString *err);
 };
 
 Q_DECLARE_OPERATORS_FOR_FLAGS(Storage::SaveSpec)

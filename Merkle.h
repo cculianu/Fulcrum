@@ -68,7 +68,7 @@ namespace Merkle
     /// EX work-alike merkle cache. We do it this way because pretty much the protocol demands this approach.
     class Cache {
     public:
-        using GetHashesFunc = std::function<HashVec(unsigned, unsigned)>;
+        using GetHashesFunc = std::function<HashVec(unsigned, unsigned, QString *)>;
 
         /// may throw BadArgs if !func
         Cache(const GetHashesFunc & func);
@@ -76,12 +76,16 @@ namespace Merkle
         bool isInitialized() const { return initialized; }
 
         /// initialize the cache to length hashes
-        void initialize(unsigned length); ///< takes exclusive lock
+        void initialize(unsigned length); ///< takes exclusive lock, may throw
+        /// initialize the cache using a set of hashes
+        void initialize(const HashVec &hashes); ///< takes exclusive lock, may throw
 
         BranchAndRootPair branchAndRoot(unsigned length, unsigned index); ///< takes exclusive lock, may throw
 
         /// truncate the cache to at most length hashes
         void truncate(unsigned length); ///< takes exclusive lock, may throw
+
+        size_t size() const { SharedLockGuard g(lock); return level.size(); }
 
     private:
         using RWLock = std::shared_mutex;
@@ -89,16 +93,23 @@ namespace Merkle
         using ExclusiveLockGuard = std::lock_guard<RWLock>;
 
         mutable RWLock lock;
-        const GetHashesFunc getHashes;
+        const GetHashesFunc getHashesFunc;
         unsigned length = 0, depthHigher = 0;
         HashVec level;
         std::atomic_bool initialized{false};
+
+        // takes no locks, may throw
+        void initialize_nolock(const HashVec &);
+
+        // takes no locks, may throw
+        HashVec getHashes(unsigned from, unsigned count) const;
 
         HashVec getLevel(const HashVec &) const; ///< takes no locks
         inline unsigned segmentLength() const { return 1 << depthHigher; }
         inline unsigned leafStart(unsigned index) const { return (index >> depthHigher) << depthHigher; }
         void extendTo(unsigned length); ///< takes no locks
         HashVec levelFor(unsigned length) const; ///< takes no locks, may throw
+
     };
 
     // -- For Testing --

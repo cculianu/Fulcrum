@@ -1,5 +1,6 @@
 #include "BTC.h"
 #include "LRUCache.h"
+#include "Merkle.h"
 #include "RecordFile.h"
 #include "Storage.h"
 
@@ -488,6 +489,12 @@ Storage::~Storage() { Debug("%s", __FUNCTION__); cleanup(); }
 
 void Storage::startup()
 {
+    {
+        // set up the merkle cache object
+        using namespace std::placeholders;
+        merkleCache = std::make_unique<Merkle::Cache>(std::bind(&Storage::merkleCacheHelperFunc, this, _1, _2, _3));
+    }
+
     {   // open all db's ...
 
         rocksdb::Options & opts(p->db.opts), &shistOpts(p->db.shistOpts);
@@ -594,6 +601,11 @@ auto Storage::stats() const -> Stats
         caches["lruHeight2Hash_Size"] = qlonglong(sz);
         caches["lruHeight2Hash_nHashes"] = qlonglong(nHashes);
         caches["lruHeight2Hash_SizeBytes"] = qlonglong(bytes);
+    }
+    {
+        const size_t nHashes = merkleCache->size(), bytes = nHashes * (HashLen + sizeof(HeaderHash));
+        caches["merkleHeaders_Size"] = qulonglong(nHashes);
+        caches["merkleHeaders_SizeBytes"] = qulonglong(bytes);
     }
     ret["caches"] = caches;
     return ret;
@@ -764,6 +776,7 @@ void Storage::loadCheckHeadersInDB()
 
     Log() << "Verifying headers ...";
     uint32_t num = 0;
+    Merkle::HashVec hashVec;
     const auto t0 = Util::getTimeNS();
     {
         auto * const db = p->db.headers.get();
@@ -775,6 +788,7 @@ void Storage::loadCheckHeadersInDB()
                                       .arg(num));
         // verify headers: hashPrevBlock must match what we actually read from db
         if (num) {
+            hashVec.reserve(num);
             auto [verif, lock] = headerVerifier();
             Debug() << "Verifying " << num << " " << Util::Pluralize("header", num) << " ...";
 
@@ -788,6 +802,7 @@ void Storage::loadCheckHeadersInDB()
                     throw DatabaseFormatError(QString("Error reading header %1, wrong size: %2").arg(i).arg(bytes.size()));
                 if (!verif(bytes, &err))
                     throw DatabaseError(QString("%1. Possible databaase corruption. Delete the datadir and resynch.").arg(err));
+                hashVec.emplace_back(BTC::Hash(bytes));
             }
         }
     }
@@ -795,6 +810,21 @@ void Storage::loadCheckHeadersInDB()
         const auto elapsed = Util::getTimeNS();
 
         Debug() << "Read & verified " << num << " " << Util::Pluralize("header", num) << " from db in " << QString::number((elapsed-t0)/1e6, 'f', 3) << " msec";
+    }
+
+    if (!merkleCache->isInitialized() && !hashVec.empty())
+        merkleCache->initialize(hashVec); // this may take a few seconds, and it may also throw
+
+}
+
+void Storage::updateMerkleCache(unsigned int height)
+{
+    if (!merkleCache->isInitialized() && height) {
+        try {
+            merkleCache->initialize(height+1); // this may take a few seconds
+        } catch (const std::exception & e) {
+            Error() << e.what();
+        }
     }
 }
 
@@ -1302,6 +1332,7 @@ BlockHeight Storage::undoLatestBlock()
         // first, undo the header
         p->headerVerifier.reset(prevHeight+1, prevHeader);
         deleteHeadersPastHeight(prevHeight); // commit change to db
+        merkleCache->truncate(prevHeight+1);
 
         // undo the blkInfo from the back
         p->blkInfos.pop_back();
@@ -1599,6 +1630,14 @@ bitcoin::Amount Storage::getBalance(const HashX &hashX) const
         Warning(Log::Magenta) << __func__ << ": " << e.what();
     }
     return ret;
+}
+
+std::vector<QByteArray> Storage::merkleCacheHelperFunc(unsigned int start, unsigned int count, QString *err)
+{
+    auto vec = headersFromHeight(start, count, err);
+    for (auto & ba : vec)
+        ba = BTC::Hash(ba);
+    return vec;
 }
 
 // HistoryItem & UnspentItem -- operator< and operator== -- for sort.

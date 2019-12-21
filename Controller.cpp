@@ -1,6 +1,7 @@
 #include "BlockProc.h"
 #include "BTC.h"
 #include "Controller.h"
+#include "Merkle.h"
 #include "TXO.h"
 
 #include "robin_hood/robin_hood.h"
@@ -492,7 +493,8 @@ void Controller::process(bool beSilentIfUpToDate)
             if (tip == sm->ht) {
                 if (task->info.bestBlockhash == tipHash) { // no reorg
                     if (!beSilentIfUpToDate) {
-                        Log() << "Block height " << sm->ht << ", up-to-date";
+                        storage->updateMerkleCache(unsigned(tip));
+                        Log() << "Block height " << tip << ", up-to-date";
                         emit upToDate();
                         emit newHeader(unsigned(tip), tipHeader);
                     }

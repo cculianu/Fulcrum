@@ -180,7 +180,7 @@ private:
     void rpc_server_ping(Client *, const RPC::Message &);
     void rpc_server_version(Client *, const RPC::Message &);
     // blockchain misc
-    void rpc_blockchain_block_header(Client *, const RPC::Message &);  // todo: cp_height
+    void rpc_blockchain_block_header(Client *, const RPC::Message &);  // fully implemented
     void rpc_blockchain_block_headers(Client *, const RPC::Message &); // todo: cp_height
     void rpc_blockchain_estimatefee(Client *, const RPC::Message &); // todo: this is a stub implementation
     void rpc_blockchain_headers_subscribe(Client *, const RPC::Message &); // fully implemented

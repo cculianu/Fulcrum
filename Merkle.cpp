@@ -153,20 +153,45 @@ namespace Merkle {
 
 
     Cache::Cache(const GetHashesFunc & f)
-        : getHashes(f)
+        : getHashesFunc(f)
     {
-        if (!getHashes)
+        if (!getHashesFunc)
             throw BadArgs("Merkle::Cache requires a valid getHashes function");
+    }
+
+    HashVec Cache::getHashes(unsigned int from, unsigned int count) const
+    {
+        QString err;
+        auto ret = getHashesFunc(from, count, &err);
+        if (ret.size() != count) {
+            throw InternalError(QString("Bad read from getHashes, expected %1, instead got %2%3")
+                                .arg(count).arg(ret.size()).arg(err.isEmpty() ? "" : QString(": %1").arg(err)));
+        } else if (!err.isEmpty())
+            throw InternalError(err);
+        return ret;
     }
 
     void Cache::initialize(unsigned l)
     {
         ExclusiveLockGuard g(lock);
+        Log() << "Initializing header merkle cache ...";
         const auto hashes = getHashes(0, l);
-        length = unsigned(hashes.size()); // may be a short return, so ensure length is the actual size retrieved
+        initialize_nolock(hashes);
+    }
+    void Cache::initialize(const HashVec &hashes)
+    {
+        ExclusiveLockGuard g(lock);
+        Log() << "Initializing header merkle cache ...";
+        initialize_nolock(hashes);
+    }
+
+    void Cache::initialize_nolock(const HashVec &hashes)
+    {
+        length = unsigned(hashes.size());
         depthHigher = Merkle::treeDepth(length) / 2;
         level = getLevel(hashes);
         initialized = true;
+        Debug() << "Merkle cache initialized to length " << length;
     }
 
     HashVec Cache::getLevel(const HashVec &hashes) const {
@@ -204,10 +229,6 @@ namespace Merkle {
         const auto leafstart = leafStart(l);
         const auto count = std::min(segmentLength(), l - leafstart);
         auto hashes = getHashes(leafstart, count);
-        if (count != hashes.size()) {
-            throw InternalError(QString("Bad read from getHashes, expected %1, instead got %2")
-                                .arg(count).arg(hashes.size()));
-        }
         const auto vec = getLevel(hashes);
         ret.reserve(ret.size() + vec.size());
         ret.insert(ret.end(), vec.begin(), vec.end());
@@ -217,15 +238,15 @@ namespace Merkle {
     BranchAndRootPair Cache::branchAndRoot(unsigned length, unsigned index)
     {
         if (!length)
-            throw BadArgs(QString("%1: length must not be 0").arg(__PRETTY_FUNCTION__));
+            throw BadArgs(QString("%1: length must not be 0").arg(__FUNCTION__));
         if (index >= length)
-            throw BadArgs(QString("%1: index must be less than length").arg(__PRETTY_FUNCTION__));
+            throw BadArgs(QString("%1: index must be less than length").arg(__FUNCTION__));
         BranchAndRootPair ret;
         ExclusiveLockGuard g(lock);
         extendTo(length);
-        if (length != this->length) {
+        if (length > this->length) {
             // ruh-roh.. what to do here?
-            throw InternalError(QString("%1: extendTo failed to extend length to %2").arg(__PRETTY_FUNCTION__).arg(length));
+            throw InternalError(QString("%1: extendTo failed to extend length to %2").arg(__FUNCTION__).arg(length));
         }
         auto ls = leafStart(index);
         auto count = std::min(segmentLength(), length - ls);
@@ -241,8 +262,10 @@ namespace Merkle {
 
     void Cache::truncate(unsigned length)
     {
+        if (!initialized)
+            return;
         if (!length)
-            throw BadArgs(QString("%1: length cannot be 0").arg(__PRETTY_FUNCTION__));
+            throw BadArgs(QString("%1: length cannot be 0").arg(__FUNCTION__));
         ExclusiveLockGuard g(lock);
         if (length >= this->length)
             // we are already smaller than length, so it's fine.
