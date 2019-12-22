@@ -564,7 +564,7 @@ void Server::rpc_blockchain_block_header(Client *c, const RPC::Message &m)
         throw RPCError("Invalid cp_height");
     if (cp_height) {
         const auto tip = storage->latestTip().first;
-        if (tip < 0) throw InternalError("chaing height is negative");
+        if (tip < 0) throw InternalError("chain height is negative");
         if ( ! (height <= cp_height && cp_height <= unsigned(tip)) )
             throw RPCError(QString("header height %1 must be <= cp_height %2 which must be <= chain height %3")
                            .arg(height).arg(cp_height).arg(tip));
@@ -578,7 +578,7 @@ void Server::rpc_blockchain_block_header(Client *c, const RPC::Message &m)
             if (!cp_height)
                 ret = hexHdr;
             else {
-                auto pair = storage->merkleCache->branchAndRoot(cp_height+1, height);
+                auto pair = storage->headerBranchAndRoot(height, cp_height);
                 auto & [branch, root] = pair;
                 std::reverse(root.begin(), root.end());
                 root = Util::ToHexFast(root);

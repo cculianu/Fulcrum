@@ -2,6 +2,7 @@
 #define STORAGE_H
 
 #include "BlockProc.h"
+#include "Merkle.h"
 #include "Mgr.h"
 #include "Mixins.h"
 #include "Options.h"
@@ -20,7 +21,6 @@
 #include <vector>
 
 namespace BTC { class HeaderVerifier; } // fwd decl used below. #include "BTC.h" to see this type
-namespace Merkle { class Cache; }
 
 /// Generic database error
 struct DatabaseError : public Exception { using Exception::Exception; ~DatabaseError() override; };
@@ -172,17 +172,18 @@ public:
     };
     using UnspentItems = std::vector<UnspentItem>;
 
-    // thread safe
+    /// thread safe
     UnspentItems listUnspent(const HashX &) const;
 
-    // thread safe
+    /// thread safe
     bitcoin::Amount getBalance(const HashX &) const;
 
-    /// this object is thread safe -- but Controller should check it is initialized and initialize it as soon as it can before allowing client connections.
-    std::unique_ptr<Merkle::Cache> merkleCache;
-
-    // thread safe, called from controller when we are up-to-date
+    /// thread safe, called from controller when we are up-to-date
     void updateMerkleCache(unsigned height);
+
+    /// thread safe, returns a BranchAndRootPair for headers from height, cp_height. May throw in rare circumstances
+    /// if there was a reorg and cp_height is no longer <= chain height.
+    Merkle::BranchAndRootPair headerBranchAndRoot(unsigned height, unsigned cp_height);
 
 protected:
     virtual Stats stats() const override; ///< from StatsMixin

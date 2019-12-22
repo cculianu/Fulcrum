@@ -476,6 +476,9 @@ struct Storage::Pvt
     /// undoLatestBlock.  This is used by the txHashesForBlock function only (which is used by get_merkle and
     /// id_from_pos in the protocol). TODO: MAKE THIS CACHE SIZE CONFIGURABLE.
     LRU::Cache<true, BlockHeight, std::vector<TxHash>> lruHeight2Hashes_BitcoindMemOrder { 500, 150 };
+
+    /// this object is thread safe, but it needs to be initialized with headers before allowing client connections.
+    std::unique_ptr<Merkle::Cache> merkleCache;
 };
 
 Storage::Storage(const std::shared_ptr<Options> & options)
@@ -492,7 +495,7 @@ void Storage::startup()
     {
         // set up the merkle cache object
         using namespace std::placeholders;
-        merkleCache = std::make_unique<Merkle::Cache>(std::bind(&Storage::merkleCacheHelperFunc, this, _1, _2, _3));
+        p->merkleCache = std::make_unique<Merkle::Cache>(std::bind(&Storage::merkleCacheHelperFunc, this, _1, _2, _3));
     }
 
     {   // open all db's ...
@@ -603,7 +606,7 @@ auto Storage::stats() const -> Stats
         caches["lruHeight2Hash_SizeBytes"] = qlonglong(bytes);
     }
     {
-        const size_t nHashes = merkleCache->size(), bytes = nHashes * (HashLen + sizeof(HeaderHash));
+        const size_t nHashes = p->merkleCache->size(), bytes = nHashes * (HashLen + sizeof(HeaderHash));
         caches["merkleHeaders_Size"] = qulonglong(nHashes);
         caches["merkleHeaders_SizeBytes"] = qulonglong(bytes);
     }
@@ -812,20 +815,9 @@ void Storage::loadCheckHeadersInDB()
         Debug() << "Read & verified " << num << " " << Util::Pluralize("header", num) << " from db in " << QString::number((elapsed-t0)/1e6, 'f', 3) << " msec";
     }
 
-    if (!merkleCache->isInitialized() && !hashVec.empty())
-        merkleCache->initialize(hashVec); // this may take a few seconds, and it may also throw
+    if (!p->merkleCache->isInitialized() && !hashVec.empty())
+        p->merkleCache->initialize(hashVec); // this may take a few seconds, and it may also throw
 
-}
-
-void Storage::updateMerkleCache(unsigned int height)
-{
-    if (!merkleCache->isInitialized() && height) {
-        try {
-            merkleCache->initialize(height+1); // this may take a few seconds
-        } catch (const std::exception & e) {
-            Error() << e.what();
-        }
-    }
 }
 
 void Storage::loadCheckTxNumsFileAndBlkInfo()
@@ -1332,7 +1324,7 @@ BlockHeight Storage::undoLatestBlock()
         // first, undo the header
         p->headerVerifier.reset(prevHeight+1, prevHeader);
         deleteHeadersPastHeight(prevHeight); // commit change to db
-        merkleCache->truncate(prevHeight+1);
+        p->merkleCache->truncate(prevHeight+1);
 
         // undo the blkInfo from the back
         p->blkInfos.pop_back();
@@ -1638,6 +1630,27 @@ std::vector<QByteArray> Storage::merkleCacheHelperFunc(unsigned int start, unsig
     for (auto & ba : vec)
         ba = BTC::Hash(ba);
     return vec;
+}
+
+void Storage::updateMerkleCache(unsigned int height)
+{
+    if (!p->merkleCache->isInitialized() && height) {
+        try {
+            p->merkleCache->initialize(height+1); // this may take a few seconds
+        } catch (const std::exception & e) {
+            Error() << e.what();
+        }
+    }
+}
+
+Merkle::BranchAndRootPair Storage::headerBranchAndRoot(unsigned height, unsigned cp_height)
+{
+    // TODO: there is a potential, non-fatal race condition here where the caller tried to verify that cp_height is
+    // above chainTip height, but it's possible for a reorg to happen and for that to no longer be valid by the time
+    // the call path gets to this point.  That's fine -- an exception will be thrown. This is only ever called by
+    // code that catches exceptions.
+    assert(p->merkleCache);
+    return p->merkleCache->branchAndRoot(cp_height+1, height);
 }
 
 // HistoryItem & UnspentItem -- operator< and operator== -- for sort.
