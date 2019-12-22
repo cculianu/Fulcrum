@@ -6,6 +6,10 @@
 
 namespace Merkle {
 
+    // TODO: See if it would be better to throw exceptions here.
+    // It appears all calling code into this catches exceptions.. although for now I do like the fact that these errors
+    // all unconditionally appear in the log since any errors in these functions are probably due to programming error.
+
     BranchAndRootPair branchAndRoot(const HashVec &hashVec, unsigned index, const std::optional<unsigned> & optLen)
     {
         BranchAndRootPair ret;
@@ -203,10 +207,13 @@ namespace Merkle {
             return;
         auto start = leafStart(length);
         auto hashes = getHashes(start, l-start);
-        l = start + unsigned(hashes.size()); // set length to what we actually got;
+
+        // set length to what we actually got; TODO: should we throw here instead if it's a short count? FIXME.
+        l = start + unsigned(hashes.size());
         if (l <= length)
-            // we got nothing!
+            // we got nothing!  TODO: should we throw here instead?
             return;
+
         level.erase(level.begin() + (start >> depthHigher), level.end());
         auto vec = getLevel(hashes);
         level.reserve(level.size() + vec.size());
@@ -223,6 +230,7 @@ namespace Merkle {
         }
         unsigned limit = l >> depthHigher;
         if (limit >= level.size())
+            // should we throw here instead? TODO: resolve this question.
             limit = unsigned(level.size());
         ret.reserve(limit);
         ret.insert(ret.end(), level.begin(), level.begin() + limit);
@@ -241,6 +249,8 @@ namespace Merkle {
             throw BadArgs(QString("%1: length must not be 0").arg(__FUNCTION__));
         if (index >= length)
             throw BadArgs(QString("%1: index must be less than length").arg(__FUNCTION__));
+        if (!initialized)
+            throw InternalError(QString("%1: Merkle cache is not initialized").arg(__FUNCTION__));
         BranchAndRootPair ret;
         ExclusiveLockGuard g(lock);
         extendTo(length);
