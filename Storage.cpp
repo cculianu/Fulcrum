@@ -40,7 +40,10 @@ namespace {
     };
 
     // some database keys we use -- todo: if this grows large, move it elsewhere
-    static const rocksdb::Slice kMeta{"meta"}, kNumHeaders{"num_headers"};
+    static const bool falseMem = false, trueMem = true;
+    static const rocksdb::Slice kMeta{"meta"}, kNumHeaders{"num_headers"}, kDirty{"dirty"}, kUtxoCount{"utxo_count"},
+                                kTrue(reinterpret_cast<const char *>(&trueMem), sizeof(trueMem)),
+                                kFalse(reinterpret_cast<const char *>(&falseMem), sizeof(trueMem));
 
     // serialize/deser -- for basic types we use QDataStream, but we also have specializations at the end of this file
     template <typename Type>
@@ -96,7 +99,7 @@ namespace {
     /// architectures.
     template <typename Scalar,
               std::enable_if_t<std::is_scalar_v<Scalar> && !std::is_pointer_v<Scalar>, int> = 0>
-    [[maybe_unused]] QByteArray SerializeScalar (const Scalar & s) { return DeepCpy(&s); }
+    QByteArray SerializeScalar (const Scalar & s) { return DeepCpy(&s); }
     template <typename Scalar,
               std::enable_if_t<std::is_scalar_v<Scalar> && !std::is_pointer_v<Scalar>, int> = 0>
     QByteArray SerializeScalarNoCopy (const Scalar &s) { return ShallowTmp(&s);  }
@@ -130,6 +133,8 @@ namespace {
     template <> TXO Deserialize(const QByteArray &, bool *);
     template <> QByteArray Serialize(const TXOInfo &);
     template <> TXOInfo Deserialize(const QByteArray &, bool *);
+    template <> [[maybe_unused]] QByteArray Serialize(const bitcoin::Amount &);
+    template <> bitcoin::Amount Deserialize(const QByteArray &, bool *);
     // TxNumVec
     using TxNumVec = std::vector<TxNum>;
     // this serializes a vector of TxNums to a compact representation (6 bytes, eg 48 bits per TxNum), in little endian byte order
@@ -559,6 +564,12 @@ void Storage::startup()
             // ok, did not exist .. write a new one to db
             saveMeta_impl();
         }
+        if (isDirty()) {
+            throw DatabaseError("It appears that " APPNAME " was forcefully killed in the middle of committng a block to the db. "
+                                "We cannot figure out where exactly in the update process " APPNAME " was killed, so we "
+                                "cannot undo the inconsistent state caused by the unexpected shutdown. Sorry!"
+                                "\n\nThe database has been corrupted. Please delete the datadir and resynch to bitcoind.\n");
+        }
     }
 
     Log() << "Loading database ...";
@@ -751,6 +762,54 @@ auto Storage::headerForHeight_nolock(BlockHeight height, QString *err) -> std::o
     return ret;
 }
 
+auto Storage::headersFromHeight_nolock_nocheck(BlockHeight height, unsigned num, QString *err) -> std::vector<Header>
+{
+    std::vector<Header> ret;
+    if (err) err->clear();
+    std::vector<uint32_t> heightsMem;
+    std::vector<rocksdb::Slice> heightsKeys; // these will be shallow pointers into heithsMem;
+    heightsMem.reserve(size_t(num));
+    heightsKeys.reserve(size_t(num));
+    std::vector<std::string> results;
+
+    for (uint32_t i = 0; i < uint32_t(num); ++i) {
+        heightsMem.push_back(height + i);
+        heightsKeys.emplace_back(ToSlice(heightsMem.back()));
+    }
+    std::vector<rocksdb::Status> statuses =
+            p->db.headers->MultiGet(p->db.defReadOpts, heightsKeys, &results);
+
+    const size_t ct = statuses.size();
+
+    if (ct != unsigned(num)) {
+        if (err) *err ="returned statuses != requested header count";
+    } else {
+        ret.reserve(ct);
+
+        for (size_t i = 0; i < ct; ++i) {
+            if (UNLIKELY(!statuses[i].ok())) {
+                if (err) *err = QString("Error reading header %1 from db: %2").arg(i).arg(StatusString(statuses[i]));
+                break;
+            } else if (UNLIKELY(results[i].size() != unsigned(p->blockHeaderSize))) {
+                if (err) *err = QString("Error reading header %1, wrong size: %2").arg(i).arg(results[i].size());
+                break;
+            }
+            ret.emplace_back(results[i].data(), int(results[i].size()));
+        }
+    }
+    /*
+    if (err) *err = "";
+    ret.reserve(unsigned(num));
+    for (int i = 0; i < num; ++i) {
+        auto opt = headerForHeight_nolock(height + unsigned(i), err);
+        if (!opt.has_value())
+            break;
+        ret.emplace_back(std::move(opt.value()));
+    }*/
+    ret.shrink_to_fit();
+    return ret;
+}
+
 /// Convenient batched alias for above. Returns a set of headers starting at height. May return < count if not
 /// all headers were found. Thead safe.
 auto Storage::headersFromHeight(BlockHeight height, unsigned count, QString *err) -> std::vector<Header>
@@ -759,16 +818,8 @@ auto Storage::headersFromHeight(BlockHeight height, unsigned count, QString *err
     SharedLockGuard g(p->blocksLock); // to ensure clients get a consistent view
     int num = std::min(1 + latestTip().first - int(height), int(count)); // note this also takes a lock briefly so we need to do this after the lockguard above
     if (num > 0) {
-        if (err) *err = "";
-        ret.reserve(unsigned(num));
-        for (int i = 0; i < num; ++i) {
-            auto opt = headerForHeight_nolock(height + unsigned(i), err);
-            if (!opt.has_value())
-                break;
-            ret.emplace_back(std::move(opt.value()));
-        }
+        ret = headersFromHeight_nolock_nocheck(height, count, err);
     } else if (err) *err = "No headers in the specified range";
-    ret.shrink_to_fit();
     return ret;
 }
 
@@ -779,7 +830,7 @@ void Storage::loadCheckHeadersInDB()
 
     Log() << "Verifying headers ...";
     uint32_t num = 0;
-    Merkle::HashVec hashVec;
+    std::vector<QByteArray> hVec;
     const auto t0 = Util::getTimeNS();
     {
         auto * const db = p->db.headers.get();
@@ -791,21 +842,21 @@ void Storage::loadCheckHeadersInDB()
                                       .arg(num));
         // verify headers: hashPrevBlock must match what we actually read from db
         if (num) {
-            hashVec.reserve(num);
-            auto [verif, lock] = headerVerifier();
             Debug() << "Verifying " << num << " " << Util::Pluralize("header", num) << " ...";
+            QString err;
+            hVec = headersFromHeight_nolock_nocheck(0, num, &err);
+            if (!err.isEmpty() || hVec.size() != num)
+                throw DatabaseFormatError(QString("%1. Possible databaase corruption. Delete the datadir and resynch.").arg(err.isEmpty() ? "Could not read all headers" : err));
+            auto [verif, lock] = headerVerifier();
 
             const QString errMsg("Error retrieving header from db");
-            QString err;
+            err.clear();
             // read db
             for (uint32_t i = 0; i < num; ++i) {
-                // guaranteed to return a value or throw
-                const auto bytes = GenericDBGetFailIfMissing<QByteArray>(db, uint32_t(i), errMsg, false, p->db.defReadOpts);
-                if (UNLIKELY(bytes.size() != p->blockHeaderSize))
-                    throw DatabaseFormatError(QString("Error reading header %1, wrong size: %2").arg(i).arg(bytes.size()));
+                auto & bytes = hVec[i];
                 if (!verif(bytes, &err))
-                    throw DatabaseError(QString("%1. Possible databaase corruption. Delete the datadir and resynch.").arg(err));
-                hashVec.emplace_back(BTC::Hash(bytes));
+                    throw DatabaseFormatError(QString("%1. Possible databaase corruption. Delete the datadir and resynch.").arg(err));
+                bytes = BTC::Hash(bytes); // replace the header in the vector with its hash because it will be needed below...
             }
         }
     }
@@ -815,8 +866,8 @@ void Storage::loadCheckHeadersInDB()
         Debug() << "Read & verified " << num << " " << Util::Pluralize("header", num) << " from db in " << QString::number((elapsed-t0)/1e6, 'f', 3) << " msec";
     }
 
-    if (!p->merkleCache->isInitialized() && !hashVec.empty())
-        p->merkleCache->initialize(hashVec); // this may take a few seconds, and it may also throw
+    if (!p->merkleCache->isInitialized() && !hVec.empty())
+        p->merkleCache->initialize(hVec); // this may take a few seconds, and it may also throw
 
 }
 
@@ -856,65 +907,80 @@ void Storage::loadCheckUTXOsInDB()
 {
     FatalAssert(!!p->db.utxoset) << __FUNCTION__ << ": Utxo set db is not open";
 
-    Log() << "Verifying utxo set ...";
+    if (options->doSlowDbChecks) {
+        Log() << "CheckDB: Verifying utxo set (this may take some time) ...";
 
-    const auto t0 = Util::getTimeNS();
-    {
-        const int currentHeight = latestTip().first;
+        const auto t0 = Util::getTimeNS();
+        {
+            const int currentHeight = latestTip().first;
 
-        std::unique_ptr<rocksdb::Iterator> iter(p->db.utxoset->NewIterator(p->db.defReadOpts));
-        if (!iter) throw DatabaseError("Unable to obtain an iterator to the utxo set db");
-        p->utxoCt = 0;
-        for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
-            // TODO: the below checks may be too slow. See about removing them and just counting the iter.
-            const auto txo = Deserialize<TXO>(FromSlice(iter->key()));
-            if (!txo.isValid()) {
-                throw DatabaseSerializationError("Read an invalid txo from the utxo set database."
-                                                 " This may be due to a database format mismatch."
-                                                 "\n\nDelete the datadir and resynch to bitcoind.\n");
-            }
-            auto info = Deserialize<TXOInfo>(FromSlice(iter->value()));
-            if (!info.isValid())
-                throw DatabaseSerializationError(QString("Txo %1 has invalid metadata in the db."
-                                                        " This may be due to a database format mismatch."
-                                                        "\n\nDelete the datadir and resynch to bitcoind.\n")
-                                                 .arg(txo.toString()));
-            // uncomment this to do a deep test: TODO: Make this configurable from the CLI -- this last check is very slow.
-            //const CompactTXO ctxo = CompactTXO(info.txNum, txo.prevoutN);
-            //const QByteArray shuKey = info.hashX + ctxo.toBytes();
-            //static const QString errPrefix("Error reading scripthash_unspent");
-            if (bool fail1 = false, fail2 = false/*, fail3 = false*/;
-                    (fail1 = (info.confirmedHeight.has_value() && int(info.confirmedHeight.value()) > currentHeight))
-                    || (fail2 = info.txNum >= p->txNumNext)
-                    /*|| (fail3 = !GenericDBGet<QByteArray>(p->db.shunspent.get(), shuKey, true, errPrefix, false, p->db.defReadOpts).has_value())*/) {
-                // TODO: reorg? Inconsisent db?  FIXME
-                QString msg;
-                {
-                    QTextStream ts(&msg);
-                    ts << "Inconsistent database: txo " << txo.toString() << " at height: "
-                       << info.confirmedHeight.value();
-                    if (fail1) {
-                        ts << " > current height: " << currentHeight << ".";
-                    } else if (fail2) {
-                        ts << ". TxNum: " << info.txNum << " >= " << p->txNumNext << ".";
-                    } /*else if (fail3) {
-                        ts << ". Failed to find ctxo " << ctxo.toString() << " in scripthash_unspent db.";
-                    }*/
-                    ts << "\n\nThe database has been corrupted. Please delete the datadir and resynch to bitcoind.\n";
+            std::unique_ptr<rocksdb::Iterator> iter(p->db.utxoset->NewIterator(p->db.defReadOpts));
+            if (!iter) throw DatabaseError("Unable to obtain an iterator to the utxo set db");
+            p->utxoCt = 0;
+            for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
+                // TODO: the below checks may be too slow. See about removing them and just counting the iter.
+                const auto txo = Deserialize<TXO>(FromSlice(iter->key()));
+                if (!txo.isValid()) {
+                    throw DatabaseSerializationError("Read an invalid txo from the utxo set database."
+                                                     " This may be due to a database format mismatch."
+                                                     "\n\nDelete the datadir and resynch to bitcoind.\n");
                 }
-                throw DatabaseError(msg);
+                auto info = Deserialize<TXOInfo>(FromSlice(iter->value()));
+                if (!info.isValid())
+                    throw DatabaseSerializationError(QString("Txo %1 has invalid metadata in the db."
+                                                            " This may be due to a database format mismatch."
+                                                            "\n\nDelete the datadir and resynch to bitcoind.\n")
+                                                     .arg(txo.toString()));
+                // uncomment this to do a deep test: TODO: Make this configurable from the CLI -- this last check is very slow.
+                const CompactTXO ctxo = CompactTXO(info.txNum, txo.prevoutN);
+                const QByteArray shuKey = info.hashX + ctxo.toBytes();
+                static const QString errPrefix("Error reading scripthash_unspent");
+                QByteArray tmpBa;
+                if (bool fail1 = false, fail2 = false, fail3 = false, fail4 = false;
+                        (fail1 = (info.confirmedHeight.has_value() && int(info.confirmedHeight.value()) > currentHeight))
+                        || (fail2 = info.txNum >= p->txNumNext)
+                        || (fail3 = (tmpBa = GenericDBGet<QByteArray>(p->db.shunspent.get(), shuKey, true, errPrefix, false, p->db.defReadOpts).value_or("")).isEmpty())
+                        || (fail4 = (info.amount != Deserialize<bitcoin::Amount>(tmpBa)))) {
+                    // TODO: reorg? Inconsisent db?  FIXME
+                    QString msg;
+                    {
+                        QTextStream ts(&msg);
+                        ts << "Inconsistent database: txo " << txo.toString() << " at height: "
+                           << info.confirmedHeight.value();
+                        if (fail1) {
+                            ts << " > current height: " << currentHeight << ".";
+                        } else if (fail2) {
+                            ts << ". TxNum: " << info.txNum << " >= " << p->txNumNext << ".";
+                        } else if (fail3) {
+                            ts << ". Failed to find ctxo " << ctxo.toString() << " in the scripthash_unspent db.";
+                        } else if (fail4) {
+                            ts << ". Utxo amount does not match the ctxo amount in the scripthash_unspent db.";
+                        }
+                        ts << "\n\nThe database has been corrupted. Please delete the datadir and resynch to bitcoind.\n";
+                    }
+                    throw DatabaseError(msg);
+                }
+                if (0 == ++p->utxoCt % 100000) {
+                    *(0 == p->utxoCt % 2500000 ? std::make_unique<Log>() : std::make_unique<Debug>()) << "CheckDB: Verified " << p->utxoCt << " utxos ...";
+                }
             }
-            if (0 == ++p->utxoCt % 100000) {
-                *(0 == p->utxoCt % 2500000 ? std::make_unique<Log>() : std::make_unique<Debug>()) << "Verified " << p->utxoCt << " utxos ...";
-            }
+
+            if (const auto metact = readUtxoCtFromDB(); p->utxoCt != metact)
+                    throw DatabaseError(QString("UTXO count in meta table (%1) does not match the actual number of UTXOs in the utxoset (%2)."
+                                                "\n\nThe database has been corrupted. Please delete the datadir and resynch to bitcoind.\n")
+                                        .arg(metact).arg(p->utxoCt.load()));
+
         }
-        const auto ct = utxoSetSize();
-        if (ct)
-            Log() << "UTXO set: "  << ct << Util::Pluralize(" utxo", ct)
-                  << ", " << QString::number(utxoSetSizeMiB(), 'f', 3) << " MiB";
+        const auto elapsed = Util::getTimeNS();
+        Debug() << "CheckDB: Verified utxos in " << QString::number((elapsed-t0)/1e6, 'f', 3) << " msec";
+
+    } else {
+        p->utxoCt = readUtxoCtFromDB();
     }
-    const auto elapsed = Util::getTimeNS();
-    Debug() << "Read txos from db in " << QString::number((elapsed-t0)/1e6, 'f', 3) << " msec";
+
+    if (const auto ct = utxoSetSize(); ct)
+        Log() << "UTXO set: "  << ct << Util::Pluralize(" utxo", ct)
+              << ", " << QString::number(utxoSetSizeMiB(), 'f', 3) << " MiB";
 }
 
 void Storage::loadCheckEarliestUndo()
@@ -991,7 +1057,9 @@ void Storage::UTXOBatch::add(const TXO &txo, const TXOInfo &info, const CompactT
         // on lookup cost for getBalance().
         static const QString errMsgPrefix("Failed to add an entry to the scripthash_unspent batch");
 
-        GenericBatchPut(p->shunspentBatch, mkShunspentKey(info.hashX, ctxo), int64_t(info.amount / info.amount.satoshi()),
+        GenericBatchPut(p->shunspentBatch,
+                        mkShunspentKey(info.hashX, ctxo),
+                        int64_t( info.amount / info.amount.satoshi() ), ///< we do it this way because it avoids a memcpy. this is the right way: Serialize(info.amount)
                         errMsgPrefix); // may throw, which is what we want
     }
     ++p->addCt;
@@ -1061,6 +1129,8 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
             // after everything completes successfully.
             rawHeader = p->headerVerifier.lastHeaderProcessed().second;
         }
+
+        setDirty(true); // <--  no turning back. if the app crashes unexpectedly while this is set, on next restart it will refuse to run and insist on a clean resynch.
 
         {  // add txnum -> txhash association to the TxNumsFile...
             auto batch = p->txNumsFile->beginBatchAppend(); // may throw if io error in c'tor here.
@@ -1285,6 +1355,9 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
 
         appendHeader(rawHeader, ppb->height);
 
+        saveUtxoCt();
+        setDirty(false);
+
         undoVerifierOnScopeEnd.disable(); // indicate to the "Defer" object declared at the top of this function that it shouldn't undo anything anymore as we are happy now with the db state now.
     }
 }
@@ -1323,6 +1396,7 @@ BlockHeight Storage::undoLatestBlock()
 
         // first, undo the header
         p->headerVerifier.reset(prevHeight+1, prevHeader);
+        setDirty(true); // <-- no turning back. we clear this flag at the end
         deleteHeadersPastHeight(prevHeight); // commit change to db
         p->merkleCache->truncate(prevHeight+1);
 
@@ -1398,6 +1472,9 @@ BlockHeight Storage::undoLatestBlock()
         if (QString err; p->txNumsFile->truncate(txNum0, &err) != txNum0 || !err.isEmpty()) {
             throw InternalError(QString("Failed to truncate txNumsFile to %1: %2").arg(txNum0).arg(err));
         }
+
+        saveUtxoCt();
+        setDirty(false); // phew. done.
     }
 
     const size_t nTx = undo.blkInfo.nTx, nSH = undo.scriptHashes.size();
@@ -1408,6 +1485,33 @@ BlockHeight Storage::undoLatestBlock()
 
     return prevHeight;
 }
+
+
+void Storage::setDirty(bool dirtyFlag)
+{
+    static const QString errPrefix("Error saving dirty flag to the meta db");
+    const auto & val = dirtyFlag ? kTrue : kFalse;
+    GenericDBPut(p->db.meta.get(), kDirty, val, errPrefix, p->db.defWriteOpts);
+}
+
+bool Storage::isDirty() const
+{
+    static const QString errPrefix("Error reading dirty flag from the meta db");
+    return GenericDBGet<bool>(p->db.meta.get(), kDirty, true, errPrefix, false, p->db.defReadOpts).value_or(false);
+}
+
+void Storage::saveUtxoCt()
+{
+    static const QString errPrefix("Error writing the utxo count to the meta db");
+    const int64_t ct = p->utxoCt.load();
+    GenericDBPut(p->db.meta.get(), kUtxoCount, ct, errPrefix, p->db.defWriteOpts);
+}
+int64_t Storage::readUtxoCtFromDB() const
+{
+    static const QString errPrefix("Error reading the utxo count from the meta db");
+    return GenericDBGet<int64_t>(p->db.meta.get(), kUtxoCount, true, errPrefix, false, p->db.defReadOpts).value_or(0LL);
+}
+
 
 std::optional<TxHash> Storage::hashForTxNum(TxNum n, bool throwIfMissing, bool *wasCached, bool skipCache) const
 {
@@ -1606,12 +1710,11 @@ bitcoin::Amount Storage::getBalance(const HashX &hashX) const
                 // should never happen, indicates db corruption
                 throw InternalError(QString("Deserialized CompactTXO is invalid for scripthash %1").arg(QString(hashX.toHex())));
             bool ok;
-            const auto amt = DeserializeScalar<int64_t>(FromSlice(iter->value()), &ok);
+            const bitcoin::Amount amount = Deserialize<bitcoin::Amount>(FromSlice(iter->value()), &ok);
             if (UNLIKELY(!ok))
                 throw InternalError(QString("Bad amount in db for ctxo %1 (%2)").arg(ctxo.toString()).arg(QString(hashX.toHex())));
-            const bitcoin::Amount amount = amt * bitcoin::Amount::satoshi();
             if (UNLIKELY(!bitcoin::MoneyRange(amount)))
-                throw InternalError(QString("Out-of-range amount in db for ctxo %1: %2").arg(ctxo.toString()).arg(amt));
+                throw InternalError(QString("Out-of-range amount in db for ctxo %1: %2").arg(ctxo.toString()).arg(amount / amount.satoshi()));
             ret += amount; // tally the result
         }
         if (UNLIKELY(!bitcoin::MoneyRange(ret))) {
@@ -1929,4 +2032,11 @@ namespace {
         if (ok) *ok = ret.isValid();
         return ret;
     }
+
+    template <> QByteArray Serialize(const bitcoin::Amount &a) { return SerializeScalar(a / a.satoshi()); }
+    template <> bitcoin::Amount Deserialize(const QByteArray &ba, bool *ok) {
+        const int64_t amt = DeserializeScalar<int64_t>(ba, ok);
+        return amt * bitcoin::Amount::satoshi();
+    }
+
 } // end anon namespace

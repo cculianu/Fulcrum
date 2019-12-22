@@ -64,7 +64,8 @@ public:
     /// height > latestTip().first.  May also fail on low-level db error. Use the optional arg *err to see why if failed.
     std::optional<Header> headerForHeight(BlockHeight height, QString *err = nullptr);
     /// Convenient batched alias for above. Returns a set of headers starting at height. May return < count if not
-    /// all headers were found. Thead safe.
+    /// all headers were found. Thread safe.  This is potentially much faster than calling headerForHeight in a loop
+    /// since it uses the RocksDB MultiGet API. Does not throw.
     std::vector<Header> headersFromHeight(BlockHeight height, unsigned count, QString *err = nullptr);
 
     /// Implicitly takes a lock to return this. Thread safe. Breakdown of info returned:
@@ -238,6 +239,18 @@ protected:
     /// Rewinds the headers until the latest header is at the specified height.  May throw on error.
     void deleteHeadersPastHeight(BlockHeight height);
 
+    /// This is set in addBlock and undoLatestBlock while we do a bunch of updates, then cleared when updates are done,
+    /// for each block. Thread-safe, may throw.
+    void setDirty(bool dirtyFlag);
+    /// If this is true on startup, we know the db must be inconsistent and we refuse to continue, exiting with an
+    /// error. Thread-safe, may throw.
+    bool isDirty() const;
+
+    /// Called by addBlock and undoLatestBlock to update the utxo_count in the Meta db. Thread-safe, may throw.
+    void saveUtxoCt();
+    /// Reads the UtxoCt from the meta db. If they key is missing it will return 0.  May throw on low-level db error.
+    int64_t readUtxoCtFromDB() const;
+
 private:
     const std::shared_ptr<Options> options;
 
@@ -253,6 +266,7 @@ private:
     void loadCheckEarliestUndo(); ///< may throw -- called from startup()
 
     std::optional<Header> headerForHeight_nolock(BlockHeight height, QString *errMsg = nullptr);
+    std::vector<Header> headersFromHeight_nolock_nocheck(BlockHeight height, unsigned count, QString *errMsg = nullptr);
 
     /// thread-safe helper that returns hashed headers starting from start up until count (hashes are in bitcoin memory order)
     std::vector<QByteArray> merkleCacheHelperFunc(unsigned start, unsigned count, QString *err);
