@@ -1350,7 +1350,7 @@ BlockHeight Storage::undoLatestBlock()
         p->headerVerifier.reset(prevHeight+1, prevHeader);
         setDirty(true); // <-- no turning back. we clear this flag at the end
         deleteHeadersPastHeight(prevHeight); // commit change to db
-        p->merkleCache->truncate(prevHeight+1);
+        p->merkleCache->truncate(prevHeight+1); // this takes a length, not a height, which is always +1 the height
 
         // undo the blkInfo from the back
         p->blkInfos.pop_back();

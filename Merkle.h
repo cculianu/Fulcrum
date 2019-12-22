@@ -15,6 +15,7 @@
 #include <QByteArray>
 
 /// Utility functions for merkle tree computations
+/// Note: most of these functions throw on bad args, etc.
 namespace Merkle
 {
     // some typedefs
@@ -37,20 +38,21 @@ namespace Merkle
 
     /// Return a (merkle branch, merkle root) pair given a list of hashes, and the index of one of those hashes.
     /// Specify an optional length which must be >= the tree's natural branch length, or nothing which defaults the
-    /// branch length to the natural length.  Returns a default-constructed pair with nothing in it on error
-    /// (out-of-range index or length, bad hashes, etc).
+    /// branch length to the natural length.
+    /// Throws an Exception subclass on error (out-of-range index or length, bad hashes, etc).
     BranchAndRootPair branchAndRoot(const HashVec &hashes, unsigned index, const std::optional<unsigned> & length = {});
 
-    /// Convenient alias -- return just the merkle root of a non-empty vector of hashes.
+    /// Convenient alias -- return just the merkle root of a non-empty vector of hashes. May throw.
     inline Hash root(const HashVec & hashes, const std::optional<unsigned> & length = {}) {
         return branchAndRoot(hashes, 0, length).second;
     }
 
     /// Returns a level of the merkle tree of hashes the given depth higher than the bottom row of the original tree.
+    /// May throw.
     HashVec level(const HashVec &hashes, unsigned depthHigher);
 
     /**
-     * Return a (merkle branch, merkle root) pair when a merkle-tree has a level cached.
+     * Return a (merkle branch, merkle root) pair when a merkle-tree has a level cached. Throws on error.
      *
      * To maximally reduce the amount of data hashed in computing a merkle branch, cache a tree of depth N at level
      * N / 2.
@@ -84,7 +86,7 @@ namespace Merkle
         BranchAndRootPair branchAndRoot(unsigned length, unsigned index); ///< takes exclusive lock, may throw
 
         /// truncate the cache to at most length hashes
-        void truncate(unsigned length); ///< takes exclusive lock, may throw
+        void truncate(unsigned length); ///< takes an exclusive lock, will throw BadArgs if length is 0.
 
         size_t size() const { SharedLockGuard g(lock); return level.size(); }
 
@@ -105,7 +107,7 @@ namespace Merkle
         // takes no locks, may throw
         HashVec getHashes(unsigned from, unsigned count) const;
 
-        HashVec getLevel(const HashVec &) const; ///< takes no locks
+        HashVec getLevel(const HashVec &) const; ///< takes no locks, may throw on bad args
         inline unsigned segmentLength() const { return 1 << depthHigher; }
         inline unsigned leafStart(unsigned index) const { return (index >> depthHigher) << depthHigher; }
         void extendTo(unsigned length); ///< takes no locks
