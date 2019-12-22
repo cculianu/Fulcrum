@@ -498,6 +498,8 @@ Storage::~Storage() { Debug("%s", __FUNCTION__); cleanup(); }
 
 void Storage::startup()
 {
+    Log() << "Loading database ...";
+
     {
         // set up the merkle cache object
         using namespace std::placeholders;
@@ -572,7 +574,6 @@ void Storage::startup()
         }
     }
 
-    Log() << "Loading database ...";
     // load headers -- may throw.. this must come first
     loadCheckHeadersInDB();
     // check txnums
