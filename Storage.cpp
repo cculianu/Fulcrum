@@ -41,7 +41,7 @@ namespace {
 
     // some database keys we use -- todo: if this grows large, move it elsewhere
     static const bool falseMem = false, trueMem = true;
-    static const rocksdb::Slice kMeta{"meta"}, kNumHeaders{"num_headers"}, kDirty{"dirty"}, kUtxoCount{"utxo_count"},
+    static const rocksdb::Slice kMeta{"meta"}, kDirty{"dirty"}, kUtxoCount{"utxo_count"},
                                 kTrue(reinterpret_cast<const char *>(&trueMem), sizeof(trueMem)),
                                 kFalse(reinterpret_cast<const char *>(&falseMem), sizeof(trueMem));
 
@@ -429,7 +429,7 @@ struct Storage::Pvt
 {
     /* NOTE: If taking multiple locks, all locks should be taken in the order they are declared, to avoid deadlocks. */
 
-    const int blockHeaderSize = BTC::GetBlockHeaderSize();
+    constexpr int blockHeaderSize() { return BTC::GetBlockHeaderSize(); }
 
     Meta meta;
     Lock metaLock;
@@ -444,12 +444,13 @@ struct Storage::Pvt
 
         std::shared_ptr<ConcatOperator> concatOperator;
 
-        std::unique_ptr<rocksdb::DB> meta, headers, blkinfo, utxoset,
+        std::unique_ptr<rocksdb::DB> meta, blkinfo, utxoset,
                                      shist, shunspent, // scripthash_history and scripthash_unspent
                                      undo; // undo (reorg rewind)
     } db;
 
     std::unique_ptr<RecordFile> txNumsFile;
+    std::unique_ptr<RecordFile> headersFile;
 
     /// Big lock used for block/history updates. Public methods that read the history such as getHistory and listUnspent
     /// take this as read-only (shared), and addBlock and undoLatestBlock take this as read/write (exclusively).
@@ -521,7 +522,6 @@ void Storage::startup()
         using DBInfoTup = std::tuple<QString, std::unique_ptr<rocksdb::DB> &, const rocksdb::Options &>;
         const std::list<DBInfoTup> dbs2open = {
             { "meta", p->db.meta, opts },
-            { "headers", p->db.headers, opts },
             { "blkinfo" , p->db.blkinfo , opts },
             { "utxoset", p->db.utxoset, opts },
             { "scripthash_history", p->db.shist, shistOpts },
@@ -573,7 +573,7 @@ void Storage::startup()
     }
 
     Log() << "Loading database ...";
-    // load headers -- may throw
+    // load headers -- may throw.. this must come first
     loadCheckHeadersInDB();
     // check txnums
     loadCheckTxNumsFileAndBlkInfo();
@@ -706,33 +706,25 @@ void Storage::saveMeta_impl()
 
 void Storage::appendHeader(const Header &h, BlockHeight height)
 {
-    const auto targetHeight = GenericDBGet<uint32_t, true>(p->db.headers.get(), kNumHeaders, true, // missing ok
-                                                           "Error reading header count from database").value_or(0);
+    const auto targetHeight = p->headersFile->numRecords();
     if (UNLIKELY(height != targetHeight))
         throw InternalError(QString("Bad use of appendHeader -- expected height %1, got height %2").arg(targetHeight).arg(height));
-    rocksdb::WriteBatch batch;
-    if (auto stat = batch.Put(ToSlice(uint32_t(height)), ToSlice(h)); !stat.ok())
-        throw DatabaseError(QString("Error writing header %1: %2").arg(height).arg(StatusString(stat)));
-    if (auto stat = batch.Put(kNumHeaders, ToSlice<true>(uint32_t(height+1))); !stat.ok())
-        throw DatabaseError(QString("Error writing header size key: %1").arg(StatusString(stat)));
-    if (auto stat = p->db.headers->Write(p->db.defWriteOpts, &batch); !stat.ok())
-        throw DatabaseError(QString("Error writing header %1: %2").arg(height).arg(StatusString(stat)));
+    QString err;
+    const auto res = p->headersFile->appendRecord(h, true, &err);
+    if (UNLIKELY(!err.isEmpty()))
+        throw DatabaseError(QString("Failed to append header %1: %2").arg(height).arg(err));
+    else if (UNLIKELY(!res.has_value() || res.value() != height))
+        throw DatabaseError(QString("Failed to append header %1: returned count is bad").arg(height));
 }
 
 void Storage::deleteHeadersPastHeight(BlockHeight height)
 {
-    auto numHdrs = GenericDBGetFailIfMissing<uint32_t, true>(p->db.headers.get(), kNumHeaders, "Error reading header count from database");
-    rocksdb::WriteBatch batch;
-    while (--numHdrs > height) {
-        if (auto stat = batch.Delete(ToSlice(uint32_t(numHdrs))); !stat.ok())
-            throw DatabaseError(QString("batch.Delete failed for %1 when deleting headers to height %2: %3")
-                                .arg(numHdrs).arg(height).arg(StatusString(stat)));
-    }
-    numHdrs = height + 1;
-    if (auto stat = batch.Put(kNumHeaders, ToSlice<true>(uint32_t(numHdrs))); !stat.ok())
-        throw DatabaseError(QString("batch.Put failed when for numHdrs %1: %2").arg(numHdrs).arg(StatusString(stat)));
-    if (auto stat = p->db.headers->Write(p->db.defWriteOpts, &batch); !stat.ok())
-        throw DatabaseError(QString("Write failed when deleting headers to height %1: %2").arg(height).arg(StatusString(stat)));
+    QString err;
+    const auto res = p->headersFile->truncate(height + 1, &err);
+    if (!err.isEmpty())
+        throw DatabaseError(QString("Failed to truncate headers past height %1: %2").arg(height).arg(err));
+    else if (res != height + 1)
+        throw InternalError("header truncate returned an unexepected value");
 }
 
 auto Storage::headerForHeight(BlockHeight height, QString *err) -> std::optional<Header>
@@ -747,14 +739,12 @@ auto Storage::headerForHeight(BlockHeight height, QString *err) -> std::optional
 auto Storage::headerForHeight_nolock(BlockHeight height, QString *err) -> std::optional<Header>
 {
     std::optional<Header> ret;
-    static const QString errMsg("Failed to retrieve header from db");
     try {
-        ret.emplace(
-            GenericDBGetFailIfMissing<QByteArray>(
-                p->db.headers.get(), uint32_t(height), errMsg, false, p->db.defReadOpts));
-        if (UNLIKELY(ret.value().size() != p->blockHeaderSize)) {
+        QString err1;
+        ret.emplace( p->headersFile->readRecord(height, &err1) );
+        if (!err1.isEmpty()) {
             ret.reset();
-            throw DatabaseSerializationError("Bad header read from db. Wrong size!"); // jumps to below catch
+            throw DatabaseError(QString("failed to read header %1: %2").arg(height).arg(err1));
         }
     } catch (const std::exception &e) {
         if (err) *err = e.what();
@@ -764,48 +754,12 @@ auto Storage::headerForHeight_nolock(BlockHeight height, QString *err) -> std::o
 
 auto Storage::headersFromHeight_nolock_nocheck(BlockHeight height, unsigned num, QString *err) -> std::vector<Header>
 {
-    std::vector<Header> ret;
     if (err) err->clear();
-    std::vector<uint32_t> heightsMem;
-    std::vector<rocksdb::Slice> heightsKeys; // these will be shallow pointers into heithsMem;
-    heightsMem.reserve(size_t(num));
-    heightsKeys.reserve(size_t(num));
-    std::vector<std::string> results;
+    std::vector<Header> ret = p->headersFile->readRecords(height, num, err);
 
-    for (uint32_t i = 0; i < uint32_t(num); ++i) {
-        heightsMem.push_back(height + i);
-        heightsKeys.emplace_back(ToSlice(heightsMem.back()));
-    }
-    std::vector<rocksdb::Status> statuses =
-            p->db.headers->MultiGet(p->db.defReadOpts, heightsKeys, &results);
+    if (ret.size() != num && err && err->isEmpty())
+        *err = "short header count returned from headers file";
 
-    const size_t ct = statuses.size();
-
-    if (ct != unsigned(num)) {
-        if (err) *err ="returned statuses != requested header count";
-    } else {
-        ret.reserve(ct);
-
-        for (size_t i = 0; i < ct; ++i) {
-            if (UNLIKELY(!statuses[i].ok())) {
-                if (err) *err = QString("Error reading header %1 from db: %2").arg(i).arg(StatusString(statuses[i]));
-                break;
-            } else if (UNLIKELY(results[i].size() != unsigned(p->blockHeaderSize))) {
-                if (err) *err = QString("Error reading header %1, wrong size: %2").arg(i).arg(results[i].size());
-                break;
-            }
-            ret.emplace_back(results[i].data(), int(results[i].size()));
-        }
-    }
-    /*
-    if (err) *err = "";
-    ret.reserve(unsigned(num));
-    for (int i = 0; i < num; ++i) {
-        auto opt = headerForHeight_nolock(height + unsigned(i), err);
-        if (!opt.has_value())
-            break;
-        ret.emplace_back(std::move(opt.value()));
-    }*/
     ret.shrink_to_fit();
     return ret;
 }
@@ -826,16 +780,14 @@ auto Storage::headersFromHeight(BlockHeight height, unsigned count, QString *err
 
 void Storage::loadCheckHeadersInDB()
 {
-    FatalAssert(!!p->db.headers) << __FUNCTION__ << ": Headers db is not open";
+    assert(p->blockHeaderSize() > 0);
+    p->headersFile = std::make_unique<RecordFile>(options->datadir + QDir::separator() + "headers", size_t(p->blockHeaderSize()), 0x00f026a1); // may throw
 
     Log() << "Verifying headers ...";
-    uint32_t num = 0;
+    uint32_t num = unsigned(p->headersFile->numRecords());
     std::vector<QByteArray> hVec;
     const auto t0 = Util::getTimeNS();
     {
-        auto * const db = p->db.headers.get();
-
-        num = GenericDBGet<uint32_t, true>(db, kNumHeaders, true, "Error reading header count from database").value_or(0); // missing ok
         if (num > MAX_HEADERS)
             throw DatabaseFormatError(QString("Header count (%1) in database exceeds MAX_HEADERS! This is likely due to"
                                               " a database format mistmatch. Delete the datadir and resynch it.")
@@ -1370,7 +1322,7 @@ BlockHeight Storage::undoLatestBlock()
     const auto t0 = Util::getTimeNS();
 
     const auto [tip, header] = p->headerVerifier.lastHeaderProcessed();
-    if (tip <= 0 || header.length() != p->blockHeaderSize) throw UndoInfoMissing("No header to undo");
+    if (tip <= 0 || header.length() != p->blockHeaderSize()) throw UndoInfoMissing("No header to undo");
     const BlockHeight prevHeight = unsigned(tip-1);
     Header prevHeader;
     {

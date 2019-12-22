@@ -56,19 +56,6 @@ namespace BTC
         bitcoin::GenericVectorReader<QByteArray> vr(bitcoin::SER_NETWORK, bitcoin::PROTOCOL_VERSION, bytes, pos);
         return bitcoin::CTransaction(bitcoin::deserialize, vr);
     }
-    /// Helper -- returns the size of a block header. Should always be 80.
-    int GetBlockHeaderSize()
-    {
-        static std::atomic_int sz = 0;
-        if (!sz) {
-            bitcoin::CSizeComputer comp(bitcoin::SER_NETWORK, bitcoin::PROTOCOL_VERSION);
-            bitcoin::CBlockHeader h;
-            h.Serialize(comp);
-            sz = int(comp.size());
-            FatalAssert(sz > 0) << "Unable to determine header size. FIXME.";
-        }
-        return sz;
-    }
 
     QByteArray Hash(const QByteArray &b, bool once)
     {

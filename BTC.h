@@ -70,9 +70,8 @@ namespace BTC
     /// Template specialization for CTransaction which has const fields and works a little differently (impl. in BTC.cpp)
     template <> bitcoin::CTransaction Deserialize(const QByteArray &, int pos);
 
-    /// Helper -- returns the size of a block header. Should always be 80.  Returns an internal constant after first call.
-    /// (this returns an int because we mostly compare it to QByteArray.size() whose size_type is int)
-    extern int GetBlockHeaderSize();
+    /// Helper -- returns the size of a block header. Should always be 80. Update this if that changes.
+    constexpr int GetBlockHeaderSize() { return 80; }
 
     /// Returns the sha256 double hash (not reveresed) of the input QByteArray. The results are copied once from the
     /// hasher into the returned QByteArray.  This is faster than obtaining a uint256 from bitcoin::Hash then converting

@@ -104,7 +104,7 @@ std::vector<QByteArray> RecordFile::readRecords(uint64_t recNumStart, size_t cou
     std::vector<QByteArray> ret;
     count = nrecs > recNumStart ? std::min(count, size_t(nrecs-recNumStart)) : 0;
     if (!count) {
-        if (errStr) *errStr = "Out of readRecords specification is out of range";
+        if (errStr) *errStr = "readRecords specification is out of range";
         return ret;
     }
     QFile f(fileName());
@@ -138,7 +138,7 @@ uint64_t RecordFile::truncate(uint64_t newNRecs, QString *errStr)
         return nrecs;
     }
     nrecs = newNRecs;
-    if (!writeNewSizeToHeader(errStr))
+    if (!writeNewSizeToHeader(errStr, true))
         return 0;
     return nrecs;
 }
