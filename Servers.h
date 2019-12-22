@@ -181,7 +181,7 @@ private:
     void rpc_server_version(Client *, const RPC::Message &);
     // blockchain misc
     void rpc_blockchain_block_header(Client *, const RPC::Message &);  // fully implemented
-    void rpc_blockchain_block_headers(Client *, const RPC::Message &); // todo: cp_height
+    void rpc_blockchain_block_headers(Client *, const RPC::Message &); // fully implemented
     void rpc_blockchain_estimatefee(Client *, const RPC::Message &); // todo: this is a stub implementation
     void rpc_blockchain_headers_subscribe(Client *, const RPC::Message &); // fully implemented
     void rpc_blockchain_relayfee(Client *, const RPC::Message &); // todo: this is a stub implementation
@@ -222,6 +222,10 @@ private:
     std::shared_ptr<Storage> storage;
     /// pointer to shared BitcoinDMgr object -- owned and controlled by the Controller instance
     std::shared_ptr<BitcoinDMgr> bitcoindmgr;
+
+    using HeadersBranchAndRootPair = std::pair<QVariantList, QVariant>;
+    /// Helper for rpc block_header* methods -- returns the 'branch' and 'root' keys ready to be put in the results dictionary
+    HeadersBranchAndRootPair getHeadersBranchAndRoot(unsigned height, unsigned cp_height);
 };
 
 

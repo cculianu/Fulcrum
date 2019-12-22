@@ -550,6 +550,30 @@ void Server::rpc_server_ping(Client *c, const RPC::Message &m)
     emit c->sendResult(m.id);
 }
 
+/// returns the 'branch' and 'root' keys ready to be put in the results dictionary
+auto Server::getHeadersBranchAndRoot(unsigned height, unsigned cp_height) -> HeadersBranchAndRootPair
+{
+    HeadersBranchAndRootPair ret;
+    if (height <= cp_height) {
+        auto pair = storage->headerBranchAndRoot(height, cp_height);
+        auto & [branch, root] = pair;
+        std::reverse(root.begin(), root.end());
+        ret.second = Util::ToHexFast(root);
+        if (ret.second.isNull()) ret.second = QString(""); // prevent null value
+        QVariantList & branchList = ret.first;
+        branchList.reserve(int(branch.size()));
+        for (auto & item : branch) {
+            std::reverse(item.begin(), item.end());
+            branchList.push_back(Util::ToHexFast(item));
+            if (branchList.back().isNull())
+                // this should never happen, but it pays to be paranoid
+                throw InternalError("bad data retrieved from merkle cache");
+        }
+    }
+    return ret;
+}
+
+
 void Server::rpc_blockchain_block_header(Client *c, const RPC::Message &m)
 {
     QVariantList l = m.paramsList();
@@ -578,20 +602,11 @@ void Server::rpc_blockchain_block_header(Client *c, const RPC::Message &m)
             if (!cp_height)
                 ret = hexHdr;
             else {
-                auto pair = storage->headerBranchAndRoot(height, cp_height);
-                auto & [branch, root] = pair;
-                std::reverse(root.begin(), root.end());
-                root = Util::ToHexFast(root);
-                QVariantList branchList;
-                branchList.reserve(int(branch.size()));
-                for (auto & item : branch) {
-                    std::reverse(item.begin(), item.end());
-                    branchList.push_back(Util::ToHexFast(item));
-                }
+                const auto [branch, root] = getHeadersBranchAndRoot(height, cp_height);
                 ret = QVariantMap{
                     { "header" , hexHdr },
-                    { "branch",  branchList },
-                    { "root", root }
+                    { "branch",  branch },
+                    { "root",    root   },
                 };
             }
             return ret;
@@ -608,19 +623,25 @@ void Server::rpc_blockchain_block_headers(Client *c, const RPC::Message &m)
     const unsigned height = l.front().toUInt(&ok);
     if (!ok || height >= Storage::MAX_HEADERS)
         throw RPCError("Invalid height");
-    const unsigned count = l[1].toUInt(&ok);
+    unsigned count = l[1].toUInt(&ok);
     if (!ok || count >= Storage::MAX_HEADERS)
         throw RPCError("Invalid count");
+    const auto tip = storage->latestTip().first;
+    if (tip < 0) throw InternalError("chain height is negative");
+    static constexpr unsigned MAX_COUNT = 2016; ///< TODO: make this cofigurable. this is the current electrumx limit, for now.
+    count = std::min(std::min(unsigned(tip+1) - height, count), MAX_COUNT);
     ok = true;
     const unsigned cp_height = l.size() > 2 ? l.back().toUInt(&ok) : 0;
-    // TODO SUPPORT CP_HEIGHT!
-    if (!ok || cp_height != 0)
-        throw RPCError("cp_height not yet supported", RPC::ErrorCodes::Code_InternalError);
-    generic_do_async(c, m.id, [height, count, cp_height, this]{
-        Q_UNUSED(cp_height)// TODO SUPPORT CP_HEIGHT!
-        constexpr unsigned MAX_COUNT = 2016; ///< TODO: make this cofigurable. this is the current electrumx limit, for now.
+    if (!ok || cp_height >= Storage::MAX_HEADERS)
+        throw RPCError("Invalid cp_height");
+    if (count && cp_height) {
+        if ( ! (height + (count - 1) <= cp_height && cp_height <= unsigned(tip)) )
+            throw RPCError(QString("header height + (count - 1) %1 must be <= cp_height %2 which must be <= chain height %3")
+                           .arg(height + (count - 1)).arg(cp_height).arg(tip));
+    }
+    generic_do_async(c, m.id, [height, count, cp_height, this] {
         // EX doesn't seem to return error here if invalid height/no results, so we will do same.
-        const auto hdrs = storage->headersFromHeight(height, std::min(MAX_COUNT, count));
+        const auto hdrs = storage->headersFromHeight(height, std::min(count, MAX_COUNT));
         const size_t nHdrs = hdrs.size(), hdrSz = size_t(BTC::GetBlockHeaderSize()), hdrHexSz = hdrSz*2;
         QByteArray hexHeaders(int(nHdrs * hdrHexSz), Qt::Uninitialized);
         for (size_t i = 0, offset = 0; i < nHdrs; ++i, offset += hdrHexSz) {
@@ -638,6 +659,18 @@ void Server::rpc_blockchain_block_headers(Client *c, const RPC::Message &m)
             {"count", unsigned(hdrs.size())},
             {"max", MAX_COUNT}
         };
+        if (count && cp_height) {
+            if ( ! (height + (count - 1) <= cp_height && cp_height <= unsigned(storage->latestTip().first)) )
+                // note: even with this check it's possible for a reorg to happen during this call.. in which case
+                // the getHeadersBranchAndRoot function will either return no data or propagate out an exception.
+                // this is very unlikely to occur as usually checkpoints are way in the past -- but it's worth
+                // noting.
+                throw InternalError("blockchain mutated during call");
+            const auto lastHeight = height + count - 1;
+            const auto [branch, root] = getHeadersBranchAndRoot(lastHeight, cp_height);
+            resp["branch"] = branch;
+            resp["root"] = root;
+        }
         if (hexHeaders.isEmpty()) {
             // special-case: on empty results, prevent sending null (empty QByteArray ends up as null), but prefer
             // sending "" so as to not confuse clients if they see null but are expecting only string "".
