@@ -558,8 +558,7 @@ auto Server::getHeadersBranchAndRoot(unsigned height, unsigned cp_height) -> Hea
         auto pair = storage->headerBranchAndRoot(height, cp_height);
         auto & [branch, root] = pair;
         std::reverse(root.begin(), root.end());
-        ret.second = Util::ToHexFast(root);
-        if (ret.second.isNull()) ret.second = QString(""); // prevent null value
+        ret.second = QString(Util::ToHexFast(root)); // we cast to QString to prevent JSON null for empty string ""
         QVariantList & branchList = ret.first;
         branchList.reserve(int(branch.size()));
         for (auto & item : branch) {
@@ -595,14 +594,14 @@ void Server::rpc_blockchain_block_header(Client *c, const RPC::Message &m)
     }
     generic_do_async(c, m.id, [height, cp_height, this] {
         QString err;
-        const auto optHdr = storage->headerForHeight(height, &err);
+        const auto optHdr = storage->headerForHeight(height, &err); // may return nothing (but will set err) if height is now beyond chain height due to reorg
         if (QByteArray hdr; err.isEmpty() && optHdr.has_value() && !(hdr = optHdr.value()).isEmpty()) {
-            const auto hexHdr = Util::ToHexFast(hdr);
+            const auto hexHdr = Util::ToHexFast(hdr); // hexHdr definitely not empty, no need to cast to QString (avoids a copy!)
             QVariant ret;
             if (!cp_height)
                 ret = hexHdr;
             else {
-                const auto [branch, root] = getHeadersBranchAndRoot(height, cp_height);
+                const auto [branch, root] = getHeadersBranchAndRoot(height, cp_height); // may throw if chain mutated and height or cp_height are no longer legal
                 ret = QVariantMap{
                     { "header" , hexHdr },
                     { "branch",  branch },
@@ -649,32 +648,25 @@ void Server::rpc_blockchain_block_headers(Client *c, const RPC::Message &m)
             if (UNLIKELY(hdr.size() != int(hdrSz))) { // ensure header looks the right size
                 // this should never happen.
                 Error() << "Header size from db height " << i + height << " is not " << hdrSz << " bytes! Database corruption likely! FIXME!";
-                throw RPCError("server header store invalid", RPC::Code_InternalError);
+                throw RPCError("Server header store invalid", RPC::Code_InternalError);
             }
             // fast, in-place conversion to hex
             Util::ToHexFastInPlace(hdr, hexHeaders.data() + offset, hdrHexSz);
         }
         QVariantMap resp{
-            {"hex" , hexHeaders},
+            {"hex" , QString(hexHeaders)},  // we cast to QString to prevent null for empty string ""
             {"count", unsigned(hdrs.size())},
             {"max", MAX_COUNT}
         };
         if (count && cp_height) {
-            if ( ! (height + (count - 1) <= cp_height && cp_height <= unsigned(storage->latestTip().first)) )
-                // note: even with this check it's possible for a reorg to happen during this call.. in which case
-                // the getHeadersBranchAndRoot function will either return no data or propagate out an exception.
-                // this is very unlikely to occur as usually checkpoints are way in the past -- but it's worth
-                // noting.
-                throw InternalError("blockchain mutated during call");
+            // Note: it's possible for a reorg to happen and the chain height to be shortened in parellel in such
+            // a way that lastHeight > chainHeight or cp_height > chainHeight, thus making this merkle branch query
+            // below illegal. In that case the getHeadersBranchAndRoot function will bubble up an exception about a
+            // short header count, which is what we want.
             const auto lastHeight = height + count - 1;
             const auto [branch, root] = getHeadersBranchAndRoot(lastHeight, cp_height);
             resp["branch"] = branch;
             resp["root"] = root;
-        }
-        if (hexHeaders.isEmpty()) {
-            // special-case: on empty results, prevent sending null (empty QByteArray ends up as null), but prefer
-            // sending "" so as to not confuse clients if they see null but are expecting only string "".
-            resp["hex"] = QString("");
         }
         return resp;
     });

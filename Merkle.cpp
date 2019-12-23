@@ -164,7 +164,7 @@ namespace Merkle {
         QString err;
         auto ret = getHashesFunc(from, count, &err);
         if (ret.size() != count) {
-            throw InternalError(QString("Bad read from getHashes, expected %1 hashes, instead got %2%3")
+            throw InternalError(QString("In getHashes, expected %1 hashes, instead got %2%3")
                                 .arg(count).arg(ret.size()).arg(err.isEmpty() ? "" : QString(": %1").arg(err)));
         } else if (!err.isEmpty())
             throw InternalError(err);

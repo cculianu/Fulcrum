@@ -1682,7 +1682,7 @@ bitcoin::Amount Storage::getBalance(const HashX &hashX) const
 
 std::vector<QByteArray> Storage::merkleCacheHelperFunc(unsigned int start, unsigned int count, QString *err)
 {
-    auto vec = headersFromHeight(start, count, err);
+    auto vec = headersFromHeight_nolock_nocheck(start, count, err); // despite the name of this function, it does take a small lock internally and is thread-safe. we cannot use the public one as that would potentially cause a deadlock here
     for (auto & ba : vec)
         ba = BTC::Hash(ba);
     return vec;
