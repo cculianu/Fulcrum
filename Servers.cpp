@@ -538,11 +538,11 @@ void Server::generic_async_to_bitcoind(Client *c, const RPC::Message::Id & reqId
 void Server::rpc_server_banner(Client *c, const RPC::Message &m)
 {
     // TODO: have this come from a configurable text file, etc
-    emit c->sendResult(m.id, QString("This is a %1 %2 server").arg(APPNAME).arg(VERSION));
+    emit c->sendResult(m.id, QString("Connected to a %1 %2 server").arg(APPNAME).arg(VERSION));
 }
 void Server::rpc_server_donation_address(Client *c, const RPC::Message &m)
 {
-    // TODO: have this come from a configurable text file, etc
+    // TODO: have this come from a configuration param, etc
     emit c->sendResult(m.id, QString("bitcoincash:qplw0d304x9fshz420lkvys2jxup38m9symky6k028"));
 }
 void Server::rpc_server_ping(Client *c, const RPC::Message &m)
