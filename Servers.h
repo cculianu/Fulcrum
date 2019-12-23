@@ -177,6 +177,8 @@ private:
                                    const BitcoinDErrorFunc & errorFunc = BitcoinDErrorFunc());
     // RPC methods below
     // server
+    void rpc_server_banner(Client *, const RPC::Message &); // returns static string, TODO: have this come from a config file
+    void rpc_server_donation_address(Client *, const RPC::Message &); // returns static string, TODO: have this come from config
     void rpc_server_ping(Client *, const RPC::Message &);
     void rpc_server_version(Client *, const RPC::Message &);
     // blockchain misc

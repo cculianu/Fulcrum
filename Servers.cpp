@@ -535,19 +535,27 @@ void Server::generic_async_to_bitcoind(Client *c, const RPC::Message::Id & reqId
     );
 }
 
+void Server::rpc_server_banner(Client *c, const RPC::Message &m)
+{
+    // TODO: have this come from a configurable text file, etc
+    emit c->sendResult(m.id, QString("This is a %1 %2 server").arg(APPNAME).arg(VERSION));
+}
+void Server::rpc_server_donation_address(Client *c, const RPC::Message &m)
+{
+    // TODO: have this come from a configurable text file, etc
+    emit c->sendResult(m.id, QString("bitcoincash:qplw0d304x9fshz420lkvys2jxup38m9symky6k028"));
+}
+void Server::rpc_server_ping(Client *c, const RPC::Message &m)
+{
+    emit c->sendResult(m.id);
+}
 void Server::rpc_server_version(Client *c, const RPC::Message &m)
 {
     QVariantList l = m.paramsList();
     assert(l.size() == 2);
     c->info.userAgent = l[0].toString().left(kMaxServerVersion);
     c->info.protocolVersion = l[1].toString().left(kMaxServerVersion);
-    Trace() << "Client (id: " << c->id << ") sent version: \"" << c->info.userAgent << "\" / \"" << c->info.protocolVersion << "\"";
     emit c->sendResult(m.id, QStringList({QString("%1/%2").arg(APPNAME).arg(VERSION), QString("1.4")}));
-}
-void Server::rpc_server_ping(Client *c, const RPC::Message &m)
-{
-    Trace() << "Got ping from client (id: " << c->id << "), responding...";
-    emit c->sendResult(m.id);
 }
 
 /// returns the 'branch' and 'root' keys ready to be put in the results dictionary
@@ -675,8 +683,6 @@ void Server::rpc_blockchain_estimatefee(Client *c, const RPC::Message &m)
 {
     QVariantList l = m.paramsList();
     assert(!l.isEmpty());
-    // TODO: Implement this
-    Trace() << "Got estimatefee from client (id: " << c->id << "), responding...";
     constexpr double dummyReply = 0.00001000;
     emit c->sendResult(m.id, dummyReply);
 }
@@ -707,7 +713,6 @@ void Server::rpc_blockchain_headers_subscribe(Client *c, const RPC::Message &m) 
 void Server::rpc_blockchain_relayfee(Client *c, const RPC::Message &m)
 {
     // TODO: Implement this
-    Trace() << "Got relayfee from client (id: " << c->id << "), responding...";
     constexpr double dummyReply = 0.00001000;
     emit c->sendResult(m.id, dummyReply);
 }
@@ -1005,7 +1010,9 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::methodMap);
 HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
 /*  ==> Note: Add stuff to this table when adding new RPC methods.
     { {"rpc.name",                allow_requests, allow_notifications, PosParamRange, (QSet<QString> note: {} means undefined optional)}, &method_to_call }     */
-    { {"server.ping",                       true,               false,    PR{0,0},      RPC::KeySet{} },          &Server::rpc_server_ping },
+    { {"server.banner",                     true,               false,    PR{0,0},      RPC::KeySet{} },          &Server::rpc_server_banner },
+    { {"server.donation_address",           true,               false,    PR{0,0},                    },          &Server::rpc_server_donation_address },
+    { {"server.ping",                       true,               false,    PR{0,0},                    },          &Server::rpc_server_ping },
     { {"server.version",                    true,               false,    PR{2,2},                    },          &Server::rpc_server_version },
 
     { {"blockchain.block.header",           true,               false,    PR{1,2},                    },          &Server::rpc_blockchain_block_header },
