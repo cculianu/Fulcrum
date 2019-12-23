@@ -372,6 +372,10 @@ struct Controller::StateMachine
     static constexpr unsigned progressIntervalBlocks = 1000;
     size_t nProgBlocks = 0, nProgIOs = 0, nProgTx = 0;
     double lastProgTs = 0.;
+
+    /// this pointer should *not* be dereferenced (which is why it's void *), but rather is just used to filter out
+    /// old/stale GetChainInfoTask responses in Controller::process()
+    void * mostRecentGetChainInfoTask = nullptr;
 };
 
 unsigned Controller::downloadTaskRecommendedThrottleTimeMsec(unsigned bnum) const
@@ -449,7 +453,7 @@ CtlTaskT *Controller::newTask(bool connectErroredSignal, Args && ...args)
     tasks.emplace(task, task);
     if (connectErroredSignal)
         connect(task, &CtlTask::errored, this, &Controller::genericTaskErrored);
-    QTimer::singleShot(0, this, [task, this] {
+    Util::AsyncOnObject(this, [task, this] { // schedule start when we return to our event loop
         if (!isTaskDeleted(task))
             task->start();
     });
@@ -470,8 +474,12 @@ void Controller::process(bool beSilentIfUpToDate)
     using State = StateMachine::State;
     if (sm->state == State::Begin) {
         auto task = newTask<GetChainInfoTask>(true, this);
+        sm->mostRecentGetChainInfoTask = task; // reentrancy defense mechanism for ignoring all but the most recent getchaininfo reply from bitcoind
         connect(task, &CtlTask::success, this, [this, task, beSilentIfUpToDate]{
-            if (UNLIKELY(!sm || isTaskDeleted(task))) return; // task was stopped from underneath us, this is stale.. abort.
+            if (UNLIKELY(!sm || task != sm->mostRecentGetChainInfoTask || isTaskDeleted(task)))
+                // task was stopped from underneath us and/or this response is stale.. so return and ignore
+                return;
+            sm->mostRecentGetChainInfoTask = nullptr;
             if (task->info.initialBlockDownload) {
                 sm->state = State::IBD;
                 AGAIN();

@@ -505,6 +505,11 @@ void Server::generic_async_to_bitcoind(Client *c, const RPC::Message::Id & reqId
                                        const BitcoinDSuccessFunc & successFunc,
                                        const BitcoinDErrorFunc & errorFunc)
 {
+    if (UNLIKELY(QThread::currentThread() != c->thread())) {
+        // Paranoia, in case I or a future programmer forgets this rule.
+        Warning() << __FUNCTION__ << " is meant to be called from the Client thread only. The current thread is not the"
+                  << " Client thread. This may cause problems if the Client is deleted while submitting the request. FIXME!";
+    }
     bitcoindmgr->submitRequest(c, newId(), method, params,
         // success
         [c, reqId, successFunc](const RPC::Message & reply) {
