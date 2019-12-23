@@ -876,7 +876,7 @@ void Server::rpc_blockchain_transaction_get(Client *c, const RPC::Message &m)
         // error func, throw an RPCError
         [](const RPC::Message & errResponse) {
             // EX does this weird thing.. we do it too for now until we can verify not doing it won't break old EC
-            // clients...
+            // clients... TODO: see if this can be removed in favor of a more canonical error message.
             throw RPCError(formatBitcoinDErrorResponseToLookLikeDumbElectrumXPythonRepr(errResponse),
                            RPC::Code_App_DaemonError);
         }
@@ -885,7 +885,7 @@ void Server::rpc_blockchain_transaction_get(Client *c, const RPC::Message &m)
 }
 
 namespace {
-    /// Note: no bounds checking is done. pos must be within the txHashes array!
+    /// Note: pos must be within the txHashes array, otherwise a BadArgs exception will be thrown.
     /// Input txHashes should be in bitcoind memory order.
     /// Output is a QVariantList already reversed and hex encoded, suitable for putting into the results map as 'merkle'.
     /// Used by the below two _id_from_pos and _get_merkle rpc methods.
