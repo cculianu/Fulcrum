@@ -79,6 +79,10 @@ public:
     QString getChain() const;
     void setChain(const QString &); // implicitly calls db save of 'meta' (thread safe)
 
+    /// Thread-safe. Returns a reversed hash (ready for hex encoding) of block 0's header.  Always succeeds if we have
+    /// block 0, never throws. (If we have not seen block 0, returns an empty HeaderHash).
+    HeaderHash genesisHash() const;
+
     enum class SaveItem : uint32_t {
         Meta = 0x1, ///< save meta
 

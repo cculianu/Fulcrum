@@ -179,8 +179,9 @@ private:
     // server
     void rpc_server_banner(Client *, const RPC::Message &); // returns static string, TODO: have this come from a config file
     void rpc_server_donation_address(Client *, const RPC::Message &); // returns static string, TODO: have this come from config
-    void rpc_server_ping(Client *, const RPC::Message &);
-    void rpc_server_version(Client *, const RPC::Message &);
+    void rpc_server_features(Client *, const RPC::Message &); // partially implemented. TODO: "hosts" dict key is incomplete
+    void rpc_server_ping(Client *, const RPC::Message &); // fully implemented
+    void rpc_server_version(Client *, const RPC::Message &); // partially implemented (TODO: we need to reject clients claiming old protocol versions)
     // blockchain misc
     void rpc_blockchain_block_header(Client *, const RPC::Message &);  // fully implemented
     void rpc_blockchain_block_headers(Client *, const RPC::Message &); // fully implemented

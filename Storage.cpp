@@ -485,6 +485,8 @@ struct Storage::Pvt
 
     /// this object is thread safe, but it needs to be initialized with headers before allowing client connections.
     std::unique_ptr<Merkle::Cache> merkleCache;
+
+    HeaderHash genesisHash; // written-to once by either loadHeaders code or addBlock for block 0. Guarded by headerVerifierLock.
 };
 
 Storage::Storage(const std::shared_ptr<Options> & options)
@@ -800,7 +802,10 @@ void Storage::loadCheckHeadersInDB()
             hVec = headersFromHeight_nolock_nocheck(0, num, &err);
             if (!err.isEmpty() || hVec.size() != num)
                 throw DatabaseFormatError(QString("%1. Possible databaase corruption. Delete the datadir and resynch.").arg(err.isEmpty() ? "Could not read all headers" : err));
+
             auto [verif, lock] = headerVerifier();
+            // set genesis hash
+            p->genesisHash = BTC::HashRev(hVec.front());
 
             const QString errMsg("Error retrieving header from db");
             err.clear();
@@ -1308,6 +1313,11 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
 
         appendHeader(rawHeader, ppb->height);
 
+        if (UNLIKELY(ppb->height == 0)) {
+            // update genesis hash now if block 0 -- this info is used by rpc method server.features
+            p->genesisHash = BTC::HashRev(rawHeader); // this variable is guarded by p->headerVerifierLock
+        }
+
         saveUtxoCt();
         setDirty(false);
 
@@ -1707,6 +1717,12 @@ Merkle::BranchAndRootPair Storage::headerBranchAndRoot(unsigned height, unsigned
     // code that catches exceptions.
     assert(p->merkleCache);
     return p->merkleCache->branchAndRoot(cp_height+1, height);
+}
+
+auto Storage::genesisHash() const -> HeaderHash
+{
+    SharedLockGuard g(p->headerVerifierLock);
+    return p->genesisHash;
 }
 
 // HistoryItem & UnspentItem -- operator< and operator== -- for sort.

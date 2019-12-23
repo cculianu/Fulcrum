@@ -545,6 +545,28 @@ void Server::rpc_server_donation_address(Client *c, const RPC::Message &m)
     // TODO: have this come from a configuration param, etc
     emit c->sendResult(m.id, QString("bitcoincash:qplw0d304x9fshz420lkvys2jxup38m9symky6k028"));
 }
+void Server::rpc_server_features(Client *c, const RPC::Message &m)
+{
+    // TODO: this is an incomplete impl. ("hosts", etc need love, see comments below)
+    QVariantMap r;
+    r["pruning"] = QVariant(); // null
+    r["genesis_hash"] = QString(Util::ToHexFast(storage->genesisHash()));
+    r["server_version"] = QString("%1 %2").arg(APPNAME).arg(VERSION);
+    r["protocol_min"] = "1.4"; // TODO: have this come from a global constant
+    r["protocol_max"] = "1.4.2"; // TODO: have this come from a global constant
+    r["hash_function"] = "sha256";
+    // TODO: this "hosts" key is a stub.  Its info needs to come from global config announce settings since public
+    // host/port is what we should return, not local bind ip, local bind port.
+    r["hosts"] = QVariantMap{
+        { c->localAddress().toString(), /* TODO: have this NOT be the bind ip but rather come from config "announce" setting */
+          QVariantMap{
+              { "tcp_port", c->localPort() /* TODO: have this NOT be the bind ip but rather come from config "announce" setting */ }
+          }
+          // TODO: support SSL
+        },
+    };
+    emit c->sendResult(m.id, r);
+}
 void Server::rpc_server_ping(Client *c, const RPC::Message &m)
 {
     emit c->sendResult(m.id);
@@ -1012,6 +1034,7 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
     { {"rpc.name",                allow_requests, allow_notifications, PosParamRange, (QSet<QString> note: {} means undefined optional)}, &method_to_call }     */
     { {"server.banner",                     true,               false,    PR{0,0},      RPC::KeySet{} },          &Server::rpc_server_banner },
     { {"server.donation_address",           true,               false,    PR{0,0},                    },          &Server::rpc_server_donation_address },
+    { {"server.features",                   true,               false,    PR{0,0},                    },          &Server::rpc_server_features },
     { {"server.ping",                       true,               false,    PR{0,0},                    },          &Server::rpc_server_ping },
     { {"server.version",                    true,               false,    PR{2,2},                    },          &Server::rpc_server_version },
 

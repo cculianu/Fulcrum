@@ -32,6 +32,40 @@ bool AbstractConnection::isStale() const
     return isGood() && Util::getTime() - lastGood > stale_threshold;
 }
 
+// The below 4 will only return valid results if this->thread() == QThread::currentThread(), and if socket != nullptr
+QHostAddress AbstractConnection::localAddress() const
+{
+    QHostAddress ret;
+    if (thread() == QThread::currentThread() && socket) {
+        ret = socket->localAddress();
+    }
+    return ret;
+}
+quint16 AbstractConnection::localPort() const
+{
+    quint16 ret{};
+    if (thread() == QThread::currentThread() && socket) {
+        ret = socket->localPort();
+    }
+    return ret;
+}
+QHostAddress AbstractConnection::peerAddress() const
+{
+    QHostAddress ret;
+    if (thread() == QThread::currentThread() && socket) {
+        ret = socket->peerAddress();
+    }
+    return ret;
+}
+quint16 AbstractConnection::peerPort() const
+{
+    quint16 ret{};
+    if (thread() == QThread::currentThread() && socket) {
+        ret = socket->peerPort();
+    }
+    return ret;
+}
+
 void AbstractConnection::do_disconnect(bool graceful)
 {
     status = status == Bad ? Bad : NotConnected;  // try and keep Bad status around so EXMgr can decide when to reconnect based on it

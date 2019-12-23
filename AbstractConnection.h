@@ -29,6 +29,14 @@ public:
     /// true if we got a malformed reply from the server
     virtual bool isBad() const { return status == Bad; }
 
+    // The below 4 can only be called from the same thread that this instance lives in.
+    // They will only return valid results if this->thread() == QThread::currentThread(), and if socket != nullptr.
+    // Otherwise, default-constructed values are returned.
+    QHostAddress localAddress() const;
+    quint16 localPort() const;
+    QHostAddress peerAddress() const;
+    quint16 peerPort() const;
+
 signals:
     void lostConnection(AbstractConnection *);
     /// call (emit) this to send data to the other end. connected to do_write() when socket is in the connected state.
@@ -65,7 +73,7 @@ protected:
     static constexpr qint64 default_stale_threshold = 2*60*1000; /// connection considered stale if no activity for 2 mins
     int pingtime_ms = default_pingtime_ms;
     qint64 stale_threshold = default_stale_threshold;
-    QTcpSocket *socket = nullptr; ///< this should only ever be touched in our thread
+    QTcpSocket *socket = nullptr; ///< this should only ever be touched in our thread (also: socket should live in same thread as this instance)
     QByteArray writeBackLog = ""; ///< if this grows beyond a certain size, we should kill the connection
     QString lastSocketError; ///< the last socket error seen.
     QList<QMetaObject::Connection> connectedConns; /// signal/slot connections for the connected state. this gets populated when the socket connects in on_connected. signal connections will be disconnected on socket disconnect.
