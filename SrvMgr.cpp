@@ -39,21 +39,21 @@ void SrvMgr::startServers()
 {
     const auto num = options->interfaces.length() + options->sslInterfaces.length();
     Log() << "SrvMgr: starting " << num << " " << Util::Pluralize("service", num) << " ...";
-    for (auto iface : options->interfaces) {
-        servers.emplace_back(std::make_unique<Server>(iface.first, iface.second, storage, bitcoindmgr));
+    const auto firstSsl = options->interfaces.size();
+    int i = 0;
+    for (const auto & iface : options->interfaces + options->sslInterfaces) {
+        if (i < firstSsl)
+            // TCP
+            servers.emplace_back(std::make_unique<Server>(iface.first, iface.second, storage, bitcoindmgr));
+        else
+            // SSL
+            servers.emplace_back(std::make_unique<ServerSSL>(options->sslCert, options->sslKey, iface.first, iface.second, storage, bitcoindmgr));
         Server *srv = servers.back().get();
         srv->tryStart();
 
         // connet blockchain.headers.subscribe signal
         connect(this, &SrvMgr::newHeader, srv, &Server::newHeader);
-    }
-    for (auto iface : options->sslInterfaces) {
-        servers.emplace_back(std::make_unique<ServerSSL>(options->sslCert, options->sslKey, iface.first, iface.second, storage, bitcoindmgr));
-        Server *srv = servers.back().get();
-        srv->tryStart();
-
-        // connet blockchain.headers.subscribe signal
-        connect(this, &SrvMgr::newHeader, srv, &Server::newHeader);
+        ++i;
     }
 }
 

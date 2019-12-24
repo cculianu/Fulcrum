@@ -103,8 +103,7 @@ protected:
 class BitcoinDMgr;
 class Client;
 class Storage;
-/// Implements the ElectrumX/ElectronX protocol
-/// TODO: Implement optional SSL.
+/// Implements the ElectronX variant of the Electrum JSON-RPC protocol, version 1.4.2
 class Server : public AbstractTcpServer
 {
     Q_OBJECT
@@ -224,28 +223,31 @@ private:
     HeadersBranchAndRootPair getHeadersBranchAndRoot(unsigned height, unsigned cp_height);
 };
 
-/// SSL version of the above Server class. All sockers are QSslSocket instances, thus the connection is encrypted.
-/// Requires SSL support + a cert and key.
+/// SSL version of the above Server class that just wraps tcp sockets with a QSslSocket.
+/// All sockets emitted by newConnection are QSslSocket instances (a subclass of
+/// QTcpSocket), thus the connection is encrypted. Requires SSL support + a cert & a private key.
 class ServerSSL : public Server
 {
     Q_OBJECT
 public:
-    ServerSSL(const QSslCertificate & cert, const QSslKey & key, const QHostAddress & address, quint16 port, std::shared_ptr<Storage> storage, std::shared_ptr<BitcoinDMgr> bitcoindmgr);
+    ServerSSL(const QSslCertificate & cert, const QSslKey & key, const QHostAddress & address, quint16 port,
+              std::shared_ptr<Storage> storage, std::shared_ptr<BitcoinDMgr> bitcoindmgr);
     ~ServerSSL() override;
 
-    QString prettyName() const override; ///< overrides super completely to indicate SSL
+    QString prettyName() const override; ///< overrides super to indicate SSL in server name
 
 signals:
     void ready(); ///< emitted when the underlying QSslSocket emits "encrypted"
+
 protected:
-    /// overrides QTcpServer to create an ssl socket
+    /// overrides QTcpServer to create a QSslSocket wrapping the passed-in file descriptor.
     void incomingConnection(qintptr) override;
 private:
     QSslCertificate cert;
     QSslKey key;
 };
 
-/// Encapsulates a Electron Cash (Electrum) Client
+/// Encapsulates an Electron Cash (Electrum) Client
 /// These run and live in 'Server' instance thread
 /// Note that their parent QObject is the socket!
 /// (grandparent is Server) .. so they will be destroyed
