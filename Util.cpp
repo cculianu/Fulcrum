@@ -348,13 +348,13 @@ FatalAssert::~FatalAssert()
 namespace Util {
     namespace ThreadPool {
         namespace {
-            std::atomic_uint64_t ctr = 0;
-            std::atomic_int extant = 0;
+            std::atomic_uint64_t ctr = 0, overflows = 0;
+            std::atomic_int extant = 0, extantMaxSeen = 0;
             std::atomic_bool blockNewWork = false;
             constexpr bool debugPrt = false;
             /// maximum number of extant jobs we allow before failing and not enqueuing more.
             /// TODO: make this configurable and/or tune this "magic" value
-            constexpr int maxExtant = 50;
+            constexpr int extantLimit = 100;
         }
 
         Job::Job(QObject *context, const VoidFunc & work, const VoidFunc & completion, const FailFunc &fail)
@@ -406,7 +406,8 @@ namespace Util {
             const FailFunc & failFuncToUse (fail ? fail : defaultFail);
             Job *job = new Job(context, work, completion, failFuncToUse);
             QObject::connect(job, &QObject::destroyed, qApp, [](QObject *){ --extant;}, Qt::DirectConnection);
-            if (const auto njobs = ++extant; njobs > maxExtant) {
+            if (const auto njobs = ++extant; njobs > extantLimit) {
+                ++overflows;
                 delete job; // will decrement extant on delete
                 const auto msg = QString("Job limit exceeded (%1)").arg(njobs);
                 failFuncToUse(msg);
@@ -417,7 +418,9 @@ namespace Util {
             } else if (UNLIKELY(njobs < 0)) {
                 // should absolutely never happen.
                 Error() << "FIXME: njobs " << njobs << " < 0!";
-            }
+            } else if (njobs > extantMaxSeen)
+                // FIXME: this isn't entirely atomic but this value is for diagnostic purposes and doesn't need to be strictly correct
+                extantMaxSeen = njobs;
             job->setAutoDelete(true);
             const auto num = ++ctr;
             job->setObjectName(QString("Job %1 for '%2'").arg(num).arg( context ? context->objectName() : "<no context>"));
@@ -446,8 +449,10 @@ namespace Util {
         }
 
         int ExtantJobs() { return extant.load(); }
-        int MaxExtantJobs() { return maxExtant; }
+        int ExtantJobsMaxSeen() { return extantMaxSeen.load(); }
+        int ExtantJobLimit() { return extantLimit; }
         uint64_t NumJobsSubmitted() { return ctr.load(); }
+        uint64_t Overflows() { return overflows.load(); }
 
     } // end namespace ThreadPool
 } // end namespace Util

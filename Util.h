@@ -422,8 +422,13 @@ namespace Util {
 
         /// Returns the number of jobs currently running or scheduled to run.
         int ExtantJobs();
-        /// Returns the maximum number of extant jobs before failure is unconditionally asserted on SubmitWork (currently 50)
-        int MaxExtantJobs();
+        /// Returns the maximal value ExtantJobs() has ever reached during the lifetime of this application.
+        int ExtantJobsMaxSeen();
+        /// Returns the maximum number of extant jobs before failure is unconditionally asserted on SubmitWork (currently 100)
+        int ExtantJobLimit();
+        /// Returns the number of lifetime job overflows (the number of times the job queue was full and work was rejected).
+        /// Ideally this number is always 0 even under load.
+        uint64_t Overflows();
 
         /// Returns the number of jobs that were ever successfilly submitted via SubmitWork
         uint64_t NumJobsSubmitted();

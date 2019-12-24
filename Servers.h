@@ -98,7 +98,6 @@ protected:
     QMap<QString, Lambda> endPoints;
 };
 
-
 class BitcoinDMgr;
 class Client;
 class Storage;

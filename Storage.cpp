@@ -1,4 +1,5 @@
 #include "BTC.h"
+#include "CostCache.h"
 #include "LRUCache.h"
 #include "Merkle.h"
 #include "RecordFile.h"
@@ -12,6 +13,7 @@
 
 #include <QByteArray>
 #include <QDir>
+#include <QVector> // we use this for the Height2Hash cache to save on memcopies since it's implicitly shared.
 
 #include <atomic>
 #include <cstring> // for memcpy
@@ -478,12 +480,18 @@ struct Storage::Pvt
     static constexpr size_t nCacheMax = 1000000, nCacheElasticity = 250000;
     LRU::Cache<true, TxNum, TxHash> lruNum2Hash{nCacheMax, nCacheElasticity};
 
+    static constexpr size_t kMaxHeight2HashesMemoryBytes = 100*1000*1000; // 100 MiB max cache
     /// Cache BlockHeight -> vector of txHashes for the block (in bitcoind memory order). This gets cleared by
     /// undoLatestBlock.  This is used by the txHashesForBlock function only (which is used by get_merkle and
     /// id_from_pos in the protocol). TODO: MAKE THIS CACHE SIZE CONFIGURABLE.
     /// Also TODO: Maybe use a QCache here and/or use a memcost-based limit.  Right now we can't predict the memory
     /// cost using this size-based cache limit provided by LRU::Cache.
-    LRU::Cache<true, BlockHeight, std::vector<TxHash>> lruHeight2Hashes_BitcoindMemOrder { 1250, 250 };
+    CostCache<BlockHeight, QVector<TxHash>> lruHeight2Hashes_BitcoindMemOrder { kMaxHeight2HashesMemoryBytes };
+    /// returns the cost for a particular cache item based on the number of hashes in the vector
+    unsigned constexpr lruHeight2HashSizeCalc(size_t nHashes) {
+        // each cache item with nHashes takes roughly this much memory
+        return unsigned( (nHashes * (HashLen + sizeof(TxHash))) + decltype(lruHeight2Hashes_BitcoindMemOrder)::itemOverheadBytes() );
+    }
 
     /// this object is thread safe, but it needs to be initialized with headers before allowing client connections.
     std::unique_ptr<Merkle::Cache> merkleCache;
@@ -606,20 +614,19 @@ auto Storage::stats() const -> Stats
     ret["merge calls"] = c ? c->merges.load() : QVariant();
     QVariantMap caches;
     {
+        QVariantMap m;
+
         const auto sz = p->lruNum2Hash.size(), bytes = sz * ( sizeof(TxNum) + sizeof(decltype(p->lruNum2Hash)::node_type) + HashLen + 1);
-        caches["lruNum2Hash_Size"] = qlonglong(sz);
-        caches["lruNum2Hash_SizeBytes"] = qlonglong(bytes);
+        m["Size items"] = qlonglong(sz);
+        m["Size bytes"] = qlonglong(bytes);
+        caches["LRU Cache: TxNum -> TxHash"] = m;
     }
     {
-        size_t nHashes = 0, sz = 0;
-        p->lruHeight2Hashes_BitcoindMemOrder.cwalk([&nHashes, &sz](const auto & it){
-            nHashes += it.value.size();
-            ++sz;
-        });
-        const auto bytes = sz * (sizeof(BlockHeight) + sizeof(decltype(p->lruHeight2Hashes_BitcoindMemOrder)::node_type)) + nHashes*(sizeof(TxHash)+HashLen+1);
-        caches["lruHeight2Hash_Size"] = qlonglong(sz);
-        caches["lruHeight2Hash_nHashes"] = qlonglong(nHashes);
-        caches["lruHeight2Hash_SizeBytes"] = qlonglong(bytes);
+        QVariantMap m;
+        const unsigned nItems = p->lruHeight2Hashes_BitcoindMemOrder.size(), szBytes = p->lruHeight2Hashes_BitcoindMemOrder.totalCost();
+        m["nBlocks"] = nItems;
+        m["Size bytes"] = szBytes;
+        caches["LRU Cache: Block Height -> TxHashes"] = m;
     }
     {
         const size_t nHashes = p->merkleCache->size(), bytes = nHashes * (HashLen + sizeof(HeaderHash));
@@ -1545,10 +1552,14 @@ std::vector<TxHash> Storage::txHashesForBlockInBitcoindMemoryOrder(BlockHeight h
     SharedLockGuard(p->blocksLock); // guarantee a consistent view (so that data doesn't mutate from underneath us)
     {
         // check cache
-        auto opt = p->lruHeight2Hashes_BitcoindMemOrder.tryGet(height);
+        auto opt = p->lruHeight2Hashes_BitcoindMemOrder.object(height);
         if (opt.has_value()) {
             // cache hit! return the cached item
-            ret.swap(opt.value());
+            auto & vec = opt.value();
+            // convert from QVector to std::vector -- TODO: see if we can make the whole call path use QVector to avoid
+            // these copies.
+            ret.reserve(size_t(vec.size()));
+            ret.insert(ret.end(), vec.begin(), vec.end()); // We do it this way because QVector::toStdVector() doesn't reserve() first :/
             return ret;
         }
     }
@@ -1569,7 +1580,7 @@ std::vector<TxHash> Storage::txHashesForBlockInBitcoindMemoryOrder(BlockHeight h
     ret.swap(vec);
     {
         // put result in cache
-        p->lruHeight2Hashes_BitcoindMemOrder.insert(height, ret);
+        p->lruHeight2Hashes_BitcoindMemOrder.insert(height, QVector<TxHash>::fromStdVector(ret), p->lruHeight2HashSizeCalc(ret.size()));
     }
     return ret;
 }

@@ -150,6 +150,7 @@ HEADERS += \
     BlockProcTypes.h \
     Common.h \
     Controller.h \
+    CostCache.h \
     Logger.h \
     LRUCache.h \
     Merkle.h \
