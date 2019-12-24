@@ -26,7 +26,7 @@ struct Options {
     using Interface = QPair<QHostAddress, quint16>;
     QList<Interface> interfaces, ///< TCP interfaces to use for binding, defaults to 0.0.0.0 DEFAULT_PORT_TCP
                      sslInterfaces;  ///< SSL interfaces to use for binding SSL ports. Defaults to nothing.
-    QList<Interface> statsInterfaces; ///< ditto for 'stats' server, defaults empty (no stats server)
+    QList<Interface> statsInterfaces; ///< 'stats' server, defaults to empty (no stats server)
     QSslCertificate sslCert; ///< this must be valid if we have any SSL interfaces.
     QSslKey sslKey; ///< this must be valid if we have any SSL interfaces.
     Interface bitcoind;
