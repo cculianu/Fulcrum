@@ -153,6 +153,7 @@ HEADERS += \
     CostCache.h \
     Logger.h \
     LRUCache.h \
+    Mempool.h \
     Merkle.h \
     Mgr.h \
     Mixins.h \
