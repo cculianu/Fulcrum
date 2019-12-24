@@ -9,6 +9,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QSslSocket>
 
 #include <csignal>
 #include <cstdlib>
@@ -28,7 +29,7 @@ App::App(int argc, char *argv[])
     register_MetaTypes();
 
     options = std::make_shared<Options>();
-    options->interfaces = {{QHostAddress("0.0.0.0"), Options::DEFAULT_PORT}}; // start with default, will be cleared if -i specified
+    options->interfaces = {{QHostAddress("0.0.0.0"), Options::DEFAULT_PORT_TCP}}; // start with default, will be cleared if -t specified
     setApplicationName(APPNAME);
     setApplicationVersion(QString("%1 %2").arg(VERSION).arg(VERSION_EXTRA));
 
@@ -66,7 +67,7 @@ void App::startup()
     };
     // print banner to log now
     Log() << getBannerWithTimeStamp() << " - starting up ...";
-    // schedule print banner to log every hour
+    // schedule print banner to log every hour so admin has an idea of how log timestamps correlate to wall clock time
     callOnTimerSoon(60*60*1000, "printTimeStamp", []{ Log() << getBannerWithTimeStamp(); return true; }, Qt::TimerType::VeryCoarseTimer);
 
     if ( ! Util::isClockSteady() ) {
@@ -74,7 +75,6 @@ void App::startup()
     } else {
         Debug() << "High resolution clock: isSteady = true";
     }
-
     try {
         BTC::CheckBitcoinEndiannessAndOtherSanityChecks();
 
@@ -161,10 +161,28 @@ void App::parseArgs()
            "question should live on a fast drive such as an SSD and it should have plenty of free space available."),
            QString("path"),
          },
-         { { "i", "interface" },
-           QString("Specify which <interface:port> to listen for connections on, defaults to 0.0.0.0:%1 (all interfaces,"
-           " port %1). This option may be specified more than once to bind to multiple interfaces and/or ports.").arg(Options::DEFAULT_PORT),
+         { { "t", "tcp" },
+           QString("Specify an <interface:port> on which to listen for TCP connections, defaults to 0.0.0.0:%1 (all interfaces,"
+           " port %1 -- only if no other interfaces are specified via -t or -s)."
+           " This option may be specified more than once to bind to multiple interfaces and/or ports.").arg(Options::DEFAULT_PORT_TCP),
            QString("interface:port"),
+         },
+         { { "s", "ssl" },
+           QString("Specify an <interface:port> on which to listen for SSL connections. Note that if this option is"
+           " specified, then the `cert` and `key` options need to also be specified otherwise the app will refuse to run."
+           " This option may be specified more than once to bind to multiple interfaces and/or ports."
+           " Suggested value for port: %1.").arg(Options::DEFAULT_PORT_SSL),
+           QString("interface:port"),
+         },
+         { { "c", "cert" },
+           QString("Specify a .crt file to use as the server's SSL cert. This option is required if the -s/--ssl option"
+           " appears at all on the command-line. The file should contain a valid non-self-signed certificate in PEM format."),
+           QString("crtfile"),
+         },
+         { { "k", "key" },
+           QString("Specify a .key file to use as the server's SSL key. This option is required if the -s/--ssl option"
+           " appears at all on the command-line. The file should contain an RSA private key in PEM format."),
+           QString("keyfile"),
          },
          { { "z", "stats" },
            QString("Specify listen address and port for the stats HTTP server. Format is same as the interface option, "
@@ -278,9 +296,53 @@ void App::parseArgs()
     options->rpcuser = parser.isSet("u") ? parser.value("u") : std::getenv(RPCUSER);
     // grab rpcpass
     options->rpcpassword = parser.isSet("p") ? parser.value("p") : std::getenv(RPCPASSWORD);
-    // grab bind (listen) interfaces
-    if (auto l = parser.values("i"); !l.isEmpty()) {
+    bool tcpIsDefault = true;
+    // grab bind (listen) interfaces for TCP
+    if (auto l = parser.values("t"); !l.isEmpty()) {
         parseInterfaces(options->interfaces, l);
+        tcpIsDefault = false;
+    }
+    // grab bind (listen) interfaces for SSL
+    if (auto l = parser.values("s"); !l.isEmpty()) {
+        if (!QSslSocket::supportsSsl()) {
+            throw InternalError("SSL support is not compiled and/or linked to this version. Cannot proceed with SSL support. Sorry!");
+        }
+        parseInterfaces(options->sslInterfaces, l);
+        if (tcpIsDefault) options->interfaces.clear(); // they had default tcp setup, clear the default since they did end up specifying at least 1 real interface to bind to
+    }
+    if (const QString cert = parser.value("c"), key = parser.value("k"); !options->sslInterfaces.isEmpty() && (cert.isEmpty() || key.isEmpty())) {
+        throw BadArgs("SSL option requires both -c/--cert and -k/--key options be specified on the command-line");
+    } else if (!QFile::exists(cert)) {
+        throw BadArgs(QString("Cert file not found: %1").arg(cert));
+    } else if (!QFile::exists(key)) {
+        throw BadArgs(QString("Key file not found: %1").arg(key));
+    } else if (!options->sslInterfaces.isEmpty()) {
+        QFile certf(cert), keyf(key);
+        if (!certf.open(QIODevice::ReadOnly))
+            throw BadArgs(QString("Unable to open cert file %1: %2").arg(cert).arg(certf.errorString()));
+        if (!keyf.open(QIODevice::ReadOnly))
+            throw BadArgs(QString("Unable to open key file %1: %2").arg(key).arg(keyf.errorString()));
+        options->sslCert = QSslCertificate(&certf, QSsl::EncodingFormat::Pem);
+        options->sslKey = QSslKey(&keyf, QSsl::KeyAlgorithm::Rsa, QSsl::EncodingFormat::Pem);
+        if (options->sslCert.isNull()) throw BadArgs(QString("Unable to read ssl certificate from %1. Please make sure the file is readable and contains a single certificate in PEM format.").arg(cert));
+        else Log() << "Loaded SSL certificate: " << options->sslCert.subjectDisplayName()
+                   << " " << options->sslCert.subjectInfo(QSslCertificate::SubjectInfo::EmailAddress).join(",")
+                   //<< " self-signed: " << (options->sslCert.isSelfSigned() ? "YES" : "NO")
+                   << " expires: " << (options->sslCert.expiryDate().toString("ddd MMMM d yyyy hh:mm:ss"));
+        if (options->sslKey.isNull()) throw BadArgs(QString("Unable to read private key from %1. Please make sure the file is readable and contains a single RSA or DSA key in PEM format.").arg(key));
+        else {
+            constexpr auto KeyAlgoStr = [](QSsl::KeyAlgorithm a) {
+                switch (a) {
+                case QSsl::KeyAlgorithm::Dh: return "DH";
+                case QSsl::KeyAlgorithm::Ec: return "EC";
+                case QSsl::KeyAlgorithm::Dsa: return "DSA";
+                case QSsl::KeyAlgorithm::Rsa: return "RSA";
+                default: return "Other";
+                }
+            };
+            Log() << "Loaded key type: " << (options->sslKey.type() == QSsl::KeyType::PrivateKey ? "private" : "public")
+                  << " algorithm: " << KeyAlgoStr(options->sslKey.algorithm());
+        }
     }
     parseInterfaces(options->statsInterfaces, parser.values("z"));
 }
@@ -317,4 +379,12 @@ void App::start_httpServer(const Options::Interface &iface)
         stats = stats.isNull() ? QVariantList{QVariant()} : stats;
         req.response.data = QString("%1\r\n").arg(Util::Json::toString(stats, false)).toUtf8();
     });
+}
+
+void App::miscPreAppFixups()
+{
+#ifdef Q_OS_DARWIN
+    // workaround for annoying macos keychain access prompt. see: https://doc.qt.io/qt-5/qsslsocket.html#setLocalCertificate
+    setenv("QT_SSL_USE_TEMPORARY_KEYCHAIN", "1", 1);
+#endif
 }

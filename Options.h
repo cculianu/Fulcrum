@@ -4,12 +4,15 @@
 #include <QHostAddress>
 #include <QList>
 #include <QPair>
+#include <QSslCertificate>
+#include <QSslKey>
 #include <QString>
 
 #include <atomic>
+#include <tuple>
 
 struct Options {
-    static constexpr quint16 DEFAULT_PORT = 50001;
+    static constexpr quint16 DEFAULT_PORT_TCP = 50001, DEFAULT_PORT_SSL = 50002;
 
     std::atomic_bool verboseDebug =
 #ifdef QT_DEBUG
@@ -21,8 +24,11 @@ struct Options {
     std::atomic_bool syslogMode = false; ///< if true, suppress printing of timestamps to logger
 
     using Interface = QPair<QHostAddress, quint16>;
-    QList<Interface> interfaces; ///< interfaces to use for binding, defaults to 0.0.0.0 DEFAULT_PORT
+    QList<Interface> interfaces, ///< TCP interfaces to use for binding, defaults to 0.0.0.0 DEFAULT_PORT_TCP
+                     sslInterfaces;  ///< SSL interfaces to use for binding SSL ports. Defaults to nothing.
     QList<Interface> statsInterfaces; ///< ditto for 'stats' server, defaults empty (no stats server)
+    QSslCertificate sslCert; ///< this must be valid we have any SSL interfaces.
+    QSslKey sslKey; ///< this must be valid we have any SSL interfaces.
     Interface bitcoind;
     QString rpcuser, rpcpassword;
     QString datadir; ///< The directory to store the database. It exists and has appropriate permissions (otherwise the app would have quit on startup).

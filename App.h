@@ -20,6 +20,8 @@ public:
     explicit App(int argc, char *argv[]);
     ~App() override;
 
+    static void miscPreAppFixups();
+
     Logger *logger() { return _logger.get(); }
 
     std::shared_ptr<Options> options;

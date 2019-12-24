@@ -1096,6 +1096,48 @@ void Server::StaticData::init()
 // --- /Server::StaticData Definitions ---
 // --- /RPC METHODS ---
 
+// --- SSL Server support ---
+ServerSSL::ServerSSL(const QSslCertificate & cert, const QSslKey & key, const QHostAddress & address, quint16 port_,
+                     std::shared_ptr<Storage> storage, std::shared_ptr<BitcoinDMgr> bitcoindmgr)
+    : Server(address, port_, storage, bitcoindmgr), cert(cert), key(key)
+{
+    if (cert.isNull() || key.isNull())
+        throw BadArgs("ServerSSL cannot be instantiated: Key or cert are null!");
+    if (!QSslSocket::supportsSsl())
+        throw BadArgs("ServerSSL cannot be instantiated: Missing SSL support!");
+    connect(this, &ServerSSL::ready, this, []{
+        Debug() << "SSL ready emitted";
+    });
+    setObjectName(prettyName());
+    _thread.setObjectName(prettyName());
+}
+ServerSSL::~ServerSSL() {}
+QString ServerSSL::prettyName() const
+{
+    return QString("Ssl%1").arg(AbstractTcpServer::prettyName());
+}
+void ServerSSL::incomingConnection(qintptr socketDescriptor)
+{
+    QSslSocket *socket = new QSslSocket(this);
+    if (socket->setSocketDescriptor(socketDescriptor)) {
+        socket->setLocalCertificate(cert);
+        socket->setPrivateKey(key);
+        socket->setProtocol(QSsl::SslProtocol::AnyProtocol);
+        connect(socket, &QSslSocket::encrypted, this, &ServerSSL::ready);
+        connect(socket, QOverload<const QList<QSslError> &>::of(&QSslSocket::sslErrors),
+                this, [](const QList<QSslError> & errors) {
+                    for (auto e : errors)
+                        Warning() << "SSL error: " << e.errorString();
+        });
+        addPendingConnection(socket);
+        socket->startServerEncryption();
+    } else {
+        Warning() << "setSocketDescriptor returned false -- unable to initiate SSL for client: " << socket->errorString();
+        delete socket;
+    }
+}
+
+// --- /SSL Server support ---
 
 Client::Client(const RPC::MethodMap & mm, quint64 id_in, Server *srv, QTcpSocket *sock)
     : RPC::LinefeedConnection(mm, id_in, sock, kMaxBuffer), srv(srv)

@@ -5,6 +5,8 @@
 #include "Util.h"
 #include "Mixins.h"
 #include "RPC.h"
+#include <QSslCertificate>
+#include <QSslKey>
 #include <QTcpServer>
 #include <QThread>
 #include <QMap>
@@ -222,6 +224,26 @@ private:
     HeadersBranchAndRootPair getHeadersBranchAndRoot(unsigned height, unsigned cp_height);
 };
 
+/// SSL version of the above Server class. All sockers are QSslSocket instances, thus the connection is encrypted.
+/// Requires SSL support + a cert and key.
+class ServerSSL : public Server
+{
+    Q_OBJECT
+public:
+    ServerSSL(const QSslCertificate & cert, const QSslKey & key, const QHostAddress & address, quint16 port, std::shared_ptr<Storage> storage, std::shared_ptr<BitcoinDMgr> bitcoindmgr);
+    ~ServerSSL() override;
+
+    QString prettyName() const override; ///< overrides super completely to indicate SSL
+
+signals:
+    void ready(); ///< emitted when the underlying QSslSocket emits "encrypted"
+protected:
+    /// overrides QTcpServer to create an ssl socket
+    void incomingConnection(qintptr) override;
+private:
+    QSslCertificate cert;
+    QSslKey key;
+};
 
 /// Encapsulates a Electron Cash (Electrum) Client
 /// These run and live in 'Server' instance thread

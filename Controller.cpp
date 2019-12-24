@@ -74,7 +74,7 @@ void Controller::startup()
                 Fatal() << "INTERNAL ERROR: Controller's creation thread is null; cannot start SrvMgr, exiting!";
                 return;
             }
-            srvmgr = std::make_unique<SrvMgr>(options->interfaces, storage, bitcoindmgr);
+            srvmgr = std::make_unique<SrvMgr>(options, storage, bitcoindmgr);
             // this object will live on our creation thread (normally the main thread)
             srvmgr->moveToThread(origThread);
             // now, start it up on our creation thread (normally the main thread)

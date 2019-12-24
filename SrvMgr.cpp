@@ -7,11 +7,10 @@
 
 #include <utility>
 
-SrvMgr::SrvMgr(const QList<Options::Interface> & ifaces, std::shared_ptr<Storage> s, std::shared_ptr<BitcoinDMgr> bdm,
-               QObject *parent)
-    : Mgr(parent), interfaces(ifaces), storage(std::move(s)), bitcoindmgr(std::move(bdm))
+SrvMgr::SrvMgr(const std::shared_ptr<Options> & options,
+               std::shared_ptr<Storage> s, std::shared_ptr<BitcoinDMgr> bdm, QObject *parent)
+    : Mgr(parent), options(options), storage(std::move(s)), bitcoindmgr(std::move(bdm))
 {
-
 }
 
 SrvMgr::~SrvMgr()
@@ -23,7 +22,7 @@ SrvMgr::~SrvMgr()
 // will throw Exception on error from within TcpServer::tryStart
 void SrvMgr::startup()
 {
-    if (servers.isEmpty()) {
+    if (servers.empty()) {
         startServers();
     } else {
         Error() << __PRETTY_FUNCTION__ << " called with servers already active! FIXME!";
@@ -32,20 +31,25 @@ void SrvMgr::startup()
 
 void SrvMgr::cleanup()
 {
-    for (auto srv : servers) {
-        delete srv; // will wait for threads to finish
-    }
-    servers.clear();
+    servers.clear(); // unique_ptrs auto-delete all servers
 }
 
 // throw Exception on error
 void SrvMgr::startServers()
 {
-    const auto num = interfaces.length();
+    const auto num = options->interfaces.length() + options->sslInterfaces.length();
     Log() << "SrvMgr: starting " << num << " " << Util::Pluralize("service", num) << " ...";
-    for (auto iface : interfaces) {
-        auto srv = new Server(iface.first, iface.second, storage, bitcoindmgr);
-        servers.push_back(srv); // save server in list unconditionally so we may delete later because tryStart may throw
+    for (auto iface : options->interfaces) {
+        servers.emplace_back(std::make_unique<Server>(iface.first, iface.second, storage, bitcoindmgr));
+        Server *srv = servers.back().get();
+        srv->tryStart();
+
+        // connet blockchain.headers.subscribe signal
+        connect(this, &SrvMgr::newHeader, srv, &Server::newHeader);
+    }
+    for (auto iface : options->sslInterfaces) {
+        servers.emplace_back(std::make_unique<ServerSSL>(options->sslCert, options->sslKey, iface.first, iface.second, storage, bitcoindmgr));
+        Server *srv = servers.back().get();
         srv->tryStart();
 
         // connet blockchain.headers.subscribe signal
@@ -56,10 +60,10 @@ void SrvMgr::startServers()
 auto SrvMgr::stats() const -> Stats
 {
     QVariantList serverList;
-    auto servers = this->servers; // copy
-    const int timeout = kDefaultTimeout / qMax(servers.size(), 1);
-    for (auto server : servers) {
+    const int timeout = kDefaultTimeout / qMax(int(servers.size()), 1);
+    for (auto & serverptr : servers) {
         using Pair = std::pair<QString, QVariant>;
+        auto server = serverptr.get();
         auto result = Util::LambdaOnObjectNoThrow<Pair>(server, [server] {
             return Pair(server->prettyName(), server->stats());
         }, timeout); // <-- limited timeout just in case
