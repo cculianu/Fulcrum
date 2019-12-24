@@ -354,7 +354,7 @@ namespace Util {
             constexpr bool debugPrt = false;
             /// maximum number of extant jobs we allow before failing and not enqueuing more.
             /// TODO: make this configurable and/or tune this "magic" value
-            constexpr int extantLimit = 100;
+            constexpr int extantLimit = 1000;
         }
 
         Job::Job(QObject *context, const VoidFunc & work, const VoidFunc & completion, const FailFunc &fail)
