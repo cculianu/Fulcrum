@@ -310,27 +310,33 @@ void App::parseArgs()
         parseInterfaces(options->sslInterfaces, l);
         if (tcpIsDefault) options->interfaces.clear(); // they had default tcp setup, clear the default since they did end up specifying at least 1 real interface to bind to
     }
-    if (const QString cert = parser.value("c"), key = parser.value("k"); !options->sslInterfaces.isEmpty() && (cert.isEmpty() || key.isEmpty())) {
-        throw BadArgs("SSL option requires both -c/--cert and -k/--key options be specified on the command-line");
-    } else if (!QFile::exists(cert)) {
-        throw BadArgs(QString("Cert file not found: %1").arg(cert));
-    } else if (!QFile::exists(key)) {
-        throw BadArgs(QString("Key file not found: %1").arg(key));
-    } else if (!options->sslInterfaces.isEmpty()) {
-        QFile certf(cert), keyf(key);
-        if (!certf.open(QIODevice::ReadOnly))
-            throw BadArgs(QString("Unable to open cert file %1: %2").arg(cert).arg(certf.errorString()));
-        if (!keyf.open(QIODevice::ReadOnly))
-            throw BadArgs(QString("Unable to open key file %1: %2").arg(key).arg(keyf.errorString()));
-        options->sslCert = QSslCertificate(&certf, QSsl::EncodingFormat::Pem);
-        options->sslKey = QSslKey(&keyf, QSsl::KeyAlgorithm::Rsa, QSsl::EncodingFormat::Pem);
-        if (options->sslCert.isNull()) throw BadArgs(QString("Unable to read ssl certificate from %1. Please make sure the file is readable and contains a single certificate in PEM format.").arg(cert));
-        else Log() << "Loaded SSL certificate: " << options->sslCert.subjectDisplayName()
-                   << " " << options->sslCert.subjectInfo(QSslCertificate::SubjectInfo::EmailAddress).join(",")
-                   //<< " self-signed: " << (options->sslCert.isSelfSigned() ? "YES" : "NO")
-                   << " expires: " << (options->sslCert.expiryDate().toString("ddd MMMM d yyyy hh:mm:ss"));
-        if (options->sslKey.isNull()) throw BadArgs(QString("Unable to read private key from %1. Please make sure the file is readable and contains a single RSA or DSA key in PEM format.").arg(key));
-        else {
+    if (!options->sslInterfaces.isEmpty()) {
+        const QString cert = parser.value("c"), key = parser.value("k");
+        if (cert.isEmpty() || key.isEmpty()) {
+            throw BadArgs("SSL option requires both -c/--cert and -k/--key options be specified on the command-line");
+        } else if (!QFile::exists(cert)) {
+            throw BadArgs(QString("Cert file not found: %1").arg(cert));
+        } else if (!QFile::exists(key)) {
+            throw BadArgs(QString("Key file not found: %1").arg(key));
+        } else {
+            QFile certf(cert), keyf(key);
+            if (!certf.open(QIODevice::ReadOnly))
+                throw BadArgs(QString("Unable to open cert file %1: %2").arg(cert).arg(certf.errorString()));
+            if (!keyf.open(QIODevice::ReadOnly))
+                throw BadArgs(QString("Unable to open key file %1: %2").arg(key).arg(keyf.errorString()));
+            options->sslCert = QSslCertificate(&certf, QSsl::EncodingFormat::Pem);
+            options->sslKey = QSslKey(&keyf, QSsl::KeyAlgorithm::Rsa, QSsl::EncodingFormat::Pem);
+            if (options->sslCert.isNull())
+                throw BadArgs(QString("Unable to read ssl certificate from %1. Please make sure the file is readable and "
+                                      "contains a valid certificate in PEM format.").arg(cert));
+            else
+                Log() << "Loaded SSL certificate: " << options->sslCert.subjectDisplayName() << " "
+                      << options->sslCert.subjectInfo(QSslCertificate::SubjectInfo::EmailAddress).join(",")
+                      //<< " self-signed: " << (options->sslCert.isSelfSigned() ? "YES" : "NO")
+                      << " expires: " << (options->sslCert.expiryDate().toString("ddd MMMM d yyyy hh:mm:ss"));
+            if (options->sslKey.isNull())
+                throw BadArgs(QString("Unable to read private key from %1. Please make sure the file is readable and "
+                                      "contains a single RSA private key in PEM format.").arg(key));
             constexpr auto KeyAlgoStr = [](QSsl::KeyAlgorithm a) {
                 switch (a) {
                 case QSsl::KeyAlgorithm::Dh: return "DH";
