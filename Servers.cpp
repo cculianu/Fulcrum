@@ -734,7 +734,8 @@ void Server::rpc_blockchain_headers_subscribe(Client *c, const RPC::Message &m) 
         c->isSubscribedToHeaders = true;
         // connect to signal. Will be emitted directly to object until it dies.
         connect(this, &Server::newHeader, c, [c, meth=m.method](unsigned height, const QByteArray &header){
-             c->sendNotification(meth, mkResp(height, header));
+            // the notification is a list of size 1, with a dict in it. :/
+            c->sendNotification(meth, QVariantList({mkResp(height, header)}));
         });
         Debug() << c->prettyName() << " is now subscribed to headers";
     } else {
