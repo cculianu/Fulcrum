@@ -54,8 +54,14 @@ namespace RPC {
         }
 
 
-        if (!v1 && ret.jsonRpcVersion() != RPC::jsonRpcVersion) // we ignore this key in v1
-            throw InvalidError(QString("Expected jsonrpc version %1").arg(RPC::jsonRpcVersion));
+        if (QString ver; !v1 && (ver=ret.jsonRpcVersion()) != RPC::jsonRpcVersion) {// we ignore this key in v1
+            if (!ver.isEmpty())
+                throw InvalidError(QString("Expected jsonrpc version %1").arg(RPC::jsonRpcVersion));
+            // It turns out Electron Cash doesn't even send this key, even though JSON 2.0 spec specifies it. We accept
+            // requests without it if the key is missing entirely, and "fake" it so below code works (what follows is
+            // code that was originally written assuming the key is there).
+            ret.data[s_jsonrpc] = RPC::jsonRpcVersion;
+        }
 
         if (auto var = map.value(s_method);
                 map.contains(s_method) && (QMetaType::Type(var.type()) != QMetaType::QString

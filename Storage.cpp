@@ -481,7 +481,9 @@ struct Storage::Pvt
     /// Cache BlockHeight -> vector of txHashes for the block (in bitcoind memory order). This gets cleared by
     /// undoLatestBlock.  This is used by the txHashesForBlock function only (which is used by get_merkle and
     /// id_from_pos in the protocol). TODO: MAKE THIS CACHE SIZE CONFIGURABLE.
-    LRU::Cache<true, BlockHeight, std::vector<TxHash>> lruHeight2Hashes_BitcoindMemOrder { 500, 150 };
+    /// Also TODO: Maybe use a QCache here and/or use a memcost-based limit.  Right now we can't predict the memory
+    /// cost using this size-based cache limit provided by LRU::Cache.
+    LRU::Cache<true, BlockHeight, std::vector<TxHash>> lruHeight2Hashes_BitcoindMemOrder { 1250, 250 };
 
     /// this object is thread safe, but it needs to be initialized with headers before allowing client connections.
     std::unique_ptr<Merkle::Cache> merkleCache;

@@ -408,7 +408,11 @@ namespace Util {
             QObject::connect(job, &QObject::destroyed, qApp, [](QObject *){ --extant;}, Qt::DirectConnection);
             if (const auto njobs = ++extant; njobs > maxExtant) {
                 delete job; // will decrement extant on delete
-                failFuncToUse(QString("Job limit exceeded (%1)").arg(njobs));
+                const auto msg = QString("Job limit exceeded (%1)").arg(njobs);
+                failFuncToUse(msg);
+                if (&failFuncToUse != &defaultFail)
+                    // make sure log gets the error
+                    Warning() << msg;
                 return;
             } else if (UNLIKELY(njobs < 0)) {
                 // should absolutely never happen.

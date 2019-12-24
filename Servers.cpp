@@ -346,7 +346,7 @@ QVariantMap Server::stats() const
 void Server::on_started()
 {
     AbstractTcpServer::on_started();
-    conns.push_back(connect(this, &Server::tellClientScriptHashStatus, this, &Server::_tellClientScriptHashStatus));
+    // add more conns here, etc, if needed
 }
 
 void Server::on_newConnection(QTcpSocket *sock) { newClient(sock); }
@@ -572,6 +572,11 @@ void Server::rpc_server_features(Client *c, const RPC::Message &m)
     };
     emit c->sendResult(m.id, r);
 }
+void Server::rpc_server_peers_subscribe(Client *c, const RPC::Message &m)
+{
+    // TODO: Implement. See: https://electrumx.readthedocs.io/en/latest/protocol-methods.html#server-peers-subscribe
+    emit c->sendResult(m.id, QVariantList());
+}
 void Server::rpc_server_ping(Client *c, const RPC::Message &m)
 {
     emit c->sendResult(m.id);
@@ -782,15 +787,16 @@ void Server::rpc_blockchain_scripthash_get_history(Client *c, const RPC::Message
         return resp;
     });
 }
-void Server::rpc_blockchain_scripthash_get_mempool(Client *c [[maybe_unused]], const RPC::Message &m [[maybe_unused]])
+void Server::rpc_blockchain_scripthash_get_mempool(Client *c, const RPC::Message &m)
 {
     QVariantList l(m.paramsList());
     assert(!l.isEmpty());
     const QByteArray sh = validateHashHex( l.front().toString() );
     if (sh.length() != HashLen)
         throw RPCError("Invalid scripthash");
+    emit c->sendResult(m.id, QVariantList()); // always return empty mempool for now in this stub
     // NOT YET IMPLEMENTED. TODO: Implement!
-    throw RPCError("not yet implemented", RPC::Code_InternalError);
+    //throw RPCError("not yet implemented", RPC::Code_InternalError);
     /* Not yet implemented.. this is what the possible implementation would look like
     generic_do_async(c, m.id, [sh, this] {
         QVariantList resp;
@@ -831,23 +837,29 @@ void Server::rpc_blockchain_scripthash_subscribe(Client *c, const RPC::Message &
 {
     QVariantList l = m.paramsList();
     assert(l.size() == 1);
-    constexpr bool testTimer = false;
-    if constexpr (!testTimer) {
-        throw RPCError("not yet implemented", RPC::Code_InternalError);
-    } else {
-        // TESTING TODO FIXME THIS IS FOR TESTING ONLY
-        const auto clientId = c->id;
-        QByteArray sh = validateHashHex( l.front().toString() );
-        if (sh.length() != HashLen)
-            throw RPCError("Invalid scripthash");
-        emit tellClientScriptHashStatus(clientId, m.id, QByteArray(HashLen, 0));
-        QTimer *t = new QTimer(c);
-        connect(t, &QTimer::timeout, this, [sh, clientId, this] {
-            auto val = QRandomGenerator::global()->generate64();
-            emit tellClientScriptHashStatus(clientId, RPC::Message::Id(), QByteArray(reinterpret_cast<char *>(&val), sizeof(val)), sh);
-        });
-        t->setSingleShot(false); t->start(3000);
-    }
+    // this isn't really implemented. this is a stub that just returns the immediate status, but doesn't actually
+    // subscribe for notifications.
+    QByteArray sh = validateHashHex( l.front().toString() );
+    if (sh.length() != HashLen)
+        throw RPCError("Invalid scripthash");
+    generic_do_async(c, m.id, [sh, this] {
+        QVariant ret;
+        // note: this returns just the status hex as a string. The notification will be: [scriptHash, statusHex]
+        const auto hist = storage->getHistory(sh);
+        if (hist.empty())
+            // no history, always return 'null'
+            return ret;
+        QString historyString;
+        {
+            QTextStream ts(&historyString, QIODevice::WriteOnly);
+            for (const auto & item : hist) {
+                ts << Util::ToHexFast(item.hash) << ":" << item.height << ":";
+            }
+        }
+        // scritphash status is non-reversed, single sha256
+        const QByteArray historyHex = Util::ToHexFast(BTC::HashOnce(historyString.toUtf8()));
+        return QVariant(QString::fromUtf8(historyHex));
+    });
 }
 void Server::rpc_blockchain_scripthash_unsubscribe(Client *c, const RPC::Message &m)
 {
@@ -1040,6 +1052,7 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
     { {"server.banner",                     true,               false,    PR{0,0},      RPC::KeySet{} },          &Server::rpc_server_banner },
     { {"server.donation_address",           true,               false,    PR{0,0},                    },          &Server::rpc_server_donation_address },
     { {"server.features",                   true,               false,    PR{0,0},                    },          &Server::rpc_server_features },
+    { {"server.peers.subscribe",            true,               false,    PR{0,0},                    },          &Server::rpc_server_peers_subscribe },
     { {"server.ping",                       true,               false,    PR{0,0},                    },          &Server::rpc_server_ping },
     { {"server.version",                    true,               false,    PR{2,2},                    },          &Server::rpc_server_version },
 
@@ -1082,21 +1095,6 @@ void Server::StaticData::init()
 // --- /Server::StaticData Definitions ---
 // --- /RPC METHODS ---
 
-
-void Server::_tellClientScriptHashStatus(quint64 clientId, const RPC::Message::Id & refId, const QByteArray & status, const QByteArray & scriptHash)
-{
-    if (Client *client = getClient(clientId); client) {
-        if (scriptHash.isEmpty())
-            // immediate scripthash status result
-            emit client->sendResult(refId, status.toHex());
-        else {
-            // notification, no id.
-            emit client->sendNotification("blockchain.scripthash.subscribe", QVariantList{scriptHash.toHex(), status.toHex()});
-        }
-    } else {
-        Debug() << "ClientId: " << clientId << " not found.";
-    }
-}
 
 Client::Client(const RPC::MethodMap & mm, quint64 id_in, Server *srv, QTcpSocket *sock)
     : RPC::LinefeedConnection(mm, id_in, sock, kMaxBuffer), srv(srv)

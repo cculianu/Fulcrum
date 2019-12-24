@@ -120,9 +120,6 @@ public:
 signals:
     void clientDisconnected(quint64 clientId);
 
-    /// these are emitted from Controller and are connected to private slots we handle in our thread.
-    void tellClientScriptHashStatus(quint64 clientId, const RPC::Message::Id & refId, const QByteArray & status, const QByteArray & scriptHash = QByteArray());
-
     /// Connected to SrvMgr parent's "newHeader" signal (which itself is connected to Controller's newHeader).
     /// Used to notify clients that are subscribed to headers that a new header has arrived.
     void newHeader(unsigned height, const QByteArray &header);
@@ -134,12 +131,6 @@ public slots:
 private:
     void on_started() override;
     void on_newConnection(QTcpSocket *) override;
-
-private slots:
-
-    // connected to signals above, runs in our thread. Note if not scriptHash.isNull(), will send a notification
-    // (without including refId), otherwise sends a response with refId included.
-    void _tellClientScriptHashStatus(quint64 clientId, const RPC::Message::Id & refId, const QByteArray & status, const QByteArray & scriptHash = QByteArray());
 
 private:
     Client * newClient(QTcpSocket *);
@@ -164,9 +155,9 @@ private:
     using BitcoinDSuccessFunc = std::function<QVariant(const RPC::Message &)>;
     using BitcoinDErrorFunc = std::function<void(const RPC::Message &)>; // errfunc should always throw RPCError to indicate the exact error it wants to send.
 
-    /// used by some of the slower rpc methods to do work in a threadpool thread. this returns right away but schedules
+    /// Used by some of the slower rpc methods to do work in a threadpool thread. This returns right away but schedules
     /// the work for later and handles sending the response (returned from work) to the client as well as sending
-    /// any errors to the client. the `work` functor may throw RPCError, in which case code and message will be
+    /// any errors to the client. The `work` functor may throw RPCError, in which case code and message will be
     /// sent instead.  Note that all other exceptions also end up sent to the client as "internal error: MESSAGE".
     void generic_do_async(Client *client, const RPC::Message::Id &reqId,  const AsyncWorkFunc & work);
     void generic_async_to_bitcoind(Client *client,
@@ -180,6 +171,7 @@ private:
     void rpc_server_banner(Client *, const RPC::Message &); // returns static string, TODO: have this come from a config file
     void rpc_server_donation_address(Client *, const RPC::Message &); // returns static string, TODO: have this come from config
     void rpc_server_features(Client *, const RPC::Message &); // partially implemented. TODO: "hosts" dict key is incomplete
+    void rpc_server_peers_subscribe(Client *, const RPC::Message &); // not implemented -- returns empty list always
     void rpc_server_ping(Client *, const RPC::Message &); // fully implemented
     void rpc_server_version(Client *, const RPC::Message &); // partially implemented (TODO: we need to reject clients claiming old protocol versions)
     // blockchain misc
@@ -191,9 +183,9 @@ private:
     // scripthash
     void rpc_blockchain_scripthash_get_balance(Client *, const RPC::Message &); // partially implemented -- needs unconfirmed balance
     void rpc_blockchain_scripthash_get_history(Client *, const RPC::Message &); // partially implemented -- needs mempool tx's
-    [[noreturn]] void rpc_blockchain_scripthash_get_mempool(Client *, const RPC::Message &); // not yet implemented -- needs mempool subsystem
+    void rpc_blockchain_scripthash_get_mempool(Client *, const RPC::Message &); // not yet implemented -- needs mempool subsystem
     void rpc_blockchain_scripthash_listunspent(Client *, const RPC::Message &); // partially implemented -- needs mempool tx's
-    [[noreturn]] void rpc_blockchain_scripthash_subscribe(Client *, const RPC::Message &); // not implemented yet
+    void rpc_blockchain_scripthash_subscribe(Client *, const RPC::Message &); // stub implementation returning immediate status -- status updates not implemented yet
     void rpc_blockchain_scripthash_unsubscribe(Client *, const RPC::Message &); // not implemented yet -- stub impl. always returns true, requires suscribe to work first
     // transaction
     void rpc_blockchain_transaction_broadcast(Client *, const RPC::Message &); // fully implemented
