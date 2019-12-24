@@ -1150,7 +1150,7 @@ Client::Client(const RPC::MethodMap & mm, quint64 id_in, Server *srv, QTcpSocket
     errorPolicy = ErrorPolicySendErrorMessage;
     setObjectName(QString("Client.%1").arg(id_in));
     on_connected();
-    Debug() << prettyName() << " new client";
+    Log() << prettyName() << " new client";
 }
 
 Client::~Client()
