@@ -683,7 +683,7 @@ bool Controller::process_VerifyAndAddBlock(PreProcessedBlockPtr ppb)
 
     try {
         const auto nLeft = qMax(sm->endHeight - (sm->ppBlkHtNext-1), 0U);
-        const bool saveUndoInfo = int(ppb->height) > (sm->ht - int(BTC::maxReorgDepth));
+        const bool saveUndoInfo = int(ppb->height) > (sm->ht - int(storage->configuredUndoDepth()));
 
         storage->addBlock(ppb, saveUndoInfo, nLeft);
 

@@ -59,6 +59,10 @@ public:
     /// 100 mln max headers for now.
     static constexpr size_t MAX_HEADERS = 100000000;
 
+    /// Hard-coded to 100 blocks of undo. TODO: have this come from actual config, and take into account
+    /// BTC::MaxReorgDepth (10) as a minimum.
+    inline unsigned configuredUndoDepth() const { return 100; }
+
 
     /// Thread safe. May hit the database (or touch a cache).  Returns the header for the given height or nothing if
     /// height > latestTip().first.  May also fail on low-level db error. Use the optional arg *err to see why if failed.

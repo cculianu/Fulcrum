@@ -1308,7 +1308,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
         }
         // Expire old undos >10 blocks ago to keep the db tidy.  We only do this if we know there is an old
         // undo for said height in db.
-        if (const auto expireUndoHeight = int(ppb->height) - int(BTC::maxReorgDepth);
+        if (const auto expireUndoHeight = int(ppb->height) - int(configuredUndoDepth());
                 expireUndoHeight >= 0 && unsigned(expireUndoHeight) >= p->earliestUndoHeight) {
             // FIXME -- this runs for every block in between the last undo save and current tip.
             // If the node was off for a while then restarted this just hits the db with useless deletes for non-existant
@@ -1451,7 +1451,8 @@ BlockHeight Storage::undoLatestBlock()
 
     const size_t nTx = undo.blkInfo.nTx, nSH = undo.scriptHashes.size();
     const auto elapsedms = (Util::getTimeNS() - t0) / 1e6;
-    Log() << "Applied undo for block " << undo.height << ", " << nTx << " " << Util::Pluralize("transaction", nTx)
+    Log() << "Applied undo for block " << undo.height << " hash " << Util::ToHexFast(undo.hash) << ", "
+          << nTx << " " << Util::Pluralize("transaction", nTx)
           << " involving " << nSH << " " << Util::Pluralize("scripthash", nSH)
           << ", in " << QString::number(elapsedms, 'f', 2) << " msec, new height now: " << prevHeight;
 
