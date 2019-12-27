@@ -80,4 +80,6 @@ struct Mempool
     // -- Data members of struct Mempool --
     TxMap txs;
     HashXTxMap hashXTxs;
+
+    inline void clear() { txs.clear(); hashXTxs.clear(); }
 };
