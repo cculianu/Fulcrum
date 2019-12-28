@@ -77,7 +77,7 @@ void ThreadObjectMixin::stop()
         ++ct;
     }
     conns.clear();
-    if (ct && dbgLC) Debug() << _thread.objectName() << " cleaned up " << ct << " signsl/slot connections";
+    if (ct && dbgLC) Debug() << _thread.objectName() << " cleaned up " << ct << " signal/slot connections";
 }
 
 
