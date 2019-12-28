@@ -472,7 +472,7 @@ void SynchMempoolTask::doDLNextTx()
 {
     Mempool::TxRef tx;
     if (auto it = txsNeedingDownload.begin(); it == txsNeedingDownload.end()) {
-        Warning() << "FIXME -- txsNeedingDownload is empty in " << __FUNCTION__;
+        Error() << "FIXME -- txsNeedingDownload is empty in " << __FUNCTION__;
         emit errored();
         return;
     } else {
@@ -487,11 +487,11 @@ void SynchMempoolTask::doDLNextTx()
         const int expectedLen = txdata.length() / 2;
         txdata = Util::ParseHexFast(txdata);
         if (txdata.length() != expectedLen) {
-            Warning() << "Received tx data is of the wrong length -- bad hex? FIXME";
+            Error() << "Received tx data is of the wrong length -- bad hex? FIXME";
             emit errored();
             return;
         } else if (BTC::HashRev(txdata) != tx->hash) {
-            Warning() << "Received tx data appears to not match requested tx! FIXME!!";
+            Error() << "Received tx data appears to not match requested tx! FIXME!!";
             emit errored();
             return;
         }
@@ -514,14 +514,14 @@ void SynchMempoolTask::doGetRawMempool()
         for (auto it = vm.begin(); it != vm.end(); ++it) {
             const TxHash hash = Util::ParseHexFast(it.key().toUtf8());
             if (hash.length() != HashLen) {
-                Warning() << resp.method << ": got an empty tx hash";
+                Error() << resp.method << ": got an empty tx hash";
                 emit errored();
                 return;
             }
             droppedTxs.erase(hash); // mark this tx as "not dropped"
             const QVariantMap m = it.value().toMap();
             if (m.isEmpty()) {
-                Warning() << resp.method << ": got an empty dict for tx hash " << hash.toHex();
+                Error() << resp.method << ": got an empty dict for tx hash " << hash.toHex();
                 emit errored();
                 return;
             }
@@ -550,7 +550,7 @@ void SynchMempoolTask::doGetRawMempool()
                 // our in-mempory mempool is wiped anyway.
                 tx->ancestorCount = m.value("ancestorcount", 0).toUInt();
                 if (!tx->ancestorCount) {
-                    Warning() << resp.method << ": failed to parse ancestor count for tx " << hash.toHex();
+                    Error() << resp.method << ": failed to parse ancestor count for tx " << hash.toHex();
                     emit errored();
                     return;
                 }
@@ -559,7 +559,7 @@ void SynchMempoolTask::doGetRawMempool()
                 for (const auto & var : depends) {
                     TxHash deptx = Util::ParseHexFast(var.toString().toUtf8());
                     if (deptx.length() != HashLen) {
-                        Warning() << "Error parsing depend `" << var.toString() << "` for mempool tx " << hash.toHex();
+                        Error() << "Error parsing depend `" << var.toString() << "` for mempool tx " << hash.toHex();
                         emit errored();
                         return;
                     }
@@ -574,7 +574,7 @@ void SynchMempoolTask::doGetRawMempool()
             // update descendantCount since it may change as new tx's appear in mempool
             tx->descendantCount = m.value("descendantcount", 0).toUInt();
             if (!tx->descendantCount) {
-                Warning() << resp.method << ": failed to parse descendant count for tx " << hash.toHex();
+                Error() << resp.method << ": failed to parse descendant count for tx " << hash.toHex();
                 emit errored();
                 return;
             }
@@ -583,7 +583,7 @@ void SynchMempoolTask::doGetRawMempool()
             for (const auto & var : spentby) {
                 TxHash spendtx = Util::ParseHexFast(var.toString().toUtf8());
                 if (spendtx.length() != HashLen) {
-                    Warning() << "Error parsing spentby `" << var.toString() << "` for mempool tx " << hash.toHex();
+                    Error() << "Error parsing spentby `" << var.toString() << "` for mempool tx " << hash.toHex();
                     emit errored();
                     return;
                 }
