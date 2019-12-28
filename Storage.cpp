@@ -1760,9 +1760,10 @@ auto Storage::getBalance(const HashX &hashX) const -> std::pair<bitcoin::Amount,
                 // for all tx's involving scripthash
                 bitcoin::Amount utxos, spends;
                 for (const auto & tx : it->second) {
+                    assert(bool(tx));
                     auto it2 = tx->hashXs.find(hashX);
                     if (UNLIKELY(it2 == tx->hashXs.end())) {
-                        throw InternalError(QString("hashX %1 lists tx %2, which then lacks the IOInfo for said hashX! FIXM!")
+                        throw InternalError(QString("scripthash %1 lists tx %2, which then lacks the IOInfo for said hashX! FIXM!")
                                             .arg(QString(hashX.toHex())).arg(QString(tx->hash.toHex())));
                     }
                     auto & info = it2->second;
@@ -1771,7 +1772,7 @@ auto Storage::getBalance(const HashX &hashX) const -> std::pair<bitcoin::Amount,
                     for (const auto ionum : info.utxo) {
                         auto it3 = tx->txos.find(ionum);
                         if (it3 == tx->txos.end())
-                            throw InternalError(QString("hashX %1 lists tx %2, which then lacks the TXO IONum %3 for said hashX! FIXM!")
+                            throw InternalError(QString("scripthash %1 lists tx %2, which then lacks the TXO IONum %3 for said hashX! FIXM!")
                                                 .arg(QString(hashX.toHex())).arg(QString(tx->hash.toHex())).arg(ionum));
                         utxos += it3->second.amount;
                     }
