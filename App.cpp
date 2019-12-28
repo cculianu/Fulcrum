@@ -224,6 +224,12 @@ void App::parseArgs()
            QString("If specified, database consistency will be checked thoroughly for sanity & integrity."
                    "Note that these checks are somewhat slow to perform and under normal operation are not necessary."),
          },
+         { { "T", "polltime" },
+           QString("The number of seconds for the bitcoind poll interval. Bitcoind is polled once every `polltime_secs` "
+                   "seconds to detect mempool and blockchain changes. This value must be at least 1 and cannot exceed "
+                   "30. If not specified, defaults to %1 seconds.").arg(Options::defaultPollTimeSecs),
+           QString("polltime_secs"), QString::number(Options::defaultPollTimeSecs)
+         },
      });
     parser.process(*this);
 
@@ -234,6 +240,11 @@ void App::parseArgs()
     if (parser.isSet("q")) options->verboseDebug = false;
     if (parser.isSet("S")) options->syslogMode = true;
     if (parser.isSet("C")) options->doSlowDbChecks = true;
+    // parse --polltimesecs
+    if (bool ok; (options->pollTimeSecs = parser.value("T").toUInt(&ok)) < options->minPollTimeSecs
+            || !ok || options->pollTimeSecs > options->maxPollTimeSecs) {
+        throw BadArgs(QString("-T/--polltime option must be an integer value in the range [%1, %2]").arg(options->minPollTimeSecs).arg(options->maxPollTimeSecs));
+    }
     // make sure -b -p and -u all present and specified exactly once
     using ReqOptsList = std::list<std::tuple<QString, QString, const char *>>;
     for (const auto & opt : ReqOptsList({{"D", "datadir", nullptr},

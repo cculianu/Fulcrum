@@ -419,7 +419,7 @@ namespace RPC {
             int code = Code_Custom;
             if (wasJsonParse) code = Code_ParseError;
             else if (wasInvParms) code = Code_InvalidParams;
-            else if (wasUnk) code = Code_MethodNotFOund;
+            else if (wasUnk) code = Code_MethodNotFound;
             else if (wasInv) code = Code_InvalidRequest;
             bool doDisconnect = errorPolicy & ErrorPolicyDisconnect;
             if (errorPolicy & ErrorPolicySendErrorMessage) {

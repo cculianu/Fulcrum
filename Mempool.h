@@ -24,6 +24,7 @@ struct Mempool
     struct Tx
     {
         TxHash hash; ///< in reverse bitcoind order (ready for hex encode), fixed value.
+        unsigned ordinal = 0; ///< used to keep track of the order this tx appeared in the mempool from bitcoind. Not particularly useful.
         unsigned sizeBytes = 0;
         bitcoin::Amount fee;
         int64_t time = 0; ///< fixed (does not change during lifetime of a Tx instance)
@@ -55,8 +56,9 @@ struct Mempool
         };
 
         bool operator<(const Tx &o) const {
-            // NOTE: These 4 fields: ancestorCount, height, time, and hash should remain unchanged throughout the lifetime
-            // of a Tx
+            /*if (ordinal != o.ordinal) // <-- this doesn't seem to do anything useful, so disabled.
+                return ordinal < o.ordinal;
+            else*/
             if (ancestorCount != o.ancestorCount)
                 return ancestorCount < o.ancestorCount;
             else if (height != o.height)
@@ -89,6 +91,7 @@ struct Mempool
     // -- Data members of struct Mempool --
     TxMap txs;
     HashXTxMap hashXTxs;
+    unsigned nextOrdinal = 0; ///< used to keep track of the order of new tx's appearing from bitcoind for possible sorting based on natural bitcoind order
 
-    inline void clear() { txs.clear(); hashXTxs.clear(); }
+    inline void clear() { txs.clear(); hashXTxs.clear(); nextOrdinal = 0; }
 };

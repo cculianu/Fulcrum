@@ -27,7 +27,7 @@ namespace RPC {
         /// "Invalid Request" ; The JSON sent is not a valid Request object.
         Code_InvalidRequest = -32600,
         /// "Method not found" ; The method does not exist / is not available.
-        Code_MethodNotFOund = -32601,
+        Code_MethodNotFound = -32601,
         /// "Invalid params" ; Invalid method parameter(s).
         Code_InvalidParams = -32602,
         /// "Internal error" ; Internal JSON-RPC error.

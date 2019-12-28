@@ -34,6 +34,10 @@ struct Options {
     QString datadir; ///< The directory to store the database. It exists and has appropriate permissions (otherwise the app would have quit on startup).
     /// If true, on db open/startup, we will perform some slow/paranoid db consistency checks
     bool doSlowDbChecks = false;
+
+    static constexpr unsigned minPollTimeSecs = 1, maxPollTimeSecs = 30, defaultPollTimeSecs = 5;
+    /// bitcoin poll time interval. This value will always be in the range [minPollTimeSecs, maxPollTimeSecs] aka [1, 30]
+    unsigned pollTimeSecs = defaultPollTimeSecs;
 };
 
 #endif // OPTIONS_H

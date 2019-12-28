@@ -15,7 +15,7 @@
 #include <map>
 
 Controller::Controller(const std::shared_ptr<Options> &o)
-    : Mgr(nullptr), options(o)
+    : Mgr(nullptr), polltimeMS(int(o->pollTimeSecs * 1000)), options(o)
 {
     setObjectName("Controller");
     _thread.setObjectName(objectName());
@@ -510,6 +510,7 @@ void SynchMempoolTask::doGetRawMempool()
         int newCt = 0;
         const QVariantMap vm = resp.result().toMap();
         auto [mempool, lock] = storage->mutableMempool(); // grab the mempool data struct and lock it exclusively
+        const auto oldCt = mempool.txs.size();
         auto droppedTxs = Util::keySet<std::unordered_set<TxHash, HashHasher>>(mempool.txs);
         for (auto it = vm.begin(); it != vm.end(); ++it) {
             const TxHash hash = Util::ParseHexFast(it.key().toUtf8());
@@ -535,6 +536,7 @@ void SynchMempoolTask::doGetRawMempool()
                 ++newCt;
                 tx = std::make_shared<Mempool::Tx>();
                 tx->hash = hash;
+                tx->ordinal = mempool.nextOrdinal++;
                 tx->sizeBytes = m.value("size", 0).toUInt();
                 tx->fee = int64_t(m.value("fee", 0.0).toDouble() * (bitcoin::COIN / bitcoin::Amount::satoshi())) * bitcoin::Amount::satoshi();
                 tx->time = int64_t(m.value("time", 0).toULongLong());
@@ -543,7 +545,7 @@ void SynchMempoolTask::doGetRawMempool()
                 if (tx->height > unsigned(tipHeight)) {
                     Debug() << resp.method << ": tx height " << tx->height << " > current height " <<  tipHeight << ", assuming a new block has arrived, aborting mempool synch ...";
                     mempool.clear();
-                    emit success();
+                    emit retryRecommended(); // this is an exit point for this task
                     return;
                 }
                 // save ancestor count exactly once. this should never change unless there is a reorg, at which point
@@ -609,9 +611,14 @@ void SynchMempoolTask::doGetRawMempool()
             }
         }
         if (UNLIKELY(!droppedTxs.empty())) {
+            const bool recommendFullRetry = oldCt >= 2 && droppedTxs.size() >= oldCt/2; // more than 50% of the mempool tx's dropped out. something is funny. likely a new block arrived.
             // TODO here: keep track of notifications?
             Debug() << droppedTxs.size() << " txs dropped from mempool, resetting mempool and trying again ...";
             mempool.clear();
+            if (recommendFullRetry) {
+                emit retryRecommended(); // this is an exit point for this task
+                return;
+            }
             clear();
             AGAIN();
             return;
@@ -726,7 +733,8 @@ void Controller::add_DLHeaderTask(unsigned int from, unsigned int to, size_t nTa
 void Controller::genericTaskErrored()
 {
     if (sm && sm->state != StateMachine::State::Failure) {
-        sm->state = StateMachine::State::Failure;
+        if (LIKELY(sm))
+            sm->state = StateMachine::State::Failure;
         AGAIN();
     }
 }
@@ -738,6 +746,11 @@ CtlTaskT *Controller::newTask(bool connectErroredSignal, Args && ...args)
     tasks.emplace(task, task);
     if (connectErroredSignal)
         connect(task, &CtlTask::errored, this, &Controller::genericTaskErrored);
+    connect(task, &CtlTask::retryRecommended, this, [this]{ // only the SynchMempoolTask ever emits this
+        if (LIKELY(sm))
+            sm->state = StateMachine::State::Retry;
+        AGAIN();
+    });
     Util::AsyncOnObject(this, [task, this] { // schedule start when we return to our event loop
         if (!isTaskDeleted(task))
             task->start();
@@ -749,7 +762,7 @@ void Controller::process(bool beSilentIfUpToDate)
 {
     if (stopFlag) return;
     bool enablePollTimer = false;
-    auto polltimeout = polltime_ms;
+    auto polltimeout = polltimeMS;
     stopTimer(pollTimerName);
     //Debug() << "Process called...";
     if (!sm) {
@@ -791,8 +804,7 @@ void Controller::process(bool beSilentIfUpToDate)
                         emit upToDate();
                         emit newHeader(unsigned(tip), tipHeader);
                     }
-                    //sm->state = State::End;
-                    sm->state = State::SynchMempool;
+                    sm->state = State::SynchMempool; // now, move on to synch mempool
                 } else {
                     // height ok, but best block hash mismatch.. reorg
                     Warning() << "We have bestBlock " << tipHash.toHex() << ", but bitcoind reports bestBlock " << task->info.bestBlockhash.toHex() << "."
@@ -1042,6 +1054,7 @@ void CtlTask::on_started()
     ThreadObjectMixin::on_started();
     conns += connect(this, &CtlTask::success, ctl, [this]{stop();});
     conns += connect(this, &CtlTask::errored, ctl, [this]{stop();});
+    conns += connect(this, &CtlTask::retryRecommended, ctl, [this]{stop();});
     conns += connect(this, &CtlTask::finished, ctl, [this]{ctl->rmTask(this);});
     process();
     emit started();
@@ -1213,6 +1226,7 @@ auto Controller::debug(const StatsParams &p) const -> Stats // from StatsMixin
             if (!tx) continue;
             QVariantMap m;
             m["hash"] = tx->hash.toHex();
+            m["ordinal"] = tx->ordinal;
             m["sizeBytes"] = tx->sizeBytes;
             m["fee"] = tx->fee.ToString().c_str();
             m["time"] = qlonglong(tx->time);

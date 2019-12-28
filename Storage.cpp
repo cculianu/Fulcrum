@@ -578,6 +578,8 @@ void Storage::startup()
             }
             p->meta = m_db;
             Debug () << "Read meta from db ok";
+            if (!p->meta.chain.isEmpty())
+                Log() << "Chain: " << p->meta.chain;
         } else {
             // ok, did not exist .. write a new one to db
             saveMeta_impl();
@@ -665,6 +667,7 @@ void Storage::setChain(const QString &chain)
         LockGuard l(p->metaLock);
         p->meta.chain = chain;
     }
+    Log() << "Chain: " << chain;
     save(SaveItem::Meta);
 }
 
@@ -1646,6 +1649,7 @@ auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
             // See: https://github.com/facebook/rocksdb/wiki/Prefix-Seek-API-Changes#transition-to-the-new-usage
             rocksdb::Slice key;
             bool didReserveIota = false;
+            TxNum maxTxNumSeen = 0;
             for (iter->Seek(prefix); iter->Valid() && (key = iter->key()).starts_with(prefix); iter->Next()) {
                 if (key.size() != HashLen + CompactTXO::serSize())
                     // should never happen, indicates db corruption
@@ -1663,6 +1667,7 @@ auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
                     didReserveIota = true;
                     ret.reserve(iota);
                 }
+                maxTxNumSeen = std::max(info.txNum, maxTxNumSeen);
                 ret.emplace_back(UnspentItem{
                     { hash, int(height), {} }, // base HistoryItem
                     ctxo.N(),  // .tx_pos
@@ -1672,7 +1677,6 @@ auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
             }
             {
                 // grab mempool utxos for scripthash
-                constexpr TxNum UNCONF_PARENT_NUM = UINT64_MAX - static_cast<TxNum>(1000000);
                 auto [mempool, lock] = this->mempool(); // shared lock
                 if (auto it = mempool.hashXTxs.find(hashX); it != mempool.hashXTxs.end()) {
                     const auto & txset = it->second;
@@ -1691,7 +1695,7 @@ auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
                                         { tx->hash, 0 /* always put 0 for height here */, tx->fee }, // base HistoryItem
                                         ionum, // .tx_pos
                                         txoinfo.amount,  // .value
-                                        UNCONF_PARENT_NUM + TxNum(tx->ancestorCount), // .txNum (this is fudged for sorting at the end properly)
+                                        TxNum(1) + maxTxNumSeen + TxNum(tx->ancestorCount), // .txNum (this is fudged for sorting at the end properly)
                                     });
                                 } else {
                                     // this should never happen!

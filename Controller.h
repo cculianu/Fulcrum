@@ -29,7 +29,7 @@ public:
     void startup() override; ///< may throw
     void cleanup() override;
 
-    int polltime_ms = 5 * 1000; ///< the default amount of time for polling bitcoind for new headers
+    const int polltimeMS; ///< the amount of time for polling bitcoind for new headers -- comes from options->pollTimeSecs
 
     /// thread-safe -- call this from the slave task thread to submit a block
     /// Note: we had to make this a public member but it's not really intended to be used from code outside this subsystem.
@@ -135,9 +135,21 @@ public:
 
 signals:
     void started();
+
+    // the below 4 signals are all exit points. After they are emitted the task will stop.
+
+    /// Emitted after one of: success(), errored() or retryRecommended() to indicate the task thread has stopped.
+    /// The task has or will soon remove itself after this has been emitted.
     void finished();
+    /// Emitted if the task has completed successfully. finished() will be emitted afterwards.
     void success();
+    /// Emitted if the task has encountered an error. finished() will be emitted afterwards.
     void errored();
+    /// Only the SynchMempoolTask emits this when it thinks that the mempool looks funny and like a new block may have
+    /// arrived. After this is emitted the task will stop. The Controller listens for this and immediately retries
+    /// a full poll cycle of bitcoind. finished() will be emitted afterwards.
+    void retryRecommended();
+
     void progress(double); ///< some tasks emit this to indicate progress. may be a number from 0->1.0 or anything else (task specific)
 protected:
     void on_started() override;
@@ -150,7 +162,7 @@ protected:
 
     quint64 submitRequest(const QString &method, const QVariantList &params, const BitcoinDMgr::ResultsF &resultsFunc);
 
-    Controller * const ctl;  ///< initted in c'tor
+    Controller * const ctl;  ///< initted in c'tor. Is always valid since all tasks' lifecycles are managed by the Controller.
 };
 
 #endif // CONTROLLER_H
