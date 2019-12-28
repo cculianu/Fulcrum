@@ -182,9 +182,9 @@ private:
     void rpc_blockchain_relayfee(Client *, const RPC::Message &); // todo: this is a stub implementation
     // scripthash
     void rpc_blockchain_scripthash_get_balance(Client *, const RPC::Message &); // partially implemented -- needs unconfirmed balance
-    void rpc_blockchain_scripthash_get_history(Client *, const RPC::Message &); // partially implemented -- needs mempool tx's
-    void rpc_blockchain_scripthash_get_mempool(Client *, const RPC::Message &); // not yet implemented -- needs mempool subsystem
-    void rpc_blockchain_scripthash_listunspent(Client *, const RPC::Message &); // partially implemented -- needs mempool tx's
+    void rpc_blockchain_scripthash_get_history(Client *, const RPC::Message &); // fully implemented
+    void rpc_blockchain_scripthash_get_mempool(Client *, const RPC::Message &); // fully implemented
+    void rpc_blockchain_scripthash_listunspent(Client *, const RPC::Message &); // fully implemented
     void rpc_blockchain_scripthash_subscribe(Client *, const RPC::Message &); // stub implementation returning immediate status -- status updates not implemented yet
     void rpc_blockchain_scripthash_unsubscribe(Client *, const RPC::Message &); // not implemented yet -- stub impl. always returns true, requires suscribe to work first
     // transaction
@@ -221,6 +221,10 @@ private:
     using HeadersBranchAndRootPair = std::pair<QVariantList, QVariant>;
     /// Helper for rpc block_header* methods -- returns the 'branch' and 'root' keys ready to be put in the results dictionary
     HeadersBranchAndRootPair getHeadersBranchAndRoot(unsigned height, unsigned cp_height);
+
+    /// called from get_mempool and get_history to retrieve the mempool and/or history for a hashx synchronously.
+    /// Returns the QVariantMap suitable for placing into the resulting response.
+    QVariantList getHistoryCommon(const QByteArray & sh, bool mempoolOnly);
 };
 
 /// SSL version of the above Server class that just wraps tcp sockets with a QSslSocket.

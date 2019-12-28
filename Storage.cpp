@@ -1,6 +1,7 @@
 #include "BTC.h"
 #include "CostCache.h"
 #include "LRUCache.h"
+#include "Mempool.h"
 #include "Merkle.h"
 #include "RecordFile.h"
 #include "Storage.h"
@@ -497,6 +498,9 @@ struct Storage::Pvt
     std::unique_ptr<Merkle::Cache> merkleCache;
 
     HeaderHash genesisHash; // written-to once by either loadHeaders code or addBlock for block 0. Guarded by headerVerifierLock.
+
+    Mempool mempool; ///< app-wide mempool data -- does not get saved to db. Controller.cpp writes to this
+    RWLock mempoolLock;
 };
 
 Storage::Storage(const std::shared_ptr<Options> & options)
@@ -1073,7 +1077,9 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
     }
 
     // take all locks now.. since this is a Big Deal. TODO: add more locks here?
-    std::scoped_lock guard(p->blocksLock, p->headerVerifierLock, p->blkInfoLock);
+    std::scoped_lock guard(p->blocksLock, p->headerVerifierLock, p->blkInfoLock, p->mempoolLock);
+
+    p->mempool.clear(); // just make sure the mempool is clean
 
     const auto verifUndo = p->headerVerifier; // keep a copy of verifier state for undo purposes in case this fails
     // This object ensures that if an exception is thrown while we are in the below code, we undo the header verifier
@@ -1337,7 +1343,9 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
 BlockHeight Storage::undoLatestBlock()
 {
     // take all locks now.. since this is a Big Deal. TODO: add more locks here?
-    std::scoped_lock guard(p->blocksLock, p->headerVerifierLock, p->blkInfoLock);
+    std::scoped_lock guard(p->blocksLock, p->headerVerifierLock, p->blkInfoLock, p->mempoolLock);
+
+    p->mempool.clear(); // make sure mempool is clean
 
     const auto t0 = Util::getTimeNS();
 
@@ -1586,22 +1594,33 @@ std::vector<TxHash> Storage::txHashesForBlockInBitcoindMemoryOrder(BlockHeight h
     return ret;
 }
 
-auto Storage::getHistory(const HashX & hashX) const -> History
+auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf) const -> History
 {
     History ret;
     if (hashX.length() != HashLen)
         return ret;
     try {
         SharedLockGuard g(p->blocksLock);  // makes sure history doesn't mutate from underneath our feet
-        static const QString err("Error retrieving history for a script hash");
-        auto nums_opt = GenericDBGet<TxNumVec>(p->db.shist.get(), hashX, true, err, false, p->db.defReadOpts);
-        if (nums_opt.has_value()) {
-            auto & nums = nums_opt.value();
-            ret.reserve(nums.size());
-            for (auto num : nums) {
-                auto hash = hashForTxNum(num).value(); // may throw, but that indicates some database inconsistency. we catch below
-                auto height = heightForTxNum(num).value(); // may throw, same deal
-                ret.emplace_back(HistoryItem{hash, height});
+        if (conf) {
+            static const QString err("Error retrieving history for a script hash");
+            auto nums_opt = GenericDBGet<TxNumVec>(p->db.shist.get(), hashX, true, err, false, p->db.defReadOpts);
+            if (nums_opt.has_value()) {
+                auto & nums = nums_opt.value();
+                ret.reserve(nums.size());
+                for (auto num : nums) {
+                    auto hash = hashForTxNum(num).value(); // may throw, but that indicates some database inconsistency. we catch below
+                    auto height = heightForTxNum(num).value(); // may throw, same deal
+                    ret.emplace_back(HistoryItem{hash, int(height), {}});
+                }
+            }
+        }
+        if (unconf) {
+            auto [mempool, lock] = this->mempool();
+            if (auto it = mempool.hashXTxs.find(hashX); it != mempool.hashXTxs.end()) {
+                const auto & txset = it->second;
+                ret.reserve(ret.size() + txset.size());
+                for (const auto & tx : txset)
+                    ret.emplace_back(HistoryItem{tx->hash, tx->ancestorCount > 1 ? -1 : 0, tx->fee});
             }
         }
     } catch (const std::exception &e) {
@@ -1645,13 +1664,46 @@ auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
                     ret.reserve(iota);
                 }
                 ret.emplace_back(UnspentItem{
-                    { hash, height }, // base HistoryItem
+                    { hash, int(height), {} }, // base HistoryItem
                     ctxo.N(),  // .tx_pos
                     info.amount, // .value
                     info.txNum, // .txNum
                 });
             }
-        } // release lock
+            {
+                // grab mempool utxos for scripthash
+                constexpr TxNum UNCONF_PARENT_NUM = UINT64_MAX - static_cast<TxNum>(65536);
+                auto [mempool, lock] = this->mempool(); // shared lock
+                if (auto it = mempool.hashXTxs.find(hashX); it != mempool.hashXTxs.end()) {
+                    const auto & txset = it->second;
+                    for (const auto & tx : txset) {
+                        if (!tx) {
+                            // defensive programming. should never happen
+                            Warning() << "Cannot find tx for sh " << hashX.toHex() << ". FIXME!!";
+                            continue;
+                        }
+                        if (auto it2 = tx->hashXs.find(hashX); it2 != tx->hashXs.end()) {
+                            const auto & ioinfo = it2->second;
+                            for (const auto ionum : ioinfo.utxo) {
+                                if (auto it3 = tx->txos.find(ionum); it3 != tx->txos.end()) {
+                                    const auto & txoinfo = it3->second;
+                                    ret.emplace_back(UnspentItem{
+                                        { tx->hash, 0 /* always put 0 for height here */, tx->fee }, // base HistoryItem
+                                        ionum, // .tx_pos
+                                        txoinfo.amount,  // .value
+                                        UNCONF_PARENT_NUM + TxNum(tx->ancestorCount), // .txNum (this is fudged for sorting at the end properly)
+                                    });
+                                } else {
+                                    // this should never happen!
+                                    Warning() << "Cannot find txo " << ionum << " for sh " << hashX.toHex() << " in tx " << tx->hash.toHex();
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                }
+            } // release mempool lock
+        } // release blocks lock
         std::sort(ret.begin(), ret.end());
         if (const auto sz = ret.size(), cap = ret.capacity(); cap - sz > iota && double(cap)/double(sz) > 1.20)
             // we only do this if we're wasting enough space (at least iota, and at least 20% space wasted),
@@ -1763,6 +1815,15 @@ bool Storage::UnspentItem::operator<(const UnspentItem &o) const noexcept {
 }
 bool Storage::UnspentItem::operator==(const UnspentItem &o) const noexcept {
     return txNum == o.txNum && tx_pos == o.tx_pos && value == o.value && HistoryItem::operator==(o);
+}
+
+auto Storage::mempool() const -> std::pair<const Mempool &, SharedLockGuard>
+{
+    return {p->mempool, SharedLockGuard{p->mempoolLock}};
+}
+auto Storage::mutableMempool() -> std::pair<Mempool &, ExclusiveLockGuard>
+{
+    return {p->mempool, ExclusiveLockGuard{p->mempoolLock}};
 }
 
 namespace {

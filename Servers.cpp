@@ -768,6 +768,25 @@ void Server::rpc_blockchain_scripthash_get_balance(Client *c, const RPC::Message
         return resp;
     });
 }
+
+/// called from get_mempool and get_history to retrieve the mempool for a hashx synchronously.  Returns the
+/// QVariantMap suitable for placing into the resulting response.
+QVariantList Server::getHistoryCommon(const QByteArray &sh, bool mempoolOnly)
+{
+    QVariantList resp;
+    const auto items = storage->getHistory(sh, !mempoolOnly, true); // these are already sorted
+    for (const auto & item : items) {
+        QVariantMap m{
+            { "tx_hash" , Util::ToHexFast(item.hash) },
+            { "height", int(item.height) },
+        };
+        if (item.fee.has_value())
+            m["fee"] = qlonglong(item.fee.value() / bitcoin::Amount::satoshi());
+        resp.push_back(m);
+    }
+    return resp;
+}
+
 void Server::rpc_blockchain_scripthash_get_history(Client *c, const RPC::Message &m)
 {
     QVariantList l(m.paramsList());
@@ -776,16 +795,7 @@ void Server::rpc_blockchain_scripthash_get_history(Client *c, const RPC::Message
     if (sh.length() != HashLen)
         throw RPCError("Invalid scripthash");
     generic_do_async(c, m.id, [sh, this] {
-        QVariantList resp;
-        const auto items = storage->getHistory(sh); // these are already sorted
-        for (const auto & item : items) {
-            resp.push_back(QVariantMap{
-                { "tx_hash" , Util::ToHexFast(item.hash) },
-                { "height", item.height },
-                // mempool tx's here would also have "fee"!  (basically the contents of get_mempool concatenated) <--- TODO
-            });
-        }
-        return resp;
+        return getHistoryCommon(sh, false);
     });
 }
 void Server::rpc_blockchain_scripthash_get_mempool(Client *c, const RPC::Message &m)
@@ -795,23 +805,9 @@ void Server::rpc_blockchain_scripthash_get_mempool(Client *c, const RPC::Message
     const QByteArray sh = validateHashHex( l.front().toString() );
     if (sh.length() != HashLen)
         throw RPCError("Invalid scripthash");
-    emit c->sendResult(m.id, QVariantList()); // always return empty mempool for now in this stub
-    // NOT YET IMPLEMENTED. TODO: Implement!
-    //throw RPCError("not yet implemented", RPC::Code_InternalError);
-    /* Not yet implemented.. this is what the possible implementation would look like
     generic_do_async(c, m.id, [sh, this] {
-        QVariantList resp;
-        const auto items = storage->getMempool(sh); // these are already sorted
-        for (const auto & item : items) {
-            resp.push_back(QVariantMap{
-                { "tx_hash" , Util::ToHexFast(item.hash) },
-                { "height", item.height },  // should be 0 for "no unconfirmed parent", -1 for "has unconfirmed parent"
-                { "fee", item.fee }, // fee (int64) in satoshis
-            });
-        }
-        return QVariant(resp);
+        return getHistoryCommon(sh, true);
     });
-    */
 }
 void Server::rpc_blockchain_scripthash_listunspent(Client *c, const RPC::Message &m)
 {
@@ -846,7 +842,7 @@ void Server::rpc_blockchain_scripthash_subscribe(Client *c, const RPC::Message &
     generic_do_async(c, m.id, [sh, this] {
         QVariant ret;
         // note: this returns just the status hex as a string. The notification will be: [scriptHash, statusHex]
-        const auto hist = storage->getHistory(sh);
+        const auto hist = storage->getHistory(sh, true, true);
         if (hist.empty())
             // no history, always return 'null'
             return ret;

@@ -38,6 +38,8 @@ struct HeaderVerificationFailure : public Exception { using Exception::Exception
 /// rewind too far back or some other unforeseen circumstance).
 struct UndoInfoMissing : public Exception { using Exception::Exception; ~UndoInfoMissing() override; };
 
+struct Mempool;
+
 /// Manages the db and all storage-related facilities.  Most of its public methods are fully reentrant and thread-safe.
 class Storage final : public Mgr, public ThreadObjectMixin
 {
@@ -49,6 +51,13 @@ public:
     void startup() override;
     void cleanup() override;
     // /Mgr
+
+    // locking types
+    using RWLock = std::shared_mutex;
+    using Lock = std::mutex;
+    using ExclusiveLockGuard = std::unique_lock<RWLock>;
+    using SharedLockGuard = std::shared_lock<RWLock>;
+    using LockGuard = std::unique_lock<Lock>;
 
     // Public interface -- unless otherwise specified all functions below are thread-safe
 
@@ -159,7 +168,8 @@ public:
     //-- scritphash history (WIP)
     struct HistoryItem {
         TxHash hash;
-        unsigned height = 0;
+        int height = 0; ///< block height. 0 = unconfirmed, -1 = unconfirmed with unconfirmed parent. Note this is ambiguous with block 0 :(
+        std::optional<bitcoin::Amount> fee; ///< fee, if known. this is only ever populated with a value for unconfirmed (mempool) tx's
 
         // for sort & maps
         bool operator<(const HistoryItem &o) const noexcept;
@@ -168,7 +178,7 @@ public:
     using History = std::vector<HistoryItem>;
 
     // thread safe
-    History getHistory(const HashX &) const;
+    History getHistory(const HashX &, bool includeConfirmed, bool includeMempool) const;
 
     struct UnspentItem : HistoryItem {
         IONum tx_pos = 0;
@@ -194,16 +204,18 @@ public:
     /// if there was a reorg and cp_height is no longer <= chain height.
     Merkle::BranchAndRootPair headerBranchAndRoot(unsigned height, unsigned cp_height);
 
+    /// Caller must hold the returned SharedLockGuard for as long as they use the reference otherwise bad things happen!
+    std::pair<const Mempool &, SharedLockGuard> mempool() const;
+    /// Caller must hold the returned ExclusiveLockGuard for as long as they use the reference otherwise bad things happen!
+    std::pair<Mempool &, ExclusiveLockGuard> mutableMempool();
+
+    /// Thread-safe. Query db for a UTXO, and return it if found.  May throw on database error.
+    std::optional<TXOInfo> utxoGetFromDB(const TXO &, bool throwIfMissing = false);
+
 protected:
     virtual Stats stats() const override; ///< from StatsMixin
 
     // -- Header and misc
-    // some types
-    using RWLock = std::shared_mutex;
-    using Lock = std::mutex;
-    using ExclusiveLockGuard = std::unique_lock<RWLock>;
-    using SharedLockGuard = std::shared_lock<RWLock>;
-    using LockGuard = std::unique_lock<Lock>;
 
     /// Keep the returned LockGuard in scope while you use the HeaderVerifier
     std::pair<BTC::HeaderVerifier &, ExclusiveLockGuard> headerVerifier();
@@ -212,9 +224,6 @@ protected:
 
 
     // -- the below are used inside addBlock (and undoLatestBlock) to maintain the UTXO set & Headers
-
-    /// Thread-safe. Query db for a UTXO, and return it if found.  May throw on database error.
-    std::optional<TXOInfo> utxoGetFromDB(const TXO &, bool throwIfMissing = false);
 
     /// Used to store (in an opaque fashion) the rocksdb::WriteBatch objects used for updating the db.
     /// Called internally from addBlock and undoLatestBlock().

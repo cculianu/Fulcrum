@@ -1,9 +1,11 @@
 #include "BlockProc.h"
 #include "BTC.h"
 #include "Controller.h"
+#include "Mempool.h"
 #include "Merkle.h"
 #include "TXO.h"
 
+#include "bitcoin/transaction.h"
 #include "robin_hood/robin_hood.h"
 
 #include <algorithm>
@@ -341,10 +343,292 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
     });
 }
 
+struct SynchMempoolTask : public CtlTask
+{
+    SynchMempoolTask(Controller *ctl_, std::shared_ptr<Storage> storage)
+        : CtlTask(ctl_, "SynchMempool"), storage(storage) {}
+    ~SynchMempoolTask() override;
+    void process() override;
+
+    std::shared_ptr<Storage> storage;
+    bool isdlingtxs = false;
+    Mempool::TxMap txsNeedingDownload, txsWaitingForResponse;
+    using DldTxsMap = robin_hood::unordered_flat_map<TxHash, std::pair<Mempool::TxRef, bitcoin::CTransactionRef>, HashHasher>;
+    DldTxsMap txsDownloaded;
+    unsigned expectedNumTxsDownloaded = 0;
+
+    void clear() {
+        isdlingtxs = false;
+        txsNeedingDownload.clear(); txsWaitingForResponse.clear();
+        txsDownloaded.clear();
+        expectedNumTxsDownloaded = 0;
+    }
+
+    void doGetRawMempool();
+    void doDLNextTx();
+    void processResults();
+};
+
+SynchMempoolTask::~SynchMempoolTask() { stop(); } // paranoia
+
+void SynchMempoolTask::process()
+{
+    if (ctl->isStopping())
+        return; // short-circuit early return if controller is stopping
+    if (!isdlingtxs)
+        doGetRawMempool();
+    else if (!txsNeedingDownload.empty()) {
+        doDLNextTx();
+    } else if (txsWaitingForResponse.empty()) {
+        try {
+            processResults();
+        } catch (const std::exception & e) {
+            Error() << "Caught exception when processing mempool tx's: " << e.what();
+            emit errored();
+            return;
+        }
+    } else {
+        Error() << "Unexpected state in " << __PRETTY_FUNCTION__ << ". FIXME!";
+        emit errored();
+        return;
+    }
+}
+
+void SynchMempoolTask::processResults()
+{
+    if (txsDownloaded.size() != expectedNumTxsDownloaded) {
+        Error() << __PRETTY_FUNCTION__ << ": Expected to downlaod " << expectedNumTxsDownloaded << ", instead got " << txsDownloaded.size() << ". FIXME!";
+        emit errored();
+        return;
+    }
+    auto [mempool, lock] = storage->mutableMempool(); // grab mempool struct exclusively
+    const auto oldSize = mempool.txs.size();
+    // first, do new outputs for all tx's, and put the new tx's in the mempool struct
+    for (auto & [hash, pair] : txsDownloaded) {
+        auto & [tx, ctx] = pair;
+        assert(hash == tx->hash);
+        IONum n = 0;
+        for (const auto & out : ctx->vout) {
+            const auto & script = out.scriptPubKey;
+            if (BTC::IsOpReturn(script))
+                continue; // ignore OP_RETURN
+            HashX sh = BTC::HashXFromCScript(out.scriptPubKey);
+            TXOInfo info{out.nValue, sh, {}, {}};
+            tx->txos[n] = info;
+            tx->hashXs[sh].utxo.insert(n);
+            mempool.txs[tx->hash] = tx; // save tx
+            mempool.hashXTxs[sh].insert(tx); // save tx to hashx -> tx set
+            ++n;
+        }
+    }
+    // next, do new inputs for all tx's, debiting/crediting either a mempool tx or querying db for the relevant utxo
+    for (auto & [hash, pair] : txsDownloaded) {
+        auto & [tx, ctx] = pair;
+        assert(hash == tx->hash);
+        IONum inNum = 0;
+        for (const auto & in : ctx->vin) {
+            const IONum prevN = IONum(in.prevout.GetN());
+            const TxHash prevTxId = BTC::Hash2ByteArrayRev(in.prevout.GetTxId());
+            const TXO prevTXO{prevTxId, prevN};
+            TXOInfo prevInfo;
+            QByteArray sh; // shallow copy of prevInfo.hashX
+            if (tx->depends.count(prevTxId)) {
+                // prev is a mempool tx
+                auto it = mempool.txs.find(prevTxId);
+                if (it == mempool.txs.end())
+                    throw InternalError(QString("FAILED TO FIND PREVIOUS TX IN MEMPOOL! Fixme! TxHash: %1").arg(QString(prevTxId.toHex())));
+                auto prevTxRef = it->second;
+                assert(bool(prevTxRef));
+                auto it2 = prevTxRef->txos.find(prevN);
+                if (it2 == prevTxRef->txos.end())
+                    throw InternalError(QString("FAILED TO FIND PREVIOUS TXOUTN %1 IN MEMPOOL for TxHash: %2").arg(prevN).arg(QString(prevTxId.toHex())));
+                prevInfo = it2->second;
+                sh = prevInfo.hashX;
+                tx->hashXs[sh].unconfirmedSpends[prevTXO] = prevInfo;
+                prevTxRef->hashXs[sh].utxo.erase(prevN); // remove this spend from utxo set for prevTx in mempool
+                Debug() << hash.toHex() << " unconfirmed spend: " << prevTXO.toString() << " " << prevInfo.amount.ToString().c_str();
+            } else {
+                // prev is a confirmed tx
+                prevInfo = storage->utxoGetFromDB(prevTXO, true).value(); // will throw if missing
+                sh = prevInfo.hashX;
+                tx->hashXs[sh].confirmedSpends[prevTXO] = prevInfo;
+                Debug() << hash.toHex() << " confirmed spend: " << prevTXO.toString() << " " << prevInfo.amount.ToString().c_str();
+            }
+            assert(sh == prevInfo.hashX);
+            mempool.hashXTxs[sh].insert(tx); // mark this hashX as having been "touched" because of this input
+            ++inNum;
+        }
+    }
+    const auto newSize = mempool.txs.size();
+    const auto numAddresses = mempool.hashXTxs.size();
+    (*(oldSize == newSize ? std::unique_ptr<Log>(new Debug) : std::unique_ptr<Log>(new Log)))
+            << newSize << Util::Pluralize(" mempool tx", newSize) << " involving "
+            << numAddresses << Util::Pluralize(" address", numAddresses);
+    // TODO here: notify on status change
+    emit success();
+}
+
+void SynchMempoolTask::doDLNextTx()
+{
+    Mempool::TxRef tx;
+    if (auto it = txsNeedingDownload.begin(); it == txsNeedingDownload.end()) {
+        Warning() << "FIXME -- txsNeedingDownload is empty in " << __FUNCTION__;
+        emit errored();
+        return;
+    } else {
+        tx = it->second;
+        txsNeedingDownload.erase(it); // pop it off the front
+    }
+    assert(bool(tx));
+    const auto hashHex = Util::ToHexFast(tx->hash);
+    txsWaitingForResponse[tx->hash] = tx;
+    submitRequest("getrawtransaction", {hashHex, false}, [this, hashHex, tx](const RPC::Message & resp){
+        QByteArray txdata = resp.result().toString().toUtf8();
+        const int expectedLen = txdata.length() / 2;
+        txdata = Util::ParseHexFast(txdata);
+        if (txdata.length() != expectedLen) {
+            Warning() << "Received tx data is of the wrong length -- bad hex? FIXME";
+            emit errored();
+            return;
+        } else if (BTC::HashRev(txdata) != tx->hash) {
+            Warning() << "Received tx data appears to not match requested tx! FIXME!!";
+            emit errored();
+            return;
+        }
+        Debug() << "got reply for tx: " << hashHex << " " << txdata.length() << " bytes";
+        bitcoin::CTransaction ctx = BTC::Deserialize<bitcoin::CTransaction>(txdata);
+        txsDownloaded[tx->hash] = {tx, bitcoin::MakeTransactionRef(std::move(ctx)) };
+        txsWaitingForResponse.erase(tx->hash);
+        AGAIN();
+    });
+}
+
+void SynchMempoolTask::doGetRawMempool()
+{
+    submitRequest("getrawmempool", {true}, [this](const RPC::Message & resp){
+        const int tipHeight = storage->latestTip().first;
+        int newCt = 0;
+        const QVariantMap vm = resp.result().toMap();
+        auto [mempool, lock] = storage->mutableMempool(); // grab the mempool data struct and lock it exclusively
+        auto droppedTxs = Util::keySet<std::unordered_set<TxHash, HashHasher>>(mempool.txs);
+        for (auto it = vm.begin(); it != vm.end(); ++it) {
+            const TxHash hash = Util::ParseHexFast(it.key().toUtf8());
+            if (hash.length() != HashLen) {
+                Warning() << resp.method << ": got an empty tx hash";
+                emit errored();
+                return;
+            }
+            droppedTxs.erase(hash); // mark this tx as "not dropped"
+            const QVariantMap m = it.value().toMap();
+            if (m.isEmpty()) {
+                Warning() << resp.method << ": got an empty dict for tx hash " << hash.toHex();
+                emit errored();
+                return;
+            }
+            Mempool::TxRef tx;
+            static const QVariantList EmptyList; // avoid constructng this for each iteration
+            if (auto it = mempool.txs.find(hash); it != mempool.txs.end()) {
+                tx = it->second;
+                Debug() << "Existing mempool tx: " << hash.toHex();
+            } else {
+                Debug() << "New mempool tx: " << hash.toHex();
+                ++newCt;
+                tx = std::make_shared<Mempool::Tx>();
+                tx->hash = hash;
+                tx->sizeBytes = m.value("size", 0).toUInt();
+                tx->fee = int64_t(m.value("fee", 0.0).toDouble() * (bitcoin::COIN / bitcoin::Amount::satoshi())) * bitcoin::Amount::satoshi();
+                tx->time = int64_t(m.value("time", 0).toULongLong());
+                tx->height = m.value("height", 0).toUInt();
+                // Note mempool tx's may have any height in the past because they may not confirm when new blocks arrive...
+                if (tx->height > unsigned(tipHeight)) {
+                    Debug() << resp.method << ": tx height " << tx->height << " > current height " <<  tipHeight << ", assuming a new block has arrived, aborting mempool synch ...";
+                    mempool.clear();
+                    emit success();
+                    return;
+                }
+                // save ancestor count exactly once. this should never change unless there is a reorg, at which point
+                // our in-mempory mempool is wiped anyway.
+                tx->ancestorCount = m.value("ancestorcount", 0).toUInt();
+                if (!tx->ancestorCount) {
+                    Warning() << resp.method << ": failed to parse ancestor count for tx " << hash.toHex();
+                    emit errored();
+                    return;
+                }
+                // we only build the depends list once per tx instantiation
+                const auto depends = m.value("depends", EmptyList).toList();
+                for (const auto & var : depends) {
+                    TxHash deptx = Util::ParseHexFast(var.toString().toUtf8());
+                    if (deptx.length() != HashLen) {
+                        Warning() << "Error parsing depend `" << var.toString() << "` for mempool tx " << hash.toHex();
+                        emit errored();
+                        return;
+                    }
+                    auto res = tx->depends.insert(deptx);
+                    if (res.second) {
+                        Debug() << "new dep: " << deptx.toHex() << " for tx: " << hash.toHex();
+                    }
+                }
+                txsNeedingDownload[hash] = tx;
+            }
+            // at this point we have a valid tx ptr
+            // update descendantCount since it may change as new tx's appear in mempool
+            tx->descendantCount = m.value("descendantcount", 0).toUInt();
+            if (!tx->descendantCount) {
+                Warning() << resp.method << ": failed to parse descendant count for tx " << hash.toHex();
+                emit errored();
+                return;
+            }
+            const auto spentby = m.value("spentby", EmptyList).toList();
+
+            for (const auto & var : spentby) {
+                TxHash spendtx = Util::ParseHexFast(var.toString().toUtf8());
+                if (spendtx.length() != HashLen) {
+                    Warning() << "Error parsing spentby `" << var.toString() << "` for mempool tx " << hash.toHex();
+                    emit errored();
+                    return;
+                }
+                auto res = tx->spentBy.insert(spendtx);
+                if (res.second) {
+                    Debug() << "new spentby: " << spendtx.toHex() << " for tx: " << hash.toHex();
+                }
+            }
+            // detect spentBy deletions... this normally won't happen unless a descendant tx has dropped out of the mempool
+            // if this happens mempool needs to be completely rebuilt -- in which case we reset this class's state as well
+            // as the known-mempool state, and try again.
+            // TODO here: keep track of notifications?
+            for (const auto & hash : tx->spentBy) {
+                const auto hashHex = Util::ToHexFast(hash);
+                if (UNLIKELY(!spentby.contains(hashHex))) {
+                    Debug() << "spent-by descendant tx " << hashHex << " disappeared from mempool for parent tx " << Util::ToHexFast(tx->hash)
+                            << ", resetting mempool and trying again ...";
+                    mempool.clear();
+                    clear();
+                    AGAIN();
+                    return;
+                }
+            }
+        }
+        if (UNLIKELY(!droppedTxs.empty())) {
+            // TODO here: keep track of notifications?
+            Debug() << droppedTxs.size() << " txs dropped from mempool, resetting mempool and trying again ...";
+            mempool.clear();
+            clear();
+            AGAIN();
+            return;
+        }
+        Debug() << resp.method << ": got reply with " << vm.size() << " items, " << newCt << " new";
+        isdlingtxs = true;
+        expectedNumTxsDownloaded = unsigned(newCt);
+        // TX data will be downloaded now, if needed
+        AGAIN();
+    });
+}
+
 struct Controller::StateMachine
 {
     enum State {
         Begin=0, GetBlocks, DownloadingBlocks, FinishedDL, End, Failure, IBD, Retry,
+        SynchMempool, SynchingMempool, SynchMempoolFinished
     };
     State state = Begin;
     int ht = -1; ///< the latest height bitcoind told us this run
@@ -364,6 +648,7 @@ struct Controller::StateMachine
     const char * stateStr() const {
         static constexpr const char *stateStrings[] = { "Begin", "GetBlocks", "DownloadingBlocks", "FinishedDL", "End",
                                                         "Failure", "IBD", "Retry",
+                                                        "SynchMempool", "SynchingMempool", "SynchMempoolFinished",
                                                         "Unknown" /* this should always be last */ };
         auto idx = qMin(size_t(state), std::size(stateStrings)-1);
         return stateStrings[idx];
@@ -506,7 +791,8 @@ void Controller::process(bool beSilentIfUpToDate)
                         emit upToDate();
                         emit newHeader(unsigned(tip), tipHeader);
                     }
-                    sm->state = State::End;
+                    //sm->state = State::End;
+                    sm->state = State::SynchMempool;
                 } else {
                     // height ok, but best block hash mismatch.. reorg
                     Warning() << "We have bestBlock " << tipHash.toHex() << ", but bitcoind reports bestBlock " << task->info.bestBlockhash.toHex() << "."
@@ -561,7 +847,7 @@ void Controller::process(bool beSilentIfUpToDate)
         AGAIN();
     } else if (sm->state == State::Failure) {
         // We will try again later via the pollTimer
-        Error() << "Failed to download blocks";
+        Error() << "Failed to synch blocks and/or mempool";
         {
             std::lock_guard g(smLock);
             sm.reset();
@@ -583,6 +869,24 @@ void Controller::process(bool beSilentIfUpToDate)
         Warning() << "bitcoind is in initial block download, will try again in 1 minute";
         polltimeout = 60 * 1000; // try again every minute
         emit synchFailure();
+    } else if (sm->state == State::SynchMempool) {
+        // ...
+        auto task = newTask<SynchMempoolTask>(true, this, storage);
+        connect(task, &CtlTask::success, this, [this, task]{
+            if (UNLIKELY(!sm || isTaskDeleted(task) || sm->state != State::SynchingMempool))
+                // task was stopped from underneath us and/or this response is stale.. so return and ignore
+                return;
+            //Debug() << task->objectName() << " success!"; // TODO remove this, do actual stuff
+            sm->state = State::SynchMempoolFinished;
+            AGAIN();
+        });
+        sm->state = State::SynchingMempool;
+    } else if (sm->state == State::SynchingMempool) {
+        // ... nothing..
+    } else if (sm->state == State::SynchMempoolFinished) {
+        // ...
+        sm->state = State::End;
+        AGAIN();
     }
 
     if (enablePollTimer)
@@ -877,11 +1181,13 @@ auto Controller::debug(const StatsParams &p) const -> Stats // from StatsMixin
     if (const auto sh = QByteArray::fromHex(p.value("sh").toLatin1()); sh.length() == HashLen) {
         QVariantList l;
 
-        auto items = storage->getHistory(sh);
+        auto items = storage->getHistory(sh, true, true);
         for (const auto & item : items) {
             QVariantMap m;
             m["tx_hash"] = Util::ToHexFast(item.hash);
             m["height"] = item.height;
+            if (item.fee.has_value())
+                m["fee"] = item.fee.value() / item.fee.value().satoshi();
             l.push_back(m);
         }
         ret["sh_debug"] = l;
@@ -899,6 +1205,70 @@ auto Controller::debug(const StatsParams &p) const -> Stats // from StatsMixin
             l.push_back(m);
         }
         ret["unspent_debug"] = l;
+    }
+    if (p.count("mempool")) {
+        QVariantMap mp, txs;
+        auto [mempool, lock] = storage->mempool();
+        for (const auto & [hash, tx] : mempool.txs) {
+            if (!tx) continue;
+            QVariantMap m;
+            m["hash"] = tx->hash.toHex();
+            m["sizeBytes"] = tx->sizeBytes;
+            m["fee"] = tx->fee.ToString().c_str();
+            m["time"] = qlonglong(tx->time);
+            m["height"] = unsigned(tx->height);
+            m["ancestorCount"] = tx->ancestorCount;
+            m["descendantCount"] = tx->descendantCount;
+            QStringList l;
+            for (const auto & d : tx->depends) l.push_back(d.toHex());
+            m["depends"] = l;
+            l.clear();
+            for (const auto & s : tx->spentBy) l.push_back(s.toHex());
+            m["spentBy"] = l;
+            static const auto TXOInfo2Map = [](const TXOInfo &info) -> QVariantMap {
+                return QVariantMap{
+                    { "amount", QString::fromStdString(info.amount.ToString()) },
+                    { "scriptHash", info.hashX.toHex() },
+                };
+            };
+            QVariantMap txos;
+            for (const auto & [num, info] : tx->txos) {
+                txos[QString::number(num)] = TXOInfo2Map(info);
+            }
+            m["txos"] = txos;
+            QVariantMap hxs;
+            static const auto IOInfo2Map = [](const Mempool::Tx::IOInfo &inf) -> QVariantMap {
+                QVariantMap ret;
+                auto ul = Util::toList(inf.utxo);
+                QVariantList vl;
+                for (auto u : ul) vl.push_back(u);
+                ret["utxos"] = vl;
+                QVariantMap cs;
+                for (const auto & [txo, info] : inf.confirmedSpends)
+                    cs[txo.toString()] = TXOInfo2Map(info);
+                ret["confirmedSpends"] = cs;
+                QVariantMap us;
+                for (const auto & [txo, info] : inf.unconfirmedSpends)
+                    us[txo.toString()] = TXOInfo2Map(info);
+                ret["unconfirmedSpends"] = us;
+                return ret;
+            };
+            for (const auto & [sh, ioinfo] : tx->hashXs)
+                hxs[sh.toHex()] = IOInfo2Map(ioinfo);
+            m["hashXs"] = hxs;
+
+            txs[hash.toHex()] = m;
+        }
+        mp["txs"] = txs;
+        QVariantMap hxs;
+        for (const auto & [sh, txset] : mempool.hashXTxs) {
+            QVariantList l;
+            for (const auto & tx : txset)
+                if (tx) l.push_back(tx->hash.toHex());
+            hxs[sh.toHex()] = l;
+        }
+        mp["hashXTxs"] = hxs;
+        ret["mempool_debug"] = mp;
     }
     const auto elapsed = Util::getTimeNS() - t0;
     ret["elapsed"] = QString::number(elapsed/1e6, 'f', 6) + " msec";
