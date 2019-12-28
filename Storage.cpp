@@ -1716,39 +1716,68 @@ auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
     return ret;
 }
 
-bitcoin::Amount Storage::getBalance(const HashX &hashX) const
+auto Storage::getBalance(const HashX &hashX) const -> std::pair<bitcoin::Amount, bitcoin::Amount>
 {
-    bitcoin::Amount ret;
+    std::pair<bitcoin::Amount, bitcoin::Amount> ret;
     if (hashX.length() != HashLen)
         return ret;
     try {
         // take shared lock (ensure history doesn't mutate from underneath our feet)
         SharedLockGuard g(p->blocksLock);
-        std::unique_ptr<rocksdb::Iterator> iter(p->db.shunspent->NewIterator(p->db.defReadOpts));
-        const rocksdb::Slice prefix = ToSlice(hashX); // points to data in hashX
+        {
+            // confirmed -- read from db using an iterator
+            std::unique_ptr<rocksdb::Iterator> iter(p->db.shunspent->NewIterator(p->db.defReadOpts));
+            const rocksdb::Slice prefix = ToSlice(hashX); // points to data in hashX
 
-        // Search table for all keys that start with hashx's bytes. Note: the loop end-condition is strange.
-        // See: https://github.com/facebook/rocksdb/wiki/Prefix-Seek-API-Changes#transition-to-the-new-usage
-        rocksdb::Slice key;
-        for (iter->Seek(prefix); iter->Valid() && (key = iter->key()).starts_with(prefix); iter->Next()) {
-            if (key.size() != HashLen + CompactTXO::serSize())
-                // should never happen, indicates db corruption
-                throw InternalError(QString("Key size for scripthash %1 is invalid").arg(QString(hashX.toHex())));
-            const CompactTXO ctxo = CompactTXO::fromBytes(key.data() + HashLen, CompactTXO::serSize());
-            if (!ctxo.isValid())
-                // should never happen, indicates db corruption
-                throw InternalError(QString("Deserialized CompactTXO is invalid for scripthash %1").arg(QString(hashX.toHex())));
-            bool ok;
-            const bitcoin::Amount amount = Deserialize<bitcoin::Amount>(FromSlice(iter->value()), &ok);
-            if (UNLIKELY(!ok))
-                throw InternalError(QString("Bad amount in db for ctxo %1 (%2)").arg(ctxo.toString()).arg(QString(hashX.toHex())));
-            if (UNLIKELY(!bitcoin::MoneyRange(amount)))
-                throw InternalError(QString("Out-of-range amount in db for ctxo %1: %2").arg(ctxo.toString()).arg(amount / amount.satoshi()));
-            ret += amount; // tally the result
+            // Search table for all keys that start with hashx's bytes. Note: the loop end-condition is strange.
+            // See: https://github.com/facebook/rocksdb/wiki/Prefix-Seek-API-Changes#transition-to-the-new-usage
+            rocksdb::Slice key;
+            for (iter->Seek(prefix); iter->Valid() && (key = iter->key()).starts_with(prefix); iter->Next()) {
+                if (key.size() != HashLen + CompactTXO::serSize())
+                    // should never happen, indicates db corruption
+                    throw InternalError(QString("Key size for scripthash %1 is invalid").arg(QString(hashX.toHex())));
+                const CompactTXO ctxo = CompactTXO::fromBytes(key.data() + HashLen, CompactTXO::serSize());
+                if (!ctxo.isValid())
+                    // should never happen, indicates db corruption
+                    throw InternalError(QString("Deserialized CompactTXO is invalid for scripthash %1").arg(QString(hashX.toHex())));
+                bool ok;
+                const bitcoin::Amount amount = Deserialize<bitcoin::Amount>(FromSlice(iter->value()), &ok);
+                if (UNLIKELY(!ok))
+                    throw InternalError(QString("Bad amount in db for ctxo %1 (%2)").arg(ctxo.toString()).arg(QString(hashX.toHex())));
+                if (UNLIKELY(!bitcoin::MoneyRange(amount)))
+                    throw InternalError(QString("Out-of-range amount in db for ctxo %1: %2").arg(ctxo.toString()).arg(amount / amount.satoshi()));
+                ret.first += amount; // tally the result
+            }
+            if (UNLIKELY(!bitcoin::MoneyRange(ret.first))) {
+                ret.first = bitcoin::Amount::zero();
+                throw InternalError(QString("Out-of-range total in db for getBalance on scripthash: %1").arg(QString(hashX.toHex())));
+            }
         }
-        if (UNLIKELY(!bitcoin::MoneyRange(ret))) {
-            ret = ret.zero();
-            throw InternalError(QString("Out-of-range total in db for getBalance on scripthash: %1").arg(QString(hashX.toHex())));
+        {
+            // unconfirmed -- check mempool
+            auto [mempool, lock] = this->mempool(); // shared (read only) lock is held until scope end
+            if (auto it = mempool.hashXTxs.find(hashX); it != mempool.hashXTxs.end()) {
+                // for all tx's involving scripthash
+                bitcoin::Amount utxos, spends;
+                for (const auto & tx : it->second) {
+                    auto it2 = tx->hashXs.find(hashX);
+                    if (UNLIKELY(it2 == tx->hashXs.end())) {
+                        throw InternalError(QString("hashX %1 lists tx %2, which then lacks the IOInfo for said hashX! FIXM!")
+                                            .arg(QString(hashX.toHex())).arg(QString(tx->hash.toHex())));
+                    }
+                    auto & info = it2->second;
+                    for (const auto & [txo, txoinfo] : info.confirmedSpends)
+                        spends += txoinfo.amount;
+                    for (const auto ionum : info.utxo) {
+                        auto it3 = tx->txos.find(ionum);
+                        if (it3 == tx->txos.end())
+                            throw InternalError(QString("hashX %1 lists tx %2, which then lacks the TXO IONum %3 for said hashX! FIXM!")
+                                                .arg(QString(hashX.toHex())).arg(QString(tx->hash.toHex())).arg(ionum));
+                        utxos += it3->second.amount;
+                    }
+                }
+                ret.second = utxos - spends; // note this may not be MoneyRange (may be negative), which is ok.
+            }
         }
     } catch (const std::exception &e) {
         Warning(Log::Magenta) << __func__ << ": " << e.what();

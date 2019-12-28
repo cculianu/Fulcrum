@@ -194,8 +194,8 @@ public:
     /// thread safe
     UnspentItems listUnspent(const HashX &) const;
 
-    /// thread safe
-    bitcoin::Amount getBalance(const HashX &) const;
+    /// thread safe -- returns confirmd, unconfirmed balance for a scripthash
+    std::pair<bitcoin::Amount, bitcoin::Amount> getBalance(const HashX &) const;
 
     /// thread safe, called from controller when we are up-to-date
     void updateMerkleCache(unsigned height);

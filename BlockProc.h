@@ -77,8 +77,7 @@ struct PreProcessedBlock
         std::vector<TxNum> txNumsInvolvingHashX;
     };
 
-    /// Flat map ok here, presumably robin_hood does move construction when moving objects around.
-    /// TODO: Verify that is the case with robin_hood, and if not, use an unordered_node_map here.
+    /// Flat map ok here, robin_hood does move construction when moving objects around.
     robin_hood::unordered_flat_map<HashX, AggregatedOutsIns, HashHasher> hashXAggregated;
 
     /*

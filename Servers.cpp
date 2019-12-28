@@ -757,13 +757,13 @@ void Server::rpc_blockchain_scripthash_get_balance(Client *c, const RPC::Message
     if (sh.length() != HashLen)
         throw RPCError("Invalid scripthash");
     generic_do_async(c, m.id, [sh, this] {
-        const bitcoin::Amount amt = storage->getBalance(sh);
+        const auto [amt, uamt] = storage->getBalance(sh);
         /* Note: ElectrumX protocol docs are incorrect. They claim a string in coin units is returned here.
          * It is not. Instead a number in satoshis is returned!
          * Incorrect docs: https://electrumx.readthedocs.io/en/latest/protocol-methods.html#blockchain-scripthash-get-balance */
         QVariantMap resp{
           { "confirmed" , qlonglong(amt / amt.satoshi()) },
-          { "unconfirmed" , 0 }, /* TODO: unconfirmed */
+          { "unconfirmed" , qlonglong(uamt / uamt.satoshi()) },
         };
         return resp;
     });

@@ -181,7 +181,7 @@ private:
     void rpc_blockchain_headers_subscribe(Client *, const RPC::Message &); // fully implemented
     void rpc_blockchain_relayfee(Client *, const RPC::Message &); // todo: this is a stub implementation
     // scripthash
-    void rpc_blockchain_scripthash_get_balance(Client *, const RPC::Message &); // partially implemented -- needs unconfirmed balance
+    void rpc_blockchain_scripthash_get_balance(Client *, const RPC::Message &); // fully implemented
     void rpc_blockchain_scripthash_get_history(Client *, const RPC::Message &); // fully implemented
     void rpc_blockchain_scripthash_get_mempool(Client *, const RPC::Message &); // fully implemented
     void rpc_blockchain_scripthash_listunspent(Client *, const RPC::Message &); // fully implemented
