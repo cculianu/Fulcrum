@@ -26,7 +26,7 @@ struct Mempool
         TxHash hash; ///< in reverse bitcoind order (ready for hex encode), fixed value.
         unsigned sizeBytes = 0;
         bitcoin::Amount fee;
-        int64_t time = 0; ///< fixed (does not change during lifetime of instance)
+        int64_t time = 0; ///< fixed (does not change during lifetime of a Tx instance)
         BlockHeight height = 0; ///< is usually == chain tip height, but not always; fixed (does not change during lifetime of instance)
         unsigned descendantCount = 1; ///< In-mempool descentant count, including this. Is always at least 1. May increase as mempool gets refreshed.
         unsigned ancestorCount = 1; ///< In-mempool ancestor count, including this. Is always at least 1. This is fixed.

@@ -1672,7 +1672,7 @@ auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
             }
             {
                 // grab mempool utxos for scripthash
-                constexpr TxNum UNCONF_PARENT_NUM = UINT64_MAX - static_cast<TxNum>(65536);
+                constexpr TxNum UNCONF_PARENT_NUM = UINT64_MAX - static_cast<TxNum>(1000000);
                 auto [mempool, lock] = this->mempool(); // shared lock
                 if (auto it = mempool.hashXTxs.find(hashX); it != mempool.hashXTxs.end()) {
                     const auto & txset = it->second;
