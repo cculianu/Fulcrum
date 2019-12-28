@@ -47,6 +47,9 @@ public:
     /// app-global ids used for JSON-RPC 'id', as well as app-level objects we wish to track by id rather than pointer
     inline quint64 newId() { return ++globalId; }
 
+    /// This is only ever true if the aboutToQuit signal has fired (as a result of this->exit() or this->quit())
+    inline bool isQuitting() const { return quitting; }
+
 signals:
 
 public slots:
@@ -56,6 +59,7 @@ private:
     std::unique_ptr<Logger> _logger;
     std::unique_ptr<Controller> controller;
     QList<std::shared_ptr<SimpleHttpServer> > httpServers;
+    std::atomic_bool quitting = false;
 
     void startup();
     void cleanup();

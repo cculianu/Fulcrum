@@ -59,6 +59,10 @@ public:
     ThreadObjectMixin();
     virtual ~ThreadObjectMixin();
 
+    /// If true (default), and if in Debug() mode, object lifecycle info (thread start, object d'tor, etc) will be
+    /// printed to log via Debug()
+    bool threadObjectDebugLifecycle = true;
+
 protected:
     QThread _thread, *origThread = nullptr;
     Util::VariantChannel chan;
@@ -72,6 +76,9 @@ protected:
     /// Below is not always called if app is exiting, unfortunately, but is called if thread is stoppped while app is
     /// still running. Be sure to call this if you override. (does moveToThread(mainthread))
     virtual void on_finished();
+
+    /// Returns true if caller should do Debug() prints related to object lifecycle. Is true if threadObjectLifecycle = true or app is exiting.
+    bool isLifecyclePrint() const;
 };
 
 

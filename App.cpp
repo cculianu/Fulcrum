@@ -134,6 +134,7 @@ void App::startup()
 void App::cleanup()
 {
     Debug() << __PRETTY_FUNCTION__ ;
+    quitting = true;
     cleanup_WaitForThreadPoolWorkers();
     if (!httpServers.isEmpty()) {
         Log("Stopping Stats HTTP Servers ...");

@@ -479,9 +479,14 @@ void SynchMempoolTask::processResults()
     }
     const auto newSize = mempool.txs.size();
     const auto numAddresses = mempool.hashXTxs.size();
-    (*(oldSize == newSize ? std::unique_ptr<Log>(new Debug) : std::unique_ptr<Log>(new Log)))
-            << newSize << Util::Pluralize(" mempool tx", newSize) << " involving "
-            << numAddresses << Util::Pluralize(" address", numAddresses);
+    std::unique_ptr<Log> log;
+    if (oldSize != newSize)
+        log.reset(new Log);
+    else if (Trace::isEnabled())
+        log.reset(new Debug);
+    if (log)
+        (*log) << newSize << Util::Pluralize(" mempool tx", newSize) << " involving " << numAddresses
+               << Util::Pluralize(" address", numAddresses);
     // TODO here: notify on status change
     emit success();
 }
@@ -548,7 +553,8 @@ void SynchMempoolTask::doGetRawMempool()
             static const QVariantList EmptyList; // avoid constructng this for each iteration
             if (auto it = mempool.txs.find(hash); it != mempool.txs.end()) {
                 tx = it->second;
-                Debug() << "Existing mempool tx: " << hash.toHex();
+                if (Trace::isEnabled())
+                    Debug() << "Existing mempool tx: " << hash.toHex();
             } else {
                 Debug() << "New mempool tx: " << hash.toHex();
                 ++newCt;
@@ -641,7 +647,8 @@ void SynchMempoolTask::doGetRawMempool()
             AGAIN();
             return;
         }
-        Debug() << resp.method << ": got reply with " << vm.size() << " items, " << newCt << " new";
+        if (newCt)
+            Debug() << resp.method << ": got reply with " << vm.size() << " items, " << newCt << " new";
         isdlingtxs = true;
         expectedNumTxsDownloaded = unsigned(newCt);
         // TX data will be downloaded now, if needed
@@ -790,6 +797,7 @@ void Controller::process(bool beSilentIfUpToDate)
     using State = StateMachine::State;
     if (sm->state == State::Begin) {
         auto task = newTask<GetChainInfoTask>(true, this);
+        task->threadObjectDebugLifecycle = Trace::isEnabled(); // suppress debug prints here unless we are in trace mode
         sm->mostRecentGetChainInfoTask = task; // reentrancy defense mechanism for ignoring all but the most recent getchaininfo reply from bitcoind
         connect(task, &CtlTask::success, this, [this, task, beSilentIfUpToDate]{
             if (UNLIKELY(!sm || task != sm->mostRecentGetChainInfoTask || isTaskDeleted(task)))
@@ -902,6 +910,7 @@ void Controller::process(bool beSilentIfUpToDate)
     } else if (sm->state == State::SynchMempool) {
         // ...
         auto task = newTask<SynchMempoolTask>(true, this, storage);
+        task->threadObjectDebugLifecycle = Trace::isEnabled(); // suppress verbose lifecycle prints unless trace mode
         connect(task, &CtlTask::success, this, [this, task]{
             if (UNLIKELY(!sm || isTaskDeleted(task) || sm->state != State::SynchingMempool))
                 // task was stopped from underneath us and/or this response is stale.. so return and ignore
@@ -1063,7 +1072,7 @@ CtlTask::CtlTask(Controller *ctl, const QString &name)
 }
 
 CtlTask::~CtlTask() {
-    Debug("%s (%s)", __FUNCTION__, objectName().isEmpty() ? "" : Q2C(objectName()));
+    if (isLifecyclePrint()) Debug("%s (%s)", __FUNCTION__, objectName().isEmpty() ? "" : Q2C(objectName()));
     stop();
 }
 

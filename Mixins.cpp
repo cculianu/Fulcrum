@@ -38,11 +38,18 @@ ThreadObjectMixin::~ThreadObjectMixin()
     stop(); // paranoia.  Ideally child classes call this on d'tor to call their derived stop() methods.
 }
 
+bool ThreadObjectMixin::isLifecyclePrint() const
+{
+    if (threadObjectDebugLifecycle)
+        return true;
+    App *a = app();
+    return a && a->isQuitting();
+}
 
 void ThreadObjectMixin::start()
 {
     if (_thread.isRunning())  return;
-    Debug() << qobj()->objectName() << " starting thread";
+    if (isLifecyclePrint()) Debug() << qobj()->objectName() << " starting thread";
     chan.clear();
     origThread = qobj()->thread();
     conns += origThread->connect(origThread, &QThread::finished, qobj(), [this, qo=qobj(), which=conns.size()] {
@@ -58,8 +65,9 @@ void ThreadObjectMixin::start()
 
 void ThreadObjectMixin::stop()
 {
+    const bool dbgLC = isLifecyclePrint();
     if (_thread.isRunning()) {
-        Debug() << _thread.objectName() << " thread is running, joining thread";
+        if (dbgLC) Debug() << _thread.objectName() << " thread is running, joining thread";
         _thread.quit();
         _thread.wait();
     }
@@ -69,8 +77,7 @@ void ThreadObjectMixin::stop()
         ++ct;
     }
     conns.clear();
-    if (ct)
-        Debug() << _thread.objectName() << " cleaned up " << ct << " signsl/slot connections";
+    if (ct && dbgLC) Debug() << _thread.objectName() << " cleaned up " << ct << " signsl/slot connections";
 }
 
 

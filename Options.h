@@ -53,7 +53,7 @@ struct Options {
     /// If true, on db open/startup, we will perform some slow/paranoid db consistency checks
     bool doSlowDbChecks = false;
 
-    static constexpr unsigned minPollTimeSecs = 1, maxPollTimeSecs = 30, defaultPollTimeSecs = 5;
+    static constexpr unsigned minPollTimeSecs = 1, maxPollTimeSecs = 30, defaultPollTimeSecs = 2;
     /// bitcoin poll time interval. This value will always be in the range [minPollTimeSecs, maxPollTimeSecs] aka [1, 30]
     unsigned pollTimeSecs = defaultPollTimeSecs;
 };
