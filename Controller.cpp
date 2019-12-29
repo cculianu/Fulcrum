@@ -1129,7 +1129,7 @@ CtlTask::CtlTask(Controller *ctl, const QString &name)
 }
 
 CtlTask::~CtlTask() {
-    if (isLifecyclePrint()) Debug("%s (%s)", __FUNCTION__, objectName().isEmpty() ? "" : Q2C(objectName()));
+    if (isLifecyclePrint()) Debug() << __func__ << " (" << objectName() << ")";
     stop();
 }
 

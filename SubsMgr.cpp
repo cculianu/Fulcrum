@@ -124,10 +124,7 @@ void SubsMgr::addNotif_nolock(const HashX & sh)
 
 auto SubsMgr::makeSubRef(const HashX &sh) -> SubRef
 {
-    static const auto Deleter = [](Subscription *s){
-        //Debug() << "Deleting: " << s->scriptHash.toHex() << " clients: " << s->subscribedClientIds.size();
-        s->deleteLater();
-    };
+    static const auto Deleter = [](Subscription *s){ s->deleteLater(); };
     SubRef ret(new Subscription(sh), Deleter);
     if (QThread::currentThread() != this->thread()) {
         ret->moveToThread(this->thread());
