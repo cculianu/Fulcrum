@@ -88,6 +88,7 @@ void Controller::startup()
     // for clients.
     auto connPtr = std::make_shared<QMetaObject::Connection>();
     *connPtr = connect(this, &Controller::upToDate, this, [this, connPtr] {
+        // the below code runs precisely once after the first upToDate signal
         if (connPtr) disconnect(*connPtr);
         if (!srvmgr) {
             if (!origThread) {
@@ -112,6 +113,21 @@ void Controller::startup()
             conns += connect(this, &Controller::newHeader, srvmgr.get(), &SrvMgr::newHeader);
         }
     }, Qt::QueuedConnection);
+
+    {
+        // logging/stats timers stuff
+        constexpr const char * mempoolLogTimer = "mempoolLogTimer";
+        constexpr int mempoolLogTimerTimeout = 10000; // 10 secs (the actual printing happens once every 30 seconds if changed)
+        // set up the mempool status log timer
+        conns += connect(this, &Controller::upToDate, this, [this]{
+            callOnTimerSoon(mempoolLogTimerTimeout, mempoolLogTimer, [this]{
+                printMempoolStatusToLog();
+                return true;
+            }, Qt::TimerType::VeryCoarseTimer);
+        });
+        conns += connect(this, &Controller::synchronizing, this, [this]{ stopTimer(mempoolLogTimer);});
+        conns += connect(bitcoindmgr.get(), &BitcoinDMgr::allConnectionsLost, this, [this]{ stopTimer(mempoolLogTimer);});
+    }
 
     start();  // start our thread
 }
@@ -412,6 +428,42 @@ void SynchMempoolTask::process()
     }
 }
 
+
+/// takes locks, prints to Log() every 30 seconds if there were changes
+void Controller::printMempoolStatusToLog() const
+{
+    if (storage) {
+        size_t newSize, numAddresses;
+        {
+            auto [mempool, lock] = storage->mempool();
+            newSize = mempool.txs.size();
+            numAddresses = mempool.hashXTxs.size();
+        } // release mempool lock
+        printMempoolStatusToLog(newSize, numAddresses, false);
+    }
+}
+// static
+void Controller::printMempoolStatusToLog(size_t newSize, size_t numAddresses, bool isDebug, bool force)
+{
+    static size_t oldSize = 0;
+    static double lastTS = 0.;
+    static std::mutex mut;
+    constexpr double interval = 30.;
+    double now = Util::getTimeSecs();
+    std::lock_guard g(mut);
+    if (force || (newSize > 0 && oldSize != newSize && now - lastTS >= interval)) {
+        std::unique_ptr<Log> logger(isDebug ? new Debug : new Log);
+        Log & log(*logger);
+        log << newSize << Util::Pluralize(" mempool tx", newSize) << " involving " << numAddresses
+            << Util::Pluralize(" address", numAddresses);
+        if (!force) {
+            oldSize = newSize;
+            lastTS = now;
+        }
+    }
+}
+
+
 void SynchMempoolTask::processResults()
 {
     if (txsDownloaded.size() != expectedNumTxsDownloaded) {
@@ -478,15 +530,10 @@ void SynchMempoolTask::processResults()
         }
     }
     const auto newSize = mempool.txs.size();
-    const auto numAddresses = mempool.hashXTxs.size();
-    std::unique_ptr<Log> log;
-    if (oldSize != newSize)
-        log.reset(new Log);
-    else if (Trace::isEnabled())
-        log.reset(new Debug);
-    if (log)
-        (*log) << newSize << Util::Pluralize(" mempool tx", newSize) << " involving " << numAddresses
-               << Util::Pluralize(" address", numAddresses);
+    if (oldSize != newSize && Debug::isEnabled()) {
+        const auto numAddresses = mempool.hashXTxs.size();
+        Controller::printMempoolStatusToLog(newSize, numAddresses, true, true);
+    }
     // TODO here: notify on status change
     emit success();
 }

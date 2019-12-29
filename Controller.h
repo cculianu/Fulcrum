@@ -62,8 +62,10 @@ public:
     /// internal DownloadBlocksTask only.
     unsigned downloadTaskRecommendedThrottleTimeMsec(unsigned forBlockHeight) const;
 
-
     QVariantMap statsDebug(const QMap<QString, QString> & params) const;
+
+    /// Helper for log printing mempool status. Called from this from a timer, also called from the SynchMempoolTask for debug printing.
+    static void printMempoolStatusToLog(size_t newSize, size_t numAddresses, bool useDebugLogger, bool force = false);
 
 signals:
     /// Emitted whenever bitcoind is detected to be up-to-date, and everything is synched up.
@@ -131,6 +133,9 @@ private:
 
     volatile bool stopFlag = false;
     bool lostConn = true;
+
+    /// takes locks, prints to Log() every 30 seconds if there were changes
+    void printMempoolStatusToLog() const;
 };
 
 /// Abstract base class for our private internal tasks. Concrete implementations are in Controller.cpp.
