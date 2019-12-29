@@ -64,7 +64,8 @@ public:
 
     QVariantMap statsDebug(const QMap<QString, QString> & params) const;
 
-    /// Helper for log printing mempool status. Called from this from a timer, also called from the SynchMempoolTask for debug printing.
+    /// Helper for log printing mempool status. Called this instance (from a timer), also called from the SynchMempoolTask
+    /// for debug printing when it receives new mempool tx's.
     static void printMempoolStatusToLog(size_t newSize, size_t numAddresses, bool useDebugLogger, bool force = false);
 
 signals:

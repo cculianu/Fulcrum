@@ -566,8 +566,11 @@ void SynchMempoolTask::doDLNextTx()
             return;
         }
         Debug() << "got reply for tx: " << hashHex << " " << txdata.length() << " bytes";
-        bitcoin::CTransaction ctx = BTC::Deserialize<bitcoin::CTransaction>(txdata);
-        txsDownloaded[tx->hash] = {tx, bitcoin::MakeTransactionRef(std::move(ctx)) };
+        {
+            // tmp mutable object will be moved into CTransactionRef below via a move constructor
+            bitcoin::CMutableTransaction ctx = BTC::Deserialize<bitcoin::CMutableTransaction>(txdata);
+            txsDownloaded[tx->hash] = {tx, bitcoin::MakeTransactionRef(std::move(ctx)) };
+        }
         txsWaitingForResponse.erase(tx->hash);
         AGAIN();
     });
