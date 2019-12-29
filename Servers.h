@@ -292,6 +292,8 @@ public:
 
     bool isSubscribedToHeaders = false;
 
+    static std::atomic_int numClients;
+
 protected:
 
     void do_ping() override;

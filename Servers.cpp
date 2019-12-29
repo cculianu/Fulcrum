@@ -1153,9 +1153,12 @@ void ServerSSL::incomingConnection(qintptr socketDescriptor)
 
 // --- /SSL Server support ---
 
+/*static*/ std::atomic_int Client::numClients{0};
+
 Client::Client(const RPC::MethodMap & mm, quint64 id_in, Server *srv, QTcpSocket *sock)
     : RPC::LinefeedConnection(mm, id_in, sock, kMaxBuffer), srv(srv)
 {
+    const auto N = ++numClients;
     socket = sock;
     stale_threshold = 10 * 60 * 1000; // 10 mins stale threshold; after which clients get disconnected for being idle (for now... TODO: make this configurable)
     pingtime_ms = int(stale_threshold); // this determines how often the pingtimer fires
@@ -1164,11 +1167,12 @@ Client::Client(const RPC::MethodMap & mm, quint64 id_in, Server *srv, QTcpSocket
     errorPolicy = ErrorPolicySendErrorMessage;
     setObjectName(QString("Client.%1").arg(id_in));
     on_connected();
-    Log() << prettyName() << " new client";
+    Log() << "New " << prettyName(false, false) << ", " << N << Util::Pluralize(" client", N) << " total";
 }
 
 Client::~Client()
 {
+    --numClients;
     Debug() << __PRETTY_FUNCTION__;
     socket = nullptr; // NB: we are a child of socket. this line here is added in case some day I make AbstractClient delete socket on destruct.
 }
