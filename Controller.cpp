@@ -255,6 +255,7 @@ struct DownloadBlocksTask : public CtlTask
     unsigned next = 0;
     std::atomic_uint goodCt = 0;
     bool maybeDone = false;
+    const bool TRACE = Trace::isEnabled();
 
     int q_ct = 0;
     static constexpr int max_q = /*16;*/BitcoinDMgr::N_CLIENTS+1; // todo: tune this
@@ -327,10 +328,8 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
                 QByteArray chkHash;
                 if (bool sizeOk = header.length() == HEADER_SIZE; sizeOk && (chkHash = BTC::HashRev(header)) == hash) {
                     auto ppb = PreProcessedBlock::makeShared(bnum, size_t(rawblock.size()), BTC::Deserialize<bitcoin::CBlock>(rawblock)); // this is here to test performance
-                    // TESTING --
-                    //if (bnum == 60000) Debug() << ppb->toDebugString();
 
-                    if (Trace::isEnabled()) Trace() << "block " << bnum << " size: " << rawblock.size() << " nTx: " << ppb->txInfos.size();
+                    if (TRACE) Trace() << "block " << bnum << " size: " << rawblock.size() << " nTx: " << ppb->txInfos.size();
                     // update some stats for /stats endpoint
                     nTx += ppb->txInfos.size();
                     nOuts += ppb->outputs.size();
@@ -343,7 +342,7 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
                     if (!(bnum % 1000) && bnum) {
                         emit progress(lastProgress);
                     }
-                    if (Trace::isEnabled()) Trace() << resp.method << ": header for height: " << bnum << " len: " << header.length();
+                    if (TRACE) Trace() << resp.method << ": header for height: " << bnum << " len: " << header.length();
                     ctl->putBlock(this, ppb); // send the block off to the Controller thread for further processing and for save to db
                     if (goodCt >= expectedCt) {
                         // flag state to maybeDone to do checks when process() called again
@@ -390,6 +389,7 @@ struct SynchMempoolTask : public CtlTask
     using DldTxsMap = robin_hood::unordered_flat_map<TxHash, std::pair<Mempool::TxRef, bitcoin::CTransactionRef>, HashHasher>;
     DldTxsMap txsDownloaded;
     unsigned expectedNumTxsDownloaded = 0;
+    const bool TRACE = Trace::isEnabled(); // set this to true to print more debug
 
     void clear() {
         isdlingtxs = false;
@@ -517,13 +517,13 @@ void SynchMempoolTask::processResults()
                 sh = prevInfo.hashX;
                 tx->hashXs[sh].unconfirmedSpends[prevTXO] = prevInfo;
                 prevTxRef->hashXs[sh].utxo.erase(prevN); // remove this spend from utxo set for prevTx in mempool
-                Debug() << hash.toHex() << " unconfirmed spend: " << prevTXO.toString() << " " << prevInfo.amount.ToString().c_str();
+                if (TRACE) Debug() << hash.toHex() << " unconfirmed spend: " << prevTXO.toString() << " " << prevInfo.amount.ToString().c_str();
             } else {
                 // prev is a confirmed tx
                 prevInfo = storage->utxoGetFromDB(prevTXO, true).value(); // will throw if missing
                 sh = prevInfo.hashX;
                 tx->hashXs[sh].confirmedSpends[prevTXO] = prevInfo;
-                Debug() << hash.toHex() << " confirmed spend: " << prevTXO.toString() << " " << prevInfo.amount.ToString().c_str();
+                if (TRACE) Debug() << hash.toHex() << " confirmed spend: " << prevTXO.toString() << " " << prevInfo.amount.ToString().c_str();
             }
             assert(sh == prevInfo.hashX);
             mempool.hashXTxs[sh].insert(tx); // mark this hashX as having been "touched" because of this input
@@ -566,7 +566,10 @@ void SynchMempoolTask::doDLNextTx()
             emit errored();
             return;
         }
-        Debug() << "got reply for tx: " << hashHex << " " << txdata.length() << " bytes";
+
+        if (TRACE)
+            Debug() << "got reply for tx: " << hashHex << " " << txdata.length() << " bytes";
+
         {
             // tmp mutable object will be moved into CTransactionRef below via a move constructor
             bitcoin::CMutableTransaction ctx = BTC::Deserialize<bitcoin::CMutableTransaction>(txdata);
@@ -604,10 +607,9 @@ void SynchMempoolTask::doGetRawMempool()
             static const QVariantList EmptyList; // avoid constructng this for each iteration
             if (auto it = mempool.txs.find(hash); it != mempool.txs.end()) {
                 tx = it->second;
-                if (Trace::isEnabled())
-                    Debug() << "Existing mempool tx: " << hash.toHex();
+                if (TRACE) Debug() << "Existing mempool tx: " << hash.toHex();
             } else {
-                Debug() << "New mempool tx: " << hash.toHex();
+                if (TRACE) Debug() << "New mempool tx: " << hash.toHex();
                 ++newCt;
                 tx = std::make_shared<Mempool::Tx>();
                 tx->hash = hash;
@@ -641,7 +643,7 @@ void SynchMempoolTask::doGetRawMempool()
                         return;
                     }
                     auto res = tx->depends.insert(deptx);
-                    if (res.second) {
+                    if (res.second && TRACE) {
                         Debug() << "new dep: " << deptx.toHex() << " for tx: " << hash.toHex();
                     }
                 }
@@ -665,7 +667,7 @@ void SynchMempoolTask::doGetRawMempool()
                     return;
                 }
                 auto res = tx->spentBy.insert(spendtx);
-                if (res.second) {
+                if (res.second && TRACE) {
                     Debug() << "new spentby: " << spendtx.toHex() << " for tx: " << hash.toHex();
                 }
             }
@@ -699,9 +701,7 @@ void SynchMempoolTask::doGetRawMempool()
             return;
         }
         if (newCt)
-            //Debug() << resp.method << ": got reply with " << vm.size() << " items, " << newCt << " new";
-            // TESTING
-            Log() << resp.method << ": got reply with " << vm.size() << " items, " << newCt << " new";
+            Debug() << resp.method << ": got reply with " << vm.size() << " items, " << newCt << " new";
         isdlingtxs = true;
         expectedNumTxsDownloaded = unsigned(newCt);
         // TX data will be downloaded now, if needed
