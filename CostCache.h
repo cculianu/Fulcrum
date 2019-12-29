@@ -27,6 +27,7 @@
 #include <mutex> // for lock_guard
 #include <optional>
 #include <shared_mutex> // for shared_lock, shared_mutex
+#include <utility> // for move
 
 /// A cost-based cache, allowing for memory-bounded caching.
 ///
@@ -101,11 +102,13 @@ public:
             return false;
         }
     }
-    /// Copy-constructs `v` via new and inserts it into the cache.  A failed insertion will lead to the object being
-    /// deleted.
-    bool insert(const Key & k, const Value & v, unsigned cost) {
-        return insert(k, new Value(v), cost);
-    }
+    /// Copy-constructs `v` (via new) and inserts it into the cache.  A failed insertion will lead to the new instance
+    /// being deleted and false being returned.
+    bool insert(const Key & k, const Value & v, unsigned cost) { return insert(k, new Value(v), cost); }
+    /// Move-constructs `v` (via new) and inserts it into the cache.  A failed insertion will lead to the new instance
+    /// being deleted and false being returned.
+    bool insert(const Key & k, Value &&v, unsigned cost) { return insert(k, new Value(std::move(v)), cost);  }
+
     bool isEmpty() const {
         SharedLockGuard g(lock);
         return Base::isEmpty();
