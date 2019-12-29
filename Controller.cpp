@@ -699,7 +699,7 @@ void SynchMempoolTask::doGetRawMempool()
             return;
         }
         if (newCt)
-            Debug() << resp.method << ": got reply with " << vm.size() << " items, " << newCt << " new";
+            Log() << resp.method << ": got reply with " << vm.size() << " items, " << newCt << " new";
         isdlingtxs = true;
         expectedNumTxsDownloaded = unsigned(newCt);
         // TX data will be downloaded now, if needed
