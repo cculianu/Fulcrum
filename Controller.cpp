@@ -477,6 +477,7 @@ void SynchMempoolTask::processResults()
     for (auto & [hash, pair] : txsDownloaded) {
         auto & [tx, ctx] = pair;
         assert(hash == tx->hash);
+        mempool.txs[tx->hash] = tx; // save tx right away
         IONum n = 0;
         for (const auto & out : ctx->vout) {
             const auto & script = out.scriptPubKey;
@@ -486,7 +487,6 @@ void SynchMempoolTask::processResults()
                 TXOInfo info{out.nValue, sh, {}, {}};
                 tx->txos[n] = info;
                 tx->hashXs[sh].utxo.insert(n);
-                mempool.txs[tx->hash] = tx; // save tx
                 mempool.hashXTxs[sh].insert(tx); // save tx to hashx -> tx set
             }
             ++n;
@@ -699,6 +699,8 @@ void SynchMempoolTask::doGetRawMempool()
             return;
         }
         if (newCt)
+            //Debug() << resp.method << ": got reply with " << vm.size() << " items, " << newCt << " new";
+            // TESTING
             Log() << resp.method << ": got reply with " << vm.size() << " items, " << newCt << " new";
         isdlingtxs = true;
         expectedNumTxsDownloaded = unsigned(newCt);
