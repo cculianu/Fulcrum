@@ -21,6 +21,7 @@
 #include "BitcoinD.h"
 #include "Merkle.h"
 #include "Storage.h"
+#include "SubsMgr.h"
 
 #include <QByteArray>
 #include <QCoreApplication>
@@ -318,8 +319,9 @@ namespace {
     }
 }
 
-Server::Server(const QHostAddress &a, quint16 p, std::shared_ptr<Storage> s, std::shared_ptr<BitcoinDMgr> bdm)
-    : AbstractTcpServer(a, p), storage(std::move(s)), bitcoindmgr(std::move(bdm))
+Server::Server(const QHostAddress &a, quint16 p, const std::shared_ptr<Storage> &s, const std::shared_ptr<BitcoinDMgr> &bdm,
+               const std::shared_ptr<SubsMgr> & sm)
+    : AbstractTcpServer(a, p), storage(s), bitcoindmgr(bdm), subsmgr(sm)
 {
     // re-set name for debug/logging
     _thread.setObjectName(prettyName());
@@ -857,34 +859,29 @@ void Server::rpc_blockchain_scripthash_subscribe(Client *c, const RPC::Message &
     QByteArray sh = validateHashHex( l.front().toString() );
     if (sh.length() != HashLen)
         throw RPCError("Invalid scripthash");
+
+    /// Note: potential race condition here whereby notification can arrive BEFORE the status result! FIXME!
+    subsmgr->subscribe(c, sh, [c,method=m.method](const HashX &sh, const StatusHash &status) {
+        const QByteArray shHex = Util::ToHexFast(sh), statusHex = Util::ToHexFast(status);
+        emit c->sendNotification(method, QVariantList{shHex, statusHex});
+    });
     generic_do_async(c, m.id, [sh, this] {
         QVariant ret;
-        // note: this returns just the status hex as a string. The notification will be: [scriptHash, statusHex]
-        const auto hist = storage->getHistory(sh, true, true);
-        if (hist.empty())
-            // no history, always return 'null'
-            return ret;
-        QString historyString;
-        {
-            QTextStream ts(&historyString, QIODevice::WriteOnly);
-            for (const auto & item : hist) {
-                ts << Util::ToHexFast(item.hash) << ":" << item.height << ":";
-            }
-        }
-        // scritphash status is non-reversed, single sha256
-        const QByteArray historyHex = Util::ToHexFast(BTC::HashOnce(historyString.toUtf8()));
-        return QVariant(QString::fromUtf8(historyHex));
+        auto status = subsmgr->getFullStatus(sh);
+        if (!status.isEmpty()) // if empty we return `null`, otherwise we return hex encoded bytes as the immediate status.
+            ret = Util::ToHexFast(status);
+        return ret;
     });
 }
 void Server::rpc_blockchain_scripthash_unsubscribe(Client *c, const RPC::Message &m)
 {
     QVariantList l = m.paramsList();
     assert(l.size() == 1);
-    // this isn't really implemented. this is a stub.
     QByteArray sh = validateHashHex( l.front().toString() );
     if (sh.length() != HashLen)
         throw RPCError("Invalid scripthash");
-    emit c->sendResult(m.id, QVariant(true)); // dummy response. in future returns true if unsub'd (was sub'd), false otherwise.
+    const bool result = subsmgr->unsubscribe(c, sh);
+    emit c->sendResult(m.id, QVariant(result));
 }
 void Server::rpc_blockchain_transaction_broadcast(Client *c, const RPC::Message &m)
 {
@@ -1111,9 +1108,10 @@ void Server::StaticData::init()
 // --- /RPC METHODS ---
 
 // --- SSL Server support ---
-ServerSSL::ServerSSL(const QSslCertificate & cert, const QSslKey & key, const QHostAddress & address, quint16 port_,
-                     std::shared_ptr<Storage> storage, std::shared_ptr<BitcoinDMgr> bitcoindmgr)
-    : Server(address, port_, storage, bitcoindmgr), cert(cert), key(key)
+ServerSSL::ServerSSL(const QSslCertificate & cert, const QSslKey & key, const QHostAddress & address_, quint16 port_,
+                     const std::shared_ptr<Storage> & storage_, const std::shared_ptr<BitcoinDMgr> & bitcoindmgr_,
+                     const std::shared_ptr<SubsMgr> & subsmgr_)
+    : Server(address_, port_, storage_, bitcoindmgr_, subsmgr_), cert(cert), key(key)
 {
     if (cert.isNull() || key.isNull())
         throw BadArgs("ServerSSL cannot be instantiated: Key or cert are null!");

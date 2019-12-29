@@ -121,12 +121,14 @@ protected:
 class BitcoinDMgr;
 class Client;
 class Storage;
+class SubsMgr;
 /// Implements the ElectronX variant of the Electrum JSON-RPC protocol, version 1.4.2
 class Server : public AbstractTcpServer
 {
     Q_OBJECT
 public:
-    Server(const QHostAddress & address, quint16 port, std::shared_ptr<Storage> storage, std::shared_ptr<BitcoinDMgr> bitcoindmgr);
+    Server(const QHostAddress & address, quint16 port, const std::shared_ptr<Storage> & storage, const std::shared_ptr<BitcoinDMgr> & bitcoindmgr,
+           const std::shared_ptr<SubsMgr> &sm);
     ~Server() override;
 
     virtual QString prettyName() const override;
@@ -204,7 +206,7 @@ private:
     void rpc_blockchain_scripthash_get_mempool(Client *, const RPC::Message &); // fully implemented
     void rpc_blockchain_scripthash_listunspent(Client *, const RPC::Message &); // fully implemented
     void rpc_blockchain_scripthash_subscribe(Client *, const RPC::Message &); // stub implementation returning immediate status -- status updates not implemented yet
-    void rpc_blockchain_scripthash_unsubscribe(Client *, const RPC::Message &); // not implemented yet -- stub impl. always returns true, requires suscribe to work first
+    void rpc_blockchain_scripthash_unsubscribe(Client *, const RPC::Message &); // fully implemented
     // transaction
     void rpc_blockchain_transaction_broadcast(Client *, const RPC::Message &); // fully implemented
     void rpc_blockchain_transaction_get(Client *, const RPC::Message &); // fully implemented
@@ -235,6 +237,9 @@ private:
     std::shared_ptr<Storage> storage;
     /// pointer to shared BitcoinDMgr object -- owned and controlled by the Controller instance
     std::shared_ptr<BitcoinDMgr> bitcoindmgr;
+    /// pointer to shared SubsMgr object -- owned and controlled by the Controller instance. All extant servers share
+    /// 1 central subscription manager.
+    std::shared_ptr<SubsMgr> subsmgr;
 
     using HeadersBranchAndRootPair = std::pair<QVariantList, QVariant>;
     /// Helper for rpc block_header* methods -- returns the 'branch' and 'root' keys ready to be put in the results dictionary
@@ -253,7 +258,8 @@ class ServerSSL : public Server
     Q_OBJECT
 public:
     ServerSSL(const QSslCertificate & cert, const QSslKey & key, const QHostAddress & address, quint16 port,
-              std::shared_ptr<Storage> storage, std::shared_ptr<BitcoinDMgr> bitcoindmgr);
+              const std::shared_ptr<Storage> & storage, const std::shared_ptr<BitcoinDMgr> & bitcoindmgr,
+              const std::shared_ptr<SubsMgr> & subsmgr);
     ~ServerSSL() override;
 
     QString prettyName() const override; ///< overrides super to indicate SSL in server name

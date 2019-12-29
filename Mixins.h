@@ -82,8 +82,6 @@ protected:
 };
 
 
-constexpr quint64 NO_ID = 0;
-
 /// Mixin for an object that has an app-global id associated with it.
 /// Used by the various AbstractClient subclasses because we need to keep
 /// track of who sent what when, and it's more useful to work with ids rather

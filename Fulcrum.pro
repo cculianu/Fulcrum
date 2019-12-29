@@ -156,6 +156,7 @@ SOURCES += \
     Servers.cpp \
     SrvMgr.cpp \
     Storage.cpp \
+    SubsMgr.cpp \
     Util.cpp \
     register_MetaTypes.cpp
 
@@ -180,6 +181,7 @@ HEADERS += \
     Servers.h \
     SrvMgr.h \
     Storage.h \
+    SubsMgr.h \
     TXO.h \
     TXO_Compact.h \
     Util.h

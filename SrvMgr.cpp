@@ -21,13 +21,17 @@
 #include "BitcoinD.h"
 #include "Servers.h"
 #include "Storage.h"
+#include "SubsMgr.h"
 #include "Util.h"
 
 #include <utility>
 
 SrvMgr::SrvMgr(const std::shared_ptr<Options> & options,
-               std::shared_ptr<Storage> s, std::shared_ptr<BitcoinDMgr> bdm, QObject *parent)
-    : Mgr(parent), options(options), storage(std::move(s)), bitcoindmgr(std::move(bdm))
+               const std::shared_ptr<Storage> & s,
+               const std::shared_ptr<BitcoinDMgr> & bdm,
+               const std::shared_ptr<SubsMgr> & sm,
+               QObject *parent)
+    : Mgr(parent), options(options), storage(s), bitcoindmgr(bdm), subsmgr(sm)
 {
 }
 
@@ -62,10 +66,10 @@ void SrvMgr::startServers()
     for (const auto & iface : options->interfaces + options->sslInterfaces) {
         if (i < firstSsl)
             // TCP
-            servers.emplace_back(std::make_unique<Server>(iface.first, iface.second, storage, bitcoindmgr));
+            servers.emplace_back(std::make_unique<Server>(iface.first, iface.second, storage, bitcoindmgr, subsmgr));
         else
             // SSL
-            servers.emplace_back(std::make_unique<ServerSSL>(options->sslCert, options->sslKey, iface.first, iface.second, storage, bitcoindmgr));
+            servers.emplace_back(std::make_unique<ServerSSL>(options->sslCert, options->sslKey, iface.first, iface.second, storage, bitcoindmgr, subsmgr));
         Server *srv = servers.back().get();
         srv->tryStart();
 
