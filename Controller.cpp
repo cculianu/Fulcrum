@@ -480,14 +480,15 @@ void SynchMempoolTask::processResults()
         IONum n = 0;
         for (const auto & out : ctx->vout) {
             const auto & script = out.scriptPubKey;
-            if (BTC::IsOpReturn(script))
-                continue; // ignore OP_RETURN
-            HashX sh = BTC::HashXFromCScript(out.scriptPubKey);
-            TXOInfo info{out.nValue, sh, {}, {}};
-            tx->txos[n] = info;
-            tx->hashXs[sh].utxo.insert(n);
-            mempool.txs[tx->hash] = tx; // save tx
-            mempool.hashXTxs[sh].insert(tx); // save tx to hashx -> tx set
+            if (!BTC::IsOpReturn(script)) {
+                // UTXO only if it's not OP_RETURN -- can't do 'continue' here as that would throw off the 'n' counter
+                HashX sh = BTC::HashXFromCScript(out.scriptPubKey);
+                TXOInfo info{out.nValue, sh, {}, {}};
+                tx->txos[n] = info;
+                tx->hashXs[sh].utxo.insert(n);
+                mempool.txs[tx->hash] = tx; // save tx
+                mempool.hashXTxs[sh].insert(tx); // save tx to hashx -> tx set
+            }
             ++n;
         }
     }
