@@ -50,7 +50,7 @@
 ///
 /// 4. Inserted objects must be copy-constructible.
 ///
-/// Note: Purging uses an LRU-based strategy, whereby the least recently used ando/or inserted items are purged in a
+/// Note: Purging uses an LRU-based strategy, whereby the least recently used and/or inserted items are purged in a
 /// loop until totalCost() < maxCost().  Accessing an item via operator[] or object() will refresh its status as most
 /// recently used implicitly (which is why an exclusive lock is used for those two methods).
 template <typename Key, typename Value>
@@ -92,9 +92,14 @@ public:
     /// of this insert. Items whose cost exceeds maxCost will always fail to be inserted.
     /// If this method returns false, `object` is deleted already as a convenience.
     bool insert(const Key & k, Value * object, unsigned cost) {
-        assert(cost < unsigned(INT_MAX));
-        ExclusiveLockGuard g(lock);
-        return Base::insert(k, object, int(cost));
+        if (cost < unsigned(INT_MAX)) {
+            ExclusiveLockGuard g(lock);
+            return Base::insert(k, object, int(cost));
+        } else {
+            qWarning("CostCache::insert -- cost argument, %u, cannot exceed %d", cost, INT_MAX);
+            delete object;
+            return false;
+        }
     }
     /// Copy-constructs `v` via new and inserts it into the cache.  A failed insertion will lead to the object being
     /// deleted.

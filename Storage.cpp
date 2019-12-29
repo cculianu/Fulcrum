@@ -18,7 +18,6 @@
 //
 #include "BTC.h"
 #include "CostCache.h"
-#include "LRUCache.h"
 #include "Mempool.h"
 #include "Merkle.h"
 #include "RecordFile.h"
@@ -493,11 +492,12 @@ struct Storage::Pvt
 
     std::atomic<uint32_t> earliestUndoHeight = UINT32_MAX; ///< the purpose of this is to control when we issue "delete" commands to the db for deleting expired undo infos from the undo db
 
-    /// TODO: Tune the cache size. With the below settings it is approx. 50MB-60MB when totally filled
-    /// (each entry is ~40 bytes + overhead).  This cache is anticipated to see heavy use for get_history, so we may
-    /// wish to make it larger. MAKE THIS CONFIGURABLE.
-    static constexpr size_t nCacheMax = 1000000, nCacheElasticity = 250000;
-    LRU::Cache<true, TxNum, TxHash> lruNum2Hash{nCacheMax, nCacheElasticity};
+    /// This cache is anticipated to see heavy use for get_history, so we may wish to make it larger. MAKE THIS CONFIGURABLE.
+    static constexpr size_t kMaxNum2HashMemoryBytes = 100*1000*1000; ///< 100MB max cache
+    CostCache<TxNum, TxHash> lruNum2Hash{kMaxNum2HashMemoryBytes};
+    unsigned constexpr lruNum2HashSizeCalc(unsigned nItems = 1) {
+        return decltype(lruNum2Hash)::itemOverheadBytes() + (nItems * HashLen);
+    }
 
     static constexpr size_t kMaxHeight2HashesMemoryBytes = 100*1000*1000; // 100 MiB max cache
     /// Cache BlockHeight -> vector of txHashes for the block (in bitcoind memory order). This gets cleared by
@@ -640,9 +640,9 @@ auto Storage::stats() const -> Stats
     {
         QVariantMap m;
 
-        const auto sz = p->lruNum2Hash.size(), bytes = sz * ( sizeof(TxNum) + sizeof(decltype(p->lruNum2Hash)::node_type) + HashLen + 1);
-        m["Size items"] = qlonglong(sz);
-        m["Size bytes"] = qlonglong(bytes);
+        const auto sz = p->lruNum2Hash.size(), szBytes = p->lruNum2Hash.totalCost();
+        m["nItems"] = qlonglong(sz);
+        m["Size bytes"] = qlonglong(szBytes);
         caches["LRU Cache: TxNum -> TxHash"] = m;
     }
     {
@@ -1518,7 +1518,7 @@ int64_t Storage::readUtxoCtFromDB() const
 std::optional<TxHash> Storage::hashForTxNum(TxNum n, bool throwIfMissing, bool *wasCached, bool skipCache) const
 {
     std::optional<TxHash> ret;
-    if (!skipCache) ret = p->lruNum2Hash.tryGet(n);
+    if (!skipCache) ret = p->lruNum2Hash.object(n);
     if (ret.has_value()) {
         if (wasCached) *wasCached = true;
         return ret;
@@ -1537,7 +1537,7 @@ std::optional<TxHash> Storage::hashForTxNum(TxNum n, bool throwIfMissing, bool *
     }
     if (!skipCache && ret.has_value()) {
         // save in cache
-        p->lruNum2Hash.insert(n, ret.value());
+        p->lruNum2Hash.insert(n, ret.value(), p->lruNum2HashSizeCalc());
     }
     return ret;
 }

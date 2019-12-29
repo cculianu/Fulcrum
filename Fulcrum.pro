@@ -170,7 +170,6 @@ HEADERS += \
     Controller.h \
     CostCache.h \
     Logger.h \
-    LRUCache.h \
     Mempool.h \
     Merkle.h \
     Mgr.h \
