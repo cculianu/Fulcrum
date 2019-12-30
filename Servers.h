@@ -292,6 +292,7 @@ public:
     Info info;
 
     bool isSubscribedToHeaders = false;
+    std::atomic_int nShSubs{0};  ///< the number of unique scripthash subscriptions for this client.
 
     static std::atomic_int numClients;
 

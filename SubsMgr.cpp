@@ -47,6 +47,8 @@ struct SubsMgr::Pvt
     std::mutex mut;
     robin_hood::unordered_flat_map<HashX, SubsMgr::SubRef, HashHasher> subs;
     std::unordered_set<HashX, HashHasher> pendingNotificatons;
+
+    std::atomic_int nClientSubsActive{0};
 };
 
 SubsMgr::SubsMgr(const std::shared_ptr<Options> & o, Storage *s, const QString &n)
@@ -175,8 +177,9 @@ auto SubsMgr::findExistingSubRef(const HashX &sh) const -> SubRef
     return ret;
 }
 
-void SubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &sh, const StatusCallback &notifyCB)
+bool SubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &sh, const StatusCallback &notifyCB)
 {
+    bool ret = false;
     const auto t0 = Util::getTimeNS();
     if (UNLIKELY(!notifyCB))
         throw BadArgs("SubsMgr::subscribe must be called with a valid notifyCB. FIXME!");
@@ -188,9 +191,12 @@ void SubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &sh, const StatusCal
             bool res = QObject::disconnect(sub.get(), &Subscription::statusChanged, c, nullptr);
             Trace() << "Existing sub disconnected signal: " << (res ? "ok" : "not ok!");
         } else {
-            // did not have a sub for this client, add its id and also add the destroyed signal to clean up the id on client object destruction
+            // did not have a sub for this client, add its id and also add the destroyed signal to clean up the id
+            // upon client object destruction
+            ret = true;
             sub->subscribedClientIds.insert(c->id);
-            auto conn = QObject::connect(c, &QObject::destroyed, sub.get(), [sub=sub.get(), id=c->id](QObject *){
+            auto conn = QObject::connect(c, &QObject::destroyed, sub.get(), [sub=sub.get(), id=c->id, this](QObject *){
+                --p->nClientSubsActive;
                 LockGuard g(sub->mut);
                 sub->subscribedClientIds.erase(id);
                 sub->updateTS();
@@ -199,6 +205,7 @@ void SubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &sh, const StatusCal
             });
             if (UNLIKELY(!conn))
                 throw InternalError("SubsMgr::subscribe: Failed to make the 'destroyed' connection for the client object! FIXME!");
+            ++p->nClientSubsActive;
         }
         sub->updateTS();
         auto conn = QObject::connect(sub.get(), &Subscription::statusChanged, c, notifyCB);
@@ -208,6 +215,7 @@ void SubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &sh, const StatusCal
 
     const auto elapsed = Util::getTimeNS() - t0;
     Trace() << "subscribed " << Util::ToHexFast(sh) << " in " << QString::number(elapsed/1e6, 'f', 4) << " msec";
+    return ret;
 }
 
 bool SubsMgr::unsubscribe(RPC::ConnectionBase *c, const HashX &sh)
@@ -226,11 +234,18 @@ bool SubsMgr::unsubscribe(RPC::ConnectionBase *c, const HashX &sh)
             res = QObject::disconnect(c, &QObject::destroyed, sub.get(), nullptr);
             //Trace() << "Unsub: disconnected signal2 " << (res ? "ok" : "not ok!");
             ret = true;
+            --p->nClientSubsActive;
         }
     }
     const auto elapsed = Util::getTimeNS() - t0;
     Trace() << int(ret) << " unsubscribed " << Util::ToHexFast(sh) << " in " << QString::number(elapsed/1e6, 'f', 4) << " msec";
     return ret;
+}
+
+int SubsMgr::numActiveClientSubscriptions() const { return p->nClientSubsActive; }
+int SubsMgr::numScripthashesSubscribed() const {
+    LockGuard g(p->mut);
+    return int(p->subs.size());
 }
 
 auto SubsMgr::getFullStatus(const HashX &sh) const -> StatusHash
@@ -270,7 +285,7 @@ void SubsMgr::removeZombies()
     LockGuard g(p->mut);
     const auto total = p->subs.size();
     for (auto it = p->subs.begin(), next = it; it != p->subs.end(); it = next) {
-        SubRef sub = it->second;
+        SubRef sub = it->second; // take a copy to increment refct so it doesn't disappear due to erase() below...
         if (UNLIKELY(!sub)) { // paranoia
             Fatal() << "A SubRef was null in " << __func__ << ". FIXME!";
             return;
@@ -287,4 +302,35 @@ void SubsMgr::removeZombies()
         Debug() << "SubsMgr: Removed " << ctr << " zombie " << Util::Pluralize("sub", ctr) << " out of " << total
                 << " in " << QString::number(elapsed/1e6, 'f', 4) << " msec";
     }
+}
+
+auto SubsMgr::stats() const -> Stats
+{
+    QVariantMap ret;
+    {
+        QVariantMap m;
+        LockGuard g(p->mut);
+        for (auto [sh, sub] : p->subs) { // value-copy intentional here (these are very cheap to perform on QByteArray and SubsRef anyway)
+            QVariantMap m2;
+            {
+                LockGuard g2(sub->mut);
+                m2["count"] = qlonglong(sub->subscribedClientIds.size());
+                m2["lastStatusNotified"] = sub->lastStatus.toHex();
+                m2["idleSecs"] = (Util::getTime() - sub->tsMsec)/1e3;
+                const auto & clients = sub->subscribedClientIds;
+                m2["clientIds"] = QVariantList::fromStdList(Util::toList<decltype(clients), std::list<QVariant>>(clients));
+            }
+            m[QString(sh.toHex())] = m2;
+        }
+        ret["subscriptions"] = m;
+        QVariantList l;
+        for (auto sh : p->pendingNotificatons) {
+            l.push_back(QString(sh.toHex()));
+        }
+        ret["pendingNotifications"] = l;
+    }
+    // these below 2 take the above lock again so we do them without the lock held
+    ret["Num. active client subscriptions"] = numActiveClientSubscriptions();
+    ret["Num. unique scripthashes subscribed (including zombies)"] = numScripthashesSubscribed();
+    return ret;
 }

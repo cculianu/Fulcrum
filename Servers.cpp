@@ -350,6 +350,7 @@ QVariantMap Server::stats() const
         map["errCt"] = client->info.errCt;
         map["nRequestsRcv"] = client->info.nRequestsRcv;
         map["isSubscribedToHeaders"] = client->isSubscribedToHeaders;
+        map["nSubscriptions"] = client->nShSubs.load();
         // the below don't really make much sense for this class (they are always 0 or empty)
         map.remove("nDisconnects");
         map.remove("nSocketErrors");
@@ -859,13 +860,14 @@ void Server::rpc_blockchain_scripthash_subscribe(Client *c, const RPC::Message &
     if (sh.length() != HashLen)
         throw RPCError("Invalid scripthash");
     /// Note: potential race condition here whereby notification can arrive BEFORE the status result! FIXME!
-    storage->subs()->subscribe(c, sh, [c,method=m.method](const HashX &sh, const StatusHash &status) {
+    const bool wasNew = storage->subs()->subscribe(c, sh, [c,method=m.method](const HashX &sh, const StatusHash &status) {
         QVariant statusHexMaybeNull; // if empty we simply notify as 'null' (this is unlikely in practice but may happen on reorg)
         if (!status.isEmpty())
             statusHexMaybeNull = Util::ToHexFast(status);
         const QByteArray shHex = Util::ToHexFast(sh);
         emit c->sendNotification(method, QVariantList{shHex, statusHexMaybeNull});
     });
+    if (wasNew) ++c->nShSubs;
     generic_do_async(c, m.id, [sh, this] {
         QVariant ret;
         auto status = storage->subs()->getFullStatus(sh);
@@ -882,6 +884,7 @@ void Server::rpc_blockchain_scripthash_unsubscribe(Client *c, const RPC::Message
     if (sh.length() != HashLen)
         throw RPCError("Invalid scripthash");
     const bool result = storage->subs()->unsubscribe(c, sh);
+    if (result) --c->nShSubs;
     emit c->sendResult(m.id, QVariant(result));
 }
 void Server::rpc_blockchain_transaction_broadcast(Client *c, const RPC::Message &m)

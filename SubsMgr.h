@@ -82,18 +82,32 @@ public:
     ///
     /// `notifyCB` is called for update notifications asynchronously as the tx history for `sh` changes. It will always
     /// be called in the `client`'s thread.  If the client is deleted, all context for the client is cleaned-up
-    /// automatically.
+    /// automatically, and the subscription dereferenced.
     ///
-    /// Multiple calls to this function for the same client+scripthash combination overwrite previous notifyCB
-    /// callbacks registrations for the subscription. Thus each client+scripthash combo can only have at most 1 active
+    /// Multiple calls to this function for the same client + scripthash combination overwrite previous notifyCB
+    /// callback registrations for the subscription. Thus each client + scripthash combo can only have at most 1 active
     /// notifyCB extant at any time.
     ///
-    /// Doesn't normally throw but may throw BadArgs if resultCB is invalid, or InternalError if it failed to
+    /// Returns true if the subscription for this client is new, or false if it replaced a previous subscription. In
+    /// either case the client is now subscribed to the scripthash in question.
+    ///
+    /// Doesn't normally throw but may throw BadArgs if notifyCB is invalid, or InternalError if it failed to
     /// make a QMetaObject::Connection for the subscription.
-    void subscribe(RPC::ConnectionBase *client, const HashX &sh, const StatusCallback &notifyCB);
+    bool subscribe(RPC::ConnectionBase *client, const HashX &sh, const StatusCallback &notifyCB);
     /// Thread-safe. The inverse of subscribe. Returns true if the client was previously subscribed, false otherwise.
     /// Always call this from the client's thread otherwise undefined behavior may result.
     bool unsubscribe(RPC::ConnectionBase *client, const HashX &sh);
+
+    /// Returns the total number of (sh, client) subscriptions that are active (non-zombie).
+    int numActiveClientSubscriptions() const;
+    /// Returns the total number of unique scripthashes subscribed-to.  A scripthash may be subscribe-to by more than 1
+    /// client simultaneously, in which case it counts once towards this total.  This number may be <=
+    /// numActiveClientSubscriptions. Additionally, this number also represents "zombie" subscriptions that we keep
+    /// around for a time after clients disconnect (in case they reconnect in the future; this is to not lose caching
+    /// information for an extant subscription).  Thus, this number may be larger than numActiveClientSubscriptions
+    /// as well since it includes the aforementioned "zombies".
+    int numScripthashesSubscribed() const;
+
 
     /// Thread-safe. Returns the status hash bytes (32 bytes single sha256 hash of the status text). Will return
     /// an empty byte vector if the scriptHash in question has no history.
@@ -123,6 +137,8 @@ signals:
 protected:
     void on_started() override; ///< from ThreadObjectMixin
     void on_finished() override; ///< from ThreadObjectMixin
+    Stats stats() const override; ///< from StatsMixin -- show some subs stats
+
 private:
     const std::shared_ptr<Options> options;
     Storage * const storage; ///< ponter guaranteed to be valid since Storage "owns" us and if we are alive, it is alive.

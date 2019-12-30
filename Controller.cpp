@@ -21,6 +21,7 @@
 #include "Controller.h"
 #include "Mempool.h"
 #include "Merkle.h"
+#include "SubsMgr.h"
 #include "TXO.h"
 
 #include "bitcoin/transaction.h"
@@ -1255,6 +1256,7 @@ auto Controller::stats() const -> Stats
         misc["Job Queue (Thread Pool)"] = m;
     }
     st["Misc"] = misc;
+    st["SubsMgr"] = storage->subs()->statsSafe(kDefaultTimeout/2);
     return st;
 }
 
