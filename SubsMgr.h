@@ -169,9 +169,6 @@ private:
     std::pair<SubRef, bool> getOrMakeSubRef(const HashX &sh); // takes locks, returns a new subref or an existing subref
     SubRef findExistingSubRef(const HashX &) const; // takes locks, returns an existing subref or empty ref.
 
-    /// Note: Despite the name, this does implicitly acquire the Storage blocksLock as a shared lock.
-    StatusHash getFullStatus_nolock_noupdate(const HashX &scriptHash) const;
-
     void doNotifyAllPending();
 
     std::unique_lock<std::mutex> grabLock();

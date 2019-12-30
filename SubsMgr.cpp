@@ -115,7 +115,7 @@ void SubsMgr::doNotifyAllPending()
         // ^^^ We must release the above lock here temporarily because we do not want to hold it while also implicitly
         // grabbing the Storage 'blocksLock' below for getFullStatus* (storage->getHistory acquires that lock in
         // read-only mode).
-        const auto status = getFullStatus_nolock_noupdate(sh);
+        const auto status = getFullStatus(sh);
         // Now, re-acquire sub lock. Temporarily having released it above should be fine for our purposes, since the
         // above empty() check was only a performance optimization and the invariant not holding for the duration of
         // this code block is fine. In the unlikely event that a sub lost its clients while the lock was released, the
@@ -258,13 +258,6 @@ int SubsMgr::numScripthashesSubscribed() const {
 }
 
 auto SubsMgr::getFullStatus(const HashX &sh) const -> StatusHash
-{
-    // TODO here -- use cached status if the sh has existing subs ..?! It's tricky because race conditions.
-    // For now we just recompute the full status unconditionally and don't cache it.
-    return getFullStatus_nolock_noupdate(sh);
-}
-
-auto SubsMgr::getFullStatus_nolock_noupdate(const HashX &sh) const -> StatusHash
 {
     const auto t0 = Util::getTimeNS();
     StatusHash ret;
