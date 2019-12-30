@@ -22,6 +22,7 @@
 #include "Merkle.h"
 #include "RecordFile.h"
 #include "Storage.h"
+#include "SubsMgr.h"
 
 #include "rocksdb/db.h"
 #include "rocksdb/iterator.h"
@@ -521,18 +522,23 @@ struct Storage::Pvt
     RWLock mempoolLock;
 };
 
-Storage::Storage(const std::shared_ptr<Options> & options)
-    : Mgr(nullptr), options(options), p(new Pvt)
+Storage::Storage(const std::shared_ptr<Options> & options_)
+    : Mgr(nullptr), options(options_), subsmgr(new SubsMgr(options, this)), p(std::make_unique<Pvt>())
 {
     setObjectName("Storage");
     _thread.setObjectName(objectName());
 }
 
-Storage::~Storage() { Debug("%s", __FUNCTION__); cleanup(); }
+Storage::~Storage() { Debug() << __func__; cleanup(); }
 
 void Storage::startup()
 {
     Log() << "Loading database ...";
+
+    if (UNLIKELY(!subsmgr || !options))
+        throw BadArgs("Storage instance constructed with nullptr for `options` and/or `subsmgr` -- FIXME!");
+
+    subsmgr->startup(); // trivial, always succeeds if constructed correctly
 
     {
         // set up the merkle cache object
@@ -625,7 +631,7 @@ void Storage::startup()
 void Storage::cleanup()
 {
     stop(); // joins our thread
-
+    if (subsmgr) subsmgr->cleanup();
     // TODO: unsaved/"dirty state" detection here -- and forced save, if needed.
 }
 

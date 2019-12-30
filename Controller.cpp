@@ -48,9 +48,6 @@ void Controller::startup()
     storage = std::make_shared<Storage>(options);
     storage->startup(); // may throw here
 
-    subsmgr = std::make_shared<SubsMgr>(options, storage);
-    subsmgr->startup();
-
     bitcoindmgr = std::make_shared<BitcoinDMgr>(options->bitcoind.first, options->bitcoind.second, options->rpcuser, options->rpcpassword);
     {
         auto constexpr waitTimer = "wait4bitcoind", callProcessTimer = "callProcess";
@@ -98,7 +95,7 @@ void Controller::startup()
                 Fatal() << "INTERNAL ERROR: Controller's creation thread is null; cannot start SrvMgr, exiting!";
                 return;
             }
-            srvmgr = std::make_unique<SrvMgr>(options, storage, bitcoindmgr, subsmgr);
+            srvmgr = std::make_unique<SrvMgr>(options, storage, bitcoindmgr);
             // this object will live on our creation thread (normally the main thread)
             srvmgr->moveToThread(origThread);
             // now, start it up on our creation thread (normally the main thread)
@@ -141,7 +138,6 @@ void Controller::cleanup()
     stop();
     tasks.clear(); // deletes all tasks asap
     if (srvmgr) { Log("Stopping SrvMgr ... "); srvmgr->cleanup(); srvmgr.reset(); }
-    if (subsmgr) { Log("Stopping SubsMgr ..."); subsmgr->cleanup(); subsmgr.reset(); }
     if (bitcoindmgr) { Log("Stopping BitcoinDMgr ... "); bitcoindmgr->cleanup(); bitcoindmgr.reset(); }
     if (storage) { Log("Closing storage ..."); storage->cleanup(); storage.reset(); }
     sm.reset();

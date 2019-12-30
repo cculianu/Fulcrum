@@ -49,15 +49,24 @@ struct SubsMgr::Pvt
     std::unordered_set<HashX, HashHasher> pendingNotificatons;
 };
 
-SubsMgr::SubsMgr(const std::shared_ptr<Options> & o, const std::shared_ptr<Storage> & s, const QString &n)
+SubsMgr::SubsMgr(const std::shared_ptr<Options> & o, Storage *s, const QString &n)
     : Mgr(nullptr), options(o), storage(s), p(std::make_unique<SubsMgr::Pvt>())
 {
     setObjectName(n);
     _thread.setObjectName(n);
 }
-SubsMgr::~SubsMgr() { stop(); }
-void SubsMgr::startup() { start(); }
-void SubsMgr::cleanup() { stop(); }
+SubsMgr::~SubsMgr() { Debug() << __func__; cleanup(); }
+void SubsMgr::startup() {
+    if (UNLIKELY(!storage || !options))
+        // paranoia
+        throw BadArgs("SubsMgr constructed with nullptr for either options or storage! FIXME!");
+    start();
+}
+void SubsMgr::cleanup() {
+    if (_thread.isRunning())
+         Debug() << "Stopping " << objectName() << " ...";
+    stop();
+}
 
 void SubsMgr::on_started()
 {
@@ -90,10 +99,20 @@ void SubsMgr::doNotifyAllPending()
     }
     // at this point we got all the subrefs for the scripthashes that changed.. and the lock is released .. now run through them all and notify each
     for (auto & [sh, sub] : pending) {
-        LockGuard g(sub->mut);
-        if (sub->subscribedClientIds.empty())
-            continue;
+        {
+            LockGuard g(sub->mut);
+            if (sub->subscribedClientIds.empty())
+                continue;
+        }
+        // ^^^ We must release the above lock here temporarily because we do not want to hold it while also implicitly
+        // grabbing the Storage 'blocksLock' below for getFullStatus* (storage->getHistory acquires that lock in
+        // read-only mode).
         const auto status = getFullStatus_nolock_noupdate(sh);
+        // Now, re-acquire sub lock. Temporarily having released it above should be fine for our purposes, since the
+        // above empty() check was only a performance optimization and the invariant not holding for the duration of
+        // this code block is fine. In the unlikely event that a sub lost its clients while the lock was released, the
+        // below emit sub->statusChanged(...) will just be a no-op.
+        LockGuard g(sub->mut);
         const bool doemit = sub->lastStatus != status;
         sub->lastStatus = status;
         if (doemit) {
@@ -165,9 +184,9 @@ void SubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &sh, const StatusCal
     {
         LockGuard g(sub->mut);
         if (!wasnew && sub->subscribedClientIds.count(c->id)) {
-            // already had a sub for this client, disconnect it because we will re-add the new functor at function end
+            // already had a sub for this client, disconnect it because we will re-add the new functor below
             bool res = QObject::disconnect(sub.get(), &Subscription::statusChanged, c, nullptr);
-            Debug() << "Existing sub disconnected signal: " << (res ? "ok" : "not ok!");
+            Trace() << "Existing sub disconnected signal: " << (res ? "ok" : "not ok!");
         } else {
             // did not have a sub for this client, add its id and also add the destroyed signal to clean up the id on client object destruction
             sub->subscribedClientIds.insert(c->id);
@@ -175,6 +194,8 @@ void SubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &sh, const StatusCal
                 LockGuard g(sub->mut);
                 sub->subscribedClientIds.erase(id);
                 sub->updateTS();
+                //Debug() << "client id " << id << " destroyed, implicitly unsubbed from " << sub->scriptHash.toHex()
+                //        << ", " << sub->subscribedClientIds.size() << " sub(s) remain";
             });
             if (UNLIKELY(!conn))
                 throw InternalError("SubsMgr::subscribe: Failed to make the 'destroyed' connection for the client object! FIXME!");
@@ -186,7 +207,7 @@ void SubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &sh, const StatusCal
     }
 
     const auto elapsed = Util::getTimeNS() - t0;
-    Debug() << "subscribed " << Util::ToHexFast(sh) << " in " << QString::number(elapsed/1e6, 'f', 4) << " msec";
+    Trace() << "subscribed " << Util::ToHexFast(sh) << " in " << QString::number(elapsed/1e6, 'f', 4) << " msec";
 }
 
 bool SubsMgr::unsubscribe(RPC::ConnectionBase *c, const HashX &sh)
@@ -196,19 +217,19 @@ bool SubsMgr::unsubscribe(RPC::ConnectionBase *c, const HashX &sh)
     SubRef sub = findExistingSubRef(sh);
     if (sub) {
         // found
-        LockGuard g2(sub->mut);
+        LockGuard g(sub->mut);
         if (auto it = sub->subscribedClientIds.find(c->id); it != sub->subscribedClientIds.end()) {
             sub->subscribedClientIds.erase(it);
             sub->updateTS();
             bool res = QObject::disconnect(sub.get(), &Subscription::statusChanged, c, nullptr);
-            Debug() << "Unsub: disconnected signal1 " << (res ? "ok" : "not ok!");
+            //Trace() << "Unsub: disconnected signal1 " << (res ? "ok" : "not ok!");
             res = QObject::disconnect(c, &QObject::destroyed, sub.get(), nullptr);
-            Debug() << "Unsub: disconnected signal2 " << (res ? "ok" : "not ok!");
+            //Trace() << "Unsub: disconnected signal2 " << (res ? "ok" : "not ok!");
             ret = true;
         }
     }
     const auto elapsed = Util::getTimeNS() - t0;
-    Debug() << int(ret) << " unsubscribed " << Util::ToHexFast(sh) << " in " << QString::number(elapsed/1e6, 'f', 4) << " msec";
+    Trace() << int(ret) << " unsubscribed " << Util::ToHexFast(sh) << " in " << QString::number(elapsed/1e6, 'f', 4) << " msec";
     return ret;
 }
 
@@ -249,13 +270,17 @@ void SubsMgr::removeZombies()
     LockGuard g(p->mut);
     const auto total = p->subs.size();
     for (auto it = p->subs.begin(), next = it; it != p->subs.end(); it = next) {
-        ++next;
-        auto sub = it->second;
+        SubRef sub = it->second;
+        if (UNLIKELY(!sub)) { // paranoia
+            Fatal() << "A SubRef was null in " << __func__ << ". FIXME!";
+            return;
+        }
         LockGuard g(sub->mut);
         if (sub->subscribedClientIds.empty() && now - sub->tsMsec > kRemoveZombiesTimerIntervalMS) {
             ++ctr;
-            p->subs.erase(it);
-        }
+            next = it = p->subs.erase(it); // `it` is invalidated at this point, so we assign to it immediately to not keep an invalid iterator around...
+        } else
+            ++next;
     }
     if (ctr) {
         const auto elapsed = Util::getTimeNS() - t0;

@@ -319,9 +319,8 @@ namespace {
     }
 }
 
-Server::Server(const QHostAddress &a, quint16 p, const std::shared_ptr<Storage> &s, const std::shared_ptr<BitcoinDMgr> &bdm,
-               const std::shared_ptr<SubsMgr> & sm)
-    : AbstractTcpServer(a, p), storage(s), bitcoindmgr(bdm), subsmgr(sm)
+Server::Server(const QHostAddress &a, quint16 p, const std::shared_ptr<Storage> &s, const std::shared_ptr<BitcoinDMgr> &bdm)
+    : AbstractTcpServer(a, p), storage(s), bitcoindmgr(bdm)
 {
     // re-set name for debug/logging
     _thread.setObjectName(prettyName());
@@ -860,13 +859,13 @@ void Server::rpc_blockchain_scripthash_subscribe(Client *c, const RPC::Message &
     if (sh.length() != HashLen)
         throw RPCError("Invalid scripthash");
     /// Note: potential race condition here whereby notification can arrive BEFORE the status result! FIXME!
-    subsmgr->subscribe(c, sh, [c,method=m.method](const HashX &sh, const StatusHash &status) {
+    storage->subs()->subscribe(c, sh, [c,method=m.method](const HashX &sh, const StatusHash &status) {
         const QByteArray shHex = Util::ToHexFast(sh), statusHex = Util::ToHexFast(status);
         emit c->sendNotification(method, QVariantList{shHex, statusHex});
     });
     generic_do_async(c, m.id, [sh, this] {
         QVariant ret;
-        auto status = subsmgr->getFullStatus(sh);
+        auto status = storage->subs()->getFullStatus(sh);
         if (!status.isEmpty()) // if empty we return `null`, otherwise we return hex encoded bytes as the immediate status.
             ret = Util::ToHexFast(status);
         return ret;
@@ -879,7 +878,7 @@ void Server::rpc_blockchain_scripthash_unsubscribe(Client *c, const RPC::Message
     QByteArray sh = validateHashHex( l.front().toString() );
     if (sh.length() != HashLen)
         throw RPCError("Invalid scripthash");
-    const bool result = subsmgr->unsubscribe(c, sh);
+    const bool result = storage->subs()->unsubscribe(c, sh);
     emit c->sendResult(m.id, QVariant(result));
 }
 void Server::rpc_blockchain_transaction_broadcast(Client *c, const RPC::Message &m)
@@ -1108,9 +1107,8 @@ void Server::StaticData::init()
 
 // --- SSL Server support ---
 ServerSSL::ServerSSL(const QSslCertificate & cert, const QSslKey & key, const QHostAddress & address_, quint16 port_,
-                     const std::shared_ptr<Storage> & storage_, const std::shared_ptr<BitcoinDMgr> & bitcoindmgr_,
-                     const std::shared_ptr<SubsMgr> & subsmgr_)
-    : Server(address_, port_, storage_, bitcoindmgr_, subsmgr_), cert(cert), key(key)
+                     const std::shared_ptr<Storage> & storage_, const std::shared_ptr<BitcoinDMgr> & bitcoindmgr_)
+    : Server(address_, port_, storage_, bitcoindmgr_), cert(cert), key(key)
 {
     if (cert.isNull() || key.isNull())
         throw BadArgs("ServerSSL cannot be instantiated: Key or cert are null!");

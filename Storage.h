@@ -57,6 +57,7 @@ struct HeaderVerificationFailure : public Exception { using Exception::Exception
 struct UndoInfoMissing : public Exception { using Exception::Exception; ~UndoInfoMissing() override; };
 
 struct Mempool;
+class SubsMgr;
 
 /// Manages the db and all storage-related facilities.  Most of its public methods are fully reentrant and thread-safe.
 class Storage final : public Mgr, public ThreadObjectMixin
@@ -230,6 +231,14 @@ public:
     /// Thread-safe. Query db for a UTXO, and return it if found.  May throw on database error.
     std::optional<TXOInfo> utxoGetFromDB(const TXO &, bool throwIfMissing = false);
 
+    /// This pointer is guaranteed to always be valid once this instance has been constructed. It points to the
+    /// subsmgr unique_ptr which this instance owns.
+    ///
+    /// It is exposed this way publicly because other classes that hold references to Storage need to access
+    /// the shared SubsMgr (which itself exposes a public thread-safe interface intented to be called from multiple
+    /// subsystems and multiple threads).
+    inline SubsMgr * subs() const { return subsmgr.get(); }
+
 protected:
     virtual Stats stats() const override; ///< from StatsMixin
 
@@ -288,9 +297,10 @@ protected:
 
 private:
     const std::shared_ptr<Options> options;
+    const std::unique_ptr<SubsMgr> subsmgr;
 
     struct Pvt;
-    std::unique_ptr<Pvt> p;
+    const std::unique_ptr<Pvt> p;
 
     void save_impl(SaveSpec override = SaveItem::None); ///< may abort app on database failure (unlikely).
     void saveMeta_impl(); ///< This may throw if db error. Caller should hold locks or be in single-threaded mode.

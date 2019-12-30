@@ -20,9 +20,10 @@
 #define SERVERS_H
 
 #include "Common.h"
-#include "Util.h"
 #include "Mixins.h"
 #include "RPC.h"
+#include "Util.h"
+
 #include <QSslCertificate>
 #include <QSslKey>
 #include <QTcpServer>
@@ -121,14 +122,12 @@ protected:
 class BitcoinDMgr;
 class Client;
 class Storage;
-class SubsMgr;
 /// Implements the ElectronX variant of the Electrum JSON-RPC protocol, version 1.4.2
 class Server : public AbstractTcpServer
 {
     Q_OBJECT
 public:
-    Server(const QHostAddress & address, quint16 port, const std::shared_ptr<Storage> & storage, const std::shared_ptr<BitcoinDMgr> & bitcoindmgr,
-           const std::shared_ptr<SubsMgr> &sm);
+    Server(const QHostAddress & address, quint16 port, const std::shared_ptr<Storage> & storage, const std::shared_ptr<BitcoinDMgr> & bitcoindmgr);
     ~Server() override;
 
     virtual QString prettyName() const override;
@@ -237,9 +236,6 @@ private:
     std::shared_ptr<Storage> storage;
     /// pointer to shared BitcoinDMgr object -- owned and controlled by the Controller instance
     std::shared_ptr<BitcoinDMgr> bitcoindmgr;
-    /// pointer to shared SubsMgr object -- owned and controlled by the Controller instance. All extant servers share
-    /// 1 central subscription manager.
-    std::shared_ptr<SubsMgr> subsmgr;
 
     using HeadersBranchAndRootPair = std::pair<QVariantList, QVariant>;
     /// Helper for rpc block_header* methods -- returns the 'branch' and 'root' keys ready to be put in the results dictionary
@@ -258,8 +254,7 @@ class ServerSSL : public Server
     Q_OBJECT
 public:
     ServerSSL(const QSslCertificate & cert, const QSslKey & key, const QHostAddress & address, quint16 port,
-              const std::shared_ptr<Storage> & storage, const std::shared_ptr<BitcoinDMgr> & bitcoindmgr,
-              const std::shared_ptr<SubsMgr> & subsmgr);
+              const std::shared_ptr<Storage> & storage, const std::shared_ptr<BitcoinDMgr> & bitcoindmgr);
     ~ServerSSL() override;
 
     QString prettyName() const override; ///< overrides super to indicate SSL in server name

@@ -28,7 +28,6 @@
 class BitcoinDMgr;
 class Server;
 class Storage;
-class SubsMgr;
 
 class SrvMgr : public Mgr
 {
@@ -37,7 +36,6 @@ public:
     explicit SrvMgr(const std::shared_ptr<Options> & options,
                     const std::shared_ptr<Storage> & storage,
                     const std::shared_ptr<BitcoinDMgr> & bitcoindmgr,
-                    const std::shared_ptr<SubsMgr> & subsmgr,
                     QObject *parent = nullptr);
     ~SrvMgr() override;
     void startup() override; // may throw on error
@@ -58,7 +56,6 @@ private:
     const std::shared_ptr<Options> options;
     std::shared_ptr<Storage> storage;
     std::shared_ptr<BitcoinDMgr> bitcoindmgr;
-    std::shared_ptr<SubsMgr> subsmgr;
     std::list<std::unique_ptr<Server>> servers;
 };
 
