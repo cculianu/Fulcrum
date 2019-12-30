@@ -103,8 +103,14 @@ void SubsMgr::doNotifyAllPending()
     for (auto & [sh, sub] : pending) {
         {
             LockGuard g(sub->mut);
-            if (sub->subscribedClientIds.empty())
+            if (sub->subscribedClientIds.empty()) {
+                // We need to clear the "last status notified" because we have no clients now and we are skipping a
+                // notification. The "last status notified"'s only purpose is to prevent sending existing clients dupe
+                // notifications (if status didn't change). But here, if there are no clients we should keep this value
+                // clear for later when/if clients do come in.
+                sub->lastStatusNotified.reset();
                 continue;
+            }
         }
         // ^^^ We must release the above lock here temporarily because we do not want to hold it while also implicitly
         // grabbing the Storage 'blocksLock' below for getFullStatus* (storage->getHistory acquires that lock in
@@ -115,8 +121,8 @@ void SubsMgr::doNotifyAllPending()
         // this code block is fine. In the unlikely event that a sub lost its clients while the lock was released, the
         // below emit sub->statusChanged(...) will just be a no-op.
         LockGuard g(sub->mut);
-        const bool doemit = sub->lastStatus != status;
-        sub->lastStatus = status;
+        const bool doemit = !sub->lastStatusNotified.has_value() || sub->lastStatusNotified.value() != status;
+        sub->lastStatusNotified = status;
         if (doemit) {
             Debug() << "Notifying " << sub->subscribedClientIds.size() << " client(s) of status for " << Util::ToHexFast(sh);
             sub->updateTS();
@@ -315,7 +321,7 @@ auto SubsMgr::stats() const -> Stats
             {
                 LockGuard g2(sub->mut);
                 m2["count"] = qlonglong(sub->subscribedClientIds.size());
-                m2["lastStatusNotified"] = sub->lastStatus.toHex();
+                m2["lastStatusNotified"] = sub->lastStatusNotified.value_or(StatusHash()).toHex();
                 m2["idleSecs"] = (Util::getTime() - sub->tsMsec)/1e3;
                 const auto & clients = sub->subscribedClientIds;
                 m2["clientIds"] = QVariantList::fromStdList(Util::toList<std::list<QVariant>>(clients));

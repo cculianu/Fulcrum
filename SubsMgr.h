@@ -31,6 +31,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <type_traits>
 #include <unordered_set>
 
@@ -52,7 +53,7 @@ protected:
 
     const HashX scriptHash;
     std::unordered_set<quint64> subscribedClientIds;
-    StatusHash lastStatus;
+    std::optional<StatusHash> lastStatusNotified;
     /// The last time this sub was accessed in milliseconds (Util::getTime()). If the ts goes beyond 1 minute, and it
     /// has no clients attached, its entry may be removed.
     int64_t tsMsec = Util::getTime();
@@ -66,6 +67,14 @@ signals:
 
 using StatusCallback = std::function<void(const HashX &, const StatusHash &)>;
 
+/// The Subscriptions Manager. Thread-safe operations for managing subscriptions and doing notifications.
+///
+/// This class is "owned" by the Storage instance.  Internally it takes a class-level data lock for some operations,
+/// and also a per-Subscription-level locks for others.
+///
+/// Note about deadlocking: This class's locks are *SUBSERVIENT* to the "Storage" instance that owns it! Currently
+/// it takes no locks at the same time as holding a Storage lock.  However, if one must take multiple locks the order
+/// should be:  1. Storage Locks (in their defined order),  2. p->mut (Pvt::mut),  3. sub->mut (Subscription::mut).
 class SubsMgr : public Mgr, public ThreadObjectMixin, public TimersByNameMixin
 {
     Q_OBJECT
