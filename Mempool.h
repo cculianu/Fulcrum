@@ -102,7 +102,8 @@ struct Mempool
             return false;
         }
     };
-    /// note: the TxRefs here here point to the same object as the mapped_type in the TxMap above
+    /// Note: The TxRefs here here point to the same object as the mapped_type in the TxMap above
+    /// TODO: Maybe get rid of this std::set as the mapped_type and instead use some other less memory-hungry data structure.
     using HashXTxMap = robin_hood::unordered_node_map<HashX, std::set<TxRef, TxRefOrdering>, HashHasher>;
 
 
