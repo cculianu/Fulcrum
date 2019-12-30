@@ -31,6 +31,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <type_traits>
 #include <unordered_set>
 
 using StatusHash = QByteArray;
@@ -96,13 +97,13 @@ public:
     /// Thread-safe. Add a single HashX to the notification queue. If it has any subs, it will receive a notification
     /// with the updated status hash in the very near future.
     void enqueueNotification(const HashX &sh);
-    /// Thread-safe, batched version of the above. Submits a list,set,vector,etc of HashX's for notification.
+    /// Thread-safe, batched version of the above. Submit a list,set,vector,etc of HashX's for notification.
     template <typename Iterable>
     void enqueueNotifications(const Iterable & container)
     {
         auto guard = grabLock();
         for (const auto & sh : container) {
-            static_assert(std::is_same_v<HashX, std::remove_cvref_t<decltype(sh)>>, "Container of HashX must be used with enqueueNotifications");
+            static_assert(std::is_base_of_v<HashX, std::remove_cvref_t<decltype(sh)>>, "Container of HashX must be used with enqueueNotifications");
             addNotif_nolock(sh);
         }
     }

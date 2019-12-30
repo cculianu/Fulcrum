@@ -859,7 +859,6 @@ void Server::rpc_blockchain_scripthash_subscribe(Client *c, const RPC::Message &
     QByteArray sh = validateHashHex( l.front().toString() );
     if (sh.length() != HashLen)
         throw RPCError("Invalid scripthash");
-
     /// Note: potential race condition here whereby notification can arrive BEFORE the status result! FIXME!
     subsmgr->subscribe(c, sh, [c,method=m.method](const HashX &sh, const StatusHash &status) {
         const QByteArray shHex = Util::ToHexFast(sh), statusHex = Util::ToHexFast(status);
