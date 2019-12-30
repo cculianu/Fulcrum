@@ -757,9 +757,9 @@ void Server::rpc_blockchain_headers_subscribe(Client *c, const RPC::Message &m) 
             // the notification is a list of size 1, with a dict in it. :/
             c->sendNotification(meth, QVariantList({mkResp(height, header)}));
         });
-        Debug() << c->prettyName() << " is now subscribed to headers";
+        Debug() << c->prettyName(false, false) << " is now subscribed to headers";
     } else {
-        Debug() << c->prettyName() << " was already subscribed to headers, ignoring duplicate subscribe request";
+        Debug() << c->prettyName(false, false) << " was already subscribed to headers, ignoring duplicate subscribe request";
     }
     emit c->sendResult(m.id, mkResp(unsigned(std::max(0, height)), hdr));
 }
