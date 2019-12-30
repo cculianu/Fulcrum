@@ -202,7 +202,8 @@ public:
     /// TODO: Make this configurable and/or tune this value!
     static constexpr size_t MaxHistory = 250000;
 
-    /// Thread-safe. May return a short history if the history size exceeds MaxHistory.
+    /// Thread-safe. Will return an empty vector if the confirmed history size exceeds MaxHistory, or a truncated
+    /// vector if the confirmed + unconfirmed history exceeds MaxHistory.
     History getHistory(const HashX &, bool includeConfirmed, bool includeMempool) const;
 
     struct UnspentItem : HistoryItem {
@@ -216,7 +217,8 @@ public:
     };
     using UnspentItems = std::vector<UnspentItem>;
 
-    /// Thread-safe. May return a short list if the unspent list size exceeds MaxHistory.
+    /// Thread-safe. Will return an empty vector if the confirmed unspent size exceeds MaxHistory items. It may also
+    /// return a truncated vector if the overflow is as a result of confirmed+unconfirmed exceeding MaxHistory.
     UnspentItems listUnspent(const HashX &) const;
 
     /// thread safe -- returns confirmd, unconfirmed balance for a scripthash
