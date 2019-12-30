@@ -860,7 +860,7 @@ void Server::rpc_blockchain_scripthash_subscribe(Client *c, const RPC::Message &
     if (sh.length() != HashLen)
         throw RPCError("Invalid scripthash");
     /// Note: potential race condition here whereby notification can arrive BEFORE the status result! FIXME!
-    const bool wasNew = storage->subs()->subscribe(c, sh, [c,method=m.method](const HashX &sh, const StatusHash &status) {
+    const auto [wasNew, optStatus] = storage->subs()->subscribe(c, sh, [c,method=m.method](const HashX &sh, const StatusHash &status) {
         QVariant statusHexMaybeNull; // if empty we simply notify as 'null' (this is unlikely in practice but may happen on reorg)
         if (!status.isEmpty())
             statusHexMaybeNull = Util::ToHexFast(status);
@@ -868,13 +868,25 @@ void Server::rpc_blockchain_scripthash_subscribe(Client *c, const RPC::Message &
         emit c->sendNotification(method, QVariantList{shHex, statusHexMaybeNull});
     });
     if (wasNew) ++c->nShSubs;
-    generic_do_async(c, m.id, [sh, this] {
-        QVariant ret;
-        auto status = storage->subs()->getFullStatus(sh);
-        if (!status.isEmpty()) // if empty we return `null`, otherwise we return hex encoded bytes as the immediate status.
-            ret = Util::ToHexFast(status);
-        return ret;
-    });
+    if (!optStatus.has_value()) {
+        // no known/cached status -- do the work ourselves asynch in the thread pool.
+        generic_do_async(c, m.id, [sh, this] {
+            // TODO: send the computed value back to the SubsMgr somehow here? (This is tricky because race conditions)
+            QVariant ret;
+            auto status = storage->subs()->getFullStatus(sh);
+            if (!status.isEmpty()) // if empty we return `null`, otherwise we return hex encoded bytes as the immediate status.
+                ret = Util::ToHexFast(status);
+            return ret;
+        });
+    } else {
+        // SubsMgr reported a cached status -- immediately return that as the result!
+        QVariant result;
+        if (!optStatus.value().isEmpty())
+            // not empty, so we return the hex-encoded string
+            result = QString(Util::ToHexFast(optStatus.value()));
+        Debug() << "Sending cached status to client for scripthash: " << Util::ToHexFast(sh) << " status: " << result.toString(); // remove/comment-out this after testing complete
+        emit c->sendResult(m.id, result); ///<  may be 'null' if status was empty (indicates no history for scripthash)
+    }
 }
 void Server::rpc_blockchain_scripthash_unsubscribe(Client *c, const RPC::Message &m)
 {

@@ -34,6 +34,7 @@
 #include <optional>
 #include <type_traits>
 #include <unordered_set>
+#include <utility> // for pair
 
 using StatusHash = QByteArray;
 
@@ -51,13 +52,16 @@ protected:
 
     std::mutex mut; ///< this mutex guards the below data structures.
 
-    const HashX scriptHash;
-    std::unordered_set<quint64> subscribedClientIds;
+    const HashX scriptHash; ///< This is typically an implicitly shared copy of the same bytes as in the map key pointing to this instance.
+    std::unordered_set<quint64> subscribedClientIds; ///< this is atomically updated as clients subscribe/unsubscribe or as they are deleted/disconnected
+    /// The last status sent out as a notification. If it has_value, it's guaranteed to be the most recent one announced
+    /// to clients, so it is suitable for use in the respone to e.g. blockchain.scripthash.subscribe (iff has_value).
     std::optional<StatusHash> lastStatusNotified;
-    /// The last time this sub was accessed in milliseconds (Util::getTime()). If the ts goes beyond 1 minute, and it
-    /// has no clients attached, its entry may be removed.
+    /// The last time this sub was accessed in milliseconds (Util::getTime()). If the ts goes beyond 1 minute in the
+    /// past, and it has no clients attached, its entry may be removed.
     int64_t tsMsec = Util::getTime();
 
+    /// Call this with the lock held.
     inline void updateTS() { tsMsec = Util::getTime(); }
 
 signals:
@@ -87,6 +91,7 @@ public:
     void startup() override; ///< from Mgr, called only from Storage that owns us
     void cleanup() override; ///< from Mgr, called only from Storage that owns us
 
+    using SubscribeResult = std::pair<bool, std::optional<StatusHash>>; ///< used by "subscribe" below as the return value.
     /// Thread-safe. Subscribes client to a scripthash. Call this from the client's thread (not doing so is undefined).
     ///
     /// `notifyCB` is called for update notifications asynchronously as the tx history for `sh` changes. It will always
@@ -97,12 +102,17 @@ public:
     /// callback registrations for the subscription. Thus each client + scripthash combo can only have at most 1 active
     /// notifyCB extant at any time.
     ///
-    /// Returns true if the subscription for this client is new, or false if it replaced a previous subscription. In
-    /// either case the client is now subscribed to the scripthash in question.
+    /// Returns .first = true if the subscription for this client is new, or false if it replaced a previous subscription.
+    /// In either case the client is now subscribed to the scripthash in question.
+    ///
+    /// The .second of the pair is a cached StatusHash (if known).  Note the StatusHash may be defined but an empty
+    /// QByteArray if there is no history.  If the optional !has_value, then we don't have a known StatusHash for the
+    /// scripthash in question (but one still may exist!) -- client code should follow up with a getFullStatus() call to
+    /// get the updated status.
     ///
     /// Doesn't normally throw but may throw BadArgs if notifyCB is invalid, or InternalError if it failed to
     /// make a QMetaObject::Connection for the subscription.
-    bool subscribe(RPC::ConnectionBase *client, const HashX &sh, const StatusCallback &notifyCB);
+    SubscribeResult subscribe(RPC::ConnectionBase *client, const HashX &sh, const StatusCallback &notifyCB);
     /// Thread-safe. The inverse of subscribe. Returns true if the client was previously subscribed, false otherwise.
     /// Always call this from the client's thread otherwise undefined behavior may result.
     bool unsubscribe(RPC::ConnectionBase *client, const HashX &sh);

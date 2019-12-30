@@ -183,9 +183,9 @@ auto SubsMgr::findExistingSubRef(const HashX &sh) const -> SubRef
     return ret;
 }
 
-bool SubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &sh, const StatusCallback &notifyCB)
+auto SubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &sh, const StatusCallback &notifyCB) -> SubscribeResult
 {
-    bool ret = false;
+    SubscribeResult ret = { false, {} };
     const auto t0 = Util::getTimeNS();
     if (UNLIKELY(!notifyCB))
         throw BadArgs("SubsMgr::subscribe must be called with a valid notifyCB. FIXME!");
@@ -199,7 +199,7 @@ bool SubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &sh, const StatusCal
         } else {
             // did not have a sub for this client, add its id and also add the destroyed signal to clean up the id
             // upon client object destruction
-            ret = true;
+            ret.first = true;
             sub->subscribedClientIds.insert(c->id);
             auto conn = QObject::connect(c, &QObject::destroyed, sub.get(), [sub=sub.get(), id=c->id, this](QObject *){
                 --p->nClientSubsActive;
@@ -213,7 +213,10 @@ bool SubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &sh, const StatusCal
                 throw InternalError("SubsMgr::subscribe: Failed to make the 'destroyed' connection for the client object! FIXME!");
             ++p->nClientSubsActive;
         }
-        sub->updateTS();
+        // Always copy the last known StatusHash to caller. This is guaranteed to either be a recent status since the
+        // last notification sent (if known), or !has_value if not known.
+        ret.second = sub->lastStatusNotified;
+        sub->updateTS(); // our basic 'mtime'
         auto conn = QObject::connect(sub.get(), &Subscription::statusChanged, c, notifyCB);
         if (UNLIKELY(!conn))
             throw InternalError("SubsMgr::subscribe: Failed to make the 'statusChanged' connection to the notifyCB functor! FIXME!");
