@@ -446,19 +446,20 @@ void Controller::printMempoolStatusToLog() const
 // static
 void Controller::printMempoolStatusToLog(size_t newSize, size_t numAddresses, bool isDebug, bool force)
 {
-    static size_t oldSize = 0;
-    static double lastTS = 0.;
+    static std::atomic_size_t oldSize = 0, oldNumAddresses = 0;
+    static std::atomic<double> lastTS = 0.;
     static std::mutex mut;
     constexpr double interval = 30.;
     double now = Util::getTimeSecs();
     std::lock_guard g(mut);
-    if (force || (newSize > 0 && oldSize != newSize && now - lastTS >= interval)) {
+    if (force || (newSize > 0 && (oldSize != newSize || oldNumAddresses != numAddresses) && now - lastTS >= interval)) {
         std::unique_ptr<Log> logger(isDebug ? new Debug : new Log);
         Log & log(*logger);
         log << newSize << Util::Pluralize(" mempool tx", newSize) << " involving " << numAddresses
             << Util::Pluralize(" address", numAddresses);
         if (!force) {
             oldSize = newSize;
+            oldNumAddresses = numAddresses;
             lastTS = now;
         }
     }
