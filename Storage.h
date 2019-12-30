@@ -55,6 +55,8 @@ struct HeaderVerificationFailure : public Exception { using Exception::Exception
 /// Thrown by undoLatestBlock() if undo info is missing from the db for said block (this would indicate we tried to
 /// rewind too far back or some other unforeseen circumstance).
 struct UndoInfoMissing : public Exception { using Exception::Exception; ~UndoInfoMissing() override; };
+/// Thrown by internally by getHistory and listUnspent if the history is too large.
+struct HistoryTooLarge : public Exception { using Exception::Exception; ~HistoryTooLarge() override; };
 
 struct Mempool;
 class SubsMgr;
@@ -196,7 +198,11 @@ public:
     };
     using History = std::vector<HistoryItem>;
 
-    // thread safe
+    /// If the history is larger than this number of items, the returned list will be truncated to this size.
+    /// TODO: Make this configurable and/or tune this value!
+    static constexpr size_t MaxHistory = 250000;
+
+    /// Thread-safe. May return a short history if the history size exceeds MaxHistory.
     History getHistory(const HashX &, bool includeConfirmed, bool includeMempool) const;
 
     struct UnspentItem : HistoryItem {
@@ -210,7 +216,7 @@ public:
     };
     using UnspentItems = std::vector<UnspentItem>;
 
-    /// thread safe
+    /// Thread-safe. May return a short list if the unspent list size exceeds MaxHistory.
     UnspentItems listUnspent(const HashX &) const;
 
     /// thread safe -- returns confirmd, unconfirmed balance for a scripthash

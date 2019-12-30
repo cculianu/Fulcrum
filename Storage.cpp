@@ -51,6 +51,7 @@ DatabaseFormatError::~DatabaseFormatError() {} // weak vtable warning suppressio
 DatabaseKeyNotFound::~DatabaseKeyNotFound() {} // weak vtable warning suppression
 HeaderVerificationFailure::~HeaderVerificationFailure() {} // weak vtable warning suppression
 UndoInfoMissing::~UndoInfoMissing() {} // weak vtable warning suppression
+HistoryTooLarge::~HistoryTooLarge() {} // weak vtable warning suppression
 
 namespace {
     /// Encapsulates the 'meta' db table
@@ -1633,6 +1634,10 @@ auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf) const -> H
             auto nums_opt = GenericDBGet<TxNumVec>(p->db.shist.get(), hashX, true, err, false, p->db.defReadOpts);
             if (nums_opt.has_value()) {
                 auto & nums = nums_opt.value();
+                if (UNLIKELY(nums.size() > MaxHistory)) {
+                    throw HistoryTooLarge(QString("History for scripthash %1 exceeds MaxHistory %2 with %3 items!")
+                                          .arg(QString(hashX.toHex())).arg(MaxHistory).arg(nums.size()));
+                }
                 ret.reserve(nums.size());
                 for (auto num : nums) {
                     auto hash = hashForTxNum(num).value(); // may throw, but that indicates some database inconsistency. we catch below
@@ -1645,7 +1650,12 @@ auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf) const -> H
             auto [mempool, lock] = this->mempool();
             if (auto it = mempool.hashXTxs.find(hashX); it != mempool.hashXTxs.end()) {
                 const auto & txset = it->second;
-                ret.reserve(ret.size() + txset.size());
+                const size_t total = ret.size() + txset.size();
+                if (UNLIKELY(total > MaxHistory)) {
+                    throw HistoryTooLarge(QString("History for scripthash %1 exceeds MaxHistory %2 with %3 items!")
+                                          .arg(QString(hashX.toHex())).arg(MaxHistory).arg(total));
+                }
+                ret.reserve(total);
                 for (const auto & tx : txset)
                     ret.emplace_back(HistoryItem{tx->hash, tx->ancestorCount > 1 ? -1 : 0, tx->fee});
             }
@@ -1674,6 +1684,10 @@ auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
             rocksdb::Slice key;
             bool didReserveIota = false;
             TxNum maxTxNumSeen = 0;
+            std::list<const CompactTXO> ctxoList;
+            size_t ctxoListSize = 0;
+            // we do it this way as two separate loops in order to avoid the expensive heightForTxNum lookups below in
+            // the case where the history is huge.
             for (iter->Seek(prefix); iter->Valid() && (key = iter->key()).starts_with(prefix); iter->Next()) {
                 if (key.size() != HashLen + CompactTXO::serSize())
                     // should never happen, indicates db corruption
@@ -1682,6 +1696,13 @@ auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
                 if (!ctxo.isValid())
                     // should never happen, indicates db corruption
                     throw InternalError("Deserialized CompactTXO is invalid");
+                ctxoList.emplace_back(ctxo);
+                if (UNLIKELY(++ctxoListSize > MaxHistory)) {
+                    throw HistoryTooLarge(QString("Unspent history too large for %1, exceeds MaxHistory of %2")
+                                          .arg(QString(hashX.toHex())).arg(MaxHistory));
+                }
+            }
+            for (const auto & ctxo : ctxoList) {
                 static const QString err("Error retrieving the utxo for an unspent item");
                 auto hash = hashForTxNum(ctxo.txNum()).value(); // may throw, but that indicates some database inconsistency. we catch below
                 auto height = heightForTxNum(ctxo.txNum()).value(); // may throw, same deal
@@ -1721,6 +1742,10 @@ auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
                                         txoinfo.amount,  // .value
                                         TxNum(1) + maxTxNumSeen + TxNum(tx->ancestorCount), // .txNum (this is fudged for sorting at the end properly)
                                     });
+                                    if (UNLIKELY(ret.size() > MaxHistory)) {
+                                        throw HistoryTooLarge(QString("Unspent history too large for %1, exceeds MaxHistory of %2")
+                                                              .arg(QString(hashX.toHex())).arg(MaxHistory));
+                                    }
                                 } else {
                                     // this should never happen!
                                     Warning() << "Cannot find txo " << ionum << " for sh " << hashX.toHex() << " in tx " << tx->hash.toHex();
