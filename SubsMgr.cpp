@@ -74,6 +74,8 @@ void SubsMgr::on_started()
 {
     ThreadObjectMixin::on_started();
     conns += connect(this, &SubsMgr::queueNoLongerEmpty, this, [this]{
+        // Note to self: this slot is called with the p->mut lock held directly so if we add code here that takes that
+        // lock, change this connection to a Qt::QueuedConnection!
         callOnTimerSoonNoRepeat(kNotifTimerIntervalMS, kNotifTimerName, [this]{ doNotifyAllPending(); }, false, Qt::TimerType::PreciseTimer);
     });
     callOnTimerSoon(kRemoveZombiesTimerIntervalMS, kRemoveZombiesTimerName, [this]{ removeZombies(); return true;}, true);
@@ -105,9 +107,9 @@ void SubsMgr::doNotifyAllPending()
             LockGuard g(sub->mut);
             if (sub->subscribedClientIds.empty()) {
                 // We need to clear the "last status notified" because we have no clients now and we are skipping a
-                // notification. The "last status notified"'s only purpose is to prevent sending existing clients dupe
-                // notifications (if status didn't change). But here, if there are no clients we should keep this value
-                // clear for later when/if clients do come in.
+                // notification. The "last status notified"'s primary purpose is to prevent sending existing clients
+                // dupe notifications (if status didn't change). Since we are skipping a notification, we must clear
+                // it to invalidate it.
                 sub->lastStatusNotified.reset();
                 continue;
             }
@@ -217,7 +219,7 @@ auto SubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &sh, const StatusCal
         // last notification sent (if known), or !has_value if not known.
         ret.second = sub->lastStatusNotified;
         sub->updateTS(); // our basic 'mtime'
-        auto conn = QObject::connect(sub.get(), &Subscription::statusChanged, c, notifyCB);
+        auto conn = QObject::connect(sub.get(), &Subscription::statusChanged, c, notifyCB, Qt::QueuedConnection); // QueuedConnection paranoia in case client 'c' "lives" in our thread
         if (UNLIKELY(!conn))
             throw InternalError("SubsMgr::subscribe: Failed to make the 'statusChanged' connection to the notifyCB functor! FIXME!");
     }
