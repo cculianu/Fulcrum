@@ -290,12 +290,32 @@ namespace Util {
         return ret;
     }
 
-    /// Convert an iterable container (normally a vector) into a list.
-    template <typename ItCont, typename List = std::list<typename ItCont::value_type>>
-    List toList(const ItCont &vec) { return List(vec.begin(), vec.end()); }
-    /// Convert an iterable container (normally a list) into a vector.
-    template <typename ItCont, typename Vec = std::vector<typename ItCont::value_type>>
-    Vec toVec(const ItCont &list) { return Vec(list.begin(), list.end()); }
+    /// Convert an iterable container (normally a vector) into a list.  Pass the List return type as the first argument
+    /// (defaults to std::list<ItCont::value_type> if unspecified).
+    template <typename List = void, typename ItCont>
+    auto toList(const ItCont &vec) {
+        constexpr auto DeduceList = []{
+            // this code doesn't ever execute, it is just used for type deduction
+            if constexpr (std::is_same_v<List, void>)
+                return std::list<typename ItCont::value_type>();
+            else
+                return List();
+        };
+        return decltype( DeduceList() )(vec.begin(), vec.end());
+    }
+    /// Convert an iterable container (normally a list) into a vector. Pass the Vec return type as the first argument
+    /// (defaults to std::vector<ItCond::value_tyoe> if unspecified).
+    template <typename Vec = void, typename ItCont>
+    auto toVec(const ItCont &vec) {
+        constexpr auto DeduceVec = []{
+            // this code doesn't ever execute, it is just used for type deduction
+            if constexpr (std::is_same_v<Vec, void>)
+                return std::vector<typename ItCont::value_type>();
+            else
+                return Vec();
+        };
+        return decltype( DeduceVec() )(vec.begin(), vec.end());
+    }
 
     /// For each item in Container, reverse each item in-place using std::reverse(item.begin(), item.end()).
     /// Note that each item in the container must have a bidirectional iterator returned from .begin()/.end().

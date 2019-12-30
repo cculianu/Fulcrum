@@ -318,7 +318,7 @@ auto SubsMgr::stats() const -> Stats
                 m2["lastStatusNotified"] = sub->lastStatus.toHex();
                 m2["idleSecs"] = (Util::getTime() - sub->tsMsec)/1e3;
                 const auto & clients = sub->subscribedClientIds;
-                m2["clientIds"] = QVariantList::fromStdList(Util::toList<decltype(clients), std::list<QVariant>>(clients));
+                m2["clientIds"] = QVariantList::fromStdList(Util::toList<std::list<QVariant>>(clients));
             }
             m[QString(sh.toHex())] = m2;
         }

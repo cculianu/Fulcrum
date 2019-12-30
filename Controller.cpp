@@ -1335,9 +1335,7 @@ auto Controller::debug(const StatsParams &p) const -> Stats // from StatsMixin
             QVariantMap hxs;
             static const auto IOInfo2Map = [](const Mempool::Tx::IOInfo &inf) -> QVariantMap {
                 QVariantMap ret;
-                auto ul = Util::toList(inf.utxo);
-                QVariantList vl;
-                for (auto u : ul) vl.push_back(u);
+                const auto vl = QVariantList::fromStdList( Util::toList<std::list<QVariant>>(inf.utxo) );
                 ret["utxos"] = vl;
                 QVariantMap cs;
                 for (const auto & [txo, info] : inf.confirmedSpends)
