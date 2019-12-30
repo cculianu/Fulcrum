@@ -860,8 +860,11 @@ void Server::rpc_blockchain_scripthash_subscribe(Client *c, const RPC::Message &
         throw RPCError("Invalid scripthash");
     /// Note: potential race condition here whereby notification can arrive BEFORE the status result! FIXME!
     storage->subs()->subscribe(c, sh, [c,method=m.method](const HashX &sh, const StatusHash &status) {
-        const QByteArray shHex = Util::ToHexFast(sh), statusHex = Util::ToHexFast(status);
-        emit c->sendNotification(method, QVariantList{shHex, statusHex});
+        QVariant statusHexMaybeNull; // if empty we simply notify as 'null' (this is unlikely in practice but may happen on reorg)
+        if (!status.isEmpty())
+            statusHexMaybeNull = Util::ToHexFast(status);
+        const QByteArray shHex = Util::ToHexFast(sh);
+        emit c->sendNotification(method, QVariantList{shHex, statusHexMaybeNull});
     });
     generic_do_async(c, m.id, [sh, this] {
         QVariant ret;
