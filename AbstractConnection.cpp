@@ -37,8 +37,8 @@ QString AbstractConnection::prettyName(bool dontTouchSocket, bool showId) const
     QString type = socket && !dontTouchSocket ? (dynamic_cast<QSslSocket *>(socket) ? "SSL" : "TCP") : "(NoSocket)";
     QString port = socket && !dontTouchSocket && socket->peerPort() ? QString(":%1").arg(socket->peerPort()) : "";
     QString ip = socket && !dontTouchSocket && !socket->peerAddress().isNull() ? socket->peerAddress().toString() : "";
-    QString idStr = showId ? QString(" (id: %1) ").arg(id) : QString();
-    return QString("%1 %2%3%4%5").arg(type).arg(!objectName().isNull()?objectName():"(AbstractSocket)").arg(idStr).arg(ip).arg(port);
+    QString idStr = showId ? QString(" (id: %1)").arg(id) : QString();
+    return QString("%1 %2%3 %4%5").arg(type).arg(!objectName().isNull()?objectName():"(AbstractSocket)").arg(idStr).arg(ip).arg(port);
 }
 
 bool AbstractConnection::isGood() const
