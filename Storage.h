@@ -145,7 +145,7 @@ public:
     /// the block is accepted.  A successful return from this function without throwing indicates success.
     ///
     /// Note: you can only add blocks in serial sequence from 0 -> latest.
-    void addBlock(PreProcessedBlockPtr ppb, bool alsoSaveUnfoInfo, unsigned num2ReserveAfter = 0);
+    void addBlock(PreProcessedBlockPtr ppb, bool alsoSaveUnfoInfo, unsigned num2ReserveAfter = 0, bool notifySubs = false);
 
     /// Thread-safe.  Will attempt to undo the latest block that was previously added via a successfully completed call
     /// to addBlock().  This should be called if addBlock throws HeaderVerificationFailure. This function may throw
@@ -154,7 +154,7 @@ public:
     ///
     /// Returns the new BlockHeight .. which is the current height - 1 (after this call returns, this will be
     ///  the same int value as latestTip().first).
-    BlockHeight undoLatestBlock();
+    BlockHeight undoLatestBlock(bool notifySubs = false);
 
     /// returns the "next" TxNum (thread safe)
     TxNum getTxNum() const;

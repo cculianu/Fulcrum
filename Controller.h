@@ -134,6 +134,10 @@ private:
 
     volatile bool stopFlag = false;
     bool lostConn = true;
+    /// Master subscription notification flag. Initially we don't do notifications. However, after we start the srvmgr,
+    /// this gets set to true permanently, and future blocks/undoes/mempool changes notify the app-wide SubsMgr, which
+    /// notifies subscribed clients (if any).
+    bool masterNotifySubsFlag = false;
 
     /// takes locks, prints to Log() every 30 seconds if there were changes
     void printMempoolStatusToLog() const;

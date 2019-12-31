@@ -91,6 +91,8 @@ public:
     void startup() override; ///< from Mgr, called only from Storage that owns us
     void cleanup() override; ///< from Mgr, called only from Storage that owns us
 
+    static constexpr size_t kRecommendedPendingNotificationsReserveSize = 2048;
+
     using SubscribeResult = std::pair<bool, std::optional<StatusHash>>; ///< used by "subscribe" below as the return value.
     /// Thread-safe. Subscribes client to a scripthash. Call this from the client's thread (not doing so is undefined).
     ///
@@ -135,19 +137,12 @@ public:
     /// this from `Storage` with that lock already held.
     StatusHash getFullStatus(const HashX &scriptHash) const;
 
-    /// Thread-safe. Add a single HashX to the notification queue. If it has any subs, it will receive a notification
-    /// with the updated status hash in the very near future.
-    void enqueueNotification(const HashX &sh);
-    /// Thread-safe, batched version of the above. Submit a list,set,vector,etc of HashX's for notification.
-    template <typename Iterable>
-    void enqueueNotifications(const Iterable & container1D)
-    {
-        auto guard = grabLock();
-        for (const auto & sh : container1D) {
-            static_assert(std::is_base_of_v<HashX, std::remove_cv_t<std::remove_reference_t<decltype(sh)>>>, "Container of HashX must be used with enqueueNotifications");
-            addNotif_nolock(sh);
-        }
-    }
+    /// Thread-safe. We do it this way because it's the fastest approack (uses C++17 unordered_set:::merge). After this
+    /// call, s is modified and contains only the elements that were already pending (thus were not enqueued as they
+    /// were already in the queue).
+    void enqueueNotifications(std::unordered_set<HashX, HashHasher> & s);
+    /// Like the above but uses move.  After this call, s can be considered to be invalidated.
+    void enqueueNotifications(std::unordered_set<HashX, HashHasher> && s);
 signals:
     /// Private signal.  Used to indicate the notification queue is empty (and thus any associated timers should be stopped).
     void queueEmpty();
@@ -171,8 +166,5 @@ private:
 
     void doNotifyAllPending();
 
-    std::unique_lock<std::mutex> grabLock();
-    /// Only ever call this with the lock held.
-    void addNotif_nolock(const HashX & sh);
     void removeZombies();
 };

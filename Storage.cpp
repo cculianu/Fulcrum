@@ -1093,16 +1093,23 @@ double Storage::utxoSetSizeMiB() const {
     return (utxoSetSize()*elemSize) / 1e6;
 }
 
-void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserve)
+void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserve, bool notifySubs)
 {
     assert(bool(ppb) && bool(p));
 
     std::unique_ptr<UndoInfo> undo;
 
     if (saveUndo) {
-        undo.reset(new UndoInfo);
+        undo = std::make_unique<UndoInfo>();
         undo->height = ppb->height;
     }
+
+    using NotifySet = std::unordered_set<HashX, HashHasher>;
+    std::unique_ptr<NotifySet> notify;
+
+    if (notifySubs)
+        notify = std::make_unique<NotifySet>();
+        // note we don't reserve here -- we will reserve at the end when we run through the hashXAggregated set one final time...
 
     // take all locks now.. since this is a Big Deal. TODO: add more locks here?
     std::scoped_lock guard(p->blocksLock, p->headerVerifierLock, p->blkInfoLock, p->mempoolLock);
@@ -1155,6 +1162,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
         // update utxoSet & scritphash history
         {
             std::unordered_set<HashX, HashHasher> newHashXInputsResolved;
+            newHashXInputsResolved.reserve(1024); ///< todo: tune this magic number?
 
             {
                 // utxo batch block (updtes utxoset & scripthash_unspent tables)
@@ -1264,8 +1272,12 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
         {
             // now.. update the txNumsInvolvingHashX to be offset from txNum0 for this block, and save history to db table
             // history is hashX -> TxNumVec (serialized) as a serities of 6-bytes txNums in blockchain order as they appeared.
+            if (notify)
+                // first, reserve space for notifications
+                notify->reserve(ppb->hashXAggregated.size());
             rocksdb::WriteBatch batch;
             for (auto & [hashX, ag] : ppb->hashXAggregated) {
+                if (notify) notify->insert(hashX); // fast O(1) insertion because we reserved the right size above.
                 for (auto & txNum : ag.txNumsInvolvingHashX) {
                     txNum += blockTxNum0; // transform local txIdx to -> txNum (global mapping)
                 }
@@ -1365,132 +1377,150 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
         setDirty(false);
 
         undoVerifierOnScopeEnd.disable(); // indicate to the "Defer" object declared at the top of this function that it shouldn't undo anything anymore as we are happy now with the db state now.
-    }
+    } /// release locks
+
+    // now, do notifications
+    if (notify && subsmgr && !notify->empty())
+        subsmgr->enqueueNotifications(std::move(*notify));
 }
 
-BlockHeight Storage::undoLatestBlock()
+BlockHeight Storage::undoLatestBlock(bool notifySubs)
 {
-    // take all locks now.. since this is a Big Deal. TODO: add more locks here?
-    std::scoped_lock guard(p->blocksLock, p->headerVerifierLock, p->blkInfoLock, p->mempoolLock);
+    BlockHeight prevHeight{0};
+    std::unique_ptr<UndoInfo::ScriptHashSet> notify;
+    if (notifySubs)
+        notify = std::make_unique<UndoInfo::ScriptHashSet>();
 
-    p->mempool.clear(); // make sure mempool is clean
-
-    const auto t0 = Util::getTimeNS();
-
-    const auto [tip, header] = p->headerVerifier.lastHeaderProcessed();
-    if (tip <= 0 || header.length() != p->blockHeaderSize()) throw UndoInfoMissing("No header to undo");
-    const BlockHeight prevHeight = unsigned(tip-1);
-    Header prevHeader;
     {
-        // grab previous header now
-        QString err;
-        auto opt = headerForHeight_nolock(prevHeight, &err);
-        if (!opt.has_value()) throw UndoInfoMissing(err);
-        prevHeader = opt.value();
-    }
-    const QString errMsg1 = QString("Unable to retrieve undo info for %1").arg(tip);
-    const auto undoOpt = GenericDBGet<UndoInfo>(p->db.undo.get(), uint32_t(tip), true, errMsg1, false, p->db.defReadOpts);
-    if (!undoOpt.has_value())
-        throw UndoInfoMissing(errMsg1);
-    const auto & undo = undoOpt.value();
+        // take all locks now.. since this is a Big Deal. TODO: add more locks here?
+        std::scoped_lock guard(p->blocksLock, p->headerVerifierLock, p->blkInfoLock, p->mempoolLock);
 
-    // ensure undo info sanity
-    if (!undo.isValid() || undo.height != unsigned(tip) || undo.hash != BTC::HashRev(header)
-        || prevHeight+1 >= p->blkInfos.size() || p->blkInfos.empty() || p->blkInfos.back() != undo.blkInfo)
-        throw DatabaseFormatError(QString("The undo information for height %1 was successfully retrieved from the "
-                                          "database, but it failed an internal consistency check.").arg(tip));
-    {
-        // all sanity check passed. Now, undo things in reverse order of what we did in addBlock above, rougly speaking
+        p->mempool.clear(); // make sure mempool is clean
 
-        // first, undo the header
-        p->headerVerifier.reset(prevHeight+1, prevHeader);
-        setDirty(true); // <-- no turning back. we clear this flag at the end
-        deleteHeadersPastHeight(prevHeight); // commit change to db
-        p->merkleCache->truncate(prevHeight+1); // this takes a length, not a height, which is always +1 the height
+        const auto t0 = Util::getTimeNS();
 
-        // undo the blkInfo from the back
-        p->blkInfos.pop_back();
-        p->blkInfosByTxNum.erase(undo.blkInfo.txNum0);
-        GenericDBDelete(p->db.blkinfo.get(), uint32_t(undo.height), "Failed to delete blkInfo in undoLatestBlock");
-        // clear num2hash cache
-        p->lruNum2Hash.clear();
-        // remove block from txHashes cache
-        p->lruHeight2Hashes_BitcoindMemOrder.remove(undo.height);
+        const auto [tip, header] = p->headerVerifier.lastHeaderProcessed();
+        if (tip <= 0 || header.length() != p->blockHeaderSize()) throw UndoInfoMissing("No header to undo");
+        prevHeight = unsigned(tip-1);
+        Header prevHeader;
+        {
+            // grab previous header now
+            QString err;
+            auto opt = headerForHeight_nolock(prevHeight, &err);
+            if (!opt.has_value()) throw UndoInfoMissing(err);
+            prevHeader = opt.value();
+        }
+        const QString errMsg1 = QString("Unable to retrieve undo info for %1").arg(tip);
+        auto undoOpt = GenericDBGet<UndoInfo>(p->db.undo.get(), uint32_t(tip), true, errMsg1, false, p->db.defReadOpts);
+        if (!undoOpt.has_value())
+            throw UndoInfoMissing(errMsg1);
+        auto & undo = undoOpt.value(); // non-const because we swap out its scripthashes potentially below if notifySubs == true
 
-        const auto txNum0 = undo.blkInfo.txNum0;
+        // ensure undo info sanity
+        if (!undo.isValid() || undo.height != unsigned(tip) || undo.hash != BTC::HashRev(header)
+            || prevHeight+1 >= p->blkInfos.size() || p->blkInfos.empty() || p->blkInfos.back() != undo.blkInfo)
+            throw DatabaseFormatError(QString("The undo information for height %1 was successfully retrieved from the "
+                                              "database, but it failed an internal consistency check.").arg(tip));
+        {
+            // all sanity check passed. Now, undo things in reverse order of what we did in addBlock above, rougly speaking
 
-        // undo the scripthash histories
-        for (const auto & sh : undo.scriptHashes) {
-            const QString shHex = Util::ToHexFast(sh);
-            const auto vec = GenericDBGetFailIfMissing<TxNumVec>(p->db.shist.get(), sh, QString("Undo failed because we failed to retrieve the scripthash history for %1").arg(shHex), false, p->db.defReadOpts);
-            TxNumVec newVec;
-            newVec.reserve(vec.size());
-            for (const auto txNum : vec) {
-                if (txNum < txNum0) {
-                    // accept only stuff in history that's before txNum0 for this block, filter out everything else
-                    newVec.push_back(txNum);
+            // first, undo the header
+            p->headerVerifier.reset(prevHeight+1, prevHeader);
+            setDirty(true); // <-- no turning back. we clear this flag at the end
+            deleteHeadersPastHeight(prevHeight); // commit change to db
+            p->merkleCache->truncate(prevHeight+1); // this takes a length, not a height, which is always +1 the height
+
+            // undo the blkInfo from the back
+            p->blkInfos.pop_back();
+            p->blkInfosByTxNum.erase(undo.blkInfo.txNum0);
+            GenericDBDelete(p->db.blkinfo.get(), uint32_t(undo.height), "Failed to delete blkInfo in undoLatestBlock");
+            // clear num2hash cache
+            p->lruNum2Hash.clear();
+            // remove block from txHashes cache
+            p->lruHeight2Hashes_BitcoindMemOrder.remove(undo.height);
+
+            const auto txNum0 = undo.blkInfo.txNum0;
+
+            // undo the scripthash histories
+            for (const auto & sh : undo.scriptHashes) {
+                const QString shHex = Util::ToHexFast(sh);
+                const auto vec = GenericDBGetFailIfMissing<TxNumVec>(p->db.shist.get(), sh, QString("Undo failed because we failed to retrieve the scripthash history for %1").arg(shHex), false, p->db.defReadOpts);
+                TxNumVec newVec;
+                newVec.reserve(vec.size());
+                for (const auto txNum : vec) {
+                    if (txNum < txNum0) {
+                        // accept only stuff in history that's before txNum0 for this block, filter out everything else
+                        newVec.push_back(txNum);
+                    }
+                }
+                const QString errMsg = QString("Undo failed because we failed to write the new scripthash history for %1").arg(shHex);
+                if (!newVec.empty()) {
+                    // The below is entirely unnecessary as the txnums should be already sorted and unique in the db data.
+                    // We are doing this here to illustrate that this invariant in the data is very important.
+                    // Block undo is intended to be an infrequent process (and thus not especially performance-critical),
+                    // so this does no harm.
+                    std::sort(newVec.begin(), newVec.end());
+                    auto last = std::unique(newVec.begin(), newVec.end());
+                    newVec.erase(last, newVec.end());
+                }
+                if (!newVec.empty()) {
+                    // the sh still has some history, write it to db
+                    GenericDBPut(p->db.shist.get(), sh, newVec, errMsg, p->db.defWriteOpts);
+                } else {
+                    // the sh in question lost all its history as a result of undo, just delete it from db to save space
+                    GenericDBDelete(p->db.shist.get(), sh, errMsg, p->db.defWriteOpts);
                 }
             }
-            const QString errMsg = QString("Undo failed because we failed to write the new scripthash history for %1").arg(shHex);
-            if (!newVec.empty()) {
-                // The below is entirely unnecessary as the txnums should be already sorted and unique in the db data.
-                // We are doing this here to illustrate that this invariant in the data is very important.
-                // Block undo is intended to be an infrequent process (and thus not especially performance-critical),
-                // so this does no harm.
-                std::sort(newVec.begin(), newVec.end());
-                auto last = std::unique(newVec.begin(), newVec.end());
-                newVec.erase(last, newVec.end());
+
+            {
+                // UTXO set update
+                UTXOBatch utxoBatch;
+
+                // now, undo the utxo deletions by re-adding them
+                for (const auto & [txo, info] : undo.delUndos) {
+                    // note that deletions may have an info with a txnum before this block, for obvious reasons
+                    utxoBatch.add(txo, info, CompactTXO(info.txNum, txo.prevoutN)); // may throw
+                }
+
+                // now, undo the utxo additions by deleting them
+                for (const auto & [txo, hashx, ctxo] : undo.addUndos) {
+                    assert(ctxo.txNum() >= txNum0); // all of the additions must have been in this block or newer
+                    utxoBatch.remove(txo, hashx, ctxo); // may throw
+                }
+
+                issueUpdates(utxoBatch); // may throw, updates p->utxoCt and issues write to db.
             }
-            if (!newVec.empty()) {
-                // the sh still has some history, write it to db
-                GenericDBPut(p->db.shist.get(), sh, newVec, errMsg, p->db.defWriteOpts);
-            } else {
-                // the sh in question lost all its history as a result of undo, just delete it from db to save space
-                GenericDBDelete(p->db.shist.get(), sh, errMsg, p->db.defWriteOpts);
+
+            if (p->earliestUndoHeight >= undo.height)
+                // oops, we're out of undos now!
+                p->earliestUndoHeight = UINT_MAX;
+            GenericDBDelete(p->db.undo.get(), uint32_t(undo.height)); // make sure to delete this undo info since it was just applied.
+
+            // lastly, truncate the tx num file and re-set txNumNext to point to this block's txNum0 (thereby recycling it)
+            assert(long(p->txNumNext) - long(txNum0) == long(undo.blkInfo.nTx));
+            p->txNumNext = txNum0;
+            if (QString err; p->txNumsFile->truncate(txNum0, &err) != txNum0 || !err.isEmpty()) {
+                throw InternalError(QString("Failed to truncate txNumsFile to %1: %2").arg(txNum0).arg(err));
             }
+
+            saveUtxoCt();
+            setDirty(false); // phew. done.
+
+            if (notify)
+                notify->swap(undo.scriptHashes);
         }
 
-        {
-            // UTXO set update
-            UTXOBatch utxoBatch;
+        const size_t nTx = undo.blkInfo.nTx, nSH = undo.scriptHashes.size();
+        const auto elapsedms = (Util::getTimeNS() - t0) / 1e6;
+        Log() << "Applied undo for block " << undo.height << " hash " << Util::ToHexFast(undo.hash) << ", "
+              << nTx << " " << Util::Pluralize("transaction", nTx)
+              << " involving " << nSH << " " << Util::Pluralize("scripthash", nSH)
+              << ", in " << QString::number(elapsedms, 'f', 2) << " msec, new height now: " << prevHeight;
+    } // release locks
 
-            // now, undo the utxo deletions by re-adding them
-            for (const auto & [txo, info] : undo.delUndos) {
-                // note that deletions may have an info with a txnum before this block, for obvious reasons
-                utxoBatch.add(txo, info, CompactTXO(info.txNum, txo.prevoutN)); // may throw
-            }
-
-            // now, undo the utxo additions by deleting them
-            for (const auto & [txo, hashx, ctxo] : undo.addUndos) {
-                assert(ctxo.txNum() >= txNum0); // all of the additions must have been in this block or newer
-                utxoBatch.remove(txo, hashx, ctxo); // may throw
-            }
-
-            issueUpdates(utxoBatch); // may throw, updates p->utxoCt and issues write to db.
-        }
-
-        if (p->earliestUndoHeight >= undo.height)
-            // oops, we're out of undos now!
-            p->earliestUndoHeight = UINT_MAX;
-        GenericDBDelete(p->db.undo.get(), uint32_t(undo.height)); // make sure to delete this undo info since it was just applied.
-
-        // lastly, truncate the tx num file and re-set txNumNext to point to this block's txNum0 (thereby recycling it)
-        assert(long(p->txNumNext) - long(txNum0) == long(undo.blkInfo.nTx));
-        p->txNumNext = txNum0;
-        if (QString err; p->txNumsFile->truncate(txNum0, &err) != txNum0 || !err.isEmpty()) {
-            throw InternalError(QString("Failed to truncate txNumsFile to %1: %2").arg(txNum0).arg(err));
-        }
-
-        saveUtxoCt();
-        setDirty(false); // phew. done.
-    }
-
-    const size_t nTx = undo.blkInfo.nTx, nSH = undo.scriptHashes.size();
-    const auto elapsedms = (Util::getTimeNS() - t0) / 1e6;
-    Log() << "Applied undo for block " << undo.height << " hash " << Util::ToHexFast(undo.hash) << ", "
-          << nTx << " " << Util::Pluralize("transaction", nTx)
-          << " involving " << nSH << " " << Util::Pluralize("scripthash", nSH)
-          << ", in " << QString::number(elapsedms, 'f', 2) << " msec, new height now: " << prevHeight;
+    // now, do notifications
+    if (notify && subsmgr && !notify->empty())
+        subsmgr->enqueueNotifications(std::move(*notify));
 
     return prevHeight;
 }

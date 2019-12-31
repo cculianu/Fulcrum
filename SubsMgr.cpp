@@ -36,10 +36,10 @@ Subscription::~Subscription()
 
 namespace {
     using LockGuard = std::lock_guard<std::mutex>;
-    constexpr int kNotifTimerIntervalMS = 50; ///< we notify in batches at most once every 50ms
-    constexpr const char *kNotifTimerName = "ScripthashStatusNotificationTimer";
+    constexpr int kNotifTimerIntervalMS = 500; ///< we notify in batches at most once every 500ms .. this delay is ok because anyway we only receive mempool updates at most once per second.
+    constexpr const char *kNotifTimerName = "NotificationTimer";
     constexpr int kRemoveZombiesTimerIntervalMS = 60000; ///< we remove zombie subs entries every minute
-    constexpr const char *kRemoveZombiesTimerName = "ScripthashStatusNotificationTimer";
+    constexpr const char *kRemoveZombiesTimerName = "ZombieTimer";
 }
 
 struct SubsMgr::Pvt
@@ -49,6 +49,18 @@ struct SubsMgr::Pvt
     std::unordered_set<HashX, HashHasher> pendingNotificatons;
 
     std::atomic_int nClientSubsActive{0};
+
+    static constexpr size_t kSubsReserveSize = 16384;
+    Pvt() {
+        subs.reserve(kSubsReserveSize);
+        pendingNotificatons.reserve(kRecommendedPendingNotificationsReserveSize);
+    }
+    /// call this with the lock held
+    void clearPending_nolock() noexcept {
+        decltype(pendingNotificatons) emptySet;
+        pendingNotificatons.swap(emptySet);
+        pendingNotificatons.reserve(kRecommendedPendingNotificationsReserveSize);
+    }
 };
 
 SubsMgr::SubsMgr(const std::shared_ptr<Options> & o, Storage *s, const QString &n)
@@ -74,10 +86,8 @@ void SubsMgr::on_started()
 {
     ThreadObjectMixin::on_started();
     conns += connect(this, &SubsMgr::queueNoLongerEmpty, this, [this]{
-        // Note to self: this slot is called with the p->mut lock held directly so if we add code here that takes that
-        // lock, change this connection to a Qt::QueuedConnection!
         callOnTimerSoonNoRepeat(kNotifTimerIntervalMS, kNotifTimerName, [this]{ doNotifyAllPending(); }, false, Qt::TimerType::PreciseTimer);
-    });
+    }, Qt::QueuedConnection);
     callOnTimerSoon(kRemoveZombiesTimerIntervalMS, kRemoveZombiesTimerName, [this]{ removeZombies(); return true;}, true);
 }
 
@@ -90,19 +100,23 @@ void SubsMgr::on_finished()
 // this runs in our thread
 void SubsMgr::doNotifyAllPending()
 {
+    const auto t0 = Util::getTimeNS();
+    size_t ctr = 0, ctrSH = 0;
     decltype(p->subs) pending;
     {
         LockGuard g(p->mut);
+        pending.reserve(p->pendingNotificatons.size());
         for (const auto & sh : p->pendingNotificatons) {
             if (auto it = p->subs.find(sh); it != p->subs.end()) {
                 pending[it->first] = it->second; // save memory by using it->first instead of 'sh' as the map key
             }
         }
-        p->pendingNotificatons.clear();
+        p->clearPending_nolock();
         emit queueEmpty();
     }
     // at this point we got all the subrefs for the scripthashes that changed.. and the lock is released .. now run through them all and notify each
     for (auto & [sh, sub] : pending) {
+        ++ctrSH;
         {
             LockGuard g(sub->mut);
             if (sub->subscribedClientIds.empty()) {
@@ -126,27 +140,34 @@ void SubsMgr::doNotifyAllPending()
         const bool doemit = !sub->lastStatusNotified.has_value() || sub->lastStatusNotified.value() != status;
         sub->lastStatusNotified = status;
         if (doemit) {
-            Debug() << "Notifying " << sub->subscribedClientIds.size() << " client(s) of status for " << Util::ToHexFast(sh);
+            const auto nClients = sub->subscribedClientIds.size();
+            ctr += nClients;
+            Debug() << "Notifying " << nClients << Util::Pluralize(" client", nClients) << " of status for " << Util::ToHexFast(sh);
             sub->updateTS();
             emit sub->statusChanged(sh, status);
         }
     }
-}
-
-void SubsMgr::enqueueNotification(const HashX &sh) {
-    LockGuard g(p->mut);
-    addNotif_nolock(sh);
-}
-
-std::unique_lock<std::mutex> SubsMgr::grabLock() { return std::unique_lock(p->mut); }
-void SubsMgr::addNotif_nolock(const HashX & sh)
-{
-    if (UNLIKELY(sh.length() != HashLen)) {
-        Warning() << __FUNCTION__ << ": called with a scripthash whose length is not " << HashLen << " (" << Util::ToHexFast(sh) << "), ignoring ... ";
-        return;
+    if (ctr || ctrSH) {
+        const auto elapsedMS = (Util::getTimeNS() - t0)/1e6;
+        Debug() << __func__ << ": " << ctr << Util::Pluralize(" client", ctr) << ", " << ctrSH << Util::Pluralize(" scripthash", ctrSH) << " in " << QString::number(elapsedMS, 'f', 4) << " msec";
     }
+}
+
+void SubsMgr::enqueueNotifications(std::unordered_set<HashX, HashHasher> &s)
+{
+    if (s.empty()) return;
+    LockGuard g(p->mut);
     const bool wasEmpty = p->pendingNotificatons.empty();
-    p->pendingNotificatons.insert(sh);
+    p->pendingNotificatons.merge(s);
+    if (wasEmpty)
+        emit queueNoLongerEmpty();
+}
+void SubsMgr::enqueueNotifications(std::unordered_set<HashX, HashHasher> &&s)
+{
+    if (s.empty()) return;
+    LockGuard g(p->mut);
+    const bool wasEmpty = p->pendingNotificatons.empty();
+    p->pendingNotificatons.merge(std::move(s));
     if (wasEmpty)
         emit queueNoLongerEmpty();
 }

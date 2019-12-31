@@ -33,6 +33,7 @@
 #include <list>
 #include <map>
 
+
 Controller::Controller(const std::shared_ptr<Options> &o)
     : Mgr(nullptr), polltimeMS(int(o->pollTimeSecs * 1000)), options(o)
 {
@@ -96,6 +97,9 @@ void Controller::startup()
                 Fatal() << "INTERNAL ERROR: Controller's creation thread is null; cannot start SrvMgr, exiting!";
                 return;
             }
+
+            masterNotifySubsFlag = true; // permanently latch this to true. notifications enabled.
+
             srvmgr = std::make_unique<SrvMgr>(options, storage, bitcoindmgr);
             // this object will live on our creation thread (normally the main thread)
             srvmgr->moveToThread(origThread);
@@ -380,7 +384,8 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
 struct SynchMempoolTask : public CtlTask
 {
     SynchMempoolTask(Controller *ctl_, std::shared_ptr<Storage> storage)
-        : CtlTask(ctl_, "SynchMempool"), storage(storage) {}
+        : CtlTask(ctl_, "SynchMempool"), storage(storage)
+        { scriptHashesAffected.reserve(SubsMgr::kRecommendedPendingNotificationsReserveSize); }
     ~SynchMempoolTask() override;
     void process() override;
 
@@ -391,6 +396,9 @@ struct SynchMempoolTask : public CtlTask
     DldTxsMap txsDownloaded;
     unsigned expectedNumTxsDownloaded = 0;
     const bool TRACE = Trace::isEnabled(); // set this to true to print more debug
+
+    /// The scriptHashes that were affected by this refresh/synch cycle. Used for notifications.
+    std::unordered_set<HashX, HashHasher> scriptHashesAffected;
 
     void clear() {
         isdlingtxs = false;
@@ -473,10 +481,11 @@ void SynchMempoolTask::processResults()
         emit errored();
         return;
     }
-    std::list<HashX> scriptHashesAffected; // initially we add all of them to this via push_back, then we sort and uniqueify them at the end
+    size_t oldSize = 0, newSize = 0, oldNumAddresses = 0, newNumAddresses = 0;
     {
         auto [mempool, lock] = storage->mutableMempool(); // grab mempool struct exclusively
-        const auto oldSize = mempool.txs.size();
+        oldSize = mempool.txs.size();
+        oldNumAddresses = mempool.hashXTxs.size();
         // first, do new outputs for all tx's, and put the new tx's in the mempool struct
         for (auto & [hash, pair] : txsDownloaded) {
             auto & [tx, ctx] = pair;
@@ -492,7 +501,7 @@ void SynchMempoolTask::processResults()
                     tx->txos[n] = info;
                     tx->hashXs[sh].utxo.insert(n);
                     mempool.hashXTxs[sh].push_back(tx); // save tx to hashx -> tx vector (amortized constant time insert at end -- we will sort and uniqueify this at end of this function)
-                    scriptHashesAffected.push_back(sh);
+                    scriptHashesAffected.insert(sh);
                 }
                 ++n;
             }
@@ -531,14 +540,13 @@ void SynchMempoolTask::processResults()
                     if (TRACE) Debug() << hash.toHex() << " confirmed spend: " << prevTXO.toString() << " " << prevInfo.amount.ToString().c_str();
                 }
                 assert(sh == prevInfo.hashX);
-                mempool.hashXTxs[sh].push_back(tx); // mark this hashX as having been "touched" because of this input
-                scriptHashesAffected.push_back(sh);
+                mempool.hashXTxs[sh].push_back(tx); // mark this hashX as having been "touched" because of this input (note we push dupes here out of order but sort and uniqueify at the end)
+                scriptHashesAffected.insert(sh);
                 ++inNum;
             }
         }
 
-        // now, sort and uniqueify data structures made temporarily inconsistent above
-        Util::sortAndUniqueify(scriptHashesAffected);
+        // now, sort and uniqueify data structures made temporarily inconsistent above (have dupes, are out-of-order)
         for (const auto & sh : scriptHashesAffected) {
             if (auto it = mempool.hashXTxs.find(sh); LIKELY(it != mempool.hashXTxs.end()))
                 Util::sortAndUniqueify<Mempool::TxRefOrdering>(it->second);
@@ -546,14 +554,12 @@ void SynchMempoolTask::processResults()
                 throw InternalError(QString("Unable to find sh %1 in hashXTXs map! FIXME!").arg(QString(sh.toHex())));
         }
 
-        const auto newSize = mempool.txs.size();
-        if (oldSize != newSize && Debug::isEnabled()) {
-            const auto numAddresses = mempool.hashXTxs.size();
-            Controller::printMempoolStatusToLog(newSize, numAddresses, true, true);
-        }
+        newSize = mempool.txs.size();
+        newNumAddresses = mempool.hashXTxs.size();
     } // release mempool lock
-    // TODO here: notify on status change
-    //ctl->notifySubs(scriptHashesAffected)
+    if (oldSize != newSize && Debug::isEnabled()) {
+        Controller::printMempoolStatusToLog(newSize, newNumAddresses, true, true);
+    }
     emit success();
 }
 
@@ -986,7 +992,9 @@ void Controller::process(bool beSilentIfUpToDate)
             if (UNLIKELY(!sm || isTaskDeleted(task) || sm->state != State::SynchingMempool))
                 // task was stopped from underneath us and/or this response is stale.. so return and ignore
                 return;
-            //Debug() << task->objectName() << " success!"; // TODO remove this, do actual stuff
+            if (masterNotifySubsFlag) // this is false until we enable the servers that listen for connections
+                // notify status change for affected sh's
+                storage->subs()->enqueueNotifications(std::move(task->scriptHashesAffected));
             sm->state = State::SynchMempoolFinished;
             AGAIN();
         });
@@ -1099,7 +1107,7 @@ bool Controller::process_VerifyAndAddBlock(PreProcessedBlockPtr ppb)
         const auto nLeft = qMax(sm->endHeight - (sm->ppBlkHtNext-1), 0U);
         const bool saveUndoInfo = int(ppb->height) > (sm->ht - int(storage->configuredUndoDepth()));
 
-        storage->addBlock(ppb, saveUndoInfo, nLeft);
+        storage->addBlock(ppb, saveUndoInfo, nLeft, masterNotifySubsFlag);
 
     } catch (const HeaderVerificationFailure & e) {
         Debug() << "addBlock exception: " << e.what();
@@ -1121,7 +1129,7 @@ void Controller::process_DoUndoAndRetry()
 {
     assert(sm);
     try {
-        storage->undoLatestBlock();
+        storage->undoLatestBlock(masterNotifySubsFlag);
         // . <-- If we get here, rollback was successful.
         // We flag the state to retry, which retries the full download right away
         // (Note: this may eventually lead us to roll back again and again until we reorg to the sufficient depth).
