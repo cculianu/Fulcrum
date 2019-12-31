@@ -59,14 +59,8 @@ namespace Util {
         const auto now = getAbsTimeNS();
         return now - absT0;
     }
-    qint64 getTimeMicros() {
-        return getTimeNS()/1000LL;
-    }
     qint64 getTime() {
         return getTimeNS()/1000000LL;
-    }
-    double getTimeSecs() {
-        return double(getTimeMicros()) / 1e6;
     }
     bool isClockSteady() { return true; }
 #elif defined(Q_OS_WINDOWS)
@@ -91,39 +85,33 @@ namespace Util {
         const auto now = getAbsTimeNS();
         return now - absT0;
     }
-    qint64 getTimeMicros() {
-        return getTimeNS()/1000LL;
-    }
     qint64 getTime() {
         return getTimeNS()/1000000LL;
-    }
-    double getTimeSecs() {
-        return double(getTimeMicros()) / 1e6;
     }
     bool isClockSteady() { return true; }
 #else
     // MacOS or generic platform (on MacOS with clang this happens to be very accurate)
     static const auto t0 = std::chrono::high_resolution_clock::now();
-
     qint64 getTime() {
         const auto now = std::chrono::high_resolution_clock::now();
         return std::chrono::duration_cast<std::chrono::milliseconds>(now - t0).count();
     }
-
     qint64 getTimeNS() {
         const auto now = std::chrono::high_resolution_clock::now();
         return std::chrono::duration_cast<std::chrono::nanoseconds>(now - t0).count();
-    }
-    qint64 getTimeMicros() {
-        return getTimeNS()/1000LL;
-    }
-    double getTimeSecs() {
-        return double(getTimeMicros()) / 1e6;
     }
     bool isClockSteady() {
         return std::chrono::high_resolution_clock::is_steady;
     }
 #endif
+
+    qint64 getTimeMicros() {
+        return getTimeNS()/1000LL;
+    }
+
+    double getTimeSecs() {
+        return double(getTime()) / 1e3;
+    }
 
     namespace Json {
         QVariant parseString(const QString &str, bool expectMap) {
