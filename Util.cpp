@@ -46,11 +46,14 @@ namespace Util {
 #if defined(Q_OS_LINUX)
     static int64_t getAbsTimeNS()
     {
-        struct timespec ts = {0,0};
+        struct timespec ts;
         // Note: CLOCK_MONOTONIC does *not* include the time spent suspended. If we want that, then we can Use
         // CLOCK_BOOTTIME here for that.
         if (clock_gettime(CLOCK_MONOTONIC, &ts)) {
-            Warning() << "clock_gettime returned error: " << strerror(errno);
+            ts = {0, 0};
+            // We can't do a Warning() or Error() here because that would cause infinite recursion.
+            // This is an unlikely and also pretty fatal situation, though, so we must warn
+            std::cerr << "Fatal: clock_gettime for CLOCK_MONOTONIC returned error status: %s" << strerror(errno) << std::endl;
         }
         return int64_t(ts.tv_sec * 1000000000LL) + int64_t(ts.tv_nsec);
     }
