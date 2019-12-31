@@ -27,6 +27,7 @@
 #  include <mach/mach_time.h>
 #elif defined(Q_OS_LINUX)
 #  include <unistd.h>
+#  include <time.h>
 #elif defined(Q_OS_WINDOWS)
 #define WIN32_LEAN_AND_MEAN 1
 #  include <windows.h>
@@ -42,27 +43,30 @@ namespace Util {
         return toks.last();
     }
 
-#ifndef Q_OS_WINDOWS
-    static const auto t0 = std::chrono::high_resolution_clock::now();
-
-    qint64 getTime() {
-        const auto now = std::chrono::high_resolution_clock::now();
-        return std::chrono::duration_cast<std::chrono::milliseconds>(now - t0).count();
+#ifdef Q_OS_LINUX
+    static int64_t getAbsTimeNS()
+    {
+        struct timespec ts = {0,0};
+        // Note: CLOCK_MONOTONIC does *not* include the time spent suspended. If we want that, then we can Use
+        // CLOCK_BOOTTIME here for that.
+        if (clock_gettime(CLOCK_MONOTONIC, &ts)) {
+            Warning() << "clock_gettime returned error: " << strerror(errno);
+        }
+        return int64_t(ts.tv_sec * 1000000000LL) + int64_t(ts.tv_nsec);
     }
-
+    static int64_t absT0 = getAbsTimeNS();
     qint64 getTimeNS() {
-        const auto now = std::chrono::high_resolution_clock::now();
-        return std::chrono::duration_cast<std::chrono::nanoseconds>(now - t0).count();
+        const auto now = getAbsTimeNS();
+        return now - absT0;
     }
-
+    qint64 getTime() {
+        return getTimeNS()/1000000LL;
+    }
     double getTimeSecs() {
         return double(getTime()) / 1000.0;
     }
-
-    bool isClockSteady() {
-        return std::chrono::high_resolution_clock::is_steady;
-    }
-#else
+    bool isClockSteady() { return true; }
+#elif defined(Q_OS_WINDOWS)
     // Windows lacks a decent high resolution clock source on some C++ implementations (such as MinGW). So we
     // query the OS's QPC mechanism, which, on Windows 7+ is very fast to query and guaranteed to be accurate, and also
     // monotocic ("steady").
@@ -85,12 +89,33 @@ namespace Util {
         return now - absT0;
     }
     qint64 getTime() {
-        return getTimeNS()/1000000;
+        return getTimeNS()/1000000LL;
     }
     double getTimeSecs() {
         return double(getTime()) / 1000.0;
     }
     bool isClockSteady() { return true; }
+#else
+    // MacOS or generic platform (on MacOS with clang this happens to be very accurate)
+    static const auto t0 = std::chrono::high_resolution_clock::now();
+
+    qint64 getTime() {
+        const auto now = std::chrono::high_resolution_clock::now();
+        return std::chrono::duration_cast<std::chrono::milliseconds>(now - t0).count();
+    }
+
+    qint64 getTimeNS() {
+        const auto now = std::chrono::high_resolution_clock::now();
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(now - t0).count();
+    }
+
+    double getTimeSecs() {
+        return double(getTime()) / 1000.0;
+    }
+
+    bool isClockSteady() {
+        return std::chrono::high_resolution_clock::is_steady;
+    }
 #endif
 
     namespace Json {
