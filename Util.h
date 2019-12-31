@@ -219,8 +219,9 @@ namespace Util {
     extern QString basename(const QString &);
 
     qint64 getTime(); ///< returns a timestamp in milliseconds
+    qint64 getTimeMicros(); ///< returns a timestamp in microseconds
     qint64 getTimeNS(); ///< returns a timestamp in nanoseconds
-    double getTimeSecs(); ///< returns a timestamp in seconds
+    double getTimeSecs(); ///< returns a timestamp in seconds (resolution is microsecond precision)
     bool isClockSteady(); ///< returns true if the above timestamp clock is steady (monotonic).
 
     /// returns the number of virtual processors on the system

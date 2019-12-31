@@ -59,11 +59,14 @@ namespace Util {
         const auto now = getAbsTimeNS();
         return now - absT0;
     }
+    qint64 getTimeMicros() {
+        return getTimeNS()/1000LL;
+    }
     qint64 getTime() {
         return getTimeNS()/1000000LL;
     }
     double getTimeSecs() {
-        return double(getTime()) / 1000.0;
+        return double(getTimeMicros()) / 1e6;
     }
     bool isClockSteady() { return true; }
 #elif defined(Q_OS_WINDOWS)
@@ -88,11 +91,14 @@ namespace Util {
         const auto now = getAbsTimeNS();
         return now - absT0;
     }
+    qint64 getTimeMicros() {
+        return getTimeNS()/1000LL;
+    }
     qint64 getTime() {
         return getTimeNS()/1000000LL;
     }
     double getTimeSecs() {
-        return double(getTime()) / 1000.0;
+        return double(getTimeMicros()) / 1e6;
     }
     bool isClockSteady() { return true; }
 #else
@@ -108,11 +114,12 @@ namespace Util {
         const auto now = std::chrono::high_resolution_clock::now();
         return std::chrono::duration_cast<std::chrono::nanoseconds>(now - t0).count();
     }
-
-    double getTimeSecs() {
-        return double(getTime()) / 1000.0;
+    qint64 getTimeMicros() {
+        return getTimeNS()/1000LL;
     }
-
+    double getTimeSecs() {
+        return double(getTimeMicros()) / 1e6;
+    }
     bool isClockSteady() {
         return std::chrono::high_resolution_clock::is_steady;
     }
