@@ -1649,14 +1649,14 @@ auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf) const -> H
         if (unconf) {
             auto [mempool, lock] = this->mempool();
             if (auto it = mempool.hashXTxs.find(hashX); it != mempool.hashXTxs.end()) {
-                const auto & txset = it->second;
-                const size_t total = ret.size() + txset.size();
+                const auto & txvec = it->second;
+                const size_t total = ret.size() + txvec.size();
                 if (UNLIKELY(total > MaxHistory)) {
                     throw HistoryTooLarge(QString("History for scripthash %1 exceeds MaxHistory %2 with %3 items!")
                                           .arg(QString(hashX.toHex())).arg(MaxHistory).arg(total));
                 }
                 ret.reserve(total);
-                for (const auto & tx : txset)
+                for (const auto & tx : txvec)
                     ret.emplace_back(HistoryItem{tx->hash, tx->ancestorCount > 1 ? -1 : 0, tx->fee});
             }
         }
@@ -1724,8 +1724,8 @@ auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
                 // grab mempool utxos for scripthash
                 auto [mempool, lock] = this->mempool(); // shared lock
                 if (auto it = mempool.hashXTxs.find(hashX); it != mempool.hashXTxs.end()) {
-                    const auto & txset = it->second;
-                    for (const auto & tx : txset) {
+                    const auto & txvec = it->second;
+                    for (const auto & tx : txvec) {
                         if (!tx) {
                             // defensive programming. should never happen
                             Warning() << "Cannot find tx for sh " << hashX.toHex() << ". FIXME!!";

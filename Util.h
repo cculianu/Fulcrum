@@ -317,6 +317,28 @@ namespace Util {
         return decltype( DeduceVec() )(vec.begin(), vec.end());
     }
 
+    /// Boilerplate to sort a container using Comparator class (defaults to just using operator<), and then
+    /// uniqueify it (remove adjacent dupes).
+    template <typename Comparator = void, typename Container>
+    void sortAndUniqueify(Container &cont, bool shrinkIfSupported = true)
+    {
+        if constexpr(std::is_same_v<std::list<typename Container::value_type>, Container>) {
+            if constexpr (std::is_same_v<Comparator,void>)
+                cont.sort();
+            else
+                cont.sort(Comparator());
+        } else {
+            if constexpr (std::is_same_v<Comparator,void>)
+                std::sort(cont.begin(), cont.end());
+            else
+                std::sort(cont.begin(), cont.end(), Comparator());
+        }
+        auto last = std::unique(cont.begin(), cont.end());
+        cont.erase(last, cont.end());
+        if constexpr (std::is_same_v<std::vector<typename Container::value_type>, Container>)
+            if (shrinkIfSupported) cont.shrink_to_fit();
+    }
+
     /// For each item in Container, reverse each item in-place using std::reverse(item.begin(), item.end()).
     /// Note that each item in the container must have a bidirectional iterator returned from .begin()/.end().
     template <typename Container>

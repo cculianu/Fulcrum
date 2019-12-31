@@ -473,71 +473,87 @@ void SynchMempoolTask::processResults()
         emit errored();
         return;
     }
-    auto [mempool, lock] = storage->mutableMempool(); // grab mempool struct exclusively
-    const auto oldSize = mempool.txs.size();
-    // first, do new outputs for all tx's, and put the new tx's in the mempool struct
-    for (auto & [hash, pair] : txsDownloaded) {
-        auto & [tx, ctx] = pair;
-        assert(hash == tx->hash);
-        mempool.txs[tx->hash] = tx; // save tx right away
-        IONum n = 0;
-        for (const auto & out : ctx->vout) {
-            const auto & script = out.scriptPubKey;
-            if (!BTC::IsOpReturn(script)) {
-                // UTXO only if it's not OP_RETURN -- can't do 'continue' here as that would throw off the 'n' counter
-                HashX sh = BTC::HashXFromCScript(out.scriptPubKey);
-                TXOInfo info{out.nValue, sh, {}, {}};
-                tx->txos[n] = info;
-                tx->hashXs[sh].utxo.insert(n);
-                mempool.hashXTxs[sh].insert(tx); // save tx to hashx -> tx set
+    std::list<HashX> scriptHashesAffected; // initially we add all of them to this via push_back, then we sort and uniqueify them at the end
+    {
+        auto [mempool, lock] = storage->mutableMempool(); // grab mempool struct exclusively
+        const auto oldSize = mempool.txs.size();
+        // first, do new outputs for all tx's, and put the new tx's in the mempool struct
+        for (auto & [hash, pair] : txsDownloaded) {
+            auto & [tx, ctx] = pair;
+            assert(hash == tx->hash);
+            mempool.txs[tx->hash] = tx; // save tx right away
+            IONum n = 0;
+            for (const auto & out : ctx->vout) {
+                const auto & script = out.scriptPubKey;
+                if (!BTC::IsOpReturn(script)) {
+                    // UTXO only if it's not OP_RETURN -- can't do 'continue' here as that would throw off the 'n' counter
+                    HashX sh = BTC::HashXFromCScript(out.scriptPubKey);
+                    TXOInfo info{out.nValue, sh, {}, {}};
+                    tx->txos[n] = info;
+                    tx->hashXs[sh].utxo.insert(n);
+                    mempool.hashXTxs[sh].push_back(tx); // save tx to hashx -> tx vector (amortized constant time insert at end -- we will sort and uniqueify this at end of this function)
+                    scriptHashesAffected.push_back(sh);
+                }
+                ++n;
             }
-            ++n;
         }
-    }
-    // next, do new inputs for all tx's, debiting/crediting either a mempool tx or querying db for the relevant utxo
-    for (auto & [hash, pair] : txsDownloaded) {
-        auto & [tx, ctx] = pair;
-        assert(hash == tx->hash);
-        IONum inNum = 0;
-        for (const auto & in : ctx->vin) {
-            const IONum prevN = IONum(in.prevout.GetN());
-            const TxHash prevTxId = BTC::Hash2ByteArrayRev(in.prevout.GetTxId());
-            const TXO prevTXO{prevTxId, prevN};
-            TXOInfo prevInfo;
-            QByteArray sh; // shallow copy of prevInfo.hashX
-            if (tx->depends.count(prevTxId)) {
-                // prev is a mempool tx
-                auto it = mempool.txs.find(prevTxId);
-                if (it == mempool.txs.end())
-                    throw InternalError(QString("FAILED TO FIND PREVIOUS TX IN MEMPOOL! Fixme! TxHash: %1").arg(QString(prevTxId.toHex())));
-                auto prevTxRef = it->second;
-                assert(bool(prevTxRef));
-                auto it2 = prevTxRef->txos.find(prevN);
-                if (it2 == prevTxRef->txos.end())
-                    throw InternalError(QString("FAILED TO FIND PREVIOUS TXOUTN %1 IN MEMPOOL for TxHash: %2").arg(prevN).arg(QString(prevTxId.toHex())));
-                prevInfo = it2->second;
-                sh = prevInfo.hashX;
-                tx->hashXs[sh].unconfirmedSpends[prevTXO] = prevInfo;
-                prevTxRef->hashXs[sh].utxo.erase(prevN); // remove this spend from utxo set for prevTx in mempool
-                if (TRACE) Debug() << hash.toHex() << " unconfirmed spend: " << prevTXO.toString() << " " << prevInfo.amount.ToString().c_str();
-            } else {
-                // prev is a confirmed tx
-                prevInfo = storage->utxoGetFromDB(prevTXO, true).value(); // will throw if missing
-                sh = prevInfo.hashX;
-                tx->hashXs[sh].confirmedSpends[prevTXO] = prevInfo;
-                if (TRACE) Debug() << hash.toHex() << " confirmed spend: " << prevTXO.toString() << " " << prevInfo.amount.ToString().c_str();
+        // next, do new inputs for all tx's, debiting/crediting either a mempool tx or querying db for the relevant utxo
+        for (auto & [hash, pair] : txsDownloaded) {
+            auto & [tx, ctx] = pair;
+            assert(hash == tx->hash);
+            IONum inNum = 0;
+            for (const auto & in : ctx->vin) {
+                const IONum prevN = IONum(in.prevout.GetN());
+                const TxHash prevTxId = BTC::Hash2ByteArrayRev(in.prevout.GetTxId());
+                const TXO prevTXO{prevTxId, prevN};
+                TXOInfo prevInfo;
+                QByteArray sh; // shallow copy of prevInfo.hashX
+                if (tx->depends.count(prevTxId)) {
+                    // prev is a mempool tx
+                    auto it = mempool.txs.find(prevTxId);
+                    if (it == mempool.txs.end())
+                        throw InternalError(QString("FAILED TO FIND PREVIOUS TX IN MEMPOOL! Fixme! TxHash: %1").arg(QString(prevTxId.toHex())));
+                    auto prevTxRef = it->second;
+                    assert(bool(prevTxRef));
+                    auto it2 = prevTxRef->txos.find(prevN);
+                    if (it2 == prevTxRef->txos.end())
+                        throw InternalError(QString("FAILED TO FIND PREVIOUS TXOUTN %1 IN MEMPOOL for TxHash: %2").arg(prevN).arg(QString(prevTxId.toHex())));
+                    prevInfo = it2->second;
+                    sh = prevInfo.hashX;
+                    tx->hashXs[sh].unconfirmedSpends[prevTXO] = prevInfo;
+                    prevTxRef->hashXs[sh].utxo.erase(prevN); // remove this spend from utxo set for prevTx in mempool
+                    if (TRACE) Debug() << hash.toHex() << " unconfirmed spend: " << prevTXO.toString() << " " << prevInfo.amount.ToString().c_str();
+                } else {
+                    // prev is a confirmed tx
+                    prevInfo = storage->utxoGetFromDB(prevTXO, true).value(); // will throw if missing
+                    sh = prevInfo.hashX;
+                    tx->hashXs[sh].confirmedSpends[prevTXO] = prevInfo;
+                    if (TRACE) Debug() << hash.toHex() << " confirmed spend: " << prevTXO.toString() << " " << prevInfo.amount.ToString().c_str();
+                }
+                assert(sh == prevInfo.hashX);
+                mempool.hashXTxs[sh].push_back(tx); // mark this hashX as having been "touched" because of this input
+                scriptHashesAffected.push_back(sh);
+                ++inNum;
             }
-            assert(sh == prevInfo.hashX);
-            mempool.hashXTxs[sh].insert(tx); // mark this hashX as having been "touched" because of this input
-            ++inNum;
         }
-    }
-    const auto newSize = mempool.txs.size();
-    if (oldSize != newSize && Debug::isEnabled()) {
-        const auto numAddresses = mempool.hashXTxs.size();
-        Controller::printMempoolStatusToLog(newSize, numAddresses, true, true);
-    }
+
+        // now, sort and uniqueify data structures made temporarily inconsistent above
+        Util::sortAndUniqueify(scriptHashesAffected);
+        for (const auto & sh : scriptHashesAffected) {
+            if (auto it = mempool.hashXTxs.find(sh); LIKELY(it != mempool.hashXTxs.end()))
+                Util::sortAndUniqueify<Mempool::TxRefOrdering>(it->second);
+            else
+                throw InternalError(QString("Unable to find sh %1 in hashXTXs map! FIXME!").arg(QString(sh.toHex())));
+        }
+
+        const auto newSize = mempool.txs.size();
+        if (oldSize != newSize && Debug::isEnabled()) {
+            const auto numAddresses = mempool.hashXTxs.size();
+            Controller::printMempoolStatusToLog(newSize, numAddresses, true, true);
+        }
+    } // release mempool lock
     // TODO here: notify on status change
+    //ctl->notifySubs(scriptHashesAffected)
     emit success();
 }
 
