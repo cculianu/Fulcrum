@@ -43,7 +43,7 @@ namespace Util {
         return toks.last();
     }
 
-#ifdef Q_OS_LINUX
+#if defined(Q_OS_LINUX)
     static int64_t getAbsTimeNS()
     {
         struct timespec ts = {0,0};
