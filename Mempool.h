@@ -95,8 +95,11 @@ struct Mempool
     /// ensures an ordering of TxRefs for the set below that are from fewest ancestors -> most ancestors
     struct TxRefOrdering {
         bool operator()(const TxRef &a, const TxRef &b) const {
-            if (a && b)
+            if (a && b) {
+                if (UNLIKELY(a == b))
+                    return false;
                 return *a < *b;
+            }
             else if (!a && b)
                 return true;
             return false;
