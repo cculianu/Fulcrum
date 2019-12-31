@@ -1318,7 +1318,7 @@ auto Controller::debug(const StatsParams &p) const -> Stats // from StatsMixin
             m["tx_hash"] = Util::ToHexFast(item.hash);
             m["height"] = item.height;
             if (item.fee.has_value())
-                m["fee"] = item.fee.value() / item.fee.value().satoshi();
+                m["fee"] = qlonglong(item.fee.value() / item.fee.value().satoshi());
             l.push_back(m);
         }
         ret["sh_debug"] = l;
@@ -1332,7 +1332,7 @@ auto Controller::debug(const StatsParams &p) const -> Stats // from StatsMixin
             m["tx_hash"] = Util::ToHexFast(item.hash);
             m["height"] = item.height;
             m["tx_pos"] = item.tx_pos;
-            m["value"] = item.value / item.value.satoshi();
+            m["value"] = qlonglong(item.value / item.value.satoshi());
             l.push_back(m);
         }
         ret["unspent_debug"] = l;

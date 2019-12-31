@@ -359,17 +359,28 @@ void App::parseArgs()
             if (options->sslCert.isNull())
                 throw BadArgs(QString("Unable to read ssl certificate from %1. Please make sure the file is readable and "
                                       "contains a valid certificate in PEM format.").arg(cert));
-            else
-                Log() << "Loaded SSL certificate: " << options->sslCert.subjectDisplayName() << " "
+            else {
+                QString name;
+#if (QT_VERSION >= QT_VERSION_CHECK(5, 12, 0))
+                // Was added Qt 5.12+
+                name = options->sslCert.subjectDisplayName();
+#else
+                name = options->sslCert.subjectInfo(QSslCertificate::Organization).join(", ");
+#endif
+                Log() << "Loaded SSL certificate: " << name << " "
                       << options->sslCert.subjectInfo(QSslCertificate::SubjectInfo::EmailAddress).join(",")
                       //<< " self-signed: " << (options->sslCert.isSelfSigned() ? "YES" : "NO")
                       << " expires: " << (options->sslCert.expiryDate().toString("ddd MMMM d yyyy hh:mm:ss"));
+            }
             if (options->sslKey.isNull())
                 throw BadArgs(QString("Unable to read private key from %1. Please make sure the file is readable and "
                                       "contains a single RSA private key in PEM format.").arg(key));
             constexpr auto KeyAlgoStr = [](QSsl::KeyAlgorithm a) {
                 switch (a) {
+#if (QT_VERSION >= QT_VERSION_CHECK(5, 12, 0))
+                // This was added in Qt 5.12+
                 case QSsl::KeyAlgorithm::Dh: return "DH";
+#endif
                 case QSsl::KeyAlgorithm::Ec: return "EC";
                 case QSsl::KeyAlgorithm::Dsa: return "DSA";
                 case QSsl::KeyAlgorithm::Rsa: return "RSA";

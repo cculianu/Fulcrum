@@ -1714,7 +1714,7 @@ auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
             rocksdb::Slice key;
             bool didReserveIota = false;
             TxNum maxTxNumSeen = 0;
-            std::list<const CompactTXO> ctxoList;
+            std::list<CompactTXO> ctxoList;
             size_t ctxoListSize = 0;
             // we do it this way as two separate loops in order to avoid the expensive heightForTxNum lookups below in
             // the case where the history is huge.
