@@ -58,7 +58,7 @@ QString AbstractTcpServer::hostPort() const
 
 QString AbstractTcpServer::prettyName() const
 {
-    return QString("Srv %1").arg(hostPort()).arg(id);
+    return QString("Srv %1").arg(hostPort());
 }
 
 void AbstractTcpServer::tryStart(ulong timeout_ms)
