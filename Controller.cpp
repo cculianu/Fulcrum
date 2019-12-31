@@ -457,7 +457,7 @@ void Controller::printMempoolStatusToLog(size_t newSize, size_t numAddresses, bo
     static std::atomic_size_t oldSize = 0, oldNumAddresses = 0;
     static std::atomic<double> lastTS = 0.;
     static std::mutex mut;
-    constexpr double interval = 30.;
+    constexpr double interval = 60.; // print once per minute if changed. (TODO: make this configurable?)
     double now = Util::getTimeSecs();
     std::lock_guard g(mut);
     if (force || (newSize > 0 && (oldSize != newSize || oldNumAddresses != numAddresses) && now - lastTS >= interval)) {
