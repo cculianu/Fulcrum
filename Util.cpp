@@ -27,6 +27,9 @@
 #  include <mach/mach_time.h>
 #elif defined(Q_OS_LINUX)
 #  include <unistd.h>
+#elif defined(Q_OS_WINDOWS)
+#define WIN32_LEAN_AND_MEAN 1
+#  include <windows.h>
 #endif
 
 #include <iostream>
@@ -39,6 +42,7 @@ namespace Util {
         return toks.last();
     }
 
+#ifndef Q_OS_WINDOWS
     static const auto t0 = std::chrono::high_resolution_clock::now();
 
     qint64 getTime() {
@@ -58,6 +62,36 @@ namespace Util {
     bool isClockSteady() {
         return std::chrono::high_resolution_clock::is_steady;
     }
+#else
+    // Windows lacks a decent high resolution clock source on some C++ implementations (such as MinGW). So we
+    // query the OS's QPC mechanism, which, on Windows 7+ is very fast to query and guaranteed to be accurate, and also
+    // monotocic ("steady").
+    static int64_t getAbsTimeNS()
+    {
+        static __int64 freq = 0;
+        __int64 ct, factor;
+
+        if (!freq) {
+            QueryPerformanceFrequency((LARGE_INTEGER *)&freq);
+        }
+        QueryPerformanceCounter((LARGE_INTEGER *)&ct);   // reads the current time (in system units)
+        factor = 1000000000LL/freq;
+        if (factor <= 0) factor = 1;
+        return int64_t(ct * factor);
+    }
+    static qint64 absT0 = qint64(getAbsTimeNS()); // initializes static data inside getAbsTimeNS() once at startup in main thread.
+    qint64 getTimeNS() {
+        const auto now = getAbsTimeNS();
+        return now - absT0;
+    }
+    qint64 getTime() {
+        return getTimeNS()/1000000;
+    }
+    double getTimeSecs() {
+        return double(getTime()) / 1000.0;
+    }
+    bool isClockSteady() { return true; }
+#endif
 
     namespace Json {
         QVariant parseString(const QString &str, bool expectMap) {
