@@ -204,7 +204,7 @@ private:
     void rpc_blockchain_scripthash_get_history(Client *, const RPC::Message &); // fully implemented
     void rpc_blockchain_scripthash_get_mempool(Client *, const RPC::Message &); // fully implemented
     void rpc_blockchain_scripthash_listunspent(Client *, const RPC::Message &); // fully implemented
-    void rpc_blockchain_scripthash_subscribe(Client *, const RPC::Message &); // stub implementation returning immediate status -- status updates not implemented yet
+    void rpc_blockchain_scripthash_subscribe(Client *, const RPC::Message &); // fully implemented
     void rpc_blockchain_scripthash_unsubscribe(Client *, const RPC::Message &); // fully implemented
     // transaction
     void rpc_blockchain_transaction_broadcast(Client *, const RPC::Message &); // fully implemented
