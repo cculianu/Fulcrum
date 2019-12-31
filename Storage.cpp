@@ -1761,15 +1761,16 @@ auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
                             Warning() << "Cannot find tx for sh " << hashX.toHex() << ". FIXME!!";
                             continue;
                         }
-                        if (auto it2 = tx->hashXs.find(hashX); it2 != tx->hashXs.end()) {
+                        if (auto it2 = tx->hashXs.find(hashX); LIKELY(it2 != tx->hashXs.end())) {
                             const auto & ioinfo = it2->second;
                             for (const auto ionum : ioinfo.utxo) {
-                                if (auto it3 = tx->txos.find(ionum); it3 != tx->txos.end()) {
-                                    const auto & txoinfo = it3->second;
+                                if (decltype(tx->txos.cbegin()) it3;
+                                        LIKELY( ionum < tx->txos.size() && (it3 = tx->txos.cbegin() + ionum)->isValid() ))
+                                {
                                     ret.emplace_back(UnspentItem{
                                         { tx->hash, 0 /* always put 0 for height here */, tx->fee }, // base HistoryItem
                                         ionum, // .tx_pos
-                                        txoinfo.amount,  // .value
+                                        it3->amount,  // .value
                                         TxNum(1) + maxTxNumSeen + TxNum(tx->ancestorCount), // .txNum (this is fudged for sorting at the end properly)
                                     });
                                     if (UNLIKELY(ret.size() > MaxHistory)) {
@@ -1782,6 +1783,9 @@ auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
                                     continue;
                                 }
                             }
+                        } else {
+                            // defensive programming. should never happen
+                            Warning() << "Cannot find scripthash " << hashX.toHex() << " in tx 'hashX -> IOInfo' map for tx " << tx->hash.toHex() << ". FIXME!";
                         }
                     }
                 }
@@ -1853,11 +1857,14 @@ auto Storage::getBalance(const HashX &hashX) const -> std::pair<bitcoin::Amount,
                     for (const auto & [txo, txoinfo] : info.confirmedSpends)
                         spends += txoinfo.amount;
                     for (const auto ionum : info.utxo) {
-                        auto it3 = tx->txos.find(ionum);
-                        if (it3 == tx->txos.end())
-                            throw InternalError(QString("scripthash %1 lists tx %2, which then lacks the TXO IONum %3 for said hashX! FIXM!")
+                        if (decltype(tx->txos.cbegin()) it3; UNLIKELY( ionum >= tx->txos.size()
+                                                                       || !(it3 = tx->txos.cbegin() + ionum)->isValid()) )
+                        {
+                            throw InternalError(QString("scripthash %1 lists tx %2, which then lacks a valid TXO IONum %3 for said hashX! FIXME!")
                                                 .arg(QString(hashX.toHex())).arg(QString(tx->hash.toHex())).arg(ionum));
-                        utxos += it3->second.amount;
+                        } else {
+                            utxos += it3->amount;
+                        }
                     }
                 }
                 ret.second = utxos - spends; // note this may not be MoneyRange (may be negative), which is ok.

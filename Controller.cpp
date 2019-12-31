@@ -492,19 +492,28 @@ void SynchMempoolTask::processResults()
             assert(hash == tx->hash);
             mempool.txs[tx->hash] = tx; // save tx right away
             IONum n = 0;
+            const auto numTxo = ctx->vout.size();
+            if (LIKELY(tx->txos.size() != numTxo)) {
+                // we do it this way (reserve then resize) to avoid the automatic 2^N prealloc of normal vector .resize()
+                tx->txos.reserve(numTxo);
+                tx->txos.resize(numTxo);
+            }
             for (const auto & out : ctx->vout) {
                 const auto & script = out.scriptPubKey;
                 if (!BTC::IsOpReturn(script)) {
                     // UTXO only if it's not OP_RETURN -- can't do 'continue' here as that would throw off the 'n' counter
                     HashX sh = BTC::HashXFromCScript(out.scriptPubKey);
-                    TXOInfo info{out.nValue, sh, {}, {}};
-                    tx->txos[n] = info;
+                    TXOInfo &txoInfo = tx->txos[n];
+                    txoInfo = TXOInfo{out.nValue, sh, {}, {}};
                     tx->hashXs[sh].utxo.insert(n);
                     mempool.hashXTxs[sh].push_back(tx); // save tx to hashx -> tx vector (amortized constant time insert at end -- we will sort and uniqueify this at end of this function)
                     scriptHashesAffected.insert(sh);
+                    assert(txoInfo.isValid());
                 }
                 ++n;
             }
+            assert(n == numTxo);
+            // . <-- at this point the .txos vec is built, with everything isValid() except for the OP_RETURN outs, which are all !isValid()
         }
         // next, do new inputs for all tx's, debiting/crediting either a mempool tx or querying db for the relevant utxo
         for (auto & [hash, pair] : txsDownloaded) {
@@ -521,13 +530,15 @@ void SynchMempoolTask::processResults()
                     // prev is a mempool tx
                     auto it = mempool.txs.find(prevTxId);
                     if (it == mempool.txs.end())
-                        throw InternalError(QString("FAILED TO FIND PREVIOUS TX IN MEMPOOL! Fixme! TxHash: %1").arg(QString(prevTxId.toHex())));
+                        throw InternalError(QString("FAILED TO FIND PREVIOUS TX IN MEMPOOL! Fixme! TxHash: %1")
+                                            .arg(QString(prevTxId.toHex())));
                     auto prevTxRef = it->second;
                     assert(bool(prevTxRef));
-                    auto it2 = prevTxRef->txos.find(prevN);
-                    if (it2 == prevTxRef->txos.end())
-                        throw InternalError(QString("FAILED TO FIND PREVIOUS TXOUTN %1 IN MEMPOOL for TxHash: %2").arg(prevN).arg(QString(prevTxId.toHex())));
-                    prevInfo = it2->second;
+                    if (prevN >= prevTxRef->txos.size()
+                            || !(prevInfo = prevTxRef->txos[prevN]).isValid())
+                        // defensive programming paranoia
+                        throw InternalError(QString("FAILED TO FIND A VALID PREVIOUS TXOUTN %1 IN MEMPOOL for TxHash: %2")
+                                            .arg(prevN).arg(QString(prevTxId.toHex())));
                     sh = prevInfo.hashX;
                     tx->hashXs[sh].unconfirmedSpends[prevTXO] = prevInfo;
                     prevTxRef->hashXs[sh].utxo.erase(prevN); // remove this spend from utxo set for prevTx in mempool
@@ -572,7 +583,7 @@ void SynchMempoolTask::doDLNextTx()
         return;
     } else {
         tx = it->second;
-        txsNeedingDownload.erase(it); // pop it off the front
+        it = txsNeedingDownload.erase(it); // pop it off the front
     }
     assert(bool(tx));
     const auto hashHex = Util::ToHexFast(tx->hash);
@@ -1353,8 +1364,18 @@ auto Controller::debug(const StatsParams &p) const -> Stats // from StatsMixin
                 };
             };
             QVariantMap txos;
-            for (const auto & [num, info] : tx->txos) {
-                txos[QString::number(num)] = TXOInfo2Map(info);
+            IONum num = 0;
+            for (const auto & info : tx->txos) {
+                QVariantMap infoMap;
+                if (info.isValid())
+                    infoMap = TXOInfo2Map(info);
+                else
+                    infoMap = QVariantMap{
+                        { "amount" , QVariant() },
+                        { "scriptHash", QVariant() },
+                        { "comment", "OP_RETURN output not indexed"},
+                    };
+                txos[QString::number(num++)] = infoMap;
             }
             m["txos"] = txos;
             QVariantMap hxs;

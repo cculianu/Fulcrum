@@ -906,8 +906,12 @@ void Server::rpc_blockchain_transaction_broadcast(Client *c, const RPC::Message 
     QByteArray rawtxhex = l.front().toString().left(kMaxTxHex).toUtf8(); // limit raw hex to sane length.
     // no need to validate hex here -- bitcoind does validation for us!
     generic_async_to_bitcoind(c, m.id, "sendrawtransaction", QVariantList{ rawtxhex },
-        // use the default success func, which just echoes the bitcoind reply to the client
-        BitcoinDSuccessFunc(),
+        // print to log, echo bitcoind's reply to client
+        [size=rawtxhex.length()/2, cid = c->id](const RPC::Message & reply){
+            const QVariant ret = reply.result();
+            Log() << "Broadcast tx for client " << cid << ", size: " << size << " bytes, response: " << ret.toString();
+            return ret;
+        },
         // error func, throw an RPCError that's formatted in a particular way
         [](const RPC::Message & errResponse) {
             throw RPCError(QString("the transaction was rejected by network rules.\n\n"

@@ -54,8 +54,11 @@ struct Mempool
         std::unordered_set<TxHash, HashHasher> depends, ///< this is fixed
                                                spentBy; ///< this may change as we refresh the mempool
 
-        ///< these are all the txos in this tx. Once set-up, this doesn't change (unlike IOInfo.utxo)
-        std::map<IONum, TXOInfo> txos;
+        /// These are all the txos in this tx. Once set-up, this doesn't change (unlike IOInfo.utxo).
+        /// Note that this vector is always sized to the number of txouts in the tx. It may, however, contain !isValid
+        /// txo entries if an entry was an OP_RETURN (and thus was not indexed with a scripthash).  Code using this
+        /// vector should check if txos[i].isValid().
+        std::vector<TXOInfo> txos;
 
         struct IOInfo {
             /// spends. .confirmedSpends here affects get_balance.
@@ -70,7 +73,7 @@ struct Mempool
             /// the mempool evolves if new descendants appear that spend these txos (those descendants will list the
             /// item that gets deleted from here in their own IOInfo::unconfirmedSpends map).
             /// + Items here get _added_ to the "unconfirmed" balance in RPC get_balance.
-            std::set<IONum> utxo; ///< ordered IONums pointing into the txos map declared above
+            std::set<IONum> utxo; ///< ordered IONums pointing into the txos vector declared above
         };
 
         bool operator<(const Tx &o) const {
@@ -86,6 +89,7 @@ struct Mempool
             return hash < o.hash;
         }
 
+        /// This should always contain all the HashX's involved in this tx.
         robin_hood::unordered_node_map<HashX, IOInfo, HashHasher> hashXs;
     };
 
