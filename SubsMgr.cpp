@@ -105,14 +105,18 @@ void SubsMgr::doNotifyAllPending()
     decltype(p->subs) pending;
     {
         LockGuard g(p->mut);
-        pending.reserve(p->pendingNotificatons.size());
-        for (const auto & sh : p->pendingNotificatons) {
-            if (auto it = p->subs.find(sh); it != p->subs.end()) {
-                pending[it->first] = it->second; // save memory by using it->first instead of 'sh' as the map key
+        const bool pendingWasEmpty = p->pendingNotificatons.empty();
+        if (!pendingWasEmpty && !p->subs.empty()) {
+            pending.reserve(std::min(p->pendingNotificatons.size(), p->subs.size()));
+            for (const auto & sh : p->pendingNotificatons) {
+                if (auto it = p->subs.find(sh); it != p->subs.end()) {
+                    pending[it->first] = it->second; // save memory by using it->first instead of 'sh' as the map key
+                }
             }
         }
         p->clearPending_nolock();
-        emit queueEmpty();
+        if (!pendingWasEmpty)
+            emit queueEmpty();
     }
     // at this point we got all the subrefs for the scripthashes that changed.. and the lock is released .. now run through them all and notify each
     for (auto & [sh, sub] : pending) {
