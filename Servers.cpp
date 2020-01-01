@@ -874,6 +874,7 @@ void Server::rpc_blockchain_scripthash_subscribe(Client *c, const RPC::Message &
             // TODO: send the computed value back to the SubsMgr somehow here? (This is tricky because race conditions)
             QVariant ret;
             auto status = storage->subs()->getFullStatus(sh);
+            storage->subs()->maybeCacheStatusResult(sh, status);
             if (!status.isEmpty()) // if empty we return `null`, otherwise we return hex encoded bytes as the immediate status.
                 ret = Util::ToHexFast(status);
             return ret;

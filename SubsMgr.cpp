@@ -125,6 +125,7 @@ void SubsMgr::doNotifyAllPending()
                 // dupe notifications (if status didn't change). Since we are skipping a notification, we must clear
                 // it to invalidate it.
                 sub->lastStatusNotified.reset();
+                sub->cachedStatus.reset(); // forget the cached status as it is now very definitely wrong.
                 continue;
             }
         }
@@ -138,7 +139,9 @@ void SubsMgr::doNotifyAllPending()
         // below emit sub->statusChanged(...) will just be a no-op.
         LockGuard g(sub->mut);
         const bool doemit = !sub->lastStatusNotified.has_value() || sub->lastStatusNotified.value() != status;
+        // we basically cache 2 statuses but they are implicitly shared copies of the same memory so it's ok.
         sub->lastStatusNotified = status;
+        sub->cachedStatus = status;
         if (doemit) {
             const auto nClients = sub->subscribedClientIds.size();
             ctr += nClients;
@@ -238,7 +241,7 @@ auto SubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &sh, const StatusCal
         }
         // Always copy the last known StatusHash to caller. This is guaranteed to either be a recent status since the
         // last notification sent (if known), or !has_value if not known.
-        ret.second = sub->lastStatusNotified;
+        ret.second = sub->cachedStatus;
         sub->updateTS(); // our basic 'mtime'
         auto conn = QObject::connect(sub.get(), &Subscription::statusChanged, c, notifyCB, Qt::QueuedConnection); // QueuedConnection paranoia in case client 'c' "lives" in our thread
         if (UNLIKELY(!conn))
@@ -248,6 +251,19 @@ auto SubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &sh, const StatusCal
     const auto elapsed = Util::getTimeNS() - t0;
     Trace() << "subscribed " << Util::ToHexFast(sh) << " in " << QString::number(elapsed/1e6, 'f', 4) << " msec";
     return ret;
+}
+
+void SubsMgr::maybeCacheStatusResult(const HashX &sh, const StatusHash &status)
+{
+    if (status.length() != HashLen && !status.isEmpty())
+        // we only allow empty (null) or 32 bytes.. otherwise reject
+        return;
+    SubRef sub = findExistingSubRef(sh);
+    if (sub) {
+        LockGuard g(sub->mut);
+        if (!sub->lastStatusNotified.has_value() && !sub->cachedStatus.has_value())
+            sub->cachedStatus = status;
+    }
 }
 
 bool SubsMgr::unsubscribe(RPC::ConnectionBase *c, const HashX &sh)

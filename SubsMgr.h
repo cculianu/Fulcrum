@@ -52,11 +52,18 @@ protected:
 
     std::mutex mut; ///< this mutex guards the below data structures.
 
-    const HashX scriptHash; ///< This is typically an implicitly shared copy of the same bytes as in the map key pointing to this instance.
+    const HashX scriptHash; ///< This is typically an implicitly shared copy of the same bytes as in the map key pointing to this instance (thus it's cheap to keep around here too)
     std::unordered_set<quint64> subscribedClientIds; ///< this is atomically updated as clients subscribe/unsubscribe or as they are deleted/disconnected
     /// The last status sent out as a notification. If it has_value, it's guaranteed to be the most recent one announced
     /// to clients, so it is suitable for use in the respone to e.g. blockchain.scripthash.subscribe (iff has_value).
     std::optional<StatusHash> lastStatusNotified;
+    /// The last status that was computed as the result of a blockchain.scripthash.subscribe RPC call.
+    /// This status is returned as the immediate result for subsequent .subscribe calls after the first client
+    /// subscribes (as a performance optimization).  This value is correctly maintained by the notification mechanism
+    /// in collaboration with Servers.cpp.  In rare cases it is not the most recent possible status since it is a
+    /// slightly delayed value -- but that's ok as a future notification to a client will rectify the situation with
+    /// the most up-to-date status in the near future anyway.
+    std::optional<StatusHash> cachedStatus;
     /// The last time this sub was accessed in milliseconds (Util::getTime()). If the ts goes beyond 1 minute in the
     /// past, and it has no clients attached, its entry may be removed.
     int64_t tsMsec = Util::getTime();
@@ -136,6 +143,10 @@ public:
     /// Note that this implicitly will take the Storage "blocksLock" as a shared lock -- so bear that in mind if calling
     /// this from `Storage` with that lock already held.
     StatusHash getFullStatus(const HashX &scriptHash) const;
+
+    /// Thread-safe.  Client calls this to maybe save the status hash it just got from getFullStatus. We don't always
+    /// take the value and cache it -- only under very specific conditions.
+    void maybeCacheStatusResult(const HashX &, const StatusHash &);
 
     /// Thread-safe. We do it this way because it's the fastest approack (uses C++17 unordered_set:::merge). After this
     /// call, s is modified and contains only the elements that were already pending (thus were not enqueued as they
