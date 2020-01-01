@@ -41,7 +41,7 @@ Controller::Controller(const std::shared_ptr<Options> &o)
     _thread.setObjectName(objectName());
 }
 
-Controller::~Controller() { Debug("%s", __FUNCTION__); cleanup(); }
+Controller::~Controller() { Debug() << __func__; cleanup(); }
 
 void Controller::startup()
 {
