@@ -692,6 +692,7 @@ void SynchMempoolTask::doGetRawMempool()
                 if (TRACE) Debug() << "New mempool tx: " << hash.toHex();
                 ++newCt;
                 tx = std::make_shared<Mempool::Tx>();
+                tx->hashXs.max_load_factor(1.0); // hopefully this will save some memory by expicitly setting it to 1.0
                 tx->hash = hash;
                 tx->ordinal = mempool.nextOrdinal++;
                 tx->sizeBytes = m.value("size", 0).toUInt();
