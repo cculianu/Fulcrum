@@ -16,8 +16,7 @@
 // along with this program (see LICENSE.txt).  If not, see
 // <https://www.gnu.org/licenses/>.
 //
-#ifndef CONTROLLER_H
-#define CONTROLLER_H
+#pragma once
 
 #include "BitcoinD.h"
 #include "BlockProc.h"
@@ -192,5 +191,3 @@ protected:
 
     Controller * const ctl;  ///< initted in c'tor. Is always valid since all tasks' lifecycles are managed by the Controller.
 };
-
-#endif // CONTROLLER_H

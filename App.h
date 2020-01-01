@@ -16,8 +16,7 @@
 // along with this program (see LICENSE.txt).  If not, see
 // <https://www.gnu.org/licenses/>.
 //
-#ifndef APP_H
-#define APP_H
+#pragma once
 
 #include <QCoreApplication>
 
@@ -74,5 +73,3 @@ private:
 };
 
 inline App *app() { return dynamic_cast<App *>(qApp); }
-
-#endif // APP_H

@@ -16,8 +16,7 @@
 // along with this program (see LICENSE.txt).  If not, see
 // <https://www.gnu.org/licenses/>.
 //
-#ifndef SRVMGR_H
-#define SRVMGR_H
+#pragma once
 
 #include "Mgr.h"
 #include "Options.h"
@@ -58,5 +57,3 @@ private:
     std::shared_ptr<BitcoinDMgr> bitcoindmgr;
     std::list<std::unique_ptr<Server>> servers;
 };
-
-#endif // SRVMGR_H

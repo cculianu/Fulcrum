@@ -16,8 +16,7 @@
 // along with this program (see LICENSE.txt).  If not, see
 // <https://www.gnu.org/licenses/>.
 //
-#ifndef ABSTRACTCONN_H
-#define ABSTRACTCONN_H
+#pragma once
 
 #include "Common.h"
 #include "Mixins.h"
@@ -115,5 +114,3 @@ private slots:
     void on_socketState(QAbstractSocket::SocketState);
     void slot_on_readyRead(); ///< calls virtual method on_readyRead for us -- I was paranoid about Qt signal/slot binding semantics and prefer to call from within a function explicitly, hence this redundant method.
 };
-
-#endif // ABSTRACTCONN_H

@@ -16,8 +16,7 @@
 // along with this program (see LICENSE.txt).  If not, see
 // <https://www.gnu.org/licenses/>.
 //
-#ifndef MIXINS_H
-#define MIXINS_H
+#pragma once
 
 #include "Util.h"
 
@@ -85,17 +84,17 @@ protected:
 /// Mixin for an object that has an app-global id associated with it.
 /// Used by the various AbstractClient subclasses because we need to keep
 /// track of who sent what when, and it's more useful to work with ids rather
-/// than direct pointers, for various reasons (also ElectrumX itself uses Ids to identify
-/// messages).
+/// than direct pointers, for various reasons (these ids are also used by JSON
+/// RPC messages in this application).
 class IdMixin
 {
 public:
     //IdMixin() = delete; // <-- this is implicitly the case because we have a const data member.
     inline IdMixin(const quint64 id) : id(id) {}
 
-    const quint64 id;  /// derived classes should set this at construction by calling our c'tor
+    const quint64 id;  ///< derived classes should set this at construction by calling our c'tor
 
-    static quint64 newId(); /// convenience method: calls app()->newId()
+    static quint64 newId(); ///< convenience method: calls app()->newId()
 };
 
 
@@ -106,7 +105,8 @@ public:
 /// true if it wants the timer to fire again in the future, or false to delete it
 /// using deleteLater.  The typical pattern for this is to queue up a maintenance task
 /// on a named timer -- a task that may be queued up many times rapidly but you only
-/// need it to run periodically (eg expiring a cache, etc).  See EXMgr.cpp and Controller.cpp
+/// need it to run periodically (eg expiring a cache, etc).  See SubsMgr.cpp and
+/// Controller.cpp for example usages.
 class TimersByNameMixin : public virtual QObjectMixin
 {
 public:
@@ -169,6 +169,7 @@ protected:
 
 
 /// A mixin for Mgr and AbstractConnection and other classes that can return stats.
+/// Used by the optional /stats and /debug HTTP endpoints.
 class StatsMixin : public virtual QObjectMixin
 {
 public:
@@ -200,7 +201,7 @@ protected:
 /// A mixin for a QObject that may need to call process() on itself repeatedly.
 /// The utility function AGAIN() is provided to schedule process() to run in the
 /// event loop ASAP.
-/// Used in Controller.h
+/// Used in Controller.h/Controller.cpp
 class ProcessAgainMixin : virtual public QObjectMixin
 {
 public:
@@ -209,5 +210,3 @@ protected:
     virtual void process() = 0;
     void AGAIN(int when_ms=0) { QTimer::singleShot(qMax(0, when_ms), qobj(), [this]{process();}); }
 };
-
-#endif // MIXINS_H

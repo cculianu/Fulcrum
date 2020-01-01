@@ -16,8 +16,7 @@
 // along with this program (see LICENSE.txt).  If not, see
 // <https://www.gnu.org/licenses/>.
 //
-#ifndef COMMON_H
-#define COMMON_H
+#pragma once
 
 #include <cstdint>
 #include <exception>
@@ -47,4 +46,3 @@ inline constexpr bool isReleaseBuild() { return false; }
 #  define VERSION_EXTRA "(Release)"
 inline constexpr bool isReleaseBuild() { return true; }
 #endif
-#endif // COMMON_H

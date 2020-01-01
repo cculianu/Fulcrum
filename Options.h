@@ -16,8 +16,7 @@
 // along with this program (see LICENSE.txt).  If not, see
 // <https://www.gnu.org/licenses/>.
 //
-#ifndef OPTIONS_H
-#define OPTIONS_H
+#pragma once
 
 #include <QHostAddress>
 #include <QList>
@@ -57,5 +56,3 @@ struct Options {
     /// bitcoin poll time interval. This value will always be in the range [minPollTimeSecs, maxPollTimeSecs] aka [1, 30]
     unsigned pollTimeSecs = defaultPollTimeSecs;
 };
-
-#endif // OPTIONS_H

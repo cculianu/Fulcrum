@@ -16,13 +16,13 @@
 // along with this program (see LICENSE.txt).  If not, see
 // <https://www.gnu.org/licenses/>.
 //
+#pragma once
 
 // ---
 // See the large comment at the end of this file for an overview of the
 // rocksdb database layout used by this program.
 // ---
 
-#pragma once
 
 #include "BlockProc.h"
 #include "Merkle.h"

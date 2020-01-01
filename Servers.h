@@ -16,8 +16,7 @@
 // along with this program (see LICENSE.txt).  If not, see
 // <https://www.gnu.org/licenses/>.
 //
-#ifndef SERVERS_H
-#define SERVERS_H
+#pragma once
 
 #include "Common.h"
 #include "Mixins.h"
@@ -304,5 +303,3 @@ protected:
     Server *srv;
     friend class Server;
 };
-
-#endif // SERVERS_H

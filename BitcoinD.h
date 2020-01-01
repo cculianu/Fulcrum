@@ -16,8 +16,7 @@
 // along with this program (see LICENSE.txt).  If not, see
 // <https://www.gnu.org/licenses/>.
 //
-#ifndef BITCOIND_H
-#define BITCOIND_H
+#pragma once
 
 #include "Mixins.h"
 #include "Mgr.h"
@@ -161,4 +160,3 @@ namespace BitcoinDMgrHelper {
         void fail(const RPC::Message::Id &origId, const QString & failureReason);
     };
 }
-#endif // BITCOIND_H

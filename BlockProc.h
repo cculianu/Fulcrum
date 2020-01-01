@@ -16,8 +16,7 @@
 // along with this program (see LICENSE.txt).  If not, see
 // <https://www.gnu.org/licenses/>.
 //
-#ifndef MY_BLOCKPROC_H
-#define MY_BLOCKPROC_H
+#pragma once
 
 #include "BTC.h"
 #include "BlockProcTypes.h"
@@ -178,6 +177,3 @@ struct PreProcessedBlock
 protected:
     static const TxHash nullhash;
 };
-
-
-#endif // MY_BLOCKPROC_H

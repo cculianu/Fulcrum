@@ -16,8 +16,7 @@
 // along with this program (see LICENSE.txt).  If not, see
 // <https://www.gnu.org/licenses/>.
 //
-#ifndef BTC_H
-#define BTC_H
+#pragma once
 
 #include "Util.h"
 
@@ -174,5 +173,3 @@ namespace BTC
     static constexpr unsigned MaxReorgDepth = 10;
 
 } // end namespace
-
-#endif // BTC_H

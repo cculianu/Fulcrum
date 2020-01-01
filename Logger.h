@@ -16,8 +16,7 @@
 // along with this program (see LICENSE.txt).  If not, see
 // <https://www.gnu.org/licenses/>.
 //
-#ifndef LOGGER_H
-#define LOGGER_H
+#pragma once
 
 #include <QObject>
 #include <QString>
@@ -72,5 +71,3 @@ public:
     using ConsoleLogger::ConsoleLogger;
 #endif
 };
-
-#endif // LOGGER_H

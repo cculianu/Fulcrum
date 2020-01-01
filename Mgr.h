@@ -16,8 +16,7 @@
 // along with this program (see LICENSE.txt).  If not, see
 // <https://www.gnu.org/licenses/>.
 //
-#ifndef MMMGR_H
-#define MMMGR_H
+#pragma once
 
 #include "Mixins.h"
 
@@ -37,4 +36,3 @@ public:
     virtual void cleanup() = 0;
 };
 
-#endif // MMMGR_H

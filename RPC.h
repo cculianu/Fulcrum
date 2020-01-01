@@ -16,8 +16,7 @@
 // along with this program (see LICENSE.txt).  If not, see
 // <https://www.gnu.org/licenses/>.
 //
-#ifndef FULCRUM_RPC_H
-#define FULCRUM_RPC_H
+#pragma once
 
 #include "AbstractConnection.h"
 #include "Util.h"
@@ -378,5 +377,3 @@ namespace RPC {
 /// So that Qt signal/slots work with this type.  Metatypes are also registered at startup via qRegisterMetatype
 Q_DECLARE_METATYPE(RPC::Message);
 Q_DECLARE_METATYPE(RPC::Message::Id);
-
-#endif // FULCRUM_RPC_H

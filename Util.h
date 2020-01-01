@@ -16,8 +16,7 @@
 // along with this program (see LICENSE.txt).  If not, see
 // <https://www.gnu.org/licenses/>.
 //
-#ifndef UTIL_H
-#define UTIL_H
+#pragma once
 
 #include "Common.h"
 #include <QtCore>
@@ -801,5 +800,3 @@ struct RAII : public Defer<std::function<void()>> {
 // helper type for std::visit (see RPC.cpp where we use this crazy C++17 thing)
 template<class... Ts> struct Overloaded : Ts... { using Ts::operator()...; };
 template<class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
-
-#endif // UTIL_H
