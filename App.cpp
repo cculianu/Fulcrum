@@ -377,8 +377,8 @@ void App::parseArgs()
                                       "contains a single RSA private key in PEM format.").arg(key));
             constexpr auto KeyAlgoStr = [](QSsl::KeyAlgorithm a) {
                 switch (a) {
-#if (QT_VERSION >= QT_VERSION_CHECK(5, 12, 0))
-                // This was added in Qt 5.12+
+#if (QT_VERSION >= QT_VERSION_CHECK(5, 13, 0))
+                // This was added in Qt 5.13+
                 case QSsl::KeyAlgorithm::Dh: return "DH";
 #endif
                 case QSsl::KeyAlgorithm::Ec: return "EC";
