@@ -196,7 +196,7 @@ namespace RPC {
     /// should call processJson() in this base to process the potential JSON
     /// further. processJson() does validation and may implicitly close the
     /// connection, etc if it doesn't like the data it received.  processJson()
-    /// is intended to be called when the subclass things the client has sent it a
+    /// is intended to be called when the subclass thinks the client has sent it a
     /// full "packet" of a JSON RPC message.
     ///
     /// Note we implement a subset of JSON-RPC 2.0 which requires 'id' to
