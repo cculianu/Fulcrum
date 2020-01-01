@@ -176,7 +176,7 @@ void App::parseArgs()
     ({
          { { "D", "datadir" },
            QString("Specify a directory in which to store the database and other assorted data files. This is a "
-           "required options. If the specified path does not exist, it will be created. Note that the directory in "
+           "required option. If the specified path does not exist, it will be created. Note that the directory in "
            "question should live on a fast drive such as an SSD and it should have plenty of free space available."),
            QString("path"),
          },
