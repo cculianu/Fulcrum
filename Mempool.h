@@ -47,7 +47,7 @@ struct Mempool
         bitcoin::Amount fee{bitcoin::Amount::zero()}; ///< we calculate this fee ourselves since in the past I noticed we get a funny value sometimes that's off by 1 or 2 sats --  which I suspect is due limitations of doubles, perhaps?
         int64_t time = 0; ///< fixed (does not change during lifetime of a Tx instance)
         BlockHeight height = 0; ///< is usually == chain tip height, but not always; fixed (does not change during lifetime of instance)
-        unsigned descendantCount = 1; ///< In-mempool descentant count, including this. Is always at least 1. May increase as mempool gets refreshed.
+        unsigned descendantCount = 1; ///< In-mempool descendant count, including this. Is always at least 1. May increase as mempool gets refreshed.
         unsigned ancestorCount = 1; ///< In-mempool ancestor count, including this. Is always at least 1. This is fixed.
 
         /// These are all the txos in this tx. Once set-up, this doesn't change (unlike IOInfo.utxo).
@@ -85,7 +85,8 @@ struct Mempool
             return hash < o.hash;
         }
 
-        /// This should always contain all the HashX's involved in this tx. Note the use of unordered_map which can save space vs. robin_hood for immutable maps (which this is, once built)
+        /// This should always contain all the HashX's involved in this tx. Note the use of unordered_map which can
+        /// save space vs. robin_hood for immutable maps (which this is, once built)
         std::unordered_map<HashX, IOInfo, HashHasher> hashXs;
     };
 
@@ -117,11 +118,12 @@ struct Mempool
     unsigned nextOrdinal = 0; ///< used to keep track of the order of new tx's appearing from bitcoind for possible sorting based on natural bitcoind order
 
     inline void clear() {
-        // Have a little memory about what sizes we may need in the future -- reserve 75% of the last size we saw.
+        // Enforce a little hysteresis about what sizes we may need in the future; reserve 75% of the last size we saw.
         // This means if mempool was full with thousands of txs, we do indeed maintain a largeish hash table for a
-        // few blocks, decaying memory usage over time.  We do it this way to eventually recover memory.
-        // Note the default implementation of robin_hood never shrinks its hashtables once they get very big after
-        // a call to clear().
+        // few blocks, decaying memory usage over time.  We do it this way to eventually recover memory, but to also
+        // leave space in case we are in a situation where many tx's are coming in quickly.
+        // Note that the default implementation of robin_hood clear() never shrinks its hashtables, and requires
+        // explicit calles to reserve() even after a clear().
         const auto txsSize = txs.size(), hxSize = hashXTxs.size();
         txs.clear();
         hashXTxs.clear();
