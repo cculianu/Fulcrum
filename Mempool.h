@@ -38,21 +38,16 @@ struct Mempool
 {
 
     /// This info, with the exception of `hashXs` comes from bitcoind via the "getrawmempool true" RPC call.
-    /// Very much a WIP; I am not yet not sure what info we need and/or how most efficiently to orgnaize it just yet.
     struct Tx
     {
         TxHash hash; ///< in reverse bitcoind order (ready for hex encode), fixed value.
         unsigned ordinal = 0; ///< used to keep track of the order this tx appeared in the mempool from bitcoind. Not particularly useful.
         unsigned sizeBytes = 0;
-        bitcoin::Amount fee;
+        bitcoin::Amount fee{bitcoin::Amount::zero()}; ///< we calculate this fee ourselves since in the past I noticed we get a funny value sometimes that's off by 1 or 2 sats --  which I suspect is due limitations of doubles, perhaps?
         int64_t time = 0; ///< fixed (does not change during lifetime of a Tx instance)
         BlockHeight height = 0; ///< is usually == chain tip height, but not always; fixed (does not change during lifetime of instance)
         unsigned descendantCount = 1; ///< In-mempool descentant count, including this. Is always at least 1. May increase as mempool gets refreshed.
         unsigned ancestorCount = 1; ///< In-mempool ancestor count, including this. Is always at least 1. This is fixed.
-
-        /// May be empty. In-mempool ancestors & descendant txid's. All hashes are in reverse memory order (hex encode order).
-        std::unordered_set<TxHash, HashHasher> depends, ///< this is fixed
-                                               spentBy; ///< this may change as we refresh the mempool
 
         /// These are all the txos in this tx. Once set-up, this doesn't change (unlike IOInfo.utxo).
         /// Note that this vector is always sized to the number of txouts in the tx. It may, however, contain !isValid
@@ -73,7 +68,7 @@ struct Mempool
             /// the mempool evolves if new descendants appear that spend these txos (those descendants will list the
             /// item that gets deleted from here in their own IOInfo::unconfirmedSpends map).
             /// + Items here get _added_ to the "unconfirmed" balance in RPC get_balance.
-            std::set<IONum> utxo; ///< ordered IONums pointing into the txos vector declared above
+            std::unordered_set<IONum> utxo; ///< IONums which are indices into the txos vector declared above. We use an unordered_set here because it's more efficient than a regular set, and we don't care about order anyway.
         };
 
         bool operator<(const Tx &o) const {

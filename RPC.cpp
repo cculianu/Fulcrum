@@ -451,6 +451,11 @@ namespace RPC {
                 do_disconnect();
                 status = Bad;
             }
+        } catch (const std::exception &e) {
+            // Other low-level error such as bad_alloc, etc. This is very unlikely. We simply disconnect and give up.
+            Error() << prettyName(false, true) << ": Low-level error reading/parsing data coming in: " << (lastPeerError=e.what());
+            do_disconnect();
+            status = Bad;
         } // end try/catch
     }
 

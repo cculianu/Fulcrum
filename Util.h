@@ -349,16 +349,20 @@ namespace Util {
     template <typename T>
     T reversedCopy(const T &t) { T ret(t); std::reverse(ret.begin(), ret.end()); return ret; }
 
+    /// Note that Qt's JSON parser/serializer has a hard limit of ~128MB on json documents.
+    /// See: https://bugreports.qt.io/browse/QTBUG-47629
+    /// TODO: use an alternate code path (with an alternate parser) in the case where the Json document hits this limit.
+    /// For now, all calling code that calls into the below functions must also be prepared to catch bad_alloc (std::exception)
     namespace Json {
         /// Generic Json error (usually if expectMap is violated)
         struct Error : public Exception { using Exception::Exception; };
         /// More specific Json error -- usually if trying to parse malformed JSON text.
         struct ParseError : public Error { using Error::Error; };
 
-        /// if expectmap, throws Error if not a dict. Otherwise throws Error if not a list.
-        extern QVariant parseString(const QString &str, bool expectMap = true); ///< throws Error
-        extern QVariant parseFile(const QString &file, bool expectMap = true); ///< throws Error
-        extern QString toString(const QVariant &, bool compact = false); ///< throws Error
+        /// If expectmap, throws Error if not a dict. Otherwise throws Error if not a list.
+        extern QVariant parseString(const QString &str, bool expectMap = true); ///< throws Error, may throw std::exception too on low-level error (bad_alloc, etc)
+        extern QVariant parseFile(const QString &file, bool expectMap = true); ///< throws Error, std::exception
+        extern QString toString(const QVariant &, bool compact = false); ///< throws Error, may throw std::exception on low-level error (bad_alloc, etc)
     }
 
     /// Thrown by Channel.get (if throwsOnTimeout=true), and also CallOnObjectWithTimeout if the method didn't get to

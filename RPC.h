@@ -124,6 +124,7 @@ namespace RPC {
         /// will not throw exceptions
         static Message makeResponse(const Id & reqId, const QVariant & result, bool v1 = false);
 
+        /// Note in pathological cases bad_alloc may be thrown here, so we just return an empty QString in that case and hope for the best.
         QString toJsonString() const { try {return Util::Json::toString(data, true);} catch (...) {} return QString(); }
 
         // -- PERFORMANCE OPTIMIZATION --
