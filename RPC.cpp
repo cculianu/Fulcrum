@@ -87,9 +87,9 @@ namespace RPC {
                                            || ret.method.startsWith(rpcDot/*="rpc."*/)))
             throw InvalidError("Invalid method");
 
-        // todo: see if the below validation needs optimization
+        // TODO: see if the below validation needs optimization
 
-        // validate error as per JSON RPC 2.0  -- TODO: See if this is kosher for 1.0 -- it seems to be on first glance
+        // validate error as per JSON RPC 2.0 (or 1.0 if v1 is true)
         if (ret.isError()) {
             auto errmap = ret.data.value(s_error).toMap();
             if (!errmap.contains(s_code) || !errmap.contains(s_message))
@@ -106,7 +106,7 @@ namespace RPC {
                     throw InvalidError("Error response not valid");
             }
         }
-        // validate request as per JSON RPC 2.0
+        // validate request as per JSON RPC 2.0 (or 1.0 if v1 is true)
         else if (ret.isRequest()) {
             const bool hasParams = ret.hasParams();
             if (!v1) {
@@ -138,7 +138,7 @@ namespace RPC {
             throw InvalidError("Invalid JSON RPC object");
         }
 
-        // if we get to this point, the json meets minimal JSON RPC 2.0 specs.
+        // if we get to this point, the json meets minimal JSON RPC specs.
 
         return ret;
     }
