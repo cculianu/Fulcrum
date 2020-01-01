@@ -102,7 +102,7 @@ void SubsMgr::doNotifyAllPending()
 {
     const auto t0 = Util::getTimeNS();
     size_t ctr = 0, ctrSH = 0;
-    decltype(p->subs) pending;
+    std::vector<SubRef> pending;
     {
         LockGuard g(p->mut);
         const bool pendingWasEmpty = p->pendingNotificatons.empty();
@@ -110,7 +110,7 @@ void SubsMgr::doNotifyAllPending()
             pending.reserve(std::min(p->pendingNotificatons.size(), p->subs.size()));
             for (const auto & sh : p->pendingNotificatons) {
                 if (auto it = p->subs.find(sh); it != p->subs.end()) {
-                    pending[it->first] = it->second; // save memory by using it->first instead of 'sh' as the map key
+                    pending.push_back( it->second );
                 }
             }
         }
@@ -119,7 +119,8 @@ void SubsMgr::doNotifyAllPending()
             emit queueEmpty();
     }
     // at this point we got all the subrefs for the scripthashes that changed.. and the lock is released .. now run through them all and notify each
-    for (auto & [sh, sub] : pending) {
+    for (const auto & sub : pending) {
+        HashX sh; // we take a copy of this from sub in the block below with the lock held for paranoia purposes (technically we could take it now, though)
         ++ctrSH;
         {
             LockGuard g(sub->mut);
@@ -131,7 +132,8 @@ void SubsMgr::doNotifyAllPending()
                 sub->lastStatusNotified.reset();
                 sub->cachedStatus.reset(); // forget the cached status as it is now very definitely wrong.
                 continue;
-            }
+            } // else..
+            sh = sub->scriptHash;
         }
         // ^^^ We must release the above lock here temporarily because we do not want to hold it while also implicitly
         // grabbing the Storage 'blocksLock' below for getFullStatus* (storage->getHistory acquires that lock in
