@@ -336,7 +336,7 @@ namespace {
                                 .arg(StatusString(st)));
     }
 
-    //// A helper data structs -- written to the blkinfo table. This helps localize a txnum to a specific position in
+    //// A helper data struct -- written to the blkinfo table. This helps localize a txnum to a specific position in
     /// a block.  The table is keyed off of block_height(uint32_t) -> serialized BlkInfo (raw bytes)
     struct BlkInfo {
         TxNum txNum0 = 0;
@@ -495,7 +495,7 @@ struct Storage::Pvt
     std::atomic<uint32_t> earliestUndoHeight = UINT32_MAX; ///< the purpose of this is to control when we issue "delete" commands to the db for deleting expired undo infos from the undo db
 
     /// This cache is anticipated to see heavy use for get_history, so we may wish to make it larger. MAKE THIS CONFIGURABLE.
-    static constexpr size_t kMaxNum2HashMemoryBytes = 100*1000*1000; ///< 100MB max cache
+    static constexpr size_t kMaxNum2HashMemoryBytes = 100*1000*1000; ///< 100MiB max cache
     CostCache<TxNum, TxHash> lruNum2Hash{kMaxNum2HashMemoryBytes};
     unsigned constexpr lruNum2HashSizeCalc(unsigned nItems = 1) {
         return decltype(lruNum2Hash)::itemOverheadBytes() + (nItems * HashLen);
@@ -639,7 +639,7 @@ void Storage::cleanup()
 
 auto Storage::stats() const -> Stats
 {
-    // TODO ...
+    // TODO ... more stuff here, perhaps
     QVariantMap ret;
     auto & c = p->db.concatOperator;
     ret["merge calls"] = c ? c->merges.load() : QVariant();
