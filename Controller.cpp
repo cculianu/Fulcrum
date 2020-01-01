@@ -590,6 +590,16 @@ void SynchMempoolTask::processResults()
                 scriptHashesAffected.insert(sh);
                 ++inNum;
             }
+
+            // Now, compactify some data structures to take up less memory by rehashing thier unordered_maps/unordered_sets..
+            // we do this once for each new tx we see.. and it can end up saving tons of space. Note the below structures
+            // are either fixed in size or will only ever shrink as the mempool evolves so this is a good time to do this.
+            tx->hashXs.rehash(tx->hashXs.size());
+            for (auto & [sh, ioinfo] : tx->hashXs) {
+                ioinfo.confirmedSpends.rehash(ioinfo.confirmedSpends.size());  // this is fixed once built
+                ioinfo.unconfirmedSpends.rehash(ioinfo.unconfirmedSpends.size()); // this is fixed once built
+                ioinfo.utxo.rehash(ioinfo.utxo.size()); // this may shrink but we rehash it once now to the largest size it will ever have
+            }
         }
 
         // now, sort and uniqueify data structures made temporarily inconsistent above (have dupes, are out-of-order)
@@ -1389,10 +1399,12 @@ auto Controller::debug(const StatsParams &p) const -> Stats // from StatsMixin
                 for (const auto & [txo, info] : inf.confirmedSpends)
                     cs[txo.toString()] = TXOInfo2Map(info);
                 ret["confirmedSpends"] = cs;
+                ret["confirmedSpends (LoadFactor)"] = QString::number(double(inf.confirmedSpends.load_factor()), 'f', 4);
                 QVariantMap us;
                 for (const auto & [txo, info] : inf.unconfirmedSpends)
                     us[txo.toString()] = TXOInfo2Map(info);
                 ret["unconfirmedSpends"] = us;
+                ret["unconfirmedSpends (LoadFactor)"] = QString::number(double(inf.unconfirmedSpends.load_factor()), 'f', 4);
                 return ret;
             };
             for (const auto & [sh, ioinfo] : tx->hashXs)

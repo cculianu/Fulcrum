@@ -28,6 +28,7 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -56,8 +57,8 @@ struct Mempool
         std::vector<TXOInfo> txos;
 
         struct IOInfo {
-            /// spends. .confirmedSpends here affects get_balance.
-            robin_hood::unordered_flat_map<TXO, TXOInfo, std::hash<TXO>>
+            /// spends. .confirmedSpends here affects get_balance. We use unordered_map here because it wastes less space than robin_hood on fixed-sized maps
+            std::unordered_map<TXO, TXOInfo, std::hash<TXO>>
                 /// Spends of txo's from the db (confirmed) utxoset.
                 /// - Items here get _subtracted_ from the "unconfirmed" in RPC get_balance.
                 confirmedSpends,
@@ -84,8 +85,8 @@ struct Mempool
             return hash < o.hash;
         }
 
-        /// This should always contain all the HashX's involved in this tx.
-        robin_hood::unordered_node_map<HashX, IOInfo, HashHasher> hashXs;
+        /// This should always contain all the HashX's involved in this tx. Note the use of unordered_map which can save space vs. robin_hood for immutable maps (which this is, once built)
+        std::unordered_map<HashX, IOInfo, HashHasher> hashXs;
     };
 
     using TxRef = std::shared_ptr<Tx>;
