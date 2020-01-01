@@ -477,9 +477,9 @@ namespace RPC {
             processJson(data);
         }
         if (UNLIKELY(socket->bytesAvailable() > MAX_BUFFER)) {
-            // this branch normally can't be taken because super class calls setReadBufferSize() on the socket
+            // this branch can't normally be taken because super class calls setReadBufferSize() on the socket
             // in on_connected, but we leave this code here in the interests of defensive programming.
-            Error() << prettyName() << " fatal error: " << QString("Peer has sent us more than %1 bytes without a newline! Bad peer?").arg(MAX_BUFFER);
+            Warning() << prettyName() << " fatal error: " << QString("Peer has sent us more than %1 bytes without a newline! Bad peer?").arg(MAX_BUFFER);
             do_disconnect();
             status = Bad;
         }
