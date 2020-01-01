@@ -16,8 +16,13 @@
 // along with this program (see LICENSE.txt).  If not, see
 // <https://www.gnu.org/licenses/>.
 //
-#ifndef STORAGE_H
-#define STORAGE_H
+
+// ---
+// See the large comment at the end of this file for an overview of the
+// rocksdb database layout used by this program.
+// ---
+
+#pragma once
 
 #include "BlockProc.h"
 #include "Merkle.h"
@@ -327,4 +332,73 @@ private:
 
 Q_DECLARE_OPERATORS_FOR_FLAGS(Storage::SaveSpec)
 
-#endif // STORAGE_H
+/**
+
+Data model for Fulcrum:  (120 column editor width recommended here)
+
+RocksDB: "meta"
+  Purpose:  metadata and sanity checks (see Storage.cpp)
+
+RecordFile: "headers"
+  Purpose:  Data store for headers.
+  Data layout:  Each header is 80 bytes and they are laid out 1 after the other in what is conceptually a huge
+  file-backed array. See RecordFile.cpp for how this file format works.
+
+RecordFile: "txnum2txhash"
+  Purpose:  Mapping of TxNum -> TxId(hash)
+  Data layout: Each TxHash is 32 bytes and the hashes are laid out one after another in what is conceptually a huge
+  file-backed array. See RecordFile.cpp.
+  Key: record number -> txid_raw_bytes  ; maps a "txnum" to its 32-byte txid. Each tx on the blockchain has a
+  monotonically increasing txnum based on where it appeared on the blockchain. Block 0, tx 0 has "txnum" 0, up until
+  the last tx N in block 0, which has "txnum" N. Tx 0 in block 1 then follows with "txnum" N+1, and so on.
+
+RocksDB: "blkinfo"
+  Purpose:  Allow for undoing on reorg and store some metadata for each block
+  Key:  "num_blocks" -> value (uint32) one past the last block height saved (eg the latest valid block_height
+  to use above would be one less than this number).
+  Key:  block_height (serialized uint32 of the height in question) -> values:  txNum0, nTx
+  Discussion:  Undoing involves going to the height to undo, getting the list of scripthashes, then hitting the
+  scripthash_history table (and other scripthash related tables) for each one touched and removing the history entry
+  for this block.  TODO: Finish this section...
+
+RocksDB: "undo"
+  We store max 10-1000 of these or so for undoing on reorg
+  Key: block_height (uint32) (see Storage.cpp)
+  Value: a serialized structure that captures the undo info (see struct UnfoInfo in Storage.cpp).. such as
+  scripthashes, txo outs, txo ins (spends), etc.  The idea is to be able to roll back the utxoset to the state it had
+  before this block occurred, as well as roll back the scripthash history and the txids
+
+RocksDB: "scripthash_history"
+  Purpose: the place where the history is stored for eg scripthash_status and get_history
+  Key: scripthash_raw_bytes (32 bytes)
+  -> values: An ordered list of unique txNums: 6-byte txNums (txNum [uint48] , ... ), for all tx's spending from or to
+  a scripthash.
+
+RocksDB: "utxoset"
+  Purpose: serialize the UTXOSet structure as seen in the sources. loading this involves iterating over entire table.
+  Key: "prevouHashoutN (see struct TXO) (40 bytes)
+  Value:  8-byte amount , 32-byte hashX .. see struct TXOInfo.
+
+RocksDB: "scripthash_unspent"
+  Key: scripthash_raw_bytes + serialized CompactTXO (40 bytes)
+  Value: 8-byte amount field (64-bit signed integer)
+  Comments: It turns out scanning by prefix over a table is blazingly fast in rocksdb, so we can easily do listunspent
+  using this scheme. I tried a read-modify-write approach (keying off just HashX) and it was painfully slow on synch.
+  This is much faster to synch.
+
+
+A note about ACID: (atomic, consistent, isolated, durable)
+
+The above isn't 100% ACID. Abrupt program termination is ok (becasue rocksdb uses journaling internally), so long as
+we weren't in the middle of adding a block or applying a block undo which involves writing to more than 1 rocksdb
+database at once.  If abrupt termination occurs during these aforementioned critical times (unlikely, but possible),
+then the program will consider itself as having a "corrupt" database, and it will refuse to run the next time it is
+started and it will require the user to delete the datadir and resynch to bitcoind.  In practice this approach is less
+problematic than it sounds since a program crash or power outage would have to occur precisely within a specific ~20ms
+timespan (which happens once every ~10 minutes) when the program is busy committing a new block to the db.  There is a
+probability of 1 in 30,000 for a random power outage to occur during this time.  Given how rare power outages are, and
+how most servers use a battery backup anyway -- this is acceptable.  And what's more: the database is 100% rebuildable
+from bitcoind's data store anyway; so even in the unlikely event of database corruption, the user will be able to
+recover.
+
+*/
