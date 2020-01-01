@@ -116,5 +116,17 @@ struct Mempool
     HashXTxMap hashXTxs;
     unsigned nextOrdinal = 0; ///< used to keep track of the order of new tx's appearing from bitcoind for possible sorting based on natural bitcoind order
 
-    inline void clear() { txs.clear(); hashXTxs.clear(); nextOrdinal = 0; }
+    inline void clear() {
+        // Have a little memory about what sizes we may need in the future -- reserve 75% of the last size we saw.
+        // This means if mempool was full with thousands of txs, we do indeed maintain a largeish hash table for a
+        // few blocks, decaying memory usage over time.  We do it this way to eventually recover memory.
+        // Note the default implementation of robin_hood never shrinks its hashtables once they get very big after
+        // a call to clear().
+        const auto txsSize = txs.size(), hxSize = hashXTxs.size();
+        txs.clear();
+        hashXTxs.clear();
+        txs.reserve(size_t(txsSize*0.75));
+        hashXTxs.reserve(size_t(hxSize*0.75));
+        nextOrdinal = 0;
+    }
 };
