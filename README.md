@@ -1,4 +1,5 @@
 # Fulcrum
+
 A fast & nimble SPV server for Bitcoin Cash.
 
 #### Copyright
@@ -6,6 +7,8 @@ A fast & nimble SPV server for Bitcoin Cash.
 
 #### License:
 GPLv3. See the included `LICENSE.txt` file or [visit gnu.org and read the license](https://www.gnu.org/licenses/gpl-3.0.html).
+
+![Image Fulcrum](https://c3-soft.com/downloads/BitcoinCash/Fulcrum/fulcrum2.png)
 
 ### Highlights:
 
