@@ -104,8 +104,7 @@ void TimersByNameMixin::callOnTimerSoon(int ms, const QString &name, const std::
     if (auto it = _timerMap.find(name); it != _timerMap.end()) {
         if (force) {
             it->get()->stop(); // immediately stop timer
-            _timerMap.erase(it);
-            it = _timerMap.end(); // force delete QTimer since refs will go away
+            it = _timerMap.erase(it); // shared_ptr refs will go away immediately, which ends up calling deleteLater on timer
             callOnTimerSoon(ms, name, func, false, ttype); // immediately call self recursively once to re-enqueue timer
         }
         // timer was already active with force=false.. or was just re-enqueued with force=true.

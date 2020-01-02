@@ -20,9 +20,9 @@
 
 #include "Util.h"
 
+#include <QHash>
 #include <QObject>
 #include <QThread>
-#include <QMap>
 #include <QTimer>
 #include <functional>
 #include <memory>
@@ -115,7 +115,7 @@ public:
 
 protected:
 
-    using _TimerMap = QMap<QString, std::shared_ptr<QTimer> >;
+    using _TimerMap = QHash<QString, std::shared_ptr<QTimer> >;
     _TimerMap _timerMap;
 
     /// the utility function that is the point of this class.
