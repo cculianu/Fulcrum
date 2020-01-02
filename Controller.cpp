@@ -45,6 +45,11 @@ Controller::~Controller() { Debug() << __func__; cleanup(); }
 
 void Controller::startup()
 {
+    /// Note: we tried doing this using AsyncOnObject rather than a signal/slot connection, but on Linux at least those
+    /// events arrive AFTER the signal/slot events do.  So in order to make sure putBlock arrives BEFORE the
+    /// DownloadBlocksTask completes, we have to do this. On Windows and MacOS this was not an issue, just on Linux.
+    conns += connect(this, &Controller::putBlock, this, &Controller::on_putBlock);
+
     stopFlag = false;
 
     storage = std::make_shared<Storage>(options);
@@ -348,7 +353,7 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
                         emit progress(lastProgress);
                     }
                     if (TRACE) Trace() << resp.method << ": header for height: " << bnum << " len: " << header.length();
-                    ctl->putBlock(this, ppb); // send the block off to the Controller thread for further processing and for save to db
+                    emit ctl->putBlock(this, ppb); // send the block off to the Controller thread for further processing and for save to db
                     if (goodCt >= expectedCt) {
                         // flag state to maybeDone to do checks when process() called again
                         maybeDone = true;
@@ -967,7 +972,7 @@ void Controller::process(bool beSilentIfUpToDate)
         for (size_t i = 0; i < nTasks; ++i) {
             add_DLHeaderTask(unsigned(base + i), unsigned(sm->ht), nTasks);
         }
-        sm->state = State::DownloadingBlocks; // advance state now. we will be called back by download task in putBlock()
+        sm->state = State::DownloadingBlocks; // advance state now. we will be called back by download task in on_putBlock()
     } else if (sm->state == State::DownloadingBlocks) {
         process_DownloadingBlocks();
     } else if (sm->state == State::FinishedDL) {
@@ -1039,21 +1044,18 @@ void Controller::process(bool beSilentIfUpToDate)
         callOnTimerSoonNoRepeat(polltimeout, pollTimerName, [this]{if (!sm) process(true);});
 }
 
-void Controller::putBlock(CtlTask *task, PreProcessedBlockPtr p)
+// runs in our thread as the slot for putBlock
+void Controller::on_putBlock(CtlTask *task, PreProcessedBlockPtr p)
 {
-    // returns right away
-    Util::AsyncOnObject(this, [this, task, p] {
-        if (!sm || isTaskDeleted(task) || sm->state == StateMachine::State::Failure || stopFlag) {
-            Debug() << "Ignoring block " << p->height << " for now-defunct task";
-            return;
-        } else if (sm->state != StateMachine::State::DownloadingBlocks) {
-            Debug() << "Ignoring putBlocks request for block " << p->height << " -- state is not \"DownloadingBlocks\" but rather is: \"" << sm->stateStr() << "\"";
-            return;
-        }
-        sm->ppBlocks[p->height] = p;
-        //AGAIN(); // queue up, return right away -- turns out this spams events. better to call the process function directly here.
-        process_DownloadingBlocks();
-    });
+    if (!sm || isTaskDeleted(task) || sm->state == StateMachine::State::Failure || stopFlag) {
+        Debug() << "Ignoring block " << p->height << " for now-defunct task";
+        return;
+    } else if (sm->state != StateMachine::State::DownloadingBlocks) {
+        Debug() << "Ignoring putBlocks request for block " << p->height << " -- state is not \"DownloadingBlocks\" but rather is: \"" << sm->stateStr() << "\"";
+        return;
+    }
+    sm->ppBlocks[p->height] = p;
+    process_DownloadingBlocks();
 }
 
 void Controller::process_PrintProgress(unsigned height, size_t nTx, size_t nIO)

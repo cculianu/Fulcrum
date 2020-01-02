@@ -48,10 +48,6 @@ public:
 
     const int polltimeMS; ///< the amount of time for polling bitcoind for new headers -- comes from options->pollTimeSecs
 
-    /// thread-safe -- call this from the slave task thread to submit a block
-    /// Note: we had to make this a public member but it's not really intended to be used from code outside this subsystem.
-    void putBlock(CtlTask *sender, PreProcessedBlockPtr);
-
     inline bool isStopping() const { return stopFlag; }
 
     /// Returns a positive nonzero value if the calling download task should throttle because the backlog is too large.
@@ -81,6 +77,14 @@ signals:
     /// blockchain.headers.subscribe system. See Servers.cpp.
     void newHeader(unsigned height, const QByteArray & header);
 
+    /// "Private" signal, not intended to be used by outside code. Used internally to send blocks that are ready from
+    /// any thread to to this object for processing in Controller's thread. Connected to the on_putBlock slot.
+    /// This is typially called from the DownloadBlocksTask. (Note: we did it this way, using a signal/slot, rather
+    /// than a more succinct and anonymous Util::AsyncOnObject() call, because on Linux, the timer events arrive
+    /// *after* signal/slots do.. and they arrive out-of-order with respect to them -- and we want to make sure to
+    /// get all the blocks *before* the DownloadBlocksTasks are removed after they finish).
+    void putBlock(CtlTask *sender, PreProcessedBlockPtr);
+
 protected:
     Stats stats() const override; // from StatsMixin
     Stats debug(const StatsParams &) const override; // from StatsMixin
@@ -88,6 +92,10 @@ protected:
 protected slots:
     void process(bool beSilentIfUpToDate); ///< generic callback to advance state
     void process() override { process(false); } ///< from ProcessAgainMixin
+
+    /// Slot for putBlock signal. Runs in this thread, adds the block to the queue and kicks off block processing (if
+    /// the supplied block was the next one by height).
+    void on_putBlock(CtlTask *, PreProcessedBlockPtr);
 
 private:
     friend class CtlTask;
@@ -191,3 +199,6 @@ protected:
 
     Controller * const ctl;  ///< initted in c'tor. Is always valid since all tasks' lifecycles are managed by the Controller.
 };
+
+Q_DECLARE_METATYPE(CtlTask *);
+Q_DECLARE_METATYPE(PreProcessedBlockPtr);

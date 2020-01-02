@@ -17,7 +17,9 @@
 // <https://www.gnu.org/licenses/>.
 //
 #include "App.h"
+#include "BlockProc.h"
 #include "BTC.h"
+#include "Controller.h"
 #include "RPC.h"
 
 #include <QMetaType>
@@ -29,8 +31,13 @@ void App::register_MetaTypes()
     if (!registered) {
         // finish registering RPC::Message metatype so that signals/slots work. This needs to only happen
         // once in main thread at app init.
-        qRegisterMetaType<RPC::Message>();
+        qRegisterMetaType<RPC::Message>("RPC::Message");
         qRegisterMetaType<RPC::Message::Id>("RPC::Message::Id"); // for some reason when this is an alias for QVariant it needs this string here
+
+        // Used by the Controller::putBlock signal
+        qRegisterMetaType<CtlTask *>("CtlTask *");
+        // Used by the Controller::putBlock signal
+        qRegisterMetaType<PreProcessedBlockPtr>("PreProcessedBlockPtr");
 
         registered = true;
     }
