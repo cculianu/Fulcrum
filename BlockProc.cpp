@@ -40,7 +40,9 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bi
     header = b.GetBlockHeader();
     estimatedThisSizeBytes = sizeof(*this) + size_t(BTC::GetBlockHeaderSize());
     txInfos.reserve(b.vtx.size());
-    robin_hood::unordered_flat_map<TxHash, unsigned, HashHasher> txHashToIndex;
+    robin_hood::unordered_flat_map<TxHash, unsigned, HashHasher, std::equal_to<TxHash>, 99> txHashToIndex; // since we know the size ahead of time here, we can set max_load_factor to 99% and avoid over-allocating the hash table
+    txHashToIndex.reserve(b.vtx.size());
+
     // run through all tx's, build inputs and outputs lists
     size_t txIdx = 0;
     for (const auto & tx : b.vtx) {
