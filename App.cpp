@@ -314,7 +314,7 @@ void App::parseArgs()
         const bool confIsSet = conf.hasValue(l);
         const auto envVar = env ? std::getenv(env) : nullptr;
         if ((cliIsSet || confIsSet) && envVar)
-            Warning() << "Warning: -" << s <<  " is specified both via the " << (cliIsSet ? "CLI" : "config file")
+            Warning() << "Warning: " << l <<  " is specified both via the " << (cliIsSet ? "CLI" : "config file")
                       << " and the environement (as " << env << "). The " << (cliIsSet ? "CLI arg" : "config file setting")
                       << " will take precendence.";
         if (((!cliIsSet && !confIsSet) || conf.value(l, parser.value(s)).isEmpty()) && (!env || !envVar))
