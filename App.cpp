@@ -114,7 +114,7 @@ void App::startup()
         controller->startup(); // may throw
 
         if (!options->statsInterfaces.isEmpty()) {
-            const auto num = options->interfaces.count();
+            const auto num = options->statsInterfaces.count();
             Log() << "Stats HTTP: starting " << num << " " << Util::Pluralize("server", num) << " ...";
             // start 'stats' http servers, if any
             for (const auto & i : options->statsInterfaces)
@@ -283,6 +283,15 @@ void App::parseArgs()
     // check for -d -d
     if (auto found = parser.optionNames(); found.count("d") + found.count("debug") > 1)
         options->verboseTrace = true;
+    else {
+        // check for multiple debug = true in configFile (only present if no -d on CLI, otherwise config keys are deleted)
+        const auto l = conf.values("debug");
+        int ctr = 0;
+        for (const auto & str : l)
+            ctr += (str.toInt() || QStringList{{"yes","true","on",""}}.contains(str.toLower())) ? 1 : 0;
+        if (ctr > 1)
+            options->verboseTrace = true;
+    }
     if (parser.isSet("q") || conf.boolValue("quiet")) options->verboseDebug = false;
     if (parser.isSet("S") || conf.boolValue("syslog")) options->syslogMode = true;
     if (parser.isSet("C") || conf.boolValue("checkdb")) options->doSlowDbChecks = true;
@@ -312,6 +321,8 @@ void App::parseArgs()
             throw BadArgs(QString("Required option missing or empty: -%1 (--%2)%3").arg(s).arg(l).arg(env ? QString(" (or env var: %1)").arg(env) : ""));
         else if (parser.values(s).count() > 1)
             throw BadArgs(QString("Option specified multiple times: -%1 (--%2)").arg(s).arg(l));
+        else if (conf.values(l).count() > 1)
+            throw BadArgs(QString("This option cannot be specified multiple times in the config file: %1").arg(l));
     }
     static const auto parseInterface = [](const QString &s) -> Options::Interface {
         auto toks = s.split(":");
@@ -360,12 +371,12 @@ void App::parseArgs()
     options->rpcpassword = conf.value("rpcpassword", parser.isSet("p") ? parser.value("p") : std::getenv(RPCPASSWORD));
     bool tcpIsDefault = true;
     // grab bind (listen) interfaces for TCP -- this hard-to-read code here looks at both conf.value and parser, but conf.value only has values if parser does not (CLI parser takes precedence).
-    if (auto l = conf.hasValue("tcp") ? QStringList{{conf.value("tcp")}} : parser.values("t");  !l.isEmpty()) {
+    if (auto l = conf.hasValue("tcp") ? conf.values("tcp") : parser.values("t");  !l.isEmpty()) {
         parseInterfaces(options->interfaces, l);
         tcpIsDefault = false;
     }
     // grab bind (listen) interfaces for SSL (again, apologies for this hard to read expression below -- same comments as above apply here)
-    if (auto l = conf.hasValue("ssl") ? QStringList{{conf.value("ssl")}} : parser.values("s"); !l.isEmpty()) {
+    if (auto l = conf.hasValue("ssl") ? conf.values("ssl") : parser.values("s"); !l.isEmpty()) {
         if (!QSslSocket::supportsSsl()) {
             throw InternalError("SSL support is not compiled and/or linked to this version. Cannot proceed with SSL support. Sorry!");
         }
@@ -430,7 +441,7 @@ void App::parseArgs()
         }
     }
     parseInterfaces(options->statsInterfaces, conf.hasValue("stats")
-                                              ? QStringList{{conf.value("stats")}}
+                                              ? conf.values("stats")
                                               : parser.values("z"));
 }
 

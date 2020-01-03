@@ -43,13 +43,10 @@ std::optional<QString> ConfigFile::optValue(const QString &name, Qt::CaseSensiti
 
 int ConfigFile::remove(const QString &name, Qt::CaseSensitivity cs)
 {
-    int ctr = 0;
     if (cs == Qt::CaseSensitive) {
-        if (auto it = map.find(name); it != map.end()) {
-            it = map.erase(it);
-            return ++ctr;
-        }
+        return map.remove(name);
     } else {
+        int ctr = 0;
         for (auto it = map.begin(), next = it; it != map.end(); it = next) {
             if (it.key().compare(name, cs) == 0) {
                 next = map.erase(it);
@@ -57,8 +54,8 @@ int ConfigFile::remove(const QString &name, Qt::CaseSensitivity cs)
             } else
                 ++next;
         }
+        return ctr;
     }
-    return ctr;
 }
 
 bool ConfigFile::hasValue(const QString &name, Qt::CaseSensitivity cs) const
@@ -69,6 +66,20 @@ bool ConfigFile::hasValue(const QString &name, Qt::CaseSensitivity cs) const
 QString ConfigFile::value(const QString &name, const QString & def, Qt::CaseSensitivity cs) const
 {
     return optValue(name, cs).value_or(def);
+}
+
+QStringList ConfigFile::values(const QString &name, Qt::CaseSensitivity cs) const
+{
+    QStringList ret;
+    if (cs == Qt::CaseSensitive) {
+        ret = map.values(name);
+    } else {
+        for (auto it = map.begin(); it != map.end(); ++it) {
+            if (it.key().compare(name, cs) == 0)
+                ret.push_back(it.value());
+        }
+    }
+    return ret;
 }
 
 bool ConfigFile::open(const QString &filePath)
@@ -104,7 +115,7 @@ bool ConfigFile::open(const QString &filePath)
             // indicate the name was present (can act like a bool flag if present)
             name = line;
         // save item
-        map[name] = value;
+        map.insertMulti(name, value);
     }
 
     map.squeeze();

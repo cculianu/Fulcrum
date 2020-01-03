@@ -18,7 +18,7 @@
 //
 #pragma once
 
-#include <QHash>
+#include <QMultiHash>
 #include <QHostAddress>
 #include <QList>
 #include <QPair>
@@ -76,7 +76,8 @@ struct Options {
 /// ask for "name" (case insensitive) -- an arbitrary value may be returned for "name" (either "1" or "2" in this case).
 ///
 /// If multiple, same-case versions of the same name appear in the file, e.g.:  "MyFoo=1", "MyFoo=2", "MyFoo=3", etc,
-/// only the last one encountered is used (the previous ones seen are overwritten as the file is parsed).
+/// they are all saved (QMultiHash is used to store name/value pairs).  However, the simple .value() style functions
+/// will return an arbitrary value of the same name.
 ///
 /// A note about boolean values (obtained from boolValue()) -- they are parsed as an int and if nonzero, they are true.
 /// The keywords 'true', 'yes', 'false' and 'no' are all supported.  Additionally the mere presence of a name by
@@ -105,9 +106,12 @@ public:
     /// whereas CaseInsensitive lookups are linear.
     std::optional<QString> optValue(const QString &name, Qt::CaseSensitivity = Qt::CaseInsensitive) const;
 
-    /// Will remove the entry for `name` (if any) from the internal hash table of name/value pairs and return the number
-    /// of items matched & removed.  If CaseSensitive, this number will be at most 1.  Complexity: O(N) for
-    /// CaseInsensitive, O(1) for CaseSensitive.
+    /// Returns all the values matching name or an empty list if no values matching name exist.
+    QStringList values(const QString &name, Qt::CaseSensitivity = Qt::CaseInsensitive) const;
+
+    /// Remove all entries for `name` (if any) from the internal hash table of name/value pairs and returns the number
+    /// of items matched & removed.  Complexity: O(N) for CaseInsensitive, O(M) for CaseSensitive (where M is the
+    /// number of items having exactly the same name).
     int remove(const QString &name, Qt::CaseSensitivity = Qt::CaseInsensitive);
 
     /// Parses the string as a boolean and returns what was found, or the default if not found or if not parsed ok.
@@ -125,11 +129,11 @@ public:
     /// Returns all the names in the file.  Dupe names of different cases (if any) are all included in the returned list.
     QStringList allNames() const { return map.keys(); }
     /// Returns the entire parsed name/value pair dictionary.  Dupe names of different cases (if any) are all in the returned hash map.
-    QHash<QString, QString> all() const { return map; }
+    QMultiHash<QString, QString> all() const { return map; }
 
     bool isEmpty() const { return map.isEmpty(); }
     void clear() { map.clear(); }
 
 private:
-    QHash<QString, QString> map; ///< name/value pairs read/parsed
+    QMultiHash<QString, QString> map; ///< name/value pairs read/parsed
 };
