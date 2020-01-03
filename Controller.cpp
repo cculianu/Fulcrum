@@ -35,7 +35,7 @@
 
 
 Controller::Controller(const std::shared_ptr<Options> &o)
-    : Mgr(nullptr), polltimeMS(int(o->pollTimeSecs * 1000)), options(o)
+    : Mgr(nullptr), polltimeMS(int(o->pollTimeSecs * 1e3)), options(o)
 {
     setObjectName("Controller");
     _thread.setObjectName(objectName());

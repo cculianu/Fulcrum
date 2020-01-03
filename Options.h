@@ -56,9 +56,9 @@ struct Options {
     /// If true, on db open/startup, we will perform some slow/paranoid db consistency checks
     bool doSlowDbChecks = false;
 
-    static constexpr unsigned minPollTimeSecs = 1, maxPollTimeSecs = 30, defaultPollTimeSecs = 2;
-    /// bitcoin poll time interval. This value will always be in the range [minPollTimeSecs, maxPollTimeSecs] aka [1, 30]
-    unsigned pollTimeSecs = defaultPollTimeSecs;
+    static constexpr double minPollTimeSecs = 0.5, maxPollTimeSecs = 30., defaultPollTimeSecs = 2.;
+    /// bitcoin poll time interval. This value will always be in the range [minPollTimeSecs, maxPollTimeSecs] aka [0.5, 30]
+    double pollTimeSecs = defaultPollTimeSecs;
 };
 
 
@@ -104,6 +104,11 @@ public:
     /// Like the above but returns an empty optional if name is not found. CaseSensitive lookups are constant time
     /// whereas CaseInsensitive lookups are linear.
     std::optional<QString> optValue(const QString &name, Qt::CaseSensitivity = Qt::CaseInsensitive) const;
+
+    /// Will remove the entry for `name` (if any) from the internal hash table of name/value pairs and return the number
+    /// of items matched & removed.  If CaseSensitive, this number will be at most 1.  Complexity: O(N) for
+    /// CaseInsensitive, O(1) for CaseSensitive.
+    int remove(const QString &name, Qt::CaseSensitivity = Qt::CaseInsensitive);
 
     /// Parses the string as a boolean and returns what was found, or the default if not found or if not parsed ok.
     /// Note that "true", "yes", "false", "no" and numeric strings are supported as possible boolean values.  If

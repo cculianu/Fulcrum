@@ -41,6 +41,26 @@ std::optional<QString> ConfigFile::optValue(const QString &name, Qt::CaseSensiti
     return ret;
 }
 
+int ConfigFile::remove(const QString &name, Qt::CaseSensitivity cs)
+{
+    int ctr = 0;
+    if (cs == Qt::CaseSensitive) {
+        if (auto it = map.find(name); it != map.end()) {
+            it = map.erase(it);
+            return ++ctr;
+        }
+    } else {
+        for (auto it = map.begin(), next = it; it != map.end(); it = next) {
+            if (it.key().compare(name, cs) == 0) {
+                next = map.erase(it);
+                ++ctr;
+            } else
+                ++next;
+        }
+    }
+    return ctr;
+}
+
 bool ConfigFile::hasValue(const QString &name, Qt::CaseSensitivity cs) const
 {
     return optValue(name, cs).has_value();
@@ -101,8 +121,8 @@ bool ConfigFile::boolValue(const QString & name, bool def, bool *parsedOk, Qt::C
     if (!opt.has_value())
         return def;
     const auto val = opt.value().toLower();
-    if (val == "true" || val == "yes" || val.isEmpty() /* "" means true! */) { ok = true; return true; }
-    else if (val == "false" || val == "no") { ok = true; return false; }
+    if (val == "true" || val == "yes" || val == "on" || val.isEmpty() /* "" means true! */) { ok = true; return true; }
+    else if (val == "false" || val == "no" || val == "off") { ok = true; return false; }
     bool ret = val.toInt(&ok);
     if (!ok) ret = def;
     return ret;

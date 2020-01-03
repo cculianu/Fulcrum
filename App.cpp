@@ -49,9 +49,10 @@ App::App(int argc, char *argv[])
 
     try {
         parseArgs();
-    } catch (const BadArgs &e) {
+    } catch (const std::exception &e) {
         options->syslogMode = true; // suppress timestamp stuff
         Error() << e.what();
+        Log() << "Use the -h option to show help.";
         std::exit(1);
     }
     if (options->syslogMode) {
@@ -166,8 +167,7 @@ void App::parseArgs()
 
     static constexpr auto RPCUSER = "RPCUSER", RPCPASSWORD = "RPCPASSWORD"; // optional env vars we use below
 
-    parser.addOptions
-    ({
+    QList<QCommandLineOption> allOptions{
          { { "D", "datadir" },
            QString("Specify a directory in which to store the database and other assorted data files. This is a "
            "required option. If the specified path does not exist, it will be created. Note that the directory in "
@@ -198,7 +198,7 @@ void App::parseArgs()
            QString("keyfile"),
          },
          { { "z", "stats" },
-           QString("Specify listen address and port for the stats HTTP server. Format is same as the interface option, "
+           QString("Specify listen address and port for the stats HTTP server. Format is same as the -s or -t options, "
            "e.g.: <interface:port>. Default is to not start any starts HTTP servers. "
            "This option may be specified more than once to bind to multiple interfaces and/or ports."),
            QString("interface:port"),
@@ -211,14 +211,14 @@ void App::parseArgs()
          },
          { { "u", "rpcuser" },
            QString("Specify a username to use for authenticating to bitcoind. This is a required option, along "
-           "with -b and -p.  This opton should be the same username you specified in your bitcoind.conf file "
+           "with -b and -p.  This option should be the same username you specified in your bitcoind.conf file "
            "under rpcuser=. For security, you may omit this option from the command-line and use the %1 "
            "environment variable instead (the CLI arg takes precedence if both are present).").arg(RPCUSER),
            QString("username"),
          },
          { { "p", "rpcpassword" },
            QString("Specify a password to use for authenticating to bitcoind. This is a required option, along "
-           "with -b and -u.  This opton should be the same password you specified in your bitcoind.conf file "
+           "with -b and -u.  This option should be the same password you specified in your bitcoind.conf file "
            "under rpcpassword=. For security, you may omit this option from the command-line and use the "
            "%1 environment variable instead (the CLI arg takes precedence if both are present).").arg(RPCPASSWORD),
            QString("password"),
@@ -238,25 +238,60 @@ void App::parseArgs()
                    "Note that these checks are somewhat slow to perform and under normal operation are not necessary."),
          },
          { { "T", "polltime" },
-           QString("The number of seconds for the bitcoind poll interval. Bitcoind is polled once every `polltime_secs` "
-                   "seconds to detect mempool and blockchain changes. This value must be at least 1 and cannot exceed "
+           QString("The number of seconds for the bitcoind poll interval. Bitcoind is polled once every `polltime` "
+                   "seconds to detect mempool and blockchain changes. This value must be at least 0.5 and cannot exceed "
                    "30. If not specified, defaults to %1 seconds.").arg(Options::defaultPollTimeSecs),
-           QString("polltime_secs"), QString::number(Options::defaultPollTimeSecs)
+           QString("polltime"), QString::number(Options::defaultPollTimeSecs)
          },
-     });
+     };
+
+    parser.addOptions(allOptions);
+    parser.addPositionalArgument("config", "Configuration file (optional).", "[config]");
     parser.process(*this);
 
-    if (parser.isSet("d")) options->verboseDebug = true;
+    ConfigFile conf;
+
+    // First, parse config file (if specified) -- We will take whatever it specified that matches the above options
+    // but CLI args take precedence over config file options.
+    if (auto posArgs = parser.positionalArguments(); !posArgs.isEmpty()) {
+        if (posArgs.size() > 1)
+            throw BadArgs("More than 1 config file was specified.  Please specify at most 1 config file.");
+        const auto file = posArgs.first();
+        if (!conf.open(file))
+            throw BadArgs(QString("Unable to open config file %1").arg(file));
+        // ok, at this point the config file is slurped up and we can check it below
+    }
+
+    // first warn user about dupes
+    for (const auto & opt : allOptions) {
+        static const auto DupeMsg = [](const QString &arg) {
+            Log() << "'" << arg << "' specified both via the CLI and the configuration file. The CLI arg will take precedence.";
+        };
+        for (const auto & name : opt.names()) {
+            if (name.length() == 1) continue;
+            if (conf.hasValue(name) && parser.isSet(name)) {
+                DupeMsg(name);
+                conf.remove(name);
+            }
+        }
+    }
+
+    if (parser.isSet("d") || conf.boolValue("debug")) {
+        //if (config.hasValue("debug"))
+        options->verboseDebug = true;
+    }
     // check for -d -d
     if (auto found = parser.optionNames(); found.count("d") + found.count("debug") > 1)
         options->verboseTrace = true;
-    if (parser.isSet("q")) options->verboseDebug = false;
-    if (parser.isSet("S")) options->syslogMode = true;
-    if (parser.isSet("C")) options->doSlowDbChecks = true;
-    // parse --polltimesecs
-    if (bool ok; (options->pollTimeSecs = parser.value("T").toUInt(&ok)) < options->minPollTimeSecs
+    if (parser.isSet("q") || conf.boolValue("quiet")) options->verboseDebug = false;
+    if (parser.isSet("S") || conf.boolValue("syslog")) options->syslogMode = true;
+    if (parser.isSet("C") || conf.boolValue("checkdb")) options->doSlowDbChecks = true;
+    // parse --polltime
+    // note despite how confusingly the below line reads, the CLI parser value takes precedence over the conf file here.
+    const QString polltimeStr = conf.value("polltime", parser.value("T"));
+    if (bool ok; (options->pollTimeSecs = polltimeStr.toDouble(&ok)) < options->minPollTimeSecs
             || !ok || options->pollTimeSecs > options->maxPollTimeSecs) {
-        throw BadArgs(QString("-T/--polltime option must be an integer value in the range [%1, %2]").arg(options->minPollTimeSecs).arg(options->maxPollTimeSecs));
+        throw BadArgs(QString("The 'polltime' option must be a numeric value in the range [%1, %2]").arg(options->minPollTimeSecs).arg(options->maxPollTimeSecs));
     }
     // make sure -b -p and -u all present and specified exactly once
     using ReqOptsList = std::list<std::tuple<QString, QString, const char *>>;
@@ -267,10 +302,13 @@ void App::parseArgs()
     {
         const auto & [s, l, env] = opt;
         const bool cliIsSet = parser.isSet(s);
+        const bool confIsSet = conf.hasValue(l);
         const auto envVar = env ? std::getenv(env) : nullptr;
-        if (cliIsSet && envVar)
-            Warning() << "Warning: -" << s <<  " is specified both via the CLI and the environement (as " << env << "). The CLI arg will take precendence.";
-        if ((!parser.isSet(s) || parser.value(s).isEmpty()) && (!env || !envVar))
+        if ((cliIsSet || confIsSet) && envVar)
+            Warning() << "Warning: -" << s <<  " is specified both via the " << (cliIsSet ? "CLI" : "config file")
+                      << " and the environement (as " << env << "). The " << (cliIsSet ? "CLI arg" : "config file setting")
+                      << " will take precendence.";
+        if (((!cliIsSet && !confIsSet) || conf.value(l, parser.value(s)).isEmpty()) && (!env || !envVar))
             throw BadArgs(QString("Required option missing or empty: -%1 (--%2)%3").arg(s).arg(l).arg(env ? QString(" (or env var: %1)").arg(env) : ""));
         else if (parser.values(s).count() > 1)
             throw BadArgs(QString("Option specified multiple times: -%1 (--%2)").arg(s).arg(l));
@@ -299,35 +337,35 @@ void App::parseArgs()
     };
 
     // grab datadir, check it's good, create it if needed
-    options->datadir = parser.value("D");
+    options->datadir = conf.value("datadir", parser.value("D"));
     QFileInfo fi(options->datadir);
     if (auto path = fi.canonicalFilePath(); fi.exists()) {
         if (!fi.isDir()) // was a file and not a directory
             throw BadArgs(QString("The specified path \"%1\" already exists but is not a directory").arg(path));
         if (!fi.isReadable() || !fi.isExecutable() || !fi.isWritable())
             throw BadArgs(QString("Bad permissions for path \"%1\" (must be readable, writable, and executable)").arg(path));
-        Debug() << "datadir: " << path;
+        Util::AsyncOnObject(this, [path]{ Debug() << "datadir: " << path; }); // log this after return to event loop so it ends up in syslog (if -S mode)
     } else { // !exists
         if (!QDir().mkpath(options->datadir))
             throw BadArgs(QString("Unable to create directory: %1").arg(options->datadir));
         path = QFileInfo(options->datadir).canonicalFilePath();
-        Debug() << "datadir: Created directory " << path;
+        Util::AsyncOnObject(this, [path]{ Debug() << "datadir: Created directory " << path; }); // log this after return to event loop so it ends up in syslog (if -S mode)
     }
 
-    // parse bitcoind
-    options->bitcoind = parseInterface(parser.value("b"));
+    // parse bitcoind - conf.value is always unset if parser.value is set, hence this strange constrcution below (parser.value takes precedence)
+    options->bitcoind = parseInterface(conf.value("bitcoind", parser.value("b")));
     // grab rpcuser
-    options->rpcuser = parser.isSet("u") ? parser.value("u") : std::getenv(RPCUSER);
+    options->rpcuser = conf.value("rpcuser", parser.isSet("u") ? parser.value("u") : std::getenv(RPCUSER));
     // grab rpcpass
-    options->rpcpassword = parser.isSet("p") ? parser.value("p") : std::getenv(RPCPASSWORD);
+    options->rpcpassword = conf.value("rpcpassword", parser.isSet("p") ? parser.value("p") : std::getenv(RPCPASSWORD));
     bool tcpIsDefault = true;
-    // grab bind (listen) interfaces for TCP
-    if (auto l = parser.values("t"); !l.isEmpty()) {
+    // grab bind (listen) interfaces for TCP -- this hard-to-read code here looks at both conf.value and parser, but conf.value only has values if parser does not (CLI parser takes precedence).
+    if (auto l = conf.hasValue("tcp") ? QStringList{{conf.value("tcp")}} : parser.values("t");  !l.isEmpty()) {
         parseInterfaces(options->interfaces, l);
         tcpIsDefault = false;
     }
-    // grab bind (listen) interfaces for SSL
-    if (auto l = parser.values("s"); !l.isEmpty()) {
+    // grab bind (listen) interfaces for SSL (again, apologies for this hard to read expression below -- same comments as above apply here)
+    if (auto l = conf.hasValue("ssl") ? QStringList{{conf.value("ssl")}} : parser.values("s"); !l.isEmpty()) {
         if (!QSslSocket::supportsSsl()) {
             throw InternalError("SSL support is not compiled and/or linked to this version. Cannot proceed with SSL support. Sorry!");
         }
@@ -335,7 +373,7 @@ void App::parseArgs()
         if (tcpIsDefault) options->interfaces.clear(); // they had default tcp setup, clear the default since they did end up specifying at least 1 real interface to bind to
     }
     if (!options->sslInterfaces.isEmpty()) {
-        const QString cert = parser.value("c"), key = parser.value("k");
+        const QString cert = conf.value("cert", parser.value("c")), key = conf.value("key", parser.value("k"));
         if (cert.isEmpty() || key.isEmpty()) {
             throw BadArgs("SSL option requires both -c/--cert and -k/--key options be specified on the command-line");
         } else if (!QFile::exists(cert)) {
@@ -361,15 +399,18 @@ void App::parseArgs()
 #else
                 name = options->sslCert.subjectInfo(QSslCertificate::Organization).join(", ");
 #endif
-                Log() << "Loaded SSL certificate: " << name << " "
-                      << options->sslCert.subjectInfo(QSslCertificate::SubjectInfo::EmailAddress).join(",")
-                      //<< " self-signed: " << (options->sslCert.isSelfSigned() ? "YES" : "NO")
-                      << " expires: " << (options->sslCert.expiryDate().toString("ddd MMMM d yyyy hh:mm:ss"));
+                Util::AsyncOnObject(this, [name, this]{
+                    // We do this logging later. This is to ensure that it ends up in the syslog if user specified -S
+                    Log() << "Loaded SSL certificate: " << name << " "
+                          << options->sslCert.subjectInfo(QSslCertificate::SubjectInfo::EmailAddress).join(",")
+                          //<< " self-signed: " << (options->sslCert.isSelfSigned() ? "YES" : "NO")
+                          << " expires: " << (options->sslCert.expiryDate().toString("ddd MMMM d yyyy hh:mm:ss"));
+                });
             }
             if (options->sslKey.isNull())
                 throw BadArgs(QString("Unable to read private key from %1. Please make sure the file is readable and "
                                       "contains a single RSA private key in PEM format.").arg(key));
-            constexpr auto KeyAlgoStr = [](QSsl::KeyAlgorithm a) {
+            static const auto KeyAlgoStr = [](QSsl::KeyAlgorithm a) {
                 switch (a) {
 #if (QT_VERSION >= QT_VERSION_CHECK(5, 13, 0))
                 // This was added in Qt 5.13+
@@ -381,11 +422,16 @@ void App::parseArgs()
                 default: return "Other";
                 }
             };
-            Log() << "Loaded key type: " << (options->sslKey.type() == QSsl::KeyType::PrivateKey ? "private" : "public")
-                  << " algorithm: " << KeyAlgoStr(options->sslKey.algorithm());
+            Util::AsyncOnObject(this, [this] {
+                // We do this logging later. This is to ensure that it ends up in the syslog if user specified -S
+                Log() << "Loaded key type: " << (options->sslKey.type() == QSsl::KeyType::PrivateKey ? "private" : "public")
+                      << " algorithm: " << KeyAlgoStr(options->sslKey.algorithm());
+            });
         }
     }
-    parseInterfaces(options->statsInterfaces, parser.values("z"));
+    parseInterfaces(options->statsInterfaces, conf.hasValue("stats")
+                                              ? QStringList{{conf.value("stats")}}
+                                              : parser.values("z"));
 }
 
 namespace {
