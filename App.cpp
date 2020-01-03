@@ -360,7 +360,8 @@ void App::parseArgs()
         if (!QDir().mkpath(options->datadir))
             throw BadArgs(QString("Unable to create directory: %1").arg(options->datadir));
         path = QFileInfo(options->datadir).canonicalFilePath();
-        Util::AsyncOnObject(this, [path]{ Debug() << "datadir: Created directory " << path; }); // log this after return to event loop so it ends up in syslog (if -S mode)
+        // log this after return to event loop so it ends up in syslog (in case user specified -S mode)
+        Util::AsyncOnObject(this, [path]{ Debug() << "datadir: Created directory " << path; });
     }
 
     // parse bitcoind - conf.value is always unset if parser.value is set, hence this strange constrcution below (parser.value takes precedence)
@@ -403,15 +404,15 @@ void App::parseArgs()
                 throw BadArgs(QString("Unable to read ssl certificate from %1. Please make sure the file is readable and "
                                       "contains a valid certificate in PEM format.").arg(cert));
             else {
-                QString name;
-#if (QT_VERSION >= QT_VERSION_CHECK(5, 12, 0))
-                // Was added Qt 5.12+
-                name = options->sslCert.subjectDisplayName();
-#else
-                name = options->sslCert.subjectInfo(QSslCertificate::Organization).join(", ");
-#endif
-                Util::AsyncOnObject(this, [name, this]{
+                Util::AsyncOnObject(this, [this]{
                     // We do this logging later. This is to ensure that it ends up in the syslog if user specified -S
+                    QString name;
+#if (QT_VERSION >= QT_VERSION_CHECK(5, 12, 0))
+                    // Was added Qt 5.12+
+                    name = options->sslCert.subjectDisplayName();
+#else
+                    name = options->sslCert.subjectInfo(QSslCertificate::Organization).join(", ");
+#endif
                     Log() << "Loaded SSL certificate: " << name << " "
                           << options->sslCert.subjectInfo(QSslCertificate::SubjectInfo::EmailAddress).join(",")
                           //<< " self-signed: " << (options->sslCert.isSelfSigned() ? "YES" : "NO")
@@ -433,7 +434,7 @@ void App::parseArgs()
                 default: return "Other";
                 }
             };
-            Util::AsyncOnObject(this, [this] {
+            Util::AsyncOnObject(this, [this]{
                 // We do this logging later. This is to ensure that it ends up in the syslog if user specified -S
                 Log() << "Loaded key type: " << (options->sslKey.type() == QSsl::KeyType::PrivateKey ? "private" : "public")
                       << " algorithm: " << KeyAlgoStr(options->sslKey.algorithm());
