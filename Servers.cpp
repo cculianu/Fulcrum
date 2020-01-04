@@ -642,7 +642,6 @@ void Server::rpc_server_donation_address(Client *c, const RPC::Message &m)
 }
 void Server::rpc_server_features(Client *c, const RPC::Message &m)
 {
-    // TODO: this is an incomplete impl. ("hosts", etc need love, see comments below)
     QVariantMap r;
     r["pruning"] = QVariant(); // null
     r["genesis_hash"] = QString(Util::ToHexFast(storage->genesisHash()));
@@ -650,15 +649,24 @@ void Server::rpc_server_features(Client *c, const RPC::Message &m)
     r["protocol_min"] = "1.4"; // TODO: have this come from a global constant
     r["protocol_max"] = "1.4.2"; // TODO: have this come from a global constant
     r["hash_function"] = "sha256";
-    // TODO: this "hosts" key is a stub.  Its info needs to come from global config announce settings since public
-    // host/port is what we should return, not local bind ip, local bind port.
+
+    QVariantMap hmap;
+    if (options->publicTcp.has_value())
+        hmap["tcp_port"] = unsigned(options->publicTcp.value());
+    if (options->publicSsl.has_value())
+        hmap["ssl_port"] = unsigned(options->publicSsl.value());
+    if (hmap.isEmpty()) {
+        // This should not normally happen but it can if user specified public_tcp_port=0 and public_ssl_port=0.
+        // In that case we have to report SOMETHING here as per electrumx protocol specs, so we just use the local port
+        // that the client is connected to right now.  TODO: verify if we can get away with an empty dictionary here
+        // instead?
+        const QString key = c->isSsl() ? "ssl_port" : "tcp_port";
+        hmap[key] = unsigned(c->localPort());
+    }
+    const QString hostName = options->hostName.value_or(c->localAddress().toString());
+
     r["hosts"] = QVariantMap{
-        { c->localAddress().toString(), /* TODO: have this NOT be the bind ip but rather come from config "announce" setting */
-          QVariantMap{
-              { "tcp_port", c->localPort() /* TODO: have this NOT be the bind ip but rather come from config "announce" setting */ }
-          }
-          // TODO: support SSL
-        },
+        { hostName, hmap },
     };
     emit c->sendResult(m.id, r);
 }

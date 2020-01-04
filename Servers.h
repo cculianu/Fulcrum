@@ -190,7 +190,7 @@ private:
     // server
     void rpc_server_banner(Client *, const RPC::Message &); // fully implemented (comes from a text file specified by config banner=)
     void rpc_server_donation_address(Client *, const RPC::Message &); // fully implemented (comes from config donation=)
-    void rpc_server_features(Client *, const RPC::Message &); // partially implemented. TODO: "hosts" dict key is incomplete
+    void rpc_server_features(Client *, const RPC::Message &); // fully implemented (comes from config)
     void rpc_server_peers_subscribe(Client *, const RPC::Message &); // not implemented -- returns empty list always
     void rpc_server_ping(Client *, const RPC::Message &); // fully implemented
     void rpc_server_version(Client *, const RPC::Message &); // partially implemented (TODO: we need to reject clients claiming old protocol versions)

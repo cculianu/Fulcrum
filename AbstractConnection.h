@@ -54,6 +54,12 @@ public:
     QHostAddress peerAddress() const;
     quint16 peerPort() const;
 
+    /// Returns true if the connection is via SSL. The default implementation of this function attempts to dynamic_cast
+    /// `socket` to QSslSocket, and if it succeeds, assumes the connection is SSL and returns true.  False is returned
+    /// if the dynamic_cast fails.  This will always return false if called from a thread other than the one in which
+    /// this instance lives.
+    virtual bool isSsl() const;
+
 signals:
     void lostConnection(AbstractConnection *);
     /// call (emit) this to send data to the other end. connected to do_write() when socket is in the connected state.

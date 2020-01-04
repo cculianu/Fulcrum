@@ -375,6 +375,10 @@ void App::parseArgs()
     if (auto l = conf.hasValue("tcp") ? conf.values("tcp") : parser.values("t");  !l.isEmpty()) {
         parseInterfaces(options->interfaces, l);
         tcpIsDefault = false;
+        if (!options->interfaces.isEmpty())
+            // save default publicTcp we will report now -- note this may get reset() to !has_value() later in
+            // this function if user explicitly specified public_tcp_port=0 in the config file.
+            options->publicTcp = options->interfaces.front().second;
     }
     // grab bind (listen) interfaces for SSL (again, apologies for this hard to read expression below -- same comments as above apply here)
     if (auto l = conf.hasValue("ssl") ? conf.values("ssl") : parser.values("s"); !l.isEmpty()) {
@@ -383,6 +387,10 @@ void App::parseArgs()
         }
         parseInterfaces(options->sslInterfaces, l);
         if (tcpIsDefault) options->interfaces.clear(); // they had default tcp setup, clear the default since they did end up specifying at least 1 real interface to bind to
+        if (!options->sslInterfaces.isEmpty())
+            // save default publicSsl we will report now -- note this may get reset() to !has_value() later in
+            // this function if user explicitly specified public_ssl_port=0 in the config file.
+            options->publicSsl = options->sslInterfaces.front().second;
     }
     if (!options->sslInterfaces.isEmpty()) {
         const QString cert = conf.value("cert", parser.value("c")), key = conf.value("key", parser.value("k"));
@@ -448,6 +456,32 @@ void App::parseArgs()
     /// misc conf-only variables ...
     options->donationAddress = conf.value("donation", options->donationAddress).left(80); // the 80 character limit is in case the user specified a crazy long string, no need to send all of it -- it's probably invalid anyway.
     options->bannerFile = conf.value("banner", options->bannerFile);
+    if (conf.hasValue("hostname"))
+        options->hostName = conf.value("hostname");
+    if (conf.hasValue("public_tcp_port")) {
+        bool ok;
+        int val = conf.intValue("public_tcp_port", -1, &ok);
+        if (!ok || val < 0 || val > UINT16_MAX)
+            throw BadArgs("public_tcp_port parse error: not an integer from 0 to 65535");
+        if (!val) options->publicTcp.reset();
+        else options->publicTcp = val;
+    }
+    if (conf.hasValue("public_ssl_port")) {
+        bool ok;
+        int val = conf.intValue("public_ssl_port", -1, &ok);
+        if (!ok || val < 0 || val > UINT16_MAX)
+            throw BadArgs("public_ssl_port parse error: not an integer from 0 to 65535");
+        if (!val) options->publicSsl.reset();
+        else options->publicSsl = val;
+    }
+
+    // warn user that no hostname was specified if they have peerDiscover turned on
+    if (!options->hostName.has_value() && options->peerDiscovery && options->peerAnnounceSelf) {
+        // do this when we return to event loop in case user is logging to -S (so it appears in syslog which gets set up after we return)
+        Util::AsyncOnObject(this, []{
+            Warning() << "Warning: No 'hostname' variable defined in configuration. This server may not be peer-discoverable.";
+        });
+    }
 }
 
 namespace {

@@ -85,6 +85,15 @@ quint16 AbstractConnection::peerPort() const
     return ret;
 }
 
+bool AbstractConnection::isSsl() const
+{
+    bool ret{};
+    if (thread() == QThread::currentThread() && socket) {
+        ret = dynamic_cast<QSslSocket *>(socket) != nullptr;
+    }
+    return ret;
+}
+
 void AbstractConnection::do_disconnect(bool graceful)
 {
     status = status == Bad ? Bad : NotConnected;  // try and keep Bad status around so EXMgr can decide when to reconnect based on it

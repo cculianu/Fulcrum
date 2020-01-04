@@ -65,6 +65,12 @@ struct Options {
     /// Used for the server.banner RPC response. Specified via conf file only via the "banner=" variable. If empty,
     /// or if the file cannot be opened, the default banner text will be emitted to the client as a fallback.
     QString bannerFile = "";
+
+    bool peerDiscovery = false, peerAnnounceSelf = false; ///< comes from config setting: 'peering' and 'announce' TODO
+
+    std::optional<QString> hostName; ///< corresponds to hostname in server config
+    std::optional<quint16> publicTcp;   ///< corresponds to public_tcp_port in server config -- if unspecified will default to the first TCP interface, if !has_value, it will not be announced
+    std::optional<quint16> publicSsl;   ///< corresponds to public_ssl_port in server config -- if unspecified will default to the first SSL interface, if !has_value, it will not be announced
 };
 
 
