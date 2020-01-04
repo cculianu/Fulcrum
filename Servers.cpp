@@ -932,12 +932,11 @@ void Server::rpc_blockchain_scripthash_subscribe(Client *c, const RPC::Message &
 {
     QVariantList l = m.paramsList();
     assert(l.size() == 1);
-    // this isn't really implemented. this is a stub that just returns the immediate status, but doesn't actually
-    // subscribe for notifications.
     QByteArray sh = validateHashHex( l.front().toString() );
     if (sh.length() != HashLen)
         throw RPCError("Invalid scripthash");
-    /// Note: potential race condition here whereby notification can arrive BEFORE the status result! FIXME!
+    /// Note: potential race condition here whereby notification can arrive BEFORE the status result. In practice this
+    /// is fine since clients will cope with the situation, but... ideally, fixme.
     const auto [wasNew, optStatus] = storage->subs()->subscribe(c, sh, [c,method=m.method](const HashX &sh, const StatusHash &status) {
         QVariant statusHexMaybeNull; // if empty we simply notify as 'null' (this is unlikely in practice but may happen on reorg)
         if (!status.isEmpty())
@@ -949,9 +948,8 @@ void Server::rpc_blockchain_scripthash_subscribe(Client *c, const RPC::Message &
     if (!optStatus.has_value()) {
         // no known/cached status -- do the work ourselves asynch in the thread pool.
         generic_do_async(c, m.id, [sh, this] {
-            // TODO: send the computed value back to the SubsMgr somehow here? (This is tricky because race conditions)
             QVariant ret;
-            auto status = storage->subs()->getFullStatus(sh);
+            const auto status = storage->subs()->getFullStatus(sh);
             storage->subs()->maybeCacheStatusResult(sh, status);
             if (!status.isEmpty()) // if empty we return `null`, otherwise we return hex encoded bytes as the immediate status.
                 ret = Util::ToHexFast(status);
