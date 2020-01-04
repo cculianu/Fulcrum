@@ -372,9 +372,9 @@ void Server::on_started()
     AbstractTcpServer::on_started();
 
     // refresh bitcionD version info, server version & subversion, whenever it comes back (in case user upgraded bitcoind from under our feet!)
-    conns += connect(bitcoindmgr.get(), &BitcoinDMgr::gotFirstGoodConnection, this, &Server::refreshBitcoinDVersionInfo);
+    conns += connect(bitcoindmgr.get(), &BitcoinDMgr::gotFirstGoodConnection, this, &Server::refreshBitcoinDNetworkInfo);
     // try and refresh once now as soon as we come alive (usually we don't come alive until bitcoind connections are established so this is ok)
-    refreshBitcoinDVersionInfo();
+    refreshBitcoinDNetworkInfo();
 }
 
 void Server::on_newConnection(QTcpSocket *sock) { newClient(sock); }
@@ -568,7 +568,7 @@ void Server::generic_async_to_bitcoind(Client *c, const RPC::Message::Id & reqId
     );
 }
 
-void Server::refreshBitcoinDVersionInfo()
+void Server::refreshBitcoinDNetworkInfo()
 {
     bitcoindmgr->submitRequest(this, newId(), "getnetworkinfo", QVariantList(),
         // success
@@ -582,12 +582,13 @@ void Server::refreshBitcoinDVersionInfo()
                                minor0 = val % 1000000,
                                minor = minor0 / 10000,
                                revision = (minor0 % 10000) / 100;
-                bitcoinDVersion = {major, minor, revision};
+                bitcoinDInfo.version = {major, minor, revision};
                 //Debug() << "Refreshed version info from bitcoind";
             } else {
                 Warning() << "Failed to get version info from bitcoind";
             }
-            bitcoinDSubversion = networkInfo.value("subversion", "").toString();
+            bitcoinDInfo.relayFee = networkInfo.value("relayfee", 0.0).toDouble();
+            bitcoinDInfo.subversion = networkInfo.value("subversion", "").toString();
         });
 }
 
@@ -608,8 +609,8 @@ void Server::rpc_server_banner(Client *c, const RPC::Message &m)
         generic_do_async(c, m.id,
                         [bannerFile = options->bannerFile,
                          donationAddress = options->donationAddress,
-                         versionTup = bitcoinDVersion,
-                         subversion = bitcoinDSubversion] {
+                         versionTup = bitcoinDInfo.version,
+                         subversion = bitcoinDInfo.subversion] {
                 QVariant ret;
                 QFile bf(bannerFile);
                 if (QByteArray bannerFileData;
@@ -817,7 +818,7 @@ void Server::rpc_blockchain_estimatefee(Client *c, const RPC::Message &m)
     int n = l.front().toInt(&ok);
     if (!ok || n < 0)
         throw RPCError(QString("%1 parameter should be a single non-negative integer").arg(m.method));
-    if (bitcoinDSubversion.startsWith("/Bitcoin ABC") && bitcoinDVersion >= std::make_tuple(0, 20, 2)) {
+    if (bitcoinDInfo.subversion.startsWith("/Bitcoin ABC") && bitcoinDInfo.version >= std::make_tuple(0, 20, 2)) {
         // Bitcoin ABC v0.20.2 has taken out the nblocks argument
         generic_async_to_bitcoind(c, m.id, "estimatefee", QVariantList(),[](const RPC::Message &response){
             return response.result();
@@ -856,9 +857,9 @@ void Server::rpc_blockchain_headers_subscribe(Client *c, const RPC::Message &m) 
 }
 void Server::rpc_blockchain_relayfee(Client *c, const RPC::Message &m)
 {
-    // TODO: Implement this
-    constexpr double dummyReply = 0.00001000;
-    emit c->sendResult(m.id, dummyReply);
+    // This value never changes unless bitcoind is restarted, in which case we will pick up the new value when it comes
+    // back. See: refreshBitcoinDNetworkInfo()
+    emit c->sendResult(m.id, bitcoinDInfo.relayFee);
 }
 void Server::rpc_blockchain_scripthash_get_balance(Client *c, const RPC::Message &m)
 {

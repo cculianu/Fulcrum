@@ -197,9 +197,9 @@ private:
     // blockchain misc
     void rpc_blockchain_block_header(Client *, const RPC::Message &);  // fully implemented
     void rpc_blockchain_block_headers(Client *, const RPC::Message &); // fully implemented
-    void rpc_blockchain_estimatefee(Client *, const RPC::Message &); // todo: this is a stub implementation
+    void rpc_blockchain_estimatefee(Client *, const RPC::Message &); // fully implemented
     void rpc_blockchain_headers_subscribe(Client *, const RPC::Message &); // fully implemented
-    void rpc_blockchain_relayfee(Client *, const RPC::Message &); // todo: this is a stub implementation
+    void rpc_blockchain_relayfee(Client *, const RPC::Message &); // fully implemented
     // scripthash
     void rpc_blockchain_scripthash_get_balance(Client *, const RPC::Message &); // fully implemented
     void rpc_blockchain_scripthash_get_history(Client *, const RPC::Message &); // fully implemented
@@ -248,10 +248,15 @@ private:
     /// Returns the QVariantMap suitable for placing into the resulting response.
     QVariantList getHistoryCommon(const QByteArray & sh, bool mempoolOnly);
 
-    std::tuple<unsigned, unsigned, unsigned> bitcoinDVersion {0,0,0}; ///> major, minor, revision e.g. {0, 20, 6} for v0.20.6
-    QString bitcoinDSubversion; ///< subversion string from daemon e.g.: /BitcoinABC bla bla;EB32 ..../
+    /// This basically all comes from getnetworkinfo to bitcoind.
+    struct BitcoinDInfo {
+        std::tuple<unsigned, unsigned, unsigned> version {0,0,0}; ///> major, minor, revision e.g. {0, 20, 6} for v0.20.6
+        QString subversion; ///< subversion string from daemon e.g.: /BitcoinABC bla bla;EB32 ..../
+        double relayFee = 0.0; ///< from 'relayfee' in the getnetworkinfo response; minimum fee/kb to relay a tx, usually: 0.00001000
+    };
+    BitcoinDInfo bitcoinDInfo;
 private slots:
-    void refreshBitcoinDVersionInfo(); ///< whenever bitcoind comes back alive, this is invoked to update bitcoin daemon version and subversion info
+    void refreshBitcoinDNetworkInfo(); ///< whenever bitcoind comes back alive, this is invoked to update the BitcoinDInfo struct declared above
 };
 
 /// SSL version of the above Server class that just wraps tcp sockets with a QSslSocket.
