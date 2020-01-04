@@ -1232,7 +1232,7 @@ quint64 CtlTask::submitRequest(const QString &method, const QVariantList &params
 auto Controller::stats() const -> Stats
 {
     // "Servers"
-    auto st = QVariantMap{{ "Servers", srvmgr ? srvmgr->statsSafe() : QVariant() }};
+    auto st = QVariantMap{{ "Server Manager", srvmgr ? srvmgr->statsSafe() : QVariant() }};
 
     // "BitcoinD's"
     st["Bitcoin Daemon"] = bitcoindmgr->statsSafe();

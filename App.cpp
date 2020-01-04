@@ -444,6 +444,10 @@ void App::parseArgs()
     parseInterfaces(options->statsInterfaces, conf.hasValue("stats")
                                               ? conf.values("stats")
                                               : parser.values("z"));
+
+    /// misc conf-only variables ...
+    options->donationAddress = conf.value("donation", options->donationAddress).left(80); // the 80 character limit is in case the user specified a crazy long string, no need to send all of it -- it's probably invalid anyway.
+    options->bannerFile = conf.value("banner", options->bannerFile);
 }
 
 namespace {

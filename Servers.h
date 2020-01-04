@@ -20,6 +20,7 @@
 
 #include "Common.h"
 #include "Mixins.h"
+#include "Options.h"
 #include "RPC.h"
 #include "Util.h"
 
@@ -126,7 +127,8 @@ class Server : public AbstractTcpServer
 {
     Q_OBJECT
 public:
-    Server(const QHostAddress & address, quint16 port, const std::shared_ptr<Storage> & storage, const std::shared_ptr<BitcoinDMgr> & bitcoindmgr);
+    Server(const QHostAddress & address, quint16 port, const std::shared_ptr<Options> & options,
+           const std::shared_ptr<Storage> & storage, const std::shared_ptr<BitcoinDMgr> & bitcoindmgr);
     ~Server() override;
 
     virtual QString prettyName() const override;
@@ -187,7 +189,7 @@ private:
     // RPC methods below
     // server
     void rpc_server_banner(Client *, const RPC::Message &); // returns static string, TODO: have this come from a config file
-    void rpc_server_donation_address(Client *, const RPC::Message &); // returns static string, TODO: have this come from config
+    void rpc_server_donation_address(Client *, const RPC::Message &); // fully implemented (comes from config donation=)
     void rpc_server_features(Client *, const RPC::Message &); // partially implemented. TODO: "hosts" dict key is incomplete
     void rpc_server_peers_subscribe(Client *, const RPC::Message &); // not implemented -- returns empty list always
     void rpc_server_ping(Client *, const RPC::Message &); // fully implemented
@@ -231,6 +233,8 @@ private:
         StaticData() = delete; ///< unconstructible class! :D
     };
 
+    /// pointer to the shared Options object -- app-wide configuration settings. Owned and controlled by the App instance.
+    std::shared_ptr<const Options> options;
     /// pointer to shared Storage object -- owned and controlled by the Controller instance
     std::shared_ptr<Storage> storage;
     /// pointer to shared BitcoinDMgr object -- owned and controlled by the Controller instance
@@ -252,7 +256,7 @@ class ServerSSL : public Server
 {
     Q_OBJECT
 public:
-    ServerSSL(const QSslCertificate & cert, const QSslKey & key, const QHostAddress & address, quint16 port,
+    ServerSSL(const QHostAddress & address, quint16 port, const std::shared_ptr<Options> & options,
               const std::shared_ptr<Storage> & storage, const std::shared_ptr<BitcoinDMgr> & bitcoindmgr);
     ~ServerSSL() override;
 

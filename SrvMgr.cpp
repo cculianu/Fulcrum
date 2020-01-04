@@ -64,10 +64,10 @@ void SrvMgr::startServers()
     for (const auto & iface : options->interfaces + options->sslInterfaces) {
         if (i < firstSsl)
             // TCP
-            servers.emplace_back(std::make_unique<Server>(iface.first, iface.second, storage, bitcoindmgr));
+            servers.emplace_back(std::make_unique<Server>(iface.first, iface.second, options, storage, bitcoindmgr));
         else
             // SSL
-            servers.emplace_back(std::make_unique<ServerSSL>(options->sslCert, options->sslKey, iface.first, iface.second, storage, bitcoindmgr));
+            servers.emplace_back(std::make_unique<ServerSSL>(iface.first, iface.second, options, storage, bitcoindmgr));
         Server *srv = servers.back().get();
         srv->tryStart();
 
@@ -79,6 +79,9 @@ void SrvMgr::startServers()
 
 auto SrvMgr::stats() const -> Stats
 {
+    QVariantMap m;
+    m["donationAddress"] = options->donationAddress;
+    m["bannerFile"] = options->bannerFile.toUtf8(); // so we get a nice 'null' if not specified
     QVariantList serverList;
     const int timeout = kDefaultTimeout / qMax(int(servers.size()), 1);
     for (auto & serverptr : servers) {
@@ -93,5 +96,6 @@ auto SrvMgr::stats() const -> Stats
             serverList.push_back(m);
         }
     }
-    return serverList;
+    m["Servers"] = serverList;
+    return m;
 }

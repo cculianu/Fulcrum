@@ -25,6 +25,8 @@
 
 #include <QByteArray>
 #include <QCoreApplication>
+#include <QFile>
+#include <QFileInfo>
 #include <QtNetwork>
 #include <QString>
 #include <QTextCodec>
@@ -319,8 +321,9 @@ namespace {
     }
 }
 
-Server::Server(const QHostAddress &a, quint16 p, const std::shared_ptr<Storage> &s, const std::shared_ptr<BitcoinDMgr> &bdm)
-    : AbstractTcpServer(a, p), storage(s), bitcoindmgr(bdm)
+Server::Server(const QHostAddress &a, quint16 p, const std::shared_ptr<Options> & opts,
+               const std::shared_ptr<Storage> &s, const std::shared_ptr<BitcoinDMgr> &bdm)
+    : AbstractTcpServer(a, p), options(opts), storage(s), bitcoindmgr(bdm)
 {
     // re-set name for debug/logging
     _thread.setObjectName(prettyName());
@@ -562,13 +565,27 @@ void Server::generic_async_to_bitcoind(Client *c, const RPC::Message::Id & reqId
 
 void Server::rpc_server_banner(Client *c, const RPC::Message &m)
 {
-    // TODO: have this come from a configurable text file, etc
-    emit c->sendResult(m.id, QString("Connected to a %1 %2 server").arg(APPNAME).arg(VERSION));
+    constexpr int MAX_BANNER_DATA = 16384;
+    static const QString bannerFallback = QString("Connected to a %1 %2 server").arg(APPNAME).arg(VERSION);
+    const QString bannerFile(options->bannerFile);
+    if (bannerFile.isEmpty() || !QFile::exists(bannerFile) || !QFileInfo(bannerFile).isReadable()) {
+        // fallback -- banner file invalid/not readable/not specified
+        emit c->sendResult(m.id, bannerFallback);
+    } else {
+        // TODO: $DONATON_ADDRESS, $SERVER_VERSION, etc variable substitution.. this is a stub. We will need to
+        // go out to bitcoind to accomplish some of the substitutions.
+        QFile f(bannerFile);
+        if (QByteArray banner; f.open(QIODevice::ReadOnly) && (!(banner = f.read(MAX_BANNER_DATA)).isEmpty()
+                                                               || f.error() == QFile::NoError) )
+            emit c->sendResult(m.id, QString::fromUtf8(banner));
+        else
+            emit c->sendResult(m.id, bannerFallback);
+    }
+
 }
 void Server::rpc_server_donation_address(Client *c, const RPC::Message &m)
 {
-    // TODO: have this come from a configuration param, etc
-    emit c->sendResult(m.id, QString("bitcoincash:qplw0d304x9fshz420lkvys2jxup38m9symky6k028"));
+    emit c->sendResult(m.id, options->donationAddress);
 }
 void Server::rpc_server_features(Client *c, const RPC::Message &m)
 {
@@ -1129,9 +1146,9 @@ void Server::StaticData::init()
 // --- /RPC METHODS ---
 
 // --- SSL Server support ---
-ServerSSL::ServerSSL(const QSslCertificate & cert, const QSslKey & key, const QHostAddress & address_, quint16 port_,
+ServerSSL::ServerSSL(const QHostAddress & address_, quint16 port_, const std::shared_ptr<Options> & opts,
                      const std::shared_ptr<Storage> & storage_, const std::shared_ptr<BitcoinDMgr> & bitcoindmgr_)
-    : Server(address_, port_, storage_, bitcoindmgr_), cert(cert), key(key)
+    : Server(address_, port_, opts, storage_, bitcoindmgr_), cert(opts->sslCert), key(opts->sslKey)
 {
     if (cert.isNull() || key.isNull())
         throw BadArgs("ServerSSL cannot be instantiated: Key or cert are null!");
