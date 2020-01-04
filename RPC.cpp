@@ -369,9 +369,13 @@ namespace RPC {
                     auto [minParams, maxParams] = m.opt_nPosParams.value();
                     if (maxParams < minParams) maxParams = minParams;
                     if (num < minParams)
-                        throw InvalidParameters(QString("Expected at least %1 parameters for %2, got %3 instead").arg(minParams).arg(m.method).arg(num));
+                        throw InvalidParameters(QString("Expected at least %1 %2 for %3, got %4 instead")
+                                                .arg(minParams).arg(Util::Pluralize("parameter", minParams))
+                                                .arg(m.method).arg(num));
                     if (num > maxParams)
-                        throw InvalidParameters(QString("Expected at most %1 parameters for %2, got %3 instead").arg(maxParams).arg(m.method).arg(num));
+                        throw InvalidParameters(QString("Expected at most %1 %2 for %3, got %4 instead")
+                                                .arg(maxParams).arg(Util::Pluralize("parameter", maxParams))
+                                                .arg(m.method).arg(num));
                 } else if (msg.isParamsMap()) {
                     // named args specified
                     if (!m.opt_kwParams.has_value())
