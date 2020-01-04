@@ -248,8 +248,10 @@ private:
     /// Returns the QVariantMap suitable for placing into the resulting response.
     QVariantList getHistoryCommon(const QByteArray & sh, bool mempoolOnly);
 
-    struct Pvt;
-    std::unique_ptr<Pvt> p;
+    std::tuple<unsigned, unsigned, unsigned> bitcoinDVersion {0,0,0}; ///> major, minor, revision e.g. {0, 20, 6} for v0.20.6
+    QString bitcoinDSubversion; ///< subversion string from daemon e.g.: /BitcoinABC bla bla;EB32 ..../
+private slots:
+    void refreshBitcoinDVersionInfo(); ///< whenever bitcoind comes back alive, this is invoked to update bitcoin daemon version and subversion info
 };
 
 /// SSL version of the above Server class that just wraps tcp sockets with a QSslSocket.

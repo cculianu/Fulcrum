@@ -321,16 +321,10 @@ namespace {
     }
 }
 
-struct Server::Pvt {
-    using CachedBanner = std::pair<std::optional<QString>, double>; // banner data, timestamp (seconds).
-    static constexpr double cachedBannerTimeout = 5.0; // cached banner lives this long before refresh
-
-    CachedBanner cachedBanner; ///< since we sometimes have to go out to bitcoind to compose the banner, we instead cache it and refresh it only after it is at least 5 seconds old
-};
 
 Server::Server(const QHostAddress &a, quint16 p, const std::shared_ptr<Options> & opts,
                const std::shared_ptr<Storage> &s, const std::shared_ptr<BitcoinDMgr> &bdm)
-    : AbstractTcpServer(a, p), options(opts), storage(s), bitcoindmgr(bdm), p(std::make_unique<Pvt>())
+    : AbstractTcpServer(a, p), options(opts), storage(s), bitcoindmgr(bdm)
 {
     // re-set name for debug/logging
     _thread.setObjectName(prettyName());
@@ -376,7 +370,11 @@ QVariantMap Server::stats() const
 void Server::on_started()
 {
     AbstractTcpServer::on_started();
-    // add more conns here, etc, if needed
+
+    // refresh bitcionD version info, server version & subversion, whenever it comes back (in case user upgraded bitcoind from under our feet!)
+    conns += connect(bitcoindmgr.get(), &BitcoinDMgr::gotFirstGoodConnection, this, &Server::refreshBitcoinDVersionInfo);
+    // try and refresh once now as soon as we come alive (usually we don't come alive until bitcoind connections are established so this is ok)
+    refreshBitcoinDVersionInfo();
 }
 
 void Server::on_newConnection(QTcpSocket *sock) { newClient(sock); }
@@ -570,6 +568,31 @@ void Server::generic_async_to_bitcoind(Client *c, const RPC::Message::Id & reqId
     );
 }
 
+void Server::refreshBitcoinDVersionInfo()
+{
+    bitcoindmgr->submitRequest(this, newId(), "getnetworkinfo", QVariantList(),
+        // success
+        [this](const RPC::Message & reply) {
+            const QVariantMap networkInfo = reply.result().toMap();
+            bool ok = false;
+            const auto val = networkInfo.value("version", 0).toUInt(&ok);
+            if (ok) {
+                // e.g. 0.20.6 comes in like this from bitcoind (as an unsigned int): 200600
+                const unsigned major = val / 1000000,
+                               minor0 = val % 1000000,
+                               minor = minor0 / 10000,
+                               revision = (minor0 % 10000) / 100;
+                bitcoinDVersion = {major, minor, revision};
+                //Debug() << "Refreshed version info from bitcoind";
+            } else {
+                Warning() << "Failed to get version info from bitcoind";
+            }
+            bitcoinDSubversion = networkInfo.value("subversion", "").toString();
+        });
+}
+
+// This is used mainly below in rpc_server_banner() which is why we put it here.
+
 void Server::rpc_server_banner(Client *c, const RPC::Message &m)
 {
     constexpr int MAX_BANNER_DATA = 16384;
@@ -581,60 +604,38 @@ void Server::rpc_server_banner(Client *c, const RPC::Message &m)
         // fallback -- banner file invalid/not readable/not specified
         emit c->sendResult(m.id, bannerFallback);
     } else {
-        // banner file specified, now let's see if we should use the cached data
-        const auto & [cachedBannerOpt, cachedBannerTs] = p->cachedBanner;
-        if (cachedBannerOpt.has_value() && Util::getTimeSecs() - cachedBannerTs < p->cachedBannerTimeout) {
-            // just send the cached banner -- it's less than 5 seconds old and has good data
-            emit c->sendResult(m.id, cachedBannerOpt.value());
-        } else {
-            // no cached banner data or banner data is too old -- refresh bitcoind info so we can do variable
-            // substitutions for variables like $DAEMON_VERSION and $DAEMON_SUBVERSION which may appear in the banner
-            // text file.
-            generic_async_to_bitcoind(c, m.id, "getnetworkinfo", QVariantList(),
-                // success function
-                [this](const RPC::Message & response){
-                    QVariant ret;
-                    const QVariantMap networkInfo = response.result().toMap();
-                    QFile bf(options->bannerFile);
-                    if (QByteArray bannerFileData;
-                            !bf.open(QIODevice::ReadOnly) || ((bannerFileData = bf.read(MAX_BANNER_DATA)).isEmpty()
-                                                              && bf.error() != QFile::FileError::NoError))
-                    {
-                        // error reading banner file, just send the fallback
-                        ret = bannerFallback;
-                    } else {
-                        // read banner file ok, perform variable substitutions
-                        const unsigned dver = networkInfo.value("version", 0).toUInt(), // e.g. 0.20.6 comes in like this: 200600
-                                       major = dver / 1000000,
-                                       minor0 = dver % 1000000,
-                                       minor = minor0 / 10000,
-                                       revision = (minor0 % 10000) / 100;
-                        // The reason why we don't cache this data from bitcoind once at startup or similar is that it
-                        // is not guaranteed to not change. The user can always upgrade their bitcoind while we are still
-                        // running, and while clients are even still connected!
-                        const QString daemonVersion = QString("%1.%2.%3").arg(major).arg(minor).arg(revision);
-                        const QString banner =
-                                QString::fromUtf8(bannerFileData)
-                                .replace("$SERVER_VERSION", QString(fulcrumVersion))
-                                .replace("$SERVER_SUBVERSION", fulcrumSubVersion)
-                                .replace("$DONATION_ADDRESS", options->donationAddress)
-                                .replace("$DAEMON_VERSION", daemonVersion)
-                                .replace("$DAEMON_SUBVERSION", networkInfo.value("subversion", "").toString())
-                                .left(MAX_BANNER_DATA); ///< Note this ".left()" is really not in bytes but unicode codepoints, that's fine, the limit is a soft limit
-
-                        p->cachedBanner = { banner, Util::getTimeSecs() }; // good banner: save to cache
-                        ret = banner;
-                    }
-                    // send result to client (either the fallback or the real deal)
-                    return ret;
-                },
-                // failed to get info from bitcoind, just send the fallback banner to the client
-                [](const RPC::Message &) { return bannerFallback; }
-            );
-        }
+        // banner file specified, now let's open it up in a worker thread to keep the server responsive and return immediately
+        generic_do_async(c, m.id,
+                        [bannerFile = options->bannerFile,
+                         donationAddress = options->donationAddress,
+                         versionTup = bitcoinDVersion,
+                         subversion = bitcoinDSubversion] {
+                QVariant ret;
+                QFile bf(bannerFile);
+                if (QByteArray bannerFileData;
+                        !bf.open(QIODevice::ReadOnly) || ((bannerFileData = bf.read(MAX_BANNER_DATA)).isEmpty()
+                                                          && bf.error() != QFile::FileError::NoError))
+                {
+                    // error reading banner file, just send the fallback
+                    ret = bannerFallback;
+                } else {
+                    // read banner file ok, perform variable substitutions
+                    const auto [major, minor, revision] = versionTup;
+                    const QString daemonVersion = QString("%1.%2.%3").arg(major).arg(minor).arg(revision);
+                    ret = QString::fromUtf8(bannerFileData)
+                            .replace("$SERVER_VERSION", QString(fulcrumVersion))
+                            .replace("$SERVER_SUBVERSION", fulcrumSubVersion)
+                            .replace("$DONATION_ADDRESS", donationAddress)
+                            .replace("$DAEMON_VERSION", daemonVersion)
+                            .replace("$DAEMON_SUBVERSION", subversion)
+                            .left(MAX_BANNER_DATA); ///< Note this ".left()" is really not in bytes but unicode codepoints, that's fine, the limit is a soft limit
+                }
+                // send result to client (either the fallback or the real deal)
+                return ret;
+        });
     }
-
 }
+
 void Server::rpc_server_donation_address(Client *c, const RPC::Message &m)
 {
     emit c->sendResult(m.id, options->donationAddress);
