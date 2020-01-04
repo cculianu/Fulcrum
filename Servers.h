@@ -182,13 +182,13 @@ private:
     void generic_do_async(Client *client, const RPC::Message::Id &reqId,  const AsyncWorkFunc & work);
     void generic_async_to_bitcoind(Client *client,
                                    const RPC::Message::Id & reqId,  ///< the original client request id
-                                   const QString &method,
-                                   const QVariantList &params,
+                                   const QString &method, ///< bitcoind method to invoke
+                                   const QVariantList &params, ///< params for bitcoind method
                                    const BitcoinDSuccessFunc & successFunc,
                                    const BitcoinDErrorFunc & errorFunc = BitcoinDErrorFunc());
     // RPC methods below
     // server
-    void rpc_server_banner(Client *, const RPC::Message &); // returns static string, TODO: have this come from a config file
+    void rpc_server_banner(Client *, const RPC::Message &); // fully implemented (comes from a text file specified by config banner=)
     void rpc_server_donation_address(Client *, const RPC::Message &); // fully implemented (comes from config donation=)
     void rpc_server_features(Client *, const RPC::Message &); // partially implemented. TODO: "hosts" dict key is incomplete
     void rpc_server_peers_subscribe(Client *, const RPC::Message &); // not implemented -- returns empty list always
@@ -247,6 +247,9 @@ private:
     /// called from get_mempool and get_history to retrieve the mempool and/or history for a hashx synchronously.
     /// Returns the QVariantMap suitable for placing into the resulting response.
     QVariantList getHistoryCommon(const QByteArray & sh, bool mempoolOnly);
+
+    struct Pvt;
+    std::unique_ptr<Pvt> p;
 };
 
 /// SSL version of the above Server class that just wraps tcp sockets with a QSslSocket.

@@ -321,9 +321,16 @@ namespace {
     }
 }
 
+struct Server::Pvt {
+    using CachedBanner = std::pair<std::optional<QString>, double>; // banner data, timestamp (seconds).
+    static constexpr double cachedBannerTimeout = 5.0; // cached banner lives this long before refresh
+
+    CachedBanner cachedBanner; ///< since we sometimes have to go out to bitcoind to compose the banner, we instead cache it and refresh it only after it is at least 5 seconds old
+};
+
 Server::Server(const QHostAddress &a, quint16 p, const std::shared_ptr<Options> & opts,
                const std::shared_ptr<Storage> &s, const std::shared_ptr<BitcoinDMgr> &bdm)
-    : AbstractTcpServer(a, p), options(opts), storage(s), bitcoindmgr(bdm)
+    : AbstractTcpServer(a, p), options(opts), storage(s), bitcoindmgr(bdm), p(std::make_unique<Pvt>())
 {
     // re-set name for debug/logging
     _thread.setObjectName(prettyName());
@@ -566,20 +573,65 @@ void Server::generic_async_to_bitcoind(Client *c, const RPC::Message::Id & reqId
 void Server::rpc_server_banner(Client *c, const RPC::Message &m)
 {
     constexpr int MAX_BANNER_DATA = 16384;
-    static const QString bannerFallback = QString("Connected to a %1 %2 server").arg(APPNAME).arg(VERSION);
+    constexpr auto fulcrumVersion = VERSION;
+    static const QString fulcrumSubVersion = QString("%1 %2").arg(APPNAME).arg(fulcrumVersion);
+    static const QString bannerFallback = QString("Connected to a %1 server").arg(fulcrumSubVersion);
     const QString bannerFile(options->bannerFile);
     if (bannerFile.isEmpty() || !QFile::exists(bannerFile) || !QFileInfo(bannerFile).isReadable()) {
         // fallback -- banner file invalid/not readable/not specified
         emit c->sendResult(m.id, bannerFallback);
     } else {
-        // TODO: $DONATON_ADDRESS, $SERVER_VERSION, etc variable substitution.. this is a stub. We will need to
-        // go out to bitcoind to accomplish some of the substitutions.
-        QFile f(bannerFile);
-        if (QByteArray banner; f.open(QIODevice::ReadOnly) && (!(banner = f.read(MAX_BANNER_DATA)).isEmpty()
-                                                               || f.error() == QFile::NoError) )
-            emit c->sendResult(m.id, QString::fromUtf8(banner));
-        else
-            emit c->sendResult(m.id, bannerFallback);
+        // banner file specified, now let's see if we should use the cached data
+        const auto & [cachedBannerOpt, cachedBannerTs] = p->cachedBanner;
+        if (cachedBannerOpt.has_value() && Util::getTimeSecs() - cachedBannerTs < p->cachedBannerTimeout) {
+            // just send the cached banner -- it's less than 5 seconds old and has good data
+            emit c->sendResult(m.id, cachedBannerOpt.value());
+        } else {
+            // no cached banner data or banner data is too old -- refresh bitcoind info so we can do variable
+            // substitutions for variables like $DAEMON_VERSION and $DAEMON_SUBVERSION which may appear in the banner
+            // text file.
+            generic_async_to_bitcoind(c, m.id, "getnetworkinfo", QVariantList(),
+                // success function
+                [this](const RPC::Message & response){
+                    QVariant ret;
+                    const QVariantMap networkInfo = response.result().toMap();
+                    QFile bf(options->bannerFile);
+                    if (QByteArray bannerFileData;
+                            !bf.open(QIODevice::ReadOnly) || ((bannerFileData = bf.read(MAX_BANNER_DATA)).isEmpty()
+                                                              && bf.error() != QFile::FileError::NoError))
+                    {
+                        // error reading banner file, just send the fallback
+                        ret = bannerFallback;
+                    } else {
+                        // read banner file ok, perform variable substitutions
+                        const unsigned dver = networkInfo.value("version", 0).toUInt(), // e.g. 0.20.6 comes in like this: 200600
+                                       major = dver / 1000000,
+                                       minor0 = dver % 1000000,
+                                       minor = minor0 / 10000,
+                                       revision = (minor0 % 10000) / 100;
+                        // The reason why we don't cache this data from bitcoind once at startup or similar is that it
+                        // is not guaranteed to not change. The user can always upgrade their bitcoind while we are still
+                        // running, and while clients are even still connected!
+                        const QString daemonVersion = QString("%1.%2.%3").arg(major).arg(minor).arg(revision);
+                        const QString banner =
+                                QString::fromUtf8(bannerFileData)
+                                .replace("$SERVER_VERSION", QString(fulcrumVersion))
+                                .replace("$SERVER_SUBVERSION", fulcrumSubVersion)
+                                .replace("$DONATION_ADDRESS", options->donationAddress)
+                                .replace("$DAEMON_VERSION", daemonVersion)
+                                .replace("$DAEMON_SUBVERSION", networkInfo.value("subversion", "").toString())
+                                .left(MAX_BANNER_DATA); ///< Note this ".left()" is really not in bytes but unicode codepoints, that's fine, the limit is a soft limit
+
+                        p->cachedBanner = { banner, Util::getTimeSecs() }; // good banner: save to cache
+                        ret = banner;
+                    }
+                    // send result to client (either the fallback or the real deal)
+                    return ret;
+                },
+                // failed to get info from bitcoind, just send the fallback banner to the client
+                [](const RPC::Message &) { return bannerFallback; }
+            );
+        }
     }
 
 }
