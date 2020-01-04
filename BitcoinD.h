@@ -47,15 +47,18 @@ public:
     using FailF = std::function<void(const RPC::Message::Id &origId, const QString & failureReason)>;
 
     /// This is safe to call from any thread.
-    /// Internally it dispatches messages to `this` obejct's thread. Results/Error/Fail functions are called in the
-    /// context of the `sender` object's thread. Returns immediately regardless of which thread context it's called in,
-    /// with one of the 3 following being called later, in the thread context of `sender`, when results/errors/failure
-    /// is determined:
+    /// Internally it dispatches messages to `this` object's thread. Results/Error/Fail functions are called in the
+    /// context of the `sender` object's thread, but only as long as `sender` is still alive. Returns immediately
+    /// regardless of which thread context it's called in, with one of the 3 following being called later, in the thread
+    /// context of `sender`, when results/errors/failure is determined:
     /// - ResultsF will be called exactly once on success returning the reults encapsulated in an RPC::Message
     /// - If BitcoinD generated an error response, ErrorF will be called exactly once with the error wrapped in an
     ///   RPC::Message
     /// - If some other error occurred (such as timeout, or BitcoinD not connected, or connection lost, etc), FailF
     ///   will be called exactly once with a string message.
+    ///
+    /// If at any time before results are ready the `sender` object is deleted, nothing will be called and everything
+    /// related to this request will be cleaned up automatically.
     void submitRequest(QObject *sender, const RPC::Message::Id &id, const QString & method, const QVariantList & params,
                        const ResultsF & = ResultsF(), const ErrorF & = ErrorF(), const FailF & = FailF());
 

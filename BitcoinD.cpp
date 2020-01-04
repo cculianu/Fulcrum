@@ -135,8 +135,8 @@ BitcoinD *BitcoinDMgr::getBitcoinD()
     return ret;
 }
 
-/// this is safe to call from any thread. internally it dispatches messages to this obejct's thread.
-/// does not throw. Results/Error/Fail functions are called in the context of the sender's thread.
+/// This is safe to call from any thread. Internally it dispatches messages to this obejct's thread.
+/// Does not throw. Results/Error/Fail functions are called in the context of the `sender` thread.
 /// Returns the BitcoinD->id that was given the message.
 void BitcoinDMgr::submitRequest(QObject *sender, const RPC::Message::Id &rid, const QString & method, const QVariantList & params,
                                 const ResultsF & resf, const ErrorF & errf, const FailF & failf)
