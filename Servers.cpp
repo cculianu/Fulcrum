@@ -471,6 +471,30 @@ void Server::onPeerError(quint64 clientId, const QString &what)
     }
 }
 
+void Server::refreshBitcoinDNetworkInfo()
+{
+    bitcoindmgr->submitRequest(this, newId(), "getnetworkinfo", QVariantList(),
+        // success
+        [this](const RPC::Message & reply) {
+            const QVariantMap networkInfo = reply.result().toMap();
+            bool ok = false;
+            const auto val = networkInfo.value("version", 0).toUInt(&ok);
+            if (ok) {
+                // e.g. 0.20.6 comes in like this from bitcoind (as an unsigned int): 200600
+                const unsigned major = val / 1000000,
+                               minor0 = val % 1000000,
+                               minor = minor0 / 10000,
+                               revision = (minor0 % 10000) / 100;
+                bitcoinDInfo.version = {major, minor, revision};
+                //Debug() << "Refreshed version info from bitcoind";
+            } else {
+                Warning() << "Failed to get version info from bitcoind";
+            }
+            bitcoinDInfo.relayFee = networkInfo.value("relayfee", 0.0).toDouble();
+            bitcoinDInfo.subversion = networkInfo.value("subversion", "").toString();
+        });
+}
+
 // --- RPC METHODS ---
 namespace {
     Util::ThreadPool::FailFunc defaultTPFailFunc(Client *c, const RPC::Message::Id &id) {
@@ -568,32 +592,14 @@ void Server::generic_async_to_bitcoind(Client *c, const RPC::Message::Id & reqId
     );
 }
 
-void Server::refreshBitcoinDNetworkInfo()
+void Server::rpc_server_add_peer(Client *c, const RPC::Message &m)
 {
-    bitcoindmgr->submitRequest(this, newId(), "getnetworkinfo", QVariantList(),
-        // success
-        [this](const RPC::Message & reply) {
-            const QVariantMap networkInfo = reply.result().toMap();
-            bool ok = false;
-            const auto val = networkInfo.value("version", 0).toUInt(&ok);
-            if (ok) {
-                // e.g. 0.20.6 comes in like this from bitcoind (as an unsigned int): 200600
-                const unsigned major = val / 1000000,
-                               minor0 = val % 1000000,
-                               minor = minor0 / 10000,
-                               revision = (minor0 % 10000) / 100;
-                bitcoinDInfo.version = {major, minor, revision};
-                //Debug() << "Refreshed version info from bitcoind";
-            } else {
-                Warning() << "Failed to get version info from bitcoind";
-            }
-            bitcoinDInfo.relayFee = networkInfo.value("relayfee", 0.0).toDouble();
-            bitcoinDInfo.subversion = networkInfo.value("subversion", "").toString();
-        });
+    // TODO: Implement this. This is a stub implementation always returning true.
+    const auto map = m.paramsList().front().toMap();
+    if (map.isEmpty())
+        throw RPCError(QString("%1 expected a non-empty dictionary argument").arg(m.method));
+    emit c->sendResult(m.id, true);
 }
-
-// This is used mainly below in rpc_server_banner() which is why we put it here.
-
 void Server::rpc_server_banner(Client *c, const RPC::Message &m)
 {
     constexpr int MAX_BANNER_DATA = 16384;
@@ -636,7 +642,6 @@ void Server::rpc_server_banner(Client *c, const RPC::Message &m)
         });
     }
 }
-
 void Server::rpc_server_donation_address(Client *c, const RPC::Message &m)
 {
     emit c->sendResult(m.id, options->donationAddress);
@@ -1172,7 +1177,8 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::methodMap);
 HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
 /*  ==> Note: Add stuff to this table when adding new RPC methods.
     { {"rpc.name",                allow_requests, allow_notifications, PosParamRange, (QSet<QString> note: {} means undefined optional)}, &method_to_call }     */
-    { {"server.banner",                     true,               false,    PR{0,0},      RPC::KeySet{} },          &Server::rpc_server_banner },
+    { {"server.add_peer",                   true,               false,    PR{1,1},      RPC::KeySet{} },          &Server::rpc_server_add_peer },
+    { {"server.banner",                     true,               false,    PR{0,0},                    },          &Server::rpc_server_banner },
     { {"server.donation_address",           true,               false,    PR{0,0},                    },          &Server::rpc_server_donation_address },
     { {"server.features",                   true,               false,    PR{0,0},                    },          &Server::rpc_server_features },
     { {"server.peers.subscribe",            true,               false,    PR{0,0},                    },          &Server::rpc_server_peers_subscribe },

@@ -188,6 +188,7 @@ private:
                                    const BitcoinDErrorFunc & errorFunc = BitcoinDErrorFunc());
     // RPC methods below
     // server
+    void rpc_server_add_peer(Client *, const RPC::Message &); // not implemented -- returns true always
     void rpc_server_banner(Client *, const RPC::Message &); // fully implemented (comes from a text file specified by config banner=)
     void rpc_server_donation_address(Client *, const RPC::Message &); // fully implemented (comes from config donation=)
     void rpc_server_features(Client *, const RPC::Message &); // fully implemented (comes from config)
