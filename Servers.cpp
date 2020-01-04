@@ -813,8 +813,21 @@ void Server::rpc_blockchain_estimatefee(Client *c, const RPC::Message &m)
 {
     QVariantList l = m.paramsList();
     assert(!l.isEmpty());
-    constexpr double dummyReply = 0.00001000;
-    emit c->sendResult(m.id, dummyReply);
+    bool ok;
+    int n = l.front().toInt(&ok);
+    if (!ok || n < 0)
+        throw RPCError(QString("%1 parameter should be a single non-negative integer").arg(m.method));
+    if (bitcoinDSubversion.startsWith("/Bitcoin ABC") && bitcoinDVersion >= std::make_tuple(0, 20, 2)) {
+        // Bitcoin ABC v0.20.2 has taken out the nblocks argument
+        generic_async_to_bitcoind(c, m.id, "estimatefee", QVariantList(),[](const RPC::Message &response){
+            return response.result();
+        });
+    } else {
+        // BUcash, earlier ABC, and others support the nblocks argument
+        generic_async_to_bitcoind(c, m.id, "estimatefee", QVariantList{unsigned(n)},[](const RPC::Message &response){
+            return response.result();
+        });
+    }
 }
 void Server::rpc_blockchain_headers_subscribe(Client *c, const RPC::Message &m) // fully implemented
 {
