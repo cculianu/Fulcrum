@@ -520,6 +520,7 @@ struct Storage::Pvt
     HeaderHash genesisHash; // written-to once by either loadHeaders code or addBlock for block 0. Guarded by headerVerifierLock.
 
     Mempool mempool; ///< app-wide mempool data -- does not get saved to db. Controller.cpp writes to this
+    Mempool::FeeHistogramVec mempoolFeeHistogram; ///< refreshed periodically by refreshMempoolHistogram()
     RWLock mempoolLock;
 };
 
@@ -1944,6 +1945,26 @@ auto Storage::mempool() const -> std::pair<const Mempool &, SharedLockGuard>
 auto Storage::mutableMempool() -> std::pair<Mempool &, ExclusiveLockGuard>
 {
     return {p->mempool, ExclusiveLockGuard{p->mempoolLock}};
+}
+
+void Storage::refreshMempoolHistogram()
+{
+    Mempool::FeeHistogramVec hist;
+    {
+        // shared lock
+        auto [mempool, lock] = this->mempool();
+        auto histTmp = mempool.calcCompactFeeHistogram();
+        hist.swap(histTmp);
+    }
+    // lock exclusively to do the final swap
+    ExclusiveLockGuard g(p->mempoolLock);
+    p->mempoolFeeHistogram.swap(hist);
+}
+
+auto Storage::mempoolHistogram() const -> Mempool::FeeHistogramVec
+{
+    SharedLockGuard g(p->mempoolLock);
+    return p->mempoolFeeHistogram;
 }
 
 namespace {

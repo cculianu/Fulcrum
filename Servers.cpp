@@ -1166,8 +1166,12 @@ void Server::rpc_blockchain_transaction_id_from_pos(Client *c, const RPC::Messag
 }
 void Server::rpc_mempool_get_fee_histogram(Client *c, const RPC::Message &m)
 {
-    // this is a stub
-    emit c->sendResult(m.id, QVariantList());
+    const auto hist = storage->mempoolHistogram();
+    QVariantList result;
+    for  (const auto & [feeRate, cumSize] : hist) {
+        result.push_back(QVariantList{feeRate, cumSize});
+    }
+    emit c->sendResult(m.id, result);
 }
 // --- Server::StaticData Definitions ---
 #define HEY_COMPILER_PUT_STATIC_HERE(x) decltype(x) x

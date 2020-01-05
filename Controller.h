@@ -148,9 +148,6 @@ private:
 
     /// takes locks, prints to Log() every 30 seconds if there were changes
     void printMempoolStatusToLog() const;
-
-    /// called from a timer every 500 seconds -- takes locks, updates compact fee histogram
-    void refreshMempoolHistogram() const;
 };
 
 /// Abstract base class for our private internal tasks. Concrete implementations are in Controller.cpp.

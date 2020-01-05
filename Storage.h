@@ -26,6 +26,7 @@
 
 #include "BlockProc.h"
 #include "Merkle.h"
+#include "Mempool.h"
 #include "Mgr.h"
 #include "Mixins.h"
 #include "Options.h"
@@ -251,6 +252,13 @@ public:
     /// the shared SubsMgr (which itself exposes a public thread-safe interface intented to be called from multiple
     /// subsystems and multiple threads).
     inline SubsMgr * subs() const { return subsmgr.get(); }
+
+    /// called from a timer periodically from Controller (see Controller.cpp)
+    /// -- takes locks, updates compact fee histogram for the mempool
+    void refreshMempoolHistogram();
+
+    /// Takes a shared lock and returns the cached mempool histogram (calculated periodically in refreshMempoolHistogram above)
+    Mempool::FeeHistogramVec mempoolHistogram() const;
 
 protected:
     virtual Stats stats() const override; ///< from StatsMixin

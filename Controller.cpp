@@ -140,16 +140,18 @@ void Controller::startup()
     }
 
     {
-        // set up periodid refresh of mempool fee histogram
+        // set up periodic refresh of mempool fee histogram
         constexpr const char *feeHistogramTimer = "feeHistogramTimer";
-        constexpr int feeHistogramTimerInterval = 10 * 1000;//500 * 1000; // 500 seconds
+        constexpr int feeHistogramTimerInterval = 10 * 1000; // every 30 seconds
         conns += connect(this, &Controller::upToDate, this, [this] {
             callOnTimerSoon(feeHistogramTimerInterval, feeHistogramTimer, [this]{
-                refreshMempoolHistogram();
+                const double t0 = Util::getTimeNS();
+                storage->refreshMempoolHistogram();
+                Debug() << "Fee histogram calc took " << QString::number((Util::getTimeNS()-t0)/1e6, 'f', 4) << " msec";
                 return true;
             }, false, Qt::TimerType::VeryCoarseTimer);
         });
-        // disable the timer if synchronizing and restart it later when up-to-date
+        // disable the timer if downloading blocks and restart it later when up-to-date
         conns += connect(this, &Controller::synchronizing, this, [this]{ stopTimer(feeHistogramTimer); });
     }
 
@@ -1184,23 +1186,6 @@ void Controller::process_DoUndoAndRetry()
         sm->state = StateMachine::State::Failure;
         // upon return to event loop, will shut down
     }
-}
-
-void Controller::refreshMempoolHistogram() const
-{
-    const auto t0 = Util::getTimeMicros();
-    Mempool::FeeHistogramVec hist;
-    {
-        auto [mempool, lock] = storage->mempool();
-        auto histtmp = mempool.calcCompactFeeHistogram();
-        hist.swap(histtmp);
-    }
-    const auto elapsed = Util::getTimeMicros() - t0;
-    Debug() << "Histogram: " << Util::Stringify(hist, [](const auto &val) {
-            auto & [feeRate, cumSize] = val;
-            return QString("(%1, %2)").arg(feeRate).arg(cumSize);
-    });
-    Debug() << "Refreshed mempool fee histogram in " << QString::number(elapsed/1e3, 'f', 4) << " msec";
 }
 
 // -- CtlTask

@@ -214,7 +214,7 @@ private:
     void rpc_blockchain_transaction_get_merkle(Client *, const RPC::Message &); // fully implemented
     void rpc_blockchain_transaction_id_from_pos(Client *, const RPC::Message &); // fully implemented
     // mempool
-    void rpc_mempool_get_fee_histogram(Client *, const RPC::Message &); // not implemented yet, returns empty list always
+    void rpc_mempool_get_fee_histogram(Client *, const RPC::Message &); // fully implemented
 
     /// Basically a namespace for our rpc dispatch tables, etc
     struct StaticData {

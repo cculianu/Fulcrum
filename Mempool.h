@@ -139,8 +139,8 @@ struct Mempool
         unsigned cumulativeSize = 0; // bin size, cumulative bytes
     };
     using FeeHistogramVec = std::vector<FeeHistogramItem>;
-    /// This function is potentially going to take a few ms (or more) on large mempools, so call this from a background
-    /// task that updates a cached histogram. If calling this from threaded code with a shared mempool, be sure to call
-    /// it with the appropriate locks held.
+    /// This function is potentially going to take a couple of ms at worst on very large mempools.  Even a 1.5k tx
+    /// mempool takes under 1 ms on average hardware, so it's very fast. Storage calls this in refreshMempoolHistogram
+    /// from a periodic background task kicked off in Controller.
     FeeHistogramVec calcCompactFeeHistogram(double binSize = 1e5 /* binSize in bytes */) const;
 };

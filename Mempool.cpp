@@ -7,6 +7,8 @@
 
 auto Mempool::calcCompactFeeHistogram(double binSize) const -> FeeHistogramVec
 {
+    // this algorithm is taken from:
+    // https://github.com/Electron-Cash/electrumx/blob/fbd00416d804c286eb7de856e9399efb07a2ceaf/electrumx/server/mempool.py#L139
     FeeHistogramVec ret;
     std::map<unsigned, unsigned, std::greater<unsigned>> histogram; // sorted map, descending order by key
 
