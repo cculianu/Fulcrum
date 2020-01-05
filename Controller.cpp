@@ -133,7 +133,7 @@ void Controller::startup()
             callOnTimerSoon(mempoolLogTimerTimeout, mempoolLogTimer, [this]{
                 printMempoolStatusToLog();
                 return true;
-            }, Qt::TimerType::VeryCoarseTimer);
+            }, false, Qt::TimerType::VeryCoarseTimer);
         });
         conns += connect(this, &Controller::synchronizing, this, [this]{ stopTimer(mempoolLogTimer);});
         conns += connect(bitcoindmgr.get(), &BitcoinDMgr::allConnectionsLost, this, [this]{ stopTimer(mempoolLogTimer);});
