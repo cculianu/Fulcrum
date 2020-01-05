@@ -131,4 +131,16 @@ struct Mempool
         hashXTxs.reserve(size_t(hxSize*0.75));
         nextOrdinal = 0;
     }
+
+    // -- Fee histogram support (used by mempool.get_fee_histogram RPC) --
+
+    struct FeeHistogramItem {
+        unsigned feeRate = 0; // in sats/B, quotient truncated to uint.
+        unsigned cumulativeSize = 0; // bin size, cumulative bytes
+    };
+    using FeeHistogramVec = std::vector<FeeHistogramItem>;
+    /// This function is potentially going to take a few ms (or more) on large mempools, so call this from a background
+    /// task that updates a cached histogram. If calling this from threaded code with a shared mempool, be sure to call
+    /// it with the appropriate locks held.
+    FeeHistogramVec calcCompactFeeHistogram(double binSize = 1e5 /* binSize in bytes */) const;
 };
