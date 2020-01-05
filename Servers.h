@@ -23,6 +23,7 @@
 #include "Options.h"
 #include "RPC.h"
 #include "Util.h"
+#include "Version.h"
 
 #include <QSslCertificate>
 #include <QSslKey>
@@ -137,6 +138,12 @@ public:
     // this must be called in the thread context of this thread
     QVariantMap stats() const;
 
+    /// Used in various places to rejects old clients or incompatible peers. Currently 1.4 and 1.4.2 respectively.
+    static const Version MinProtocolVersion, MaxProtocolVersion;
+
+    static const QString AppVersion,  ///< in string form suitable for sending in protocol or banner e.g. "1.0"
+                         AppSubVersion; ///< e.g. "Fulcrum 1.0"
+
 signals:
     void clientDisconnected(quint64 clientId);
 
@@ -165,10 +172,15 @@ private:
 
 private:
     struct RPCError : public Exception {
-        RPCError(const QString & message, int code = RPC::ErrorCodes::Code_App_BadRequest)
-            : Exception(message), code(code) {}
+        RPCError(const QString & message, int code = RPC::ErrorCodes::Code_App_BadRequest, bool disconnect = false)
+            : Exception(message), code(code), disconnect(disconnect) {}
         const int code;
+        const bool disconnect;
         ~RPCError () override;
+    };
+    struct RPCErrorWithDisconnect : public RPCError {
+        RPCErrorWithDisconnect(const QString &message) : RPCError(message, RPC::ErrorCodes::Code_App_BadRequest, true) {}
+        ~RPCErrorWithDisconnect() override;
     };
 
     using AsyncWorkFunc = std::function<QVariant()>;
@@ -251,11 +263,12 @@ private:
 
     /// This basically all comes from getnetworkinfo to bitcoind.
     struct BitcoinDInfo {
-        std::tuple<unsigned, unsigned, unsigned> version {0,0,0}; ///> major, minor, revision e.g. {0, 20, 6} for v0.20.6
+        Version version {0,0,0}; ///> major, minor, revision e.g. {0, 20, 6} for v0.20.6
         QString subversion; ///< subversion string from daemon e.g.: /BitcoinABC bla bla;EB32 ..../
         double relayFee = 0.0; ///< from 'relayfee' in the getnetworkinfo response; minimum fee/kb to relay a tx, usually: 0.00001000
     };
     BitcoinDInfo bitcoinDInfo;
+
 private slots:
     void refreshBitcoinDNetworkInfo(); ///< whenever bitcoind comes back alive, this is invoked to update the BitcoinDInfo struct declared above
 };
@@ -300,7 +313,13 @@ public:
     struct Info {
         int errCt = 0; ///< this gets incremented for each peerError. If errCt - nRequests >= 10, then we disconnect the client.
         int nRequestsRcv = 0; ///< the number of request messages that were non-errors that the client sent us
-        QString userAgent = "Unknown", protocolVersion = "";
+
+        // server.version info the client sent us
+        QString userAgent = "Unknown"; //< the exact useragent string as the client sent us.
+        /// may be 0,0,0 if we were unable to parse the above string. Used to detect old EC versions and send them an error string on broadcast to warn them to upgrade.
+        inline Version uaVersion() const { return Version(userAgent); }
+        Version protocolVersion = {1,4,0}; ///< defaults to 1,4,0 if client says nothing.
+        bool alreadySentVersion = false;
     };
 
     Info info;

@@ -266,7 +266,7 @@ void SimpleHttpServer::addEndpoint(const QString &endPoint, const Lambda &callba
 namespace {
     // TODO: maybe move these to a more global place? For now here is fine.
     namespace Constants {
-        constexpr int kMaxServerVersion = 80,  ///< the maximum server version length we accept to prevent memory exhaustion attacks
+        constexpr int kMaxServerVersionLen = 80,  ///< the maximum server version length we accept to prevent memory exhaustion attacks
                       kMaxBuffer = 4*1000*1000, ///< =4MB. The max buffer we use in Client (ElectronX client). TODO: Make this tune-able and configurable!
                       kMaxTxHex = 2*1024*1024, ///< >1MB raw tx max (over 1 MiB, 1 traditional PoT MB should be enough).
                       kMaxErrorCount = 10; ///< The maximum number of errors we tolerate from a Client before disconnecting them.
@@ -322,6 +322,11 @@ namespace {
 }
 
 
+/* static */ const Version Server::MinProtocolVersion(1,4,0);
+             const Version Server::MaxProtocolVersion(1,4,2);
+/* static */ const QString Server::AppVersion(VERSION);
+             const QString Server::AppSubVersion = QString("%1 %2").arg(APPNAME).arg(VERSION);
+
 Server::Server(const QHostAddress &a, quint16 p, const std::shared_ptr<Options> & opts,
                const std::shared_ptr<Storage> &s, const std::shared_ptr<BitcoinDMgr> &bdm)
     : AbstractTcpServer(a, p), options(opts), storage(s), bitcoindmgr(bdm)
@@ -350,7 +355,8 @@ QVariantMap Server::stats() const
         // changes, update this to call client->statsSafe(100) instead
         auto map = client->stats().toMap();
         auto name = map.take("name").toString();
-        map["version"] = QVariantList({client->info.userAgent, client->info.protocolVersion});
+        map["version"] = QVariantList({client->info.uaVersion().toString(), client->info.protocolVersion.toString()});
+        map["userAgent"] = client->info.userAgent;
         map["errCt"] = client->info.errCt;
         map["nRequestsRcv"] = client->info.nRequestsRcv;
         map["isSubscribedToHeaders"] = client->isSubscribedToHeaders;
@@ -439,7 +445,7 @@ void Server::onMessage(quint64 clientId, const RPC::Message &m)
                 // call ptr to member -- note member is free to throw if it wants to send an error immediately
                 (this->*member)(c, m);
             } catch (const RPCError & e) {
-                emit c->sendError(false, e.code, e.what(), m.id);
+                emit c->sendError(e.disconnect, e.code, e.what(), m.id);
             } catch (const std::exception & e) {
                 emit c->sendError(false, RPC::ErrorCodes::Code_InternalError,
                                   QString("internal error: %1").arg(e.what()),  m.id);
@@ -481,11 +487,7 @@ void Server::refreshBitcoinDNetworkInfo()
             const auto val = networkInfo.value("version", 0).toUInt(&ok);
             if (ok) {
                 // e.g. 0.20.6 comes in like this from bitcoind (as an unsigned int): 200600
-                const unsigned major = val / 1000000,
-                               minor0 = val % 1000000,
-                               minor = minor0 / 10000,
-                               revision = (minor0 % 10000) / 100;
-                bitcoinDInfo.version = {major, minor, revision};
+                bitcoinDInfo.version = Version(val, Version::BitcoinD);
                 //Debug() << "Refreshed version info from bitcoind";
             } else {
                 Warning() << "Failed to get version info from bitcoind";
@@ -510,13 +512,14 @@ namespace {
 }
 
 Server::RPCError::~RPCError() {}
+Server::RPCErrorWithDisconnect::~RPCErrorWithDisconnect() {}
 
 void Server::generic_do_async(Client *c, const RPC::Message::Id &reqId, const std::function<QVariant ()> &work)
 {
     if (LIKELY(work)) {
         struct ResErr {
             QVariant results;
-            bool error = false;
+            bool error = false, doDisconnect = false;
             QString errMsg;
             int errCode = 0;
         };
@@ -532,6 +535,7 @@ void Server::generic_do_async(Client *c, const RPC::Message::Id &reqId, const st
                     reserr->results.swap( result ); // constant-time copy
                 } catch (const RPCError & e) {
                     reserr->error = true;
+                    reserr->doDisconnect = e.disconnect;
                     reserr->errMsg = e.what();
                     reserr->errCode = e.code;
                 }
@@ -539,7 +543,7 @@ void Server::generic_do_async(Client *c, const RPC::Message::Id &reqId, const st
             // completion: runs in client thread (only called if client not already deleted)
             [c, reqId, reserr] {
                 if (reserr->error) {
-                    emit c->sendError(false, reserr->errCode, reserr->errMsg, reqId);
+                    emit c->sendError(reserr->doDisconnect, reserr->errCode, reserr->errMsg, reqId);
                     return;
                 }
                 // no error, send results to client
@@ -569,7 +573,7 @@ void Server::generic_async_to_bitcoind(Client *c, const RPC::Message::Id & reqId
                 const QVariant result = successFunc ? successFunc(reply) : reply.result(); // if no successFunc specified, use default which just copies the result to the client.
                 emit c->sendResult(reqId, result);
             } catch (const RPCError &e) {
-                emit c->sendError(false, e.code, e.what(), reqId);
+                emit c->sendError(e.disconnect, e.code, e.what(), reqId);
             } catch (const std::exception &e) {
                 emit c->sendError(false, RPC::ErrorCodes::Code_InternalError, e.what(), reqId);
             }
@@ -581,7 +585,7 @@ void Server::generic_async_to_bitcoind(Client *c, const RPC::Message::Id & reqId
                     errorFunc(errorReply); // this should throw RPCError
                 throw RPCError(errorReply.errorMessage(), RPC::Code_App_DaemonError);
             } catch (const RPCError &e) {
-                emit c->sendError(false, e.code, e.what(), reqId);
+                emit c->sendError(e.disconnect, e.code, e.what(), reqId);
             } catch (const std::exception &e) {
                 emit c->sendError(false, RPC::ErrorCodes::Code_InternalError, QString("internal error: %1").arg(e.what()),
                                   reqId);
@@ -603,9 +607,7 @@ void Server::rpc_server_add_peer(Client *c, const RPC::Message &m)
 void Server::rpc_server_banner(Client *c, const RPC::Message &m)
 {
     constexpr int MAX_BANNER_DATA = 16384;
-    constexpr auto fulcrumVersion = VERSION;
-    static const QString fulcrumSubVersion = QString("%1 %2").arg(APPNAME).arg(fulcrumVersion);
-    static const QString bannerFallback = QString("Connected to a %1 server").arg(fulcrumSubVersion);
+    static const QString bannerFallback = QString("Connected to a %1 server").arg(AppSubVersion);
     const QString bannerFile(options->bannerFile);
     if (bannerFile.isEmpty() || !QFile::exists(bannerFile) || !QFileInfo(bannerFile).isReadable()) {
         // fallback -- banner file invalid/not readable/not specified
@@ -615,7 +617,7 @@ void Server::rpc_server_banner(Client *c, const RPC::Message &m)
         generic_do_async(c, m.id,
                         [bannerFile = options->bannerFile,
                          donationAddress = options->donationAddress,
-                         versionTup = bitcoinDInfo.version,
+                         daemonVersion = bitcoinDInfo.version,
                          subversion = bitcoinDInfo.subversion] {
                 QVariant ret;
                 QFile bf(bannerFile);
@@ -627,13 +629,11 @@ void Server::rpc_server_banner(Client *c, const RPC::Message &m)
                     ret = bannerFallback;
                 } else {
                     // read banner file ok, perform variable substitutions
-                    const auto [major, minor, revision] = versionTup;
-                    const QString daemonVersion = QString("%1.%2.%3").arg(major).arg(minor).arg(revision);
                     ret = QString::fromUtf8(bannerFileData)
-                            .replace("$SERVER_VERSION", QString(fulcrumVersion))
-                            .replace("$SERVER_SUBVERSION", fulcrumSubVersion)
+                            .replace("$SERVER_VERSION", AppVersion)
+                            .replace("$SERVER_SUBVERSION", AppSubVersion)
                             .replace("$DONATION_ADDRESS", donationAddress)
-                            .replace("$DAEMON_VERSION", daemonVersion)
+                            .replace("$DAEMON_VERSION", daemonVersion.toString(true))
                             .replace("$DAEMON_SUBVERSION", subversion)
                             .left(MAX_BANNER_DATA); ///< Note this ".left()" is really not in bytes but unicode codepoints, that's fine, the limit is a soft limit
                 }
@@ -651,9 +651,9 @@ void Server::rpc_server_features(Client *c, const RPC::Message &m)
     QVariantMap r;
     r["pruning"] = QVariant(); // null
     r["genesis_hash"] = QString(Util::ToHexFast(storage->genesisHash()));
-    r["server_version"] = QString("%1 %2").arg(APPNAME).arg(VERSION);
-    r["protocol_min"] = "1.4"; // TODO: have this come from a global constant
-    r["protocol_max"] = "1.4.2"; // TODO: have this come from a global constant
+    r["server_version"] = AppSubVersion;
+    r["protocol_min"] = MinProtocolVersion.toString();
+    r["protocol_max"] = MaxProtocolVersion.toString();
     r["hash_function"] = "sha256";
 
     QVariantMap hmap;
@@ -689,9 +689,18 @@ void Server::rpc_server_version(Client *c, const RPC::Message &m)
 {
     QVariantList l = m.paramsList();
     assert(l.size() == 2);
-    c->info.userAgent = l[0].toString().left(kMaxServerVersion);
-    c->info.protocolVersion = l[1].toString().left(kMaxServerVersion);
-    emit c->sendResult(m.id, QStringList({QString("%1/%2").arg(APPNAME).arg(VERSION), QString("1.4")}));
+
+    if (c->info.alreadySentVersion)
+        throw RPCError(QString("%1 already sent").arg(m.method));
+
+    Version ver = l[1].toString().left(kMaxServerVersionLen); // try and parse version, see Version.cpp, QString constructor.
+    if (!ver.isValid() || ver < MinProtocolVersion || ver > MaxProtocolVersion)
+        throw RPCErrorWithDisconnect("Unsupported protocol version");
+
+    c->info.userAgent = l[0].toString().left(kMaxServerVersionLen);
+    c->info.protocolVersion = ver;
+    c->info.alreadySentVersion = true;
+    emit c->sendResult(m.id, QStringList({AppSubVersion, ver.toString()}));
 }
 
 /// returns the 'branch' and 'root' keys ready to be put in the results dictionary
@@ -823,7 +832,7 @@ void Server::rpc_blockchain_estimatefee(Client *c, const RPC::Message &m)
     int n = l.front().toInt(&ok);
     if (!ok || n < 0)
         throw RPCError(QString("%1 parameter should be a single non-negative integer").arg(m.method));
-    if (bitcoinDInfo.subversion.startsWith("/Bitcoin ABC") && bitcoinDInfo.version >= std::make_tuple(0, 20, 2)) {
+    if (bitcoinDInfo.subversion.startsWith("/Bitcoin ABC") && bitcoinDInfo.version >= Version(0, 20, 2)) {
         // Bitcoin ABC v0.20.2 has taken out the nblocks argument
         generic_async_to_bitcoind(c, m.id, "estimatefee", QVariantList(),[](const RPC::Message &response){
             return response.result();

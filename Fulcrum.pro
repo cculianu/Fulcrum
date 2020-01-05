@@ -159,6 +159,7 @@ SOURCES += \
     Storage.cpp \
     SubsMgr.cpp \
     Util.cpp \
+    Version.cpp \
     register_MetaTypes.cpp
 
 HEADERS += \
@@ -185,7 +186,8 @@ HEADERS += \
     SubsMgr.h \
     TXO.h \
     TXO_Compact.h \
-    Util.h
+    Util.h \
+    Version.h
 
 # Robin Hood unordered_flat_map implememntation (single header and MUCH more efficient than unordered_map!)
 HEADERS += robin_hood/robin_hood.h
