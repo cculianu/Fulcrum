@@ -142,12 +142,10 @@ void Controller::startup()
     {
         // set up periodic refresh of mempool fee histogram
         constexpr const char *feeHistogramTimer = "feeHistogramTimer";
-        constexpr int feeHistogramTimerInterval = 10 * 1000; // every 30 seconds
+        constexpr int feeHistogramTimerInterval = 30 * 1000; // every 30 seconds
         conns += connect(this, &Controller::upToDate, this, [this] {
             callOnTimerSoon(feeHistogramTimerInterval, feeHistogramTimer, [this]{
-                const double t0 = Util::getTimeNS();
                 storage->refreshMempoolHistogram();
-                Debug() << "Fee histogram calc took " << QString::number((Util::getTimeNS()-t0)/1e6, 'f', 4) << " msec";
                 return true;
             }, false, Qt::TimerType::VeryCoarseTimer);
         });
