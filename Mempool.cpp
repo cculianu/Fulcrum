@@ -1,7 +1,5 @@
 #include "Mempool.h"
 
-#include <QList>
-
 #include <functional>
 #include <map>
 

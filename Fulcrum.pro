@@ -146,8 +146,8 @@ SOURCES += \
     Common.cpp \
     Controller.cpp \
     Logger.cpp \
-    Mempool.cpp \
     main.cpp \
+    Mempool.cpp \
     Merkle.cpp \
     Mixins.cpp \
     Mgr.cpp \
