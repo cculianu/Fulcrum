@@ -21,6 +21,7 @@
 #include "AbstractConnection.h"
 #include "Util.h"
 
+#include <QHash>
 #include <QMap>
 #include <QSet>
 #include <QString>
@@ -178,7 +179,7 @@ namespace RPC {
     };
 
 
-    using MethodMap = QMap<QString, Method>;
+    using MethodMap = QHash<QString, Method>;
 
     /// A semi-concrete derived class of AbstractConnection implementing a
     /// JSON-RPC based method<->result protocol.  This class is client/server

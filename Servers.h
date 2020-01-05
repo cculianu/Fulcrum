@@ -133,7 +133,7 @@ public:
     ~Server() override;
 
     virtual QString prettyName() const override;
-    static const RPC::MethodMap & rpcMethods() { return StaticData::methodMap; }
+    static constexpr const RPC::MethodMap & rpcMethods() { return StaticData::methodMap; }
 
     // this must be called in the thread context of this thread
     QVariantMap stats() const;
