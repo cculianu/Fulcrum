@@ -390,8 +390,9 @@ Server::newClient(QTcpSocket *sock)
 {
     const auto clientId = newId();
     auto ret = clientsById[clientId] = new Client(rpcMethods(), clientId, this, sock);
+    const auto addr = ret->peerAddress();
     // if deleted, we need to purge it from map
-    auto on_destroyed = [clientId, this](QObject *o) {
+    auto on_destroyed = [clientId, addr, this](QObject *o) {
         // this whole call is here so that delete client->sock ends up auto-removing the map entry
         // as a convenience.
         Debug() << "Client nested 'on_destroyed' called";
@@ -402,12 +403,13 @@ Server::newClient(QTcpSocket *sock)
             }
             Debug("client id %ld purged from map", long(clientId));
         }
+        // tell SrvMgr this client is gone so it can decrement its clients-per-ip count.
+        emit clientDisconnected(clientId, addr);
     };
     connect(ret, &QObject::destroyed, this, on_destroyed);
-    connect(ret, &AbstractConnection::lostConnection, this, [this,clientId](AbstractConnection *cl){
+    connect(ret, &AbstractConnection::lostConnection, this, [this, clientId](AbstractConnection *cl){
         if (auto client = dynamic_cast<Client *>(cl) ; client) {
             Debug() <<  client->prettyName() << " lost connection";
-            emit clientDisconnected(client->id);
             killClient(client);
         } else {
             Error() << "Internal error: lostConnection callback received null client! (expected client id: " << clientId << ")";
@@ -416,6 +418,8 @@ Server::newClient(QTcpSocket *sock)
     connect(ret, &RPC::ConnectionBase::gotMessage, this, &Server::onMessage);
     connect(ret, &RPC::ConnectionBase::gotErrorMessage, this, &Server::onErrorMessage);
     connect(ret, &RPC::ConnectionBase::peerError, this, &Server::onPeerError);
+    // tell SrvMgr about this client so it can keep track of clients-per-ip and other statistics
+    emit clientConnected(clientId, addr);
     return ret;
 }
 
@@ -427,11 +431,12 @@ void Server::killClient(Client *client)
     clientsById.remove(client->id); // ensure gone from map asap so future lookups fail
     client->do_disconnect();
 }
-void Server::killClient(quint64 clientId)
+// public slot
+void Server::killClient(IdMixin::Id clientId)
 {
     killClient(clientsById.take(clientId));
 }
-void Server::onMessage(quint64 clientId, const RPC::Message &m)
+void Server::onMessage(IdMixin::Id clientId, const RPC::Message &m)
 {
     Trace() << "onMessage: " << clientId << " json: " << m.toJsonString();
     if (Client *c = getClient(clientId); c) {
@@ -457,7 +462,7 @@ void Server::onMessage(quint64 clientId, const RPC::Message &m)
         Debug() << "Unknown client: " << clientId;
     }
 }
-void Server::onErrorMessage(quint64 clientId, const RPC::Message &m)
+void Server::onErrorMessage(IdMixin::Id clientId, const RPC::Message &m)
 {
     Trace() << "onErrorMessage: " << clientId << " json: " << m.toJsonString();
     if (Client *c = getClient(clientId); c) {
@@ -465,7 +470,7 @@ void Server::onErrorMessage(quint64 clientId, const RPC::Message &m)
         emit c->sendError(true, RPC::Code_InvalidRequest, "Not a valid request object");
     }
 }
-void Server::onPeerError(quint64 clientId, const QString &what)
+void Server::onPeerError(IdMixin::Id clientId, const QString &what)
 {
     Debug() << "onPeerError, client " << clientId << " error: " << what;
     if (Client *c = getClient(clientId); c) {
@@ -1282,7 +1287,7 @@ void ServerSSL::incomingConnection(qintptr socketDescriptor)
 
 /*static*/ std::atomic_int Client::numClients{0};
 
-Client::Client(const RPC::MethodMap & mm, quint64 id_in, Server *srv, QTcpSocket *sock)
+Client::Client(const RPC::MethodMap & mm, IdMixin::Id id_in, Server *srv, QTcpSocket *sock)
     : RPC::LinefeedConnection(mm, id_in, sock, kMaxBuffer), srv(srv)
 {
     const auto N = ++numClients;

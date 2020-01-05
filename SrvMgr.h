@@ -21,6 +21,8 @@
 #include "Mgr.h"
 #include "Options.h"
 
+#include <QMultiHash>
+
 #include <list>
 #include <memory>
 
@@ -47,8 +49,20 @@ signals:
     /// (normally connected to the Controller::newHeader signal).
     void newHeader(unsigned height, const QByteArray &header);
 
+    /// Emitted once upon client connect (from the clientConnected() slot) if the new client in question ends up
+    /// exceeding the connection limit for its IP.  The "Server" and its subclasses should subscribe to this signal
+    /// and immediately kill the connection for such clients.  The clients-per-ip limit is set by the
+    /// "max_clients_per_ip"  config variable and its default is defined in Options.h
+    void clientExceedsConnectionLimit(IdMixin::Id);
+
 protected:
     Stats stats() const override;
+
+protected slots:
+    /// Server subclasses are automatically connect to this slot to notify this instance of new client connections
+    void clientConnected(IdMixin::Id, const QHostAddress &);
+    /// Server subclasses are automatically connect to this slot to notify this instance of client disconnections
+    void clientDisconnected(IdMixin::Id, const QHostAddress &);
 
 private:
     void startServers();
@@ -56,4 +70,8 @@ private:
     std::shared_ptr<Storage> storage;
     std::shared_ptr<BitcoinDMgr> bitcoindmgr;
     std::list<std::unique_ptr<Server>> servers;
+
+    QMultiHash<QHostAddress, IdMixin::Id> addrIdMap;
 };
+
+Q_DECLARE_METATYPE(QHostAddress);

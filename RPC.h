@@ -247,7 +247,7 @@ namespace RPC {
          */
 
     public:
-        ConnectionBase(const MethodMap & methods, quint64 id, QObject *parent = nullptr, qint64 maxBuffer = DEFAULT_MAX_BUFFER);
+        ConnectionBase(const MethodMap & methods, IdMixin::Id id, QObject *parent = nullptr, qint64 maxBuffer = DEFAULT_MAX_BUFFER);
         ~ConnectionBase() override;
 
         const MethodMap & methods; //< Note: this map needs to remain alive for the lifetime of this connection (and all connections) .. so it should point to static or long-lived data, ideally
@@ -283,12 +283,12 @@ namespace RPC {
         /// this is emitted when a new message arrives that was successfully parsed and matches
         /// a known method described in the 'methods' MethodMap. Unknown messages will eventually result
         /// in auto-disconnect.
-        void gotMessage(quint64 thisId, const RPC::Message & m);
+        void gotMessage(IdMixin::Id thisId, const RPC::Message & m);
         /// Same as a above, but for 'error' replies
-        void gotErrorMessage(quint64 thisId, const RPC::Message &em);
+        void gotErrorMessage(IdMixin::Id thisId, const RPC::Message &em);
         /// This is emitted when the peer sent malformed data to us and we didn't disconnect
         /// because errorPolicy is not ErrorPolicyDisconnect
-        void peerError(quint64 thisId, const QString &what);
+        void peerError(IdMixin::Id thisId, const QString &what);
 
     protected slots:
         /// Actual implentation that prepares the request. Is connected to sendRequest() above. Runs in this object's

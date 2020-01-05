@@ -69,11 +69,54 @@ void SrvMgr::startServers()
             // SSL
             servers.emplace_back(std::make_unique<ServerSSL>(iface.first, iface.second, options, storage, bitcoindmgr));
         Server *srv = servers.back().get();
-        srv->tryStart();
 
-        // connet blockchain.headers.subscribe signal
+        // connect blockchain.headers.subscribe signal
         connect(this, &SrvMgr::newHeader, srv, &Server::newHeader);
+        // track client lifecycles for per-ip-address connection limits and other stuff
+        connect(srv, &Server::clientConnected, this, &SrvMgr::clientConnected);
+        connect(srv, &Server::clientDisconnected, this, &SrvMgr::clientDisconnected);
+        // if srv receives this message, it will delete the client then we will get a signal back that it is now gone
+        connect(this, &SrvMgr::clientExceedsConnectionLimit, srv, qOverload<IdMixin::Id>(&Server::killClient));
+
+        srv->tryStart();
         ++i;
+    }
+}
+
+void SrvMgr::clientConnected(IdMixin::Id cid, const QHostAddress &addr)
+{
+    addrIdMap.insertMulti(addr, cid);
+    const auto maxPerIP = options->maxClientsPerIP;
+    if (addrIdMap.count(addr) > maxPerIP) {
+        std::optional<Options::Subnet> matched;
+        // linear search through excluded subnets --  this branch is only really taken if limit is hit .. it should hopefully be fast enough
+        for (const auto & sn : options->subnetsExcludedFromPerIPLimits) {
+            if (addr.isInSubnet(sn.subnet, sn.mask)) {
+                matched = sn;
+                break;
+            }
+        }
+        if (!matched.has_value()) {
+            Log() << "Connection limit (" << maxPerIP << ") exceeded for client "
+                  << cid << " from " << addr.toString() << ", connection refused";
+            emit clientExceedsConnectionLimit(cid);
+        } else {
+            Debug() << "Client " << cid << " from " << addr.toString() << " would have exceeded the connection limit ("
+                    << maxPerIP << ") but it matches subnet " << matched.value().toString() << " from the exclude list";
+        }
+    }
+}
+
+void SrvMgr::clientDisconnected(IdMixin::Id cid, const QHostAddress &addr)
+{
+    if (auto count = addrIdMap.remove(addr, cid); count > 1) {
+        Warning() << "Multiple clients with id: " << cid << ", address " << addr.toString() << " in addrIdMap in " << __func__ << " -- FIXME!";
+    } else if (count) {
+        //Debug() << "Client id " << cid << " addr " << addr.toString() << " removed from addrIdMap";
+        if (const auto size = addrIdMap.size(); size >= 10 && addrIdMap.capacity() / size >= 2) {
+            // save space if we are over 2x capacity vs size
+            addrIdMap.squeeze();
+        }
     }
 }
 

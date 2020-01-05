@@ -71,6 +71,21 @@ struct Options {
     std::optional<QString> hostName; ///< corresponds to hostname in server config
     std::optional<quint16> publicTcp;   ///< corresponds to public_tcp_port in server config -- if unspecified will default to the first TCP interface, if !has_value, it will not be announced
     std::optional<quint16> publicSsl;   ///< corresponds to public_ssl_port in server config -- if unspecified will default to the first SSL interface, if !has_value, it will not be announced
+
+    // Max clients per IP related
+    static constexpr int defaultMaxClientsPerIP = 12;
+    int maxClientsPerIP = defaultMaxClientsPerIP; ///< corresponds to max_clients_per_ip in config file
+
+    struct Subnet {
+        QHostAddress subnet;
+        int mask = -1; ///< default invalid mask. IPv4 is [0,32] and IPv6 is [0, 128]
+        inline bool isValid() const { return !subnet.isNull() && mask >= 0 && mask <= 128; }
+        /// Parses the supplied netmask string "11.56.24." or "11.45.24.0/24", etc and returns a valid Subnet iff parsed ok.
+        static Subnet fromString(const QString &netmaskString);
+        QString toString() const;
+    };
+    /// Default: do not apply IP address connection limits (and other limits) to clients originating from localhost (for Tor)
+    QList<Subnet> subnetsExcludedFromPerIPLimits = {{QHostAddress::LocalHost,32}, {QHostAddress::LocalHostIPv6,128}};
 };
 
 

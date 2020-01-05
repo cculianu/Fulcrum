@@ -229,7 +229,7 @@ namespace RPC {
         return ret;
     }
 
-    ConnectionBase::ConnectionBase(const MethodMap & methods, quint64 id_in, QObject *parent, qint64 maxBuffer)
+    ConnectionBase::ConnectionBase(const MethodMap & methods, IdMixin::Id id_in, QObject *parent, qint64 maxBuffer)
         : AbstractConnection(id_in, parent, maxBuffer), methods(methods)
     {
     }

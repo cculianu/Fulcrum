@@ -25,11 +25,11 @@
 #include "Util.h"
 #include "Version.h"
 
+#include <QHash>
 #include <QSslCertificate>
 #include <QSslKey>
 #include <QTcpServer>
 #include <QThread>
-#include <QMap>
 #include <QVector>
 
 #include <memory> // for shared_ptr
@@ -93,7 +93,7 @@ public:
     struct Request {
         QString httpVersion = "HTTP/1.1";
         Method method = Method::GET;
-        QMap<QString, QString> header; // headers that came in
+        QHash<QString, QString> header; // headers that came in
         QString endPoint; // eg /stats
         QString queryString; // eg everything after the ? bla=1&foo=bar
 
@@ -117,7 +117,7 @@ protected:
     void on_newConnection(QTcpSocket *) override;
 
     QString err404Msg = "Unknown resource";
-    QMap<QString, Lambda> endPoints;
+    QHash<QString, Lambda> endPoints;
 };
 
 class BitcoinDMgr;
@@ -145,15 +145,22 @@ public:
                          AppSubVersion; ///< e.g. "Fulcrum 1.0"
 
 signals:
-    void clientDisconnected(quint64 clientId);
+    /// connected to SrvMgr clientConnected slot by SrvMgr class
+    void clientConnected(IdMixin::Id clientId, const QHostAddress & remoteAddress);
+    /// connected to SrvMgr clientDisconnected slot by SrvMgr class
+    void clientDisconnected(IdMixin::Id clientId, const QHostAddress & remoteAddress);
 
     /// Connected to SrvMgr parent's "newHeader" signal (which itself is connected to Controller's newHeader).
     /// Used to notify clients that are subscribed to headers that a new header has arrived.
     void newHeader(unsigned height, const QByteArray &header);
 public slots:
-    void onMessage(quint64 clientId, const RPC::Message &m);
-    void onErrorMessage(quint64 clientId, const RPC::Message &m);
-    void onPeerError(quint64 clientId, const QString &what);
+    void onMessage(IdMixin::Id clientId, const RPC::Message &m);
+    void onErrorMessage(IdMixin::Id clientId, const RPC::Message &m);
+    void onPeerError(IdMixin::Id clientId, const QString &what);
+
+    /// Kills the client immediately and ungracefully. Silently ignores request to kill clients for clientIds not found.
+    /// This is used internally and is also connected to the clientExceedsConnectionLimit signal by SrvMgr.
+    void killClient(IdMixin::Id id);
 
 private:
     void on_started() override;
@@ -161,14 +168,13 @@ private:
 
 private:
     Client * newClient(QTcpSocket *);
-    inline Client * getClient(quint64 clientId) {
+    inline Client * getClient(IdMixin::Id clientId) {
         if (auto it = clientsById.find(clientId); it != clientsById.end())
             return it.value();
         return nullptr;
     }
     void killClient(Client *);
-    void killClient(quint64 id);
-    QMap<quint64, Client *> clientsById;
+    QHash<IdMixin::Id, Client *> clientsById;
 
 private:
     struct RPCError : public Exception {
@@ -236,7 +242,7 @@ private:
 
         // the below two get populated at app init by the above rpc_method_registry table
         /// Dispatch tables of "rpc.method.name" -> pointer to method
-        static QMap<QString, Member_t> dispatchTable;
+        static QHash<QString, Member_t> dispatchTable;
         /// method spec for RPC::Connection class interface to know what to accept/reject
         static RPC::MethodMap methodMap;
         /// This static data is used to build the above two static tables at app init
@@ -307,7 +313,7 @@ class Client : public RPC::LinefeedConnection
     Q_OBJECT
 public:
     /// NB: sock should be in an already connected state.
-    explicit Client(const RPC::MethodMap & methods, quint64 id, Server *srv, QTcpSocket *sock);
+    explicit Client(const RPC::MethodMap & methods, IdMixin::Id id, Server *srv, QTcpSocket *sock);
     ~Client() override;
 
     struct Info {

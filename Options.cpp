@@ -22,6 +22,23 @@
 #include <QIODevice>
 #include <QTextStream>
 
+/*static*/ auto Options::Subnet::fromString(const QString &s) -> Subnet
+{
+    Subnet sn;
+    const auto pair = QHostAddress::parseSubnet(s.trimmed());
+    sn.subnet = pair.first;
+    sn.mask = pair.second;
+    return sn;
+}
+
+QString Options::Subnet::toString() const  {
+    QString ret;
+    if (!isValid())
+        ret = "<Invalid Subnet>";
+    else
+        ret = QString("%1/%2").arg(subnet.toString()).arg(mask);
+    return ret;
+}
 
 std::optional<QString> ConfigFile::optValue(const QString &name, Qt::CaseSensitivity cs) const
 {

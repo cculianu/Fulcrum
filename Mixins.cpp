@@ -93,7 +93,7 @@ void ThreadObjectMixin::on_finished()
 
 
 /*static*/
-quint64 IdMixin::newId() { return app()->newId(); }
+auto IdMixin::newId() -> Id { return app()->newId(); }
 
 
 TimersByNameMixin::TimersByNameMixin() {}

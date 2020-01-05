@@ -459,7 +459,7 @@ void App::parseArgs()
     if (conf.hasValue("hostname"))
         options->hostName = conf.value("hostname");
     if (conf.hasValue("public_tcp_port")) {
-        bool ok;
+        bool ok = false;
         int val = conf.intValue("public_tcp_port", -1, &ok);
         if (!ok || val < 0 || val > UINT16_MAX)
             throw BadArgs("public_tcp_port parse error: not an integer from 0 to 65535");
@@ -467,12 +467,43 @@ void App::parseArgs()
         else options->publicTcp = val;
     }
     if (conf.hasValue("public_ssl_port")) {
-        bool ok;
+        bool ok = false;
         int val = conf.intValue("public_ssl_port", -1, &ok);
         if (!ok || val < 0 || val > UINT16_MAX)
             throw BadArgs("public_ssl_port parse error: not an integer from 0 to 65535");
         if (!val) options->publicSsl.reset();
         else options->publicSsl = val;
+    }
+
+    if (conf.hasValue("max_clients_per_ip")) {
+        bool ok = false;
+        options->maxClientsPerIP = conf.intValue("max_clients_per_ip", 0, &ok);
+        if (const auto val = conf.value("max_clients_per_ip");  !ok && !val.isEmpty())
+            throw BadArgs(QString("max_clients_per_ip parse error: cannot parse '%1' as an integer").arg(val));
+        // log this later in case we are in syslog mode
+        Util::AsyncOnObject(this, [this]{
+            Debug() << "config: max_clients_per_ip = "
+                    << (options->maxClientsPerIP > 0 ? QString::number(options->maxClientsPerIP) : "Unlimited");
+        });
+    }
+
+    if (conf.hasValue("subnets_to_exclude_from_per_ip_limits")) {
+        options->subnetsExcludedFromPerIPLimits.clear();
+        const auto sl = conf.value("subnets_to_exclude_from_per_ip_limits").split(",");
+        QStringList parsed;
+        for (const auto & s : sl) {
+            if (s.isEmpty())
+                continue;
+            auto subnet = Options::Subnet::fromString(s);
+            if (!subnet.isValid())
+                throw BadArgs(QString("subnets_to_exclude_from_per_ip_limits: Failed to parse %1").arg(s));
+            options->subnetsExcludedFromPerIPLimits.push_back(subnet);
+            parsed.push_back(subnet.toString());
+        }
+        // log this later in case we are in syslog mode
+        Util::AsyncOnObject(this, [parsed]{
+            Debug() << "config: subnets_to_exclude_from_per_ip_limits = " << (parsed.isEmpty() ? "None" : parsed.join(", "));
+        });
     }
 
     // warn user that no hostname was specified if they have peerDiscover turned on

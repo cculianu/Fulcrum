@@ -89,12 +89,13 @@ protected:
 class IdMixin
 {
 public:
+    using Id = quint64;
     //IdMixin() = delete; // <-- this is implicitly the case because we have a const data member.
-    inline IdMixin(const quint64 id) : id(id) {}
+    inline IdMixin(const Id id) : id(id) {}
 
-    const quint64 id;  ///< derived classes should set this at construction by calling our c'tor
+    const Id id;  ///< derived classes should set this at construction by calling our c'tor
 
-    static quint64 newId(); ///< convenience method: calls app()->newId()
+    static Id newId(); ///< convenience method: calls app()->newId()
 };
 
 
@@ -210,3 +211,5 @@ protected:
     virtual void process() = 0;
     void AGAIN(int when_ms=0) { QTimer::singleShot(qMax(0, when_ms), qobj(), [this]{process();}); }
 };
+
+Q_DECLARE_METATYPE(IdMixin::Id);

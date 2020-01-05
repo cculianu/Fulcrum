@@ -35,7 +35,7 @@ class AbstractConnection : public QObject, public IdMixin, public TimersByNameMi
 public:
     static constexpr qint64 DEFAULT_MAX_BUFFER = 64*1024*1024; ///< 64MB, may change default in derived classes by setting maxBuffer in c'tor TODO: tune this.
 
-    explicit AbstractConnection(quint64 id, QObject *parent = nullptr, qint64 maxBuffer = DEFAULT_MAX_BUFFER);
+    explicit AbstractConnection(IdMixin::Id id, QObject *parent = nullptr, qint64 maxBuffer = DEFAULT_MAX_BUFFER);
 
     const qint64 MAX_BUFFER;
 
