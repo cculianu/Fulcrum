@@ -50,18 +50,18 @@ signals:
     void newHeader(unsigned height, const QByteArray &header);
 
     /// Emitted once upon client connect (from the clientConnected() slot) if the new client in question ends up
-    /// exceeding the connection limit for its IP.  The "Server" and its subclasses should subscribe to this signal
+    /// exceeding the connection limit for its IP.  The "Server" (and its subclasses) are connected to this signal
     /// and immediately kill the connection for such clients.  The clients-per-ip limit is set by the
-    /// "max_clients_per_ip"  config variable and its default is defined in Options.h
+    /// "max_clients_per_ip"  config variable (see Options.h)
     void clientExceedsConnectionLimit(IdMixin::Id);
 
 protected:
     Stats stats() const override;
 
 protected slots:
-    /// Server subclasses are automatically connect to this slot to notify this instance of new client connections
+    /// Server subclasses are connected to this slot, which is used to notify this instance of new client connections
     void clientConnected(IdMixin::Id, const QHostAddress &);
-    /// Server subclasses are automatically connect to this slot to notify this instance of client disconnections
+    /// Server subclasses are connected to this slot, which is used to notify this instance of client disconnections
     void clientDisconnected(IdMixin::Id, const QHostAddress &);
 
 private:
