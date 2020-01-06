@@ -502,10 +502,11 @@ namespace RPC {
                 Debug() << "Memory waste timer stopped for " << me->id << " from " << me->peerAddress().toString()
                         << ", read buffer now: " << avail;
         };
-        if (memoryWasteThreshold < 0)
+        if (memoryWasteThreshold < 0) {
             // uninitialized.. initialize
-            memoryWasteThreshold = qMin(qint64(defMemoryWasteThreshold), qint64(MAX_BUFFER));
-        assert(memoryWasteThreshold >= 0);
+            memoryWasteThreshold = int(qMin(qint64(defMemoryWasteThreshold), MAX_BUFFER));
+            assert(memoryWasteThreshold >= 0 && memoryWasteThreshold <= MAX_BUFFER);
+        }
         // DoS protection logic below for memory exhaustion attacks.  If a client connects from many IPs and with
         // many clients a memory exhaustion attack is possible.  The attack would simply involve filling our buffers
         // and never sending a newline.  The below code detects the situation and disconnects clients whereby too much
