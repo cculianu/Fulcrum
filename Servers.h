@@ -160,7 +160,12 @@ public slots:
 
     /// Kills the client immediately and ungracefully. Silently ignores request to kill clients for clientIds not found.
     /// This is used internally and is also connected to the clientExceedsConnectionLimit signal by SrvMgr.
+    /// Must be called from this object's thread.
     void killClient(IdMixin::Id id);
+
+    /// Kick/Ban support -- kill clients matching a paricular remote address (this isn't called by anything yet but
+    /// is in place for later when we add per-IP bans and per-IP kicking). Must be called from this object's thread.
+    void killClientsByAddress(const QHostAddress &);
 
 private:
     void on_started() override;

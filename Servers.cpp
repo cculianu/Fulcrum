@@ -34,6 +34,7 @@
 #include <QTimer>
 
 #include <cstdlib>
+#include <list>
 #include <utility>
 
 TcpServerError::~TcpServerError() {} // for vtable
@@ -418,8 +419,10 @@ Server::newClient(QTcpSocket *sock)
     connect(ret, &RPC::ConnectionBase::gotMessage, this, &Server::onMessage);
     connect(ret, &RPC::ConnectionBase::gotErrorMessage, this, &Server::onErrorMessage);
     connect(ret, &RPC::ConnectionBase::peerError, this, &Server::onPeerError);
+
     // tell SrvMgr about this client so it can keep track of clients-per-ip and other statistics
     emit clientConnected(clientId, addr);
+
     return ret;
 }
 
@@ -436,6 +439,23 @@ void Server::killClient(IdMixin::Id clientId)
 {
     killClient(clientsById.take(clientId));
 }
+// public slot
+void Server::killClientsByAddress(const QHostAddress &address)
+{
+    std::list<Client *> clientsMatched;
+    int ctr = 0;
+    for (auto it = clientsById.begin(); it != clientsById.end(); ++it) {
+        if (auto client = it.value(); client->peerAddress() == address)
+            clientsMatched.push_back(client); // save to list so as to not mutate hashtable while iterating...
+    }
+    for (auto & client : clientsMatched) {
+        killClient(client);
+        ++ctr;
+    }
+    if (ctr)
+        Debug() << "Killed " << ctr << Util::Pluralize(" client", ctr) << " matching address: " << address.toString();
+}
+
 void Server::onMessage(IdMixin::Id clientId, const RPC::Message &m)
 {
     Trace() << "onMessage: " << clientId << " json: " << m.toJsonString();
