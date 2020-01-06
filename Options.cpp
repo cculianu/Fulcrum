@@ -40,6 +40,19 @@ QString Options::Subnet::toString() const  {
     return ret;
 }
 
+bool Options::isAddrInPerIPLimitExcludeSet(const QHostAddress &addr, Subnet *matched) const
+{
+    // linearly search through excluded subnets --  this is normally only called if some limit was hit (which is rare)
+    // so it should hopefully be fast enough.
+    for (const auto & sn : subnetsExcludedFromPerIPLimits) {
+        if (addr.isInSubnet(sn.subnet, sn.mask)) {
+            if (matched) *matched = sn;
+            return true;
+        }
+    }
+    return false;
+}
+
 std::optional<QString> ConfigFile::optValue(const QString &name, Qt::CaseSensitivity cs) const
 {
     std::optional<QString> ret;

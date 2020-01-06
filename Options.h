@@ -86,6 +86,9 @@ struct Options {
     };
     /// Default: do not apply IP address connection limits (and other limits) to clients originating from localhost (for Tor)
     QList<Subnet> subnetsExcludedFromPerIPLimits = {{QHostAddress::LocalHost,32}, {QHostAddress::LocalHostIPv6,128}};
+    /// Returns true if addr matches one of the subnets in subnetsExcludedFromPerIPLimits, false otherwise
+    /// Optionally sets the pointer *matched = theMatchedSubnet (if !nullptr).
+    bool isAddrInPerIPLimitExcludeSet(const QHostAddress & addr, Subnet * matched = nullptr) const;
 };
 
 

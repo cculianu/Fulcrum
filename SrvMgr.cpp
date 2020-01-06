@@ -88,21 +88,15 @@ void SrvMgr::clientConnected(IdMixin::Id cid, const QHostAddress &addr)
     addrIdMap.insertMulti(addr, cid);
     const auto maxPerIP = options->maxClientsPerIP;
     if (addrIdMap.count(addr) > maxPerIP) {
-        std::optional<Options::Subnet> matched;
-        // linear search through excluded subnets --  this branch is only really taken if limit is hit .. it should hopefully be fast enough
-        for (const auto & sn : options->subnetsExcludedFromPerIPLimits) {
-            if (addr.isInSubnet(sn.subnet, sn.mask)) {
-                matched = sn;
-                break;
-            }
-        }
-        if (!matched.has_value()) {
-            Log() << "Connection limit (" << maxPerIP << ") exceeded for client "
-                  << cid << " from " << addr.toString() << ", connection refused";
+        // the below ends up linearly searching through excluded subnets --  this branch is only really taken if the
+        // limit is hit .. O(N) where N is probably very small should hopefully be fast enough
+        if (Options::Subnet matched; ! options->isAddrInPerIPLimitExcludeSet(addr, &matched) ) {
+            Log() << "Connection limit (" << maxPerIP << ") exceeded for " << addr.toString()
+                  << ", connection refused for client " << cid;
             emit clientExceedsConnectionLimit(cid);
         } else {
             Debug() << "Client " << cid << " from " << addr.toString() << " would have exceeded the connection limit ("
-                    << maxPerIP << ") but it matches subnet " << matched.value().toString() << " from the exclude list";
+                    << maxPerIP << ") but its IP matches subnet " << matched.toString() << " from 'subnets_to_exclude_from_per_ip_limits'";
         }
     }
 }
