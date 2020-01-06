@@ -328,7 +328,7 @@ namespace {
 /* static */ const QString Server::AppVersion(VERSION);
              const QString Server::AppSubVersion = QString("%1 %2").arg(APPNAME).arg(VERSION);
 
-Server::Server(const QHostAddress &a, quint16 p, const std::shared_ptr<Options> & opts,
+Server::Server(const QHostAddress &a, quint16 p, const std::shared_ptr<const Options> & opts,
                const std::shared_ptr<Storage> &s, const std::shared_ptr<BitcoinDMgr> &bdm)
     : AbstractTcpServer(a, p), options(opts), storage(s), bitcoindmgr(bdm)
 {
@@ -1263,7 +1263,7 @@ void Server::StaticData::init()
 // --- /RPC METHODS ---
 
 // --- SSL Server support ---
-ServerSSL::ServerSSL(const QHostAddress & address_, quint16 port_, const std::shared_ptr<Options> & opts,
+ServerSSL::ServerSSL(const QHostAddress & address_, quint16 port_, const std::shared_ptr<const Options> & opts,
                      const std::shared_ptr<Storage> & storage_, const std::shared_ptr<BitcoinDMgr> & bitcoindmgr_)
     : Server(address_, port_, opts, storage_, bitcoindmgr_), cert(opts->sslCert), key(opts->sslKey)
 {

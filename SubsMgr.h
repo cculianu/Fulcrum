@@ -91,7 +91,7 @@ class SubsMgr : public Mgr, public ThreadObjectMixin, public TimersByNameMixin
     Q_OBJECT
     friend class ::Storage;
     /// Only Storage can construct one of these -- Storage is guaranteed to remain alive at least as long as this instance.
-    SubsMgr(const std::shared_ptr<Options> & opts, Storage * storage, const QString &name = "SubsMgr");
+    SubsMgr(const std::shared_ptr<const Options> & opts, Storage * storage, const QString &name = "SubsMgr");
 public:
     ~SubsMgr() override;
 
@@ -165,7 +165,7 @@ protected:
     Stats stats() const override; ///< from StatsMixin -- show some subs stats
 
 private:
-    const std::shared_ptr<Options> options;
+    const std::shared_ptr<const Options> options;
     Storage * const storage; ///< ponter guaranteed to be valid since Storage "owns" us and if we are alive, it is alive.
     struct Pvt;
     std::unique_ptr<Pvt> p;

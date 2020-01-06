@@ -63,7 +63,7 @@ struct SubsMgr::Pvt
     }
 };
 
-SubsMgr::SubsMgr(const std::shared_ptr<Options> & o, Storage *s, const QString &n)
+SubsMgr::SubsMgr(const std::shared_ptr<const Options> & o, Storage *s, const QString &n)
     : Mgr(nullptr), options(o), storage(s), p(std::make_unique<SubsMgr::Pvt>())
 {
     setObjectName(n);

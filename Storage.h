@@ -71,7 +71,7 @@ class SubsMgr;
 class Storage final : public Mgr, public ThreadObjectMixin
 {
 public:
-    Storage(const std::shared_ptr<Options> & options);
+    Storage(const std::shared_ptr<const Options> & options);
     ~Storage() override;
 
     // Mgr interface
@@ -317,7 +317,7 @@ protected:
     int64_t readUtxoCtFromDB() const;
 
 private:
-    const std::shared_ptr<Options> options;
+    const std::shared_ptr<const Options> options;
     const std::unique_ptr<SubsMgr> subsmgr;
 
     struct Pvt;

@@ -34,7 +34,7 @@ class SrvMgr : public Mgr
 {
     Q_OBJECT
 public:
-    explicit SrvMgr(const std::shared_ptr<Options> & options,
+    explicit SrvMgr(const std::shared_ptr<const Options> & options,
                     const std::shared_ptr<Storage> & storage,
                     const std::shared_ptr<BitcoinDMgr> & bitcoindmgr,
                     QObject *parent = nullptr);
@@ -66,7 +66,7 @@ protected slots:
 
 private:
     void startServers();
-    const std::shared_ptr<Options> options;
+    const std::shared_ptr<const Options> options;
     std::shared_ptr<Storage> storage;
     std::shared_ptr<BitcoinDMgr> bitcoindmgr;
     std::list<std::unique_ptr<Server>> servers;

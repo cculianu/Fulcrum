@@ -128,7 +128,7 @@ class Server : public AbstractTcpServer
 {
     Q_OBJECT
 public:
-    Server(const QHostAddress & address, quint16 port, const std::shared_ptr<Options> & options,
+    Server(const QHostAddress & address, quint16 port, const std::shared_ptr<const Options> & options,
            const std::shared_ptr<Storage> & storage, const std::shared_ptr<BitcoinDMgr> & bitcoindmgr);
     ~Server() override;
 
@@ -258,7 +258,7 @@ private:
     };
 
     /// pointer to the shared Options object -- app-wide configuration settings. Owned and controlled by the App instance.
-    std::shared_ptr<const Options> options;
+    const std::shared_ptr<const Options> options;
     /// pointer to shared Storage object -- owned and controlled by the Controller instance
     std::shared_ptr<Storage> storage;
     /// pointer to shared BitcoinDMgr object -- owned and controlled by the Controller instance
@@ -291,7 +291,7 @@ class ServerSSL : public Server
 {
     Q_OBJECT
 public:
-    ServerSSL(const QHostAddress & address, quint16 port, const std::shared_ptr<Options> & options,
+    ServerSSL(const QHostAddress & address, quint16 port, const std::shared_ptr<const Options> & options,
               const std::shared_ptr<Storage> & storage, const std::shared_ptr<BitcoinDMgr> & bitcoindmgr);
     ~ServerSSL() override;
 

@@ -40,7 +40,7 @@ class Controller : public Mgr, public ThreadObjectMixin, public TimersByNameMixi
 {
     Q_OBJECT
 public:
-    explicit Controller(const std::shared_ptr<Options> & options);
+    explicit Controller(const std::shared_ptr<const Options> & options);
     ~Controller() override;
 
     void startup() override; ///< may throw
@@ -119,7 +119,7 @@ private:
     void genericTaskErrored();
     static constexpr auto pollTimerName = "pollForNewHeaders";
 
-    const std::shared_ptr<Options> options;
+    const std::shared_ptr<const Options> options;
     std::shared_ptr<Storage> storage; ///< shared with srvmgr, but we control its lifecycle
     std::shared_ptr<BitcoinDMgr> bitcoindmgr; ///< shared with srvmgr, but we control its lifecycle
     std::unique_ptr<SrvMgr> srvmgr; ///< NB: this may be nullptr if we haven't yet synched up and started listening.  Additionally, this should be destructed before storage or bitcoindmgr.

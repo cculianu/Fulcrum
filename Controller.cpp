@@ -34,7 +34,7 @@
 #include <map>
 
 
-Controller::Controller(const std::shared_ptr<Options> &o)
+Controller::Controller(const std::shared_ptr<const Options> &o)
     : Mgr(nullptr), polltimeMS(int(o->pollTimeSecs * 1e3)), options(o)
 {
     setObjectName("Controller");

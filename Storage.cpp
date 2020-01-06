@@ -524,7 +524,7 @@ struct Storage::Pvt
     RWLock mempoolLock;
 };
 
-Storage::Storage(const std::shared_ptr<Options> & options_)
+Storage::Storage(const std::shared_ptr<const Options> & options_)
     : Mgr(nullptr), options(options_), subsmgr(new SubsMgr(options, this)), p(std::make_unique<Pvt>())
 {
     setObjectName("Storage");

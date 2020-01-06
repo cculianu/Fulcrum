@@ -25,7 +25,7 @@
 
 #include <utility>
 
-SrvMgr::SrvMgr(const std::shared_ptr<Options> & options,
+SrvMgr::SrvMgr(const std::shared_ptr<const Options> & options,
                const std::shared_ptr<Storage> & s,
                const std::shared_ptr<BitcoinDMgr> & bdm,
                QObject *parent)
