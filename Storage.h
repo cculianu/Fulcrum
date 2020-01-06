@@ -61,7 +61,7 @@ struct HeaderVerificationFailure : public Exception { using Exception::Exception
 /// Thrown by undoLatestBlock() if undo info is missing from the db for said block (this would indicate we tried to
 /// rewind too far back or some other unforeseen circumstance).
 struct UndoInfoMissing : public Exception { using Exception::Exception; ~UndoInfoMissing() override; };
-/// Thrown by internally by getHistory and listUnspent if the history is too large.
+/// Thrown by internally by getHistory and listUnspent if the history is too large (larger than max_history from config).
 struct HistoryTooLarge : public Exception { using Exception::Exception; ~HistoryTooLarge() override; };
 
 struct Mempool;
@@ -203,10 +203,6 @@ public:
         bool operator==(const HistoryItem &o) const noexcept;
     };
     using History = std::vector<HistoryItem>;
-
-    /// If the history is larger than this number of items, the returned list will be truncated to this size.
-    /// TODO: Make this configurable and/or tune this value!
-    static constexpr size_t MaxHistory = 250000;
 
     /// Thread-safe. Will return an empty vector if the confirmed history size exceeds MaxHistory, or a truncated
     /// vector if the confirmed + unconfirmed history exceeds MaxHistory.

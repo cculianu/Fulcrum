@@ -33,6 +33,10 @@
 
 
 struct Options {
+private:
+    static void test();
+public:
+
     static constexpr quint16 DEFAULT_PORT_TCP = 50001, DEFAULT_PORT_SSL = 50002;
 
     std::atomic_bool verboseDebug =
@@ -89,8 +93,15 @@ struct Options {
     /// Returns true if addr matches one of the subnets in subnetsExcludedFromPerIPLimits, false otherwise
     /// Optionally sets the pointer *matched = theMatchedSubnet (if !nullptr).
     bool isAddrInPerIPLimitExcludeSet(const QHostAddress & addr, Subnet * matched = nullptr) const;
-};
 
+    // Max history & max buffer
+    static constexpr int defaultMaxBuffer = 4000000, maxBufferMin = 64000, maxBufferMax = 100000000;
+    static constexpr int defaultMaxHistory = 125000, maxHistoryMin = 1000, maxHistoryMax = 100000000;
+
+    int maxBuffer = defaultMaxBuffer;
+    int maxHistory = defaultMaxHistory;
+
+};
 
 /// A class encapsulating a simple read-only config file format.  The format is similar to the bitcoin.conf format
 /// with "name = value" pairs, one per line. Section headers, e.g. [MySection] are not supported (they are simply

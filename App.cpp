@@ -486,7 +486,6 @@ void App::parseArgs()
                     << (options->maxClientsPerIP > 0 ? QString::number(options->maxClientsPerIP) : "Unlimited");
         });
     }
-
     if (conf.hasValue("subnets_to_exclude_from_per_ip_limits")) {
         options->subnetsExcludedFromPerIPLimits.clear();
         const auto sl = conf.value("subnets_to_exclude_from_per_ip_limits").split(",");
@@ -503,6 +502,30 @@ void App::parseArgs()
         // log this later in case we are in syslog mode
         Util::AsyncOnObject(this, [parsed]{
             Debug() << "config: subnets_to_exclude_from_per_ip_limits = " << (parsed.isEmpty() ? "None" : parsed.join(", "));
+        });
+    }
+    if (conf.hasValue("max_history")) {
+        bool ok;
+        int mh = conf.intValue("max_history", -1, &ok);
+        if (!ok || mh < options->maxHistoryMin || mh > options->maxHistoryMax)
+            throw BadArgs(QString("max_history: bad value. Specify a value in the range [%1, %2]")
+                          .arg(options->maxHistoryMin).arg(options->maxHistoryMax));
+        options->maxHistory = mh;
+        // log this later in case we are in syslog mode
+        Util::AsyncOnObject(this, [mh]{
+            Debug() << "config: max_history = " << mh;
+        });
+    }
+    if (conf.hasValue("max_buffer")) {
+        bool ok;
+        int mb = conf.intValue("max_buffer", -1, &ok);
+        if (!ok || mb < options->maxBufferMin || mb > options->maxBufferMax)
+            throw BadArgs(QString("max_buffer: bad value. Specify a value in the range [%1, %2]")
+                          .arg(options->maxBufferMin).arg(options->maxBufferMax));
+        options->maxBuffer = mb;
+        // log this later in case we are in syslog mode
+        Util::AsyncOnObject(this, [mb]{
+            Debug() << "config: max_buffer = " << mb;
         });
     }
 

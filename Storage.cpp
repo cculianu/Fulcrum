@@ -1656,6 +1656,7 @@ std::vector<TxHash> Storage::txHashesForBlockInBitcoindMemoryOrder(BlockHeight h
 auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf) const -> History
 {
     History ret;
+    const size_t maxHistory = size_t(options->maxHistory);
     if (hashX.length() != HashLen)
         return ret;
     try {
@@ -1665,9 +1666,9 @@ auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf) const -> H
             auto nums_opt = GenericDBGet<TxNumVec>(p->db.shist.get(), hashX, true, err, false, p->db.defReadOpts);
             if (nums_opt.has_value()) {
                 auto & nums = nums_opt.value();
-                if (UNLIKELY(nums.size() > MaxHistory)) {
+                if (UNLIKELY(nums.size() > maxHistory)) {
                     throw HistoryTooLarge(QString("History for scripthash %1 exceeds MaxHistory %2 with %3 items!")
-                                          .arg(QString(hashX.toHex())).arg(MaxHistory).arg(nums.size()));
+                                          .arg(QString(hashX.toHex())).arg(maxHistory).arg(nums.size()));
                 }
                 ret.reserve(nums.size());
                 for (auto num : nums) {
@@ -1682,9 +1683,9 @@ auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf) const -> H
             if (auto it = mempool.hashXTxs.find(hashX); it != mempool.hashXTxs.end()) {
                 const auto & txvec = it->second;
                 const size_t total = ret.size() + txvec.size();
-                if (UNLIKELY(total > MaxHistory)) {
+                if (UNLIKELY(total > maxHistory)) {
                     throw HistoryTooLarge(QString("History for scripthash %1 exceeds MaxHistory %2 with %3 items!")
-                                          .arg(QString(hashX.toHex())).arg(MaxHistory).arg(total));
+                                          .arg(QString(hashX.toHex())).arg(maxHistory).arg(total));
                 }
                 ret.reserve(total);
                 for (const auto & tx : txvec)
@@ -1703,6 +1704,7 @@ auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
     if (hashX.length() != HashLen)
         return ret;
     try {
+        const size_t maxHistory = size_t(options->maxHistory);
         constexpr size_t iota = 10; // we initially reserve this many items in the returned array in order to prevent redundant allocations in the common case.
         {
             // take shared lock (ensure history doesn't mutate from underneath our feet)
@@ -1728,9 +1730,9 @@ auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
                     // should never happen, indicates db corruption
                     throw InternalError("Deserialized CompactTXO is invalid");
                 ctxoList.emplace_back(ctxo);
-                if (UNLIKELY(++ctxoListSize > MaxHistory)) {
+                if (UNLIKELY(++ctxoListSize > maxHistory)) {
                     throw HistoryTooLarge(QString("Unspent history too large for %1, exceeds MaxHistory of %2")
-                                          .arg(QString(hashX.toHex())).arg(MaxHistory));
+                                          .arg(QString(hashX.toHex())).arg(maxHistory));
                 }
             }
             for (const auto & ctxo : ctxoList) {
@@ -1774,9 +1776,9 @@ auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
                                         it3->amount,  // .value
                                         TxNum(1) + maxTxNumSeen + TxNum(tx->ancestorCount), // .txNum (this is fudged for sorting at the end properly)
                                     });
-                                    if (UNLIKELY(ret.size() > MaxHistory)) {
+                                    if (UNLIKELY(ret.size() > maxHistory)) {
                                         throw HistoryTooLarge(QString("Unspent history too large for %1, exceeds MaxHistory of %2")
-                                                              .arg(QString(hashX.toHex())).arg(MaxHistory));
+                                                              .arg(QString(hashX.toHex())).arg(maxHistory));
                                     }
                                 } else {
                                     // this should never happen!

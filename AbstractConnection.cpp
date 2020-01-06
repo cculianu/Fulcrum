@@ -149,7 +149,7 @@ bool AbstractConnection::do_write(const QByteArray & data)
     }
     nSent += written;
     if (writeBackLog.length() > MAX_BUFFER) {
-        Error() << __FUNCTION__ << " MAX_BUFFER reached on write (" << MAX_BUFFER << ") id=" << id;
+        Warning(Log::Magenta) << __FUNCTION__ << " MAX_BUFFER reached on write (" << MAX_BUFFER << ") id=" << id;
         do_disconnect();
         return false;
     }

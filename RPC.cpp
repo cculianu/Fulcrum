@@ -19,6 +19,8 @@
 #include "RPC.h"
 #include <QtCore>
 
+#include <QHostAddress>
+
 #include <type_traits>
 
 namespace RPC {
@@ -480,12 +482,63 @@ namespace RPC {
             }
             processJson(data);
         }
-        if (UNLIKELY(socket->bytesAvailable() > MAX_BUFFER)) {
+
+        memoryWasteDoSProtection();
+    }
+
+    void LinefeedConnection::memoryWasteDoSProtection()
+    {
+        constexpr const char *memoryWasteTimer = "memoryWasteTimer";
+        constexpr int defMemoryWasteThreshold = 256 * 1024; // 256 KiB
+        constexpr int memoryWasteTimeout = 5000; /// 5 seconds
+        constexpr bool debugPrint = false;
+        // we declare this lamba this way with no captures and static as a performance optimization for the common case
+        // where this code passes through doing nothing.  We don't want to be pushing lambdas we never used onto
+        // the stack every time this function is called.
+        static const auto StopTimer = [](LinefeedConnection *me, qint64 avail) {
+            me->memoryWasteTimerActive = false;
+            me->stopTimer(memoryWasteTimer);
+            if constexpr (debugPrint)
+                Debug() << "Memory waste timer stopped for " << me->id << " from " << me->peerAddress().toString()
+                        << ", read buffer now: " << avail;
+        };
+        if (memoryWasteThreshold < 0)
+            // uninitialized.. initialize
+            memoryWasteThreshold = qMin(qint64(defMemoryWasteThreshold), qint64(MAX_BUFFER));
+        assert(memoryWasteThreshold >= 0);
+        // DoS protection logic below for memory exhaustion attacks.  If a client connects from many IPs and with
+        // many clients a memory exhaustion attack is possible.  The attack would simply involve filling our buffers
+        // and never sending a newline.  The below code detects the situation and disconnects clients whereby too much
+        // time has expired (5 seconds) with extant unprocessed read buffers past the 256KB threshold (or MAX_BUFFER,
+        // whichever is smaller).
+        if (const auto avail = socket->bytesAvailable(); UNLIKELY(avail > MAX_BUFFER)) {
             // this branch can't normally be taken because super class calls setReadBufferSize() on the socket
             // in on_connected, but we leave this code here in the interests of defensive programming.
             Warning() << prettyName() << " fatal error: " << QString("Peer has sent us more than %1 bytes without a newline! Bad peer?").arg(MAX_BUFFER);
             do_disconnect();
             status = Bad;
+        } else if (UNLIKELY(!memoryWasteTimerActive && avail >= memoryWasteThreshold)) {
+            memoryWasteTimerActive = true;
+            callOnTimerSoonNoRepeat(memoryWasteTimeout, memoryWasteTimer, [this]{
+                if (!memoryWasteTimerActive)
+                    Warning() << "Memory waste timer was not active but the timer lambda fired! FIXME!";
+                memoryWasteTimerActive = false;
+                const auto avail = socket ? socket->bytesAvailable() : 0;
+                if (avail >= memoryWasteThreshold) {
+                    Warning(Log::Magenta)
+                            << "Client " << this->id << " from " << this->peerAddress().toString()
+                            << " exceeded its \"memory waste threshold\" by filling our receive buffer with "
+                            << avail << " bytes without a newline, and then sitting idle in excess of "
+                            << QString::number(memoryWasteTimeout/1e3, 'f', 1) << " seconds -- disconnecting!";
+                    do_disconnect();
+                    status = Bad;
+                } else
+                    StopTimer(this, avail);
+            });
+            if constexpr (debugPrint)
+                Debug() << "Memory waste timer started for " << this->id << " from " << this->peerAddress().toString() << ", read buffer size: " << avail;
+        } else if (UNLIKELY(memoryWasteTimerActive && avail < memoryWasteThreshold)) {
+            StopTimer(this, avail);
         }
     }
 

@@ -268,7 +268,6 @@ namespace {
     // TODO: maybe move these to a more global place? For now here is fine.
     namespace Constants {
         constexpr int kMaxServerVersionLen = 80,  ///< the maximum server version length we accept to prevent memory exhaustion attacks
-                      kMaxBuffer = 4*1000*1000, ///< =4MB. The max buffer we use in Client (ElectronX client). TODO: Make this tune-able and configurable!
                       kMaxTxHex = 2*1024*1024, ///< >1MB raw tx max (over 1 MiB, 1 traditional PoT MB should be enough).
                       kMaxErrorCount = 10; ///< The maximum number of errors we tolerate from a Client before disconnecting them.
 
@@ -390,7 +389,7 @@ Client *
 Server::newClient(QTcpSocket *sock)
 {
     const auto clientId = newId();
-    auto ret = clientsById[clientId] = new Client(rpcMethods(), clientId, this, sock);
+    auto ret = clientsById[clientId] = new Client(rpcMethods(), clientId, this, sock, options->maxBuffer);
     const auto addr = ret->peerAddress();
     // if deleted, we need to purge it from map
     auto on_destroyed = [clientId, addr, this](QObject *o) {
@@ -1307,8 +1306,9 @@ void ServerSSL::incomingConnection(qintptr socketDescriptor)
 
 /*static*/ std::atomic_int Client::numClients{0};
 
-Client::Client(const RPC::MethodMap & mm, IdMixin::Id id_in, Server *srv, QTcpSocket *sock)
-    : RPC::LinefeedConnection(mm, id_in, sock, kMaxBuffer), srv(srv)
+Client::Client(const RPC::MethodMap & mm, IdMixin::Id id_in, Server *srv, QTcpSocket *sock, int maxBuffer)
+    : RPC::LinefeedConnection(mm, id_in, sock, /* ensure sane --> */ qMax(maxBuffer, Options::maxBufferMin)),
+      srv(srv)
 {
     const auto N = ++numClients;
     socket = sock;

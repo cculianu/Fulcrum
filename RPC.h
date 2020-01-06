@@ -344,6 +344,10 @@ namespace RPC {
         /// implements pure virtual from super to handle linefeed-based JSON. When a full line arrives, calls ConnectionBase::processJson
         void on_readyRead() override;
         QByteArray wrapForSend(const QByteArray &) override;
+    private:
+        bool memoryWasteTimerActive = false;  ///< inticates the DoS protection timer is active, used by memoryWasteDoSProtection
+        qint64 memoryWasteThreshold = -1; ///< gets lazy-initialized in memoryWasteDoSProtection below
+        void memoryWasteDoSProtection(); ///< must be called from on_readyRead only.
     };
 
     /// JSON RPC over HTTP.  Wraps the outgoing data in headers and can also parse incoming headers.

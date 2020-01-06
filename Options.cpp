@@ -22,6 +22,13 @@
 #include <QIODevice>
 #include <QTextStream>
 
+/* static */ void Options::test()
+{
+    // paranoia
+    static_assert ( maxHistoryMin > 0 && maxHistoryMax > 0 && maxBufferMin > 0 && maxBufferMax > 0
+                    && defaultMaxBuffer > 0 && defaultMaxHistory > 0, "maxHistory and/or maxBuffer may not be <= 0" );
+}
+
 /*static*/ auto Options::Subnet::fromString(const QString &s) -> Subnet
 {
     Subnet sn;

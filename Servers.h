@@ -318,7 +318,7 @@ class Client : public RPC::LinefeedConnection
     Q_OBJECT
 public:
     /// NB: sock should be in an already connected state.
-    explicit Client(const RPC::MethodMap & methods, IdMixin::Id id, Server *srv, QTcpSocket *sock);
+    explicit Client(const RPC::MethodMap & methods, IdMixin::Id id, Server *srv, QTcpSocket *sock, int maxBuffer);
     ~Client() override;
 
     struct Info {
