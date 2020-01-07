@@ -681,21 +681,27 @@ void Server::rpc_server_donation_address(Client *c, const RPC::Message &m)
 {
     emit c->sendResult(m.id, options->donationAddress);
 }
-void Server::rpc_server_features(Client *c, const RPC::Message &m)
+/* static */
+QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const QByteArray &genesisHash, const Options &options)
 {
     QVariantMap r;
+    if (!c) {
+        // paranoia
+        Error() << __func__ << ": called with a nullptr for AbstractConnection FIXME!";
+        return r;
+    }
     r["pruning"] = QVariant(); // null
-    r["genesis_hash"] = QString(Util::ToHexFast(storage->genesisHash()));
+    r["genesis_hash"] = QString(Util::ToHexFast(genesisHash));
     r["server_version"] = ServerMisc::AppSubVersion;
     r["protocol_min"] = ServerMisc::MinProtocolVersion.toString();
     r["protocol_max"] = ServerMisc::MaxProtocolVersion.toString();
     r["hash_function"] = ServerMisc::HashFunction;
 
     QVariantMap hmap;
-    if (options->publicTcp.has_value())
-        hmap["tcp_port"] = unsigned(options->publicTcp.value());
-    if (options->publicSsl.has_value())
-        hmap["ssl_port"] = unsigned(options->publicSsl.value());
+    if (options.publicTcp.has_value())
+        hmap["tcp_port"] = unsigned(options.publicTcp.value());
+    if (options.publicSsl.has_value())
+        hmap["ssl_port"] = unsigned(options.publicSsl.value());
     if (hmap.isEmpty()) {
         // This should not normally happen but it can if user specified public_tcp_port=0 and public_ssl_port=0.
         // In that case we have to report SOMETHING here as per electrumx protocol specs, so we just use the local port
@@ -704,12 +710,16 @@ void Server::rpc_server_features(Client *c, const RPC::Message &m)
         const QString key = c->isSsl() ? "ssl_port" : "tcp_port";
         hmap[key] = unsigned(c->localPort());
     }
-    const QString hostName = options->hostName.value_or(c->localAddress().toString());
+    const QString hostName = options.hostName.value_or(c->localAddress().toString());
 
     r["hosts"] = QVariantMap{
         { hostName, hmap },
     };
-    emit c->sendResult(m.id, r);
+    return r;
+}
+void Server::rpc_server_features(Client *c, const RPC::Message &m)
+{
+    emit c->sendResult(m.id, makeFeaturesDictForConnection(c, storage->genesisHash(), *options));
 }
 void Server::rpc_server_peers_subscribe(Client *c, const RPC::Message &m)
 {

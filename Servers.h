@@ -139,6 +139,11 @@ public:
     // this must be called in the thread context of this thread
     QVariantMap stats() const;
 
+    /// This is refactored code that is called both from here (rpc_server_features) and from the PeerMgr
+    /// which also needs a features dict when *it* calls add_peer on peer servers.
+    /// NOTE: Be sure to only ever call this function from the same thread as the AbstractConnection instance!
+    static QVariantMap makeFeaturesDictForConnection(AbstractConnection *, const QByteArray &genesisHash, const Options & options);
+
 signals:
     /// connected to SrvMgr clientConnected slot by SrvMgr class
     void clientConnected(IdMixin::Id clientId, const QHostAddress & remoteAddress);

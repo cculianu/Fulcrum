@@ -57,10 +57,14 @@ private:
     const std::shared_ptr<const Storage> storage; ///< from SrvMgr, read-only, for getChain() and genesisHash()
     const std::shared_ptr<const Options> options; ///< from SrvMgr that creates us.
 
-    QHash<QString, PeerInfo> seedPeers; ///< parsed PeerInfos from server.json or servers_testnet.json
+    using PeerInfoMap = QHash<QString, PeerInfo>; // hostname -> PeerInfo
+
+    PeerInfoMap seedPeers; ///< parsed PeerInfos from server.json or servers_testnet.json
     void parseServersDotJson(const QString &) noexcept(false); ///< may throw
 
     void addPeerVerifiedSource(const PeerInfo &, const QHostAddress &resolvedAddress);
+
+    PeerInfoMap queued, bad, stale;
 };
 
 /// Thrown by PeerInfo::fromFeaturesMap
@@ -80,6 +84,8 @@ struct PeerInfo
     Version protocolMin,
             protocolMax;
     QString hashFunction = ServerMisc::HashFunction; /// may also come from features map
+
+    double ts = 0.; ///< ts from Util::getTimeSecs() -- when it went stale or bad,  (if stale or bad), or when it was added
 
     void clear() { *this = PeerInfo(); }
     bool isTor() const { return hostName.toLower().endsWith(".onion"); }

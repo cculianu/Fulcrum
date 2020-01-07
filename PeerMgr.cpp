@@ -86,6 +86,13 @@ void PeerMgr::on_rpcAddPeer(const PeerInfoList &infos, const QHostAddress &sourc
     // over and over and cause us to waste time doing network lookups.
 
     for (const auto & pi : infos) {
+        // TODO here also check the "good" connections we actively have, and if in there, maybe bump server to refresh its features,
+        // then exit loop early. Also we need a way to keep track of "recently verified bad" as a DoS defense here? Hmm...
+        if (queued.contains(pi.hostName)) { // NB: assumption here is hostName is already trimmed and toLower()
+            // already added... no need to do DNS lookup
+            Debug() << "add_peer: " << pi.hostName << " already queued";
+            continue;
+        }
         // For each peer in the list, do a DNS lookup and verify that the source address matches at least one
         // of the resolved addresses.  If that is the case, we can proceed with the peer add (addPeerVerifiedSource).
         // Otherwise, we reject add_peer requests from random sources.
@@ -117,9 +124,15 @@ void PeerMgr::on_rpcAddPeer(const PeerInfoList &infos, const QHostAddress &sourc
 
 void PeerMgr::addPeerVerifiedSource(const PeerInfo &piIn, const QHostAddress & addr)
 {
+    Debug() << __func__ << " peer " << piIn.hostName << " ipaddr: " << addr.toString();
+
     PeerInfo pi(piIn);
     pi.addr = addr;
-    Debug() << __func__ << " peer " << pi.hostName << " ipaddr: " << pi.addr.toString();
+    pi.ts = Util::getTimeSecs();
+    queued[pi.hostName] = pi;
+    stale.remove(pi.hostName);
+    bad.remove(pi.hostName);
+    Debug() << "add_peer: " << pi.hostName << " added to queue";
     // TODO ...
 }
 
