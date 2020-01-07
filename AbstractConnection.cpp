@@ -276,5 +276,6 @@ auto AbstractConnection::stats() const -> Stats
         }
         return QVariant(); // null
     }();
+    m["maxBuffer"] = MAX_BUFFER;
     return m;
 }

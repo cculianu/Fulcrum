@@ -60,6 +60,54 @@ bool Options::isAddrInPerIPLimitExcludeSet(const QHostAddress &addr, Subnet *mat
     return false;
 }
 
+QVariantMap Options::toMap() const
+{
+    QVariantMap m;
+
+    m["debug"] = verboseDebug.load();
+    m["trace"] = verboseTrace.load();
+    QVariantList l;
+    for (const auto & pair : interfaces)
+        l.push_back(QString("%1:%2").arg(pair.first.toString()).arg(pair.second));
+    m["tcp"] = l;
+    l.clear();
+    for (const auto & pair : sslInterfaces)
+        l.push_back(QString("%1:%2").arg(pair.first.toString()).arg(pair.second));
+    m["ssl"] = l;
+    l.clear();
+    for (const auto & pair : statsInterfaces)
+        l.push_back(QString("%1:%2").arg(pair.first.toString()).arg(pair.second));
+    m["stats"] = l;
+    m["cert"] = certFile;
+    m["key"] = keyFile;
+    m["bitcoind"] = QString("%1:%2").arg(bitcoind.first.toString()).arg(bitcoind.second);
+    m["rpcuser"] = rpcuser.isNull() ? QVariant() : QVariant("<hidden>");
+    m["rpcpassword"] = rpcpassword.isNull() ? QVariant() : QVariant("<hidden>");
+    m["datadir"] = datadir;
+    m["checkdb"] = doSlowDbChecks;
+    m["polltime"] = pollTimeSecs;
+    m["donation"] = donationAddress;
+    m["banner"] = bannerFile;
+    m["peering"] = peerDiscovery;
+    m["peering_announce_self"] = peerAnnounceSelf;
+    m["hostname"] = hostName.has_value() ? QVariant(hostName.value()) : QVariant();
+    m["public_tcp"] = publicTcp.has_value() ? QVariant(publicTcp.value()) : QVariant();
+    m["public_ssl"] = publicSsl.has_value() ? QVariant(publicSsl.value()) : QVariant();
+    m["max_clients_per_ip"] = maxClientsPerIP;
+    l.clear();
+    for (const auto & sn : subnetsExcludedFromPerIPLimits)
+        l.push_back(sn.toString());
+    m["subnets_to_exclude_from_per_ip_limits"] = l;
+    m["max_buffer"] = maxBuffer;
+    m["max_history"] = maxHistory;
+    m["workqueue"] = workQueue;
+    m["worker_threads"] = workerThreads;
+
+    return m;
+}
+
+// -- ConfigFile
+
 std::optional<QString> ConfigFile::optValue(const QString &name, Qt::CaseSensitivity cs) const
 {
     std::optional<QString> ret;

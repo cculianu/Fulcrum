@@ -26,6 +26,7 @@
 #include <QSslKey>
 #include <QString>
 #include <QStringList>
+#include <QVariantMap>
 
 #include <atomic>
 #include <optional>
@@ -36,6 +37,9 @@ struct Options {
 private:
     static void test();
 public:
+    /// Return this object as a QVariantMap suitable for serializing as JSON. Controller::stats() uses this to
+    /// output the configured options to the /stats output JSON, for example.
+    QVariantMap toMap() const;
 
     static constexpr quint16 DEFAULT_PORT_TCP = 50001, DEFAULT_PORT_SSL = 50002;
 
@@ -53,7 +57,9 @@ public:
                      sslInterfaces;  ///< SSL interfaces to use for binding SSL ports. Defaults to nothing.
     QList<Interface> statsInterfaces; ///< 'stats' server, defaults to empty (no stats server)
     QSslCertificate sslCert; ///< this must be valid if we have any SSL interfaces.
+    QString certFile; ///< saved here for toMap() to remember what was specified in config file
     QSslKey sslKey; ///< this must be valid if we have any SSL interfaces.
+    QString keyFile; ///< saved here for toMap() to remember what was specified in config file
     Interface bitcoind;
     QString rpcuser, rpcpassword;
     QString datadir; ///< The directory to store the database. It exists and has appropriate permissions (otherwise the app would have quit on startup).
@@ -101,6 +107,10 @@ public:
     int maxBuffer = defaultMaxBuffer;
     int maxHistory = defaultMaxHistory;
 
+    // Work queue options as configured by user; these are the saved values from config (if any) and are not
+    // necessarily the options used in practice (those can be determined by querying the Util::ThreadPool).
+    int workQueue = -1;
+    int workerThreads = -1;
 };
 
 /// A class encapsulating a simple read-only config file format.  The format is similar to the bitcoin.conf format

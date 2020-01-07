@@ -488,8 +488,14 @@ namespace Util {
         int ExtantJobs();
         /// Returns the maximal value ExtantJobs() has ever reached during the lifetime of this application.
         int ExtantJobsMaxSeen();
-        /// Returns the maximum number of extant jobs before failure is unconditionally asserted on SubmitWork (currently 1000)
+        /// Returns the maximum number of extant jobs before failure is unconditionally asserted on SubmitWork (currently the default is 1000)
         int ExtantJobLimit();
+        /// Sets the extant job limit.  This number cannot be set below 10, doing so returns false.
+        bool SetExtantJobLimit(int limit);
+        /// Returns the maximum number of threads used by the pool.
+        int MaxThreadCount();
+        /// Sets the maximum number of threads used by the pool
+        bool SetMaxThreadCount(int max);
         /// Returns the number of lifetime job overflows (the number of times the job queue was full and work was rejected).
         /// Ideally this number is always 0 even under load.
         uint64_t Overflows();

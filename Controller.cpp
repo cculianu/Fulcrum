@@ -1322,10 +1322,12 @@ auto Controller::stats() const -> Stats
         m["extant limit"] = Util::ThreadPool::ExtantJobLimit();
         m["job count (lifetime)"] = qulonglong(Util::ThreadPool::NumJobsSubmitted());
         m["job queue overflows (lifetime)"] = qulonglong(Util::ThreadPool::Overflows());
+        m["thread count (max)"] = Util::ThreadPool::MaxThreadCount();
         misc["Job Queue (Thread Pool)"] = m;
     }
     st["Misc"] = misc;
     st["SubsMgr"] = storage->subs()->statsSafe(kDefaultTimeout/2);
+    st["Config"] = options->toMap();
     return st;
 }
 

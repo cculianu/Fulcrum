@@ -429,7 +429,7 @@ namespace Util {
             constexpr bool debugPrt = false;
             /// maximum number of extant jobs we allow before failing and not enqueuing more.
             /// TODO: make this configurable and/or tune this "magic" value
-            constexpr int extantLimit = 1000;
+            std::atomic_int extantLimit = 1000;
         }
 
         Job::Job(QObject *context, const VoidFunc & work, const VoidFunc & completion, const FailFunc &fail)
@@ -525,9 +525,22 @@ namespace Util {
 
         int ExtantJobs() { return extant.load(); }
         int ExtantJobsMaxSeen() { return extantMaxSeen.load(); }
-        int ExtantJobLimit() { return extantLimit; }
+        int ExtantJobLimit() { return extantLimit.load(); }
+        bool SetExtantJobLimit(int limit) {
+            if (limit < 10)
+                return false;
+            extantLimit = limit;
+            return true;
+        }
         uint64_t NumJobsSubmitted() { return ctr.load(); }
         uint64_t Overflows() { return overflows.load(); }
+        int MaxThreadCount() { return QThreadPool::globalInstance()->maxThreadCount(); }
+        bool SetMaxThreadCount(int max) {
+            if (max < 1 || max > int(getNVirtualProcessors()))
+                return false;
+            QThreadPool::globalInstance()->setMaxThreadCount(max);
+            return QThreadPool::globalInstance()->maxThreadCount() == max;
+        }
 
     } // end namespace ThreadPool
 } // end namespace Util

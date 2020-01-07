@@ -408,6 +408,8 @@ void App::parseArgs()
                 throw BadArgs(QString("Unable to open key file %1: %2").arg(key).arg(keyf.errorString()));
             options->sslCert = QSslCertificate(&certf, QSsl::EncodingFormat::Pem);
             options->sslKey = QSslKey(&keyf, QSsl::KeyAlgorithm::Rsa, QSsl::EncodingFormat::Pem);
+            options->certFile = cert; // this is only used for /stats port advisory info
+            options->keyFile = key; // this is only used for /stats port advisory info
             if (options->sslCert.isNull())
                 throw BadArgs(QString("Unable to read ssl certificate from %1. Please make sure the file is readable and "
                                       "contains a valid certificate in PEM format.").arg(cert));
@@ -512,9 +514,7 @@ void App::parseArgs()
                           .arg(options->maxHistoryMin).arg(options->maxHistoryMax));
         options->maxHistory = mh;
         // log this later in case we are in syslog mode
-        Util::AsyncOnObject(this, [mh]{
-            Debug() << "config: max_history = " << mh;
-        });
+        Util::AsyncOnObject(this, [mh]{ Debug() << "config: max_history = " << mh; });
     }
     if (conf.hasValue("max_buffer")) {
         bool ok;
@@ -524,10 +524,36 @@ void App::parseArgs()
                           .arg(options->maxBufferMin).arg(options->maxBufferMax));
         options->maxBuffer = mb;
         // log this later in case we are in syslog mode
-        Util::AsyncOnObject(this, [mb]{
-            Debug() << "config: max_buffer = " << mb;
-        });
+        Util::AsyncOnObject(this, [mb]{ Debug() << "config: max_buffer = " << mb; });
     }
+    // pick up 'workqueue' and 'worker_threads' optional conf params
+    if (conf.hasValue("workqueue")) {
+        bool ok;
+        int val = conf.intValue("workqueue", 0, &ok);
+        if (!ok || val < 10)
+            throw BadArgs("workqueue: bad value. Specify an integer >= 10");
+        if (!Util::ThreadPool::SetExtantJobLimit(val))
+            throw BadArgs(QString("workqueue: Unable to set workqueue to %1; SetExtantJobLimit returned false.").arg(val));
+        options->workQueue = val; // save advisory value for stats(), etc code
+        // log this later in case we are in syslog mode
+        Util::AsyncOnObject(this, []{ Debug() << "config: workqueue = " << Util::ThreadPool::ExtantJobLimit(); });
+    } else
+        options->workQueue = Util::ThreadPool::ExtantJobLimit(); // so stats() knows what was auto-configured
+    if (conf.hasValue("worker_threads")) {
+        bool ok;
+        int val = conf.intValue("worker_threads", 0, &ok);
+        if (!ok || val < 0)
+            throw BadArgs("worker_threads: bad value. Specify an integer >= 0");
+        if (val > int(Util::getNVirtualProcessors()))
+            throw BadArgs(QString("worker_threads: specified value of %1 exceeds the detected number of virtual processors of %2")
+                          .arg(val).arg(Util::getNVirtualProcessors()));
+        if (val > 0 && !Util::ThreadPool::SetMaxThreadCount(val))
+            throw BadArgs(QString("worker_threads: Unable to set worker threads to %1").arg(val));
+        options->workerThreads = val; // save advisory value for stats(), etc code
+        // log this later in case we are in syslog mode
+        Util::AsyncOnObject(this, [val]{ Debug() << "config: worker_threads = " << val << " (configured: " << Util::ThreadPool::MaxThreadCount() << ")"; });
+    } else
+        options->workerThreads = Util::ThreadPool::MaxThreadCount(); // so stats() knows what was auto-configured
 
     // warn user that no hostname was specified if they have peerDiscover turned on
     if (!options->hostName.has_value() && options->peerDiscovery && options->peerAnnounceSelf) {
