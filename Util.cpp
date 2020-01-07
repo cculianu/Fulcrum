@@ -428,7 +428,6 @@ namespace Util {
             std::atomic_bool blockNewWork = false;
             constexpr bool debugPrt = false;
             /// maximum number of extant jobs we allow before failing and not enqueuing more.
-            /// TODO: make this configurable and/or tune this "magic" value
             std::atomic_int extantLimit = 1000;
         }
 
