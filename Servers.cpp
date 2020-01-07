@@ -20,6 +20,8 @@
 
 #include "BitcoinD.h"
 #include "Merkle.h"
+#include "PeerMgr.h"
+#include "ServerMisc.h"
 #include "Storage.h"
 #include "SubsMgr.h"
 
@@ -322,11 +324,6 @@ namespace {
 }
 
 
-/* static */ const Version Server::MinProtocolVersion(1,4,0);
-             const Version Server::MaxProtocolVersion(1,4,2);
-/* static */ const QString Server::AppVersion(VERSION);
-             const QString Server::AppSubVersion = QString("%1 %2").arg(APPNAME).arg(VERSION);
-
 Server::Server(const QHostAddress &a, quint16 p, const std::shared_ptr<const Options> & opts,
                const std::shared_ptr<Storage> &s, const std::shared_ptr<BitcoinDMgr> &bdm)
     : AbstractTcpServer(a, p), options(opts), storage(s), bitcoindmgr(bdm)
@@ -622,16 +619,30 @@ void Server::generic_async_to_bitcoind(Client *c, const RPC::Message::Id & reqId
 
 void Server::rpc_server_add_peer(Client *c, const RPC::Message &m)
 {
-    // TODO: Implement this. This is a stub implementation always returning true.
     const auto map = m.paramsList().front().toMap();
     if (map.isEmpty())
         throw RPCError(QString("%1 expected a non-empty dictionary argument").arg(m.method));
-    emit c->sendResult(m.id, true);
+    bool retval = true;
+    try {
+        const auto peerList = PeerInfo::fromFeaturesMap(map); // this may throw BadFeaturesMap
+        if (peerList.isEmpty() || peerList.front().genesisHash != storage->genesisHash())
+            throw BadFeaturesMap("Incompatible genesis hash");
+        const auto peerAddress = c->peerAddress();
+        Debug() << "add_peer tentatively accepted for host " << peerList.front().hostName << " (" << peerList.size() << ")" << " from " << peerAddress.toString();
+        emit gotRpcAddPeer(peerList, peerAddress);
+    } catch (const BadFeaturesMap & e) {
+        const auto hm = map.value("hosts").toMap();
+        const QString hostNamePart = !hm.isEmpty() ? QString(" (%1)").arg(hm.firstKey()) : QString();
+        Debug() << "Refusing add_peer" << hostNamePart << " for reason: " << e.what();
+        retval = false;
+    }
+    emit c->sendResult(m.id, retval);
+
 }
 void Server::rpc_server_banner(Client *c, const RPC::Message &m)
 {
     constexpr int MAX_BANNER_DATA = 16384;
-    static const QString bannerFallback = QString("Connected to a %1 server").arg(AppSubVersion);
+    static const QString bannerFallback = QString("Connected to a %1 server").arg(ServerMisc::AppSubVersion);
     const QString bannerFile(options->bannerFile);
     if (bannerFile.isEmpty() || !QFile::exists(bannerFile) || !QFileInfo(bannerFile).isReadable()) {
         // fallback -- banner file invalid/not readable/not specified
@@ -654,8 +665,8 @@ void Server::rpc_server_banner(Client *c, const RPC::Message &m)
                 } else {
                     // read banner file ok, perform variable substitutions
                     ret = QString::fromUtf8(bannerFileData)
-                            .replace("$SERVER_VERSION", AppVersion)
-                            .replace("$SERVER_SUBVERSION", AppSubVersion)
+                            .replace("$SERVER_VERSION", ServerMisc::AppVersion)
+                            .replace("$SERVER_SUBVERSION", ServerMisc::AppSubVersion)
                             .replace("$DONATION_ADDRESS", donationAddress)
                             .replace("$DAEMON_VERSION", daemonVersion.toString(true))
                             .replace("$DAEMON_SUBVERSION", subversion)
@@ -675,10 +686,10 @@ void Server::rpc_server_features(Client *c, const RPC::Message &m)
     QVariantMap r;
     r["pruning"] = QVariant(); // null
     r["genesis_hash"] = QString(Util::ToHexFast(storage->genesisHash()));
-    r["server_version"] = AppSubVersion;
-    r["protocol_min"] = MinProtocolVersion.toString();
-    r["protocol_max"] = MaxProtocolVersion.toString();
-    r["hash_function"] = "sha256";
+    r["server_version"] = ServerMisc::AppSubVersion;
+    r["protocol_min"] = ServerMisc::MinProtocolVersion.toString();
+    r["protocol_max"] = ServerMisc::MaxProtocolVersion.toString();
+    r["hash_function"] = ServerMisc::HashFunction;
 
     QVariantMap hmap;
     if (options->publicTcp.has_value())
@@ -718,13 +729,13 @@ void Server::rpc_server_version(Client *c, const RPC::Message &m)
         throw RPCError(QString("%1 already sent").arg(m.method));
 
     Version ver = l[1].toString().left(kMaxServerVersionLen); // try and parse version, see Version.cpp, QString constructor.
-    if (!ver.isValid() || ver < MinProtocolVersion || ver > MaxProtocolVersion)
+    if (!ver.isValid() || ver < ServerMisc::MinProtocolVersion || ver > ServerMisc::MaxProtocolVersion)
         throw RPCErrorWithDisconnect("Unsupported protocol version");
 
     c->info.userAgent = l[0].toString().left(kMaxServerVersionLen);
     c->info.protocolVersion = ver;
     c->info.alreadySentVersion = true;
-    emit c->sendResult(m.id, QStringList({AppSubVersion, ver.toString()}));
+    emit c->sendResult(m.id, QStringList({ServerMisc::AppSubVersion, ver.toString()}));
 }
 
 /// returns the 'branch' and 'root' keys ready to be put in the results dictionary

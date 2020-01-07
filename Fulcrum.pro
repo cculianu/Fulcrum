@@ -152,8 +152,10 @@ SOURCES += \
     Mixins.cpp \
     Mgr.cpp \
     Options.cpp \
+    PeerMgr.cpp \
     RecordFile.cpp \
     RPC.cpp \
+    ServerMisc.cpp \
     Servers.cpp \
     SrvMgr.cpp \
     Storage.cpp \
@@ -178,8 +180,10 @@ HEADERS += \
     Mgr.h \
     Mixins.h \
     Options.h \
+    PeerMgr.h \
     RecordFile.h \
     RPC.h \
+    ServerMisc.h \
     Servers.h \
     SrvMgr.h \
     Storage.h \

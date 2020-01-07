@@ -1,3 +1,6 @@
 <RCC>
-    <qresource prefix="/file"/>
+    <qresource prefix="/">
+        <file>resources/servers.json</file>
+        <file>resources/servers_testnet.json</file>
+    </qresource>
 </RCC>

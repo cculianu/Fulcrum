@@ -21,6 +21,7 @@
 #include "Common.h"
 #include "Mixins.h"
 #include "Options.h"
+#include "PeerMgr.h"
 #include "RPC.h"
 #include "Util.h"
 #include "Version.h"
@@ -138,12 +139,6 @@ public:
     // this must be called in the thread context of this thread
     QVariantMap stats() const;
 
-    /// Used in various places to rejects old clients or incompatible peers. Currently 1.4 and 1.4.2 respectively.
-    static const Version MinProtocolVersion, MaxProtocolVersion;
-
-    static const QString AppVersion,  ///< in string form suitable for sending in protocol or banner e.g. "1.0"
-                         AppSubVersion; ///< e.g. "Fulcrum 1.0"
-
 signals:
     /// connected to SrvMgr clientConnected slot by SrvMgr class
     void clientConnected(IdMixin::Id clientId, const QHostAddress & remoteAddress);
@@ -153,6 +148,10 @@ signals:
     /// Connected to SrvMgr parent's "newHeader" signal (which itself is connected to Controller's newHeader).
     /// Used to notify clients that are subscribed to headers that a new header has arrived.
     void newHeader(unsigned height, const QByteArray &header);
+
+    /// Inform PeerMgr of new add_peer request coming in
+    void gotRpcAddPeer(const PeerInfoList &, const QHostAddress &source);
+
 public slots:
     void onMessage(IdMixin::Id clientId, const RPC::Message &m);
     void onErrorMessage(IdMixin::Id clientId, const RPC::Message &m);

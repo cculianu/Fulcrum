@@ -21,6 +21,7 @@
 #include "BTC.h"
 #include "Controller.h"
 #include "Mixins.h"
+#include "PeerMgr.h"
 #include "RPC.h"
 #include "SrvMgr.h"
 
@@ -43,6 +44,9 @@ void App::register_MetaTypes()
         qRegisterMetaType<PreProcessedBlockPtr>("PreProcessedBlockPtr");
 
         qRegisterMetaType<QHostAddress>("QHostAddress");
+
+        qRegisterMetaType<PeerInfo>("PeerInfo");
+        qRegisterMetaType<PeerInfoList>("PeerInfoList");
 
         registered = true;
     }

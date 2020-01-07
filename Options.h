@@ -76,7 +76,7 @@ public:
     /// or if the file cannot be opened, the default banner text will be emitted to the client as a fallback.
     QString bannerFile = "";
 
-    bool peerDiscovery = false, peerAnnounceSelf = false; ///< comes from config setting: 'peering' and 'announce' TODO
+    bool peerDiscovery = true, peerAnnounceSelf = true; ///< comes from config setting: 'peering' and 'announce' TODO -- for now hard-coded on for testing
 
     std::optional<QString> hostName; ///< corresponds to hostname in server config
     std::optional<quint16> publicTcp;   ///< corresponds to public_tcp_port in server config -- if unspecified will default to the first TCP interface, if !has_value, it will not be announced

@@ -19,6 +19,7 @@
 #include "SrvMgr.h"
 
 #include "BitcoinD.h"
+#include "PeerMgr.h"
 #include "Servers.h"
 #include "Storage.h"
 #include "Util.h"
@@ -51,12 +52,19 @@ void SrvMgr::startup()
 
 void SrvMgr::cleanup()
 {
+    peermgr.reset(); // unique_ptr, kill peermgr (if any)
     servers.clear(); // unique_ptrs auto-delete all servers
 }
 
 // throw Exception on error
 void SrvMgr::startServers()
 {
+    if (options->peerDiscovery) {
+        Log() << "SrvMgr: starting PeerMgr ...";
+        peermgr = std::make_unique<PeerMgr>(storage, options);
+        peermgr->startup();
+    } else peermgr.reset();
+
     const auto num = options->interfaces.length() + options->sslInterfaces.length();
     Log() << "SrvMgr: starting " << num << " " << Util::Pluralize("service", num) << " ...";
     const auto firstSsl = options->interfaces.size();
@@ -78,9 +86,16 @@ void SrvMgr::startServers()
         // if srv receives this message, it will delete the client then we will get a signal back that it is now gone
         connect(this, &SrvMgr::clientExceedsConnectionLimit, srv, qOverload<IdMixin::Id>(&Server::killClient));
 
+        if (peermgr) {
+            connect(srv, &Server::gotRpcAddPeer, peermgr.get(), &PeerMgr::on_rpcAddPeer);
+        }
+
         srv->tryStart();
         ++i;
     }
+
+    if (peermgr)
+        peermgr->allServersStarted();
 }
 
 void SrvMgr::clientConnected(IdMixin::Id cid, const QHostAddress &addr)

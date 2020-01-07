@@ -27,6 +27,7 @@
 #include <memory>
 
 class BitcoinDMgr;
+class PeerMgr;
 class Server;
 class Storage;
 
@@ -70,6 +71,7 @@ private:
     std::shared_ptr<Storage> storage;
     std::shared_ptr<BitcoinDMgr> bitcoindmgr;
     std::list<std::unique_ptr<Server>> servers;
+    std::unique_ptr<PeerMgr> peermgr; ///< will be nullptr if options->peerDiscovery is false
 
     QMultiHash<QHostAddress, IdMixin::Id> addrIdMap;
 };
