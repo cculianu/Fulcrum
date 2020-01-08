@@ -23,6 +23,14 @@
 
 #include <tuple> // for std::tie
 
+/* On some Linux setups, sys/sysmacros.h ends up here and clashes with these names. */
+#ifdef major
+#undef major
+#endif
+#ifdef minor
+#undef minor
+#endif
+
 /// A class that encapsulates a version, be it a protocol version or a bitcoind version. Basically something that
 /// can compare "1.0" and "1.2.1" and come up with a lexical comparison (which is what the tuple can do, but if you
 /// inherit from tuple you lose structured binding!) -- this is like a tuple basically, with added niceties like

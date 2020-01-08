@@ -2,6 +2,15 @@
 
 #include <QStringList>
 
+// Again, on some Linux setups, sys/sysmacros.h defines these symbols :/
+#ifdef major
+#undef major
+#endif
+#ifdef minor
+#undef minor
+#endif
+
+
 Version::Version(unsigned val, CompactType)
 {
     // e.g. 0.20.6 comes in like this from bitcoind (as an unsigned int): 200600
