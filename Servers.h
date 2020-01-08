@@ -124,7 +124,7 @@ protected:
 class BitcoinDMgr;
 class Client;
 class Storage;
-/// Implements the ElectronX variant of the Electrum JSON-RPC protocol, version 1.4.2
+/// Implements the Electrum JSON-RPC protocol, version 1.4.2
 class Server : public AbstractTcpServer
 {
     Q_OBJECT
@@ -141,7 +141,7 @@ public:
 
     /// This is refactored code that is called both from here (rpc_server_features) and from the PeerMgr
     /// which also needs a features dict when *it* calls add_peer on peer servers.
-    /// NOTE: Be sure to only ever call this function from the same thread as the AbstractConnection instance!
+    /// NOTE: Be sure to only ever call this function from the same thread as the AbstractConnection (first arg) instance!
     static QVariantMap makeFeaturesDictForConnection(AbstractConnection *, const QByteArray &genesisHash, const Options & options);
 
 signals:

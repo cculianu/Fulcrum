@@ -96,7 +96,7 @@ bool AbstractConnection::isSsl() const
 
 void AbstractConnection::do_disconnect(bool graceful)
 {
-    status = status == Bad ? Bad : NotConnected;  // try and keep Bad status around so EXMgr can decide when to reconnect based on it
+    status = status == Bad ? Bad : NotConnected;  // try and keep Bad status around so PeerMgr can decide when to reconnect based on it? TODO: remove this concept from the codebase
     if (socket) {
         if (!graceful) {
             Debug() << __FUNCTION__ << " (abort)";
