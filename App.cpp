@@ -476,6 +476,17 @@ void App::parseArgs()
         if (!val) options->publicSsl.reset();
         else options->publicSsl = val;
     }
+    const auto ConfParseBool = [conf](const QString &key, bool def = false) -> bool {
+        if (!conf.hasValue(key)) return def;
+        const QString str = conf.value(key);
+        return (str.toInt() || QStringList{{"yes","true","on",""}}.contains(str.toLower()));
+    };
+    options->peerDiscovery = ConfParseBool("peering", options->peerDiscovery);
+    // set default first.. which is if we have hostName defined and peerDiscovery enabled
+    options->peerAnnounceSelf = options->hostName.has_value() && options->peerDiscovery;
+    // now set from conf fiel, specifying our default
+    options->peerAnnounceSelf = ConfParseBool("announce", options->peerAnnounceSelf);
+
 
     if (conf.hasValue("max_clients_per_ip")) {
         bool ok = false;

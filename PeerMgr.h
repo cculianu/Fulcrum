@@ -159,7 +159,7 @@ class PeerClient : public RPC::LinefeedConnection
 protected:
     /// Only PeerMgr can construct us.
     friend class ::PeerMgr;
-    explicit PeerClient(const PeerInfo &info, IdMixin::Id id, PeerMgr *mgr, int maxBuffer);
+    explicit PeerClient(bool announceSelf, const PeerInfo &info, IdMixin::Id id, PeerMgr *mgr, int maxBuffer);
 public:
     ~PeerClient() override;
 
@@ -167,6 +167,7 @@ public:
 
     bool sentVersion = false;
 
+    const bool announceSelf;
     PeerInfo info;
 
 signals:

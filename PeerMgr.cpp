@@ -314,7 +314,7 @@ PeerClient * PeerMgr::newClient(const PeerInfo &pi)
         Warning() << "Already had a client for " << pi.hostName << ", deleting ...";
         client->deleteLater();
     }
-    client = new PeerClient(pi, newId(), this, 64*1024);
+    client = new PeerClient(options->peerAnnounceSelf, pi, newId(), this, 64*1024);
     connect(client, &PeerClient::connectFailed, this, &PeerMgr::on_connectFailed);
     connect(client, &PeerClient::bad, this, &PeerMgr::on_bad);
     connect(client, &PeerClient::gotPeersSubscribeReply, this, &PeerMgr::on_rpcAddPeer);
@@ -382,6 +382,8 @@ auto PeerMgr::stats() const -> Stats
         m0[info.hostName] = QVariantList{ info.addr.toString(), info.tcp, info.ssl, info.subversion, info.protocolVersion.toString(), info.failureReason };
     }
     ret["failed"] = m0;
+    ret["peering"] = options->peerDiscovery;
+    ret["announce"] = options->peerAnnounceSelf;
     return ret;
 }
 
@@ -401,8 +403,8 @@ auto PeerClient::stats() const -> Stats
     return m;
 }
 
-PeerClient::PeerClient(const PeerInfo &pi, IdMixin::Id id_, PeerMgr *mgr, int maxBuffer)
-    : RPC::LinefeedConnection({}, id_, mgr, maxBuffer), info(pi), mgr(mgr)
+PeerClient::PeerClient(bool announce, const PeerInfo &pi, IdMixin::Id id_, PeerMgr *mgr, int maxBuffer)
+    : RPC::LinefeedConnection({}, id_, mgr, maxBuffer), announceSelf(announce), info(pi), mgr(mgr)
 {
     setObjectName(QString("Peer %1").arg(pi.hostName));
 
@@ -586,15 +588,17 @@ void PeerClient::handleReply(IdMixin::Id, const RPC::Message & reply)
         }
         // tell peermgr about some new candidates (note peermgr filters out already-added or candidates that may be dupes, etc).
         emit gotPeersSubscribeReply(candidates, QHostAddress());
-        bool foundme = false;
-        for (const auto & pi : candidates) {
-            if (pi.hostName == mgr->publicHostNameForConnection(this)) {
-                foundme = true;
-                break;
+        if (announceSelf) {
+            bool foundme = false;
+            for (const auto & pi : candidates) {
+                if (pi.hostName == mgr->publicHostNameForConnection(this)) {
+                    foundme = true;
+                    break;
+                }
             }
-        }
-        if (!foundme) {
-            emit sendRequest(newId(), "server.add_peer", QVariantList{mgr->makeFeaturesDict(this)});
+            if (!foundme) {
+                emit sendRequest(newId(), "server.add_peer", QVariantList{mgr->makeFeaturesDict(this)});
+            }
         }
     } else
         Bad();
