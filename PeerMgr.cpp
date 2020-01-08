@@ -122,6 +122,7 @@ void PeerMgr::parseServersDotJson(const QString &fnIn)
 void PeerMgr::on_started()
 {
     Debug() << objectName() << ": started ok";
+    conns += connect(this, &PeerMgr::needUpdateSoon, this, &PeerMgr::updateSoon);
 }
 
 void PeerMgr::cleanup()
@@ -570,6 +571,7 @@ void PeerClient::handleReply(IdMixin::Id, const RPC::Message & reply)
             Bad("Cannot find an entry in 'features' that matches the same hostname AND that is also advertising the port we are connected to");
             return;
         }
+        emit mgr->needUpdateSoon(); // tell mgr info may have been updated so it can rebuild its list
         emit sendRequest(newId(), "server.peers.subscribe");
     } else if (reply.method == "server.add_peer") {
         // handle

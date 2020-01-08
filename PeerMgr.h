@@ -75,6 +75,9 @@ signals:
     /// Emitted to notify Server instances of a new peers list.  Connected to the onPeersUpdated slot in all extant Server instances.
     void updated(const PeerInfoList &);
 
+    /// internal signal -- connected to this->updateSoon
+    void needUpdateSoon();
+
 protected:
     void on_started() override;
     void process() override;
