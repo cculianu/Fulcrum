@@ -730,7 +730,7 @@ void Server::rpc_server_peers_subscribe(Client *c, const RPC::Message &m)
 {
     // See: https://electrumx.readthedocs.io/en/latest/protocol-methods.html#server-peers-subscribe
     QVariantList res;
-    for (const auto & pi : peers) {
+    for (const auto & pi : std::as_const(peers)) { // as_const here ensures we keep the implicit sharing for `peers`
         if (!pi.isMinimallyValid() || pi.addr.isNull())
             continue; // paranoia -- should never happen as we filter our our peer list carefully
         QVariantList item;

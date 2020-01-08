@@ -90,6 +90,7 @@ QVariantMap Options::toMap() const
     m["banner"] = bannerFile;
     m["peering"] = peerDiscovery;
     m["peering_announce_self"] = peerAnnounceSelf;
+    m["peering_enforce_unique_ip"] = peeringEnforceUniqueIPs;
     m["hostname"] = hostName.has_value() ? QVariant(hostName.value()) : QVariant();
     m["public_tcp"] = publicTcp.has_value() ? QVariant(publicTcp.value()) : QVariant();
     m["public_ssl"] = publicSsl.has_value() ? QVariant(publicSsl.value()) : QVariant();

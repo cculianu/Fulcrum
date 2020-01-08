@@ -77,6 +77,7 @@ public:
     QString bannerFile = "";
 
     bool peerDiscovery = true, peerAnnounceSelf = true; ///< comes from config setting: 'peering' and 'announce'
+    bool peeringEnforceUniqueIPs = true; ///< comes from config 'peering_enforce_unique_ip'
 
     std::optional<QString> hostName; ///< corresponds to hostname in server config
     std::optional<quint16> publicTcp;   ///< corresponds to public_tcp_port in server config -- if unspecified will default to the first TCP interface, if !has_value, it will not be announced

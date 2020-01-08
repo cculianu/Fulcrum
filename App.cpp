@@ -486,7 +486,8 @@ void App::parseArgs()
     options->peerAnnounceSelf = options->hostName.has_value() && options->peerDiscovery;
     // now set from conf fiel, specifying our default
     options->peerAnnounceSelf = ConfParseBool("announce", options->peerAnnounceSelf);
-
+    // 'peering_enforce_unique_ip'
+    options->peeringEnforceUniqueIPs = ConfParseBool("peering_enforce_unique_ip", options->peeringEnforceUniqueIPs);
 
     if (conf.hasValue("max_clients_per_ip")) {
         bool ok = false;

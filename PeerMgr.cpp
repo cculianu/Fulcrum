@@ -206,9 +206,6 @@ void PeerMgr::addPeerVerifiedSource(const PeerInfo &piIn, const QHostAddress & a
 {
     Debug() << __func__ << " peer " << piIn.hostName << " ipaddr: " << addr.toString();
 
-    // *** TODO here -- keep a set of IP addresses of peers and not add dupe peers with different hostnames (but same
-    // IP).  This would be a sybil attack defense measure!  TODO ****
-
     PeerInfo pi(piIn);
     pi.addr = addr;
     pi.failureReason = "";
@@ -298,6 +295,8 @@ void PeerMgr::process()
     if (pi.addr.isNull()) {
         Debug() << "PeerInfo.addr was null for " << pi.hostName << ", calling on_rpcAddPeer to resolve address";
         on_rpcAddPeer(PeerInfoList{pi}, pi.addr);
+    } else if (options->peeringEnforceUniqueIPs && peerIPAddrs.contains(pi.addr)) {
+        Debug() << pi.hostName << " (" << pi.addr.toString() << ") already in peer set, skipping ...";
     } else {
         auto client = newClient(pi);
         client->connectToPeer();
@@ -315,11 +314,13 @@ PeerClient * PeerMgr::newClient(const PeerInfo &pi)
         Warning() << "Already had a client for " << pi.hostName << ", deleting ...";
         client->deleteLater();
     }
+    peerIPAddrs.insert(pi.addr);
     client = new PeerClient(options->peerAnnounceSelf, pi, newId(), this, 64*1024);
     connect(client, &PeerClient::connectFailed, this, &PeerMgr::on_connectFailed);
     connect(client, &PeerClient::bad, this, &PeerMgr::on_bad);
     connect(client, &PeerClient::gotPeersSubscribeReply, this, &PeerMgr::on_rpcAddPeer);
-    connect(client, &QObject::destroyed, this, [this, hostName = pi.hostName](QObject *obj) {
+    connect(client, &QObject::destroyed, this, [this, hostName = pi.hostName, addr = pi.addr](QObject *obj) {
+        peerIPAddrs.remove(addr); // mark it as gone from the set
         auto client = clients.value(hostName, nullptr);
         if (client == obj) {
             clients.remove(hostName);
