@@ -48,18 +48,22 @@ public:
     /// some time intervals we use, in seconds
     static constexpr double kDNSTimeout = 15.0, ///< The hostname lookup timeout for add_peer hostname verification (set to a longish value for Tor support)
                             kProcessSoonInterval = 1.0, ///< "processSoon" means in 1 second
-                            kFailureRetryTime = 10. * 60., ///< the amount of time to wait before retrying failed servers (10 mins),
+                            kFailureRetryTime = 10. * 60., ///< the amount of time to wait before retrying failed servers (10 mins)
+                            kBadPeerRetryTime = 60. * 60., ///< the amount of time to wait before retrying bad peers (60 mins)
                             kConnectedPeerRefreshInterval = 3. * 60.; ///< we keep "pinging" connected peers at this interval (3 mins) to make sure they are still alive
 
     /// Used by PeerClient instances to compare the remote server's genesis hash to our own.
     QByteArray genesisHash() const { return _genesisHash; }
+    QString publicHostNameForConnection(PeerClient *) const;
     /// returns a suitable features map for a given client connection
     QVariantMap makeFeaturesDict(PeerClient *) const;
 
 public slots:
     /// The various Server instances are connected to this slot (via their gotRpcAddPeer signals), connections made by SrvMgr.
+    /// Also: PeerClient instances are connected to this via their gotPeersSubscribeReply signal
     void on_rpcAddPeer(const PeerInfoList &, const QHostAddress & source);
-    void allServersStarted(); ///< tells this instance all our services are up, so it may begin searching for peers and publishing our information
+    /// Called by SrvMgr to tell this instance all our services are up, so it may begin searching for peers and publishing our information.
+    void allServersStarted();
 
 protected:
     void on_started() override;
@@ -86,7 +90,7 @@ private:
     void addPeerVerifiedSource(const PeerInfo &, const QHostAddress &resolvedAddress);
 
     void processSoon();
-    void retryFailedPeers();
+    void retryFailedPeers(bool useBadMapInstead = false);
     void detectProtocol(const QHostAddress &);
     PeerClient *newClient(const PeerInfo &);
 
@@ -98,6 +102,8 @@ private:
 
 /// Thrown by PeerInfo::fromFeaturesMap
 struct BadFeaturesMap : public Exception { using Exception::Exception; };
+/// Thrown by PeerInfo::fromPeersSubscribeList
+struct BadPeerList : public Exception { using Exception::Exception; };
 
 struct PeerInfo
 {
@@ -126,6 +132,9 @@ struct PeerInfo
     /// members with the exception of .hostName, .ssl, and .tcp which may differ. Will never return an empty list,
     /// instead, it will throw if no servers are contained in the map. Will also throw if other minimal checks fail.
     static PeerInfoList fromFeaturesMap(const QVariantMap &m) noexcept(false); ///< NOTE: May throw BadFeaturesMap
+    /// Pass it the list as you would get from a server.peers.subscribe response.  It should spit back out a
+    /// list of infos, partially-filled-in, and ready to be send down the PeerMgr pipeline for connecting-to.
+    static PeerInfoList fromPeersSubscribeList(const QVariantList &l) noexcept(false);
 };
 
 class PeerClient : public RPC::LinefeedConnection
@@ -145,10 +154,13 @@ public:
     PeerInfo info;
 
 signals:
-    /// connected to on_bad slot of PeerMgr
+    /// connected to PeerMgr::on_bad
     void bad(PeerClient *me);
-    /// connected to on_connectFailed of PeerMgr
+    /// connected to PeerMgr::on_connectFailed
     void connectFailed(PeerClient *me);
+    /// connected to PeerMgr::on_rpcAddPeer
+    void gotPeersSubscribeReply(const PeerInfoList &, const QHostAddress &);
+
 protected slots:
     void handleReply(IdMixin::Id myid, const RPC::Message & reply);
 protected:

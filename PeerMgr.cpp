@@ -11,6 +11,10 @@
 #include <QSslSocket>
 #include <QTcpSocket>
 
+namespace {
+    constexpr int kStringMax = 80, kHostNameMax = 120;
+}
+
 PeerMgr::PeerMgr(const std::shared_ptr<Storage> &storage_ , const std::shared_ptr<const Options> &options_)
     : IdMixin(newId()), storage(storage_), options(options_)
 {
@@ -23,6 +27,11 @@ PeerMgr::~PeerMgr() { stop(); /* noop if already stopped */ Debug() << __func__;
 QVariantMap PeerMgr::makeFeaturesDict(PeerClient *c) const
 {
     return Server::makeFeaturesDictForConnection(c, _genesisHash, *options);
+}
+
+QString PeerMgr::publicHostNameForConnection(PeerClient *c) const
+{
+    return options->hostName.value_or(c->localAddress().toString());
 }
 
 void PeerMgr::startup()
@@ -127,15 +136,27 @@ void PeerMgr::on_rpcAddPeer(const PeerInfoList &infos, const QHostAddress &sourc
     // detect protocols we may have missed on startup. No-op if source isNull or if we have both v4 and v6
     detectProtocol(source);
 
-    // TODO: perhaps put all these in a queue and collapse dupes down -- as it stands clients can spam the same request
-    // over and over and cause us to waste time doing network lookups.. ?
-
     for (const auto & pi : infos) {
         // TODO here also check the "good" connections we actively have, and if in there, maybe bump server to refresh its features,
         // then exit loop early. Also we need a way to keep track of "recently verified bad" as a DoS defense here? Hmm...
         if (queued.contains(pi.hostName) || clients.contains(pi.hostName)) { // NB: assumption here is hostName is already trimmed and toLower()
             // already added... no need to do DNS lookup or any further processing
             Debug() << "add_peer: " << pi.hostName << " already queued or in process";
+            continue;
+        } else if (source.isNull() && (failed.contains(pi.hostName) || bad.contains(pi.hostName))) {
+            // source was not the server itself, so we ignore this request since it may have come from a server.peers.subscribe
+            // and may be stale.  We will retry failed servers ourselves eventually...
+
+            // TODO FIXME: we are optimistically going to update the ports on failed/bad with the new ports that came in
+            // as a hack to support servers changing ports and our detecting that change and eventually being able to
+            // connect to their new ports.  This needs tuning and more thought and consideration, however.
+            for (auto map : {&failed, &bad}) { ///< go thru the failed and bad maps and update the ports if we find this hostName in them...
+                if (auto it = map->find(pi.hostName); it != map->end()) {
+                    it.value().tcp = pi.tcp;
+                    it.value().ssl = pi.ssl;
+                }
+            }
+            Debug() << "add_peer: " << pi.hostName << " was already deemed bad/failed, skipping";
             continue;
         }
         // For each peer in the list, do a DNS lookup and verify that the source address matches at least one
@@ -184,6 +205,9 @@ void PeerMgr::addPeerVerifiedSource(const PeerInfo &piIn, const QHostAddress & a
 {
     Debug() << __func__ << " peer " << piIn.hostName << " ipaddr: " << addr.toString();
 
+    // *** TODO here -- keep a set of IP addresses of peers and not add dupe peers with different hostnames (but same
+    // IP).  This would be a sybil attack defense measure!  TODO ****
+
     PeerInfo pi(piIn);
     pi.addr = addr;
     pi.failureReason = "";
@@ -212,11 +236,17 @@ void PeerMgr::allServersStarted()
         retryFailedPeers();
         return true;
     });
+    // next, set up the "bad retry time" which runs every kBadPeerRetryTime seconds (60 mins)
+    callOnTimerSoon(int(kBadPeerRetryTime*1e3), "badPeerRetry", [this]{
+        retryFailedPeers(true);
+        return true;
+    });
 }
 
-void PeerMgr::retryFailedPeers()
+void PeerMgr::retryFailedPeers(bool useBadMap)
 {
     int ctr = 0;
+    auto & failed = (useBadMap ? this->bad : this->failed);
     for (const auto & pi : failed) {
         if (!queued.contains(pi.hostName) && !clients.contains(pi.hostName)) {
             queued.insert(pi.hostName, pi);
@@ -226,7 +256,7 @@ void PeerMgr::retryFailedPeers()
     failed.clear();
     failed.squeeze();
     if (ctr) {
-        Debug() << "Retrying " << ctr << " 'failed' peers ...";
+        Debug() << "Retrying " << ctr << " " << (useBadMap ? "'bad'" : "'failed'") << Util::Pluralize(" peer", ctr) << " ...";
         processSoon();
     }
 }
@@ -264,6 +294,7 @@ PeerClient * PeerMgr::newClient(const PeerInfo &pi)
     client = new PeerClient(pi, newId(), this, 64*1024);
     connect(client, &PeerClient::connectFailed, this, &PeerMgr::on_connectFailed);
     connect(client, &PeerClient::bad, this, &PeerMgr::on_bad);
+    connect(client, &PeerClient::gotPeersSubscribeReply, this, &PeerMgr::on_rpcAddPeer);
     connect(client, &QObject::destroyed, this, [this, hostName = pi.hostName](QObject *obj) {
         auto client = clients.value(hostName, nullptr);
         if (client == obj) {
@@ -521,10 +552,73 @@ void PeerClient::handleReply(IdMixin::Id, const RPC::Message & reply)
         QString dbgstr;
         try { dbgstr = Util::Json::toString(reply.result(), true); } catch (...) {}
         Debug() << info.hostName << ": subscribe responded ... " << dbgstr;
-        // TODO: in order to save chatter.. only do this if we aren't in their peer list or if their info is wrong, otherwise we are done.
-        //emit sendRequest(newId(), "server.add_peer", QVariantList{mgr->makeFeaturesDict(this)});
+        PeerInfoList candidates;
+        try {
+            candidates = PeerInfo::fromPeersSubscribeList(reply.result().toList());
+        } catch (const BadPeerList & e) {
+            Bad(QString("Failed to parse add_peer list: ") + e.what());
+            return;
+        }
+        // tell peermgr about some new candidates (note peermgr filters out already-added or candidates that may be dupes, etc).
+        emit gotPeersSubscribeReply(candidates, QHostAddress());
+        bool foundme = false;
+        for (const auto & pi : candidates) {
+            if (pi.hostName == mgr->publicHostNameForConnection(this)) {
+                foundme = true;
+                break;
+            }
+        }
+        if (!foundme) {
+            emit sendRequest(newId(), "server.add_peer", QVariantList{mgr->makeFeaturesDict(this)});
+        }
     } else
         Bad();
+}
+
+PeerInfoList PeerInfo::fromPeersSubscribeList(const QVariantList &l)
+{
+    PeerInfoList ret;
+    for (const auto & item : l) {
+        QVariantList l2 = item.toList();
+        if (l2.length() < 3)
+            throw BadPeerList("short item count");
+        PeerInfo pi;
+        pi.addr.setAddress(l2.at(0).toString().trimmed().left(kStringMax));
+        if (pi.addr.isNull()) {
+            Debug() << "skipping null address";
+            continue;
+        }
+        pi.hostName = l2.at(1).toString().trimmed().left(kHostNameMax).toLower();
+        if (pi.hostName.isEmpty()) {
+            Debug() << "skipping empty hostname for " << pi.addr.toString();
+            continue;
+        }
+        QVariantList l3 = l2.at(2).toList();
+        for (const auto & v : l3) {
+            QString s(v.toString().trimmed().left(kStringMax));
+            if (s.isEmpty()) continue;
+            if (s.startsWith('v', Qt::CaseInsensitive))
+                pi.protocolVersion = s;
+            else if (s.startsWith('t', Qt::CaseInsensitive)) {
+                bool ok;
+                unsigned p = s.mid(1).toUInt(&ok);
+                if (!p || !ok || p > USHRT_MAX)
+                    continue;
+                pi.tcp = quint16(p);
+            } else if (s.startsWith('s', Qt::CaseInsensitive)) {
+                    bool ok;
+                    unsigned p = s.mid(1).toUInt(&ok);
+                    if (!p || !ok || p > USHRT_MAX)
+                        continue;
+                    pi.ssl = quint16(p);
+                }
+        }
+        if (pi.isMinimallyValid())
+            ret.push_back(pi);
+        else
+            Debug() << "PeerInfo " << pi.hostName << " not minimally valid, skipping ...";
+    }
+    return ret;
 }
 
 void PeerClient::updateInfoFromRemoteFeaturesMap(const PeerInfo &o)
@@ -553,9 +647,9 @@ void PeerClient::updateInfoFromRemoteFeaturesMap(const PeerInfo &o)
 
     PeerInfo base;
 
-    base.subversion = m.value("server_version", "Unknown").toString().trimmed().left(80);
-    base.protocolMin = m.value("protocol_min").toString().trimmed().left(80);
-    base.protocolMax = m.value("protocol_max").toString().trimmed().left(80);
+    base.subversion = m.value("server_version", "Unknown").toString().trimmed().left(kStringMax);
+    base.protocolMin = m.value("protocol_min").toString().trimmed().left(kStringMax);
+    base.protocolMax = m.value("protocol_max").toString().trimmed().left(kStringMax);
     base.genesisHash = QByteArray::fromHex(m.value("genesis_hash").toString().trimmed().toUtf8()).left(HashLen+1);
     if (base.genesisHash.length() != HashLen)
         throw BadFeaturesMap("Bad genesis hash");
@@ -577,7 +671,7 @@ void PeerClient::updateInfoFromRemoteFeaturesMap(const PeerInfo &o)
     // now, parse each host
     for (auto it = hosts.begin(); it != hosts.end(); ++it) {
         PeerInfo pi(base); // copy c'tor of base, but fill in host, tcp, and ssl
-        pi.hostName = it.key().trimmed().toLower().left(120); // we don't support super long hostnames as a paranoia defense
+        pi.hostName = it.key().trimmed().toLower().left(kHostNameMax); // we don't support super long hostnames as a paranoia defense
         const auto m = it.value().toMap(); // <--- note to self: shadows outer scope 'm'
         if (!m.value("tcp_port").isNull()) {
             bool ok;
