@@ -171,6 +171,10 @@ public slots:
     /// is in place for later when we add per-IP bans and per-IP kicking). Must be called from this object's thread.
     void killClientsByAddress(const QHostAddress &);
 
+    /// Updates the internal peer list we cache. This is called as a result of PeerMgr::updated() being emitted which
+    /// the SrvMgr automatically connects us to.
+    void onPeersUpdated(const PeerInfoList &);
+
 private:
     void on_started() override;
     void on_newConnection(QTcpSocket *) override;
@@ -215,13 +219,13 @@ private:
                                    const BitcoinDErrorFunc & errorFunc = BitcoinDErrorFunc());
     // RPC methods below
     // server
-    void rpc_server_add_peer(Client *, const RPC::Message &); // not implemented -- returns true always
+    void rpc_server_add_peer(Client *, const RPC::Message &); // fully implemented
     void rpc_server_banner(Client *, const RPC::Message &); // fully implemented (comes from a text file specified by config banner=)
     void rpc_server_donation_address(Client *, const RPC::Message &); // fully implemented (comes from config donation=)
     void rpc_server_features(Client *, const RPC::Message &); // fully implemented (comes from config)
-    void rpc_server_peers_subscribe(Client *, const RPC::Message &); // not implemented -- returns empty list always
+    void rpc_server_peers_subscribe(Client *, const RPC::Message &); // fully implemented
     void rpc_server_ping(Client *, const RPC::Message &); // fully implemented
-    void rpc_server_version(Client *, const RPC::Message &); // partially implemented (TODO: we need to reject clients claiming old protocol versions)
+    void rpc_server_version(Client *, const RPC::Message &); // fully implemented
     // blockchain misc
     void rpc_blockchain_block_header(Client *, const RPC::Message &);  // fully implemented
     void rpc_blockchain_block_headers(Client *, const RPC::Message &); // fully implemented
@@ -283,6 +287,8 @@ private:
         double relayFee = 0.0; ///< from 'relayfee' in the getnetworkinfo response; minimum fee/kb to relay a tx, usually: 0.00001000
     };
     BitcoinDInfo bitcoinDInfo;
+
+    PeerInfoList peers;
 
 private slots:
     void refreshBitcoinDNetworkInfo(); ///< whenever bitcoind comes back alive, this is invoked to update the BitcoinDInfo struct declared above

@@ -28,6 +28,9 @@
 #include <QHostAddress>
 #include <QList>
 
+#include <mutex>
+#include <shared_mutex>
+
 struct Options;
 class Storage;
 struct PeerInfo;
@@ -58,12 +61,19 @@ public:
     /// returns a suitable features map for a given client connection
     QVariantMap makeFeaturesDict(PeerClient *) const;
 
+    /// Thread-safe. Returns the current known-good PeerInfoList
+    PeerInfoList peers() const;
+
 public slots:
     /// The various Server instances are connected to this slot (via their gotRpcAddPeer signals), connections made by SrvMgr.
     /// Also: PeerClient instances are connected to this via their gotPeersSubscribeReply signal
     void on_rpcAddPeer(const PeerInfoList &, const QHostAddress & source);
     /// Called by SrvMgr to tell this instance all our services are up, so it may begin searching for peers and publishing our information.
     void allServersStarted();
+
+signals:
+    /// Emitted to notify Server instances of a new peers list.  Connected to the onPeersUpdated slot in all extant Server instances.
+    void updated(const PeerInfoList &);
 
 protected:
     void on_started() override;
@@ -90,6 +100,7 @@ private:
     void addPeerVerifiedSource(const PeerInfo &, const QHostAddress &resolvedAddress);
 
     void processSoon();
+    void updateSoon();
     void retryFailedPeers(bool useBadMapInstead = false);
     void detectProtocol(const QHostAddress &);
     PeerClient *newClient(const PeerInfo &);
@@ -97,6 +108,11 @@ private:
     PeerInfoMap queued, bad, failed;
 
     QHash<QString, PeerClient *> clients;
+
+    PeerInfoList sharedPeers; ///< gets returned from the public thread-safe function `peers`
+    mutable std::shared_mutex mut; ///< mutex for above
+    using ExclusiveLock = std::lock_guard<std::shared_mutex>;
+    using SharedLock = std::shared_lock<std::shared_mutex>;
 };
 
 

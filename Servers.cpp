@@ -518,6 +518,11 @@ void Server::refreshBitcoinDNetworkInfo()
         });
 }
 
+void Server::onPeersUpdated(const PeerInfoList &pl)
+{
+    peers = pl;
+}
+
 // --- RPC METHODS ---
 namespace {
     Util::ThreadPool::FailFunc defaultTPFailFunc(Client *c, const RPC::Message::Id &id) {
@@ -723,8 +728,24 @@ void Server::rpc_server_features(Client *c, const RPC::Message &m)
 }
 void Server::rpc_server_peers_subscribe(Client *c, const RPC::Message &m)
 {
-    // TODO: Implement. See: https://electrumx.readthedocs.io/en/latest/protocol-methods.html#server-peers-subscribe
-    emit c->sendResult(m.id, QVariantList());
+    // See: https://electrumx.readthedocs.io/en/latest/protocol-methods.html#server-peers-subscribe
+    QVariantList res;
+    for (const auto & pi : peers) {
+        if (!pi.isMinimallyValid() || pi.addr.isNull())
+            continue; // paranoia -- should never happen as we filter our our peer list carefully
+        QVariantList item;
+        item.push_back(pi.addr.toString()); // item 1, ip address
+        item.push_back(pi.hostName); // item 2, hostName
+        QVariantList nested;
+        nested.push_back(QString("v") + (pi.protocolMax.isValid() ? pi.protocolMax.toString() : pi.protocolVersion.toString()));
+        if (pi.ssl)
+            nested.push_back(QString("s") + QString::number(pi.ssl));
+        if (pi.tcp)
+            nested.push_back(QString("t") + QString::number(pi.tcp));
+        item.push_back(nested);
+        res.push_back(item);
+    }
+    emit c->sendResult(m.id, res);
 }
 void Server::rpc_server_ping(Client *c, const RPC::Message &m)
 {

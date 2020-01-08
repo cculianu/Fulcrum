@@ -266,6 +266,29 @@ void PeerMgr::processSoon()
     callOnTimerSoonNoRepeat(int(kProcessSoonInterval * 1e3), __func__, [this]{process();});
 }
 
+void PeerMgr::updateSoon()
+{
+    callOnTimerSoonNoRepeat(int(kProcessSoonInterval * 1e3), __func__, [this]{
+        // the below happens in a rate-limited fashion after a small delay (currently 1 sec)
+        PeerInfoList copy;
+        {
+            ExclusiveLock g(mut);
+            sharedPeers.clear();
+            for (const auto & client : clients) {
+                if (client->isGood() && !client->isStale() && !client->info.genesisHash.isEmpty())
+                    sharedPeers.push_back(client->info);
+            }
+            copy = sharedPeers; // take a copy now for signal below (this is O(1) due to implicit sharing)
+        }
+        emit updated(copy);
+    });
+}
+
+PeerInfoList PeerMgr::peers() const {
+    SharedLock g(mut);
+    return sharedPeers;
+}
+
 void PeerMgr::process()
 {
     if (queued.isEmpty())
@@ -299,6 +322,7 @@ PeerClient * PeerMgr::newClient(const PeerInfo &pi)
         auto client = clients.value(hostName, nullptr);
         if (client == obj) {
             clients.remove(hostName);
+            updateSoon();
             Debug() << "Removed peer from map: " << hostName;
         } else {
             Debug() << "Peer not found in map: " << hostName;
@@ -311,6 +335,7 @@ PeerClient * PeerMgr::newClient(const PeerInfo &pi)
     });
 
     clients[pi.hostName] = client;
+    updateSoon();
     return client;
 }
 

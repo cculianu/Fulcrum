@@ -88,6 +88,7 @@ void SrvMgr::startServers()
 
         if (peermgr) {
             connect(srv, &Server::gotRpcAddPeer, peermgr.get(), &PeerMgr::on_rpcAddPeer);
+            connect(peermgr.get(), &PeerMgr::updated, srv, &Server::onPeersUpdated);
         }
 
         srv->tryStart();
