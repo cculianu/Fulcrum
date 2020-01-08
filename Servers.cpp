@@ -760,7 +760,7 @@ void Server::rpc_server_version(Client *c, const RPC::Message &m)
         throw RPCError(QString("%1 already sent").arg(m.method));
 
     Version pver;
-    if (auto sl = l[1].toStringList(); sl.size() == 2) {
+    if (const auto sl = l[1].toStringList(); sl.size() == 2) {
         // Ergh. EX also supports (protocolMin, protocolMax) tuples as the second arg! :/
         Version cMin = sl[0].left(kMaxServerVersionLen);
         Version cMax = sl[1].left(kMaxServerVersionLen);
