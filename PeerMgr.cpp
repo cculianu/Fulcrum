@@ -494,7 +494,10 @@ void PeerClient::refresh()
 {
     if (!sentVersion) {
         // this kicks off the chain of handleReply below which is really a simple state machine
-        emit sendRequest(newId(), "server.version", QVariantList{ServerMisc::AppSubVersion, ServerMisc::MinProtocolVersion.toString()});
+        emit sendRequest(newId(), "server.version", QVariantList{ServerMisc::AppSubVersion,
+                                                                 // EX protocol expects this form for servers doing peering
+                                                                 QVariantList{ServerMisc::MinProtocolVersion.toString(),
+                                                                              ServerMisc::MaxProtocolVersion.toString() }});
         sentVersion = true;
     } else {
         // we already sent version -- kick off the state machine from its second state

@@ -759,14 +759,27 @@ void Server::rpc_server_version(Client *c, const RPC::Message &m)
     if (c->info.alreadySentVersion)
         throw RPCError(QString("%1 already sent").arg(m.method));
 
-    Version ver = l[1].toString().left(kMaxServerVersionLen); // try and parse version, see Version.cpp, QString constructor.
-    if (!ver.isValid() || ver < ServerMisc::MinProtocolVersion || ver > ServerMisc::MaxProtocolVersion)
+    Version pver;
+    if (auto sl = l[1].toStringList(); sl.size() == 2) {
+        // Ergh. EX also supports (protocolMin, protocolMax) tuples as the second arg! :/
+        Version cMin = sl[0].left(kMaxServerVersionLen);
+        Version cMax = sl[1].left(kMaxServerVersionLen);
+        if (!cMin.isValid() || !cMax.isValid() || cMin > cMax)
+            throw RPCErrorWithDisconnect(QString("Bad version tuple: %1").arg(sl.join(", ")));
+
+        pver = std::min(cMax, ServerMisc::MaxProtocolVersion);
+        if (pver < std::max(cMin, ServerMisc::MinProtocolVersion))
+            pver = Version();
+    } else {
+        pver = l[1].toString().left(kMaxServerVersionLen); // try and parse version, see Version.cpp, QString constructor.
+    }
+    if (!pver.isValid() || pver < ServerMisc::MinProtocolVersion || pver > ServerMisc::MaxProtocolVersion)
         throw RPCErrorWithDisconnect("Unsupported protocol version");
 
     c->info.userAgent = l[0].toString().left(kMaxServerVersionLen);
-    c->info.protocolVersion = ver;
+    c->info.protocolVersion = pver;
     c->info.alreadySentVersion = true;
-    emit c->sendResult(m.id, QStringList({ServerMisc::AppSubVersion, ver.toString()}));
+    emit c->sendResult(m.id, QStringList({ServerMisc::AppSubVersion, pver.toString()}));
 }
 
 /// returns the 'branch' and 'root' keys ready to be put in the results dictionary
