@@ -149,5 +149,6 @@ auto SrvMgr::stats() const -> Stats
         }
     }
     m["Servers"] = serverList;
+    m["PeerMgr"] = peermgr ? peermgr->statsSafe(kDefaultTimeout/2) : QVariant();
     return m;
 }

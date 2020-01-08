@@ -122,7 +122,10 @@ void AbstractConnection::socketConnectSignals()
 {
     connect(socket, SIGNAL(error(QAbstractSocket::SocketError)), this, SLOT(on_error(QAbstractSocket::SocketError)));
     connect(socket, SIGNAL(stateChanged(QAbstractSocket::SocketState)), this, SLOT(on_socketState(QAbstractSocket::SocketState)));
-    connect(socket, &QAbstractSocket::connected, this, [this]{on_connected();});
+    if (QSslSocket *ssl = dynamic_cast<QSslSocket *>(socket); ssl)
+        connect(ssl, &QSslSocket::encrypted, this, [this]{on_connected();});
+    else
+        connect(socket, &QAbstractSocket::connected, this, [this]{on_connected();});
     setSockOpts(socket);  // from Qt docs: required on Windows before connection
 }
 

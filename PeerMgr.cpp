@@ -7,6 +7,9 @@
 
 #include <QHostInfo>
 #include <QSet>
+#include <QSslConfiguration>
+#include <QSslSocket>
+#include <QTcpSocket>
 
 PeerMgr::PeerMgr(const std::shared_ptr<Storage> &storage_ , const std::shared_ptr<const Options> &options_)
     : IdMixin(newId()), storage(storage_), options(options_)
@@ -17,18 +20,57 @@ PeerMgr::PeerMgr(const std::shared_ptr<Storage> &storage_ , const std::shared_pt
 
 PeerMgr::~PeerMgr() { stop(); /* noop if already stopped */ Debug() << __func__;  }
 
+QVariantMap PeerMgr::makeFeaturesDict(PeerClient *c) const
+{
+    return Server::makeFeaturesDictForConnection(c, _genesisHash, *options);
+}
+
 void PeerMgr::startup()
 {
-    if (storage->genesisHash().length() != HashLen)
+    _genesisHash = storage->genesisHash();
+    if (_genesisHash.length() != HashLen)
         throw InternalError("PeerMgr cannot be started until we have a valid genesis hash! FIXME!");
+
     if (const auto chain = storage->getChain(); !QSet<QString>{"test", "main"}.contains(chain))
         // can only do peering with testnet or mainnet after they have been defined (no regtest)
         throw InternalError(QString("PeerMgr cannot be started for the given chain \"%1\"").arg(chain));
     else if (chain == "test")
         parseServersDotJson(":resources/servers_testnet.json");
     else
-        parseServersDotJson(":resources/servers_testnet.json");
+        parseServersDotJson(":resources/servers.json");
+
+    // next, scan all the interfaces configured to determine if we have ipv4 or ipv6 or both
+    // this allows us to decide what kinds of addresses to connect to later
+    for (const auto & iface : options->interfaces + options->sslInterfaces + options->statsInterfaces) {
+        detectProtocol( iface.first );
+        if (hasip4 && hasip6)
+            break;
+    }
+    if (!hasip4 && !hasip6)
+        Warning() << objectName() << ": Could not determine which protocols are available based on bind addresses.";
+
     start();
+}
+
+void PeerMgr::detectProtocol(const QHostAddress &addr)
+{
+    if ((hasip4 && hasip6) || addr.isNull())
+        return;
+    switch (addr.protocol()) {
+    case QAbstractSocket::IPv4Protocol:
+        hasip4 = true;
+        break;
+    case QAbstractSocket::IPv6Protocol:
+        hasip6 = true;
+        break;
+    case QAbstractSocket::AnyIPProtocol: {
+        const auto astr = addr.toString();
+        hasip4 = hasip4 || astr.split('.').size() == 4;
+        hasip6 = hasip6 || astr.split(':').size() > 2;
+    }
+        break;
+    default: break;
+    }
 }
 
 void PeerMgr::parseServersDotJson(const QString &fnIn)
@@ -82,15 +124,18 @@ void PeerMgr::on_rpcAddPeer(const PeerInfoList &infos, const QHostAddress &sourc
 {
     Debug() << __func__ << " source: " << source.toString();
 
+    // detect protocols we may have missed on startup. No-op if source isNull or if we have both v4 and v6
+    detectProtocol(source);
+
     // TODO: perhaps put all these in a queue and collapse dupes down -- as it stands clients can spam the same request
-    // over and over and cause us to waste time doing network lookups.
+    // over and over and cause us to waste time doing network lookups.. ?
 
     for (const auto & pi : infos) {
         // TODO here also check the "good" connections we actively have, and if in there, maybe bump server to refresh its features,
         // then exit loop early. Also we need a way to keep track of "recently verified bad" as a DoS defense here? Hmm...
-        if (queued.contains(pi.hostName)) { // NB: assumption here is hostName is already trimmed and toLower()
-            // already added... no need to do DNS lookup
-            Debug() << "add_peer: " << pi.hostName << " already queued";
+        if (queued.contains(pi.hostName) || clients.contains(pi.hostName)) { // NB: assumption here is hostName is already trimmed and toLower()
+            // already added... no need to do DNS lookup or any further processing
+            Debug() << "add_peer: " << pi.hostName << " already queued or in process";
             continue;
         }
         // For each peer in the list, do a DNS lookup and verify that the source address matches at least one
@@ -101,22 +146,35 @@ void PeerMgr::on_rpcAddPeer(const PeerInfoList &infos, const QHostAddress &sourc
             lookupId->reset(); // signify we no longer need a cancellation .. calls reset on the std::optional (not on the shared_ptr)
             if (result.error() != QHostInfo::NoError) {
                 Debug() << "add_peer: Host lookup error for " << pi.hostName << ": " << result.errorString();
+                PeerInfo & p2 = failed[pi.hostName] = pi;
+                p2.failureReason = result.errorString();
                 return;
             }
+            int skipped = 0;
             for (const auto & addr : result.addresses()) {
-                if (addr == source) {
-                    Debug() << "add_peer: " << pi.hostName << " address (" << addr.toString() << ") matches source (" << source.toString() << "), processing further ...";
+                if (auto proto = addr.protocol(); proto == QAbstractSocket::IPv4Protocol && !hasip4) {
+                    ++skipped;
+                    continue;
+                } else if (proto == QAbstractSocket::IPv6Protocol && !hasip6) {
+                    ++skipped;
+                    continue;
+                }
+                if (source.isNull() || addr == source) {
+                    Debug() << "add_peer: " << pi.hostName << " address (" << addr.toString() << ") ok for source (" << source.toString() << "), processing further ...";
                     addPeerVerifiedSource(pi, addr);
                     return;
                 }
             }
             Debug() << "add_peer: Rejected because source (" << source.toString() << ") does not match resolved address ("
-                    << (result.addresses().isEmpty() ? QString() : result.addresses().front().toString()) << ")";
+                    << (result.addresses().isEmpty() ? QString() : result.addresses().front().toString()) << ")"
+                    << (skipped ? " (some of the resolved addresses were skipped due us lacking the capability to connect to their advertised IP protocol)" : "");
         });
-        QTimer::singleShot(DNSTimeoutMS, this, [lookupId, hostName = pi.hostName]{
+        QTimer::singleShot(int(kDNSTimeout*1e3), this, [this, lookupId, pi] {
             if (lookupId->has_value()) {
                 QHostInfo::abortHostLookup(lookupId->value());
-                Debug() << "add_peer: hostname lookup for " << hostName << " timed out after " << QString::number(DNSTimeoutMS/1e3, 'f', 1) << " secs";
+                PeerInfo & p2 = failed[pi.hostName] = pi;
+                p2.failureReason = "DNS timed out";
+                Debug() << "add_peer: hostname lookup for " << pi.hostName << " timed out after " << QString::number(kDNSTimeout, 'f', 1) << " secs";
             }
         });
     }
@@ -128,20 +186,363 @@ void PeerMgr::addPeerVerifiedSource(const PeerInfo &piIn, const QHostAddress & a
 
     PeerInfo pi(piIn);
     pi.addr = addr;
-    pi.ts = Util::getTimeSecs();
+    pi.failureReason = "";
     queued[pi.hostName] = pi;
-    stale.remove(pi.hostName);
+    failed.remove(pi.hostName);
     bad.remove(pi.hostName);
     Debug() << "add_peer: " << pi.hostName << " added to queue";
-    // TODO ...
+    processSoon();
 }
 
 void PeerMgr::allServersStarted()
 {
+    if (QThread::currentThread() != thread()) {
+        Util::AsyncOnObject(this, [this] {allServersStarted();});
+        return;
+    }
     // TODO ...
     Debug() << __func__;
+
+    // start out with the seedPeers
+    queued = seedPeers;
+    processSoon();
+
+    // next, set up the "failed retry time" which runs every kFailureRetryTime seconds (10 mins)
+    callOnTimerSoon(int(kFailureRetryTime*1e3), "failedPeerRetry", [this]{
+        retryFailedPeers();
+        return true;
+    });
 }
 
+void PeerMgr::retryFailedPeers()
+{
+    int ctr = 0;
+    for (const auto & pi : failed) {
+        if (!queued.contains(pi.hostName) && !clients.contains(pi.hostName)) {
+            queued.insert(pi.hostName, pi);
+            ++ctr;
+        }
+    }
+    failed.clear();
+    failed.squeeze();
+    if (ctr) {
+        Debug() << "Retrying " << ctr << " 'failed' peers ...";
+        processSoon();
+    }
+}
+
+void PeerMgr::processSoon()
+{
+    callOnTimerSoonNoRepeat(int(kProcessSoonInterval * 1e3), __func__, [this]{process();});
+}
+
+void PeerMgr::process()
+{
+    if (queued.isEmpty())
+        return;
+    PeerInfo pi = queued.take(queued.begin().key());
+    if (pi.addr.isNull()) {
+        Debug() << "PeerInfo.addr was null for " << pi.hostName << ", calling on_rpcAddPeer to resolve address";
+        on_rpcAddPeer(PeerInfoList{pi}, pi.addr);
+    } else {
+        auto client = newClient(pi);
+        client->connectToPeer();
+    }
+    if (!queued.isEmpty())
+        AGAIN();
+    else
+        queued.squeeze();
+}
+
+PeerClient * PeerMgr::newClient(const PeerInfo &pi)
+{
+    PeerClient *client = clients.take(pi.hostName);
+    if (client) {
+        Warning() << "Already had a client for " << pi.hostName << ", deleting ...";
+        client->deleteLater();
+    }
+    client = new PeerClient(pi, newId(), this, 64*1024);
+    connect(client, &PeerClient::connectFailed, this, &PeerMgr::on_connectFailed);
+    connect(client, &PeerClient::bad, this, &PeerMgr::on_bad);
+    connect(client, &QObject::destroyed, this, [this, hostName = pi.hostName](QObject *obj) {
+        auto client = clients.value(hostName, nullptr);
+        if (client == obj) {
+            clients.remove(hostName);
+            Debug() << "Removed peer from map: " << hostName;
+        } else {
+            Debug() << "Peer not found in map: " << hostName;
+        }
+    });
+    connect(client, &PeerClient::lostConnection, this, [](AbstractConnection *c){
+        PeerClient *client = dynamic_cast<PeerClient *>(c);
+        Debug() << (client ? client->info.hostName : QString("???")) << ": Socket disconnect";
+        c->deleteLater();
+    });
+
+    clients[pi.hostName] = client;
+    return client;
+}
+
+void PeerMgr::on_bad(PeerClient *c)
+{
+    if (c->info.hostName.isEmpty())
+        return;
+    bad[c->info.hostName] = c->info;
+    c->deleteLater(); // drop connection
+}
+
+void PeerMgr::on_connectFailed(PeerClient *c)
+{
+    if (c->info.hostName.isEmpty())
+        return;
+    if (c->info.failureReason.isEmpty()) {
+        c->info.failureReason = c->socket ? c->socket->errorString() : "";
+        if (c->info.failureReason.isEmpty())
+            c->info.failureReason = "Connection failed";
+    }
+    failed[c->info.hostName] = c->info;
+    c->deleteLater(); // clean up
+}
+
+auto PeerMgr::stats() const -> Stats
+{
+    QVariantMap ret;
+    QVariantMap m0;
+    for (const auto & client : clients)
+        m0[client->info.hostName] = client->stats();
+    ret["peers"] = m0;
+    m0.clear();
+    for (const auto & info : bad) {
+        m0[info.hostName] = QVariantList{ info.addr.toString(), info.tcp, info.ssl, info.subversion, info.protocolVersion.toString(), info.failureReason };
+    }
+    ret["bad"] = m0;
+    m0.clear();
+    for (const auto & info : queued) {
+        m0[info.hostName] = QVariantList{ info.addr.toString(), info.tcp, info.ssl, info.subversion, info.protocolVersion.toString(), info.failureReason };
+    }
+    ret["queued"] = m0;
+    m0.clear();
+    for (const auto & info : failed) {
+        m0[info.hostName] = QVariantList{ info.addr.toString(), info.tcp, info.ssl, info.subversion, info.protocolVersion.toString(), info.failureReason };
+    }
+    ret["failed"] = m0;
+    return ret;
+}
+
+auto PeerClient::stats() const -> Stats
+{
+    QVariantMap m = RPC::LinefeedConnection::stats().toMap();
+    m["addr"] = info.addr.toString();
+    m["server_version"] = info.subversion;
+    m["protocolVersion"] = info.protocolVersion.toString();
+    m["protocol_min"] = info.protocolMin.toString();
+    m["protocol_max"] = info.protocolMax.toString();
+    m["hash_function"] = info.hashFunction;
+    m["genesis_hash"] = info.genesisHash.toHex();
+    m["tcp_port"] = info.tcp;
+    m["ssl_port"] = info.ssl;
+    m["isTor?"] = info.isTor();
+    return m;
+}
+
+PeerClient::PeerClient(const PeerInfo &pi, IdMixin::Id id_, PeerMgr *mgr, int maxBuffer)
+    : RPC::LinefeedConnection({}, id_, mgr, maxBuffer), info(pi), mgr(mgr)
+{
+    setObjectName(QString("Peer %1").arg(pi.hostName));
+
+    pingtime_ms = int(PeerMgr::kConnectedPeerRefreshInterval * 1e3);
+    stale_threshold = pingtime_ms * 2;
+
+    if (pi.tcp) { // prefer tcp -- it's faster
+        socket = new QTcpSocket(this);
+    } else if (pi.ssl) {
+        QSslSocket *ssl = new QSslSocket(this);
+        socket = ssl;
+        // modify the configuration to be extremely permissive, because this is what ElectrumX does and half the
+        // servers online have self-signed or otherwise funky certs.
+        // TODO: Get all the server admins to use real certs?  Make the level of strictness for SSL configurable?
+        auto conf = ssl->sslConfiguration();
+        conf.setPeerVerifyMode(QSslSocket::PeerVerifyMode::VerifyNone);
+        conf.setProtocol(QSsl::SslProtocol::AnyProtocol);
+        ssl->setSslConfiguration(conf);
+    }
+    // on any errors we just assume the connection is down, tell PeerMgr to put it in the connect failed list
+    connect(socket, qOverload<QAbstractSocket::SocketError>(&QAbstractSocket::error), this,
+            [this](QAbstractSocket::SocketError){ emit connectFailed(this); });
+
+    if (socket) {
+        socketConnectSignals();
+    } else {
+        Warning() << "!ssl && !tcp for " << pi.hostName << "! FIXME!";
+    }
+
+    connect(this, &RPC::ConnectionBase::gotMessage, this, &PeerClient::handleReply);
+    auto OnErr = [this]([[maybe_unused]]  auto arg1, [[maybe_unused]] auto arg2){
+        // this should never happen with a good peer -- indicates peer is bad
+        info.failureReason = "Got an unexpected JSON-RPC error response or a JSON-RPC parse error";
+        emit bad(this);
+    };
+    connect(this, &RPC::ConnectionBase::gotErrorMessage, this, OnErr);
+    connect(this, &RPC::ConnectionBase::peerError, this, OnErr);
+}
+
+PeerClient::~PeerClient() {
+    Debug() << __func__ << ": " << info.hostName;
+}
+
+
+void PeerClient::connectToPeer()
+{
+    if (!socket) return;
+    QSslSocket *ssl = dynamic_cast<QSslSocket *>(socket);
+    if (ssl) {
+        Debug() << info.hostName << ": connecting to SSL " << info.addr.toString();
+        connect(ssl, qOverload<const QList<QSslError> &>(&QSslSocket::sslErrors), ssl, [ssl, hostName = info.hostName](auto errs) {
+            for (const auto & err : errs) {
+                Debug() << "Ignoring SSL error for " << hostName << ": " << err.errorString();
+            }
+            ssl->ignoreSslErrors();
+        });
+        ssl->connectToHostEncrypted(info.addr.toString(), info.ssl, info.hostName);
+    } else {
+        Debug() << info.hostName << ": connecting to TCP " << info.addr.toString();
+        socket->connectToHost(info.addr, info.tcp);
+    }
+}
+
+void PeerClient::do_disconnect([[maybe_unused]] bool graceful)
+{
+    RPC::LinefeedConnection::do_disconnect(false);
+    deleteLater();
+}
+
+void PeerClient::on_connected()
+{
+    RPC::LinefeedConnection::on_connected();
+    // refresh immediately upon connection
+    refresh();
+}
+
+void PeerClient::do_ping()
+{
+    Debug() << info.hostName << ": pinging ... ";
+    // the "ping" here is to grab server.features and server.peer.subscribe periodically
+    refresh();
+}
+
+void PeerClient::refresh()
+{
+    if (!sentVersion) {
+        // this kicks off the chain of handleReply below which is really a simple state machine
+        emit sendRequest(newId(), "server.version", QVariantList{ServerMisc::AppSubVersion, ServerMisc::MinProtocolVersion.toString()});
+        sentVersion = true;
+    } else {
+        // we already sent version -- kick off the state machine from its second state
+        emit sendRequest(newId(), "server.features");
+    }
+
+}
+
+void PeerClient::handleReply(IdMixin::Id, const RPC::Message & reply)
+{
+    auto Bad = [this](const QString & reason = QString()) {
+        QString res = reason;
+        if (res.isNull()) res = "Got an unexpected or malformed response from peer";
+        Warning() << info.hostName <<": " << res;
+        info.failureReason = res;
+        emit bad(this);
+    };
+    if (!reply.isResponse()) {
+        Bad();
+        return;
+    }
+    if (reply.method == "server.version") {
+        QVariantList l = reply.result().toList();
+        if (l.size() != 2) {
+            Bad("Bad response to server.version");
+            return;
+        }
+        info.subversion = l.front().toString();
+        Version pver = l.back().toString();
+        if (!pver.isValid() || pver > ServerMisc::MaxProtocolVersion || pver < ServerMisc::MinProtocolVersion) {
+            Bad(QString("Protocol version '%1' is incompatible with us").arg(pver.toString()));
+            return;
+        }
+        info.protocolVersion = pver; // save
+        emit sendRequest(newId(), "server.features");
+    } else if (reply.method == "server.features") {
+        // handle
+        Debug() << info.hostName << ": features responded ...";
+        PeerInfoList pl;
+        try {
+            pl = PeerInfo::fromFeaturesMap(reply.result().toMap());
+            const auto remoteAddr = peerAddress();
+            for (auto & pi : pl)  {
+                // fill-in address right now since we know it, just to be tidy
+                pi.addr = remoteAddr;
+            }
+        } catch (const BadFeaturesMap &e) {
+            Debug() << "Peer " << info.hostName << " gave us a bad features mep: " << e.what();
+            Bad(QString("Bad features map: ") + e.what());
+            return;
+        }
+        bool found = false;
+        const bool weAreSsl = isSsl();
+        const quint16 remotePort = peerPort();
+        for (const auto & pi : pl) {
+            // find a hostname match and also port match for what we are connected to
+            if (pi.hostName == info.hostName
+                    // see if ports match what we are connected to
+                    && ( weAreSsl ? pi.ssl == remotePort : pi.tcp == remotePort ))
+            {
+                // see if genesis hash matches
+                if (pi.genesisHash != mgr->genesisHash()) {
+                    Bad("Genesis hash mistmach");
+                    return;
+                } else if (pi.hashFunction != info.hashFunction) {
+                    Bad("Hash function mismatch");
+                    return;
+                }
+                found = true;
+                updateInfoFromRemoteFeaturesMap(pi);
+                break;
+            }
+        }
+        if (!found) {
+            Bad("Cannot find an entry in 'features' that matches the same hostname AND that is also advertising the port we are connected to");
+            return;
+        }
+        emit sendRequest(newId(), "server.peers.subscribe");
+    } else if (reply.method == "server.add_peer") {
+        // handle
+        Debug() << info.hostName << ": add_peer... result = " << reply.result().toBool();
+    } else if (reply.method == "server.peers.subscribe") {
+        // handle
+        QString dbgstr;
+        try { dbgstr = Util::Json::toString(reply.result(), true); } catch (...) {}
+        Debug() << info.hostName << ": subscribe responded ... " << dbgstr;
+        // TODO: in order to save chatter.. only do this if we aren't in their peer list or if their info is wrong, otherwise we are done.
+        //emit sendRequest(newId(), "server.add_peer", QVariantList{mgr->makeFeaturesDict(this)});
+    } else
+        Bad();
+}
+
+void PeerClient::updateInfoFromRemoteFeaturesMap(const PeerInfo &o)
+{
+    PeerInfo & p{info};
+    if (&p == &o)
+        return;
+
+    p.subversion = o.subversion;
+    p.protocolMin = o.protocolMin;
+    p.protocolMax = o.protocolMax;
+    p.hashFunction = o.hashFunction;
+    p.genesisHash = o.genesisHash;
+    p.ssl = o.ssl;
+    p.tcp = o.tcp;
+    p.addr = o.addr;
+    p.failureReason.clear();
+}
 
 /* static */ QList<PeerInfo> PeerInfo::fromFeaturesMap(const QVariantMap &m)
 {

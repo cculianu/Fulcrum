@@ -320,9 +320,12 @@ private:
 class Client : public RPC::LinefeedConnection
 {
     Q_OBJECT
-public:
+protected:
+    /// Only Server instances can construct us
+    friend class ::Server;
     /// NB: sock should be in an already connected state.
     explicit Client(const RPC::MethodMap & methods, IdMixin::Id id, Server *srv, QTcpSocket *sock, int maxBuffer);
+public:
     ~Client() override;
 
     struct Info {
@@ -350,5 +353,4 @@ protected:
     void do_disconnect(bool graceful = false) override;
 
     Server *srv;
-    friend class Server;
 };

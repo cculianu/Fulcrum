@@ -34,7 +34,7 @@
         "s": "50002",
         "version": "1.4.2"
     },
-    "bitcoincash.quangld.com": {
+    "bch.quangld.com": {
         "pruning": "-",
         "s": "50002",
         "t": "50001",

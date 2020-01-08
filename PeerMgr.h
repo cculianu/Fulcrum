@@ -20,6 +20,7 @@
 
 #include "Mixins.h"
 #include "Mgr.h"
+#include "RPC.h"
 #include "ServerMisc.h"
 #include "Version.h"
 
@@ -30,10 +31,11 @@
 struct Options;
 class Storage;
 struct PeerInfo;
+class PeerClient;
 
 using PeerInfoList = QList<PeerInfo>;
 
-class PeerMgr : public Mgr, public IdMixin, public ThreadObjectMixin, public TimersByNameMixin
+class PeerMgr : public Mgr, public IdMixin, public ThreadObjectMixin, public TimersByNameMixin, public ProcessAgainMixin
 {
     Q_OBJECT
 public:
@@ -43,8 +45,16 @@ public:
     void startup() noexcept(false) override; ///< may throw
     void cleanup() override;
 
-    /// The hostname lookup timeout for add_peer hostname verification
-    static constexpr int DNSTimeoutMS = 3000;
+    /// some time intervals we use, in seconds
+    static constexpr double kDNSTimeout = 15.0, ///< The hostname lookup timeout for add_peer hostname verification (set to a longish value for Tor support)
+                            kProcessSoonInterval = 1.0, ///< "processSoon" means in 1 second
+                            kFailureRetryTime = 10. * 60., ///< the amount of time to wait before retrying failed servers (10 mins),
+                            kConnectedPeerRefreshInterval = 3. * 60.; ///< we keep "pinging" connected peers at this interval (3 mins) to make sure they are still alive
+
+    /// Used by PeerClient instances to compare the remote server's genesis hash to our own.
+    QByteArray genesisHash() const { return _genesisHash; }
+    /// returns a suitable features map for a given client connection
+    QVariantMap makeFeaturesDict(PeerClient *) const;
 
 public slots:
     /// The various Server instances are connected to this slot (via their gotRpcAddPeer signals), connections made by SrvMgr.
@@ -53,19 +63,38 @@ public slots:
 
 protected:
     void on_started() override;
+    void process() override;
+    Stats stats() const override;
+
+protected slots:
+    void on_bad(PeerClient *);
+    void on_connectFailed(PeerClient *);
 private:
     const std::shared_ptr<const Storage> storage; ///< from SrvMgr, read-only, for getChain() and genesisHash()
     const std::shared_ptr<const Options> options; ///< from SrvMgr that creates us.
 
+    QByteArray _genesisHash;
+
+    bool hasip4 = false, hasip6 = false;
+
     using PeerInfoMap = QHash<QString, PeerInfo>; // hostname -> PeerInfo
 
     PeerInfoMap seedPeers; ///< parsed PeerInfos from server.json or servers_testnet.json
+
     void parseServersDotJson(const QString &) noexcept(false); ///< may throw
 
     void addPeerVerifiedSource(const PeerInfo &, const QHostAddress &resolvedAddress);
 
-    PeerInfoMap queued, bad, stale;
+    void processSoon();
+    void retryFailedPeers();
+    void detectProtocol(const QHostAddress &);
+    PeerClient *newClient(const PeerInfo &);
+
+    PeerInfoMap queued, bad, failed;
+
+    QHash<QString, PeerClient *> clients;
 };
+
 
 /// Thrown by PeerInfo::fromFeaturesMap
 struct BadFeaturesMap : public Exception { using Exception::Exception; };
@@ -85,7 +114,7 @@ struct PeerInfo
             protocolMax;
     QString hashFunction = ServerMisc::HashFunction; /// may also come from features map
 
-    double ts = 0.; ///< ts from Util::getTimeSecs() -- when it went stale or bad,  (if stale or bad), or when it was added
+    QString failureReason; ///< the 'failed' and 'bad' PeerInfos may have this set
 
     void clear() { *this = PeerInfo(); }
     bool isTor() const { return hostName.toLower().endsWith(".onion"); }
@@ -97,6 +126,43 @@ struct PeerInfo
     /// members with the exception of .hostName, .ssl, and .tcp which may differ. Will never return an empty list,
     /// instead, it will throw if no servers are contained in the map. Will also throw if other minimal checks fail.
     static PeerInfoList fromFeaturesMap(const QVariantMap &m) noexcept(false); ///< NOTE: May throw BadFeaturesMap
+};
+
+class PeerClient : public RPC::LinefeedConnection
+{
+    Q_OBJECT
+protected:
+    /// Only PeerMgr can construct us.
+    friend class ::PeerMgr;
+    explicit PeerClient(const PeerInfo &info, IdMixin::Id id, PeerMgr *mgr, int maxBuffer);
+public:
+    ~PeerClient() override;
+
+    void connectToPeer();
+
+    bool sentVersion = false;
+
+    PeerInfo info;
+
+signals:
+    /// connected to on_bad slot of PeerMgr
+    void bad(PeerClient *me);
+    /// connected to on_connectFailed of PeerMgr
+    void connectFailed(PeerClient *me);
+protected slots:
+    void handleReply(IdMixin::Id myid, const RPC::Message & reply);
+protected:
+    void do_ping() override;
+    void on_connected() override;
+    void do_disconnect(bool graceful = false) override; ///< calls base, also does this->deleteLater
+
+    Stats stats() const override; /// adds more stats to base class's stats map
+
+    PeerMgr *mgr;
+private:
+    void refresh();
+    /// Updates the updateable fields in this->info from the remote "features" response
+    void updateInfoFromRemoteFeaturesMap(const PeerInfo &);
 };
 
 Q_DECLARE_METATYPE(PeerInfo);
