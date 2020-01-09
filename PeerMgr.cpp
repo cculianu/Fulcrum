@@ -698,9 +698,9 @@ void PeerClient::updateInfoFromRemoteFeaturesMap(const PeerInfo &o)
     p.failureReason.clear();
 }
 
-/* static */ QList<PeerInfo> PeerInfo::fromFeaturesMap(const QVariantMap &m)
+/* static */ PeerInfoList PeerInfo::fromFeaturesMap(const QVariantMap &m)
 {
-    QList<PeerInfo> ret;
+    PeerInfoList ret;
 
     if (!m.value("pruning").isNull())
         throw BadFeaturesMap("Pruning not supported");
