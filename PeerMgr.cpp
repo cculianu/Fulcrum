@@ -188,6 +188,7 @@ void PeerMgr::on_rpcAddPeer(const PeerInfoList &infos, const QHostAddress &sourc
                 Debug() << "add_peer: Host lookup error for " << pi.hostName << ": " << result.errorString();
                 PeerInfo & p2 = failed[pi.hostName] = pi;
                 p2.failureReason = result.errorString();
+                p2.setFailureTsIfNotSet();
                 return;
             }
             int skipped = 0;
@@ -214,6 +215,7 @@ void PeerMgr::on_rpcAddPeer(const PeerInfoList &infos, const QHostAddress &sourc
                 QHostInfo::abortHostLookup(lookupId->value());
                 PeerInfo & p2 = failed[pi.hostName] = pi;
                 p2.failureReason = "DNS timed out";
+                p2.setFailureTsIfNotSet();
                 Debug() << "add_peer: hostname lookup for " << pi.hostName << " timed out after " << QString::number(kDNSTimeout, 'f', 1) << " secs";
             }
         });
@@ -226,7 +228,7 @@ void PeerMgr::addPeerVerifiedSource(const PeerInfo &piIn, const QHostAddress & a
 
     PeerInfo pi(piIn);
     pi.addr = addr;
-    pi.failureReason = "";
+    pi.failureReason = ""; // Note: here we just clear the message but leave the failureTs (if any) unchanged
     queued[pi.hostName] = pi;
     failed.remove(pi.hostName);
     bad.remove(pi.hostName);
@@ -259,12 +261,25 @@ void PeerMgr::allServersStarted()
     });
 }
 
+namespace {
+    QString failureHoursString(const PeerInfo &info) {
+        QString ret;
+        if (const auto fa = info.failureAge(); fa.has_value())
+            ret = QString::number(fa.value() / (60.*60.), 'f', 2) + " hours";
+        return ret;
+    }
+}
+
 void PeerMgr::retryFailedPeers(bool useBadMap)
 {
     int ctr = 0;
     auto & failed = (useBadMap ? this->bad : this->failed);
     for (const auto & pi : failed) {
         if (!queued.contains(pi.hostName) && !clients.contains(pi.hostName)) {
+            if (auto fa = pi.failureAge(); fa.has_value() && fa.value() > kExpireFailedPeersTime) {
+                Log() << "Purging failed peer " << pi.hostName << " because it has been unavailable for " <<  failureHoursString(pi);
+                continue;
+            }
             queued.insert(pi.hostName, pi);
             ++ctr;
         }
@@ -366,6 +381,7 @@ void PeerMgr::on_bad(PeerClient *c)
 {
     if (c->info.hostName.isEmpty())
         return;
+    c->info.setFailureTsIfNotSet();
     bad[c->info.hostName] = c->info;
     c->deleteLater(); // drop connection
 }
@@ -374,11 +390,15 @@ void PeerMgr::on_connectFailed(PeerClient *c)
 {
     if (c->info.hostName.isEmpty())
         return;
-    if (c->info.failureReason.isEmpty()) {
-        c->info.failureReason = c->socket ? c->socket->errorString() : "";
+    if (const auto r = c->socket ? c->socket->errorString() : QString();
+            // pick up the new failure reason, but only if it's not empty.. however if we had no failureReason before,
+            // then we synthesize one here so /stats looks informative
+            !r.isEmpty() || c->info.failureReason.isEmpty()) {
+        c->info.failureReason = r;
         if (c->info.failureReason.isEmpty())
             c->info.failureReason = "Connection failed";
     }
+    c->info.setFailureTsIfNotSet();
     failed[c->info.hostName] = c->info;
     c->deleteLater(); // clean up
 }
@@ -392,17 +412,17 @@ auto PeerMgr::stats() const -> Stats
     ret["peers"] = m0;
     m0.clear();
     for (const auto & info : bad) {
-        m0[info.hostName] = QVariantList{ info.addr.toString(), info.tcp, info.ssl, info.subversion, info.protocolVersion.toString(), info.failureReason };
+        m0[info.hostName] = QVariantList{ info.addr.toString(), info.tcp, info.ssl, info.subversion, info.protocolVersion.toString(), failureHoursString(info), info.failureReason };
     }
     ret["bad"] = m0;
     m0.clear();
     for (const auto & info : queued) {
-        m0[info.hostName] = QVariantList{ info.addr.toString(), info.tcp, info.ssl, info.subversion, info.protocolVersion.toString(), info.failureReason };
+        m0[info.hostName] = QVariantList{ info.addr.toString(), info.tcp, info.ssl, info.subversion, info.protocolVersion.toString(), failureHoursString(info), info.failureReason };
     }
     ret["queued"] = m0;
     m0.clear();
     for (const auto & info : failed) {
-        m0[info.hostName] = QVariantList{ info.addr.toString(), info.tcp, info.ssl, info.subversion, info.protocolVersion.toString(), info.failureReason };
+        m0[info.hostName] = QVariantList{ info.addr.toString(), info.tcp, info.ssl, info.subversion, info.protocolVersion.toString(), failureHoursString(info), info.failureReason };
     }
     ret["failed"] = m0;
     ret["peering"] = options->peerDiscovery;
@@ -423,6 +443,8 @@ auto PeerClient::stats() const -> Stats
     m["tcp_port"] = info.tcp;
     m["ssl_port"] = info.ssl;
     m["isTor?"] = info.isTor();
+    if (const auto s = failureHoursString(info); !s.isEmpty())
+        m["failureAge"] = s;
     return m;
 }
 
@@ -629,6 +651,7 @@ void PeerClient::handleReply(IdMixin::Id, const RPC::Message & reply)
         }
         if (!verified) {
             verified = true;
+            info.clearFailureTs(); // make sure all failure timestamps are cleared
             Log() << "Verified peer " << info.hostName << " (" << info.addr.toString() << ")";
         }
     } else

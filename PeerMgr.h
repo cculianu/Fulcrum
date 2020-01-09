@@ -54,7 +54,8 @@ public:
                             kProcessSoonInterval = 1.0, ///< "processSoon" means in 1 second
                             kFailureRetryTime = 10. * 60., ///< the amount of time to wait before retrying failed servers (10 mins)
                             kBadPeerRetryTime = 60. * 60., ///< the amount of time to wait before retrying bad peers (60 mins)
-                            kConnectedPeerRefreshInterval = 3. * 60.; ///< we keep "pinging" connected peers at this interval (3 mins) to make sure they are still alive
+                            kConnectedPeerRefreshInterval = 3. * 60., ///< we keep "pinging" connected peers at this interval (3 mins) to make sure they are still alive, and to pick up new peers from them
+                            kExpireFailedPeersTime = 24. * 60. * 60.; ///< we expire peers that are in the "bad" or "failed" status after 24 hours. (see PeerInfo::failureTs)
 
     /// Used by PeerClient instances to compare the remote server's genesis hash to our own.
     QByteArray genesisHash() const { return _genesisHash; }
@@ -142,11 +143,21 @@ struct PeerInfo
     QString hashFunction = ServerMisc::HashFunction; /// may also come from features map
 
     QString failureReason; ///< the 'failed' and 'bad' PeerInfos may have this set
+    /// The timestamp of when this Peer first entered the "failed" status. Peers that have been 'failed' for longer than
+    /// kExpireFailedPeersTime will be purged completely from all data structures. Only has_value for 'failed' or 'bad'
+    /// peers, or peers that just came off the 'failed' or 'bad' lists but haven't yet been verified good.
+    std::optional<double> failureTs;
 
     void clear() { *this = PeerInfo(); }
     bool isTor() const { return hostName.toLower().endsWith(".onion"); }
     /// minimal checking that hostname is not empty and that at least an ssl or a tcp port are defined.
     bool isMinimallyValid() const { return !hostName.isEmpty() && (ssl || tcp) && hashFunction == ServerMisc::HashFunction; }
+    /// only sets the failureTs if missing, otherwise does nothing.
+    void setFailureTsIfNotSet() { if (!failureTs.has_value()) failureTs = Util::getTimeSecs(); }
+    /// reset the failure Ts
+    void clearFailureTs() { failureTs.reset(); }
+    /// returns the age of the failureTs in seconds, if set, or an empty optional otherwise
+    std::optional<double> failureAge() const { return failureTs.has_value() ? Util::getTimeSecs() - failureTs.value() : std::optional<double>{}; }
 
     /// Pass it the "features" map as returned by server.features. Normally only one PeerInfo will be returned, but
     /// there may be multiple in the case of .onion in the 'hosts' sub-map.  All of the hosts returned have identical
