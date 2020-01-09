@@ -51,7 +51,12 @@ Version::Version(const QString &s_)
             if (!ok)
                 minor = 0;
             else if (sl.length() >= 3) {
-                revision = sl.at(2).trimmed().toUInt(&ok);
+                const QRegExp nonNumericRE("[^0-9]");
+                QString s2 = sl.at(2).trimmed();
+                if (int pos = s2.indexOf(nonNumericRE); pos > -1)
+                    // only take the numeric part of the string eg 3.3."4CS" -> 3.3."4"
+                    s2 = s2.left(pos);
+                revision = s2.toUInt(&ok);
                 if (!ok)
                     revision = 0;
             }
