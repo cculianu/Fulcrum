@@ -63,7 +63,7 @@ Execute the binary, with `-h` to see the built-in help, e.g. `./Fulcrum -h`. You
 
 Fulcrum requires a `bitcoind` instance running either on `testnet` or `mainnet` (or `regtest` for testing), which you must tell it about via the CLI options or via the config file.  You also need to tell it what port(s) to listen on and optionally what SSL certificates to use (if using SSL). ***Note:*** *Electron Cash at this time no longer supports connecting to non-SSL servers, so you should probably configure SSL for production use*.
 
-It is recommended you specify a data dir (`-D` or `datadir=`) on an SSD drive for best results.  Synching against `testnet` should take you about 10-20 minutes (more on slower machines), and mainnet can take anywhere from 4 hours to 20+ hours, depending on machine and drive speed.  I have not tried synching against mainnet on an HDD and it will probably take ***days*** if you are lucky.
+It is recommended you specify a data dir (`-D` via CLI or `datadir=` via config file) on an SSD drive for best results.  Synching against `testnet` should take you about 10-20 minutes (more on slower machines), and mainnet can take anywhere from 4 hours to 20+ hours, depending on machine and drive speed.  I have not tried synching against mainnet on an HDD and it will probably take ***days*** if you are lucky.
 
 Once the server finishes synching it will behave like an ElectronX/ElectrumX server and it can receive requests from Electron Cash.
 
