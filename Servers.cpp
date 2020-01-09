@@ -754,6 +754,12 @@ void Server::rpc_server_ping(Client *c, const RPC::Message &m)
 void Server::rpc_server_version(Client *c, const RPC::Message &m)
 {
     QVariantList l = m.paramsList();
+    if (l.size() == 0)
+        // missing client useragent, default to "Unknown"
+        l.push_back(c->info.userAgent);
+    if (l.size() == 1)
+        // missing second arg, protocolVersion, default to our minimal protocol version "1.4"
+        l.push_back(ServerMisc::MinProtocolVersion.toString());
     assert(l.size() == 2);
 
     if (c->info.alreadySentVersion)
@@ -1291,7 +1297,7 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
     { {"server.features",                   true,               false,    PR{0,0},                    },          &Server::rpc_server_features },
     { {"server.peers.subscribe",            true,               false,    PR{0,0},                    },          &Server::rpc_server_peers_subscribe },
     { {"server.ping",                       true,               false,    PR{0,0},                    },          &Server::rpc_server_ping },
-    { {"server.version",                    true,               false,    PR{2,2},                    },          &Server::rpc_server_version },
+    { {"server.version",                    true,               false,    PR{0,2},                    },          &Server::rpc_server_version },
 
     { {"blockchain.block.header",           true,               false,    PR{1,2},                    },          &Server::rpc_blockchain_block_header },
     { {"blockchain.block.headers",          true,               false,    PR{2,3},                    },          &Server::rpc_blockchain_block_headers },
