@@ -136,7 +136,7 @@ contains(features, staticlibs) {
     }
     win32 {
         win32-g++ {
-            LIBS += $$PWD/staticlibs/rocksdb/bin/win64
+            LIBS += -L$$PWD/staticlibs/rocksdb/bin/win64
         } else {
             error("This project lacks a pre-compiled static librocksdb.a for this compiler! Either add one to staticlib/rocksdb/bin/win64/ or use MinGW G++ 7.3.0.")
         }
