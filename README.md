@@ -33,7 +33,7 @@ You may also build from the CLI (on Linux and MacOS):
 
 1. Make sure you have `qmake` in your path and all the requisite Qt5 dev libs installed.
 2. `qmake` (to generate the Makefile)
-3. `make -j8`  (replace 8 here with the number of cores in your machine)
+3. `make -j8`  (replace 8 here with the number of cores on your machine)
 
 **A note for Linux users**: `Qt 5.11` or above is required (5.13 is recommended). You may have to install the Qt5 networking package separately such as `libqt5network5` (depending on your distribution). You also need `libbz2-dev` otherwise compilation will fail.
 
@@ -46,15 +46,24 @@ The other likely culprit is the fact that at the present time I have included a 
 
 If you are still having trouble, [file an issue here in this github](https://github.com/cculianu/Fulcrum/issues).
 
+#### Linking against the system `librocksdb.so` (experimental)
+
+You may optionally build against the **system rocksdb** (Linux only) if your distribution offers `rocksdb` version `6.5.x` or newer.
+
+1. `qmake features=`  (to generate the Makefile **without** the `staticlibs` feature)
+2. `make clean && make -j8` (replace 8 here with the number of cores on your machine)
+
+**Note**: Some Linux distributions have been known to package `librocksdb.so` incorrectly. [See here for an example](https://bugs.archlinux.org/task/65093), so until I can be confident most distributions do it right, I am considering using the system `librocksdb.so` an ***experimental feature*** for the time being (in principle it should work ok if the library is compiled correctly).
+
 ---
 
 ### Running Fulcrum
 
-Execute the binary, with `-h` to see the built-in help, e.g. `./Fulcrum -h`.
+Execute the binary, with `-h` to see the built-in help, e.g. `./Fulcrum -h`. You can set most options from the CLI, but you can also specify a **config file** as an argument. See [doc/fulcrum-example-config.conf](https://github.com/cculianu/Fulcrum/blob/master/doc/fulcrum-example-config.conf) in the source tree (this sample config file is very well documented with comments).
 
-Fulcrum requires a `bitcoind` instance running either on `testnet` or `mainnet` (or `regtest` for testing), which you must tell it about via the CLI options.  You also need to tell it what port(s) to listen on and optionally what SSL certificates to use (if using SSL). ***Note:*** *Electron Cash at this time no longer supports connecting to non-SSL servers, so you should probably configure SSL for production use*.
+Fulcrum requires a `bitcoind` instance running either on `testnet` or `mainnet` (or `regtest` for testing), which you must tell it about via the CLI options or via the config file.  You also need to tell it what port(s) to listen on and optionally what SSL certificates to use (if using SSL). ***Note:*** *Electron Cash at this time no longer supports connecting to non-SSL servers, so you should probably configure SSL for production use*.
 
-It is recommender you specify a data dir (`-D`) on an SSD drive for best results.  Synching against `testnet` should take you about 10-20 minutes (more on slower machines), and mainnet can take anywhere from 4 hours to 20+ hours, depending on machine and drive speed.  I have not tried synching against mainnet on an HDD and it will probably take ***days*** if you are lucky.
+It is recommended you specify a data dir (`-D` or `datadir=`) on an SSD drive for best results.  Synching against `testnet` should take you about 10-20 minutes (more on slower machines), and mainnet can take anywhere from 4 hours to 20+ hours, depending on machine and drive speed.  I have not tried synching against mainnet on an HDD and it will probably take ***days*** if you are lucky.
 
 Once the server finishes synching it will behave like an ElectronX/ElectrumX server and it can receive requests from Electron Cash.
 

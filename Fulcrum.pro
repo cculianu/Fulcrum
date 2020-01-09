@@ -138,7 +138,7 @@ contains(features, staticlibs) {
         win32-g++ {
             LIBS += $$PWD/staticlibs/rocksdb/bin/win64
         } else {
-            error("This project lacks a pre-compiled static librocksdb.a for this compiler! Either add one to staticlib/win64/ or use MinGW G++ 7.3.0.")
+            error("This project lacks a pre-compiled static librocksdb.a for this compiler! Either add one to staticlib/rocksdb/bin/win64/ or use MinGW G++ 7.3.0.")
         }
     }
     INCLUDEPATH += $$PWD/staticlibs/rocksdb/include
@@ -153,7 +153,7 @@ linux {
 }
 win32 {
     !contains(features, staticlibs) {
-        error("Windows can not be built without the staticlibs feature")
+        error("Cannot build Fulcrum on Windows without the staticlibs feature")
     }
     LIBS += -lrocksdb -lShlwapi -lrpcrt4
 }
