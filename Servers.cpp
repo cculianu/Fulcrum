@@ -1083,6 +1083,7 @@ void Server::rpc_blockchain_scripthash_unsubscribe(Client *c, const RPC::Message
     if (result) --c->nShSubs;
     emit c->sendResult(m.id, QVariant(result));
 }
+
 void Server::rpc_blockchain_transaction_broadcast(Client *c, const RPC::Message &m)
 {
     QVariantList l = m.paramsList();
@@ -1091,9 +1092,24 @@ void Server::rpc_blockchain_transaction_broadcast(Client *c, const RPC::Message 
     // no need to validate hex here -- bitcoind does validation for us!
     generic_async_to_bitcoind(c, m.id, "sendrawtransaction", QVariantList{ rawtxhex },
         // print to log, echo bitcoind's reply to client
-        [size=rawtxhex.length()/2, cid = c->id](const RPC::Message & reply){
-            const QVariant ret = reply.result();
+        [size=rawtxhex.length()/2, cid = c->id, uaVersion = c->info.uaVersion()](const RPC::Message & reply){
+            QVariant ret = reply.result();
             Log() << "Broadcast tx for client " << cid << ", size: " << size << " bytes, response: " << ret.toString();
+            static const Version FirstNonVulberableECVersion(3,3,4);
+            if (uaVersion.isValid() && uaVersion < FirstNonVulberableECVersion) {
+                // The below is to warn old clients that they are vulnerable to a phishing attack.
+                // This logic is also used by the ElectronX implementations here:
+                // https://github.com/Electron-Cash/electrumx/blob/fbd00416d804c286eb7de856e9399efb07a2ceaf/electrumx/server/session.py#L1526
+                // https://github.com/Electron-Cash/electrumx/blob/fbd00416d804c286eb7de856e9399efb07a2ceaf/electrumx/lib/coins.py#L397
+                ret = "<br/><br/>"
+                      "Your transaction was successfully broadcast.<br/><br/>"
+                      "However, you are using a VULNERABLE version of Electron Cash.<br/>"
+                      "Download the latest version from this web site ONLY:<br/>"
+                      "https://electroncash.org/"
+                      "<br/><br/>";
+                Log() << "Client " << cid << " has a vulnerable Electron Cash (" << uaVersion.toString()
+                      << "); upgrade warning HTML sent to client";
+            }
             return ret;
         },
         // error func, throw an RPCError that's formatted in a particular way
