@@ -333,6 +333,9 @@ PeerClient * PeerMgr::newClient(const PeerInfo &pi)
     connect(client, &PeerClient::lostConnection, this, [](AbstractConnection *c){
         PeerClient *client = dynamic_cast<PeerClient *>(c);
         Debug() << (client ? client->info.hostName : QString("???")) << ": Socket disconnect";
+        if (client && client->verified) {
+            Log() << "Peer " << client->info.hostName << " connection lost";
+        }
         c->deleteLater();
     });
 
@@ -605,6 +608,10 @@ void PeerClient::handleReply(IdMixin::Id, const RPC::Message & reply)
             if (!foundme) {
                 emit sendRequest(newId(), "server.add_peer", QVariantList{mgr->makeFeaturesDict(this)});
             }
+        }
+        if (!verified) {
+            verified = true;
+            Log() << "Verified peer " << info.hostName << " (" << info.addr.toString() << ")";
         }
     } else
         Bad();

@@ -171,6 +171,7 @@ public:
     void connectToPeer();
 
     bool sentVersion = false;
+    bool verified = false;
 
     const bool announceSelf;
     PeerInfo info;
