@@ -24,11 +24,11 @@
 #include "Storage.h"
 #include "SubsMgr.h"
 
-#include "rocksdb/db.h"
-#include "rocksdb/iterator.h"
-#include "rocksdb/merge_operator.h"
-#include "rocksdb/options.h"
-#include "rocksdb/slice.h"
+#include <rocksdb/db.h>
+#include <rocksdb/iterator.h>
+#include <rocksdb/merge_operator.h>
+#include <rocksdb/options.h>
+#include <rocksdb/slice.h>
 
 #include <QByteArray>
 #include <QDir>

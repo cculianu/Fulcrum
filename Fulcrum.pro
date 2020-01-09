@@ -16,6 +16,11 @@
 # along with this program (see LICENSE.txt).  If not, see
 # <https://www.gnu.org/licenses/>.
 #
+
+!defined(features, var) {
+    features = staticlibs
+}
+
 QT -= gui
 QT += network
 
@@ -87,55 +92,72 @@ linux-g++ {
     CONFIG += warn_off
 }
 
-# RocksDB Static Lib
-# ------------------
-#
-# Build information --
-#
-# Currently this was built from github sources:
-#     https://github.com/facebook/rocksdb.git
-# Commit hash (from Wed Nov 27 15:05:32 2019):
-#     e8f997ca597761087c46ad6657aebe7c73a45e38
-#
-# OSX:
-#   Built on Apple clang version 11.0.0 (clang-1100.0.33.12), from Xcode 11.
-#   command: USE_RTTI=1 PORTABLE=1 make static_lib -j4 V=1
-#   Annoyingly, the produced .a file has debug symbols which we strip with: strip -S.
-#
-# Linux:
-#   Built on Ubuntu 18.10, g++ (Ubuntu 8.2.0-7ubuntu1) 8.2.0.
-#   command: USE_RTTI=1 PORTABLE=1 make static_lib -j4 V=1
-#   Annoyingly, the produced .a file has debug symbols which we strip with: strip -g.
-#
-# Windows:
-#   Built using the MinGW G++ 7.3.0 (compiler that ships with Qt), from a cmd.exe prompt, via cmake.exe by following
-#   these steps:
-#   - Install a recent cmake into eg c:\cmake
-#   - Open up a Qt cmd.exe prompt that points to MinGW G++ 7.3.0 in the path (using the Start menu shortcut installed by
-#     Qt 5.13.2+ is easiest).
-#   - Put installed 'c:\cmake\bin' in the path so that 'cmake.exe' works from the cmd prompt, eg:
-#         set PATH=c:\cmake\bin;%PATH%
-#   - Checkout rocksdb, cd rocksdb, mkdir build, cd build
-#   - Run this command from within the rocksdb/build dir that you just created:
-#         cmake .. -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_SYSTEM_NAME=Windows -G"MinGW Makefiles"
-#   - Edit CMakeFiles\rocksdb.dir\flags.make and add -O3 to the flags to get maximal speed
-#   - Build with this command:
-#         mingw32-make -j4 V=1 rocksdb  <-- will build static lib only
-#   The generated librocksdb.a will be in the build/ directory you are currently in, ready to be put into the project.
+contains(features, staticlibs) {
+    # RocksDB Static Lib
+    # ------------------
+    #
+    # Build information --
+    #
+    # Currently this was built from github sources:
+    #     https://github.com/facebook/rocksdb.git
+    # Commit hash (from Wed Nov 27 15:05:32 2019):
+    #     e8f997ca597761087c46ad6657aebe7c73a45e38
+    #
+    # OSX:
+    #   Built on Apple clang version 11.0.0 (clang-1100.0.33.12), from Xcode 11.
+    #   command: USE_RTTI=1 PORTABLE=1 make static_lib -j4 V=1
+    #   Annoyingly, the produced .a file has debug symbols which we strip with: strip -S.
+    #
+    # Linux:
+    #   Built on Ubuntu 18.10, g++ (Ubuntu 8.2.0-7ubuntu1) 8.2.0.
+    #   command: USE_RTTI=1 PORTABLE=1 make static_lib -j4 V=1
+    #   Annoyingly, the produced .a file has debug symbols which we strip with: strip -g.
+    #
+    # Windows:
+    #   Built using the MinGW G++ 7.3.0 (compiler that ships with Qt), from a cmd.exe prompt, via cmake.exe by following
+    #   these steps:
+    #   - Install a recent cmake into eg c:\cmake
+    #   - Open up a Qt cmd.exe prompt that points to MinGW G++ 7.3.0 in the path (using the Start menu shortcut installed by
+    #     Qt 5.13.2+ is easiest).
+    #   - Put installed 'c:\cmake\bin' in the path so that 'cmake.exe' works from the cmd prompt, eg:
+    #         set PATH=c:\cmake\bin;%PATH%
+    #   - Checkout rocksdb, cd rocksdb, mkdir build, cd build
+    #   - Run this command from within the rocksdb/build dir that you just created:
+    #         cmake .. -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_SYSTEM_NAME=Windows -G"MinGW Makefiles"
+    #   - Edit CMakeFiles\rocksdb.dir\flags.make and add -O3 to the flags to get maximal speed
+    #   - Build with this command:
+    #         mingw32-make -j4 V=1 rocksdb  <-- will build static lib only
+    #   The generated librocksdb.a will be in the build/ directory you are currently in, ready to be put into the project.
+    macx {
+        LIBS += -L$$PWD/staticlibs/rocksdb/bin/osx
+    }
+    linux {
+        LIBS += -L$$PWD/staticlibs/rocksdb/bin/linux
+    }
+    win32 {
+        win32-g++ {
+            LIBS += $$PWD/staticlibs/rocksdb/bin/win64
+        } else {
+            error("This project lacks a pre-compiled static librocksdb.a for this compiler! Either add one to staticlib/win64/ or use MinGW G++ 7.3.0.")
+        }
+    }
+    INCLUDEPATH += $$PWD/staticlibs/rocksdb/include
+    # /RocksDB Static Lib
+}
+
 macx {
-    LIBS += -L$$PWD/staticlibs/osx -lrocksdb -lz -lbz2
+    LIBS += -lrocksdb -lz -lbz2
 }
 linux {
-    LIBS += -L$$PWD/staticlibs/linux -lrocksdb -lz -lbz2 -ldl
+    LIBS += -lrocksdb -lz -lbz2 -ldl
 }
 win32 {
-    win32-g++ {
-        LIBS += $$PWD/staticlibs/win64/librocksdb.a -lShlwapi -lrpcrt4
-    } else {
-        error("This project lacks a pre-compiled static librocksdb.a for this compiler! Either add one to staticlib/win64/ or use MinGW G++ 7.3.0.")
+    !contains(features, staticlibs) {
+        error("Windows can not be built without the staticlibs feature")
     }
+    LIBS += -lrocksdb -lShlwapi -lrpcrt4
 }
-# /RocksDB Static Lib
+
 
 SOURCES += \
     AbstractConnection.cpp \
@@ -319,86 +341,3 @@ HEADERS += \
     bitcoin/uint256.h \
     bitcoin/utilstrencodings.h \
     bitcoin/version.h
-
-# rocksdb related headers
-HEADERS += \
-    rocksdb/advanced_options.h \
-    rocksdb/c.h \
-    rocksdb/cache.h \
-    rocksdb/cleanable.h \
-    rocksdb/compaction_filter.h \
-    rocksdb/compaction_job_stats.h \
-    rocksdb/comparator.h \
-    rocksdb/concurrent_task_limiter.h \
-    rocksdb/convenience.h \
-    rocksdb/db.h \
-    rocksdb/db_bench_tool.h \
-    rocksdb/db_dump_tool.h \
-    rocksdb/db_stress_tool.h \
-    rocksdb/env.h \
-    rocksdb/env_encryption.h \
-    rocksdb/experimental.h \
-    rocksdb/filter_policy.h \
-    rocksdb/flush_block_policy.h \
-    rocksdb/iostats_context.h \
-    rocksdb/iterator.h \
-    rocksdb/ldb_tool.h \
-    rocksdb/listener.h \
-    rocksdb/memory_allocator.h \
-    rocksdb/memtablerep.h \
-    rocksdb/merge_operator.h \
-    rocksdb/metadata.h \
-    rocksdb/options.h \
-    rocksdb/perf_context.h \
-    rocksdb/perf_level.h \
-    rocksdb/persistent_cache.h \
-    rocksdb/rate_limiter.h \
-    rocksdb/slice.h \
-    rocksdb/slice_transform.h \
-    rocksdb/snapshot.h \
-    rocksdb/sst_dump_tool.h \
-    rocksdb/sst_file_manager.h \
-    rocksdb/sst_file_reader.h \
-    rocksdb/sst_file_writer.h \
-    rocksdb/statistics.h \
-    rocksdb/stats_history.h \
-    rocksdb/status.h \
-    rocksdb/table.h \
-    rocksdb/table_properties.h \
-    rocksdb/thread_status.h \
-    rocksdb/threadpool.h \
-    rocksdb/trace_reader_writer.h \
-    rocksdb/transaction_log.h \
-    rocksdb/types.h \
-    rocksdb/universal_compaction.h \
-    rocksdb/utilities/backupable_db.h \
-    rocksdb/utilities/checkpoint.h \
-    rocksdb/utilities/convenience.h \
-    rocksdb/utilities/db_ttl.h \
-    rocksdb/utilities/debug.h \
-    rocksdb/utilities/env_librados.h \
-    rocksdb/utilities/env_mirror.h \
-    rocksdb/utilities/info_log_finder.h \
-    rocksdb/utilities/ldb_cmd.h \
-    rocksdb/utilities/ldb_cmd_execute_result.h \
-    rocksdb/utilities/leveldb_options.h \
-    rocksdb/utilities/lua/rocks_lua_custom_library.h \
-    rocksdb/utilities/lua/rocks_lua_util.h \
-    rocksdb/utilities/memory_util.h \
-    rocksdb/utilities/object_registry.h \
-    rocksdb/utilities/optimistic_transaction_db.h \
-    rocksdb/utilities/option_change_migration.h \
-    rocksdb/utilities/options_util.h \
-    rocksdb/utilities/sim_cache.h \
-    rocksdb/utilities/stackable_db.h \
-    rocksdb/utilities/table_properties_collectors.h \
-    rocksdb/utilities/transaction.h \
-    rocksdb/utilities/transaction_db.h \
-    rocksdb/utilities/transaction_db_mutex.h \
-    rocksdb/utilities/utility_db.h \
-    rocksdb/utilities/write_batch_with_index.h \
-    rocksdb/version.h \
-    rocksdb/wal_filter.h \
-    rocksdb/write_batch.h \
-    rocksdb/write_batch_base.h \
-    rocksdb/write_buffer_manager.h
