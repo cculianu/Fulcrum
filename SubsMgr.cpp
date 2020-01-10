@@ -40,6 +40,8 @@ namespace {
     constexpr const char *kNotifTimerName = "NotificationTimer";
     constexpr int kRemoveZombiesTimerIntervalMS = 60000; ///< we remove zombie subs entries every minute
     constexpr const char *kRemoveZombiesTimerName = "ZombieTimer";
+
+    constexpr bool debugPrint = false; ///< some of the more performance critical code in this file has its trace/debug prints compiled in or out based on this flag.
 }
 
 struct SubsMgr::Pvt
@@ -223,7 +225,7 @@ auto SubsMgr::findExistingSubRef(const HashX &sh) const -> SubRef
 auto SubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &sh, const StatusCallback &notifyCB) -> SubscribeResult
 {
     SubscribeResult ret = { false, {} };
-    const auto t0 = Util::getTimeNS();
+    const auto t0 = debugPrint ? Util::getTimeNS() : 0LL;
     if (UNLIKELY(!notifyCB))
         throw BadArgs("SubsMgr::subscribe must be called with a valid notifyCB. FIXME!");
     auto [sub, wasnew] = getOrMakeSubRef(sh);
@@ -232,7 +234,7 @@ auto SubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &sh, const StatusCal
         if (!wasnew && sub->subscribedClientIds.count(c->id)) {
             // already had a sub for this client, disconnect it because we will re-add the new functor below
             bool res = QObject::disconnect(sub.get(), &Subscription::statusChanged, c, nullptr);
-            Trace() << "Existing sub disconnected signal: " << (res ? "ok" : "not ok!");
+            if constexpr (debugPrint) Debug() << "Existing sub disconnected signal: " << (res ? "ok" : "not ok!");
         } else {
             // did not have a sub for this client, add its id and also add the destroyed signal to clean up the id
             // upon client object destruction
@@ -259,8 +261,10 @@ auto SubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &sh, const StatusCal
             throw InternalError("SubsMgr::subscribe: Failed to make the 'statusChanged' connection to the notifyCB functor! FIXME!");
     }
 
-    const auto elapsed = Util::getTimeNS() - t0;
-    Trace() << "subscribed " << Util::ToHexFast(sh) << " in " << QString::number(elapsed/1e6, 'f', 4) << " msec";
+    if constexpr (debugPrint) {
+        const auto elapsed = Util::getTimeNS() - t0;
+        Debug() << "subscribed " << Util::ToHexFast(sh) << " in " << QString::number(elapsed/1e6, 'f', 4) << " msec";
+    }
     return ret;
 }
 
@@ -280,7 +284,7 @@ void SubsMgr::maybeCacheStatusResult(const HashX &sh, const StatusHash &status)
 bool SubsMgr::unsubscribe(RPC::ConnectionBase *c, const HashX &sh)
 {
     bool ret = false;
-    const auto t0 = Util::getTimeNS();
+    const auto t0 = debugPrint ? Util::getTimeNS() : 0LL;
     SubRef sub = findExistingSubRef(sh);
     if (sub) {
         // found
@@ -296,8 +300,10 @@ bool SubsMgr::unsubscribe(RPC::ConnectionBase *c, const HashX &sh)
             --p->nClientSubsActive;
         }
     }
-    const auto elapsed = Util::getTimeNS() - t0;
-    Trace() << int(ret) << " unsubscribed " << Util::ToHexFast(sh) << " in " << QString::number(elapsed/1e6, 'f', 4) << " msec";
+    if constexpr (debugPrint) {
+        const auto elapsed = Util::getTimeNS() - t0;
+        Debug() << int(ret) << " unsubscribed " << Util::ToHexFast(sh) << " in " << QString::number(elapsed/1e6, 'f', 4) << " msec";
+    }
     return ret;
 }
 
@@ -325,7 +331,10 @@ auto SubsMgr::getFullStatus(const HashX &sh) const -> StatusHash
     // status is non-reversed, single sha256 (32 bytes)
     ret = BTC::HashOnce(historyString.toUtf8());
     const auto elapsed = Util::getTimeNS() - t0;
-    Debug() << "full status for " << Util::ToHexFast(sh) << " " << hist.size() << " items in " << QString::number(elapsed/1e6, 'f', 4) << " msec";
+    constexpr qint64 kTookKindaLongNS = 7500000LL; // 7.5mec -- if it takes longer than this, log it to debug log, otherwise don't as this can get spammy.
+    if (elapsed > kTookKindaLongNS) {
+        Debug() << "full status for " << Util::ToHexFast(sh) << " " << hist.size() << " items in " << QString::number(elapsed/1e6, 'f', 4) << " msec";
+    }
     return ret;
 }
 

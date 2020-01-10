@@ -1074,7 +1074,10 @@ void Server::rpc_blockchain_scripthash_subscribe(Client *c, const RPC::Message &
         if (!optStatus.value().isEmpty())
             // not empty, so we return the hex-encoded string
             result = QString(Util::ToHexFast(optStatus.value()));
-        Debug() << "Sending cached status to client for scripthash: " << Util::ToHexFast(sh) << " status: " << result.toString(); // remove/comment-out this after testing complete
+        // this debug statement below can get spammy and also eats cycles.  TODO: add some better global way to toggle
+        // debug stuff on/off other than at compile-time... and do it without extra function calls as you get in operator<<.
+        //Debug() << "Sending cached status to client for scripthash: " << Util::ToHexFast(sh) << " status: " << result.toString();
+        //
         emit c->sendResult(m.id, result); ///<  may be 'null' if status was empty (indicates no history for scripthash)
     }
 }
