@@ -7,7 +7,7 @@ License:    GPLv2+
 URL:        https://someurl.org
 VCS:        {{{ git_dir_vcs }}}
 
-Source:     {{{ git_dir_pack }}}
+Source:     {{{ git_pack }}}
 
 BuildRequires: qt5-qtbase-devel
 
@@ -15,7 +15,7 @@ BuildRequires: qt5-qtbase-devel
 %{summary}.
 
 %prep
-{{{ git_dir_setup_macro }}}
+{{{ git_setup_macro }}}
 
 %build
 %qmake_qt5
