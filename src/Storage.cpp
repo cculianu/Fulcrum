@@ -714,6 +714,15 @@ auto Storage::latestTip(Header *hdrOut) const -> std::pair<int, HeaderHash> {
     return ret;
 }
 
+auto Storage::latestHeight() const -> std::optional<BlockHeight>
+{
+    std::optional<BlockHeight> ret;
+    SharedLockGuard g(p->blkInfoLock);
+    if (!p->blkInfos.empty())
+        ret = BlockHeight(p->blkInfos.size()-1);
+    return ret;
+}
+
 void Storage::save(SaveSpec typed_spec)
 {
     using IntType = decltype(p->pendingSaves.load());
@@ -772,7 +781,7 @@ void Storage::deleteHeadersPastHeight(BlockHeight height)
         throw InternalError("header truncate returned an unexepected value");
 }
 
-auto Storage::headerForHeight(BlockHeight height, QString *err) -> std::optional<Header>
+auto Storage::headerForHeight(BlockHeight height, QString *err) const -> std::optional<Header>
 {
     std::optional<Header> ret;
     if (int(height) <= latestTip().first && int(height) >= 0) {
@@ -781,7 +790,7 @@ auto Storage::headerForHeight(BlockHeight height, QString *err) -> std::optional
     return ret;
 }
 
-auto Storage::headerForHeight_nolock(BlockHeight height, QString *err) -> std::optional<Header>
+auto Storage::headerForHeight_nolock(BlockHeight height, QString *err) const -> std::optional<Header>
 {
     std::optional<Header> ret;
     try {
@@ -797,7 +806,7 @@ auto Storage::headerForHeight_nolock(BlockHeight height, QString *err) -> std::o
     return ret;
 }
 
-auto Storage::headersFromHeight_nolock_nocheck(BlockHeight height, unsigned num, QString *err) -> std::vector<Header>
+auto Storage::headersFromHeight_nolock_nocheck(BlockHeight height, unsigned num, QString *err) const -> std::vector<Header>
 {
     if (err) err->clear();
     std::vector<Header> ret = p->headersFile->readRecords(height, num, err);
@@ -811,7 +820,7 @@ auto Storage::headersFromHeight_nolock_nocheck(BlockHeight height, unsigned num,
 
 /// Convenient batched alias for above. Returns a set of headers starting at height. May return < count if not
 /// all headers were found. Thead safe.
-auto Storage::headersFromHeight(BlockHeight height, unsigned count, QString *err) -> std::vector<Header>
+auto Storage::headersFromHeight(BlockHeight height, unsigned count, QString *err) const -> std::vector<Header>
 {
     std::vector<Header> ret;
     SharedLockGuard g(p->blocksLock); // to ensure clients get a consistent view

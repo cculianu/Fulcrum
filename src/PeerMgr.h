@@ -18,10 +18,12 @@
 //
 #pragma once
 
+#include "BlockProcTypes.h"
 #include "Mixins.h"
 #include "Mgr.h"
 #include "RPC.h"
 #include "ServerMisc.h"
+#include "Storage.h"
 #include "Version.h"
 
 #include <QHash>
@@ -65,6 +67,13 @@ public:
 
     /// Thread-safe. Returns the current known-good PeerInfoList
     PeerInfoList peers() const;
+
+    using HeightHeaderPair = std::pair<BlockHeight, Storage::Header>;
+    /// Thread-safe. Called from PeerClient instances.
+    /// Returns a height, block header 10 blocks in the past for querying peers (for peer verification that they are
+    /// not BSV, or another fork). May return an empty optional if for some bizarre reason we are on a chain with
+    /// <10 blocks.
+    std::optional<HeightHeaderPair> headerToVerifyWithPeer() const;
 
 public slots:
     /// The various Server instances are connected to this slot (via their gotRpcAddPeer signals), connections made by SrvMgr.
@@ -182,6 +191,7 @@ public:
     void connectToPeer();
 
     bool sentVersion = false;
+    std::optional<PeerMgr::HeightHeaderPair> headerToVerify;
     bool verified = false;
     double lastRefreshTs = 0.;
 

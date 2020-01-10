@@ -102,11 +102,11 @@ public:
 
     /// Thread safe. May hit the database (or touch a cache).  Returns the header for the given height or nothing if
     /// height > latestTip().first.  May also fail on low-level db error. Use the optional arg *err to see why if failed.
-    std::optional<Header> headerForHeight(BlockHeight height, QString *err = nullptr);
+    std::optional<Header> headerForHeight(BlockHeight height, QString *err = nullptr) const;
     /// Convenient batched alias for above. Returns a set of headers starting at height. May return < count if not
     /// all headers were found. Thread safe.  This is potentially much faster than calling headerForHeight in a loop
     /// since it uses the RocksDB MultiGet API. Does not throw.
-    std::vector<Header> headersFromHeight(BlockHeight height, unsigned count, QString *err = nullptr);
+    std::vector<Header> headersFromHeight(BlockHeight height, unsigned count, QString *err = nullptr) const;
 
     /// Implicitly takes a lock to return this. Thread safe. Breakdown of info returned:
     ///   .first - the latest valid height we have synched or -1 if no headers.
@@ -114,6 +114,9 @@ public:
     ///             bitcoind parlance), in bitcoind REVERSED memory order (that is, ready for json sending/receiving).
     ///             (Empty if no headers yet).
     std::pair<int, HeaderHash> latestTip(Header *header = nullptr) const;
+
+    /// Returns the current block height, or an empty optional if no genesisHash and no blocks;
+    std::optional<BlockHeight> latestHeight() const;
 
     /// eg 'main' or 'test' or may be empty string if new db (thread safe)
     QString getChain() const;
@@ -327,8 +330,8 @@ private:
     void loadCheckTxNumsFileAndBlkInfo(); ///< may throw -- called from startup()
     void loadCheckEarliestUndo(); ///< may throw -- called from startup()
 
-    std::optional<Header> headerForHeight_nolock(BlockHeight height, QString *errMsg = nullptr);
-    std::vector<Header> headersFromHeight_nolock_nocheck(BlockHeight height, unsigned count, QString *errMsg = nullptr);
+    std::optional<Header> headerForHeight_nolock(BlockHeight height, QString *errMsg = nullptr) const;
+    std::vector<Header> headersFromHeight_nolock_nocheck(BlockHeight height, unsigned count, QString *errMsg = nullptr) const;
 
     /// thread-safe helper that returns hashed headers starting from start up until count (hashes are in bitcoin memory order)
     std::vector<QByteArray> merkleCacheHelperFunc(unsigned start, unsigned count, QString *err);
