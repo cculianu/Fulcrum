@@ -91,8 +91,6 @@ void BitcoinDMgr::on_started()
             resolveBitcoinDHostname();
             Debug() << "Started " << resolveTimer;
             callOnTimerSoon(resolverTimeout, resolveTimer, [this]{
-                if (!goodSet.empty())
-                    return false;
                 resolveBitcoinDHostname();
                 return goodSet.empty();
             });
