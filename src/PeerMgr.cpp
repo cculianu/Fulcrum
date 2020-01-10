@@ -676,7 +676,7 @@ void PeerClient::handleReply(IdMixin::Id, const RPC::Message & reply)
     } else if (reply.method == "blockchain.block.header") {
         if constexpr (debugPrint) Debug() << info.hostName << " " << reply.method << " response";
         if (!headerToVerify.has_value()) {
-            Bad("Unexpected header response -- bug in Fulcrum");
+            Bad("Unexpected header response");
             return;
         }
         const auto  hdr = Util::ParseHexFast(reply.result().toString().trimmed().toLower().toUtf8());
