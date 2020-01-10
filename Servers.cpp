@@ -1057,7 +1057,10 @@ void Server::rpc_blockchain_scripthash_subscribe(Client *c, const RPC::Message &
         const QByteArray shHex = Util::ToHexFast(sh);
         emit c->sendNotification(method, QVariantList{shHex, statusHexMaybeNull});
     });
-    if (wasNew) ++c->nShSubs;
+    if (wasNew) {
+        if (++c->nShSubs == 1)
+            Debug() << c->prettyName(false, false) << " is now subscribed to at least one scripthash";
+    }
     if (!optStatus.has_value()) {
         // no known/cached status -- do the work ourselves asynch in the thread pool.
         generic_do_async(c, m.id, [sh, this] {
@@ -1089,7 +1092,10 @@ void Server::rpc_blockchain_scripthash_unsubscribe(Client *c, const RPC::Message
     if (sh.length() != HashLen)
         throw RPCError("Invalid scripthash");
     const bool result = storage->subs()->unsubscribe(c, sh);
-    if (result) --c->nShSubs;
+    if (result) {
+        if (--c->nShSubs == 0)
+            Debug() << c->prettyName(false, false) << " is no longer subscribed to any scripthashes";
+    }
     emit c->sendResult(m.id, QVariant(result));
 }
 
