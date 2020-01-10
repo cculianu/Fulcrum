@@ -453,8 +453,9 @@ PeerClient::PeerClient(bool announce, const PeerInfo &pi, IdMixin::Id id_, PeerM
 {
     setObjectName(QString("Peer %1").arg(pi.hostName));
 
-    pingtime_ms = int(PeerMgr::kConnectedPeerRefreshInterval * 1e3);
-    stale_threshold = pingtime_ms * 2;
+    constexpr int kPingtimeMS = 5 * 60 * 1000; ///< ping peer servers every 5 minutes to make sure connection is good and to avoid them disconnecting us for being idle.
+    pingtime_ms = kPingtimeMS;
+    stale_threshold = kPingtimeMS * 2;
 
     if (pi.tcp) { // prefer tcp -- it's faster
         socket = new QTcpSocket(this);
@@ -528,13 +529,19 @@ void PeerClient::on_connected()
 
 void PeerClient::do_ping()
 {
-    if constexpr (debugPrint) Debug() << info.hostName << ": pinging ... ";
-    // the "ping" here is to grab server.features and server.peer.subscribe periodically
-    refresh();
+    if (Util::getTimeSecs() - lastRefreshTs >= PeerMgr::kConnectedPeerRefreshInterval) {
+        // refresh after kConnectedPeerRefreshInterval (30 mins)
+        refresh();
+    } else {
+        // otherwise ping every 5 mins to keep connection alive and detect staleness
+        if constexpr (debugPrint) Debug() << info.hostName << ": pinging ... ";
+        emit sendRequest(newId(), "server.ping");
+    }
 }
 
 void PeerClient::refresh()
 {
+    lastRefreshTs = Util::getTimeSecs();
     Debug() << "Querying peer " << info.hostName;
     if (!sentVersion) {
         // this kicks off the chain of handleReply below which is really a simple state machine
@@ -564,7 +571,7 @@ void PeerClient::handleReply(IdMixin::Id, const RPC::Message & reply)
         return;
     }
     if (reply.method == "server.ping") {
-        // no-op
+        if constexpr (debugPrint) Debug() << info.hostName << ": ping reply.";
     } else if (reply.method == "server.version") {
         QVariantList l = reply.result().toList();
         if (l.size() != 2) {

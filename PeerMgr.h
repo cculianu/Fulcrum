@@ -54,7 +54,7 @@ public:
                             kProcessSoonInterval = 1.0, ///< "processSoon" means in 1 second
                             kFailureRetryTime = 10. * 60., ///< the amount of time to wait before retrying failed servers (10 mins)
                             kBadPeerRetryTime = 60. * 60., ///< the amount of time to wait before retrying bad peers (60 mins)
-                            kConnectedPeerRefreshInterval = 3. * 60., ///< we keep "pinging" connected peers at this interval (3 mins) to make sure they are still alive, and to pick up new peers from them
+                            kConnectedPeerRefreshInterval = 30. * 60., ///< we keep "refreshing" from connected peers at this interval (30 mins) to make sure they are still good, and to pick up new peers from them
                             kExpireFailedPeersTime = 24. * 60. * 60.; ///< we expire peers that are in the "bad" or "failed" status after 24 hours. (see PeerInfo::failureTs)
 
     /// Used by PeerClient instances to compare the remote server's genesis hash to our own.
@@ -183,6 +183,7 @@ public:
 
     bool sentVersion = false;
     bool verified = false;
+    double lastRefreshTs = 0.;
 
     const bool announceSelf;
     PeerInfo info;
