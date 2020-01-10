@@ -158,6 +158,9 @@ win32 {
     LIBS += -lrocksdb -lShlwapi -lrpcrt4
 }
 
+# Tell QMake all of the below is relative to src/.
+VPATH += src/
+INCLUDEPATH += src/
 
 SOURCES += \
     AbstractConnection.cpp \
