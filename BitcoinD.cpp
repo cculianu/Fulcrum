@@ -16,15 +16,17 @@
 // along with this program (see LICENSE.txt).  If not, see
 // <https://www.gnu.org/licenses/>.
 //
+#include <QHostInfo>
 #include <QPointer>
 
 #include "bitcoin/rpc/protocol.h"
 
 #include "BitcoinD.h"
 
-BitcoinDMgr::BitcoinDMgr(const QHostAddress &host, quint16 port,
-                         const QString &user, const QString &pass)
-    : Mgr(nullptr), IdMixin(newId()), host(host), port(port), user(user), pass(pass)
+BitcoinDMgr::BitcoinDMgr(const QString &hostName, quint16 port,
+                         const QString &user, const QString &pass, bool ip6)
+    : Mgr(nullptr), IdMixin(newId()), hostName(hostName), resolvedAddress(hostName), port(port), user(user), pass(pass),
+      preferIPv6(ip6), needsResolver(resolvedAddress.isNull())
 {
     setObjectName("BitcoinDMgr");
     _thread.setObjectName(objectName());
@@ -36,7 +38,12 @@ void BitcoinDMgr::startup() {
     Log() << objectName() << ": starting " << N_CLIENTS << " " << Util::Pluralize("bitcoin rpc client", N_CLIENTS) << " ...";
 
     for (auto & client : clients) {
-        client = std::make_unique<BitcoinD>(host, port, user, pass);
+        // initial resolvedAddress may be invalid if user specified a hostname, in which case we will resolve it and
+        // tell bitcoind's to update themselves and reconnect
+        client = std::make_unique<BitcoinD>(resolvedAddress, port, user, pass);
+
+        // connect us to client for when we resolve new address for bitcoind
+        connect(this, &BitcoinDMgr::bitcoinDIPChanged, client.get(), &BitcoinD::on_BitcoinDIPChanged);
 
         // connect client to us -- TODO: figure out workflow: how requests for work and results will get dispatched
         connect(client.get(), &BitcoinD::gotMessage, this, &BitcoinDMgr::on_Message);
@@ -73,6 +80,30 @@ void BitcoinDMgr::startup() {
     start();
 
     Log() << objectName() << ": started ok";
+}
+
+void BitcoinDMgr::on_started()
+{
+    ThreadObjectMixin::on_started();
+    if (needsResolver) {
+        static auto constexpr resolveTimer = "resolverTimer";
+        const auto StartResolverTimer = [this] {
+            resolveBitcoinDHostname();
+            Debug() << "Started " << resolveTimer;
+            callOnTimerSoon(resolverTimeout, resolveTimer, [this]{
+                if (!goodSet.empty())
+                    return false;
+                resolveBitcoinDHostname();
+                return goodSet.empty();
+            });
+        };
+        conns += connect(this, &BitcoinDMgr::allConnectionsLost, this, StartResolverTimer);
+        conns += connect(this, &BitcoinDMgr::gotFirstGoodConnection, this, [this](quint64) {
+            stopTimer(resolveTimer);
+            Debug() << "Stopped " << resolveTimer;
+        });
+        StartResolverTimer();
+    }
 }
 
 void BitcoinDMgr::cleanup() {
@@ -112,6 +143,7 @@ auto BitcoinDMgr::stats() const -> Stats
     QVariantMap m;
     m["rpc clients"] = l;
     m["extant request contexts"] = BitcoinDMgrHelper::ReqCtxObj::extant.load();
+    m["bitcoind needs DNS lookup"] = needsResolver;
     return m;
 }
 
@@ -133,6 +165,56 @@ BitcoinD *BitcoinDMgr::getBitcoinD()
         }
     }
     return ret;
+}
+
+void BitcoinDMgr::resolveBitcoinDHostname()
+{
+    // no need to resolve hostname if we have connections
+    if (!goodSet.empty())
+        return;
+    using OptId = std::optional<int>;
+    auto idref = std::make_shared<OptId>();
+    *idref = QHostInfo::lookupHost(hostName, this, [this, idref](const QHostInfo &info) {
+        idref->reset(); // clear the optional.. tells timer lambda below to noop when it eventually fires
+        if (info.error() != QHostInfo::NoError) {
+            Warning() << "Hostname lookup for bitcoind " << hostName << ": " << info.errorString();
+            return;
+        }
+        QHostAddress newAddr, fallback;
+        for (const auto & addr : info.addresses()) {
+            if (auto proto = addr.protocol(); proto == QAbstractSocket::NetworkLayerProtocol::IPv6Protocol) {
+                if (preferIPv6)
+                    newAddr = addr;
+                else
+                    fallback = addr;
+            } else if (proto == QAbstractSocket::NetworkLayerProtocol::IPv4Protocol) {
+                if (!preferIPv6)
+                    newAddr = addr;
+                else
+                    fallback = addr;
+            }
+        }
+        if (newAddr.isNull())
+            newAddr = fallback;
+        if (!newAddr.isNull()) {
+            if (newAddr != resolvedAddress) {
+                resolvedAddress = newAddr;
+                Debug() << "Resolved new bitcoind IP: " << resolvedAddress.toString();
+                emit bitcoinDIPChanged(resolvedAddress);
+            } else
+                Debug() << "Resolved bitcoind IP matches existing: " << resolvedAddress.toString();
+        } else {
+            Warning() << "Could not find a suitable IP address for bitcoind: " << hostName;
+        }
+    });
+    Debug() << "Resolving IP address for bitcoind: " << hostName << " ...";
+    // the below is simple paranoia .. todo: see if this can be removed.
+    QTimer::singleShot(resolverTimeout, this, [idref]{
+        if (!idref->has_value()) return;
+        const int lookupId = idref->value();
+        idref->reset();
+        QHostInfo::abortHostLookup(lookupId);
+    });
 }
 
 /// This is safe to call from any thread. Internally it dispatches messages to this obejct's thread.
@@ -309,6 +391,12 @@ void BitcoinD::reconnect()
     socket = new QTcpSocket(this);
     socketConnectSignals();
     socket->connectToHost(host, port);
+}
+
+void BitcoinD::on_BitcoinDIPChanged(const QHostAddress &ip)
+{
+    host = ip;
+    reconnect();
 }
 
 void BitcoinD::on_connected()

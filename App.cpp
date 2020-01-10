@@ -211,7 +211,7 @@ void App::parseArgs()
            QString("Specify a <hostname:port> to connect to the bitcoind rpc service. This is a required option, along "
            "with -u and -p. This hostname:port should be the same as you specified in your bitcoin.conf file "
            "under rpcbind= and rpcport=."),
-           QString("interface:port"),
+           QString("hostname:port"),
          },
          { { "u", "rpcuser" },
            QString("Specify a username to use for authenticating to bitcoind. This is a required option, along "
@@ -328,23 +328,33 @@ void App::parseArgs()
         else if (conf.values(l).count() > 1)
             throw BadArgs(QString("This option cannot be specified multiple times in the config file: %1").arg(l));
     }
-    static const auto parseInterface = [](const QString &s) -> Options::Interface {
+    static const auto parseHostnamePortPair = [](const QString &s) -> QPair<QString, quint16> {
         auto toks = s.split(":");
+        constexpr const char *msg1 = "Malformed host:port spec. Please specify a string of the form <host>:<port>";
         if (toks.length() < 2)
-            throw BadArgs("Malformed interface spec. Please pass a address of the form 1.2.3.4:123 for IPv4 or ::1:123 for IPv6.");
+            throw BadArgs(msg1);
         QString portStr = toks.last();
         toks.removeLast();
         QString hostStr = toks.join(":");
-        QHostAddress h(hostStr);
-        if (h.isNull())
-            throw BadArgs(QString("Bad interface address: %1").arg(hostStr));
+        if (hostStr.isEmpty())
+            throw BadArgs(msg1);
         bool ok;
         quint16 port = portStr.toUShort(&ok);
         if (!ok || port == 0)
             throw BadArgs(QString("Bad port: %1").arg(portStr));
+        return {hostStr, port};
+    };
+    const auto parseInterface = [&options = options](const QString &s) -> Options::Interface {
+        const auto pair = parseHostnamePortPair(s);
+        const auto & hostStr = pair.first;
+        const auto port = pair.second;
+        QHostAddress h(hostStr);
+        if (h.isNull())
+            throw BadArgs(QString("Bad interface address: %1").arg(hostStr));
+        options->hasIPv6Listener = options->hasIPv6Listener || h.protocol() == QAbstractSocket::NetworkLayerProtocol::IPv6Protocol;
         return {h, port};
     };
-    static const auto parseInterfaces = [](decltype(Options::interfaces) & interfaces, const QStringList & l) {
+    const auto parseInterfaces = [&parseInterface](decltype(Options::interfaces) & interfaces, const QStringList & l) {
         // functor parses -i and -z options, puts results in 'interfaces' passed-in reference.
         interfaces.clear();
         for (const auto & s : l)
@@ -369,7 +379,7 @@ void App::parseArgs()
     }
 
     // parse bitcoind - conf.value is always unset if parser.value is set, hence this strange constrcution below (parser.value takes precedence)
-    options->bitcoind = parseInterface(conf.value("bitcoind", parser.value("b")));
+    options->bitcoind = parseHostnamePortPair(conf.value("bitcoind", parser.value("b")));
     // grab rpcuser
     options->rpcuser = conf.value("rpcuser", parser.isSet("u") ? parser.value("u") : std::getenv(RPCUSER));
     // grab rpcpass

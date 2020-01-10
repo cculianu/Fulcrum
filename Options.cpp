@@ -80,7 +80,8 @@ QVariantMap Options::toMap() const
     m["stats"] = l;
     m["cert"] = certFile;
     m["key"] = keyFile;
-    m["bitcoind"] = QString("%1:%2").arg(bitcoind.first.toString()).arg(bitcoind.second);
+    m["bitcoind"] = QString("%1:%2").arg(bitcoind.first).arg(bitcoind.second);
+    m["hasIPv6 listener"] = hasIPv6Listener;
     m["rpcuser"] = rpcuser.isNull() ? QVariant() : QVariant("<hidden>");
     m["rpcpassword"] = rpcpassword.isNull() ? QVariant() : QVariant("<hidden>");
     m["datadir"] = datadir;

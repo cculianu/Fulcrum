@@ -52,6 +52,8 @@ public:
     std::atomic_bool verboseTrace = false; ///< this gets set if -d -d specified
     std::atomic_bool syslogMode = false; ///< if true, suppress printing of timestamps to logger
 
+    bool hasIPv6Listener = false; ///< used internally -- set to true by argParser if at least one of the specified listening interfaces is IPv6, false otherwise
+
     using Interface = QPair<QHostAddress, quint16>;
     QList<Interface> interfaces, ///< TCP interfaces to use for binding, defaults to 0.0.0.0 DEFAULT_PORT_TCP
                      sslInterfaces;  ///< SSL interfaces to use for binding SSL ports. Defaults to nothing.
@@ -60,7 +62,7 @@ public:
     QString certFile; ///< saved here for toMap() to remember what was specified in config file
     QSslKey sslKey; ///< this must be valid if we have any SSL interfaces.
     QString keyFile; ///< saved here for toMap() to remember what was specified in config file
-    Interface bitcoind;
+    QPair<QString, quint16> bitcoind; ///< hostname, port pair. We resolve bitcoind's actual IP address each time if it's a hostname and not an IP address string.
     QString rpcuser, rpcpassword;
     QString datadir; ///< The directory to store the database. It exists and has appropriate permissions (otherwise the app would have quit on startup).
     /// If true, on db open/startup, we will perform some slow/paranoid db consistency checks

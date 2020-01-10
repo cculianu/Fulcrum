@@ -34,7 +34,7 @@ class BitcoinDMgr : public Mgr, public IdMixin, public ThreadObjectMixin, public
 {
     Q_OBJECT
 public:
-    BitcoinDMgr(const QHostAddress &host, quint16 port, const QString &user, const QString &pass);
+    BitcoinDMgr(const QString &hostnameOrIP, quint16 port, const QString &user, const QString &pass, bool preferIPv6);
     ~BitcoinDMgr() override;
 
     void startup() override; ///< from Mgr
@@ -69,8 +69,13 @@ signals:
     /// the argument.
     void inWarmUp(const QString &);
 
+    /// internal signal, emitted when resolved a new IP address for bitcoind
+    void bitcoinDIPChanged(const QHostAddress &);
+
 protected:
     Stats stats() const override; // from Mgr
+
+    void on_started() override; // from ThreadObjectMixin
 
 protected slots:
     // connected to BitcoinD gotMessage signal
@@ -79,17 +84,21 @@ protected slots:
     void on_ErrorMessage(quint64 bitcoindId, const RPC::Message &msg);
 
 private:
-    const QHostAddress host;
+    const QString hostName;
+    QHostAddress resolvedAddress;
     const quint16 port;
     const QString user, pass;
+    const bool preferIPv6;
+    const bool needsResolver;
 
-    static constexpr int miniTimeout = 333, tinyTimeout = 167, medTimeout = 500, longTimeout = 1000;
+    static constexpr int miniTimeout = 333, tinyTimeout = 167, medTimeout = 500, longTimeout = 1000, resolverTimeout = 30000;
 
     std::set<quint64> goodSet; ///< set of bitcoind's (by id) that are `isGood` (connected, authed). This set is updated as we get signaled from BitcoinD objects. May be empty. Has at most N_CLIENTS elements.
 
     std::unique_ptr<BitcoinD> clients[N_CLIENTS];
 
     BitcoinD *getBitcoinD(); ///< may return nullptr if none are up. Otherwise does a round-robin of the ones present to grab one. to be called only in this thread.
+    void resolveBitcoinDHostname();
 };
 
 class BitcoinD : public RPC::HttpConnection, public ThreadObjectMixin /* NB: also inherits TimersByNameMixin via AbstractConnection base */
@@ -117,6 +126,9 @@ signals:
     void connected(BitcoinD *me);
     void authenticated(BitcoinD *me); ///< This is emitted after we have successfully connected and auth'd.
 
+public slots:
+    void on_BitcoinDIPChanged(const QHostAddress &);
+
 protected:
     void on_started() override;
     void on_connected() override;
@@ -131,7 +143,7 @@ protected:
 private:
     void connectMiscSignals(); ///< some signals/slots to self to do bookkeeping
 
-    const QHostAddress host;
+    QHostAddress host;
     const quint16 port;
     std::atomic_bool badAuth = false, needAuth = true;
 };
