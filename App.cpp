@@ -34,10 +34,13 @@
 #include <list>
 #include <tuple>
 
+App *App::_globalInstance = nullptr;
 
 App::App(int argc, char *argv[])
     : QCoreApplication (argc, argv)
 {
+    assert(!_globalInstance);
+    _globalInstance = this;
     register_MetaTypes();
 
     options = std::make_shared<Options>();
@@ -67,7 +70,8 @@ App::~App()
 {
     Debug() << "App d'tor";
     Log() << "Shudown complete";
-    /// child objects will be auto-deleted
+    _globalInstance = nullptr;
+    /// child objects will be auto-deleted, however most are already gone in cleanup() at this point.
 }
 
 void App::startup()

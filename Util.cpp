@@ -302,12 +302,12 @@ Log::~Log()
         if (QThread *th = QThread::currentThread(); th && ourApp && th != ourApp->thread()) {
             QString thrdName = th->objectName();
             if (thrdName.trimmed().isEmpty()) thrdName = QString::asprintf("%p", reinterpret_cast<void *>(QThread::currentThreadId()));
-            thrdStr = QString("<Thread: %1> ").arg(thrdName);
+            thrdStr = QString("<Thr: %1> ").arg(thrdName);
         }
 
         Logger *logger = ourApp ? ourApp->logger() : nullptr;
 
-        QString theString = tsStr + thrdStr + (logger && logger->isaTTY() ? colorify(str, color) : str);
+        QString theString = tsStr + thrdStr + (logger && logger->isaTTY() ? colorize(str, color) : str);
 
         if (logger) {
             emit logger->log(level, theString);
@@ -347,7 +347,7 @@ QString Log::colorString(Color c) {
     return QString::asprintf("%s%s", prefix, suffix);
 }
 
-QString Log::colorify(const QString &str, Color c) {
+QString Log::colorize(const QString &str, Color c) {
     QString colorStr = useColor && c != Normal ? colorString(c) : "";
     QString normalStr = useColor && c != Normal ? colorString(Normal) : "";
     return colorStr + str + normalStr;
@@ -380,7 +380,7 @@ Trace::~Trace()
 
 bool Trace::isEnabled() {
     auto ourApp = app();
-    return ourApp && ourApp->options && ourApp->options->verboseTrace && Debug::isEnabled();
+    return ourApp && ourApp->options && ourApp->options->verboseTrace && ourApp->options->verboseDebug; // both trace and debug must be on
 }
 
 Error::~Error()

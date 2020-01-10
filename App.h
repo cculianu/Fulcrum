@@ -33,13 +33,14 @@ class SimpleHttpServer;
 class App final : public QCoreApplication, public TimersByNameMixin
 {
     Q_OBJECT
+    static App *_globalInstance;
 public:
     explicit App(int argc, char *argv[]);
     ~App() override;
 
     static void miscPreAppFixups();
 
-    Logger *logger() { return _logger.get(); }
+    Logger *logger() const { return _logger.get(); }
 
     std::shared_ptr<Options> options;
 
@@ -48,6 +49,9 @@ public:
 
     /// This is only ever true if the aboutToQuit signal has fired (as a result of this->exit() or this->quit())
     inline bool isQuitting() const { return quitting; }
+
+    /// Performance optimization to avoid dynamic_cast<App *>(qApp) in ::app() below.
+    static inline App * globalInstance() { return _globalInstance; }
 
 signals:
 
@@ -72,4 +76,4 @@ private:
     void start_httpServer(const Options::Interface &iface); // may throw
 };
 
-inline App *app() { return dynamic_cast<App *>(qApp); }
+inline App *app() { return App::globalInstance(); }

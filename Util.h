@@ -91,7 +91,7 @@ public:
 
 protected:
     static QString colorString(Color c);
-    QString colorify(const QString &, Color c);
+    QString colorize(const QString &, Color c);
 
     bool colorOverridden = false, useColor = true;
     int level = 0;
