@@ -102,6 +102,7 @@ void SubsMgr::doNotifyAllPending()
 {
     const auto t0 = Util::getTimeNS();
     size_t ctr = 0, ctrSH = 0;
+    bool emitQueueEmpty = false;
     std::vector<SubRef> pending;
     {
         LockGuard g(p->mut);
@@ -115,8 +116,12 @@ void SubsMgr::doNotifyAllPending()
             }
         }
         p->clearPending_nolock();
-        if (!pendingWasEmpty)
-            emit queueEmpty();
+        emitQueueEmpty = !pendingWasEmpty; // emit queueEmpty below only if it wasn't empty before
+    }
+    if (emitQueueEmpty) {
+        // defensive programming nit, let's emit the signal with no locks held in case somebody someday connects this
+        // signal via a direct connection to a slot in this thread that then tries to take the same lock.
+        emit queueEmpty();
     }
     // at this point we got all the subrefs for the scripthashes that changed.. and the lock is released .. now run through them all and notify each
     for (const auto & sub : pending) {
