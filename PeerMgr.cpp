@@ -31,6 +31,7 @@
 
 namespace {
     constexpr int kStringMax = 80, kHostNameMax = 120;
+    constexpr bool debugPrint = false;
 }
 
 PeerMgr::PeerMgr(const std::shared_ptr<Storage> &storage_ , const std::shared_ptr<const Options> &options_)
@@ -150,7 +151,7 @@ void PeerMgr::cleanup()
 
 void PeerMgr::on_rpcAddPeer(const PeerInfoList &infos, const QHostAddress &source)
 {
-    Debug() << __func__ << " source: " << source.toString();
+    if constexpr (debugPrint) Debug() << __func__ << " source: " << source.toString();
 
     // detect protocols we may have missed on startup. No-op if source isNull or if we have both v4 and v6
     detectProtocol(source);
@@ -160,7 +161,7 @@ void PeerMgr::on_rpcAddPeer(const PeerInfoList &infos, const QHostAddress &sourc
         // then exit loop early. Also we need a way to keep track of "recently verified bad" as a DoS defense here? Hmm...
         if (queued.contains(pi.hostName) || clients.contains(pi.hostName)) { // NB: assumption here is hostName is already trimmed and toLower()
             // already added... no need to do DNS lookup or any further processing
-            Debug() << "add_peer: " << pi.hostName << " already queued or in process";
+            if constexpr (debugPrint) Debug() << "add_peer: " << pi.hostName << " already queued or in process";
             continue;
         } else if (source.isNull() && (failed.contains(pi.hostName) || bad.contains(pi.hostName))) {
             // source was not the server itself, so we ignore this request since it may have come from a server.peers.subscribe
@@ -175,7 +176,7 @@ void PeerMgr::on_rpcAddPeer(const PeerInfoList &infos, const QHostAddress &sourc
                     it.value().ssl = pi.ssl;
                 }
             }
-            Debug() << "add_peer: " << pi.hostName << " was already deemed bad/failed, skipping";
+            if constexpr (debugPrint) Debug() << "add_peer: " << pi.hostName << " was already deemed bad/failed, skipping";
             continue;
         }
         // For each peer in the list, do a DNS lookup and verify that the source address matches at least one
@@ -201,7 +202,7 @@ void PeerMgr::on_rpcAddPeer(const PeerInfoList &infos, const QHostAddress &sourc
                     continue;
                 }
                 if (source.isNull() || addr == source) {
-                    Debug() << "add_peer: " << pi.hostName << " address (" << addr.toString() << ") ok for source (" << source.toString() << "), processing further ...";
+                    if constexpr (debugPrint) Debug() << "add_peer: " << pi.hostName << " address (" << addr.toString() << ") ok for source (" << source.toString() << "), processing further ...";
                     addPeerVerifiedSource(pi, addr);
                     return;
                 }
@@ -224,7 +225,7 @@ void PeerMgr::on_rpcAddPeer(const PeerInfoList &infos, const QHostAddress &sourc
 
 void PeerMgr::addPeerVerifiedSource(const PeerInfo &piIn, const QHostAddress & addr)
 {
-    Debug() << __func__ << " peer " << piIn.hostName << " ipaddr: " << addr.toString();
+    if constexpr (debugPrint) Debug() << __func__ << " peer " << piIn.hostName << " ipaddr: " << addr.toString();
 
     PeerInfo pi(piIn);
     pi.addr = addr;
@@ -242,7 +243,6 @@ void PeerMgr::allServersStarted()
         Util::AsyncOnObject(this, [this] {allServersStarted();});
         return;
     }
-    // TODO ...
     Debug() << __func__;
 
     // start out with the seedPeers
@@ -326,10 +326,10 @@ void PeerMgr::process()
         return;
     PeerInfo pi = queued.take(queued.begin().key());
     if (pi.addr.isNull()) {
-        Debug() << "PeerInfo.addr was null for " << pi.hostName << ", calling on_rpcAddPeer to resolve address";
+        if constexpr (debugPrint) Debug() << "PeerInfo.addr was null for " << pi.hostName << ", calling on_rpcAddPeer to resolve address";
         on_rpcAddPeer(PeerInfoList{pi}, pi.addr);
     } else if (options->peeringEnforceUniqueIPs && peerIPAddrs.contains(pi.addr)) {
-        Debug() << pi.hostName << " (" << pi.addr.toString() << ") already in peer set, skipping ...";
+        if constexpr (debugPrint) Debug() << pi.hostName << " (" << pi.addr.toString() << ") already in peer set, skipping ...";
     } else {
         auto client = newClient(pi);
         client->connectToPeer();
@@ -358,9 +358,9 @@ PeerClient * PeerMgr::newClient(const PeerInfo &pi)
         if (client == obj) {
             clients.remove(hostName);
             updateSoon();
-            Debug() << "Removed peer from map: " << hostName;
+            if constexpr (debugPrint) Debug() << "Removed peer from map: " << hostName;
         } else {
-            Debug() << "Peer not found in map: " << hostName;
+            if constexpr (debugPrint) Debug() << "Peer not found in map: " << hostName;
         }
     });
     connect(client, &PeerClient::lostConnection, this, [](AbstractConnection *c){
@@ -490,7 +490,7 @@ PeerClient::PeerClient(bool announce, const PeerInfo &pi, IdMixin::Id id_, PeerM
 }
 
 PeerClient::~PeerClient() {
-    Debug() << __func__ << ": " << info.hostName;
+    if constexpr (debugPrint) Debug() << __func__ << ": " << info.hostName;
 }
 
 
@@ -528,13 +528,14 @@ void PeerClient::on_connected()
 
 void PeerClient::do_ping()
 {
-    Debug() << info.hostName << ": pinging ... ";
+    if constexpr (debugPrint) Debug() << info.hostName << ": pinging ... ";
     // the "ping" here is to grab server.features and server.peer.subscribe periodically
     refresh();
 }
 
 void PeerClient::refresh()
 {
+    Debug() << "Querying peer " << info.hostName;
     if (!sentVersion) {
         // this kicks off the chain of handleReply below which is really a simple state machine
         emit sendRequest(newId(), "server.version", QVariantList{ServerMisc::AppSubVersion,
@@ -562,7 +563,9 @@ void PeerClient::handleReply(IdMixin::Id, const RPC::Message & reply)
         Bad();
         return;
     }
-    if (reply.method == "server.version") {
+    if (reply.method == "server.ping") {
+        // no-op
+    } else if (reply.method == "server.version") {
         QVariantList l = reply.result().toList();
         if (l.size() != 2) {
             Bad("Bad response to server.version");
@@ -578,7 +581,7 @@ void PeerClient::handleReply(IdMixin::Id, const RPC::Message & reply)
         emit sendRequest(newId(), "server.features");
     } else if (reply.method == "server.features") {
         // handle
-        Debug() << info.hostName << ": features responded ...";
+        if constexpr (debugPrint) Debug() << info.hostName << ": features responded ...";
         PeerInfoList pl;
         try {
             pl = PeerInfo::fromFeaturesMap(reply.result().toMap());
@@ -622,12 +625,14 @@ void PeerClient::handleReply(IdMixin::Id, const RPC::Message & reply)
         emit sendRequest(newId(), "server.peers.subscribe");
     } else if (reply.method == "server.add_peer") {
         // handle
-        Debug() << info.hostName << ": add_peer... result = " << reply.result().toBool();
+        if constexpr (debugPrint) Debug() << info.hostName << ": add_peer... result = " << reply.result().toBool();
     } else if (reply.method == "server.peers.subscribe") {
         // handle
-        QString dbgstr;
-        try { dbgstr = Util::Json::toString(reply.result(), true); } catch (...) {}
-        Debug() << info.hostName << ": subscribe responded ... " << dbgstr;
+        if constexpr (debugPrint) {
+            QString dbgstr;
+            try { dbgstr = Util::Json::toString(reply.result(), true); } catch (...) {}
+            Debug() << info.hostName << ": subscribe responded ... " << dbgstr;
+        }
         PeerInfoList candidates;
         try {
             candidates = PeerInfo::fromPeersSubscribeList(reply.result().toList());
@@ -677,12 +682,13 @@ PeerInfoList PeerInfo::fromPeersSubscribeList(const QVariantList &l)
             continue;
         }
         QVariantList l3 = l2.at(2).toList();
+        bool isPruning = false;
         for (const auto & v : l3) {
             QString s(v.toString().trimmed().left(kStringMax));
             if (s.isEmpty()) continue;
-            if (s.startsWith('v', Qt::CaseInsensitive))
+            if (s.startsWith('v', Qt::CaseInsensitive)) {
                 pi.protocolVersion = s;
-            else if (s.startsWith('t', Qt::CaseInsensitive)) {
+            } else if (s.startsWith('t', Qt::CaseInsensitive)) {
                 bool ok;
                 unsigned p = s.mid(1).toUInt(&ok);
                 if (!p || !ok || p > USHRT_MAX)
@@ -694,9 +700,15 @@ PeerInfoList PeerInfo::fromPeersSubscribeList(const QVariantList &l)
                     if (!p || !ok || p > USHRT_MAX)
                         continue;
                     pi.ssl = quint16(p);
-                }
+            } else if (s.startsWith('p', Qt::CaseInsensitive) && s.mid(1).toInt()) {
+                // skip 'p' = pruning
+                isPruning = true;
+                break;
+            }
         }
-        if (pi.isMinimallyValid())
+        if (isPruning)
+            Debug() << "PeerInfo " << pi.hostName << " is a pruning peer, skipping ...";
+        else if (pi.isMinimallyValid())
             ret.push_back(pi);
         else
             Debug() << "PeerInfo " << pi.hostName << " not minimally valid, skipping ...";

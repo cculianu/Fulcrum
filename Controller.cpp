@@ -1074,7 +1074,7 @@ void Controller::on_putBlock(CtlTask *task, PreProcessedBlockPtr p)
 
 void Controller::process_PrintProgress(unsigned height, size_t nTx, size_t nIO)
 {
-    if (UNLIKELY(!sm)) return; // paranaoia
+    if (UNLIKELY(!sm)) return; // paranoia
     sm->nProgBlocks++;
     sm->nProgTx += nTx;
     sm->nProgIOs += nIO;
