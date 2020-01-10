@@ -337,7 +337,7 @@ void SubsMgr::removeZombies()
     LockGuard g(p->mut);
     const auto total = p->subs.size();
     for (auto it = p->subs.begin(), next = it; it != p->subs.end(); it = next) {
-        SubRef sub = it->second; // take a copy to increment refct so it doesn't disappear due to erase() below...
+        SubRef sub = it->second; // take a copy to increment refct so it doesn't get deleted before we unlock it (erase() below)...
         if (UNLIKELY(!sub)) { // paranoia
             Fatal() << "A SubRef was null in " << __func__ << ". FIXME!";
             return;
