@@ -335,8 +335,11 @@ namespace Util {
         }
         auto last = std::unique(cont.begin(), cont.end());
         cont.erase(last, cont.end());
-        if constexpr (std::is_same_v<std::vector<typename Container::value_type>, Container>)
+        if constexpr (std::is_same_v<std::vector<typename Container::value_type>, Container>) {
             if (shrinkIfSupported) cont.shrink_to_fit();
+        } else if constexpr (std::is_same_v<QVector<typename Container::value_type>, Container>) {
+            if (shrinkIfSupported) cont.squeeze();
+        }
     }
 
     /// For each item in Container, reverse each item in-place using std::reverse(item.begin(), item.end()).

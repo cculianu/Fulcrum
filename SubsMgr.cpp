@@ -345,6 +345,7 @@ void SubsMgr::removeZombies()
             ++next;
     }
     if (ctr) {
+        p->subs.reserve(p->kSubsReserveSize); // shrink_to_fit if over kSubsReserveSize
         const auto elapsed = Util::getTimeNS() - t0;
         Debug() << "SubsMgr: Removed " << ctr << " zombie " << Util::Pluralize("sub", ctr) << " out of " << total
                 << " in " << QString::number(elapsed/1e6, 'f', 4) << " msec";
@@ -370,6 +371,7 @@ auto SubsMgr::stats() const -> Stats
             m[QString(sh.toHex())] = m2;
         }
         ret["subscriptions"] = m;
+        ret["subscriptions (LoadFactor)"] = p->subs.load_factor();
         QVariantList l;
         for (auto sh : p->pendingNotificatons) {
             l.push_back(QString(sh.toHex()));
