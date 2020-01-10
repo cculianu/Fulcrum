@@ -280,7 +280,8 @@ void PeerMgr::retryFailedPeers(bool useBadMap)
                 Log() << "Purging failed peer " << pi.hostName << " because it has been unavailable for " <<  failureHoursString(pi);
                 continue;
             }
-            queued.insert(pi.hostName, pi);
+            auto it = queued.insert(pi.hostName, pi);
+            it.value().addr.clear(); // make sure addr is null so we do lookup again in case peer IP address has changed
             ++ctr;
         }
     }
