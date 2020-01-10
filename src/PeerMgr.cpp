@@ -350,16 +350,15 @@ PeerClient * PeerMgr::newClient(const PeerInfo &pi)
         Warning() << "Already had a client for " << pi.hostName << ", deleting ...";
         client->deleteLater();
     }
-    peerIPAddrs.insert(pi.addr);
     client = new PeerClient(options->peerAnnounceSelf, pi, newId(), this, 64*1024);
     connect(client, &PeerClient::connectFailed, this, &PeerMgr::on_connectFailed);
     connect(client, &PeerClient::bad, this, &PeerMgr::on_bad);
     connect(client, &PeerClient::gotPeersSubscribeReply, this, &PeerMgr::on_rpcAddPeer);
     connect(client, &QObject::destroyed, this, [this, hostName = pi.hostName, addr = pi.addr](QObject *obj) {
-        peerIPAddrs.remove(addr); // mark it as gone from the set
         auto client = clients.value(hostName, nullptr);
         if (client == obj) {
             clients.remove(hostName);
+            peerIPAddrs.remove(addr); // mark it as gone from the set
             updateSoon();
             if constexpr (debugPrint) Debug() << "Removed peer from map: " << hostName;
         } else {
@@ -375,6 +374,7 @@ PeerClient * PeerMgr::newClient(const PeerInfo &pi)
         c->deleteLater();
     });
 
+    peerIPAddrs.insert(pi.addr);
     clients[pi.hostName] = client;
     updateSoon();
     return client;
