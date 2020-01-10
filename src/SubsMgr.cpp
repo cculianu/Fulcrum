@@ -51,6 +51,7 @@ struct SubsMgr::Pvt
     std::unordered_set<HashX, HashHasher> pendingNotificatons;
 
     std::atomic_int nClientSubsActive{0};
+    std::atomic_uint64_t cacheHits{0}, cacheMisses{0};
 
     static constexpr size_t kSubsReserveSize = 16384;
     Pvt() {
@@ -261,6 +262,11 @@ auto SubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &sh, const StatusCal
             throw InternalError("SubsMgr::subscribe: Failed to make the 'statusChanged' connection to the notifyCB functor! FIXME!");
     }
 
+    if (ret.second.has_value())
+        ++p->cacheHits;
+    else
+        ++p->cacheMisses;
+
     if constexpr (debugPrint) {
         const auto elapsed = Util::getTimeNS() - t0;
         Debug() << "subscribed " << Util::ToHexFast(sh) << " in " << QString::number(elapsed/1e6, 'f', 4) << " msec";
@@ -392,6 +398,8 @@ auto SubsMgr::stats() const -> Stats
         }
         ret["pendingNotifications"] = l;
     }
+    ret["subscriptions cache hits"] = qlonglong(p->cacheHits.load()); // atomic, no lock needed
+    ret["subscriptions cache misses"] = qlonglong(p->cacheMisses.load()); // atomic, no lock needed
     // these below 2 take the above lock again so we do them without the lock held
     ret["Num. active client subscriptions"] = numActiveClientSubscriptions();
     ret["Num. unique scripthashes subscribed (including zombies)"] = numScripthashesSubscribed();
