@@ -163,9 +163,15 @@ protected:
     /// provided for stats/debug
     QStringList activeTimers() const { return _timerMap.keys(); }
 
+    /// Returns a timer map suitable for sending to /stats endpoint or via JSON e.g. { "TimerName": 5000, ... }
+    QVariantMap activeTimerMapForStats() const;
+
     /// Stops the named timer and immediately deletes it.
     inline bool stopTimer(const QString &name) { auto timer = _timerMap.take(name); return bool(timer); }
 
+    /// Stops all extant timers immediately.  Note that this implicitly uses deleteLater to delete the timer objects.
+    /// Returns the number of timers that were stopped.
+    int stopAllTimers();
 };
 
 

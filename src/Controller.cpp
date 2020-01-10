@@ -1295,11 +1295,7 @@ auto Controller::stats() const -> Stats
         m["StateMachine"] = m2;
     } else
         m["StateMachine"] = QVariant(); // null
-    QVariantMap timerMap;
-    for (const auto & timer: _timerMap) {
-        timerMap.insert(timer->objectName(), timer->interval());
-    }
-    m["activeTimers"] = timerMap;
+    m["activeTimers"] = activeTimerMapForStats();
     QVariantList l;
     { // task list
         const auto now = Util::getTime();

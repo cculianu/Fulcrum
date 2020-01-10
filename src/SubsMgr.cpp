@@ -403,5 +403,6 @@ auto SubsMgr::stats() const -> Stats
     // these below 2 take the above lock again so we do them without the lock held
     ret["Num. active client subscriptions"] = numActiveClientSubscriptions();
     ret["Num. unique scripthashes subscribed (including zombies)"] = numScripthashesSubscribed();
+    ret["activeTimers"] = activeTimerMapForStats();
     return ret;
 }

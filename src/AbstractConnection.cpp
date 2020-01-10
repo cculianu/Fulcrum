@@ -262,11 +262,7 @@ auto AbstractConnection::stats() const -> Stats
     m["nSocketErrors"] = nSocketErrors.load();
     m["writeBackLog"] = writeBackLog.size();
     m["readBytesAvailable"] = socket ? socket->bytesAvailable() : 0;
-    auto atl = activeTimers();
-    QVariantMap timerMap;
-    for (const auto & name : atl)
-        timerMap[name] = timerInterval(name);
-    m["activeTimers"] = timerMap;
+    m["activeTimers"] = activeTimerMapForStats();
     m["remote"] = [this]() -> QVariant {
         if (QString addr; socket && !(addr=socket->peerAddress().toString()).isNull()) {
             return QString("%1:%2").arg(addr).arg(socket->peerPort());

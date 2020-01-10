@@ -142,6 +142,7 @@ auto BitcoinDMgr::stats() const -> Stats
     m["rpc clients"] = l;
     m["extant request contexts"] = BitcoinDMgrHelper::ReqCtxObj::extant.load();
     m["bitcoind needs DNS lookup"] = needsResolver;
+    m["activeTimers"] = activeTimerMapForStats();
     return m;
 }
 

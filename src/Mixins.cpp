@@ -135,6 +135,22 @@ void TimersByNameMixin::callOnTimerSoonNoRepeat(int ms, const QString &name, con
     callOnTimerSoon(ms, name, [fn]() -> bool { fn(); return false; }, force, ttype);
 }
 
+int TimersByNameMixin::stopAllTimers() {
+    int ctr = 0;
+    for (const auto & name : activeTimers()) {
+        stopTimer(name);
+        ++ctr;
+    }
+    return ctr;
+}
+QVariantMap TimersByNameMixin::activeTimerMapForStats() const
+{
+    QVariantMap ret;
+    for (const auto & timer: _timerMap) {
+        ret.insert(timer->objectName(), timer->interval());
+    }
+    return ret;
+}
 
 /// --- StatsMixin
 StatsMixin::~StatsMixin() {}

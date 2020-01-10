@@ -41,7 +41,7 @@ PeerMgr::PeerMgr(const std::shared_ptr<Storage> &storage_ , const std::shared_pt
     _thread.setObjectName(objectName());
 }
 
-PeerMgr::~PeerMgr() { stop(); /* noop if already stopped */ Debug() << __func__;  }
+PeerMgr::~PeerMgr() { cleanup(); /* noop if already stopped */ Debug() << __func__;  }
 
 QVariantMap PeerMgr::makeFeaturesDict(PeerClient *c) const
 {
@@ -146,7 +146,9 @@ void PeerMgr::on_started()
 
 void PeerMgr::cleanup()
 {
-
+    stop();
+    if (auto num = stopAllTimers(); num)
+        Debug() << objectName() << " stopped " << num << " active timers";
 }
 
 void PeerMgr::on_rpcAddPeer(const PeerInfoList &infos, const QHostAddress &source)
@@ -428,6 +430,8 @@ auto PeerMgr::stats() const -> Stats
     ret["failed"] = m0;
     ret["peering"] = options->peerDiscovery;
     ret["announce"] = options->peerAnnounceSelf;
+    ret["activeTimers"] = activeTimerMapForStats();
+
     return ret;
 }
 
