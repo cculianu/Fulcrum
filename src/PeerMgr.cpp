@@ -309,7 +309,7 @@ void PeerMgr::updateSoon()
             ExclusiveLock g(mut);
             sharedPeers.clear();
             for (const auto & client : clients) {
-                if (client->isGood() && !client->isStale() && !client->info.genesisHash.isEmpty())
+                if (client->isGood() && !client->isStale() && client->verified)
                     sharedPeers.push_back(client->info);
             }
             copy = sharedPeers; // take a copy now for signal below (this is O(1) due to implicit sharing)
@@ -385,6 +385,7 @@ void PeerMgr::on_bad(PeerClient *c)
     if (c->info.hostName.isEmpty())
         return;
     c->info.setFailureTsIfNotSet();
+    c->info.genesisHash.clear();
     bad[c->info.hostName] = c->info;
     c->deleteLater(); // drop connection
 }
@@ -402,6 +403,7 @@ void PeerMgr::on_connectFailed(PeerClient *c)
             c->info.failureReason = "Connection failed";
     }
     c->info.setFailureTsIfNotSet();
+    c->info.genesisHash.clear();
     failed[c->info.hostName] = c->info;
     c->deleteLater(); // clean up
 }
@@ -450,6 +452,7 @@ auto PeerClient::stats() const -> Stats
     m["isTor?"] = info.isTor();
     if (const auto s = failureHoursString(info); !s.isEmpty())
         m["failureAge"] = s;
+    m["verified"] = verified;
     return m;
 }
 
