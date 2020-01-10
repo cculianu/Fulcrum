@@ -651,6 +651,7 @@ void PeerClient::handleReply(IdMixin::Id, const RPC::Message & reply)
                 }
                 found = true;
                 updateInfoFromRemoteFeaturesMap(pi);
+                info.genesisHash = mgr->genesisHash(); // tweak to point to same underlying bytes
                 break;
             }
         }
