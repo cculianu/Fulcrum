@@ -214,6 +214,7 @@ void BitcoinDMgr::resolveBitcoinDHostname()
         const int lookupId = idref->value();
         idref->reset();
         QHostInfo::abortHostLookup(lookupId);
+        Warning() << "Hostname lookup timed-out after " << QString::number(resolverTimeout/1e3, 'f', 1) << " secs";
     });
 }
 

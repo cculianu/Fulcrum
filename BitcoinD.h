@@ -91,7 +91,7 @@ private:
     const bool preferIPv6;
     const bool needsResolver;
 
-    static constexpr int miniTimeout = 333, tinyTimeout = 167, medTimeout = 500, longTimeout = 1000, resolverTimeout = 30000;
+    static constexpr int miniTimeout = 333, tinyTimeout = 167, medTimeout = 500, longTimeout = 1000, resolverTimeout = 10000;
 
     std::set<quint64> goodSet; ///< set of bitcoind's (by id) that are `isGood` (connected, authed). This set is updated as we get signaled from BitcoinD objects. May be empty. Has at most N_CLIENTS elements.
 
