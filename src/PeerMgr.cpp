@@ -679,7 +679,7 @@ void PeerClient::handleReply(IdMixin::Id, const RPC::Message & reply)
             Bad("Unexpected header response");
             return;
         }
-        const auto  hdr = Util::ParseHexFast(reply.result().toString().trimmed().toLower().toUtf8());
+        const auto  hdr = Util::ParseHexFast(reply.result().toString().trimmed().left(BTC::GetBlockHeaderSize()*2).toLower().toUtf8());
         if (hdr != headerToVerify.value().second) {
             Bad(QString("Peer appears to be on a different chain (header verification failed for height %1)").arg(headerToVerify.value().first));
             return;
