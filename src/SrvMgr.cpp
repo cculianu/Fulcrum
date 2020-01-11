@@ -62,7 +62,8 @@ void SrvMgr::startServers()
     if (options->peerDiscovery) {
         Log() << "SrvMgr: starting PeerMgr ...";
         peermgr = std::make_unique<PeerMgr>(storage, options);
-        peermgr->startup();
+        peermgr->startup(); // may throw
+        connect(this, &SrvMgr::allServersStarted, peermgr.get(), &PeerMgr::on_allServersStarted);
     } else peermgr.reset();
 
     const auto num = options->interfaces.length() + options->sslInterfaces.length();
@@ -95,8 +96,7 @@ void SrvMgr::startServers()
         ++i;
     }
 
-    if (peermgr)
-        peermgr->allServersStarted();
+    emit allServersStarted();
 }
 
 void SrvMgr::clientConnected(IdMixin::Id cid, const QHostAddress &addr)
@@ -123,7 +123,7 @@ void SrvMgr::clientDisconnected(IdMixin::Id cid, const QHostAddress &addr)
         Warning() << "Multiple clients with id: " << cid << ", address " << addr.toString() << " in addrIdMap in " << __func__ << " -- FIXME!";
     } else if (count) {
         //Debug() << "Client id " << cid << " addr " << addr.toString() << " removed from addrIdMap";
-        if (const auto size = addrIdMap.size(); size >= 10 && addrIdMap.capacity() / size >= 2) {
+        if (const auto size = addrIdMap.size(); size >= 64 && size * 2 <= addrIdMap.capacity()) {
             // save space if we are over 2x capacity vs size
             addrIdMap.squeeze();
         }

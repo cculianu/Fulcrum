@@ -79,8 +79,9 @@ public slots:
     /// The various Server instances are connected to this slot (via their gotRpcAddPeer signals), connections made by SrvMgr.
     /// Also: PeerClient instances are connected to this via their gotPeersSubscribeReply signal
     void on_rpcAddPeer(const PeerInfoList &, const QHostAddress & source);
-    /// Called by SrvMgr to tell this instance all our services are up, so it may begin searching for peers and publishing our information.
-    void allServersStarted();
+    /// Called by a signal connected to SrvMgr to tell this instance all our services are up, so it may begin searching
+    /// for peers and publishing our information.
+    void on_allServersStarted();
 
 signals:
     /// Emitted to notify Server instances of a new peers list.  Connected to the onPeersUpdated slot in all extant Server instances.
@@ -120,6 +121,8 @@ private:
     PeerClient *newClient(const PeerInfo &);
 
     PeerInfoMap queued, bad, failed;
+
+    bool gotAllServersStartedSignal = false;
 
     QHash<QString, PeerClient *> clients;
     QSet<QHostAddress> peerIPAddrs; ///< in case we want to ensure IP-uniqueness of peers and reject dupes with different hostname, same IP (sybil attack defense measure)

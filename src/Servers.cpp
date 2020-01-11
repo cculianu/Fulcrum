@@ -398,7 +398,7 @@ Server::newClient(QTcpSocket *sock)
             if (client != o) {
                 Error() << " client != passed-in pointer to on_destroy in " << __FILE__ << " line " << __LINE__  << ". FIXME!";
             }
-            Debug("client id %ld purged from map", long(clientId));
+            Debug() << "client id " << clientId << " purged from map";
         }
         // tell SrvMgr this client is gone so it can decrement its clients-per-ip count.
         emit clientDisconnected(clientId, addr);

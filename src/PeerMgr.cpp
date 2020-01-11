@@ -78,6 +78,9 @@ void PeerMgr::startup()
         Warning() << objectName() << ": Could not determine which protocols are available based on bind addresses.";
 
     start();
+    // wait for thread to start before returning.
+    if (auto s = chan.get<QString>(60000); s != "ok") // this will throw to caller if it has a timeout
+        throw InternalError("Could not start PeerMgr");
 }
 
 void PeerMgr::detectProtocol(const QHostAddress &addr)
@@ -142,6 +145,7 @@ void PeerMgr::on_started()
 {
     Debug() << objectName() << ": started ok";
     conns += connect(this, &PeerMgr::needUpdateSoon, this, &PeerMgr::updateSoon);
+    chan.put("ok");
 }
 
 void PeerMgr::cleanup()
@@ -239,13 +243,13 @@ void PeerMgr::addPeerVerifiedSource(const PeerInfo &piIn, const QHostAddress & a
     processSoon();
 }
 
-void PeerMgr::allServersStarted()
+void PeerMgr::on_allServersStarted()
 {
-    if (QThread::currentThread() != thread()) {
-        Util::AsyncOnObject(this, [this] {allServersStarted();});
+    if (gotAllServersStartedSignal) // paranoia
         return;
-    }
     Debug() << __func__;
+
+    gotAllServersStartedSignal = true;
 
     // start out with the seedPeers
     queued = seedPeers;
