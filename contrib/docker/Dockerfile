@@ -3,9 +3,9 @@ LABEL maintainer="Axel Gembe <derago@gmail.com>"
 
 RUN apt-get update -y && \
     apt-get install -y software-properties-common && \
-    add-apt-repository ppa:beineri/opt-qt-5.12.3-bionic && \
+    add-apt-repository ppa:beineri/opt-qt-5.13.2-bionic && \
     apt-get update -y && \
-    apt-get install -y qt512base openssl && \
+    apt-get install -y qt513base openssl && \
     apt-get install -y git build-essential zlib1g-dev libbz2-dev && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* && \
@@ -13,7 +13,7 @@ RUN apt-get update -y && \
     git remote add origin https://github.com/cculianu/Fulcrum.git && \
     git fetch --depth 1 origin master && \
     git checkout -b pinned FETCH_HEAD && \
-    /opt/qt512/bin/qmake -makefile Fulcrum.pro && \
+    /opt/qt513/bin/qmake -makefile Fulcrum.pro && \
     make install && \
     apt-get remove -y git build-essential zlib1g-dev libbz2-dev && \
     apt-get autoremove -y && \
