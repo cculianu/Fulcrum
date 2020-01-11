@@ -37,7 +37,7 @@ ThreadPool::~ThreadPool()
 }
 
 
-Job::Job(QObject *context, ThreadPool *pool, const VoidFunc & work, const VoidFunc & completion, const FailFunc &fail)
+Job::Job(QObject *context, ThreadPool *pool, const VoidFunc & work, const VoidFunc & completion, const FailFunc &fail) noexcept
     : QObject(nullptr), pool(pool), work(work), weakContextRef(context ? context : pool)
 {
     if (!context && (completion || fail))
@@ -129,22 +129,21 @@ bool ThreadPool::shutdownWaitForJobs(int timeout_ms)
     return pool->waitForDone(timeout_ms);
 }
 
-int ThreadPool::extantJobs() const { return extant.load(); }
-int ThreadPool::extantJobsMaxSeen() const { return extantMaxSeen.load(); }
-int ThreadPool::extantJobLimit() const { return extantLimit.load(); }
-bool ThreadPool::setExtantJobLimit(int limit) {
+int ThreadPool::extantJobs() const noexcept { return extant.load(); }
+int ThreadPool::extantJobsMaxSeen() const noexcept { return extantMaxSeen.load(); }
+int ThreadPool::extantJobLimit() const noexcept { return extantLimit.load(); }
+bool ThreadPool::setExtantJobLimit(int limit)  noexcept {
     if (limit < 10)
         return false;
     extantLimit = limit;
     return true;
 }
-uint64_t ThreadPool::numJobsSubmitted() const { return ctr.load(); }
-uint64_t ThreadPool::overflows() const { return noverflows.load(); }
-int ThreadPool::maxThreadCount() const { return pool->maxThreadCount(); }
+uint64_t ThreadPool::numJobsSubmitted() const noexcept { return ctr.load(); }
+uint64_t ThreadPool::overflows() const noexcept { return noverflows.load(); }
+int ThreadPool::maxThreadCount() const noexcept { return pool->maxThreadCount(); }
 bool ThreadPool::setMaxThreadCount(int max) {
     if (max < 1)
         return false;
     pool->setMaxThreadCount(max);
     return pool->maxThreadCount() == max;
 }
-

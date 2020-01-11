@@ -35,7 +35,7 @@ class QThreadPool;
 /// Each instance of this class internally creates its own QThreadPool instance, thus each instance never conflicts with
 /// other thread pools such as the Qt-provided QThreadPool::globalInstance().
 ///
-/// All of the public methods of this class are thread-safe.
+/// All of the public methods of this class are thread-safe.  None of the methods of this class throw.
 class ThreadPool : public QObject
 {
     Q_OBJECT
@@ -51,9 +51,9 @@ public:
 
     /// Submit work to be performed asynchronously from a thread pool thread.
     ///
-    /// `work` is called in the context of one of the global QThreadPool::globalInstance() threads (it should
-    /// lambda-capture all data it needs to compute its results). It may throw, in which case `fail` (if specified)
-    /// is invoked with the exception.what() message.
+    /// `work` is called in the context of one of this instance's QThreadPool threads (it should lambda-capture all
+    /// data it needs to compute its results). It may throw, in which case `fail` (if specified) is invoked with the
+    /// exception.what() message.
     ///
     /// `completion` will be called in the context of `context`'s thread. If `context` dies before the work
     /// is completed, completion will never be called.
@@ -90,29 +90,32 @@ public:
     /// submitted to the ThreadPool instance (it latches a boolean that permanently blocks the creation of new jobs once
     /// called). Note that after this function is called all extant jobs that may begin to run will exit immediately as
     /// well (as a consequence of said "shutting down" boolean being true).
+    ///
+    /// Despite the lack of a noexcept declaration, this does not throw (however I cannot guarantee Qt code we call
+    /// does not throw, hence the lack of noexcept here).
     bool shutdownWaitForJobs(int timeout_ms = -1);
 
     /// Returns the number of jobs currently running or scheduled to run.
-    int extantJobs() const;
+    int extantJobs() const noexcept;
     /// Returns the maximal value ExtantJobs() has ever reached during the lifetime of this application.
-    int extantJobsMaxSeen() const;
+    int extantJobsMaxSeen() const noexcept;
     /// Returns the maximum number of extant jobs before failure is unconditionally asserted on SubmitWork (currently the default is 1000)
-    int extantJobLimit() const;
+    int extantJobLimit() const noexcept;
     /// Sets the extant job limit.  This number cannot be set below 10, doing so returns false.
-    bool setExtantJobLimit(int limit);
+    bool setExtantJobLimit(int limit) noexcept;
     /// Returns the maximum number of threads used by the pool.
-    int maxThreadCount() const;
+    int maxThreadCount() const noexcept;
     /// Sets the maximum number of threads used by the pool. Cannot be set <1.  Returns true on success (usually this is the case).
     bool setMaxThreadCount(int max);
     /// Returns the number of lifetime job overflows (the number of times the job queue was full and work was rejected).
     /// Ideally this number is always 0 even under load.
-    uint64_t overflows() const;
+    uint64_t overflows() const noexcept;
 
     /// Returns the number of jobs that were ever successfilly submitted via SubmitWork
-    uint64_t numJobsSubmitted() const;
+    uint64_t numJobsSubmitted() const noexcept;
 
     /// Returns true if the ThreadPool is currently being shutdown. A shutting-down ThreadPool will reject all new work.
-    inline bool isShuttingDown() const { return blockNewWork.load(); }
+    inline bool isShuttingDown() const noexcept { return blockNewWork.load(); }
 
 private:
     const std::unique_ptr<QThreadPool> pool;
@@ -137,7 +140,10 @@ class Job : public QObject, public QRunnable {
     QPointer<QObject> weakContextRef;
 
 
-    Job(QObject *context, ThreadPool *pool, const VoidFunc & work, const VoidFunc & completion = VoidFunc(), const FailFunc & = FailFunc());
+    Job(QObject *context, ThreadPool *pool,
+        const VoidFunc & work,
+        const VoidFunc & completion = VoidFunc(),
+        const FailFunc & = FailFunc()) noexcept;
 
 public:
     void run() override;
