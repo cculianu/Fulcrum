@@ -10,6 +10,8 @@ VCS:        {{{ git_dir_vcs }}}
 Source:     {{{ git_pack }}}
 
 BuildRequires: qt5-qtbase-devel
+BuildRequires: bzip2-devel
+BuildRequires: zlib-devel
 
 %description
 %{summary}.
