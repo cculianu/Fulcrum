@@ -18,7 +18,7 @@ GPLv3. See the included `LICENSE.txt` file or [visit gnu.org and read the licens
 
 ### Requirements
 
-- `Qt Core` & `Qt Networking` libraries `5.11` or above (I use `5.13.2` myself).
+- `Qt Core` & `Qt Networking` libraries `5.12.5` or above (I use `5.13.2` myself).  Qt `5.12.4` (or earlier) is not supported.
 - A modern, 64-bit `C++17` compiler.  `clang` is recommended but `G++` also works. MSVC on Windows is not supported (please use `MinGW G++` instead, which ships with Qt Open Source Edition for Windows).
 
 ### How To Compile
@@ -35,7 +35,7 @@ You may also build from the CLI (on Linux and MacOS):
 2. `qmake` (to generate the Makefile)
 3. `make -j8`  (replace 8 here with the number of cores on your machine)
 
-**A note for Linux users**: `Qt 5.11` or above is required (5.13 is recommended). You may have to install the Qt5 networking package separately such as `libqt5network5` (depending on your distribution). You also need `libbz2-dev` otherwise compilation will fail.
+**A note for Linux users**: You may have to install the Qt5 networking package separately such as `libqt5network5` (depending on your distribution). You also need `libbz2-dev` otherwise compilation will fail. If you are having trouble finding the required Qt versions, you can try this link: https://launchpad.net/~beineri (for Ubuntu/Debian ppas).
 
 **A note for Windows users**: `Qt 5.13.2` (or above) with `MinGW G++ 7.x.x` is the compiler/Qt kit you should be using.  MSVC is not supported by this codebase at the present time.
 
