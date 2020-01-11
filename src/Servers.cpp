@@ -542,7 +542,7 @@ namespace {
 Server::RPCError::~RPCError() {}
 Server::RPCErrorWithDisconnect::~RPCErrorWithDisconnect() {}
 
-void Server::generic_do_async(Client *c, const RPC::Message::Id &reqId, const std::function<QVariant ()> &work)
+void Server::generic_do_async(Client *c, const RPC::Message::Id &reqId, const std::function<QVariant ()> &work, int priority)
 {
     if (LIKELY(work)) {
         struct ResErr {
@@ -578,7 +578,9 @@ void Server::generic_do_async(Client *c, const RPC::Message::Id &reqId, const st
                 emit c->sendResult(reqId, reserr->results);
             },
             // default fail function just sends json rpc error "internal error: <message>"
-            defaultTPFailFunc(c, reqId)
+            defaultTPFailFunc(c, reqId),
+            // lower is sooner, higher is later. Default 0.
+            priority
         );
     } else
         Error() << "INTERNAL ERROR: work must be valid! FIXME!";

@@ -210,7 +210,7 @@ private:
     /// the work for later and handles sending the response (returned from work) to the client as well as sending
     /// any errors to the client. The `work` functor may throw RPCError, in which case code and message will be
     /// sent instead.  Note that all other exceptions also end up sent to the client as "internal error: MESSAGE".
-    void generic_do_async(Client *client, const RPC::Message::Id &reqId,  const AsyncWorkFunc & work);
+    void generic_do_async(Client *client, const RPC::Message::Id &reqId,  const AsyncWorkFunc & work, int priority = 0);
     void generic_async_to_bitcoind(Client *client,
                                    const RPC::Message::Id & reqId,  ///< the original client request id
                                    const QString &method, ///< bitcoind method to invoke
