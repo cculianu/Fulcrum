@@ -27,11 +27,8 @@ QT += network
 CONFIG += c++17 console
 CONFIG -= app_bundle
 
-# Test for ability to use c++latest; requires Qt 5.12.0 or above
-greaterThan(QT_MAJOR_VERSION, 4):greaterThan(QT_MINOR_VERSION, 12):!win32-g++ {
-    # Qt 5.13+ supports "c++latest"
-    CONFIG -= c++17
-    CONFIG += c++latest
+versionAtMost(QT_VERSION, 5.12.4) {
+    error("Fulcrum requires Qt 5.12.5 (or later) or Qt 5.13.1 (or later) to be successfully built without errors.  Please use Qt 5.12.5+ or Qt 5.13.1+ to build this codebase.")
 }
 
 QMAKE_CXXFLAGS_RELEASE += -DNDEBUG
