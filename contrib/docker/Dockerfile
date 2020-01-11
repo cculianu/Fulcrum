@@ -1,6 +1,7 @@
-ARG cores=1
 FROM ubuntu:bionic
 LABEL maintainer="Axel Gembe <derago@gmail.com>"
+
+ARG MAKEFLAGS
 
 RUN apt-get update -y && \
     apt-get install -y software-properties-common && \
@@ -15,7 +16,7 @@ RUN apt-get update -y && \
     git fetch --depth 1 origin master && \
     git checkout -b pinned FETCH_HEAD && \
     /opt/qt513/bin/qmake -makefile Fulcrum.pro && \
-    make -j ${cores} install && \
+    make $MAKEFLAGS install && \
     apt-get remove -y git build-essential zlib1g-dev libbz2-dev && \
     apt-get autoremove -y && \
     rm -rf Fulcrum
