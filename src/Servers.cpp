@@ -1132,12 +1132,14 @@ void Server::rpc_blockchain_transaction_broadcast(Client *c, const RPC::Message 
             return ret;
         },
         // error func, throw an RPCError that's formatted in a particular way
-        [](const RPC::Message & errResponse) {
+        [cid = c->id](const RPC::Message & errResponse) {
+            const auto errorMessage = errResponse.errorMessage();
+            Log() << "Broadcast fail for client " << cid << ": " << errorMessage.left(120);
             throw RPCError(QString("the transaction was rejected by network rules.\n\n"
                                    // Note: ElectrumX here would also spit back the [txhex] after the final newline.
                                    // We do not do that, since it's a waste of bandwidth and also Electron Cash
                                    // ignores that information anyway.
-                                   "%1\n").arg(errResponse.errorMessage()),
+                                   "%1\n").arg(errorMessage),
                             RPC::Code_App_BadRequest /**< ex does this here.. inconsistent with transaction.get,
                                                       * so for now we emulate that until we verify that EC
                                                       * will be ok with us changing it to Code_App_DaemonError */
