@@ -12,4 +12,4 @@ IMAGE_TAG="$1"
 here=$(dirname $(realpath "$0" 2> /dev/null || grealpath "$0"))
 . "$here"/../base.sh
 
-docker build --build-arg MAKEFLAGS=$WORKER_COUNT -t "$IMAGE_TAG" -f contrib/docker/Dockerfile "$here"/../..
+docker build --build-arg MAKEFLAGS="-j $WORKER_COUNT" -t "$IMAGE_TAG" -f contrib/docker/Dockerfile "$here"/../..
