@@ -252,6 +252,7 @@ namespace Util {
     auto keySet(const Map &map) {
         // lambda template
         constexpr auto inner = [](const Map &map, auto & set) {
+            set.reserve(map.size());
             for (auto it = map.begin(); it != map.end(); ++it) {
                 set.insert(it->first);
             }
@@ -273,6 +274,7 @@ namespace Util {
     auto valueSet(const Map &map) {
         // lambda template
         constexpr auto inner = [](const Map &map, auto & set) {
+            set.reserve(map.size());
             for (auto it = map.begin(); it != map.end(); ++it) {
                 set.insert(it->second);
             }
