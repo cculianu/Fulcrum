@@ -18,9 +18,8 @@
 //
 #pragma once
 
-#include "Util.h"
-
 #include <QObject>
+#include <QPointer>
 #include <QRunnable>
 
 #include <atomic>
@@ -29,6 +28,12 @@
 
 class QThreadPool;
 
+/// A wrapper around QThreadPool, whereby all work is submitted via lambdas.  It also keeps some stats and
+/// provides some limits on number of jobs that can be enqueued.  Currently, there is one of these globally
+/// owned by the 'App' object and accessible via ::AppThreadPool() (declared in App.h).
+///
+/// Each instance of this class internally creates its own QThreadPool instance, thus each instance never conflicts with
+/// other thread pools such as the Qt-provided QThreadPool::globalInstance().
 class ThreadPool : public QObject
 {
     Q_OBJECT
@@ -40,7 +45,7 @@ public:
 
     /// Callback used below to indicate an exception was thrown or other low-level unlikely failure.
     using FailFunc = std::function<void(const QString &)>;
-    using VoidFunc = Util::VoidFunc;
+    using VoidFunc = std::function<void()>;
 
     /// Submit work to be performed asynchronously from a thread pool thread.
     ///
@@ -64,7 +69,7 @@ public:
     ///
     /// Using shared_ptr to share data between `work` and `completion` (via lambda-capture) is thus the intended
     /// way to use this mechanism.
-    void SubmitWork(QObject *context, const VoidFunc & work, const VoidFunc & completion = VoidFunc(),
+    void submitWork(QObject *context, const VoidFunc & work, const VoidFunc & completion = VoidFunc(),
                     const FailFunc & fail = FailFunc(), int priority = 0);
 
     /// Call this on app or pool shutdown to wait for extant jobs that may be running to complete. This prevents jobs
@@ -83,33 +88,33 @@ public:
     /// submitted to the ThreadPool instance (it latches a boolean that permanently blocks the creation of new jobs once
     /// called). Note that after this function is called all extant jobs that may begin to run will exit immediately as
     /// well (as a consequence of said "shutting down" boolean being true).
-    bool ShutdownWaitForJobs(int timeout_ms = -1);
+    bool shutdownWaitForJobs(int timeout_ms = -1);
 
     /// Returns the number of jobs currently running or scheduled to run.
-    int ExtantJobs() const;
+    int extantJobs() const;
     /// Returns the maximal value ExtantJobs() has ever reached during the lifetime of this application.
-    int ExtantJobsMaxSeen() const;
+    int extantJobsMaxSeen() const;
     /// Returns the maximum number of extant jobs before failure is unconditionally asserted on SubmitWork (currently the default is 1000)
-    int ExtantJobLimit() const;
+    int extantJobLimit() const;
     /// Sets the extant job limit.  This number cannot be set below 10, doing so returns false.
-    bool SetExtantJobLimit(int limit);
+    bool setExtantJobLimit(int limit);
     /// Returns the maximum number of threads used by the pool.
-    int MaxThreadCount() const;
+    int maxThreadCount() const;
     /// Sets the maximum number of threads used by the pool. Cannot be set <1.  Returns true on success (usually this is the case).
-    bool SetMaxThreadCount(int max);
+    bool setMaxThreadCount(int max);
     /// Returns the number of lifetime job overflows (the number of times the job queue was full and work was rejected).
     /// Ideally this number is always 0 even under load.
-    uint64_t Overflows() const;
+    uint64_t overflows() const;
 
     /// Returns the number of jobs that were ever successfilly submitted via SubmitWork
-    uint64_t NumJobsSubmitted() const;
+    uint64_t numJobsSubmitted() const;
 
     /// Returns true if the ThreadPool is currently being shutdown. A shutting-down ThreadPool will reject all new work.
     inline bool isShuttingDown() const { return blockNewWork.load(); }
 
 private:
     const std::unique_ptr<QThreadPool> pool;
-    std::atomic_uint64_t ctr = 0, overflows = 0;
+    std::atomic_uint64_t ctr = 0, noverflows = 0;
     std::atomic_int extant = 0, extantMaxSeen = 0;
     std::atomic_bool blockNewWork = false;
     /// maximum number of extant jobs we allow before failing and not enqueuing more.
@@ -122,7 +127,7 @@ class Job : public QObject, public QRunnable {
     Q_OBJECT
 
     friend class ::ThreadPool;
-    using VoidFunc = Util::VoidFunc;
+    using VoidFunc = ThreadPool::VoidFunc;
     using FailFunc = ThreadPool::FailFunc;
 
     const ThreadPool * const pool; ///< since the ThreadPool object owns us, this pointer is always valid if we exist.

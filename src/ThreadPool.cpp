@@ -17,6 +17,7 @@
 // <https://www.gnu.org/licenses/>.
 //
 #include "ThreadPool.h"
+#include "Util.h"
 
 #include <QThreadPool>
 
@@ -32,7 +33,7 @@ ThreadPool::ThreadPool(QObject *parent)
 
 ThreadPool::~ThreadPool()
 {
-    ShutdownWaitForJobs();
+    shutdownWaitForJobs();
 }
 
 
@@ -74,7 +75,7 @@ void Job::run() {
     emit completed();
 }
 
-void ThreadPool::SubmitWork(QObject *context, const VoidFunc & work, const VoidFunc & completion, const FailFunc & fail, int priority)
+void ThreadPool::submitWork(QObject *context, const VoidFunc & work, const VoidFunc & completion, const FailFunc & fail, int priority)
 {
     if (blockNewWork) {
         Debug() << __FUNCTION__ << ": Ignoring new work submitted because blockNewWork = true";
@@ -87,7 +88,7 @@ void ThreadPool::SubmitWork(QObject *context, const VoidFunc & work, const VoidF
     Job *job = new Job(context, this, work, completion, failFuncToUse);
     QObject::connect(job, &QObject::destroyed, this, [this](QObject *){ --extant;}, Qt::DirectConnection);
     if (const auto njobs = ++extant; njobs > extantLimit) {
-        ++overflows;
+        ++noverflows;
         delete job; // will decrement extant on delete
         const auto msg = QString("Job limit exceeded (%1)").arg(njobs);
         failFuncToUse(msg);
@@ -118,7 +119,7 @@ void ThreadPool::SubmitWork(QObject *context, const VoidFunc & work, const VoidF
     pool->start(job, priority);
 }
 
-bool ThreadPool::ShutdownWaitForJobs(int timeout_ms)
+bool ThreadPool::shutdownWaitForJobs(int timeout_ms)
 {
     blockNewWork = true;
     if constexpr (debugPrt) {
@@ -128,19 +129,19 @@ bool ThreadPool::ShutdownWaitForJobs(int timeout_ms)
     return pool->waitForDone(timeout_ms);
 }
 
-int ThreadPool::ExtantJobs() const { return extant.load(); }
-int ThreadPool::ExtantJobsMaxSeen() const { return extantMaxSeen.load(); }
-int ThreadPool::ExtantJobLimit() const { return extantLimit.load(); }
-bool ThreadPool::SetExtantJobLimit(int limit) {
+int ThreadPool::extantJobs() const { return extant.load(); }
+int ThreadPool::extantJobsMaxSeen() const { return extantMaxSeen.load(); }
+int ThreadPool::extantJobLimit() const { return extantLimit.load(); }
+bool ThreadPool::setExtantJobLimit(int limit) {
     if (limit < 10)
         return false;
     extantLimit = limit;
     return true;
 }
-uint64_t ThreadPool::NumJobsSubmitted() const { return ctr.load(); }
-uint64_t ThreadPool::Overflows() const { return overflows.load(); }
-int ThreadPool::MaxThreadCount() const { return pool->maxThreadCount(); }
-bool ThreadPool::SetMaxThreadCount(int max) {
+uint64_t ThreadPool::numJobsSubmitted() const { return ctr.load(); }
+uint64_t ThreadPool::overflows() const { return noverflows.load(); }
+int ThreadPool::maxThreadCount() const { return pool->maxThreadCount(); }
+bool ThreadPool::setMaxThreadCount(int max) {
     if (max < 1)
         return false;
     pool->setMaxThreadCount(max);

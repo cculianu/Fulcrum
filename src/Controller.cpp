@@ -1315,12 +1315,12 @@ auto Controller::stats() const -> Stats
     QVariantMap misc;
     {
         QVariantMap m;
-        m["extant jobs"] = ::AppThreadPool()->ExtantJobs();
-        m["extant jobs (max lifetime)"] = ::AppThreadPool()->ExtantJobsMaxSeen();
-        m["extant limit"] = ::AppThreadPool()->ExtantJobLimit();
-        m["job count (lifetime)"] = qulonglong(::AppThreadPool()->NumJobsSubmitted());
-        m["job queue overflows (lifetime)"] = qulonglong(::AppThreadPool()->Overflows());
-        m["thread count (max)"] = ::AppThreadPool()->MaxThreadCount();
+        m["extant jobs"] = ::AppThreadPool()->extantJobs();
+        m["extant jobs (max lifetime)"] = ::AppThreadPool()->extantJobsMaxSeen();
+        m["extant limit"] = ::AppThreadPool()->extantJobLimit();
+        m["job count (lifetime)"] = qulonglong(::AppThreadPool()->numJobsSubmitted());
+        m["job queue overflows (lifetime)"] = qulonglong(::AppThreadPool()->overflows());
+        m["thread count (max)"] = ::AppThreadPool()->maxThreadCount();
         misc["Job Queue (Thread Pool)"] = m;
     }
     st["Misc"] = misc;

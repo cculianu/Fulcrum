@@ -554,7 +554,7 @@ void Server::generic_do_async(Client *c, const RPC::Message::Id &reqId, const st
 
         auto reserr = std::make_shared<ResErr>(); ///< shared with lambda for both work and completion. this is how they communicate.
 
-        ::AppThreadPool()->SubmitWork(
+        ::AppThreadPool()->submitWork(
             c, // <--- all work done in client context, so if client is deleted, completion not called
             // runs in worker thread, must not access anything other than reserr and work
             [reserr,work]{
