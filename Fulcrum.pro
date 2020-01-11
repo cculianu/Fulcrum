@@ -182,6 +182,7 @@ SOURCES += \
     SrvMgr.cpp \
     Storage.cpp \
     SubsMgr.cpp \
+    ThreadPool.cpp \
     Util.cpp \
     Version.cpp \
     register_MetaTypes.cpp
@@ -210,6 +211,7 @@ HEADERS += \
     SrvMgr.h \
     Storage.h \
     SubsMgr.h \
+    ThreadPool.h \
     TXO.h \
     TXO_Compact.h \
     Util.h \

@@ -18,12 +18,14 @@
 //
 #include "Servers.h"
 
+#include "App.h"
 #include "BitcoinD.h"
 #include "Merkle.h"
 #include "PeerMgr.h"
 #include "ServerMisc.h"
 #include "Storage.h"
 #include "SubsMgr.h"
+#include "ThreadPool.h"
 
 #include <QByteArray>
 #include <QCoreApplication>
@@ -525,7 +527,7 @@ void Server::onPeersUpdated(const PeerInfoList &pl)
 
 // --- RPC METHODS ---
 namespace {
-    Util::ThreadPool::FailFunc defaultTPFailFunc(Client *c, const RPC::Message::Id &id) {
+    ThreadPool::FailFunc defaultTPFailFunc(Client *c, const RPC::Message::Id &id) {
         return [c, id](const QString &what) {
             emit c->sendError(false, RPC::Code_InternalError, QString("internal error: %1").arg(what), id);
         };
@@ -552,7 +554,7 @@ void Server::generic_do_async(Client *c, const RPC::Message::Id &reqId, const st
 
         auto reserr = std::make_shared<ResErr>(); ///< shared with lambda for both work and completion. this is how they communicate.
 
-        Util::ThreadPool::SubmitWork(
+        ::AppThreadPool()->SubmitWork(
             c, // <--- all work done in client context, so if client is deleted, completion not called
             // runs in worker thread, must not access anything other than reserr and work
             [reserr,work]{

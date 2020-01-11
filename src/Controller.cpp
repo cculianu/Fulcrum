@@ -16,12 +16,14 @@
 // along with this program (see LICENSE.txt).  If not, see
 // <https://www.gnu.org/licenses/>.
 //
+#include "App.h"
 #include "BlockProc.h"
 #include "BTC.h"
 #include "Controller.h"
 #include "Mempool.h"
 #include "Merkle.h"
 #include "SubsMgr.h"
+#include "ThreadPool.h"
 #include "TXO.h"
 
 #include "bitcoin/transaction.h"
@@ -1313,12 +1315,12 @@ auto Controller::stats() const -> Stats
     QVariantMap misc;
     {
         QVariantMap m;
-        m["extant jobs"] = Util::ThreadPool::ExtantJobs();
-        m["extant jobs (max lifetime)"] = Util::ThreadPool::ExtantJobsMaxSeen();
-        m["extant limit"] = Util::ThreadPool::ExtantJobLimit();
-        m["job count (lifetime)"] = qulonglong(Util::ThreadPool::NumJobsSubmitted());
-        m["job queue overflows (lifetime)"] = qulonglong(Util::ThreadPool::Overflows());
-        m["thread count (max)"] = Util::ThreadPool::MaxThreadCount();
+        m["extant jobs"] = ::AppThreadPool()->ExtantJobs();
+        m["extant jobs (max lifetime)"] = ::AppThreadPool()->ExtantJobsMaxSeen();
+        m["extant limit"] = ::AppThreadPool()->ExtantJobLimit();
+        m["job count (lifetime)"] = qulonglong(::AppThreadPool()->NumJobsSubmitted());
+        m["job queue overflows (lifetime)"] = qulonglong(::AppThreadPool()->Overflows());
+        m["thread count (max)"] = ::AppThreadPool()->MaxThreadCount();
         misc["Job Queue (Thread Pool)"] = m;
     }
     st["Misc"] = misc;

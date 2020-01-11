@@ -29,6 +29,7 @@
 class Controller;
 class Logger;
 class SimpleHttpServer;
+class ThreadPool;
 
 class App final : public QCoreApplication, public TimersByNameMixin
 {
@@ -50,8 +51,13 @@ public:
     /// This is only ever true if the aboutToQuit signal has fired (as a result of this->exit() or this->quit())
     inline bool isQuitting() const { return quitting; }
 
+    inline ThreadPool *threadPool() const { return tpool.get(); }
+
     /// Performance optimization to avoid dynamic_cast<App *>(qApp) in ::app() below.
     static inline App * globalInstance() { return _globalInstance; }
+
+    /// Convenience to obtain our singleton ThreadPool instance that goes with this singleton App instance.
+    static inline ThreadPool *globalThreadPool() { return _globalInstance ? _globalInstance->threadPool() : nullptr; }
 
 signals:
 
@@ -59,6 +65,7 @@ public slots:
 
 private:
     std::atomic<quint64> globalId = 0;
+    const std::unique_ptr<ThreadPool> tpool;
     std::unique_ptr<Logger> _logger;
     std::unique_ptr<Controller> controller;
     QList<std::shared_ptr<SimpleHttpServer> > httpServers;
@@ -77,3 +84,4 @@ private:
 };
 
 inline App *app() { return App::globalInstance(); }
+inline ThreadPool * AppThreadPool() { return App::globalThreadPool(); }
