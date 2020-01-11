@@ -34,7 +34,7 @@ class BitcoinDMgr : public Mgr, public IdMixin, public ThreadObjectMixin, public
 {
     Q_OBJECT
 public:
-    BitcoinDMgr(const QString &hostnameOrIP, quint16 port, const QString &user, const QString &pass, bool preferIPv6);
+    BitcoinDMgr(const QString &hostnameOrIP, quint16 port, const QString &user, const QString &pass);
     ~BitcoinDMgr() override;
 
     void startup() override; ///< from Mgr
@@ -68,10 +68,6 @@ signals:
     /// emitted if bitcoind is telling us it's still warming up (RPC error code -28). The actual warmup message is
     /// the argument.
     void inWarmUp(const QString &);
-
-    /// internal signal, emitted when resolved a new IP address for bitcoind
-    void bitcoinDIPChanged(const QHostAddress &);
-
 protected:
     Stats stats() const override; // from Mgr
 
@@ -85,11 +81,8 @@ protected slots:
 
 private:
     const QString hostName;
-    QHostAddress resolvedAddress;
     const quint16 port;
     const QString user, pass;
-    const bool preferIPv6;
-    const bool needsResolver;
 
     static constexpr int miniTimeout = 333, tinyTimeout = 167, medTimeout = 500, longTimeout = 1000, resolverTimeout = 10000;
 
@@ -98,7 +91,6 @@ private:
     std::unique_ptr<BitcoinD> clients[N_CLIENTS];
 
     BitcoinD *getBitcoinD(); ///< may return nullptr if none are up. Otherwise does a round-robin of the ones present to grab one. to be called only in this thread.
-    void resolveBitcoinDHostname();
 };
 
 class BitcoinD : public RPC::HttpConnection, public ThreadObjectMixin /* NB: also inherits TimersByNameMixin via AbstractConnection base */
@@ -111,7 +103,7 @@ public:
     /// This should work for now since we are on 32MiB max block size on BCH anyway right now.
     static constexpr qint64 BTCD_DEFAULT_MAX_BUFFER = 100*1000*1000;
 
-    explicit BitcoinD(const QHostAddress &host, quint16 port, const QString & user, const QString &pass, qint64 maxBuffer = BTCD_DEFAULT_MAX_BUFFER);
+    explicit BitcoinD(const QString &host, quint16 port, const QString & user, const QString &pass, qint64 maxBuffer = BTCD_DEFAULT_MAX_BUFFER);
     ~BitcoinD() override;
 
     using ThreadObjectMixin::start;
@@ -125,9 +117,6 @@ signals:
     /// or the base class's authFailure() signal.
     void connected(BitcoinD *me);
     void authenticated(BitcoinD *me); ///< This is emitted after we have successfully connected and auth'd.
-
-public slots:
-    void on_BitcoinDIPChanged(const QHostAddress &);
 
 protected:
     void on_started() override;
@@ -143,7 +132,7 @@ protected:
 private:
     void connectMiscSignals(); ///< some signals/slots to self to do bookkeeping
 
-    QHostAddress host;
+    const QString host;
     const quint16 port;
     std::atomic_bool badAuth = false, needAuth = true;
 };
