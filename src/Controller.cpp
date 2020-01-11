@@ -433,6 +433,8 @@ struct SynchMempoolTask : public CtlTask
         txsNeedingDownload.clear(); txsWaitingForResponse.clear();
         txsDownloaded.clear();
         expectedNumTxsDownloaded = 0;
+        // Note: we don't clear "scriptHashesAffected" intentionally in case we are retrying. We want to accumulate
+        // all the droppedTx scripthashes for each retry, so we never clear the set.
     }
 
     void doGetRawMempool();
@@ -627,8 +629,8 @@ void SynchMempoolTask::processResults()
         for (const auto & sh : scriptHashesAffected) {
             if (auto it = mempool.hashXTxs.find(sh); LIKELY(it != mempool.hashXTxs.end()))
                 Util::sortAndUniqueify<Mempool::TxRefOrdering>(it->second);
-            else
-                throw InternalError(QString("Unable to find sh %1 in hashXTXs map! FIXME!").arg(QString(sh.toHex())));
+            /*else // the below is no longer a relevant check as the set may now refer to scripthashes that were dropped as well
+                throw InternalError(QString("Unable to find sh %1 in hashXTXs map! FIXME!").arg(QString(sh.toHex())));*/
         }
 
         newSize = mempool.txs.size();
@@ -724,6 +726,10 @@ void SynchMempoolTask::doGetRawMempool()
                 // Note mempool tx's may have any height in the past because they may not confirm when new blocks arrive...
                 if (tx->height > unsigned(tipHeight)) {
                     Debug() << resp.method << ": tx height " << tx->height << " > current height " <<  tipHeight << ", assuming a new block has arrived, aborting mempool synch ...";
+
+                    // NOTIFICATION of all ...
+                    scriptHashesAffected.merge(Util::keySet<std::unordered_set<TxHash, HashHasher>>(mempool.hashXTxs));
+
                     mempool.clear();
                     emit retryRecommended(); // this is an exit point for this task
                     return;
@@ -747,10 +753,26 @@ void SynchMempoolTask::doGetRawMempool()
                 return;
             }
         }
+
         if (UNLIKELY(!droppedTxs.empty())) {
+            // If tx's were dropped, we clear the mempool and try again. We also enqueue notifications for the dropped
+            // tx's.
             const bool recommendFullRetry = oldCt >= 2 && droppedTxs.size() >= oldCt/2; // more than 50% of the mempool tx's dropped out. something is funny. likely a new block arrived.
-            // TODO here: keep track of notifications?
             Debug() << droppedTxs.size() << " txs dropped from mempool, resetting mempool and trying again ...";
+            // NOTIFICATION
+            if (recommendFullRetry) {
+                // NOTIFICATION of all ...
+                scriptHashesAffected.merge(Util::keySet<std::unordered_set<TxHash, HashHasher>>(mempool.hashXTxs));
+                Debug() << "Will notify for all " << scriptHashesAffected.size() << " addresses of mempool for notificatons ...";
+            } else {
+                // just the dropped tx's
+                for (const auto & txid : droppedTxs) {
+                    const auto & tx = mempool.txs[txid];
+                    if (tx) ///< paranoia / defensive programming.  the above map lookup will always produce a valid TxRef
+                        scriptHashesAffected.merge(Util::keySet<std::unordered_set<TxHash, HashHasher>>(tx->hashXs));
+                }
+                Debug() << "Will notify for " << scriptHashesAffected.size() << " addresses belonging to the dropped tx's for notificatons ...";
+            }
             mempool.clear();
             if (recommendFullRetry) {
                 emit retryRecommended(); // this is an exit point for this task
@@ -760,6 +782,7 @@ void SynchMempoolTask::doGetRawMempool()
             AGAIN();
             return;
         }
+
         if (newCt)
             Debug() << resp.method << ": got reply with " << vm.size() << " items, " << newCt << " new";
         isdlingtxs = true;
@@ -886,11 +909,6 @@ CtlTaskT *Controller::newTask(bool connectErroredSignal, Args && ...args)
     tasks.emplace(task, task);
     if (connectErroredSignal)
         connect(task, &CtlTask::errored, this, &Controller::genericTaskErrored);
-    connect(task, &CtlTask::retryRecommended, this, [this]{ // only the SynchMempoolTask ever emits this
-        if (LIKELY(sm))
-            sm->state = StateMachine::State::Retry;
-        AGAIN();
-    });
     Util::AsyncOnObject(this, [task, this] { // schedule start when we return to our event loop
         if (!isTaskDeleted(task))
             task->start();
@@ -1037,6 +1055,18 @@ void Controller::process(bool beSilentIfUpToDate)
         // ...
         auto task = newTask<SynchMempoolTask>(true, this, storage);
         task->threadObjectDebugLifecycle = Trace::isEnabled(); // suppress verbose lifecycle prints unless trace mode
+        connect(task, &CtlTask::retryRecommended, this, [this, task]{ // only the SynchMempoolTask ever emits this
+            if (LIKELY(sm)) {
+                if (masterNotifySubsFlag && !isTaskDeleted(task) && sm->state == State::SynchingMempool) {
+                    if (auto sz = task->scriptHashesAffected.size(); sz)  {
+                        Debug() << "Enqueueing " << sz << " scripthash notifications from retry of SynchMempool task ...";
+                        storage->subs()->enqueueNotifications(std::move(task->scriptHashesAffected));
+                    }
+                }
+                sm->state = StateMachine::State::Retry;
+            }
+            AGAIN();
+        });
         connect(task, &CtlTask::success, this, [this, task]{
             if (UNLIKELY(!sm || isTaskDeleted(task) || sm->state != State::SynchingMempool))
                 // task was stopped from underneath us and/or this response is stale.. so return and ignore

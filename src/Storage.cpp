@@ -1124,6 +1124,10 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
     // take all locks now.. since this is a Big Deal. TODO: add more locks here?
     std::scoped_lock guard(p->blocksLock, p->headerVerifierLock, p->blkInfoLock, p->mempoolLock);
 
+    if (notify)
+        // mark ALL of mempool for notify so we can properly detect drops that weren't in block but also disappeared from mempool
+        notify->merge(Util::keySet<NotifySet>(p->mempool.hashXTxs));
+
     p->mempool.clear(); // just make sure the mempool is clean
 
     const auto verifUndo = p->headerVerifier; // keep a copy of verifier state for undo purposes in case this fails
@@ -1284,7 +1288,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
             // history is hashX -> TxNumVec (serialized) as a serities of 6-bytes txNums in blockchain order as they appeared.
             if (notify)
                 // first, reserve space for notifications
-                notify->reserve(ppb->hashXAggregated.size());
+                notify->reserve(notify->size() + ppb->hashXAggregated.size());
             rocksdb::WriteBatch batch;
             for (auto & [hashX, ag] : ppb->hashXAggregated) {
                 if (notify) notify->insert(hashX); // fast O(1) insertion because we reserved the right size above.
@@ -1405,6 +1409,10 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
         // take all locks now.. since this is a Big Deal. TODO: add more locks here?
         std::scoped_lock guard(p->blocksLock, p->headerVerifierLock, p->blkInfoLock, p->mempoolLock);
 
+        if (notify)
+            // mark ALL of mempool for notify so we can detect drops that weren't in block but also disappeared from mempool properly
+            notify->merge(Util::keySet<UndoInfo::ScriptHashSet>(p->mempool.hashXTxs));
+
         p->mempool.clear(); // make sure mempool is clean
 
         const auto t0 = Util::getTimeNS();
@@ -1516,8 +1524,12 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
             saveUtxoCt();
             setDirty(false); // phew. done.
 
-            if (notify)
-                notify->swap(undo.scriptHashes);
+            if (notify) {
+                if (notify->empty())
+                    notify->swap(undo.scriptHashes);
+                else
+                    notify->merge(undo.scriptHashes);
+            }
         }
 
         const size_t nTx = undo.blkInfo.nTx, nSH = undo.scriptHashes.size();
