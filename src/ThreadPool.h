@@ -34,6 +34,8 @@ class QThreadPool;
 ///
 /// Each instance of this class internally creates its own QThreadPool instance, thus each instance never conflicts with
 /// other thread pools such as the Qt-provided QThreadPool::globalInstance().
+///
+/// All of the public methods of this class are thread-safe.
 class ThreadPool : public QObject
 {
     Q_OBJECT
