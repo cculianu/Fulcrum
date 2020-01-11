@@ -1,3 +1,4 @@
+ARG cores=1
 FROM ubuntu:bionic
 LABEL maintainer="Axel Gembe <derago@gmail.com>"
 
@@ -14,7 +15,7 @@ RUN apt-get update -y && \
     git fetch --depth 1 origin master && \
     git checkout -b pinned FETCH_HEAD && \
     /opt/qt513/bin/qmake -makefile Fulcrum.pro && \
-    make -j4 install && \
+    make -j ${cores} install && \
     apt-get remove -y git build-essential zlib1g-dev libbz2-dev && \
     apt-get autoremove -y && \
     rm -rf Fulcrum
