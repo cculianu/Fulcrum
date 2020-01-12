@@ -13,6 +13,8 @@ BuildRequires: qt5-qtbase-devel
 BuildRequires: bzip2-devel
 BuildRequires: zlib-devel
 
+Requires(pre): shadow-utils
+
 BuildRequires: systemd systemd-rpm-macros
 %{?systemd_requires}
 
@@ -31,6 +33,13 @@ install -Dm 640 doc/fulcrum-example-config.conf %{buildroot}/%{_sysconfdir}/fulc
 install -Dm 755 Fulcrum %{buildroot}/%{_sbindir}/fulcrum
 install -Dm 644 contrib/rpm/fulcrum.service %{buildroot}/%{_unitdir}/fulcrum.service
 install -dm 750 %{buildroot}/%{_sharedstatedir}/fulcrum
+
+%pre
+getent group fulcrum >/dev/null || groupadd -r fulcrum
+getent passwd fulcrum >/dev/null || \
+    useradd -r -g fulcrum -d %{_sharedstatedir}/fulcrum -s /sbin/nologin \
+    -c "Fulcrum SPV server for Bitcoin Cash" fulcrum
+exit 0
 
 %post
 %systemd_post fulcrum.service
