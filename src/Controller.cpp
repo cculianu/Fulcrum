@@ -402,12 +402,10 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
 }
 
 
-/// We use the "getrawmempool true" (verbose) call to get the initial list of mempool tx's. In pathological cases where
-/// the mempool is extremely full this 1. wastes lots of CPU cycles parsing all that JSON and 2. may hit the limit on
-/// Qt's ability to parse JSON (which is 128MB for the source text). See: https://bugreports.qt.io/browse/QTBUG-47629
-/// For now we will continue to use that call because it provides useful info for detecting reorgs (such as height),
-/// but we may want to think about not using that call and doing it the hard way from the non-verbose version (which
-/// just returns a txhash list).
+/// We use the "getrawmempool false" (nonverbose) call to get the initial list of mempool tx's.  This is the
+/// most efficient.  With fill mempools bitcoind CPU usage could spike to 100% if we use the verbose more.
+/// It turns out we don't need that verbose data anyway (such as a full ancestor count) -- it's enough to have a bool
+/// flag for "has unconfirmed parent tx", and be done with it.  Everything else we can calculate.
 struct SynchMempoolTask : public CtlTask
 {
     SynchMempoolTask(Controller *ctl_, std::shared_ptr<Storage> storage, const std::atomic_bool & notifyFlag)
@@ -577,6 +575,7 @@ void SynchMempoolTask::processResults()
                 QByteArray sh; // shallow copy of prevInfo.hashX
                 if (auto it = mempool.txs.find(prevTxId); it != mempool.txs.end()) {
                     // prev is a mempool tx
+                    tx->hasUnconfirmedParentTx = true; ///< mark the current tx we are processing as having an unconfirmed parent (this is used for sorting later and by the get_mempool & listUnspent code)
                     auto prevTxRef = it->second;
                     assert(bool(prevTxRef));
                     if (prevN >= prevTxRef->txos.size()
@@ -678,6 +677,7 @@ void SynchMempoolTask::doDLNextTx()
             emit errored();
             return;
         }
+        tx->sizeBytes = unsigned(expectedLen); // save size now -- this is needed later to calculate fees and for everything else.
 
         if (TRACE)
             Debug() << "got reply for tx: " << hashHex << " " << txdata.length() << " bytes";
@@ -694,7 +694,7 @@ void SynchMempoolTask::doDLNextTx()
 
 void SynchMempoolTask::doGetRawMempool()
 {
-    submitRequest("getrawmempool", {true}, [this](const RPC::Message & resp){
+    submitRequest("getrawmempool", {false}, [this](const RPC::Message & resp){
         bool clearMempool = false; // this is set below in rare cases at the end of this lamba
         Defer deferredClearMempoolIfNeeded(
             [this, &clearMempool] {
@@ -705,74 +705,36 @@ void SynchMempoolTask::doGetRawMempool()
                     Debug() << "Mempool cleared of " << sz << Util::Pluralize(" tx", sz);
                 }
             });
-        const int tipHeight = storage->latestTip().first;
         int newCt = 0;
-        const QVariantMap vm = resp.result().toMap();
+        const QVariantList txidList = resp.result().toList();
         // Grab the mempool data struct and lock it *shared*.  This improves performance vs. an exclusive lock here.
         // Since we aren't modifying it.. this is fine.  We are the only subsystem that ever modifies it anyway, so
         // invariants will hold regardless.
         auto [mempool, lock] = storage->mempool();
         const auto oldCt = mempool.txs.size();
         auto droppedTxs = Util::keySet<std::unordered_set<TxHash, HashHasher>>(mempool.txs);
-        for (auto it = vm.begin(); it != vm.end(); ++it) {
-            const TxHash hash = Util::ParseHexFast(it.key().toUtf8());
+        for (const auto & var : txidList) {
+            const auto txidHex = var.toString().trimmed().toLower();
+            const TxHash hash = Util::ParseHexFast(txidHex.toUtf8());
             if (hash.length() != HashLen) {
                 Error() << resp.method << ": got an empty tx hash";
                 emit errored();
                 return;
             }
-            droppedTxs.erase(hash); // mark this tx as "not dropped"
-            const QVariantMap m = it.value().toMap();
-            if (m.isEmpty()) {
-                Error() << resp.method << ": got an empty dict for tx hash " << hash.toHex();
-                emit errored();
-                return;
-            }
-            Mempool::TxRef tx;
             static const QVariantList EmptyList; // avoid constructng this for each iteration
             if (auto it = mempool.txs.find(hash); it != mempool.txs.end()) {
-                tx = it->second;
+                droppedTxs.erase(hash); // mark this tx as "not dropped" since it was in the mempool before and is in the mempool now.
                 if (TRACE) Debug() << "Existing mempool tx: " << hash.toHex();
             } else {
                 if (TRACE) Debug() << "New mempool tx: " << hash.toHex();
                 ++newCt;
-                tx = std::make_shared<Mempool::Tx>();
+                Mempool::TxRef tx = std::make_shared<Mempool::Tx>();
                 tx->hashXs.max_load_factor(1.0); // hopefully this will save some memory by expicitly setting it to 1.0
                 tx->hash = hash;
-                tx->sizeBytes = m.value("size", 0).toUInt();
                 // Note: we end up calculating the fee ourselves since I don't trust doubles here. I wish bitcoind would have returned sats.. :(
-                //tx->fee = int64_t(m.value("fee", 0.0).toDouble() * (bitcoin::COIN / bitcoin::Amount::satoshi())) * bitcoin::Amount::satoshi();
-                tx->time = int64_t(m.value("time", 0).toULongLong());
-                tx->height = m.value("height", 0).toUInt();
-                // Note mempool tx's may have any height in the past because they may not confirm when new blocks arrive...
-                if (tx->height > unsigned(tipHeight)) {
-                    Debug() << resp.method << ": tx height " << tx->height << " > current height " <<  tipHeight << ", assuming a new block has arrived, aborting mempool synch ...";
-
-                    // NOTIFICATION of all ...
-                    scriptHashesAffected.merge(Util::keySet<decltype(scriptHashesAffected)>(mempool.hashXTxs));
-
-                    clearMempool = true; // Defer object above will clear the mempool upon return (it will grab the lock again exclusively)
-                    emit retryRecommended(); // this is an exit point for this task
-                    return;
-                }
-                // save ancestor count exactly once. this should never change unless there is a reorg, at which point
-                // our in-mempory mempool is wiped anyway.
-                tx->ancestorCount = m.value("ancestorcount", 0).toUInt();
-                if (!tx->ancestorCount) {
-                    Error() << resp.method << ": failed to parse ancestor count for tx " << hash.toHex();
-                    emit errored();
-                    return;
-                }
                 txsNeedingDownload[hash] = tx;
             }
             // at this point we have a valid tx ptr
-            // update descendantCount since it may change as new tx's appear in mempool
-            tx->descendantCount = m.value("descendantcount", 0).toUInt();
-            if (!tx->descendantCount) {
-                Error() << resp.method << ": failed to parse descendant count for tx " << hash.toHex();
-                emit errored();
-                return;
-            }
         }
 
         if (UNLIKELY(!droppedTxs.empty())) {
@@ -807,7 +769,7 @@ void SynchMempoolTask::doGetRawMempool()
         }
 
         if (newCt)
-            Debug() << resp.method << ": got reply with " << vm.size() << " items, " << newCt << " new";
+            Debug() << resp.method << ": got reply with " << txidList.size() << " items, " << newCt << " new";
         isdlingtxs = true;
         expectedNumTxsDownloaded = unsigned(newCt);
         // TX data will be downloaded now, if needed
@@ -1424,10 +1386,7 @@ auto Controller::debug(const StatsParams &p) const -> Stats // from StatsMixin
             m["hash"] = tx->hash.toHex();
             m["sizeBytes"] = tx->sizeBytes;
             m["fee"] = tx->fee.ToString().c_str();
-            m["time"] = qlonglong(tx->time);
-            m["height"] = unsigned(tx->height);
-            m["ancestorCount"] = tx->ancestorCount;
-            m["descendantCount"] = tx->descendantCount;
+            m["hasUnconfirmedParentTx"] = tx->hasUnconfirmedParentTx;
             static const auto TXOInfo2Map = [](const TXOInfo &info) -> QVariantMap {
                 return QVariantMap{
                     { "amount", QString::fromStdString(info.amount.ToString()) },

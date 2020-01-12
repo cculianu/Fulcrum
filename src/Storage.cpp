@@ -1710,7 +1710,7 @@ auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf) const -> H
                 }
                 ret.reserve(total);
                 for (const auto & tx : txvec)
-                    ret.emplace_back(HistoryItem{tx->hash, tx->ancestorCount > 1 ? -1 : 0, tx->fee});
+                    ret.emplace_back(HistoryItem{tx->hash, tx->hasUnconfirmedParentTx ? -1 : 0, tx->fee});
             }
         }
     } catch (const std::exception &e) {
@@ -1795,7 +1795,7 @@ auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
                                         { tx->hash, 0 /* always put 0 for height here */, tx->fee }, // base HistoryItem
                                         ionum, // .tx_pos
                                         it3->amount,  // .value
-                                        TxNum(1) + maxTxNumSeen + TxNum(tx->ancestorCount), // .txNum (this is fudged for sorting at the end properly)
+                                        TxNum(1) + maxTxNumSeen + TxNum(tx->hasUnconfirmedParentTx ? 1 : 0), // .txNum (this is fudged for sorting at the end properly)
                                     });
                                     if (UNLIKELY(ret.size() > maxHistory)) {
                                         throw HistoryTooLarge(QString("Unspent history too large for %1, exceeds MaxHistory of %2")
