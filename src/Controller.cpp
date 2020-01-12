@@ -443,12 +443,13 @@ struct SynchMempoolTask : public CtlTask
 };
 
 SynchMempoolTask::~SynchMempoolTask() {
+    stop(); // paranoia
     if (!scriptHashesAffected.empty() && notifyFlag.load()) // this is false until Controller enables the servers that listen for connections
         // notify status change for affected sh's, regardless of how this task exited (this catches corner cases
         // where we queued up some notifications and then we died on a retry due to errors from bitcoind)
         storage->subs()->enqueueNotifications(std::move(scriptHashesAffected));
-    stop();
-} // paranoia
+
+}
 
 void SynchMempoolTask::process()
 {
