@@ -410,13 +410,14 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
 /// just returns a txhash list).
 struct SynchMempoolTask : public CtlTask
 {
-    SynchMempoolTask(Controller *ctl_, std::shared_ptr<Storage> storage)
-        : CtlTask(ctl_, "SynchMempool"), storage(storage)
+    SynchMempoolTask(Controller *ctl_, std::shared_ptr<Storage> storage, const std::atomic_bool & notifyFlag)
+        : CtlTask(ctl_, "SynchMempool"), storage(storage), notifyFlag(notifyFlag)
         { scriptHashesAffected.reserve(SubsMgr::kRecommendedPendingNotificationsReserveSize); }
     ~SynchMempoolTask() override;
     void process() override;
 
-    std::shared_ptr<Storage> storage;
+    const std::shared_ptr<Storage> storage;
+    const std::atomic_bool & notifyFlag;
     bool isdlingtxs = false;
     Mempool::TxMap txsNeedingDownload, txsWaitingForResponse;
     using DldTxsMap = robin_hood::unordered_flat_map<TxHash, std::pair<Mempool::TxRef, bitcoin::CTransactionRef>, HashHasher>;
@@ -441,7 +442,13 @@ struct SynchMempoolTask : public CtlTask
     void processResults();
 };
 
-SynchMempoolTask::~SynchMempoolTask() { stop(); } // paranoia
+SynchMempoolTask::~SynchMempoolTask() {
+    if (!scriptHashesAffected.empty() && notifyFlag.load()) // this is false until Controller enables the servers that listen for connections
+        // notify status change for affected sh's, regardless of how this task exited (this catches corner cases
+        // where we queued up some notifications and then we died on a retry due to errors from bitcoind)
+        storage->subs()->enqueueNotifications(std::move(scriptHashesAffected));
+    stop();
+} // paranoia
 
 void SynchMempoolTask::process()
 {
@@ -687,15 +694,23 @@ void SynchMempoolTask::doDLNextTx()
 void SynchMempoolTask::doGetRawMempool()
 {
     submitRequest("getrawmempool", {true}, [this](const RPC::Message & resp){
-        // TODO: A possible optimization here that's a low-hanging fruit would be to *NOT* lock the mempool
-        // exclusively here.  We only really ever modify it for clearing (which happens only if there were drops or
-        // a new block) -- we could instead lock it shared, and in the rare cases we clear, clear before returning
-        // if a flag is set (and grab the exclusive lock only then).  This would improve concurrency for the common
-        // case where clients also want to see the mempool for history and we are iterating here.  TODO
+        bool clearMempool = false; // this is set below in rare cases at the end of this lamba
+        Defer deferredClearMempoolIfNeeded(
+            [this, &clearMempool] {
+                if (clearMempool) {
+                    auto [mempool, lock] = storage->mutableMempool(); // take the lock exclusively here
+                    const auto sz = mempool.txs.size();
+                    mempool.clear();
+                    Debug() << "Mempool cleared of " << sz << Util::Pluralize(" tx", sz);
+                }
+            });
         const int tipHeight = storage->latestTip().first;
         int newCt = 0;
         const QVariantMap vm = resp.result().toMap();
-        auto [mempool, lock] = storage->mutableMempool(); // grab the mempool data struct and lock it exclusively
+        // Grab the mempool data struct and lock it *shared*.  This improves performance vs. an exclusive lock here.
+        // Since we aren't modifying it.. this is fine.  We are the only subsystem that ever modifies it anyway, so
+        // invariants will hold regardless.
+        auto [mempool, lock] = storage->mempool();
         const auto oldCt = mempool.txs.size();
         auto droppedTxs = Util::keySet<std::unordered_set<TxHash, HashHasher>>(mempool.txs);
         for (auto it = vm.begin(); it != vm.end(); ++it) {
@@ -723,7 +738,6 @@ void SynchMempoolTask::doGetRawMempool()
                 tx = std::make_shared<Mempool::Tx>();
                 tx->hashXs.max_load_factor(1.0); // hopefully this will save some memory by expicitly setting it to 1.0
                 tx->hash = hash;
-                tx->ordinal = mempool.nextOrdinal++;
                 tx->sizeBytes = m.value("size", 0).toUInt();
                 // Note: we end up calculating the fee ourselves since I don't trust doubles here. I wish bitcoind would have returned sats.. :(
                 //tx->fee = int64_t(m.value("fee", 0.0).toDouble() * (bitcoin::COIN / bitcoin::Amount::satoshi())) * bitcoin::Amount::satoshi();
@@ -736,7 +750,7 @@ void SynchMempoolTask::doGetRawMempool()
                     // NOTIFICATION of all ...
                     scriptHashesAffected.merge(Util::keySet<decltype(scriptHashesAffected)>(mempool.hashXTxs));
 
-                    mempool.clear();
+                    clearMempool = true; // Defer object above will clear the mempool upon return (it will grab the lock again exclusively)
                     emit retryRecommended(); // this is an exit point for this task
                     return;
                 }
@@ -773,13 +787,15 @@ void SynchMempoolTask::doGetRawMempool()
             } else {
                 // just the dropped tx's
                 for (const auto & txid : droppedTxs) {
-                    const auto & tx = mempool.txs[txid];
-                    if (tx) ///< paranoia / defensive programming.  the above map lookup will always produce a valid TxRef
-                        scriptHashesAffected.merge(Util::keySet<decltype(scriptHashesAffected)>(tx->hashXs));
+                    if (auto it = mempool.txs.find(txid); it != mempool.txs.end()) {
+                        const auto & tx = it->second;
+                        if (tx) // paranoia: tx will always be a valid reference.
+                            scriptHashesAffected.merge(Util::keySet<decltype(scriptHashesAffected)>(tx->hashXs));
+                    }
                 }
                 Debug() << "Will notify for " << scriptHashesAffected.size() << " addresses belonging to the dropped tx's for notificatons ...";
             }
-            mempool.clear();
+            clearMempool = true; // Defer object at top of this lamba above will clear the mempool on function return (taking an exclusive lock) if this is true.
             if (recommendFullRetry) {
                 emit retryRecommended(); // this is an exit point for this task
                 return;
@@ -902,8 +918,7 @@ void Controller::add_DLHeaderTask(unsigned int from, unsigned int to, size_t nTa
 void Controller::genericTaskErrored()
 {
     if (sm && sm->state != StateMachine::State::Failure) {
-        if (LIKELY(sm))
-            sm->state = StateMachine::State::Failure;
+        sm->state = StateMachine::State::Failure;
         AGAIN();
     }
 }
@@ -915,6 +930,11 @@ CtlTaskT *Controller::newTask(bool connectErroredSignal, Args && ...args)
     tasks.emplace(task, task);
     if (connectErroredSignal)
         connect(task, &CtlTask::errored, this, &Controller::genericTaskErrored);
+    connect(task, &CtlTask::retryRecommended, this, [this]{  // only the SynchMempoolTask ever emits this.
+        if (LIKELY(sm))
+            sm->state = StateMachine::State::Retry;
+        AGAIN();
+    });
     Util::AsyncOnObject(this, [task, this] { // schedule start when we return to our event loop
         if (!isTaskDeleted(task))
             task->start();
@@ -1058,27 +1078,12 @@ void Controller::process(bool beSilentIfUpToDate)
         emit synchFailure();
     } else if (sm->state == State::SynchMempool) {
         // ...
-        auto task = newTask<SynchMempoolTask>(true, this, storage);
+        auto task = newTask<SynchMempoolTask>(true, this, storage, masterNotifySubsFlag);
         task->threadObjectDebugLifecycle = Trace::isEnabled(); // suppress verbose lifecycle prints unless trace mode
-        connect(task, &CtlTask::retryRecommended, this, [this, task]{ // only the SynchMempoolTask ever emits this
-            if (LIKELY(sm)) {
-                if (masterNotifySubsFlag && !isTaskDeleted(task) && sm->state == State::SynchingMempool) {
-                    if (auto sz = task->scriptHashesAffected.size(); sz)  {
-                        Debug() << "Enqueueing " << sz << " scripthash notifications from retry of SynchMempool task ...";
-                        storage->subs()->enqueueNotifications(std::move(task->scriptHashesAffected));
-                    }
-                }
-                sm->state = StateMachine::State::Retry;
-            }
-            AGAIN();
-        });
         connect(task, &CtlTask::success, this, [this, task]{
             if (UNLIKELY(!sm || isTaskDeleted(task) || sm->state != State::SynchingMempool))
                 // task was stopped from underneath us and/or this response is stale.. so return and ignore
                 return;
-            if (masterNotifySubsFlag) // this is false until we enable the servers that listen for connections
-                // notify status change for affected sh's
-                storage->subs()->enqueueNotifications(std::move(task->scriptHashesAffected));
             sm->state = State::SynchMempoolFinished;
             AGAIN();
         });
@@ -1412,7 +1417,6 @@ auto Controller::debug(const StatsParams &p) const -> Stats // from StatsMixin
             if (!tx) continue;
             QVariantMap m;
             m["hash"] = tx->hash.toHex();
-            m["ordinal"] = tx->ordinal;
             m["sizeBytes"] = tx->sizeBytes;
             m["fee"] = tx->fee.ToString().c_str();
             m["time"] = qlonglong(tx->time);

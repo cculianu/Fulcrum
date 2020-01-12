@@ -42,7 +42,6 @@ struct Mempool
     struct Tx
     {
         TxHash hash; ///< in reverse bitcoind order (ready for hex encode), fixed value.
-        unsigned ordinal = 0; ///< used to keep track of the order this tx appeared in the mempool from bitcoind. Not particularly useful.
         unsigned sizeBytes = 0;
         bitcoin::Amount fee{bitcoin::Amount::zero()}; ///< we calculate this fee ourselves since in the past I noticed we get a funny value sometimes that's off by 1 or 2 sats --  which I suspect is due limitations of doubles, perhaps?
         int64_t time = 0; ///< fixed (does not change during lifetime of a Tx instance)
@@ -73,9 +72,6 @@ struct Mempool
         };
 
         bool operator<(const Tx &o) const {
-            /*if (ordinal != o.ordinal) // <-- this doesn't seem to do anything useful, so disabled.
-                return ordinal < o.ordinal;
-            else*/
             if (ancestorCount != o.ancestorCount)
                 return ancestorCount < o.ancestorCount;
             else if (height != o.height)
@@ -115,7 +111,6 @@ struct Mempool
     // -- Data members of struct Mempool --
     TxMap txs;
     HashXTxMap hashXTxs;
-    unsigned nextOrdinal = 0; ///< used to keep track of the order of new tx's appearing from bitcoind for possible sorting based on natural bitcoind order
 
     inline void clear() {
         // Enforce a little hysteresis about what sizes we may need in the future; reserve 75% of the last size we saw.
@@ -129,7 +124,6 @@ struct Mempool
         hashXTxs.clear();
         txs.reserve(size_t(txsSize*0.75));
         hashXTxs.reserve(size_t(hxSize*0.75));
-        nextOrdinal = 0;
     }
 
     // -- Fee histogram support (used by mempool.get_fee_histogram RPC) --
