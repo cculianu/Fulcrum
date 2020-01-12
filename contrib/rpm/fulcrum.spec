@@ -24,7 +24,12 @@ BuildRequires: zlib-devel
 %make_build
 
 %install
-%make_install
+install -Dm 640 doc/fulcrum-example-config.conf %{buildroot}/%{_sysconfdir}/fulcrum.conf
+install -Dm 755 Fulcrum %{buildroot}/%{_sbindir}/fulcrum
+
+%files
+%{_sysconfdir}/fulcrum.conf
+%{_sbindir}/fulcrum
 
 %changelog
 {{{ git_dir_changelog }}}
