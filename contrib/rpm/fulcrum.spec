@@ -51,7 +51,7 @@ exit 0
 %systemd_postun_with_restart fulcrum.service
 
 %files
-%{_sysconfdir}/fulcrum.conf
+%config %attr(640, root, fulcrum) %{_sysconfdir}/fulcrum.conf
 %{_bindir}/fulcrum
 %{_sharedstatedir}/fulcrum
 %{_unitdir}/fulcrum.service
