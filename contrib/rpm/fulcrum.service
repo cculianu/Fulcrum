@@ -1,0 +1,9 @@
+[Unit]
+Description=Fulcrum SPV server for Bitcoin Cash
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/fulcrum --datadir /var/lib/fulcrum
+
+[Install]
+WantedBy=multi-user.target
