@@ -834,7 +834,7 @@ struct Controller::StateMachine
     // todo: tune this
     const size_t DL_CONCURRENCY = qMax(Util::getNPhysicalProcessors()-1, 1U);//size_t(qMin(qMax(int(Util::getNPhysicalProcessors())-BitcoinDMgr::N_CLIENTS, BitcoinDMgr::N_CLIENTS), 32));
 
-    size_t nTx = 0, nIns = 0, nOuts = 0;
+    size_t nTx = 0, nIns = 0, nOuts = 0, nSH = 0;
 
     const char * stateStr() const {
         static constexpr const char *stateStrings[] = { "Begin", "WaitingForChainInfo", "GetBlocks", "DownloadingBlocks",
@@ -900,13 +900,10 @@ void Controller::add_DLHeaderTask(unsigned int from, unsigned int to, size_t nTa
 {
     DownloadBlocksTask *t = newTask<DownloadBlocksTask>(false, unsigned(from), unsigned(to), unsigned(nTasks), this);
     connect(t, &CtlTask::success, this, [t, this]{
-        if (UNLIKELY(!sm || isTaskDeleted(t))) return; // task was stopped from underneath us, this is stale.. abort.
-        sm->nTx += t->nTx;
-        sm->nIns += t->nIns;
-        sm->nOuts += t->nOuts;
+        // NOTE: this callback is sometimes delivered after the sm has been reset(), so we don't check or use it here.
+        if (UNLIKELY(isTaskDeleted(t))) return; // task was stopped from underneath us, this is stale.. abort.
         Debug() << "Got all blocks from: " << t->objectName() << " blockCt: "  << t->goodCt
-                << " nTx,nInp,nOutp: " << t->nTx << "," << t->nIns << "," << t->nOuts << " totals: "
-                << sm->nTx << "," << sm->nIns << "," << sm->nOuts;
+                << " nTx,nInp,nOutp: " << t->nTx << "," << t->nIns << "," << t->nOuts;
     });
     connect(t, &CtlTask::errored, this, [t, this]{
         if (UNLIKELY(!sm || isTaskDeleted(t))) return; // task was stopped from underneath us, this is stale.. abort.
@@ -1038,7 +1035,8 @@ void Controller::process(bool beSilentIfUpToDate)
     } else if (sm->state == State::FinishedDL) {
         size_t N = sm->endHeight - sm->startheight + 1;
         Log() << "Processed " << N << " new " << Util::Pluralize("block", N) << " with " << sm->nTx << " " << Util::Pluralize("tx", sm->nTx)
-              << " (" << sm->nIns << " " << Util::Pluralize("input", sm->nIns) << " & " << sm->nOuts << " " << Util::Pluralize("output", sm->nOuts) << ")"
+              << " (" << sm->nIns << " " << Util::Pluralize("input", sm->nIns) << ", " << sm->nOuts << " " << Util::Pluralize("output", sm->nOuts)
+              << ", " << sm->nSH << Util::Pluralize(" address", sm->nSH) << ")"
               << ", verified ok.";
         {
             std::lock_guard g(smLock);
@@ -1115,12 +1113,18 @@ void Controller::on_putBlock(CtlTask *task, PreProcessedBlockPtr p)
     process_DownloadingBlocks();
 }
 
-void Controller::process_PrintProgress(unsigned height, size_t nTx, size_t nIO)
+void Controller::process_PrintProgress(unsigned height, size_t nTx, size_t nIns, size_t nOuts, size_t nSH)
 {
     if (UNLIKELY(!sm)) return; // paranoia
     sm->nProgBlocks++;
+
+    sm->nTx += nTx;
+    sm->nIns += nIns;
+    sm->nOuts += nOuts;
+    sm->nSH += nSH;
+
     sm->nProgTx += nTx;
-    sm->nProgIOs += nIO;
+    sm->nProgIOs += nIns + nOuts;
     if (UNLIKELY(height && !(height % sm->progressIntervalBlocks))) {
         static const auto formatRate = [](double rate, const QString & thing, bool addComma = true) {
             QString unit = "sec";
@@ -1164,7 +1168,7 @@ void Controller::process_DownloadingBlocks()
             // error encountered.. abort!
             return;
 
-        process_PrintProgress(ppb->height, ppb->txInfos.size(), ppb->inputs.size()+ppb->outputs.size());
+        process_PrintProgress(ppb->height, ppb->txInfos.size(), ppb->inputs.size(), ppb->outputs.size(), ppb->hashXAggregated.size());
 
         if (sm->ppBlkHtNext > sm->endHeight) {
             sm->state = StateMachine::State::FinishedDL;
