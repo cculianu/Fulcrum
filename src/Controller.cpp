@@ -687,6 +687,11 @@ void SynchMempoolTask::doDLNextTx()
 void SynchMempoolTask::doGetRawMempool()
 {
     submitRequest("getrawmempool", {true}, [this](const RPC::Message & resp){
+        // TODO: A possible optimization here that's a low-hanging fruit would be to *NOT* lock the mempool
+        // exclusively here.  We only really ever modify it for clearing (which happens only if there were drops or
+        // a new block) -- we could instead lock it shared, and in the rare cases we clear, clear before returning
+        // if a flag is set (and grab the exclusive lock only then).  This would improve concurrency for the common
+        // case where clients also want to see the mempool for history and we are iterating here.  TODO
         const int tipHeight = storage->latestTip().first;
         int newCt = 0;
         const QVariantMap vm = resp.result().toMap();
