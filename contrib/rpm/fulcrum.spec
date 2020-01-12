@@ -30,7 +30,7 @@ BuildRequires: systemd systemd-rpm-macros
 
 %install
 install -Dm 640 doc/fulcrum-example-config.conf %{buildroot}/%{_sysconfdir}/fulcrum.conf
-install -Dm 755 Fulcrum %{buildroot}/%{_sbindir}/fulcrum
+install -Dm 755 Fulcrum %{buildroot}/%{_bindir}/fulcrum
 install -Dm 644 contrib/rpm/fulcrum.service %{buildroot}/%{_unitdir}/fulcrum.service
 install -dm 750 %{buildroot}/%{_sharedstatedir}/fulcrum
 
@@ -52,7 +52,7 @@ exit 0
 
 %files
 %{_sysconfdir}/fulcrum.conf
-%{_sbindir}/fulcrum
+%{_bindir}/fulcrum
 %{_sharedstatedir}/fulcrum
 %{_unitdir}/fulcrum.service
 
