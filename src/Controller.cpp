@@ -629,8 +629,10 @@ void SynchMempoolTask::processResults()
         for (const auto & sh : scriptHashesAffected) {
             if (auto it = mempool.hashXTxs.find(sh); LIKELY(it != mempool.hashXTxs.end()))
                 Util::sortAndUniqueify<Mempool::TxRefOrdering>(it->second);
-            /*else // the below is no longer a relevant check as the set may now refer to scripthashes that were dropped as well
-                throw InternalError(QString("Unable to find sh %1 in hashXTXs map! FIXME!").arg(QString(sh.toHex())));*/
+            //else {}
+            // Note: It's possible for the scriptHashesAffected set to refer to sh's no longer in the mempool because
+            // we sometimes retry this task when we detect mempool drops, with the scriptHasesAffected set containing
+            // the dropped address hashes.  This is why the if conditional above exists.
         }
 
         newSize = mempool.txs.size();
@@ -728,7 +730,7 @@ void SynchMempoolTask::doGetRawMempool()
                     Debug() << resp.method << ": tx height " << tx->height << " > current height " <<  tipHeight << ", assuming a new block has arrived, aborting mempool synch ...";
 
                     // NOTIFICATION of all ...
-                    scriptHashesAffected.merge(Util::keySet<std::unordered_set<TxHash, HashHasher>>(mempool.hashXTxs));
+                    scriptHashesAffected.merge(Util::keySet<decltype(scriptHashesAffected)>(mempool.hashXTxs));
 
                     mempool.clear();
                     emit retryRecommended(); // this is an exit point for this task
@@ -762,14 +764,14 @@ void SynchMempoolTask::doGetRawMempool()
             // NOTIFICATION
             if (recommendFullRetry) {
                 // NOTIFICATION of all ...
-                scriptHashesAffected.merge(Util::keySet<std::unordered_set<TxHash, HashHasher>>(mempool.hashXTxs));
+                scriptHashesAffected.merge(Util::keySet<decltype(scriptHashesAffected)>(mempool.hashXTxs));
                 Debug() << "Will notify for all " << scriptHashesAffected.size() << " addresses of mempool for notificatons ...";
             } else {
                 // just the dropped tx's
                 for (const auto & txid : droppedTxs) {
                     const auto & tx = mempool.txs[txid];
                     if (tx) ///< paranoia / defensive programming.  the above map lookup will always produce a valid TxRef
-                        scriptHashesAffected.merge(Util::keySet<std::unordered_set<TxHash, HashHasher>>(tx->hashXs));
+                        scriptHashesAffected.merge(Util::keySet<decltype(scriptHashesAffected)>(tx->hashXs));
                 }
                 Debug() << "Will notify for " << scriptHashesAffected.size() << " addresses belonging to the dropped tx's for notificatons ...";
             }
