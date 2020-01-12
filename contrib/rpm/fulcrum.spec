@@ -53,7 +53,7 @@ exit 0
 %files
 %config %attr(640, root, fulcrum) %{_sysconfdir}/fulcrum.conf
 %{_bindir}/fulcrum
-%{_sharedstatedir}/fulcrum
+%attr(700, fulcrum, fulcrum) %{_sharedstatedir}/fulcrum
 %{_unitdir}/fulcrum.service
 
 %changelog
