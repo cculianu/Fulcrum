@@ -171,7 +171,6 @@ void Controller::cleanup()
 
 /// Encapsulates basically the data returned from bitcoind by the getblockchaininfo RPC method.
 /// This has been separated out into its own struct for future use to detect blockchain changes.
-/// TODO: Refactor this out to storage, etc to detect when blockchain changed.
 struct ChainInfo {
     QString toString() const;
 
@@ -284,7 +283,7 @@ struct DownloadBlocksTask : public CtlTask
     const bool TRACE = Trace::isEnabled();
 
     int q_ct = 0;
-    static constexpr int max_q = /*16;*/BitcoinDMgr::N_CLIENTS+1; // todo: tune this
+    static constexpr int max_q = BitcoinDMgr::N_CLIENTS+1; // todo: tune this
 
     static const int HEADER_SIZE;
 
@@ -956,7 +955,6 @@ void Controller::process(bool beSilentIfUpToDate)
             }
             sm->isMainNet = task->info.chain == "main";
             QByteArray tipHeader;
-            // TODO: detect reorgs here -- to be implemented later after we figure out data model more, etc.
             const auto [tip, tipHash] = storage->latestTip(&tipHeader);
             sm->ht = task->info.blocks;
             if (tip == sm->ht) {
