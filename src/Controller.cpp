@@ -16,12 +16,14 @@
 // along with this program (see LICENSE.txt).  If not, see
 // <https://www.gnu.org/licenses/>.
 //
+#include "App.h"
 #include "BlockProc.h"
 #include "BTC.h"
 #include "Controller.h"
 #include "Mempool.h"
 #include "Merkle.h"
 #include "SubsMgr.h"
+#include "ThreadPool.h"
 #include "TXO.h"
 
 #include "bitcoin/transaction.h"
@@ -55,7 +57,7 @@ void Controller::startup()
     storage = std::make_shared<Storage>(options);
     storage->startup(); // may throw here
 
-    bitcoindmgr = std::make_shared<BitcoinDMgr>(options->bitcoind.first, options->bitcoind.second, options->rpcuser, options->rpcpassword, options->hasIPv6Listener);
+    bitcoindmgr = std::make_shared<BitcoinDMgr>(options->bitcoind.first, options->bitcoind.second, options->rpcuser, options->rpcpassword);
     {
         auto constexpr waitTimer = "wait4bitcoind", callProcessTimer = "callProcess";
         int constexpr msgPeriod = 10000, // 10sec
@@ -169,7 +171,6 @@ void Controller::cleanup()
 
 /// Encapsulates basically the data returned from bitcoind by the getblockchaininfo RPC method.
 /// This has been separated out into its own struct for future use to detect blockchain changes.
-/// TODO: Refactor this out to storage, etc to detect when blockchain changed.
 struct ChainInfo {
     QString toString() const;
 
@@ -282,7 +283,7 @@ struct DownloadBlocksTask : public CtlTask
     const bool TRACE = Trace::isEnabled();
 
     int q_ct = 0;
-    static constexpr int max_q = /*16;*/BitcoinDMgr::N_CLIENTS+1; // todo: tune this
+    static constexpr int max_q = BitcoinDMgr::N_CLIENTS+1; // todo: tune this
 
     static const int HEADER_SIZE;
 
@@ -401,21 +402,20 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
 }
 
 
-/// We use the "getrawmempool true" (verbose) call to get the initial list of mempool tx's. In pathological cases where
-/// the mempool is extremely full this 1. wastes lots of CPU cycles parsing all that JSON and 2. may hit the limit on
-/// Qt's ability to parse JSON (which is 128MB for the source text). See: https://bugreports.qt.io/browse/QTBUG-47629
-/// For now we will continue to use that call because it provides useful info for detecting reorgs (such as height),
-/// but we may want to think about not using that call and doing it the hard way from the non-verbose version (which
-/// just returns a txhash list).
+/// We use the "getrawmempool false" (nonverbose) call to get the initial list of mempool tx's.  This is the
+/// most efficient.  With fill mempools bitcoind CPU usage could spike to 100% if we use the verbose more.
+/// It turns out we don't need that verbose data anyway (such as a full ancestor count) -- it's enough to have a bool
+/// flag for "has unconfirmed parent tx", and be done with it.  Everything else we can calculate.
 struct SynchMempoolTask : public CtlTask
 {
-    SynchMempoolTask(Controller *ctl_, std::shared_ptr<Storage> storage)
-        : CtlTask(ctl_, "SynchMempool"), storage(storage)
+    SynchMempoolTask(Controller *ctl_, std::shared_ptr<Storage> storage, const std::atomic_bool & notifyFlag)
+        : CtlTask(ctl_, "SynchMempool"), storage(storage), notifyFlag(notifyFlag)
         { scriptHashesAffected.reserve(SubsMgr::kRecommendedPendingNotificationsReserveSize); }
     ~SynchMempoolTask() override;
     void process() override;
 
-    std::shared_ptr<Storage> storage;
+    const std::shared_ptr<Storage> storage;
+    const std::atomic_bool & notifyFlag;
     bool isdlingtxs = false;
     Mempool::TxMap txsNeedingDownload, txsWaitingForResponse;
     using DldTxsMap = robin_hood::unordered_flat_map<TxHash, std::pair<Mempool::TxRef, bitcoin::CTransactionRef>, HashHasher>;
@@ -431,6 +431,8 @@ struct SynchMempoolTask : public CtlTask
         txsNeedingDownload.clear(); txsWaitingForResponse.clear();
         txsDownloaded.clear();
         expectedNumTxsDownloaded = 0;
+        // Note: we don't clear "scriptHashesAffected" intentionally in case we are retrying. We want to accumulate
+        // all the droppedTx scripthashes for each retry, so we never clear the set.
     }
 
     void doGetRawMempool();
@@ -438,7 +440,14 @@ struct SynchMempoolTask : public CtlTask
     void processResults();
 };
 
-SynchMempoolTask::~SynchMempoolTask() { stop(); } // paranoia
+SynchMempoolTask::~SynchMempoolTask() {
+    stop(); // paranoia
+    if (!scriptHashesAffected.empty() && notifyFlag.load()) // this is false until Controller enables the servers that listen for connections
+        // notify status change for affected sh's, regardless of how this task exited (this catches corner cases
+        // where we queued up some notifications and then we died on a retry due to errors from bitcoind)
+        storage->subs()->enqueueNotifications(std::move(scriptHashesAffected));
+
+}
 
 void SynchMempoolTask::process()
 {
@@ -566,6 +575,7 @@ void SynchMempoolTask::processResults()
                 QByteArray sh; // shallow copy of prevInfo.hashX
                 if (auto it = mempool.txs.find(prevTxId); it != mempool.txs.end()) {
                     // prev is a mempool tx
+                    tx->hasUnconfirmedParentTx = true; ///< mark the current tx we are processing as having an unconfirmed parent (this is used for sorting later and by the get_mempool & listUnspent code)
                     auto prevTxRef = it->second;
                     assert(bool(prevTxRef));
                     if (prevN >= prevTxRef->txos.size()
@@ -625,8 +635,10 @@ void SynchMempoolTask::processResults()
         for (const auto & sh : scriptHashesAffected) {
             if (auto it = mempool.hashXTxs.find(sh); LIKELY(it != mempool.hashXTxs.end()))
                 Util::sortAndUniqueify<Mempool::TxRefOrdering>(it->second);
-            else
-                throw InternalError(QString("Unable to find sh %1 in hashXTXs map! FIXME!").arg(QString(sh.toHex())));
+            //else {}
+            // Note: It's possible for the scriptHashesAffected set to refer to sh's no longer in the mempool because
+            // we sometimes retry this task when we detect mempool drops, with the scriptHasesAffected set containing
+            // the dropped address hashes.  This is why the if conditional above exists.
         }
 
         newSize = mempool.txs.size();
@@ -665,6 +677,7 @@ void SynchMempoolTask::doDLNextTx()
             emit errored();
             return;
         }
+        tx->sizeBytes = unsigned(expectedLen); // save size now -- this is needed later to calculate fees and for everything else.
 
         if (TRACE)
             Debug() << "got reply for tx: " << hashHex << " " << txdata.length() << " bytes";
@@ -681,75 +694,71 @@ void SynchMempoolTask::doDLNextTx()
 
 void SynchMempoolTask::doGetRawMempool()
 {
-    submitRequest("getrawmempool", {true}, [this](const RPC::Message & resp){
-        const int tipHeight = storage->latestTip().first;
+    submitRequest("getrawmempool", {false}, [this](const RPC::Message & resp){
+        bool clearMempool = false; // this is set below in rare cases at the end of this lamba
+        Defer deferredClearMempoolIfNeeded(
+            [this, &clearMempool] {
+                if (clearMempool) {
+                    auto [mempool, lock] = storage->mutableMempool(); // take the lock exclusively here
+                    const auto sz = mempool.txs.size();
+                    mempool.clear();
+                    Debug() << "Mempool cleared of " << sz << Util::Pluralize(" tx", sz);
+                }
+            });
         int newCt = 0;
-        const QVariantMap vm = resp.result().toMap();
-        auto [mempool, lock] = storage->mutableMempool(); // grab the mempool data struct and lock it exclusively
+        const QVariantList txidList = resp.result().toList();
+        // Grab the mempool data struct and lock it *shared*.  This improves performance vs. an exclusive lock here.
+        // Since we aren't modifying it.. this is fine.  We are the only subsystem that ever modifies it anyway, so
+        // invariants will hold regardless.
+        auto [mempool, lock] = storage->mempool();
         const auto oldCt = mempool.txs.size();
         auto droppedTxs = Util::keySet<std::unordered_set<TxHash, HashHasher>>(mempool.txs);
-        for (auto it = vm.begin(); it != vm.end(); ++it) {
-            const TxHash hash = Util::ParseHexFast(it.key().toUtf8());
+        for (const auto & var : txidList) {
+            const auto txidHex = var.toString().trimmed().toLower();
+            const TxHash hash = Util::ParseHexFast(txidHex.toUtf8());
             if (hash.length() != HashLen) {
                 Error() << resp.method << ": got an empty tx hash";
                 emit errored();
                 return;
             }
-            droppedTxs.erase(hash); // mark this tx as "not dropped"
-            const QVariantMap m = it.value().toMap();
-            if (m.isEmpty()) {
-                Error() << resp.method << ": got an empty dict for tx hash " << hash.toHex();
-                emit errored();
-                return;
-            }
-            Mempool::TxRef tx;
             static const QVariantList EmptyList; // avoid constructng this for each iteration
             if (auto it = mempool.txs.find(hash); it != mempool.txs.end()) {
-                tx = it->second;
+                droppedTxs.erase(hash); // mark this tx as "not dropped" since it was in the mempool before and is in the mempool now.
                 if (TRACE) Debug() << "Existing mempool tx: " << hash.toHex();
             } else {
                 if (TRACE) Debug() << "New mempool tx: " << hash.toHex();
                 ++newCt;
-                tx = std::make_shared<Mempool::Tx>();
+                Mempool::TxRef tx = std::make_shared<Mempool::Tx>();
                 tx->hashXs.max_load_factor(1.0); // hopefully this will save some memory by expicitly setting it to 1.0
                 tx->hash = hash;
-                tx->ordinal = mempool.nextOrdinal++;
-                tx->sizeBytes = m.value("size", 0).toUInt();
                 // Note: we end up calculating the fee ourselves since I don't trust doubles here. I wish bitcoind would have returned sats.. :(
-                //tx->fee = int64_t(m.value("fee", 0.0).toDouble() * (bitcoin::COIN / bitcoin::Amount::satoshi())) * bitcoin::Amount::satoshi();
-                tx->time = int64_t(m.value("time", 0).toULongLong());
-                tx->height = m.value("height", 0).toUInt();
-                // Note mempool tx's may have any height in the past because they may not confirm when new blocks arrive...
-                if (tx->height > unsigned(tipHeight)) {
-                    Debug() << resp.method << ": tx height " << tx->height << " > current height " <<  tipHeight << ", assuming a new block has arrived, aborting mempool synch ...";
-                    mempool.clear();
-                    emit retryRecommended(); // this is an exit point for this task
-                    return;
-                }
-                // save ancestor count exactly once. this should never change unless there is a reorg, at which point
-                // our in-mempory mempool is wiped anyway.
-                tx->ancestorCount = m.value("ancestorcount", 0).toUInt();
-                if (!tx->ancestorCount) {
-                    Error() << resp.method << ": failed to parse ancestor count for tx " << hash.toHex();
-                    emit errored();
-                    return;
-                }
                 txsNeedingDownload[hash] = tx;
             }
             // at this point we have a valid tx ptr
-            // update descendantCount since it may change as new tx's appear in mempool
-            tx->descendantCount = m.value("descendantcount", 0).toUInt();
-            if (!tx->descendantCount) {
-                Error() << resp.method << ": failed to parse descendant count for tx " << hash.toHex();
-                emit errored();
-                return;
-            }
         }
+
         if (UNLIKELY(!droppedTxs.empty())) {
+            // If tx's were dropped, we clear the mempool and try again. We also enqueue notifications for the dropped
+            // tx's.
             const bool recommendFullRetry = oldCt >= 2 && droppedTxs.size() >= oldCt/2; // more than 50% of the mempool tx's dropped out. something is funny. likely a new block arrived.
-            // TODO here: keep track of notifications?
             Debug() << droppedTxs.size() << " txs dropped from mempool, resetting mempool and trying again ...";
-            mempool.clear();
+            // NOTIFICATION
+            if (recommendFullRetry) {
+                // NOTIFICATION of all ...
+                scriptHashesAffected.merge(Util::keySet<decltype(scriptHashesAffected)>(mempool.hashXTxs));
+                Debug() << "Will notify for all " << scriptHashesAffected.size() << " addresses of mempool for notificatons ...";
+            } else {
+                // just the dropped tx's
+                for (const auto & txid : droppedTxs) {
+                    if (auto it = mempool.txs.find(txid); it != mempool.txs.end()) {
+                        const auto & tx = it->second;
+                        if (tx) // paranoia: tx will always be a valid reference.
+                            scriptHashesAffected.merge(Util::keySet<decltype(scriptHashesAffected)>(tx->hashXs));
+                    }
+                }
+                Debug() << "Will notify for " << scriptHashesAffected.size() << " addresses belonging to the dropped tx's for notificatons ...";
+            }
+            clearMempool = true; // Defer object at top of this lamba above will clear the mempool on function return (taking an exclusive lock) if this is true.
             if (recommendFullRetry) {
                 emit retryRecommended(); // this is an exit point for this task
                 return;
@@ -758,8 +767,9 @@ void SynchMempoolTask::doGetRawMempool()
             AGAIN();
             return;
         }
+
         if (newCt)
-            Debug() << resp.method << ": got reply with " << vm.size() << " items, " << newCt << " new";
+            Debug() << resp.method << ": got reply with " << txidList.size() << " items, " << newCt << " new";
         isdlingtxs = true;
         expectedNumTxsDownloaded = unsigned(newCt);
         // TX data will be downloaded now, if needed
@@ -786,7 +796,7 @@ struct Controller::StateMachine
     // todo: tune this
     const size_t DL_CONCURRENCY = qMax(Util::getNPhysicalProcessors()-1, 1U);//size_t(qMin(qMax(int(Util::getNPhysicalProcessors())-BitcoinDMgr::N_CLIENTS, BitcoinDMgr::N_CLIENTS), 32));
 
-    size_t nTx = 0, nIns = 0, nOuts = 0;
+    size_t nTx = 0, nIns = 0, nOuts = 0, nSH = 0;
 
     const char * stateStr() const {
         static constexpr const char *stateStrings[] = { "Begin", "WaitingForChainInfo", "GetBlocks", "DownloadingBlocks",
@@ -852,13 +862,10 @@ void Controller::add_DLHeaderTask(unsigned int from, unsigned int to, size_t nTa
 {
     DownloadBlocksTask *t = newTask<DownloadBlocksTask>(false, unsigned(from), unsigned(to), unsigned(nTasks), this);
     connect(t, &CtlTask::success, this, [t, this]{
-        if (UNLIKELY(!sm || isTaskDeleted(t))) return; // task was stopped from underneath us, this is stale.. abort.
-        sm->nTx += t->nTx;
-        sm->nIns += t->nIns;
-        sm->nOuts += t->nOuts;
+        // NOTE: this callback is sometimes delivered after the sm has been reset(), so we don't check or use it here.
+        if (UNLIKELY(isTaskDeleted(t))) return; // task was stopped from underneath us, this is stale.. abort.
         Debug() << "Got all blocks from: " << t->objectName() << " blockCt: "  << t->goodCt
-                << " nTx,nInp,nOutp: " << t->nTx << "," << t->nIns << "," << t->nOuts << " totals: "
-                << sm->nTx << "," << sm->nIns << "," << sm->nOuts;
+                << " nTx,nInp,nOutp: " << t->nTx << "," << t->nIns << "," << t->nOuts;
     });
     connect(t, &CtlTask::errored, this, [t, this]{
         if (UNLIKELY(!sm || isTaskDeleted(t))) return; // task was stopped from underneath us, this is stale.. abort.
@@ -871,8 +878,7 @@ void Controller::add_DLHeaderTask(unsigned int from, unsigned int to, size_t nTa
 void Controller::genericTaskErrored()
 {
     if (sm && sm->state != StateMachine::State::Failure) {
-        if (LIKELY(sm))
-            sm->state = StateMachine::State::Failure;
+        sm->state = StateMachine::State::Failure;
         AGAIN();
     }
 }
@@ -884,7 +890,7 @@ CtlTaskT *Controller::newTask(bool connectErroredSignal, Args && ...args)
     tasks.emplace(task, task);
     if (connectErroredSignal)
         connect(task, &CtlTask::errored, this, &Controller::genericTaskErrored);
-    connect(task, &CtlTask::retryRecommended, this, [this]{ // only the SynchMempoolTask ever emits this
+    connect(task, &CtlTask::retryRecommended, this, [this]{  // only the SynchMempoolTask ever emits this.
         if (LIKELY(sm))
             sm->state = StateMachine::State::Retry;
         AGAIN();
@@ -934,7 +940,6 @@ void Controller::process(bool beSilentIfUpToDate)
             }
             sm->isMainNet = task->info.chain == "main";
             QByteArray tipHeader;
-            // TODO: detect reorgs here -- to be implemented later after we figure out data model more, etc.
             const auto [tip, tipHash] = storage->latestTip(&tipHeader);
             sm->ht = task->info.blocks;
             if (tip == sm->ht) {
@@ -992,7 +997,8 @@ void Controller::process(bool beSilentIfUpToDate)
     } else if (sm->state == State::FinishedDL) {
         size_t N = sm->endHeight - sm->startheight + 1;
         Log() << "Processed " << N << " new " << Util::Pluralize("block", N) << " with " << sm->nTx << " " << Util::Pluralize("tx", sm->nTx)
-              << " (" << sm->nIns << " " << Util::Pluralize("input", sm->nIns) << " & " << sm->nOuts << " " << Util::Pluralize("output", sm->nOuts) << ")"
+              << " (" << sm->nIns << " " << Util::Pluralize("input", sm->nIns) << ", " << sm->nOuts << " " << Util::Pluralize("output", sm->nOuts)
+              << ", " << sm->nSH << Util::Pluralize(" address", sm->nSH) << ")"
               << ", verified ok.";
         {
             std::lock_guard g(smLock);
@@ -1033,15 +1039,12 @@ void Controller::process(bool beSilentIfUpToDate)
         emit synchFailure();
     } else if (sm->state == State::SynchMempool) {
         // ...
-        auto task = newTask<SynchMempoolTask>(true, this, storage);
+        auto task = newTask<SynchMempoolTask>(true, this, storage, masterNotifySubsFlag);
         task->threadObjectDebugLifecycle = Trace::isEnabled(); // suppress verbose lifecycle prints unless trace mode
         connect(task, &CtlTask::success, this, [this, task]{
             if (UNLIKELY(!sm || isTaskDeleted(task) || sm->state != State::SynchingMempool))
                 // task was stopped from underneath us and/or this response is stale.. so return and ignore
                 return;
-            if (masterNotifySubsFlag) // this is false until we enable the servers that listen for connections
-                // notify status change for affected sh's
-                storage->subs()->enqueueNotifications(std::move(task->scriptHashesAffected));
             sm->state = State::SynchMempoolFinished;
             AGAIN();
         });
@@ -1072,12 +1075,18 @@ void Controller::on_putBlock(CtlTask *task, PreProcessedBlockPtr p)
     process_DownloadingBlocks();
 }
 
-void Controller::process_PrintProgress(unsigned height, size_t nTx, size_t nIO)
+void Controller::process_PrintProgress(unsigned height, size_t nTx, size_t nIns, size_t nOuts, size_t nSH)
 {
     if (UNLIKELY(!sm)) return; // paranoia
     sm->nProgBlocks++;
+
+    sm->nTx += nTx;
+    sm->nIns += nIns;
+    sm->nOuts += nOuts;
+    sm->nSH += nSH;
+
     sm->nProgTx += nTx;
-    sm->nProgIOs += nIO;
+    sm->nProgIOs += nIns + nOuts;
     if (UNLIKELY(height && !(height % sm->progressIntervalBlocks))) {
         static const auto formatRate = [](double rate, const QString & thing, bool addComma = true) {
             QString unit = "sec";
@@ -1121,7 +1130,7 @@ void Controller::process_DownloadingBlocks()
             // error encountered.. abort!
             return;
 
-        process_PrintProgress(ppb->height, ppb->txInfos.size(), ppb->inputs.size()+ppb->outputs.size());
+        process_PrintProgress(ppb->height, ppb->txInfos.size(), ppb->inputs.size(), ppb->outputs.size(), ppb->hashXAggregated.size());
 
         if (sm->ppBlkHtNext > sm->endHeight) {
             sm->state = StateMachine::State::FinishedDL;
@@ -1313,12 +1322,12 @@ auto Controller::stats() const -> Stats
     QVariantMap misc;
     {
         QVariantMap m;
-        m["extant jobs"] = Util::ThreadPool::ExtantJobs();
-        m["extant jobs (max lifetime)"] = Util::ThreadPool::ExtantJobsMaxSeen();
-        m["extant limit"] = Util::ThreadPool::ExtantJobLimit();
-        m["job count (lifetime)"] = qulonglong(Util::ThreadPool::NumJobsSubmitted());
-        m["job queue overflows (lifetime)"] = qulonglong(Util::ThreadPool::Overflows());
-        m["thread count (max)"] = Util::ThreadPool::MaxThreadCount();
+        m["extant jobs"] = ::AppThreadPool()->extantJobs();
+        m["extant jobs (max lifetime)"] = ::AppThreadPool()->extantJobsMaxSeen();
+        m["extant limit"] = ::AppThreadPool()->extantJobLimit();
+        m["job count (lifetime)"] = qulonglong(::AppThreadPool()->numJobsSubmitted());
+        m["job queue overflows (lifetime)"] = qulonglong(::AppThreadPool()->overflows());
+        m["thread count (max)"] = ::AppThreadPool()->maxThreadCount();
         misc["Job Queue (Thread Pool)"] = m;
     }
     st["Misc"] = misc;
@@ -1375,13 +1384,9 @@ auto Controller::debug(const StatsParams &p) const -> Stats // from StatsMixin
             if (!tx) continue;
             QVariantMap m;
             m["hash"] = tx->hash.toHex();
-            m["ordinal"] = tx->ordinal;
             m["sizeBytes"] = tx->sizeBytes;
             m["fee"] = tx->fee.ToString().c_str();
-            m["time"] = qlonglong(tx->time);
-            m["height"] = unsigned(tx->height);
-            m["ancestorCount"] = tx->ancestorCount;
-            m["descendantCount"] = tx->descendantCount;
+            m["hasUnconfirmedParentTx"] = tx->hasUnconfirmedParentTx;
             static const auto TXOInfo2Map = [](const TXOInfo &info) -> QVariantMap {
                 return QVariantMap{
                     { "amount", QString::fromStdString(info.amount.ToString()) },

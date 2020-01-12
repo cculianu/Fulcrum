@@ -18,10 +18,12 @@
 //
 #pragma once
 
+#include "BlockProcTypes.h"
 #include "Mixins.h"
 #include "Mgr.h"
 #include "RPC.h"
 #include "ServerMisc.h"
+#include "Storage.h"
 #include "Version.h"
 
 #include <QHash>
@@ -66,12 +68,20 @@ public:
     /// Thread-safe. Returns the current known-good PeerInfoList
     PeerInfoList peers() const;
 
+    using HeightHeaderPair = std::pair<BlockHeight, Storage::Header>;
+    /// Thread-safe. Called from PeerClient instances.
+    /// Returns a height, block header 10 blocks in the past for querying peers (for peer verification that they are
+    /// not BSV, or another fork). May return an empty optional if for some bizarre reason we are on a chain with
+    /// <10 blocks.
+    std::optional<HeightHeaderPair> headerToVerifyWithPeer() const;
+
 public slots:
     /// The various Server instances are connected to this slot (via their gotRpcAddPeer signals), connections made by SrvMgr.
     /// Also: PeerClient instances are connected to this via their gotPeersSubscribeReply signal
     void on_rpcAddPeer(const PeerInfoList &, const QHostAddress & source);
-    /// Called by SrvMgr to tell this instance all our services are up, so it may begin searching for peers and publishing our information.
-    void allServersStarted();
+    /// Called by a signal connected to SrvMgr to tell this instance all our services are up, so it may begin searching
+    /// for peers and publishing our information.
+    void on_allServersStarted();
 
 signals:
     /// Emitted to notify Server instances of a new peers list.  Connected to the onPeersUpdated slot in all extant Server instances.
@@ -111,6 +121,8 @@ private:
     PeerClient *newClient(const PeerInfo &);
 
     PeerInfoMap queued, bad, failed;
+
+    bool gotAllServersStartedSignal = false;
 
     QHash<QString, PeerClient *> clients;
     QSet<QHostAddress> peerIPAddrs; ///< in case we want to ensure IP-uniqueness of peers and reject dupes with different hostname, same IP (sybil attack defense measure)
@@ -182,6 +194,7 @@ public:
     void connectToPeer();
 
     bool sentVersion = false;
+    std::optional<PeerMgr::HeightHeaderPair> headerToVerify;
     bool verified = false;
     double lastRefreshTs = 0.;
 

@@ -252,6 +252,7 @@ namespace Util {
     auto keySet(const Map &map) {
         // lambda template
         constexpr auto inner = [](const Map &map, auto & set) {
+            set.reserve(map.size());
             for (auto it = map.begin(); it != map.end(); ++it) {
                 set.insert(it->first);
             }
@@ -273,6 +274,7 @@ namespace Util {
     auto valueSet(const Map &map) {
         // lambda template
         constexpr auto inner = [](const Map &map, auto & set) {
+            set.reserve(map.size());
             for (auto it = map.begin(); it != map.end(); ++it) {
                 set.insert(it->second);
             }
@@ -443,92 +445,6 @@ namespace Util {
     };
 
     using VoidFunc = std::function<void()>;
-
-    /// Helpers for performing work on the global thread pool.
-    namespace ThreadPool {
-
-        /// Callback used below to indicate an exception was thrown or other low-level unlikely failure.
-        using FailFunc = std::function<void(const QString &)>;
-
-        /// Submit work to be performed asynchronously from a thread pool thread.
-        ///
-        /// `work` is called in the context of one of the global QThreadPool::globalInstance() threads (it should
-        /// lambda-capture all data it needs to compute its results). It may throw, in which case `fail` (if specified)
-        /// is invoked with the exception.what() message.
-        ///
-        /// `completion` will be called in the context of `context`'s thread. If `context` dies before the work
-        /// is completed, completion will never be called.
-        ///
-        /// `fail` will be called in the context of `context`'s thread on failure such as an exception being thrown
-        /// by `work` .. *OR* if there is an excessive amount of work to be done and no room left in the queue (in which
-        /// case it is called immediately).  If unspecified, the default fail func simply prints an error message to the
-        /// error log.  In either case, if a failure occurs, `completion` will not be called.
-        ///
-        /// The intended client code usecase is that `work` and `completion` would share a shared_ptr to the same
-        /// result set, which `work` writes-to to produce results, and `completion` reads-from and acts upon within
-        /// the thread context of the caller. `completion` is guaranteed to be called *after* `work` returns (*if*
-        /// `context` was not deleted first -- if it was, then `completion` is never called. `completion` is also never
-        /// called if a failure occurs, in which case `fail`, if specified, is called instead).
-        ///
-        /// Using shared_ptr to share data between `work` and `completion` (via lambda-capture) is thus the intended
-        /// way to use this mechanism.
-        void SubmitWork(QObject *context, const VoidFunc & work, const VoidFunc & completion = VoidFunc(),
-                        const FailFunc & fail = FailFunc(), int priority = 0);
-
-        /// Call this on app shutdown to wait for extant jobs that may be running to complete. This prevents jobs that
-        /// are currently running from referencing data that may go away during shutdown, causing a segfault.  The app's
-        /// exit handler calls this on shutdown as the first thing it does, before deconstructing other objects.
-        ///
-        /// Returns true if the jobs completed before timeout_ms expired, or false otherwise.
-        /// Negative timeout_ms indicates "wait forever" for jobs to complete.
-        ///
-        /// This function should only ever be called once on app exit since it latches a boolean that permanently blocks
-        /// the creation of new jobs once called.  Note that after this function is called all extant jobs that may
-        /// begin to run will exit immediately as well (as a consequence of said "shutting down" boolean being true).
-        bool ShutdownWaitForJobs(int timeout_ms = -1);
-
-        /// Returns the number of jobs currently running or scheduled to run.
-        int ExtantJobs();
-        /// Returns the maximal value ExtantJobs() has ever reached during the lifetime of this application.
-        int ExtantJobsMaxSeen();
-        /// Returns the maximum number of extant jobs before failure is unconditionally asserted on SubmitWork (currently the default is 1000)
-        int ExtantJobLimit();
-        /// Sets the extant job limit.  This number cannot be set below 10, doing so returns false.
-        bool SetExtantJobLimit(int limit);
-        /// Returns the maximum number of threads used by the pool.
-        int MaxThreadCount();
-        /// Sets the maximum number of threads used by the pool
-        bool SetMaxThreadCount(int max);
-        /// Returns the number of lifetime job overflows (the number of times the job queue was full and work was rejected).
-        /// Ideally this number is always 0 even under load.
-        uint64_t Overflows();
-
-        /// Returns the number of jobs that were ever successfilly submitted via SubmitWork
-        uint64_t NumJobsSubmitted();
-
-        /// Semi-private class not intended to be constructed by client code, but used inside SubmitWork.
-        /// We put it here because the meta object compiler needs to see it for signal/slot glue code generation.
-        class Job : public QObject, public QRunnable {
-            Q_OBJECT
-
-            friend void Util::ThreadPool::SubmitWork(QObject *, const VoidFunc &, const VoidFunc &, const FailFunc &, int);
-
-            const VoidFunc work;
-            QPointer<QObject> weakContextRef;
-
-            Job(QObject *context, const VoidFunc & work, const VoidFunc & completion = VoidFunc(), const FailFunc & = FailFunc());
-
-        public:
-            void run() override;
-            ~Job() override;
-
-        signals:
-            void started(); ///< emitted inside run() on job start
-            void completed(); ///< calls completion in QObject context via a signal emit
-            void failed(const QString &); ///< called if work() throws.
-        };
-    }
-
 
     /// Stringify any 1D container's values (typically QSet or QList) by calling 'ToStringFunc'
     /// on each item, and producing a comma-separate string result, e.g.: "item1, item2, someotheritem" etc...

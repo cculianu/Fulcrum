@@ -714,6 +714,15 @@ auto Storage::latestTip(Header *hdrOut) const -> std::pair<int, HeaderHash> {
     return ret;
 }
 
+auto Storage::latestHeight() const -> std::optional<BlockHeight>
+{
+    std::optional<BlockHeight> ret;
+    SharedLockGuard g(p->blkInfoLock);
+    if (!p->blkInfos.empty())
+        ret = BlockHeight(p->blkInfos.size()-1);
+    return ret;
+}
+
 void Storage::save(SaveSpec typed_spec)
 {
     using IntType = decltype(p->pendingSaves.load());
@@ -772,7 +781,7 @@ void Storage::deleteHeadersPastHeight(BlockHeight height)
         throw InternalError("header truncate returned an unexepected value");
 }
 
-auto Storage::headerForHeight(BlockHeight height, QString *err) -> std::optional<Header>
+auto Storage::headerForHeight(BlockHeight height, QString *err) const -> std::optional<Header>
 {
     std::optional<Header> ret;
     if (int(height) <= latestTip().first && int(height) >= 0) {
@@ -781,7 +790,7 @@ auto Storage::headerForHeight(BlockHeight height, QString *err) -> std::optional
     return ret;
 }
 
-auto Storage::headerForHeight_nolock(BlockHeight height, QString *err) -> std::optional<Header>
+auto Storage::headerForHeight_nolock(BlockHeight height, QString *err) const -> std::optional<Header>
 {
     std::optional<Header> ret;
     try {
@@ -797,7 +806,7 @@ auto Storage::headerForHeight_nolock(BlockHeight height, QString *err) -> std::o
     return ret;
 }
 
-auto Storage::headersFromHeight_nolock_nocheck(BlockHeight height, unsigned num, QString *err) -> std::vector<Header>
+auto Storage::headersFromHeight_nolock_nocheck(BlockHeight height, unsigned num, QString *err) const -> std::vector<Header>
 {
     if (err) err->clear();
     std::vector<Header> ret = p->headersFile->readRecords(height, num, err);
@@ -811,7 +820,7 @@ auto Storage::headersFromHeight_nolock_nocheck(BlockHeight height, unsigned num,
 
 /// Convenient batched alias for above. Returns a set of headers starting at height. May return < count if not
 /// all headers were found. Thead safe.
-auto Storage::headersFromHeight(BlockHeight height, unsigned count, QString *err) -> std::vector<Header>
+auto Storage::headersFromHeight(BlockHeight height, unsigned count, QString *err) const -> std::vector<Header>
 {
     std::vector<Header> ret;
     SharedLockGuard g(p->blocksLock); // to ensure clients get a consistent view
@@ -1115,6 +1124,10 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
     // take all locks now.. since this is a Big Deal. TODO: add more locks here?
     std::scoped_lock guard(p->blocksLock, p->headerVerifierLock, p->blkInfoLock, p->mempoolLock);
 
+    if (notify)
+        // mark ALL of mempool for notify so we can properly detect drops that weren't in block but also disappeared from mempool
+        notify->merge(Util::keySet<NotifySet>(p->mempool.hashXTxs));
+
     p->mempool.clear(); // just make sure the mempool is clean
 
     const auto verifUndo = p->headerVerifier; // keep a copy of verifier state for undo purposes in case this fails
@@ -1275,7 +1288,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
             // history is hashX -> TxNumVec (serialized) as a serities of 6-bytes txNums in blockchain order as they appeared.
             if (notify)
                 // first, reserve space for notifications
-                notify->reserve(ppb->hashXAggregated.size());
+                notify->reserve(notify->size() + ppb->hashXAggregated.size());
             rocksdb::WriteBatch batch;
             for (auto & [hashX, ag] : ppb->hashXAggregated) {
                 if (notify) notify->insert(hashX); // fast O(1) insertion because we reserved the right size above.
@@ -1396,6 +1409,10 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
         // take all locks now.. since this is a Big Deal. TODO: add more locks here?
         std::scoped_lock guard(p->blocksLock, p->headerVerifierLock, p->blkInfoLock, p->mempoolLock);
 
+        if (notify)
+            // mark ALL of mempool for notify so we can detect drops that weren't in block but also disappeared from mempool properly
+            notify->merge(Util::keySet<UndoInfo::ScriptHashSet>(p->mempool.hashXTxs));
+
         p->mempool.clear(); // make sure mempool is clean
 
         const auto t0 = Util::getTimeNS();
@@ -1507,8 +1524,12 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
             saveUtxoCt();
             setDirty(false); // phew. done.
 
-            if (notify)
-                notify->swap(undo.scriptHashes);
+            if (notify) {
+                if (notify->empty())
+                    notify->swap(undo.scriptHashes);
+                else
+                    notify->merge(undo.scriptHashes);
+            }
         }
 
         const size_t nTx = undo.blkInfo.nTx, nSH = undo.scriptHashes.size();
@@ -1689,7 +1710,7 @@ auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf) const -> H
                 }
                 ret.reserve(total);
                 for (const auto & tx : txvec)
-                    ret.emplace_back(HistoryItem{tx->hash, tx->ancestorCount > 1 ? -1 : 0, tx->fee});
+                    ret.emplace_back(HistoryItem{tx->hash, tx->hasUnconfirmedParentTx ? -1 : 0, tx->fee});
             }
         }
     } catch (const std::exception &e) {
@@ -1774,7 +1795,7 @@ auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
                                         { tx->hash, 0 /* always put 0 for height here */, tx->fee }, // base HistoryItem
                                         ionum, // .tx_pos
                                         it3->amount,  // .value
-                                        TxNum(1) + maxTxNumSeen + TxNum(tx->ancestorCount), // .txNum (this is fudged for sorting at the end properly)
+                                        TxNum(1) + maxTxNumSeen + TxNum(tx->hasUnconfirmedParentTx ? 1 : 0), // .txNum (this is fudged for sorting at the end properly)
                                     });
                                     if (UNLIKELY(ret.size() > maxHistory)) {
                                         throw HistoryTooLarge(QString("Unspent history too large for %1, exceeds MaxHistory of %2")

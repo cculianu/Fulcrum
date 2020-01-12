@@ -18,12 +18,14 @@
 //
 #include "Servers.h"
 
+#include "App.h"
 #include "BitcoinD.h"
 #include "Merkle.h"
 #include "PeerMgr.h"
 #include "ServerMisc.h"
 #include "Storage.h"
 #include "SubsMgr.h"
+#include "ThreadPool.h"
 
 #include <QByteArray>
 #include <QCoreApplication>
@@ -398,7 +400,7 @@ Server::newClient(QTcpSocket *sock)
             if (client != o) {
                 Error() << " client != passed-in pointer to on_destroy in " << __FILE__ << " line " << __LINE__  << ". FIXME!";
             }
-            Debug("client id %ld purged from map", long(clientId));
+            Debug() << "client id " << clientId << " purged from map";
         }
         // tell SrvMgr this client is gone so it can decrement its clients-per-ip count.
         emit clientDisconnected(clientId, addr);
@@ -525,7 +527,7 @@ void Server::onPeersUpdated(const PeerInfoList &pl)
 
 // --- RPC METHODS ---
 namespace {
-    Util::ThreadPool::FailFunc defaultTPFailFunc(Client *c, const RPC::Message::Id &id) {
+    ThreadPool::FailFunc defaultTPFailFunc(Client *c, const RPC::Message::Id &id) {
         return [c, id](const QString &what) {
             emit c->sendError(false, RPC::Code_InternalError, QString("internal error: %1").arg(what), id);
         };
@@ -540,7 +542,7 @@ namespace {
 Server::RPCError::~RPCError() {}
 Server::RPCErrorWithDisconnect::~RPCErrorWithDisconnect() {}
 
-void Server::generic_do_async(Client *c, const RPC::Message::Id &reqId, const std::function<QVariant ()> &work)
+void Server::generic_do_async(Client *c, const RPC::Message::Id &reqId, const std::function<QVariant ()> &work, int priority)
 {
     if (LIKELY(work)) {
         struct ResErr {
@@ -552,7 +554,7 @@ void Server::generic_do_async(Client *c, const RPC::Message::Id &reqId, const st
 
         auto reserr = std::make_shared<ResErr>(); ///< shared with lambda for both work and completion. this is how they communicate.
 
-        Util::ThreadPool::SubmitWork(
+        ::AppThreadPool()->submitWork(
             c, // <--- all work done in client context, so if client is deleted, completion not called
             // runs in worker thread, must not access anything other than reserr and work
             [reserr,work]{
@@ -576,7 +578,9 @@ void Server::generic_do_async(Client *c, const RPC::Message::Id &reqId, const st
                 emit c->sendResult(reqId, reserr->results);
             },
             // default fail function just sends json rpc error "internal error: <message>"
-            defaultTPFailFunc(c, reqId)
+            defaultTPFailFunc(c, reqId),
+            // lower is sooner, higher is later. Default 0.
+            priority
         );
     } else
         Error() << "INTERNAL ERROR: work must be valid! FIXME!";
@@ -1128,12 +1132,14 @@ void Server::rpc_blockchain_transaction_broadcast(Client *c, const RPC::Message 
             return ret;
         },
         // error func, throw an RPCError that's formatted in a particular way
-        [](const RPC::Message & errResponse) {
+        [cid = c->id](const RPC::Message & errResponse) {
+            const auto errorMessage = errResponse.errorMessage();
+            Log() << "Broadcast fail for client " << cid << ": " << errorMessage.left(120);
             throw RPCError(QString("the transaction was rejected by network rules.\n\n"
                                    // Note: ElectrumX here would also spit back the [txhex] after the final newline.
                                    // We do not do that, since it's a waste of bandwidth and also Electron Cash
                                    // ignores that information anyway.
-                                   "%1\n").arg(errResponse.errorMessage()),
+                                   "%1\n").arg(errorMessage),
                             RPC::Code_App_BadRequest /**< ex does this here.. inconsistent with transaction.get,
                                                       * so for now we emulate that until we verify that EC
                                                       * will be ok with us changing it to Code_App_DaemonError */

@@ -56,6 +56,10 @@ signals:
     /// "max_clients_per_ip"  config variable (see Options.h)
     void clientExceedsConnectionLimit(IdMixin::Id);
 
+    /// Emitted by this instance to signify all servers have been started.  PeerMgr is connected to this to start
+    /// its own processing once all servers are up.
+    void allServersStarted();
+
 protected:
     Stats stats() const override;
 

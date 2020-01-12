@@ -46,3 +46,7 @@ inline constexpr bool isReleaseBuild() { return false; }
 #  define VERSION_EXTRA "(Release)"
 inline constexpr bool isReleaseBuild() { return true; }
 #endif
+
+#if (QT_VERSION < QT_VERSION_CHECK(5, 12, 5)) || (QT_VERSION == QT_VERSION_CHECK(5, 13, 0))
+#error Fulcrum requires Qt 5.12.5 (or later) or Qt 5.13.1 (or later) to be successfully built without errors.  Please use Qt 5.12.5+ or Qt 5.13.1+ to build this codebase.
+#endif

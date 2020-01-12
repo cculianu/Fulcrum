@@ -133,7 +133,7 @@ private:
     void add_DLHeaderTask(unsigned from, unsigned to, size_t nTasks);
     void process_DownloadingBlocks();
     bool process_VerifyAndAddBlock(PreProcessedBlockPtr); ///< helper called from within DownloadingBlocks state -- makes sure block is sane and adds it to db
-    void process_PrintProgress(unsigned height, size_t nTx, size_t nIO);
+    void process_PrintProgress(unsigned height, size_t nTx, size_t nIns, size_t nOuts, size_t nSH);
     void process_DoUndoAndRetry(); ///< internal -- calls storage->undoLatestBlock() and schedules a task death and retry.
 
     size_t nBlocksDownloadedSoFar() const; ///< not 100% accurate. call this only from this thread
@@ -144,7 +144,7 @@ private:
     /// Master subscription notification flag. Initially we don't do notifications. However, after we start the srvmgr,
     /// this gets set to true permanently, and future blocks/undoes/mempool changes notify the app-wide SubsMgr, which
     /// notifies subscribed clients (if any).
-    bool masterNotifySubsFlag = false;
+    std::atomic_bool masterNotifySubsFlag = false;
 
     /// takes locks, prints to Log() every 30 seconds if there were changes
     void printMempoolStatusToLog() const;

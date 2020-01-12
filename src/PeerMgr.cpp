@@ -78,6 +78,9 @@ void PeerMgr::startup()
         Warning() << objectName() << ": Could not determine which protocols are available based on bind addresses.";
 
     start();
+    // wait for thread to start before returning.
+    if (auto s = chan.get<QString>(60000); s != "ok") // this will throw to caller if it has a timeout
+        throw InternalError("Could not start PeerMgr");
 }
 
 void PeerMgr::detectProtocol(const QHostAddress &addr)
@@ -142,6 +145,7 @@ void PeerMgr::on_started()
 {
     Debug() << objectName() << ": started ok";
     conns += connect(this, &PeerMgr::needUpdateSoon, this, &PeerMgr::updateSoon);
+    chan.put("ok");
 }
 
 void PeerMgr::cleanup()
@@ -239,13 +243,13 @@ void PeerMgr::addPeerVerifiedSource(const PeerInfo &piIn, const QHostAddress & a
     processSoon();
 }
 
-void PeerMgr::allServersStarted()
+void PeerMgr::on_allServersStarted()
 {
-    if (QThread::currentThread() != thread()) {
-        Util::AsyncOnObject(this, [this] {allServersStarted();});
+    if (gotAllServersStartedSignal) // paranoia
         return;
-    }
     Debug() << __func__;
+
+    gotAllServersStartedSignal = true;
 
     // start out with the seedPeers
     queued = seedPeers;
@@ -309,7 +313,7 @@ void PeerMgr::updateSoon()
             ExclusiveLock g(mut);
             sharedPeers.clear();
             for (const auto & client : clients) {
-                if (client->isGood() && !client->isStale() && !client->info.genesisHash.isEmpty())
+                if (client->isGood() && !client->isStale() && client->verified)
                     sharedPeers.push_back(client->info);
             }
             copy = sharedPeers; // take a copy now for signal below (this is O(1) due to implicit sharing)
@@ -385,6 +389,7 @@ void PeerMgr::on_bad(PeerClient *c)
     if (c->info.hostName.isEmpty())
         return;
     c->info.setFailureTsIfNotSet();
+    c->info.genesisHash.clear();
     bad[c->info.hostName] = c->info;
     c->deleteLater(); // drop connection
 }
@@ -402,6 +407,7 @@ void PeerMgr::on_connectFailed(PeerClient *c)
             c->info.failureReason = "Connection failed";
     }
     c->info.setFailureTsIfNotSet();
+    c->info.genesisHash.clear();
     failed[c->info.hostName] = c->info;
     c->deleteLater(); // clean up
 }
@@ -450,7 +456,30 @@ auto PeerClient::stats() const -> Stats
     m["isTor?"] = info.isTor();
     if (const auto s = failureHoursString(info); !s.isEmpty())
         m["failureAge"] = s;
+    m["verified"] = verified;
     return m;
+}
+
+auto PeerMgr::headerToVerifyWithPeer() const -> std::optional<HeightHeaderPair>
+{
+    std::optional<HeightHeaderPair> ret;
+    const auto optCurHeight = storage->latestHeight();
+    if (optCurHeight.has_value()) {
+        const auto curHeight = optCurHeight.value();
+        constexpr unsigned cutoff = BTC::MaxReorgDepth + 1;
+        if (cutoff < curHeight) {
+            const auto height = curHeight - cutoff;
+            QString err = "Bad size";
+            auto optHdr = storage->headerForHeight(height, &err);
+            if ( optHdr.value_or(Storage::Header{}).length() == BTC::GetBlockHeaderSize() ) {
+                ret.emplace(height, optHdr.value());
+            } else
+                Warning() << "PeerMgr: Failed to retrieve header " << height << ": " << err;
+        } else {
+            Warning() << "PeerMgr: Block height is not greater than " << cutoff << ", cannot verify peer header";
+        }
+    }
+    return ret;
 }
 
 PeerClient::PeerClient(bool announce, const PeerInfo &pi, IdMixin::Id id_, PeerMgr *mgr, int maxBuffer)
@@ -626,6 +655,7 @@ void PeerClient::handleReply(IdMixin::Id, const RPC::Message & reply)
                 }
                 found = true;
                 updateInfoFromRemoteFeaturesMap(pi);
+                info.genesisHash = mgr->genesisHash(); // tweak to point to same underlying bytes
                 break;
             }
         }
@@ -634,6 +664,32 @@ void PeerClient::handleReply(IdMixin::Id, const RPC::Message & reply)
             return;
         }
         emit mgr->needUpdateSoon(); // tell mgr info may have been updated so it can rebuild its list
+        headerToVerify = mgr->headerToVerifyWithPeer();
+        if (LIKELY(headerToVerify.has_value())) {
+            // this is the likely branch -- verify that this peer is not on a different chain such as BSV, etc
+            if constexpr (debugPrint) Debug() << info.hostName << " requesting header for height " << headerToVerify.value().first;
+            emit sendRequest(newId(), "blockchain.block.header", QVariantList{headerToVerify.value().first, 0});
+        } else {
+            // this should never happen -- but if it does, get its peers.subscribe list and just keep going.
+            // next time around we should have a header ready if we reach this very strange corner case where
+            // we have no headers.  (This branch is entirely in the interests of defensive programming and should never really be taken).
+            Warning() << info.hostName << ": our db returned no header to verify against peer; proceeding anyway with peer.  "
+                      << "If this keeps happening, please contact the developers.";
+            emit sendRequest(newId(), "server.peers.subscribe");
+        }
+    } else if (reply.method == "blockchain.block.header") {
+        if constexpr (debugPrint) Debug() << info.hostName << " " << reply.method << " response";
+        if (!headerToVerify.has_value()) {
+            Bad("Unexpected header response");
+            return;
+        }
+        const auto  hdr = Util::ParseHexFast(reply.result().toString().trimmed().left(BTC::GetBlockHeaderSize()*2).toLower().toUtf8());
+        if (hdr != headerToVerify.value().second) {
+            Bad(QString("Peer appears to be on a different chain (header verification failed for height %1)").arg(headerToVerify.value().first));
+            return;
+        }
+        headerToVerify.reset(); // clear the optional now to release the header's memory
+        // go on to next phase, get its peers.subscribe list
         emit sendRequest(newId(), "server.peers.subscribe");
     } else if (reply.method == "server.add_peer") {
         // handle
@@ -669,6 +725,7 @@ void PeerClient::handleReply(IdMixin::Id, const RPC::Message & reply)
         if (!verified) {
             verified = true;
             info.clearFailureTs(); // make sure all failure timestamps are cleared
+            mgr->needUpdateSoon();
             Log() << "Verified peer " << info.hostName << " (" << info.addr.toString() << ")";
         }
     } else

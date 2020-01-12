@@ -21,6 +21,7 @@
 #include "Controller.h"
 #include "Logger.h"
 #include "Servers.h"
+#include "ThreadPool.h"
 #include "Util.h"
 
 #include <QCommandLineParser>
@@ -37,7 +38,7 @@
 App *App::_globalInstance = nullptr;
 
 App::App(int argc, char *argv[])
-    : QCoreApplication (argc, argv)
+    : QCoreApplication (argc, argv), tpool(std::make_unique<ThreadPool>(this))
 {
     assert(!_globalInstance);
     _globalInstance = this;
@@ -147,10 +148,10 @@ void App::cleanup_WaitForThreadPoolWorkers()
 {
     constexpr int timeout = 5000;
     QElapsedTimer t0; t0.start();
-    const int nJobs = Util::ThreadPool::ExtantJobs();
+    const int nJobs = tpool->extantJobs();
     if (nJobs)
         Log() << "Waiting for extant thread pool workers ...";
-    const bool res = Util::ThreadPool::ShutdownWaitForJobs(timeout);
+    const bool res = tpool->shutdownWaitForJobs(timeout);
     if (!res) {
         Warning("After %d seconds, %d thread pool %s %s still active. App may abort with an error.",
                 qRound(double(t0.elapsed())/1e3), nJobs, Util::Pluralize("worker", nJobs).toUtf8().constData(),
@@ -558,13 +559,13 @@ void App::parseArgs()
         int val = conf.intValue("workqueue", 0, &ok);
         if (!ok || val < 10)
             throw BadArgs("workqueue: bad value. Specify an integer >= 10");
-        if (!Util::ThreadPool::SetExtantJobLimit(val))
+        if (!tpool->setExtantJobLimit(val))
             throw BadArgs(QString("workqueue: Unable to set workqueue to %1; SetExtantJobLimit returned false.").arg(val));
         options->workQueue = val; // save advisory value for stats(), etc code
         // log this later in case we are in syslog mode
-        Util::AsyncOnObject(this, []{ Debug() << "config: workqueue = " << Util::ThreadPool::ExtantJobLimit(); });
+        Util::AsyncOnObject(this, [this]{ Debug() << "config: workqueue = " << tpool->extantJobLimit(); });
     } else
-        options->workQueue = Util::ThreadPool::ExtantJobLimit(); // so stats() knows what was auto-configured
+        options->workQueue = tpool->extantJobLimit(); // so stats() knows what was auto-configured
     if (conf.hasValue("worker_threads")) {
         bool ok;
         int val = conf.intValue("worker_threads", 0, &ok);
@@ -573,13 +574,13 @@ void App::parseArgs()
         if (val > int(Util::getNVirtualProcessors()))
             throw BadArgs(QString("worker_threads: specified value of %1 exceeds the detected number of virtual processors of %2")
                           .arg(val).arg(Util::getNVirtualProcessors()));
-        if (val > 0 && !Util::ThreadPool::SetMaxThreadCount(val))
+        if (val > 0 && !tpool->setMaxThreadCount(val))
             throw BadArgs(QString("worker_threads: Unable to set worker threads to %1").arg(val));
         options->workerThreads = val; // save advisory value for stats(), etc code
         // log this later in case we are in syslog mode
-        Util::AsyncOnObject(this, [val]{ Debug() << "config: worker_threads = " << val << " (configured: " << Util::ThreadPool::MaxThreadCount() << ")"; });
+        Util::AsyncOnObject(this, [val,this]{ Debug() << "config: worker_threads = " << val << " (configured: " << tpool->maxThreadCount() << ")"; });
     } else
-        options->workerThreads = Util::ThreadPool::MaxThreadCount(); // so stats() knows what was auto-configured
+        options->workerThreads = tpool->maxThreadCount(); // so stats() knows what was auto-configured
 
     // warn user that no hostname was specified if they have peerDiscover turned on
     if (!options->hostName.has_value() && options->peerDiscovery && options->peerAnnounceSelf) {
