@@ -55,6 +55,8 @@ exit 0
 %{_bindir}/fulcrum
 %attr(700, fulcrum, fulcrum) %{_sharedstatedir}/fulcrum
 %{_unitdir}/fulcrum.service
+%doc README.md
+%license LICENSE.txt
 
 %changelog
 {{{ git_dir_changelog }}}
