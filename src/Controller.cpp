@@ -809,7 +809,7 @@ struct Controller::StateMachine
     }
 
     static constexpr unsigned progressIntervalBlocks = 1000;
-    size_t nProgBlocks = 0, nProgIOs = 0, nProgTx = 0;
+    size_t nProgBlocks = 0, nProgIOs = 0, nProgTx = 0, nProgSH = 0;
     double lastProgTs = 0., waitingTs = 0.;
     static constexpr double simpleTaskTookTooLongSecs = 30.;
 
@@ -1087,6 +1087,7 @@ void Controller::process_PrintProgress(unsigned height, size_t nTx, size_t nIns,
 
     sm->nProgTx += nTx;
     sm->nProgIOs += nIns + nOuts;
+    sm->nProgSH += nSH;
     if (UNLIKELY(height && !(height % sm->progressIntervalBlocks))) {
         static const auto formatRate = [](double rate, const QString & thing, bool addComma = true) {
             QString unit = "sec";
@@ -1106,10 +1107,12 @@ void Controller::process_PrintProgress(unsigned height, size_t nTx, size_t nIns,
         QString pctDisplay = QString::number((height*1e2) / std::max(sm->endHeight, 1U), 'f', 1) + "%";
         const double rateBlocks = sm->nProgBlocks / elapsed;
         const double rateIO = sm->nProgIOs / elapsed;
-        Log() << "Processed height: " << height << ", " << pctDisplay << formatRate(rateBlocks, "blocks") << formatRate(rateIO, "ins & outs");
+        const double rateSH = sm->nProgSH / elapsed;
+        Log() << "Processed height: " << height << ", " << pctDisplay << formatRate(rateBlocks, "blocks")
+              << formatRate(rateIO, "ins & outs")  << formatRate(rateSH, "addrs");
         // update/reset ts and counters
         sm->lastProgTs = now;
-        sm->nProgBlocks = sm->nProgTx = sm->nProgIOs = 0;
+        sm->nProgBlocks = sm->nProgTx = sm->nProgIOs = sm->nProgSH = 0;
     }
 }
 
