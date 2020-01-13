@@ -16,8 +16,8 @@ jobs:
       env: TARGET_OS=pc TARGET_MINGW=mingw64 MINGW_ARCH=x86_64
       cache: false
 before_install:
-  - "${TRAVIS_BUILD_DIR}/travis/${TRAVIS_OS_NAME}.${TARGET_OS}.before_install"
+  - "${TRAVIS_BUILD_DIR}/contrib/travis/${TRAVIS_OS_NAME}.${TARGET_OS}.before_install"
 install:
-  - "${TRAVIS_BUILD_DIR}/travis/${TRAVIS_OS_NAME}.${TARGET_OS}.install"
+  - "${TRAVIS_BUILD_DIR}/contrib/travis/${TRAVIS_OS_NAME}.${TARGET_OS}.install"
 script:
-  - "${TRAVIS_BUILD_DIR}/travis/${TRAVIS_OS_NAME}.${TARGET_OS}.script"
+  - "${TRAVIS_BUILD_DIR}/contrib/travis/${TRAVIS_OS_NAME}.${TARGET_OS}.script"
