@@ -121,12 +121,16 @@ QString AbstractTcpServer::prettySock(QAbstractSocket *sock)
 
 void AbstractTcpServer::pvt_on_newConnection()
 {
-    QTcpSocket *sock = nextPendingConnection();
-    if (sock) {
+    int ctr = 0;
+    // from Qt docs: it's possible for more than 1 connection to be ready on a signal emission of nextPendingConnection
+    // if we are at or above maxPendingConnections() on a QTcpServer, so we do this: grab as many connections as we can
+    // at once in a loop.
+    for (QTcpSocket *sock = nullptr; (sock = nextPendingConnection()); ++ctr) {
         Debug() << "Got connection from: " << prettySock(sock);
         on_newConnection(sock);
-    } else {
-        Warning() << __FUNCTION__ << ": nextPendingConnection returned a nullptr! Called at the wrong time? FIXME!";
+    }
+    if (!ctr) {
+        Warning() << __FUNCTION__ << ": nextPendingConnection had no connections ready! Spurious call to " << __func__ << "? FIXME!";
     }
 }
 
@@ -333,6 +337,7 @@ Server::Server(const QHostAddress &a, quint16 p, const std::shared_ptr<const Opt
     // re-set name for debug/logging
     _thread.setObjectName(prettyName());
     setObjectName(prettyName());
+    setMaxPendingConnections(std::max(maxPendingConnections(), 60)); // minimum 60 pending connections is enough?  TODO: make this configurable, perhaps
     StaticData::init(); // only does something first time it's called, otherwise a no-op
 }
 
