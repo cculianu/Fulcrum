@@ -53,12 +53,12 @@ exit 0
 %systemd_postun_with_restart fulcrum.service
 
 %files
+%doc README.md
+%license LICENSE.txt
 %config %attr(640, root, fulcrum) %{_sysconfdir}/fulcrum.conf
 %{_bindir}/fulcrum
 %attr(700, fulcrum, fulcrum) %{_sharedstatedir}/fulcrum
 %{_unitdir}/fulcrum.service
-%doc README.md
-%license LICENSE.txt
 
 %changelog
 {{{ git_changelog }}}
