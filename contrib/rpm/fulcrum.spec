@@ -1,17 +1,19 @@
-Name:       fulcrum
+Name:       {{{ git_name name="fulcrum" }}}
 Version:    0
-Release:    0.20200113%{?dist}
+Release:    {{{ git_version }}}%{?dist}
 Summary:    A fast & nimble SPV server for Bitcoin Cash
 
 License:    GPLv3
 URL:        https://github.com/cculianu/Fulcrum
-VCS:        {{{ git_dir_vcs }}}
+VCS:        {{{ git_vcs }}}
 
 Source:     {{{ git_pack }}}
 
 BuildRequires: qt5-qtbase-devel
 BuildRequires: bzip2-devel
 BuildRequires: zlib-devel
+
+Obsoletes:     Fulcrum-contrib-rpm
 
 Requires(pre): shadow-utils
 
@@ -59,4 +61,4 @@ exit 0
 %license LICENSE.txt
 
 %changelog
-{{{ git_dir_changelog }}}
+{{{ git_changelog }}}
