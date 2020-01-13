@@ -274,6 +274,10 @@ signals:
     /// Used to notify clients that are subscribed to headers that a new header has arrived.
     void newHeader(unsigned height, const QByteArray &header);
 
+    /// Emitted for the SrvMgr to update its counters of the number of tx's successfully broadcast.  The argument
+    /// is a size in bytes.
+    void broadcastTxSuccess(unsigned);
+
 private:
     // RPC methods below
     // server
@@ -388,7 +392,7 @@ public:
     bool isSubscribedToHeaders = false;
     std::atomic_int nShSubs{0};  ///< the number of unique scripthash subscriptions for this client.
 
-    static std::atomic_int numClients;
+    static std::atomic_size_t numClients, numClientsMax, numClientsCtr; // number of connected clients: current, max lifetime, accumulated counter
 
 protected:
 

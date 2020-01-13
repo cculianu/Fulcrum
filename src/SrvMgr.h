@@ -78,6 +78,8 @@ private:
     std::unique_ptr<PeerMgr> peermgr; ///< will be nullptr if options->peerDiscovery is false
 
     QMultiHash<QHostAddress, IdMixin::Id> addrIdMap;
+
+    std::size_t numTxBroadcasts = 0, txBroadcastBytesTotal = 0;
 };
 
 Q_DECLARE_METATYPE(QHostAddress);

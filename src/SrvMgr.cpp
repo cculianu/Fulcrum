@@ -86,6 +86,8 @@ void SrvMgr::startServers()
         connect(srv, &ServerBase::clientDisconnected, this, &SrvMgr::clientDisconnected);
         // if srv receives this message, it will delete the client then we will get a signal back that it is now gone
         connect(this, &SrvMgr::clientExceedsConnectionLimit, srv, qOverload<IdMixin::Id>(&ServerBase::killClient));
+        // tally tx broadcasts (lifetime)
+        connect(srv, &Server::broadcastTxSuccess, this, [this](unsigned bytes){ ++numTxBroadcasts; txBroadcastBytesTotal += bytes; });
 
         if (peermgr) {
             connect(srv, &ServerBase::gotRpcAddPeer, peermgr.get(), &PeerMgr::on_rpcAddPeer);
@@ -141,5 +143,10 @@ auto SrvMgr::stats() const -> Stats
         serversMap.unite( server->statsSafe(timeout).toMap() );
     m["Servers"] = serversMap;
     m["PeerMgr"] = peermgr ? peermgr->statsSafe(kDefaultTimeout/2) : QVariant();
+    m["transactions sent"] = qlonglong(numTxBroadcasts);
+    m["transactions sent (bytes)"] = qlonglong(txBroadcastBytesTotal);
+    m["number of clients"] = qlonglong(Client::numClients.load());
+    m["number of clients (max lifetime)"] = qlonglong(Client::numClientsMax.load());
+    m["number of clients (total lifetime connections)"] = qlonglong(Client::numClientsCtr.load());
     return m;
 }

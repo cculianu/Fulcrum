@@ -1123,8 +1123,9 @@ void Server::rpc_blockchain_transaction_broadcast(Client *c, const RPC::Message 
     // no need to validate hex here -- bitcoind does validation for us!
     generic_async_to_bitcoind(c, m.id, "sendrawtransaction", QVariantList{ rawtxhex },
         // print to log, echo bitcoind's reply to client
-        [size=rawtxhex.length()/2, cid = c->id, uaVersion = c->info.uaVersion()](const RPC::Message & reply){
+        [size=rawtxhex.length()/2, cid = c->id, uaVersion = c->info.uaVersion(), this](const RPC::Message & reply){
             QVariant ret = reply.result();
+            emit broadcastTxSuccess(unsigned(size));
             Log() << "Broadcast tx for client " << cid << ", size: " << size << " bytes, response: " << ret.toString();
             static const Version FirstNonVulberableECVersion(3,3,4);
             if (uaVersion.isValid() && uaVersion < FirstNonVulberableECVersion) {
@@ -1410,13 +1411,24 @@ void ServerSSL::incomingConnection(qintptr socketDescriptor)
 
 // --- /SSL Server support ---
 
-/*static*/ std::atomic_int Client::numClients{0};
+/*static*/ std::atomic_size_t Client::numClients{0}, Client::numClientsMax{0}, Client::numClientsCtr{0};
 
 Client::Client(const RPC::MethodMap & mm, IdMixin::Id id_in, ServerBase *srv, QTcpSocket *sock, int maxBuffer)
     : RPC::LinefeedConnection(mm, id_in, sock, /* ensure sane --> */ qMax(maxBuffer, Options::maxBufferMin)),
       srv(srv)
 {
+    ++numClientsCtr;
     const auto N = ++numClients;
+    {
+        size_t expected = numClientsMax.load(std::memory_order_relaxed);
+        // This loop atomically updates the maximum only if it's less than the current counter.
+        // It will only actually loop if there is contention on the atomic variable numClientsMax
+        // otherwise it will atomically update it so long as it is the true maximum. Don't worry, it will generally
+        // only loop if there is contention and even so the number of iterations won't exceed the number of contending
+        // threads (typically 2 iterations max worst case on a server listening to 2 ports).
+        while (expected < N && !numClientsMax.compare_exchange_weak(expected, N, std::memory_order_release, std::memory_order_relaxed))
+        { /* nothing */ }
+    }
     socket = sock;
     stale_threshold = 10 * 60 * 1000; // 10 mins stale threshold; after which clients get disconnected for being idle (for now... TODO: make this configurable)
     pingtime_ms = int(stale_threshold); // this determines how often the pingtimer fires
