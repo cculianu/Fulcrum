@@ -1,0 +1,16 @@
+language: cpp
+compiler: gcc
+os: linux
+dist: bionic
+jobs:
+  fast_finish: true
+  include:
+    - os: linux
+      dist: bionic
+      env: TARGET_OS=ubuntu
+before_install:
+  - "${TRAVIS_BUILD_DIR}/travis/${TRAVIS_OS_NAME}.${TARGET_OS}.before_install"
+install:
+  - "${TRAVIS_BUILD_DIR}/travis/${TRAVIS_OS_NAME}.${TARGET_OS}.install"
+script:
+  - "${TRAVIS_BUILD_DIR}/travis/${TRAVIS_OS_NAME}.${TARGET_OS}.script"
