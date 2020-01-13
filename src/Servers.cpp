@@ -329,27 +329,16 @@ namespace {
     }
 }
 
-
-Server::Server(const QHostAddress &a, quint16 p, const std::shared_ptr<const Options> & opts,
-               const std::shared_ptr<Storage> &s, const std::shared_ptr<BitcoinDMgr> &bdm)
-    : AbstractTcpServer(a, p), options(opts), storage(s), bitcoindmgr(bdm)
+ServerBase::ServerBase(const RPC::MethodMap & methods, const DispatchTable & dispatchTable,
+                       const QHostAddress & a, quint16 p, const std::shared_ptr<const Options> & opts,
+                       const std::shared_ptr<Storage> & st, const std::shared_ptr<BitcoinDMgr> & bdm)
+    : AbstractTcpServer(a, p), methods(methods), dispatchTable(dispatchTable), options(opts), storage(st), bitcoindmgr(bdm)
 {
-    // re-set name for debug/logging
-    _thread.setObjectName(prettyName());
-    setObjectName(prettyName());
-    setMaxPendingConnections(std::max(maxPendingConnections(), 60)); // minimum 60 pending connections is enough?  TODO: make this configurable, perhaps
-    StaticData::init(); // only does something first time it's called, otherwise a no-op
 }
-
-Server::~Server() { stop(); } // paranoia about pure virtual, and vtable consistency, etc
-
-QString Server::prettyName() const
-{
-    return QString("Tcp%1").arg(AbstractTcpServer::prettyName());
-}
+ServerBase::~ServerBase() { stop(); }
 
 // this must be called in the thread context of this thread
-QVariant Server::stats() const
+QVariant ServerBase::stats() const
 {
     QVariantMap m;
     m["numClients"] = clientsById.count();
@@ -377,20 +366,20 @@ QVariant Server::stats() const
     return QVariantMap{{prettyName(), m}};
 }
 
-void Server::on_started()
+void ServerBase::on_started()
 {
     AbstractTcpServer::on_started();
 
     // refresh bitcionD version info, server version & subversion, whenever it comes back (in case user upgraded bitcoind from under our feet!)
-    conns += connect(bitcoindmgr.get(), &BitcoinDMgr::gotFirstGoodConnection, this, &Server::refreshBitcoinDNetworkInfo);
+    conns += connect(bitcoindmgr.get(), &BitcoinDMgr::gotFirstGoodConnection, this, &ServerBase::refreshBitcoinDNetworkInfo);
     // try and refresh once now as soon as we come alive (usually we don't come alive until bitcoind connections are established so this is ok)
     refreshBitcoinDNetworkInfo();
 }
 
-void Server::on_newConnection(QTcpSocket *sock) { newClient(sock); }
+void ServerBase::on_newConnection(QTcpSocket *sock) { newClient(sock); }
 
 Client *
-Server::newClient(QTcpSocket *sock)
+ServerBase::newClient(QTcpSocket *sock)
 {
     const auto clientId = newId();
     auto ret = clientsById[clientId] = new Client(rpcMethods(), clientId, this, sock, options->maxBuffer);
@@ -419,9 +408,9 @@ Server::newClient(QTcpSocket *sock)
             Error() << "Internal error: lostConnection callback received null client! (expected client id: " << clientId << ")";
         }
     });
-    connect(ret, &RPC::ConnectionBase::gotMessage, this, &Server::onMessage);
-    connect(ret, &RPC::ConnectionBase::gotErrorMessage, this, &Server::onErrorMessage);
-    connect(ret, &RPC::ConnectionBase::peerError, this, &Server::onPeerError);
+    connect(ret, &RPC::ConnectionBase::gotMessage, this, &ServerBase::onMessage);
+    connect(ret, &RPC::ConnectionBase::gotErrorMessage, this, &ServerBase::onErrorMessage);
+    connect(ret, &RPC::ConnectionBase::peerError, this, &ServerBase::onPeerError);
 
     // tell SrvMgr about this client so it can keep track of clients-per-ip and other statistics
     emit clientConnected(clientId, addr);
@@ -429,7 +418,7 @@ Server::newClient(QTcpSocket *sock)
     return ret;
 }
 
-void Server::killClient(Client *client)
+void ServerBase::killClient(Client *client)
 {
     if (!client)
         return;
@@ -438,12 +427,12 @@ void Server::killClient(Client *client)
     client->do_disconnect();
 }
 // public slot
-void Server::killClient(IdMixin::Id clientId)
+void ServerBase::killClient(IdMixin::Id clientId)
 {
     killClient(clientsById.take(clientId));
 }
 // public slot
-void Server::killClientsByAddress(const QHostAddress &address)
+void ServerBase::killClientsByAddress(const QHostAddress &address)
 {
     std::list<Client *> clientsMatched;
     int ctr = 0;
@@ -459,11 +448,11 @@ void Server::killClientsByAddress(const QHostAddress &address)
         Debug() << "Killed " << ctr << Util::Pluralize(" client", ctr) << " matching address: " << address.toString();
 }
 
-void Server::onMessage(IdMixin::Id clientId, const RPC::Message &m)
+void ServerBase::onMessage(IdMixin::Id clientId, const RPC::Message &m)
 {
     Trace() << "onMessage: " << clientId << " json: " << m.toJsonString();
     if (Client *c = getClient(clientId); c) {
-        auto member = StaticData::dispatchTable.value(m.method);
+        const auto member = dispatchTable.value(m.method);
         if (!member)
             Error() << "Unknown method: \"" << m.method << "\". This shouldn't happen. FIXME! Json: " << m.toJsonString();
         else {
@@ -485,7 +474,7 @@ void Server::onMessage(IdMixin::Id clientId, const RPC::Message &m)
         Debug() << "Unknown client: " << clientId;
     }
 }
-void Server::onErrorMessage(IdMixin::Id clientId, const RPC::Message &m)
+void ServerBase::onErrorMessage(IdMixin::Id clientId, const RPC::Message &m)
 {
     Trace() << "onErrorMessage: " << clientId << " json: " << m.toJsonString();
     if (Client *c = getClient(clientId); c) {
@@ -493,7 +482,7 @@ void Server::onErrorMessage(IdMixin::Id clientId, const RPC::Message &m)
         emit c->sendError(true, RPC::Code_InvalidRequest, "Not a valid request object");
     }
 }
-void Server::onPeerError(IdMixin::Id clientId, const QString &what)
+void ServerBase::onPeerError(IdMixin::Id clientId, const QString &what)
 {
     Debug() << "onPeerError, client " << clientId << " error: " << what;
     if (Client *c = getClient(clientId); c) {
@@ -505,7 +494,7 @@ void Server::onPeerError(IdMixin::Id clientId, const QString &what)
     }
 }
 
-void Server::refreshBitcoinDNetworkInfo()
+void ServerBase::refreshBitcoinDNetworkInfo()
 {
     bitcoindmgr->submitRequest(this, newId(), "getnetworkinfo", QVariantList(),
         // success
@@ -525,7 +514,7 @@ void Server::refreshBitcoinDNetworkInfo()
         });
 }
 
-void Server::onPeersUpdated(const PeerInfoList &pl)
+void ServerBase::onPeersUpdated(const PeerInfoList &pl)
 {
     peers = pl;
 }
@@ -544,10 +533,10 @@ namespace {
     }
 }
 
-Server::RPCError::~RPCError() {}
-Server::RPCErrorWithDisconnect::~RPCErrorWithDisconnect() {}
+ServerBase::RPCError::~RPCError() {}
+ServerBase::RPCErrorWithDisconnect::~RPCErrorWithDisconnect() {}
 
-void Server::generic_do_async(Client *c, const RPC::Message::Id &reqId, const std::function<QVariant ()> &work, int priority)
+void ServerBase::generic_do_async(Client *c, const RPC::Message::Id &reqId, const std::function<QVariant ()> &work, int priority)
 {
     if (LIKELY(work)) {
         struct ResErr {
@@ -591,7 +580,7 @@ void Server::generic_do_async(Client *c, const RPC::Message::Id &reqId, const st
         Error() << "INTERNAL ERROR: work must be valid! FIXME!";
 }
 
-void Server::generic_async_to_bitcoind(Client *c, const RPC::Message::Id & reqId, const QString &method,
+void ServerBase::generic_async_to_bitcoind(Client *c, const RPC::Message::Id & reqId, const QString &method,
                                        const QVariantList & params,
                                        const BitcoinDSuccessFunc & successFunc,
                                        const BitcoinDErrorFunc & errorFunc)
@@ -629,6 +618,24 @@ void Server::generic_async_to_bitcoind(Client *c, const RPC::Message::Id & reqId
         // use default function on failure, sends json rpc error "internal error: <message>"
         defaultBDFailFunc(c, reqId)
     );
+}
+
+Server::Server(const QHostAddress &a, quint16 p, const std::shared_ptr<const Options> & opts,
+               const std::shared_ptr<Storage> &s, const std::shared_ptr<BitcoinDMgr> &bdm)
+    : ServerBase(StaticData::methodMap, StaticData::dispatchTable, a, p, opts, s, bdm)
+{
+    StaticData::init(); // only does something first time it's called, otherwise a no-op
+    // re-set name for debug/logging
+    _thread.setObjectName(prettyName());
+    setObjectName(prettyName());
+    setMaxPendingConnections(std::max(maxPendingConnections(), 60)); // minimum 60 pending connections is enough?  TODO: make this configurable, perhaps
+}
+
+Server::~Server() {}
+
+QString Server::prettyName() const
+{
+    return QString("Tcp%1").arg(AbstractTcpServer::prettyName());
 }
 
 void Server::rpc_server_add_peer(Client *c, const RPC::Message &m)
@@ -696,7 +703,7 @@ void Server::rpc_server_donation_address(Client *c, const RPC::Message &m)
     emit c->sendResult(m.id, options->donationAddress);
 }
 /* static */
-QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const QByteArray &genesisHash, const Options &options)
+QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const QByteArray &genesisHash, const Options &opts)
 {
     QVariantMap r;
     if (!c) {
@@ -712,10 +719,10 @@ QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const Q
     r["hash_function"] = ServerMisc::HashFunction;
 
     QVariantMap hmap;
-    if (options.publicTcp.has_value())
-        hmap["tcp_port"] = unsigned(options.publicTcp.value());
-    if (options.publicSsl.has_value())
-        hmap["ssl_port"] = unsigned(options.publicSsl.value());
+    if (opts.publicTcp.has_value())
+        hmap["tcp_port"] = unsigned(opts.publicTcp.value());
+    if (opts.publicSsl.has_value())
+        hmap["ssl_port"] = unsigned(opts.publicSsl.value());
     if (hmap.isEmpty()) {
         // This should not normally happen but it can if user specified public_tcp_port=0 and public_ssl_port=0.
         // In that case we have to report SOMETHING here as per electrumx protocol specs, so we just use the local port
@@ -724,7 +731,7 @@ QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const Q
         const QString key = c->isSsl() ? "ssl_port" : "tcp_port";
         hmap[key] = unsigned(c->localPort());
     }
-    const QString hostName = options.hostName.value_or(c->localAddress().toString());
+    const QString hostName = opts.hostName.value_or(c->localAddress().toString());
 
     r["hosts"] = QVariantMap{
         { hostName, hmap },
@@ -1306,39 +1313,41 @@ void Server::rpc_mempool_get_fee_histogram(Client *c, const RPC::Message &m)
 // --- Server::StaticData Definitions ---
 #define HEY_COMPILER_PUT_STATIC_HERE(x) decltype(x) x
 #define PR RPC::Method::PosParamRange
+#define MP(x) static_cast<ServerBase::Member_t>(&Server :: x) // wrapper to cast from narrow method pointer to ServerBase::Member_t
 HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::dispatchTable);
 HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::methodMap);
 HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
 /*  ==> Note: Add stuff to this table when adding new RPC methods.
     { {"rpc.name",                allow_requests, allow_notifications, PosParamRange, (QSet<QString> note: {} means undefined optional)}, &method_to_call }     */
-    { {"server.add_peer",                   true,               false,    PR{1,1},      RPC::KeySet{} },          &Server::rpc_server_add_peer },
-    { {"server.banner",                     true,               false,    PR{0,0},                    },          &Server::rpc_server_banner },
-    { {"server.donation_address",           true,               false,    PR{0,0},                    },          &Server::rpc_server_donation_address },
-    { {"server.features",                   true,               false,    PR{0,0},                    },          &Server::rpc_server_features },
-    { {"server.peers.subscribe",            true,               false,    PR{0,0},                    },          &Server::rpc_server_peers_subscribe },
-    { {"server.ping",                       true,               false,    PR{0,0},                    },          &Server::rpc_server_ping },
-    { {"server.version",                    true,               false,    PR{0,2},                    },          &Server::rpc_server_version },
+    { {"server.add_peer",                   true,               false,    PR{1,1},      RPC::KeySet{} },          MP(rpc_server_add_peer) },
+    { {"server.banner",                     true,               false,    PR{0,0},                    },          MP(rpc_server_banner) },
+    { {"server.donation_address",           true,               false,    PR{0,0},                    },          MP(rpc_server_donation_address) },
+    { {"server.features",                   true,               false,    PR{0,0},                    },          MP(rpc_server_features) },
+    { {"server.peers.subscribe",            true,               false,    PR{0,0},                    },          MP(rpc_server_peers_subscribe) },
+    { {"server.ping",                       true,               false,    PR{0,0},                    },          MP(rpc_server_ping) },
+    { {"server.version",                    true,               false,    PR{0,2},                    },          MP(rpc_server_version) },
 
-    { {"blockchain.block.header",           true,               false,    PR{1,2},                    },          &Server::rpc_blockchain_block_header },
-    { {"blockchain.block.headers",          true,               false,    PR{2,3},                    },          &Server::rpc_blockchain_block_headers },
-    { {"blockchain.estimatefee",            true,               false,    PR{1,1},                    },          &Server::rpc_blockchain_estimatefee },
-    { {"blockchain.headers.subscribe",      true,               false,    PR{0,0},                    },          &Server::rpc_blockchain_headers_subscribe },
-    { {"blockchain.relayfee",               true,               false,    PR{0,0},                    },          &Server::rpc_blockchain_relayfee },
+    { {"blockchain.block.header",           true,               false,    PR{1,2},                    },          MP(rpc_blockchain_block_header) },
+    { {"blockchain.block.headers",          true,               false,    PR{2,3},                    },          MP(rpc_blockchain_block_headers) },
+    { {"blockchain.estimatefee",            true,               false,    PR{1,1},                    },          MP(rpc_blockchain_estimatefee) },
+    { {"blockchain.headers.subscribe",      true,               false,    PR{0,0},                    },          MP(rpc_blockchain_headers_subscribe) },
+    { {"blockchain.relayfee",               true,               false,    PR{0,0},                    },          MP(rpc_blockchain_relayfee) },
 
-    { {"blockchain.scripthash.get_balance", true,               false,    PR{1,1},                    },          &Server::rpc_blockchain_scripthash_get_balance },
-    { {"blockchain.scripthash.get_history", true,               false,    PR{1,1},                    },          &Server::rpc_blockchain_scripthash_get_history },
-    { {"blockchain.scripthash.get_mempool", true,               false,    PR{1,1},                    },          &Server::rpc_blockchain_scripthash_get_mempool },
-    { {"blockchain.scripthash.listunspent", true,               false,    PR{1,1},                    },          &Server::rpc_blockchain_scripthash_listunspent },
-    { {"blockchain.scripthash.subscribe",   true,               false,    PR{1,1},                    },          &Server::rpc_blockchain_scripthash_subscribe },
-    { {"blockchain.scripthash.unsubscribe", true,               false,    PR{1,1},                    },          &Server::rpc_blockchain_scripthash_unsubscribe },
+    { {"blockchain.scripthash.get_balance", true,               false,    PR{1,1},                    },          MP(rpc_blockchain_scripthash_get_balance) },
+    { {"blockchain.scripthash.get_history", true,               false,    PR{1,1},                    },          MP(rpc_blockchain_scripthash_get_history) },
+    { {"blockchain.scripthash.get_mempool", true,               false,    PR{1,1},                    },          MP(rpc_blockchain_scripthash_get_mempool) },
+    { {"blockchain.scripthash.listunspent", true,               false,    PR{1,1},                    },          MP(rpc_blockchain_scripthash_listunspent) },
+    { {"blockchain.scripthash.subscribe",   true,               false,    PR{1,1},                    },          MP(rpc_blockchain_scripthash_subscribe) },
+    { {"blockchain.scripthash.unsubscribe", true,               false,    PR{1,1},                    },          MP(rpc_blockchain_scripthash_unsubscribe) },
 
-    { {"blockchain.transaction.broadcast",  true,               false,    PR{1,1},                    },          &Server::rpc_blockchain_transaction_broadcast },
-    { {"blockchain.transaction.get",        true,               false,    PR{1,2},                    },          &Server::rpc_blockchain_transaction_get },
-    { {"blockchain.transaction.get_merkle", true,               false,    PR{2,2},                    },          &Server::rpc_blockchain_transaction_get_merkle },
-    { {"blockchain.transaction.id_from_pos",true,               false,    PR{2,3},                    },          &Server::rpc_blockchain_transaction_id_from_pos },
+    { {"blockchain.transaction.broadcast",  true,               false,    PR{1,1},                    },          MP(rpc_blockchain_transaction_broadcast) },
+    { {"blockchain.transaction.get",        true,               false,    PR{1,2},                    },          MP(rpc_blockchain_transaction_get) },
+    { {"blockchain.transaction.get_merkle", true,               false,    PR{2,2},                    },          MP(rpc_blockchain_transaction_get_merkle) },
+    { {"blockchain.transaction.id_from_pos",true,               false,    PR{2,3},                    },          MP(rpc_blockchain_transaction_id_from_pos) },
 
-    { {"mempool.get_fee_histogram",         true,               false,    PR{0,0},                    },          &Server::rpc_mempool_get_fee_histogram },
+    { {"mempool.get_fee_histogram",         true,               false,    PR{0,0},                    },          MP(rpc_mempool_get_fee_histogram) },
 };
+#undef MP
 #undef PR
 #undef HEY_COMPILER_PUT_STATIC_HERE
 /*static*/
@@ -1403,7 +1412,7 @@ void ServerSSL::incomingConnection(qintptr socketDescriptor)
 
 /*static*/ std::atomic_int Client::numClients{0};
 
-Client::Client(const RPC::MethodMap & mm, IdMixin::Id id_in, Server *srv, QTcpSocket *sock, int maxBuffer)
+Client::Client(const RPC::MethodMap & mm, IdMixin::Id id_in, ServerBase *srv, QTcpSocket *sock, int maxBuffer)
     : RPC::LinefeedConnection(mm, id_in, sock, /* ensure sane --> */ qMax(maxBuffer, Options::maxBufferMin)),
       srv(srv)
 {

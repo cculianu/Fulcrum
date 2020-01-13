@@ -82,14 +82,14 @@ void SrvMgr::startServers()
         // connect blockchain.headers.subscribe signal
         connect(this, &SrvMgr::newHeader, srv, &Server::newHeader);
         // track client lifecycles for per-ip-address connection limits and other stuff
-        connect(srv, &Server::clientConnected, this, &SrvMgr::clientConnected);
-        connect(srv, &Server::clientDisconnected, this, &SrvMgr::clientDisconnected);
+        connect(srv, &ServerBase::clientConnected, this, &SrvMgr::clientConnected);
+        connect(srv, &ServerBase::clientDisconnected, this, &SrvMgr::clientDisconnected);
         // if srv receives this message, it will delete the client then we will get a signal back that it is now gone
-        connect(this, &SrvMgr::clientExceedsConnectionLimit, srv, qOverload<IdMixin::Id>(&Server::killClient));
+        connect(this, &SrvMgr::clientExceedsConnectionLimit, srv, qOverload<IdMixin::Id>(&ServerBase::killClient));
 
         if (peermgr) {
-            connect(srv, &Server::gotRpcAddPeer, peermgr.get(), &PeerMgr::on_rpcAddPeer);
-            connect(peermgr.get(), &PeerMgr::updated, srv, &Server::onPeersUpdated);
+            connect(srv, &ServerBase::gotRpcAddPeer, peermgr.get(), &PeerMgr::on_rpcAddPeer);
+            connect(peermgr.get(), &PeerMgr::updated, srv, &ServerBase::onPeersUpdated);
         }
 
         srv->tryStart();

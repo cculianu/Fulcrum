@@ -125,25 +125,43 @@ protected:
 class BitcoinDMgr;
 class Client;
 class Storage;
-/// Implements the Electrum JSON-RPC protocol, version 1.4.2
-class Server : public AbstractTcpServer, public StatsMixin
+
+/// Base class for the Electrum-server-style linefeed-based JSON-RPC service.
+///
+/// This base class knows how to handle clients and how to dispatch messages. It offers all the facilities an RPC
+/// server endpoint in this program would need to serve clients.  All that it lacks to actually do so are a dispatch
+/// table of RPC methods.  A concrete class that uses this base is the Server subcless which implements a set of RPC
+/// methods (used for serving to Electron Cash SPV clients).
+class ServerBase : public AbstractTcpServer, public StatsMixin
 {
     Q_OBJECT
-public:
-    Server(const QHostAddress & address, quint16 port, const std::shared_ptr<const Options> & options,
-           const std::shared_ptr<Storage> & storage, const std::shared_ptr<BitcoinDMgr> & bitcoindmgr);
-    ~Server() override;
+protected:
+    using Member_t = void (ServerBase::*)(Client *, const RPC::Message &); ///< ptr to member function
+    using DispatchTable = QHash<QString, Member_t>; ///< this dispatch table mechanism which relies on ptr to member is a slight performance optimization over std::function with std::bind
 
-    virtual QString prettyName() const override;
-    static constexpr const RPC::MethodMap & rpcMethods() { return StaticData::methodMap; }
+    const RPC::MethodMap & methods; ///< must be valid for the lifetime of this instance
+    const DispatchTable & dispatchTable; ///< must be valid for the lifetime of this instance
+
+    /// This class can only be inherited from. Cannot be directly constructed.
+    /// The `rpcMethods` reference needs to be valid for the lifetime of this instance.
+    /// The `dispatchTable` reference needs to be valid for the lifetime of this instance.
+    /// It's ok to pass a reference to empty containers for both `rpcMethods` and `dispatchTable` so long as
+    /// that data gets filled-in later before the server is started via `tryStart()`.
+    /// It is undefined to modify those structures after `tryStart()` has been called, however.
+    ServerBase(const RPC::MethodMap & rpcMethods, const DispatchTable & dispatchTable,
+               const QHostAddress & address, quint16 port,
+               const std::shared_ptr<const Options> & options,
+               const std::shared_ptr<Storage> & storage,
+               const std::shared_ptr<BitcoinDMgr> & bitcoindmgr);
+    ServerBase() = delete; ///< just to drive the "do not construct me" point home further. :)
+
+public:
+    ~ServerBase() override;
+
+    inline const RPC::MethodMap & rpcMethods() const { return methods; }
 
     /// From StatsMixin. This must be called in the thread context of this thread (use statsSafe() for the blocking, thread-safe version!)
     QVariant stats() const override;
-
-    /// This is refactored code that is called both from here (rpc_server_features) and from the PeerMgr
-    /// which also needs a features dict when *it* calls add_peer on peer servers.
-    /// NOTE: Be sure to only ever call this function from the same thread as the AbstractConnection (first arg) instance!
-    static QVariantMap makeFeaturesDictForConnection(AbstractConnection *, const QByteArray &genesisHash, const Options & options);
 
 signals:
     /// connected to SrvMgr clientConnected slot by SrvMgr class
@@ -151,18 +169,10 @@ signals:
     /// connected to SrvMgr clientDisconnected slot by SrvMgr class
     void clientDisconnected(IdMixin::Id clientId, const QHostAddress & remoteAddress);
 
-    /// Connected to SrvMgr parent's "newHeader" signal (which itself is connected to Controller's newHeader).
-    /// Used to notify clients that are subscribed to headers that a new header has arrived.
-    void newHeader(unsigned height, const QByteArray &header);
-
     /// Inform PeerMgr of new add_peer request coming in
     void gotRpcAddPeer(const PeerInfoList &, const QHostAddress &source);
 
 public slots:
-    void onMessage(IdMixin::Id clientId, const RPC::Message &m);
-    void onErrorMessage(IdMixin::Id clientId, const RPC::Message &m);
-    void onPeerError(IdMixin::Id clientId, const QString &what);
-
     /// Kills the client immediately and ungracefully. Silently ignores request to kill clients for clientIds not found.
     /// This is used internally and is also connected to the clientExceedsConnectionLimit signal by SrvMgr.
     /// Must be called from this object's thread.
@@ -175,6 +185,13 @@ public slots:
     /// Updates the internal peer list we cache. This is called as a result of PeerMgr::updated() being emitted which
     /// the SrvMgr automatically connects us to.
     void onPeersUpdated(const PeerInfoList &);
+
+protected slots:
+    void onMessage(IdMixin::Id clientId, const RPC::Message &m);
+    void onErrorMessage(IdMixin::Id clientId, const RPC::Message &m);
+    void onPeerError(IdMixin::Id clientId, const QString &what);
+
+    void refreshBitcoinDNetworkInfo(); ///< whenever bitcoind comes back alive, this is invoked to update the BitcoinDInfo struct declared above
 
 protected:
     void on_started() override;
@@ -220,9 +237,9 @@ protected:
     /// pointer to the shared Options object -- app-wide configuration settings. Owned and controlled by the App instance.
     const std::shared_ptr<const Options> options;
     /// pointer to shared Storage object -- owned and controlled by the Controller instance
-    std::shared_ptr<Storage> storage;
+    const std::shared_ptr<Storage> storage;
     /// pointer to shared BitcoinDMgr object -- owned and controlled by the Controller instance
-    std::shared_ptr<BitcoinDMgr> bitcoindmgr;
+    const std::shared_ptr<BitcoinDMgr> bitcoindmgr;
 
     /// This basically all comes from getnetworkinfo to bitcoind.
     struct BitcoinDInfo {
@@ -233,9 +250,29 @@ protected:
     BitcoinDInfo bitcoinDInfo;
 
     PeerInfoList peers;
+};
 
-protected slots:
-    void refreshBitcoinDNetworkInfo(); ///< whenever bitcoind comes back alive, this is invoked to update the BitcoinDInfo struct declared above
+/// Implements the ElectrumX/ElectronX JSON-RPC protocol, version 1.4.2.
+/// See also ServerSSL (subclass) which is identical but serves to SSL clients.  (This class serves to TCP clients).
+class Server : public ServerBase
+{
+    Q_OBJECT
+public:
+    Server(const QHostAddress & address, quint16 port, const std::shared_ptr<const Options> & options,
+           const std::shared_ptr<Storage> & storage, const std::shared_ptr<BitcoinDMgr> & bitcoindmgr);
+    ~Server() override;
+
+    /// This is refactored code that is called both from here (rpc_server_features) and from the PeerMgr
+    /// which also needs a features dict when *it* calls add_peer on peer servers.
+    /// NOTE: Be sure to only ever call this function from the same thread as the AbstractConnection (first arg) instance!
+    static QVariantMap makeFeaturesDictForConnection(AbstractConnection *, const QByteArray &genesisHash, const Options & options);
+
+    virtual QString prettyName() const override;
+
+signals:
+    /// Connected to SrvMgr parent's "newHeader" signal (which itself is connected to Controller's newHeader).
+    /// Used to notify clients that are subscribed to headers that a new header has arrived.
+    void newHeader(unsigned height, const QByteArray &header);
 
 private:
     // RPC methods below
@@ -270,13 +307,11 @@ private:
 
     /// Basically a namespace for our rpc dispatch tables, etc
     struct StaticData {
-        using Member_t = void (Server::*)(Client *, const RPC::Message &); ///< ptr to member function
-
         struct MethodMember : public RPC::Method { Member_t member = nullptr; }; ///< used to associate the method spec with a pointer to member
 
         // the below two get populated at app init by the above rpc_method_registry table
         /// Dispatch tables of "rpc.method.name" -> pointer to method
-        static QHash<QString, Member_t> dispatchTable;
+        static DispatchTable dispatchTable;
         /// method spec for RPC::Connection class interface to know what to accept/reject
         static RPC::MethodMap methodMap;
         /// This static data is used to build the above two static tables at app init
@@ -315,8 +350,8 @@ protected:
     /// overrides QTcpServer to create a QSslSocket wrapping the passed-in file descriptor.
     void incomingConnection(qintptr) override;
 private:
-    QSslCertificate cert;
-    QSslKey key;
+    const QSslCertificate cert;
+    const QSslKey key;
 };
 
 /// Encapsulates an Electron Cash (Electrum) Client
@@ -329,9 +364,10 @@ class Client : public RPC::LinefeedConnection
     Q_OBJECT
 protected:
     /// Only Server instances can construct us
+    friend class ::ServerBase;
     friend class ::Server;
     /// NB: sock should be in an already connected state.
-    explicit Client(const RPC::MethodMap & methods, IdMixin::Id id, Server *srv, QTcpSocket *sock, int maxBuffer);
+    explicit Client(const RPC::MethodMap & methods, IdMixin::Id id, ServerBase *srv, QTcpSocket *sock, int maxBuffer);
 public:
     ~Client() override;
 
@@ -359,5 +395,5 @@ protected:
     void do_ping() override;
     void do_disconnect(bool graceful = false) override;
 
-    Server *srv;
+    ServerBase *srv;
 };
