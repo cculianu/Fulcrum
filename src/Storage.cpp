@@ -1692,6 +1692,12 @@ auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf) const -> H
                                           .arg(QString(hashX.toHex())).arg(maxHistory).arg(nums.size()));
                 }
                 ret.reserve(nums.size());
+                // TODO: The below could use some optimization.  A batched version of both hashForTxNum and
+                // heightForTxNum are low-hanging fruit for optimization.  Each call to the below takes a shared lock
+                // then releases it, for each item.  I imagine batched versions would have significantly less overhead
+                // per item, which could add up to huge performance savings on large histories.  This is a very
+                // low hanging fruit for optimization -- thus I am leaving this comment here so I can remember to come
+                // back and optmize the below.  /TODO
                 for (auto num : nums) {
                     auto hash = hashForTxNum(num).value(); // may throw, but that indicates some database inconsistency. we catch below
                     auto height = heightForTxNum(num).value(); // may throw, same deal
