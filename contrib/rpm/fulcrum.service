@@ -4,6 +4,7 @@ Description=Fulcrum SPV server for Bitcoin Cash
 [Service]
 Type=simple
 User=fulcrum
+LimitNOFILE=20000:32767
 ExecStart=/usr/bin/fulcrum --datadir /var/lib/fulcrum /etc/fulcrum.conf
 
 [Install]

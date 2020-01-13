@@ -514,6 +514,11 @@ struct Storage::Pvt
         return unsigned( (nHashes * (HashLen + sizeof(TxHash))) + decltype(lruHeight2Hashes_BitcoindMemOrder)::itemOverheadBytes() );
     }
 
+    struct LRUCacheStats {
+        std::atomic_size_t num2HashHits = 0, num2HashMisses = 0,
+                           height2HashesHits = 0, height2HashesMisses = 0;
+    } lruCacheStats;
+
     /// this object is thread safe, but it needs to be initialized with headers before allowing client connections.
     std::unique_ptr<Merkle::Cache> merkleCache;
 
@@ -651,6 +656,8 @@ auto Storage::stats() const -> Stats
         const auto sz = p->lruNum2Hash.size(), szBytes = p->lruNum2Hash.totalCost();
         m["nItems"] = qlonglong(sz);
         m["Size bytes"] = qlonglong(szBytes);
+        m["~hits"] = qlonglong(p->lruCacheStats.num2HashHits);
+        m["~misses"] = qlonglong(p->lruCacheStats.num2HashMisses);
         caches["LRU Cache: TxNum -> TxHash"] = m;
     }
     {
@@ -658,6 +665,8 @@ auto Storage::stats() const -> Stats
         const unsigned nItems = p->lruHeight2Hashes_BitcoindMemOrder.size(), szBytes = p->lruHeight2Hashes_BitcoindMemOrder.totalCost();
         m["nBlocks"] = nItems;
         m["Size bytes"] = szBytes;
+        m["~hits"] = qlonglong(p->lruCacheStats.height2HashesHits);
+        m["~misses"] = qlonglong(p->lruCacheStats.height2HashesMisses);
         caches["LRU Cache: Block Height -> TxHashes"] = m;
     }
     {
@@ -1580,8 +1589,10 @@ std::optional<TxHash> Storage::hashForTxNum(TxNum n, bool throwIfMissing, bool *
     if (!skipCache) ret = p->lruNum2Hash.object(n);
     if (ret.has_value()) {
         if (wasCached) *wasCached = true;
+        ++p->lruCacheStats.num2HashHits;
         return ret;
     } else if (wasCached) *wasCached = false;
+    if (!skipCache) ++p->lruCacheStats.num2HashMisses;
 
     static const QString kErrMsg ("Error reading TxHash for TxNum %1: %2");
     QString errStr;
@@ -1649,9 +1660,11 @@ std::vector<TxHash> Storage::txHashesForBlockInBitcoindMemoryOrder(BlockHeight h
             // these copies.
             ret.reserve(size_t(vec.size()));
             ret.insert(ret.end(), vec.begin(), vec.end()); // We do it this way because QVector::toStdVector() doesn't reserve() first :/
+            ++p->lruCacheStats.height2HashesHits;
             return ret;
         }
     }
+    ++p->lruCacheStats.height2HashesMisses;
     {
         SharedLockGuard g(p->blkInfoLock);
         if (height >= p->blkInfos.size())
