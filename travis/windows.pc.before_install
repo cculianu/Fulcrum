@@ -1,0 +1,3 @@
+#!/bin/sh
+choco uninstall -y mingw
+choco install --no-progress -y msys2

@@ -12,6 +12,9 @@ jobs:
       osx_image: xcode11
       env: TARGET_OS=mac
       compiler: clang
+    - os: windows
+      env: TARGET_OS=pc TARGET_MINGW=mingw64 MINGW_ARCH=x86_64
+      cache: false
 before_install:
   - "${TRAVIS_BUILD_DIR}/travis/${TRAVIS_OS_NAME}.${TARGET_OS}.before_install"
 install:
