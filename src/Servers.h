@@ -54,6 +54,7 @@ public:
     void tryStart(ulong timeout_ms = ULONG_MAX); ///< may raise Exception if cannot bind, etc. Blocks waiting for thread to listen and return ok/error status.
     using ThreadObjectMixin::stop; /// promote this back up to public
 
+    /// not garanteed thread-safe
     virtual QString prettyName() const;
     QString hostPort() const;
 
@@ -66,8 +67,8 @@ protected:
     void on_started() override;
     void on_finished() override;
 
-    QHostAddress addr;
-    quint16 port;
+    const QHostAddress addr;
+    const quint16 port;
 private slots:
     void pvt_on_newConnection();
 };
@@ -125,7 +126,7 @@ class BitcoinDMgr;
 class Client;
 class Storage;
 /// Implements the Electrum JSON-RPC protocol, version 1.4.2
-class Server : public AbstractTcpServer
+class Server : public AbstractTcpServer, public StatsMixin
 {
     Q_OBJECT
 public:
@@ -136,8 +137,8 @@ public:
     virtual QString prettyName() const override;
     static constexpr const RPC::MethodMap & rpcMethods() { return StaticData::methodMap; }
 
-    // this must be called in the thread context of this thread
-    QVariantMap stats() const;
+    /// From StatsMixin. This must be called in the thread context of this thread (use statsSafe() for the blocking, thread-safe version!)
+    QVariant stats() const override;
 
     /// This is refactored code that is called both from here (rpc_server_features) and from the PeerMgr
     /// which also needs a features dict when *it* calls add_peer on peer servers.
@@ -175,11 +176,10 @@ public slots:
     /// the SrvMgr automatically connects us to.
     void onPeersUpdated(const PeerInfoList &);
 
-private:
+protected:
     void on_started() override;
     void on_newConnection(QTcpSocket *) override;
 
-private:
     Client * newClient(QTcpSocket *);
     inline Client * getClient(IdMixin::Id clientId) {
         if (auto it = clientsById.find(clientId); it != clientsById.end())
@@ -189,7 +189,6 @@ private:
     void killClient(Client *);
     QHash<IdMixin::Id, Client *> clientsById;
 
-private:
     struct RPCError : public Exception {
         RPCError(const QString & message, int code = RPC::ErrorCodes::Code_App_BadRequest, bool disconnect = false)
             : Exception(message), code(code), disconnect(disconnect) {}
@@ -217,6 +216,28 @@ private:
                                    const QVariantList &params, ///< params for bitcoind method
                                    const BitcoinDSuccessFunc & successFunc,
                                    const BitcoinDErrorFunc & errorFunc = BitcoinDErrorFunc());
+
+    /// pointer to the shared Options object -- app-wide configuration settings. Owned and controlled by the App instance.
+    const std::shared_ptr<const Options> options;
+    /// pointer to shared Storage object -- owned and controlled by the Controller instance
+    std::shared_ptr<Storage> storage;
+    /// pointer to shared BitcoinDMgr object -- owned and controlled by the Controller instance
+    std::shared_ptr<BitcoinDMgr> bitcoindmgr;
+
+    /// This basically all comes from getnetworkinfo to bitcoind.
+    struct BitcoinDInfo {
+        Version version {0,0,0}; ///> major, minor, revision e.g. {0, 20, 6} for v0.20.6
+        QString subversion; ///< subversion string from daemon e.g.: /BitcoinABC bla bla;EB32 ..../
+        double relayFee = 0.0; ///< from 'relayfee' in the getnetworkinfo response; minimum fee/kb to relay a tx, usually: 0.00001000
+    };
+    BitcoinDInfo bitcoinDInfo;
+
+    PeerInfoList peers;
+
+protected slots:
+    void refreshBitcoinDNetworkInfo(); ///< whenever bitcoind comes back alive, this is invoked to update the BitcoinDInfo struct declared above
+
+private:
     // RPC methods below
     // server
     void rpc_server_add_peer(Client *, const RPC::Message &); // fully implemented
@@ -265,13 +286,6 @@ private:
         StaticData() = delete; ///< unconstructible class! :D
     };
 
-    /// pointer to the shared Options object -- app-wide configuration settings. Owned and controlled by the App instance.
-    const std::shared_ptr<const Options> options;
-    /// pointer to shared Storage object -- owned and controlled by the Controller instance
-    std::shared_ptr<Storage> storage;
-    /// pointer to shared BitcoinDMgr object -- owned and controlled by the Controller instance
-    std::shared_ptr<BitcoinDMgr> bitcoindmgr;
-
     using HeadersBranchAndRootPair = std::pair<QVariantList, QVariant>;
     /// Helper for rpc block_header* methods -- returns the 'branch' and 'root' keys ready to be put in the results dictionary
     HeadersBranchAndRootPair getHeadersBranchAndRoot(unsigned height, unsigned cp_height);
@@ -279,19 +293,6 @@ private:
     /// called from get_mempool and get_history to retrieve the mempool and/or history for a hashx synchronously.
     /// Returns the QVariantMap suitable for placing into the resulting response.
     QVariantList getHistoryCommon(const QByteArray & sh, bool mempoolOnly);
-
-    /// This basically all comes from getnetworkinfo to bitcoind.
-    struct BitcoinDInfo {
-        Version version {0,0,0}; ///> major, minor, revision e.g. {0, 20, 6} for v0.20.6
-        QString subversion; ///< subversion string from daemon e.g.: /BitcoinABC bla bla;EB32 ..../
-        double relayFee = 0.0; ///< from 'relayfee' in the getnetworkinfo response; minimum fee/kb to relay a tx, usually: 0.00001000
-    };
-    BitcoinDInfo bitcoinDInfo;
-
-    PeerInfoList peers;
-
-private slots:
-    void refreshBitcoinDNetworkInfo(); ///< whenever bitcoind comes back alive, this is invoked to update the BitcoinDInfo struct declared above
 };
 
 /// SSL version of the above Server class that just wraps tcp sockets with a QSslSocket.

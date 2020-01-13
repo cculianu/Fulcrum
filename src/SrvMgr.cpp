@@ -135,21 +135,11 @@ auto SrvMgr::stats() const -> Stats
     QVariantMap m;
     m["donationAddress"] = options->donationAddress;
     m["bannerFile"] = options->bannerFile.toUtf8(); // so we get a nice 'null' if not specified
-    QVariantList serverList;
+    QVariantMap serversMap;
     const int timeout = kDefaultTimeout / qMax(int(servers.size()), 1);
-    for (auto & serverptr : servers) {
-        using Pair = std::pair<QString, QVariant>;
-        auto server = serverptr.get();
-        auto result = Util::LambdaOnObjectNoThrow<Pair>(server, [server] {
-            return Pair(server->prettyName(), server->stats());
-        }, timeout); // <-- limited timeout just in case
-        if (result) {
-            QVariantMap m;
-            m[result->first] = result->second;
-            serverList.push_back(m);
-        }
-    }
-    m["Servers"] = serverList;
+    for (const auto & server : servers)
+        serversMap.unite( server->statsSafe(timeout).toMap() );
+    m["Servers"] = serversMap;
     m["PeerMgr"] = peermgr ? peermgr->statsSafe(kDefaultTimeout/2) : QVariant();
     return m;
 }

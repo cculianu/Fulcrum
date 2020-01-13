@@ -349,10 +349,10 @@ QString Server::prettyName() const
 }
 
 // this must be called in the thread context of this thread
-QVariantMap Server::stats() const
+QVariant Server::stats() const
 {
-    QVariantMap ret;
-    ret["numClients"] = clientsById.count();
+    QVariantMap m;
+    m["numClients"] = clientsById.count();
     QVariantList clientList;
     for (const auto & client : clientsById) {
         // note we call this thread-unsafe function stats() here because client lives in our thread. but if that design
@@ -373,8 +373,8 @@ QVariantMap Server::stats() const
         map.remove("nRequestsSent");
         clientList.append(QVariantMap({{name, map}}));
     }
-    ret["clients"] = clientList;
-    return ret;
+    m["clients"] = clientList;
+    return QVariantMap{{prettyName(), m}};
 }
 
 void Server::on_started()
