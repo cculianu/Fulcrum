@@ -1,0 +1,8 @@
+#!/bin/sh
+sudo apt-get install -y \
+    qt513base \
+    openssl \
+    git \
+    build-essential \
+    zlib1g-dev \
+    libbz2-dev

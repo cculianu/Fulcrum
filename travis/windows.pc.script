@@ -1,0 +1,5 @@
+#!/bin/sh
+export PATH=/C/tools/msys64/$TARGET_MINGW/bin:$PATH
+qmake -makefile CONFIG+=release Fulcrum.pro
+mingw32-make
+mingw32-make install
