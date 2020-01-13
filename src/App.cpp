@@ -581,6 +581,17 @@ void App::parseArgs()
         Util::AsyncOnObject(this, [val,this]{ Debug() << "config: worker_threads = " << val << " (configured: " << tpool->maxThreadCount() << ")"; });
     } else
         options->workerThreads = tpool->maxThreadCount(); // so stats() knows what was auto-configured
+    // max_pending_connections
+    if (conf.hasValue("max_pending_connections")) {
+        bool ok;
+        auto val = conf.intValue("max_pending_connections", options->maxPendingConnections, &ok);
+        if (!ok || val < options->minMaxPendingConnections || val > options->maxMaxPendingConnections)
+            throw BadArgs(QString("max_pending_connections: Please specify an integer in the range [%1, %2]")
+                          .arg(options->minMaxPendingConnections).arg(options->maxMaxPendingConnections));
+        options->maxPendingConnections = val;
+        // log this later in case we are in syslog mode
+        Util::AsyncOnObject(this, [val]{ Debug() << "config: max_pending_connections = " << val; });
+    }
 
     // warn user that no hostname was specified if they have peerDiscover turned on
     if (!options->hostName.has_value() && options->peerDiscovery && options->peerAnnounceSelf) {

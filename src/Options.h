@@ -114,6 +114,9 @@ public:
     // necessarily the options used in practice (those can be determined by querying the Util::ThreadPool).
     int workQueue = -1;
     int workerThreads = -1;
+
+    static constexpr int defaultMaxPendingConnections = 60, minMaxPendingConnections = 10, maxMaxPendingConnections = 9999;
+    int maxPendingConnections = defaultMaxPendingConnections; ///< comes from config 'max_pending_connections'.
 };
 
 /// A class encapsulating a simple read-only config file format.  The format is similar to the bitcoin.conf format

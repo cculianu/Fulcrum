@@ -130,7 +130,7 @@ void AbstractTcpServer::pvt_on_newConnection()
         on_newConnection(sock);
     }
     if (!ctr) {
-        Warning() << __FUNCTION__ << ": nextPendingConnection had no connections ready! Spurious call to " << __func__ << "? FIXME!";
+        Debug() << __func__ << ": nextPendingConnection had no connections ready; Spurious call";
     }
 }
 
@@ -628,7 +628,7 @@ Server::Server(const QHostAddress &a, quint16 p, const std::shared_ptr<const Opt
     // re-set name for debug/logging
     _thread.setObjectName(prettyName());
     setObjectName(prettyName());
-    setMaxPendingConnections(std::max(maxPendingConnections(), 60)); // minimum 60 pending connections is enough?  TODO: make this configurable, perhaps
+    setMaxPendingConnections(std::max(options->maxPendingConnections, options->minMaxPendingConnections)); // default in Options is 60 pending connections
 }
 
 Server::~Server() {}
