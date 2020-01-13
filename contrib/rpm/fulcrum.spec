@@ -1,6 +1,6 @@
-Name:       {{{ git_dir_name }}}
-Version:    {{{ git_dir_version }}}
-Release:    1%{?dist}
+Name:       fulcrum
+Version:    0
+Release:    0.20200113%{?dist}
 Summary:    A fast & nimble SPV server for Bitcoin Cash
 
 License:    GPLv3
