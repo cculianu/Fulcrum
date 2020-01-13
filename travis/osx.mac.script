@@ -1,0 +1,4 @@
+#!/bin/sh
+qmake -makefile CONFIG+=release Fulcrum.pro
+make
+sudo make install

@@ -8,6 +8,10 @@ jobs:
     - os: linux
       dist: bionic
       env: TARGET_OS=ubuntu
+    - os: osx
+      osx_image: xcode11
+      env: TARGET_OS=mac
+      compiler: clang
 before_install:
   - "${TRAVIS_BUILD_DIR}/travis/${TRAVIS_OS_NAME}.${TARGET_OS}.before_install"
 install:
