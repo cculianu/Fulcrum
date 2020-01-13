@@ -1,5 +1,7 @@
 # Fulcrum
 
+[![Docker Build](https://img.shields.io/docker/cloud/build/cculianu/fulcrum)](https://hub.docker.com/r/cculianu/fulcrum)
+
 A fast & nimble SPV server for Bitcoin Cash.
 
 #### Copyright
