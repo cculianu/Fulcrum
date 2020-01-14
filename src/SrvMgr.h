@@ -26,6 +26,7 @@
 #include <list>
 #include <memory>
 
+class AdminServer;
 class BitcoinDMgr;
 class PeerMgr;
 class Server;
@@ -44,6 +45,9 @@ public:
     void cleanup() override;
 
     int nServers() const { return int(servers.size()); }
+
+    std::size_t txBroadcasts() const { return numTxBroadcasts.load(); }
+    std::size_t txBroadcastBytes() const { return txBroadcastBytesTotal.load(); }
 
 signals:
     /// Notifies all blockchain.headers.subscribe'd clients for the entire server about a new header.
@@ -75,11 +79,12 @@ private:
     std::shared_ptr<Storage> storage;
     std::shared_ptr<BitcoinDMgr> bitcoindmgr;
     std::list<std::unique_ptr<Server>> servers;
+    std::list<std::unique_ptr<AdminServer>> adminServers;
     std::unique_ptr<PeerMgr> peermgr; ///< will be nullptr if options->peerDiscovery is false
 
     QMultiHash<QHostAddress, IdMixin::Id> addrIdMap;
 
-    std::size_t numTxBroadcasts = 0, txBroadcastBytesTotal = 0;
+    std::atomic_size_t numTxBroadcasts = 0, txBroadcastBytesTotal = 0;
 };
 
 Q_DECLARE_METATYPE(QHostAddress);

@@ -246,6 +246,7 @@ protected:
         Version version {0,0,0}; ///> major, minor, revision e.g. {0, 20, 6} for v0.20.6
         QString subversion; ///< subversion string from daemon e.g.: /BitcoinABC bla bla;EB32 ..../
         double relayFee = 0.0; ///< from 'relayfee' in the getnetworkinfo response; minimum fee/kb to relay a tx, usually: 0.00001000
+        QString warnings = ""; ///< from 'warnings' in the getnetworkinfo response (usually is empty string, but may not always be)
     };
     BitcoinDInfo bitcoinDInfo;
 
@@ -356,6 +357,41 @@ protected:
 private:
     const QSslCertificate cert;
     const QSslKey key;
+};
+
+class SrvMgr;
+
+/// The local admin RPC service for sending control commands to Fulcrum.
+class AdminServer : public ServerBase
+{
+public:
+    AdminServer(SrvMgr *srvMgr, const QHostAddress & address, quint16 port, const std::shared_ptr<const Options> & options,
+                const std::shared_ptr<Storage> & storage, const std::shared_ptr<BitcoinDMgr> & bitcoindmgr);
+    ~AdminServer() override;
+
+    QString prettyName() const override;
+
+private:
+    SrvMgr * const srvmgr; ///< this is alive for the entire lifetime of this instance.
+
+    void rpc_getinfo(Client *, const RPC::Message &);
+    void rpc_shutdown(Client *, const RPC::Message &);
+
+    /// Basically a namespace for our rpc dispatch tables, etc, private to this class
+    struct StaticData {
+        struct MethodMember : public RPC::Method { Member_t member = nullptr; }; ///< used to associate the method spec with a pointer to member
+
+        // the below two get populated at app init by the above rpc_method_registry table
+        /// Dispatch tables of "rpc.method.name" -> pointer to method
+        static DispatchTable dispatchTable;
+        /// method spec for RPC::Connection class interface to know what to accept/reject
+        static RPC::MethodMap methodMap;
+        /// This static data is used to build the above two static tables at app init
+        static const QVector<MethodMember> registry;
+
+        static void init(); ///< called by Server c'tor. (First time it's called it populates the above tables from the 'registry' table)
+        StaticData() = delete; ///< unconstructible class! :D
+    };
 };
 
 /// Encapsulates an Electron Cash (Electrum) Client

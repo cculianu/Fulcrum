@@ -78,6 +78,10 @@ QVariantMap Options::toMap() const
     for (const auto & pair : statsInterfaces)
         l.push_back(QString("%1:%2").arg(pair.first.toString()).arg(pair.second));
     m["stats"] = l;
+    l.clear();
+    for (const auto & pair : adminInterfaces)
+        l.push_back(QString("%1:%2").arg(pair.first.toString()).arg(pair.second));
+    m["admin"] = l;
     m["cert"] = certFile;
     m["key"] = keyFile;
     m["bitcoind"] = QString("%1:%2").arg(bitcoind.first).arg(bitcoind.second);
@@ -104,6 +108,7 @@ QVariantMap Options::toMap() const
     m["max_history"] = maxHistory;
     m["workqueue"] = workQueue;
     m["worker_threads"] = workerThreads;
+    m["max_pending_connections"] = maxPendingConnections;
 
     return m;
 }

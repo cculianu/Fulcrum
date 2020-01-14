@@ -179,6 +179,9 @@ struct PeerInfo
     /// Pass it the list as you would get from a server.peers.subscribe response.  It should spit back out a
     /// list of infos, partially-filled-in, and ready to be send down the PeerMgr pipeline for connecting-to.
     static PeerInfoList fromPeersSubscribeList(const QVariantList &l) noexcept(false);
+
+    /// Returns a map of this peer suitable for putting into the /stats endpoint map or returning via admin rpc
+    QVariantMap toStatsMap() const;
 };
 
 class PeerClient : public RPC::LinefeedConnection

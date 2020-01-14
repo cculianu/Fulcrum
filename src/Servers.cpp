@@ -23,6 +23,7 @@
 #include "Merkle.h"
 #include "PeerMgr.h"
 #include "ServerMisc.h"
+#include "SrvMgr.h"
 #include "Storage.h"
 #include "SubsMgr.h"
 #include "ThreadPool.h"
@@ -511,6 +512,7 @@ void ServerBase::refreshBitcoinDNetworkInfo()
             }
             bitcoinDInfo.relayFee = networkInfo.value("relayfee", 0.0).toDouble();
             bitcoinDInfo.subversion = networkInfo.value("subversion", "").toString();
+            bitcoinDInfo.warnings = networkInfo.value("warnings", "").toString();
         });
 }
 
@@ -1408,8 +1410,87 @@ void ServerSSL::incomingConnection(qintptr socketDescriptor)
         delete socket;
     }
 }
-
 // --- /SSL Server support ---
+
+// --- Admin RPC Serer ---
+AdminServer::AdminServer(SrvMgr *sm, const QHostAddress & a, quint16 p, const std::shared_ptr<const Options> & o,
+                const std::shared_ptr<Storage> & s, const std::shared_ptr<BitcoinDMgr> & b)
+    : ServerBase(StaticData::methodMap, StaticData::dispatchTable, a, p, o, s, b), srvmgr(sm)
+{
+    StaticData::init(); // noop after first time it's called
+    setObjectName(prettyName());
+    _thread.setObjectName(objectName());
+}
+
+AdminServer::~AdminServer() {}
+
+QString AdminServer::prettyName() const { return QString("Admin%1").arg(AbstractTcpServer::prettyName()); }
+
+void AdminServer::rpc_getinfo(Client *c, const RPC::Message &m)
+{
+    QVariantMap res;
+    res["bitcoind"] = QString("%1:%2").arg(options->bitcoind.first).arg(options->bitcoind.second);
+    res["bitcoind_warnings"] = bitcoinDInfo.warnings;
+    {
+        const auto opt = storage->latestHeight();
+        res["db_synched_height"] = opt.has_value() ? opt.value() : QVariant();
+    }
+    res["pid"] = QCoreApplication::applicationPid();
+    res["clients_connected"] = qulonglong(Client::numClients.load());
+    res["clients_connected_max_lifetime"] = qulonglong(Client::numClientsMax.load());
+    res["clients_connected_total_lifetime"] = qulonglong(Client::numClientsCtr.load());
+    res["version"] = ServerMisc::AppSubVersion;
+    res["txs_sent"] = qulonglong(srvmgr->txBroadcasts());
+    res["txs_sent_bytes"] = qulonglong(srvmgr->txBroadcastBytes());
+    res["uptime"] = QString::number(Util::getTimeSecs(), 'f', 1) + " secs";
+    res["subscriptions"] = storage->subs()->numActiveClientSubscriptions();
+    res["peers"] = peers.size();
+    res["config"] = options->toMap();
+    emit c->sendResult(m.id, res);
+}
+
+void AdminServer::rpc_shutdown(Client *c, const RPC::Message &m)
+{
+    auto app = qApp;
+    // send the signal after 100ms to the QCoreApplication instance to quit.  this allows time for the result to be sent to the client, hopefully.
+    Util::AsyncOnObject(app, [app] {
+        Log() << "Received 'stop' command from admin RPC, shutting down ...";
+        app->quit();
+    }, 100);
+    emit c->sendResult(m.id, QVariant(true));
+}
+
+// --- AdminServer::StaticData Definitions ---
+#define HEY_COMPILER_PUT_STATIC_HERE(x) decltype(x) x
+#define PR RPC::Method::PosParamRange
+#define MP(x) static_cast<ServerBase::Member_t>(&AdminServer :: x) // wrapper to cast from narrow method pointer to ServerBase::Member_t
+HEY_COMPILER_PUT_STATIC_HERE(AdminServer::StaticData::dispatchTable);
+HEY_COMPILER_PUT_STATIC_HERE(AdminServer::StaticData::methodMap);
+HEY_COMPILER_PUT_STATIC_HERE(AdminServer::StaticData::registry){
+/*  ==> Note: Add stuff to this table when adding new RPC methods.
+    { {"rpc.name",                allow_requests, allow_notifications, PosParamRange, (QSet<QString> note: {} means undefined optional)}, &method_to_call }     */
+    { {"getinfo",                           true,               false,    PR{0,0},      RPC::KeySet{} },          MP(rpc_getinfo) },
+    { {"shutdown",                          true,               false,    PR{0,0},      RPC::KeySet{} },          MP(rpc_shutdown) },
+    { {"stop",                              true,               false,    PR{0,0},      RPC::KeySet{} },          MP(rpc_shutdown) }, // alias for shutdown
+};
+#undef MP
+#undef PR
+#undef HEY_COMPILER_PUT_STATIC_HERE
+/*static*/
+void AdminServer::StaticData::init()
+{
+    if (!dispatchTable.empty())
+        return;
+    for (const auto & r : registry) {
+        if (!r.member) {
+            Error() << "Runtime check failed: RPC Method " << r.method << " has a nullptr for its .member! See Server class! FIXME!";
+            std::_Exit(EXIT_FAILURE);
+        }
+        methodMap[r.method] = r;
+        dispatchTable[r.method] = r.member;
+    }
+}
+// ---- /Admin RPC Server ---
 
 /*static*/ std::atomic_size_t Client::numClients{0}, Client::numClientsMax{0}, Client::numClientsCtr{0};
 

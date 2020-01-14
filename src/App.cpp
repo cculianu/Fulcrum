@@ -202,6 +202,16 @@ void App::parseArgs()
            " appears at all on the command-line. The file should contain an RSA private key in PEM format."),
            QString("keyfile"),
          },
+        { { "a", "admin" },
+          QString("Specify an <interface:port> on which to listen for TCP connections for the admin RPC service."
+                  " The admin service is used for sending special control commands to the server, such as stopping"
+                  " the server, and it should *NOT* be exposed to the internet.  This option is required if you wish to"
+                  " use the fulcrum_admin CLI tool to send commands to Fulcrum. It is recommended that you specify the "
+                  " loopback address as the bind interface for this option such as: 127.0.0.1:PORT for IPv4 and/or"
+                  " ::1:PORT for IPv6."
+                  " This option may be specified more than once to bind to multiple interfaces and/or ports."),
+          QString("interface:port"),
+         },
          { { "z", "stats" },
            QString("Specify listen address and port for the stats HTTP server. Format is same as the -s or -t options, "
            "e.g.: <interface:port>. Default is to not start any starts HTTP servers. "
@@ -466,9 +476,23 @@ void App::parseArgs()
             });
         }
     }
+    // stats port
     parseInterfaces(options->statsInterfaces, conf.hasValue("stats")
                                               ? conf.values("stats")
                                               : parser.values("z"));
+    // admin rpc port
+    parseInterfaces(options->adminInterfaces, conf.hasValue("admin")
+                                              ? conf.values("admin")
+                                              : parser.values("a"));
+    // warn user if any of the admin rpc services are on non-loopback
+    for (const auto &iface : options->adminInterfaces) {
+        if (!iface.first.isLoopback()) {
+            // print the warning later when logger is up
+            Util::AsyncOnObject(this, [iface]{
+                Warning() << "Warning: Binding admin RPC port to non-loopback interface " << iface.first.toString() << ":" << iface.second << " is not recommended. Please ensure that this port is not globally reachable from the internet.";
+            });
+        }
+    }
 
     /// misc conf-only variables ...
     options->donationAddress = conf.value("donation", options->donationAddress).left(80); // the 80 character limit is in case the user specified a crazy long string, no need to send all of it -- it's probably invalid anyway.

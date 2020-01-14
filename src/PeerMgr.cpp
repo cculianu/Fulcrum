@@ -441,19 +441,26 @@ auto PeerMgr::stats() const -> Stats
     return ret;
 }
 
+QVariantMap PeerInfo::toStatsMap() const
+{
+    QVariantMap m;
+    m["addr"] = addr.toString();
+    m["server_version"] = subversion;
+    m["protocolVersion"] = protocolVersion.toString();
+    m["protocol_min"] = protocolMin.toString();
+    m["protocol_max"] = protocolMax.toString();
+    m["hash_function"] = hashFunction;
+    m["genesis_hash"] = genesisHash.toHex();
+    m["tcp_port"] = tcp;
+    m["ssl_port"] = ssl;
+    m["isTor?"] = isTor();
+    return m;
+}
+
 auto PeerClient::stats() const -> Stats
 {
     QVariantMap m = RPC::LinefeedConnection::stats().toMap();
-    m["addr"] = info.addr.toString();
-    m["server_version"] = info.subversion;
-    m["protocolVersion"] = info.protocolVersion.toString();
-    m["protocol_min"] = info.protocolMin.toString();
-    m["protocol_max"] = info.protocolMax.toString();
-    m["hash_function"] = info.hashFunction;
-    m["genesis_hash"] = info.genesisHash.toHex();
-    m["tcp_port"] = info.tcp;
-    m["ssl_port"] = info.ssl;
-    m["isTor?"] = info.isTor();
+    m.unite(info.toStatsMap());
     if (const auto s = failureHoursString(info); !s.isEmpty())
         m["failureAge"] = s;
     m["verified"] = verified;

@@ -66,7 +66,7 @@ void SrvMgr::startServers()
         connect(this, &SrvMgr::allServersStarted, peermgr.get(), &PeerMgr::on_allServersStarted);
     } else peermgr.reset();
 
-    const auto num = options->interfaces.length() + options->sslInterfaces.length();
+    const auto num = options->interfaces.length() + options->sslInterfaces.length() + options->adminInterfaces.length();
     Log() << "SrvMgr: starting " << num << " " << Util::Pluralize("service", num) << " ...";
     const auto firstSsl = options->interfaces.size();
     int i = 0;
@@ -96,6 +96,16 @@ void SrvMgr::startServers()
 
         srv->tryStart();
         ++i;
+    }
+    // next do admin RPC, if any
+    for (const auto & iface : options->adminInterfaces) {
+        adminServers.emplace_back( std::make_unique<AdminServer>(this, iface.first, iface.second, options, storage, bitcoindmgr) );
+        AdminServer *asrv = adminServers.back().get();
+        if (peermgr) {
+            connect(asrv, &ServerBase::gotRpcAddPeer, peermgr.get(), &PeerMgr::on_rpcAddPeer);
+            connect(peermgr.get(), &PeerMgr::updated, asrv, &ServerBase::onPeersUpdated);
+        }
+        asrv->tryStart();
     }
 
     emit allServersStarted();
@@ -143,10 +153,10 @@ auto SrvMgr::stats() const -> Stats
         serversMap.unite( server->statsSafe(timeout).toMap() );
     m["Servers"] = serversMap;
     m["PeerMgr"] = peermgr ? peermgr->statsSafe(kDefaultTimeout/2) : QVariant();
-    m["transactions sent"] = qlonglong(numTxBroadcasts);
-    m["transactions sent (bytes)"] = qlonglong(txBroadcastBytesTotal);
-    m["number of clients"] = qlonglong(Client::numClients.load());
-    m["number of clients (max lifetime)"] = qlonglong(Client::numClientsMax.load());
-    m["number of clients (total lifetime connections)"] = qlonglong(Client::numClientsCtr.load());
+    m["transactions sent"] = qulonglong(numTxBroadcasts.load());
+    m["transactions sent (bytes)"] = qulonglong(txBroadcastBytesTotal.load());
+    m["number of clients"] = qulonglong(Client::numClients.load());
+    m["number of clients (max lifetime)"] = qulonglong(Client::numClientsMax.load());
+    m["number of clients (total lifetime connections)"] = qulonglong(Client::numClientsCtr.load());
     return m;
 }

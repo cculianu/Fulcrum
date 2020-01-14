@@ -58,6 +58,7 @@ public:
     QList<Interface> interfaces, ///< TCP interfaces to use for binding, defaults to 0.0.0.0 DEFAULT_PORT_TCP
                      sslInterfaces;  ///< SSL interfaces to use for binding SSL ports. Defaults to nothing.
     QList<Interface> statsInterfaces; ///< 'stats' server, defaults to empty (no stats server)
+    QList<Interface> adminInterfaces; ///< the admin server, defaults to empty (no admin RPC)
     QSslCertificate sslCert; ///< this must be valid if we have any SSL interfaces.
     QString certFile; ///< saved here for toMap() to remember what was specified in config file
     QSslKey sslKey; ///< this must be valid if we have any SSL interfaces.
