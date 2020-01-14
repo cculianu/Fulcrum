@@ -174,22 +174,24 @@ void App::parseArgs()
 
     QList<QCommandLineOption> allOptions{
          { { "D", "datadir" },
-           QString("Specify a directory in which to store the database and other assorted data files. This is a "
-           "required option. If the specified path does not exist, it will be created. Note that the directory in "
-           "question should live on a fast drive such as an SSD and it should have plenty of free space available."),
+           QString("Specify a directory in which to store the database and other assorted data files. This is a"
+           " required option. If the specified path does not exist, it will be created. Note that the directory in"
+           " question should ideally live on a fast drive such as an SSD and it should have plenty of free space"
+           " available."),
            QString("path"),
          },
          { { "t", "tcp" },
-           QString("Specify an <interface:port> on which to listen for TCP connections, defaults to 0.0.0.0:%1 (all interfaces,"
-           " port %1 -- only if no other interfaces are specified via -t or -s)."
-           " This option may be specified more than once to bind to multiple interfaces and/or ports.").arg(Options::DEFAULT_PORT_TCP),
+           QString("Specify an <interface:port> on which to listen for TCP connections, defaults to 0.0.0.0:%1 (all"
+                   " interfaces, port %1 -- only if no other interfaces are specified via -t or -s)."
+           " This option may be specified more than once to bind to multiple interfaces and/or ports."
+           " Suggested values for port: %1 on mainnet and %2 on testnet.").arg(Options::DEFAULT_PORT_TCP).arg(Options::DEFAULT_PORT_TCP + 10000),
            QString("interface:port"),
          },
          { { "s", "ssl" },
            QString("Specify an <interface:port> on which to listen for SSL connections. Note that if this option is"
            " specified, then the `cert` and `key` options need to also be specified otherwise the app will refuse to run."
            " This option may be specified more than once to bind to multiple interfaces and/or ports."
-           " Suggested value for port: %1.").arg(Options::DEFAULT_PORT_SSL),
+           " Suggested values for port: %1 on mainnet and %2 on testnet.").arg(Options::DEFAULT_PORT_SSL).arg(Options::DEFAULT_PORT_SSL + 10000),
            QString("interface:port"),
          },
          { { "c", "cert" },
@@ -203,44 +205,46 @@ void App::parseArgs()
            QString("keyfile"),
          },
         { { "a", "admin" },
-          QString("Specify an <interface:port> on which to listen for TCP connections for the admin RPC service."
+          QString("Specify a <port> or an <interface:port> on which to listen for TCP connections for the admin RPC service."
                   " The admin service is used for sending special control commands to the server, such as stopping"
                   " the server, and it should *NOT* be exposed to the internet.  This option is required if you wish to"
-                  " use the fulcrum_admin CLI tool to send commands to Fulcrum. It is recommended that you specify the "
-                  " loopback address as the bind interface for this option such as: 127.0.0.1:PORT for IPv4 and/or"
-                  " ::1:PORT for IPv6."
+                  " use the FulcrumAdmin CLI tool to send commands to Fulcrum. It is recommended that you specify the"
+                  " loopback address as the bind interface for this option such as: <port> by itself or 127.0.0.1:<port> for"
+                  " IPv4 and/or ::1:<port> for IPv6. If no interface is specified, and just a port number by itself is"
+                  " used, then IPv4 127.0.0.1 is the bind interface used (along with the specified port)."
                   " This option may be specified more than once to bind to multiple interfaces and/or ports."),
-          QString("interface:port"),
+          QString("[interface:]port"),
          },
          { { "z", "stats" },
-           QString("Specify listen address and port for the stats HTTP server. Format is same as the -s or -t options, "
-           "e.g.: <interface:port>. Default is to not start any starts HTTP servers. "
-           "This option may be specified more than once to bind to multiple interfaces and/or ports."),
-           QString("interface:port"),
+           QString("Specify listen address and port for the stats HTTP server. Format is same as the -s, -t or -a options,"
+           " e.g.: <interface:port>. Default is to not start any starts HTTP servers.  Also, like the -a option, you may"
+           " specify a port number by itself here and 127.0.0.1:<port> will be assumed."
+           " This option may be specified more than once to bind to multiple interfaces and/or ports."),
+           QString("[interface:]port"),
          },
          { { "b", "bitcoind" },
-           QString("Specify a <hostname:port> to connect to the bitcoind rpc service. This is a required option, along "
-           "with -u and -p. This hostname:port should be the same as you specified in your bitcoin.conf file "
-           "under rpcbind= and rpcport=."),
+           QString("Specify a <hostname:port> to connect to the bitcoind rpc service. This is a required option, along"
+           " with -u and -p. This hostname:port should be the same as you specified in your bitcoin.conf file"
+           " under rpcbind= and rpcport=."),
            QString("hostname:port"),
          },
          { { "u", "rpcuser" },
-           QString("Specify a username to use for authenticating to bitcoind. This is a required option, along "
-           "with -b and -p.  This option should be the same username you specified in your bitcoind.conf file "
-           "under rpcuser=. For security, you may omit this option from the command-line and use the %1 "
-           "environment variable instead (the CLI arg takes precedence if both are present).").arg(RPCUSER),
+           QString("Specify a username to use for authenticating to bitcoind. This is a required option, along"
+           " with -b and -p.  This option should be the same username you specified in your bitcoind.conf file"
+           " under rpcuser=. For security, you may omit this option from the command-line and use the %1"
+           " environment variable instead (the CLI arg takes precedence if both are present).").arg(RPCUSER),
            QString("username"),
          },
          { { "p", "rpcpassword" },
-           QString("Specify a password to use for authenticating to bitcoind. This is a required option, along "
-           "with -b and -u.  This option should be the same password you specified in your bitcoind.conf file "
-           "under rpcpassword=. For security, you may omit this option from the command-line and use the "
-           "%1 environment variable instead (the CLI arg takes precedence if both are present).").arg(RPCPASSWORD),
+           QString("Specify a password to use for authenticating to bitcoind. This is a required option, along"
+           " with -b and -u.  This option should be the same password you specified in your bitcoind.conf file"
+           " under rpcpassword=. For security, you may omit this option from the command-line and use the"
+           " %1 environment variable instead (the CLI arg takes precedence if both are present).").arg(RPCPASSWORD),
            QString("password"),
          },
          { { "d", "debug" },
-           QString("Print extra verbose debug output. This is the default on debug builds. This is the opposite of -q. "
-           "(Specify this options twice to get network-level trace debug output.)"),
+           QString("Print extra verbose debug output. This is the default on debug builds. This is the opposite of -q."
+           " (Specify this options twice to get network-level trace debug output.)"),
          },
          { { "q", "quiet" },
            QString("Suppress debug output. This is the default on release builds. This is the opposite of -d."),
@@ -250,12 +254,12 @@ void App::parseArgs()
          },
          { { "C", "checkdb" },
            QString("If specified, database consistency will be checked thoroughly for sanity & integrity."
-                   "Note that these checks are somewhat slow to perform and under normal operation are not necessary."),
+                   " Note that these checks are somewhat slow to perform and under normal operation are not necessary."),
          },
          { { "T", "polltime" },
-           QString("The number of seconds for the bitcoind poll interval. Bitcoind is polled once every `polltime` "
-                   "seconds to detect mempool and blockchain changes. This value must be at least 0.5 and cannot exceed "
-                   "30. If not specified, defaults to %1 seconds.").arg(Options::defaultPollTimeSecs),
+           QString("The number of seconds for the bitcoind poll interval. Bitcoind is polled once every `polltime`"
+                   " seconds to detect mempool and blockchain changes. This value must be at least 0.5 and cannot exceed"
+                   " 30. If not specified, defaults to %1 seconds.").arg(Options::defaultPollTimeSecs),
            QString("polltime"), QString::number(Options::defaultPollTimeSecs)
          },
      };
@@ -339,24 +343,31 @@ void App::parseArgs()
         else if (conf.values(l).count() > 1)
             throw BadArgs(QString("This option cannot be specified multiple times in the config file: %1").arg(l));
     }
-    static const auto parseHostnamePortPair = [](const QString &s) -> QPair<QString, quint16> {
+    static const auto parseHostnamePortPair = [](const QString &s, bool allowImplicitLoopback = false) -> QPair<QString, quint16> {
+        constexpr auto parsePort = [](const QString & portStr) -> quint16 {
+            bool ok;
+            quint16 port = portStr.toUShort(&ok);
+            if (!ok || port == 0)
+                throw BadArgs(QString("Bad port: %1").arg(portStr));
+            return port;
+        };
         auto toks = s.split(":");
         constexpr const char *msg1 = "Malformed host:port spec. Please specify a string of the form <host>:<port>";
-        if (toks.length() < 2)
+        if (const auto len = toks.length(); len < 2) {
+            if (allowImplicitLoopback && len == 1)
+                // this option allows bare port number with the implicit ipv4 127.0.0.1 -- try that (may throw if bad port number)
+                return QPair<QString, quint16>{QHostAddress(QHostAddress::LocalHost).toString(), parsePort(toks.front())};
             throw BadArgs(msg1);
+        }
         QString portStr = toks.last();
-        toks.removeLast();
-        QString hostStr = toks.join(":");
+        toks.removeLast(); // pop off port
+        QString hostStr = toks.join(":"); // rejoin on ':' in case it was IPv6 which is full of colons
         if (hostStr.isEmpty())
             throw BadArgs(msg1);
-        bool ok;
-        quint16 port = portStr.toUShort(&ok);
-        if (!ok || port == 0)
-            throw BadArgs(QString("Bad port: %1").arg(portStr));
-        return {hostStr, port};
+        return {hostStr, parsePort(portStr)};
     };
-    const auto parseInterface = [&options = options](const QString &s) -> Options::Interface {
-        const auto pair = parseHostnamePortPair(s);
+    const auto parseInterface = [&options = options](const QString &s, bool allowImplicitLoopback = false) -> Options::Interface {
+        const auto pair = parseHostnamePortPair(s, allowImplicitLoopback);
         const auto & hostStr = pair.first;
         const auto port = pair.second;
         QHostAddress h(hostStr);
@@ -365,11 +376,12 @@ void App::parseArgs()
         options->hasIPv6Listener = options->hasIPv6Listener || h.protocol() == QAbstractSocket::NetworkLayerProtocol::IPv6Protocol;
         return {h, port};
     };
-    const auto parseInterfaces = [&parseInterface](decltype(Options::interfaces) & interfaces, const QStringList & l) {
+    const auto parseInterfaces = [&parseInterface](decltype(Options::interfaces) & interfaces, const QStringList & l,
+                                                   bool supportsLoopbackImplicitly = false) {
         // functor parses -i and -z options, puts results in 'interfaces' passed-in reference.
         interfaces.clear();
         for (const auto & s : l)
-            interfaces.push_back(parseInterface(s));
+            interfaces.push_back(parseInterface(s, supportsLoopbackImplicitly));
     };
 
     // grab datadir, check it's good, create it if needed
@@ -476,14 +488,14 @@ void App::parseArgs()
             });
         }
     }
-    // stats port
+    // stats port -- this supports <port> by itself as well
     parseInterfaces(options->statsInterfaces, conf.hasValue("stats")
                                               ? conf.values("stats")
-                                              : parser.values("z"));
-    // admin rpc port
+                                              : parser.values("z"), true);
+    // admin port -- this supports <port> by itself as well
     parseInterfaces(options->adminInterfaces, conf.hasValue("admin")
                                               ? conf.values("admin")
-                                              : parser.values("a"));
+                                              : parser.values("a"), true);
     // warn user if any of the admin rpc services are on non-loopback
     for (const auto &iface : options->adminInterfaces) {
         if (!iface.first.isLoopback()) {
