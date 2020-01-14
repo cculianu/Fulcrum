@@ -371,7 +371,8 @@ class AdminServer : public ServerBase
 {
 public:
     AdminServer(SrvMgr *srvMgr, const QHostAddress & address, quint16 port, const std::shared_ptr<const Options> & options,
-                const std::shared_ptr<Storage> & storage, const std::shared_ptr<BitcoinDMgr> & bitcoindmgr);
+                const std::shared_ptr<Storage> & storage, const std::shared_ptr<BitcoinDMgr> & bitcoindmgr,
+                const std::optional<std::shared_ptr<PeerMgr>> & peerMgr = {});
     ~AdminServer() override;
 
     QString prettyName() const override;
@@ -383,6 +384,7 @@ private:
     std::unique_ptr<ThreadPool> threadPool; ///< we use our own threadpool for the admin server so as to not interfere with the normal one used for SPV clients.
 
     SrvMgr * const srvmgr; ///< this is alive for the entire lifetime of this instance.
+    const std::optional<std::shared_ptr<PeerMgr>> peerMgr; ///< this isn't always valid if peering is disabled
 
     static constexpr int kBlockingCallTimeoutMS = 10000;
 
@@ -393,6 +395,7 @@ private:
     void rpc_getinfo(Client *, const RPC::Message &);
     void rpc_kick(Client *, const RPC::Message &);
     void rpc_listbanned(Client *, const RPC::Message &);
+    void rpc_peers(Client *, const RPC::Message &);
     void rpc_shutdown(Client *, const RPC::Message &);
     void rpc_unban(Client *, const RPC::Message &);
 

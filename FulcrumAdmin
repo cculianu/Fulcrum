@@ -50,6 +50,7 @@ def main():
     kick = subparsers.add_parser('kick', help="Kick clients by ID and/or IP address")
     kick.add_argument('ids_or_ips', metavar='ipaddress_or_id', nargs='+', help="Specify a list of ID's and/or IP addresses to kick.")
     listbanned = subparsers.add_parser('listbanned', help="Print the list of banend IP addresses")
+    peers = subparsers.add_parser('peers', help="Print peering information")
     stop = subparsers.add_parser('stop', help="Gracefully shut down the server")
     unban = subparsers.add_parser('unban', help="Unban IP addresses")
     unban.add_argument('ips', metavar='ipaddress', nargs='+', help="Specify a list of IP addresses to unban.")
@@ -98,6 +99,9 @@ def main():
 
     elif command == 'listbanned' and not JSON:
         response_handler = listbanned_handler
+
+    elif command == 'peers' and not JSON:
+        pass
 
     try:
         print(response_handler(send_request(command, command_params)))

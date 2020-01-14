@@ -1426,8 +1426,9 @@ void ServerSSL::incomingConnection(qintptr socketDescriptor)
 
 // --- Admin RPC Serer ---
 AdminServer::AdminServer(SrvMgr *sm, const QHostAddress & a, quint16 p, const std::shared_ptr<const Options> & o,
-                const std::shared_ptr<Storage> & s, const std::shared_ptr<BitcoinDMgr> & b)
-    : ServerBase(StaticData::methodMap, StaticData::dispatchTable, a, p, o, s, b), srvmgr(sm)
+                         const std::shared_ptr<Storage> & s, const std::shared_ptr<BitcoinDMgr> & b,
+                         const std::optional<std::shared_ptr<PeerMgr>> & pm)
+    : ServerBase(StaticData::methodMap, StaticData::dispatchTable, a, p, o, s, b), srvmgr(sm), peerMgr(pm)
 {
     StaticData::init(); // noop after first time it's called
     setObjectName(prettyName());
@@ -1549,7 +1550,7 @@ void AdminServer::rpc_getinfo(Client *c, const RPC::Message &m)
     }
     { // utxoset
         QVariantMap us;
-        us["size"] = storage->utxoSetSize();
+        us["size"] = qulonglong(storage->utxoSetSize());
         us["size_MiB"] = long(std::round(storage->utxoSetSizeMiB() * 100.0)) / 100.;
         res["utxoset"] = us;
     }
@@ -1571,6 +1572,15 @@ void AdminServer::rpc_kick(Client *c, const RPC::Message &m)
 void AdminServer::rpc_listbanned(Client *c, const RPC::Message &m)
 {
     emit c->sendResult(m.id, srvmgr->adminRPC_banInfo_threadSafe());
+}
+void AdminServer::rpc_peers(Client *c, const RPC::Message &m)
+{
+    if (!peerMgr.has_value())
+        throw RPCError("This server has peering disabled");
+    // We do this async in our worker thread since it blocks (briefly)
+    generic_do_async(c, m.id, [peerMgr = this->peerMgr.value()]{
+        return peerMgr->statsSafe(kBlockingCallTimeoutMS);
+    });
 }
 void AdminServer::rpc_shutdown(Client *c, const RPC::Message &m)
 {
@@ -1603,6 +1613,7 @@ HEY_COMPILER_PUT_STATIC_HERE(AdminServer::StaticData::registry){
     { {"getinfo",                           true,               false,    PR{0,0},      RPC::KeySet{} },          MP(rpc_getinfo) },
     { {"kick",                              true,               false,    PR{1,UNLIMITED},         {} },          MP(rpc_kick) },
     { {"listbanned",                        true,               false,    PR{0,0},      RPC::KeySet{} },          MP(rpc_listbanned) },
+    { {"peers",                             true,               false,    PR{0,0},      RPC::KeySet{} },          MP(rpc_peers) },
     { {"shutdown",                          true,               false,    PR{0,0},      RPC::KeySet{} },          MP(rpc_shutdown) },
     { {"stop",                              true,               false,    PR{0,0},      RPC::KeySet{} },          MP(rpc_shutdown) }, // alias for 'shutdown'
     { {"unban",                             true,               false,    PR{1,UNLIMITED},         {} },          MP(rpc_unban) },

@@ -125,7 +125,7 @@ private:
     std::shared_ptr<BitcoinDMgr> bitcoindmgr;
     std::list<std::unique_ptr<Server>> servers;
     std::list<std::unique_ptr<AdminServer>> adminServers;
-    std::unique_ptr<PeerMgr> peermgr; ///< will be nullptr if options->peerDiscovery is false
+    std::shared_ptr<PeerMgr> peermgr; ///< will be nullptr if options->peerDiscovery is false
 
     QMultiHash<QHostAddress, IdMixin::Id> addrIdMap;
 

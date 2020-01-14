@@ -63,7 +63,7 @@ void SrvMgr::startServers()
 {
     if (options->peerDiscovery) {
         Log() << "SrvMgr: starting PeerMgr ...";
-        peermgr = std::make_unique<PeerMgr>(storage, options);
+        peermgr = std::make_shared<PeerMgr>(storage, options);
         peermgr->startup(); // may throw
         connect(this, &SrvMgr::allServersStarted, peermgr.get(), &PeerMgr::on_allServersStarted);
     } else peermgr.reset();
@@ -106,8 +106,10 @@ void SrvMgr::startServers()
         ++i;
     }
     // next do admin RPC, if any
+    std::optional<std::shared_ptr<PeerMgr>> optPeerMgr;
+    if (peermgr) optPeerMgr = peermgr;
     for (const auto & iface : options->adminInterfaces) {
-        adminServers.emplace_back( std::make_unique<AdminServer>(this, iface.first, iface.second, options, storage, bitcoindmgr) );
+        adminServers.emplace_back( std::make_unique<AdminServer>(this, iface.first, iface.second, options, storage, bitcoindmgr, optPeerMgr) );
         AdminServer *asrv = adminServers.back().get();
         if (peermgr) {
             connect(asrv, &ServerBase::gotRpcAddPeer, peermgr.get(), &PeerMgr::on_rpcAddPeer);
