@@ -1470,8 +1470,10 @@ void AdminServer::rpc_getinfo(Client *c, const RPC::Message &m)
     res["bitcoind_warnings"] = bitcoinDInfo.warnings;
     {
         const auto opt = storage->latestHeight();
-        res["db_synched_height"] = opt.has_value() ? opt.value() : QVariant();
+        res["height"] = opt.has_value() ? opt.value() : QVariant();
     }
+    res["chain"] = storage->getChain();
+    res["genesis_hash"] = Util::ToHexFast(storage->genesisHash());
     res["pid"] = QCoreApplication::applicationPid();
     res["clients_connected"] = qulonglong(Client::numClients.load());
     res["clients_connected_max_lifetime"] = qulonglong(Client::numClientsMax.load());
@@ -1483,7 +1485,33 @@ void AdminServer::rpc_getinfo(Client *c, const RPC::Message &m)
     res["subscriptions"] = storage->subs()->numActiveClientSubscriptions();
     res["peers"] = peers.size();
     res["config"] = options->toMap();
-    emit c->sendResult(m.id, res);
+    { // mempool
+        QVariantMap mp;
+        auto [mempool, lock] = storage->mempool();
+        mp["txs"] = qulonglong(mempool.txs.size());
+        mp["addresses"] = qulonglong(mempool.hashXTxs.size());
+        std::size_t sizeTotal = 0;
+        std::int64_t feeTotal = 0;
+        std::for_each(mempool.txs.begin(), mempool.txs.end(), [&sizeTotal, &feeTotal](const auto &pair){
+            sizeTotal += pair.second->sizeBytes;
+            feeTotal += pair.second->fee / bitcoin::Amount::satoshi();
+        });
+        mp["size_bytes"] = qulonglong(sizeTotal);
+        mp["avg_fee_sats_B"] = long(std::round(double(feeTotal) / double(sizeTotal) * 100.)) / 100.;
+        res["mempool"] = mp;
+    }
+    { // utxoset
+        QVariantMap us;
+        us["size"] = storage->utxoSetSize();
+        us["size_MiB"] = long(std::round(storage->utxoSetSizeMiB() * 100.0)) / 100.;
+        res["utxoset"] = us;
+    }
+    // threadpool stats -- for this we need to go asynch because we need to block to grab them using the StatsMixin API
+    res["thread_pool"] = ::AppThreadPool()->stats();
+    generic_do_async(c, m.id, [storage = storage.get(), res]() mutable {
+        res["storage_stats"] = storage->statsSafe(kBlockingCallTimeoutMS);
+        return res; // returns result to client
+    });
 }
 void AdminServer::rpc_kick(Client *c, const RPC::Message &m)
 {
