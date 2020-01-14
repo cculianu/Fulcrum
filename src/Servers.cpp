@@ -1511,7 +1511,7 @@ void AdminServer::rpc_getinfo(Client *c, const RPC::Message &m)
     res["thread_pool"] = ::AppThreadPool()->stats();
 
     // storage stats -- for this we need to go asynch because we need to block to grab them using the StatsMixin API
-    generic_do_async(c, m.id, [storage = storage.get(), res]() mutable {
+    generic_do_async(c, m.id, [storage = this->storage, res]() mutable {
         res["storage_stats"] = storage->statsSafe(kBlockingCallTimeoutMS);
         return res; // returns result to client
     });
