@@ -356,6 +356,9 @@ QVariant ServerBase::stats() const
         map["nRequestsRcv"] = client->info.nRequestsRcv;
         map["isSubscribedToHeaders"] = client->isSubscribedToHeaders;
         map["nSubscriptions"] = client->nShSubs.load();
+        map["nTxSent"] = client->info.nTxSent;
+        map["nTxBytesSent"] = client->info.nTxBytesSent;
+        map["nTxBroadcastErrors"] = client->info.nTxBroadcastErrors;
         // the below don't really make much sense for this class (they are always 0 or empty)
         map.remove("nDisconnects");
         map.remove("nSocketErrors");
@@ -1126,12 +1129,14 @@ void Server::rpc_blockchain_transaction_broadcast(Client *c, const RPC::Message 
     // no need to validate hex here -- bitcoind does validation for us!
     generic_async_to_bitcoind(c, m.id, "sendrawtransaction", QVariantList{ rawtxhex },
         // print to log, echo bitcoind's reply to client
-        [size=rawtxhex.length()/2, cid = c->id, uaVersion = c->info.uaVersion(), this](const RPC::Message & reply){
+        [size=rawtxhex.length()/2, c, this](const RPC::Message & reply){
             QVariant ret = reply.result();
+            ++c->info.nTxSent;
+            c->info.nTxBytesSent += unsigned(size);
             emit broadcastTxSuccess(unsigned(size));
-            Log() << "Broadcast tx for client " << cid << ", size: " << size << " bytes, response: " << ret.toString();
+            Log() << "Broadcast tx for client " << c->id << ", size: " << size << " bytes, response: " << ret.toString();
             static const Version FirstNonVulberableECVersion(3,3,4);
-            if (uaVersion.isValid() && uaVersion < FirstNonVulberableECVersion) {
+            if (const auto uaVersion = c->info.uaVersion(); uaVersion.isValid() && uaVersion < FirstNonVulberableECVersion) {
                 // The below is to warn old clients that they are vulnerable to a phishing attack.
                 // This logic is also used by the ElectronX implementations here:
                 // https://github.com/Electron-Cash/electrumx/blob/fbd00416d804c286eb7de856e9399efb07a2ceaf/electrumx/server/session.py#L1526
@@ -1142,15 +1147,16 @@ void Server::rpc_blockchain_transaction_broadcast(Client *c, const RPC::Message 
                       "Download the latest version from this web site ONLY:<br/>"
                       "https://electroncash.org/"
                       "<br/><br/>";
-                Log() << "Client " << cid << " has a vulnerable Electron Cash (" << uaVersion.toString()
+                Log() << "Client " << c->id << " has a vulnerable Electron Cash (" << uaVersion.toString()
                       << "); upgrade warning HTML sent to client";
             }
             return ret;
         },
         // error func, throw an RPCError that's formatted in a particular way
-        [cid = c->id](const RPC::Message & errResponse) {
+        [c](const RPC::Message & errResponse) {
+            ++c->info.nTxBroadcastErrors;
             const auto errorMessage = errResponse.errorMessage();
-            Log() << "Broadcast fail for client " << cid << ": " << errorMessage.left(120);
+            Log() << "Broadcast fail for client " << c->id << ": " << errorMessage.left(120);
             throw RPCError(QString("the transaction was rejected by network rules.\n\n"
                                    // Note: ElectrumX here would also spit back the [txhex] after the final newline.
                                    // We do not do that, since it's a waste of bandwidth and also Electron Cash
@@ -1448,7 +1454,15 @@ auto AdminServer::stats() const -> Stats
     }
     return m;
 }
-
+void AdminServer::rpc_clients(Client *c, const RPC::Message &m)
+{
+    generic_do_async(c, m.id, [srvmgr = QPointer(this->srvmgr)]{
+        if (!srvmgr) throw InternalError("SrvMgr pointer is null"); // this should never happen but it pays to be paranoid
+        // this blocks, but it will block in this worker thread. It may throw, but that's ok as the generic_do_async() wrapper
+        // in ServerBase handles catching any and all exceptions and will just send an error response to the client.
+        return srvmgr->adminRPC_getClients_blocking(kBlockingCallTimeoutMS);
+    });
+}
 void AdminServer::rpc_getinfo(Client *c, const RPC::Message &m)
 {
     QVariantMap res;
@@ -1492,9 +1506,10 @@ HEY_COMPILER_PUT_STATIC_HERE(AdminServer::StaticData::methodMap);
 HEY_COMPILER_PUT_STATIC_HERE(AdminServer::StaticData::registry){
 /*  ==> Note: Add stuff to this table when adding new RPC methods.
     { {"rpc.name",                allow_requests, allow_notifications, PosParamRange, (QSet<QString> note: {} means undefined optional)}, &method_to_call }     */
+    { {"clients",                           true,               false,    PR{0,0},      RPC::KeySet{} },          MP(rpc_clients) },
     { {"getinfo",                           true,               false,    PR{0,0},      RPC::KeySet{} },          MP(rpc_getinfo) },
     { {"shutdown",                          true,               false,    PR{0,0},      RPC::KeySet{} },          MP(rpc_shutdown) },
-    { {"stop",                              true,               false,    PR{0,0},      RPC::KeySet{} },          MP(rpc_shutdown) }, // alias for shutdown
+    { {"stop",                              true,               false,    PR{0,0},      RPC::KeySet{} },          MP(rpc_shutdown) }, // alias for 'shutdown'
 };
 #undef MP
 #undef PR

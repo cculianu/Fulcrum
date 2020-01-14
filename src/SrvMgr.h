@@ -49,6 +49,12 @@ public:
     std::size_t txBroadcasts() const { return numTxBroadcasts.load(); }
     std::size_t txBroadcastBytes() const { return txBroadcastBytesTotal.load(); }
 
+    /// Must be called in this object's thread -- does a blocking call to all the Server instances that are started
+    /// (timeout_ms, specify timeout_ms <= 0 to block forever), and prepares the QVariantList RPC response appropriate
+    /// to send back to the FulcrumAdmin script.  May throw Utils::TimeoutException, or Util::ThreadNotRunning if called
+    /// with the servers stopped.
+    QVariantList adminRPC_getClients_blocking(int timeout_ms) const;
+
 signals:
     /// Notifies all blockchain.headers.subscribe'd clients for the entire server about a new header.
     /// (normally connected to the Controller::newHeader signal).

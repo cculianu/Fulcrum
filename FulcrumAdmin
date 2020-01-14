@@ -1,0 +1,138 @@
+#!/usr/bin/env python3
+import argparse
+import json
+import random
+import socket
+import sys
+
+from collections import defaultdict
+
+HOST = 'localhost'
+PORT = None
+ID_NEXT = random.randint(0, 262144)
+JSON = False
+
+class ErrorResponse(RuntimeError):
+    pass
+
+def send_request(method, params=None):
+    global ID_NEXT
+    verb = False#not args.q
+    with socket.create_connection((HOST, PORT), timeout=10.0) as sock:
+        def sndrecv(_id, method, params=None):
+            outj = { "id" : _id, "jsonrpc" : "2.0", "method" : method, "params": params or [] }
+            msg = json.dumps(outj, indent=None).encode("utf8") + b'\n'
+            if verb: print(f"Srv --> {msg[:2048]}")
+            sock.send(msg)
+            resp = sock.recv(4*1034*1024)
+            if verb: print(f"Srv <-- {resp[:2048]}")
+            j = json.loads(resp.decode("utf8").strip())
+            if j.get("error") or j.get("id") != _id:
+                raise ErrorResponse("Error response from Fulcrum:\n\n" + (json.dumps(j.get("error"), indent=4) or j))
+            return j.get("result")
+        global ID_NEXT
+        reqid = ID_NEXT; ID_NEXT += 1
+        return sndrecv(reqid, method, params)
+
+
+def main():
+    global HOST, PORT, JSON
+    parser = argparse.ArgumentParser(prog="FulcrumAdmin.py", description="Fulcrum CLI admin tool")
+    parser.add_argument('-p', type=int, metavar="port", nargs=1, required=True, help=f"Specify the port for the Fulcrum admin RPC service. This is a required argument.")
+    parser.add_argument('-j', action='store_true', dest="json", help=f"Print the response from the server as JSON, not as formatted text")
+    parser.add_argument('-H', type=str, metavar="host", nargs='?', default=HOST, help=f"Specify the host for the Fulcrum admin RPC service. Defaults to {HOST}.")
+    subparsers = parser.add_subparsers(title="command", description="Select from one of the following commands:", dest="command")
+    clients = subparsers.add_parser('clients', help="Print information on all the currently connected clients", aliases=['sessions'])
+    getinfo = subparsers.add_parser('getinfo', help="Get server information")
+    stop = subparsers.add_parser('stop', help="Gracefully shut down the server")
+
+    args = parser.parse_args()
+
+    HOST = args.H
+    PORT, = args.p
+    JSON = args.json
+
+    if PORT > 65535:
+        sys.exit("Port argument must be < 65536")
+
+    command = args.command
+    if command == 'sessions': command = 'clients'  # Is there a better way to do this by referring back to the subparser above?? TODO
+    command_params = tuple()
+    response_handler = lambda r: json.dumps(r, indent = 4)  # default handler just pretty-prints the JSON
+    if command is None:
+        print("Please specify a command to run.\n")
+        parser.print_help()
+        sys.exit(1)
+    elif command == 'stop' and not JSON:
+        def handler(r):
+            if isinstance(r, bool) and r:
+                return "Fulcrum server is shutting down"
+            else:
+                return f"Unexpected response from Fulcrum server: {r}"
+        response_handler = handler
+    elif command == 'clients' and not JSON:
+        response_handler = clients_handler
+
+
+    try:
+        print(response_handler(send_request(command, command_params)))
+    except OSError as e:
+        print(f"Error communicating with the admin RPC port at {HOST}:{PORT}\n\n    {e}\n")
+        sys.exit(1)
+    except ErrorResponse as e:
+        print(f"{e}")
+        sys.exit(1)
+
+
+
+def clients_handler(r):
+    def badResp():
+        return f"Unexpected resposne from Fulcrum server: {r!r}"
+    if not isinstance(r, (list, tuple)):
+        return badResp()
+    lines = []
+    line = ("ID","IP:PORT","Typ","UAgent","ProtocolVer","Subs","HdrSub?","ReqRcv","RespSent","RecvBytes","SentBytes","TxsSent","Notifs","ErrorCt")
+    maxfields = defaultdict(int)
+    for i,c in enumerate(line):
+        maxfields[i] = max(maxfields[i], len(c))
+    lines.append(line)
+    is_ssl = False
+    for serverdict in r:
+        if not isinstance(serverdict, dict):
+            return badResp()
+        for server_name, subdict in serverdict.items():
+            is_ssl = server_name.lower().startswith('ssl')
+
+            for client in subdict.get('clients', []):
+                for cname, cdict in client.items():
+                    line = (
+                        cdict.get('id', -1),
+                        cdict.get('remote', '?'),
+                        'SSL' if is_ssl else 'TCP',
+                        cdict.get('userAgent', 'Unk'),
+                        cdict.get('version', ['?'])[-1],
+                        cdict.get('nSubscriptions', -1),
+                        'Y' if cdict.get('isSubscribedToHeaders') else 'N',
+                        cdict.get('nRequestsRcv', -1),
+                        cdict.get('nResultsSent', -1),
+                        cdict.get('nBytesReceived', -1),
+                        cdict.get('nBytesSent', -1),
+                        cdict.get('nTxSent', -1),
+                        cdict.get('nNotificationsSent', -1),
+                        cdict.get('nErrorsSent', -1)
+                    )
+                    line = [str(x) for x in line]
+                    for i,c in enumerate(line):
+                        maxfields[i] = max(maxfields[i], len(c))
+                    lines.append(line)
+    for i,line in enumerate(list(lines)):
+        line = list(line)
+        for j,c in enumerate(line):
+            line[j] = c.ljust(maxfields[j])
+        lines[i] = '  '.join(line)
+    return '\n'.join(lines) + '\n'
+
+
+
+if __name__ == '__main__':
+    main()

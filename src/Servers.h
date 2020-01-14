@@ -384,6 +384,9 @@ private:
 
     SrvMgr * const srvmgr; ///< this is alive for the entire lifetime of this instance.
 
+    static constexpr int kBlockingCallTimeoutMS = 10000;
+
+    void rpc_clients(Client *, const RPC::Message &);
     void rpc_getinfo(Client *, const RPC::Message &);
     void rpc_shutdown(Client *, const RPC::Message &);
 
@@ -431,6 +434,7 @@ public:
         inline Version uaVersion() const { return Version(userAgent); }
         Version protocolVersion = {1,4,0}; ///< defaults to 1,4,0 if client says nothing.
         bool alreadySentVersion = false;
+        unsigned nTxSent = 0, nTxBroadcastErrors = 0, nTxBytesSent = 0;
     };
 
     Info info;

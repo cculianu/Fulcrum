@@ -162,3 +162,16 @@ auto SrvMgr::stats() const -> Stats
     m["number of clients (total lifetime connections)"] = qulonglong(Client::numClientsCtr.load());
     return m;
 }
+
+QVariantList SrvMgr::adminRPC_getClients_blocking(int timeout_ms) const
+{
+    return Util::LambdaOnObject<QVariantList>(this, [this, timeout_ms] {
+        const bool infiniteTimeout = timeout_ms <= 0;
+        const auto nClients = std::max(int(servers.size()), 1);
+        const int timeoutPerServer = infiniteTimeout ? -1 : std::min(timeout_ms / nClients, 1);
+        QVariantList ret;
+        for (const auto & server : servers)
+            ret.push_back( server->statsSafe(timeoutPerServer) );
+        return ret;
+    }, timeout_ms);
+}
