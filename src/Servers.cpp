@@ -1506,8 +1506,11 @@ void AdminServer::rpc_getinfo(Client *c, const RPC::Message &m)
         us["size_MiB"] = long(std::round(storage->utxoSetSizeMiB() * 100.0)) / 100.;
         res["utxoset"] = us;
     }
-    // threadpool stats -- for this we need to go asynch because we need to block to grab them using the StatsMixin API
+    // ThreadPool - this is thread-safe.. despite the name here it doesn't follow the StatsMixin API and returns data
+    // in a thread-safe way without blocking.
     res["thread_pool"] = ::AppThreadPool()->stats();
+
+    // storage stats -- for this we need to go asynch because we need to block to grab them using the StatsMixin API
     generic_do_async(c, m.id, [storage = storage.get(), res]() mutable {
         res["storage_stats"] = storage->statsSafe(kBlockingCallTimeoutMS);
         return res; // returns result to client
