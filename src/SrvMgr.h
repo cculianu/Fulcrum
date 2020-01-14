@@ -25,6 +25,7 @@
 
 #include <list>
 #include <memory>
+#include <mutex>
 
 class AdminServer;
 class BitcoinDMgr;
@@ -54,6 +55,12 @@ public:
     /// to send back to the FulcrumAdmin script.  May throw Utils::TimeoutException, or Util::ThreadNotRunning if called
     /// with the servers stopped.
     QVariantList adminRPC_getClients_blocking(int timeout_ms) const;
+    /// Called by the admin server (and also the ::stats method). This is thread-safe as it takes a lock.
+    /// Returns a map suitable for serializing to JSON or printing ot the /stats port.
+    QVariantMap adminRPC_banInfo_threadSafe() const;
+
+    /// Returns true if the specified address is in the ban table.  This method is thread-safe.
+    bool isIPBanned(const QHostAddress &, bool incrementCounter = true) const;
 
 signals:
     /// Notifies all blockchain.headers.subscribe'd clients for the entire server about a new header.
@@ -66,6 +73,11 @@ signals:
     /// "max_clients_per_ip"  config variable (see Options.h)
     void clientExceedsConnectionLimit(IdMixin::Id);
 
+    /// Emitted one upon client connect (from the clientConnected() slot) if the new client in question is banneed
+    /// (bans are currently by-IP).  Like clientExceedsConnectionLimit above, the Server (and its subclasses) are
+    /// connected to this signal. The ban table is the banMap private member.
+    void clientIsBanned(IdMixin::Id);
+
     /// Emitted by this instance to signify all servers have been started.  PeerMgr is connected to this to start
     /// its own processing once all servers are up.
     void allServersStarted();
@@ -77,6 +89,18 @@ signals:
     /// specified address will be immediately disconnected.
     void kickByAddress(const QHostAddress &);
 
+    /// Any object or thread can emit this signal, which is connected to the protected on_banIP slot, which then
+    /// goes ahead and updates the ban table and issues an immediate kick by IP to the server instances.
+    /// AdminServer emits this.
+    void banIP(const QHostAddress &);
+    /// This is also emitted by the AdminServer, connected to on_banID, which tries to find the given ID by doing
+    /// a linear search in the addrIdMap.  May not always succeed if the client is no longer connected when the
+    /// on_banID slot is called.
+    void banID(IdMixin::Id);
+
+    /// Emitted by the AdminServer, connected to a slot which will run in our thread, on_liftIPBan.
+    void liftIPBan(const QHostAddress &);
+
 protected:
     Stats stats() const override;
 
@@ -85,6 +109,14 @@ protected slots:
     void clientConnected(IdMixin::Id, const QHostAddress &);
     /// Server subclasses are connected to this slot, which is used to notify this instance of client disconnections
     void clientDisconnected(IdMixin::Id, const QHostAddress &);
+    /// Connected to the banIP signal declared above -- effects the ban.
+    void on_banIP(const QHostAddress &);
+    /// Connected to the banIP signal declared above -- effects the ban, but may not always succeed if the client
+    /// disconnected before this runs, because we "forget" their id immediately.
+    /// TODO: FIX THIS by remembering Ids for recently-disconnected clients for a time...
+    void on_banID(IdMixin::Id);
+    /// Connected to the liftIPBan signal
+    void on_liftIPBan(const QHostAddress &);
 
 private:
     void startServers();
@@ -98,6 +130,15 @@ private:
     QMultiHash<QHostAddress, IdMixin::Id> addrIdMap;
 
     std::atomic_size_t numTxBroadcasts = 0, txBroadcastBytesTotal = 0;
+
+    // -- the below is shared with other threads and guarded by banMut.
+    struct BanInfo {
+        QHostAddress address;
+        int64_t ts = 0U; ///< when banned, in msec, from Util::getTime()
+        mutable unsigned rejectedConnectionCount = 0U; ///< the number of times a connection was rejected matching this ban
+    };
+    QHash<QHostAddress, BanInfo> banMap;
+    mutable std::mutex banMut;
 };
 
 Q_DECLARE_METATYPE(QHostAddress);

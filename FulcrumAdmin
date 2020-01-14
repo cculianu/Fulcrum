@@ -43,11 +43,16 @@ def main():
     parser.add_argument('-j', action='store_true', dest="json", help=f"Print the response from the server as JSON, not as formatted text")
     parser.add_argument('-H', type=str, metavar="host", nargs='?', default=HOST, help=f"Specify the host for the Fulcrum admin RPC service. Defaults to {HOST}.")
     subparsers = parser.add_subparsers(title="command", description="Select from one of the following commands:", dest="command")
+    ban = subparsers.add_parser('ban', help="Ban clients by ID and/or IP address")
+    ban.add_argument('ids_or_ips', metavar='ipaddress_or_id', nargs='+', help="Specify a list of ID's and/or IP addresses to ban.")
     clients = subparsers.add_parser('clients', help="Print information on all the currently connected clients", aliases=['sessions'])
     getinfo = subparsers.add_parser('getinfo', help="Get server information")
     kick = subparsers.add_parser('kick', help="Kick clients by ID and/or IP address")
-    kick.add_argument('ids_or_ips', metavar='IP_or_ID_List', nargs='+', help="Specify a list of ID's and/or IP addresses to kick.")
+    kick.add_argument('ids_or_ips', metavar='ipaddress_or_id', nargs='+', help="Specify a list of ID's and/or IP addresses to kick.")
+    listbanned = subparsers.add_parser('listbanned', help="Print the list of banend IP addresses")
     stop = subparsers.add_parser('stop', help="Gracefully shut down the server")
+    unban = subparsers.add_parser('unban', help="Unban IP addresses")
+    unban.add_argument('ips', metavar='ipaddress', nargs='+', help="Specify a list of IP addresses to unban.")
 
     args = parser.parse_args()
 
@@ -80,16 +85,19 @@ def main():
     elif command == 'clients' and not JSON:
         response_handler = clients_handler
 
-    elif command == 'kick':
-        command_params = args.ids_or_ips
+    elif command == 'kick' or command == 'ban' or command == 'unban':
+        command_params = args.ids_or_ips if command != 'unban' else args.ips
         if not JSON:
             def handler(r):
                 if isinstance(r, bool) and r:
-                    return "Kick command submitted for: " + ', '.join(command_params)
+                    return f"{command.title()} command submitted for: " + ', '.join(command_params)
                 else:
                     EXITSTATUS = 1
                     return f"Unexpected response from Fulcrum server: {r}"
             response_handler = handler
+
+    elif command == 'listbanned' and not JSON:
+        response_handler = listbanned_handler
 
     try:
         print(response_handler(send_request(command, command_params)))
@@ -152,6 +160,37 @@ def clients_handler(r):
         lines[i] = '  '.join(line)
     return '\n'.join(lines) + '\n'
 
+def listbanned_handler(r):
+    global EXITSTATUS
+    def badResp():
+        EXITSTATUS = 1
+        return f"Unexpected resposne from Fulcrum server: {r!r}"
+    if not isinstance(r, (dict,)):
+        return badResp()
+    lines = []
+    line = ("IP","AgeSecs","RejectedConnections",)
+    maxfields = defaultdict(int)
+    for i,c in enumerate(line):
+        maxfields[i] = max(maxfields[i], len(c))
+    lines.append(line)
+    for ipaddr, subdict in r.items():
+        if not isinstance(subdict, dict):
+            return badResp()
+        line = (
+            ipaddr,
+            subdict.get('age_secs', -1),
+            subdict.get('connections_rejected', 0),
+        )
+        line = [str(x) for x in line]
+        for i,c in enumerate(line):
+            maxfields[i] = max(maxfields[i], len(c))
+        lines.append(line)
+    for i,line in enumerate(list(lines)):
+        line = list(line)
+        for j,c in enumerate(line):
+            line[j] = c.ljust(maxfields[j])
+        lines[i] = '  '.join(line)
+    return '\n'.join(lines) + '\n'
 
 
 if __name__ == '__main__':

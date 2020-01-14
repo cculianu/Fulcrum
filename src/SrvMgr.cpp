@@ -32,6 +32,8 @@ SrvMgr::SrvMgr(const std::shared_ptr<const Options> & options,
                QObject *parent)
     : Mgr(parent), options(options), storage(s), bitcoindmgr(bdm)
 {
+    connect(this, &SrvMgr::banIP, this, &SrvMgr::on_banIP);
+    connect(this, &SrvMgr::liftIPBan, this, &SrvMgr::on_liftIPBan);
 }
 
 SrvMgr::~SrvMgr()
@@ -86,6 +88,8 @@ void SrvMgr::startServers()
         connect(srv, &ServerBase::clientDisconnected, this, &SrvMgr::clientDisconnected);
         // if srv receives this message, it will delete the client then we will get a signal back that it is now gone
         connect(this, &SrvMgr::clientExceedsConnectionLimit, srv, qOverload<IdMixin::Id>(&ServerBase::killClient));
+        // same situation here as above -- servers kick the client in question immediately
+        connect(this, &SrvMgr::clientIsBanned, srv, qOverload<IdMixin::Id>(&ServerBase::killClient));
         // tally tx broadcasts (lifetime)
         connect(srv, &Server::broadcastTxSuccess, this, [this](unsigned bytes){ ++numTxBroadcasts; txBroadcastBytesTotal += bytes; });
 
@@ -117,6 +121,7 @@ void SrvMgr::startServers()
 
 void SrvMgr::clientConnected(IdMixin::Id cid, const QHostAddress &addr)
 {
+    bool clientWillDieAnyway = false;
     addrIdMap.insertMulti(addr, cid);
     const auto maxPerIP = options->maxClientsPerIP;
     if (addrIdMap.count(addr) > maxPerIP) {
@@ -126,12 +131,33 @@ void SrvMgr::clientConnected(IdMixin::Id cid, const QHostAddress &addr)
             Log() << "Connection limit (" << maxPerIP << ") exceeded for " << addr.toString()
                   << ", connection refused for client " << cid;
             emit clientExceedsConnectionLimit(cid);
+            clientWillDieAnyway = true;
         } else {
             Debug() << "Client " << cid << " from " << addr.toString() << " would have exceeded the connection limit ("
                     << maxPerIP << ") but its IP matches subnet " << matched.toString() << " from 'subnets_to_exclude_from_per_ip_limits'";
         }
     }
+
+    // lastly, check bans and tally ctr and increment counter anyway -- even if clientWillDieAnyway == true
+    const bool banned = isIPBanned(addr, true);
+
+    if (banned && !clientWillDieAnyway) {
+        Log() << "Rejecting client " << cid << " from " << addr.toString() << " (banned)";
+        emit clientIsBanned(cid);
+    }
 }
+
+bool SrvMgr::isIPBanned(const QHostAddress &addr, bool increment) const
+{
+    std::lock_guard g(banMut);
+    if (auto it = banMap.find(addr); it != banMap.end()) {
+        if (increment)
+            ++it.value().rejectedConnectionCount;
+        return true;
+    }
+    return false;
+}
+
 
 void SrvMgr::clientDisconnected(IdMixin::Id cid, const QHostAddress &addr)
 {
@@ -144,6 +170,62 @@ void SrvMgr::clientDisconnected(IdMixin::Id cid, const QHostAddress &addr)
             addrIdMap.squeeze();
         }
     }
+}
+
+void SrvMgr::on_banIP(const QHostAddress &addr)
+{
+    if (addr.isNull()) {
+        Debug() << __func__ << ": address is null!";
+        return;
+    }
+    bool wasNew = false;
+    {
+        // place in map if not already there
+        std::lock_guard g(banMut);
+        if (!banMap.contains(addr)) {
+            wasNew = true;
+            auto & bi = banMap[addr];
+            bi.ts = Util::getTime();
+            bi.address = addr;
+        }
+    }
+    int kicks = 0;
+    if ((kicks = addrIdMap.count(addr)))
+        emit kickByAddress(addr);
+    if (wasNew || kicks)
+        Log() << addr.toString() << " is now banned"
+              << (kicks ? QString(" (%1 %2 kicked)").arg(kicks).arg(Util::Pluralize("client", kicks)) : QString());
+}
+
+void SrvMgr::on_banID(IdMixin::Id cid)
+{
+    QHostAddress found;
+    for (auto it = addrIdMap.cbegin(); it != addrIdMap.cend(); ++it) {
+        if (it.value() == cid) {
+            found = it.key();
+            break;
+        }
+    }
+    if (!found.isNull())
+        emit banIP(found);
+    else
+        Debug() << "Unable to ban client " << cid << "; not found";
+}
+
+void SrvMgr::on_liftIPBan(const QHostAddress &addr)
+{
+    if (addr.isNull()) {
+        Debug() << __func__ << ": address is null!";
+        return;
+    }
+
+    bool wasBanned = false;
+    {
+        std::lock_guard g(banMut);
+        wasBanned = banMap.remove(addr);
+    }
+    if (wasBanned)
+        Log() << "Address " << addr.toString() << " is no longer banned";
 }
 
 auto SrvMgr::stats() const -> Stats
@@ -164,7 +246,21 @@ auto SrvMgr::stats() const -> Stats
     m["number of clients"] = qulonglong(Client::numClients.load());
     m["number of clients (max lifetime)"] = qulonglong(Client::numClientsMax.load());
     m["number of clients (total lifetime connections)"] = qulonglong(Client::numClientsCtr.load());
+    m["bans"] = adminRPC_banInfo_threadSafe();
     return m;
+}
+
+QVariantMap SrvMgr::adminRPC_banInfo_threadSafe() const
+{
+    QVariantMap ret;
+    std::lock_guard g(banMut);
+    for (const auto & ban : banMap) {
+        QVariantMap m;
+        m["connections_rejected"] = ban.rejectedConnectionCount;
+        m["age_secs"] = qlonglong(std::round((Util::getTime() - ban.ts)/1e3));
+        ret[ban.address.toString()] = m;
+    }
+    return ret;
 }
 
 QVariantList SrvMgr::adminRPC_getClients_blocking(int timeout_ms) const

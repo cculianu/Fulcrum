@@ -1454,6 +1454,53 @@ auto AdminServer::stats() const -> Stats
     }
     return m;
 }
+
+
+void AdminServer::kickBanBoilerPlate(const RPC::Message &m, BanOp banOp)
+{
+    const auto list = m.paramsList();
+    std::list<IdMixin::Id> ids;
+    std::list<QHostAddress> addrs;
+    int argNum = 0;
+    for (const auto & var : list) {
+        ++argNum;
+        QString s = var.toString();
+        bool ok;
+        std::uint64_t cid = s.toULongLong(&ok);
+        constexpr auto UnbanMsg = "Argument %1 is not an IP address: '%2'",
+                       OtherMsg = "Argument %1 is not a ClientID or an IP address: '%2'";
+        if (ok && cid) {
+            if (banOp == BanOp::Unban)
+                // cannot unban by ID since the actual ban table only stores IP addresses
+                throw RPCError(QString(UnbanMsg).arg(argNum).arg(s));
+            ids.push_back(cid);
+        } else if (auto addr = QHostAddress(s); !addr.isNull() ) {
+            addrs.emplace_back(std::move(addr));
+        } else {
+            const char * msg = banOp == BanOp::Unban ? UnbanMsg : OtherMsg;
+            throw RPCError(QString(msg).arg(argNum).arg(s));
+        }
+    }
+    for (const auto & cid : ids) {
+        switch (banOp) {
+        case BanOp::Ban:  emit srvmgr->banID(cid); break;
+        case BanOp::Kick: emit srvmgr->kickById(cid); break;
+        case BanOp::Unban: break; ///< this is never reached because we throw above if we encounter cid's in an Unban.
+        }
+    }
+    for (const auto & addr : addrs) {
+        switch (banOp) {
+        case BanOp::Ban:  emit srvmgr->banIP(addr); break;
+        case BanOp::Kick: emit srvmgr->kickByAddress(addr); break;
+        case BanOp::Unban: emit srvmgr->liftIPBan(addr); break;
+        }
+    }
+}
+void AdminServer::rpc_ban(Client *c, const RPC::Message &m)
+{
+    kickBanBoilerPlate(m, BanOp::Ban);
+    emit c->sendResult(m.id, true);
+}
 void AdminServer::rpc_clients(Client *c, const RPC::Message &m)
 {
     generic_do_async(c, m.id, [srvmgr = QPointer(this->srvmgr)]{
@@ -1518,30 +1565,13 @@ void AdminServer::rpc_getinfo(Client *c, const RPC::Message &m)
 }
 void AdminServer::rpc_kick(Client *c, const RPC::Message &m)
 {
-    const auto list = m.paramsList();
-    std::list<IdMixin::Id> ids2kick;
-    std::list<QHostAddress> addrs2kick;
-    int argNum = 0;
-    for (const auto & var : list) {
-        ++argNum;
-        QString s = var.toString();
-        bool ok;
-        std::uint64_t cid = s.toULongLong(&ok);
-        if (ok && cid) {
-            ids2kick.push_back(cid);
-        } else if (auto addr = QHostAddress(s); !addr.isNull() ) {
-            addrs2kick.emplace_back(std::move(addr));
-        } else {
-            throw RPCError(QString("Argument %1 is not a ClientID or an IP address: '%2'").arg(argNum).arg(s));
-        }
-    }
-    for (const auto & cid : ids2kick)
-        emit srvmgr->kickById(cid);
-    for (const auto & addr : addrs2kick)
-        emit srvmgr->kickByAddress(addr);
+    kickBanBoilerPlate(m, BanOp::Kick);
     emit c->sendResult(m.id, true);
 }
-
+void AdminServer::rpc_listbanned(Client *c, const RPC::Message &m)
+{
+    emit c->sendResult(m.id, srvmgr->adminRPC_banInfo_threadSafe());
+}
 void AdminServer::rpc_shutdown(Client *c, const RPC::Message &m)
 {
     auto app = qApp;
@@ -1551,6 +1581,11 @@ void AdminServer::rpc_shutdown(Client *c, const RPC::Message &m)
         app->quit();
     }, 100);
     emit c->sendResult(m.id, QVariant(true));
+}
+void AdminServer::rpc_unban(Client *c, const RPC::Message &m)
+{
+    kickBanBoilerPlate(m, BanOp::Unban);
+    emit c->sendResult(m.id, true);
 }
 
 // --- AdminServer::StaticData Definitions ---
@@ -1563,11 +1598,14 @@ HEY_COMPILER_PUT_STATIC_HERE(AdminServer::StaticData::methodMap);
 HEY_COMPILER_PUT_STATIC_HERE(AdminServer::StaticData::registry){
 /*  ==> Note: Add stuff to this table when adding new RPC methods.
     { {"rpc.name",                allow_requests, allow_notifications, PosParamRange, (QSet<QString> note: {} means undefined optional)}, &method_to_call }     */
+    { {"ban",                               true,               false,    PR{1,UNLIMITED},         {} },          MP(rpc_ban) },
     { {"clients",                           true,               false,    PR{0,0},      RPC::KeySet{} },          MP(rpc_clients) },
     { {"getinfo",                           true,               false,    PR{0,0},      RPC::KeySet{} },          MP(rpc_getinfo) },
     { {"kick",                              true,               false,    PR{1,UNLIMITED},         {} },          MP(rpc_kick) },
+    { {"listbanned",                        true,               false,    PR{0,0},      RPC::KeySet{} },          MP(rpc_listbanned) },
     { {"shutdown",                          true,               false,    PR{0,0},      RPC::KeySet{} },          MP(rpc_shutdown) },
     { {"stop",                              true,               false,    PR{0,0},      RPC::KeySet{} },          MP(rpc_shutdown) }, // alias for 'shutdown'
+    { {"unban",                             true,               false,    PR{1,UNLIMITED},         {} },          MP(rpc_unban) },
 };
 #undef UNLIMITED
 #undef MP
