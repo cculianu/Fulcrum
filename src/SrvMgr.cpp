@@ -151,6 +151,8 @@ auto SrvMgr::stats() const -> Stats
     const int timeout = kDefaultTimeout / qMax(int(servers.size()), 1);
     for (const auto & server : servers)
         serversMap.unite( server->statsSafe(timeout).toMap() );
+    for (const auto & server : adminServers)
+        serversMap.unite( server->statsSafe(timeout).toMap() );
     m["Servers"] = serversMap;
     m["PeerMgr"] = peermgr ? peermgr->statsSafe(kDefaultTimeout/2) : QVariant();
     m["transactions sent"] = qulonglong(numTxBroadcasts.load());

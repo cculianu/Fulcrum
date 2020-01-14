@@ -147,3 +147,15 @@ bool ThreadPool::setMaxThreadCount(int max) {
     pool->setMaxThreadCount(max);
     return pool->maxThreadCount() == max;
 }
+
+QVariantMap ThreadPool::stats() const noexcept
+{
+    QVariantMap m;
+    m["extant jobs"] = extantJobs();
+    m["extant jobs (max lifetime)"] = extantJobsMaxSeen();
+    m["extant limit"] = extantJobLimit();
+    m["job count (lifetime)"] = qulonglong(numJobsSubmitted());
+    m["job queue overflows (lifetime)"] = qulonglong(overflows());
+    m["thread count (max)"] = maxThreadCount();
+    return m;
+}

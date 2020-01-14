@@ -1323,16 +1323,7 @@ auto Controller::stats() const -> Stats
     st["Controller"] = m;
     st["Storage"] = storage->statsSafe();
     QVariantMap misc;
-    {
-        QVariantMap m;
-        m["extant jobs"] = ::AppThreadPool()->extantJobs();
-        m["extant jobs (max lifetime)"] = ::AppThreadPool()->extantJobsMaxSeen();
-        m["extant limit"] = ::AppThreadPool()->extantJobLimit();
-        m["job count (lifetime)"] = qulonglong(::AppThreadPool()->numJobsSubmitted());
-        m["job queue overflows (lifetime)"] = qulonglong(::AppThreadPool()->overflows());
-        m["thread count (max)"] = ::AppThreadPool()->maxThreadCount();
-        misc["Job Queue (Thread Pool)"] = m;
-    }
+    misc["Job Queue (Thread Pool)"] = ::AppThreadPool()->stats();
     st["Misc"] = misc;
     st["SubsMgr"] = storage->subs()->statsSafe(kDefaultTimeout/2);
     st["Config"] = options->toMap();

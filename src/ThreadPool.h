@@ -117,6 +117,10 @@ public:
     /// Returns true if the ThreadPool is currently being shutdown. A shutting-down ThreadPool will reject all new work.
     inline bool isShuttingDown() const noexcept { return blockNewWork.load(); }
 
+    /// Thred-safe.  Returns some stats suitable for placing into a JSON object, etc. Used by the Controller as
+    /// well as the AdminServer classes.
+    QVariantMap stats() const noexcept;
+
 private:
     const std::unique_ptr<QThreadPool> pool;
     std::atomic_uint64_t ctr = 0, noverflows = 0;

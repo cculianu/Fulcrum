@@ -125,6 +125,7 @@ protected:
 class BitcoinDMgr;
 class Client;
 class Storage;
+class ThreadPool;
 
 /// Base class for the Electrum-server-style linefeed-based JSON-RPC service.
 ///
@@ -233,6 +234,10 @@ protected:
                                    const QVariantList &params, ///< params for bitcoind method
                                    const BitcoinDSuccessFunc & successFunc,
                                    const BitcoinDErrorFunc & errorFunc = BitcoinDErrorFunc());
+
+    /// Subclasses may set this pointer if they wish the generic_do_async function above to use a private/custom
+    /// threadpool. Otherwise the app-global ::AppThreadPool()  will be used for generic_do_async().
+    ThreadPool *asyncThreadPool = nullptr;
 
     /// pointer to the shared Options object -- app-wide configuration settings. Owned and controlled by the App instance.
     const std::shared_ptr<const Options> options;
@@ -371,7 +376,12 @@ public:
 
     QString prettyName() const override;
 
+    /// From StatsMixin. This must be called in the thread context of this thread (use statsSafe() for the blocking, thread-safe version!)
+    QVariant stats() const override;
+
 private:
+    std::unique_ptr<ThreadPool> threadPool; ///< we use our own threadpool for the admin server so as to not interfere with the normal one used for SPV clients.
+
     SrvMgr * const srvmgr; ///< this is alive for the entire lifetime of this instance.
 
     void rpc_getinfo(Client *, const RPC::Message &);

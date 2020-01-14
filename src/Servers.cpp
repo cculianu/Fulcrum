@@ -551,7 +551,7 @@ void ServerBase::generic_do_async(Client *c, const RPC::Message::Id &reqId, cons
 
         auto reserr = std::make_shared<ResErr>(); ///< shared with lambda for both work and completion. this is how they communicate.
 
-        ::AppThreadPool()->submitWork(
+        (asyncThreadPool ? asyncThreadPool : ::AppThreadPool())->submitWork(
             c, // <--- all work done in client context, so if client is deleted, completion not called
             // runs in worker thread, must not access anything other than reserr and work
             [reserr,work]{
@@ -634,7 +634,7 @@ Server::Server(const QHostAddress &a, quint16 p, const std::shared_ptr<const Opt
     setMaxPendingConnections(std::max(options->maxPendingConnections, options->minMaxPendingConnections)); // default in Options is 60 pending connections
 }
 
-Server::~Server() {}
+Server::~Server() { stop(); }
 
 QString Server::prettyName() const
 {
@@ -1391,7 +1391,7 @@ ServerSSL::ServerSSL(const QHostAddress & address_, quint16 port_, const std::sh
     setObjectName(prettyName());
     _thread.setObjectName(prettyName());
 }
-ServerSSL::~ServerSSL() {}
+ServerSSL::~ServerSSL() { stop(); }
 QString ServerSSL::prettyName() const
 {
     return QString("Ssl%1").arg(AbstractTcpServer::prettyName());
@@ -1426,11 +1426,28 @@ AdminServer::AdminServer(SrvMgr *sm, const QHostAddress & a, quint16 p, const st
     StaticData::init(); // noop after first time it's called
     setObjectName(prettyName());
     _thread.setObjectName(objectName());
+    threadPool = std::make_unique<ThreadPool>(this);
+    asyncThreadPool = threadPool.get();
+    threadPool->setExtantJobLimit(30); // be very conservative here.
+    threadPool->setMaxThreadCount(std::min(QThread::idealThreadCount(), 2)); // limit to max 2 threads for admin rpc. we want to limit interference with SPV clients.
 }
 
-AdminServer::~AdminServer() {}
+AdminServer::~AdminServer() { stop(); asyncThreadPool = nullptr; }
 
 QString AdminServer::prettyName() const { return QString("Admin%1").arg(AbstractTcpServer::prettyName()); }
+
+auto AdminServer::stats() const -> Stats
+{
+    QVariantMap m = ServerBase::stats().toMap();
+    if (!m.isEmpty()) {
+        // this is a bit awkward...
+        const auto fkey = m.firstKey();
+        auto m2 = m[fkey].toMap();
+        m2["threadPool"] = threadPool->stats();
+        m[fkey] = m2;
+    }
+    return m;
+}
 
 void AdminServer::rpc_getinfo(Client *c, const RPC::Message &m)
 {
