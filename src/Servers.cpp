@@ -39,6 +39,7 @@
 #include <QTimer>
 
 #include <cstdlib>
+#include <iostream>
 #include <list>
 #include <utility>
 
@@ -1353,20 +1354,25 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
 #undef MP
 #undef PR
 #undef HEY_COMPILER_PUT_STATIC_HERE
-/*static*/
-void Server::StaticData::init()
-{
-    if (!dispatchTable.empty())
-        return;
-    for (const auto & r : registry) {
-        if (!r.member) {
-            Error() << "Runtime check failed: RPC Method " << r.method << " has a nullptr for its .member! See Server class! FIXME!";
-            std::_Exit(EXIT_FAILURE);
+namespace {
+    template <typename DTable, typename MMap, typename Registry>
+    void InitStaticDataCommon(DTable & dispatchTable, MMap & methodMap, const Registry & registry) {
+        if (!dispatchTable.empty())
+            return;
+        for (const auto & r : registry) {
+            if (!r.member) {
+                std::cerr << "Runtime check failed: RPC Method " << r.method.toUtf8().constData()
+                          << " has a nullptr for its .member! FIXME!" << std::endl << std::flush;
+                std::_Exit(EXIT_FAILURE);
+            }
+            methodMap[r.method] = r;
+            dispatchTable[r.method] = r.member;
         }
-        methodMap[r.method] = r;
-        dispatchTable[r.method] = r.member;
+
     }
 }
+/*static*/
+void Server::StaticData::init() { InitStaticDataCommon(dispatchTable, methodMap, registry); }
 // --- /Server::StaticData Definitions ---
 // --- /RPC METHODS ---
 
@@ -1477,19 +1483,7 @@ HEY_COMPILER_PUT_STATIC_HERE(AdminServer::StaticData::registry){
 #undef PR
 #undef HEY_COMPILER_PUT_STATIC_HERE
 /*static*/
-void AdminServer::StaticData::init()
-{
-    if (!dispatchTable.empty())
-        return;
-    for (const auto & r : registry) {
-        if (!r.member) {
-            Error() << "Runtime check failed: RPC Method " << r.method << " has a nullptr for its .member! See Server class! FIXME!";
-            std::_Exit(EXIT_FAILURE);
-        }
-        methodMap[r.method] = r;
-        dispatchTable[r.method] = r.member;
-    }
-}
+void AdminServer::StaticData::init() { InitStaticDataCommon(dispatchTable, methodMap, registry); }
 // ---- /Admin RPC Server ---
 
 /*static*/ std::atomic_size_t Client::numClients{0}, Client::numClientsMax{0}, Client::numClientsCtr{0};

@@ -389,7 +389,7 @@ private:
         /// This static data is used to build the above two static tables at app init
         static const QVector<MethodMember> registry;
 
-        static void init(); ///< called by Server c'tor. (First time it's called it populates the above tables from the 'registry' table)
+        static void init(); ///< called by AdminServer c'tor. (First time it's called it populates the above tables from the 'registry' table)
         StaticData() = delete; ///< unconstructible class! :D
     };
 };
