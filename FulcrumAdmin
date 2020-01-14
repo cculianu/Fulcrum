@@ -101,7 +101,7 @@ def main():
         response_handler = listbanned_handler
 
     elif command == 'peers' and not JSON:
-        pass
+        response_handler = peers_handler
 
     try:
         print(response_handler(send_request(command, command_params)))
@@ -195,6 +195,68 @@ def listbanned_handler(r):
             line[j] = c.ljust(maxfields[j])
         lines[i] = '  '.join(line)
     return '\n'.join(lines) + '\n'
+
+def peers_handler(r):
+    global EXITSTATUS
+    def badResp():
+        EXITSTATUS = 1
+        return f"Unexpected resposne from Fulcrum server: {r!r}"
+    if not isinstance(r, (dict,)):
+        return badResp()
+    lines = []
+    line = ("Hostname","IP","Status","TCP","SSL","Version","ProtoMin","ProtoMax","Elapsed","Message",)
+    maxfields = defaultdict(int)
+    for i,c in enumerate(line):
+        maxfields[i] = max(maxfields[i], len(c))
+    lines.append(line)
+    # peers (good, connected peers)
+    peerdict = r.get('peers')
+    if not isinstance(peerdict, dict):
+        return badResp()
+    for hostname, d in peerdict.items():
+        line = (
+            hostname,
+            d.get('addr','-'),
+            'Verified' if d.get('verified') == True else 'Unverified',
+            d.get('tcp_port') if d.get('tcp_port') else '-',
+            d.get('ssl_port') if d.get('ssl_port') else '-',
+            d.get('server_version', 'Unk'),
+            d.get('protocol_min', '-'),
+            d.get('protocol_max', '-'),
+            d.get('connectedTime', '-'),
+            '-',
+        )
+        line = [str(x) for x in line]
+        for i,c in enumerate(line):
+            maxfields[i] = max(maxfields[i], len(c))
+        lines.append(line)
+    # next, do the failed, bad, and queued peers
+    for status in ('failed', 'bad', 'queued'):
+        d = r.get(status)
+        if not d:
+            continue  # skip empties
+        if not isinstance(d, dict):
+            return badResp()
+        for hostname, l in d.items():
+            try:
+                ip, tcp, ssl, subver, pver, time, msg = l
+            except ValueError:
+                pass
+            line = (
+                hostname, ip, status.title(), tcp if tcp else '-', ssl if ssl else '-', subver, pver, pver, time, msg
+            )
+            line = [str(x) for x in line]
+            for i,c in enumerate(line):
+                maxfields[i] = max(maxfields[i], len(c))
+            lines.append(line)
+
+    for i,line in enumerate(list(lines)):
+        line = list(line)
+        for j,c in enumerate(line):
+            line[j] = c.ljust(maxfields[j])
+        lines[i] = '  '.join(line)
+    return '\n'.join(lines) + '\n'
+
 
 
 if __name__ == '__main__':

@@ -308,23 +308,13 @@ void PeerMgr::updateSoon()
 {
     callOnTimerSoonNoRepeat(int(kProcessSoonInterval * 1e3), __func__, [this]{
         // the below happens in a rate-limited fashion after a small delay (currently 1 sec)
-        PeerInfoList copy;
-        {
-            ExclusiveLock g(mut);
-            sharedPeers.clear();
-            for (const auto & client : clients) {
-                if (client->isGood() && !client->isStale() && client->verified)
-                    sharedPeers.push_back(client->info);
-            }
-            copy = sharedPeers; // take a copy now for signal below (this is O(1) due to implicit sharing)
+        PeerInfoList peers;
+        for (const auto & client : clients) {
+            if (client->isGood() && !client->isStale() && client->verified)
+                peers.push_back(client->info);
         }
-        emit updated(copy);
+        emit updated(peers);
     });
-}
-
-PeerInfoList PeerMgr::peers() const {
-    SharedLock g(mut);
-    return sharedPeers;
 }
 
 void PeerMgr::process()

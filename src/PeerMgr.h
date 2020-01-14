@@ -65,9 +65,6 @@ public:
     /// returns a suitable features map for a given client connection
     QVariantMap makeFeaturesDict(PeerClient *) const;
 
-    /// Thread-safe. Returns the current known-good PeerInfoList
-    PeerInfoList peers() const;
-
     using HeightHeaderPair = std::pair<BlockHeight, Storage::Header>;
     /// Thread-safe. Called from PeerClient instances.
     /// Returns a height, block header 10 blocks in the past for querying peers (for peer verification that they are
@@ -126,11 +123,6 @@ private:
 
     QHash<QString, PeerClient *> clients;
     QSet<QHostAddress> peerIPAddrs; ///< in case we want to ensure IP-uniqueness of peers and reject dupes with different hostname, same IP (sybil attack defense measure)
-
-    PeerInfoList sharedPeers; ///< gets returned from the public thread-safe function `peers`
-    mutable std::shared_mutex mut; ///< mutex for above
-    using ExclusiveLock = std::lock_guard<std::shared_mutex>;
-    using SharedLock = std::shared_lock<std::shared_mutex>;
 };
 
 
