@@ -11,6 +11,7 @@ HOST = 'localhost'
 PORT = None
 ID_NEXT = random.randint(0, 262144)
 JSON = False
+EXITSTATUS = 0
 
 class ErrorResponse(RuntimeError):
     pass
@@ -36,7 +37,7 @@ def send_request(method, params=None):
 
 
 def main():
-    global HOST, PORT, JSON
+    global HOST, PORT, JSON, EXITSTATUS
     parser = argparse.ArgumentParser(prog="FulcrumAdmin.py", description="Fulcrum CLI admin tool")
     parser.add_argument('-p', type=int, metavar="port", nargs=1, required=True, help=f"Specify the port for the Fulcrum admin RPC service. This is a required argument.")
     parser.add_argument('-j', action='store_true', dest="json", help=f"Print the response from the server as JSON, not as formatted text")
@@ -44,6 +45,8 @@ def main():
     subparsers = parser.add_subparsers(title="command", description="Select from one of the following commands:", dest="command")
     clients = subparsers.add_parser('clients', help="Print information on all the currently connected clients", aliases=['sessions'])
     getinfo = subparsers.add_parser('getinfo', help="Get server information")
+    kick = subparsers.add_parser('kick', help="Kick clients by ID and/or IP address")
+    kick.add_argument('ids_or_ips', metavar='IP_or_ID_List', nargs='+', help="Specify a list of ID's and/or IP addresses to kick.")
     stop = subparsers.add_parser('stop', help="Gracefully shut down the server")
 
     args = parser.parse_args()
@@ -59,23 +62,38 @@ def main():
     if command == 'sessions': command = 'clients'  # Is there a better way to do this by referring back to the subparser above?? TODO
     command_params = tuple()
     response_handler = lambda r: json.dumps(r, indent = 4)  # default handler just pretty-prints the JSON
+
     if command is None:
         print("Please specify a command to run.\n")
         parser.print_help()
         sys.exit(1)
+
     elif command == 'stop' and not JSON:
         def handler(r):
             if isinstance(r, bool) and r:
                 return "Fulcrum server is shutting down"
             else:
+                EXITSTATUS = 1
                 return f"Unexpected response from Fulcrum server: {r}"
         response_handler = handler
+
     elif command == 'clients' and not JSON:
         response_handler = clients_handler
 
+    elif command == 'kick':
+        command_params = args.ids_or_ips
+        if not JSON:
+            def handler(r):
+                if isinstance(r, bool) and r:
+                    return "Kick command submitted for: " + ', '.join(command_params)
+                else:
+                    EXITSTATUS = 1
+                    return f"Unexpected response from Fulcrum server: {r}"
+            response_handler = handler
 
     try:
         print(response_handler(send_request(command, command_params)))
+        sys.exit(EXITSTATUS)
     except OSError as e:
         print(f"Error communicating with the admin RPC port at {HOST}:{PORT}\n\n    {e}\n")
         sys.exit(1)
@@ -86,7 +104,9 @@ def main():
 
 
 def clients_handler(r):
+    global EXITSTATUS
     def badResp():
+        EXITSTATUS = 1
         return f"Unexpected resposne from Fulcrum server: {r!r}"
     if not isinstance(r, (list, tuple)):
         return badResp()

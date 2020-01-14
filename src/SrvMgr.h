@@ -70,6 +70,13 @@ signals:
     /// its own processing once all servers are up.
     void allServersStarted();
 
+    /// Connected to each Server instance's `killClient` slot.  Each client has a unique Id, so if the client is still
+    /// connected, one of the extant Server instances will pick up the request and disconnect the client immediately.
+    void kickById(IdMixin::Id);
+    /// Connected to each Server instance's `killClientsByAddress` slot.  All clients (if any) that exactly match the
+    /// specified address will be immediately disconnected.
+    void kickByAddress(const QHostAddress &);
+
 protected:
     Stats stats() const override;
 

@@ -388,6 +388,7 @@ private:
 
     void rpc_clients(Client *, const RPC::Message &);
     void rpc_getinfo(Client *, const RPC::Message &);
+    void rpc_kick(Client *, const RPC::Message &);
     void rpc_shutdown(Client *, const RPC::Message &);
 
     /// Basically a namespace for our rpc dispatch tables, etc, private to this class

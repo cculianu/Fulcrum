@@ -1485,6 +1485,31 @@ void AdminServer::rpc_getinfo(Client *c, const RPC::Message &m)
     res["config"] = options->toMap();
     emit c->sendResult(m.id, res);
 }
+void AdminServer::rpc_kick(Client *c, const RPC::Message &m)
+{
+    const auto list = m.paramsList();
+    std::list<IdMixin::Id> ids2kick;
+    std::list<QHostAddress> addrs2kick;
+    int argNum = 0;
+    for (const auto & var : list) {
+        ++argNum;
+        QString s = var.toString();
+        bool ok;
+        std::uint64_t cid = s.toULongLong(&ok);
+        if (ok && cid) {
+            ids2kick.push_back(cid);
+        } else if (auto addr = QHostAddress(s); !addr.isNull() ) {
+            addrs2kick.emplace_back(std::move(addr));
+        } else {
+            throw RPCError(QString("Argument %1 is not a ClientID or an IP address: '%2'").arg(argNum).arg(s));
+        }
+    }
+    for (const auto & cid : ids2kick)
+        emit srvmgr->kickById(cid);
+    for (const auto & addr : addrs2kick)
+        emit srvmgr->kickByAddress(addr);
+    emit c->sendResult(m.id, true);
+}
 
 void AdminServer::rpc_shutdown(Client *c, const RPC::Message &m)
 {
@@ -1501,6 +1526,7 @@ void AdminServer::rpc_shutdown(Client *c, const RPC::Message &m)
 #define HEY_COMPILER_PUT_STATIC_HERE(x) decltype(x) x
 #define PR RPC::Method::PosParamRange
 #define MP(x) static_cast<ServerBase::Member_t>(&AdminServer :: x) // wrapper to cast from narrow method pointer to ServerBase::Member_t
+#define UNLIMITED (RPC::Method::NO_POS_PARAM_LIMIT)
 HEY_COMPILER_PUT_STATIC_HERE(AdminServer::StaticData::dispatchTable);
 HEY_COMPILER_PUT_STATIC_HERE(AdminServer::StaticData::methodMap);
 HEY_COMPILER_PUT_STATIC_HERE(AdminServer::StaticData::registry){
@@ -1508,9 +1534,11 @@ HEY_COMPILER_PUT_STATIC_HERE(AdminServer::StaticData::registry){
     { {"rpc.name",                allow_requests, allow_notifications, PosParamRange, (QSet<QString> note: {} means undefined optional)}, &method_to_call }     */
     { {"clients",                           true,               false,    PR{0,0},      RPC::KeySet{} },          MP(rpc_clients) },
     { {"getinfo",                           true,               false,    PR{0,0},      RPC::KeySet{} },          MP(rpc_getinfo) },
+    { {"kick",                              true,               false,    PR{1,UNLIMITED},         {} },          MP(rpc_kick) },
     { {"shutdown",                          true,               false,    PR{0,0},      RPC::KeySet{} },          MP(rpc_shutdown) },
     { {"stop",                              true,               false,    PR{0,0},      RPC::KeySet{} },          MP(rpc_shutdown) }, // alias for 'shutdown'
 };
+#undef UNLIMITED
 #undef MP
 #undef PR
 #undef HEY_COMPILER_PUT_STATIC_HERE

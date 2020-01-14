@@ -89,6 +89,10 @@ void SrvMgr::startServers()
         // tally tx broadcasts (lifetime)
         connect(srv, &Server::broadcastTxSuccess, this, [this](unsigned bytes){ ++numTxBroadcasts; txBroadcastBytesTotal += bytes; });
 
+        // kicking
+        connect(this, &SrvMgr::kickById, srv, qOverload<IdMixin::Id>(&ServerBase::killClient));
+        connect(this, &SrvMgr::kickByAddress, srv, &ServerBase::killClientsByAddress);
+
         if (peermgr) {
             connect(srv, &ServerBase::gotRpcAddPeer, peermgr.get(), &PeerMgr::on_rpcAddPeer);
             connect(peermgr.get(), &PeerMgr::updated, srv, &ServerBase::onPeersUpdated);
