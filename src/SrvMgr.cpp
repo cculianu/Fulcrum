@@ -347,8 +347,8 @@ QVariantList SrvMgr::adminRPC_getClients_blocking(int timeout_ms) const
 {
     return Util::LambdaOnObject<QVariantList>(this, [this, timeout_ms] {
         const bool infiniteTimeout = timeout_ms <= 0;
-        const auto nClients = std::max(int(servers.size()), 1);
-        const int timeoutPerServer = infiniteTimeout ? -1 : std::max(timeout_ms / nClients, 1);
+        const auto nServers = std::max(int(servers.size()), 1);
+        const int timeoutPerServer = infiniteTimeout ? -1 : std::max(timeout_ms / nServers, 1);
         QVariantList ret;
         for (const auto & server : servers)
             ret.push_back( server->statsSafe(timeoutPerServer) );

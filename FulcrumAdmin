@@ -25,7 +25,9 @@ def send_request(method, params=None):
             msg = json.dumps(outj, indent=None).encode("utf8") + b'\n'
             if verb: print(f"Srv --> {msg[:2048]}")
             sock.send(msg)
-            resp = sock.recv(4*1034*1024)
+            resp = bytearray()
+            while b'\n' not in resp:
+                resp += sock.recv(4096)
             if verb: print(f"Srv <-- {resp[:2048]}")
             j = json.loads(resp.decode("utf8").strip())
             if j.get("error") or j.get("id") != _id:
