@@ -204,11 +204,15 @@ def peers_handler(r):
     if not isinstance(r, (dict,)):
         return badResp()
     lines = []
-    line = ("Hostname","IP","Status","TCP","SSL","Version","ProtoMin","ProtoMax","Elapsed","Message",)
+    line = ("Hostname","IP","Status","TCP","SSL","Version","ProtoMin","ProtoMax","Elapsed","Message","RetryPeriod")
     maxfields = defaultdict(int)
     for i,c in enumerate(line):
         maxfields[i] = max(maxfields[i], len(c))
     lines.append(line)
+    retryTimes = {
+        "bad" : r.get('activeTimers', {}).get("badPeerRetry", 0),
+        "failed" : r.get('activeTimers', {}).get("failedPeerRetry", 0),
+    }
     # peers (good, connected peers)
     peerdict = r.get('peers')
     if not isinstance(peerdict, dict):
@@ -217,14 +221,14 @@ def peers_handler(r):
         line = (
             hostname,
             d.get('addr','-'),
-            'Verified' if d.get('verified') == True else 'Unverified',
+            'Good' if d.get('verified') == True else 'Verifying',
             d.get('tcp_port') if d.get('tcp_port') else '-',
             d.get('ssl_port') if d.get('ssl_port') else '-',
             d.get('server_version', 'Unk'),
             d.get('protocol_min', '-'),
             d.get('protocol_max', '-'),
             d.get('connectedTime', '-'),
-            '-',
+            '-', '-'
         )
         line = [str(x) for x in line]
         for i,c in enumerate(line):
@@ -243,7 +247,8 @@ def peers_handler(r):
             except ValueError:
                 pass
             line = (
-                hostname, ip, status.title(), tcp if tcp else '-', ssl if ssl else '-', subver, pver, pver, time, msg
+                hostname, ip, status.title(), tcp if tcp else '-', ssl if ssl else '-',
+                subver, pver, pver, time, msg, '~' + str(retryTimes.get(status, 0)//1000) + 's'
             )
             line = [str(x) for x in line]
             for i,c in enumerate(line):
