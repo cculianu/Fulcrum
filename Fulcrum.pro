@@ -223,11 +223,6 @@ HEADERS += robin_hood/robin_hood.h
 RESOURCES += \
     resources.qrc
 
-# Default rules for deployment.
-qnx: target.path = /tmp/$${TARGET}/bin
-else: unix:!android: target.path = /opt/$${TARGET}/bin
-!isEmpty(target.path): INSTALLS += target
-
 # Bitcoin related sources & headers
 SOURCES += \
     bitcoin/amount.cpp \
@@ -343,3 +338,28 @@ HEADERS += \
     bitcoin/uint256.h \
     bitcoin/utilstrencodings.h \
     bitcoin/version.h
+
+# Installation
+unix:!android: {
+    !defined(PREFIX, var) {
+        PREFIX=$$(PREFIX)
+        isEmpty(PREFIX) {
+            PREFIX = /usr/local
+        }
+    }
+
+    message("Installation dir prefix is $$PREFIX")
+
+    target.path = $${PREFIX}/bin
+
+    documentation.path = $${PREFIX}/share/doc/$${TARGET}
+    documentation.files = doc/*
+
+    QMAKE_STRIP = true # Trick qmake into not stripping files
+    admin.path = $${PREFIX}/bin
+    admin.files = FulcrumAdmin
+}
+
+!isEmpty(target.path): INSTALLS += target
+!isEmpty(documentation.path): INSTALLS += documentation
+!isEmpty(admin.path): INSTALLS += admin
