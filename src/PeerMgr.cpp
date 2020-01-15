@@ -447,7 +447,7 @@ void PeerMgr::on_kickBySuffix(const QString &suffix)
 {
     if (suffix.isEmpty())
         return;
-    // NB: the suffix comes in pre-normalized from PeerMgr.
+    // NB: the suffix comes in pre-normalized from SrvMgr.
     int ctr = 0;
     QSet<QString> hostnames;
     // first, loop through all the inactive maps and search for this addr
