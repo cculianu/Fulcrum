@@ -391,6 +391,7 @@ private:
     enum BanOp { Kick, Ban, Unban };
     void kickBanBoilerPlate(const RPC::Message &, BanOp);
     void rpc_ban(Client *, const RPC::Message &);
+    void rpc_banpeer(Client *, const RPC::Message &);
     void rpc_clients(Client *, const RPC::Message &);
     void rpc_getinfo(Client *, const RPC::Message &);
     void rpc_kick(Client *, const RPC::Message &);
@@ -398,6 +399,7 @@ private:
     void rpc_peers(Client *, const RPC::Message &);
     void rpc_shutdown(Client *, const RPC::Message &);
     void rpc_unban(Client *, const RPC::Message &);
+    void rpc_unbanpeer(Client *, const RPC::Message &);
 
     /// Basically a namespace for our rpc dispatch tables, etc, private to this class
     struct StaticData {

@@ -34,6 +34,8 @@ SrvMgr::SrvMgr(const std::shared_ptr<const Options> & options,
 {
     connect(this, &SrvMgr::banIP, this, &SrvMgr::on_banIP);
     connect(this, &SrvMgr::liftIPBan, this, &SrvMgr::on_liftIPBan);
+    connect(this, &SrvMgr::banPeersWithSuffix, this, &SrvMgr::on_banPeersWithSuffix);
+    connect(this, &SrvMgr::liftPeerSuffixBan, this, &SrvMgr::on_liftPeerSuffixBan);
 }
 
 SrvMgr::~SrvMgr()
@@ -63,9 +65,11 @@ void SrvMgr::startServers()
 {
     if (options->peerDiscovery) {
         Log() << "SrvMgr: starting PeerMgr ...";
-        peermgr = std::make_shared<PeerMgr>(storage, options);
+        peermgr = std::make_shared<PeerMgr>(this, storage, options);
         peermgr->startup(); // may throw
         connect(this, &SrvMgr::allServersStarted, peermgr.get(), &PeerMgr::on_allServersStarted);
+        connect(this, &SrvMgr::kickByAddress, peermgr.get(), &PeerMgr::on_kickByAddress);
+        connect(this, &SrvMgr::kickPeersWithSuffix, peermgr.get(), &PeerMgr::on_kickBySuffix);
     } else peermgr.reset();
 
     const auto num = options->interfaces.length() + options->sslInterfaces.length() + options->adminInterfaces.length();
@@ -160,6 +164,37 @@ bool SrvMgr::isIPBanned(const QHostAddress &addr, bool increment) const
     return false;
 }
 
+namespace {
+    QString normalizeHostNameSuffix(const QString &s) {
+        QString ret = s.trimmed().toLower();
+
+        // strip leading '.' and '*' chars
+        int pos = 0;
+        const int len = ret.length();
+        static const QChar dot('.'), star('*');
+        for (QChar c; pos < len && ( (c = ret.at(pos)) == dot || c == star ) ; ++pos)
+        { /* */ }
+        if (pos) ret = ret.mid(pos);
+        //
+
+        return ret;
+    }
+}
+
+bool SrvMgr::isPeerHostNameBanned(const QString &h) const
+{
+    const QString hostName(normalizeHostNameSuffix(h));
+    if (hostName.isEmpty())
+        return false;
+    std::lock_guard g(banMut);
+    // we must do a linear search because we support *.host.whatever.com bans (which get normalized to a host.whatever.com suffix search)
+    for (auto it = bannedPeerSuffixes.cbegin(); it != bannedPeerSuffixes.cend(); ++it) {
+        if (hostName.endsWith(it.key()))
+            return true;
+    }
+    return false;
+}
+
 
 void SrvMgr::clientDisconnected(IdMixin::Id cid, const QHostAddress &addr)
 {
@@ -172,6 +207,39 @@ void SrvMgr::clientDisconnected(IdMixin::Id cid, const QHostAddress &addr)
             addrIdMap.squeeze();
         }
     }
+}
+
+void SrvMgr::on_banPeersWithSuffix(const QString &hn)
+{
+    const QString suffix(normalizeHostNameSuffix(hn)); // normalize
+    if (suffix.isEmpty())
+        return;
+    bool newBan = false;
+    {
+        std::lock_guard g(banMut);
+        if (!bannedPeerSuffixes.contains(suffix)) {
+            newBan = true;
+            auto & info = bannedPeerSuffixes[suffix];
+            info.ts = Util::getTime(); // remember when we banned it for stats / admin rpc display
+        }
+    }
+    if (newBan)
+        Log() << "Peers with host names matching *" << suffix << " are now banned";
+    emit kickPeersWithSuffix(suffix); // tell peer mgr to kick peers it has with that name (if any)
+}
+
+void SrvMgr::on_liftPeerSuffixBan(const QString &s)
+{
+    const QString suffix(normalizeHostNameSuffix(s));
+    if (suffix.isEmpty())
+        return;
+    bool wasBanned = false;
+    {
+        std::lock_guard g(banMut);
+        wasBanned = bannedPeerSuffixes.remove(suffix);
+    }
+    if (wasBanned)
+        Log() << "Peers matching suffix *" << suffix << " are no longer banned";
 }
 
 void SrvMgr::on_banIP(const QHostAddress &addr)
@@ -191,9 +259,8 @@ void SrvMgr::on_banIP(const QHostAddress &addr)
             bi.address = addr;
         }
     }
-    int kicks = 0;
-    if ((kicks = addrIdMap.count(addr)))
-        emit kickByAddress(addr);
+    int kicks = addrIdMap.count(addr);
+    emit kickByAddress(addr); // we must emit this regardless as the PeerMgr also listens for this, and we have no way of knowing from this class if it's connected to the peer in question or has it in queue, etc.
     if (wasNew || kicks)
         Log() << addr.toString() << " is now banned"
               << (kicks ? QString(" (%1 %2 kicked)").arg(kicks).arg(Util::Pluralize("client", kicks)) : QString());
@@ -256,12 +323,23 @@ QVariantMap SrvMgr::adminRPC_banInfo_threadSafe() const
 {
     QVariantMap ret;
     std::lock_guard g(banMut);
+    QVariantMap ipbans, hostnamebans;
     for (const auto & ban : banMap) {
         QVariantMap m;
         m["connections_rejected"] = ban.rejectedConnectionCount;
         m["age_secs"] = qlonglong(std::round((Util::getTime() - ban.ts)/1e3));
-        ret[ban.address.toString()] = m;
+        ipbans[ban.address.toString()] = m;
     }
+    for (auto it = bannedPeerSuffixes.begin(); it != bannedPeerSuffixes.end(); ++it) {
+        const auto & ban = it.value();
+        QVariantMap m;
+        m["age_secs"] = qlonglong(std::round((Util::getTime() - ban.ts)/1e3));
+        hostnamebans[QString("*") + it.key()] = m;
+    }
+
+    ret["Banned_IPAddrs"] = ipbans;
+    ret["Banned_Peers"] = hostnamebans;
+
     return ret;
 }
 

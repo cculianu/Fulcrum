@@ -139,12 +139,12 @@ int ConfigFile::remove(const QString &name, Qt::CaseSensitivity cs)
         return map.remove(name);
     } else {
         int ctr = 0;
-        for (auto it = map.begin(), next = it; it != map.end(); it = next) {
+        for (auto it = map.begin(); it != map.end(); /* */) {
             if (it.key().compare(name, cs) == 0) {
-                next = map.erase(it);
+                it = map.erase(it);
                 ++ctr;
             } else
-                ++next;
+                ++it;
         }
         return ctr;
     }

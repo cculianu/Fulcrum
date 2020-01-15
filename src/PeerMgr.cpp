@@ -20,6 +20,7 @@
 
 #include "Options.h"
 #include "Servers.h"
+#include "SrvMgr.h"
 #include "Storage.h"
 #include "Util.h"
 
@@ -34,9 +35,10 @@ namespace {
     constexpr bool debugPrint = false;
 }
 
-PeerMgr::PeerMgr(const std::shared_ptr<Storage> &storage_ , const std::shared_ptr<const Options> &options_)
-    : IdMixin(newId()), storage(storage_), options(options_)
+PeerMgr::PeerMgr(const SrvMgr *sm, const std::shared_ptr<Storage> &storage_ , const std::shared_ptr<const Options> &options_)
+    : IdMixin(newId()), srvmgr(sm), storage(storage_), options(options_)
 {
+    assert(srvmgr && storage && options);
     setObjectName("PeerMgr");
     _thread.setObjectName(objectName());
 }
@@ -325,6 +327,10 @@ void PeerMgr::process()
     if (pi.addr.isNull()) {
         if constexpr (debugPrint) Debug() << "PeerInfo.addr was null for " << pi.hostName << ", calling on_rpcAddPeer to resolve address";
         on_rpcAddPeer(PeerInfoList{pi}, pi.addr);
+    } else if (srvmgr->isIPBanned(pi.addr, false)) {
+        Debug() << "peer IP address " << pi.addr.toString() << " is banned, ignoring peer";
+    } else if (srvmgr->isPeerHostNameBanned(pi.hostName)) {
+        Debug() << "peer hostname " << pi.hostName << " is banned, ignoring peer";
     } else if (options->peeringEnforceUniqueIPs && peerIPAddrs.contains(pi.addr)) {
         if constexpr (debugPrint) Debug() << pi.hostName << " (" << pi.addr.toString() << ") already in peer set, skipping ...";
     } else {
@@ -380,7 +386,8 @@ void PeerMgr::on_bad(PeerClient *c)
         return;
     c->info.setFailureTsIfNotSet();
     c->info.genesisHash.clear();
-    bad[c->info.hostName] = c->info;
+    if (!c->wasKicked)
+        bad[c->info.hostName] = c->info;
     c->deleteLater(); // drop connection
 }
 
@@ -398,8 +405,75 @@ void PeerMgr::on_connectFailed(PeerClient *c)
     }
     c->info.setFailureTsIfNotSet();
     c->info.genesisHash.clear();
-    failed[c->info.hostName] = c->info;
+    if (!c->wasKicked)
+        failed[c->info.hostName] = c->info;
     c->deleteLater(); // clean up
+}
+
+
+void PeerMgr::on_kickByAddress(const QHostAddress &addr)
+{
+    if (addr.isNull())
+        return;
+    int ctr = 0;
+    QSet<QString> hostnames;
+    // first, loop through all the inactive maps and search for this addr
+    for (PeerInfoMap *m : {&seedPeers, &queued, &bad, &failed} ) {
+        for (auto it = m->begin(); it != m->end() ; /**/) {
+            if (it->addr == addr) {
+                Debug() << __func__ << " removing peer " << it.key() << " " << addr.toString();
+                hostnames.insert(it->hostName);
+                it = m->erase(it);
+                ++ctr;
+            } else
+                ++it;
+        }
+    }
+    // lastly, loop through the active/connected clients and tell them all to delete themselves
+    for (PeerClient *c : clients) {
+        if (c->peerAddress() == addr || c->info.addr == addr) {
+            Debug() << __func__ << " kicked connected peer " << c->info.hostName << " " << addr.toString();
+            hostnames.insert(c->info.hostName);
+            c->wasKicked = true;
+            c->deleteLater(); // this will call us back to remove it from the hashmap, etc
+            ++ctr;
+        }
+    }
+    if (const auto uniqs = hostnames.size(); uniqs)
+        Log() << uniqs << Util::Pluralize(" entry", uniqs) << " matching IP " << addr.toString() << " removed from the PeerMgr";
+}
+
+void PeerMgr::on_kickBySuffix(const QString &suffix)
+{
+    if (suffix.isEmpty())
+        return;
+    // NB: the suffix comes in pre-normalized from PeerMgr.
+    int ctr = 0;
+    QSet<QString> hostnames;
+    // first, loop through all the inactive maps and search for this addr
+    for (PeerInfoMap *m : {&seedPeers, &queued, &bad, &failed} ) {
+        for (auto it = m->begin(); it != m->end() ; /**/) {
+            if (it->hostName.endsWith(suffix)) {
+                Debug() << __func__ << " removing peer " << it.key() << " " << it->hostName;
+                hostnames.insert(it->hostName);
+                it = m->erase(it);
+                ++ctr;
+            } else
+                ++it;
+        }
+    }
+    // lastly, loop through the active/connected clients and tell them all to delete themselves
+    for (PeerClient *c : clients) {
+        if (c->info.hostName.endsWith(suffix)) {
+            Debug() << __func__ << " kicked connected peer " << c->info.hostName << " " << c->info.addr.toString();
+            hostnames.insert(c->info.hostName);
+            c->wasKicked = true;
+            c->deleteLater(); // this will call us back to remove it from the hashmap, etc
+            ++ctr;
+        }
+    }
+    if (const auto uniqs = hostnames.size(); uniqs)
+        Log() << "Removed " << uniqs << Util::Pluralize(" entry", uniqs) << " matching *" << suffix;
 }
 
 auto PeerMgr::stats() const -> Stats
@@ -484,7 +558,7 @@ PeerClient::PeerClient(bool announce, const PeerInfo &pi, IdMixin::Id id_, PeerM
 {
     setObjectName(QString("Peer %1").arg(pi.hostName));
 
-    constexpr int kPingtimeMS = 5 * 60 * 1000; ///< ping peer servers every 5 minutes to make sure connection is good and to avoid them disconnecting us for being idle.
+    constexpr int kPingtimeMS = int(PeerMgr::kConnectedPeerPingTime * 1000.); ///< ping peer servers every 5 minutes to make sure connection is good and to avoid them disconnecting us for being idle.
     pingtime_ms = kPingtimeMS;
     stale_threshold = kPingtimeMS * 2;
 

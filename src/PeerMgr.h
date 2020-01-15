@@ -35,9 +35,10 @@
 #include <shared_mutex>
 
 struct Options;
-class Storage;
 struct PeerInfo;
 class PeerClient;
+class SrvMgr;
+class Storage;
 
 using PeerInfoList = QList<PeerInfo>;
 
@@ -45,7 +46,7 @@ class PeerMgr : public Mgr, public IdMixin, public ThreadObjectMixin, public Tim
 {
     Q_OBJECT
 public:
-    PeerMgr(const std::shared_ptr<Storage> & , const std::shared_ptr<const Options> &);
+    PeerMgr(const SrvMgr *, const std::shared_ptr<Storage> & , const std::shared_ptr<const Options> &);
     ~PeerMgr() override;
 
     void startup() noexcept(false) override; ///< may throw
@@ -57,6 +58,7 @@ public:
                             kFailureRetryTime = 10. * 60., ///< the amount of time to wait before retrying failed servers (10 mins)
                             kBadPeerRetryTime = 60. * 60., ///< the amount of time to wait before retrying bad peers (60 mins)
                             kConnectedPeerRefreshInterval = 30. * 60., ///< we keep "refreshing" from connected peers at this interval (30 mins) to make sure they are still good, and to pick up new peers from them
+                            kConnectedPeerPingTime = 5. * 60., ///< we send server.ping to connected peers every 5 mins. This value should always be lower than kConnectedPeerRefreshInterval.
                             kExpireFailedPeersTime = 24. * 60. * 60.; ///< we expire peers that are in the "bad" or "failed" status after 24 hours. (see PeerInfo::failureTs)
 
     /// Used by PeerClient instances to compare the remote server's genesis hash to our own.
@@ -80,6 +82,13 @@ public slots:
     /// for peers and publishing our information.
     void on_allServersStarted();
 
+    /// Connected to SrvMgr's "kickByAddress" signal. Will go through all the lists of peers (inactive, queued, connected)
+    /// and either the peer entry matching the specified address and/or disconnect the peer if connected.
+    void on_kickByAddress(const QHostAddress &);
+    /// Connected to SrvMgr's "kickPeersWithSuffix" signal. Will go through all the lists of peers (inactive, queued, connected)
+    /// and either the peer entry matching the specified hostname suffix and/or disconnect the peer if connected.
+    void on_kickBySuffix(const QString &);
+
 signals:
     /// Emitted to notify Server instances of a new peers list.  Connected to the onPeersUpdated slot in all extant Server instances.
     void updated(const PeerInfoList &);
@@ -96,6 +105,7 @@ protected slots:
     void on_bad(PeerClient *);
     void on_connectFailed(PeerClient *);
 private:
+    const SrvMgr * const srvmgr; ///< SrvMgr owns us and is guaranteed to remain alive throughout our lifetime, hence the lack of a shared_ptr or other guard here.
     const std::shared_ptr<const Storage> storage; ///< from SrvMgr, read-only, for getChain() and genesisHash()
     const std::shared_ptr<const Options> options; ///< from SrvMgr that creates us.
 
@@ -192,6 +202,7 @@ public:
     std::optional<PeerMgr::HeightHeaderPair> headerToVerify;
     bool verified = false;
     double lastRefreshTs = 0.;
+    bool wasKicked = false; ///< used by the 'kick' code to tell the rest of the system to NOT re-enqueue this peer after disconnect
 
     const bool announceSelf;
     PeerInfo info;

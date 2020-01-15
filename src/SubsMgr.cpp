@@ -351,7 +351,7 @@ void SubsMgr::removeZombies()
     const auto now = Util::getTime();
     LockGuard g(p->mut);
     const auto total = p->subs.size();
-    for (auto it = p->subs.begin(), next = it; it != p->subs.end(); it = next) {
+    for (auto it = p->subs.begin(); it != p->subs.end(); /* */) {
         SubRef sub = it->second; // take a copy to increment refct so it doesn't get deleted before we unlock it (erase() below)...
         if (UNLIKELY(!sub)) { // paranoia
             Fatal() << "A SubRef was null in " << __func__ << ". FIXME!";
@@ -360,9 +360,9 @@ void SubsMgr::removeZombies()
         LockGuard g(sub->mut);
         if (sub->subscribedClientIds.empty() && now - sub->tsMsec > kRemoveZombiesTimerIntervalMS) {
             ++ctr;
-            next = it = p->subs.erase(it); // `it` is invalidated at this point, so we assign to it immediately to not keep an invalid iterator around...
+            it = p->subs.erase(it);
         } else
-            ++next;
+            ++it;
     }
     if (ctr) {
         p->subs.reserve(p->kSubsReserveSize); // shrink_to_fit if over kSubsReserveSize

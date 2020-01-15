@@ -61,6 +61,9 @@ public:
 
     /// Returns true if the specified address is in the ban table.  This method is thread-safe.
     bool isIPBanned(const QHostAddress &, bool incrementCounter = true) const;
+    /// Returns true if the specified hostname is in the ban table (this only really works for peers from PeerMgr and
+    /// not regular clients for which we never do reverse-DNS).  This method is thread-safe.
+    bool isPeerHostNameBanned(const QString &) const;
 
 signals:
     /// Notifies all blockchain.headers.subscribe'd clients for the entire server about a new header.
@@ -89,6 +92,10 @@ signals:
     /// specified address will be immediately disconnected.
     void kickByAddress(const QHostAddress &);
 
+    /// Connected to the peermgr (if it's valid). Kicks all peers matching the specified hostname suffix.
+    /// This is emitted from within on_banPeerHostName.
+    void kickPeersWithSuffix(const QString &);
+
     /// Any object or thread can emit this signal, which is connected to the protected on_banIP slot, which then
     /// goes ahead and updates the ban table and issues an immediate kick by IP to the server instances.
     /// AdminServer emits this.
@@ -100,6 +107,14 @@ signals:
 
     /// Emitted by the AdminServer, connected to a slot which will run in our thread, on_liftIPBan.
     void liftIPBan(const QHostAddress &);
+
+    /// Emitted by the AdminServer to signal us to ban a peer by hostname suffix.  Connected to on_banPeer
+    void banPeersWithSuffix(const QString &);
+
+    /// Emitted by the AdminServer, connected to a slot which will run in our thread, on_liftPeerSuffixBan.
+    /// Note than the suffix must match an existing entry exactly (leading '*' and '.' chars are stripped when
+    /// searching for a match).
+    void liftPeerSuffixBan(const QString &);
 
 protected:
     Stats stats() const override;
@@ -117,6 +132,10 @@ protected slots:
     void on_banID(IdMixin::Id);
     /// Connected to the liftIPBan signal
     void on_liftIPBan(const QHostAddress &);
+    /// Connected to the banPeersWithSuffix signal
+    void on_banPeersWithSuffix(const QString &);
+    /// Connected to the liftPeerSuffixBan signal
+    void on_liftPeerSuffixBan(const QString &);
 
 private:
     void startServers();
@@ -138,6 +157,7 @@ private:
         mutable unsigned rejectedConnectionCount = 0U; ///< the number of times a connection was rejected matching this ban
     };
     QHash<QHostAddress, BanInfo> banMap;
+    QHash<QString, BanInfo> bannedPeerSuffixes; // the banInfo .address in this map is always isNull(). We just use the info for the 'ts' stat ;)
     mutable std::mutex banMut;
 };
 

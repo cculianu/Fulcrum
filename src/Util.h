@@ -487,18 +487,24 @@ namespace Util {
 
     template <typename Numeric,
               std::enable_if_t<std::is_arithmetic<Numeric>::value, int> = 0>
-    QString Pluralize(const QString &word, Numeric n) {
+    QString Pluralize(const QString &wordIn, Numeric n) {
         QString ret;
         {
-            QTextStream s(&ret);
-            s << word;
             if (qAbs(int(n)) != 1) {
+                QString word(wordIn);
+                QString ending("s"); // default to 's' ending
                 const auto wordend = word.right(2);
                 // 's' or "sh" sound in English are pluralized with "es" rather than simple "s"
-                // TODO: suppored ALL CAPS? Not needed for now so we don't bother...
-                if (wordend.endsWith('s') || wordend == "sh") s << "es";
-                else s << "s";
-            }
+                // 'y' endings have the 'y' truncated and 'ies' appended in its stead for plurals as well.
+                // TODO: suppored ALL CAPS? Not needed for now in this app, so we don't bother...
+                if (wordend.endsWith('s') || wordend == "sh") ending = "es";
+                else if (wordend.endsWith('y')) {
+                    word.truncate(word.length()-1);  // remove training 'y'
+                    ending = "ies";  // .. append 'ies' eg entry -> entries
+                }
+                ret = QString("%1%2").arg(word).arg(ending);
+            } else
+                ret = wordIn; // constant time copy (implicitly shared)
         }
         return ret;
     }

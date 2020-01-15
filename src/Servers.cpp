@@ -1502,6 +1502,18 @@ void AdminServer::rpc_ban(Client *c, const RPC::Message &m)
     kickBanBoilerPlate(m, BanOp::Ban);
     emit c->sendResult(m.id, true);
 }
+void AdminServer::rpc_banpeer(Client *c, const RPC::Message &m)
+{
+    const auto strs = m.params().toStringList();
+    int ctr = 0;
+    for (auto suf : strs) {
+        if ((suf=suf.trimmed()).isEmpty())
+            continue;
+        ++ctr;
+        emit srvmgr->banPeersWithSuffix(suf);
+    }
+    emit c->sendResult(m.id, bool(ctr));
+}
 void AdminServer::rpc_clients(Client *c, const RPC::Message &m)
 {
     generic_do_async(c, m.id, [srvmgr = QPointer(this->srvmgr)]{
@@ -1590,12 +1602,24 @@ void AdminServer::rpc_shutdown(Client *c, const RPC::Message &m)
         Log() << "Received 'stop' command from admin RPC, shutting down ...";
         app->quit();
     }, 100);
-    emit c->sendResult(m.id, QVariant(true));
+    emit c->sendResult(m.id, true);
 }
 void AdminServer::rpc_unban(Client *c, const RPC::Message &m)
 {
     kickBanBoilerPlate(m, BanOp::Unban);
     emit c->sendResult(m.id, true);
+}
+void AdminServer::rpc_unbanpeer(Client *c, const RPC::Message &m)
+{
+    const auto strs = m.params().toStringList();
+    int ctr = 0;
+    for (auto suf : strs) {
+        if ((suf=suf.trimmed()).isEmpty())
+            continue;
+        ++ctr;
+        emit srvmgr->liftPeerSuffixBan(suf);
+    }
+    emit c->sendResult(m.id, bool(ctr));
 }
 
 // --- AdminServer::StaticData Definitions ---
@@ -1609,6 +1633,7 @@ HEY_COMPILER_PUT_STATIC_HERE(AdminServer::StaticData::registry){
 /*  ==> Note: Add stuff to this table when adding new RPC methods.
     { {"rpc.name",                allow_requests, allow_notifications, PosParamRange, (QSet<QString> note: {} means undefined optional)}, &method_to_call }     */
     { {"ban",                               true,               false,    PR{1,UNLIMITED},         {} },          MP(rpc_ban) },
+    { {"banpeer",                           true,               false,    PR{1,UNLIMITED},         {} },          MP(rpc_banpeer) },
     { {"clients",                           true,               false,    PR{0,0},      RPC::KeySet{} },          MP(rpc_clients) },
     { {"getinfo",                           true,               false,    PR{0,0},      RPC::KeySet{} },          MP(rpc_getinfo) },
     { {"kick",                              true,               false,    PR{1,UNLIMITED},         {} },          MP(rpc_kick) },
@@ -1617,6 +1642,7 @@ HEY_COMPILER_PUT_STATIC_HERE(AdminServer::StaticData::registry){
     { {"shutdown",                          true,               false,    PR{0,0},      RPC::KeySet{} },          MP(rpc_shutdown) },
     { {"stop",                              true,               false,    PR{0,0},      RPC::KeySet{} },          MP(rpc_shutdown) }, // alias for 'shutdown'
     { {"unban",                             true,               false,    PR{1,UNLIMITED},         {} },          MP(rpc_unban) },
+    { {"unbanpeer",                         true,               false,    PR{1,UNLIMITED},         {} },          MP(rpc_unbanpeer) },
 };
 #undef UNLIMITED
 #undef MP
