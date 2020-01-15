@@ -15,14 +15,12 @@ RUN apt-get update -y && \
 COPY . /src
 
 RUN cd /src && \
-    /opt/qt513/bin/qmake -makefile Fulcrum.pro && \
+    /opt/qt513/bin/qmake -makefile PREFIX=/usr Fulcrum.pro && \
     make $MAKEFLAGS install
 
 RUN rm -rf /src && \
     apt-get remove -y git build-essential zlib1g-dev libbz2-dev && \
     apt-get autoremove -y
-
-ENV PATH=/opt/Fulcrum/bin:$PATH
 
 VOLUME ["/data"]
 ENV DATA_DIR /data
