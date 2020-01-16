@@ -23,6 +23,12 @@ BuildRequires: systemd systemd-rpm-macros
 %description
 %{summary}.
 
+%package admin
+Summary: Includes admin tool for fulcrum
+
+%description admin
+%{summary}.
+
 %prep
 {{{ git_setup_macro }}}
 
@@ -35,6 +41,9 @@ install -Dm 640 doc/fulcrum-example-config.conf %{buildroot}/%{_sysconfdir}/fulc
 install -Dm 755 Fulcrum %{buildroot}/%{_bindir}/fulcrum
 install -Dm 644 contrib/rpm/fulcrum.service %{buildroot}/%{_unitdir}/fulcrum.service
 install -dm 750 %{buildroot}/%{_sharedstatedir}/fulcrum
+
+#admin
+install -Dm 755 FulcrumAdmin %{buildroot}/%{_bindir}/fulcrumctl
 
 %pre
 getent group fulcrum >/dev/null || groupadd -r fulcrum
@@ -59,6 +68,11 @@ exit 0
 %{_bindir}/fulcrum
 %attr(700, fulcrum, fulcrum) %{_sharedstatedir}/fulcrum
 %{_unitdir}/fulcrum.service
+
+%files admin
+%doc README.md
+%license LICENSE.txt
+%{_bindir}/fulcrumctl
 
 %changelog
 {{{ git_changelog }}}
