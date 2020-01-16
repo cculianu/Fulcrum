@@ -76,7 +76,7 @@ Once the server finishes synching it will behave like an ElectronX/ElectrumX ser
 
 #### Admin Script: FulcrumAdmin
 
-`Fulcrum` comes with an admin script (`Python 3.6+` is required on the system to run this script).  You may send command to `Fulcrum` using this script. The script requires that an **admin port** (config var `admin=`, CLI arg `-a`) be configured for your server.  To run the script, execute `./FulcrumAdmin -h` and you will see a list of possible subcommands that you can send to `Fulcrum`.  Here are two of the most popular commands to try (the below assumes the `admin` port is on port `8000`):
+`Fulcrum` comes with an admin script (`Python 3.6+` is required on the system to run this script).  You may send commands to `Fulcrum` using this script. The script requires that an **admin port** (config var `admin=`, CLI arg `-a`) be configured for your server.  To run the script, execute `./FulcrumAdmin -h` and you will see a list of possible subcommands that you can send to `Fulcrum`.  Here are two of the most popular commands to try (the below assumes the `admin` port is on port `8000`):
 
     $ ./FulcrumAdmin -p 8000 peers
     $ ./FulcrumAdmin -p 8000 clients
