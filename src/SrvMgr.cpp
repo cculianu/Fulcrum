@@ -61,6 +61,23 @@ void SrvMgr::cleanup()
     servers.clear(); // unique_ptrs auto-delete all servers
 }
 
+namespace {
+    QString normalizeHostNameSuffix(const QString &s) {
+        QString ret = s.trimmed().toLower();
+
+        // strip leading '.' and '*' chars
+        int pos = 0;
+        const int len = ret.length();
+        static const QChar dot('.'), star('*');
+        for (QChar c; pos < len && ( (c = ret.at(pos)) == dot || c == star ) ; ++pos)
+        { /* */ }
+        if (pos) ret = ret.mid(pos);
+        //
+
+        return ret;
+    }
+}
+
 // throw Exception on error
 void SrvMgr::startServers()
 {
@@ -70,7 +87,14 @@ void SrvMgr::startServers()
         peermgr->startup(); // may throw
         connect(this, &SrvMgr::allServersStarted, peermgr.get(), &PeerMgr::on_allServersStarted);
         connect(this, &SrvMgr::kickByAddress, peermgr.get(), &PeerMgr::on_kickByAddress);
-        connect(this, &SrvMgr::kickPeersWithSuffix, peermgr.get(), &PeerMgr::on_kickBySuffix);
+        connect(this, &SrvMgr::kickPeersWithSuffix, peermgr.get(), [peermgr=peermgr.get()](const QString &sufIn){
+            // we must intercept this signal and do this here because AdminServer also emits this with a potentially
+            // un-normalized hostname suffix. Note this lambda executes in the peermgr thread context and thus should
+            // *NOT* capture 'this' or touch 'this'.
+            const auto suf = normalizeHostNameSuffix(sufIn);
+            if (!suf.isEmpty())
+                peermgr->on_kickBySuffix(suf);
+        });
     } else peermgr.reset();
 
     const auto num = options->interfaces.length() + options->sslInterfaces.length() + options->adminInterfaces.length();
@@ -161,23 +185,6 @@ bool SrvMgr::isIPBanned(const QHostAddress &addr, bool increment) const
         return true;
     }
     return false;
-}
-
-namespace {
-    QString normalizeHostNameSuffix(const QString &s) {
-        QString ret = s.trimmed().toLower();
-
-        // strip leading '.' and '*' chars
-        int pos = 0;
-        const int len = ret.length();
-        static const QChar dot('.'), star('*');
-        for (QChar c; pos < len && ( (c = ret.at(pos)) == dot || c == star ) ; ++pos)
-        { /* */ }
-        if (pos) ret = ret.mid(pos);
-        //
-
-        return ret;
-    }
 }
 
 bool SrvMgr::isPeerHostNameBanned(const QString &h) const
