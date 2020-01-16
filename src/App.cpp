@@ -64,6 +64,8 @@ App::App(int argc, char *argv[])
     }
 
     connect(this, &App::aboutToQuit, this, &App::cleanup);
+    connect(this, &App::setVerboseDebug, this, &App::on_setVerboseDebug);
+    connect(this, &App::setVerboseTrace, this, &App::on_setVerboseTrace);
     QTimer::singleShot(0, this, &App::startup); // register to run after app event loop start
 }
 
@@ -678,4 +680,17 @@ void App::miscPreAppFixups()
     // workaround for annoying macos keychain access prompt. see: https://doc.qt.io/qt-5/qsslsocket.html#setLocalCertificate
     setenv("QT_SSL_USE_TEMPORARY_KEYCHAIN", "1", 1);
 #endif
+}
+
+void App::on_setVerboseDebug(bool b)
+{
+    options->verboseDebug = b;
+    if (!b)
+        options->verboseTrace = false;
+}
+void App::on_setVerboseTrace(bool b)
+{
+    options->verboseTrace = b;
+    if (b)
+        options->verboseDebug = true;
 }

@@ -398,6 +398,7 @@ private:
     void rpc_getinfo(Client *, const RPC::Message &);
     void rpc_kick(Client *, const RPC::Message &);
     void rpc_listbanned(Client *, const RPC::Message &);
+    void rpc_loglevel(Client *, const RPC::Message &);
     void rpc_peers(Client *, const RPC::Message &);
     void rpc_rmpeer(Client *, const RPC::Message &);
     void rpc_shutdown(Client *, const RPC::Message &);

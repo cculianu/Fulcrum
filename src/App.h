@@ -60,8 +60,14 @@ public:
     static inline ThreadPool *globalThreadPool() { return _globalInstance ? _globalInstance->threadPool() : nullptr; }
 
 signals:
+    // other code emits the below two to tell the app (main) thread to call the corresponding protected slot to set
+    // the corresponding values in the shared Options object.
+    void setVerboseDebug(bool); ///< if true, sets verbose debug. If false, clears both verboseTrace and verboseDebug
+    void setVerboseTrace(bool); ///< if true, implicitly sets verboseDebug as well
 
-public slots:
+private slots:
+    void on_setVerboseDebug(bool);
+    void on_setVerboseTrace(bool);
 
 private:
     std::atomic<quint64> globalId = 0;

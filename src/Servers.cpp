@@ -1616,6 +1616,30 @@ void AdminServer::rpc_listbanned(Client *c, const RPC::Message &m)
 {
     emit c->sendResult(m.id, srvmgr->adminRPC_banInfo_threadSafe());
 }
+void AdminServer::rpc_loglevel(Client *c, const RPC::Message &m)
+{
+    bool ok;
+    int level = m.paramsList().front().toInt(&ok);
+    if (!ok || level < 0 || level > 2)
+        throw RPCError("Invalid log level, please specify an integer from 0 to 2");
+    App *app = ::app();
+    if (!app) throw InternalError("The impossible has happened. The App pointer is null. FIXME!");
+    switch (level) {
+    case 0:
+        emit app->setVerboseTrace(false);
+        emit app->setVerboseDebug(false);
+        break;
+    case 1:
+        emit app->setVerboseTrace(false);
+        emit app->setVerboseDebug(true);
+        break;
+    case 2:
+        emit app->setVerboseDebug(true);
+        emit app->setVerboseTrace(true);
+        break;
+    }
+    emit c->sendResult(m.id, true);
+}
 void AdminServer::rpc_peers(Client *c, const RPC::Message &m)
 {
     auto strongPeerMgr = peerMgr.lock();
@@ -1688,6 +1712,7 @@ HEY_COMPILER_PUT_STATIC_HERE(AdminServer::StaticData::registry){
     { {"getinfo",                           true,               false,    PR{0,0},                 {} },          MP(rpc_getinfo) },
     { {"kick",                              true,               false,    PR{1,UNLIMITED},         {} },          MP(rpc_kick) },
     { {"listbanned",                        true,               false,    PR{0,0},                 {} },          MP(rpc_listbanned) },
+    { {"loglevel",                          true,               false,    PR{1,1},                 {} },          MP(rpc_loglevel) },
     { {"peers",                             true,               false,    PR{0,0},                 {} },          MP(rpc_peers) },
     { {"rmpeer",                            true,               false,    PR{1,UNLIMITED},         {} },          MP(rpc_rmpeer) },
     { {"shutdown",                          true,               false,    PR{0,0},                 {} },          MP(rpc_shutdown) },

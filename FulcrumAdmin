@@ -58,6 +58,8 @@ def main():
     kick = subparsers.add_parser('kick', help="Kick clients by ID and/or IP address")
     kick.add_argument('id_or_ip', metavar='ipaddress_or_id', nargs='+', help="Client ID or IP addresses to kick.")
     listbanned = subparsers.add_parser('listbanned', help="Print the list of banned IP addresses and peer hostnames", aliases=['banlist'])
+    loglevel = subparsers.add_parser('loglevel', help="Set the server's logging verbosity")
+    loglevel.add_argument('level', metavar='level', nargs=1, help="One of: 'normal', 'debug', or 'trace'")
     peers = subparsers.add_parser('peers', help="Print peering information")
     rmpeer = subparsers.add_parser('rmpeer', help="Remove peers by hostname suffix")
     rmpeer.add_argument('hostnames', metavar='hostname', nargs='+', help="A hostname or hostname suffix e.g. somehost.com or *some.host.com.")
@@ -100,7 +102,7 @@ def main():
     elif command == 'clients' and not JSON:
         response_handler = clients_handler
 
-    elif command in ('kick', 'ban', 'banpeer', 'unban', 'unbanpeer', 'rmpeer'):
+    elif command in ('kick', 'ban', 'banpeer', 'unban', 'unbanpeer', 'rmpeer', 'loglevel'):
         extratxt = ''
         if command in ('kick', 'ban'):
             command_params = args.id_or_ip
@@ -115,10 +117,18 @@ possibly peer with this Fulcrum server, then please use the 'banpeer' command.
 ''')
         elif command == 'unban':
             command_params = args.ips
+        elif command == 'loglevel':
+            levels = { 'normal': 0, 'debug' : 1, 'trace' : 2}
+            if args.level[0] not in levels:
+                print("level argument must be one of:", ', '.join(levels.keys()))
+                sys.exit(1)
+            command_params = [levels[args.level[0]]]
+            extratxt = f' -> {args.level[0]}'
+
         if not JSON:
             def handler(r):
                 if isinstance(r, bool) and r:
-                    return f"{command} command submitted for: " + ', '.join(command_params) + extratxt
+                    return f"{command} command submitted for: " + ', '.join([str(x) for x in command_params]) + extratxt
                 else:
                     EXITSTATUS = 1
                     return f"Unexpected response from Fulcrum server: {r}"
