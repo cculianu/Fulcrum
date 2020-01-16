@@ -1435,7 +1435,7 @@ AdminServer::AdminServer(SrvMgr *sm, const QHostAddress & a, quint16 p, const st
     _thread.setObjectName(objectName());
     threadPool = std::make_unique<ThreadPool>(this);
     asyncThreadPool = threadPool.get();
-    threadPool->setExtantJobLimit(30); // be very conservative here.
+    threadPool->setExtantJobLimit(100); // be very conservative here.
     threadPool->setMaxThreadCount(std::min(QThread::idealThreadCount(), 2)); // limit to max 2 threads for admin rpc. we want to limit interference with SPV clients.
 }
 
