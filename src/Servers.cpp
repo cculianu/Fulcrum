@@ -387,7 +387,7 @@ Client *
 ServerBase::newClient(QTcpSocket *sock)
 {
     const auto clientId = newId();
-    auto ret = clientsById[clientId] = new Client(rpcMethods(), clientId, this, sock, options->maxBuffer);
+    auto ret = clientsById[clientId] = new Client(rpcMethods(), clientId, sock, options->maxBuffer);
     const auto addr = ret->peerAddress();
     // if deleted, we need to purge it from map
     auto on_destroyed = [clientId, addr, this](QObject *o) {
@@ -1731,9 +1731,8 @@ void AdminServer::StaticData::init() { InitStaticDataCommon(dispatchTable, metho
 
 /*static*/ std::atomic_size_t Client::numClients{0}, Client::numClientsMax{0}, Client::numClientsCtr{0};
 
-Client::Client(const RPC::MethodMap & mm, IdMixin::Id id_in, ServerBase *srv, QTcpSocket *sock, int maxBuffer)
-    : RPC::LinefeedConnection(mm, id_in, sock, /* ensure sane --> */ qMax(maxBuffer, Options::maxBufferMin)),
-      srv(srv)
+Client::Client(const RPC::MethodMap & mm, IdMixin::Id id_in, QTcpSocket *sock, int maxBuffer)
+    : RPC::LinefeedConnection(mm, id_in, sock, /* ensure sane --> */ qMax(maxBuffer, Options::maxBufferMin))
 {
     ++numClientsCtr;
     const auto N = ++numClients;

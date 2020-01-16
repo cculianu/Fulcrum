@@ -354,7 +354,7 @@ namespace {
     // deserializes as raw bytes from struct
     template <> BlkInfo Deserialize(const QByteArray &, bool *);
 
-    /// Block rewind/undo information. One of these is kept around in the db for the last 10 blocks.
+    /// Block rewind/undo information. One of these is kept around in the db for the last configuredUndoDepth() blocks.
     /// It basically stores a record of all the UTXO's added and removed, as well as the set of
     /// scripthashes.
     struct UndoInfo {
@@ -505,8 +505,6 @@ struct Storage::Pvt
     /// Cache BlockHeight -> vector of txHashes for the block (in bitcoind memory order). This gets cleared by
     /// undoLatestBlock.  This is used by the txHashesForBlock function only (which is used by get_merkle and
     /// id_from_pos in the protocol). TODO: MAKE THIS CACHE SIZE CONFIGURABLE.
-    /// Also TODO: Maybe use a QCache here and/or use a memcost-based limit.  Right now we can't predict the memory
-    /// cost using this size-based cache limit provided by LRU::Cache.
     CostCache<BlockHeight, QVector<TxHash>> lruHeight2Hashes_BitcoindMemOrder { kMaxHeight2HashesMemoryBytes };
     /// returns the cost for a particular cache item based on the number of hashes in the vector
     unsigned constexpr lruHeight2HashSizeCalc(size_t nHashes) {

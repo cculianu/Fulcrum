@@ -148,7 +148,7 @@ public:
     /// take the value and cache it -- only under very specific conditions.
     void maybeCacheStatusResult(const HashX &, const StatusHash &);
 
-    /// Thread-safe. We do it this way because it's the fastest approack (uses C++17 unordered_set:::merge). After this
+    /// Thread-safe. We do it this way because it's the fastest approach (uses C++17 unordered_set:::merge). After this
     /// call, s is modified and contains only the elements that were already pending (thus were not enqueued as they
     /// were already in the queue).
     void enqueueNotifications(std::unordered_set<HashX, HashHasher> & s);
@@ -166,7 +166,7 @@ protected:
 
 private:
     const std::shared_ptr<const Options> options;
-    Storage * const storage; ///< ponter guaranteed to be valid since Storage "owns" us and if we are alive, it is alive.
+    Storage * const storage; ///< pointer guaranteed to be valid since Storage "owns" us and if we are alive, it is alive.
     struct Pvt;
     std::unique_ptr<Pvt> p;
 

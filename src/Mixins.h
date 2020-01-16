@@ -33,13 +33,13 @@
 /// A note about C++ multiple inheritance, regarding dynamic_cast *down* (which we need here for qobj()):
 ///
 /// 1. In order for the qobj() virtual function below to not fail, all direct derived classes of this base should
-///    inherit from this class via virtual inheritence. This ensures only 1 implementation of this base will be attached
+///    inherit from this class via virtual inheritance. This ensures only 1 implementation of this base will be attached
 ///    to all concrete derived classes.  This only affects directly inheriting children (ie all the Mixins in this
 ///    file).
-/// 2. In addition, all inheritence must be public all the way down, otherwise dynamic_cast<QObject *>(this) will fail.
+/// 2. In addition, all inheritance must be public all the way down, otherwise dynamic_cast<QObject *>(this) will fail.
 ///    See: https://en.cppreference.com/w/cpp/language/dynamic_cast#Explanation.
 ///    Likely this is because qobj() in this class can't "see" the derived class inherits from it unless the whole
-///    chain of inheritence leading down is public.  This makes sense, actually.
+///    chain of inheritance leading down is public.  This makes sense, actually.
 class QObjectMixin
 {
 public:

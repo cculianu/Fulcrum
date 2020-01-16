@@ -54,7 +54,7 @@ public:
     void tryStart(ulong timeout_ms = ULONG_MAX); ///< may raise Exception if cannot bind, etc. Blocks waiting for thread to listen and return ok/error status.
     using ThreadObjectMixin::stop; /// promote this back up to public
 
-    /// not garanteed thread-safe
+    /// not guaranteed thread-safe
     virtual QString prettyName() const;
     QString hostPort() const;
 
@@ -435,7 +435,7 @@ protected:
     friend class ::ServerBase;
     friend class ::Server;
     /// NB: sock should be in an already connected state.
-    explicit Client(const RPC::MethodMap & methods, IdMixin::Id id, ServerBase *srv, QTcpSocket *sock, int maxBuffer);
+    explicit Client(const RPC::MethodMap & methods, IdMixin::Id id, QTcpSocket *sock, int maxBuffer);
 public:
     ~Client() override;
 
@@ -463,6 +463,4 @@ protected:
 
     void do_ping() override;
     void do_disconnect(bool graceful = false) override;
-
-    ServerBase *srv;
 };

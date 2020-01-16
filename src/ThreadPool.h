@@ -81,7 +81,7 @@ public:
     /// For example, our App has a ThreadPool instance it uses. The App's exit handler calls this on shutdown as the
     /// first thing it does, before deconstructing other objects.
     ///
-    /// Destructing the ThreadPool instance will also implicitly call this.
+    /// Destructing the ThreadPool instance will also implicitly call this function.
     ///
     /// Returns true if the jobs completed before timeout_ms expired, or false otherwise.
     /// Negative timeout_ms indicates "wait forever" for jobs to complete.
