@@ -1426,9 +1426,9 @@ void ServerSSL::incomingConnection(qintptr socketDescriptor)
 
 // --- Admin RPC Serer ---
 AdminServer::AdminServer(SrvMgr *sm, const QHostAddress & a, quint16 p, const std::shared_ptr<const Options> & o,
-                         const std::shared_ptr<Storage> & s, const std::shared_ptr<BitcoinDMgr> & b,
+                         const std::shared_ptr<Storage> & s, const std::shared_ptr<BitcoinDMgr> & bdm,
                          const std::weak_ptr<PeerMgr> & pm)
-    : ServerBase(StaticData::methodMap, StaticData::dispatchTable, a, p, o, s, b), srvmgr(sm), peerMgr(pm)
+    : ServerBase(StaticData::methodMap, StaticData::dispatchTable, a, p, o, s, bdm), srvmgr(sm), peerMgr(pm)
 {
     StaticData::init(); // noop after first time it's called
     setObjectName(prettyName());
@@ -1626,6 +1626,20 @@ void AdminServer::rpc_peers(Client *c, const RPC::Message &m)
         return peerMgr->statsSafe(kBlockingCallTimeoutMS);
     });
 }
+void AdminServer::rpc_rmpeer(Client *c, const RPC::Message &m)
+{
+    if (peerMgr.expired())
+        throw RPCError("This server has peering disabled");
+    const auto strs = m.params().toStringList();
+    int ctr = 0;
+    for (auto suffix : strs) {
+        if ((suffix=suffix.trimmed()).isEmpty())
+            continue;
+        ++ctr;
+        emit srvmgr->kickPeersWithSuffix(suffix);
+    }
+    emit c->sendResult(m.id, bool(ctr));
+}
 void AdminServer::rpc_shutdown(Client *c, const RPC::Message &m)
 {
     auto app = qApp;
@@ -1670,13 +1684,14 @@ HEY_COMPILER_PUT_STATIC_HERE(AdminServer::StaticData::registry){
     { {"addpeer",                           true,               false,    PR{0,0},      KS{"host","tcp","ssl"} }, MP(rpc_addpeer) },
     { {"ban",                               true,               false,    PR{1,UNLIMITED},         {} },          MP(rpc_ban) },
     { {"banpeer",                           true,               false,    PR{1,UNLIMITED},         {} },          MP(rpc_banpeer) },
-    { {"clients",                           true,               false,    PR{0,0},      RPC::KeySet{} },          MP(rpc_clients) },
-    { {"getinfo",                           true,               false,    PR{0,0},      RPC::KeySet{} },          MP(rpc_getinfo) },
+    { {"clients",                           true,               false,    PR{0,0},                 {} },          MP(rpc_clients) },
+    { {"getinfo",                           true,               false,    PR{0,0},                 {} },          MP(rpc_getinfo) },
     { {"kick",                              true,               false,    PR{1,UNLIMITED},         {} },          MP(rpc_kick) },
-    { {"listbanned",                        true,               false,    PR{0,0},      RPC::KeySet{} },          MP(rpc_listbanned) },
-    { {"peers",                             true,               false,    PR{0,0},      RPC::KeySet{} },          MP(rpc_peers) },
-    { {"shutdown",                          true,               false,    PR{0,0},      RPC::KeySet{} },          MP(rpc_shutdown) },
-    { {"stop",                              true,               false,    PR{0,0},      RPC::KeySet{} },          MP(rpc_shutdown) }, // alias for 'shutdown'
+    { {"listbanned",                        true,               false,    PR{0,0},                 {} },          MP(rpc_listbanned) },
+    { {"peers",                             true,               false,    PR{0,0},                 {} },          MP(rpc_peers) },
+    { {"rmpeer",                            true,               false,    PR{1,UNLIMITED},         {} },          MP(rpc_rmpeer) },
+    { {"shutdown",                          true,               false,    PR{0,0},                 {} },          MP(rpc_shutdown) },
+    { {"stop",                              true,               false,    PR{0,0},                 {} },          MP(rpc_shutdown) }, // alias for 'shutdown'
     { {"unban",                             true,               false,    PR{1,UNLIMITED},         {} },          MP(rpc_unban) },
     { {"unbanpeer",                         true,               false,    PR{1,UNLIMITED},         {} },          MP(rpc_unbanpeer) },
 };

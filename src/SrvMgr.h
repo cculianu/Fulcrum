@@ -93,7 +93,7 @@ signals:
     void kickByAddress(const QHostAddress &);
 
     /// Connected to the peermgr (if it's valid). Kicks all peers matching the specified hostname suffix.
-    /// This is emitted from within on_banPeerHostName.
+    /// This is emitted from within on_banPeerHostName, but also from AdminServer rpc_rmpeer.
     void kickPeersWithSuffix(const QString &);
 
     /// Any object or thread can emit this signal, which is connected to the protected on_banIP slot, which then

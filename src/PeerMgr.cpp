@@ -284,7 +284,16 @@ void PeerMgr::retryFailedPeers(bool useBadMap)
     auto & failed = (useBadMap ? this->bad : this->failed);
     for (const auto & pi : failed) {
         if (!queued.contains(pi.hostName) && !clients.contains(pi.hostName)) {
-            if (auto fa = pi.failureAge(); fa.has_value() && fa.value() > kExpireFailedPeersTime) {
+            if (auto fa = pi.failureAge(); fa.has_value() && fa.value() > kExpireFailedPeersTime && !seedPeers.contains(pi.hostName)) {
+                // We purge peers that have been bad or failed for >24 hours. However we never purge seedPeers since
+                // they are our lifeline to the outside world.  It's possible ALL peers can be failed/bad for a long
+                // time if we lose internet connectivity for an extended period due to an outage.  In that scenario,
+                // when we come back, we don't want the server to have lost its ability to announce itself to the world.
+                // So we always keep the seedPeers even if they remain 'failed' for years. The assumption here is that
+                // the seed peers list is reasonably good and worth keeping around.  Removing failed peers is an
+                // optimization to not waste memory on defunct peers and is not a requirement for correctness.
+                // Keeping the seedPeers around indefinitely even if 'failed' does very little harm since the seedPeer
+                // list is bounded and small, and it does good (in the case of an extended connectivity outage).
                 Log() << "Purging failed peer " << pi.hostName << " because it has been unavailable for " <<  failureHoursString(pi);
                 continue;
             }

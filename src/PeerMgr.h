@@ -59,7 +59,7 @@ public:
                             kBadPeerRetryTime = 60. * 60., ///< the amount of time to wait before retrying bad peers (60 mins)
                             kConnectedPeerRefreshInterval = 30. * 60., ///< we keep "refreshing" from connected peers at this interval (30 mins) to make sure they are still good, and to pick up new peers from them
                             kConnectedPeerPingTime = 5. * 60., ///< we send server.ping to connected peers every 5 mins. This value should always be lower than kConnectedPeerRefreshInterval.
-                            kExpireFailedPeersTime = 24. * 60. * 60.; ///< we expire peers that are in the "bad" or "failed" status after 24 hours. (see PeerInfo::failureTs)
+                            kExpireFailedPeersTime = 24. * 60. * 60.; ///< we expire non-seed peers that are in the "bad" or "failed" status after 24 hours. (see PeerInfo::failureTs)
 
     /// Used by PeerClient instances to compare the remote server's genesis hash to our own.
     QByteArray genesisHash() const { return _genesisHash; }

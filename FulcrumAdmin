@@ -57,8 +57,10 @@ def main():
     getinfo = subparsers.add_parser('getinfo', help="Get server information")
     kick = subparsers.add_parser('kick', help="Kick clients by ID and/or IP address")
     kick.add_argument('id_or_ip', metavar='ipaddress_or_id', nargs='+', help="Client ID or IP addresses to kick.")
-    listbanned = subparsers.add_parser('listbanned', help="Print the list of banned IP addresses and peer hostnames")
+    listbanned = subparsers.add_parser('listbanned', help="Print the list of banned IP addresses and peer hostnames", aliases=['banlist'])
     peers = subparsers.add_parser('peers', help="Print peering information")
+    rmpeer = subparsers.add_parser('rmpeer', help="Remove peers by hostname suffix")
+    rmpeer.add_argument('hostnames', metavar='hostname', nargs='+', help="A hostname or hostname suffix e.g. somehost.com or *some.host.com.")
     stop = subparsers.add_parser('stop', help="Gracefully shut down the server", aliases=['shutdown'])
     unban = subparsers.add_parser('unban', help="Unban IP addresses")
     unban.add_argument('ips', metavar='ipaddress', nargs='+', help="Specify an existing banned IP address to unban.")
@@ -77,6 +79,7 @@ def main():
     command = args.command
     if command == 'sessions': command = 'clients'  # Is there a better way to do this by referring back to the subparser above?? TODO
     if command == 'shutdown': command = 'stop'
+    if command == 'banlist' : command = 'listbanned'
     command_params = tuple()
     response_handler = lambda r: json.dumps(r, indent = 4)  # default handler just pretty-prints the JSON
 
@@ -97,17 +100,25 @@ def main():
     elif command == 'clients' and not JSON:
         response_handler = clients_handler
 
-    elif command in ('kick', 'ban', 'banpeer', 'unban', 'unbanpeer'):
+    elif command in ('kick', 'ban', 'banpeer', 'unban', 'unbanpeer', 'rmpeer'):
+        extratxt = ''
         if command in ('kick', 'ban'):
             command_params = args.id_or_ip
-        elif command in ('banpeer', 'unbanpeer'):
+        elif command in ('banpeer', 'unbanpeer', 'rmpeer'):
             command_params = args.hostnames
+            if command == 'rmpeer':
+                extratxt = ('''
+
+Note: Removal of 'Good' peers is not guaranteed to keep them from re-peering
+with the server in the near future. If you want the specified peer(s) to never
+possibly peer with this Fulcrum server, then please use the 'banpeer' command.
+''')
         elif command == 'unban':
             command_params = args.ips
         if not JSON:
             def handler(r):
                 if isinstance(r, bool) and r:
-                    return f"{command.title()} command submitted for: " + ', '.join(command_params)
+                    return f"{command} command submitted for: " + ', '.join(command_params) + extratxt
                 else:
                     EXITSTATUS = 1
                     return f"Unexpected response from Fulcrum server: {r}"
@@ -132,7 +143,7 @@ def main():
         if not JSON:
             def handler(r):
                 if isinstance(r, bool) and r:
-                    return f"{command.title()} command submitted for: {host}"
+                    return f"{command} command submitted for: {host}"
                 else:
                     EXITSTATUS = 1
                     return f"Unexpected response from Fulcrum server: {r}"
