@@ -178,6 +178,8 @@ void SrvMgr::clientConnected(IdMixin::Id cid, const QHostAddress &addr)
 
 bool SrvMgr::isIPBanned(const QHostAddress &addr, bool increment) const
 {
+    if (addr.isNull())
+        return false;
     std::lock_guard g(banMut);
     if (auto it = banMap.find(addr); it != banMap.end()) {
         if (increment)

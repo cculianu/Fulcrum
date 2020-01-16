@@ -41,6 +41,12 @@ PeerMgr::PeerMgr(const SrvMgr *sm, const std::shared_ptr<Storage> &storage_ , co
     : IdMixin(newId()), srvmgr(sm), storage(storage_), options(options_)
 {
     assert(srvmgr && storage && options);
+    // TESTING
+    proxy.setType(QNetworkProxy::ProxyType::Socks5Proxy);
+    proxy.setHostName("127.0.0.1");
+    proxy.setPort(9150);
+    proxy.setCapabilities(QNetworkProxy::Capability::TunnelingCapability|QNetworkProxy::Capability::HostNameLookupCapability);
+    /// /TESTING
     setObjectName("PeerMgr");
     _thread.setObjectName(objectName());
 }
@@ -190,6 +196,13 @@ void PeerMgr::on_rpcAddPeer(const PeerInfoList &infos, const QHostAddress &sourc
             if constexpr (debugPrint) Debug() << "add_peer: " << pi.hostName << " was already deemed bad/failed, skipping";
             continue;
         }
+        // TESTING
+        if (pi.isTor()) {
+            // .onion must go through proxy to resolve..
+            addPeerVerifiedSource(pi, QHostAddress());
+            return;
+        }
+        // /TESTING
         // For each peer in the list, do a DNS lookup and verify that the source address matches at least one
         // of the resolved addresses.  If that is the case, we can proceed with the peer add (addPeerVerifiedSource).
         // Otherwise, we reject add_peer requests from random sources.
@@ -346,14 +359,14 @@ void PeerMgr::process()
     if (queued.isEmpty())
         return;
     PeerInfo pi = queued.take(queued.begin().key());
-    if (pi.addr.isNull()) {
+    if (pi.addr.isNull() && !pi.isTor()) {
         if constexpr (debugPrint) Debug() << "PeerInfo.addr was null for " << pi.hostName << ", calling on_rpcAddPeer to resolve address";
         on_rpcAddPeer(PeerInfoList{pi}, pi.addr);
     } else if (srvmgr->isIPBanned(pi.addr, false)) {
         Debug() << "peer IP address " << pi.addr.toString() << " is banned, ignoring peer";
     } else if (srvmgr->isPeerHostNameBanned(pi.hostName)) {
         Debug() << "peer hostname " << pi.hostName << " is banned, ignoring peer";
-    } else if (options->peeringEnforceUniqueIPs && peerIPAddrs.contains(pi.addr)) {
+    } else if (!pi.isTor() && options->peeringEnforceUniqueIPs && peerIPAddrs.contains(pi.addr)) {
         if constexpr (debugPrint) Debug() << pi.hostName << " (" << pi.addr.toString() << ") already in peer set, skipping ...";
     } else {
         auto client = newClient(pi);
@@ -638,10 +651,22 @@ void PeerClient::connectToPeer()
             }
             ssl->ignoreSslErrors();
         });
-        ssl->connectToHostEncrypted(info.addr.toString(), info.ssl, info.hostName);
+        if (info.isTor()) {
+            Debug() << "Connecting to " << info.hostName << ":" << info.ssl << " using SSL via Tor proxy";
+            ssl->setProxy(mgr->proxy);
+            ssl->connectToHostEncrypted(info.hostName, info.ssl, info.hostName);
+        } else {
+            ssl->connectToHostEncrypted(info.addr.toString(), info.ssl, info.hostName);
+        }
     } else {
-        Debug() << info.hostName << ": connecting to TCP " << info.addr.toString();
-        socket->connectToHost(info.addr, info.tcp);
+        if (info.isTor()) {
+            Debug() << "Connecting to " << info.hostName << ":" << info.tcp << " using TCP via Tor proxy";
+            socket->setProxy(mgr->proxy);
+            socket->connectToHost(info.hostName, info.tcp);
+        } else {
+            Debug() << info.hostName << ": connecting to TCP " << info.addr.toString();
+            socket->connectToHost(info.addr, info.tcp);
+        }
     }
 }
 
@@ -720,7 +745,8 @@ void PeerClient::handleReply(IdMixin::Id, const RPC::Message & reply)
         emit sendRequest(newId(), "server.features");
     } else if (reply.method == "server.features") {
         // handle
-        if constexpr (debugPrint) Debug() << info.hostName << ": features responded ...";
+        /*if constexpr (debugPrint)*/
+        if (info.isTor()) Debug() << info.hostName << ": features responded: " << Util::Json::toString(reply.result(), false);
         PeerInfoList pl;
         try {
             pl = PeerInfo::fromFeaturesMap(reply.result().toMap());

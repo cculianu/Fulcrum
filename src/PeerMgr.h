@@ -29,6 +29,7 @@
 #include <QHash>
 #include <QHostAddress>
 #include <QList>
+#include <QNetworkProxy>
 #include <QSet>
 
 #include <mutex>
@@ -133,6 +134,8 @@ private:
 
     QHash<QString, PeerClient *> clients;
     QSet<QHostAddress> peerIPAddrs; ///< in case we want to ensure IP-uniqueness of peers and reject dupes with different hostname, same IP (sybil attack defense measure)
+public:
+    QNetworkProxy proxy;
 };
 
 
