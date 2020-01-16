@@ -372,24 +372,26 @@ class AdminServer : public ServerBase
 public:
     AdminServer(SrvMgr *srvMgr, const QHostAddress & address, quint16 port, const std::shared_ptr<const Options> & options,
                 const std::shared_ptr<Storage> & storage, const std::shared_ptr<BitcoinDMgr> & bitcoindmgr,
-                const std::optional<std::shared_ptr<PeerMgr>> & peerMgr = {});
+                const std::weak_ptr<PeerMgr> & peerMgr = {});
     ~AdminServer() override;
 
     QString prettyName() const override;
 
+protected:
     /// From StatsMixin. This must be called in the thread context of this thread (use statsSafe() for the blocking, thread-safe version!)
     QVariant stats() const override;
 
 private:
     std::unique_ptr<ThreadPool> threadPool; ///< we use our own threadpool for the admin server so as to not interfere with the normal one used for SPV clients.
 
-    SrvMgr * const srvmgr; ///< this is alive for the entire lifetime of this instance.
-    const std::optional<std::shared_ptr<PeerMgr>> peerMgr; ///< this isn't always valid if peering is disabled
+    SrvMgr * const srvmgr; ///< basically a weak reference -- this is guaranteed to be alive for the entire lifetime of this instance, however.
+    const std::weak_ptr<PeerMgr> peerMgr; ///< this isn't always valid if peering is disabled.  SrvMgr owns this, and as the app shuts down it may go away.
 
     static constexpr int kBlockingCallTimeoutMS = 10000;
 
     enum BanOp { Kick, Ban, Unban };
     void kickBanBoilerPlate(const RPC::Message &, BanOp);
+    void rpc_addpeer(Client *, const RPC::Message &);
     void rpc_ban(Client *, const RPC::Message &);
     void rpc_banpeer(Client *, const RPC::Message &);
     void rpc_clients(Client *, const RPC::Message &);

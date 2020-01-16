@@ -56,7 +56,8 @@ void SrvMgr::startup()
 
 void SrvMgr::cleanup()
 {
-    peermgr.reset(); // unique_ptr, kill peermgr (if any)
+    adminServers.clear(); // unique_ptrs, kill all admin servers first (these hold weak_ptrs to peermgr and also naked ptrs to this, so must be killed first)
+    peermgr.reset(); // shared_ptr, kill peermgr (if any)
     servers.clear(); // unique_ptrs auto-delete all servers
 }
 
@@ -110,10 +111,8 @@ void SrvMgr::startServers()
         ++i;
     }
     // next do admin RPC, if any
-    std::optional<std::shared_ptr<PeerMgr>> optPeerMgr;
-    if (peermgr) optPeerMgr = peermgr;
     for (const auto & iface : options->adminInterfaces) {
-        adminServers.emplace_back( std::make_unique<AdminServer>(this, iface.first, iface.second, options, storage, bitcoindmgr, optPeerMgr) );
+        adminServers.emplace_back( std::make_unique<AdminServer>(this, iface.first, iface.second, options, storage, bitcoindmgr, peermgr) );
         AdminServer *asrv = adminServers.back().get();
         if (peermgr) {
             connect(asrv, &ServerBase::gotRpcAddPeer, peermgr.get(), &PeerMgr::on_rpcAddPeer);

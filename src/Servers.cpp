@@ -1427,7 +1427,7 @@ void ServerSSL::incomingConnection(qintptr socketDescriptor)
 // --- Admin RPC Serer ---
 AdminServer::AdminServer(SrvMgr *sm, const QHostAddress & a, quint16 p, const std::shared_ptr<const Options> & o,
                          const std::shared_ptr<Storage> & s, const std::shared_ptr<BitcoinDMgr> & b,
-                         const std::optional<std::shared_ptr<PeerMgr>> & pm)
+                         const std::weak_ptr<PeerMgr> & pm)
     : ServerBase(StaticData::methodMap, StaticData::dispatchTable, a, p, o, s, b), srvmgr(sm), peerMgr(pm)
 {
     StaticData::init(); // noop after first time it's called
@@ -1497,6 +1497,35 @@ void AdminServer::kickBanBoilerPlate(const RPC::Message &m, BanOp banOp)
         }
     }
 }
+void AdminServer::rpc_addpeer(Client *c, const RPC::Message &m)
+{
+    if (peerMgr.expired())
+        throw RPCError("This server has peering disabled");
+    const auto kwargs = m.paramsMap(); // this is guaranteed to not be empty by calling code
+    PeerInfo pi;
+    pi.hostName = kwargs.value("host").toString().trimmed().toLower();
+    if (pi.hostName.isEmpty())
+        throw RPCError("Invalid host specified");
+
+    // the below parses kwargs["tcp"] and kwargs["ssl"] if not null, and puts the result (if any) in pi.tcp and pi.ssl
+    using Tup = std::tuple<QString, quint16 &>;
+    for (const auto & [key, valDest] : {Tup{"tcp", pi.tcp}, Tup{"ssl", pi.ssl}}) {
+        bool ok;
+        unsigned val = 0;
+        if (!kwargs.value(key).isNull()) {
+            val = kwargs.value(key).toUInt(&ok);
+            if (!ok || val > USHRT_MAX)
+                throw RPCError(QString("Invalid %1 port specified").arg(key));
+            valDest = quint16(val);
+        }
+    }
+    // -
+
+    if (!pi.ssl && !pi.tcp)
+        throw RPCError("Must specify at least one TCP or SSL port");
+    emit gotRpcAddPeer(PeerInfoList{pi}, QHostAddress());
+    emit c->sendResult(m.id, true);
+}
 void AdminServer::rpc_ban(Client *c, const RPC::Message &m)
 {
     kickBanBoilerPlate(m, BanOp::Ban);
@@ -1504,6 +1533,8 @@ void AdminServer::rpc_ban(Client *c, const RPC::Message &m)
 }
 void AdminServer::rpc_banpeer(Client *c, const RPC::Message &m)
 {
+    if (peerMgr.expired())
+        throw RPCError("This server has peering disabled");
     const auto strs = m.params().toStringList();
     int ctr = 0;
     for (auto suf : strs) {
@@ -1587,10 +1618,11 @@ void AdminServer::rpc_listbanned(Client *c, const RPC::Message &m)
 }
 void AdminServer::rpc_peers(Client *c, const RPC::Message &m)
 {
-    if (!peerMgr.has_value())
+    auto strongPeerMgr = peerMgr.lock();
+    if (!strongPeerMgr)
         throw RPCError("This server has peering disabled");
     // We do this async in our worker thread since it blocks (briefly)
-    generic_do_async(c, m.id, [peerMgr = this->peerMgr.value()]{
+    generic_do_async(c, m.id, [peerMgr = strongPeerMgr]{
         return peerMgr->statsSafe(kBlockingCallTimeoutMS);
     });
 }
@@ -1611,6 +1643,8 @@ void AdminServer::rpc_unban(Client *c, const RPC::Message &m)
 }
 void AdminServer::rpc_unbanpeer(Client *c, const RPC::Message &m)
 {
+    if (peerMgr.expired())
+        throw RPCError("This server has peering disabled");
     const auto strs = m.params().toStringList();
     int ctr = 0;
     for (auto suf : strs) {
@@ -1625,6 +1659,7 @@ void AdminServer::rpc_unbanpeer(Client *c, const RPC::Message &m)
 // --- AdminServer::StaticData Definitions ---
 #define HEY_COMPILER_PUT_STATIC_HERE(x) decltype(x) x
 #define PR RPC::Method::PosParamRange
+#define KS  RPC::KeySet
 #define MP(x) static_cast<ServerBase::Member_t>(&AdminServer :: x) // wrapper to cast from narrow method pointer to ServerBase::Member_t
 #define UNLIMITED (RPC::Method::NO_POS_PARAM_LIMIT)
 HEY_COMPILER_PUT_STATIC_HERE(AdminServer::StaticData::dispatchTable);
@@ -1632,6 +1667,7 @@ HEY_COMPILER_PUT_STATIC_HERE(AdminServer::StaticData::methodMap);
 HEY_COMPILER_PUT_STATIC_HERE(AdminServer::StaticData::registry){
 /*  ==> Note: Add stuff to this table when adding new RPC methods.
     { {"rpc.name",                allow_requests, allow_notifications, PosParamRange, (QSet<QString> note: {} means undefined optional)}, &method_to_call }     */
+    { {"addpeer",                           true,               false,    PR{0,0},      KS{"host","tcp","ssl"} }, MP(rpc_addpeer) },
     { {"ban",                               true,               false,    PR{1,UNLIMITED},         {} },          MP(rpc_ban) },
     { {"banpeer",                           true,               false,    PR{1,UNLIMITED},         {} },          MP(rpc_banpeer) },
     { {"clients",                           true,               false,    PR{0,0},      RPC::KeySet{} },          MP(rpc_clients) },
@@ -1646,6 +1682,7 @@ HEY_COMPILER_PUT_STATIC_HERE(AdminServer::StaticData::registry){
 };
 #undef UNLIMITED
 #undef MP
+#undef KS
 #undef PR
 #undef HEY_COMPILER_PUT_STATIC_HERE
 /*static*/

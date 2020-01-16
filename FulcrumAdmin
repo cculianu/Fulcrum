@@ -45,6 +45,10 @@ def main():
     parser.add_argument('-j', action='store_true', dest="json", help=f"Print the response from the server as JSON, not as formatted text")
     parser.add_argument('-H', type=str, metavar="host", nargs='?', default=HOST, help=f"Specify the host for the Fulcrum admin RPC service. Defaults to {HOST}.")
     subparsers = parser.add_subparsers(title="command", description="Select from one of the following commands:", dest="command")
+    addpeer = subparsers.add_parser('addpeer', help="Add a peer to the server's list of peers")
+    addpeer.add_argument('hostname', metavar='hostname', nargs=1, help="Hostname of peer.")
+    addpeer.add_argument('-s', metavar='ssl_port', type=int, nargs='?', help="Peer's SSL port.")
+    addpeer.add_argument('-t', metavar='tcp_port', type=int, nargs='?', help="Peer's TCP port.")
     ban = subparsers.add_parser('ban', help="Ban clients by ID and/or IP address")
     ban.add_argument('id_or_ip', metavar='ipaddress_or_id', nargs='+', help="Client ID or IP address to ban.")
     banpeer = subparsers.add_parser('banpeer', help="Ban peers by hostname suffix")
@@ -114,6 +118,25 @@ def main():
 
     elif command == 'peers' and not JSON:
         response_handler = peers_handler
+
+    elif command == 'addpeer':
+        if not args.s and not args.t:
+            print("addpeer requires at least one of the two port arguments (-s, -t), or both.")
+            sys.exit(1)
+        host = args.hostname[0]
+        command_params = {
+            'host' : host,
+            'ssl'  : args.s or 0,
+            'tcp'  : args.t or 0,
+        }
+        if not JSON:
+            def handler(r):
+                if isinstance(r, bool) and r:
+                    return f"{command.title()} command submitted for: {host}"
+                else:
+                    EXITSTATUS = 1
+                    return f"Unexpected response from Fulcrum server: {r}"
+            response_handler = handler
 
     try:
         print(response_handler(send_request(command, command_params)))

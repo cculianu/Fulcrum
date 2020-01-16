@@ -382,7 +382,7 @@ namespace RPC {
                     // named args specified
                     if (!m.opt_kwParams.has_value())
                         throw InvalidParameters("Named params are not supported for this method");
-                    const auto nameset = KeySet::fromList(msg.paramsMap().keys());
+                    const auto nameset = KeySet::fromList(msg.paramsMap().keys()); // TODO: this is not the most efficient -- for now this isn't used except for AdminServer, so it's fine.
                     const auto & kwSet = *m.opt_kwParams;
                     if (m.allowUnknownNamedParams) {
                         if (!(kwSet - nameset).isEmpty())
