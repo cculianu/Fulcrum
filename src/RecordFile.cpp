@@ -55,7 +55,7 @@ RecordFile::RecordFile(const QString &fileName_, size_t recordSize_, uint32_t ma
             throw FileFormatError("Bad magic in header");
         }
         if (qint64(tmpNRecs*recsz + hdrsz) != file.size()) {
-            throw FileFormatError("File size does is not a multiple of recordSize");
+            throw FileFormatError("File size is not a multiple of recordSize");
         }
         nrecs = tmpNRecs; // store num records since everything checks out.
     }
