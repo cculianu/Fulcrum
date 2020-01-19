@@ -1106,10 +1106,10 @@ void Controller::process_PrintProgress(unsigned height, size_t nTx, size_t nIns,
         const double elapsed = std::max(now - sm->lastProgTs, 0.00001); // ensure no division by zero
         QString pctDisplay = QString::number((height*1e2) / std::max(sm->endHeight, 1U), 'f', 1) + "%";
         const double rateBlocks = sm->nProgBlocks / elapsed;
-        const double rateIO = sm->nProgIOs / elapsed;
+        const double rateTx = sm->nProgTx / elapsed;
         const double rateSH = sm->nProgSH / elapsed;
         Log() << "Processed height: " << height << ", " << pctDisplay << formatRate(rateBlocks, "blocks")
-              << formatRate(rateIO, "ins & outs")  << formatRate(rateSH, "addrs");
+              << formatRate(rateTx, "txs")  << formatRate(rateSH, "addrs");
         // update/reset ts and counters
         sm->lastProgTs = now;
         sm->nProgBlocks = sm->nProgTx = sm->nProgIOs = sm->nProgSH = 0;
