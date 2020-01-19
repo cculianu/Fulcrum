@@ -288,13 +288,13 @@ void PeerMgr::on_allServersStarted()
     gotAllServersStartedSignal = true;
 
     if (options->peerAnnounceSelf && options->torHostName.has_value() && (options->torSsl.has_value() || options->torTcp.has_value())) {
-        if (const auto torHostName = options->torHostName.value(); !seedPeers.contains(torHostName)) {
-            // add our tor identity to seed peers if not already there -- this is so we can end up in our own
-            // server.peers.subscribe() list -- so that the tor route can get picked up by our peers; this is because
-            // we cannot directly add our tor self via add_peer (source address verification fails)... so this is
-            // another way to end up in our peers' peer lists... by connecting to ourself later and verifying self.
-            // then we will be in our OWN peer list, and our peers can opt to pick the .onion up from there...
-            // (such circular logic!).
+        if (const auto torHostName = options->torHostName.value(); !torHostName.isEmpty()) {
+            // Add/update our Tor identity to seed peers (even if it's already there) -- this is so we can end up in our
+            // *own* server.peers.subscribe() list -- so that the Tor route can get picked up by our peers; this is
+            // because we cannot directly add our Tor route via add_peer on our peers (source address verification
+            // fails)... So this is another way to end up in our peers' peer lists... by connecting to self later and
+            // verifying self. Then when a peer asks us for server.peers.subscribe, we will be in our OWN peer list,
+            // and our peers can opt to pick the .onion up from there. (Such circular logic!!)
             PeerInfo torpi;
             torpi.hostName = torHostName;
             torpi.ssl = options->torSsl.value_or(0);
