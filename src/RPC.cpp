@@ -362,6 +362,13 @@ namespace RPC {
 
     void ConnectionBase::processJson(const QByteArray &json)
     {
+        if (ignoreNewIncomingMessages) {
+            // This is only ever latched to true in the "Client" subclass and it signifies that the client is being
+            // dropped and so we have this short-circuit conditional to save on cycles in that situation and not
+            // bother processing further messages.
+            Debug() << "ignoring " << json.length() << " byte incoming message for " << id;
+            return;
+        }
         Message::Id msgId;
         try {
             Message message = Message::fromJsonData( Util::Json::parseString(json, true).toMap() , &msgId, v1); // may throw

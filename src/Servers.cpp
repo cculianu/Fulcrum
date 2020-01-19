@@ -1784,6 +1784,9 @@ void Client::do_disconnect(bool graceful)
         socket->deleteLater(); // side-effect: will implicitly delete 'this' because we are a child of the socket!
     else if (socket && graceful)
         Debug() << __func__ << " " << id << " (graceful); delayed socket delete (wait for disconnect) ...";
+
+    // tell ConnectionBase to not send us any new messages from this client
+    ignoreNewIncomingMessages = true;
 }
 
 void Client::do_ping()
