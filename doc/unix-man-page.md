@@ -1,4 +1,6 @@
-% FULCRUM(1) Version 1.0 | SPV server for Bitcoin Cash
+% FULCRUM(1) Version 1.0 | Fulcrum Manual
+% Fulcrum is written by Calin Culianu (cculianu)
+% January 2020
 
 # NAME
 
@@ -105,11 +107,3 @@ The default port is 50001 and 50002
 # BUGS
 
 See GitHub Issues: <https://github.com/cculianu/Fulcrum/issues>
-
-# AUTHOR
-
-Fulcrum is written by Calin Culianu (cculianu)
-
-# SEE ALSO
-
-**fulcrum.conf(5)**
