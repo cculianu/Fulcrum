@@ -99,11 +99,11 @@ void AbstractConnection::do_disconnect(bool graceful)
     status = status == Bad ? Bad : NotConnected;  // try and keep Bad status around so PeerMgr can decide when to reconnect based on it? TODO: remove this concept from the codebase
     if (socket) {
         if (!graceful) {
-            Debug() << __FUNCTION__ << " (abort)";
+            Debug() << __func__ << " (abort) " << id;
             socket->abort();  // this will set status too because state change, but we set it first above to be paranoid
         } else {
             socket->disconnectFromHost();
-            Debug() << __FUNCTION__ << " (graceful)";
+            Debug() << __func__ << " (graceful) " << id;
         }
     }
 }
@@ -164,7 +164,7 @@ void AbstractConnection::slot_on_readyRead() { on_readyRead(); }
 void AbstractConnection::on_connected()
 {
     // runs in our thread's context
-    Debug() << __FUNCTION__;
+    Debug() << __func__ << " " << id;
     connectedTS = Util::getTime();
     setSockOpts(socket); // ensure nagling disabled
     socket->setReadBufferSize(MAX_BUFFER); // ensure memory exhaustion from peer can't happen in case we're too busy to read.
@@ -187,7 +187,6 @@ void AbstractConnection::on_connected()
             stopTimer(pingTimer); // kill the ping timer (method from TimersByNameMixin)
             on_disconnected();
             emit lostConnection(this);
-            // todo: put stuff to queue up a reconnect sometime later?
         })
     );
     {  // set up the "pingTimer"

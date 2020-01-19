@@ -381,7 +381,17 @@ void ServerBase::on_started()
     refreshBitcoinDNetworkInfo();
 }
 
-void ServerBase::on_newConnection(QTcpSocket *sock) { newClient(sock); }
+void ServerBase::on_newConnection(QTcpSocket *sock) {
+    if (!sock) // paranoia
+        return;
+    if (sock->state() == QAbstractSocket::SocketState::ConnectedState) {
+        newClient(sock);
+    } else {
+        Debug() << "Got a connection from " << sock->peerAddress().toString()
+                << ", but before we could handle it, it was closed; deleting socket and ignoring.";
+        sock->deleteLater();
+    }
+}
 
 Client *
 ServerBase::newClient(QTcpSocket *sock)
@@ -393,11 +403,11 @@ ServerBase::newClient(QTcpSocket *sock)
     auto on_destroyed = [clientId, addr, this](QObject *o) {
         // this whole call is here so that delete client->sock ends up auto-removing the map entry
         // as a convenience.
-        Debug() << "Client nested 'on_destroyed' called";
+        Debug() << "Client nested 'on_destroyed' called for " << clientId;
         auto client = clientsById.take(clientId);
         if (client) {
             if (client != o) {
-                Error() << " client != passed-in pointer to on_destroy in " << __FILE__ << " line " << __LINE__  << ". FIXME!";
+                Error() << " client != passed-in pointer to on_destroy in " << __FILE__ << " line " << __LINE__  << " client " << clientId << ". FIXME!";
             }
             Debug() << "client id " << clientId << " purged from map";
         }
@@ -410,7 +420,7 @@ ServerBase::newClient(QTcpSocket *sock)
             Debug() <<  client->prettyName() << " lost connection";
             killClient(client);
         } else {
-            Error() << "Internal error: lostConnection callback received null client! (expected client id: " << clientId << ")";
+            Debug() << "lostConnection callback received null client! (expected client id: " << clientId << ")";
         }
     });
     connect(ret, &RPC::ConnectionBase::gotMessage, this, &ServerBase::onMessage);
@@ -427,7 +437,7 @@ void ServerBase::killClient(Client *client)
 {
     if (!client)
         return;
-    Debug() << __FUNCTION__ << " (id: " << client->id << ")";
+    Debug() << __func__ << " (id: " << client->id << ")";
     clientsById.remove(client->id); // ensure gone from map asap so future lookups fail
     client->do_disconnect();
 }
@@ -1749,7 +1759,6 @@ Client::Client(const RPC::MethodMap & mm, IdMixin::Id id_in, QTcpSocket *sock, i
     socket = sock;
     stale_threshold = 10 * 60 * 1000; // 10 mins stale threshold; after which clients get disconnected for being idle (for now... TODO: make this configurable)
     pingtime_ms = int(stale_threshold); // this determines how often the pingtimer fires
-    Q_ASSERT(socket->state() == QAbstractSocket::ConnectedState);
     status = Connected ; // we are always connected at construction time.
     errorPolicy = ErrorPolicySendErrorMessage;
     setObjectName(QString("Client.%1").arg(id_in));
@@ -1760,7 +1769,7 @@ Client::Client(const RPC::MethodMap & mm, IdMixin::Id id_in, QTcpSocket *sock, i
 Client::~Client()
 {
     --numClients;
-    Debug() << __PRETTY_FUNCTION__;
+    Debug() << __func__ << " " << id;
     socket = nullptr; // NB: we are a child of socket. this line here is added in case some day I make AbstractClient delete socket on destruct.
 }
 
@@ -1774,7 +1783,7 @@ void Client::do_disconnect(bool graceful)
         /// reenter here and delete the socket.
         socket->deleteLater(); // side-effect: will implicitly delete 'this' because we are a child of the socket!
     else if (socket && graceful)
-        Debug() << __FUNCTION__ << " (graceful); delayed socket delete (wait for disconnect) ...";
+        Debug() << __func__ << " " << id << " (graceful); delayed socket delete (wait for disconnect) ...";
 }
 
 void Client::do_ping()

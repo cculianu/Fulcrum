@@ -272,7 +272,9 @@ namespace RPC {
     void ConnectionBase::_sendRequest(const Message::Id & reqid, const QString &method, const QVariantList & params)
     {
         if (status != Connected || !socket) {
-            Debug() << __FUNCTION__ << " method: " << method << "; Not connected! " << "(id: " << this->id << ")";
+            Debug() << __FUNCTION__ << " method: " << method << "; Not connected! " << "(id: " << this->id << "), forcing on_disconnect ...";
+            // the below ensures socket cleanup code runs.  This guarantees a disconnect & cleanup on bad socket state.
+            do_disconnect();
             return;
         }
         QString json = Message::makeRequest(reqid, method, params, v1).toJsonString();
@@ -296,7 +298,9 @@ namespace RPC {
     void ConnectionBase::_sendNotification(const QString &method, const QVariant & params)
     {
         if (status != Connected || !socket) {
-            Debug() << __FUNCTION__ << " method: " << method << "; Not connected! " << "(id: " << this->id << ")";
+            Debug() << __FUNCTION__ << " method: " << method << "; Not connected! " << "(id: " << this->id << "), forcing on_disconnect ...";
+            // the below ensures socket cleanup code runs.  This guarantees a disconnect & cleanup on bad socket state.
+            do_disconnect();
             return;
         }
         QString json;
@@ -321,7 +325,9 @@ namespace RPC {
     void ConnectionBase::_sendError(bool disc, int code, const QString &msg, const Message::Id & reqId)
     {
         if (status != Connected || !socket) {
-            Debug() << __FUNCTION__ << "; Not connected! " << "(id: " << this->id << ")";
+            Debug() << __FUNCTION__ << "; Not connected! " << "(id: " << this->id << "), forcing on_disconnect ...";
+            // the below ensures socket cleanup code runs.  This guarantees a disconnect & cleanup on bad socket state.
+            do_disconnect();
             return;
         }
         QString json = Message::makeError(code, msg, reqId, v1).toJsonString();
@@ -337,7 +343,9 @@ namespace RPC {
     void ConnectionBase::_sendResult(const Message::Id & reqid, const QVariant & result)
     {
         if (status != Connected || !socket) {
-            Debug() << __FUNCTION__ << ":  Not connected! " << "(id: " << this->id << ")";
+            Debug() << __FUNCTION__ << ":  Not connected! " << "(id: " << this->id << "), forcing on_disconnect ...";
+            // the below ensures socket cleanup code runs.  This guarantees a disconnect & cleanup on bad socket state.
+            do_disconnect();
             return;
         }
         QString json = Message::makeResponse(reqid, result, v1).toJsonString();
