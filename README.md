@@ -74,6 +74,9 @@ It is recommended you specify a data dir (`-D` via CLI or `datadir=` via config 
 
 Once the server finishes synching it will behave like an ElectronX/ElectrumX server and it can receive requests from Electron Cash.
 
+You may also wish to read the [Fulcrum manpage](https://github.com/cculianu/Fulcrum/blob/master/doc/unix-man-page.md).
+
+
 #### Admin Script: FulcrumAdmin
 
 `Fulcrum` comes with an admin script (`Python 3.6+` is required on the system to run this script).  You may send commands to `Fulcrum` using this script. The script requires that an **admin port** (config var `admin=`, CLI arg `-a`) be configured for your server.  To run the script, execute `./FulcrumAdmin -h` and you will see a list of possible subcommands that you can send to `Fulcrum`.  Here are two of the most popular commands to try (the below assumes the `admin` port is on port `8000`):
