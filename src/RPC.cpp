@@ -366,7 +366,7 @@ namespace RPC {
             // This is only ever latched to true in the "Client" subclass and it signifies that the client is being
             // dropped and so we have this short-circuit conditional to save on cycles in that situation and not
             // bother processing further messages.
-            Debug() << "ignoring " << json.length() << " byte incoming message for " << id;
+            Debug() << "ignoring " << json.length() << " byte incoming message from " << id;
             return;
         }
         Message::Id msgId;
@@ -487,6 +487,7 @@ namespace RPC {
     {
         Trace() << __FUNCTION__;
         // TODO: This may be slow for large loads.
+        // Also TODO: This should have some upper bound on how many times it loops and come back later if too much data is available
         while (socket->canReadLine()) {
             auto data = socket->readLine();
             nReceived += data.length();
