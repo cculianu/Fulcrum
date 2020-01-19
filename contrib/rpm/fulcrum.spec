@@ -13,6 +13,8 @@ BuildRequires: qt5-qtbase-devel
 BuildRequires: bzip2-devel
 BuildRequires: zlib-devel
 
+BuildRequires: pandoc
+
 Obsoletes:     Fulcrum-contrib-rpm
 
 Requires(pre): shadow-utils
@@ -35,12 +37,15 @@ Summary: Includes admin tool for fulcrum
 %build
 %qmake_qt5
 %make_build
+pandoc --standalone --from markdown-smart --to man doc/unix-man-page.md -o fulcrum.1
 
 %install
 install -Dm 640 doc/fulcrum-example-config.conf %{buildroot}/%{_sysconfdir}/fulcrum.conf
 install -Dm 755 Fulcrum %{buildroot}/%{_bindir}/fulcrum
 install -Dm 644 contrib/rpm/fulcrum.service %{buildroot}/%{_unitdir}/fulcrum.service
 install -dm 750 %{buildroot}/%{_sharedstatedir}/fulcrum
+#doc
+install -Dm 644 fulcrum.1 %{buildroot}/%{_mandir}/man1/fulcrum.1
 
 #admin
 install -Dm 755 FulcrumAdmin %{buildroot}/%{_bindir}/fulcrumctl
@@ -64,6 +69,7 @@ exit 0
 %files
 %doc README.md
 %license LICENSE.txt
+%{_mandir}/man1/fulcrum.1*
 %config %attr(640, root, fulcrum) %{_sysconfdir}/fulcrum.conf
 %{_bindir}/fulcrum
 %attr(700, fulcrum, fulcrum) %{_sharedstatedir}/fulcrum
