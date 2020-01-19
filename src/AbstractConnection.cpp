@@ -21,6 +21,7 @@
 #include <QTcpSocket>
 #include <QSslSocket>
 #include <QHostAddress>
+#include <QNetworkProxy>
 
 #include <cassert>
 
@@ -90,6 +91,14 @@ bool AbstractConnection::isSsl() const
     bool ret{};
     if (thread() == QThread::currentThread() && socket) {
         ret = dynamic_cast<QSslSocket *>(socket) != nullptr;
+    }
+    return ret;
+}
+bool AbstractConnection::isUsingCustomProxy() const
+{
+    bool ret{};
+    if (thread() == QThread::currentThread() && socket) {
+        ret = socket->proxy().type() != QNetworkProxy::DefaultProxy;
     }
     return ret;
 }
@@ -275,5 +284,15 @@ auto AbstractConnection::stats() const -> Stats
         return QVariant(); // null
     }();
     m["maxBuffer"] = MAX_BUFFER;
+    m["isProxied"] = [this]() -> QVariant {
+        if (socket)
+            return QVariant(isUsingCustomProxy());
+        return QVariant();
+    }();
+    m["isSsl"] = [this]() -> QVariant {
+            if (socket)
+                return QVariant(isSsl());
+            return QVariant();
+    }();
     return m;
 }

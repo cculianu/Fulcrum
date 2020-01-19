@@ -53,6 +53,8 @@ public:
     quint16 localPort() const;
     QHostAddress peerAddress() const;
     quint16 peerPort() const;
+    /// Returns true if this->socket and this->socket->proxy() is not DefaultProxy. Call this from this->thread().
+    bool isUsingCustomProxy() const;
 
     /// Returns true if the connection is via SSL. The default implementation of this function attempts to dynamic_cast
     /// `socket` to QSslSocket, and if it succeeds, assumes the connection is SSL and returns true.  False is returned

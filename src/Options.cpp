@@ -109,6 +109,14 @@ QVariantMap Options::toMap() const
     m["workqueue"] = workQueue;
     m["worker_threads"] = workerThreads;
     m["max_pending_connections"] = maxPendingConnections;
+    // tor related
+    m["tor_hostname"] = torHostName.has_value() ? QVariant(torHostName.value()) : QVariant();
+    m["tor_tcp_port"] = torTcp.has_value() ? QVariant(torTcp.value()) : QVariant();
+    m["tor_ssl_port"] = torSsl.has_value() ? QVariant(torSsl.value()) : QVariant();
+    m["tor_proxy"] = QString("%1:%2").arg(torProxy.first.toString()).arg(torProxy.second);
+    m["tor_user"] = torUser;
+    m["tor_pass"] = torPass;
+    // /tor related
 
     return m;
 }

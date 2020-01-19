@@ -1414,9 +1414,7 @@ ServerSSL::ServerSSL(const QHostAddress & address_, quint16 port_, const std::sh
         throw BadArgs("ServerSSL cannot be instantiated: Key or cert are null!");
     if (!QSslSocket::supportsSsl())
         throw BadArgs("ServerSSL cannot be instantiated: Missing SSL support!");
-    connect(this, &ServerSSL::ready, this, []{
-        Debug() << "SSL ready emitted";
-    });
+    connect(this, &ServerSSL::ready, this, []{ Trace() << "SSL ready"; });
     setObjectName(prettyName());
     _thread.setObjectName(prettyName());
 }
