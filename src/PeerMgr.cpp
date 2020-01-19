@@ -299,8 +299,10 @@ void PeerMgr::on_allServersStarted()
             torpi.hostName = torHostName;
             torpi.ssl = options->torSsl.value_or(0);
             torpi.tcp = options->torTcp.value_or(0);
-            seedPeers.insert(torHostName, torpi);
-            Debug() << "Added our tor hostname to the seed peer list: " << torHostName;
+            if (torpi.isMinimallyValid()) {
+                seedPeers.insert(torHostName, torpi);
+                Debug() << "Added our tor hostname to the seed peer list: " << torHostName;
+            }
         }
     }
 
@@ -385,14 +387,14 @@ void PeerMgr::process()
     if (queued.isEmpty())
         return;
     PeerInfo pi = queued.take(queued.begin().key());
-    if (pi.addr.isNull() && !pi.isTor()) {
+    if (const bool isTor = pi.isTor(); pi.addr.isNull() && !isTor) {
         if constexpr (debugPrint) Debug() << "PeerInfo.addr was null for " << pi.hostName << ", calling on_rpcAddPeer to resolve address";
         on_rpcAddPeer(PeerInfoList{pi}, pi.addr);
-    } else if (srvmgr->isIPBanned(pi.addr, false)) {
+    } else if (!isTor && srvmgr->isIPBanned(pi.addr, false)) {
         Debug() << "peer IP address " << pi.addr.toString() << " is banned, ignoring peer";
     } else if (srvmgr->isPeerHostNameBanned(pi.hostName)) {
         Debug() << "peer hostname " << pi.hostName << " is banned, ignoring peer";
-    } else if (!pi.isTor() && options->peeringEnforceUniqueIPs && peerIPAddrs.contains(pi.addr)) {
+    } else if (!isTor && options->peeringEnforceUniqueIPs && peerIPAddrs.contains(pi.addr)) {
         if constexpr (debugPrint) Debug() << pi.hostName << " (" << pi.addr.toString() << ") already in peer set, skipping ...";
     } else {
         auto client = newClient(pi);
