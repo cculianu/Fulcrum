@@ -1,12 +1,10 @@
 % FULCRUM(1) Version 1.0 | SPV server for Bitcoin Cash
 
-NAME
-====
+# NAME
 
 **fulcrum** - SPV server for Bitcoin Cash.
 
-SYNOPSIS
-========
+# SYNOPSIS
 
 | **fulcrum** \[options\] \[config\]
 
@@ -28,8 +26,7 @@ it will probably take **days** if you are lucky.
 
 Once the server finishes synching it will behave like an ElectronX/ElectrumX server and it can receive requests from Electron Cash.
 
-OPTIONS
-=======
+# OPTIONS
 
 -h, --help
 :   Prints brief usage information.
@@ -95,29 +92,24 @@ OPTIONS
 :   Configuration file (optional).
 
 
-FILES
-=====
+# FILES
 
 */etc/fulcrum.conf*
 
 :   Default config file when running as a service.
 
-PORTS
-=====
+# PORTS
 
 The default port is 50001 and 50002
 
-BUGS
-====
+# BUGS
 
 See GitHub Issues: <https://github.com/cculianu/Fulcrum/issues>
 
-AUTHOR
-======
+# AUTHOR
 
 Jonny Heggheim <hegjon@gmail.com>
 
-SEE ALSO
-========
+# SEE ALSO
 
 **fulcrum.conf(5)**
