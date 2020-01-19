@@ -77,7 +77,7 @@ public:
 
     /// Returns a reference to the proxy in this instance.  To be used only by the PeerClient subclass.  Note the
     /// proxy may be invalid or temporarily unreachable.  Used for clients where info.isTor() is true.
-    /// Not thread-safe. The returned reference is always valid, even if the object itself may be an defunct proxy.
+    /// Not thread-safe. The returned reference is always valid, even if the object itself may be a no-op/defunct proxy.
     const QNetworkProxy & getProxy() const { return proxy; }
 
 public slots:
