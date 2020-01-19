@@ -290,9 +290,9 @@ auto AbstractConnection::stats() const -> Stats
         return QVariant();
     }();
     m["isSsl"] = [this]() -> QVariant {
-            if (socket)
-                return QVariant(isSsl());
-            return QVariant();
+        if (socket)
+            return QVariant(isSsl());
+        return QVariant();
     }();
     return m;
 }
