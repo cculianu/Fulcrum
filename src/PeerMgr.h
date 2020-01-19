@@ -214,7 +214,8 @@ signals:
     void connectFailed(PeerClient *me);
     /// connected to PeerMgr::on_rpcAddPeer
     void gotPeersSubscribeReply(const PeerInfoList &, const QHostAddress &);
-
+    /// connected to PeerMgr -> lambda to detectProtocol() (so we learn if we have IPv6 as the app runs)
+    void connectionEstablished(PeerClient *me);
 protected slots:
     void handleReply(IdMixin::Id myid, const RPC::Message & reply);
 protected:

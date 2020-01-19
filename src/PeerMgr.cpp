@@ -30,6 +30,8 @@
 #include <QSslSocket>
 #include <QTcpSocket>
 
+#include <list>
+
 namespace {
     constexpr int kStringMax = 80, kHostNameMax = 120;
     constexpr bool debugPrint = false;
@@ -97,6 +99,7 @@ void PeerMgr::detectProtocol(const QHostAddress &addr)
         hasip6 = true;
         break;
     case QAbstractSocket::AnyIPProtocol: {
+        // not entirely sure about these heuristics .. or even if this branch can be taken normally.
         const auto astr = addr.toString();
         hasip4 = hasip4 || astr.split('.').size() == 4;
         hasip6 = hasip6 || astr.split(':').size() > 2;
@@ -201,14 +204,24 @@ void PeerMgr::on_rpcAddPeer(const PeerInfoList &infos, const QHostAddress &sourc
                 return;
             }
             int skipped = 0;
+            std::list<QHostAddress> addressesPri;
+            static const QSet<QAbstractSocket::NetworkLayerProtocol>
+                    acceptableProtos = { QAbstractSocket::IPv4Protocol, QAbstractSocket::IPv6Protocol };
+            // loop through the addresses and enqueue them in `addressesPri` in a prioritized order based on some
+            // heuristics about which protocols we prefer.
             for (const auto & addr : result.addresses()) {
-                if (auto proto = addr.protocol(); proto == QAbstractSocket::IPv4Protocol && !hasip4) {
-                    ++skipped;
-                    continue;
+                if (auto proto = addr.protocol(); !acceptableProtos.contains(proto)) {
+                    ++skipped; // some unknown protocol. tally it as skipped so we can indicate this in the error message at the end.
+                } else if (proto == QAbstractSocket::IPv4Protocol && !hasip4) {
+                    addressesPri.push_back(addr); // we may not have ipv4, so put this address at the back of the line to try last
                 } else if (proto == QAbstractSocket::IPv6Protocol && !hasip6) {
-                    ++skipped;
-                    continue;
+                    addressesPri.push_back(addr); // we may not have ipv6, so put this address at the back of the line to try last
+                } else {
+                    addressesPri.push_front(addr); // we have this protocol, so put this address at the front of the line to try first
                 }
+            }
+            // now, loop through the queue we created and prefer the addresses at the front over ones at the back.
+            for (const auto & addr : addressesPri) {
                 if (source.isNull() || addr == source) {
                     if constexpr (debugPrint) Debug() << "add_peer: " << pi.hostName << " address (" << addr.toString() << ") ok for source (" << source.toString() << "), processing further ...";
                     addPeerVerifiedSource(pi, addr);
@@ -381,6 +394,10 @@ PeerClient * PeerMgr::newClient(const PeerInfo &pi)
             Log() << "Peer " << client->info.hostName << " connection lost";
         }
         c->deleteLater();
+    });
+    connect(client, &PeerClient::connectionEstablished, this, [this](PeerClient *client){
+        if constexpr (debugPrint) Debug() << "Connection established for " << client->info.hostName << " ...";
+        detectProtocol(client->peerAddress()); // this is so that we learn about whether we really can do IPv6 as the app runs.
     });
 
     peerIPAddrs.insert(pi.addr);
@@ -637,6 +654,7 @@ void PeerClient::do_disconnect([[maybe_unused]] bool graceful)
 void PeerClient::on_connected()
 {
     RPC::LinefeedConnection::on_connected();
+    emit connectionEstablished(this);
     // refresh immediately upon connection
     refresh();
 }
