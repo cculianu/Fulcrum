@@ -108,7 +108,7 @@ See GitHub Issues: <https://github.com/cculianu/Fulcrum/issues>
 
 # AUTHOR
 
-Jonny Heggheim <hegjon@gmail.com>
+Fulcrum is written by Calin Culianu (cculianu)
 
 # SEE ALSO
 
