@@ -77,14 +77,18 @@ public:
     QString donationAddress = "bitcoincash:qplw0d304x9fshz420lkvys2jxup38m9symky6k028";
     /// Used for the server.banner RPC response. Specified via conf file only via the "banner=" variable. If empty,
     /// or if the file cannot be opened, the default banner text will be emitted to the client as a fallback.
-    QString bannerFile = "";
+    QString bannerFile = "",
+            torBannerFile = ""; ///< same as above, but configured from tor_banner=
 
     bool peerDiscovery = true, peerAnnounceSelf = true; ///< comes from config setting: 'peering' and 'announce'
     bool peeringEnforceUniqueIPs = true; ///< comes from config 'peering_enforce_unique_ip'
 
     std::optional<QString> hostName; ///< corresponds to hostname in server config
+    std::optional<QString> torHostName; ///< corresponds to tor_hostname in server config. Must end in .onion. If unset, will not announce ourselves as .onion.
     std::optional<quint16> publicTcp;   ///< corresponds to public_tcp_port in server config -- if unspecified will default to the first TCP interface, if !has_value, it will not be announced
     std::optional<quint16> publicSsl;   ///< corresponds to public_ssl_port in server config -- if unspecified will default to the first SSL interface, if !has_value, it will not be announced
+    std::optional<quint16> torTcp;   ///< corresponds to tor_tcp_port in server config -- if unspecified will not announce tcp on tor route.
+    std::optional<quint16> torSsl;   ///< corresponds to tor_ssl_port in server config -- if unspecified will not announce ssl on tor route.
 
     // Max clients per IP related
     static constexpr int defaultMaxClientsPerIP = 12;
@@ -118,6 +122,10 @@ public:
 
     static constexpr int defaultMaxPendingConnections = 60, minMaxPendingConnections = 10, maxMaxPendingConnections = 9999;
     int maxPendingConnections = defaultMaxPendingConnections; ///< comes from config 'max_pending_connections'.
+
+    Interface torProxy = {QHostAddress::SpecialAddress::LocalHost, 9050};  // tor_proxy e.g. 127.0.0.1:9050
+    QString torUser, torPass;  // tor_user, tor_pass in config -- most tor installs have this blank
+
 };
 
 /// A class encapsulating a simple read-only config file format.  The format is similar to the bitcoin.conf format

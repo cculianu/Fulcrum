@@ -75,6 +75,11 @@ public:
     /// <10 blocks.
     std::optional<HeightHeaderPair> headerToVerifyWithPeer() const;
 
+    /// Returns a reference to the proxy in this instance.  To be used only by the PeerClient subclass.  Note the
+    /// proxy may be invalid or temporarily unreachable.  Used for clients where info.isTor() is true.
+    /// Not thread-safe. The returned reference is always valid, even if the object itself may be an defunct proxy.
+    const QNetworkProxy & getProxy() const { return proxy; }
+
 public slots:
     /// The various Server instances are connected to this slot (via their gotRpcAddPeer signals), connections made by SrvMgr.
     /// Also: PeerClient instances are connected to this via their gotPeersSubscribeReply signal
@@ -134,7 +139,6 @@ private:
 
     QHash<QString, PeerClient *> clients;
     QSet<QHostAddress> peerIPAddrs; ///< in case we want to ensure IP-uniqueness of peers and reject dupes with different hostname, same IP (sybil attack defense measure)
-public:
     QNetworkProxy proxy;
 };
 

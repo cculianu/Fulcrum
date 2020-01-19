@@ -631,6 +631,41 @@ void App::parseArgs()
         Util::AsyncOnObject(this, [val]{ Debug() << "config: max_pending_connections = " << val; });
     }
 
+    // handle tor-related params: tor_hostname, tor_banner, tor_tcp_port, tor_ssl_port, tor_proxy, tor_user, tor_pass
+    if (const auto thn = conf.value("tor_hostname").toLower(); !thn.isEmpty()) {
+        options->torHostName = thn;
+        if (!thn.endsWith(".onion"))
+            throw BadArgs(QString("Bad tor_hostname specified: must end with .onion: %1").arg(thn));
+    }
+    if (conf.hasValue("tor_banner"))
+        options->torBannerFile = conf.value("tor_banner");
+    if (conf.hasValue("tor_tcp_port")) {
+        bool ok = false;
+        int val = conf.intValue("tor_tcp_port", -1, &ok);
+        if (!ok || val < 0 || val > UINT16_MAX)
+            throw BadArgs("tor_tcp_port parse error: not an integer from 0 to 65535");
+        if (!val) options->torTcp.reset();
+        else options->torTcp = val;
+    }
+    if (conf.hasValue("tor_ssl_port")) {
+        bool ok = false;
+        int val = conf.intValue("tor_ssl_port", -1, &ok);
+        if (!ok || val < 0 || val > UINT16_MAX)
+            throw BadArgs("torc_ssl_port parse error: not an integer from 0 to 65535");
+        if (!val) options->torSsl.reset();
+        else options->torSsl = val;
+    }
+    if (conf.hasValue("tor_proxy")) {
+        options->torProxy = parseInterface(conf.value("tor_proxy"), true); // may throw if bad
+    }
+    if (conf.hasValue("tor_user"))
+        options->torUser = conf.value("tor_user");
+    if (conf.hasValue("tor_pass"))
+        options->torUser = conf.value("tor_pass");
+
+
+    // /Tor params
+
     // warn user that no hostname was specified if they have peerDiscover turned on
     if (!options->hostName.has_value() && options->peerDiscovery && options->peerAnnounceSelf) {
         // do this when we return to event loop in case user is logging to -S (so it appears in syslog which gets set up after we return)

@@ -41,14 +41,19 @@ PeerMgr::PeerMgr(const SrvMgr *sm, const std::shared_ptr<Storage> &storage_ , co
     : IdMixin(newId()), srvmgr(sm), storage(storage_), options(options_)
 {
     assert(srvmgr && storage && options);
-    // TESTING
-    proxy.setType(QNetworkProxy::ProxyType::Socks5Proxy);
-    proxy.setHostName("127.0.0.1");
-    proxy.setPort(9150);
-    proxy.setCapabilities(QNetworkProxy::Capability::TunnelingCapability|QNetworkProxy::Capability::HostNameLookupCapability);
-    /// /TESTING
     setObjectName("PeerMgr");
     _thread.setObjectName(objectName());
+
+    // setup the Tor proxy -- note if user didn't specify it in config, it simply defaults to 127.0.0.1, port 9150
+    proxy.setType(QNetworkProxy::ProxyType::Socks5Proxy);
+    proxy.setHostName(options->torProxy.first.toString());
+    proxy.setPort(options->torProxy.second);
+    proxy.setCapabilities(QNetworkProxy::Capability::TunnelingCapability|QNetworkProxy::Capability::HostNameLookupCapability);
+    if (!options->torUser.isEmpty())
+        proxy.setUser(options->torUser);
+    if (!options->torPass.isEmpty())
+        proxy.setPassword(options->torPass);
+    // /proxy
 }
 
 PeerMgr::~PeerMgr() { cleanup(); /* noop if already stopped */ Debug() << __func__;  }
@@ -196,13 +201,16 @@ void PeerMgr::on_rpcAddPeer(const PeerInfoList &infos, const QHostAddress &sourc
             if constexpr (debugPrint) Debug() << "add_peer: " << pi.hostName << " was already deemed bad/failed, skipping";
             continue;
         }
-        // TESTING
         if (pi.isTor()) {
-            // .onion must go through proxy to resolve..
-            addPeerVerifiedSource(pi, QHostAddress());
+            if (source.isNull()) {
+                // .onion must go through proxy to resolve.. so skip the resolve test. But we only allow adding .onion
+                // from *outside* the public RPC interface (that's why source has to be isNull()).
+                addPeerVerifiedSource(pi, QHostAddress());
+            } else {
+                Debug() << "add_peer: Refusing to add a .onion peer from the public rpc interface, ignoring " << pi.hostName;
+            }
             return;
         }
-        // /TESTING
         // For each peer in the list, do a DNS lookup and verify that the source address matches at least one
         // of the resolved addresses.  If that is the case, we can proceed with the peer add (addPeerVerifiedSource).
         // Otherwise, we reject add_peer requests from random sources.
@@ -279,8 +287,26 @@ void PeerMgr::on_allServersStarted()
 
     gotAllServersStartedSignal = true;
 
+    if (options->peerAnnounceSelf && options->torHostName.has_value() && (options->torSsl.has_value() || options->torTcp.has_value())) {
+        if (const auto torHostName = options->torHostName.value(); !seedPeers.contains(torHostName)) {
+            // add our tor identity to seed peers if not already there -- this is so we can end up in our own
+            // server.peers.subscribe() list -- so that the tor route can get picked up by our peers; this is because
+            // we cannot directly add our tor self via add_peer (source address verification fails)... so this is
+            // another way to end up in our peers' peer lists... by connecting to ourself later and verifying self.
+            // then we will be in our OWN peer list, and our peers can opt to pick the .onion up from there...
+            // (such circular logic!).
+            PeerInfo torpi;
+            torpi.hostName = torHostName;
+            torpi.ssl = options->torSsl.value_or(0);
+            torpi.tcp = options->torTcp.value_or(0);
+            seedPeers.insert(torHostName, torpi);
+            Debug() << "Added our tor hostname to the seed peer list: " << torHostName;
+        }
+    }
+
     // start out with the seedPeers
     queued = seedPeers;
+
     processSoon();
 
     // next, set up the "failed retry time" which runs every kFailureRetryTime seconds (10 mins)
@@ -643,30 +669,24 @@ void PeerClient::connectToPeer()
 {
     if (!socket) return;
     QSslSocket *ssl = dynamic_cast<QSslSocket *>(socket);
+    QString msgXtra = "", connectAddr = info.addr.toString(); // default is to use the address as the "host" for connecting
+    if (info.isTor()) {
+        msgXtra = " via Tor proxy";
+        socket->setProxy(mgr->getProxy());
+        connectAddr = info.hostName;  // however, we resolve-on-connect for .onion
+    }
     if (ssl) {
-        Debug() << info.hostName << ": connecting to SSL " << info.addr.toString();
+        Debug() << info.hostName << ": connecting to SSL " << connectAddr << ":" << info.ssl << msgXtra;
         connect(ssl, qOverload<const QList<QSslError> &>(&QSslSocket::sslErrors), ssl, [ssl, hostName = info.hostName](auto errs) {
             for (const auto & err : errs) {
                 Debug() << "Ignoring SSL error for " << hostName << ": " << err.errorString();
             }
             ssl->ignoreSslErrors();
         });
-        if (info.isTor()) {
-            Debug() << "Connecting to " << info.hostName << ":" << info.ssl << " using SSL via Tor proxy";
-            ssl->setProxy(mgr->proxy);
-            ssl->connectToHostEncrypted(info.hostName, info.ssl, info.hostName);
-        } else {
-            ssl->connectToHostEncrypted(info.addr.toString(), info.ssl, info.hostName);
-        }
+        ssl->connectToHostEncrypted(connectAddr, info.ssl, info.hostName);
     } else {
-        if (info.isTor()) {
-            Debug() << "Connecting to " << info.hostName << ":" << info.tcp << " using TCP via Tor proxy";
-            socket->setProxy(mgr->proxy);
-            socket->connectToHost(info.hostName, info.tcp);
-        } else {
-            Debug() << info.hostName << ": connecting to TCP " << info.addr.toString();
-            socket->connectToHost(info.addr, info.tcp);
-        }
+        Debug() << info.hostName << ": connecting to TCP " << connectAddr << ":" << info.tcp << msgXtra;
+        socket->connectToHost(connectAddr, info.tcp);
     }
 }
 
@@ -745,15 +765,17 @@ void PeerClient::handleReply(IdMixin::Id, const RPC::Message & reply)
         emit sendRequest(newId(), "server.features");
     } else if (reply.method == "server.features") {
         // handle
-        /*if constexpr (debugPrint)*/
-        if (info.isTor()) Debug() << info.hostName << ": features responded: " << Util::Json::toString(reply.result(), false);
+        if constexpr (debugPrint) Debug() << info.hostName << ": features responded: " << Util::Json::toString(reply.result(), false);
         PeerInfoList pl;
         try {
             pl = PeerInfo::fromFeaturesMap(reply.result().toMap());
             const auto remoteAddr = peerAddress();
             for (auto & pi : pl)  {
-                // fill-in address right now since we know it, just to be tidy
-                pi.addr = remoteAddr;
+                if (!pi.isTor())
+                    // fill-in address right now since we know it, just to be tidy
+                    pi.addr = remoteAddr;
+                else
+                    pi.addr.clear();
             }
         } catch (const BadFeaturesMap &e) {
             Debug() << "Peer " << info.hostName << " gave us a bad features mep: " << e.what();
@@ -835,14 +857,15 @@ void PeerClient::handleReply(IdMixin::Id, const RPC::Message & reply)
         // tell peermgr about some new candidates (note peermgr filters out already-added or candidates that may be dupes, etc).
         emit gotPeersSubscribeReply(candidates, QHostAddress());
         if (announceSelf) {
-            bool foundme = false;
+            bool foundMe = false;
+            const QString phn = mgr->publicHostNameForConnection(this);
             for (const auto & pi : candidates) {
-                if (pi.hostName == mgr->publicHostNameForConnection(this)) {
-                    foundme = true;
+                if (!foundMe && pi.hostName == phn) {
+                    foundMe = true;
                     break;
                 }
             }
-            if (!foundme) {
+            if (!foundMe) {
                 emit sendRequest(newId(), "server.add_peer", QVariantList{mgr->makeFeaturesDict(this)});
             }
         }
@@ -864,15 +887,20 @@ PeerInfoList PeerInfo::fromPeersSubscribeList(const QVariantList &l)
         if (l2.length() < 3)
             throw BadPeerList("short item count");
         PeerInfo pi;
-        pi.addr.setAddress(l2.at(0).toString().trimmed().left(kStringMax));
-        if (pi.addr.isNull()) {
-            Debug() << "skipping null address";
-            continue;
-        }
         pi.hostName = l2.at(1).toString().trimmed().left(kHostNameMax).toLower();
         if (pi.hostName.isEmpty()) {
             Debug() << "skipping empty hostname for " << pi.addr.toString();
             continue;
+        }
+        if (pi.isTor()) {
+            // allow bad address if tor.. don't even parse address in that case
+        } else {
+            // otherwise require good address
+            pi.addr.setAddress(l2.at(0).toString().trimmed().left(kStringMax));
+            if (pi.addr.isNull()) {
+                Debug() << "skipping null address";
+                continue;
+            }
         }
         QVariantList l3 = l2.at(2).toList();
         bool isPruning = false;

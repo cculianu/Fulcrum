@@ -680,14 +680,15 @@ void Server::rpc_server_banner(Client *c, const RPC::Message &m)
 {
     constexpr int MAX_BANNER_DATA = 16384;
     static const QString bannerFallback = QString("Connected to a %1 server").arg(ServerMisc::AppSubVersion);
-    const QString bannerFile(options->bannerFile);
+    const QString bannerFile(c->peerAddress().isLoopback() && !options->torBannerFile.isEmpty()
+                             ? options->torBannerFile : options->bannerFile);
     if (bannerFile.isEmpty() || !QFile::exists(bannerFile) || !QFileInfo(bannerFile).isReadable()) {
         // fallback -- banner file invalid/not readable/not specified
         emit c->sendResult(m.id, bannerFallback);
     } else {
         // banner file specified, now let's open it up in a worker thread to keep the server responsive and return immediately
         generic_do_async(c, m.id,
-                        [bannerFile = options->bannerFile,
+                        [bannerFile,
                          donationAddress = options->donationAddress,
                          daemonVersion = bitcoinDInfo.version,
                          subversion = bitcoinDInfo.subversion] {
@@ -734,7 +735,7 @@ QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const Q
     r["protocol_max"] = ServerMisc::MaxProtocolVersion.toString();
     r["hash_function"] = ServerMisc::HashFunction;
 
-    QVariantMap hmap;
+    QVariantMap hmap, hmapTor;
     if (opts.publicTcp.has_value())
         hmap["tcp_port"] = unsigned(opts.publicTcp.value());
     if (opts.publicSsl.has_value())
@@ -748,10 +749,21 @@ QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const Q
         hmap[key] = unsigned(c->localPort());
     }
     const QString hostName = opts.hostName.value_or(c->localAddress().toString());
+    // next, add tor .onion identity, if any defined in config -- for tor they need to specify at least a hostname and a port
+    QString torHostName;
+    if (opts.torHostName.has_value()) {
 
-    r["hosts"] = QVariantMap{
-        { hostName, hmap },
-    };
+        torHostName = opts.torHostName.value();
+        if (opts.torTcp.has_value())
+            hmapTor["tcp_port"] = unsigned(opts.torTcp.value());
+        if (opts.torSsl.has_value())
+            hmapTor["ssl_port"] = unsigned(opts.torSsl.value());
+    }
+    QVariantMap hostsMap = {{ hostName, hmap }};
+    if (!hmapTor.isEmpty() && !torHostName.isEmpty())
+        hostsMap[torHostName] = hmapTor;
+
+    r["hosts"] = hostsMap;
     return r;
 }
 void Server::rpc_server_features(Client *c, const RPC::Message &m)
@@ -763,10 +775,11 @@ void Server::rpc_server_peers_subscribe(Client *c, const RPC::Message &m)
     // See: https://electrumx.readthedocs.io/en/latest/protocol-methods.html#server-peers-subscribe
     QVariantList res;
     for (const auto & pi : std::as_const(peers)) { // as_const here ensures we keep the implicit sharing for `peers`
-        if (!pi.isMinimallyValid() || pi.addr.isNull())
-            continue; // paranoia -- should never happen as we filter our our peer list carefully
+        if (!pi.isMinimallyValid()) // paranoia -- this should never happen as other code filtered this out already
+            continue;
         QVariantList item;
-        item.push_back(pi.addr.toString()); // item 1, ip address
+        const QString addrOrHost = !pi.addr.isNull() ? pi.addr.toString() : pi.hostName;
+        item.push_back(addrOrHost); // item 1, ip address (or host if .isNull() e.g. tor)
         item.push_back(pi.hostName); // item 2, hostName
         QVariantList nested;
         nested.push_back(QString("v") + (pi.protocolMax.isValid() ? pi.protocolMax.toString() : pi.protocolVersion.toString()));
