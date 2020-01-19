@@ -90,6 +90,15 @@ def main():
         parser.print_help()
         sys.exit(1)
 
+    elif command == 'getinfo':
+        orig_handler = response_handler
+        def handler(r):
+            # mogrify the uptime field to be more useful to humans
+            if r.get('uptime'):
+                r['uptime'] = formatTimeField(r['uptime'])
+            return orig_handler(r)
+        response_handler = handler
+
     elif command == 'stop' and not JSON:
         def handler(r):
             if isinstance(r, bool) and r:
@@ -179,7 +188,7 @@ def clients_handler(r):
     if not isinstance(r, (list, tuple)):
         return badResp()
     lines = []
-    line = ("ID","IP:PORT","Typ","UAgent","ProtocolVer","Subs","HdrSub?","ReqRcv","RespSent","RecvBytes","SentBytes","TxsSent","Notifs","ErrorCt")
+    line = ("ID","IP:PORT","Typ","UAgent","ProtocolVer","Subs","HdrSub?","ReqRcv","RespSent","RecvBytes","SentBytes","TxsSent","Notifs","ErrorCt","Elapsed")
     maxfields = defaultdict(int)
     for i,c in enumerate(line):
         maxfields[i] = max(maxfields[i], len(c))
@@ -210,7 +219,8 @@ def clients_handler(r):
                         cdict.get('nBytesSent', -1),
                         cdict.get('nTxSent', -1),
                         cdict.get('nNotificationsSent', -1),
-                        cdict.get('nErrorsSent', -1)
+                        cdict.get('nErrorsSent', -1),
+                        formatTimeField( cdict.get('connectedTime', '-') )
                     )
                     line = [str(x) for x in line]
                     for i,c in enumerate(line):
@@ -222,6 +232,7 @@ def clients_handler(r):
             line[j] = c.ljust(maxfields[j])
         lines[i] = '  '.join(line)
     return '\n'.join(lines) + '\n'
+
 
 def listbanned_handler(r):
     global EXITSTATUS
@@ -279,11 +290,13 @@ def listbanned_handler(r):
     peerPart = '~Peer Bans~\n' + '\n'.join(lines)
     return clientPart + '\n\n' + peerPart
 
+
 def peers_handler(r):
     global EXITSTATUS
     def badResp():
         EXITSTATUS = 1
         return f"Unexpected resposne from Fulcrum server: {r!r}"
+
     if not isinstance(r, (dict,)):
         return badResp()
     lines = []
@@ -310,7 +323,7 @@ def peers_handler(r):
             d.get('server_version', 'Unk'),
             d.get('protocol_min', '-'),
             d.get('protocol_max', '-'),
-            d.get('connectedTime', '-'),
+            formatTimeField( d.get('connectedTime', '-') ),
             '-', '-'
         )
         line = [str(x) for x in line]
@@ -331,7 +344,7 @@ def peers_handler(r):
                 pass
             line = (
                 hostname, ip, status.title(), tcp if tcp else '-', ssl if ssl else '-',
-                subver, pver, pver, time, msg, '~' + str(retryTimes.get(status, 0)//1000) + 's'
+                subver, pver, pver, formatTimeField(time), msg, '~' + str(retryTimes.get(status, 0)//1000) + 's'
             )
             line = [str(x) for x in line]
             for i,c in enumerate(line):
@@ -345,6 +358,44 @@ def peers_handler(r):
         lines[i] = '  '.join(line)
     return '\n'.join(lines) + '\n'
 
+
+def formatTimeField(s):
+    if s is None:
+        return '-'  # transform None to '-' since it takes up fewer characters
+    secs_per_hour = 60.0 * 60.0
+    if isinstance(s, str):
+        to_secs_factor = 1.0
+        if s.endswith("hours"):  # one of the "xx hours" fields
+            to_secs_factor = secs_per_hour
+        elif s.endswith("secs"):
+            pass
+        else:
+            return s # unknown field type, just return it verbatim
+        try:
+            s = float(s.split()[0].strip()) * to_secs_factor  # transform hours to seconds
+        except (ValueError, TypeError, IndexError):
+            return s
+        del to_secs_factor
+    # at this point s should be in seconds.. if not, give up and just return it
+    if not isinstance(s, (int, float)):
+        return s
+    # now turn seconds to minutes, hours, days, months, years
+    secs_per_day = secs_per_hour * 24.0
+    secs_per_year = 365.0 * secs_per_day
+    secs_per_month = 30.0 * secs_per_day
+    secs_per_minute = 60.0
+    if s >= secs_per_year:
+        return f'{s/secs_per_year:0.3f} years'
+    elif s >= secs_per_month:
+        return f'{s/secs_per_month:0.3f} months'
+    elif s >= secs_per_day:
+        return f'{s/secs_per_day:0.2f} days'
+    elif s >= secs_per_hour:
+        return f'{s/secs_per_hour:0.2f} hours'
+    elif s >= secs_per_minute:
+        return f'{s/secs_per_minute:0.1f} mins'
+    else:
+        return f'{s:0.1f} secs'
 
 
 if __name__ == '__main__':
