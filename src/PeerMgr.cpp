@@ -44,7 +44,7 @@ PeerMgr::PeerMgr(const SrvMgr *sm, const std::shared_ptr<Storage> &storage_ , co
     setObjectName("PeerMgr");
     _thread.setObjectName(objectName());
 
-    // setup the Tor proxy -- note if user didn't specify it in config, it simply defaults to 127.0.0.1, port 9150
+    // setup the Tor proxy -- note if user didn't specify it in config, it simply defaults to 127.0.0.1, port 9050
     proxy.setType(QNetworkProxy::ProxyType::Socks5Proxy);
     proxy.setHostName(options->torProxy.first.toString());
     proxy.setPort(options->torProxy.second);
