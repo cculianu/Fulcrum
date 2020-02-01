@@ -1807,7 +1807,7 @@ void Client::do_ping()
     // The below just checks idle.
     if (Util::getTime() - lastGood >= stale_threshold) {
         Debug() << prettyName() << ": idle timeout after " << ((stale_threshold)/1e3) << " sec., will close connection";
-        emit sendError(true, RPC::Code_Custom+1, "Idle time exceeded");
+        do_disconnect();
         return;
     }
 }
