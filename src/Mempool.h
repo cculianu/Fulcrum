@@ -57,6 +57,7 @@ struct Mempool
             std::unordered_map<TXO, TXOInfo, std::hash<TXO>>
                 /// Spends of txo's from the db (confirmed) utxoset.
                 /// - Items here get _subtracted_ from the "unconfirmed" in RPC get_balance.
+                /// - Items appearing here also suppress confirmed utxo items from appearing in RPC listunspent (since they are spent in mempool).
                 confirmedSpends,
                 /// spends of mempool ancestor txos. Items appearing here will not appear in the ancestor's
                 /// IOInfo::utxo map (their insertion here accompanies a deletion of those ancestor items).

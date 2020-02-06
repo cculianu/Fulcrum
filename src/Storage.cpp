@@ -1766,8 +1766,8 @@ auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
                             const auto & ioinfo = it2->second;
                             // make sure to put any confirmed spends we see now in the "mempool confirmed spends" set
                             // so we know not to include them in the list of utxos from the DB later in this function!
-                            for (const auto & cspend : ioinfo.confirmedSpends) {
-                                mempoolConfirmedSpends.insert(cspend.first);
+                            for (const auto & [txo, txoinfo] : ioinfo.confirmedSpends) {
+                                mempoolConfirmedSpends.insert(txo);
                             }
                             for (const auto ionum : ioinfo.utxo) {
                                 if (decltype(tx->txos.cbegin()) it3;
@@ -1816,7 +1816,7 @@ auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
                         // should never happen, indicates db corruption
                         throw InternalError("Deserialized CompactTXO is invalid");
                     ctxoList.emplace_back(ctxo);
-                    if (UNLIKELY(++ctxoListSize > maxHistory)) {
+                    if (UNLIKELY(++ctxoListSize + ret.size() > maxHistory)) {
                         throw HistoryTooLarge(QString("Unspent history too large for %1, exceeds MaxHistory of %2")
                                               .arg(QString(hashX.toHex())).arg(maxHistory));
                     }
