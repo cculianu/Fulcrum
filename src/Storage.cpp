@@ -1971,7 +1971,7 @@ bool Storage::UnspentItem::operator<(const UnspentItem &o) const noexcept {
     if (txNum == o.txNum) { // order by txNum
         if (tx_pos == o.tx_pos) { // then by tx_pos
             // next by tx_hash, height (this branch shouldn't normally be reached with real blockchain data since
-            // txNum:tx_pos defines an UnspentItem completed...
+            // txNum:tx_pos defines an UnspentItem completely...
             if (HistoryItem::operator<(o))
                 return true;
             else if (HistoryItem::operator==(o))

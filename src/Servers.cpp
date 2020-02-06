@@ -1079,7 +1079,7 @@ void Server::rpc_blockchain_scripthash_listunspent(Client *c, const RPC::Message
             resp.push_back(QVariantMap{
                 { "tx_hash" , Util::ToHexFast(item.hash) },
                 { "tx_pos"  , item.tx_pos },
-                { "height", item.height },  // confirmed height. TODO: should be 0 for mempool regardless of unconf. parent status. Note this differs from get_mempool or get_history
+                { "height", item.height },  // confirmed height. Is 0 for mempool tx regardless of unconf. parent status. Note this differs from get_mempool or get_history where -1 is used for unconf. parent.
                 { "value", qlonglong(item.value / item.value.satoshi()) }, // amount (int64) in satoshis
             });
         }
