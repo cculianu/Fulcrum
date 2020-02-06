@@ -1,5 +1,5 @@
 Name:    {{{ git_name name="fulcrum" }}}
-Version: 1.0.2
+Version: 1.0.3
 Release: {{{ git_version }}}%{?dist}
 Summary: A fast & nimble SPV server for Bitcoin Cash
 

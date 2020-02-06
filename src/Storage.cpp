@@ -1744,55 +1744,15 @@ auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
     try {
         const size_t maxHistory = size_t(options->maxHistory);
         constexpr size_t iota = 10; // we initially reserve this many items in the returned array in order to prevent redundant allocations in the common case.
+        std::unordered_set<TXO, std::hash<TXO>> mempoolConfirmedSpends;
+        mempoolConfirmedSpends.reserve(iota);
+        ret.reserve(iota);
         {
             // take shared lock (ensure history doesn't mutate from underneath our feet)
             SharedLockGuard g(p->blocksLock);
-            std::unique_ptr<rocksdb::Iterator> iter(p->db.shunspent->NewIterator(p->db.defReadOpts));
-            const rocksdb::Slice prefix = ToSlice(hashX); // points to data in hashX
-
-            // Search table for all keys that start with hashx's bytes. Note: the loop end-condition is strange.
-            // See: https://github.com/facebook/rocksdb/wiki/Prefix-Seek-API-Changes#transition-to-the-new-usage
-            rocksdb::Slice key;
-            bool didReserveIota = false;
-            TxNum maxTxNumSeen = 0;
-            std::list<CompactTXO> ctxoList;
-            size_t ctxoListSize = 0;
-            // we do it this way as two separate loops in order to avoid the expensive heightForTxNum lookups below in
-            // the case where the history is huge.
-            for (iter->Seek(prefix); iter->Valid() && (key = iter->key()).starts_with(prefix); iter->Next()) {
-                if (key.size() != HashLen + CompactTXO::serSize())
-                    // should never happen, indicates db corruption
-                    throw InternalError("Key size for hashx is invalid");
-                const CompactTXO ctxo = CompactTXO::fromBytes(key.data() + HashLen, CompactTXO::serSize());
-                if (!ctxo.isValid())
-                    // should never happen, indicates db corruption
-                    throw InternalError("Deserialized CompactTXO is invalid");
-                ctxoList.emplace_back(ctxo);
-                if (UNLIKELY(++ctxoListSize > maxHistory)) {
-                    throw HistoryTooLarge(QString("Unspent history too large for %1, exceeds MaxHistory of %2")
-                                          .arg(QString(hashX.toHex())).arg(maxHistory));
-                }
-            }
-            for (const auto & ctxo : ctxoList) {
-                static const QString err("Error retrieving the utxo for an unspent item");
-                auto hash = hashForTxNum(ctxo.txNum()).value(); // may throw, but that indicates some database inconsistency. we catch below
-                auto height = heightForTxNum(ctxo.txNum()).value(); // may throw, same deal
-                auto info = GenericDBGetFailIfMissing<TXOInfo>(p->db.utxoset.get(), TXO{ hash, ctxo.N()}, err, false, p->db.defReadOpts); // may throw -- indicates db inconsistency
-                if (!didReserveIota) {
-                    // small performance tweak -- reserve iota (10) initially since most unspent lists are <10 in db.
-                    didReserveIota = true;
-                    ret.reserve(iota);
-                }
-                maxTxNumSeen = std::max(info.txNum, maxTxNumSeen);
-                ret.emplace_back(UnspentItem{
-                    { hash, int(height), {} }, // base HistoryItem
-                    ctxo.N(),  // .tx_pos
-                    info.amount, // .value
-                    info.txNum, // .txNum
-                });
-            }
+            const TxNum veryHighTxNum = getTxNum() + 100000000;  // pick an absurdly high TxNum that is 100 million past current. This is a fudge so sorting works ok for unconfirmed tx's so that they appear at the end.
             {
-                // grab mempool utxos for scripthash
+                // grab mempool utxos for scripthash -- we do mempool first so as to build the "mempoolConfirmedSpends" set as we iterate.
                 auto [mempool, lock] = this->mempool(); // shared lock
                 if (auto it = mempool.hashXTxs.find(hashX); it != mempool.hashXTxs.end()) {
                     const auto & txvec = it->second;
@@ -1804,6 +1764,11 @@ auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
                         }
                         if (auto it2 = tx->hashXs.find(hashX); LIKELY(it2 != tx->hashXs.end())) {
                             const auto & ioinfo = it2->second;
+                            // make sure to put any confirmed spends we see now in the "mempool confirmed spends" set
+                            // so we know not to include them in the list of utxos from the DB later in this function!
+                            for (const auto & cspend : ioinfo.confirmedSpends) {
+                                mempoolConfirmedSpends.insert(cspend.first);
+                            }
                             for (const auto ionum : ioinfo.utxo) {
                                 if (decltype(tx->txos.cbegin()) it3;
                                         LIKELY( ionum < tx->txos.size() && (it3 = tx->txos.cbegin() + ionum)->isValid() ))
@@ -1812,7 +1777,7 @@ auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
                                         { tx->hash, 0 /* always put 0 for height here */, tx->fee }, // base HistoryItem
                                         ionum, // .tx_pos
                                         it3->amount,  // .value
-                                        TxNum(1) + maxTxNumSeen + TxNum(tx->hasUnconfirmedParentTx ? 1 : 0), // .txNum (this is fudged for sorting at the end properly)
+                                        TxNum(1) + veryHighTxNum + TxNum(tx->hasUnconfirmedParentTx ? 1 : 0), // .txNum (this is fudged for sorting at the end properly)
                                     });
                                     if (UNLIKELY(ret.size() > maxHistory)) {
                                         throw HistoryTooLarge(QString("Unspent history too large for %1, exceeds MaxHistory of %2")
@@ -1831,9 +1796,52 @@ auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
                     }
                 }
             } // release mempool lock
+            { // begin confirmed/db search
+                std::unique_ptr<rocksdb::Iterator> iter(p->db.shunspent->NewIterator(p->db.defReadOpts));
+                const rocksdb::Slice prefix = ToSlice(hashX); // points to data in hashX
+
+                // Search table for all keys that start with hashx's bytes. Note: the loop end-condition is strange.
+                // See: https://github.com/facebook/rocksdb/wiki/Prefix-Seek-API-Changes#transition-to-the-new-usage
+                rocksdb::Slice key;
+                std::list<CompactTXO> ctxoList;
+                size_t ctxoListSize = 0;
+                // we do it this way as two separate loops in order to avoid the expensive heightForTxNum lookups below in
+                // the case where the history is huge.
+                for (iter->Seek(prefix); iter->Valid() && (key = iter->key()).starts_with(prefix); iter->Next()) {
+                    if (key.size() != HashLen + CompactTXO::serSize())
+                        // should never happen, indicates db corruption
+                        throw InternalError("Key size for hashx is invalid");
+                    const CompactTXO ctxo = CompactTXO::fromBytes(key.data() + HashLen, CompactTXO::serSize());
+                    if (!ctxo.isValid())
+                        // should never happen, indicates db corruption
+                        throw InternalError("Deserialized CompactTXO is invalid");
+                    ctxoList.emplace_back(ctxo);
+                    if (UNLIKELY(++ctxoListSize > maxHistory)) {
+                        throw HistoryTooLarge(QString("Unspent history too large for %1, exceeds MaxHistory of %2")
+                                              .arg(QString(hashX.toHex())).arg(maxHistory));
+                    }
+                }
+                for (const auto & ctxo : ctxoList) {
+                    static const QString err("Error retrieving the utxo for an unspent item");
+                    const auto hash = hashForTxNum(ctxo.txNum()).value(); // may throw, but that indicates some database inconsistency. we catch below
+                    const auto height = heightForTxNum(ctxo.txNum()).value(); // may throw, same deal
+                    const TXO txo{ hash, ctxo.N() };
+                    if (mempoolConfirmedSpends.count(txo))
+                        // Skip items that are spent in mempool. This fixes a bug in Fulcrum 1.0.2 or earlier where the
+                        // confirmed spends in the mempool were still appearing in the listunspent utxos.
+                        continue;
+                    auto info = GenericDBGetFailIfMissing<TXOInfo>(p->db.utxoset.get(), txo, err, false, p->db.defReadOpts); // may throw -- indicates db inconsistency
+                    ret.emplace_back(UnspentItem{
+                        { hash, int(height), {} }, // base HistoryItem
+                        txo.prevoutN,  // .tx_pos
+                        info.amount, // .value
+                        info.txNum, // .txNum
+                    });
+                }
+            } // end confirmed/db search
         } // release blocks lock
         std::sort(ret.begin(), ret.end());
-        if (const auto sz = ret.size(), cap = ret.capacity(); cap - sz > iota && double(cap)/double(sz) > 1.20)
+        if (const auto sz = ret.size(), cap = ret.capacity(); cap - sz > iota && sz > 0 && double(cap)/double(sz) > 1.20)
             // we only do this if we're wasting enough space (at least iota, and at least 20% space wasted),
             // otherwise we don't bother since this returned object is fairly ephemeral and for smallish disparities
             // between capacity and size, it's fine.
