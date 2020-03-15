@@ -104,7 +104,13 @@ namespace RPC {
                 if (int code = errmap.value(s_code).toInt(&ok); !ok || errmap.value(s_code).toString() != QString::number(code))
                     throw InvalidError("Expected error code to be an integer");
                 static const KeySet required{ s_id, s_error, s_jsonrpc };
-                if (KeySet::fromList(ret.data.keys()) != required)
+                if (required !=
+#if QT_VERSION < QT_VERSION_CHECK(5, 14, 0)
+                        KeySet::fromList(ret.data.keys())
+#else
+                        Util::toCont<KeySet>(ret.data.keys())
+#endif
+                    )
                     throw InvalidError("Error response not valid");
             }
         }
@@ -397,7 +403,12 @@ namespace RPC {
                     // named args specified
                     if (!m.opt_kwParams.has_value())
                         throw InvalidParameters("Named params are not supported for this method");
-                    const auto nameset = KeySet::fromList(msg.paramsMap().keys()); // TODO: this is not the most efficient -- for now this isn't used except for AdminServer, so it's fine.
+                    const auto nameset =
+ #if QT_VERSION < QT_VERSION_CHECK(5, 14, 0)
+                            KeySet::fromList(msg.paramsMap().keys()); // TODO: this is not the most efficient -- for now this isn't used except for AdminServer, so it's fine.
+ #else
+                            Util::toCont<KeySet>(msg.paramsMap().keys());
+ #endif
                     const auto & kwSet = *m.opt_kwParams;
                     if (m.allowUnknownNamedParams) {
                         if (!(kwSet - nameset).isEmpty())

@@ -292,10 +292,14 @@ namespace Util {
         return ret;
     }
 
+    /// Convert an iterable container from one format to another, using ranged iterator constructors. Only works
+    /// on containers supporting such constructors.  Pass the out container return type as the first argument.
+    template <typename OutCont, typename InCont>
+    auto toCont(const InCont &in) { return OutCont{in.begin(), in.end()}; }
     /// Convert an iterable container (normally a vector) into a list.  Pass the List return type as the first argument
     /// (defaults to std::list<ItCont::value_type> if unspecified).
     template <typename List = void, typename ItCont>
-    auto toList(const ItCont &vec) {
+    auto toList(const ItCont &cont) {
         constexpr auto DeduceList = []{
             // this code doesn't ever execute, it is just used for type deduction
             if constexpr (std::is_same_v<List, void>)
@@ -303,12 +307,12 @@ namespace Util {
             else
                 return List();
         };
-        return decltype( DeduceList() )(vec.begin(), vec.end());
+        return toCont<decltype( DeduceList() )>(cont);
     }
     /// Convert an iterable container (normally a list) into a vector. Pass the Vec return type as the first argument
     /// (defaults to std::vector<ItCond::value_tyoe> if unspecified).
     template <typename Vec = void, typename ItCont>
-    auto toVec(const ItCont &vec) {
+    auto toVec(const ItCont &cont) {
         constexpr auto DeduceVec = []{
             // this code doesn't ever execute, it is just used for type deduction
             if constexpr (std::is_same_v<Vec, void>)
@@ -316,7 +320,7 @@ namespace Util {
             else
                 return Vec();
         };
-        return decltype( DeduceVec() )(vec.begin(), vec.end());
+        return toCont<decltype( DeduceVec() )>(cont);
     }
 
     /// Boilerplate to sort a container using Comparator class (defaults to just using operator<), and then

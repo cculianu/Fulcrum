@@ -386,7 +386,12 @@ auto SubsMgr::stats() const -> Stats
                 m2["lastStatusNotified"] = sub->lastStatusNotified.value_or(StatusHash()).toHex();
                 m2["idleSecs"] = (Util::getTime() - sub->tsMsec)/1e3;
                 const auto & clients = sub->subscribedClientIds;
+#if QT_VERSION < QT_VERSION_CHECK(5, 14, 0)
+                // Qt < 5.14 lacks the ranged constructors for containers so we must do this.
                 m2["clientIds"] = QVariantList::fromStdList(Util::toList<std::list<QVariant>>(clients));
+#else
+                m2["clientIds"] = Util::toList<QVariantList>(clients);
+#endif
             }
             m[QString(sh.toHex())] = m2;
         }

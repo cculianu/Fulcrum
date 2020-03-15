@@ -1405,7 +1405,11 @@ auto Controller::debug(const StatsParams &p) const -> Stats // from StatsMixin
             QVariantMap hxs;
             static const auto IOInfo2Map = [](const Mempool::Tx::IOInfo &inf) -> QVariantMap {
                 QVariantMap ret;
+#if QT_VERSION < QT_VERSION_CHECK(5, 14, 0)
                 const auto vl = QVariantList::fromStdList( Util::toList<std::list<QVariant>>(inf.utxo) );
+#else
+                const auto vl = Util::toList<QVariantList>(inf.utxo);
+#endif
                 ret["utxos"] = vl;
                 ret["utxos (BucketCount)"] = qlonglong(inf.utxo.bucket_count());
                 ret["utxos (LoadFactor)"] = QString::number(double(inf.utxo.load_factor()), 'f', 4);

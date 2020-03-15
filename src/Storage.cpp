@@ -1680,7 +1680,13 @@ std::vector<TxHash> Storage::txHashesForBlockInBitcoindMemoryOrder(BlockHeight h
     ret.swap(vec);
     {
         // put result in cache
-        p->lruHeight2Hashes_BitcoindMemOrder.insert(height, QVector<TxHash>::fromStdVector(ret), p->lruHeight2HashSizeCalc(ret.size()));
+        p->lruHeight2Hashes_BitcoindMemOrder.insert(height,
+#if QT_VERSION < QT_VERSION_CHECK(5, 14, 0)
+                                                    QVector<TxHash>::fromStdVector(ret),
+#else
+                                                    Util::toVec<QVector<TxHash>>(ret),
+#endif
+                                                    p->lruHeight2HashSizeCalc(ret.size()));
     }
     return ret;
 }
