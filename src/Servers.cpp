@@ -962,8 +962,20 @@ void Server::rpc_blockchain_estimatefee(Client *c, const RPC::Message &m)
     int n = l.front().toInt(&ok);
     if (!ok || n < 0)
         throw RPCError(QString("%1 parameter should be a single non-negative integer").arg(m.method));
-    if (bitcoinDInfo.subversion.startsWith("/Bitcoin ABC") && bitcoinDInfo.version >= Version(0, 20, 2)) {
-        // Bitcoin ABC v0.20.2 has taken out the nblocks argument
+
+    static const auto isZeroArgEstimateFee = [](const QString &subversion, const Version &version) -> bool {
+        static const QString zeroArgSubversionPrefixes[] = { "/Bitcoin ABC", "/Bitcoin Cash Node", };
+        static const Version minVersion{0, 20, 2};
+        if (version < minVersion)
+            return false;
+        for (const auto & prefix : zeroArgSubversionPrefixes)
+            if (subversion.startsWith(prefix))
+                return true;
+        return false;
+    };
+
+    if ( isZeroArgEstimateFee(bitcoinDInfo.subversion, bitcoinDInfo.version) ) {
+        // Bitcoin ABC v0.20.2 has taken out the nblocks argument (also applies to Bitcoin Cash Node)
         generic_async_to_bitcoind(c, m.id, "estimatefee", QVariantList(),[](const RPC::Message &response){
             return response.result();
         });
