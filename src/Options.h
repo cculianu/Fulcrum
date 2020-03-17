@@ -130,7 +130,7 @@ public:
     Interface torProxy = {QHostAddress::SpecialAddress::LocalHost, 9050};  // tor_proxy e.g. 127.0.0.1:9050
     QString torUser, torPass;  // tor_user, tor_pass in config -- most tor installs have this blank
 
-    static constexpr int defaultBDReqHi = 50, defaultBDReqLo = 20, defaultBDReqDecayPerSec = 10;
+    static constexpr int defaultBDReqHi = 50, defaultBDReqLo = 20, defaultBDReqDecayPerSec = 5;
     static constexpr int maxBDReqHi = 10000, maxBDReqLo = 9999, maxBDReqDecayPerSec = 9999;
     static constexpr int minBDReqHi = 5, minBDReqLo = 1, minBDReqDecayPerSec = 1;
     /// BitcoinD Request throttling params, per client
