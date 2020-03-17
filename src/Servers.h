@@ -398,6 +398,7 @@ private:
     void rpc_addpeer(Client *, const RPC::Message &);
     void rpc_ban(Client *, const RPC::Message &);
     void rpc_banpeer(Client *, const RPC::Message &);
+    void rpc_bitcoind_throttle(Client *, const RPC::Message &); // getter / setter in 1 method
     void rpc_clients(Client *, const RPC::Message &);
     void rpc_getinfo(Client *, const RPC::Message &);
     void rpc_kick(Client *, const RPC::Message &);
@@ -406,7 +407,6 @@ private:
     void rpc_maxbuffer(Client *, const RPC::Message &);
     void rpc_peers(Client *, const RPC::Message &);
     void rpc_rmpeer(Client *, const RPC::Message &);
-    void rpc_setmaxbuffer(Client *, const RPC::Message &);
     void rpc_shutdown(Client *, const RPC::Message &);
     void rpc_unban(Client *, const RPC::Message &);
     void rpc_unbanpeer(Client *, const RPC::Message &);

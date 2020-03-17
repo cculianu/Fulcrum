@@ -1616,6 +1616,31 @@ void AdminServer::rpc_banpeer(Client *c, const RPC::Message &m)
     }
     emit c->sendResult(m.id, bool(ctr));
 }
+void AdminServer::rpc_bitcoind_throttle(Client *c, const RPC::Message &m)
+{
+    const QVariantList l = m.paramsList();
+    if (!l.isEmpty()) {
+        // set
+        if (l.size() != 3)
+err:
+            throw RPCError("Bad params: please pass a list of 3 positive integers");
+        Options::BdReqThrottleParams p;
+        bool ok;
+        p.hi = l[0].toInt(&ok);
+        if (!ok) goto err;
+        p.lo = l[1].toInt(&ok);
+        if (!ok) goto err;
+        p.decay = l[2].toInt(&ok);
+        if (!ok) goto err;
+        if (!p.isValid())
+            throw RPCError(QString("Bad params: specify [hi, lo, decay], where hi > lo (both must be under %1)").arg(Options::maxBDReqHi));
+
+        emit srvmgr->requestBitcoindThrottleParamsChange(p.hi, p.lo, p.decay); // direct connection to App object, takes effect immediately
+    }
+    // get
+    const auto [hi, lo, decay] = options->bdReqThrottleParams.load();
+    emit c->sendResult(m.id, QVariantList{hi, lo, decay});
+}
 void AdminServer::rpc_clients(Client *c, const RPC::Message &m)
 {
     generic_do_async(c, m.id, [srvmgr = QPointer(this->srvmgr)]{
@@ -1713,6 +1738,15 @@ void AdminServer::rpc_loglevel(Client *c, const RPC::Message &m)
 }
 void AdminServer::rpc_maxbuffer(Client *c, const RPC::Message &m)
 {
+
+    if (const auto l = m.paramsList(); !l.empty()) {
+        bool ok;
+        const int arg = m.paramsList().front().toInt(&ok);
+        if (!ok || !Options::isMaxBufferSettingInBounds(arg))
+            throw RPCError(QString("Invalid maxbuffer, please specify an integer in the range [%1, %2]").arg(Options::maxBufferMin).arg(Options::maxBufferMax));
+        emit srvmgr->requestMaxBufferChange(Options::clampMaxBufferSetting(arg)); // has a slot connected via DirectConnection so takes effect immediately
+    }
+    // return the current setting
     emit c->sendResult(m.id, options->maxBuffer.load());
 }
 void AdminServer::rpc_peers(Client *c, const RPC::Message &m)
@@ -1738,15 +1772,6 @@ void AdminServer::rpc_rmpeer(Client *c, const RPC::Message &m)
         emit srvmgr->kickPeersWithSuffix(suffix);
     }
     emit c->sendResult(m.id, bool(ctr));
-}
-void AdminServer::rpc_setmaxbuffer(Client *c, const RPC::Message &m)
-{
-    bool ok;
-    const int arg = m.paramsList().front().toInt(&ok);
-    if (!ok || !Options::isMaxBufferSettingInBounds(arg))
-        throw RPCError(QString("Invalid maxbuffer, please specify an integer in the range [%1, %2]").arg(Options::maxBufferMin).arg(Options::maxBufferMax));
-    emit srvmgr->requestMaxBufferChange(Options::clampMaxBufferSetting(arg));
-    emit c->sendResult(m.id, true);
 }
 void AdminServer::rpc_shutdown(Client *c, const RPC::Message &m)
 {
@@ -1792,15 +1817,15 @@ HEY_COMPILER_PUT_STATIC_HERE(AdminServer::StaticData::registry){
     { {"addpeer",                           true,               false,    PR{0,0},      KS{"host","tcp","ssl"} }, MP(rpc_addpeer) },
     { {"ban",                               true,               false,    PR{1,UNLIMITED},         {} },          MP(rpc_ban) },
     { {"banpeer",                           true,               false,    PR{1,UNLIMITED},         {} },          MP(rpc_banpeer) },
+    { {"bitcoind_throttle",                 true,               false,    PR{0,3},                 {} },          MP(rpc_bitcoind_throttle) },
     { {"clients",                           true,               false,    PR{0,0},                 {} },          MP(rpc_clients) },
     { {"getinfo",                           true,               false,    PR{0,0},                 {} },          MP(rpc_getinfo) },
     { {"kick",                              true,               false,    PR{1,UNLIMITED},         {} },          MP(rpc_kick) },
     { {"listbanned",                        true,               false,    PR{0,0},                 {} },          MP(rpc_listbanned) },
     { {"loglevel",                          true,               false,    PR{1,1},                 {} },          MP(rpc_loglevel) },
-    { {"maxbuffer",                         true,               false,    PR{0,0},                 {} },          MP(rpc_maxbuffer) },
+    { {"maxbuffer",                         true,               false,    PR{0,1},                 {} },          MP(rpc_maxbuffer) },
     { {"peers",                             true,               false,    PR{0,0},                 {} },          MP(rpc_peers) },
     { {"rmpeer",                            true,               false,    PR{1,UNLIMITED},         {} },          MP(rpc_rmpeer) },
-    { {"setmaxbuffer",                      true,               false,    PR{1,1},                 {} },          MP(rpc_setmaxbuffer) },
     { {"shutdown",                          true,               false,    PR{0,0},                 {} },          MP(rpc_shutdown) },
     { {"stop",                              true,               false,    PR{0,0},                 {} },          MP(rpc_shutdown) }, // alias for 'shutdown'
     { {"unban",                             true,               false,    PR{1,UNLIMITED},         {} },          MP(rpc_unban) },

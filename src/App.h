@@ -71,6 +71,11 @@ public slots:
     /// from any thread and/or to use a Qt::DirectConnection here.
     void on_requestMaxBufferChange(int maxBufferBytes);
 
+    /// SrvMgr is connected to this when AdminServer requests a param change.  If arguments are out of range,
+    /// this call has no effect.  Otherwise it updates the app-global Options object.  It is safe to call this
+    /// from any thread and/or to use a Qt::DirectConnection here.
+    void on_bitcoindThrottleParamsChange(int hi, int lo, int decay);
+
 private slots:
     void on_setVerboseDebug(bool);
     void on_setVerboseTrace(bool);

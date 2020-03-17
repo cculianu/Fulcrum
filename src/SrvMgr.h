@@ -121,6 +121,10 @@ signals:
     /// - Each ServerBase's applyMaxBufferToAllClients (via an AutoConnection)
     void requestMaxBufferChange(int newMaxBuffer);
 
+    /// Emitted by the AdminServer, connected to:
+    /// - App::on_bitcoindThrottleParamsChange (via a DirectConnection)
+    void requestBitcoindThrottleParamsChange(int hi, int lo, int decay);
+
 protected:
     Stats stats() const override;
 

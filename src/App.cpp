@@ -759,3 +759,12 @@ void App::on_requestMaxBufferChange(int m)
     else
         Warning() << __func__ << ": " << m << " is out of range, ignoring new max_buffer setting";
 }
+
+void App::on_bitcoindThrottleParamsChange(int hi, int lo, int decay)
+{
+    Options::BdReqThrottleParams p{hi, lo, decay};
+    if (p.isValid())
+        options->bdReqThrottleParams.store(p);
+    else
+        Warning() << __func__ << ": arguments out of range, ignoring new bitcoind_throttle setting";
+}

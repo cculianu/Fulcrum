@@ -37,6 +37,8 @@ SrvMgr::SrvMgr(const std::shared_ptr<const Options> & options,
     connect(this, &SrvMgr::liftIPBan, this, &SrvMgr::on_liftIPBan);
     connect(this, &SrvMgr::banPeersWithSuffix, this, &SrvMgr::on_banPeersWithSuffix);
     connect(this, &SrvMgr::liftPeerSuffixBan, this, &SrvMgr::on_liftPeerSuffixBan);
+    connect(this, &SrvMgr::requestMaxBufferChange, app(), &App::on_requestMaxBufferChange, Qt::DirectConnection);
+    connect(this, &SrvMgr::requestBitcoindThrottleParamsChange, app(), &App::on_bitcoindThrottleParamsChange, Qt::DirectConnection);
 }
 
 SrvMgr::~SrvMgr()
@@ -128,7 +130,6 @@ void SrvMgr::startServers()
         connect(this, &SrvMgr::kickByAddress, srv, &ServerBase::killClientsByAddress);
 
         // max_buffer changes
-        connect(this, &SrvMgr::requestMaxBufferChange, app(), &App::on_requestMaxBufferChange, Qt::DirectConnection);
         connect(this, &SrvMgr::requestMaxBufferChange, srv, &ServerBase::applyMaxBufferToAllClients);
 
         if (peermgr) {
