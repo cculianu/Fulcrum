@@ -29,7 +29,7 @@
 #include <QVariantMap>
 
 #include <algorithm>
-#include <atomic>
+#include <mutex>
 #include <optional>
 #include <tuple>
 
@@ -139,10 +139,24 @@ public:
         int hi = defaultBDReqHi,             ///< hi - hi water mark (threshold), PAUSE client processing
             lo = defaultBDReqLo,             ///< lo - lo water mark (threashold), RESUME client  processing
             decay = defaultBDReqDecayPerSec; ///< decay - how much to decay from the bitcoind request counter, per second
-        bool isValid() const;
+        bool isValid() const noexcept;
+    };
+    // Atomic version of above. We could't use C++ atomic here because GCC 7.3.x lacks support for std::atomic<struct>.
+    class AtomicBdReqThrottleParams : protected BdReqThrottleParams
+    {
+        mutable std::mutex mut{};
+    public:
+        BdReqThrottleParams load() const {
+            std::lock_guard<std::mutex> l(mut);
+            return *this;
+        }
+        void store(const BdReqThrottleParams &p) {
+            std::lock_guard<std::mutex> l(mut);
+            std::tie(hi, lo, decay) = std::tuple(p.hi, p.lo, p.decay);
+        }
     };
     /// Comes from a triplet in config, if specified e.g.: "bitcoind_throttle = 50, 20, 10"
-    std::atomic<BdReqThrottleParams> bdReqThrottleParams = BdReqThrottleParams{}; ///< NB: C++ atomic here is weird. Need to initialize it like this otherwise defaults don't take hold.
+    AtomicBdReqThrottleParams bdReqThrottleParams;
 };
 
 /// A class encapsulating a simple read-only config file format.  The format is similar to the bitcoin.conf format

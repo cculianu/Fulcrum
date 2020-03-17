@@ -124,7 +124,7 @@ QVariantMap Options::toMap() const
     return m;
 }
 
-bool Options::BdReqThrottleParams::isValid() const
+bool Options::BdReqThrottleParams::isValid() const noexcept
 {
     return hi >= lo && hi >= minBDReqHi && hi <= maxBDReqHi && lo >= minBDReqLo && lo <= maxBDReqLo
             && decay >= minBDReqDecayPerSec && decay <= maxBDReqDecayPerSec;
