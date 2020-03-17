@@ -424,6 +424,7 @@ namespace RPC {
             if (message.isError()) {
                 // error message
                 ++nErrorReplies;
+                idMethodMap.remove(message.id); // don't leak the request -- an error response is an answer! Remove from map.
                 emit gotErrorMessage(id, message);
             } else if (message.isNotif()) {
                 try {
