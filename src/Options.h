@@ -130,6 +130,19 @@ public:
     Interface torProxy = {QHostAddress::SpecialAddress::LocalHost, 9050};  // tor_proxy e.g. 127.0.0.1:9050
     QString torUser, torPass;  // tor_user, tor_pass in config -- most tor installs have this blank
 
+    static constexpr int defaultBDReqHi = 50, defaultBDReqLo = 20, defaultBDReqDecayPerSec = 10;
+    static constexpr int maxBDReqHi = 1000, maxBDReqLo = 950, maxBDReqDecayPerSec = 999;
+    static constexpr int minBDReqHi = 5, minBDReqLo = 1, minBDReqDecayPerSec = 1;
+    /// BitcoinD Request throttling params, per client
+    /// See Server.cpp, generic_async_to_bitcoind for how these are used.
+    struct BdReqThrottleParams {
+        int hi = defaultBDReqHi,             ///< hi - hi water mark (threshold), PAUSE client processing
+            lo = defaultBDReqLo,             ///< lo - lo water mark (threashold), RESUME client  processing
+            decay = defaultBDReqDecayPerSec; ///< decay - how much to decay from the bitcoind request counter, per second
+        bool isValid() const;
+    };
+    /// Comes from a triplet in config, if specified e.g.: "bitcoind_throttle = 50, 20, 10"
+    std::atomic<BdReqThrottleParams> bdReqThrottleParams = BdReqThrottleParams{}; ///< NB: C++ atomic here is weird. Need to initialize it like this otherwise defaults don't take hold.
 };
 
 /// A class encapsulating a simple read-only config file format.  The format is similar to the bitcoin.conf format

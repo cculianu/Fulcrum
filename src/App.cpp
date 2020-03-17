@@ -28,8 +28,10 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QRegExp>
 #include <QSslSocket>
 
+#include <array>
 #include <csignal>
 #include <cstdlib>
 #include <list>
@@ -662,6 +664,26 @@ void App::parseArgs()
         options->torUser = conf.value("tor_user");
     if (conf.hasValue("tor_pass"))
         options->torUser = conf.value("tor_pass");
+
+    if (conf.hasValue("bitcoind_throttle")) {
+        const QStringList vals = conf.value("bitcoind_throttle").trimmed().simplified().split(QRegExp("\\W+"), QString::SplitBehavior::SkipEmptyParts);
+        constexpr size_t N = 3;
+        std::array<int, N> parsed = {0,0,0};
+        size_t i = 0;
+        bool ok = false;
+        for (const auto & val : vals) {
+            if (i >= N) { ok = false; break; }
+            parsed[i++] = val.toInt(&ok);
+            if (!ok) break;
+        }
+        Options::BdReqThrottleParams p { parsed[0], parsed[1], parsed[2] };
+        ok = ok && i == N && p.isValid();
+        if (!ok)
+            // failed to parse.. abort...
+            throw BadArgs("Failed to parse \"bitcoind_throttle\" -- out of range or invalid format. Please specify 3 positive integers in range.");
+        Debug() << "config: bitcoind_throttle = " << QString("(hi: %1, lo: %2, decay: %3)").arg(p.hi).arg(p.lo).arg(p.decay);
+        options->bdReqThrottleParams.store(p);
+    }
 
 
     // /Tor params

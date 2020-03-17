@@ -117,8 +117,17 @@ QVariantMap Options::toMap() const
     m["tor_user"] = torUser;
     m["tor_pass"] = torPass;
     // /tor related
+    // bitcoind_throttle params
+    const auto [hi, lo, decay] = bdReqThrottleParams.load();
+    m["bitcoind_throttle"] = QVariantList{ hi, lo, decay };
 
     return m;
+}
+
+bool Options::BdReqThrottleParams::isValid() const
+{
+    return hi >= lo && hi >= minBDReqHi && hi <= maxBDReqHi && lo >= minBDReqLo && lo <= maxBDReqLo
+            && decay >= minBDReqDecayPerSec && decay <= maxBDReqDecayPerSec;
 }
 
 // -- ConfigFile

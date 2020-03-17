@@ -463,9 +463,8 @@ public:
     bool isSubscribedToHeaders = false;
     std::atomic_int nShSubs{0};  ///< the number of unique scripthash subscriptions for this client.
 
+    //bitcoind_throttle counter, per client
     qint64 bdReqCtr = 0;
-    static constexpr qint64 bdReqHi = 50, bdReqLo = 20, bdReqDecayPerSec = 10;
-    static constexpr const char *bdReqTimerName = "BDReqDecayTimer";
 
     static std::atomic_size_t numClients, numClientsMax, numClientsCtr; // number of connected clients: current, max lifetime, accumulated counter
 

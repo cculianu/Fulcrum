@@ -613,9 +613,9 @@ void ServerBase::generic_do_async(Client *c, const RPC::Message::Id &reqId, cons
 }
 
 void ServerBase::generic_async_to_bitcoind(Client *c, const RPC::Message::Id & reqId, const QString &method,
-                                       const QVariantList & params,
-                                       const BitcoinDSuccessFunc & successFunc,
-                                       const BitcoinDErrorFunc & errorFunc)
+                                           const QVariantList & params,
+                                           const BitcoinDSuccessFunc & successFunc,
+                                           const BitcoinDErrorFunc & errorFunc)
 {
     if (UNLIKELY(QThread::currentThread() != c->thread())) {
         // Paranoia, in case I or a future programmer forgets this rule.
@@ -623,18 +623,23 @@ void ServerBase::generic_async_to_bitcoind(Client *c, const RPC::Message::Id & r
                   << " Client thread. This may cause problems if the Client is deleted while submitting the request. FIXME!";
     }
     // Throttling support
-    if (++c->bdReqCtr >= c->bdReqHi && !c->isReadPaused()) {
-        Debug() << c->prettyName() << " has bitcoinD req ctr: " << c->bdReqCtr << ", PAUSING reads from socket";
-        c->setReadPaused(true); // pause reading from this client -- they exceeded threshold.
-        // if timer not already active, start timer to decay ctr over time --
-        c->callOnTimerSoon(1000, Client::bdReqTimerName, [c]{
-            c->bdReqCtr -= std::min(Client::bdReqDecayPerSec, c->bdReqCtr);
-            if (c->isReadPaused() && c->bdReqCtr <= Client::bdReqLo) {
-                Debug() << c->prettyName() << " has bitcoinD req ctr: " << c->bdReqCtr << ", RESUMING reads from socket";
-                c->setReadPaused(false);
-            }
-            return c->bdReqCtr > 0; // return false when ctr reaches 0, which stops the recurring timer
-        });
+    {
+        const int bdReqHi = options->bdReqThrottleParams.load().hi;
+        if (++c->bdReqCtr >= bdReqHi && !c->isReadPaused()) {
+            static constexpr const char *bdReqTimerName = "+BDR_DecayTimer";
+            Debug() << c->prettyName() << " has bitcoinD req ctr: " << c->bdReqCtr << ", PAUSING reads from socket";
+            c->setReadPaused(true); // pause reading from this client -- they exceeded threshold.
+            // if timer not already active, start timer to decay ctr over time --
+            c->callOnTimerSoon(1000, bdReqTimerName, [c, this]{
+                const auto [bdReqHi, bdReqLo, decayPerSec] = options->bdReqThrottleParams.load();
+                c->bdReqCtr -= std::min(qint64(decayPerSec), c->bdReqCtr);
+                if (c->isReadPaused() && c->bdReqCtr <= bdReqLo) {
+                    Debug() << c->prettyName() << " has bitcoinD req ctr: " << c->bdReqCtr << ", RESUMING reads from socket";
+                    c->setReadPaused(false);
+                }
+                return c->bdReqCtr > 0; // return false when ctr reaches 0, which stops the recurring timer
+            });
+        }
     }
     // /Throttling support
     bitcoindmgr->submitRequest(c, newId(), method, params,
