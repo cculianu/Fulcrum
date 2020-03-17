@@ -260,6 +260,7 @@ namespace RPC {
     void ConnectionBase::on_disconnected()
     {
         AbstractConnection::on_disconnected(); // will auto-disconnect all QMetaObject::Connections appearing in connectedConns
+        nUnansweredLifetime += quint64(idMethodMap.size());
         idMethodMap.clear();
     }
 
@@ -270,7 +271,7 @@ namespace RPC {
         m["nResultsSent"] = nResultsSent;
         m["nErrorsSent"] = nErrorsSent;
         m["nNotificationsSent"] = nNotificationsSent;
-        m["nUnansweredRequests"] = idMethodMap.size(); // we may care about this
+        m["nUnansweredRequests"] = nUnansweredLifetime + quint64(idMethodMap.size()); // we may care about this
         m["nErrorReplies"] = nErrorReplies;
         return m;
     }

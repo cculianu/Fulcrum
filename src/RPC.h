@@ -332,7 +332,7 @@ namespace RPC {
 
         QString lastPeerError;
         quint64 nRequestsSent = 0, nNotificationsSent = 0, nResultsSent = 0, nErrorsSent = 0;
-        quint64 nErrorReplies = 0;
+        quint64 nErrorReplies = 0, nUnansweredLifetime = 0;
 
         /// New in 1.0.1: This is latched to true in Client::on_disconnect to signal that the client is being
         /// disconnected and to just throw away any future messages from this client.
