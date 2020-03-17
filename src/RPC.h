@@ -347,6 +347,7 @@ namespace RPC {
 
         void setReadPaused(bool);
         bool isReadPaused() const { return readPaused; }
+        virtual QString pauseReason() const { return "paused"; }
 
     protected:
         /// implements pure virtual from super to handle linefeed-based JSON. When a full line arrives, calls ConnectionBase::processJson

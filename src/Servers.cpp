@@ -1808,6 +1808,11 @@ Client::Client(const RPC::MethodMap & mm, IdMixin::Id id_in, QTcpSocket *sock, i
     Log() << "New " << prettyName(false, false) << ", " << N << Util::Pluralize(" client", N) << " total";
 }
 
+QString Client::pauseReason() const /* override */
+{
+    return QString("bdReqCtr=%1").arg(bdReqCtr);
+}
+
 Client::~Client()
 {
     --numClients;

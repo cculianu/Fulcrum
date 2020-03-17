@@ -505,7 +505,11 @@ namespace RPC {
             // check if paused -- we may get paused inside processJson below
             if (readPaused) {
                 skippedOnReadyRead = true;
-                Debug() << prettyName() << " reads paused, skipping reads in on_readyRead ...";
+                if (Debug::isEnabled()) {
+                    Debug() << prettyName() << " reads paused, skipping on_readyRead "
+                            << " (bufsz: " << QString::number(socket->bytesAvailable()/1024.0, 'f', 3) << " KB, reason: "
+                            << pauseReason() << " ...";
+                }
                 return;
             }
             // /pause check
