@@ -38,6 +38,7 @@
 #include <QTextStream>
 #include <QTimer>
 
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 #include <list>
@@ -544,6 +545,7 @@ namespace {
     }
     BitcoinDMgr::FailF defaultBDFailFunc(Client *c, const RPC::Message::Id &id) {
         return [c, id](const RPC::Message::Id &, const QString &what) {
+            c->bdReqCtr -= std::min(c->bdReqCtr, 1LL); // decrease throttle counter
             emit c->sendError(false, RPC::Code_InternalError, QString("internal error: %1").arg(what), id);
         };
     }
@@ -606,9 +608,25 @@ void ServerBase::generic_async_to_bitcoind(Client *c, const RPC::Message::Id & r
         Warning() << __FUNCTION__ << " is meant to be called from the Client thread only. The current thread is not the"
                   << " Client thread. This may cause problems if the Client is deleted while submitting the request. FIXME!";
     }
+    // Throttling support
+    if (++c->bdReqCtr >= c->bdReqHi && !c->isReadPaused()) {
+        Debug() << c->prettyName() << " has bitcoinD req threshold: " << c->bdReqCtr << ", PAUSING reads from socket";
+        c->setReadPaused(true); // pause reading from this client -- they exceeded threshold.
+        // if timer not already active, start timer to decay ctr over time --
+        c->callOnTimerSoon(1000, Client::bdReqTimerName, [c]{
+            c->bdReqCtr -= std::min(Client::bdReqDecayPerSec, c->bdReqCtr);
+            if (c->isReadPaused() && c->bdReqCtr <= Client::bdReqLo) {
+                Debug() << c->prettyName() << " has bitcoinD req threshold: " << c->bdReqCtr << ", RESUMING reads from socket";
+                c->setReadPaused(false);
+            }
+            return c->bdReqCtr > 0; // return false when ctr reaches 0, which stops the recurring timer
+        });
+    }
+    // /Throttling support
     bitcoindmgr->submitRequest(c, newId(), method, params,
         // success
         [c, reqId, successFunc](const RPC::Message & reply) {
+            c->bdReqCtr -= std::min(c->bdReqCtr, 1LL); // decrease throttle counter
             try {
                 const QVariant result = successFunc ? successFunc(reply) : reply.result(); // if no successFunc specified, use default which just copies the result to the client.
                 emit c->sendResult(reqId, result);
@@ -620,6 +638,7 @@ void ServerBase::generic_async_to_bitcoind(Client *c, const RPC::Message::Id & r
         },
         // error
         [c, reqId, errorFunc](const RPC::Message & errorReply) {
+            c->bdReqCtr -= std::min(c->bdReqCtr, 1LL); // decrease throttle counter
             try {
                 if (errorFunc)
                     errorFunc(errorReply); // this should throw RPCError

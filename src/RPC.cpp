@@ -498,6 +498,13 @@ namespace RPC {
     void LinefeedConnection::on_readyRead()
     {
         Trace() << __FUNCTION__;
+
+        if (readPaused) {
+            skippedOnReadyRead = true;
+            Debug() << prettyName() << " reads paused, skipping reads in on_readyRead ...";
+            return;
+        }
+
         // TODO: This may be slow for large loads.
         // Also TODO: This should have some upper bound on how many times it loops and come back later if too much data is available
         while (socket->canReadLine()) {
@@ -511,7 +518,19 @@ namespace RPC {
             processJson(data);
         }
 
-        memoryWasteDoSProtection();
+        memoryWasteDoSProtection(); // TODO: have this not be mutually exclusive with readPaused above
+    }
+
+    void LinefeedConnection::setReadPaused(bool b)
+    {
+        if (!!b == !!readPaused)
+            return; // already set
+        const bool hadSkips = skippedOnReadyRead;
+        skippedOnReadyRead = false;
+        readPaused = b;
+        if (!readPaused && hadSkips)
+            // we had some skipped on_readyReads() -- resume
+            QTimer::singleShot(0, this, [this]{on_readyRead();} );
     }
 
     void LinefeedConnection::memoryWasteDoSProtection()
