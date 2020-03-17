@@ -22,7 +22,7 @@ GPLv3. See the included `LICENSE.txt` file or [visit gnu.org and read the licens
 
 ### Requirements
 
-- `Qt Core` & `Qt Networking` libraries `5.12.5` or above (I use `5.13.2` myself).  Qt `5.12.4` (or earlier) is not supported.
+- `Qt Core` & `Qt Networking` libraries `5.12.5` or above (I use `5.14.1` myself).  Qt `5.12.4` (or earlier) is not supported.
 - A modern, 64-bit `C++17` compiler.  `clang` is recommended but `G++` also works. MSVC on Windows is not supported (please use `MinGW G++` instead, which ships with Qt Open Source Edition for Windows).
 
 ### How To Compile
@@ -52,7 +52,7 @@ If you are still having trouble, [file an issue here in this github](https://git
 
 #### Linking against the system `librocksdb.so` (experimental)
 
-You may optionally build against the **system rocksdb** (Linux only) if your distribution offers `rocksdb` version `6.5.x` or newer.
+You may optionally build against the **system rocksdb** (Linux only) if your distribution offers `rocksdb` version `6.6.4` or newer.
 
 1. `qmake features=`  (to generate the Makefile **without** the `staticlibs` feature)
 2. `make clean && make -j8` (replace 8 here with the number of cores on your machine)
