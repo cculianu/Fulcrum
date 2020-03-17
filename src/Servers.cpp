@@ -624,13 +624,13 @@ void ServerBase::generic_async_to_bitcoind(Client *c, const RPC::Message::Id & r
     }
     // Throttling support
     if (++c->bdReqCtr >= c->bdReqHi && !c->isReadPaused()) {
-        Debug() << c->prettyName() << " has bitcoinD req threshold: " << c->bdReqCtr << ", PAUSING reads from socket";
+        Debug() << c->prettyName() << " has bitcoinD req ctr: " << c->bdReqCtr << ", PAUSING reads from socket";
         c->setReadPaused(true); // pause reading from this client -- they exceeded threshold.
         // if timer not already active, start timer to decay ctr over time --
         c->callOnTimerSoon(1000, Client::bdReqTimerName, [c]{
             c->bdReqCtr -= std::min(Client::bdReqDecayPerSec, c->bdReqCtr);
             if (c->isReadPaused() && c->bdReqCtr <= Client::bdReqLo) {
-                Debug() << c->prettyName() << " has bitcoinD req threshold: " << c->bdReqCtr << ", RESUMING reads from socket";
+                Debug() << c->prettyName() << " has bitcoinD req ctr: " << c->bdReqCtr << ", RESUMING reads from socket";
                 c->setReadPaused(false);
             }
             return c->bdReqCtr > 0; // return false when ctr reaches 0, which stops the recurring timer
