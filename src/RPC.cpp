@@ -499,15 +499,16 @@ namespace RPC {
     {
         Trace() << __FUNCTION__;
 
-        if (readPaused) {
-            skippedOnReadyRead = true;
-            Debug() << prettyName() << " reads paused, skipping reads in on_readyRead ...";
-            return;
-        }
-
         // TODO: This may be slow for large loads.
         // Also TODO: This should have some upper bound on how many times it loops and come back later if too much data is available
         while (socket->canReadLine()) {
+            // check if paused -- we may get paused inside processJson below
+            if (readPaused) {
+                skippedOnReadyRead = true;
+                Debug() << prettyName() << " reads paused, skipping reads in on_readyRead ...";
+                return;
+            }
+            // /pause check
             auto data = socket->readLine();
             nReceived += data.length();
             if (Trace::isEnabled()) // may be slow, so conditional on trace mode
@@ -517,8 +518,8 @@ namespace RPC {
             }
             processJson(data);
         }
-
-        memoryWasteDoSProtection(); // TODO: have this not be mutually exclusive with readPaused above
+        if (!readPaused)
+            memoryWasteDoSProtection(); // TODO: have this not be mutually exclusive with readPaused above
     }
 
     void LinefeedConnection::setReadPaused(bool b)
