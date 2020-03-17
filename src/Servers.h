@@ -187,6 +187,10 @@ public slots:
     /// the SrvMgr automatically connects us to.
     void onPeersUpdated(const PeerInfoList &);
 
+    /// Connected to SrvMgr::requestMaxBufferChange; Iterates through all clients, applying the newMaxBuffer.
+    /// If the new setting is out of bounds, has no effect. See: Options::maxBufferMin & Options::maxBufferMax.
+    void applyMaxBufferToAllClients(int newMax);
+
 protected slots:
     void onMessage(IdMixin::Id clientId, const RPC::Message &m);
     void onErrorMessage(IdMixin::Id clientId, const RPC::Message &m);
@@ -399,8 +403,10 @@ private:
     void rpc_kick(Client *, const RPC::Message &);
     void rpc_listbanned(Client *, const RPC::Message &);
     void rpc_loglevel(Client *, const RPC::Message &);
+    void rpc_maxbuffer(Client *, const RPC::Message &);
     void rpc_peers(Client *, const RPC::Message &);
     void rpc_rmpeer(Client *, const RPC::Message &);
+    void rpc_setmaxbuffer(Client *, const RPC::Message &);
     void rpc_shutdown(Client *, const RPC::Message &);
     void rpc_unban(Client *, const RPC::Message &);
     void rpc_unbanpeer(Client *, const RPC::Message &);

@@ -398,7 +398,7 @@ Client *
 ServerBase::newClient(QTcpSocket *sock)
 {
     const auto clientId = newId();
-    auto ret = clientsById[clientId] = new Client(rpcMethods(), clientId, sock, options->maxBuffer);
+    auto ret = clientsById[clientId] = new Client(rpcMethods(), clientId, sock, options->maxBuffer.load());
     const auto addr = ret->peerAddress();
     // if deleted, we need to purge it from map
     auto on_destroyed = [clientId, addr, this](QObject *o) {
@@ -463,6 +463,20 @@ void ServerBase::killClientsByAddress(const QHostAddress &address)
     if (ctr)
         Debug() << "Killed " << ctr << Util::Pluralize(" client", ctr) << " matching address: " << address.toString();
 }
+// public slot
+void ServerBase::applyMaxBufferToAllClients(int newMax)
+{
+    if (!Options::isMaxBufferSettingInBounds(newMax))
+        return;
+    newMax = Options::clampMaxBufferSetting(newMax);
+    int ctr = 0;
+    for (auto & client : clientsById) {
+        client->setMaxBuffer(newMax);
+        ++ctr;
+    }
+    Debug() << "Applied new max_buffer setting of " << newMax << " to " << ctr << Util::Pluralize(" client", ctr);
+}
+
 
 void ServerBase::onMessage(IdMixin::Id clientId, const RPC::Message &m)
 {
@@ -1671,7 +1685,7 @@ void AdminServer::rpc_listbanned(Client *c, const RPC::Message &m)
 void AdminServer::rpc_loglevel(Client *c, const RPC::Message &m)
 {
     bool ok;
-    int level = m.paramsList().front().toInt(&ok);
+    const int level = m.paramsList().front().toInt(&ok);
     if (!ok || level < 0 || level > 2)
         throw RPCError("Invalid log level, please specify an integer from 0 to 2");
     App *app = ::app();
@@ -1691,6 +1705,10 @@ void AdminServer::rpc_loglevel(Client *c, const RPC::Message &m)
         break;
     }
     emit c->sendResult(m.id, true);
+}
+void AdminServer::rpc_maxbuffer(Client *c, const RPC::Message &m)
+{
+    emit c->sendResult(m.id, options->maxBuffer.load());
 }
 void AdminServer::rpc_peers(Client *c, const RPC::Message &m)
 {
@@ -1715,6 +1733,15 @@ void AdminServer::rpc_rmpeer(Client *c, const RPC::Message &m)
         emit srvmgr->kickPeersWithSuffix(suffix);
     }
     emit c->sendResult(m.id, bool(ctr));
+}
+void AdminServer::rpc_setmaxbuffer(Client *c, const RPC::Message &m)
+{
+    bool ok;
+    const int arg = m.paramsList().front().toInt(&ok);
+    if (!ok || !Options::isMaxBufferSettingInBounds(arg))
+        throw RPCError(QString("Invalid maxbuffer, please specify an integer in the range [%1, %2]").arg(Options::maxBufferMin).arg(Options::maxBufferMax));
+    emit srvmgr->requestMaxBufferChange(Options::clampMaxBufferSetting(arg));
+    emit c->sendResult(m.id, true);
 }
 void AdminServer::rpc_shutdown(Client *c, const RPC::Message &m)
 {
@@ -1765,8 +1792,10 @@ HEY_COMPILER_PUT_STATIC_HERE(AdminServer::StaticData::registry){
     { {"kick",                              true,               false,    PR{1,UNLIMITED},         {} },          MP(rpc_kick) },
     { {"listbanned",                        true,               false,    PR{0,0},                 {} },          MP(rpc_listbanned) },
     { {"loglevel",                          true,               false,    PR{1,1},                 {} },          MP(rpc_loglevel) },
+    { {"maxbuffer",                         true,               false,    PR{0,0},                 {} },          MP(rpc_maxbuffer) },
     { {"peers",                             true,               false,    PR{0,0},                 {} },          MP(rpc_peers) },
     { {"rmpeer",                            true,               false,    PR{1,UNLIMITED},         {} },          MP(rpc_rmpeer) },
+    { {"setmaxbuffer",                      true,               false,    PR{1,1},                 {} },          MP(rpc_setmaxbuffer) },
     { {"shutdown",                          true,               false,    PR{0,0},                 {} },          MP(rpc_shutdown) },
     { {"stop",                              true,               false,    PR{0,0},                 {} },          MP(rpc_shutdown) }, // alias for 'shutdown'
     { {"unban",                             true,               false,    PR{1,UNLIMITED},         {} },          MP(rpc_unban) },

@@ -37,8 +37,6 @@ public:
 
     explicit AbstractConnection(IdMixin::Id id, QObject *parent = nullptr, qint64 maxBuffer = DEFAULT_MAX_BUFFER);
 
-    const qint64 MAX_BUFFER;
-
     /// true if we are connected
     virtual bool isGood() const;
     /// true if we are connected but haven't received any response in some time
@@ -46,7 +44,7 @@ public:
     /// true if we got a malformed reply from the server
     virtual bool isBad() const { return status == Bad; }
 
-    // The below 4 can only be called from the same thread that this instance lives in.
+    // The below 6 can only be called from the same thread that this instance lives in.
     // They will only return valid results if this->thread() == QThread::currentThread(), and if socket != nullptr.
     // Otherwise, default-constructed values are returned.
     QHostAddress localAddress() const;
@@ -55,6 +53,11 @@ public:
     quint16 peerPort() const;
     /// Returns true if this->socket and this->socket->proxy() is not DefaultProxy. Call this from this->thread().
     bool isUsingCustomProxy() const;
+    /// Returns the current maxBuffer setting
+    qint64 maxBuffer() const { return MAX_BUFFER; }
+    /// Attempts to set the new max buffer. Can only be called from this object's thread. Clamps the specified value
+    /// to [Options::maxBufferMin, Options::maxBufferMax].
+    void setMaxBuffer(qint64 maxBytes);
 
     /// Returns true if the connection is via SSL. The default implementation of this function attempts to dynamic_cast
     /// `socket` to QSslSocket, and if it succeeds, assumes the connection is SSL and returns true.  False is returned
@@ -82,6 +85,8 @@ protected:
     };
 
     void socketConnectSignals(); ///< call this from derived classes to connect socket error and stateChanged to this
+
+    qint64 MAX_BUFFER; // only read this from this thread.
 
     std::atomic<Status> status = NotConnected;
     /// timestamp in ms from Util::getTime() when the server was last good

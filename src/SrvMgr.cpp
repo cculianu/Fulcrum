@@ -18,6 +18,7 @@
 //
 #include "SrvMgr.h"
 
+#include "App.h"
 #include "BitcoinD.h"
 #include "PeerMgr.h"
 #include "Servers.h"
@@ -125,6 +126,10 @@ void SrvMgr::startServers()
         // kicking
         connect(this, &SrvMgr::kickById, srv, qOverload<IdMixin::Id>(&ServerBase::killClient));
         connect(this, &SrvMgr::kickByAddress, srv, &ServerBase::killClientsByAddress);
+
+        // max_buffer changes
+        connect(this, &SrvMgr::requestMaxBufferChange, app(), &App::on_requestMaxBufferChange, Qt::DirectConnection);
+        connect(this, &SrvMgr::requestMaxBufferChange, srv, &ServerBase::applyMaxBufferToAllClients);
 
         if (peermgr) {
             connect(srv, &ServerBase::gotRpcAddPeer, peermgr.get(), &PeerMgr::on_rpcAddPeer);

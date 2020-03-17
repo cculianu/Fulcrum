@@ -584,10 +584,10 @@ void App::parseArgs()
     if (conf.hasValue("max_buffer")) {
         bool ok;
         int mb = conf.intValue("max_buffer", -1, &ok);
-        if (!ok || mb < options->maxBufferMin || mb > options->maxBufferMax)
+        if (!ok || !options->isMaxBufferSettingInBounds(mb))
             throw BadArgs(QString("max_buffer: bad value. Specify a value in the range [%1, %2]")
                           .arg(options->maxBufferMin).arg(options->maxBufferMax));
-        options->maxBuffer = mb;
+        options->maxBuffer.store( mb );
         // log this later in case we are in syslog mode
         Util::AsyncOnObject(this, [mb]{ Debug() << "config: max_buffer = " << mb; });
     }
@@ -728,4 +728,12 @@ void App::on_setVerboseTrace(bool b)
     options->verboseTrace = b;
     if (b)
         options->verboseDebug = true;
+}
+
+void App::on_requestMaxBufferChange(int m)
+{
+    if (Options::isMaxBufferSettingInBounds(m))
+        options->maxBuffer.store( Options::clampMaxBufferSetting(m) );
+    else
+        Warning() << __func__ << ": " << m << " is out of range, ignoring new max_buffer setting";
 }

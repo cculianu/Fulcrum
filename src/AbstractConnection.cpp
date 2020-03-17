@@ -17,18 +17,21 @@
 // <https://www.gnu.org/licenses/>.
 //
 #include "AbstractConnection.h"
+#include "Options.h"
 #include "Util.h"
 #include <QTcpSocket>
 #include <QSslSocket>
 #include <QHostAddress>
 #include <QNetworkProxy>
 
+#include <algorithm>
 #include <cassert>
 
-AbstractConnection::AbstractConnection(IdMixin::Id id_in, QObject *parent, qint64 maxBuffer)
-    : QObject(parent), IdMixin(id_in), MAX_BUFFER(maxBuffer)
+AbstractConnection::AbstractConnection(IdMixin::Id id_in, QObject *parent, qint64 maxBuffer_)
+    : QObject(parent), IdMixin(id_in)
 {
     assert(qobj()); // Runtime check that derived class followed the rules outlined at the top of Mixins.h
+    setMaxBuffer(maxBuffer_);
 }
 
 
@@ -101,6 +104,15 @@ bool AbstractConnection::isUsingCustomProxy() const
         ret = socket->proxy().type() != QNetworkProxy::DefaultProxy;
     }
     return ret;
+}
+void AbstractConnection::setMaxBuffer(qint64 maxBytes)
+{
+    MAX_BUFFER = Options::clampMaxBufferSetting(int(maxBytes));
+    if (socket && thread() == QThread::currentThread()) {
+        socket->setReadBufferSize(MAX_BUFFER);
+        if (Debug::isEnabled())
+            Debug() << prettyName() << " set max_buffer to " << MAX_BUFFER << ", socket says: " << socket->readBufferSize();
+    }
 }
 
 void AbstractConnection::do_disconnect(bool graceful)

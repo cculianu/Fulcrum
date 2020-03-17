@@ -65,6 +65,12 @@ signals:
     void setVerboseDebug(bool); ///< if true, sets verbose debug. If false, clears both verboseTrace and verboseDebug
     void setVerboseTrace(bool); ///< if true, implicitly sets verboseDebug as well
 
+public slots:
+    /// SrvMgr is connected to this when it requests a maxBuffer change.  If maxBufferBytes is out of range,
+    /// this call has no effect.  Otherwise it updates the app-global Options object.  It is safe to call this
+    /// from any thread and/or to use a Qt::DirectConnection here.
+    void on_requestMaxBufferChange(int maxBufferBytes);
+
 private slots:
     void on_setVerboseDebug(bool);
     void on_setVerboseTrace(bool);

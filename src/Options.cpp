@@ -104,7 +104,7 @@ QVariantMap Options::toMap() const
     for (const auto & sn : subnetsExcludedFromPerIPLimits)
         l.push_back(sn.toString());
     m["subnets_to_exclude_from_per_ip_limits"] = l;
-    m["max_buffer"] = maxBuffer;
+    m["max_buffer"] = maxBuffer.load();
     m["max_history"] = maxHistory;
     m["workqueue"] = workQueue;
     m["worker_threads"] = workerThreads;

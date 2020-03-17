@@ -60,9 +60,12 @@ def main():
     listbanned = subparsers.add_parser('listbanned', help="Print the list of banned IP addresses and peer hostnames", aliases=['banlist'])
     loglevel = subparsers.add_parser('loglevel', help="Set the server's logging verbosity")
     loglevel.add_argument('level', metavar='level', nargs=1, help="One of: 'normal', 'debug', or 'trace'")
+    maxbuffer = subparsers.add_parser('maxbuffer', help="Query the current server max_buffer setting")
     peers = subparsers.add_parser('peers', help="Print peering information")
     rmpeer = subparsers.add_parser('rmpeer', help="Remove peers by hostname suffix")
     rmpeer.add_argument('hostnames', metavar='hostname', nargs='+', help="A hostname or hostname suffix e.g. somehost.com or *some.host.com.")
+    setmaxbuffer = subparsers.add_parser('setmaxbuffer', help="Set the server's max_buffer setting")
+    setmaxbuffer.add_argument('bytes', metavar='bytes', nargs=1, help='The new desired max_buffer setting in bytes. Must be >= 64KiB and <= 100MiB.')
     stop = subparsers.add_parser('stop', help="Gracefully shut down the server", aliases=['shutdown'])
     unban = subparsers.add_parser('unban', help="Unban IP addresses")
     unban.add_argument('ips', metavar='ipaddress', nargs='+', help="Specify an existing banned IP address to unban.")
@@ -111,7 +114,10 @@ def main():
     elif command == 'clients' and not JSON:
         response_handler = clients_handler
 
-    elif command in ('kick', 'ban', 'banpeer', 'unban', 'unbanpeer', 'rmpeer', 'loglevel'):
+    elif command ==  'maxbuffer' and not JSON:
+        response_handler = lambda x: x  # just echo back the result
+
+    elif command in ('kick', 'ban', 'banpeer', 'unban', 'unbanpeer', 'rmpeer', 'loglevel', 'setmaxbuffer'):
         extratxt = ''
         if command in ('kick', 'ban'):
             command_params = args.id_or_ip
@@ -133,6 +139,8 @@ possibly peer with this Fulcrum server, then please use the 'banpeer' command.
                 sys.exit(1)
             command_params = [levels[args.level[0]]]
             extratxt = f' -> {args.level[0]}'
+        elif command == 'setmaxbuffer':
+            command_params = [args.bytes[0]]
 
         if not JSON:
             def handler(r):

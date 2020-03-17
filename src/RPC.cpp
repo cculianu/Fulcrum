@@ -237,8 +237,8 @@ namespace RPC {
         return ret;
     }
 
-    ConnectionBase::ConnectionBase(const MethodMap & methods, IdMixin::Id id_in, QObject *parent, qint64 maxBuffer)
-        : AbstractConnection(id_in, parent, maxBuffer), methods(methods)
+    ConnectionBase::ConnectionBase(const MethodMap & methods, IdMixin::Id id_in, QObject *parent, qint64 maxBuffer_)
+        : AbstractConnection(id_in, parent, maxBuffer_), methods(methods)
     {
     }
 
@@ -527,6 +527,12 @@ namespace RPC {
 
     void LinefeedConnection::setReadPaused(bool b)
     {
+#ifndef NDEBUG
+        if (this->thread() != QThread::currentThread()) {
+            Error() << __func__ << ": ERROR -- called from a thread outside this object's thread! FIXME!";
+            return;
+        }
+#endif
         if (!!b == !!readPaused)
             return; // already set
         const bool hadSkips = skippedOnReadyRead;

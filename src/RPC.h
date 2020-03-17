@@ -345,6 +345,7 @@ namespace RPC {
         using ConnectionBase::ConnectionBase;
         ~LinefeedConnection() override; ///< for vtable
 
+        // the below two can/should only be called from the same thread as this object's thread
         void setReadPaused(bool);
         bool isReadPaused() const { return readPaused; }
 

@@ -116,6 +116,11 @@ signals:
     /// searching for a match).
     void liftPeerSuffixBan(const QString &);
 
+    /// Emitted by the AdminServer, connected to:
+    /// - App::on_requestMaxBufferChange (via a DirectConnection)
+    /// - Each ServerBase's applyMaxBufferToAllClients (via an AutoConnection)
+    void requestMaxBufferChange(int newMaxBuffer);
+
 protected:
     Stats stats() const override;
 

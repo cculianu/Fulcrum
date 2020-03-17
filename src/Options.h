@@ -28,6 +28,7 @@
 #include <QStringList>
 #include <QVariantMap>
 
+#include <algorithm>
 #include <atomic>
 #include <optional>
 #include <tuple>
@@ -109,10 +110,13 @@ public:
     bool isAddrInPerIPLimitExcludeSet(const QHostAddress & addr, Subnet * matched = nullptr) const;
 
     // Max history & max buffer
-    static constexpr int defaultMaxBuffer = 2100000, maxBufferMin = 64000, maxBufferMax = 100000000;
+    static constexpr int defaultMaxBuffer = 4000000, maxBufferMin = 64000, maxBufferMax = 100000000;
     static constexpr int defaultMaxHistory = 125000, maxHistoryMin = 1000, maxHistoryMax = 100000000;
 
-    int maxBuffer = defaultMaxBuffer;
+    static constexpr bool isMaxBufferSettingInBounds(int m) { return m >= maxBufferMin && m <= maxBufferMax; }
+    static constexpr int clampMaxBufferSetting(int m) { return std::max(std::min(m, maxBufferMax), maxBufferMin); }
+
+    std::atomic_int maxBuffer = defaultMaxBuffer; ///< this can be set at runtime by FulcrumAdmin as of Fulcrum 1.0.4, hence why it's an atomic.
     int maxHistory = defaultMaxHistory;
 
     // Work queue options as configured by user; these are the saved values from config (if any) and are not
