@@ -42,7 +42,7 @@ public:
     /// true if we are connected but haven't received any response in some time
     virtual bool isStale() const;
     /// true if we got a malformed reply from the server
-    virtual bool isBad() const { return status == Bad; }
+    inline bool isBad() const { return status == Bad; }
 
     // The below 6 can only be called from the same thread that this instance lives in.
     // They will only return valid results if this->thread() == QThread::currentThread(), and if socket != nullptr.

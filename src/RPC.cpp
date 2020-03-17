@@ -501,7 +501,7 @@ namespace RPC {
 
         // TODO: This may be slow for large loads.
         // Also TODO: This should have some upper bound on how many times it loops and come back later if too much data is available
-        while (socket->canReadLine()) {
+        while (!isBad() && socket && socket->canReadLine()) {
             // check if paused -- we may get paused inside processJson below
             if (readPaused) {
                 skippedOnReadyRead = true;
@@ -509,7 +509,7 @@ namespace RPC {
                     Debug() << prettyName() << " reads paused, skipping on_readyRead"
                             << " (bufsz: " << QString::number(socket->bytesAvailable()/1024.0, 'f', 1) << " KB) ...";
                 }
-                return;
+                break;
             }
             // /pause check
             auto data = socket->readLine();
@@ -521,8 +521,21 @@ namespace RPC {
             }
             processJson(data);
         }
-        if (!readPaused)
-            memoryWasteDoSProtection(); // TODO: have this not be mutually exclusive with readPaused above
+        if (isBad()) { // this may have been set again by processJson() above
+            if (Debug::isEnabled()) {
+                Debug() << prettyName() << " is now bad, ignoring read (buf: "
+                        << QString::number((socket ? socket->bytesAvailable() : 0)/1024., 'f', 1) << " KB)";
+            }
+            return;
+        }
+
+        // This checks if the client's socket->bytesAvailable() stays >= MAX_BUFFER for longer than 5 seconds,
+        // in which case the client is kicked.  Note that a client's bytesAvailable() won't go down if they
+        // are being throttled due to many bitcoind requests, but only the strange 3.7.11 clients ever hit MAX_BUFFER
+        // here, so it's ok for non-misbehaving, *typical* EC clients to have this check exist here, and it guards
+        // against misbehaving clients.  The hope is that by kicking abusing clients, client lib authors will adjust
+        // their code.
+        memoryWasteDoSProtection();
     }
 
     void LinefeedConnection::setReadPaused(bool b)
@@ -545,56 +558,50 @@ namespace RPC {
 
     void LinefeedConnection::memoryWasteDoSProtection()
     {
-        constexpr const char *memoryWasteTimer = "memoryWasteTimer";
-        constexpr int defMemoryWasteThreshold = 256 * 1024; // 256 KiB
+        constexpr const char *memoryWasteTimer = "MemoryWasteDoSTimer";
         constexpr int memoryWasteTimeout = 5000; /// 5 seconds
-        constexpr bool debugPrint = false;
         // we declare this lamba this way with no captures and static as a performance optimization for the common case
         // where this code passes through doing nothing.  We don't want to be pushing lambdas we never used onto
         // the stack every time this function is called.
         static const auto StopTimer = [](LinefeedConnection *me, qint64 avail) {
             me->memoryWasteTimerActive = false;
             me->stopTimer(memoryWasteTimer);
-            if constexpr (debugPrint)
-                Debug() << "Memory waste timer stopped for " << me->id << " from " << me->peerAddress().toString()
+            if (Debug::isEnabled())
+                Debug() << "Memory waste timer STOPPED for " << me->id << " from " << me->peerAddress().toString()
                         << ", read buffer now: " << avail;
         };
+        memoryWasteThreshold = MAX_BUFFER;
         if (memoryWasteThreshold < 0) {
-            // uninitialized.. initialize
-            memoryWasteThreshold = int(qMin(qint64(defMemoryWasteThreshold), MAX_BUFFER));
-            assert(memoryWasteThreshold >= 0 && memoryWasteThreshold <= MAX_BUFFER);
+            Error() << __func__ << ": MAX_BUFFER is < 0 -- fix me!";
+            return;
         }
         // DoS protection logic below for memory exhaustion attacks.  If a client connects from many IPs and with
         // many clients a memory exhaustion attack is possible.  The attack would simply involve filling our buffers
         // and never sending a newline.  The below code detects the situation and disconnects clients whereby too much
-        // time has expired (5 seconds) with extant unprocessed read buffers past the 256KB threshold (or MAX_BUFFER,
-        // whichever is smaller).
-        if (const auto avail = socket->bytesAvailable(); UNLIKELY(avail > MAX_BUFFER)) {
-            // this branch can't normally be taken because super class calls setReadBufferSize() on the socket
-            // in on_connected, but we leave this code here in the interests of defensive programming.
-            Warning() << prettyName() << " fatal error: " << QString("Peer has sent us more than %1 bytes without a newline! Bad peer?").arg(MAX_BUFFER);
-            do_disconnect();
-            status = Bad;
-        } else if (UNLIKELY(!memoryWasteTimerActive && avail >= memoryWasteThreshold)) {
+        // time has expired (5 seconds) with extant unprocessed read buffers at or past the MAX_BUFFER threshold.
+        if (const qint64 avail = socket ? socket->bytesAvailable() : 0;
+                UNLIKELY(!memoryWasteTimerActive && avail >= memoryWasteThreshold)) {
             memoryWasteTimerActive = true;
             callOnTimerSoonNoRepeat(memoryWasteTimeout, memoryWasteTimer, [this]{
                 if (!memoryWasteTimerActive)
                     Warning() << "Memory waste timer was not active but the timer lambda fired! FIXME!";
                 memoryWasteTimerActive = false;
-                const auto avail = socket ? socket->bytesAvailable() : 0;
+                const qint64 avail = socket ? socket->bytesAvailable() : 0;
                 if (avail >= memoryWasteThreshold) {
                     Warning(Log::Magenta)
                             << "Client " << this->id << " from " << this->peerAddress().toString()
                             << " exceeded its \"memory waste threshold\" by filling our receive buffer with "
-                            << avail << " bytes without a newline, and then sitting idle in excess of "
-                            << QString::number(memoryWasteTimeout/1e3, 'f', 1) << " seconds -- disconnecting!";
-                    do_disconnect();
+                            << avail << " bytes for longer than "
+                            << QString::number(memoryWasteTimeout/1e3, 'f', 1) << " seconds -- kicking client!";
+                    // the below also sets ignoreIncomingMessage = true iff this is of type Client *
+                    emit sendError(true, RPC::ErrorCodes::Cose_App_ExcessiveFlood,
+                                   "Excessive flood, please throttle your client implementation to not do this");
                     status = Bad;
                 } else
                     StopTimer(this, avail);
             });
-            if constexpr (debugPrint)
-                Debug() << "Memory waste timer started for " << this->id << " from " << this->peerAddress().toString() << ", read buffer size: " << avail;
+            if (Debug::isEnabled())
+                Debug() << "Memory waste timer STARTED for " << this->id << " from " << this->peerAddress().toString() << ", read buffer size: " << avail;
         } else if (UNLIKELY(memoryWasteTimerActive && avail < memoryWasteThreshold)) {
             StopTimer(this, avail);
         }

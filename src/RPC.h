@@ -58,6 +58,8 @@ namespace RPC {
         Code_App_BadRequest = 1,
         /// Daemon problem
         Code_App_DaemonError = 2,
+        /// Excessive flood
+        Cose_App_ExcessiveFlood = 3,
     };
 
     using KeySet = QSet<QString>;
@@ -356,7 +358,7 @@ namespace RPC {
 
     private:
         bool memoryWasteTimerActive = false;  ///< inticates the DoS protection timer is active, used by memoryWasteDoSProtection
-        int memoryWasteThreshold = -1; ///< gets lazy-initialized in memoryWasteDoSProtection below
+        qint64 memoryWasteThreshold = -1; ///< gets lazy-initialized in memoryWasteDoSProtection below
         void memoryWasteDoSProtection(); ///< must be called from on_readyRead only.
 
         bool readPaused = false;
