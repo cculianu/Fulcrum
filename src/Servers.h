@@ -463,8 +463,6 @@ public:
 
     static std::atomic_size_t numClients, numClientsMax, numClientsCtr; // number of connected clients: current, max lifetime, accumulated counter
 
-    QString pauseReason() const override;
-
 protected:
 
     void do_ping() override;

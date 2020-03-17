@@ -506,9 +506,8 @@ namespace RPC {
             if (readPaused) {
                 skippedOnReadyRead = true;
                 if (Debug::isEnabled()) {
-                    Debug() << prettyName() << " reads paused, skipping on_readyRead "
-                            << " (bufsz: " << QString::number(socket->bytesAvailable()/1024.0, 'f', 1) << " KB, reason: "
-                            << pauseReason() << ") ...";
+                    Debug() << prettyName() << " reads paused, skipping on_readyRead"
+                            << " (bufsz: " << QString::number(socket->bytesAvailable()/1024.0, 'f', 1) << " KB) ...";
                 }
                 return;
             }

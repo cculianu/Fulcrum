@@ -109,7 +109,7 @@ public:
     bool isAddrInPerIPLimitExcludeSet(const QHostAddress & addr, Subnet * matched = nullptr) const;
 
     // Max history & max buffer
-    static constexpr int defaultMaxBuffer = 4000000, maxBufferMin = 64000, maxBufferMax = 100000000;
+    static constexpr int defaultMaxBuffer = 2100000, maxBufferMin = 64000, maxBufferMax = 100000000;
     static constexpr int defaultMaxHistory = 125000, maxHistoryMin = 1000, maxHistoryMax = 100000000;
 
     int maxBuffer = defaultMaxBuffer;
