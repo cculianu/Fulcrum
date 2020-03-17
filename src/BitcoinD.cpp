@@ -295,7 +295,7 @@ void BitcoinD::on_started()
                 return false; // kill timer
             });
         };
-        conns += connect(this, &BitcoinD::lostConnection, this, [SetTimer, this]{
+        conns += connect(this, &BitcoinD::lostConnection, this, [SetTimer]{
             Log() << "Lost connection to bitcoind, will retry every 5 seconds ...";
             SetTimer();
         });
