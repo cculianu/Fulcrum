@@ -31,6 +31,7 @@
 #include <algorithm>
 #include <mutex>
 #include <optional>
+#include <shared_mutex>
 #include <tuple>
 
 
@@ -144,14 +145,14 @@ public:
     // Atomic version of above. We could't use C++ atomic here because GCC 7.3.x lacks support for std::atomic<struct>.
     class AtomicBdReqThrottleParams : protected BdReqThrottleParams
     {
-        mutable std::mutex mut{};
+        mutable std::shared_mutex rwlock;
     public:
-        BdReqThrottleParams load() const {
-            std::lock_guard<std::mutex> l(mut);
+        inline BdReqThrottleParams load() const {
+            std::shared_lock guard(rwlock);
             return *this;
         }
-        void store(const BdReqThrottleParams &p) {
-            std::lock_guard<std::mutex> l(mut);
+        inline void store(const BdReqThrottleParams &p) {
+            std::unique_lock guard(rwlock);
             std::tie(hi, lo, decay) = std::tuple(p.hi, p.lo, p.decay);
         }
     };
