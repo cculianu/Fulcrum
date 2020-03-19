@@ -411,13 +411,21 @@ ServerBase::newClient(QTcpSocket *sock)
         // this whole call is here so that delete client->sock ends up auto-removing the map entry
         // as a convenience.
         Debug() << "Client nested 'on_destroyed' called for " << clientId;
-        auto client = clientsById.take(clientId);
-        if (client) {
-            if (client != c) {
+        if (const auto client = clientsById.take(clientId); client) {
+            // purge from map
+            if (UNLIKELY(client != c))
                 Error() << " client != passed-in pointer to on_destroy in " << __FILE__ << " line " << __LINE__  << " client " << clientId << ". FIXME!";
-            }
             Debug() << "client id " << clientId << " purged from map";
         }
+        assert(c->perIPData);
+        if (UNLIKELY(c->nShSubs < 0))
+            Error() << "nShSubs for client " << c->id << " is " << c->nShSubs << ". FIXME!";
+        // decrement per-IP subs ctr for this client.
+        const auto nSubsIP = c->perIPData->nShSubs -= c->nShSubs;
+        if (UNLIKELY(nSubsIP < 0))
+            Error() << "nShSubs for IP " << addr.toString() << " is " << nSubsIP << ". FIXME!";
+        if (nSubsIP == 0 && c->nShSubs)
+            Debug() << "PerIP: " << addr.toString() << " is no longer subscribed to any scripthashes";
         // tell SrvMgr this client is gone so it can decrement its clients-per-ip count.
         emit clientDisconnected(clientId, addr);
     };
@@ -1151,18 +1159,66 @@ void Server::rpc_blockchain_scripthash_subscribe(Client *c, const RPC::Message &
     QByteArray sh = validateHashHex( l.front().toString() );
     if (sh.length() != HashLen)
         throw RPCError("Invalid scripthash");
-    /// Note: potential race condition here whereby notification can arrive BEFORE the status result. In practice this
-    /// is fine since clients will cope with the situation, but... ideally, fixme.
-    const auto [wasNew, optStatus] = storage->subs()->subscribe(c, sh, [c,method=m.method](const HashX &sh, const StatusHash &status) {
-        QVariant statusHexMaybeNull; // if empty we simply notify as 'null' (this is unlikely in practice but may happen on reorg)
-        if (!status.isEmpty())
-            statusHexMaybeNull = Util::ToHexFast(status);
-        const QByteArray shHex = Util::ToHexFast(sh);
-        emit c->sendNotification(method, QVariantList{shHex, statusHexMaybeNull});
-    });
+
+    const auto CheckSubsLimit = [c, &sh, this](int64_t nShSubs, bool doUnsub) {
+        if (UNLIKELY(nShSubs >= options->maxSubsPerIP)) {
+            if (c->perIPData->isWhitelisted()) {
+                // White-listed, let it go
+                Debug() << c->prettyName(false, false) << " exceeded the per-IP subscribe limit with " << nShSubs
+                        << " subs, but it is whitelisted (subnet: " << c->perIPData->whiteListedSubnet.toString() << ")";
+            } else {
+                // Not white-listed .. unsubscribe and throw an error.
+                Warning() << c->prettyName(false, false) << " exceeded per-IP subscribe limit with " << nShSubs
+                          << " subs, denying  subscribe request";
+                if (doUnsub) {
+                    // unsubscribe client right away
+                    if (LIKELY(storage->subs()->unsubscribe(c, sh))) {
+                        // decrement counters
+                        --c->nShSubs;
+                        --c->perIPData->nShSubs;
+                    } else
+                        // This should never happen but we'll print debug/warning info if it does.
+                        Warning() << c->prettyName(false, false) << " failed to unsubscribe client from a scripthash we just subscribed him to! FIXME!";
+                }
+                throw RPCError("Subscription limit reached", RPC::Code_App_LimitExceeded); // send error to client
+            }
+        }
+    };
+    // First, check the Per-IP subs limit right away before we do anything. This has a potential race condition
+    // with other clients from this IP -- but breaking the limit will be caught in the second check below.
+    // The reason we check twice is we *really* want to avoid creating a zombie sub for this client if we can
+    // avoid it if they are at the limit.
+    CheckSubsLimit( c->perIPData->nShSubs, false ); // may throw RPCError
+
+    SubsMgr::SubscribeResult result;
+    try {
+        /// Note: potential race condition here whereby notification can arrive BEFORE the status result. In practice this
+        /// is fine since clients will cope with the situation, but... ideally, fixme.
+        result = storage->subs()->subscribe(c, sh, [c,method=m.method](const HashX &sh, const StatusHash &status) {
+            QVariant statusHexMaybeNull; // if empty we simply notify as 'null' (this is unlikely in practice but may happen on reorg)
+            if (!status.isEmpty())
+                statusHexMaybeNull = Util::ToHexFast(status);
+            const QByteArray shHex = Util::ToHexFast(sh);
+            emit c->sendNotification(method, QVariantList{shHex, statusHexMaybeNull});
+        });
+    } catch (const SubsMgr::LimitReached &e) {
+        static double lastPrintTime = 0.;
+        if (Util::getTimeSecs() - lastPrintTime > SrvMgr::kMaxSubsAutoKickDelaySecs) {
+            // rate limit printing
+            Warning() << "Exception from SubsMgr: " << e.what() << " (while serving subscribe request for " << c->prettyName(false, false) << ")";
+            lastPrintTime = Util::getTimeSecs();
+        }
+        emit globalSubsLimitReached(); // connected to the SrvMgr, which will loop through all IPs and kick all clients for the most-subscribed IP
+        throw RPCError("Subscription limit reached", RPC::Code_App_LimitExceeded); // send error to client
+    }
+    const auto & [wasNew, optStatus] = result;
     if (wasNew) {
         if (++c->nShSubs == 1)
             Debug() << c->prettyName(false, false) << " is now subscribed to at least one scripthash";
+        // increment per ip counter ...
+        // ... and check if they hit the limit again. This catches races.  Note the zombie sub will be left around for a time
+        // if we get here, but in practice it won't be a huge problem.
+        CheckSubsLimit( ++c->perIPData->nShSubs, true ); // may throw RPCError
     }
     if (!optStatus.has_value()) {
         // no known/cached status -- do the work ourselves asynch in the thread pool.
@@ -1180,8 +1236,7 @@ void Server::rpc_blockchain_scripthash_subscribe(Client *c, const RPC::Message &
         if (!optStatus.value().isEmpty())
             // not empty, so we return the hex-encoded string
             result = QString(Util::ToHexFast(optStatus.value()));
-        // this debug statement below can get spammy and also eats cycles.  TODO: add some better global way to toggle
-        // debug stuff on/off other than at compile-time... and do it without extra function calls as you get in operator<<.
+        // this debug statement below can get spammy and also eats cycles.
         //Debug() << "Sending cached status to client for scripthash: " << Util::ToHexFast(sh) << " status: " << result.toString();
         //
         emit c->sendResult(m.id, result); ///<  may be 'null' if status was empty (indicates no history for scripthash)
@@ -1198,6 +1253,8 @@ void Server::rpc_blockchain_scripthash_unsubscribe(Client *c, const RPC::Message
     if (result) {
         if (--c->nShSubs == 0)
             Debug() << c->prettyName(false, false) << " is no longer subscribed to any scripthashes";
+        if (--c->perIPData->nShSubs == 0)
+            Debug() << "PerIP: " << c->peerAddress().toString() << " is no longer subscribed to any scripthashes";
     }
     emit c->sendResult(m.id, QVariant(result));
 }

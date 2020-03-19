@@ -595,7 +595,7 @@ namespace RPC {
                             << avail << " bytes for longer than "
                             << QString::number(memoryWasteTimeout/1e3, 'f', 1) << " seconds -- kicking client!";
                     // the below also sets ignoreIncomingMessage = true iff this is of type Client *
-                    emit sendError(true, RPC::ErrorCodes::Cose_App_ExcessiveFlood,
+                    emit sendError(true, RPC::ErrorCodes::Code_App_ExcessiveFlood,
                                    "Excessive flood, please throttle your client implementation to not do this");
                     status = Bad;
                 } else

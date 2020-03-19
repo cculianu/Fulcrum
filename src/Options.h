@@ -161,6 +161,9 @@ public:
     };
     /// Comes from a triplet in config, if specified e.g.: "bitcoind_throttle = 50, 20, 10"
     AtomicBdReqThrottleParams bdReqThrottleParams;
+
+    int64_t maxSubsPerIP = 50000; // testing.. 50k subs per IP ought to be plenty.
+    int64_t maxSubsGlobally = 10000000; // testing.. 10 million subs max globally.
 };
 
 /// A class encapsulating a simple read-only config file format.  The format is similar to the bitcoin.conf format

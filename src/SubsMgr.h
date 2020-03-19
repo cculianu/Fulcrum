@@ -100,6 +100,9 @@ public:
 
     static constexpr size_t kRecommendedPendingNotificationsReserveSize = 2048;
 
+    /// Thrown by subsribe() if the global Options::maxSubsGlobally limit is reached.
+    struct LimitReached : public Exception { using Exception::Exception; ~LimitReached() override; /**< for vtable */ };
+
     using SubscribeResult = std::pair<bool, std::optional<StatusHash>>; ///< used by "subscribe" below as the return value.
     /// Thread-safe. Subscribes client to a scripthash. Call this from the client's thread (not doing so is undefined).
     ///
@@ -121,20 +124,27 @@ public:
     ///
     /// Doesn't normally throw but may throw BadArgs if notifyCB is invalid, or InternalError if it failed to
     /// make a QMetaObject::Connection for the subscription.
+    ///
+    /// Will throw LimitReached if the subs table is full.  Calling code should catch this exception.
+    /// (May also throw BadArgs).
     SubscribeResult subscribe(RPC::ConnectionBase *client, const HashX &sh, const StatusCallback &notifyCB);
     /// Thread-safe. The inverse of subscribe. Returns true if the client was previously subscribed, false otherwise.
     /// Always call this from the client's thread otherwise undefined behavior may result.
     bool unsubscribe(RPC::ConnectionBase *client, const HashX &sh);
 
     /// Returns the total number of (sh, client) subscriptions that are active (non-zombie).
-    int numActiveClientSubscriptions() const;
+    int64_t numActiveClientSubscriptions() const;
     /// Returns the total number of unique scripthashes subscribed-to.  A scripthash may be subscribe-to by more than 1
     /// client simultaneously, in which case it counts once towards this total.  This number may be <=
     /// numActiveClientSubscriptions. Additionally, this number also represents "zombie" subscriptions that we keep
     /// around for a time after clients disconnect (in case they reconnect in the future; this is to not lose caching
     /// information for an extant subscription).  Thus, this number may be larger than numActiveClientSubscriptions
     /// as well since it includes the aforementioned "zombies".
-    int numScripthashesSubscribed() const;
+    int64_t numScripthashesSubscribed() const;
+
+    /// Returns true if the number of active client subscriptions is near the global subs limit (>80% of global limit).
+    /// The global limit comes from Options::maxSubsGlobally. This function is thread-safe.
+    bool isNearGlobalSubsLimit() const;
 
 
     /// Thread-safe. Returns the status hash bytes (32 bytes single sha256 hash of the status text). Will return
@@ -172,7 +182,7 @@ private:
 
     using SubRef = std::shared_ptr<Subscription>;
     SubRef makeSubRef(const HashX &sh);
-    std::pair<SubRef, bool> getOrMakeSubRef(const HashX &sh); // takes locks, returns a new subref or an existing subref
+    std::pair<SubRef, bool> getOrMakeSubRef(const HashX &sh); // takes locks, returns a new subref or an existing subref, may throw LimitReached
     SubRef findExistingSubRef(const HashX &) const; // takes locks, returns an existing subref or empty ref.
 
     void doNotifyAllPending();

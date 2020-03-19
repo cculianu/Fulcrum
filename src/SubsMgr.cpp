@@ -23,6 +23,7 @@
 
 #include <QThread>
 
+#include <cmath>
 #include <mutex>
 
 Subscription::Subscription(const HashX &sh)
@@ -50,7 +51,7 @@ struct SubsMgr::Pvt
     robin_hood::unordered_flat_map<HashX, SubsMgr::SubRef, HashHasher> subs;
     std::unordered_set<HashX, HashHasher> pendingNotificatons;
 
-    std::atomic_int nClientSubsActive{0};
+    std::atomic_int64_t nClientSubsActive{0};
     std::atomic_uint64_t cacheHits{0}, cacheMisses{0};
 
     static constexpr size_t kSubsReserveSize = 16384;
@@ -65,6 +66,8 @@ struct SubsMgr::Pvt
         pendingNotificatons.reserve(kRecommendedPendingNotificationsReserveSize);
     }
 };
+
+SubsMgr::LimitReached::~LimitReached() {} // vtable
 
 SubsMgr::SubsMgr(const std::shared_ptr<const Options> & o, Storage *s, const QString &n)
     : Mgr(nullptr), options(o), storage(s), p(std::make_unique<SubsMgr::Pvt>())
@@ -199,6 +202,7 @@ auto SubsMgr::makeSubRef(const HashX &sh) -> SubRef
     return ret;
 }
 
+// may throw
 auto SubsMgr::getOrMakeSubRef(const HashX &sh) -> std::pair<SubRef, bool>
 {
     std::pair<SubRef, bool> ret;
@@ -207,6 +211,8 @@ auto SubsMgr::getOrMakeSubRef(const HashX &sh) -> std::pair<SubRef, bool>
         ret.first = it->second;
         ret.second = false; // was not new
     } else {
+        if (p->nClientSubsActive >= options->maxSubsGlobally)
+            throw LimitReached(QString("Global subs limit of %1 has been reached").arg(options->maxSubsGlobally));
         ret.first = makeSubRef(sh);
         p->subs[sh] = ret.first;
         ret.second = true; // was new
@@ -229,7 +235,7 @@ auto SubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &sh, const StatusCal
     const auto t0 = debugPrint ? Util::getTimeNS() : 0LL;
     if (UNLIKELY(!notifyCB))
         throw BadArgs("SubsMgr::subscribe must be called with a valid notifyCB. FIXME!");
-    auto [sub, wasnew] = getOrMakeSubRef(sh);
+    auto [sub, wasnew] = getOrMakeSubRef(sh); // may throw LimitReached
     {
         LockGuard g(sub->mut);
         if (!wasnew && sub->subscribedClientIds.count(c->id)) {
@@ -313,11 +319,19 @@ bool SubsMgr::unsubscribe(RPC::ConnectionBase *c, const HashX &sh)
     return ret;
 }
 
-int SubsMgr::numActiveClientSubscriptions() const { return p->nClientSubsActive; }
-int SubsMgr::numScripthashesSubscribed() const {
+int64_t SubsMgr::numActiveClientSubscriptions() const { return p->nClientSubsActive; }
+int64_t SubsMgr::numScripthashesSubscribed() const {
     LockGuard g(p->mut);
-    return int(p->subs.size());
+    return int64_t(p->subs.size());
 }
+
+bool SubsMgr::isNearGlobalSubsLimit() const
+{
+    constexpr double factor = .8;
+    const auto thresh = int64_t(std::round(options->maxSubsGlobally * factor));
+    return numActiveClientSubscriptions() > thresh;
+}
+
 
 auto SubsMgr::getFullStatus(const HashX &sh) const -> StatusHash
 {
@@ -406,8 +420,8 @@ auto SubsMgr::stats() const -> Stats
     ret["subscriptions cache hits"] = qlonglong(p->cacheHits.load()); // atomic, no lock needed
     ret["subscriptions cache misses"] = qlonglong(p->cacheMisses.load()); // atomic, no lock needed
     // these below 2 take the above lock again so we do them without the lock held
-    ret["Num. active client subscriptions"] = numActiveClientSubscriptions();
-    ret["Num. unique scripthashes subscribed (including zombies)"] = numScripthashesSubscribed();
+    ret["Num. active client subscriptions"] = qlonglong(numActiveClientSubscriptions());
+    ret["Num. unique scripthashes subscribed (including zombies)"] = qlonglong(numScripthashesSubscribed());
     ret["activeTimers"] = activeTimerMapForStats();
     return ret;
 }

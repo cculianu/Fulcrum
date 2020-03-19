@@ -291,6 +291,10 @@ signals:
     /// is a size in bytes.
     void broadcastTxSuccess(unsigned);
 
+    /// Emitted when the SubsMgr throws LimitReached inside rpc_scripthash_subscribe. Conneced to SrvMgr which
+    /// will iterate through all perIPData instances and kick the ip address with the most subs.
+    void globalSubsLimitReached();
+
 private:
     // RPC methods below
     // server
@@ -469,6 +473,7 @@ public:
 
         enum WhiteListState { UNINITIALIZED, WhiteListed, NotWhiteListed };
         std::atomic_int whiteListState{UNINITIALIZED}; ///< used to determine if we should apply limits.
+        inline bool isWhitelisted() const { return whiteListState.load() == WhiteListed; }
         Options::Subnet whiteListedSubnet; ///< guarded by mut. This is only ever valid iff whiteListState == WhiteListed. otherwise .isValid() == false
 
         std::atomic_int64_t nShSubs{0}; ///< the number of unique scripthash subscriptions for all clients coming from this IP address.

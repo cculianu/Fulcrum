@@ -33,7 +33,7 @@ class BitcoinDMgr;
 class PeerMgr;
 class Storage;
 
-class SrvMgr : public Mgr
+class SrvMgr : public Mgr, public TimersByNameMixin
 {
     Q_OBJECT
 public:
@@ -71,6 +71,9 @@ public:
     std::shared_ptr<Client::PerIPData> getOrCreatePerIPData(const QHostAddress &address);
     /// Thread-Safe. Like the above but returns an invalid shared_ptr if the per-IP data for address does not exist.
     inline std::shared_ptr<Client::PerIPData> findExistingPerIPData(const QHostAddress &address) { return perIPData.getOrCreate(address, false); }
+
+    /// The amount of time we wait before initiating auto-kick when the globalSubsLimitReached signal has been asserted by a Server instance.
+    static constexpr double kMaxSubsAutoKickDelaySecs = 0.5;
 
 signals:
     /// Notifies all blockchain.headers.subscribe'd clients for the entire server about a new header.
@@ -152,6 +155,8 @@ protected slots:
     void on_banPeersWithSuffix(const QString &);
     /// Connected to the liftPeerSuffixBan signal
     void on_liftPeerSuffixBan(const QString &);
+    /// Connected to the Server::globalSubsLimitReached signal for each Server instance
+    void globalSubsLimitReached();
 
 private:
     void startServers();

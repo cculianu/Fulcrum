@@ -23,6 +23,7 @@
 #include "PeerMgr.h"
 #include "Servers.h"
 #include "Storage.h"
+#include "SubsMgr.h"
 #include "Util.h"
 
 #include <mutex>
@@ -67,6 +68,7 @@ void SrvMgr::startup()
 
 void SrvMgr::cleanup()
 {
+    stopAllTimers();
     adminServers.clear(); // unique_ptrs, kill all admin servers first (these hold weak_ptrs to peermgr and also naked ptrs to this, so must be killed first)
     peermgr.reset(); // shared_ptr, kill peermgr (if any)
     servers.clear(); // unique_ptrs auto-delete all servers
@@ -139,6 +141,9 @@ void SrvMgr::startServers()
 
         // max_buffer changes
         connect(this, &SrvMgr::requestMaxBufferChange, srv, &ServerBase::applyMaxBufferToAllClients);
+
+        // subs limit reached
+        connect(srv, &Server::globalSubsLimitReached, this, &SrvMgr::globalSubsLimitReached);
 
         if (peermgr) {
             connect(srv, &ServerBase::gotRpcAddPeer, peermgr.get(), &PeerMgr::on_rpcAddPeer);
@@ -419,5 +424,40 @@ std::shared_ptr<Client::PerIPData> SrvMgr::getOrCreatePerIPData(const QHostAddre
         }
     }
     return ret;
+}
+
+void SrvMgr::globalSubsLimitReached()
+{
+    callOnTimerSoonNoRepeat(int(1e3 * kMaxSubsAutoKickDelaySecs), "KickMostSubscribedClient", [this]{ // we rate limit this to at most once every 500 ms.
+
+        if (!storage->subs()->isNearGlobalSubsLimit()) {
+            Debug() << "SrvMgr max subs kicker: Timer fired but we are no longer near the global subs limit. Returning early...";
+            return;
+        }
+        int64_t max = 0;
+        QHostAddress maxIP;
+        int tableSize{};
+        {
+            int64_t nSubs{};
+            // iterate through all known client datas and find the IP address with the most subs to kick
+            const auto [table, lock] = perIPData.getTable();
+            tableSize = table.size();
+            for (auto it = table.cbegin(); it != table.cend(); ++it) {
+                if (const auto data = it.value().lock();
+                        data && (nSubs = data->nShSubs.load()) > max && !it.key().isNull()) // todo; maybe skip over whitelisted IPs?
+                {
+                     max = nSubs;
+                     maxIP = it.key();
+                }
+            }
+            // lock released at scope end
+        }
+        if (LIKELY(max > 0)) {
+            Log() << "Global subs limit reached, kicking all clients for IP " << maxIP.toString() << " (subs: " << max << ")";
+            emit kickByAddress(maxIP); // kick!
+        } else {
+            Debug() << "Global subs limit reached, but could not find a client to kick (num per-IP-datas: " << tableSize << ")";
+        }
+    });
 }
 

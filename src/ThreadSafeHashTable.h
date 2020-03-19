@@ -46,8 +46,11 @@ public:
 private:
     mutable std::shared_mutex mut;
     using DataWeakRef = std::weak_ptr<Data>;
+    using SharedLockGuard = std::shared_lock<std::shared_mutex>;
+    using ExclusiveLockGuard = std::unique_lock<std::shared_mutex>;
+    using Table = QHash <Key, DataWeakRef>;
     const size_t squeezeThreshold;
-    QHash <Key, DataWeakRef> table;
+    Table table;
     std::atomic_bool isDeleted{false};
 
     static inline QString ToString(const Key & key) { return (key.*KeyToStringMember)(); }
@@ -71,6 +74,11 @@ public:
         }
     }
 
+    // Use these to grab the table for iterating
+    std::pair<const Table, SharedLockGuard> getTable() const { return {table, SharedLockGuard{mut}}; } // read-only access
+    std::pair<Table, ExclusiveLockGuard> getMutableTable() const { return {table, ExclusiveLockGuard{mut}}; } // read/write access
+
+
     /// Thread-safe.  Gets an existing shared object, or atomically creates a new one if one does not
     /// already exist. (In the case of a new connection for this client).  The object's table entry will be
     /// removed automatically by its deleter when the last instance of the returned std::shared_ptr is dereferenced.
@@ -89,7 +97,7 @@ public:
 
         // first, take the shared lock and see if we can find the per-ip data for addr, as a performance optimization.
         {
-            std::shared_lock g(mut);
+            SharedLockGuard g(mut);
             if (auto it = table.find(key); it != table.end())
                 ret = it.value().lock();
             // fall thru to below code
@@ -99,7 +107,7 @@ public:
             // Note there's a potential race condition here -- even if !ret, another thread may come in and create that
             // object and insert it into the table since we released the shared_lock above.  So we will need to search
             // for the object again with the unique_lock held.
-            std::unique_lock g(mut);
+            ExclusiveLockGuard g(mut);
             if (auto it = table.find(key); UNLIKELY(it != table.end()))
                 // Another thread may have inserted an object into the table in the meantime...
                 // Note: this weakref may be invalid here, so we may have to create a new object anyway and
@@ -138,7 +146,7 @@ public:
                     }
                     // Common-case -- above checks pass, remove from table. Note that if the predicate that we live
                     // longer than the subordinate objects is violated, then the code here will fail.
-                    std::unique_lock g(me->mut);
+                    ExclusiveLockGuard g(me->mut);
                     auto it = me->table.find(key);
                     if (LIKELY(it != me->table.end())) {
                         if (UNLIKELY(!it.value().expired() && it.value().lock().get() != p)) {
