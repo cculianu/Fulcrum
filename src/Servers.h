@@ -22,7 +22,6 @@
 #include "Mixins.h"
 #include "Options.h"
 #include "PeerMgr.h"
-#include "PerIP.h"
 #include "RPC.h"
 #include "Util.h"
 #include "Version.h"
@@ -461,7 +460,12 @@ public:
     };
 
     Info info;
-    PerIP::DataRef perIPData;
+
+    struct PerIPData {
+        std::atomic_int foo{};  /// for testing
+    };
+
+    std::shared_ptr<PerIPData> perIPData;
 
     bool isSubscribedToHeaders = false;
     std::atomic_int nShSubs{0};  ///< the number of unique scripthash subscriptions for this client.

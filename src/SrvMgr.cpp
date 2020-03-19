@@ -31,8 +31,9 @@ SrvMgr::SrvMgr(const std::shared_ptr<const Options> & options,
                const std::shared_ptr<Storage> & s,
                const std::shared_ptr<BitcoinDMgr> & bdm,
                QObject *parent)
-    : Mgr(parent), options(options), storage(s), bitcoindmgr(bdm), perIPMgr(this)
+    : Mgr(parent), options(options), storage(s), bitcoindmgr(bdm), perIPData(this)
 {
+    perIPData.setObjectName("PerIPData");
     connect(this, &SrvMgr::banIP, this, &SrvMgr::on_banIP);
     connect(this, &SrvMgr::liftIPBan, this, &SrvMgr::on_liftIPBan);
     connect(this, &SrvMgr::banPeersWithSuffix, this, &SrvMgr::on_banPeersWithSuffix);

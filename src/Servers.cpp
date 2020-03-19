@@ -403,7 +403,7 @@ ServerBase::newClient(QTcpSocket *sock)
     auto ret = clientsById[clientId] = new Client(rpcMethods(), clientId, sock, options->maxBuffer.load());
     const auto addr = ret->peerAddress();
 
-    ret->perIPData = srvmgr->getOrCreatePerIPData(addr); // IMPORTANT: ret->perIPData must be valid for properly constructed clients
+    ret->perIPData = srvmgr->getOrCreatePerIPData(addr); // IMPORTANT that we do this ASAP since ret->perIPData must be valid for properly constructed clients
     assert(ret->perIPData);
 
     // if deleted, we need to purge it from map
