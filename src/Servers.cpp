@@ -1216,8 +1216,9 @@ void Server::rpc_blockchain_scripthash_subscribe(Client *c, const RPC::Message &
         if (++c->nShSubs == 1)
             Debug() << c->prettyName(false, false) << " is now subscribed to at least one scripthash";
         // increment per ip counter ...
-        // ... and check if they hit the limit again. This catches races.  Note the zombie sub will be left around for a time
-        // if we get here, but in practice it won't be a huge problem.
+        // ... and check if they hit the limit again. This catches races.  Note that if the limit is reached this will
+        // throw and after unsubscribing -- but the zombie sub will be left around for a time until it is reaped
+        // (in practice it won't be a huge problem).
         CheckSubsLimit( ++c->perIPData->nShSubs, true ); // may throw RPCError
     }
     if (!optStatus.has_value()) {
