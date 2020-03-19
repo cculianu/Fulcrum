@@ -34,6 +34,7 @@
 #include <QVector>
 
 #include <memory> // for shared_ptr
+#include <shared_mutex>
 
 struct TcpServerError : public Exception
 {
@@ -461,8 +462,17 @@ public:
 
     Info info;
 
+    /// Data that is per-IP address. This data structure is potentially shared with multiple Client * instances living
+    /// in multiple ServerBase instances, in multiple threads.  The table that stores these is in SrvMgr. See SrvMgr.h.
     struct PerIPData {
-        std::atomic_int foo{};  /// for testing
+        std::shared_mutex mut;
+
+        enum WhiteListState { UNINITIALIZED, WhiteListed, NotWhiteListed };
+        std::atomic_int whiteListState{UNINITIALIZED}; ///< used to determine if we should apply limits.
+        Options::Subnet whiteListedSubnet; ///< guarded by mut. This is only ever valid iff whiteListState == WhiteListed. otherwise .isValid() == false
+
+        std::atomic_int64_t nShSubs{0}; ///< the number of unique scripthash subscriptions for all clients coming from this IP address.
+        std::atomic_int64_t bdReqCtr{0}; ///< the number bitcoind requests active right now for all clients coming from this IP address.
     };
 
     std::shared_ptr<PerIPData> perIPData;
@@ -475,6 +485,11 @@ public:
 
     static std::atomic_size_t numClients, numClientsMax, numClientsCtr; // number of connected clients: current, max lifetime, accumulated counter
 
+signals:
+    /// Used by ServerBase via a direct connection.  The class d'tor emits this.  This is better for us than
+    /// QObject::destroyed because that runs after this type no longer is a "Client", wheras this is emitted
+    /// immediately from this instance's d'tor.
+    void clientDestructing(Client *self);
 protected:
 
     void do_ping() override;

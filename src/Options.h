@@ -105,9 +105,12 @@ public:
         QString toString() const;
     };
     /// Default: do not apply IP address connection limits (and other limits) to clients originating from localhost (for Tor)
+    /// Note that multiple threads may read this data structure -- so if we ever decide to mutate it at runtime
+    /// after initial setup -- we must remember to guard it with a mutex!
     QList<Subnet> subnetsExcludedFromPerIPLimits = {{QHostAddress::LocalHost,32}, {QHostAddress::LocalHostIPv6,128}};
     /// Returns true if addr matches one of the subnets in subnetsExcludedFromPerIPLimits, false otherwise
-    /// Optionally sets the pointer *matched = theMatchedSubnet (if !nullptr).
+    /// Optionally sets the pointer *matched = theMatchedSubnet (if !nullptr). This is potentially called from
+    /// multiple threads and is thread-safe, since subnetsExcludedFromPerIPLimits is never changes after app init.
     bool isAddrInPerIPLimitExcludeSet(const QHostAddress & addr, Subnet * matched = nullptr) const;
 
     // Max history & max buffer

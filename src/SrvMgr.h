@@ -68,7 +68,9 @@ public:
     /// Thread-Safe. Call this from any thread to create/obtain a strong reference to a new or pre-existing
     /// "per-IP-address" data object.  These are objects held by each Client * instance in Servers.cpp and hold
     /// per-ip address shared data for all clients from a particular IP address.
-    inline std::shared_ptr<Client::PerIPData> getOrCreatePerIPData(const QHostAddress &address) { return perIPData.getOrCreate(address); }
+    std::shared_ptr<Client::PerIPData> getOrCreatePerIPData(const QHostAddress &address);
+    /// Thread-Safe. Like the above but returns an invalid shared_ptr if the per-IP data for address does not exist.
+    inline std::shared_ptr<Client::PerIPData> findExistingPerIPData(const QHostAddress &address) { return perIPData.getOrCreate(address, false); }
 
 signals:
     /// Notifies all blockchain.headers.subscribe'd clients for the entire server about a new header.

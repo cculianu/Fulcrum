@@ -46,16 +46,19 @@ public:
 private:
     mutable std::shared_mutex mut;
     using DataWeakRef = std::weak_ptr<Data>;
+    const size_t squeezeThreshold;
     QHash <Key, DataWeakRef> table;
     std::atomic_bool isDeleted{false};
 
     static inline QString ToString(const Key & key) { return (key.*KeyToStringMember)(); }
 
 public:
-    explicit ThreadSafeHashTable(QObject *parent=nullptr)
-        : QObject(parent)
+    explicit ThreadSafeHashTable(QObject *parent=nullptr, size_t initialCapacity=0, size_t squeezeThreshold_=0)
+        : QObject(parent), squeezeThreshold(squeezeThreshold_)
     {
         setObjectName(QString("ThreadSafeHashTable<%1, %2>").arg(typeid(Key).name()).arg(typeid(Data).name()));
+        if (initialCapacity)
+            table.reserve(initialCapacity);
     }
     ~ThreadSafeHashTable() override {
         isDeleted = true;
@@ -71,7 +74,7 @@ public:
     /// Thread-safe.  Gets an existing shared object, or atomically creates a new one if one does not
     /// already exist. (In the case of a new connection for this client).  The object's table entry will be
     /// removed automatically by its deleter when the last instance of the returned std::shared_ptr is dereferenced.
-    DataRef getOrCreate(const Key &key)
+    DataRef getOrCreate(const Key &key, bool createIfMissing)
     {
         DataRef ret;
         constexpr auto MkDebugPrtFunc = [](const auto & key, const auto & ret, auto me) constexpr -> auto  {
@@ -92,7 +95,7 @@ public:
             // fall thru to below code
         }
 
-        if (!ret) {
+        if (!ret && createIfMissing) {
             // Note there's a potential race condition here -- even if !ret, another thread may come in and create that
             // object and insert it into the table since we released the shared_lock above.  So we will need to search
             // for the object again with the unique_lock held.
@@ -121,6 +124,7 @@ public:
                             return [&p] { delete p; p = nullptr; };
                     };
                     const Defer deleteP = MkDeleteFunc(p, myname, key); // <--- guarantee deletion at scope end
+
                     auto me = weakThis.data();
                     if (UNLIKELY(!me)) {
                         Error() << myname << " CRITICAL: While deleting entry for " << ToString(key)
@@ -144,6 +148,13 @@ public:
                             // Eithr a valid entry was found in the table or a defunct weak_ref was found.. in either
                             // case, remove the entry from the table. This is the most likely branch.
                             it = me->table.erase(it);
+                            if (me->squeezeThreshold) {
+                                if (const auto size = size_t(me->table.size());
+                                        size >= me->squeezeThreshold && size * 2U <= size_t(me->table.capacity())) {
+                                    // save space if we are over 2x capacity vs size
+                                    me->table.squeeze();
+                                }
+                            }
                             if constexpr (debugPrt) Debug() << myname << ": Removed entry from table for " << ToString(key);
                         }
                     } else {
@@ -157,11 +168,10 @@ public:
             } else
                 // was inserted by somebody else in the meantime..
                 debugPrtFoundExisting();
-        } else
+        } else if (ret)
             // was found in fast-path with shared_lock above.
             debugPrtFoundExisting();
-        assert(ret);
+        assert(!createIfMissing || ret);
         return ret;
     }
-
 };

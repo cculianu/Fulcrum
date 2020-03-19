@@ -25,14 +25,21 @@
 #include "Storage.h"
 #include "Util.h"
 
+#include <mutex>
 #include <utility>
+
+namespace {
+    constexpr size_t tableSqueezeThreshold = 64; ///< used by perIPData and addrIdMap to determing when to auto-squeeze.
+    static_assert (tableSqueezeThreshold > 0, "SrvMgr table squeeze threshold must be > 0!");
+}
 
 SrvMgr::SrvMgr(const std::shared_ptr<const Options> & options,
                const std::shared_ptr<Storage> & s,
                const std::shared_ptr<BitcoinDMgr> & bdm,
                QObject *parent)
-    : Mgr(parent), options(options), storage(s), bitcoindmgr(bdm), perIPData(this)
+    : Mgr(parent), options(options), storage(s), bitcoindmgr(bdm), perIPData(this, tableSqueezeThreshold /* initialCapacity */, tableSqueezeThreshold)
 {
+    addrIdMap.reserve(tableSqueezeThreshold); // initial capacity
     perIPData.setObjectName("PerIPData");
     connect(this, &SrvMgr::banIP, this, &SrvMgr::on_banIP);
     connect(this, &SrvMgr::liftIPBan, this, &SrvMgr::on_liftIPBan);
@@ -161,20 +168,37 @@ void SrvMgr::clientConnected(IdMixin::Id cid, const QHostAddress &addr)
     addrIdMap.insertMulti(addr, cid);
     const auto maxPerIP = options->maxClientsPerIP;
     if (addrIdMap.count(addr) > maxPerIP) {
-        // the below ends up linearly searching through excluded subnets --  this branch is only really taken if the
-        // limit is hit .. O(N) where N is probably very small should hopefully be fast enough
-        if (Options::Subnet matched; ! options->isAddrInPerIPLimitExcludeSet(addr, &matched) ) {
-            Log() << "Connection limit (" << maxPerIP << ") exceeded for " << addr.toString()
-                  << ", connection refused for client " << cid;
-            emit clientExceedsConnectionLimit(cid);
-            clientWillDieAnyway = true;
+        const auto ipData = findExistingPerIPData(addr);
+        if (ipData) {
+            Client::PerIPData::WhiteListState wlstate{Client::PerIPData::WhiteListState::UNINITIALIZED};
+            Options::Subnet matched;
+            {
+                std::shared_lock g(ipData->mut); // shared lock guards ipData->whiteListSubnet
+                wlstate = Client::PerIPData::WhiteListState(ipData->whiteListState.load());
+                matched = ipData->whiteListedSubnet; // copy out data with lock held
+            }
+            switch (wlstate) {
+            case Client::PerIPData::WhiteListState::NotWhiteListed:
+                Log() << "Connection limit (" << maxPerIP << ") exceeded for " << addr.toString()
+                      << ", connection refused for client " << cid;
+                emit clientExceedsConnectionLimit(cid);
+                clientWillDieAnyway = true;
+                break;
+            case Client::PerIPData::WhiteListState::WhiteListed:
+                Debug() << "Client " << cid << " from " << addr.toString() << " would have exceeded the connection limit ("
+                        << maxPerIP << ") but its IP matches subnet "<< matched.toString() << " from 'subnets_to_exclude_from_per_ip_limits'";
+                break;
+            default:
+                // This should never happen.
+                Error() << "Invalid WhiteListState " << int(wlstate) << " for Client " << cid << " from " << addr.toString() << ". FIXME!";
+            }
         } else {
-            Debug() << "Client " << cid << " from " << addr.toString() << " would have exceeded the connection limit ("
-                    << maxPerIP << ") but its IP matches subnet " << matched.toString() << " from 'subnets_to_exclude_from_per_ip_limits'";
+            clientWillDieAnyway = true;
+            Debug() << "Client " << cid << " from " << addr.toString() << " -- missing per-IP data. The client may have been already deleted.";
         }
     }
 
-    // lastly, check bans and tally ctr and increment counter anyway -- even if clientWillDieAnyway == true
+    // Lastly, check bans and tally ctr and increment counter anyway -- even if clientWillDieAnyway == true!
     const bool banned = isIPBanned(addr, true);
 
     if (banned && !clientWillDieAnyway) {
@@ -213,11 +237,12 @@ bool SrvMgr::isPeerHostNameBanned(const QString &h) const
 
 void SrvMgr::clientDisconnected(IdMixin::Id cid, const QHostAddress &addr)
 {
-    if (auto count = addrIdMap.remove(addr, cid); count > 1) {
+    if (auto count = addrIdMap.remove(addr, cid); UNLIKELY(count > 1)) {
         Warning() << "Multiple clients with id: " << cid << ", address " << addr.toString() << " in addrIdMap in " << __func__ << " -- FIXME!";
     } else if (count) {
         //Debug() << "Client id " << cid << " addr " << addr.toString() << " removed from addrIdMap";
-        if (const auto size = addrIdMap.size(); size >= 64 && size * 2 <= addrIdMap.capacity()) {
+        if (const auto size = size_t(addrIdMap.size());
+                size >= tableSqueezeThreshold && size * 2U <= size_t(addrIdMap.capacity())) {
             // save space if we are over 2x capacity vs size
             addrIdMap.squeeze();
         }
@@ -370,3 +395,29 @@ QVariantList SrvMgr::adminRPC_getClients_blocking(int timeout_ms) const
         return ret;
     }, timeout_ms);
 }
+
+std::shared_ptr<Client::PerIPData> SrvMgr::getOrCreatePerIPData(const QHostAddress &address)
+{
+    auto ret = perIPData.getOrCreate(address, true);
+    // Note the below has a potential race condition *IF* the same IP address connected multiply from 2 different ServerBase
+    // instances (each ServerBase has its own thread) *at the same time* and thus this object was freshly created
+    // but is being returned twice in 2 different threads.  We guard against doing redundant work by first not using a mutex
+    // to just check the atomic variable.  If the atomic variable is uninitialized, then we grab the mutex in exclusive mode.
+    if (ret && ret->whiteListState == Client::PerIPData::WhiteListState::UNINITIALIZED) { // new instance
+        std::unique_lock g(ret->mut);
+        if (ret->whiteListState == Client::PerIPData::WhiteListState::UNINITIALIZED) { // check again with lock held.
+            // Note: this query is a linear search through the exclude set, so hopefully the set is always small
+            const bool whiteListed = options->isAddrInPerIPLimitExcludeSet(address, &ret->whiteListedSubnet);
+            ret->whiteListState = whiteListed ? Client::PerIPData::WhiteListState::WhiteListed
+                                              : Client::PerIPData::WhiteListState::NotWhiteListed;
+            if constexpr (true || !isReleaseBuild()) {
+                if (whiteListed)
+                    Debug() << address.toString() << " is whitelisted (subnet: " << ret->whiteListedSubnet.toString() << ")";
+                else
+                    Debug() << address.toString() << " is NOT whitelisted";
+            }
+        }
+    }
+    return ret;
+}
+

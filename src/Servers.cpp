@@ -407,13 +407,13 @@ ServerBase::newClient(QTcpSocket *sock)
     assert(ret->perIPData);
 
     // if deleted, we need to purge it from map
-    auto on_destroyed = [clientId, addr, this](QObject *o) {
+    auto on_destroyed = [clientId, addr, this](Client *c) {
         // this whole call is here so that delete client->sock ends up auto-removing the map entry
         // as a convenience.
         Debug() << "Client nested 'on_destroyed' called for " << clientId;
         auto client = clientsById.take(clientId);
         if (client) {
-            if (client != o) {
+            if (client != c) {
                 Error() << " client != passed-in pointer to on_destroy in " << __FILE__ << " line " << __LINE__  << " client " << clientId << ". FIXME!";
             }
             Debug() << "client id " << clientId << " purged from map";
@@ -421,7 +421,8 @@ ServerBase::newClient(QTcpSocket *sock)
         // tell SrvMgr this client is gone so it can decrement its clients-per-ip count.
         emit clientDisconnected(clientId, addr);
     };
-    connect(ret, &QObject::destroyed, this, on_destroyed);
+    assert(ret->thread() == this->thread()); // the DirectConnection below requires this client to live in the same thread as us. Which is always the case.
+    connect(ret, &Client::clientDestructing, this, on_destroyed, Qt::DirectConnection);
     connect(ret, &AbstractConnection::lostConnection, this, [this, clientId](AbstractConnection *cl){
         if (auto client = dynamic_cast<Client *>(cl) ; client) {
             Debug() <<  client->prettyName() << " lost connection";
@@ -1878,7 +1879,8 @@ Client::~Client()
 {
     --numClients;
     Debug() << __func__ << " " << id;
-    socket = nullptr; // NB: we are a child of socket. this line here is added in case some day I make AbstractClient delete socket on destruct.
+    socket = nullptr; // NB: we are a child of socket, so socket is alread invalid here. This line here is added in case some day I make AbstractClient delete socket on destruct.
+    emit clientDestructing(this); // This is currently connected to a lambda in ServerBase::newClient
 }
 
 void Client::do_disconnect(bool graceful)
