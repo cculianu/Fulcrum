@@ -31,7 +31,7 @@ SrvMgr::SrvMgr(const std::shared_ptr<const Options> & options,
                const std::shared_ptr<Storage> & s,
                const std::shared_ptr<BitcoinDMgr> & bdm,
                QObject *parent)
-    : Mgr(parent), options(options), storage(s), bitcoindmgr(bdm)
+    : Mgr(parent), options(options), storage(s), bitcoindmgr(bdm), perIPMgr(this)
 {
     connect(this, &SrvMgr::banIP, this, &SrvMgr::on_banIP);
     connect(this, &SrvMgr::liftIPBan, this, &SrvMgr::on_liftIPBan);
@@ -107,10 +107,10 @@ void SrvMgr::startServers()
     for (const auto & iface : options->interfaces + options->sslInterfaces) {
         if (i < firstSsl)
             // TCP
-            servers.emplace_back(std::make_unique<Server>(iface.first, iface.second, options, storage, bitcoindmgr));
+            servers.emplace_back(std::make_unique<Server>(this, iface.first, iface.second, options, storage, bitcoindmgr));
         else
             // SSL
-            servers.emplace_back(std::make_unique<ServerSSL>(iface.first, iface.second, options, storage, bitcoindmgr));
+            servers.emplace_back(std::make_unique<ServerSSL>(this, iface.first, iface.second, options, storage, bitcoindmgr));
         Server *srv = servers.back().get();
 
         // connect blockchain.headers.subscribe signal

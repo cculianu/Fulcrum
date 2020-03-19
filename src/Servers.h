@@ -22,6 +22,7 @@
 #include "Mixins.h"
 #include "Options.h"
 #include "PeerMgr.h"
+#include "PerIP.h"
 #include "RPC.h"
 #include "Util.h"
 #include "Version.h"
@@ -140,6 +141,7 @@ protected:
     using Member_t = void (ServerBase::*)(Client *, const RPC::Message &); ///< ptr to member function
     using DispatchTable = QHash<QString, Member_t>; ///< this dispatch table mechanism which relies on ptr to member is a slight performance optimization over std::function with std::bind
 
+    SrvMgr * const srvmgr; ///< basically a weak reference -- this is guaranteed to be alive for the entire lifetime of this instance, however.
     const RPC::MethodMap & methods; ///< must be valid for the lifetime of this instance
     const DispatchTable & dispatchTable; ///< must be valid for the lifetime of this instance
 
@@ -149,7 +151,8 @@ protected:
     /// It's ok to pass a reference to empty containers for both `rpcMethods` and `dispatchTable` so long as
     /// that data gets filled-in later before the server is started via `tryStart()`.
     /// It is undefined to modify those structures after `tryStart()` has been called, however.
-    ServerBase(const RPC::MethodMap & rpcMethods, const DispatchTable & dispatchTable,
+    ServerBase(SrvMgr *srvMgr,  // the object that owns us
+               const RPC::MethodMap & rpcMethods, const DispatchTable & dispatchTable,
                const QHostAddress & address, quint16 port,
                const std::shared_ptr<const Options> & options,
                const std::shared_ptr<Storage> & storage,
@@ -268,7 +271,7 @@ class Server : public ServerBase
 {
     Q_OBJECT
 public:
-    Server(const QHostAddress & address, quint16 port, const std::shared_ptr<const Options> & options,
+    Server(SrvMgr *, const QHostAddress & address, quint16 port, const std::shared_ptr<const Options> & options,
            const std::shared_ptr<Storage> & storage, const std::shared_ptr<BitcoinDMgr> & bitcoindmgr);
     ~Server() override;
 
@@ -351,7 +354,7 @@ class ServerSSL : public Server
 {
     Q_OBJECT
 public:
-    ServerSSL(const QHostAddress & address, quint16 port, const std::shared_ptr<const Options> & options,
+    ServerSSL(SrvMgr *, const QHostAddress & address, quint16 port, const std::shared_ptr<const Options> & options,
               const std::shared_ptr<Storage> & storage, const std::shared_ptr<BitcoinDMgr> & bitcoindmgr);
     ~ServerSSL() override;
 
@@ -388,7 +391,6 @@ protected:
 private:
     std::unique_ptr<ThreadPool> threadPool; ///< we use our own threadpool for the admin server so as to not interfere with the normal one used for SPV clients.
 
-    SrvMgr * const srvmgr; ///< basically a weak reference -- this is guaranteed to be alive for the entire lifetime of this instance, however.
     const std::weak_ptr<PeerMgr> peerMgr; ///< this isn't always valid if peering is disabled.  SrvMgr owns this, and as the app shuts down it may go away.
 
     static constexpr int kBlockingCallTimeoutMS = 10000;
@@ -459,6 +461,7 @@ public:
     };
 
     Info info;
+    PerIP::DataRef perIPData;
 
     bool isSubscribedToHeaders = false;
     std::atomic_int nShSubs{0};  ///< the number of unique scripthash subscriptions for this client.

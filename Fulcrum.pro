@@ -177,6 +177,7 @@ SOURCES += \
     Mgr.cpp \
     Options.cpp \
     PeerMgr.cpp \
+    PerIP.cpp \
     RecordFile.cpp \
     RPC.cpp \
     ServerMisc.cpp \
@@ -206,6 +207,7 @@ HEADERS += \
     Mixins.h \
     Options.h \
     PeerMgr.h \
+    PerIP.h \
     RecordFile.h \
     RPC.h \
     ServerMisc.h \

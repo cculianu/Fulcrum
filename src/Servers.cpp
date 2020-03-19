@@ -39,6 +39,7 @@
 #include <QTimer>
 
 #include <algorithm>
+#include <cassert>
 #include <cstdlib>
 #include <iostream>
 #include <list>
@@ -332,10 +333,11 @@ namespace {
     }
 }
 
-ServerBase::ServerBase(const RPC::MethodMap & methods, const DispatchTable & dispatchTable,
+ServerBase::ServerBase(SrvMgr *sm,
+                       const RPC::MethodMap & methods, const DispatchTable & dispatchTable,
                        const QHostAddress & a, quint16 p, const std::shared_ptr<const Options> & opts,
                        const std::shared_ptr<Storage> & st, const std::shared_ptr<BitcoinDMgr> & bdm)
-    : AbstractTcpServer(a, p), methods(methods), dispatchTable(dispatchTable), options(opts), storage(st), bitcoindmgr(bdm)
+    : AbstractTcpServer(a, p), srvmgr(sm), methods(methods), dispatchTable(dispatchTable), options(opts), storage(st), bitcoindmgr(bdm)
 {
 }
 ServerBase::~ServerBase() { stop(); }
@@ -400,6 +402,10 @@ ServerBase::newClient(QTcpSocket *sock)
     const auto clientId = newId();
     auto ret = clientsById[clientId] = new Client(rpcMethods(), clientId, sock, options->maxBuffer.load());
     const auto addr = ret->peerAddress();
+
+    ret->perIPData = srvmgr->getOrCreatePerIPData(addr); // IMPORTANT: ret->perIPData must be valid for properly constructed clients
+    assert(ret->perIPData);
+
     // if deleted, we need to purge it from map
     auto on_destroyed = [clientId, addr, this](QObject *o) {
         // this whole call is here so that delete client->sock ends up auto-removing the map entry
@@ -428,7 +434,8 @@ ServerBase::newClient(QTcpSocket *sock)
     connect(ret, &RPC::ConnectionBase::gotErrorMessage, this, &ServerBase::onErrorMessage);
     connect(ret, &RPC::ConnectionBase::peerError, this, &ServerBase::onPeerError);
 
-    // tell SrvMgr about this client so it can keep track of clients-per-ip and other statistics
+    // tell SrvMgr about this client so it can keep track of clients-per-ip and other statistics, and potentially
+    // kick the client if it exceeds its connection limit.
     emit clientConnected(clientId, addr);
 
     return ret;
@@ -674,9 +681,9 @@ void ServerBase::generic_async_to_bitcoind(Client *c, const RPC::Message::Id & r
     );
 }
 
-Server::Server(const QHostAddress &a, quint16 p, const std::shared_ptr<const Options> & opts,
+Server::Server(SrvMgr *sm, const QHostAddress &a, quint16 p, const std::shared_ptr<const Options> & opts,
                const std::shared_ptr<Storage> &s, const std::shared_ptr<BitcoinDMgr> &bdm)
-    : ServerBase(StaticData::methodMap, StaticData::dispatchTable, a, p, opts, s, bdm)
+    : ServerBase(sm, StaticData::methodMap, StaticData::dispatchTable, a, p, opts, s, bdm)
 {
     StaticData::init(); // only does something first time it's called, otherwise a no-op
     // re-set name for debug/logging
@@ -1456,9 +1463,9 @@ void Server::StaticData::init() { InitStaticDataCommon(dispatchTable, methodMap,
 // --- /RPC METHODS ---
 
 // --- SSL Server support ---
-ServerSSL::ServerSSL(const QHostAddress & address_, quint16 port_, const std::shared_ptr<const Options> & opts,
+ServerSSL::ServerSSL(SrvMgr *sm, const QHostAddress & address_, quint16 port_, const std::shared_ptr<const Options> & opts,
                      const std::shared_ptr<Storage> & storage_, const std::shared_ptr<BitcoinDMgr> & bitcoindmgr_)
-    : Server(address_, port_, opts, storage_, bitcoindmgr_), cert(opts->sslCert), key(opts->sslKey)
+    : Server(sm, address_, port_, opts, storage_, bitcoindmgr_), cert(opts->sslCert), key(opts->sslKey)
 {
     if (cert.isNull() || key.isNull())
         throw BadArgs("ServerSSL cannot be instantiated: Key or cert are null!");
@@ -1499,7 +1506,7 @@ void ServerSSL::incomingConnection(qintptr socketDescriptor)
 AdminServer::AdminServer(SrvMgr *sm, const QHostAddress & a, quint16 p, const std::shared_ptr<const Options> & o,
                          const std::shared_ptr<Storage> & s, const std::shared_ptr<BitcoinDMgr> & bdm,
                          const std::weak_ptr<PeerMgr> & pm)
-    : ServerBase(StaticData::methodMap, StaticData::dispatchTable, a, p, o, s, bdm), srvmgr(sm), peerMgr(pm)
+    : ServerBase(sm, StaticData::methodMap, StaticData::dispatchTable, a, p, o, s, bdm), peerMgr(pm)
 {
     StaticData::init(); // noop after first time it's called
     setObjectName(prettyName());

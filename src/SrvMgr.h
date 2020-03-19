@@ -20,6 +20,7 @@
 
 #include "Mgr.h"
 #include "Options.h"
+#include "PerIP.h"
 
 #include <QMultiHash>
 
@@ -64,6 +65,10 @@ public:
     /// Returns true if the specified hostname is in the ban table (this only really works for peers from PeerMgr and
     /// not regular clients for which we never do reverse-DNS).  This method is thread-safe.
     bool isPeerHostNameBanned(const QString &) const;
+
+    /// Thread-Safe. Call this from any thread to create/obtain a strong reference to a new or pre-existing Per-IP
+    /// address data object.
+    inline PerIP::DataRef getOrCreatePerIPData(const QHostAddress &address) { return perIPMgr.getOrCreate(address); }
 
 signals:
     /// Notifies all blockchain.headers.subscribe'd clients for the entire server about a new header.
@@ -168,6 +173,8 @@ private:
     QHash<QHostAddress, BanInfo> banMap;
     QHash<QString, BanInfo> bannedPeerSuffixes; // the banInfo .address in this map is always isNull(). We just use the info for the 'ts' stat ;)
     mutable std::mutex banMut;
+
+    PerIP::Mgr perIPMgr;
 };
 
 Q_DECLARE_METATYPE(QHostAddress);
