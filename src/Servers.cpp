@@ -662,6 +662,7 @@ void ServerBase::generic_async_to_bitcoind(Client *c, const RPC::Message::Id & r
             c->setReadPaused(true); // pause reading from this client -- they exceeded threshold.
             // if timer not already active, start timer to decay ctr over time --
             static constexpr int kPollFreqHz = 5; //<-- we "poll" 5 times per second so as to detect situations where bitcoind is faster than our heuristics estimate it to be, and then wake up clients faster in that case
+            static_assert (kPollFreqHz > 0 && kPollFreqHz <= 100); // for sanity
             c->callOnTimerSoon(1000/kPollFreqHz /*=200ms*/, bdReqTimerName, [c, this, iCtr=unsigned(0)]() mutable {
                 const auto [bdReqHi, bdReqLo, decayPerSec] = options->bdReqThrottleParams.load();
                 if ((++iCtr % kPollFreqHz) == 0) // every kPollFreqHz iterations = every 1 second, decay the counter by decayPerSec amount
