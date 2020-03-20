@@ -164,7 +164,8 @@ public:
                                     me->table.squeeze();
                                 }
                             }
-                            if constexpr (debugPrt) Debug() << myname << ": Removed entry from table for " << ToString(key);
+                            if constexpr (debugPrt)
+                                Debug() << myname << ": Removed entry from table for " << ToString(key) << ", table-size now " << me->table.size();
                         }
                     } else {
                         // this should never happen
