@@ -495,6 +495,8 @@ public:
     //bitcoind_throttle counter, per client
     qint64 bdReqCtr = 0;
 
+    double lastWarnedAboutSubsLimit = 0.; ///< used to throttle log messages when client hits subs limit
+
     static std::atomic_size_t numClients, numClientsMax, numClientsCtr; // number of connected clients: current, max lifetime, accumulated counter
 
 signals:

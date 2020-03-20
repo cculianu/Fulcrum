@@ -34,7 +34,9 @@ namespace ServerMisc
 
     /// The amount of time we wait before initiating auto-kick when the globalSubsLimitReached signal has been asserted by a Server instance.
     constexpr double kMaxSubsAutoKickDelaySecs = 0.25;
-    /// The rate limit for suppression of dupe "max subs" warnings to log.
+    /// The rate limit for suppression of dupe global "max subs" warnings to log.
     constexpr double kMaxSubsWarningsRateLimitSecs = 0.251;
+    /// The rate limit for suppression of dupe per-IP "max subs" warnings to log.
+    constexpr double kMaxSubsPerIPWarningsRateLimitSecs = 1.0;
 }
 

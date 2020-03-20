@@ -29,10 +29,12 @@
 #include <QVariantMap>
 
 #include <algorithm>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <shared_mutex>
 #include <tuple>
+#include <type_traits>
 
 
 struct Options {
@@ -162,9 +164,12 @@ public:
     /// Comes from a triplet in config, if specified e.g.: "bitcoind_throttle = 50, 20, 10"
     AtomicBdReqThrottleParams bdReqThrottleParams;
 
-    //TODO here: ensure sanity of these values if coming from config (must be >0!)
-    int64_t maxSubsPerIP = 50000; // testing.. 50k subs per IP ought to be plenty.
-    int64_t maxSubsGlobally = 10000000; // testing.. 10 million subs max globally.
+    static constexpr int64_t defaultMaxSubsPerIP = 50000, maxSubsPerIPMin = 500, maxSubsPerIPMax = std::numeric_limits<int>::max()/2; // 50k, 500, 10^30 (~1bln) respectively
+    static constexpr int64_t defaultMaxSubsGlobally = 10000000, maxSubsGloballyMin = 5000, maxSubsGloballyMax = std::numeric_limits<int>::max(); // 10 mln, 5k, 10^31 (~2bln) respectively
+    int64_t maxSubsPerIP = defaultMaxSubsPerIP; // 50k subs per IP ought to be plenty. User can set this in `max_subs_per_ip` in conf.
+    int64_t maxSubsGlobally = defaultMaxSubsGlobally; // 10 million subs max globally.  User can set this in `max_subs` in conf.
+    static constexpr bool isMaxSubsPerIPSettingInBounds(int64_t m) { return m >= maxSubsPerIPMin && m <= maxSubsPerIPMax; }
+    static constexpr bool isMaxSubsGloballySettingInBounds(int64_t m) { return m >= maxSubsGloballyMin && m <= maxSubsGloballyMax; }
 };
 
 /// A class encapsulating a simple read-only config file format.  The format is similar to the bitcoin.conf format
@@ -228,6 +233,8 @@ public:
     bool boolValue(const QString & name, bool def = false, bool *parsedOk = nullptr, Qt::CaseSensitivity = Qt::CaseInsensitive) const;
     /// Parses the value as an int and returns it, or returns the default if missing/not parsed.  Sets *parseOk = false if parse error or not found.
     int intValue(const QString & name, int def = 0, bool *parsedOk = nullptr, Qt::CaseSensitivity = Qt::CaseInsensitive) const;
+    /// Parses the value as an int64_t and returns it, or returns the default if missing/not parsed.  Sets *parseOk = false if parse error or not found.
+    int64_t int64Value(const QString & name, int64_t def = 0, bool *parsedOk = nullptr, Qt::CaseSensitivity = Qt::CaseInsensitive) const;
     /// Parses the value as a double and returns it, or returns the default if missing/not parsed.  Sets *parseOk = false if parse error or not found.
     double doubleValue(const QString & name, double def = 0.0, bool *parsedOk = nullptr, Qt::CaseSensitivity = Qt::CaseInsensitive) const;
 
@@ -240,5 +247,9 @@ public:
     void clear() { map.clear(); }
 
 private:
+    /// Generic helper for parsing arithmetic values (reduces boilerplate code)
+    template <typename Numeric, std::enable_if_t<std::is_arithmetic_v<Numeric>, int> = 0>
+    Numeric genericParseArithmeticValue(const QString &name, Numeric def, bool *parsedOk, Qt::CaseSensitivity) const;
+
     QMultiHash<QString, QString> map; ///< name/value pairs read/parsed
 };

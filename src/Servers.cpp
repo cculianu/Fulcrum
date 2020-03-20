@@ -1181,15 +1181,19 @@ void Server::rpc_blockchain_scripthash_subscribe(Client *c, const RPC::Message &
         throw RPCError("Invalid scripthash");
 
     const auto CheckSubsLimit = [c, &sh, this](int64_t nShSubs, bool doUnsub) {
-        if (UNLIKELY(nShSubs >= options->maxSubsPerIP)) {
+        if (UNLIKELY(nShSubs > options->maxSubsPerIP)) {
             if (c->perIPData->isWhitelisted()) {
                 // White-listed, let it go
                 Debug() << c->prettyName(false, false) << " exceeded the per-IP subscribe limit with " << nShSubs
                         << " subs, but it is whitelisted (subnet: " << c->perIPData->whiteListedSubnet().toString() << ")";
             } else {
                 // Not white-listed .. unsubscribe and throw an error.
-                Warning() << c->prettyName(false, false) << " exceeded per-IP subscribe limit with " << nShSubs
-                          << " subs, denying  subscribe request";
+                if (const auto now = Util::getTimeSecs(); now - c->lastWarnedAboutSubsLimit > ServerMisc::kMaxSubsPerIPWarningsRateLimitSecs /* 1.0 secs */) {
+                    // message spam throttled to once per second
+                    Warning() << c->prettyName(false, false) << " exceeded per-IP subscribe limit with " << nShSubs
+                              << " subs, denying  subscribe request";
+                    c->lastWarnedAboutSubsLimit = now;
+                }
                 if (doUnsub) {
                     // unsubscribe client right away
                     if (LIKELY(storage->subs()->unsubscribe(c, sh))) {
@@ -1208,7 +1212,7 @@ void Server::rpc_blockchain_scripthash_subscribe(Client *c, const RPC::Message &
     // with other clients from this IP -- but breaking the limit will be caught in the second check below.
     // The reason we check twice is we *really* want to avoid creating a zombie sub for this client if we can
     // avoid it if they are at the limit.
-    CheckSubsLimit( c->perIPData->nShSubs, false ); // may throw RPCError
+    CheckSubsLimit( c->perIPData->nShSubs + 1, false ); // may throw RPCError
 
     SubsMgr::SubscribeResult result;
     try {
@@ -1222,7 +1226,7 @@ void Server::rpc_blockchain_scripthash_subscribe(Client *c, const RPC::Message &
             emit c->sendNotification(method, QVariantList{shHex, statusHexMaybeNull});
         });
     } catch (const SubsMgr::LimitReached &e) {
-        if (Util::getTimeSecs() - lastSubsWarningPrintTime > ServerMisc::kMaxSubsWarningsRateLimitSecs) {
+        if (Util::getTimeSecs() - lastSubsWarningPrintTime > ServerMisc::kMaxSubsWarningsRateLimitSecs /* ~250 ms */) {
             // rate limit printing
             Warning() << "Exception from SubsMgr: " << e.what() << " (while serving subscribe request for " << c->prettyName(false, false) << ")";
             lastSubsWarningPrintTime = Util::getTimeSecs();
