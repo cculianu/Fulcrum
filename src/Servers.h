@@ -349,6 +349,8 @@ private:
     /// called from get_mempool and get_history to retrieve the mempool and/or history for a hashx synchronously.
     /// Returns the QVariantMap suitable for placing into the resulting response.
     QVariantList getHistoryCommon(const QByteArray & sh, bool mempoolOnly);
+
+    double lastSubsWarningPrintTime = 0.; ///< used internally to rate-limit "max subs exceeded" message spam to log
 };
 
 /// SSL version of the above Server class that just wraps tcp sockets with a QSslSocket.

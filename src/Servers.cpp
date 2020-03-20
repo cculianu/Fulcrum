@@ -1204,11 +1204,10 @@ void Server::rpc_blockchain_scripthash_subscribe(Client *c, const RPC::Message &
             emit c->sendNotification(method, QVariantList{shHex, statusHexMaybeNull});
         });
     } catch (const SubsMgr::LimitReached &e) {
-        static double lastPrintTime = 0.;
-        if (Util::getTimeSecs() - lastPrintTime > SrvMgr::kMaxSubsAutoKickDelaySecs) {
+        if (Util::getTimeSecs() - lastSubsWarningPrintTime > ServerMisc::kMaxSubsWarningsRateLimitSecs) {
             // rate limit printing
             Warning() << "Exception from SubsMgr: " << e.what() << " (while serving subscribe request for " << c->prettyName(false, false) << ")";
-            lastPrintTime = Util::getTimeSecs();
+            lastSubsWarningPrintTime = Util::getTimeSecs();
         }
         emit globalSubsLimitReached(); // connected to the SrvMgr, which will loop through all IPs and kick all clients for the most-subscribed IP
         throw RPCError("Subscription limit reached", RPC::Code_App_LimitExceeded); // send error to client

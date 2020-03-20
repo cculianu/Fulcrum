@@ -21,6 +21,7 @@
 #include "App.h"
 #include "BitcoinD.h"
 #include "PeerMgr.h"
+#include "ServerMisc.h"
 #include "Servers.h"
 #include "Storage.h"
 #include "SubsMgr.h"
@@ -428,7 +429,7 @@ std::shared_ptr<Client::PerIPData> SrvMgr::getOrCreatePerIPData(const QHostAddre
 
 void SrvMgr::globalSubsLimitReached()
 {
-    callOnTimerSoonNoRepeat(int(1e3 * kMaxSubsAutoKickDelaySecs), "KickMostSubscribedClient", [this]{ // we rate limit this to at most once every 500 ms.
+    callOnTimerSoonNoRepeat(int(1e3 * ServerMisc::kMaxSubsAutoKickDelaySecs), "+KickMostSubscribedClient", [this]{ // we rate limit this to at most once every 500 ms.
 
         if (!storage->subs()->isNearGlobalSubsLimit()) {
             Debug() << "SrvMgr max subs kicker: Timer fired but we are no longer near the global subs limit. Returning early...";
