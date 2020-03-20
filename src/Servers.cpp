@@ -404,13 +404,14 @@ ServerBase::newClient(QTcpSocket *sock)
     const auto addr = ret->peerAddress();
 
     ret->perIPData = srvmgr->getOrCreatePerIPData(addr); // IMPORTANT that we do this ASAP since ret->perIPData must be valid for properly constructed clients
+    ++ret->perIPData->nClients; // increment client counter now
     assert(ret->perIPData);
 
     // if deleted, we need to purge it from map
-    auto on_destroyed = [clientId, addr, this](Client *c) {
+    const auto on_destructing = [clientId, addr, this](Client *c) {
         // this whole call is here so that delete client->sock ends up auto-removing the map entry
         // as a convenience.
-        Debug() << "Client nested 'on_destroyed' called for " << clientId;
+        Debug() << "Client nested 'on_destructing' called for " << clientId;
         if (const auto client = clientsById.take(clientId); client) {
             // purge from map
             if (UNLIKELY(client != c))
@@ -426,11 +427,12 @@ ServerBase::newClient(QTcpSocket *sock)
             Error() << "nShSubs for IP " << addr.toString() << " is " << nSubsIP << ". FIXME!";
         if (nSubsIP == 0 && c->nShSubs)
             Debug() << "PerIP: " << addr.toString() << " is no longer subscribed to any scripthashes";
+        --c->perIPData->nClients; // decrement client counter
         // tell SrvMgr this client is gone so it can decrement its clients-per-ip count.
         emit clientDisconnected(clientId, addr);
     };
     assert(ret->thread() == this->thread()); // the DirectConnection below requires this client to live in the same thread as us. Which is always the case.
-    connect(ret, &Client::clientDestructing, this, on_destroyed, Qt::DirectConnection);
+    connect(ret, &Client::clientDestructing, this, on_destructing, Qt::DirectConnection);
     connect(ret, &AbstractConnection::lostConnection, this, [this, clientId](AbstractConnection *cl){
         if (auto client = dynamic_cast<Client *>(cl) ; client) {
             Debug() <<  client->prettyName() << " lost connection";
@@ -1165,7 +1167,7 @@ void Server::rpc_blockchain_scripthash_subscribe(Client *c, const RPC::Message &
             if (c->perIPData->isWhitelisted()) {
                 // White-listed, let it go
                 Debug() << c->prettyName(false, false) << " exceeded the per-IP subscribe limit with " << nShSubs
-                        << " subs, but it is whitelisted (subnet: " << c->perIPData->whiteListedSubnet.toString() << ")";
+                        << " subs, but it is whitelisted (subnet: " << c->perIPData->whiteListedSubnet().toString() << ")";
             } else {
                 // Not white-listed .. unsubscribe and throw an error.
                 Warning() << c->prettyName(false, false) << " exceeded per-IP subscribe limit with " << nShSubs

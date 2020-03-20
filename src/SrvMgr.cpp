@@ -180,7 +180,7 @@ void SrvMgr::clientConnected(IdMixin::Id cid, const QHostAddress &addr)
             {
                 std::shared_lock g(ipData->mut); // shared lock guards ipData->whiteListSubnet
                 wlstate = Client::PerIPData::WhiteListState(ipData->whiteListState.load());
-                matched = ipData->whiteListedSubnet; // copy out data with lock held
+                matched = ipData->_whiteListedSubnet; // copy out data with lock held
             }
             switch (wlstate) {
             case Client::PerIPData::WhiteListState::NotWhiteListed:
@@ -412,12 +412,12 @@ std::shared_ptr<Client::PerIPData> SrvMgr::getOrCreatePerIPData(const QHostAddre
         std::unique_lock g(ret->mut);
         if (ret->whiteListState == Client::PerIPData::WhiteListState::UNINITIALIZED) { // check again with lock held.
             // Note: this query is a linear search through the exclude set, so hopefully the set is always small
-            const bool whiteListed = options->isAddrInPerIPLimitExcludeSet(address, &ret->whiteListedSubnet);
+            const bool whiteListed = options->isAddrInPerIPLimitExcludeSet(address, &ret->_whiteListedSubnet);
             ret->whiteListState = whiteListed ? Client::PerIPData::WhiteListState::WhiteListed
                                               : Client::PerIPData::WhiteListState::NotWhiteListed;
             if constexpr (true || !isReleaseBuild()) {
                 if (whiteListed)
-                    Debug() << address.toString() << " is whitelisted (subnet: " << ret->whiteListedSubnet.toString() << ")";
+                    Debug() << address.toString() << " is whitelisted (subnet: " << ret->_whiteListedSubnet.toString() << ")";
                 else
                     Debug() << address.toString() << " is NOT whitelisted";
             }

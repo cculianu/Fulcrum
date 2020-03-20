@@ -469,13 +469,17 @@ public:
     /// Data that is per-IP address. This data structure is potentially shared with multiple Client * instances living
     /// in multiple ServerBase instances, in multiple threads.  The table that stores these is in SrvMgr. See SrvMgr.h.
     struct PerIPData {
-        std::shared_mutex mut;
+        mutable std::shared_mutex mut;  ///< guards _whiteListedSubnet
 
         enum WhiteListState { UNINITIALIZED, WhiteListed, NotWhiteListed };
         std::atomic_int whiteListState{UNINITIALIZED}; ///< used to determine if we should apply limits.
-        inline bool isWhitelisted() const { return whiteListState.load() == WhiteListed; }
-        Options::Subnet whiteListedSubnet; ///< guarded by mut. This is only ever valid iff whiteListState == WhiteListed. otherwise .isValid() == false
+        Options::Subnet _whiteListedSubnet; ///< guarded by mut. Use getter for thread-safe reads. This is only ever valid iff whiteListState == WhiteListed. otherwise .isValid() == false
 
+        inline bool isWhitelisted() const { return whiteListState.load() == WhiteListed; }
+        /// Thread-safe getter for _whiteListedSubnet above
+        inline Options::Subnet whiteListedSubnet() const { std::shared_lock g(mut); return _whiteListedSubnet; }
+
+        std::atomic_int nClients{0}; ///< the number of alive clients referencing this perIPData item
         std::atomic_int64_t nShSubs{0}; ///< the number of unique scripthash subscriptions for all clients coming from this IP address.
         std::atomic_int64_t bdReqCtr{0}; ///< the number bitcoind requests active right now for all clients coming from this IP address.
     };
