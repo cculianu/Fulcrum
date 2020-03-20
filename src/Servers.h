@@ -484,6 +484,7 @@ public:
         std::atomic_int nClients{0}; ///< the number of alive clients referencing this perIPData item
         std::atomic_int64_t nShSubs{0}; ///< the number of unique scripthash subscriptions for all clients coming from this IP address.
         std::atomic_int64_t bdReqCtr{0}; ///< the number bitcoind requests active right now for all clients coming from this IP address.
+        std::atomic_uint64_t bdReqCtr_cum{0}; ///< the number bitcoind requests, cumulatively, for all clients coming from this IP address.
     };
 
     std::shared_ptr<PerIPData> perIPData;

@@ -362,6 +362,15 @@ QVariant ServerBase::stats() const
         map["nTxSent"] = client->info.nTxSent;
         map["nTxBytesSent"] = client->info.nTxBytesSent;
         map["nTxBroadcastErrors"] = client->info.nTxBroadcastErrors;
+        // data from the per-ip structure
+        {
+            QVariantMap m;
+            m["nClients"] = qlonglong(client->perIPData->nClients.load());
+            m["nSubscriptions"] = qlonglong(client->perIPData->nShSubs.load());
+            m["nBitcoinDRequests"] = qlonglong(client->perIPData->bdReqCtr_cum.load());
+            m["isWhiteListed"] = client->perIPData->isWhitelisted();
+            map["perIPData"] = m;
+        }
         // the below don't really make much sense for this class (they are always 0 or empty)
         map.remove("nDisconnects");
         map.remove("nSocketErrors");
@@ -577,7 +586,8 @@ namespace {
     }
     BitcoinDMgr::FailF defaultBDFailFunc(Client *c, const RPC::Message::Id &id) {
         return [c, id](const RPC::Message::Id &, const QString &what) {
-            c->bdReqCtr -= std::min(c->bdReqCtr, 1LL); // decrease throttle counter
+            c->bdReqCtr -= std::min(c->bdReqCtr, 1LL); // decrease throttle counter (per-client, owned by this thread)
+            --c->perIPData->bdReqCtr; // decrease bitcoind request counter (per-IP, owned by multiple threads)
             emit c->sendError(false, RPC::Code_InternalError, QString("internal error: %1").arg(what), id);
         };
     }
@@ -643,19 +653,25 @@ void ServerBase::generic_async_to_bitcoind(Client *c, const RPC::Message::Id & r
     // Throttling support
     {
         const int bdReqHi = options->bdReqThrottleParams.load().hi;
-        if (++c->bdReqCtr >= bdReqHi && !c->isReadPaused()) {
+        ++c->perIPData->bdReqCtr; // increase bitcoind request counter (per-IP, owned by multiple threads)
+        ++c->perIPData->bdReqCtr_cum; // increase cumulative bitcoind request counter (per-IP, owned by multiple threads)
+        if (++c->bdReqCtr/*<- incr. per-client counter*/ >= bdReqHi && !c->isReadPaused()) {
             static constexpr const char *bdReqTimerName = "+BDR_DecayTimer";
-            Debug() << c->prettyName() << " has bitcoinD req ctr: " << c->bdReqCtr << ", PAUSING reads from socket";
+            Debug() << c->prettyName() << " has bitcoinD req ctr: " << c->bdReqCtr << " (PerIP ctr: "
+                    << c->perIPData->bdReqCtr << "), PAUSING reads from socket";
             c->setReadPaused(true); // pause reading from this client -- they exceeded threshold.
             // if timer not already active, start timer to decay ctr over time --
-            c->callOnTimerSoon(1000, bdReqTimerName, [c, this]{
+            static constexpr int kPollFreqHz = 5; //<-- we "poll" 5 times per second so as to detect situations where bitcoind is faster than our heuristics estimate it to be, and then wake up clients faster in that case
+            c->callOnTimerSoon(1000/kPollFreqHz /*=200ms*/, bdReqTimerName, [c, this, iCtr=unsigned(0)]() mutable {
                 const auto [bdReqHi, bdReqLo, decayPerSec] = options->bdReqThrottleParams.load();
-                c->bdReqCtr -= std::min(qint64(decayPerSec), c->bdReqCtr);
+                if ((++iCtr % kPollFreqHz) == 0) // every kPollFreqHz iterations = every 1 second, decay the counter by decayPerSec amount
+                    c->bdReqCtr -= std::min(qint64(decayPerSec), c->bdReqCtr);
                 if (c->isReadPaused() && c->bdReqCtr <= bdReqLo) {
-                    Debug() << c->prettyName() << " has bitcoinD req ctr: " << c->bdReqCtr << ", RESUMING reads from socket";
+                    Debug() << c->prettyName() << " has bitcoinD req ctr: " << c->bdReqCtr  << " (PerIP ctr: "
+                            << c->perIPData->bdReqCtr << "), RESUMING reads from socket";
                     c->setReadPaused(false);
                 }
-                return c->bdReqCtr > 0; // return false when ctr reaches 0, which stops the recurring timer
+                return c->bdReqCtr > 0; // return false when ctr reaches 0, which stops the recurring decay timer
             });
         }
     }
@@ -664,6 +680,7 @@ void ServerBase::generic_async_to_bitcoind(Client *c, const RPC::Message::Id & r
         // success
         [c, reqId, successFunc](const RPC::Message & reply) {
             c->bdReqCtr -= std::min(c->bdReqCtr, 1LL); // decrease throttle counter
+            --c->perIPData->bdReqCtr; // decrease bitcoind request counter (per-IP, owned by multiple threads)
             try {
                 const QVariant result = successFunc ? successFunc(reply) : reply.result(); // if no successFunc specified, use default which just copies the result to the client.
                 emit c->sendResult(reqId, result);
@@ -676,6 +693,7 @@ void ServerBase::generic_async_to_bitcoind(Client *c, const RPC::Message::Id & r
         // error
         [c, reqId, errorFunc](const RPC::Message & errorReply) {
             c->bdReqCtr -= std::min(c->bdReqCtr, 1LL); // decrease throttle counter
+            --c->perIPData->bdReqCtr; // decrease bitcoind request counter (per-IP, owned by multiple threads)
             try {
                 if (errorFunc)
                     errorFunc(errorReply); // this should throw RPCError
