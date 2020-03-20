@@ -656,14 +656,14 @@ void ServerBase::generic_async_to_bitcoind(Client *c, const RPC::Message::Id & r
         ++c->perIPData->bdReqCtr; // increase bitcoind request counter (per-IP, owned by multiple threads)
         ++c->perIPData->bdReqCtr_cum; // increase cumulative bitcoind request counter (per-IP, owned by multiple threads)
         if (++c->bdReqCtr/*<- incr. per-client counter*/ >= bdReqHi && !c->isReadPaused()) {
-            static constexpr const char *bdReqTimerName = "+BDR_DecayTimer";
             Debug() << c->prettyName() << " has bitcoinD req ctr: " << c->bdReqCtr << " (PerIP ctr: "
                     << c->perIPData->bdReqCtr << "), PAUSING reads from socket";
             c->setReadPaused(true); // pause reading from this client -- they exceeded threshold.
             // if timer not already active, start timer to decay ctr over time --
+            constexpr auto kTimerName = "+BDR_DecayTimer";
             static constexpr int kPollFreqHz = 5; //<-- we "poll" 5 times per second so as to detect situations where bitcoind is faster than our heuristics estimate it to be, and then wake up clients faster in that case
             static_assert (kPollFreqHz > 0 && kPollFreqHz <= 100); // for sanity
-            c->callOnTimerSoon(1000/kPollFreqHz /*=200ms*/, bdReqTimerName, [c, this, iCtr=unsigned(0)]() mutable {
+            c->callOnTimerSoon(1000/kPollFreqHz /*=200ms*/, kTimerName, [c, this, iCtr=unsigned(0)]() mutable {
                 const auto [bdReqHi, bdReqLo, decayPerSec] = options->bdReqThrottleParams.load();
                 if ((++iCtr % kPollFreqHz) == 0) // every kPollFreqHz iterations = every 1 second, decay the counter by decayPerSec amount
                     c->bdReqCtr -= std::min(qint64(decayPerSec), c->bdReqCtr);
