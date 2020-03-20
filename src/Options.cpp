@@ -121,8 +121,8 @@ QVariantMap Options::toMap() const
     const auto [hi, lo, decay] = bdReqThrottleParams.load();
     m["bitcoind_throttle"] = QVariantList{ hi, lo, decay };
     // max_subs_per_ip & max_subs
-    m["max_subs_per_ip"] = maxSubsPerIP;
-    m["max_subs"] = maxSubsGlobally;
+    m["max_subs_per_ip"] = qlonglong(maxSubsPerIP);
+    m["max_subs"] = qlonglong(maxSubsGlobally);
     return m;
 }
 
