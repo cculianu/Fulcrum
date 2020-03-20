@@ -23,6 +23,7 @@
 
 #include <QThread>
 
+#include <algorithm>
 #include <cmath>
 #include <mutex>
 
@@ -94,7 +95,11 @@ void SubsMgr::on_started()
     conns += connect(this, &SubsMgr::queueNoLongerEmpty, this, [this]{
         callOnTimerSoonNoRepeat(kNotifTimerIntervalMS, kNotifTimerName, [this]{ doNotifyAllPending(); }, false, Qt::TimerType::PreciseTimer);
     }, Qt::QueuedConnection);
-    callOnTimerSoon(kRemoveZombiesTimerIntervalMS, kRemoveZombiesTimerName, [this]{ removeZombies(); return true;}, true);
+    conns += connect(this, &SubsMgr::requestRemoveZombiesSoon, this, [this](int when_ms) {
+        // remove zombies in when_ms, outside normal rate-limiting timer
+        QTimer::singleShot(std::max(when_ms, 0), this, [this]{ removeZombies(true /* forced */); });
+    }, Qt::QueuedConnection);
+    callOnTimerSoon(kRemoveZombiesTimerIntervalMS, kRemoveZombiesTimerName, [this]{ removeZombies(false); return true;}, true);
 }
 
 void SubsMgr::on_finished()
@@ -202,17 +207,21 @@ auto SubsMgr::makeSubRef(const HashX &sh) -> SubRef
     return ret;
 }
 
-// may throw
+// may throw LimitReached
 auto SubsMgr::getOrMakeSubRef(const HashX &sh) -> std::pair<SubRef, bool>
 {
     std::pair<SubRef, bool> ret;
     LockGuard g(p->mut);
+
+    if (UNLIKELY(p->subs.size() >= size_t(options->maxSubsGlobally)))
+        // Note we check the limit against all subs (including zombies) to prevent a DoS attack that circumvents
+        // the limit by repeatedly creating subs, disconnecting, reconnecting, creating a different set of subs, etc.
+        throw LimitReached(QString("Global subs limit of %1 has been reached").arg(options->maxSubsGlobally));
+
     if (auto it = p->subs.find(sh); it != p->subs.end()) {
         ret.first = it->second;
         ret.second = false; // was not new
     } else {
-        if (p->nClientSubsActive >= options->maxSubsGlobally)
-            throw LimitReached(QString("Global subs limit of %1 has been reached").arg(options->maxSubsGlobally));
         ret.first = makeSubRef(sh);
         p->subs[sh] = ret.first;
         ret.second = true; // was new
@@ -231,10 +240,11 @@ auto SubsMgr::findExistingSubRef(const HashX &sh) const -> SubRef
 
 auto SubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &sh, const StatusCallback &notifyCB) -> SubscribeResult
 {
-    SubscribeResult ret = { false, {} };
     const auto t0 = debugPrint ? Util::getTimeNS() : 0LL;
     if (UNLIKELY(!notifyCB))
         throw BadArgs("SubsMgr::subscribe must be called with a valid notifyCB. FIXME!");
+
+    SubscribeResult ret = { false, {} };
     auto [sub, wasnew] = getOrMakeSubRef(sh); // may throw LimitReached
     {
         LockGuard g(sub->mut);
@@ -325,13 +335,12 @@ int64_t SubsMgr::numScripthashesSubscribed() const {
     return int64_t(p->subs.size());
 }
 
-bool SubsMgr::isNearGlobalSubsLimit() const
+std::pair<bool, bool> SubsMgr::globalSubsLimitFlags() const
 {
     constexpr double factor = .8;
     const auto thresh = int64_t(std::round(options->maxSubsGlobally * factor));
-    return numActiveClientSubscriptions() > thresh;
+    return { numActiveClientSubscriptions() > thresh, numScripthashesSubscribed() > thresh };
 }
-
 
 auto SubsMgr::getFullStatus(const HashX &sh) const -> StatusHash
 {
@@ -358,7 +367,7 @@ auto SubsMgr::getFullStatus(const HashX &sh) const -> StatusHash
     return ret;
 }
 
-void SubsMgr::removeZombies()
+void SubsMgr::removeZombies(bool forced)
 {
     const auto t0 = Util::getTimeNS();
     int ctr = 0;
@@ -372,7 +381,7 @@ void SubsMgr::removeZombies()
             return;
         }
         LockGuard g(sub->mut);
-        if (sub->subscribedClientIds.empty() && now - sub->tsMsec > kRemoveZombiesTimerIntervalMS) {
+        if (sub->subscribedClientIds.empty() && (forced || now - sub->tsMsec > kRemoveZombiesTimerIntervalMS)) {
             ++ctr;
             it = p->subs.erase(it);
         } else

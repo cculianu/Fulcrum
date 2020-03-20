@@ -162,6 +162,7 @@ public:
     /// Comes from a triplet in config, if specified e.g.: "bitcoind_throttle = 50, 20, 10"
     AtomicBdReqThrottleParams bdReqThrottleParams;
 
+    //TODO here: ensure sanity of these values if coming from config (must be >0!)
     int64_t maxSubsPerIP = 50000; // testing.. 50k subs per IP ought to be plenty.
     int64_t maxSubsGlobally = 10000000; // testing.. 10 million subs max globally.
 };

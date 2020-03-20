@@ -429,12 +429,29 @@ std::shared_ptr<Client::PerIPData> SrvMgr::getOrCreatePerIPData(const QHostAddre
 
 void SrvMgr::globalSubsLimitReached()
 {
-    callOnTimerSoonNoRepeat(int(1e3 * ServerMisc::kMaxSubsAutoKickDelaySecs), "+KickMostSubscribedClient", [this]{ // we rate limit this to at most once every 500 ms.
+    // we rate limit this to at most once every 250 ms.
+    static constexpr int kPeriod = int(1e3 * ServerMisc::kMaxSubsAutoKickDelaySecs);
+    callOnTimerSoon(kPeriod, "+KickMostSubscribedClient",
+                    [this, ctr=int(0)]() mutable {
+        ++ctr; // increment counter for how many times this callback has executed
+        // grab flags to get an idea of the state of the limits
+        const auto [activeNearLimit, allNearLimit] = storage->subs()->globalSubsLimitFlags();
 
-        if (!storage->subs()->isNearGlobalSubsLimit()) {
-            Debug() << "SrvMgr max subs kicker: Timer fired but we are no longer near the global subs limit. Returning early...";
-            return;
+        // request a zombie removal on return
+        Defer deferred = [this, allNearLimit=allNearLimit /*<- C++ bugs */] {
+            if (allNearLimit) {
+                const int when = kPeriod / 2;
+                Debug() << "Requesting zombie sub removal in " << when << " msec ...";
+                emit storage->subs()->requestRemoveZombiesSoon(when); // we do it with a delay to give the kick code time to run.
+            }
+        };
+
+        if (!activeNearLimit) {
+            // Ok, so there may be zombies. Come back again if there are, and give the zombie reaper a chance to fire.
+            Debug() << "SrvMgr max subs kicker: Timer fired but we are no longer near the global active subs limit, returning early ...";
+            return allNearLimit && ctr < 2; // fire once again later if we are near the limit after zombies are collected.
         }
+
         int64_t max = 0;
         QHostAddress maxIP;
         int tableSize{};
@@ -459,6 +476,7 @@ void SrvMgr::globalSubsLimitReached()
         } else {
             Debug() << "Global subs limit reached, but could not find a client to kick (num per-IP-datas: " << tableSize << ")";
         }
+        return false; // don't keep firing in this execution path.
     });
 }
 

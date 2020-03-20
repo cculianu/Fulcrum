@@ -75,8 +75,8 @@ public:
     }
 
     // Use these to grab the table for iterating
-    std::pair<const Table, SharedLockGuard> getTable() const { return {table, SharedLockGuard{mut}}; } // read-only access
-    std::pair<Table, ExclusiveLockGuard> getMutableTable() const { return {table, ExclusiveLockGuard{mut}}; } // read/write access
+    std::pair<const Table &, SharedLockGuard> getTable() const { return {table, SharedLockGuard{mut}}; } // read-only access
+    std::pair<Table &, ExclusiveLockGuard> getMutableTable() { return {table, ExclusiveLockGuard{mut}}; } // read/write access
 
 
     /// Thread-safe.  Gets an existing shared object, or atomically creates a new one if one does not

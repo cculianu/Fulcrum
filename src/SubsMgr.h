@@ -142,9 +142,11 @@ public:
     /// as well since it includes the aforementioned "zombies".
     int64_t numScripthashesSubscribed() const;
 
-    /// Returns true if the number of active client subscriptions is near the global subs limit (>80% of global limit).
+    /// Returns a pair of (limitActive, limitAll)
+    /// `limitActive` - is true if the number of active client subscriptions is near the global subs limit (>80% of global limit).
+    /// `limitAll` - is true if the subs table (including zombies) is near the global subs limit (>80% of global limit).
     /// The global limit comes from Options::maxSubsGlobally. This function is thread-safe.
-    bool isNearGlobalSubsLimit() const;
+    std::pair<bool, bool> globalSubsLimitFlags() const;
 
 
     /// Thread-safe. Returns the status hash bytes (32 bytes single sha256 hash of the status text). Will return
@@ -164,6 +166,10 @@ public:
     void enqueueNotifications(std::unordered_set<HashX, HashHasher> & s);
     /// Like the above but uses move.  After this call, s can be considered to be invalidated.
     void enqueueNotifications(std::unordered_set<HashX, HashHasher> && s);
+signals:
+    /// Public signal.  Emitted by SrvMgr to tell us to run removeZombies() right now outside the normal timer rate limit.
+    /// See SrvMgr::globalSubsLimitReached().
+    void requestRemoveZombiesSoon(int when_ms);
 signals:
     /// Private signal.  Used to indicate the notification queue is empty (and thus any associated timers should be stopped).
     void queueEmpty();
@@ -187,5 +193,5 @@ private:
 
     void doNotifyAllPending();
 
-    void removeZombies();
+    void removeZombies(bool forced);
 };
