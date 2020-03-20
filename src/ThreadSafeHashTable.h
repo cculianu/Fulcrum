@@ -149,7 +149,8 @@ public:
                     ExclusiveLockGuard g(me->mut);
                     auto it = me->table.find(key);
                     if (LIKELY(it != me->table.end())) {
-                        if (UNLIKELY(!it.value().expired() && it.value().lock().get() != p)) {
+                        if (const auto existingRef = it.value().lock();
+                                UNLIKELY(existingRef && existingRef.get() != p)) {
                             Warning() << myname << ": Deleter for " << ToString(key)
                                       << " found entry, but the weak_ref in the table refers to a different object! FIXME!";
                         } else {
