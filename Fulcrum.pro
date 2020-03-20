@@ -165,6 +165,7 @@ SOURCES += \
     AbstractConnection.cpp \
     App.cpp \
     BTC.cpp \
+    BTC_Address.cpp \
     BitcoinD.cpp \
     BlockProc.cpp \
     Common.cpp \
@@ -193,6 +194,7 @@ HEADERS += \
     AbstractConnection.h \
     App.h \
     BTC.h \
+    BTC_Address.h \
     BitcoinD.h \
     BlockProc.h \
     BlockProcTypes.h \
