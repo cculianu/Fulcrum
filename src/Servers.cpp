@@ -413,8 +413,8 @@ ServerBase::newClient(QTcpSocket *sock)
     const auto addr = ret->peerAddress();
 
     ret->perIPData = srvmgr->getOrCreatePerIPData(addr); // IMPORTANT that we do this ASAP since ret->perIPData must be valid for properly constructed clients
-    ++ret->perIPData->nClients; // increment client counter now
     assert(ret->perIPData);
+    ++ret->perIPData->nClients; // increment client counter now
 
     // if deleted, we need to purge it from map
     const auto on_destructing = [clientId, addr, this](Client *c) {
