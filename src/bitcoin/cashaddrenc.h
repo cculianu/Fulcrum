@@ -16,12 +16,12 @@ namespace bitcoin {
 // added by Calin to avoid pulling in the wold with the CChainParams
 struct MinimalisticChainParamsAddedByCalin
 {
-    std::string cashaddrPrefix = "bitcoincash";
+    const std::string cashaddrPrefix = "bitcoincash";
 
     inline const std::string & CashAddrPrefix() const { return cashaddrPrefix; }
 };
 typedef MinimalisticChainParamsAddedByCalin CChainParams;
-extern const CChainParams TestNetChainParams, MainNetChainParams; ///< convenience added by Calin
+extern const CChainParams TestNetChainParams, MainNetChainParams, RegTestNetChainParams; ///< convenience added by Calin
 
 enum CashAddrType : uint8_t { PUBKEY_TYPE = 0, SCRIPT_TYPE = 1 };
 

@@ -26,7 +26,7 @@
 namespace bitcoin {
 
 /// convenient work-alike added by Calin
-const CChainParams TestNetChainParams = { "bchtest" }, MainNetChainParams /* = "bitcoincash" */;
+const CChainParams TestNetChainParams = { "bchtest" }, RegTestNetChainParams = { "bchreg" }, MainNetChainParams /* = "bitcoincash" */;
 
 namespace {
 

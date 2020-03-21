@@ -30,15 +30,13 @@
 #include <QMetaType>
 #include <QPair>
 
+#include <algorithm>
+#include <array>
+#include <cstring>
+#include <type_traits>
 #include <vector>
 
 namespace BTC {
-    enum Net {
-        Invalid = 0,
-        MainNet = 0x80,
-        TestNet = 0xef
-    };
-
     using Byte = uint8_t;
 
     /// Helper class to glue QByteArray (which is very fast and efficient due to copy-on-write)
@@ -102,99 +100,6 @@ namespace BTC {
         ByteArray & operator<<(Byte c); ///< append any byte to this array
         operator QByteArray() const; ///< convenienct cast to QByteArray. Involves a full copy.
     };
-
-
-    struct Address
-    {
-        enum Kind {
-            Invalid = 0, P2PKH = 1, P2SH = 2
-        };
-
-        Address() {}
-        /// for the below 3 c'tors, the 'net' is auto-detected based on address.
-        Address(const QString &legacyOrCashAddress);
-        Address(const char *legacyOrCashAddress) { *this = legacyOrCashAddress; }
-        Address(const QByteArray &legacyOrCashAddress) { *this = legacyOrCashAddress; }
-
-    private:
-        static Address fromPubKey(const Byte *pbegin, const Byte *pend, Net = MainNet);
-        template <typename iter>
-        static Address fromPubKey(const iter & begin, const iter & end, Net net = MainNet) { return fromPubKey(reinterpret_cast<const Byte *>(&(*begin)), reinterpret_cast<const Byte *>(&(*end)), net); }
-    public:
-        static Address fromPubKey(const QByteArray &pubKey, Net net = MainNet) { return fromPubKey(pubKey.begin(), pubKey.end(), net); }
-        static Address fromPubKey(const std::vector<Byte> &pubKey, Net net = MainNet) { return fromPubKey(pubKey.begin(), pubKey.end(), net); }
-
-        QByteArray hash160() const { return h160; }
-
-        Kind kind() const;
-
-        bool isTestNet() const { return net == TestNet; }
-
-        bool isValid() const;
-
-
-        /// Returns the ElectrumX 'scripthash', bitcoin hex encoded.
-        /// (Which is reversed because of bitcoin's way of encoding hex).
-        /// The results of this function get cached.
-        QByteArray toHashX() const;
-
-        /// Returns the bitcoin script bytes as would be used in a spending transaction.
-        /// (not reversed)
-        /// The results of this function do not get cached.
-        /// Note the return is a ByteArray and not a QByteArray.
-        ByteArray toScript() const;
-        /// Same as toScript(), but returns the data as a CScript object (bitcoin data structure
-        /// for use with CTransaction et al in the txOut )
-        bitcoin::CScript toCScript() const;
-        /// Returns the bitcoin script bytes as would be used in a spending transaction,
-        /// hashed once with sha256. (not reversed)
-        /// The results of this function do not get cached
-        /// Note the return is a ByteArray and not a QByteArray.
-        ByteArray toScriptHash() const;
-        /// Same as above but returns QByteArray
-        QByteArray toScriptHashQ() const;
-
-        /// If isValid, returns the legacy address string, base58 encoded
-        /// Returns null string on error.
-        QString toString() const;
-
-        /// test any string to see if it's a valid address for the specified network
-        static bool isValid(const QString &legacyOrCashAddress, Net = MainNet);
-
-        Address & operator=(const QString &legacyOrCash) { return (*this = Address::fromString(legacyOrCash)); }
-        Address & operator=(const char *legacyOrCash) { return (*this = QString(legacyOrCash)); }
-        Address & operator=(const QByteArray &legacyOrCash) { return (*this = QString(legacyOrCash)); }
-
-        bool operator==(const Address & o) const { return net == o.net && verByte == o.verByte && h160 == o.h160; }
-        bool operator!=(const Address & o) const { return !(*this == o); }
-        /// less operator: for map support and also so that it sorts like the text address would.
-        bool operator<(const Address & o) const {
-            if (isValid() && o.isValid()) {
-                if (int cmp = std::memcmp(h160.constData(), o.h160.constData(), size_t(h160.length())); cmp < 0)
-                    return true;
-                else if (0==cmp)
-                    return net < o.net ? true : (net==o.net ? verByte < o.verByte : false);
-            }
-            return false;
-        }
-        bool operator<=(const Address & o) const { return *this < o || *this == o; }
-
-    private:
-        Net net = BTC::Invalid;
-        quint8 verByte = 99;
-        QByteArray h160;
-        mutable QByteArray cachedHashX;
-        static Address fromString(const QString &legacyOrCash);
-    public:
-        static bool test();
-    };
-
-    /// for Qt QSet support of type Address
-    inline uint qHash(const Address &key) {
-        if (key.isValid())
-            return key.hash160().left(8).toUInt(nullptr, 16); // just take the first 4 bytes and convert them to uint
-        return 0;
-    }
 
     struct UTXO {
         static constexpr int validTxidLength = (256/8)*2; ///< any txid not of this length (64) is immediately invalid.
