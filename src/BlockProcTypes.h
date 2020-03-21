@@ -31,7 +31,7 @@ using BlockHeight = std::uint32_t;
 using TxNum = std::uint64_t; ///< this is used by the storage subsystem and also CompactTXO
 using IONum = std::uint16_t;
 using TxHash = QByteArray;
-using HashX = QByteArray;
+using HashX = QByteArray; ///< Note that despite the name, unlike in ElectrumX/ElectronX, our "HashX" is always the full 32-byte sha256 hash.
 using BlockHash = QByteArray;
 constexpr int HashLen = bitcoin::uint256::width();
 
