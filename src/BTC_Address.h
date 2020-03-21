@@ -88,7 +88,7 @@ namespace BTC {
         /// for use with CTransaction et al in the txOut )
         bitcoin::CScript toCScript() const;
         /// Returns the bitcoin script bytes as would be used in a spending transaction,
-        /// hashed once with sha256. (in reversed hex memory order, as EX/Fulcrum would use)
+        /// hashed once with sha256, as raw bytes. (in reversed memory order, as EX/Fulcrum would use for its HashX)
         QByteArray toHashX() const;
 
         /// If isValid, returns the address as a string (either cash address w/ prefix, or legacy address string).
