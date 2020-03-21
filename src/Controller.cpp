@@ -785,7 +785,7 @@ struct Controller::StateMachine
     };
     State state = Begin;
     int ht = -1; ///< the latest height bitcoind told us this run
-    bool isMainNet = false;
+    BTC::Net net = BTC::Net::Invalid;  ///< This gets set by calls to getblockchaininfo by parsing the "chain" in the resulting dict
 
     robin_hood::unordered_flat_map<unsigned, PreProcessedBlockPtr> ppBlocks; // mapping of height -> PreProcessedBlock (we use an unordered_flat_map because it's faster for frequent updates)
     unsigned startheight = 0, ///< the height we started at
@@ -823,7 +823,7 @@ unsigned Controller::downloadTaskRecommendedThrottleTimeMsec(unsigned bnum) cons
     std::shared_lock g(smLock); // this lock guarantees that 'sm' won't be deleted from underneath us
     if (sm) {
         int maxBackLog = 1000; // <--- TODO: have this be a more dynamic value based on current average blocksize.
-        if (sm->isMainNet) {
+        if (sm->net == BTC::Net::MainNet) {
             // mainnet
             if (bnum > 150000) // beyond this height the blocks are starting to be big enough that we want to not eat memory.
                 maxBackLog = 250;
@@ -930,15 +930,25 @@ void Controller::process(bool beSilentIfUpToDate)
                 AGAIN();
                 return;
             }
-            if (const auto dbchain = storage->getChain(); dbchain.isEmpty() && !task->info.chain.isEmpty()) {
-                storage->setChain(task->info.chain);
-            } else if (dbchain != task->info.chain) {
-                Fatal() << "Bitcoind reports chain: \"" << task->info.chain << "\", which differs from our database: \""
+            const auto & chain = task->info.chain;
+            if (const auto dbchain = storage->getChain(); dbchain.isEmpty() && !chain.isEmpty()) {
+                storage->setChain(chain);
+            } else if (dbchain != chain) {
+                Fatal() << "Bitcoind reports chain: \"" << chain << "\", which differs from our database: \""
                         << dbchain << "\". You may have connected to the wrong bitcoind. To fix this issue either "
                         << "connect to a different bitcoind or delete this program's datadir to resynch.";
                 return;
             }
-            sm->isMainNet = task->info.chain == "main";
+            sm->net = BTC::NetFromName(chain);
+            if (UNLIKELY(sm->net == BTC::Net::Invalid)) {
+                // Unknown chain name. This shouldn't happen but it if does, warn the user since it will make all of
+                // the blockchain.address.* methods not work. This warning will spam the log so hopefully it will not
+                // go unnoticed. I doubt anyone anytime soon will rename "main" or "test" or "regtest", but it pays
+                // to be safe.
+                Warning() << "Warning: Bitcoind reports chain: \"" << chain << "\", which is unknown to this software. "
+                          << "Some protocol methods such as \"blockchain.address.*\" will not work correctly. "
+                          << "Please update your software and/or report this to the developers.";
+            }
             QByteArray tipHeader;
             const auto [tip, tipHash] = storage->latestTip(&tipHeader);
             sm->ht = task->info.blocks;

@@ -16,9 +16,9 @@ namespace bitcoin {
 // added by Calin to avoid pulling in the wold with the CChainParams
 struct MinimalisticChainParamsAddedByCalin
 {
-    const std::string cashaddrPrefix = "bitcoincash";
+    const std::string cashaddrPrefix; // e.g. "bitcoincash"
 
-    inline const std::string & CashAddrPrefix() const { return cashaddrPrefix; }
+    inline const std::string & CashAddrPrefix() const noexcept { return cashaddrPrefix; }
 };
 typedef MinimalisticChainParamsAddedByCalin CChainParams;
 extern const CChainParams TestNetChainParams, MainNetChainParams, RegTestNetChainParams; ///< convenience added by Calin

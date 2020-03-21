@@ -118,7 +118,7 @@ public:
     /// Returns the current block height, or an empty optional if no genesisHash and no blocks;
     std::optional<BlockHeight> latestHeight() const;
 
-    /// eg 'main' or 'test' or may be empty string if new db (thread safe)
+    /// eg 'main' or 'test' (or even possibly 'regtest') or may be empty string if new db (thread safe)
     QString getChain() const;
     void setChain(const QString &); // implicitly calls db save of 'meta' (thread safe)
 

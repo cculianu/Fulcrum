@@ -18,7 +18,9 @@
 //
 #pragma once
 
-#include "bitcoin/cashaddrenc.h"
+#include "BTC.h"
+
+#include "bitcoin/cashaddrenc.h"  // for bitcoin::CashAddrType
 
 #include <QByteArray>
 #include <QMetaType>
@@ -30,25 +32,6 @@
 #include <vector>
 
 namespace BTC {
-    using Byte = uint8_t;
-
-    enum Net : Byte {
-        Invalid = 0xff,
-        MainNet = 0x80, ///< matches secret key byte
-        TestNet = 0xef, ///< matches secret key byte
-        RegTestNet = TestNet+1, ///< does not match anything in the bitcoin world, just an enum value
-    };
-
-    inline const char *NetName(Net net) noexcept {
-        switch(net){
-        case MainNet: return "main";
-        case TestNet: return "test";
-        case RegTestNet: return "regtest";
-        default: return "invalid";
-        }
-    }
-
-
     struct Address
     {
         enum Kind : Byte {

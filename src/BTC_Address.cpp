@@ -59,8 +59,9 @@ namespace BTC
             }
             return Address::Kind::Invalid;
         }
-        /// NB: this won't auto-detect regtest and confuse it with testnet (it prefers testnet over regtest since the
-        /// two are ambiguous based on verByte alone).
+        /// NB: This won't ever auto-detect regtest since it has the same verBytes as testnet (111 & 196).  Since
+        /// between the two choices, testnet is the much more likely network anybody using this software will be using,
+        /// we always return testnet if the verByte matches regtest and/or testnet.
         Net netForVerByte(Byte verByte) {
             for (auto it = netVerByteKindMap.begin(); it != netVerByteKindMap.end(); ++it) {
                 const Net net = it.key();
@@ -280,7 +281,7 @@ namespace BTC
             std::cout << "------------------------------------" << std::endl;
             std::cout << "Cash address: " << a.toString().toUtf8().constData() << ", legacy: " << a.toLegacyString().toUtf8().constData() << ", short cashaddr: " << a.toShortString().toUtf8().constData() << std::endl;
             std::cout << "Decoded -> VerByte: " << int(a.verByte) <<  "  Hash160 (hex): " << a.h160.toHex().constData() << std::endl;
-            std::cout << "IsValid: " << a.isValid() << " Kind: " << a.kind() << " Net: " << NetName(a.net()) << std::endl;
+            std::cout << "IsValid: " << a.isValid() << " Kind: " << a.kind() << " Net: " << NetName(a.net()).toUtf8().constData() << std::endl;
             const auto cscript = a.toCScript();
             std::cout << "Script Hex of: " << a.toString().toUtf8().constData() << " = " << QByteArray(reinterpret_cast<const char *>(&*cscript.begin()), int(cscript.size())).toHex().constData() << std::endl;
             std::cout << "HashX of " << a.toString().toUtf8().constData() << " = " << a.toHashX().toHex().constData() << std::endl;
