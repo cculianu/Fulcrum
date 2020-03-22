@@ -57,6 +57,10 @@ void Controller::startup()
     storage = std::make_shared<Storage>(options);
     storage->startup(); // may throw here
 
+    if (! options->dumpScriptHashes.isEmpty())
+        // this may take a long time but normally this branch is not taken
+        dumpScriptHashes(options->dumpScriptHashes);
+
     bitcoindmgr = std::make_shared<BitcoinDMgr>(options->bitcoind.first, options->bitcoind.second, options->rpcuser, options->rpcpassword);
     {
         auto constexpr waitTimer = "wait4bitcoind", callProcessTimer = "callProcess";
@@ -1381,7 +1385,7 @@ auto Controller::debug(const StatsParams &p) const -> Stats // from StatsMixin
         }
         ret["unspent_debug"] = l;
     }
-    if (p.count("mempool")) {
+    if (p.contains("mempool")) {
         QVariantMap mp, txs;
         auto [mempool, lock] = storage->mempool();
         for (const auto & [hash, tx] : mempool.txs) {
@@ -1455,6 +1459,10 @@ auto Controller::debug(const StatsParams &p) const -> Stats // from StatsMixin
         mp["hashXTxs (LoadFactor)"] = QString::number(double(mempool.hashXTxs.load_factor()), 'f', 4);
         ret["mempool_debug"] = mp;
     }
+    if (p.contains("subs")) {
+        const auto timeLeft = kDefaultTimeout - (Util::getTime() - t0/1000000) - 50;
+        ret["subscriptions"] = storage->subs()->debugSafe(p, std::max(5, int(timeLeft)));
+    }
     const auto elapsed = Util::getTimeNS() - t0;
     ret["elapsed"] = QString::number(elapsed/1e6, 'f', 6) + " msec";
     return ret;
@@ -1485,4 +1493,28 @@ std::tuple<size_t, size_t, size_t> Controller::nTxInOutSoFar() const
         }
     }
     return {nTx, nIn, nOut};
+}
+
+
+// --- Debug dump support
+void Controller::dumpScriptHashes(const QString &fileName) const
+{
+    if (!storage)
+        throw InternalError("Dump: Storage is not started");
+    QFile outFile(fileName);
+    if (!outFile.open(QIODevice::WriteOnly|QIODevice::Text|QIODevice::Truncate))
+        throw BadArgs(QString("Dump: Output file \"%1\" could not be opened for writing").arg(fileName));
+    Log() << "Dump: " << "writing all known script hashes from db to \"" << fileName << "\" (this may take some time) ...";
+    const auto t0 = Util::getTimeSecs();
+    const auto count = storage->dumpAllScriptHashes(&outFile, 2, 0, [](size_t ctr){
+        const QString text(QString("Dump: wrote %1 scripthashes so far ...").arg(ctr));
+        if (ctr && !(ctr % 1000000))
+            Log() << text;
+        else
+            Debug() << text;
+    });
+    outFile.flush();
+    Log() << "Dump: wrote " << count << Util::Pluralize(" script hash", count) << " to \"" << fileName << "\""
+          << " in " << QString::number(Util::getTimeSecs() - t0, 'f', 1) << " seconds"
+          <<" (" << QString::number(outFile.size()/1e6, 'f', 3) << " MiB)";
 }

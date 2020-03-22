@@ -148,6 +148,9 @@ private:
 
     /// takes locks, prints to Log() every 30 seconds if there were changes
     void printMempoolStatusToLog() const;
+
+    /// If --dump-sh was specified on CLI, this will execute at startup() time right after storage has been loaded. May throw.
+    void dumpScriptHashes(const QString &fileName) const;
 };
 
 /// Abstract base class for our private internal tasks. Concrete implementations are in Controller.cpp.

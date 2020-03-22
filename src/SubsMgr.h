@@ -179,6 +179,7 @@ protected:
     void on_started() override; ///< from ThreadObjectMixin
     void on_finished() override; ///< from ThreadObjectMixin
     Stats stats() const override; ///< from StatsMixin -- show some subs stats
+    Stats debug(const StatsParams &) const override; ///< from StatsMixin -- returns a QVariantMap of *all* subs iff param "subs" is present.
 
 private:
     const std::shared_ptr<const Options> options;

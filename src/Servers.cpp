@@ -1244,7 +1244,7 @@ void Server::impl_sh_subscribe(Client *c, const RPC::Message &m, const HashX &sh
     const auto CheckSubsLimit = [c, &sh, this](int64_t nShSubs, bool doUnsub) {
         if (UNLIKELY(nShSubs > options->maxSubsPerIP)) {
             if (c->perIPData->isWhitelisted()) {
-                // White-listed, let it go
+                // White-listed, let it go, but print to debug log
                 Debug() << c->prettyName(false, false) << " exceeded the per-IP subscribe limit with " << nShSubs
                         << " subs, but it is whitelisted (subnet: " << c->perIPData->whiteListedSubnet().toString() << ")";
             } else {

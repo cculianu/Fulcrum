@@ -266,6 +266,12 @@ void App::parseArgs()
                    " 30. If not specified, defaults to %1 seconds.").arg(Options::defaultPollTimeSecs),
            QString("polltime"), QString::number(Options::defaultPollTimeSecs)
          },
+         {
+           "dump-sh",
+           QString("*** This is an advanced debugging option ***   Dump script hashes. If specified, after the database"
+                   " is loaded, all of the script hashes in the database will be written to outputfile as a JSON array."),
+           QString("outputfile"),
+         },
      };
 
     parser.addOptions(allOptions);
@@ -728,6 +734,11 @@ void App::parseArgs()
         Util::AsyncOnObject(this, []{
             Warning() << "Warning: No 'hostname' variable defined in configuration. This server may not be peer-discoverable.";
         });
+    }
+
+    // parse --dump-*
+    if (const auto outFile = parser.value("dump-sh"); !outFile.isEmpty()) {
+        options->dumpScriptHashes = outFile; // we do no checking here, but Controller::startup will throw BadArgs if it cannot open this file for writing.
     }
 }
 

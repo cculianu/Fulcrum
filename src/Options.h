@@ -170,6 +170,8 @@ public:
     int64_t maxSubsGlobally = defaultMaxSubsGlobally; // 10 million subs max globally.  User can set this in `max_subs` in conf.
     static constexpr bool isMaxSubsPerIPSettingInBounds(int64_t m) { return m >= maxSubsPerIPMin && m <= maxSubsPerIPMax; }
     static constexpr bool isMaxSubsGloballySettingInBounds(int64_t m) { return m >= maxSubsGloballyMin && m <= maxSubsGloballyMax; }
+
+    QString dumpScriptHashes;  ///< if specified, a file path to which to dump all scripthashes as JSON, corresponds to --dump-sh CLI arg
 };
 
 /// A class encapsulating a simple read-only config file format.  The format is similar to the bitcoin.conf format

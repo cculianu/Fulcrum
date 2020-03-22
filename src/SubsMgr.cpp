@@ -395,13 +395,13 @@ void SubsMgr::removeZombies(bool forced)
     }
 }
 
-auto SubsMgr::stats() const -> Stats
+auto SubsMgr::debug(const StatsParams &params) const -> Stats
 {
-    QVariantMap ret;
-    {
+    QVariant ret;
+    if (params.contains("subs")) {
         QVariantMap m;
         LockGuard g(p->mut);
-        for (auto [sh, sub] : p->subs) { // value-copy intentional here (these are very cheap to perform on QByteArray and SubsRef anyway)
+        for (const auto & [sh, sub] : p->subs) {
             QVariantMap m2;
             {
                 LockGuard g2(sub->mut);
@@ -416,13 +416,22 @@ auto SubsMgr::stats() const -> Stats
                 m2["clientIds"] = Util::toList<QVariantList>(clients);
 #endif
             }
-            m[QString(sh.toHex())] = m2;
+            m[QString(Util::ToHexFast(sh))] = m2;
         }
-        ret["subscriptions"] = m;
-        ret["subscriptions (LoadFactor)"] = p->subs.load_factor();
+        ret = m;
+    }
+    return ret;
+}
+
+auto SubsMgr::stats() const -> Stats
+{
+    QVariantMap ret;
+    {
+        LockGuard g(p->mut);
+        ret["subscriptions load factor"] = p->subs.load_factor();
         QVariantList l;
-        for (auto sh : p->pendingNotificatons) {
-            l.push_back(QString(sh.toHex()));
+        for (const auto & sh : p->pendingNotificatons) {
+            l.push_back(Util::ToHexFast(sh));
         }
         ret["pendingNotifications"] = l;
     }
