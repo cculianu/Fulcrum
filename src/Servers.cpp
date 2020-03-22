@@ -1094,7 +1094,8 @@ void Server::rpc_blockchain_relayfee(Client *c, const RPC::Message &m)
     emit c->sendResult(m.id, bitcoinDInfo.relayFee);
 }
 
-// ---- These two are used by both the blockchain.scripthash.* and blockchain.address.* sets of methods below for boilerplate checking
+// ---- The below two methods are used by both the blockchain.scripthash.* and blockchain.address.* sets of methods
+//      below for boilerplate checking & parsing.
 HashX Server::parseFirstAddrParamToShCommon(const RPC::Message &m, QString *addrStrOut) const
 {
     const auto net = srvmgr->net();
