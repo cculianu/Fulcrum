@@ -95,6 +95,8 @@ namespace {
 // throw Exception on error
 void SrvMgr::startServers()
 {
+    _net = BTC::NetFromName(storage->getChain()); // set this now since server instances may need this information
+
     if (options->peerDiscovery) {
         Log() << "SrvMgr: starting PeerMgr ...";
         peermgr = std::make_shared<PeerMgr>(this, storage, options);
