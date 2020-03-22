@@ -120,8 +120,6 @@ void App::startup()
 #endif
 
         controller = std::make_unique<Controller>(options);
-        connect(controller.get(), &Controller::dumpScriptHashesComplete, this, [this]{ options->dumpScriptHashes.clear(); }); // cleanup --dump-sh, if set, to save a tiny amount of memory
-
         controller->startup(); // may throw
 
         if (!options->statsInterfaces.isEmpty()) {
