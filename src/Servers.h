@@ -34,6 +34,7 @@
 #include <QVector>
 
 #include <memory> // for shared_ptr
+#include <optional>
 #include <shared_mutex>
 
 struct TcpServerError : public Exception
