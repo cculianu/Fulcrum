@@ -114,8 +114,8 @@ QVariantMap Options::toMap() const
     m["tor_tcp_port"] = torTcp.has_value() ? QVariant(torTcp.value()) : QVariant();
     m["tor_ssl_port"] = torSsl.has_value() ? QVariant(torSsl.value()) : QVariant();
     m["tor_proxy"] = QString("%1:%2").arg(torProxy.first.toString()).arg(torProxy.second);
-    m["tor_user"] = torUser;
-    m["tor_pass"] = torPass;
+    m["tor_user"] = torUser.isNull() ? QVariant() : QVariant("<hidden>");
+    m["tor_pass"] = torPass.isNull() ? QVariant() : QVariant("<hidden>");
     // /tor related
     // bitcoind_throttle params
     const auto [hi, lo, decay] = bdReqThrottleParams.load();
