@@ -418,7 +418,7 @@ std::shared_ptr<Client::PerIPData> SrvMgr::getOrCreatePerIPData(const QHostAddre
             const bool whiteListed = options->isAddrInPerIPLimitExcludeSet(address, &ret->_whiteListedSubnet);
             ret->whiteListState = whiteListed ? Client::PerIPData::WhiteListState::WhiteListed
                                               : Client::PerIPData::WhiteListState::NotWhiteListed;
-            if constexpr (true || !isReleaseBuild()) {
+            if constexpr (!isReleaseBuild()) {
                 if (whiteListed)
                     Debug() << address.toString() << " is whitelisted (subnet: " << ret->_whiteListedSubnet.toString() << ")";
                 else

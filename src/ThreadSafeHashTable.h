@@ -37,7 +37,7 @@
 ///
 /// Note: This object *must* live longer than all of its subordinate DataRefs because the deleters for the returned
 /// objects access this object!
-template <typename Key, typename Data, bool debugPrt = true || !isReleaseBuild(),
+template <typename Key, typename Data, bool debugPrt = !isReleaseBuild(),
           auto KeyToStringMember = &Key::toString>
 class ThreadSafeHashTable : public QObject
 {
