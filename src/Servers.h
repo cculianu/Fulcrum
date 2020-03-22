@@ -305,6 +305,13 @@ private:
     void rpc_server_peers_subscribe(Client *, const RPC::Message &); // fully implemented
     void rpc_server_ping(Client *, const RPC::Message &); // fully implemented
     void rpc_server_version(Client *, const RPC::Message &); // fully implemented
+    // address (resurrected in protocol 1.4.3)
+    void rpc_blockchain_address_get_balance(Client *, const RPC::Message &); // fully implemented
+    void rpc_blockchain_address_get_history(Client *, const RPC::Message &); // fully implemented
+    void rpc_blockchain_address_get_mempool(Client *, const RPC::Message &); // fully implemented
+    void rpc_blockchain_address_listunspent(Client *, const RPC::Message &); // fully implemented
+    void rpc_blockchain_address_subscribe(Client *, const RPC::Message &); // fully implemented
+    void rpc_blockchain_address_unsubscribe(Client *, const RPC::Message &); // fully implemented
     // blockchain misc
     void rpc_blockchain_block_header(Client *, const RPC::Message &);  // fully implemented
     void rpc_blockchain_block_headers(Client *, const RPC::Message &); // fully implemented
@@ -325,6 +332,29 @@ private:
     void rpc_blockchain_transaction_id_from_pos(Client *, const RPC::Message &); // fully implemented
     // mempool
     void rpc_mempool_get_fee_histogram(Client *, const RPC::Message &); // fully implemented
+
+    // Impl. for blockchain.scripthash.* & blockchain.address.* methods (both sets call into these).
+    // Note: Validation should have already been done by caller.
+    void impl_get_balance(Client *, const RPC::Message &, const HashX &scriptHash);
+    void impl_get_history(Client *, const RPC::Message &, const HashX &scriptHash);
+    void impl_get_mempool(Client *, const RPC::Message &, const HashX &scriptHash);
+    void impl_listunspent(Client *, const RPC::Message &, const HashX &scriptHash);
+    void impl_sh_subscribe(Client *, const RPC::Message &, const HashX &scriptHash,
+                           const std::optional<QString> & aliasUsedForNotifications = {});
+    void impl_sh_unsubscribe(Client *, const RPC::Message &, const HashX &scriptHash);
+    /// Commonly used by above methods.  Takes the first address argument in the m.paramsList() and converts it to
+    /// a scripthash, returning the raw bytes.  Will throw RPCError on invalid argument.
+    /// It is assumed the caller already ensured m.paramsList() has at least 1 item in it (which the RPC machinery
+    /// does normally if the params spec is correctly written).  Validation is done on the argument, however, and
+    /// it will throw RPCError in all parse/failure cases and only ever returns a valid scripthash on success.
+    HashX parseFirstAddrParamToShCommon(const RPC::Message &m, QString *addrStrOut = nullptr) const;
+    /// Commonly used by above methods.  Takes the first scripthash hex argument in the m.paramsList() and converts it to
+    /// a scripthash, returning the raw bytes.  Will throw RPCError on invalid argument.
+    /// It is assumed the caller already ensured m.paramsList() has at least 1 item in it (which the RPC machinery
+    /// does normally if the params spec is correctly written).  Validation is done on the argument, however, and
+    /// it will throw RPCError in all parse/failure cases and only ever returns a valid scripthash on success.
+    HashX parseFirstShParamCommon(const RPC::Message &m) const;
+
 
     /// Basically a namespace for our rpc dispatch tables, etc
     struct StaticData {
@@ -348,7 +378,7 @@ private:
 
     /// called from get_mempool and get_history to retrieve the mempool and/or history for a hashx synchronously.
     /// Returns the QVariantMap suitable for placing into the resulting response.
-    QVariantList getHistoryCommon(const QByteArray & sh, bool mempoolOnly);
+    QVariantList getHistoryCommon(const HashX & sh, bool mempoolOnly);
 
     double lastSubsWarningPrintTime = 0.; ///< used internally to rate-limit "max subs exceeded" message spam to log
 };

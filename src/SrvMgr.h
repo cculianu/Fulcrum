@@ -18,6 +18,7 @@
 //
 #pragma once
 
+#include "BTC.h"
 #include "Mgr.h"
 #include "Options.h"
 #include "Servers.h"
@@ -49,6 +50,12 @@ public:
 
     std::size_t txBroadcasts() const { return numTxBroadcasts.load(); }
     std::size_t txBroadcastBytes() const { return txBroadcastBytesTotal.load(); }
+
+    /// Thread-safe. Returns the current network that storage and bitcoind are connected to. Note in very unlikely
+    /// cases where for some reason bitcoind has renamed its networks from the canonical "main", "test", "regtest"
+    /// in some future scenario, this may return BTC::Net::Invalid, so callers should check for that possibility.
+    /// (Used by the blockchain.address.* RPC methods to figure out which addresses to accept and which to reject.)
+    inline BTC::Net net() const noexcept { return _net; }
 
     /// Must be called in this object's thread -- does a blocking call to all the Server instances that are started
     /// (timeout_ms, specify timeout_ms <= 0 to block forever), and prepares the QVariantList RPC response appropriate
@@ -167,6 +174,7 @@ private:
     QMultiHash<QHostAddress, IdMixin::Id> addrIdMap;
 
     std::atomic_size_t numTxBroadcasts = 0, txBroadcastBytesTotal = 0;
+    BTC::Net _net = BTC::Invalid; ///< gets set in startServers by querying storage.
 
     // -- the below is shared with other threads and guarded by banMut.
     struct BanInfo {

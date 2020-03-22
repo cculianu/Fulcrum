@@ -20,6 +20,7 @@
 
 #include "App.h"
 #include "BitcoinD.h"
+#include "BTC_Address.h"
 #include "Merkle.h"
 #include "PeerMgr.h"
 #include "ServerMisc.h"
@@ -1092,13 +1093,49 @@ void Server::rpc_blockchain_relayfee(Client *c, const RPC::Message &m)
     // back. See: refreshBitcoinDNetworkInfo()
     emit c->sendResult(m.id, bitcoinDInfo.relayFee);
 }
-void Server::rpc_blockchain_scripthash_get_balance(Client *c, const RPC::Message &m)
+
+// ---- These two are used by both the blockchain.scripthash.* and blockchain.address.* sets of methods below for boilerplate checking
+HashX Server::parseFirstAddrParamToShCommon(const RPC::Message &m, QString *addrStrOut) const
+{
+    const auto net = srvmgr->net();
+    if (UNLIKELY(net == BTC::Net::Invalid))
+        // This should never happen in practice, but it pays to be paranoid.
+        throw RPCError("Server cannot parse addresses at this time", RPC::ErrorCodes::Code_InternalError);
+    constexpr int kAddrLenLimit = 128; // no address is ever really over 64 chars, let alone 128
+    QVariantList l(m.paramsList());
+    assert(!l.isEmpty());
+    const QString addrStr = l.front().toString().left(kAddrLenLimit).trimmed();
+    const BTC::Address address(addrStr);
+    if (address.net() != net || !address.isValid())
+        throw RPCError(QString("Invalid address: %1").arg(addrStr));
+    const auto sh = address.toHashX();
+    if (UNLIKELY(sh.length() != HashLen))
+        throw RPCError("Invalid scripthash", RPC::ErrorCodes::Code_InternalError); // this should never happen but we must be defensive here.
+    if (addrStrOut) *addrStrOut = addrStr;
+    return sh;
+}
+HashX Server::parseFirstShParamCommon(const RPC::Message &m) const
 {
     QVariantList l(m.paramsList());
     assert(!l.isEmpty());
-    const QByteArray sh = validateHashHex( l.front().toString() );
+    const HashX sh = validateHashHex( l.front().toString() );
     if (sh.length() != HashLen)
         throw RPCError("Invalid scripthash");
+    return sh;
+}
+// ---
+void Server::rpc_blockchain_scripthash_get_balance(Client *c, const RPC::Message &m)
+{
+    const auto sh = parseFirstShParamCommon(m);
+    impl_get_balance(c, m, sh);
+}
+void Server::rpc_blockchain_address_get_balance(Client *c, const RPC::Message &m)
+{
+    const auto sh = parseFirstAddrParamToShCommon(m);
+    impl_get_balance(c, m, sh);
+}
+void Server::impl_get_balance(Client *c, const RPC::Message &m, const HashX &sh)
+{
     generic_do_async(c, m.id, [sh, this] {
         const auto [amt, uamt] = storage->getBalance(sh);
         /* Note: ElectrumX protocol docs are incorrect. They claim a string in coin units is returned here.
@@ -1114,7 +1151,7 @@ void Server::rpc_blockchain_scripthash_get_balance(Client *c, const RPC::Message
 
 /// called from get_mempool and get_history to retrieve the mempool for a hashx synchronously.  Returns the
 /// QVariantMap suitable for placing into the resulting response.
-QVariantList Server::getHistoryCommon(const QByteArray &sh, bool mempoolOnly)
+QVariantList Server::getHistoryCommon(const HashX &sh, bool mempoolOnly)
 {
     QVariantList resp;
     const auto items = storage->getHistory(sh, !mempoolOnly, true); // these are already sorted
@@ -1132,33 +1169,49 @@ QVariantList Server::getHistoryCommon(const QByteArray &sh, bool mempoolOnly)
 
 void Server::rpc_blockchain_scripthash_get_history(Client *c, const RPC::Message &m)
 {
-    QVariantList l(m.paramsList());
-    assert(!l.isEmpty());
-    const QByteArray sh = validateHashHex( l.front().toString() );
-    if (sh.length() != HashLen)
-        throw RPCError("Invalid scripthash");
+    const auto sh = parseFirstShParamCommon(m);
+    impl_get_history(c, m, sh);
+}
+void Server::rpc_blockchain_address_get_history(Client *c, const RPC::Message &m)
+{
+    const auto sh = parseFirstAddrParamToShCommon(m);
+    impl_get_history(c, m, sh);
+}
+void Server::impl_get_history(Client *c, const RPC::Message &m, const HashX &sh)
+{
     generic_do_async(c, m.id, [sh, this] {
         return getHistoryCommon(sh, false);
     });
 }
+
 void Server::rpc_blockchain_scripthash_get_mempool(Client *c, const RPC::Message &m)
 {
-    QVariantList l(m.paramsList());
-    assert(!l.isEmpty());
-    const QByteArray sh = validateHashHex( l.front().toString() );
-    if (sh.length() != HashLen)
-        throw RPCError("Invalid scripthash");
+    const auto sh = parseFirstShParamCommon(m);
+    impl_get_mempool(c, m, sh);
+}
+void Server::rpc_blockchain_address_get_mempool(Client *c, const RPC::Message &m)
+{
+    const auto sh = parseFirstAddrParamToShCommon(m);
+    impl_get_mempool(c, m, sh);
+}
+void Server::impl_get_mempool(Client *c, const RPC::Message &m, const HashX &sh)
+{
     generic_do_async(c, m.id, [sh, this] {
         return getHistoryCommon(sh, true);
     });
 }
 void Server::rpc_blockchain_scripthash_listunspent(Client *c, const RPC::Message &m)
 {
-    QVariantList l = m.paramsList();
-    assert(!l.isEmpty());
-    const QByteArray sh = validateHashHex( l.front().toString() );
-    if (sh.length() != HashLen)
-        throw RPCError("Invalid scripthash");
+    const auto sh = parseFirstShParamCommon(m);
+    impl_listunspent(c, m, sh);
+}
+void Server::rpc_blockchain_address_listunspent(Client *c, const RPC::Message &m)
+{
+    const auto sh = parseFirstAddrParamToShCommon(m);
+    impl_listunspent(c, m, sh);
+}
+void Server::impl_listunspent(Client *c, const RPC::Message &m, const HashX &sh)
+{
     generic_do_async(c, m.id, [sh, this] {
         QVariantList resp;
         const auto items = storage->listUnspent(sh); // these are already sorted
@@ -1175,12 +1228,18 @@ void Server::rpc_blockchain_scripthash_listunspent(Client *c, const RPC::Message
 }
 void Server::rpc_blockchain_scripthash_subscribe(Client *c, const RPC::Message &m)
 {
-    QVariantList l = m.paramsList();
-    assert(l.size() == 1);
-    QByteArray sh = validateHashHex( l.front().toString() );
-    if (sh.length() != HashLen)
-        throw RPCError("Invalid scripthash");
-
+    const auto sh = parseFirstShParamCommon(m);
+    impl_sh_subscribe(c, m, sh);
+}
+void Server::rpc_blockchain_address_subscribe(Client *c, const RPC::Message &m)
+{
+    QString addrStr;
+    const auto sh = parseFirstAddrParamToShCommon(m, &addrStr);
+    assert(!addrStr.isEmpty());
+    impl_sh_subscribe(c, m, sh, addrStr);
+}
+void Server::impl_sh_subscribe(Client *c, const RPC::Message &m, const HashX &sh, const std::optional<QString> &optAlias)
+{
     const auto CheckSubsLimit = [c, &sh, this](int64_t nShSubs, bool doUnsub) {
         if (UNLIKELY(nShSubs > options->maxSubsPerIP)) {
             if (c->perIPData->isWhitelisted()) {
@@ -1217,15 +1276,44 @@ void Server::rpc_blockchain_scripthash_subscribe(Client *c, const RPC::Message &
 
     SubsMgr::SubscribeResult result;
     try {
+        const auto MkNotifierLambda = [c, &m, &optAlias]() -> StatusCallback {
+            // We return two different lambdas, based on whether there is an opAddr alias specified or not.
+            // The reason for doing it this way is that were we to capture the 'alias' as an empty value in the lambda
+            // always, then in the blockchain.scripthash.subscribe case we would be wasting minimally ~16 bytes of
+            // memory for the empty QByteArray *for each subscription*.
+            //
+            // Since we only use this data for the blockchain.address.subscribe case, we will capture it only in
+            // that special case, hence the existence of two different lambdas here.
+            //
+            // This optimization optimizes memory consumption for the common case, since we don't expect many
+            // blockchain.address.subscribe calls to the server.  (EC doesn't issue these calls, and that is our
+            // primary client that we serve).
+            StatusCallback ret;
+            if (!optAlias.has_value()) { // common case
+                // regular blockchain.scripthash.subscribe callback does no aliasing/rewriting and simply echoes the sh back to client as hex.
+                ret =
+                    [c, method=m.method](const HashX &sh, const StatusHash &status) {
+                        QVariant statusHexMaybeNull; // if empty we simply notify as 'null' (this is unlikely in practice but may happen on reorg)
+                        if (!status.isEmpty())
+                            statusHexMaybeNull = Util::ToHexFast(status);
+                        const QByteArray shHex = Util::ToHexFast(sh);
+                        emit c->sendNotification(method, QVariantList{shHex, statusHexMaybeNull});
+                    };
+            } else {
+                // When notifying, blockchain.address.subscribe callback must rewrite the sh arg -> the original address argument given by the client.
+                ret =
+                    [c, method=m.method, alias=optAlias.value().toUtf8()](const HashX &, const StatusHash &status) {
+                        QVariant statusHexMaybeNull; // if empty we simply notify as 'null' (this is unlikely in practice but may happen on reorg)
+                        if (!status.isEmpty())
+                            statusHexMaybeNull = Util::ToHexFast(status);
+                        emit c->sendNotification(method, QVariantList{alias, statusHexMaybeNull});
+                    };
+            }
+            return ret;
+        };
         /// Note: potential race condition here whereby notification can arrive BEFORE the status result. In practice this
         /// is fine since clients will cope with the situation, but... ideally, fixme.
-        result = storage->subs()->subscribe(c, sh, [c,method=m.method](const HashX &sh, const StatusHash &status) {
-            QVariant statusHexMaybeNull; // if empty we simply notify as 'null' (this is unlikely in practice but may happen on reorg)
-            if (!status.isEmpty())
-                statusHexMaybeNull = Util::ToHexFast(status);
-            const QByteArray shHex = Util::ToHexFast(sh);
-            emit c->sendNotification(method, QVariantList{shHex, statusHexMaybeNull});
-        });
+        result = storage->subs()->subscribe(c, sh, MkNotifierLambda());
     } catch (const SubsMgr::LimitReached &e) {
         if (Util::getTimeSecs() - lastSubsWarningPrintTime > ServerMisc::kMaxSubsWarningsRateLimitSecs /* ~250 ms */) {
             // rate limit printing
@@ -1269,11 +1357,16 @@ void Server::rpc_blockchain_scripthash_subscribe(Client *c, const RPC::Message &
 }
 void Server::rpc_blockchain_scripthash_unsubscribe(Client *c, const RPC::Message &m)
 {
-    QVariantList l = m.paramsList();
-    assert(l.size() == 1);
-    QByteArray sh = validateHashHex( l.front().toString() );
-    if (sh.length() != HashLen)
-        throw RPCError("Invalid scripthash");
+    const auto sh = parseFirstShParamCommon(m);
+    impl_sh_unsubscribe(c, m, sh);
+}
+void Server::rpc_blockchain_address_unsubscribe(Client *c, const RPC::Message &m)
+{
+    const auto sh = parseFirstAddrParamToShCommon(m);
+    impl_sh_unsubscribe(c, m, sh);
+}
+void Server::impl_sh_unsubscribe(Client *c, const RPC::Message &m, const HashX &sh)
+{
     const bool result = storage->subs()->unsubscribe(c, sh);
     if (result) {
         if (--c->nShSubs == 0)
@@ -1499,6 +1592,13 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
     { {"server.peers.subscribe",            true,               false,    PR{0,0},                    },          MP(rpc_server_peers_subscribe) },
     { {"server.ping",                       true,               false,    PR{0,0},                    },          MP(rpc_server_ping) },
     { {"server.version",                    true,               false,    PR{0,2},                    },          MP(rpc_server_version) },
+
+    { {"blockchain.address.get_balance",    true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_get_balance) },
+    { {"blockchain.address.get_history",    true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_get_history) },
+    { {"blockchain.address.get_mempool",    true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_get_mempool) },
+    { {"blockchain.address.listunspent",    true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_listunspent) },
+    { {"blockchain.address.subscribe",      true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_subscribe) },
+    { {"blockchain.address.unsubscribe",    true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_unsubscribe) },
 
     { {"blockchain.block.header",           true,               false,    PR{1,2},                    },          MP(rpc_blockchain_block_header) },
     { {"blockchain.block.headers",          true,               false,    PR{2,3},                    },          MP(rpc_blockchain_block_headers) },
