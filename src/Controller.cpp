@@ -1514,7 +1514,9 @@ void Controller::dumpScriptHashes(const QString &fileName) const
             Debug() << text;
     });
     outFile.flush();
+    outFile.close();
     Log() << "Dump: wrote " << count << Util::Pluralize(" script hash", count) << " to \"" << fileName << "\""
           << " in " << QString::number(Util::getTimeSecs() - t0, 'f', 1) << " seconds"
           <<" (" << QString::number(outFile.size()/1e6, 'f', 3) << " MiB)";
+    emit dumpScriptHashesComplete();
 }

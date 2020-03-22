@@ -85,6 +85,9 @@ signals:
     /// get all the blocks *before* the DownloadBlocksTasks are removed after they finish).
     void putBlock(CtlTask *sender, PreProcessedBlockPtr);
 
+    /// Emitted only iff the user specified --dump-sh on the CLI. This is emitted once the script hash dump has completed.
+    void dumpScriptHashesComplete() const;
+
 protected:
     Stats stats() const override; // from StatsMixin
     Stats debug(const StatsParams &) const override; // from StatsMixin
