@@ -8,11 +8,10 @@
 #include "uint256.h"
 #include "utilstrencodings.h"
 
-#include <atomic>
+#include <array>
 #include <cassert>
 #include <cstdint>
 #include <cstring>
-#include <mutex>
 #include <string>
 #include <vector>
 
@@ -27,43 +26,29 @@ namespace {
 /** All alphanumeric characters except for "0", "I", "O", and "l" */
 const char *pszBase58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
-// Added by Calin for performance -- Always succeeds and returns an array of size 256, with invalid postions being -1,
-// and valid ones being the carry (from 0 to 57).
-const int8_t * GetB58CarryTable()
+/// Do not construct this class. Instead, use the singleton instance provided below as b58CarryTable.
+class B58CarryTable {
+    std::array<int8_t, 256> table;
+public:
+    B58CarryTable();
+    constexpr int8_t operator[](decltype(table)::size_type i) const noexcept { return table[i]; }
+};
+
+B58CarryTable::B58CarryTable()
 {
-#if defined(__clang__) || defined(__GNUC__)
-#define EXPECT(expr, constant) __builtin_expect(expr, constant)
-#else
-#define EXPECT(expr, constant) (expr)
-#endif
-#define UNLIKELY(bool_expr) EXPECT(int(bool_expr), 0)
-    static std::mutex mut;
-    static std::atomic_size_t ptr{0};
-    static std::vector<int8_t> b58Carry;
-    using RetType = const int8_t *;
-    auto ret = reinterpret_cast<RetType>(ptr.load());
-    if (UNLIKELY(!ret)) {
-        std::unique_lock g(mut);
-        if (!(ret = reinterpret_cast<RetType>(ptr.load()))) { // check again with mutex held
-            // this branch will only ever be visited once for the lifetime of this process (by 1 thread)
-            b58Carry.clear();
-            b58Carry.resize(256, -1);
-            for (auto p = pszBase58; *p; ++p)
-                // build table, storing the carry value for each character in our base58 alphabet, or -1 if not in alphabet
-                b58Carry[uint8_t(*p)] = int8_t(p - pszBase58); // (0,57) range here
-            ptr.store( reinterpret_cast<decltype (ptr.load())>(ret = b58Carry.data()) );
-        }
-    }
-    return ret;
-#undef UNLIKELY
-#undef EXPECT
+    table.fill(-1);
+    for (auto p = pszBase58; *p; ++p)
+        // build table, storing the carry value for each character in our base58 alphabet, or -1 if not in alphabet
+        table[uint8_t(*p)] = int8_t(p - pszBase58); // (0,57) range here
 }
+
+B58CarryTable b58CarryTable{}; ///< singleton instance -- used by our modified DecodeBase58.
 
 } // end anonymous namespace
 
 /* Original Bitcoin implementation below.. removed by Calin and replaced with faster alternative (15% faster on average)
    which doesn't call strchr() repeatedly on the pszBase58 like the original did, but instead builds
-   a table in a thread safe manner once, and then subsequent calls use the table. */
+   a table once (~256 byte memory cost), and then subsequent calls use the table. */
 #if 0
 bool DecodeBase58(const char *psz, std::vector<uint8_t> &vch) {
     // Skip leading spaces.
@@ -139,13 +124,11 @@ bool DecodeBase58(const char *psz, std::vector<uint8_t> &vch) {
     int size = strlen(psz) * 733 / 1000 + 1;
     std::vector<uint8_t> b256(size);
     // Process the characters.
-    // Grab the carry table -- the first time through, the carry table is initted atomically with an exclusive
-    // lock, but subsequent times, it will always be returned immediately by reference.
-    const auto b58Table = GetB58CarryTable();
     while (*psz && !IsSpace(*psz)) {
         // Decode base58 character
-        int carry = b58Table[uint8_t(*psz)];
+        int carry = b58CarryTable[uint8_t(*psz)];
         if (carry < 0) {
+            // invalid character
             return false;
         }
         // Apply "b256 = b256 * 58 + ch".
