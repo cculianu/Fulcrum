@@ -44,6 +44,7 @@ SrvMgr::SrvMgr(const std::shared_ptr<const Options> & options,
     addrIdMap.reserve(tableSqueezeThreshold); // initial capacity
     perIPData.setObjectName("PerIPData");
     connect(this, &SrvMgr::banIP, this, &SrvMgr::on_banIP);
+    connect(this, &SrvMgr::banID, this, &SrvMgr::on_banID);
     connect(this, &SrvMgr::liftIPBan, this, &SrvMgr::on_liftIPBan);
     connect(this, &SrvMgr::banPeersWithSuffix, this, &SrvMgr::on_banPeersWithSuffix);
     connect(this, &SrvMgr::liftPeerSuffixBan, this, &SrvMgr::on_liftPeerSuffixBan);
