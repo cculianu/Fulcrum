@@ -114,13 +114,15 @@ QVariantMap Options::toMap() const
     m["tor_tcp_port"] = torTcp.has_value() ? QVariant(torTcp.value()) : QVariant();
     m["tor_ssl_port"] = torSsl.has_value() ? QVariant(torSsl.value()) : QVariant();
     m["tor_proxy"] = QString("%1:%2").arg(torProxy.first.toString()).arg(torProxy.second);
-    m["tor_user"] = torUser;
-    m["tor_pass"] = torPass;
+    m["tor_user"] = torUser.isNull() ? QVariant() : QVariant("<hidden>");
+    m["tor_pass"] = torPass.isNull() ? QVariant() : QVariant("<hidden>");
     // /tor related
     // bitcoind_throttle params
     const auto [hi, lo, decay] = bdReqThrottleParams.load();
     m["bitcoind_throttle"] = QVariantList{ hi, lo, decay };
-
+    // max_subs_per_ip & max_subs
+    m["max_subs_per_ip"] = qlonglong(maxSubsPerIP);
+    m["max_subs"] = qlonglong(maxSubsGlobally);
     return m;
 }
 
@@ -234,44 +236,54 @@ bool ConfigFile::open(const QString &filePath)
 
 bool ConfigFile::boolValue(const QString & name, bool def, bool *parsedOk, Qt::CaseSensitivity cs) const
 {
-    bool dummy;
-    bool & ok ( parsedOk ? *parsedOk : dummy );
-    ok = false;
-    const auto opt = optValue(name, cs);
-    if (!opt.has_value())
-        return def;
-    const auto val = opt.value().toLower();
-    if (val == "true" || val == "yes" || val == "on" || val.isEmpty() /* "" means true! */) { ok = true; return true; }
-    else if (val == "false" || val == "no" || val == "off") { ok = true; return false; }
-    bool ret = val.toInt(&ok);
-    if (!ok) ret = def;
-    return ret;
+    return genericParseArithmeticValue(name, def, parsedOk, cs);
 }
-
 int ConfigFile::intValue(const QString & name, int def, bool *parsedOk, Qt::CaseSensitivity cs) const
 {
-    bool dummy;
-    bool & ok ( parsedOk ? *parsedOk : dummy );
-    ok = false;
-    const auto opt = optValue(name, cs);
-    if (!opt.has_value())
-        return def;
-    const auto val = opt.value().toLower();
-    int ret = val.toInt(&ok);
-    if (!ok) ret = def;
-    return ret;
+    return genericParseArithmeticValue(name, def, parsedOk, cs);
 }
-
+int64_t ConfigFile::int64Value(const QString & name, int64_t def, bool *parsedOk, Qt::CaseSensitivity cs) const
+{
+    return genericParseArithmeticValue(name, def, parsedOk, cs);
+}
 double ConfigFile::doubleValue(const QString & name, double def, bool *parsedOk, Qt::CaseSensitivity cs) const
 {
+    return genericParseArithmeticValue(name, def, parsedOk, cs);
+}
+
+template <typename Numeric, std::enable_if_t<std::is_arithmetic_v<Numeric>, int> >
+Numeric ConfigFile::genericParseArithmeticValue(const QString &name, Numeric def, bool *parsedOk, Qt::CaseSensitivity cs) const
+{
+    auto Convert = [](QString val, bool *parsedOk) -> auto {
+        val = val.toLower();
+        using Type = std::remove_cv_t<std::remove_reference_t<Numeric>>;
+        if constexpr (std::is_same_v<Type, double>)
+            return Type(val.toDouble(parsedOk));
+        else if constexpr (std::is_same_v<Type, float>)
+            return Type(val.toFloat(parsedOk));
+        else if constexpr (std::is_same_v<Type, int>)
+            return Type(val.toInt(parsedOk));
+        else if constexpr (std::is_same_v<Type, long>)
+            return Type(val.toLong(parsedOk));
+        else if constexpr (std::is_same_v<Type, int64_t> || std::is_same_v<Type, qlonglong>)
+            return Type(val.toLongLong(parsedOk));
+        else if constexpr (std::is_same_v<Type, bool>) {
+            // special support for "true", "yes", "on", "" for true and "false", "no", "off" for false
+            if (val == "true" || val == "yes" || val == "on" || val.isEmpty() /* "" means true! */) { if (parsedOk){*parsedOk = true;}  return true; }
+            else if (val == "false" || val == "no" || val == "off") { if (parsedOk){*parsedOk = true;} return false; }
+            return Type(val.toInt(parsedOk));
+        } else {
+            return nullptr; // failed to deduce which method to use
+        }
+    };
+    static_assert(!std::is_same_v<std::nullptr_t, decltype(Convert("", nullptr))>, "Failed to deduce type conversion function!");
     bool dummy;
     bool & ok ( parsedOk ? *parsedOk : dummy );
     ok = false;
     const auto opt = optValue(name, cs);
     if (!opt.has_value())
         return def;
-    const auto val = opt.value().toLower();
-    double ret = val.toDouble(&ok);
-    if (!ok) ret = def;
+    Numeric ret = Convert(opt.value(), &ok);
+    if (!ok) return def;
     return ret;
 }

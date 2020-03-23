@@ -21,18 +21,28 @@
 #include "App.h"
 #include "BitcoinD.h"
 #include "PeerMgr.h"
+#include "ServerMisc.h"
 #include "Servers.h"
 #include "Storage.h"
+#include "SubsMgr.h"
 #include "Util.h"
 
+#include <mutex>
 #include <utility>
+
+namespace {
+    constexpr size_t tableSqueezeThreshold = 64; ///< used by perIPData and addrIdMap to determing when to auto-squeeze.
+    static_assert (tableSqueezeThreshold > 0, "SrvMgr table squeeze threshold must be > 0!");
+}
 
 SrvMgr::SrvMgr(const std::shared_ptr<const Options> & options,
                const std::shared_ptr<Storage> & s,
                const std::shared_ptr<BitcoinDMgr> & bdm,
                QObject *parent)
-    : Mgr(parent), options(options), storage(s), bitcoindmgr(bdm)
+    : Mgr(parent), options(options), storage(s), bitcoindmgr(bdm), perIPData(this, tableSqueezeThreshold /* initialCapacity */, tableSqueezeThreshold)
 {
+    addrIdMap.reserve(tableSqueezeThreshold); // initial capacity
+    perIPData.setObjectName("PerIPData");
     connect(this, &SrvMgr::banIP, this, &SrvMgr::on_banIP);
     connect(this, &SrvMgr::liftIPBan, this, &SrvMgr::on_liftIPBan);
     connect(this, &SrvMgr::banPeersWithSuffix, this, &SrvMgr::on_banPeersWithSuffix);
@@ -59,6 +69,7 @@ void SrvMgr::startup()
 
 void SrvMgr::cleanup()
 {
+    stopAllTimers();
     adminServers.clear(); // unique_ptrs, kill all admin servers first (these hold weak_ptrs to peermgr and also naked ptrs to this, so must be killed first)
     peermgr.reset(); // shared_ptr, kill peermgr (if any)
     servers.clear(); // unique_ptrs auto-delete all servers
@@ -84,6 +95,8 @@ namespace {
 // throw Exception on error
 void SrvMgr::startServers()
 {
+    _net = BTC::NetFromName(storage->getChain()); // set this now since server instances may need this information
+
     if (options->peerDiscovery) {
         Log() << "SrvMgr: starting PeerMgr ...";
         peermgr = std::make_shared<PeerMgr>(this, storage, options);
@@ -107,10 +120,10 @@ void SrvMgr::startServers()
     for (const auto & iface : options->interfaces + options->sslInterfaces) {
         if (i < firstSsl)
             // TCP
-            servers.emplace_back(std::make_unique<Server>(iface.first, iface.second, options, storage, bitcoindmgr));
+            servers.emplace_back(std::make_unique<Server>(this, iface.first, iface.second, options, storage, bitcoindmgr));
         else
             // SSL
-            servers.emplace_back(std::make_unique<ServerSSL>(iface.first, iface.second, options, storage, bitcoindmgr));
+            servers.emplace_back(std::make_unique<ServerSSL>(this, iface.first, iface.second, options, storage, bitcoindmgr));
         Server *srv = servers.back().get();
 
         // connect blockchain.headers.subscribe signal
@@ -131,6 +144,9 @@ void SrvMgr::startServers()
 
         // max_buffer changes
         connect(this, &SrvMgr::requestMaxBufferChange, srv, &ServerBase::applyMaxBufferToAllClients);
+
+        // subs limit reached
+        connect(srv, &Server::globalSubsLimitReached, this, &SrvMgr::globalSubsLimitReached);
 
         if (peermgr) {
             connect(srv, &ServerBase::gotRpcAddPeer, peermgr.get(), &PeerMgr::on_rpcAddPeer);
@@ -160,20 +176,37 @@ void SrvMgr::clientConnected(IdMixin::Id cid, const QHostAddress &addr)
     addrIdMap.insertMulti(addr, cid);
     const auto maxPerIP = options->maxClientsPerIP;
     if (addrIdMap.count(addr) > maxPerIP) {
-        // the below ends up linearly searching through excluded subnets --  this branch is only really taken if the
-        // limit is hit .. O(N) where N is probably very small should hopefully be fast enough
-        if (Options::Subnet matched; ! options->isAddrInPerIPLimitExcludeSet(addr, &matched) ) {
-            Log() << "Connection limit (" << maxPerIP << ") exceeded for " << addr.toString()
-                  << ", connection refused for client " << cid;
-            emit clientExceedsConnectionLimit(cid);
-            clientWillDieAnyway = true;
+        const auto ipData = findExistingPerIPData(addr);
+        if (ipData) {
+            Client::PerIPData::WhiteListState wlstate{Client::PerIPData::WhiteListState::UNINITIALIZED};
+            Options::Subnet matched;
+            {
+                std::shared_lock g(ipData->mut); // shared lock guards ipData->whiteListSubnet
+                wlstate = Client::PerIPData::WhiteListState(ipData->whiteListState.load());
+                matched = ipData->_whiteListedSubnet; // copy out data with lock held
+            }
+            switch (wlstate) {
+            case Client::PerIPData::WhiteListState::NotWhiteListed:
+                Log() << "Connection limit (" << maxPerIP << ") exceeded for " << addr.toString()
+                      << ", connection refused for client " << cid;
+                emit clientExceedsConnectionLimit(cid);
+                clientWillDieAnyway = true;
+                break;
+            case Client::PerIPData::WhiteListState::WhiteListed:
+                Debug() << "Client " << cid << " from " << addr.toString() << " would have exceeded the connection limit ("
+                        << maxPerIP << ") but its IP matches subnet "<< matched.toString() << " from 'subnets_to_exclude_from_per_ip_limits'";
+                break;
+            default:
+                // This should never happen.
+                Error() << "Invalid WhiteListState " << int(wlstate) << " for Client " << cid << " from " << addr.toString() << ". FIXME!";
+            }
         } else {
-            Debug() << "Client " << cid << " from " << addr.toString() << " would have exceeded the connection limit ("
-                    << maxPerIP << ") but its IP matches subnet " << matched.toString() << " from 'subnets_to_exclude_from_per_ip_limits'";
+            clientWillDieAnyway = true;
+            Debug() << "Client " << cid << " from " << addr.toString() << " -- missing per-IP data. The client may have been already deleted.";
         }
     }
 
-    // lastly, check bans and tally ctr and increment counter anyway -- even if clientWillDieAnyway == true
+    // Lastly, check bans and tally ctr and increment counter anyway -- even if clientWillDieAnyway == true!
     const bool banned = isIPBanned(addr, true);
 
     if (banned && !clientWillDieAnyway) {
@@ -212,11 +245,12 @@ bool SrvMgr::isPeerHostNameBanned(const QString &h) const
 
 void SrvMgr::clientDisconnected(IdMixin::Id cid, const QHostAddress &addr)
 {
-    if (auto count = addrIdMap.remove(addr, cid); count > 1) {
+    if (auto count = addrIdMap.remove(addr, cid); UNLIKELY(count > 1)) {
         Warning() << "Multiple clients with id: " << cid << ", address " << addr.toString() << " in addrIdMap in " << __func__ << " -- FIXME!";
     } else if (count) {
         //Debug() << "Client id " << cid << " addr " << addr.toString() << " removed from addrIdMap";
-        if (const auto size = addrIdMap.size(); size >= 64 && size * 2 <= addrIdMap.capacity()) {
+        if (const auto size = size_t(addrIdMap.size());
+                size >= tableSqueezeThreshold && size * 2U <= size_t(addrIdMap.capacity())) {
             // save space if we are over 2x capacity vs size
             addrIdMap.squeeze();
         }
@@ -369,3 +403,82 @@ QVariantList SrvMgr::adminRPC_getClients_blocking(int timeout_ms) const
         return ret;
     }, timeout_ms);
 }
+
+std::shared_ptr<Client::PerIPData> SrvMgr::getOrCreatePerIPData(const QHostAddress &address)
+{
+    auto ret = perIPData.getOrCreate(address, true);
+    // Note the below has a potential race condition *IF* the same IP address connected multiply from 2 different ServerBase
+    // instances (each ServerBase has its own thread) *at the same time* and thus this object was freshly created
+    // but is being returned twice in 2 different threads.  We guard against doing redundant work by first not using a mutex
+    // to just check the atomic variable.  If the atomic variable is uninitialized, then we grab the mutex in exclusive mode.
+    if (ret && ret->whiteListState == Client::PerIPData::WhiteListState::UNINITIALIZED) { // new instance
+        std::unique_lock g(ret->mut);
+        if (ret->whiteListState == Client::PerIPData::WhiteListState::UNINITIALIZED) { // check again with lock held.
+            // Note: this query is a linear search through the exclude set, so hopefully the set is always small
+            const bool whiteListed = options->isAddrInPerIPLimitExcludeSet(address, &ret->_whiteListedSubnet);
+            ret->whiteListState = whiteListed ? Client::PerIPData::WhiteListState::WhiteListed
+                                              : Client::PerIPData::WhiteListState::NotWhiteListed;
+            if constexpr (!isReleaseBuild()) {
+                if (whiteListed)
+                    Debug() << address.toString() << " is whitelisted (subnet: " << ret->_whiteListedSubnet.toString() << ")";
+                else
+                    Debug() << address.toString() << " is NOT whitelisted";
+            }
+        }
+    }
+    return ret;
+}
+
+void SrvMgr::globalSubsLimitReached()
+{
+    // we rate limit this to at most once every 250 ms.
+    static constexpr int kPeriod = int(1e3 * ServerMisc::kMaxSubsAutoKickDelaySecs);
+    callOnTimerSoon(kPeriod, "+KickMostSubscribedClient",
+                    [this, ctr=int(0)]() mutable {
+        ++ctr; // increment counter for how many times this callback has executed
+        // grab flags to get an idea of the state of the limits
+        const auto [activeNearLimit, allNearLimit] = storage->subs()->globalSubsLimitFlags();
+
+        // request a zombie removal on return
+        Defer deferred = [this, allNearLimit=allNearLimit /*<- C++ bugs */] {
+            if (allNearLimit) {
+                const int when = kPeriod / 2;
+                Debug() << "Requesting zombie sub removal in " << when << " msec ...";
+                emit storage->subs()->requestRemoveZombiesSoon(when); // we do it with a delay to give the kick code time to run.
+            }
+        };
+
+        if (!activeNearLimit) {
+            // Ok, so there may be zombies. Come back again if there are, and give the zombie reaper a chance to fire.
+            Debug() << "SrvMgr max subs kicker: Timer fired but we are no longer near the global active subs limit, returning early ...";
+            return allNearLimit && ctr < 2; // fire once again later if we are near the limit after zombies are collected.
+        }
+
+        int64_t max = 0;
+        QHostAddress maxIP;
+        int tableSize{};
+        {
+            int64_t nSubs{};
+            // iterate through all known client datas and find the IP address with the most subs to kick
+            const auto [table, lock] = perIPData.getTable();
+            tableSize = table.size();
+            for (auto it = table.cbegin(); it != table.cend(); ++it) {
+                if (const auto data = it.value().lock();
+                        data && (nSubs = data->nShSubs.load()) > max && !it.key().isNull()) // todo; maybe skip over whitelisted IPs?
+                {
+                     max = nSubs;
+                     maxIP = it.key();
+                }
+            }
+            // lock released at scope end
+        }
+        if (LIKELY(max > 0)) {
+            Log() << "Global subs limit reached, kicking all clients for IP " << maxIP.toString() << " (subs: " << max << ")";
+            emit kickByAddress(maxIP); // kick!
+        } else {
+            Debug() << "Global subs limit reached, but could not find a client to kick (num per-IP-datas: " << tableSize << ")";
+        }
+        return false; // don't keep firing in this execution path.
+    });
+}
+

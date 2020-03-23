@@ -266,6 +266,12 @@ void App::parseArgs()
                    " 30. If not specified, defaults to %1 seconds.").arg(Options::defaultPollTimeSecs),
            QString("polltime"), QString::number(Options::defaultPollTimeSecs)
          },
+         {
+           "dump-sh",
+           QString("*** This is an advanced debugging option ***   Dump script hashes. If specified, after the database"
+                   " is loaded, all of the script hashes in the database will be written to outputfile as a JSON array."),
+           QString("outputfile"),
+         },
      };
 
     parser.addOptions(allOptions);
@@ -638,16 +644,23 @@ void App::parseArgs()
         options->torHostName = thn;
         if (!thn.endsWith(".onion"))
             throw BadArgs(QString("Bad tor_hostname specified: must end with .onion: %1").arg(thn));
+        Util::AsyncOnObject(this, [thn]{ Debug() << "config: tor_hostname = " << thn; });
     }
-    if (conf.hasValue("tor_banner"))
-        options->torBannerFile = conf.value("tor_banner");
+    if (conf.hasValue("tor_banner")) {
+        const auto banner = conf.value("tor_banner");
+        options->torBannerFile = banner;
+        Util::AsyncOnObject(this, [banner]{ Debug() << "config: tor_banner = " << banner; });
+    }
     if (conf.hasValue("tor_tcp_port")) {
         bool ok = false;
         int val = conf.intValue("tor_tcp_port", -1, &ok);
         if (!ok || val < 0 || val > UINT16_MAX)
             throw BadArgs("tor_tcp_port parse error: not an integer from 0 to 65535");
         if (!val) options->torTcp.reset();
-        else options->torTcp = val;
+        else {
+            options->torTcp = val;
+            Util::AsyncOnObject(this, [val]{ Debug() << "config: tor_tcp_port = " << val; });
+        }
     }
     if (conf.hasValue("tor_ssl_port")) {
         bool ok = false;
@@ -655,15 +668,24 @@ void App::parseArgs()
         if (!ok || val < 0 || val > UINT16_MAX)
             throw BadArgs("torc_ssl_port parse error: not an integer from 0 to 65535");
         if (!val) options->torSsl.reset();
-        else options->torSsl = val;
+        else {
+            options->torSsl = val;
+            Util::AsyncOnObject(this, [val]{ Debug() << "config: tor_ssl_port = " << val; });
+        }
     }
     if (conf.hasValue("tor_proxy")) {
         options->torProxy = parseInterface(conf.value("tor_proxy"), true); // may throw if bad
+        Util::AsyncOnObject(this, [val=options->torProxy]{ Debug() << "config: tor_proxy = " << val.first.toString() << ":" << val.second; });
     }
-    if (conf.hasValue("tor_user"))
+    if (conf.hasValue("tor_user")) {
         options->torUser = conf.value("tor_user");
-    if (conf.hasValue("tor_pass"))
+        Util::AsyncOnObject(this, [val=options->torUser]{ Debug() << "config: tor_user = " << val; });
+    }
+    if (conf.hasValue("tor_pass")) {
         options->torUser = conf.value("tor_pass");
+        Util::AsyncOnObject(this, []{ Debug() << "config: tor_pass = <hidden>"; });
+    }
+    // /Tor params
 
     if (conf.hasValue("bitcoind_throttle")) {
         const QStringList vals = conf.value("bitcoind_throttle").trimmed().simplified().split(QRegExp("\\W+"), QString::SplitBehavior::SkipEmptyParts);
@@ -681,12 +703,30 @@ void App::parseArgs()
         if (!ok)
             // failed to parse.. abort...
             throw BadArgs("Failed to parse \"bitcoind_throttle\" -- out of range or invalid format. Please specify 3 positive integers in range.");
-        Debug() << "config: bitcoind_throttle = " << QString("(hi: %1, lo: %2, decay: %3)").arg(p.hi).arg(p.lo).arg(p.decay);
         options->bdReqThrottleParams.store(p);
+        // log this later in case we are in syslog mode
+        Util::AsyncOnObject(this, [p]{ Debug() << "config: bitcoind_throttle = " << QString("(hi: %1, lo: %2, decay: %3)").arg(p.hi).arg(p.lo).arg(p.decay); });
     }
-
-
-    // /Tor params
+    if (conf.hasValue("max_subs_per_ip")) {
+        bool ok;
+        const int64_t subs = conf.int64Value("max_subs_per_ip", -1, &ok);
+        if (!ok || !options->isMaxSubsPerIPSettingInBounds(subs))
+            throw BadArgs(QString("max_subs_per_ip: bad value. Specify a value in the range [%1, %2]")
+                          .arg(options->maxSubsPerIPMin).arg(options->maxSubsPerIPMax));
+        options->maxSubsPerIP = subs;
+        // log this later in case we are in syslog mode
+        Util::AsyncOnObject(this, [subs]{ Debug() << "config: max_subs_per_ip = " << subs; });
+    }
+    if (conf.hasValue("max_subs")) {
+        bool ok;
+        const int64_t subs = conf.int64Value("max_subs", -1, &ok);
+        if (!ok || !options->isMaxSubsGloballySettingInBounds(subs))
+            throw BadArgs(QString("max_subs: bad value. Specify a value in the range [%1, %2]")
+                          .arg(options->maxSubsGloballyMin).arg(options->maxSubsGloballyMax));
+        options->maxSubsGlobally = subs;
+        // log this later in case we are in syslog mode
+        Util::AsyncOnObject(this, [subs]{ Debug() << "config: max_subs = " << subs; });
+    }
 
     // warn user that no hostname was specified if they have peerDiscover turned on
     if (!options->hostName.has_value() && options->peerDiscovery && options->peerAnnounceSelf) {
@@ -694,6 +734,11 @@ void App::parseArgs()
         Util::AsyncOnObject(this, []{
             Warning() << "Warning: No 'hostname' variable defined in configuration. This server may not be peer-discoverable.";
         });
+    }
+
+    // parse --dump-*
+    if (const auto outFile = parser.value("dump-sh"); !outFile.isEmpty()) {
+        options->dumpScriptHashes = outFile; // we do no checking here, but Controller::startup will throw BadArgs if it cannot open this file for writing.
     }
 }
 

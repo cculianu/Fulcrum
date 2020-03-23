@@ -18,8 +18,11 @@
 //
 #pragma once
 
+#include "BTC.h"
 #include "Mgr.h"
 #include "Options.h"
+#include "Servers.h"
+#include "ThreadSafeHashTable.h"
 
 #include <QMultiHash>
 
@@ -27,13 +30,11 @@
 #include <memory>
 #include <mutex>
 
-class AdminServer;
 class BitcoinDMgr;
 class PeerMgr;
-class Server;
 class Storage;
 
-class SrvMgr : public Mgr
+class SrvMgr : public Mgr, public TimersByNameMixin
 {
     Q_OBJECT
 public:
@@ -50,6 +51,12 @@ public:
     std::size_t txBroadcasts() const { return numTxBroadcasts.load(); }
     std::size_t txBroadcastBytes() const { return txBroadcastBytesTotal.load(); }
 
+    /// Thread-safe. Returns the current network that storage and bitcoind are connected to. Note in very unlikely
+    /// cases where for some reason bitcoind has renamed its networks from the canonical "main", "test", "regtest"
+    /// in some future scenario, this may return BTC::Net::Invalid, so callers should check for that possibility.
+    /// (Used by the blockchain.address.* RPC methods to figure out which addresses to accept and which to reject.)
+    inline BTC::Net net() const noexcept { return _net; }
+
     /// Must be called in this object's thread -- does a blocking call to all the Server instances that are started
     /// (timeout_ms, specify timeout_ms <= 0 to block forever), and prepares the QVariantList RPC response appropriate
     /// to send back to the FulcrumAdmin script.  May throw Utils::TimeoutException, or Util::ThreadNotRunning if called
@@ -64,6 +71,13 @@ public:
     /// Returns true if the specified hostname is in the ban table (this only really works for peers from PeerMgr and
     /// not regular clients for which we never do reverse-DNS).  This method is thread-safe.
     bool isPeerHostNameBanned(const QString &) const;
+
+    /// Thread-Safe. Call this from any thread to create/obtain a strong reference to a new or pre-existing
+    /// "per-IP-address" data object.  These are objects held by each Client * instance in Servers.cpp and hold
+    /// per-ip address shared data for all clients from a particular IP address.
+    std::shared_ptr<Client::PerIPData> getOrCreatePerIPData(const QHostAddress &address);
+    /// Thread-Safe. Like the above but returns an invalid shared_ptr if the per-IP data for address does not exist.
+    inline std::shared_ptr<Client::PerIPData> findExistingPerIPData(const QHostAddress &address) { return perIPData.getOrCreate(address, false); }
 
 signals:
     /// Notifies all blockchain.headers.subscribe'd clients for the entire server about a new header.
@@ -145,6 +159,8 @@ protected slots:
     void on_banPeersWithSuffix(const QString &);
     /// Connected to the liftPeerSuffixBan signal
     void on_liftPeerSuffixBan(const QString &);
+    /// Connected to the Server::globalSubsLimitReached signal for each Server instance
+    void globalSubsLimitReached();
 
 private:
     void startServers();
@@ -158,6 +174,7 @@ private:
     QMultiHash<QHostAddress, IdMixin::Id> addrIdMap;
 
     std::atomic_size_t numTxBroadcasts = 0, txBroadcastBytesTotal = 0;
+    BTC::Net _net = BTC::Invalid; ///< gets set in startServers by querying storage.
 
     // -- the below is shared with other threads and guarded by banMut.
     struct BanInfo {
@@ -168,6 +185,8 @@ private:
     QHash<QHostAddress, BanInfo> banMap;
     QHash<QString, BanInfo> bannedPeerSuffixes; // the banInfo .address in this map is always isNull(). We just use the info for the 'ts' stat ;)
     mutable std::mutex banMut;
+
+    ThreadSafeHashTable<QHostAddress, Client::PerIPData> perIPData;
 };
 
 Q_DECLARE_METATYPE(QHostAddress);

@@ -148,4 +148,32 @@ namespace BTC
         return { int(prevHeight), prev };
     }
 
+
+    namespace {
+        // Cache the netnames as QStrings since we will need them later for blockchain.address.* methods in Servers.cpp
+        // Note that these must always match whatever bitcoind calls these because ultimately we decide what network
+        // we are on by asking bitcoind what net it's on via the "getblockchaininfo" RPC call (upon initial synch).
+        const QString mainNetName = "main",
+                      testNetName = "test",
+                      regTestNetName = "regtest",
+                      invalidNetName = "invalid";
+    };
+    const QString & NetName(Net net) noexcept {
+        switch(net){
+        case MainNet: return mainNetName; // "main"
+        case TestNet: return testNetName; // "test"
+        case RegTestNet: return regTestNetName; // "regtest"
+        default: return invalidNetName;
+        }
+    }
+    Net NetFromName(const QString & name) noexcept {
+        if (name == mainNetName)
+            return MainNet;
+        else if (name == testNetName)
+            return TestNet;
+        else if (name == regTestNetName)
+            return RegTestNet;
+        return Net::Invalid;
+    }
+
 } // end namespace BTC

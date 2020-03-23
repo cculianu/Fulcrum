@@ -100,6 +100,9 @@ public:
 
     static constexpr size_t kRecommendedPendingNotificationsReserveSize = 2048;
 
+    /// Thrown by subsribe() if the global Options::maxSubsGlobally limit is reached.
+    struct LimitReached : public Exception { using Exception::Exception; ~LimitReached() override; /**< for vtable */ };
+
     using SubscribeResult = std::pair<bool, std::optional<StatusHash>>; ///< used by "subscribe" below as the return value.
     /// Thread-safe. Subscribes client to a scripthash. Call this from the client's thread (not doing so is undefined).
     ///
@@ -121,20 +124,29 @@ public:
     ///
     /// Doesn't normally throw but may throw BadArgs if notifyCB is invalid, or InternalError if it failed to
     /// make a QMetaObject::Connection for the subscription.
+    ///
+    /// Will throw LimitReached if the subs table is full.  Calling code should catch this exception.
+    /// (May also throw BadArgs).
     SubscribeResult subscribe(RPC::ConnectionBase *client, const HashX &sh, const StatusCallback &notifyCB);
     /// Thread-safe. The inverse of subscribe. Returns true if the client was previously subscribed, false otherwise.
     /// Always call this from the client's thread otherwise undefined behavior may result.
     bool unsubscribe(RPC::ConnectionBase *client, const HashX &sh);
 
     /// Returns the total number of (sh, client) subscriptions that are active (non-zombie).
-    int numActiveClientSubscriptions() const;
+    int64_t numActiveClientSubscriptions() const;
     /// Returns the total number of unique scripthashes subscribed-to.  A scripthash may be subscribe-to by more than 1
     /// client simultaneously, in which case it counts once towards this total.  This number may be <=
     /// numActiveClientSubscriptions. Additionally, this number also represents "zombie" subscriptions that we keep
     /// around for a time after clients disconnect (in case they reconnect in the future; this is to not lose caching
     /// information for an extant subscription).  Thus, this number may be larger than numActiveClientSubscriptions
     /// as well since it includes the aforementioned "zombies".
-    int numScripthashesSubscribed() const;
+    int64_t numScripthashesSubscribed() const;
+
+    /// Returns a pair of (limitActive, limitAll)
+    /// `limitActive` - is true if the number of active client subscriptions is near the global subs limit (>80% of global limit).
+    /// `limitAll` - is true if the subs table (including zombies) is near the global subs limit (>80% of global limit).
+    /// The global limit comes from Options::maxSubsGlobally. This function is thread-safe.
+    std::pair<bool, bool> globalSubsLimitFlags() const;
 
 
     /// Thread-safe. Returns the status hash bytes (32 bytes single sha256 hash of the status text). Will return
@@ -155,6 +167,10 @@ public:
     /// Like the above but uses move.  After this call, s can be considered to be invalidated.
     void enqueueNotifications(std::unordered_set<HashX, HashHasher> && s);
 signals:
+    /// Public signal.  Emitted by SrvMgr to tell us to run removeZombies() right now outside the normal timer rate limit.
+    /// See SrvMgr::globalSubsLimitReached().
+    void requestRemoveZombiesSoon(int when_ms);
+signals:
     /// Private signal.  Used to indicate the notification queue is empty (and thus any associated timers should be stopped).
     void queueEmpty();
     /// Private signal.  Used to indicate the notification queue is no longer empty (and thus associated timers should be started).
@@ -163,6 +179,7 @@ protected:
     void on_started() override; ///< from ThreadObjectMixin
     void on_finished() override; ///< from ThreadObjectMixin
     Stats stats() const override; ///< from StatsMixin -- show some subs stats
+    Stats debug(const StatsParams &) const override; ///< from StatsMixin -- returns a QVariantMap of *all* subs iff param "subs" is present.
 
 private:
     const std::shared_ptr<const Options> options;
@@ -172,10 +189,10 @@ private:
 
     using SubRef = std::shared_ptr<Subscription>;
     SubRef makeSubRef(const HashX &sh);
-    std::pair<SubRef, bool> getOrMakeSubRef(const HashX &sh); // takes locks, returns a new subref or an existing subref
+    std::pair<SubRef, bool> getOrMakeSubRef(const HashX &sh); // takes locks, returns a new subref or an existing subref, may throw LimitReached
     SubRef findExistingSubRef(const HashX &) const; // takes locks, returns an existing subref or empty ref.
 
     void doNotifyAllPending();
 
-    void removeZombies();
+    void removeZombies(bool forced);
 };

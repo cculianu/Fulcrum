@@ -88,7 +88,7 @@ namespace BTC
     template <> bitcoin::CTransaction Deserialize(const QByteArray &, int pos);
 
     /// Helper -- returns the size of a block header. Should always be 80. Update this if that changes.
-    constexpr int GetBlockHeaderSize() { return 80; }
+    constexpr int GetBlockHeaderSize() noexcept { return 80; }
 
     /// Returns the sha256 double hash (not reveresed) of the input QByteArray. The results are copied once from the
     /// hasher into the returned QByteArray.  This is faster than obtaining a uint256 from bitcoin::Hash then converting
@@ -171,5 +171,23 @@ namespace BTC
     /// After Nov. 2018, reorgs beyond this depth can never occur. We use this constant to limit the configurable minimum
     /// undo size.  For now, it's hard-coded at 100 blocks in Storage.h.
     static constexpr unsigned MaxReorgDepth = 10;
+
+    // -- The below Net-related stuff is mainly used by the BTC::Address class, but may be of general interest so it's
+    //    been placed here.  See BTC_Address.h for how it's used.
+
+    using Byte = uint8_t;
+
+    enum Net : Byte {
+        Invalid = 0xff,
+        MainNet = 0x80, ///< matches secret key byte
+        TestNet = 0xef, ///< matches secret key byte
+        RegTestNet = TestNet+1, ///< does not match anything in the bitcoin world, just an enum value
+    };
+
+    /// Given a Net, returns its name e.g. "main", "test", "regtest" (or "invalid" if parameter `net` is not valid).
+    const QString & NetName(Net net) noexcept;
+    /// Given a network name e.g. "main" or "test", returns the Net enum value, or Net::Invalid if parameter `name` is
+    /// not recognized.
+    Net NetFromName(const QString & name) noexcept;
 
 } // end namespace

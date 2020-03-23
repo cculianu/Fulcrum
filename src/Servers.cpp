@@ -20,6 +20,7 @@
 
 #include "App.h"
 #include "BitcoinD.h"
+#include "BTC_Address.h"
 #include "Merkle.h"
 #include "PeerMgr.h"
 #include "ServerMisc.h"
@@ -39,6 +40,7 @@
 #include <QTimer>
 
 #include <algorithm>
+#include <cassert>
 #include <cstdlib>
 #include <iostream>
 #include <list>
@@ -332,10 +334,11 @@ namespace {
     }
 }
 
-ServerBase::ServerBase(const RPC::MethodMap & methods, const DispatchTable & dispatchTable,
+ServerBase::ServerBase(SrvMgr *sm,
+                       const RPC::MethodMap & methods, const DispatchTable & dispatchTable,
                        const QHostAddress & a, quint16 p, const std::shared_ptr<const Options> & opts,
                        const std::shared_ptr<Storage> & st, const std::shared_ptr<BitcoinDMgr> & bdm)
-    : AbstractTcpServer(a, p), methods(methods), dispatchTable(dispatchTable), options(opts), storage(st), bitcoindmgr(bdm)
+    : AbstractTcpServer(a, p), srvmgr(sm), methods(methods), dispatchTable(dispatchTable), options(opts), storage(st), bitcoindmgr(bdm)
 {
 }
 ServerBase::~ServerBase() { stop(); }
@@ -360,6 +363,15 @@ QVariant ServerBase::stats() const
         map["nTxSent"] = client->info.nTxSent;
         map["nTxBytesSent"] = client->info.nTxBytesSent;
         map["nTxBroadcastErrors"] = client->info.nTxBroadcastErrors;
+        // data from the per-ip structure
+        {
+            QVariantMap m;
+            m["nClients"] = qlonglong(client->perIPData->nClients.load());
+            m["nSubscriptions"] = qlonglong(client->perIPData->nShSubs.load());
+            m["nBitcoinDRequests"] = qlonglong(client->perIPData->bdReqCtr_cum.load());
+            m["isWhiteListed"] = client->perIPData->isWhitelisted();
+            map["perIPData"] = m;
+        }
         // the below don't really make much sense for this class (they are always 0 or empty)
         map.remove("nDisconnects");
         map.remove("nSocketErrors");
@@ -400,22 +412,37 @@ ServerBase::newClient(QTcpSocket *sock)
     const auto clientId = newId();
     auto ret = clientsById[clientId] = new Client(rpcMethods(), clientId, sock, options->maxBuffer.load());
     const auto addr = ret->peerAddress();
+
+    ret->perIPData = srvmgr->getOrCreatePerIPData(addr); // IMPORTANT that we do this ASAP since ret->perIPData must be valid for properly constructed clients
+    assert(ret->perIPData);
+    ++ret->perIPData->nClients; // increment client counter now
+
     // if deleted, we need to purge it from map
-    auto on_destroyed = [clientId, addr, this](QObject *o) {
+    const auto on_destructing = [clientId, addr, this](Client *c) {
         // this whole call is here so that delete client->sock ends up auto-removing the map entry
         // as a convenience.
-        Debug() << "Client nested 'on_destroyed' called for " << clientId;
-        auto client = clientsById.take(clientId);
-        if (client) {
-            if (client != o) {
+        Debug() << "Client " << clientId << " destructing";
+        if (const auto client = clientsById.take(clientId); client) {
+            // purge from map
+            if (UNLIKELY(client != c))
                 Error() << " client != passed-in pointer to on_destroy in " << __FILE__ << " line " << __LINE__  << " client " << clientId << ". FIXME!";
-            }
             Debug() << "client id " << clientId << " purged from map";
         }
+        assert(c->perIPData);
+        if (UNLIKELY(c->nShSubs < 0))
+            Error() << "nShSubs for client " << c->id << " is " << c->nShSubs << ". FIXME!";
+        // decrement per-IP subs ctr for this client.
+        const auto nSubsIP = c->perIPData->nShSubs -= c->nShSubs;
+        if (UNLIKELY(nSubsIP < 0))
+            Error() << "nShSubs for IP " << addr.toString() << " is " << nSubsIP << ". FIXME!";
+        if (nSubsIP == 0 && c->nShSubs)
+            Debug() << "PerIP: " << addr.toString() << " is no longer subscribed to any scripthashes";
+        --c->perIPData->nClients; // decrement client counter
         // tell SrvMgr this client is gone so it can decrement its clients-per-ip count.
         emit clientDisconnected(clientId, addr);
     };
-    connect(ret, &QObject::destroyed, this, on_destroyed);
+    assert(ret->thread() == this->thread()); // the DirectConnection below requires this client to live in the same thread as us. Which is always the case.
+    connect(ret, &Client::clientDestructing, this, on_destructing, Qt::DirectConnection);
     connect(ret, &AbstractConnection::lostConnection, this, [this, clientId](AbstractConnection *cl){
         if (auto client = dynamic_cast<Client *>(cl) ; client) {
             Debug() <<  client->prettyName() << " lost connection";
@@ -428,7 +455,8 @@ ServerBase::newClient(QTcpSocket *sock)
     connect(ret, &RPC::ConnectionBase::gotErrorMessage, this, &ServerBase::onErrorMessage);
     connect(ret, &RPC::ConnectionBase::peerError, this, &ServerBase::onPeerError);
 
-    // tell SrvMgr about this client so it can keep track of clients-per-ip and other statistics
+    // tell SrvMgr about this client so it can keep track of clients-per-ip and other statistics, and potentially
+    // kick the client if it exceeds its connection limit.
     emit clientConnected(clientId, addr);
 
     return ret;
@@ -559,7 +587,8 @@ namespace {
     }
     BitcoinDMgr::FailF defaultBDFailFunc(Client *c, const RPC::Message::Id &id) {
         return [c, id](const RPC::Message::Id &, const QString &what) {
-            c->bdReqCtr -= std::min(c->bdReqCtr, 1LL); // decrease throttle counter
+            c->bdReqCtr -= std::min(c->bdReqCtr, 1LL); // decrease throttle counter (per-client, owned by this thread)
+            --c->perIPData->bdReqCtr; // decrease bitcoind request counter (per-IP, owned by multiple threads)
             emit c->sendError(false, RPC::Code_InternalError, QString("internal error: %1").arg(what), id);
         };
     }
@@ -625,19 +654,26 @@ void ServerBase::generic_async_to_bitcoind(Client *c, const RPC::Message::Id & r
     // Throttling support
     {
         const int bdReqHi = options->bdReqThrottleParams.load().hi;
-        if (++c->bdReqCtr >= bdReqHi && !c->isReadPaused()) {
-            static constexpr const char *bdReqTimerName = "+BDR_DecayTimer";
-            Debug() << c->prettyName() << " has bitcoinD req ctr: " << c->bdReqCtr << ", PAUSING reads from socket";
+        ++c->perIPData->bdReqCtr; // increase bitcoind request counter (per-IP, owned by multiple threads)
+        ++c->perIPData->bdReqCtr_cum; // increase cumulative bitcoind request counter (per-IP, owned by multiple threads)
+        if (++c->bdReqCtr/*<- incr. per-client counter*/ >= bdReqHi && !c->isReadPaused()) {
+            Debug() << c->prettyName() << " has bitcoinD req ctr: " << c->bdReqCtr << " (PerIP ctr: "
+                    << c->perIPData->bdReqCtr << "), PAUSING reads from socket";
             c->setReadPaused(true); // pause reading from this client -- they exceeded threshold.
             // if timer not already active, start timer to decay ctr over time --
-            c->callOnTimerSoon(1000, bdReqTimerName, [c, this]{
+            constexpr auto kTimerName = "+BDR_DecayTimer";
+            static constexpr int kPollFreqHz = 5; //<-- we "poll" 5 times per second so as to detect situations where bitcoind is faster than our heuristics estimate it to be, and then wake up clients faster in that case
+            static_assert (kPollFreqHz > 0 && kPollFreqHz <= 100); // for sanity
+            c->callOnTimerSoon(1000/kPollFreqHz /*=200ms*/, kTimerName, [c, this, iCtr=unsigned(0)]() mutable {
                 const auto [bdReqHi, bdReqLo, decayPerSec] = options->bdReqThrottleParams.load();
-                c->bdReqCtr -= std::min(qint64(decayPerSec), c->bdReqCtr);
+                if ((++iCtr % kPollFreqHz) == 0) // every kPollFreqHz iterations = every 1 second, decay the counter by decayPerSec amount
+                    c->bdReqCtr -= std::min(qint64(decayPerSec), c->bdReqCtr);
                 if (c->isReadPaused() && c->bdReqCtr <= bdReqLo) {
-                    Debug() << c->prettyName() << " has bitcoinD req ctr: " << c->bdReqCtr << ", RESUMING reads from socket";
+                    Debug() << c->prettyName() << " has bitcoinD req ctr: " << c->bdReqCtr  << " (PerIP ctr: "
+                            << c->perIPData->bdReqCtr << "), RESUMING reads from socket";
                     c->setReadPaused(false);
                 }
-                return c->bdReqCtr > 0; // return false when ctr reaches 0, which stops the recurring timer
+                return c->bdReqCtr > 0; // return false when ctr reaches 0, which stops the recurring decay timer
             });
         }
     }
@@ -646,6 +682,7 @@ void ServerBase::generic_async_to_bitcoind(Client *c, const RPC::Message::Id & r
         // success
         [c, reqId, successFunc](const RPC::Message & reply) {
             c->bdReqCtr -= std::min(c->bdReqCtr, 1LL); // decrease throttle counter
+            --c->perIPData->bdReqCtr; // decrease bitcoind request counter (per-IP, owned by multiple threads)
             try {
                 const QVariant result = successFunc ? successFunc(reply) : reply.result(); // if no successFunc specified, use default which just copies the result to the client.
                 emit c->sendResult(reqId, result);
@@ -658,6 +695,7 @@ void ServerBase::generic_async_to_bitcoind(Client *c, const RPC::Message::Id & r
         // error
         [c, reqId, errorFunc](const RPC::Message & errorReply) {
             c->bdReqCtr -= std::min(c->bdReqCtr, 1LL); // decrease throttle counter
+            --c->perIPData->bdReqCtr; // decrease bitcoind request counter (per-IP, owned by multiple threads)
             try {
                 if (errorFunc)
                     errorFunc(errorReply); // this should throw RPCError
@@ -674,9 +712,9 @@ void ServerBase::generic_async_to_bitcoind(Client *c, const RPC::Message::Id & r
     );
 }
 
-Server::Server(const QHostAddress &a, quint16 p, const std::shared_ptr<const Options> & opts,
+Server::Server(SrvMgr *sm, const QHostAddress &a, quint16 p, const std::shared_ptr<const Options> & opts,
                const std::shared_ptr<Storage> &s, const std::shared_ptr<BitcoinDMgr> &bdm)
-    : ServerBase(StaticData::methodMap, StaticData::dispatchTable, a, p, opts, s, bdm)
+    : ServerBase(sm, StaticData::methodMap, StaticData::dispatchTable, a, p, opts, s, bdm)
 {
     StaticData::init(); // only does something first time it's called, otherwise a no-op
     // re-set name for debug/logging
@@ -1055,13 +1093,50 @@ void Server::rpc_blockchain_relayfee(Client *c, const RPC::Message &m)
     // back. See: refreshBitcoinDNetworkInfo()
     emit c->sendResult(m.id, bitcoinDInfo.relayFee);
 }
-void Server::rpc_blockchain_scripthash_get_balance(Client *c, const RPC::Message &m)
+
+// ---- The below two methods are used by both the blockchain.scripthash.* and blockchain.address.* sets of methods
+//      below for boilerplate checking & parsing.
+HashX Server::parseFirstAddrParamToShCommon(const RPC::Message &m, QString *addrStrOut) const
+{
+    const auto net = srvmgr->net();
+    if (UNLIKELY(net == BTC::Net::Invalid))
+        // This should never happen in practice, but it pays to be paranoid.
+        throw RPCError("Server cannot parse addresses at this time", RPC::ErrorCodes::Code_InternalError);
+    constexpr int kAddrLenLimit = 128; // no address is ever really over 64 chars, let alone 128
+    QVariantList l(m.paramsList());
+    assert(!l.isEmpty());
+    const QString addrStr = l.front().toString().left(kAddrLenLimit).trimmed();
+    const BTC::Address address(addrStr);
+    if (address.net() != net || !address.isValid())
+        throw RPCError(QString("Invalid address: %1").arg(addrStr));
+    const auto sh = address.toHashX();
+    if (UNLIKELY(sh.length() != HashLen))
+        throw RPCError("Invalid scripthash", RPC::ErrorCodes::Code_InternalError); // this should never happen but we must be defensive here.
+    if (addrStrOut) *addrStrOut = addrStr;
+    return sh;
+}
+HashX Server::parseFirstShParamCommon(const RPC::Message &m) const
 {
     QVariantList l(m.paramsList());
     assert(!l.isEmpty());
-    const QByteArray sh = validateHashHex( l.front().toString() );
+    const HashX sh = validateHashHex( l.front().toString() );
     if (sh.length() != HashLen)
         throw RPCError("Invalid scripthash");
+    return sh;
+}
+// ---
+void Server::rpc_blockchain_scripthash_get_balance(Client *c, const RPC::Message &m)
+{
+    const auto sh = parseFirstShParamCommon(m);
+    impl_get_balance(c, m, sh);
+}
+void Server::rpc_blockchain_address_get_balance(Client *c, const RPC::Message &m)
+{
+    const auto sh = parseFirstAddrParamToShCommon(m);
+    impl_get_balance(c, m, sh);
+}
+void Server::impl_get_balance(Client *c, const RPC::Message &m, const HashX &sh)
+{
     generic_do_async(c, m.id, [sh, this] {
         const auto [amt, uamt] = storage->getBalance(sh);
         /* Note: ElectrumX protocol docs are incorrect. They claim a string in coin units is returned here.
@@ -1077,7 +1152,7 @@ void Server::rpc_blockchain_scripthash_get_balance(Client *c, const RPC::Message
 
 /// called from get_mempool and get_history to retrieve the mempool for a hashx synchronously.  Returns the
 /// QVariantMap suitable for placing into the resulting response.
-QVariantList Server::getHistoryCommon(const QByteArray &sh, bool mempoolOnly)
+QVariantList Server::getHistoryCommon(const HashX &sh, bool mempoolOnly)
 {
     QVariantList resp;
     const auto items = storage->getHistory(sh, !mempoolOnly, true); // these are already sorted
@@ -1095,33 +1170,49 @@ QVariantList Server::getHistoryCommon(const QByteArray &sh, bool mempoolOnly)
 
 void Server::rpc_blockchain_scripthash_get_history(Client *c, const RPC::Message &m)
 {
-    QVariantList l(m.paramsList());
-    assert(!l.isEmpty());
-    const QByteArray sh = validateHashHex( l.front().toString() );
-    if (sh.length() != HashLen)
-        throw RPCError("Invalid scripthash");
+    const auto sh = parseFirstShParamCommon(m);
+    impl_get_history(c, m, sh);
+}
+void Server::rpc_blockchain_address_get_history(Client *c, const RPC::Message &m)
+{
+    const auto sh = parseFirstAddrParamToShCommon(m);
+    impl_get_history(c, m, sh);
+}
+void Server::impl_get_history(Client *c, const RPC::Message &m, const HashX &sh)
+{
     generic_do_async(c, m.id, [sh, this] {
         return getHistoryCommon(sh, false);
     });
 }
+
 void Server::rpc_blockchain_scripthash_get_mempool(Client *c, const RPC::Message &m)
 {
-    QVariantList l(m.paramsList());
-    assert(!l.isEmpty());
-    const QByteArray sh = validateHashHex( l.front().toString() );
-    if (sh.length() != HashLen)
-        throw RPCError("Invalid scripthash");
+    const auto sh = parseFirstShParamCommon(m);
+    impl_get_mempool(c, m, sh);
+}
+void Server::rpc_blockchain_address_get_mempool(Client *c, const RPC::Message &m)
+{
+    const auto sh = parseFirstAddrParamToShCommon(m);
+    impl_get_mempool(c, m, sh);
+}
+void Server::impl_get_mempool(Client *c, const RPC::Message &m, const HashX &sh)
+{
     generic_do_async(c, m.id, [sh, this] {
         return getHistoryCommon(sh, true);
     });
 }
 void Server::rpc_blockchain_scripthash_listunspent(Client *c, const RPC::Message &m)
 {
-    QVariantList l = m.paramsList();
-    assert(!l.isEmpty());
-    const QByteArray sh = validateHashHex( l.front().toString() );
-    if (sh.length() != HashLen)
-        throw RPCError("Invalid scripthash");
+    const auto sh = parseFirstShParamCommon(m);
+    impl_listunspent(c, m, sh);
+}
+void Server::rpc_blockchain_address_listunspent(Client *c, const RPC::Message &m)
+{
+    const auto sh = parseFirstAddrParamToShCommon(m);
+    impl_listunspent(c, m, sh);
+}
+void Server::impl_listunspent(Client *c, const RPC::Message &m, const HashX &sh)
+{
     generic_do_async(c, m.id, [sh, this] {
         QVariantList resp;
         const auto items = storage->listUnspent(sh); // these are already sorted
@@ -1138,23 +1229,110 @@ void Server::rpc_blockchain_scripthash_listunspent(Client *c, const RPC::Message
 }
 void Server::rpc_blockchain_scripthash_subscribe(Client *c, const RPC::Message &m)
 {
-    QVariantList l = m.paramsList();
-    assert(l.size() == 1);
-    QByteArray sh = validateHashHex( l.front().toString() );
-    if (sh.length() != HashLen)
-        throw RPCError("Invalid scripthash");
-    /// Note: potential race condition here whereby notification can arrive BEFORE the status result. In practice this
-    /// is fine since clients will cope with the situation, but... ideally, fixme.
-    const auto [wasNew, optStatus] = storage->subs()->subscribe(c, sh, [c,method=m.method](const HashX &sh, const StatusHash &status) {
-        QVariant statusHexMaybeNull; // if empty we simply notify as 'null' (this is unlikely in practice but may happen on reorg)
-        if (!status.isEmpty())
-            statusHexMaybeNull = Util::ToHexFast(status);
-        const QByteArray shHex = Util::ToHexFast(sh);
-        emit c->sendNotification(method, QVariantList{shHex, statusHexMaybeNull});
-    });
+    const auto sh = parseFirstShParamCommon(m);
+    impl_sh_subscribe(c, m, sh);
+}
+void Server::rpc_blockchain_address_subscribe(Client *c, const RPC::Message &m)
+{
+    QString addrStr;
+    const auto sh = parseFirstAddrParamToShCommon(m, &addrStr);
+    assert(!addrStr.isEmpty());
+    impl_sh_subscribe(c, m, sh, addrStr);
+}
+void Server::impl_sh_subscribe(Client *c, const RPC::Message &m, const HashX &sh, const std::optional<QString> &optAlias)
+{
+    const auto CheckSubsLimit = [c, &sh, this](int64_t nShSubs, bool doUnsub) {
+        if (UNLIKELY(nShSubs > options->maxSubsPerIP)) {
+            if (c->perIPData->isWhitelisted()) {
+                // White-listed, let it go, but print to debug log
+                Debug() << c->prettyName(false, false) << " exceeded the per-IP subscribe limit with " << nShSubs
+                        << " subs, but it is whitelisted (subnet: " << c->perIPData->whiteListedSubnet().toString() << ")";
+            } else {
+                // Not white-listed .. unsubscribe and throw an error.
+                if (const auto now = Util::getTimeSecs(); now - c->lastWarnedAboutSubsLimit > ServerMisc::kMaxSubsPerIPWarningsRateLimitSecs /* 1.0 secs */) {
+                    // message spam throttled to once per second
+                    Warning() << c->prettyName(false, false) << " exceeded per-IP subscribe limit with " << nShSubs
+                              << " subs, denying  subscribe request";
+                    c->lastWarnedAboutSubsLimit = now;
+                }
+                if (doUnsub) {
+                    // unsubscribe client right away
+                    if (LIKELY(storage->subs()->unsubscribe(c, sh))) {
+                        // decrement counters
+                        --c->nShSubs;
+                        --c->perIPData->nShSubs;
+                    } else
+                        // This should never happen but we'll print debug/warning info if it does.
+                        Warning() << c->prettyName(false, false) << " failed to unsubscribe client from a scripthash we just subscribed him to! FIXME!";
+                }
+                throw RPCError("Subscription limit reached", RPC::Code_App_LimitExceeded); // send error to client
+            }
+        }
+    };
+    // First, check the Per-IP subs limit right away before we do anything. This has a potential race condition
+    // with other clients from this IP -- but breaking the limit will be caught in the second check below.
+    // The reason we check twice is we *really* want to avoid creating a zombie sub for this client if we can
+    // avoid it if they are at the limit.
+    CheckSubsLimit( c->perIPData->nShSubs + 1, false ); // may throw RPCError
+
+    SubsMgr::SubscribeResult result;
+    try {
+        const auto MkNotifierLambda = [c, &m, &optAlias]() -> StatusCallback {
+            // We return two different lambdas, based on whether there is an opAddr alias specified or not.
+            // The reason for doing it this way is that were we to capture the 'alias' as an empty value in the lambda
+            // always, then in the blockchain.scripthash.subscribe case we would be wasting minimally ~16 bytes of
+            // memory for the empty QByteArray *for each subscription*.
+            //
+            // Since we only use this data for the blockchain.address.subscribe case, we will capture it only in
+            // that special case, hence the existence of two different lambdas here.
+            //
+            // This optimization optimizes memory consumption for the common case, since we don't expect many
+            // blockchain.address.subscribe calls to the server.  (EC doesn't issue these calls, and that is our
+            // primary client that we serve).
+            StatusCallback ret;
+            if (!optAlias.has_value()) { // common case
+                // regular blockchain.scripthash.subscribe callback does no aliasing/rewriting and simply echoes the sh back to client as hex.
+                ret =
+                    [c, method=m.method](const HashX &sh, const StatusHash &status) {
+                        QVariant statusHexMaybeNull; // if empty we simply notify as 'null' (this is unlikely in practice but may happen on reorg)
+                        if (!status.isEmpty())
+                            statusHexMaybeNull = Util::ToHexFast(status);
+                        const QByteArray shHex = Util::ToHexFast(sh);
+                        emit c->sendNotification(method, QVariantList{shHex, statusHexMaybeNull});
+                    };
+            } else {
+                // When notifying, blockchain.address.subscribe callback must rewrite the sh arg -> the original address argument given by the client.
+                ret =
+                    [c, method=m.method, alias=optAlias.value().toUtf8()](const HashX &, const StatusHash &status) {
+                        QVariant statusHexMaybeNull; // if empty we simply notify as 'null' (this is unlikely in practice but may happen on reorg)
+                        if (!status.isEmpty())
+                            statusHexMaybeNull = Util::ToHexFast(status);
+                        emit c->sendNotification(method, QVariantList{alias, statusHexMaybeNull});
+                    };
+            }
+            return ret;
+        };
+        /// Note: potential race condition here whereby notification can arrive BEFORE the status result. In practice this
+        /// is fine since clients will cope with the situation, but... ideally, fixme.
+        result = storage->subs()->subscribe(c, sh, MkNotifierLambda());
+    } catch (const SubsMgr::LimitReached &e) {
+        if (Util::getTimeSecs() - lastSubsWarningPrintTime > ServerMisc::kMaxSubsWarningsRateLimitSecs /* ~250 ms */) {
+            // rate limit printing
+            Warning() << "Exception from SubsMgr: " << e.what() << " (while serving subscribe request for " << c->prettyName(false, false) << ")";
+            lastSubsWarningPrintTime = Util::getTimeSecs();
+        }
+        emit globalSubsLimitReached(); // connected to the SrvMgr, which will loop through all IPs and kick all clients for the most-subscribed IP
+        throw RPCError("Subscription limit reached", RPC::Code_App_LimitExceeded); // send error to client
+    }
+    const auto & [wasNew, optStatus] = result;
     if (wasNew) {
         if (++c->nShSubs == 1)
             Debug() << c->prettyName(false, false) << " is now subscribed to at least one scripthash";
+        // increment per ip counter ...
+        // ... and check if they hit the limit again. This catches races.  Note that if the limit is reached this will
+        // throw and after unsubscribing -- but the zombie sub will be left around for a time until it is reaped
+        // (in practice it won't be a huge problem).
+        CheckSubsLimit( ++c->perIPData->nShSubs, true ); // may throw RPCError
     }
     if (!optStatus.has_value()) {
         // no known/cached status -- do the work ourselves asynch in the thread pool.
@@ -1172,8 +1350,7 @@ void Server::rpc_blockchain_scripthash_subscribe(Client *c, const RPC::Message &
         if (!optStatus.value().isEmpty())
             // not empty, so we return the hex-encoded string
             result = QString(Util::ToHexFast(optStatus.value()));
-        // this debug statement below can get spammy and also eats cycles.  TODO: add some better global way to toggle
-        // debug stuff on/off other than at compile-time... and do it without extra function calls as you get in operator<<.
+        // this debug statement below can get spammy and also eats cycles.
         //Debug() << "Sending cached status to client for scripthash: " << Util::ToHexFast(sh) << " status: " << result.toString();
         //
         emit c->sendResult(m.id, result); ///<  may be 'null' if status was empty (indicates no history for scripthash)
@@ -1181,15 +1358,22 @@ void Server::rpc_blockchain_scripthash_subscribe(Client *c, const RPC::Message &
 }
 void Server::rpc_blockchain_scripthash_unsubscribe(Client *c, const RPC::Message &m)
 {
-    QVariantList l = m.paramsList();
-    assert(l.size() == 1);
-    QByteArray sh = validateHashHex( l.front().toString() );
-    if (sh.length() != HashLen)
-        throw RPCError("Invalid scripthash");
+    const auto sh = parseFirstShParamCommon(m);
+    impl_sh_unsubscribe(c, m, sh);
+}
+void Server::rpc_blockchain_address_unsubscribe(Client *c, const RPC::Message &m)
+{
+    const auto sh = parseFirstAddrParamToShCommon(m);
+    impl_sh_unsubscribe(c, m, sh);
+}
+void Server::impl_sh_unsubscribe(Client *c, const RPC::Message &m, const HashX &sh)
+{
     const bool result = storage->subs()->unsubscribe(c, sh);
     if (result) {
         if (--c->nShSubs == 0)
             Debug() << c->prettyName(false, false) << " is no longer subscribed to any scripthashes";
+        if (--c->perIPData->nShSubs == 0)
+            Debug() << "PerIP: " << c->peerAddress().toString() << " is no longer subscribed to any scripthashes";
     }
     emit c->sendResult(m.id, QVariant(result));
 }
@@ -1410,6 +1594,13 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
     { {"server.ping",                       true,               false,    PR{0,0},                    },          MP(rpc_server_ping) },
     { {"server.version",                    true,               false,    PR{0,2},                    },          MP(rpc_server_version) },
 
+    { {"blockchain.address.get_balance",    true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_get_balance) },
+    { {"blockchain.address.get_history",    true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_get_history) },
+    { {"blockchain.address.get_mempool",    true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_get_mempool) },
+    { {"blockchain.address.listunspent",    true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_listunspent) },
+    { {"blockchain.address.subscribe",      true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_subscribe) },
+    { {"blockchain.address.unsubscribe",    true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_unsubscribe) },
+
     { {"blockchain.block.header",           true,               false,    PR{1,2},                    },          MP(rpc_blockchain_block_header) },
     { {"blockchain.block.headers",          true,               false,    PR{2,3},                    },          MP(rpc_blockchain_block_headers) },
     { {"blockchain.estimatefee",            true,               false,    PR{1,1},                    },          MP(rpc_blockchain_estimatefee) },
@@ -1456,9 +1647,9 @@ void Server::StaticData::init() { InitStaticDataCommon(dispatchTable, methodMap,
 // --- /RPC METHODS ---
 
 // --- SSL Server support ---
-ServerSSL::ServerSSL(const QHostAddress & address_, quint16 port_, const std::shared_ptr<const Options> & opts,
+ServerSSL::ServerSSL(SrvMgr *sm, const QHostAddress & address_, quint16 port_, const std::shared_ptr<const Options> & opts,
                      const std::shared_ptr<Storage> & storage_, const std::shared_ptr<BitcoinDMgr> & bitcoindmgr_)
-    : Server(address_, port_, opts, storage_, bitcoindmgr_), cert(opts->sslCert), key(opts->sslKey)
+    : Server(sm, address_, port_, opts, storage_, bitcoindmgr_), cert(opts->sslCert), key(opts->sslKey)
 {
     if (cert.isNull() || key.isNull())
         throw BadArgs("ServerSSL cannot be instantiated: Key or cert are null!");
@@ -1499,7 +1690,7 @@ void ServerSSL::incomingConnection(qintptr socketDescriptor)
 AdminServer::AdminServer(SrvMgr *sm, const QHostAddress & a, quint16 p, const std::shared_ptr<const Options> & o,
                          const std::shared_ptr<Storage> & s, const std::shared_ptr<BitcoinDMgr> & bdm,
                          const std::weak_ptr<PeerMgr> & pm)
-    : ServerBase(StaticData::methodMap, StaticData::dispatchTable, a, p, o, s, bdm), srvmgr(sm), peerMgr(pm)
+    : ServerBase(sm, StaticData::methodMap, StaticData::dispatchTable, a, p, o, s, bdm), peerMgr(pm)
 {
     StaticData::init(); // noop after first time it's called
     setObjectName(prettyName());
@@ -1669,7 +1860,7 @@ void AdminServer::rpc_getinfo(Client *c, const RPC::Message &m)
     res["txs_sent"] = qulonglong(srvmgr->txBroadcasts());
     res["txs_sent_bytes"] = qulonglong(srvmgr->txBroadcastBytes());
     res["uptime"] = QString::number(Util::getTimeSecs(), 'f', 1) + " secs";
-    res["subscriptions"] = storage->subs()->numActiveClientSubscriptions();
+    res["subscriptions"] = qlonglong(storage->subs()->numActiveClientSubscriptions());
     res["peers"] = peers.size();
     res["config"] = options->toMap();
     { // mempool
@@ -1870,8 +2061,10 @@ Client::Client(const RPC::MethodMap & mm, IdMixin::Id id_in, QTcpSocket *sock, i
 Client::~Client()
 {
     --numClients;
-    Debug() << __func__ << " " << id;
-    socket = nullptr; // NB: we are a child of socket. this line here is added in case some day I make AbstractClient delete socket on destruct.
+    if constexpr (!isReleaseBuild())
+        Debug() << __func__ << " " << id;
+    socket = nullptr; // NB: we are a child of socket, so socket is alread invalid here. This line here is added in case some day I make AbstractClient delete socket on destruct.
+    emit clientDestructing(this); // This is currently connected to a lambda in ServerBase::newClient
 }
 
 void Client::do_disconnect(bool graceful)

@@ -57,6 +57,10 @@ void Controller::startup()
     storage = std::make_shared<Storage>(options);
     storage->startup(); // may throw here
 
+    if (! options->dumpScriptHashes.isEmpty())
+        // this may take a long time but normally this branch is not taken
+        dumpScriptHashes(options->dumpScriptHashes);
+
     bitcoindmgr = std::make_shared<BitcoinDMgr>(options->bitcoind.first, options->bitcoind.second, options->rpcuser, options->rpcpassword);
     {
         auto constexpr waitTimer = "wait4bitcoind", callProcessTimer = "callProcess";
@@ -785,7 +789,7 @@ struct Controller::StateMachine
     };
     State state = Begin;
     int ht = -1; ///< the latest height bitcoind told us this run
-    bool isMainNet = false;
+    BTC::Net net = BTC::Net::Invalid;  ///< This gets set by calls to getblockchaininfo by parsing the "chain" in the resulting dict
 
     robin_hood::unordered_flat_map<unsigned, PreProcessedBlockPtr> ppBlocks; // mapping of height -> PreProcessedBlock (we use an unordered_flat_map because it's faster for frequent updates)
     unsigned startheight = 0, ///< the height we started at
@@ -823,7 +827,7 @@ unsigned Controller::downloadTaskRecommendedThrottleTimeMsec(unsigned bnum) cons
     std::shared_lock g(smLock); // this lock guarantees that 'sm' won't be deleted from underneath us
     if (sm) {
         int maxBackLog = 1000; // <--- TODO: have this be a more dynamic value based on current average blocksize.
-        if (sm->isMainNet) {
+        if (sm->net == BTC::Net::MainNet) {
             // mainnet
             if (bnum > 150000) // beyond this height the blocks are starting to be big enough that we want to not eat memory.
                 maxBackLog = 250;
@@ -930,15 +934,25 @@ void Controller::process(bool beSilentIfUpToDate)
                 AGAIN();
                 return;
             }
-            if (const auto dbchain = storage->getChain(); dbchain.isEmpty() && !task->info.chain.isEmpty()) {
-                storage->setChain(task->info.chain);
-            } else if (dbchain != task->info.chain) {
-                Fatal() << "Bitcoind reports chain: \"" << task->info.chain << "\", which differs from our database: \""
+            const auto & chain = task->info.chain;
+            if (const auto dbchain = storage->getChain(); dbchain.isEmpty() && !chain.isEmpty()) {
+                storage->setChain(chain);
+            } else if (dbchain != chain) {
+                Fatal() << "Bitcoind reports chain: \"" << chain << "\", which differs from our database: \""
                         << dbchain << "\". You may have connected to the wrong bitcoind. To fix this issue either "
                         << "connect to a different bitcoind or delete this program's datadir to resynch.";
                 return;
             }
-            sm->isMainNet = task->info.chain == "main";
+            sm->net = BTC::NetFromName(chain);
+            if (UNLIKELY(sm->net == BTC::Net::Invalid)) {
+                // Unknown chain name. This shouldn't happen but it if does, warn the user since it will make all of
+                // the blockchain.address.* methods not work. This warning will spam the log so hopefully it will not
+                // go unnoticed. I doubt anyone anytime soon will rename "main" or "test" or "regtest", but it pays
+                // to be safe.
+                Warning() << "Warning: Bitcoind reports chain: \"" << chain << "\", which is unknown to this software. "
+                          << "Some protocol methods such as \"blockchain.address.*\" will not work correctly. "
+                          << "Please update your software and/or report this to the developers.";
+            }
             QByteArray tipHeader;
             const auto [tip, tipHash] = storage->latestTip(&tipHeader);
             sm->ht = task->info.blocks;
@@ -1371,7 +1385,7 @@ auto Controller::debug(const StatsParams &p) const -> Stats // from StatsMixin
         }
         ret["unspent_debug"] = l;
     }
-    if (p.count("mempool")) {
+    if (p.contains("mempool")) {
         QVariantMap mp, txs;
         auto [mempool, lock] = storage->mempool();
         for (const auto & [hash, tx] : mempool.txs) {
@@ -1445,6 +1459,10 @@ auto Controller::debug(const StatsParams &p) const -> Stats // from StatsMixin
         mp["hashXTxs (LoadFactor)"] = QString::number(double(mempool.hashXTxs.load_factor()), 'f', 4);
         ret["mempool_debug"] = mp;
     }
+    if (p.contains("subs")) {
+        const auto timeLeft = kDefaultTimeout - (Util::getTime() - t0/1000000) - 50;
+        ret["subscriptions"] = storage->subs()->debugSafe(p, std::max(5, int(timeLeft)));
+    }
     const auto elapsed = Util::getTimeNS() - t0;
     ret["elapsed"] = QString::number(elapsed/1e6, 'f', 6) + " msec";
     return ret;
@@ -1475,4 +1493,30 @@ std::tuple<size_t, size_t, size_t> Controller::nTxInOutSoFar() const
         }
     }
     return {nTx, nIn, nOut};
+}
+
+
+// --- Debug dump support
+void Controller::dumpScriptHashes(const QString &fileName) const
+{
+    if (!storage)
+        throw InternalError("Dump: Storage is not started");
+    QFile outFile(fileName);
+    if (!outFile.open(QIODevice::WriteOnly|QIODevice::Text|QIODevice::Truncate))
+        throw BadArgs(QString("Dump: Output file \"%1\" could not be opened for writing").arg(fileName));
+    Log() << "Dump: " << "writing all known script hashes from db to \"" << fileName << "\" (this may take some time) ...";
+    const auto t0 = Util::getTimeSecs();
+    const auto count = storage->dumpAllScriptHashes(&outFile, 2, 0, [](size_t ctr){
+        const QString text(QString("Dump: wrote %1 scripthashes so far ...").arg(ctr));
+        if (ctr && !(ctr % 1000000))
+            Log() << text;
+        else
+            Debug() << text;
+    });
+    outFile.flush();
+    outFile.close();
+    Log() << "Dump: wrote " << count << Util::Pluralize(" script hash", count) << " to \"" << fileName << "\""
+          << " in " << QString::number(Util::getTimeSecs() - t0, 'f', 1) << " seconds"
+          <<" (" << QString::number(outFile.size()/1e6, 'f', 3) << " MiB)";
+    emit dumpScriptHashesComplete();
 }

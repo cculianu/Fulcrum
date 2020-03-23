@@ -34,6 +34,8 @@
 #include <QVector>
 
 #include <memory> // for shared_ptr
+#include <optional>
+#include <shared_mutex>
 
 struct TcpServerError : public Exception
 {
@@ -140,6 +142,7 @@ protected:
     using Member_t = void (ServerBase::*)(Client *, const RPC::Message &); ///< ptr to member function
     using DispatchTable = QHash<QString, Member_t>; ///< this dispatch table mechanism which relies on ptr to member is a slight performance optimization over std::function with std::bind
 
+    SrvMgr * const srvmgr; ///< basically a weak reference -- this is guaranteed to be alive for the entire lifetime of this instance, however.
     const RPC::MethodMap & methods; ///< must be valid for the lifetime of this instance
     const DispatchTable & dispatchTable; ///< must be valid for the lifetime of this instance
 
@@ -149,7 +152,8 @@ protected:
     /// It's ok to pass a reference to empty containers for both `rpcMethods` and `dispatchTable` so long as
     /// that data gets filled-in later before the server is started via `tryStart()`.
     /// It is undefined to modify those structures after `tryStart()` has been called, however.
-    ServerBase(const RPC::MethodMap & rpcMethods, const DispatchTable & dispatchTable,
+    ServerBase(SrvMgr *srvMgr,  // the object that owns us
+               const RPC::MethodMap & rpcMethods, const DispatchTable & dispatchTable,
                const QHostAddress & address, quint16 port,
                const std::shared_ptr<const Options> & options,
                const std::shared_ptr<Storage> & storage,
@@ -268,7 +272,7 @@ class Server : public ServerBase
 {
     Q_OBJECT
 public:
-    Server(const QHostAddress & address, quint16 port, const std::shared_ptr<const Options> & options,
+    Server(SrvMgr *, const QHostAddress & address, quint16 port, const std::shared_ptr<const Options> & options,
            const std::shared_ptr<Storage> & storage, const std::shared_ptr<BitcoinDMgr> & bitcoindmgr);
     ~Server() override;
 
@@ -288,6 +292,10 @@ signals:
     /// is a size in bytes.
     void broadcastTxSuccess(unsigned);
 
+    /// Emitted when the SubsMgr throws LimitReached inside rpc_scripthash_subscribe. Conneced to SrvMgr which
+    /// will iterate through all perIPData instances and kick the ip address with the most subs.
+    void globalSubsLimitReached();
+
 private:
     // RPC methods below
     // server
@@ -298,6 +306,13 @@ private:
     void rpc_server_peers_subscribe(Client *, const RPC::Message &); // fully implemented
     void rpc_server_ping(Client *, const RPC::Message &); // fully implemented
     void rpc_server_version(Client *, const RPC::Message &); // fully implemented
+    // address (resurrected in protocol 1.4.3)
+    void rpc_blockchain_address_get_balance(Client *, const RPC::Message &); // fully implemented
+    void rpc_blockchain_address_get_history(Client *, const RPC::Message &); // fully implemented
+    void rpc_blockchain_address_get_mempool(Client *, const RPC::Message &); // fully implemented
+    void rpc_blockchain_address_listunspent(Client *, const RPC::Message &); // fully implemented
+    void rpc_blockchain_address_subscribe(Client *, const RPC::Message &); // fully implemented
+    void rpc_blockchain_address_unsubscribe(Client *, const RPC::Message &); // fully implemented
     // blockchain misc
     void rpc_blockchain_block_header(Client *, const RPC::Message &);  // fully implemented
     void rpc_blockchain_block_headers(Client *, const RPC::Message &); // fully implemented
@@ -318,6 +333,29 @@ private:
     void rpc_blockchain_transaction_id_from_pos(Client *, const RPC::Message &); // fully implemented
     // mempool
     void rpc_mempool_get_fee_histogram(Client *, const RPC::Message &); // fully implemented
+
+    // Impl. for blockchain.scripthash.* & blockchain.address.* methods (both sets call into these).
+    // Note: Validation should have already been done by caller.
+    void impl_get_balance(Client *, const RPC::Message &, const HashX &scriptHash);
+    void impl_get_history(Client *, const RPC::Message &, const HashX &scriptHash);
+    void impl_get_mempool(Client *, const RPC::Message &, const HashX &scriptHash);
+    void impl_listunspent(Client *, const RPC::Message &, const HashX &scriptHash);
+    void impl_sh_subscribe(Client *, const RPC::Message &, const HashX &scriptHash,
+                           const std::optional<QString> & aliasUsedForNotifications = {});
+    void impl_sh_unsubscribe(Client *, const RPC::Message &, const HashX &scriptHash);
+    /// Commonly used by above methods.  Takes the first address argument in the m.paramsList() and converts it to
+    /// a scripthash, returning the raw bytes.  Will throw RPCError on invalid argument.
+    /// It is assumed the caller already ensured m.paramsList() has at least 1 item in it (which the RPC machinery
+    /// does normally if the params spec is correctly written).  Validation is done on the argument, however, and
+    /// it will throw RPCError in all parse/failure cases and only ever returns a valid scripthash on success.
+    HashX parseFirstAddrParamToShCommon(const RPC::Message &m, QString *addrStrOut = nullptr) const;
+    /// Commonly used by above methods.  Takes the first scripthash hex argument in the m.paramsList() and converts it to
+    /// a scripthash, returning the raw bytes.  Will throw RPCError on invalid argument.
+    /// It is assumed the caller already ensured m.paramsList() has at least 1 item in it (which the RPC machinery
+    /// does normally if the params spec is correctly written).  Validation is done on the argument, however, and
+    /// it will throw RPCError in all parse/failure cases and only ever returns a valid scripthash on success.
+    HashX parseFirstShParamCommon(const RPC::Message &m) const;
+
 
     /// Basically a namespace for our rpc dispatch tables, etc
     struct StaticData {
@@ -341,7 +379,9 @@ private:
 
     /// called from get_mempool and get_history to retrieve the mempool and/or history for a hashx synchronously.
     /// Returns the QVariantMap suitable for placing into the resulting response.
-    QVariantList getHistoryCommon(const QByteArray & sh, bool mempoolOnly);
+    QVariantList getHistoryCommon(const HashX & sh, bool mempoolOnly);
+
+    double lastSubsWarningPrintTime = 0.; ///< used internally to rate-limit "max subs exceeded" message spam to log
 };
 
 /// SSL version of the above Server class that just wraps tcp sockets with a QSslSocket.
@@ -351,7 +391,7 @@ class ServerSSL : public Server
 {
     Q_OBJECT
 public:
-    ServerSSL(const QHostAddress & address, quint16 port, const std::shared_ptr<const Options> & options,
+    ServerSSL(SrvMgr *, const QHostAddress & address, quint16 port, const std::shared_ptr<const Options> & options,
               const std::shared_ptr<Storage> & storage, const std::shared_ptr<BitcoinDMgr> & bitcoindmgr);
     ~ServerSSL() override;
 
@@ -388,7 +428,6 @@ protected:
 private:
     std::unique_ptr<ThreadPool> threadPool; ///< we use our own threadpool for the admin server so as to not interfere with the normal one used for SPV clients.
 
-    SrvMgr * const srvmgr; ///< basically a weak reference -- this is guaranteed to be alive for the entire lifetime of this instance, however.
     const std::weak_ptr<PeerMgr> peerMgr; ///< this isn't always valid if peering is disabled.  SrvMgr owns this, and as the app shuts down it may go away.
 
     static constexpr int kBlockingCallTimeoutMS = 10000;
@@ -460,14 +499,42 @@ public:
 
     Info info;
 
+    /// Data that is per-IP address. This data structure is potentially shared with multiple Client * instances living
+    /// in multiple ServerBase instances, in multiple threads.  The table that stores these is in SrvMgr. See SrvMgr.h.
+    struct PerIPData {
+        mutable std::shared_mutex mut;  ///< guards _whiteListedSubnet
+
+        enum WhiteListState { UNINITIALIZED, WhiteListed, NotWhiteListed };
+        std::atomic_int whiteListState{UNINITIALIZED}; ///< used to determine if we should apply limits.
+        Options::Subnet _whiteListedSubnet; ///< guarded by mut. Use getter for thread-safe reads. This is only ever valid iff whiteListState == WhiteListed. otherwise .isValid() == false
+
+        inline bool isWhitelisted() const { return whiteListState.load() == WhiteListed; }
+        /// Thread-safe getter for _whiteListedSubnet above
+        inline Options::Subnet whiteListedSubnet() const { std::shared_lock g(mut); return _whiteListedSubnet; }
+
+        std::atomic_int nClients{0}; ///< the number of alive clients referencing this perIPData item
+        std::atomic_int64_t nShSubs{0}; ///< the number of unique scripthash subscriptions for all clients coming from this IP address.
+        std::atomic_int64_t bdReqCtr{0}; ///< the number bitcoind requests active right now for all clients coming from this IP address.
+        std::atomic_uint64_t bdReqCtr_cum{0}; ///< the number bitcoind requests, cumulatively, for all clients coming from this IP address.
+    };
+
+    std::shared_ptr<PerIPData> perIPData;
+
     bool isSubscribedToHeaders = false;
     std::atomic_int nShSubs{0};  ///< the number of unique scripthash subscriptions for this client.
 
     //bitcoind_throttle counter, per client
     qint64 bdReqCtr = 0;
 
+    double lastWarnedAboutSubsLimit = 0.; ///< used to throttle log messages when client hits subs limit
+
     static std::atomic_size_t numClients, numClientsMax, numClientsCtr; // number of connected clients: current, max lifetime, accumulated counter
 
+signals:
+    /// Used by ServerBase via a direct connection.  The class d'tor emits this.  This is better for us than
+    /// QObject::destroyed because that runs after this type no longer is a "Client", wheras this is emitted
+    /// immediately from this instance's d'tor.
+    void clientDestructing(Client *self);
 protected:
 
     void do_ping() override;

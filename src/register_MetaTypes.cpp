@@ -19,6 +19,7 @@
 #include "App.h"
 #include "BlockProc.h"
 #include "BTC.h"
+#include "BTC_Address.h"
 #include "Controller.h"
 #include "Mixins.h"
 #include "PeerMgr.h"
@@ -47,6 +48,8 @@ void App::register_MetaTypes()
 
         qRegisterMetaType<PeerInfo>("PeerInfo");
         qRegisterMetaType<PeerInfoList>("PeerInfoList");
+
+        qRegisterMetaType<BTC::Address>();
 
         registered = true;
     }

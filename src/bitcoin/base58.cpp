@@ -8,6 +8,7 @@
 #include "uint256.h"
 #include "utilstrencodings.h"
 
+#include <array>
 #include <cassert>
 #include <cstdint>
 #include <cstring>
@@ -21,10 +22,34 @@
 #endif
 
 namespace bitcoin {
+namespace {
 /** All alphanumeric characters except for "0", "I", "O", and "l" */
-static const char *pszBase58 =
-    "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+const char *pszBase58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
+/// Do not construct this class. Instead, use the singleton instance provided below as b58CarryTable.
+class B58CarryTable {
+    std::array<int8_t, 256> table;
+public:
+    B58CarryTable();
+    constexpr int8_t operator[](decltype(table)::size_type i) const noexcept { return table[i]; }
+};
+
+B58CarryTable::B58CarryTable()
+{
+    table.fill(-1);
+    for (auto p = pszBase58; *p; ++p)
+        // build table, storing the carry value for each character in our base58 alphabet, or -1 if not in alphabet
+        table[uint8_t(*p)] = int8_t(p - pszBase58); // (0,57) range here
+}
+
+B58CarryTable b58CarryTable; ///< singleton instance -- used by our modified DecodeBase58.
+
+} // end anonymous namespace
+
+/* Original Bitcoin implementation below.. removed by Calin and replaced with faster alternative (15% faster on average)
+   which doesn't call strchr() repeatedly on the pszBase58 like the original did, but instead builds
+   a table once (~256 byte memory cost), and then subsequent calls use the table. */
+#if 0
 bool DecodeBase58(const char *psz, std::vector<uint8_t> &vch) {
     // Skip leading spaces.
     while (*psz && IsSpace(*psz)) {
@@ -80,7 +105,64 @@ bool DecodeBase58(const char *psz, std::vector<uint8_t> &vch) {
     }
     return true;
 }
-
+#else
+// Calin's 15% faster implementation here
+bool DecodeBase58(const char *psz, std::vector<uint8_t> &vch) {
+    // Skip leading spaces.
+    while (*psz && IsSpace(*psz)) {
+        psz++;
+    }
+    // Skip and count leading '1's.
+    int zeroes = 0;
+    int length = 0;
+    while (*psz == '1') {
+        zeroes++;
+        psz++;
+    }
+    // Allocate enough space in big-endian base256 representation.
+    // log(58) / log(256), rounded up.
+    int size = strlen(psz) * 733 / 1000 + 1;
+    std::vector<uint8_t> b256(size);
+    // Process the characters.
+    while (*psz && !IsSpace(*psz)) {
+        // Decode base58 character
+        int carry = b58CarryTable[uint8_t(*psz)];
+        if (carry < 0) {
+            // invalid character
+            return false;
+        }
+        // Apply "b256 = b256 * 58 + ch".
+        int i = 0;
+        for (std::vector<uint8_t>::reverse_iterator it = b256.rbegin();
+             (carry != 0 || i < length) && (it != b256.rend()); ++it, ++i) {
+            carry += 58 * (*it);
+            *it = carry % 256;
+            carry /= 256;
+        }
+        assert(carry == 0);
+        length = i;
+        psz++;
+    }
+    // Skip trailing spaces.
+    while (IsSpace(*psz)) {
+        psz++;
+    }
+    if (*psz != 0) {
+        return false;
+    }
+    // Skip leading zeroes in b256.
+    std::vector<uint8_t>::iterator it = b256.begin() + (size - length);
+    while (it != b256.end() && *it == 0)
+        it++;
+    // Copy result into output vector.
+    vch.reserve(zeroes + (b256.end() - it));
+    vch.assign(zeroes, 0x00);
+    while (it != b256.end()) {
+        vch.push_back(*(it++));
+    }
+    return true;
+}
+#endif
 std::string EncodeBase58(const uint8_t *pbegin, const uint8_t *pend) {
     // Skip & count leading zeroes.
     int zeroes = 0;

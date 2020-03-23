@@ -23,6 +23,8 @@
 
 #include <QThread>
 
+#include <algorithm>
+#include <cmath>
 #include <mutex>
 
 Subscription::Subscription(const HashX &sh)
@@ -50,7 +52,7 @@ struct SubsMgr::Pvt
     robin_hood::unordered_flat_map<HashX, SubsMgr::SubRef, HashHasher> subs;
     std::unordered_set<HashX, HashHasher> pendingNotificatons;
 
-    std::atomic_int nClientSubsActive{0};
+    std::atomic_int64_t nClientSubsActive{0};
     std::atomic_uint64_t cacheHits{0}, cacheMisses{0};
 
     static constexpr size_t kSubsReserveSize = 16384;
@@ -65,6 +67,8 @@ struct SubsMgr::Pvt
         pendingNotificatons.reserve(kRecommendedPendingNotificationsReserveSize);
     }
 };
+
+SubsMgr::LimitReached::~LimitReached() {} // vtable
 
 SubsMgr::SubsMgr(const std::shared_ptr<const Options> & o, Storage *s, const QString &n)
     : Mgr(nullptr), options(o), storage(s), p(std::make_unique<SubsMgr::Pvt>())
@@ -91,7 +95,11 @@ void SubsMgr::on_started()
     conns += connect(this, &SubsMgr::queueNoLongerEmpty, this, [this]{
         callOnTimerSoonNoRepeat(kNotifTimerIntervalMS, kNotifTimerName, [this]{ doNotifyAllPending(); }, false, Qt::TimerType::PreciseTimer);
     }, Qt::QueuedConnection);
-    callOnTimerSoon(kRemoveZombiesTimerIntervalMS, kRemoveZombiesTimerName, [this]{ removeZombies(); return true;}, true);
+    conns += connect(this, &SubsMgr::requestRemoveZombiesSoon, this, [this](int when_ms) {
+        // remove zombies in when_ms, outside normal rate-limiting timer
+        QTimer::singleShot(std::max(when_ms, 0), this, [this]{ removeZombies(true /* forced */); });
+    }, Qt::QueuedConnection);
+    callOnTimerSoon(kRemoveZombiesTimerIntervalMS, kRemoveZombiesTimerName, [this]{ removeZombies(false); return true;}, true);
 }
 
 void SubsMgr::on_finished()
@@ -199,10 +207,17 @@ auto SubsMgr::makeSubRef(const HashX &sh) -> SubRef
     return ret;
 }
 
+// may throw LimitReached
 auto SubsMgr::getOrMakeSubRef(const HashX &sh) -> std::pair<SubRef, bool>
 {
     std::pair<SubRef, bool> ret;
     LockGuard g(p->mut);
+
+    if (UNLIKELY(p->subs.size() >= size_t(options->maxSubsGlobally)))
+        // Note we check the limit against all subs (including zombies) to prevent a DoS attack that circumvents
+        // the limit by repeatedly creating subs, disconnecting, reconnecting, creating a different set of subs, etc.
+        throw LimitReached(QString("Global subs limit of %1 has been reached").arg(options->maxSubsGlobally));
+
     if (auto it = p->subs.find(sh); it != p->subs.end()) {
         ret.first = it->second;
         ret.second = false; // was not new
@@ -225,11 +240,12 @@ auto SubsMgr::findExistingSubRef(const HashX &sh) const -> SubRef
 
 auto SubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &sh, const StatusCallback &notifyCB) -> SubscribeResult
 {
-    SubscribeResult ret = { false, {} };
     const auto t0 = debugPrint ? Util::getTimeNS() : 0LL;
     if (UNLIKELY(!notifyCB))
         throw BadArgs("SubsMgr::subscribe must be called with a valid notifyCB. FIXME!");
-    auto [sub, wasnew] = getOrMakeSubRef(sh);
+
+    SubscribeResult ret = { false, {} };
+    auto [sub, wasnew] = getOrMakeSubRef(sh); // may throw LimitReached
     {
         LockGuard g(sub->mut);
         if (!wasnew && sub->subscribedClientIds.count(c->id)) {
@@ -313,10 +329,17 @@ bool SubsMgr::unsubscribe(RPC::ConnectionBase *c, const HashX &sh)
     return ret;
 }
 
-int SubsMgr::numActiveClientSubscriptions() const { return p->nClientSubsActive; }
-int SubsMgr::numScripthashesSubscribed() const {
+int64_t SubsMgr::numActiveClientSubscriptions() const { return p->nClientSubsActive; }
+int64_t SubsMgr::numScripthashesSubscribed() const {
     LockGuard g(p->mut);
-    return int(p->subs.size());
+    return int64_t(p->subs.size());
+}
+
+std::pair<bool, bool> SubsMgr::globalSubsLimitFlags() const
+{
+    constexpr double factor = .8;
+    const auto thresh = int64_t(std::round(options->maxSubsGlobally * factor));
+    return { numActiveClientSubscriptions() > thresh, numScripthashesSubscribed() > thresh };
 }
 
 auto SubsMgr::getFullStatus(const HashX &sh) const -> StatusHash
@@ -344,7 +367,7 @@ auto SubsMgr::getFullStatus(const HashX &sh) const -> StatusHash
     return ret;
 }
 
-void SubsMgr::removeZombies()
+void SubsMgr::removeZombies(bool forced)
 {
     const auto t0 = Util::getTimeNS();
     int ctr = 0;
@@ -358,7 +381,7 @@ void SubsMgr::removeZombies()
             return;
         }
         LockGuard g(sub->mut);
-        if (sub->subscribedClientIds.empty() && now - sub->tsMsec > kRemoveZombiesTimerIntervalMS) {
+        if (sub->subscribedClientIds.empty() && (forced || now - sub->tsMsec > kRemoveZombiesTimerIntervalMS)) {
             ++ctr;
             it = p->subs.erase(it);
         } else
@@ -372,13 +395,13 @@ void SubsMgr::removeZombies()
     }
 }
 
-auto SubsMgr::stats() const -> Stats
+auto SubsMgr::debug(const StatsParams &params) const -> Stats
 {
-    QVariantMap ret;
-    {
+    QVariant ret;
+    if (params.contains("subs")) {
         QVariantMap m;
         LockGuard g(p->mut);
-        for (auto [sh, sub] : p->subs) { // value-copy intentional here (these are very cheap to perform on QByteArray and SubsRef anyway)
+        for (const auto & [sh, sub] : p->subs) {
             QVariantMap m2;
             {
                 LockGuard g2(sub->mut);
@@ -393,21 +416,30 @@ auto SubsMgr::stats() const -> Stats
                 m2["clientIds"] = Util::toList<QVariantList>(clients);
 #endif
             }
-            m[QString(sh.toHex())] = m2;
+            m[QString(Util::ToHexFast(sh))] = m2;
         }
-        ret["subscriptions"] = m;
-        ret["subscriptions (LoadFactor)"] = p->subs.load_factor();
+        ret = m;
+    }
+    return ret;
+}
+
+auto SubsMgr::stats() const -> Stats
+{
+    QVariantMap ret;
+    {
+        LockGuard g(p->mut);
+        ret["subscriptions load factor"] = p->subs.load_factor();
         QVariantList l;
-        for (auto sh : p->pendingNotificatons) {
-            l.push_back(QString(sh.toHex()));
+        for (const auto & sh : p->pendingNotificatons) {
+            l.push_back(Util::ToHexFast(sh));
         }
         ret["pendingNotifications"] = l;
     }
     ret["subscriptions cache hits"] = qlonglong(p->cacheHits.load()); // atomic, no lock needed
     ret["subscriptions cache misses"] = qlonglong(p->cacheMisses.load()); // atomic, no lock needed
     // these below 2 take the above lock again so we do them without the lock held
-    ret["Num. active client subscriptions"] = numActiveClientSubscriptions();
-    ret["Num. unique scripthashes subscribed (including zombies)"] = numScripthashesSubscribed();
+    ret["Num. active client subscriptions"] = qlonglong(numActiveClientSubscriptions());
+    ret["Num. unique scripthashes subscribed (including zombies)"] = qlonglong(numScripthashesSubscribed());
     ret["activeTimers"] = activeTimerMapForStats();
     return ret;
 }

@@ -59,7 +59,9 @@ namespace RPC {
         /// Daemon problem
         Code_App_DaemonError = 2,
         /// Excessive flood
-        Cose_App_ExcessiveFlood = 3,
+        Code_App_ExcessiveFlood = 3,
+        /// Limit exceeded
+        Code_App_LimitExceeded = 4,
     };
 
     using KeySet = QSet<QString>;

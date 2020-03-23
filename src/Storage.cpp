@@ -34,6 +34,7 @@
 #include <QDir>
 #include <QVector> // we use this for the Height2Hash cache to save on memcopies since it's implicitly shared.
 
+#include <algorithm>
 #include <atomic>
 #include <cstring> // for memcpy
 #include <list>
@@ -2019,6 +2020,55 @@ auto Storage::mempoolHistogram() const -> Mempool::FeeHistogramVec
 {
     SharedLockGuard g(p->mempoolLock);
     return p->mempoolFeeHistogram;
+}
+
+size_t Storage::dumpAllScriptHashes(QIODevice *outDev, unsigned int indent, unsigned int ilvl,
+                                    const DumpProgressFunc &progFunc, size_t progInterval) const
+{
+    if (!outDev || !outDev->isWritable())
+        return 0;
+    SharedLockGuard g{p->blocksLock};
+    std::unique_ptr<rocksdb::Iterator> it {p->db.shist->NewIterator(p->db.defReadOpts)};
+    if (!it) return 0;
+
+    const auto INDENT = [outDev, &ilvl, spaces = QByteArray(int(indent), ' ')] {
+        for (size_t i = 0; i < ilvl; ++i)
+            outDev->write(spaces);
+    };
+    const Util::VoidFunc NL = indent ? Util::VoidFunc([outDev, &INDENT] {
+        outDev->putChar('\n');
+        INDENT();
+    }) : Util::VoidFunc([]{});
+    size_t ctr = 0;
+    progInterval = std::max(size_t(1), progInterval);
+
+    if (indent) INDENT();
+    outDev->putChar('[');
+    ++ilvl;
+    NL();
+    if (progFunc) progFunc(0); // 0 = indicate operator began
+    qint64 lastWriteCt = 0;
+    for (it->SeekToFirst(); it->Valid() && outDev && lastWriteCt > -1; it->Next()) {
+        const auto sh = it->key();
+        if (sh.size() == HashLen) {
+            if (LIKELY(ctr)) {
+                outDev->putChar(',');
+                NL();
+            }
+            outDev->putChar('"');
+            lastWriteCt = outDev->write(Util::ToHexFast(FromSlice(sh)));
+            outDev->putChar('"');
+            if (UNLIKELY(!(++ctr % progInterval) && progFunc))
+                progFunc(ctr);
+        }
+    }
+    --ilvl;
+    if (ctr) NL();
+    outDev->putChar(']');
+
+    if (progFunc && ctr % progInterval)
+        progFunc(ctr); // always called for last item to indicate operation ended
+    return ctr;
 }
 
 namespace {

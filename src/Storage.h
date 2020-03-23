@@ -37,6 +37,7 @@
 #include <QByteArray>
 #include <QFlags>
 
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -118,7 +119,7 @@ public:
     /// Returns the current block height, or an empty optional if no genesisHash and no blocks;
     std::optional<BlockHeight> latestHeight() const;
 
-    /// eg 'main' or 'test' or may be empty string if new db (thread safe)
+    /// eg 'main' or 'test' (or even possibly 'regtest') or may be empty string if new db (thread safe)
     QString getChain() const;
     void setChain(const QString &); // implicitly calls db save of 'meta' (thread safe)
 
@@ -258,6 +259,15 @@ public:
 
     /// Takes a shared lock and returns the cached mempool histogram (calculated periodically in refreshMempoolHistogram above)
     Mempool::FeeHistogramVec mempoolHistogram() const;
+
+    // --- DUMP methods --- (used for debugging, largely)
+
+    using DumpProgressFunc = std::function<void(size_t)>;
+    /// Thread-safe.  Call this from any thread, but ideally call it from a threadPool worker thread, since it may
+    /// take a while.
+    /// Dumps all scripthashes as JSON data to output device outDev as an array of hex-encoded JSON strings,
+    /// optionally indented by `indent*indentLevel` spaces.  If indent is 0, the output will all be on 1 line with no padding.
+    size_t dumpAllScriptHashes(QIODevice *outDev, unsigned indent=0, unsigned indentLevel=0, const DumpProgressFunc & = {}, size_t progInterval = 100000) const;
 
 protected:
     virtual Stats stats() const override; ///< from StatsMixin

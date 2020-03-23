@@ -94,8 +94,10 @@ struct PreProcessedBlock
         std::vector<TxNum> txNumsInvolvingHashX;
     };
 
-    /// Flat map ok here, robin_hood does move construction when moving objects around.
-    robin_hood::unordered_flat_map<HashX, AggregatedOutsIns, HashHasher> hashXAggregated;
+    /// Node map preferable here. Even though a flat map uses move construction, it would still have to move ~72
+    /// bytes around (3 pointers per std::vector * 3 vectors * 8 bytes per pointer), so the Node* of the node map is
+    /// preferred here.
+    robin_hood::unordered_node_map<HashX, AggregatedOutsIns, HashHasher> hashXAggregated;
 
     /*
     // If we decide to track OpReturn:
