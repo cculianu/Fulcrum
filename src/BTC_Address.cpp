@@ -28,7 +28,11 @@
 #include <QHash>
 #include <QHashFunctions>
 
+#ifdef QT_DEBUG
+#include <QRandomGenerator>
+#include <thread>
 #include <iostream>
+#endif
 
 namespace BTC
 {
@@ -248,6 +252,104 @@ namespace BTC
     /*static*/
     bool Address::test()
     {
+        std::condition_variable cond;
+        std::mutex mut;
+        std::atomic_bool start{false};
+
+        const auto Bench = [&cond, &mut, &start](size_t id){
+            while (!start) {
+                std::unique_lock g(mut);
+                if (!start)
+                    cond.wait(g);
+            }
+            constexpr auto MyNet = Net::MainNet;
+            constexpr auto MyKind = Kind::P2PKH;
+            auto & os = std::cout;
+            constexpr size_t count = 1000000;
+            os << id << ": Generating " << count << " random pubkeys...\n";
+            std::vector<QByteArray> pubkeys(count);
+            const auto t0pk = Util::getTimeNS();
+            for (size_t i = 0; i < count; ++i) {
+                QByteArray & pk = pubkeys[i];
+                pk.resize(int(sizeof(quint32)*4));
+                QRandomGenerator::global()->fillRange(reinterpret_cast<quint32 *>(pk.data()), pk.size()/int(sizeof(quint32)));
+            }
+            const auto elapsedpk = Util::getTimeNS() - t0pk;
+            os << id << ": Took: " << QString::number(elapsedpk/1e6, 'f', 6).toUtf8().constData() << " msec\n";
+
+            os << "Generating " << count << " legacy address strings ...\n";
+            std::vector<QString> legStrings(count);
+            const auto t0ls = Util::getTimeNS();
+            for (size_t i = 0; i < count; ++i) {
+                QByteArray & pk = pubkeys[i];
+                QString & leg = legStrings[i];
+
+                const auto a = Address::fromPubKey(pk, MyKind, MyNet);
+                leg = a.toLegacyString();
+            }
+            const auto elapsedls = Util::getTimeNS() - t0ls;
+            os << id << ": Took: " << QString::number(elapsedls/1e6, 'f', 6).toUtf8().constData() << " msec\n";
+            os << id << ": Last string: " << legStrings.back().toUtf8().constData() << "\n";
+
+            os << id << ": Generating " << count << " cash address strings ...\n";
+            std::vector<QString> caStrings(count);
+            const auto t0ca = Util::getTimeNS();
+            for (size_t i = 0; i < count; ++i) {
+                QByteArray & pk = pubkeys[i];
+                QString & ca = caStrings[i];
+
+                const auto a = Address::fromPubKey(pk, MyKind, MyNet);
+                ca = a.toString();
+            }
+            const auto elapsedca = Util::getTimeNS() - t0ca;
+            os << id << ": Took: " << QString::number(elapsedca/1e6, 'f', 6).toUtf8().constData() << " msec\n";
+            os << id << ": Last string: " << caStrings.back().toUtf8().constData() << "\n";
+
+            os << id << ": Parsing " << count << " legacy strings ...\n";
+            std::vector<Address> addrsleg(count);
+            const auto t0pleg = Util::getTimeNS();
+            for (size_t i = 0; i < count; ++i) {
+                QString & ls = legStrings[i];
+                Address & addr = addrsleg[i];
+                addr = Address(ls);
+            }
+            const auto elapsedpleg = Util::getTimeNS() - t0pleg;
+            os << id << ": Took: " << QString::number(elapsedpleg/1e6, 'f', 6).toUtf8().constData() << " msec\n";
+
+            os << id << ": Parsing " << count << " cashaddr strings ...\n";
+            std::vector<Address> addrsca(count);
+            const auto t0pca = Util::getTimeNS();
+            for (size_t i = 0; i < count; ++i) {
+                QString & cs = caStrings[i];
+                Address & addr = addrsca[i];
+                addr = Address(cs);
+            }
+            const auto elapsedpca = Util::getTimeNS() - t0pca;
+            os << id << ": Took: " << QString::number(elapsedpca/1e6, 'f', 6).toUtf8().constData() << " msec\n";
+
+            os << id << ": Ensuring all equal each other ...\n";
+            for (size_t i = 0; i < count; ++i) {
+                if (addrsleg[i] != addrsca[i] || Address::fromPubKey(pubkeys[i], MyKind, MyNet) != addrsca[i])
+                    throw Exception(QString("Address index %1 mistmatch").arg(long(i)));
+            }
+            os << id << ": All ok!\n\n\n------------------------------------\n";
+        };
+
+        const size_t  N = 7;//std::thread::hardware_concurrency() / 2 + 1;
+        std::vector<std::thread> threads;
+        threads.reserve(N);
+        for (size_t i = 0; i < N; ++i) {
+            threads.emplace_back(Bench, i);
+        }
+        std::cout << N << " threads created.. starting them all now!\n";
+        mut.lock();
+        start = true;
+        cond.notify_all();
+        mut.unlock();
+        for (auto & thr : threads) {
+            thr.join();
+        }
+
         constexpr auto badAddress = "1C3SoftYBC2bbDbbDzCadZxDrfbnobEXLBLQZbbD";
         constexpr auto anAddress = "qpu3lsv4uufvzsklf38pfl2wckesyuecxgledta0jl";
         constexpr auto anAddress_leg = "1C3SoftYBC2bbDzCadZxDrfbnobEXLBLQZ";

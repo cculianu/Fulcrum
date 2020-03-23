@@ -8,9 +8,11 @@
 #include "uint256.h"
 #include "utilstrencodings.h"
 
+#include <atomic>
 #include <cassert>
 #include <cstdint>
 #include <cstring>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -21,10 +23,48 @@
 #endif
 
 namespace bitcoin {
+namespace {
 /** All alphanumeric characters except for "0", "I", "O", and "l" */
-static const char *pszBase58 =
-    "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+const char *pszBase58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
+// Added by Calin for performance -- Always succeeds and returns an array of size 256, with invalid postions being -1,
+// and valid ones being the carry (from 0 to 57).
+const int8_t * GetB58CarryTable()
+{
+#if defined(__clang__) || defined(__GNUC__)
+#define EXPECT(expr, constant) __builtin_expect(expr, constant)
+#else
+#define EXPECT(expr, constant) (expr)
+#endif
+#define UNLIKELY(bool_expr) EXPECT(int(bool_expr), 0)
+    static std::mutex mut;
+    static std::atomic_size_t ptr{0};
+    static std::vector<int8_t> b58Carry;
+    using RetType = const int8_t *;
+    auto ret = reinterpret_cast<RetType>(ptr.load());
+    if (UNLIKELY(!ret)) {
+        std::unique_lock g(mut);
+        if (!(ret = reinterpret_cast<RetType>(ptr.load()))) { // check again with mutex held
+            // this branch will only ever be visited once for the lifetime of this process (by 1 thread)
+            b58Carry.clear();
+            b58Carry.resize(256, -1);
+            for (auto p = pszBase58; *p; ++p)
+                // build table, storing the carry value for each character in our base58 alphabet, or -1 if not in alphabet
+                b58Carry[uint8_t(*p)] = int8_t(p - pszBase58); // (0,57) range here
+            ptr.store( reinterpret_cast<decltype (ptr.load())>(ret = b58Carry.data()) );
+        }
+    }
+    return ret;
+#undef UNLIKELY
+#undef EXPECT
+}
+
+} // end anonymous namespace
+
+/* Original Bitcoin implementation below.. removed by Calin and replaced with faster alternative (15% faster on average)
+   which doesn't call strchr() repeatedly on the pszBase58 like the original did, but instead builds
+   a table in a thread safe manner once, and then subsequent calls use the table. */
+#if 0
 bool DecodeBase58(const char *psz, std::vector<uint8_t> &vch) {
     // Skip leading spaces.
     while (*psz && IsSpace(*psz)) {
@@ -80,7 +120,66 @@ bool DecodeBase58(const char *psz, std::vector<uint8_t> &vch) {
     }
     return true;
 }
-
+#else
+// Calin's 15% faster implementation here
+bool DecodeBase58(const char *psz, std::vector<uint8_t> &vch) {
+    // Skip leading spaces.
+    while (*psz && IsSpace(*psz)) {
+        psz++;
+    }
+    // Skip and count leading '1's.
+    int zeroes = 0;
+    int length = 0;
+    while (*psz == '1') {
+        zeroes++;
+        psz++;
+    }
+    // Allocate enough space in big-endian base256 representation.
+    // log(58) / log(256), rounded up.
+    int size = strlen(psz) * 733 / 1000 + 1;
+    std::vector<uint8_t> b256(size);
+    // Process the characters.
+    // Grab the carry table -- the first time through, the carry table is initted atomically with an exclusive
+    // lock, but subsequent times, it will always be returned immediately by reference.
+    const auto b58Table = GetB58CarryTable();
+    while (*psz && !IsSpace(*psz)) {
+        // Decode base58 character
+        int carry = b58Table[uint8_t(*psz)];
+        if (carry < 0) {
+            return false;
+        }
+        // Apply "b256 = b256 * 58 + ch".
+        int i = 0;
+        for (std::vector<uint8_t>::reverse_iterator it = b256.rbegin();
+             (carry != 0 || i < length) && (it != b256.rend()); ++it, ++i) {
+            carry += 58 * (*it);
+            *it = carry % 256;
+            carry /= 256;
+        }
+        assert(carry == 0);
+        length = i;
+        psz++;
+    }
+    // Skip trailing spaces.
+    while (IsSpace(*psz)) {
+        psz++;
+    }
+    if (*psz != 0) {
+        return false;
+    }
+    // Skip leading zeroes in b256.
+    std::vector<uint8_t>::iterator it = b256.begin() + (size - length);
+    while (it != b256.end() && *it == 0)
+        it++;
+    // Copy result into output vector.
+    vch.reserve(zeroes + (b256.end() - it));
+    vch.assign(zeroes, 0x00);
+    while (it != b256.end()) {
+        vch.push_back(*(it++));
+    }
+    return true;
+}
+#endif
 std::string EncodeBase58(const uint8_t *pbegin, const uint8_t *pend) {
     // Skip & count leading zeroes.
     int zeroes = 0;
