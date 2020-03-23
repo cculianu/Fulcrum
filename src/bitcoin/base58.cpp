@@ -42,7 +42,7 @@ B58CarryTable::B58CarryTable()
         table[uint8_t(*p)] = int8_t(p - pszBase58); // (0,57) range here
 }
 
-B58CarryTable b58CarryTable{}; ///< singleton instance -- used by our modified DecodeBase58.
+B58CarryTable b58CarryTable; ///< singleton instance -- used by our modified DecodeBase58.
 
 } // end anonymous namespace
 
