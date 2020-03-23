@@ -1198,7 +1198,7 @@ void Server::rpc_blockchain_address_get_mempool(Client *c, const RPC::Message &m
 void Server::rpc_blockchain_address_get_scripthash(Client *c, const RPC::Message &m)
 {
     const auto sh = parseFirstAddrParamToShCommon(m);
-    c->sendResult(m.id, Util::ToHexFast(sh));
+    emit c->sendResult(m.id, Util::ToHexFast(sh));
 }
 void Server::impl_get_mempool(Client *c, const RPC::Message &m, const HashX &sh)
 {
