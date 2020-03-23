@@ -310,6 +310,7 @@ private:
     void rpc_blockchain_address_get_balance(Client *, const RPC::Message &); // fully implemented
     void rpc_blockchain_address_get_history(Client *, const RPC::Message &); // fully implemented
     void rpc_blockchain_address_get_mempool(Client *, const RPC::Message &); // fully implemented
+    void rpc_blockchain_address_get_scripthash(Client *, const RPC::Message &); // fully implemented
     void rpc_blockchain_address_listunspent(Client *, const RPC::Message &); // fully implemented
     void rpc_blockchain_address_subscribe(Client *, const RPC::Message &); // fully implemented
     void rpc_blockchain_address_unsubscribe(Client *, const RPC::Message &); // fully implemented

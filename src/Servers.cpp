@@ -1195,6 +1195,11 @@ void Server::rpc_blockchain_address_get_mempool(Client *c, const RPC::Message &m
     const auto sh = parseFirstAddrParamToShCommon(m);
     impl_get_mempool(c, m, sh);
 }
+void Server::rpc_blockchain_address_get_scripthash(Client *c, const RPC::Message &m)
+{
+    const auto sh = parseFirstAddrParamToShCommon(m);
+    c->sendResult(m.id, Util::ToHexFast(sh));
+}
 void Server::impl_get_mempool(Client *c, const RPC::Message &m, const HashX &sh)
 {
     generic_do_async(c, m.id, [sh, this] {
@@ -1597,6 +1602,7 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
     { {"blockchain.address.get_balance",    true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_get_balance) },
     { {"blockchain.address.get_history",    true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_get_history) },
     { {"blockchain.address.get_mempool",    true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_get_mempool) },
+    { {"blockchain.address.get_scripthash", true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_get_scripthash) },
     { {"blockchain.address.listunspent",    true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_listunspent) },
     { {"blockchain.address.subscribe",      true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_subscribe) },
     { {"blockchain.address.unsubscribe",    true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_unsubscribe) },
