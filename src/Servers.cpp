@@ -421,7 +421,7 @@ ServerBase::newClient(QTcpSocket *sock)
     const auto on_destructing = [clientId, addr, this](Client *c) {
         // this whole call is here so that delete client->sock ends up auto-removing the map entry
         // as a convenience.
-        Debug() << "Client nested 'on_destructing' called for " << clientId;
+        Debug() << "Client " << clientId << " destructing";
         if (const auto client = clientsById.take(clientId); client) {
             // purge from map
             if (UNLIKELY(client != c))
@@ -2061,7 +2061,8 @@ Client::Client(const RPC::MethodMap & mm, IdMixin::Id id_in, QTcpSocket *sock, i
 Client::~Client()
 {
     --numClients;
-    Debug() << __func__ << " " << id;
+    if constexpr (!isReleaseBuild())
+        Debug() << __func__ << " " << id;
     socket = nullptr; // NB: we are a child of socket, so socket is alread invalid here. This line here is added in case some day I make AbstractClient delete socket on destruct.
     emit clientDestructing(this); // This is currently connected to a lambda in ServerBase::newClient
 }
