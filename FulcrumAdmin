@@ -17,7 +17,6 @@ class ErrorResponse(RuntimeError):
     pass
 
 def send_request(method, params=None):
-    global ID_NEXT
     verb = False#not args.q
     with socket.create_connection((HOST, PORT), timeout=10.0) as sock:
         def sndrecv(_id, method, params=None):
@@ -108,6 +107,7 @@ def main():
             if isinstance(r, bool) and r:
                 return "Fulcrum server is shutting down"
             else:
+                global EXITSTATUS
                 EXITSTATUS = 1
                 return f"Unexpected response from Fulcrum server: {r}"
         response_handler = handler
@@ -165,6 +165,7 @@ possibly peer with this Fulcrum server, then please use the 'banpeer' command.
                 if isinstance(r, bool) and r:
                     return f"{command} command submitted for: " + ', '.join([str(x) for x in command_params]) + extratxt
                 else:
+                    global EXITSTATUS
                     EXITSTATUS = 1
                     return f"Unexpected response from Fulcrum server: {r}"
             response_handler = handler
@@ -190,6 +191,7 @@ possibly peer with this Fulcrum server, then please use the 'banpeer' command.
                 if isinstance(r, bool) and r:
                     return f"{command} command submitted for: {host}"
                 else:
+                    global EXITSTATUS
                     EXITSTATUS = 1
                     return f"Unexpected response from Fulcrum server: {r}"
             response_handler = handler
@@ -207,8 +209,8 @@ possibly peer with this Fulcrum server, then please use the 'banpeer' command.
 
 
 def clients_handler(r):
-    global EXITSTATUS
     def badResp():
+        global EXITSTATUS
         EXITSTATUS = 1
         return f"Unexpected resposne from Fulcrum server: {r!r}"
     if not isinstance(r, (list, tuple)):
@@ -261,8 +263,8 @@ def clients_handler(r):
 
 
 def listbanned_handler(r):
-    global EXITSTATUS
     def badResp():
+        global EXITSTATUS
         EXITSTATUS = 1
         return f"Unexpected resposne from Fulcrum server: {r!r}"
     if not isinstance(r, (dict,)):
@@ -318,8 +320,8 @@ def listbanned_handler(r):
 
 
 def peers_handler(r):
-    global EXITSTATUS
     def badResp():
+        global EXITSTATUS
         EXITSTATUS = 1
         return f"Unexpected resposne from Fulcrum server: {r!r}"
 
