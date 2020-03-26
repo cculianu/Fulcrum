@@ -154,7 +154,7 @@ win32 {
     !contains(features, staticlibs) {
         error("Cannot build Fulcrum on Windows without the staticlibs feature")
     }
-    LIBS += -lrocksdb -lShlwapi -lrpcrt4
+    LIBS += -lrocksdb -lshlwapi -lrpcrt4
 }
 
 # Tell QMake all of the below is relative to src/.
