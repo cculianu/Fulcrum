@@ -17,7 +17,7 @@ GPLv3. See the included `LICENSE.txt` file or [visit gnu.org and read the licens
 ### Highlights:
 
 - *Fast:* Written in 100% modern `C++17` using multi-threaded and asynchronous programming techniques.
-- *A drop-in replacement for ElectronX/ElectrumX:* Fulcrum is 100% protocol-level compatible with the [Electrum Cash 1.4 protocol](https://bitcoincash.network/electrum). Existing server admins should feel right at home with this software since installation and management of it is nearly identical to ElectronX/ElectrumX server.
+- *A drop-in replacement for ElectronX/ElectrumX:* Fulcrum is 100% protocol-level compatible with the [Electrum Cash 1.4 protocol](https://c3-soft.com/FulcrumProtocol/). Existing server admins should feel right at home with this software since installation and management of it is nearly identical to ElectronX/ElectrumX server.
 - *Cross-platform:* While this codebase was mainly developed and tested on MacOS, Windows and Linux, it should theoretically work on any modern OS (such as *BSD) that has Qt5 Core and Qt5 Networking available.
 
 ### Requirements
@@ -104,6 +104,12 @@ You may also wish to read the [Fulcrum manpage](https://github.com/cculianu/Fulc
     $ ./FulcrumAdmin -p 8000 getinfo
 
 ***(This section is incomplete for now, all apologies -- more documentation is coming soon!)***
+
+---
+
+### Protocol Documentation
+
+Documentation for the Electrum Cash protocol that Fulcrum uses is [available here](https://c3-soft.com/FulcrumProtocol/).
 
 ---
 
