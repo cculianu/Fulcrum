@@ -59,6 +59,24 @@ You may optionally build against the **system rocksdb** (Linux only) if your dis
 
 **Note**: Some Linux distributions have been known to package `librocksdb.so` incorrectly. [See here for an example](https://bugs.archlinux.org/task/65093), so until I can be confident most distributions do it right, I am considering using the system `librocksdb.so` an ***experimental feature*** for the time being (in principle it should work ok if the library is compiled correctly).
 
+### Building the Windows static `Fulcrum.exe`
+
+**New!** I recently added a mechanism using docker to build a statically-linked Windows `.exe`.  This build is 100% compatible with any stock 64-bit Windows 7 or above system -- you don't have to install anything -- it *just works*.  You can download the pre-built `.exe` youself here from the [releases page](https://github.com/cculianu/Fulcrum/releases).
+
+If you want to build it yourself though, you can do so, but it requires [Docker](https://www.docker.com/) on either a MacOS or a Linux host system (it may work on Windows too with Linux tools for Windows -- but I haven't tried it myself).
+
+1. Make sure Docker is installed such that you don't need to use `sudo`. This is the default on MacOS, but on Linux you may need to [follow these instructions here](https://docs.docker.com/install/linux/linux-postinstall/).
+
+2. Run the build script:
+
+    `$ contrib/build/win/build.sh master`
+
+3. You can point the build script to any repository, not just this one:
+
+    `$ GIT_REPO=https://github.com/myusername/MyFulcrumFork contrib/build/win/build.sh master`
+    
+**Note:** The argument given above to the build script is a git `branch` or `tag` to build.
+
 ---
 
 ### Running Fulcrum
