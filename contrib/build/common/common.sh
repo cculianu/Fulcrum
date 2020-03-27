@@ -14,10 +14,12 @@ if [ -t 1 ] ; then
     BLUE='\033[0;34m'
     YELLOW='\033[0;33m'
     GREEN='\033[0;32m'
+    LIGHTCYAN='\033[1;36m'
+    LIGFHTRED='\033[1;31m'
     NC='\033[0m' # No Color
 
-    MSG_INFO="\r💬 ${BLUE}INFO:${NC}"
-    MSG_ERROR="\r🗯  ${RED}ERROR:${NC}"
+    MSG_INFO="\r💬 ${LIGHTCYAN}"
+    MSG_ERROR="\r❌  ${LIGHTRED}ERROR:${NC}"
     MSG_WARNING="\r⚠️  ${YELLOW}WARNING:${NC}"
     MSG_OK="\r👍  ${GREEN}OK:${NC}"
 else
@@ -25,6 +27,8 @@ else
     BLUE=''
     YELLOW=''
     GREEN=''
+    LIGHTCYAN=''
+    LIGHTRED=''
     NC='' # No Color
 
     MSG_INFO="INFO:"
@@ -34,10 +38,10 @@ else
 fi
 
 function info {
-    printf "${MSG_INFO}  ${1}\n"
+    printf "${MSG_INFO}  ${1}${NC}\n"
 }
 function fail {
-    printf "${MSG_ERROR}  ${1}\n" >&2
+    printf "${MSG_ERROR}  ${1}${NC}\n" >&2
 
     if [ -r /.dockerenv ] ; then
         if [ -t 1 ] ; then
@@ -50,10 +54,10 @@ function fail {
     exit 1
 }
 function warn {
-    printf "${MSG_WARNING}  ${1}\n"
+    printf "${MSG_WARNING}  ${1}${NC}\n"
 }
 function printok {
-    printf "${MSG_OK}  ${1}\n"
+    printf "${MSG_OK}  ${1}${NC}\n"
 }
 
 function verify_hash {
