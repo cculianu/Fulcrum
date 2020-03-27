@@ -74,6 +74,7 @@ If you want to build it yourself though, you can do so, but it requires [Docker]
 3. You can point the build script to any repository, not just this one, by giving it a `GIT_REPO` environment variable:
 
     `$ GIT_REPO=https://github.com/myusername/MyFulcrumFork contrib/build/build.sh windows master`
+
     `$ GIT_REPO=$(pwd) contrib/build/build.sh windows master`
 
 The first argument to the script is the platform to build (in this case `windows`).
@@ -99,6 +100,7 @@ on either a MacOS or a Linux host system.  It builds a static Qt and static rock
 3. You can point the build script to any repository, not just this one, by giving it a `GIT_REPO` environment variable:
 
     `$ GIT_REPO=https://github.com/myusername/MyFulcrumFork contrib/build/build.sh linux master`
+
     `$ GIT_REPO=$(pwd) contrib/build/build.sh linux master`
 
 The first argument to the script is the platform to build (in this case `linux`).
