@@ -18,7 +18,7 @@ if [ -t 1 ] ; then
     LIGHTRED='\033[1;31m'
     NC='\033[0m' # No Color
 
-    MSG_INFO="\r💬 ${LIGHTCYAN}"
+    MSG_INFO="\r💬  ${LIGHTCYAN}"
     MSG_ERROR="\r❌  ${LIGHTRED}ERROR:${NC}  "
     MSG_WARNING="\r⚠️  ${YELLOW}WARNING:${NC}  "
     MSG_OK="\r👍  ${GREEN}OK:${NC}  "
