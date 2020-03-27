@@ -23,15 +23,15 @@ exit 0
 RUN \
 cd /opt && \
 git clone https://github.com/mxe/mxe.git && \
-echo "💬  \033[1;36mBuilding dependencies for static linking ...\033[0m" && \
+echo "💬 \033[1;36mBuilding dependencies for static linking ...\033[0m" && \
 cd /opt/mxe && \
 echo 'override MXE_PLUGIN_DIRS += plugins/gcc7' >> settings.mk && \
 NPROC=$(($(nproc))) && \
 make --jobs=$NPROC JOBS=$NPROC MXE_TARGETS='x86_64-w64-mingw32.static' qtbase && \
 ln -s /opt/mxe/usr/bin/x86_64-w64-mingw32.static-qmake-qt5 /usr/bin/qmake && \
-echo "" && echo "👍  \033[1;32mGCC Version:\033[0m" && \
+echo "" && echo "👍 \033[1;32mGCC Version:\033[0m" && \
 /opt/mxe/usr/bin/x86_64-w64-mingw32.static-gcc --version && \
-echo "👍  \033[1;32mQt Version:\033[0m" && \
+echo "👍 \033[1;32mQt Version:\033[0m" && \
 qmake --version && \
 exit 0
 

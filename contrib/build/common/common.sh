@@ -18,10 +18,10 @@ if [ -t 1 ] ; then
     LIGHTRED='\033[1;31m'
     NC='\033[0m' # No Color
 
-    MSG_INFO="\r💬  ${LIGHTCYAN}"
-    MSG_ERROR="\r❌  ${LIGHTRED}ERROR:${NC}  "
-    MSG_WARNING="\r⚠️  ${YELLOW}WARNING:${NC}  "
-    MSG_OK="\r👍  ${GREEN}OK:${NC}  "
+    MSG_INFO="\r💬 ${LIGHTCYAN}"
+    MSG_ERROR="\r❌ ${LIGHTRED}ERROR:${NC} "
+    MSG_WARNING="\r⚠️ ${YELLOW}WARNING:${NC} "
+    MSG_OK="\r👍 ${GREEN}OK:${NC} "
 else
     RED=''
     BLUE=''
@@ -31,10 +31,10 @@ else
     LIGHTRED=''
     NC='' # No Color
 
-    MSG_INFO="INFO:  "
-    MSG_ERROR="ERROR:  "
-    MSG_WARNING="WARNING:  "
-    MSG_OK="OK:  "
+    MSG_INFO="INFO: "
+    MSG_ERROR="ERROR: "
+    MSG_WARNING="WARNING: "
+    MSG_OK="OK: "
 fi
 
 function info {
