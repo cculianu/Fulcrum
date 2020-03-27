@@ -15,7 +15,7 @@ if [ -t 1 ] ; then
     YELLOW='\033[0;33m'
     GREEN='\033[0;32m'
     LIGHTCYAN='\033[1;36m'
-    LIGFHTRED='\033[1;31m'
+    LIGHTRED='\033[1;31m'
     NC='\033[0m' # No Color
 
     MSG_INFO="\r💬 ${LIGHTCYAN}"
