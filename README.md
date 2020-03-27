@@ -69,13 +69,40 @@ If you want to build it yourself though, you can do so, but it requires [Docker]
 
 2. Run the build script:
 
-    `$ contrib/build/win/build.sh master`
+    `$ contrib/build/build.sh windows master`
 
 3. You can point the build script to any repository, not just this one, by giving it a `GIT_REPO` environment variable:
 
-    `$ GIT_REPO=https://github.com/myusername/MyFulcrumFork contrib/build/win/build.sh master`
-    
-The argument given above to the build script is a git `branch` or `tag` to build.
+    `$ GIT_REPO=https://github.com/myusername/MyFulcrumFork contrib/build/build.sh windows master`
+    `$ GIT_REPO=$(pwd) contrib/build/build.sh windows master`
+
+The first argument to the script is the platform to build (in this case `windows`).
+The second argument to the script is a git `branch` or `tag` to build.
+
+### Building a static executable for Linux
+
+**New!** I recently added a mechanism using Docker to build a statically-linked
+Linux executable. This build is 100% compatible with most stock 64-bit Linux
+systems with a new enough glibc and libstdc++. So on a relatively modern Linux system, you
+don't have to install anything -- it *just works*. You can download the
+pre-built binary youself here from the [releases page](https://github.com/cculianu/Fulcrum/releases).
+
+If you want to build it yourself though, you can do so, but it requires [Docker](https://www.docker.com/)
+on either a MacOS or a Linux host system.  It builds a static Qt and static rocksdb.
+
+1. Make sure Docker is installed such that you don't need to use `sudo`. This is the default on MacOS, but on Linux you may need to [follow these instructions here](https://docs.docker.com/install/linux/linux-postinstall/).
+
+2. Run the build script:
+
+    `$ contrib/build/build.sh linux master`
+
+3. You can point the build script to any repository, not just this one, by giving it a `GIT_REPO` environment variable:
+
+    `$ GIT_REPO=https://github.com/myusername/MyFulcrumFork contrib/build/build.sh linux master`
+    `$ GIT_REPO=$(pwd) contrib/build/build.sh linux master`
+
+The first argument to the script is the platform to build (in this case `linux`).
+The second argument to the script is a git `branch` or `tag` to build.
 
 ---
 

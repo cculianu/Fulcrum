@@ -5,15 +5,38 @@ set -e  # Exit on error
 here=$(dirname "$0")
 test -n "$here" -a -d "$here" || (echo "Cannot determine build dir. FIXME!" && exit 1)
 
-. "$here"/../common/common.sh # functions we use below (fail, et al)
+. "$here"/common/common.sh # functions we use below (fail, et al)
 
 if [ -z "$1" ]; then
-    info "Please pass a tag, a branch, or a commit hash to this script, e.g. \"master\", \"v1.0.6\", etc ..."
+    info "Please specify a build platform as the first argument, e.g.: \"linux\" or \"win\""
     exit 1
 fi
-tag="$1"
+plat="$1"
 
-cd "$here"
+if [ -z "$2" ]; then
+    info "Please pass a tag, a branch, or a commit hash to this script as the second argument, e.g. \"master\", \"v1.0.6\", etc ..."
+    exit 1
+fi
+tag="$2"
+
+case "$plat" in
+    "win"|"windows")
+        plat=win  # normalize to 'win'
+        docker_img_name="fulcrum-builder/qt:windows"
+        docker_cont_name="fulcrum_cont_qt_windows_$$"
+        ;;
+    "linux")
+        plat=linux
+        docker_img_name="fulcrum-builder/qt:linux"
+        docker_cont_name="fulcrum_cont_qt_linux_$$"
+        ;;
+    *)
+        fail "Unknown platform \"$plat\". Please specify one of: linux winodows"
+        ;;
+esac
+
+
+cd "$here"/"$plat"
 workdir=`pwd`/work
 rm -fr "$workdir"
 mkdir -p "$workdir"
@@ -25,7 +48,7 @@ git clone -b "$tag" "$GIT_REPO" "$PACKAGE" || fail "Could not clone repository f
 cd "$PACKAGE"
 pkgdir=`pwd`
 
-rocksdb_commit=$(cat contrib/build/win/rocksdb-commit-hash) \
+rocksdb_commit=$(cat contrib/build/${plat}/rocksdb-commit-hash) \
     || fail "Could not find the proper rocksdb commit hash in [$tag]. Please manually checkout [$tag] use its own build scripts."
 
 cd ..
@@ -38,7 +61,7 @@ git clone "$ROCKSDB_REPO" "$ROCKSDB_PACKAGE" || fail "Failed to clone $ROCKSDB_P
 cd "$ROCKSDB_PACKAGE"
 rocksdir=`pwd`
 git checkout "$rocksdb_commit" || fail "Failed to checkout $ROCKSDB_PACKAGE [$rocksdb_commit]"
-pp=$(ls "$pkgdir"/contrib/build/win/rocksdb*.patch 2> /dev/null || true)
+pp=$(ls "$pkgdir"/contrib/build/${plat}/rocksdb*.patch 2> /dev/null || true)
 if [ -n "$pp" ]; then
     info "Applying patches ..."
     let i=0 || true
@@ -52,9 +75,9 @@ fi
 
 popd
 
-# Make Docker image
-docker_img_name="fulcrum-builder/qt:windows"
-docker_cont_name="fulcrum_cont_qt_windows"
+# Make Docker image using the commit's Dockerfile
+cd "${workdir}/${PACKAGE}/contrib/build/${plat}" || fail "Could not chdir to Dockerfile directory"
+[ -e Dockerfile ] || fail "Could not find Dockerfile in $(pwd)"
 info "Creating docker image: $docker_img_name ..."
 docker build -t "$docker_img_name" . \
   || fail "Could not build docker image. Check that docker is installed and that you can run docker without sudo on this system."
@@ -65,14 +88,14 @@ cd "$workdir/.." || fail "Could not chdir"
 info "Building inside docker container: $docker_cont_name ($docker_img_name) ..."
 docker run --rm -it -v "$workdir":/work \
     --name "$docker_cont_name" \
-    "$docker_img_name" ./work/"$PACKAGE"/contrib/build/win/_build.sh "$PACKAGE" "$ROCKSDB_PACKAGE"
+    "$docker_img_name" ./work/"$PACKAGE"/contrib/build/${plat}/_build.sh "$PACKAGE" "$ROCKSDB_PACKAGE"
 
-(mkdir -p ../../../dist/win && cp -fpva "$workdir"/Fulcrum.exe ../../../dist/win/. && rm -fr work) \
-    || fail "Could not clean up and move Fulcrum.exe"
+(mkdir -p ../../../dist/${plat} && cp -fpva "$workdir"/built/* ../../../dist/${plat}/. && rm -fr work) \
+    || fail "Could not clean up and move build products"
 
 cd ../../../ || fail "Could not chdir to the top level"
 info "SHA256SUM:"
-$SHA256_PROG dist/win/Fulcrum.exe || fail "Could not generate sha256sum"
+$SHA256_PROG dist/${plat}/* || fail "Could not generate sha256sum"
 
-printok "Fulcrum.exe has been placed in dist/win/ at the top level"
+printok "Build product(s) have been placed in dist/${plat}/ at the top level"
 exit 0
