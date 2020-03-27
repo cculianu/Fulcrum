@@ -61,7 +61,7 @@ You may optionally build against the **system rocksdb** (Linux only) if your dis
 
 ### Building the Windows static `Fulcrum.exe`
 
-**New!** I recently added a mechanism using Docker to build a statically-linked Windows `.exe`.  This build is 100% compatible with any stock 64-bit Windows 7 or above system -- you don't have to install anything -- it *just works*.  You can download the pre-built `.exe` youself here from the [releases page](https://github.com/cculianu/Fulcrum/releases).
+**New!** I recently added a mechanism using Docker to build a statically-linked Windows `.exe`.  This build is 100% compatible with any stock 64-bit Windows 7 or above system -- you don't have to install anything -- it *just works*.  You can download the pre-built `.exe` yourself here from the [releases page](https://github.com/cculianu/Fulcrum/releases).
 
 If you want to build it yourself though, you can do so, but it requires [Docker](https://www.docker.com/) on either a MacOS or a Linux host system (it may work on Windows too with Linux tools for Windows -- but I haven't tried it myself).  It builds *all* dependencies, including a static Qt and static rocksdb. As such, it may take a while so be patient.
 
@@ -86,7 +86,7 @@ The second argument to the script is a git `branch` or `tag` to build.
 Linux executable. This build is 100% compatible with most stock 64-bit Linux
 systems with a new enough glibc and libstdc++. So on a relatively modern Linux system, you
 don't have to install anything -- it *just works*. You can download the
-pre-built binary youself here from the [releases page](https://github.com/cculianu/Fulcrum/releases).
+pre-built binary yourself here from the [releases page](https://github.com/cculianu/Fulcrum/releases).
 
 If you want to build it yourself though, you can do so, but it requires [Docker](https://www.docker.com/)
 on either a MacOS or a Linux host system.  It builds a static Qt and static rocksdb.
