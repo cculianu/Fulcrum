@@ -18,8 +18,7 @@ apt -y install build-essential iputils-ping nano \
     g++-multilib libc6-dev-i386 && \
 apt -y autoremove && \
 apt -y autoclean && \
-apt -y clean && \
-exit 0
+apt -y clean
 
 RUN \
     cd /opt && \
@@ -60,8 +59,6 @@ RUN \
     echo "👍  \033[1;32mQt Version:\033[0m" && \
     qmake --version && \
     echo && echo "👍  \033[1;32mWine Version:\033[0m" && \
-    wine --version && echo && \
-    exit 0
-
+    wine --version && echo
 
 ENV PATH="${PATH}:/opt/mxe/usr/bin"
