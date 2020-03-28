@@ -109,7 +109,7 @@ on either a MacOS or a Linux host system.  It builds a static Qt and static rock
 
 The first argument to the script is the platform to build (in this case
 `linux`). You may also specify `oldlinux` as the first argument if you wish to
-build for an older system (in which case the Docker image will use Ubuntu 16.04
+build for an older system (in which case the Docker container will use Ubuntu 16.04
 to compile, instead of the Ubuntu "latest" tag). The second argument to the
 script is a git `branch` or `tag` to build.
 
