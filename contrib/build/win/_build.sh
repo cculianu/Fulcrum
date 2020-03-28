@@ -12,6 +12,7 @@ fi
 PACKAGE="$1"
 ROCKSDB_PACKAGE="$2"
 TARGET_BINARY=Fulcrum.exe
+TARGET_ADMIN_SCRIPT=FulcrumAdmin
 
 top=/work
 cd "$top" || fail "Could not cd $top"
@@ -49,5 +50,55 @@ info "Copying to top level ..."
 mkdir -p "$top/built" || fail "Could not create build products directory"
 cp -fpva "$TARGET_BINARY" "$top/built/." || fail "Could not copy $TARGET_BINARY"
 cd "$top" || fail "Could not cd to $top"
+
+function build_AdminScript {
+    info "Preparing to build ${TARGET_ADMIN_SCRIPT}.exe ..."
+    pushd "$top" 1> /dev/null || fail "Could not chdir to $top"
+    rm -fr tmp || true
+    mkdir tmp || fail "Cannot mkdir tmp"
+    cd tmp || fail "Cannot chdir tmp"
+    export WINEPREFIX=$HOME/wine64
+    export WINEDEBUG=-all
+	#ARCH=win32
+    #PYTHON_VERSION=3.6.8
+	#WINE=wine
+	ARCH=amd64
+    PYTHON_VERSION=3.8.2
+	WINE=wine64
+    PYHOME=c:/python$PYTHON_VERSION
+    PYTHON="$WINE $PYHOME/python.exe -OO -B"
+    info "Starting Wine ..."
+    $WINE 'wineboot' || fail "Cannot start Wine ..."
+    info "Installing Python $PYTHON_VERSION (within Wine) ..."
+    for msifile in core dev exe lib pip tools; do
+        info "Downloading Python component: ${msifile} ..."
+        wget "https://www.python.org/ftp/python/$PYTHON_VERSION/${ARCH}/${msifile}.msi"
+        info "Installing Python component: ${msifile} ..."
+        $WINE msiexec /i "${msifile}.msi" /qn TARGETDIR=$PYHOME || fail "Failed to install Python component: ${msifile}"
+    done
+    pver=$($PYTHON --version) || fail "Could not verify version"
+    printok "Python reports version: $pver"
+    unset pver
+    info "Updating Python $PYTHON_VERSION ..."
+    $PYTHON -m pip install --upgrade pip || fail "Failed to update Python"
+    info "Installing PyInstaller ..."
+    $PYTHON -m pip install --upgrade pyinstaller || fail "Failed to install PyInstaller"
+    info "Building ${TARGET_ADMIN_SCRIPT}.exe (with PyInstaller) ..."
+    cp -fpva "$top/$PACKAGE/${TARGET_ADMIN_SCRIPT}" . || fail "Failed to copy script"
+    cp -fpva "$top/$PACKAGE/contrib/build/win/${TARGET_ADMIN_SCRIPT}.spec" . || fail "Failed to copy .spec file"
+    # TODO: Add an icon here, -i option
+    $PYTHON -m PyInstaller --clean ${TARGET_ADMIN_SCRIPT}.spec \
+        || fail "Failed to build ${TARGET_ADMIN_SCRIPT}.exe"
+    info "Copying to top level ..."
+    mkdir -p "$top/built" || true
+    cp -fpva dist/${TARGET_ADMIN_SCRIPT}.exe "$top/built/." || fail "Could not copy to top level"
+    printok "${TARGET_ADMIN_SCRIPT}.exe built"
+    cd "$top" && rm -fr tmp
+    popd 1> /dev/null
+	# Be tidy and clean up variables we created above
+	unset WINEPREFIX WINEDEBUG ARCH PYTHON_VERSION WINE PYHOME PYTHON
+}
+build_AdminScript || fail "Could not build ${TARGET_ADMIN_SCRIPT}.exe"
+
 
 printok "Inner _build.sh finished"
