@@ -82,7 +82,7 @@ As such, it may take a while so be patient.
 The first argument to the script is the platform to build (in this case
 `windows`). The second argument to the script is a git `branch` or `tag` to
 build. Two `.exe` files will be generated, `Fulcrum.exe` and `FulcrumAdmin.exe`,
-which will appear in `dist/win` after the build process is completes.
+which will appear in `dist/win` after the build process completes.
 
 - *Note:* You can point the build script to any repository, not just this one, by giving it a `GIT_REPO` environment variable:
 
