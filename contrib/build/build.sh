@@ -8,7 +8,7 @@ test -n "$here" -a -d "$here" || (echo "Cannot determine build dir. FIXME!" && e
 . "$here"/common/common.sh # functions we use below (fail, et al)
 
 if [ -z "$1" ]; then
-    info "Please specify a build platform as the first argument, e.g.: \"linux\" or \"win\""
+    info "Please specify a build platform as the first argument, one of: windows linux linux_ub16 (or short versions: win lin oldlin)"
     exit 1
 fi
 plat="$1"
@@ -19,28 +19,37 @@ if [ -z "$2" ]; then
 fi
 tag="$2"
 
+suffix=""
 case "$plat" in
-    "win"|"windows")
+    "windows"|"win")
         plat=win  # normalize to 'win'
         docker_img_name="fulcrum-builder/qt:windows"
         docker_cont_name="fulcrum_cont_qt_windows_$$"
         ;;
-    "linux")
+    "linux"|"lin")
         plat=linux
         docker_img_name="fulcrum-builder/qt:linux"
         docker_cont_name="fulcrum_cont_qt_linux_$$"
         ;;
+    "linux_ub16"|"oldlinux"|"oldlin"|"lin_ub16")
+        plat=linux
+        docker_img_name="fulcrum-builder/qt:linux_ub16"
+        docker_cont_name="fulcrum_cont_qt_linux_ub16_$$"
+        suffix="_ub16"
+        ;;
     *)
-        fail "Unknown platform \"$plat\". Please specify one of: linux winodows"
+        fail "Unknown platform \"$plat\". Please specify one of: windows linux linux_ub16"
         ;;
 esac
 
 
+dockerfile=Dockerfile${suffix}
 cd "$here"/"$plat"
-workdir=`pwd`/work
+workdir=`pwd`/work${suffix}
+outdir=`pwd`/../../../dist/${plat}${suffix}
 rm -fr "$workdir"
 mkdir -p "$workdir"
-pushd "$workdir"
+pushd "$workdir" 1> /dev/null
 
 # Checkout Fulcrum @ $tag
 info "Checking out $PACKAGE: $GIT_REPO [$tag] ..."
@@ -73,29 +82,29 @@ if [ -n "$pp" ]; then
     printok "${i} patch(es) applied"
 fi
 
-popd
+popd 1> /dev/null
 
 # Make Docker image using the commit's Dockerfile
 cd "${workdir}/${PACKAGE}/contrib/build/${plat}" || fail "Could not chdir to Dockerfile directory"
-[ -e Dockerfile ] || fail "Could not find Dockerfile in $(pwd)"
+[ -e "$dockerfile" ] || fail "Could not find $dockerfile in $(pwd)"
 info "Creating docker image: $docker_img_name ..."
-docker build -t "$docker_img_name" . \
+docker build -t "$docker_img_name" - < "$dockerfile" \
   || fail "Could not build docker image. Check that docker is installed and that you can run docker without sudo on this system."
 printok "Docker image created: $docker_img_name"
 
-# Run _build.sh from the specified commit inside Docker image, with ./work mapped to /work
+# Run _build.sh from the specified commit inside Docker image, with $workdir (usually ./work) mapped to /work
 cd "$workdir/.." || fail "Could not chdir"
 info "Building inside docker container: $docker_cont_name ($docker_img_name) ..."
 docker run --rm -it -v "$workdir":/work \
     --name "$docker_cont_name" \
-    "$docker_img_name" ./work/"$PACKAGE"/contrib/build/${plat}/_build.sh "$PACKAGE" "$ROCKSDB_PACKAGE"
+    "$docker_img_name" /work/"$PACKAGE"/contrib/build/${plat}/_build.sh "$PACKAGE" "$ROCKSDB_PACKAGE"
 
-(mkdir -p ../../../dist/${plat} && cp -fpva "$workdir"/built/* ../../../dist/${plat}/. && rm -fr work) \
+(mkdir -p "$outdir" && cp -fpva "$workdir"/built/* "$outdir"/. && rm -fr "$workdir") \
     || fail "Could not clean up and move build products"
 
 cd ../../../ || fail "Could not chdir to the top level"
 info "SHA256SUM:"
-$SHA256_PROG dist/${plat}/* || fail "Could not generate sha256sum"
+$SHA256_PROG dist/${plat}${suffix}/* || fail "Could not generate sha256sum"
 
-printok "Build product(s) have been placed in dist/${plat}/ at the top level"
+printok "Build product(s) have been placed in dist/${plat}${suffix}/ at the top level"
 exit 0

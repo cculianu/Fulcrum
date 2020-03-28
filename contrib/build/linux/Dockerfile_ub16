@@ -1,16 +1,23 @@
 # Taken from https://github.com/fffaraz/docker-qt
 # Example usage:
-#   $ docker build --force-rm -t fulcrum-builder/qt:linux .
-#   $ docker run --rm -it -v $(pwd):/work fulcrum-builder/qt:linux
-FROM ubuntu:latest
+#   $ docker build --force-rm -t fulcrum-builder/qt:linux_ub16 .
+#   $ docker run --rm -it -v $(pwd):/work fulcrum-builder/qt:linux_ub16
+FROM ubuntu:xenial
 LABEL maintainer="Calin Culianu <calin.culianu@gmail.com>"
 ENTRYPOINT ["/bin/bash"]
 
 RUN \
     apt -qy update && \
     apt -qy upgrade && \
+    apt install -qy software-properties-common && \
+    add-apt-repository ppa:jonathonf/gcc-7.3 && \
+    add-apt-repository ppa:jonathonf/gcc && \
+    apt-get update -qy && \
     apt -qy install build-essential cmake gdb git iputils-ping nano perl python valgrind wget && \
     apt -qy install libbz2-dev zlib1g-dev libssl-dev libnss3-dev libxslt-dev libxml2-dev  && \
+    apt install -qy gcc-7 g++-7 && \
+    update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-7 60 \
+                        --slave /usr/bin/g++ g++ /usr/bin/g++-7 && \
     apt -qy autoremove && \
     apt -qy autoclean
 
