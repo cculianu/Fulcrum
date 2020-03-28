@@ -79,17 +79,16 @@ As such, it may take a while so be patient.
 
     `$ contrib/build/build.sh windows master`
 
-3. You can point the build script to any repository, not just this one, by giving it a `GIT_REPO` environment variable:
+The first argument to the script is the platform to build (in this case
+`windows`). The second argument to the script is a git `branch` or `tag` to
+build. Two `.exe` files will be generated, `Fulcrum.exe` and `FulcrumAdmin.exe`,
+which will appear in `dist/win` after the build process is completes.
+
+- *Note:* You can point the build script to any repository, not just this one, by giving it a `GIT_REPO` environment variable:
 
     `$ GIT_REPO=https://github.com/myusername/MyFulcrumFork contrib/build/build.sh windows master`
 
     `$ GIT_REPO=$(pwd) contrib/build/build.sh windows master`
-
-The first argument to the script is the platform to build (in this case `windows`).
-The second argument to the script is a git `branch` or `tag` to build.
-
-Two `.exe` files will be generated, `Fulcrum.exe` and `FulcrumAdmin.exe` which
-will appeare in `dist/win` after the build process is completes.
 
 ### Building a static executable for Linux
 
@@ -108,14 +107,14 @@ on either a MacOS or a Linux host system.  It builds a static Qt and static rock
 
     `$ contrib/build/build.sh linux master`
 
-3. You can point the build script to any repository, not just this one, by giving it a `GIT_REPO` environment variable:
+The first argument to the script is the platform to build (in this case `linux`).
+The second argument to the script is a git `branch` or `tag` to build.
+
+- *Note:* You can point the build script to any repository, not just this one, by giving it a `GIT_REPO` environment variable:
 
     `$ GIT_REPO=https://github.com/myusername/MyFulcrumFork contrib/build/build.sh linux master`
 
     `$ GIT_REPO=$(pwd) contrib/build/build.sh linux master`
-
-The first argument to the script is the platform to build (in this case `linux`).
-The second argument to the script is a git `branch` or `tag` to build.
 
 ---
 

@@ -59,12 +59,12 @@ function build_AdminScript {
     cd tmp || fail "Cannot chdir tmp"
     export WINEPREFIX=$HOME/wine64
     export WINEDEBUG=-all
-	#ARCH=win32
+    #ARCH=win32
     #PYTHON_VERSION=3.6.8
-	#WINE=wine
-	ARCH=amd64
+    #WINE=wine
+    ARCH=amd64
     PYTHON_VERSION=3.8.2
-	WINE=wine64
+    WINE=wine64
     PYHOME=c:/python$PYTHON_VERSION
     PYTHON="$WINE $PYHOME/python.exe -OO -B"
     info "Starting Wine ..."
@@ -95,8 +95,8 @@ function build_AdminScript {
     printok "${TARGET_ADMIN_SCRIPT}.exe built"
     cd "$top" && rm -fr tmp
     popd 1> /dev/null
-	# Be tidy and clean up variables we created above
-	unset WINEPREFIX WINEDEBUG ARCH PYTHON_VERSION WINE PYHOME PYTHON
+    # Be tidy and clean up variables we created above
+    unset WINEPREFIX WINEDEBUG ARCH PYTHON_VERSION WINE PYHOME PYTHON
 }
 build_AdminScript || fail "Could not build ${TARGET_ADMIN_SCRIPT}.exe"
 
