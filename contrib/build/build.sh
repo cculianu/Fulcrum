@@ -42,6 +42,11 @@ case "$plat" in
         ;;
 esac
 
+osxfs_option=""
+if [ `uname` == "Darwin" ]; then
+    osxfs_option=":delegated"
+fi
+
 
 dockerfile=Dockerfile${suffix}
 cd "$here"/"$plat"
@@ -95,7 +100,7 @@ printok "Docker image created: $docker_img_name"
 # Run _build.sh from the specified commit inside Docker image, with $workdir (usually ./work) mapped to /work
 cd "$workdir/.." || fail "Could not chdir"
 info "Building inside docker container: $docker_cont_name ($docker_img_name) ..."
-docker run --rm -it -v "$workdir":/work \
+docker run --rm -it -v "$workdir":/work${osxfs_option} \
     --name "$docker_cont_name" \
     "$docker_img_name" /work/"$PACKAGE"/contrib/build/${plat}/_build.sh "$PACKAGE" "$ROCKSDB_PACKAGE"
 
