@@ -61,7 +61,7 @@ struct SubsMgr::Pvt
         pendingNotificatons.reserve(kRecommendedPendingNotificationsReserveSize);
     }
     /// call this with the lock held
-    void clearPending_nolock() noexcept {
+    inline void clearPending_nolock() {
         decltype(pendingNotificatons) emptySet;
         pendingNotificatons.swap(emptySet);
         pendingNotificatons.reserve(kRecommendedPendingNotificationsReserveSize);
@@ -114,15 +114,32 @@ void SubsMgr::doNotifyAllPending()
     const auto t0 = Util::getTimeNS();
     size_t ctr = 0, ctrSH = 0;
     bool emitQueueEmpty = false;
-    std::vector<SubRef> pending;
+    std::vector<SubRef> pending; // this ends up being the intersection of the sh's in p->pendingNotifications and p->subs
     {
         LockGuard g(p->mut);
         const bool pendingWasEmpty = p->pendingNotificatons.empty();
         if (!pendingWasEmpty && !p->subs.empty()) {
-            pending.reserve(std::min(p->pendingNotificatons.size(), p->subs.size()));
-            for (const auto & sh : p->pendingNotificatons) {
-                if (auto it = p->subs.find(sh); it != p->subs.end()) {
-                    pending.push_back( it->second );
+            const size_t pnsize = p->pendingNotificatons.size(), subsize = p->subs.size();
+            pending.reserve(std::min(pnsize, subsize));
+            // The loop should always loop through the smaller structure, as a performance optimization, hence
+            // this `if` here.
+            if (pnsize < subsize) {
+                // p->pendingNotifications is smaller, loop over that, doing constant-time checks against the larger
+                // p->subs for each scripthash.
+                // Under current BCH typical network usage, this is usually the more likely branch, unless blocks are
+                // full or the network is very busy, in which case the other branch is more likely.
+                for (const auto & sh : p->pendingNotificatons) {
+                    if (const auto it = p->subs.find(sh); it != p->subs.end()) {
+                        pending.push_back( it->second );
+                    }
+                }
+            } else {
+                // p->subs is smaller (or equal), loop over that, doing constant-time checks against the larger
+                // p->pendingNotification for each scripthash.
+                for (const auto & [sh, subref] : p->subs) {
+                    if (p->pendingNotificatons.count(sh)) {
+                        pending.push_back( subref );
+                    }
                 }
             }
         }
@@ -156,7 +173,7 @@ void SubsMgr::doNotifyAllPending()
         // read-only mode).
         const auto status = getFullStatus(sh);
         // Now, re-acquire sub lock. Temporarily having released it above should be fine for our purposes, since the
-        // above empty() check was only a performance optimization and the invariant not holding for the duration of
+        // above empty() check was only a performance optimization and the predicate not holding for the duration of
         // this code block is fine. In the unlikely event that a sub lost its clients while the lock was released, the
         // below emit sub->statusChanged(...) will just be a no-op.
         LockGuard g(sub->mut);
