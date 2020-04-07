@@ -22,7 +22,7 @@ GPLv3. See the included `LICENSE.txt` file or [visit gnu.org and read the licens
 
 ### Requirements
 
-- `Qt Core` & `Qt Networking` libraries `5.12.5` or above (I use `5.14.1` myself).  Qt `5.12.4` (or earlier) is not supported.
+- `Qt Core` & `Qt Networking` libraries `5.12.5` or above (I use `5.14.2` myself).  Qt `5.12.4` (or earlier) is not supported.
 - A modern, 64-bit `C++17` compiler.  `clang` is recommended but `G++` also works. MSVC on Windows is not supported (please use `MinGW G++` instead, which ships with Qt Open Source Edition for Windows).
 
 ### How To Compile
