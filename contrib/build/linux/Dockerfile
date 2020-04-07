@@ -18,11 +18,11 @@ RUN \
     mkdir -p /opt && \
     cd /opt && \
     echo "💬  \033[1;36mDownloading Qt sources ...\033[0m" && \
-    wget -q http://download.qt.io/official_releases/qt/5.14/5.14.1/single/qt-everywhere-src-5.14.1.tar.xz && \
+    wget -q http://download.qt.io/official_releases/qt/5.14/5.14.2/single/qt-everywhere-src-5.14.2.tar.xz && \
     echo "💬  \033[1;36mExtracting archive ...\033[0m" && \
-    tar xf qt-everywhere-src-5.14.1.tar.xz && \
-    rm qt-everywhere-src-5.14.1.tar.xz && \
-    cd qt-everywhere-src-5.14.1 && \
+    tar xf qt-everywhere-src-5.14.2.tar.xz && \
+    rm qt-everywhere-src-5.14.2.tar.xz && \
+    cd qt-everywhere-src-5.14.2 && \
     echo "💬  \033[1;36mConfiguring Qt ...\033[0m" && \
     ./configure -opensource -confirm-license -release -static -nomake tests -nomake examples -no-compile-examples \
         -prefix /opt/local/qt -no-gui -no-sse2 -ssl -no-shared -c++std c++17 -no-widgets -no-dbus -no-cups -no-freetype -no-fontconfig -no-gif \
@@ -36,7 +36,7 @@ RUN \
     make install && \
     cd /opt && \
     echo "" && echo "💬  \033[1;36mCleaning up ...\033[0m" && \
-    rm -rf qt-everywhere-src-5.14.1 && \
+    rm -rf qt-everywhere-src-5.14.2 && \
     echo "" && echo "👍  \033[1;32mGCC Version:\033[0m" && \
     gcc --version && \
     echo "👍  \033[1;32mQt Version:\033[0m" && \
