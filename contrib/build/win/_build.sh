@@ -43,12 +43,12 @@ info "Building Fulcrum ..."
 qmake || fail "Could not run qmake"
 make -j`nproc`  || fail "Could not run make"
 
-ls -al "$TARGET_BINARY" || fail "$TARGET_BINARY not found"
+ls -al "release/$TARGET_BINARY" || fail "$TARGET_BINARY not found"
 printok "$TARGET_BINARY built"
 
 info "Copying to top level ..."
 mkdir -p "$top/built" || fail "Could not create build products directory"
-cp -fpva "$TARGET_BINARY" "$top/built/." || fail "Could not copy $TARGET_BINARY"
+cp -fpva "release/$TARGET_BINARY" "$top/built/." || fail "Could not copy $TARGET_BINARY"
 cd "$top" || fail "Could not cd to $top"
 
 function build_AdminScript {
