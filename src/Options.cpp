@@ -123,6 +123,9 @@ QVariantMap Options::toMap() const
     // max_subs_per_ip & max_subs
     m["max_subs_per_ip"] = qlonglong(maxSubsPerIP);
     m["max_subs"] = qlonglong(maxSubsGlobally);
+    // db advanced options
+    m["db_max_open_files"] = qlonglong(db.maxOpenFiles);
+    m["db_keep_log_file_num"] = qlonglong(db.keepLogFileNum);
     return m;
 }
 

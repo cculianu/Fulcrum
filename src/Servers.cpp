@@ -1898,7 +1898,26 @@ void AdminServer::rpc_getinfo(Client *c, const RPC::Message &m)
 
     // storage stats -- for this we need to go asynch because we need to block to grab them using the StatsMixin API
     generic_do_async(c, m.id, [storage = this->storage, res]() mutable {
-        res["storage_stats"] = storage->statsSafe(kBlockingCallTimeoutMS);
+        QVariant v = storage->statsSafe(kBlockingCallTimeoutMS);
+        // Here we do this contorted thing to delete the "table factory options" dict for each of the db's, to make
+        // the `getinfo` call not be as verbose. (We also delete "keep_log_file_num" and "max_open_files" since they
+        // are redundant).
+        if (QVariantMap m, m2; !(m = v.toMap()).isEmpty() && !(m2 = m.value("DB Stats").toMap()).isEmpty()) {
+            QVariantMap m2_new;
+            for (auto it = m2.begin(); it != m2.end(); ++it) {
+                QVariant v2 = it.value();
+                if (QVariantMap m3; !(m3 = v2.toMap()).isEmpty()) {
+                    m3.remove("table factory options"); // delete this very verbose dict
+                    m3.remove("keep_log_file_num"); // redundant with config value
+                    m3.remove("max_open_files"); // redundant with config value
+                    v2 = m3;
+                }
+                m2_new[it.key()] = v2;
+            }
+            m["DB Stats"] = m2_new;
+            v = m;
+        }
+        res["storage_stats"] = v;
         return res; // returns result to client
     });
 }
