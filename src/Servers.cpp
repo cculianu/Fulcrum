@@ -1635,6 +1635,8 @@ namespace {
     void InitStaticDataCommon(DTable & dispatchTable, MMap & methodMap, const Registry & registry) {
         if (!dispatchTable.empty())
             return;
+        dispatchTable.reserve(registry.size());
+        methodMap.reserve(registry.size());
         for (const auto & r : registry) {
             if (!r.member) {
                 std::cerr << "Runtime check failed: RPC Method " << r.method.toUtf8().constData()
