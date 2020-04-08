@@ -728,6 +728,28 @@ void App::parseArgs()
         Util::AsyncOnObject(this, [subs]{ Debug() << "config: max_subs = " << subs; });
     }
 
+    // DB options
+    if (conf.hasValue("db_max_open_files")) {
+        bool ok;
+        const int64_t mof = conf.int64Value("db_max_open_files", 0, &ok);
+        if (!ok || !options->db.isMaxOpenFilesSettingInBounds(mof))
+            throw BadArgs(QString("db_max_open_files: bad value. Specify a value in the range [%1, %2] or -1.")
+                          .arg(options->db.maxOpenFilesMin).arg(options->db.maxOpenFilesMax));
+        options->db.maxOpenFiles = int(mof);
+        // log this later in case we are in syslog mode
+        Util::AsyncOnObject(this, [mof]{ Debug() << "config: db_max_open_files = " << mof; });
+    }
+    if (conf.hasValue("db_keep_log_file_num")) {
+        bool ok;
+        const int64_t klfn = conf.int64Value("db_keep_log_file_num", -1, &ok);
+        if (!ok || !options->db.isKeepLogFileNumInBounds(klfn))
+            throw BadArgs(QString("db_keep_log_file_num: bad value. Specify a value in the range [%1, %2]")
+                          .arg(options->db.minKeepLogFileNum).arg(options->db.maxKeepLogFileNum));
+        options->db.keepLogFileNum = unsigned(klfn);
+        // log this later in case we are in syslog mode
+        Util::AsyncOnObject(this, [klfn]{ Debug() << "config: db_keep_log_file_num = " << klfn; });
+    }
+
     // warn user that no hostname was specified if they have peerDiscover turned on
     if (!options->hostName.has_value() && options->peerDiscovery && options->peerAnnounceSelf) {
         // do this when we return to event loop in case user is logging to -S (so it appears in syslog which gets set up after we return)

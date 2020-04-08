@@ -172,6 +172,20 @@ public:
     static constexpr bool isMaxSubsGloballySettingInBounds(int64_t m) { return m >= maxSubsGloballyMin && m <= maxSubsGloballyMax; }
 
     QString dumpScriptHashes;  ///< if specified, a file path to which to dump all scripthashes as JSON, corresponds to --dump-sh CLI arg
+
+    struct DBOpts {
+        static constexpr int defaultMaxOpenFiles = -1, maxOpenFilesMin = 20, maxOpenFilesMax = INT_MAX;
+        /// comes from config db_max_open_files -- default is -1 meaning unlimited.
+        /// See: https://github.com/facebook/rocksdb/wiki/Memory-usage-in-RocksDB#indexes-and-filter-blocks
+        int maxOpenFiles = defaultMaxOpenFiles;
+        static constexpr bool isMaxOpenFilesSettingInBounds(int64_t m) { return m <= 0 || (m >= maxOpenFilesMin && m <= maxOpenFilesMax); }
+
+        static constexpr unsigned defaultKeepLogFileNum = 5, minKeepLogFileNum = 5, maxKeepLogFileNum = 20000;
+        /// comes from config db_keep_log_file_num -- default is 5
+        unsigned keepLogFileNum = defaultKeepLogFileNum;
+        static constexpr bool isKeepLogFileNumInBounds(int64_t k) { return k >= int64_t(minKeepLogFileNum) && k <= int64_t(maxKeepLogFileNum); }
+    };
+    DBOpts db;
 };
 
 /// A class encapsulating a simple read-only config file format.  The format is similar to the bitcoin.conf format

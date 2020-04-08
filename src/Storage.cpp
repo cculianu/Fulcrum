@@ -29,9 +29,11 @@
 #include <rocksdb/merge_operator.h>
 #include <rocksdb/options.h>
 #include <rocksdb/slice.h>
+#include <rocksdb/table.h>
 
 #include <QByteArray>
 #include <QDir>
+#include <QFileInfo>
 #include <QVector> // we use this for the Height2Hash cache to save on memcopies since it's implicitly shared.
 
 #include <algorithm>
@@ -561,8 +563,8 @@ void Storage::startup()
         // create the DB if it's not already present
         opts.create_if_missing = true;
         opts.error_if_exists = false;
-        //opts.max_open_files = 50; ///< testing -- seems this affects memory usage see: https://github.com/facebook/rocksdb/issues/4112
-        opts.keep_log_file_num = 5; // ??
+        opts.max_open_files = options->db.maxOpenFiles <= 0 ? -1 : options->db.maxOpenFiles; ///< this affects memory usage see: https://github.com/facebook/rocksdb/issues/4112
+        opts.keep_log_file_num = options->db.keepLogFileNum;
         opts.compression = rocksdb::CompressionType::kNoCompression; // for now we test without compression. TODO: characterize what is fastest and best..
         shistOpts = opts; // copy what we just did
         shistOpts.merge_operator = p->db.concatOperator = std::make_shared<ConcatOperator>(); // this set of options uses the concat merge operator (we use this to append to history entries in the db)
@@ -674,6 +676,37 @@ auto Storage::stats() const -> Stats
         caches["merkleHeaders_SizeBytes"] = qulonglong(bytes);
     }
     ret["caches"] = caches;
+    {
+        // db stats
+        QVariantMap m;
+        for (const auto ptr : { &p->db.blkinfo, &p->db.meta, &p->db.shist, &p->db.shunspent, &p->db.undo, &p->db.utxoset, }) {
+            QVariantMap m2;
+            const auto & db = *ptr;
+            const QString name = QFileInfo(QString::fromStdString(db->GetName())).fileName();
+            for (const auto prop : { "rocksdb.estimate-table-readers-mem", "rocksdb.cur-size-all-mem-tables"}) {
+                if (std::string s; LIKELY(db->GetProperty(prop, &s)) )
+                    m2[prop] = QString::fromStdString(s);
+            }
+            if (auto fact = db->GetOptions().table_factory; LIKELY(fact) ) {
+                // parse the table factory options string, which is of the form "     opt1: val1\n     opt2: val2\n  ... "
+                QVariantMap m3;
+                for (const auto & line : QString::fromStdString( fact->GetPrintableTableOptions() ).split("\n")) {
+                    const auto nvp = line.split(":");
+                    if (nvp.size() < 2)
+                        continue;
+                    auto n = nvp.first().trimmed().simplified();
+                    auto v = nvp.mid(1).join(":").trimmed().simplified();
+                    m3[n] = v;
+                }
+                m2["table factory options"] = m3;
+            } else
+                m2["table factory options"] = QVariant(); // explicitly state it was null (this branch should not normally happen)
+            m2["max_open_files"] = db->GetOptions().max_open_files;
+            m2["keep_log_file_num"] = qulonglong(db->GetOptions().keep_log_file_num);
+            m[name] = m2;
+        }
+        ret["DB Stats"] = m;
+    }
     return ret;
 }
 
