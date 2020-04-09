@@ -302,7 +302,7 @@ Log::~Log()
         if (QThread *th = QThread::currentThread(); th && ourApp && th != ourApp->thread()) {
             QString thrdName = th->objectName();
             if (thrdName.trimmed().isEmpty()) thrdName = QString::asprintf("%p", reinterpret_cast<void *>(QThread::currentThreadId()));
-            thrdStr = QString("<Thr: %1> ").arg(thrdName);
+            thrdStr = QStringLiteral("<Thr: %1> ").arg(thrdName);
         }
 
         Logger *logger = ourApp ? ourApp->logger() : nullptr;

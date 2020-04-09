@@ -36,7 +36,7 @@ struct TXO {
     IONum  prevoutN = 0;
 
     bool isValid() const { return prevoutHash.length() == HashLen;  }
-    QString toString() const { return isValid() ? QString("%1:%2").arg(QString(prevoutHash.toHex())).arg(prevoutN) : "<txo_invalid>"; }
+    QString toString() const { return isValid() ? QStringLiteral("%1:%2").arg(QString(prevoutHash.toHex())).arg(prevoutN) : QStringLiteral("<txo_invalid>"); }
 
     bool operator==(const TXO &o) const noexcept { return prevoutHash == o.prevoutHash && prevoutN == o.prevoutN; }
     bool operator<(const TXO &o) const noexcept { return prevoutHash < o.prevoutHash && prevoutN < o.prevoutN; }

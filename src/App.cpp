@@ -371,7 +371,7 @@ void App::parseArgs()
         }
         QString portStr = toks.last();
         toks.removeLast(); // pop off port
-        QString hostStr = toks.join(":"); // rejoin on ':' in case it was IPv6 which is full of colons
+        QString hostStr = toks.join(':'); // rejoin on ':' in case it was IPv6 which is full of colons
         if (hostStr.isEmpty())
             throw BadArgs(msg1);
         return {hostStr, parsePort(portStr)};
@@ -767,9 +767,9 @@ void App::parseArgs()
 namespace {
     auto ParseParams(const SimpleHttpServer::Request &req) -> StatsMixin::StatsParams {
         StatsMixin::StatsParams params;
-        const auto nvps = req.queryString.split("&");
+        const auto nvps = req.queryString.split('&');
         for (const auto & nvp : nvps) {
-            auto nv = nvp.split("=");
+            auto nv = nvp.split('=');
             if (nv.size() == 2)
                 params[nv.front()] = nv.back();
         }

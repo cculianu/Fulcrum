@@ -59,7 +59,7 @@ public:
     explicit ThreadSafeHashTable(QObject *parent=nullptr, size_t initialCapacity=0, size_t squeezeThreshold_=0)
         : QObject(parent), squeezeThreshold(squeezeThreshold_)
     {
-        setObjectName(QString("ThreadSafeHashTable<%1, %2>").arg(typeid(Key).name()).arg(typeid(Data).name()));
+        setObjectName(QStringLiteral("ThreadSafeHashTable<%1, %2>").arg(typeid(Key).name()).arg(typeid(Data).name()));
         if (initialCapacity)
             table.reserve(initialCapacity);
     }

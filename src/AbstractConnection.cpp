@@ -38,11 +38,11 @@ AbstractConnection::AbstractConnection(IdMixin::Id id_in, QObject *parent, qint6
 /// this should only be called from our thread, because it accesses socket which should only be touched from thread
 QString AbstractConnection::prettyName(bool dontTouchSocket, bool showId) const
 {
-    QString type = socket && !dontTouchSocket ? (dynamic_cast<QSslSocket *>(socket) ? "SSL" : "TCP") : "(NoSocket)";
-    QString port = socket && !dontTouchSocket && socket->peerPort() ? QString(":%1").arg(socket->peerPort()) : "";
-    QString ip = socket && !dontTouchSocket && !socket->peerAddress().isNull() ? socket->peerAddress().toString() : "";
-    QString idStr = showId ? QString(" (id: %1)").arg(id) : QString();
-    return QString("%1 %2%3 %4%5").arg(type).arg(!objectName().isNull()?objectName():"(AbstractSocket)").arg(idStr).arg(ip).arg(port);
+    QString type = socket && !dontTouchSocket ? (dynamic_cast<QSslSocket *>(socket) ? QStringLiteral("SSL") : QStringLiteral("TCP")) : QStringLiteral("(NoSocket)");
+    QString port = socket && !dontTouchSocket && socket->peerPort() ? QStringLiteral(":%1").arg(socket->peerPort()) : QString();
+    QString ip = socket && !dontTouchSocket && !socket->peerAddress().isNull() ? socket->peerAddress().toString() : QString();
+    QString idStr = showId ? QStringLiteral(" (id: %1)").arg(id) : QString();
+    return QStringLiteral("%1 %2%3 %4%5").arg(type).arg(!objectName().isNull()?objectName():QStringLiteral("(AbstractSocket)")).arg(idStr).arg(ip).arg(port);
 }
 
 bool AbstractConnection::isGood() const

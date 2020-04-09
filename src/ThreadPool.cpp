@@ -104,7 +104,7 @@ void ThreadPool::submitWork(QObject *context, const VoidFunc & work, const VoidF
         extantMaxSeen = njobs;
     job->setAutoDelete(true);
     const auto num = ++ctr;
-    job->setObjectName(QString("Job %1 for '%2'").arg(num).arg( context ? context->objectName() : "<no context>"));
+    job->setObjectName(QStringLiteral("Job %1 for '%2'").arg(num).arg( context ? context->objectName() : QStringLiteral("<no context>")));
     if constexpr (debugPrt) {
         QObject::connect(job, &Job::started, this, [n=job->objectName()]{
             Debug() << n << " -- started";

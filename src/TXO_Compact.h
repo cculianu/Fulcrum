@@ -62,7 +62,7 @@ struct CompactTXO {
     IONum N() const noexcept { return IONum(u.prevout.n); }
     bool isValid() const { return u.asU64 != initval; }
     static constexpr size_t serSize() noexcept { return 8; }
-    QString toString() const { return isValid() ? QString("%1:%2").arg(txNum()).arg(N()) : "<compact_txo_invalid>"; }
+    QString toString() const { return isValid() ? QStringLiteral("%1:%2").arg(txNum()).arg(N()) : QStringLiteral("<compact_txo_invalid>"); }
     /// Low-level serialization to a byte buffer in place.  Note that bufsz must be >= serSize().
     /// Number of bytes written is returned, or 0 if bufsz to small.
    size_t toBytesInPlace(void *buf, size_t bufsz) const {

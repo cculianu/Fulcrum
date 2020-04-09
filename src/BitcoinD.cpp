@@ -162,7 +162,7 @@ void BitcoinDMgr::submitRequest(QObject *sender, const RPC::Message::Id &rid, co
         }
         context->deleteLater();
     });
-    context->setObjectName(QString("context for '%1' request id: %2").arg(sender ? sender->objectName() : "").arg(rid.toString()));
+    context->setObjectName(QStringLiteral("context for '%1' request id: %2").arg(sender ? sender->objectName() : QString()).arg(rid.toString()));
     connect(context.get(), &ReqCtxObj::results, sender, [context, resf](const RPC::Message &response) {
         if (!context->replied.exchange(true) && resf)
             resf(response);

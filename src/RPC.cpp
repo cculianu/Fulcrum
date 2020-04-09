@@ -610,14 +610,15 @@ namespace RPC {
 
     QByteArray LinefeedConnection::wrapForSend(const QByteArray &d)
     {
-        return d + "\r\n";
+        static const QByteArray NL("\r\n");
+        return d + NL;
     }
 
     /* --- HttpConnection --- */
     HttpConnection::~HttpConnection() {} ///< for vtable
     void HttpConnection::setAuth(const QString &username, const QString &password)
     {
-        authCookie = QString("%1:%2").arg(username).arg(password).toUtf8().toBase64();
+        authCookie = QStringLiteral("%1:%2").arg(username).arg(password).toUtf8().toBase64();
     }
 
     struct HttpConnection::StateMachine
@@ -691,7 +692,7 @@ namespace RPC {
                             // ERROR HERE. Expected header. got non-header.
                             throw Exception(QString("Expected header line: %1").arg(QString(data)));
                         }
-                        auto name = toks[0].simplified(), value = toks.mid(1).join(" ").simplified();
+                        auto name = toks[0].simplified(), value = toks.mid(1).join(' ').simplified();
                         static const QByteArray s_content_type("content-type"), s_content_length("content-length"),
                                                 s_application_json("application/json");
                         if (name.toLower() == s_content_type) {

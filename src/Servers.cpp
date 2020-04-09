@@ -65,12 +65,12 @@ AbstractTcpServer::~AbstractTcpServer()
 
 QString AbstractTcpServer::hostPort() const
 {
-    return QString("%1:%2").arg(addr.toString()).arg(port);
+    return QStringLiteral("%1:%2").arg(addr.toString()).arg(port);
 }
 
 QString AbstractTcpServer::prettyName() const
 {
-    return QString("Srv %1").arg(hostPort());
+    return QStringLiteral("Srv %1").arg(hostPort());
 }
 
 void AbstractTcpServer::tryStart(ulong timeout_ms)
@@ -151,7 +151,7 @@ SimpleHttpServer::SimpleHttpServer(const QHostAddress &listenAddr, quint16 liste
 
 QString SimpleHttpServer::prettyName() const
 {
-    return QString("Http%1").arg(AbstractTcpServer::prettyName());
+    return QStringLiteral("Http%1").arg(AbstractTcpServer::prettyName());
 }
 
 void SimpleHttpServer::on_newConnection(QTcpSocket *sock)
@@ -171,7 +171,7 @@ void SimpleHttpServer::on_newConnection(QTcpSocket *sock)
                 auto line = QString(sock->readLine()).trimmed();
                 //Debug() << sockName << " Got line: " << line;
                 if (QString loc = sock->property("req-loc").toString(); loc.isEmpty()) {
-                    auto toks = line.split(" ");
+                    auto toks = line.split(' ');
                     if (toks.length() != 3 || (toks[0] != "GET" && toks[1] != "POST") || toks[2] != "HTTP/1.1")
                         throw Exception(QString("Invalid request: %1").arg(line));
                     Trace() << sockName << " " << line;
@@ -225,10 +225,10 @@ void SimpleHttpServer::on_newConnection(QTcpSocket *sock)
                 } else {
                     // save params
                     auto vmap = sock->property("req-header").toMap();
-                    auto toks = line.split(": ");
+                    auto toks = line.split(QStringLiteral(": "));
                     if (toks.length() >= 2) {
                         auto name = toks.front(); toks.pop_front();
-                        auto value = toks.join(": ");
+                        auto value = toks.join(QStringLiteral(": "));
                         vmap[name] = value;
                         sock->setProperty("req-header", vmap);
                     } else
@@ -318,7 +318,7 @@ namespace {
             }
             return QString::fromUtf8(ret);
         };
-        return QString("daemon error: DaemonError({'code': %1, 'message': '%2'})")
+        return QStringLiteral("daemon error: DaemonError({'code': %1, 'message': '%2'})")
                 .arg(errResponse.errorCode()).arg(escapeSingleQuote(errResponse.errorMessage()));
     }
 
@@ -727,7 +727,7 @@ Server::~Server() { stop(); }
 
 QString Server::prettyName() const
 {
-    return QString("Tcp%1").arg(AbstractTcpServer::prettyName());
+    return QStringLiteral("Tcp%1").arg(AbstractTcpServer::prettyName());
 }
 
 void Server::rpc_server_add_peer(Client *c, const RPC::Message &m)
@@ -858,11 +858,11 @@ void Server::rpc_server_peers_subscribe(Client *c, const RPC::Message &m)
         item.push_back(addrOrHost); // item 1, ip address (or host if .isNull() e.g. tor)
         item.push_back(pi.hostName); // item 2, hostName
         QVariantList nested;
-        nested.push_back(QString("v") + (pi.protocolMax.isValid() ? pi.protocolMax.toString() : pi.protocolVersion.toString()));
+        nested.push_back(QStringLiteral("v") + (pi.protocolMax.isValid() ? pi.protocolMax.toString() : pi.protocolVersion.toString()));
         if (pi.ssl)
-            nested.push_back(QString("s") + QString::number(pi.ssl));
+            nested.push_back(QStringLiteral("s") + QString::number(pi.ssl));
         if (pi.tcp)
-            nested.push_back(QString("t") + QString::number(pi.tcp));
+            nested.push_back(QStringLiteral("t") + QString::number(pi.tcp));
         item.push_back(nested);
         res.push_back(item);
     }
@@ -1670,7 +1670,7 @@ ServerSSL::ServerSSL(SrvMgr *sm, const QHostAddress & address_, quint16 port_, c
 ServerSSL::~ServerSSL() { stop(); }
 QString ServerSSL::prettyName() const
 {
-    return QString("Ssl%1").arg(AbstractTcpServer::prettyName());
+    return QStringLiteral("Ssl%1").arg(AbstractTcpServer::prettyName());
 }
 void ServerSSL::incomingConnection(qintptr socketDescriptor)
 {
@@ -1711,7 +1711,7 @@ AdminServer::AdminServer(SrvMgr *sm, const QHostAddress & a, quint16 p, const st
 
 AdminServer::~AdminServer() { stop(); asyncThreadPool = nullptr; }
 
-QString AdminServer::prettyName() const { return QString("Admin%1").arg(AbstractTcpServer::prettyName()); }
+QString AdminServer::prettyName() const { return QStringLiteral("Admin%1").arg(AbstractTcpServer::prettyName()); }
 
 auto AdminServer::stats() const -> Stats
 {
@@ -2080,9 +2080,9 @@ Client::Client(const RPC::MethodMap & mm, IdMixin::Id id_in, QTcpSocket *sock, i
     pingtime_ms = int(stale_threshold); // this determines how often the pingtimer fires
     status = Connected ; // we are always connected at construction time.
     errorPolicy = ErrorPolicySendErrorMessage;
-    setObjectName(QString("Client.%1").arg(id_in));
+    setObjectName(QStringLiteral("Client.%1").arg(id_in));
     on_connected();
-    Log() << "New " << prettyName(false, false) << ", " << N << Util::Pluralize(" client", N) << " total";
+    Log() << "New " << prettyName(false, false) << ", " << N << Util::Pluralize(QStringLiteral(" client"), N) << " total";
 }
 
 Client::~Client()

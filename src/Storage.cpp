@@ -827,7 +827,7 @@ auto Storage::headerForHeight(BlockHeight height, QString *err) const -> std::op
     std::optional<Header> ret;
     if (int(height) <= latestTip().first && int(height) >= 0) {
         ret = headerForHeight_nolock(height, err);
-    } else if (err) { *err = QString("Height %1 is out of range").arg(height); }
+    } else if (err) { *err = QStringLiteral("Height %1 is out of range").arg(height); }
     return ret;
 }
 
@@ -1469,7 +1469,7 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
             if (!opt.has_value()) throw UndoInfoMissing(err);
             prevHeader = opt.value();
         }
-        const QString errMsg1 = QString("Unable to retrieve undo info for %1").arg(tip);
+        const QString errMsg1 = QStringLiteral("Unable to retrieve undo info for %1").arg(tip);
         auto undoOpt = GenericDBGet<UndoInfo>(p->db.undo.get(), uint32_t(tip), true, errMsg1, false, p->db.defReadOpts);
         if (!undoOpt.has_value())
             throw UndoInfoMissing(errMsg1);
@@ -1503,7 +1503,7 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
             // undo the scripthash histories
             for (const auto & sh : undo.scriptHashes) {
                 const QString shHex = Util::ToHexFast(sh);
-                const auto vec = GenericDBGetFailIfMissing<TxNumVec>(p->db.shist.get(), sh, QString("Undo failed because we failed to retrieve the scripthash history for %1").arg(shHex), false, p->db.defReadOpts);
+                const auto vec = GenericDBGetFailIfMissing<TxNumVec>(p->db.shist.get(), sh, QStringLiteral("Undo failed because we failed to retrieve the scripthash history for %1").arg(shHex), false, p->db.defReadOpts);
                 TxNumVec newVec;
                 newVec.reserve(vec.size());
                 for (const auto txNum : vec) {
@@ -1512,7 +1512,7 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
                         newVec.push_back(txNum);
                     }
                 }
-                const QString errMsg = QString("Undo failed because we failed to write the new scripthash history for %1").arg(shHex);
+                const QString errMsg = QStringLiteral("Undo failed because we failed to write the new scripthash history for %1").arg(shHex);
                 if (!newVec.empty()) {
                     // The below is entirely unnecessary as the txnums should be already sorted and unique in the db data.
                     // We are doing this here to illustrate that this invariant in the data is very important.

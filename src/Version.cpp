@@ -28,7 +28,7 @@ Version::Version(unsigned maj, unsigned min, unsigned rev)
 
 QString Version::toString(bool revZeroOk) const
 {
-    return QString("%1.%2%3").arg(major).arg(minor).arg( revision || revZeroOk ? QString(".%1").arg(revision) : QString() );
+    return QStringLiteral("%1.%2%3").arg(major).arg(minor).arg( revision || revZeroOk ? QStringLiteral(".%1").arg(revision) : QString() );
 }
 
 Version::Version(const QString &s_)

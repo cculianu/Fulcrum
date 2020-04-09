@@ -496,17 +496,18 @@ namespace Util {
         {
             if (qAbs(int(n)) != 1) {
                 QString word(wordIn);
-                QString ending("s"); // default to 's' ending
+                QString ending = QStringLiteral("s"); // default to 's' ending
                 const auto wordend = word.right(2);
                 // 's' or "sh" sound in English are pluralized with "es" rather than simple "s"
                 // 'y' endings have the 'y' truncated and 'ies' appended in its stead for plurals as well.
                 // TODO: suppored ALL CAPS? Not needed for now in this app, so we don't bother...
-                if (wordend.endsWith('s') || wordend == "sh") ending = "es";
+                if (wordend.endsWith('s') || wordend == QStringLiteral("sh"))
+                    ending = QStringLiteral("es");
                 else if (wordend.endsWith('y')) {
                     word.truncate(word.length()-1);  // remove training 'y'
-                    ending = "ies";  // .. append 'ies' eg entry -> entries
+                    ending = QStringLiteral("ies");  // .. append 'ies' eg entry -> entries
                 }
-                ret = QString("%1%2").arg(word).arg(ending);
+                ret = QStringLiteral("%1%2").arg(word).arg(ending);
             } else
                 ret = wordIn; // constant time copy (implicitly shared)
         }

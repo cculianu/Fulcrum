@@ -309,7 +309,7 @@ struct DownloadBlocksTask : public CtlTask
 /*static*/ const int DownloadBlocksTask::HEADER_SIZE = BTC::GetBlockHeaderSize();
 
 DownloadBlocksTask::DownloadBlocksTask(unsigned from, unsigned to, unsigned stride, Controller *ctl_)
-    : CtlTask(ctl_, QString("Task.DL %1 -> %2").arg(from).arg(to)), from(from), to(to), stride(stride), expectedCt(unsigned(nToDL(from, to, stride)))
+    : CtlTask(ctl_, QStringLiteral("Task.DL %1 -> %2").arg(from).arg(to)), from(from), to(to), stride(stride), expectedCt(unsigned(nToDL(from, to, stride)))
 {
     FatalAssert( (to >= from) && (ctl_) && (stride > 0)) << "Invalid params to DonloadBlocksTask c'tor, FIXME!";
 
@@ -1104,17 +1104,17 @@ void Controller::process_PrintProgress(unsigned height, size_t nTx, size_t nIns,
     sm->nProgSH += nSH;
     if (UNLIKELY(height && !(height % sm->progressIntervalBlocks))) {
         static const auto formatRate = [](double rate, const QString & thing, bool addComma = true) {
-            QString unit = "sec";
+            QString unit = QStringLiteral("sec");
             if (rate < 1.0 && rate > 0.0) {
                 rate *= 60.0;
-                unit = "min";
+                unit = QStringLiteral("min");
             }
             if (rate < 1.0 && rate > 0.0) {
                 rate *= 60.0;
-                unit = "hour";
+                unit = QStringLiteral("hour");
             }
             static const auto format = [](double rate) { return QString::number(rate, 'f', rate < 10. ? (rate < 1.0 ? 3 : 2) : 1); };
-            return rate > 0.0 ? QString("%1%2 %3/%4").arg(addComma ? ", " : "").arg(format(rate)).arg(thing).arg(unit) : QString();
+            return rate > 0.0 ? QStringLiteral("%1%2 %3/%4").arg(addComma ? ", " : "").arg(format(rate)).arg(thing).arg(unit) : QString();
         };
         const double now = Util::getTimeSecs();
         const double elapsed = std::max(now - sm->lastProgTs, 0.00001); // ensure no division by zero
@@ -1122,8 +1122,8 @@ void Controller::process_PrintProgress(unsigned height, size_t nTx, size_t nIns,
         const double rateBlocks = sm->nProgBlocks / elapsed;
         const double rateTx = sm->nProgTx / elapsed;
         const double rateSH = sm->nProgSH / elapsed;
-        Log() << "Processed height: " << height << ", " << pctDisplay << formatRate(rateBlocks, "blocks")
-              << formatRate(rateTx, "txs")  << formatRate(rateSH, "addrs");
+        Log() << "Processed height: " << height << ", " << pctDisplay << formatRate(rateBlocks, QStringLiteral("blocks"))
+              << formatRate(rateTx, QStringLiteral("txs"))  << formatRate(rateSH, QStringLiteral("addrs"));
         // update/reset ts and counters
         sm->lastProgTs = now;
         sm->nProgBlocks = sm->nProgTx = sm->nProgIOs = sm->nProgSH = 0;

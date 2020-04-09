@@ -28,11 +28,11 @@ std::string COutPoint::ToString() const {
 
 #ifdef USE_QT_IN_BITCOIN
 QString COutPoint::ToQString() const {
-    return QString("%1:%2").arg(txid.ToString().c_str()).arg(n);
+    return QStringLiteral("%1:%2").arg(txid.ToString().c_str()).arg(n);
 }
 COutPoint &COutPoint::SetQString(const QString &s)
 {
-    QStringList toks = s.split(":");
+    QStringList toks = s.split(':');
     if (toks.length() == 2) {
         bool ok;
         auto tmp = toks[1].toUInt(&ok);

@@ -623,7 +623,7 @@ auto PeerMgr::headerToVerifyWithPeer() const -> std::optional<HeightHeaderPair>
 PeerClient::PeerClient(bool announce, const PeerInfo &pi, IdMixin::Id id_, PeerMgr *mgr, int maxBuffer)
     : RPC::LinefeedConnection({}, id_, mgr, maxBuffer), announceSelf(announce), info(pi), mgr(mgr)
 {
-    setObjectName(QString("Peer %1").arg(pi.hostName));
+    setObjectName(QStringLiteral("Peer %1").arg(pi.hostName));
 
     constexpr int kPingtimeMS = int(PeerMgr::kConnectedPeerPingTime * 1000.); ///< ping peer servers every 5 minutes to make sure connection is good and to avoid them disconnecting us for being idle.
     pingtime_ms = kPingtimeMS;
