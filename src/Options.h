@@ -116,8 +116,8 @@ public:
     bool isAddrInPerIPLimitExcludeSet(const QHostAddress & addr, Subnet * matched = nullptr) const;
 
     // Max history & max buffer
-    static constexpr int defaultMaxBuffer = 4000000, maxBufferMin = 64000, maxBufferMax = 100000000;
-    static constexpr int defaultMaxHistory = 125000, maxHistoryMin = 1000, maxHistoryMax = 100000000;
+    static constexpr int defaultMaxBuffer = 4'000'000, maxBufferMin = 64'000, maxBufferMax = 100'000'000;
+    static constexpr int defaultMaxHistory = 125'000, maxHistoryMin = 1000, maxHistoryMax = 100'000'000;
 
     static constexpr bool isMaxBufferSettingInBounds(int m) { return m >= maxBufferMin && m <= maxBufferMax; }
     static constexpr int clampMaxBufferSetting(int m) { return std::max(std::min(m, maxBufferMax), maxBufferMin); }
@@ -137,7 +137,7 @@ public:
     QString torUser, torPass;  // tor_user, tor_pass in config -- most tor installs have this blank
 
     static constexpr int defaultBDReqHi = 50, defaultBDReqLo = 20, defaultBDReqDecayPerSec = 5;
-    static constexpr int maxBDReqHi = 10000, maxBDReqLo = 9999, maxBDReqDecayPerSec = 9999;
+    static constexpr int maxBDReqHi = 10'000, maxBDReqLo = 9999, maxBDReqDecayPerSec = 9999;
     static constexpr int minBDReqHi = 5, minBDReqLo = 1, minBDReqDecayPerSec = 1;
     /// BitcoinD Request throttling params, per client
     /// See Server.cpp, generic_async_to_bitcoind for how these are used.
@@ -164,8 +164,8 @@ public:
     /// Comes from a triplet in config, if specified e.g.: "bitcoind_throttle = 50, 20, 10"
     AtomicBdReqThrottleParams bdReqThrottleParams;
 
-    static constexpr int64_t defaultMaxSubsPerIP = 50000, maxSubsPerIPMin = 500, maxSubsPerIPMax = std::numeric_limits<int>::max()/2; // 50k, 500, 10^30 (~1bln) respectively
-    static constexpr int64_t defaultMaxSubsGlobally = 10000000, maxSubsGloballyMin = 5000, maxSubsGloballyMax = std::numeric_limits<int>::max(); // 10 mln, 5k, 10^31 (~2bln) respectively
+    static constexpr int64_t defaultMaxSubsPerIP = 50'000, maxSubsPerIPMin = 500, maxSubsPerIPMax = std::numeric_limits<int>::max()/2; // 50k, 500, 10^30 (~1bln) respectively
+    static constexpr int64_t defaultMaxSubsGlobally = 10'000'000, maxSubsGloballyMin = 5000, maxSubsGloballyMax = std::numeric_limits<int>::max(); // 10 mln, 5k, 10^31 (~2bln) respectively
     int64_t maxSubsPerIP = defaultMaxSubsPerIP; // 50k subs per IP ought to be plenty. User can set this in `max_subs_per_ip` in conf.
     int64_t maxSubsGlobally = defaultMaxSubsGlobally; // 10 million subs max globally.  User can set this in `max_subs` in conf.
     static constexpr bool isMaxSubsPerIPSettingInBounds(int64_t m) { return m >= maxSubsPerIPMin && m <= maxSubsPerIPMax; }
@@ -180,7 +180,7 @@ public:
         int maxOpenFiles = defaultMaxOpenFiles;
         static constexpr bool isMaxOpenFilesSettingInBounds(int64_t m) { return m <= 0 || (m >= maxOpenFilesMin && m <= maxOpenFilesMax); }
 
-        static constexpr unsigned defaultKeepLogFileNum = 5, minKeepLogFileNum = 5, maxKeepLogFileNum = 20000;
+        static constexpr unsigned defaultKeepLogFileNum = 5, minKeepLogFileNum = 5, maxKeepLogFileNum = 20'000;
         /// comes from config db_keep_log_file_num -- default is 5
         unsigned keepLogFileNum = defaultKeepLogFileNum;
         static constexpr bool isKeepLogFileNumInBounds(int64_t k) { return k >= int64_t(minKeepLogFileNum) && k <= int64_t(maxKeepLogFileNum); }
