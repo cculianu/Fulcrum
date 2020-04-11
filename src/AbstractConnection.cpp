@@ -162,21 +162,32 @@ bool AbstractConnection::do_write(const QByteArray & data)
         Error() << __FUNCTION__ << " (" << objectName() << ") " << err << " id=" << id;
         return false;
     }
-    auto data2write = writeBackLog + data;
-    qint64 written = socket->write(data2write);
-    if (written < 0) {
-        Error() << __FUNCTION__ << " error on write " << socket->error() << " (" << socket->errorString() << ") id=" << id;
+    if (writeBackLog > MAX_BUFFER) {
+        Warning(Log::Magenta) << __FUNCTION__ << ": " << prettyName() << " -- MAX_BUFFER reached on write (" << MAX_BUFFER << "), disconnecting client";
         do_disconnect();
         return false;
-    } else if (written < data2write.length()) {
-        writeBackLog = data2write.mid(int(written));
+    }
+    // Note: we temorarily allow the writeBackLog to grow beyond MAX_BUFFER here.  If we run through this function
+    // again in the future before bytes were actually written to the socket and we are over MAX_BUFFER, only then will
+    // the above error be triggered.
+    const auto n2write = data.length();
+    writeBackLog += n2write;
+    const qint64 written = socket->write(data);
+    if (UNLIKELY(written < 0)) {
+        Error() << __FUNCTION__ << ": " << prettyName() << " -- error on write " << socket->error() << " (" << socket->errorString() << ")";
+        do_disconnect();
+        return false;
+    } else if (UNLIKELY(written < n2write)) {
+        // This branch should never happen since QTcpSocket uses an inifinite internal write buffer and always returns
+        // mmediately with the full write request's `byteswritten` as a result.  We still keep this check around,
+        // however, in case some day this predicate is violated by a Qt API change.
+        //
+        // See: https://code.woboq.org/qt5/qtbase/src/network/socket/qabstractsocket.cpp.html#_ZN15QAbstractSocket9writeDataEPKcx
+        Error() << __FUNCTION__ << ": " << prettyName() << " -- short write count; expected to write " << n2write
+                << " bytes, but wrote " << written << " bytes instead. This should never happen! FIXME!";
+        return false;
     }
     nSent += written;
-    if (writeBackLog.length() > MAX_BUFFER) {
-        Warning(Log::Magenta) << __FUNCTION__ << " MAX_BUFFER reached on write (" << MAX_BUFFER << ") id=" << id;
-        do_disconnect();
-        return false;
-    }
     return true;
 }
 
@@ -191,13 +202,7 @@ void AbstractConnection::on_connected()
     socket->setReadBufferSize(MAX_BUFFER); // ensure memory exhaustion from peer can't happen in case we're too busy to read.
     connectedConns.push_back(connect(this, &AbstractConnection::send, this, &AbstractConnection::do_write));
     connectedConns.push_back(connect(socket, SIGNAL(readyRead()), this, SLOT(slot_on_readyRead())));
-    if (dynamic_cast<QSslSocket *>(socket)) {
-        // for some reason Qt can't find this old-style signal for QSslSocket so we do the below.
-        // Additionally, bytesWritten is never emitted for QSslSocket, violating OOP! Thanks Qt. :P
-        connectedConns.push_back(connect(socket, SIGNAL(encryptedBytesWritten(qint64)), this, SLOT(on_bytesWritten())));
-    } else {
-        connectedConns.push_back(connect(socket, SIGNAL(bytesWritten(qint64)), this, SLOT(on_bytesWritten())));
-    }
+    connectedConns.push_back(connect(socket, SIGNAL(bytesWritten(qint64)), this, SLOT(on_bytesWritten(qint64))));
     connectedConns.push_back(
         connect(socket, &QAbstractSocket::disconnected, this, [this]{
             Debug() << prettyName() << " socket disconnected";
@@ -246,12 +251,12 @@ void AbstractConnection::on_socketState(QAbstractSocket::SocketState s)
     }
 }
 
-void AbstractConnection::on_bytesWritten()
+void AbstractConnection::on_bytesWritten(qint64 nBytes)
 {
     Trace() << __FUNCTION__;
-    if (!writeBackLog.isEmpty() && status == Connected && socket) {
-        Debug() << prettyName() << " writeBackLog size: " << writeBackLog.length();
-        do_write();
+    writeBackLog -= nBytes;
+    if (writeBackLog > 0 && status == Connected && socket) {
+        Debug() << prettyName() << " writeBackLog size: " << writeBackLog << " (wrote just now: " << nBytes << ")";
     }
 }
 
@@ -280,7 +285,7 @@ auto AbstractConnection::stats() const -> Stats
     m["lastSocketError"] = lastSocketError;
     m["nDisconnects"] = nDisconnects.load();
     m["nSocketErrors"] = nSocketErrors.load();
-    m["writeBackLog"] = writeBackLog.size();
+    m["writeBackLog"] = writeBackLog;
     m["readBytesAvailable"] = socket ? socket->bytesAvailable() : 0;
     m["activeTimers"] = activeTimerMapForStats();
     m["remote"] = [this]() -> QVariant {

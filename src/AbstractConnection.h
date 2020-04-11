@@ -104,7 +104,7 @@ protected:
     int pingtime_ms = default_pingtime_ms;
     qint64 stale_threshold = default_stale_threshold;
     QTcpSocket *socket = nullptr; ///< this should only ever be touched in our thread (also: socket should live in same thread as this instance)
-    QByteArray writeBackLog = ""; ///< if this grows beyond a certain size, we should kill the connection
+    qint64 writeBackLog = 0; ///< if this grows beyond a certain size, we should kill the connection
     QString lastSocketError; ///< the last socket error seen.
     QList<QMetaObject::Connection> connectedConns; /// signal/slot connections for the connected state. this gets populated when the socket connects in on_connected. signal connections will be disconnected on socket disconnect.
 
@@ -122,7 +122,7 @@ protected:
     static constexpr auto pingTimer = "+Ping Timer";  ///< this is the internal pingTimer which calls do_ping() periodically.
 
 private slots:
-    void on_bytesWritten();
+    void on_bytesWritten(qint64);
     void on_error(QAbstractSocket::SocketError);
     void on_socketState(QAbstractSocket::SocketState);
     void slot_on_readyRead(); ///< calls virtual method on_readyRead for us -- I was paranoid about Qt signal/slot binding semantics and prefer to call from within a function explicitly, hence this redundant method.
