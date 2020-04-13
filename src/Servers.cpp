@@ -1679,13 +1679,47 @@ void ServerSSL::incomingConnection(qintptr socketDescriptor)
         socket->setLocalCertificate(cert);
         socket->setPrivateKey(key);
         socket->setProtocol(QSsl::SslProtocol::AnyProtocol);
-        connect(socket, &QSslSocket::encrypted, this, &ServerSSL::ready);
-        connect(socket, QOverload<const QList<QSslError> &>::of(&QSslSocket::sslErrors),
-                this, [](const QList<QSslError> & errors) {
-                    for (auto e : errors)
-                        Warning() << "SSL error: " << e.errorString();
+        const auto peerName = QStringLiteral("%1:%2").arg(socket->peerAddress().toString()).arg(socket->peerPort());
+        if (socket->state() != QAbstractSocket::SocketState::ConnectedState || socket->isEncrypted()) {
+            Warning() << peerName << " socket had unexpected state (must be both connected and unencrypted), deleting socket";
+            delete socket;
+            return;
+        }
+        QTimer *timer = new QTimer(socket);
+        timer->setObjectName(QStringLiteral("ssl handshake timer"));
+        timer->setSingleShot(true);
+        connect(timer, &QTimer::timeout, this, [socket, timer, peerName]{
+            Warning() << peerName << " SSL handshake timed out after " << QString::number(timer->interval()/1e3, 'f', 1) << " secs, deleting socket";
+            socket->abort();
+            socket->deleteLater();
         });
-        addPendingConnection(socket);
+        auto tmpConnections = std::make_shared<QList<QMetaObject::Connection>>();
+        *tmpConnections += connect(socket, &QSslSocket::disconnected, this, [socket, peerName]{
+            Debug() << peerName << " SSL handshake failed due to disconnect before completion, deleting socket";
+            socket->deleteLater();
+        });
+        *tmpConnections += connect(socket, &QSslSocket::encrypted, this, [this, timer, peerName, tmpConnections] {
+            if (tmpConnections) {
+                // tmpConnections will get auto-deleted after this lambda returns because the QObject connection holding
+                // it alive will be disconnected.
+                for (const auto & conn : *tmpConnections)
+                    disconnect(conn);
+            }
+            timer->stop();
+            timer->deleteLater();
+            emit ready();
+            // TODO: do we want to call addPendingConnection here? Note that if we do that, it may mean that clients
+            // can temporarily violate the max_clients_per_ip config variable, though, which is why we didn't do it here.
+        });
+        *tmpConnections +=
+        connect(socket, qOverload<const QList<QSslError> &>(&QSslSocket::sslErrors), this, [socket, peerName](const QList<QSslError> & errors) {
+            for (auto e : errors)
+                Warning() << peerName << " SSL error: " << e.errorString();
+            Debug() << peerName << " Aborting connection due to SSL errors";
+            socket->deleteLater();
+        });
+        timer->start(10000); // give the handshake 10 seconds to complete
+        addPendingConnection(socket); // <-- TODO: maybe we want to move this call into the "encrypted" lambda slot above?
         socket->startServerEncryption();
     } else {
         Warning() << "setSocketDescriptor returned false -- unable to initiate SSL for client: " << socket->errorString();
