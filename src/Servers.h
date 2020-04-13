@@ -385,6 +385,8 @@ private:
     double lastSubsWarningPrintTime = 0.; ///< used internally to rate-limit "max subs exceeded" message spam to log
 };
 
+class QSslSocket;
+
 /// SSL version of the above Server class that just wraps tcp sockets with a QSslSocket.
 /// All sockets emitted by newConnection are QSslSocket instances (a subclass of
 /// QTcpSocket), thus the connection is encrypted. Requires SSL support + a cert & a private key.
@@ -399,7 +401,8 @@ public:
     QString prettyName() const override; ///< overrides super to indicate SSL in server name
 
 signals:
-    void ready(); ///< emitted when the underlying QSslSocket emits "encrypted"
+    /// emitted when the underlying QSslSocket emits "encrypted"
+    void ready(QSslSocket *);
 
 protected:
     /// overrides QTcpServer to create a QSslSocket wrapping the passed-in file descriptor.

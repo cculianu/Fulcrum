@@ -1663,7 +1663,10 @@ ServerSSL::ServerSSL(SrvMgr *sm, const QHostAddress & address_, quint16 port_, c
         throw BadArgs("ServerSSL cannot be instantiated: Key or cert are null!");
     if (!QSslSocket::supportsSsl())
         throw BadArgs("ServerSSL cannot be instantiated: Missing SSL support!");
-    connect(this, &ServerSSL::ready, this, []{ Trace() << "SSL ready"; });
+    connect(this, &ServerSSL::ready, this, [](QSslSocket *s){
+        if (Trace::isEnabled())
+            Trace() << s->peerAddress().toString() << ":" << s->peerPort() << " SSL ready";
+    });
     setObjectName(prettyName());
     _thread.setObjectName(prettyName());
 }
@@ -1698,16 +1701,16 @@ void ServerSSL::incomingConnection(qintptr socketDescriptor)
             Debug() << peerName << " SSL handshake failed due to disconnect before completion, deleting socket";
             socket->deleteLater();
         });
-        *tmpConnections += connect(socket, &QSslSocket::encrypted, this, [this, timer, peerName, tmpConnections] {
+        *tmpConnections += connect(socket, &QSslSocket::encrypted, this, [this, timer, tmpConnections, socket] {
+            timer->stop();
+            timer->deleteLater();
             if (tmpConnections) {
                 // tmpConnections will get auto-deleted after this lambda returns because the QObject connection holding
                 // it alive will be disconnected.
                 for (const auto & conn : *tmpConnections)
                     disconnect(conn);
             }
-            timer->stop();
-            timer->deleteLater();
-            emit ready();
+            emit ready(socket);
             // TODO: do we want to call addPendingConnection here? Note that if we do that, it may mean that clients
             // can temporarily violate the max_clients_per_ip config variable, though, which is why we didn't do it here.
         });
