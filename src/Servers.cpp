@@ -1713,7 +1713,7 @@ void ServerSSL::incomingConnection(qintptr socketDescriptor)
         });
         *tmpConnections +=
         connect(socket, qOverload<const QList<QSslError> &>(&QSslSocket::sslErrors), this, [socket, peerName](const QList<QSslError> & errors) {
-            for (auto e : errors)
+            for (const auto & e : errors)
                 Warning() << peerName << " SSL error: " << e.errorString();
             Debug() << peerName << " Aborting connection due to SSL errors";
             socket->deleteLater();
