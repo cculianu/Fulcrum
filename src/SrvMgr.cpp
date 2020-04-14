@@ -188,8 +188,11 @@ void SrvMgr::clientConnected(IdMixin::Id cid, const QHostAddress &addr)
             }
             switch (wlstate) {
             case Client::PerIPData::WhiteListState::NotWhiteListed:
-                Log() << "Connection limit (" << maxPerIP << ") exceeded for " << addr.toString()
-                      << ", connection refused for client " << cid;
+                // NEW! As of 4/14/2020, this case should never be reached now that we attach the PerIPData very early
+                // on in the connection pipeline.  However, this code has been left here just in case for defensive
+                // programming purposes.
+                Warning() << "Connection limit (" << maxPerIP << ") exceeded for " << addr.toString()
+                          << ", connection refused for client " << cid;
                 emit clientExceedsConnectionLimit(cid);
                 clientWillDieAnyway = true;
                 break;

@@ -126,16 +126,20 @@ QString AbstractTcpServer::prettySock(QAbstractSocket *sock)
 
 void AbstractTcpServer::pvt_on_newConnection()
 {
-    int ctr = 0;
+    unsigned ctr = 0;
     // from Qt docs: it's possible for more than 1 connection to be ready on a signal emission of nextPendingConnection
     // if we are at or above maxPendingConnections() on a QTcpServer, so we do this: grab as many connections as we can
     // at once in a loop.
     for (QTcpSocket *sock = nullptr; (sock = nextPendingConnection()); ++ctr) {
         Debug() << "Got connection from: " << prettySock(sock);
         on_newConnection(sock);
-    }
-    if (!ctr) {
-        Debug() << __func__ << ": nextPendingConnection had no connections ready; Spurious call";
+        // The below is to prevent malicious clients from choking the event loop.
+        // We only process 10 connections at a time, then call ourselves again asynchronously.
+        if (ctr >= 9 && hasPendingConnections()) {
+            Warning() << __func__ << ": nextPendingConnection yielding to event loop after 10 connections processed, will try again shortly.";
+            Util::AsyncOnObject(this, [this]{pvt_on_newConnection();});
+            return;
+        }
     }
 }
 
@@ -406,6 +410,61 @@ void ServerBase::on_newConnection(QTcpSocket *sock) {
     }
 }
 
+// -- Client :: PerIPDataHolder_Temp
+Client::PerIPDataHolder_Temp::PerIPDataHolder_Temp(std::shared_ptr<Client::PerIPData> && ref, QTcpSocket *socket)
+    : QObject(socket), perIPData(std::move(ref))
+{
+    setObjectName(kName);
+    if (perIPData) ++perIPData->nClients;
+}
+Client::PerIPDataHolder_Temp::~PerIPDataHolder_Temp() { if (perIPData) --perIPData->nClients; }
+/*static*/
+std::shared_ptr<Client::PerIPData> Client::PerIPDataHolder_Temp::take(QTcpSocket *s)
+{
+    std::shared_ptr<PerIPData> ret;
+    auto holder = s->findChild<PerIPDataHolder_Temp *>(kName, Qt::FindDirectChildrenOnly);
+    if (holder) {
+        // transfer ownership.
+        ret.swap(holder->perIPData);
+        holder->deleteLater();
+    }
+    return ret;
+}
+// -- /Client :: PerIPDataHolder_Temp
+
+bool ServerBase::attachPerIPDataAndCheckLimits(QTcpSocket *socket)
+{
+    bool ok = true;
+    if (const auto addr = socket->peerAddress(); LIKELY(!addr.isNull())) {
+        auto holder = new Client::PerIPDataHolder_Temp(srvmgr->getOrCreatePerIPData(addr), socket);
+        const auto maxPerIP = options->maxClientsPerIP;
+        // check limit immediately
+        if (!holder->perIPData->isWhitelisted() && holder->perIPData->nClients > maxPerIP) {
+            // reject connection here
+            Log() << "Connection limit (" << maxPerIP << ") exceeded for " << addr.toString() << ", connection refused";
+            ok = false;
+        }
+    } else {
+        // this should never happen
+        Error() << "INTERNAL ERROR: could not create per-IP data object in ServerBase::incomingConnection -- invalid peer address!";
+        ok = false;
+    }
+    if (!ok) {
+        socket->abort();
+        socket->deleteLater();
+    }
+    return ok;
+}
+
+void ServerBase::incomingConnection(qintptr socketDescriptor)
+{
+    QTcpSocket *socket = new QTcpSocket(this);
+    socket->setSocketDescriptor(socketDescriptor);
+    // we do this thing here to check connection limits as early as possible in the connection pipeline
+    if (attachPerIPDataAndCheckLimits(socket))
+        addPendingConnection(socket);
+}
+
 Client *
 ServerBase::newClient(QTcpSocket *sock)
 {
@@ -413,9 +472,15 @@ ServerBase::newClient(QTcpSocket *sock)
     auto ret = clientsById[clientId] = new Client(rpcMethods(), clientId, sock, options->maxBuffer.load());
     const auto addr = ret->peerAddress();
 
-    ret->perIPData = srvmgr->getOrCreatePerIPData(addr); // IMPORTANT that we do this ASAP since ret->perIPData must be valid for properly constructed clients
+    ret->perIPData = Client::PerIPDataHolder_Temp::take(sock); // take ownership of the PerIPData ref, implicitly delete the temp holder attacked to the socket
+    if (UNLIKELY(!ret->perIPData)) {
+        // This branch should never happen.  But we left it in for defensive programming.
+        Error() << "INTERNAL ERROR: Tcp Socket " << sock->peerAddress().toString() << ":" << sock->peerPort() << " had no PerIPData! FIXME!";
+        // FUDGE it.
+        ret->perIPData = srvmgr->getOrCreatePerIPData(addr);
+        ++ret->perIPData->nClients; // increment client counter now
+    }
     assert(ret->perIPData);
-    ++ret->perIPData->nClients; // increment client counter now
 
     // if deleted, we need to purge it from map
     const auto on_destructing = [clientId, addr, this](Client *c) {
@@ -1688,17 +1753,23 @@ void ServerSSL::incomingConnection(qintptr socketDescriptor)
             delete socket;
             return;
         }
+        if (!attachPerIPDataAndCheckLimits(socket))
+            // exceeds limits, fail immediately (called function already called socket->deleteLater for us)
+            return;
         QTimer *timer = new QTimer(socket);
         timer->setObjectName(QStringLiteral("ssl handshake timer"));
         timer->setSingleShot(true);
+        static const auto kTimedOutPropertyName = "ServerSSL_Handshake_Timed_Out";
         connect(timer, &QTimer::timeout, this, [socket, timer, peerName]{
             Warning() << peerName << " SSL handshake timed out after " << QString::number(timer->interval()/1e3, 'f', 1) << " secs, deleting socket";
+            socket->setProperty(kTimedOutPropertyName, true);
             socket->abort();
             socket->deleteLater();
         });
         auto tmpConnections = std::make_shared<QList<QMetaObject::Connection>>();
         *tmpConnections += connect(socket, &QSslSocket::disconnected, this, [socket, peerName]{
-            Debug() << peerName << " SSL handshake failed due to disconnect before completion, deleting socket";
+            if (!socket->property(kTimedOutPropertyName).toBool())
+                Debug() << peerName << " SSL handshake failed due to disconnect before completion, deleting socket";
             socket->deleteLater();
         });
         *tmpConnections += connect(socket, &QSslSocket::encrypted, this, [this, timer, tmpConnections, socket] {
@@ -1710,9 +1781,9 @@ void ServerSSL::incomingConnection(qintptr socketDescriptor)
                 for (const auto & conn : *tmpConnections)
                     disconnect(conn);
             }
+            addPendingConnection(socket);
+            emit newConnection();
             emit ready(socket);
-            // TODO: do we want to call addPendingConnection here? Note that if we do that, it may mean that clients
-            // can temporarily violate the max_clients_per_ip config variable, though, which is why we didn't do it here.
         });
         *tmpConnections +=
         connect(socket, qOverload<const QList<QSslError> &>(&QSslSocket::sslErrors), this, [socket, peerName](const QList<QSslError> & errors) {
@@ -1722,7 +1793,6 @@ void ServerSSL::incomingConnection(qintptr socketDescriptor)
             socket->deleteLater();
         });
         timer->start(10000); // give the handshake 10 seconds to complete
-        addPendingConnection(socket); // <-- TODO: maybe we want to move this call into the "encrypted" lambda slot above?
         socket->startServerEncryption();
     } else {
         Warning() << "setSocketDescriptor returned false -- unable to initiate SSL for client: " << socket->errorString();

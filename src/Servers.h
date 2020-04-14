@@ -203,6 +203,16 @@ protected slots:
     void refreshBitcoinDNetworkInfo(); ///< whenever bitcoind comes back alive, this is invoked to update the BitcoinDInfo struct declared above
 
 protected:
+    /// Overrides QTcpServer -- identical to default impl. from QTcpServer except it also attaches a child
+    /// Client::PerIPDataHolder_Temp object named "__PerIPDataHolder_Temp" to the QTcpSocket that it creates, and
+    /// auto-fails the connection if the app-wide per-IP connection limit is exceeded.
+    void incomingConnection(qintptr socketDescriptor) override;
+    /// Derived classes that re-implement incomingConnection should call this to attach the Client::PerIPDataHolder_Temp
+    /// object. Returns false if the connection would exceed limits.
+    ///
+    /// Note: On false return, socket->abort() and then socket->deleteLater() are called by this function.
+    bool attachPerIPDataAndCheckLimits(QTcpSocket *);
+
     void on_started() override;
     void on_newConnection(QTcpSocket *) override;
 
@@ -540,7 +550,28 @@ signals:
     /// immediately from this instance's d'tor.
     void clientDestructing(Client *self);
 protected:
-
     void do_ping() override;
     void do_disconnect(bool graceful = false) override;
+
+    /// This gets attached to a QTcpSocket instance in ServerBase::incomingConnection immediately to create/find
+    /// Per-IP data as soon as a connection comes in (for the purposes of checking the client's IP against app-wide
+    /// per-ip connection limits).  Later on after any initial handshakes on the QTcpSocket finish, this object is
+    /// destroyed after the perIPData ref is transferred to the Client * instance (see this class's static take()
+    /// method, which is called by ServerBase::newClient).
+    class PerIPDataHolder_Temp : public QObject
+    {
+    public:
+        std::shared_ptr<PerIPData> perIPData;
+        static constexpr auto kName = "__PerIPDataHolder_Temp";
+        PerIPDataHolder_Temp(std::shared_ptr<PerIPData> && ref, QTcpSocket *socket);
+        ~PerIPDataHolder_Temp() override;
+        /// Call this once the connection is fully accepted to "take" the PerIPData reference from the QTcpSocket's
+        /// child holder object (attached in ServerBase::incomingConnection). The holder object will implicitly
+        /// delete itself using deleteLater() after this is called.
+        ///
+        /// May return an invalid shared_ptr if no child holder object could be found.
+        /// Note: In the interests of defensive programming, check the return value to make sure a valid PerIPData was
+        /// found.
+        static std::shared_ptr<PerIPData> take(QTcpSocket *s);
+    };
 };
