@@ -221,7 +221,6 @@ def clients_handler(r):
     for i,c in enumerate(line):
         maxfields[i] = max(maxfields[i], len(c))
     lines.append(line)
-    is_ssl = False
     for serverdict in r:
         if not isinstance(serverdict, dict):
             return badResp()
@@ -229,14 +228,20 @@ def clients_handler(r):
             if not isinstance(subdict, dict):
                 # in case we add stuff to here that is not a server dict some day
                 continue;
-            is_ssl = server_name.lower().startswith('ssl')
+            is_wss = server_name.lower().startswith('wsss')
+            is_ws = not is_wss and server_name.lower().startswith('wss')
+            if not is_wss and not is_ws:
+                is_ssl = server_name.lower().startswith('ssl')
+                typnam = 'SSL' if is_ssl else 'TCP'
+            else:
+                typnam = 'WS' if is_ws else 'WSS'
 
             for client in subdict.get('clients', []):
                 for cname, cdict in client.items():
                     line = (
                         cdict.get('id', -1),
                         cdict.get('remote', '?'),
-                        'SSL' if is_ssl else 'TCP',
+                        typnam,
                         cdict.get('userAgent', 'Unk'),
                         cdict.get('version', ['?'])[-1],
                         cdict.get('nSubscriptions', -1),

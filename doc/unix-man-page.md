@@ -53,8 +53,14 @@ Once the server finishes synching it will behave like an ElectronX/ElectrumX ser
 -s, --ssl <interface:port>
 :   Specify an <interface:port> on which to listen for SSL connections. Note that if this option is specified, then the `cert` and `key` options need to also be specified otherwise the app will refuse to run. This option may be specified more than once to bind to multiple interfaces and/or ports. Suggested values for port: 50002 on mainnet and 60002 on testnet.
 
+-w, --ws <interface:port>
+:   Specify an <interface:port> on which to listen for Web Socket connections (unencrypted, ws://). This option may be specified more than once to bind to multiple interfaces and/or ports. Suggested values for port: 50003 on mainnet and 60003 on testnet.
+
+-W, --wss <interface:port>
+:   Specify an <interface:port> on which to listen for Web Socket Secure connections (encrypted, wss://). Note that if this option is specified, then the `cert` and `key` options need to also be specified otherwise the app will refuse to run. This option may be specified more than once to bind to multiple interfaces and/or ports. Suggested values for port: 50004 on mainnet and 60004 on testnet.
+
 -c, --cert <crtfile>
-:   Specify a .crt file to use as the server's SSL cert. This option is required if the -s/--ssl option appears at all on the command-line. The file should contain a valid non-self-signed certificate in PEM format.
+:   Specify a .crt file to use as the server's SSL cert. This option is required if the -s/--ssl and/or the -W/--wss options appear at all on the command-line. The file should contain a valid certificate in PEM format (self-signed certs are ok).
 
 -k, --key <keyfile>
 :   Specify a .key file to use as the server's SSL key. This option is required if the
@@ -105,7 +111,7 @@ Once the server finishes synching it will behave like an ElectronX/ElectrumX ser
 
 # PORTS
 
-The default port is 50001 and 50002
+The default port is 50001 and 50002 for TCP and SSL, respectively.
 
 # BUGS
 

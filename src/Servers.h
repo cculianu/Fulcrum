@@ -62,6 +62,10 @@ public:
 
     static QString prettySock(QAbstractSocket *sock);
 
+    /// Set the objectName and thread objectName to defaults based on the current configuration of the server.  This
+    /// is called automatically in the constructor but may need to be set again in subclasses.  Calls prettyName().
+    void resetName();
+
 protected:
     /// derived classes must minimally implement this pure virtual to handle connections
     virtual void on_newConnection(QTcpSocket *) = 0;
@@ -169,9 +173,9 @@ public:
     QVariant stats() const override;
 
     /// Default false.
-    bool isWebSockets() const { return useWebSockets; }
+    bool usesWebSockets() const { return usesWS; }
     /// This should be called/set once before we begin listening for connections.  Called by SrvMgr depending on options from config.
-    void setWebSockets(bool b) { useWebSockets = b; }
+    void setUsesWebSockets(bool b) { usesWS = b; resetName(); }
 
 signals:
     /// connected to SrvMgr clientConnected slot by SrvMgr class
@@ -280,9 +284,10 @@ protected:
 
     PeerInfoList peers;
 
-    /// default false, if true, derived classes should instead create WebSocket::Wrapper instances of the underlying
-    /// QTcpSocket or QSslSocket.  See getter/setter: isWebSockets and setWebSockets.
-    bool useWebSockets = false;
+    /// Default false. If true, derived classes should instead create WebSocket::Wrapper instances of the underlying
+    /// QTcpSocket or QSslSocket.  See getter/setter: usesWebSockets and setUsesWebSockets.  Decided by the
+    /// "ws" & "wss" config file options and/or the --ws/--wss (-w/-W) CLI args.
+    bool usesWS = false;
 };
 
 /// Implements the ElectrumX/ElectronX JSON-RPC protocol, version 1.4.2.

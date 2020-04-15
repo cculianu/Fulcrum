@@ -1098,8 +1098,10 @@ namespace WebSocket
                 emit messagesReady();
             }
         } catch (const std::exception &e) {
-            Warning() << "WebSocket::wrapper caught exception in on_readyRead: " << e.what();
-            Warning() << "WebSocket::wrapper aborting socket " << socket->peerAddress().toString() << ":" << socket->peerPort();
+            const auto type = dynamic_cast<const WebSocket::Deser::ProtocolError *>(&e) ? "protocol error" : "exception";
+            const auto peerName = socket->peerAddress().toString() + ":" + QString::number(socket->peerPort());
+            Warning() << "WebSocket: " << type << " for " << peerName << ": " << e.what();
+            Warning() << "WebSocket: aborting " << peerName;
             close();
             setErrorString(e.what());
         }

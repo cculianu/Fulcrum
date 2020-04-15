@@ -116,15 +116,26 @@ void SrvMgr::startServers()
 
     const auto num = options->interfaces.length() + options->sslInterfaces.length() + options->adminInterfaces.length();
     Log() << "SrvMgr: starting " << num << " " << Util::Pluralize("service", num) << " ...";
-    const auto firstSsl = options->interfaces.size();
+    const auto firstSsl = options->interfaces.size(),
+               firstWs = options->interfaces.size() + options->sslInterfaces.size(),
+               firstWss = options->interfaces.size() + options->sslInterfaces.size() + options->wsInterfaces.size();
     int i = 0;
-    for (const auto & iface : options->interfaces + options->sslInterfaces) {
-        if (i < firstSsl)
+    for (const auto & iface : options->interfaces + options->sslInterfaces + options->wsInterfaces + options->wssInterfaces) {
+        if (i < firstSsl) {
             // TCP
             servers.emplace_back(std::make_unique<Server>(this, iface.first, iface.second, options, storage, bitcoindmgr));
-        else
+        } else if (i < firstWs) {
             // SSL
             servers.emplace_back(std::make_unique<ServerSSL>(this, iface.first, iface.second, options, storage, bitcoindmgr));
+        } else if (i < firstWss) {
+            // WS
+            servers.emplace_back(std::make_unique<Server>(this, iface.first, iface.second, options, storage, bitcoindmgr));
+            servers.back()->setUsesWebSockets(true);
+        } else {
+            // WSS
+            servers.emplace_back(std::make_unique<ServerSSL>(this, iface.first, iface.second, options, storage, bitcoindmgr));
+            servers.back()->setUsesWebSockets(true);
+        }
         Server *srv = servers.back().get();
 
         // connect blockchain.headers.subscribe signal
@@ -176,7 +187,7 @@ void SrvMgr::clientConnected(IdMixin::Id cid, const QHostAddress &addr)
     bool clientWillDieAnyway = false;
     addrIdMap.insertMulti(addr, cid);
     const auto maxPerIP = options->maxClientsPerIP;
-    if (addrIdMap.count(addr) > maxPerIP) {
+    if (maxPerIP > 0 && addrIdMap.count(addr) > maxPerIP) {
         const auto ipData = findExistingPerIPData(addr);
         if (ipData) {
             Client::PerIPData::WhiteListState wlstate{Client::PerIPData::WhiteListState::UNINITIALIZED};

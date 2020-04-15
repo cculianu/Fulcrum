@@ -357,6 +357,14 @@ namespace RPC {
         void setReadPaused(bool);
         bool isReadPaused() const { return readPaused; }
 
+        /// Reimplemented from AbstractConnection.
+        /// Returns true if the socket is wrapped by a WebSocket::Wrapper, false otherwise.
+        bool isWebSocket() const override;
+        /// Reimplemnted from AbstractConnection.
+        /// Returns true if the underlying socket is a QSslSocket (either the socket itself or the nested one wrapped by
+        /// a WebSocket::Wrapper), false otherwise.
+        bool isSsl() const override;
+
     protected:
         /// implements pure virtual from super to handle linefeed-based JSON. When a full line arrives, calls ConnectionBase::processJson
         void on_readyRead() override;

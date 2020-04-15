@@ -64,6 +64,9 @@ public:
     /// if the dynamic_cast fails.  This will always return false if called from a thread other than the one in which
     /// this instance lives.
     virtual bool isSsl() const;
+    /// Default implementation returns false.  If the connection is an ElectrumConnection (derived class), it may
+    /// return true if it is being handled via the WebSocket::Wrapper class.
+    virtual bool isWebSocket() const;
 
 signals:
     void lostConnection(AbstractConnection *);

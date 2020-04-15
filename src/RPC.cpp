@@ -21,6 +21,7 @@
 #include <QtCore>
 
 #include <QHostAddress>
+#include <QSslSocket>
 
 #include <type_traits>
 
@@ -505,6 +506,23 @@ namespace RPC {
             webSocket = ws = dynamic_cast<WebSocket::Wrapper *>(socket);
         }
         return ws;
+    }
+
+    bool ElectrumConnection::isWebSocket() const
+    {
+        if (thread() == QThread::currentThread()) // ensure safe usage
+            return const_cast<ElectrumConnection *>(this)->checkSetGetWebSocket();
+        return false;
+    }
+
+    bool ElectrumConnection::isSsl() const
+    {
+        if (thread() == QThread::currentThread()) {// ensure safe usage
+            auto ws = const_cast<ElectrumConnection *>(this)->checkSetGetWebSocket();
+            QTcpSocket * const underlying = ws ? ws->wrappedSocket() : socket;
+            return dynamic_cast<QSslSocket *>(underlying);
+        }
+        return false;
     }
 
     void ElectrumConnection::on_readyRead()

@@ -38,7 +38,10 @@ AbstractConnection::AbstractConnection(IdMixin::Id id_in, QObject *parent, qint6
 /// this should only be called from our thread, because it accesses socket which should only be touched from thread
 QString AbstractConnection::prettyName(bool dontTouchSocket, bool showId) const
 {
-    QString type = socket && !dontTouchSocket ? (dynamic_cast<QSslSocket *>(socket) ? QStringLiteral("SSL") : QStringLiteral("TCP")) : QStringLiteral("(NoSocket)");
+    QString type = socket && !dontTouchSocket
+                   ? (isSsl() ? (isWebSocket() ? QStringLiteral("WSS") : QStringLiteral("SSL"))
+                              : (isWebSocket() ? QStringLiteral("WS")  : QStringLiteral("TCP")))
+                   : QStringLiteral("(NoSocket)");
     QString port = socket && !dontTouchSocket && socket->peerPort() ? QStringLiteral(":%1").arg(socket->peerPort()) : QString();
     QString ip = socket && !dontTouchSocket && !socket->peerAddress().isNull() ? socket->peerAddress().toString() : QString();
     QString idStr = showId ? QStringLiteral(" (id: %1)").arg(id) : QString();
@@ -97,6 +100,12 @@ bool AbstractConnection::isSsl() const
     }
     return ret;
 }
+
+bool AbstractConnection::isWebSocket() const
+{
+    return false;
+}
+
 bool AbstractConnection::isUsingCustomProxy() const
 {
     bool ret{};

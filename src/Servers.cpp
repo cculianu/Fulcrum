@@ -53,7 +53,11 @@ AbstractTcpServer::AbstractTcpServer(const QHostAddress &a, quint16 p)
     : QTcpServer(nullptr), IdMixin(newId()), addr(a), port(p)
 {
     assert(qobj()); // Runtime check that derived class followed the rules outlined at the top of Mixins.h
+    resetName();
+}
 
+void AbstractTcpServer::resetName()
+{
     _thread.setObjectName(prettyName());
     setObjectName(prettyName());
 }
@@ -150,8 +154,7 @@ SimpleHttpServer::SimpleHttpServer(const QHostAddress &listenAddr, quint16 liste
       TIME_LIMIT(timeLimit)
 {
     // re-set name for debug/logging
-    _thread.setObjectName(prettyName());
-    setObjectName(prettyName());
+    resetName();
 }
 
 QString SimpleHttpServer::prettyName() const
@@ -442,7 +445,7 @@ bool ServerBase::attachPerIPDataAndCheckLimits(QTcpSocket *socket)
         auto holder = new Client::PerIPDataHolder_Temp(srvmgr->getOrCreatePerIPData(addr), socket);
         const auto maxPerIP = options->maxClientsPerIP;
         // check limit immediately
-        if (!holder->perIPData->isWhitelisted() && holder->perIPData->nClients > maxPerIP) {
+        if (maxPerIP > 0 && !holder->perIPData->isWhitelisted() && holder->perIPData->nClients > maxPerIP) {
             // reject connection here
             Log() << "Connection limit (" << maxPerIP << ") exceeded for " << addr.toString() << ", connection refused";
             ok = false;
@@ -468,7 +471,7 @@ void ServerBase::incomingConnection(qintptr socketDescriptor)
         // called function already called socekt->deleteLater() for us in this branch.
         return;
 
-    if (!useWebSockets) {
+    if (!usesWS) {
         // Classic non-WebSocket mode.  We are done; enqueue the connection.
         // `newConnection` signal will be emitted for us by the calling code in QAbstractSocket when we return.
         addPendingConnection(socket);
@@ -818,8 +821,7 @@ Server::Server(SrvMgr *sm, const QHostAddress &a, quint16 p, const std::shared_p
 {
     StaticData::init(); // only does something first time it's called, otherwise a no-op
     // re-set name for debug/logging
-    _thread.setObjectName(prettyName());
-    setObjectName(prettyName());
+    resetName();
     setMaxPendingConnections(std::max(options->maxPendingConnections, options->minMaxPendingConnections)); // default in Options is 60 pending connections
 }
 
@@ -827,7 +829,7 @@ Server::~Server() { stop(); }
 
 QString Server::prettyName() const
 {
-    return QStringLiteral("Tcp%1").arg(AbstractTcpServer::prettyName());
+    return (usesWS ? QStringLiteral("Ws%1") : QStringLiteral("Tcp%1")).arg(AbstractTcpServer::prettyName());
 }
 
 void Server::rpc_server_add_peer(Client *c, const RPC::Message &m)
@@ -916,12 +918,19 @@ QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const Q
         hmap["tcp_port"] = unsigned(opts.publicTcp.value());
     if (opts.publicSsl.has_value())
         hmap["ssl_port"] = unsigned(opts.publicSsl.value());
+    if (opts.publicWs.has_value())
+        hmap["ws_port"] = unsigned(opts.publicWs.value());
+    if (opts.publicWss.has_value())
+        hmap["wss_port"] = unsigned(opts.publicWss.value());
     if (hmap.isEmpty()) {
         // This should not normally happen but it can if user specified public_tcp_port=0 and public_ssl_port=0.
-        // In that case we have to report SOMETHING here as per electrumx protocol specs, so we just use the local port
+        // In that case we have to report SOMETHING here as per Electrum Cash protocol specs, so we just use the local port
         // that the client is connected to right now.  TODO: verify if we can get away with an empty dictionary here
         // instead?
-        const QString key = c->isSsl() ? "ssl_port" : "tcp_port";
+        const bool isws = c->isWebSocket(), isssl = c->isSsl();
+        const QString key = isws
+                            ? (isssl ? "wss_port" : "ws_port" )
+                            : (isssl ? "ssl_port" : "tcp_port");
         hmap[key] = unsigned(c->localPort());
     }
     const QString hostName = opts.hostName.value_or(c->localAddress().toString());
@@ -934,6 +943,10 @@ QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const Q
             hmapTor["tcp_port"] = unsigned(opts.torTcp.value());
         if (opts.torSsl.has_value())
             hmapTor["ssl_port"] = unsigned(opts.torSsl.value());
+        if (opts.torWs.has_value())
+            hmapTor["ws_port"] = unsigned(opts.torWs.value());
+        if (opts.torWss.has_value())
+            hmapTor["wss_port"] = unsigned(opts.torWss.value());
     }
     QVariantMap hostsMap = {{ hostName, hmap }};
     if (!hmapTor.isEmpty() && !torHostName.isEmpty())
@@ -1763,13 +1776,12 @@ ServerSSL::ServerSSL(SrvMgr *sm, const QHostAddress & address_, quint16 port_, c
         throw BadArgs("ServerSSL cannot be instantiated: Key or cert are null!");
     if (!QSslSocket::supportsSsl())
         throw BadArgs("ServerSSL cannot be instantiated: Missing SSL support!");
-    setObjectName(prettyName());
-    _thread.setObjectName(prettyName());
+    resetName();
 }
 ServerSSL::~ServerSSL() { stop(); }
 QString ServerSSL::prettyName() const
 {
-    return QStringLiteral("Ssl%1").arg(AbstractTcpServer::prettyName());
+    return (usesWS ? QStringLiteral("Wss%1") : QStringLiteral("Ssl%1")).arg(AbstractTcpServer::prettyName());
 }
 void ServerSSL::incomingConnection(qintptr socketDescriptor)
 {
@@ -1814,7 +1826,7 @@ void ServerSSL::incomingConnection(qintptr socketDescriptor)
                     disconnect(conn);
                 tmpConnections->clear();
             }
-            if (!useWebSockets) {
+            if (!usesWS) {
                 // Classic non-WebSocket mode.  We are done; enqueue the connection and emit the signal.
                 addPendingConnection(socket);
                 emit newConnection();
@@ -1866,8 +1878,7 @@ AdminServer::AdminServer(SrvMgr *sm, const QHostAddress & a, quint16 p, const st
     : ServerBase(sm, StaticData::methodMap, StaticData::dispatchTable, a, p, o, s, bdm), peerMgr(pm)
 {
     StaticData::init(); // noop after first time it's called
-    setObjectName(prettyName());
-    _thread.setObjectName(objectName());
+    resetName();
     threadPool = std::make_unique<ThreadPool>(this);
     asyncThreadPool = threadPool.get();
     threadPool->setExtantJobLimit(100); // be very conservative here.

@@ -66,6 +66,7 @@ QVariantMap Options::toMap() const
 
     m["debug"] = verboseDebug.load();
     m["trace"] = verboseTrace.load();
+    // interfaces
     QVariantList l;
     for (const auto & pair : interfaces)
         l.push_back(QString("%1:%2").arg(pair.first.toString()).arg(pair.second));
@@ -75,6 +76,14 @@ QVariantMap Options::toMap() const
         l.push_back(QString("%1:%2").arg(pair.first.toString()).arg(pair.second));
     m["ssl"] = l;
     l.clear();
+    for (const auto & pair : wsInterfaces)
+        l.push_back(QString("%1:%2").arg(pair.first.toString()).arg(pair.second));
+    m["ws"] = l;
+    l.clear();
+    for (const auto & pair : wssInterfaces)
+        l.push_back(QString("%1:%2").arg(pair.first.toString()).arg(pair.second));
+    m["wss"] = l;
+    l.clear();
     for (const auto & pair : statsInterfaces)
         l.push_back(QString("%1:%2").arg(pair.first.toString()).arg(pair.second));
     m["stats"] = l;
@@ -82,6 +91,7 @@ QVariantMap Options::toMap() const
     for (const auto & pair : adminInterfaces)
         l.push_back(QString("%1:%2").arg(pair.first.toString()).arg(pair.second));
     m["admin"] = l;
+    // /interfaces
     m["cert"] = certFile;
     m["key"] = keyFile;
     m["bitcoind"] = QString("%1:%2").arg(bitcoind.first).arg(bitcoind.second);
@@ -97,8 +107,10 @@ QVariantMap Options::toMap() const
     m["peering_announce_self"] = peerAnnounceSelf;
     m["peering_enforce_unique_ip"] = peeringEnforceUniqueIPs;
     m["hostname"] = hostName.has_value() ? QVariant(hostName.value()) : QVariant();
-    m["public_tcp"] = publicTcp.has_value() ? QVariant(publicTcp.value()) : QVariant();
-    m["public_ssl"] = publicSsl.has_value() ? QVariant(publicSsl.value()) : QVariant();
+    m["public_tcp_port"] = publicTcp.has_value() ? QVariant(publicTcp.value()) : QVariant();
+    m["public_ssl_port"] = publicSsl.has_value() ? QVariant(publicSsl.value()) : QVariant();
+    m["public_ws_port"] = publicWs.has_value() ? QVariant(publicWs.value()) : QVariant();
+    m["public_wss_port"] = publicWss.has_value() ? QVariant(publicWss.value()) : QVariant();
     m["max_clients_per_ip"] = maxClientsPerIP;
     l.clear();
     for (const auto & sn : subnetsExcludedFromPerIPLimits)
@@ -113,6 +125,8 @@ QVariantMap Options::toMap() const
     m["tor_hostname"] = torHostName.has_value() ? QVariant(torHostName.value()) : QVariant();
     m["tor_tcp_port"] = torTcp.has_value() ? QVariant(torTcp.value()) : QVariant();
     m["tor_ssl_port"] = torSsl.has_value() ? QVariant(torSsl.value()) : QVariant();
+    m["tor_ws_port"] = torWs.has_value() ? QVariant(torWs.value()) : QVariant();
+    m["tor_wss_port"] = torWss.has_value() ? QVariant(torWss.value()) : QVariant();
     m["tor_proxy"] = QString("%1:%2").arg(torProxy.first.toString()).arg(torProxy.second);
     m["tor_user"] = torUser.isNull() ? QVariant() : QVariant("<hidden>");
     m["tor_pass"] = torPass.isNull() ? QVariant() : QVariant("<hidden>");

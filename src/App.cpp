@@ -186,7 +186,7 @@ void App::parseArgs()
          },
          { { "t", "tcp" },
            QString("Specify an <interface:port> on which to listen for TCP connections, defaults to 0.0.0.0:%1 (all"
-                   " interfaces, port %1 -- only if no other interfaces are specified via -t or -s)."
+           " interfaces, port %1 -- only if no other interfaces are specified via -t or -s)."
            " This option may be specified more than once to bind to multiple interfaces and/or ports."
            " Suggested values for port: %1 on mainnet and %2 on testnet.").arg(Options::DEFAULT_PORT_TCP).arg(Options::DEFAULT_PORT_TCP + 10000),
            QString("interface:port"),
@@ -198,14 +198,30 @@ void App::parseArgs()
            " Suggested values for port: %1 on mainnet and %2 on testnet.").arg(Options::DEFAULT_PORT_SSL).arg(Options::DEFAULT_PORT_SSL + 10000),
            QString("interface:port"),
          },
+        {  { "w", "ws"},
+           QString("Specify an <interface:port> on which to listen for Web Socket connections (unencrypted, ws://)."
+           " This option may be specified more than once to bind to multiple interfaces and/or ports."
+           " Suggested values for port: %1 on mainnet and %2 on testnet.").arg(Options::DEFAULT_PORT_WS).arg(Options::DEFAULT_PORT_WS + 10000),
+           QString("interface:port"),
+        },
+        {  { "W", "wss"},
+           QString("Specify an <interface:port> on which to listen for Web Socket Secure connections (encrypted, wss://)."
+           " Note that if this option is specified, then the `cert` and `key` options need to also be specified"
+           " otherwise the app will refuse to run."
+           " This option may be specified more than once to bind to multiple interfaces and/or ports."
+           " Suggested values for port: %1 on mainnet and %2 on testnet.").arg(Options::DEFAULT_PORT_WSS).arg(Options::DEFAULT_PORT_WSS + 10000),
+           QString("interface:port"),
+        },
          { { "c", "cert" },
-           QString("Specify a .crt file to use as the server's SSL cert. This option is required if the -s/--ssl option"
-           " appears at all on the command-line. The file should contain a valid non-self-signed certificate in PEM format."),
+           QString("Specify a .crt file to use as the server's SSL cert. This option is required if the -s/--ssl and/or"
+           " the -W/--wss options appear at all on the command-line. The file should contain a valid certificate in PEM"
+           " format (self-signed certs are ok)."),
            QString("crtfile"),
          },
          { { "k", "key" },
-           QString("Specify a .key file to use as the server's SSL key. This option is required if the -s/--ssl option"
-           " appears at all on the command-line. The file should contain an RSA private key in PEM format."),
+           QString("Specify a .key file to use as the server's SSL key. This option is required if the -s/--ssl and/or"
+           " the -W/--wss options apear at all on the command-line. The file should contain an RSA private key in PEM"
+           " format."),
            QString("keyfile"),
          },
         { { "a", "admin" },
@@ -427,6 +443,24 @@ void App::parseArgs()
             // this function if user explicitly specified public_tcp_port=0 in the config file.
             options->publicTcp = options->interfaces.front().second;
     }
+    // grab bind (listen) interfaces for WS -- this hard-to-read code here looks at both conf.value and parser, but conf.value only has values if parser does not (CLI parser takes precedence).
+    if (auto l = conf.hasValue("ws") ? conf.values("ws") : parser.values("w");  !l.isEmpty()) {
+        parseInterfaces(options->wsInterfaces, l);
+        if (tcpIsDefault) options->interfaces.clear(); // they had default tcp setup, clear the default since they did end up specifying at least 1 real interface to bind to
+        if (!options->wsInterfaces.isEmpty())
+            // save default publicWs we will report now -- note this may get reset() to !has_value() later in
+            // this function if user explicitly specified public_ws_port=0 in the config file.
+            options->publicWs = options->wsInterfaces.front().second;
+    }
+    // grab bind (listen) interfaces for WSS -- this hard-to-read code here looks at both conf.value and parser, but conf.value only has values if parser does not (CLI parser takes precedence).
+    if (auto l = conf.hasValue("wss") ? conf.values("wss") : parser.values("W");  !l.isEmpty()) {
+        parseInterfaces(options->wssInterfaces, l);
+        if (tcpIsDefault) options->interfaces.clear(); // they had default tcp setup, clear the default since they did end up specifying at least 1 real interface to bind to
+        if (!options->wssInterfaces.isEmpty())
+            // save default publicWss we will report now -- note this may get reset() to !has_value() later in
+            // this function if user explicitly specified public_wss_port=0 in the config file.
+            options->publicWss = options->wssInterfaces.front().second;
+    }
     // grab bind (listen) interfaces for SSL (again, apologies for this hard to read expression below -- same comments as above apply here)
     if (auto l = conf.hasValue("ssl") ? conf.values("ssl") : parser.values("s"); !l.isEmpty()) {
         if (!QSslSocket::supportsSsl()) {
@@ -439,10 +473,11 @@ void App::parseArgs()
             // this function if user explicitly specified public_ssl_port=0 in the config file.
             options->publicSsl = options->sslInterfaces.front().second;
     }
-    if (!options->sslInterfaces.isEmpty()) {
+    if (const bool hasSSL = !options->sslInterfaces.isEmpty(); hasSSL || !options->wssInterfaces.isEmpty()) { // if they had either SSL or WSS, grab and validate the cert & key
         const QString cert = conf.value("cert", parser.value("c")), key = conf.value("key", parser.value("k"));
         if (cert.isEmpty() || key.isEmpty()) {
-            throw BadArgs("SSL option requires both -c/--cert and -k/--key options be specified on the command-line");
+            throw BadArgs(QString("%1 option requires both -c/--cert and -k/--key options be specified on the command-line")
+                          .arg(hasSSL ? "SSL" : "WSS"));
         } else if (!QFile::exists(cert)) {
             throw BadArgs(QString("Cert file not found: %1").arg(cert));
         } else if (!QFile::exists(key)) {
@@ -536,6 +571,22 @@ void App::parseArgs()
             throw BadArgs("public_ssl_port parse error: not an integer from 0 to 65535");
         if (!val) options->publicSsl.reset();
         else options->publicSsl = val;
+    }
+    if (conf.hasValue("public_ws_port")) {
+        bool ok = false;
+        int val = conf.intValue("public_ws_port", -1, &ok);
+        if (!ok || val < 0 || val > UINT16_MAX)
+            throw BadArgs("public_ws_port parse error: not an integer from 0 to 65535");
+        if (!val) options->publicWs.reset();
+        else options->publicWs = val;
+    }
+    if (conf.hasValue("public_wss_port")) {
+        bool ok = false;
+        int val = conf.intValue("public_wss_port", -1, &ok);
+        if (!ok || val < 0 || val > UINT16_MAX)
+            throw BadArgs("public_wss_port parse error: not an integer from 0 to 65535");
+        if (!val) options->publicWss.reset();
+        else options->publicWss = val;
     }
     const auto ConfParseBool = [conf](const QString &key, bool def = false) -> bool {
         if (!conf.hasValue(key)) return def;
@@ -671,6 +722,28 @@ void App::parseArgs()
         else {
             options->torSsl = val;
             Util::AsyncOnObject(this, [val]{ Debug() << "config: tor_ssl_port = " << val; });
+        }
+    }
+    if (conf.hasValue("tor_ws_port")) {
+        bool ok = false;
+        int val = conf.intValue("tor_ws_port", -1, &ok);
+        if (!ok || val < 0 || val > UINT16_MAX)
+            throw BadArgs("tor_ws_port parse error: not an integer from 0 to 65535");
+        if (!val) options->torWs.reset();
+        else {
+            options->torWs = val;
+            Util::AsyncOnObject(this, [val]{ Debug() << "config: tor_ws_port = " << val; });
+        }
+    }
+    if (conf.hasValue("tor_wss_port")) {
+        bool ok = false;
+        int val = conf.intValue("tor_wss_port", -1, &ok);
+        if (!ok || val < 0 || val > UINT16_MAX)
+            throw BadArgs("tor_wss_port parse error: not an integer from 0 to 65535");
+        if (!val) options->torWss.reset();
+        else {
+            options->torWss = val;
+            Util::AsyncOnObject(this, [val]{ Debug() << "config: tor_wss_port = " << val; });
         }
     }
     if (conf.hasValue("tor_proxy")) {

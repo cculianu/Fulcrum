@@ -45,7 +45,7 @@ public:
     /// output the configured options to the /stats output JSON, for example.
     QVariantMap toMap() const;
 
-    static constexpr quint16 DEFAULT_PORT_TCP = 50001, DEFAULT_PORT_SSL = 50002;
+    static constexpr quint16 DEFAULT_PORT_TCP = 50001, DEFAULT_PORT_SSL = 50002, DEFAULT_PORT_WS = 50003, DEFAULT_PORT_WSS = 50004;
 
     std::atomic_bool verboseDebug =
 #ifdef QT_DEBUG
@@ -60,12 +60,14 @@ public:
 
     using Interface = QPair<QHostAddress, quint16>;
     QList<Interface> interfaces, ///< TCP interfaces to use for binding, defaults to 0.0.0.0 DEFAULT_PORT_TCP
-                     sslInterfaces;  ///< SSL interfaces to use for binding SSL ports. Defaults to nothing.
+                     sslInterfaces,  ///< SSL interfaces to use for binding SSL ports. Defaults to nothing.
+                     wsInterfaces,   ///< Web Socket (WS) interfaces. Defaults to nothing.
+                     wssInterfaces;  ///< Web Socket Secure (WSS) interfaces. Defaults to nothing.
     QList<Interface> statsInterfaces; ///< 'stats' server, defaults to empty (no stats server)
     QList<Interface> adminInterfaces; ///< the admin server, defaults to empty (no admin RPC)
-    QSslCertificate sslCert; ///< this must be valid if we have any SSL interfaces.
+    QSslCertificate sslCert; ///< this must be valid if we have any SSL or WSS interfaces.
     QString certFile; ///< saved here for toMap() to remember what was specified in config file
-    QSslKey sslKey; ///< this must be valid if we have any SSL interfaces.
+    QSslKey sslKey; ///< this must be valid if we have any SSL or WSS interfaces.
     QString keyFile; ///< saved here for toMap() to remember what was specified in config file
     QPair<QString, quint16> bitcoind; ///< hostname, port pair. We resolve bitcoind's actual IP address each time if it's a hostname and not an IP address string.
     QString rpcuser, rpcpassword;
@@ -91,12 +93,16 @@ public:
     std::optional<QString> torHostName; ///< corresponds to tor_hostname in server config. Must end in .onion. If unset, will not announce ourselves as .onion.
     std::optional<quint16> publicTcp;   ///< corresponds to public_tcp_port in server config -- if unspecified will default to the first TCP interface, if !has_value, it will not be announced
     std::optional<quint16> publicSsl;   ///< corresponds to public_ssl_port in server config -- if unspecified will default to the first SSL interface, if !has_value, it will not be announced
+    std::optional<quint16> publicWs;   ///< corresponds to public_ws_port in server config -- if unspecified will default to the first WS interface, if !has_value, it will not be announced
+    std::optional<quint16> publicWss;   ///< corresponds to public_wss_port in server config -- if unspecified will default to the first WSS interface, if !has_value, it will not be announced
     std::optional<quint16> torTcp;   ///< corresponds to tor_tcp_port in server config -- if unspecified will not announce tcp on tor route.
     std::optional<quint16> torSsl;   ///< corresponds to tor_ssl_port in server config -- if unspecified will not announce ssl on tor route.
+    std::optional<quint16> torWs;   ///< corresponds to tor_ws_port in server config -- if unspecified will not announce ws on tor route.
+    std::optional<quint16> torWss;   ///< corresponds to tor_wss_port in server config -- if unspecified will not announce wss on tor route.
 
     // Max clients per IP related
     static constexpr int defaultMaxClientsPerIP = 12;
-    int maxClientsPerIP = defaultMaxClientsPerIP; ///< corresponds to max_clients_per_ip in config file
+    int maxClientsPerIP = defaultMaxClientsPerIP; ///< corresponds to max_clients_per_ip in config file. <= 0 means unlimited.
 
     struct Subnet {
         QHostAddress subnet;
