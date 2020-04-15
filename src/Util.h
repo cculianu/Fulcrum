@@ -119,6 +119,7 @@ public:
     virtual ~Debug();
 
     static bool isEnabled();
+    static bool forceEnable; ///< defaults false -- set to true if there is not App and you want to ensure Debug() works
 
 #if defined(__GNUC__) && !defined(__clang__)
     // Grr.. GCC doesn't fully implement C++ 17 so we must do this. :(
@@ -140,6 +141,7 @@ public:
     virtual ~Trace();
 
     static bool isEnabled();
+    static bool forceEnable; ///< defaults false -- set to true if there is not App and you want Trace() to work.
 
 #if defined(__GNUC__) && !defined(__clang__)
     // Grr.. GCC doesn't fully implement C++ 17 so we must do this. :(

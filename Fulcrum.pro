@@ -188,6 +188,7 @@ SOURCES += \
     ThreadPool.cpp \
     Util.cpp \
     Version.cpp \
+    WebSocket.cpp \
     register_MetaTypes.cpp
 
 HEADERS += \
@@ -220,7 +221,8 @@ HEADERS += \
     TXO.h \
     TXO_Compact.h \
     Util.h \
-    Version.h
+    Version.h \
+    WebSocket.h
 
 # Robin Hood unordered_flat_map implememntation (single header and MUCH more efficient than unordered_map!)
 HEADERS += robin_hood/robin_hood.h

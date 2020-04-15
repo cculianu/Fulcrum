@@ -364,10 +364,13 @@ Debug::~Debug()
     str = QString("(Debug) ") + str;
 }
 
+bool Debug::forceEnable = false;
+
 bool Debug::isEnabled() {
     auto ourApp = app();
-    return !ourApp || !ourApp->options || ourApp->options->verboseDebug;
+    return forceEnable || !ourApp || !ourApp->options || ourApp->options->verboseDebug;
 }
+
 
 Trace::~Trace()
 {
@@ -378,9 +381,12 @@ Trace::~Trace()
     str = QString("(Trace) ") + str;
 }
 
+bool Trace::forceEnable = false;
+
 bool Trace::isEnabled() {
     auto ourApp = app();
-    return ourApp && ourApp->options && ourApp->options->verboseTrace && ourApp->options->verboseDebug; // both trace and debug must be on
+    return forceEnable
+            || (ourApp && ourApp->options && ourApp->options->verboseTrace && ourApp->options->verboseDebug); // both trace and debug must be on
 }
 
 Error::~Error()
