@@ -193,7 +193,7 @@ struct PeerInfo
     QVariantMap toStatsMap() const;
 };
 
-class PeerClient : public RPC::LinefeedConnection
+class PeerClient : public RPC::ElectrumConnection
 {
     Q_OBJECT
 protected:

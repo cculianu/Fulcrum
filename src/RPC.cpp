@@ -17,6 +17,7 @@
 // <https://www.gnu.org/licenses/>.
 //
 #include "RPC.h"
+#include "WebSocket.h"
 #include <QtCore>
 
 #include <QHostAddress>
@@ -494,15 +495,28 @@ namespace RPC {
     }
 
     /* --- LinefeedConnection --- */
-    LinefeedConnection::~LinefeedConnection() {} ///< for vtable
+    ElectrumConnection::~ElectrumConnection() {} ///< for vtable
 
-    void LinefeedConnection::on_readyRead()
+    WebSocket::Wrapper *ElectrumConnection::checkSetGetWebSocket()
+    {
+        WebSocket::Wrapper *ws = webSocket.value_or(nullptr);
+
+        if (socket && ( !webSocket.has_value() || (ws && socket != ws) )) { // <--- checks if it's not yet defined or if the underlying socket has changed between calls
+            webSocket = ws = dynamic_cast<WebSocket::Wrapper *>(socket);
+        }
+        return ws;
+    }
+
+    void ElectrumConnection::on_readyRead()
     {
         Trace() << __FUNCTION__;
+        WebSocket::Wrapper * const ws = checkSetGetWebSocket();
+        assert(!ws || ws == socket);  // If `ws` is not null, `ws` and `socket` point to the same underlying object.
 
-        // TODO: This may be slow for large loads.
-        // Also TODO: This should have some upper bound on how many times it loops and come back later if too much data is available
-        while (!isBad() && socket && socket->canReadLine()) {
+        // TODO: In the non-WebSocket case, scanning for '\n' may be slow for large loads.
+        // Also TODO: This should have some upper bound on how many times it loops and come back later if too much data
+        // is available
+        while (!isBad() && socket && (ws ? ws->messagesAvailable() > 0 : socket->canReadLine())) {
             // check if paused -- we may get paused inside processJson below
             if (readPaused) {
                 skippedOnReadyRead = true;
@@ -513,11 +527,11 @@ namespace RPC {
                 break;
             }
             // /pause check
-            auto data = socket->readLine();
+            auto data = ws ? ws->readNextMessage() : socket->readLine();
             nReceived += data.length();
             if (Trace::isEnabled()) // may be slow, so conditional on trace mode
             {
-                auto line = data.trimmed();
+                auto line = !ws ? data.trimmed() : data;
                 Trace() << "Got: " << line;
             }
             processJson(data);
@@ -539,7 +553,7 @@ namespace RPC {
         memoryWasteDoSProtection();
     }
 
-    void LinefeedConnection::setReadPaused(bool b)
+    void ElectrumConnection::setReadPaused(bool b)
     {
 #ifndef NDEBUG
         if (this->thread() != QThread::currentThread()) {
@@ -557,14 +571,14 @@ namespace RPC {
             QTimer::singleShot(0, this, [this]{on_readyRead();} );
     }
 
-    void LinefeedConnection::memoryWasteDoSProtection()
+    void ElectrumConnection::memoryWasteDoSProtection()
     {
         constexpr const char *memoryWasteTimer = "MemoryWasteDoSTimer";
         constexpr int memoryWasteTimeout = 5000; /// 5 seconds
         // we declare this lamba this way with no captures and static as a performance optimization for the common case
         // where this code passes through doing nothing.  We don't want to be pushing lambdas we never used onto
         // the stack every time this function is called.
-        static const auto StopTimer = [](LinefeedConnection *me, qint64 avail) {
+        static const auto StopTimer = [](ElectrumConnection *me, qint64 avail) {
             me->memoryWasteTimerActive = false;
             me->stopTimer(memoryWasteTimer);
             if (Debug::isEnabled())
@@ -608,10 +622,14 @@ namespace RPC {
         }
     }
 
-    QByteArray LinefeedConnection::wrapForSend(const QByteArray &d)
+    QByteArray ElectrumConnection::wrapForSend(const QByteArray &d)
     {
-        static const QByteArray NL("\r\n");
-        return d + NL;
+        if (checkSetGetWebSocket()) {
+            // in websocket mode we don't wrap anything -- it's already framed.
+            return d;
+        }
+        // regular classic Electrum Cash socket -- newline delimited.
+        return d + QByteArrayLiteral("\r\n");
     }
 
     /* --- HttpConnection --- */

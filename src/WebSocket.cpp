@@ -452,7 +452,7 @@ namespace WebSocket
                            kWebsocketReqResource = "websocket-request-resource";
             /// Some error templates used in ClientSide::start() and ServerSide::start()
             constexpr auto kMaxHeadersExceeded = "maxHeaders exceeded",
-                           kBadHttpLine = "Bad http response line: %1";
+                           kBadHttpLine = "Bad HTTP: %1";
             const auto HttpMagic = QByteArrayLiteral("HTTP/");
 
             // this function is a copy of QHttpNetworkReplyPrivate::parseStatus

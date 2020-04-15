@@ -28,6 +28,7 @@
 #include "Storage.h"
 #include "SubsMgr.h"
 #include "ThreadPool.h"
+#include "WebSocket.h"
 
 #include <QByteArray>
 #include <QCoreApplication>
@@ -422,7 +423,9 @@ Client::PerIPDataHolder_Temp::~PerIPDataHolder_Temp() { if (perIPData) --perIPDa
 std::shared_ptr<Client::PerIPData> Client::PerIPDataHolder_Temp::take(QTcpSocket *s)
 {
     std::shared_ptr<PerIPData> ret;
-    auto holder = s->findChild<PerIPDataHolder_Temp *>(kName, Qt::FindDirectChildrenOnly);
+    /* We use a recursive search for the PerIPData because in the WebSocket::Wrapper case, it may live in
+     * the nested wrapped QTcpSocket child of `s` */
+    auto holder = s->findChild<PerIPDataHolder_Temp *>(kName, Qt::FindChildrenRecursively);
     if (holder) {
         // transfer ownership.
         ret.swap(holder->perIPData);
@@ -461,8 +464,40 @@ void ServerBase::incomingConnection(qintptr socketDescriptor)
     QTcpSocket *socket = new QTcpSocket(this);
     socket->setSocketDescriptor(socketDescriptor);
     // we do this thing here to check connection limits as early as possible in the connection pipeline
-    if (attachPerIPDataAndCheckLimits(socket))
+    if (!attachPerIPDataAndCheckLimits(socket))
+        // called function already called socekt->deleteLater() for us in this branch.
+        return;
+
+    if (!useWebSockets) {
+        // Classic non-WebSocket mode.  We are done; enqueue the connection.
+        // `newConnection` signal will be emitted for us by the calling code in QAbstractSocket when we return.
         addPendingConnection(socket);
+        return;
+    }
+
+    // WebSockets mode -- create the wrapper object and further negotiate the handshake.
+
+    auto ws = new WebSocket::Wrapper(socket, this); // <--- the wrapper `ws` becomes parent of the socket, and `this` is now parent of the wrapper.
+    assert(socket->parent() == ws);
+    // do not access `socket` below this line, use `ws` instead.
+    auto tmpConnections = std::make_shared<QList<QMetaObject::Connection>>();
+    *tmpConnections += connect(ws, &WebSocket::Wrapper::handshakeSuccess, this, [this, ws, tmpConnections] {
+        for (const auto & conn : *tmpConnections)
+            disconnect(conn);
+        tmpConnections->clear();
+        addPendingConnection(ws);
+        emit newConnection(); // <-- we must emit here because we went asynch and are doing this 'some time later', and the calling code emitted a spurous newConnection() on our behalf previously.. and this is the *real* newConnection()
+    });
+    const auto peerName = ws->peerAddress().toString() + ":" + QString::number(ws->peerPort());
+    *tmpConnections += connect(ws, &WebSocket::Wrapper::handshakeFailed, this, [ws, peerName](const QString &reason) {
+        Warning() << "WebSocket handshake failed for " << peerName << ", reason: " << (reason.length() > 60 ? (reason.left(49) + QStringLiteral(u"…") + reason.right(10)) : reason);
+        ws->deleteLater();
+    });
+    if (!ws->startServerHandshake()) {
+        Error() << "Unable to start WebSocket handshake for " << peerName << ", closing socket";
+        delete ws; ws = nullptr;
+        return;
+    }
 }
 
 Client *
@@ -1728,10 +1763,6 @@ ServerSSL::ServerSSL(SrvMgr *sm, const QHostAddress & address_, quint16 port_, c
         throw BadArgs("ServerSSL cannot be instantiated: Key or cert are null!");
     if (!QSslSocket::supportsSsl())
         throw BadArgs("ServerSSL cannot be instantiated: Missing SSL support!");
-    connect(this, &ServerSSL::ready, this, [](QSslSocket *s){
-        if (Trace::isEnabled())
-            Trace() << s->peerAddress().toString() << ":" << s->peerPort() << " SSL ready";
-    });
     setObjectName(prettyName());
     _thread.setObjectName(prettyName());
 }
@@ -1757,7 +1788,7 @@ void ServerSSL::incomingConnection(qintptr socketDescriptor)
             // exceeds limits, fail immediately (called function already called socket->deleteLater for us)
             return;
         QTimer *timer = new QTimer(socket);
-        timer->setObjectName(QStringLiteral("ssl handshake timer"));
+        timer->setObjectName(QStringLiteral("TLS handshake timer"));
         timer->setSingleShot(true);
         static const auto kTimedOutPropertyName = "ServerSSL_Handshake_Timed_Out";
         connect(timer, &QTimer::timeout, this, [socket, timer, peerName]{
@@ -1772,7 +1803,8 @@ void ServerSSL::incomingConnection(qintptr socketDescriptor)
                 Debug() << peerName << " SSL handshake failed due to disconnect before completion, deleting socket";
             socket->deleteLater();
         });
-        *tmpConnections += connect(socket, &QSslSocket::encrypted, this, [this, timer, tmpConnections, socket] {
+        *tmpConnections += connect(socket, &QSslSocket::encrypted, this, [this, timer, tmpConnections, socket, peerName] {
+            Trace() << peerName << " SSL ready";
             timer->stop();
             timer->deleteLater();
             if (tmpConnections) {
@@ -1780,10 +1812,36 @@ void ServerSSL::incomingConnection(qintptr socketDescriptor)
                 // it alive will be disconnected.
                 for (const auto & conn : *tmpConnections)
                     disconnect(conn);
+                tmpConnections->clear();
             }
-            addPendingConnection(socket);
-            emit newConnection();
-            emit ready(socket);
+            if (!useWebSockets) {
+                // Classic non-WebSocket mode.  We are done; enqueue the connection and emit the signal.
+                addPendingConnection(socket);
+                emit newConnection();
+                return;
+            }
+
+            // WebSockets mode -- create the wrapper object and further negotiate the handshake.
+
+            auto ws = new WebSocket::Wrapper(socket, this); // <--- the wrapper `ws` becomes parent of the socket, and `this` is now parent of the wrapper.
+            assert(socket->parent() == ws);
+            // do not access `socket` below this line, use `ws` instead.
+            *tmpConnections += connect(ws, &WebSocket::Wrapper::handshakeSuccess, this, [this, ws, tmpConnections] {
+                for (const auto & conn : *tmpConnections)
+                    disconnect(conn);
+                tmpConnections->clear();
+                addPendingConnection(ws);
+                emit newConnection();
+            });
+            *tmpConnections += connect(ws, &WebSocket::Wrapper::handshakeFailed, this, [ws, peerName](const QString &reason) {
+                Warning() << "WebSocket handshake failed for " << peerName << ", reason: " << (reason.length() > 60 ? (reason.left(49) + QStringLiteral(u"…") + reason.right(10)) : reason);
+                ws->deleteLater();
+            });
+            if (!ws->startServerHandshake()) {
+                Error() << "Unable to start WebSocket handshake for " << peerName << ", closing socket";
+                delete ws; ws = nullptr;
+                return;
+            }
         });
         *tmpConnections +=
         connect(socket, qOverload<const QList<QSslError> &>(&QSslSocket::sslErrors), this, [socket, peerName](const QList<QSslError> & errors) {
@@ -2168,7 +2226,7 @@ void AdminServer::StaticData::init() { InitStaticDataCommon(dispatchTable, metho
 /*static*/ std::atomic_size_t Client::numClients{0}, Client::numClientsMax{0}, Client::numClientsCtr{0};
 
 Client::Client(const RPC::MethodMap & mm, IdMixin::Id id_in, QTcpSocket *sock, int maxBuffer)
-    : RPC::LinefeedConnection(mm, id_in, sock, /* ensure sane --> */ qMax(maxBuffer, Options::maxBufferMin))
+    : RPC::ElectrumConnection(mm, id_in, sock, /* ensure sane --> */ qMax(maxBuffer, Options::maxBufferMin))
 {
     ++numClientsCtr;
     const auto N = ++numClients;

@@ -590,7 +590,7 @@ QVariantMap PeerInfo::toStatsMap() const
 
 auto PeerClient::stats() const -> Stats
 {
-    QVariantMap m = RPC::LinefeedConnection::stats().toMap();
+    QVariantMap m = RPC::ElectrumConnection::stats().toMap();
     m.unite(info.toStatsMap());
     if (const auto s = failureHoursString(info); !s.isEmpty())
         m["failureAge"] = s;
@@ -621,7 +621,7 @@ auto PeerMgr::headerToVerifyWithPeer() const -> std::optional<HeightHeaderPair>
 }
 
 PeerClient::PeerClient(bool announce, const PeerInfo &pi, IdMixin::Id id_, PeerMgr *mgr, int maxBuffer)
-    : RPC::LinefeedConnection({}, id_, mgr, maxBuffer), announceSelf(announce), info(pi), mgr(mgr)
+    : RPC::ElectrumConnection({}, id_, mgr, maxBuffer), announceSelf(announce), info(pi), mgr(mgr)
 {
     setObjectName(QStringLiteral("Peer %1").arg(pi.hostName));
 
@@ -694,13 +694,13 @@ void PeerClient::connectToPeer()
 
 void PeerClient::do_disconnect([[maybe_unused]] bool graceful)
 {
-    RPC::LinefeedConnection::do_disconnect(false);
+    RPC::ElectrumConnection::do_disconnect(false);
     deleteLater();
 }
 
 void PeerClient::on_connected()
 {
-    RPC::LinefeedConnection::on_connected();
+    RPC::ElectrumConnection::on_connected();
     emit connectionEstablished(this);
     // refresh immediately upon connection
     refresh();

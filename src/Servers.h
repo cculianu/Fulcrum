@@ -168,6 +168,11 @@ public:
     /// From StatsMixin. This must be called in the thread context of this thread (use statsSafe() for the blocking, thread-safe version!)
     QVariant stats() const override;
 
+    /// Default false.
+    bool isWebSockets() const { return useWebSockets; }
+    /// This should be called/set once before we begin listening for connections.  Called by SrvMgr depending on options from config.
+    void setWebSockets(bool b) { useWebSockets = b; }
+
 signals:
     /// connected to SrvMgr clientConnected slot by SrvMgr class
     void clientConnected(IdMixin::Id clientId, const QHostAddress & remoteAddress);
@@ -274,6 +279,10 @@ protected:
     BitcoinDInfo bitcoinDInfo;
 
     PeerInfoList peers;
+
+    /// default false, if true, derived classes should instead create WebSocket::Wrapper instances of the underlying
+    /// QTcpSocket or QSslSocket.  See getter/setter: isWebSockets and setWebSockets.
+    bool useWebSockets = false;
 };
 
 /// Implements the ElectrumX/ElectronX JSON-RPC protocol, version 1.4.2.
@@ -410,10 +419,6 @@ public:
 
     QString prettyName() const override; ///< overrides super to indicate SSL in server name
 
-signals:
-    /// emitted when the underlying QSslSocket emits "encrypted"
-    void ready(QSslSocket *);
-
 protected:
     /// overrides QTcpServer to create a QSslSocket wrapping the passed-in file descriptor.
     void incomingConnection(qintptr) override;
@@ -486,7 +491,7 @@ private:
 /// Note that their parent QObject is the socket!
 /// (grandparent is Server) .. so they will be destroyed
 /// when the server goes away or the socket is deleted.
-class Client : public RPC::LinefeedConnection
+class Client : public RPC::ElectrumConnection
 {
     Q_OBJECT
 protected:

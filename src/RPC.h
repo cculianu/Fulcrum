@@ -32,6 +32,8 @@
 #include <utility> // for std::pair
 #include <variant>
 
+namespace WebSocket { class Wrapper; } ///< fwd decl
+
 namespace RPC {
 
     /// Thrown on json that is a json object but doesn't match JSON-RPC 2.0 spec.
@@ -343,11 +345,13 @@ namespace RPC {
         bool ignoreNewIncomingMessages = false;
     };
 
-    /// Concrete class. For ElectrumX/ElectronX style JSON RPC where newlines delimit RPC messages.
-    class LinefeedConnection : public ConnectionBase {
+    /// Concrete class. For Electrum Cash style JSON RPC.
+    /// This class can be used either with a bare QTcpSocket/QSslSocket in which case newlines delimit RPC messages.
+    /// If used with a WebSocket::Wrapper instance, messages are already framed and newlines are not required.
+    class ElectrumConnection : public ConnectionBase {
     public:
         using ConnectionBase::ConnectionBase;
-        ~LinefeedConnection() override; ///< for vtable
+        ~ElectrumConnection() override; ///< for vtable
 
         // the below two can/should only be called from the same thread as this object's thread
         void setReadPaused(bool);
@@ -365,6 +369,8 @@ namespace RPC {
 
         bool readPaused = false;
         bool skippedOnReadyRead = false;
+        std::optional<WebSocket::Wrapper *> webSocket; ///< set once the first time on_readyRead() or wrapForSend() is called. If set and valid, affects the framing behavior of this class.
+        WebSocket::Wrapper *checkSetGetWebSocket();
     };
 
     /// JSON RPC over HTTP.  Wraps the outgoing data in headers and can also parse incoming headers.
