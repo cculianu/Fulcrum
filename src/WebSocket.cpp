@@ -433,7 +433,7 @@ namespace WebSocket
                 reason = f.payload.mid(2);
             } else {
                 code.reset();
-                reason.clear();
+                reason = f.payload; // single-byte reason. It's in-spec, I guess.
             }
             return *this;
         }
