@@ -114,7 +114,9 @@ void SrvMgr::startServers()
         });
     } else peermgr.reset();
 
-    const auto num = options->interfaces.length() + options->sslInterfaces.length() + options->adminInterfaces.length();
+    const auto num =   options->interfaces.length() + options->sslInterfaces.length()
+                     + options->wsInterfaces.length() + options->wssInterfaces.length()
+                     + options->adminInterfaces.length();
     Log() << "SrvMgr: starting " << num << " " << Util::Pluralize("service", num) << " ...";
     const auto firstSsl = options->interfaces.size(),
                firstWs = options->interfaces.size() + options->sslInterfaces.size(),
