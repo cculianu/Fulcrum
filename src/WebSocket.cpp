@@ -1071,7 +1071,7 @@ namespace WebSocket
                 } else {
                     if (f.type == FrameType::Ctl_Close) {
                         const Deser::CloseFrameInfo info(f);
-                        Trace() << "Got CLOSE " << info.code.value_or(0) << info.reason;
+                        Trace() << "Got CLOSE " << info.code.value_or(0) << " " << info.reason;
                         gotclose = true;
                         emit closeFrameReceived(info.code.value_or(0), info.reason);
                         if (!sentclose) {
