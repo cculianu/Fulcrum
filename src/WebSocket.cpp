@@ -75,8 +75,8 @@ namespace WebSocket
                 throw BadArgs("control frames may not exceed 125 bytes of payload data");
             const auto dsize = std::size_t(data.size());
             constexpr int maxUShort = std::numeric_limits<std::uint16_t>::max();
-            fragmentSize = std::max(std::min(dsize, fragmentSize), 1UL);
-            const auto nFragments = std::max(1UL, (dsize / fragmentSize) + (fragmentSize > 1UL && dsize % fragmentSize ? 1UL : 0UL));
+            fragmentSize = std::max(std::min(dsize, fragmentSize), std::size_t(1));
+            const auto nFragments = std::max(std::size_t(1), (dsize / fragmentSize) + (fragmentSize > 1UL && dsize % fragmentSize ? 1UL : 0UL));
             const auto perFragmentOverhead =
                     2UL // base opcode byte + minimum payload length byte
                     + (isMasked ? 4UL : 0) // if we have a mask, then the mask is encoded in the frame, per-frame as 4 bytes
