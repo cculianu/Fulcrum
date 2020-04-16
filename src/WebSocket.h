@@ -163,7 +163,7 @@ namespace WebSocket
 
         /// Convenience function that creates a PING control frame. Optionally up to 125 bytes worth of data may be
         /// sent to the other end, which will be echoed back in its PONG reply.
-        inline QByteArray makePingFrame(bool isMasked, const QByteArray & data = QByteArray()) {
+        inline QByteArray makePingFrame(bool isMasked, const QByteArray & data = {}) {
             return wrapPayload(data.size() > 125 ? data.left(125) : data, FrameType::Ctl_Ping, isMasked);
         }
 
@@ -175,11 +175,11 @@ namespace WebSocket
 
         /// Returns a "Close" control frame with empty data payload (which is prefectly ok to send as per the RFC)
         inline QByteArray makeCloseFrame(bool isMasked) {
-            return wrapPayload(QByteArray(), FrameType::Ctl_Close, isMasked);
+            return wrapPayload({}, FrameType::Ctl_Close, isMasked);
         }
 
         /// Returns a "Close" control frame with non-empty data payload.  The payload will consist of 2-byte code + reason (reason may be empty)
-        QByteArray makeCloseFrame(bool isMasked, CloseCode code, const QByteArray &reason = QByteArray());
+        QByteArray makeCloseFrame(bool isMasked, CloseCode code, const QByteArray &reason = {});
     } // end namespace Ser
 
     namespace Deser {
@@ -314,7 +314,7 @@ namespace WebSocket
                 ///
                 void start(const QString & resourceName /* e.g. "/" */,
                            const QString &host /* e.g. "remoteserver.com" */,
-                           const QString &origin = QString() /* Akin to http referer. This is optional, Typically omitted for non-browser clients */,
+                           const QString &origin = {} /* Akin to http referer. This is optional, Typically omitted for non-browser clients */,
                            int timeout = kDefaultTimeout /* milliseconds */);
 
             protected:
@@ -414,6 +414,8 @@ namespace WebSocket
 
         /// This instance will become the parent of socket.  The socket should already be in the Connected state.
         /// Socket may not be nullptr.  If socket is a QSslSocket, it should already be in the 'encrypted' state.
+        /// Note: Passing a Wrapper * instance as the first argument to this constructor is not supported and the
+        /// WebSocket handshake will fail.
         explicit Wrapper(QTcpSocket *socket, QObject *parent = nullptr);
         ~Wrapper() override;
 
@@ -422,7 +424,7 @@ namespace WebSocket
         /// Use this after construction to start the WebSocket handshake as a client. `handshakeSuccess` or
         /// `handshakeFailed` will be emitted when the handshake finishes (iff true is returned).
         /// No-op if called twice or if socket is not in the connected state, in which case false is returned.
-        bool startClientHandshake(const QString & resourceName, const QString & host, const QString & origin = QString(),
+        bool startClientHandshake(const QString & resourceName, const QString & host, const QString & origin = {},
                                   int timeout = Handshake::Async::ClientSide::kDefaultTimeout);
 
         /// Use this after construction to start the WebSocket handshake as a server. `handshakeSuccess` or
@@ -437,7 +439,7 @@ namespace WebSocket
         Mode mode() const { return _mode; }
         /// The default message mode to use when generating frames for the QIODevice::write() function
         MessageMode messageMode() const { return _messageMode; }
-        void setMessaeMode(MessageMode m) { _messageMode = m; }
+        void setMessageMode(MessageMode m) { _messageMode = m; }
         /// If true, we will auto-reply to pings asynchronously in this object's thread's event loop
         bool autoPingReply() const { return autopingreply; }
         void setAutoPingReply(bool b) { autopingreply = b; }
@@ -469,7 +471,7 @@ namespace WebSocket
         /// sends CLOSE frame (Code: Normal 1001), waits 3 seconds for CLOSE reply
         void disconnectFromHost() override;
         /// Disconnect from remote host with a specified code and reason. Same semantics as disconnectFromHost().
-        void disconnectFromHost(CloseCode code, const QByteArray & reason = QByteArray());
+        void disconnectFromHost(CloseCode code, const QByteArray & reason = {});
 
         // From QIODevice
         qint64 bytesAvailable() const override { return dataFrameByteCount + readDataPartialBuf.size(); }
@@ -517,8 +519,8 @@ namespace WebSocket
         void messagesReady();
 
     public slots:
-        qint64 sendPing(const QByteArray &data = QByteArray());
-        qint64 sendPong(const QByteArray &data = QByteArray());
+        qint64 sendPing(const QByteArray &data = {});
+        qint64 sendPong(const QByteArray &data = {});
 
         qint64 sendText(const QByteArray &data);
         qint64 sendBinary(const QByteArray &data);
@@ -529,7 +531,7 @@ namespace WebSocket
         qint64 writeData(const char *data, qint64 len) override; ///< wraps the data in a frame and writes it to socket. uses the frameType specified in messageMode
 
         qint64 sendClose();
-        qint64 sendClose(quint16 code, const QByteArray &reason = QByteArray());
+        qint64 sendClose(quint16 code, const QByteArray &reason = {});
 
     private:
         QPointer<QTcpSocket> socket;
