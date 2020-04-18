@@ -36,6 +36,7 @@
 #include <memory> // for shared_ptr
 #include <optional>
 #include <shared_mutex>
+#include <type_traits>
 
 struct TcpServerError : public Exception
 {
@@ -130,6 +131,7 @@ protected:
 
 class BitcoinDMgr;
 class Client;
+class QSslSocket;
 class Storage;
 class ThreadPool;
 
@@ -216,11 +218,30 @@ protected:
     /// Client::PerIPDataHolder_Temp object named "__PerIPDataHolder_Temp" to the QTcpSocket that it creates, and
     /// auto-fails the connection if the app-wide per-IP connection limit is exceeded.
     void incomingConnection(qintptr socketDescriptor) override;
+
+    // Helpers used in `incomingConnection` in both this base class and the ServerSSL derived class.
+    //
+
     /// Derived classes that re-implement incomingConnection should call this to attach the Client::PerIPDataHolder_Temp
-    /// object. Returns false if the connection would exceed limits.
+    /// object. (Or, alternatively, call createSocketFromDescriptorAndCheckLimits).
+    ///
+    /// Returns false if the connection would exceed limits.
     ///
     /// Note: On false return, socket->abort() and then socket->deleteLater() are called by this function.
     bool attachPerIPDataAndCheckLimits(QTcpSocket *);
+    /// Used internally by both this incomingConnection implementation and ServerSSL's implementation.
+    /// SockType must be QTcpSocket or QSslSocket.
+    template <typename SockType,
+              typename = std::enable_if_t< std::is_same_v<QTcpSocket, SockType> || std::is_same_v<QSslSocket, SockType> > >
+    SockType *createSocketFromDescriptorAndCheckLimits(qintptr socketDescriptor);
+    /// Initiates the WebSocket handshake.  If false is returned, the passed-in socket has already been queued for
+    /// deletion. If true is returned, some time later after handshake success, addPendingConnection() will get called
+    /// and newConnection() will be emitted.  On handshake failure errors will be logged and the socket object will get
+    /// deleted.  Note that a WebSocket::Wrapper will be used to wrap the socket and that will end up being added
+    /// to addPendingConnection().
+    bool startWebSocketHandshake(QTcpSocket *);
+    ///
+    // /end `incomingConnection` Helpers
 
     void on_started() override;
     void on_newConnection(QTcpSocket *) override;
@@ -409,8 +430,6 @@ private:
     double lastSubsWarningPrintTime = 0.; ///< used internally to rate-limit "max subs exceeded" message spam to log
 };
 
-class QSslSocket;
-
 /// SSL version of the above Server class that just wraps tcp sockets with a QSslSocket.
 /// All sockets emitted by newConnection are QSslSocket instances (a subclass of
 /// QTcpSocket), thus the connection is encrypted. Requires SSL support + a cert & a private key.
@@ -425,7 +444,8 @@ public:
     QString prettyName() const override; ///< overrides super to indicate SSL in server name
 
 protected:
-    /// overrides QTcpServer to create a QSslSocket wrapping the passed-in file descriptor.
+    /// overrides ServerBase to create a QSslSocket wrapping the passed-in file descriptor, and then initiate the TLS
+    /// server-side handshake.
     void incomingConnection(qintptr) override;
 private:
     const QSslCertificate cert;
