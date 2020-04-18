@@ -1395,7 +1395,7 @@ void Server::impl_sh_subscribe(Client *c, const RPC::Message &m, const HashX &sh
                 if (const auto now = Util::getTimeSecs(); now - c->lastWarnedAboutSubsLimit > ServerMisc::kMaxSubsPerIPWarningsRateLimitSecs /* 1.0 secs */) {
                     // message spam throttled to once per second
                     Warning() << c->prettyName(false, false) << " exceeded per-IP subscribe limit with " << nShSubs
-                              << " subs, denying  subscribe request";
+                              << " subs, denying subscribe request";
                     c->lastWarnedAboutSubsLimit = now;
                 }
                 if (doUnsub) {
