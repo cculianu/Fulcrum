@@ -486,8 +486,16 @@ namespace WebSocket
         // From QAbstractSocket:
         void setReadBufferSize(qint64 size) override { QTcpSocket::setReadBufferSize(size); socket->setReadBufferSize(size); }
 
+        /// Returns the number of Binary and/or Text message frames in the receive message queue.
         int messagesAvailable() const { return int(dataMessages.size()); }
+        /// Pops and returns the next (complete) Binary or Text message waiting in the receive queue, or an empty
+        /// QByteArray if the receive queue was empty. Note that it's possible for the other endpoint to send empty
+        /// frames (payload size 0), so to distinguish between that situation and an empty queue, one would need to call
+        /// messagesAvailable() before calling this function. If the `binary` pointer is specified, will write true or
+        /// false to it depending on whether the retrieved frame was of Binary or Text type.
         QByteArray readNextMessage(bool *binary = nullptr);
+        /// Pops all of the queued messages off the receive queue and returns them. (All of the messages returned
+        /// are complete -- no partial messages are ever returned here).
         MessageList readAllMessages();
 
         /// TODO: what do we do about all these?!
@@ -509,6 +517,10 @@ namespace WebSocket
         /// handshakeSuccess() and/or handshakeFailed().
         void handshakeFinished();
 
+        /// Similar in spirit to QSslSocket's "encryptedBytesWritten".  Emitted when the underlying socket sends
+        /// data down the wire.  The value here will always be larger than the `bytesWritten` signal this class
+        /// also emits, since it will account for Web Socket framing + payload data. (In contrast `bytesWritten` reports
+        /// payload sizes, not counting framing overhead).
         void rawBytesWritten(qint64 totalBytes);
 
         void closeFrameReceived(quint16 code, const QByteArray &data);
@@ -516,7 +528,7 @@ namespace WebSocket
         void pongFrameReceived(const QByteArray &data);
 
         /// This is emitted when Text or Binary messages have arrived and are ready for processing.
-        /// Use readNextMessage or readAllMessages
+        /// Use readNextMessage() or readAllMessages() to read the completed data frames.
         void messagesReady();
 
     public slots:
