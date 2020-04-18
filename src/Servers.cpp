@@ -452,7 +452,7 @@ bool ServerBase::attachPerIPDataAndCheckLimits(QTcpSocket *socket)
         }
     } else {
         // this should never happen
-        Error() << "INTERNAL ERROR: could not create per-IP data object in ServerBase::incomingConnection -- invalid peer address!";
+        Error() << "INTERNAL ERROR: Could not create per-IP data object in " << __func__ << " -- invalid peer address!";
         ok = false;
     }
     if (!ok) {
@@ -469,8 +469,11 @@ SockType *ServerBase::createSocketFromDescriptorAndCheckLimits(qintptr socketDes
 {
     auto socket = new SockType(this);
     if (!socket->setSocketDescriptor(socketDescriptor)) {
-        /// This won't ever happen unless somehow this class or a derived class ends up being radically misused.
-        /// It means the socket engine doesn't recognize the fd.  We added this here simply for defensive programming.
+        /// This branch won't ever be taken unless somehow this class or a derived class ends up being radically
+        /// misused. `setSocketDescriptor` returning false means the socket engine doesn't recognize the fd.  We added
+        /// this check here simply for defensive programming.  Note: We don't go to the trouble of trying to close() the
+        /// fd because it's an opaque type that isn't guaranteed to be an int, so we must let it leak.  However, if
+        /// this branch is taken we already have bigger problems.
         Error() << __func__ << ": setSocketDescriptor returned false! Socket fd will now leak. Error was: " << socket->errorString();
         delete socket;
         return nullptr;
@@ -510,7 +513,7 @@ void ServerBase::incomingConnection(qintptr socketDescriptor)
 {
     auto socket = createSocketFromDescriptorAndCheckLimits<QTcpSocket>(socketDescriptor);
     if (!socket)
-        // low-level error, fail. Error was already logged.
+        // Per-IP connection limit reached or low-level error. Fail. (Error was already logged)
         return;
 
     if (!usesWS) {
@@ -520,7 +523,7 @@ void ServerBase::incomingConnection(qintptr socketDescriptor)
         return;
     }
 
-    // WebSockets mode -- create the wrapper object and further negotiate the handshake.  Later on newConnection() will
+    // WebSocket mode -- create the wrapper object and further negotiate the handshake.  Later on newConnection() will
     // be emitted again on success, or the socket will be auto-deleted on failure.
     startWebSocketHandshake(socket);
 }
@@ -1809,7 +1812,7 @@ void ServerSSL::incomingConnection(qintptr socketDescriptor)
 {
     auto socket = createSocketFromDescriptorAndCheckLimits<QSslSocket>(socketDescriptor);
     if (!socket)
-        // low-level error. Fail. Error message was already logged.
+        // Per-IP connection limit reached or low-level error. Fail. (Error was already logged)
         return;
     socket->setLocalCertificate(cert);
     socket->setPrivateKey(key);
@@ -1837,7 +1840,7 @@ void ServerSSL::incomingConnection(qintptr socketDescriptor)
         socket->deleteLater();
     });
     *tmpConnections += connect(socket, &QSslSocket::encrypted, this, [this, timer, tmpConnections, socket, peerName] {
-        Trace() << peerName << " SSL ready";
+        if (Trace::isEnabled()) Trace() << peerName << " SSL ready";
         timer->stop();
         timer->deleteLater();
         if (tmpConnections) {
@@ -1853,7 +1856,7 @@ void ServerSSL::incomingConnection(qintptr socketDescriptor)
             return;
         }
 
-        // WebSockets mode -- create the wrapper object and further negotiate the handshake.  Later on newConnection()
+        // WebSocket mode -- create the wrapper object and further negotiate the handshake.  Later on newConnection()
         // will be emitted again on success, or the socket will be auto-deleted on failure.
         startWebSocketHandshake(socket);
     });
