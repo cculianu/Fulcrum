@@ -501,7 +501,7 @@ bool ServerBase::startWebSocketHandshake(QTcpSocket *socket)
     if (!ws->startServerHandshake()) {
         // This shouldn't normally happen unless we somehow misuse the WebSocket::Wrapper class in some future use of this code.
         Error() << "Unable to start WebSocket handshake for " << peerName << ", closing socket";
-        delete ws; ws = nullptr;
+        ws->deleteLater(); // we must use deleteLater to be safe.
         return false;
     }
     return true;
