@@ -178,7 +178,7 @@ struct PeerInfo
     /// reset the failure Ts
     void clearFailureTs() { failureTs.reset(); }
     /// returns the age of the failureTs in seconds, if set, or an empty optional otherwise
-    std::optional<double> failureAge() const { return failureTs.has_value() ? Util::getTimeSecs() - failureTs.value() : std::optional<double>{}; }
+    std::optional<double> failureAge() const { return failureTs.has_value() ? Util::getTimeSecs() - *failureTs : std::optional<double>{}; }
 
     /// Pass it the "features" map as returned by server.features. Normally only one PeerInfo will be returned, but
     /// there may be multiple in the case of .onion in the 'hosts' sub-map.  All of the hosts returned have identical

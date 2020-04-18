@@ -106,11 +106,11 @@ QVariantMap Options::toMap() const
     m["peering"] = peerDiscovery;
     m["peering_announce_self"] = peerAnnounceSelf;
     m["peering_enforce_unique_ip"] = peeringEnforceUniqueIPs;
-    m["hostname"] = hostName.has_value() ? QVariant(hostName.value()) : QVariant();
-    m["public_tcp_port"] = publicTcp.has_value() ? QVariant(publicTcp.value()) : QVariant();
-    m["public_ssl_port"] = publicSsl.has_value() ? QVariant(publicSsl.value()) : QVariant();
-    m["public_ws_port"] = publicWs.has_value() ? QVariant(publicWs.value()) : QVariant();
-    m["public_wss_port"] = publicWss.has_value() ? QVariant(publicWss.value()) : QVariant();
+    m["hostname"] = hostName.has_value() ? QVariant(*hostName) : QVariant();
+    m["public_tcp_port"] = publicTcp.has_value() ? QVariant(*publicTcp) : QVariant();
+    m["public_ssl_port"] = publicSsl.has_value() ? QVariant(*publicSsl) : QVariant();
+    m["public_ws_port"] = publicWs.has_value() ? QVariant(*publicWs) : QVariant();
+    m["public_wss_port"] = publicWss.has_value() ? QVariant(*publicWss) : QVariant();
     m["max_clients_per_ip"] = maxClientsPerIP;
     l.clear();
     for (const auto & sn : subnetsExcludedFromPerIPLimits)
@@ -122,11 +122,11 @@ QVariantMap Options::toMap() const
     m["worker_threads"] = workerThreads;
     m["max_pending_connections"] = maxPendingConnections;
     // tor related
-    m["tor_hostname"] = torHostName.has_value() ? QVariant(torHostName.value()) : QVariant();
-    m["tor_tcp_port"] = torTcp.has_value() ? QVariant(torTcp.value()) : QVariant();
-    m["tor_ssl_port"] = torSsl.has_value() ? QVariant(torSsl.value()) : QVariant();
-    m["tor_ws_port"] = torWs.has_value() ? QVariant(torWs.value()) : QVariant();
-    m["tor_wss_port"] = torWss.has_value() ? QVariant(torWss.value()) : QVariant();
+    m["tor_hostname"] = torHostName.has_value() ? QVariant(*torHostName) : QVariant();
+    m["tor_tcp_port"] = torTcp.has_value() ? QVariant(*torTcp) : QVariant();
+    m["tor_ssl_port"] = torSsl.has_value() ? QVariant(*torSsl) : QVariant();
+    m["tor_ws_port"] = torWs.has_value() ? QVariant(*torWs) : QVariant();
+    m["tor_wss_port"] = torWss.has_value() ? QVariant(*torWss) : QVariant();
     m["tor_proxy"] = QString("%1:%2").arg(torProxy.first.toString()).arg(torProxy.second);
     m["tor_user"] = torUser.isNull() ? QVariant() : QVariant("<hidden>");
     m["tor_pass"] = torPass.isNull() ? QVariant() : QVariant("<hidden>");
@@ -300,7 +300,7 @@ Numeric ConfigFile::genericParseArithmeticValue(const QString &name, Numeric def
     const auto opt = optValue(name, cs);
     if (!opt.has_value())
         return def;
-    Numeric ret = Convert(opt.value(), &ok);
+    Numeric ret = Convert(*opt, &ok);
     if (!ok) return def;
     return ret;
 }

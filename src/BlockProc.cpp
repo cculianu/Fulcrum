@@ -124,7 +124,7 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bi
             const TxInfo & prevInfo = txInfos[prevTxIdx];
             inp.prevoutHash = prevInfo.hash; //<--- ensure shallow copy that points to same underlying data (saves memory)
             if (prevInfo.output0Index.has_value())
-                inp.parentTxOutIdx.emplace( prevInfo.output0Index.value() + inp.prevoutN ); // save the index into the `outputs` array where the parent tx to this spend occurred
+                inp.parentTxOutIdx.emplace( *prevInfo.output0Index + inp.prevoutN ); // save the index into the `outputs` array where the parent tx to this spend occurred
             else { assert(0); }
             auto & outp = outputs[ inp.parentTxOutIdx.value() ];
             outp.spentInInputIndex.emplace( inIdx ); // mark the output as spent by this index
@@ -175,7 +175,7 @@ QString PreProcessedBlock::toDebugString() const
             for (size_t j = 0; j < ag.ins.size(); ++j) {
                 const auto idx = ag.ins[j];
                 const auto & theInput [[maybe_unused]] = inputs[idx];
-                assert(theInput.parentTxOutIdx.has_value() && txHashForOutputIdx(theInput.parentTxOutIdx.value()) == theInput.prevoutHash);
+                assert(theInput.parentTxOutIdx.has_value() && txHashForOutputIdx(*theInput.parentTxOutIdx) == theInput.prevoutHash);
                 ts << " {in# " << j << " - " << inputs[idx].prevoutHash.toHex() << ":" << inputs[idx].prevoutN
                    << ", spent in " << txHashForInputIdx(idx).toHex() << ":" << numForInputIdx(idx).value_or(999999) << " }";
             }

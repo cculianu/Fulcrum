@@ -385,14 +385,14 @@ namespace RPC {
             static const auto ValidateParams = [](const Message &msg, const Method &m) {
                 if (!msg.hasParams()) {
                     if ( (m.opt_kwParams.has_value() && !m.opt_kwParams->isEmpty())
-                         || (m.opt_nPosParams.has_value() && m.opt_nPosParams.value().first != 0) )
+                         || (m.opt_nPosParams.has_value() && m.opt_nPosParams->first != 0) )
                         throw InvalidParameters("Missing required params");
                 } else if (msg.isParamsList()) {
                     // positional args specified
                     if (!m.opt_nPosParams.has_value())
                         throw InvalidParameters("Postional params are not supported for this method");
                     const unsigned num = unsigned(msg.paramsList().count());
-                    auto [minParams, maxParams] = m.opt_nPosParams.value();
+                    auto [minParams, maxParams] = *m.opt_nPosParams;
                     if (maxParams < minParams) maxParams = minParams;
                     if (num < minParams)
                         throw InvalidParameters(QString("Expected at least %1 %2 for %3, got %4 instead")

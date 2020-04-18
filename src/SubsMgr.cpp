@@ -177,7 +177,7 @@ void SubsMgr::doNotifyAllPending()
         // this code block is fine. In the unlikely event that a sub lost its clients while the lock was released, the
         // below emit sub->statusChanged(...) will just be a no-op.
         LockGuard g(sub->mut);
-        const bool doemit = !sub->lastStatusNotified.has_value() || sub->lastStatusNotified.value() != status;
+        const bool doemit = !sub->lastStatusNotified.has_value() || *sub->lastStatusNotified != status;
         // we basically cache 2 statuses but they are implicitly shared copies of the same memory so it's ok.
         sub->lastStatusNotified = status;
         sub->cachedStatus = status;

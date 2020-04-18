@@ -940,13 +940,13 @@ QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const Q
 
     QVariantMap hmap, hmapTor;
     if (opts.publicTcp.has_value())
-        hmap["tcp_port"] = unsigned(opts.publicTcp.value());
+        hmap["tcp_port"] = unsigned(*opts.publicTcp);
     if (opts.publicSsl.has_value())
-        hmap["ssl_port"] = unsigned(opts.publicSsl.value());
+        hmap["ssl_port"] = unsigned(*opts.publicSsl);
     if (opts.publicWs.has_value())
-        hmap["ws_port"] = unsigned(opts.publicWs.value());
+        hmap["ws_port"] = unsigned(*opts.publicWs);
     if (opts.publicWss.has_value())
-        hmap["wss_port"] = unsigned(opts.publicWss.value());
+        hmap["wss_port"] = unsigned(*opts.publicWss);
     if (hmap.isEmpty()) {
         // This should not normally happen but it can if user specified public_tcp_port=0 and public_ssl_port=0.
         // In that case we have to report SOMETHING here as per Electrum Cash protocol specs, so we just use the local port
@@ -963,15 +963,15 @@ QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const Q
     QString torHostName;
     if (opts.torHostName.has_value()) {
 
-        torHostName = opts.torHostName.value();
+        torHostName = *opts.torHostName;
         if (opts.torTcp.has_value())
-            hmapTor["tcp_port"] = unsigned(opts.torTcp.value());
+            hmapTor["tcp_port"] = unsigned(*opts.torTcp);
         if (opts.torSsl.has_value())
-            hmapTor["ssl_port"] = unsigned(opts.torSsl.value());
+            hmapTor["ssl_port"] = unsigned(*opts.torSsl);
         if (opts.torWs.has_value())
-            hmapTor["ws_port"] = unsigned(opts.torWs.value());
+            hmapTor["ws_port"] = unsigned(*opts.torWs);
         if (opts.torWss.has_value())
-            hmapTor["wss_port"] = unsigned(opts.torWss.value());
+            hmapTor["wss_port"] = unsigned(*opts.torWss);
     }
     QVariantMap hostsMap = {{ hostName, hmap }};
     if (!hmapTor.isEmpty() && !torHostName.isEmpty())
@@ -1092,7 +1092,7 @@ void Server::rpc_blockchain_block_header(Client *c, const RPC::Message &m)
     generic_do_async(c, m.id, [height, cp_height, this] {
         QString err;
         const auto optHdr = storage->headerForHeight(height, &err); // may return nothing (but will set err) if height is now beyond chain height due to reorg
-        if (QByteArray hdr; err.isEmpty() && optHdr.has_value() && !(hdr = optHdr.value()).isEmpty()) {
+        if (QByteArray hdr; err.isEmpty() && optHdr.has_value() && !(hdr = *optHdr).isEmpty()) {
             const auto hexHdr = Util::ToHexFast(hdr); // hexHdr definitely not empty, no need to cast to QString (avoids a copy!)
             QVariant ret;
             if (!cp_height)
@@ -1300,7 +1300,7 @@ QVariantList Server::getHistoryCommon(const HashX &sh, bool mempoolOnly)
             { "height", int(item.height) },
         };
         if (item.fee.has_value())
-            m["fee"] = qlonglong(item.fee.value() / bitcoin::Amount::satoshi());
+            m["fee"] = qlonglong(*item.fee / bitcoin::Amount::satoshi());
         resp.push_back(m);
     }
     return resp;
@@ -1446,7 +1446,7 @@ void Server::impl_sh_subscribe(Client *c, const RPC::Message &m, const HashX &sh
             } else {
                 // When notifying, blockchain.address.subscribe callback must rewrite the sh arg -> the original address argument given by the client.
                 ret =
-                    [c, method=m.method, alias=optAlias.value().toUtf8()](const HashX &, const StatusHash &status) {
+                    [c, method=m.method, alias=optAlias->toUtf8()](const HashX &, const StatusHash &status) {
                         QVariant statusHexMaybeNull; // if empty we simply notify as 'null' (this is unlikely in practice but may happen on reorg)
                         if (!status.isEmpty())
                             statusHexMaybeNull = Util::ToHexFast(status);
@@ -1490,9 +1490,9 @@ void Server::impl_sh_subscribe(Client *c, const RPC::Message &m, const HashX &sh
     } else {
         // SubsMgr reported a cached status -- immediately return that as the result!
         QVariant result;
-        if (!optStatus.value().isEmpty())
+        if (!optStatus->isEmpty())
             // not empty, so we return the hex-encoded string
-            result = QString(Util::ToHexFast(optStatus.value()));
+            result = QString(Util::ToHexFast(*optStatus));
         // this debug statement below can get spammy and also eats cycles.
         //Debug() << "Sending cached status to client for scripthash: " << Util::ToHexFast(sh) << " status: " << result.toString();
         //
@@ -1704,7 +1704,7 @@ void Server::rpc_blockchain_transaction_id_from_pos(Client *c, const RPC::Messag
         } else {
             // no merkle, just return the tx_hash immediately without going async
             const auto opt = storage->hashForHeightAndPos(height, pos);
-            if (!opt.has_value() || opt.value().length() != HashLen)
+            if (!opt.has_value() || opt->length() != HashLen)
                 throw RPCError(missingErr.arg(pos).arg(height));
             const auto txHashHex = Util::ToHexFast(opt.value());
             return QVariant(txHashHex);
@@ -2033,7 +2033,7 @@ void AdminServer::rpc_getinfo(Client *c, const RPC::Message &m)
     res["bitcoind_warnings"] = bitcoinDInfo.warnings;
     {
         const auto opt = storage->latestHeight();
-        res["height"] = opt.has_value() ? opt.value() : QVariant();
+        res["height"] = opt.has_value() ? *opt : QVariant();
     }
     res["chain"] = storage->getChain();
     res["genesis_hash"] = Util::ToHexFast(storage->genesisHash());

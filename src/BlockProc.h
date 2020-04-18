@@ -140,7 +140,7 @@ struct PreProcessedBlock
         std::optional<IONum> ret;
         if (inputIdx < inputs.size()) {
             if (const auto & opt = txInfos[inputs[inputIdx].txIdx].input0Index;
-                    opt.has_value() && inputIdx >= opt.value()) {
+                    opt.has_value() && inputIdx >= *opt) {
                 const unsigned val = inputIdx - opt.value();
                 assert(val <= UINT16_MAX); // this should never happen -- all tx's are guaranteed to have <=65535 inputs or outputs currently and for the foreseeable future. If that changes, fixme.
                 ret.emplace( IONum(val) );

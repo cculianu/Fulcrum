@@ -604,7 +604,7 @@ void Storage::startup()
         if (auto opt = GenericDBGet<Meta>(p->db.meta.get(), kMeta, true, errMsg);
                 opt.has_value())
         {
-            m_db = opt.value();
+            m_db = *opt;
             if (m_db.magic != p->meta.magic || m_db.version != p->meta.version || m_db.platformBits != p->meta.platformBits) {
                 throw DatabaseFormatError(errMsg);
             }
@@ -808,7 +808,7 @@ void Storage::appendHeader(const Header &h, BlockHeight height)
     const auto res = p->headersFile->appendRecord(h, true, &err);
     if (UNLIKELY(!err.isEmpty()))
         throw DatabaseError(QString("Failed to append header %1: %2").arg(height).arg(err));
-    else if (UNLIKELY(!res.has_value() || res.value() != height))
+    else if (UNLIKELY(!res.has_value() || *res != height))
         throw DatabaseError(QString("Failed to append header %1: returned count is bad").arg(height));
 }
 
@@ -987,7 +987,7 @@ void Storage::loadCheckUTXOsInDB()
                 static const QString errPrefix("Error reading scripthash_unspent");
                 QByteArray tmpBa;
                 if (bool fail1 = false, fail2 = false, fail3 = false, fail4 = false;
-                        (fail1 = (info.confirmedHeight.has_value() && int(info.confirmedHeight.value()) > currentHeight))
+                        (fail1 = (info.confirmedHeight.has_value() && int(*info.confirmedHeight) > currentHeight))
                         || (fail2 = info.txNum >= p->txNumNext)
                         || (fail3 = (tmpBa = GenericDBGet<QByteArray>(p->db.shunspent.get(), shuKey, true, errPrefix, false, p->db.defReadOpts).value_or("")).isEmpty())
                         || (fail4 = (info.amount != Deserialize<bitcoin::Amount>(tmpBa)))) {
@@ -1235,7 +1235,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                         const auto & out = ppb->outputs[oidx];
                         if (out.spentInInputIndex.has_value()) {
                             if constexpr (debugPrt)
-                                Debug() << "Skipping output #: " << oidx << " for " << ppb->txInfos[out.txIdx].hash.toHex() << " (was spent in same block tx: " << ppb->txInfos[ppb->inputs[out.spentInInputIndex.value()].txIdx].hash.toHex() << ")";
+                                Debug() << "Skipping output #: " << oidx << " for " << ppb->txInfos[out.txIdx].hash.toHex() << " (was spent in same block tx: " << ppb->txInfos[ppb->inputs[*out.spentInInputIndex].txIdx].hash.toHex() << ")";
                             continue;
                         }
                         const TxHash & hash = ppb->txInfos[out.txIdx].hash;
@@ -1266,10 +1266,10 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                     } else if (in.parentTxOutIdx.has_value()) {
                         // was an input that was spent in this block so it's ok to skip.. we never added it to utxo set
                         if constexpr (debugPrt)
-                            Debug() << "Skipping input " << txo.toString() << ", spent in this block (output # " << in.parentTxOutIdx.value() << ")";
+                            Debug() << "Skipping input " << txo.toString() << ", spent in this block (output # " << *in.parentTxOutIdx << ")";
                     } else if (const auto opt = utxoGetFromDB(txo); opt.has_value()) {
-                        const auto & info = opt.value();
-                        if (info.confirmedHeight.has_value() && info.confirmedHeight.value() != ppb->height) {
+                        const auto & info = *opt;
+                        if (info.confirmedHeight.has_value() && *info.confirmedHeight != ppb->height) {
                             // was a prevout from a previos block.. so the ppb didn't have it in the 'involving hashx' set..
                             // mark the spend as having involved this hashX for this ppb now.
                             auto & ag = ppb->hashXAggregated[info.hashX];
@@ -1467,13 +1467,13 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
             QString err;
             auto opt = headerForHeight_nolock(prevHeight, &err);
             if (!opt.has_value()) throw UndoInfoMissing(err);
-            prevHeader = opt.value();
+            prevHeader = *opt;
         }
         const QString errMsg1 = QStringLiteral("Unable to retrieve undo info for %1").arg(tip);
         auto undoOpt = GenericDBGet<UndoInfo>(p->db.undo.get(), uint32_t(tip), true, errMsg1, false, p->db.defReadOpts);
         if (!undoOpt.has_value())
             throw UndoInfoMissing(errMsg1);
-        auto & undo = undoOpt.value(); // non-const because we swap out its scripthashes potentially below if notifySubs == true
+        auto & undo = *undoOpt; // non-const because we swap out its scripthashes potentially below if notifySubs == true
 
         // ensure undo info sanity
         if (!undo.isValid() || undo.height != unsigned(tip) || undo.hash != BTC::HashRev(header)
@@ -1639,7 +1639,7 @@ std::optional<TxHash> Storage::hashForTxNum(TxNum n, bool throwIfMissing, bool *
     }
     if (!skipCache && ret.has_value()) {
         // save in cache
-        p->lruNum2Hash.insert(n, ret.value(), p->lruNum2HashSizeCalc());
+        p->lruNum2Hash.insert(n, *ret, p->lruNum2HashSizeCalc());
     }
     return ret;
 }
@@ -1687,7 +1687,7 @@ std::vector<TxHash> Storage::txHashesForBlockInBitcoindMemoryOrder(BlockHeight h
         auto opt = p->lruHeight2Hashes_BitcoindMemOrder.object(height);
         if (opt.has_value()) {
             // cache hit! return the cached item
-            auto & vec = opt.value();
+            auto & vec = *opt;
             // convert from QVector to std::vector -- TODO: see if we can make the whole call path use QVector to avoid
             // these copies.
             ret.reserve(size_t(vec.size()));
@@ -1737,7 +1737,7 @@ auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf) const -> H
             static const QString err("Error retrieving history for a script hash");
             auto nums_opt = GenericDBGet<TxNumVec>(p->db.shist.get(), hashX, true, err, false, p->db.defReadOpts);
             if (nums_opt.has_value()) {
-                auto & nums = nums_opt.value();
+                auto & nums = *nums_opt;
                 if (UNLIKELY(nums.size() > maxHistory)) {
                     throw HistoryTooLarge(QString("History for scripthash %1 exceeds MaxHistory %2 with %3 items!")
                                           .arg(QString(hashX.toHex())).arg(maxHistory).arg(nums.size()));

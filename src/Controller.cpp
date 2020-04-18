@@ -601,7 +601,7 @@ void SynchMempoolTask::processResults()
                         throw InternalError(QString("FAILED TO FIND PREVIOUS TX %1 IN EITHER MEMPOOL OR DB for TxHash: %2 (input %3)")
                                             .arg(prevTXO.toString()).arg(QString(prevTxId.toHex())).arg(inNum));
                     }
-                    prevInfo = optTXOInfo.value();
+                    prevInfo = *optTXOInfo;
                     sh = prevInfo.hashX;
                     // hack to save memory by re-using existing sh QByteArray and/or forcing a shallow-copy
                     auto hxit = tx->hashXs.find(sh);
@@ -1354,7 +1354,7 @@ auto Controller::debug(const StatsParams &p) const -> Stats // from StatsMixin
         auto hash = storage->hashForTxNum(txnum).value_or(QByteArray());
         auto opt = storage->heightForTxNum(txnum);
         m["tx_hash"] = Util::ToHexFast(hash);
-        m["height"] = opt.has_value() ? int(opt.value()) : -1;
+        m["height"] = opt.has_value() ? int(*opt) : -1;
         ret["txnum_debug"] = m;
     }
     if (const auto sh = QByteArray::fromHex(p.value("sh").toLatin1()); sh.length() == HashLen) {
@@ -1366,7 +1366,7 @@ auto Controller::debug(const StatsParams &p) const -> Stats // from StatsMixin
             m["tx_hash"] = Util::ToHexFast(item.hash);
             m["height"] = item.height;
             if (item.fee.has_value())
-                m["fee"] = qlonglong(item.fee.value() / item.fee.value().satoshi());
+                m["fee"] = qlonglong(*item.fee / item.fee->satoshi());
             l.push_back(m);
         }
         ret["sh_debug"] = l;

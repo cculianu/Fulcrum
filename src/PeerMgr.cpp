@@ -288,7 +288,7 @@ void PeerMgr::on_allServersStarted()
     gotAllServersStartedSignal = true;
 
     if (options->peerAnnounceSelf && options->torHostName.has_value() && (options->torSsl.has_value() || options->torTcp.has_value())) {
-        if (const auto torHostName = options->torHostName.value(); !torHostName.isEmpty()) {
+        if (const auto torHostName = *options->torHostName; !torHostName.isEmpty()) {
             // Add/update our Tor identity to seed peers (even if it's already there) -- this is so we can end up in our
             // *own* server.peers.subscribe() list -- so that the Tor route can get picked up by our peers; this is
             // because we cannot directly add our Tor route via add_peer on our peers (source address verification
@@ -327,7 +327,7 @@ namespace {
     QString failureHoursString(const PeerInfo &info) {
         QString ret;
         if (const auto fa = info.failureAge(); fa.has_value())
-            ret = QString::number(fa.value() / (60.*60.), 'f', 2) + " hours";
+            ret = QString::number(*fa / (60.*60.), 'f', 2) + " hours";
         return ret;
     }
 }
@@ -338,7 +338,7 @@ void PeerMgr::retryFailedPeers(bool useBadMap)
     auto & failed = (useBadMap ? this->bad : this->failed);
     for (const auto & pi : failed) {
         if (!queued.contains(pi.hostName) && !clients.contains(pi.hostName)) {
-            if (auto fa = pi.failureAge(); fa.has_value() && fa.value() > kExpireFailedPeersTime && !seedPeers.contains(pi.hostName)) {
+            if (auto fa = pi.failureAge(); fa.has_value() && *fa > kExpireFailedPeersTime && !seedPeers.contains(pi.hostName)) {
                 // We purge peers that have been bad or failed for >24 hours. However we never purge seedPeers since
                 // they are our lifeline to the outside world.  It's possible ALL peers can be failed/bad for a long
                 // time if we lose internet connectivity for an extended period due to an outage.  In that scenario,
@@ -603,7 +603,7 @@ auto PeerMgr::headerToVerifyWithPeer() const -> std::optional<HeightHeaderPair>
     std::optional<HeightHeaderPair> ret;
     const auto optCurHeight = storage->latestHeight();
     if (optCurHeight.has_value()) {
-        const auto curHeight = optCurHeight.value();
+        const auto curHeight = *optCurHeight;
         constexpr unsigned cutoff = BTC::MaxReorgDepth + 1;
         if (cutoff < curHeight) {
             const auto height = curHeight - cutoff;
@@ -815,8 +815,8 @@ void PeerClient::handleReply(IdMixin::Id, const RPC::Message & reply)
         headerToVerify = mgr->headerToVerifyWithPeer();
         if (LIKELY(headerToVerify.has_value())) {
             // this is the likely branch -- verify that this peer is not on a different chain such as BSV, etc
-            if constexpr (debugPrint) Debug() << info.hostName << " requesting header for height " << headerToVerify.value().first;
-            emit sendRequest(newId(), "blockchain.block.header", QVariantList{headerToVerify.value().first, 0});
+            if constexpr (debugPrint) Debug() << info.hostName << " requesting header for height " << headerToVerify->first;
+            emit sendRequest(newId(), "blockchain.block.header", QVariantList{headerToVerify->first, 0});
         } else {
             // this should never happen -- but if it does, get its peers.subscribe list and just keep going.
             // next time around we should have a header ready if we reach this very strange corner case where

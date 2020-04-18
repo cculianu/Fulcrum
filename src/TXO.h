@@ -94,7 +94,7 @@ struct TXOInfo {
         QByteArray ret;
         if (!isValid()) return ret;
         const auto amt_sats = amount / bitcoin::Amount::satoshi();
-        const int cheight = confirmedHeight.has_value() ? int(confirmedHeight.value()) : -1;
+        const int cheight = confirmedHeight.has_value() ? int(*confirmedHeight) : -1;
         ret.resize(int(serSize()));
         char *cur = ret.data();
         std::memcpy(cur, &amt_sats, sizeof(amt_sats));
