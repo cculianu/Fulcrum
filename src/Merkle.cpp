@@ -46,21 +46,22 @@ namespace Merkle {
         // Copy all hashVec to our working vector, to start. This vector mutates as we iterate below.
         hashes.insert(hashes.end(), hashVec.begin(), hashVec.end());
 
+        constexpr auto recomputeHashes = [](HashVec & hashes) {
+            HashVec hv;
+            const unsigned sz = unsigned(hashes.size());
+            hv.reserve( (sz / 2) + 1 );
+            for (unsigned i = 0; i < sz; i+=2) {
+                hv.emplace_back(BTC::Hash(hashes[i] + hashes[i+1]));
+            }
+            hashes.swap(hv);
+        };
+
         for (unsigned i = 0; i < length; ++i) {
             if (hashes.size() & 0x1) // is odd, add the end twice
                 hashes.emplace_back(hashes.back());
 
             branch.push_back(hashes[index ^ 1]);
             index >>= 1;
-            constexpr auto recomputeHashes = [](HashVec & hashes) {
-                HashVec hv;
-                const unsigned sz = unsigned(hashes.size());
-                hv.reserve( (sz / 2) + 1 );
-                for (unsigned i = 0; i < sz; i+=2) {
-                    hv.emplace_back(BTC::Hash(hashes[i] + hashes[i+1]));
-                }
-                hashes.swap(hv);
-            };
             recomputeHashes(hashes); // makes hashes be 1/2 the size each time
         }
         if (UNLIKELY(hashes.empty())) {

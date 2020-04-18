@@ -34,7 +34,7 @@
 #include <vector>
 
 
-/// Models the mempool -- WIP
+/// Models the mempool
 struct Mempool
 {
 
