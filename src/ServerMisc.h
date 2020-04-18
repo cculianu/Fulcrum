@@ -26,7 +26,7 @@ namespace ServerMisc
 {
     constexpr const char * const HashFunction = "sha256";
 
-    /// Used in various places to rejects old clients or incompatible peers. Currently 1.4 and 1.4.2 respectively.
+    /// Used in various places to rejects old clients or incompatible peers. Currently 1.4 and 1.4.3 respectively.
     extern const Version MinProtocolVersion, MaxProtocolVersion;
 
     extern const QString AppVersion,  ///< in string form suitable for sending in protocol or banner e.g. "1.0"

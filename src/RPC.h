@@ -193,7 +193,7 @@ namespace RPC {
     /// It can be used for either a client or a server.
     ///
     /// Note that this class is somewhat transport agnostic and is intended to
-    /// be re-used for either HTTP or line-based (as in ElectrumX) JSON-RPC via
+    /// be re-used for either HTTP or line-based (as in Electrum) JSON-RPC via
     /// subclassing.
     ///
     /// Concrete subclasses should implement on_readyRead() and wrapForSend().

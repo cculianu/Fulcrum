@@ -529,11 +529,11 @@ namespace RPC {
     {
         Trace() << __FUNCTION__;
         WebSocket::Wrapper * const ws = checkSetGetWebSocket();
-        assert(!ws || ws == socket);  // If `ws` is not null, `ws` and `socket` point to the same underlying object.
+        assert(!ws || ws == socket);  // If `ws` is not null, then `ws` and `socket` must point to the same object.
 
         // TODO: In the non-WebSocket case, scanning for '\n' may be slow for large loads.
         // Also TODO: This should have some upper bound on how many times it loops and come back later if too much data
-        // is available
+        // is available.
         while (!isBad() && socket && (ws ? ws->messagesAvailable() > 0 : socket->canReadLine())) {
             // check if paused -- we may get paused inside processJson below
             if (readPaused) {
