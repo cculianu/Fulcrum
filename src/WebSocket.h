@@ -449,7 +449,7 @@ namespace WebSocket
         /// Set to <= 0 to disable auto-ping.
         void setAutoPingInterval(int msec);
         /// The maximum number of messages that may be queued. If more than this number of messages are in the message queue,
-        /// then da disconnectFromHost(PolicyViolated) will be sent to the other endpoint, as a DoS defense. Default: 20000.
+        /// then disconnectFromHost(PolicyViolated) will be sent to the other endpoint, as a DoS defense. Default: 20000.
         unsigned maxMessageQueue() const { return maxframes; }
         void setMaxMessageQueue(unsigned val) { if (val) maxframes = val; }
 
@@ -468,7 +468,8 @@ namespace WebSocket
         QVariant socketOption(QAbstractSocket::SocketOption option) override
         { return socket->socketOption(option); }
 
-        /// sends CLOSE frame (Code: Normal 1001), waits 3 seconds for CLOSE reply
+        /// Sends CLOSE frame (Code: Normal 1000), waits 3 seconds for CLOSE reply before timing out the close handshake
+        /// and aborting the connection unconditionally (this all happens asynch. -- this function returns immediately).
         void disconnectFromHost() override;
         /// Disconnect from remote host with a specified code and reason. Same semantics as disconnectFromHost().
         void disconnectFromHost(CloseCode code, const QByteArray & reason = {});
