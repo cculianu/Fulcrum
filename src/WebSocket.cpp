@@ -541,6 +541,7 @@ namespace WebSocket
                 });
                 connect(this, &ClientSide::finished, this, [this]{
                     if (autodelete) deleteLater();
+                    else if (sock) disconnect(sock, &QAbstractSocket::readyRead, this, nullptr);
                     //qDebug("finished");
                 });
             }
