@@ -477,7 +477,7 @@ SockType *ServerBase::createSocketFromDescriptorAndCheckLimits(qintptr socketDes
     }
     // we do this thing here to check connection limits as early as possible in the connection pipeline
     if (!attachPerIPDataAndCheckLimits(socket))
-        // called function already called socekt->deleteLater() for us in this branch.
+        // called function already called socket->deleteLater() for us in this branch.
         return nullptr;
     return socket;
 }
