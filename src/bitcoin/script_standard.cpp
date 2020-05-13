@@ -290,7 +290,7 @@ CScript GetScriptForDestination(const CTxDestination &dest) {
     } catch (const std::bad_variant_access &e) {
         // what to do here?
 #ifdef USE_QT_IN_BITCOIN
-        qCritical("%s: Caught exception bad_variant_access: %s", __FUNCTION__, e.what());
+        qCritical("%s: Caught exception bad_variant_access: %s", __func__, e.what());
 #endif
         script.clear();
     }

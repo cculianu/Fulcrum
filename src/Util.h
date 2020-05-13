@@ -84,10 +84,14 @@ public:
     Log();
     virtual ~Log();
 
-    template <class T> Log & operator<<(const T & t) {  s << t; return *this;  }
+    template <class T> Log & operator<<(const T & t) { s << t; return *this;  }
 
     Log & setColor(Color c) { color = c; colorOverridden = true; return *this; }
     Color getColor() const { return color; }
+
+    /// Used by the DebugM macros, etc.  Unpacks all of its args using operator<< for each arg.
+    template <class ...Args>
+    Log & operator()(Args&& ...args) {  ((*this) << ... << args); return *this; }
 
 protected:
     static QString colorString(Color c);
@@ -104,7 +108,7 @@ protected:
 // specialization to set the color.
 template <> Log & Log::operator<<(const Color &);
 // specialization for std::string
-template <> inline Log& Log::operator<<(const std::string &t) { s << t.c_str(); return *this; }
+template <> Log & Log::operator<<(const std::string &t);
 
 /** \brief Stream-like class to print a debug message to the app's logging facility
     Example:
@@ -128,6 +132,15 @@ public:
 #endif
 };
 
+/// This is fast: It only evaluates args if Debug is enabled. Use this in performance-critical code.
+/// Unfortunately, there is no way to do this exact thing with templates, so we opted for a C-style macro
+/// to avoid evaluating the args in the !Debug::isEnabled() case.
+#define DebugM(...)                \
+    do {                           \
+        if (Debug::isEnabled())    \
+            Debug()(__VA_ARGS__);  \
+    } while (0)
+
 /** \brief Stream-like class to print a trace message to the app's logging facility
     Example:
    \code
@@ -150,6 +163,14 @@ public:
 #endif
 };
 
+/// This is fast: It only evaluates args if Trace is enabled. Use this in performance-critical code.
+/// Unfortunately, there is no way to do this exact thing with templates, so we opted for a C-style macro
+/// to avoid evaluating the args in the !Trace::isEnabled() case.
+#define TraceM(...)                \
+    do {                           \
+        if (Trace::isEnabled())    \
+            Trace()(__VA_ARGS__);  \
+    } while (0)
 
 /** \brief Stream-like class to print an error message to the app's logging facility
     Example:
@@ -204,17 +225,17 @@ public:
 #endif
 };
 
-/// Like Fatal(), except it will not do anything if the c'tor expression is true, otherwise if expression is false,
-/// it will behave identically to Fatal().
-class FatalAssert : public Log
-{
-    const bool assertion;
-public:
-    FatalAssert(bool assertion);
-    virtual ~FatalAssert() override;
+// Now add these macros for symmetry
+#define LogM(...) (Log()(__VA_ARGS__))
+#define WarningM(...) (Warning()(__VA_ARGS__))
+#define ErrorM(...) (Error()(__VA_ARGS__))
+#define FatalM(...) (Fatal()(__VA_ARGS__))
 
-    template <class T> FatalAssert & operator<<(const T & t) {  if (!assertion) s << t; return *this;  }
-};
+#define FatalAssert(b,...)                                            \
+    do {                                                              \
+        if (!(b))                                                     \
+            FatalM("ASSERTION FAILED: \"", #b, "\" - ", __VA_ARGS__); \
+    } while (0)
 
 namespace Util {
     extern QString basename(const QString &);
@@ -587,7 +608,7 @@ namespace Util {
         try {
             ret.emplace( LambdaOnObject<RET>(obj, lambda, timeout_ms) );
         } catch (const ThreadNotRunning & e) {
-            Warning() << __FUNCTION__ << ": " << e.what();
+            Warning() << __func__ << ": " << e.what();
         } catch (const Exception &) {}
         return ret;
     }
@@ -658,7 +679,7 @@ namespace Util {
         try {
             ret.emplace( CallOnObjectWithTimeout<RET>(timeout_ms, obj, method, std::forward<Args>(args)...) );
         } catch (const ThreadNotRunning & e) {
-            Warning() << __FUNCTION__ << ": " << e.what();
+            Warning() << __func__ << ": " << e.what();
         } catch (const Exception &) {}
         return ret;
     }
@@ -678,7 +699,7 @@ namespace Util {
         try {
             ret.emplace( CallOnObject<RET>(obj, method, std::forward<Args>(args)...) );
         } catch (const ThreadNotRunning & e) {
-            Warning() << __FUNCTION__ << ": " << e.what();
+            Warning() << __func__ << ": " << e.what();
         } catch (const Exception &) {}
         return ret;
     }
@@ -707,7 +728,6 @@ struct Defer
     /// function upon descruction.  This operation cannot be reversed.
     void disable() { valid = false; }
 protected:
-    Defer(const Defer &) = delete;
     VoidFunc func;
     bool valid = true;
 };
@@ -735,6 +755,6 @@ struct RAII : public Defer<std::function<void()>> {
     RAII(const VoidFunc & initFunc, VoidFunc && cleanupFunc) : Defer(std::move(cleanupFunc)) { if (initFunc) initFunc(); valid = bool(cleanupFunc); }
 };
 
-// helper type for std::visit (see RPC.cpp where we use this crazy C++17 thing)
+// helper type for std::visit (currently unused in this code base due to lack of std::variant support)
 template<class... Ts> struct Overloaded : Ts... { using Ts::operator()...; };
 template<class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;

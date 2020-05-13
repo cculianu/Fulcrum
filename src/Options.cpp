@@ -140,7 +140,21 @@ QVariantMap Options::toMap() const
     // db advanced options
     m["db_max_open_files"] = qlonglong(db.maxOpenFiles);
     m["db_keep_log_file_num"] = qlonglong(db.keepLogFileNum);
+    // ts-format
+    m["ts-format"] = logTimestampModeString();
     return m;
+}
+
+QString Options::logTimestampModeString() const
+{
+    switch (logTimestampMode) {
+    // NB: We didn't use QStringLiteral here since this is called rarely so we are better off embedding C-strings
+    // in the compiled binary rather than the wide strings that QStringLiteral embeds in the compiled code.
+    case LogTimestampMode::None: return "none";
+    case LogTimestampMode::Local: return "localtime";
+    case LogTimestampMode::Uptime: return "uptime";
+    case LogTimestampMode::UTC: return "utc";
+    }
 }
 
 bool Options::BdReqThrottleParams::isValid() const noexcept

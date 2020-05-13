@@ -54,7 +54,7 @@ SrvMgr::SrvMgr(const std::shared_ptr<const Options> & options,
 
 SrvMgr::~SrvMgr()
 {
-    Debug() << __FUNCTION__ ;
+    Debug() << __func__ ;
     cleanup();
 }
 
@@ -210,8 +210,8 @@ void SrvMgr::clientConnected(IdMixin::Id cid, const QHostAddress &addr)
                 clientWillDieAnyway = true;
                 break;
             case Client::PerIPData::WhiteListState::WhiteListed:
-                Debug() << "Client " << cid << " from " << addr.toString() << " would have exceeded the connection limit ("
-                        << maxPerIP << ") but its IP matches subnet "<< matched.toString() << " from 'subnets_to_exclude_from_per_ip_limits'";
+                DebugM("Client ", cid, " from ", addr.toString(), " would have exceeded the connection limit (",
+                       maxPerIP, ") but its IP matches subnet ", matched.toString(), " from 'subnets_to_exclude_from_per_ip_limits'");
                 break;
             default:
                 // This should never happen.
@@ -219,7 +219,7 @@ void SrvMgr::clientConnected(IdMixin::Id cid, const QHostAddress &addr)
             }
         } else {
             clientWillDieAnyway = true;
-            Debug() << "Client " << cid << " from " << addr.toString() << " -- missing per-IP data. The client may have been already deleted.";
+            DebugM("Client ", cid, " from ", addr.toString(), " -- missing per-IP data. The client may have been already deleted.");
         }
     }
 
@@ -265,7 +265,7 @@ void SrvMgr::clientDisconnected(IdMixin::Id cid, const QHostAddress &addr)
     if (auto count = addrIdMap.remove(addr, cid); UNLIKELY(count > 1)) {
         Warning() << "Multiple clients with id: " << cid << ", address " << addr.toString() << " in addrIdMap in " << __func__ << " -- FIXME!";
     } else if (count) {
-        //Debug() << "Client id " << cid << " addr " << addr.toString() << " removed from addrIdMap";
+        //DebugM("Client id ", cid, " addr ", addr.toString(), " removed from addrIdMap");
         if (const auto size = size_t(addrIdMap.size());
                 size >= tableSqueezeThreshold && size * 2U <= size_t(addrIdMap.capacity())) {
             // save space if we are over 2x capacity vs size
@@ -310,7 +310,7 @@ void SrvMgr::on_liftPeerSuffixBan(const QString &s)
 void SrvMgr::on_banIP(const QHostAddress &addr)
 {
     if (addr.isNull()) {
-        Debug() << __func__ << ": address is null!";
+        DebugM(__func__ , ": address is null!");
         return;
     }
     bool wasNew = false;
@@ -343,13 +343,13 @@ void SrvMgr::on_banID(IdMixin::Id cid)
     if (!found.isNull())
         emit banIP(found);
     else
-        Debug() << "Unable to ban client " << cid << "; not found";
+        DebugM("Unable to ban client ", cid, "; not found");
 }
 
 void SrvMgr::on_liftIPBan(const QHostAddress &addr)
 {
     if (addr.isNull()) {
-        Debug() << __func__ << ": address is null!";
+        DebugM(__func__ , ": address is null!");
         return;
     }
 
@@ -437,9 +437,9 @@ std::shared_ptr<Client::PerIPData> SrvMgr::getOrCreatePerIPData(const QHostAddre
                                               : Client::PerIPData::WhiteListState::NotWhiteListed;
             if constexpr (!isReleaseBuild()) {
                 if (whiteListed)
-                    Debug() << address.toString() << " is whitelisted (subnet: " << ret->_whiteListedSubnet.toString() << ")";
+                    DebugM(address.toString(), " is whitelisted (subnet: ", ret->_whiteListedSubnet.toString(), ")");
                 else
-                    Debug() << address.toString() << " is NOT whitelisted";
+                    DebugM(address.toString(), " is NOT whitelisted");
             }
         }
     }
@@ -460,14 +460,14 @@ void SrvMgr::globalSubsLimitReached()
         Defer deferred = [this, allNearLimit=allNearLimit /*<- C++ bugs */] {
             if (allNearLimit) {
                 const int when = kPeriod / 2;
-                Debug() << "Requesting zombie sub removal in " << when << " msec ...";
+                DebugM("Requesting zombie sub removal in ", when, " msec ...");
                 emit storage->subs()->requestRemoveZombiesSoon(when); // we do it with a delay to give the kick code time to run.
             }
         };
 
         if (!activeNearLimit) {
             // Ok, so there may be zombies. Come back again if there are, and give the zombie reaper a chance to fire.
-            Debug() << "SrvMgr max subs kicker: Timer fired but we are no longer near the global active subs limit, returning early ...";
+            DebugM("SrvMgr max subs kicker: Timer fired but we are no longer near the global active subs limit, returning early ...");
             return allNearLimit && ctr < 2; // fire once again later if we are near the limit after zombies are collected.
         }
 
@@ -493,7 +493,7 @@ void SrvMgr::globalSubsLimitReached()
             Log() << "Global subs limit reached, kicking all clients for IP " << maxIP.toString() << " (subs: " << max << ")";
             emit kickByAddress(maxIP); // kick!
         } else {
-            Debug() << "Global subs limit reached, but could not find a client to kick (num per-IP-datas: " << tableSize << ")";
+            DebugM("Global subs limit reached, but could not find a client to kick (num per-IP-datas: ", tableSize, ")");
         }
         return false; // don't keep firing in this execution path.
     });

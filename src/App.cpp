@@ -227,7 +227,7 @@ void App::parseArgs()
         { { "a", "admin" },
           QString("Specify a <port> or an <interface:port> on which to listen for TCP connections for the admin RPC service."
                   " The admin service is used for sending special control commands to the server, such as stopping"
-                  " the server, and it should *NOT* be exposed to the internet.  This option is required if you wish to"
+                  " the server, and it should *NOT* be exposed to the internet. This option is required if you wish to"
                   " use the FulcrumAdmin CLI tool to send commands to Fulcrum. It is recommended that you specify the"
                   " loopback address as the bind interface for this option such as: <port> by itself or 127.0.0.1:<port> for"
                   " IPv4 and/or ::1:<port> for IPv6. If no interface is specified, and just a port number by itself is"
@@ -237,7 +237,7 @@ void App::parseArgs()
          },
          { { "z", "stats" },
            QString("Specify listen address and port for the stats HTTP server. Format is same as the -s, -t or -a options,"
-           " e.g.: <interface:port>. Default is to not start any starts HTTP servers.  Also, like the -a option, you may"
+           " e.g.: <interface:port>. Default is to not start any starts HTTP servers. Also, like the -a option, you may"
            " specify a port number by itself here and 127.0.0.1:<port> will be assumed."
            " This option may be specified more than once to bind to multiple interfaces and/or ports."),
            QString("[interface:]port"),
@@ -250,14 +250,14 @@ void App::parseArgs()
          },
          { { "u", "rpcuser" },
            QString("Specify a username to use for authenticating to bitcoind. This is a required option, along"
-           " with -b and -p.  This option should be the same username you specified in your bitcoind.conf file"
+           " with -b and -p. This option should be the same username you specified in your bitcoind.conf file"
            " under rpcuser=. For security, you may omit this option from the command-line and use the %1"
            " environment variable instead (the CLI arg takes precedence if both are present).").arg(RPCUSER),
            QString("username"),
          },
          { { "p", "rpcpassword" },
            QString("Specify a password to use for authenticating to bitcoind. This is a required option, along"
-           " with -b and -u.  This option should be the same password you specified in your bitcoind.conf file"
+           " with -b and -u. This option should be the same password you specified in your bitcoind.conf file"
            " under rpcpassword=. For security, you may omit this option from the command-line and use the"
            " %1 environment variable instead (the CLI arg takes precedence if both are present).").arg(RPCPASSWORD),
            QString("password"),
@@ -270,7 +270,8 @@ void App::parseArgs()
            QString("Suppress debug output. This is the default on release builds. This is the opposite of -d."),
          },
          { { "S", "syslog" },
-           QString("Syslog mode. If on Unix, use the syslog() facility to produce log messages. This option currently has no effect on Windows."),
+           QString("Syslog mode. If on Unix, use the syslog() facility to produce log messages."
+                   " This option currently has no effect on Windows."),
          },
          { { "C", "checkdb" },
            QString("If specified, database consistency will be checked thoroughly for sanity & integrity."
@@ -281,6 +282,13 @@ void App::parseArgs()
                    " seconds to detect mempool and blockchain changes. This value must be at least 0.5 and cannot exceed"
                    " 30. If not specified, defaults to %1 seconds.").arg(Options::defaultPollTimeSecs),
            QString("polltime"), QString::number(Options::defaultPollTimeSecs)
+         },
+         {
+           "ts-format",
+           QString("Specify log timestamp format, one of: \"none\", \"uptime\", \"localtime\", or \"utc\". "
+                   "If unspecified, default is \"localtime\" (previous versions of " APPNAME " always logged using "
+                   "\"uptime\")."),
+           QString("keyword"),
          },
          {
            "dump-sh",
@@ -300,7 +308,7 @@ void App::parseArgs()
     // but CLI args take precedence over config file options.
     if (auto posArgs = parser.positionalArguments(); !posArgs.isEmpty()) {
         if (posArgs.size() > 1)
-            throw BadArgs("More than 1 config file was specified.  Please specify at most 1 config file.");
+            throw BadArgs("More than 1 config file was specified. Please specify at most 1 config file.");
         const auto file = posArgs.first();
         if (!conf.open(file))
             throw BadArgs(QString("Unable to open config file %1").arg(file));
@@ -830,6 +838,29 @@ void App::parseArgs()
             Warning() << "Warning: No 'hostname' variable defined in configuration. This server may not be peer-discoverable.";
         });
     }
+
+    // parse --ts-format or ts-format= from conf (ts_format also supported from conf)
+    if (auto fmt = parser.value("ts-format");
+            !fmt.isEmpty() || !(fmt = conf.value("ts-format")).isEmpty() || !(fmt = conf.value("ts_format")).isEmpty()) {
+        fmt = fmt.toLower().trimmed();
+        if (fmt == "uptime" || fmt == "abs" || fmt == "abstime")
+            options->logTimestampMode = Options::LogTimestampMode::Uptime;
+        else if (fmt.startsWith("local"))
+            options->logTimestampMode = Options::LogTimestampMode::Local;
+        else if (fmt == "utc")
+            options->logTimestampMode = Options::LogTimestampMode::UTC;
+        else if (fmt == "none")
+            options->logTimestampMode = Options::LogTimestampMode::None;
+        else
+            throw BadArgs(QString("ts-format: unrecognized value \"%1\"").arg(fmt));
+        Util::AsyncOnObject(this, [this]{ DebugM("config: ts-format = ", options->logTimestampModeString()); });
+    }
+#ifdef Q_OS_UNIX
+    else if (options->syslogMode) {
+        options->logTimestampMode = Options::LogTimestampMode::None;
+        Util::AsyncOnObject(this, []{ DebugM("syslog mode enabled, defaulting to \"--ts-format none\""); });
+    }
+#endif
 
     // parse --dump-*
     if (const auto outFile = parser.value("dump-sh"); !outFile.isEmpty()) {

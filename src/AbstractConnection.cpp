@@ -119,8 +119,7 @@ void AbstractConnection::setMaxBuffer(qint64 maxBytes)
     MAX_BUFFER = Options::clampMaxBufferSetting(int(maxBytes));
     if (socket && thread() == QThread::currentThread()) {
         socket->setReadBufferSize(MAX_BUFFER);
-        if (Debug::isEnabled())
-            Debug() << prettyName() << " set max_buffer to " << MAX_BUFFER << ", socket says: " << socket->readBufferSize();
+        DebugM(prettyName(), " set max_buffer to ", MAX_BUFFER, ", socket says: ", socket->readBufferSize());
     }
 }
 
@@ -129,11 +128,11 @@ void AbstractConnection::do_disconnect(bool graceful)
     status = status == Bad ? Bad : NotConnected;  // try and keep Bad status around so PeerMgr can decide when to reconnect based on it? TODO: remove this concept from the codebase
     if (socket) {
         if (!graceful) {
-            Debug() << __func__ << " (abort) " << id;
+            DebugM(__func__, " (abort) ", id);
             socket->abort();  // this will set status too because state change, but we set it first above to be paranoid
         } else {
             socket->disconnectFromHost();
-            Debug() << __func__ << " (graceful) " << id;
+            DebugM(__func__, " (graceful) ", id);
         }
     }
 }
@@ -168,11 +167,11 @@ bool AbstractConnection::do_write(const QByteArray & data)
         err = " called from another thread! FIXME!";
     }
     if (!err.isEmpty()) {
-        Error() << __FUNCTION__ << " (" << objectName() << ") " << err << " id=" << id;
+        Error() << __func__ << " (" << objectName() << ") " << err << " id=" << id;
         return false;
     }
     if (writeBackLog > MAX_BUFFER) {
-        Warning(Log::Magenta) << __FUNCTION__ << ": " << prettyName() << " -- MAX_BUFFER reached on write (" << MAX_BUFFER << "), disconnecting client";
+        Warning(Log::Magenta) << __func__ << ": " << prettyName() << " -- MAX_BUFFER reached on write (" << MAX_BUFFER << "), disconnecting client";
         do_disconnect();
         return false;
     }
@@ -183,7 +182,7 @@ bool AbstractConnection::do_write(const QByteArray & data)
     writeBackLog += n2write;
     const qint64 written = socket->write(data);
     if (UNLIKELY(written < 0)) {
-        Error() << __FUNCTION__ << ": " << prettyName() << " -- error on write " << socket->error() << " (" << socket->errorString() << ")";
+        Error() << __func__ << ": " << prettyName() << " -- error on write " << socket->error() << " (" << socket->errorString() << ")";
         do_disconnect();
         return false;
     } else if (UNLIKELY(written < n2write)) {
@@ -192,7 +191,7 @@ bool AbstractConnection::do_write(const QByteArray & data)
         // however, in case some day this predicate is violated by a Qt API change.
         //
         // See: https://code.woboq.org/qt5/qtbase/src/network/socket/qabstractsocket.cpp.html#_ZN15QAbstractSocket9writeDataEPKcx
-        Error() << __FUNCTION__ << ": " << prettyName() << " -- short write count; expected to write " << n2write
+        Error() << __func__ << ": " << prettyName() << " -- short write count; expected to write " << n2write
                 << " bytes, but wrote " << written << " bytes instead. This should never happen! FIXME!";
         return false;
     }
@@ -205,7 +204,7 @@ void AbstractConnection::slot_on_readyRead() { on_readyRead(); }
 void AbstractConnection::on_connected()
 {
     // runs in our thread's context
-    Debug() << __func__ << " " << id;
+    DebugM(__func__, " ", id);
     connectedTS = Util::getTime();
     setSockOpts(socket); // ensure nagling disabled
     socket->setReadBufferSize(MAX_BUFFER); // ensure memory exhaustion from peer can't happen in case we're too busy to read.
@@ -214,7 +213,7 @@ void AbstractConnection::on_connected()
     connectedConns.push_back(connect(socket, SIGNAL(bytesWritten(qint64)), this, SLOT(on_bytesWritten(qint64))));
     connectedConns.push_back(
         connect(socket, &QAbstractSocket::disconnected, this, [this]{
-            Debug() << prettyName() << " socket disconnected";
+            DebugM(prettyName(), " socket disconnected");
             for (const auto & connection : connectedConns) {
                 QObject::disconnect(connection);
             }
@@ -243,7 +242,7 @@ void AbstractConnection::on_disconnected()
 
 void AbstractConnection::on_socketState(QAbstractSocket::SocketState s)
 {
-    Debug() << prettyName() << " socket state: " << s;
+    DebugM(prettyName(), " socket state: ",  int(s));
     switch (s) {
     case QAbstractSocket::ConnectedState:
         status = Connected;
@@ -262,16 +261,16 @@ void AbstractConnection::on_socketState(QAbstractSocket::SocketState s)
 
 void AbstractConnection::on_bytesWritten(qint64 nBytes)
 {
-    Trace() << __FUNCTION__;
+    TraceM(__func__);
     writeBackLog -= nBytes;
     if (writeBackLog > 0 && status == Connected && socket) {
-        Debug() << prettyName() << " writeBackLog size: " << writeBackLog << " (wrote just now: " << nBytes << ")";
+        DebugM(prettyName(), " writeBackLog size: ", writeBackLog, " (wrote just now: ", nBytes, ")");
     }
 }
 
 void AbstractConnection::do_ping()
 {
-    Debug() << __FUNCTION__ << " " << prettyName() << " stub ...";
+    DebugM(__func__, " ", prettyName(), " stub ...");
 }
 
 void AbstractConnection::on_error(QAbstractSocket::SocketError err)

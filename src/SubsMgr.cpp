@@ -184,14 +184,15 @@ void SubsMgr::doNotifyAllPending()
         if (doemit) {
             const auto nClients = sub->subscribedClientIds.size();
             ctr += nClients;
-            Debug() << "Notifying " << nClients << Util::Pluralize(" client", nClients) << " of status for " << Util::ToHexFast(sh);
+            DebugM("Notifying ", nClients, Util::Pluralize(" client", nClients), " of status for ", Util::ToHexFast(sh));
             sub->updateTS();
             emit sub->statusChanged(sh, status);
         }
     }
     if (ctr || ctrSH) {
         const auto elapsedMS = (Util::getTimeNS() - t0)/1e6;
-        Debug() << __func__ << ": " << ctr << Util::Pluralize(" client", ctr) << ", " << ctrSH << Util::Pluralize(" scripthash", ctrSH) << " in " << QString::number(elapsedMS, 'f', 4) << " msec";
+        DebugM(__func__, ": ", ctr, Util::Pluralize(" client", ctr), ", ", ctrSH, Util::Pluralize(" scripthash", ctrSH),
+               " in ", QString::number(elapsedMS, 'f', 4), " msec");
     }
 }
 
@@ -332,9 +333,7 @@ bool SubsMgr::unsubscribe(RPC::ConnectionBase *c, const HashX &sh)
             sub->subscribedClientIds.erase(it);
             sub->updateTS();
             bool res = QObject::disconnect(sub.get(), &Subscription::statusChanged, c, nullptr);
-            //Trace() << "Unsub: disconnected signal1 " << (res ? "ok" : "not ok!");
             res = QObject::disconnect(c, &QObject::destroyed, sub.get(), nullptr);
-            //Trace() << "Unsub: disconnected signal2 " << (res ? "ok" : "not ok!");
             ret = true;
             --p->nClientSubsActive;
         }
@@ -379,7 +378,7 @@ auto SubsMgr::getFullStatus(const HashX &sh) const -> StatusHash
     const auto elapsed = Util::getTimeNS() - t0;
     constexpr qint64 kTookKindaLongNS = 7500000LL; // 7.5mec -- if it takes longer than this, log it to debug log, otherwise don't as this can get spammy.
     if (elapsed > kTookKindaLongNS) {
-        Debug() << "full status for " << Util::ToHexFast(sh) << " " << hist.size() << " items in " << QString::number(elapsed/1e6, 'f', 4) << " msec";
+        DebugM("full status for ",  Util::ToHexFast(sh), " ", hist.size(), " items in ", QString::number(elapsed/1e6, 'f', 4), " msec");
     }
     return ret;
 }
@@ -407,8 +406,8 @@ void SubsMgr::removeZombies(bool forced)
     if (ctr) {
         p->subs.reserve(p->kSubsReserveSize); // shrink_to_fit if over kSubsReserveSize
         const auto elapsed = Util::getTimeNS() - t0;
-        Debug() << "SubsMgr: Removed " << ctr << " zombie " << Util::Pluralize("sub", ctr) << " out of " << total
-                << " in " << QString::number(elapsed/1e6, 'f', 4) << " msec";
+        DebugM( "SubsMgr: Removed ", ctr, " zombie ", Util::Pluralize("sub", ctr), " out of ", total,
+                " in ", QString::number(elapsed/1e6, 'f', 4), " msec");
     }
 }
 

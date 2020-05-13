@@ -30,13 +30,13 @@ namespace Merkle {
         const unsigned hvsz = unsigned(hashVec.size());
         if (!hvsz || index >= hvsz) {
             Error() << __PRETTY_FUNCTION__ << ": Misused. Please specify a non-empty hash vector as well as an in-range index. FIXME!";
-            throw BadArgs(QString("Bad args to %1").arg(__FUNCTION__));
+            throw BadArgs(QString("Bad args to %1").arg(__func__));
         }
         const unsigned natLen = branchLength(unsigned(hvsz));
         const unsigned length = optLen.value_or(natLen);
         if (length < natLen) {
             Error() << __PRETTY_FUNCTION__ << ": Misused. Must specify a length argument that is >= " << natLen << " for a vector of size " << hvsz << ". FIXME!";
-            throw BadArgs(QString("Bad length arg to %1").arg(__FUNCTION__));
+            throw BadArgs(QString("Bad length arg to %1").arg(__func__));
         }
         HashVec branch;
         branch.reserve(length);
@@ -66,7 +66,7 @@ namespace Merkle {
         }
         if (UNLIKELY(hashes.empty())) {
             Error() << __PRETTY_FUNCTION__ << ": INTERNAL ERROR. Output vector is empty! FIXME!";
-            throw InternalError(QString("%1: Output hash vector is empty").arg(__FUNCTION__));
+            throw InternalError(QString("%1: Output hash vector is empty").arg(__func__));
         }
         ret = { std::move(branch), hashes.front() };
         return ret;
@@ -84,7 +84,7 @@ namespace Merkle {
         }
         if (index) {
             Error() << __PRETTY_FUNCTION__ << ": INTERNAL ERROR. Passed-in index is out of range! FIXME!";
-            throw BadArgs(QString("%1: Index argument out of range").arg(__FUNCTION__));
+            throw BadArgs(QString("%1: Index argument out of range").arg(__func__));
         }
         return hash;
     }
@@ -116,7 +116,7 @@ namespace Merkle {
         BranchAndRootPair ret;
         if (level.empty() || leafHashes.empty() || depthHigher > MaxDepth) {
             Error() << __PRETTY_FUNCTION__ << ": Invalid args";
-            throw BadArgs(QString("Invalid arguments to %1").arg(__FUNCTION__));
+            throw BadArgs(QString("Invalid arguments to %1").arg(__func__));
         }
         const unsigned leafIndex = (index >> depthHigher) << depthHigher; // funny way to make 0's on the right.
         auto leafPair = branchAndRoot(leafHashes, index - leafIndex, depthHigher);
@@ -126,7 +126,7 @@ namespace Merkle {
         const auto & [levelBranch, root] = levelPair;
         if (index >= level.size() || leafRoot != level[index]) {
             Error() << __PRETTY_FUNCTION__ << ": leaf hashes inconsistent with level. FIXME!";
-            throw InternalError(QString("%1: leaf hashes inconsistent with level").arg(__FUNCTION__));
+            throw InternalError(QString("%1: leaf hashes inconsistent with level").arg(__func__));
         }
         auto & outVec (leafBranch); // we concatenate to the end of this vector
         outVec.reserve(outVec.size() + levelBranch.size()); // make room
@@ -212,7 +212,7 @@ namespace Merkle {
         depthHigher = Merkle::treeDepth(length) / 2;
         level = getLevel(hashes);
         initialized = true;
-        Debug() << "Merkle cache initialized to length " << length;
+        DebugM("Merkle cache initialized to length ", length);
     }
 
     HashVec Cache::getLevel(const HashVec &hashes) const {
@@ -235,7 +235,7 @@ namespace Merkle {
         level.reserve(level.size() + vec.size());
         level.insert(level.end(), vec.begin(), vec.end());
         length = l;
-        Debug() << "Merkle cache extended to length " << length;
+        DebugM("Merkle cache extended to length ", length);
     }
 
     HashVec Cache::levelFor(unsigned l) const
@@ -264,17 +264,17 @@ namespace Merkle {
     BranchAndRootPair Cache::branchAndRoot(unsigned length, unsigned index)
     {
         if (!length)
-            throw BadArgs(QString("%1: length must not be 0").arg(__FUNCTION__));
+            throw BadArgs(QString("%1: length must not be 0").arg(__func__));
         if (index >= length)
-            throw BadArgs(QString("%1: index must be less than length").arg(__FUNCTION__));
+            throw BadArgs(QString("%1: index must be less than length").arg(__func__));
         if (!initialized)
-            throw InternalError(QString("%1: Merkle cache is not initialized").arg(__FUNCTION__));
+            throw InternalError(QString("%1: Merkle cache is not initialized").arg(__func__));
         BranchAndRootPair ret;
         ExclusiveLockGuard g(lock);
         extendTo(length);
         if (length > this->length) {
             // ruh-roh.. what to do here?
-            throw InternalError(QString("%1: extendTo failed to extend length to %2").arg(__FUNCTION__).arg(length));
+            throw InternalError(QString("%1: extendTo failed to extend length to %2").arg(__func__).arg(length));
         }
         auto ls = leafStart(index);
         auto count = std::min(segmentLength(), length - ls);
@@ -293,7 +293,7 @@ namespace Merkle {
         if (!initialized)
             return;
         if (!length)
-            throw BadArgs(QString("%1: length cannot be 0").arg(__FUNCTION__));
+            throw BadArgs(QString("%1: length cannot be 0").arg(__func__));
         ExclusiveLockGuard g(lock);
         if (this->length <= length)
             // we are already smaller than length, so it's fine.
@@ -306,7 +306,7 @@ namespace Merkle {
             Warning() << "limit > levelSize in merkle cache truncate. FIXME!";
         }
         level.erase(level.begin()+limit, level.end());
-        Debug() << "Merkle cache truncated to length " << length;
+        DebugM("Merkle cache truncated to length ", length);
     }
 
 

@@ -178,7 +178,6 @@ namespace Util {
             if (0 == sysctlbyname("hw.physicalcpu",&a,&b,nullptr,0)) {
                 nProcs = unsigned(a);
             }
-            //Debug() << "nProcs = " << nProcs;//  << " a:" << a << "  b:" << b;
         }
         return nProcs.load() ? nProcs.load() : 1;
     }
@@ -290,19 +289,37 @@ Log::~Log()
 {
     if (doprt) {
         App *ourApp = app();
+        using LTS = Options::LogTimestampMode;
+        const LTS ltsMode = !ourApp ? Options::defaultLogTimeStampMode : ourApp->options->logTimestampMode;
         s.flush(); // does nothing probably..
-        // note: we always want to log the timestamp, even in syslog mode.
-        // this is because if logging from a thread, log lines may be out-of-order.
+        // [timestamp]
+        // Note: we always want to log the timestamp, even in syslog mode.
+        // This is because if logging from a thread, log lines may be out-of-order.
         // The timestamp is the only record of the actual order in which things
-        // occurred. Currently the timestamp is to 4 decimal places (hundreds of micros)
-        const auto unow = Util::getTimeNS()/1000LL;
-        const QString tsStr = QString::asprintf("[%lld.%04d] ", unow/1000000LL, int((unow/100LL)%10000));
-        QString thrdStr = "";
-
+        // occurred. Currently the timestamp is to 4 decimal places (hundreds of micros) in Uptime mode only.
+        // We do offer LogTimestampMode::None for users really wishing to suppress timestamp logging.
+        QString tsStr;
+        switch (ltsMode) {
+        case LTS::None:
+            break;
+        case LTS::Uptime: {
+            const auto unow = Util::getTimeNS()/1000LL;
+            tsStr = QString::asprintf("[%lld.%04d] ", unow/1000000LL, int((unow/100LL)%10000));
+        }
+            break;
+        case LTS::UTC:
+        case LTS::Local: {
+            const auto now = ltsMode == LTS::UTC ? QDateTime::currentDateTimeUtc() : QDateTime::currentDateTime();
+            tsStr = now.toString(u"[yyyy-MM-dd hh:mm:ss.zzz] ");
+        }
+            break;
+        }
+        // /[timestamp]
+        QString thrdStr;
         if (QThread *th = QThread::currentThread(); th && ourApp && th != ourApp->thread()) {
             QString thrdName = th->objectName();
             if (thrdName.trimmed().isEmpty()) thrdName = QString::asprintf("%p", reinterpret_cast<void *>(QThread::currentThreadId()));
-            thrdStr = QStringLiteral("<Thr: %1> ").arg(thrdName);
+            thrdStr = QStringLiteral("<%1> ").arg(thrdName);
         }
 
         Logger *logger = ourApp ? ourApp->logger() : nullptr;
@@ -354,6 +371,7 @@ QString Log::colorize(const QString &str, Color c) {
 }
 
 template <> Log & Log::operator<<(const Color &c) { setColor(c); return *this; }
+template <> Log & Log::operator<<(const std::string &t) { s << t.c_str(); return *this; }
 
 Debug::~Debug()
 {
@@ -361,7 +379,7 @@ Debug::~Debug()
     doprt = isEnabled();
     if (!doprt) return;
     if (!colorOverridden) color = Cyan;
-    str = QString("(Debug) ") + str;
+    str = QStringLiteral("(Debug) ") + str;
 }
 
 bool Debug::forceEnable = false;
@@ -378,7 +396,7 @@ Trace::~Trace()
     doprt = isEnabled();
     if (!doprt) return;
     if (!colorOverridden) color = Green;
-    str = QString("(Trace) ") + str;
+    str = QStringLiteral("(Trace) ") + str;
 }
 
 bool Trace::forceEnable = false;
@@ -407,19 +425,4 @@ Fatal::~Fatal()
     level = Logger::Level::Fatal;
     str = QString("FATAL: ") + str;
     if (!colorOverridden) color = BrightRed;
-}
-
-FatalAssert::FatalAssert(bool expr)
-    : assertion(expr)
-{
-    doprt = !assertion;
-}
-
-FatalAssert::~FatalAssert()
-{
-    if ((doprt = !assertion)) {
-        level = Logger::Level::Fatal;
-        str = QString("ASSERTION FAILED: ") + str;
-        if (!colorOverridden) color = BrightRed;
-    }
 }

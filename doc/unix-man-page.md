@@ -1,6 +1,6 @@
-% FULCRUM(1) Version 1.1.0 | Fulcrum Manual
+% FULCRUM(1) Version 1.1.1 | Fulcrum Manual
 % Fulcrum is written by Calin Culianu (cculianu)
-% April 15, 2020
+% May 13, 2020
 
 # NAME
 
@@ -95,6 +95,9 @@ Once the server finishes synching it will behave like an ElectronX/ElectrumX ser
 
 -T, --polltime <polltime>
 :   The number of seconds for the bitcoind poll interval. Bitcoind is polled once every `polltime` seconds to detect mempool and blockchain changes. This value must be at least 0.5 and cannot exceed 30. If not specified, defaults to 2 seconds.
+
+--ts-format <keyword>
+:   Specify log timestamp format, one of: "none", "uptime", "localtime", or "utc". If unspecified, default is "localtime" (previous versions of Fulcrum always logged using "uptime").
 
 --dump-sh <outputfile>
 :    *This is an advanced debugging option*. Dump script hashes. If specified, after the database is loaded, all of the script hashes in the database will be written to outputfile as a JSON array.

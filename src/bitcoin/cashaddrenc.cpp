@@ -113,7 +113,7 @@ std::string EncodeCashAddr(const CTxDestination &dst,
         ret = std::visit(CashAddrEncoder(params), dst); // cheap rvalue ref copy assign
     } catch (const std::bad_variant_access & e) {
 #ifdef USE_QT_IN_BITCOIN
-        qCritical("%s: Caught exception bad_variant_access: %s", __FUNCTION__, e.what());
+        qCritical("%s: Caught exception bad_variant_access: %s", __func__, e.what());
 #endif
         // ignore..
         ret.clear();

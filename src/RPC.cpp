@@ -281,14 +281,14 @@ namespace RPC {
     void ConnectionBase::_sendRequest(const Message::Id & reqid, const QString &method, const QVariantList & params)
     {
         if (status != Connected || !socket) {
-            Debug() << __FUNCTION__ << " method: " << method << "; Not connected! " << "(id: " << this->id << "), forcing on_disconnect ...";
+            DebugM(__func__, " method: ", method, "; Not connected! ", "(id: ", this->id, "), forcing on_disconnect ...");
             // the below ensures socket cleanup code runs.  This guarantees a disconnect & cleanup on bad socket state.
             do_disconnect();
             return;
         }
         QString json = Message::makeRequest(reqid, method, params, v1).toJsonString();
         if (json.isEmpty()) {
-            Error() << __FUNCTION__ << " method: " << method << "; Unable to generate request JSON! FIXME!";
+            Error() << __func__ << " method: " << method << "; Unable to generate request JSON! FIXME!";
             return;
         }
         if (idMethodMap.size() >= MAX_UNANSWERED_REQUESTS) {  // prevent memory leaks in case of misbehaving peer
@@ -299,7 +299,7 @@ namespace RPC {
         idMethodMap[reqid] = method; // remember method sent out to associate it back.
 
         const auto data = json.toUtf8();
-        if (Trace::isEnabled()) Trace() << "Sending json: " << Util::Ellipsify(data);
+        TraceM("Sending json: ", Util::Ellipsify(data));
         ++nRequestsSent;
         // below send() ends up calling do_write immediately (which is connected to send)
         emit send( wrapForSend(data) );
@@ -307,7 +307,7 @@ namespace RPC {
     void ConnectionBase::_sendNotification(const QString &method, const QVariant & params)
     {
         if (status != Connected || !socket) {
-            Debug() << __FUNCTION__ << " method: " << method << "; Not connected! " << "(id: " << this->id << "), forcing on_disconnect ...";
+            DebugM(__func__, " method: ", method, "; Not connected! ", "(id: ", this->id, "), forcing on_disconnect ...");
             // the below ensures socket cleanup code runs.  This guarantees a disconnect & cleanup on bad socket state.
             do_disconnect();
             return;
@@ -318,15 +318,15 @@ namespace RPC {
         } else if (params.canConvert<QVariantList>()) {
             json = Message::makeNotification(method, params.toList(), v1).toJsonString();
         } else {
-            Error() << __FUNCTION__ << " method: " << method << "; Notification requires either a QVarantList or a QVariantMap as its argument! FIXME!";
+            Error() << __func__ << " method: " << method << "; Notification requires either a QVarantList or a QVariantMap as its argument! FIXME!";
             return;
         }
         if (json.isEmpty()) {
-            Error() << __FUNCTION__ << " method: " << method << "; Unable to generate notification JSON! FIXME!";
+            Error() << __func__ << " method: " << method << "; Unable to generate notification JSON! FIXME!";
             return;
         }
         const auto data = json.toUtf8();
-        if (Trace::isEnabled()) Trace() << "Sending json: " << Util::Ellipsify(data);
+        TraceM("Sending json: ", Util::Ellipsify(data));
         ++nNotificationsSent;
         // below send() ends up calling do_write immediately (which is connected to send)
         emit send( wrapForSend(data) );
@@ -334,14 +334,14 @@ namespace RPC {
     void ConnectionBase::_sendError(bool disc, int code, const QString &msg, const Message::Id & reqId)
     {
         if (status != Connected || !socket) {
-            Debug() << __FUNCTION__ << "; Not connected! " << "(id: " << this->id << "), forcing on_disconnect ...";
+            DebugM(__func__, "; Not connected! ", "(id: ", this->id, "), forcing on_disconnect ...");
             // the below ensures socket cleanup code runs.  This guarantees a disconnect & cleanup on bad socket state.
             do_disconnect();
             return;
         }
         QString json = Message::makeError(code, msg, reqId, v1).toJsonString();
         const auto data = json.toUtf8();
-        if (Trace::isEnabled()) Trace() << "Sending json: " << Util::Ellipsify(data);
+        TraceM("Sending json: ", Util::Ellipsify(data));
         ++nErrorsSent;
         // below send() ends up calling do_write immediately (which is connected to send)
         emit send( wrapForSend(data) );
@@ -352,18 +352,18 @@ namespace RPC {
     void ConnectionBase::_sendResult(const Message::Id & reqid, const QVariant & result)
     {
         if (status != Connected || !socket) {
-            Debug() << __FUNCTION__ << ":  Not connected! " << "(id: " << this->id << "), forcing on_disconnect ...";
+            DebugM(__func__, ":  Not connected! ", "(id: ", this->id, "), forcing on_disconnect ...");
             // the below ensures socket cleanup code runs.  This guarantees a disconnect & cleanup on bad socket state.
             do_disconnect();
             return;
         }
         QString json = Message::makeResponse(reqid, result, v1).toJsonString();
         if (json.isEmpty()) {
-            Error() << __FUNCTION__ << ": Unable to generate result JSON! FIXME!";
+            Error() << __func__ << ": Unable to generate result JSON! FIXME!";
             return;
         }
         const auto data = json.toUtf8();
-        if (Trace::isEnabled()) Trace() << "Sending result json: " << Util::Ellipsify(data);
+        TraceM("Sending result json: ", Util::Ellipsify(data));
         ++nResultsSent;
         // below send() ends up calling do_write immediately (which is connected to send)
         emit send( wrapForSend(data) );
@@ -375,7 +375,7 @@ namespace RPC {
             // This is only ever latched to true in the "Client" subclass and it signifies that the client is being
             // dropped and so we have this short-circuit conditional to save on cycles in that situation and not
             // bother processing further messages.
-            Debug() << "ignoring " << json.length() << " byte incoming message from " << id;
+            DebugM("ignoring ", json.length(), " byte incoming message from ", id);
             return;
         }
         Message::Id msgId;
@@ -527,7 +527,7 @@ namespace RPC {
 
     void ElectrumConnection::on_readyRead()
     {
-        Trace() << __FUNCTION__;
+        TraceM(__func__);
         WebSocket::Wrapper * const ws = checkSetGetWebSocket();
         assert(!ws || ws == socket);  // If `ws` is not null, then `ws` and `socket` must point to the same object.
 
@@ -538,27 +538,20 @@ namespace RPC {
             // check if paused -- we may get paused inside processJson below
             if (readPaused) {
                 skippedOnReadyRead = true;
-                if (Debug::isEnabled()) {
-                    Debug() << prettyName() << " reads paused, skipping on_readyRead"
-                            << " (bufsz: " << QString::number(socket->bytesAvailable()/1024.0, 'f', 1) << " KB) ...";
-                }
+                DebugM(prettyName(), " reads paused, skipping on_readyRead",
+                       " (bufsz: ", QString::number(socket->bytesAvailable()/1024.0, 'f', 1), " KB) ...");
                 break;
             }
             // /pause check
             auto data = ws ? ws->readNextMessage() : socket->readLine();
             nReceived += data.length();
-            if (Trace::isEnabled()) // may be slow, so conditional on trace mode
-            {
-                auto line = !ws ? data.trimmed() : data;
-                Trace() << "Got: " << line;
-            }
+            // may be slow, so use the efficient TraceM
+            TraceM("Got: ", (!ws ? data.trimmed() : data));
             processJson(data);
         }
         if (isBad()) { // this may have been set again by processJson() above
-            if (Debug::isEnabled()) {
-                Debug() << prettyName() << " is now bad, ignoring read (buf: "
-                        << QString::number((socket ? socket->bytesAvailable() : 0)/1024., 'f', 1) << " KB)";
-            }
+            DebugM(prettyName(), " is now bad, ignoring read (buf: ",
+                   QString::number((socket ? socket->bytesAvailable() : 0)/1024., 'f', 1), " KB)");
             return;
         }
 
@@ -599,9 +592,8 @@ namespace RPC {
         static const auto StopTimer = [](ElectrumConnection *me, qint64 avail) {
             me->memoryWasteTimerActive = false;
             me->stopTimer(memoryWasteTimer);
-            if (Debug::isEnabled())
-                Debug() << "Memory waste timer STOPPED for " << me->id << " from " << me->peerAddress().toString()
-                        << ", read buffer now: " << avail;
+            DebugM("Memory waste timer STOPPED for ", me->id, " from ", me->peerAddress().toString(),
+                   ", read buffer now: ", avail);
         };
         memoryWasteThreshold = MAX_BUFFER;
         if (memoryWasteThreshold < 0) {
@@ -633,8 +625,8 @@ namespace RPC {
                 } else
                     StopTimer(this, avail);
             });
-            if (Debug::isEnabled())
-                Debug() << "Memory waste timer STARTED for " << this->id << " from " << this->peerAddress().toString() << ", read buffer size: " << avail;
+            DebugM("Memory waste timer STARTED for ", this->id, " from ", this->peerAddress().toString(),
+                   ", read buffer size: ", avail);
         } else if (UNLIKELY(memoryWasteTimerActive && avail < memoryWasteThreshold)) {
             StopTimer(this, avail);
         }
@@ -689,7 +681,7 @@ namespace RPC {
                 QByteArray data = socket->readLine();
                 nReceived += data.size();
                 data = data.simplified();
-                if (Trace::isEnabled()) Trace() << __FUNCTION__ << " Got: " << data;
+                TraceM(__func__, " Got: ", data);
                 if (sm->state == St::BEGIN) {
                     // read "HTTP/1.1 200 OK" line
                     auto toks = data.split(' ');
@@ -708,13 +700,14 @@ namespace RPC {
                         throw Exception(QString("Could not parse status code: %1").arg(QString(code)));
                     }
                     if (sm->status != 200 && sm->status != 500) { // bitcoind sends 200 on results= and 500 on error= RPC messages. Everything else is unexpected.
-                        Warning() << "Got HTTP status " << sm->status << " " << msg << (!Trace::isEnabled() ? "; will log the rest of this HTTP response" : "");
+                        Warning() << "Got HTTP status " << sm->status << " " << msg
+                                  << (!Trace::isEnabled() ? "; will log the rest of this HTTP response" : "");
                         sm->logBad = true;
                         if (sm->status == 401) // 401 status indicates other side didn't like our auth cookie or we need an auth cookie.
                             emit authFailure(this);
                     }
                     sm->statusMsg = QString::fromUtf8(msg);
-                    if (Trace::isEnabled()) Trace() << "Status message: " << sm->statusMsg;
+                    TraceM("Status message: ", sm->statusMsg);
                     sm->state = St::HEADER;
                 } else if (sm->state == St::HEADER) {
                     // read header, line by line
@@ -748,7 +741,7 @@ namespace RPC {
                                 throw Exception(QString("Peer wants to send us more than %1 bytes of data, exceeding our buffer limit!").arg(MAX_BUFFER));
                             }
                             sm->gotLength = true;
-                            if (Trace::isEnabled()) Trace() << "Content length: " << sm->contentLength;
+                            TraceM("Content length: ", sm->contentLength);
                         }
                     } else {
                         // caught EMPTY line -- this signifies end of header
@@ -778,7 +771,8 @@ namespace RPC {
                 if (sm->content.length() > sm->contentLength) {
                     // this shouldn't happen. if we get here, likely below code will fail with nonsense and connection will be killed. this is here
                     // just as a sanity check.
-                    Error() << "Content buffer has extra stuff at the end. Bug in code. FIXME! Crud was: '" << sm->content.mid(sm->contentLength) << "'";
+                    Error() << "Content buffer has extra stuff at the end. Bug in code. FIXME! Crud was: '"
+                            << sm->content.mid(sm->contentLength) << "'";
                 }
                 if (bool trace = Trace::isEnabled(); sm->logBad && !trace)
                     Warning() << sm->status << " (content): " << json.trimmed();

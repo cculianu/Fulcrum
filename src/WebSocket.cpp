@@ -384,7 +384,7 @@ namespace WebSocket
                     // note that this should not normally get triggered as we guard for it above already, but this
                     // was left in for defensive programming.
                     throw ProtocolError(QString("%1: Unexpected state in processing frame -- type=%2 tmpFrame=%3")
-                                        .arg(__FUNCTION__ ).arg(pfi->type).arg(tmpFrame ? "valid" : "invalid"));
+                                        .arg(__func__ ).arg(pfi->type).arg(tmpFrame ? "valid" : "invalid"));
 
                 // guard against ridiculously big messages that exceed QByteArray size limits
                 if (std::size_t(tmpFrame->payload.length()) + pfi->srcPayloadLen() > std::size_t(std::numeric_limits<int>::max()))
@@ -400,7 +400,7 @@ namespace WebSocket
             }
             if (tmpFrame)
                 // code above should guard against this -- this should never happen
-                throw InternalError(QString("%1: Unexpected state -- tmpFrame was not pushed back .. FIXME!").arg(__FUNCTION__));
+                throw InternalError(QString("%1: Unexpected state -- tmpFrame was not pushed back .. FIXME!").arg(__func__));
 
             // finally, copy back pieces of data we didn't process so that the `buf` arg now only contains unprocessed data.
             {
@@ -611,7 +611,7 @@ namespace WebSocket
             } // end function ClientServerBase::startCommon
 
             // --- ClientSide
-            ClientSide::~ClientSide() { /*qDebug("%s", __FUNCTION__);*/ }
+            ClientSide::~ClientSide() { /*qDebug("%s", __func__);*/ }
 
             void ClientSide::start(const QString &resourceName, const QString &host, const QString &origin, int timeout)
             {
@@ -646,7 +646,7 @@ namespace WebSocket
                      .arg(host.trimmed())
                      .arg(origin.trimmed().isEmpty() ? QString() : QStringLiteral("Origin: %1\r\n").arg(origin.trimmed()))
                      .arg(QString::fromLatin1(secKey)).toLatin1();
-                Trace("Sending header:\n%s", header.constData());
+                TraceM("Sending header:\n", header.constData());
                 sock->write(header);
             } // end function ClientSide::start
 
@@ -669,7 +669,7 @@ namespace WebSocket
                             headersFinished = true;
                             break;
                         }
-                        Trace("Got line: %s", line.constData());
+                        TraceM("Got line: ", line.constData());
                         if (expectingStatusLine) {
                             // parse status line
                             QString reasonPhrase;
@@ -677,7 +677,7 @@ namespace WebSocket
                             if (!parseStatusLine(line, &major, &minor, &code, &reasonPhrase)
                                     || major < 1 || minor < 1 || code != 101)
                                 Fail(QString(kBadHttpLine).arg(QString(line)));
-                            Trace("Got HTTP status 101 ok");
+                            TraceM("Got HTTP status 101 ok");
                             expectingStatusLine = false;
                         } else {
                             // expecting Header: value
@@ -699,7 +699,7 @@ namespace WebSocket
                                 ok && (gotKey=headers.value(QStringLiteral("sec-websocket-accept"))) != expectedDigest)
                             Fail(QString("Bad key: expected '%1', got '%2'").arg(QString(expectedDigest)).arg(gotKey));
                         if (ok) {
-                            Debug("Successful websocket handshake to host %s:%hu", sock->peerName().toLatin1().constData(), sock->peerPort());
+                            DebugM("Successful websocket handshake to host ", sock->peerName(), ":",  sock->peerPort());
                             {
                                 // save some properties to the socket
                                 sock->setProperty(kWebsocketFlag, true);
@@ -714,7 +714,7 @@ namespace WebSocket
                             Fail("Missing required headers");
                     }
                 } catch (const std::exception &e) {
-                    Debug("Failed handshake: %s", e.what());
+                    DebugM("Failed handshake: ", e.what());
                     emit failure(e.what());
                     // at this point this slot will never be called again because we auto-disconnect signals
                 }
@@ -769,7 +769,7 @@ namespace WebSocket
                             headersFinished = true;
                             break;
                         }
-                        Trace("Got line: %s", line.constData());
+                        TraceM("Got line: ", line.constData());
                         if (expectingReqLine) {
                             // parse status line
                             QString method;
@@ -777,7 +777,7 @@ namespace WebSocket
                             if (!parseReqLine(line, &major, &minor, &method, &reqResource)
                                     || major < 1 || minor < 1 || method != "GET")
                                 Fail(QString(kBadHttpLine).arg(QString(line)));
-                            Trace("HTTP GET for: %s", reqResource.toUtf8().constData());
+                            TraceM("HTTP GET for: ", reqResource.toUtf8().constData());
                             expectingReqLine = false;
                         } else {
                             // expecting Header: value
@@ -787,7 +787,7 @@ namespace WebSocket
                             const QString key = QString::fromLatin1(parts.front().trimmed().toLower()),
                                           value = QString::fromLatin1(parts.mid(1).join(':').trimmed());
                             headers[key] = value;
-                            //Trace("[Added header: %s=%s]", key.toUtf8().constData(), value.toUtf8().constData());
+                            //TraceM("[Added header: ", key, "=", value, "]");
                         }
                     } // while
                     if (headersFinished) {
@@ -820,12 +820,12 @@ namespace WebSocket
                                  .arg(serverAgent.trimmed().isEmpty() ? QString() : QStringLiteral("Server: %1\r\n").arg(serverAgent.trimmed()))
                                  .arg(GetHTTPDate())
                                  .toLatin1();
-                            Trace("Sending response header:\n%s", header.constData());
+                            TraceM("Sending response header:\n", header.constData());
                             sock->write(header);
                         }
 
-                        Debug("Successful websocket handshake for client %s:%hu",
-                              sock->peerAddress().toString().toUtf8().constData(), sock->peerPort());
+                        DebugM("Successful websocket handshake for client ",
+                               sock->peerAddress().toString(), ":", sock->peerPort());
                         {
                             // save some properties to the socket
                             sock->setProperty(kWebsocketFlag, true);
@@ -839,8 +839,7 @@ namespace WebSocket
                         return;
                     }
                 } catch (const std::exception &e) {
-                    Debug("%s:%hu failed handshake: %s", sock->peerAddress().toString().toUtf8().constData(), sock->peerPort(),
-                          e.what());
+                    DebugM(sock->peerAddress().toString(), ":", sock->peerPort(), " failed handshake: ", e.what());
                     emit failure(e.what());
                     // at this point this slot will never be called again because we auto-disconnect signals
                 }
@@ -928,7 +927,7 @@ namespace WebSocket
                 *reinterpret_cast<quint32 *>(data.data()) = QRandomGenerator::global()->generate();
                 sendPing(data);
                 if (Util::getTime() - lastPongRecvd >= pingTimer->interval()*2) {
-                    Debug() << "Ping timeout for " << QString::asprintf("%s:%hu", peerAddress().toString().toUtf8().constData(), peerPort());
+                    DebugM("Ping timeout for ", peerAddress().toString(), ":", peerPort());
                     disconnectFromHost(CloseCode::ProtocolError, QByteArrayLiteral("Ping timeout"));
                 }
             });
@@ -984,7 +983,7 @@ namespace WebSocket
         sendClose(code, reason);
         QTimer::singleShot(3000, this, [this]{
             if (!gotclose && isValid()) {
-                Debug() << "close reply timeout, closing socket";
+                DebugM("close reply timeout, closing socket");
                 socket->disconnectFromHost();
             }
         });
@@ -998,25 +997,25 @@ namespace WebSocket
     qint64 Wrapper::sendClose(quint16 code, const QByteArray &reason)
     {
         sentclose = true;
-        Trace() << "sending CLOSE";
+        TraceM("sending CLOSE");
         return socket->write(Ser::makeCloseFrame(isMasked(), CloseCode(code), reason));
     }
 
     qint64 Wrapper::sendPong(const QByteArray &data)
     {
-        Trace() << "sending PONG " << data.size() << " bytes";
+        TraceM("sending PONG ", data.size(), " bytes");
         return socket->write(Ser::makePongFrame(data, isMasked()));
     }
 
     qint64 Wrapper::sendPing(const QByteArray &data)
     {
-        Trace() << "sending PING " << data.size() << " bytes";
+        TraceM("sending PING ", data.size(), " bytes");
         return socket->write(Ser::makePingFrame(isMasked(), data));
     }
 
     qint64 Wrapper::sendText(const QByteArray &data)
     {
-        Trace() << "sending TEXT " << data.size() << " bytes";
+        TraceM("sending TEXT ", data.size(), " bytes");
         qint64 res = -1;
         try {
             res = socket->write(Ser::wrapText(data, isMasked()));
@@ -1031,7 +1030,7 @@ namespace WebSocket
     }
     qint64 Wrapper::sendBinary(const QByteArray &data)
     {
-        Trace() << "sending BINARY " << data.size() << " bytes";
+        TraceM("sending BINARY ", data.size(), " bytes");
         qint64 res = -1;
         try {
             res = socket->write(Ser::wrapBinary(data, isMasked()));
@@ -1072,23 +1071,23 @@ namespace WebSocket
                 } else {
                     if (f.type == FrameType::Ctl_Close) {
                         const Deser::CloseFrameInfo info(f);
-                        Trace() << "Got CLOSE " << info.code.value_or(0) << " " << info.reason;
+                        TraceM("Got CLOSE ", info.code.value_or(0), " ", info.reason);
                         gotclose = true;
                         emit closeFrameReceived(info.code.value_or(0), info.reason);
                         if (!sentclose) {
                             sendClose();
                         } else {
-                            Trace() << "disconnectFromHost received Close reply";
+                            TraceM("disconnectFromHost received Close reply");
                         }
                         socket->disconnectFromHost();
                     } else if (f.type == FrameType::Ctl_Ping) {
-                        Trace() << "Got PING " << f.payload.size() << " bytes";
+                        TraceM("Got PING ", f.payload.size(), " bytes");
                         if (autopingreply && !gotclose) {
                             sendPong(f.payload);
                         }
                         emit pingFrameReceived(f.payload);
                     } else if (f.type == FrameType::Ctl_Pong) {
-                        Trace() << "Got PONG " << f.payload.size() << " bytes";
+                        TraceM("Got PONG ", f.payload.size(), " bytes");
                         lastPongRecvd = Util::getTime();
                         emit pongFrameReceived(f.payload);
                     }

@@ -47,7 +47,7 @@ void BitcoinDMgr::startup() {
         connect(client.get(), &BitcoinD::authenticated, this, [this](BitcoinD *b){
             // guard against stale/old signal
             if (!b->isGood()) {
-                Debug() << "got authenticated for id:" << b->id << " but isGood() is false!";
+                DebugM("got authenticated for id:", b->id, " but isGood() is false!");
                 return; // false/stale signal
             }
             const bool wasEmpty = goodSet.empty();
@@ -58,7 +58,7 @@ void BitcoinDMgr::startup() {
         connect(client.get(), &BitcoinD::lostConnection, this, [this](AbstractConnection *c){
             // guard against stale/old signal
             if (c->isGood()) {
-                Debug() << "got lostConnection for id:" << c->id << " but isGood() is true!";
+                DebugM("got lostConnection for id:", c->id, " but isGood() is true!");
                 return; // false/stale signal
             }
             goodSet.erase(c->id);
@@ -96,11 +96,11 @@ void BitcoinDMgr::cleanup() {
 
 void BitcoinDMgr::on_Message(quint64 bid, const RPC::Message &msg)
 {
-    if (Trace::isEnabled()) Trace() << "Msg from: " << bid << " method=" << msg.method;
+    TraceM("Msg from: ", bid, " method=", msg.method);
 }
 void BitcoinDMgr::on_ErrorMessage(quint64 bid, const RPC::Message &msg)
 {
-    Debug() << "ErrMsg from: " << bid << " (reqId: " << msg.id.toString() << ") error=" << msg.errorMessage();
+    DebugM("ErrMsg from: ", bid, " (reqId: ", msg.id.toString(),") error=", msg.errorMessage());
     if (msg.errorCode() == bitcoin::RPCErrorCode::RPC_IN_WARMUP) {
         emit inWarmUp(msg.errorMessage());
     }
@@ -157,8 +157,8 @@ void BitcoinDMgr::submitRequest(QObject *sender, const RPC::Message::Id &rid, co
     // to happen either as a result of a successful request reply, or due to bitcoind failure.
     auto context = std::shared_ptr<ReqCtxObj>(new ReqCtxObj, [](ReqCtxObj *context){
         if constexpr (debugDeletes) {
-            Debug() << context->objectName() << " shptr deleter";
-            connect(context, &QObject::destroyed, qApp, [n=context->objectName()]{ Debug() << n << " destroyed"; }, Qt::DirectConnection);
+            DebugM(context->objectName(), " shptr deleter");
+            connect(context, &QObject::destroyed, qApp, [n=context->objectName()]{ DebugM(n, " destroyed"); }, Qt::DirectConnection);
         }
         context->deleteLater();
     });
@@ -288,7 +288,7 @@ void BitcoinD::on_started()
         const auto SetTimer = [this] {
             callOnTimerSoon(5000, reconnectTimer, [this]{
                 if (!isGood()) {
-                    Debug() << prettyName() << " reconnecting...";
+                    DebugM(prettyName(), " reconnecting...");
                     reconnect();
                     return true; // keep the timer alive
                 }
@@ -337,7 +337,7 @@ void BitcoinD::on_connected()
 void BitcoinD::do_ping()
 {
     if (isStale()) {
-        Debug() << "Stale connection, reconnecting.";
+        DebugM("Stale connection, reconnecting.");
         reconnect();
     } else
         emit sendRequest(newId(), "ping");

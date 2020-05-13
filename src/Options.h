@@ -54,7 +54,7 @@ public:
         false; ///< gets set to false on release builds
 #endif
     std::atomic_bool verboseTrace = false; ///< this gets set if -d -d specified
-    std::atomic_bool syslogMode = false; ///< if true, suppress printing of timestamps to logger
+    std::atomic_bool syslogMode = false; ///< if true, suppress printing of timestamps to logger by default (may be overridden with --ts-format)
 
     bool hasIPv6Listener = false; ///< used internally -- set to true by argParser if at least one of the specified listening interfaces is IPv6, false otherwise
 
@@ -192,6 +192,13 @@ public:
         static constexpr bool isKeepLogFileNumInBounds(int64_t k) { return k >= int64_t(minKeepLogFileNum) && k <= int64_t(maxKeepLogFileNum); }
     };
     DBOpts db;
+
+    enum class LogTimestampMode {
+        None = 0, Uptime, Local, UTC
+    };
+    static constexpr auto defaultLogTimeStampMode = LogTimestampMode::Local;
+    LogTimestampMode logTimestampMode = defaultLogTimeStampMode;
+    QString logTimestampModeString() const;
 };
 
 /// A class encapsulating a simple read-only config file format.  The format is similar to the bitcoin.conf format
