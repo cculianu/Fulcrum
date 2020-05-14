@@ -255,7 +255,7 @@ namespace {
                 }
             } else {
                 if (UNLIKELY(acceptExtraBytesAtEndOfData))
-                    Debug() << "Warning:  Caller misuse of function '" << __FUNCTION__
+                    Debug() << "Warning:  Caller misuse of function '" << __func__
                             << "'. 'acceptExtraBytesAtEndOfData=true' is ignored when deserializing using QDataStream.";
                 bool ok;
                 ret.emplace( Deserialize<RetType>(FromSlice(datum), &ok) );
@@ -796,7 +796,7 @@ void Storage::saveMeta_impl()
         throw DatabaseError("Failed to write meta to db");
     }
 
-    Debug() << "Wrote new metadata to db";
+    DebugM("Wrote new metadata to db");
 }
 
 void Storage::appendHeader(const Header &h, BlockHeight height)
@@ -955,7 +955,7 @@ void Storage::loadCheckTxNumsFileAndBlkInfo()
 // NOTE: this must be called *after* loadCheckTxNumsFileAndBlkInfo(), because it needs a valid p->txNumNext
 void Storage::loadCheckUTXOsInDB()
 {
-    FatalAssert(!!p->db.utxoset) << __FUNCTION__ << ": Utxo set db is not open";
+    FatalAssert(!!p->db.utxoset, __func__, ": Utxo set db is not open");
 
     if (options->doSlowDbChecks) {
         Log() << "CheckDB: Verifying utxo set (this may take some time) ...";
@@ -1035,7 +1035,7 @@ void Storage::loadCheckUTXOsInDB()
 
 void Storage::loadCheckEarliestUndo()
 {
-    FatalAssert(!!p->db.undo) << __FUNCTION__ << ": Undo db is not open";
+    FatalAssert(!!p->db.undo,  __func__, ": Undo db is not open");
 
     const auto t0 = Util::getTimeNS();
     int ctr = 0;
@@ -1395,7 +1395,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                 bool ok;
                 auto undo2 = Deserialize<UndoInfo>(ba, &ok);
                 ba.fill('z'); // ensure no shallow copies of buffer exist in deserialized object. if they do below tests will fail
-                FatalAssert(ok && undo2.isValid()) << "Deser of undo info failed!";
+                FatalAssert(ok && undo2.isValid(), "Deser of undo info failed!");
                 Debug() << "Undo info 2: " << undo2.toDebugString();
                 Debug() << "Undo info 1 == undo info 2: " << (*undo == undo2);
             } else {

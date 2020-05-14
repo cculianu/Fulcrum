@@ -49,7 +49,7 @@ bool ThreadObjectMixin::isLifecyclePrint() const
 void ThreadObjectMixin::start()
 {
     if (_thread.isRunning())  return;
-    if (isLifecyclePrint()) Debug() << qobj()->objectName() << " starting thread";
+    if (isLifecyclePrint()) DebugM(qobj()->objectName(), " starting thread");
     chan.clear();
     origThread = qobj()->thread();
     conns += origThread->connect(origThread, &QThread::finished, qobj(), [this, qo=qobj(), which=conns.size()] {
@@ -67,7 +67,7 @@ void ThreadObjectMixin::stop()
 {
     const bool dbgLC = isLifecyclePrint();
     if (_thread.isRunning()) {
-        if (dbgLC) Debug() << _thread.objectName() << " thread is running, joining thread";
+        if (dbgLC) DebugM(_thread.objectName(), " thread is running, joining thread");
         _thread.quit();
         _thread.wait();
     }
@@ -77,7 +77,7 @@ void ThreadObjectMixin::stop()
         ++ct;
     }
     conns.clear();
-    if (ct && dbgLC) Debug() << _thread.objectName() << " cleaned up " << ct << " signal/slot connections";
+    if (ct && dbgLC) DebugM(_thread.objectName(), " cleaned up ", ct, " signal/slot connections");
 }
 
 
@@ -126,7 +126,7 @@ void TimersByNameMixin::callOnTimerSoon(int ms, const QString &name, const std::
     _timerMap[name] = timer;
     timer->setObjectName(name);
     timer->start(ms);
-    //Debug() << "timerByName: " << name << " started, ms = " << ms;
+    //DebugM("timerByName: ", name, " started, ms = ", ms);
 }
 
 /// Identical to above, except takes a pure voidfunc. It's as if the above returned false (so will not keep going).
@@ -168,7 +168,7 @@ auto StatsMixin::statsSafe(int timeout_ms) const -> Stats
     try {
         ret = Util::LambdaOnObject<Stats>(qobj(), [this]{ return stats(); }, timeout_ms);
     } catch (const std::exception & e) {
-        Debug() << "Safe stats get failed: " << e.what();
+        DebugM("Safe stats get failed: ",  e.what());
         ret = QVariantMap{{"error" , e.what()}};
     }
     return ret;
@@ -181,7 +181,7 @@ auto StatsMixin::debugSafe(const StatsParams &p, int timeout_ms) const -> Stats
     try {
         ret = Util::LambdaOnObject<Stats>(qobj(), [this, p]{ return debug(p); }, timeout_ms);
     } catch (const std::exception & e) {
-        Debug() << "Safe debug get failed: " << e.what();
+        DebugM("Safe debug get failed: ", e.what());
         ret = QVariantMap{{"error" , e.what()}};
     }
     return ret;

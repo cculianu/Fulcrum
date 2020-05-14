@@ -118,7 +118,7 @@ namespace BTC
             if (dec.size() != 21) {
                 // this should never happen
 #ifdef QT_DEBUG
-                Debug() << __FUNCTION__ << ": bad decoded length  " << dec.size() << " for address " << legacyOrCash;
+                DebugM(__func__, ": bad decoded length  ", dec.size(), " for address ", legacyOrCash);
 #endif
             } else {
                 a.verByte = dec[0];
@@ -133,7 +133,7 @@ namespace BTC
             try {
                 if (!(ok = DecodeCash(a, ss))) {
 #ifdef QT_DEBUG
-                    Debug() << __FUNCTION__ << ": got bad address " << legacyOrCash;
+                    DebugM(__func__, ": got bad address ", legacyOrCash);
 #endif
                 }
             } catch (const std::exception &e) {

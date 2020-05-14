@@ -58,7 +58,7 @@ void Job::run() {
     } else if (UNLIKELY(!weakContextRef)) {
         // this is here so we avoid doing any work in case work is costly when we know for a fact the
         // interested/subscribed context object is already deleted.
-        Debug() << objectName() << ": context already deleted, exiting early without doing any work";
+        DebugM(objectName(), ": context already deleted, exiting early without doing any work");
         return;
     }
     if (LIKELY(work)) {
@@ -78,7 +78,7 @@ void Job::run() {
 void ThreadPool::submitWork(QObject *context, const VoidFunc & work, const VoidFunc & completion, const FailFunc & fail, int priority)
 {
     if (blockNewWork) {
-        Debug() << __FUNCTION__ << ": Ignoring new work submitted because blockNewWork = true";
+        Debug() << __func__ << ": Ignoring new work submitted because blockNewWork = true";
         return;
     }
     static const FailFunc defaultFail = [](const QString &msg) {
@@ -123,7 +123,7 @@ bool ThreadPool::shutdownWaitForJobs(int timeout_ms)
 {
     blockNewWork = true;
     if constexpr (debugPrt) {
-        Debug() << __FUNCTION__ << ": waiting for jobs ...";
+        Debug() << __func__ << ": waiting for jobs ...";
     }
     pool->clear();
     return pool->waitForDone(timeout_ms);

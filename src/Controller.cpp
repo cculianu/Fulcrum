@@ -43,7 +43,7 @@ Controller::Controller(const std::shared_ptr<const Options> &o)
     _thread.setObjectName(objectName());
 }
 
-Controller::~Controller() { Debug() << __func__; cleanup(); }
+Controller::~Controller() { DebugM(__func__); cleanup(); }
 
 void Controller::startup()
 {
@@ -81,7 +81,7 @@ void Controller::startup()
             if (lostConn) {
                 lostConn = false;
                 stopTimer(waitTimer);
-                Debug() << "Auth recvd from bicoind with id: " << id << ", proceeding with processing ...";
+                DebugM("Auth recvd from bicoind with id: ", id, ", proceeding with processing ...");
                 callOnTimerSoonNoRepeat(smallDelay, callProcessTimer, [this]{process();}, true);
             }
         });
@@ -240,7 +240,7 @@ void GetChainInfoTask::process()
             info.pruned = map.value("pruned").toBool(); // error ok
             info.warnings = map.value("warnings").toString(); // error ok
 
-            if (Trace::isEnabled()) Trace() << info.toString();
+            TraceM(info.toString());
 
             emit success();
         } catch (const Exception & e) {
@@ -311,7 +311,7 @@ struct DownloadBlocksTask : public CtlTask
 DownloadBlocksTask::DownloadBlocksTask(unsigned from, unsigned to, unsigned stride, Controller *ctl_)
     : CtlTask(ctl_, QStringLiteral("Task.DL %1 -> %2").arg(from).arg(to)), from(from), to(to), stride(stride), expectedCt(unsigned(nToDL(from, to, stride)))
 {
-    FatalAssert( (to >= from) && (ctl_) && (stride > 0)) << "Invalid params to DonloadBlocksTask c'tor, FIXME!";
+    FatalAssert( (to >= from) && (ctl_) && (stride > 0), "Invalid params to DonloadBlocksTask c'tor, FIXME!");
 
     next = from;
 }
@@ -658,7 +658,7 @@ void SynchMempoolTask::doDLNextTx()
 {
     Mempool::TxRef tx;
     if (auto it = txsNeedingDownload.begin(); it == txsNeedingDownload.end()) {
-        Error() << "FIXME -- txsNeedingDownload is empty in " << __FUNCTION__;
+        Error() << "FIXME -- txsNeedingDownload is empty in " << __func__;
         emit errored();
         return;
     } else {
@@ -706,7 +706,7 @@ void SynchMempoolTask::doGetRawMempool()
                     auto [mempool, lock] = storage->mutableMempool(); // take the lock exclusively here
                     const auto sz = mempool.txs.size();
                     mempool.clear();
-                    Debug() << "Mempool cleared of " << sz << Util::Pluralize(" tx", sz);
+                    DebugM("Mempool cleared of ", sz, Util::Pluralize(" tx", sz));
                 }
             });
         int newCt = 0;
@@ -745,12 +745,12 @@ void SynchMempoolTask::doGetRawMempool()
             // If tx's were dropped, we clear the mempool and try again. We also enqueue notifications for the dropped
             // tx's.
             const bool recommendFullRetry = oldCt >= 2 && droppedTxs.size() >= oldCt/2; // more than 50% of the mempool tx's dropped out. something is funny. likely a new block arrived.
-            Debug() << droppedTxs.size() << " txs dropped from mempool, resetting mempool and trying again ...";
+            DebugM(droppedTxs.size(), " txs dropped from mempool, resetting mempool and trying again ...");
             // NOTIFICATION
             if (recommendFullRetry) {
                 // NOTIFICATION of all ...
                 scriptHashesAffected.merge(Util::keySet<decltype(scriptHashesAffected)>(mempool.hashXTxs));
-                Debug() << "Will notify for all " << scriptHashesAffected.size() << " addresses of mempool for notificatons ...";
+                DebugM("Will notify for all ", scriptHashesAffected.size(), " addresses of mempool for notificatons ...");
             } else {
                 // just the dropped tx's
                 for (const auto & txid : droppedTxs) {
@@ -760,7 +760,7 @@ void SynchMempoolTask::doGetRawMempool()
                             scriptHashesAffected.merge(Util::keySet<decltype(scriptHashesAffected)>(tx->hashXs));
                     }
                 }
-                Debug() << "Will notify for " << scriptHashesAffected.size() << " addresses belonging to the dropped tx's for notificatons ...";
+                DebugM("Will notify for ", scriptHashesAffected.size(), " addresses belonging to the dropped tx's for notificatons ...");
             }
             clearMempool = true; // Defer object at top of this lamba above will clear the mempool on function return (taking an exclusive lock) if this is true.
             if (recommendFullRetry) {
@@ -773,7 +773,7 @@ void SynchMempoolTask::doGetRawMempool()
         }
 
         if (newCt)
-            Debug() << resp.method << ": got reply with " << txidList.size() << " items, " << newCt << " new";
+            DebugM(resp.method, ": got reply with ", txidList.size(), " items, ", newCt, " new");
         isdlingtxs = true;
         expectedNumTxsDownloaded = unsigned(newCt);
         // TX data will be downloaded now, if needed
@@ -857,7 +857,7 @@ void Controller::rmTask(CtlTask *t)
         tasks.erase(it); // will delete object immediately
         return;
     }
-    Error() << __FUNCTION__ << ": Task '" << t->objectName() << "' not found! FIXME!";
+    Error() << __func__ << ": Task '" << t->objectName() << "' not found! FIXME!";
 }
 
 bool Controller::isTaskDeleted(CtlTask *t) const { return tasks.count(t) == 0; }
@@ -868,8 +868,8 @@ void Controller::add_DLHeaderTask(unsigned int from, unsigned int to, size_t nTa
     connect(t, &CtlTask::success, this, [t, this]{
         // NOTE: this callback is sometimes delivered after the sm has been reset(), so we don't check or use it here.
         if (UNLIKELY(isTaskDeleted(t))) return; // task was stopped from underneath us, this is stale.. abort.
-        Debug() << "Got all blocks from: " << t->objectName() << " blockCt: "  << t->goodCt
-                << " nTx,nInp,nOutp: " << t->nTx << "," << t->nIns << "," << t->nOuts;
+        DebugM( "Got all blocks from: ", t->objectName(), " blockCt: ",  t->goodCt,
+                " nTx,nInp,nOutp: ", t->nTx, ",", t->nIns, ",", t->nOuts);
     });
     connect(t, &CtlTask::errored, this, [t, this]{
         if (UNLIKELY(!sm || isTaskDeleted(t))) return; // task was stopped from underneath us, this is stale.. abort.
@@ -912,7 +912,7 @@ void Controller::process(bool beSilentIfUpToDate)
     bool enablePollTimer = false;
     auto polltimeout = polltimeMS;
     stopTimer(pollTimerName);
-    //Debug() << "Process called...";
+    //DebugM("Process called...");
     if (!sm) {
         std::lock_guard g(smLock);
         sm = std::make_unique<StateMachine>();
@@ -992,12 +992,12 @@ void Controller::process(bool beSilentIfUpToDate)
             // this is very unlikely but is here in case bitcoind goes out to lunch so we can reset things and try again.
             Warning() << "GetChainInfo task took longer than " << sm->simpleTaskTookTooLongSecs << " seconds to return a response. Trying again ...";
             genericTaskErrored();
-        } else { Debug() << "Spurious Controller::process() call while waiting for the chain info task to complete, ignoring"; }
+        } else { DebugM("Spurious Controller::process() call while waiting for the chain info task to complete, ignoring"); }
     } else if (sm->state == State::GetBlocks) {
-        FatalAssert(sm->ht >= 0) << "Inconsistent state -- sm->ht cannot be negative in State::GetBlocks! FIXME!"; // paranoia
+        FatalAssert(sm->ht >= 0, "Inconsistent state -- sm->ht cannot be negative in State::GetBlocks! FIXME!"); // paranoia
         const size_t base = size_t(storage->latestTip().first+1);
         const size_t num = size_t(sm->ht+1) - base;
-        FatalAssert(num > 0) << "Cannot download 0 blocks! FIXME!"; // more paranoia
+        FatalAssert(num > 0, "Cannot download 0 blocks! FIXME!"); // more paranoia
         const size_t nTasks = qMin(num, sm->DL_CONCURRENCY);
         sm->lastProgTs = Util::getTimeSecs();
         sm->ppBlkHtNext = sm->startheight = unsigned(base);
@@ -1021,7 +1021,7 @@ void Controller::process(bool beSilentIfUpToDate)
         AGAIN();
     } else if (sm->state == State::Retry) {
         // normally the result of Rewinding due to reorg, retry right away.
-        Debug() << "Retrying download again ...";
+        DebugM("Retrying download again ...");
         {
             std::lock_guard g(smLock);
             sm.reset();
@@ -1079,10 +1079,10 @@ void Controller::process(bool beSilentIfUpToDate)
 void Controller::on_putBlock(CtlTask *task, PreProcessedBlockPtr p)
 {
     if (!sm || isTaskDeleted(task) || sm->state == StateMachine::State::Failure || stopFlag) {
-        Debug() << "Ignoring block " << p->height << " for now-defunct task";
+        DebugM("Ignoring block ", p->height, " for now-defunct task");
         return;
     } else if (sm->state != StateMachine::State::DownloadingBlocks) {
-        Debug() << "Ignoring putBlocks request for block " << p->height << " -- state is not \"DownloadingBlocks\" but rather is: \"" << sm->stateStr() << "\"";
+        DebugM("Ignoring putBlocks request for block ", p->height, " -- state is not \"DownloadingBlocks\" but rather is: \"", sm->stateStr(), "\"");
         return;
     }
     sm->ppBlocks[p->height] = p;
@@ -1159,7 +1159,7 @@ void Controller::process_DownloadingBlocks()
 
     // testing debug
     //if (auto backlog = sm->ppBlocks.size(); backlog < 100 || ct > 100) {
-    //    Debug() << "ppblk - processed: " << ct << ", backlog: " << backlog;
+    //    DebugM("ppblk - processed: ", ct, ", backlog: ", backlog);
     //}
 }
 
@@ -1180,7 +1180,7 @@ bool Controller::process_VerifyAndAddBlock(PreProcessedBlockPtr ppb)
         storage->addBlock(ppb, saveUndoInfo, nLeft, masterNotifySubsFlag);
 
     } catch (const HeaderVerificationFailure & e) {
-        Debug() << "addBlock exception: " << e.what();
+        DebugM("addBlock exception: ", e.what());
         Log() << "Possible reorg detected at height " << ppb->height << ", rewinding 1 block and trying again ...";
         process_DoUndoAndRetry();
         return false;
@@ -1221,7 +1221,7 @@ CtlTask::CtlTask(Controller *ctl, const QString &name)
 }
 
 CtlTask::~CtlTask() {
-    if (isLifecyclePrint()) Debug() << __func__ << " (" << objectName() << ")";
+    if (isLifecyclePrint()) DebugM(__func__, " (", objectName(), ")");
     stop();
 }
 
@@ -1511,7 +1511,7 @@ void Controller::dumpScriptHashes(const QString &fileName) const
         if (ctr && !(ctr % 1000000))
             Log() << text;
         else
-            Debug() << text;
+            DebugM(text);
     });
     outFile.flush();
     outFile.close();
