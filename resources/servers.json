@@ -1,4 +1,15 @@
 {
+    "bch.crypto.mldlabs.com": {
+        "pruning": "-",
+        "s": "50002",
+        "t": "50001",
+        "version": "1.4.2"
+    },
+    "bch.disdev.org": {
+        "pruning": "-",
+        "s": "50002",
+        "version": "1.4.2"
+    },
     "bch.imaginary.cash": {
         "pruning": "-",
         "s": "50002",
@@ -29,12 +40,7 @@
         "s": "50002",
         "version": "1.4.1"
     },
-    "bchx.disdev.org": {
-        "pruning": "-",
-        "s": "50002",
-        "version": "1.4.2"
-    },
-    "bch.quangld.com": {
+    "bitcoincash.quangld.com": {
         "pruning": "-",
         "s": "50002",
         "t": "50001",
@@ -45,18 +51,6 @@
         "s": "50002",
         "t": "50001",
         "version": "1.4.1"
-    },
-    "crypto.mldlabs.com": {
-        "pruning": "-",
-        "s": "50002",
-        "t": "50001",
-        "version": "1.4.1"
-    },
-    "electron-cash.dragon.zone": {
-        "pruning": "-",
-        "s": "50002",
-        "t": "50001",
-        "version": "1.4.2"
     },
     "electron.jochen-hoenicke.de": {
         "pruning": "-",
@@ -70,21 +64,21 @@
         "t": "50001",
         "version": "1.4.2"
     },
+    "bch2.electroncash.dk": {
+        "pruning": "-",
+        "s": "50002",
+        "t": "50001",
+        "version": "1.4.3"
+    },
     "electrum.imaginary.cash": {
         "pruning": "-",
         "s": "50002",
         "t": "50001",
-        "version": "1.4.1"
+        "version": "1.4.3"
     },
-    "electrumx.hillsideinternet.com": {
+    "ec-bcn.criptolayer.net": {
         "pruning": "-",
-        "s": "50002",
-        "t": "50001",
-        "version": "1.4.1"
-    },
-    "electrum-abc.criptolayer.net": {
-        "pruning": "-",
-        "s": "50012",
+        "s": "50212",
         "version": "1.4.1"
     },
     "electrumx-cash.1209k.com": {
@@ -93,13 +87,7 @@
         "t": "50001",
         "version": "1.4.2"
     },
-    "greedyhog.ddns.net": {
-        "pruning": "-",
-        "s": "50002",
-        "t": "50001",
-        "version": "1.4.1"
-    },
-    "wallet.satoshiscoffeehouse.com": {
+    "greedyhog.mooo.com": {
         "pruning": "-",
         "s": "50002",
         "t": "50001",
@@ -115,12 +103,6 @@
         "pruning": "-",
         "t": "50001",
         "version": "1.4.1"
-    },
-    "electron.coinucopia.io": {
-        "pruning": "-",
-        "s": "50002",
-        "t": "50001",
-        "version": "1.4"
     },
     "bxdp2p6abpqt5etc.onion": {
         "pruning": "-",
@@ -156,5 +138,21 @@
         "pruning": "-",
         "s": "50002",
         "version": "1.4"
+    },
+    "bch.cyberbits.eu": {
+        "pruning": "-",
+        "s": "50002",
+        "version": "1.4.2"
+    },
+    "bitcoincash.network": {
+        "pruning": "-",
+        "s": "50002",
+        "version": "1.4.1"
+    },
+    "electrumx-bch.cryptonermal.net": {
+        "pruning": "-",
+        "s": "50002",
+        "t": "50001",
+        "version": "1.4.2"
     }
 }
