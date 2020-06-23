@@ -44,7 +44,9 @@
 #include <cassert>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <list>
+#include <type_traits>
 #include <utility>
 
 TcpServerError::~TcpServerError() {} // for vtable
@@ -1712,6 +1714,36 @@ void Server::rpc_blockchain_transaction_id_from_pos(Client *c, const RPC::Messag
         }
     });
 }
+void Server::rpc_blockchain_utxo_get_info(Client *c, const RPC::Message &m)
+{
+    QVariantList l = m.paramsList();
+    assert(l.size() == 2);
+
+    QByteArray txHash = validateHashHex( l.front().toString() ); // arg0: prevoutHash
+    if (txHash.length() != HashLen)
+        throw RPCError("Invalid tx hash");
+    static_assert(std::is_unsigned_v<IONum>); // compile-time paranoia
+    constexpr auto outNMax = std::numeric_limits<IONum>::max();
+    bool ok = false;
+    const unsigned outN = l.back().toUInt(&ok); // arg1: prevoutN
+    if (!ok || outN > outNMax)
+        throw RPCError(QString("Invalid tx out number: expected a value >= 0 and <= %1").arg(qlonglong(outNMax)));
+    const TXO txo{txHash, IONum(outN)};
+    generic_do_async(c, m.id, [txo, this] {
+        QVariant ret;
+        if (auto optInfo = storage->utxoGet(txo); optInfo.has_value() && optInfo->isValid()) {
+            QVariantMap m;
+            m["value"] = qlonglong(optInfo->amount / bitcoin::Amount::satoshi());
+            m["scripthash"] = QString(Util::ToHexFast(optInfo->hashX));
+            if (optInfo->confirmedHeight.has_value())
+                m["confirmed_height"] = qlonglong(optInfo->confirmedHeight.value());
+            // NB: unconfirmed utxos will lack a "confirmed_height" entry
+            ret = m;
+        }
+        // NB: if not fond  or invalid, `null` will be returned
+        return ret;
+    });
+}
 void Server::rpc_mempool_get_fee_histogram(Client *c, const RPC::Message &m)
 {
     const auto hist = storage->mempoolHistogram();
@@ -1763,6 +1795,8 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
     { {"blockchain.transaction.get",        true,               false,    PR{1,2},                    },          MP(rpc_blockchain_transaction_get) },
     { {"blockchain.transaction.get_merkle", true,               false,    PR{2,2},                    },          MP(rpc_blockchain_transaction_get_merkle) },
     { {"blockchain.transaction.id_from_pos",true,               false,    PR{2,3},                    },          MP(rpc_blockchain_transaction_id_from_pos) },
+
+    { {"blockchain.utxo.get_info",          true,               false,    PR{2,2},                    },          MP(rpc_blockchain_utxo_get_info) },
 
     { {"mempool.get_fee_histogram",         true,               false,    PR{0,0},                    },          MP(rpc_mempool_get_fee_histogram) },
 };

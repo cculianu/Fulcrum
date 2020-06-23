@@ -1130,6 +1130,7 @@ void Storage::UTXOBatch::remove(const TXO &txo, const HashX &hashX, const Compac
     ++p->rmCt;
 }
 
+
 /// Thread-safe. Query db for a UTXO, and return it if found.  May throw on database error.
 std::optional<TXOInfo> Storage::utxoGetFromDB(const TXO &txo, bool throwIfMissing)
 {
@@ -1142,6 +1143,75 @@ int64_t Storage::utxoSetSize() const { return p->utxoCt; }
 double Storage::utxoSetSizeMiB() const {
     constexpr int64_t elemSize = TXO::serSize() + TXOInfo::serSize();
     return (utxoSetSize()*elemSize) / 1e6;
+}
+
+/// Thread-safe. Query the mempool and the DB for a TXO. If the TXO is unspent, will return a valid
+/// optional.  If the TXO is spent or non-existant, will return an invalid optional.
+std::optional<TXOInfo> Storage::utxoGet(const TXO &txo)
+{
+    std::optional<TXOInfo> ret;
+    bool mempoolHit = false;
+    // take shared lock (ensure history doesn't mutate from underneath our feet)
+    SharedLockGuard g(p->blocksLock);
+    {
+        // first, check mempool
+        auto [mempool, lock] = this->mempool(); // shared (read only) lock is held until scope end
+
+        if (auto txsIt = mempool.txs.find(txo.prevoutHash); txsIt != mempool.txs.end()) {
+            mempoolHit = true; // flag mempool hit so that we don't redundantly check db at end of this function
+            const auto & tx = txsIt->second;
+            if (UNLIKELY(!tx)) {
+                // Paranoia to detect bugs. This will never happen.
+                throw InternalError(QString("TxRef for %1 is null! FIXME!").arg(QString(txo.prevoutHash.toHex())));
+            }
+            if (txo.prevoutN < tx->txos.size()) {
+                const TXOInfo & info = tx->txos[txo.prevoutN];
+                if (auto hxIt = tx->hashXs.find(info.hashX); LIKELY(hxIt != tx->hashXs.end())) {
+                    const auto & ioinfo = hxIt->second;
+                    if (ioinfo.utxo.count(txo.prevoutN)) {
+                        // found! It's unspent!
+                        ret = info;
+                    }
+                } else {
+                    // Defensive programming: should never happen but if it does, indicates DB corruption
+                    // or a bug in this program.
+                    throw InternalError(QString("scripthash %1 lists tx %2, which then lacks the IOInfo for said hashX! FIXME!")
+                                        .arg(QString(info.hashX.toHex())).arg(QString(tx->hash.toHex())));
+                }
+            }
+        }
+    }
+    if (!mempoolHit) {
+        // no mempool hit, check DB
+        ret = utxoGetFromDB(txo, false);
+        if (ret.has_value()) {
+            // found in DB, but we need to make sure it's not spent in mempool!
+            auto [mempool, lock] = this->mempool(); // shared (read only) lock is held until scope end
+
+            if (auto hxTxIt = mempool.hashXTxs.find(ret->hashX); hxTxIt != mempool.hashXTxs.end()) {
+                // slow-ish -- linear scan through all mempool tx's pertaining to this scripthash
+                // in practice this shouldn't be too bad since it's not often that a particular scripthash
+                // has more than a few mempool tx's.
+                for (const auto & tx : hxTxIt->second) {
+                    if (auto hxInfoIt = tx->hashXs.find(hxTxIt->first); LIKELY(hxInfoIt != tx->hashXs.end())) {
+                        const auto & ioinfo = hxInfoIt->second;
+                        if (ioinfo.confirmedSpends.count(txo)) {
+                            //Debug() << "TXO: " << txo.toString() << " was in DB but is spent in mempool";
+                            // DB HIT, but was spent in mempool, reset ret so that caller knows it was spent.
+                            ret.reset();
+                            break; // enclosing ranged for()
+                        }
+                    } else {
+                        // should never happen
+                        throw InternalError(QString("scripthash %1 has inconsistent mempool state for tx %2! FIXME!")
+                                            .arg(QString(hxTxIt->first.toHex()))
+                                            .arg(QString(tx->hash.toHex())));
+                    }
+                }
+            }
+        }
+    }
+    return ret;
 }
 
 void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserve, bool notifySubs)
@@ -1939,7 +2009,7 @@ auto Storage::getBalance(const HashX &hashX) const -> std::pair<bitcoin::Amount,
                     assert(bool(tx));
                     auto it2 = tx->hashXs.find(hashX);
                     if (UNLIKELY(it2 == tx->hashXs.end())) {
-                        throw InternalError(QString("scripthash %1 lists tx %2, which then lacks the IOInfo for said hashX! FIXM!")
+                        throw InternalError(QString("scripthash %1 lists tx %2, which then lacks the IOInfo for said hashX! FIXME!")
                                             .arg(QString(hashX.toHex())).arg(QString(tx->hash.toHex())));
                     }
                     auto & info = it2->second;

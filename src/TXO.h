@@ -30,7 +30,7 @@
 #include <functional> // for std::hash
 #include <optional>
 
-/// WIP
+/// A transaction output; A prevoutHash:prevoutN pair.
 struct TXO {
     TxHash prevoutHash;
     IONum  prevoutN = 0;
@@ -77,7 +77,7 @@ namespace std {
     };
 }
 
-/// WIP -- Spend info for a txo.
+/// Spend info for a txo. Amount, scripthash, txNum, and possibly confirmedHeight
 struct TXOInfo {
     bitcoin::Amount amount;
     HashX hashX; ///< the scripthash this output is sent to.  Note in most cases this can be compactified to be a shallow-copy of existing data (such that dupes point to the same underlying data in eg UTXOSet).

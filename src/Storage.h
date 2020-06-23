@@ -139,7 +139,7 @@ public:
     /// object's thread's event loop.
     void save(SaveSpec = SaveItem::All);
 
-    // --- Block Processing (still a WIP)
+    // --- Block Processing
 
     /// Thread-safe. Call this from the Controller thread or any thread. Will return on success, or throw on failure.
     ///
@@ -196,7 +196,7 @@ public:
     /// Returns the known size of the utxo set in millions of bytes
     double utxoSetSizeMiB() const;
 
-    //-- scritphash history (WIP)
+    //-- scritphash history
     struct HistoryItem {
         TxHash hash;
         int height = 0; ///< block height. 0 = unconfirmed, -1 = unconfirmed with unconfirmed parent. Note this is ambiguous with block 0 :(
@@ -242,8 +242,16 @@ public:
     /// Caller must hold the returned ExclusiveLockGuard for as long as they use the reference otherwise bad things happen!
     std::pair<Mempool &, ExclusiveLockGuard> mutableMempool();
 
-    /// Thread-safe. Query db for a UTXO, and return it if found.  May throw on database error.
+    /// Thread-safe. Query db (but not mempool) for a UTXO, and return its info if found.  May throw on database error.
     std::optional<TXOInfo> utxoGetFromDB(const TXO &, bool throwIfMissing = false);
+
+    /// Thread-safe. Query the mempool and the DB for a TXO. If the TXO is unspent, will return a valid
+    /// optional.  If the TXO is spent or non-existant, will return a !has_value optional. May throw on internal
+    /// or database error.
+    ///
+    /// If the returned optional has a value, then check its TXOInfo::confirmedHeight member to determine if it is a
+    /// mempool or confirmed UTXO (mempool UTXOs will have an invalid optional for TXOInfo::confirmedHeight).
+    std::optional<TXOInfo> utxoGet(const TXO &);
 
     /// This pointer is guaranteed to always be valid once this instance has been constructed. It points to the
     /// subsmgr unique_ptr which this instance owns.

@@ -38,7 +38,7 @@
 struct Mempool
 {
 
-    /// This info, with the exception of `hashXs` comes from bitcoind via the "getrawmempool true" RPC call.
+    /// This info, with the exception of `hashXs` comes from bitcoind via the "getrawmempool false" RPC call.
     struct Tx
     {
         TxHash hash; ///< in reverse bitcoind order (ready for hex encode), fixed value.
