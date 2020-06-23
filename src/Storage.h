@@ -243,11 +243,12 @@ public:
     std::pair<Mempool &, ExclusiveLockGuard> mutableMempool();
 
     /// Thread-safe. Query db (but not mempool) for a UTXO, and return its info if found.  May throw on database error.
+    /// (Does not take the blocks lock)
     std::optional<TXOInfo> utxoGetFromDB(const TXO &, bool throwIfMissing = false);
 
     /// Thread-safe. Query the mempool and the DB for a TXO. If the TXO is unspent, will return a valid
     /// optional.  If the TXO is spent or non-existant, will return a !has_value optional. May throw on internal
-    /// or database error.
+    /// or database error. (Does not take the blocks lock)
     ///
     /// If the returned optional has a value, then check its TXOInfo::confirmedHeight member to determine if it is a
     /// mempool or confirmed UTXO (mempool UTXOs will have an invalid optional for TXOInfo::confirmedHeight).
