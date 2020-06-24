@@ -66,6 +66,7 @@ public:
     QList<Interface> statsInterfaces; ///< 'stats' server, defaults to empty (no stats server)
     QList<Interface> adminInterfaces; ///< the admin server, defaults to empty (no admin RPC)
     QSslCertificate sslCert; ///< this must be valid if we have any SSL or WSS interfaces.
+    QList<QSslCertificate> sslCertChain; ///< this is either empty or contains 2 or more elements. (if certFile was a chain, otherwise empty)
     QString certFile; ///< saved here for toMap() to remember what was specified in config file
     QSslKey sslKey; ///< this must be valid if we have any SSL or WSS interfaces.
     QString keyFile; ///< saved here for toMap() to remember what was specified in config file

@@ -213,15 +213,14 @@ void App::parseArgs()
            QString("interface:port"),
         },
          { { "c", "cert" },
-           QString("Specify a .crt file to use as the server's SSL cert. This option is required if the -s/--ssl and/or"
-           " the -W/--wss options appear at all on the command-line. The file should contain a valid certificate in PEM"
-           " format (self-signed certs are ok)."),
+           QString("Specify a PEM file to use as the server's SSL certificate. This option is required if the -s/--ssl"
+           " and/or the -W/--wss options appear at all on the command-line. The file should contain either a single"
+           " valid self-signed certificate or the full certificate chain if using CA-signed certificates."),
            QString("crtfile"),
          },
          { { "k", "key" },
-           QString("Specify a .key file to use as the server's SSL key. This option is required if the -s/--ssl and/or"
-           " the -W/--wss options apear at all on the command-line. The file should contain an RSA private key in PEM"
-           " format."),
+           QString("Specify a PEM file to use as the server's SSL key. This option is required if the -s/--ssl and/or"
+           " the -W/--wss options apear at all on the command-line. The file should contain an RSA private key."),
            QString("keyfile"),
          },
         { { "a", "admin" },
@@ -504,6 +503,14 @@ void App::parseArgs()
                 throw BadArgs(QString("Unable to read ssl certificate from %1. Please make sure the file is readable and "
                                       "contains a valid certificate in PEM format.").arg(cert));
             else {
+                if (!options->sslCert.isSelfSigned()) {
+                    certf.seek(0);
+                    options->sslCertChain = QSslCertificate::fromDevice(&certf, QSsl::EncodingFormat::Pem);
+                    if (options->sslCertChain.size() < 2)
+                        throw BadArgs(QString("File '%1' does not appear to be a full certificate chain.\n"
+                                              "Please make sure your CA signed certificate is the fullchain.pem file.")
+                                      .arg(cert));
+                }
                 Util::AsyncOnObject(this, [this]{
                     // We do this logging later. This is to ensure that it ends up in the syslog if user specified -S
                     QString name;
@@ -902,8 +909,41 @@ void App::start_httpServer(const Options::Interface &iface)
     });
 }
 
+/* static */
+void App::customMessageHandler(QtMsgType type, const QMessageLogContext &context, const QString &msg)
+{
+    // suppressions
+    if ( msg.contains(QStringLiteral("QSslCertificate::isSelfSigned"))
+         || msg.contains(QStringLiteral("Type conversion already registered")))
+        return;
+    // /suppressions
+
+    const QByteArray umsg = msg.toUtf8();
+    const char *file = context.file ? context.file : "";
+    const char *function = context.function ? context.function : "";
+
+    switch (type) {
+    case QtDebugMsg:
+        DebugM("[Qt] ", umsg.constData(), " (", file, ":", context.line, ", ", function, ")");
+        break;
+    case QtInfoMsg:
+        Log("[Qt] %s (%s:%d, %s)", umsg.constData(), file, context.line, function);
+        break;
+    case QtWarningMsg:
+        Warning("[Qt Warning] %s (%s:%d, %s)", umsg.constData(), file, context.line, function);
+        break;
+    case QtCriticalMsg:
+        Error("[Qt Critical] %s (%s:%d, %s)", umsg.constData(), file, context.line, function);
+        break;
+    case QtFatalMsg:
+        Error("[Qt Fatal] %s (%s:%d, %s)", umsg.constData(), file, context.line, function);
+        break;
+    }
+}
+
 void App::miscPreAppFixups()
 {
+    qInstallMessageHandler(customMessageHandler);
 #ifdef Q_OS_DARWIN
     // workaround for annoying macos keychain access prompt. see: https://doc.qt.io/qt-5/qsslsocket.html#setLocalCertificate
     setenv("QT_SSL_USE_TEMPORARY_KEYCHAIN", "1", 1);

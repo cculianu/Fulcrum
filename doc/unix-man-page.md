@@ -38,17 +38,10 @@ Once the server finishes synching it will behave like an ElectronX/ElectrumX ser
 
 
 -D, --datadir <path>
-:   Specify a directory in which to store the database and other assorted data files.
-    This is a required option. If the specified path does not exist, it will be
-    created. Note that the directory in question should ideally live on a fast
-    drive such as an SSD and it should have plenty of free space available.
+:   Specify a directory in which to store the database and other assorted data files.  This is a required option. If the specified path does not exist, it will be created. Note that the directory in question should ideally live on a fast drive such as an SSD and it should have plenty of free space available.
 
 -t, --tcp <interface:port>
-:   Specify an <interface:port> on which to listen for TCP connections,
-    defaults to 0.0.0.0:50001 (all interfaces, port 50001 -- only if no other
-    interfaces are specified via -t or -s). This option may be specified more
-    than once to bind to multiple interfaces and/or ports.
-    Suggested values for port: 50001 on mainnet and 60001 on testnet.
+:   Specify an <interface:port> on which to listen for TCP connections, defaults to 0.0.0.0:50001 (all interfaces, port 50001 -- only if no other interfaces are specified via -t or -s). This option may be specified more than once to bind to multiple interfaces and/or ports.  Suggested values for port: 50001 on mainnet and 60001 on testnet.
 
 -s, --ssl <interface:port>
 :   Specify an <interface:port> on which to listen for SSL connections. Note that if this option is specified, then the `cert` and `key` options need to also be specified otherwise the app will refuse to run. This option may be specified more than once to bind to multiple interfaces and/or ports. Suggested values for port: 50002 on mainnet and 60002 on testnet.
@@ -60,11 +53,10 @@ Once the server finishes synching it will behave like an ElectronX/ElectrumX ser
 :   Specify an <interface:port> on which to listen for Web Socket Secure connections (encrypted, wss://). Note that if this option is specified, then the `cert` and `key` options need to also be specified otherwise the app will refuse to run. This option may be specified more than once to bind to multiple interfaces and/or ports. Suggested values for port: 50004 on mainnet and 60004 on testnet.
 
 -c, --cert <crtfile>
-:   Specify a .crt file to use as the server's SSL cert. This option is required if the -s/--ssl and/or the -W/--wss options appear at all on the command-line. The file should contain a valid certificate in PEM format (self-signed certs are ok).
+:   Specify a PEM file to use as the server's SSL certificate.  This option is required if the -s/--ssl and/or the -W/--wss options appear at all on the command-line.  The file should contain either a single valid self-signed certificate or the full certificate chain if using CA-signed certificates.
 
 -k, --key <keyfile>
-:   Specify a .key file to use as the server's SSL key. This option is required if the
--s/--ssl option appears at all on the command-line. The file should contain an RSA private key in PEM format.
+:   Specify a PEM file to use as the server's SSL key.  This option is required if the -s/--ssl and/or the -W/--wss options apear at all on the command-line.  The file should contain an RSA private key.
 
 -a, --admin <[interface:]port>
 :   Specify a <port> or an <interface:port> on which to listen for TCP connections for the admin RPC service. The admin service is used for sending special control commands to the server, such as stopping the server, and it should *NOT* be exposed to the internet.  This option is required if you wish to use the FulcrumAdmin CLI tool to send commands to Fulcrum. It is recommended that you specify the loopback address as the bind interface for this option such as: <port> by itself or 127.0.0.1:<port> for IPv4 and/or ::1:<port> for IPv6. If no interface is specified, and just a port number by itself is used, then IPv4 127.0.0.1 is the bind interface used (along with the specified port). This option may be specified more than once to bind to multiple interfaces and/or ports.

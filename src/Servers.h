@@ -451,7 +451,9 @@ protected:
     void incomingConnection(qintptr) override;
 private:
     const QSslCertificate cert;
+    const QList<QSslCertificate> chain;
     const QSslKey key;
+    std::unique_ptr<QSslConfiguration> sslConfiguration;
 };
 
 class SrvMgr;
