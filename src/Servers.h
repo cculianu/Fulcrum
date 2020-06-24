@@ -27,8 +27,7 @@
 #include "Version.h"
 
 #include <QHash>
-#include <QSslCertificate>
-#include <QSslKey>
+#include <QSslConfiguration>
 #include <QTcpServer>
 #include <QThread>
 #include <QVector>
@@ -450,10 +449,8 @@ protected:
     /// server-side handshake.
     void incomingConnection(qintptr) override;
 private:
-    const QSslCertificate cert;
-    const QList<QSslCertificate> chain;
-    const QSslKey key;
-    std::unique_ptr<QSslConfiguration> sslConfiguration;
+    QSslConfiguration sslConfiguration;
+    void setupSslConfiguration();
 };
 
 class SrvMgr;

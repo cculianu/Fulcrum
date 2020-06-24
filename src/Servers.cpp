@@ -35,6 +35,8 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QtNetwork>
+#include <QSslCertificate>
+#include <QSslKey>
 #include <QString>
 #include <QTextCodec>
 #include <QTextStream>
@@ -350,6 +352,9 @@ ServerBase::ServerBase(SrvMgr *sm,
                        const std::shared_ptr<Storage> & st, const std::shared_ptr<BitcoinDMgr> & bdm)
     : AbstractTcpServer(a, p), srvmgr(sm), methods(methods), dispatchTable(dispatchTable), options(opts), storage(st), bitcoindmgr(bdm)
 {
+    if (!options || !storage || !bitcoindmgr)
+        // defensive programming
+        throw BadArgs("ServerBase cannot be constructed with nullptr arguments!");
 }
 ServerBase::~ServerBase() { stop(); }
 
@@ -1830,12 +1835,9 @@ void Server::StaticData::init() { InitStaticDataCommon(dispatchTable, methodMap,
 // --- SSL Server support ---
 ServerSSL::ServerSSL(SrvMgr *sm, const QHostAddress & address_, quint16 port_, const std::shared_ptr<const Options> & opts,
                      const std::shared_ptr<Storage> & storage_, const std::shared_ptr<BitcoinDMgr> & bitcoindmgr_)
-    : Server(sm, address_, port_, opts, storage_, bitcoindmgr_), cert(opts->sslCert), chain(opts->sslCertChain), key(opts->sslKey)
+    : Server(sm, address_, port_, opts, storage_, bitcoindmgr_)
 {
-    if (cert.isNull() || key.isNull())
-        throw BadArgs("ServerSSL cannot be instantiated: Key or cert are null!");
-    if (!QSslSocket::supportsSsl())
-        throw BadArgs("ServerSSL cannot be instantiated: Missing SSL support!");
+    setupSslConfiguration();
     resetName();
 }
 ServerSSL::~ServerSSL() { stop(); }
@@ -1843,23 +1845,31 @@ QString ServerSSL::prettyName() const
 {
     return (usesWS ? QStringLiteral("Wss%1") : QStringLiteral("Ssl%1")).arg(AbstractTcpServer::prettyName());
 }
+void ServerSSL::setupSslConfiguration()
+{
+    const QSslCertificate & cert = options->sslCert;
+    const QList<QSslCertificate> & chain = options->sslCertChain;
+    const QSslKey & key = options->sslKey;
+
+    if (cert.isNull() || key.isNull())
+        throw BadArgs("ServerSSL cannot be constructed: Key or cert are null!");
+    if (!QSslSocket::supportsSsl())
+        throw BadArgs("ServerSSL cannot be constructed: Missing SSL support!");
+    sslConfiguration = QSslConfiguration::defaultConfiguration();
+    sslConfiguration.setLocalCertificate(cert);
+    sslConfiguration.setPrivateKey(key);
+    if (!chain.isEmpty())
+        // not a self-signed cert -- we need the full chain
+        sslConfiguration.setLocalCertificateChain(chain);
+    sslConfiguration.setProtocol(QSsl::SslProtocol::AnyProtocol);
+}
 void ServerSSL::incomingConnection(qintptr socketDescriptor)
 {
     auto socket = createSocketFromDescriptorAndCheckLimits<QSslSocket>(socketDescriptor);
     if (!socket)
         // Per-IP connection limit reached or low-level error. Fail. (Error was already logged)
         return;
-    if (!sslConfiguration) {
-        // lazy-init our QSslConfiguration from QSslSocket default
-        sslConfiguration = std::make_unique<QSslConfiguration>( socket->sslConfiguration() );
-        sslConfiguration->setLocalCertificate(cert);
-        sslConfiguration->setPrivateKey(key);
-        if (!chain.isEmpty())
-            // not a self-signed cert -- we need the full chain
-            sslConfiguration->setLocalCertificateChain(chain);
-        sslConfiguration->setProtocol(QSsl::SslProtocol::AnyProtocol);
-    }
-    socket->setSslConfiguration(*sslConfiguration);
+    socket->setSslConfiguration(sslConfiguration);
     const auto peerName = QStringLiteral("%1:%2").arg(socket->peerAddress().toString()).arg(socket->peerPort());
     if (socket->state() != QAbstractSocket::SocketState::ConnectedState || socket->isEncrypted()) {
         Warning() << peerName << " socket had unexpected state (must be both connected and unencrypted), deleting socket";
