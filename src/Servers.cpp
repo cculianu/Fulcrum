@@ -1852,7 +1852,7 @@ void ServerSSL::setupSslConfiguration()
     const QSslKey & key = options->sslKey;
 
     if (cert.isNull() || key.isNull())
-        throw BadArgs("ServerSSL cannot be constructed: Key or cert are null!");
+        throw BadArgs("ServerSSL cannot be constructed: Key or cert is null!");
     if (!QSslSocket::supportsSsl())
         throw BadArgs("ServerSSL cannot be constructed: Missing SSL support!");
     sslConfiguration = QSslConfiguration::defaultConfiguration();
