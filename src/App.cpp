@@ -18,6 +18,7 @@
 //
 #include "App.h"
 #include "BTC.h"
+#include "Compat.h"
 #include "Controller.h"
 #include "Logger.h"
 #include "Servers.h"
@@ -776,7 +777,7 @@ void App::parseArgs()
     // /Tor params
 
     if (conf.hasValue("bitcoind_throttle")) {
-        const QStringList vals = conf.value("bitcoind_throttle").trimmed().simplified().split(QRegExp("\\W+"), QString::SplitBehavior::SkipEmptyParts);
+        const QStringList vals = conf.value("bitcoind_throttle").trimmed().simplified().split(QRegExp("\\W+"), Compat::SplitBehaviorSkipEmptyParts);
         constexpr size_t N = 3;
         std::array<int, N> parsed = {0,0,0};
         size_t i = 0;

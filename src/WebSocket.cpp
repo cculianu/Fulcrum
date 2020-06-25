@@ -16,6 +16,7 @@
 // along with this program (see LICENSE.txt).  If not, see
 // <https://www.gnu.org/licenses/>.
 //
+#include "Compat.h"
 #include "Util.h"
 #include "WebSocket.h"
 
@@ -863,9 +864,9 @@ namespace WebSocket
         connect(socket, &QTcpSocket::disconnected, this, &Wrapper::disconnected);
         connect(socket, &QTcpSocket::stateChanged, this, &Wrapper::setSocketState);
         connect(socket, &QTcpSocket::stateChanged, this, &Wrapper::stateChanged);
-        connect(socket, qOverload<QAbstractSocket::SocketError>(&QTcpSocket::error), this, &Wrapper::setSocketError);
-        connect(socket, qOverload<QAbstractSocket::SocketError>(&QTcpSocket::error),
-                this, qOverload<QAbstractSocket::SocketError>(&Wrapper::error));
+        connect(socket, Compat::SocketErrorSignalFunctionPtr<QTcpSocket>(), this, &Wrapper::setSocketError);
+        connect(socket, Compat::SocketErrorSignalFunctionPtr<QTcpSocket>(),
+                this, Compat::SocketErrorSignalFunctionPtr<Wrapper>());
 
         setOpenMode(socket->openMode());
         setPeerName(socket->peerName());

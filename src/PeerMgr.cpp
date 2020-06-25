@@ -18,6 +18,7 @@
 //
 #include "PeerMgr.h"
 
+#include "Compat.h"
 #include "Options.h"
 #include "Servers.h"
 #include "SrvMgr.h"
@@ -25,12 +26,14 @@
 #include "Util.h"
 
 #include <QHostInfo>
+#include <QMultiMap>
 #include <QSet>
 #include <QSslConfiguration>
 #include <QSslSocket>
 #include <QTcpSocket>
 
 #include <list>
+#include <utility>
 
 namespace {
     constexpr int kStringMax = 80, kHostNameMax = 120;
@@ -598,7 +601,7 @@ QVariantMap PeerInfo::toStatsMap() const
 auto PeerClient::stats() const -> Stats
 {
     QVariantMap m = RPC::ElectrumConnection::stats().toMap();
-    m.unite(info.toStatsMap());
+    Compat::MapUnite(m, info.toStatsMap());
     if (const auto s = failureHoursString(info); !s.isEmpty())
         m["failureAge"] = s;
     m["verified"] = verified;
@@ -650,7 +653,7 @@ PeerClient::PeerClient(bool announce, const PeerInfo &pi, IdMixin::Id id_, PeerM
         ssl->setSslConfiguration(conf);
     }
     // on any errors we just assume the connection is down, tell PeerMgr to put it in the connect failed list
-    connect(socket, qOverload<QAbstractSocket::SocketError>(&QAbstractSocket::error), this,
+    connect(socket, Compat::SocketErrorSignalFunctionPtr(), this,
             [this](QAbstractSocket::SocketError){ emit connectFailed(this); });
 
     if (socket) {

@@ -17,6 +17,7 @@
 // <https://www.gnu.org/licenses/>.
 //
 #include "AbstractConnection.h"
+#include "Compat.h"
 #include "Options.h"
 #include "Util.h"
 #include <QTcpSocket>
@@ -149,8 +150,8 @@ void setSockOpts(QAbstractSocket *socket) {
 
 void AbstractConnection::socketConnectSignals()
 {
-    connect(socket, SIGNAL(error(QAbstractSocket::SocketError)), this, SLOT(on_error(QAbstractSocket::SocketError)));
-    connect(socket, SIGNAL(stateChanged(QAbstractSocket::SocketState)), this, SLOT(on_socketState(QAbstractSocket::SocketState)));
+    connect(socket, Compat::SocketErrorSignalFunctionPtr<QTcpSocket>(), this, &AbstractConnection::on_error);
+    connect(socket, &QTcpSocket::stateChanged, this, &AbstractConnection::on_socketState);
     if (QSslSocket *ssl = dynamic_cast<QSslSocket *>(socket); ssl)
         connect(ssl, &QSslSocket::encrypted, this, [this]{on_connected();});
     else
@@ -209,8 +210,8 @@ void AbstractConnection::on_connected()
     setSockOpts(socket); // ensure nagling disabled
     socket->setReadBufferSize(MAX_BUFFER); // ensure memory exhaustion from peer can't happen in case we're too busy to read.
     connectedConns.push_back(connect(this, &AbstractConnection::send, this, &AbstractConnection::do_write));
-    connectedConns.push_back(connect(socket, SIGNAL(readyRead()), this, SLOT(slot_on_readyRead())));
-    connectedConns.push_back(connect(socket, SIGNAL(bytesWritten(qint64)), this, SLOT(on_bytesWritten(qint64))));
+    connectedConns.push_back(connect(socket, &QTcpSocket::readyRead, this, &AbstractConnection::slot_on_readyRead));
+    connectedConns.push_back(connect(socket, &QTcpSocket::bytesWritten, this, &AbstractConnection::on_bytesWritten));
     connectedConns.push_back(
         connect(socket, &QAbstractSocket::disconnected, this, [this]{
             DebugM(prettyName(), " socket disconnected");

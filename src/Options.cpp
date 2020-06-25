@@ -257,7 +257,7 @@ bool ConfigFile::open(const QString &filePath)
             // indicate the name was present (can act like a bool flag if present)
             name = line;
         // save item
-        map.insertMulti(name, value);
+        map.insert(name, value); //NB: this is effectively an insertMulti() (deprecated in Qt 5.15)
     }
 
     map.squeeze();

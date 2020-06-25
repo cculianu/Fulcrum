@@ -20,6 +20,7 @@
 
 #include "App.h"
 #include "BitcoinD.h"
+#include "Compat.h"
 #include "PeerMgr.h"
 #include "ServerMisc.h"
 #include "Servers.h"
@@ -187,7 +188,7 @@ void SrvMgr::startServers()
 void SrvMgr::clientConnected(IdMixin::Id cid, const QHostAddress &addr)
 {
     bool clientWillDieAnyway = false;
-    addrIdMap.insertMulti(addr, cid);
+    addrIdMap.insert(addr, cid); //NB: this is effectively an insertMulti() (deprecated in Qt 5.15)
     const auto maxPerIP = options->maxClientsPerIP;
     if (maxPerIP > 0 && addrIdMap.count(addr) > maxPerIP) {
         const auto ipData = findExistingPerIPData(addr);
@@ -370,9 +371,9 @@ auto SrvMgr::stats() const -> Stats
     QVariantMap serversMap;
     const int timeout = kDefaultTimeout / qMax(int(servers.size()), 1);
     for (const auto & server : servers)
-        serversMap.unite( server->statsSafe(timeout).toMap() );
+        Compat::MapUnite(serversMap, server->statsSafe(timeout).toMap());
     for (const auto & server : adminServers)
-        serversMap.unite( server->statsSafe(timeout).toMap() );
+        Compat::MapUnite(serversMap, server->statsSafe(timeout).toMap());
     m["Servers"] = serversMap;
     m["PeerMgr"] = peermgr ? peermgr->statsSafe(kDefaultTimeout/2) : QVariant();
     m["transactions sent"] = qulonglong(numTxBroadcasts.load());
