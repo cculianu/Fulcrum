@@ -42,9 +42,9 @@ namespace RPC {
 
 
     /* static */
-    Message Message::fromString(const QString &s, Id *id_out, bool v1)
+    Message Message::fromUtf8(const QByteArray &ba, Id *id_out, bool v1)
     {
-        return fromJsonData(Util::Json::parseString(s, true).toMap(), id_out, v1); // may throw
+        return fromJsonData(Json::parseUtf8(ba, true).toMap(), id_out, v1); // may throw
     }
 
     /* static */
@@ -275,8 +275,8 @@ namespace RPC {
             do_disconnect();
             return;
         }
-        QString json = Message::makeRequest(reqid, method, params, v1).toJsonString();
-        if (json.isEmpty()) {
+        const QByteArray jsonData = Message::makeRequest(reqid, method, params, v1).toJsonUtf8();
+        if (jsonData.isEmpty()) {
             Error() << __func__ << " method: " << method << "; Unable to generate request JSON! FIXME!";
             return;
         }
@@ -287,11 +287,10 @@ namespace RPC {
         }
         idMethodMap[reqid] = method; // remember method sent out to associate it back.
 
-        const auto data = json.toUtf8();
-        TraceM("Sending json: ", Util::Ellipsify(data));
+        TraceM("Sending json: ", Util::Ellipsify(jsonData));
         ++nRequestsSent;
         // below send() ends up calling do_write immediately (which is connected to send)
-        emit send( wrapForSend(data) );
+        emit send( wrapForSend(jsonData) );
     }
     void ConnectionBase::_sendNotification(const QString &method, const QVariant & params)
     {
@@ -301,11 +300,11 @@ namespace RPC {
             do_disconnect();
             return;
         }
-        QString json;
+        QByteArray json;
         if (params.canConvert<QVariantMap>()) {
-            json = Message::makeNotification(method, params.toMap(), v1).toJsonString();
+            json = Message::makeNotification(method, params.toMap(), v1).toJsonUtf8();
         } else if (params.canConvert<QVariantList>()) {
-            json = Message::makeNotification(method, params.toList(), v1).toJsonString();
+            json = Message::makeNotification(method, params.toList(), v1).toJsonUtf8();
         } else {
             Error() << __func__ << " method: " << method << "; Notification requires either a QVarantList or a QVariantMap as its argument! FIXME!";
             return;
@@ -314,11 +313,10 @@ namespace RPC {
             Error() << __func__ << " method: " << method << "; Unable to generate notification JSON! FIXME!";
             return;
         }
-        const auto data = json.toUtf8();
-        TraceM("Sending json: ", Util::Ellipsify(data));
+        TraceM("Sending json: ", Util::Ellipsify(json));
         ++nNotificationsSent;
         // below send() ends up calling do_write immediately (which is connected to send)
-        emit send( wrapForSend(data) );
+        emit send( wrapForSend(json) );
     }
     void ConnectionBase::_sendError(bool disc, int code, const QString &msg, const Message::Id & reqId)
     {
@@ -328,12 +326,11 @@ namespace RPC {
             do_disconnect();
             return;
         }
-        QString json = Message::makeError(code, msg, reqId, v1).toJsonString();
-        const auto data = json.toUtf8();
-        TraceM("Sending json: ", Util::Ellipsify(data));
+        const QByteArray json = Message::makeError(code, msg, reqId, v1).toJsonUtf8();
+        TraceM("Sending json: ", Util::Ellipsify(json));
         ++nErrorsSent;
         // below send() ends up calling do_write immediately (which is connected to send)
-        emit send( wrapForSend(data) );
+        emit send( wrapForSend(json) );
         if (disc) {
             do_disconnect(true); // graceful disconnect
         }
@@ -346,16 +343,15 @@ namespace RPC {
             do_disconnect();
             return;
         }
-        QString json = Message::makeResponse(reqid, result, v1).toJsonString();
+        const QByteArray json = Message::makeResponse(reqid, result, v1).toJsonUtf8();
         if (json.isEmpty()) {
             Error() << __func__ << ": Unable to generate result JSON! FIXME!";
             return;
         }
-        const auto data = json.toUtf8();
-        TraceM("Sending result json: ", Util::Ellipsify(data));
+        TraceM("Sending result json: ", Util::Ellipsify(json));
         ++nResultsSent;
         // below send() ends up calling do_write immediately (which is connected to send)
-        emit send( wrapForSend(data) );
+        emit send( wrapForSend(json) );
     }
 
     void ConnectionBase::processJson(const QByteArray &json)
@@ -369,7 +365,7 @@ namespace RPC {
         }
         Message::Id msgId;
         try {
-            Message message = Message::fromJsonData( Util::Json::parseString(json, true).toMap() , &msgId, v1); // may throw
+            Message message = Message::fromJsonData( Json::parseUtf8(json, true).toMap() , &msgId, v1); // may throw
 
             static const auto ValidateParams = [](const Message &msg, const Method &m) {
                 if (!msg.hasParams()) {
@@ -455,7 +451,7 @@ namespace RPC {
             lastGood = Util::getTime(); // update "lastGood" as this is used to determine if stale or not.
         } catch (const Exception &e) {
             // TODO: clean this up. It's rather inelegant. :/
-            const bool wasJsonParse = dynamic_cast<const Util::Json::ParseError *>(&e);
+            const bool wasJsonParse = dynamic_cast<const Json::ParseError *>(&e);
             const bool wasUnk = dynamic_cast<const UnknownMethod *>(&e);
             const bool wasInv = dynamic_cast<const InvalidRequest *>(&e) || dynamic_cast<const InvalidError *>(&e);
             const bool wasInvParms = dynamic_cast<const InvalidParameters *>(&e);

@@ -125,7 +125,7 @@ void PeerMgr::detectProtocol(const QHostAddress &addr)
 
 void PeerMgr::parseServersDotJson(const QString &fnIn)
 {
-    QVariantMap m = Util::Json::parseFile(fnIn).toMap();
+    QVariantMap m = Json::parseFile(fnIn).toMap();
     const QString fn = Util::basename(fnIn); // use basename for error messages below, etc
     if (m.isEmpty()) throw InternalError(QString("PeerMgr: %1 file parsed to an empty dict! FIXME!").arg(fn));
     for (auto it = m.begin(); it != m.end(); ++it) {
@@ -777,7 +777,7 @@ void PeerClient::handleReply(IdMixin::Id, const RPC::Message & reply)
         emit sendRequest(newId(), "server.features");
     } else if (reply.method == "server.features") {
         // handle
-        if constexpr (debugPrint) DebugM(info.hostName, ": features responded: ", Util::Json::toString(reply.result(), false));
+        if constexpr (debugPrint) DebugM(info.hostName, ": features responded: ", QString{Json::toJsonUtf8(reply.result(), false)});
         PeerInfoList pl;
         try {
             pl = PeerInfo::fromFeaturesMap(reply.result().toMap());
@@ -856,7 +856,7 @@ void PeerClient::handleReply(IdMixin::Id, const RPC::Message & reply)
         // handle
         if constexpr (debugPrint) {
             QString dbgstr;
-            try { dbgstr = Util::Json::toString(reply.result(), true); } catch (...) {}
+            try { dbgstr = Json::toJsonUtf8(reply.result(), true); } catch (...) {}
             DebugM(info.hostName, ": subscribe responded ... ", dbgstr);
         }
         PeerInfoList candidates;

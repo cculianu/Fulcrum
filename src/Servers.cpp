@@ -643,11 +643,11 @@ void ServerBase::applyMaxBufferToAllClients(int newMax)
 
 void ServerBase::onMessage(IdMixin::Id clientId, const RPC::Message &m)
 {
-    TraceM("onMessage: ", clientId, " json: ", m.toJsonString());
+    TraceM("onMessage: ", clientId, " json: ", m.toJsonUtf8());
     if (Client *c = getClient(clientId); c) {
         const auto member = dispatchTable.value(m.method);
         if (!member)
-            Error() << "Unknown method: \"" << m.method << "\". This shouldn't happen. FIXME! Json: " << m.toJsonString();
+            Error() << "Unknown method: \"" << m.method << "\". This shouldn't happen. FIXME! Json: " << m.toJsonUtf8();
         else {
             // indicate a good request, accepted request
             ++c->info.nRequestsRcv;
@@ -669,7 +669,7 @@ void ServerBase::onMessage(IdMixin::Id clientId, const RPC::Message &m)
 }
 void ServerBase::onErrorMessage(IdMixin::Id clientId, const RPC::Message &m)
 {
-    TraceM("onErrorMessage: ", clientId, " json: ", m.toJsonString());
+    TraceM("onErrorMessage: ", clientId, " json: ", m.toJsonUtf8());
     if (Client *c = getClient(clientId); c) {
         // we never expect client to send us errors. Always return invalid request, disconnect client.
         emit c->sendError(true, RPC::Code_InvalidRequest, "Not a valid request object");

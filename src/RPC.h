@@ -19,6 +19,7 @@
 #pragma once
 
 #include "AbstractConnection.h"
+#include "Json.h"
 #include "RPCMsgId.h"
 #include "Util.h"
 
@@ -38,8 +39,8 @@ namespace WebSocket { class Wrapper; } ///< fwd decl
 namespace RPC {
 
     /// Thrown on json that is a json object but doesn't match JSON-RPC 2.0 spec.
-    struct InvalidError : Util::Json::Error {
-        using Util::Json::Error::Error;
+    struct InvalidError : Json::Error {
+        using Json::Error::Error;
     };
 
     enum ErrorCodes {
@@ -116,7 +117,7 @@ namespace RPC {
         // -- METHODS --
 
         /// may throw Exception. This factory method should be the way one of the 6 ways one constructs this object
-        static Message fromString(const QString &, Id *id_out = nullptr, bool v1 = false);
+        static Message fromUtf8(const QByteArray &, Id *id_out = nullptr, bool v1 = false);
         /// may throw Exception. This factory method should be the way one of the 6 ways one constructs this object
         static Message fromJsonData(const QVariantMap &jsonData, Id *id_parsed_even_if_failed = nullptr, bool v1 = false);
         // 4 more factories below..
@@ -132,7 +133,7 @@ namespace RPC {
         static Message makeResponse(const Id & reqId, const QVariant & result, bool v1 = false);
 
         /// Note in pathological cases bad_alloc may be thrown here, so we just return an empty QString in that case and hope for the best.
-        QString toJsonString() const { try {return Util::Json::toString(data, true);} catch (...) {} return QString(); }
+        QByteArray toJsonUtf8() const { try {return Json::toJsonUtf8(data, true);} catch (...) {} return QByteArray(); }
 
         // -- PERFORMANCE OPTIMIZATION --
         // It turns out QString::QString(const char *) is called a lot in typical usase of this class, so we pre-create

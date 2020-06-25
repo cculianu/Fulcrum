@@ -20,6 +20,7 @@
 #include "BTC.h"
 #include "Compat.h"
 #include "Controller.h"
+#include "Json.h"
 #include "Logger.h"
 #include "Servers.h"
 #include "ThreadPool.h"
@@ -895,18 +896,19 @@ void App::start_httpServer(const Options::Interface &iface)
     httpServers.push_back(server);
     server->tryStart(); // may throw, waits for server to start
     server->set404Message("Error: Unknown endpoint. /stats & /debug are the only valid endpoint I understand.\r\n");
+    static const auto CRLF = QByteArrayLiteral("\r\n");
     server->addEndpoint("/stats",[this](SimpleHttpServer::Request &req){
         req.response.contentType = "application/json; charset=utf-8";
         auto stats = controller->statsSafe();
         stats = stats.isNull() ? QVariantList{QVariant()} : stats;
-        req.response.data = QString("%1\r\n").arg(Util::Json::toString(stats, false)).toUtf8();
+        req.response.data = Json::toJsonUtf8(stats, false) + CRLF;
     });
     server->addEndpoint("/debug",[this](SimpleHttpServer::Request &req){
         req.response.contentType = "application/json; charset=utf-8";
         const auto params = ParseParams(req);
         auto stats = controller->debugSafe(params);
         stats = stats.isNull() ? QVariantList{QVariant()} : stats;
-        req.response.data = QString("%1\r\n").arg(Util::Json::toString(stats, false)).toUtf8();
+        req.response.data = Json::toJsonUtf8(stats, false) + CRLF;
     });
 }
 
