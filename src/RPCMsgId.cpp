@@ -41,7 +41,7 @@ RPCMsgId RPCMsgId::fromVariant(const QVariant &var)
         if (auto mtype = QMetaType::Type(var.type()); mtype == QMetaType::QString) {
             ret = var.toString();
         } else if (mtype == QMetaType::Bool) {
-            throw BadArgs("Booleans not supported");
+            throw BadArgs("Booleans are not supported");
         } else if (mtype == QMetaType::Int || mtype == QMetaType::UInt || mtype == QMetaType::Long || mtype == QMetaType::LongLong) {
             ret = int64_t(var.toLongLong(&ok));
             if (!ok) throw BadArgs("QVariant::toLongLong returned false");
