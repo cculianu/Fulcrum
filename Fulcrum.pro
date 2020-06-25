@@ -170,6 +170,7 @@ SOURCES += \
     BlockProc.cpp \
     Common.cpp \
     Controller.cpp \
+    Json.cpp \
     Logger.cpp \
     main.cpp \
     Mempool.cpp \
@@ -204,6 +205,7 @@ HEADERS += \
     Compat.h \
     Controller.h \
     CostCache.h \
+    Json.h \
     Logger.h \
     Mempool.h \
     Merkle.h \

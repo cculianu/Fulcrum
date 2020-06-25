@@ -1244,7 +1244,7 @@ void CtlTask::on_finished()
 
 void CtlTask::on_error(const RPC::Message &resp)
 {
-    Warning() << resp.method << ": error response: " << resp.toJsonString();
+    Warning() << resp.method << ": error response: " << resp.toJsonUtf8();
     errorCode = resp.errorCode();
     errorMessage = resp.errorMessage();
     emit errored();

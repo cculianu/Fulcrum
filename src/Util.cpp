@@ -116,36 +116,6 @@ namespace Util {
         return double(getTime()) / 1e3;
     }
 
-    namespace Json {
-        QVariant parseString(const QString &str, bool expectMap) {
-            QJsonParseError e;
-            QJsonDocument d = QJsonDocument::fromJson(str.toUtf8(), &e);
-            if (d.isNull())
-                throw ParseError(QString("Error parsing Json from string: %1").arg(e.errorString()));
-            auto v = d.toVariant();
-            if (expectMap && v.type() != QVariant::Map)
-                throw Error("Json Error, expected map, got a list instead");
-            if (!expectMap && v.type() != QVariant::List)
-                throw Error("Json Error, expected list, got a map instead");
-            return v;
-        }
-        QVariant parseFile(const QString &file, bool expectMap) {
-            QFile f(file);
-            if (!f.open(QFile::ReadOnly))
-                throw Error(QString("Could not open file: %1").arg(file));
-            QString s(f.readAll());
-            return parseString(s, expectMap);
-        }
-        QString toString(const QVariant &v, bool compact) {
-            if (v.isNull() || !v.isValid()) throw Error("Empty or invalid QVariant passed to Json::toString");
-            auto d = QJsonDocument::fromVariant(v);
-            if (d.isNull())
-                throw Error("Bad QVariant pased to Json::toString");
-            return d.toJson(compact ? QJsonDocument::Compact : QJsonDocument::Indented);
-        }
-
-    } // end namespace Json
-
     bool VoidFuncOnObjectNoThrow(const QObject *obj, const std::function<void()> & lambda, int timeout_ms)
     {
         try {
