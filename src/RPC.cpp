@@ -57,24 +57,13 @@ namespace RPC {
         if (id_out)
             id_out->clear();
 
-        // Grab the id first in case later processing fails.
-        if (auto var = map.value(s_id); !var.isNull()) {
-            // note as per JSON-RPC 2.0 spec, we squash floats down to ints, discarding the fractional part
-            // we will throw if the id is not a string, integer, or null
-            bool ok;
-            qint64 id_ll{};
-            if (QMetaType::Type(var.type()) == QMetaType::QString)
-                ret.id = var;
-            // note the below will fail at non-fractional integers > 2^53 (or 9 quadrillion)
-            else if (double id_dbl = var.toDouble(&ok); ok && qAbs(double(id_ll=qint64(id_dbl)) - id_dbl) <= 0.0) // this checks that fractional part not present
-                ret.id = id_ll;
-            else
-                // if we get here, id is not a valid type as per our restricted JSON RPC 2.0 (we don't accept fractional parts for id)
-                throw InvalidError("id must be a string, a non-fractional number, or null");
+        try {
+            ret.id = Id::fromVariant(map.value(s_id));
             if (id_out)
                 *id_out = ret.id;
+        } catch (const BadArgs & e) {
+            throw InvalidError(QString("Error parsing JSON key \"%1\": %2").arg(s_id).arg(e.what()));
         }
-
 
         if (QString ver; !v1 && (ver=ret.jsonRpcVersion()) != RPC::jsonRpcVersion) {// we ignore this key in v1
             if (!ver.isEmpty())
@@ -162,7 +151,7 @@ namespace RPC {
             map[s_jsonrpc] = RPC::jsonRpcVersion;
         ret.v1 = v1;
         ret.id = id;
-        map[s_id] = id; // may be "null"
+        map[s_id] = id.toVariant(); // may be "null"
         QVariantMap errMap;
         errMap[s_code] = code;
         errMap[s_message] = message;
@@ -181,7 +170,7 @@ namespace RPC {
             map[s_jsonrpc] = RPC::jsonRpcVersion;
         else
             map[s_error] = QVariant(); // v1: always set the "error" key to null
-        map[s_id] = reqId;
+        map[s_id] = reqId.toVariant();
         map[s_result] = result;
         ret.id = reqId;
         return ret;
@@ -192,7 +181,7 @@ namespace RPC {
     {
         Message ret = makeNotification(methodName, params, v1);
         auto & map = ret.data;
-        map[s_id] = id;
+        map[s_id] = id.toVariant();
         ret.id = id;
         return ret;
     }
@@ -202,7 +191,7 @@ namespace RPC {
     {
         Message ret = makeNotification(methodName, params, v1);
         auto & map = ret.data;
-        map[s_id] = id;
+        map[s_id] = id.toVariant();
         ret.id = id;
         return ret;
     }

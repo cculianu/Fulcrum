@@ -180,6 +180,7 @@ SOURCES += \
     PeerMgr.cpp \
     RecordFile.cpp \
     RPC.cpp \
+    RPCMsgId.cpp \
     ServerMisc.cpp \
     Servers.cpp \
     SrvMgr.cpp \
@@ -212,6 +213,7 @@ HEADERS += \
     PeerMgr.h \
     RecordFile.h \
     RPC.h \
+    RPCMsgId.h \
     ServerMisc.h \
     Servers.h \
     SrvMgr.h \

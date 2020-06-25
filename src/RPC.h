@@ -19,6 +19,7 @@
 #pragma once
 
 #include "AbstractConnection.h"
+#include "RPCMsgId.h"
 #include "Util.h"
 
 #include <QHash>
@@ -102,7 +103,7 @@ namespace RPC {
     /// TODO: see if performance benefit can be gained by wrapping in shared_ptr anyway..
     struct Message
     {
-        using Id = QVariant;
+        using Id = RPCMsgId;
 
         // -- DATA --
 
@@ -320,7 +321,7 @@ namespace RPC {
         /// map of requests that were generated via _sendRequest to method names to build a more meaningful Message
         /// object (which has a .method defined even on 'result=' messages).  It is an error to receive a result=
         /// message from the peer with its id= parameter not having an entry in this map.
-        QMap<Message::Id, QString> idMethodMap;
+        QHash<Message::Id, QString> idMethodMap;
 
         enum ErrorPolicy {
             /// Send an error RPC message on protocol errors.
