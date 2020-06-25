@@ -18,9 +18,10 @@
 //
 #pragma once
 
+#include <QString>
+
 #include <cstdint>
 #include <exception>
-#include <QString>
 
 #ifdef __clang__
 // turn off the dreaded "warning: class padded with xx bytes, etc" since we aren't writing wire protocols using structs..
