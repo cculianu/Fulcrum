@@ -200,6 +200,7 @@ HEADERS += \
     BlockProc.h \
     BlockProcTypes.h \
     Common.h \
+    Compat.h \
     Controller.h \
     CostCache.h \
     Logger.h \
