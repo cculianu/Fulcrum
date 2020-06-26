@@ -215,19 +215,19 @@ private:
     void append_codepoint(unsigned int codepoint_)
     {
         if (codepoint_ <= 0x7f)
-            str.push_back((char)codepoint_);
+            str.push_back(char(codepoint_));
         else if (codepoint_ <= 0x7FF) {
-            str.push_back((char)(0xC0 | (codepoint_ >> 6)));
-            str.push_back((char)(0x80 | (codepoint_ & 0x3F)));
+            str.push_back(char(0xC0 | (codepoint_ >> 6)));
+            str.push_back(char(0x80 | (codepoint_ & 0x3F)));
         } else if (codepoint_ <= 0xFFFF) {
-            str.push_back((char)(0xE0 | (codepoint_ >> 12)));
-            str.push_back((char)(0x80 | ((codepoint_ >> 6) & 0x3F)));
-            str.push_back((char)(0x80 | (codepoint_ & 0x3F)));
+            str.push_back(char(0xE0 | (codepoint_ >> 12)));
+            str.push_back(char(0x80 | ((codepoint_ >> 6) & 0x3F)));
+            str.push_back(char(0x80 | (codepoint_ & 0x3F)));
         } else if (codepoint_ <= 0x1FFFFF) {
-            str.push_back((char)(0xF0 | (codepoint_ >> 18)));
-            str.push_back((char)(0x80 | ((codepoint_ >> 12) & 0x3F)));
-            str.push_back((char)(0x80 | ((codepoint_ >> 6) & 0x3F)));
-            str.push_back((char)(0x80 | (codepoint_ & 0x3F)));
+            str.push_back(char(0xF0 | (codepoint_ >> 18)));
+            str.push_back(char(0x80 | ((codepoint_ >> 12) & 0x3F)));
+            str.push_back(char(0x80 | ((codepoint_ >> 6) & 0x3F)));
+            str.push_back(char(0x80 | (codepoint_ & 0x3F)));
         }
     }
 };
