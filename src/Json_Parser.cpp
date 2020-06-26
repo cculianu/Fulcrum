@@ -16,6 +16,14 @@
 // along with this program (see LICENSE.txt).  If not, see
 // <https://www.gnu.org/licenses/>.
 //
+// Portions of the below code are adapted from Bitcoin Cash Node's custom
+// "UniValue" library, and they have the following copyrights and license:
+// Copyright 2014 BitPay Inc.
+// Copyright 2015 Bitcoin Core Developers
+// Copyright (c) 2020 The Bitcoin developers
+// Distributed under the MIT software license, see the accompanying
+// file COPYING or https://opensource.org/licenses/mit-license.php.
+//
 #include "Json.h"
 #include "Util.h"
 
