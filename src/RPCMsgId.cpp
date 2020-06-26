@@ -23,12 +23,14 @@
 #include <QMetaType>
 #include <QtGlobal>
 
+#include <cmath>
 #include <limits>
 
 /* static */
 RPCMsgId RPCMsgId::fromVariant(const QVariant &var)
 {
     RPCMsgId ret;
+    static const double Epsilon = std::nextafter(0., 1.);
 
     if (!var.isNull()) {
         if (!var.isValid())
@@ -50,7 +52,7 @@ RPCMsgId RPCMsgId::fromVariant(const QVariant &var)
                 throw BadArgs("Unable to convert to int64 from qulong/qulonglong");
             ret = int64_t(qull);
         // note the below will fail at non-fractional integers > 2^53 (or 9 quadrillion)
-        } else if (double id_dbl = var.toDouble(&ok); ok && qAbs(double(id_ll=int64_t(id_dbl)) - id_dbl) <= 0.0) { // this checks that fractional part not present
+        } else if (double id_dbl = var.toDouble(&ok); ok && std::abs(double(id_ll=int64_t(id_dbl)) - id_dbl) <= Epsilon) { // this checks that fractional part not present
             ret = id_ll;
         } else {
             // if we get here, id is not a valid type as per our restricted JSON RPC 2.0 (we don't accept fractional parts for id)
