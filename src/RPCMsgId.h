@@ -78,9 +78,9 @@ public:
     RPCMsgId &operator=(const RPCMsgId &) = default;
     RPCMsgId &operator=(RPCMsgId &&) = default;
 
-    // return a QVariant for JSONification
+    /// return a QVariant for JSONification
     QVariant toVariant() const;
-    /// Will throw BadArgs if the QVariant is not either QString or a numeric that is an integer.
+    /// Will throw BadArgs if the QVariant is not either QString or a numeric that is an integer, or null
     static RPCMsgId fromVariant(const QVariant &) noexcept(false);
 
     std::size_t hashValue(uint seed = 0) const;
@@ -95,9 +95,9 @@ private:
     QString sdata{};
 };
 
-/// template specialization for std::hash of RPCMsgId
+/// template specialization for std::hash of RPCMsgId (for std::unordered_map, std::unordered_set, etc)
 template<> struct std::hash<RPCMsgId> { std::size_t operator()(const RPCMsgId &r) const { return r.hashValue(); } };
-/// for qHash(const RPCMsgId &, uint)
+/// overload for Qt's hashtable containers (QHash, QMultiHash, etc)
 inline uint qHash(const RPCMsgId &r, uint seed = 0) {
     return uint(r.hashValue(seed));
 }
