@@ -17,10 +17,10 @@
 // <https://www.gnu.org/licenses/>.
 //
 #include "Json.h"
+#include "Json_Parser.h"
 #include "Util.h"
 
 #include <QFile>
-#include <QJsonDocument>
 #include <QMetaType>
 #include <QVariant>
 
@@ -32,11 +32,10 @@
 #include <limits>
 #include <type_traits>
 
-namespace Json {
-    extern const std::array<const char *, 256> escapes;
-}
-
 namespace {
+    // JSON escapes -- used in jsonEscape()
+    extern const std::array<const char *, 256> escapes;
+
     // Opaque type used for writing. This can be further optimized later.
     struct Writer {
         QByteArray & buf; // this is a reference for RVO to always work in write() below
@@ -77,7 +76,7 @@ namespace {
         void jsonEscape(const QByteArray & inS)
         {
             for (const auto ch : inS) {
-                const char * const escStr = Json::escapes[uint8_t(ch)];
+                const char * const escStr = escapes[uint8_t(ch)];
 
                 if (escStr)
                     *this << escStr;
@@ -234,16 +233,15 @@ namespace {
 namespace Json {
     QVariant parseUtf8(const QByteArray &ba, bool expectMap)
     {
-        QJsonParseError e;
-        QJsonDocument d = QJsonDocument::fromJson(ba, &e);
-        if (d.isNull())
-            throw ParseError(QString("Error parsing Json from string: %1").arg(e.errorString()));
-        auto v = d.toVariant();
-        if (expectMap && v.type() != QVariant::Map)
+        QVariant ret;
+        bool ok = Json::detail::parse(ret, ba);
+        if (!ok)
+            throw ParseError(QString("Failed to parse Json from string: %1%2").arg(QString(ba.left(80))).arg(ba.size() > 80 ? "..." : ""));
+        if (expectMap && QMetaType::Type(ret.type()) != QMetaType::QVariantMap)
             throw Error("Json Error, expected map, got a list instead");
-        if (!expectMap && v.type() != QVariant::List)
+        if (!expectMap && QMetaType::Type(ret.type()) != QMetaType::QVariantList)
             throw Error("Json Error, expected list, got a map instead");
-        return v;
+        return ret;
     }
     QVariant parseFile(const QString &file, bool expectMap) {
         QFile f(file);
@@ -256,7 +254,9 @@ namespace Json {
         if (v.isNull() || !v.isValid()) throw Error("Empty or invalid QVariant passed to Json::toString");
         return serialize(v, compact ? 0 : 4);
     }
+} // end namespace Json
 
+namespace {
     const std::array<const char *, 256> escapes = {{
         "\\u0000",
         "\\u0001",
@@ -515,4 +515,4 @@ namespace Json {
         nullptr,
         nullptr,
     }};
-} // end namespace Json
+} // end namespace
