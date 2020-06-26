@@ -30,10 +30,9 @@ RPCMsgId RPCMsgId::fromVariant(const QVariant &var)
 {
     RPCMsgId ret;
 
-    if (!var.isValid())
-        throw BadArgs(QString("Invalid QVariant specified in %1").arg(__func__));
-
     if (!var.isNull()) {
+        if (!var.isValid())
+            throw BadArgs(QString("Invalid QVariant specified in %1").arg(__func__));
         // note as per JSON-RPC 2.0 spec, we squash floats down to ints, discarding the fractional part
         // we will throw if the id is not a string, integer, or null
         bool ok{};
