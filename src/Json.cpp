@@ -56,8 +56,7 @@ namespace {
         Writer & operator<<(const QByteArray &ba) { buf.append(ba); return *this; }
 
         template<typename Num>
-        bool writeIntOrFloat(Num num)
-        {
+        bool writeIntOrFloat(Num num) {
             constexpr int bufSize = std::is_integral<Num>::value ? 32 : 64; // use 32 byte buffer for ints, 64 for double
             constexpr auto fmt =
                     std::is_same<Num, double>::value
@@ -81,8 +80,7 @@ namespace {
             return true;
         }
 
-        void jsonEscape(const QByteArray & inS)
-        {
+        void jsonEscape(const QByteArray & inS) {
             for (const auto ch : inS) {
                 const char * const escStr = escapes[uint8_t(ch)];
 
@@ -93,10 +91,8 @@ namespace {
             }
         }
 
-        void indentStr(unsigned prettyIndent, unsigned indentLevel)
-        {
-            put(' ', prettyIndent * indentLevel);
-        }
+        void indentStr(unsigned prettyIndent, unsigned indentLevel) { put(' ', prettyIndent * indentLevel); }
+
         void writeArray(const QVariantList &v, unsigned prettyIndent, unsigned indentLevel);
         void writeObject(const QVariantMap &v, unsigned prettyIndent, unsigned indentLevel);
         void writeVariant(const QVariant &v, unsigned prettyIndent, unsigned indentLevel);

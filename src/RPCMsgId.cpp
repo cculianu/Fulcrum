@@ -18,6 +18,7 @@
 //
 #include "Common.h"
 #include "RPCMsgId.h"
+#include "Util.h"
 
 #include <QHash>
 #include <QMetaType>
@@ -29,8 +30,8 @@
 /* static */
 RPCMsgId RPCMsgId::fromVariant(const QVariant &var)
 {
-    RPCMsgId ret;
     static const double Epsilon = std::nextafter(0., 1.);
+    RPCMsgId ret;
 
     if (!var.isNull()) {
         if (!var.isValid())
@@ -41,6 +42,8 @@ RPCMsgId RPCMsgId::fromVariant(const QVariant &var)
         int64_t id_ll;
         if (auto mtype = QMetaType::Type(var.type()); mtype == QMetaType::QString) {
             ret = var.toString();
+        } else if (UNLIKELY(mtype == QMetaType::QByteArray)) {
+            ret = QString::fromUtf8(var.toByteArray());
         } else if (mtype == QMetaType::Bool) {
             throw BadArgs("Booleans are not supported");
         } else if (mtype == QMetaType::Int || mtype == QMetaType::UInt || mtype == QMetaType::Long || mtype == QMetaType::LongLong) {
@@ -99,7 +102,7 @@ bool RPCMsgId::operator<=(const RPCMsgId & o) const
 }
 bool RPCMsgId::operator>=(const RPCMsgId & o) const
 {
-    return *this > o || *this == o;
+    return !(*this < o);
 }
 bool RPCMsgId::operator==(const RPCMsgId & o) const
 {

@@ -96,8 +96,8 @@ inline constexpr size_t MAX_JSON_DEPTH = 512;
 
 inline bool json_isdigit(int ch) noexcept { return ((ch >= '0') && (ch <= '9')); }
 
-// convert hexadecimal string to unsigned integer
-const char *hatoui(const char *first, const char *last, unsigned &out) noexcept
+// convert hexadecimal (big endian) string to unsigned integer (machine byte orer)
+const char *hextouint(const char *first, const char *last, unsigned &out) noexcept
 {
     unsigned result = 0;
     for (; first != last; ++first)
@@ -240,7 +240,7 @@ jtokentype getJsonToken(QByteArray &tokenVal, unsigned &consumed, const char *ra
     const char *rawStart = raw;
 
     while (raw < end && (json_isspace(*raw)))          // skip whitespace
-        raw++;
+        ++raw;
 
     if (raw >= end)
         return JTOK_NONE;
@@ -248,28 +248,28 @@ jtokentype getJsonToken(QByteArray &tokenVal, unsigned &consumed, const char *ra
     switch (*raw) {
 
     case '{':
-        raw++;
+        ++raw;
         consumed = (raw - rawStart);
         return JTOK_OBJ_OPEN;
     case '}':
-        raw++;
+        ++raw;
         consumed = (raw - rawStart);
         return JTOK_OBJ_CLOSE;
     case '[':
-        raw++;
+        ++raw;
         consumed = (raw - rawStart);
         return JTOK_ARR_OPEN;
     case ']':
-        raw++;
+        ++raw;
         consumed = (raw - rawStart);
         return JTOK_ARR_CLOSE;
 
     case ':':
-        raw++;
+        ++raw;
         consumed = (raw - rawStart);
         return JTOK_COLON;
     case ',':
-        raw++;
+        ++raw;
         consumed = (raw - rawStart);
         return JTOK_COMMA;
 
@@ -310,48 +310,48 @@ jtokentype getJsonToken(QByteArray &tokenVal, unsigned &consumed, const char *ra
         const char *firstDigit = first;
         if (!json_isdigit(*firstDigit))
             firstDigit++;
-        if ((*firstDigit == '0') && json_isdigit(firstDigit[1]))
+        if (*firstDigit == '0' && json_isdigit(firstDigit[1]))
             return JTOK_ERR;
 
         numStr += *raw;                       // copy first char
-        raw++;
+        ++raw;
 
-        if ((*first == '-') && (raw < end) && (!json_isdigit(*raw)))
+        if (*first == '-' && raw < end && !json_isdigit(*raw))
             return JTOK_ERR;
 
         while (raw < end && json_isdigit(*raw)) {  // copy digits
             numStr += *raw;
-            raw++;
+            ++raw;
         }
 
         // part 2: frac
         if (raw < end && *raw == '.') {
             numStr += *raw;                   // copy .
-            raw++;
+            ++raw;
 
             if (raw >= end || !json_isdigit(*raw))
                 return JTOK_ERR;
             while (raw < end && json_isdigit(*raw)) { // copy digits
                 numStr += *raw;
-                raw++;
+                ++raw;
             }
         }
 
         // part 3: exp
         if (raw < end && (*raw == 'e' || *raw == 'E')) {
             numStr += *raw;                   // copy E
-            raw++;
+            ++raw;
 
             if (raw < end && (*raw == '-' || *raw == '+')) { // copy +/-
                 numStr += *raw;
-                raw++;
+                ++raw;
             }
 
             if (raw >= end || !json_isdigit(*raw))
                 return JTOK_ERR;
             while (raw < end && json_isdigit(*raw)) { // copy digits
                 numStr += *raw;
-                raw++;
+                ++raw;
             }
         }
 
@@ -361,23 +361,23 @@ jtokentype getJsonToken(QByteArray &tokenVal, unsigned &consumed, const char *ra
         }
 
     case '"': {
-        raw++;                                // skip "
+        ++raw;                                // skip "
 
         QByteArray valStr;
         JSONUTF8StringFilter writer(valStr);
 
         while (true) {
-            if (raw >= end || (unsigned char)*raw < 0x20)
+            if (raw >= end || uint8_t(*raw) < 0x20)
                 return JTOK_ERR;
 
             else if (*raw == '\\') {
-                raw++;                        // skip backslash
+                ++raw;                        // skip backslash
 
                 if (raw >= end)
                     return JTOK_ERR;
 
                 switch (*raw) {
-                case '"':  writer.push_back('\"'); break;
+                case '"':  writer.push_back('"'); break;
                 case '\\': writer.push_back('\\'); break;
                 case '/':  writer.push_back('/'); break;
                 case 'b':  writer.push_back('\b'); break;
@@ -388,9 +388,7 @@ jtokentype getJsonToken(QByteArray &tokenVal, unsigned &consumed, const char *ra
 
                 case 'u': {
                     unsigned int codepoint;
-                    if (raw + 1 + 4 >= end ||
-                        hatoui(raw + 1, raw + 1 + 4, codepoint) !=
-                               raw + 1 + 4)
+                    if (raw + 1 + 4 >= end || hextouint(raw + 1, raw + 1 + 4, codepoint) != raw + 1 + 4)
                         return JTOK_ERR;
                     writer.push_back_u(codepoint);
                     raw += 4;
@@ -401,17 +399,17 @@ jtokentype getJsonToken(QByteArray &tokenVal, unsigned &consumed, const char *ra
 
                 }
 
-                raw++;                        // skip esc'd char
+                ++raw;                        // skip esc'd char
             }
 
             else if (*raw == '"') {
-                raw++;                        // skip "
+                ++raw;                        // skip "
                 break;                        // stop scanning
             }
 
             else {
                 writer.push_back(*raw);
-                raw++;
+                ++raw;
             }
         }
 
@@ -502,21 +500,22 @@ namespace Json {
 namespace detail {
 bool parse(QVariant & out, const QByteArray &bytes)
 {
-    enum expect_bits {
-        EXP_OBJ_NAME = (1U << 0),
-        EXP_COLON = (1U << 1),
-        EXP_ARR_VALUE = (1U << 2),
-        EXP_VALUE = (1U << 3),
-        EXP_NOT_VALUE = (1U << 4),
+    enum ExpectBits : uint32_t {
+        EXP_OBJ_NAME = 1U << 0,
+        EXP_COLON = 1U << 1,
+        EXP_ARR_VALUE = 1U << 2,
+        EXP_VALUE = 1U << 3,
+        EXP_NOT_VALUE = 1U << 4,
     };
-#   define expect(bit) (expectMask & (EXP_##bit))
-#   define setExpect(bit) (expectMask |= EXP_##bit)
-#   define clearExpect(bit) (expectMask &= ~EXP_##bit)
-    out = QVariant{}; // ensure cleared
-    Container root;
-
     uint32_t expectMask = 0;
-    std::vector<Container*> stack;
+#   define expect(bit) (expectMask & ExpectBits::EXP_##bit)
+#   define setExpect(bit) (expectMask |= ExpectBits::EXP_##bit)
+#   define clearExpect(bit) (expectMask &= ~ExpectBits::EXP_##bit)
+
+    out = QVariant{}; // ensure cleared
+
+    Container root;
+    std::vector<Container *> stack;
 
     QByteArray tokenVal;
     unsigned consumed;
@@ -758,7 +757,7 @@ bool parse(QVariant & out, const QByteArray &bytes)
     try {
         out = root.toVariant(); // convert to (possibly nested) QVariant containing QVariants
     } catch (const std::exception &e) {
-        // this should never happen.
+        // this is unlikely to happen, but may if std::bad_alloc (or if bugs in this code).
         Warning() << "Failed to parse JSON: " << e.what();
         return false;
     }
