@@ -42,4 +42,6 @@ namespace Json {
     extern QVariant parseFragmentUtf8(const QByteArray &ba);
     /// Serialization- throws Error, may throw std::exception on low-level error (bad_alloc, etc)
     extern QByteArray toJsonUtf8(const QVariant &, bool compact = false);
+    /// Like the above, but also accepts QVariant{} (null) and doesn't throw in that case.
+    extern QByteArray toJsonFragmentUtf8(const QVariant &, bool compact = false);
 }
