@@ -296,7 +296,7 @@ protected:
     /// This basically all comes from getnetworkinfo to bitcoind.
     struct BitcoinDInfo {
         Version version {0,0,0}; ///> major, minor, revision e.g. {0, 20, 6} for v0.20.6
-        QString subversion; ///< subversion string from daemon e.g.: /BitcoinABC bla bla;EB32 ..../
+        QString subversion; ///< subversion string from daemon e.g.: /Bitcoin Cash Node bla bla;EB32 ..../
         double relayFee = 0.0; ///< from 'relayfee' in the getnetworkinfo response; minimum fee/kb to relay a tx, usually: 0.00001000
         QString warnings = ""; ///< from 'warnings' in the getnetworkinfo response (usually is empty string, but may not always be)
     };
@@ -310,7 +310,7 @@ protected:
     bool usesWS = false;
 };
 
-/// Implements the ElectrumX/ElectronX JSON-RPC protocol, version 1.4.2.
+/// Implements the ElectrumX/ElectronX JSON-RPC protocol, version 1.4.4.
 /// See also ServerSSL (subclass) which is identical but serves to SSL clients.  (This class serves to TCP clients).
 class Server : public ServerBase
 {
