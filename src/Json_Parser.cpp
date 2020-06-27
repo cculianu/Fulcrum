@@ -498,7 +498,7 @@ QVariant Container::toVariant() const
 
 namespace Json {
 namespace detail {
-bool parse(QVariant & out, const QByteArray &bytes)
+bool parse(QVariant &out, const QByteArray &bytes)
 {
     enum ExpectBits : uint32_t {
         EXP_OBJ_NAME = 1U << 0,

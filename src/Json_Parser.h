@@ -23,6 +23,6 @@
 
 namespace Json {
 namespace detail {
-    extern bool parse(QVariant &, const QByteArray &json);
+    extern bool parse(QVariant &out, const QByteArray &json);
 }
 }
