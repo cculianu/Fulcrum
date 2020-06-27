@@ -98,8 +98,7 @@ class BitcoinD : public RPC::HttpConnection, public ThreadObjectMixin /* NB: als
     Q_OBJECT
 
 public:
-    /// TODO: have this come from config. For now: support up to ~50MiB blocks (hex encoded) from bitcoind.
-    /// Note that Qt has a limitation for JSON document parsing at around 100MB anyway so .. it is what it is.
+    /// TODO: Have this come from config. For now: support up to ~50MiB blocks (hex encoded) from bitcoind.
     /// This should work for now since we are on 32MiB max block size on BCH anyway right now.
     static constexpr qint64 BTCD_DEFAULT_MAX_BUFFER = 100*1000*1000;
 

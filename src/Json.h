@@ -24,10 +24,10 @@
 #include <QString>
 #include <QVariant>
 
-/// Note that Qt's JSON parser/serializer has a hard limit of ~128MB on json documents.
+/// As of version 1.2.1, we implemented our own JSON serializer and parser.
+/// Qt's JSON parser/serializer had a hard limit of ~128MB on json documents.
 /// See: https://bugreports.qt.io/browse/QTBUG-47629
-/// TODO: use an alternate code path (with an alternate parser) in the case where the Json document hits this limit.
-/// For now, all calling code that calls into the below functions must also be prepared to catch bad_alloc (std::exception)
+/// The current serializer we implemented has no such limit.
 namespace Json {
     /// Generic Json error (usually if expectMap is violated)
     struct Error : public Exception { using Exception::Exception; };
