@@ -400,3 +400,144 @@ Fatal::~Fatal()
     str = QString("FATAL: ") + str;
     if (!colorOverridden) color = BrightRed;
 }
+
+
+#ifdef ENABLE_TESTS
+#include "bitcoin/utilstrencodings.h"
+#include "Json.h"
+
+#include <string>
+#include <vector>
+
+namespace {
+    void BenchHexParse()
+    {
+        const auto fn = std::getenv("HEXJSON");
+        if (!fn)
+            throw Exception("Please specify a HEXJSON= env var that points to a file containing a JSON array of hex strings");
+        const QString filename = fn;
+        const auto varlist = Json::parseFile(filename, Json::ParseOption::RequireArray).toList(); // throws on error
+        QList<QByteArray> hexList;
+        size_t bytes = 0;
+        for (const auto & v : varlist) {
+            auto ba = v.toByteArray();
+            ba = ba.trimmed().simplified();
+            if (ba.isEmpty())
+                throw Exception(QString("read an empty bytearray for item %1 -- make sure json has hex strings").arg(hexList.size()));
+            if (QByteArray::fromHex(ba).toHex() != ba)
+                throw Exception(QString("read bad hex data at %1: %2").arg(hexList.count()).arg(v.toString()));
+            bytes += size_t(ba.size());
+            hexList.push_back(ba);
+        }
+        Log() << "Read " << bytes << " hex-digits in " << hexList.count() << " bytearrays ...";
+        using BVec = std::vector<QByteArray>;
+        BVec vec1, vec2;
+        using UVec = std::vector<std::vector<uint8_t>>;
+        UVec vec3;
+        vec1.reserve(size_t(hexList.size()));
+        vec2.reserve(size_t(hexList.size()));
+        vec3.reserve(size_t(hexList.size()));
+        const auto customMethod = [&vec1, &hexList, &bytes]() -> qint64 {
+            size_t bytes2 = 0;
+            Log() << "Parsing hex using Util::ParseHexFast() ...";
+            const auto t0 = Util::getTimeNS();
+            for (const auto & hex : hexList) {
+                vec1.emplace_back(Util::ParseHexFast(hex));
+            }
+            const auto tf = Util::getTimeNS();
+            for (const auto & b : vec1)
+                bytes2 += size_t(b.size());
+            if (bytes2 * 2 != bytes)
+                throw Exception(QString("Decoded data is missing bytes: %1 != %2").arg(bytes2*2).arg(bytes));
+            const auto micros = qint64((tf-t0)/1000LL);
+            Log() << "Util::ParseHexFast method: decoded " << bytes2 << " bytes, elapsed: " << micros << " usec";
+            return micros;
+        };
+        const auto qtMethod = [&vec2, &hexList, &bytes]() -> qint64 {
+            size_t bytes2 = 0;
+            Log() << "Parsing hex using Qt's QByteArray::fromHex() ...";
+            const auto t0 = Util::getTimeNS();
+            for (const auto & hex : hexList) {
+                vec2.emplace_back(QByteArray::fromHex(hex));
+            }
+            const auto tf = Util::getTimeNS();
+            for (const auto & b : vec2)
+                bytes2 += size_t(b.size());
+            if (bytes2 * 2 != bytes)
+                throw Exception(QString("Decoded data is missing bytes: %1 != %2").arg(bytes2*2).arg(bytes));
+            const auto micros = qint64((tf-t0)/1000LL);
+            Log() << "Qt method: decoded " << bytes2 << " bytes, elapsed: " << micros << " usec";
+            return micros;
+        };
+        const auto bitcoindMethod = [&vec3, &hexList, &bytes]() -> qint64 {
+            size_t bytes2 = 0;
+            Log() << "Parsing hex using bitcoin::ParseHex() from bitcoind ...";
+            const auto t0 = Util::getTimeNS();
+            for (const auto & hex : hexList) {
+                vec3.emplace_back(bitcoin::ParseHex(hex.constData()));
+            }
+            const auto tf = Util::getTimeNS();
+            for (const auto & b : vec3)
+                bytes2 += size_t(b.size());
+            if (bytes2 * 2 != bytes)
+                throw Exception(QString("Decoded data is missing bytes: %1 != %2").arg(bytes2*2).arg(bytes));
+            const auto micros = qint64((tf-t0)/1000LL);
+            Log() << "bitcoind method: decoded " << bytes2 << " bytes, elapsed: " << micros << " usec";
+            return micros;
+        };
+        customMethod();
+        qtMethod();
+        bitcoindMethod();
+        if (vec1 == vec2)
+            Log() << "The first two resulting vectors match perfectly";
+        else
+            throw Exception("The first two vectors don't match!");
+        if (vec3.size() != vec2.size())
+            throw Exception("The bitcoind method vector is of the wrong size");
+        for (size_t i = 0; i < vec3.size(); ++i) {
+            if (std::memcmp(vec3[i].data(), vec2[i].data(), vec3[i].size()) != 0)
+                throw Exception(QString("The bitcoind method hex string %1 does not match").arg(i));
+        }
+        Log() << "The bitcoind method data matches the other two data sets ok";
+
+        Log() << "Checking ToHexFast vs. Qt vs. bitcoind ...";
+        for (const auto & ba : vec1) {
+            if (Util::ToHexFast(ba) != ba.toHex())
+                throw Exception("ToHexFast and Qt toHex produced different hex strings!");
+        }
+
+        // Lasty, benchmark encoding hex
+        BVec res; res.reserve(vec1.size());
+        // Util::ToHexFast
+        auto t0 = Util::getTimeNS();
+        for (const auto & ba : vec1) {
+            res.emplace_back(Util::ToHexFast(ba));
+        }
+        auto elapsed = (Util::getTimeNS() - t0)/1000LL;
+        Log() << "Util::ToHexFast took: " << elapsed << " usec";
+        res.clear(); res.reserve(vec1.size());
+        // Qt toHex()
+        t0 = Util::getTimeNS();
+        for (const auto & ba : vec1) {
+            res.emplace_back(ba.toHex());
+        }
+        elapsed = (Util::getTimeNS() - t0)/1000LL;
+        Log() << "Qt toHex took: " << elapsed << " usec";
+        // bitcoind HexStr()
+        res.clear();
+        {
+            std::vector<std::string> res;
+            res.reserve(vec1.size());
+            t0 = Util::getTimeNS();
+            for (const auto & ba : vec1) {
+                res.emplace_back(bitcoin::HexStr(ba.cbegin(), ba.cend()));
+            }
+            elapsed = (Util::getTimeNS() - t0)/1000LL;
+            Log() << "bitcoind HexStr took: " << elapsed << " usec";
+        }
+    }
+
+    const auto b1 = App::registerBench("hexparse", &BenchHexParse);
+}
+
+#endif
