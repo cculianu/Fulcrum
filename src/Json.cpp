@@ -237,9 +237,9 @@ namespace Json {
             throw ParseError(QString("Failed to parse Json from string: %1%2").arg(QString(ba.left(80)))
                              .arg(ba.size() > 80 ? "..." : ""));
         if (opt == ParseOption::RequireObject && QMetaType::Type(ret.type()) != QMetaType::QVariantMap)
-            throw Error("Json Error: expected map");
+            throw Error("Json Error: expected object");
         if (opt == ParseOption::RequireArray && QMetaType::Type(ret.type()) != QMetaType::QVariantList)
-            throw Error("Json Error: expected list");
+            throw Error("Json Error: expected array");
         return ret;
     }
     QVariant parseFile(const QString &file, ParseOption opt) {
