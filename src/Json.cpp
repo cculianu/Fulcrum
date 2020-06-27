@@ -235,12 +235,16 @@ namespace {
 }
 
 namespace Json {
+    QVariant parseFragmentUtf8(const QByteArray &ba) {
+        QVariant ret;
+        if (!detail::parse(ret, ba))
+            throw ParseError(QString("Failed to parse Json from string: %1%2").arg(QString(ba.left(80)))
+                             .arg(ba.size() > 80 ? "..." : ""));
+        return ret;
+    }
     QVariant parseUtf8(const QByteArray &ba, bool expectMap)
     {
-        QVariant ret;
-        bool ok = Json::detail::parse(ret, ba);
-        if (!ok)
-            throw ParseError(QString("Failed to parse Json from string: %1%2").arg(QString(ba.left(80))).arg(ba.size() > 80 ? "..." : ""));
+        QVariant ret = parseFragmentUtf8(ba); // may throw
         if (expectMap && QMetaType::Type(ret.type()) != QMetaType::QVariantMap)
             throw Error("Json Error, expected map, got a list instead");
         if (!expectMap && QMetaType::Type(ret.type()) != QMetaType::QVariantList)
@@ -520,3 +524,120 @@ namespace {
         nullptr,
     }};
 } // end namespace
+
+
+#ifdef ENABLE_TESTS
+#include "App.h"
+
+#include <QDir>
+#include <QFile>
+#include <QJsonDocument>
+
+#include <cstdlib>
+#include <cstdint>
+
+namespace Json {
+namespace {
+    void bench() {
+        const char *dir = std::getenv("DATADIR");
+        if (!dir) {
+            Warning() << "Json benchmark requires the DATADIR environment variable, which should be a directory on the "
+                         "filesystem containing *.json files to use for the benchmark.";
+            throw Exception("No DATADIR specified");
+        }
+        QDir dataDir(dir);
+        if (!dataDir.exists()) throw BadArgs(QString("DATADIR '%1' does not exist").arg(dir));
+        auto files = dataDir.entryList({{"*.json"}}, QDir::Filter::Files);
+        if (files.isEmpty()) throw BadArgs(QString("DATADIR '%1' does not have any *.json files").arg(dir));
+        std::vector<QByteArray> fileData;
+        std::size_t total = 0;
+        Log() << "Reading " << files.size() << " *.json files from DATADIR=" << dir << " ...";
+
+        for (auto & fn : files) {
+            QFile f(dataDir.path() + QDir::separator() + fn);
+            if (!f.open(QFile::ReadOnly|QFile::Text))
+                throw Exception(QString("Cannot open %1").arg(f.fileName()));
+            fileData.push_back(f.readAll());
+            total += fileData.back().size();
+        }
+        Log() << "Read " << total << " bytes total";
+        std::vector<QVariant> parsed;
+        int iters = 10;
+        {
+            auto itenv = std::getenv("ITERS");
+            if (itenv) {
+                bool ok;
+                iters = QString(itenv).toInt(&ok);
+                if (!ok || iters <= 0)
+                    throw BadArgs("Expected ITERS= to be a positive integer");
+            }
+        }
+        Log() << "---";
+        Log() << "Benching custom Json lib parse: Iterating " << iters << " times ...";
+        double t0 = Util::getTimeSecs();
+        for (int i = 0; i < iters; ++i) {
+            for (const auto & ba : fileData) {
+                auto var = parseFragmentUtf8(ba);
+                if (var.isNull()) throw Exception("Parse result is null");
+                if (parsed.size() != fileData.size())
+                    parsed.push_back(var); // save parsed data
+            }
+        }
+        double tf = Util::getTimeSecs();
+        Log() << "Custom lib parse - total: " << (tf-t0) << " secs" << " - per-iter: "
+              << QString::asprintf("%1.16g", ((tf-t0)/iters) * 1e3) << " msec";
+        parsed.clear();
+
+        Log() << "---";
+        Log() << "Benching Qt Json parse: Iterating " << iters << " times ...";
+        t0 = Util::getTimeSecs();
+        for (int i = 0; i < iters; ++i) {
+            for (const auto & ba : fileData) {
+                QJsonParseError err;
+                auto d = QJsonDocument::fromJson(ba, &err);
+                if (d.isNull())
+                    throw Exception(QString("Could not parse: %1").arg(err.errorString()));
+                auto var = d.toVariant();
+                if (var.isNull()) throw Exception("Parse result is null");
+                if (parsed.size() != fileData.size())
+                    parsed.push_back(var); // save parsed data
+            }
+        }
+        tf = Util::getTimeSecs();
+        Log() << "Qt Json parse - total: " << (tf-t0) << " secs" << " - per-iter: "
+              << QString::asprintf("%1.16g", ((tf-t0)/iters) * 1e3) << " msec";
+
+        Log() << "---";
+        Log() << "Benching custom Json lib serialize: Iterating " << iters << " times ...";
+        t0 = Util::getTimeSecs();
+        for (int i = 0; i < iters; ++i) {
+            for (const auto & var : parsed) {
+                auto json = serialize(var, 4);
+                if (json.isEmpty()) throw Exception("Serializaiton error");
+            }
+        }
+        tf = Util::getTimeSecs();
+        Log() << "Custom lib serialize - total: " << (tf-t0) << " secs" << " - per-iter: "
+              << QString::asprintf("%1.16g", ((tf-t0)/iters) * 1e3) << " msec";
+
+        Log() << "---";
+        Log() << "Benching Qt lib serialize: Iterating " << iters << " times ...";
+        t0 = Util::getTimeSecs();
+        for (int i = 0; i < iters; ++i) {
+            for (const auto & var : parsed) {
+                auto d = QJsonDocument::fromVariant(var);
+                auto json = d.toJson(QJsonDocument::JsonFormat::Indented);
+                if (json.isEmpty()) throw Exception("Serializaiton error");
+            }
+        }
+        tf = Util::getTimeSecs();
+        Log() << "Qt lib serialize - total: " << (tf-t0) << " secs" << " - per-iter: "
+              << QString::asprintf("%1.16g", ((tf-t0)/iters) * 1e3) << " msec";
+
+        Log() << "---";
+    }
+
+    static const auto bench_ = App::registerBench("json", &bench);
+}
+}
+#endif

@@ -21,6 +21,8 @@
 #include <QCoreApplication>
 
 #include <atomic>
+#include <functional>
+#include <map>
 #include <memory>
 
 #include "Mixins.h"
@@ -58,6 +60,14 @@ public:
 
     /// Convenience to obtain our singleton ThreadPool instance that goes with this singleton App instance.
     static inline ThreadPool *globalThreadPool() { return _globalInstance ? _globalInstance->threadPool() : nullptr; }
+
+    // -- Test & Bench support (requires -DENABLE_TESTS) --
+    using RegisteredTest = struct{};
+    using RegisteredBench = struct{};
+    /// Call this from namespace-scope to register a test, e.g. static auto foo = registerTest(...)
+    static RegisteredTest registerTest(const QString &name, const std::function<void()> &func);
+    /// Call this from namespace scope to register a benchmark.
+    static RegisteredBench registerBench(const QString &name, const std::function<void()> &func);
 
 signals:
     // other code emits the below two to tell the app (main) thread to call the corresponding protected slot to set
@@ -101,6 +111,12 @@ private:
 
     /// Used to forward Qt messages to our Log() subsystem, installed by miscPreAppFixups()
     static void customMessageHandler(QtMsgType type, const QMessageLogContext &context, const QString &msg);
+
+    /// Used for registerTest and registerBench
+    using NameFuncMap = std::map<QString, std::function<void()>>;
+    static NameFuncMap registeredTests, registeredBenches;
+    static void registerTestBenchCommon(const char *fname, const char *brief, NameFuncMap &map,
+                                        const NameFuncMap::key_type &name, const NameFuncMap::mapped_type &func);
 };
 
 inline App *app() { return App::globalInstance(); }

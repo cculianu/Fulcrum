@@ -37,5 +37,9 @@ namespace Json {
     /// If expectmap, throws Error if not a dict. Otherwise throws Error if not a list.
     extern QVariant parseUtf8(const QByteArray &ba, bool expectMap = true); ///< throws Error, may throw std::exception too on low-level error (bad_alloc, etc)
     extern QVariant parseFile(const QString &file, bool expectMap = true); ///< throws Error, std::exception
-    extern QByteArray toJsonUtf8(const QVariant &, bool compact = false); ///< throws Error, may throw std::exception on low-level error (bad_alloc, etc)
+    /// Parse any JSON fragment (doesn't have to be inside a [] or {})
+    /// throws Error, may throw std::exception too on low-level error (bad_alloc, etc)
+    extern QVariant parseFragmentUtf8(const QByteArray &ba);
+    /// Serialization- throws Error, may throw std::exception on low-level error (bad_alloc, etc)
+    extern QByteArray toJsonUtf8(const QVariant &, bool compact = false);
 }
