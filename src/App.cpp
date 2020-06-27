@@ -341,7 +341,7 @@ void App::parseArgs()
                     it->second();
                 }
             } catch (const std::exception & e) {
-                Error() << "Caught exception: " << e.what();
+                Error(Log::Color::Magenta) << "Caught exception: " << e.what();
                 std::exit(1);
             }
         }
@@ -357,7 +357,7 @@ void App::parseArgs()
                     it->second();
                 }
             } catch (const std::exception & e) {
-                Error() << "Caught exception: " << e.what();
+                Error(Log::Color::Magenta) << "Caught exception: " << e.what();
                 std::exit(1);
             }
         }

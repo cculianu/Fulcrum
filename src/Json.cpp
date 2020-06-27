@@ -260,8 +260,13 @@ namespace Json {
     }
     QByteArray toJsonUtf8(const QVariant &v, bool compact) {
         if (v.isNull() || !v.isValid()) throw Error("Empty or invalid QVariant passed to Json::toString");
+        return toJsonFragmentUtf8(v, compact);
+    }
+    QByteArray toJsonFragmentUtf8(const QVariant &v, bool compact)
+    {
         return serialize(v, compact ? 0 : 4);
     }
+
 } // end namespace Json
 
 namespace {
@@ -531,6 +536,7 @@ namespace {
 
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonDocument>
 
 #include <cstdlib>
@@ -539,7 +545,7 @@ namespace {
 namespace Json {
 namespace {
     void bench() {
-        const char *dir = std::getenv("DATADIR");
+        const char * const dir = std::getenv("DATADIR");
         if (!dir) {
             Warning() << "Json benchmark requires the DATADIR environment variable, which should be a directory on the "
                          "filesystem containing *.json files to use for the benchmark.";
@@ -637,7 +643,64 @@ namespace {
         Log() << "---";
     }
 
+    void test()
+    {
+        const char *dir = std::getenv("DATADIR");
+        if (!dir) dir = "test/json";
+        QDir dataDir(dir);
+        if (!dataDir.exists()) throw BadArgs(QString("DATADIR '%1' does not exist").arg(dir));
+        struct TFile {
+            QString path;
+            bool wantsFail{}, wantsRound{};
+        };
+        std::list<TFile> files;
+        for (auto & file : dataDir.entryList({{"*.json"}}, QDir::Filter::Files)) {
+            TFile t;
+            if (file.startsWith("pass"))
+                t.wantsFail = false;
+            else if (file.startsWith("fail"))
+                t.wantsFail = true;
+            else if (file.startsWith("round"))
+                t.wantsFail = false, t.wantsRound = true;
+            else
+                // skip unrelated json file
+                continue;
+            t.path = dataDir.path() + QDir::separator() + file;
+            files.push_back(std::move(t));
+        }
+        if (files.empty()) throw BadArgs(QString("DATADIR '%1' does not have any [pass/fail/round]*.json files").arg(dir));
+        Log() << "Found " << files.size() << " json test files, running tests ...";
+        const auto runTest = [](const TFile &t) {
+            QFile f(t.path);
+            auto baseName = QFileInfo(t.path).baseName();
+            if (!f.open(QFile::ReadOnly|QFile::Text))
+                throw Exception(QString("Cannot open %1").arg(f.fileName()));
+            const QByteArray json = f.readAll();
+            QVariant var;
+            bool didFail = false;
+            try {
+                var = parseFragmentUtf8(json);
+            } catch (...) {
+                if (!t.wantsFail)
+                    throw;
+                didFail = true;
+            }
+            if (t.wantsFail && !didFail)
+                throw Exception(QString("Expected to fail test: %1 (Json: %2)").arg(baseName).arg(QString(toJsonFragmentUtf8(var, true))));
+            if (t.wantsRound) {
+                if (auto json2 = toJsonFragmentUtf8(var, true); json.trimmed() != json2.trimmed())
+                    throw Exception(QString("Round-trip deser/ser failed for: %1\n\nExpected:\n%2\nHex: %3\n\nGot:\n%4\nHex: %5").arg(baseName)
+                                    .arg(QString(json)).arg(QString(json.toHex()))
+                                    .arg(QString(json2)).arg(QString(json2.toHex())));
+            }
+            Log() << baseName << ": passed";
+        };
+        for (const auto & t : files)
+            runTest(t);
+    }
+
     static const auto bench_ = App::registerBench("json", &bench);
+    static const auto test_  = App::registerTest("json", &test);
 }
 }
 #endif
