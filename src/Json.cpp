@@ -105,7 +105,7 @@ namespace {
     const QByteArray FalseLiteral = QByteArrayLiteral("false");
 
 
-    void Writer::writeVariant(const QVariant &v, unsigned prettyIndent, unsigned indentLevel)
+    void Writer::writeVariant(const QVariant &v, unsigned prettyIndent, unsigned indentLevel) noexcept(false)
     {
         if (v.isNull()) {
             write(NullLiteral);
@@ -218,53 +218,41 @@ namespace {
         put('}');
     }
 
-    QByteArray serialize(const QVariant &v, unsigned prettyIndent, unsigned indentLevel = 0)
+    QByteArray serialize(const QVariant &v, unsigned prettyIndent, unsigned indentLevel = 0) noexcept(false)
     {
         QByteArray ba; // we do it this way for RVO to work on all compilers
-        try {
-            Writer writer{ba};
-            ba.reserve(1024);
-            writer.writeVariant(v, prettyIndent, indentLevel);
-        } catch (const std::exception & e) {
-            Warning() << "Unable to write json: " << e.what();
-            ba.clear();
-        }
+        Writer writer{ba};
+        ba.reserve(1024);
+        writer.writeVariant(v, prettyIndent, indentLevel); // this may throw
         return ba;
     }
 
 }
 
 namespace Json {
-    QVariant parseFragmentUtf8(const QByteArray &ba) {
+    QVariant parseUtf8(const QByteArray &ba, ParseOption opt)
+    {
         QVariant ret;
         if (!detail::parse(ret, ba))
             throw ParseError(QString("Failed to parse Json from string: %1%2").arg(QString(ba.left(80)))
                              .arg(ba.size() > 80 ? "..." : ""));
+        if (opt == ParseOption::RequireObject && QMetaType::Type(ret.type()) != QMetaType::QVariantMap)
+            throw Error("Json Error: expected map");
+        if (opt == ParseOption::RequireArray && QMetaType::Type(ret.type()) != QMetaType::QVariantList)
+            throw Error("Json Error: expected list");
         return ret;
     }
-    QVariant parseUtf8(const QByteArray &ba, bool expectMap)
-    {
-        QVariant ret = parseFragmentUtf8(ba); // may throw
-        if (expectMap && QMetaType::Type(ret.type()) != QMetaType::QVariantMap)
-            throw Error("Json Error, expected map, got a list instead");
-        if (!expectMap && QMetaType::Type(ret.type()) != QMetaType::QVariantList)
-            throw Error("Json Error, expected list, got a map instead");
-        return ret;
-    }
-    QVariant parseFile(const QString &file, bool expectMap) {
+    QVariant parseFile(const QString &file, ParseOption opt) {
         QFile f(file);
         if (!f.open(QFile::ReadOnly))
             throw Error(QString("Could not open file: %1").arg(file));
         const QByteArray ba{f.readAll()};
-        return parseUtf8(ba, expectMap);
+        return parseUtf8(ba, opt);
     }
-    QByteArray toJsonUtf8(const QVariant &v, bool compact) {
-        if (v.isNull() || !v.isValid()) throw Error("Empty or invalid QVariant passed to Json::toString");
-        return toJsonFragmentUtf8(v, compact);
-    }
-    QByteArray toJsonFragmentUtf8(const QVariant &v, bool compact)
-    {
-        return serialize(v, compact ? 0 : 4);
+    QByteArray toUtf8(const QVariant &v, bool compact, SerOption opt) {
+        if (opt == SerOption::NoBareNull && v.isNull())
+            throw Error("Attempted to serialize a null variant, but serialization option is NoBareNull");
+        return serialize(v, compact ? 0 : 4); // may throw on low-level error or if !v.isValid()
     }
 
 } // end namespace Json
@@ -583,7 +571,7 @@ namespace {
         double t0 = Util::getTimeSecs();
         for (int i = 0; i < iters; ++i) {
             for (const auto & ba : fileData) {
-                auto var = parseFragmentUtf8(ba);
+                auto var = parseUtf8(ba, ParseOption::AcceptAnyValue);
                 if (var.isNull()) throw Exception("Parse result is null");
                 if (parsed.size() != fileData.size())
                     parsed.push_back(var); // save parsed data
@@ -618,8 +606,7 @@ namespace {
         t0 = Util::getTimeSecs();
         for (int i = 0; i < iters; ++i) {
             for (const auto & var : parsed) {
-                auto json = serialize(var, 4);
-                if (json.isEmpty()) throw Exception("Serializaiton error");
+                auto json = serialize(var, 4); // throw on error
             }
         }
         tf = Util::getTimeSecs();
@@ -679,16 +666,16 @@ namespace {
             QVariant var;
             bool didFail = false;
             try {
-                var = parseFragmentUtf8(json);
+                var = parseUtf8(json, ParseOption::AcceptAnyValue);
             } catch (...) {
                 if (!t.wantsFail)
                     throw;
                 didFail = true;
             }
             if (t.wantsFail && !didFail)
-                throw Exception(QString("Expected to fail test: %1 (Json: %2)").arg(baseName).arg(QString(toJsonFragmentUtf8(var, true))));
+                throw Exception(QString("Expected to fail test: %1 (Json: %2)").arg(baseName).arg(QString(toUtf8(var, true, SerOption::BareNullOk))));
             if (t.wantsRound) {
-                if (auto json2 = toJsonFragmentUtf8(var, true); json.trimmed() != json2.trimmed())
+                if (auto json2 = toUtf8(var, true, SerOption::BareNullOk); json.trimmed() != json2.trimmed())
                     throw Exception(QString("Round-trip deser/ser failed for: %1\n\nExpected:\n%2\nHex: %3\n\nGot:\n%4\nHex: %5").arg(baseName)
                                     .arg(QString(json)).arg(QString(json.toHex()))
                                     .arg(QString(json2)).arg(QString(json2.toHex())));

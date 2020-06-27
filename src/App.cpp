@@ -959,14 +959,14 @@ void App::start_httpServer(const Options::Interface &iface)
         req.response.contentType = "application/json; charset=utf-8";
         auto stats = controller->statsSafe();
         stats = stats.isNull() ? QVariantList{QVariant()} : stats;
-        req.response.data = Json::toJsonUtf8(stats, false) + CRLF;
+        req.response.data = Json::toUtf8(stats, false) + CRLF; // may throw -- calling code will handle exception
     });
     server->addEndpoint("/debug",[this](SimpleHttpServer::Request &req){
         req.response.contentType = "application/json; charset=utf-8";
         const auto params = ParseParams(req);
         auto stats = controller->debugSafe(params);
         stats = stats.isNull() ? QVariantList{QVariant()} : stats;
-        req.response.data = Json::toJsonUtf8(stats, false) + CRLF;
+        req.response.data = Json::toUtf8(stats, false) + CRLF; // may throw -- caller will handle exception
     });
 }
 

@@ -44,7 +44,7 @@ namespace RPC {
     /* static */
     Message Message::fromUtf8(const QByteArray &ba, Id *id_out, bool v1)
     {
-        return fromJsonData(Json::parseUtf8(ba, true).toMap(), id_out, v1); // may throw
+        return fromJsonData(Json::parseUtf8(ba, Json::ParseOption::RequireObject).toMap(), id_out, v1); // may throw
     }
 
     /* static */
@@ -365,7 +365,7 @@ namespace RPC {
         }
         Message::Id msgId;
         try {
-            Message message = Message::fromJsonData( Json::parseUtf8(json, true).toMap() , &msgId, v1); // may throw
+            Message message = Message::fromUtf8(json, &msgId, v1); // may throw
 
             static const auto ValidateParams = [](const Message &msg, const Method &m) {
                 if (!msg.hasParams()) {

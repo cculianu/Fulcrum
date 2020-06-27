@@ -133,7 +133,7 @@ namespace RPC {
         static Message makeResponse(const Id & reqId, const QVariant & result, bool v1 = false);
 
         /// Note in pathological cases bad_alloc may be thrown here, so we just return an empty QString in that case and hope for the best.
-        QByteArray toJsonUtf8() const { try {return Json::toJsonUtf8(data, true);} catch (...) {} return QByteArray(); }
+        QByteArray toJsonUtf8() const { QByteArray ret; try {ret = Json::toUtf8(data, true);} catch (...) {} return ret; }
 
         // -- PERFORMANCE OPTIMIZATION --
         // It turns out QString::QString(const char *) is called a lot in typical usase of this class, so we pre-create

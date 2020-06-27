@@ -34,14 +34,20 @@ namespace Json {
     /// More specific Json error -- usually if trying to parse malformed JSON text.
     struct ParseError : public Error { using Error::Error; };
 
-    /// If expectmap, throws Error if not a dict. Otherwise throws Error if not a list.
-    extern QVariant parseUtf8(const QByteArray &ba, bool expectMap = true); ///< throws Error, may throw std::exception too on low-level error (bad_alloc, etc)
-    extern QVariant parseFile(const QString &file, bool expectMap = true); ///< throws Error, std::exception
-    /// Parse any JSON fragment (doesn't have to be inside a [] or {})
-    /// throws Error, may throw std::exception too on low-level error (bad_alloc, etc)
-    extern QVariant parseFragmentUtf8(const QByteArray &ba);
-    /// Serialization- throws Error, may throw std::exception on low-level error (bad_alloc, etc)
-    extern QByteArray toJsonUtf8(const QVariant &, bool compact = false);
-    /// Like the above, but also accepts QVariant{} (null) and doesn't throw in that case.
-    extern QByteArray toJsonFragmentUtf8(const QVariant &, bool compact = false);
+    enum class ParseOption {
+        RequireObject,     ///< Reject any JSON that is not embeded in a JSON object { ... }
+        RequireArray,      ///< Reject any JSON that is not embeded in a JSON array [ ... ]
+        AcceptAnyValue     ///< Do not require a root-level container: accept any JSON value that is valid e.g. "str", null, true, etc
+    };
+
+    /// If ParseOption is not satisfied, throws Error. May also throw Error on invalid JSON or throw
+    /// std::exception too on low-level error (bad_alloc, etc).
+    extern QVariant parseUtf8(const QByteArray &json, ParseOption);
+    /// Convenience method -- loads all data from file and calls parseUtf8 on it.
+    extern QVariant parseFile(const QString &file, ParseOption);
+
+    enum class SerOption { NoBareNull, BareNullOk };
+    /// Serialization, may throw Error, may throw std::exception on low-level error (bad_alloc, etc).
+    /// Will throw also if given an empty QVariant{}, unless BareNullOk is specified.
+    extern QByteArray toUtf8(const QVariant &, bool compact = false, SerOption = SerOption::NoBareNull);
 }
