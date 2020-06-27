@@ -93,10 +93,13 @@ namespace {
 
         void indentStr(unsigned prettyIndent, unsigned indentLevel) { put(' ', prettyIndent * indentLevel); }
 
-        void writeArray(const QVariantList &v, unsigned prettyIndent, unsigned indentLevel);
-        void writeObject(const QVariantMap &v, unsigned prettyIndent, unsigned indentLevel);
+        template <typename List>
+        void writeArray(const List &vl, unsigned prettyIndent, unsigned indentLevel);
+        template <typename Map>
+        void writeObject(const Map &vm, unsigned prettyIndent, unsigned indentLevel);
         void writeVariant(const QVariant &v, unsigned prettyIndent, unsigned indentLevel);
         void writeString(const QByteArray &ba) { put('"'); jsonEscape(ba); put('"'); };
+        void writeString(const QString &qs) { writeString(qs.toUtf8()); }
     };
 
 
@@ -107,15 +110,24 @@ namespace {
 
     void Writer::writeVariant(const QVariant &v, unsigned prettyIndent, unsigned indentLevel) noexcept(false)
     {
+        const auto typ = QMetaType::Type(v.type());
+
         if (v.isNull()) {
-            write(NullLiteral);
+            // Note that QString.isNull() in the QVariant can also satisfy this, so we must
+            // special-case this: null and empty QStrings all end up as "" uniformly, whereas empty QByteArray will be
+            // null. We must do this here to preserve compatibility with how we wrote this application initially
+            // to follow that assumption, because Qt 5.14 and before always did it that way.
+            if (typ == QMetaType::QString)
+                writeString(QByteArrayLiteral("")); // writes: ""  (two quotes)
+            else
+                write(NullLiteral); // write literal `null`
             return;
         }
+
         if (UNLIKELY(!v.isValid())) {
-            throw Json::Error("Variant has unknown type");
+            throw Json::Error("Variant is not valid");
         }
 
-        const auto typ = QMetaType::Type(v.type());
         switch(typ) {
         case QMetaType::QByteArray: {
             const auto ba = v.toByteArray();
@@ -126,14 +138,22 @@ namespace {
             break;
         }
         case QMetaType::QString:
-            writeString(v.toString().toUtf8());
+            writeString(v.toString());
             break;
-        case QMetaType::QStringList:
-        case QMetaType::QVariantList:
+        case QMetaType::QStringList: // unlikely
+            writeArray(v.toStringList(), prettyIndent, std::max(indentLevel, 1U));
+            break;
+        case QMetaType::QByteArrayList: // uncommon
+            writeArray(v.value<QByteArrayList>(), prettyIndent, std::max(indentLevel, 1U));
+            break;
+        case QMetaType::QVariantList: // common case for arrays
             writeArray(v.toList(), prettyIndent, std::max(indentLevel, 1U));
             break;
-        case QMetaType::QVariantMap:
+        case QMetaType::QVariantMap: // common case for maps
             writeObject(v.toMap(), prettyIndent, std::max(indentLevel, 1U));
+            break;
+        case QMetaType::QVariantHash: // uncommon
+            writeObject(v.toHash(), prettyIndent, std::max(indentLevel, 1U));
             break;
         case QMetaType::Bool:
             write(v.toBool() ? TrueLiteral : FalseLiteral);
@@ -165,11 +185,12 @@ namespace {
             break;
         }
         default:
-            throw Json::Error(QString("Unsupported type %1 for '%2'").arg(int(typ)).arg(v.toString()));
+            throw Json::Error(QString("Unsupported type %1 (%2) for '%3'").arg(int(typ)).arg(QMetaType::typeName(typ)).arg(v.toString()));
         }
     }
 
-    void Writer::writeArray(const QVariantList &v, unsigned prettyIndent, unsigned indentLevel)
+    template<typename List>
+    void Writer::writeArray(const List &v, unsigned prettyIndent, unsigned indentLevel)
     {
         put('[');
         if (prettyIndent)
@@ -178,7 +199,12 @@ namespace {
         for (int i = 0, nValues = v.size(); i < nValues; ++i) {
             if (prettyIndent)
                 indentStr(prettyIndent, indentLevel);
-            writeVariant(v[i], prettyIndent, indentLevel + 1);
+            if constexpr (std::is_same_v<QString, typename List::value_type> || std::is_same_v<QByteArray, typename List::value_type>)
+                writeString(v[i]); // optimization, avoid creating a temporary QVariant if we are writing a QStringList or a QByteArrayList
+            else {
+                static_assert (std::is_same_v<QVariant, typename List::value_type>); // catch usages that lead to extra implicit temporaries
+                writeVariant(v[i], prettyIndent, indentLevel + 1);
+            }
             if (i != (nValues - 1)) {
                 put(',');
             }
@@ -191,8 +217,10 @@ namespace {
         put(']');
     }
 
-    void Writer::writeObject(const QVariantMap &v, unsigned prettyIndent, unsigned indentLevel)
+    template<typename Map>
+    void Writer::writeObject(const Map &v, unsigned prettyIndent, unsigned indentLevel)
     {
+        static_assert(std::is_same_v<QVariantMap, Map> || std::is_same_v<QVariantHash, Map>); // enforce supported types
         put('{');
         if (prettyIndent)
             put('\n');
@@ -632,6 +660,45 @@ namespace {
 
     void test()
     {
+        // basic tests
+        {
+            const auto expect1 = "[\"astring\",\"anotherstring\",\"laststring\"]";
+            const auto expect2 = "[\"astringl1\",\"anotherstringl2\",\"laststringl3\"]";
+            const auto expect3 = "{\"7 item list\":[1,2,3.14,null,{},[777777]],\"a bytearray\":\"bytearray\",\"a null\":null,\"a null bytearray\":null,\"a null string\":\"\",\"a string\":\"hello\",\"an empty bytearray\":null,\"an empty string\":\"\",\"another empty bytearray\":null,\"nested map key\":3.14}";
+            QByteArray json;
+            QByteArrayList bal = {{"astring", "anotherstring", "laststring"}};
+            QVariant v;
+            v.setValue(bal);
+            Log() << "QByteArrayList -> JSON: " << (json=toUtf8(v, true, SerOption::BareNullOk));
+            if (json != expect1) throw Exception(QString("Json does not match, excpected: %1").arg(expect1));
+            QStringList sl = {{"astringl1", "anotherstringl2", "laststringl3"}};
+            v.setValue(sl);
+            Log() << "QStringList -> JSON: " << (json=toUtf8(v, true, SerOption::BareNullOk));
+            if (json != expect2) throw Exception(QString("Json does not match, excpected: %1").arg(expect2));
+            QVariantHash h;
+            QByteArray empty; empty.resize(10); empty.resize(0);
+            h["key1"] = 1.2345;
+            h["another key"] = sl;
+            h["mapkey"] = QVariantMap{{
+               {"nested map key", 3.14},
+               {"a null", QVariant{}},
+               {"a null bytearray", QByteArray{}},
+               {"a null string", QString{}},
+               {"an empty string", QString{""}},
+               {"an empty bytearray", QByteArray{""}},
+               {"another empty bytearray", empty},
+               {"a string", QString{"hello"}},
+               {"a bytearray", QByteArray{"bytearray"}},
+               {"7 item list", QVariantList{{1,2,3.14,QVariant{}, QVariantMap{}, QVariantList{{777777}}}}}
+            }};
+            Log() << "QVariantHash -> JSON: " << (json=toUtf8(h, true, SerOption::BareNullOk));
+            // we can't do the top-level hash since that has random order based on hash seed.. so we do this
+            auto hh = parseUtf8(json, ParseOption::RequireObject).toMap();
+            json = toUtf8(hh["mapkey"], true, SerOption::BareNullOk);
+            if (json != expect3) throw Exception(QString("Json \"mapkey\" does not match\nexcpected:\n%1\n\ngot:\n%2").arg(expect3).arg(QString(json)));
+            Log() << "Basic tests: passed";
+        }
+        // /end basic tests
         const char *dir = std::getenv("DATADIR");
         if (!dir) dir = "test/json";
         QDir dataDir(dir);
@@ -656,7 +723,7 @@ namespace {
             files.push_back(std::move(t));
         }
         if (files.empty()) throw BadArgs(QString("DATADIR '%1' does not have any [pass/fail/round]*.json files").arg(dir));
-        Log() << "Found " << files.size() << " json test files, running tests ...";
+        Log() << "Found " << files.size() << " json test files, running extended tests ...";
         const auto runTest = [](const TFile &t) {
             QFile f(t.path);
             auto baseName = QFileInfo(t.path).baseName();
