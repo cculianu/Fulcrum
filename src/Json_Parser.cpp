@@ -71,7 +71,7 @@ inline bool jsonTokenIsValue(jtokentype jtt) noexcept {
     // not reached
 }
 
-inline bool json_isspace(int ch) noexcept {
+inline bool json_isspace(uint8_t ch) noexcept {
     switch (ch) {
     case 0x20:
     case 0x09:
@@ -94,13 +94,13 @@ inline bool json_isspace(int ch) noexcept {
  */
 inline constexpr size_t MAX_JSON_DEPTH = 512;
 
-inline bool json_isdigit(int ch) noexcept { return ((ch >= '0') && (ch <= '9')); }
+inline bool json_isdigit(uint8_t ch) noexcept { return ch >= '0' && ch <= '9'; }
 
 // convert hexadecimal (big endian) string to unsigned integer (machine byte orer)
 const char *hextouint(const char *first, const char *last, unsigned &out) noexcept
 {
     unsigned result = 0;
-    for (; first != last; ++first)
+    for (; first < last; ++first)
     {
         int digit;
         if (json_isdigit(*first))
@@ -129,10 +129,9 @@ const char *hextouint(const char *first, const char *last, unsigned &out) noexce
 class JSONUTF8StringFilter
 {
 public:
-    explicit JSONUTF8StringFilter(QByteArray &s):
-        str(s), is_valid(true), codepoint(0), state(0), surpair(0)
-    {
-    }
+    explicit JSONUTF8StringFilter(QByteArray &s) noexcept
+        : str(s), is_valid(true), codepoint(0), state(0), surpair(0)
+    {}
     // Write single 8-bit char (may be part of UTF-8 sequence)
     void push_back(unsigned char ch)
     {
@@ -234,6 +233,7 @@ private:
 
 jtokentype getJsonToken(QByteArray &tokenVal, unsigned &consumed, const char *raw, const char *end)
 {
+    static constexpr int reserveSize = 0; // set to 0 to not pre-alloc anything (0 = saves memory, easts 5% more CPU)
     tokenVal.clear();
     consumed = 0;
 
@@ -276,15 +276,15 @@ jtokentype getJsonToken(QByteArray &tokenVal, unsigned &consumed, const char *ra
     case 'n':
     case 't':
     case 'f':
-        if (!std::strncmp(raw, "null", 4)) {
+        if (0 == std::strncmp(raw, "null", 4)) {
             raw += 4;
             consumed = (raw - rawStart);
             return JTOK_KW_NULL;
-        } else if (!std::strncmp(raw, "true", 4)) {
+        } else if (0 == std::strncmp(raw, "true", 4)) {
             raw += 4;
             consumed = (raw - rawStart);
             return JTOK_KW_TRUE;
-        } else if (!std::strncmp(raw, "false", 5)) {
+        } else if (0 == std::strncmp(raw, "false", 5)) {
             raw += 5;
             consumed = (raw - rawStart);
             return JTOK_KW_FALSE;
@@ -304,19 +304,21 @@ jtokentype getJsonToken(QByteArray &tokenVal, unsigned &consumed, const char *ra
     case '9': {
         // part 1: int
         QByteArray numStr;
+        if constexpr (reserveSize > 0)
+            numStr.reserve(reserveSize);
 
         const char *first = raw;
 
         const char *firstDigit = first;
         if (!json_isdigit(*firstDigit))
-            firstDigit++;
-        if (*firstDigit == '0' && json_isdigit(firstDigit[1]))
+            ++firstDigit;
+        if (UNLIKELY(*firstDigit == '0' && json_isdigit(firstDigit[1])))
             return JTOK_ERR;
 
         numStr += *raw;                       // copy first char
         ++raw;
 
-        if (*first == '-' && raw < end && !json_isdigit(*raw))
+        if (UNLIKELY(*first == '-' && raw < end && !json_isdigit(*raw)))
             return JTOK_ERR;
 
         while (raw < end && json_isdigit(*raw)) {  // copy digits
@@ -347,7 +349,7 @@ jtokentype getJsonToken(QByteArray &tokenVal, unsigned &consumed, const char *ra
                 ++raw;
             }
 
-            if (raw >= end || !json_isdigit(*raw))
+            if (UNLIKELY(raw >= end || !json_isdigit(*raw)))
                 return JTOK_ERR;
             while (raw < end && json_isdigit(*raw)) { // copy digits
                 numStr += *raw;
@@ -355,7 +357,7 @@ jtokentype getJsonToken(QByteArray &tokenVal, unsigned &consumed, const char *ra
             }
         }
 
-        tokenVal = numStr;
+        tokenVal = std::move(numStr);
         consumed = (raw - rawStart);
         return JTOK_NUMBER;
         }
@@ -364,16 +366,18 @@ jtokentype getJsonToken(QByteArray &tokenVal, unsigned &consumed, const char *ra
         ++raw;                                // skip "
 
         QByteArray valStr;
+        if constexpr (reserveSize > 0)
+            valStr.reserve(reserveSize);
         JSONUTF8StringFilter writer(valStr);
 
         while (true) {
-            if (raw >= end || uint8_t(*raw) < 0x20)
+            if (UNLIKELY(raw >= end || uint8_t(*raw) < 0x20))
                 return JTOK_ERR;
 
             else if (*raw == '\\') {
                 ++raw;                        // skip backslash
 
-                if (raw >= end)
+                if (UNLIKELY(raw >= end))
                     return JTOK_ERR;
 
                 switch (*raw) {
@@ -413,10 +417,10 @@ jtokentype getJsonToken(QByteArray &tokenVal, unsigned &consumed, const char *ra
             }
         }
 
-        if (!writer.finalize())
+        if (UNLIKELY(!writer.finalize()))
             return JTOK_ERR;
-        tokenVal = valStr;
-        consumed = (raw - rawStart);
+        tokenVal = std::move(valStr);
+        consumed = raw - rawStart;
         return JTOK_STRING;
         }
 
@@ -611,12 +615,12 @@ bool parse(QVariant &out, const QByteArray &bytes)
 
         case JTOK_OBJ_CLOSE:
         case JTOK_ARR_CLOSE: {
-            if (stack.empty() || last_tok == JTOK_COMMA)
+            if (UNLIKELY(stack.empty() || last_tok == JTOK_COMMA))
                 return false;
 
             VType utyp = (tok == JTOK_OBJ_CLOSE ? VType::Obj : VType::Arr);
             Container *top = stack.back();
-            if (utyp != top->typ)
+            if (UNLIKELY(utyp != top->typ))
                 return false;
 
             stack.pop_back();
@@ -626,11 +630,11 @@ bool parse(QVariant &out, const QByteArray &bytes)
             }
 
         case JTOK_COLON: {
-            if (stack.empty())
+            if (UNLIKELY(stack.empty()))
                 return false;
 
             Container *top = stack.back();
-            if (top->typ != VType::Obj)
+            if (UNLIKELY(top->typ != VType::Obj))
                 return false;
 
             setExpect(VALUE);
@@ -638,7 +642,7 @@ bool parse(QVariant &out, const QByteArray &bytes)
             }
 
         case JTOK_COMMA: {
-            if (stack.empty() || last_tok == JTOK_COMMA || last_tok == JTOK_ARR_OPEN)
+            if (UNLIKELY(stack.empty() || last_tok == JTOK_COMMA || last_tok == JTOK_ARR_OPEN))
                 return false;
 
             Container *top = stack.back();
