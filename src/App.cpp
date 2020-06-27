@@ -327,42 +327,38 @@ void App::parseArgs()
     parser.addPositionalArgument("config", "Configuration file (optional).", "[config]");
     parser.process(*this);
 
-    {   // handle possible --test or --bench args first, since those immediately exit the app if they do run.
+    // handle possible --test or --bench args before doing anything else, since
+    // those immediately exit the app if they do run.
+    try {
         int setCtr = 0;
         if (!registeredTests.empty() && parser.isSet("test")) {
             ++setCtr;
             // process tests and exit if we take this branch
-            try {
-                for (const auto & tname : parser.values("test")) {
-                    auto it = registeredTests.find(tname);
-                    if (it == registeredTests.end())
-                        throw Exception(QString("No such test: %1").arg(tname));
-                    Log() << "Running test: " << it->first << " ...";
-                    it->second();
-                }
-            } catch (const std::exception & e) {
-                Error(Log::Color::Magenta) << "Caught exception: " << e.what();
-                std::exit(1);
+            for (const auto & tname : parser.values("test")) {
+                auto it = registeredTests.find(tname);
+                if (it == registeredTests.end())
+                    throw BadArgs(QString("No such test: %1").arg(tname));
+                Log() << "Running test: " << it->first << " ...";
+                it->second();
             }
         }
         if (!registeredBenches.empty() && parser.isSet("bench")) {
             ++setCtr;
             // process benches and exit if we take this branch
-            try {
-                for (const auto & tname : parser.values("bench")) {
-                    auto it = registeredBenches.find(tname);
-                    if (it == registeredBenches.end())
-                        throw Exception(QString("No such bench: %1").arg(tname));
-                    Log() << "Running benchmark: " << it->first << " ...";
-                    it->second();
-                }
-            } catch (const std::exception & e) {
-                Error(Log::Color::Magenta) << "Caught exception: " << e.what();
-                std::exit(1);
+            for (const auto & tname : parser.values("bench")) {
+                auto it = registeredBenches.find(tname);
+                if (it == registeredBenches.end())
+                    throw BadArgs(QString("No such bench: %1").arg(tname));
+                Log() << "Running benchmark: " << it->first << " ...";
+                it->second();
             }
         }
         if (setCtr)
             std::exit(0);
+    } catch (const std::exception & e) {
+        // bench or test execution failed with an exception
+        Error(Log::Color::Magenta) << "Caught exception: " << e.what();
+        std::exit(1);
     }
 
     ConfigFile conf;
