@@ -175,13 +175,14 @@ namespace Util {
             return ret;
         }
         const char *d = hex.constData(), * const dend = d + size;
-        for (char c1, c2, *out = ret.data(); d < dend; d += 2, ++out) {
-            constexpr char offset_A = 'A' - 0xa,
-                           offset_a = 'a' - 0xa,
-                           offset_0 = '0';
+        uint8_t c1, c2;
+        for (char *out = ret.data(); d < dend; d += 2, ++out) {
+            constexpr uint8_t offset_A = 'A' - 0xa,
+                              offset_a = 'a' - 0xa,
+                              offset_0 = '0';
             // slightly unrolled loop, does 2 chars at a time
-            c1 = d[0];
-            c2 = d[1];
+            c1 = uint8_t(d[0]);
+            c2 = uint8_t(d[1]);
 
             // c1
             if (c1 <= '9') // this is the most likely for any random digit, so we check this first
@@ -201,11 +202,11 @@ namespace Util {
 
             // The below is slowish... we can just accept bad hex data as 'corrupt' ...
             // checkDigit = false allows us to skip this check, making this function >5x faster!
-            if (UNLIKELY(checkDigits && (c1 < 0 || c1 > 0xf || c2 < 0 || c2 > 0xf))) { // ensure data was actually in range
+            if (UNLIKELY(checkDigits && (c1 > 0xf || c2 > 0xf))) { // ensure data was actually in range
                 ret.clear();
                 break;
             }
-            *out = char(c1 << 4) | c2;
+            *out = char((c1 << 4) | c2);
         }
         return ret;
     }
