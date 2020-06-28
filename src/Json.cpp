@@ -199,10 +199,15 @@ namespace {
         for (int i = 0, nValues = v.size(); i < nValues; ++i) {
             if (prettyIndent)
                 indentStr(prettyIndent, indentLevel);
-            if constexpr (std::is_same_v<QString, typename List::value_type> || std::is_same_v<QByteArray, typename List::value_type>)
-                writeString(v[i]); // optimization, avoid creating a temporary QVariant if we are writing a QStringList or a QByteArrayList
-            else {
-                static_assert (std::is_same_v<QVariant, typename List::value_type>); // catch usages that lead to extra implicit temporaries
+            if constexpr (std::is_same_v<QString, typename List::value_type>) {
+                // Minor optimization to avoid creating a temporary QVariant if we are writing a QStringList.
+                writeString(v[i]);
+            } else {
+                // The below static_assert catches usages that lead to extra implicit temporaries that we don't want.
+                // We do however allow QByteArray through to be implicitly cast to QVariant so it can end up with its
+                // special "" -> null treatment in writeVariant() below.
+                static_assert (std::is_same_v<QVariant, typename List::value_type>
+                               || std::is_same_v<QByteArray, typename List::value_type>);
                 writeVariant(v[i], prettyIndent, indentLevel + 1);
             }
             if (i != (nValues - 1)) {
@@ -662,16 +667,21 @@ namespace {
     {
         // basic tests
         {
-            const auto expect1 = "[\"astring\",\"anotherstring\",\"laststring\"]";
-            const auto expect2 = "[\"astringl1\",\"anotherstringl2\",\"laststringl3\"]";
-            const auto expect3 = "{\"7 item list\":[1,2,3.14,null,{},[777777]],\"a bytearray\":\"bytearray\",\"a null\":null,\"a null bytearray\":null,\"a null string\":\"\",\"a string\":\"hello\",\"an empty bytearray\":null,\"an empty string\":\"\",\"another empty bytearray\":null,\"nested map key\":3.14}";
+            const auto expect1 = "[\"astring\",\"anotherstring\",\"laststring\",null]";
+            const auto expect2 = "[\"astringl1\",\"anotherstringl2\",\"laststringl3\",\"\"]";
+            const auto expect3 = "{\"7 item list\":[1,true,false,1.4e-07,null,{},[-777777.293678102,null,"
+                                 "-999999999999999999]],\"a bytearray\":\"bytearray\",\"a null\":null,"
+                                 "\"a null bytearray\":null,\"a null string\":\"\",\"a string\":\"hello\","
+                                 "\"an empty bytearray\":null,\"an empty string\":\"\",\"another empty bytearray\":"
+                                 "null,\"empty balist\":[],\"empty strlist\":[],\"empty vlist\":[],\"nested map key\":"
+                                 "3.140000001,\"u64_max\":18446744073709551615,\"z_i64_min\":-9223372036854775808}";
             QByteArray json;
-            QByteArrayList bal = {{"astring", "anotherstring", "laststring"}};
+            QByteArrayList bal = {{ "astring", "anotherstring", "laststring", QByteArray{} }};
             QVariant v;
             v.setValue(bal);
             Log() << "QByteArrayList -> JSON: " << (json=toUtf8(v, true, SerOption::BareNullOk));
             if (json != expect1) throw Exception(QString("Json does not match, excpected: %1").arg(expect1));
-            QStringList sl = {{"astringl1", "anotherstringl2", "laststringl3"}};
+            QStringList sl = {{ "astringl1", "anotherstringl2", "laststringl3", QString{} }};
             v.setValue(sl);
             Log() << "QStringList -> JSON: " << (json=toUtf8(v, true, SerOption::BareNullOk));
             if (json != expect2) throw Exception(QString("Json does not match, excpected: %1").arg(expect2));
@@ -680,7 +690,7 @@ namespace {
             h["key1"] = 1.2345;
             h["another key"] = sl;
             h["mapkey"] = QVariantMap{{
-               {"nested map key", 3.14},
+               {"nested map key", 3.140000001},
                {"a null", QVariant{}},
                {"a null bytearray", QByteArray{}},
                {"a null string", QString{}},
@@ -689,7 +699,15 @@ namespace {
                {"another empty bytearray", empty},
                {"a string", QString{"hello"}},
                {"a bytearray", QByteArray{"bytearray"}},
-               {"7 item list", QVariantList{{1,2,3.14,QVariant{}, QVariantMap{}, QVariantList{{777777}}}}}
+               {"empty vlist", QVariantList{}},
+               {"empty strlist", QStringList{}},
+               {"empty balist", QVariant::fromValue(QByteArrayList{})},
+               {"7 item list", QVariantList{{
+                    1,true,false,14e-8,QVariant{}, QVariantMap{}, QVariantList{{-777777.293678102, QVariant{},
+                    qlonglong(-999999999999999999)}}}},
+               },
+               {"u64_max", qulonglong(18446744073709551615ULL)},
+               {"z_i64_min", qlonglong(0x8000000000000000LL)},
             }};
             Log() << "QVariantHash -> JSON: " << (json=toUtf8(h, true, SerOption::BareNullOk));
             // we can't do the top-level hash since that has random order based on hash seed.. so we do this
