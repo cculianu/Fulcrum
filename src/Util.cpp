@@ -264,6 +264,8 @@ Log::~Log()
 {
     if (doprt) {
         App *ourApp = app();
+        if (UNLIKELY(ourApp && !ourApp->options))
+            ourApp = nullptr; // spurious Qt message -- ourApp not yet fully constructed.
         using LTS = Options::LogTimestampMode;
         const LTS ltsMode = !ourApp ? Options::defaultLogTimeStampMode : ourApp->options->logTimestampMode;
         s.flush(); // does nothing probably..
