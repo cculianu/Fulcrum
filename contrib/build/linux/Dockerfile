@@ -6,6 +6,8 @@ FROM ubuntu:latest
 LABEL maintainer="Calin Culianu <calin.culianu@gmail.com>"
 ENTRYPOINT ["/bin/bash"]
 
+ENV DEBIAN_FRONTEND=noninteractive
+
 RUN \
     apt -qy update && \
     apt -qy upgrade && \
