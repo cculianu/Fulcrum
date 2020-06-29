@@ -233,7 +233,6 @@ private:
 
 jtokentype getJsonToken(QByteArray &tokenVal, unsigned &consumed, const char *raw, const char *end)
 {
-    static constexpr int reserveSize = 0; // set to 0 to not pre-alloc anything (0 = saves memory, easts 5% more CPU)
     tokenVal.clear();
     consumed = 0;
 
@@ -303,66 +302,55 @@ jtokentype getJsonToken(QByteArray &tokenVal, unsigned &consumed, const char *ra
     case '8':
     case '9': {
         // part 1: int
-        QByteArray numStr;
-        if constexpr (reserveSize > 0)
-            numStr.reserve(reserveSize);
+        const char * const first = raw;
+        const bool firstIsMinus = *first == '-';
 
-        const char *first = raw;
+        const char * const firstDigit = first + firstIsMinus; // if first == '-', firstDigit = first + 1, else firstDigit = first
 
-        const char *firstDigit = first;
-        if (!json_isdigit(*firstDigit))
-            ++firstDigit;
-        if (UNLIKELY(*firstDigit == '0' && json_isdigit(firstDigit[1])))
+        if (UNLIKELY(*firstDigit == '0' && firstDigit + 1 < end && json_isdigit(firstDigit[1])))
             return JTOK_ERR;
 
-        numStr += *raw;                       // copy first char
-        ++raw;
+        ++raw;                                  // consume first char
 
-        if (UNLIKELY(*first == '-' && raw < end && !json_isdigit(*raw)))
+        if (UNLIKELY(firstIsMinus && (raw >= end || !json_isdigit(*raw)))) // fail if buffer ends in '-', or matches '-[^0-9]'
             return JTOK_ERR;
 
-        while (raw < end && json_isdigit(*raw)) {  // copy digits
-            numStr += *raw;
+        while (raw < end && json_isdigit(*raw)) {  // consume digits
             ++raw;
         }
 
         // part 2: frac
         if (raw < end && *raw == '.') {
-            numStr += *raw;                   // copy .
-            ++raw;
+            ++raw;                              // consume .
 
-            if (raw >= end || !json_isdigit(*raw))
+            if (UNLIKELY(raw >= end || !json_isdigit(*raw)))
                 return JTOK_ERR;
-            while (raw < end && json_isdigit(*raw)) { // copy digits
-                numStr += *raw;
+            while (raw < end && json_isdigit(*raw)) { // consume digits
                 ++raw;
             }
         }
 
         // part 3: exp
         if (raw < end && (*raw == 'e' || *raw == 'E')) {
-            numStr += *raw;                   // copy E
-            ++raw;
+            ++raw;                              // consume E
 
-            if (raw < end && (*raw == '-' || *raw == '+')) { // copy +/-
-                numStr += *raw;
+            if (raw < end && (*raw == '-' || *raw == '+')) { // consume +/-
                 ++raw;
             }
 
             if (UNLIKELY(raw >= end || !json_isdigit(*raw)))
                 return JTOK_ERR;
-            while (raw < end && json_isdigit(*raw)) { // copy digits
-                numStr += *raw;
+            while (raw < end && json_isdigit(*raw)) { // consume digits
                 ++raw;
             }
         }
-
-        tokenVal = std::move(numStr);
-        consumed = (raw - rawStart);
+        tokenVal.append(first, raw - first);  // assign chars to output buffer (which is pre-cleared)
+        consumed = raw - rawStart;
         return JTOK_NUMBER;
         }
 
     case '"': {
+        constexpr int reserveSize = 0; // set to 0 to not pre-alloc anything
         ++raw;                                // skip "
 
         QByteArray valStr;
@@ -419,6 +407,9 @@ jtokentype getJsonToken(QByteArray &tokenVal, unsigned &consumed, const char *ra
 
         if (UNLIKELY(!writer.finalize()))
             return JTOK_ERR;
+
+        if constexpr (reserveSize > 0)
+            valStr.squeeze();
         tokenVal = std::move(valStr);
         consumed = raw - rawStart;
         return JTOK_STRING;
@@ -431,16 +422,26 @@ jtokentype getJsonToken(QByteArray &tokenVal, unsigned &consumed, const char *ra
 
 struct Container {
     enum Typ {
-        Null, Num, Bool, Str, Arr, Obj
+        Null, BoolFalse, BoolTrue, Num, Str, Arr, Obj
     };
     Typ typ = Null;
-    QVariant var; // only for Num, Bool, Str
+    // Note: I tried using a union class here to conserve memory but that was actually 10-20% slower
+    // than simply doing this, and had lots of boilerplate for copy/move c'tor and copy/move assign, so
+    // we just go with this.  This consumes ~48 bytes of extra memory on avg. per parsed json value;
+    // but since this data structure is ephemeral and only used during parsing, that's acceptable since
+    // the memory will be freed once parsing finishes.  It would only be a problem if we anticipated
+    // parsing json that ends up containing hundreds of millions of json values, but since we don't,
+    // this is fine.
+    //
+    // We could have also used a std::variant here but that is not implemented yet on all compilers
+    // that we target.
+    QByteArray data; // only for Num, Str
     std::vector<Container> values; // only for Arr
     std::vector<std::pair<QByteArray, Container>> entries; // only for Obj
-    void clear() { var = QVariant{}; values.clear(); entries.clear(); typ = Null; }
+    void clear() { data.clear(); values.clear(); entries.clear(); typ = Null; }
     void setArr() { clear(); typ = Arr; }
     void setObj() { clear(); typ = Obj; }
-    void setBool(bool b) { clear(); typ = Bool; var = b; }
+    void setBool(bool b) { clear(); typ = b ? BoolTrue: BoolFalse; }
 
     /// recursively scours this container and its sub-containers and builds the proper QVariant / nesting
     QVariant toVariant() const;
@@ -454,29 +455,31 @@ QVariant Container::toVariant() const
         // no further processing needed
         break;
     case Num: {
-        const QByteArray data = var.toByteArray(); // this should be a cheap shallow-copy
         if (UNLIKELY(data.isEmpty())) {
             // this should never happen
             throw Json::ParseError("Data is empty for a nested variant of type Num");
         }
         bool ok;
         if (data.contains('.') || data.contains('e') || data.contains('E')) {
-            ret = var.toDouble(&ok);
+            ret = data.toDouble(&ok);
         } else if (data.front() == '-') {
-            ret = var.toLongLong(&ok);
+            ret = data.toLongLong(&ok);
         } else
-            ret = var.toULongLong(&ok);
+            ret = data.toULongLong(&ok);
         if (UNLIKELY(!ok)) {
             // this should never happen
             throw Json::ParseError("Failed to parse a variant as a number");
         }
         break;
     }
-    case Bool:
-        ret = var.toBool();
+    case BoolTrue:
+        ret = true;
+        break;
+    case BoolFalse:
+        ret = false;
         break;
     case Str:
-        ret = QString::fromUtf8(var.toByteArray());
+        ret = QString::fromUtf8(data);
         break;
     case Arr: {
         QVariantList vl;
@@ -545,14 +548,14 @@ bool parse(QVariant &out, const QByteArray &bytes)
             clearExpect(VALUE);
 
         } else if (expect(ARR_VALUE)) {
-            bool isArrValue = isValueOpen || (tok == JTOK_ARR_CLOSE);
+            bool isArrValue = isValueOpen || tok == JTOK_ARR_CLOSE;
             if (!isArrValue)
                 return false;
 
             clearExpect(ARR_VALUE);
 
         } else if (expect(OBJ_NAME)) {
-            bool isObjName = (tok == JTOK_OBJ_CLOSE || tok == JTOK_STRING);
+            bool isObjName = tok == JTOK_OBJ_CLOSE || tok == JTOK_STRING;
             if (!isObjName)
                 return false;
 
@@ -561,7 +564,7 @@ bool parse(QVariant &out, const QByteArray &bytes)
                 return false;
             clearExpect(COLON);
 
-        } else if (!expect(COLON) && (tok == JTOK_COLON)) {
+        } else if (!expect(COLON) && tok == JTOK_COLON) {
             return false;
         }
 

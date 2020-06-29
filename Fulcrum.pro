@@ -72,7 +72,7 @@ DEFINES += USE_QT_IN_BITCOIN
 #DEFINES += QT_DISABLE_DEPRECATED_BEFORE=0x060000    # disables all the APIs deprecated before Qt 6.0.0
 
 # If defined, tests and benchmarks will be compiled-in to the app (accessed via --test and --bench CLI args).
-#DEFINES += ENABLE_TESTS
+DEFINES += ENABLE_TESTS
 
 win32-msvc {
     error("MSVC is not supported for this project. Please compile with MinGW G++ 7.3.0.")

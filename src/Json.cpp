@@ -709,8 +709,9 @@ namespace {
                {"u64_max", qulonglong(18446744073709551615ULL)},
                {"z_i64_min", qlonglong(0x8000000000000000LL)},
             }};
-            Log() << "QVariantHash -> JSON: " << (json=toUtf8(h, true, SerOption::BareNullOk));
+            Log() << "QVariantHash -> JSON: " << toUtf8(h, true, SerOption::BareNullOk);
             // we can't do the top-level hash since that has random order based on hash seed.. so we do this
+            json = toUtf8(h, false /* !compact */, SerOption::BareNullOk);
             auto hh = parseUtf8(json, ParseOption::RequireObject).toMap();
             json = toUtf8(hh["mapkey"], true, SerOption::BareNullOk);
             if (json != expect3) throw Exception(QString("Json \"mapkey\" does not match\nexcpected:\n%1\n\ngot:\n%2").arg(expect3).arg(QString(json)));
