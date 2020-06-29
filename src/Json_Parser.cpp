@@ -492,8 +492,8 @@ QVariant Container::toVariant() const
     }
     case Obj: {
         QVariantMap vm;
-        for (const auto & entry : entries) {
-            vm[QString::fromUtf8(entry.first)] = entry.second.toVariant();
+        for (const auto & [key, cont] : entries) {
+            vm[QString::fromUtf8(key)] = cont.toVariant();
         }
         ret = vm;
         break;
