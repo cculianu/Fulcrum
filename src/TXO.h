@@ -31,34 +31,34 @@
 #include <functional> // for std::hash
 #include <optional>
 
-/// A transaction output; A prevoutHash:prevoutN pair.
+/// A transaction output; A txHash:outN pair.
 struct TXO {
-    TxHash prevoutHash;
-    IONum  prevoutN = 0;
+    TxHash txHash;
+    IONum  outN = 0;
 
-    bool isValid() const { return prevoutHash.length() == HashLen;  }
-    QString toString() const { return isValid() ? QStringLiteral("%1:%2").arg(QString(prevoutHash.toHex())).arg(prevoutN) : QStringLiteral("<txo_invalid>"); }
+    bool isValid() const { return txHash.length() == HashLen;  }
+    QString toString() const { return isValid() ? QStringLiteral("%1:%2").arg(QString(txHash.toHex())).arg(outN) : QStringLiteral("<txo_invalid>"); }
 
-    bool operator==(const TXO &o) const noexcept { return prevoutHash == o.prevoutHash && prevoutN == o.prevoutN; }
-    bool operator<(const TXO &o) const noexcept { return prevoutHash < o.prevoutHash && prevoutN < o.prevoutN; }
+    bool operator==(const TXO &o) const noexcept { return txHash == o.txHash && outN == o.outN; }
+    bool operator<(const TXO &o) const noexcept { return txHash < o.txHash && outN < o.outN; }
 
 
     // serialization/deserialization
     QByteArray toBytes() const noexcept {
         QByteArray ret;
         if (!isValid()) return ret;
-        const int hlen = prevoutHash.length();
+        const int hlen = txHash.length();
         ret.resize(int(serSize()));
-        std::memcpy(ret.data(), prevoutHash.data(), size_t(hlen));
-        std::memcpy(ret.data() + hlen, &prevoutN, sizeof(prevoutN));
+        std::memcpy(ret.data(), txHash.data(), size_t(hlen));
+        std::memcpy(ret.data() + hlen, &outN, sizeof(outN));
         return ret;
     }
 
     static TXO fromBytes(const QByteArray &ba) noexcept {
         TXO ret;
         if (ba.length() != int(serSize())) return ret;
-        ret.prevoutHash = QByteArray(ba.data(), HashLen);
-        ret.prevoutN = *reinterpret_cast<const IONum *>(ba.data()+HashLen);
+        ret.txHash = QByteArray(ba.data(), HashLen);
+        ret.outN = *reinterpret_cast<const IONum *>(ba.data()+HashLen);
         return ret;
     }
 
@@ -74,14 +74,14 @@ template<> struct hash<TXO> {
             uint8_t  u8[8];
         } u;
         static_assert(sizeof(u) == sizeof(u.u64) && sizeof(u.u64) == sizeof(u.u8), "Unexpected union packing.");
-        static_assert(sizeof(txo.prevoutN) <= 4);
-        constexpr int hash2copy = sizeof(u.u8) - sizeof(txo.prevoutN);
+        static_assert(sizeof(txo.outN) <= 4);
+        constexpr int hash2copy = sizeof(u.u8) - sizeof(txo.outN);
         static_assert(hash2copy > 0);
         u.u64 = 0; // clear
         // take up to first hash2copy bytes (6 bytes) of hash
-        std::memcpy(u.u8, txo.prevoutHash.constData(), size_t(std::min(txo.prevoutHash.size(), hash2copy)));
+        std::memcpy(u.u8, txo.txHash.constData(), size_t(std::min(txo.txHash.size(), hash2copy)));
         // append 2-byte IONum
-        std::memcpy(u.u8 + hash2copy, &txo.prevoutN, sizeof(txo.prevoutN));
+        std::memcpy(u.u8 + hash2copy, &txo.outN, sizeof(txo.outN));
         // hash the concatenation using std C++ (murmur2 hash)
         return hasher64(u.u64);
     }

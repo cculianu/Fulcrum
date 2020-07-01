@@ -982,7 +982,7 @@ void Storage::loadCheckUTXOsInDB()
                                                             "\n\nDelete the datadir and resynch to bitcoind.\n")
                                                      .arg(txo.toString()));
                 // uncomment this to do a deep test: TODO: Make this configurable from the CLI -- this last check is very slow.
-                const CompactTXO ctxo = CompactTXO(info.txNum, txo.prevoutN);
+                const CompactTXO ctxo = CompactTXO(info.txNum, txo.outN);
                 const QByteArray shuKey = info.hashX + ctxo.toBytes();
                 static const QString errPrefix("Error reading scripthash_unspent");
                 QByteArray tmpBa;
@@ -1157,18 +1157,18 @@ std::optional<TXOInfo> Storage::utxoGet(const TXO &txo)
     auto [mempool, lock] = this->mempool(); // shared (read only) lock is held until scope end
 
     // first, check mempool
-    if (auto txsIt = mempool.txs.find(txo.prevoutHash); txsIt != mempool.txs.end()) {
+    if (auto txsIt = mempool.txs.find(txo.txHash); txsIt != mempool.txs.end()) {
         mempoolHit = true; // flag mempool hit so that we don't redundantly check db at end of this function
         const auto & tx = txsIt->second;
         if (UNLIKELY(!tx)) {
             // Paranoia to detect bugs. This will never happen.
-            throw InternalError(QString("TxRef for %1 is null! FIXME!").arg(QString(txo.prevoutHash.toHex())));
+            throw InternalError(QString("TxRef for %1 is null! FIXME!").arg(QString(txo.txHash.toHex())));
         }
-        if (txo.prevoutN < tx->txos.size()) {
-            const TXOInfo & info = tx->txos[txo.prevoutN];
+        if (txo.outN < tx->txos.size()) {
+            const TXOInfo & info = tx->txos[txo.outN];
             if (auto hxIt = tx->hashXs.find(info.hashX); LIKELY(hxIt != tx->hashXs.end())) {
                 const auto & ioinfo = hxIt->second;
-                if (ioinfo.utxo.count(txo.prevoutN)) {
+                if (ioinfo.utxo.count(txo.outN)) {
                     // found! It's unspent!
                     ret = info;
                 }
@@ -1311,7 +1311,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                         info.confirmedHeight = ppb->height;
                         info.txNum = blockTxNum0 + out.txIdx;
                         const TXO txo{ hash, out.outN };
-                        const CompactTXO ctxo(info.txNum, txo.prevoutN);
+                        const CompactTXO ctxo(info.txNum, txo.outN);
                         utxoBatch.add(txo, info, ctxo); // add to db
                         if (undo) { // save undo info if we are in saveUndo mode
                             undo->addUndos.emplace_back(txo, info.hashX, ctxo);
@@ -1354,7 +1354,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                                     << " HashX: " << info.hashX.toHex();
                         }
                         // delete from db
-                        utxoBatch.remove(txo, info.hashX, CompactTXO(info.txNum, txo.prevoutN)); // delete from db
+                        utxoBatch.remove(txo, info.hashX, CompactTXO(info.txNum, txo.outN)); // delete from db
                         if (undo) { // save undo info, if we are in saveUndo mode
                             undo->delUndos.emplace_back(txo, info);
                         }
@@ -1604,7 +1604,7 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
                 // now, undo the utxo deletions by re-adding them
                 for (const auto & [txo, info] : undo.delUndos) {
                     // note that deletions may have an info with a txnum before this block, for obvious reasons
-                    utxoBatch.add(txo, info, CompactTXO(info.txNum, txo.prevoutN)); // may throw
+                    utxoBatch.add(txo, info, CompactTXO(info.txNum, txo.outN)); // may throw
                 }
 
                 // now, undo the utxo additions by deleting them
@@ -1939,7 +1939,7 @@ auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
                     auto info = GenericDBGetFailIfMissing<TXOInfo>(p->db.utxoset.get(), txo, err, false, p->db.defReadOpts); // may throw -- indicates db inconsistency
                     ret.emplace_back(UnspentItem{
                         { hash, int(height), {} }, // base HistoryItem
-                        txo.prevoutN,  // .tx_pos
+                        txo.outN,  // .tx_pos
                         info.amount, // .value
                         info.txNum, // .txNum
                     });

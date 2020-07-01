@@ -30,6 +30,7 @@
 // -------------------------------------------------------------------------------------------------------------------
 // ----- Some storage helper classes below.. (safe to ignore in rest of codebase outside of Storage.h / Storage.cpp)
 // -------------------------------------------------------------------------------------------------------------------
+[[maybe_unused]] inline constexpr int xxx_to_suppress_warning_1{}; /* needed otherwise below may warn (clang bug) */
 #ifdef __GNUC__
 #pragma pack(push, 1)
 #endif
@@ -45,21 +46,21 @@ struct CompactTXO {
             std::uint64_t txNum : 48;
             /// The the 'N' (output index) for the tx itself as per bitcoin tx format
             std::uint16_t n;
-        } prevout;
+        } compact;
         std::uint64_t asU64 = initval;
     } u;
     CompactTXO() = default;
-    CompactTXO(TxNum txNum, IONum n) { u.prevout.txNum = txNum; u.prevout.n = n; }
+    CompactTXO(TxNum txNum, IONum n) { u.compact.txNum = txNum; u.compact.n = n; }
     CompactTXO(const CompactTXO & o) { *this = o; }
-    CompactTXO & operator=(const CompactTXO & o) noexcept { std::memcpy(&u.prevout, &o.u.prevout, sizeof(u.prevout)); return *this; }
+    CompactTXO & operator=(const CompactTXO & o) noexcept { std::memcpy(&u.compact, &o.u.compact, sizeof(u.compact)); return *this; }
     /// for most container types
-    bool operator==(const CompactTXO &o) const noexcept { return u.prevout.txNum == o.u.prevout.txNum && u.prevout.n == o.u.prevout.n; }
+    bool operator==(const CompactTXO &o) const noexcept { return u.compact.txNum == o.u.compact.txNum && u.compact.n == o.u.compact.n; }
     /// for ordered sets
-    bool operator<(const CompactTXO &o) const noexcept  { return u.prevout.txNum == o.u.prevout.txNum ? u.prevout.n < o.u.prevout.n : u.prevout.txNum < o.u.prevout.txNum;  }
+    bool operator<(const CompactTXO &o) const noexcept  { return u.compact.txNum == o.u.compact.txNum ? u.compact.n < o.u.compact.n : u.compact.txNum < o.u.compact.txNum;  }
     // convenience
-    TxNum txNum() const noexcept { return TxNum(u.prevout.txNum); }
+    TxNum txNum() const noexcept { return TxNum(u.compact.txNum); }
     // convenience
-    IONum N() const noexcept { return IONum(u.prevout.n); }
+    IONum N() const noexcept { return IONum(u.compact.n); }
     bool isValid() const { return u.asU64 != initval; }
     static constexpr size_t serSize() noexcept { return 8; }
     QString toString() const { return isValid() ? QStringLiteral("%1:%2").arg(txNum()).arg(N()) : QStringLiteral("<compact_txo_invalid>"); }
@@ -68,9 +69,9 @@ struct CompactTXO {
    size_t toBytesInPlace(void *buf, size_t bufsz) const {
         if (bufsz >= serSize()) {
             uint8_t * cur = reinterpret_cast<uint8_t *>(buf);
-            txNumToCompactBytes(cur, u.prevout.txNum);
-            cur[6] = (u.prevout.n >> 0) & 0xff;
-            cur[7] = (u.prevout.n >> 8) & 0xff;
+            txNumToCompactBytes(cur, u.compact.txNum);
+            cur[6] = (u.compact.n >> 0) & 0xff;
+            cur[7] = (u.compact.n >> 8) & 0xff;
             return serSize();
         }
         return 0;
@@ -90,8 +91,8 @@ struct CompactTXO {
         CompactTXO ret;
         if (b.size() == serSize()) {
             const uint8_t * cur = reinterpret_cast<const uint8_t *>(b.data());
-            ret.u.prevout.txNum = txNumFromCompactBytes(cur);
-            ret.u.prevout.n = IONum(cur[6]) | IONum(IONum(cur[7]) << 8);
+            ret.u.compact.txNum = txNumFromCompactBytes(cur);
+            ret.u.compact.n = IONum(cur[6]) | IONum(IONum(cur[7]) << 8);
         }
         return ret;
     }
@@ -114,7 +115,7 @@ struct CompactTXO {
         bytes[2] = (num >> 16) & 0xff;
         bytes[3] = (num >> 24) & 0xff;
         bytes[4] = (num >> 32) & 0xff;
-        bytes[5] = (num >> 48) & 0xff;
+        bytes[5] = (num >> 40) & 0xff;
     }
 
     static constexpr size_t compactTxNumSize() { return 6; }
@@ -127,7 +128,7 @@ namespace std {
 /// specialization of std::hash to be able to add struct CompactTXO to any unordered_set or unordered_map
 template<> struct hash<CompactTXO> {
     size_t operator()(const CompactTXO &txo) const noexcept {
-        static_assert (sizeof(txo.u.asU64) == sizeof(txo.u.prevout),
+        static_assert (sizeof(txo.u.asU64) == sizeof(txo.u.compact),
                        "Unknown platform or struct packing. Expected CompactTXO.u.prevout size to be 64 bytes.");
         // just return the hash of the packed asU64.
         return hasher64(txo.u.asU64);
