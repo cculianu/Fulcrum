@@ -126,11 +126,13 @@ struct CompactTXO {
 namespace std {
 /// specialization of std::hash to be able to add struct CompactTXO to any unordered_set or unordered_map
 template<> struct hash<CompactTXO> {
-        size_t operator()(const CompactTXO &txo) const noexcept {
-            if constexpr (sizeof(txo.u.asU64) <= sizeof(size_t) && sizeof(txo.u.prevout) >= 8
-                          && sizeof(txo.u.prevout) == sizeof(txo.u.asU64))
-                return txo.u.asU64; // just return the packed txNum:n value as this is guaranteed to be unique
-            return (txo.u.prevout.txNum<<16) | size_t(txo.u.prevout.n&0xffff);
-        }
+    size_t operator()(const CompactTXO &txo) const noexcept {
+        static_assert (sizeof(txo.u.asU64) == sizeof(txo.u.prevout),
+                       "Unknown platform or struct packing. Expected CompactTXO.u.prevout size to be 64 bytes.");
+        // just return the hash of the packed asU64.
+        return hasher64(txo.u.asU64);
+    }
+private:
+    hash<uint64_t> hasher64;
 };
 } // namespace std

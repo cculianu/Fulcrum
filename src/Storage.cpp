@@ -1850,7 +1850,7 @@ auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
     try {
         const size_t maxHistory = size_t(options->maxHistory);
         constexpr size_t iota = 10; // we initially reserve this many items in the returned array in order to prevent redundant allocations in the common case.
-        std::unordered_set<TXO, std::hash<TXO>> mempoolConfirmedSpends;
+        std::unordered_set<TXO> mempoolConfirmedSpends;
         mempoolConfirmedSpends.reserve(iota);
         ret.reserve(iota);
         {

@@ -83,8 +83,6 @@ public:
     /// Will throw BadArgs if the QVariant is not either QString or a numeric that is an integer, or null
     static RPCMsgId fromVariant(const QVariant &) noexcept(false);
 
-    std::size_t hashValue(uint seed = 0) const;
-
     // getters
     int64_t toInt() const; // returns the value if type() == Integer, or tries to parse the value if String, or returns 0 if cannot parse or Null
     QString toString() const; // returns the string value (may return a number string if type() == Integer or 'null' if type() == Null
@@ -93,11 +91,29 @@ private:
     Type typ = Null;
     int64_t idata{};
     QString sdata{};
+
+    friend uint qHash(const RPCMsgId &, uint);
+    friend struct std::hash<RPCMsgId>;
 };
 
 /// template specialization for std::hash of RPCMsgId (for std::unordered_map, std::unordered_set, etc)
-template<> struct std::hash<RPCMsgId> { std::size_t operator()(const RPCMsgId &r) const { return r.hashValue(); } };
+template<> struct std::hash<RPCMsgId> {
+    std::size_t operator()(const RPCMsgId &r) const {
+        switch(r.typ) {
+        case RPCMsgId::String: return hasher32(qHash(r.sdata, 0));
+        case RPCMsgId::Integer: return hasher64(r.idata);
+        case RPCMsgId::Null: return 0;
+        }
+    }
+private:
+    std::hash<uint32_t> hasher32;
+    std::hash<int64_t> hasher64;
+};
 /// overload for Qt's hashtable containers (QHash, QMultiHash, etc)
-inline uint qHash(const RPCMsgId &r, uint seed = 0) {
-    return uint(r.hashValue(seed));
+inline uint qHash(const RPCMsgId &r, uint seed = 0)  {
+    switch(r.typ) {
+    case RPCMsgId::String: return qHash(r.sdata, seed);
+    case RPCMsgId::Integer: return qHash(r.idata, seed);
+    case RPCMsgId::Null: return 0;
+    }
 }

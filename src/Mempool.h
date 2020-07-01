@@ -54,7 +54,7 @@ struct Mempool
 
         struct IOInfo {
             /// spends. .confirmedSpends here affects get_balance. We use unordered_map here because it wastes less space than robin_hood on fixed-sized maps
-            std::unordered_map<TXO, TXOInfo, std::hash<TXO>>
+            std::unordered_map<TXO, TXOInfo>
                 /// Spends of txo's from the db (confirmed) utxoset.
                 /// - Items here get _subtracted_ from the "unconfirmed" in RPC get_balance.
                 /// - Items appearing here also suppress confirmed utxo items from appearing in RPC listunspent (since they are spent in mempool).

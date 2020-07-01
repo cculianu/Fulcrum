@@ -124,13 +124,16 @@ namespace BTC {
 } // end namespace BTC
 
 /// for Qt QSet/QHash support of type Address
-inline uint qHash(const BTC::Address &key, uint seed = 0) noexcept {
+inline uint qHash(const BTC::Address &key, uint seed = 0) {
     if (key.isValid()) {
         const auto h160 = key.hash160();
+        uint prefixBytes;
         // The below is safe because isValid implies h160 length == 20
-        return *reinterpret_cast<const uint *>(h160.data()) ^ seed; // just take the first 4 bytes and convert them to uint
+        static_assert (sizeof(prefixBytes) <= 20);
+        std::memcpy(&prefixBytes, h160.constData(), sizeof(prefixBytes));
+        return qHash(prefixBytes, seed);
     }
-    return 0 ^ seed;
+    return qHash(0, seed);
 }
 
 Q_DECLARE_METATYPE(BTC::Address);

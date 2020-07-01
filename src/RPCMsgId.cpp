@@ -120,25 +120,6 @@ bool RPCMsgId::operator!=(const RPCMsgId & o) const
     return !(*this == o);
 }
 
-std::size_t RPCMsgId::hashValue(uint seed) const
-{
-    if constexpr (sizeof(std::size_t) == sizeof(uint)) {
-        switch(typ) {
-        case String: return qHash(sdata, seed);
-        case Integer: return qHash(idata, seed);
-        case Null: return 0;
-        }
-    } else {
-        static const std::hash<uint> hasher32{};
-        static const std::hash<int64_t> hasher64{};
-        switch(typ) {
-        case String: return hasher32(qHash(sdata, seed));
-        case Integer: return hasher64(idata) ^ std::size_t(seed);
-        case Null: return 0;
-        }
-    }
-}
-
 int64_t RPCMsgId::toInt() const
 {
     switch (typ) {

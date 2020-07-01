@@ -25,6 +25,7 @@
 
 #include <QString>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring> // for std::memcpy
 #include <functional> // for std::hash
@@ -65,16 +66,28 @@ struct TXO {
 };
 
 namespace std {
-    /// specialization of std::hash to be able to add struct TXO to any unordered_set or unordered_map as a key
-    template<> struct hash<TXO> {
-        size_t operator()(const TXO &txo) const noexcept {
-            if (txo.prevoutHash.length() >= int(sizeof(size_t)))
-                return *reinterpret_cast<const size_t *>(txo.prevoutHash.constData()) + size_t(txo.prevoutN);
-            using h1 = std::hash<uint>;
-            using h2 = std::hash<IONum>;
-            return h1()(qHash(txo.prevoutHash)) + h2()(txo.prevoutN);
-        }
-    };
+/// specialization of std::hash to be able to add struct TXO to any unordered_set or unordered_map as a key
+template<> struct hash<TXO> {
+    size_t operator()(const TXO &txo) const noexcept {
+        union {
+            uint64_t u64;
+            uint8_t  u8[8];
+        } u;
+        static_assert(sizeof(u) == sizeof(u.u64) && sizeof(u.u64) == sizeof(u.u8), "Unexpected union packing.");
+        static_assert(sizeof(txo.prevoutN) <= 4);
+        constexpr int hash2copy = sizeof(u.u8) - sizeof(txo.prevoutN);
+        static_assert(hash2copy > 0);
+        u.u64 = 0; // clear
+        // take up to first hash2copy bytes (6 bytes) of hash
+        std::memcpy(u.u8, txo.prevoutHash.constData(), size_t(std::min(txo.prevoutHash.size(), hash2copy)));
+        // append 2-byte IONum
+        std::memcpy(u.u8 + hash2copy, &txo.prevoutN, sizeof(txo.prevoutN));
+        // hash the concatenation using std C++ (murmur2 hash)
+        return hasher64(u.u64);
+    }
+private:
+    std::hash<uint64_t> hasher64;
+};
 }
 
 /// Spend info for a txo. Amount, scripthash, txNum, and possibly confirmedHeight

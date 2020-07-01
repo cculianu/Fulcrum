@@ -228,9 +228,13 @@ uint256 SerializeHash(const T &obj, int nType = SER_GETHASH,
     return ss.GetHash();
 }
 
+// MurmurHash3: ultra-fast hash suitable for hash tables but not cryptographically secure
 uint32_t MurmurHash3(uint32_t nHashSeed,
-                     const std::vector<uint8_t> &vDataToHash);
-
+                     const uint8_t *pDataToHash, size_t nDataLen /* bytes */);
+inline uint32_t MurmurHash3(uint32_t nHashSeed,
+                            const std::vector<uint8_t> &vDataToHash) {
+    return MurmurHash3(nHashSeed, vDataToHash.data(), vDataToHash.size());
+}
 
 void BIP32Hash(const ChainCode &chainCode, uint32_t nChild, uint8_t header,
                const uint8_t data[32], uint8_t output[64]);
