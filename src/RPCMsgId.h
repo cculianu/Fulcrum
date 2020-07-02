@@ -17,12 +17,15 @@
 // <https://www.gnu.org/licenses/>.
 //
 #pragma once
+#include "Util.h"
+
 #include <QHash>
 #include <QString>
 #include <QVariant>
 
 #include <cstdint>
 #include <functional>
+#include <type_traits>
 #include <utility>
 
 /// This class is designed to be a constrained sort of variant: either an integer or string
@@ -100,14 +103,18 @@ private:
 template<> struct std::hash<RPCMsgId> {
     std::size_t operator()(const RPCMsgId &r) const {
         switch(r.typ) {
-        case RPCMsgId::String: return hasher32(qHash(r.sdata, 0));
-        case RPCMsgId::Integer: return hasher64(r.idata);
+        case RPCMsgId::String: {
+            static_assert (std::is_same_v<decltype(r.sdata.constBegin()), const QChar *>,
+                           "Assumption here is that QString::constBegin() returns a pointer");
+            // get pointers to underlying data, and hash that
+            const uint8_t * const begin = reinterpret_cast<const uint8_t *>(r.sdata.constBegin()),
+                          * const end   = reinterpret_cast<const uint8_t *>(r.sdata.constEnd());
+            return Util::hashForStd(begin, std::size_t(end - begin));
+        }
+        case RPCMsgId::Integer: return Util::hashForStd(r.idata);
         case RPCMsgId::Null: return 0;
         }
     }
-private:
-    std::hash<uint32_t> hasher32;
-    std::hash<int64_t> hasher64;
 };
 /// overload for Qt's hashtable containers (QHash, QMultiHash, etc)
 inline uint qHash(const RPCMsgId &r, uint seed = 0)  {

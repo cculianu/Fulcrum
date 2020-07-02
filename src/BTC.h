@@ -159,13 +159,12 @@ namespace BTC
                 static_assert (std::is_scalar_v<std::remove_pointer_t<decltype (b.begin())>>,
                                "GenericTrivialHasher must be used with a container type where .begin() returns a pointer to its data." );
                 std::size_t ret;
-                std::memcpy(&ret, b.begin(), sizeof(ret));
+                std::memcpy(reinterpret_cast<char *>(&ret), b.begin(), sizeof(ret));
                 return ret;
             }
-            return hasher32(qHash(b, 0xf1234567)); // this should not normally be reached.
+            // this should not normally be reached.
+            return Util::hashForStd(reinterpret_cast<const uint8_t *>(b.begin()), std::size_t(b.size()));
         }
-    private:
-        std::hash<uint> hasher32;
     };
 
     // useful type aliases to be passed as template args to eg std::unordered_map, robin_hood::unordered_flat_map, etc

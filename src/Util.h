@@ -25,6 +25,7 @@
 #include <atomic>
 #include <cassert>
 #include <chrono>
+#include <cstdint>
 #include <functional>
 #include <future>
 #include <list>
@@ -687,6 +688,30 @@ namespace Util {
         } catch (const Exception &) {}
         return ret;
     }
+
+    /// uses MurmurHash3 with the unique seed initialized at app start
+    uint32_t hashData32(const uint8_t *data, size_t dataLenBytes);
+    inline uint32_t hash32(uint32_t val) {
+        return hashData32(reinterpret_cast<const uint8_t *>(const_cast<const uint32_t *>(&val)), sizeof(val));
+    }
+
+    /// uses CityHash64 with the unique seed initialized at app start
+    uint64_t hashData64(const uint8_t *data, size_t dataLenBytes);
+    inline uint64_t hash64(uint64_t val) {
+        return hashData64(reinterpret_cast<const uint8_t *>(const_cast<const uint64_t *>(&val)), sizeof(val));
+    }
+
+    inline std::size_t hashForStd(const uint8_t *data, std::size_t dataLenBytes) {
+        constexpr auto size_t_size = sizeof(std::size_t);
+        static_assert(size_t_size == sizeof(uint32_t) || size_t_size == sizeof(uint64_t));
+        if constexpr (size_t_size == sizeof(uint64_t)) {
+            return std::size_t(hashData64(data, dataLenBytes));
+        } else {
+            return std::size_t(hashData32(data, dataLenBytes));
+        }
+    }
+    template <typename T>
+    inline std::size_t hashForStd(const T &t) { return hashForStd(reinterpret_cast<const uint8_t *>(&t), sizeof(t)); }
 
 } // end namespace Util
 

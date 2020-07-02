@@ -19,6 +19,7 @@
 #pragma once
 
 #include "BlockProcTypes.h"
+#include "Util.h"
 
 #include <QByteArray>
 #include <QString>
@@ -128,18 +129,9 @@ namespace std {
 /// specialization of std::hash to be able to add struct CompactTXO to any unordered_set or unordered_map
 template<> struct hash<CompactTXO> {
     size_t operator()(const CompactTXO &txo) const noexcept {
-        if constexpr (sizeof(txo.u.asU64) == sizeof(txo.u.compact)) {
-            // just return the hash of the packed asU64.
-            return hasher64(txo.u.asU64);
-        } else {
-            // on Windows MinGW GCC for some reason the above is false, so we do this
-            uint64_t buf;
-            static_assert(sizeof(buf) == CompactTXO::serSize());
-            txo.toBytesInPlace(&buf, sizeof(buf));
-            return hasher64(buf);
-        }
+        // on Windows MinGW GCC for some reason .u.compact is 10 bytes, so we are forced to hash the whole thing,
+        // rather than pass txo.u.asU64 here.
+        return Util::hashForStd(txo.u.compact);
     }
-private:
-    hash<uint64_t> hasher64;
 };
 } // namespace std

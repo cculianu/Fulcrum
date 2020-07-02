@@ -15,6 +15,7 @@
 #include <string>
 #include <vector>
 
+[[maybe_unused]] inline constexpr int xxx_to_suppress_warning_2{}; // without this the below sometimes warns
 #ifdef __clang__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wold-style-cast"
@@ -30,11 +31,11 @@ protected:
     uint8_t data[WIDTH];
 
 public:
-    base_blob() { memset(data, 0, sizeof(data)); }
+    constexpr base_blob() noexcept : data{0} { }
 
-    explicit base_blob(const std::vector<uint8_t> &vch);
+    explicit base_blob(const std::vector<uint8_t> &vch) noexcept;
 
-    bool IsNull() const {
+    constexpr bool IsNull() const noexcept {
         for (int i = 0; i < WIDTH; i++) {
             if (data[i] != 0) {
                 return false;
@@ -43,16 +44,16 @@ public:
         return true;
     }
 
-    void SetNull() { memset(data, 0, sizeof(data)); }
+    void SetNull() noexcept { std::memset(data, 0, sizeof(data)); }
 
-    inline int Compare(const base_blob &other) const {
+    constexpr int Compare(const base_blob &other) const noexcept {
         for (size_t i = 0; i < sizeof(data); i++) {
             uint8_t a = data[sizeof(data) - 1 - i];
             uint8_t b = other.data[sizeof(data) - 1 - i];
-            if (a > b) {
-                return 1;
-            }
-            if (a < b) {
+            if (a != b) {
+                if (a > b)
+                    return 1;
+                // else a < b...
                 return -1;
             }
         }
@@ -60,22 +61,22 @@ public:
         return 0;
     }
 
-    friend inline bool operator==(const base_blob &a, const base_blob &b) {
+    friend inline constexpr bool operator==(const base_blob &a, const base_blob &b) noexcept {
         return a.Compare(b) == 0;
     }
-    friend inline bool operator!=(const base_blob &a, const base_blob &b) {
+    friend inline constexpr bool operator!=(const base_blob &a, const base_blob &b) noexcept {
         return a.Compare(b) != 0;
     }
-    friend inline bool operator<(const base_blob &a, const base_blob &b) {
+    friend inline constexpr bool operator<(const base_blob &a, const base_blob &b) noexcept {
         return a.Compare(b) < 0;
     }
-    friend inline bool operator<=(const base_blob &a, const base_blob &b) {
+    friend inline constexpr bool operator<=(const base_blob &a, const base_blob &b) noexcept {
         return a.Compare(b) <= 0;
     }
-    friend inline bool operator>(const base_blob &a, const base_blob &b) {
+    friend inline constexpr bool operator>(const base_blob &a, const base_blob &b) noexcept {
         return a.Compare(b) > 0;
     }
-    friend inline bool operator>=(const base_blob &a, const base_blob &b) {
+    friend inline constexpr bool operator>=(const base_blob &a, const base_blob &b) noexcept {
         return a.Compare(b) >= 0;
     }
 
@@ -84,19 +85,19 @@ public:
     void SetHex(const std::string &str);
     std::string ToString() const { return GetHex(); }
 
-    uint8_t *begin() { return &data[0]; }
+    constexpr uint8_t *begin() noexcept { return &data[0]; }
 
-    uint8_t *end() { return &data[WIDTH]; }
+    constexpr uint8_t *end() noexcept { return &data[WIDTH]; }
 
-    const uint8_t *begin() const { return &data[0]; }
+    constexpr const uint8_t *begin() const noexcept { return &data[0]; }
 
-    const uint8_t *end() const { return &data[WIDTH]; }
+    constexpr const uint8_t *end() const noexcept { return &data[WIDTH]; }
 
-    unsigned int size() const { return sizeof(data); }
+    constexpr unsigned int size() const noexcept { return sizeof(data); }
 
-    static constexpr int width() { return WIDTH; } // added by Calin
+    static constexpr int width() noexcept { return WIDTH; } // added by Calin
 
-    uint64_t GetUint64(int pos) const {
+    constexpr uint64_t GetUint64(int pos) const noexcept {
         const uint8_t *ptr = data + pos * 8;
         return uint64_t(ptr[0]) | (uint64_t(ptr[1]) << 8) |
                (uint64_t(ptr[2]) << 16) | (uint64_t(ptr[3]) << 24) |
@@ -121,9 +122,10 @@ public:
  */
 class uint160 : public base_blob<160> {
 public:
-    uint160() {}
-    explicit uint160(const base_blob<160> &b) : base_blob<160>(b) {}
-    explicit uint160(const std::vector<uint8_t> &vch) : base_blob<160>(vch) {}
+    // inherit c'tors
+    using base_blob<160>::base_blob;
+    // base type copy
+    explicit constexpr uint160(const base_blob<160> &b) noexcept : base_blob<160>(b) {}
 };
 
 /**
@@ -134,9 +136,10 @@ public:
  */
 class uint256 : public base_blob<256> {
 public:
-    uint256() {}
-    explicit uint256(const base_blob<256> &b) : base_blob<256>(b) {}
-    explicit uint256(const std::vector<uint8_t> &vch) : base_blob<256>(vch) {}
+    // inherit c'tors
+    using base_blob<256>::base_blob;
+    // base type copy
+    explicit constexpr uint256(const base_blob<256> &b) noexcept : base_blob<256>(b) {}
 
     /**
      * A cheap hash function that just returns 64 bits from the result, it can

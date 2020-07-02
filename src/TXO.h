@@ -19,6 +19,7 @@
 #pragma once
 
 #include "BlockProcTypes.h"
+#include "BTC.h"
 #include "TXO_Compact.h"
 
 #include "robin_hood/robin_hood.h"
@@ -50,7 +51,7 @@ struct TXO {
         const int hlen = txHash.length();
         ret.resize(int(serSize()));
         std::memcpy(ret.data(), txHash.data(), size_t(hlen));
-        std::memcpy(ret.data() + hlen, &outN, sizeof(outN));
+        std::memcpy(ret.data() + hlen, reinterpret_cast<const char *>(&outN), sizeof(outN));
         return ret;
     }
 
@@ -58,7 +59,8 @@ struct TXO {
         TXO ret;
         if (ba.length() != int(serSize())) return ret;
         ret.txHash = QByteArray(ba.data(), HashLen);
-        ret.outN = *reinterpret_cast<const IONum *>(ba.data()+HashLen);
+        // we memcpy rather than reinterpret_cast in order to guard against unaligned access
+        std::memcpy(reinterpret_cast<char *>(&ret.outN), ba.data()+HashLen, sizeof(ret.outN));
         return ret;
     }
 
@@ -69,24 +71,14 @@ namespace std {
 /// specialization of std::hash to be able to add struct TXO to any unordered_set or unordered_map as a key
 template<> struct hash<TXO> {
     size_t operator()(const TXO &txo) const noexcept {
-        union {
-            uint64_t u64;
-            uint8_t  u8[8];
-        } u;
-        static_assert(sizeof(u) == sizeof(u.u64) && sizeof(u.u64) == sizeof(u.u8), "Unexpected union packing.");
-        static_assert(sizeof(txo.outN) <= 4);
-        constexpr int hash2copy = sizeof(u.u8) - sizeof(txo.outN);
-        static_assert(hash2copy > 0);
-        u.u64 = 0; // clear
-        // take up to first hash2copy bytes (6 bytes) of hash
-        std::memcpy(u.u8, txo.txHash.constData(), size_t(std::min(txo.txHash.size(), hash2copy)));
-        // append 2-byte IONum
-        std::memcpy(u.u8 + hash2copy, &txo.outN, sizeof(txo.outN));
-        // hash the concatenation using std C++ (murmur2 hash)
-        return hasher64(u.u64);
+        struct { size_t first; IONum second; } mypair = {
+            BTC::QByteArrayHashHasher{}(txo.txHash), // trivially copies first sizeof(size_t) bytes of hash
+            txo.outN,
+        };
+        // on 32-bit: below hashes the above 6-byte struct using MurMur3
+        // on 64-bit: below hashes the above 10-byte struct using CityHash64
+        return Util::hashForStd(mypair);
     }
-private:
-    std::hash<uint64_t> hasher64;
 };
 }
 

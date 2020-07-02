@@ -17,8 +17,11 @@
 // <https://www.gnu.org/licenses/>.
 //
 #include "App.h"
+#include "CityHash.h"
 #include "Logger.h"
 #include "Util.h"
+
+#include "bitcoin/hash.h"
 
 // below headers are for getN*Processors, etc.
 #if defined(Q_OS_DARWIN)
@@ -240,6 +243,38 @@ namespace Util {
         return true;
     }
 
+    namespace {
+        /// Stores a hash seed that we will use for our hash tables.
+        /// There really should only be one of these globally.
+        class HashSeed {
+            uint64_t seed;
+        public:
+            /// seeds 'seed' from QRandomGenerator
+            HashSeed() {
+                auto gen = QRandomGenerator::global();
+                if (!gen) {
+                    Warning() << "App-global random number generator is null! Seeding hash seed with current time. FIXME!";
+                    seed = uint64_t(getTimeNS());
+                } else {
+                    seed = uint64_t(gen->generate64());
+                }
+            }
+            template <typename IntType, typename = std::enable_if_t<std::is_integral_v<IntType>>>
+            IntType get() const { return static_cast<IntType>(seed); }
+        };
+
+        /// app-global hash seed -- initialized before we enter main()
+        const HashSeed hashSeed;
+    } // namespace (anonymous)
+
+    uint32_t hashData32(const uint8_t *data, size_t len)
+    {
+        return bitcoin::MurmurHash3(hashSeed.get<uint32_t>(), data, len);
+    }
+    uint64_t hashData64(const uint8_t *data, size_t len)
+    {
+        return uint64_t(CityHash::CityHash64WithSeed(reinterpret_cast<const char *>(data), len, hashSeed.get<CityHash::uint64>()));
+    }
 
 } // end namespace Util
 

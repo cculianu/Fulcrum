@@ -21,6 +21,7 @@
 #include "BTC.h"
 
 #include "bitcoin/cashaddrenc.h"  // for bitcoin::CashAddrType
+#include "bitcoin/uint256.h"
 
 #include <QByteArray>
 #include <QMetaType>
@@ -34,6 +35,8 @@
 namespace BTC {
     struct Address
     {
+        static constexpr std::size_t H160Len = bitcoin::uint160::width();
+
         enum Kind : Byte {
             Invalid = 0xff,
             P2PKH = bitcoin::CashAddrType::PUBKEY_TYPE,  // 0
@@ -62,7 +65,7 @@ namespace BTC {
         inline bool isRegTestNet() const noexcept { return _net == RegTestNet; }
         inline bool isMainNet() const noexcept { return _net == MainNet; }
 
-        inline bool isValid() const noexcept {  return _kind != Kind::Invalid && h160.length() == 20 && _net != Net::Invalid && verByte != InvalidVerByte; }
+        inline bool isValid() const noexcept {  return _kind != Kind::Invalid && h160.length() == H160Len && _net != Net::Invalid && verByte != InvalidVerByte; }
 
         /// test any string to see if it's a valid address for the specified network
         static bool isValid(const QString &legacyOrCashAddress, Net = MainNet);
@@ -123,17 +126,21 @@ namespace BTC {
 
 } // end namespace BTC
 
-/// for Qt QSet/QHash support of type Address
-inline uint qHash(const BTC::Address &key, uint seed = 0) {
-    if (key.isValid()) {
-        const auto h160 = key.hash160();
-        uint prefixBytes;
-        // The below is safe because isValid implies h160 length == 20
-        static_assert (sizeof(prefixBytes) <= 20);
-        std::memcpy(&prefixBytes, h160.constData(), sizeof(prefixBytes));
-        return qHash(prefixBytes, seed);
+/// for std::hash support of type BTC::Address -- just take first 4/8 bytes of hash160
+template <> struct std::hash<BTC::Address> {
+    std::size_t operator()(const BTC::Address &a) const {
+        if (a.isValid()) {
+            // The below will produce a good value because isValid implies h160 length == 20
+            return BTC::QByteArrayHashHasher{}(a.hash160());
+        }
+        // invalid will always hash to 0
+        return 0;
     }
-    return qHash(0, seed);
+};
+
+/// for Qt QSet/QHash support of type BTC::Address
+inline uint qHash(const BTC::Address &key, uint seed = 0) {
+    return qHash(std::hash<BTC::Address>{}(key), seed);
 }
 
 Q_DECLARE_METATYPE(BTC::Address);

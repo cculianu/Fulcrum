@@ -171,6 +171,7 @@ SOURCES += \
     BTC_Address.cpp \
     BitcoinD.cpp \
     BlockProc.cpp \
+    CityHash.cpp \
     Common.cpp \
     Controller.cpp \
     Json.cpp \
@@ -197,6 +198,7 @@ SOURCES += \
     WebSocket.cpp \
     register_MetaTypes.cpp
 
+
 HEADERS += \
     AbstractConnection.h \
     App.h \
@@ -205,6 +207,7 @@ HEADERS += \
     BitcoinD.h \
     BlockProc.h \
     BlockProcTypes.h \
+    CityHash.h \
     Common.h \
     Compat.h \
     Controller.h \

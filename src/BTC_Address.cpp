@@ -115,15 +115,15 @@ namespace BTC
         std::vector<Byte> dec;
         if (const auto ss = legacyOrCash.toStdString(); bitcoin::DecodeBase58Check(ss, dec)) {
             // Legacy address
-            if (dec.size() != 21) {
+            if (dec.size() != 1 + H160Len) {
                 // this should never happen
 #ifdef QT_DEBUG
                 DebugM(__func__, ": bad decoded length  ", dec.size(), " for address ", legacyOrCash);
 #endif
             } else {
                 a.verByte = dec[0];
-                a.h160.resize(20);
-                memcpy(a.h160.data(), &dec[1], 20);
+                a.h160.resize(int(H160Len));
+                std::memcpy(a.h160.data(), &dec[1], H160Len);
                 a._net = netForVerByte(a.verByte); // note this will not correctly differntiate between TestNet and RegTestNet and always pick TestNet since they have the same verBytes.
                 a.autosetKind(); // this will clear the address if something is wrong
             }
@@ -162,7 +162,7 @@ namespace BTC
     // Used internally in one branch when parsing Legacy.  If it fails it will clear the address to default constructed values.
     bool Address::autosetKind()
     {
-        if (h160.length() == 20) {
+        if (h160.length() == int(H160Len)) {
             _kind = kindForNetAndVerByte(_net, verByte);
             if (_kind != Kind::Invalid)
                 return true;
@@ -177,7 +177,7 @@ namespace BTC
     {
         using namespace bitcoin;
         CScript ret;
-        if (h160.length() == 20) {
+        if (h160.length() == int(H160Len)) {
             if (_kind == P2PKH) {
                 ret << OP_DUP << OP_HASH160;
                 ret.insert(ret.end(), uint8_t(h160.length())); // push length
