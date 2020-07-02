@@ -128,10 +128,16 @@ namespace std {
 /// specialization of std::hash to be able to add struct CompactTXO to any unordered_set or unordered_map
 template<> struct hash<CompactTXO> {
     size_t operator()(const CompactTXO &txo) const noexcept {
-        static_assert (sizeof(txo.u.asU64) == sizeof(txo.u.compact),
-                       "Unknown platform or struct packing. Expected CompactTXO.u.prevout size to be 64 bytes.");
-        // just return the hash of the packed asU64.
-        return hasher64(txo.u.asU64);
+        if constexpr (sizeof(txo.u.asU64) == sizeof(txo.u.compact)) {
+            // just return the hash of the packed asU64.
+            return hasher64(txo.u.asU64);
+        } else {
+            // on Windows MinGW GCC for some reason the above is false, so we do this
+            uint64_t buf;
+            static_assert(sizeof(buf) == CompactTXO::serSize());
+            txo.toBytesInPlace(&buf, sizeof(buf));
+            return hasher64(buf);
+        }
     }
 private:
     hash<uint64_t> hasher64;
