@@ -60,8 +60,8 @@ class App;
 #define EXPECT(expr, constant) (expr)
 #endif
 
-#define LIKELY(bool_expr)   EXPECT(bool(bool_expr), 1)
-#define UNLIKELY(bool_expr) EXPECT(bool(bool_expr), 0)
+#define LIKELY(bool_expr)   EXPECT(int(bool(bool_expr)), 1)
+#define UNLIKELY(bool_expr) EXPECT(int(bool(bool_expr)), 0)
 
 /// Super class of Debug, Warning, Error classes.  Can be instantiated for regular log messages.
 class Log

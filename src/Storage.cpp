@@ -1087,7 +1087,7 @@ namespace {
         assert(hxlen == HashLen);
         QByteArray key(hxlen + int(ctxo.serSize()), Qt::Uninitialized);
         std::memcpy(key.data(), hashX.constData(), size_t(hxlen));
-        ctxo.toBytesInPlace(key.data()+hxlen, ctxo.serSize());
+        ctxo.toBytesInPlace(reinterpret_cast<std::byte *>(key.data()+hxlen), ctxo.serSize());
         return key;
     }
 }
@@ -1917,7 +1917,7 @@ auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
                     if (key.size() != HashLen + CompactTXO::serSize())
                         // should never happen, indicates db corruption
                         throw InternalError("Key size for hashx is invalid");
-                    const CompactTXO ctxo = CompactTXO::fromBytes(key.data() + HashLen, CompactTXO::serSize());
+                    const CompactTXO ctxo = CompactTXO::fromBytes(reinterpret_cast<const std::byte *>(key.data() + HashLen), CompactTXO::serSize());
                     if (!ctxo.isValid())
                         // should never happen, indicates db corruption
                         throw InternalError("Deserialized CompactTXO is invalid");
@@ -1978,7 +1978,7 @@ auto Storage::getBalance(const HashX &hashX) const -> std::pair<bitcoin::Amount,
                 if (key.size() != HashLen + CompactTXO::serSize())
                     // should never happen, indicates db corruption
                     throw InternalError(QString("Key size for scripthash %1 is invalid").arg(QString(hashX.toHex())));
-                const CompactTXO ctxo = CompactTXO::fromBytes(key.data() + HashLen, CompactTXO::serSize());
+                const CompactTXO ctxo = CompactTXO::fromBytes(reinterpret_cast<const std::byte *>(key.data() + HashLen), CompactTXO::serSize());
                 if (!ctxo.isValid())
                     // should never happen, indicates db corruption
                     throw InternalError(QString("Deserialized CompactTXO is invalid for scripthash %1").arg(QString(hashX.toHex())));
@@ -2386,30 +2386,37 @@ namespace {
     template <> QByteArray Serialize(const TxNumVec &v)
     {
         // this serializes a vector of TxNums to a compact representation (6 bytes, eg 48 bits per TxNum), in little endian byte order
-        QByteArray ret(int(v.size()*6), Qt::Uninitialized);
-        uint8_t *cur = reinterpret_cast<uint8_t *>(ret.data());
+        constexpr auto compactSize = CompactTXO::compactTxNumSize(); /* 6 */
+        const size_t nBytes = v.size() * compactSize;
+        QByteArray ret(int(nBytes), Qt::Uninitialized);
+        if (UNLIKELY(nBytes != size_t(ret.size()))) {
+            throw DatabaseSerializationError(QString("Overflow or other error when attempting to serialize a TxNumVec"
+                                                     " of %1 bytes").arg(qulonglong(nBytes)));
+        }
+        std::byte *cur = reinterpret_cast<std::byte *>(ret.data());
         for (const auto num : v) {
             CompactTXO::txNumToCompactBytes(cur, num);
-            cur += 6;
+            cur += compactSize;
         }
         return ret;
     }
     // this deserializes a vector of TxNums from a compact representation (6 bytes, eg 48 bits per TxNum), assuming little endian byte order
     template <> TxNumVec Deserialize (const QByteArray &ba, bool *ok)
     {
+        constexpr auto compactSize = CompactTXO::compactTxNumSize(); /* 6 */
         const size_t blen = size_t(ba.length());
-        const size_t N = blen / 6;
+        const size_t N = blen / compactSize;
         TxNumVec ret;
-        if (N * 6 != blen) {
+        if (N * compactSize != blen) {
             // wrong size, not multiple of 6; bail
             if (ok) *ok = false;
             return ret;
         }
         if (ok) *ok = true;
-        const uint8_t *cur = reinterpret_cast<const uint8_t *>(ba.begin()), *end = reinterpret_cast<const uint8_t *>(ba.end());
+        auto *cur = reinterpret_cast<const std::byte *>(ba.begin()), * const end = reinterpret_cast<const std::byte *>(ba.end());
         ret.reserve(N);
-        for ( ; cur < end; cur += 6) {
-            ret.emplace_back( CompactTXO::txNumFromCompactBytes(cur) );
+        for ( ; cur < end; cur += compactSize) {
+            ret.push_back( CompactTXO::txNumFromCompactBytes(cur) );
         }
         return ret;
     }

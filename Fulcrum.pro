@@ -24,7 +24,7 @@
 QT -= gui
 QT += network
 
-CONFIG += c++17 console
+CONFIG += c++17 console warn_on
 CONFIG -= app_bundle
 
 versionAtMost(QT_VERSION, 5.12.4) {

@@ -27,6 +27,7 @@
 #include <QString>
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <cstring> // for std::memcpy
 #include <functional> // for std::hash
@@ -106,7 +107,7 @@ struct TXOInfo {
         cur += sizeof(amt_sats);
         std::memcpy(cur, &cheight, sizeof(cheight));
         cur += sizeof(cheight);
-        CompactTXO::txNumToCompactBytes(reinterpret_cast<uint8_t *>(cur), txNum);
+        CompactTXO::txNumToCompactBytes(reinterpret_cast<std::byte *>(cur), txNum);
         cur += CompactTXO::compactTxNumSize();
         std::memcpy(cur, hashX.constData(), size_t(hashX.length()));
         return ret;
@@ -123,7 +124,7 @@ struct TXOInfo {
         cur += sizeof(amt);
         std::memcpy(&cheight, cur, sizeof(cheight));
         cur += sizeof(cheight);
-        ret.txNum = CompactTXO::txNumFromCompactBytes(reinterpret_cast<const uint8_t *>(cur));
+        ret.txNum = CompactTXO::txNumFromCompactBytes(reinterpret_cast<const std::byte *>(cur));
         cur += CompactTXO::compactTxNumSize();
         ret.hashX = QByteArray(cur, HashLen);
         ret.amount = amt * bitcoin::Amount::satoshi();
