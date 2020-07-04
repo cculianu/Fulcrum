@@ -269,6 +269,16 @@ namespace Util {
         return map;
     }
 
+    /// SFINAE-based functor that calls .reserve(size) on an instance, otherwise does nothing if instance's
+    /// type has no reserve() method.
+    struct CallReserve {
+        template <typename T>
+        auto operator()(T &s, size_t size) const -> decltype(s.reserve(size)) // SFINAE fail if no .reserve()
+        { s.reserve(size); }
+        // fallback if SFINAE failed, no-op
+        template <typename T> void operator()(const T &, size_t) const {}
+    };
+
     /// Grab just the keys from a map, by copy construction.
     /// If no Set template arg is specified, std::set<Map::key_type> is used.
     /// Otherwise specify any set type such as std::unordered_set<type>, etc.
@@ -276,7 +286,7 @@ namespace Util {
     auto keySet(const Map &map) {
         // lambda template
         constexpr auto inner = [](const Map &map, auto & set) {
-            set.reserve(map.size());
+            CallReserve{}(set, map.size());
             for (auto it = map.begin(); it != map.end(); ++it) {
                 set.insert(it->first);
             }
@@ -298,7 +308,7 @@ namespace Util {
     auto valueSet(const Map &map) {
         // lambda template
         constexpr auto inner = [](const Map &map, auto & set) {
-            set.reserve(map.size());
+            CallReserve{}(set, map.size());
             for (auto it = map.begin(); it != map.end(); ++it) {
                 set.insert(it->second);
             }
