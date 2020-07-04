@@ -585,8 +585,8 @@ void SynchMempoolTask::processResults()
                     if (prevN >= prevTxRef->txos.size()
                             || !(prevInfo = prevTxRef->txos[prevN]).isValid())
                         // defensive programming paranoia
-                        throw InternalError(QString("FAILED TO FIND A VALID PREVIOUS TXOUTN %1 IN MEMPOOL for TxHash: %2")
-                                            .arg(prevN).arg(QString(prevTxId.toHex())));
+                        throw InternalError(QString("FAILED TO FIND A VALID PREVIOUS TXOUTN %1:%2 IN MEMPOOL for TxHash: %3 (input %4)")
+                                            .arg(QString(prevTxId.toHex())).arg(prevN).arg(QString(hash.toHex())).arg(inNum));
                     sh = prevInfo.hashX;
                     tx->hashXs[sh].unconfirmedSpends[prevTXO] = prevInfo;
                     prevTxRef->hashXs[sh].utxo.erase(prevN); // remove this spend from utxo set for prevTx in mempool
@@ -599,7 +599,7 @@ void SynchMempoolTask::processResults()
                         // We will throw if missing, and the synch process aborts and hopefully we recover with a reorg
                         // or a new block or somesuch.
                         throw InternalError(QString("FAILED TO FIND PREVIOUS TX %1 IN EITHER MEMPOOL OR DB for TxHash: %2 (input %3)")
-                                            .arg(prevTXO.toString()).arg(QString(prevTxId.toHex())).arg(inNum));
+                                            .arg(prevTXO.toString()).arg(QString(hash.toHex())).arg(inNum));
                     }
                     prevInfo = *optTXOInfo;
                     sh = prevInfo.hashX;
