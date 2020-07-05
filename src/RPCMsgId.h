@@ -107,8 +107,8 @@ template<> struct std::hash<RPCMsgId> {
             static_assert (std::is_same_v<decltype(r.sdata.constBegin()), const QChar *>,
                            "Assumption here is that QString::constBegin() returns a pointer");
             // get pointers to underlying data, and hash that
-            const uint8_t * const begin = reinterpret_cast<const uint8_t *>(r.sdata.constBegin()),
-                          * const end   = reinterpret_cast<const uint8_t *>(r.sdata.constEnd());
+            const std::byte * const begin = reinterpret_cast<const std::byte *>(r.sdata.constBegin()),
+                            * const end   = reinterpret_cast<const std::byte *>(r.sdata.constEnd());
             return Util::hashForStd(begin, std::size_t(end - begin));
         }
         case RPCMsgId::Integer: return Util::hashForStd(r.idata);

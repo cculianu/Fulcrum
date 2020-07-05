@@ -163,7 +163,7 @@ namespace BTC
                 return ret;
             }
             // this should not normally be reached.
-            return Util::hashForStd(reinterpret_cast<const uint8_t *>(b.begin()), std::size_t(b.size()));
+            return Util::hashForStd(reinterpret_cast<const std::byte *>(b.begin()), std::size_t(b.size()));
         }
     };
 
