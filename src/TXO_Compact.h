@@ -67,8 +67,8 @@ struct CompactTXO {
    size_t toBytesInPlace(std::byte *buf, size_t bufsz) const {
         if (bufsz >= serSize()) {
             txNumToCompactBytes(buf, compact.txNum);
-            buf[6] = std::byte((compact.n >> 0) & 0xff);
-            buf[7] = std::byte((compact.n >> 8) & 0xff);
+            buf[6] = std::byte((compact.n >> 0u) & 0xffu);
+            buf[7] = std::byte((compact.n >> 8u) & 0xffu);
             return serSize();
         }
         return 0;
@@ -89,7 +89,7 @@ struct CompactTXO {
         if (b.size() == serSize()) {
             const std::byte * cur = reinterpret_cast<const std::byte *>(b.data());
             ret.compact.txNum = txNumFromCompactBytes(cur);
-            ret.compact.n = IONum(cur[6]) | IONum(IONum(cur[7]) << 8);
+            ret.compact.n = IONum(cur[6]) | IONum(IONum(cur[7]) << 8u);
         }
         return ret;
     }
@@ -99,22 +99,22 @@ struct CompactTXO {
     /// Converts: TxNum (8 bytes) <- from a 6-byte buffer. Uses little-endian ordering.
     static inline TxNum txNumFromCompactBytes(const std::byte bytes[6])
     {
-        return    (TxNum(bytes[0]) <<  0)
-                | (TxNum(bytes[1]) <<  8)
-                | (TxNum(bytes[2]) << 16)
-                | (TxNum(bytes[3]) << 24)
-                | (TxNum(bytes[4]) << 32)
-                | (TxNum(bytes[5]) << 40);
+        return    (TxNum(bytes[0]) <<  0u)
+                | (TxNum(bytes[1]) <<  8u)
+                | (TxNum(bytes[2]) << 16u)
+                | (TxNum(bytes[3]) << 24u)
+                | (TxNum(bytes[4]) << 32u)
+                | (TxNum(bytes[5]) << 40u);
     }
     /// Converts: TxNum (8 bytes) -> into a 6-byte buffer. Uses little-endian ordering.
     static inline void txNumToCompactBytes(std::byte bytes[6], TxNum num)
     {
-        bytes[0] = std::byte((num >>  0) & 0xff);
-        bytes[1] = std::byte((num >>  8) & 0xff);
-        bytes[2] = std::byte((num >> 16) & 0xff);
-        bytes[3] = std::byte((num >> 24) & 0xff);
-        bytes[4] = std::byte((num >> 32) & 0xff);
-        bytes[5] = std::byte((num >> 40) & 0xff);
+        bytes[0] = std::byte((num >>  0u) & 0xffu);
+        bytes[1] = std::byte((num >>  8u) & 0xffu);
+        bytes[2] = std::byte((num >> 16u) & 0xffu);
+        bytes[3] = std::byte((num >> 24u) & 0xffu);
+        bytes[4] = std::byte((num >> 32u) & 0xffu);
+        bytes[5] = std::byte((num >> 40u) & 0xffu);
     }
 };
 #if defined(__GNUC__) || defined(__clang__)
