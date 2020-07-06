@@ -31,6 +31,8 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QRegExp>
+#include <QSslCipher>
+#include <QSslEllipticCurve>
 #include <QSslSocket>
 
 #include <array>
@@ -223,7 +225,8 @@ void App::parseArgs()
          },
          { { "k", "key" },
            QString("Specify a PEM file to use as the server's SSL key. This option is required if the -s/--ssl and/or"
-           " the -W/--wss options apear at all on the command-line. The file should contain an RSA private key."),
+           " the -W/--wss options apear at all on the command-line. The file should contain an RSA private key."
+           " EC, DH, and DSA keys are also supported, but their support is experimental."),
            QString("keyfile"),
          },
         { { "a", "admin" },
@@ -556,7 +559,22 @@ void App::parseArgs()
             if (!keyf.open(QIODevice::ReadOnly))
                 throw BadArgs(QString("Unable to open key file %1: %2").arg(key).arg(keyf.errorString()));
             options->sslCert = QSslCertificate(&certf, QSsl::EncodingFormat::Pem);
-            options->sslKey = QSslKey(&keyf, QSsl::KeyAlgorithm::Rsa, QSsl::EncodingFormat::Pem);
+            // proble key algorithm by trying all the algorithms Qt supports
+            for (auto algo : {QSsl::KeyAlgorithm::Rsa, QSsl::KeyAlgorithm::Ec, QSsl::KeyAlgorithm::Dsa, QSsl::KeyAlgorithm::Dh}) {
+                keyf.seek(0);
+                options->sslKey = QSslKey(&keyf, algo, QSsl::EncodingFormat::Pem);
+                if (!options->sslKey.isNull())
+                    break;
+            }
+            // check key is ok
+            if (options->sslKey.isNull()) {
+                throw BadArgs(QString("Unable to read private key from %1. Please make sure the file is readable and "
+                                      "contains an RSA, DSA, EC, or DH private key in PEM format.").arg(key));
+            } else if (options->sslKey.algorithm() == QSsl::KeyAlgorithm::Ec && QSslConfiguration::supportedEllipticCurves().isEmpty()) {
+                throw BadArgs(QString("Private key `%1` is an elliptic curve key, however this Qt installation lacks"
+                                      " elliptic curve support. Please recompile and link Qt against the OpenSSL library"
+                                      " in order to enable elliptic curve support in Qt.").arg(key));
+            }
             options->certFile = cert; // this is only used for /stats port advisory info
             options->keyFile = key; // this is only used for /stats port advisory info
             if (options->sslCert.isNull())
@@ -584,11 +602,24 @@ void App::parseArgs()
                           << options->sslCert.subjectInfo(QSslCertificate::SubjectInfo::EmailAddress).join(",")
                           //<< " self-signed: " << (options->sslCert.isSelfSigned() ? "YES" : "NO")
                           << " expires: " << (options->sslCert.expiryDate().toString("ddd MMMM d yyyy hh:mm:ss"));
+                    if (Debug::isEnabled()) {
+                        QString cipherStr;
+                        for (const auto & ciph : QSslConfiguration::supportedCiphers()) {
+                            if (!cipherStr.isEmpty()) cipherStr += ", ";
+                            cipherStr += ciph.name();
+                        }
+                        if (cipherStr.isEmpty()) cipherStr = "(None)";
+                        Debug() << "Supported ciphers: " << cipherStr;
+                        QString curvesStr;
+                        for (const auto & curve : QSslConfiguration::supportedEllipticCurves()) {
+                            if (!curvesStr.isEmpty()) curvesStr += ", ";
+                            curvesStr += curve.longName();
+                        }
+                        if (curvesStr.isEmpty()) curvesStr = "(None)";
+                        Debug() << "Supported curves: " << curvesStr;
+                    }
                 });
             }
-            if (options->sslKey.isNull())
-                throw BadArgs(QString("Unable to read private key from %1. Please make sure the file is readable and "
-                                      "contains a single RSA private key in PEM format.").arg(key));
             static const auto KeyAlgoStr = [](QSsl::KeyAlgorithm a) {
                 switch (a) {
 #if (QT_VERSION >= QT_VERSION_CHECK(5, 13, 0))
@@ -603,8 +634,13 @@ void App::parseArgs()
             };
             Util::AsyncOnObject(this, [this]{
                 // We do this logging later. This is to ensure that it ends up in the syslog if user specified -S
-                Log() << "Loaded key type: " << (options->sslKey.type() == QSsl::KeyType::PrivateKey ? "private" : "public")
-                      << " algorithm: " << KeyAlgoStr(options->sslKey.algorithm());
+                const auto algo = options->sslKey.algorithm();
+                const auto algoName = KeyAlgoStr(algo);
+                const auto keyTypeName = (options->sslKey.type() == QSsl::KeyType::PrivateKey ? "private" : "public");
+                Log() << "Loaded key type: " << keyTypeName << " algorithm: " << algoName;
+                if (algo != QSsl::KeyAlgorithm::Rsa)
+                    Warning() << "Warning: " << algoName << " key support is experimental."
+                              << " Please consider switching your SSL certificate and key to use 2048-bit RSA.";
             });
         }
     }

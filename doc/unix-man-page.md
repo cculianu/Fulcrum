@@ -56,7 +56,7 @@ Once the server finishes synching it will behave like an ElectronX/ElectrumX ser
 :   Specify a PEM file to use as the server's SSL certificate.  This option is required if the -s/--ssl and/or the -W/--wss options appear at all on the command-line.  The file should contain either a single valid self-signed certificate or the full certificate chain if using CA-signed certificates.
 
 -k, --key <keyfile>
-:   Specify a PEM file to use as the server's SSL key.  This option is required if the -s/--ssl and/or the -W/--wss options apear at all on the command-line.  The file should contain an RSA private key.
+:   Specify a PEM file to use as the server's SSL key.  This option is required if the -s/--ssl and/or the -W/--wss options apear at all on the command-line.  The file should contain an RSA private key.  EC, DH, and DSA keys are also supported, but their support is experimental.
 
 -a, --admin <[interface:]port>
 :   Specify a <port> or an <interface:port> on which to listen for TCP connections for the admin RPC service. The admin service is used for sending special control commands to the server, such as stopping the server, and it should *NOT* be exposed to the internet.  This option is required if you wish to use the FulcrumAdmin CLI tool to send commands to Fulcrum. It is recommended that you specify the loopback address as the bind interface for this option such as: <port> by itself or 127.0.0.1:<port> for IPv4 and/or ::1:<port> for IPv6. If no interface is specified, and just a port number by itself is used, then IPv4 127.0.0.1 is the bind interface used (along with the specified port). This option may be specified more than once to bind to multiple interfaces and/or ports.
