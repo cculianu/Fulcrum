@@ -560,7 +560,12 @@ void App::parseArgs()
                 throw BadArgs(QString("Unable to open key file %1: %2").arg(key).arg(keyf.errorString()));
             options->sslCert = QSslCertificate(&certf, QSsl::EncodingFormat::Pem);
             // proble key algorithm by trying all the algorithms Qt supports
-            for (auto algo : {QSsl::KeyAlgorithm::Rsa, QSsl::KeyAlgorithm::Ec, QSsl::KeyAlgorithm::Dsa, QSsl::KeyAlgorithm::Dh}) {
+            for (auto algo : {QSsl::KeyAlgorithm::Rsa, QSsl::KeyAlgorithm::Ec, QSsl::KeyAlgorithm::Dsa,
+#if (QT_VERSION >= QT_VERSION_CHECK(5, 13, 0))
+                     // This was added in Qt 5.13+
+                 QSsl::KeyAlgorithm::Dh,
+#endif
+                             }) {
                 keyf.seek(0);
                 options->sslKey = QSslKey(&keyf, algo, QSsl::EncodingFormat::Pem);
                 if (!options->sslKey.isNull())
