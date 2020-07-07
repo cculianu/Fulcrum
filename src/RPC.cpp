@@ -631,7 +631,7 @@ namespace RPC {
     HttpConnection::~HttpConnection() {} ///< for vtable
     void HttpConnection::setAuth(const QString &username, const QString &password)
     {
-        authCookie = QStringLiteral("%1:%2").arg(username).arg(password).toUtf8().toBase64();
+        header.authCookie = QStringLiteral("%1:%2").arg(username).arg(password).toUtf8().toBase64();
     }
 
     struct HttpConnection::StateMachine
@@ -793,15 +793,21 @@ namespace RPC {
             QTextStream ss(&responseHeader, QIODevice::WriteOnly);
             ss.setCodec(QTextCodec::codecForName("UTF-8"));
             ss << "POST / HTTP/1.1" << NL;
+            if (!header.host.isEmpty())
+                ss << "Host: " << header.host << NL;
             ss << "Content-Type: application/json-rpc" << NL;
-            if (!authCookie.isEmpty())
-                ss << "Authorization: Basic " << authCookie << NL;
+            if (!header.authCookie.isEmpty())
+                ss << "Authorization: Basic " << header.authCookie << NL;
             ss << "Content-Length: " << (data.length()+suffix.length()) << NL;
             ss << NL;
         }
         return responseHeader + data + suffix;
     }
 
+    void HttpConnection::setHeaderHost(const QString &s) {
+        if (auto trimmed = s.trimmed(); !trimmed.isEmpty())
+            header.host = trimmed.toUtf8();
+    }
 
 } // end namespace RPC
 

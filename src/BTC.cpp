@@ -56,10 +56,11 @@ namespace BTC
 {
     void CheckBitcoinEndiannessAndOtherSanityChecks() {
         bitcoin::Endian_Check_In_namespace_bitcoin();
+        auto impl = bitcoin::SHA256AutoDetect();
+        Debug() << "Using sha256: " << QString::fromStdString(impl);
         if ( ! bitcoin::CSHA256::SelfTest() )
             throw InternalError("sha256 self-test failed. Cannot proceed.");
         Tests::Base58(true, true);
-        Debug() << "Using sha256 algorithm: " << bitcoin::SHA256AutoDetect();
     }
 
 

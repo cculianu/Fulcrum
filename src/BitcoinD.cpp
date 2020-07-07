@@ -250,6 +250,7 @@ BitcoinD::BitcoinD(const QString &host, quint16 port, const QString & user, cons
     _thread.setObjectName(objectName());
 
     setAuth(user, pass);
+    setHeaderHost(QString("%1:%2").arg(host).arg(port)); // for HTTP RFC 2616 Host: field
     setV1(true); // bitcoind uses jsonrpc v1
     pingtime_ms = 10000;
     stale_threshold = pingtime_ms * 2;

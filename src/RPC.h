@@ -391,8 +391,16 @@ namespace RPC {
         using ConnectionBase::ConnectionBase;
         ~HttpConnection() override; ///< for vtable
 
+        /// For: "Authorization: Basic <cookie>"; used to calculate the <cookie>
         void setAuth(const QString & username, const QString & password);
-        void clearAuth() { authCookie.clear(); }
+        void clearAuth() { header.authCookie.clear(); }
+
+        /// Sets the HTTP header "Host:" field.  This string will be sent verbatim to the other end when
+        /// doing an HTTP/1.1 POST.  This must be set if acting as a client, otherwise no "Host:" header
+        /// field will be sent, which some endpoints don't like (namely bchd) since it violates RFC 2616.
+        void setHeaderHost(const QString &);
+        QString headerHost() const { return header.host; }
+        void clearHeaderHost() { header.host.clear(); }
 
         //static void Test();
     signals:
@@ -404,7 +412,11 @@ namespace RPC {
         QByteArray wrapForSend(const QByteArray &) override;
 
     private:
-        QByteArray authCookie;
+        /// These end up verbatim in the HTTP/1.1 POST header.
+        struct {
+            QByteArray authCookie; ///< "Authorization: Basic <cookie>"
+            QByteArray host; ///< "Host: <host>"; caller should set this if acting as a client
+        } header;
         struct StateMachine;
         using SMDel = std::function<void(StateMachine *)>;
         std::unique_ptr<StateMachine, SMDel> sm; ///< we need to declare this with a deleter otherwise subclasses won't be able to inherit from us because StateMachine is a private, opaque struct; the need for a deleter is due to implementation details of how unique_ptr works with opaque types.
