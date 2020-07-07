@@ -706,16 +706,18 @@ namespace RPC {
                             // ERROR HERE. Expected header. got non-header.
                             throw Exception(QString("Expected header line: %1").arg(QString(data)));
                         }
-                        auto name = toks[0].simplified(), value = toks.mid(1).join(' ').simplified();
+                        const auto name = toks[0].simplified().toLower(),
+                                   value = toks.mid(1).join(':').simplified();
                         static const QByteArray s_content_type("content-type"), s_content_length("content-length"),
-                                                s_application_json("application/json");
-                        if (name.toLower() == s_content_type) {
+                                                s_application_json("application/json"), s_connection("connection"),
+                                                s_close("close");
+                        if (name == s_content_type) {
                             sm->contentType = QString::fromUtf8(value);
                             if (sm->contentType.compare(s_application_json, Qt::CaseInsensitive) != 0) {
                                 Warning() << "Got unexpected content type: " << sm->contentType << (!Trace::isEnabled() ? "; will log the rest of this HTTP response" : "");
                                 sm->logBad = true;
                             }
-                        } else if (name.toLower() == s_content_length) {
+                        } else if (name == s_content_length) {
                             bool ok = false;
                             sm->contentLength = value.toInt(&ok);
                             if (!ok || sm->contentLength < 0) {
@@ -727,6 +729,18 @@ namespace RPC {
                             }
                             sm->gotLength = true;
                             TraceM("Content length: ", sm->contentLength);
+                        } else if (name == s_connection) {
+                            static const auto MakeErrMsg = [](const QString & value) {
+                                return QString("Unsupported \"Connection: %1\" header field in response").arg(value);
+                            };
+                            if (value.toLower() == s_close) {
+                                Fatal() << "\n\nThe remote bitcoind is asserting \"Connection: close\" in its response header.\n"
+                                        << APPNAME << " requires persistent connections in order to operate efficiently.\n"
+                                        << "Please contact the developers of the bitcoin daemon software you are using and\n"
+                                        << "request that they implement HTTP/1.1 persistent connections as per RFC 2616.\n\n";
+                                throw Exception(MakeErrMsg(value));
+                            } else
+                                DebugM(MakeErrMsg(value));
                         }
                     } else {
                         // caught EMPTY line -- this signifies end of header
