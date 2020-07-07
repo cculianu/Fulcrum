@@ -787,21 +787,66 @@ namespace RPC {
     QByteArray HttpConnection::wrapForSend(const QByteArray &data)
     {
         static const QByteArray NL("\r\n"), SLASHN("\n"), EMPTY("");
-        QByteArray responseHeader;
+        static const QByteArray POST("POST / HTTP/1.1");
+        static const QByteArray HOST("Host: ");
+        static const QByteArray AUTH("Authorization: Basic ");
+        static const QByteArray CONTENT_TYPE("Content-Type: application/json-rpc");
+        static const QByteArray CONTENT_LENGTH("Content-Length: ");
         const QByteArray suffix = !data.endsWith(SLASHN) ? NL : EMPTY;
-        {
-            QTextStream ss(&responseHeader, QIODevice::WriteOnly);
-            ss.setCodec(QTextCodec::codecForName("UTF-8"));
-            ss << "POST / HTTP/1.1" << NL;
-            if (!header.host.isEmpty())
-                ss << "Host: " << header.host << NL;
-            ss << "Content-Type: application/json-rpc" << NL;
-            if (!header.authCookie.isEmpty())
-                ss << "Authorization: Basic " << header.authCookie << NL;
-            ss << "Content-Length: " << (data.length()+suffix.length()) << NL;
-            ss << NL;
+        const bool addHost = !header.host.isEmpty(),
+                   addAuth = !header.authCookie.isEmpty();
+        const int clen = data.size() + suffix.size();
+        const QByteArray clenStr = QByteArray::number(clen);
+        // Pre-alloc all space we will need as an optimization. We do this to reduce excess
+        // copies and mallocs() because this function is potentially called often, especially
+        // when synching the blockchain. Note: If updating the below "+= append" code, be sure
+        // to update this calculation as well otherwise we will potentially suffer from
+        // extra mallocs.
+        QByteArray payload;
+        const int reserveSize =
+              POST.size() + NL.size()
+            + (addHost ? HOST.size() + header.host.size() + NL.size() : 0)
+            + CONTENT_TYPE.size() + NL.size()
+            + (addAuth ? AUTH.size() + header.authCookie.size() + NL.size() : 0)
+            + CONTENT_LENGTH.size() + clenStr.size() + NL.size()
+            + NL.size() + clen;
+        payload.reserve( reserveSize );
+
+        // Note we originally used a QTextStream here without the above reserve().
+        // It turns out QTextStream first converts everything to QString() and does
+        // a toUtf8() on the resulting QString when appending QByteArray, which takes
+        // extra CPU and is not what we want here.  So we simply hand-crafted the appends
+        // ourselves here in order to save cycles and reduce mallocs.
+
+        // POST / HTTP/1.1
+        payload += POST; payload += NL;
+        if (addHost) {
+            // Host: <host>\r\n
+            payload += HOST; payload += header.host; payload += NL;
         }
-        return responseHeader + data + suffix;
+        // Content-Type: application/json-rpc\r\n
+        payload += CONTENT_TYPE; payload += NL;
+        if (addAuth) {
+            // Authorization: Basic <auth>\r\n
+            payload += AUTH; payload += header.authCookie; payload += NL;
+        }
+        // Content-Length: <length>\r\n
+        payload += CONTENT_LENGTH; payload += clenStr; payload += NL;
+        // \r\n to separate header from data
+        payload += NL;
+        // actual data payload
+        payload += data;
+        // optional suffix (\r\n because JSON needs this)
+        payload += suffix;
+
+        // Sanity check to ensure we estimated the size correctly. This branch is compiled-out of release builds.
+        if constexpr (!isReleaseBuild()) {
+            if (const auto actualSize = payload.size(); reserveSize != actualSize && Debug::isEnabled())
+                Debug() << "reserveSize: " << reserveSize << " != actualSize: " << actualSize
+                        << " (this leads to extra mallocs) for: \"" << payload.left(80) << "\" ... ";
+        }
+
+        return payload;
     }
 
     void HttpConnection::setHeaderHost(const QString &s) {
