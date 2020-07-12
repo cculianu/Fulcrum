@@ -24,7 +24,7 @@
 
 namespace ServerMisc
 {
-    constexpr const char * const HashFunction = "sha256";
+    inline constexpr auto HashFunction = "sha256";
 
     /// Used in various places to rejects old clients or incompatible peers. Currently 1.4 and 1.4.4 respectively.
     extern const Version MinProtocolVersion, MaxProtocolVersion;
@@ -33,10 +33,12 @@ namespace ServerMisc
                          AppSubVersion; ///< e.g. "Fulcrum 1.0"
 
     /// The amount of time we wait before initiating auto-kick when the globalSubsLimitReached signal has been asserted by a Server instance.
-    constexpr double kMaxSubsAutoKickDelaySecs = 0.25;
+    inline constexpr double kMaxSubsAutoKickDelaySecs = 0.25;
     /// The rate limit for suppression of dupe global "max subs" warnings to log.
-    constexpr double kMaxSubsWarningsRateLimitSecs = 0.251;
+    inline constexpr double kMaxSubsWarningsRateLimitSecs = 0.251;
     /// The rate limit for suppression of dupe per-IP "max subs" warnings to log.
-    constexpr double kMaxSubsPerIPWarningsRateLimitSecs = 1.0;
+    inline constexpr double kMaxSubsPerIPWarningsRateLimitSecs = 1.0;
+    /// This key is used in the stats() map for each Server instance to save bloom filter info
+    inline constexpr auto kBloomFiltersKey = "bloom filters";
 }
 

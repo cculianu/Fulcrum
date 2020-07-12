@@ -880,13 +880,13 @@ QVariant Server::stats() const
     const QString myKey = m.size() != 1 ? QString{} : m.firstKey();
     if (auto mm = m.value(myKey).toMap(); !mm.isEmpty()) {
         // unite whatever base class created as a map with the bloom filter info map
-        mm.insert("bloom filters", logFilter->broadcast.stats());
+        mm.insert(ServerMisc::kBloomFiltersKey, logFilter->broadcast.stats());
         m[myKey] = mm;
         v = m;
     } else {
         // runtime catch if we introduce a change to the stats map layout that breaks the above assumptions
         Warning()  << "Expected ServerBase::stats to return a map with a single sub-map in it. Unable to insert "
-                   << "\"bloom filters\" key into stats map. FIXME!";
+                   << "\"" << ServerMisc::kBloomFiltersKey << "\" key into stats map. FIXME!";
     }
     return v;
 }
@@ -1590,13 +1590,17 @@ QVariantMap Server::LogFilter::Broadcast::stats() const {
         { "valid", fail.isValid() },
         { "count", qulonglong(fail.count()) },
         { "capacity", qulonglong(fail.capacity()) },
-        { "memUsage", qulonglong(fail.memoryUsage()) }
+        { "memUsage", qulonglong(fail.memoryUsage()) },
+        { "+hits", qulonglong(fail.hits()) },
+        { "-misses", qulonglong(fail.misses()) },
     }},
     {"broadcast success", QVariantMap{
         { "valid", success.isValid() },
         { "count", qulonglong(success.count()) },
         { "capacity", qulonglong(success.capacity()) },
-        { "memUsage", qulonglong(success.memoryUsage()) }
+        { "memUsage", qulonglong(success.memoryUsage()) },
+        { "+hits", qulonglong(success.hits()) },
+        { "-misses", qulonglong(success.misses()) },
     }}};
 }
 void Server::LogFilter::Broadcast::onNewBlock()
@@ -1652,7 +1656,7 @@ void Server::rpc_blockchain_transaction_broadcast(Client *c, const RPC::Message 
                 // This "logFilter" mechanism was added in Fulcrum 1.2.5 to suppress repeated Mist Miner broadcast fail
                 // spam from appearing in the log.  We basically observed that the Mist Miners keep spamming the same
                 // tx's over and over again.  So we simply take the first 1024 bytes of the tx, hash that and use a
-                // rolling bloom filter to keep track of tx's we've seen (bloom filter size: 4096).  In this way, we
+                // rolling bloom filter to keep track of tx's we've seen (bloom filter size: 16384).  In this way, we
                 // don't produce duplicate log messages in the default Log() for the same tx broadcast failure. (But we
                 // do still produce Debug() log messages, if debug logging is enabled).
                 QByteArray logLine;

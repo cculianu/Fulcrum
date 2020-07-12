@@ -155,9 +155,11 @@ bool RollingBloomFilter::contains(const byte *bytes, size_t len) const {
         /* If the relevant bit is not set in either data[pos & ~1] or data[pos |
          * 1], the filter does not contain vKey */
         if (!(((data[pos & ~1] | data[pos | 1]) >> bit) & 1)) {
+            ++nMisses;
             return false;
         }
     }
+    ++nHits;
     return true;
 }
 

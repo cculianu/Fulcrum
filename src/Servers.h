@@ -443,8 +443,8 @@ protected:
             mutable std::mutex lock;
             // NOTE: the below must only be accessed with .lock held
             RollingBloomFilter
-                success {1024, 0.000001}, ///< ~11042 bytes - this filter resets with each new block found
-                fail    {4096, 0.000001}; ///< ~44168 bytes - this filter does not reset with each new block found
+                success { 1024, 0.000001}, ///<  ~11042 bytes - this filter resets with each new block found
+                fail    {16384, 0.000001}; ///< ~176672 bytes - this filter does not reset with each new block found
         public:
             void operator()(bool isSuccess, const QByteArray &logLine, const QByteArray &key);
             QVariantMap stats() const;

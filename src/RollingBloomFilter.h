@@ -111,6 +111,11 @@ public:
     /// before the filter will roll over.
     unsigned capacity() const { return unsigned(nEntriesPerGeneration * 2); }
 
+    /// Returns the number of times contains() returned true. This value is not reset across resets.
+    unsigned hits() const { return nHits; }
+    /// Returns the number of times contains() returned false. This value is not reset across resets.
+    unsigned misses() const { return nMisses; }
+
     void reset(); ///< clears the filter of all insertions (but keeps it valid)
 
     /// Invalid RollingBloomFilter occurs if pathological parameters are passed
@@ -135,4 +140,7 @@ private:
     std::vector<uint64_t> data;
     uint32_t nTweak{};
     int nHashFuncs{1};
+
+    // stats, added by Calin
+    mutable uint32_t nHits{}, nMisses{};
 };

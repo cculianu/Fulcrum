@@ -377,7 +377,7 @@ auto SrvMgr::stats() const -> Stats
             // remove the "bloom filters" submap -- which is the same exact info for each server... we will put it at top level
             QVariantMap m = server->statsSafe(timeout).toMap();
             if (QVariantMap m2 = m.isEmpty() ? QVariantMap{} : m[m.firstKey()].toMap(); !m2.isEmpty()) {
-                const auto kBloomFilters = "bloom filters";
+                constexpr auto kBloomFilters = ServerMisc::kBloomFiltersKey;
                 // unconditionally remove the "bloom filters" key, and remember it if first time through
                 if (QVariant val = m2.take(kBloomFilters); !val.isNull() && bloomFilters.isEmpty())
                     bloomFilters[kBloomFilters] = val;
