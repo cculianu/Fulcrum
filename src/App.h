@@ -117,6 +117,9 @@ private:
     static NameFuncMap registeredTests, registeredBenches;
     static void registerTestBenchCommon(const char *fname, const char *brief, NameFuncMap &map,
                                         const NameFuncMap::key_type &name, const NameFuncMap::mapped_type &func);
+    /// Call this at app init and/or after the App object is initialized to undo the locale damage that Qt does
+    /// for the C library for number formatting. Previous to this, this could break the JSON serializer.
+    static void setCLocale();
 };
 
 inline App *app() { return App::globalInstance(); }

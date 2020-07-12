@@ -36,6 +36,7 @@
 #include <QSslSocket>
 
 #include <array>
+#include <clocale>
 #include <csignal>
 #include <cstdlib>
 #include <list>
@@ -47,6 +48,7 @@ App *App::_globalInstance = nullptr;
 App::App(int argc, char *argv[])
     : QCoreApplication (argc, argv), tpool(std::make_unique<ThreadPool>(this))
 {
+    RAII localeParanoia([]{setCLocale();}, []{setCLocale();}); // enforce C locale so JSON doesn't break
     assert(!_globalInstance);
     _globalInstance = this;
     register_MetaTypes();
@@ -1107,4 +1109,10 @@ auto App::registerBench(const QString &name, const std::function<void()> &func) 
 {
     registerTestBenchCommon(__func__, "bench", registeredBenches, name, func);
     return {};
+}
+
+void App::setCLocale()
+{
+    std::setlocale(LC_ALL, "C");
+    std::setlocale(LC_NUMERIC, "C");
 }
