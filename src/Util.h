@@ -43,11 +43,6 @@
 
 class App;
 
-/****
- * Loggers.
- * Declared first as some templates in Util use these.
- * Scroll down in this file for namespace Util..
- ****/
 #if !defined(_MSC_VER) && (defined(__clang__) || defined(__GNUC__))
 #define ATTR_PRINTF(fmt, arg) __attribute__((format(printf, fmt, arg)))
 #else
@@ -263,7 +258,7 @@ namespace Util {
     }
 
     template <typename Map>
-    Map & updateMap(Map & map, const Map &updates) {
+    Map & updateMap(Map &map, const Map &updates) {
         for (auto it = updates.cbegin(); it != updates.cend(); ++it) {
             map.insert(it.key(), it.value());
         }

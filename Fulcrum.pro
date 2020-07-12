@@ -185,6 +185,7 @@ SOURCES += \
     Options.cpp \
     PeerMgr.cpp \
     RecordFile.cpp \
+    RollingBloomFilter.cpp \
     RPC.cpp \
     RPCMsgId.cpp \
     ServerMisc.cpp \
@@ -197,7 +198,6 @@ SOURCES += \
     Version.cpp \
     WebSocket.cpp \
     register_MetaTypes.cpp
-
 
 HEADERS += \
     AbstractConnection.h \
@@ -222,6 +222,7 @@ HEADERS += \
     Options.h \
     PeerMgr.h \
     RecordFile.h \
+    RollingBloomFilter.h \
     RPC.h \
     RPCMsgId.h \
     ServerMisc.h \

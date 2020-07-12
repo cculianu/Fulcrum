@@ -852,9 +852,17 @@ Server::Server(SrvMgr *sm, const QHostAddress &a, quint16 p, const std::shared_p
     : ServerBase(sm, StaticData::methodMap, StaticData::dispatchTable, a, p, opts, s, bdm)
 {
     StaticData::init(); // only does something first time it's called, otherwise a no-op
+    logFilter = weakLogFilter.lock();
+    if (!logFilter) {
+        assert(!qApp || QThread::currentThread() == qApp->thread());
+        // create singleton for all instances -- singleton will be cleaned up when last instance is deleted
+        weakLogFilter = logFilter = std::make_shared<LogFilter>();
+        assert(bool(logFilter));
+    }
     // re-set name for debug/logging
     resetName();
     setMaxPendingConnections(std::max(options->maxPendingConnections, options->minMaxPendingConnections)); // default in Options is 60 pending connections
+    connect(this, &Server::newHeader, this, [this]{ logFilter->broadcast.onNewBlock(); }, Qt::QueuedConnection);
 }
 
 Server::~Server() { stop(); }
@@ -862,6 +870,25 @@ Server::~Server() { stop(); }
 QString Server::prettyName() const
 {
     return (usesWS ? QStringLiteral("Ws%1") : QStringLiteral("Tcp%1")).arg(AbstractTcpServer::prettyName());
+}
+
+/// override from base -- we add custom stats for things like the bloom filter stats, etc
+QVariant Server::stats() const
+{
+    QVariant v = ServerBase::stats();
+    QVariantMap m = v.toMap();
+    const QString myKey = m.size() != 1 ? QString{} : m.firstKey();
+    if (auto mm = m.value(myKey).toMap(); !mm.isEmpty()) {
+        // unite whatever base class created as a map with the bloom filter info map
+        mm.insert("bloom filters", logFilter->broadcast.stats());
+        m[myKey] = mm;
+        v = m;
+    } else {
+        // runtime catch if we introduce a change to the stats map layout that breaks the above assumptions
+        Warning()  << "Expected ServerBase::stats to return a map with a single sub-map in it. Unable to insert "
+                   << "\"bloom filters\" key into stats map. FIXME!";
+    }
+    return v;
 }
 
 void Server::rpc_server_add_peer(Client *c, const RPC::Message &m)
@@ -1529,6 +1556,57 @@ void Server::impl_sh_unsubscribe(Client *c, const RPC::Message &m, const HashX &
     emit c->sendResult(m.id, QVariant(result));
 }
 
+/* static */ std::weak_ptr<Server::LogFilter> Server::weakLogFilter;
+
+void Server::LogFilter::Broadcast::operator()(bool isSuccess, const QByteArray &logLine, const QByteArray &key)
+{
+    // The below scheme checks the appropriate bloom filter based on `isSuccess` for key (if key is not empty)
+    // and if it's in the filter, it logs to Debug(), otherwise it logs to Log()
+    auto [doLog, isDebug] = [&]() -> std::pair<bool, bool> {
+        std::unique_lock g(lock);
+        auto & which = isSuccess ? success : fail;
+        if (key.isEmpty() || !which.contains(key)) {
+            // log the line if it's not already been logged (this prevents log spam abuse from malicious clients)
+            if (!key.isEmpty())
+                which.insert(key);
+            return {true, false};
+        } else if (Debug::isEnabled()) {
+            // even if suppressed, log it anyway as debug log, iff debug is enabled
+            return {true, true};
+        }
+        return {false, false};
+    }();
+    if (doLog) {
+        if (!isDebug)
+            Log() << QString(logLine);
+        else
+            Debug() << QString(logLine);
+    }
+}
+QVariantMap Server::LogFilter::Broadcast::stats() const {
+    std::unique_lock g(lock);
+    return QVariantMap{
+    {"broadcast fail" , QVariantMap{
+        { "valid", fail.isValid() },
+        { "count", qulonglong(fail.count()) },
+        { "capacity", qulonglong(fail.capacity()) },
+        { "memUsage", qulonglong(fail.memoryUsage()) }
+    }},
+    {"broadcast success", QVariantMap{
+        { "valid", success.isValid() },
+        { "count", qulonglong(success.count()) },
+        { "capacity", qulonglong(success.capacity()) },
+        { "memUsage", qulonglong(success.memoryUsage()) }
+    }}};
+}
+void Server::LogFilter::Broadcast::onNewBlock()
+{
+    std::unique_lock g(lock);
+    // reset the broadcast success filter with each block found
+    if (success.count())
+        success.reset();
+}
+
 void Server::rpc_blockchain_transaction_broadcast(Client *c, const RPC::Message &m)
 {
     QVariantList l = m.paramsList();
@@ -1542,7 +1620,10 @@ void Server::rpc_blockchain_transaction_broadcast(Client *c, const RPC::Message 
             ++c->info.nTxSent;
             c->info.nTxBytesSent += unsigned(size);
             emit broadcastTxSuccess(unsigned(size));
-            Log() << "Broadcast tx for client " << c->id << ", size: " << size << " bytes, response: " << ret.toString();
+            QByteArray logLine;
+            QTextStream{&logLine, QIODevice::WriteOnly}
+                << "Broadcast tx for client " << c->id << ", size: " << size << " bytes, response: " << ret.toString();
+            logFilter->broadcast(true, logLine, ret.toString().toUtf8());
             static const Version FirstNonVulberableECVersion(3,3,4);
             if (const auto uaVersion = c->info.uaVersion(); uaVersion.isValid() && uaVersion < FirstNonVulberableECVersion) {
                 // The below is to warn old clients that they are vulnerable to a phishing attack.
@@ -1555,16 +1636,30 @@ void Server::rpc_blockchain_transaction_broadcast(Client *c, const RPC::Message 
                       "Download the latest version from this web site ONLY:<br/>"
                       "https://electroncash.org/"
                       "<br/><br/>";
-                Log() << "Client " << c->id << " has a vulnerable Electron Cash (" << uaVersion.toString()
-                      << "); upgrade warning HTML sent to client";
+                logLine.clear();
+                QTextStream{&logLine, QIODevice::WriteOnly}
+                    << "Client " << c->id << " has a vulnerable Electron Cash (" << uaVersion.toString()
+                    << "); upgrade warning HTML sent to client";
+                logFilter->broadcast(true, logLine, logLine);
             }
             return ret;
         },
         // error func, throw an RPCError that's formatted in a particular way
-        [c](const RPC::Message & errResponse) {
+        [c, this, txkey = Util::ParseHexFast(rawtxhex.left(2048))] (const RPC::Message & errResponse) {
             ++c->info.nTxBroadcastErrors;
             const auto errorMessage = errResponse.errorMessage();
-            Log() << "Broadcast fail for client " << c->id << ": " << errorMessage.left(120);
+            {
+                // This "logFilter" mechanism was added in Fulcrum 1.2.5 to suppress repeated Mist Miner broadcast fail
+                // spam from appearing in the log.  We basically observed that the Mist Miners keep spamming the same
+                // tx's over and over again.  So we simply take the first 1024 bytes of the tx, hash that and use a
+                // rolling bloom filter to keep track of tx's we've seen (bloom filter size: 4096).  In this way, we
+                // don't produce duplicate log messages in the default Log() for the same tx broadcast failure. (But we
+                // do still produce Debug() log messages, if debug logging is enabled).
+                QByteArray logLine;
+                QTextStream{&logLine, QIODevice::WriteOnly}
+                    << "Broadcast fail for client " << c->id << ": " << errorMessage.left(120);
+                logFilter->broadcast(false, logLine, txkey);
+            }
             throw RPCError(QString("the transaction was rejected by network rules.\n\n"
                                    // Note: ElectrumX here would also spit back the [txhex] after the final newline.
                                    // We do not do that, since it's a waste of bandwidth and also Electron Cash

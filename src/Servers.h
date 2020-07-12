@@ -22,6 +22,7 @@
 #include "Mixins.h"
 #include "Options.h"
 #include "PeerMgr.h"
+#include "RollingBloomFilter.h"
 #include "RPC.h"
 #include "Util.h"
 #include "Version.h"
@@ -33,6 +34,7 @@
 #include <QVector>
 
 #include <memory> // for shared_ptr
+#include <mutex>
 #include <optional>
 #include <shared_mutex>
 #include <type_traits>
@@ -327,6 +329,9 @@ public:
 
     virtual QString prettyName() const override;
 
+    /// override from base -- we add custom stats for things like the bloom filter stats, etc
+    QVariant stats() const override;
+
 signals:
     /// Connected to SrvMgr parent's "newHeader" signal (which itself is connected to Controller's newHeader).
     /// Used to notify clients that are subscribed to headers that a new header has arrived.
@@ -429,6 +434,25 @@ private:
     QVariantList getHistoryCommon(const HashX & sh, bool mempoolOnly);
 
     double lastSubsWarningPrintTime = 0.; ///< used internally to rate-limit "max subs exceeded" message spam to log
+
+protected:
+    /// Rolling bloom filters used by blockchain.transaction.broadcast to suppress repetitive messages to the log.
+    /// There is 1 of these shared amongst all intances of this class, however access to it is thread-safe.
+    struct LogFilter {
+        class Broadcast {
+            mutable std::mutex lock;
+            // NOTE: the below must only be accessed with .lock held
+            RollingBloomFilter
+                success {1024, 0.000001}, ///< ~11042 bytes - this filter resets with each new block found
+                fail    {4096, 0.000001}; ///< ~44168 bytes - this filter does not reset with each new block found
+        public:
+            void operator()(bool isSuccess, const QByteArray &logLine, const QByteArray &key);
+            QVariantMap stats() const;
+            void onNewBlock();
+        } broadcast;
+    };
+    static std::weak_ptr<LogFilter> weakLogFilter;
+    std::shared_ptr<LogFilter> logFilter;
 };
 
 /// SSL version of the above Server class that just wraps tcp sockets with a QSslSocket.

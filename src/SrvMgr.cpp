@@ -370,8 +370,25 @@ auto SrvMgr::stats() const -> Stats
     m["bannerFile"] = options->bannerFile.toUtf8(); // so we get a nice 'null' if not specified
     QVariantMap serversMap;
     const int timeout = kDefaultTimeout / qMax(int(servers.size()), 1);
-    for (const auto & server : servers)
-        Compat::MapUnite(serversMap, server->statsSafe(timeout).toMap());
+    // regular servers
+    {
+        QVariantMap bloomFilters;
+        for (const auto & server : servers) {
+            // remove the "bloom filters" submap -- which is the same exact info for each server... we will put it at top level
+            QVariantMap m = server->statsSafe(timeout).toMap();
+            if (QVariantMap m2 = m.isEmpty() ? QVariantMap{} : m[m.firstKey()].toMap(); !m2.isEmpty()) {
+                const auto kBloomFilters = "bloom filters";
+                // unconditionally remove the "bloom filters" key, and remember it if first time through
+                if (QVariant val = m2.take(kBloomFilters); !val.isNull() && bloomFilters.isEmpty())
+                    bloomFilters[kBloomFilters] = val;
+                m[m.firstKey()] = m2; // re-save the map without "bloom filters" submap
+            }
+            Compat::MapUnite(serversMap, m);
+        }
+        // if the shared "bloom filters" submap was found, put it at top level
+        Compat::MapUnite(serversMap, bloomFilters);
+    }
+    // admin servers
     for (const auto & server : adminServers)
         Compat::MapUnite(serversMap, server->statsSafe(timeout).toMap());
     m["Servers"] = serversMap;
