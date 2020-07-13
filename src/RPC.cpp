@@ -733,13 +733,9 @@ namespace RPC {
                             static const auto MakeErrMsg = [](const QString & value) {
                                 return QString("Unsupported \"Connection: %1\" header field in response").arg(value);
                             };
-                            if (value.toLower() == s_close) {
-                                Fatal() << "\n\nThe remote bitcoind is asserting \"Connection: close\" in its response header.\n"
-                                        << APPNAME << " requires persistent connections in order to operate efficiently.\n"
-                                        << "Please contact the developers of the bitcoin daemon software you are using and\n"
-                                        << "request that they implement HTTP/1.1 persistent connections as per RFC 2616.\n\n";
-                                throw Exception(MakeErrMsg(value));
-                            } else
+                            if (value.toLower() == s_close && sm->status == 200)
+                                Warning() << MakeErrMsg(value);
+                            else
                                 DebugM(MakeErrMsg(value));
                         }
                     } else {
