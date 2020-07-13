@@ -792,6 +792,7 @@ namespace RPC {
             Error() << prettyName() << " fatal error: " << e.what();
             do_disconnect();
             status = Bad;
+            if (sm) sm->clear(); // ensure state machine is "fresh" if we get here
         }
     }
     QByteArray HttpConnection::wrapForSend(const QByteArray &data)

@@ -238,6 +238,7 @@ void AbstractConnection::on_connected()
 
 void AbstractConnection::on_disconnected()
 {
+    writeBackLog = 0;
     ++nDisconnects;
 }
 
