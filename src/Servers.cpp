@@ -1649,7 +1649,11 @@ void Server::rpc_blockchain_transaction_broadcast(Client *c, const RPC::Message 
             return ret;
         },
         // error func, throw an RPCError that's formatted in a particular way
-        [c, this, txkey = Util::ParseHexFast(rawtxhex.left(2048))] (const RPC::Message & errResponse) {
+        // -- Note we need the txkey for broadcast fail filtering -- the key is a single sha256 of the tx bytes, but
+        // -- just the first 16 bytes of this hash are taken. Keeping the key compact is essential because the bloom
+        // -- filter may end up applying murmur3 hash to the entire key we give it from 20-50 times!
+        [c, this, txkey = (!rawtxhex.isEmpty() ? BTC::HashOnce(Util::ParseHexFast(rawtxhex)) : QByteArrayLiteral("xx")).left(16)]
+        (const RPC::Message & errResponse) {
             ++c->info.nTxBroadcastErrors;
             const auto errorMessage = errResponse.errorMessage();
             {
