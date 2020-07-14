@@ -589,6 +589,7 @@ namespace {
         }
         Log() << "Read " << total << " bytes total";
         std::vector<QVariant> parsed;
+        parsed.reserve(fileData.size());
         int iters = 10;
         {
             auto itenv = std::getenv("ITERS");
@@ -614,6 +615,7 @@ namespace {
         Log() << "Custom lib parse - total: " << (tf-t0) << " secs" << " - per-iter: "
               << QString::asprintf("%1.16g", ((tf-t0)/iters) * 1e3) << " msec";
         parsed.clear();
+        parsed.reserve(fileData.size());
 
         Log() << "---";
         Log() << "Benching Qt Json parse: Iterating " << iters << " times ...";
