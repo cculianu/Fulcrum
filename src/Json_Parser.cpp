@@ -353,6 +353,52 @@ jtokentype getJsonToken(QByteArray &tokenVal, unsigned &consumed, const char *ra
         constexpr int reserveSize = 0; // set to 0 to not pre-alloc anything
         ++raw;                                // skip "
 
+        // First, try the fast path which doesn't use the (slow) JSONUTF8StringFilter.
+        // This is a common-case optimization: we optimistically scan to ensure string
+        // is a simple ascii string with no unicode and no escapes, and if so, return it.
+        constexpr bool tryFastPath = true;
+        if constexpr (tryFastPath) {
+            enum class FastPath {
+                NotProcessed, Processed, Error
+            };
+
+            static const auto FastPathParseSimpleString = [](QByteArray &out, const char *cur, const char * const end) -> FastPath {
+                const char * const begin = cur;
+                for (; cur < end; ++cur) {
+                    const uint8_t ch = uint8_t(*cur);
+                    if (ch == '"') {
+                        // base case, simple string end at '"' -- copy string contents before the quote
+                        const int len = int(cur - begin);
+                        out = QByteArray(begin, len);
+                        return FastPath::Processed;
+                    } else if (ch == '\\') {
+                        // has escapes -- cannot process as simple string, must take slow path
+                        return FastPath::NotProcessed;
+                    } else if (ch < 0x20) {
+                        // is not legal JSON because < 0x20
+                        return FastPath::Error;
+                    } else if (ch >= 0x80) {
+                        // has a funky unicode character.. must take slow path
+                        return FastPath::NotProcessed;
+                    }
+                }
+                // premature string end
+                return FastPath::Error;
+            };
+            if (const auto res = FastPathParseSimpleString(tokenVal, raw, end); res == FastPath::Processed) {
+                // fast path taken -- the string had no embedded escapes or non-ascii characters, return
+                // early since FastPathParseSimpleString already set tokenVal for us, simply calculate
+                // "consumed" as (raw-rawStart) + tokenVal.length() + 1 (+1 is for the closing quote)
+                consumed = (raw + tokenVal.length() + 1) - rawStart;
+                return JTOK_STRING;
+            } else if (res == FastPath::Error) {
+                // the fast path encountered premature string end or char < 0x20 -- abort early
+                return JTOK_ERR;
+            }
+        }
+        // -----
+        // Slow path -- scan 1 character at a time and place the characters into the JSONUTF8StringFilter
+        // -----
         QByteArray valStr;
         if constexpr (reserveSize > 0)
             valStr.reserve(reserveSize);
