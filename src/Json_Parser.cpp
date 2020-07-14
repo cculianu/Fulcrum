@@ -479,7 +479,7 @@ jtokentype getJsonToken(QByteArray &tokenVal, unsigned &consumed, const char *ra
     }
 }
 
-/// Note: The QByteArrays in this struct may be "views" or shallow copies into the original `bytes` buffer
+/// Note: The QByteArrays in this struct may be "views of" or shallow copies of the original `bytes` buffer
 /// being parsed (e.g. via QByteArray::fromRawData) -- so when producing the final result we need to always
 /// take deep copies of any QByteArray data.
 struct Container {
@@ -497,9 +497,9 @@ struct Container {
     //
     // We could have also used a std::variant here but that is not implemented yet on all compilers
     // that we target.
-    QByteArray data; // only for Num, Str -- may be a shallow copy into the `bytes` QByteArray passed to Json::detail::parse()
+    QByteArray data; // only for Num, Str -- may be a shallow copy pointing into the `bytes` QByteArray passed to Json::detail::parse()
     std::vector<Container> values; // only for Arr
-    // Note that the below pair.first QByteArray may be a shallow copy into the `bytes` QByteArray
+    // Note that the below pair.first QByteArray may be a shallow copy pointing into the `bytes` QByteArray
     std::vector<std::pair<QByteArray, Container>> entries; // only for Obj
     void clear() { data.clear(); values.clear(); entries.clear(); typ = Null; }
     void setArr() { clear(); typ = Arr; }
@@ -551,7 +551,7 @@ QVariant Container::toVariant() const {
         // unless we do this C-string syntax to construct the QString.
         // QString quirks, see:  https://github.com/qt/qtbase/blob/ba3b53cb501a77144aa6259e48a8e0edc3d1481d/src/corelib/text/qstring.h#L701
         //              versus:  https://github.com/qt/qtbase/blob/ba3b53cb501a77144aa6259e48a8e0edc3d1481d/src/corelib/text/qstring.h#L709
-        ret = QString::fromUtf8(data.constData(), data.size()); // ensure DEEP COPY
+        ret = QString::fromUtf8(data.constData(), data.size());
         break;
     case Arr: {
         QVariantList vl;
@@ -566,7 +566,7 @@ QVariant Container::toVariant() const {
         // NB: pair.first in entries may be a deep or shallow copy of the data in `bytes`
         QVariantMap vm;
         for (const auto & [key, cont] : entries) {
-            // We use this C string syntax because it's faster. (QString quirks)
+            // We use this C string syntax because it's faster & more accurate. (QString quirks)
             vm[QString::fromUtf8(key.constData(), key.size())] = cont.toVariant();
         }
         ret = vm;
