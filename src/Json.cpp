@@ -671,7 +671,7 @@ namespace {
         {
             const auto expect1 = "[\"astring\",\"anotherstring\",\"laststring\",null]";
             const auto expect2 = "[\"astringl1\",\"anotherstringl2\",\"laststringl3\",\"\"]";
-            const auto expect3 = "{\"7 item list\":[1,true,false,1.4e-07,null,{},[-777777.293678102,null,"
+            const auto expect3 = "{\"7 item list\":[1,true,false,1.4e-07,null,{},[-777777.293678102,null,1.000000000000001,"
                                  "-999999999999999999]],\"a bytearray\":\"bytearray\",\"a null\":null,"
                                  "\"a null bytearray\":null,\"a null string\":\"\",\"a string\":\"hello\","
                                  "\"an empty bytearray\":null,\"an empty string\":\"\",\"another empty bytearray\":"
@@ -687,6 +687,8 @@ namespace {
             v.setValue(sl);
             Log() << "QStringList -> JSON: " << (json=toUtf8(v, true, SerOption::BareNullOk));
             if (json != expect2) throw Exception(QString("Json does not match, excpected: %1").arg(expect2));
+            Log() << "Parse \"1.01000\": " << (json=toUtf8(parseUtf8("1.01000", ParseOption::AcceptAnyValue), true, SerOption::BareNullOk));
+            if (json != "1.01") throw Exception(QString("Json does not match, excpected: %1").arg("1.01"));
             QVariantHash h;
             QByteArray empty; empty.resize(10); empty.resize(0);
             h["key1"] = 1.2345;
@@ -706,7 +708,7 @@ namespace {
                {"empty balist", QVariant::fromValue(QByteArrayList{})},
                {"7 item list", QVariantList{{
                     1,true,false,14e-8,QVariant{}, QVariantMap{}, QVariantList{{-777777.293678102, QVariant{},
-                    qlonglong(-999999999999999999)}}}},
+                    1.000000000000001, qlonglong(-999999999999999999)}}}},
                },
                {"u64_max", qulonglong(18446744073709551615ULL)},
                {"z_i64_min", qlonglong(0x8000000000000000LL)},
