@@ -100,7 +100,7 @@ inline bool json_isdigit(uint8_t ch) noexcept { return ch >= '0' && ch <= '9'; }
 // convert hexadecimal (big endian) string to unsigned integer (machine byte orer)
 const char *hextouint(const char *first, const char *last, unsigned &out) noexcept
 {
-    unsigned result = 0;
+    out = 0;
     for (; first < last; ++first)
     {
         int digit;
@@ -116,9 +116,8 @@ const char *hextouint(const char *first, const char *last, unsigned &out) noexce
         else
             break;
 
-        result = 16 * result + digit;
+        out = 16 * out + digit;
     }
-    out = result;
 
     return first;
 }
@@ -250,28 +249,28 @@ jtokentype getJsonToken(QByteArray &tokenVal, unsigned &consumed, const char *ra
 
     case '{':
         ++raw;
-        consumed = (raw - rawStart);
+        consumed = raw - rawStart;
         return JTOK_OBJ_OPEN;
     case '}':
         ++raw;
-        consumed = (raw - rawStart);
+        consumed = raw - rawStart;
         return JTOK_OBJ_CLOSE;
     case '[':
         ++raw;
-        consumed = (raw - rawStart);
+        consumed = raw - rawStart;
         return JTOK_ARR_OPEN;
     case ']':
         ++raw;
-        consumed = (raw - rawStart);
+        consumed = raw - rawStart;
         return JTOK_ARR_CLOSE;
 
     case ':':
         ++raw;
-        consumed = (raw - rawStart);
+        consumed = raw - rawStart;
         return JTOK_COLON;
     case ',':
         ++raw;
-        consumed = (raw - rawStart);
+        consumed = raw - rawStart;
         return JTOK_COMMA;
 
     case 'n':
@@ -279,15 +278,15 @@ jtokentype getJsonToken(QByteArray &tokenVal, unsigned &consumed, const char *ra
     case 'f':
         if (0 == std::strncmp(raw, "null", 4)) {
             raw += 4;
-            consumed = (raw - rawStart);
+            consumed = raw - rawStart;
             return JTOK_KW_NULL;
         } else if (0 == std::strncmp(raw, "true", 4)) {
             raw += 4;
-            consumed = (raw - rawStart);
+            consumed = raw - rawStart;
             return JTOK_KW_TRUE;
         } else if (0 == std::strncmp(raw, "false", 5)) {
             raw += 5;
-            consumed = (raw - rawStart);
+            consumed = raw - rawStart;
             return JTOK_KW_FALSE;
         } else
             return JTOK_ERR;
@@ -349,7 +348,7 @@ jtokentype getJsonToken(QByteArray &tokenVal, unsigned &consumed, const char *ra
         tokenVal = QByteArray::fromRawData(first, int(raw - first));  // SHALLOW COPY
         consumed = raw - rawStart;
         return JTOK_NUMBER;
-        }
+    }
 
     case '"': {
         constexpr int reserveSize = 0; // set to 0 to not pre-alloc anything
@@ -602,7 +601,7 @@ bool parse(QVariant &out, const QByteArray &bytes)
     unsigned consumed;
     jtokentype tok = JTOK_NONE;
     jtokentype last_tok = JTOK_NONE;
-    const char *raw = bytes.data();
+    const char *raw = bytes.constData();
     const char * const end = raw + bytes.size();
     do {
         using VType = Container::Typ;
@@ -691,7 +690,7 @@ bool parse(QVariant &out, const QByteArray &bytes)
             else
                 setExpect(ARR_VALUE);
             break;
-            }
+        }
 
         case JTOK_OBJ_CLOSE:
         case JTOK_ARR_CLOSE: {
@@ -707,7 +706,7 @@ bool parse(QVariant &out, const QByteArray &bytes)
             clearExpect(OBJ_NAME);
             setExpect(NOT_VALUE);
             break;
-            }
+        }
 
         case JTOK_COLON: {
             if (UNLIKELY(stack.empty()))
@@ -719,7 +718,7 @@ bool parse(QVariant &out, const QByteArray &bytes)
 
             setExpect(VALUE);
             break;
-            }
+        }
 
         case JTOK_COMMA: {
             if (UNLIKELY(stack.empty() || last_tok == JTOK_COMMA || last_tok == JTOK_ARR_OPEN))
@@ -731,7 +730,7 @@ bool parse(QVariant &out, const QByteArray &bytes)
             else
                 setExpect(ARR_VALUE);
             break;
-            }
+        }
 
         case JTOK_KW_NULL:
         case JTOK_KW_TRUE:
@@ -770,7 +769,7 @@ bool parse(QVariant &out, const QByteArray &bytes)
 
             setExpect(NOT_VALUE);
             break;
-            }
+        }
 
         case JTOK_NUMBER: {
             Container tmpVal{VType::Num, std::move(tokenVal), {}, {}};
@@ -794,7 +793,7 @@ bool parse(QVariant &out, const QByteArray &bytes)
 
             setExpect(NOT_VALUE);
             break;
-            }
+        }
 
         case JTOK_STRING: {
             if (expect(OBJ_NAME)) {
@@ -826,7 +825,7 @@ bool parse(QVariant &out, const QByteArray &bytes)
 
             setExpect(NOT_VALUE);
             break;
-            }
+        }
 
         default:
             return false;
