@@ -526,27 +526,28 @@ QVariant Container::toVariant() const {
         // NB: for `Num` type, `data` is always a shallow copy of the data in the original `bytes` arg
         if (UNLIKELY(data.isEmpty())) {
             // this should never happen
-            throw Json::ParseError("Data is empty for a nested variant of type Num");
+            throw Json::ParseError("Data is empty for a nested item of type Num");
         }
         // NOTE .toDouble() is unsafe on raw shallow QByteArray - see QT-BUG 85580 and 86681.
         // Also note that .toLongLong() and .toULongLong() make an implicit deep copy of the data.
         // Since we want to avoid excess mallocs, we take a copy ourselves on the stack of the C-string
         // data to ensure NUL termination, and then we call into the C functions for parsing ourselves.
-        // 31 bytes are more than enough for doubles; we won't support excessively long notations.
-        // See: https://stackoverflow.com/questions/1701055/what-is-the-maximum-length-in-chars-needed-to-represent-any-double-value
-        std::array<char, 32> copy;
-        const int len = std::min(int(copy.size()-1), int(data.size()));
-        std::memcpy(copy.data(), data.constData(), len);
-        copy[len] = 0; // ensure nul termination
-        const char * const begin = copy.data(); char *parseEnd = nullptr;
+        // - 47 chars are more than enough for doubles; we won't support excessively long notations.
+        //   See: https://stackoverflow.com/questions/1701055/what-is-the-maximum-length-in-chars-needed-to-represent-any-double-value
+        // - int64's need about ~22 bytes, so 47 is plenty
+        std::array<char, 48> dcopy;
+        const int len = std::min(int(dcopy.size()-1), int(data.size()));
+        std::memcpy(dcopy.data(), data.constData(), len);
+        dcopy[len] = 0; // ensure nul termination
+        const char * const begin = dcopy.data(); char *parseEnd = nullptr;
+        const auto HasChar = [begin, len](char c) { return std::memchr(begin, c, len) != nullptr; };
         bool ok;
-        if (data.contains('.') || data.contains('e') || data.contains('E')) {
+        if (HasChar('.') || HasChar('e') || HasChar('E')) {
             errno = 0; // NB: errno lives in thread-local storage so this is fine
             const double d = std::strtod(begin, &parseEnd);
             ok = !errno && parseEnd != begin; /* accept junk at end, just in case? */
-
             ret = d;
-        } else if (data.front() == '-') {
+        } else if (*begin == '-') {
             errno = 0; // NB: errno lives in thread-local storage so this is fine
             const auto ll = std::strtoll(begin, &parseEnd, 10);
             ok = !errno && parseEnd == begin + len; /* do not accept junk at end */
@@ -554,7 +555,6 @@ QVariant Container::toVariant() const {
             constexpr auto MIN = std::numeric_limits<qlonglong>::min(), MAX = std::numeric_limits<qlonglong>::max();
             if constexpr (MIN != std::numeric_limits<decltype(ll)>::min() || MAX != std::numeric_limits<decltype(ll)>::max())
                 ok = ok && ll >= MIN && ll <= MAX;
-
             ret = qlonglong(ll);
         } else {
             errno = 0; // NB: errno lives in thread-local storage so this is fine
@@ -564,12 +564,12 @@ QVariant Container::toVariant() const {
             constexpr auto MIN = std::numeric_limits<qulonglong>::min(), MAX = std::numeric_limits<qulonglong>::max();
             if constexpr (MIN != std::numeric_limits<decltype(ull)>::min() || MAX != std::numeric_limits<decltype(ull)>::max())
                 ok = ok && ull >= MIN && ull <= MAX;
-
             ret = qulonglong(ull);
         }
         if (UNLIKELY(!ok)) {
             // this should never happen
-            throw Json::ParseError(QString("Failed to parse a variant as a number: %1").arg(QString::fromUtf8(copy.data())));
+            throw Json::ParseError(QString("Failed to parse number from string: %1 (original: %2)")
+                                   .arg(begin).arg(QString::fromUtf8(data.constData(), data.size())));
         }
         break;
     }
