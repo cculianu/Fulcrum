@@ -68,7 +68,7 @@ public:
 
     /// Insert any vector of POD data e.g. vector<char>, vector<int64_t>, etc
     template <typename T>
-    std::enable_if_t<std::is_pod_v<T>, void>
+    std::enable_if_t<std::is_pod_v<T> && !std::is_pointer_v<T>, void>
     /* void */ insert(const std::vector<T> &vKey) {
         insert(reinterpret_cast<const byte *>(vKey.data()), vKey.size() * sizeof(T));
     }
@@ -81,15 +81,21 @@ public:
     void insert(const QByteArray &ba) {
         insert(reinterpret_cast<const byte *>(ba.constData()), static_cast<std::size_t>(ba.size()));
     }
+    /// for any POD data item char, int64_t, double, simple struct, etc
+    template <typename T>
+    std::enable_if_t<std::is_pod_v<T> && !std::is_pointer_v<T>, void>
+    /* void */ insert(const T &datum) {
+        insert(reinterpret_cast<const byte *>(&datum), sizeof(datum));
+    }
 
     /// Real implementation -- expects a std::byte array to operator on.
     bool contains(const byte *bytes, size_t len) const;
 
     // -- Convenient overloads for `contains` --
 
-    /// for any vector of POD data e.g. vector<char>, vector<int64_t>, etc
+    /// for any vector of POD data e.g. vector<char>, vector<int64_t>, vector<SomeStruct>, etc
     template <typename T>
-    std::enable_if_t<std::is_pod_v<T>, bool>
+    std::enable_if_t<std::is_pod_v<T> && !std::is_pointer_v<T>, bool>
     /* bool */ contains(const std::vector<T> &vKey) const {
         return contains(reinterpret_cast<const byte *>(vKey.data()), vKey.size() * sizeof(T));
     }
@@ -100,6 +106,12 @@ public:
     /// for QByteArray
     bool contains(const QByteArray &ba) const {
         return contains(reinterpret_cast<const byte *>(ba.constData()), static_cast<std::size_t>(ba.size()));
+    }
+    /// for any POD data item char, int64_t, double, simple struct, etc
+    template <typename T>
+    std::enable_if_t<std::is_pod_v<T> && !std::is_pointer_v<T>, bool>
+    /* bool */ contains(const T &datum) const {
+        return contains(reinterpret_cast<const byte *>(&datum), sizeof(datum));
     }
 
     /// Returns an imprecise estimate of the number of entries that have been
