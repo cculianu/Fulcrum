@@ -30,6 +30,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QLocale>
 #include <QRegExp>
 #include <QSslCipher>
 #include <QSslEllipticCurve>
@@ -40,6 +41,7 @@
 #include <csignal>
 #include <cstdlib>
 #include <list>
+#include <locale>
 #include <tuple>
 #include <utility>
 
@@ -48,7 +50,11 @@ App *App::_globalInstance = nullptr;
 App::App(int argc, char *argv[])
     : QCoreApplication (argc, argv), tpool(std::make_unique<ThreadPool>(this))
 {
-    RAII localeParanoia([]{setCLocale();}, []{setCLocale();}); // enforce C locale so JSON doesn't break
+    // Enforce "C" locale so JSON doesn't break. We do this because QCoreApplication
+    // may set the C locale to something unexpected which may break JSON number
+    // formatting & parsing.
+    RAII localeParanoia([]{setCLocale();}, []{setCLocale();});
+
     assert(!_globalInstance);
     _globalInstance = this;
     register_MetaTypes();
@@ -1113,6 +1119,12 @@ auto App::registerBench(const QString &name, const std::function<void()> &func) 
 
 void App::setCLocale()
 {
-    std::setlocale(LC_ALL, "C");
-    std::setlocale(LC_NUMERIC, "C");
+    try {
+        QLocale::setDefault(QLocale::c());
+        std::setlocale(LC_ALL, "C");
+        std::setlocale(LC_NUMERIC, "C");
+        std::locale::global(std::locale::classic());
+    } catch (const std::exception &e) {
+        Warning() << "Failed to set \"C\" locale: " << e.what();
+    }
 }

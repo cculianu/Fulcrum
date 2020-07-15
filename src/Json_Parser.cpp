@@ -25,6 +25,7 @@
 // file COPYING or https://opensource.org/licenses/mit-license.php.
 //
 #include "Json.h"
+#include "Json_Parser.h"
 #include "Util.h"
 
 #include <QMetaType>
@@ -32,8 +33,12 @@
 #include <QVariantList>
 #include <QVariantMap>
 
+#include <array>
+#include <cerrno>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <utility>
 #include <vector>
 
@@ -99,7 +104,7 @@ inline bool json_isdigit(uint8_t ch) noexcept { return ch >= '0' && ch <= '9'; }
 // convert hexadecimal (big endian) string to unsigned integer (machine byte orer)
 const char *hextouint(const char *first, const char *last, unsigned &out) noexcept
 {
-    unsigned result = 0;
+    out = 0;
     for (; first < last; ++first)
     {
         int digit;
@@ -115,9 +120,8 @@ const char *hextouint(const char *first, const char *last, unsigned &out) noexce
         else
             break;
 
-        result = 16 * result + digit;
+        out = 16 * out + digit;
     }
-    out = result;
 
     return first;
 }
@@ -131,7 +135,8 @@ class JSONUTF8StringFilter
 public:
     explicit JSONUTF8StringFilter(QByteArray &s) noexcept
         : str(s), is_valid(true), codepoint(0), state(0), surpair(0)
-    {}
+    { /* Note: this object must not clear the passed-in str */ }
+
     // Write single 8-bit char (may be part of UTF-8 sequence)
     void push_back(unsigned char ch)
     {
@@ -231,12 +236,12 @@ private:
     }
 };
 
-jtokentype getJsonToken(QByteArray &tokenVal, unsigned &consumed, const char *raw, const char *end)
+/// ** Note ** this may end up making `tokenVal` be a *shallow copy* that points into `raw`
+jtokentype getJsonToken(QByteArray &tokenVal, unsigned &consumed, const char *raw, const char * const end)
 {
-    tokenVal.clear();
     consumed = 0;
 
-    const char *rawStart = raw;
+    const char * const rawStart = raw;
 
     while (raw < end && (json_isspace(*raw)))          // skip whitespace
         ++raw;
@@ -248,28 +253,28 @@ jtokentype getJsonToken(QByteArray &tokenVal, unsigned &consumed, const char *ra
 
     case '{':
         ++raw;
-        consumed = (raw - rawStart);
+        consumed = raw - rawStart;
         return JTOK_OBJ_OPEN;
     case '}':
         ++raw;
-        consumed = (raw - rawStart);
+        consumed = raw - rawStart;
         return JTOK_OBJ_CLOSE;
     case '[':
         ++raw;
-        consumed = (raw - rawStart);
+        consumed = raw - rawStart;
         return JTOK_ARR_OPEN;
     case ']':
         ++raw;
-        consumed = (raw - rawStart);
+        consumed = raw - rawStart;
         return JTOK_ARR_CLOSE;
 
     case ':':
         ++raw;
-        consumed = (raw - rawStart);
+        consumed = raw - rawStart;
         return JTOK_COLON;
     case ',':
         ++raw;
-        consumed = (raw - rawStart);
+        consumed = raw - rawStart;
         return JTOK_COMMA;
 
     case 'n':
@@ -277,15 +282,15 @@ jtokentype getJsonToken(QByteArray &tokenVal, unsigned &consumed, const char *ra
     case 'f':
         if (0 == std::strncmp(raw, "null", 4)) {
             raw += 4;
-            consumed = (raw - rawStart);
+            consumed = raw - rawStart;
             return JTOK_KW_NULL;
         } else if (0 == std::strncmp(raw, "true", 4)) {
             raw += 4;
-            consumed = (raw - rawStart);
+            consumed = raw - rawStart;
             return JTOK_KW_TRUE;
         } else if (0 == std::strncmp(raw, "false", 5)) {
             raw += 5;
-            consumed = (raw - rawStart);
+            consumed = raw - rawStart;
             return JTOK_KW_FALSE;
         } else
             return JTOK_ERR;
@@ -344,19 +349,75 @@ jtokentype getJsonToken(QByteArray &tokenVal, unsigned &consumed, const char *ra
                 ++raw;
             }
         }
-        tokenVal.append(first, raw - first);  // assign chars to output buffer (which is pre-cleared)
+        tokenVal = QByteArray::fromRawData(first, int(raw - first));  // SHALLOW COPY
         consumed = raw - rawStart;
         return JTOK_NUMBER;
-        }
+    }
 
     case '"': {
         constexpr int reserveSize = 0; // set to 0 to not pre-alloc anything
         ++raw;                                // skip "
 
-        QByteArray valStr;
+        // First, try the fast path which doesn't use the (slow) JSONUTF8StringFilter.
+        // This is a common-case optimization: we optimistically scan to ensure string
+        // is a simple ascii string with no unicode and no escapes, and if so, return it.
+        // If we do encounter non-ascii or escapes, we accept the partial string into
+        // `tokenVal`, then we proceed to the slow path.  In most real-world JSON for
+        // this app, the fast path below is the only path taken and is the common-case.
+        constexpr bool tryFastPath = true;
+        if constexpr (tryFastPath) {
+            enum class FastPath {
+                Processed, NotFullyProcessed, Error
+            };
+
+            static const auto FastPathParseSimpleString = [](const char *& raw, const char * const end) -> FastPath {
+                for (; raw < end; ++raw) {
+                    const uint8_t ch = uint8_t(*raw);
+                    if (ch == '"') {
+                        // fast-path accept case: simple string end at " char
+                        return FastPath::Processed;
+                    } else if (ch == '\\') {
+                        // has escapes -- cannot process as simple string, must continue using slow path
+                        return FastPath::NotFullyProcessed;
+                    } else if (ch < 0x20) {
+                        // is not legal JSON because < 0x20
+                        return FastPath::Error;
+                    } else if (ch >= 0x80) {
+                        // has a funky unicode character.. must take slow path
+                        return FastPath::NotFullyProcessed;
+                    }
+                }
+                // premature string end
+                return FastPath::Error;
+            };
+            switch (const auto begin = raw; FastPathParseSimpleString(raw /*pass-by-ref*/, end)) {
+            case FastPath::Processed:
+                // fast path taken -- the string had no embedded escapes or non-ascii characters, return
+                // early, set tokenVal, set consumed. Note: raw now points to trailing " char
+                assert(*raw == '"');
+                tokenVal = QByteArray::fromRawData(begin, int(raw - begin)); // SHALLOW COPY
+                ++raw; // consume trailing "
+                consumed = raw - rawStart;
+                return JTOK_STRING;
+            case FastPath::NotFullyProcessed:
+                // we partially processed, put accepted chars into `tokenVal`
+                tokenVal = QByteArray{begin, int(raw - begin)};  // DEEP COPY
+                break; // will take slow path below
+            case FastPath::Error:
+                // the fast path encountered premature string end or char < 0x20 -- abort early
+                return JTOK_ERR;
+            }
+        } else {
+            // this is taken if tryFastPath is disabled at compile-time
+            // -- just ensure output buffer is cleared so we can append to it below
+            tokenVal.clear();
+        }
+        // -----
+        // Slow path -- scan 1 character at a time and process the chars thru JSONUTF8StringFilter
+        // -----
         if constexpr (reserveSize > 0)
-            valStr.reserve(reserveSize);
-        JSONUTF8StringFilter writer(valStr);
+            tokenVal.reserve(reserveSize);
+        JSONUTF8StringFilter writer(tokenVal); // note: this filter object must *not* clear tokenVal in its c'tor
 
         while (true) {
             if (UNLIKELY(raw >= end || uint8_t(*raw) < 0x20))
@@ -385,7 +446,7 @@ jtokentype getJsonToken(QByteArray &tokenVal, unsigned &consumed, const char *ra
                     writer.push_back_u(codepoint);
                     raw += 4;
                     break;
-                    }
+                }
                 default:
                     return JTOK_ERR;
 
@@ -409,8 +470,9 @@ jtokentype getJsonToken(QByteArray &tokenVal, unsigned &consumed, const char *ra
             return JTOK_ERR;
 
         if constexpr (reserveSize > 0)
-            valStr.squeeze();
-        tokenVal = std::move(valStr);
+            tokenVal.squeeze();
+        // -- At this point `tokenVal` contains the entire accepted string from
+        // -- inside the enclosing quotes "", unescaped and UTF-8-processed.
         consumed = raw - rawStart;
         return JTOK_STRING;
         }
@@ -420,6 +482,9 @@ jtokentype getJsonToken(QByteArray &tokenVal, unsigned &consumed, const char *ra
     }
 }
 
+/// Note: The QByteArrays in this struct may be "views of" or shallow copies of the original `bytes` buffer
+/// being parsed (e.g. via QByteArray::fromRawData) -- so when producing the final result we need to always
+/// take deep copies of any QByteArray data.
 struct Container {
     enum Typ {
         Null, BoolFalse, BoolTrue, Num, Str, Arr, Obj
@@ -435,40 +500,76 @@ struct Container {
     //
     // We could have also used a std::variant here but that is not implemented yet on all compilers
     // that we target.
-    QByteArray data; // only for Num, Str
+    QByteArray data; // only for Num, Str -- may be a shallow copy pointing into the `bytes` QByteArray passed to Json::detail::parse()
     std::vector<Container> values; // only for Arr
+    // Note that the below pair.first QByteArray may be a shallow copy pointing into the `bytes` QByteArray
     std::vector<std::pair<QByteArray, Container>> entries; // only for Obj
     void clear() { data.clear(); values.clear(); entries.clear(); typ = Null; }
     void setArr() { clear(); typ = Arr; }
     void setObj() { clear(); typ = Obj; }
     void setBool(bool b) { clear(); typ = b ? BoolTrue: BoolFalse; }
 
-    /// recursively scours this container and its sub-containers and builds the proper QVariant / nesting
+    /// Recursively scours this container and its sub-containers and builds the proper QVariant / nesting.
+    /// Unlike this intermediate object, the resultant QVariant's string data (if any) will always be deep
+    /// copies of the original string data that came in.
     QVariant toVariant() const;
 };
 
-QVariant Container::toVariant() const
-{
+/// recursively scours this container and its sub-containers and builds the proper QVariant / nesting
+QVariant Container::toVariant() const {
     QVariant ret;
     switch(typ) {
     case Null:
         // no further processing needed
         break;
     case Num: {
+        // NB: for `Num` type, `data` is always a shallow copy of the data in the original `bytes` arg
         if (UNLIKELY(data.isEmpty())) {
             // this should never happen
-            throw Json::ParseError("Data is empty for a nested variant of type Num");
+            throw Json::ParseError("Data is empty for a nested item of type Num");
         }
+        // NOTE .toDouble() is unsafe on raw shallow QByteArray - see QT-BUG 85580 and 86681.
+        // Also note that .toLongLong() and .toULongLong() make an implicit deep copy of the data.
+        // Since we want to avoid excess mallocs, we take a copy ourselves on the stack of the C-string
+        // data to ensure NUL termination, and then we call into the C functions for parsing ourselves.
+        // - 47 chars are more than enough for doubles; we won't support excessively long notations.
+        //   See: https://stackoverflow.com/questions/1701055/what-is-the-maximum-length-in-chars-needed-to-represent-any-double-value
+        // - int64's need about ~22 bytes, so 47 is plenty
+        std::array<char, 48> dcopy;
+        const int len = std::min(int(dcopy.size()-1), int(data.size()));
+        std::memcpy(dcopy.data(), data.constData(), len);
+        dcopy[len] = 0; // ensure nul termination
+        const char * const begin = dcopy.data(); char *parseEnd = nullptr;
+        const auto HasChar = [begin, len](char c) { return std::memchr(begin, c, len) != nullptr; };
         bool ok;
-        if (data.contains('.') || data.contains('e') || data.contains('E')) {
-            ret = data.toDouble(&ok);
-        } else if (data.front() == '-') {
-            ret = data.toLongLong(&ok);
-        } else
-            ret = data.toULongLong(&ok);
+        if (HasChar('.') || HasChar('e') || HasChar('E')) {
+            errno = 0; // NB: errno lives in thread-local storage so this is fine
+            const double d = std::strtod(begin, &parseEnd);
+            ok = !errno && parseEnd != begin; /* accept junk at end, just in case? */
+            ret = d;
+        } else if (*begin == '-') {
+            errno = 0; // NB: errno lives in thread-local storage so this is fine
+            const auto ll = std::strtoll(begin, &parseEnd, 10);
+            ok = !errno && parseEnd == begin + len; /* do not accept junk at end */
+            // the below is just in case qlonglong differs from long long
+            constexpr auto MIN = std::numeric_limits<qlonglong>::min(), MAX = std::numeric_limits<qlonglong>::max();
+            if constexpr (MIN != std::numeric_limits<decltype(ll)>::min() || MAX != std::numeric_limits<decltype(ll)>::max())
+                ok = ok && ll >= MIN && ll <= MAX;
+            ret = qlonglong(ll);
+        } else {
+            errno = 0; // NB: errno lives in thread-local storage so this is fine
+            const auto ull = std::strtoull(begin, &parseEnd, 10);
+            ok = !errno && parseEnd == begin + len; /* do not accept junk at end */
+            // the below is just in case qulonglong differs from unsigned long long
+            constexpr auto MIN = std::numeric_limits<qulonglong>::min(), MAX = std::numeric_limits<qulonglong>::max();
+            if constexpr (MIN != std::numeric_limits<decltype(ull)>::min() || MAX != std::numeric_limits<decltype(ull)>::max())
+                ok = ok && ull >= MIN && ull <= MAX;
+            ret = qulonglong(ull);
+        }
         if (UNLIKELY(!ok)) {
             // this should never happen
-            throw Json::ParseError("Failed to parse a variant as a number");
+            throw Json::ParseError(QString("Failed to parse number from string: %1 (original: %2)")
+                                   .arg(begin).arg(QString::fromUtf8(data.constData(), data.size())));
         }
         break;
     }
@@ -479,7 +580,13 @@ QVariant Container::toVariant() const
         ret = false;
         break;
     case Str:
-        ret = QString::fromUtf8(data);
+        // NB: data may be a shallow or deep copy of the original data in `bytes`
+        // We use this C string syntax because it's faster, as well as more correct.
+        // Also note that round1.json test fails (because it contains the 0 codepoint)
+        // unless we do this C-string syntax to construct the QString.
+        // QString quirks, see:  https://github.com/qt/qtbase/blob/ba3b53cb501a77144aa6259e48a8e0edc3d1481d/src/corelib/text/qstring.h#L701
+        //              versus:  https://github.com/qt/qtbase/blob/ba3b53cb501a77144aa6259e48a8e0edc3d1481d/src/corelib/text/qstring.h#L709
+        ret = QString::fromUtf8(data.constData(), data.size());
         break;
     case Arr: {
         QVariantList vl;
@@ -491,9 +598,11 @@ QVariant Container::toVariant() const
         break;
     }
     case Obj: {
+        // NB: pair.first in entries may be a deep or shallow copy of the data in `bytes`
         QVariantMap vm;
         for (const auto & [key, cont] : entries) {
-            vm[QString::fromUtf8(key)] = cont.toVariant();
+            // We use this C string syntax because it's faster & more accurate. (QString quirks)
+            vm[QString::fromUtf8(key.constData(), key.size())] = cont.toVariant();
         }
         ret = vm;
         break;
@@ -528,13 +637,16 @@ bool parse(QVariant &out, const QByteArray &bytes)
     unsigned consumed;
     jtokentype tok = JTOK_NONE;
     jtokentype last_tok = JTOK_NONE;
-    const char *raw = bytes.data();
+    const char *raw = bytes.constData();
     const char * const end = raw + bytes.size();
     do {
         using VType = Container::Typ;
 
         last_tok = tok;
 
+        /* Note: getJsonToken modifies `tokenVal` *only if* return val was
+         * JTOK_NUMBER or JTOK_STRING, but it may also modify it on JTOK_ERR,
+         * leaving `tokenVal` in an unspecified state. */
         tok = getJsonToken(tokenVal, consumed, raw, end);
         if (tok == JTOK_NONE || tok == JTOK_ERR)
             return false;
@@ -614,7 +726,7 @@ bool parse(QVariant &out, const QByteArray &bytes)
             else
                 setExpect(ARR_VALUE);
             break;
-            }
+        }
 
         case JTOK_OBJ_CLOSE:
         case JTOK_ARR_CLOSE: {
@@ -630,7 +742,7 @@ bool parse(QVariant &out, const QByteArray &bytes)
             clearExpect(OBJ_NAME);
             setExpect(NOT_VALUE);
             break;
-            }
+        }
 
         case JTOK_COLON: {
             if (UNLIKELY(stack.empty()))
@@ -642,7 +754,7 @@ bool parse(QVariant &out, const QByteArray &bytes)
 
             setExpect(VALUE);
             break;
-            }
+        }
 
         case JTOK_COMMA: {
             if (UNLIKELY(stack.empty() || last_tok == JTOK_COMMA || last_tok == JTOK_ARR_OPEN))
@@ -654,7 +766,7 @@ bool parse(QVariant &out, const QByteArray &bytes)
             else
                 setExpect(ARR_VALUE);
             break;
-            }
+        }
 
         case JTOK_KW_NULL:
         case JTOK_KW_TRUE:
@@ -693,7 +805,7 @@ bool parse(QVariant &out, const QByteArray &bytes)
 
             setExpect(NOT_VALUE);
             break;
-            }
+        }
 
         case JTOK_NUMBER: {
             Container tmpVal{VType::Num, std::move(tokenVal), {}, {}};
@@ -717,7 +829,7 @@ bool parse(QVariant &out, const QByteArray &bytes)
 
             setExpect(NOT_VALUE);
             break;
-            }
+        }
 
         case JTOK_STRING: {
             if (expect(OBJ_NAME)) {
@@ -749,7 +861,7 @@ bool parse(QVariant &out, const QByteArray &bytes)
 
             setExpect(NOT_VALUE);
             break;
-            }
+        }
 
         default:
             return false;
