@@ -18,13 +18,9 @@
 //
 #pragma once
 
-#include "bitcoin/uint256.h"
+#include "ByteView.h"
 
-#include <QByteArray>
-
-#include <cstddef>
 #include <cstdint>
-#include <type_traits>
 #include <vector>
 
 /**
@@ -46,9 +42,6 @@
  */
 class RollingBloomFilter {
 public:
-    /// Our canonical data type that we operate on, the std::byte opaque byte type.
-    using byte = std::byte;
-
     /// No default c'tor
     RollingBloomFilter() = delete;
 
@@ -59,60 +52,13 @@ public:
     /// global RollingBloomFilter objects before the global seed is set.
     RollingBloomFilter(const uint32_t nElements, const double nFPRate);
 
-    /// Implementation expects a std::byte * pointer to operate on,
-    /// which gets hashed using MurmurHash3 to a uint32_t key for insertion
+    /// Implementation expects a ByteView (std::byte * pointer + size) to operate on;
+    /// data gets hashed using MurmurHash3 to a uint32_t key for insertion
     /// into the bloom set.
-    void insert(const byte *bytes, size_t len);
+    void insert(const ByteView &bv);
 
-    // -- Convenient overloads for `insert` --
-
-    /// Insert any vector of POD data e.g. vector<char>, vector<int64_t>, etc
-    template <typename T>
-    std::enable_if_t<std::is_pod_v<T> && !std::is_pointer_v<T>, void>
-    /* void */ insert(const std::vector<T> &vKey) {
-        insert(reinterpret_cast<const byte *>(vKey.data()), vKey.size() * sizeof(T));
-    }
-    /// insert any bitcoin base_blob e.g. hash256 & hash160
-    template<unsigned int N>
-    void insert(const bitcoin::base_blob<N> &hash) {
-        insert(reinterpret_cast<const byte *>(hash.begin()), hash.size());
-    }
-    /// insert any QByteArray
-    void insert(const QByteArray &ba) {
-        insert(reinterpret_cast<const byte *>(ba.constData()), static_cast<std::size_t>(ba.size()));
-    }
-    /// for any POD data item char, int64_t, double, simple struct, etc
-    template <typename T>
-    std::enable_if_t<std::is_pod_v<T> && !std::is_pointer_v<T>, void>
-    /* void */ insert(const T &datum) {
-        insert(reinterpret_cast<const byte *>(&datum), sizeof(datum));
-    }
-
-    /// Real implementation -- expects a std::byte array to operator on.
-    bool contains(const byte *bytes, size_t len) const;
-
-    // -- Convenient overloads for `contains` --
-
-    /// for any vector of POD data e.g. vector<char>, vector<int64_t>, vector<SomeStruct>, etc
-    template <typename T>
-    std::enable_if_t<std::is_pod_v<T> && !std::is_pointer_v<T>, bool>
-    /* bool */ contains(const std::vector<T> &vKey) const {
-        return contains(reinterpret_cast<const byte *>(vKey.data()), vKey.size() * sizeof(T));
-    }
-    /// for e.g. hash256 & hash160
-    template<unsigned int N>
-    bool contains(const bitcoin::base_blob<N> &hash) const {
-        return contains(reinterpret_cast<const byte *>(hash.begin()), hash.size()); }
-    /// for QByteArray
-    bool contains(const QByteArray &ba) const {
-        return contains(reinterpret_cast<const byte *>(ba.constData()), static_cast<std::size_t>(ba.size()));
-    }
-    /// for any POD data item char, int64_t, double, simple struct, etc
-    template <typename T>
-    std::enable_if_t<std::is_pod_v<T> && !std::is_pointer_v<T>, bool>
-    /* bool */ contains(const T &datum) const {
-        return contains(reinterpret_cast<const byte *>(&datum), sizeof(datum));
-    }
+    /// Expects a ByteView to operator on. Checks set membership.
+    bool contains(const ByteView &bv) const;
 
     /// Returns an imprecise estimate of the number of entries that have been
     /// inserted (this count eventually resets to 0 when the filter rolls).

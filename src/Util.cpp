@@ -267,13 +267,13 @@ namespace Util {
         const HashSeed hashSeed;
     } // namespace (anonymous)
 
-    uint32_t hashData32(const std::byte *data, size_t len)
+    uint32_t hashData32(const ByteView &bv)
     {
-        return bitcoin::MurmurHash3(hashSeed.get<uint32_t>(), reinterpret_cast<const uint8_t *>(data), len);
+        return bitcoin::MurmurHash3(hashSeed.get<uint32_t>(), bv.ucharData(), bv.size());
     }
-    uint64_t hashData64(const std::byte *data, size_t len)
+    uint64_t hashData64(const ByteView &bv)
     {
-        return uint64_t(CityHash::CityHash64WithSeed(reinterpret_cast<const char *>(data), len, hashSeed.get<CityHash::uint64>()));
+        return uint64_t(CityHash::CityHash64WithSeed(bv.charData(), bv.size(), hashSeed.get<CityHash::uint64>()));
     }
 
 } // end namespace Util

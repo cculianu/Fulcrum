@@ -103,14 +103,7 @@ private:
 template<> struct std::hash<RPCMsgId> {
     std::size_t operator()(const RPCMsgId &r) const {
         switch(r.typ) {
-        case RPCMsgId::String: {
-            static_assert (std::is_same_v<decltype(r.sdata.constBegin()), const QChar *>,
-                           "Assumption here is that QString::constBegin() returns a pointer");
-            // get pointers to underlying data, and hash that
-            const std::byte * const begin = reinterpret_cast<const std::byte *>(r.sdata.constBegin()),
-                            * const end   = reinterpret_cast<const std::byte *>(r.sdata.constEnd());
-            return Util::hashForStd(begin, std::size_t(end - begin));
-        }
+        case RPCMsgId::String: return Util::hashForStd(r.sdata);
         case RPCMsgId::Integer: return Util::hashForStd(r.idata);
         case RPCMsgId::Null: return 0;
         }
@@ -121,7 +114,7 @@ inline uint qHash(const RPCMsgId &r, uint seed = 0)  {
     switch(r.typ) {
     case RPCMsgId::String: return qHash(r.sdata, seed);
     case RPCMsgId::Integer: return qHash(r.idata, seed);
-    case RPCMsgId::Null: return 0;
+    case RPCMsgId::Null: return seed;
     }
 }
 

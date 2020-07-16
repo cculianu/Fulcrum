@@ -207,6 +207,7 @@ HEADERS += \
     BitcoinD.h \
     BlockProc.h \
     BlockProcTypes.h \
+    ByteView.h \
     CityHash.h \
     Common.h \
     Compat.h \
