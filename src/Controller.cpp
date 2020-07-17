@@ -232,8 +232,11 @@ void GetChainInfoTask::process()
 
             if (auto v = map.value("initialblockdownload"); v.canConvert<bool>())
                 info.initialBlockDownload = v.toBool();
-            else
-                Err("initialblockdownload");
+            else {
+                //Err("initialblockdownload");
+                // tolerate missing initialblockdownload key since bchd doesn't emit this key
+                info.initialBlockDownload = false;
+            }
 
             info.chainWork = Util::ParseHexFast(map.value("chainwork").toByteArray()); // error ok
             info.sizeOnDisk = map.value("size_on_disk").toULongLong(); // error ok
@@ -1251,7 +1254,7 @@ void CtlTask::on_error(const RPC::Message &resp)
 }
 void CtlTask::on_failure(const RPC::Message::Id &id, const QString &msg)
 {
-    Warning() << id.toString() << ": FAIL: " << msg;
+    Warning() << id << ": FAIL: " << msg;
     errorCode = id.toInt();
     errorMessage = msg;
     emit errored();

@@ -31,6 +31,7 @@
 #include <QSslConfiguration>
 #include <QSslSocket>
 #include <QTcpSocket>
+#include <QVector>
 
 #include <list>
 #include <utility>
@@ -77,10 +78,11 @@ void PeerMgr::startup()
     if (_genesisHash.length() != HashLen)
         throw InternalError("PeerMgr cannot be started until we have a valid genesis hash! FIXME!");
 
-    if (const auto chain = storage->getChain(); !QSet<QString>{"test", "main"}.contains(chain))
+    const auto chain = storage->getChain();
+    if (const auto net = BTC::NetFromName(chain); !QVector<BTC::Net>{{BTC::Net::TestNet, BTC::Net::MainNet}}.contains(net))
         // can only do peering with testnet or mainnet after they have been defined (no regtest)
         throw InternalError(QString("PeerMgr cannot be started for the given chain \"%1\"").arg(chain));
-    else if (chain == "test")
+    else if (net == BTC::Net::TestNet)
         parseServersDotJson(":resources/servers_testnet.json");
     else
         parseServersDotJson(":resources/servers.json");

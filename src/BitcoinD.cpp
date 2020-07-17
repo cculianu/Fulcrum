@@ -100,7 +100,7 @@ void BitcoinDMgr::on_Message(quint64 bid, const RPC::Message &msg)
 }
 void BitcoinDMgr::on_ErrorMessage(quint64 bid, const RPC::Message &msg)
 {
-    DebugM("ErrMsg from: ", bid, " (reqId: ", msg.id.toString(),") error=", msg.errorMessage());
+    DebugM("ErrMsg from: ", bid, " (reqId: ", msg.id, ") error=", msg.errorMessage());
     if (msg.errorCode() == bitcoin::RPCErrorCode::RPC_IN_WARMUP) {
         emit inWarmUp(msg.errorMessage());
     }
