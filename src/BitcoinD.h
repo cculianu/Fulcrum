@@ -21,6 +21,7 @@
 #include "Mixins.h"
 #include "Mgr.h"
 #include "RPC.h"
+#include "Version.h"
 
 #include <QHostAddress>
 
@@ -29,6 +30,7 @@
 #include <set>
 
 class BitcoinD;
+namespace BitcoinDMgrHelper { class ReqCtxObj; }
 
 class BitcoinDMgr : public Mgr, public IdMixin, public ThreadObjectMixin, public TimersByNameMixin
 {
@@ -62,6 +64,10 @@ public:
     void submitRequest(QObject *sender, const RPC::Message::Id &id, const QString & method, const QVariantList & params,
                        const ResultsF & = ResultsF(), const ErrorF & = ErrorF(), const FailF & = FailF());
 
+    /// Thread-safe. Called by ServerBase -- this is to inform us of the remote bitcoind's `subversion` so we
+    /// we may detect that the remote bitcoind has quirks, etc. (see: `quirks` later in this class)
+    void setBitcoinDVersion(const Version &version, const QString &subversion);
+
 signals:
     void gotFirstGoodConnection(quint64 bitcoindId); // emitted whenever the first bitcoind after a "down" state (or after startup) gets its first good status (after successful authentication)
     void allConnectionsLost(); // emitted whenever all bitcoind rpc connections are down.
@@ -91,6 +97,25 @@ private:
     std::unique_ptr<BitcoinD> clients[N_CLIENTS];
 
     BitcoinD *getBitcoinD(); ///< may return nullptr if none are up. Otherwise does a round-robin of the ones present to grab one. to be called only in this thread.
+
+    /// Various quirk flags of the bitcoind we are connected to
+    struct Quirks {
+        /// If true, remote bitcoind is bchd. Gets set when ServerBase calls setBitcoinDVersion() on us
+        /// (from the periodic task that reads remote bitcoind subversion).
+        std::atomic_bool isBchd = false;
+        /// (bchd only) If this is true, then `getrawtransaction` expects an integer not a bool for its second
+        /// arg; start off true, but this flag may get latched to false if we detect that bchd fixed the bug
+        /// (see submitRequest).
+        std::atomic_bool bchdGetRawTransaction = true;
+
+        /// (ABC and BCHN only version >= 0.20.2) If true, `estimatefee` expects 0 args.
+        std::atomic_bool zeroArgEstimateFee = false;
+    };
+    Quirks quirks;
+
+    /// Called from `submitRequest` -- returns a params object which may be a shallow copy of `params`, or a
+    /// transformed params object after applying bitcoind workarounds (consults the `quirks` struct above).
+    QVariantList applyBitcoinDQuirksToParams(const BitcoinDMgrHelper::ReqCtxObj *context, const QString &method, const QVariantList &params);
 };
 
 class BitcoinD : public RPC::HttpConnection, public ThreadObjectMixin /* NB: also inherits TimersByNameMixin via AbstractConnection base */

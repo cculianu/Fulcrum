@@ -705,6 +705,8 @@ void ServerBase::refreshBitcoinDNetworkInfo()
             bitcoinDInfo.relayFee = networkInfo.value("relayfee", 0.0).toDouble();
             bitcoinDInfo.subversion = networkInfo.value("subversion", "").toString();
             bitcoinDInfo.warnings = networkInfo.value("warnings", "").toString();
+            // notify bitcoindmgr about this server subversion in case it needs to apply some workarounds for version-specific quirks
+            bitcoindmgr->setBitcoinDVersion(bitcoinDInfo.version, bitcoinDInfo.subversion); // (thread-safe call)
         });
 }
 
@@ -1212,28 +1214,9 @@ void Server::rpc_blockchain_estimatefee(Client *c, const RPC::Message &m)
     if (!ok || n < 0)
         throw RPCError(QString("%1 parameter should be a single non-negative integer").arg(m.method));
 
-    static const auto isZeroArgEstimateFee = [](const QString &subversion, const Version &version) -> bool {
-        static const QString zeroArgSubversionPrefixes[] = { "/Bitcoin ABC", "/Bitcoin Cash Node", };
-        static const Version minVersion{0, 20, 2};
-        if (version < minVersion)
-            return false;
-        for (const auto & prefix : zeroArgSubversionPrefixes)
-            if (subversion.startsWith(prefix))
-                return true;
-        return false;
-    };
-
-    if ( isZeroArgEstimateFee(bitcoinDInfo.subversion, bitcoinDInfo.version) ) {
-        // Bitcoin ABC v0.20.2 has taken out the nblocks argument (also applies to Bitcoin Cash Node)
-        generic_async_to_bitcoind(c, m.id, "estimatefee", QVariantList(),[](const RPC::Message &response){
-            return response.result();
-        });
-    } else {
-        // BUcash, earlier ABC, and others support the nblocks argument
-        generic_async_to_bitcoind(c, m.id, "estimatefee", QVariantList{unsigned(n)},[](const RPC::Message &response){
-            return response.result();
-        });
-    }
+    generic_async_to_bitcoind(c, m.id, "estimatefee", QVariantList{unsigned(n)},[](const RPC::Message &response){
+        return response.result();
+    });
 }
 void Server::rpc_blockchain_headers_subscribe(Client *c, const RPC::Message &m) // fully implemented
 {
