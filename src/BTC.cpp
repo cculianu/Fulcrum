@@ -28,6 +28,8 @@
 #include "bitcoin/utilstrencodings.h"
 #include "bitcoin/version.h"
 
+#include <QMap>
+
 #include <algorithm>
 #include <atomic>
 #include <utility>
@@ -154,26 +156,29 @@ namespace BTC
         // Cache the netnames as QStrings since we will need them later for blockchain.address.* methods in Servers.cpp
         // Note that these must always match whatever bitcoind calls these because ultimately we decide what network
         // we are on by asking bitcoind what net it's on via the "getblockchaininfo" RPC call (upon initial synch).
-        const QString mainNetName = "main",
-                      testNetName = "test",
-                      regTestNetName = "regtest",
-                      invalidNetName = "invalid";
+        const QMap<Net, QStringList> netNameMap = {{
+            // We store a list of names for each net type because bitcoind and bchd disagree about what to call
+            // these.  The first item in the list is bitcoind's name for the network, second (if present) is bchd's.
+            { MainNet, {"main", "mainnet"}},
+            { TestNet, {"test", "testnet3"}},
+            { RegTestNet, {"regtest"}},
+        }};
+        const QString invalidNetName = "invalid";
     };
     const QString & NetName(Net net) noexcept {
-        switch(net){
-        case MainNet: return mainNetName; // "main"
-        case TestNet: return testNetName; // "test"
-        case RegTestNet: return regTestNetName; // "regtest"
-        default: return invalidNetName;
-        }
+        if (auto it = netNameMap.find(net); it != netNameMap.end() && !it.value().empty())
+            return it.value().front();
+        return invalidNetName; // not found
     }
     Net NetFromName(const QString & name) noexcept {
-        if (name == mainNetName)
-            return MainNet;
-        else if (name == testNetName)
-            return TestNet;
-        else if (name == regTestNetName)
-            return RegTestNet;
+        // all apologies for this quadratic search.. but in practice it is not too bad since the map being searched is
+        // microscopically tiny.
+        for (auto it = netNameMap.begin(); it != netNameMap.end(); ++it) {
+            for (const auto & knownName : it.value()) {
+                if (knownName == name)
+                    return it.key();
+            }
+        }
         return Net::Invalid;
     }
 

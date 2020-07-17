@@ -45,7 +45,7 @@ struct Version
 
     Version(unsigned maj, unsigned min, unsigned rev);
 
-    enum CompactType { BitcoinD };
+    enum CompactType { BitcoinD, BCHD };
     /// To explicitly construct an instance from the version number returned by bitcoind's getnetworkinfo RPC call
     /// e.g.: 200600 becomes -> 0.20.6
     explicit Version(unsigned compactVersion, CompactType);

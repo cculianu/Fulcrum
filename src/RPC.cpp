@@ -411,7 +411,11 @@ namespace RPC {
             if (message.isError()) {
                 // error message
                 ++nErrorReplies;
-                idMethodMap.remove(message.id); // don't leak the request -- an error response is an answer! Remove from map.
+                // don't leak the request -- an error response is an answer! Remove from map.
+                message.method = idMethodMap.take(message.id);
+                if (!message.id.isNull() && message.method.isEmpty())
+                    // Hmm. Error with no corresponding request id.. log that fact to debug log
+                    DebugM("Got unexpected error reply for id: ", message.id);
                 emit gotErrorMessage(id, message);
             } else if (message.isNotif()) {
                 try {

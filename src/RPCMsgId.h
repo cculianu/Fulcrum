@@ -124,3 +124,9 @@ inline uint qHash(const RPCMsgId &r, uint seed = 0)  {
     case RPCMsgId::Null: return 0;
     }
 }
+
+/// overload to support writing RpcMsgId to a text stream
+inline QTextStream &operator<<(QTextStream &ts, const RPCMsgId &rid)
+{
+    return ts << rid.toString();
+}

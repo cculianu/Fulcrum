@@ -212,8 +212,6 @@ protected slots:
     void onErrorMessage(IdMixin::Id clientId, const RPC::Message &m);
     void onPeerError(IdMixin::Id clientId, const QString &what);
 
-    void refreshBitcoinDNetworkInfo(); ///< whenever bitcoind comes back alive, this is invoked to update the BitcoinDInfo struct declared above
-
 protected:
     /// Overrides QTcpServer -- identical to default impl. from QTcpServer except it also attaches a child
     /// Client::PerIPDataHolder_Temp object named "__PerIPDataHolder_Temp" to the QTcpSocket that it creates, and
@@ -244,7 +242,6 @@ protected:
     ///
     // /end `incomingConnection` Helpers
 
-    void on_started() override;
     void on_newConnection(QTcpSocket *) override;
 
     Client * newClient(QTcpSocket *);
@@ -294,15 +291,6 @@ protected:
     const std::shared_ptr<Storage> storage;
     /// pointer to shared BitcoinDMgr object -- owned and controlled by the Controller instance
     const std::shared_ptr<BitcoinDMgr> bitcoindmgr;
-
-    /// This basically all comes from getnetworkinfo to bitcoind.
-    struct BitcoinDInfo {
-        Version version {0,0,0}; ///> major, minor, revision e.g. {0, 20, 6} for v0.20.6
-        QString subversion; ///< subversion string from daemon e.g.: /Bitcoin Cash Node bla bla;EB32 ..../
-        double relayFee = 0.0; ///< from 'relayfee' in the getnetworkinfo response; minimum fee/kb to relay a tx, usually: 0.00001000
-        QString warnings = ""; ///< from 'warnings' in the getnetworkinfo response (usually is empty string, but may not always be)
-    };
-    BitcoinDInfo bitcoinDInfo;
 
     PeerInfoList peers;
 
