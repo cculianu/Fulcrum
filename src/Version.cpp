@@ -11,16 +11,29 @@
 #endif
 
 
-Version::Version(unsigned val, CompactType)
+Version::Version(unsigned val, CompactType type)
 {
-    // e.g. 0.20.6 comes in like this from bitcoind (as an unsigned int): 200600
-    const unsigned major = val / 1000000,
-                   minor0 = val % 1000000,
-                   minor = minor0 / 10000,
-                   revision = (minor0 % 10000) / 100;
-    *this = Version(major, minor, revision);
+    switch(type) {
+    case BitcoinD: {
+        // e.g. 0.20.6 comes in like this from bitcoind (as an unsigned int): 200600
+        const unsigned major = val / 1000000,
+                       minor0 = val % 1000000,
+                       minor = minor0 / 10000,
+                       revision = (minor0 % 10000) / 100;
+        *this = Version(major, minor, revision);
+        break;
+    }
+    case BCHD: {
+        // from bchd sources: version = 2 ^ AppMajor*3 ^ AppMinor*5 ^ AppPatch
+        // I don't understand that code. So we kind of hack it and this mostly works.
+        const unsigned v = val ^ 2; // undo the first 2 ^
+        const unsigned patch   = (v & 0x0f) >> 0;
+        const unsigned minor   = (((v & 0xf0) >> 4) ^ patch) * 16;
+        *this = Version(0, minor, patch);
+        break;
+    }
+    }
 }
-
 
 Version::Version(unsigned maj, unsigned min, unsigned rev)
     : major(maj), minor(min), revision(rev)

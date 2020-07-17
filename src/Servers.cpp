@@ -399,16 +399,6 @@ QVariant ServerBase::stats() const
     return QVariantMap{{prettyName(), m}};
 }
 
-void ServerBase::on_started()
-{
-    AbstractTcpServer::on_started();
-
-    // refresh bitcionD version info, server version & subversion, whenever it comes back (in case user upgraded bitcoind from under our feet!)
-    conns += connect(bitcoindmgr.get(), &BitcoinDMgr::gotFirstGoodConnection, this, &ServerBase::refreshBitcoinDNetworkInfo);
-    // try and refresh once now as soon as we come alive (usually we don't come alive until bitcoind connections are established so this is ok)
-    refreshBitcoinDNetworkInfo();
-}
-
 void ServerBase::on_newConnection(QTcpSocket *sock) {
     if (!sock) // paranoia
         return;
@@ -687,29 +677,6 @@ void ServerBase::onPeerError(IdMixin::Id clientId, const QString &what)
     }
 }
 
-void ServerBase::refreshBitcoinDNetworkInfo()
-{
-    bitcoindmgr->submitRequest(this, newId(), "getnetworkinfo", QVariantList(),
-        // success
-        [this](const RPC::Message & reply) {
-            const QVariantMap networkInfo = reply.result().toMap();
-            bool ok = false;
-            const auto val = networkInfo.value("version", 0).toUInt(&ok);
-            if (ok) {
-                // e.g. 0.20.6 comes in like this from bitcoind (as an unsigned int): 200600
-                bitcoinDInfo.version = Version(val, Version::BitcoinD);
-                //DebugM("Refreshed version info from bitcoind");
-            } else {
-                Warning() << "Failed to get version info from bitcoind";
-            }
-            bitcoinDInfo.relayFee = networkInfo.value("relayfee", 0.0).toDouble();
-            bitcoinDInfo.subversion = networkInfo.value("subversion", "").toString();
-            bitcoinDInfo.warnings = networkInfo.value("warnings", "").toString();
-            // notify bitcoindmgr about this server subversion in case it needs to apply some workarounds for version-specific quirks
-            bitcoindmgr->setBitcoinDVersion(bitcoinDInfo.version, bitcoinDInfo.subversion); // (thread-safe call)
-        });
-}
-
 void ServerBase::onPeersUpdated(const PeerInfoList &pl)
 {
     peers = pl;
@@ -927,6 +894,7 @@ void Server::rpc_server_banner(Client *c, const RPC::Message &m)
         emit c->sendResult(m.id, bannerFallback);
     } else {
         // banner file specified, now let's open it up in a worker thread to keep the server responsive and return immediately
+        const auto bitcoinDInfo = bitcoindmgr->getBitcoinDInfo();
         generic_do_async(c, m.id,
                         [bannerFile,
                          donationAddress = options->donationAddress,
@@ -1246,8 +1214,8 @@ void Server::rpc_blockchain_headers_subscribe(Client *c, const RPC::Message &m) 
 void Server::rpc_blockchain_relayfee(Client *c, const RPC::Message &m)
 {
     // This value never changes unless bitcoind is restarted, in which case we will pick up the new value when it comes
-    // back. See: refreshBitcoinDNetworkInfo()
-    emit c->sendResult(m.id, bitcoinDInfo.relayFee);
+    // back. See: BitcoinDMgr::refreshBitcoinDNetworkInfo()
+    emit c->sendResult(m.id, bitcoindmgr->getBitcoinDInfo().relayFee);
 }
 
 // ---- The below two methods are used by both the blockchain.scripthash.* and blockchain.address.* sets of methods
@@ -2169,11 +2137,13 @@ void AdminServer::rpc_getinfo(Client *c, const RPC::Message &m)
 {
     QVariantMap res;
     res["bitcoind"] = QString("%1:%2").arg(options->bitcoind.first).arg(options->bitcoind.second);
-    res["bitcoind_warnings"] = bitcoinDInfo.warnings;
+    const auto bitcoindDInfo = bitcoindmgr->getBitcoinDInfo();
+    res["bitcoind_warnings"] = bitcoindDInfo.warnings;
     {
         const auto opt = storage->latestHeight();
         res["height"] = opt.has_value() ? *opt : QVariant();
     }
+    res["bitcoind_version"] = QStringList{{ bitcoindDInfo.version.toString(true), bitcoindDInfo.subversion }};
     res["chain"] = storage->getChain();
     res["genesis_hash"] = Util::ToHexFast(storage->genesisHash());
     res["pid"] = QCoreApplication::applicationPid();

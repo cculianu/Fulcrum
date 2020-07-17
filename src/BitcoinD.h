@@ -28,9 +28,18 @@
 #include <atomic>
 #include <memory>
 #include <set>
+#include <shared_mutex>
 
 class BitcoinD;
 namespace BitcoinDMgrHelper { class ReqCtxObj; }
+
+/// This basically all comes from bitcoind RPC `getnetworkinfo`
+struct BitcoinDInfo {
+    Version version {0,0,0}; ///> major, minor, revision e.g. {0, 20, 6} for v0.20.6
+    QString subversion; ///< subversion string from daemon e.g.: /Bitcoin Cash Node bla bla;EB32 ..../
+    double relayFee = 0.0; ///< from 'relayfee' in the getnetworkinfo response; minimum fee/kb to relay a tx, usually: 0.00001000
+    QString warnings = ""; ///< from 'warnings' in the getnetworkinfo response (usually is empty string, but may not always be)
+};
 
 class BitcoinDMgr : public Mgr, public IdMixin, public ThreadObjectMixin, public TimersByNameMixin
 {
@@ -64,9 +73,9 @@ public:
     void submitRequest(QObject *sender, const RPC::Message::Id &id, const QString & method, const QVariantList & params,
                        const ResultsF & = ResultsF(), const ErrorF & = ErrorF(), const FailF & = FailF());
 
-    /// Thread-safe. Called by ServerBase -- this is to inform us of the remote bitcoind's `subversion` so we
-    /// we may detect that the remote bitcoind has quirks, etc. (see: `quirks` later in this class)
-    void setBitcoinDVersion(const Version &version, const QString &subversion);
+    /// Thread-safe.  Returns a copy of the BitcoinDInfo object.  This object is refreshed each time we
+    /// reconnect to BitcoinD.  Called by ServerBase in various places.
+    BitcoinDInfo getBitcoinDInfo() const;
 
 signals:
     void gotFirstGoodConnection(quint64 bitcoindId); // emitted whenever the first bitcoind after a "down" state (or after startup) gets its first good status (after successful authentication)
@@ -116,6 +125,11 @@ private:
     /// Called from `submitRequest` -- returns a params object which may be a shallow copy of `params`, or a
     /// transformed params object after applying bitcoind workarounds (consults the `quirks` struct above).
     QVariantList applyBitcoinDQuirksToParams(const BitcoinDMgrHelper::ReqCtxObj *context, const QString &method, const QVariantList &params);
+
+    mutable std::shared_mutex bitcoinDInfoLock;
+    BitcoinDInfo bitcoinDInfo;    ///< guarded by bitcoinDInfoLock
+
+    void refreshBitcoinDNetworkInfo(); ///< whenever bitcoind comes back alive, this is invoked to update the bitcoinDInfo struct
 };
 
 class BitcoinD : public RPC::HttpConnection, public ThreadObjectMixin /* NB: also inherits TimersByNameMixin via AbstractConnection base */

@@ -16,13 +16,15 @@
 // along with this program (see LICENSE.txt).  If not, see
 // <https://www.gnu.org/licenses/>.
 //
+
+#include "BitcoinD.h"
+#include "bitcoin/rpc/protocol.h"
+
 #include <QHostInfo>
 #include <QMetaType>
 #include <QPointer>
 
-#include "bitcoin/rpc/protocol.h"
-
-#include "BitcoinD.h"
+#include <mutex>
 
 BitcoinDMgr::BitcoinDMgr(const QString &hostName, quint16 port,
                          const QString &user, const QString &pass)
@@ -36,6 +38,11 @@ BitcoinDMgr::~BitcoinDMgr() {  cleanup(); }
 
 void BitcoinDMgr::startup() {
     Log() << objectName() << ": starting " << N_CLIENTS << " " << Util::Pluralize("bitcoin rpc client", N_CLIENTS) << " ...";
+
+    // As soon as a good BitcoinD is up, try and grab the network info (version, subversion, etc).  This must
+    // happen early because the values in this info object determine which workarounds we may or may not apply to
+    // RPC args.
+    conns += connect(this, &BitcoinDMgr::gotFirstGoodConnection, this, &BitcoinDMgr::refreshBitcoinDNetworkInfo);
 
     for (auto & client : clients) {
         // initial resolvedAddress may be invalid if user specified a hostname, in which case we will resolve it and
@@ -130,6 +137,15 @@ auto BitcoinDMgr::stats() const -> Stats
     quirks["zeroArgEstimateFee"] = this->quirks.zeroArgEstimateFee.load();
     m["quirks"] = quirks;
 
+    // "bitcoind info"
+    QVariantMap bdInfoMap;
+    const auto bdInfo = getBitcoinDInfo(); // takes lock, makes a copy, releases lock
+    bdInfoMap["version"] = bdInfo.version.toString(true);
+    bdInfoMap["subversion"] = bdInfo.subversion;
+    bdInfoMap["warnings"] = bdInfo.warnings;
+    bdInfoMap["relayfee"] = bdInfo.relayFee;
+    m["bitcoind info"] = bdInfoMap;
+
     return m;
 }
 
@@ -153,23 +169,61 @@ BitcoinD *BitcoinDMgr::getBitcoinD()
     return ret;
 }
 
-void BitcoinDMgr::setBitcoinDVersion(const Version &version, const QString &subversion)
+void BitcoinDMgr::refreshBitcoinDNetworkInfo()
 {
-    // bchd?
-    quirks.isBchd = subversion.startsWith("/bchd"); // informs submitRequest that we (maybe) need to do some workarounds for bchd
+    submitRequest(this, newId(), "getnetworkinfo", QVariantList(),
+        // success
+        [this](const RPC::Message & reply) {
+            const QVariantMap networkInfo = reply.result().toMap();
+            bool ok = false;
+            const auto val = networkInfo.value("version", 0).toUInt(&ok);
+            {
+                // EXCLUSIVE-LOCKED SCOPE
+                std::unique_lock g(bitcoinDInfoLock);
+                bitcoinDInfo.subversion = networkInfo.value("subversion", "").toString();
+                const bool isBchd = bitcoinDInfo.subversion.startsWith("/bchd");
+                if (ok) {
+                    // e.g. 0.20.6 comes in like this from bitcoind (as an unsigned int): 200600
+                    // Note: bchd has a weird version int with a different format than above that we try to handle.
+                    bitcoinDInfo.version = Version(val, isBchd ? Version::BCHD :Version::BitcoinD);
+                    //DebugM("Refreshed version info from bitcoind");
+                } else {
+                    Warning() << "Failed to parse version info from bitcoind";
+                }
+                bitcoinDInfo.relayFee = networkInfo.value("relayfee", 0.0).toDouble();
+                bitcoinDInfo.warnings = networkInfo.value("warnings", "").toString();
+                // set some quirk flags
+                [this](const Version &version, const QString &subversion, const bool isBchd)
+                {
+                    // bchd?
+                    quirks.isBchd = isBchd; // informs submitRequest that we (maybe) need to do some workarounds for bchd
 
-    // requires 0 arg `estimatefee`?
-    static const auto isZeroArgEstimateFee = [](const Version &version, const QString &subversion) -> bool {
-        static const QString zeroArgSubversionPrefixes[] = { "/Bitcoin ABC", "/Bitcoin Cash Node", };
-        static const Version minVersion{0, 20, 2};
-        if (version < minVersion)
-            return false;
-        for (const auto & prefix : zeroArgSubversionPrefixes)
-            if (subversion.startsWith(prefix))
-                return true;
-        return false;
-    };
-    quirks.zeroArgEstimateFee = isZeroArgEstimateFee(version, subversion);
+                    // requires 0 arg `estimatefee`?
+                    static const auto isZeroArgEstimateFee = [](const Version &version, const QString &subversion) -> bool {
+                        static const QString zeroArgSubversionPrefixes[] = { "/Bitcoin ABC", "/Bitcoin Cash Node", };
+                        static const Version minVersion{0, 20, 2};
+                        if (version < minVersion)
+                            return false;
+                        for (const auto & prefix : zeroArgSubversionPrefixes)
+                            if (subversion.startsWith(prefix))
+                                return true;
+                        return false;
+                    };
+                    quirks.zeroArgEstimateFee = isZeroArgEstimateFee(version, subversion);
+                }(bitcoinDInfo.version, bitcoinDInfo.subversion, isBchd);
+            }
+        },
+        // error
+        [](auto &){ Error() << "getnetworkinfo error"; },
+        // failure
+        [](auto &, auto &){ Error() << "getnetworkinfo failed"; }
+    );
+}
+
+BitcoinDInfo BitcoinDMgr::getBitcoinDInfo() const
+{
+    std::shared_lock g(bitcoinDInfoLock);
+    return bitcoinDInfo;
 }
 
 QVariantList BitcoinDMgr::applyBitcoinDQuirksToParams(const BitcoinDMgrHelper::ReqCtxObj *context, const QString &method, const QVariantList &paramsIn)
