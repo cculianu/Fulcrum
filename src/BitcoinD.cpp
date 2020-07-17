@@ -171,7 +171,7 @@ BitcoinD *BitcoinDMgr::getBitcoinD()
 
 void BitcoinDMgr::refreshBitcoinDNetworkInfo()
 {
-    submitRequest(this, newId(), "getnetworkinfo", QVariantList(),
+    submitRequest(this, newId(), "getnetworkinfo", {},
         // success
         [this](const RPC::Message & reply) {
             const QVariantMap networkInfo = reply.result().toMap();
@@ -186,7 +186,8 @@ void BitcoinDMgr::refreshBitcoinDNetworkInfo()
                     // e.g. 0.20.6 comes in like this from bitcoind (as an unsigned int): 200600
                     // Note: bchd has a weird version int with a different format than above that we try to handle.
                     bitcoinDInfo.version = Version(val, isBchd ? Version::BCHD :Version::BitcoinD);
-                    //DebugM("Refreshed version info from bitcoind");
+                    DebugM("Refreshed version info from bitcoind, version: ", bitcoinDInfo.version.toString(true),
+                           ", subversion: ", bitcoinDInfo.subversion);
                 } else {
                     Warning() << "Failed to parse version info from bitcoind";
                 }
@@ -212,11 +213,59 @@ void BitcoinDMgr::refreshBitcoinDNetworkInfo()
                     quirks.zeroArgEstimateFee = isZeroArgEstimateFee(version, subversion);
                 }(bitcoinDInfo.version, bitcoinDInfo.subversion, isBchd);
             }
+            // next up, do this query
+            refreshBitcoinDGenesisHash();
         },
         // error
-        [](auto &){ Error() << "getnetworkinfo error"; },
+        [](const RPC::Message &msg) {
+            Error() << "getnetworkinfo error, code: " << msg.errorCode() << ", error: " << msg.errorMessage();
+        },
         // failure
-        [](auto &, auto &){ Error() << "getnetworkinfo failed"; }
+        [](const RPCMsgId &, const QString &reason){ Error() << "getnetworkinfo failed: " << reason; }
+    );
+}
+
+void BitcoinDMgr::refreshBitcoinDGenesisHash()
+{
+    submitRequest(this, newId(), "getblockhash", {{0}},
+        // success
+        [this](const RPC::Message & reply) {
+            bool ok, changed = false;
+            BlockHash oldHash, newHash;
+            if (const auto hex = reply.result().toString().toUtf8(); (ok = hex.length() == HashLen*2)) {
+                newHash = Util::ParseHexFast(hex);
+                if ((ok = newHash.length() == HashLen)) {
+                    {   // Lock scope
+                        std::unique_lock g(bitcoinDGenesisHashLock);
+                        oldHash = bitcoinDGenesisHash;
+                        bitcoinDGenesisHash = newHash;
+                    }
+                    changed = !oldHash.isEmpty() && oldHash != newHash;
+                    ok = !changed;
+                }
+            }
+            if (!ok) {
+                // Both of these error modes are pretty fatal. It might be a good idea to just
+                // quit the app here. But in the spirit of never giving up and never surrendering,
+                // we will just power through this situation with some error messages.
+                if (changed)
+                    Error() << "Error: bitcoind reports that the genesis hash has changed! Old hash: " << oldHash.toHex()
+                            << ", new hash: " << newHash.toHex();
+                else
+                    Error() << "Error: Failed to parse genesis hash from bitcoind: " << reply.result().toString();
+            } else {
+                DebugM("Refreshed genesis hash from bitcoind: ", newHash.toHex());
+            }
+        },
+        // error
+        [](const RPC::Message &msg){
+            Error() << "getblockhash error when attempting to get genesis hash, code: " << msg.errorCode()
+                    << ", error: " << msg.errorMessage();
+        },
+        // failure
+        [](const RPCMsgId &, const QString &reason){
+            Error() << "getblockhash failed when attempting to get genesis hash: " << reason;
+        }
     );
 }
 
@@ -224,6 +273,12 @@ BitcoinDInfo BitcoinDMgr::getBitcoinDInfo() const
 {
     std::shared_lock g(bitcoinDInfoLock);
     return bitcoinDInfo;
+}
+
+BlockHash BitcoinDMgr::getBitcoinDGenesisHash() const
+{
+    std::shared_lock g(bitcoinDGenesisHashLock);
+    return bitcoinDGenesisHash;
 }
 
 QVariantList BitcoinDMgr::applyBitcoinDQuirksToParams(const BitcoinDMgrHelper::ReqCtxObj *context, const QString &method, const QVariantList &paramsIn)

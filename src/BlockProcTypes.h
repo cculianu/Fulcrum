@@ -33,5 +33,5 @@ using IONum = std::uint16_t;
 using TxHash = QByteArray;
 using HashX = QByteArray; ///< Note that despite the name, unlike in ElectrumX/ElectronX, our "HashX" is always the full 32-byte sha256 hash.
 using BlockHash = QByteArray;
-constexpr int HashLen = bitcoin::uint256::width();
+inline constexpr int HashLen = bitcoin::uint256::width();
 

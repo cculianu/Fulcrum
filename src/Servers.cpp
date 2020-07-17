@@ -2169,13 +2169,13 @@ void AdminServer::rpc_getinfo(Client *c, const RPC::Message &m)
             feeTotal += pair.second->fee / bitcoin::Amount::satoshi();
         });
         mp["size_bytes"] = qulonglong(sizeTotal);
-        mp["avg_fee_sats_B"] = long(std::round(double(feeTotal) / double(sizeTotal) * 100.)) / 100.;
+        mp["avg_fee_sats_B"] = sizeTotal ? long(std::round(double(feeTotal) / double(sizeTotal) * 100.0)) / 100.0 : 0.0;
         res["mempool"] = mp;
     }
     { // utxoset
         QVariantMap us;
         us["size"] = qulonglong(storage->utxoSetSize());
-        us["size_MiB"] = long(std::round(storage->utxoSetSizeMiB() * 100.0)) / 100.;
+        us["size_MiB"] = long(std::round(storage->utxoSetSizeMiB() * 100.0)) / 100.0;
         res["utxoset"] = us;
     }
     // ThreadPool - this is thread-safe.. despite the name here it doesn't follow the StatsMixin API and returns data

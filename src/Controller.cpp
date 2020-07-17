@@ -940,12 +940,20 @@ void Controller::process(bool beSilentIfUpToDate)
             const auto & chain = task->info.chain;
             const auto normalizedChain = BTC::NetNameNormalize(chain);
             const auto net = BTC::NetFromName(chain);
-            if (const auto dbchain = storage->getChain(); dbchain.isEmpty() && !chain.isEmpty() && net != BTC::Net::Invalid) {
+            if (const auto dbchain = storage->getChain();
+                    dbchain.isEmpty() && !chain.isEmpty() && !normalizedChain.isEmpty() && net != BTC::Net::Invalid) {
+                // save the normalized chain to the db, if we were able to grok it. Older versions of Fulcrum
+                // will expect to see it in the DB since they use it to check sanity.  Newer versions >= 1.2.7
+                // instead query bitcoind for its genesish hash and compare it to db.
                 storage->setChain(normalizedChain);
-            } else if (!dbchain.isEmpty() && dbchain != normalizedChain && dbchain != chain /* `chain` for backward compat */) {
-                Fatal() << "Bitcoind reports chain: \"" << chain << "\", which differs from our database: \""
-                        << dbchain << "\". You may have connected to the wrong bitcoind. To fix this issue either "
-                        << "connect to a different bitcoind or delete this program's datadir to resynch.";
+            }
+
+            if (const auto hashDaemon = bitcoindmgr->getBitcoinDGenesisHash(), hashDb = storage->genesisHash();
+                    !hashDb.isEmpty() && !hashDaemon.isEmpty() && hashDb != hashDaemon) {
+                Fatal() << "Bitcoind reports genesis hash: \"" << hashDaemon.toHex() << "\", which differs from our "
+                        << "database: \"" << hashDb.toHex() << "\". You may have connected to the wrong bitcoind. "
+                        << "To fix this issue either connect to a different bitcoind or delete this program's datadir "
+                        << "to resynch.";
                 return;
             }
             sm->net = net;

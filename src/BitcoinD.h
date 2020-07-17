@@ -18,6 +18,7 @@
 //
 #pragma once
 
+#include "BlockProcTypes.h"
 #include "Mixins.h"
 #include "Mgr.h"
 #include "RPC.h"
@@ -74,8 +75,14 @@ public:
                        const ResultsF & = ResultsF(), const ErrorF & = ErrorF(), const FailF & = FailF());
 
     /// Thread-safe.  Returns a copy of the BitcoinDInfo object.  This object is refreshed each time we
-    /// reconnect to BitcoinD.  Called by ServerBase in various places.
+    /// reconnect to BitcoinD.  This is called by ServerBase in various places.
     BitcoinDInfo getBitcoinDInfo() const;
+
+    /// Thread-safe.  Returns a copy of the bitcoinDGenesisHash.  This hash is refreshed each time we
+    /// reconnect to BitcoinD.  If empty, we haven't yet had a valid and successful bitcoind connection.
+    /// This is called by the Controller task to check sanity and bail if it doesn't match the hash stored
+    /// in the db. See also: Storage::genesisHash().
+    BlockHash getBitcoinDGenesisHash() const;
 
 signals:
     void gotFirstGoodConnection(quint64 bitcoindId); // emitted whenever the first bitcoind after a "down" state (or after startup) gets its first good status (after successful authentication)
@@ -130,6 +137,12 @@ private:
     BitcoinDInfo bitcoinDInfo;    ///< guarded by bitcoinDInfoLock
 
     void refreshBitcoinDNetworkInfo(); ///< whenever bitcoind comes back alive, this is invoked to update the bitcoinDInfo struct
+
+    mutable std::shared_mutex bitcoinDGenesisHashLock;
+    /// guarded by bitcoinDGenesisHashLock. When we first (re)connect to bitcoind, we query this info to make sure it's still sane.
+    BlockHash bitcoinDGenesisHash;
+
+    void refreshBitcoinDGenesisHash(); ///< called whenever bitcoind comes back alive, updates bitcoinDGenesisHash
 };
 
 class BitcoinD : public RPC::HttpConnection, public ThreadObjectMixin /* NB: also inherits TimersByNameMixin via AbstractConnection base */
