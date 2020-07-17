@@ -156,30 +156,29 @@ namespace BTC
         // Cache the netnames as QStrings since we will need them later for blockchain.address.* methods in Servers.cpp
         // Note that these must always match whatever bitcoind calls these because ultimately we decide what network
         // we are on by asking bitcoind what net it's on via the "getblockchaininfo" RPC call (upon initial synch).
-        const QMap<Net, QStringList> netNameMap = {{
-            // We store a list of names for each net type because bitcoind and bchd disagree about what to call
-            // these.  The first item in the list is bitcoind's name for the network, second (if present) is bchd's.
-            { MainNet, {"main", "mainnet"}},
-            { TestNet, {"test", "testnet3"}},
-            { RegTestNet, {"regtest"}},
+        const QMap<Net, QString> netNameMap = {{
+            // These names are all the "canonical" or normalized names (they are what BCHN calls them)
+            // Note that bchd has altername names for these (see nameNetMap below).
+            { MainNet, "main"},
+            { TestNet, "test"},
+            { RegTestNet, "regtest"},
+        }};
+        const QMap<QString, Net> nameNetMap = {{
+            {"main",     MainNet},     // BCHN, BU, ABC
+            {"mainnet",  MainNet},     // bchd
+            {"test",     TestNet},     // BCHN, BU, ABC
+            {"testnet3", TestNet},     // bchd
+            {"regtest",  RegTestNet},  // BCHN, BU, ABC, bchd
         }};
         const QString invalidNetName = "invalid";
     };
     const QString & NetName(Net net) noexcept {
-        if (auto it = netNameMap.find(net); it != netNameMap.end() && !it.value().empty())
-            return it.value().front();
+        if (auto it = netNameMap.find(net); it != netNameMap.end())
+            return it.value();
         return invalidNetName; // not found
     }
     Net NetFromName(const QString & name) noexcept {
-        // all apologies for this quadratic search.. but in practice it is not too bad since the map being searched is
-        // microscopically tiny.
-        for (auto it = netNameMap.begin(); it != netNameMap.end(); ++it) {
-            for (const auto & knownName : it.value()) {
-                if (knownName == name)
-                    return it.key();
-            }
-        }
-        return Net::Invalid;
+        return nameNetMap.value(name, Net::Invalid /* default if not found */);
     }
 
 } // end namespace BTC
