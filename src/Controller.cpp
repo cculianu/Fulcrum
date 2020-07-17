@@ -942,7 +942,7 @@ void Controller::process(bool beSilentIfUpToDate)
             const auto net = BTC::NetFromName(chain);
             if (const auto dbchain = storage->getChain(); dbchain.isEmpty() && !chain.isEmpty() && net != BTC::Net::Invalid) {
                 storage->setChain(normalizedChain);
-            } else if (!dbchain.isEmpty() && dbchain != normalizedChain && dbchain != chain /* `chain` for backward comapt */) {
+            } else if (!dbchain.isEmpty() && dbchain != normalizedChain && dbchain != chain /* `chain` for backward compat */) {
                 Fatal() << "Bitcoind reports chain: \"" << chain << "\", which differs from our database: \""
                         << dbchain << "\". You may have connected to the wrong bitcoind. To fix this issue either "
                         << "connect to a different bitcoind or delete this program's datadir to resynch.";
