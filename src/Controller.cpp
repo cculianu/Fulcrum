@@ -938,15 +938,17 @@ void Controller::process(bool beSilentIfUpToDate)
                 return;
             }
             const auto & chain = task->info.chain;
-            if (const auto dbchain = storage->getChain(); dbchain.isEmpty() && !chain.isEmpty()) {
-                storage->setChain(chain);
-            } else if (dbchain != chain) {
+            const auto normalizedChain = BTC::NetNameNormalize(chain);
+            const auto net = BTC::NetFromName(chain);
+            if (const auto dbchain = storage->getChain(); dbchain.isEmpty() && !chain.isEmpty() && net != BTC::Net::Invalid) {
+                storage->setChain(normalizedChain);
+            } else if (!dbchain.isEmpty() && dbchain != normalizedChain && dbchain != chain /* `chain` for backward comapt */) {
                 Fatal() << "Bitcoind reports chain: \"" << chain << "\", which differs from our database: \""
                         << dbchain << "\". You may have connected to the wrong bitcoind. To fix this issue either "
                         << "connect to a different bitcoind or delete this program's datadir to resynch.";
                 return;
             }
-            sm->net = BTC::NetFromName(chain);
+            sm->net = net;
             if (UNLIKELY(sm->net == BTC::Net::Invalid)) {
                 // Unknown chain name. This shouldn't happen but it if does, warn the user since it will make all of
                 // the blockchain.address.* methods not work. This warning will spam the log so hopefully it will not

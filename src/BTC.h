@@ -196,6 +196,6 @@ namespace BTC
     /// Given a network name e.g. "mainnet" or "test" or "main" or "testnet3" -> transform it to the canonical name
     /// (such as "main", "test").  This is so that our app uses a single consistent string name for all net names
     /// as reported by the Bitcoin daemon (bchd uses different net names than bitcoind).
-    inline const QString & NetNameMakeCanonical(const QString &name) noexcept { return NetName(NetFromName(name)); }
+    inline const QString & NetNameNormalize(const QString &name) noexcept { return NetName(NetFromName(name)); }
 
 } // end namespace
