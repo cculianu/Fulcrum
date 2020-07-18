@@ -354,7 +354,7 @@ QVariantList BitcoinDMgr::applyBitcoinDQuirksToParams(const BitcoinDMgrHelper::R
             }
         }
     }
-    // BCHN or ABC >= v.0.20.6 require no arguments to "estimatefee"
+    // BCHN or ABC >= v.0.20.2 require no arguments to "estimatefee"
     if (quirks.zeroArgEstimateFee.load(std::memory_order::memory_order_relaxed) && method == QStringLiteral("estimatefee")) {
         params.clear();
     }
