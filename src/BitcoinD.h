@@ -24,6 +24,7 @@
 #include "RPC.h"
 #include "Version.h"
 
+#include <QHash>
 #include <QHostAddress>
 #include <QVariantMap>
 
@@ -67,7 +68,7 @@ public:
     /// context of the `sender` object's thread, but only as long as `sender` is still alive. Returns immediately
     /// regardless of which thread context it's called in, with one of the 3 following being called later, in the thread
     /// context of `sender`, when results/errors/failure is determined:
-    /// - ResultsF will be called exactly once on success returning the reults encapsulated in an RPC::Message
+    /// - ResultsF will be called exactly once on success with the reults encapsulated in an RPC::Message
     /// - If BitcoinD generated an error response, ErrorF will be called exactly once with the error wrapped in an
     ///   RPC::Message
     /// - If some other error occurred (such as timeout, or BitcoinD not connected, or connection lost, etc), FailF
@@ -75,6 +76,8 @@ public:
     ///
     /// If at any time before results are ready the `sender` object is deleted, nothing will be called and everything
     /// related to this request will be cleaned up automatically.
+    /// NOTE: the `id` for the request *must* be unique with respect to all other extant requests to bitcoind;
+    ///       use newId() to guarantee this.
     void submitRequest(QObject *sender, const RPC::Message::Id &id, const QString & method, const QVariantList & params,
                        const ResultsF & = ResultsF(), const ErrorF & = ErrorF(), const FailF & = FailF());
 
@@ -151,6 +154,12 @@ private:
     /// Calls resetPingTimer on each BitcionD -- used by quirk fixup code since bchd vs bitcoind require different
     /// pingtimes
     void resetPingTimers(int timeout_ms);
+
+    // -- Request context table and request handler function --
+    QHash<RPC::Message::Id, std::weak_ptr<BitcoinDMgrHelper::ReqCtxObj>> reqContextTable; // this should only be accessed from this thread
+    // called in on_Message and on_ErrorMessage -- dispatches message by emitting proper signal
+    template <typename ReqCtxObjT> // <-- we must template this here because ReqCtxObj is not defined yet. :/
+    void handleMessageCommon(const RPC::Message &, void (ReqCtxObjT::*resultsOrErrorFunc)(const RPC::Message &));
 };
 
 class BitcoinD : public RPC::HttpConnection, public ThreadObjectMixin /* NB: also inherits TimersByNameMixin via AbstractConnection base */
@@ -222,6 +231,8 @@ namespace BitcoinDMgrHelper {
         /// Mainly used for debugging the lifecycle of this class's instances.
         static std::atomic_int extant;
 
+        /// Called to clear the conns list (conns only hold weak_ptr refs in their lambda captures)
+        void killConns(); // only call this from this object's thread!
     signals:
         /// emitted by bitcoindmgr submitRequest internally when results are ready
         void results(const RPC::Message &response);

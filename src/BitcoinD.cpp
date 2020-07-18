@@ -109,19 +109,6 @@ void BitcoinDMgr::cleanup() {
     Debug() << "BitcoinDMgr cleaned up";
 }
 
-void BitcoinDMgr::on_Message(quint64 bid, const RPC::Message &msg)
-{
-    TraceM("Msg from: ", bid, " method=", msg.method);
-}
-void BitcoinDMgr::on_ErrorMessage(quint64 bid, const RPC::Message &msg)
-{
-    DebugM("ErrMsg from: ", bid, " (reqId: ", msg.id, ", method: ", msg.method, ") error=", msg.errorMessage());
-    if (msg.errorCode() == bitcoin::RPCErrorCode::RPC_IN_WARMUP) {
-        emit inWarmUp(msg.errorMessage());
-    }
-}
-
-
 auto BitcoinDMgr::stats() const -> Stats
 {
     QVariantList l;
@@ -135,6 +122,7 @@ auto BitcoinDMgr::stats() const -> Stats
     QVariantMap m;
     m["rpc clients"] = l;
     m["extant request contexts"] = BitcoinDMgrHelper::ReqCtxObj::extant.load();
+    m["request context table size"] = reqContextTable.size();
     m["activeTimers"] = activeTimerMapForStats();
 
     // "quirks"
@@ -254,7 +242,7 @@ void BitcoinDMgr::refreshBitcoinDNetworkInfo()
             Error() << "getnetworkinfo error, code: " << msg.errorCode() << ", error: " << msg.errorMessage();
         },
         // failure
-        [](const RPCMsgId &, const QString &reason){ Error() << "getnetworkinfo failed: " << reason; }
+        [](const RPC::Message::Id &, const QString &reason){ Error() << "getnetworkinfo failed: " << reason; }
     );
 }
 
@@ -302,7 +290,7 @@ void BitcoinDMgr::refreshBitcoinDGenesisHash()
                     << ", error: " << msg.errorMessage();
         },
         // failure
-        [](const RPCMsgId &, const QString &reason){
+        [](const RPC::Message::Id &, const QString &reason){
             Error() << "getblockhash failed when attempting to get genesis hash: " << reason;
         }
     );
@@ -329,7 +317,10 @@ QVariantList BitcoinDMgr::applyBitcoinDQuirksToParams(const BitcoinDMgrHelper::R
             // first, unconditionally attach this error handler (runs via DIRECT CONNECTION in `context`'s thread)
             connect(context, &BitcoinDMgrHelper::ReqCtxObj::error, this, [quirks=&quirks](const RPC::Message &response) {
                 // Note: for performance, this runs in the `context` object's thread as a direct conenction
-                // and as such it only captures a pointer to the thread-safe object "quirks"
+                // and as such it only captures a pointer to the thread-safe object "quirks".
+                // For now context->thread() == this->thread(), but we are being defensive here
+                // in restricting things in case we decide to change where context lives in the
+                // future.
                 DebugM("BitcoinDMgr: bchd-quirk error handler fired for `", response.method, "`");
                 if (response.errorCode() == -8) {
                     const bool flagVal = quirks->bchdGetRawTransaction;
@@ -363,44 +354,48 @@ QVariantList BitcoinDMgr::applyBitcoinDQuirksToParams(const BitcoinDMgrHelper::R
 
 /// This is safe to call from any thread. Internally it dispatches messages to this obejct's thread.
 /// Does not throw. Results/Error/Fail functions are called in the context of the `sender` thread.
-/// Returns the BitcoinD->id that was given the message.
 void BitcoinDMgr::submitRequest(QObject *sender, const RPC::Message::Id &rid, const QString & method, const QVariantList & paramsIn,
                                 const ResultsF & resf, const ErrorF & errf, const FailF & failf)
 {
     using namespace BitcoinDMgrHelper;
     constexpr bool debugDeletes = false; // set this to true to print debug messages tracking all the below object deletions (tested: no leaks!)
-    // A note about ownership: this context object is owned by the connections below both to ->sender and from bitcoind
-    // ->context.  It will be auto-deleted when the shared_ptr refct held by the lambdas drops to 0.  This is guaranteed
-    // to happen either as a result of a successful request reply, or due to bitcoind failure.
+    // A note about ownership: this context object is "owned" by the connections below to ->sender *only*.
+    // It will be auto-deleted when the shared_ptr refct held by the lambdas drops to 0.  This is guaranteed
+    // to happen either as a result of a successful request reply, or due to bitcoind failure, or if the sender
+    // is deleted.
     auto context = std::shared_ptr<ReqCtxObj>(new ReqCtxObj, [](ReqCtxObj *context){
+        // Note: this may run in any thread -- so all we can do here to context is context->deleteLater()
         if constexpr (debugDeletes) {
             DebugM(context->objectName(), " shptr deleter");
             connect(context, &QObject::destroyed, qApp, [n=context->objectName()]{ DebugM(n, " destroyed"); }, Qt::DirectConnection);
         }
-        context->deleteLater();
+        context->deleteLater(); // thread-safe
     });
     context->setObjectName(QStringLiteral("context for '%1' request id: %2").arg(sender ? sender->objectName() : QString()).arg(rid.toString()));
 
     // first, apply any bitcoind quirks (transforms 'params', may attach additional error handlers, etc)
     const QVariantList params = applyBitcoinDQuirksToParams(context.get(), method, paramsIn);
 
-    // result handler (runs in sender thread)
-    connect(context.get(), &ReqCtxObj::results, sender, [context, resf](const RPC::Message &response) {
+    // result handler (runs in sender thread), captures context and keeps it alive as long as signal/slot connection is alive
+    connect(context.get(), &ReqCtxObj::results, sender, [context, resf, sender](const RPC::Message &response) {
         if (!context->replied.exchange(true) && resf)
             resf(response);
-        context->disconnect(); // kills all lambdas and shared ptr, should cause deleter to execute
+        // kill lambdas and shared_ptr captures, should cause deleter to execute
+        context->disconnect(nullptr, sender); // thread-safe
     });
-    // error handler (runs in sender thread)
-    connect(context.get(), &ReqCtxObj::error, sender, [context, errf](const RPC::Message &response) {
+    // error handler (runs in sender thread), captures context and keeps it alive as long as signal/slot connection is alive
+    connect(context.get(), &ReqCtxObj::error, sender, [context, errf, sender](const RPC::Message &response) {
         if (!context->replied.exchange(true) && errf)
             errf(response);
-        context->disconnect(); // kills all lambdas and shared ptr, should cause deleter to execute
+        // kill lambdas and shared_ptr captures, should cause deleter to execute
+        context->disconnect(nullptr, sender); // thread-safe
     });
-    // failure handler (runs in sender thread)
-    connect(context.get(), &ReqCtxObj::fail, sender, [context, failf](const RPC::Message::Id &origId, const QString & failureReason) {
+    // failure handler (runs in sender thread), captures context and keeps it alive as long as signal/slot connection is alive
+    connect(context.get(), &ReqCtxObj::fail, sender, [context, failf, sender](const RPC::Message::Id &origId, const QString & failureReason) {
         if (!context->replied.exchange(true) && failf)
             failf(origId, failureReason);
-        context->disconnect(); // kills all lambdas and shared ptr, should cause deleter to execute
+        // kill lambdas and shared_ptr captures, should cause deleter to execute
+        context->disconnect(nullptr, sender); // thread-safe
     });
 
     // send the context to our thread
@@ -413,36 +408,51 @@ void BitcoinDMgr::submitRequest(QObject *sender, const RPC::Message::Id &rid, co
             emit context->fail(rid, "Unable to find a good BitcoinD connection");
             return;
         }
-        using ConnsList = decltype (context->conns);
-        static const auto killConns = [](ConnsList & conns) {
-            for (const auto & conn : conns) {
-                QObject::disconnect(conn);
+
+        // put context in table -- this table is consulted in handleMessageCommon to dispatch
+        // the reply directly to this context object
+        if (auto it = reqContextTable.find(rid); LIKELY(it == reqContextTable.end() || it.value().expired())) {
+            // does not exist in table, put in table
+            reqContextTable[rid] = context; // weak ref inserted into table
+            // Install cleanup handler to remove object from table on `destroyed`.
+            // NOTE: it's not clear to me if the destroyed signal is guaranteed to be delivered if
+            // context->thread() != this->thread().  Currently the two live in the same thread but
+            // if that changes -- update this code and/or test that the signal is in fact delivered
+            // reliably.
+            connect(context.get(), &QObject::destroyed, this, [this, rid](QObject *context) {
+                // remove context from table and also check it's what we expect
+                if (const auto ref = reqContextTable.take(rid).lock(); ref && ref.get() != context) {
+                    // this should never happen
+                    Error() << "Context in table with rid " << rid << " differs from what we expected! FIXME!";
+                }
+                if constexpr (debugDeletes)
+                    DebugM(__func__, " - req context table size now: ", reqContextTable.size());
+            });
+        } else {
+            // this indicates a bug in this code
+            emit context->fail(rid, QString("Request id %1 already exists in table! FIXME!").arg(rid.toString()));
+            return;
+        }
+
+        /* Note the "Results" and "Error" responses are handled in on_Message and on_ErrorMessage
+           by looking up the proper context object in the hash table directly. */
+
+        // Connect some signals to trap the situation where things may go wrong.
+        // The capture of `context` is a weak ptr to not keep it alive longer than it needs to stay alive.
+        using WeakPtr = std::weak_ptr<BitcoinDMgrHelper::ReqCtxObj>;
+        context->conns +=
+        connect(bd, &BitcoinD::lostConnection, context.get(), [weakContext = WeakPtr(context), rid](AbstractConnection *){
+            if (auto context = weakContext.lock()) {
+                emit context->fail(rid, "connection lost");
+                context->killConns(); // remove these two connections right away to prevent duplicate fail() delivery
             }
-            conns.clear();
-        };
-        context->conns +=
-        connect(bd, &BitcoinD::gotMessage, context.get(), [context, rid](quint64, const RPC::Message &reply){
-             if (reply.id == rid) {// filter out messages not for us
-                emit context->results(reply);
-                killConns(context->conns); // to kill lambdas, shared ptr captures
-             }
         });
         context->conns +=
-        connect(bd, &BitcoinD::gotErrorMessage, context.get(), [context, rid](quint64, const RPC::Message &errMsg){
-             if (errMsg.id == rid) { // filter out error messages not for us
-                 emit context->error(errMsg);
-                 killConns(context->conns); // to kill lambdas, shared ptr captures
-             }
-        });
-        context->conns +=
-        connect(bd, &BitcoinD::lostConnection, context.get(), [context, rid](AbstractConnection *){
-            emit context->fail(rid, "connection lost");
-            killConns(context->conns); // to kill lambdas, shared ptr captures
-        });
-        context->conns +=
-        connect(bd, &QObject::destroyed, context.get(), [context, rid](QObject *){
-            emit context->fail(rid, "bitcoind client deleted");
-            killConns(context->conns); // to kill lambdas, shared ptr captures
+        connect(bd, &QObject::destroyed, context.get(), [weakContext = WeakPtr(context), rid](QObject *){
+            if (auto context = weakContext.lock()) {
+                emit context->fail(rid, "bitcoind client deleted");
+                context->killConns(); // remove these two connections right away to prevent duplicate fail() delivery
+            }
         });
 
         bd->sendRequest(rid, method, params);
@@ -451,11 +461,62 @@ void BitcoinDMgr::submitRequest(QObject *sender, const RPC::Message::Id &rid, co
     // .. aand.. return right away
 }
 
+namespace {
+    using ReqCtxResultsOrErrorFunc = decltype(&BitcoinDMgrHelper::ReqCtxObj::results);
+}
+
+template <>
+void BitcoinDMgr::handleMessageCommon(const RPC::Message &msg, ReqCtxResultsOrErrorFunc resultsOrErrorFunc)
+{
+    // find message context in map
+    auto context = reqContextTable.take(msg.id).lock();
+    if (!context) {
+        if (msg.method != "ping") { // <--- pings don't go through our req layer so they always come through without a table entry here
+            // this can happen in rare cases if the sender object was deleted before bitcoind responded.
+            // log the situation but don't warn or anything like that
+            DebugM(__func__, " - request id ", msg.id, " method `", msg.method, "` not found in request context table "
+                   "(sender object may have already been deleted)");
+        }
+        return;
+    }
+    // call member function pointer
+    emit (context.get()->*resultsOrErrorFunc)(msg);
+    // kill lambdas, weak_ptr captures
+    context->killConns();
+}
+
+void BitcoinDMgr::on_Message(quint64 bid, const RPC::Message &msg)
+{
+    TraceM("Msg from: ", bid, " (reqId: ", msg.id, " method: ", msg.method, ")");
+
+    // handle the messsage by looking up the context in the table and emitting the proper signal
+    handleMessageCommon(msg, &BitcoinDMgrHelper::ReqCtxObj::results);
+}
+
+void BitcoinDMgr::on_ErrorMessage(quint64 bid, const RPC::Message &msg)
+{
+    DebugM("ErrMsg from: ", bid, " (reqId: ", msg.id, ", method: ", msg.method, ") code=", msg.errorCode(),
+           " error=", msg.errorMessage());
+    if (msg.errorCode() == bitcoin::RPCErrorCode::RPC_IN_WARMUP) {
+        emit inWarmUp(msg.errorMessage());
+    }
+
+    // handle the messsage by looking up the context in the table and emitting the proper signal
+    handleMessageCommon(msg, &BitcoinDMgrHelper::ReqCtxObj::error);
+}
+
+
 namespace BitcoinDMgrHelper {
     /* static */ std::atomic_int ReqCtxObj::extant{0};
     ReqCtxObj::ReqCtxObj() : QObject(nullptr) { ++extant; }
     ReqCtxObj::~ReqCtxObj() { --extant; }
+    void ReqCtxObj::killConns() {
+        for (const auto & conn : conns)
+            QObject::disconnect(conn);
+        conns.clear();
+    }
 }
+
 
 /* --- BitcoinD --- */
 auto BitcoinD::stats() const -> Stats
