@@ -16,10 +16,10 @@ Version::Version(unsigned val, CompactType type)
     switch(type) {
     case BitcoinD: {
         // e.g. 0.20.6 comes in like this from bitcoind (as an unsigned int): 200600
-        const unsigned major = val / 1000000,
-                       minor0 = val % 1000000,
-                       minor = minor0 / 10000,
-                       revision = (minor0 % 10000) / 100;
+        const unsigned major    = val / 1'000'000,
+                       minor0   = val % 1'000'000,
+                       minor    = minor0 / 10'000,
+                       revision = (minor0 % 10'000) / 100;
         *this = Version(major, minor, revision);
         break;
     }
