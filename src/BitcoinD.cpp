@@ -171,7 +171,7 @@ BitcoinD *BitcoinDMgr::getBitcoinD()
 
 void BitcoinDMgr::refreshBitcoinDNetworkInfo()
 {
-    submitRequest(this, newId(), "getnetworkinfo", {},
+    submitRequest(this, newId(), "getnetworkinfo", QVariantList{},
         // success
         [this](const RPC::Message & reply) {
             const QVariantMap networkInfo = reply.result().toMap();
@@ -227,7 +227,7 @@ void BitcoinDMgr::refreshBitcoinDNetworkInfo()
 
 void BitcoinDMgr::refreshBitcoinDGenesisHash()
 {
-    submitRequest(this, newId(), "getblockhash", {{0}},
+    submitRequest(this, newId(), "getblockhash", {0},
         // success
         [this](const RPC::Message & reply) {
             bool ok, changed = false;
@@ -283,7 +283,7 @@ BlockHash BitcoinDMgr::getBitcoinDGenesisHash() const
 
 QVariantList BitcoinDMgr::applyBitcoinDQuirksToParams(const BitcoinDMgrHelper::ReqCtxObj *context, const QString &method, const QVariantList &paramsIn)
 {
-    QVariantList params{paramsIn}; // quick shallow copy
+    QVariantList params = paramsIn; // quick shallow copy
     // bchd quirk workaround detection (may add custom error handler connected to `this`, and mutate params iff `getrawtransaction`)
     if (quirks.isBchd.load(std::memory_order::memory_order_relaxed)) {
         if (method == QStringLiteral("getrawtransaction")) {

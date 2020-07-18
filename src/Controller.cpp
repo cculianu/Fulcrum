@@ -202,7 +202,7 @@ struct GetChainInfoTask : public CtlTask
 
 void GetChainInfoTask::process()
 {
-    submitRequest("getblockchaininfo", {}, [this](const RPC::Message & resp){
+    submitRequest("getblockchaininfo", QVariantList{}, [this](const RPC::Message & resp){
         const auto Err = [this, id=resp.id.toInt()](const QString &thing) {
             const auto msg = QString("Failed to parse %1").arg(thing);
             errorCode = id;
