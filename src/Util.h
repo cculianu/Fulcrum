@@ -18,6 +18,7 @@
 //
 #pragma once
 
+#include "ByteView.h"
 #include "Common.h"
 #include <QtCore>
 
@@ -696,22 +697,20 @@ namespace Util {
     }
 
     /// uses MurmurHash3 with the unique seed initialized at app start
-    uint32_t hashData32(const std::byte *data, size_t dataLenBytes);
+    uint32_t hashData32(const ByteView &);
 
     /// uses CityHash64 with the unique seed initialized at app start
-    uint64_t hashData64(const std::byte *data, size_t dataLenBytes);
+    uint64_t hashData64(const ByteView &);
 
-    inline std::size_t hashForStd(const std::byte *data, std::size_t dataLenBytes) {
+    inline std::size_t hashForStd(const ByteView &bv) {
         constexpr auto size_t_size = sizeof(std::size_t);
         static_assert(size_t_size == sizeof(uint32_t) || size_t_size == sizeof(uint64_t));
         if constexpr (size_t_size == sizeof(uint64_t)) {
-            return std::size_t(hashData64(data, dataLenBytes));
+            return std::size_t(hashData64(bv));
         } else {
-            return std::size_t(hashData32(data, dataLenBytes));
+            return std::size_t(hashData32(bv));
         }
     }
-    template <typename T>
-    inline std::size_t hashForStd(const T &t) { return hashForStd(reinterpret_cast<const std::byte *>(&t), sizeof(t)); }
 
 } // end namespace Util
 

@@ -152,18 +152,18 @@ namespace BTC
     /// already randomized.
     template <typename BytesT>
     struct GenericTrivialHashHasher {
-        std::size_t operator()(const BytesT &b) const noexcept {
-            if (LIKELY(std::size_t(b.size()) >= sizeof(std::size_t))) {
+        static_assert(std::is_convertible_v<BytesT, ByteView>, "Assumption here is that BytesT has an implicit conversion to ByteView");
+
+        std::size_t operator()(const ByteView &bv) const noexcept {
+            if (LIKELY(bv.size() >= sizeof(std::size_t))) {
                 // common case, just return the first 8 bytes reinterpreted as size_t since this is already
                 // a random hash.
-                static_assert (std::is_scalar_v<std::remove_pointer_t<decltype (b.begin())>>,
-                               "GenericTrivialHasher must be used with a container type where .begin() returns a pointer to its data." );
                 std::size_t ret;
-                std::memcpy(reinterpret_cast<char *>(&ret), b.begin(), sizeof(ret));
+                std::memcpy(reinterpret_cast<char *>(&ret), bv.data(), sizeof(ret));
                 return ret;
             }
             // this should not normally be reached.
-            return Util::hashForStd(reinterpret_cast<const std::byte *>(b.begin()), std::size_t(b.size()));
+            return Util::hashForStd(bv);
         }
     };
 

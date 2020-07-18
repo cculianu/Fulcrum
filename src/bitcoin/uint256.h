@@ -26,30 +26,29 @@ namespace bitcoin {
 
 /** Template base class for fixed-sized opaque blobs. */
 template <unsigned int BITS> class base_blob {
-protected:
     static constexpr int WIDTH = BITS / 8;
-    uint8_t data[WIDTH];
+    uint8_t m_data[WIDTH];
 
 public:
-    constexpr base_blob() noexcept : data{0} { }
+    constexpr base_blob() noexcept : m_data{0} { }
 
     explicit base_blob(const std::vector<uint8_t> &vch) noexcept;
 
     constexpr bool IsNull() const noexcept {
         for (int i = 0; i < WIDTH; i++) {
-            if (data[i] != 0) {
+            if (m_data[i] != 0) {
                 return false;
             }
         }
         return true;
     }
 
-    void SetNull() noexcept { std::memset(data, 0, sizeof(data)); }
+    void SetNull() noexcept { std::memset(m_data, 0, sizeof(m_data)); }
 
     constexpr int Compare(const base_blob &other) const noexcept {
-        for (size_t i = 0; i < sizeof(data); i++) {
-            uint8_t a = data[sizeof(data) - 1 - i];
-            uint8_t b = other.data[sizeof(data) - 1 - i];
+        for (size_t i = 0; i < sizeof(m_data); i++) {
+            uint8_t a = m_data[sizeof(m_data) - 1 - i];
+            uint8_t b = other.m_data[sizeof(m_data) - 1 - i];
             if (a != b) {
                 if (a > b)
                     return 1;
@@ -85,20 +84,23 @@ public:
     void SetHex(const std::string &str);
     std::string ToString() const { return GetHex(); }
 
-    constexpr uint8_t *begin() noexcept { return &data[0]; }
+    constexpr uint8_t *begin() noexcept { return &m_data[0]; }
 
-    constexpr uint8_t *end() noexcept { return &data[WIDTH]; }
+    constexpr uint8_t *end() noexcept { return &m_data[WIDTH]; }
 
-    constexpr const uint8_t *begin() const noexcept { return &data[0]; }
+    constexpr const uint8_t *begin() const noexcept { return &m_data[0]; }
 
-    constexpr const uint8_t *end() const noexcept { return &data[WIDTH]; }
+    constexpr const uint8_t *end() const noexcept { return &m_data[WIDTH]; }
 
-    constexpr unsigned int size() const noexcept { return sizeof(data); }
+    constexpr uint8_t *data() noexcept { return begin(); }
+    constexpr const uint8_t *data() const noexcept { return begin(); }
+
+    constexpr unsigned int size() const noexcept { return sizeof(m_data); }
 
     static constexpr int width() noexcept { return WIDTH; } // added by Calin
 
     constexpr uint64_t GetUint64(int pos) const noexcept {
-        const uint8_t *ptr = data + pos * 8;
+        const uint8_t *ptr = m_data + pos * 8;
         return uint64_t(ptr[0]) | (uint64_t(ptr[1]) << 8) |
                (uint64_t(ptr[2]) << 16) | (uint64_t(ptr[3]) << 24) |
                (uint64_t(ptr[4]) << 32) | (uint64_t(ptr[5]) << 40) |
@@ -106,11 +108,11 @@ public:
     }
 
     template <typename Stream> void Serialize(Stream &s) const {
-        s.write((char *)data, sizeof(data));
+        s.write((char *)m_data, sizeof(m_data));
     }
 
     template <typename Stream> void Unserialize(Stream &s) {
-        s.read((char *)data, sizeof(data));
+        s.read((char *)m_data, sizeof(m_data));
     }
 };
 
@@ -147,7 +149,7 @@ public:
      * appropriate when the value can easily be influenced from outside as e.g.
      * a network adversary could provide values to trigger worst-case behavior.
      */
-    uint64_t GetCheapHash() const { return ReadLE64(data); }
+    uint64_t GetCheapHash() const { return ReadLE64(data()); }
 };
 
 /**

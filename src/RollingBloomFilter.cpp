@@ -27,10 +27,6 @@
 #include <cmath>
 #include <limits>
 
-namespace {
-    using byte = RollingBloomFilter::byte;
-}
-
 RollingBloomFilter::RollingBloomFilter(const uint32_t nElements, const double fpRate) {
     constexpr auto EPSILON = std::numeric_limits<double>::epsilon();
     const Defer deferredIsValidChecker([&] {
@@ -95,9 +91,9 @@ RollingBloomFilter::RollingBloomFilter(const uint32_t nElements, const double fp
 
 /* Similar to CBloomFilter::Hash */
 static inline uint32_t
-RollingBloomHash(uint32_t nHashNum, uint32_t nTweak, const byte *pDataToHash, size_t nDataLen) {
+RollingBloomHash(uint32_t nHashNum, uint32_t nTweak, const ByteView &data) {
     return bitcoin::MurmurHash3(nHashNum * 0xFBA4C795 + nTweak,
-                                reinterpret_cast<const uint8_t *>(pDataToHash), nDataLen);
+                                data.ucharData(), data.size());
 }
 
 // A replacement for x % n. This assumes that x and n are 32bit integers, and x
@@ -108,7 +104,7 @@ static inline uint32_t FastMod(uint32_t x, size_t n) {
     return (uint64_t(x) * uint64_t(n)) >> 32;
 }
 
-void RollingBloomFilter::insert(const byte *bytes, size_t len) {
+void RollingBloomFilter::insert(const ByteView &bv) {
     if (!isValid())
         return;
 
@@ -130,7 +126,7 @@ void RollingBloomFilter::insert(const byte *bytes, size_t len) {
     nEntriesThisGeneration++;
 
     for (int n = 0; n < nHashFuncs; n++) {
-        uint32_t h = RollingBloomHash(n, nTweak, bytes, len);
+        uint32_t h = RollingBloomHash(n, nTweak, bv);
         int bit = h & 0x3F;
         /* FastMod works with the upper bits of h, so it is safe to ignore that
          * the lower bits of h are already used for bit. */
@@ -144,12 +140,12 @@ void RollingBloomFilter::insert(const byte *bytes, size_t len) {
     }
 }
 
-bool RollingBloomFilter::contains(const byte *bytes, size_t len) const {
+bool RollingBloomFilter::contains(const ByteView &bv) const {
     if (!isValid())
         return false;
 
     for (int n = 0; n < nHashFuncs; n++) {
-        uint32_t h = RollingBloomHash(n, nTweak, bytes, len);
+        uint32_t h = RollingBloomHash(n, nTweak, bv);
         int bit = h & 0x3F;
         uint32_t pos = FastMod(h, data.size());
         /* If the relevant bit is not set in either data[pos & ~1] or data[pos |
