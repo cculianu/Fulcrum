@@ -145,13 +145,7 @@ auto BitcoinDMgr::stats() const -> Stats
     m["quirks"] = quirks;
 
     // "bitcoind info"
-    QVariantMap bdInfoMap;
-    const auto bdInfo = getBitcoinDInfo(); // takes lock, makes a copy, releases lock
-    bdInfoMap["version"] = bdInfo.version.toString(true);
-    bdInfoMap["subversion"] = bdInfo.subversion;
-    bdInfoMap["warnings"] = bdInfo.warnings;
-    bdInfoMap["relayfee"] = bdInfo.relayFee;
-    m["bitcoind info"] = bdInfoMap;
+    m["bitcoind info"] = getBitcoinDInfo().toVariandMap(); // takes lock, makes a copy, releases lock;
 
     return m;
 }
@@ -594,3 +588,13 @@ void BitcoinD::resetPingTimer(int time_ms)
         Util::AsyncOnObject(this, setter, 0);
 }
 
+
+QVariantMap BitcoinDInfo::toVariandMap() const
+{
+    QVariantMap ret;
+    ret["version"] = version.toString(true);
+    ret["subversion"] = subversion;
+    ret["warnings"] = warnings;
+    ret["relayfee"] = relayFee;
+    return ret;
+}

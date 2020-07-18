@@ -25,6 +25,7 @@
 #include "Version.h"
 
 #include <QHostAddress>
+#include <QVariantMap>
 
 #include <atomic>
 #include <memory>
@@ -40,6 +41,9 @@ struct BitcoinDInfo {
     QString subversion; ///< subversion string from daemon e.g.: /Bitcoin Cash Node bla bla;EB32 ..../
     double relayFee = 0.0; ///< from 'relayfee' in the getnetworkinfo response; minimum fee/kb to relay a tx, usually: 0.00001000
     QString warnings = ""; ///< from 'warnings' in the getnetworkinfo response (usually is empty string, but may not always be)
+
+    /// Return all the information in this obejct as a QVariantMap suitable for placing into JSON results, etc (used by /stats and `getinfo`)
+    QVariantMap toVariandMap() const;
 };
 
 class BitcoinDMgr : public Mgr, public IdMixin, public ThreadObjectMixin, public TimersByNameMixin

@@ -2137,15 +2137,7 @@ void AdminServer::rpc_getinfo(Client *c, const RPC::Message &m)
 {
     QVariantMap res;
     res["bitcoind"] = QString("%1:%2").arg(options->bitcoind.first).arg(options->bitcoind.second);
-    {
-        const auto bitcoindDInfo = bitcoindmgr->getBitcoinDInfo();
-        const auto & ver = bitcoindDInfo.version;
-        res["bitcoind_info"] = QVariantMap{{
-            { "version", QVariantList{{ ver.major, ver.minor, ver.revision }} },
-            { "subversion", bitcoindDInfo.subversion },
-            { "warnings", bitcoindDInfo.warnings },
-        }};
-    }
+    res["bitcoind_info"] = bitcoindmgr->getBitcoinDInfo().toVariandMap();
     {
         const auto opt = storage->latestHeight();
         res["height"] = opt.has_value() ? *opt : QVariant();
