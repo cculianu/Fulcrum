@@ -1516,10 +1516,9 @@ void Server::LogFilter::Broadcast::operator()(bool isSuccess, const QByteArray &
     auto [doLog, isDebug] = [&]() -> std::pair<bool, bool> {
         std::unique_lock g(lock);
         auto & which = isSuccess ? success : fail;
-        if (key.isEmpty() || !which.contains(key)) {
+        if (!which.contains(key)) {
             // log the line if it's not already been logged (this prevents log spam abuse from malicious clients)
-            if (!key.isEmpty())
-                which.insert(key);
+            which.insert(key);
             return {true, false};
         } else if (Debug::isEnabled()) {
             // even if suppressed, log it anyway as debug log, iff debug is enabled
@@ -1564,13 +1563,17 @@ void Server::LogFilter::Broadcast::onNewBlock()
 
 void Server::rpc_blockchain_transaction_broadcast(Client *c, const RPC::Message &m)
 {
-    QVariantList l = m.paramsList();
+    const QVariantList l = m.paramsList();
     assert(l.size() == 1);
-    QByteArray rawtxhex = l.front().toString().left(kMaxTxHex).toUtf8(); // limit raw hex to sane length.
+    const QByteArray rawtxhex = l.front().toString().left(kMaxTxHex).toUtf8(); // limit raw hex to sane length.
+    // -- Note we need the txkey for broadcast fail filtering -- the key is a single sha256 of the tx bytes, but
+    // -- just the first 16 bytes of this hash are taken. Keeping the key compact is essential because the bloom
+    // -- filter may end up applying murmur3 hash to the entire key we give it from 20-50 times!
+    const QByteArray txkey = (!rawtxhex.isEmpty() ? BTC::HashOnce(Util::ParseHexFast(rawtxhex)).left(16) : QByteArrayLiteral("xx"));
     // no need to validate hex here -- bitcoind does validation for us!
     generic_async_to_bitcoind(c, m.id, "sendrawtransaction", QVariantList{ rawtxhex },
         // print to log, echo bitcoind's reply to client
-        [size=rawtxhex.length()/2, c, this](const RPC::Message & reply){
+        [size=rawtxhex.length()/2, c, this, txkey](const RPC::Message & reply){
             QVariant ret = reply.result();
             ++c->info.nTxSent;
             c->info.nTxBytesSent += unsigned(size);
@@ -1578,7 +1581,7 @@ void Server::rpc_blockchain_transaction_broadcast(Client *c, const RPC::Message 
             QByteArray logLine;
             QTextStream{&logLine, QIODevice::WriteOnly}
                 << "Broadcast tx for client " << c->id << ", size: " << size << " bytes, response: " << ret.toString();
-            logFilter->broadcast(true, logLine, ret.toString().toUtf8());
+            logFilter->broadcast(true, logLine, txkey);
             static const Version FirstNonVulberableECVersion(3,3,4);
             if (const auto uaVersion = c->info.uaVersion(); uaVersion.isValid() && uaVersion < FirstNonVulberableECVersion) {
                 // The below is to warn old clients that they are vulnerable to a phishing attack.
@@ -1600,11 +1603,7 @@ void Server::rpc_blockchain_transaction_broadcast(Client *c, const RPC::Message 
             return ret;
         },
         // error func, throw an RPCError that's formatted in a particular way
-        // -- Note we need the txkey for broadcast fail filtering -- the key is a single sha256 of the tx bytes, but
-        // -- just the first 16 bytes of this hash are taken. Keeping the key compact is essential because the bloom
-        // -- filter may end up applying murmur3 hash to the entire key we give it from 20-50 times!
-        [c, this, txkey = (!rawtxhex.isEmpty() ? BTC::HashOnce(Util::ParseHexFast(rawtxhex)) : QByteArrayLiteral("xx")).left(16)]
-        (const RPC::Message & errResponse) {
+        [c, this, txkey] (const RPC::Message & errResponse) {
             ++c->info.nTxBroadcastErrors;
             const auto errorMessage = errResponse.errorMessage();
             {
