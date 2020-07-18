@@ -26,6 +26,13 @@
 
 #include <mutex>
 
+namespace {
+    enum class PingTimes : int {
+        Normal = 10'000,  /**< Normal bitcoind -- we send a ping every 10 seconds */
+        BCHD   =  3'333,  /**< bchd has a short idle timeout of 10 secs. 3.333 sec pingtime ensures no dropped conns. */
+    };
+}
+
 BitcoinDMgr::BitcoinDMgr(const QString &hostName, quint16 port,
                          const QString &user, const QString &pass)
     : Mgr(nullptr), IdMixin(newId()), hostName(hostName), port(port), user(user), pass(pass)
@@ -169,50 +176,81 @@ BitcoinD *BitcoinDMgr::getBitcoinD()
     return ret;
 }
 
+namespace {
+    struct BitcoinDVersionParseResult {
+        bool isBchd;
+        Version version;
+    };
+
+    BitcoinDVersionParseResult parseBitcoindDVersion(unsigned val, const QString &subversion) {
+        // e.g. 0.20.6 comes in like this from bitcoind (as an unsigned int): 200600
+        // Note: bchd has a weird version int with a different format than above that we try to handle.
+        if (subversion.startsWith("/bchd")) {
+            // bchd is quirky. We can't rely on its "version" integer since the algorithm for its packing
+            // is bizarre in older versions. (In newer versons Josh says he changed it to match bitcoind).
+            // Instead, we parse the subversion string: /bchd:maj.min.rev(
+            Version version;
+            if (const int colon = subversion.indexOf(':'), trailSlash = subversion.lastIndexOf('/'); colon == 5 && trailSlash > colon) {
+                const int len = trailSlash - (colon + 1);
+                if (len > 0)
+                    // try and parse everything after /bchd:
+                    version = Version(subversion.mid(colon + 1, len));
+            }
+            if (!version.isValid())
+                // hmm.. subversion isnt /bchd:x.y.z( -> fall back to parsing the integer value (only works on newer bchd)
+                version = Version(val, Version::BitcoinD);
+            return {true, version};
+        } else {
+            // regular bitcoind, "val" is reliable
+            return {false, Version(val, Version::BitcoinD)};
+        }
+    }
+}
+
 void BitcoinDMgr::refreshBitcoinDNetworkInfo()
 {
     submitRequest(this, newId(), "getnetworkinfo", QVariantList{},
         // success
         [this](const RPC::Message & reply) {
-            const QVariantMap networkInfo = reply.result().toMap();
-            bool ok = false;
-            const auto val = networkInfo.value("version", 0).toUInt(&ok);
             {
-                // EXCLUSIVE-LOCKED SCOPE
+                const QVariantMap networkInfo = reply.result().toMap();
+                // --- EXCLUSIVE-LOCKED SCOPE below this line ---
                 std::unique_lock g(bitcoinDInfoLock);
                 bitcoinDInfo.subversion = networkInfo.value("subversion", "").toString();
-                const bool isBchd = bitcoinDInfo.subversion.startsWith("/bchd");
-                if (ok) {
-                    // e.g. 0.20.6 comes in like this from bitcoind (as an unsigned int): 200600
-                    // Note: bchd has a weird version int with a different format than above that we try to handle.
-                    bitcoinDInfo.version = Version(val, isBchd ? Version::BCHD :Version::BitcoinD);
-                    DebugM("Refreshed version info from bitcoind, version: ", bitcoinDInfo.version.toString(true),
-                           ", subversion: ", bitcoinDInfo.subversion);
-                } else {
-                    Warning() << "Failed to parse version info from bitcoind";
-                }
+                // try and determine version major/minor/revision
+                quirks.isBchd = [&networkInfo, this] {
+                    bool ok = false;
+                    const auto val = networkInfo.value("version", 0).toUInt(&ok);
+
+                    if (ok) {
+                        const auto res = parseBitcoindDVersion(val, bitcoinDInfo.subversion);
+                        bitcoinDInfo.version = res.version;
+                        DebugM("Refreshed version info from bitcoind, version: ", bitcoinDInfo.version.toString(true),
+                               ", subversion: ", bitcoinDInfo.subversion);
+                        return res.isBchd;
+                    } else {
+                        bitcoinDInfo.version = Version();
+                        Warning() << "Failed to parse version info from bitcoind";
+                    }
+                    return false;
+                }();
                 bitcoinDInfo.relayFee = networkInfo.value("relayfee", 0.0).toDouble();
                 bitcoinDInfo.warnings = networkInfo.value("warnings", "").toString();
-                // set some quirk flags
-                [this](const Version &version, const QString &subversion, const bool isBchd)
-                {
-                    // bchd?
-                    quirks.isBchd = isBchd; // informs submitRequest that we (maybe) need to do some workarounds for bchd
-
-                    // requires 0 arg `estimatefee`?
-                    static const auto isZeroArgEstimateFee = [](const Version &version, const QString &subversion) -> bool {
-                        static const QString zeroArgSubversionPrefixes[] = { "/Bitcoin ABC", "/Bitcoin Cash Node", };
-                        static const Version minVersion{0, 20, 2};
-                        if (version < minVersion)
-                            return false;
-                        for (const auto & prefix : zeroArgSubversionPrefixes)
-                            if (subversion.startsWith(prefix))
-                                return true;
+                // set quirk flags: requires 0 arg `estimatefee`?
+                static const auto isZeroArgEstimateFee = [](const Version &version, const QString &subversion) -> bool {
+                    static const QString zeroArgSubversionPrefixes[] = { "/Bitcoin ABC", "/Bitcoin Cash Node", };
+                    static const Version minVersion{0, 20, 2};
+                    if (version < minVersion)
                         return false;
-                    };
-                    quirks.zeroArgEstimateFee = isZeroArgEstimateFee(version, subversion);
-                }(bitcoinDInfo.version, bitcoinDInfo.subversion, isBchd);
-            }
+                    for (const auto & prefix : zeroArgSubversionPrefixes)
+                        if (subversion.startsWith(prefix))
+                            return true;
+                    return false;
+                };
+                quirks.zeroArgEstimateFee = isZeroArgEstimateFee(bitcoinDInfo.version, bitcoinDInfo.subversion);
+            } // end lock scope
+            // next, be sure to set up the ping time appropriately for bchd vs bitcoind
+            resetPingTimers(int(quirks.isBchd ? PingTimes::BCHD : PingTimes::Normal));
             // next up, do this query
             refreshBitcoinDGenesisHash();
         },
@@ -223,6 +261,12 @@ void BitcoinDMgr::refreshBitcoinDNetworkInfo()
         // failure
         [](const RPCMsgId &, const QString &reason){ Error() << "getnetworkinfo failed: " << reason; }
     );
+}
+
+void BitcoinDMgr::resetPingTimers(int timeout_ms)
+{
+    for (auto & bd : clients)
+        if (bd) bd->resetPingTimer(timeout_ms); // thread-safe
 }
 
 void BitcoinDMgr::refreshBitcoinDGenesisHash()
@@ -439,8 +483,7 @@ BitcoinD::BitcoinD(const QString &host, quint16 port, const QString & user, cons
     setAuth(user, pass);
     setHeaderHost(QString("%1:%2").arg(host).arg(port)); // for HTTP RFC 2616 Host: field
     setV1(true); // bitcoind uses jsonrpc v1
-    pingtime_ms = 10000;
-    stale_threshold = pingtime_ms * 2;
+    resetPingTimer(int(PingTimes::Normal)); // just sets pingtime_ms and stale_threshold = pingtime_ms * 2
 
     connectMiscSignals();
 }
@@ -530,3 +573,24 @@ void BitcoinD::do_ping()
     } else
         emit sendRequest(newId(), "ping");
 }
+
+void BitcoinD::resetPingTimer(int time_ms)
+{
+    auto setter = [time_ms, this] {  // set up the "pingTimer"
+        if (pingtime_ms != time_ms)
+            DebugM("Changed pingtime_ms: ", time_ms);
+        pingtime_ms = time_ms;
+        stale_threshold = pingtime_ms * 2;
+        if (pingtime_ms > 0) {
+            resetTimerInterval(pingTimer, pingtime_ms); // no-op if pingTimer not active
+        } else {
+            stopTimer(pingTimer); // no-op if pingTimer not active
+        }
+    };
+    // thread guard -- can only do the above in "this" object's thread
+    if (this->thread() == QThread::currentThread())
+        setter();
+    else
+        Util::AsyncOnObject(this, setter, 0);
+}
+

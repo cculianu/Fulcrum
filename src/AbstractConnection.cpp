@@ -231,7 +231,7 @@ void AbstractConnection::on_connected()
                 do_ping();
             return true;
         };
-        const int period_ms = pingtime_ms/* 1 minute */ / 2;
+        const int period_ms = pingtime_ms/* default: 1 minute */ / 2;
         callOnTimerSoon(period_ms, pingTimer, on_pingTimer, true, Qt::TimerType::VeryCoarseTimer); // method inherited from TimersByNameMixin
     }
 }

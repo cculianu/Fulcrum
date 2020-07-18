@@ -137,9 +137,9 @@ protected:
     );
 
     /// Returns true iff timer `name` exists
-    inline bool isTimerByNameActive(const QString & name) const { return _timerMap.contains(name); }
+    bool isTimerByNameActive(const QString & name) const { return _timerMap.contains(name); }
     /// Calls setInterval for you on the named timer, if it exists, and returns true. Returns false otherwise.
-    inline bool resetTimerInterval(const QString & name, int interval_ms) {
+    bool resetTimerInterval(const QString & name, int interval_ms) {
         if (auto timer = _timerMap.value(name); timer) {
             timer->setInterval(interval_ms);
             return true;
@@ -147,14 +147,14 @@ protected:
         return false;
     }
     /// Calls setTimerType for you on the named timer, if it exists, and returns true. Returns false otherwise.
-    inline bool resetTimerType(const QString & name, Qt::TimerType tt) {
+    bool resetTimerType(const QString & name, Qt::TimerType tt) {
         if (auto timer = _timerMap.value(name); timer) {
             timer->setTimerType(tt);
             return true;
         }
         return false;
     }
-    inline int timerInterval(const QString & name) const {
+    int timerInterval(const QString & name) const {
         if (auto timer = _timerMap.value(name); timer) {
             return timer->interval();
         }
@@ -167,7 +167,7 @@ protected:
     QVariantMap activeTimerMapForStats() const;
 
     /// Stops the named timer and immediately deletes it.
-    inline bool stopTimer(const QString &name) { auto timer = _timerMap.take(name); return bool(timer); }
+    bool stopTimer(const QString &name) { auto timer = _timerMap.take(name); return bool(timer); }
 
     /// Stops all extant timers immediately.  Note that this implicitly uses deleteLater to delete the timer objects.
     /// Returns the number of timers that were stopped.

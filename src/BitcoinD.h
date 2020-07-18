@@ -143,6 +143,8 @@ private:
     BlockHash bitcoinDGenesisHash;
 
     void refreshBitcoinDGenesisHash(); ///< called whenever bitcoind comes back alive, updates bitcoinDGenesisHash
+
+    void resetPingTimers(int timeout_ms); ///< calls resetPingTimer on each BitcionD -- used by quirk fixup code since bchd vs bitcoind require different pingtimes
 };
 
 class BitcoinD : public RPC::HttpConnection, public ThreadObjectMixin /* NB: also inherits TimersByNameMixin via AbstractConnection base */
@@ -152,7 +154,7 @@ class BitcoinD : public RPC::HttpConnection, public ThreadObjectMixin /* NB: als
 public:
     /// TODO: Have this come from config. For now: support up to ~50MiB blocks (hex encoded) from bitcoind.
     /// This should work for now since we are on 32MiB max block size on BCH anyway right now.
-    static constexpr qint64 BTCD_DEFAULT_MAX_BUFFER = 100*1000*1000;
+    static constexpr qint64 BTCD_DEFAULT_MAX_BUFFER = 100'000'000;
 
     explicit BitcoinD(const QString &host, quint16 port, const QString & user, const QString &pass, qint64 maxBuffer = BTCD_DEFAULT_MAX_BUFFER);
     ~BitcoinD() override;
@@ -161,6 +163,14 @@ public:
     using ThreadObjectMixin::stop;
 
     bool isGood() const override; ///< from AbstractConnection -- returns true iff Status==Connected AND auth confirmed ok.
+
+    /// Resets the pingTimer to the specified interval in ms. Specify an interval <= 0 to disable the ping timer for
+    /// this instance. (Thread-safe).
+    ///
+    /// Unlike the other methods in this class, this one is thread-safe.  If the calling thread is this->thread(), it
+    /// takes effect immediately, otherwise an event is send to this object in its thread to restart the ping timer with
+    /// the specified interval.
+    void resetPingTimer(int time_ms);
 
 signals:
     /// This is emitted immediately after successful socket connect but before auth. After this signal, client code

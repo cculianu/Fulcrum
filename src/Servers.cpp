@@ -2137,13 +2137,19 @@ void AdminServer::rpc_getinfo(Client *c, const RPC::Message &m)
 {
     QVariantMap res;
     res["bitcoind"] = QString("%1:%2").arg(options->bitcoind.first).arg(options->bitcoind.second);
-    const auto bitcoindDInfo = bitcoindmgr->getBitcoinDInfo();
-    res["bitcoind_warnings"] = bitcoindDInfo.warnings;
+    {
+        const auto bitcoindDInfo = bitcoindmgr->getBitcoinDInfo();
+        const auto & ver = bitcoindDInfo.version;
+        res["bitcoind_info"] = QVariantMap{{
+            { "version", QVariantList{{ ver.major, ver.minor, ver.revision }} },
+            { "subversion", bitcoindDInfo.subversion },
+            { "warnings", bitcoindDInfo.warnings },
+        }};
+    }
     {
         const auto opt = storage->latestHeight();
         res["height"] = opt.has_value() ? *opt : QVariant();
     }
-    res["bitcoind_version"] = QStringList{{ bitcoindDInfo.version.toString(true), bitcoindDInfo.subversion }};
     res["chain"] = storage->getChain();
     res["genesis_hash"] = Util::ToHexFast(storage->genesisHash());
     res["pid"] = QCoreApplication::applicationPid();

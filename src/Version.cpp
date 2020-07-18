@@ -23,6 +23,7 @@ Version::Version(unsigned val, CompactType type)
         *this = Version(major, minor, revision);
         break;
     }
+    /* // this is currently not used because the API will change soon (to the BitcoinD method above)
     case BCHD: {
         // from bchd sources: version = 2 ^ AppMajor*3 ^ AppMinor*5 ^ AppPatch
         // I don't understand that code. So we kind of hack it and this mostly works.
@@ -32,6 +33,7 @@ Version::Version(unsigned val, CompactType type)
         *this = Version(0, minor, patch);
         break;
     }
+    */
     }
 }
 
