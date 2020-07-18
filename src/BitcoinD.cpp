@@ -123,6 +123,7 @@ auto BitcoinDMgr::stats() const -> Stats
     m["rpc clients"] = l;
     m["extant request contexts"] = BitcoinDMgrHelper::ReqCtxObj::extant.load();
     m["request context table size"] = reqContextTable.size();
+    m["zombie response count"] = zombieResponseCtr;
     m["activeTimers"] = activeTimerMapForStats();
 
     // "quirks"
@@ -476,6 +477,7 @@ void BitcoinDMgr::handleMessageCommon(const RPC::Message &msg, ReqCtxResultsOrEr
             // log the situation but don't warn or anything like that
             DebugM(__func__, " - request id ", msg.id, " method `", msg.method, "` not found in request context table "
                    "(sender object may have already been deleted)");
+            ++zombieResponseCtr; // increment this counter for /stats
         }
         return;
     }

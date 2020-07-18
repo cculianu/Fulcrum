@@ -160,6 +160,7 @@ private:
     // called in on_Message and on_ErrorMessage -- dispatches message by emitting proper signal
     template <typename ReqCtxObjT> // <-- we must template this here because ReqCtxObj is not defined yet. :/
     void handleMessageCommon(const RPC::Message &, void (ReqCtxObjT::*resultsOrErrorFunc)(const RPC::Message &));
+    unsigned zombieResponseCtr = 0; ///< keep track of how many req responses came in after the sender was deleted
 };
 
 class BitcoinD : public RPC::HttpConnection, public ThreadObjectMixin /* NB: also inherits TimersByNameMixin via AbstractConnection base */
