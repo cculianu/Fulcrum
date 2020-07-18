@@ -120,12 +120,11 @@ private:
 
     /// Various quirk flags of the bitcoind we are connected to
     struct Quirks {
-        /// If true, remote bitcoind is bchd. Gets set when ServerBase calls setBitcoinDVersion() on us
-        /// (from the periodic task that reads remote bitcoind subversion).
+        /// If true, remote bitcoind is bchd. Gets set in refreshBitcoinDNetworkInfo() when we (re)connect to bitcoind.
         std::atomic_bool isBchd = false;
         /// (bchd only) If this is true, then `getrawtransaction` expects an integer not a bool for its second
-        /// arg; start off true, but this flag may get latched to false if we detect that bchd fixed the bug
-        /// (see submitRequest).
+        /// arg; start off true, but this flag may get latched to false if we detect that bchd fixed the bug.
+        /// see: applyBitcoinDQuirksToParams()
         std::atomic_bool bchdGetRawTransaction = true;
 
         /// (ABC and BCHN only version >= 0.20.2) If true, `estimatefee` expects 0 args.
@@ -138,17 +137,20 @@ private:
     QVariantList applyBitcoinDQuirksToParams(const BitcoinDMgrHelper::ReqCtxObj *context, const QString &method, const QVariantList &params);
 
     mutable std::shared_mutex bitcoinDInfoLock;
-    BitcoinDInfo bitcoinDInfo;    ///< guarded by bitcoinDInfoLock
+    BitcoinDInfo bitcoinDInfo;     ///< guarded by bitcoinDInfoLock
 
     void refreshBitcoinDNetworkInfo(); ///< whenever bitcoind comes back alive, this is invoked to update the bitcoinDInfo struct
 
     mutable std::shared_mutex bitcoinDGenesisHashLock;
-    /// guarded by bitcoinDGenesisHashLock. When we first (re)connect to bitcoind, we query this info to make sure it's still sane.
-    BlockHash bitcoinDGenesisHash;
+    /// When we first (re)connect to bitcoind, we query this info to make sure it's still sane.
+    BlockHash bitcoinDGenesisHash; ///< guarded by bitcoinDGenesisHashLock
 
-    void refreshBitcoinDGenesisHash(); ///< called whenever bitcoind comes back alive, updates bitcoinDGenesisHash
+    /// called whenever bitcoind comes back alive, updates bitcoinDGenesisHash
+    void refreshBitcoinDGenesisHash();
 
-    void resetPingTimers(int timeout_ms); ///< calls resetPingTimer on each BitcionD -- used by quirk fixup code since bchd vs bitcoind require different pingtimes
+    /// Calls resetPingTimer on each BitcionD -- used by quirk fixup code since bchd vs bitcoind require different
+    /// pingtimes
+    void resetPingTimers(int timeout_ms);
 };
 
 class BitcoinD : public RPC::HttpConnection, public ThreadObjectMixin /* NB: also inherits TimersByNameMixin via AbstractConnection base */
