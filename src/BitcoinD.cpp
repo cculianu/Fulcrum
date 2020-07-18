@@ -177,12 +177,13 @@ namespace {
     };
 
     BitcoinDVersionParseResult parseBitcoindDVersion(unsigned val, const QString &subversion) {
-        // e.g. 0.20.6 comes in like this from bitcoind (as an unsigned int): 200600
-        // Note: bchd has a weird version int with a different format than above that we try to handle.
+        // e.g. 0.20.6 comes in like this from bitcoind (as an unsigned int): 200600 (millions, 10-thousands, hundreds).
+        // Note: some bchd versions have a weird version int with a different format than above, so we handle bchd
+        // differently.
         if (subversion.startsWith("/bchd")) {
             // bchd is quirky. We can't rely on its "version" integer since the algorithm for its packing
             // is bizarre in older versions. (In newer versons Josh says he changed it to match bitcoind).
-            // Instead, we parse the subversion string: /bchd:maj.min.rev(
+            // Instead, we parse the subversion string: "/bchd:maj.min.rev.../"
             Version version;
             if (const int colon = subversion.indexOf(':'), trailSlash = subversion.lastIndexOf('/'); colon == 5 && trailSlash > colon) {
                 const int len = trailSlash - (colon + 1);
@@ -191,11 +192,11 @@ namespace {
                     version = Version(subversion.mid(colon + 1, len));
             }
             if (!version.isValid())
-                // hmm.. subversion isnt /bchd:x.y.z( -> fall back to parsing the integer value (only works on newer bchd)
+                // hmm.. subversion isn't "/bchd:x.y.z.../" -> fall back to unpacking the integer value (only works on newer bchd)
                 version = Version(val, Version::BitcoinD);
             return {true, version};
         } else {
-            // regular bitcoind, "val" is reliable
+            // regular bitcoind, "version" is reliable
             return {false, Version(val, Version::BitcoinD)};
         }
     }
@@ -570,7 +571,7 @@ void BitcoinD::do_ping()
 
 void BitcoinD::resetPingTimer(int time_ms)
 {
-    auto setter = [time_ms, this] {  // set up the "pingTimer"
+    auto setter = [time_ms, this] {
         if (pingtime_ms != time_ms)
             DebugM("Changed pingtime_ms: ", time_ms);
         pingtime_ms = time_ms;
