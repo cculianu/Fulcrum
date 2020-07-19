@@ -96,6 +96,15 @@ void BitcoinDMgr::startup() {
 void BitcoinDMgr::on_started()
 {
     ThreadObjectMixin::on_started();
+    callOnTimerSoon(kRequestTimeoutMS / 2, kRequestTimeoutTimer, [this]{ requestTimeoutChecker(); return true; });
+}
+
+void BitcoinDMgr::on_finished()
+{
+    // We need to stop the timer before we call ThreadObjectMixin::on_finished (since that moves us to a different
+    // thread), and we need to delete the timer while still in our current calling thread.
+    stopTimer(kRequestTimeoutTimer);
+    ThreadObjectMixin::on_finished();
 }
 
 void BitcoinDMgr::cleanup() {
@@ -123,7 +132,8 @@ auto BitcoinDMgr::stats() const -> Stats
     m["rpc clients"] = l;
     m["extant request contexts"] = BitcoinDMgrHelper::ReqCtxObj::extant.load();
     m["request context table size"] = reqContextTable.size();
-    m["zombie response count"] = zombieResponseCtr;
+    m["request zombie count"] = requestZombieCtr;
+    m["request timeout count"] = requestTimeoutCtr;
     m["activeTimers"] = activeTimerMapForStats();
 
     // "quirks"
@@ -367,6 +377,7 @@ void BitcoinDMgr::submitRequest(QObject *sender, const RPC::Message::Id &rid, co
     auto context = std::shared_ptr<ReqCtxObj>(new ReqCtxObj, [](ReqCtxObj *context){
         // Note: this may run in any thread -- so all we can do here to context is context->deleteLater()
         if constexpr (debugDeletes) {
+            // the below is not technically thread-safe, because it calls objectName(); only enable this branch when testing
             DebugM(context->objectName(), " shptr deleter");
             connect(context, &QObject::destroyed, qApp, [n=context->objectName()]{ DebugM(n, " destroyed"); }, Qt::DirectConnection);
         }
@@ -410,10 +421,18 @@ void BitcoinDMgr::submitRequest(QObject *sender, const RPC::Message::Id &rid, co
             return;
         }
 
+        // Note: there is still a race condition here. The `bd` that getBitcoinD() returns runs
+        // in its own thread, and it may have "gone bad" from underneath our feet and lose its
+        // connection as the below code executes but before the "lostConnection" signal handler
+        // is connected below.  In that case, the request will time-out after >15 seconds with a
+        // "fail" to the sender. This is a rare occurrence but is handled nonetheless, see
+        // requestTimeoutChecker()
+
         // put context in table -- this table is consulted in handleMessageCommon to dispatch
         // the reply directly to this context object
         if (auto it = reqContextTable.find(rid); LIKELY(it == reqContextTable.end() || it.value().expired())) {
             // does not exist in table, put in table
+            context->ts = Util::getTime(); // set timestamp; used by requestTimeoutChecker()
             reqContextTable[rid] = context; // weak ref inserted into table
             // Install cleanup handler to remove object from table on `destroyed`.
             // NOTE: it's not clear to me if the destroyed signal is guaranteed to be delivered if
@@ -430,7 +449,7 @@ void BitcoinDMgr::submitRequest(QObject *sender, const RPC::Message::Id &rid, co
                     DebugM(__func__, " - req context table size now: ", reqContextTable.size());
             });
         } else {
-            // this indicates a bug in this code
+            // this indicates a bug the calling code; it is sending dupe id's which we do not support
             emit context->fail(rid, QString("Request id %1 already exists in table! FIXME!").arg(rid.toString()));
             return;
         }
@@ -444,7 +463,7 @@ void BitcoinDMgr::submitRequest(QObject *sender, const RPC::Message::Id &rid, co
         context->conns +=
         connect(bd, &BitcoinD::lostConnection, context.get(), [weakContext = WeakPtr(context), rid](AbstractConnection *){
             if (auto context = weakContext.lock()) {
-                emit context->fail(rid, "connection lost");
+                emit context->fail(rid, "bitcoind connection lost");
                 context->killConns(); // remove these two connections right away to prevent duplicate fail() delivery
             }
         });
@@ -462,6 +481,26 @@ void BitcoinDMgr::submitRequest(QObject *sender, const RPC::Message::Id &rid, co
     // .. aand.. return right away
 }
 
+void BitcoinDMgr::requestTimeoutChecker()
+{
+    const auto cutoffTime = Util::getTime() - kRequestTimeoutMS /* 15 seconds */;
+    for (auto it = reqContextTable.begin(); it != reqContextTable.end(); ++it) {
+        if (auto context = it.value().lock(); context && context->ts < cutoffTime && !context->timedOut) {
+            // This context timed out. A rare event but we need to notify the `sender` object
+            // so that the sender gets a (belated) "failed" reply to its request, and so that
+            // the context may be deleted. Note that this can only occur in circumstances where
+            // the bitcoind connection went away while we were preparing the request to bitcoind
+            // (see the note above in submitRequest() about the race that may occur there).
+            context->timedOut = true; // flag it as having already been handled
+            ++requestTimeoutCtr; // increment counter for /stats
+            emit context->fail(it.key(), "bitcoind request timed out");
+            DebugM(__func__, " - request id ", it.key(), " timed out after ", (Util::getTime()-context->ts)/1e3,
+                   " secs without a response from bitcoind (possibly because the connection was lost while we were"
+                   " preparing the request)");
+        }
+    }
+}
+
 namespace {
     using ReqCtxResultsOrErrorFunc = decltype(&BitcoinDMgrHelper::ReqCtxObj::results);
 }
@@ -477,7 +516,7 @@ void BitcoinDMgr::handleMessageCommon(const RPC::Message &msg, ReqCtxResultsOrEr
             // log the situation but don't warn or anything like that
             DebugM(__func__, " - request id ", msg.id, " method `", msg.method, "` not found in request context table "
                    "(sender object may have already been deleted)");
-            ++zombieResponseCtr; // increment this counter for /stats
+            ++requestZombieCtr; // increment this counter for /stats
         }
         return;
     }

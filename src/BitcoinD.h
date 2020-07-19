@@ -101,6 +101,7 @@ protected:
     Stats stats() const override; // from Mgr
 
     void on_started() override; // from ThreadObjectMixin
+    void on_finished() override; // from ThreadObjectMixin
 
 protected slots:
     // connected to BitcoinD gotMessage signal
@@ -160,7 +161,14 @@ private:
     // called in on_Message and on_ErrorMessage -- dispatches message by emitting proper signal
     template <typename ReqCtxObjT> // <-- we must template this here because ReqCtxObj is not defined yet. :/
     void handleMessageCommon(const RPC::Message &, void (ReqCtxObjT::*resultsOrErrorFunc)(const RPC::Message &));
-    unsigned zombieResponseCtr = 0; ///< keep track of how many req responses came in after the sender was deleted
+
+    unsigned requestZombieCtr = 0; ///< keep track of how many req responses came in after the sender was deleted
+    static constexpr qint64 kRequestTimeoutMS = 15'000; ///< the time in milliseconds after which we consider an extant request has "timed out"
+    static constexpr auto kRequestTimeoutTimer = "+RequestTimeoutChecker";
+    unsigned requestTimeoutCtr = 0; ///< keep track of how many requests timed out after kRequestTimeoutMS msecs of no reply from bitcoind
+
+    /// Periodically checks the reqContextTable and expires extant requests that have timed out.
+    void requestTimeoutChecker();
 };
 
 class BitcoinD : public RPC::HttpConnection, public ThreadObjectMixin /* NB: also inherits TimersByNameMixin via AbstractConnection base */
@@ -226,8 +234,10 @@ namespace BitcoinDMgrHelper {
         ~ReqCtxObj() override;
 
         // used internally by submitRequest
-        std::atomic_bool replied = false;
+        qint64 ts; ///< intentionally uninitialized to save cycles
         QList<QMetaObject::Connection> conns;
+        std::atomic_bool replied = false;
+        bool timedOut = false;
 
         /// Mainly used for debugging the lifecycle of this class's instances.
         static std::atomic_int extant;
