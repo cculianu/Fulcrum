@@ -56,7 +56,7 @@ namespace Util {
             ts = {0, 0};
             // We can't do a Warning() or Error() here because that would cause infinite recursion.
             // This is an unlikely and also pretty fatal situation, though, so we must warn
-            std::cerr << "Fatal: clock_gettime for CLOCK_MONOTONIC returned error status: %s" << strerror(errno) << std::endl;
+            std::cerr << "Fatal: clock_gettime for CLOCK_MONOTONIC returned error status: " << strerror(errno) << std::endl;
         }
         return int64_t(ts.tv_sec * 1000000000LL) + int64_t(ts.tv_nsec);
     }

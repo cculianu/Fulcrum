@@ -315,13 +315,13 @@ QVariantList BitcoinDMgr::applyBitcoinDQuirksToParams(const BitcoinDMgrHelper::R
     // bchd quirk workaround detection (may add custom error handler connected to `this`, and mutate params iff `getrawtransaction`)
     if (quirks.isBchd.load(std::memory_order::memory_order_relaxed)) {
         if (method == QStringLiteral("getrawtransaction")) {
-            // first, unconditionally attach this error handler (runs via DIRECT CONNECTION in `context`'s thread)
+            // first, unconditionally attach this error handler (runs via DIRECT CONNECTION)
             connect(context, &BitcoinDMgrHelper::ReqCtxObj::error, this, [quirks=&quirks](const RPC::Message &response) {
-                // Note: for performance, this runs in the `context` object's thread as a direct conenction
-                // and as such it only captures a pointer to the thread-safe object "quirks".
-                // For now context->thread() == this->thread(), but we are being defensive here
-                // in restricting things in case we decide to change where context lives in the
-                // future.
+                // Note: for performance, this lambda is connected to the context object error signal via a direct
+                // connection.  For now, the only place the `error` signal is emitted happens to be in the BitcoinDMgr
+                // thread anyway (so the below happens to execute in `this`'s thread).  We restrict things anyway,
+                // though, and capture only the thread-safe `quirks` object pointer, in case the above assumption
+                // changes in the future.
                 DebugM("BitcoinDMgr: bchd-quirk error handler fired for `", response.method, "`");
                 if (response.errorCode() == -8) {
                     const bool flagVal = quirks->bchdGetRawTransaction;
