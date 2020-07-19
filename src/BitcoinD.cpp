@@ -71,6 +71,16 @@ void BitcoinDMgr::startup() {
                 emit gotFirstGoodConnection(b->id);
         });
         connect(client.get(), &BitcoinD::lostConnection, this, [this](AbstractConnection *c){
+            // tell all extant requests being serviced by this BitcoinD about this failure
+            notifyFailForRequestsMatchingBitcoinD(static_cast<BitcoinD *>(c) /* guaranteed to be a BitcoinD * */,
+                                                  "bitcoind connection lost");
+        });
+        connect(client.get(), &QObject::destroyed, this, [this](QObject *o){
+            // just in case there are any extant requests up when this has been deleted (unlikely)
+            notifyFailForRequestsMatchingBitcoinD(static_cast<BitcoinD *>(o) /* guaranteed to be a BitcoinD * */,
+                                                  "bitcoind client deleted");
+        });
+        connect(client.get(), &BitcoinD::lostConnection, this, [this](AbstractConnection *c){
             // guard against stale/old signal
             if (c->isGood()) {
                 DebugM("got lostConnection for id:", c->id, " but isGood() is true!");
@@ -420,13 +430,15 @@ void BitcoinDMgr::submitRequest(QObject *sender, const RPC::Message::Id &rid, co
             emit context->fail(rid, "Unable to find a good BitcoinD connection");
             return;
         }
+        context->bd = bd; // record which bitcoind is servicing this request for notifyFailForRequestsMatchingBitcoinD()
 
-        // Note: there is still a race condition here. The `bd` that getBitcoinD() returns runs
-        // in its own thread, and it may have "gone bad" from underneath our feet and lose its
-        // connection as the below code executes but before the "lostConnection" signal handler
-        // is connected below.  In that case, the request will time-out after >15 seconds with a
-        // "fail" to the sender. This is a rare occurrence but is handled nonetheless, see
-        // requestTimeoutChecker()
+        // Note: there is a small chance of a race condition here because the `bd` that getBitcoinD() returns runs in
+        // its own thread, and it may have "gone bad" from underneath our feet as this code executes by losing its
+        // connection; we must defensively handle that situation just in case the "lostConnection" signal arrives right
+        // after this runs.  In that very unlikely case, if a request has not completed in 15 seconds, eventually
+        // requestTimeoutChecker() will tell the sender that the request timed out.  Also, it is theoretically possible
+        // for BitcoinD to just never respond, so we need to be able to handle that situation as well with a guaranteed
+        // `fail` signal delivery "some time later".
 
         // put context in table -- this table is consulted in handleMessageCommon to dispatch
         // the reply directly to this context object
@@ -454,26 +466,15 @@ void BitcoinDMgr::submitRequest(QObject *sender, const RPC::Message::Id &rid, co
             return;
         }
 
-        /* Note the "Results" and "Error" responses are handled in on_Message and on_ErrorMessage
-           by looking up the proper context object in the hash table directly. */
-
-        // Connect some signals to trap the situation where things may go wrong.
-        // The capture of `context` is a weak ptr to not keep it alive longer than it needs to stay alive.
-        using WeakPtr = std::weak_ptr<BitcoinDMgrHelper::ReqCtxObj>;
-        context->conns +=
-        connect(bd, &BitcoinD::lostConnection, context.get(), [weakContext = WeakPtr(context), rid](AbstractConnection *){
-            if (auto context = weakContext.lock()) {
-                emit context->fail(rid, "bitcoind connection lost");
-                context->killConns(); // remove these two connections right away to prevent duplicate fail() delivery
-            }
-        });
-        context->conns +=
-        connect(bd, &QObject::destroyed, context.get(), [weakContext = WeakPtr(context), rid](QObject *){
-            if (auto context = weakContext.lock()) {
-                emit context->fail(rid, "bitcoind client deleted");
-                context->killConns(); // remove these two connections right away to prevent duplicate fail() delivery
-            }
-        });
+        /*
+           Notes:
+             - The "Results" and "Error" responses are handled in on_Message and on_ErrorMessage by looking up the
+               proper context object in the hash table directly.
+             - BitcoinD losing connection (lostConnection signal) is handled by notifyFailForRequestsMatchingBitcoinD().
+             - BitcoinD being deleted (destroyed signal) is handled by notifyFailForRequestsMatchingBitcoinD().
+             - If BitcoinD goes out to lunch for >15 seconds the periodic requestTimeoutChecker() will eventually
+               notify the sender of a timeout.
+        */
 
         bd->sendRequest(rid, method, params);
     });
@@ -496,9 +497,16 @@ void BitcoinDMgr::requestTimeoutChecker()
             emit context->fail(it.key(), "bitcoind request timed out");
             DebugM(__func__, " - request id ", it.key(), " timed out after ", (Util::getTime()-context->ts)/1e3,
                    " secs without a response from bitcoind (possibly because the connection was lost while we were"
-                   " preparing the request)");
+                   " preparing the request, or it may just be hung)");
         }
     }
+}
+
+void BitcoinDMgr::notifyFailForRequestsMatchingBitcoinD(const BitcoinD *bd, const QString &errorMessage)
+{
+    for (auto it = reqContextTable.begin(); it != reqContextTable.end(); ++it)
+        if (auto context = it.value().lock(); context && context->bd == bd)
+            emit context->fail(it.key(), errorMessage);
 }
 
 namespace {
@@ -522,8 +530,6 @@ void BitcoinDMgr::handleMessageCommon(const RPC::Message &msg, ReqCtxResultsOrEr
     }
     // call member function pointer
     emit (context.get()->*resultsOrErrorFunc)(msg);
-    // kill lambdas, weak_ptr captures
-    context->killConns();
 }
 
 void BitcoinDMgr::on_Message(quint64 bid, const RPC::Message &msg)
@@ -551,11 +557,6 @@ namespace BitcoinDMgrHelper {
     /* static */ std::atomic_int ReqCtxObj::extant{0};
     ReqCtxObj::ReqCtxObj() : QObject(nullptr) { ++extant; }
     ReqCtxObj::~ReqCtxObj() { --extant; }
-    void ReqCtxObj::killConns() {
-        for (const auto & conn : conns)
-            QObject::disconnect(conn);
-        conns.clear();
-    }
 }
 
 

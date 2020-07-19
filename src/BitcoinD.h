@@ -76,8 +76,9 @@ public:
     ///
     /// If at any time before results are ready the `sender` object is deleted, nothing will be called and everything
     /// related to this request will be cleaned up automatically.
-    /// NOTE: the `id` for the request *must* be unique with respect to all other extant requests to bitcoind;
-    ///       use newId() to guarantee this.
+    /// NOTE:  the `id` for the request *must* be unique with respect to all other extant requests to bitcoind;
+    ///        use newId() to guarantee this.
+    /// NOTE2: calling this method while this BitcoinDManager is being stopped or about to be stopped is not supported.
     void submitRequest(QObject *sender, const RPC::Message::Id &id, const QString & method, const QVariantList & params,
                        const ResultsF & = ResultsF(), const ErrorF & = ErrorF(), const FailF & = FailF());
 
@@ -169,6 +170,8 @@ private:
 
     /// Periodically checks the reqContextTable and expires extant requests that have timed out.
     void requestTimeoutChecker();
+    /// Called from lostConnection() and destroyed() on a BitcoinD in order to notify all extant requests of the failure
+    void notifyFailForRequestsMatchingBitcoinD(const BitcoinD *bd, const QString &errorMessage);
 };
 
 class BitcoinD : public RPC::HttpConnection, public ThreadObjectMixin /* NB: also inherits TimersByNameMixin via AbstractConnection base */
@@ -235,15 +238,13 @@ namespace BitcoinDMgrHelper {
 
         // used internally by submitRequest
         qint64 ts; ///< intentionally uninitialized to save cycles
-        QList<QMetaObject::Connection> conns;
+        const BitcoinD *bd = nullptr; ///< the bitcoind that is handling our request. This pointer should *not* be dereferenced but only be used for == compare.
         std::atomic_bool replied = false;
         bool timedOut = false;
 
         /// Mainly used for debugging the lifecycle of this class's instances.
         static std::atomic_int extant;
 
-        /// Called to clear the conns list (conns only hold weak_ptr refs in their lambda captures)
-        void killConns(); // only call this from this object's thread!
     signals:
         /// emitted by bitcoindmgr submitRequest internally when results are ready
         void results(const RPC::Message &response);
