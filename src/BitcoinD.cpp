@@ -111,8 +111,8 @@ void BitcoinDMgr::on_started()
 
 void BitcoinDMgr::on_finished()
 {
-    // Note: There normally aren't any requests in this table when we get here since Controller and SrvMgr are the only
-    // objects that issue requests to us, and they are both stopped and deleted before we are stopped.  However, in the
+    // Note: There normally aren't any requests in this table when we get here since Controller and Servers are the only
+    // objects that issue requests to us, and they are all stopped and deleted before we are stopped.  However, in the
     // interests of correctness, we must make an attempt to clean the req table.  We would ideally emit "fail" here for
     // all active contexts in this table, but that's ill-defined since our thread is about to end, and not supported.
     // Instead we just disconnect all signals for each `context` which should cause their deleters to fire immediately
