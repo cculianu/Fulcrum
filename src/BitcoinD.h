@@ -78,7 +78,7 @@ public:
     /// related to this request will be cleaned up automatically.
     /// NOTE:  the `id` for the request *must* be unique with respect to all other extant requests to bitcoind;
     ///        use newId() to guarantee this.
-    /// NOTE2: calling this method while this BitcoinDManager is being stopped or about to be stopped is not supported.
+    /// NOTE2: calling this method while this BitcoinDManager is stopped or about to be stopped is not supported.
     void submitRequest(QObject *sender, const RPC::Message::Id &id, const QString & method, const QVariantList & params,
                        const ResultsF & = ResultsF(), const ErrorF & = ErrorF(), const FailF & = FailF());
 
@@ -120,6 +120,7 @@ private:
     std::set<quint64> goodSet; ///< set of bitcoind's (by id) that are `isGood` (connected, authed). This set is updated as we get signaled from BitcoinD objects. May be empty. Has at most N_CLIENTS elements.
 
     std::unique_ptr<BitcoinD> clients[N_CLIENTS];
+    unsigned roundRobinCursor = 0; ///< this is incremented each time. use this % N_CLIENTS to dole out bitcoind's in a round-robin fashion
 
     BitcoinD *getBitcoinD(); ///< may return nullptr if none are up. Otherwise does a round-robin of the ones present to grab one. to be called only in this thread.
 

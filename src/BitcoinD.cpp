@@ -111,9 +111,22 @@ void BitcoinDMgr::on_started()
 
 void BitcoinDMgr::on_finished()
 {
+    // Note: There normally aren't any requests in this table when we get here since Controller and SrvMgr are the only
+    // objects that issue requests to us, and they are both stopped and deleted before we are stopped.  However, in the
+    // interests of correctness, we must make an attempt to clean the req table.  We would ideally emit "fail" here for
+    // all active contexts in this table, but that's ill-defined since our thread is about to end, and not supported.
+    // Instead we just disconnect all signals for each `context` which should cause their deleters to fire immediately
+    // and thus call `context->deleteLater()`, which will get each `context` deleted as soon as our thread ends (which
+    // is right after this function returns).
+    for (auto it = reqContextTable.begin(); it != reqContextTable.end(); ++it)
+        if (auto context = it.value().lock())
+            context->disconnect();
+    reqContextTable.clear();
+
     // We need to stop the timer before we call ThreadObjectMixin::on_finished (since that moves us to a different
     // thread), and we need to delete the timer while still in our current calling thread.
     stopTimer(kRequestTimeoutTimer);
+
     ThreadObjectMixin::on_finished();
 }
 
@@ -162,21 +175,18 @@ auto BitcoinDMgr::stats() const -> Stats
 
 BitcoinD *BitcoinDMgr::getBitcoinD()
 {
-    BitcoinD *ret = nullptr;
-    unsigned which = 0;
-    if (unsigned n = quint32(goodSet.size()); n > 1)
-        which = QRandomGenerator::system()->bounded(n); // pick a random client in the set (which is an index of the "good clients")
-    if (!goodSet.empty()) {
-        // linear search for a bitcoind that is not lastBitcoinDUsed
-        unsigned i = 0;
-        for (auto & client : clients) {
-            if (goodSet.count(client->id) && i++ == which && client->isGood()) {
-                ret = client.get();
-                break;
-            }
-        }
+    if (goodSet.empty())
+        return nullptr;
+    // Scan round-robin through clients for a client that is both in the goodSet (authenticated) and still has
+    // immediate "isGood" status. Note this loop is optimized for the common case where all clients are in the goodSet
+    // and so most of the time it will only iterate once.
+    for (int i = 0; i < N_CLIENTS; ++i) {
+        auto client = clients[ roundRobinCursor++ % N_CLIENTS ].get();
+        if (goodSet.count(client->id) && client->isGood())
+            return client;
     }
-    return ret;
+    // nothing found
+    return nullptr;
 }
 
 namespace {
@@ -434,8 +444,8 @@ void BitcoinDMgr::submitRequest(QObject *sender, const RPC::Message::Id &rid, co
 
         // Note: there is a small chance of a race condition here because the `bd` that getBitcoinD() returns runs in
         // its own thread, and it may have "gone bad" from underneath our feet as this code executes by losing its
-        // connection; we must defensively handle that situation just in case the "lostConnection" signal arrives right
-        // after this runs.  In that very unlikely case, if a request has not completed in 15 seconds, eventually
+        // connection; we must defensively handle that situation just in case the "lostConnection" signal is emitted
+        // when we are here.  In that very unlikely case, if a request has not completed in 15 seconds, eventually
         // requestTimeoutChecker() will tell the sender that the request timed out.  Also, it is theoretically possible
         // for BitcoinD to just never respond, so we need to be able to handle that situation as well with a guaranteed
         // `fail` signal delivery "some time later".
