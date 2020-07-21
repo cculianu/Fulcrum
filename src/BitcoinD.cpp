@@ -507,7 +507,7 @@ void BitcoinDMgr::requestTimeoutChecker()
             emit context->fail(it.key(), "bitcoind request timed out");
             DebugM(__func__, " - request id ", it.key(), " timed out after ", (Util::getTime()-context->ts)/1e3,
                    " secs without a response from bitcoind (possibly because the connection was lost while we were"
-                   " preparing the request, or it may just be hung)");
+                   " preparing the request, or bitcoind may have hung)");
         }
     }
 }
