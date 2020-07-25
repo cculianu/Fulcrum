@@ -548,6 +548,30 @@ namespace WebSocket
             }
             ClientServerBase::~ClientServerBase() {} ///< for vtable
 
+            bool ClientServerBase::checkHeaders(QString *what) const
+            {
+                const auto Fail = [what](const QString &_what) {
+                    if (what != nullptr)
+                        *what = _what;
+                    return false;
+                };
+
+                if (headers.isEmpty())
+                    return Fail("Empty headers");
+
+                if (headers.value(QStringLiteral("upgrade")).toLower() != QStringLiteral("websocket"))
+                    return Fail("Missing Upgrade: websocket header");
+
+                auto connection = headers.value(QStringLiteral("connection")).toLower().split(',', Compat::SplitBehaviorSkipEmptyParts);
+                for(auto &str : connection)
+                    str = str.trimmed();
+
+                if (!connection.contains(QStringLiteral("upgrade")))
+                    return Fail("Missing Connection: upgrade header");
+
+                return true;
+            } // end function ClientServerBase::checkHeaders
+
             bool ClientServerBase::startCommon(int timeout)
             {
                 if (!sock) {
@@ -692,10 +716,7 @@ namespace WebSocket
                         }
                     } // while
                     if (headersFinished) {
-                        const bool ok =
-                            !headers.isEmpty()
-                                && headers.value(QStringLiteral("upgrade")).toLower() == QStringLiteral("websocket")
-                                && headers.value(QStringLiteral("connection")).toLower() == QStringLiteral("upgrade");
+                        const bool ok = checkHeaders();
                         if (QString gotKey;
                                 ok && (gotKey=headers.value(QStringLiteral("sec-websocket-accept"))) != expectedDigest)
                             Fail(QString("Bad key: expected '%1', got '%2'").arg(QString(expectedDigest)).arg(gotKey));
@@ -792,10 +813,8 @@ namespace WebSocket
                         }
                     } // while
                     if (headersFinished) {
-                        if (headers.isEmpty()
-                                || headers.value(QStringLiteral("upgrade")).toLower() != QStringLiteral("websocket")
-                                || headers.value(QStringLiteral("connection")).toLower() != QStringLiteral("upgrade"))
-                            Fail("Bad header fields", 426, "Upgrade Required");
+                        if (QString message; !checkHeaders(&message))
+                            Fail(message, 426, "Upgrade Required");
 
                         QByteArray key;
                         if (key = headers.value(QStringLiteral("sec-websocket-key")).toLatin1();

@@ -276,6 +276,7 @@ namespace WebSocket
 
                 int nread = 0;
                 QHash<QString, QString> headers;
+                bool checkHeaders(QString *what = nullptr) const;
 
                 /// called from derived classes' start(), returns false if should abort start(), emits failure(reason)
                 /// on false return.  On true return, sets up some private signal/slot connections for emitting failure
