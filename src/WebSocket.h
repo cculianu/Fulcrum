@@ -241,9 +241,7 @@ namespace WebSocket
                 ~ClientServerBase() override;
 
                 static constexpr int kDefaultTimeout = 10000, ///< 10s handshake timeout default
-                                     kDefaultMaxHeaders = 8192,
-                                     /// only analyze the first 64 header items in the connection header, e.g. "Connection: item1, item2.."
-                                     kMaxConnectionHeaderItems = 64;
+                                     kDefaultMaxHeaders = 8192;
 
                 /// Get the underlying socket.
                 inline QTcpSocket *socket() const { return const_cast<QTcpSocket *>(sock); }
