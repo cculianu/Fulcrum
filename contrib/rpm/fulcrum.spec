@@ -12,6 +12,7 @@ Source:     {{{ git_pack }}}
 BuildRequires: qt5-qtbase-devel
 BuildRequires: bzip2-devel
 BuildRequires: zlib-devel
+BuildRequires: rocksdb-devel
 
 BuildRequires: pandoc
 
@@ -34,8 +35,10 @@ Summary: Includes admin tool for fulcrum
 %prep
 {{{ git_setup_macro }}}
 
+rm -rfv staticlibs/
+
 %build
-%qmake_qt5
+%qmake_qt5 features=
 %make_build
 pandoc --standalone --from markdown-smart --to man doc/unix-man-page.md -o fulcrum.1
 
