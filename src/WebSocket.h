@@ -240,8 +240,10 @@ namespace WebSocket
                 explicit ClientServerBase(QTcpSocket * /* may not be nullptr */);
                 ~ClientServerBase() override;
 
-                static constexpr int kDefaultTimeout = 10000, // 10s handshake timeout default
-                                     kDefaultMaxHeaders = 8192;
+                static constexpr int kDefaultTimeout = 10000, ///< 10s handshake timeout default
+                                     kDefaultMaxHeaders = 8192,
+                                     /// only analyze the first 64 header items in the connection header, e.g. "Connection: item1, item2.."
+                                     kMaxConnectionHeaderItems = 64;
 
                 /// Get the underlying socket.
                 inline QTcpSocket *socket() const { return const_cast<QTcpSocket *>(sock); }

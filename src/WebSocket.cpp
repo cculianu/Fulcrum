@@ -562,14 +562,18 @@ namespace WebSocket
                 if (headers.value(QStringLiteral("upgrade")).toLower() != QStringLiteral("websocket"))
                     return Fail("Missing Upgrade: websocket header");
 
-                auto connection = headers.value(QStringLiteral("connection")).toLower().split(',', Compat::SplitBehaviorSkipEmptyParts);
-                for(auto &str : connection)
-                    str = str.trimmed();
-
-                if (!connection.contains(QStringLiteral("upgrade")))
-                    return Fail("Missing Connection: upgrade header");
-
-                return true;
+                // Lastly, scan `Connection:` header items. Items are ","-delimited; we succeed if "upgrade" found in list.
+                const auto connItems = headers.value(QStringLiteral("connection"))
+                                       .split(',', Compat::SplitBehaviorSkipEmptyParts)
+                                        // limit list length to be defensive -- this should really be a short list
+                                       .mid(0, kMaxConnectionHeaderItems);
+                for (auto &str : connItems) {
+                    if (str.trimmed().toLower() == QStringLiteral("upgrade"))
+                        // found required Connection: upgrade item -- success!
+                        return true;
+                }
+                // fail: no "upgrade" item found in the loop above
+                return Fail("Missing Connection: upgrade header");
             } // end function ClientServerBase::checkHeaders
 
             bool ClientServerBase::startCommon(int timeout)
