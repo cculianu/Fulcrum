@@ -1915,6 +1915,7 @@ void ServerSSL::setupSslConfiguration()
         // not a self-signed cert -- we need the full chain
         sslConfiguration.setLocalCertificateChain(chain);
     sslConfiguration.setProtocol(QSsl::SslProtocol::AnyProtocol);
+    sslConfiguration.setPeerVerifyMode(QSslSocket::VerifyNone);
 }
 void ServerSSL::incomingConnection(qintptr socketDescriptor)
 {
