@@ -776,6 +776,7 @@ namespace WebSocket
                             "%4"
                         ).arg(code).arg(reason).arg(content.size()).arg(QString::fromLatin1(content)).toLatin1();
                         sock->write(resp);
+                        sock->flush();
                         throw Exception(what);
                     };
                     while (sock->canReadLine()) {
