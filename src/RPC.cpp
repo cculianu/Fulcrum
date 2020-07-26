@@ -714,7 +714,7 @@ namespace RPC {
                                    value = toks.mid(1).join(':').simplified();
                         static const QByteArray s_content_type("content-type"), s_content_length("content-length"),
                                                 s_application_json("application/json"), s_connection("connection"),
-                                                s_close("close");
+                                                s_close("close"), s_keep_alive("keep-alive");
                         if (name == s_content_type) {
                             sm->contentType = QString::fromUtf8(value);
                             if (sm->contentType.compare(s_application_json, Qt::CaseInsensitive) != 0) {
@@ -733,7 +733,7 @@ namespace RPC {
                             }
                             sm->gotLength = true;
                             TraceM("Content length: ", sm->contentLength);
-                        } else if (name == s_connection) {
+                        } else if (name == s_connection && value.toLower() != s_keep_alive /* tolerate Connection: keep-alive */) {
                             static const auto MakeErrMsg = [](const QString & value) {
                                 return QString("Unsupported \"Connection: %1\" header field in response").arg(value);
                             };
