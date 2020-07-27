@@ -200,6 +200,9 @@ public:
     static constexpr auto defaultLogTimeStampMode = LogTimestampMode::Local;
     LogTimestampMode logTimestampMode = defaultLogTimeStampMode;
     QString logTimestampModeString() const;
+
+    // CLI: --tls-disallow-deprecated, config: tls-disallow-deprecated
+    bool tlsDisallowDeprecated = false;
 };
 
 /// A class encapsulating a simple read-only config file format.  The format is similar to the bitcoin.conf format

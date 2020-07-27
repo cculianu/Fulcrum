@@ -142,6 +142,8 @@ QVariantMap Options::toMap() const
     m["db_keep_log_file_num"] = qlonglong(db.keepLogFileNum);
     // ts-format
     m["ts-format"] = logTimestampModeString();
+    // tls-disallow-deprecated
+    m["tls-disallow-deprecated"] = tlsDisallowDeprecated;
     return m;
 }
 

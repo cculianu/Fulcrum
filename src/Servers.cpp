@@ -1914,7 +1914,11 @@ void ServerSSL::setupSslConfiguration()
     if (!chain.isEmpty())
         // not a self-signed cert -- we need the full chain
         sslConfiguration.setLocalCertificateChain(chain);
-    sslConfiguration.setProtocol(QSsl::SslProtocol::AnyProtocol);
+    // restrict if admin wants strict TLS 1.2 or newer only (default is to allow any TLS protocol version)
+    if (options->tlsDisallowDeprecated)
+        sslConfiguration.setProtocol(QSsl::SslProtocol::TlsV1_2OrLater);
+    else
+        sslConfiguration.setProtocol(QSsl::SslProtocol::AnyProtocol);
     sslConfiguration.setPeerVerifyMode(QSslSocket::VerifyNone);
 }
 void ServerSSL::incomingConnection(qintptr socketDescriptor)

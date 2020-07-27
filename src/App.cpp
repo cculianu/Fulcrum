@@ -304,6 +304,12 @@ void App::parseArgs()
            QString("keyword"),
          },
          {
+           "tls-disallow-deprecated",
+           QString("If specified, restricts the TLS protocol used by the server to non-deprecated v1.2 or newer,"
+                   " disallowing connections from clients requesting TLS v1.1 or earlier. This option applies to all"
+                   " SSL and WSS ports server-wide."),
+         },
+         {
            "dump-sh",
            QString("*** This is an advanced debugging option ***   Dump script hashes. If specified, after the database"
                    " is loaded, all of the script hashes in the database will be written to outputfile as a JSON array."),
@@ -977,6 +983,12 @@ void App::parseArgs()
         Util::AsyncOnObject(this, []{ DebugM("syslog mode enabled, defaulting to \"--ts-format none\""); });
     }
 #endif
+
+    // --tls-disallow-deprecated from CLI and/or tls-disallow-deprecated from conf
+    if (parser.isSet("tls-disallow-deprecated") || conf.boolValue("tls-disallow-deprecated")) {
+        options->tlsDisallowDeprecated = true;
+        Util::AsyncOnObject(this, []{ Log() << "TLS restricted to non-deprecated versions (version 1.2 or above)"; });
+    }
 
     // parse --dump-*
     if (const auto outFile = parser.value("dump-sh"); !outFile.isEmpty()) {
