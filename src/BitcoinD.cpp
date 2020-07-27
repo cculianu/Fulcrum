@@ -23,6 +23,8 @@
 #include <QHostInfo>
 #include <QMetaType>
 #include <QPointer>
+#include <QSslConfiguration>
+#include <QSslSocket>
 
 #include <mutex>
 
@@ -33,9 +35,8 @@ namespace {
     };
 }
 
-BitcoinDMgr::BitcoinDMgr(const QString &hostName, quint16 port,
-                         const QString &user, const QString &pass)
-    : Mgr(nullptr), IdMixin(newId()), hostName(hostName), port(port), user(user), pass(pass)
+BitcoinDMgr::BitcoinDMgr(const QString &hostName, quint16 port, const QString &user, const QString &pass, bool useSsl)
+    : Mgr(nullptr), IdMixin(newId()), hostName(hostName), port(port), user(user), pass(pass), useSsl(useSsl)
 {
     setObjectName("BitcoinDMgr");
     _thread.setObjectName(objectName());
@@ -54,7 +55,7 @@ void BitcoinDMgr::startup() {
     for (auto & client : clients) {
         // initial resolvedAddress may be invalid if user specified a hostname, in which case we will resolve it and
         // tell bitcoind's to update themselves and reconnect
-        client = std::make_unique<BitcoinD>(hostName, port, user, pass);
+        client = std::make_unique<BitcoinD>(hostName, port, user, pass, useSsl);
 
         // connect client to us -- TODO: figure out workflow: how requests for work and results will get dispatched
         connect(client.get(), &BitcoinD::gotMessage, this, &BitcoinDMgr::on_Message);
@@ -581,8 +582,8 @@ auto BitcoinD::stats() const -> Stats
     return m;
 }
 
-BitcoinD::BitcoinD(const QString &host, quint16 port, const QString & user, const QString &pass, qint64 maxBuffer_)
-    : RPC::HttpConnection(RPC::MethodMap{}, newId(), nullptr, maxBuffer_), host(host), port(port)
+BitcoinD::BitcoinD(const QString &host, quint16 port, const QString & user, const QString &pass, bool useSsl_, qint64 maxBuffer_)
+    : RPC::HttpConnection(RPC::MethodMap{}, newId(), nullptr, maxBuffer_), host(host), port(port), useSsl(useSsl_)
 {
     static int N = 1;
     setObjectName(QString("BitcoinD.%1").arg(N++));
@@ -654,9 +655,30 @@ void BitcoinD::on_started()
 void BitcoinD::reconnect()
 {
     if (socket) delete socket;
-    socket = new QTcpSocket(this);
-    socketConnectSignals();
-    socket->connectToHost(host, port);
+    if (useSsl) {
+        // remote bitcoind expects https (--bitcoind-tls CLI option); usually this is only for bchd
+        QSslSocket *ssl;
+        socket = ssl = new QSslSocket(this);
+
+        auto conf = ssl->sslConfiguration();
+        conf.setPeerVerifyMode(QSslSocket::PeerVerifyMode::VerifyNone);
+        conf.setProtocol(QSsl::SslProtocol::AnyProtocol);
+        ssl->setSslConfiguration(conf);
+
+        socketConnectSignals();
+        connect(ssl, qOverload<const QList<QSslError> &>(&QSslSocket::sslErrors), ssl, [ssl](auto errs) {
+            for (const auto & err : errs)
+                DebugM("Ignoring SSL error for ", ssl->peerName(), ": ", err.errorString());
+            ssl->ignoreSslErrors();
+        });
+
+        ssl->connectToHostEncrypted(host, port);
+    } else {
+        // regular http bitcoind (default)
+        socket = new QTcpSocket(this);
+        socketConnectSignals();
+        socket->connectToHost(host, port);
+    }
 }
 
 void BitcoinD::on_connected()

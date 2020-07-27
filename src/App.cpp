@@ -261,6 +261,12 @@ void App::parseArgs()
            " under rpcbind= and rpcport=."),
            QString("hostname:port"),
          },
+         { "bitcoind-tls",
+           QString("If specified, connect to the remote bitcoind via HTTPS rather than the usual HTTP. Historically,"
+                   " bitcoind supported only JSON-RPC over HTTP; however, some implementations such as bchd support"
+                   " HTTPS. If you are using " APPNAME " with bchd, you either need to start bchd with the `notls`"
+                   " option, or you need to specify this option to " APPNAME "."),
+         },
          { { "u", "rpcuser" },
            QString("Specify a username to use for authenticating to bitcoind. This is a required option, along"
            " with -b and -p. This option should be the same username you specified in your bitcoind.conf file"
@@ -513,6 +519,9 @@ void App::parseArgs()
 
     // parse bitcoind - conf.value is always unset if parser.value is set, hence this strange constrcution below (parser.value takes precedence)
     options->bitcoind = parseHostnamePortPair(conf.value("bitcoind", parser.value("b")));
+    // --bitcoind-tls
+    if ((options->bitcoindUsesTls = parser.isSet("bitcoind-tls") || conf.boolValue("bitcoind-tls")))
+        Util::AsyncOnObject(this, []{ Debug() << "config: bitcoind-tls = true"; });
     // grab rpcuser
     options->rpcuser = conf.value("rpcuser", parser.isSet("u") ? parser.value("u") : std::getenv(RPCUSER));
     // grab rpcpass

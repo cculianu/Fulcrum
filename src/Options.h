@@ -71,6 +71,7 @@ public:
     QSslKey sslKey; ///< this must be valid if we have any SSL or WSS interfaces.
     QString keyFile; ///< saved here for toMap() to remember what was specified in config file
     QPair<QString, quint16> bitcoind; ///< hostname, port pair. We resolve bitcoind's actual IP address each time if it's a hostname and not an IP address string.
+    bool bitcoindUsesTls = false; ///< CLI: --bitcoind-tls. If true, we will connect to the remote bitcoind via SSL/TLS. See BitcoinD.cpp.
     QString rpcuser, rpcpassword;
     QString datadir; ///< The directory to store the database. It exists and has appropriate permissions (otherwise the app would have quit on startup).
     /// If true, on db open/startup, we will perform some slow/paranoid db consistency checks

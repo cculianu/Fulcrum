@@ -51,7 +51,7 @@ class BitcoinDMgr : public Mgr, public IdMixin, public ThreadObjectMixin, public
 {
     Q_OBJECT
 public:
-    BitcoinDMgr(const QString &hostnameOrIP, quint16 port, const QString &user, const QString &pass);
+    BitcoinDMgr(const QString &hostnameOrIP, quint16 port, const QString &user, const QString &pass, bool useSsl);
     ~BitcoinDMgr() override;
 
     void startup() override; ///< from Mgr
@@ -114,6 +114,7 @@ private:
     const QString hostName;
     const quint16 port;
     const QString user, pass;
+    const bool useSsl;
 
     static constexpr int miniTimeout = 333, tinyTimeout = 167, medTimeout = 500, longTimeout = 1000;
 
@@ -184,7 +185,8 @@ public:
     /// This should work for now since we are on 32MiB max block size on BCH anyway right now.
     static constexpr qint64 BTCD_DEFAULT_MAX_BUFFER = 100'000'000;
 
-    explicit BitcoinD(const QString &host, quint16 port, const QString & user, const QString &pass, qint64 maxBuffer = BTCD_DEFAULT_MAX_BUFFER);
+    explicit BitcoinD(const QString &host, quint16 port, const QString & user, const QString &pass, bool useSsl,
+                      qint64 maxBuffer = BTCD_DEFAULT_MAX_BUFFER);
     ~BitcoinD() override;
 
     using ThreadObjectMixin::start;
@@ -223,6 +225,7 @@ private:
 
     const QString host;
     const quint16 port;
+    const bool useSsl;
     std::atomic_bool badAuth = false, needAuth = true;
 };
 

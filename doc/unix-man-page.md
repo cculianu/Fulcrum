@@ -67,6 +67,9 @@ Once the server finishes synching it will behave like an ElectronX/ElectrumX ser
 -b, --bitcoind <hostname:port>
 :   Specify a <hostname:port> to connect to the bitcoind rpc service. This is a required option, along with -u and -p. This hostname:port should be the same as you specified in your bitcoin.conf file under rpcbind- and rpcport-.
 
+--bitcoind-tls
+:   If specified, connect to the remote bitcoind via HTTPS rather than the usual HTTP. Historically, bitcoind supported only JSON-RPC over HTTP; however, some implementations such as *bchd* support HTTPS. If you are using *fulcrum* with *bchd*, you either need to start *bchd* with the `notls` option, or you need to specify this option to *fulcrum*.
+
 -u, --rpcuser <username>
 :   Specify a username to use for authenticating to bitcoind. This is a required option, along with -b and -p.  This option should be the same username you specified in your bitcoind.conf file under rpcuser-. For security, you may omit this option from the command-line and use the RPCUSER environment variable instead (the CLI arg takes precedence if both are present).
 

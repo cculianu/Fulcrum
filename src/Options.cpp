@@ -95,6 +95,7 @@ QVariantMap Options::toMap() const
     m["cert"] = certFile;
     m["key"] = keyFile;
     m["bitcoind"] = QString("%1:%2").arg(bitcoind.first).arg(bitcoind.second);
+    m["bitcoind-tls"] = bitcoindUsesTls;
     m["hasIPv6 listener"] = hasIPv6Listener;
     m["rpcuser"] = rpcuser.isNull() ? QVariant() : QVariant("<hidden>");
     m["rpcpassword"] = rpcpassword.isNull() ? QVariant() : QVariant("<hidden>");

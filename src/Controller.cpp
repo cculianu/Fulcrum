@@ -61,7 +61,7 @@ void Controller::startup()
         // this may take a long time but normally this branch is not taken
         dumpScriptHashes(options->dumpScriptHashes);
 
-    bitcoindmgr = std::make_shared<BitcoinDMgr>(options->bitcoind.first, options->bitcoind.second, options->rpcuser, options->rpcpassword);
+    bitcoindmgr = std::make_shared<BitcoinDMgr>(options->bitcoind.first, options->bitcoind.second, options->rpcuser, options->rpcpassword, options->bitcoindUsesTls);
     {
         auto constexpr waitTimer = "wait4bitcoind", callProcessTimer = "callProcess";
         int constexpr msgPeriod = 10000, // 10sec
