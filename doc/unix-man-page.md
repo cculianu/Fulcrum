@@ -1,6 +1,6 @@
 % FULCRUM(1) Version 1.2.7 | Fulcrum Manual
 % Fulcrum is written by Calin Culianu (cculianu)
-% July 19, 2020
+% July 27, 2020
 
 # NAME
 
@@ -90,6 +90,9 @@ Once the server finishes synching it will behave like an ElectronX/ElectrumX ser
 
 --ts-format <keyword>
 :   Specify log timestamp format, one of: "none", "uptime", "localtime", or "utc". If unspecified, default is "localtime" (previous versions of Fulcrum always logged using "uptime").
+
+--tls-disallow-deprecated
+:   If specified, restricts the TLS protocol used by the server to non-deprecated v1.2 or newer, disallowing connections from clients requesting TLS v1.1 or earlier. This option applies to all SSL and WSS ports server-wide.
 
 --dump-sh <outputfile>
 :    *This is an advanced debugging option*. Dump script hashes. If specified, after the database is loaded, all of the script hashes in the database will be written to outputfile as a JSON array.
