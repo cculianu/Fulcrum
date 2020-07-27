@@ -733,14 +733,17 @@ namespace RPC {
                             }
                             sm->gotLength = true;
                             TraceM("Content length: ", sm->contentLength);
-                        } else if (name == s_connection && value.toLower() != s_keep_alive /* tolerate Connection: keep-alive */) {
-                            static const auto MakeErrMsg = [](const QString & value) {
-                                return QString("Unsupported \"Connection: %1\" header field in response").arg(value);
-                            };
-                            if (value.toLower() == s_close && sm->status == 200)
-                                Warning() << MakeErrMsg(value);
-                            else
-                                DebugM(MakeErrMsg(value));
+                        } else if (name == s_connection) {
+                            // we tolerate "Connection: keep-alive", for everything else warn or print a debug message
+                            if (const auto lowerVal = value.toLower(); lowerVal != s_keep_alive) {
+                                static const auto MakeErrMsg = [](const QString & value) {
+                                    return QString("Unsupported \"Connection: %1\" header field in response").arg(value);
+                                };
+                                if (lowerVal == s_close && sm->status == 200)
+                                    Warning() << MakeErrMsg(value);
+                                else
+                                    DebugM(MakeErrMsg(value));
+                            }
                         }
                     } else {
                         // caught EMPTY line -- this signifies end of header
