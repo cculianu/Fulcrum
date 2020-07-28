@@ -105,6 +105,9 @@ private:
 
     void parseArgs();
 
+    /// Called from parseArgs().  Returns a valid CertInfo object given a cert & key filename, or throws on error.
+    static Options::CertInfo makeCertInfo(const QObject *context, const QString &certFile, const QString &keyFile);
+
     /// This is defined in register_MetaTypes.cpp
     void register_MetaTypes();
     void start_httpServer(const Options::Interface &iface); // may throw
