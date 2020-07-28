@@ -65,11 +65,15 @@ public:
                      wssInterfaces;  ///< Web Socket Secure (WSS) interfaces. Defaults to nothing.
     QList<Interface> statsInterfaces; ///< 'stats' server, defaults to empty (no stats server)
     QList<Interface> adminInterfaces; ///< the admin server, defaults to empty (no admin RPC)
-    QSslCertificate sslCert; ///< this must be valid if we have any SSL or WSS interfaces.
-    QList<QSslCertificate> sslCertChain; ///< this is either empty or contains 2 or more elements. (if certFile was a chain, otherwise empty)
-    QString certFile; ///< saved here for toMap() to remember what was specified in config file
-    QSslKey sslKey; ///< this must be valid if we have any SSL or WSS interfaces.
-    QString keyFile; ///< saved here for toMap() to remember what was specified in config file
+    struct CertInfo {
+        QSslCertificate cert; ///< this must be valid if we have any SSL or WSS interfaces.
+        QList<QSslCertificate> certChain; ///< this is either empty or contains 2 or more elements. (if certFile was a chain, otherwise empty)
+        QString file; ///< saved here for toMap() to remember what was specified in config file
+        QSslKey key; ///< this must be valid if we have any SSL or WSS interfaces.
+        QString keyFile; ///< saved here for toMap() to remember what was specified in config file
+    };
+    CertInfo certInfo;
+    std::optional<CertInfo> wssCertInfo; ///< if valid, then the user specified --wss-cert and --wss-key on CLI or in config, and these are those.
     QPair<QString, quint16> bitcoind; ///< hostname, port pair. We resolve bitcoind's actual IP address each time if it's a hostname and not an IP address string.
     bool bitcoindUsesTls = false; ///< CLI: --bitcoind-tls. If true, we will connect to the remote bitcoind via SSL/TLS. See BitcoinD.cpp.
     QString rpcuser, rpcpassword;

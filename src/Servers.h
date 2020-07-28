@@ -178,7 +178,7 @@ public:
     /// Default false.
     bool usesWebSockets() const { return usesWS; }
     /// This should be called/set once before we begin listening for connections.  Called by SrvMgr depending on options from config.
-    void setUsesWebSockets(bool b) { usesWS = b; resetName(); }
+    virtual void setUsesWebSockets(bool b) { usesWS = b; resetName(); }
 
 signals:
     /// connected to SrvMgr clientConnected slot by SrvMgr class
@@ -455,6 +455,10 @@ public:
     ~ServerSSL() override;
 
     QString prettyName() const override; ///< overrides super to indicate SSL in server name
+
+    /// Overides ServerBase -- re-sets the SSL config (sometimes WSS uses a different config from regular SSL ports).
+    /// Do not call this after the server has already been started.
+    void setUsesWebSockets(bool b) override;
 
 protected:
     /// overrides ServerBase to create a QSslSocket wrapping the passed-in file descriptor, and then initiate the TLS

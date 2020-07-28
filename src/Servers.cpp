@@ -1905,9 +1905,9 @@ QString ServerSSL::prettyName() const
 }
 void ServerSSL::setupSslConfiguration()
 {
-    const QSslCertificate & cert = options->sslCert;
-    const QList<QSslCertificate> & chain = options->sslCertChain;
-    const QSslKey & key = options->sslKey;
+    const QSslCertificate & cert = usesWS && options->wssCertInfo.has_value() ? options->wssCertInfo->cert : options->certInfo.cert;
+    const QList<QSslCertificate> & chain = usesWS && options->wssCertInfo.has_value() ? options->wssCertInfo->certChain : options->certInfo.certChain;
+    const QSslKey & key = usesWS && options->wssCertInfo.has_value() ? options->wssCertInfo->key : options->certInfo.key;
 
     if (cert.isNull() || key.isNull())
         throw BadArgs("ServerSSL cannot be constructed: Key or cert is null!");
@@ -1925,6 +1925,11 @@ void ServerSSL::setupSslConfiguration()
     else
         sslConfiguration.setProtocol(QSsl::SslProtocol::AnyProtocol);
     sslConfiguration.setPeerVerifyMode(QSslSocket::VerifyNone);
+}
+void ServerSSL::setUsesWebSockets(bool b) /* override */
+{
+    ServerBase::setUsesWebSockets(b);
+    setupSslConfiguration(); // need to re-set the ssl config in case wss-specific certs were specified by the user
 }
 void ServerSSL::incomingConnection(qintptr socketDescriptor)
 {

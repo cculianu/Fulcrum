@@ -92,8 +92,12 @@ QVariantMap Options::toMap() const
         l.push_back(QString("%1:%2").arg(pair.first.toString()).arg(pair.second));
     m["admin"] = l;
     // /interfaces
-    m["cert"] = certFile;
-    m["key"] = keyFile;
+    m["cert"] = certInfo.file;
+    m["key"] = certInfo.keyFile;
+    if (wssCertInfo.has_value()) {
+        m["wss-cert"] = wssCertInfo->file;
+        m["wss-key"] = wssCertInfo->keyFile;
+    }
     m["bitcoind"] = QString("%1:%2").arg(bitcoind.first).arg(bitcoind.second);
     m["bitcoind-tls"] = bitcoindUsesTls;
     m["hasIPv6 listener"] = hasIPv6Listener;

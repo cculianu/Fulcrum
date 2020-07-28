@@ -384,6 +384,11 @@ void App::parseArgs()
         std::exit(1);
     }
 
+    const auto checkSupportsSsl = [] {
+        if (!QSslSocket::supportsSsl())
+            throw InternalError("SSL support is not compiled and/or linked to this version. Cannot proceed with SSL support. Sorry!");
+    };
+
     ConfigFile conf;
 
     // First, parse config file (if specified) -- We will take whatever it specified that matches the above options
@@ -520,8 +525,11 @@ void App::parseArgs()
     // parse bitcoind - conf.value is always unset if parser.value is set, hence this strange constrcution below (parser.value takes precedence)
     options->bitcoind = parseHostnamePortPair(conf.value("bitcoind", parser.value("b")));
     // --bitcoind-tls
-    if ((options->bitcoindUsesTls = parser.isSet("bitcoind-tls") || conf.boolValue("bitcoind-tls")))
+    if ((options->bitcoindUsesTls = parser.isSet("bitcoind-tls") || conf.boolValue("bitcoind-tls"))) {
+        // check that Qt actually supports SSL since we now know that we require it to proceed
+        checkSupportsSsl();
         Util::AsyncOnObject(this, []{ Debug() << "config: bitcoind-tls = true"; });
+    }
     // grab rpcuser
     options->rpcuser = conf.value("rpcuser", parser.isSet("u") ? parser.value("u") : std::getenv(RPCUSER));
     // grab rpcpass
@@ -556,9 +564,6 @@ void App::parseArgs()
     }
     // grab bind (listen) interfaces for SSL (again, apologies for this hard to read expression below -- same comments as above apply here)
     if (auto l = conf.hasValue("ssl") ? conf.values("ssl") : parser.values("s"); !l.isEmpty()) {
-        if (!QSslSocket::supportsSsl()) {
-            throw InternalError("SSL support is not compiled and/or linked to this version. Cannot proceed with SSL support. Sorry!");
-        }
         parseInterfaces(options->sslInterfaces, l);
         if (tcpIsDefault) options->interfaces.clear(); // they had default tcp setup, clear the default since they did end up specifying at least 1 real interface to bind to
         if (!options->sslInterfaces.isEmpty())
@@ -566,7 +571,10 @@ void App::parseArgs()
             // this function if user explicitly specified public_ssl_port=0 in the config file.
             options->publicSsl = options->sslInterfaces.front().second;
     }
-    if (const bool hasSSL = !options->sslInterfaces.isEmpty(); hasSSL || !options->wssInterfaces.isEmpty()) { // if they had either SSL or WSS, grab and validate the cert & key
+    // if they had either SSL or WSS, grab and validate the cert & key
+    if (const bool hasSSL = !options->sslInterfaces.isEmpty(), hasWSS = !options->wssInterfaces.isEmpty(); hasSSL || hasWSS) {
+        // check that Qt actually supports SSL since we now know that we require it to proceed
+        checkSupportsSsl();
         const QString cert = conf.value("cert", parser.value("c")), key = conf.value("key", parser.value("k"));
         if (cert.isEmpty() || key.isEmpty()) {
             throw BadArgs(QString("%1 option requires both -c/--cert and -k/--key options be specified on the command-line")
@@ -581,7 +589,7 @@ void App::parseArgs()
                 throw BadArgs(QString("Unable to open cert file %1: %2").arg(cert).arg(certf.errorString()));
             if (!keyf.open(QIODevice::ReadOnly))
                 throw BadArgs(QString("Unable to open key file %1: %2").arg(key).arg(keyf.errorString()));
-            options->sslCert = QSslCertificate(&certf, QSsl::EncodingFormat::Pem);
+            options->certInfo.cert = QSslCertificate(&certf, QSsl::EncodingFormat::Pem);
             // proble key algorithm by trying all the algorithms Qt supports
             for (auto algo : {QSsl::KeyAlgorithm::Rsa, QSsl::KeyAlgorithm::Ec, QSsl::KeyAlgorithm::Dsa,
 #if (QT_VERSION >= QT_VERSION_CHECK(5, 13, 0))
@@ -590,29 +598,29 @@ void App::parseArgs()
 #endif
                              }) {
                 keyf.seek(0);
-                options->sslKey = QSslKey(&keyf, algo, QSsl::EncodingFormat::Pem);
-                if (!options->sslKey.isNull())
+                options->certInfo.key = QSslKey(&keyf, algo, QSsl::EncodingFormat::Pem);
+                if (!options->certInfo.key.isNull())
                     break;
             }
             // check key is ok
-            if (options->sslKey.isNull()) {
+            if (options->certInfo.key.isNull()) {
                 throw BadArgs(QString("Unable to read private key from %1. Please make sure the file is readable and "
                                       "contains an RSA, DSA, EC, or DH private key in PEM format.").arg(key));
-            } else if (options->sslKey.algorithm() == QSsl::KeyAlgorithm::Ec && QSslConfiguration::supportedEllipticCurves().isEmpty()) {
+            } else if (options->certInfo.key.algorithm() == QSsl::KeyAlgorithm::Ec && QSslConfiguration::supportedEllipticCurves().isEmpty()) {
                 throw BadArgs(QString("Private key `%1` is an elliptic curve key, however this Qt installation lacks"
                                       " elliptic curve support. Please recompile and link Qt against the OpenSSL library"
                                       " in order to enable elliptic curve support in Qt.").arg(key));
             }
-            options->certFile = cert; // this is only used for /stats port advisory info
-            options->keyFile = key; // this is only used for /stats port advisory info
-            if (options->sslCert.isNull())
+            options->certInfo.file = cert; // this is only used for /stats port advisory info
+            options->certInfo.keyFile = key; // this is only used for /stats port advisory info
+            if (options->certInfo.cert.isNull())
                 throw BadArgs(QString("Unable to read ssl certificate from %1. Please make sure the file is readable and "
                                       "contains a valid certificate in PEM format.").arg(cert));
             else {
-                if (!options->sslCert.isSelfSigned()) {
+                if (!options->certInfo.cert.isSelfSigned()) {
                     certf.seek(0);
-                    options->sslCertChain = QSslCertificate::fromDevice(&certf, QSsl::EncodingFormat::Pem);
-                    if (options->sslCertChain.size() < 2)
+                    options->certInfo.certChain = QSslCertificate::fromDevice(&certf, QSsl::EncodingFormat::Pem);
+                    if (options->certInfo.certChain.size() < 2)
                         throw BadArgs(QString("File '%1' does not appear to be a full certificate chain.\n"
                                               "Please make sure your CA signed certificate is the fullchain.pem file.")
                                       .arg(cert));
@@ -622,14 +630,14 @@ void App::parseArgs()
                     QString name;
 #if (QT_VERSION >= QT_VERSION_CHECK(5, 12, 0))
                     // Was added Qt 5.12+
-                    name = options->sslCert.subjectDisplayName();
+                    name = options->certInfo.cert.subjectDisplayName();
 #else
-                    name = options->sslCert.subjectInfo(QSslCertificate::Organization).join(", ");
+                    name = options->certInfo.cert.subjectInfo(QSslCertificate::Organization).join(", ");
 #endif
                     Log() << "Loaded SSL certificate: " << name << " "
-                          << options->sslCert.subjectInfo(QSslCertificate::SubjectInfo::EmailAddress).join(",")
+                          << options->certInfo.cert.subjectInfo(QSslCertificate::SubjectInfo::EmailAddress).join(",")
                           //<< " self-signed: " << (options->sslCert.isSelfSigned() ? "YES" : "NO")
-                          << " expires: " << (options->sslCert.expiryDate().toString("ddd MMMM d yyyy hh:mm:ss"));
+                          << " expires: " << (options->certInfo.cert.expiryDate().toString("ddd MMMM d yyyy hh:mm:ss"));
                     if (Debug::isEnabled()) {
                         QString cipherStr;
                         for (const auto & ciph : QSslConfiguration::supportedCiphers()) {
@@ -662,9 +670,9 @@ void App::parseArgs()
             };
             Util::AsyncOnObject(this, [this]{
                 // We do this logging later. This is to ensure that it ends up in the syslog if user specified -S
-                const auto algo = options->sslKey.algorithm();
+                const auto algo = options->certInfo.key.algorithm();
                 const auto algoName = KeyAlgoStr(algo);
-                const auto keyTypeName = (options->sslKey.type() == QSsl::KeyType::PrivateKey ? "private" : "public");
+                const auto keyTypeName = (options->certInfo.key.type() == QSsl::KeyType::PrivateKey ? "private" : "public");
                 Log() << "Loaded key type: " << keyTypeName << " algorithm: " << algoName;
                 if (algo != QSsl::KeyAlgorithm::Rsa)
                     Warning() << "Warning: " << algoName << " key support is experimental."
