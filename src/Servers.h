@@ -456,6 +456,9 @@ public:
 
     QString prettyName() const override; ///< overrides super to indicate SSL in server name
 
+    /// override from Server -- we add custom stats for our TLS certificate
+    QVariant stats() const override;
+
     /// Overides ServerBase -- re-sets the SSL config (sometimes WSS uses a different config from regular SSL ports).
     /// Do not call this after the server has already been started.
     void setUsesWebSockets(bool b) override;

@@ -217,24 +217,37 @@ void App::parseArgs()
         },
         {  { "W", "wss"},
            QString("Specify an <interface:port> on which to listen for Web Socket Secure connections (encrypted, wss://)."
-           " Note that if this option is specified, then the `cert` and `key` options need to also be specified"
-           " otherwise the app will refuse to run."
+           " Note that if this option is specified, then the --cert and --key options (or alternatively, the --wss-cert"
+           " and --wss-key options) need to also be specified otherwise the app will refuse to run."
            " This option may be specified more than once to bind to multiple interfaces and/or ports."
            " Suggested values for port: %1 on mainnet and %2 on testnet.").arg(Options::DEFAULT_PORT_WSS).arg(Options::DEFAULT_PORT_WSS + 10000),
            QString("interface:port"),
         },
-         { { "c", "cert" },
+        { { "c", "cert" },
            QString("Specify a PEM file to use as the server's SSL certificate. This option is required if the -s/--ssl"
            " and/or the -W/--wss options appear at all on the command-line. The file should contain either a single"
            " valid self-signed certificate or the full certificate chain if using CA-signed certificates."),
            QString("crtfile"),
-         },
-         { { "k", "key" },
-           QString("Specify a PEM file to use as the server's SSL key. This option is required if the -s/--ssl and/or"
-           " the -W/--wss options apear at all on the command-line. The file should contain an RSA private key."
-           " EC, DH, and DSA keys are also supported, but their support is experimental."),
-           QString("keyfile"),
-         },
+        },
+        { { "k", "key" },
+          QString("Specify a PEM file to use as the server's SSL key. This option is required if the -s/--ssl and/or"
+          " the -W/--wss options apear at all on the command-line. The file should contain an RSA private key."
+          " EC, DH, and DSA keys are also supported, but their support is experimental."),
+          QString("keyfile"),
+        },
+        { "wss-cert",
+          QString("Specify a certificate PEM file to use specifically for only WSS ports. This option is intended to"
+                  " allow WSS ports to use a CA-signed certificate (required by web browsers), whereas legacy Electrum"
+                  " Cash ports may want to continue to use self-signed certificates. If this option is specified,"
+                  " --wss-key must also be specified. If this option is missing, then WSS ports will just fall-back to"
+                  " using the certificate specified by --cert."),
+          QString("crtfile"),
+        },
+        { "wss-key",
+          QString("Specify a private key PEM file to use for WSS. This key must go with the certificate specified in"
+                  " --wss-cert. If this option is specified, --wss-cert must also be specified."),
+          QString("keyfile"),
+        },
         { { "a", "admin" },
           QString("Specify a <port> or an <interface:port> on which to listen for TCP connections for the admin RPC service."
                   " The admin service is used for sending special control commands to the server, such as stopping"
@@ -573,13 +586,44 @@ void App::parseArgs()
     if (const bool hasSSL = !options->sslInterfaces.isEmpty(), hasWSS = !options->wssInterfaces.isEmpty(); hasSSL || hasWSS) {
         // check that Qt actually supports SSL since we now know that we require it to proceed
         checkSupportsSsl();
-        const QString cert = conf.value("cert", parser.value("c")), key = conf.value("key", parser.value("k"));
-        if (cert.isEmpty() || key.isEmpty()) {
-            throw BadArgs(QString("%1 option requires both -c/--cert and -k/--key options be specified on the command-line")
+        QString cert    = conf.value("cert",     parser.value("c")),
+                key     = conf.value("key",      parser.value("k")),
+                wssCert = conf.value("wss-cert", parser.value("wss-cert")),
+                wssKey  = conf.value("wss-key",  parser.value("wss-key"));
+        // ensure --cert/--key and --wss-cert/--wss-key pairs are both specified together (or not specified at all)
+        for (const auto & [c, k, txt] : { std::tuple(cert, key, static_cast<const char *>("`cert` and `key`")),
+                                          std::tuple(wssCert, wssKey, static_cast<const char *>("`wss-cert` and `wss-key`")) }) {
+            if (std::tuple(c.isEmpty(), k.isEmpty()) != std::tuple(k.isEmpty(), c.isEmpty()))
+                throw BadArgs(QString("%1 must both be specified").arg(txt));
+        }
+        // . <-- at this point, cert.isEmpty() and/or wssCert.isEmpty() are synonymous for both the cert/key pair being either empty or non-empty
+
+        // The rules are:  Default to using -c and -k.  (both must be present)
+        // If they are using wss, allow --wss-cert and --wss-key (both must be present)
+        // If the only secure port is wss, allow -c/-k to be missing (use --wss-cert and --wss-key instead).
+        // Otherwise if no cert and key combo, throw.
+        if ( cert.isEmpty() && (hasSSL || wssCert.isEmpty()) )  {
+            throw BadArgs(QString("%1 option requires both -c/--cert and -k/--key options be specified")
                           .arg(hasSSL ? "SSL" : "WSS"));
         }
+        // if they are using the wss-port and wss-key options, they *better* have a wss port
+        if ( !wssCert.isEmpty() && !hasWSS )
+            throw BadArgs("wss-cert option specified but no WSS listening ports defined");
+
+        if (cert.isEmpty() && !wssCert.isEmpty()) {
+            // copy over wssCert/wssKey to cert/key, clear wssCert/wssKey
+            cert = wssCert;  wssCert.clear();
+            key  = wssKey;   wssKey.clear();
+        }
+        // sanity check
+        if (cert.isEmpty() || key.isEmpty()) throw InternalError("Internal Error: cert and/or key is empty");
+
         // the below always either returns a good certInfo object, or throws on error
         options->certInfo = makeCertInfo(this, cert, key);
+        if (!wssCert.isEmpty()) {
+            if (wssKey.isEmpty()) throw InternalError("Internal Error: wss-key is empty"); // sanity check
+            options->wssCertInfo = makeCertInfo(this, wssCert, wssKey);
+        }
     }
     // stats port -- this supports <port> by itself as well
     parseInterfaces(options->statsInterfaces, conf.hasValue("stats")

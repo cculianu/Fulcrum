@@ -1931,6 +1931,25 @@ void ServerSSL::setUsesWebSockets(bool b) /* override */
     ServerBase::setUsesWebSockets(b);
     setupSslConfiguration(); // need to re-set the ssl config in case wss-specific certs were specified by the user
 }
+QVariant ServerSSL::stats() const
+{
+    QVariant v = Server::stats();
+    QVariantMap m = v.toMap();
+    const QString myKey = m.size() != 1 ? QString{} : m.firstKey();
+    if (auto mm = m.value(myKey).toMap(); !mm.isEmpty()) {
+        // add our entry for the sslCertificate
+        mm["ssl certificate (name)"] =
+#if (QT_VERSION >= QT_VERSION_CHECK(5, 12, 0))
+            // Was added Qt 5.12+
+            sslConfiguration.localCertificate().subjectDisplayName();
+#else
+            sslConfiguration.localCertificate().subjectInfo(QSslCertificate::Organization).join(", ");
+#endif
+        m[myKey] = mm;
+        v = m;
+    }
+    return v;
+}
 void ServerSSL::incomingConnection(qintptr socketDescriptor)
 {
     auto socket = createSocketFromDescriptorAndCheckLimits<QSslSocket>(socketDescriptor);
