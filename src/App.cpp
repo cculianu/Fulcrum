@@ -102,8 +102,6 @@ void App::startup()
     };
     // print banner to log now
     Log() << getBannerWithTimeStamp() << " - starting up ...";
-    // schedule print banner to log every hour so admin has an idea of how log timestamps correlate to wall clock time
-    callOnTimerSoon(60*60*1000, "printTimeStamp", []{ Log() << getBannerWithTimeStamp(); return true; }, false, Qt::TimerType::VeryCoarseTimer);
 
     if ( ! Util::isClockSteady() ) {
         Debug() << "High resolution clock provided by the std C++ library is not 'steady'. Log timestamps may drift if system time gets adjusted.";
