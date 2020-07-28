@@ -1182,7 +1182,12 @@ void Server::rpc_blockchain_estimatefee(Client *c, const RPC::Message &m)
     if (!ok || n < 0)
         throw RPCError(QString("%1 parameter should be a single non-negative integer").arg(m.method));
 
-    generic_async_to_bitcoind(c, m.id, "estimatefee", QVariantList{unsigned(n)},[](const RPC::Message &response){
+    QVariantList params;
+    // Flowee, BU, early ABC, bchd have a 1-arg estimate fee, newer ABC & BCHN -> 0 arg
+    if (!bitcoindmgr->isZeroArgEstimateFee())
+        params.push_back(unsigned(n));
+
+    generic_async_to_bitcoind(c, m.id, "estimatefee", params, [](const RPC::Message &response){
         return response.result();
     });
 }

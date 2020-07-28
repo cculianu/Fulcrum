@@ -160,13 +160,6 @@ auto BitcoinDMgr::stats() const -> Stats
     m["request timeout count"] = requestTimeoutCtr;
     m["activeTimers"] = activeTimerMapForStats();
 
-    // "quirks"
-    QVariantMap quirks;
-    quirks["bchd"] = this->quirks.isBchd.load();
-    quirks["bchdGetRawTransaction"] = this->quirks.isBchd && this->quirks.bchdGetRawTransaction;
-    quirks["zeroArgEstimateFee"] = this->quirks.zeroArgEstimateFee.load();
-    m["quirks"] = quirks;
-
     // "bitcoind info"
     m["bitcoind info"] = getBitcoinDInfo().toVariandMap(); // takes lock, makes a copy, releases lock;
 
@@ -227,13 +220,14 @@ void BitcoinDMgr::refreshBitcoinDNetworkInfo()
     submitRequest(this, newId(), "getnetworkinfo", QVariantList{},
         // success
         [this](const RPC::Message & reply) {
+            bool isBchd{};
             {
                 const QVariantMap networkInfo = reply.result().toMap();
                 // --- EXCLUSIVE-LOCKED SCOPE below this line ---
                 std::unique_lock g(bitcoinDInfoLock);
                 bitcoinDInfo.subversion = networkInfo.value("subversion", "").toString();
                 // try and determine version major/minor/revision
-                quirks.isBchd = [&networkInfo, this] {
+                bitcoinDInfo.isBchd = isBchd = [&networkInfo, this] {
                     bool ok = false;
                     const auto val = networkInfo.value("version", 0).toUInt(&ok);
 
@@ -262,10 +256,10 @@ void BitcoinDMgr::refreshBitcoinDNetworkInfo()
                             return true;
                     return false;
                 };
-                quirks.zeroArgEstimateFee = isZeroArgEstimateFee(bitcoinDInfo.version, bitcoinDInfo.subversion);
+                bitcoinDInfo.isZeroArgEstimateFee = isZeroArgEstimateFee(bitcoinDInfo.version, bitcoinDInfo.subversion);
             } // end lock scope
             // next, be sure to set up the ping time appropriately for bchd vs bitcoind
-            resetPingTimers(int(quirks.isBchd ? PingTimes::BCHD : PingTimes::Normal));
+            resetPingTimers(int(isBchd ? PingTimes::BCHD : PingTimes::Normal));
             // next up, do this query
             refreshBitcoinDGenesisHash();
         },
@@ -334,59 +328,21 @@ BitcoinDInfo BitcoinDMgr::getBitcoinDInfo() const
     return bitcoinDInfo;
 }
 
+bool BitcoinDMgr::isZeroArgEstimateFee() const
+{
+    std::shared_lock g(bitcoinDInfoLock);
+    return bitcoinDInfo.isZeroArgEstimateFee;
+}
+
 BlockHash BitcoinDMgr::getBitcoinDGenesisHash() const
 {
     std::shared_lock g(bitcoinDGenesisHashLock);
     return bitcoinDGenesisHash;
 }
 
-QVariantList BitcoinDMgr::applyBitcoinDQuirksToParams(const BitcoinDMgrHelper::ReqCtxObj *context, const QString &method, const QVariantList &paramsIn)
-{
-    QVariantList params = paramsIn; // quick shallow copy
-    // bchd quirk workaround detection (may add custom error handler connected to `this`, and mutate params iff `getrawtransaction`)
-    if (quirks.isBchd.load(std::memory_order::memory_order_relaxed)) {
-        if (method == QStringLiteral("getrawtransaction")) {
-            // first, unconditionally attach this error handler (runs via DIRECT CONNECTION)
-            connect(context, &BitcoinDMgrHelper::ReqCtxObj::error, this, [quirks=&quirks](const RPC::Message &response) {
-                // Note: for performance, this lambda is connected to the context object error signal via a direct
-                // connection.  For now, the only place the `error` signal is emitted happens to be in the BitcoinDMgr
-                // thread anyway (so the below happens to execute in `this`'s thread).  We restrict things anyway,
-                // though, and capture only the thread-safe `quirks` object pointer, in case the above assumption
-                // changes in the future.
-                DebugM("BitcoinDMgr: bchd-quirk error handler fired for `", response.method, "`");
-                if (response.errorCode() == -8) {
-                    const bool flagVal = quirks->bchdGetRawTransaction;
-                    if (!flagVal && response.errorMessage().contains("must be type int")) {
-                        // bug present -- enable flag
-                        quirks->bchdGetRawTransaction = true;
-                        DebugM("BitcoinDMgr: latched quirk flag `bchdGetRawTransaction` to true");
-                    } else if (flagVal && response.errorMessage().contains("must be type bool")) {
-                        // bug was fixed in a future version -- disable flag
-                        quirks->bchdGetRawTransaction = false;
-                        DebugM("BitcoinDMgr: latched quirk flag `bchdGetRawTransaction` to false");
-                    }
-                }
-            }, Qt::DirectConnection);
-            // next, possibly do the `getrawtransaction` parameter transform if flag is set
-            if (quirks.bchdGetRawTransaction && params.size() >= 2) {
-                // transform the second arg to int from bool to handle bchd quirks
-                if (auto var = params[1]; QMetaType::Type(var.type()) == QMetaType::Type::Bool) {
-                    var = int(var.toBool());
-                    params[1] = var;
-                }
-            }
-        }
-    }
-    // BCHN or ABC >= v.0.20.2 require no arguments to "estimatefee"
-    if (quirks.zeroArgEstimateFee.load(std::memory_order::memory_order_relaxed) && method == QStringLiteral("estimatefee")) {
-        params.clear();
-    }
-    return params;
-}
-
 /// This is safe to call from any thread. Internally it dispatches messages to this obejct's thread.
 /// Does not throw. Results/Error/Fail functions are called in the context of the `sender` thread.
-void BitcoinDMgr::submitRequest(QObject *sender, const RPC::Message::Id &rid, const QString & method, const QVariantList & paramsIn,
+void BitcoinDMgr::submitRequest(QObject *sender, const RPC::Message::Id &rid, const QString & method, const QVariantList & params,
                                 const ResultsF & resf, const ErrorF & errf, const FailF & failf)
 {
     using namespace BitcoinDMgrHelper;
@@ -405,9 +361,6 @@ void BitcoinDMgr::submitRequest(QObject *sender, const RPC::Message::Id &rid, co
         context->deleteLater(); // thread-safe
     });
     context->setObjectName(QStringLiteral("context for '%1' request id: %2").arg(sender ? sender->objectName() : QString()).arg(rid.toString()));
-
-    // first, apply any bitcoind quirks (transforms 'params', may attach additional error handlers, etc)
-    const QVariantList params = applyBitcoinDQuirksToParams(context.get(), method, paramsIn);
 
     // result handler (runs in sender thread), captures context and keeps it alive as long as signal/slot connection is alive
     connect(context.get(), &ReqCtxObj::results, sender, [context, resf, sender](const RPC::Message &response) {
@@ -530,7 +483,7 @@ void BitcoinDMgr::handleMessageCommon(const RPC::Message &msg, ReqCtxResultsOrEr
     // find message context in map
     auto context = reqContextTable.take(msg.id).lock();
     if (!context) {
-        if (msg.method != "ping") { // <--- pings don't go through our req layer so they always come through without a table entry here
+        if (msg.method != QStringLiteral("ping")) { // <--- pings don't go through our req layer so they always come through without a table entry here
             // this can happen in rare cases if the sender object was deleted before bitcoind responded.
             // log the situation but don't warn or anything like that
             DebugM(__func__, " - request id ", msg.id, " method `", msg.method, "` not found in request context table "
@@ -732,5 +685,7 @@ QVariantMap BitcoinDInfo::toVariandMap() const
     ret["subversion"] = subversion;
     ret["warnings"] = warnings;
     ret["relayfee"] = relayFee;
+    ret["isZeroArgEstimateFee"] = isZeroArgEstimateFee;
+    ret["isBchd"] = isBchd;
     return ret;
 }

@@ -42,6 +42,8 @@ struct BitcoinDInfo {
     QString subversion; ///< subversion string from daemon e.g.: /Bitcoin Cash Node bla bla;EB32 ..../
     double relayFee = 0.0; ///< from 'relayfee' in the getnetworkinfo response; minimum fee/kb to relay a tx, usually: 0.00001000
     QString warnings = ""; ///< from 'warnings' in the getnetworkinfo response (usually is empty string, but may not always be)
+    bool isBchd = false; ///< true if remote bitcoind subversion is: /bchd:...
+    bool isZeroArgEstimateFee = false; ///< true if remote bitcoind expects 0 argument "estimatefee" RPC.
 
     /// Return all the information in this obejct as a QVariantMap suitable for placing into JSON results, etc (used by /stats and `getinfo`)
     QVariantMap toVariandMap() const;
@@ -92,6 +94,9 @@ public:
     /// in the db. See also: Storage::genesisHash().
     BlockHash getBitcoinDGenesisHash() const;
 
+    /// Thread-safe.  Convenient method to avoid an extra copy. Returns getBitcoinDInfo().isZeroArgEstimateFee
+    bool isZeroArgEstimateFee() const;
+
 signals:
     void gotFirstGoodConnection(quint64 bitcoindId); // emitted whenever the first bitcoind after a "down" state (or after startup) gets its first good status (after successful authentication)
     void allConnectionsLost(); // emitted whenever all bitcoind rpc connections are down.
@@ -124,24 +129,6 @@ private:
     unsigned roundRobinCursor = 0; ///< this is incremented each time. use this % N_CLIENTS to dole out bitcoind's in a round-robin fashion
 
     BitcoinD *getBitcoinD(); ///< may return nullptr if none are up. Otherwise does a round-robin of the ones present to grab one. to be called only in this thread.
-
-    /// Various quirk flags of the bitcoind we are connected to
-    struct Quirks {
-        /// If true, remote bitcoind is bchd. Gets set in refreshBitcoinDNetworkInfo() when we (re)connect to bitcoind.
-        std::atomic_bool isBchd = false;
-        /// (bchd only) If this is true, then `getrawtransaction` expects an integer not a bool for its second
-        /// arg; start off true, but this flag may get latched to false if we detect that bchd fixed the bug.
-        /// see: applyBitcoinDQuirksToParams()
-        std::atomic_bool bchdGetRawTransaction = true;
-
-        /// (ABC and BCHN only version >= 0.20.2) If true, `estimatefee` expects 0 args.
-        std::atomic_bool zeroArgEstimateFee = false;
-    };
-    Quirks quirks;
-
-    /// Called from `submitRequest` -- returns a params object which may be a shallow copy of `params`, or a
-    /// transformed params object after applying bitcoind workarounds (consults the `quirks` struct above).
-    QVariantList applyBitcoinDQuirksToParams(const BitcoinDMgrHelper::ReqCtxObj *context, const QString &method, const QVariantList &params);
 
     mutable std::shared_mutex bitcoinDInfoLock;
     BitcoinDInfo bitcoinDInfo;     ///< guarded by bitcoinDInfoLock
