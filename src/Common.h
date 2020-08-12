@@ -39,7 +39,7 @@ struct InternalError : public Exception { using Exception::Exception; };
 struct BadArgs : public Exception { using Exception::Exception; };
 
 #define APPNAME "Fulcrum"
-#define VERSION "1.2.8"
+#define VERSION "1.2.9"
 #ifdef QT_DEBUG
 #  define VERSION_EXTRA "(Debug)"
 inline constexpr bool isReleaseBuild() { return false; }
