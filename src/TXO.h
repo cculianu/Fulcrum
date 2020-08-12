@@ -27,6 +27,7 @@
 #include <QString>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstring> // for std::memcpy
@@ -39,7 +40,7 @@ struct TXO {
     IONum  outN = 0;
 
     bool isValid() const { return txHash.length() == HashLen;  }
-    QString toString() const { return isValid() ? QStringLiteral("%1:%2").arg(QString(txHash.toHex())).arg(outN) : QStringLiteral("<txo_invalid>"); }
+    QString toString() const;
 
     bool operator==(const TXO &o) const noexcept { return txHash == o.txHash && outN == o.outN; }
     bool operator<(const TXO &o) const noexcept { return txHash < o.txHash && outN < o.outN; }
@@ -68,20 +69,25 @@ struct TXO {
     static constexpr size_t serSize() noexcept { return HashLen + sizeof(IONum); }
 };
 
+
 namespace std {
 /// specialization of std::hash to be able to add struct TXO to any unordered_set or unordered_map as a key
 template<> struct hash<TXO> {
     size_t operator()(const TXO &txo) const noexcept {
-        struct { size_t first; IONum second; } mypair = {
-            BTC::QByteArrayHashHasher{}(txo.txHash), // trivially copies first sizeof(size_t) bytes of hash
-            txo.outN,
-        };
-        // on 32-bit: below hashes the above 6-byte struct using MurMur3
-        // on 64-bit: below hashes the above 10-byte struct using CityHash64
-        return Util::hashForStd(mypair);
+        const size_t val1 = BTC::QByteArrayHashHasher{}(txo.txHash);
+        const IONum  val2 = txo.outN;
+        // We must copy the hash bytes and the ionum to a temporary buffer and hash that.
+        // Previously, we put these two items in a struct but it didn't have a unique
+        // objected repr and that led to bugs.  See Fulcrum issue #47 on GitHub.
+        std::array<std::byte, sizeof(val1) + sizeof(val2)> buf;
+        std::memcpy(buf.data()               , reinterpret_cast<const char *>(&val1), sizeof(val1));
+        std::memcpy(buf.data() + sizeof(val1), reinterpret_cast<const char *>(&val2), sizeof(val2));
+        // on 32-bit: below hashes the above 6-byte buffer using MurMur3
+        // on 64-bit: below hashes the above 10-byte buffer using CityHash64
+        return Util::hashForStd(buf);
     }
 };
-}
+} // namespace std
 
 /// Spend info for a txo. Amount, scripthash, txNum, and possibly confirmedHeight
 struct TXOInfo {

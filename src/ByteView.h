@@ -59,6 +59,7 @@ public:
 
     /// Construct a ByteView from any POD data item or C array (but not a std::array)
     template<typename T, std::enable_if_t<std::is_pod_v<T> && !std::is_pointer_v<T> && !is_std_array_v<T>
+                                          && std::has_unique_object_representations_v<T>
                                           && (!std::is_array_v<T> || !std::is_pointer_v<std::remove_all_extents_t<T>>), int> = 0>
     ByteView(const T &t) noexcept
         : ByteView(ptr_cast<std::byte>(&t), sizeof(t)) {}
