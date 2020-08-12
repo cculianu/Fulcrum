@@ -454,7 +454,13 @@ Fatal::~Fatal()
 #include <unordered_set>
 #include <vector>
 
-namespace std { struct hash { std::size_t operator()(const QString &s) const { return Util::hashForStd(s); } }; }
+#if QT_VERSION < QT_VERSION_CHECK(5, 14, 0)
+namespace std {
+    template<> struct hash<QString> {
+        std::size_t operator()(const QString &s) const { return Util::hashForStd(s); }
+    };
+}
+#endif
 
 namespace {
     // ---bench hexparse
