@@ -124,9 +124,18 @@ struct CompactTXO {
 namespace std {
 /// specialization of std::hash to be able to add struct CompactTXO to any unordered_set or unordered_map
 template<> struct hash<CompactTXO> {
-    size_t operator()(const CompactTXO &txo) const noexcept {
-        // Note: on Windows MinGW GCC for some reason .compact is 10 bytes, but the below can handle any size data
-        return Util::hashForStd(txo.compact);
+    size_t operator()(const CompactTXO &ctxo) const noexcept {
+        const auto val1 = ctxo.txNum();
+        const auto val2 = ctxo.N();
+        // We must copy the hash bytes and the ionum to a temporary buffer and hash that.
+        // Previously, we put these two items in a struct but it didn't have a unique
+        // objected repr and that led to bugs.  See Fulcrum issue #47 on GitHub.
+        std::array<std::byte, sizeof(val1) + sizeof(val2)> buf;
+        std::memcpy(buf.data()               , reinterpret_cast<const char *>(&val1), sizeof(val1));
+        std::memcpy(buf.data() + sizeof(val1), reinterpret_cast<const char *>(&val2), sizeof(val2));
+        // on 32-bit: below hashes the above 6-byte buffer using MurMur3
+        // on 64-bit: below hashes the above 10-byte buffer using CityHash64
+        return Util::hashForStd(buf);
     }
 };
 } // namespace std
