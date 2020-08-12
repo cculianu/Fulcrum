@@ -454,6 +454,8 @@ Fatal::~Fatal()
 #include <unordered_set>
 #include <vector>
 
+namespace std { struct hash { std::size_t operator()(const QString &s) const { return Util::hashForStd(s); } }; }
+
 namespace {
     // ---bench hexparse
     void BenchHexParse()
