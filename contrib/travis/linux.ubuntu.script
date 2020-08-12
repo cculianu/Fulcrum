@@ -1,4 +1,5 @@
 #!/bin/sh
+set -e
 /opt/qt513/bin/qmake -makefile CONFIG+=release Fulcrum.pro
 make
 sudo make install

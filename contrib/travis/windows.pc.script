@@ -1,4 +1,5 @@
 #!/bin/sh
+set -e
 export PATH=/C/tools/msys64/$TARGET_MINGW/bin:$PATH
 qmake -makefile CONFIG+=release Fulcrum.pro
 mingw32-make
