@@ -1,5 +1,6 @@
 #!/bin/sh
 set -e
-qmake -makefile CONFIG+=release Fulcrum.pro
+qmake -makefile CONFIG+=release DEFINES+=ENABLE_TESTS Fulcrum.pro
 make
 sudo make install
+Fulcrum --test json --test txo
