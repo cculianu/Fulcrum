@@ -127,7 +127,7 @@ template<> struct hash<CompactTXO> {
     size_t operator()(const CompactTXO &ctxo) const noexcept {
         const auto val1 = ctxo.txNum();
         const auto val2 = ctxo.N();
-        // We must copy the hash bytes and the ionum to a temporary buffer and hash that.
+        // We must copy the txNum and the ionum to a temporary buffer and hash that.
         // Previously, we put these two items in a struct but it didn't have a unique
         // objected repr and that led to bugs.  See Fulcrum issue #47 on GitHub.
         std::array<std::byte, sizeof(val1) + sizeof(val2)> buf;
