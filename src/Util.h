@@ -267,58 +267,88 @@ namespace Util {
     }
 
     /// SFINAE-based functor that calls .reserve(size) on an instance, otherwise does nothing if instance's
-    /// type has no reserve() method.
+    /// type has no reserve() method.  Used by keySet() and valueSet() below.
     struct CallReserve {
         template <typename T>
         auto operator()(T &s, size_t size) const -> decltype(s.reserve(size)) // SFINAE fail if no .reserve()
-        { s.reserve(size); }
+        { return s.reserve(size); }
         // fallback if SFINAE failed, no-op
         template <typename T> void operator()(const T &, size_t) const {}
+    };
+    /// SFINAE-based functor that calls .insert(item) on an set-like instance, or push_back(item) on a
+    /// vector/list-like instance.  Used by keySet() and valueSet() below.
+    struct CallPushBackOrInsert {
+        template <typename T, typename U>
+        auto operator()(T &s, const U &item) const -> decltype(s.insert(item)) // SFINAE fail if no .insert()
+        { return s.insert(item); }
+        template <typename T, typename U>
+        auto operator()(T &s, const U &item) const -> decltype(s.push_back(item)) // SFINAE fail if no .push_back()
+        { return s.push_back(item); }
+    };
+    /// SFINAE-based functor that calls it.key() on a QMap-like iterator or it->first on an STL-map-like iterator
+    struct GetMapItKey {
+        template <typename It>
+        auto operator()(const It &it) const -> decltype((it.key())) // SFINAE fail if no it.key()
+        { return it.key(); }
+        template <typename It>
+        auto operator()(const It &it) const -> decltype((it->first)) // SFINAE fail if no it->first
+        { return it->first; }
+    };
+    /// SFINAE-based functor that calls it.value() on a QMap-like iterator or it->second on an STL-map-like iterator
+    struct GetMapItValue {
+        template <typename It>
+        auto operator()(const It &it) const -> decltype((it.value())) // SFINAE fail if no it.value()
+        { return it.value(); }
+        template <typename It>
+        auto operator()(const It &it) const -> decltype((it->second)) // SFINAE fail if no it->second
+        { return it->second; }
     };
 
     /// Grab just the keys from a map, by copy construction.
     /// If no Set template arg is specified, std::set<Map::key_type> is used.
     /// Otherwise specify any set type such as std::unordered_set<type>, etc.
+    /// This fuction also can create vectors and/or lists (both STL and Qt varieties).
     template <typename Set = void, typename Map> /* We do it this way so that Set is the first arg an Map is inferred from args. */
     auto keySet(const Map &map) {
         // lambda template
         constexpr auto inner = [](const Map &map, auto & set) {
             CallReserve{}(set, map.size());
             for (auto it = map.begin(); it != map.end(); ++it) {
-                set.insert(it->first);
+                CallPushBackOrInsert{}(set, GetMapItKey{}(it));
             }
         };
         // this lambda template is only here to assist in type deduction, it's never called.
-        constexpr auto deduceSet = [] {
+        constexpr auto DeduceSet = [] {
             if constexpr (std::is_void_v<Set>)
                 // default of void leads to std::set being used as the return type
                 return std::set<typename Map::mapped_type>();
             else
                 return Set();
         };
-        decltype(deduceSet()) ret;
+        decltype( DeduceSet() ) ret;
         inner(map, ret);
         return ret;
     }
     /// Similar to keySet(), but instead grabs all the values from a map.
+    /// This fuction also can create vectors and/or lists (both STL and Qt varieties).
     template <typename Set = void, typename Map>
     auto valueSet(const Map &map) {
         // lambda template
         constexpr auto inner = [](const Map &map, auto & set) {
             CallReserve{}(set, map.size());
             for (auto it = map.begin(); it != map.end(); ++it) {
-                set.insert(it->second);
+                CallPushBackOrInsert{}(set, GetMapItValue{}(it));
             }
         };
         // this lambda template is only here to assist in type deduction, it's never called.
-        constexpr auto deduceSet = [] {
+        constexpr auto DeduceSet = [] {
             if constexpr (std::is_void_v<Set>)
                 // default of void leads to std::set being used as the return type
                 return std::set<typename Map::mapped_type>();
             else
                 return Set();
         };
-        decltype(deduceSet()) ret;
+        decltype( DeduceSet() ) ret;
         inner(map, ret);
         return ret;
     }

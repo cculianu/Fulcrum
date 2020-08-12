@@ -5,4 +5,4 @@ qmake -makefile CONFIG+=release DEFINES+=ENABLE_TESTS Fulcrum.pro
 mingw32-make
 mingw32-make install
 # FIXME: Fulcrum.exe currenlty causes Segmentation fault on Travis
-#./release/Fulcrum.exe --test json --test txo
+#./release/Fulcrum.exe --test all

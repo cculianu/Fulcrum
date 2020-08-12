@@ -444,10 +444,18 @@ Fatal::~Fatal()
 #include "bitcoin/utilstrencodings.h"
 #include "Json.h"
 
+#include <QMap>
+#include <QSet>
+
+#include <algorithm>
+#include <list>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace {
+    // ---bench hexparse
     void BenchHexParse()
     {
         const auto fn = std::getenv("HEXJSON");
@@ -576,6 +584,133 @@ namespace {
     }
 
     const auto b1 = App::registerBench("hexparse", &BenchHexParse);
-}
+
+    // ---test keyset
+    void TestKeySetAndValueSet() {
+        const std::map<QString, QString> map{
+            { "hello", "hi" }, { "foo", "bar" }, { "biz", "baz" }, { "fulcrum", "rocks" }, { "booyaka", "sha" },
+        };
+        const QMap<QString, QString> qmap{
+            { "hello", "hi" }, { "foo", "bar" }, { "biz", "baz" }, { "fulcrum", "rocks" }, { "booyaka", "sha" },
+        };
+        const std::unordered_map<QString, QString> umap{
+            { "hello", "hi" }, { "foo", "bar" }, { "biz", "baz" }, { "fulcrum", "rocks" }, { "booyaka", "sha" },
+        };
+        int num = 0;
+        // Util::keySet
+        {
+            auto s1 = Util::keySet<QSet<QString>>(map);
+            auto s2 = Util::keySet<QSet<QString>>(qmap);
+            auto s3 = Util::keySet<QSet<QString>>(umap);
+            if (s1.size() != int(map.size()) || s2.size() != qmap.size() || s1 != s2 || s1 != s3)
+                throw Exception("keySet<QSet> test failed!");
+            for (const auto &k : s1)
+                if (map.find(k) == map.end())
+                    throw Exception(QString("key %1 not found in map").arg(k));
+            ++num;
+        }
+        {
+            auto s1 = Util::keySet<std::unordered_set<QString>>(map);
+            auto s2 = Util::keySet<std::unordered_set<QString>>(qmap);
+            auto s3 = Util::keySet<std::unordered_set<QString>>(umap);
+            if (s1.size() != map.size() || int(s2.size()) != qmap.size() || s1 != s2 || s1 != s3)
+                throw Exception("keySet<unordered_set> test failed!");
+            ++num;
+        }
+        {
+            auto s1 = Util::keySet<std::vector<QString>>(map);
+            auto s2 = Util::keySet<std::vector<QString>>(qmap);
+            auto s3 = Util::keySet<std::vector<QString>>(umap);
+            std::sort(s3.begin(), s3.end());
+            if (s1.size() != map.size() || int(s2.size()) != qmap.size() || s1 != s2 || s1 != s3)
+                throw Exception("keySet<vector> test failed!");
+            ++num;
+        }
+        {
+            auto s1 = Util::keySet<std::list<QString>>(map);
+            auto s2 = Util::keySet<std::list<QString>>(qmap);
+            auto s3 = Util::keySet<std::list<QString>>(umap);
+            auto v = Util::toVec(s3);
+            std::sort(v.begin(), v.end());
+            s3 = Util::toList(v);
+            if (s1.size() != map.size() || int(s2.size()) != qmap.size() || s1 != s2 || s1 != s3)
+                throw Exception("keySet<list> test failed!");
+            ++num;
+        }
+        {
+            auto s1 = Util::keySet<QStringList>(map);
+            auto s2 = Util::keySet<QStringList>(qmap);
+            auto s3 = Util::keySet<QStringList>(umap);
+            std::sort(s3.begin(), s3.end());
+            if (s1.size() != int(map.size()) || s2.size() != qmap.size() || s1 != s2 || s1 != s3)
+                throw Exception("keySet<QStringList> test failed!");
+            ++num;
+        }
+        // Util::valueSet
+        {
+            auto s1 = Util::valueSet<QSet<QString>>(map);
+            auto s2 = Util::valueSet<QSet<QString>>(qmap);
+            auto s3 = Util::valueSet<QSet<QString>>(umap);
+            if (s1.size() != int(map.size()) || s2.size() != qmap.size() || s1 != s2 || s1 != s3)
+                throw Exception("valueSet<QSet> test failed!");
+            for (const auto &v : s1) {
+                bool found = false;
+                for (const auto & [mk, mv] : map) {
+                    if (v == mv) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found)
+                    throw Exception(QString("value %1 not found in map").arg(v));
+            }
+            ++num;
+        }
+        {
+            auto s1 = Util::valueSet<std::unordered_set<QString>>(map);
+            auto s2 = Util::valueSet<std::unordered_set<QString>>(qmap);
+            auto s3 = Util::valueSet<std::unordered_set<QString>>(umap);
+            if (s1.size() != map.size() || int(s2.size()) != qmap.size() || s1 != s2 || s1 != s3)
+                throw Exception("valueSet<unordered_map> test failed!");
+            ++num;
+        }
+        {
+            auto s1 = Util::valueSet<std::vector<QString>>(map);
+            auto s2 = Util::valueSet<std::vector<QString>>(qmap);
+            auto s3 = Util::valueSet<std::vector<QString>>(umap);
+            for (auto * s : { &s1, &s2, &s3 })
+                std::sort(s->begin(), s->end());
+            if (s1.size() != map.size() || int(s2.size()) != qmap.size() || s1 != s2 || s1 != s3)
+                throw Exception("valueSet<vector> test failed!");
+            ++num;
+        }
+        {
+            auto s1 = Util::valueSet<std::list<QString>>(map);
+            auto s2 = Util::valueSet<std::list<QString>>(qmap);
+            auto s3 = Util::valueSet<std::list<QString>>(umap);
+            for (auto * s : { &s1, &s2, &s3 }) {
+                auto v = Util::toVec(*s);
+                std::sort(v.begin(), v.end());
+                *s = Util::toList(v);
+            }
+            if (s1.size() != map.size() || int(s2.size()) != qmap.size() || s1 != s2 || s1 != s3)
+                throw Exception("valueSet<list> test failed!");
+            ++num;
+        }
+        {
+            auto s1 = Util::valueSet<QStringList>(map);
+            auto s2 = Util::valueSet<QStringList>(qmap);
+            auto s3 = Util::valueSet<QStringList>(umap);
+            for (auto * s : { &s1, &s2, &s3 })
+                std::sort(s->begin(), s->end());
+            if (s1.size() != int(map.size()) || s2.size() != qmap.size() || s1 != s2 || s1 != s3)
+                throw Exception("valueSet<QStringList> test failed!");
+            ++num;
+        }
+        Log() << "keyset test passed " << num << Util::Pluralize(" test", num) << " ok";
+    }
+
+    const auto t1 = App::registerTest("keyset", &TestKeySetAndValueSet);
+} // namespace
 
 #endif

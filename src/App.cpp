@@ -341,7 +341,8 @@ void App::parseArgs()
             tests.append(name);
         allOptions.push_back({
             "test",
-            QString("Run a test and exit. This option may be specified multiple times. Available tests: %1").arg(tests.join(", ")),
+            QString("Run a test and exit. This option may be specified multiple times. Specify \"all\" to run all tests."
+                    " Available tests: \"%1\"").arg(tests.join("\", \"")),
             QString("test")
         });
     }
@@ -352,7 +353,8 @@ void App::parseArgs()
             benches.append(name);
         allOptions.push_back({
             "bench",
-            QString("Run a benchmark and exit. This option may be specified multiple times. Available benchmarks: %1").arg(benches.join(", ")),
+            QString("Run a benchmark and exit. This option may be specified multiple times. Specify \"all\" to run all benchmarks."
+                    " Available benchmarks: \"%1\"").arg(benches.join("\", \"")),
             QString("benchmark")
         });
     }
@@ -367,8 +369,14 @@ void App::parseArgs()
         int setCtr = 0;
         if (!registeredTests.empty() && parser.isSet("test")) {
             ++setCtr;
+            auto vals = parser.values("test");
+            if (vals.length() == 1 && vals.front() == "all") {
+                // special keyword "all" means run all tests
+                vals = Util::keySet<decltype(vals)>(registeredTests);
+                Log() << "Running all " << vals.count() << " tests ...";
+            }
             // process tests and exit if we take this branch
-            for (const auto & tname : parser.values("test")) {
+            for (const auto & tname : vals) {
                 auto it = registeredTests.find(tname);
                 if (it == registeredTests.end())
                     throw BadArgs(QString("No such test: %1").arg(tname));
@@ -378,8 +386,14 @@ void App::parseArgs()
         }
         if (!registeredBenches.empty() && parser.isSet("bench")) {
             ++setCtr;
+            auto vals = parser.values("bench");
+            if (vals.length() == 1 && vals.front() == "all") {
+                // special keyword "all" means run all benchmarks
+                vals = Util::keySet<decltype(vals)>(registeredBenches);
+                Log() << "Running all " << vals.count() << " benchmarks ...";
+            }
             // process benches and exit if we take this branch
-            for (const auto & tname : parser.values("bench")) {
+            for (const auto & tname : vals) {
                 auto it = registeredBenches.find(tname);
                 if (it == registeredBenches.end())
                     throw BadArgs(QString("No such bench: %1").arg(tname));
@@ -1175,7 +1189,9 @@ void App::on_bitcoindThrottleParamsChange(int hi, int lo, int decay)
         Warning() << __func__ << ": arguments out of range, ignoring new bitcoind_throttle setting";
 }
 
-/* static */ std::map<QString, std::function<void()>> App::registeredTests, App::registeredBenches;
+/* static */
+std::map<QString, std::function<void()>> App::registeredTests, App::registeredBenches;
+
 /* static */
 void App::registerTestBenchCommon(const char *fname, const char *brief, NameFuncMap &map,
                                   const NameFuncMap::key_type &name, const NameFuncMap::mapped_type &func)
@@ -1189,12 +1205,14 @@ void App::registerTestBenchCommon(const char *fname, const char *brief, NameFunc
     if (!inserted)
         Error() << fname << ": ignoring duplicate " << brief << " \"" << name << "\"";
 }
+
 /* static */
 auto App::registerTest(const QString &name, const std::function<void()> &func) -> RegisteredTest
 {
     registerTestBenchCommon(__func__, "test", registeredTests, name, func);
     return {};
 }
+
 /* static */
 auto App::registerBench(const QString &name, const std::function<void()> &func) -> RegisteredBench
 {
