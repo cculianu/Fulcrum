@@ -27,7 +27,7 @@ QString TXO::toString() const
             : QStringLiteral("<txo_invalid>");
 }
 
-#ifdef ENABLE_TESTSS
+#ifdef ENABLE_TESTS
 #include "App.h"
 
 #include <QByteArray>
