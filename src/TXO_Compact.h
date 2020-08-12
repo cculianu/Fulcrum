@@ -133,8 +133,7 @@ template<> struct hash<CompactTXO> {
         std::array<std::byte, sizeof(val1) + sizeof(val2)> buf;
         std::memcpy(buf.data()               , reinterpret_cast<const char *>(&val1), sizeof(val1));
         std::memcpy(buf.data() + sizeof(val1), reinterpret_cast<const char *>(&val2), sizeof(val2));
-        // on 32-bit: below hashes the above 6-byte buffer using MurMur3
-        // on 64-bit: below hashes the above 10-byte buffer using CityHash64
+        // below hashes the above 10-byte buffer using CityHash64
         return Util::hashForStd(buf);
     }
 };
