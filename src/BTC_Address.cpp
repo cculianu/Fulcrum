@@ -283,7 +283,7 @@ namespace BTC
             }
             constexpr auto MyNet = Net::MainNet;
             constexpr auto MyKind = Kind::P2PKH;
-            constexpr size_t count = 1000000;
+            constexpr size_t count = 300'000;
             Print() << id << ": Generating " << count << " random pubkeys...";
             std::vector<QByteArray> pubkeys(count);
             const auto t0pk = Util::getTimeNS();
@@ -295,7 +295,7 @@ namespace BTC
             const auto elapsedpk = Util::getTimeNS() - t0pk;
             Print() << id << ": Took: " << QString::number(elapsedpk/1e6, 'f', 6).toUtf8().constData() << " msec";
 
-            Print() << "Generating " << count << " legacy address strings ...";
+            Print() << id << ": Generating " << count << " legacy address strings ...";
             std::vector<QString> legStrings(count);
             const auto t0ls = Util::getTimeNS();
             for (size_t i = 0; i < count; ++i) {
@@ -353,7 +353,7 @@ namespace BTC
             Print() << id << ": All ok!";
         };
 
-        const size_t  N = 7;//std::thread::hardware_concurrency() / 2 + 1;
+        const size_t N = std::max(std::min(7u, std::thread::hardware_concurrency()), 2u);
         std::vector<std::thread> threads;
         threads.reserve(N);
         for (size_t i = 0; i < N; ++i) {
