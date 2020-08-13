@@ -334,9 +334,10 @@ void App::parseArgs()
          },
      };
 
-    if (!registeredTests.empty()) {
+    bool haveTests{}, haveBenches{};
+    if ((haveTests = registeredTests && !registeredTests->empty())) {
         // add --test option if we have any registered tests
-        const auto tests = Util::keySet<QStringList>(registeredTests);
+        const auto tests = Util::keySet<QStringList>(*registeredTests);
         allOptions.push_back({
             "test",
             QString("Run a test and exit. This option may be specified multiple times. Specify \"all\" to run all tests."
@@ -344,9 +345,9 @@ void App::parseArgs()
             QString("test")
         });
     }
-    if (!registeredBenches.empty()) {
+    if ((haveBenches = registeredBenches && !registeredBenches->empty())) {
         // add --bench option if we have any registered benches
-        const auto benches = Util::keySet<QStringList>(registeredBenches);
+        const auto benches = Util::keySet<QStringList>(*registeredBenches);
         allOptions.push_back({
             "bench",
             QString("Run a benchmark and exit. This option may be specified multiple times. Specify \"all\" to run all benchmarks."
@@ -363,35 +364,35 @@ void App::parseArgs()
     // those immediately exit the app if they do run.
     try {
         int setCtr = 0;
-        if (!registeredTests.empty() && parser.isSet("test")) {
+        if (haveTests && parser.isSet("test")) {
             ++setCtr;
             auto vals = parser.values("test");
             if (vals.length() == 1 && vals.front() == "all") {
                 // special keyword "all" means run all tests
-                vals = Util::keySet<decltype(vals)>(registeredTests);
+                vals = Util::keySet<decltype(vals)>(*registeredTests);
                 Log() << "Running all " << vals.count() << " tests ...";
             }
             // process tests and exit if we take this branch
             for (const auto & tname : vals) {
-                auto it = registeredTests.find(tname);
-                if (it == registeredTests.end())
+                auto it = registeredTests->find(tname);
+                if (it == registeredTests->end())
                     throw BadArgs(QString("No such test: %1").arg(tname));
                 Log() << "Running test: " << it->first << " ...";
                 it->second();
             }
         }
-        if (!registeredBenches.empty() && parser.isSet("bench")) {
+        if (haveBenches && parser.isSet("bench")) {
             ++setCtr;
             auto vals = parser.values("bench");
             if (vals.length() == 1 && vals.front() == "all") {
                 // special keyword "all" means run all benchmarks
-                vals = Util::keySet<decltype(vals)>(registeredBenches);
+                vals = Util::keySet<decltype(vals)>(*registeredBenches);
                 Log() << "Running all " << vals.count() << " benchmarks ...";
             }
             // process benches and exit if we take this branch
             for (const auto & tname : vals) {
-                auto it = registeredBenches.find(tname);
-                if (it == registeredBenches.end())
+                auto it = registeredBenches->find(tname);
+                if (it == registeredBenches->end())
                     throw BadArgs(QString("No such bench: %1").arg(tname));
                 Log() << "Running benchmark: " << it->first << " ...";
                 it->second();
@@ -1186,10 +1187,10 @@ void App::on_bitcoindThrottleParamsChange(int hi, int lo, int decay)
 }
 
 /* static */
-std::map<QString, std::function<void()>> App::registeredTests, App::registeredBenches;
+std::unique_ptr<std::map<QString, std::function<void()>>> App::registeredTests, App::registeredBenches;
 
 /* static */
-void App::registerTestBenchCommon(const char *fname, const char *brief, NameFuncMap &map,
+void App::registerTestBenchCommon(const char *fname, const char *brief, NameFuncMapPtr &map,
                                   const NameFuncMap::key_type &name, const NameFuncMap::mapped_type &func)
 {
     if (_globalInstance) {
@@ -1197,7 +1198,8 @@ void App::registerTestBenchCommon(const char *fname, const char *brief, NameFunc
                 << " Ignoring request to register " << brief << " \"" << name << "\"";
         return;
     }
-    const auto & [_, inserted] = map.insert({name, func});
+    if (!map) map = std::make_unique<NameFuncMap>(); // construct the map the first time through
+    const auto & [_, inserted] = map->insert({name, func});
     if (!inserted)
         Error() << fname << ": ignoring duplicate " << brief << " \"" << name << "\"";
 }

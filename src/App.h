@@ -117,8 +117,9 @@ private:
 
     /// Used for registerTest and registerBench
     using NameFuncMap = std::map<QString, std::function<void()>>;
-    static NameFuncMap registeredTests, registeredBenches;
-    static void registerTestBenchCommon(const char *fname, const char *brief, NameFuncMap &map,
+    using NameFuncMapPtr = std::unique_ptr<NameFuncMap>;
+    static std::unique_ptr<NameFuncMap> registeredTests, registeredBenches;
+    static void registerTestBenchCommon(const char *fname, const char *brief, NameFuncMapPtr &map,
                                         const NameFuncMap::key_type &name, const NameFuncMap::mapped_type &func);
     /// Call this at app init and/or after the App object is initialized to undo the locale damage that Qt does
     /// for the C library for number formatting. Previous to this, this could break the JSON serializer.
