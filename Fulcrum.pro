@@ -154,10 +154,10 @@ linux {
     LIBS += -lrocksdb -lz -lbz2 -ldl
 }
 win32 {
-    !contains(features, staticlibs) {
-        error("Cannot build Fulcrum on Windows without the staticlibs feature")
-    }
     LIBS += -lrocksdb -lshlwapi -lrpcrt4
+    !contains(features, staticlibs) {
+        LIBS += -lzstd -lbz2 -llz4 -lsnappy -lz
+    }
 }
 
 # Tell QMake all of the below is relative to src/.
