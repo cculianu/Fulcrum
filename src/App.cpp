@@ -336,9 +336,7 @@ void App::parseArgs()
 
     if (!registeredTests.empty()) {
         // add --test option if we have any registered tests
-        QStringList tests;
-        for (const auto & [name, func] : registeredTests)
-            tests.append(name);
+        const auto tests = Util::keySet<QStringList>(registeredTests);
         allOptions.push_back({
             "test",
             QString("Run a test and exit. This option may be specified multiple times. Specify \"all\" to run all tests."
@@ -348,9 +346,7 @@ void App::parseArgs()
     }
     if (!registeredBenches.empty()) {
         // add --bench option if we have any registered benches
-        QStringList benches;
-        for (const auto & [name, func] : registeredBenches)
-            benches.append(name);
+        const auto benches = Util::keySet<QStringList>(registeredBenches);
         allOptions.push_back({
             "bench",
             QString("Run a benchmark and exit. This option may be specified multiple times. Specify \"all\" to run all benchmarks."
