@@ -118,9 +118,10 @@ namespace BTC {
         QByteArray h160;
         Kind _kind = Kind::Invalid;
         bool autosetKind();
-#ifdef QT_DEBUG
+#ifdef ENABLE_TESTS
     public:
         static bool test();
+        static void bench();
 #endif
     };
 

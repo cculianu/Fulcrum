@@ -28,10 +28,12 @@
 #include <QHash>
 #include <QHashFunctions>
 
-#ifdef QT_DEBUG
-#include <QRandomGenerator>
-#include <thread>
-#include <iostream>
+#ifdef ENABLE_TESTS
+#  include "App.h"
+#  include <QRandomGenerator>
+#  include <iostream>
+#  include <thread>
+#  include <utility>
 #endif
 
 namespace BTC
@@ -248,10 +250,27 @@ namespace BTC
         return a.isValid() && a._net == net;
     }
 
-#ifdef QT_DEBUG
+#ifdef ENABLE_TESTS
+    namespace {
+        struct ThreadSafeLogger {
+            QString str;
+            QTextStream ts{&str};
+            static std::mutex mut;
+
+            ~ThreadSafeLogger() {
+                ts.flush();
+                std::unique_lock g(mut);
+                std::cout << str.toUtf8().constData() << "\n";
+            }
+            template <typename T>
+            ThreadSafeLogger &operator<<(T &&t) { ts << t; return *this; }
+        };
+        std::mutex ThreadSafeLogger::mut;
+    }
     /*static*/
-    bool Address::test()
+    void Address::bench()
     {
+        using Print = ThreadSafeLogger;
         std::condition_variable cond;
         std::mutex mut;
         std::atomic_bool start{false};
@@ -264,9 +283,8 @@ namespace BTC
             }
             constexpr auto MyNet = Net::MainNet;
             constexpr auto MyKind = Kind::P2PKH;
-            auto & os = std::cout;
             constexpr size_t count = 1000000;
-            os << id << ": Generating " << count << " random pubkeys...\n";
+            Print() << id << ": Generating " << count << " random pubkeys...";
             std::vector<QByteArray> pubkeys(count);
             const auto t0pk = Util::getTimeNS();
             for (size_t i = 0; i < count; ++i) {
@@ -275,9 +293,9 @@ namespace BTC
                 QRandomGenerator::global()->fillRange(reinterpret_cast<quint32 *>(pk.data()), pk.size()/int(sizeof(quint32)));
             }
             const auto elapsedpk = Util::getTimeNS() - t0pk;
-            os << id << ": Took: " << QString::number(elapsedpk/1e6, 'f', 6).toUtf8().constData() << " msec\n";
+            Print() << id << ": Took: " << QString::number(elapsedpk/1e6, 'f', 6).toUtf8().constData() << " msec";
 
-            os << "Generating " << count << " legacy address strings ...\n";
+            Print() << "Generating " << count << " legacy address strings ...";
             std::vector<QString> legStrings(count);
             const auto t0ls = Util::getTimeNS();
             for (size_t i = 0; i < count; ++i) {
@@ -288,10 +306,10 @@ namespace BTC
                 leg = a.toLegacyString();
             }
             const auto elapsedls = Util::getTimeNS() - t0ls;
-            os << id << ": Took: " << QString::number(elapsedls/1e6, 'f', 6).toUtf8().constData() << " msec\n";
-            os << id << ": Last string: " << legStrings.back().toUtf8().constData() << "\n";
+            Print() << id << ": Took: " << QString::number(elapsedls/1e6, 'f', 6).toUtf8().constData() << " msec";
+            Print() << id << ": Last string: " << legStrings.back().toUtf8().constData();
 
-            os << id << ": Generating " << count << " cash address strings ...\n";
+            Print() << id << ": Generating " << count << " cash address strings ...";
             std::vector<QString> caStrings(count);
             const auto t0ca = Util::getTimeNS();
             for (size_t i = 0; i < count; ++i) {
@@ -302,10 +320,10 @@ namespace BTC
                 ca = a.toString();
             }
             const auto elapsedca = Util::getTimeNS() - t0ca;
-            os << id << ": Took: " << QString::number(elapsedca/1e6, 'f', 6).toUtf8().constData() << " msec\n";
-            os << id << ": Last string: " << caStrings.back().toUtf8().constData() << "\n";
+            Print() << id << ": Took: " << QString::number(elapsedca/1e6, 'f', 6).toUtf8().constData() << " msec";
+            Print() << id << ": Last string: " << caStrings.back().toUtf8().constData();
 
-            os << id << ": Parsing " << count << " legacy strings ...\n";
+            Print() << id << ": Parsing " << count << " legacy strings ...";
             std::vector<Address> addrsleg(count);
             const auto t0pleg = Util::getTimeNS();
             for (size_t i = 0; i < count; ++i) {
@@ -314,9 +332,9 @@ namespace BTC
                 addr = Address(ls);
             }
             const auto elapsedpleg = Util::getTimeNS() - t0pleg;
-            os << id << ": Took: " << QString::number(elapsedpleg/1e6, 'f', 6).toUtf8().constData() << " msec\n";
+            Print() << id << ": Took: " << QString::number(elapsedpleg/1e6, 'f', 6).toUtf8().constData() << " msec";
 
-            os << id << ": Parsing " << count << " cashaddr strings ...\n";
+            Print() << id << ": Parsing " << count << " cashaddr strings ...";
             std::vector<Address> addrsca(count);
             const auto t0pca = Util::getTimeNS();
             for (size_t i = 0; i < count; ++i) {
@@ -325,14 +343,14 @@ namespace BTC
                 addr = Address(cs);
             }
             const auto elapsedpca = Util::getTimeNS() - t0pca;
-            os << id << ": Took: " << QString::number(elapsedpca/1e6, 'f', 6).toUtf8().constData() << " msec\n";
+            Print() << id << ": Took: " << QString::number(elapsedpca/1e6, 'f', 6).toUtf8().constData() << " msec";
 
-            os << id << ": Ensuring all equal each other ...\n";
+            Print() << id << ": Ensuring all equal each other ...";
             for (size_t i = 0; i < count; ++i) {
                 if (addrsleg[i] != addrsca[i] || Address::fromPubKey(pubkeys[i], MyKind, MyNet) != addrsca[i])
                     throw Exception(QString("Address index %1 mistmatch").arg(long(i)));
             }
-            os << id << ": All ok!\n\n\n------------------------------------\n";
+            Print() << id << ": All ok!";
         };
 
         const size_t  N = 7;//std::thread::hardware_concurrency() / 2 + 1;
@@ -341,7 +359,7 @@ namespace BTC
         for (size_t i = 0; i < N; ++i) {
             threads.emplace_back(Bench, i);
         }
-        std::cout << N << " threads created.. starting them all now!\n";
+        Log() << N << " threads created.. starting them all now!";
         mut.lock();
         start = true;
         cond.notify_all();
@@ -349,7 +367,14 @@ namespace BTC
         for (auto & thr : threads) {
             thr.join();
         }
+    }
 
+    namespace { const auto b1 = App::registerBench("address", Address::bench); }
+
+    /*static*/
+    bool Address::test()
+    {
+        using Print = Log;
         constexpr auto badAddress = "1C3SoftYBC2bbDbbDzCadZxDrfbnobEXLBLQZbbD";
         constexpr auto anAddress = "qpu3lsv4uufvzsklf38pfl2wckesyuecxgledta0jl";
         constexpr auto anAddress_leg = "1C3SoftYBC2bbDzCadZxDrfbnobEXLBLQZ";
@@ -360,40 +385,78 @@ namespace BTC
         Address a = anAddress, b, bad(badAddress);
         b = a;
         Address c(a);
-        std::cout << "a < b? " << int(a < b) << std::endl;
-        std::cout << "a <= b? " << int(a <= b) << std::endl;
-        std::cout << "a == b? " << int(a == b) << std::endl;
-        std::cout << "bad is Valid? " << bad.isValid() << std::endl;
+
+        {
+            int res, cur = 0;
+            const int expect[] = { 0, 1, 1, 0};
+            Print() << "a < b? " << (res = a < b);
+            if (expect[cur++] != res) return false;
+            Print() << "a <= b? " << (res = a <= b);
+            if (expect[cur++] != res) return false;
+            Print() << "a == b? " << (res = a == b);
+            if (expect[cur++] != res) return false;
+            Print() << "bad is Valid? " << (res = bad.isValid());
+            if (expect[cur++] != res) return false;
+        }
+
         c = b;
 
         Address p2sh(anAddress2);
         Address p2sh_leg(anAddress2_leg);
 
-        Address testnet("qq9rw090p2eu9drv6ptztwx4ghpftwfa0gyqvlvx2q");
+        constexpr auto testnetStr = "qq9rw090p2eu9drv6ptztwx4ghpftwfa0gyqvlvx2q";
+        Address testnet(testnetStr);
 
-        std::cout << "p2sh == p2sh_leg? " << int(p2sh == p2sh_leg) << std::endl;
-        std::cout << "a == p2sh? " << int(a == p2sh) << std::endl;
-        std::cout << "a > p2sh? " << int(a > p2sh) << std::endl;
-        std::cout << "a < p2sh? " << int(a < p2sh) << std::endl;
-        std::cout << "a >= p2sh? " << int(a >= p2sh) << std::endl;
-        std::cout << "a <= p2sh? " << int(a <= p2sh) << std::endl;
+        {
+            int res, cur = 0;
+            const int expect[] = { 1, 0, 0, 1, 0, 1 };
+            Print() << "p2sh == p2sh_leg? " << (res = p2sh == p2sh_leg);
+            if (expect[cur++] != res) return false;
+            Print() << "a == p2sh? " << (res = a == p2sh);
+            if (expect[cur++] != res) return false;
+            Print() << "a > p2sh? " << (res = a > p2sh);
+            if (expect[cur++] != res) return false;
+            Print() << "a < p2sh? " << (res = a < p2sh);
+            if (expect[cur++] != res) return false;
+            Print() << "a >= p2sh? " << (res = a >= p2sh);
+            if (expect[cur++] != res) return false;
+            Print() << "a <= p2sh? " << (res = a <= p2sh);
+            if (expect[cur++] != res) return false;
+        }
 
         Address last;
-        for (const auto & a : { bad, Address{anAddress}, Address{anAddress_leg}, Address{anAddress2}, Address{anAddress2_leg}, testnet, Address{reg1}, Address{reg2}}) {
-            std::cout << "------------------------------------" << std::endl;
-            std::cout << "Cash address: " << a.toString().toUtf8().constData() << ", legacy: " << a.toLegacyString().toUtf8().constData() << ", short cashaddr: " << a.toShortString().toUtf8().constData() << std::endl;
-            std::cout << "Decoded -> VerByte: " << int(a.verByte) <<  "  Hash160 (hex): " << a.h160.toHex().constData() << std::endl;
-            std::cout << "IsValid: " << a.isValid() << " Kind: " << a.kind() << " Net: " << NetName(a.net()).toUtf8().constData() << std::endl;
+        using P = std::pair<const char * const, bool>;
+        for (const auto & [str, expectedValid] : {
+             P{badAddress, false}, P{anAddress, true}, P{anAddress_leg, true}, P{anAddress2, true}, P{anAddress2_leg, true}, P{testnetStr, true},
+             P{reg1, true}, P{reg2, false} }) {
+            const Address a{str};
+            Print() << "------------------------------------";
+            Print() << "Orig string: " << str;
+            Print() << "Cash address: " << a.toString().toUtf8().constData() << ", legacy: " << a.toLegacyString().toUtf8().constData() << ", short cashaddr: " << a.toShortString().toUtf8().constData();
+            Print() << "Decoded -> VerByte: " << int(a.verByte) <<  "  Hash160 (hex): " << a.h160.toHex().constData();
+            Print() << "IsValid: " << a.isValid() << " Kind: " << a.kind() << " Net: " << NetName(a.net()).toUtf8().constData();
             const auto cscript = a.toCScript();
-            std::cout << "Script Hex of: " << a.toString().toUtf8().constData() << " = " << QByteArray(reinterpret_cast<const char *>(&*cscript.begin()), int(cscript.size())).toHex().constData() << std::endl;
-            std::cout << "HashX of " << a.toString().toUtf8().constData() << " = " << a.toHashX().toHex().constData() << std::endl;
+            Print() << "Script Hex of: " << a.toString().toUtf8().constData() << " = " << QByteArray(reinterpret_cast<const char *>(&*cscript.begin()), int(cscript.size())).toHex().constData();
+            Print() << "HashX of " << a.toString().toUtf8().constData() << " = " << a.toHashX().toHex().constData();
             c = a;
-            std::cout << "HashX again " << c.toString().toUtf8().constData() << " = " << c.toHashX().toHex().constData() << std::endl;
-            std::cout << "c==a : " << int(c==a) << "  a==Address()? : " << int(a==Address()) << "  a>Address()?: " << int(a > Address()) << "  a<Address()?: " << int(a < Address()) << std::endl;
-            std::cout << "last==a : " << int(last==a) << "  last>a?: " << int(last > a) << "  last<a?: " << int(last < a) << "  last==a?: " << int(last == a) << std::endl;
+            Print() << "HashX again " << c.toString().toUtf8().constData() << " = " << c.toHashX().toHex().constData();
+            Print() << "c==a : " << int(c==a) << "  a==Address()? : " << int(a==Address()) << "  a>Address()?: " << int(a > Address()) << "  a<Address()?: " << int(a < Address());
+            Print() << "last==a : " << int(last==a) << "  last>a?: " << int(last > a) << "  last<a?: " << int(last < a) << "  last==a?: " << int(last == a);
+            if (a.isValid() != expectedValid)
+                return false;
             last = a;
         }
+        Print() << "------------------------------------";
+        Print() << "address test success";
         return true;
     }
+
+    namespace {
+        const auto t1 = App::registerTest("address", []{
+            if (!Address::test())
+                throw Exception("address test failed");
+        });
+    }
+
 #endif
 } // end namespace BTC
