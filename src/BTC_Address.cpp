@@ -45,6 +45,7 @@ namespace BTC
         const QHash<Net, QHash<quint8, Address::Kind> > netVerByteKindMap = {
             { MainNet, { {0, Address::P2PKH },  {5, Address::P2SH} } },
             { TestNet, { {111, Address::P2PKH },{196, Address::P2SH} } },
+            { TestNet4, { {111, Address::P2PKH },{196, Address::P2SH} } },
             { RegTestNet, { {111, Address::P2PKH },{196, Address::P2SH} } },
         };
         Byte verByteForNetAndKind(Net net, Address::Kind kind) {
@@ -74,6 +75,9 @@ namespace BTC
                 if (net == RegTestNet)
                     // don't auto-detect regtest net -- skip it.
                     continue;
+                if (net == TestNet4)
+                    // don't auto-detect testnet4 for now -- skip it.
+                    continue;
                 if (it.value().contains(verByte))
                     return net;
             }
@@ -92,7 +96,7 @@ namespace BTC
             if (!content.hash.empty())
                 a._net = Net::MainNet;
             else {
-                // try testnet
+                // try testnet (note testnet4 also matches this)
                 content = bitcoin::DecodeCashAddrContent(ss, bitcoin::TestNetChainParams.CashAddrPrefix());
                 if (!content.hash.empty()) a._net = TestNet;
                 else {
@@ -126,7 +130,7 @@ namespace BTC
                 a.verByte = dec[0];
                 a.h160.resize(int(H160Len));
                 std::memcpy(a.h160.data(), &dec[1], H160Len);
-                a._net = netForVerByte(a.verByte); // note this will not correctly differntiate between TestNet and RegTestNet and always pick TestNet since they have the same verBytes.
+                a._net = netForVerByte(a.verByte); // note this will not correctly differntiate between TestNet, TestNet4 and RegTestNet and always pick TestNet since they have the same verBytes.
                 a.autosetKind(); // this will clear the address if something is wrong
             }
         } else {
