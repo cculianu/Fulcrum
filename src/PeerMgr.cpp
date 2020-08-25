@@ -33,6 +33,7 @@
 #include <QTcpSocket>
 #include <QVector>
 
+#include <limits>
 #include <list>
 #include <utility>
 
@@ -136,17 +137,17 @@ void PeerMgr::parseServersDotJson(const QString &fnIn)
         PeerInfo info;
         QVariantMap d = it.value().toMap();
         info.hostName = it.key().trimmed().toLower();
-        // skip empties/malformed entries, or pruning entries -- thisdefensive programming.. ideally we include only good entries in servers.json
+        // skip empties/malformed entries, or pruning entries -- for defensive programming.. ideally we include only good entries in servers.json
         if (info.hostName.isEmpty() || d.isEmpty() || (!d.value("pruning").isNull() && d.value("pruning").toString() != "-")) {
             Debug() << "Server \"" << info.hostName << "\" in " << fn << " has either no data or uses pruning, skipping";
             continue;
         }
         bool ok;
         unsigned val = d.value("s", 0).toUInt(&ok);
-        if (ok && val && val <= USHRT_MAX)
+        if (ok && val && val <= std::numeric_limits<quint16>::max())
             info.ssl = quint16(val);
         val = d.value("t", 0).toUInt(&ok);
-        if (ok && val && val <= USHRT_MAX)
+        if (ok && val && val <= std::numeric_limits<quint16>::max())
             info.tcp = quint16(val);
         info.protocolVersion = d.value("version", ServerMisc::MinProtocolVersion.toString()).toString();
         if (!info.isMinimallyValid()) {
@@ -932,13 +933,13 @@ PeerInfoList PeerInfo::fromPeersSubscribeList(const QVariantList &l)
             } else if (s.startsWith('t', Qt::CaseInsensitive)) {
                 bool ok;
                 unsigned p = s.mid(1).toUInt(&ok);
-                if (!p || !ok || p > USHRT_MAX)
+                if (!p || !ok || p > std::numeric_limits<quint16>::max())
                     continue;
                 pi.tcp = quint16(p);
             } else if (s.startsWith('s', Qt::CaseInsensitive)) {
                     bool ok;
                     unsigned p = s.mid(1).toUInt(&ok);
-                    if (!p || !ok || p > USHRT_MAX)
+                    if (!p || !ok || p > std::numeric_limits<quint16>::max())
                         continue;
                     pi.ssl = quint16(p);
             } else if (s.startsWith('p', Qt::CaseInsensitive) && s.mid(1).toInt()) {
@@ -1012,13 +1013,15 @@ void PeerClient::updateInfoFromRemoteFeaturesMap(const PeerInfo &o)
         if (!m.value("tcp_port").isNull()) {
             bool ok;
             unsigned val = m.value("tcp_port", 0).toUInt(&ok);
-            if (!ok || !val || val > USHRT_MAX) throw BadFeaturesMap("Bad tcp_port");
+            if (!ok || !val || val > std::numeric_limits<quint16>::max())
+                throw BadFeaturesMap("Bad tcp_port");
             pi.tcp = quint16(val);
         }
         if (!m.value("ssl_port").isNull()) {
             bool ok;
             unsigned val = m.value("ssl_port", 0).toUInt(&ok);
-            if (!ok || !val || val > USHRT_MAX) throw BadFeaturesMap("Bad ssl_port");
+            if (!ok || !val || val > std::numeric_limits<quint16>::max())
+                throw BadFeaturesMap("Bad ssl_port");
             pi.ssl = quint16(val);
         }
         if (!pi.isMinimallyValid())
