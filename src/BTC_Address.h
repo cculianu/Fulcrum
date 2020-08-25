@@ -56,16 +56,20 @@ namespace BTC {
         static Address fromPubKey(const QByteArray &pubKey, Kind kind, Net net = MainNet) { return fromPubKey(reinterpret_cast<const Byte *>(pubKey.data()), reinterpret_cast<const Byte *>(pubKey.data() + pubKey.length()), kind, net); }
         static Address fromPubKey(const std::vector<Byte> &pubKey, Kind kind, Net net = MainNet) { return fromPubKey(&*pubKey.begin(), &*pubKey.end(), kind, net); }
 
-        inline const QByteArray & hash160() const noexcept { return h160; }
+        const QByteArray & hash160() const noexcept { return h160; }
 
-        inline Kind kind() const noexcept { return _kind; }
-        inline Net net() const noexcept { return _net; }
+        Kind kind() const noexcept { return _kind; }
+        Net net() const noexcept { return _net; }
 
-        inline bool isTestNet() const noexcept { return _net == TestNet; }
-        inline bool isRegTestNet() const noexcept { return _net == RegTestNet; }
-        inline bool isMainNet() const noexcept { return _net == MainNet; }
+        //! Returns true if this address is valid would be identical if encoded on network `net`.
+        //! This is only true for TestNet & TestNet4 which are interchangeable.
+        bool isCompatibleWithNet(Net net) const;
 
-        inline bool isValid() const noexcept {  return _kind != Kind::Invalid && h160.length() == H160Len && _net != Net::Invalid && verByte != InvalidVerByte; }
+        bool isTestNet() const noexcept { return _net == TestNet || _net == TestNet4; }
+        bool isRegTestNet() const noexcept { return _net == RegTestNet; }
+        bool isMainNet() const noexcept { return _net == MainNet; }
+
+        bool isValid() const noexcept {  return _kind != Kind::Invalid && h160.length() == H160Len && _net != Net::Invalid && verByte != InvalidVerByte; }
 
         /// test any string to see if it's a valid address for the specified network
         static bool isValid(const QString &legacyOrCashAddress, Net = MainNet);
@@ -85,17 +89,17 @@ namespace BTC {
         QString toShortString() const;
 
         /// Alias for toString(true)
-        inline QString toLegacyString() const { return toString(true); }
+        QString toLegacyString() const { return toString(true); }
 
-        inline Address & operator=(const QString &legacyOrCash) { return (*this = Address::fromString(legacyOrCash)); }
-        inline Address & operator=(const char *legacyOrCash) { return (*this = QString(legacyOrCash)); }
-        inline Address & operator=(const QByteArray &legacyOrCash) { return (*this = QString(legacyOrCash)); }
+        Address & operator=(const QString &legacyOrCash) { return (*this = Address::fromString(legacyOrCash)); }
+        Address & operator=(const char *legacyOrCash) { return (*this = QString(legacyOrCash)); }
+        Address & operator=(const QByteArray &legacyOrCash) { return (*this = QString(legacyOrCash)); }
 
-        inline bool operator==(const Address & o) const noexcept { return !isValid() && !o.isValid() ? true : _net == o._net && verByte == o.verByte && _kind == o._kind && h160 == o.h160; }
-        inline bool operator!=(const Address & o) const noexcept { return !(*this == o); }
+        bool operator==(const Address & o) const noexcept { return !isValid() && !o.isValid() ? true : _net == o._net && verByte == o.verByte && _kind == o._kind && h160 == o.h160; }
+        bool operator!=(const Address & o) const noexcept { return !(*this == o); }
         /// less operator: for map support and also so that it sorts like the text address would.
         /// All invalid addresses sort before valid ones.
-        inline bool operator<(const Address & o) const noexcept {
+        bool operator<(const Address & o) const noexcept {
             if (isValid() && o.isValid()) {
                 // same h160, so compare net, verbyte, and kind
                 const std::array<Byte, 3> a = { _net, verByte, _kind },
@@ -108,9 +112,9 @@ namespace BTC {
             }
             return int(isValid()) < int(o.isValid()); // invalid always sorts before valid
         }
-        inline bool operator<=(const Address & o) const noexcept { return *this < o || *this == o; }
-        inline bool operator>(const Address & o) const noexcept { return !(*this <= o); }
-        inline bool operator>=(const Address & o) const noexcept { return *this > o || *this == o; }
+        bool operator<=(const Address & o) const noexcept { return *this < o || *this == o; }
+        bool operator>(const Address & o) const noexcept { return !(*this <= o); }
+        bool operator>=(const Address & o) const noexcept { return *this > o || *this == o; }
 
     private:
         Net _net = BTC::Invalid;

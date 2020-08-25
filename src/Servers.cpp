@@ -1236,7 +1236,7 @@ HashX Server::parseFirstAddrParamToShCommon(const RPC::Message &m, QString *addr
     assert(!l.isEmpty());
     const QString addrStr = l.front().toString().left(kAddrLenLimit).trimmed();
     const BTC::Address address(addrStr);
-    if (address.net() != net || !address.isValid())
+    if (!address.isValid() || !address.isCompatibleWithNet(net))
         throw RPCError(QString("Invalid address: %1").arg(addrStr));
     const auto sh = address.toHashX();
     if (UNLIKELY(sh.length() != HashLen))
