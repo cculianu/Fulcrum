@@ -18,10 +18,11 @@ struct MinimalisticChainParamsAddedByCalin
 {
     const std::string cashaddrPrefix; // e.g. "bitcoincash"
 
-    inline const std::string & CashAddrPrefix() const noexcept { return cashaddrPrefix; }
+    const std::string & CashAddrPrefix() const noexcept { return cashaddrPrefix; }
 };
-typedef MinimalisticChainParamsAddedByCalin CChainParams;
-extern const CChainParams TestNetChainParams, MainNetChainParams, RegTestNetChainParams; ///< convenience added by Calin
+using CChainParams = MinimalisticChainParamsAddedByCalin;
+//! convenience added by Calin
+extern const CChainParams TestNetChainParams, TestNet4ChainParams, MainNetChainParams, RegTestNetChainParams;
 
 enum CashAddrType : uint8_t { PUBKEY_TYPE = 0, SCRIPT_TYPE = 1 };
 

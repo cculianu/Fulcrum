@@ -185,7 +185,8 @@ namespace BTC
         Invalid = 0xff,
         MainNet = 0x80, ///< matches secret key byte
         TestNet = 0xef, ///< matches secret key byte
-        RegTestNet = TestNet+1, ///< does not match anything in the bitcoin world, just an enum value
+        TestNet4 = TestNet+1, ///< does not match anything in the bitcoin world, just an enum value
+        RegTestNet = TestNet+2, ///< does not match anything in the bitcoin world, just an enum value
     };
 
     /// Given a Net, returns its name e.g. "main", "test", "regtest" (or "invalid" if parameter `net` is not valid).

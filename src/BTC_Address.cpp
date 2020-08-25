@@ -28,6 +28,8 @@
 #include <QHash>
 #include <QHashFunctions>
 
+#include <utility>
+
 #ifdef ENABLE_TESTS
 #  include "App.h"
 #  include <QRandomGenerator>
@@ -43,9 +45,10 @@ namespace BTC
     namespace {
         // Hash of Net -> [Hash of VerByte -> Kind]
         const QHash<Net, QHash<quint8, Address::Kind> > netVerByteKindMap = {
-            { MainNet, { {0, Address::P2PKH },  {5, Address::P2SH} } },
-            { TestNet, { {111, Address::P2PKH },{196, Address::P2SH} } },
-            { RegTestNet, { {111, Address::P2PKH },{196, Address::P2SH} } },
+            { MainNet,      { {0, Address::P2PKH }, {5, Address::P2SH} } },
+            { TestNet,    { {111, Address::P2PKH }, {196, Address::P2SH} } },
+            { TestNet4,   { {111, Address::P2PKH }, {196, Address::P2SH} } },
+            { RegTestNet, { {111, Address::P2PKH }, {196, Address::P2SH} } },
         };
         Byte verByteForNetAndKind(Net net, Address::Kind kind) {
             if (const auto map = netVerByteKindMap.value(net); LIKELY(!map.isEmpty())) {
@@ -74,6 +77,9 @@ namespace BTC
                 if (net == RegTestNet)
                     // don't auto-detect regtest net -- skip it.
                     continue;
+                if (net == TestNet4)
+                    // don't auto-detect testnet4 for now -- skip it.
+                    continue;
                 if (it.value().contains(verByte))
                     return net;
             }
@@ -83,22 +89,41 @@ namespace BTC
 
     /// -- Address --
 
+    bool Address::isCompatibleWithNet(Net net) const
+    {
+        if (_net == Net::Invalid || net == Net::Invalid)
+            return false;
+        if (net == _net)
+            return true;
+        Address other(*this);
+        other._net = net;
+        other.verByte = verByteForNetAndKind(other._net, other._kind);
+        // true if both cashaddr and legacy encodings match
+        return other.isValid()
+                && toString(false) == other.toString(false)
+                && toString(true) == other.toString(true);
+    }
+
     /*static*/
     Address Address::fromString(const QString &legacyOrCash)
     {
         static const auto DecodeCash = [] (Address & a, const std::string &ss) -> bool {
+            using PN = std::pair<const std::string &, const Net>;
             a._net = Net::Invalid;
-            auto content = bitcoin::DecodeCashAddrContent(ss, bitcoin::MainNetChainParams.CashAddrPrefix());
-            if (!content.hash.empty())
-                a._net = Net::MainNet;
-            else {
-                // try testnet
-                content = bitcoin::DecodeCashAddrContent(ss, bitcoin::TestNetChainParams.CashAddrPrefix());
-                if (!content.hash.empty()) a._net = TestNet;
-                else {
-                    // try regtest
-                    content = bitcoin::DecodeCashAddrContent(ss, bitcoin::RegTestNetChainParams.CashAddrPrefix());
-                    if (!content.hash.empty()) a._net = RegTestNet;
+            bitcoin::CashAddrContent content;
+            // Keep trying to decode with the various prefixes until we get a match.
+            // Note that testnet4 and testnet have the same prefix, but we added both to this loop,
+            // just in case that situation changes.
+            for (const auto & [prefix, net] : {
+                    PN{bitcoin::MainNetChainParams.CashAddrPrefix(), Net::MainNet},
+                    PN{bitcoin::TestNetChainParams.CashAddrPrefix(), Net::TestNet},
+                    PN{bitcoin::TestNet4ChainParams.CashAddrPrefix(), Net::TestNet4},
+                    PN{bitcoin::RegTestNetChainParams.CashAddrPrefix(), Net::RegTestNet},})
+            {
+                content = bitcoin::DecodeCashAddrContent(ss, prefix);
+                if (!content.hash.empty()) {
+                    a._net = net;
+                    break;
                 }
             }
             if (!content.hash.empty() && a._net != Net::Invalid) {
@@ -126,7 +151,7 @@ namespace BTC
                 a.verByte = dec[0];
                 a.h160.resize(int(H160Len));
                 std::memcpy(a.h160.data(), &dec[1], H160Len);
-                a._net = netForVerByte(a.verByte); // note this will not correctly differntiate between TestNet and RegTestNet and always pick TestNet since they have the same verBytes.
+                a._net = netForVerByte(a.verByte); // note this will not correctly differntiate between TestNet, TestNet4 and RegTestNet and always pick TestNet since they have the same verBytes.
                 a.autosetKind(); // this will clear the address if something is wrong
             }
         } else {
@@ -218,10 +243,11 @@ namespace BTC
             } else {
                 const std::string *prefix = nullptr;
                 switch (_net) {
-                case MainNet: prefix = &bitcoin::MainNetChainParams.cashaddrPrefix; break;
-                case TestNet: prefix = &bitcoin::TestNetChainParams.cashaddrPrefix; break;
-                case RegTestNet: prefix = &bitcoin::RegTestNetChainParams.cashaddrPrefix; break;
-                default: break;
+                case Net::MainNet:    prefix = &bitcoin::MainNetChainParams.cashaddrPrefix; break;
+                case Net::TestNet:    prefix = &bitcoin::TestNetChainParams.cashaddrPrefix; break;
+                case Net::TestNet4:   prefix = &bitcoin::TestNet4ChainParams.cashaddrPrefix; break;
+                case Net::RegTestNet: prefix = &bitcoin::RegTestNetChainParams.cashaddrPrefix; break;
+                case Net::Invalid:    break;
                 }
                 if (prefix) {
                     const std::vector<Byte> content(h160.begin(), h160.end());

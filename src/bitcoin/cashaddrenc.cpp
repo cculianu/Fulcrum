@@ -27,6 +27,7 @@ namespace bitcoin {
 
 /// convenient work-alike added by Calin
 const CChainParams TestNetChainParams    = { "bchtest" },
+                   TestNet4ChainParams   = { "bchtest" },
                    RegTestNetChainParams = { "bchreg" },
                    MainNetChainParams    = { "bitcoincash" };
 
