@@ -170,7 +170,7 @@ namespace BTC
             {"test",     TestNet},     // BCHN, BU, ABC
             {"test4",    TestNet4},    // BCHN
             {"testnet3", TestNet},     // bchd
-            {"testnet4", TestNet4},     // possibly future bchd
+            {"testnet4", TestNet4},    // possible future bchd
             {"regtest",  RegTestNet},  // BCHN, BU, ABC, bchd
         }};
         const QString invalidNetName = "invalid";

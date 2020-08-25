@@ -45,10 +45,10 @@ namespace BTC
     namespace {
         // Hash of Net -> [Hash of VerByte -> Kind]
         const QHash<Net, QHash<quint8, Address::Kind> > netVerByteKindMap = {
-            { MainNet, { {0, Address::P2PKH },  {5, Address::P2SH} } },
-            { TestNet, { {111, Address::P2PKH },{196, Address::P2SH} } },
-            { TestNet4, { {111, Address::P2PKH },{196, Address::P2SH} } },
-            { RegTestNet, { {111, Address::P2PKH },{196, Address::P2SH} } },
+            { MainNet,      { {0, Address::P2PKH }, {5, Address::P2SH} } },
+            { TestNet,    { {111, Address::P2PKH }, {196, Address::P2SH} } },
+            { TestNet4,   { {111, Address::P2PKH }, {196, Address::P2SH} } },
+            { RegTestNet, { {111, Address::P2PKH }, {196, Address::P2SH} } },
         };
         Byte verByteForNetAndKind(Net net, Address::Kind kind) {
             if (const auto map = netVerByteKindMap.value(net); LIKELY(!map.isEmpty())) {
@@ -243,11 +243,11 @@ namespace BTC
             } else {
                 const std::string *prefix = nullptr;
                 switch (_net) {
-                case Net::MainNet: prefix = &bitcoin::MainNetChainParams.cashaddrPrefix; break;
-                case Net::TestNet: prefix = &bitcoin::TestNetChainParams.cashaddrPrefix; break;
-                case Net::TestNet4: prefix = &bitcoin::TestNet4ChainParams.cashaddrPrefix; break;
+                case Net::MainNet:    prefix = &bitcoin::MainNetChainParams.cashaddrPrefix; break;
+                case Net::TestNet:    prefix = &bitcoin::TestNetChainParams.cashaddrPrefix; break;
+                case Net::TestNet4:   prefix = &bitcoin::TestNet4ChainParams.cashaddrPrefix; break;
                 case Net::RegTestNet: prefix = &bitcoin::RegTestNetChainParams.cashaddrPrefix; break;
-                case Net::Invalid: break;
+                case Net::Invalid:    break;
                 }
                 if (prefix) {
                     const std::vector<Byte> content(h160.begin(), h160.end());
