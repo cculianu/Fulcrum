@@ -17,9 +17,8 @@
 # <https://www.gnu.org/licenses/>.
 #
 
-!defined(features, var) {
-    features = staticlibs
-}
+# Make qtCompileTest available
+load(configure)
 
 QT -= gui
 QT += network
@@ -92,7 +91,9 @@ linux-g++ {
     CONFIG += warn_off
 }
 
-contains(features, staticlibs) {
+# Test if rocksdb is installed and meets the minimum version requirement
+qtCompileTest(rocksdb)
+!contains(CONFIG, config_rocksdb) {
     # RocksDB Static Lib
     # ------------------
     #
@@ -155,7 +156,7 @@ linux {
 }
 win32 {
     LIBS += -lrocksdb -lshlwapi -lrpcrt4
-    !contains(features, staticlibs) {
+    contains(CONFIG, config_rocksdb) {
         LIBS += -lzstd -lbz2 -llz4 -lsnappy -lz
     }
 }
