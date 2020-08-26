@@ -148,6 +148,12 @@ qtCompileTest(rocksdb)
     # /RocksDB Static Lib
 }
 
+# Test if jemalloc is installed
+qtCompileTest(jemalloc)
+contains(CONFIG, config_jemalloc) {
+    LIBS += -ljemalloc
+}
+
 macx {
     LIBS += -lrocksdb -lz -lbz2
 }
