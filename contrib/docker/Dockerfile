@@ -8,7 +8,7 @@ RUN apt-get update -y && \
     add-apt-repository ppa:beineri/opt-qt-5.13.2-bionic && \
     apt-get update -y && \
     apt-get install -y qt513base openssl && \
-    apt-get install -y git build-essential zlib1g-dev libbz2-dev libjemalloc1 && \
+    apt-get install -y git build-essential zlib1g-dev libbz2-dev libjemalloc-dev libjemalloc1 && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
@@ -19,7 +19,7 @@ RUN cd /src && \
     make $MAKEFLAGS install
 
 RUN rm -rf /src && \
-    apt-get remove -y git build-essential zlib1g-dev libbz2-dev && \
+    apt-get remove -y git build-essential zlib1g-dev libbz2-dev libjemalloc-dev && \
     apt-get autoremove -y
 
 VOLUME ["/data"]
@@ -27,8 +27,6 @@ ENV DATA_DIR /data
 
 ENV SSL_CERTFILE ${DATA_DIR}/fulcrum.crt
 ENV SSL_KEYFILE ${DATA_DIR}/fulcrum.key
-
-ENV LD_PRELOAD /usr/lib/x86_64-linux-gnu/libjemalloc.so.1
 
 EXPOSE 50001 50002
 
