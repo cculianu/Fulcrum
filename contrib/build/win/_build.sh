@@ -22,7 +22,7 @@ cd "$top" || fail "Could not cd $top"
 info "Running configure for jemalloc ..."
 cd "$JEMALLOC_PACKAGE" || fail "Could not change dir to $JEMALLOC_PACKAGE"
 CXX=x86_64-w64-mingw32.static-g++ LD=x86_64-w64-mingw32.static-ld CC=x86_64-w64-mingw32.static-gcc-7.5.0 \
-    ./configure --host x86_64-w64-mingw32 -with-jemalloc-prefix= --disable-shared --enable-static \
+    ./autogen.sh --host x86_64-w64-mingw32 -with-jemalloc-prefix= --disable-shared --enable-static \
 || fail "Configure of jemalloc failed"
 
 info "Building jemalloc ..."
