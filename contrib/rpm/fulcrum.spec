@@ -13,6 +13,7 @@ BuildRequires: qt5-qtbase-devel
 BuildRequires: bzip2-devel
 BuildRequires: zlib-devel
 BuildRequires: rocksdb-devel
+BuildRequires: jemalloc-devel
 
 BuildRequires: pandoc
 
