@@ -28,7 +28,7 @@ make -j`nproc` || fail "Could not build jemalloc"
 make install || fail "Could not install jemalloc"
 JEMALLOC_LIBDIR=$(jemalloc-config --libdir)
 [ -n "$JEMALLOC_LIBDIR" ] || fail "Could not determine JEMALLOC_LIBDIR"
-for a in "$JEMALLOC_LIBDIR"/jemalloc*; do
+for a in "$JEMALLOC_LIBDIR"/libjemalloc*; do
     bn=`basename $a`
     info "Stripping $bn ..."
     strip -g "$a" || fail "Failed to strip $a"
