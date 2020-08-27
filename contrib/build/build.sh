@@ -63,9 +63,35 @@ cd "$PACKAGE"
 pkgdir=`pwd`
 
 rocksdb_commit=$(cat contrib/build/${plat}/rocksdb-commit-hash) \
-    || fail "Could not find the proper rocksdb commit hash in [$tag]. Please manually checkout [$tag] use its own build scripts."
+    || fail "Could not find the proper rocksdb commit hash in [$tag]."
+
+jemalloc_commit=$(cat contrib/build/${plat}/jemalloc-commit-hash) \
+    || fail "Could not find the proper jemalloc commit hash in [$tag]."
+
 
 cd ..
+
+# Checkout jemalloc @ $tag
+JEMALLOC_REPO=${JEMALLOC_REPO:-https://github.com/jemalloc/jemalloc.git}
+JEMALLOC_PACKAGE=$(basename $JEMALLOC_REPO .git)
+info "Checking out $JEMALLOC_PACKAGE: $JEMALLOC_REPO [$jemalloc_commit] ..."
+git clone "$JEMALLOC_REPO" "$JEMALLOC_PACKAGE" || fail "Failed to clone $JEMALLOC_PACKAGE"
+cd "$JEMALLOC_PACKAGE"
+jemallocdir=`pwd`
+git checkout "$jemalloc_commit" || fail "Failed to checkout $JEMALLOC_PACKAGE [$jemalloc_commit]"
+pp=$(ls "$pkgdir"/contrib/build/${plat}/jemalloc*.patch 2> /dev/null || true)
+if [ -n "$pp" ]; then
+    info "Applying patches ..."
+    let i=0 || true
+    for a in $pp; do
+        info "Applying ${a} ..."
+        patch -p1 < "$a" || fail "Could not apply patch: $a"
+        let i++ || true
+    done
+    printok "${i} patch(es) applied"
+fi
+
+cd ..  # back up, proceed to rocksdb checkout
 
 # Checkout rocksdb @ $tag
 ROCKSDB_REPO=${ROCKSDB_REPO:-https://github.com/facebook/rocksdb.git}
