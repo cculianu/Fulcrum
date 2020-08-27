@@ -38,7 +38,7 @@ Summary: Includes admin tool for fulcrum
 rm -rfv staticlibs/
 
 %build
-%qmake_qt5 features=
+%qmake_qt5
 %make_build
 pandoc --standalone --from markdown-smart --to man doc/unix-man-page.md -o fulcrum.1
 
