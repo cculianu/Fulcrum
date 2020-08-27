@@ -4,13 +4,14 @@
 
 set -e  # Exit on error
 
-if [ -z "$1" ] || [ -z "$2" ]; then
-    echo "Please pass Fulcrum and rocksdb dirnames as the two args"
+if [ -z "$1" ] || [ -z "$2" ] || [ -z "$3" ]; then
+    echo "Please pass Fulcrum, rocksdb, and jemalloc dirnames as the three args"
     exit 1
 fi
 
 PACKAGE="$1"
 ROCKSDB_PACKAGE="$2"
+JEMALLOC_PACKAGE="$3"
 TARGET_BINARY=Fulcrum
 
 top=/work
