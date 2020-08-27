@@ -27,7 +27,7 @@ CXX=x86_64-w64-mingw32.static-g++ LD=x86_64-w64-mingw32.static-ld CC=x86_64-w64-
 
 info "Building jemalloc ..."
 make -j`nproc` || fail "Could not build jemalloc"
-make install
+make install || fail "Could not install jemalloc"
 JEMALLOC_LIBDIR=$(jemalloc-config --libdir)
 [ -n "$JEMALLOC_LIBDIR" ] || fail "Could not determine JEMALLOC_LIBDIR"
 for a in "$JEMALLOC_LIBDIR"/jemalloc*.lib; do
@@ -35,6 +35,7 @@ for a in "$JEMALLOC_LIBDIR"/jemalloc*.lib; do
     info "Stripping $bn ..."
     x86_64-w64-mingw32.static-strip -g "$a" || fail "Failed to strip $a"
 done
+printok "jemalloc static library built and installed in $JEMALLOC_LIBDIR"
 
 cd "$top" || fail "Could not cd $top"  # back to top to proceed to rocksdb build
 
