@@ -61,7 +61,7 @@ cd "$top"/"$PACKAGE" || fail "Could not chdir to Fulcrum dir"
 
 info "Building Fulcrum ..."
 mkdir build && cd build || fail "Could not create/change-to build/"
-qmake "CONFIG-=debug" "CONFIG+=release" "LIBS+=-L${JEMALLOC_LIBDIR} -ljemalloc" \
+qmake ../Fulcrum.pro "CONFIG-=debug" "CONFIG+=release" "LIBS+=-L${JEMALLOC_LIBDIR} -ljemalloc" \
     || fail "Could not run qmake"
 make -j`nproc`  || fail "Could not run make"
 
