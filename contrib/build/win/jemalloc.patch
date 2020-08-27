@@ -1,0 +1,32 @@
+diff --git a/src/jemalloc.c b/src/jemalloc.c
+index ed13718d..32a74368 100644
+--- a/src/jemalloc.c
++++ b/src/jemalloc.c
+@@ -2468,6 +2468,15 @@ je_aligned_alloc(size_t alignment, size_t size) {
+ 	return ret;
+ }
+ 
++#ifdef _WIN32
++JEMALLOC_EXPORT JEMALLOC_ALLOCATOR JEMALLOC_RESTRICT_RETURN
++void JEMALLOC_NOTHROW *
++JEMALLOC_ATTR(malloc) JEMALLOC_ALLOC_SIZE(2)
++_aligned_malloc(size_t size, size_t alignment) {
++	return je_aligned_alloc(alignment, size);
++}
++#endif
++
+ JEMALLOC_EXPORT JEMALLOC_ALLOCATOR JEMALLOC_RESTRICT_RETURN
+ void JEMALLOC_NOTHROW *
+ JEMALLOC_ATTR(malloc) JEMALLOC_ALLOC_SIZE2(1, 2)
+@@ -2870,6 +2879,11 @@ je_free(void *ptr) {
+ 	LOG("core.free.exit", "");
+ }
+ 
++#ifdef _WIN32
++JEMALLOC_EXPORT void JEMALLOC_NOTHROW
++_aligned_free(void *ptr) { je_free(ptr); }
++#endif
++
+ /*
+  * End malloc(3)-compatible functions.
+  */
