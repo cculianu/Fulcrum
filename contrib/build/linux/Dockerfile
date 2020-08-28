@@ -11,7 +11,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN \
     apt -qy update && \
     apt -qy upgrade && \
-    apt -qy install build-essential cmake gdb git iputils-ping nano perl python valgrind wget && \
+    apt -qy install build-essential cmake gdb git iputils-ping nano perl python valgrind wget autoconf && \
     apt -qy install libbz2-dev zlib1g-dev libssl-dev libnss3-dev libxslt-dev libxml2-dev  && \
     apt -qy autoremove && \
     apt -qy autoclean

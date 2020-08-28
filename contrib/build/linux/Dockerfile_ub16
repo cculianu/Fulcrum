@@ -13,7 +13,7 @@ RUN \
     add-apt-repository ppa:jonathonf/gcc-7.3 && \
     add-apt-repository ppa:jonathonf/gcc && \
     apt-get update -qy && \
-    apt -qy install build-essential cmake gdb git iputils-ping nano perl python valgrind wget && \
+    apt -qy install build-essential cmake gdb git iputils-ping nano perl python valgrind wget autoconf && \
     apt -qy install libbz2-dev zlib1g-dev libssl-dev libnss3-dev libxslt-dev libxml2-dev  && \
     apt install -qy gcc-7 g++-7 && \
     update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-7 60 \
