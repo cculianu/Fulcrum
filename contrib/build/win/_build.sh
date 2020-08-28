@@ -30,6 +30,8 @@ make -j`nproc` || fail "Could not build jemalloc"
 make install || fail "Could not install jemalloc"
 JEMALLOC_LIBDIR=$(jemalloc-config --libdir)
 [ -n "$JEMALLOC_LIBDIR" ] || fail "Could not determine JEMALLOC_LIBDIR"
+JEMALLOC_INCDIR=$(jemalloc-config --includedir)
+[ -n "$JEMALLOC_INCDIR" ] || fail "Could not determine JEMALLOC_INCDIR"
 for a in "$JEMALLOC_LIBDIR"/jemalloc*.lib; do
     bn=`basename $a`
     info "Stripping $bn ..."
@@ -62,7 +64,10 @@ cd "$top"/"$PACKAGE" || fail "Could not chdir to Fulcrum dir"
 
 info "Building Fulcrum ..."
 mkdir build && cd build || fail "Could not create/change-to build/"
-qmake ../Fulcrum.pro "CONFIG-=debug" "CONFIG+=release" "LIBS+=-L${JEMALLOC_LIBDIR} -ljemalloc" \
+qmake ../Fulcrum.pro "CONFIG-=debug" \
+                     "CONFIG+=release" \
+                     "LIBS+=-L${JEMALLOC_LIBDIR} -ljemalloc" \
+                     "INCLUDEPATH+=${JEMALLOC_INCDIR}" \
     || fail "Could not run qmake"
 make -j`nproc`  || fail "Could not run make"
 

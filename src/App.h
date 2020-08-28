@@ -19,6 +19,7 @@
 #pragma once
 
 #include <QCoreApplication>
+#include <QVariantMap>
 
 #include <atomic>
 #include <functional>
@@ -68,6 +69,11 @@ public:
     static RegisteredTest registerTest(const QString &name, const std::function<void()> &func);
     /// Call this from namespace scope to register a benchmark.
     static RegisteredBench registerBench(const QString &name, const std::function<void()> &func);
+
+    /// If jemalloc is linked to this application and its headers were visible at compile-time, then
+    /// this will return a Json-suitable QVariantMap of jemalloc stats.  If that is not the case, then
+    /// an empty map will be returned.  This function is 100% reentrant and thread-safe.
+    static QVariantMap jemallocStats();
 
 signals:
     // other code emits the below two to tell the app (main) thread to call the corresponding protected slot to set

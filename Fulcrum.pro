@@ -156,10 +156,12 @@ qtCompileTest(rocksdb)
     qtCompileTest(jemalloc)
     contains(CONFIG, config_jemalloc) {
         LIBS += -ljemalloc
+        DEFINES += HAVE_JEMALLOC_HEADERS
     } else {
         message("jemalloc: not found, will use system allocator")
     }
 } else {
+    DEFINES += HAVE_JEMALLOC_HEADERS
     message("jemalloc: using CLI override"))
 }
 

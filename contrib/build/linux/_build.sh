@@ -28,11 +28,13 @@ make -j`nproc` || fail "Could not build jemalloc"
 make install || fail "Could not install jemalloc"
 JEMALLOC_LIBDIR=$(jemalloc-config --libdir)
 [ -n "$JEMALLOC_LIBDIR" ] || fail "Could not determine JEMALLOC_LIBDIR"
-#for a in "$JEMALLOC_LIBDIR"/libjemalloc*; do
-#    bn=`basename $a`
-#    info "Stripping $bn ..."
-#    strip -g "$a" || fail "Failed to strip $a"
-#done
+JEMALLOC_INCDIR=$(jemalloc-config --includedir)
+[ -n "$JEMALLOC_INCDIR" ] || fail "Could not determine JEMALLOC_INCDIR"
+for a in "$JEMALLOC_LIBDIR"/libjemalloc*; do
+    bn=`basename $a`
+    info "Stripping $bn ..."
+    strip -g "$a" || fail "Failed to strip $a"
+done
 printok "jemalloc static library built and installed in $JEMALLOC_LIBDIR"
 
 info "Building RocksDB ..."
@@ -41,7 +43,7 @@ USE_RTTI=1 PORTABLE=1 make static_lib -j`nproc` V=1 \
     || fail "Could not build RocksDB"
 
 info "Stripping librocksdb.a ..."
-#strip -g librocksdb.a || fail "Could not strip librocksdb.a"
+strip -g librocksdb.a || fail "Could not strip librocksdb.a"
 
 info "Copying librocksdb.a to Fulcrum directory ..."
 cp -fpva librocksdb.a "$top"/"$PACKAGE"/staticlibs/rocksdb/bin/linux || fail "Could not copy librocksdb.a"
@@ -51,7 +53,10 @@ cd "$top"/"$PACKAGE" || fail "Could not chdir to Fulcrum dir"
 
 info "Building Fulcrum ..."
 mkdir build && cd build || fail "Could not create/change-to build/"
-qmake ../Fulcrum.pro "CONFIG-=release" "CONFIG+=debug" "LIBS+=-L${JEMALLOC_LIBDIR} -ljemalloc" \
+qmake ../Fulcrum.pro "CONFIG-=debug" \
+                     "CONFIG+=release" \
+                     "LIBS+=-L${JEMALLOC_LIBDIR} -ljemalloc" \
+                     "INCLUDEPATH+=${JEMALLOC_INCDIR}" \
     || fail "Could not run qmake"
 make -j`nproc` || fail "Could not run make"
 
