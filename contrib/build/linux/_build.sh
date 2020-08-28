@@ -20,7 +20,7 @@ cd "$top" || fail "Could not cd $top"
 
 info "Running configure for jemalloc ..."
 cd "$JEMALLOC_PACKAGE" || fail "Could not change dir to $JEMALLOC_PACKAGE"
-./autogen.sh -with-jemalloc-prefix= --disable-shared --enable-static \
+./autogen.sh --with-jemalloc-prefix= --disable-shared --enable-static \
     || fail "Configure of jemalloc failed"
 
 info "Building jemalloc ..."
