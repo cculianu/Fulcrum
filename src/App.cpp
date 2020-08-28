@@ -1232,6 +1232,7 @@ void App::setCLocale()
 
 
 #if HAVE_JEMALLOC_HEADERS
+#define JEMALLOC_NO_DEMANGLE
 #include <jemalloc/jemalloc.h>
 /* static */
 QVariantMap App::jemallocStats()
@@ -1241,7 +1242,7 @@ QVariantMap App::jemallocStats()
         buffer += QByteArray(str);
     };
     QByteArray buffer;
-    malloc_stats_print(cb, reinterpret_cast<void *>(reinterpret_cast<char *>(&buffer)), "Jmdax");
+    je_malloc_stats_print(cb, reinterpret_cast<void *>(reinterpret_cast<char *>(&buffer)), "Jmdax");
     QVariantMap m;
     try {
         m = Json::parseUtf8(buffer, Json::ParseOption::RequireObject).toMap();
@@ -1268,6 +1269,7 @@ QVariantMap App::jemallocStats()
     }
     return m;
 }
+#undef JEMALLOC_NO_DEMANGLE
 #else
 /* static */
 QVariantMap App::jemallocStats() { return {}; }
