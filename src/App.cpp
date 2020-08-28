@@ -1263,7 +1263,7 @@ QVariantMap App::jemallocStats()
                 }
             }
         }
-    } catch (const Exception &e) {
+    } catch (const std::exception &e) {
         m["raw"] = buffer;
         m["parse error"] = QString(e.what());
     }

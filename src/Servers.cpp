@@ -2213,6 +2213,19 @@ void AdminServer::rpc_getinfo(Client *c, const RPC::Message &m)
     // in a thread-safe way without blocking.
     res["thread_pool"] = ::AppThreadPool()->stats();
 
+    { // jemalloc stats (if any), concise version
+        const auto je = App::jemallocStats();
+        res["jemalloc"] = je.isEmpty()
+                          ? QVariant{"jemalloc stats support was not enabled at compile-time"}
+                          : !je.contains("stats") // this can happen on old jemalloc versions that don't output json
+                            ? je // in that case we will get a raw string buffer here
+                            : QVariantMap{
+                                  // newer jemalloc outputs json, but for the admin stats we want just the summary
+                                  {"stats", je.value("stats")},
+                                  {"version", je.value("version")},
+                              };
+    }
+
     // storage stats -- for this we need to go asynch because we need to block to grab them using the StatsMixin API
     generic_do_async(c, m.id, [storage = this->storage, res]() mutable {
         QVariant v = storage->statsSafe(kBlockingCallTimeoutMS);
