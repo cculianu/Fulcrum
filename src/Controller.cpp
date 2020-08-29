@@ -1354,6 +1354,8 @@ auto Controller::stats() const -> Stats
     st["Misc"] = misc;
     st["SubsMgr"] = storage->subs()->statsSafe(kDefaultTimeout/2);
     st["Config"] = options->toMap();
+    // grab jemalloc stats, if any
+    st["Jemalloc"] = App::jemallocStats();
     return st;
 }
 
