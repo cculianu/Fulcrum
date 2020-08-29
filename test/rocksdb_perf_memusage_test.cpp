@@ -271,7 +271,7 @@ int main(int argc, char *argv[]) {
     ChkErr(s);
     db.reset();
 
-    std::cerr << "DB closed, oress enter to exit" << std::endl;
+    std::cerr << "DB closed, press enter to exit" << std::endl;
     readLine();
 
     return 0;
