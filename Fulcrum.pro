@@ -74,7 +74,7 @@ DEFINES += USE_QT_IN_BITCOIN
 #DEFINES += ENABLE_TESTS
 
 win32-msvc {
-    error("MSVC is not supported for this project. Please compile with MinGW G++ 7.3.0.")
+    error("MSVC is not supported for this project. Please compile with MinGW G++ 7.3.0 or above.")
 }
 win32 {
     # Windows MSVC & mingw-g++ both have too many warnings due to bitcoin sources, so just disable warnings.
@@ -145,13 +145,24 @@ qtCompileTest(rocksdb)
         }
     }
     INCLUDEPATH += $$PWD/staticlibs/rocksdb/include
+    message("rocksdb: using static lib")
     # /RocksDB Static Lib
+} else {
+    message("rocksdb: using system lib")
 }
 
-# Test if jemalloc is installed
-qtCompileTest(jemalloc)
-contains(CONFIG, config_jemalloc) {
-    LIBS += -ljemalloc
+!contains(LIBS, -ljemalloc) {
+    # Test if jemalloc is installed
+    qtCompileTest(jemalloc)
+    contains(CONFIG, config_jemalloc) {
+        LIBS += -ljemalloc
+        DEFINES += HAVE_JEMALLOC_HEADERS
+    } else {
+        message("jemalloc: not found, will use system allocator")
+    }
+} else {
+    DEFINES += HAVE_JEMALLOC_HEADERS
+    message("jemalloc: using CLI override"))
 }
 
 macx {

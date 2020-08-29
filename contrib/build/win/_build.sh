@@ -4,13 +4,14 @@
 
 set -e  # Exit on error
 
-if [ -z "$1" ] || [ -z "$2" ]; then
-    echo "Please pass Fulcrum and rocksdb dirnames as the two args"
+if [ -z "$1" ] || [ -z "$2" ] || [ -z "$3" ]; then
+    echo "Please pass Fulcrum, rocksdb, and jemalloc dirnames as the three args"
     exit 1
 fi
 
 PACKAGE="$1"
 ROCKSDB_PACKAGE="$2"
+JEMALLOC_PACKAGE="$3"
 TARGET_BINARY=Fulcrum.exe
 TARGET_ADMIN_SCRIPT=FulcrumAdmin
 
@@ -18,12 +19,34 @@ top=/work
 cd "$top" || fail "Could not cd $top"
 . "$top/$PACKAGE/contrib/build/common/common.sh" || (echo "Cannot source common.h" && exit 1)
 
+info "Running configure for jemalloc ..."
+cd "$JEMALLOC_PACKAGE" || fail "Could not change dir to $JEMALLOC_PACKAGE"
+CXX=x86_64-w64-mingw32.static-g++ LD=x86_64-w64-mingw32.static-ld CC=x86_64-w64-mingw32.static-gcc-7.5.0 \
+    ./autogen.sh --host x86_64-w64-mingw32 --with-jemalloc-prefix= --disable-shared --enable-static \
+|| fail "Configure of jemalloc failed"
+
+info "Building jemalloc ..."
+make -j`nproc` || fail "Could not build jemalloc"
+make install || fail "Could not install jemalloc"
+JEMALLOC_LIBDIR=$(jemalloc-config --libdir)
+[ -n "$JEMALLOC_LIBDIR" ] || fail "Could not determine JEMALLOC_LIBDIR"
+JEMALLOC_INCDIR=$(jemalloc-config --includedir)
+[ -n "$JEMALLOC_INCDIR" ] || fail "Could not determine JEMALLOC_INCDIR"
+for a in "$JEMALLOC_LIBDIR"/jemalloc*.lib; do
+    bn=`basename $a`
+    info "Stripping $bn ..."
+    x86_64-w64-mingw32.static-strip -g "$a" || fail "Failed to strip $a"
+done
+printok "jemalloc static library built and installed in $JEMALLOC_LIBDIR"
+
+cd "$top" || fail "Could not cd $top"  # back to top to proceed to rocksdb build
+
 info "Running CMake for RocksDB ..."
 cd "$ROCKSDB_PACKAGE" && mkdir build/ && cd build || fail "Could not change to build dir"
 /opt/mxe/usr/x86_64-pc-linux-gnu/bin/cmake  .. -DCMAKE_C_COMPILER=x86_64-w64-mingw32.static-gcc \
     -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32.static-g++ -DCMAKE_SYSTEM_NAME=Windows \
     -DCMAKE_HOST_SYSTEM_NAME=Linux -G"Unix Makefiles" -DWITH_GFLAGS=0 -DWITH_JNI=0  \
-    -DCMAKE_BUILD_TYPE=Release -DUSE_RTTI=1 -DPORTABLE=1 \
+    -DCMAKE_BUILD_TYPE=Release -DUSE_RTTI=1 -DPORTABLE=1 -DWITH_JEMALLOC=OFF \
 || fail "Could not run CMake"
 
 info "Building RocksDB ..."
@@ -40,7 +63,12 @@ printok "RocksDB built and moved to Fulcrum staticlibs directory"
 cd "$top"/"$PACKAGE" || fail "Could not chdir to Fulcrum dir"
 
 info "Building Fulcrum ..."
-qmake || fail "Could not run qmake"
+mkdir build && cd build || fail "Could not create/change-to build/"
+qmake ../Fulcrum.pro "CONFIG-=debug" \
+                     "CONFIG+=release" \
+                     "LIBS+=-L${JEMALLOC_LIBDIR} -ljemalloc" \
+                     "INCLUDEPATH+=${JEMALLOC_INCDIR}" \
+    || fail "Could not run qmake"
 make -j`nproc`  || fail "Could not run make"
 
 ls -al "release/$TARGET_BINARY" || fail "$TARGET_BINARY not found"

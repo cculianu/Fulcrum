@@ -1229,3 +1229,49 @@ void App::setCLocale()
         Warning() << "Failed to set \"C\" locale: " << e.what();
     }
 }
+
+
+#if HAVE_JEMALLOC_HEADERS
+#define JEMALLOC_NO_DEMANGLE
+#include <jemalloc/jemalloc.h>
+/* static */
+QVariantMap App::jemallocStats()
+{
+    static const auto cb = [](void *ptr, const char *str) {
+        QByteArray &buffer = *reinterpret_cast<QByteArray *>(reinterpret_cast<char *>(ptr));
+        buffer += QByteArray(str);
+    };
+    QByteArray buffer;
+    je_malloc_stats_print(cb, reinterpret_cast<void *>(reinterpret_cast<char *>(&buffer)), "Jmdax");
+    QVariantMap m;
+    try {
+        m = Json::parseUtf8(buffer, Json::ParseOption::RequireObject).toMap();
+        if (m.size() == 1) {
+            // modify stats a little bit to be less verbose and less nested...
+            if (const auto submap = m.take("jemalloc");
+                    !submap.isNull() && submap.canConvert<QVariantMap>()) {
+                // bring the single "jemalloc" submap up to top level
+                m = submap.toMap();
+                // find and delete the huge "bin" and "lextents" array that we don't need
+                if (const auto arenasV = m.take("arenas");
+                        !arenasV.isNull() && arenasV.canConvert<QVariantMap>()) {
+                    auto arenas = arenasV.toMap();
+                    // I can't figure out how to suppress these two in the options...
+                    arenas.remove("bin");
+                    arenas.remove("lextent");
+                    m["arenas"] = arenas;
+                }
+            }
+        }
+    } catch (const std::exception &e) {
+        m["raw"] = buffer;
+        m["parse error"] = QString(e.what());
+    }
+    return m;
+}
+#undef JEMALLOC_NO_DEMANGLE
+#else
+/* static */
+QVariantMap App::jemallocStats() { return {}; }
+#endif
+
