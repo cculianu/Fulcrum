@@ -91,7 +91,7 @@ struct Mempool
     struct TxRefOrdering {
         bool operator()(const TxRef &a, const TxRef &b) const {
             if (a && b) {
-                if (UNLIKELY(a == b))
+                if (Q_UNLIKELY(a == b))
                     return false;
                 return *a < *b;
             }

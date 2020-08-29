@@ -51,7 +51,7 @@ namespace BTC
             { RegTestNet, { {111, Address::P2PKH }, {196, Address::P2SH} } },
         };
         Byte verByteForNetAndKind(Net net, Address::Kind kind) {
-            if (const auto map = netVerByteKindMap.value(net); LIKELY(!map.isEmpty())) {
+            if (const auto map = netVerByteKindMap.value(net); Q_LIKELY(!map.isEmpty())) {
                 for (auto it = map.begin(); it != map.end(); ++it) {
                     if (it.value() == kind)
                         return it.key();
@@ -60,7 +60,7 @@ namespace BTC
             return Address::InvalidVerByte;
         }
         Address::Kind kindForNetAndVerByte(Net net, Byte verByte) {
-            if (const auto map = netVerByteKindMap.value(net); LIKELY(!map.isEmpty())) {
+            if (const auto map = netVerByteKindMap.value(net); Q_LIKELY(!map.isEmpty())) {
                 for (auto it = map.begin(); it != map.end(); ++it) {
                     if (it.key() == verByte)
                         return it.value();
@@ -129,7 +129,7 @@ namespace BTC
             if (!content.hash.empty() && a._net != Net::Invalid) {
                 a._kind = static_cast<Address::Kind>(content.type) /* Our Kind enum intentionally matches content.type's enum for values, so this works*/;
                 a.verByte = verByteForNetAndKind(a._net, a._kind);
-                if (UNLIKELY(a.verByte == InvalidVerByte))
+                if (Q_UNLIKELY(a.verByte == InvalidVerByte))
                     // Defensive programming.. we should never reach this branch.
                     throw Exception("Unknown content.type or other missing data on cash addr decode attempt");
                 a.h160.clear();
@@ -176,7 +176,7 @@ namespace BTC
     Address Address::fromPubKey(const Byte *pbegin, const Byte *pend, Kind k, Net net)
     {
         Address ret;
-        if (const auto vb = verByteForNetAndKind(net, k); LIKELY(vb != InvalidVerByte && pend > pbegin)) {
+        if (const auto vb = verByteForNetAndKind(net, k); Q_LIKELY(vb != InvalidVerByte && pend > pbegin)) {
             const auto hash160 = bitcoin::Hash160(pbegin, pend);
             ret.h160 = QByteArray(reinterpret_cast<const char *>(hash160.begin()), int(hash160.size()));
             ret.verByte = vb;

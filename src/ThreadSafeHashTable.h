@@ -108,12 +108,12 @@ public:
             // object and insert it into the table since we released the shared_lock above.  So we will need to search
             // for the object again with the unique_lock held.
             ExclusiveLockGuard g(mut);
-            if (auto it = table.find(key); UNLIKELY(it != table.end()))
+            if (auto it = table.find(key); Q_UNLIKELY(it != table.end()))
                 // Another thread may have inserted an object into the table in the meantime...
                 // Note: this weakref may be invalid here, so we may have to create a new object anyway and
                 // overwrite this table entry below if it is (bool(ret) will be false in that case).
                 ret = it.value().lock();
-            if (LIKELY(!ret)) {
+            if (Q_LIKELY(!ret)) {
                 // definitely no entries in table for this key exist -- create a new Data object
                 ret = DataRef(new Data, [weakThis = QPointer(this), key, myname = objectName()](Data *p){
                     // Deleter may be called from any thread. It's critical here that this instance live
@@ -134,12 +134,12 @@ public:
                     const Defer deleteP = MkDeleteFunc(p, myname, key); // <--- guarantee deletion at scope end
 
                     auto me = weakThis.data();
-                    if (UNLIKELY(!me)) {
+                    if (Q_UNLIKELY(!me)) {
                         Error() << myname << " CRITICAL: While deleting entry for " << ToString(key)
                                 << ", manager object no longer exists! FIXME!";
                         return;
                     }
-                    if (UNLIKELY(me->isDeleted)) {
+                    if (Q_UNLIKELY(me->isDeleted)) {
                         if constexpr (debugPrt)
                             Debug() << myname << ": is cleaing up, skipping remove-from-table for " << ToString(key);
                         return;
@@ -148,9 +148,9 @@ public:
                     // longer than the subordinate objects is violated, then the code here will fail.
                     ExclusiveLockGuard g(me->mut);
                     auto it = me->table.find(key);
-                    if (LIKELY(it != me->table.end())) {
+                    if (Q_LIKELY(it != me->table.end())) {
                         if (const auto existingRef = it.value().lock();
-                                UNLIKELY(existingRef && existingRef.get() != p)) {
+                                Q_UNLIKELY(existingRef && existingRef.get() != p)) {
                             Warning() << myname << ": Deleter for " << ToString(key)
                                       << " found entry, but the weak_ref in the table refers to a different object! FIXME!";
                         } else {

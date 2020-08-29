@@ -155,7 +155,7 @@ namespace BTC
         static_assert(std::is_convertible_v<BytesT, ByteView>, "Assumption here is that BytesT has an implicit conversion to ByteView");
 
         std::size_t operator()(const ByteView &bv) const noexcept {
-            if (LIKELY(bv.size() >= sizeof(std::size_t))) {
+            if (Q_LIKELY(bv.size() >= sizeof(std::size_t))) {
                 // common case, just return the first 8 bytes reinterpreted as size_t since this is already
                 // a random hash.
                 std::size_t ret;

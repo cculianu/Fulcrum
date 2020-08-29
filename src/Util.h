@@ -57,9 +57,6 @@ class App;
 #define EXPECT(expr, constant) (expr)
 #endif
 
-#define LIKELY(bool_expr)   EXPECT(int(bool(bool_expr)), 1)
-#define UNLIKELY(bool_expr) EXPECT(int(bool(bool_expr)), 0)
-
 /// Super class of Debug, Warning, Error classes.  Can be instantiated for regular log messages.
 class Log
 {
@@ -446,10 +443,10 @@ namespace Util {
             if (!killed && !ct && timeout_ms > 0) {
                 cond.wait(&mut, timeout_ms);
             }
-            if (LIKELY(ct != 0)) {
+            if (Q_LIKELY(ct != 0)) {
                 ret = data.takeFirst(); --ct;
             }
-            else if (UNLIKELY(killed && throwsIfClosed))
+            else if (Q_UNLIKELY(killed && throwsIfClosed))
                 throw ChannelClosed("Cannot read from closed Channel");
             else if (throwsOnTimeout)
                 throw TimeoutException(QString("Timed out waiting for channel with timeout_ms = %1").arg(long(timeout_ms)));
@@ -458,13 +455,13 @@ namespace Util {
         /// Put to the queue.  Note that if you specified a sizeLimit > 0 it will potentially throw ChannelFull if
         /// the queue is full.  Also may throw ChannelClosed if throwsIfClosed and the channel was closed.
         void put(const T & t) {
-            if (UNLIKELY(killed)) {
+            if (Q_UNLIKELY(killed)) {
                 if (throwsIfClosed)
                     throw ChannelClosed("Cannot write to closed Channel");
                 return;
             }
             QMutexLocker ml(&mut);
-            if (UNLIKELY(sizeLimit > 0 && ct >= sizeLimit))
+            if (Q_UNLIKELY(sizeLimit > 0 && ct >= sizeLimit))
                 throw ChannelFull(QString("The channel is full (size = %1)").arg(ct));
             data.push_back(t);
             ++ct;
@@ -604,7 +601,7 @@ namespace Util {
         if (auto const objThr = obj->thread(); QThread::currentThread() == objThr) {
             // direct call to save on a copy c'tor
             return lambda();
-        } else if (UNLIKELY(!objThr->isRunning())) {
+        } else if (Q_UNLIKELY(!objThr->isRunning())) {
             throw ThreadNotRunning(QString("Target object's thread is not running (objectName: '%1')").arg(obj->objectName()));
         } else {
             auto taskp = std::make_shared< std::packaged_task<RET()> >(lambda);

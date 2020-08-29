@@ -438,7 +438,7 @@ std::shared_ptr<Client::PerIPData> Client::PerIPDataHolder_Temp::take(QTcpSocket
 bool ServerBase::attachPerIPDataAndCheckLimits(QTcpSocket *socket)
 {
     bool ok = true;
-    if (const auto addr = socket->peerAddress(); LIKELY(!addr.isNull())) {
+    if (const auto addr = socket->peerAddress(); Q_LIKELY(!addr.isNull())) {
         auto holder = new Client::PerIPDataHolder_Temp(srvmgr->getOrCreatePerIPData(addr), socket);
         const auto maxPerIP = options->maxClientsPerIP;
         // check limit immediately
@@ -533,7 +533,7 @@ ServerBase::newClient(QTcpSocket *sock)
     const auto addr = ret->peerAddress();
 
     ret->perIPData = Client::PerIPDataHolder_Temp::take(sock); // take ownership of the PerIPData ref, implicitly delete the temp holder attacked to the socket
-    if (UNLIKELY(!ret->perIPData)) {
+    if (Q_UNLIKELY(!ret->perIPData)) {
         // This branch should never happen.  But we left it in for defensive programming.
         Error() << "INTERNAL ERROR: Tcp Socket " << sock->peerAddress().toString() << ":" << sock->peerPort() << " had no PerIPData! FIXME!";
         // FUDGE it.
@@ -549,16 +549,16 @@ ServerBase::newClient(QTcpSocket *sock)
         DebugM("Client ", clientId, " destructing");
         if (const auto client = clientsById.take(clientId); client) {
             // purge from map
-            if (UNLIKELY(client != c))
+            if (Q_UNLIKELY(client != c))
                 Error() << " client != passed-in pointer to on_destroy in " << __FILE__ << " line " << __LINE__  << " client " << clientId << ". FIXME!";
             DebugM("client id ", clientId, " purged from map");
         }
         assert(c->perIPData);
-        if (UNLIKELY(c->nShSubs < 0))
+        if (Q_UNLIKELY(c->nShSubs < 0))
             Error() << "nShSubs for client " << c->id << " is " << c->nShSubs << ". FIXME!";
         // decrement per-IP subs ctr for this client.
         const auto nSubsIP = c->perIPData->nShSubs -= c->nShSubs;
-        if (UNLIKELY(nSubsIP < 0))
+        if (Q_UNLIKELY(nSubsIP < 0))
             Error() << "nShSubs for IP " << addr.toString() << " is " << nSubsIP << ". FIXME!";
         if (nSubsIP == 0 && c->nShSubs)
             DebugM("PerIP: ", addr.toString(), " is no longer subscribed to any scripthashes");
@@ -703,7 +703,7 @@ ServerBase::RPCErrorWithDisconnect::~RPCErrorWithDisconnect() {}
 
 void ServerBase::generic_do_async(Client *c, const RPC::Message::Id &reqId, const std::function<QVariant ()> &work, int priority)
 {
-    if (LIKELY(work)) {
+    if (Q_LIKELY(work)) {
         struct ResErr {
             QVariant results;
             bool error = false, doDisconnect = false;
@@ -750,7 +750,7 @@ void ServerBase::generic_async_to_bitcoind(Client *c, const RPC::Message::Id & r
                                            const BitcoinDSuccessFunc & successFunc,
                                            const BitcoinDErrorFunc & errorFunc)
 {
-    if (UNLIKELY(QThread::currentThread() != c->thread())) {
+    if (Q_UNLIKELY(QThread::currentThread() != c->thread())) {
         // Paranoia, in case I or a future programmer forgets this rule.
         Warning() << __func__ << " is meant to be called from the Client thread only. The current thread is not the"
                   << " Client thread. This may cause problems if the Client is deleted while submitting the request. FIXME!";
@@ -1147,7 +1147,7 @@ void Server::rpc_blockchain_block_headers(Client *c, const RPC::Message &m)
         QByteArray hexHeaders(int(nHdrs * hdrHexSz), Qt::Uninitialized);
         for (size_t i = 0, offset = 0; i < nHdrs; ++i, offset += hdrHexSz) {
             const auto & hdr = hdrs[i];
-            if (UNLIKELY(hdr.size() != int(hdrSz))) { // ensure header looks the right size
+            if (Q_UNLIKELY(hdr.size() != int(hdrSz))) { // ensure header looks the right size
                 // this should never happen.
                 Error() << "Header size from db height " << i + height << " is not " << hdrSz << " bytes! Database corruption likely! FIXME!";
                 throw RPCError("Server header store invalid", RPC::Code_InternalError);
@@ -1228,7 +1228,7 @@ void Server::rpc_blockchain_relayfee(Client *c, const RPC::Message &m)
 HashX Server::parseFirstAddrParamToShCommon(const RPC::Message &m, QString *addrStrOut) const
 {
     const auto net = srvmgr->net();
-    if (UNLIKELY(net == BTC::Net::Invalid))
+    if (Q_UNLIKELY(net == BTC::Net::Invalid))
         // This should never happen in practice, but it pays to be paranoid.
         throw RPCError("Server cannot parse addresses at this time", RPC::ErrorCodes::Code_InternalError);
     constexpr int kAddrLenLimit = 128; // no address is ever really over 64 chars, let alone 128
@@ -1239,7 +1239,7 @@ HashX Server::parseFirstAddrParamToShCommon(const RPC::Message &m, QString *addr
     if (!address.isValid() || !address.isCompatibleWithNet(net))
         throw RPCError(QString("Invalid address: %1").arg(addrStr));
     const auto sh = address.toHashX();
-    if (UNLIKELY(sh.length() != HashLen))
+    if (Q_UNLIKELY(sh.length() != HashLen))
         throw RPCError("Invalid scripthash", RPC::ErrorCodes::Code_InternalError); // this should never happen but we must be defensive here.
     if (addrStrOut) *addrStrOut = addrStr;
     return sh;
@@ -1376,7 +1376,7 @@ void Server::rpc_blockchain_address_subscribe(Client *c, const RPC::Message &m)
 void Server::impl_sh_subscribe(Client *c, const RPC::Message &m, const HashX &sh, const std::optional<QString> &optAlias)
 {
     const auto CheckSubsLimit = [c, &sh, this](int64_t nShSubs, bool doUnsub) {
-        if (UNLIKELY(nShSubs > options->maxSubsPerIP)) {
+        if (Q_UNLIKELY(nShSubs > options->maxSubsPerIP)) {
             if (c->perIPData->isWhitelisted()) {
                 // White-listed, let it go, but print to debug log
                 DebugM( c->prettyName(false, false), " exceeded the per-IP subscribe limit with ", nShSubs,
@@ -1391,7 +1391,7 @@ void Server::impl_sh_subscribe(Client *c, const RPC::Message &m, const HashX &sh
                 }
                 if (doUnsub) {
                     // unsubscribe client right away
-                    if (LIKELY(storage->subs()->unsubscribe(c, sh))) {
+                    if (Q_LIKELY(storage->subs()->unsubscribe(c, sh))) {
                         // decrement counters
                         --c->nShSubs;
                         --c->perIPData->nShSubs;

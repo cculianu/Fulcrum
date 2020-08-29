@@ -51,17 +51,17 @@ Job::~Job() {}
 
 void Job::run() {
     emit started();
-    if (UNLIKELY(pool->isShuttingDown())) {
+    if (Q_UNLIKELY(pool->isShuttingDown())) {
         Debug() << objectName() << ": blockNewWork = true, exiting early without doing any work";
         return;
 
-    } else if (UNLIKELY(!weakContextRef)) {
+    } else if (Q_UNLIKELY(!weakContextRef)) {
         // this is here so we avoid doing any work in case work is costly when we know for a fact the
         // interested/subscribed context object is already deleted.
         DebugM(objectName(), ": context already deleted, exiting early without doing any work");
         return;
     }
-    if (LIKELY(work)) {
+    if (Q_LIKELY(work)) {
         try {
             work();
         } catch (const std::exception &e) {
@@ -96,7 +96,7 @@ void ThreadPool::submitWork(QObject *context, const VoidFunc & work, const VoidF
             // make sure log gets the error
             Warning() << msg;
         return;
-    } else if (UNLIKELY(njobs < 0)) {
+    } else if (Q_UNLIKELY(njobs < 0)) {
         // should absolutely never happen.
         Error() << "FIXME: njobs " << njobs << " < 0!";
     } else if (njobs > extantMaxSeen)

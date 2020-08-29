@@ -312,12 +312,12 @@ jtokentype getJsonToken(QByteArray &tokenVal, unsigned &consumed, const char *ra
 
         const char * const firstDigit = first + firstIsMinus; // if first == '-', firstDigit = first + 1, else firstDigit = first
 
-        if (UNLIKELY(*firstDigit == '0' && firstDigit + 1 < end && json_isdigit(firstDigit[1])))
+        if (Q_UNLIKELY(*firstDigit == '0' && firstDigit + 1 < end && json_isdigit(firstDigit[1])))
             return JTOK_ERR;
 
         ++raw;                                  // consume first char
 
-        if (UNLIKELY(firstIsMinus && (raw >= end || !json_isdigit(*raw)))) // fail if buffer ends in '-', or matches '-[^0-9]'
+        if (Q_UNLIKELY(firstIsMinus && (raw >= end || !json_isdigit(*raw)))) // fail if buffer ends in '-', or matches '-[^0-9]'
             return JTOK_ERR;
 
         while (raw < end && json_isdigit(*raw)) {  // consume digits
@@ -328,7 +328,7 @@ jtokentype getJsonToken(QByteArray &tokenVal, unsigned &consumed, const char *ra
         if (raw < end && *raw == '.') {
             ++raw;                              // consume .
 
-            if (UNLIKELY(raw >= end || !json_isdigit(*raw)))
+            if (Q_UNLIKELY(raw >= end || !json_isdigit(*raw)))
                 return JTOK_ERR;
             while (raw < end && json_isdigit(*raw)) { // consume digits
                 ++raw;
@@ -343,7 +343,7 @@ jtokentype getJsonToken(QByteArray &tokenVal, unsigned &consumed, const char *ra
                 ++raw;
             }
 
-            if (UNLIKELY(raw >= end || !json_isdigit(*raw)))
+            if (Q_UNLIKELY(raw >= end || !json_isdigit(*raw)))
                 return JTOK_ERR;
             while (raw < end && json_isdigit(*raw)) { // consume digits
                 ++raw;
@@ -420,13 +420,13 @@ jtokentype getJsonToken(QByteArray &tokenVal, unsigned &consumed, const char *ra
         JSONUTF8StringFilter writer(tokenVal); // note: this filter object must *not* clear tokenVal in its c'tor
 
         while (true) {
-            if (UNLIKELY(raw >= end || uint8_t(*raw) < 0x20))
+            if (Q_UNLIKELY(raw >= end || uint8_t(*raw) < 0x20))
                 return JTOK_ERR;
 
             else if (*raw == '\\') {
                 ++raw;                        // skip backslash
 
-                if (UNLIKELY(raw >= end))
+                if (Q_UNLIKELY(raw >= end))
                     return JTOK_ERR;
 
                 switch (*raw) {
@@ -466,7 +466,7 @@ jtokentype getJsonToken(QByteArray &tokenVal, unsigned &consumed, const char *ra
             }
         }
 
-        if (UNLIKELY(!writer.finalize()))
+        if (Q_UNLIKELY(!writer.finalize()))
             return JTOK_ERR;
 
         if constexpr (reserveSize > 0)
@@ -524,7 +524,7 @@ QVariant Container::toVariant() const {
         break;
     case Num: {
         // NB: for `Num` type, `data` is always a shallow copy of the data in the original `bytes` arg
-        if (UNLIKELY(data.isEmpty())) {
+        if (Q_UNLIKELY(data.isEmpty())) {
             // this should never happen
             throw Json::ParseError("Data is empty for a nested item of type Num");
         }
@@ -566,7 +566,7 @@ QVariant Container::toVariant() const {
                 ok = ok && ull >= MIN && ull <= MAX;
             ret = qulonglong(ull);
         }
-        if (UNLIKELY(!ok)) {
+        if (Q_UNLIKELY(!ok)) {
             // this should never happen
             throw Json::ParseError(QString("Failed to parse number from string: %1 (original: %2)")
                                    .arg(begin).arg(QString::fromUtf8(data.constData(), data.size())));
@@ -701,7 +701,7 @@ bool parse(QVariant &out, const QByteArray &bytes)
                 Container *top = stack.back();
                 if (top->typ == VType::Obj) {
                     // paranoia
-                    if (UNLIKELY(top->entries.empty())) {
+                    if (Q_UNLIKELY(top->entries.empty())) {
                         ::Error() << "Json Parser ERROR: Obj 'entries' is empty; FIXME!";
                         return false;
                     }
@@ -718,7 +718,7 @@ bool parse(QVariant &out, const QByteArray &bytes)
                 }
             }
 
-            if (UNLIKELY(stack.size() > MAX_JSON_DEPTH))
+            if (Q_UNLIKELY(stack.size() > MAX_JSON_DEPTH))
                 return false;
 
             if (utyp == VType::Obj)
@@ -730,12 +730,12 @@ bool parse(QVariant &out, const QByteArray &bytes)
 
         case JTOK_OBJ_CLOSE:
         case JTOK_ARR_CLOSE: {
-            if (UNLIKELY(stack.empty() || last_tok == JTOK_COMMA))
+            if (Q_UNLIKELY(stack.empty() || last_tok == JTOK_COMMA))
                 return false;
 
             VType utyp = (tok == JTOK_OBJ_CLOSE ? VType::Obj : VType::Arr);
             Container *top = stack.back();
-            if (UNLIKELY(utyp != top->typ))
+            if (Q_UNLIKELY(utyp != top->typ))
                 return false;
 
             stack.pop_back();
@@ -745,11 +745,11 @@ bool parse(QVariant &out, const QByteArray &bytes)
         }
 
         case JTOK_COLON: {
-            if (UNLIKELY(stack.empty()))
+            if (Q_UNLIKELY(stack.empty()))
                 return false;
 
             Container *top = stack.back();
-            if (UNLIKELY(top->typ != VType::Obj))
+            if (Q_UNLIKELY(top->typ != VType::Obj))
                 return false;
 
             setExpect(VALUE);
@@ -757,7 +757,7 @@ bool parse(QVariant &out, const QByteArray &bytes)
         }
 
         case JTOK_COMMA: {
-            if (UNLIKELY(stack.empty() || last_tok == JTOK_COMMA || last_tok == JTOK_ARR_OPEN))
+            if (Q_UNLIKELY(stack.empty() || last_tok == JTOK_COMMA || last_tok == JTOK_ARR_OPEN))
                 return false;
 
             Container *top = stack.back();
@@ -793,7 +793,7 @@ bool parse(QVariant &out, const QByteArray &bytes)
             Container *top = stack.back();
             if (top->typ == VType::Obj) {
                 // paranoia
-                if (UNLIKELY(top->entries.empty())) {
+                if (Q_UNLIKELY(top->entries.empty())) {
                     ::Error() << "Json Parser ERROR: Obj 'entries' is empty when parsing a keyword; FIXME!";
                     return false;
                 }
@@ -817,7 +817,7 @@ bool parse(QVariant &out, const QByteArray &bytes)
             Container *top = stack.back();
             if (top->typ == VType::Obj) {
                 // paranoia
-                if (UNLIKELY(top->entries.empty())) {
+                if (Q_UNLIKELY(top->entries.empty())) {
                     ::Error() << "Json Parser ERROR: Obj 'entries' is empty when parsing a number; FIXME!";
                     return false;
                 }
@@ -848,7 +848,7 @@ bool parse(QVariant &out, const QByteArray &bytes)
                 Container *top = stack.back();
                 if (top->typ == VType::Obj) {
                     // paranoia
-                    if (UNLIKELY(top->entries.empty())) {
+                    if (Q_UNLIKELY(top->entries.empty())) {
                         ::Error() << "Json Parser ERROR: Obj 'entries' is empty when parsing a string; FIXME!";
                         return false;
                     }

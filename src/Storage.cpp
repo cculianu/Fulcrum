@@ -220,7 +220,7 @@ namespace {
     {
         rocksdb::PinnableSlice datum;
         std::optional<RetType> ret;
-        if (UNLIKELY(!db)) throw InternalError("GenericDBGet was passed a null pointer!");
+        if (Q_UNLIKELY(!db)) throw InternalError("GenericDBGet was passed a null pointer!");
         const auto status = db->Get(ropts, db->DefaultColumnFamily(), ToSlice<safeScalar>(keyIn), &datum);
         if (status.IsNotFound()) {
             if (missingOk)
@@ -254,7 +254,7 @@ namespace {
                                 .arg(typeid (RetType).name()));
                 }
             } else {
-                if (UNLIKELY(acceptExtraBytesAtEndOfData))
+                if (Q_UNLIKELY(acceptExtraBytesAtEndOfData))
                     Debug() << "Warning:  Caller misuse of function '" << __func__
                             << "'. 'acceptExtraBytesAtEndOfData=true' is ignored when deserializing using QDataStream.";
                 bool ok;
@@ -543,7 +543,7 @@ void Storage::startup()
 {
     Log() << "Loading database ...";
 
-    if (UNLIKELY(!subsmgr || !options))
+    if (Q_UNLIKELY(!subsmgr || !options))
         throw BadArgs("Storage instance constructed with nullptr for `options` and/or `subsmgr` -- FIXME!");
 
     subsmgr->startup(); // trivial, always succeeds if constructed correctly
@@ -684,10 +684,10 @@ auto Storage::stats() const -> Stats
             const auto & db = *ptr;
             const QString name = QFileInfo(QString::fromStdString(db->GetName())).fileName();
             for (const auto prop : { "rocksdb.estimate-table-readers-mem", "rocksdb.cur-size-all-mem-tables"}) {
-                if (std::string s; LIKELY(db->GetProperty(prop, &s)) )
+                if (std::string s; Q_LIKELY(db->GetProperty(prop, &s)) )
                     m2[prop] = QString::fromStdString(s);
             }
-            if (auto fact = db->GetOptions().table_factory; LIKELY(fact) ) {
+            if (auto fact = db->GetOptions().table_factory; Q_LIKELY(fact) ) {
                 // parse the table factory options string, which is of the form "     opt1: val1\n     opt2: val2\n  ... "
                 QVariantMap m3;
                 for (const auto & line : QString::fromStdString( fact->GetPrintableTableOptions() ).split("\n")) {
@@ -802,13 +802,13 @@ void Storage::saveMeta_impl()
 void Storage::appendHeader(const Header &h, BlockHeight height)
 {
     const auto targetHeight = p->headersFile->numRecords();
-    if (UNLIKELY(height != targetHeight))
+    if (Q_UNLIKELY(height != targetHeight))
         throw InternalError(QString("Bad use of appendHeader -- expected height %1, got height %2").arg(targetHeight).arg(height));
     QString err;
     const auto res = p->headersFile->appendRecord(h, true, &err);
-    if (UNLIKELY(!err.isEmpty()))
+    if (Q_UNLIKELY(!err.isEmpty()))
         throw DatabaseError(QString("Failed to append header %1: %2").arg(height).arg(err));
-    else if (UNLIKELY(!res.has_value() || *res != height))
+    else if (Q_UNLIKELY(!res.has_value() || *res != height))
         throw DatabaseError(QString("Failed to append header %1: returned count is bad").arg(height));
 }
 
@@ -1071,7 +1071,7 @@ void Storage::issueUpdates(UTXOBatch &b)
 {
     static const QString errMsg1("Error issuing batch write to utxoset db for a utxo update"),
                          errMsg2("Error issuing batch write to scripthash_unspent db for a utxo update");
-    if (UNLIKELY(b.p->defunct))
+    if (Q_UNLIKELY(b.p->defunct))
         throw InternalError("Misuse of Storage::issueUpdates. Cannot issue the same updates using the same context more than once. FIXME!");
     assert(bool(p->db.utxoset) && bool(p->db.shunspent));
     GenericBatchWrite(p->db.utxoset.get(), b.p->utxosetBatch, errMsg1, p->db.defWriteOpts); // may throw
@@ -1160,13 +1160,13 @@ std::optional<TXOInfo> Storage::utxoGet(const TXO &txo)
     if (auto txsIt = mempool.txs.find(txo.txHash); txsIt != mempool.txs.end()) {
         mempoolHit = true; // flag mempool hit so that we don't redundantly check db at end of this function
         const auto & tx = txsIt->second;
-        if (UNLIKELY(!tx)) {
+        if (Q_UNLIKELY(!tx)) {
             // Paranoia to detect bugs. This will never happen.
             throw InternalError(QString("TxRef for %1 is null! FIXME!").arg(QString(txo.txHash.toHex())));
         }
         if (txo.outN < tx->txos.size()) {
             const TXOInfo & info = tx->txos[txo.outN];
-            if (auto hxIt = tx->hashXs.find(info.hashX); LIKELY(hxIt != tx->hashXs.end())) {
+            if (auto hxIt = tx->hashXs.find(info.hashX); Q_LIKELY(hxIt != tx->hashXs.end())) {
                 const auto & ioinfo = hxIt->second;
                 if (ioinfo.utxo.count(txo.outN)) {
                     // found! It's unspent!
@@ -1189,7 +1189,7 @@ std::optional<TXOInfo> Storage::utxoGet(const TXO &txo)
                 // in practice this shouldn't be too bad since it's not often that a particular scripthash
                 // has more than a few mempool tx's.
                 for (const auto & tx : hxTxIt->second) {
-                    if (auto hxInfoIt = tx->hashXs.find(hxTxIt->first); LIKELY(hxInfoIt != tx->hashXs.end())) {
+                    if (auto hxInfoIt = tx->hashXs.find(hxTxIt->first); Q_LIKELY(hxInfoIt != tx->hashXs.end())) {
                         const auto & ioinfo = hxInfoIt->second;
                         if (ioinfo.confirmedSpends.count(txo)) {
                             //Debug() << "TXO: " << txo.toString() << " was in DB but is spent in mempool";
@@ -1489,7 +1489,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
 
         appendHeader(rawHeader, ppb->height);
 
-        if (UNLIKELY(ppb->height == 0)) {
+        if (Q_UNLIKELY(ppb->height == 0)) {
             // update genesis hash now if block 0 -- this info is used by rpc method server.features
             p->genesisHash = BTC::HashRev(rawHeader); // this variable is guarded by p->headerVerifierLock
         }
@@ -1804,7 +1804,7 @@ auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf) const -> H
             auto nums_opt = GenericDBGet<TxNumVec>(p->db.shist.get(), hashX, true, err, false, p->db.defReadOpts);
             if (nums_opt.has_value()) {
                 auto & nums = *nums_opt;
-                if (UNLIKELY(nums.size() > maxHistory)) {
+                if (Q_UNLIKELY(nums.size() > maxHistory)) {
                     throw HistoryTooLarge(QString("History for scripthash %1 exceeds MaxHistory %2 with %3 items!")
                                           .arg(QString(hashX.toHex())).arg(maxHistory).arg(nums.size()));
                 }
@@ -1827,7 +1827,7 @@ auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf) const -> H
             if (auto it = mempool.hashXTxs.find(hashX); it != mempool.hashXTxs.end()) {
                 const auto & txvec = it->second;
                 const size_t total = ret.size() + txvec.size();
-                if (UNLIKELY(total > maxHistory)) {
+                if (Q_UNLIKELY(total > maxHistory)) {
                     throw HistoryTooLarge(QString("History for scripthash %1 exceeds MaxHistory %2 with %3 items!")
                                           .arg(QString(hashX.toHex())).arg(maxHistory).arg(total));
                 }
@@ -1868,7 +1868,7 @@ auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
                             Warning() << "Cannot find tx for sh " << hashX.toHex() << ". FIXME!!";
                             continue;
                         }
-                        if (auto it2 = tx->hashXs.find(hashX); LIKELY(it2 != tx->hashXs.end())) {
+                        if (auto it2 = tx->hashXs.find(hashX); Q_LIKELY(it2 != tx->hashXs.end())) {
                             const auto & ioinfo = it2->second;
                             // make sure to put any confirmed spends we see now in the "mempool confirmed spends" set
                             // so we know not to include them in the list of utxos from the DB later in this function!
@@ -1877,7 +1877,7 @@ auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
                             }
                             for (const auto ionum : ioinfo.utxo) {
                                 if (decltype(tx->txos.cbegin()) it3;
-                                        LIKELY( ionum < tx->txos.size() && (it3 = tx->txos.cbegin() + ionum)->isValid() ))
+                                        Q_LIKELY( ionum < tx->txos.size() && (it3 = tx->txos.cbegin() + ionum)->isValid() ))
                                 {
                                     ret.emplace_back(UnspentItem{
                                         { tx->hash, 0 /* always put 0 for height here */, tx->fee }, // base HistoryItem
@@ -1885,7 +1885,7 @@ auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
                                         it3->amount,  // .value
                                         TxNum(1) + veryHighTxNum + TxNum(tx->hasUnconfirmedParentTx ? 1 : 0), // .txNum (this is fudged for sorting at the end properly)
                                     });
-                                    if (UNLIKELY(ret.size() > maxHistory)) {
+                                    if (Q_UNLIKELY(ret.size() > maxHistory)) {
                                         throw HistoryTooLarge(QString("Unspent history too large for %1, exceeds MaxHistory of %2")
                                                               .arg(QString(hashX.toHex())).arg(maxHistory));
                                     }
@@ -1922,7 +1922,7 @@ auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
                         // should never happen, indicates db corruption
                         throw InternalError("Deserialized CompactTXO is invalid");
                     ctxoList.emplace_back(ctxo);
-                    if (UNLIKELY(++ctxoListSize + ret.size() > maxHistory)) {
+                    if (Q_UNLIKELY(++ctxoListSize + ret.size() > maxHistory)) {
                         throw HistoryTooLarge(QString("Unspent history too large for %1, exceeds MaxHistory of %2")
                                               .arg(QString(hashX.toHex())).arg(maxHistory));
                     }
@@ -1984,13 +1984,13 @@ auto Storage::getBalance(const HashX &hashX) const -> std::pair<bitcoin::Amount,
                     throw InternalError(QString("Deserialized CompactTXO is invalid for scripthash %1").arg(QString(hashX.toHex())));
                 bool ok;
                 const bitcoin::Amount amount = Deserialize<bitcoin::Amount>(FromSlice(iter->value()), &ok);
-                if (UNLIKELY(!ok))
+                if (Q_UNLIKELY(!ok))
                     throw InternalError(QString("Bad amount in db for ctxo %1 (%2)").arg(ctxo.toString()).arg(QString(hashX.toHex())));
-                if (UNLIKELY(!bitcoin::MoneyRange(amount)))
+                if (Q_UNLIKELY(!bitcoin::MoneyRange(amount)))
                     throw InternalError(QString("Out-of-range amount in db for ctxo %1: %2").arg(ctxo.toString()).arg(amount / amount.satoshi()));
                 ret.first += amount; // tally the result
             }
-            if (UNLIKELY(!bitcoin::MoneyRange(ret.first))) {
+            if (Q_UNLIKELY(!bitcoin::MoneyRange(ret.first))) {
                 ret.first = bitcoin::Amount::zero();
                 throw InternalError(QString("Out-of-range total in db for getBalance on scripthash: %1").arg(QString(hashX.toHex())));
             }
@@ -2004,7 +2004,7 @@ auto Storage::getBalance(const HashX &hashX) const -> std::pair<bitcoin::Amount,
                 for (const auto & tx : it->second) {
                     assert(bool(tx));
                     auto it2 = tx->hashXs.find(hashX);
-                    if (UNLIKELY(it2 == tx->hashXs.end())) {
+                    if (Q_UNLIKELY(it2 == tx->hashXs.end())) {
                         throw InternalError(QString("scripthash %1 lists tx %2, which then lacks the IOInfo for said hashX! FIXME!")
                                             .arg(QString(hashX.toHex())).arg(QString(tx->hash.toHex())));
                     }
@@ -2012,7 +2012,7 @@ auto Storage::getBalance(const HashX &hashX) const -> std::pair<bitcoin::Amount,
                     for (const auto & [txo, txoinfo] : info.confirmedSpends)
                         spends += txoinfo.amount;
                     for (const auto ionum : info.utxo) {
-                        if (decltype(tx->txos.cbegin()) it3; UNLIKELY( ionum >= tx->txos.size()
+                        if (decltype(tx->txos.cbegin()) it3; Q_UNLIKELY( ionum >= tx->txos.size()
                                                                        || !(it3 = tx->txos.cbegin() + ionum)->isValid()) )
                         {
                             throw InternalError(QString("scripthash %1 lists tx %2, which then lacks a valid TXO IONum %3 for said hashX! FIXME!")
@@ -2150,14 +2150,14 @@ size_t Storage::dumpAllScriptHashes(QIODevice *outDev, unsigned int indent, unsi
     for (it->SeekToFirst(); it->Valid() && outDev && lastWriteCt > -1; it->Next()) {
         const auto sh = it->key();
         if (sh.size() == HashLen) {
-            if (LIKELY(ctr)) {
+            if (Q_LIKELY(ctr)) {
                 outDev->putChar(',');
                 NL();
             }
             outDev->putChar('"');
             lastWriteCt = outDev->write(Util::ToHexFast(FromSlice(sh)));
             outDev->putChar('"');
-            if (UNLIKELY(!(++ctr % progInterval) && progFunc))
+            if (Q_UNLIKELY(!(++ctr % progInterval) && progFunc))
                 progFunc(ctr);
         }
     }
@@ -2287,12 +2287,12 @@ namespace {
         ret.append(blkInfoBytes);
         // 5. .scriptHashes, 32 bytes each, for all in set
         for (const auto & sh : u.scriptHashes) {
-            if (UNLIKELY(!chkHashLen(sh))) return ret;
+            if (Q_UNLIKELY(!chkHashLen(sh))) return ret;
             ret.append(sh);
         }
         // 6. .addUndos, 64 bytes each * nAddUndos
         for (const auto & [txo, hashX, ctxo] : u.addUndos) {
-            if (UNLIKELY(!chkHashLen(hashX))) return ret;
+            if (Q_UNLIKELY(!chkHashLen(hashX))) return ret;
             ret.append(Serialize(txo));
             ret.append(hashX);
             ret.append(Serialize(ctxo));
@@ -2300,7 +2300,7 @@ namespace {
         // 7. .delUndos, 50 bytes each * nDelUndos
         for (const auto & [txo, txoInfo] : u.delUndos) {
             ret.append(Serialize(txo));
-            if (UNLIKELY(!chkHashLen(txoInfo.hashX))) return ret;
+            if (Q_UNLIKELY(!chkHashLen(txoInfo.hashX))) return ret;
             ret.append(Serialize(txoInfo));
         }
         assert(ret.length() == int(hdr.len));
@@ -2312,7 +2312,7 @@ namespace {
         UndoInfo ret;
         const auto setOk = [&ok, &ret] (bool b) { if (ok) *ok = b; if (!b) ret.clear(); };
         const auto chkAssertion = [&setOk] (bool assertion, const char *extra = "") {
-            if (UNLIKELY(!assertion)) {
+            if (Q_UNLIKELY(!assertion)) {
                 Warning() << "Deserialize UndoInfo called with an invalid byte array! FIXME! " << extra;
                 setOk(false);
             }
@@ -2389,7 +2389,7 @@ namespace {
         constexpr auto compactSize = CompactTXO::compactTxNumSize(); /* 6 */
         const size_t nBytes = v.size() * compactSize;
         QByteArray ret(int(nBytes), Qt::Uninitialized);
-        if (UNLIKELY(nBytes != size_t(ret.size()))) {
+        if (Q_UNLIKELY(nBytes != size_t(ret.size()))) {
             throw DatabaseSerializationError(QString("Overflow or other error when attempting to serialize a TxNumVec"
                                                      " of %1 bytes").arg(qulonglong(nBytes)));
         }

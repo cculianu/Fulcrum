@@ -594,7 +594,7 @@ namespace RPC {
         // and never sending a newline.  The below code detects the situation and disconnects clients whereby too much
         // time has expired (5 seconds) with extant unprocessed read buffers at or past the MAX_BUFFER threshold.
         if (const qint64 avail = socket ? socket->bytesAvailable() : 0;
-                UNLIKELY(!memoryWasteTimerActive && avail >= memoryWasteThreshold)) {
+                Q_UNLIKELY(!memoryWasteTimerActive && avail >= memoryWasteThreshold)) {
             memoryWasteTimerActive = true;
             callOnTimerSoonNoRepeat(memoryWasteTimeout, memoryWasteTimer, [this]{
                 if (!memoryWasteTimerActive)
@@ -616,7 +616,7 @@ namespace RPC {
             });
             DebugM("Memory waste timer STARTED for ", this->id, " from ", this->peerAddress().toString(),
                    ", read buffer size: ", avail);
-        } else if (UNLIKELY(memoryWasteTimerActive && avail < memoryWasteThreshold)) {
+        } else if (Q_UNLIKELY(memoryWasteTimerActive && avail < memoryWasteThreshold)) {
             StopTimer(this, avail);
         }
     }
@@ -727,7 +727,7 @@ namespace RPC {
                             if (!ok || sm->contentLength < 0) {
                                 // ERROR HERE. Expected numeric length, got nonsense
                                 throw Exception(QString("Could not parse content-length: %1").arg(QString(data)));
-                            } else if (UNLIKELY(sm->contentLength > MAX_BUFFER)) {
+                            } else if (Q_UNLIKELY(sm->contentLength > MAX_BUFFER)) {
                                 // ERROR, defend against memory exhaustion attack.
                                 throw Exception(QString("Peer wants to send us more than %1 bytes of data, exceeding our buffer limit!").arg(MAX_BUFFER));
                             }
@@ -790,7 +790,7 @@ namespace RPC {
                     QTimer::singleShot(0, socket, [this]{on_readyRead();});
                 }
             }
-            if (UNLIKELY(socket->bytesAvailable() > MAX_BUFFER)) {
+            if (Q_UNLIKELY(socket->bytesAvailable() > MAX_BUFFER)) {
                 // this branch normally can't be taken because super class calls setReadBufferSize() on the socket
                 // in on_connected, but we leave this code here in the interests of defensive programming.
                 throw Exception( QString("Peer backbuffer exceeded %1 bytes! Bad peer?").arg(MAX_BUFFER) );

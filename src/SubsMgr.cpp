@@ -78,7 +78,7 @@ SubsMgr::SubsMgr(const std::shared_ptr<const Options> & o, Storage *s, const QSt
 }
 SubsMgr::~SubsMgr() { Debug() << __func__; cleanup(); }
 void SubsMgr::startup() {
-    if (UNLIKELY(!storage || !options))
+    if (Q_UNLIKELY(!storage || !options))
         // paranoia
         throw BadArgs("SubsMgr constructed with nullptr for either options or storage! FIXME!");
     start();
@@ -231,7 +231,7 @@ auto SubsMgr::getOrMakeSubRef(const HashX &sh) -> std::pair<SubRef, bool>
     std::pair<SubRef, bool> ret;
     LockGuard g(p->mut);
 
-    if (UNLIKELY(p->subs.size() >= size_t(options->maxSubsGlobally)))
+    if (Q_UNLIKELY(p->subs.size() >= size_t(options->maxSubsGlobally)))
         // Note we check the limit against all subs (including zombies) to prevent a DoS attack that circumvents
         // the limit by repeatedly creating subs, disconnecting, reconnecting, creating a different set of subs, etc.
         throw LimitReached(QString("Global subs limit of %1 has been reached").arg(options->maxSubsGlobally));
@@ -259,7 +259,7 @@ auto SubsMgr::findExistingSubRef(const HashX &sh) const -> SubRef
 auto SubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &sh, const StatusCallback &notifyCB) -> SubscribeResult
 {
     const auto t0 = debugPrint ? Util::getTimeNS() : 0LL;
-    if (UNLIKELY(!notifyCB))
+    if (Q_UNLIKELY(!notifyCB))
         throw BadArgs("SubsMgr::subscribe must be called with a valid notifyCB. FIXME!");
 
     SubscribeResult ret = { false, {} };
@@ -283,7 +283,7 @@ auto SubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &sh, const StatusCal
                 //Debug() << "client id " << id << " destroyed, implicitly unsubbed from " << sub->scriptHash.toHex()
                 //        << ", " << sub->subscribedClientIds.size() << " sub(s) remain";
             });
-            if (UNLIKELY(!conn))
+            if (Q_UNLIKELY(!conn))
                 throw InternalError("SubsMgr::subscribe: Failed to make the 'destroyed' connection for the client object! FIXME!");
             ++p->nClientSubsActive;
         }
@@ -292,7 +292,7 @@ auto SubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &sh, const StatusCal
         ret.second = sub->cachedStatus;
         sub->updateTS(); // our basic 'mtime'
         auto conn = QObject::connect(sub.get(), &Subscription::statusChanged, c, notifyCB, Qt::QueuedConnection); // QueuedConnection paranoia in case client 'c' "lives" in our thread
-        if (UNLIKELY(!conn))
+        if (Q_UNLIKELY(!conn))
             throw InternalError("SubsMgr::subscribe: Failed to make the 'statusChanged' connection to the notifyCB functor! FIXME!");
     }
 
@@ -392,7 +392,7 @@ void SubsMgr::removeZombies(bool forced)
     const auto total = p->subs.size();
     for (auto it = p->subs.begin(); it != p->subs.end(); /* */) {
         SubRef sub = it->second; // take a copy to increment refct so it doesn't get deleted before we unlock it (erase() below)...
-        if (UNLIKELY(!sub)) { // paranoia
+        if (Q_UNLIKELY(!sub)) { // paranoia
             Fatal() << "A SubRef was null in " << __func__ << ". FIXME!";
             return;
         }

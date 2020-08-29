@@ -64,7 +64,7 @@ namespace Merkle {
             index >>= 1;
             recomputeHashes(hashes); // makes hashes be 1/2 the size each time
         }
-        if (UNLIKELY(hashes.empty())) {
+        if (Q_UNLIKELY(hashes.empty())) {
             Error() << __PRETTY_FUNCTION__ << ": INTERNAL ERROR. Output vector is empty! FIXME!";
             throw InternalError(QString("%1: Output hash vector is empty").arg(__func__));
         }

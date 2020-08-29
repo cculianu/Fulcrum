@@ -42,7 +42,7 @@ RPCMsgId RPCMsgId::fromVariant(const QVariant &var)
         int64_t id_ll;
         if (auto mtype = QMetaType::Type(var.type()); mtype == QMetaType::QString) {
             ret = var.toString();
-        } else if (UNLIKELY(mtype == QMetaType::QByteArray)) {
+        } else if (Q_UNLIKELY(mtype == QMetaType::QByteArray)) {
             ret = QString::fromUtf8(var.toByteArray());
         } else if (mtype == QMetaType::Bool) {
             throw BadArgs("Booleans are not supported");

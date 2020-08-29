@@ -172,7 +172,7 @@ namespace Util {
     {
         const int size = hex.size();
         QByteArray ret(size / 2, Qt::Initialization::Uninitialized);
-        if (UNLIKELY(size % 2)) {
+        if (Q_UNLIKELY(size % 2)) {
             // bad / not hex because not even number of chars.
             ret.clear();
             return ret;
@@ -205,7 +205,7 @@ namespace Util {
 
             // The below is slowish... we can just accept bad hex data as 'corrupt' ...
             // checkDigit = false allows us to skip this check, making this function >5x faster!
-            if (UNLIKELY(checkDigits && (c1 > 0xf || c2 > 0xf))) { // ensure data was actually in range
+            if (Q_UNLIKELY(checkDigits && (c1 > 0xf || c2 > 0xf))) { // ensure data was actually in range
                 ret.clear();
                 break;
             }
@@ -299,7 +299,7 @@ Log::~Log()
 {
     if (doprt) {
         App *ourApp = app();
-        if (UNLIKELY(ourApp && !ourApp->options))
+        if (Q_UNLIKELY(ourApp && !ourApp->options))
             ourApp = nullptr; // spurious Qt message -- ourApp not yet fully constructed.
         using LTS = Options::LogTimestampMode;
         const LTS ltsMode = !ourApp ? Options::defaultLogTimeStampMode : ourApp->options->logTimestampMode;

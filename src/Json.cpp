@@ -124,7 +124,7 @@ namespace {
             return;
         }
 
-        if (UNLIKELY(!v.isValid())) {
+        if (Q_UNLIKELY(!v.isValid())) {
             throw Json::Error("Variant is not valid");
         }
 
@@ -163,7 +163,7 @@ namespace {
         case QMetaType::LongLong: {
             bool ok1, ok2;
             ok2 = writeIntOrFloat(int64_t(v.toLongLong(&ok1)));
-            if (UNLIKELY(!ok1 || !ok2))
+            if (Q_UNLIKELY(!ok1 || !ok2))
                 throw Json::Error(QString("Unable to serialize int64 for '%1' (%2, %3)").arg(v.toString()).arg(int(ok1)).arg(int(ok2)));
             break;
         }
@@ -172,7 +172,7 @@ namespace {
         case QMetaType::ULongLong: {
             bool ok1, ok2;
             ok2 = writeIntOrFloat(uint64_t(v.toULongLong(&ok1)));
-            if (UNLIKELY(!ok1 || !ok2))
+            if (Q_UNLIKELY(!ok1 || !ok2))
                 throw Json::Error(QString("Unable to serialize uint64 for '%1' (%2, %3)").arg(v.toString()).arg(int(ok1)).arg(int(ok2)));
             break;
         }
@@ -180,7 +180,7 @@ namespace {
         case QMetaType::Float: {
             bool ok1, ok2;
             ok2 = writeIntOrFloat(v.toDouble(&ok1));
-            if (UNLIKELY(!ok1 || !ok2))
+            if (Q_UNLIKELY(!ok1 || !ok2))
                 throw Json::Error(QString("Unable to serialize double for '%1' (%2, %3)").arg(v.toString()).arg(int(ok1)).arg(int(ok2)));
             break;
         }

@@ -166,7 +166,7 @@ std::optional<uint64_t> RecordFile::appendRecord(const QByteArray &data, bool up
     std::lock_guard g(rwlock);
     std::optional<uint64_t> ret;
 
-    if (UNLIKELY(data.length() != int(recsz))) {
+    if (Q_UNLIKELY(data.length() != int(recsz))) {
         if (errStr) *errStr = QString("Expected data of length %1, instead got data of length %2").arg(recsz).arg(data.length());
     } else if (const auto newNRecs = ++nrecs; !file.seek(offsetOfRec(newNRecs-1))) {
         if (errStr) *errStr = QString("Cannot seek to write record %1 (%2)").arg(newNRecs-1).arg(file.errorString());
@@ -208,7 +208,7 @@ bool RecordFile::BatchAppendContext::append(const QByteArray &data, QString *err
 bool RecordFile::writeNewSizeToHeader(QString *errStr, bool flush)
 {
     bool ret = false;
-    if (UNLIKELY(!file.isOpen())) {
+    if (Q_UNLIKELY(!file.isOpen())) {
         if (errStr) *errStr = "File not open";
     } else if (!file.seek(offsetOfNRecs())) {
         if (errStr) *errStr = QString("Cannot seek to write header for %1").arg(file.fileName());

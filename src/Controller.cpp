@@ -535,7 +535,7 @@ void SynchMempoolTask::processResults()
             mempool.txs[tx->hash] = tx; // save tx right now to map, since we need to find it later for possible spends, etc if subsequent tx's refer to this tx.
             IONum n = 0;
             const auto numTxo = ctx->vout.size();
-            if (LIKELY(tx->txos.size() != numTxo)) {
+            if (Q_LIKELY(tx->txos.size() != numTxo)) {
                 // we do it this way (reserve then resize) to avoid the automatic 2^N prealloc of normal vector .resize()
                 tx->txos.reserve(numTxo);
                 tx->txos.resize(numTxo);
@@ -597,7 +597,7 @@ void SynchMempoolTask::processResults()
                 } else {
                     // prev is a confirmed tx
                     const auto optTXOInfo = storage->utxoGetFromDB(prevTXO, false); // this may also throw on low-level db error
-                    if (UNLIKELY(!optTXOInfo.has_value())) {
+                    if (Q_UNLIKELY(!optTXOInfo.has_value())) {
                         // Uh oh. If it wasn't in the mempool or in the db.. something is very wrong with our code.
                         // We will throw if missing, and the synch process aborts and hopefully we recover with a reorg
                         // or a new block or somesuch.
@@ -640,7 +640,7 @@ void SynchMempoolTask::processResults()
 
         // now, sort and uniqueify data structures made temporarily inconsistent above (have dupes, are out-of-order)
         for (const auto & sh : scriptHashesAffected) {
-            if (auto it = mempool.hashXTxs.find(sh); LIKELY(it != mempool.hashXTxs.end()))
+            if (auto it = mempool.hashXTxs.find(sh); Q_LIKELY(it != mempool.hashXTxs.end()))
                 Util::sortAndUniqueify<Mempool::TxRefOrdering>(it->second);
             //else {}
             // Note: It's possible for the scriptHashesAffected set to refer to sh's no longer in the mempool because
@@ -744,7 +744,7 @@ void SynchMempoolTask::doGetRawMempool()
             // at this point we have a valid tx ptr
         }
 
-        if (UNLIKELY(!droppedTxs.empty())) {
+        if (Q_UNLIKELY(!droppedTxs.empty())) {
             // If tx's were dropped, we clear the mempool and try again. We also enqueue notifications for the dropped
             // tx's.
             const bool recommendFullRetry = oldCt >= 2 && droppedTxs.size() >= oldCt/2; // more than 50% of the mempool tx's dropped out. something is funny. likely a new block arrived.
@@ -870,12 +870,12 @@ void Controller::add_DLHeaderTask(unsigned int from, unsigned int to, size_t nTa
     DownloadBlocksTask *t = newTask<DownloadBlocksTask>(false, unsigned(from), unsigned(to), unsigned(nTasks), this);
     connect(t, &CtlTask::success, this, [t, this]{
         // NOTE: this callback is sometimes delivered after the sm has been reset(), so we don't check or use it here.
-        if (UNLIKELY(isTaskDeleted(t))) return; // task was stopped from underneath us, this is stale.. abort.
+        if (Q_UNLIKELY(isTaskDeleted(t))) return; // task was stopped from underneath us, this is stale.. abort.
         DebugM( "Got all blocks from: ", t->objectName(), " blockCt: ",  t->goodCt,
                 " nTx,nInp,nOutp: ", t->nTx, ",", t->nIns, ",", t->nOuts);
     });
     connect(t, &CtlTask::errored, this, [t, this]{
-        if (UNLIKELY(!sm || isTaskDeleted(t))) return; // task was stopped from underneath us, this is stale.. abort.
+        if (Q_UNLIKELY(!sm || isTaskDeleted(t))) return; // task was stopped from underneath us, this is stale.. abort.
         if (sm->state == StateMachine::State::Failure) return; // silently ignore if we are already in failure
         Error() << "Task errored: " << t->objectName() << ", error: " << t->errorMessage;
         genericTaskErrored();
@@ -898,7 +898,7 @@ CtlTaskT *Controller::newTask(bool connectErroredSignal, Args && ...args)
     if (connectErroredSignal)
         connect(task, &CtlTask::errored, this, &Controller::genericTaskErrored);
     connect(task, &CtlTask::retryRecommended, this, [this]{  // only the SynchMempoolTask ever emits this.
-        if (LIKELY(sm))
+        if (Q_LIKELY(sm))
             sm->state = StateMachine::State::Retry;
         AGAIN();
     });
@@ -928,7 +928,7 @@ void Controller::process(bool beSilentIfUpToDate)
         sm->waitingTs = Util::getTimeSecs();
         sm->state = State::WaitingForChainInfo; // more reentrancy prevention paranoia -- in case we get a spurious call to process() in the future
         connect(task, &CtlTask::success, this, [this, task, beSilentIfUpToDate]{
-            if (UNLIKELY(!sm || task != sm->mostRecentGetChainInfoTask || isTaskDeleted(task) || sm->state != State::WaitingForChainInfo))
+            if (Q_UNLIKELY(!sm || task != sm->mostRecentGetChainInfoTask || isTaskDeleted(task) || sm->state != State::WaitingForChainInfo))
                 // task was stopped from underneath us and/or this response is stale.. so return and ignore
                 return;
             sm->mostRecentGetChainInfoTask = nullptr;
@@ -957,7 +957,7 @@ void Controller::process(bool beSilentIfUpToDate)
                 return;
             }
             sm->net = net;
-            if (UNLIKELY(sm->net == BTC::Net::Invalid)) {
+            if (Q_UNLIKELY(sm->net == BTC::Net::Invalid)) {
                 // Unknown chain name. This shouldn't happen but it if does, warn the user since it will make all of
                 // the blockchain.address.* methods not work. This warning will spam the log so hopefully it will not
                 // go unnoticed. I doubt anyone anytime soon will rename "main" or "test" or "regtest", but it pays
@@ -1069,7 +1069,7 @@ void Controller::process(bool beSilentIfUpToDate)
         auto task = newTask<SynchMempoolTask>(true, this, storage, masterNotifySubsFlag);
         task->threadObjectDebugLifecycle = Trace::isEnabled(); // suppress verbose lifecycle prints unless trace mode
         connect(task, &CtlTask::success, this, [this, task]{
-            if (UNLIKELY(!sm || isTaskDeleted(task) || sm->state != State::SynchingMempool))
+            if (Q_UNLIKELY(!sm || isTaskDeleted(task) || sm->state != State::SynchingMempool))
                 // task was stopped from underneath us and/or this response is stale.. so return and ignore
                 return;
             sm->state = State::SynchMempoolFinished;
@@ -1104,7 +1104,7 @@ void Controller::on_putBlock(CtlTask *task, PreProcessedBlockPtr p)
 
 void Controller::process_PrintProgress(unsigned height, size_t nTx, size_t nIns, size_t nOuts, size_t nSH)
 {
-    if (UNLIKELY(!sm)) return; // paranoia
+    if (Q_UNLIKELY(!sm)) return; // paranoia
     sm->nProgBlocks++;
 
     sm->nTx += nTx;
@@ -1115,7 +1115,7 @@ void Controller::process_PrintProgress(unsigned height, size_t nTx, size_t nIns,
     sm->nProgTx += nTx;
     sm->nProgIOs += nIns + nOuts;
     sm->nProgSH += nSH;
-    if (UNLIKELY(height && !(height % sm->progressIntervalBlocks))) {
+    if (Q_UNLIKELY(height && !(height % sm->progressIntervalBlocks))) {
         static const auto formatRate = [](double rate, const QString & thing, bool addComma = true) {
             QString unit = QStringLiteral("sec");
             if (rate < 1.0 && rate > 0.0) {
