@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <cinttypes>
 #include <csignal>
+#include <cstring>
 #include <functional>
 #include <iomanip>
 #include <iostream>
