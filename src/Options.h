@@ -186,7 +186,7 @@ public:
     QString dumpScriptHashes;  ///< if specified, a file path to which to dump all scripthashes as JSON, corresponds to --dump-sh CLI arg
 
     struct DBOpts {
-        static constexpr int defaultMaxOpenFiles = -1, maxOpenFilesMin = 20, maxOpenFilesMax = INT_MAX;
+        static constexpr int defaultMaxOpenFiles = 25, maxOpenFilesMin = 20, maxOpenFilesMax = std::numeric_limits<int>::max();
         /// comes from config db_max_open_files -- default is -1 meaning unlimited.
         /// See: https://github.com/facebook/rocksdb/wiki/Memory-usage-in-RocksDB#indexes-and-filter-blocks
         int maxOpenFiles = defaultMaxOpenFiles;
@@ -196,6 +196,10 @@ public:
         /// comes from config db_keep_log_file_num -- default is 5
         unsigned keepLogFileNum = defaultKeepLogFileNum;
         static constexpr bool isKeepLogFileNumInBounds(int64_t k) { return k >= int64_t(minKeepLogFileNum) && k <= int64_t(maxKeepLogFileNum); }
+
+        static constexpr size_t defaultMaxMem = 512 * 1024 * 1024, maxMemMin = 50 * 1024 * 1024, maxMemMax = std::numeric_limits<size_t>::max();
+        size_t maxMem = defaultMaxMem;
+        static constexpr bool isMaxMemInBounds(size_t mem) { return mem >= maxMemMin && mem <= maxMemMax; }
     };
     DBOpts db;
 

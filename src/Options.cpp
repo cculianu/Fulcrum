@@ -145,6 +145,7 @@ QVariantMap Options::toMap() const
     // db advanced options
     m["db_max_open_files"] = qlonglong(db.maxOpenFiles);
     m["db_keep_log_file_num"] = qlonglong(db.keepLogFileNum);
+    m["db_mem"] = double(db.maxMem / 1024.0 / 1024.0);
     // ts-format
     m["ts-format"] = logTimestampModeString();
     // tls-disallow-deprecated

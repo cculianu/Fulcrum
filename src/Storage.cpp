@@ -569,17 +569,23 @@ void Storage::startup()
         shistOpts = opts; // copy what we just did
         shistOpts.merge_operator = p->db.concatOperator = std::make_shared<ConcatOperator>(); // this set of options uses the concat merge operator (we use this to append to history entries in the db)
 
-        using DBInfoTup = std::tuple<QString, std::unique_ptr<rocksdb::DB> &, const rocksdb::Options &>;
+        using DBInfoTup = std::tuple<QString, std::unique_ptr<rocksdb::DB> &, const rocksdb::Options &, double>;
         const std::list<DBInfoTup> dbs2open = {
-            { "meta", p->db.meta, opts },
-            { "blkinfo" , p->db.blkinfo , opts },
-            { "utxoset", p->db.utxoset, opts },
-            { "scripthash_history", p->db.shist, shistOpts },
-            { "scripthash_unspent", p->db.shunspent, opts },
-            { "undo", p->db.undo, opts },
+            { "meta", p->db.meta, opts, 0.02 },
+            { "blkinfo" , p->db.blkinfo , opts, 0.02 },
+            { "utxoset", p->db.utxoset, opts, 0.10 },
+            { "scripthash_history", p->db.shist, shistOpts, 0.74 },
+            { "scripthash_unspent", p->db.shunspent, opts, 0.10 },
+            { "undo", p->db.undo, opts, 0.02 },
         };
-        const auto OpenDB = [this](const DBInfoTup &tup) {
-            auto & [name, uptr, opts] = tup;
+        std::size_t memTotal = 0;
+        const auto OpenDB = [this, &memTotal](const DBInfoTup &tup) {
+            auto & [name, uptr, opts_in, memFactor] = tup;
+            rocksdb::Options opts = opts_in;
+            const size_t mem = std::max(size_t(options->db.maxMem * memFactor), size_t(1024*1024));
+            Debug() << "DB \"" << name << "\" mem: " << QString::number(mem / 1024. / 1024., 'f', 2) << " MB";
+            opts.OptimizeLevelStyleCompaction(mem);
+            memTotal += mem;
             rocksdb::Status s;
             // try and open database
             const QString path = options->datadir + QDir::separator() + name;
@@ -599,6 +605,8 @@ void Storage::startup()
         // open all db's defined above
         for (auto & tup : dbs2open)
             OpenDB(tup);
+
+        Log() << "DB memory: " << QString::number(memTotal / 1024. / 1024., 'f', 2) << " MB";
 
     }  // /open db's
 

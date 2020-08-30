@@ -925,6 +925,18 @@ void App::parseArgs()
         // log this later in case we are in syslog mode
         Util::AsyncOnObject(this, [klfn]{ Debug() << "config: db_keep_log_file_num = " << klfn; });
     }
+    if (conf.hasValue("db_mem")) {
+        bool ok;
+        const double mb = conf.doubleValue("db_mem", options->db.defaultMaxMem, &ok);
+        if (const size_t bytes = mb*size_t(1024*1024); !ok || mb < 0. || !options->db.isMaxMemInBounds(bytes))
+            throw BadArgs(QString("db_mem: bad value. Specify a value in the range [%1, %2]")
+                          .arg(options->db.maxMemMin).arg(options->db.maxMemMax));
+        else {
+            options->db.maxMem = bytes;
+            // log this later in case we are in syslog mode
+            Util::AsyncOnObject(this, [mb]{ Debug() << "config: db_mem = " << mb; });
+        }
+    }
 
     // warn user that no hostname was specified if they have peerDiscover turned on
     if (!options->hostName.has_value() && options->peerDiscovery && options->peerAnnounceSelf) {
