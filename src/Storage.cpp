@@ -580,15 +580,20 @@ void Storage::startup()
         };
         const auto OpenDB = [this](const DBInfoTup &tup) {
             auto & [name, uptr, opts] = tup;
-            rocksdb::DB *db = nullptr;
             rocksdb::Status s;
             // try and open database
             const QString path = options->datadir + QDir::separator() + name;
-            s = rocksdb::DB::Open( opts, path.toStdString(), &db);
-            if (!s.ok() || !db)
+            std::unique_ptr<rocksdb::DB> tmpPtr;
+            {
+                // open db, immediately placing the new'd pointer (if any) into a unique_ptr
+                rocksdb::DB *db = nullptr;
+                s = rocksdb::DB::Open( opts, path.toStdString(), &db);
+                tmpPtr.reset(db);
+            }
+            if (!s.ok() || !tmpPtr)
                 throw DatabaseError(QString("Error opening %1 database: %2 (path: %3)")
                                     .arg(name).arg(StatusString(s)).arg(path));
-            uptr.reset(db);
+            uptr = std::move(tmpPtr); // everything ok, move tmpPtr
         };
 
         // open all db's defined above
