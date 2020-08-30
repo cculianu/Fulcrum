@@ -172,7 +172,7 @@ linux {
     LIBS += -lrocksdb -lz -lbz2 -ldl
 }
 win32 {
-    LIBS += -lrocksdb -lshlwapi -lrpcrt4
+    LIBS += -lrocksdb -lshlwapi -lrpcrt4 -lpsapi
     contains(CONFIG, config_rocksdb) {
         LIBS += -lzstd -lbz2 -llz4 -lsnappy -lz
     }

@@ -2213,6 +2213,14 @@ void AdminServer::rpc_getinfo(Client *c, const RPC::Message &m)
     // in a thread-safe way without blocking.
     res["thread_pool"] = ::AppThreadPool()->stats();
 
+    { // Process memory usage
+        const auto mu = Util::getProcessMemoryUsage();
+        res["memory_usage"] = QVariantMap{
+            { "physical_kb", std::round((mu.phys / 1024.0) * 100.0) / 100.0 },
+            { "virtual_kb", std::round((mu.virt / 1024.0) * 100.0) / 100.0 },
+        };
+    }
+
     { // jemalloc stats (if any), concise version
         const auto je = App::jemallocStats();
         res["jemalloc"] = je.isEmpty()

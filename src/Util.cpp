@@ -27,13 +27,19 @@
 #if defined(Q_OS_DARWIN)
 #  include <sys/types.h>
 #  include <sys/sysctl.h>
+#  include <mach/mach.h>
 #  include <mach/mach_time.h>
 #elif defined(Q_OS_LINUX)
-#  include <unistd.h>
+#  include <array>
+#  include <fstream>
+#  include <sstream>
+#  include <strings.h>
 #  include <time.h>
+#  include <unistd.h>
 #elif defined(Q_OS_WINDOWS)
 #define WIN32_LEAN_AND_MEAN 1
 #  include <windows.h>
+#  include <psapi.h>
 #endif
 
 #include <iostream>
@@ -274,6 +280,44 @@ namespace Util {
     uint64_t hashData64(const ByteView &bv)
     {
         return uint64_t(CityHash::CityHash64WithSeed(bv.charData(), bv.size(), hashSeed.get<CityHash::uint64>()));
+    }
+
+    MemUsage getProcessMemoryUsage()
+    {
+#if defined(Q_OS_WINDOWS)
+        PROCESS_MEMORY_COUNTERS_EX pmc;
+        GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS*)&pmc, sizeof(pmc));
+        return { std::size_t{pmc.WorkingSetSize}, std::size_t{pmc.PrivateUsage} };
+#elif defined(Q_OS_LINUX)
+        MemUsage ret;
+        std::ifstream file("/proc/self/status", std::ios_base::in);
+        if (!file) return ret;
+        std::array<char, 256> buf;
+        buf[0] = 0;
+        // sizes are in kB
+        while (file.getline(buf.data(), buf.size()) && (ret.phys == 0 || ret.virt == 0)) {
+            if (strncasecmp(buf.data(), "VmSize:", 7) == 0) {
+                std::istringstream is(buf.data() + 7);
+                is >> std::skipws >> ret.virt;
+                ret.virt *= std::size_t(1024);
+            } else if (strncasecmp(buf.data(), "VmRSS:", 6) == 0) {
+                std::istringstream is(buf.data() + 6);
+                is >> std::skipws >> ret.phys;
+                ret.phys *= std::size_t(1024);
+            }
+        }
+        return ret;
+#elif defined(Q_OS_DARWIN)
+        struct task_basic_info t_info;
+        mach_msg_type_number_t t_info_count = TASK_BASIC_INFO_COUNT;
+
+        if (KERN_SUCCESS != task_info(mach_task_self(), TASK_BASIC_INFO, (task_info_t)&t_info, &t_info_count)) {
+            return {};
+        }
+        return { std::size_t{t_info.resident_size}, std::size_t{t_info.virtual_size} };
+#else
+        return {};
+#endif
     }
 
 } // end namespace Util

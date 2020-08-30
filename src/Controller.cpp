@@ -31,6 +31,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cmath>
 #include <iterator>
 #include <list>
 #include <map>
@@ -1354,6 +1355,14 @@ auto Controller::stats() const -> Stats
     st["Misc"] = misc;
     st["SubsMgr"] = storage->subs()->statsSafe(kDefaultTimeout/2);
     st["Config"] = options->toMap();
+    { // Process memory usage
+        const auto mu = Util::getProcessMemoryUsage();
+        st["Memory Usage"] = QVariantMap{
+            { "physical kB", std::round((mu.phys / 1024.0) * 100.0) / 100.0 },
+            { "virtual kB", std::round((mu.virt / 1024.0) * 100.0) / 100.0 },
+        };
+    }
+
     // grab jemalloc stats, if any
     st["Jemalloc"] = App::jemallocStats();
     return st;

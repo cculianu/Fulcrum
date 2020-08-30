@@ -742,6 +742,9 @@ namespace Util {
         }
     }
 
+    struct MemUsage { std::size_t phys{}, virt{}; };
+    MemUsage getProcessMemoryUsage();
+
 } // end namespace Util
 
 /// Kind of like Go's "defer" statement. Call a lambda (for clean-up code) at scope end.
