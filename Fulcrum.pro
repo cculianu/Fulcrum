@@ -17,6 +17,14 @@
 # <https://www.gnu.org/licenses/>.
 #
 
+# print CLI overrides to stdout immediately
+!isEmpty(LIBS) {
+    message("CLI overrides: LIBS=$$LIBS")
+}
+!isEmpty(INCLUDEPATH) {
+    message("CLI overrides: INCLUDEPATH=$$INCLUDEPATH")
+}
+
 # Make qtCompileTest available
 load(configure)
 
@@ -91,66 +99,89 @@ linux-g++ {
     CONFIG += warn_off
 }
 
-# Test if rocksdb is installed and meets the minimum version requirement
-qtCompileTest(rocksdb)
-!contains(CONFIG, config_rocksdb) {
-    # RocksDB Static Lib
-    # ------------------
-    #
-    # Build information --
-    #
-    # Currently this was built from github sources of the v6.6.4 rocksdb release:
-    #     https://github.com/facebook/rocksdb.git
-    # Commit tag v6.6.4, commit hash (from Fri Jan 31 13:03:51 2020 -0800):
-    #     551a110918493a19d11243f53408b97485de1411
-    #
-    # OSX:
-    #   Built on Apple clang version 11.0.0 (clang-1100.0.33.17), from Xcode 113.1.
-    #   command: USE_RTTI=1 PORTABLE=1 make static_lib -j4 V=1
-    #   Annoyingly, the produced .a file has debug symbols which we strip with: strip -S.
-    #
-    # Linux:
-    #   Built on Ubuntu 18.10, g++ (Ubuntu 8.2.0-7ubuntu1) 8.2.0.
-    #   command: USE_RTTI=1 PORTABLE=1 make static_lib -j4 V=1
-    #   Annoyingly, the produced .a file has debug symbols which we strip with: strip -g.
-    #
-    # Windows:
-    #   Built using the MinGW G++ 7.3.0 (compiler that ships with Qt), from a cmd.exe prompt, via cmake.exe by following
-    #   these steps:
-    #   - Install a recent cmake into eg c:\cmake
-    #   - Open up a Qt cmd.exe prompt that points to MinGW G++ 7.3.0 in the path (using the Start menu shortcut installed by
-    #     Qt 5.13.2+ or Qt 5.14.1+ is easiest).
-    #   - Put installed 'c:\cmake\bin' in the path so that 'cmake.exe' works from the cmd prompt, eg:
-    #         set PATH=c:\cmake\bin;%PATH%
-    #   - Checkout rocksdb (commit hash above), cd rocksdb
-    #   - Edit CMakeLists.txt and search for '-fno-asynchronous-unwind-tables' and remove that compile option since it
-    #     breaks building on MinGW against Qt, and replace it with -O3 for maximal speed.
-    #   - mkdir build, cd build
-    #   - Run this command from within the rocksdb/build dir that you just created:
-    #         cmake .. -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_SYSTEM_NAME=Windows -G"MinGW Makefiles" -DWITH_GFLAGS=0 -DWITH_JNI=0  -DCMAKE_BUILD_TYPE=Release -DUSE_RTTI=1 -DPORTABLE=1
-    #   - Build with this command:
-    #         mingw32-make -j4 V=1 rocksdb  <-- will build static lib only
-    #   The generated librocksdb.a will be in the build/ directory you are currently in, ready to be put into the project.
+# - Try and detect rocksdb and if not, fall back to the staticlib.
+# - User can suppress this behavior by specifying a "LIBS+=-lrocksdb..." on the
+# - CLI when they invoked qmake. In that case, they must set-up the LIBS+= and
+#   INCLUDEPATH+= fully when invoking qmake.
+!contains(LIBS, -lrocksdb) {
+    # Test if rocksdb is installed and meets the minimum version requirement
+    qtCompileTest(rocksdb)
+    contains(CONFIG, config_rocksdb) {
+        message("rocksdb: using system lib")
+    } else {
+        # RocksDB Static Lib
+        # ------------------
+        #
+        # Build information --
+        #
+        # Currently this was built from github sources of the v6.6.4 rocksdb release:
+        #     https://github.com/facebook/rocksdb.git
+        # Commit tag v6.6.4, commit hash (from Fri Jan 31 13:03:51 2020 -0800):
+        #     551a110918493a19d11243f53408b97485de1411
+        #
+        # OSX:
+        #   Built on Apple clang version 11.0.0 (clang-1100.0.33.17), from Xcode 113.1.
+        #   command: USE_RTTI=1 PORTABLE=1 make static_lib -j4 V=1
+        #   Annoyingly, the produced .a file has debug symbols which we strip with: strip -S.
+        #
+        # Linux:
+        #   Built on Ubuntu 18.10, g++ (Ubuntu 8.2.0-7ubuntu1) 8.2.0.
+        #   command: USE_RTTI=1 PORTABLE=1 make static_lib -j4 V=1
+        #   Annoyingly, the produced .a file has debug symbols which we strip with: strip -g.
+        #
+        # Windows:
+        #   Built using the MinGW G++ 7.3.0 (compiler that ships with Qt), from a cmd.exe prompt, via cmake.exe by following
+        #   these steps:
+        #   - Install a recent cmake into eg c:\cmake
+        #   - Open up a Qt cmd.exe prompt that points to MinGW G++ 7.3.0 in the path (using the Start menu shortcut installed by
+        #     Qt 5.13.2+ or Qt 5.14.1+ is easiest).
+        #   - Put installed 'c:\cmake\bin' in the path so that 'cmake.exe' works from the cmd prompt, eg:
+        #         set PATH=c:\cmake\bin;%PATH%
+        #   - Checkout rocksdb (commit hash above), cd rocksdb
+        #   - Edit CMakeLists.txt and search for '-fno-asynchronous-unwind-tables' and remove that compile option since it
+        #     breaks building on MinGW against Qt, and replace it with -O3 for maximal speed.
+        #   - mkdir build, cd build
+        #   - Run this command from within the rocksdb/build dir that you just created:
+        #         cmake .. -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_SYSTEM_NAME=Windows -G"MinGW Makefiles" -DWITH_GFLAGS=0 -DWITH_JNI=0  -DCMAKE_BUILD_TYPE=Release -DUSE_RTTI=1 -DPORTABLE=1
+        #   - Build with this command:
+        #         mingw32-make -j4 V=1 rocksdb  <-- will build static lib only
+        #   The generated librocksdb.a will be in the build/ directory you are currently in, ready to be put into the project.
+        macx {
+            LIBS += -L$$PWD/staticlibs/rocksdb/bin/osx
+        }
+        linux {
+            LIBS += -L$$PWD/staticlibs/rocksdb/bin/linux
+        }
+        win32 {
+            win32-g++ {
+                LIBS += -L$$PWD/staticlibs/rocksdb/bin/win64
+            } else {
+                error("This project lacks a pre-compiled static librocksdb.a for this compiler! Either add one to staticlib/rocksdb/bin/win64/ or use MinGW G++ 7.3.0.")
+            }
+        }
+        INCLUDEPATH += $$PWD/staticlibs/rocksdb/include
+        message("rocksdb: using static lib")
+        # /RocksDB Static Lib
+    }
     macx {
-        LIBS += -L$$PWD/staticlibs/rocksdb/bin/osx
+        LIBS += -lrocksdb -lz -lbz2
     }
     linux {
-        LIBS += -L$$PWD/staticlibs/rocksdb/bin/linux
+        LIBS += -lrocksdb -lz -lbz2
     }
     win32 {
-        win32-g++ {
-            LIBS += -L$$PWD/staticlibs/rocksdb/bin/win64
-        } else {
-            error("This project lacks a pre-compiled static librocksdb.a for this compiler! Either add one to staticlib/rocksdb/bin/win64/ or use MinGW G++ 7.3.0.")
+        LIBS += -lrocksdb
+        contains(CONFIG, config_rocksdb) {
+            LIBS += -lzstd -lbz2 -llz4 -lsnappy -lz
         }
     }
-    INCLUDEPATH += $$PWD/staticlibs/rocksdb/include
-    message("rocksdb: using static lib")
-    # /RocksDB Static Lib
 } else {
-    message("rocksdb: using system lib")
+    message("rocksdb: using CLI override")
 }
 
+# - Try and detect jemalloc and if not, don't use jemalloc.
+# - User can override auto-detection by specifying "LIBS+=-ljemaloc..." on the
+#   CLI when they invoked qmake.
 !contains(LIBS, -ljemalloc) {
     # Test if jemalloc is installed
     qtCompileTest(jemalloc)
@@ -162,20 +193,14 @@ qtCompileTest(rocksdb)
     }
 } else {
     DEFINES += HAVE_JEMALLOC_HEADERS
-    message("jemalloc: using CLI override"))
+    message("jemalloc: using CLI override")
 }
 
-macx {
-    LIBS += -lrocksdb -lz -lbz2
-}
 linux {
-    LIBS += -lrocksdb -lz -lbz2 -ldl
+    LIBS += -ldl
 }
 win32 {
-    LIBS += -lrocksdb -lshlwapi -lrpcrt4 -lpsapi
-    contains(CONFIG, config_rocksdb) {
-        LIBS += -lzstd -lbz2 -llz4 -lsnappy -lz
-    }
+    LIBS += -lshlwapi -lrpcrt4 -lpsapi
 }
 
 # Tell QMake all of the below is relative to src/.
