@@ -930,7 +930,7 @@ void App::parseArgs()
         const double mb = conf.doubleValue("db_mem", options->db.defaultMaxMem, &ok);
         if (const size_t bytes = mb*size_t(1024*1024); !ok || mb < 0. || !options->db.isMaxMemInBounds(bytes))
             throw BadArgs(QString("db_mem: bad value. Specify a value in the range [%1, %2]")
-                          .arg(options->db.maxMemMin).arg(options->db.maxMemMax));
+                          .arg(options->db.maxMemMin / 1024. / 1024.).arg(options->db.maxMemMax / 1024. / 1024., 0, 'f', 0));
         else {
             options->db.maxMem = bytes;
             // log this later in case we are in syslog mode
