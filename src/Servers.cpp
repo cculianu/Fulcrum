@@ -293,7 +293,7 @@ namespace {
     // TODO: maybe move these to a more global place? For now here is fine.
     namespace Constants {
         constexpr int kMaxServerVersionLen = 80,  ///< the maximum server version length we accept to prevent memory exhaustion attacks
-                      kMaxTxHex = 2*1024*1024, ///< >1MB raw tx max (over 1 MiB, 1 traditional PoT MB should be enough).
+                      kMaxTxHex = 2*1024*1024, ///< >1MB raw tx max (1MiB is comfortably over 1 MB).
                       kMaxErrorCount = 10; ///< The maximum number of errors we tolerate from a Client before disconnecting them.
 
         // types in a Message.params object that we accept as booleans
@@ -2206,7 +2206,7 @@ void AdminServer::rpc_getinfo(Client *c, const RPC::Message &m)
     { // utxoset
         QVariantMap us;
         us["size"] = qulonglong(storage->utxoSetSize());
-        us["size_MiB"] = long(std::round(storage->utxoSetSizeMiB() * 100.0)) / 100.0;
+        us["size_MB"] = long(std::round(storage->utxoSetSizeMB() * 100.0)) / 100.0;
         res["utxoset"] = us;
     }
     // ThreadPool - this is thread-safe.. despite the name here it doesn't follow the StatsMixin API and returns data

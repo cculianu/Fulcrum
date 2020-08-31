@@ -62,7 +62,7 @@ def main():
     loglevel = subparsers.add_parser('loglevel', help="Set the server's logging verbosity")
     loglevel.add_argument('level', metavar='level', nargs=1, help="One of: 'normal', 'debug', or 'trace'")
     maxbuffer = subparsers.add_parser('maxbuffer', help="Query or set server max_buffer setting")
-    maxbuffer.add_argument('bytes', metavar='bytes', type=int, nargs='?', help='The new desired max_buffer setting in bytes. Must be >= 64KiB and <= 100MiB. If omitted, then this script will just query the current value.')
+    maxbuffer.add_argument('bytes', metavar='bytes', type=int, nargs='?', help='The new desired max_buffer setting in bytes. Must be >= 64KB and <= 100MB. If omitted, then this script will just query the current value.')
     peers = subparsers.add_parser('peers', help="Print peering information")
     rmpeer = subparsers.add_parser('rmpeer', help="Remove peers by hostname suffix")
     rmpeer.add_argument('hostnames', metavar='hostname', nargs='+', help="A hostname or hostname suffix e.g. somehost.com or *some.host.com.")

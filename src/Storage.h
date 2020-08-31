@@ -194,7 +194,7 @@ public:
     /// Returns the known size of the utxo set (for now this is a signed value -- to debug underflow errors)
     int64_t utxoSetSize() const;
     /// Returns the known size of the utxo set in millions of bytes
-    double utxoSetSizeMiB() const;
+    double utxoSetSizeMB() const;
 
     //-- scritphash history
     struct HistoryItem {

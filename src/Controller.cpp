@@ -1298,7 +1298,7 @@ auto Controller::stats() const -> Stats
     m["Chain"] = storage->getChain();
     m["Chain tip"] = tipInfo.second.toHex();
     m["UTXO set"] = qlonglong(storage->utxoSetSize());
-    m["UTXO set bytes"] = QString::number(storage->utxoSetSizeMiB(), 'f', 3) + " MiB";
+    m["UTXO set bytes"] = QString::number(storage->utxoSetSizeMB(), 'f', 3) + " MB";
     const auto txnum = qlonglong(storage->getTxNum());
     m["TxNum"] = txnum;
     m["TxNum -> TxHash (latest)"] = txnum ? storage->hashForTxNum(TxNum(txnum-1), false, nullptr, true).value_or("").toHex() : QVariant();
@@ -1325,8 +1325,8 @@ auto Controller::stats() const -> Stats
                 backlogTxs += ppb->txInfos.size();
                 backlogInMemoryBytes += ppb->estimatedThisSizeBytes;
             }
-            m3["in-memory (est.)"] = QString("%1 MiB").arg(QString::number(double(backlogInMemoryBytes) / 1e6, 'f', 3));
-            m3["block bytes"] = QString("%1 MiB").arg(QString::number(double(backlogBytes) / 1e6, 'f', 3));
+            m3["in-memory (est.)"] = QString("%1 MB").arg(QString::number(double(backlogInMemoryBytes) / 1e6, 'f', 3));
+            m3["block bytes"] = QString("%1 MB").arg(QString::number(double(backlogBytes) / 1e6, 'f', 3));
             m3["numTxs"] = qulonglong(backlogTxs);
             m2["BackLog"] = m3;
         } else {
@@ -1541,6 +1541,6 @@ void Controller::dumpScriptHashes(const QString &fileName) const
     outFile.close();
     Log() << "Dump: wrote " << count << Util::Pluralize(" script hash", count) << " to \"" << fileName << "\""
           << " in " << QString::number(Util::getTimeSecs() - t0, 'f', 1) << " seconds"
-          <<" (" << QString::number(outFile.size()/1e6, 'f', 3) << " MiB)";
+          <<" (" << QString::number(outFile.size()/1e6, 'f', 3) << " MB)";
     emit dumpScriptHashesComplete();
 }

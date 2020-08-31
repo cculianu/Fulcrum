@@ -168,8 +168,8 @@ class BitcoinD : public RPC::HttpConnection, public ThreadObjectMixin /* NB: als
     Q_OBJECT
 
 public:
-    /// TODO: Have this come from config. For now: support up to ~50MiB blocks (hex encoded) from bitcoind.
-    /// This should work for now since we are on 32MiB max block size on BCH anyway right now.
+    /// TODO: Have this come from config. For now: support up to ~50MB blocks (hex encoded) from bitcoind.
+    /// This should work for now since we are on 32MB max block size on BCH anyway right now.
     static constexpr qint64 BTCD_DEFAULT_MAX_BUFFER = 100'000'000;
 
     explicit BitcoinD(const QString &host, quint16 port, const QString & user, const QString &pass, bool useSsl,
