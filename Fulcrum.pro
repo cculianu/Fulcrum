@@ -101,7 +101,7 @@ linux-g++ {
 
 # - Try and detect rocksdb and if not, fall back to the staticlib.
 # - User can suppress this behavior by specifying a "LIBS+=-lrocksdb..." on the
-# - CLI when they invoked qmake. In that case, they must set-up the LIBS+= and
+#   CLI when they invoked qmake. In that case, they must set-up the LIBS+= and
 #   INCLUDEPATH+= fully when invoking qmake.
 !contains(LIBS, -lrocksdb) {
     # Test if rocksdb is installed and meets the minimum version requirement
