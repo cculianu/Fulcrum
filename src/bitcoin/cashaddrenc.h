@@ -22,7 +22,7 @@ struct MinimalisticChainParamsAddedByCalin
 };
 using CChainParams = MinimalisticChainParamsAddedByCalin;
 //! convenience added by Calin
-extern const CChainParams TestNetChainParams, TestNet4ChainParams, MainNetChainParams, RegTestNetChainParams;
+extern const CChainParams TestNetChainParams, TestNet4ChainParams, ScaleNetChainParams, MainNetChainParams, RegTestNetChainParams;
 
 enum CashAddrType : uint8_t { PUBKEY_TYPE = 0, SCRIPT_TYPE = 1 };
 

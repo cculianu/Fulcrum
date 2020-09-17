@@ -162,13 +162,15 @@ namespace BTC
             { MainNet, "main"},
             { TestNet, "test"},
             { TestNet4, "test4"},
+            { ScaleNet, "scale"},
             { RegTestNet, "regtest"},
         }};
         const QMap<QString, Net> nameNetMap = {{
             {"main",     MainNet},     // BCHN, BU, ABC
             {"mainnet",  MainNet},     // bchd
             {"test",     TestNet},     // BCHN, BU, ABC
-            {"test4",    TestNet4},    // BCHN
+            {"test4",    TestNet4},    // BCHN, BU
+            {"scale",    ScaleNet},    // BCHN, BU
             {"testnet3", TestNet},     // bchd
             {"testnet4", TestNet4},    // possible future bchd
             {"regtest",  RegTestNet},  // BCHN, BU, ABC, bchd

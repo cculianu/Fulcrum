@@ -80,13 +80,15 @@ void PeerMgr::startup()
         throw InternalError("PeerMgr cannot be started until we have a valid genesis hash! FIXME!");
 
     const auto chain = storage->getChain();
-    if (const auto net = BTC::NetFromName(chain); !QVector<BTC::Net>{{BTC::Net::TestNet, BTC::Net::TestNet4, BTC::Net::MainNet}}.contains(net))
+    if (const auto net = BTC::NetFromName(chain); !QVector<BTC::Net>{{BTC::Net::TestNet, BTC::Net::TestNet4, BTC::Net::ScaleNet, BTC::Net::MainNet}}.contains(net))
         // can only do peering with testnet or mainnet after they have been defined (no regtest)
         throw InternalError(QString("PeerMgr cannot be started for the given chain \"%1\"").arg(chain));
     else if (net == BTC::Net::TestNet)
         parseServersDotJson(":resources/servers_testnet.json");
     else if (net == BTC::Net::TestNet4)
         parseServersDotJson(":resources/servers_testnet4.json");
+    else if (net == BTC::Net::ScaleNet)
+        parseServersDotJson(":resources/servers_scalenet.json");
     else
         parseServersDotJson(":resources/servers.json");
 
