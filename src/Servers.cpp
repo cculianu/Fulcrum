@@ -667,7 +667,13 @@ void ServerBase::onErrorMessage(IdMixin::Id clientId, const RPC::Message &m)
 }
 void ServerBase::onPeerError(IdMixin::Id clientId, const QString &what)
 {
-    DebugM("onPeerError, client ", clientId, " error: ", what);
+    if (Debug::isEnabled()) {
+        int num = what.size();
+        // clean up the message so that it doesn't contain trailing newlines (we don't want to pollute our log with extra newlines)
+        for (QChar c; num > 0 && ((c=what[num-1]) == '\n' || c == '\r'); --num) {}
+        // and finally log it
+        Debug() << "onPeerError, client " << clientId << " error: " << what.leftRef(num);
+    }
     if (Client *c = getClient(clientId); c) {
         if (++c->info.errCt - c->info.nRequestsRcv >= kMaxErrorCount) {
             Warning() << "Excessive errors (" << kMaxErrorCount << ") for: " << c->prettyName() << ", disconnecting";
@@ -2339,6 +2345,21 @@ void AdminServer::rpc_shutdown(Client *c, const RPC::Message &m)
     }, 100);
     emit c->sendResult(m.id, true);
 }
+// query or set simdjson option at runtime
+void AdminServer::rpc_simdjson(Client *c, const RPC::Message &m)
+{
+    const auto l = m.paramsList();
+    if (l.isEmpty()) {
+        // query -- return the info map if it's set, or null if it is not set
+        emit c->sendResult(m.id, Options::isSimdJson() ? App::simdJsonStats() : QVariant());
+    } else {
+        // set
+        const QVariant arg = l.front();
+        if (arg.type() != QVariant::Bool)
+            throw RPCError("Invalid argument, please specify a boolean value to enable/disable the simdjson backend");
+        emit c->sendResult(m.id, Options::setSimdJson(arg.toBool()));
+    }
+}
 void AdminServer::rpc_unban(Client *c, const RPC::Message &m)
 {
     kickBanBoilerPlate(m, BanOp::Unban);
@@ -2383,6 +2404,7 @@ HEY_COMPILER_PUT_STATIC_HERE(AdminServer::StaticData::registry){
     { {"peers",                             true,               false,    PR{0,0},                 {} },          MP(rpc_peers) },
     { {"rmpeer",                            true,               false,    PR{1,UNLIMITED},         {} },          MP(rpc_rmpeer) },
     { {"shutdown",                          true,               false,    PR{0,0},                 {} },          MP(rpc_shutdown) },
+    { {"simdjson",                          true,               false,    PR{0,1},                 {} },          MP(rpc_simdjson) },
     { {"stop",                              true,               false,    PR{0,0},                 {} },          MP(rpc_shutdown) }, // alias for 'shutdown'
     { {"unban",                             true,               false,    PR{1,UNLIMITED},         {} },          MP(rpc_unban) },
     { {"unbanpeer",                         true,               false,    PR{1,UNLIMITED},         {} },          MP(rpc_unbanpeer) },

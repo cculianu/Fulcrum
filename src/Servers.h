@@ -510,6 +510,7 @@ private:
     void rpc_maxbuffer(Client *, const RPC::Message &);
     void rpc_peers(Client *, const RPC::Message &);
     void rpc_rmpeer(Client *, const RPC::Message &);
+    void rpc_simdjson(Client *, const RPC::Message &);
     void rpc_shutdown(Client *, const RPC::Message &);
     void rpc_unban(Client *, const RPC::Message &);
     void rpc_unbanpeer(Client *, const RPC::Message &);
