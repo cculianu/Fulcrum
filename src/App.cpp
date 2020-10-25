@@ -328,9 +328,9 @@ void App::parseArgs()
          },
          {
             "simdjson",
-            QString("If specified, enable the new simdjson backend for JSON parsing. This parser is over 2x faster "
-                    "than the default parser, but since this backend was recently added and hasn't been war-tested "
-                    "yet, it is currently disabled by default."),
+            QString("If specified, enable the new simdjson backend for JSON parsing. This parser is over 2x faster"
+                    " than the default parser, but since this backend was recently added and hasn't been fully war"
+                    " tested yet, it is currently disabled by default."),
          },
          {
            "dump-sh",

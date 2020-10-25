@@ -183,10 +183,10 @@ bool Options::setSimdJson(const bool b) {
     if (b != isSimdJson()) {
         const bool res = RPC::setFastJson(b);
         if (res && b) {
-            Log() << "Enabled fast JSON parser: simdjson";
+            Log() << "Enabled JSON parser: simdjson";
             App::logSimdJsonInfo();
         } else if (res && !b) {
-            Log() << "Disabled simdjson";
+            Log() << "Disabled JSON parser: simdjson";
         } else if (!res && b) {
             Warning() << "Failed to enable simdjson: unavailable";
         }

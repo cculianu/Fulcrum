@@ -66,6 +66,10 @@ def main():
     peers = subparsers.add_parser('peers', help="Print peering information")
     rmpeer = subparsers.add_parser('rmpeer', help="Remove peers by hostname suffix")
     rmpeer.add_argument('hostnames', metavar='hostname', nargs='+', help="A hostname or hostname suffix e.g. somehost.com or *some.host.com.")
+    simdjson = subparsers.add_parser('simdjson', help="Get or set the server's 'simdjson' (JSON parser) setting")
+    simdjson.add_argument('enabled', type=int, nargs='?',
+                          help='Flag used to enable or disable the simdjson JSON parser on the server (1=enabled,'
+                               ' 0=disabled). If this option is omitted, then the current setting is queried.')
     stop = subparsers.add_parser('stop', help="Gracefully shut down the server", aliases=['shutdown'])
     unban = subparsers.add_parser('unban', help="Unban IP addresses")
     unban.add_argument('ips', metavar='ipaddress', nargs='+', help="Specify an existing banned IP address to unban.")
@@ -123,6 +127,27 @@ def main():
                     return f"Server max_buffer setting -> {x}"
                 else:
                     return f"Server max_buffer setting is: {x}"
+            response_handler = handler
+
+    elif command == 'simdjson':
+        command_params = [bool(args.enabled)] if args.enabled is not None else command_params
+        if not JSON:
+            def handler(x):
+                if command_params:
+                    # set
+                    assert isinstance(x, bool)
+                    if x:
+                        verb = "enabled" if command_params[0] else "disabled"
+                        return f"Server simdjson parser {verb} successfully"
+                    else:
+                        verb = "enable" if command_params[0] else "disable"
+                        return f"Failed to {verb} server simdjson parser"
+                else:
+                    # query
+                    if x is not None:
+                        return json.dumps(x, indent=4)
+                    else:
+                        return "Server simdjson parser is disabled"
             response_handler = handler
 
     elif command == 'bitcoind_throttle':
