@@ -1,34 +1,32 @@
-//
-// Fulcrum - A fast & nimble SPV Server for Bitcoin Cash
-// Copyright (C) 2019-2020  Calin A. Culianu <calin.culianu@gmail.com>
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU General Public License as published by
-// the Free Software Foundation, either version 3 of the License, or
-// (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-// GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License
-// along with this program (see LICENSE.txt).  If not, see
-// <https://www.gnu.org/licenses/>.
-//
-// Portions of the below code are adapted from Bitcoin Cash Node's custom
-// "UniValue" library, and they have the following copyrights and license:
-// Copyright 2014 BitPay Inc.
-// Copyright 2015 Bitcoin Core Developers
-// Copyright (c) 2020 The Bitcoin developers
-// Distributed under the MIT software license, see the accompanying
-// file COPYING or https://opensource.org/licenses/mit-license.php.
-//
+/*
+Json - A lightweight JSON parser and serializer for Qt.
+Copyright (c) 2020 Calin A. Culianu <calin.culianu@gmail.com>
+
+The MIT License (MIT)
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+*/
 #include "Json.h"
-#include "Json_Parser.h"
-#include "Util.h"
 
 #include <QMetaType>
+#include <QtDebug>
 #include <QVariant>
 #include <QVariantList>
 #include <QVariantMap>
@@ -41,6 +39,36 @@
 #include <limits>
 #include <utility>
 #include <vector>
+
+#ifdef __clang__
+// turn off the dreaded "warning: class padded with xx bytes, etc" since we aren't writing wire protocols using structs..
+#pragma clang diagnostic ignored "-Wpadded"
+#endif
+// EXPECT, LIKELY, and UNLIKELY
+#if defined(__clang__) || defined(__GNUC__)
+#define EXPECT(expr, constant) __builtin_expect(expr, constant)
+#else
+#define EXPECT(expr, constant) (expr)
+#endif
+
+#define LIKELY(bool_expr)   EXPECT(bool(bool_expr), 1)
+#define UNLIKELY(bool_expr) EXPECT(bool(bool_expr), 0)
+
+// embed simdjson here, if we are on a known 64-bit platform and the header & sources are available
+#if defined(__x86_64__) || defined(_M_AMD64) || defined(__aarch64__) || defined(_M_ARM64)
+#if __has_include("simdjson/simdjson.h") && __has_include("simdjson/simdjson.cpp")
+#include "simdjson/simdjson.h"
+#include "simdjson/simdjson.cpp"
+#define HAVE_SIMDJSON 1
+#elif __has_include("simdjson.h") && __has_include("simdjson.cpp")
+#include "simdjson.h"
+#include "simdjson.cpp"
+#define HAVE_SIMDJSON 1
+#endif
+#endif
+#ifndef HAVE_SIMDJSON
+#define HAVE_SIMDJSON 0
+#endif
 
 namespace {
 
@@ -613,9 +641,30 @@ QVariant Container::toVariant() const {
 } // end anonymous namespace
 
 namespace Json {
+
+bool isParserAvailable(ParserBackend backend) {
+    switch (backend) {
+    case ParserBackend::FastestAvailable:
+    case ParserBackend::Default: return true;
+    case ParserBackend::SimdJson: return bool(HAVE_SIMDJSON);
+    }
+}
+
 namespace detail {
-bool parse(QVariant &out, const QByteArray &bytes)
+
+namespace {
+/// May throw ParserUnavailable if the simdjson parser is not compiled-in
+bool sjParse(QVariant &out, const QByteArray &bytes);
+}
+
+bool parse(QVariant &out, const QByteArray &bytes, ParserBackend backend)
 {
+    if (backend == ParserBackend::SimdJson
+            || (backend == ParserBackend::FastestAvailable && isParserAvailable(ParserBackend::SimdJson)))
+        return sjParse(out, bytes);
+
+    // "Default" (internal) parser implementation below
+
     enum ExpectBits : uint32_t {
         EXP_OBJ_NAME = 1U << 0,
         EXP_COLON = 1U << 1,
@@ -702,7 +751,7 @@ bool parse(QVariant &out, const QByteArray &bytes)
                 if (top->typ == VType::Obj) {
                     // paranoia
                     if (UNLIKELY(top->entries.empty())) {
-                        ::Error() << "Json Parser ERROR: Obj 'entries' is empty; FIXME!";
+                        qCritical() << "Json Parser ERROR: Obj 'entries' is empty; FIXME!";
                         return false;
                     }
                     // /paranoia
@@ -794,7 +843,7 @@ bool parse(QVariant &out, const QByteArray &bytes)
             if (top->typ == VType::Obj) {
                 // paranoia
                 if (UNLIKELY(top->entries.empty())) {
-                    ::Error() << "Json Parser ERROR: Obj 'entries' is empty when parsing a keyword; FIXME!";
+                    qCritical() << "Json Parser ERROR: Obj 'entries' is empty when parsing a keyword; FIXME!";
                     return false;
                 }
                 // /paranoia
@@ -818,7 +867,7 @@ bool parse(QVariant &out, const QByteArray &bytes)
             if (top->typ == VType::Obj) {
                 // paranoia
                 if (UNLIKELY(top->entries.empty())) {
-                    ::Error() << "Json Parser ERROR: Obj 'entries' is empty when parsing a number; FIXME!";
+                    qCritical() << "Json Parser ERROR: Obj 'entries' is empty when parsing a number; FIXME!";
                     return false;
                 }
                 // /paranoia
@@ -849,7 +898,7 @@ bool parse(QVariant &out, const QByteArray &bytes)
                 if (top->typ == VType::Obj) {
                     // paranoia
                     if (UNLIKELY(top->entries.empty())) {
-                        ::Error() << "Json Parser ERROR: Obj 'entries' is empty when parsing a string; FIXME!";
+                        qCritical() << "Json Parser ERROR: Obj 'entries' is empty when parsing a string; FIXME!";
                         return false;
                     }
                     // /paranoia
@@ -877,7 +926,7 @@ bool parse(QVariant &out, const QByteArray &bytes)
         out = root.toVariant(); // convert to (possibly nested) QVariant containing QVariants
     } catch (const std::exception &e) {
         // this is unlikely to happen, but may if std::bad_alloc (or if bugs in this code).
-        Warning() << "Failed to parse JSON: " << e.what();
+        qWarning() << "Failed to parse JSON: " << e.what();
         return false;
     }
 
@@ -886,5 +935,95 @@ bool parse(QVariant &out, const QByteArray &bytes)
 #   undef setExpect
 #   undef clearExpect
 }
-} // end namespace detail
-} // end namespace Json
+
+namespace {
+#if HAVE_SIMDJSON
+QVariant sjToVariant(const simdjson::dom::element &e)
+{
+    QVariant var;
+    using T = simdjson::dom::element_type;
+    switch (e.type()) {
+    case T::ARRAY: {
+        QVariantList l;
+        auto && res = e.get_array();
+        auto && arr = res.value();
+        l.reserve(arr.size());
+        for (const auto &e2 : arr)
+            l.push_back(sjToVariant(e2));
+        var = l;
+        break;
+    }
+    case T::OBJECT: {
+        QVariantMap m;
+        auto && res = e.get_object();
+        auto && o = res.value();
+        for (auto && [k, v] : o)
+            m.insert(QString::fromUtf8(k.data(), k.size()), sjToVariant(v));
+        var = m;
+        break;
+    }
+    case T::INT64:
+        var = e.get_int64().value();
+        break;
+    case T::UINT64:
+        var = e.get_uint64().value();
+        break;
+    case T::DOUBLE:
+        var = e.get_double().value();
+        break;
+    case T::BOOL:
+        var = e.get_bool().value();
+        break;
+    case T::STRING: {
+        const std::string_view s = e.get_string().value();
+        // this fromUtf8 syntax is preferred since it can pick up embedded NULs
+        var = QString::fromUtf8(s.data(), s.size());
+        break;
+    }
+    case T::NULL_VALUE:
+        // default constructed QVariant is already null
+        break;
+    }
+    return var;
+}
+#endif
+
+// does not normally throw unless !HAVE_SIMDJSON in which case it always throws ParserUnavailable
+bool sjParse(QVariant &out, const QByteArray &bytes)
+{
+#if HAVE_SIMDJSON
+    simdjson::dom::parser parser;
+    simdjson::dom::element elem;
+    auto error = parser.parse(std::string_view{bytes.data(), size_t(bytes.size())}).get(elem);
+    if (error)
+        return false;
+    out = sjToVariant(elem);
+    return true;
+#else
+    (void)out; (void)bytes;
+    throw ParserUnavailable("Json Error: The SimdJson parser is not available");
+#endif
+}
+} // namespace
+} // namespace detail
+
+namespace SimdJson {
+std::optional<const Info> getInfo()
+{
+    std::optional<Info> ret;
+#if HAVE_SIMDJSON
+    ret.emplace();
+    const auto &activeName = simdjson::active_implementation->name();
+    for (auto *implementation : simdjson::available_implementations) {
+        auto & imp = ret->implementations.emplace_back();
+        imp.name = QString::fromStdString(implementation->name());
+        imp.description = QString::fromStdString(implementation->description());
+        imp.supported = implementation->supported_by_runtime_system();
+        if (implementation->name() == activeName)
+            ret->active = imp; // copy
+    }
+#endif
+    return ret;
+}
+} // namespace SimdJson
+} // namespace Json

@@ -18,6 +18,7 @@
 //
 #include "App.h"
 #include "CityHash.h"
+#include "Json/Json.h"
 #include "Logger.h"
 #include "Util.h"
 
@@ -320,6 +321,21 @@ namespace Util {
 #endif
     }
 
+    bool logSimdJsonInfo()
+    {
+        auto info = Json::SimdJson::getInfo();
+        if (!info)
+            // simdjson not available
+            return false;
+        Log() << "simdjson implementations:";
+        for (const auto & imp : info->implementations) {
+            Log() << "    " << imp.name << ": " << imp.description
+                  << (imp.supported ? "  [supported]" : "  [not supported]");
+        }
+        Log() << "active implementation: " << info->active.name;
+        return true;
+    }
+
 } // end namespace Util
 
 Log::Log() {}
@@ -486,7 +502,6 @@ Fatal::~Fatal()
 
 #ifdef ENABLE_TESTS
 #include "bitcoin/utilstrencodings.h"
-#include "Json.h"
 
 #include <QMap>
 #include <QSet>

@@ -454,6 +454,8 @@ namespace RPC {
             }
             lastGood = Util::getTime(); // update "lastGood" as this is used to determine if stale or not.
         } catch (const Exception &e) {
+            static_assert (std::is_base_of_v<Exception, Json::ParseError>,
+                           "Please ensure that Json::Error and Json::ParseError are derived from Exception!");
             // TODO: clean this up. It's rather inelegant. :/
             const bool wasJsonParse = dynamic_cast<const Json::ParseError *>(&e);
             const bool wasUnk = dynamic_cast<const UnknownMethod *>(&e);

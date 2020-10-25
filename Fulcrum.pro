@@ -217,8 +217,9 @@ SOURCES += \
     CityHash.cpp \
     Common.cpp \
     Controller.cpp \
-    Json.cpp \
-    Json_Parser.cpp \
+    Json/Json.cpp \
+    Json/Json_Parser.cpp \
+    Json/tests.cpp \
     Logger.cpp \
     main.cpp \
     Mempool.cpp \
@@ -257,8 +258,8 @@ HEADERS += \
     Compat.h \
     Controller.h \
     CostCache.h \
-    Json.h \
-    Json_Parser.h \
+    Json/Json.h \
+    Json/Json_Parser.h \
     Logger.h \
     Mempool.h \
     Merkle.h \
