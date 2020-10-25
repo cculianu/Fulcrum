@@ -937,6 +937,15 @@ void App::parseArgs()
             Util::AsyncOnObject(this, [mb]{ Debug() << "config: db_mem = " << mb; });
         }
     }
+    if (conf.hasValue("db_use_fsync")) {
+        bool ok;
+        const bool val = conf.boolValue("db_use_fsync", options->db.defaultUseFsync, &ok);
+        if (!ok)
+            throw BadArgs("db_use_fsync: bad value. Specify a boolean value such as 0, 1, true, false, yes, no");
+        options->db.useFsync = val;
+        // log this later in case we are in syslog mode
+        Util::AsyncOnObject(this, [val]{ Debug() << "config: db_use_fsync = " << val; });
+    }
 
     // warn user that no hostname was specified if they have peerDiscover turned on
     if (!options->hostName.has_value() && options->peerDiscovery && options->peerAnnounceSelf) {

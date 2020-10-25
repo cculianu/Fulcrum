@@ -200,6 +200,10 @@ public:
         static constexpr size_t defaultMaxMem = 512 * 1024 * 1024, maxMemMin = 50 * 1024 * 1024, maxMemMax = std::numeric_limits<size_t>::max();
         size_t maxMem = defaultMaxMem;
         static constexpr bool isMaxMemInBounds(size_t mem) { return mem >= maxMemMin && mem <= maxMemMax; }
+
+        /// db_use_fsync in conf file -- default false
+        static constexpr bool defaultUseFsync = false;
+        bool useFsync = defaultUseFsync;
     };
     DBOpts db;
 
