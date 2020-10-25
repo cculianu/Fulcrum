@@ -75,6 +75,16 @@ public:
     /// an empty map will be returned.  This function is 100% reentrant and thread-safe.
     static QVariantMap jemallocStats();
 
+    /// If simdjson is available and compiled-in, then this will return a Json-suitable QVariantMap of simdjson
+    /// status.  If the previous is not the case, then an empty map will be returned.  This function is 100% reentrant
+    /// and thread-safe.
+    static QVariantMap simdJsonStats();
+
+    /// Logs some information on the simdjson implementation. Uses the Log() logger.
+    ///
+    /// @returns true if it logged anything, false otherwise
+    static bool logSimdJsonInfo();
+
 signals:
     // other code emits the below two to tell the app (main) thread to call the corresponding protected slot to set
     // the corresponding values in the shared Options object.

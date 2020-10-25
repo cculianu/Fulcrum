@@ -745,11 +745,6 @@ namespace Util {
     struct MemUsage { std::size_t phys{}, virt{}; };
     MemUsage getProcessMemoryUsage();
 
-    /// Logs some information on the simdjson implementation. Uses the Log() logger.
-    ///
-    /// @returns true if it logged anything, false otherwise
-    bool logSimdJsonInfo();
-
 } // end namespace Util
 
 /// Kind of like Go's "defer" statement. Call a lambda (for clean-up code) at scope end.

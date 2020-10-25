@@ -49,7 +49,7 @@ namespace {
         }
 
         // print simdjson info, if any, to log
-        if (Util::logSimdJsonInfo())
+        if (App::logSimdJsonInfo())
             Log() << "---"; // something was logged, so separate it with ---
 
         QDir dataDir(dir);

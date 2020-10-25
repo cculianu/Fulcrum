@@ -327,6 +327,12 @@ void App::parseArgs()
                    " SSL and WSS ports server-wide."),
          },
          {
+            "simdjson",
+            QString("If specified, enable the new simdjson backend for JSON parsing. This parser is over 2x faster "
+                    "than the default parser, but since this backend was recently added and hasn't been war-tested "
+                    "yet, it is currently disabled by default."),
+         },
+         {
            "dump-sh",
            QString("*** This is an advanced debugging option ***   Dump script hashes. If specified, after the database"
                    " is loaded, all of the script hashes in the database will be written to outputfile as a JSON array."),
@@ -944,7 +950,7 @@ void App::parseArgs()
             throw BadArgs("db_use_fsync: bad value. Specify a boolean value such as 0, 1, true, false, yes, no");
         options->db.useFsync = val;
         // log this later in case we are in syslog mode
-        Util::AsyncOnObject(this, [val]{ Debug() << "config: db_use_fsync = " << val; });
+        Util::AsyncOnObject(this, [val]{ Debug() << "config: db_use_fsync = " << (val ? "true" : "false"); });
     }
 
     // warn user that no hostname was specified if they have peerDiscover turned on
@@ -982,6 +988,16 @@ void App::parseArgs()
     if (parser.isSet("tls-disallow-deprecated") || conf.boolValue("tls-disallow-deprecated")) {
         options->tlsDisallowDeprecated = true;
         Util::AsyncOnObject(this, []{ Log() << "TLS restricted to non-deprecated versions (version 1.2 or above)"; });
+    }
+
+    // --simdjson from CLI or simdjson from conf
+    if (parser.isSet("simdjson") || conf.boolValue("simdjson")) {
+        // We do this on an asynch task since this call may log, and we wish to log later after startup
+        // in case we are in --syslog mode.
+        Util::AsyncOnObject(this, [] {
+            Debug() << "config: simdjson = true";
+            Options::setSimdJson(true);
+        });
     }
 
     // parse --dump-*
@@ -1304,3 +1320,36 @@ QVariantMap App::jemallocStats()
 QVariantMap App::jemallocStats() { return {}; }
 #endif
 
+QVariantMap App::simdJsonStats()
+{
+    QVariantMap ret;
+    auto info = Json::SimdJson::getInfo();
+    if (info) {
+        QVariantMap m;
+        for (const auto & imp : info->implementations) {
+            QVariantMap m2;
+            m2["description"] = imp.description;
+            m2["supported"] = imp.supported;
+            m[imp.name] = m2;
+        }
+        ret["implementations"] = m;
+        ret["active_implementation"] = Options::isSimdJson() ? info->active.name : QVariant();
+    }
+    return ret;
+}
+
+/* static */
+bool App::logSimdJsonInfo()
+{
+    auto info = Json::SimdJson::getInfo();
+    if (!info)
+        // simdjson not available
+        return false;
+    Log() << "simdjson implementations:";
+    for (const auto & imp : info->implementations) {
+        Log() << "    " << imp.name << ": " << imp.description
+              << (imp.supported ? "  [supported]" : "  [not supported]");
+    }
+    Log() << "active implementation: " << info->active.name;
+    return true;
+}

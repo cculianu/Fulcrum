@@ -16,7 +16,9 @@
 // along with this program (see LICENSE.txt).  If not, see
 // <https://www.gnu.org/licenses/>.
 //
+#include "App.h"
 #include "Options.h"
+#include "RPC.h"
 
 #include <QFile>
 #include <QIODevice>
@@ -151,6 +153,8 @@ QVariantMap Options::toMap() const
     m["ts-format"] = logTimestampModeString();
     // tls-disallow-deprecated
     m["tls-disallow-deprecated"] = tlsDisallowDeprecated;
+    // simdjson
+    m["simdjson"] = isSimdJson();
     return m;
 }
 
@@ -171,6 +175,26 @@ bool Options::BdReqThrottleParams::isValid() const noexcept
     return hi >= lo && hi >= minBDReqHi && hi <= maxBDReqHi && lo >= minBDReqLo && lo <= maxBDReqLo
             && decay >= minBDReqDecayPerSec && decay <= maxBDReqDecayPerSec;
 }
+
+/* static */
+bool Options::isSimdJson() { return RPC::isFastJson(); }
+/* static */
+bool Options::setSimdJson(const bool b) {
+    if (b != isSimdJson()) {
+        const bool res = RPC::setFastJson(b);
+        if (res && b) {
+            Log() << "Enabled fast JSON parser: simdjson";
+            App::logSimdJsonInfo();
+        } else if (res && !b) {
+            Log() << "Disabled simdjson";
+        } else if (!res && b) {
+            Warning() << "Failed to enable simdjson: unavailable";
+        }
+        return res;
+    }
+    return true;
+}
+
 
 // -- ConfigFile
 

@@ -422,6 +422,12 @@ namespace RPC {
         std::unique_ptr<StateMachine, SMDel> sm; ///< we need to declare this with a deleter otherwise subclasses won't be able to inherit from us because StateMachine is a private, opaque struct; the need for a deleter is due to implementation details of how unique_ptr works with opaque types.
     };
 
+    /// Query whether using the simdjson backend or using default for JSON parsing.
+    bool isFastJson();
+    /// Set fast Json parsing to on or off. Note that the requested setting may not take effect if we are missing
+    /// the underlying libs or are on an unsupported platform.  As such, this returns true on success, false on failure.
+    bool setFastJson(bool);
+
 } // end namespace RPC
 
 /// So that Qt signal/slots work with this type.  Metatypes are also registered at startup via qRegisterMetatype

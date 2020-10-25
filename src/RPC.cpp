@@ -23,6 +23,7 @@
 #include <QHostAddress>
 #include <QSslSocket>
 
+#include <atomic>
 #include <type_traits>
 
 namespace RPC {
@@ -40,11 +41,14 @@ namespace RPC {
     /*static*/ const QString Message::s_params("params");
     /*static*/ const QString Message::s_result("result");
 
+    static std::atomic<Json::ParserBackend> jsonParserBackend = Json::ParserBackend::Default;
 
     /* static */
     Message Message::fromUtf8(const QByteArray &ba, Id *id_out, bool v1)
     {
-        return fromJsonData(Json::parseUtf8(ba, Json::ParseOption::RequireObject).toMap(), id_out, v1); // may throw
+        const auto backend = jsonParserBackend.load(std::memory_order_relaxed);
+        // may throw
+        return fromJsonData(Json::parseUtf8(ba, Json::ParseOption::RequireObject, backend).toMap(), id_out, v1);
     }
 
     /* static */
@@ -874,6 +878,33 @@ namespace RPC {
             header.host = trimmed.toUtf8();
     }
 
+    bool isFastJson()
+    {
+        switch (jsonParserBackend.load(std::memory_order_relaxed)) {
+        case Json::ParserBackend::Default:
+            return false;
+        case Json::ParserBackend::FastestAvailable:
+            return Json::isParserAvailable(Json::ParserBackend::SimdJson);
+        case Json::ParserBackend::SimdJson: {
+            // this branch should never be taken but we put it here for defensive purposes
+            const bool avail = Json::isParserAvailable(Json::ParserBackend::SimdJson);
+            if (!avail)
+                // uh oh, force it to be the safer option "FastestAvailable" to avoid parse errors
+                jsonParserBackend.store(Json::ParserBackend::FastestAvailable, std::memory_order_relaxed);
+            return avail;
+        }
+        }
+    }
+
+    bool setFastJson(bool b) {
+        if (b) {
+            jsonParserBackend.store(Json::ParserBackend::FastestAvailable, std::memory_order_relaxed);
+            return isFastJson();
+        } else {
+            jsonParserBackend.store(Json::ParserBackend::Default, std::memory_order_relaxed);
+            return true;
+        }
+    }
 } // end namespace RPC
 
 #if 0

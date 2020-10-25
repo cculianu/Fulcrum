@@ -1365,6 +1365,10 @@ auto Controller::stats() const -> Stats
 
     // grab jemalloc stats, if any
     st["Jemalloc"] = App::jemallocStats();
+
+    // grab simdjson stats, if any
+    st["simdjson"] = App::simdJsonStats();
+
     return st;
 }
 
