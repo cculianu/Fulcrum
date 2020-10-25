@@ -2356,7 +2356,7 @@ void AdminServer::rpc_simdjson(Client *c, const RPC::Message &m)
         // set
         const QVariant arg = l.front();
         if (arg.type() != QVariant::Bool)
-            throw RPCError("Invalid argument, please specify a boolean value to enable/disable the simdjson backend");
+            throw RPCError("Invalid argument, please specify a boolean value to enable/disable the simdjson parser");
         emit c->sendResult(m.id, Options::setSimdJson(arg.toBool()));
     }
 }
