@@ -963,10 +963,10 @@ QVariant sjToVariant(const simdjson::dom::element &e)
         break;
     }
     case T::INT64:
-        var = e.get_int64().value();
+        var = static_cast<qlonglong>(e.get_int64().value());
         break;
     case T::UINT64:
-        var = e.get_uint64().value();
+        var = static_cast<qulonglong>(e.get_uint64().value());
         break;
     case T::DOUBLE:
         var = e.get_double().value();
