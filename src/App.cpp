@@ -1240,6 +1240,14 @@ void App::setCLocale()
     } catch (const std::exception &e) {
         Warning() << "Failed to set \"C\" locale: " << e.what();
     }
+    try {
+        // Also for paranoia call into the Json lib's own locale checker / setter.
+        Json::checkLocale(true);
+        // We don't need this check each time we parse since once set, it won't change in this app.
+        Json::autoFixLocale = false;
+    } catch (const std::exception &e) {
+        Warning() << e.what();
+    }
 }
 
 
