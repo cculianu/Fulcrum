@@ -315,7 +315,6 @@ SOURCES += \
     bitcoin/script.cpp \
     bitcoin/script_error.cpp \
     bitcoin/script_standard.cpp \
-    bitcoin/secp256k1/secp256k1.c \
     bitcoin/sigencoding.cpp \
     bitcoin/test.cpp \
     bitcoin/transaction.cpp \
@@ -353,46 +352,6 @@ HEADERS += \
     bitcoin/script_error.h \
     bitcoin/script_flags.h \
     bitcoin/script_standard.h \
-    bitcoin/secp256k1/ecdsa.h \
-    bitcoin/secp256k1/ecdsa_impl.h \
-    bitcoin/secp256k1/eckey.h \
-    bitcoin/secp256k1/eckey_impl.h \
-    bitcoin/secp256k1/ecmult.h \
-    bitcoin/secp256k1/ecmult_const.h \
-    bitcoin/secp256k1/ecmult_const_impl.h \
-    bitcoin/secp256k1/ecmult_gen.h \
-    bitcoin/secp256k1/ecmult_gen_impl.h \
-    bitcoin/secp256k1/ecmult_impl.h \
-    bitcoin/secp256k1/field.h \
-    bitcoin/secp256k1/field_10x26.h \
-    bitcoin/secp256k1/field_10x26_impl.h \
-    bitcoin/secp256k1/field_5x52.h \
-    bitcoin/secp256k1/field_5x52_impl.h \
-    bitcoin/secp256k1/field_5x52_int128_impl.h \
-    bitcoin/secp256k1/field_impl.h \
-    bitcoin/secp256k1/group.h \
-    bitcoin/secp256k1/group_impl.h \
-    bitcoin/secp256k1/hash.h \
-    bitcoin/secp256k1/hash_impl.h \
-    bitcoin/secp256k1/libsecp256k1-config.h \
-    bitcoin/secp256k1/recovery_main_impl.h \
-    bitcoin/secp256k1/schnorr_main_impl.h \
-    bitcoin/secp256k1/schnorr.h \
-    bitcoin/secp256k1/schnorr_impl.h \
-    bitcoin/secp256k1/num.h \
-    bitcoin/secp256k1/num_impl.h \
-    bitcoin/secp256k1/scalar.h \
-    bitcoin/secp256k1/scalar_4x64.h \
-    bitcoin/secp256k1/scalar_4x64_impl.h \
-    bitcoin/secp256k1/scalar_8x32.h \
-    bitcoin/secp256k1/scalar_8x32_impl.h \
-    bitcoin/secp256k1/scalar_impl.h \
-    bitcoin/secp256k1/scalar_low.h \
-    bitcoin/secp256k1/scalar_low_impl.h \
-    bitcoin/secp256k1/secp256k1.h \
-    bitcoin/secp256k1/secp256k1_recovery.h \
-    bitcoin/secp256k1/secp256k1_schnorr.h \
-    bitcoin/secp256k1/util.h \
     bitcoin/streams.h \
     bitcoin/support/cleanse.h \
     bitcoin/support/zeroafterfree.h \
@@ -405,6 +364,59 @@ HEADERS += \
     bitcoin/uint256.h \
     bitcoin/utilstrencodings.h \
     bitcoin/version.h
+
+# Enable secp256k1 compilation on x86_64 only -- we don't actually use this lib
+# yet in Fulcrum, so on platforms that aren't x86_64 it's ok to exclude it; it
+# was included in case we wish to someday verify signatures in Fulcrum, etc.
+contains(QT_ARCH, x86_64):!win32-msvc {
+    message("Including embedded secp256k1")
+
+    SOURCES += bitcoin/secp256k1/secp256k1.c
+    HEADERS += \
+        bitcoin/secp256k1/ecdsa.h \
+        bitcoin/secp256k1/ecdsa_impl.h \
+        bitcoin/secp256k1/eckey.h \
+        bitcoin/secp256k1/eckey_impl.h \
+        bitcoin/secp256k1/ecmult.h \
+        bitcoin/secp256k1/ecmult_const.h \
+        bitcoin/secp256k1/ecmult_const_impl.h \
+        bitcoin/secp256k1/ecmult_gen.h \
+        bitcoin/secp256k1/ecmult_gen_impl.h \
+        bitcoin/secp256k1/ecmult_impl.h \
+        bitcoin/secp256k1/field.h \
+        bitcoin/secp256k1/field_10x26.h \
+        bitcoin/secp256k1/field_10x26_impl.h \
+        bitcoin/secp256k1/field_5x52.h \
+        bitcoin/secp256k1/field_5x52_impl.h \
+        bitcoin/secp256k1/field_5x52_int128_impl.h \
+        bitcoin/secp256k1/field_impl.h \
+        bitcoin/secp256k1/group.h \
+        bitcoin/secp256k1/group_impl.h \
+        bitcoin/secp256k1/hash.h \
+        bitcoin/secp256k1/hash_impl.h \
+        bitcoin/secp256k1/libsecp256k1-config.h \
+        bitcoin/secp256k1/recovery_main_impl.h \
+        bitcoin/secp256k1/schnorr_main_impl.h \
+        bitcoin/secp256k1/schnorr.h \
+        bitcoin/secp256k1/schnorr_impl.h \
+        bitcoin/secp256k1/num.h \
+        bitcoin/secp256k1/num_impl.h \
+        bitcoin/secp256k1/scalar.h \
+        bitcoin/secp256k1/scalar_4x64.h \
+        bitcoin/secp256k1/scalar_4x64_impl.h \
+        bitcoin/secp256k1/scalar_8x32.h \
+        bitcoin/secp256k1/scalar_8x32_impl.h \
+        bitcoin/secp256k1/scalar_impl.h \
+        bitcoin/secp256k1/scalar_low.h \
+        bitcoin/secp256k1/scalar_low_impl.h \
+        bitcoin/secp256k1/secp256k1.h \
+        bitcoin/secp256k1/secp256k1_recovery.h \
+        bitcoin/secp256k1/secp256k1_schnorr.h \
+        bitcoin/secp256k1/util.h
+} else {
+    message("Not including embedded secp256k1")
+    DEFINES += DISABLE_SECP256K1
+}
 
 # Installation
 unix:!android: {

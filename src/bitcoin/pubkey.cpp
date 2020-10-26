@@ -12,9 +12,36 @@
 
 #include "pubkey.h"
 
+#ifndef DISABLE_SECP256K1
 #include "secp256k1/secp256k1.h"
 #include "secp256k1/secp256k1_recovery.h"
 #include "secp256k1/secp256k1_schnorr.h"
+#else
+// Added by Calin: if we aren't on a platform where our custom embedded secp256k1 is known to compile ok,
+// then we will use a "fake" implementation that throws. This is ok since we don't actually use the functions
+// that call into secp256k1 yet in Fulcrum.
+#include "Common.h"
+#include "tinyformat.h"
+#include <stdexcept>
+using secp256k1_context = void*;
+using secp256k1_ecdsa_signature = void*;
+using secp256k1_pubkey = void*;
+using secp256k1_ecdsa_recoverable_signature = void*;
+enum { SECP256K1_EC_UNCOMPRESSED, SECP256K1_EC_COMPRESSED, SECP256K1_CONTEXT_VERIFY };
+#define THROW_UNIMPLEMENTED throw std::runtime_error(strprintf("%s is not compiled-in to %s on this platform", __func__, APPNAME))
+#define UNIMPLEMENTED(func) void** func(...) { THROW_UNIMPLEMENTED; }
+UNIMPLEMENTED(secp256k1_ecdsa_signature_parse_compact)
+UNIMPLEMENTED(secp256k1_ecdsa_signature_normalize)
+UNIMPLEMENTED(secp256k1_ec_pubkey_parse)
+UNIMPLEMENTED(secp256k1_ecdsa_verify)
+UNIMPLEMENTED(secp256k1_schnorr_verify)
+UNIMPLEMENTED(secp256k1_ecdsa_recoverable_signature_parse_compact)
+UNIMPLEMENTED(secp256k1_ecdsa_recover)
+UNIMPLEMENTED(secp256k1_ec_pubkey_serialize)
+UNIMPLEMENTED(secp256k1_ec_pubkey_tweak_add)
+UNIMPLEMENTED(secp256k1_context_create)
+UNIMPLEMENTED(secp256k1_context_destroy)
+#endif
 
 namespace bitcoin {
 namespace {
