@@ -83,7 +83,7 @@ namespace {
                           ? "%" PRIu64
                             // this is here to enforce uint64_t, int64_t or double (if evaluated will fail at compile-time)
                           : throw std::runtime_error("Unexpected type")));
-            if (std::is_floating_point<Num>::value) {
+            if constexpr (std::is_floating_point<Num>::value) {
                 // ensure not NaN or inf, which are not representable by the JSON Number type
                 if (!std::isfinite(num))
                     return false;
