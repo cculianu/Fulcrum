@@ -24,6 +24,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 #pragma once
+
 #include "Common.h"
 
 #include <QByteArray>
@@ -54,17 +55,17 @@ namespace Json {
     /// This is the only thing modified from the library implementation -- in order to
     /// fit the exception hierarchy for this lib into our codebase's "Exception" tree.
     /// There is a static_assert in RPC.cpp to check for this.
-    struct Error : public Exception {
+    struct Error : Exception {
         using Exception::Exception;
         Error(const QString &msg) : Exception(msg) {}
         ~Error() override;
     };
 
     /// More specific Json error -- usually if trying to parse malformed JSON text.
-    struct ParseError : public Error { using Error::Error; ~ParseError() override; };
+    struct ParseError : Error { using Error::Error; ~ParseError() override; };
 
     /// Thrown by the parseUtf8 and parseFile functions if the parser SimdJson was selected but it is unavailable.
-    struct ParserUnavailable : public Error { using Error::Error; ~ParserUnavailable() override; };
+    struct ParserUnavailable : Error { using Error::Error; ~ParserUnavailable() override; };
 
     enum class ParseOption {
         RequireObject,     ///< Reject any JSON that is not embeded in a JSON object { ... }
@@ -133,4 +134,22 @@ namespace Json {
     /// and/or parse*(). Checking the locale on each call takes ~1-10 us at most, but if you want to not waste those
     /// cycles, this flag is offered for advanced users of this library.
     extern bool autoFixLocale;
+
+
+    // ---
+    // --- detail
+    // ---
+
+    /// Internal namespace -- not intended for public use, but if you must you can call into it.
+    namespace detail {
+        /// Parser.  Implemented in Json_Parser.cpp.
+        ///
+        /// @param vout - out param.  Results are placed here
+        /// @param json - The json to parse.  It need not be wrapped in an object or an array. Even simple json items
+        ///               may be parsed.
+        /// @param backend - The backend to use.  May throw `ParserUnavailable` if backend is SimdJson and it is not
+        ///                  available.
+        /// @returns true on success, false on parse error.
+        extern bool parse(QVariant &out, const QByteArray &json, ParserBackend backend);
+    }
 }

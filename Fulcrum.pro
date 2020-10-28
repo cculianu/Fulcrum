@@ -259,7 +259,6 @@ HEADERS += \
     Controller.h \
     CostCache.h \
     Json/Json.h \
-    Json/Json_Parser.h \
     Logger.h \
     Mempool.h \
     Merkle.h \
