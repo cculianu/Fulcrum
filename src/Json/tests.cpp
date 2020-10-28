@@ -27,7 +27,6 @@
 #ifdef ENABLE_TESTS
 #include "App.h"
 #include "Json.h"
-#include "Json_Parser.h"
 #include "Util.h"
 
 #include <QDir>
