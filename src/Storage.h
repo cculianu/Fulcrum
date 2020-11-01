@@ -99,6 +99,8 @@ public:
     /// Hard-coded to 100 blocks of undo. TODO: have this come from actual config, and take into account
     /// BTC::MaxReorgDepth (10) as a minimum.
     inline unsigned configuredUndoDepth() const { return 100; }
+    /// True if the DB contains any undo entries for blocks
+    bool hasUndo() const;
 
 
     /// Thread safe. May hit the database (or touch a cache).  Returns the header for the given height or nothing if

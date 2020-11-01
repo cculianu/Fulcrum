@@ -223,6 +223,13 @@ void GetChainInfoTask::process()
             if (info.chain.isEmpty()) Err("chain");
 
             info.headers = map.value("headers").toInt(); // error ignored here
+            if (info.headers < info.blocks) {
+                // This may happen if for some reason bitcoind omits this info or there is a parse error.
+                // We rely on this field being >= info.blocks in later code so just enforce that invariant now.
+                info.headers = info.blocks;
+                DebugM("bitcoind did not return the expected headers field, expected headers >= blocks (headers=",
+                       map.value("headers").toString(), ", blocks=", info.blocks, ")");
+            }
 
             info.bestBlockhash = Util::ParseHexFast(map.value("bestblockhash").toByteArray());
             if (info.bestBlockhash.size() != HashLen) Err("bestblockhash");
@@ -787,12 +794,14 @@ void SynchMempoolTask::doGetRawMempool()
 
 struct Controller::StateMachine
 {
-    enum State {
-        Begin=0, WaitingForChainInfo, GetBlocks, DownloadingBlocks, FinishedDL, End, Failure, IBD, Retry,
-        SynchMempool, SynchingMempool, SynchMempoolFinished
+    enum State : uint8_t {
+        Begin=0, WaitingForChainInfo, GetBlocks, DownloadingBlocks, FinishedDL, End, Failure, BitcoinDIsInHeaderDL,
+        Retry, RetryInIBD, SynchMempool, SynchingMempool, SynchMempoolFinished
     };
     State state = Begin;
+    bool suppressSaveUndo = false; ///< true if bitcoind is in IBD, in which case we don't save undo info.
     int ht = -1; ///< the latest height bitcoind told us this run
+    int nHeaders = -1; ///< the number of headers our bitcoind has, in the chain we are synching
     BTC::Net net = BTC::Net::Invalid;  ///< This gets set by calls to getblockchaininfo by parsing the "chain" in the resulting dict
 
     robin_hood::unordered_flat_map<unsigned, PreProcessedBlockPtr> ppBlocks; // mapping of height -> PreProcessedBlock (we use an unordered_flat_map because it's faster for frequent updates)
@@ -809,7 +818,7 @@ struct Controller::StateMachine
     const char * stateStr() const {
         static constexpr const char *stateStrings[] = { "Begin", "WaitingForChainInfo", "GetBlocks", "DownloadingBlocks",
                                                         "FinishedDL", "End",
-                                                        "Failure", "IBD", "Retry",
+                                                        "Failure", "BitcoinDIsInHeaderDL", "Retry", "RetryInIBD",
                                                         "SynchMempool", "SynchingMempool", "SynchMempoolFinished",
                                                         "Unknown" /* this should always be last */ };
         auto idx = qMin(size_t(state), std::size(stateStrings)-1);
@@ -818,7 +827,7 @@ struct Controller::StateMachine
 
     static constexpr unsigned progressIntervalBlocks = 1000;
     size_t nProgBlocks = 0, nProgIOs = 0, nProgTx = 0, nProgSH = 0;
-    double lastProgTs = 0., waitingTs = 0.;
+    double lastProgTs = 0., startedTs = 0.;
     static constexpr double simpleTaskTookTooLongSecs = 30.;
 
     /// this pointer should *not* be dereferenced (which is why it's void *), but rather is just used to filter out
@@ -926,15 +935,17 @@ void Controller::process(bool beSilentIfUpToDate)
         auto task = newTask<GetChainInfoTask>(true, this);
         task->threadObjectDebugLifecycle = Trace::isEnabled(); // suppress debug prints here unless we are in trace mode
         sm->mostRecentGetChainInfoTask = task; // reentrancy defense mechanism for ignoring all but the most recent getchaininfo reply from bitcoind
-        sm->waitingTs = Util::getTimeSecs();
+        sm->startedTs = Util::getTimeSecs();
         sm->state = State::WaitingForChainInfo; // more reentrancy prevention paranoia -- in case we get a spurious call to process() in the future
         connect(task, &CtlTask::success, this, [this, task, beSilentIfUpToDate]{
             if (UNLIKELY(!sm || task != sm->mostRecentGetChainInfoTask || isTaskDeleted(task) || sm->state != State::WaitingForChainInfo))
                 // task was stopped from underneath us and/or this response is stale.. so return and ignore
                 return;
             sm->mostRecentGetChainInfoTask = nullptr;
-            if (task->info.initialBlockDownload) {
-                sm->state = State::IBD;
+            if (task->info.blocks < 1 && task->info.initialBlockDownload) {
+                // we assume if height is still below 1, and if the ibd flag is set, that we are still synching initial
+                // headers, so we mark the state as "BitcoinDIsInHeaderDL", which will retry in 5 seconds
+                sm->state = State::BitcoinDIsInHeaderDL;
                 AGAIN();
                 return;
             }
@@ -970,15 +981,23 @@ void Controller::process(bool beSilentIfUpToDate)
             QByteArray tipHeader;
             const auto [tip, tipHash] = storage->latestTip(&tipHeader);
             sm->ht = task->info.blocks;
+            sm->nHeaders = task->info.headers;
             if (tip == sm->ht) {
                 if (task->info.bestBlockhash == tipHash) { // no reorg
-                    if (!beSilentIfUpToDate) {
-                        storage->updateMerkleCache(unsigned(tip));
-                        Log() << "Block height " << tip << ", up-to-date";
-                        emit upToDate();
-                        emit newHeader(unsigned(tip), tipHeader);
+                    if (!task->info.initialBlockDownload) {
+                        // bitcoind is not in IBD -- proceed to next phase of emitting signals, synching
+                        // mempool, turning on the network, etc.
+                        if (!beSilentIfUpToDate) {
+                            storage->updateMerkleCache(unsigned(tip));
+                            Log() << "Block height " << tip << ", up-to-date";
+                            emit upToDate();
+                            emit newHeader(unsigned(tip), tipHeader);
+                        }
+                        sm->state = State::SynchMempool; // now, move on to synch mempool
+                    } else {
+                        // bitcoind is in IBD (we will keep polling to see if it made progress)
+                        sm->state = State::RetryInIBD;
                     }
-                    sm->state = State::SynchMempool; // now, move on to synch mempool
                 } else {
                     // height ok, but best block hash mismatch.. reorg
                     Warning() << "We have bestBlock " << tipHash.toHex() << ", but bitcoind reports bestBlock " << task->info.bestBlockhash.toHex() << "."
@@ -995,6 +1014,19 @@ void Controller::process(bool beSilentIfUpToDate)
                 Log() << "Block height " << sm->ht << ", downloading new blocks ...";
                 emit synchronizing();
                 sm->state = State::GetBlocks;
+                // In order to not waste disk I/O on undo info we don't need, as a performance optimization we suppress
+                // saving undo (reorg) info if the following is true:
+                // - bitcoind has the `initialblockdownload` flag set
+                // - the current chain tip is way beyond the current height (so a reorg affecting the blocks we dl now
+                //   is not likely)
+                // - we have *no* undo info in the db right now (if we did we would need to save undo since the way that
+                //   old undo is deleted is only when new undo is added -- hard to explain why in this comment but read
+                //   the `process_VerifyAndAddBlock` code in this file to see why this last bullet point
+                //   invariant must be satisfied).
+                if (task->info.initialBlockDownload && !storage->hasUndo()) {
+                    sm->suppressSaveUndo = sm->nHeaders > 0 && sm->ht > 0 && sm->nHeaders >= sm->ht
+                                           && unsigned(sm->nHeaders - sm->ht) > storage->configuredUndoDepth();
+                }
             }
             AGAIN();
         });
@@ -1002,7 +1034,7 @@ void Controller::process(bool beSilentIfUpToDate)
         // This branch very unlikely -- I couldn't get it to happen in normal testing, but is here in case there are
         // suprious calls to process(), or in case bitcoind goes out to lunch and our process() timer fires while it
         // does so.
-        if (Util::getTimeSecs() - sm->waitingTs > sm->simpleTaskTookTooLongSecs) {
+        if (Util::getTimeSecs() - sm->startedTs > sm->simpleTaskTookTooLongSecs) {
             // this is very unlikely but is here in case bitcoind goes out to lunch so we can reset things and try again.
             Warning() << "GetChainInfo task took longer than " << sm->simpleTaskTookTooLongSecs << " seconds to return a response. Trying again ...";
             genericTaskErrored();
@@ -1041,6 +1073,24 @@ void Controller::process(bool beSilentIfUpToDate)
             sm.reset();
         }
         AGAIN();
+    } else if (sm->state == State::RetryInIBD) {
+        constexpr double tooFastThresh = 1.0; // seconds
+        const bool tooFast = Util::getTimeSecs() - sm->startedTs < tooFastThresh;
+        // in either case reset the state machine
+        {
+            std::lock_guard g(smLock);
+            sm.reset();
+        }
+        if (tooFast) {
+            // the task was too quick -- we need to cool off and let bitcoind get more blocks before proceeding
+            DebugM("bitcoind is in IBD, cooldown for ", tooFastThresh, " ", Util::Pluralize("second", tooFastThresh),
+                   " to allow it to get more blocks ...");
+            enablePollTimer = true;
+            polltimeout = int(tooFastThresh * 1000);
+        } else {
+            DebugM("bitcoind is in IBD, continuing to fetch blocks ...");
+            AGAIN();
+        }
     } else if (sm->state == State::Failure) {
         // We will try again later via the pollTimer
         Error() << "Failed to synch blocks and/or mempool";
@@ -1056,14 +1106,14 @@ void Controller::process(bool beSilentIfUpToDate)
             sm.reset();  // great success!
         }
         enablePollTimer = true;
-    } else if (sm->state == State::IBD) {
+    } else if (sm->state == State::BitcoinDIsInHeaderDL) {
         {
             std::lock_guard g(smLock);
             sm.reset();  // great success!
         }
         enablePollTimer = true;
-        Warning() << "bitcoind is in initial block download, will try again in 1 minute";
-        polltimeout = 60 * 1000; // try again every minute
+        Warning() << "bitcoind is still downloading headers, will try again in 5 seconds";
+        polltimeout = 5 * 1000; // try again every 5 seconds
         emit synchFailure();
     } else if (sm->state == State::SynchMempool) {
         // ...
@@ -1132,7 +1182,7 @@ void Controller::process_PrintProgress(unsigned height, size_t nTx, size_t nIns,
         };
         const double now = Util::getTimeSecs();
         const double elapsed = std::max(now - sm->lastProgTs, 0.00001); // ensure no division by zero
-        QString pctDisplay = QString::number((height*1e2) / std::max(sm->endHeight, 1U), 'f', 1) + "%";
+        QString pctDisplay = QString::number((height*1e2) / std::max(std::max(int(sm->endHeight), sm->nHeaders), 1), 'f', 1) + "%";
         const double rateBlocks = sm->nProgBlocks / elapsed;
         const double rateTx = sm->nProgTx / elapsed;
         const double rateSH = sm->nProgSH / elapsed;
@@ -1189,7 +1239,7 @@ bool Controller::process_VerifyAndAddBlock(PreProcessedBlockPtr ppb)
 
     try {
         const auto nLeft = qMax(sm->endHeight - (sm->ppBlkHtNext-1), 0U);
-        const bool saveUndoInfo = int(ppb->height) > (sm->ht - int(storage->configuredUndoDepth()));
+        const bool saveUndoInfo = !sm->suppressSaveUndo && int(ppb->height) > (sm->ht - int(storage->configuredUndoDepth()));
 
         storage->addBlock(ppb, saveUndoInfo, nLeft, masterNotifySubsFlag);
 

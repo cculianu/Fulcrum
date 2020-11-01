@@ -535,11 +535,11 @@ namespace Util {
     }
 
     template <typename Numeric,
-              std::enable_if_t<std::is_arithmetic<Numeric>::value, int> = 0>
+              std::enable_if_t<std::is_arithmetic_v<Numeric>, int> = 0>
     QString Pluralize(const QString &wordIn, Numeric n) {
         QString ret;
         {
-            if (qAbs(int(n)) != 1) {
+            if (qAbs(n) != Numeric(1)) {
                 QString word(wordIn);
                 QString ending = QStringLiteral("s"); // default to 's' ending
                 const auto wordend = word.right(2);

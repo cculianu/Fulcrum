@@ -1072,6 +1072,10 @@ void Storage::loadCheckEarliestUndo()
     }
 }
 
+bool Storage::hasUndo() const {
+    return p->earliestUndoHeight < UINT32_MAX;
+}
+
 struct Storage::UTXOBatch::P {
     rocksdb::WriteBatch utxosetBatch; ///< batch writes/deletes end up in the utxoset db (keyed off TXO)
     rocksdb::WriteBatch shunspentBatch; ///< batch writes/deletes end up in the shunspent db (keyed off HashX+CompactTXO)
@@ -1633,7 +1637,7 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
 
             if (p->earliestUndoHeight >= undo.height)
                 // oops, we're out of undos now!
-                p->earliestUndoHeight = UINT_MAX;
+                p->earliestUndoHeight = UINT32_MAX;
             GenericDBDelete(p->db.undo.get(), uint32_t(undo.height)); // make sure to delete this undo info since it was just applied.
 
             // lastly, truncate the tx num file and re-set txNumNext to point to this block's txNum0 (thereby recycling it)
