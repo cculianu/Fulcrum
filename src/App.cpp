@@ -125,13 +125,18 @@ void App::startup_Sighandlers()
     // or from the App::cleanup_Sighandlers() function (whichever executes first).
     struct ExitThr : QThread {
         App *app;
-        std::atomic_bool didStart = false;
-        explicit ExitThr(App *app_) : QThread(app_), app(app_) {
-            unsigned stackBytes = Util::getPlatformMinimumThreadStackSize();
-            if (stackBytes != 0 && stackBytes < 2*1024) stackBytes = 0; // if stackBytes returnd was suspiciously small, use default
-            setObjectName("ExitThr"), setStackSize(stackBytes);
+        std::atomic_bool didStart = false, deleting = false;
+        explicit ExitThr(App *app_, bool minStackSize) : QThread(app_), app(app_) {
+            setObjectName("ExitThr");
+            if (minStackSize) {
+                unsigned stackBytes = Util::getPlatformMinimumThreadStackSize();
+                if (stackBytes != 0 && stackBytes < 2*1024)
+                    stackBytes = 0; // if stackBytes was suspiciously small, use default
+                 setStackSize(stackBytes);
+            }
         }
         ~ExitThr() override {
+            deleting = true;
             if (isRunning()) {
                 try {
                     app->exitSem.release();
@@ -140,7 +145,7 @@ void App::startup_Sighandlers()
                     Error() << "Exception in exitSem.release(): " << e.what();
                     terminate();
                 }
-                wait();
+                if (!wait(500)) terminate(), wait();
             }
         }
         void run() override {
@@ -149,32 +154,40 @@ void App::startup_Sighandlers()
             DebugM("started with stack size: ", stackSize() ? QString::number(stackSize()) : QString("default"));
             Defer d([]{DebugM("exited");});
             try {
-                while (!app->quitting && !app->sigCtr)
+                while (!deleting && !app->sigCtr)
                     // keep waiting to allow for spurious wake-ups -- stop waiting when either quitting or sigCtr != 0
                     app->exitSem.acquire();
-                if (!app->quitting) emit app->requestQuit(true);
+                if (!deleting) emit app->requestQuit(true);
             } catch (const std::exception &e) {
                 // should never happen -- here to defend against programming errors.
                 Error() << "Caught exception in exitThr: " << e.what();
             }
         }
-        // Paranoia in case we got the stackSize wrong and the thread failed to start -- at lest warn user
+        // Paranoia in case we got the stackSize wrong and the thread failed to start -- warn user and then try with default stack size
         void startWithWatchDog() {
-            assert(!isRunning() && !didStart);
+            assert(!isRunning() && !didStart || !deleting);
             assert(app);
             start();
             const int wdSecs = 5;  // watchdog secs
             // single short watchdog verifies that thread has at least run once after 5 seconds, if not warn user.
             QTimer::singleShot(wdSecs * 1000, app, [app=this->app, wdSecs]{
                 if (ExitThr *exitThr = dynamic_cast<ExitThr *>(app->exitThr.get());
-                        exitThr && !exitThr->didStart && !exitThr->isRunning() && !app->quitting)
-                    Error() << "ERROR: Thread <" << exitThr->objectName() << "> has not yet started even after "
-                            << wdSecs << Util::Pluralize(" second", wdSecs) << " have elapsed! FIXME!";
+                        exitThr && !exitThr->didStart && !exitThr->isRunning() && !app->quitting && !exitThr->deleting) {
+                    Warning() << "Warning:: Thread <" << exitThr->objectName() << "> has not yet started even after "
+                              << wdSecs << Util::Pluralize(" second", wdSecs) << " have elapsed!"
+                              << " Trying again without setting a minimal stack size ...";
+                    // fall back to starting the thread with non-minimal stack size
+                    // we will re-create the thread object (implicitly deleting the old one)
+                    auto uptr = std::make_unique<ExitThr>(app, false);
+                    exitThr = uptr.get();
+                    app->exitThr = std::move(uptr); // invalidate old, overwrite with new ExitThr
+                    exitThr->startWithWatchDog(); // try again!
+                }
             });
         }
     };
 
-    exitThr = std::make_unique<ExitThr>(this);
+    exitThr = std::make_unique<ExitThr>(this, true);
     dynamic_cast<ExitThr &>(*exitThr).startWithWatchDog();
 
 #define Pair_(x) std::pair{x, #x}
@@ -259,7 +272,6 @@ void App::cleanup()
 
 void App::cleanup_Sighandlers()
 {
-    assert(bool(quitting)); // precondition
     posixSignalRegistrations.clear(); // unregisters the registered signal handlers
     exitThr.reset(); // implicitly quits then joins the thread
 }
