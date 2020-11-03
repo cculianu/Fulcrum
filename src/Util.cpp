@@ -73,7 +73,45 @@ static constexpr unsigned PLATFORM_STACK_MIN = 0;
 #endif
 
 namespace Util {
-    unsigned getPlatformMinimumThreadStackSize() { return PLATFORM_STACK_MIN; }
+    unsigned getPlatformMinimumThreadStackSize() {
+        // we must probe the minimum stack size just in case PTHREAD_STACK_MIN is a lie (it can happen if we built the
+        // static binary for a slightly different platform/compiler than what it is executing on now).
+        static const unsigned probedMin = [] {
+            try {
+                if (!PLATFORM_STACK_MIN)
+                    return 0U;
+                const auto t0 = getTimeMicros();
+                std::promise<unsigned> p;
+                auto fut = p.get_future();
+                std::unique_ptr<QThread> thr {QThread::create([p=std::move(p)]() mutable {
+                    p.set_value(QThread::currentThread()->stackSize());
+                })};
+                thr->setStackSize(PLATFORM_STACK_MIN);
+                thr->setObjectName("ProbeMinStackSize");
+                thr->start();
+                Defer deferredJoin([&thr]{
+                    if (thr && !thr->isFinished()) {
+                        thr->terminate();
+                        if (!thr->wait(250))
+                            // sadly, we must release the unique_ptr since deleting the thread while it's running can cause a crash.
+                            Error() << "Timed-out waiting for thread \"" << thr.release()->objectName() << "\". FIXME!";
+                    }
+                });
+                if (auto res = fut.wait_for(std::chrono::milliseconds(250)); res == std::future_status::ready) {
+                    const auto ret = fut.get();
+                    Debug() << "successfully probed minimum stack size of " << ret << " in "
+                            << (getTimeMicros()-t0) << " usec";
+                    return ret;
+                } else
+                    Warning() << "Failed to probe thread minimum stack size, using system default.";
+            } catch (const std::exception &e) {
+                // this should never be reached
+                Error() << "Exception caught in minimum stack size probe function: " << e.what();
+            }
+            return 0U;
+        }();
+        return probedMin;
+    }
 
     QString basename(const QString &s) {
         QRegExp re("[\\/]");

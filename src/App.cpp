@@ -129,7 +129,7 @@ void App::startup_Sighandlers()
         explicit ExitThr(App *app_) : QThread(app_), app(app_) {
             unsigned stackBytes = Util::getPlatformMinimumThreadStackSize();
             if (stackBytes != 0 && stackBytes < 2*1024) stackBytes = 0; // if stackBytes returnd was suspiciously small, use default
-            setObjectName("ExitThr"), setStackSize(stackBytes), setTerminationEnabled(true);
+            setObjectName("ExitThr"), setStackSize(stackBytes);
         }
         ~ExitThr() override {
             if (isRunning()) {
@@ -145,6 +145,7 @@ void App::startup_Sighandlers()
         }
         void run() override {
             didStart = true;
+            setTerminationEnabled(true); // applies to currently running thread
             DebugM("started with stack size: ", stackSize() ? QString::number(stackSize()) : QString("default"));
             Defer d([]{DebugM("exited");});
             try {
