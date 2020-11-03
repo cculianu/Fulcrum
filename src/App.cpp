@@ -43,6 +43,7 @@
 #include <cstdlib>
 #include <list>
 #include <locale>
+#include <mutex>
 #include <tuple>
 #include <utility>
 
@@ -1269,13 +1270,36 @@ void App::start_httpServer(const Options::Interface &iface)
     });
 }
 
+/* static */ App::QtLogSuppressionList App::qlSuppressions;
+/* static */ std::shared_mutex App::qlSuppressionsMut;
+
 /* static */
-void App::customMessageHandler(QtMsgType type, const QMessageLogContext &context, const QString &msg)
+auto App::addQtLogSuppression(const QString &s) -> QtLogSuppression {
+    std::unique_lock l(qlSuppressionsMut);
+    qlSuppressions.push_front(s);
+    return qlSuppressions.begin();
+}
+
+/* static */
+void App::rmQtLogSuppression(QtLogSuppression &it) {
+    std::unique_lock l(qlSuppressionsMut);
+    qlSuppressions.erase(it);
+    it = qlSuppressions.end(); // invalidate
+}
+
+/* static */
+void App::customQtMessageHandler(QtMsgType type, const QMessageLogContext &context, const QString &msg)
 {
     // suppressions
     if ( msg.contains(QStringLiteral("QSslCertificate::isSelfSigned"))
          || msg.contains(QStringLiteral("Type conversion already registered")))
         return;
+    {  // client-code specified suppressions, if any
+        std::shared_lock l(qlSuppressionsMut);
+        for (const auto &str : qlSuppressions)
+            if (msg.contains(str))
+                return; // filter
+    }
     // /suppressions
 
     const QByteArray umsg = msg.toUtf8();
@@ -1303,7 +1327,7 @@ void App::customMessageHandler(QtMsgType type, const QMessageLogContext &context
 
 void App::miscPreAppFixups()
 {
-    qInstallMessageHandler(customMessageHandler);
+    qInstallMessageHandler(customQtMessageHandler);
 #ifdef Q_OS_DARWIN
     // workaround for annoying macos keychain access prompt. see: https://doc.qt.io/qt-5/qsslsocket.html#setLocalCertificate
     setenv("QT_SSL_USE_TEMPORARY_KEYCHAIN", "1", 1);

@@ -31,6 +31,7 @@
 #include <list>
 #include <map>
 #include <memory>
+#include <shared_mutex>
 #include <type_traits>
 
 class Controller;
@@ -91,6 +92,16 @@ public:
     /// @returns true if it logged anything, false otherwise
     static bool logSimdJsonInfo();
 
+    using QtLogSuppressionList = std::list<QString>;
+    using QtLogSuppression = QtLogSuppressionList::const_iterator;
+
+    /// Qt sometimes puts messages to the log that we would rather it not. Use this thread-safe function
+    /// to add a substring filter.
+    static QtLogSuppression addQtLogSuppression(const QString &substring);
+    /// Remove a log suppression previously added with addQtLogSuppression. Note that after removing the item,
+    /// suppression handle is invalidated. Thread-safe.
+    static void rmQtLogSuppression(QtLogSuppression &);
+
 signals:
     // other code emits the below two to tell the app (main) thread to call the corresponding protected slot to set
     // the corresponding values in the shared Options object.
@@ -138,8 +149,11 @@ private:
     void register_MetaTypes();
     void start_httpServer(const Options::Interface &iface); // may throw
 
+    static QtLogSuppressionList qlSuppressions; // substrings in this list will be filtered from being logged
+    static std::shared_mutex qlSuppressionsMut;
+
     /// Used to forward Qt messages to our Log() subsystem, installed by miscPreAppFixups()
-    static void customMessageHandler(QtMsgType type, const QMessageLogContext &context, const QString &msg);
+    static void customQtMessageHandler(QtMsgType type, const QMessageLogContext &context, const QString &msg);
 
     /// Used for registerTest and registerBench
     using NameFuncMap = std::map<QString, std::function<void()>>;

@@ -77,6 +77,8 @@ namespace Util {
         // we must probe the minimum stack size just in case PTHREAD_STACK_MIN is a lie (it can happen if we built the
         // static binary for a slightly different platform/compiler than what it is executing on now).
         static const unsigned probedMin = [] {
+            auto supp = App::addQtLogSuppression("QThread::start"); // suppress the error Qt may generate while we probe
+            Defer d([&supp]{ App::rmQtLogSuppression(supp);}); // undo the suppression on scope end
             try {
                 if (!PLATFORM_STACK_MIN)
                     return 0U;
