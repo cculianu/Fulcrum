@@ -54,7 +54,27 @@
 #include <iostream>
 #include <thread>
 
+#if __has_include(<pthread.h>) && !defined(Q_OS_WIN)
+// MacOS, Linux, etc
+#include <pthread.h>
+static constexpr unsigned PLATFORM_STACK_MIN = PTHREAD_STACK_MIN;
+#elif defined(Q_OS_WIN) && __has_include(<sysinfoapi.h>)
+// Windows
+#include <sysinfoapi.h>
+// typically 4KiB to 64KiB
+static const unsigned PLATFORM_STACK_MIN = []{
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);
+    return unsigned(si.dwPageSize);
+}();
+#else
+// unknown platform, 0 indicates to use defaults
+static constexpr unsigned PLATFORM_STACK_MIN = 0;
+#endif
+
 namespace Util {
+    unsigned getPlatformMinimumThreadStackSize() { return PLATFORM_STACK_MIN; }
+
     QString basename(const QString &s) {
         QRegExp re("[\\/]");
         auto toks = s.split(re);
@@ -386,6 +406,7 @@ namespace Util {
         void Sem::release() { p.cond.notify_one(); }
 #endif // defined(Q_OS_WIN) || defined(Q_OS_UNIX)
     } // end namespace AsyncSignalSafe
+
 } // end namespace Util
 
 Log::Log() {}

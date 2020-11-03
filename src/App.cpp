@@ -37,6 +37,7 @@
 #include <QSslSocket>
 
 #include <array>
+#include <cassert>
 #include <clocale>
 #include <csignal>
 #include <cstdlib>
@@ -81,8 +82,8 @@ App::App(int argc, char *argv[])
     connect(this, &App::aboutToQuit, this, &App::cleanup);
     connect(this, &App::setVerboseDebug, this, &App::on_setVerboseDebug);
     connect(this, &App::setVerboseTrace, this, &App::on_setVerboseTrace);
-    connect(this, &App::requestQuit, this, [this]{
-        Log() << "Shutdown requested" << (sigCtr ? " via signal" : "");
+    connect(this, &App::requestQuit, this, [this] (bool signalled) {
+        Log() << "Shutdown requested" << (signalled ? " via signal" : "");
         this->quit();
     }, Qt::QueuedConnection);
     QTimer::singleShot(0, this, &App::startup); // register to run after app event loop start
@@ -115,24 +116,65 @@ void App::signalHandler(int sig)
 
 void App::startup_Sighandlers()
 {
-    if (exitThr.joinable())
+    if (exitThr && exitThr->isRunning())
         throw InternalError("Exit thread is already running!");
 
     sigCtr = 0;
 
-    // Quit thread. Waits on exitSem and then does a quit.  Woken up precisely once from the signal handler,
-    // or from the cleanup() function (whichever executes first).
-    exitThr = std::thread([this] {
-        try {
-            while (!quitting && !sigCtr)
-                // keep waiting to allow for spurious wake-ups -- stop waiting when either quitting or sigCtr != 0
-                exitSem.acquire();
-            if (!quitting) emit requestQuit();
-        } catch (const std::exception &e) {
-            // should never happen -- here to defend against programming errors.
-            Error() << "Caught exception in exitThr: " << e.what();
+    // "Quit" thread. Waits on exitSem and then does a quit.  Woken up precisely once from the signal handler,
+    // or from the App::cleanup_Sighandlers() function (whichever executes first).
+    struct ExitThr : QThread {
+        App *app;
+        std::atomic_bool didStart = false;
+        explicit ExitThr(App *app_) : QThread(app_), app(app_) {
+            unsigned stackBytes = Util::getPlatformMinimumThreadStackSize();
+            if (stackBytes != 0 && stackBytes < 2*1024) stackBytes = 0; // if stackBytes returnd was suspiciously small, use default
+            setObjectName("ExitThr"), setStackSize(stackBytes), setTerminationEnabled(true);
         }
-    });
+        ~ExitThr() override {
+            if (isRunning()) {
+                try {
+                    app->exitSem.release();
+                } catch (const std::exception &e) {
+                    // should never happen -- here to defend against programming errors.
+                    Error() << "Exception in exitSem.release(): " << e.what();
+                    terminate();
+                }
+                wait();
+            }
+        }
+        void run() override {
+            didStart = true;
+            DebugM("started with stack size: ", stackSize() ? QString::number(stackSize()) : QString("default"));
+            Defer d([]{DebugM("exited");});
+            try {
+                while (!app->quitting && !app->sigCtr)
+                    // keep waiting to allow for spurious wake-ups -- stop waiting when either quitting or sigCtr != 0
+                    app->exitSem.acquire();
+                if (!app->quitting) emit app->requestQuit(true);
+            } catch (const std::exception &e) {
+                // should never happen -- here to defend against programming errors.
+                Error() << "Caught exception in exitThr: " << e.what();
+            }
+        }
+        // Paranoia in case we got the stackSize wrong and the thread failed to start -- at lest warn user
+        void startWithWatchDog() {
+            assert(!isRunning() && !didStart);
+            assert(app);
+            start();
+            const int wdSecs = 5;  // watchdog secs
+            // single short watchdog verifies that thread has at least run once after 5 seconds, if not warn user.
+            QTimer::singleShot(wdSecs * 1000, app, [app=this->app, wdSecs]{
+                if (ExitThr *exitThr = dynamic_cast<ExitThr *>(app->exitThr.get());
+                        exitThr && !exitThr->didStart && !exitThr->isRunning() && !app->quitting)
+                    Error() << "ERROR: Thread <" << exitThr->objectName() << "> has not yet started even after "
+                            << wdSecs << Util::Pluralize(" second", wdSecs) << " have elapsed! FIXME!";
+            });
+        }
+    };
+
+    exitThr = std::make_unique<ExitThr>(this);
+    dynamic_cast<ExitThr &>(*exitThr).startWithWatchDog();
 
 #define Pair_(x) std::pair{x, #x}
     const auto pairs = {
@@ -218,15 +260,7 @@ void App::cleanup_Sighandlers()
 {
     assert(bool(quitting)); // precondition
     posixSignalRegistrations.clear(); // unregisters the registered signal handlers
-    if (exitThr.joinable()) {
-        try {
-            exitSem.release();
-        } catch (const std::exception &e) {
-            // should never happen -- here to defend against programming errors.
-            Error() << "Exception in exitSem.release(): " << e.what();
-        }
-        exitThr.join();
-    }
+    exitThr.reset(); // implicitly quits then joins the thread
 }
 
 void App::cleanup_WaitForThreadPoolWorkers()

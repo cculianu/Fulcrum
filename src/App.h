@@ -23,6 +23,7 @@
 #include "Util.h"
 
 #include <QCoreApplication>
+#include <QThread>
 #include <QVariantMap>
 
 #include <atomic>
@@ -30,7 +31,6 @@
 #include <list>
 #include <map>
 #include <memory>
-#include <thread>
 #include <type_traits>
 
 class Controller;
@@ -97,7 +97,9 @@ signals:
     void setVerboseDebug(bool); ///< if true, sets verbose debug. If false, clears both verboseTrace and verboseDebug
     void setVerboseTrace(bool); ///< if true, implicitly sets verboseDebug as well
 
-    void requestQuit(); ///< connected to this->quit() as its slot, useful for being able to quit from any thread
+    /// Connected to this->quit() as its slot, useful for being able to quit from any thread.
+    /// Pass `true` if this request came as the result of a signal handler.
+    void requestQuit(bool signalled = false);
 
 public slots:
     /// SrvMgr is connected to this when it requests a maxBuffer change.  If maxBufferBytes is out of range,
@@ -152,7 +154,7 @@ private:
     // - Ctrl-C / signal handling for shutdown -
     std::list<Defer<>> posixSignalRegistrations;
     Util::AsyncSignalSafe::Sem exitSem;
-    std::thread exitThr;
+    std::unique_ptr<QThread> exitThr;
     using SigCtr = std::conditional_t<std::atomic_int::is_always_lock_free, std::atomic_int, volatile int>;
     SigCtr sigCtr = 0;
     /// Registered for SIGINT, SIGHUP, etc. Sets the condition variable exitSem
