@@ -41,8 +41,16 @@
 #define WIN32_LEAN_AND_MEAN 1
 #  include <windows.h>
 #  include <psapi.h>
+#  include <io.h>    // for _write(), _read(), _pipe(), _close()
+#  include <fcntl.h> // for O_BINARY, O_TEXT
+#  include <errno.h> // for errno
 #endif
 
+#if defined(Q_OS_UNIX)
+#include <unistd.h>  // for write(), read(), pipe(), close()
+#endif
+
+#include <cstring>   // for strerror
 #include <iostream>
 #include <thread>
 
@@ -321,6 +329,63 @@ namespace Util {
 #endif
     }
 
+    namespace AsyncSignalSafe {
+        namespace {
+#if defined(Q_OS_WIN)
+            auto writeFD = ::_write; // Windows API docs say to use this function, since write() is deprecated
+            auto readFD  = ::_read;  // Windows API docs say to use this function, since read() is deprecated
+            auto closeFD = ::_close; // Windows API docs say to use this function, since close() is deprecated
+            inline constexpr std::array<char, 3> NL{"\r\n"};
+#elif defined(Q_OS_UNIX)
+            auto writeFD = ::write;
+            auto readFD  = ::read;
+            auto closeFD = ::close;
+            inline constexpr std::array<char, 2> NL{"\n"};
+#else
+            // no-op on unknown platform (this platform would use the cond variable and doesn't need read/close/pipe)
+            auto writeFD = [](int, const void *, size_t n) { return int(n); };
+            inline constexpr std::array<char, 1> NL{0};
+#endif
+        }
+        void writeStdErr(const std::string_view &sv, bool wrnl) {
+            constexpr int stderr_fd = 2; /* this is the case on all platforms */
+            writeFD(stderr_fd, sv.data(), sv.length());
+            if (wrnl && NL.size() > 1)
+                writeFD(stderr_fd, NL.data(), NL.size()-1);
+        }
+#if defined(Q_OS_WIN) || defined(Q_OS_UNIX)
+        Cond::Pipe::Pipe() {
+            const int res =
+#           ifdef Q_OS_WIN
+                ::_pipe(fds, 256 /* bufsize */, O_BINARY);
+#           else
+                ::pipe(fds);
+#           endif
+            if (res != 0)
+                throw InternalError(QString("Failed to create a Cond::Pipe: (%1) %2").arg(errno).arg(std::strerror(errno)));
+        }
+        Cond::Pipe::~Pipe() { closeFD(fds[0]), closeFD(fds[1]); }
+        void Cond::block() {
+            char c;
+            if (const int res = readFD(p.fds[0], &c, 1); res != 1)
+                throw InternalError(QString("Cond::block: readFD returned %1").arg(res));
+        }
+        void Cond::wakeUp() {
+            const char c = 0;
+            if (const int res = writeFD(p.fds[1], &c, 1); res != 1)
+                throw InternalError(QString("Cond::block: writeFD returned %1").arg(res));
+        }
+#else
+        // fallback to emulated -- use std C++ condition variable which is not technically
+        // guaranteed async signal safe, but for all pratical purposes it's safe enough as a fallback.
+        void Cond::block() {
+            std::mutex dummy; // hack, but works
+            std::unique_lock l(dummy);
+            p.cond.wait(l);
+        }
+        void Cond::wakeUp() { p.cond.notify_one(); }
+#endif // defined(Q_OS_WIN) || defined(Q_OS_UNIX)
+    } // end namespace AsyncSignalSafe
 } // end namespace Util
 
 Log::Log() {}

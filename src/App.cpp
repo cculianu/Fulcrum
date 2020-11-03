@@ -81,6 +81,10 @@ App::App(int argc, char *argv[])
     connect(this, &App::aboutToQuit, this, &App::cleanup);
     connect(this, &App::setVerboseDebug, this, &App::on_setVerboseDebug);
     connect(this, &App::setVerboseTrace, this, &App::on_setVerboseTrace);
+    connect(this, &App::requestQuit, this, [this]{
+        Log() << "Shutdown requested" << (sigCtr ? " via signal" : "");
+        this->quit();
+    }, Qt::QueuedConnection);
     QTimer::singleShot(0, this, &App::startup); // register to run after app event loop start
 }
 
@@ -91,6 +95,73 @@ App::~App()
     _globalInstance = nullptr;
     /// child objects will be auto-deleted, however most are already gone in cleanup() at this point.
 }
+
+void App::signalHandler(int sig)
+{
+    // We must use writeStdErr() below since it is async signal safe (fprintf, std::cerr, etc are not).
+    constexpr int thresh = 5;
+    using Util::AsyncSignalSafe::writeStdErr, Util::AsyncSignalSafe::SBuf;
+    if (const auto ct = ++sigCtr; ct == 1) {
+        writeStdErr(SBuf{" -- Caught signal ", sig, ", exiting ..."});
+    } else if (ct < thresh) {
+        writeStdErr(SBuf{" -- Caught signal ", sig, " (count: ", ct, "/", thresh, "). "
+                         APPNAME " is exiting, please wait ..."});
+    } else {
+        writeStdErr(SBuf{" -- Caught signal ", sig, ". Caught ", thresh, " or more signals, aborting."});
+        std::abort();
+    }
+    try { exitCond.wakeUp(); } catch (...) {} // wake exitThr
+}
+
+void App::startup_Sighandlers()
+{
+    if (exitThr.joinable())
+        throw InternalError("Exit thread is already running!");
+
+    sigCtr = 0;
+
+    // Quit thread. Waits on exitCond and then does a quit.  Woken up precisely once from the signal handler,
+    // or from the cleanup() function (whichever executes first).
+    exitThr = std::thread([this] {
+        try {
+            while (!quitting && !sigCtr)
+                // keep waiting to allow for spurious wake-ups -- stop waiting when either quitting or sigCtr != 0
+                exitCond.block();
+            if (!quitting) emit requestQuit();
+        } catch (const std::exception &e) {
+            // should never happen -- here to defend against programming errors.
+            Error() << "Caught exception in exitThr: " << e.what();
+        }
+    });
+
+#define Pair_(x) std::pair{x, #x}
+    const auto pairs = {
+        Pair_(SIGINT), Pair_(SIGTERM), // all platforms have these signals
+#ifdef Q_OS_UNIX
+        Pair_(SIGQUIT), Pair_(SIGHUP), // unix only
+#endif
+#undef Pair_
+    };
+    for (const auto & [sig, name] : pairs) {
+        auto res = std::signal(sig, signal_trampoline);
+        if (res == SIG_ERR)
+            Warning() << "Error registering " << name << ": " << std::strerror(errno);
+        else {
+            DebugM("Registered ", name);
+            posixSignalRegistrations.emplace_back(
+                // Executes at list destruction (unregister)
+                [sig=sig, name=name]{
+                    std::signal(sig, SIG_DFL);
+                    DebugM("Unregistered ", name);
+            });
+        }
+    }
+    const auto num = posixSignalRegistrations.size();
+    DebugM("Registered ", num, Util::Pluralize(" signal handler", num));
+}
+
+/// The standard says we must use C linkage for POSIX signal handlers
+extern "C" void signal_trampoline(int sig) { if (App::_globalInstance) App::_globalInstance->signalHandler(sig); }
 
 void App::startup()
 {
@@ -111,24 +182,7 @@ void App::startup()
     try {
         BTC::CheckBitcoinEndiannessAndOtherSanityChecks();
 
-        auto gotsig = [](int sig) {
-            static int ct = 0;
-            if (!ct++) {
-                Log() << "Got signal: " << sig << ", exiting ...";
-                app()->exit(sig);
-            } else if (ct < 5) {
-                std::printf("Duplicate signal %d already being handled, ignoring\n", sig);
-            } else {
-                std::printf("Signal %d caught more than 5 times, aborting\n", sig);
-                std::abort();
-            }
-        };
-        std::signal(SIGINT, gotsig);
-        std::signal(SIGTERM, gotsig);
-#ifdef Q_OS_UNIX
-        std::signal(SIGQUIT, gotsig);
-        std::signal(SIGHUP, SIG_IGN);
-#endif
+        startup_Sighandlers(); // register our signal handlers (SIGINT, SIGTERM, etc)
 
         controller = std::make_unique<Controller>(options);
         controller->startup(); // may throw
@@ -157,6 +211,22 @@ void App::cleanup()
         httpServers.clear(); // deletes shared pointers
     }
     if (controller) { Log("Stopping Controller ... "); controller->cleanup(); controller.reset(); }
+    cleanup_Sighandlers();
+}
+
+void App::cleanup_Sighandlers()
+{
+    assert(bool(quitting)); // precondition
+    posixSignalRegistrations.clear(); // unregisters the registered signal handlers
+    if (exitThr.joinable()) {
+        try {
+            exitCond.wakeUp();
+        } catch (const std::exception &e) {
+            // should never happen -- here to defend against programming errors.
+            Error() << "Exception in exitCond.wakeUp(): " << e.what();
+        }
+        exitThr.join();
+    }
 }
 
 void App::cleanup_WaitForThreadPoolWorkers()

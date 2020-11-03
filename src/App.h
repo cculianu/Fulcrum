@@ -18,21 +18,27 @@
 //
 #pragma once
 
+#include "Mixins.h"
+#include "Options.h"
+#include "Util.h"
+
 #include <QCoreApplication>
 #include <QVariantMap>
 
 #include <atomic>
 #include <functional>
+#include <list>
 #include <map>
 #include <memory>
-
-#include "Mixins.h"
-#include "Options.h"
+#include <thread>
+#include <type_traits>
 
 class Controller;
 class Logger;
 class SimpleHttpServer;
 class ThreadPool;
+
+extern "C" void signal_trampoline(int sig); ///< signal handler must be extern "C" according to the C++ standard.
 
 class App final : public QCoreApplication, public TimersByNameMixin
 {
@@ -91,6 +97,8 @@ signals:
     void setVerboseDebug(bool); ///< if true, sets verbose debug. If false, clears both verboseTrace and verboseDebug
     void setVerboseTrace(bool); ///< if true, implicitly sets verboseDebug as well
 
+    void requestQuit(); ///< connected to this->quit() as its slot, useful for being able to quit from any thread
+
 public slots:
     /// SrvMgr is connected to this when it requests a maxBuffer change.  If maxBufferBytes is out of range,
     /// this call has no effect.  Otherwise it updates the app-global Options object.  It is safe to call this
@@ -140,6 +148,18 @@ private:
     /// Call this at app init and/or after the App object is initialized to undo the locale damage that Qt does
     /// for the C library for number formatting. Previous to this, this could break the JSON serializer.
     static void setCLocale();
+
+    // - Ctrl-C / signal handling for shutdown -
+    std::list<Defer<>> posixSignalRegistrations;
+    Util::AsyncSignalSafe::Cond exitCond;
+    std::thread exitThr;
+    using SigCtr = std::conditional_t<std::atomic_int::is_always_lock_free, std::atomic_int, volatile int>;
+    SigCtr sigCtr = 0;
+    /// Registered for SIGINT, SIGHUP, etc. Sets the condition variable exitCond
+    void signalHandler(int sig);
+    friend void ::signal_trampoline(int sig); // The extern "C" function declared at the top of this file.
+    void startup_Sighandlers();
+    void cleanup_Sighandlers();
 };
 
 inline App *app() { return App::globalInstance(); }

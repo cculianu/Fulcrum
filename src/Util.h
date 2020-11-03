@@ -28,6 +28,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <functional>
 #include <future>
 #include <list>
@@ -745,6 +746,107 @@ namespace Util {
     struct MemUsage { std::size_t phys{}, virt{}; };
     MemUsage getProcessMemoryUsage();
 
+    /// A namespace for a bunch of functionality that can be used from an async POSIX signal handler.
+    ///
+    /// We can't really use any functions in a signal handler besides the ones in this table --
+    /// https://pubs.opengroup.org/onlinepubs/9699919799/functions/V2_chap02.html#tag_15_04
+    namespace AsyncSignalSafe {
+
+        //! A very simple C string buffer. Uses the stack only, so it's async signal safe.
+        //! Use this in an the app signal handler to build a simple (non-allocating) C string for
+        //! writeStdErr() declared later in this file.
+        template <std::size_t N = 255>
+        struct SBuf {
+            static_assert (N < std::size_t(std::numeric_limits<long>::max())); // ensure no signed overflow
+            static constexpr std::size_t MaxLen = N;
+            std::array<char, MaxLen + 1> strBuf;
+            std::size_t len = 0;
+
+            constexpr SBuf() noexcept { clear(); }
+
+            /// Construct by formatting the args to this buffer.
+            /// Usage: SBuf("A string: ", anum, " another string\n", anotherNum), etc.
+            template <typename ... Args>
+            SBuf(Args && ...args) : SBuf() {
+                // fold expression: calls append() for each argument in the pack
+                (append(std::forward<Args>(args)),...);
+            }
+
+            constexpr void clear() noexcept { len = 0; strBuf[0] = 0; }
+
+            // append a string_view to the buffer
+            SBuf & append(const std::string_view &sv) noexcept {
+                auto *const s = sv.data();
+                long slen = long(sv.length());
+                if (slen <= 0) return *this;
+                if (slen + len > MaxLen)
+                    slen = long(MaxLen) - len;
+                if (slen <= 0) return *this;
+                std::strncpy(strBuf.data() + len, s, slen);
+                len += slen;
+                strBuf[len] = 0;
+                return *this;
+            }
+            // append an integer converting to decimal string
+            SBuf & append(int n) noexcept {
+                std::array<char, 20> buf;
+                buf[0] = 0;
+                long len = 0;
+                if (n < 0) { n = -n; buf[len++] = '-'; buf[len] = 0; }
+                do {
+                    buf[len++] = '0' + n % 10;
+                    n /= 10;
+                } while (n && len < long(MaxLen));
+                buf[len] = 0; // terminating nul
+                std::reverse(buf.begin(), buf.begin() + len);
+                return append({buf.data(), std::size_t(len)});
+            }
+            constexpr operator const char *() const noexcept { return strBuf.data(); }
+            operator std::string_view() const noexcept { return {strBuf.data(), len}; }
+            SBuf &operator=(const std::string_view &sv) noexcept { clear(); return append(sv); }
+            SBuf &operator+=(const std::string_view &sv) noexcept { return append(sv); }
+        };
+
+        /// Writes directly to file descriptor 2 on platforms that have this concept (Windows, OSX, Unix, etc).
+        /// On other platforms is a no-op.  Use this with SBuf() to compose a string to output to stderr
+        /// immediately.  If writeNewLine is true, then the platform-specific "\r\n" or "\n" will be also written
+        /// in a second write all.
+        void writeStdErr(const std::string_view &, bool writeNewLine = true);
+
+        /// A very rudimentary primitive for signaling a condition from a signal handler,
+        /// which is intended to get picked-up later by a monitoring thread.
+        ///
+        /// This class is necessary because none of the C++ synchronization primitives are technically async signal
+        /// safe and thus cannot be used inside signal handlers.
+        ///
+        /// Internally, this class uses a self-pipe technique on platforms that have pipe() (such as Windows & Unix).
+        /// On unknown platforms this behavior is emulated (in a technically async signal unsafe way) via use of C++
+        /// std::condition_variable. While this latter technique is not techincally safe -- it is only a fallback so
+        /// that we compile and run on such hypothetical unknown platforms. In practice this fallback technique won't
+        /// cause problems 99.9999999% of the time (what's more: it is not even used on any known platform).
+        struct Cond
+        {
+            Cond() = default; ///< may throw InternalError if it could not allocate necessary resources
+            /// Call this from a monitoring thread -- blocks until wakeUp() is called from e.g. a signal handler
+            /// or another thread.
+            void block();
+            /// Call this from a signal handler or from a thread that wants to wake up the monitoring thread.
+            void wakeUp();
+
+        private:
+#if defined(Q_OS_WIN) || defined(Q_OS_UNIX)
+            // async signal safe self-pipe
+            struct Pipe { int fds[2]; Pipe(); /* <-- may throw */  ~Pipe(); };
+            // copying not supported in the pipe case
+            Cond(const Cond &) = delete;
+            Cond &operator=(const Cond &) = delete;
+#else
+            // emulated fallback for unknown platforms
+            struct Pipe { std::condition_variable cond; };
+#endif
+            Pipe p;
+        };
+    } // end namespace AsyncSignalSafe
 } // end namespace Util
 
 /// Kind of like Go's "defer" statement. Call a lambda (for clean-up code) at scope end.
@@ -753,7 +855,7 @@ namespace Util {
 /// This is a tiny performance optimization as it avoids a std::function wrapper. You can, however, also use a
 /// std::function, with this class -- just be sure it's valid (operator bool() == true), since we don't check for
 /// validity on std::function before invoking.
-template <typename VoidFuncT,
+template <typename VoidFuncT = Util::VoidFunc,
           std::enable_if_t<std::is_invocable_v<VoidFuncT>, int> = 0>
 struct Defer
 {
@@ -789,7 +891,7 @@ protected:
 ///     Defer d1( [&]{ someUniqPtr.reset(); } );
 ///
 /// But the RAII version above is more explicit about what code goes with what cleanup.
-struct RAII : public Defer<std::function<void()>> {
+struct RAII : public Defer<> {
     /// initFunc called immediately, cleanupFunc called in this instance's destructor
     RAII(const VoidFunc & initFunc, const VoidFunc &cleanupFunc) : Defer(cleanupFunc) { if (initFunc) initFunc(); valid = bool(cleanupFunc); }
     /// initFunc called immediately, cleanupFunc called in this instance's destructor

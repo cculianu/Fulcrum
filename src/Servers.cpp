@@ -2337,11 +2337,11 @@ void AdminServer::rpc_rmpeer(Client *c, const RPC::Message &m)
 }
 void AdminServer::rpc_shutdown(Client *c, const RPC::Message &m)
 {
-    auto app = qApp;
+    App *app = ::app();
     // send the signal after 100ms to the QCoreApplication instance to quit.  this allows time for the result to be sent to the client, hopefully.
     Util::AsyncOnObject(app, [app] {
         Log() << "Received 'stop' command from admin RPC, shutting down ...";
-        app->quit();
+        emit app->requestQuit();
     }, 100);
     emit c->sendResult(m.id, true);
 }
