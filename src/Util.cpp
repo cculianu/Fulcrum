@@ -354,36 +354,36 @@ namespace Util {
                 writeFD(stderr_fd, NL.data(), NL.size()-1);
         }
 #if defined(Q_OS_WIN) || defined(Q_OS_UNIX)
-        Cond::Pipe::Pipe() {
+        Sem::Pipe::Pipe() {
             const int res =
 #           ifdef Q_OS_WIN
-                ::_pipe(fds, 256 /* bufsize */, O_BINARY);
+                ::_pipe(fds, 32 /* bufsize */, O_BINARY);
 #           else
                 ::pipe(fds);
 #           endif
             if (res != 0)
                 throw InternalError(QString("Failed to create a Cond::Pipe: (%1) %2").arg(errno).arg(std::strerror(errno)));
         }
-        Cond::Pipe::~Pipe() { closeFD(fds[0]), closeFD(fds[1]); }
-        void Cond::block() {
+        Sem::Pipe::~Pipe() { closeFD(fds[0]), closeFD(fds[1]); }
+        void Sem::acquire() {
             char c;
             if (const int res = readFD(p.fds[0], &c, 1); res != 1)
-                throw InternalError(QString("Cond::block: readFD returned %1").arg(res));
+                throw InternalError(QString("Sem::acquire: readFD returned %1").arg(res));
         }
-        void Cond::wakeUp() {
+        void Sem::release() {
             const char c = 0;
             if (const int res = writeFD(p.fds[1], &c, 1); res != 1)
-                throw InternalError(QString("Cond::block: writeFD returned %1").arg(res));
+                throw InternalError(QString("Sem::release: writeFD returned %1").arg(res));
         }
 #else
         // fallback to emulated -- use std C++ condition variable which is not technically
         // guaranteed async signal safe, but for all pratical purposes it's safe enough as a fallback.
-        void Cond::block() {
+        void Sem::acquire() {
             std::mutex dummy; // hack, but works
             std::unique_lock l(dummy);
             p.cond.wait(l);
         }
-        void Cond::wakeUp() { p.cond.notify_one(); }
+        void Sem::release() { p.cond.notify_one(); }
 #endif // defined(Q_OS_WIN) || defined(Q_OS_UNIX)
     } // end namespace AsyncSignalSafe
 } // end namespace Util

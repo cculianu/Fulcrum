@@ -151,11 +151,11 @@ private:
 
     // - Ctrl-C / signal handling for shutdown -
     std::list<Defer<>> posixSignalRegistrations;
-    Util::AsyncSignalSafe::Cond exitCond;
+    Util::AsyncSignalSafe::Sem exitSem;
     std::thread exitThr;
     using SigCtr = std::conditional_t<std::atomic_int::is_always_lock_free, std::atomic_int, volatile int>;
     SigCtr sigCtr = 0;
-    /// Registered for SIGINT, SIGHUP, etc. Sets the condition variable exitCond
+    /// Registered for SIGINT, SIGHUP, etc. Sets the condition variable exitSem
     void signalHandler(int sig);
     friend void ::signal_trampoline(int sig); // The extern "C" function declared at the top of this file.
     void startup_Sighandlers();

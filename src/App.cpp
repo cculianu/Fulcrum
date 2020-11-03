@@ -110,7 +110,7 @@ void App::signalHandler(int sig)
         writeStdErr(SBuf{" -- Caught signal ", sig, ". Caught ", thresh, " or more signals, aborting."});
         std::abort();
     }
-    try { exitCond.wakeUp(); } catch (...) {} // wake exitThr
+    try { exitSem.release(); } catch (...) {} // wake exitThr
 }
 
 void App::startup_Sighandlers()
@@ -120,13 +120,13 @@ void App::startup_Sighandlers()
 
     sigCtr = 0;
 
-    // Quit thread. Waits on exitCond and then does a quit.  Woken up precisely once from the signal handler,
+    // Quit thread. Waits on exitSem and then does a quit.  Woken up precisely once from the signal handler,
     // or from the cleanup() function (whichever executes first).
     exitThr = std::thread([this] {
         try {
             while (!quitting && !sigCtr)
                 // keep waiting to allow for spurious wake-ups -- stop waiting when either quitting or sigCtr != 0
-                exitCond.block();
+                exitSem.acquire();
             if (!quitting) emit requestQuit();
         } catch (const std::exception &e) {
             // should never happen -- here to defend against programming errors.
@@ -220,10 +220,10 @@ void App::cleanup_Sighandlers()
     posixSignalRegistrations.clear(); // unregisters the registered signal handlers
     if (exitThr.joinable()) {
         try {
-            exitCond.wakeUp();
+            exitSem.release();
         } catch (const std::exception &e) {
             // should never happen -- here to defend against programming errors.
-            Error() << "Exception in exitCond.wakeUp(): " << e.what();
+            Error() << "Exception in exitSem.release(): " << e.what();
         }
         exitThr.join();
     }

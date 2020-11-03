@@ -824,22 +824,22 @@ namespace Util {
         /// std::condition_variable. While this latter technique is not techincally safe -- it is only a fallback so
         /// that we compile and run on such hypothetical unknown platforms. In practice this fallback technique won't
         /// cause problems 99.9999999% of the time (what's more: it is not even used on any known platform).
-        struct Cond
+        struct Sem
         {
-            Cond() = default; ///< may throw InternalError if it could not allocate necessary resources
-            /// Call this from a monitoring thread -- blocks until wakeUp() is called from e.g. a signal handler
+            Sem() = default; ///< may throw InternalError if it could not allocate necessary resources
+            /// Call this from a monitoring thread -- blocks until realease() is called from e.g. a signal handler
             /// or another thread.
-            void block();
+            void acquire();
             /// Call this from a signal handler or from a thread that wants to wake up the monitoring thread.
-            void wakeUp();
+            void release();
 
         private:
 #if defined(Q_OS_WIN) || defined(Q_OS_UNIX)
             // async signal safe self-pipe
             struct Pipe { int fds[2]; Pipe(); /* <-- may throw */  ~Pipe(); };
-            // copying not supported in the pipe case
-            Cond(const Cond &) = delete;
-            Cond &operator=(const Cond &) = delete;
+            // copying not supported
+            Sem(const Sem &) = delete;
+            Sem &operator=(const Sem &) = delete;
 #else
             // emulated fallback for unknown platforms
             struct Pipe { std::condition_variable cond; };
