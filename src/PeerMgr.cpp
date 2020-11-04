@@ -132,6 +132,7 @@ void PeerMgr::detectProtocol(const QHostAddress &addr)
 
 void PeerMgr::parseServersDotJson(const QString &fnIn)
 {
+    seedPeers.clear();
     const auto backend = Options::isSimdJson() ? Json::ParserBackend::FastestAvailable : Json::ParserBackend::Default; // kind of a hack
     QVariantMap m = Json::parseFile(fnIn, Json::ParseOption::RequireObject, backend).toMap();
     const QString fn = Util::basename(fnIn); // use basename for error messages below, etc

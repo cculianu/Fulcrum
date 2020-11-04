@@ -121,7 +121,7 @@ private:
 
     using PeerInfoMap = QHash<QString, PeerInfo>; // hostname -> PeerInfo
 
-    PeerInfoMap seedPeers; ///< parsed PeerInfos from server.json or servers_testnet.json
+    PeerInfoMap seedPeers; ///< parsed PeerInfos from servers.json or servers_testnet.json or servers_testnet4.json, etc
 
     void parseServersDotJson(const QString &) noexcept(false); ///< may throw
 

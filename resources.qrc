@@ -4,5 +4,7 @@
         <file>resources/servers_testnet.json</file>
         <file>resources/servers_testnet4.json</file>
         <file>resources/servers_scalenet.json</file>
+        <file>resources/btc/servers.json</file>
+        <file>resources/btc/servers_testnet.json</file>
     </qresource>
 </RCC>
