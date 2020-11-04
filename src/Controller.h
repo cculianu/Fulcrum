@@ -149,6 +149,9 @@ private:
     /// notifies subscribed clients (if any).
     std::atomic_bool masterNotifySubsFlag = false;
 
+    /// If true, BitcoinDMgr informed us that the bitcoind node we are connected to is bitcoin core (thus we allow segwit)
+    std::atomic_bool bitcoinCoreFlag = false;
+
     /// takes locks, prints to Log() every 30 seconds if there were changes
     void printMempoolStatusToLog() const;
 
@@ -203,7 +206,8 @@ protected:
 
     quint64 submitRequest(const QString &method, const QVariantList &params, const BitcoinDMgr::ResultsF &resultsFunc);
 
-    Controller * const ctl;  ///< initted in c'tor. Is always valid since all tasks' lifecycles are managed by the Controller.
+    Controller * const ctl; ///< initted in c'tor. Is always valid since all tasks' lifecycles are managed by the Controller.
+    const bool allowSegWitTx; ///< initted in c'tor. If true, subclasses may deserialize tx's using the optional segwit extensons to the tx format.
 };
 
 Q_DECLARE_METATYPE(CtlTask *);

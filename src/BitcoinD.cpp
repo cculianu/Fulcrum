@@ -27,6 +27,7 @@
 #include <QSslSocket>
 
 #include <mutex>
+#include <tuple>
 
 namespace {
     enum class PingTimes : int {
@@ -185,7 +186,7 @@ BitcoinD *BitcoinDMgr::getBitcoinD()
 
 namespace {
     struct BitcoinDVersionParseResult {
-        bool isBchd;
+        bool isBchd, isCore;
         Version version;
     };
 
@@ -207,10 +208,11 @@ namespace {
             if (!version.isValid())
                 // hmm.. subversion isn't "/bchd:x.y.z.../" -> fall back to unpacking the integer value (only works on newer bchd)
                 version = Version(val, Version::BitcoinD);
-            return {true, version};
+            return {true, false, version};
         } else {
+            const bool isCore = subversion.startsWith("/Satoshi:");
             // regular bitcoind, "version" is reliable
-            return {false, Version(val, Version::BitcoinD)};
+            return {false, isCore, Version(val, Version::BitcoinD)};
         }
     }
 }
@@ -220,14 +222,14 @@ void BitcoinDMgr::refreshBitcoinDNetworkInfo()
     submitRequest(this, newId(), "getnetworkinfo", QVariantList{},
         // success
         [this](const RPC::Message & reply) {
-            bool isBchd{};
+            bool isBchd{}, isCore{};
             {
                 const QVariantMap networkInfo = reply.result().toMap();
                 // --- EXCLUSIVE-LOCKED SCOPE below this line ---
                 std::unique_lock g(bitcoinDInfoLock);
                 bitcoinDInfo.subversion = networkInfo.value("subversion", "").toString();
                 // try and determine version major/minor/revision
-                bitcoinDInfo.isBchd = isBchd = [&networkInfo, this] {
+                std::tie(bitcoinDInfo.isBchd, bitcoinDInfo.isCore) = [&networkInfo, this] {
                     bool ok = false;
                     const auto val = networkInfo.value("version", 0).toUInt(&ok);
 
@@ -236,13 +238,15 @@ void BitcoinDMgr::refreshBitcoinDNetworkInfo()
                         bitcoinDInfo.version = res.version;
                         DebugM("Refreshed version info from bitcoind, version: ", bitcoinDInfo.version.toString(true),
                                ", subversion: ", bitcoinDInfo.subversion);
-                        return res.isBchd;
+                        return std::pair{res.isBchd, res.isCore};
                     } else {
                         bitcoinDInfo.version = Version();
                         Warning() << "Failed to parse version info from bitcoind";
                     }
-                    return false;
+                    return std::pair{false, false};
                 }();
+                isBchd = bitcoinDInfo.isBchd;
+                isCore = bitcoinDInfo.isCore;
                 bitcoinDInfo.relayFee = networkInfo.value("relayfee", 0.0).toDouble();
                 bitcoinDInfo.warnings = networkInfo.value("warnings", "").toString();
                 // set quirk flags: requires 0 arg `estimatefee`?
@@ -256,8 +260,10 @@ void BitcoinDMgr::refreshBitcoinDNetworkInfo()
                             return true;
                     return false;
                 };
-                bitcoinDInfo.isZeroArgEstimateFee = isZeroArgEstimateFee(bitcoinDInfo.version, bitcoinDInfo.subversion);
+                bitcoinDInfo.isZeroArgEstimateFee = !isCore && isZeroArgEstimateFee(bitcoinDInfo.version, bitcoinDInfo.subversion);
             } // end lock scope
+            // be sure to announce whether remote bitcoind is bitcoin core (this determines whether we use segwit or not)
+            emit bitcoinCoreDetection(isCore);
             // next, be sure to set up the ping time appropriately for bchd vs bitcoind
             resetPingTimers(int(isBchd ? PingTimes::BCHD : PingTimes::Normal));
             // next up, do this query
@@ -332,6 +338,18 @@ bool BitcoinDMgr::isZeroArgEstimateFee() const
 {
     std::shared_lock g(bitcoinDInfoLock);
     return bitcoinDInfo.isZeroArgEstimateFee;
+}
+
+bool BitcoinDMgr::isBitcoinCore() const
+{
+    std::shared_lock g(bitcoinDInfoLock);
+    return bitcoinDInfo.isCore;
+}
+
+Version BitcoinDMgr::getBitcoinDVersion() const
+{
+    std::shared_lock g(bitcoinDInfoLock);
+    return bitcoinDInfo.version;
 }
 
 BlockHash BitcoinDMgr::getBitcoinDGenesisHash() const
@@ -687,5 +705,6 @@ QVariantMap BitcoinDInfo::toVariandMap() const
     ret["relayfee"] = relayFee;
     ret["isZeroArgEstimateFee"] = isZeroArgEstimateFee;
     ret["isBchd"] = isBchd;
+    ret["isCore"] = isCore;
     return ret;
 }

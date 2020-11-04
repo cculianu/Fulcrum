@@ -53,40 +53,67 @@ namespace BTC
     /// Specify from_pos=-1 for appending at the end.  Returns a reference to the passed-in buffer.  This is very fast
     /// and done in-place.
     template <typename BitcoinObject>
-    QByteArray & Serialize(QByteArray &buf, const BitcoinObject &thing, int from_pos = -1)
+    QByteArray & Serialize(QByteArray &buf, const BitcoinObject &thing, int from_pos = -1, bool allowSegWit = false)
     {
         if (from_pos < 0) from_pos = buf.size();
-        bitcoin::GenericVectorWriter<QByteArray> vw(bitcoin::SER_NETWORK, bitcoin::PROTOCOL_VERSION, buf, from_pos);
+        const int version = bitcoin::PROTOCOL_VERSION | (allowSegWit ? bitcoin::SERIALIZE_TRANSACTION_USE_WITNESS : 0);
+        bitcoin::GenericVectorWriter<QByteArray> vw(bitcoin::SER_NETWORK, version, buf, from_pos);
         thing.Serialize(vw);
         return buf;
     }
     /// Convenience for above -- serialize to a new QByteArray directly
     template <typename BitcoinObject>
-    QByteArray Serialize(const BitcoinObject &thing)
+    QByteArray Serialize(const BitcoinObject &thing, bool allowSegWit = false)
     {
         QByteArray ret;
-        Serialize(ret, thing);
+        Serialize(ret, thing, -1, allowSegWit);
         return ret;
     }
     /// Deserialize to a pre-allocated bitcoin object such as bitcoin::CBlock, bitcoin::CBlockHeader, bitcoin::CMutableTransaction, etc
     template <typename BitcoinObject,
               /// NB: This in-place Deserialization does *NOT* work with CTransaction because if has const-fields. (use the non-in-place specialization instead)
               std::enable_if_t<!std::is_same_v<BitcoinObject, bitcoin::CTransaction>, int> = 0 >
-    void Deserialize(BitcoinObject &thing, const QByteArray &bytes, int pos = 0)
+    void Deserialize(BitcoinObject &thing, const QByteArray &bytes, int pos = 0, bool allowSegWit = false)
     {
-        bitcoin::GenericVectorReader<QByteArray> vr(bitcoin::SER_NETWORK, bitcoin::PROTOCOL_VERSION, bytes, pos);
+        const int version = bitcoin::PROTOCOL_VERSION | (allowSegWit ? bitcoin::SERIALIZE_TRANSACTION_USE_WITNESS : 0);
+        bitcoin::GenericVectorReader<QByteArray> vr(bitcoin::SER_NETWORK, version, bytes, pos);
         thing.Unserialize(vr);
     }
     /// Convenience for above.  Create an instance of object and deserialize to it
     template <typename BitcoinObject>
-    BitcoinObject Deserialize(const QByteArray &bytes, int pos = 0)
+    BitcoinObject Deserialize(const QByteArray &bytes, int pos = 0, bool allowSegWit = false)
     {
         BitcoinObject ret;
-        Deserialize(ret, bytes, pos);
+        Deserialize(ret, bytes, pos, allowSegWit);
         return ret;
     }
+
+    template <typename BitcoinObject>
+    struct is_block_or_tx {
+        using BO = std::decay_t<BitcoinObject>;
+        static constexpr bool value = std::is_base_of_v<bitcoin::CBlock, BO> || std::is_same_v<bitcoin::CTransaction, BO>
+                                        || std::is_same_v<bitcoin::CMutableTransaction, BO>;
+    };
+
+    template <typename BitcoinObject>
+    inline constexpr bool is_block_or_tx_v = is_block_or_tx<BitcoinObject>::value;
+
     /// Template specialization for CTransaction which has const fields and works a little differently (impl. in BTC.cpp)
-    template <> bitcoin::CTransaction Deserialize(const QByteArray &, int pos);
+    template <> bitcoin::CTransaction Deserialize(const QByteArray &, int pos, bool allowSegWit);
+
+    /// Convenience to deserialize segwit object (block or tx) (Core only)
+    template <typename BitcoinObject>
+    std::enable_if_t<is_block_or_tx_v<BitcoinObject>, BitcoinObject>
+    /* BitcoinObject */ DeserializeSegWit(const QByteArray &ba, int pos = 0) {
+        return Deserialize<BitcoinObject>(ba, pos, true);
+    }
+
+    /// Convenience to serialize segwit object (block or tx) (Core only)
+    template <typename BitcoinObject>
+    std::enable_if_t<is_block_or_tx_v<BitcoinObject>, QByteArray>
+    /* QByteArray */ SerializeSegWit(const BitcoinObject &bo, int pos = -1) {
+        return Serialize<BitcoinObject>(bo, pos, true);
+    }
 
     /// Helper -- returns the size of a block header. Should always be 80. Update this if that changes.
     constexpr int GetBlockHeaderSize() noexcept { return 80; }

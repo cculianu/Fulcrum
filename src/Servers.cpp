@@ -1193,6 +1193,18 @@ void Server::rpc_blockchain_estimatefee(Client *c, const RPC::Message &m)
     if (!bitcoindmgr->isZeroArgEstimateFee())
         params.push_back(unsigned(n));
 
+    if (bitcoindmgr->isBitcoinCore() && bitcoindmgr->getBitcoinDVersion() >= Version{0,17,0}) {
+        // Bitcoin Core removed the "estimatefee" RPC method entirely in version 0.17.0, in favor of "estimatesmartfee"
+        generic_async_to_bitcoind(c, m.id, "estimatesmartfee", params, [](const RPC::Message &response){
+            // We don't validate what bitcoind returns. Sometimes if it has not enough information, it may
+            // return no "feerate" but instead return an "errors" entry in the dict. This is fine.
+            // ElectrumX just returns -1 in that case here, so we do the same.
+            return response.result().toMap().value("feerate", -1.0);
+        });
+        return;
+    }
+
+    // regular Bitcoin Cash daemons
     generic_async_to_bitcoind(c, m.id, "estimatefee", params, [](const RPC::Message &response){
         return response.result();
     });

@@ -76,6 +76,7 @@ void Controller::startup()
             callOnTimerSoon(msgPeriod, waitTimer, []{ Log("Waiting for bitcoind..."); return true; }, false, Qt::TimerType::VeryCoarseTimer);
         };
         waitForBitcoinD();
+        conns += connect(bitcoindmgr.get(), &BitcoinDMgr::bitcoinCoreDetection, this, [this](bool b){bitcoinCoreFlag = b;}, Qt::DirectConnection);
         conns += connect(bitcoindmgr.get(), &BitcoinDMgr::allConnectionsLost, this, waitForBitcoinD);
         conns += connect(bitcoindmgr.get(), &BitcoinDMgr::gotFirstGoodConnection, this, [this](quint64 id) {
             // connection to kick off our 'process' method once the first auth is received
@@ -362,49 +363,53 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
         const auto hash = Util::ParseHexFast(var.toByteArray());
         if (hash.length() == HashLen) {
             submitRequest("getblock", {var, false}, [this, bnum, hash](const RPC::Message & resp){
-                QVariant var = resp.result();
-                const auto rawblock = Util::ParseHexFast(var.toByteArray());
-                const auto header = rawblock.left(HEADER_SIZE); // we need a deep copy of this anyway so might as well take it now.
-                QByteArray chkHash;
-                if (bool sizeOk = header.length() == HEADER_SIZE; sizeOk && (chkHash = BTC::HashRev(header)) == hash) {
-                    auto ppb = PreProcessedBlock::makeShared(bnum, size_t(rawblock.size()), BTC::Deserialize<bitcoin::CBlock>(rawblock)); // this is here to test performance
+                try {
+                    QVariant var = resp.result();
+                    const auto rawblock = Util::ParseHexFast(var.toByteArray());
+                    const auto header = rawblock.left(HEADER_SIZE); // we need a deep copy of this anyway so might as well take it now.
+                    QByteArray chkHash;
+                    if (bool sizeOk = header.length() == HEADER_SIZE; sizeOk && (chkHash = BTC::HashRev(header)) == hash) {
+                        auto ppb = PreProcessedBlock::makeShared(bnum, size_t(rawblock.size()), BTC::Deserialize<bitcoin::CBlock>(rawblock, 0, allowSegWitTx));
 
-                    if (TRACE) Trace() << "block " << bnum << " size: " << rawblock.size() << " nTx: " << ppb->txInfos.size();
-                    // update some stats for /stats endpoint
-                    nTx += ppb->txInfos.size();
-                    nOuts += ppb->outputs.size();
-                    nIns += ppb->inputs.size();
+                        if (TRACE) Trace() << "block " << bnum << " size: " << rawblock.size() << " nTx: " << ppb->txInfos.size();
+                        // update some stats for /stats endpoint
+                        nTx += ppb->txInfos.size();
+                        nOuts += ppb->outputs.size();
+                        nIns += ppb->inputs.size();
 
-                    const size_t index = height2Index(bnum);
-                    ++goodCt;
-                    q_ct = qMax(q_ct-1, 0);
-                    lastProgress = double(index) / double(expectedCt);
-                    if (!(bnum % 1000) && bnum) {
-                        emit progress(lastProgress);
+                        const size_t index = height2Index(bnum);
+                        ++goodCt;
+                        q_ct = qMax(q_ct-1, 0);
+                        lastProgress = double(index) / double(expectedCt);
+                        if (!(bnum % 1000) && bnum) {
+                            emit progress(lastProgress);
+                        }
+                        if (TRACE) Trace() << resp.method << ": header for height: " << bnum << " len: " << header.length();
+                        emit ctl->putBlock(this, ppb); // send the block off to the Controller thread for further processing and for save to db
+                        if (goodCt >= expectedCt) {
+                            // flag state to maybeDone to do checks when process() called again
+                            maybeDone = true;
+                            AGAIN();
+                            return;
+                        }
+                        while (goodCt + unsigned(q_ct) < expectedCt && q_ct < max_q) {
+                            // queue multiple at once
+                            AGAIN();
+                            ++q_ct;
+                        }
+                    } else if (!sizeOk) {
+                        Warning() << resp.method << ": at height " << bnum << " header not valid (decoded size: " << header.length() << ")";
+                        errorCode = int(bnum);
+                        errorMessage = QString("bad size for height %1").arg(bnum);
+                        emit errored();
+                    } else {
+                        Warning() << resp.method << ": at height " << bnum << " header not valid (expected hash: " << hash.toHex() << ", got hash: " << chkHash.toHex() << ")";
+                        errorCode = int(bnum);
+                        errorMessage = QString("hash mismatch for height %1").arg(bnum);
+                        emit errored();
                     }
-                    if (TRACE) Trace() << resp.method << ": header for height: " << bnum << " len: " << header.length();
-                    emit ctl->putBlock(this, ppb); // send the block off to the Controller thread for further processing and for save to db
-                    if (goodCt >= expectedCt) {
-                        // flag state to maybeDone to do checks when process() called again
-                        maybeDone = true;
-                        AGAIN();
-                        return;
-                    }
-                    while (goodCt + unsigned(q_ct) < expectedCt && q_ct < max_q) {
-                        // queue multiple at once
-                        AGAIN();
-                        ++q_ct;
-                    }
-                } else if (!sizeOk) {
-                    Warning() << resp.method << ": at height " << bnum << " header not valid (decoded size: " << header.length() << ")";
-                    errorCode = int(bnum);
-                    errorMessage = QString("bad size for height %1").arg(bnum);
-                    emit errored();
-                } else {
-                    Warning() << resp.method << ": at height " << bnum << " header not valid (expected hash: " << hash.toHex() << ", got hash: " << chkHash.toHex() << ")";
-                    errorCode = int(bnum);
-                    errorMessage = QString("hash mismatch for height %1").arg(bnum);
-                    emit errored();
+                } catch (const std::exception &e) {
+                    Fatal() << QString("Caught exception processing block %1: %2").arg(bnum).arg(e.what());
                 }
             });
         } else {
@@ -687,8 +692,11 @@ void SynchMempoolTask::doDLNextTx()
             Error() << "Received tx data is of the wrong length -- bad hex? FIXME";
             emit errored();
             return;
-        } else if (BTC::HashRev(txdata) != tx->hash) {
-            Error() << "Received tx data appears to not match requested tx! FIXME!!";
+        } else if (!allowSegWitTx /* For segwit we tolerate the data not matching (since its hash is minus the witness
+                                     data, but txdata *contains* the witness data) -- in the segwit case, bad txdata
+                                     will simply throw an exception on Deserialize below. */
+                        && BTC::HashRev(txdata) != tx->hash) {
+            Error() << "Received tx data appears to not match requested tx for txhash: " << tx->hash.toHex() << "! FIXME!!";
             emit errored();
             return;
         }
@@ -697,11 +705,16 @@ void SynchMempoolTask::doDLNextTx()
         if (TRACE)
             Debug() << "got reply for tx: " << hashHex << " " << txdata.length() << " bytes";
 
-        {
+        try {
             // tmp mutable object will be moved into CTransactionRef below via a move constructor
-            bitcoin::CMutableTransaction ctx = BTC::Deserialize<bitcoin::CMutableTransaction>(txdata);
+            bitcoin::CMutableTransaction ctx = BTC::Deserialize<bitcoin::CMutableTransaction>(txdata, 0, allowSegWitTx);
             txsDownloaded[tx->hash] = {tx, bitcoin::MakeTransactionRef(std::move(ctx)) };
+        } catch (const std::exception &e) {
+            Error() << "Exception deserializing and adding tx " << tx->hash.toHex() << ": " << e.what();
+            emit errored();
+            return;
         }
+
         txsWaitingForResponse.erase(tx->hash);
         AGAIN();
     });
@@ -1278,7 +1291,7 @@ void Controller::process_DoUndoAndRetry()
 
 // -- CtlTask
 CtlTask::CtlTask(Controller *ctl, const QString &name)
-    : QObject(nullptr), ctl(ctl)
+    : QObject(nullptr), ctl(ctl), allowSegWitTx(ctl->bitcoinCoreFlag.load())
 {
     setObjectName(name);
     _thread.setObjectName(name);
@@ -1572,7 +1585,6 @@ std::tuple<size_t, size_t, size_t> Controller::nTxInOutSoFar() const
     }
     return {nTx, nIn, nOut};
 }
-
 
 // --- Debug dump support
 void Controller::dumpScriptHashes(const QString &fileName) const

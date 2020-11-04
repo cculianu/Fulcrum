@@ -72,9 +72,10 @@ namespace BTC
 
 
     /// specialization for CTransaction which works differently
-    template <> bitcoin::CTransaction Deserialize(const QByteArray &bytes, int pos)
+    template <> bitcoin::CTransaction Deserialize(const QByteArray &bytes, int pos, bool allowSegWit)
     {
-        bitcoin::GenericVectorReader<QByteArray> vr(bitcoin::SER_NETWORK, bitcoin::PROTOCOL_VERSION, bytes, pos);
+        const int version = bitcoin::PROTOCOL_VERSION | (allowSegWit ? bitcoin::SERIALIZE_TRANSACTION_USE_WITNESS : 0);
+        bitcoin::GenericVectorReader<QByteArray> vr(bitcoin::SER_NETWORK, version, bytes, pos);
         return bitcoin::CTransaction(bitcoin::deserialize, vr);
     }
 
