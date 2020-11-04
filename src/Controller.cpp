@@ -692,25 +692,38 @@ void SynchMempoolTask::doDLNextTx()
             Error() << "Received tx data is of the wrong length -- bad hex? FIXME";
             emit errored();
             return;
-        } else if (!allowSegWitTx /* For segwit we tolerate the data not matching (since its hash is minus the witness
-                                     data, but txdata *contains* the witness data) -- in the segwit case, bad txdata
-                                     will simply throw an exception on Deserialize below. */
-                        && BTC::HashRev(txdata) != tx->hash) {
-            Error() << "Received tx data appears to not match requested tx for txhash: " << tx->hash.toHex() << "! FIXME!!";
+        }
+
+        // deserialize tx, catching any deser errors
+        bitcoin::CMutableTransaction ctx;
+        try {
+            ctx = BTC::Deserialize<bitcoin::CMutableTransaction>(txdata, 0, allowSegWitTx);
+        } catch (const std::exception &e) {
+            Error() << "Error deserializing tx: " << tx->hash.toHex() << ", exception: " << e.what();
             emit errored();
             return;
         }
-        tx->sizeBytes = unsigned(expectedLen); // save size now -- this is needed later to calculate fees and for everything else.
+
+        // save size now -- this is needed later to calculate fees and for everything else.
+        // note: for btc core with segwit this size is not the same "virtual" size as what bitcoind would report
+        tx->sizeBytes = unsigned(expectedLen);
 
         if (TRACE)
             Debug() << "got reply for tx: " << hashHex << " " << txdata.length() << " bytes";
 
-        try {
-            // tmp mutable object will be moved into CTransactionRef below via a move constructor
-            bitcoin::CMutableTransaction ctx = BTC::Deserialize<bitcoin::CMutableTransaction>(txdata, 0, allowSegWitTx);
-            txsDownloaded[tx->hash] = {tx, bitcoin::MakeTransactionRef(std::move(ctx)) };
-        } catch (const std::exception &e) {
-            Error() << "Exception deserializing and adding tx " << tx->hash.toHex() << ": " << e.what();
+        // ctx is moved into CTransactionRef below via move construction
+        const auto & [_, txref] = txsDownloaded[tx->hash] = {tx, bitcoin::MakeTransactionRef(std::move(ctx)) };
+
+        // Check txdata is sane -- its hash should match the hash we asked for.
+        //
+        // We do this last because we want to reduce the number of hash operations done by this code -- constructing
+        // the CTransaction necessarily causes it to compute its own (segwit-stripped) hash on construction, so we get
+        // that hash "for free" here as it were -- and we can use it to ensure sanity that the tx matches what we
+        // expected without the need to do BTC::HashRev(txdata) above (which would be redundant).
+        if (const auto reversedHash = Util::reversedCopy(tx->hash); txref->GetHash() != reversedHash) {
+            txsDownloaded.erase(tx->hash); // remove the object we just inserted
+            // WARNING! `txref` is now a dangling reference at this point!
+            Error() << "Received tx data appears to not match requested tx for txhash: " << tx->hash.toHex() << "! FIXME!!";
             emit errored();
             return;
         }
