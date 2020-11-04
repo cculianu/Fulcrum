@@ -2194,6 +2194,7 @@ void AdminServer::rpc_getinfo(Client *c, const RPC::Message &m)
         res["height"] = opt.has_value() ? *opt : QVariant();
     }
     res["chain"] = storage->getChain();
+    res["coin"] = storage->getCoin();
     res["genesis_hash"] = Util::ToHexFast(storage->genesisHash());
     res["pid"] = QCoreApplication::applicationPid();
     res["clients_connected"] = qulonglong(Client::numClients.load());

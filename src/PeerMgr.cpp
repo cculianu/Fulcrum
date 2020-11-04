@@ -80,17 +80,19 @@ void PeerMgr::startup()
         throw InternalError("PeerMgr cannot be started until we have a valid genesis hash! FIXME!");
 
     const auto chain = storage->getChain();
+    const auto lcaseCoin = storage->getCoin().trimmed().toLower();
+    const auto pathPrefix = QString(":resources/%1/").arg(lcaseCoin);
     if (const auto net = BTC::NetFromName(chain); !QVector<BTC::Net>{{BTC::Net::TestNet, BTC::Net::TestNet4, BTC::Net::ScaleNet, BTC::Net::MainNet}}.contains(net))
         // can only do peering with testnet or mainnet after they have been defined (no regtest)
         throw InternalError(QString("PeerMgr cannot be started for the given chain \"%1\"").arg(chain));
     else if (net == BTC::Net::TestNet)
-        parseServersDotJson(":resources/servers_testnet.json");
+        parseServersDotJson(pathPrefix + "servers_testnet.json");
     else if (net == BTC::Net::TestNet4)
-        parseServersDotJson(":resources/servers_testnet4.json");
+        parseServersDotJson(pathPrefix + "servers_testnet4.json"); // BCH only
     else if (net == BTC::Net::ScaleNet)
-        parseServersDotJson(":resources/servers_scalenet.json");
+        parseServersDotJson(pathPrefix + "servers_scalenet.json"); // BCH only
     else
-        parseServersDotJson(":resources/servers.json");
+        parseServersDotJson(pathPrefix + "servers.json");
 
     // next, scan all the interfaces configured to determine if we have ipv4 or ipv6 or both
     // this allows us to decide what kinds of addresses to connect to later
