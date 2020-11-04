@@ -17,6 +17,8 @@
 #include <QString>
 #endif
 
+#include <algorithm>
+
 #ifdef __clang__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunused-function"
@@ -388,6 +390,8 @@ public:
 
     const TxId GetId() const { return TxId(hash); }
     const TxHash GetHash() const { return TxHash(hash); }
+    /// added by Calin to avoid extra copying
+    const uint256 &GetHashRef() const { return hash; }
     /// Added by Calin -- to support Core. Not cached, computed on-the-fly (this is not the case in Core code)
     const TxHash GetWitnessHash() const { return TxHash{ComputeWitnessHash()}; }
 
@@ -428,12 +432,9 @@ public:
 
     std::string ToString() const;
 
-    // Added by Calin
+    /// Added by Calin to support Core
     bool HasWitness() const {
-        for (const auto &txin : vin)
-            if (!txin.scriptWitness.IsNull())
-                return true;
-        return false;
+        return std::any_of(vin.begin(), vin.end(), [](const CTxIn & txin){ return !txin.scriptWitness.IsNull(); });
     }
 };
 
@@ -477,12 +478,9 @@ public:
         return a.GetId() == b.GetId();
     }
 
-    // Added by Calin
+    /// Added by Calin to support Core
     bool HasWitness() const {
-        for (const auto &txin : vin)
-            if (!txin.scriptWitness.IsNull())
-                return true;
-        return false;
+        return std::any_of(vin.begin(), vin.end(), [](const CTxIn & txin){ return !txin.scriptWitness.IsNull(); });
     }
 };
 

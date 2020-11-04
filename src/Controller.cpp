@@ -720,7 +720,7 @@ void SynchMempoolTask::doDLNextTx()
         // the CTransaction necessarily causes it to compute its own (segwit-stripped) hash on construction, so we get
         // that hash "for free" here as it were -- and we can use it to ensure sanity that the tx matches what we
         // expected without the need to do BTC::HashRev(txdata) above (which would be redundant).
-        if (const auto reversedHash = Util::reversedCopy(tx->hash); txref->GetHash() != reversedHash) {
+        if (Util::reversedCopy(txref->GetHashRef()) != tx->hash) {
             txsDownloaded.erase(tx->hash); // remove the object we just inserted
             // WARNING! `txref` is now a dangling reference at this point!
             Error() << "Received tx data appears to not match requested tx for txhash: " << tx->hash.toHex() << "! FIXME!!";
