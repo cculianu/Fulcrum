@@ -93,8 +93,8 @@ public:
     using Header = QByteArray;
     using HeaderHash = QByteArray;
 
-    /// 100 mln max headers for now.
-    static constexpr size_t MAX_HEADERS = 100000000;
+    /// 100 million max headers for now.
+    static constexpr size_t MAX_HEADERS = 100'000'000;
 
     /// Hard-coded to 100 blocks of undo. TODO: have this come from actual config, and take into account
     /// BTC::MaxReorgDepth (10) as a minimum.
@@ -124,6 +124,10 @@ public:
     /// eg 'main' or 'test' (or even possibly 'regtest') or may be empty string if new db (thread safe)
     QString getChain() const;
     void setChain(const QString &); // implicitly calls db save of 'meta' (thread safe)
+
+    /// Will be one of: "BCH", "BTC". Note Controller class must use this to match the coin with the bitcoind it is
+    /// connected to.
+    QString getCoin() const;
 
     /// Thread-safe. Returns a reversed hash (ready for hex encoding) of block 0's header.  Always succeeds if we have
     /// block 0, never throws. (If we have not seen block 0, returns an empty HeaderHash).
@@ -168,7 +172,7 @@ public:
     ///  the same int value as latestTip().first).
     BlockHeight undoLatestBlock(bool notifySubs = false);
 
-    /// returns the "next" TxNum (thread safe)
+    /// returns the "next" TxNum (thread safe, lock-free)
     TxNum getTxNum() const;
 
     /// Helper for TxNum. Resolve a 64-bit TxNum to a TxHash -- this may throw a DatabaseError if throwIfMissing=true (thread safe, takes no class-level locks)

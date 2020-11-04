@@ -29,17 +29,17 @@
 #endif
 
 /// All of the custom exceptions we define in this app inherit from this base.
-struct Exception : public std::runtime_error
+struct Exception : std::runtime_error
 {
     Exception(const QString & what = "Error") : std::runtime_error(what.toUtf8()) {}
     ~Exception() override; ///< for vtable
 };
 
-struct InternalError : public Exception { using Exception::Exception; };
-struct BadArgs : public Exception { using Exception::Exception; };
+struct InternalError : Exception { using Exception::Exception; ~InternalError() override; };
+struct BadArgs : Exception { using Exception::Exception; ~BadArgs() override; };
 
 #define APPNAME "Fulcrum"
-#define VERSION "1.2.12"
+#define VERSION "1.3.0"
 #ifdef QT_DEBUG
 #  define VERSION_EXTRA "(Debug)"
 inline constexpr bool isReleaseBuild() { return false; }

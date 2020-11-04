@@ -62,6 +62,10 @@ namespace {
         uint32_t magic = 0xf33db33f, version = 0x1;
         QString chain; ///< "test", "main", etc
         uint16_t platformBits = sizeof(long)*8U; ///< we save the platform wordsize to the db
+
+        // -- New in 1.3.0 (this field is not in older db's)
+        /// "BCH" or "BTC" or may be empty for older db's, in which case we take the default ("BCH").
+        QString coin = Options::defaultCoin;
     };
 
     // some database keys we use -- todo: if this grows large, move it elsewhere
@@ -625,10 +629,13 @@ void Storage::startup()
             }
             p->meta = m_db;
             Debug () << "Read meta from db ok";
+            if (!p->meta.coin.isEmpty())
+                Log() << "Coin: " << p->meta.coin;
             if (!p->meta.chain.isEmpty())
                 Log() << "Chain: " << p->meta.chain;
         } else {
             // ok, did not exist .. write a new one to db
+            p->meta.coin = options->coin; // On new dbs only, we write the options->coin to db (currently --btc affects this).
             saveMeta_impl();
         }
         if (isDirty()) {
@@ -736,7 +743,6 @@ auto Storage::headerVerifier() const -> std::pair<const BTC::HeaderVerifier &, S
 }
 
 
-
 QString Storage::getChain() const
 {
     LockGuard l(p->metaLock);
@@ -745,12 +751,22 @@ QString Storage::getChain() const
 
 void Storage::setChain(const QString &chain)
 {
+    QString coin;
     {
         LockGuard l(p->metaLock);
-        p->meta.chain = chain;
+        p->meta.chain = chain; // set chain for saving
+        coin = p->meta.coin; // read coin for logging
     }
+    if (!coin.isEmpty())
+        Log() << "Coin: " << p->meta.coin; // just so this gets logged along with "Chain: "
     Log() << "Chain: " << chain;
     save(SaveItem::Meta);
+}
+
+QString Storage::getCoin() const
+{
+    LockGuard l(p->metaLock);
+    return p->meta.coin;
 }
 
 /// returns the "next" TxNum
@@ -2197,7 +2213,7 @@ namespace {
         {
             QDataStream ds(&ba, QIODevice::WriteOnly|QIODevice::Truncate);
             // we serialize the 'magic' value as a simple scalar as a sort of endian check for the DB
-            ds << SerializeScalarNoCopy(m.magic) << m.version << m.chain << m.platformBits;
+            ds << SerializeScalarNoCopy(m.magic) << m.version << m.chain << m.platformBits << m.coin;
         }
         return ba;
     }
@@ -2215,10 +2231,17 @@ namespace {
                 m.magic = DeserializeScalar<decltype (m.magic)>(magicBytes, &ok);
                 if (ok) {
                     ds >> m.version >> m.chain;
-                    if (!ds.atEnd()) {
+                    ok = ds.status() == QDataStream::Status::Ok;
+                    if (ok && !ds.atEnd()) {
                         // TODO: make this field non-optional. For now we tolerate it missing since we added this field
                         // later and we want to be able to still test on our existing db's.
                         ds >> m.platformBits;
+                    }
+                    ok = ds.status() == QDataStream::Status::Ok;
+                    if (ok && !ds.atEnd()) {
+                        // Older db's pre-1.3.0 lacked this field -- but now we interpret missing data as "BCH".
+                        // Otherwise, read the db value now. Client code gets this value via Storage::getCoin().
+                        ds >> m.coin;
                     }
                     ok = ds.status() == QDataStream::Status::Ok;
                 }

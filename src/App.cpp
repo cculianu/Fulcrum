@@ -306,157 +306,168 @@ void App::parseArgs()
     static constexpr auto RPCUSER = "RPCUSER", RPCPASSWORD = "RPCPASSWORD"; // optional env vars we use below
 
     QList<QCommandLineOption> allOptions{
-         { { "D", "datadir" },
-           QString("Specify a directory in which to store the database and other assorted data files. This is a"
-           " required option. If the specified path does not exist, it will be created. Note that the directory in"
-           " question should ideally live on a fast drive such as an SSD and it should have plenty of free space"
-           " available."),
-           QString("path"),
-         },
-         { { "t", "tcp" },
-           QString("Specify an <interface:port> on which to listen for TCP connections, defaults to 0.0.0.0:%1 (all"
-           " interfaces, port %1 -- only if no other interfaces are specified via -t or -s)."
-           " This option may be specified more than once to bind to multiple interfaces and/or ports."
-           " Suggested values for port: %1 on mainnet and %2 on testnet.").arg(Options::DEFAULT_PORT_TCP).arg(Options::DEFAULT_PORT_TCP + 10000),
-           QString("interface:port"),
-         },
-         { { "s", "ssl" },
-           QString("Specify an <interface:port> on which to listen for SSL connections. Note that if this option is"
-           " specified, then the `cert` and `key` options need to also be specified otherwise the app will refuse to run."
-           " This option may be specified more than once to bind to multiple interfaces and/or ports."
-           " Suggested values for port: %1 on mainnet and %2 on testnet.").arg(Options::DEFAULT_PORT_SSL).arg(Options::DEFAULT_PORT_SSL + 10000),
-           QString("interface:port"),
-         },
-        {  { "w", "ws"},
-           QString("Specify an <interface:port> on which to listen for Web Socket connections (unencrypted, ws://)."
-           " This option may be specified more than once to bind to multiple interfaces and/or ports."
-           " Suggested values for port: %1 on mainnet and %2 on testnet.").arg(Options::DEFAULT_PORT_WS).arg(Options::DEFAULT_PORT_WS + 10000),
-           QString("interface:port"),
-        },
-        {  { "W", "wss"},
-           QString("Specify an <interface:port> on which to listen for Web Socket Secure connections (encrypted, wss://)."
-           " Note that if this option is specified, then the --cert and --key options (or alternatively, the --wss-cert"
-           " and --wss-key options) need to also be specified otherwise the app will refuse to run."
-           " This option may be specified more than once to bind to multiple interfaces and/or ports."
-           " Suggested values for port: %1 on mainnet and %2 on testnet.").arg(Options::DEFAULT_PORT_WSS).arg(Options::DEFAULT_PORT_WSS + 10000),
-           QString("interface:port"),
-        },
-        { { "c", "cert" },
-           QString("Specify a PEM file to use as the server's SSL certificate. This option is required if the -s/--ssl"
-           " and/or the -W/--wss options appear at all on the command-line. The file should contain either a single"
-           " valid self-signed certificate or the full certificate chain if using CA-signed certificates."),
-           QString("crtfile"),
-        },
-        { { "k", "key" },
-          QString("Specify a PEM file to use as the server's SSL key. This option is required if the -s/--ssl and/or"
-          " the -W/--wss options apear at all on the command-line. The file should contain an RSA private key."
-          " EC, DH, and DSA keys are also supported, but their support is experimental."),
-          QString("keyfile"),
-        },
-        { "wss-cert",
-          QString("Specify a certificate PEM file to use specifically for only WSS ports. This option is intended to"
-                  " allow WSS ports to use a CA-signed certificate (required by web browsers), whereas legacy Electrum"
-                  " Cash ports may want to continue to use self-signed certificates. If this option is specified,"
-                  " --wss-key must also be specified. If this option is missing, then WSS ports will just fall-back to"
-                  " using the certificate specified by --cert."),
-          QString("crtfile"),
-        },
-        { "wss-key",
-          QString("Specify a private key PEM file to use for WSS. This key must go with the certificate specified in"
-                  " --wss-cert. If this option is specified, --wss-cert must also be specified."),
-          QString("keyfile"),
-        },
-        { { "a", "admin" },
-          QString("Specify a <port> or an <interface:port> on which to listen for TCP connections for the admin RPC service."
-                  " The admin service is used for sending special control commands to the server, such as stopping"
-                  " the server, and it should *NOT* be exposed to the internet. This option is required if you wish to"
-                  " use the FulcrumAdmin CLI tool to send commands to Fulcrum. It is recommended that you specify the"
-                  " loopback address as the bind interface for this option such as: <port> by itself or 127.0.0.1:<port> for"
-                  " IPv4 and/or ::1:<port> for IPv6. If no interface is specified, and just a port number by itself is"
-                  " used, then IPv4 127.0.0.1 is the bind interface used (along with the specified port)."
-                  " This option may be specified more than once to bind to multiple interfaces and/or ports."),
-          QString("[interface:]port"),
-         },
-         { { "z", "stats" },
-           QString("Specify listen address and port for the stats HTTP server. Format is same as the -s, -t or -a options,"
-           " e.g.: <interface:port>. Default is to not start any starts HTTP servers. Also, like the -a option, you may"
-           " specify a port number by itself here and 127.0.0.1:<port> will be assumed."
-           " This option may be specified more than once to bind to multiple interfaces and/or ports."),
-           QString("[interface:]port"),
-         },
-         { { "b", "bitcoind" },
-           QString("Specify a <hostname:port> to connect to the bitcoind rpc service. This is a required option, along"
-           " with -u and -p. This hostname:port should be the same as you specified in your bitcoin.conf file"
-           " under rpcbind= and rpcport=."),
-           QString("hostname:port"),
-         },
-         { "bitcoind-tls",
-           QString("If specified, connect to the remote bitcoind via HTTPS rather than the usual HTTP. Historically,"
-                   " bitcoind supported only JSON-RPC over HTTP; however, some implementations such as bchd support"
-                   " HTTPS. If you are using " APPNAME " with bchd, you either need to start bchd with the `notls`"
-                   " option, or you need to specify this option to " APPNAME "."),
-         },
-         { { "u", "rpcuser" },
-           QString("Specify a username to use for authenticating to bitcoind. This is a required option, along"
-           " with -b and -p. This option should be the same username you specified in your bitcoind.conf file"
-           " under rpcuser=. For security, you may omit this option from the command-line and use the %1"
-           " environment variable instead (the CLI arg takes precedence if both are present).").arg(RPCUSER),
-           QString("username"),
-         },
-         { { "p", "rpcpassword" },
-           QString("Specify a password to use for authenticating to bitcoind. This is a required option, along"
-           " with -b and -u. This option should be the same password you specified in your bitcoind.conf file"
-           " under rpcpassword=. For security, you may omit this option from the command-line and use the"
-           " %1 environment variable instead (the CLI arg takes precedence if both are present).").arg(RPCPASSWORD),
-           QString("password"),
-         },
-         { { "d", "debug" },
-           QString("Print extra verbose debug output. This is the default on debug builds. This is the opposite of -q."
-           " (Specify this options twice to get network-level trace debug output.)"),
-         },
-         { { "q", "quiet" },
-           QString("Suppress debug output. This is the default on release builds. This is the opposite of -d."),
-         },
-         { { "S", "syslog" },
-           QString("Syslog mode. If on Unix, use the syslog() facility to produce log messages."
-                   " This option currently has no effect on Windows."),
-         },
-         { { "C", "checkdb" },
-           QString("If specified, database consistency will be checked thoroughly for sanity & integrity."
-                   " Note that these checks are somewhat slow to perform and under normal operation are not necessary."),
-         },
-         { { "T", "polltime" },
-           QString("The number of seconds for the bitcoind poll interval. Bitcoind is polled once every `polltime`"
-                   " seconds to detect mempool and blockchain changes. This value must be at least 0.5 and cannot exceed"
-                   " 30. If not specified, defaults to %1 seconds.").arg(Options::defaultPollTimeSecs),
-           QString("polltime"), QString::number(Options::defaultPollTimeSecs)
-         },
-         {
-           "ts-format",
-           QString("Specify log timestamp format, one of: \"none\", \"uptime\", \"localtime\", or \"utc\". "
-                   "If unspecified, default is \"localtime\" (previous versions of " APPNAME " always logged using "
-                   "\"uptime\")."),
-           QString("keyword"),
-         },
-         {
-           "tls-disallow-deprecated",
-           QString("If specified, restricts the TLS protocol used by the server to non-deprecated v1.2 or newer,"
-                   " disallowing connections from clients requesting TLS v1.1 or earlier. This option applies to all"
-                   " SSL and WSS ports server-wide."),
-         },
-         {
-            "simdjson",
-            QString("If specified, enable the new simdjson backend for JSON parsing. This parser is over 2x faster"
-                    " than the default parser, but since this parser was recently added and hasn't been fully war"
-                    " tested yet, it is currently disabled by default."),
-         },
-         {
-           "dump-sh",
-           QString("*** This is an advanced debugging option ***   Dump script hashes. If specified, after the database"
-                   " is loaded, all of the script hashes in the database will be written to outputfile as a JSON array."),
-           QString("outputfile"),
-         },
-     };
+    { { "D", "datadir" },
+       QString("Specify a directory in which to store the database and other assorted data files. This is a"
+       " required option. If the specified path does not exist, it will be created. Note that the directory in"
+       " question should ideally live on a fast drive such as an SSD and it should have plenty of free space"
+       " available.\n"),
+       QString("path"),
+    },
+    { { "t", "tcp" },
+       QString("Specify an <interface:port> on which to listen for TCP connections, defaults to 0.0.0.0:%1 (all"
+       " interfaces, port %1 -- only if no other interfaces are specified via -t or -s)."
+       " This option may be specified more than once to bind to multiple interfaces and/or ports."
+       " Suggested values for port: %1 on mainnet and %2 on testnet.\n").arg(Options::DEFAULT_PORT_TCP).arg(Options::DEFAULT_PORT_TCP + 10000),
+       QString("interface:port"),
+    },
+    { { "s", "ssl" },
+       QString("Specify an <interface:port> on which to listen for SSL connections. Note that if this option is"
+       " specified, then the `cert` and `key` options need to also be specified otherwise the app will refuse to run."
+       " This option may be specified more than once to bind to multiple interfaces and/or ports."
+       " Suggested values for port: %1 on mainnet and %2 on testnet.\n").arg(Options::DEFAULT_PORT_SSL).arg(Options::DEFAULT_PORT_SSL + 10000),
+       QString("interface:port"),
+    },
+    {  { "w", "ws"},
+       QString("Specify an <interface:port> on which to listen for Web Socket connections (unencrypted, ws://)."
+       " This option may be specified more than once to bind to multiple interfaces and/or ports."
+       " Suggested values for port: %1 on mainnet and %2 on testnet.\n").arg(Options::DEFAULT_PORT_WS).arg(Options::DEFAULT_PORT_WS + 10000),
+       QString("interface:port"),
+    },
+    {  { "W", "wss"},
+       QString("Specify an <interface:port> on which to listen for Web Socket Secure connections (encrypted, wss://)."
+       " Note that if this option is specified, then the --cert and --key options (or alternatively, the --wss-cert"
+       " and --wss-key options) need to also be specified otherwise the app will refuse to run."
+       " This option may be specified more than once to bind to multiple interfaces and/or ports."
+       " Suggested values for port: %1 on mainnet and %2 on testnet.\n").arg(Options::DEFAULT_PORT_WSS).arg(Options::DEFAULT_PORT_WSS + 10000),
+       QString("interface:port"),
+    },
+    { { "c", "cert" },
+       QString("Specify a PEM file to use as the server's SSL certificate. This option is required if the -s/--ssl"
+       " and/or the -W/--wss options appear at all on the command-line. The file should contain either a single"
+       " valid self-signed certificate or the full certificate chain if using CA-signed certificates.\n"),
+       QString("crtfile"),
+    },
+    { { "k", "key" },
+      QString("Specify a PEM file to use as the server's SSL key. This option is required if the -s/--ssl and/or"
+      " the -W/--wss options apear at all on the command-line. The file should contain an RSA private key."
+      " EC, DH, and DSA keys are also supported, but their support is experimental.\n"),
+      QString("keyfile"),
+    },
+    { "wss-cert",
+      QString("Specify a certificate PEM file to use specifically for only WSS ports. This option is intended to"
+              " allow WSS ports to use a CA-signed certificate (required by web browsers), whereas legacy Electrum"
+              " Cash ports may want to continue to use self-signed certificates. If this option is specified,"
+              " --wss-key must also be specified. If this option is missing, then WSS ports will just fall-back to"
+              " using the certificate specified by --cert.\n"),
+      QString("crtfile"),
+    },
+    { "wss-key",
+      QString("Specify a private key PEM file to use for WSS. This key must go with the certificate specified in"
+              " --wss-cert. If this option is specified, --wss-cert must also be specified.\n"),
+      QString("keyfile"),
+    },
+    { { "a", "admin" },
+      QString("Specify a <port> or an <interface:port> on which to listen for TCP connections for the admin RPC service."
+              " The admin service is used for sending special control commands to the server, such as stopping"
+              " the server, and it should *NOT* be exposed to the internet. This option is required if you wish to"
+              " use the FulcrumAdmin CLI tool to send commands to Fulcrum. It is recommended that you specify the"
+              " loopback address as the bind interface for this option such as: <port> by itself or 127.0.0.1:<port> for"
+              " IPv4 and/or ::1:<port> for IPv6. If no interface is specified, and just a port number by itself is"
+              " used, then IPv4 127.0.0.1 is the bind interface used (along with the specified port)."
+              " This option may be specified more than once to bind to multiple interfaces and/or ports.\n"),
+      QString("[interface:]port"),
+    },
+    { { "z", "stats" },
+       QString("Specify listen address and port for the stats HTTP server. Format is same as the -s, -t or -a options,"
+       " e.g.: <interface:port>. Default is to not start any starts HTTP servers. Also, like the -a option, you may"
+       " specify a port number by itself here and 127.0.0.1:<port> will be assumed."
+       " This option may be specified more than once to bind to multiple interfaces and/or ports.\n"),
+       QString("[interface:]port"),
+    },
+    { { "b", "bitcoind" },
+       QString("Specify a <hostname:port> to connect to the bitcoind rpc service. This is a required option, along"
+       " with -u and -p. This hostname:port should be the same as you specified in your bitcoin.conf file"
+       " under rpcbind= and rpcport=.\n"),
+       QString("hostname:port"),
+    },
+    { "bitcoind-tls",
+       QString("If specified, connect to the remote bitcoind via HTTPS rather than the usual HTTP. Historically,"
+               " bitcoind supported only JSON-RPC over HTTP; however, some implementations such as bchd support"
+               " HTTPS. If you are using " APPNAME " with bchd, you either need to start bchd with the `notls`"
+               " option, or you need to specify this option to " APPNAME ".\n"),
+    },
+    { { "u", "rpcuser" },
+       QString("Specify a username to use for authenticating to bitcoind. This is a required option, along"
+       " with -b and -p. This option should be the same username you specified in your bitcoind.conf file"
+       " under rpcuser=. For security, you may omit this option from the command-line and use the %1"
+       " environment variable instead (the CLI arg takes precedence if both are present).\n").arg(RPCUSER),
+       QString("username"),
+    },
+    { { "p", "rpcpassword" },
+       QString("Specify a password to use for authenticating to bitcoind. This is a required option, along"
+       " with -b and -u. This option should be the same password you specified in your bitcoind.conf file"
+       " under rpcpassword=. For security, you may omit this option from the command-line and use the"
+       " %1 environment variable instead (the CLI arg takes precedence if both are present).\n").arg(RPCPASSWORD),
+       QString("password"),
+    },
+    { { "d", "debug" },
+       QString("Print extra verbose debug output. This is the default on debug builds. This is the opposite of -q."
+       " (Specify this options twice to get network-level trace debug output.)\n"),
+    },
+    { { "q", "quiet" },
+       QString("Suppress debug output. This is the default on release builds. This is the opposite of -d.\n"),
+    },
+    { { "S", "syslog" },
+       QString("Syslog mode. If on Unix, use the syslog() facility to produce log messages."
+               " This option currently has no effect on Windows.\n"),
+    },
+    { { "C", "checkdb" },
+       QString("If specified, database consistency will be checked thoroughly for sanity & integrity."
+               " Note that these checks are somewhat slow to perform and under normal operation are not necessary.\n"),
+    },
+    { { "T", "polltime" },
+       QString("The number of seconds for the bitcoind poll interval. Bitcoind is polled once every `polltime`"
+               " seconds to detect mempool and blockchain changes. This value must be at least 0.5 and cannot exceed"
+               " 30. If not specified, defaults to %1 seconds.\n").arg(Options::defaultPollTimeSecs),
+       QString("polltime"), QString::number(Options::defaultPollTimeSecs)
+    },
+    {
+       "ts-format",
+       QString("Specify log timestamp format, one of: \"none\", \"uptime\", \"localtime\", or \"utc\". "
+               "If unspecified, default is \"localtime\" (previous versions of " APPNAME " always logged using "
+               "\"uptime\").\n"),
+       QString("keyword"),
+    },
+    {
+       "tls-disallow-deprecated",
+       QString("If specified, restricts the TLS protocol used by the server to non-deprecated v1.2 or newer,"
+               " disallowing connections from clients requesting TLS v1.1 or earlier. This option applies to all"
+               " SSL and WSS ports server-wide.\n"),
+    },
+    {
+        "simdjson",
+        QString("If specified, enable the new simdjson backend for JSON parsing. This parser is over 2x faster"
+                " than the default parser, but since this parser was recently added and hasn't been fully war"
+                " tested yet, it is currently disabled by default.\n"),
+    },
+    {
+        "btc",
+        QString("If specified, use the Bitcoin (BTC) blockchain, rather than the Bitcoin Cash (BCH) blockchain."
+                " This option should be specified the first time " APPNAME " is run for a new DB synch, after which"
+                " time this setting is saved to the database and is ignored completely if encountered on the"
+                " command-line or in the config file."
+                " Note that the bitcoind we connect to must be running Bitcoin Core v0.17.0 or later if this option"
+                " is set. No other BTC daemons are supported at this time. This option affects the following in"
+                " " APPNAME ": (1) Which seed servers we use for peering, (2) whether we accept and can parse"
+                " SegWit blocks, and (3) the `blockchain.address.*` RPC API.\n"),
+    },
+    {
+       "dump-sh",
+       QString("*** This is an advanced debugging option ***   Dump script hashes. If specified, after the database"
+               " is loaded, all of the script hashes in the database will be written to outputfile as a JSON array."),
+       QString("outputfile"),
+    },
+    };
 
     bool haveTests{}, haveBenches{};
     if ((haveTests = registeredTests && !registeredTests->empty())) {
@@ -1116,6 +1127,12 @@ void App::parseArgs()
             Debug() << "config: simdjson = true";
             Options::setSimdJson(true);
         });
+    }
+
+    // --btc from CLI or btc from conf
+    if (parser.isSet("btc") || conf.boolValue("btc")) {
+        options->setBTC();
+        Util::AsyncOnObject(this, [] { Debug() << "config: btc = true"; });
     }
 
     // parse --dump-*

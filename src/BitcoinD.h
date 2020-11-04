@@ -44,7 +44,7 @@ struct BitcoinDInfo {
     QString warnings = ""; ///< from 'warnings' in the getnetworkinfo response (usually is empty string, but may not always be)
     bool isBchd = false; ///< true if remote bitcoind subversion is: /bchd:...
     bool isZeroArgEstimateFee = false; ///< true if remote bitcoind expects 0 argument "estimatefee" RPC.
-    bool isCore = false; ///< true if we are actually connected to /Satoshi.. node (bitcoin core)
+    bool isCore = false; ///< true if we are actually connected to /Satoshi.. node (Bitcoin Core)
 
     /// Return all the information in this obejct as a QVariantMap suitable for placing into JSON results, etc (used by /stats and `getinfo`)
     QVariantMap toVariandMap() const;
@@ -111,7 +111,7 @@ signals:
     /// the argument.
     void inWarmUp(const QString &);
 
-    /// Emitted as soone as we read the bitcoind subversion. If it starts with /Satoshi:.., we emit this
+    /// Emitted as soon as we read the bitcoind subversion. If it starts with /Satoshi:.., we emit this
     /// with true, Otherwise, we emit it with false.
     void bitcoinCoreDetection(bool);
 

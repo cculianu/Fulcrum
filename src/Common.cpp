@@ -20,3 +20,5 @@
 
 /// put the vtable here.
 Exception::~Exception() {}
+InternalError::~InternalError() {}
+BadArgs::~BadArgs() {}

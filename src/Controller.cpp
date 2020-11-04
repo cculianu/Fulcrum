@@ -32,6 +32,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <ios>
 #include <iterator>
 #include <list>
 #include <map>
@@ -58,6 +59,25 @@ void Controller::startup()
     storage = std::make_shared<Storage>(options);
     storage->startup(); // may throw here
 
+    // check that the coin from DB is known and supported
+    {
+        const auto supportedCoins = { "BCH", "BTC" };
+        const auto coin = storage->getCoin();
+        if (std::none_of(supportedCoins.begin(), supportedCoins.end(),
+                         [&coin](const auto &supported){ return coin == supported; })) {
+            throw InternalError(QString("This database was synched to a bitcoind for the coin \"%1\", yet that coin is"
+                                        " unknown to this version of %2. Either delete the datadir and resynch or"
+                                        " use the newer version of %2 that was used to create this database.")
+                                .arg(coin).arg(APPNAME));
+        }
+        // set flag -- this affects how we parse blocks, etc
+        coinIsBTC = coin == "BTC";
+        if (options->isBTC() && !coinIsBTC)
+            // Warn on ignored option
+            Warning() << "config option `btc` ignored since the database was initialized with: btc = false";
+    }
+
+
     if (! options->dumpScriptHashes.isEmpty())
         // this may take a long time but normally this branch is not taken
         dumpScriptHashes(options->dumpScriptHashes);
@@ -76,7 +96,8 @@ void Controller::startup()
             callOnTimerSoon(msgPeriod, waitTimer, []{ Log("Waiting for bitcoind..."); return true; }, false, Qt::TimerType::VeryCoarseTimer);
         };
         waitForBitcoinD();
-        conns += connect(bitcoindmgr.get(), &BitcoinDMgr::bitcoinCoreDetection, this, [this](bool b){bitcoinCoreFlag = b;}, Qt::DirectConnection);
+        conns += connect(bitcoindmgr.get(), &BitcoinDMgr::bitcoinCoreDetection, this, &Controller::on_bitcoinCoreDetection,
+                         /* NOTE --> */ Qt::DirectConnection);
         conns += connect(bitcoindmgr.get(), &BitcoinDMgr::allConnectionsLost, this, waitForBitcoinD);
         conns += connect(bitcoindmgr.get(), &BitcoinDMgr::gotFirstGoodConnection, this, [this](quint64 id) {
             // connection to kick off our 'process' method once the first auth is received
@@ -162,6 +183,50 @@ void Controller::startup()
     }
 
     start();  // start our thread
+}
+
+void Controller::on_bitcoinCoreDetection(bool iscore)
+{
+    if (iscore != coinIsBTC) {
+        const bool brandNewDB = 0 == storage->getTxNum(); // <-- lock-free getter
+        if (iscore) {
+            // bitcoind is Core, we are expecting BCH
+            if (brandNewDB)
+                // brand new DB, likely user forgot the --btc option
+                Fatal() << "\n\n"
+                           "You are connected to a Bitcoin Core (BTC) bitcoind, yet this new database was\n"
+                           "not initialized for BTC.\n\n"
+
+                           "Please delete the datadir and restart " APPNAME " with the `--btc` option.\n";
+            else
+                // already-synched DB, bitcoind is Core, DB is not core
+                Fatal() << "\n\n"
+
+                           "You are connected to a Bitcoin Core (BTC) bitcoind, yet this database was not\n"
+                           "synched to a BTC chain.\n\n"
+
+                           "Please either connect to the appropriate bitcoind for this database, or delete\n"
+                           "the datadir and resynch to this bitcoind.\n";
+        } else {
+            // bitcoind is not Core, we are expecting BTC
+            if (brandNewDB)
+                // brand new DB, likely user added the --btc option erroneously
+                Fatal() << "\n\n"
+                           "You are connected to a non-Bitcoin Core (BTC) bitcoind, yet this new database\n"
+                           "was initialized for BTC.\n\n"
+
+                           "Please delete the datadir and restart " APPNAME " without the `--btc` option.\n";
+            else
+                // already-synched DB, bitcoind is not Core, we are expecting Core only
+                Fatal() << "\n\n"
+                           "You are connected to a non-Bitcoin Core (BTC) bitcoind, yet this database was\n"
+                           "synched to a BTC chain.\n\n"
+
+                           "At the present time, for BTC, bitcoind must be Satoshi (Core) v0.17.0 or above.\n"
+                           "Please either connect to the appropriate bitcoind for this database, or delete\n"
+                           "the datadir and resynch.\n";
+        }
+    }
 }
 
 void Controller::cleanup()
@@ -369,7 +434,27 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
                     const auto header = rawblock.left(HEADER_SIZE); // we need a deep copy of this anyway so might as well take it now.
                     QByteArray chkHash;
                     if (bool sizeOk = header.length() == HEADER_SIZE; sizeOk && (chkHash = BTC::HashRev(header)) == hash) {
-                        auto ppb = PreProcessedBlock::makeShared(bnum, size_t(rawblock.size()), BTC::Deserialize<bitcoin::CBlock>(rawblock, 0, allowSegWitTx));
+                        PreProcessedBlockPtr ppb;
+                        try {
+                            ppb = PreProcessedBlock::makeShared(bnum, size_t(rawblock.size()),
+                                                                BTC::Deserialize<bitcoin::CBlock>(rawblock, 0, allowSegWitTx));
+                        } catch (const std::ios_base::failure &e) {
+                            // deserialization error -- check if block is segwit and we are not segwit
+                            if (!allowSegWitTx) {
+                                try {
+                                    const auto cblock = BTC::DeserializeSegWit<bitcoin::CBlock>(rawblock);
+                                    // If we get here the block deserialized ok as segwit but not ok as non-segwit.
+                                    // we must assume that there is some misconfiguration e.g. the remote is BTC
+                                    // but DB is not expecting BTC. This can happen if user is using non-Satoshi
+                                    // bitcoind and they didn't specify --btc when initializing the DB.
+                                    if (std::any_of(cblock.vtx.begin(), cblock.vtx.end(),
+                                                    [](const auto &tx){ return tx->HasWitness(); }))
+                                        throw InternalError("SegWit block encountered for non-SegWit coin.");
+                                } catch (const std::ios_base::failure &) { /* ignore -- block is bad as segwit too. */}
+                            }
+                            throw; // outer catch clause will handle printing the message
+                        }
+                        assert(bool(ppb));
 
                         if (TRACE) Trace() << "block " << bnum << " size: " << rawblock.size() << " nTx: " << ppb->txInfos.size();
                         // update some stats for /stats endpoint
@@ -1304,7 +1389,7 @@ void Controller::process_DoUndoAndRetry()
 
 // -- CtlTask
 CtlTask::CtlTask(Controller *ctl, const QString &name)
-    : QObject(nullptr), ctl(ctl), allowSegWitTx(ctl->bitcoinCoreFlag.load())
+    : QObject(nullptr), ctl(ctl), allowSegWitTx(ctl->coinIsBTC)
 {
     setObjectName(name);
     _thread.setObjectName(name);
@@ -1372,6 +1457,7 @@ auto Controller::stats() const -> Stats
     const auto tipInfo = storage->latestTip();
     m["Header count"] = tipInfo.first+1;
     m["Chain"] = storage->getChain();
+    m["Coin"] = storage->getCoin();
     m["Chain tip"] = tipInfo.second.toHex();
     m["UTXO set"] = qlonglong(storage->utxoSetSize());
     m["UTXO set bytes"] = QString::number(storage->utxoSetSizeMB(), 'f', 3) + " MB";
@@ -1430,7 +1516,13 @@ auto Controller::stats() const -> Stats
     misc["Job Queue (Thread Pool)"] = ::AppThreadPool()->stats();
     st["Misc"] = misc;
     st["SubsMgr"] = storage->subs()->statsSafe(kDefaultTimeout/2);
-    st["Config"] = options->toMap();
+    { // Options map
+        auto map = options->toMap();
+        // fudge option to reflect what is actually being used.
+        if (map.contains("btc")) map["btc"] = coinIsBTC;
+        else DebugM("Warning: Options map missing expected key: \"btc\" ... FIXME!");
+        st["Config"] = map;
+    }
     { // Process memory usage
         const auto mu = Util::getProcessMemoryUsage();
         st["Memory Usage"] = QVariantMap{
