@@ -61,20 +61,22 @@ void Controller::startup()
 
     // check that the coin from DB is known and supported
     {
-        const auto supportedCoins = { "BCH", "BTC" };
         const auto coin = storage->getCoin();
-        if (std::none_of(supportedCoins.begin(), supportedCoins.end(),
-                         [&coin](const auto &supported){ return coin == supported; })) {
-            throw InternalError(QString("This database was synched to a bitcoind for the coin \"%1\", yet that coin is"
-                                        " unknown to this version of %2. Either delete the datadir and resynch or"
-                                        " use the newer version of %2 that was used to create this database.")
-                                .arg(coin).arg(APPNAME));
+        const auto ctype = BTC::coinFromName(coin);
+        if (!storage->isNewlyInitialized() && ctype == BTC::Coin::Unknown) {
+            if (!coin.isEmpty()) {
+                // Coin field in DB is unrecognized. Complain.
+                throw InternalError(QString("This database was synched to a bitcoind for the coin \"%1\", yet that coin is"
+                                            " unknown to this version of %2. Either delete the datadir and resynch or"
+                                            " use the newer version of %2 that was used to create this database.")
+                                    .arg(coin).arg(APPNAME));
+            } else {
+                // this should never happen for not-newly-initialized DBs. Indicates programming error in codebase.
+                throw InternalError("Database \"Coin\" field is empty yet the database has data! This should never happen. FIXME!!");
+            }
         }
-        // set flag -- this affects how we parse blocks, etc
-        coinIsBTC = coin == "BTC";
-        if (options->isBTC() && !coinIsBTC)
-            // Warn on ignored option
-            Warning() << "config option `btc` ignored since the database was initialized with: btc = false";
+        // set the atomic -- this affects how we parse blocks, etc
+        coinType = ctype;
     }
 
 
@@ -187,44 +189,40 @@ void Controller::startup()
 
 void Controller::on_bitcoinCoreDetection(bool iscore)
 {
-    if (iscore != coinIsBTC) {
-        const bool brandNewDB = 0 == storage->getTxNum(); // <-- lock-free getter
-        if (iscore) {
-            // bitcoind is Core, we are expecting BCH
-            if (brandNewDB)
-                // brand new DB, likely user forgot the --btc option
-                Fatal() << "\n\n"
-                           "You are connected to a Bitcoin Core (BTC) bitcoind, yet this new database was\n"
-                           "not initialized for BTC.\n\n"
+    const auto ourtype = coinType.load(std::memory_order_relaxed);
+    const auto detectedtype = !iscore ? BTC::Coin::BCH : BTC::Coin::BTC;
+    if (ourtype == BTC::Coin::Unknown) {
+        // We had no coin set in DB, but we just detected the coin, set it now and return.
+        // This is the common case with no misconfiguration.
+        coinType = detectedtype;
+        storage->setCoin(BTC::coinToName(detectedtype)); // thread-safe call to storage, ok to do here.
+        return;
+    }
+    if (ourtype != detectedtype) {
+        // Misconfiguration -- DB says one thing and bitcoind says another. Complain and exit.
+        if (detectedtype == BTC::Coin::BTC && ourtype == BTC::Coin::BCH) {
+            // bitcoind is Core, yet we are expecting BCH
+            Fatal() << "\n\n"
 
-                           "Please delete the datadir and restart " APPNAME " with the `--btc` option.\n";
-            else
-                // already-synched DB, bitcoind is Core, DB is not core
-                Fatal() << "\n\n"
+                       "You are connected to a Bitcoin Core (BTC) bitcoind, yet this database was not\n"
+                       "synched to a BTC chain.\n\n"
 
-                           "You are connected to a Bitcoin Core (BTC) bitcoind, yet this database was not\n"
-                           "synched to a BTC chain.\n\n"
-
-                           "Please either connect to the appropriate bitcoind for this database, or delete\n"
-                           "the datadir and resynch to this bitcoind.\n";
-        } else {
+                       "Please either connect to the appropriate bitcoind for this database, or delete\n"
+                       "the datadir and resynch to this bitcoind.\n";
+        } else if (detectedtype == BTC::Coin::BCH && ourtype == BTC::Coin::BTC){
             // bitcoind is not Core, we are expecting BTC
-            if (brandNewDB)
-                // brand new DB, likely user added the --btc option erroneously
-                Fatal() << "\n\n"
-                           "You are connected to a non-Bitcoin Core (BTC) bitcoind, yet this new database\n"
-                           "was initialized for BTC.\n\n"
+            Fatal() << "\n\n"
+                       "You are connected to a non-Bitcoin Core (BTC) bitcoind, yet this database was\n"
+                       "synched to a BTC chain.\n\n"
 
-                           "Please delete the datadir and restart " APPNAME " without the `--btc` option.\n";
-            else
-                // already-synched DB, bitcoind is not Core, we are expecting Core only
-                Fatal() << "\n\n"
-                           "You are connected to a non-Bitcoin Core (BTC) bitcoind, yet this database was\n"
-                           "synched to a BTC chain.\n\n"
-
-                           "At the present time, for BTC, bitcoind must be Satoshi (Core) v0.17.0 or above.\n"
-                           "Please either connect to the appropriate bitcoind for this database, or delete\n"
-                           "the datadir and resynch.\n";
+                       "At the present time, to use BTC, bitcoind must be Bitcoin Core v0.17.0 or above.\n"
+                       "Please either connect to the appropriate bitcoind for this database, or delete\n"
+                       "the datadir and resynch.\n";
+        } else {
+            // defensive programming -- should never be reached. This is here in case we
+            // add new coin types yet we forget to update this code.
+            Fatal() << "INTERNAL ERROR: Unexpected coin combination: ourtype=" << BTC::coinToName(ourtype)
+                    << " detectedtype=" <<  BTC::coinToName(detectedtype) << " -- FIXME!";
         }
     }
 }
@@ -370,6 +368,8 @@ struct DownloadBlocksTask : public CtlTask
 
     std::atomic<size_t> nTx = 0, nIns = 0, nOuts = 0;
 
+    const bool allowSegWit; ///< initted in c'tor. If true, deserialize blocks using the optional segwit extensons to the tx format.
+
     void do_get(unsigned height);
 
     // basically computes expectedCt. Use expectedCt member to get the actual expected ct. this is used only by c'tor as a utility function
@@ -386,7 +386,8 @@ struct DownloadBlocksTask : public CtlTask
 /*static*/ const int DownloadBlocksTask::HEADER_SIZE = BTC::GetBlockHeaderSize();
 
 DownloadBlocksTask::DownloadBlocksTask(unsigned from, unsigned to, unsigned stride, Controller *ctl_)
-    : CtlTask(ctl_, QStringLiteral("Task.DL %1 -> %2").arg(from).arg(to)), from(from), to(to), stride(stride), expectedCt(unsigned(nToDL(from, to, stride)))
+    : CtlTask(ctl_, QStringLiteral("Task.DL %1 -> %2").arg(from).arg(to)), from(from), to(to), stride(stride),
+      expectedCt(unsigned(nToDL(from, to, stride))), allowSegWit(ctl_->isCoinBTC())
 {
     FatalAssert( (to >= from) && (ctl_) && (stride > 0), "Invalid params to DonloadBlocksTask c'tor, FIXME!");
 
@@ -437,19 +438,22 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
                         PreProcessedBlockPtr ppb;
                         try {
                             ppb = PreProcessedBlock::makeShared(bnum, size_t(rawblock.size()),
-                                                                BTC::Deserialize<bitcoin::CBlock>(rawblock, 0, allowSegWitTx));
+                                                                BTC::Deserialize<bitcoin::CBlock>(rawblock, 0, allowSegWit));
                         } catch (const std::ios_base::failure &e) {
                             // deserialization error -- check if block is segwit and we are not segwit
-                            if (!allowSegWitTx) {
+                            if (!allowSegWit) {
                                 try {
                                     const auto cblock = BTC::DeserializeSegWit<bitcoin::CBlock>(rawblock);
                                     // If we get here the block deserialized ok as segwit but not ok as non-segwit.
-                                    // we must assume that there is some misconfiguration e.g. the remote is BTC
+                                    // We must assume that there is some misconfiguration e.g. the remote is BTC
                                     // but DB is not expecting BTC. This can happen if user is using non-Satoshi
-                                    // bitcoind and they didn't specify --btc when initializing the DB.
+                                    // bitcoind with BTC.  We only support /Satoshi... as uagent for BTC due to the
+                                    // way that our auto-detection works.
                                     if (std::any_of(cblock.vtx.begin(), cblock.vtx.end(),
                                                     [](const auto &tx){ return tx->HasWitness(); }))
-                                        throw InternalError("SegWit block encountered for non-SegWit coin.");
+                                        throw InternalError("SegWit block encountered for non-SegWit coin."
+                                                            " If you wish to use BTC, please delete the datadir and"
+                                                            " resynch using Bitcoin Core v0.17.0 or later.");
                                 } catch (const std::ios_base::failure &) { /* ignore -- block is bad as segwit too. */}
                             }
                             throw; // outer catch clause will handle printing the message
@@ -514,7 +518,7 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
 struct SynchMempoolTask : public CtlTask
 {
     SynchMempoolTask(Controller *ctl_, std::shared_ptr<Storage> storage, const std::atomic_bool & notifyFlag)
-        : CtlTask(ctl_, "SynchMempool"), storage(storage), notifyFlag(notifyFlag)
+        : CtlTask(ctl_, "SynchMempool"), storage(storage), notifyFlag(notifyFlag), allowSegWitTx(ctl_->isCoinBTC())
         { scriptHashesAffected.reserve(SubsMgr::kRecommendedPendingNotificationsReserveSize); }
     ~SynchMempoolTask() override;
     void process() override;
@@ -527,6 +531,7 @@ struct SynchMempoolTask : public CtlTask
     DldTxsMap txsDownloaded;
     unsigned expectedNumTxsDownloaded = 0;
     const bool TRACE = Trace::isEnabled(); // set this to true to print more debug
+    const bool allowSegWitTx; ///< initted in c'tor. If true, deserialize tx's using the optional segwit extensons to the tx format.
 
     /// The scriptHashes that were affected by this refresh/synch cycle. Used for notifications.
     std::unordered_set<HashX, HashHasher> scriptHashesAffected;
@@ -1389,7 +1394,7 @@ void Controller::process_DoUndoAndRetry()
 
 // -- CtlTask
 CtlTask::CtlTask(Controller *ctl, const QString &name)
-    : QObject(nullptr), ctl(ctl), allowSegWitTx(ctl->coinIsBTC)
+    : QObject(nullptr), ctl(ctl)
 {
     setObjectName(name);
     _thread.setObjectName(name);
@@ -1516,13 +1521,8 @@ auto Controller::stats() const -> Stats
     misc["Job Queue (Thread Pool)"] = ::AppThreadPool()->stats();
     st["Misc"] = misc;
     st["SubsMgr"] = storage->subs()->statsSafe(kDefaultTimeout/2);
-    { // Options map
-        auto map = options->toMap();
-        // fudge option to reflect what is actually being used.
-        if (map.contains("btc")) map["btc"] = coinIsBTC;
-        else DebugM("Warning: Options map missing expected key: \"btc\" ... FIXME!");
-        st["Config"] = map;
-    }
+    // Config (Options) map
+    st["Config"] = options->toMap();
     { // Process memory usage
         const auto mu = Util::getProcessMemoryUsage();
         st["Memory Usage"] = QVariantMap{

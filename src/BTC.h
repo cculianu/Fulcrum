@@ -27,15 +27,24 @@
 #include "bitcoin/version.h"
 
 #include <QByteArray>
-#include <QString>
 #include <QHash>
+#include <QString>
+#include <QStringView>
 
 #include <cstring> // for memcpy
 #include <type_traits>
 #include <utility> // for pair, etc
 
+/// A namespace for Bitcoin-related classes and types. Despite the BTC moniker,
+/// this namespace is not specific to Bitcoin (Core), but applies to BCH as well.
 namespace BTC
 {
+    /// Used by the Storage and Controller subsystem to figure out what coin we are on (BCH vs BTC)
+    enum class Coin { Unknown = 0, BCH, BTC };
+
+    QString coinToName(Coin);
+    Coin coinFromName(const QStringView &);
+
     /// Tests
     namespace Tests {
         bool Base58(bool silent = false, bool throws = false);

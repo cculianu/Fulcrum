@@ -451,17 +451,6 @@ void App::parseArgs()
                 " tested yet, it is currently disabled by default.\n"),
     },
     {
-        "btc",
-        QString("If specified, use the Bitcoin (BTC) blockchain, rather than the Bitcoin Cash (BCH) blockchain."
-                " This option should be specified the first time " APPNAME " is run for a new DB synch, after which"
-                " time this setting is saved to the database and is ignored completely if encountered on the"
-                " command-line or in the config file."
-                " Note that the bitcoind we connect to must be running Bitcoin Core v0.17.0 or later if this option"
-                " is set. No other BTC daemons are supported at this time. This option affects the following in"
-                " " APPNAME ": (1) Which seed servers we use for peering, (2) whether we accept and can parse"
-                " SegWit blocks, and (3) the `blockchain.address.*` RPC API.\n"),
-    },
-    {
        "dump-sh",
        QString("*** This is an advanced debugging option ***   Dump script hashes. If specified, after the database"
                " is loaded, all of the script hashes in the database will be written to outputfile as a JSON array."),
@@ -1127,12 +1116,6 @@ void App::parseArgs()
             Debug() << "config: simdjson = true";
             Options::setSimdJson(true);
         });
-    }
-
-    // --btc from CLI or btc from conf
-    if (parser.isSet("btc") || conf.boolValue("btc")) {
-        options->setBTC();
-        Util::AsyncOnObject(this, [] { Debug() << "config: btc = true"; });
     }
 
     // parse --dump-*

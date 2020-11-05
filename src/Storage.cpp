@@ -64,8 +64,9 @@ namespace {
         uint16_t platformBits = sizeof(long)*8U; ///< we save the platform wordsize to the db
 
         // -- New in 1.3.0 (this field is not in older db's)
-        /// "BCH" or "BTC" or may be empty for older db's, in which case we take the default ("BCH").
-        QString coin = Options::defaultCoin;
+        /// "BCH", "BTC", "" or may be empty for older db's, in which case we take the default ("BCH").
+        /// On uninitialized DB's this is empty "".
+        QString coin = QString();
     };
 
     // some database keys we use -- todo: if this grows large, move it elsewhere
@@ -461,7 +462,7 @@ struct Storage::Pvt
     constexpr int blockHeaderSize() { return BTC::GetBlockHeaderSize(); }
 
     Meta meta;
-    Lock metaLock;
+    RWLock metaLock;
 
     std::atomic<std::underlying_type_t<SaveItem>> pendingSaves{0};
 
@@ -635,7 +636,6 @@ void Storage::startup()
                 Log() << "Chain: " << p->meta.chain;
         } else {
             // ok, did not exist .. write a new one to db
-            p->meta.coin = options->coin; // On new dbs only, we write the options->coin to db (currently --btc affects this).
             saveMeta_impl();
         }
         if (isDirty()) {
@@ -745,28 +745,35 @@ auto Storage::headerVerifier() const -> std::pair<const BTC::HeaderVerifier &, S
 
 QString Storage::getChain() const
 {
-    LockGuard l(p->metaLock);
+    SharedLockGuard l(p->metaLock);
     return p->meta.chain;
 }
 
 void Storage::setChain(const QString &chain)
 {
-    QString coin;
     {
-        LockGuard l(p->metaLock);
+        ExclusiveLockGuard l(p->metaLock);
         p->meta.chain = chain; // set chain for saving
-        coin = p->meta.coin; // read coin for logging
     }
-    if (!coin.isEmpty())
-        Log() << "Coin: " << p->meta.coin; // just so this gets logged along with "Chain: "
-    Log() << "Chain: " << chain;
+    if (!chain.isEmpty())
+        Log() << "Chain: " << chain;
     save(SaveItem::Meta);
 }
 
 QString Storage::getCoin() const
 {
-    LockGuard l(p->metaLock);
+    SharedLockGuard l(p->metaLock);
     return p->meta.coin;
+}
+
+void Storage::setCoin(const QString &coin) {
+    {
+        ExclusiveLockGuard l(p->metaLock);
+        p->meta.coin = coin;
+    }
+    if (!coin.isEmpty())
+        Log() << "Coin: " << coin;
+    save(SaveItem::Meta);
 }
 
 /// returns the "next" TxNum
@@ -811,7 +818,7 @@ void Storage::save_impl(SaveSpec override)
     if (const auto flags = SaveSpec(p->pendingSaves.exchange(0))|override; flags) { // atomic clear of flags, grab prev val
         try {
             if (flags & SaveItem::Meta) { // Meta
-                LockGuard l(p->metaLock);
+                SharedLockGuard l(p->metaLock);
                 saveMeta_impl();
             }
         } catch (const std::exception & e) {
@@ -2238,10 +2245,17 @@ namespace {
                         ds >> m.platformBits;
                     }
                     ok = ds.status() == QDataStream::Status::Ok;
-                    if (ok && !ds.atEnd()) {
-                        // Older db's pre-1.3.0 lacked this field -- but now we interpret missing data as "BCH".
-                        // Otherwise, read the db value now. Client code gets this value via Storage::getCoin().
-                        ds >> m.coin;
+                    if (ok) {
+                        if (!ds.atEnd()) {
+                            // Newer db's will always either have an empty string "", "BCH", or "BTC" here.
+                            // Read the db value now. Client code gets this value via Storage::getCoin().
+                            ds >> m.coin;
+                        } else {
+                            // Older db's pre-1.3.0 lacked this field -- but now we interpret missing data here as
+                            // "BCH".
+                            m.coin = BTC::coinToName(BTC::Coin::BCH);
+                            Debug() << "Missing coin info from Meta table, defaulting coin to: \"" << m.coin << "\"";
+                        }
                     }
                     ok = ds.status() == QDataStream::Status::Ok;
                 }

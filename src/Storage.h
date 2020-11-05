@@ -125,9 +125,12 @@ public:
     QString getChain() const;
     void setChain(const QString &); // implicitly calls db save of 'meta' (thread safe)
 
-    /// Will be one of: "BCH", "BTC". Note Controller class must use this to match the coin with the bitcoind it is
-    /// connected to.
+    /// Will be one of: "BCH", "BTC" or "" on a newly initialized DB. Note Controller class must use this to match
+    /// the coin with the bitcoind it is connected to.  It sets the Coin via setCoin on first connection to a bitcoind.
     QString getCoin() const;
+    /// Controller calls this the first time it connects to a bitcoind if the current coin is Coin::Unknown in order
+    /// to save the Coin to the DB.
+    void setCoin(const QString &); // implicitly calls db save of 'meta' (thread safe)
 
     /// Thread-safe. Returns a reversed hash (ready for hex encoding) of block 0's header.  Always succeeds if we have
     /// block 0, never throws. (If we have not seen block 0, returns an empty HeaderHash).
@@ -174,6 +177,8 @@ public:
 
     /// returns the "next" TxNum (thread safe, lock-free)
     TxNum getTxNum() const;
+    /// convenience method  (thread safe, lock-free)
+    bool isNewlyInitialized() const { return getTxNum() == 0; }
 
     /// Helper for TxNum. Resolve a 64-bit TxNum to a TxHash -- this may throw a DatabaseError if throwIfMissing=true (thread safe, takes no class-level locks)
     std::optional<TxHash> hashForTxNum(TxNum, bool throwIfMissng = false, bool *wasCached = nullptr, bool skipCache = false) const;

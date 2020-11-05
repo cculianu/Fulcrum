@@ -19,6 +19,7 @@
 #pragma once
 
 #include "BitcoinD.h"
+#include "BTC.h"
 #include "BlockProc.h"
 #include "Mixins.h"
 #include "Options.h"
@@ -62,6 +63,9 @@ public:
     /// Helper for log printing mempool status. Called this instance (from a timer), also called from the SynchMempoolTask
     /// for debug printing when it receives new mempool tx's.
     static void printMempoolStatusToLog(size_t newSize, size_t numAddresses, bool useDebugLogger, bool force = false);
+
+    /// Thread-safe, lock-free
+    bool isCoinBTC() const { return coinType.load(std::memory_order_relaxed) == BTC::Coin::BTC; }
 
 signals:
     /// Emitted whenever bitcoind is detected to be up-to-date, and everything is synched up.
@@ -153,9 +157,9 @@ private:
     /// notifies subscribed clients (if any).
     std::atomic_bool masterNotifySubsFlag = false;
 
-    /// If true, DB had "BTC" in its Meta table. We are expecting bitcoind to be "/Satoshi:..." and we will
-    /// acceot segwit blocks.
-    bool coinIsBTC = false;
+    /// Comes from DB. If DB had no entry (newly initialized DB), then we update this variable whe we first connect
+    /// to the BitcoinD.  We look for "/Satoshi..." in the useragen to set BTC, otherwise everything else is BCH.
+    std::atomic<BTC::Coin> coinType = BTC::Coin::Unknown;
 
     /// takes locks, prints to Log() every 30 seconds if there were changes
     void printMempoolStatusToLog() const;
@@ -212,7 +216,6 @@ protected:
     quint64 submitRequest(const QString &method, const QVariantList &params, const BitcoinDMgr::ResultsF &resultsFunc);
 
     Controller * const ctl; ///< initted in c'tor. Is always valid since all tasks' lifecycles are managed by the Controller.
-    const bool allowSegWitTx; ///< initted in c'tor. If true, subclasses may deserialize tx's using the optional segwit extensons to the tx format.
 };
 
 Q_DECLARE_METATYPE(CtlTask *);

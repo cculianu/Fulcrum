@@ -187,4 +187,20 @@ namespace BTC
         return nameNetMap.value(name, Net::Invalid /* default if not found */);
     }
 
+    namespace { const QString coinNameBCH{"BCH"}, coinNameBTC{"BTC"}; }
+    QString coinToName(Coin c) {
+        QString ret; // for NRVO
+        switch (c) {
+        case Coin::BCH: ret = coinNameBCH; break;
+        case Coin::BTC: ret = coinNameBTC; break;
+        case Coin::Unknown: break;
+        }
+        return ret;
+    }
+    Coin coinFromName(const QStringView &sv) {
+        if (sv == coinNameBCH) return Coin::BCH;
+        if (sv == coinNameBTC) return Coin::BTC;
+        return Coin::Unknown;
+    }
+
 } // end namespace BTC

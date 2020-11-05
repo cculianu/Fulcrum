@@ -217,16 +217,6 @@ public:
     // CLI: --tls-disallow-deprecated, config: tls-disallow-deprecated
     bool tlsDisallowDeprecated = false;
 
-    static constexpr auto defaultCoin = "BCH";
-    /// CLI: --btc, config: btc=true will set this to "BTC". The first time the program is run for a new DB, this
-    /// options's setting gets stored to the database. Subsequent times the program is run this option is ignored.
-    /// As such. this is not the authoritative place to ask the program if we are on BTC -- see Storage::getCoin()
-    /// and Controller::coinISBTC for that.
-    QString coin = defaultCoin;
-
-    void setBTC() { coin = "BTC"; } // Used by App on startup if --btc/btc=true seen. Storage reads from `coin` above to initialize new DB.
-    bool isBTC() const { return coin == "BTC"; } // Used only for the stats display -- not authoritative (DB setting overrides this).
-
     // CLI: --simdjson, config: simdjson = true
     /// This is actually a thin wrapper around RPC::isFastJson(), hence why it is static
     static bool isSimdJson();
