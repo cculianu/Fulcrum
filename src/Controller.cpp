@@ -66,9 +66,10 @@ void Controller::startup()
         if (!storage->isNewlyInitialized() && ctype == BTC::Coin::Unknown) {
             if (!coin.isEmpty()) {
                 // Coin field in DB is unrecognized. Complain.
-                throw InternalError(QString("This database was synched to a bitcoind for the coin \"%1\", yet that coin is"
-                                            " unknown to this version of %2. Either delete the datadir and resynch or"
-                                            " use the newer version of %2 that was used to create this database.")
+                throw InternalError(QString("This database was synched to a bitcoind for the coin \"%1\", yet that coin"
+                                            " is unknown to this version of %2. Please use the version of %2 that was"
+                                            " used to create this database, or specify a different datadir to create"
+                                            " a new database.")
                                     .arg(coin).arg(APPNAME));
             } else {
                 // this should never happen for not-newly-initialized DBs. Indicates programming error in codebase.

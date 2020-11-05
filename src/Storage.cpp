@@ -622,12 +622,11 @@ void Storage::startup()
 
     // load/check meta
     {
-        Meta m_db;
         static const QString errMsg{"Incompatible database format -- delete the datadir and resynch. RocksDB error"};
-        if (auto opt = GenericDBGet<Meta>(p->db.meta.get(), kMeta, true, errMsg);
+        if (const auto opt = GenericDBGet<Meta>(p->db.meta.get(), kMeta, true, errMsg);
                 opt.has_value())
         {
-            m_db = *opt;
+            const Meta &m_db = *opt;
             if (m_db.magic != p->meta.magic || m_db.version != p->meta.version || m_db.platformBits != p->meta.platformBits) {
                 throw DatabaseFormatError(errMsg);
             }
@@ -2255,7 +2254,7 @@ namespace {
                             ds >> m.coin;
                         } else {
                             // Older db's pre-1.3.0 lacked this field -- but now we interpret missing data here as
-                            // "BCH".
+                            // "BCH" (since all older db's were always BCH only).
                             m.coin = BTC::coinToName(BTC::Coin::BCH);
                             Debug() << "Missing coin info from Meta table, defaulting coin to: \"" << m.coin << "\"";
                         }
