@@ -122,7 +122,7 @@ public:
     virtual ~Debug();
 
     static bool isEnabled();
-    static bool forceEnable; ///< defaults false -- set to true if there is not App and you want to ensure Debug() works
+    static bool forceEnable; ///< defaults false -- set to true if there is no App and you want to ensure Debug() works
 
 #if defined(__GNUC__) && !defined(__clang__)
     // Grr.. GCC doesn't fully implement C++ 17 so we must do this. :(
@@ -153,7 +153,7 @@ public:
     virtual ~Trace();
 
     static bool isEnabled();
-    static bool forceEnable; ///< defaults false -- set to true if there is not App and you want Trace() to work.
+    static bool forceEnable; ///< defaults false -- set to true if there is no App and you want Trace() to work.
 
 #if defined(__GNUC__) && !defined(__clang__)
     // Grr.. GCC doesn't fully implement C++ 17 so we must do this. :(
@@ -242,7 +242,7 @@ namespace Util {
     qint64 getTime(); ///< returns a timestamp in milliseconds
     qint64 getTimeMicros(); ///< returns a timestamp in microseconds
     qint64 getTimeNS(); ///< returns a timestamp in nanoseconds
-    double getTimeSecs(); ///< returns a timestamp in seconds (resolution is microsecond precision)
+    double getTimeSecs(); ///< returns a timestamp in seconds (resolution is milliseconds precision)
     bool isClockSteady(); ///< returns true if the above timestamp clock is steady (monotonic).
 
     /// returns the number of virtual processors on the system

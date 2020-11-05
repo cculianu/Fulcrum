@@ -816,7 +816,7 @@ namespace RPC {
         static const QByteArray AUTH("Authorization: Basic ");
         static const QByteArray CONTENT_TYPE("Content-Type: application/json-rpc");
         static const QByteArray CONTENT_LENGTH("Content-Length: ");
-        const QByteArray suffix = !data.endsWith(SLASHN) ? NL : EMPTY;
+        const QByteArray &suffix = !data.endsWith(SLASHN) ? NL : EMPTY;
         const bool addHost = !header.host.isEmpty(),
                    addAuth = !header.authCookie.isEmpty();
         const int clen = data.size() + suffix.size();
