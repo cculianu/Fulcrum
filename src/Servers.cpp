@@ -1605,6 +1605,8 @@ void Server::rpc_blockchain_transaction_broadcast(Client *c, const RPC::Message 
             QTextStream{&logLine, QIODevice::WriteOnly}
                 << "Broadcast tx for client " << c->id << ", size: " << size << " bytes, response: " << ret.toString();
             logFilter->broadcast(true, logLine, txkey);
+            /* // This code has been disabled since we added BTC support, but has been left here in case
+             * // we decide to do this for Electrum clients too.
             static const Version FirstNonVulberableECVersion(3,3,4);
             if (const auto uaVersion = c->info.uaVersion(); uaVersion.isValid() && uaVersion < FirstNonVulberableECVersion) {
                 // The below is to warn old clients that they are vulnerable to a phishing attack.
@@ -1622,7 +1624,7 @@ void Server::rpc_blockchain_transaction_broadcast(Client *c, const RPC::Message 
                     << "Client " << c->id << " has a vulnerable Electron Cash (" << uaVersion.toString()
                     << "); upgrade warning HTML sent to client";
                 logFilter->broadcast(true, logLine, logLine);
-            }
+            }*/
             return ret;
         },
         // error func, throw an RPCError that's formatted in a particular way
