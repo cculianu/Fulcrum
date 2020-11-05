@@ -79,7 +79,7 @@ void PeerMgr::startup()
     if (_genesisHash.length() != HashLen)
         throw InternalError("PeerMgr cannot be started until we have a valid genesis hash! FIXME!");
 
-    const auto chain = storage->getChain();
+    const auto chain = storage->getChain(); // Note: assumption is that this is always non-empty if PeerMgr was started! (PeerMgr is never started until the db is synched so this is fine)
     const auto lcaseCoin = storage->getCoin().trimmed().toLower();
     const auto pathPrefix = QString(":resources/%1/").arg(lcaseCoin);
     if (const auto net = BTC::NetFromName(chain); !QVector<BTC::Net>{{BTC::Net::TestNet, BTC::Net::TestNet4, BTC::Net::ScaleNet, BTC::Net::MainNet}}.contains(net))
@@ -88,9 +88,9 @@ void PeerMgr::startup()
     else if (net == BTC::Net::TestNet)
         parseServersDotJson(pathPrefix + "servers_testnet.json");
     else if (net == BTC::Net::TestNet4)
-        parseServersDotJson(pathPrefix + "servers_testnet4.json"); // BCH only
+        parseServersDotJson(pathPrefix + "servers_testnet4.json"); // BCH only -- will implicitly throw if somehow the coin is BTC (should never happen)
     else if (net == BTC::Net::ScaleNet)
-        parseServersDotJson(pathPrefix + "servers_scalenet.json"); // BCH only
+        parseServersDotJson(pathPrefix + "servers_scalenet.json"); // BCH only -- will implicitly throw if somehow the coin is BTC (should never happen)
     else
         parseServersDotJson(pathPrefix + "servers.json");
 
