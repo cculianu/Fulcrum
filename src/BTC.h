@@ -29,7 +29,6 @@
 #include <QByteArray>
 #include <QHash>
 #include <QString>
-#include <QStringView>
 
 #include <cstring> // for memcpy
 #include <type_traits>
@@ -43,7 +42,7 @@ namespace BTC
     enum class Coin { Unknown = 0, BCH, BTC };
 
     QString coinToName(Coin);
-    Coin coinFromName(const QStringView &);
+    Coin coinFromName(const QString &);
 
     /// Tests
     namespace Tests {

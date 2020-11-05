@@ -197,9 +197,9 @@ namespace BTC
         }
         return ret;
     }
-    Coin coinFromName(const QStringView &sv) {
-        if (sv == coinNameBCH) return Coin::BCH;
-        if (sv == coinNameBTC) return Coin::BTC;
+    Coin coinFromName(const QString &s) {
+        if (s == coinNameBCH) return Coin::BCH;
+        if (s == coinNameBTC) return Coin::BTC;
         return Coin::Unknown;
     }
 
