@@ -64,8 +64,11 @@ namespace {
         uint16_t platformBits = sizeof(long)*8U; ///< we save the platform wordsize to the db
 
         // -- New in 1.3.0 (this field is not in older db's)
-        /// "BCH", "BTC", "" or may be empty for older db's, in which case we take the default ("BCH").
-        /// On uninitialized DB's this is empty "".
+        /// "BCH", "BTC", or "".  May be missing in DB data for older db's, in which case we take the default ("BCH")
+        /// when we deserialize, if we detect that it was missing.
+        ///
+        /// On uninitialized, newly-created DB's this is present but empty "". The fact that it is empty allows us
+        /// to auto-detect the Coin in question in Controller.
         QString coin = QString();
     };
 
