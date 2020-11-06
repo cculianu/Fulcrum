@@ -37,10 +37,6 @@ Version::Version(unsigned val, CompactType type)
     }
 }
 
-Version::Version(unsigned maj, unsigned min, unsigned rev)
-    : major(maj), minor(min), revision(rev)
-{}
-
 QString Version::toString(bool revZeroOk) const
 {
     return QStringLiteral("%1.%2%3").arg(major).arg(minor).arg( revision || revZeroOk ? QStringLiteral(".%1").arg(revision) : QString() );

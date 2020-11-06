@@ -20,6 +20,7 @@
 
 #include "App.h"
 #include "BitcoinD.h"
+#include "BTC.h"
 #include "BTC_Address.h"
 #include "Merkle.h"
 #include "PeerMgr.h"
@@ -355,6 +356,11 @@ ServerBase::ServerBase(SrvMgr *sm,
     if (!options || !storage || !bitcoindmgr)
         // defensive programming
         throw BadArgs("ServerBase cannot be constructed with nullptr arguments!");
+    // setup the isBTC flag -- node that assumption is that storage was aleady setup properly
+    if (const auto coin = BTC::coinFromName(storage->getCoin()); coin == BTC::Coin::Unknown)
+        throw InternalError("ServerBase cannot be constructed without a valid \"Coin\" in the database!");
+    else
+        isBTC = coin == BTC::Coin::BTC;
 }
 ServerBase::~ServerBase() { stop(); }
 
@@ -1605,26 +1611,34 @@ void Server::rpc_blockchain_transaction_broadcast(Client *c, const RPC::Message 
             QTextStream{&logLine, QIODevice::WriteOnly}
                 << "Broadcast tx for client " << c->id << ", size: " << size << " bytes, response: " << ret.toString();
             logFilter->broadcast(true, logLine, txkey);
-            /* // This code has been disabled since we added BTC support, but has been left here in case
-             * // we decide to do this for Electrum clients too.
-            static const Version FirstNonVulberableECVersion(3,3,4);
-            if (const auto uaVersion = c->info.uaVersion(); uaVersion.isValid() && uaVersion < FirstNonVulberableECVersion) {
+            // Next, check if client is old and has the phishing exploit:
+            // version 3.3.4 was the first one that was good for both Electron Cash and Electrum
+            constexpr Version FirstNonVulberableVersion(3,3,4);
+            if (const auto uaVersion = c->info.uaVersion(); uaVersion.isValid() && uaVersion < FirstNonVulberableVersion) {
                 // The below is to warn old clients that they are vulnerable to a phishing attack.
                 // This logic is also used by the ElectronX implementations here:
                 // https://github.com/Electron-Cash/electrumx/blob/fbd00416d804c286eb7de856e9399efb07a2ceaf/electrumx/server/session.py#L1526
                 // https://github.com/Electron-Cash/electrumx/blob/fbd00416d804c286eb7de856e9399efb07a2ceaf/electrumx/lib/coins.py#L397
-                ret = "<br/><br/>"
-                      "Your transaction was successfully broadcast.<br/><br/>"
-                      "However, you are using a VULNERABLE version of Electron Cash.<br/>"
-                      "Download the latest version from this web site ONLY:<br/>"
-                      "https://electroncash.org/"
-                      "<br/><br/>";
+                QString clientName, website;
+                if (isBTC) {
+                    clientName = "Electrum";
+                    website = "https://electrum.org/";
+                } else {
+                    clientName = "Electron Cash";
+                    website = "https://electroncash.org/";
+                }
+                ret = QString("<br/><br/>"
+                              "Your transaction was successfully broadcast.<br/><br/>"
+                              "However, you are using a VULNERABLE version of %1.<br/>"
+                              "Download the latest version from this web site ONLY:<br/>"
+                              "%2"
+                              "<br/><br/>").arg(clientName, website);
                 logLine.clear();
                 QTextStream{&logLine, QIODevice::WriteOnly}
-                    << "Client " << c->id << " has a vulnerable Electron Cash (" << uaVersion.toString()
+                    << "Client " << c->id << " has a vulnerable " << clientName << " (" << uaVersion.toString()
                     << "); upgrade warning HTML sent to client";
                 logFilter->broadcast(true, logLine, logLine);
-            }*/
+            }
             return ret;
         },
         // error func, throw an RPCError that's formatted in a particular way

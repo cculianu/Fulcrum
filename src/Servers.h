@@ -298,6 +298,10 @@ protected:
     /// QTcpSocket or QSslSocket.  See getter/setter: usesWebSockets and setUsesWebSockets.  Decided by the
     /// "ws" & "wss" config file options and/or the --ws/--wss (-w/-W) CLI args.
     bool usesWS = false;
+
+    /// If true we are on the BTC chain. This is set on construction by querying Storage. Subclasses may use this
+    /// information at runtime to present RPC behavior differences between BTC vs BCH (e.g. in the address_* RPCs).
+    bool isBTC = false;
 };
 
 /// Implements the ElectrumX/ElectronX JSON-RPC protocol, version 1.4.4.
