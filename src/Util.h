@@ -861,7 +861,7 @@ namespace Util {
         long oldLimit = 0, newLimit = 0;
         QString errMsg{};
     };
-    /// Supported pn Unix only (on other platforms the result will be NotRelevant). Will attempt to raise the
+    /// Supported on Unix only (on other platforms the result will be NotRelevant). Will attempt to raise the
     /// POSIX RLIMIT_NOFILE limit from the soft limit to the hard limit.
     MaxOpenFilesResult raiseMaxOpenFilesToHardLimit();
 
