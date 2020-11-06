@@ -597,7 +597,7 @@ QVariant Container::toVariant() const {
         if (UNLIKELY(!ok)) {
             // this should never happen
             throw Json::ParseError(QString("Failed to parse number from string: %1 (original: %2)")
-                                   .arg(begin).arg(QString::fromUtf8(data.constData(), data.size())));
+                                   .arg(begin, QString::fromUtf8(data.constData(), data.size())));
         }
         break;
     }

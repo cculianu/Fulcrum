@@ -641,7 +641,7 @@ namespace RPC {
     HttpConnection::~HttpConnection() {} ///< for vtable
     void HttpConnection::setAuth(const QString &username, const QString &password)
     {
-        header.authCookie = QStringLiteral("%1:%2").arg(username).arg(password).toUtf8().toBase64();
+        header.authCookie = QStringLiteral("%1:%2").arg(username, password).toUtf8().toBase64();
     }
 
     struct HttpConnection::StateMachine

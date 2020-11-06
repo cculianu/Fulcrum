@@ -553,7 +553,7 @@ namespace Util {
                     word.truncate(word.length()-1);  // remove training 'y'
                     ending = QStringLiteral("ies");  // .. append 'ies' eg entry -> entries
                 }
-                ret = QStringLiteral("%1%2").arg(word).arg(ending);
+                ret = QStringLiteral("%1%2").arg(word, ending);
             } else
                 ret = wordIn; // constant time copy (implicitly shared)
         }
