@@ -1251,6 +1251,8 @@ void Server::rpc_blockchain_relayfee(Client *c, const RPC::Message &m)
 //      below for boilerplate checking & parsing.
 HashX Server::parseFirstAddrParamToShCommon(const RPC::Message &m, QString *addrStrOut) const
 {
+    if (isBTC)
+        throw RPCError("blockchain.address.* methods are not available on BTC"); // unsupported on BTC (for now)
     const auto net = srvmgr->net();
     if (UNLIKELY(net == BTC::Net::Invalid))
         // This should never happen in practice, but it pays to be paranoid.
