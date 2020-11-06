@@ -581,19 +581,19 @@ void Storage::startup()
 
         using DBInfoTup = std::tuple<QString, std::unique_ptr<rocksdb::DB> &, const rocksdb::Options &, double>;
         const std::list<DBInfoTup> dbs2open = {
-            { "meta", p->db.meta, opts, 0.02 },
+            { "meta", p->db.meta, opts, 0.0005 },
             { "blkinfo" , p->db.blkinfo , opts, 0.02 },
             { "utxoset", p->db.utxoset, opts, 0.10 },
             { "scripthash_history", p->db.shist, shistOpts, 0.74 },
             { "scripthash_unspent", p->db.shunspent, opts, 0.10 },
-            { "undo", p->db.undo, opts, 0.02 },
+            { "undo", p->db.undo, opts, 0.0395 },
         };
         std::size_t memTotal = 0;
         const auto OpenDB = [this, &memTotal](const DBInfoTup &tup) {
             auto & [name, uptr, opts_in, memFactor] = tup;
             rocksdb::Options opts = opts_in;
-            const size_t mem = std::max(size_t(options->db.maxMem * memFactor), size_t(1024*1024));
-            Debug() << "DB \"" << name << "\" mem: " << QString::number(mem / 1024. / 1024., 'f', 2) << " MB";
+            const size_t mem = std::max(size_t(options->db.maxMem * memFactor), size_t(64*1024));
+            Debug() << "DB \"" << name << "\" mem: " << QString::number(mem / 1024. / 1024., 'f', 2) << " MiB";
             opts.OptimizeLevelStyleCompaction(mem);
             memTotal += mem;
             rocksdb::Status s;
@@ -616,7 +616,7 @@ void Storage::startup()
         for (auto & tup : dbs2open)
             OpenDB(tup);
 
-        Log() << "DB memory: " << QString::number(memTotal / 1024. / 1024., 'f', 2) << " MB";
+        Log() << "DB memory: " << QString::number(memTotal / 1024. / 1024., 'f', 2) << " MiB";
 
     }  // /open db's
 

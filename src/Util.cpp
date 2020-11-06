@@ -38,29 +38,34 @@
 #  include <time.h>
 #  include <unistd.h>
 #elif defined(Q_OS_WINDOWS)
-#define WIN32_LEAN_AND_MEAN 1
+#  define WIN32_LEAN_AND_MEAN 1
 #  include <windows.h>
 #  include <psapi.h>
-#  include <io.h>    // for _write(), _read(), _pipe(), _close()
-#  include <fcntl.h> // for O_BINARY, O_TEXT
-#  include <errno.h> // for errno
+#  include <io.h>              // for _write(), _read(), _pipe(), _close()
+#  include <fcntl.h>           // for O_BINARY, O_TEXT
+#  include <errno.h>           // for errno
 #endif
 
 #if defined(Q_OS_UNIX)
-#include <unistd.h>  // for write(), read(), pipe(), close()
+#  include <unistd.h>          // for write(), read(), pipe(), close()
+#  if __has_include(<sys/time.h>) && __has_include(<sys/resource.h>) // POSIX includes for setrlimit/getrlimit
+#    include <sys/time.h>      // for setrlimit related stuff
+#    include <sys/resource.h>  // for setrlimit related stuff
+#    define HAS_SETRLIMIT
+#  endif
 #endif
 
-#include <cstring>   // for strerror
+#include <cstring>             // for strerror
 #include <iostream>
 #include <thread>
 
 #if __has_include(<pthread.h>) && !defined(Q_OS_WIN)
 // MacOS, Linux, etc
-#include <pthread.h>
+#  include <pthread.h>
 static constexpr unsigned PLATFORM_STACK_MIN = PTHREAD_STACK_MIN;
 #elif defined(Q_OS_WIN) && __has_include(<sysinfoapi.h>)
 // Windows
-#include <sysinfoapi.h>
+#  include <sysinfoapi.h>
 // typically 4KiB to 64KiB
 static const unsigned PLATFORM_STACK_MIN = []{
     SYSTEM_INFO si;
@@ -446,6 +451,58 @@ namespace Util {
         void Sem::release() { p.cond.notify_one(); }
 #endif // defined(Q_OS_WIN) || defined(Q_OS_UNIX)
     } // end namespace AsyncSignalSafe
+
+    MaxOpenFilesResult raiseMaxOpenFilesToHardLimit()
+    {
+#ifdef HAS_SETRLIMIT
+        MaxOpenFilesResult ret;
+        struct rlimit rl;
+        auto get = [&rl, &ret] {
+            if (getrlimit(RLIMIT_NOFILE, &rl)) {
+                ret.status = ret.Error;
+                ret.errMsg = QString("getrlimit: ") + std::strerror(errno);
+                return false;
+            }
+            return true;
+        };
+        // first get the current limits
+        if (!get())
+            return ret;
+        // paranoia
+        if (long(rl.rlim_cur) < 0 || long(rl.rlim_max) < 0) {
+            ret.status = ret.Error;
+            ret.errMsg = "getrlimit reports limits are negative";
+        }
+        // more paranoia
+        if (rl.rlim_cur > rl.rlim_max) {
+            ret.status = ret.Error;
+            ret.errMsg = "soft limit > hard limit (this shouldn't happen)";
+        }
+        // save value
+        ret.oldLimit = long(rl.rlim_cur);
+        if (rl.rlim_cur != rl.rlim_max) { // if not at hard limit, raise it
+            // set to max
+            rl.rlim_cur = rl.rlim_max;
+            if (setrlimit(RLIMIT_NOFILE, &rl)) {
+                ret.status = ret.Error;
+                ret.errMsg = QString("setrlimit: ") + std::strerror(errno);
+                return ret;
+            }
+        }
+        // get the new limits again
+        if (!get())
+            return ret;
+        // save value, indicate success
+        ret.newLimit = long(rl.rlim_cur);
+        ret.status = ret.Ok;
+
+        return ret;
+#else
+        // On Windows this call is not even needed -- our use of Qt uses the Win32 API directly which has a limit
+        // of 16.7 million for the handle tables.
+        return {MaxOpenFilesResult::NotRelevant};
+#endif
+    }
 
 } // end namespace Util
 

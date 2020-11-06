@@ -236,6 +236,19 @@ void App::startup()
     } else {
         Debug() << "High resolution clock: isSteady = true";
     }
+    // attempt to raise rlimit for max open files on Unix platforms (on Windows the limit is already absurdly high)
+    if (const auto res = Util::raiseMaxOpenFilesToHardLimit(); res.status != res.NotRelevant) {
+        if (res.status == res.Ok) {
+            Log() << "Max open files: " << res.newLimit
+                  << (res.oldLimit != res.newLimit ? QString(" (increased from default %1").arg(res.oldLimit) : "");
+            constexpr int min = 2000;
+            if (res.newLimit < min) {
+                Warning() << "The max open file limit for this process is low. Please see about configuring your"
+                             " system to raise the hard limit on open files beyond " << min << ".";
+            }
+        } else // error
+            Warning() << "Failed to raise max open file limit: " << res.errMsg;
+    }
     try {
         BTC::CheckBitcoinEndiannessAndOtherSanityChecks();
 

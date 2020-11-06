@@ -853,6 +853,18 @@ namespace Util {
     /// just results in using the default thread stack settings).
     unsigned getPlatformMinimumThreadStackSize();
 
+    struct MaxOpenFilesResult {
+        enum Status {
+            Ok = 0, NotRelevant, Error
+        };
+        Status status = Error;
+        long oldLimit = 0, newLimit = 0;
+        QString errMsg{};
+    };
+    /// Supported pn Unix only (on other platforms the result will be NotRelevant). Will attempt to raise the
+    /// POSIX RLIMIT_NOFILE limit from the soft limit to the hard limit.
+    MaxOpenFilesResult raiseMaxOpenFilesToHardLimit();
+
 } // end namespace Util
 
 /// Kind of like Go's "defer" statement. Call a lambda (for clean-up code) at scope end.
