@@ -240,7 +240,7 @@ void App::startup()
     if (const auto res = Util::raiseMaxOpenFilesToHardLimit(); res.status != res.NotRelevant) {
         if (res.status == res.Ok) {
             Log() << "Max open files: " << res.newLimit
-                  << (res.oldLimit != res.newLimit ? QString(" (increased from default %1)").arg(res.oldLimit) : "");
+                  << (res.oldLimit != res.newLimit ? QString(" (increased from default: %1)").arg(res.oldLimit) : "");
             constexpr int min = 2000;
             if (res.newLimit < min) {
                 Warning() << "The max open file limit for this process is low. Please see about configuring your"
