@@ -462,10 +462,9 @@ void App::parseArgs()
                " SSL and WSS ports server-wide.\n"),
     },
     {
-        "simdjson",
-        QString("If specified, enable the new simdjson backend for JSON parsing. This parser is over 2x faster"
-                " than the default parser, but since this parser was recently added and hasn't been fully war"
-                " tested yet, it is currently disabled by default.\n"),
+        "no-simdjson",
+        QString("If specified, disable the fast simdjson backend for JSON parsing. This parser is over 2x faster"
+                " than the original parser, and is enabled by default as of " APPNAME " version 1.3.0.\n"),
     },
     {
        "dump-sh",
@@ -1125,13 +1124,16 @@ void App::parseArgs()
         Util::AsyncOnObject(this, []{ Log() << "TLS restricted to non-deprecated versions (version 1.2 or above)"; });
     }
 
-    // --simdjson from CLI or simdjson from conf
-    if (parser.isSet("simdjson") || conf.boolValue("simdjson")) {
+    // --no-simdjson from CLI or simdjson=bool from conf -- note as of Fulcrum v1.3.0 we default simdjson to enabled
+    {
+        const bool clinosj = parser.isSet("no-simdjson"), confnosj = !conf.boolValue("simdjson", true),
+                   enabled = !(clinosj || confnosj);
+
         // We do this on an asynch task since this call may log, and we wish to log later after startup
         // in case we are in --syslog mode.
-        Util::AsyncOnObject(this, [] {
-            Debug() << "config: simdjson = true";
-            Options::setSimdJson(true);
+        Util::AsyncOnObject(this, [enabled] {
+            Debug() << "config: simdjson = " << (enabled ? "true" : "false");
+            Options::setSimdJson(enabled, true);
         });
     }
 

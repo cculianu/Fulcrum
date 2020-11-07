@@ -103,6 +103,9 @@ Once the server finishes synching it will behave like an ElectronX/ElectrumX ser
 --tls-disallow-deprecated
 :   If specified, restricts the TLS protocol used by the server to non-deprecated v1.2 or newer, disallowing connections from clients requesting TLS v1.1 or earlier. This option applies to all SSL and WSS ports server-wide.
 
+--no-simdjson
+:   If specified, disable the fast simdjson backend for JSON parsing. This parser is over 2x faster than the original parser, and is enabled by default as of Fulcrum version 1.3.0.
+
 --dump-sh <outputfile>
 :    *This is an advanced debugging option*. Dump script hashes. If specified, after the database is loaded, all of the script hashes in the database will be written to outputfile as a JSON array.
 

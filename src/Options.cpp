@@ -179,8 +179,8 @@ bool Options::BdReqThrottleParams::isValid() const noexcept
 /* static */
 bool Options::isSimdJson() { return RPC::isFastJson(); }
 /* static */
-bool Options::setSimdJson(const bool b) {
-    if (b != isSimdJson()) {
+bool Options::setSimdJson(const bool b, const bool forceLog) {
+    if (forceLog || b != isSimdJson()) {
         const bool res = RPC::setFastJson(b);
         if (res && b) {
             Log() << "Enabled JSON parser: simdjson";

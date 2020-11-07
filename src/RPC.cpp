@@ -41,6 +41,8 @@ namespace RPC {
     /*static*/ const QString Message::s_params("params");
     /*static*/ const QString Message::s_result("result");
 
+    /* Note that we set `ParserBackend::Default` here, however the actual app default for Fulcrum is
+     * `ParserBackend::FastestAvailable` which is set in App.cpp on startup. */
     static std::atomic<Json::ParserBackend> jsonParserBackend = Json::ParserBackend::Default;
 
     /* static */

@@ -217,11 +217,11 @@ public:
     // CLI: --tls-disallow-deprecated, config: tls-disallow-deprecated
     bool tlsDisallowDeprecated = false;
 
-    // CLI: --simdjson, config: simdjson = true
+    // CLI: --no-simdjson, config: simdjson = true
     /// This is actually a thin wrapper around RPC::isFastJson(), hence why it is static
     static bool isSimdJson();
     /// This is actually a thin wrapper around RPC::setFastJson(), hence why it is static
-    static bool setSimdJson(bool b);
+    static bool setSimdJson(bool b, bool forcePrintToLog = false);
 };
 
 /// A class encapsulating a simple read-only config file format.  The format is similar to the bitcoin.conf format
