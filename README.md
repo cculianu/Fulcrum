@@ -4,7 +4,7 @@
 [![Docker Build](https://img.shields.io/docker/cloud/build/cculianu/fulcrum)](https://hub.docker.com/r/cculianu/fulcrum)
 [![Copr build status](https://copr.fedorainfracloud.org/coprs/jonny/BitcoinCash/package/fulcrum/status_image/last_build.png)](https://copr.fedorainfracloud.org/coprs/jonny/BitcoinCash/package/fulcrum/)
 
-A fast & nimble SPV server for Bitcoin Cash.
+A fast & nimble SPV server for Bitcoin Cash & Bitcoin BTC.
 
 #### Copyright
 (C) 2019-2020 Calin Culianu <calin.culianu@gmail.com>
@@ -19,15 +19,31 @@ GPLv3. See the included `LICENSE.txt` file or [visit gnu.org and read the licens
 - *Fast:* Written in 100% modern `C++17` using multi-threaded and asynchronous programming techniques.
 - *A drop-in replacement for ElectronX/ElectrumX:* Fulcrum is 100% protocol-level compatible with the [Electrum Cash 1.4.4 protocol](https://electrum-cash-protocol.readthedocs.io/en/latest/). Existing server admins should feel right at home with this software since installation and management of it is nearly identical to ElectronX/ElectrumX server.
 - *Cross-platform:* While this codebase was mainly developed and tested on MacOS, Windows and Linux, it should theoretically work on any modern OS (such as *BSD) that has Qt5 Core and Qt5 Networking available.
+- ***NEW!*** *Dual-coin:* Supports both BCH and BTC.
 
 ### Requirements
 
-- `Qt Core` & `Qt Networking` libraries `5.12.5` or above (I use `5.14.2` myself).  Qt `5.12.4` (or earlier) is not supported.
-- A modern, 64-bit `C++17` compiler.  `clang` is recommended but `G++` also works. MSVC on Windows is not supported (please use `MinGW G++` instead, which ships with Qt Open Source Edition for Windows).
+- *For running*:
+  - A supported bitcoin full node with its JSON-RPC service enabled, preferably running on the same machine.
+    - *For **BCH***: Bitcoin Cash Node, Bitcoin Unlimited Cash, Flowee, and bchd have all been tested extensively and are known to work well with this software.
+    - *For **BTC***: Bitcoin Core v0.17.0 or later.  No other full nodes are supported by this software for BTC.
+    - The node must have txindex enabled e.g. `txindex=1`.
+    - The node must not be a pruning node.
+  - *Recommended hardware*: Minimum 1GB RAM, 64-bit CPU, ~40GB disk space for mainnet BCH (slightly more for BTC). For best results, use an SSD rather than an HDD.
+- *For compiling*: 
+  - `Qt Core` & `Qt Networking` libraries `5.12.5` or above (I use `5.14.2` myself).  Qt `5.12.4` (or earlier) is not supported.
+  - A modern, 64-bit `C++17` compiler.  `clang` is recommended but `G++` also works. MSVC on Windows is not supported (please use `MinGW G++` instead, which ships with Qt Open Source Edition for Windows).
+
+### Quickstart
+
+1. Download a [pre-built static binary](https://github.com/cculianu/Fulcrum/releases).
+2. Verify that the binary runs on your system by executing the binary with `./Fulcrum -h` to see the CLI options.
+3. Setup a configuration file and to point Fulcrum to your bitcoind JSON-RPC server, specify listening ports, TLS certificates, etc.  See: [doc/fulcrum-example-config.conf](https://github.com/cculianu/Fulcrum/blob/master/doc/fulcrum-example-config.conf) and/or [doc/fulcrum-quick-config.conf](https://github.com/cculianu/Fulcrum/blob/master/doc/fulcrum-quick-config.conf)
+4. Also see this section below on [Running Fulcrum](#running-fulcrum).
 
 ### How To Compile
 
-It's recommended you use Qt Creator.
+Compiling is for those users that do not wish to use the [pre-built static binaries provided here](https://github.com/cculianu/Fulcrum/releases), or for users on platforms for which the static binaries are not provided (such as FreeBSD or macOS). To compile, it's recommended you use the Qt Creator IDE.
 
 1. Get the latest version of Qt Open Source Edition for your platform.
 2. Point the Qt Creator IDE at the `Fulcrum.pro` file.
@@ -128,11 +144,11 @@ Execute the binary, with `-h` to see the built-in help, e.g. `./Fulcrum -h`. You
  - [doc/fulcrum-example-config.conf](https://github.com/cculianu/Fulcrum/blob/master/doc/fulcrum-example-config.conf) in the source tree. This sample config file is very well documented with comments.
  - [doc/fulcrum-quick-config.conf](https://github.com/cculianu/Fulcrum/blob/master/doc/fulcrum-quick-config.conf) in the source tree. This is a more abbreviated config file you can use as a starting point as well.
 
-`Fulcrum` requires a `bitcoind` instance running either on `testnet` or `mainnet` (or `regtest` for testing), which you must tell it about via the CLI options or via the config file.  You also need to tell it what port(s) to listen on and optionally what SSL certificates to use (if using SSL). ***Note:*** *Electron Cash at this time no longer supports connecting to non-SSL servers, so you should probably configure SSL for production use*.
+`Fulcrum` requires a `bitcoind` instance running either on `testnet` or `mainnet` (or `regtest` for testing), which you must tell it about via the CLI options or via the config file.  You also need to tell it what port(s) to listen on and optionally what SSL certificates to use (if using SSL). ***Note:*** *Electron Cash (and/or Electrum) at this time no longer support connecting to non-SSL servers, so you should probably configure SSL for production use*.
 
 It is recommended you specify a data dir (`-D` via CLI or `datadir=` via config file) on an SSD drive for best results.  Synching against `testnet` should take you about 10-20 minutes (more on slower machines), and mainnet can take anywhere from 4 hours to 20+ hours, depending on machine and drive speed.  I have not tried synching against mainnet on an HDD and it will probably take ***days*** if you are lucky.
 
-Once the server finishes synching it will behave like an ElectronX/ElectrumX server and it can receive requests from Electron Cash.
+Once the server finishes synching it will behave like an ElectronX/ElectrumX server and it can receive requests from Electron Cash (or Electrum if on BTC).
 
 You may also wish to read the [Fulcrum manpage](https://github.com/cculianu/Fulcrum/blob/master/doc/unix-man-page.md).
 
@@ -191,8 +207,10 @@ Everything should just work (I use MacOS as my dev machine).
 
 ### Donations
 
-Sure!  Send BCH here:
+Sure!  Send **BCH** here:
 
 [bitcoincash:qphax4s4n9h60jxj2fkrjs35w2tvgd4wzvf52cgtzc](bitcoincash:qphax4s4n9h60jxj2fkrjs35w2tvgd4wzvf52cgtzc)
 
 [![bitcoincash:qphax4s4n9h60jxj2fkrjs35w2tvgd4wzvf52cgtzc](https://raw.githubusercontent.com/cculianu/DonateSpareChange/master/donate.png)](bitcoincash:qphax4s4n9h60jxj2fkrjs35w2tvgd4wzvf52cgtzc)
+
+You may also send **BTC** to the BTC-equivalent of the above address, which is: **`1BCHBCH6TXBaXyc5HReLBm1sNytBF2kkPD`**
