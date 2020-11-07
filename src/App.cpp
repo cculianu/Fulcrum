@@ -191,19 +191,19 @@ void App::startup_Sighandlers()
     exitThr = std::make_unique<ExitThr>(this, true);
     dynamic_cast<ExitThr &>(*exitThr).startWithWatchDog();
 
-#define Pair_(x) std::pair{x, #x}
+#define Tup(x, b) std::tuple<decltype(SIGINT), const char *, bool>{x, #x, b}
     const auto pairs = {
-        Pair_(SIGINT), Pair_(SIGTERM), // all platforms have these signals
+        Tup(SIGINT, true), Tup(SIGTERM, true), // all platforms have these signals
 #ifdef Q_OS_UNIX
-        Pair_(SIGQUIT), Pair_(SIGHUP), // unix only
+        Tup(SIGQUIT, true), Tup(SIGHUP, false), // unix only
 #endif
-#undef Pair_
+#undef Tup
     };
-    for (const auto & [sig, name] : pairs) {
-        auto res = std::signal(sig, signal_trampoline);
+    for (const auto & [sig, name, reg] : pairs) {
+        auto res = std::signal(sig, reg ? signal_trampoline : SIG_IGN);
         if (res == SIG_ERR)
             Warning() << "Error registering " << name << ": " << std::strerror(errno);
-        else {
+        else if (reg) {
             DebugM("Registered ", name);
             posixSignalRegistrations.emplace_back(
                 // Executes at list destruction (unregister)
@@ -211,7 +211,8 @@ void App::startup_Sighandlers()
                     std::signal(sig, SIG_DFL);
                     DebugM("Unregistered ", name);
             });
-        }
+        } else
+            DebugM("Ignoring ", name);
     }
     const auto num = posixSignalRegistrations.size();
     DebugM("Registered ", num, Util::Pluralize(" signal handler", num));
