@@ -173,8 +173,10 @@ namespace {
         Log() << "---";
     }
 
-    void test()
+    void testImpl(bool useSimdJson)
     {
+        const auto parser = useSimdJson ? ParserBackend::SimdJson : ParserBackend::Default;
+        Log() << (useSimdJson ? "Testing with simdjson backend ..." : "Testing with default backend ...");
         // basic tests
         {
             const auto expect1 = "[\"astring\",\"anotherstring\",\"laststring\",null]";
@@ -195,7 +197,7 @@ namespace {
             v.setValue(sl);
             Log() << "QStringList -> JSON: " << (json=toUtf8(v, true, SerOption::BareNullOk));
             if (json != expect2) throw Exception(QString("Json does not match, excpected: %1").arg(expect2));
-            Log() << "Parse \"1.01000\": " << (json=toUtf8(parseUtf8("1.01000", ParseOption::AcceptAnyValue), true, SerOption::BareNullOk));
+            Log() << "Parse \"1.01000\": " << (json=toUtf8(parseUtf8("1.01000", ParseOption::AcceptAnyValue, parser), true, SerOption::BareNullOk));
             if (json != "1.01") throw Exception(QString("Json does not match, excpected: %1").arg("1.01"));
             QVariantHash h;
             QByteArray empty; empty.resize(10); empty.resize(0);
@@ -224,7 +226,7 @@ namespace {
             Log() << "QVariantHash -> JSON: " << toUtf8(h, true, SerOption::BareNullOk);
             // we can't do the top-level hash since that has random order based on hash seed.. so we do this
             json = toUtf8(h, false /* !compact */, SerOption::BareNullOk);
-            auto hh = parseUtf8(json, ParseOption::RequireObject).toMap();
+            auto hh = parseUtf8(json, ParseOption::RequireObject, parser).toMap();
             json = toUtf8(hh["mapkey"], true, SerOption::BareNullOk);
             if (json != expect3) throw Exception(QString("Json \"mapkey\" does not match\nexcpected:\n%1\n\ngot:\n%2").arg(expect3).arg(QString(json)));
             Log() << "Basic tests: passed";
@@ -243,9 +245,13 @@ namespace {
             TFile t;
             if (file.startsWith("pass"))
                 t.wantsFail = false;
-            else if (file.startsWith("fail"))
-                t.wantsFail = true;
-            else if (file.startsWith("round"))
+            else if (file.startsWith("fail")) {
+                if (useSimdJson) {
+                    t.wantsRound = file.contains("_round_sj.");
+                    t.wantsFail = !t.wantsRound && !file.contains("_pass_sj.");
+                } else
+                    t.wantsFail = true;
+            } else if (file.startsWith("round"))
                 t.wantsFail = false, t.wantsRound = true;
             else
                 // skip unrelated json file
@@ -255,7 +261,7 @@ namespace {
         }
         if (files.empty()) throw BadArgs(QString("DATADIR '%1' does not have any [pass/fail/round]*.json files").arg(dir));
         Log() << "Found " << files.size() << " json test files, running extended tests ...";
-        const auto runTest = [](const TFile &t) {
+        const auto runTest = [parser](const TFile &t) {
             QFile f(t.path);
             auto baseName = QFileInfo(t.path).baseName();
             if (!f.open(QFile::ReadOnly|QFile::Text))
@@ -264,7 +270,7 @@ namespace {
             QVariant var;
             bool didFail = false;
             try {
-                var = parseUtf8(json, ParseOption::AcceptAnyValue);
+                var = parseUtf8(json, ParseOption::AcceptAnyValue, parser);
             } catch (...) {
                 if (!t.wantsFail)
                     throw;
@@ -282,6 +288,13 @@ namespace {
         };
         for (const auto & t : files)
             runTest(t);
+    }
+
+    void test() {
+        // run tests twice both without and with simdjson (if available)
+        testImpl(false); // regular backend
+        if (isParserAvailable(ParserBackend::SimdJson))
+                testImpl(true); // simdjson backend
     }
 
     static const auto bench_ = App::registerBench("json", &bench);

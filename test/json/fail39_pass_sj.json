@@ -1,0 +1,1 @@
+["\udd61 <-- the reason this fails on our lib but passes on simdjson is becasue simdjson implements the JSON RFC quirks that our lib rejects. This codepoint is technically forbidden but JSON RFC allows for it. This is fine."]
