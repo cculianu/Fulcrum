@@ -641,7 +641,7 @@ namespace RPC {
     HttpConnection::~HttpConnection() {} ///< for vtable
     void HttpConnection::setAuth(const QString &username, const QString &password)
     {
-        header.authCookie = QStringLiteral("%1:%2").arg(username).arg(password).toUtf8().toBase64();
+        header.authCookie = QStringLiteral("%1:%2").arg(username, password).toUtf8().toBase64();
     }
 
     struct HttpConnection::StateMachine
@@ -816,7 +816,7 @@ namespace RPC {
         static const QByteArray AUTH("Authorization: Basic ");
         static const QByteArray CONTENT_TYPE("Content-Type: application/json-rpc");
         static const QByteArray CONTENT_LENGTH("Content-Length: ");
-        const QByteArray suffix = !data.endsWith(SLASHN) ? NL : EMPTY;
+        const QByteArray &suffix = !data.endsWith(SLASHN) ? NL : EMPTY;
         const bool addHost = !header.host.isEmpty(),
                    addAuth = !header.authCookie.isEmpty();
         const int clen = data.size() + suffix.size();

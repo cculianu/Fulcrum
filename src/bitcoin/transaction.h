@@ -17,6 +17,8 @@
 #include <QString>
 #endif
 
+#include <algorithm>
+
 #ifdef __clang__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunused-function"
@@ -26,7 +28,18 @@
 #endif
 
 namespace bitcoin {
-constexpr int SERIALIZE_TRANSACTION = 0x00;
+/**
+ * Flags that is ORed into the protocol version to designate that a transaction
+ * should be (un)serialized with or without out witness data.
+ * Make sure that this does not collide with any of the values in `version.h`
+ * or with `ADDRV2_FORMAT`.
+ */
+
+inline constexpr int SERIALIZE_TRANSACTION = 0x00;
+// Added by Calin, imported from Core. Note in Core this flag has the *opposite* meaning
+// (there it is called SERIALIZE_TRANSACTION_NO_WITNESS
+inline constexpr int SERIALIZE_TRANSACTION_USE_WITNESS = 0x40000000;
+static_assert (sizeof(int) >= 4);
 
 /**
  * An outpoint - a combination of a transaction hash and an index n into its
@@ -92,6 +105,8 @@ public:
     COutPoint prevout;
     CScript scriptSig;
     uint32_t nSequence;
+    // Added by Calin:
+    CScriptWitness scriptWitness; //!< Only serialized through CTransaction
 
     /**
      * Setting nSequence to this value for every input in a transaction disables
@@ -233,25 +248,88 @@ class CMutableTransaction;
  * - std::vector<CTxIn> vin
  * - std::vector<CTxOut> vout
  * - uint32_t nLockTime
+ *
+ * Extended transaction serialization format:
+ * - int32_t nVersion
+ * - unsigned char dummy = 0x00
+ * - unsigned char flags (!= 0)
+ * - std::vector<CTxIn> vin
+ * - std::vector<CTxOut> vout
+ * - if (flags & 1):
+ *   - CTxWitness wit;
+ * - uint32_t nLockTime
  */
 template <typename Stream, typename TxType>
 inline void UnserializeTransaction(TxType &tx, Stream &s) {
+    // MODIFIED BY CALIN -- To allow for deserializing SegWit blocks
+    const bool fAllowWitness = s.GetVersion() & SERIALIZE_TRANSACTION_USE_WITNESS;
+    unsigned char flags = 0;
     s >> tx.nVersion;
     tx.vin.clear();
     tx.vout.clear();
     /* Try to read the vin. In case the dummy is there, this will be read as an
      * empty vector. */
     s >> tx.vin;
-    /* We read a non-empty vin. Assume a normal vout follows. */
-    s >> tx.vout;
+    if (tx.vin.size() == 0 && fAllowWitness) {
+        /* We read a dummy or an empty vin. */
+        s >> flags;
+        if (flags != 0) {
+            s >> tx.vin;
+            s >> tx.vout;
+        }
+    } else {
+        /* We read a non-empty vin. Assume a normal vout follows. */
+        s >> tx.vout;
+    }
+    if (flags & 1 && fAllowWitness) {
+        /* The witness flag is present, and we support witnesses. */
+        flags ^= 1;
+        for (auto &txin : tx.vin) {
+            s >> txin.scriptWitness.stack;
+        }
+        if (!tx.HasWitness()) {
+            /* It's illegal to encode witnesses when all witness stacks are empty. */
+            throw std::ios_base::failure("Superfluous witness record");
+        }
+    }
+    if (flags) {
+        /* Unknown flag in the serialization */
+        throw std::ios_base::failure("Unknown transaction optional data");
+    }
     s >> tx.nLockTime;
 }
 
 template <typename Stream, typename TxType>
 inline void SerializeTransaction(const TxType &tx, Stream &s) {
+    /* // Original code:
     s << tx.nVersion;
     s << tx.vin;
     s << tx.vout;
+    s << tx.nLockTime;*/
+    // MODIFIED BY CALIN: Allow for SegWit support to be able to sync to BTC
+    const bool fAllowWitness = s.GetVersion() & SERIALIZE_TRANSACTION_USE_WITNESS;
+
+    s << tx.nVersion;
+    unsigned char flags = 0;
+    // Consistency check
+    if (fAllowWitness) {
+        /* Check whether witnesses need to be serialized. */
+        if (tx.HasWitness()) {
+            flags |= 1;
+        }
+    }
+    if (flags) {
+        /* Use extended format in case witnesses are to be serialized. */
+        const std::vector<CTxIn> vinDummy;
+        s << vinDummy;
+        s << flags;
+    }
+    s << tx.vin;
+    s << tx.vout;
+    if (flags & 1) {
+        for (const auto &txin : tx.vin)
+            s << txin.scriptWitness.stack;
+    }
     s << tx.nLockTime;
 }
 
@@ -285,6 +363,7 @@ private:
     const uint256 hash;
 
     uint256 ComputeHash() const;
+    uint256 ComputeWitnessHash() const;
 
 public:
     /** Construct a CTransaction that qualifies as IsNull() */
@@ -311,6 +390,10 @@ public:
 
     const TxId GetId() const { return TxId(hash); }
     const TxHash GetHash() const { return TxHash(hash); }
+    /// added by Calin to avoid extra copying
+    const uint256 &GetHashRef() const { return hash; }
+    /// Added by Calin -- to support Core. Not cached, computed on-the-fly (this is not the case in Core code)
+    const TxHash GetWitnessHash() const { return TxHash{ComputeWitnessHash()}; }
 
     // Return sum of txouts.
     Amount GetValueOut() const;
@@ -348,6 +431,11 @@ public:
     }
 
     std::string ToString() const;
+
+    /// Added by Calin to support Core
+    bool HasWitness() const {
+        return std::any_of(vin.begin(), vin.end(), [](const CTxIn & txin){ return !txin.scriptWitness.IsNull(); });
+    }
 };
 
 /**
@@ -383,10 +471,16 @@ public:
      */
     TxId GetId() const;
     TxHash GetHash() const;
+    TxHash GetWitnessHash() const; ///< Added by Calin to support Core
 
     friend bool operator==(const CMutableTransaction &a,
                            const CMutableTransaction &b) {
         return a.GetId() == b.GetId();
+    }
+
+    /// Added by Calin to support Core
+    bool HasWitness() const {
+        return std::any_of(vin.begin(), vin.end(), [](const CTxIn & txin){ return !txin.scriptWitness.IsNull(); });
     }
 };
 

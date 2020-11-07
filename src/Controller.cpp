@@ -32,6 +32,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <ios>
 #include <iterator>
 #include <list>
 #include <map>
@@ -58,6 +59,28 @@ void Controller::startup()
     storage = std::make_shared<Storage>(options);
     storage->startup(); // may throw here
 
+    // check that the coin from DB is known and supported
+    {
+        const auto coin = storage->getCoin();
+        const auto ctype = BTC::coinFromName(coin);
+        if (!storage->isNewlyInitialized() && ctype == BTC::Coin::Unknown) {
+            if (!coin.isEmpty()) {
+                // Coin field in DB is unrecognized. Complain.
+                throw InternalError(QString("This database was synched to a bitcoind for the coin \"%1\", yet that coin"
+                                            " is unknown to this version of %2. Please use the version of %2 that was"
+                                            " used to create this database, or specify a different datadir to create"
+                                            " a new database.")
+                                    .arg(coin).arg(APPNAME));
+            } else {
+                // this should never happen for not-newly-initialized DBs. Indicates programming error in codebase.
+                throw InternalError("Database \"Coin\" field is empty yet the database has data! This should never happen. FIXME!!");
+            }
+        }
+        // set the atomic -- this affects how we parse blocks, etc
+        coinType = ctype;
+    }
+
+
     if (! options->dumpScriptHashes.isEmpty())
         // this may take a long time but normally this branch is not taken
         dumpScriptHashes(options->dumpScriptHashes);
@@ -76,6 +99,8 @@ void Controller::startup()
             callOnTimerSoon(msgPeriod, waitTimer, []{ Log("Waiting for bitcoind..."); return true; }, false, Qt::TimerType::VeryCoarseTimer);
         };
         waitForBitcoinD();
+        conns += connect(bitcoindmgr.get(), &BitcoinDMgr::bitcoinCoreDetection, this, &Controller::on_bitcoinCoreDetection,
+                         /* NOTE --> */ Qt::DirectConnection);
         conns += connect(bitcoindmgr.get(), &BitcoinDMgr::allConnectionsLost, this, waitForBitcoinD);
         conns += connect(bitcoindmgr.get(), &BitcoinDMgr::gotFirstGoodConnection, this, [this](quint64 id) {
             // connection to kick off our 'process' method once the first auth is received
@@ -161,6 +186,46 @@ void Controller::startup()
     }
 
     start();  // start our thread
+}
+
+void Controller::on_bitcoinCoreDetection(bool iscore)
+{
+    const auto ourtype = coinType.load(std::memory_order_relaxed);
+    const auto detectedtype = !iscore ? BTC::Coin::BCH : BTC::Coin::BTC;
+    if (ourtype == BTC::Coin::Unknown) {
+        // We had no coin set in DB, but we just detected the coin, set it now and return.
+        // This is the common case with no misconfiguration.
+        coinType = detectedtype;
+        storage->setCoin(BTC::coinToName(detectedtype)); // thread-safe call to storage, ok to do here.
+        return;
+    }
+    if (ourtype != detectedtype) {
+        // Misconfiguration -- DB says one thing and bitcoind says another. Complain and exit.
+        if (detectedtype == BTC::Coin::BTC && ourtype == BTC::Coin::BCH) {
+            // bitcoind is Core, yet we are expecting BCH
+            Fatal() << "\n\n"
+
+                       "You are connected to a Bitcoin Core (BTC) bitcoind, yet this database was not\n"
+                       "synched to a BTC chain.\n\n"
+
+                       "Please either connect to the appropriate bitcoind for this database, or delete\n"
+                       "the datadir and resynch to this bitcoind.\n";
+        } else if (detectedtype == BTC::Coin::BCH && ourtype == BTC::Coin::BTC){
+            // bitcoind is not Core, we are expecting BTC
+            Fatal() << "\n\n"
+                       "You are connected to a non-Bitcoin Core (BTC) bitcoind, yet this database was\n"
+                       "synched to a BTC chain.\n\n"
+
+                       "At the present time, to use BTC, bitcoind must be Bitcoin Core v0.17.0 or above.\n"
+                       "Please either connect to the appropriate bitcoind for this database, or delete\n"
+                       "the datadir and resynch.\n";
+        } else {
+            // defensive programming -- should never be reached. This is here in case we
+            // add new coin types yet we forget to update this code.
+            Fatal() << "INTERNAL ERROR: Unexpected coin combination: ourtype=" << BTC::coinToName(ourtype)
+                    << " detectedtype=" <<  BTC::coinToName(detectedtype) << " -- FIXME!";
+        }
+    }
 }
 
 void Controller::cleanup()
@@ -304,6 +369,8 @@ struct DownloadBlocksTask : public CtlTask
 
     std::atomic<size_t> nTx = 0, nIns = 0, nOuts = 0;
 
+    const bool allowSegWit; ///< initted in c'tor. If true, deserialize blocks using the optional segwit extensons to the tx format.
+
     void do_get(unsigned height);
 
     // basically computes expectedCt. Use expectedCt member to get the actual expected ct. this is used only by c'tor as a utility function
@@ -320,7 +387,8 @@ struct DownloadBlocksTask : public CtlTask
 /*static*/ const int DownloadBlocksTask::HEADER_SIZE = BTC::GetBlockHeaderSize();
 
 DownloadBlocksTask::DownloadBlocksTask(unsigned from, unsigned to, unsigned stride, Controller *ctl_)
-    : CtlTask(ctl_, QStringLiteral("Task.DL %1 -> %2").arg(from).arg(to)), from(from), to(to), stride(stride), expectedCt(unsigned(nToDL(from, to, stride)))
+    : CtlTask(ctl_, QStringLiteral("Task.DL %1 -> %2").arg(from).arg(to)), from(from), to(to), stride(stride),
+      expectedCt(unsigned(nToDL(from, to, stride))), allowSegWit(ctl_->isCoinBTC())
 {
     FatalAssert( (to >= from) && (ctl_) && (stride > 0), "Invalid params to DonloadBlocksTask c'tor, FIXME!");
 
@@ -362,49 +430,76 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
         const auto hash = Util::ParseHexFast(var.toByteArray());
         if (hash.length() == HashLen) {
             submitRequest("getblock", {var, false}, [this, bnum, hash](const RPC::Message & resp){
-                QVariant var = resp.result();
-                const auto rawblock = Util::ParseHexFast(var.toByteArray());
-                const auto header = rawblock.left(HEADER_SIZE); // we need a deep copy of this anyway so might as well take it now.
-                QByteArray chkHash;
-                if (bool sizeOk = header.length() == HEADER_SIZE; sizeOk && (chkHash = BTC::HashRev(header)) == hash) {
-                    auto ppb = PreProcessedBlock::makeShared(bnum, size_t(rawblock.size()), BTC::Deserialize<bitcoin::CBlock>(rawblock)); // this is here to test performance
+                try {
+                    QVariant var = resp.result();
+                    const auto rawblock = Util::ParseHexFast(var.toByteArray());
+                    const auto header = rawblock.left(HEADER_SIZE); // we need a deep copy of this anyway so might as well take it now.
+                    QByteArray chkHash;
+                    if (bool sizeOk = header.length() == HEADER_SIZE; sizeOk && (chkHash = BTC::HashRev(header)) == hash) {
+                        PreProcessedBlockPtr ppb;
+                        try {
+                            ppb = PreProcessedBlock::makeShared(bnum, size_t(rawblock.size()),
+                                                                BTC::Deserialize<bitcoin::CBlock>(rawblock, 0, allowSegWit));
+                        } catch (const std::ios_base::failure &e) {
+                            // deserialization error -- check if block is segwit and we are not segwit
+                            if (!allowSegWit) {
+                                try {
+                                    const auto cblock = BTC::DeserializeSegWit<bitcoin::CBlock>(rawblock);
+                                    // If we get here the block deserialized ok as segwit but not ok as non-segwit.
+                                    // We must assume that there is some misconfiguration e.g. the remote is BTC
+                                    // but DB is not expecting BTC. This can happen if user is using non-Satoshi
+                                    // bitcoind with BTC.  We only support /Satoshi... as uagent for BTC due to the
+                                    // way that our auto-detection works.
+                                    if (std::any_of(cblock.vtx.begin(), cblock.vtx.end(),
+                                                    [](const auto &tx){ return tx->HasWitness(); }))
+                                        throw InternalError("SegWit block encountered for non-SegWit coin."
+                                                            " If you wish to use BTC, please delete the datadir and"
+                                                            " resynch using Bitcoin Core v0.17.0 or later.");
+                                } catch (const std::ios_base::failure &) { /* ignore -- block is bad as segwit too. */}
+                            }
+                            throw; // outer catch clause will handle printing the message
+                        }
+                        assert(bool(ppb));
 
-                    if (TRACE) Trace() << "block " << bnum << " size: " << rawblock.size() << " nTx: " << ppb->txInfos.size();
-                    // update some stats for /stats endpoint
-                    nTx += ppb->txInfos.size();
-                    nOuts += ppb->outputs.size();
-                    nIns += ppb->inputs.size();
+                        if (TRACE) Trace() << "block " << bnum << " size: " << rawblock.size() << " nTx: " << ppb->txInfos.size();
+                        // update some stats for /stats endpoint
+                        nTx += ppb->txInfos.size();
+                        nOuts += ppb->outputs.size();
+                        nIns += ppb->inputs.size();
 
-                    const size_t index = height2Index(bnum);
-                    ++goodCt;
-                    q_ct = qMax(q_ct-1, 0);
-                    lastProgress = double(index) / double(expectedCt);
-                    if (!(bnum % 1000) && bnum) {
-                        emit progress(lastProgress);
+                        const size_t index = height2Index(bnum);
+                        ++goodCt;
+                        q_ct = qMax(q_ct-1, 0);
+                        lastProgress = double(index) / double(expectedCt);
+                        if (!(bnum % 1000) && bnum) {
+                            emit progress(lastProgress);
+                        }
+                        if (TRACE) Trace() << resp.method << ": header for height: " << bnum << " len: " << header.length();
+                        emit ctl->putBlock(this, ppb); // send the block off to the Controller thread for further processing and for save to db
+                        if (goodCt >= expectedCt) {
+                            // flag state to maybeDone to do checks when process() called again
+                            maybeDone = true;
+                            AGAIN();
+                            return;
+                        }
+                        while (goodCt + unsigned(q_ct) < expectedCt && q_ct < max_q) {
+                            // queue multiple at once
+                            AGAIN();
+                            ++q_ct;
+                        }
+                    } else if (!sizeOk) {
+                        Warning() << resp.method << ": at height " << bnum << " header not valid (decoded size: " << header.length() << ")";
+                        errorCode = int(bnum);
+                        errorMessage = QString("bad size for height %1").arg(bnum);
+                        emit errored();
+                    } else {
+                        Warning() << resp.method << ": at height " << bnum << " header not valid (expected hash: " << hash.toHex() << ", got hash: " << chkHash.toHex() << ")";
+                        errorCode = int(bnum);
+                        errorMessage = QString("hash mismatch for height %1").arg(bnum);
+                        emit errored();
                     }
-                    if (TRACE) Trace() << resp.method << ": header for height: " << bnum << " len: " << header.length();
-                    emit ctl->putBlock(this, ppb); // send the block off to the Controller thread for further processing and for save to db
-                    if (goodCt >= expectedCt) {
-                        // flag state to maybeDone to do checks when process() called again
-                        maybeDone = true;
-                        AGAIN();
-                        return;
-                    }
-                    while (goodCt + unsigned(q_ct) < expectedCt && q_ct < max_q) {
-                        // queue multiple at once
-                        AGAIN();
-                        ++q_ct;
-                    }
-                } else if (!sizeOk) {
-                    Warning() << resp.method << ": at height " << bnum << " header not valid (decoded size: " << header.length() << ")";
-                    errorCode = int(bnum);
-                    errorMessage = QString("bad size for height %1").arg(bnum);
-                    emit errored();
-                } else {
-                    Warning() << resp.method << ": at height " << bnum << " header not valid (expected hash: " << hash.toHex() << ", got hash: " << chkHash.toHex() << ")";
-                    errorCode = int(bnum);
-                    errorMessage = QString("hash mismatch for height %1").arg(bnum);
-                    emit errored();
+                } catch (const std::exception &e) {
+                    Fatal() << QString("Caught exception processing block %1: %2").arg(bnum).arg(e.what());
                 }
             });
         } else {
@@ -424,7 +519,7 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
 struct SynchMempoolTask : public CtlTask
 {
     SynchMempoolTask(Controller *ctl_, std::shared_ptr<Storage> storage, const std::atomic_bool & notifyFlag)
-        : CtlTask(ctl_, "SynchMempool"), storage(storage), notifyFlag(notifyFlag)
+        : CtlTask(ctl_, "SynchMempool"), storage(storage), notifyFlag(notifyFlag), allowSegWitTx(ctl_->isCoinBTC())
         { scriptHashesAffected.reserve(SubsMgr::kRecommendedPendingNotificationsReserveSize); }
     ~SynchMempoolTask() override;
     void process() override;
@@ -437,6 +532,7 @@ struct SynchMempoolTask : public CtlTask
     DldTxsMap txsDownloaded;
     unsigned expectedNumTxsDownloaded = 0;
     const bool TRACE = Trace::isEnabled(); // set this to true to print more debug
+    const bool allowSegWitTx; ///< initted in c'tor. If true, deserialize tx's using the optional segwit extensons to the tx format.
 
     /// The scriptHashes that were affected by this refresh/synch cycle. Used for notifications.
     std::unordered_set<HashX, HashHasher> scriptHashesAffected;
@@ -687,21 +783,42 @@ void SynchMempoolTask::doDLNextTx()
             Error() << "Received tx data is of the wrong length -- bad hex? FIXME";
             emit errored();
             return;
-        } else if (BTC::HashRev(txdata) != tx->hash) {
-            Error() << "Received tx data appears to not match requested tx! FIXME!!";
+        }
+
+        // deserialize tx, catching any deser errors
+        bitcoin::CMutableTransaction ctx;
+        try {
+            ctx = BTC::Deserialize<bitcoin::CMutableTransaction>(txdata, 0, allowSegWitTx);
+        } catch (const std::exception &e) {
+            Error() << "Error deserializing tx: " << tx->hash.toHex() << ", exception: " << e.what();
             emit errored();
             return;
         }
-        tx->sizeBytes = unsigned(expectedLen); // save size now -- this is needed later to calculate fees and for everything else.
+
+        // save size now -- this is needed later to calculate fees and for everything else.
+        // note: for btc core with segwit this size is not the same "virtual" size as what bitcoind would report
+        tx->sizeBytes = unsigned(expectedLen);
 
         if (TRACE)
             Debug() << "got reply for tx: " << hashHex << " " << txdata.length() << " bytes";
 
-        {
-            // tmp mutable object will be moved into CTransactionRef below via a move constructor
-            bitcoin::CMutableTransaction ctx = BTC::Deserialize<bitcoin::CMutableTransaction>(txdata);
-            txsDownloaded[tx->hash] = {tx, bitcoin::MakeTransactionRef(std::move(ctx)) };
+        // ctx is moved into CTransactionRef below via move construction
+        const auto & [_, txref] = txsDownloaded[tx->hash] = {tx, bitcoin::MakeTransactionRef(std::move(ctx)) };
+
+        // Check txdata is sane -- its hash should match the hash we asked for.
+        //
+        // We do this last because we want to reduce the number of hash operations done by this code -- constructing
+        // the CTransaction necessarily causes it to compute its own (segwit-stripped) hash on construction, so we get
+        // that hash "for free" here as it were -- and we can use it to ensure sanity that the tx matches what we
+        // expected without the need to do BTC::HashRev(txdata) above (which would be redundant).
+        if (Util::reversedCopy(txref->GetHashRef()) != tx->hash) {
+            txsDownloaded.erase(tx->hash); // remove the object we just inserted
+            // WARNING! `txref` is now a dangling reference at this point!
+            Error() << "Received tx data appears to not match requested tx for txhash: " << tx->hash.toHex() << "! FIXME!!";
+            emit errored();
+            return;
         }
+
         txsWaitingForResponse.erase(tx->hash);
         AGAIN();
     });
@@ -1346,6 +1463,7 @@ auto Controller::stats() const -> Stats
     const auto tipInfo = storage->latestTip();
     m["Header count"] = tipInfo.first+1;
     m["Chain"] = storage->getChain();
+    m["Coin"] = storage->getCoin();
     m["Chain tip"] = tipInfo.second.toHex();
     m["UTXO set"] = qlonglong(storage->utxoSetSize());
     m["UTXO set bytes"] = QString::number(storage->utxoSetSizeMB(), 'f', 3) + " MB";
@@ -1404,6 +1522,7 @@ auto Controller::stats() const -> Stats
     misc["Job Queue (Thread Pool)"] = ::AppThreadPool()->stats();
     st["Misc"] = misc;
     st["SubsMgr"] = storage->subs()->statsSafe(kDefaultTimeout/2);
+    // Config (Options) map
     st["Config"] = options->toMap();
     { // Process memory usage
         const auto mu = Util::getProcessMemoryUsage();
@@ -1572,7 +1691,6 @@ std::tuple<size_t, size_t, size_t> Controller::nTxInOutSoFar() const
     }
     return {nTx, nIn, nOut};
 }
-
 
 // --- Debug dump support
 void Controller::dumpScriptHashes(const QString &fileName) const

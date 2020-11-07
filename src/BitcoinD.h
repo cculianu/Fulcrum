@@ -44,6 +44,7 @@ struct BitcoinDInfo {
     QString warnings = ""; ///< from 'warnings' in the getnetworkinfo response (usually is empty string, but may not always be)
     bool isBchd = false; ///< true if remote bitcoind subversion is: /bchd:...
     bool isZeroArgEstimateFee = false; ///< true if remote bitcoind expects 0 argument "estimatefee" RPC.
+    bool isCore = false; ///< true if we are actually connected to /Satoshi.. node (Bitcoin Core)
 
     /// Return all the information in this obejct as a QVariantMap suitable for placing into JSON results, etc (used by /stats and `getinfo`)
     QVariantMap toVariandMap() const;
@@ -97,12 +98,23 @@ public:
     /// Thread-safe.  Convenient method to avoid an extra copy. Returns getBitcoinDInfo().isZeroArgEstimateFee
     bool isZeroArgEstimateFee() const;
 
+    /// Thread-safe.  Convenient method to avoid an extra copy. Returns getBitcoinDInfio().isCore
+    bool isBitcoinCore() const;
+
+    /// Thread-safe.  Convenient method to avoid an extra copy. Returns getBitcoinDInfio().version
+    Version getBitcoinDVersion() const;
+
 signals:
     void gotFirstGoodConnection(quint64 bitcoindId); // emitted whenever the first bitcoind after a "down" state (or after startup) gets its first good status (after successful authentication)
     void allConnectionsLost(); // emitted whenever all bitcoind rpc connections are down.
     /// emitted if bitcoind is telling us it's still warming up (RPC error code -28). The actual warmup message is
     /// the argument.
     void inWarmUp(const QString &);
+
+    /// Emitted as soon as we read the bitcoind subversion. If it starts with /Satoshi:.., we emit this
+    /// with true, Otherwise, we emit it with false.
+    void bitcoinCoreDetection(bool);
+
 protected:
     Stats stats() const override; // from Mgr
 

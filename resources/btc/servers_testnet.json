@@ -1,0 +1,66 @@
+{
+    "hsmithsxurybd7uh.onion": {
+        "pruning": "-",
+        "s": "53012",
+        "t": "53011",
+        "version": "1.4"
+    },
+    "testnet.hsmiths.com": {
+        "pruning": "-",
+        "s": "53012",
+        "t": "53011",
+        "version": "1.4"
+    },
+    "testnet.qtornado.com": {
+        "pruning": "-",
+        "s": "51002",
+        "t": "51001",
+        "version": "1.4.2"
+    },
+    "testnet1.bauerj.eu": {
+        "pruning": "-",
+        "s": "50002",
+        "version": "1.4.2"
+    },
+    "tn.not.fyi": {
+        "pruning": "-",
+        "s": "55002",
+        "t": "55001",
+        "version": "1.4"
+    },
+    "bitcoin.cluelessperson.com": {
+        "pruning": "-",
+        "s": "51002",
+        "t": "51001",
+        "version": "1.4"
+    },
+    "electrum.blockstream.info": {
+        "pruning": "-",
+        "s": "60002",
+        "t": "60001",
+        "version": "1.4"
+    },
+    "explorerzydxu5ecjrkwceayqybizmpjjznk5izmitf2modhcusuqlid.onion": {
+        "pruning": "-",
+        "t": "143",
+        "version": "1.4"
+    },
+    "testnet.aranguren.org": {
+        "pruning": "-",
+        "s": "51002",
+        "t": "51001",
+        "version": "1.4.2"
+    },
+    "wgzwu3vg3i54wayx.onion": {
+        "pruning": "-",
+        "s": "51002",
+        "t": "51001",
+        "version": "1.4.2"
+    },
+    "blockstream.info": {
+        "pruning": "-",
+        "s": "993",
+        "t": "143",
+        "version": "1.4"
+    }
+}

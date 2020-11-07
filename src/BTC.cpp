@@ -72,9 +72,10 @@ namespace BTC
 
 
     /// specialization for CTransaction which works differently
-    template <> bitcoin::CTransaction Deserialize(const QByteArray &bytes, int pos)
+    template <> bitcoin::CTransaction Deserialize(const QByteArray &bytes, int pos, bool allowSegWit)
     {
-        bitcoin::GenericVectorReader<QByteArray> vr(bitcoin::SER_NETWORK, bitcoin::PROTOCOL_VERSION, bytes, pos);
+        const int version = bitcoin::PROTOCOL_VERSION | (allowSegWit ? bitcoin::SERIALIZE_TRANSACTION_USE_WITNESS : 0);
+        bitcoin::GenericVectorReader<QByteArray> vr(bitcoin::SER_NETWORK, version, bytes, pos);
         return bitcoin::CTransaction(bitcoin::deserialize, vr);
     }
 
@@ -184,6 +185,22 @@ namespace BTC
     }
     Net NetFromName(const QString & name) noexcept {
         return nameNetMap.value(name, Net::Invalid /* default if not found */);
+    }
+
+    namespace { const QString coinNameBCH{"BCH"}, coinNameBTC{"BTC"}; }
+    QString coinToName(Coin c) {
+        QString ret; // for NRVO
+        switch (c) {
+        case Coin::BCH: ret = coinNameBCH; break;
+        case Coin::BTC: ret = coinNameBTC; break;
+        case Coin::Unknown: break;
+        }
+        return ret;
+    }
+    Coin coinFromName(const QString &s) {
+        if (s == coinNameBCH) return Coin::BCH;
+        if (s == coinNameBTC) return Coin::BTC;
+        return Coin::Unknown;
     }
 
 } // end namespace BTC

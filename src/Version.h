@@ -41,9 +41,10 @@ struct Version
     unsigned major = 0, minor = 0, revision = 0;
 
     /// constructs an invalid version (0,0,0)
-    Version() = default;
+    constexpr Version() noexcept = default;
 
-    Version(unsigned maj, unsigned min, unsigned rev);
+    constexpr Version(unsigned maj, unsigned min, unsigned rev) noexcept
+        : major(maj), minor(min), revision(rev) {}
 
     enum CompactType { BitcoinD/*, BCHD */};
     /// To explicitly construct an instance from the version number returned by bitcoind's getnetworkinfo RPC call

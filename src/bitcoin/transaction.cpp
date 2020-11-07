@@ -78,6 +78,10 @@ static uint256 ComputeCMutableTransactionHash(const CMutableTransaction &tx) {
     return SerializeHash(tx, SER_GETHASH, 0);
 }
 
+static uint256 ComputeCMutableTransactionWitnessHash(const CMutableTransaction &tx) {
+    return SerializeHash(tx, SER_GETHASH, SERIALIZE_TRANSACTION_USE_WITNESS);
+}
+
 TxId CMutableTransaction::GetId() const {
     return TxId(ComputeCMutableTransactionHash(*this));
 }
@@ -86,8 +90,16 @@ TxHash CMutableTransaction::GetHash() const {
     return TxHash(ComputeCMutableTransactionHash(*this));
 }
 
+TxHash CMutableTransaction::GetWitnessHash() const {
+    return TxHash(ComputeCMutableTransactionWitnessHash(*this));
+}
+
 uint256 CTransaction::ComputeHash() const {
     return SerializeHash(*this, SER_GETHASH, 0);
+}
+
+uint256 CTransaction::ComputeWitnessHash() const {
+    return SerializeHash(*this, SER_GETHASH, SERIALIZE_TRANSACTION_USE_WITNESS);
 }
 
 /**

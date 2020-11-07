@@ -62,6 +62,14 @@ namespace {
         uint32_t magic = 0xf33db33f, version = 0x1;
         QString chain; ///< "test", "main", etc
         uint16_t platformBits = sizeof(long)*8U; ///< we save the platform wordsize to the db
+
+        // -- New in 1.3.0 (this field is not in older db's)
+        /// "BCH", "BTC", or "".  May be missing in DB data for older db's, in which case we take the default ("BCH")
+        /// when we deserialize, if we detect that it was missing.
+        ///
+        /// On uninitialized, newly-created DB's this is present but empty "". The fact that it is empty allows us
+        /// to auto-detect the Coin in question in Controller.
+        QString coin = QString();
     };
 
     // some database keys we use -- todo: if this grows large, move it elsewhere
@@ -457,7 +465,7 @@ struct Storage::Pvt
     constexpr int blockHeaderSize() { return BTC::GetBlockHeaderSize(); }
 
     Meta meta;
-    Lock metaLock;
+    RWLock metaLock;
 
     std::atomic<std::underlying_type_t<SaveItem>> pendingSaves{0};
 
@@ -573,19 +581,19 @@ void Storage::startup()
 
         using DBInfoTup = std::tuple<QString, std::unique_ptr<rocksdb::DB> &, const rocksdb::Options &, double>;
         const std::list<DBInfoTup> dbs2open = {
-            { "meta", p->db.meta, opts, 0.02 },
+            { "meta", p->db.meta, opts, 0.0005 },
             { "blkinfo" , p->db.blkinfo , opts, 0.02 },
             { "utxoset", p->db.utxoset, opts, 0.10 },
             { "scripthash_history", p->db.shist, shistOpts, 0.74 },
             { "scripthash_unspent", p->db.shunspent, opts, 0.10 },
-            { "undo", p->db.undo, opts, 0.02 },
+            { "undo", p->db.undo, opts, 0.0395 },
         };
         std::size_t memTotal = 0;
         const auto OpenDB = [this, &memTotal](const DBInfoTup &tup) {
             auto & [name, uptr, opts_in, memFactor] = tup;
             rocksdb::Options opts = opts_in;
-            const size_t mem = std::max(size_t(options->db.maxMem * memFactor), size_t(1024*1024));
-            Debug() << "DB \"" << name << "\" mem: " << QString::number(mem / 1024. / 1024., 'f', 2) << " MB";
+            const size_t mem = std::max(size_t(options->db.maxMem * memFactor), size_t(64*1024));
+            Debug() << "DB \"" << name << "\" mem: " << QString::number(mem / 1024. / 1024., 'f', 2) << " MiB";
             opts.OptimizeLevelStyleCompaction(mem);
             memTotal += mem;
             rocksdb::Status s;
@@ -608,23 +616,24 @@ void Storage::startup()
         for (auto & tup : dbs2open)
             OpenDB(tup);
 
-        Log() << "DB memory: " << QString::number(memTotal / 1024. / 1024., 'f', 2) << " MB";
+        Log() << "DB memory: " << QString::number(memTotal / 1024. / 1024., 'f', 2) << " MiB";
 
     }  // /open db's
 
     // load/check meta
     {
-        Meta m_db;
         static const QString errMsg{"Incompatible database format -- delete the datadir and resynch. RocksDB error"};
-        if (auto opt = GenericDBGet<Meta>(p->db.meta.get(), kMeta, true, errMsg);
+        if (const auto opt = GenericDBGet<Meta>(p->db.meta.get(), kMeta, true, errMsg);
                 opt.has_value())
         {
-            m_db = *opt;
+            const Meta &m_db = *opt;
             if (m_db.magic != p->meta.magic || m_db.version != p->meta.version || m_db.platformBits != p->meta.platformBits) {
                 throw DatabaseFormatError(errMsg);
             }
             p->meta = m_db;
             Debug () << "Read meta from db ok";
+            if (!p->meta.coin.isEmpty())
+                Log() << "Coin: " << p->meta.coin;
             if (!p->meta.chain.isEmpty())
                 Log() << "Chain: " << p->meta.chain;
         } else {
@@ -736,20 +745,36 @@ auto Storage::headerVerifier() const -> std::pair<const BTC::HeaderVerifier &, S
 }
 
 
-
 QString Storage::getChain() const
 {
-    LockGuard l(p->metaLock);
+    SharedLockGuard l(p->metaLock);
     return p->meta.chain;
 }
 
 void Storage::setChain(const QString &chain)
 {
     {
-        LockGuard l(p->metaLock);
-        p->meta.chain = chain;
+        ExclusiveLockGuard l(p->metaLock);
+        p->meta.chain = chain; // set chain for saving
     }
-    Log() << "Chain: " << chain;
+    if (!chain.isEmpty())
+        Log() << "Chain: " << chain;
+    save(SaveItem::Meta);
+}
+
+QString Storage::getCoin() const
+{
+    SharedLockGuard l(p->metaLock);
+    return p->meta.coin;
+}
+
+void Storage::setCoin(const QString &coin) {
+    {
+        ExclusiveLockGuard l(p->metaLock);
+        p->meta.coin = coin;
+    }
+    if (!coin.isEmpty())
+        Log() << "Coin: " << coin;
     save(SaveItem::Meta);
 }
 
@@ -795,7 +820,7 @@ void Storage::save_impl(SaveSpec override)
     if (const auto flags = SaveSpec(p->pendingSaves.exchange(0))|override; flags) { // atomic clear of flags, grab prev val
         try {
             if (flags & SaveItem::Meta) { // Meta
-                LockGuard l(p->metaLock);
+                SharedLockGuard l(p->metaLock);
                 saveMeta_impl();
             }
         } catch (const std::exception & e) {
@@ -2197,7 +2222,7 @@ namespace {
         {
             QDataStream ds(&ba, QIODevice::WriteOnly|QIODevice::Truncate);
             // we serialize the 'magic' value as a simple scalar as a sort of endian check for the DB
-            ds << SerializeScalarNoCopy(m.magic) << m.version << m.chain << m.platformBits;
+            ds << SerializeScalarNoCopy(m.magic) << m.version << m.chain << m.platformBits << m.coin;
         }
         return ba;
     }
@@ -2215,10 +2240,24 @@ namespace {
                 m.magic = DeserializeScalar<decltype (m.magic)>(magicBytes, &ok);
                 if (ok) {
                     ds >> m.version >> m.chain;
-                    if (!ds.atEnd()) {
+                    ok = ds.status() == QDataStream::Status::Ok;
+                    if (ok && !ds.atEnd()) {
                         // TODO: make this field non-optional. For now we tolerate it missing since we added this field
                         // later and we want to be able to still test on our existing db's.
                         ds >> m.platformBits;
+                    }
+                    ok = ds.status() == QDataStream::Status::Ok;
+                    if (ok) {
+                        if (!ds.atEnd()) {
+                            // Newer db's will always either have an empty string "", "BCH", or "BTC" here.
+                            // Read the db value now. Client code gets this value via Storage::getCoin().
+                            ds >> m.coin;
+                        } else {
+                            // Older db's pre-1.3.0 lacked this field -- but now we interpret missing data here as
+                            // "BCH" (since all older db's were always BCH only).
+                            m.coin = BTC::coinToName(BTC::Coin::BCH);
+                            Debug() << "Missing coin info from Meta table, defaulting coin to: \"" << m.coin << "\"";
+                        }
                     }
                     ok = ds.status() == QDataStream::Status::Ok;
                 }

@@ -20,6 +20,7 @@
 
 #include "App.h"
 #include "BitcoinD.h"
+#include "BTC.h"
 #include "BTC_Address.h"
 #include "Merkle.h"
 #include "PeerMgr.h"
@@ -355,6 +356,11 @@ ServerBase::ServerBase(SrvMgr *sm,
     if (!options || !storage || !bitcoindmgr)
         // defensive programming
         throw BadArgs("ServerBase cannot be constructed with nullptr arguments!");
+    // setup the isBTC flag -- node that assumption is that storage was aleady setup properly
+    if (const auto coin = BTC::coinFromName(storage->getCoin()); coin == BTC::Coin::Unknown)
+        throw InternalError("ServerBase cannot be constructed without a valid \"Coin\" in the database!");
+    else
+        isBTC = coin == BTC::Coin::BTC;
 }
 ServerBase::~ServerBase() { stop(); }
 
@@ -1193,6 +1199,18 @@ void Server::rpc_blockchain_estimatefee(Client *c, const RPC::Message &m)
     if (!bitcoindmgr->isZeroArgEstimateFee())
         params.push_back(unsigned(n));
 
+    if (bitcoindmgr->isBitcoinCore() && bitcoindmgr->getBitcoinDVersion() >= Version{0,17,0}) {
+        // Bitcoin Core removed the "estimatefee" RPC method entirely in version 0.17.0, in favor of "estimatesmartfee"
+        generic_async_to_bitcoind(c, m.id, "estimatesmartfee", params, [](const RPC::Message &response){
+            // We don't validate what bitcoind returns. Sometimes if it has not enough information, it may
+            // return no "feerate" but instead return an "errors" entry in the dict. This is fine.
+            // ElectrumX just returns -1 in that case here, so we do the same.
+            return response.result().toMap().value("feerate", -1.0);
+        });
+        return;
+    }
+
+    // regular Bitcoin Cash daemons
     generic_async_to_bitcoind(c, m.id, "estimatefee", params, [](const RPC::Message &response){
         return response.result();
     });
@@ -1233,6 +1251,8 @@ void Server::rpc_blockchain_relayfee(Client *c, const RPC::Message &m)
 //      below for boilerplate checking & parsing.
 HashX Server::parseFirstAddrParamToShCommon(const RPC::Message &m, QString *addrStrOut) const
 {
+    if (isBTC)
+        throw RPCError("blockchain.address.* methods are not available on BTC"); // unsupported on BTC (for now)
     const auto net = srvmgr->net();
     if (UNLIKELY(net == BTC::Net::Invalid))
         // This should never happen in practice, but it pays to be paranoid.
@@ -1593,21 +1613,31 @@ void Server::rpc_blockchain_transaction_broadcast(Client *c, const RPC::Message 
             QTextStream{&logLine, QIODevice::WriteOnly}
                 << "Broadcast tx for client " << c->id << ", size: " << size << " bytes, response: " << ret.toString();
             logFilter->broadcast(true, logLine, txkey);
-            static const Version FirstNonVulberableECVersion(3,3,4);
-            if (const auto uaVersion = c->info.uaVersion(); uaVersion.isValid() && uaVersion < FirstNonVulberableECVersion) {
+            // Next, check if client is old and has the phishing exploit:
+            // version 3.3.4 was the first one that was good for both Electron Cash and Electrum
+            constexpr Version FirstNonVulberableVersion(3,3,4);
+            if (const auto uaVersion = c->info.uaVersion(); uaVersion.isValid() && uaVersion < FirstNonVulberableVersion) {
                 // The below is to warn old clients that they are vulnerable to a phishing attack.
                 // This logic is also used by the ElectronX implementations here:
                 // https://github.com/Electron-Cash/electrumx/blob/fbd00416d804c286eb7de856e9399efb07a2ceaf/electrumx/server/session.py#L1526
                 // https://github.com/Electron-Cash/electrumx/blob/fbd00416d804c286eb7de856e9399efb07a2ceaf/electrumx/lib/coins.py#L397
-                ret = "<br/><br/>"
-                      "Your transaction was successfully broadcast.<br/><br/>"
-                      "However, you are using a VULNERABLE version of Electron Cash.<br/>"
-                      "Download the latest version from this web site ONLY:<br/>"
-                      "https://electroncash.org/"
-                      "<br/><br/>";
+                QString clientName, website;
+                if (isBTC) {
+                    clientName = "Electrum";
+                    website = "https://electrum.org/";
+                } else {
+                    clientName = "Electron Cash";
+                    website = "https://electroncash.org/";
+                }
+                ret = QString("<br/><br/>"
+                              "Your transaction was successfully broadcast.<br/><br/>"
+                              "However, you are using a VULNERABLE version of %1.<br/>"
+                              "Download the latest version from this web site ONLY:<br/>"
+                              "%2"
+                              "<br/><br/>").arg(clientName, website);
                 logLine.clear();
                 QTextStream{&logLine, QIODevice::WriteOnly}
-                    << "Client " << c->id << " has a vulnerable Electron Cash (" << uaVersion.toString()
+                    << "Client " << c->id << " has a vulnerable " << clientName << " (" << uaVersion.toString()
                     << "); upgrade warning HTML sent to client";
                 logFilter->broadcast(true, logLine, logLine);
             }
@@ -1620,10 +1650,10 @@ void Server::rpc_blockchain_transaction_broadcast(Client *c, const RPC::Message 
             {
                 // This "logFilter" mechanism was added in Fulcrum 1.2.5 to suppress repeated Mist Miner broadcast fail
                 // spam from appearing in the log.  We basically observed that the Mist Miners keep spamming the same
-                // tx's over and over again.  So we simply take the first 1024 bytes of the tx, hash that and use a
-                // rolling bloom filter to keep track of tx's we've seen (bloom filter size: 16384).  In this way, we
-                // don't produce duplicate log messages in the default Log() for the same tx broadcast failure. (But we
-                // do still produce Debug() log messages, if debug logging is enabled).
+                // tx's over and over again.  So we simply take the bytes of the tx, hash that and use a rolling bloom
+                // filter to keep track of tx's we've seen (bloom filter size: 16384).  In this way, we don't produce
+                // duplicate log messages in the default Log() for the same tx broadcast failure. (But we do still
+                // produce Debug() log messages, if debug logging is enabled).
                 QByteArray logLine;
                 QTextStream{&logLine, QIODevice::WriteOnly}
                     << "Broadcast fail for client " << c->id << ": " << errorMessage.left(120);
@@ -2182,6 +2212,7 @@ void AdminServer::rpc_getinfo(Client *c, const RPC::Message &m)
         res["height"] = opt.has_value() ? *opt : QVariant();
     }
     res["chain"] = storage->getChain();
+    res["coin"] = storage->getCoin();
     res["genesis_hash"] = Util::ToHexFast(storage->genesisHash());
     res["pid"] = QCoreApplication::applicationPid();
     res["clients_connected"] = qulonglong(Client::numClients.load());
