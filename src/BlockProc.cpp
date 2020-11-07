@@ -48,7 +48,7 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bi
     for (const auto & tx : b.vtx) {
         // copy tx hash data for the tx
         TxInfo info;
-        info.hash = BTC::Hash2ByteArrayRev(tx->GetHash());
+        info.hash = BTC::Hash2ByteArrayRev(tx->GetHashRef());
         info.nInputs = IONum(tx->vin.size());
         info.nOutputs = IONum(tx->vout.size());
         // remember the tx hash -> index association for use later in this function
