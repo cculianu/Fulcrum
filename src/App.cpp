@@ -199,23 +199,26 @@ void App::startup_Sighandlers()
 #endif
 #undef Tup
     };
+    int nreg = 0;
     for (const auto & [sig, name, reg] : pairs) {
-        auto res = std::signal(sig, reg ? signal_trampoline : SIG_IGN);
-        if (res == SIG_ERR)
+        const auto prev = std::signal(sig, reg ? signal_trampoline : SIG_IGN);
+        if (prev == SIG_ERR)
             Warning() << "Error registering " << name << ": " << std::strerror(errno);
-        else if (reg) {
-            DebugM("Registered ", name);
+        else {
+            if (reg) {
+                ++nreg;
+                DebugM("Registered ", name);
+            } else
+                DebugM("Ignoring ", name);
             posixSignalRegistrations.emplace_back(
                 // Executes at list destruction (unregister)
-                [sig=sig, name=name]{
-                    std::signal(sig, SIG_DFL);
-                    DebugM("Unregistered ", name);
+                [sig=sig, name=name, prev]{
+                    std::signal(sig, prev);
+                    DebugM("Restored ", name);
             });
-        } else
-            DebugM("Ignoring ", name);
+        }
     }
-    const auto num = posixSignalRegistrations.size();
-    DebugM("Registered ", num, Util::Pluralize(" signal handler", num));
+    DebugM("Registered ", nreg, Util::Pluralize(" signal handler", nreg));
 }
 
 /// The standard says we must use C linkage for POSIX signal handlers
