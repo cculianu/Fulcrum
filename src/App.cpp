@@ -32,6 +32,7 @@
 #include <QFileInfo>
 #include <QLocale>
 #include <QRegExp>
+#include <QSemaphore>
 #include <QSslCipher>
 #include <QSslEllipticCurve>
 #include <QSslSocket>
@@ -124,9 +125,11 @@ void App::startup_Sighandlers()
 
     // "Quit" thread. Waits on exitSem and then does a quit.  Woken up precisely once from the signal handler,
     // or from the App::cleanup_Sighandlers() function (whichever executes first).
-    struct ExitThr : QThread {
-        App *app;
-        std::atomic_bool didStart = false, deleting = false;
+    class ExitThr : public QThread {
+        App * const app;
+        QSemaphore startedSem{0};
+        std::atomic_bool deleting = false;
+    public:
         explicit ExitThr(App *app_) : QThread(app_), app(app_) { setObjectName("ExitThr"); }
         ~ExitThr() override {
             deleting = true;
@@ -142,7 +145,7 @@ void App::startup_Sighandlers()
             }
         }
         void run() override {
-            didStart = true;
+            startedSem.release();
             setTerminationEnabled(true); // applies to currently running thread
             DebugM("started with stack size: ", stackSize() ? QString::number(stackSize()) : QString("default"));
             Defer d([]{DebugM("exited");});
@@ -156,10 +159,19 @@ void App::startup_Sighandlers()
                 Error() << "Caught exception in exitThr: " << e.what();
             }
         }
+        void startSynched() {
+            if (isRunning()) return;
+            start();
+            if (!startedSem.tryAcquire(1, 5000))
+                throw InternalError("ExitThr did not start after 5 seconds. Please report this bug to the developers.");
+        }
     };
 
+    // ExitThr creation and start
     exitThr = std::make_unique<ExitThr>(this);
-    dynamic_cast<ExitThr &>(*exitThr).start();
+    ExitThr &et = dynamic_cast<ExitThr &>(*exitThr);
+    // Ensure thread is started before proceeding -- wait up to 5 seconds for thread to start. This usually succeeds within 1 ms.
+    et.startSynched();
 
 #define Tup(x, b) std::tuple<decltype(SIGINT), const char *, bool>{x, #x, b}
     const auto pairs = {
@@ -239,7 +251,7 @@ void App::startup()
                 start_httpServer(i); // may throw
         }
 
-    } catch (const Exception & e) {
+    } catch (const std::exception & e) {
         Fatal() << "Caught exception: " << e.what();
     }
 }
