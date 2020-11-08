@@ -127,15 +127,7 @@ void App::startup_Sighandlers()
     struct ExitThr : QThread {
         App *app;
         std::atomic_bool didStart = false, deleting = false;
-        explicit ExitThr(App *app_, bool minStackSize) : QThread(app_), app(app_) {
-            setObjectName("ExitThr");
-            if (minStackSize) {
-                unsigned stackBytes = Util::getPlatformMinimumThreadStackSize();
-                if (stackBytes != 0 && stackBytes < 2*1024)
-                    stackBytes = 0; // if stackBytes was suspiciously small, use default
-                 setStackSize(stackBytes);
-            }
-        }
+        explicit ExitThr(App *app_) : QThread(app_), app(app_) { setObjectName("ExitThr"); }
         ~ExitThr() override {
             deleting = true;
             if (isRunning()) {
@@ -164,32 +156,10 @@ void App::startup_Sighandlers()
                 Error() << "Caught exception in exitThr: " << e.what();
             }
         }
-        // Paranoia in case we got the stackSize wrong and the thread failed to start -- warn user and then try with default stack size
-        void startWithWatchDog() {
-            assert(!isRunning() && !didStart || !deleting);
-            assert(app);
-            start();
-            const int wdSecs = 5;  // watchdog secs
-            // single short watchdog verifies that thread has at least run once after 5 seconds, if not warn user.
-            QTimer::singleShot(wdSecs * 1000, app, [app=this->app, wdSecs]{
-                if (ExitThr *exitThr = dynamic_cast<ExitThr *>(app->exitThr.get());
-                        exitThr && !exitThr->didStart && !exitThr->isRunning() && !app->quitting && !exitThr->deleting) {
-                    Warning() << "Warning:: Thread <" << exitThr->objectName() << "> has not yet started even after "
-                              << wdSecs << Util::Pluralize(" second", wdSecs) << " have elapsed!"
-                              << " Trying again without setting a minimal stack size ...";
-                    // fall back to starting the thread with non-minimal stack size
-                    // we will re-create the thread object (implicitly deleting the old one)
-                    auto uptr = std::make_unique<ExitThr>(app, false);
-                    exitThr = uptr.get();
-                    app->exitThr = std::move(uptr); // invalidate old, overwrite with new ExitThr
-                    exitThr->startWithWatchDog(); // try again!
-                }
-            });
-        }
     };
 
-    exitThr = std::make_unique<ExitThr>(this, true);
-    dynamic_cast<ExitThr &>(*exitThr).startWithWatchDog();
+    exitThr = std::make_unique<ExitThr>(this);
+    dynamic_cast<ExitThr &>(*exitThr).start();
 
 #define Tup(x, b) std::tuple<decltype(SIGINT), const char *, bool>{x, #x, b}
     const auto pairs = {
