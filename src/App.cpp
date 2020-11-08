@@ -94,7 +94,7 @@ App::App(int argc, char *argv[])
 App::~App()
 {
     Debug() << "App d'tor";
-    Log() << "Shudown complete";
+    Log() << "Shutdown complete";
     _globalInstance = nullptr;
     /// child objects will be auto-deleted, however most are already gone in cleanup() at this point.
 }
