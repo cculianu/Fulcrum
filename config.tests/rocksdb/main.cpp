@@ -1,6 +1,7 @@
 #include <array>
 #include <cstddef>
 #include <rocksdb/version.h>
+#include <rocksdb/db.h>
 
 constexpr int minimumVersion[] = {6, 6, 4};
 constexpr int version[] = {ROCKSDB_MAJOR, ROCKSDB_MINOR, ROCKSDB_PATCH};
@@ -21,5 +22,8 @@ static_assert(compareVersion(version, minimumVersion, std::size(version)));
 
 int main()
 {
+    rocksdb::DB* db;
+    rocksdb::Options options;
+    rocksdb::DB::Open(options, "", &db);
     return 0;
 }
