@@ -154,7 +154,9 @@ QVariantMap Options::toMap() const
     // tls-disallow-deprecated
     m["tls-disallow-deprecated"] = tlsDisallowDeprecated;
     // simdjson
-    m["simdjson"] = isSimdJson();
+    m["simdjson"] = !isSimdJson();
+    // bitcoind_timeout
+    m["bitcoind_timeout"] = bdTimeoutMS;
     return m;
 }
 

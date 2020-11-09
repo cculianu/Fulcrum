@@ -115,9 +115,9 @@ bool AbstractConnection::isUsingCustomProxy() const
     }
     return ret;
 }
-void AbstractConnection::setMaxBuffer(qint64 maxBytes)
+void AbstractConnection::setMaxBuffer(qint64 maxBytes, bool noClampMax)
 {
-    MAX_BUFFER = Options::clampMaxBufferSetting(int(maxBytes));
+    MAX_BUFFER = Options::clampMaxBufferSetting(int(maxBytes), noClampMax);
     if (socket && thread() == QThread::currentThread()) {
         socket->setReadBufferSize(MAX_BUFFER);
         DebugM(prettyName(), " set max_buffer to ", MAX_BUFFER, ", socket says: ", socket->readBufferSize());

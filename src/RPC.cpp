@@ -655,10 +655,12 @@ namespace RPC {
         int status = 0;
         QString statusMsg;
         QString contentType;
-        int contentLength = 0;
         QByteArray content = "";
+        int contentLength = 0;
         bool logBad = false;
         bool gotLength = false;
+        static constexpr int kLargeContentThresh = 32'000'000; ///< sizes above this threshold get logged to debug log as to how long they took to download
+        qint64 largeContentT0 = 0;
         void clear() { *this = StateMachine(); }
     };
     void HttpConnection::on_readyRead()
@@ -738,6 +740,9 @@ namespace RPC {
                             } else if (UNLIKELY(sm->contentLength > MAX_BUFFER)) {
                                 // ERROR, defend against memory exhaustion attack.
                                 throw Exception(QString("Peer wants to send us more than %1 bytes of data, exceeding our buffer limit!").arg(MAX_BUFFER));
+                            } else if (UNLIKELY(sm->contentLength >= sm->kLargeContentThresh)) {
+                                // take timestamp for large reads  -- we will print elapsed time to debug log below
+                                sm->largeContentT0 = Util::getTime();
                             }
                             sm->gotLength = true;
                             TraceM("Content length: ", sm->contentLength);
@@ -770,12 +775,17 @@ namespace RPC {
                 if (QByteArray buf = socket->read(n2read); !buf.isEmpty()) {
                     nReceived += buf.size();
                     sm->content += buf;
+                    lastGood = Util::getTime(); // we just received data, so update "lastGood" as this is used to determine if stale or not -- and for large downloads we don't want to go stale while downloading.
                 } else {
                     // read 0 bytes, but bytesAvailable was >0, must mean there was some sort of error
                     throw Exception("Read 0 bytes from socket");
                 }
             }
             if (sm->state == St::READING_CONTENT && sm->content.length() >= sm->contentLength) {
+                if (UNLIKELY(sm->largeContentT0)) {
+                    DebugM("HttpConnection received large content: ", QString::number(sm->contentLength / 1e6, 'f', 1),
+                           " MB in ", QString::number((Util::getTime() - sm->largeContentT0)/1e3, 'f', 3), " secs");
+                }
                 // got a full content packet!
                 const QByteArray json = sm->content;
                 if (sm->content.length() > sm->contentLength) {

@@ -18,9 +18,10 @@
 //
 #pragma once
 
-#include <QMultiHash>
+#include <QtGlobal>
 #include <QHostAddress>
 #include <QList>
+#include <QMultiHash>
 #include <QPair>
 #include <QSslCertificate>
 #include <QSslKey>
@@ -132,7 +133,10 @@ public:
     static constexpr int defaultMaxHistory = 125'000, maxHistoryMin = 1000, maxHistoryMax = 100'000'000;
 
     static constexpr bool isMaxBufferSettingInBounds(int m) { return m >= maxBufferMin && m <= maxBufferMax; }
-    static constexpr int clampMaxBufferSetting(int m) { return std::max(std::min(m, maxBufferMax), maxBufferMin); }
+    static constexpr int clampMaxBufferSetting(const qint64 m64, const bool noClampMax=false) {
+        const int m = std::min(qint64(std::numeric_limits<int>::max()), m64); // clamp high end to int32 always
+        return std::max(noClampMax ? m : std::min(m, maxBufferMax), maxBufferMin);
+    }
 
     std::atomic_int maxBuffer = defaultMaxBuffer; ///< this can be set at runtime by FulcrumAdmin as of Fulcrum 1.0.4, hence why it's an atomic.
     int maxHistory = defaultMaxHistory;
@@ -222,6 +226,15 @@ public:
     static bool isSimdJson();
     /// This is actually a thin wrapper around RPC::setFastJson(), hence why it is static
     static bool setSimdJson(bool b, bool forcePrintToLog = false);
+
+    // CLI: --bd-timeout, config: bitcoind_timeout
+    /// These values are all in milliseconds but the incoming variable from the user is expressed as a double in seconds.
+    /// Note that bitcoind requests originating from clients all use BitcoinDMgr::kDefaultTimeoutMS regardless of this value.
+    /// This setting is only for bitcoind requests originating from the Controller class.
+    static constexpr int defaultBdTimeout = 20'000, // msec
+                         bdTimeoutMax = 600'000, bdTimeoutMin = 5'000;
+    static constexpr bool isBdTimeoutInRange(int msec) { return msec >= bdTimeoutMin && msec <= bdTimeoutMax; }
+    int bdTimeoutMS = defaultBdTimeout; ///< the amount of time to wait for BitcoinD requests originating from Controller.cpp
 };
 
 /// A class encapsulating a simple read-only config file format.  The format is similar to the bitcoin.conf format

@@ -66,6 +66,11 @@ public:
     using ErrorF = ResultsF; // identical to ResultsF above except the message passed in is an error="" message.
     using FailF = std::function<void(const RPC::Message::Id &origId, const QString & failureReason)>;
 
+    /// The default time in milliseconds after which we consider an extant request has "timed out". Can be set
+    /// per-request in submitRequest. This default is used for remote clients (Electrum Protocol clients).
+    /// For timeouts for requests originating from the Controller class, see Options::bdTimeout.
+    static constexpr int kDefaultTimeoutMS = 15'000;
+
     /// This is safe to call from any thread.
     /// Internally it dispatches messages to `this` object's thread. Results/Error/Fail functions are called in the
     /// context of the `sender` object's thread, but only as long as `sender` is still alive. Returns immediately
@@ -83,7 +88,8 @@ public:
     ///        use newId() to guarantee this.
     /// NOTE2: calling this method while this BitcoinDManager is stopped or about to be stopped is not supported.
     void submitRequest(QObject *sender, const RPC::Message::Id &id, const QString & method, const QVariantList & params,
-                       const ResultsF & = ResultsF(), const ErrorF & = ErrorF(), const FailF & = FailF());
+                       const ResultsF & = ResultsF(), const ErrorF & = ErrorF(), const FailF & = FailF(),
+                       int timeout = kDefaultTimeoutMS);
 
     /// Thread-safe.  Returns a copy of the BitcoinDInfo object.  This object is refreshed each time we
     /// reconnect to BitcoinD.  This is called by ServerBase in various places.
@@ -165,8 +171,8 @@ private:
     void handleMessageCommon(const RPC::Message &, void (ReqCtxObjT::*resultsOrErrorFunc)(const RPC::Message &));
 
     unsigned requestZombieCtr = 0; ///< keep track of how many req responses came in after the sender was deleted
-    static constexpr qint64 kRequestTimeoutMS = 15'000; ///< the time in milliseconds after which we consider an extant request has "timed out"
     static constexpr auto kRequestTimeoutTimer = "+RequestTimeoutChecker";
+    static constexpr auto kRequestTimerPolltimeMS = kDefaultTimeoutMS / 2;
     unsigned requestTimeoutCtr = 0; ///< keep track of how many requests timed out after kRequestTimeoutMS msecs of no reply from bitcoind
 
     /// Periodically checks the reqContextTable and expires extant requests that have timed out.
@@ -180,12 +186,11 @@ class BitcoinD : public RPC::HttpConnection, public ThreadObjectMixin /* NB: als
     Q_OBJECT
 
 public:
-    /// TODO: Have this come from config. For now: support up to ~50MB blocks (hex encoded) from bitcoind.
-    /// This should work for now since we are on 32MB max block size on BCH anyway right now.
-    static constexpr qint64 BTCD_DEFAULT_MAX_BUFFER = 100'000'000;
+    /// TODO: Have this come from config. For now: support up to ~300MB blocks (hex encoded) from bitcoind.
+    /// This should work for now since we are on 256MB max block size on BCH ScaleNet anyway.
+    static constexpr qint64 BITCOIND_DEFAULT_MAX_BUFFER = 600*1024*1024;
 
-    explicit BitcoinD(const QString &host, quint16 port, const QString & user, const QString &pass, bool useSsl,
-                      qint64 maxBuffer = BTCD_DEFAULT_MAX_BUFFER);
+    explicit BitcoinD(const QString &host, quint16 port, const QString & user, const QString &pass, bool useSsl);
     ~BitcoinD() override;
 
     using ThreadObjectMixin::start;
@@ -236,14 +241,15 @@ namespace BitcoinDMgrHelper {
         Q_OBJECT
 
         friend class ::BitcoinDMgr;
-        ReqCtxObj();
+        ReqCtxObj(int timeout);
         ~ReqCtxObj() override;
 
         // used internally by submitRequest
-        qint64 ts; ///< intentionally uninitialized to save cycles
-        const BitcoinD *bd = nullptr; ///< the bitcoind that is handling our request. This pointer should *not* be dereferenced but only be used for == compare.
         std::atomic_bool replied = false;
         bool timedOut = false;
+        const int timeout; //< request timeout in milliseconds. Must be >= 0.
+        qint64 ts; ///<--- intentionally uninitialized to save cycles
+        const BitcoinD *bd = nullptr; ///< the bitcoind that is handling our request. This pointer should *not* be dereferenced but only be used for == compare.
 
         /// Mainly used for debugging the lifecycle of this class's instances.
         static std::atomic_int extant;

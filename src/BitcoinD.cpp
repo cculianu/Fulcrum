@@ -26,6 +26,7 @@
 #include <QSslConfiguration>
 #include <QSslSocket>
 
+#include <algorithm>
 #include <mutex>
 #include <tuple>
 
@@ -108,7 +109,7 @@ void BitcoinDMgr::startup() {
 void BitcoinDMgr::on_started()
 {
     ThreadObjectMixin::on_started();
-    callOnTimerSoon(kRequestTimeoutMS / 2, kRequestTimeoutTimer, [this]{ requestTimeoutChecker(); return true; });
+    callOnTimerSoon(kRequestTimerPolltimeMS, kRequestTimeoutTimer, [this]{ requestTimeoutChecker(); return true; });
 }
 
 void BitcoinDMgr::on_finished()
@@ -361,7 +362,7 @@ BlockHash BitcoinDMgr::getBitcoinDGenesisHash() const
 /// This is safe to call from any thread. Internally it dispatches messages to this obejct's thread.
 /// Does not throw. Results/Error/Fail functions are called in the context of the `sender` thread.
 void BitcoinDMgr::submitRequest(QObject *sender, const RPC::Message::Id &rid, const QString & method, const QVariantList & params,
-                                const ResultsF & resf, const ErrorF & errf, const FailF & failf)
+                                const ResultsF & resf, const ErrorF & errf, const FailF & failf, int timeout)
 {
     using namespace BitcoinDMgrHelper;
     constexpr bool debugDeletes = false; // set this to true to print debug messages tracking all the below object deletions (tested: no leaks!)
@@ -369,7 +370,8 @@ void BitcoinDMgr::submitRequest(QObject *sender, const RPC::Message::Id &rid, co
     // It will be auto-deleted when the shared_ptr refct held by the lambdas drops to 0.  This is guaranteed
     // to happen either as a result of a successful request reply, or due to bitcoind failure, or if the sender
     // is deleted.
-    auto context = std::shared_ptr<ReqCtxObj>(new ReqCtxObj, [](ReqCtxObj *context){
+    timeout = std::max(timeout, 0); /* no negative timeouts allowed */
+    auto context = std::shared_ptr<ReqCtxObj>(new ReqCtxObj(timeout), [](ReqCtxObj *context){
         // Note: this may run in any thread -- so all we can do here to context is context->deleteLater()
         if constexpr (debugDeletes) {
             // the below is not technically thread-safe, because it calls objectName(); only enable this branch when testing
@@ -466,14 +468,17 @@ void BitcoinDMgr::submitRequest(QObject *sender, const RPC::Message::Id &rid, co
 
 void BitcoinDMgr::requestTimeoutChecker()
 {
-    const auto cutoffTime = Util::getTime() - kRequestTimeoutMS /* 15 seconds */;
+    const auto now = Util::getTime();
     for (auto it = reqContextTable.begin(); it != reqContextTable.end(); ++it) {
-        if (auto context = it.value().lock(); context && context->ts < cutoffTime && !context->timedOut) {
+        if (auto context = it.value().lock(); context && !context->timedOut && now - context->ts > context->timeout) {
             // This context timed out. A rare event but we need to notify the `sender` object
             // so that the sender gets a (belated) "failed" reply to its request, and so that
             // the context may be deleted. Note that this can only occur in circumstances where
             // the bitcoind connection went away while we were preparing the request to bitcoind
             // (see the note above in submitRequest() about the race that may occur there).
+            // It also may happen if the bitcoind is very slow to respond or has a slow connection.
+            // For requests originating from our app and not from clients, the CLI arg --bd-timeout
+            // or conf var bitcoind_timeout can help alleviate the situation if we get this error often.
             context->timedOut = true; // flag it as having already been handled
             ++requestTimeoutCtr; // increment counter for /stats
             emit context->fail(it.key(), "bitcoind request timed out");
@@ -537,7 +542,7 @@ void BitcoinDMgr::on_ErrorMessage(quint64 bid, const RPC::Message &msg)
 
 namespace BitcoinDMgrHelper {
     /* static */ std::atomic_int ReqCtxObj::extant{0};
-    ReqCtxObj::ReqCtxObj() : QObject(nullptr) { ++extant; }
+    ReqCtxObj::ReqCtxObj(int timeout) : QObject(nullptr), timeout(timeout) { ++extant; }
     ReqCtxObj::~ReqCtxObj() { --extant; }
 }
 
@@ -553,12 +558,14 @@ auto BitcoinD::stats() const -> Stats
     return m;
 }
 
-BitcoinD::BitcoinD(const QString &host, quint16 port, const QString & user, const QString &pass, bool useSsl_, qint64 maxBuffer_)
-    : RPC::HttpConnection(RPC::MethodMap{}, newId(), nullptr, maxBuffer_), host(host), port(port), useSsl(useSsl_)
+BitcoinD::BitcoinD(const QString &host, quint16 port, const QString & user, const QString &pass, bool useSsl_)
+    : RPC::HttpConnection(RPC::MethodMap{}, newId(), nullptr), host(host), port(port), useSsl(useSsl_)
 {
     static int N = 1;
     setObjectName(QString("BitcoinD.%1").arg(N++));
     _thread.setObjectName(objectName());
+
+    setMaxBuffer(BITCOIND_DEFAULT_MAX_BUFFER, true /* noClampMax; allow for larger max buffer for scalenet */);
 
     setAuth(user, pass);
     setHeaderHost(QString("%1:%2").arg(host).arg(port)); // for HTTP RFC 2616 Host: field

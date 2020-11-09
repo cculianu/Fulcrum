@@ -216,6 +216,7 @@ protected:
     quint64 submitRequest(const QString &method, const QVariantList &params, const BitcoinDMgr::ResultsF &resultsFunc);
 
     Controller * const ctl; ///< initted in c'tor. Is always valid since all tasks' lifecycles are managed by the Controller.
+    const int reqTimeout; ///< initted in c'tor, cached from ctl->options->bdTimeout
 };
 
 Q_DECLARE_METATYPE(CtlTask *);

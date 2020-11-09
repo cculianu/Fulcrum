@@ -449,6 +449,14 @@ void App::parseArgs()
                 " than the original parser, and is enabled by default as of " APPNAME " version 1.3.0.\n"),
     },
     {
+        "bd-timeout",
+        QString("Corresponds to the configuration file variable \"bitcoind_timeout\". The number of seconds to wait for"
+                " unanswered bitcoind requests before we consider them as having timed-out (default: %1). You may wish"
+                " to set this higher than the default if using BCH ScaleNet, or if you see \"bitcoind request timed"
+                " out\" appear in the log.\n").arg(double(Options::defaultBdTimeout)/1e3),
+        QString("seconds"),
+    },
+    {
        "dump-sh",
        QString("*** This is an advanced debugging option ***   Dump script hashes. If specified, after the database"
                " is loaded, all of the script hashes in the database will be written to outputfile as a JSON array."),
@@ -1117,6 +1125,19 @@ void App::parseArgs()
             Debug() << "config: simdjson = " << (enabled ? "true" : "false");
             Options::setSimdJson(enabled, true);
         });
+    }
+
+    // --bd-timeout on CLI or bitcoind_timeout from conf
+    if (const bool pset = parser.isSet("bd-timeout"); pset || conf.hasValue("bitcoind_timeout")) {
+        bool ok{};
+        const auto name = pset ? "bd-timeout" : "bitcoind_timeout";
+        const int msec = int(1e3 * (pset ? parser.value("bd-timeout").toDouble(&ok)
+                                         : conf.doubleValue("bitcoind_timeout", 0., &ok)));
+        if (!ok || !options->isBdTimeoutInRange(msec))
+            throw BadArgs(QString("%1: please specify a value in the range [%2, %3]").arg(name)
+                          .arg(options->bdTimeoutMin/1e3).arg(options->bdTimeoutMax/1e3));
+        options->bdTimeoutMS = msec;
+        Util::AsyncOnObject(this, [secs=msec/1e3, name]{ DebugM("config: ", name, " = ", QString::number(secs, 'f', 3)); });
     }
 
     // parse --dump-*

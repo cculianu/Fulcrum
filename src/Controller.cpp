@@ -1395,7 +1395,7 @@ void Controller::process_DoUndoAndRetry()
 
 // -- CtlTask
 CtlTask::CtlTask(Controller *ctl, const QString &name)
-    : QObject(nullptr), ctl(ctl)
+    : QObject(nullptr), ctl(ctl), reqTimeout(ctl->options->bdTimeoutMS)
 {
     setObjectName(name);
     _thread.setObjectName(name);
@@ -1443,7 +1443,8 @@ quint64 CtlTask::submitRequest(const QString &method, const QVariantList &params
     ctl->bitcoindmgr->submitRequest(this, id, method, params,
                                     resultsFunc,
                                     [this](const RPC::Message &r){on_error(r);},
-                                    [this](const RPC::Message::Id &id, const QString &msg){on_failure(id, msg);});
+                                    [this](const RPC::Message::Id &id, const QString &msg){on_failure(id, msg);},
+                                    reqTimeout);
     return id;
 }
 
