@@ -284,10 +284,12 @@ inline void UnserializeTransaction(TxType &tx, Stream &s) {
     if (flags & 1 && fAllowWitness) {
         /* The witness flag is present, and we support witnesses. */
         flags ^= 1;
+        bool hasWitness = false;
         for (auto &txin : tx.vin) {
             s >> txin.scriptWitness.stack;
+            hasWitness = hasWitness || !txin.scriptWitness.stack.empty(); // added by Calin as a perf. improvement
         }
-        if (!tx.HasWitness()) {
+        if (!hasWitness) {
             /* It's illegal to encode witnesses when all witness stacks are empty. */
             throw std::ios_base::failure("Superfluous witness record");
         }
