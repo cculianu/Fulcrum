@@ -583,9 +583,9 @@ void Storage::startup()
         const std::list<DBInfoTup> dbs2open = {
             { "meta", p->db.meta, opts, 0.0005 },
             { "blkinfo" , p->db.blkinfo , opts, 0.02 },
-            { "utxoset", p->db.utxoset, opts, 0.10 },
-            { "scripthash_history", p->db.shist, shistOpts, 0.74 },
-            { "scripthash_unspent", p->db.shunspent, opts, 0.10 },
+            { "utxoset", p->db.utxoset, opts, 0.305 },
+            { "scripthash_history", p->db.shist, shistOpts, 0.33 },
+            { "scripthash_unspent", p->db.shunspent, opts, 0.305 },
             { "undo", p->db.undo, opts, 0.0395 },
         };
         std::size_t memTotal = 0;
