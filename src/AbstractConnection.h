@@ -55,10 +55,10 @@ public:
     bool isUsingCustomProxy() const;
     /// Returns the current maxBuffer setting
     qint64 maxBuffer() const { return MAX_BUFFER; }
-    /// Attempts to set the new max buffer. Can only be called from this object's thread. Clamps the specified value
-    /// to [Options::maxBufferMin, Options::maxBufferMax], unless noClampMax=true in which case it will not clamp the
-    /// max, just minimum.
-    void setMaxBuffer(qint64 maxBytes, bool noClampMax = false);
+    /// Attempts to set the new max buffer. Can only be called from this object's thread.
+    /// Note: `maxBytes` is not checked for sanity -- so be sure to call this with a sane argument.
+    /// (perhaps use Options::clampMaxBufferSetting to clamp it to a sane value)
+    void setMaxBuffer(qint64 maxBytes);
 
     /// Returns true if the connection is via SSL. The default implementation of this function attempts to dynamic_cast
     /// `socket` to QSslSocket, and if it succeeds, assumes the connection is SSL and returns true.  False is returned

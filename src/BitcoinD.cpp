@@ -559,13 +559,12 @@ auto BitcoinD::stats() const -> Stats
 }
 
 BitcoinD::BitcoinD(const QString &host, quint16 port, const QString & user, const QString &pass, bool useSsl_)
-    : RPC::HttpConnection(RPC::MethodMap{}, newId(), nullptr), host(host), port(port), useSsl(useSsl_)
+    : RPC::HttpConnection(RPC::MethodMap{}, newId(), nullptr, BITCOIND_MAX_BUFFER),
+      host(host), port(port), useSsl(useSsl_)
 {
     static int N = 1;
     setObjectName(QString("BitcoinD.%1").arg(N++));
     _thread.setObjectName(objectName());
-
-    setMaxBuffer(BITCOIND_DEFAULT_MAX_BUFFER, true /* noClampMax; allow for larger max buffer for scalenet */);
 
     setAuth(user, pass);
     setHeaderHost(QString("%1:%2").arg(host).arg(port)); // for HTTP RFC 2616 Host: field
