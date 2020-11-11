@@ -821,7 +821,10 @@ void SynchMempoolTask::doDLNextTx()
 
         txsWaitingForResponse.erase(tx->hash);
         AGAIN();
-    });
+    },
+    // Retry on error -- if we fail to retrieve the transaction then it's possible that there was some RBF action
+    // if on BTC, or the tx happened to drop out of mempool for some other reason.  Do an immediate retry in that case.
+    true /* retry on error response */);
 }
 
 void SynchMempoolTask::doGetRawMempool()
@@ -1430,6 +1433,11 @@ void CtlTask::on_error(const RPC::Message &resp)
     errorMessage = resp.errorMessage();
     emit errored();
 }
+void CtlTask::on_error_retry(const RPC::Message &resp)
+{
+    Warning() << "Will retry for " << resp.method << ": error response: " << resp.toJsonUtf8();
+    emit retryRecommended();
+}
 void CtlTask::on_failure(const RPC::Message::Id &id, const QString &msg)
 {
     Warning() << id << ": FAIL: " << msg;
@@ -1437,13 +1445,15 @@ void CtlTask::on_failure(const RPC::Message::Id &id, const QString &msg)
     errorMessage = msg;
     emit errored();
 }
-quint64 CtlTask::submitRequest(const QString &method, const QVariantList &params, const BitcoinDMgr::ResultsF &resultsFunc)
+quint64 CtlTask::submitRequest(const QString &method, const QVariantList &params, const ResultsF &resultsFunc, bool retryOnError)
 {
     quint64 id = IdMixin::newId();
+    using ErrorF = BitcoinDMgr::ErrorF;
+    using MsgCRef = const RPC::Message &;
     ctl->bitcoindmgr->submitRequest(this, id, method, params,
                                     resultsFunc,
-                                    [this](const RPC::Message &r){on_error(r);},
-                                    [this](const RPC::Message::Id &id, const QString &msg){on_failure(id, msg);},
+                                    !retryOnError ? ErrorF([this](MsgCRef m){ on_error(m); }) : [this](MsgCRef m){ on_error_retry(m); },
+                                    [this](const RPC::Message::Id &id, const QString &msg){ on_failure(id, msg); },
                                     reqTimeout);
     return id;
 }
