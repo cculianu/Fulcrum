@@ -519,7 +519,7 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
 struct SynchMempoolTask : public CtlTask
 {
     SynchMempoolTask(Controller *ctl_, std::shared_ptr<Storage> storage, const std::atomic_bool & notifyFlag)
-        : CtlTask(ctl_, "SynchMempool"), storage(storage), notifyFlag(notifyFlag), allowSegWitTx(ctl_->isCoinBTC())
+        : CtlTask(ctl_, "SynchMempool"), storage(storage), notifyFlag(notifyFlag), isBTC(ctl_->isCoinBTC())
         { scriptHashesAffected.reserve(SubsMgr::kRecommendedPendingNotificationsReserveSize); }
     ~SynchMempoolTask() override;
     void process() override;
@@ -532,7 +532,7 @@ struct SynchMempoolTask : public CtlTask
     DldTxsMap txsDownloaded;
     unsigned expectedNumTxsDownloaded = 0;
     const bool TRACE = Trace::isEnabled(); // set this to true to print more debug
-    const bool allowSegWitTx; ///< initted in c'tor. If true, deserialize tx's using the optional segwit extensons to the tx format.
+    const bool isBTC; ///< initted in c'tor. If true, deserialize tx's using the optional segwit extensons to the tx format.
 
     /// The scriptHashes that were affected by this refresh/synch cycle. Used for notifications.
     std::unordered_set<HashX, HashHasher> scriptHashesAffected;
@@ -788,7 +788,7 @@ void SynchMempoolTask::doDLNextTx()
         // deserialize tx, catching any deser errors
         bitcoin::CMutableTransaction ctx;
         try {
-            ctx = BTC::Deserialize<bitcoin::CMutableTransaction>(txdata, 0, allowSegWitTx);
+            ctx = BTC::Deserialize<bitcoin::CMutableTransaction>(txdata, 0, isBTC);
         } catch (const std::exception &e) {
             Error() << "Error deserializing tx: " << tx->hash.toHex() << ", exception: " << e.what();
             emit errored();
@@ -824,7 +824,7 @@ void SynchMempoolTask::doDLNextTx()
     },
     // Retry on error -- if we fail to retrieve the transaction then it's possible that there was some RBF action
     // if on BTC, or the tx happened to drop out of mempool for some other reason.  Do an immediate retry in that case.
-    true /* retry on error response */);
+    isBTC ? "Tx possibly dropped out of mempool due to RBF" : nullptr);
 }
 
 void SynchMempoolTask::doGetRawMempool()
@@ -1433,9 +1433,9 @@ void CtlTask::on_error(const RPC::Message &resp)
     errorMessage = resp.errorMessage();
     emit errored();
 }
-void CtlTask::on_error_retry(const RPC::Message &resp)
+void CtlTask::on_error_retry(const RPC::Message &resp, const char *msg)
 {
-    Warning() << "Will retry for " << resp.method << ": error response: " << resp.toJsonUtf8();
+    Log() << resp.method << ": " << msg << ", retrying ...";
     emit retryRecommended();
 }
 void CtlTask::on_failure(const RPC::Message::Id &id, const QString &msg)
@@ -1445,14 +1445,17 @@ void CtlTask::on_failure(const RPC::Message::Id &id, const QString &msg)
     errorMessage = msg;
     emit errored();
 }
-quint64 CtlTask::submitRequest(const QString &method, const QVariantList &params, const ResultsF &resultsFunc, bool retryOnError)
+quint64 CtlTask::submitRequest(const QString &method, const QVariantList &params, const ResultsF &resultsFunc,
+                               const char *recommendRetryMsg)
 {
     quint64 id = IdMixin::newId();
     using ErrorF = BitcoinDMgr::ErrorF;
     using MsgCRef = const RPC::Message &;
     ctl->bitcoindmgr->submitRequest(this, id, method, params,
                                     resultsFunc,
-                                    !retryOnError ? ErrorF([this](MsgCRef m){ on_error(m); }) : [this](MsgCRef m){ on_error_retry(m); },
+                                    !recommendRetryMsg
+                                        ? ErrorF([this](MsgCRef m){ on_error(m); }) // more common case, just emit error on RPC error reply
+                                        : [this, recommendRetryMsg](MsgCRef m){ on_error_retry(m, recommendRetryMsg); }, // getrawtransaction for SynchMempool case on BTC, retry immediately because RBF
                                     [this](const RPC::Message::Id &id, const QString &msg){ on_failure(id, msg); },
                                     reqTimeout);
     return id;

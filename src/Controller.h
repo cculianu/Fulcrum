@@ -211,11 +211,13 @@ protected:
     void process() override = 0; ///< from ProcessAgainMixin -- here to illustrate it's still pure virtual
 
     void on_error(const RPC::Message &);
-    void on_error_retry(const RPC::Message &);
+    void on_error_retry(const RPC::Message &, const char *msg);
     void on_failure(const RPC::Message::Id &, const QString &msg);
 
     using ResultsF = BitcoinDMgr::ResultsF;
-    quint64 submitRequest(const QString &method, const QVariantList &params, const ResultsF &resultsFunc, bool recommendRetryOnError = false);
+    quint64 submitRequest(const QString &method, const QVariantList &params, const ResultsF &resultsFunc,
+                          // this string should point to a persistent C string (such as a literal) or nullptr
+                          const char *recommendRetryOnErrorWithMsg = nullptr);
 
     Controller * const ctl; ///< initted in c'tor. Is always valid since all tasks' lifecycles are managed by the Controller.
     const int reqTimeout; ///< initted in c'tor, cached from ctl->options->bdTimeout
