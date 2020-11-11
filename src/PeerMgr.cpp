@@ -433,7 +433,7 @@ PeerClient * PeerMgr::newClient(const PeerInfo &pi)
         Warning() << "Already had a client for " << pi.hostName << ", deleting ...";
         client->deleteLater();
     }
-    client = new PeerClient(options->peerAnnounceSelf, pi, newId(), this, 64*1024);
+    client = new PeerClient(options->peerAnnounceSelf, pi, newId(), this, 256*1024);
     connect(client, &PeerClient::connectFailed, this, &PeerMgr::on_connectFailed);
     connect(client, &PeerClient::bad, this, &PeerMgr::on_bad);
     connect(client, &PeerClient::gotPeersSubscribeReply, this, &PeerMgr::on_rpcAddPeer);
