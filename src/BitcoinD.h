@@ -61,7 +61,7 @@ public:
     void startup() override; ///< from Mgr
     void cleanup() override; ///< from Mgr
 
-    const unsigned nClients = 3; ///< The number of simultaneous BitcoinD clients we spawn. Always >=1. Comes ultimately from Options::bdNClients.
+    const unsigned nClients; ///< The number of simultaneous BitcoinD clients we spawn. Always >=1. Comes ultimately from Options::bdNClients.
 
     using ResultsF = std::function<void(const RPC::Message &response)>;
     using ErrorF = ResultsF; // identical to ResultsF above except the message passed in is an error="" message.
