@@ -85,7 +85,8 @@ void Controller::startup()
         // this may take a long time but normally this branch is not taken
         dumpScriptHashes(options->dumpScriptHashes);
 
-    bitcoindmgr = std::make_shared<BitcoinDMgr>(options->bitcoind.first, options->bitcoind.second, options->rpcuser, options->rpcpassword, options->bitcoindUsesTls);
+    bitcoindmgr = std::make_shared<BitcoinDMgr>(options->bdNClients, options->bitcoind.first, options->bitcoind.second,
+                                                options->rpcuser, options->rpcpassword, options->bitcoindUsesTls);
     {
         auto constexpr waitTimer = "wait4bitcoind", callProcessTimer = "callProcess";
         int constexpr msgPeriod = 10000, // 10sec
@@ -351,7 +352,7 @@ QString ChainInfo::toString() const
 
 struct DownloadBlocksTask : public CtlTask
 {
-    DownloadBlocksTask(unsigned from, unsigned to, unsigned stride, Controller *ctl);
+    DownloadBlocksTask(unsigned from, unsigned to, unsigned stride, unsigned numBitcoinDClients, Controller *ctl);
     ~DownloadBlocksTask() override { stop(); } // paranoia
     void process() override;
 
@@ -363,7 +364,7 @@ struct DownloadBlocksTask : public CtlTask
     const bool TRACE = Trace::isEnabled();
 
     int q_ct = 0;
-    static constexpr int max_q = BitcoinDMgr::N_CLIENTS+1; // todo: tune this
+    const int max_q; // todo: tune this, for now it is numBitcoinDClients + 1
 
     static const int HEADER_SIZE;
 
@@ -386,9 +387,9 @@ struct DownloadBlocksTask : public CtlTask
 
 /*static*/ const int DownloadBlocksTask::HEADER_SIZE = BTC::GetBlockHeaderSize();
 
-DownloadBlocksTask::DownloadBlocksTask(unsigned from, unsigned to, unsigned stride, Controller *ctl_)
+DownloadBlocksTask::DownloadBlocksTask(unsigned from, unsigned to, unsigned stride, unsigned nClients, Controller *ctl_)
     : CtlTask(ctl_, QStringLiteral("Task.DL %1 -> %2").arg(from).arg(to)), from(from), to(to), stride(stride),
-      expectedCt(unsigned(nToDL(from, to, stride))), allowSegWit(ctl_->isCoinBTC())
+      expectedCt(unsigned(nToDL(from, to, stride))), max_q(int(nClients)+1), allowSegWit(ctl_->isCoinBTC())
 {
     FatalAssert( (to >= from) && (ctl_) && (stride > 0), "Invalid params to DonloadBlocksTask c'tor, FIXME!");
 
@@ -931,7 +932,7 @@ struct Controller::StateMachine
     std::atomic<unsigned> ppBlkHtNext = 0;  ///< the next unprocessed block height we need to process in series
 
     // todo: tune this
-    const size_t DL_CONCURRENCY = qMax(Util::getNPhysicalProcessors()-1, 1U);//size_t(qMin(qMax(int(Util::getNPhysicalProcessors())-BitcoinDMgr::N_CLIENTS, BitcoinDMgr::N_CLIENTS), 32));
+    const size_t DL_CONCURRENCY = qMax(Util::getNPhysicalProcessors()-1, 1U);
 
     size_t nTx = 0, nIns = 0, nOuts = 0, nSH = 0;
 
@@ -997,7 +998,7 @@ bool Controller::isTaskDeleted(CtlTask *t) const { return tasks.count(t) == 0; }
 
 void Controller::add_DLHeaderTask(unsigned int from, unsigned int to, size_t nTasks)
 {
-    DownloadBlocksTask *t = newTask<DownloadBlocksTask>(false, unsigned(from), unsigned(to), unsigned(nTasks), this);
+    DownloadBlocksTask *t = newTask<DownloadBlocksTask>(false, unsigned(from), unsigned(to), unsigned(nTasks), options->bdNClients, this);
     connect(t, &CtlTask::success, this, [t, this]{
         // NOTE: this callback is sometimes delivered after the sm has been reset(), so we don't check or use it here.
         if (UNLIKELY(isTaskDeleted(t))) return; // task was stopped from underneath us, this is stale.. abort.

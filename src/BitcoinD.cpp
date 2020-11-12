@@ -37,23 +37,26 @@ namespace {
     };
 }
 
-BitcoinDMgr::BitcoinDMgr(const QString &hostName, quint16 port, const QString &user, const QString &pass, bool useSsl)
-    : Mgr(nullptr), IdMixin(newId()), hostName(hostName), port(port), user(user), pass(pass), useSsl(useSsl)
+BitcoinDMgr::BitcoinDMgr(unsigned nClients, const QString &hostName, quint16 port, const QString &user, const QString &pass, bool useSsl)
+    : Mgr(nullptr), IdMixin(newId()), nClients(nClients), hostName(hostName), port(port), user(user), pass(pass), useSsl(useSsl)
 {
     setObjectName("BitcoinDMgr");
     _thread.setObjectName(objectName());
+    if (!nClients)
+        throw BadArgs("The number of BitcoinD clients cannot be 0!");
 }
 
 BitcoinDMgr::~BitcoinDMgr() {  cleanup(); }
 
 void BitcoinDMgr::startup() {
-    Log() << objectName() << ": starting " << N_CLIENTS << " " << Util::Pluralize("bitcoin rpc client", N_CLIENTS) << " ...";
+    Log() << objectName() << ": starting " << nClients << " " << Util::Pluralize("bitcoin RPC client", nClients) << " ...";
 
     // As soon as a good BitcoinD is up, try and grab the network info (version, subversion, etc).  This must
     // happen early because the values in this info object determine which workarounds we may or may not apply to
     // RPC args.
     conns += connect(this, &BitcoinDMgr::gotFirstGoodConnection, this, &BitcoinDMgr::refreshBitcoinDNetworkInfo);
 
+    clients.resize(nClients);
     for (auto & client : clients) {
         // initial resolvedAddress may be invalid if user specified a hostname, in which case we will resolve it and
         // tell bitcoind's to update themselves and reconnect
@@ -136,9 +139,7 @@ void BitcoinDMgr::on_finished()
 void BitcoinDMgr::cleanup() {
     stop();
 
-    for (auto & client : clients) {
-        client.reset(); /// implicitly calls client->stop()
-    }
+    clients.clear(); /// for each client, implicitly calls client->stop() in client d'tor
     goodSet.clear();
 
     Debug() << "BitcoinDMgr cleaned up";
@@ -147,7 +148,7 @@ void BitcoinDMgr::cleanup() {
 auto BitcoinDMgr::stats() const -> Stats
 {
     QVariantList l;
-    constexpr int timeout = kDefaultTimeout/qMax(N_CLIENTS,1);
+    const int timeout = kDefaultTimeout/int(qMax(nClients, 1u));
     for (const auto & client : clients) {
         if (!client) continue;
         auto map = client->statsSafe(timeout).toMap();
@@ -176,9 +177,9 @@ BitcoinD *BitcoinDMgr::getBitcoinD()
     // Scan round-robin through clients for a client that is both in the goodSet (authenticated) and still has
     // immediate "isGood" status. Note this loop is optimized for the common case where all clients are in the goodSet
     // and so most of the time it will only iterate once.
-    for (int i = 0; i < N_CLIENTS; ++i) {
-        auto client = clients[ roundRobinCursor++ % N_CLIENTS ].get();
-        if (goodSet.count(client->id) && client->isGood())
+    for (unsigned i = 0; i < nClients; ++i) {
+        auto *client = clients[ roundRobinCursor++ % nClients ].get();
+        if (client && goodSet.count(client->id) && client->isGood())
             return client;
     }
     // nothing found

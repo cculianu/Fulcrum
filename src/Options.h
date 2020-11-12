@@ -235,6 +235,13 @@ public:
                          bdTimeoutMax = 600'000, bdTimeoutMin = 5'000;
     static constexpr bool isBdTimeoutInRange(int msec) { return msec >= bdTimeoutMin && msec <= bdTimeoutMax; }
     int bdTimeoutMS = defaultBdTimeout; ///< the amount of time to wait for BitcoinD requests originating from Controller.cpp
+
+    // CLI: --bd-clients, config: bitcoind_clients
+    /// Corresponds to the number of BitcoinD clients that we spawn. Ideally bitcoind itself also has
+    /// -rpcthreads=1+bdNClients, and a sufficiently large -rpcworkqueue= as well.
+    static constexpr unsigned defaultBdNClients = 3, bdNClientsMax = 1024, bdNClientsMin = 1;
+    static constexpr bool isBdNClientsInRange(unsigned n) { return n >= bdNClientsMin && n <= bdNClientsMax; }
+    unsigned bdNClients = defaultBdNClients;
 };
 
 /// A class encapsulating a simple read-only config file format.  The format is similar to the bitcoin.conf format

@@ -32,6 +32,7 @@
 #include <memory>
 #include <set>
 #include <shared_mutex>
+#include <vector>
 
 class BitcoinD;
 namespace BitcoinDMgrHelper { class ReqCtxObj; }
@@ -54,13 +55,13 @@ class BitcoinDMgr : public Mgr, public IdMixin, public ThreadObjectMixin, public
 {
     Q_OBJECT
 public:
-    BitcoinDMgr(const QString &hostnameOrIP, quint16 port, const QString &user, const QString &pass, bool useSsl);
+    BitcoinDMgr(unsigned nClients, const QString &hostnameOrIP, quint16 port, const QString &user, const QString &pass, bool useSsl);
     ~BitcoinDMgr() override;
 
     void startup() override; ///< from Mgr
     void cleanup() override; ///< from Mgr
 
-    static constexpr int N_CLIENTS = 3; ///< the number of simultaneous BitcoinD clients we spawn. TODO: make this configurable.
+    const unsigned nClients = 3; ///< The number of simultaneous BitcoinD clients we spawn. Always >=1. Comes ultimately from Options::bdNClients.
 
     using ResultsF = std::function<void(const RPC::Message &response)>;
     using ErrorF = ResultsF; // identical to ResultsF above except the message passed in is an error="" message.
@@ -143,7 +144,7 @@ private:
 
     std::set<quint64> goodSet; ///< set of bitcoind's (by id) that are `isGood` (connected, authed). This set is updated as we get signaled from BitcoinD objects. May be empty. Has at most N_CLIENTS elements.
 
-    std::unique_ptr<BitcoinD> clients[N_CLIENTS];
+    std::vector<std::unique_ptr<BitcoinD>> clients;
     unsigned roundRobinCursor = 0; ///< this is incremented each time. use this % N_CLIENTS to dole out bitcoind's in a round-robin fashion
 
     BitcoinD *getBitcoinD(); ///< may return nullptr if none are up. Otherwise does a round-robin of the ones present to grab one. to be called only in this thread.

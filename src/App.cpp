@@ -457,6 +457,15 @@ void App::parseArgs()
         QString("seconds"),
     },
     {
+        "bd-clients",
+        QString("Corresponds to the configuration file variable \"bitcoind_clients\". The number of simultaneous"
+                " bitcoin RPC clients that we spawn to connect to bitcoind (default: %1). If you raise this value from"
+                " the default, be sure to also specify the option `rpcthreads=` to bitcoind so that there are enough"
+                " threads to accommodate the clients we spawn, otherwise you may get errors from bitcoind.\n")
+                .arg(Options::defaultBdNClients),
+        QString("seconds"),
+    },
+    {
        "dump-sh",
        QString("*** This is an advanced debugging option ***   Dump script hashes. If specified, after the database"
                " is loaded, all of the script hashes in the database will be written to outputfile as a JSON array."),
@@ -1138,6 +1147,19 @@ void App::parseArgs()
                           .arg(options->bdTimeoutMin/1e3).arg(options->bdTimeoutMax/1e3));
         options->bdTimeoutMS = msec;
         Util::AsyncOnObject(this, [secs=msec/1e3, name]{ DebugM("config: ", name, " = ", QString::number(secs, 'f', 3)); });
+    }
+
+    // --bd-clients on CLI or bitcoind_clients from conf
+    if (const bool pset = parser.isSet("bd-clients"); pset || conf.hasValue("bitcoind_clients")) {
+        bool ok{};
+        const auto name = pset ? "bd-clients" : "bitcoind_clients";
+        const unsigned n = pset ? parser.value("bd-clients").toUInt(&ok)
+                                : unsigned(conf.intValue("bitcoind_clients", 0, &ok));
+        if (!ok || !options->isBdNClientsInRange(n))
+            throw BadArgs(QString("%1: please specify a value in the range [%2, %3]").arg(name)
+                          .arg(options->bdNClientsMin).arg(options->bdNClientsMax));
+        options->bdNClients = n;
+        Util::AsyncOnObject(this, [n, name]{ DebugM("config: ", name, " = ", n); });
     }
 
     // parse --dump-*
