@@ -540,7 +540,15 @@ namespace RPC {
                 break;
             }
             // /pause check
-            auto data = ws ? ws->readNextMessage() : socket->readLine();
+            QByteArray data;
+            try {
+                data = ws ? ws->readNextMessage() : socket->readLine();
+            } catch (const std::exception &e) { // we anticipate only bad_alloc being thrown here in pathological cases
+                Error() << prettyName() << " exception copying data from socket: " << e.what() << ", aborting connection";
+                do_disconnect();
+                status = Bad;
+                break;
+            }
             nReceived += data.length();
             // may be slow, so use the efficient TraceM
             TraceM("Got: ", (!ws ? data.trimmed() : data));
@@ -593,8 +601,11 @@ namespace RPC {
                    ", read buffer now: ", avail);
         };
         memoryWasteThreshold = MAX_BUFFER;
-        if (memoryWasteThreshold < 0) {
-            Error() << __func__ << ": MAX_BUFFER is < 0 -- fix me!";
+        if (memoryWasteThreshold <= 0) {
+            // Buffer limits disabled for this connection. This is not really recommended for general-purpose
+            // untrusted Electrum connections so warn in debug and return.
+            DebugM(__func__, ": MAX_BUFFER is unlimited for ElectrumConnection \"", objectName(),
+                   "\"  -- unlimited MAX_BUFFER is not recommended for ElectrumConnection instances.");
             return;
         }
         // DoS protection logic below for memory exhaustion attacks.  If a client connects from many IPs and with
@@ -609,7 +620,8 @@ namespace RPC {
                     Warning() << "Memory waste timer was not active but the timer lambda fired! FIXME!";
                 memoryWasteTimerActive = false;
                 const qint64 avail = socket ? socket->bytesAvailable() : 0;
-                if (avail >= memoryWasteThreshold) {
+                if (memoryWasteThreshold > 0  // we must check memoryWasteThreshold didn't become 0 (unlimited) which may happen in theory but not in practice.
+                        && avail >= memoryWasteThreshold) {
                     Warning(Log::Magenta)
                             << "Client " << this->id << " from " << this->peerAddress().toString()
                             << " exceeded its \"memory waste threshold\" by filling our receive buffer with "
@@ -737,9 +749,10 @@ namespace RPC {
                             if (!ok || sm->contentLength < 0) {
                                 // ERROR HERE. Expected numeric length, got nonsense
                                 throw Exception(QString("Could not parse content-length: %1").arg(QString(data)));
-                            } else if (UNLIKELY(sm->contentLength > MAX_BUFFER)) {
+                            } else if (UNLIKELY(MAX_BUFFER > 0 && sm->contentLength > MAX_BUFFER)) {
                                 // ERROR, defend against memory exhaustion attack.
-                                throw Exception(QString("Peer wants to send us more than %1 bytes of data, exceeding our buffer limit!").arg(MAX_BUFFER));
+                                throw Exception(QString("Peer wants to send us %1 bytes of data, exceeding our buffer limit of %2!")
+                                                .arg(sm->contentLength).arg(MAX_BUFFER));
                             } else if (UNLIKELY(sm->contentLength >= sm->kLargeContentThresh)) {
                                 // take timestamp for large reads  -- we will print elapsed time to debug log below
                                 sm->largeContentT0 = Util::getTime();
@@ -802,18 +815,18 @@ namespace RPC {
                 processJson(json);
                 // If bytesAvailable .. schedule a callback to this function again since we did a partial read just now,
                 // and the socket's buffers still have data.
-                if (auto avail = socket->bytesAvailable(); avail > 0 && avail <= MAX_BUFFER) {
+                if (auto avail = socket->bytesAvailable(); avail > 0 && (MAX_BUFFER <= 0 || avail <= MAX_BUFFER)) {
                     // callback is on socket as receiver this way if socket dies and is deleted, callback never happens.
                     // *taps forehead*
                     QTimer::singleShot(0, socket, [this]{on_readyRead();});
                 }
             }
-            if (UNLIKELY(socket->bytesAvailable() > MAX_BUFFER)) {
+            if (UNLIKELY(MAX_BUFFER > 0 && socket->bytesAvailable() > MAX_BUFFER)) {
                 // this branch normally can't be taken because super class calls setReadBufferSize() on the socket
                 // in on_connected, but we leave this code here in the interests of defensive programming.
                 throw Exception( QString("Peer backbuffer exceeded %1 bytes! Bad peer?").arg(MAX_BUFFER) );
             }
-        } catch (const Exception & e) {
+        } catch (const std::exception & e) { // NB: we catch the broad std::exception in case of bad_alloc
             Error() << prettyName() << " fatal error: " << e.what();
             do_disconnect();
             status = Bad;

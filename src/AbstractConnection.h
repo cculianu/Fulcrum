@@ -53,11 +53,13 @@ public:
     quint16 peerPort() const;
     /// Returns true if this->socket and this->socket->proxy() is not DefaultProxy. Call this from this->thread().
     bool isUsingCustomProxy() const;
-    /// Returns the current maxBuffer setting
+    /// Returns the current maxBuffer setting. <= 0 indicates "unlimited"
     qint64 maxBuffer() const { return MAX_BUFFER; }
     /// Attempts to set the new max buffer. Can only be called from this object's thread.
     /// Note: `maxBytes` is not checked for sanity -- so be sure to call this with a sane argument.
     /// (perhaps use Options::clampMaxBufferSetting to clamp it to a sane value)
+    /// Note that values <= 0 here signify "unlimited" read buffer size, and no limits will be
+    /// put in place.
     void setMaxBuffer(qint64 maxBytes);
 
     /// Returns true if the connection is via SSL. The default implementation of this function attempts to dynamic_cast

@@ -117,10 +117,11 @@ bool AbstractConnection::isUsingCustomProxy() const
 }
 void AbstractConnection::setMaxBuffer(qint64 maxBytes)
 {
-    MAX_BUFFER = maxBytes;
+    MAX_BUFFER = std::max(maxBytes, qint64(0)); // values <= 0 mean: unlimited -- flatten negative to 0.
     if (socket && thread() == QThread::currentThread()) {
-        socket->setReadBufferSize(MAX_BUFFER);
-        DebugM(prettyName(), " set max_buffer to ", MAX_BUFFER, ", socket says: ", socket->readBufferSize());
+        socket->setReadBufferSize(MAX_BUFFER /* Qt interprets 0 here as unlimited */);
+        DebugM(prettyName(), " set max_buffer to ", (MAX_BUFFER ? QString::number(MAX_BUFFER) : "unlimited"),
+               ", socket says: ", (socket->readBufferSize() ? QString::number(socket->readBufferSize()) : "unlimited"));
     }
 }
 
@@ -171,7 +172,7 @@ bool AbstractConnection::do_write(const QByteArray & data)
         Error() << __func__ << " (" << objectName() << ") " << err << " id=" << id;
         return false;
     }
-    if (writeBackLog > MAX_BUFFER) {
+    if (MAX_BUFFER > 0 && writeBackLog > MAX_BUFFER) {
         Warning(Log::Magenta) << __func__ << ": " << prettyName() << " -- MAX_BUFFER reached on write (" << MAX_BUFFER << "), disconnecting client";
         do_disconnect();
         return false;
@@ -208,7 +209,7 @@ void AbstractConnection::on_connected()
     DebugM(__func__, " ", id);
     connectedTS = Util::getTime();
     setSockOpts(socket); // ensure nagling disabled
-    socket->setReadBufferSize(MAX_BUFFER); // ensure memory exhaustion from peer can't happen in case we're too busy to read.
+    socket->setReadBufferSize(MAX_BUFFER); // ensure memory exhaustion from peer can't happen in case we're too busy to read -- NB: 0 means unlimited
     connectedConns.push_back(connect(this, &AbstractConnection::send, this, &AbstractConnection::do_write));
     connectedConns.push_back(connect(socket, &QTcpSocket::readyRead, this, &AbstractConnection::slot_on_readyRead));
     connectedConns.push_back(connect(socket, &QTcpSocket::bytesWritten, this, &AbstractConnection::on_bytesWritten));
