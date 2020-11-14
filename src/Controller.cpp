@@ -963,13 +963,18 @@ unsigned Controller::downloadTaskRecommendedThrottleTimeMsec(unsigned bnum) cons
         int maxBackLog = 1000; // <--- TODO: have this be a more dynamic value based on current average blocksize.
         if (sm->net == BTC::Net::MainNet) {
             // mainnet
-            if (bnum > 150000) // beyond this height the blocks are starting to be big enough that we want to not eat memory.
+            if (bnum > 150'000) // beyond this height the blocks are starting to be big enough that we want to not eat memory.
                 maxBackLog = 250;
-            else if (bnum > 550000) // beyond this height we may start to see 32MB blocks in the future
+            else if (bnum > 550'000) // beyond this height we may start to see 32MB blocks in the future
                 maxBackLog = 100;
+        } else if (sm->net == BTC::ScaleNet) {
+            if (bnum > 10'000)
+                maxBackLog = 100; // on ScaleNet, after block 10,000 -- we may start to hit big blocks.
+        } else if (sm->net == BTC::TestNet4) {
+            // nothing, use 1000 always, testnet4 has has 2MB blocks.
         } else {
             // testnet
-            if (bnum > 1300000) // beyond this height 32MB blocks may be common, esp. in the future
+            if (bnum > 1'300'000) // beyond this height 32MB blocks may be common, esp. in the future
                 maxBackLog = 100;
         }
 
