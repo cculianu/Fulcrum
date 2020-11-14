@@ -190,8 +190,8 @@ public:
     QString dumpScriptHashes;  ///< if specified, a file path to which to dump all scripthashes as JSON, corresponds to --dump-sh CLI arg
 
     struct DBOpts {
-        static constexpr int defaultMaxOpenFiles = 100, maxOpenFilesMin = 20, maxOpenFilesMax = std::numeric_limits<int>::max();
-        /// comes from config db_max_open_files -- default is -1 meaning unlimited.
+        static constexpr int defaultMaxOpenFiles = 30, maxOpenFilesMin = 20, maxOpenFilesMax = std::numeric_limits<int>::max();
+        /// comes from config db_max_open_files -- default in rocksdb is -1 meaning unlimited.
         /// See: https://github.com/facebook/rocksdb/wiki/Memory-usage-in-RocksDB#indexes-and-filter-blocks
         int maxOpenFiles = defaultMaxOpenFiles;
         static constexpr bool isMaxOpenFilesSettingInBounds(int64_t m) { return m <= 0 || (m >= maxOpenFilesMin && m <= maxOpenFilesMax); }
@@ -231,7 +231,7 @@ public:
     /// These values are all in milliseconds but the incoming variable from the user is expressed as a double in seconds.
     /// Note that bitcoind requests originating from clients all use BitcoinDMgr::kDefaultTimeoutMS regardless of this value.
     /// This setting is only for bitcoind requests originating from the Controller class.
-    static constexpr int defaultBdTimeout = 20'000, // msec
+    static constexpr int defaultBdTimeout = 30'000, // msec
                          bdTimeoutMax = 600'000, bdTimeoutMin = 5'000;
     static constexpr bool isBdTimeoutInRange(int msec) { return msec >= bdTimeoutMin && msec <= bdTimeoutMax; }
     int bdTimeoutMS = defaultBdTimeout; ///< the amount of time to wait for BitcoinD requests originating from Controller.cpp
