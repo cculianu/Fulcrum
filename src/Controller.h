@@ -215,9 +215,9 @@ protected:
     void on_failure(const RPC::Message::Id &, const QString &msg);
 
     using ResultsF = BitcoinDMgr::ResultsF;
+    using ErrorF = BitcoinDMgr::ErrorF;
     quint64 submitRequest(const QString &method, const QVariantList &params, const ResultsF &resultsFunc,
-                          // this string should point to a persistent C string (such as a literal) or nullptr
-                          const char *recommendRetryOnErrorWithMsg = nullptr);
+                          const ErrorF &errorFunc = {});
 
     Controller * const ctl; ///< initted in c'tor. Is always valid since all tasks' lifecycles are managed by the Controller.
     const int reqTimeout; ///< initted in c'tor, cached from ctl->options->bdTimeout

@@ -710,85 +710,80 @@ void SynchMempoolTask::doDLNextTx()
         txsWaitingForResponse.erase(tx->hash);
         AGAIN();
     },
-    // Retry on error -- if we fail to retrieve the transaction then it's possible that there was some RBF action
-    // if on BTC, or the tx happened to drop out of mempool for some other reason.  Do an immediate retry in that case.
-    isBTC ? "Tx possibly dropped out of mempool due to RBF" : nullptr);
+    [this, hashHex, tx](const RPC::Message &resp) {
+        // Continue on error -- if we fail to retrieve the transaction then it's possible that there was some RBF action
+        // if on BTC, or the tx happened to drop out of mempool for some other reason. We continue anyway.
+        const auto *const pre = isBTC ? "Tx dropped out of mempool (possibly due to RBF)" : "Tx dropped out of mempool";
+        Warning() << pre << ": " << QString(hashHex) << " (error response: " << resp.errorMessage()
+                  << "), continuing anyway ...";
+        // remove from sets
+        txsNeedingDownload.erase(tx->hash);
+        txsWaitingForResponse.erase(tx->hash);
+        txsDownloaded.erase(tx->hash);
+
+        // tell mempool just in case -- TODO: remove the below after testing is done since it is not really needed
+        {
+            auto [mempool, lock] = storage->mutableMempool();
+            const auto res = mempool.dropTxs(scriptHashesAffected, {tx->hash}, TRACE);
+            if (res.newSize != res.oldSize)
+                Error() << "UNEXPECTED: Tx was in mempool despite us expecting it to be a new tx! FIXME!  TXID: "
+                        << QString(hashHex);
+        }
+
+        AGAIN(); // proceed to next tx download anyway
+    });
 }
 
 void SynchMempoolTask::doGetRawMempool()
 {
     submitRequest("getrawmempool", {false}, [this](const RPC::Message & resp){
-        bool clearMempool = false; // this is set below in rare cases at the end of this lamba
-        Defer deferredClearMempoolIfNeeded(
-            [this, &clearMempool] {
-                if (clearMempool) {
-                    auto [mempool, lock] = storage->mutableMempool(); // take the lock exclusively here
-                    const auto sz = mempool.txs.size();
-                    mempool.clear();
-                    DebugM("Mempool cleared of ", sz, Util::Pluralize(" tx", sz));
-                }
-            });
         int newCt = 0;
         const QVariantList txidList = resp.result().toList();
-        // Grab the mempool data struct and lock it *shared*.  This improves performance vs. an exclusive lock here.
-        // Since we aren't modifying it.. this is fine.  We are the only subsystem that ever modifies it anyway, so
-        // invariants will hold regardless.
-        auto [mempool, lock] = storage->mempool();
-        const auto oldCt = mempool.txs.size();
-        auto droppedTxs = Util::keySet<std::unordered_set<TxHash, HashHasher>>(mempool.txs);
-        for (const auto & var : txidList) {
-            const auto txidHex = var.toString().trimmed().toLower();
-            const TxHash hash = Util::ParseHexFast(txidHex.toUtf8());
-            if (hash.length() != HashLen) {
-                Error() << resp.method << ": got an empty tx hash";
-                emit errored();
-                return;
-            }
-            static const QVariantList EmptyList; // avoid constructng this for each iteration
-            if (auto it = mempool.txs.find(hash); it != mempool.txs.end()) {
-                droppedTxs.erase(hash); // mark this tx as "not dropped" since it was in the mempool before and is in the mempool now.
-                if (TRACE) Debug() << "Existing mempool tx: " << hash.toHex();
-            } else {
-                if (TRACE) Debug() << "New mempool tx: " << hash.toHex();
-                ++newCt;
-                Mempool::TxRef tx = std::make_shared<Mempool::Tx>();
-                tx->hashXs.max_load_factor(1.0); // hopefully this will save some memory by expicitly setting it to 1.0
-                tx->hash = hash;
-                // Note: we end up calculating the fee ourselves since I don't trust doubles here. I wish bitcoind would have returned sats.. :(
-                txsNeedingDownload[hash] = tx;
-            }
-            // at this point we have a valid tx ptr
-        }
-
-        if (UNLIKELY(!droppedTxs.empty())) {
-            // If tx's were dropped, we clear the mempool and try again. We also enqueue notifications for the dropped
-            // tx's.
-            const bool recommendFullRetry = oldCt >= 2 && droppedTxs.size() >= oldCt/2; // more than 50% of the mempool tx's dropped out. something is funny. likely a new block arrived.
-            DebugM(droppedTxs.size(), " txs dropped from mempool, resetting mempool and trying again ...");
-            // NOTIFICATION
-            if (recommendFullRetry) {
-                // NOTIFICATION of all ...
-                scriptHashesAffected.merge(Util::keySet<decltype(scriptHashesAffected)>(mempool.hashXTxs));
-                DebugM("Will notify for all ", scriptHashesAffected.size(), " addresses of mempool for notificatons ...");
-            } else {
-                // just the dropped tx's
-                for (const auto & txid : droppedTxs) {
-                    if (auto it = mempool.txs.find(txid); it != mempool.txs.end()) {
-                        const auto & tx = it->second;
-                        if (tx) // paranoia: tx will always be a valid reference.
-                            scriptHashesAffected.merge(Util::keySet<decltype(scriptHashesAffected)>(tx->hashXs));
-                    }
+        Mempool::TxHashSet droppedTxs;
+        {
+            // Grab the mempool data struct and lock it *shared*.  This improves performance vs. an exclusive lock here.
+            // Since we aren't modifying it.. this is fine.  We are the only subsystem that ever modifies it anyway, so
+            // invariants will hold regardless.
+            auto [mempool, lock] = storage->mempool();
+            droppedTxs = Util::keySet<Mempool::TxHashSet>(mempool.txs);
+            for (const auto & var : txidList) {
+                const auto txidHex = var.toString().trimmed().toLower();
+                const TxHash hash = Util::ParseHexFast(txidHex.toUtf8());
+                if (hash.length() != HashLen) {
+                    Error() << resp.method << ": got an empty tx hash";
+                    emit errored();
+                    return;
                 }
-                DebugM("Will notify for ", scriptHashesAffected.size(), " addresses belonging to the dropped tx's for notificatons ...");
+                static const QVariantList EmptyList; // avoid constructng this for each iteration
+                if (auto it = mempool.txs.find(hash); it != mempool.txs.end()) {
+                    droppedTxs.erase(hash); // mark this tx as "not dropped" since it was in the mempool before and is in the mempool now.
+                    if (TRACE) Debug() << "Existing mempool tx: " << hash.toHex();
+                } else {
+                    if (TRACE) Debug() << "New mempool tx: " << hash.toHex();
+                    ++newCt;
+                    Mempool::TxRef tx = std::make_shared<Mempool::Tx>();
+                    tx->hashXs.max_load_factor(1.0); // hopefully this will save some memory by expicitly setting it to 1.0
+                    tx->hash = hash;
+                    // Note: we end up calculating the fee ourselves since I don't trust doubles here. I wish bitcoind would have returned sats.. :(
+                    txsNeedingDownload[hash] = tx;
+                }
+                // at this point we have a valid tx ptr
             }
-            clearMempool = true; // Defer object at top of this lamba above will clear the mempool on function return (taking an exclusive lock) if this is true.
-            if (recommendFullRetry) {
-                emit retryRecommended(); // this is an exit point for this task
-                return;
+        }
+        if (!droppedTxs.empty()) {
+            // Some txs were dropped, update mempool with the drops, grabbing the lock exclusively.
+            // Note the release and re-acquisition of the lock should be ok since this Controller
+            // thread is the only thread that ever modifies the mempool, so a coherent view of the
+            // mempool is the case here even after having released and re-acquired the lock.
+            auto [mempool, lock] = storage->mutableMempool();
+            const auto res = mempool.dropTxs(scriptHashesAffected /* will upate set */, droppedTxs, TRACE);
+            const std::size_t sizeDiff = res.oldSize - res.newSize;
+            if (UNLIKELY(sizeDiff != droppedTxs.size())) {
+                Warning() << "WARNING: Synch mempool expected to drop " << droppedTxs.size() << ", but only dropped "
+                          << sizeDiff << " -- This should never happen! FIXME!";
             }
-            clear();
-            AGAIN();
-            return;
+            DebugM("Dropped ", sizeDiff, " txs from mempool (", res.oldNumAddresses-res.newNumAddresses,
+                   " addresses), new mempool size: ", res.newSize, " (", res.newNumAddresses, " addresses)");
         }
 
         if (newCt)
@@ -1339,16 +1334,16 @@ void CtlTask::on_failure(const RPC::Message::Id &id, const QString &msg)
     emit errored();
 }
 quint64 CtlTask::submitRequest(const QString &method, const QVariantList &params, const ResultsF &resultsFunc,
-                               const char *recommendRetryMsg)
+                               const ErrorF &errorFunc)
 {
     quint64 id = IdMixin::newId();
     using ErrorF = BitcoinDMgr::ErrorF;
     using MsgCRef = const RPC::Message &;
     ctl->bitcoindmgr->submitRequest(this, id, method, params,
                                     resultsFunc,
-                                    !recommendRetryMsg
+                                    !errorFunc
                                         ? ErrorF([this](MsgCRef m){ on_error(m); }) // more common case, just emit error on RPC error reply
-                                        : [this, recommendRetryMsg](MsgCRef m){ on_error_retry(m, recommendRetryMsg); }, // getrawtransaction for SynchMempool case on BTC, retry immediately because RBF
+                                        : errorFunc,
                                     [this](const RPC::Message::Id &id, const QString &msg){ on_failure(id, msg); },
                                     reqTimeout);
     return id;

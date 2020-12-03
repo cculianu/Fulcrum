@@ -109,6 +109,8 @@ struct Mempool
     TxMap txs;
     HashXTxMap hashXTxs;
 
+protected:
+    // disallow clears from external code. Client code should always just use dropTxs.
     inline void clear() {
         // Enforce a little hysteresis about what sizes we may need in the future; reserve 75% of the last size we saw.
         // This means if mempool was full with thousands of txs, we do indeed maintain a largeish hash table for a
@@ -122,7 +124,7 @@ struct Mempool
         txs.reserve(size_t(txsSize*0.75));
         hashXTxs.reserve(size_t(hxSize*0.75));
     }
-
+public:
 
     // -- Add to mempool
 
@@ -143,9 +145,9 @@ struct Mempool
     /// Note that all the txs in txsNew *must* be new (must not already exist in this mempool instance).
     /// scriptHashesAffected is updated for all of the new tx's added.
     /// This is called by the SynchMempoolTask in Controller.cpp.
-    Stats addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
-                    const NewTxsMap & txsNew,
-                    const GetTXOInfoFromDBFunc & getTXOInfo,
+    Stats addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected, // will add to this set
+                    const NewTxsMap & txsNew, // txs to add
+                    const GetTXOInfoFromDBFunc & getTXOInfo, // callback to get DB confirmed utxos
                     bool TRACE = false);
 
 
@@ -154,13 +156,10 @@ struct Mempool
     using TxHashSet = std::unordered_set<TxHash, HashHasher>;
     /// Drop a bunch of tx's, deleting them from this data structure and reversing the effects of their spends
     /// in the mempool. This is called by the SynchMempoolTask whenever the bitcoind mempool has droped tx's.
-    /// Note that it is assumed that the caller is not dropping any tx's in the middle of an unconfirmed chain.
-    /// That is, for any tx's that have unconfirmed children, they cannot be dropped unless all their descendants
-    /// are dropped as well in this call. This assumption exists so that some extra checks are skipped here for
-    /// performance.
-    Stats dropTxs(ScriptHashesAffectedSet & scriptHashesAffected,
-                  const TxHashSet & txids,
-                  bool TRACE = false);
+    /// Note that this function executes much faster if the caller is not dropping any tx's in the middle of an
+    /// unconfirmed chain.  For unconfirmed chains, child tx's in the chain that are not in the specified
+    /// txids set will also be dropped (since they are spending txs that no longer are in the mempool).
+    Stats dropTxs(ScriptHashesAffectedSet & scriptHashesAffected, const TxHashSet & txids, bool TRACE = false);
 
 
     // -- Fee histogram support (used by mempool.get_fee_histogram RPC) --

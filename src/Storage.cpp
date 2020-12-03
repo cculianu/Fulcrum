@@ -1275,11 +1275,19 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
     // take all locks now.. since this is a Big Deal. TODO: add more locks here?
     std::scoped_lock guard(p->blocksLock, p->headerVerifierLock, p->blkInfoLock, p->mempoolLock);
 
-    if (notify)
-        // mark ALL of mempool for notify so we can properly detect drops that weren't in block but also disappeared from mempool
-        notify->merge(Util::keySet<NotifySet>(p->mempool.hashXTxs));
-
-    p->mempool.clear(); // just make sure the mempool is clean
+    if (notify) {
+        // txs in block can never be in mempool. Ensure they are gone.
+        Mempool::TxHashSet txids;
+        const auto sz = ppb->txInfos.size();
+        txids.reserve(sz > 0 ? sz-1 : 0);
+        for (std::size_t i = 1 /* skip coinbase */; i < sz; ++i)
+            txids.insert(ppb->txInfos[i].hash);
+        const auto res = p->mempool.dropTxs(*notify, txids, Trace::isEnabled());
+        if (const auto diff = res.oldSize - res.newSize; diff && Debug::isEnabled()) {
+            Debug() << "addBlock: removed " << diff << " txs from mempool involving "
+                    << (res.oldNumAddresses-res.newNumAddresses) << " addresses";
+        }
+    }
 
     const auto verifUndo = p->headerVerifier; // keep a copy of verifier state for undo purposes in case this fails
     // This object ensures that if an exception is thrown while we are in the below code, we undo the header verifier
@@ -1560,11 +1568,17 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
         // take all locks now.. since this is a Big Deal. TODO: add more locks here?
         std::scoped_lock guard(p->blocksLock, p->headerVerifierLock, p->blkInfoLock, p->mempoolLock);
 
-        if (notify)
-            // mark ALL of mempool for notify so we can detect drops that weren't in block but also disappeared from mempool properly
-            notify->merge(Util::keySet<UndoInfo::ScriptHashSet>(p->mempool.hashXTxs));
-
-        p->mempool.clear(); // make sure mempool is clean
+        // NOTE: We don't touch the mempool in this function since it's not clear which tx's we should notify for.
+        // Instead, we rely on the Controller task that will eventually see the drops and notify appropriately.
+        // There MAY be a race condition of sorts with clients where while we apply the undo, they may get
+        // an inconsistent view of the mempool and utxos -- however the more I think about it -- I realize
+        // in practice for very full mempools we prefer to not have to clear the mempool here which would be
+        // very slow in cases where most of it would have to be rebuilt anyway with the same data (such as on BTC
+        // mainnet). It's hoped that walking back/reorg is a rare enough event that we accept the potential
+        // for clients to get spazzy / inconsistent results here.
+        //
+        // *** TODO: perhaps clear mempool here anyway, just to prevent strangeness/non-exitant utxos, etc. ***
+        //
 
         const auto t0 = Util::getTimeNS();
 

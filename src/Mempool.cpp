@@ -194,10 +194,40 @@ auto Mempool::addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
     return ret;
 }
 
-auto Mempool::dropTxs(ScriptHashesAffectedSet & scriptHashesAffectedOut,
-                      const TxHashSet & txids,
-                      bool TRACE) -> Stats
+auto Mempool::dropTxs(ScriptHashesAffectedSet & scriptHashesAffectedOut, const TxHashSet & txidsIn, bool TRACE) -> Stats
 {
+    auto txids = txidsIn;
+    // also drop txs that spend from the txids in the above set as well -- since we
+    // cannot drop tx's in the middle of a chain of spends due to limitations in how
+    // we model the mempool
+    {
+        int iterct = 0, added = 0;
+        const auto t0 = Debug::isEnabled() ? Util::getTimeMicros() : 0;
+        while (txids.size() && ++iterct) {
+            for (const auto & [txid, tx] : txs) {
+                if (!tx->hasUnconfirmedParentTx || txids.count(txid))
+                    continue; // no unconf. parents or already added
+                for (const auto &[sh, ioinfo] : tx->hashXs) {
+                    for (const auto &[txo, txoinfo] : ioinfo.unconfirmedSpends) {
+                        if (txids.count(txo.txHash)) {
+                            // this spends one of the ones in our set! add it since it's a child of something we want to remove.
+                            txids.emplace(txid);
+                            ++added;
+                            DebugM("addBlock: additonal tx ", Util::ToHexFast(txid), " added to set because it spends ",
+                                   txo.toString(), " which is already in our removal set");
+                            goto outer_loop_iterate_again;
+                        }
+                    }
+                }
+            }
+            break;
+        outer_loop_iterate_again:
+            continue;
+        }
+        DebugM("dropTxs: iterated ", iterct, " time(s) to add ", added, " additional child tx(s) in ",
+               QString::number((Util::getTimeMicros()-t0)/1e3, 'f', 2), " msec");
+    }
+
     Stats ret;
     ScriptHashesAffectedSet scriptHashesAffected;
     auto & [oldSize, newSize, oldNumAddresses, newNumAddresses] = ret;
@@ -208,7 +238,9 @@ auto Mempool::dropTxs(ScriptHashesAffectedSet & scriptHashesAffectedOut,
     for (const auto & txid : txids) {
         auto it = txs.find(txid);
         if (UNLIKELY(it == txs.end())) {
-            Warning() << "dropTxs: tx " << Util::ToHexFast(txid) << " not found in mempool";
+            // Note that it's ok to call this function for non-existant tx's -- we call it when adding new blocks
+            // and it's possible for txids in blocks to not be in mempool. Only print a message in debug mode.
+            DebugM("dropTxs: tx ", Util::ToHexFast(txid), " not found in mempool");
             continue;
         }
         auto & tx = it->second;
@@ -445,6 +477,7 @@ namespace {
     }
 
     void bench() {
+        Debug::forceEnable = true;
         const char * const mpdat = std::getenv("MPDAT");
         if (!mpdat) {
             Warning() << "Mempool benchmark requires the MPDAT environment variable, which should be a path to a "
@@ -461,175 +494,190 @@ namespace {
 
         if (isSegWit) bitcoin::SetCurrencyUnit("BTC");
 
-        Mempool mempool;
-        {
-            static const Mempool::GetTXOInfoFromDBFunc getTXOInfo = [](const TXO &txo) -> std::optional<TXOInfo> {
-                TXOInfo ret;
-                ret.amount = 546 * bitcoin::Amount::satoshi();
-                ret.confirmedHeight = 1;
-                ret.hashX = BTC::HashXFromCScript(bitcoin::CScript() << Util::toVec<std::vector<uint8_t>>(txo.toBytes()));
-                return ret;
-            };
-            Mempool::ScriptHashesAffectedSet shset;
-            const auto t0 = Util::getTimeMicros();
-            const auto stats = mempool.addNewTxs(shset, mpd, getTXOInfo);
-            const auto tf = Util::getTimeMicros();
-            mpd.clear();
-            Log() << "Added to mempool in " << QString::number((tf-t0)/1e3, 'f', 3) << " msec."
-                  << " Scripthashes: " << shset.size() << ", size: " << stats.newSize << ", addresses " << stats.newNumAddresses;
-            shset.clear();
-            const auto mem = Util::getProcessMemoryUsage();
-            Log() << "Mem usage: physical " << QString::number(mem.phys / 1024.0, 'f', 1)
-                  << " KiB, virtual " << QString::number(mem.virt / 1024.0, 'f', 1) << " KiB";
-            Log() << "Delta phys: " << QString::number((mem.phys - mem0.phys) / 1024.0, 'f', 1) << " KiB";
-        }
-
-        Log() << QString(79, QChar{'-'});
-
-        {
-            const auto t0 = Util::getTimeMicros();
-            decltype(Util::getTimeMicros()) actualTimeCost = 0;
-            bool dumped = false;
-            // iterate each time, dropping leaves from mempool
-            for (int ct = 1; !mempool.txs.empty(); ++ct) {
-                Mempool::TxHashSet txids;
-                for (const auto & [txHash, tx] : mempool.txs) {
-                    std::unordered_set<IONum> ionums;
-                    for (const auto & [hashX, ioinfo] : tx->hashXs) {
-                        for (const auto & n : ioinfo.utxo)
-                            ionums.insert(n);
-                    }
-                    std::size_t validSize = 0;
-                    for (const auto & txo : tx->txos)
-                        validSize += txo.isValid();
-                    if (ionums.size() == validSize) {
-                        // this is a leaf
-                        txids.insert(txHash);
-                    }
-                }
-                if (txids.empty())
-                    throw InternalError("Expected to find at least 1 leaf tx! This should not happen! FIXME!");
-
-                // do at most 250 drops each iter, randomizing which get dropped
-                constexpr std::size_t iterLimit = 250;
-                if (txids.size() > iterLimit) {
-                    auto tvec = Util::toVec(txids);
-                    Util::shuffle(tvec.begin(), tvec.end());
-                    tvec.resize(iterLimit);
-                    txids = Util::toCont<decltype(txids)>(tvec);
-                }
-
-                using UTXOMap = std::map<TXO, TXOInfo>;
-                struct Expected {
-                    UTXOMap unconfUtxos;
-                    bitcoin::Amount unconfUtxoValue;
-                    Mempool::ScriptHashesAffectedSet affected;
-                } expected;
-
-                const auto getUnconfUtxos = [&mempool]() -> std::pair<UTXOMap, bitcoin::Amount> {
-                    UTXOMap ret;
-                    bitcoin::Amount value;
-                    for (const auto &[txid, tx] : mempool.txs) {
-                        for (const auto &[sh, ioinfo] : tx->hashXs) {
-                            for (const auto &ionum : ioinfo.utxo) {
-                                const TXO txo{txid, ionum};
-                                const bool isnew = ret.emplace(txo, tx->txos[ionum]).second;
-                                if (isnew)
-                                    value += tx->txos[ionum].amount;
-                                else
-                                    throw Exception(QString("getUnconfUtxos: non-unique utxo encountered %1! FIXME!").arg(txo.toString()));
-                                //Log() << "Added: " << txo.toString();
-                            }
-                        }
-                    }
-                    return {std::move(ret), value};
+        for (int iter = 0; iter < 2; ++iter) { // we iterate twice. first iteraton is "leaf" mode, second is "drop any tx!!" mode.
+            Log() << QString(79, QChar{'-'});
+            Mempool mempool;
+            {
+                static const Mempool::GetTXOInfoFromDBFunc getTXOInfo = [](const TXO &txo) -> std::optional<TXOInfo> {
+                    TXOInfo ret;
+                    ret.amount = 546 * bitcoin::Amount::satoshi();
+                    ret.confirmedHeight = 1;
+                    ret.hashX = BTC::HashXFromCScript(bitcoin::CScript() << Util::toVec<std::vector<uint8_t>>(txo.toBytes()));
+                    return ret;
                 };
+                Mempool::ScriptHashesAffectedSet shset;
+                const auto t0 = Util::getTimeMicros();
+                const auto stats = mempool.addNewTxs(shset, mpd, getTXOInfo);
+                const auto tf = Util::getTimeMicros();
+                Log() << "Added to mempool in " << QString::number((tf-t0)/1e3, 'f', 3) << " msec."
+                      << " Scripthashes: " << shset.size() << ", size: " << stats.newSize << ", addresses " << stats.newNumAddresses;
+                shset.clear();
+                const auto mem = Util::getProcessMemoryUsage();
+                Log() << "Mem usage: physical " << QString::number(mem.phys / 1024.0, 'f', 1)
+                      << " KiB, virtual " << QString::number(mem.virt / 1024.0, 'f', 1) << " KiB";
+                Log() << "Delta phys: " << QString::number((mem.phys - mem0.phys) / 1024.0, 'f', 1) << " KiB";
+            }
 
-                bitcoin::Amount beforeAmt;
-                std::size_t beforeSize;
 
-                { // build expected set to verify the results of calling dropTxs()
+            Log() << QString(79, QChar{'-'});
 
-                    // build utxo set we have now
-                    std::tie(expected.unconfUtxos, expected.unconfUtxoValue) = getUnconfUtxos();
-
-                    beforeSize = expected.unconfUtxos.size();
-                    beforeAmt = expected.unconfUtxoValue;
-
-                    for (const auto &txid : txids) {
-                        const auto &tx = mempool.txs[txid];
-                        for (const auto &[sh, ioinfo] : tx->hashXs) {
-                            expected.affected.insert(sh);
-                            for (const auto &[txo, txoinfo] : ioinfo.unconfirmedSpends) {
-                                const bool isnew = expected.unconfUtxos.emplace(txo, txoinfo).second;
-                                if (!isnew) throw Exception(QString("Non-unique utxo encountered %1! FIXME!").arg(txo.toString()));
-                                expected.unconfUtxoValue += txoinfo.amount;
-                                auto it = mempool.txs.find(txo.txHash);
-                                if (it == mempool.txs.end())
-                                    throw Exception(QString("Could not find prev out %1 for unconfirmed spend for txid %2")
-                                                    .arg(txo.toString(), QString(txid.toHex())));
-                                if (it->second->hashXs.count(txoinfo.hashX) == 0)
-                                    throw Exception(QString("Coult not find prev out %1 hashx %2 for unfonfirmed spend for txid %3")
-                                                    .arg(txo.toString(), QString(txoinfo.hashX.toHex()), QString(txid.toHex())));
-                                expected.affected.insert(txoinfo.hashX);
-                            }
+            {
+                const auto t0 = Util::getTimeMicros();
+                decltype(Util::getTimeMicros()) actualTimeCost = 0;
+                bool dumped = false;
+                // iterate each time, dropping leaves from mempool
+                for (int ct = 1; !mempool.txs.empty(); ++ct) {
+                    Mempool::TxHashSet txids;
+                    for (const auto & [txHash, tx] : mempool.txs) {
+                        std::unordered_set<IONum> ionums;
+                        for (const auto & [hashX, ioinfo] : tx->hashXs) {
+                            for (const auto & n : ioinfo.utxo)
+                                ionums.insert(n);
                         }
-                        // delete existing, subtracting utxo value for each
-                        int i = -1;
-                        for (const auto &txoinfo : tx->txos) {
-                            ++i;
-                            if (!txoinfo.isValid()) continue;
-                            const TXO txo{txid, IONum(i)};
-                            expected.unconfUtxoValue -= txoinfo.amount;
-                            expected.unconfUtxos.erase(txo);
+                        if (iter == 0) {
+                            // drop only leaves mode
+                            std::size_t validSize = 0;
+                            for (const auto & txo : tx->txos)
+                                validSize += txo.isValid();
+                            if (ionums.size() == validSize) {
+                                // this is a leaf
+                                txids.insert(txHash);
+                            }
+                        } else {
+                            // second iteration drop anything not just leaf! (slower)
+                            txids.insert(txHash);
                         }
                     }
-                }
+                    if (txids.empty())
+                        throw InternalError("Expected to find at least 1 leaf tx! This should not happen! FIXME!");
 
-                QVariantMap dumpBefore;
-                if (!dumped && mempool.txs.size() < 20) {
-                    // dump once when we reach 20
-                    dumped = true;
-                    dumpBefore = mempool.dump();
-                }
+                    // do at most 250 drops each iter, randomizing which get dropped
+                    constexpr std::size_t iterLimit = 250;
+                    if (txids.size() > iterLimit) {
+                        auto tvec = Util::toVec(txids);
+                        Util::shuffle(tvec.begin(), tvec.end());
+                        tvec.resize(iterLimit);
+                        txids = Util::toCont<decltype(txids)>(tvec);
+                    }
 
-                Mempool::ScriptHashesAffectedSet shset;
-                //Debug::forceEnable = true;
-                const auto t1 = Util::getTimeMicros();
-                const auto stats = mempool.dropTxs(shset, txids, true);
-                const auto t2 = Util::getTimeMicros();
-                actualTimeCost += t2 - t1;
-                const auto [utxos, value] = getUnconfUtxos();
-                Log() << "Iter " << ct << ": oldSize: " << stats.oldSize << " newSize: " << stats.newSize
-                      << " oldNumAddresses: " << stats.oldNumAddresses << " newNumAddresses: " << stats.newNumAddresses
-                      << " shsaffected: " << shset.size()  << " utxoSetSize: " << beforeSize << " -> " << utxos.size()
-                      << " value: " << QString::fromStdString(beforeAmt.ToString()) << " -> " << QString::fromStdString(value.ToString())
-                      << " (" << QString::fromStdString((value - beforeAmt).ToString()) << ")"
-                      << " in " << QString::number((t2-t1)/1e3, 'f', 1) << " msec";
-                if (!dumpBefore.isEmpty()) {
-                    const QVariantMap dumpAfter = mempool.dump();
-                    Log() << QString(79, QChar{'-'});
-                    Log() << "Dump, before:";
-                    Log() << Json::toUtf8(dumpBefore);
-                    Log() << "Dump, after:";
-                    Log() << Json::toUtf8(dumpAfter);
-                    Log() << QString(79, QChar{'-'});
+                    using UTXOMap = std::map<TXO, TXOInfo>;
+                    struct Expected {
+                        UTXOMap unconfUtxos;
+                        bitcoin::Amount unconfUtxoValue;
+                        Mempool::ScriptHashesAffectedSet affected;
+                    } expected;
+
+                    const auto getUnconfUtxos = [&mempool]() -> std::pair<UTXOMap, bitcoin::Amount> {
+                        UTXOMap ret;
+                        bitcoin::Amount value;
+                        for (const auto &[txid, tx] : mempool.txs) {
+                            for (const auto &[sh, ioinfo] : tx->hashXs) {
+                                for (const auto &ionum : ioinfo.utxo) {
+                                    const TXO txo{txid, ionum};
+                                    const bool isnew = ret.emplace(txo, tx->txos[ionum]).second;
+                                    if (isnew)
+                                        value += tx->txos[ionum].amount;
+                                    else
+                                        throw Exception(QString("getUnconfUtxos: non-unique utxo encountered %1! FIXME!").arg(txo.toString()));
+                                    //Log() << "Added: " << txo.toString();
+                                }
+                            }
+                        }
+                        return {std::move(ret), value};
+                    };
+
+                    bitcoin::Amount beforeAmt;
+                    std::size_t beforeSize;
+
+                    { // build expected set to verify the results of calling dropTxs()
+
+                        // build utxo set we have now
+                        std::tie(expected.unconfUtxos, expected.unconfUtxoValue) = getUnconfUtxos();
+
+                        beforeSize = expected.unconfUtxos.size();
+                        beforeAmt = expected.unconfUtxoValue;
+
+                        for (const auto &txid : txids) {
+                            const auto &tx = mempool.txs[txid];
+                            for (const auto &[sh, ioinfo] : tx->hashXs) {
+                                expected.affected.insert(sh);
+                                for (const auto &[txo, txoinfo] : ioinfo.unconfirmedSpends) {
+                                    const bool isnew = expected.unconfUtxos.emplace(txo, txoinfo).second;
+                                    if (!isnew) throw Exception(QString("Non-unique utxo encountered %1! FIXME!").arg(txo.toString()));
+                                    expected.unconfUtxoValue += txoinfo.amount;
+                                    auto it = mempool.txs.find(txo.txHash);
+                                    if (it == mempool.txs.end())
+                                        throw Exception(QString("Could not find prev out %1 for unconfirmed spend for txid %2")
+                                                        .arg(txo.toString(), QString(txid.toHex())));
+                                    if (it->second->hashXs.count(txoinfo.hashX) == 0)
+                                        throw Exception(QString("Coult not find prev out %1 hashx %2 for unfonfirmed spend for txid %3")
+                                                        .arg(txo.toString(), QString(txoinfo.hashX.toHex()), QString(txid.toHex())));
+                                    expected.affected.insert(txoinfo.hashX);
+                                }
+                            }
+                            // delete existing, subtracting utxo value for each
+                            int i = -1;
+                            for (const auto &txoinfo : tx->txos) {
+                                ++i;
+                                if (!txoinfo.isValid()) continue;
+                                const TXO txo{txid, IONum(i)};
+                                expected.unconfUtxoValue -= txoinfo.amount;
+                                expected.unconfUtxos.erase(txo);
+                            }
+                        }
+                    }
+
+
+                    QVariantMap dumpBefore;
+                    if constexpr (false) {
+                        if (!dumped && mempool.txs.size() < 20) {
+                            // dump once when we reach 20
+                            dumped = true;
+                            dumpBefore = mempool.dump();
+                        }
+                    }
+
+                    Mempool::ScriptHashesAffectedSet shset;
+                    const auto t1 = Util::getTimeMicros();
+                    const auto stats = mempool.dropTxs(shset, txids, false);
+                    const auto t2 = Util::getTimeMicros();
+                    actualTimeCost += t2 - t1;
+                    const auto [utxos, value] = getUnconfUtxos();
+                    Log() << "Iter " << ct << ": oldSize: " << stats.oldSize << " newSize: " << stats.newSize
+                          << " oldNumAddresses: " << stats.oldNumAddresses << " newNumAddresses: " << stats.newNumAddresses
+                          << " shsaffected: " << shset.size()  << " utxoSetSize: " << beforeSize << " -> " << utxos.size()
+                          << " value: " << QString::fromStdString(beforeAmt.ToString()) << " -> " << QString::fromStdString(value.ToString())
+                          << " (" << QString::fromStdString((value - beforeAmt).ToString()) << ")"
+                          << " in " << QString::number((t2-t1)/1e3, 'f', 1) << " msec";
+                    if (!dumpBefore.isEmpty()) {
+                        const QVariantMap dumpAfter = mempool.dump();
+                        Log() << QString(79, QChar{'-'});
+                        Log() << "Dump, before:";
+                        Log() << Json::toUtf8(dumpBefore);
+                        Log() << "Dump, after:";
+                        Log() << Json::toUtf8(dumpAfter);
+                        Log() << QString(79, QChar{'-'});
+                    }
+                    if (iter == 0) {
+                        // For now we do this sanity check only on "leaf" mode (first iteratiorn)
+                        // TODO: do some sanity checking for the "drop anything" mode as well.
+                        if (stats.oldSize - stats.newSize != txids.size())
+                            throw Exception("New tx counds are not as expected!");
+                        if (shset != expected.affected)
+                            throw Exception("ScriptHashes affected is not as expected!");
+                        if (utxos != expected.unconfUtxos)
+                            throw Exception("Resultant utxo set is not as expected!");
+                        if (value != expected.unconfUtxoValue)
+                            throw Exception("Resultant utxo totals are not as expected!");
+                    }
                 }
-                if (stats.oldSize - stats.newSize != txids.size())
-                    throw Exception("New tx counds are not as expected!");
-                if (shset != expected.affected)
-                    throw Exception("ScriptHashes affected is not as expected!");
-                if (utxos != expected.unconfUtxos)
-                    throw Exception("Resultant utxo set is not as expected!");
-                if (value != expected.unconfUtxoValue)
-                    throw Exception("Resultant utxo totals are not as expected!");
+                const auto tf = Util::getTimeMicros();
+                Log() << "Dropped all from mempool in " << QString::number((tf-t0)/1e3, 'f', 3)
+                      << " msec, actual \"non-verification\" processing time was " << QString::number(actualTimeCost / 1e3, 'f', 3) << " msec";
+                const auto mem = Util::getProcessMemoryUsage();
+                Log() << "Mem usage: physical " << QString::number(mem.phys / 1024.0, 'f', 1)
+                      << " KiB, virtual " << QString::number(mem.virt / 1024.0, 'f', 1) << " KiB";
             }
-            const auto tf = Util::getTimeMicros();
-            Log() << "Dropped all from mempool in " << QString::number((tf-t0)/1e3, 'f', 3)
-                  << " msec, actual \"non-verification\" processing time was " << QString::number(actualTimeCost / 1e3, 'f', 3) << " msec";
-            const auto mem = Util::getProcessMemoryUsage();
-            Log() << "Mem usage: physical " << QString::number(mem.phys / 1024.0, 'f', 1)
-                  << " KiB, virtual " << QString::number(mem.virt / 1024.0, 'f', 1) << " KiB";
         }
     }
 
