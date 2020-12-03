@@ -221,7 +221,7 @@ auto Mempool::dropTxs(ScriptHashesAffectedSet & scriptHashesAffectedOut, const T
                             // this spends one of the ones in our set! add it since it's a child of something we want to remove.
                             txids.emplace(txid);
                             ++added;
-                            DebugM("addBlock: additonal tx ", Util::ToHexFast(txid), " added to set because it spends ",
+                            DebugM("dropTxs: additonal tx ", Util::ToHexFast(txid), " added to set because it spends ",
                                    txo.toString(), " which is already in our removal set");
                             goto outer_loop_iterate_again;
                         }
