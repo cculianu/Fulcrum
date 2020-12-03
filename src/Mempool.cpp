@@ -349,7 +349,7 @@ auto Mempool::dropTxs(ScriptHashesAffectedSet & scriptHashesAffectedOut, const T
         if (txs.load_factor() <= *rehashMaxLoadFactor)
             txs.rehash(0); // shrink to fit
         if (hashXTxs.load_factor() <= *rehashMaxLoadFactor)
-            hashXTxs.rehash(0);  // shrint to fit
+            hashXTxs.rehash(0);  // shrink to fit
     }
     return ret;
 }
