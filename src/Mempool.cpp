@@ -24,6 +24,13 @@
 #include <functional>
 #include <map>
 
+void Mempool::clear() {
+    txs.clear();
+    hashXTxs.clear();
+    txs.reserve(0); // this should free previous capacity
+    hashXTxs.reserve(0);
+}
+
 auto Mempool::calcCompactFeeHistogram(double binSize) const -> FeeHistogramVec
 {
     // this algorithm is taken from:
@@ -194,7 +201,8 @@ auto Mempool::addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
     return ret;
 }
 
-auto Mempool::dropTxs(ScriptHashesAffectedSet & scriptHashesAffectedOut, const TxHashSet & txidsIn, bool TRACE) -> Stats
+auto Mempool::dropTxs(ScriptHashesAffectedSet & scriptHashesAffectedOut, const TxHashSet & txidsIn, bool TRACE,
+                      std::optional<float> rehashMaxLoadFactor) -> Stats
 {
     auto txids = txidsIn;
     // also drop txs that spend from the txids in the above set as well -- since we
@@ -336,6 +344,13 @@ auto Mempool::dropTxs(ScriptHashesAffectedSet & scriptHashesAffectedOut, const T
     // update returned stats
     newSize = this->txs.size();
     newNumAddresses = this->hashXTxs.size();
+
+    if (rehashMaxLoadFactor) {
+        if (txs.load_factor() <= *rehashMaxLoadFactor)
+            txs.rehash(0); // shrink to fit
+        if (hashXTxs.load_factor() <= *rehashMaxLoadFactor)
+            hashXTxs.rehash(0);  // shrint to fit
+    }
     return ret;
 }
 

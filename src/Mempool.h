@@ -27,6 +27,7 @@
 #include <QVariantMap>
 
 #include <memory>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -73,9 +74,7 @@ struct Mempool
             const uint8_t nParentMe = hasUnconfirmedParentTx ? 1 : 0,
                           nParentOther = o.hasUnconfirmedParentTx ? 1 : 0;
             // always sort the unconf. parent tx's *after* the regular (confirmed parent-only) tx's.
-            if (nParentMe != nParentOther)
-                return nParentMe < nParentOther;
-            return hash < o.hash;
+            return std::tie(nParentMe, hash) < std::tie(nParentOther, o.hash);
         }
 
         /// This should always contain all the HashX's involved in this tx. Note the use of unordered_map which can
@@ -111,19 +110,8 @@ struct Mempool
 
 protected:
     // disallow clears from external code. Client code should always just use dropTxs.
-    inline void clear() {
-        // Enforce a little hysteresis about what sizes we may need in the future; reserve 75% of the last size we saw.
-        // This means if mempool was full with thousands of txs, we do indeed maintain a largeish hash table for a
-        // few blocks, decaying memory usage over time.  We do it this way to eventually recover memory, but to also
-        // leave space in case we are in a situation where many tx's are coming in quickly.
-        // Note that the default implementation of robin_hood clear() never shrinks its hashtables, and requires
-        // explicit calles to reserve() even after a clear().
-        const auto txsSize = txs.size(), hxSize = hashXTxs.size();
-        txs.clear();
-        hashXTxs.clear();
-        txs.reserve(size_t(txsSize*0.75));
-        hashXTxs.reserve(size_t(hxSize*0.75));
-    }
+    void clear();
+
 public:
 
     // -- Add to mempool
@@ -159,7 +147,8 @@ public:
     /// Note that this function executes much faster if the caller is not dropping any tx's in the middle of an
     /// unconfirmed chain.  For unconfirmed chains, child tx's in the chain that are not in the specified
     /// txids set will also be dropped (since they are spending txs that no longer are in the mempool).
-    Stats dropTxs(ScriptHashesAffectedSet & scriptHashesAffected, const TxHashSet & txids, bool TRACE = false);
+    Stats dropTxs(ScriptHashesAffectedSet & scriptHashesAffected, const TxHashSet & txids, bool TRACE = false,
+                  std::optional<float> rehashMaxLoadFactor = {});
 
 
     // -- Fee histogram support (used by mempool.get_fee_histogram RPC) --

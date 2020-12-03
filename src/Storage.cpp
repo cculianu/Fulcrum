@@ -1282,7 +1282,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
         txids.reserve(sz > 0 ? sz-1 : 0);
         for (std::size_t i = 1 /* skip coinbase */; i < sz; ++i)
             txids.insert(ppb->txInfos[i].hash);
-        const auto res = p->mempool.dropTxs(*notify, txids, Trace::isEnabled());
+        const auto res = p->mempool.dropTxs(*notify, txids, Trace::isEnabled(), 0.5f /* shrink to fit load_factor threshold */);
         if (const auto diff = res.oldSize - res.newSize; diff && Debug::isEnabled()) {
             Debug() << "addBlock: removed " << diff << " txs from mempool involving "
                     << (res.oldNumAddresses-res.newNumAddresses) << " addresses";
