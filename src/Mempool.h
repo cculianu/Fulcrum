@@ -24,6 +24,8 @@
 #include "bitcoin/amount.h"
 #include "robin_hood/robin_hood.h"
 
+#include <QVariantMap>
+
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
@@ -172,4 +174,9 @@ struct Mempool
     /// mempool takes under 1 ms on average hardware, so it's very fast. Storage calls this in refreshMempoolHistogram
     /// from a periodic background task kicked off in Controller.
     FeeHistogramVec calcCompactFeeHistogram(double binSize = 1e5 /* binSize in bytes */) const;
+
+    // -- Dump (for JSONesque debug support)
+
+    /// Dump to QVariantMap (used by Controller::debug(), see Controller.cpp)
+    QVariantMap dump() const;
 };

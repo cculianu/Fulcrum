@@ -1490,78 +1490,8 @@ auto Controller::debug(const StatsParams &p) const -> Stats // from StatsMixin
         ret["unspent_debug"] = l;
     }
     if (p.contains("mempool")) {
-        QVariantMap mp, txs;
         auto [mempool, lock] = storage->mempool();
-        for (const auto & [hash, tx] : mempool.txs) {
-            if (!tx) continue;
-            QVariantMap m;
-            m["hash"] = tx->hash.toHex();
-            m["sizeBytes"] = tx->sizeBytes;
-            m["fee"] = tx->fee.ToString().c_str();
-            m["hasUnconfirmedParentTx"] = tx->hasUnconfirmedParentTx;
-            static const auto TXOInfo2Map = [](const TXOInfo &info) -> QVariantMap {
-                return QVariantMap{
-                    { "amount", QString::fromStdString(info.amount.ToString()) },
-                    { "scriptHash", info.hashX.toHex() },
-                };
-            };
-            QVariantMap txos;
-            IONum num = 0;
-            for (const auto & info : tx->txos) {
-                QVariantMap infoMap;
-                if (info.isValid())
-                    infoMap = TXOInfo2Map(info);
-                else
-                    infoMap = QVariantMap{
-                        { "amount" , QVariant() },
-                        { "scriptHash", QVariant() },
-                        { "comment", "OP_RETURN output not indexed"},
-                    };
-                txos[QString::number(num++)] = infoMap;
-            }
-            m["txos"] = txos;
-            QVariantMap hxs;
-            static const auto IOInfo2Map = [](const Mempool::Tx::IOInfo &inf) -> QVariantMap {
-                QVariantMap ret;
-#if QT_VERSION < QT_VERSION_CHECK(5, 14, 0)
-                const auto vl = QVariantList::fromStdList( Util::toList<std::list<QVariant>>(inf.utxo) );
-#else
-                const auto vl = Util::toList<QVariantList>(inf.utxo);
-#endif
-                ret["utxos"] = vl;
-                ret["utxos (BucketCount)"] = qlonglong(inf.utxo.bucket_count());
-                ret["utxos (LoadFactor)"] = QString::number(double(inf.utxo.load_factor()), 'f', 4);
-                QVariantMap cs;
-                for (const auto & [txo, info] : inf.confirmedSpends)
-                    cs[txo.toString()] = TXOInfo2Map(info);
-                ret["confirmedSpends"] = cs;
-                ret["confirmedSpends (LoadFactor)"] = QString::number(double(inf.confirmedSpends.load_factor()), 'f', 4);
-                QVariantMap us;
-                for (const auto & [txo, info] : inf.unconfirmedSpends)
-                    us[txo.toString()] = TXOInfo2Map(info);
-                ret["unconfirmedSpends"] = us;
-                ret["unconfirmedSpends (LoadFactor)"] = QString::number(double(inf.unconfirmedSpends.load_factor()), 'f', 4);
-                return ret;
-            };
-            for (const auto & [sh, ioinfo] : tx->hashXs)
-                hxs[sh.toHex()] = IOInfo2Map(ioinfo);
-            m["hashXs"] = hxs;
-            m["hashXs (LoadFactor)"] = QString::number(double(tx->hashXs.load_factor()), 'f', 4);
-
-            txs[hash.toHex()] = m;
-        }
-        mp["txs"] = txs;
-        mp["txs (LoadFactor)"] = QString::number(double(mempool.txs.load_factor()), 'f', 4);
-        QVariantMap hxs;
-        for (const auto & [sh, txset] : mempool.hashXTxs) {
-            QVariantList l;
-            for (const auto & tx : txset)
-                if (tx) l.push_back(tx->hash.toHex());
-            hxs[sh.toHex()] = l;
-        }
-        mp["hashXTxs"] = hxs;
-        mp["hashXTxs (LoadFactor)"] = QString::number(double(mempool.hashXTxs.load_factor()), 'f', 4);
-        ret["mempool_debug"] = mp;
+        ret["mempool_debug"] = mempool.dump();
     }
     if (p.contains("subs")) {
         const auto timeLeft = kDefaultTimeout - (Util::getTime() - t0/1000000) - 50;

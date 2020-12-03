@@ -17,6 +17,7 @@
 // <https://www.gnu.org/licenses/>.
 //
 #include "Mempool.h"
+#include "Util.h"
 
 #include <algorithm>
 #include <cassert>
@@ -128,7 +129,11 @@ auto Mempool::addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
                                         .arg(QString(prevTxId.toHex())).arg(prevN).arg(QString(hash.toHex())).arg(inNum));
                 sh = prevInfo.hashX;
                 tx->hashXs[sh].unconfirmedSpends[prevTXO] = prevInfo;
-                prevTxRef->hashXs[sh].utxo.erase(prevN); // remove this spend from utxo set for prevTx in mempool
+                auto prevHashXIt = prevTxRef->hashXs.find(sh);
+                if (prevHashXIt == prevTxRef->hashXs.end())
+                    throw InternalError(QString("PREV OUT %1 IS MISSING ITS HASHX ENTRY FOR HASHX %2 (txid: %3)")
+                                        .arg(prevTXO.toString(), QString(sh.toHex()), QString(tx->hash.toHex())));
+                prevHashXIt->second.utxo.erase(prevN); // remove this spend from utxo set for prevTx in mempool
                 if (TRACE) Debug() << hash.toHex() << " unconfirmed spend: " << prevTXO.toString() << " " << prevInfo.amount.ToString().c_str();
             } else {
                 // prev is a confirmed tx
@@ -302,9 +307,86 @@ auto Mempool::dropTxs(ScriptHashesAffectedSet & scriptHashesAffectedOut,
     return ret;
 }
 
+QVariantMap Mempool::dump() const
+{
+    QVariantMap mp, txMap;
+    for (const auto & [hash, tx] : txs) {
+        if (!tx) continue;
+        QVariantMap m;
+        m["hash"] = tx->hash.toHex();
+        m["sizeBytes"] = tx->sizeBytes;
+        m["fee"] = tx->fee.ToString().c_str();
+        m["hasUnconfirmedParentTx"] = tx->hasUnconfirmedParentTx;
+        static const auto TXOInfo2Map = [](const TXOInfo &info) -> QVariantMap {
+            return QVariantMap{
+                { "amount", QString::fromStdString(info.amount.ToString()) },
+                { "scriptHash", info.hashX.toHex() },
+            };
+        };
+        QVariantMap txos;
+        IONum num = 0;
+        for (const auto & info : tx->txos) {
+            QVariantMap infoMap;
+            if (info.isValid())
+                infoMap = TXOInfo2Map(info);
+            else
+                infoMap = QVariantMap{
+                    { "amount" , QVariant() },
+                    { "scriptHash", QVariant() },
+                    { "comment", "OP_RETURN output not indexed"},
+                };
+            txos[QString::number(num++)] = infoMap;
+        }
+        m["txos"] = txos;
+        QVariantMap hxs;
+        static const auto IOInfo2Map = [](const Mempool::Tx::IOInfo &inf) -> QVariantMap {
+            QVariantMap ret;
+#if QT_VERSION < QT_VERSION_CHECK(5, 14, 0)
+            const auto vl = QVariantList::fromStdList( Util::toList<std::list<QVariant>>(inf.utxo) );
+#else
+            const auto vl = Util::toList<QVariantList>(inf.utxo);
+#endif
+            ret["utxos"] = vl;
+            ret["utxos (BucketCount)"] = qlonglong(inf.utxo.bucket_count());
+            ret["utxos (LoadFactor)"] = QString::number(double(inf.utxo.load_factor()), 'f', 4);
+            QVariantMap cs;
+            for (const auto & [txo, info] : inf.confirmedSpends)
+                cs[txo.toString()] = TXOInfo2Map(info);
+            ret["confirmedSpends"] = cs;
+            ret["confirmedSpends (LoadFactor)"] = QString::number(double(inf.confirmedSpends.load_factor()), 'f', 4);
+            QVariantMap us;
+            for (const auto & [txo, info] : inf.unconfirmedSpends)
+                us[txo.toString()] = TXOInfo2Map(info);
+            ret["unconfirmedSpends"] = us;
+            ret["unconfirmedSpends (LoadFactor)"] = QString::number(double(inf.unconfirmedSpends.load_factor()), 'f', 4);
+            return ret;
+        };
+        for (const auto & [sh, ioinfo] : tx->hashXs)
+            hxs[sh.toHex()] = IOInfo2Map(ioinfo);
+        m["hashXs"] = hxs;
+        m["hashXs (LoadFactor)"] = QString::number(double(tx->hashXs.load_factor()), 'f', 4);
+
+        txMap[hash.toHex()] = m;
+    }
+    mp["txs"] = txMap;
+    mp["txs (LoadFactor)"] = QString::number(double(txs.load_factor()), 'f', 4);
+    QVariantMap hxs;
+    for (const auto & [sh, txset] : hashXTxs) {
+        QVariantList l;
+        for (const auto & tx : txset)
+            if (tx) l.push_back(tx->hash.toHex());
+        hxs[sh.toHex()] = l;
+    }
+    mp["hashXTxs"] = hxs;
+    mp["hashXTxs (LoadFactor)"] = QString::number(double(hashXTxs.load_factor()), 'f', 4);
+
+    return mp;
+}
+
 #ifdef ENABLE_TESTS
 #include "App.h"
 #include "BTC.h"
+#include "Json/Json.h"
 #include "Util.h"
 
 #include "bitcoin/streams.h"
@@ -402,11 +484,12 @@ namespace {
             Log() << "Delta phys: " << QString::number((mem.phys - mem0.phys) / 1024.0, 'f', 1) << " KiB";
         }
 
-        Log() << "-------------------------------------------------------------------------------";
+        Log() << QString(79, QChar{'-'});
 
         {
             const auto t0 = Util::getTimeMicros();
             decltype(Util::getTimeMicros()) actualTimeCost = 0;
+            bool dumped = false;
             // iterate each time, dropping leaves from mempool
             for (int ct = 1; !mempool.txs.empty(); ++ct) {
                 Mempool::TxHashSet txids;
@@ -503,6 +586,13 @@ namespace {
                     }
                 }
 
+                QVariantMap dumpBefore;
+                if (!dumped && mempool.txs.size() < 20) {
+                    // dump once when we reach 20
+                    dumped = true;
+                    dumpBefore = mempool.dump();
+                }
+
                 Mempool::ScriptHashesAffectedSet shset;
                 //Debug::forceEnable = true;
                 const auto t1 = Util::getTimeMicros();
@@ -516,6 +606,15 @@ namespace {
                       << " value: " << QString::fromStdString(beforeAmt.ToString()) << " -> " << QString::fromStdString(value.ToString())
                       << " (" << QString::fromStdString((value - beforeAmt).ToString()) << ")"
                       << " in " << QString::number((t2-t1)/1e3, 'f', 1) << " msec";
+                if (!dumpBefore.isEmpty()) {
+                    const QVariantMap dumpAfter = mempool.dump();
+                    Log() << QString(79, QChar{'-'});
+                    Log() << "Dump, before:";
+                    Log() << Json::toUtf8(dumpBefore);
+                    Log() << "Dump, after:";
+                    Log() << Json::toUtf8(dumpAfter);
+                    Log() << QString(79, QChar{'-'});
+                }
                 if (stats.oldSize - stats.newSize != txids.size())
                     throw Exception("New tx counds are not as expected!");
                 if (shset != expected.affected)
