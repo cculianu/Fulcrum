@@ -26,6 +26,7 @@
 #include "ThreadPool.h"
 #include "TXO.h"
 
+#include "bitcoin/amount.h"
 #include "bitcoin/transaction.h"
 #include "robin_hood/robin_hood.h"
 
@@ -78,6 +79,8 @@ void Controller::startup()
         }
         // set the atomic -- this affects how we parse blocks, etc
         coinType = ctype;
+        if (ctype != BTC::Coin::Unknown)
+            bitcoin::SetCurrencyUnit(coin.toStdString());
     }
 
 
@@ -197,7 +200,9 @@ void Controller::on_bitcoinCoreDetection(bool iscore)
         // We had no coin set in DB, but we just detected the coin, set it now and return.
         // This is the common case with no misconfiguration.
         coinType = detectedtype;
-        storage->setCoin(BTC::coinToName(detectedtype)); // thread-safe call to storage, ok to do here.
+        const auto coinName = BTC::coinToName(detectedtype);
+        storage->setCoin(coinName); // thread-safe call to storage, ok to do here.
+        bitcoin::SetCurrencyUnit(coinName.toStdString());
         return;
     }
     if (ourtype != detectedtype) {
@@ -628,7 +633,7 @@ void SynchMempoolTask::processResults()
         emit errored();
         return;
     }
-    const auto & [oldSize, newSize, oldNumAddresses, newNumAddresses] = [this] {
+    const auto [oldSize, newSize, oldNumAddresses, newNumAddresses] = [this] {
         const auto getFromDB = [this](const TXO &prevTXO) -> std::optional<TXOInfo> {
             // this is a callback called from whithin addNewTxs() below when encountering
             // a confirmed spend.
