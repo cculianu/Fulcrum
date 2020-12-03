@@ -447,7 +447,7 @@ namespace {
             uint64_t version;
             file >> version;
             constexpr uint64_t BCHN_BTC_VERSION = 1, BU_VERSION = 1541030400;
-            if (!std::set{{BCHN_BTC_VERSION, BU_VERSION}}.count(version))
+            if (!std::set<uint64_t>({BCHN_BTC_VERSION, BU_VERSION}).count(version))
                 throw Exception(QString("Unknown mempool.dat version: %1").arg(qulonglong(version)));
 
             uint64_t num;
