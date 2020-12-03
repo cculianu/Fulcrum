@@ -737,7 +737,7 @@ void SynchMempoolTask::doDLNextTx()
 void SynchMempoolTask::doGetRawMempool()
 {
     submitRequest("getrawmempool", {false}, [this](const RPC::Message & resp){
-        int newCt = 0;
+        std::size_t newCt = 0, droppedCt = 0;
         const QVariantList txidList = resp.result().toList();
         Mempool::TxHashSet droppedTxs;
         {
@@ -777,17 +777,17 @@ void SynchMempoolTask::doGetRawMempool()
             // mempool is the case here even after having released and re-acquired the lock.
             auto [mempool, lock] = storage->mutableMempool();
             const auto res = mempool.dropTxs(scriptHashesAffected /* will upate set */, droppedTxs, TRACE);
-            const std::size_t sizeDiff = res.oldSize - res.newSize;
-            if (UNLIKELY(sizeDiff != droppedTxs.size())) {
-                Warning() << "WARNING: Synch mempool expected to drop " << droppedTxs.size() << ", but only dropped "
-                          << sizeDiff << " -- This should never happen! FIXME!";
+            droppedCt = res.oldSize - res.newSize;
+            if (UNLIKELY(droppedCt != droppedTxs.size())) {
+                Warning() << "WARNING: Synch mempool expected to drop " << droppedTxs.size() << ", but in fact dropped "
+                          << droppedCt << " -- This should never happen! FIXME!";
             }
-            DebugM("Dropped ", sizeDiff, " txs from mempool (", res.oldNumAddresses-res.newNumAddresses,
+            DebugM("Dropped ", droppedCt, " txs from mempool (", res.oldNumAddresses-res.newNumAddresses,
                    " addresses), new mempool size: ", res.newSize, " (", res.newNumAddresses, " addresses)");
         }
 
-        if (newCt)
-            DebugM(resp.method, ": got reply with ", txidList.size(), " items, ", newCt, " new");
+        if (newCt || droppedCt)
+            DebugM(resp.method, ": got reply with ", txidList.size(), " items, ", droppedCt, " dropped, ", newCt, " new");
         isdlingtxs = true;
         expectedNumTxsDownloaded = unsigned(newCt);
         // TX data will be downloaded now, if needed

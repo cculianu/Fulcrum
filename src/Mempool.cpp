@@ -207,8 +207,8 @@ auto Mempool::dropTxs(ScriptHashesAffectedSet & scriptHashesAffectedOut, const T
             for (const auto & [txid, tx] : txs) {
                 if (!tx->hasUnconfirmedParentTx || txids.count(txid))
                     continue; // no unconf. parents or already added
-                for (const auto &[sh, ioinfo] : tx->hashXs) {
-                    for (const auto &[txo, txoinfo] : ioinfo.unconfirmedSpends) {
+                for (const auto & [sh, ioinfo] : tx->hashXs) {
+                    for (const auto & [txo, txoinfo] : ioinfo.unconfirmedSpends) {
                         if (txids.count(txo.txHash)) {
                             // this spends one of the ones in our set! add it since it's a child of something we want to remove.
                             txids.emplace(txid);
