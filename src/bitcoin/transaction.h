@@ -418,7 +418,7 @@ public:
      * Get the total transaction size in bytes.
      * @return Total transaction size in bytes
      */
-    unsigned int GetTotalSize() const;
+    unsigned int GetTotalSize(bool segwit = false) const;
 
     bool IsCoinBase() const {
         return (vin.size() == 1 && vin[0].prevout.IsNull());

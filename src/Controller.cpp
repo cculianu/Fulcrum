@@ -628,134 +628,16 @@ void SynchMempoolTask::processResults()
         emit errored();
         return;
     }
-    size_t oldSize = 0, newSize = 0, oldNumAddresses = 0, newNumAddresses = 0;
-    {
+    const auto & [oldSize, newSize, oldNumAddresses, newNumAddresses] = [this] {
+        const auto getFromDB = [this](const TXO &prevTXO) -> std::optional<TXOInfo> {
+            // this is a callback called from whithin addNewTxs() below when encountering
+            // a confirmed spend.
+            return storage->utxoGetFromDB(prevTXO, false); // this may throw on low-level db error
+        };
+        // exclusive lock; held from here until scope end
         auto [mempool, lock] = storage->mutableMempool(); // grab mempool struct exclusively
-        oldSize = mempool.txs.size();
-        oldNumAddresses = mempool.hashXTxs.size();
-        // first, do new outputs for all tx's, and put the new tx's in the mempool struct
-        for (auto & [hash, pair] : txsDownloaded) {
-            auto & [tx, ctx] = pair;
-            assert(hash == tx->hash);
-            mempool.txs[tx->hash] = tx; // save tx right now to map, since we need to find it later for possible spends, etc if subsequent tx's refer to this tx.
-            IONum n = 0;
-            const auto numTxo = ctx->vout.size();
-            if (LIKELY(tx->txos.size() != numTxo)) {
-                // we do it this way (reserve then resize) to avoid the automatic 2^N prealloc of normal vector .resize()
-                tx->txos.reserve(numTxo);
-                tx->txos.resize(numTxo);
-            }
-            for (const auto & out : ctx->vout) {
-                const auto & script = out.scriptPubKey;
-                if (!BTC::IsOpReturn(script)) {
-                    // UTXO only if it's not OP_RETURN -- can't do 'continue' here as that would throw off the 'n' counter
-                    HashX sh = BTC::HashXFromCScript(out.scriptPubKey);
-                    // the below is a hack to save memory by re-using the same shallow copy of 'sh' each time
-                    auto hxit = mempool.hashXTxs.find(sh);
-                    if (hxit != mempool.hashXTxs.end()) {
-                        // found existing, re-use sh as a shallow copy
-                        sh = hxit->first;
-                    } else {
-                        // new entry, insert, update hxit
-                        auto pair = mempool.hashXTxs.insert({sh, decltype(hxit->second)()});
-                        hxit = pair.first;
-                    }
-                    // end memory saving hack
-                    TXOInfo &txoInfo = tx->txos[n];
-                    txoInfo = TXOInfo{out.nValue, sh, {}, {}};
-                    tx->hashXs[sh].utxo.insert(n);
-                    hxit->second.push_back(tx); // save tx to hashx -> tx vector (amortized constant time insert at end -- we will sort and uniqueify this at end of this function)
-                    scriptHashesAffected.insert(sh);
-                    assert(txoInfo.isValid());
-                }
-                tx->fee -= out.nValue; // update fee (fee = ins - outs, so we "add" the outs as a negative)
-                ++n;
-            }
-            assert(n == numTxo);
-            // . <-- at this point the .txos vec is built, with everything isValid() except for the OP_RETURN outs, which are all !isValid()
-        }
-        // next, do new inputs for all tx's, debiting/crediting either a mempool tx or querying db for the relevant utxo
-        for (auto & [hash, pair] : txsDownloaded) {
-            auto & [tx, ctx] = pair;
-            assert(hash == tx->hash);
-            IONum inNum = 0;
-            for (const auto & in : ctx->vin) {
-                const IONum prevN = IONum(in.prevout.GetN());
-                const TxHash prevTxId = BTC::Hash2ByteArrayRev(in.prevout.GetTxId());
-                const TXO prevTXO{prevTxId, prevN};
-                TXOInfo prevInfo;
-                QByteArray sh; // shallow copy of prevInfo.hashX
-                if (auto it = mempool.txs.find(prevTxId); it != mempool.txs.end()) {
-                    // prev is a mempool tx
-                    tx->hasUnconfirmedParentTx = true; ///< mark the current tx we are processing as having an unconfirmed parent (this is used for sorting later and by the get_mempool & listUnspent code)
-                    auto prevTxRef = it->second;
-                    assert(bool(prevTxRef));
-                    if (prevN >= prevTxRef->txos.size()
-                            || !(prevInfo = prevTxRef->txos[prevN]).isValid())
-                        // defensive programming paranoia
-                        throw InternalError(QString("FAILED TO FIND A VALID PREVIOUS TXOUTN %1:%2 IN MEMPOOL for TxHash: %3 (input %4)")
-                                            .arg(QString(prevTxId.toHex())).arg(prevN).arg(QString(hash.toHex())).arg(inNum));
-                    sh = prevInfo.hashX;
-                    tx->hashXs[sh].unconfirmedSpends[prevTXO] = prevInfo;
-                    prevTxRef->hashXs[sh].utxo.erase(prevN); // remove this spend from utxo set for prevTx in mempool
-                    if (TRACE) Debug() << hash.toHex() << " unconfirmed spend: " << prevTXO.toString() << " " << prevInfo.amount.ToString().c_str();
-                } else {
-                    // prev is a confirmed tx
-                    const auto optTXOInfo = storage->utxoGetFromDB(prevTXO, false); // this may also throw on low-level db error
-                    if (UNLIKELY(!optTXOInfo.has_value())) {
-                        // Uh oh. If it wasn't in the mempool or in the db.. something is very wrong with our code.
-                        // We will throw if missing, and the synch process aborts and hopefully we recover with a reorg
-                        // or a new block or somesuch.
-                        throw InternalError(QString("FAILED TO FIND PREVIOUS TX %1 IN EITHER MEMPOOL OR DB for TxHash: %2 (input %3)")
-                                            .arg(prevTXO.toString()).arg(QString(hash.toHex())).arg(inNum));
-                    }
-                    prevInfo = *optTXOInfo;
-                    sh = prevInfo.hashX;
-                    // hack to save memory by re-using existing sh QByteArray and/or forcing a shallow-copy
-                    auto hxit = tx->hashXs.find(sh);
-                    if (hxit != tx->hashXs.end()) {
-                        // existing found, re-use same unerlying QByteArray memory for sh
-                        sh = prevInfo.hashX = hxit->first;
-                    } else {
-                        // new entry, insert, update hxit
-                        auto pair = tx->hashXs.insert({sh, decltype(hxit->second)()});
-                        hxit = pair.first;
-                    }
-                    // end memory saving hack
-                    hxit->second.confirmedSpends[prevTXO] = prevInfo;
-                    if (TRACE) Debug() << hash.toHex() << " confirmed spend: " << prevTXO.toString() << " " << prevInfo.amount.ToString().c_str();
-                }
-                tx->fee += prevInfo.amount;
-                assert(sh == prevInfo.hashX);
-                mempool.hashXTxs[sh].push_back(tx); // mark this hashX as having been "touched" because of this input (note we push dupes here out of order but sort and uniqueify at the end)
-                scriptHashesAffected.insert(sh);
-                ++inNum;
-            }
-
-            // Now, compactify some data structures to take up less memory by rehashing thier unordered_maps/unordered_sets..
-            // we do this once for each new tx we see.. and it can end up saving tons of space. Note the below structures
-            // are either fixed in size or will only ever shrink as the mempool evolves so this is a good time to do this.
-            tx->hashXs.rehash(tx->hashXs.size());
-            for (auto & [sh, ioinfo] : tx->hashXs) {
-                ioinfo.confirmedSpends.rehash(ioinfo.confirmedSpends.size());  // this is fixed once built
-                ioinfo.unconfirmedSpends.rehash(ioinfo.unconfirmedSpends.size()); // this is fixed once built
-                ioinfo.utxo.rehash(ioinfo.utxo.size()); // this may shrink but we rehash it once now to the largest size it will ever have
-            }
-        }
-
-        // now, sort and uniqueify data structures made temporarily inconsistent above (have dupes, are out-of-order)
-        for (const auto & sh : scriptHashesAffected) {
-            if (auto it = mempool.hashXTxs.find(sh); LIKELY(it != mempool.hashXTxs.end()))
-                Util::sortAndUniqueify<Mempool::TxRefOrdering>(it->second);
-            //else {}
-            // Note: It's possible for the scriptHashesAffected set to refer to sh's no longer in the mempool because
-            // we sometimes retry this task when we detect mempool drops, with the scriptHasesAffected set containing
-            // the dropped address hashes.  This is why the if conditional above exists.
-        }
-
-        newSize = mempool.txs.size();
-        newNumAddresses = mempool.hashXTxs.size();
-    } // release mempool lock
+        return mempool.addNewTxs(scriptHashesAffected, txsDownloaded, getFromDB, TRACE);
+    }();
     if (oldSize != newSize && Debug::isEnabled()) {
         Controller::printMempoolStatusToLog(newSize, newNumAddresses, true, true);
     }

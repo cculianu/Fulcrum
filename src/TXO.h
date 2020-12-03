@@ -101,6 +101,7 @@ struct TXOInfo {
     /// for debug, etc
     bool operator==(const TXOInfo &o) const
         { return amount == o.amount && hashX == o.hashX && confirmedHeight == o.confirmedHeight && txNum == o.txNum; }
+    bool operator!=(const TXOInfo &o) const { return !(*this == o); }
 
     QByteArray toBytes() const noexcept {
         QByteArray ret;

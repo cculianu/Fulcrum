@@ -24,10 +24,7 @@
 #include "bitcoin/amount.h"
 #include "robin_hood/robin_hood.h"
 
-#include <list>
-#include <map>
 #include <memory>
-#include <set>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -123,6 +120,46 @@ struct Mempool
         txs.reserve(size_t(txsSize*0.75));
         hashXTxs.reserve(size_t(hxSize*0.75));
     }
+
+
+    // -- Add to mempool
+
+    /// Used by addNewTxs
+    using NewTxsMap = robin_hood::unordered_flat_map<TxHash, std::pair<Mempool::TxRef, bitcoin::CTransactionRef>, HashHasher>;
+    /// The scriptHashes that were affected by this refresh/synch cycle. Used for notifications.
+    using ScriptHashesAffectedSet = std::unordered_set<HashX, HashHasher>;
+    /// DB getter -- called to retrieve a utxo's scripthash & amount data from the DB. May throw.
+    using GetTXOInfoFromDBFunc = std::function<std::optional<TXOInfo>(const TXO &)>;
+
+    /// Results of add or drop -- some statustics for caller.
+    struct Stats {
+        std::size_t oldSize = 0, newSize = 0;
+        std::size_t oldNumAddresses = 0, newNumAddresses = 0;
+    };
+
+    /// Add a batch of tx's that are new (downloaded from bitcoind) and were not previously in this mempool structure
+    /// Note that all the txs in txsNew *must* be new (must not already exist in this mempool instance).
+    /// scriptHashesAffected is updated for all of the new tx's added.
+    /// This is called by the SynchMempoolTask in Controller.cpp.
+    Stats addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
+                    const NewTxsMap & txsNew,
+                    const GetTXOInfoFromDBFunc & getTXOInfo,
+                    bool TRACE = false);
+
+
+    // -- Drop from mempool
+
+    using TxHashSet = std::unordered_set<TxHash, HashHasher>;
+    /// Drop a bunch of tx's, deleting them from this data structure and reversing the effects of their spends
+    /// in the mempool. This is called by the SynchMempoolTask whenever the bitcoind mempool has droped tx's.
+    /// Note that it is assumed that the caller is not dropping any tx's in the middle of an unconfirmed chain.
+    /// That is, for any tx's that have unconfirmed children, they cannot be dropped unless all their descendants
+    /// are dropped as well in this call. This assumption exists so that some extra checks are skipped here for
+    /// performance.
+    Stats dropTxs(ScriptHashesAffectedSet & scriptHashesAffected,
+                  const TxHashSet & txids,
+                  bool TRACE = false);
+
 
     // -- Fee histogram support (used by mempool.get_fee_histogram RPC) --
 
