@@ -728,8 +728,9 @@ void SynchMempoolTask::doDLNextTx()
         AGAIN();
     },
     [this, hashHex, tx](const RPC::Message &resp) {
-        // Continue on error -- if we fail to retrieve the transaction then it's possible that there was some RBF action
-        // if on BTC, or the tx happened to drop out of mempool for some other reason. We continue anyway.
+        // Retry on error -- if we fail to retrieve the transaction then it's possible that there was some RBF action
+        // if on BTC, or the tx happened to drop out of mempool for some other reason. We must retry to ensure a
+        // consistent view of bitcoind's mempool.
         const auto *const pre = isBTC ? "Tx dropped out of mempool (possibly due to RBF)" : "Tx dropped out of mempool";
         Warning() << pre << ": " << QString(hashHex) << " (error response: " << resp.errorMessage()
                   << "), retrying getrawmempool ...";
