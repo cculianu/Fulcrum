@@ -746,31 +746,29 @@ void SynchMempoolTask::doGetRawMempool()
         {
             // Grab the mempool data struct and lock it *shared*.  This improves performance vs. an exclusive lock here.
             // Since we aren't modifying it.. this is fine.  We are the only subsystem that ever modifies it anyway, so
-            // invariants will hold regardless.
+            // invariants will hold even if we release the lock early, regardless.
             auto [mempool, lock] = storage->mempool();
             droppedTxs = Util::keySet<Mempool::TxHashSet>(mempool.txs);
-            for (const auto & var : txidList) {
-                const auto txidHex = var.toString().trimmed().toLower();
-                const TxHash hash = Util::ParseHexFast(txidHex.toUtf8());
-                if (hash.length() != HashLen) {
-                    Error() << resp.method << ": got an empty tx hash";
-                    emit errored();
-                    return;
-                }
-                static const QVariantList EmptyList; // avoid constructng this for each iteration
-                if (auto it = mempool.txs.find(hash); it != mempool.txs.end()) {
-                    droppedTxs.erase(hash); // mark this tx as "not dropped" since it was in the mempool before and is in the mempool now.
-                    if (TRACE) Debug() << "Existing mempool tx: " << hash.toHex();
-                } else {
-                    if (TRACE) Debug() << "New mempool tx: " << hash.toHex();
-                    ++newCt;
-                    Mempool::TxRef tx = std::make_shared<Mempool::Tx>();
-                    tx->hashXs.max_load_factor(1.0); // hopefully this will save some memory by expicitly setting it to 1.0
-                    tx->hash = hash;
-                    // Note: we end up calculating the fee ourselves since I don't trust doubles here. I wish bitcoind would have returned sats.. :(
-                    txsNeedingDownload[hash] = tx;
-                }
-                // at this point we have a valid tx ptr
+        }
+        for (const auto & var : txidList) {
+            const auto txidHex = var.toString().trimmed().toLower();
+            const TxHash hash = Util::ParseHexFast(txidHex.toUtf8());
+            if (hash.length() != HashLen) {
+                Error() << resp.method << ": got an invalid tx hash: " << txidHex;
+                emit errored();
+                return;
+            }
+            if (auto it = droppedTxs.find(hash); it != droppedTxs.end()) {
+                droppedTxs.erase(it); // mark this tx as "not dropped" since it was in the mempool before and is in the mempool now.
+                if (TRACE) Debug() << "Existing mempool tx: " << hash.toHex();
+            } else {
+                if (TRACE) Debug() << "New mempool tx: " << hash.toHex();
+                ++newCt;
+                Mempool::TxRef tx = std::make_shared<Mempool::Tx>();
+                tx->hashXs.max_load_factor(.9); // hopefully this will save some memory by expicitly setting max table size to 90%
+                tx->hash = hash;
+                // Note: we end up calculating the fee ourselves since I don't trust doubles here. I wish bitcoind would have returned sats.. :(
+                txsNeedingDownload[hash] = tx;
             }
         }
         if (!droppedTxs.empty()) {
@@ -788,7 +786,7 @@ void SynchMempoolTask::doGetRawMempool()
             if (UNLIKELY(droppedCt != droppedTxs.size())) {
                 Warning() << "Synch mempool expected to drop " << droppedTxs.size() << ", but in fact dropped "
                           << droppedCt << " -- retrying getrawmempool";
-                redoFromStart(); // reset back to getrawmempool again unless redoCt exceeds kRedoCtMax, in which case errors out
+                redoFromStart(); // set state such that the next process() call will do getrawmempool again unless redoCt exceeds kRedoCtMax, in which case errors out
                 return;
             }
         }
@@ -797,6 +795,8 @@ void SynchMempoolTask::doGetRawMempool()
             DebugM(resp.method, ": got reply with ", txidList.size(), " items, ", droppedCt, " dropped, ", newCt, " new");
         isdlingtxs = true;
         expectedNumTxsDownloaded = unsigned(newCt);
+        txsDownloaded.reserve(expectedNumTxsDownloaded);
+        txsWaitingForResponse.reserve(expectedNumTxsDownloaded);
 
         // TX data will be downloaded now, if needed
         AGAIN();
