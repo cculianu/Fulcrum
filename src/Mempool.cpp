@@ -67,7 +67,7 @@ auto Mempool::addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
                         const GetTXOInfoFromDBFunc & getTXOInfo,
                         bool TRACE) -> Stats
 {
-    const auto t0 = Util::getTimeMicros();
+    const auto t0 = Tic();
     Stats ret;
     auto & [oldSize, newSize, oldNumAddresses, newNumAddresses, elapsedMsec] = ret;
     oldSize = this->txs.size();
@@ -200,7 +200,7 @@ auto Mempool::addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
 
     newSize = this->txs.size();
     newNumAddresses = this->hashXTxs.size();
-    elapsedMsec = (Util::getTimeMicros() - t0) / 1e3;
+    elapsedMsec = t0.msec<decltype(elapsedMsec)>();
     return ret;
 }
 
@@ -214,7 +214,7 @@ std::size_t Mempool::growTxHashSetToIncludeDescendants(const char *const logpfx,
 
     // "recursively" find txids spending from a source set. Implicitly keeps adding
     // to the resulting set until all dependant txs in mempool are covered.
-    const auto t0 = Debug::isEnabled() ? Util::getTimeMicros() : 0;
+    const auto t0 = Tic();
     do {
         ++iterct;
         found = false;
@@ -242,7 +242,7 @@ std::size_t Mempool::growTxHashSetToIncludeDescendants(const char *const logpfx,
 
     using Util::Pluralize;
     DebugM(logpfx, ": iterated ", iterct, Pluralize(" time", iterct), " to add ", added, Pluralize(" additional child tx", added),
-           " in ", QString::number((Util::getTimeMicros()-t0)/1e3, 'f', 2), " msec");
+           " in ", t0.msecStr(2), " msec");
     return added;
 }
 
@@ -254,7 +254,7 @@ std::size_t Mempool::growTxHashSetToIncludeDescendants(TxHashSet &txids, const b
 auto Mempool::dropTxs(ScriptHashesAffectedSet & scriptHashesAffectedOut, const TxHashSet & txidsIn, bool TRACE,
                       std::optional<float> rehashMaxLoadFactor) -> Stats
 {
-    const auto t0 = Util::getTimeMicros();
+    const auto t0 = Tic();
     auto txids = txidsIn;
     // also drop txs that spend from the txids in the above set as well -- since we
     // cannot drop tx's in the middle of a chain of spends due to the inconsistency
@@ -376,7 +376,7 @@ auto Mempool::dropTxs(ScriptHashesAffectedSet & scriptHashesAffectedOut, const T
         if (hashXTxs.load_factor() <= *rehashMaxLoadFactor)
             hashXTxs.rehash(0);  // shrink to fit
     }
-    elapsedMsec = (Util::getTimeMicros() - t0) / 1e3;
+    elapsedMsec = t0.msec<decltype(elapsedMsec)>();
     return ret;
 }
 
@@ -469,6 +469,44 @@ QVariantMap Mempool::dump() const
 #include <cstdio>
 #include <set>
 
+bool Mempool::deepCompareEqual(const Mempool &o) const noexcept
+{
+    if (this == &o)
+        return true;
+    if (txs.size() != o.txs.size())
+        return false;
+    if (hashXTxs.size() != o.hashXTxs.size())
+        return false;
+    long ct = 0;
+    Defer d([&ct]{ Debug() << "deepCompareEqual: iterated over " << ct << Util::Pluralize(" item", ct); });
+    for (const auto & [txid, tx] : txs) {
+        ++ct;
+        auto it = o.txs.find(txid);
+        if (it == o.txs.end()) return false;
+        // compare first the shared_ptr (for short-circuit pointer equality) and if that fails, do actual deep compare of Tx object
+        const auto & otx = it->second;
+        if (tx != otx && *tx != *otx) return false;
+        // otherwise equal so far...
+    }
+    // compare each of the hashXTxs
+    for (const auto & [sh, vec] : hashXTxs) {
+        ++ct;
+        auto it = o.hashXTxs.find(sh);
+        if (it == o.hashXTxs.end()) return false;
+        const auto & ovec = it->second;
+        if (vec.size() != ovec.size()) return false;
+        for (std::size_t i = 0; i < vec.size(); ++i) {
+            ++ct;
+            // compare first the shared_ptr (for short-circuit pointer equality) and if that fails, do actual deep compare of Tx object
+            if (vec[i] != ovec[i] && *vec[i] != *ovec[i])
+                return false;
+        }
+        // otherwise equal so far...
+    }
+    // couldn't find an inequality, return true
+    return true;
+}
+
 namespace {
     using MPData = Mempool::NewTxsMap;
 
@@ -480,7 +518,7 @@ namespace {
             throw Exception(QString("Failed to open mempool file '%1'").arg(fname));
 
         std::size_t dataTotal = 0;
-        const auto t0 = Util::getTimeMicros();
+        const Tic t0;
 
         MPData ret;
         bool isSegWit = false;
@@ -513,7 +551,7 @@ namespace {
         } catch (const std::exception &e) {
             throw Exception(QString("Failed to deserialize mempool data: %1").arg(e.what()));
         }
-        Log("Imported mempool: %d txs, %1.2f MB in %1.3f msec", int(ret.size()), dataTotal / 1e6, (Util::getTimeMicros()-t0)/1e3);
+        Log("Imported mempool: %d txs, %1.2f MB in %1.3f msec", int(ret.size()), dataTotal / 1e6, t0.msec<double>());
         return {std::move(ret), isSegWit};
     }
 
@@ -521,9 +559,8 @@ namespace {
         Debug::forceEnable = true;
         const char * const mpdat = std::getenv("MPDAT");
         if (!mpdat) {
-            Warning() << "Mempool benchmark requires the MPDAT environment variable, which should be a path to a "
-                         "mempool.dat taken from either BCHN, BU, or a BTC (Core) bitcoind..";
-            throw Exception("No MPDAT specified");
+            throw Exception("Mempool benchmark requires the MPDAT environment variable, which should be a path to a "
+                            "mempool.dat taken from either BCHN, BU, or a BTC (Core) bitcoind..");
         }
 
         const auto mem0 = Util::getProcessMemoryUsage();
@@ -531,9 +568,20 @@ namespace {
               << " KiB, virtual " << QString::number(mem0.virt / 1024.0, 'f', 1) << " KiB";
 
 
-        auto && [mpd, isSegWit] = loadMempoolDat(mpdat);
+        const auto && [mpd, isSegWit] = loadMempoolDat(mpdat);
 
         if (isSegWit) bitcoin::SetCurrencyUnit("BTC");
+
+        static const auto deepCopyMPD = [](const MPData &other) -> MPData {
+            MPData ret;
+            for (const auto & [txid, pair] : other) {
+                const auto & [tx, ctx] = pair;
+                // we only copy the TxRef; the CTransactionRef is immutable and it doesn't need to be copied
+                auto txCopy = std::make_shared<Mempool::Tx>(*tx);
+                ret.emplace(std::piecewise_construct, std::forward_as_tuple(txid), std::forward_as_tuple(txCopy, ctx));
+            }
+            return ret;
+        };
 
         enum IterMode { DropOnlyLeaves = 0, DropAnyTx = 1 };
         static constexpr std::array<IterMode, 2> iterModes = { DropOnlyLeaves, DropAnyTx };
@@ -555,10 +603,10 @@ namespace {
             Mempool mempool;
             {
                 Mempool::ScriptHashesAffectedSet shset;
-                const auto t0 = Util::getTimeMicros();
-                const auto stats = mempool.addNewTxs(shset, mpd, getTXOInfo);
-                const auto tf = Util::getTimeMicros();
-                Log() << "Added to mempool in " << QString::number((tf-t0)/1e3, 'f', 3) << " msec."
+                auto t0 = Tic();
+                const auto stats = mempool.addNewTxs(shset, deepCopyMPD(mpd), getTXOInfo);
+                t0.fin();
+                Log() << "Added to mempool in " << t0.msecStr() << " msec."
                       << " Scripthashes: " << shset.size() << ", size: " << stats.newSize << ", addresses " << stats.newNumAddresses;
                 shset.clear();
                 const auto mem = Util::getProcessMemoryUsage();
@@ -581,8 +629,8 @@ namespace {
             Log();
 
             {
-                const auto t0 = Util::getTimeMicros();
-                decltype(Util::getTimeMicros()) actualTimeCost = 0;
+                auto t0 = Tic();
+                qint64 actualTimeCost = 0;
                 bool dumped = false;
                 // iterate each time, dropping leaves from mempool
                 for (int ct = 1; !mempool.txs.empty(); ++ct) {
@@ -698,17 +746,17 @@ namespace {
                     }
 
                     Mempool::ScriptHashesAffectedSet shset;
-                    const auto t1 = Util::getTimeMicros();
+                    auto t1 = Tic();
                     const auto stats = mempool.dropTxs(shset, txids, false);
-                    const auto t2 = Util::getTimeMicros();
-                    actualTimeCost += t2 - t1;
+                    t1.fin();
+                    actualTimeCost += t1.usec();
                     const auto [utxos, value] = getUnconfUtxos();
                     Log() << "Iter " << ct << ": oldSize: " << stats.oldSize << " newSize: " << stats.newSize
                           << " oldNumAddresses: " << stats.oldNumAddresses << " newNumAddresses: " << stats.newNumAddresses
                           << " shsaffected: " << shset.size()  << " utxoSetSize: " << beforeSize << " -> " << utxos.size()
                           << " value: " << QString::fromStdString(beforeAmt.ToString()) << " -> " << QString::fromStdString(value.ToString())
                           << " (" << QString::fromStdString((value - beforeAmt).ToString()) << ")"
-                          << " in " << QString::number((t2-t1)/1e3, 'f', 1) << " msec";
+                          << " in " << t1.msecStr(1) << " msec";
                     if (!dumpBefore.isEmpty()) {
                         const QVariantMap dumpAfter = mempool.dump();
                         Log() << QString(79, QChar{'-'});
@@ -730,29 +778,35 @@ namespace {
                             throw Exception("Resultant utxo totals are not as expected!");
                     } else if (iterMode == DropAnyTx) {
                         // In this mode the only way to verify is to build a second mempool with the same txid set
-                        // as the first -- this checks and spends and everything else is consistent.
+                        // as the first -- this checks that spends and everything else is consistent.
                         // This of course assumes that the "addTxs" code is bug-free and always leads to consistency
                         // (whcih is the case since the addTxs code is very mature at this point).
-                        // Note: The below is very slow.
+                        // Note: The below is very *very* slow.
+                        Log() << "Verifying resultant mempool (this may take a while) ...";
                         Mempool mempool2;
                         Mempool::NewTxsMap adds;
+                        auto t0 = Tic();
+                        auto mpd2 = deepCopyMPD(mpd); // take a deep copy of the original mempool to get unique "untouched" TxRefs
+                        Debug() << "Deep copied txs in " << t0.msecStr() << " msec";
                         for (const auto & [txid, _] : mempool.txs) {
-                            auto it = mpd.find(txid);
-                            if (it == mpd.end()) throw InternalError(QString("TxId %1 not found. This should never happen.").arg(QString(txid.toHex())));
+                            auto it = mpd2.find(txid);
+                            if (it == mpd2.end())
+                                throw InternalError(QString("TxId %1 not found. This should never happen.").arg(QString(txid.toHex())));
                             if (txids.count(txid))
                                 throw Exception("Drop verification failed -- a txid in the drop set is still in the mempool structure!");
                             adds.insert(*it);
                         }
                         Mempool::ScriptHashesAffectedSet _;
+                        auto t1 = Tic();
                         mempool2.addNewTxs(_, adds, getTXOInfo);
-                        if (mempool.txs != mempool2.txs)
-                            throw Exception("Drop verification failed -- mempool.txs != mempool2.txs");
-                        if (mempool.hashXTxs != mempool2.hashXTxs)
-                            throw Exception("Drop verification failed -- mempool.hashXTxs != mempool2.hashXTxs");
+                        Debug() << "Added to a dupe mempool in " << t1.msecStr() << " msec";
+                        if (!mempool.deepCompareEqual(mempool2))
+                            throw Exception("Drop verification failed -- mempool != mempool2");
+                        Log() << "Verified ok in " << t0.secsStr() << " secs";
                     }
                 }
-                const auto tf = Util::getTimeMicros();
-                Log() << "Dropped all from mempool in " << QString::number((tf-t0)/1e3, 'f', 3)
+                t0.fin();
+                Log() << "Dropped all from mempool in " << t0.msecStr()
                       << " msec, actual \"non-verification\" processing time was " << QString::number(actualTimeCost / 1e3, 'f', 3) << " msec";
                 const auto mem = Util::getProcessMemoryUsage();
                 Log() << "Mem usage: physical " << QString::number(mem.phys / 1024.0, 'f', 1)

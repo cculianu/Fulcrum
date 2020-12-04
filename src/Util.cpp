@@ -127,7 +127,7 @@ namespace Util {
     }
 
 #if defined(Q_OS_LINUX)
-    static int64_t getAbsTimeNS()
+    static int64_t getAbsTimeNS() noexcept
     {
         struct timespec ts;
         // Note: CLOCK_MONOTONIC does *not* include the time spent suspended. If we want that, then we can Use
@@ -135,25 +135,27 @@ namespace Util {
         if (clock_gettime(CLOCK_MONOTONIC, &ts)) {
             ts = {0, 0};
             // We can't do a Warning() or Error() here because that would cause infinite recursion.
-            // This is an unlikely and also pretty fatal situation, though, so we must warn
-            std::cerr << "Fatal: clock_gettime for CLOCK_MONOTONIC returned error status: " << strerror(errno) << std::endl;
+            // This is an unlikely and also pretty fatal situation, though, so we must warn.
+            // Also we will use these noexcept functions here to preserve our noexcept-ness
+            using namespace AsyncSignalSafe;
+            writeStdErr(SBuf("Fatal: clock_gettime for CLOCK_MONOTONIC returned error status: ", std::strerror(errno)));
         }
         return int64_t(ts.tv_sec * 1000000000LL) + int64_t(ts.tv_nsec);
     }
     static int64_t absT0 = getAbsTimeNS();
-    qint64 getTimeNS() {
+    qint64 getTimeNS() noexcept {
         const auto now = getAbsTimeNS();
         return now - absT0;
     }
-    qint64 getTime() {
+    qint64 getTime() noexcept {
         return getTimeNS()/1000000LL;
     }
-    bool isClockSteady() { return true; }
+    bool isClockSteady() noexcept { return true; }
 #elif defined(Q_OS_WINDOWS)
     // Windows lacks a decent high resolution clock source on some C++ implementations (such as MinGW). So we
     // query the OS's QPC mechanism, which, on Windows 7+ is very fast to query and guaranteed to be accurate, and also
     // monotocic ("steady").
-    static int64_t getAbsTimeNS()
+    static int64_t getAbsTimeNS() noexcept
     {
         static __int64 freq = 0;
         __int64 ct, factor;
@@ -167,35 +169,35 @@ namespace Util {
         return int64_t(ct * factor);
     }
     static qint64 absT0 = qint64(getAbsTimeNS()); // initializes static data inside getAbsTimeNS() once at startup in main thread.
-    qint64 getTimeNS() {
+    qint64 getTimeNS() noexcept {
         const auto now = getAbsTimeNS();
         return now - absT0;
     }
-    qint64 getTime() {
+    qint64 getTime() noexcept {
         return getTimeNS()/1000000LL;
     }
-    bool isClockSteady() { return true; }
+    bool isClockSteady() noexcept { return true; }
 #else
     // MacOS or generic platform (on MacOS with clang this happens to be very accurate)
     static const auto t0 = std::chrono::high_resolution_clock::now();
-    qint64 getTime() {
+    qint64 getTime() noexcept {
         const auto now = std::chrono::high_resolution_clock::now();
         return std::chrono::duration_cast<std::chrono::milliseconds>(now - t0).count();
     }
-    qint64 getTimeNS() {
+    qint64 getTimeNS() noexcept {
         const auto now = std::chrono::high_resolution_clock::now();
         return std::chrono::duration_cast<std::chrono::nanoseconds>(now - t0).count();
     }
-    bool isClockSteady() {
+    bool isClockSteady() noexcept {
         return std::chrono::high_resolution_clock::is_steady;
     }
 #endif
 
-    qint64 getTimeMicros() {
+    qint64 getTimeMicros() noexcept {
         return getTimeNS()/1000LL;
     }
 
-    double getTimeSecs() {
+    double getTimeSecs() noexcept {
         return double(getTime()) / 1e3;
     }
 
@@ -412,7 +414,7 @@ namespace Util {
             inline constexpr std::array<char, 1> NL{0};
 #endif
         }
-        void writeStdErr(const std::string_view &sv, bool wrnl) {
+        void writeStdErr(const std::string_view &sv, bool wrnl) noexcept {
             constexpr int stderr_fd = 2; /* this is the case on all platforms */
             writeFD(stderr_fd, sv.data(), sv.length());
             if (wrnl && NL.size() > 1)
@@ -790,31 +792,31 @@ namespace {
         // Lasty, benchmark encoding hex
         BVec res; res.reserve(vec1.size());
         // Util::ToHexFast
-        auto t0 = Util::getTimeNS();
+        auto t0 = Tic();
         for (const auto & ba : vec1) {
             res.emplace_back(Util::ToHexFast(ba));
         }
-        auto elapsed = (Util::getTimeNS() - t0)/1000LL;
-        Log() << "Util::ToHexFast took: " << elapsed << " usec";
+        t0.fin();
+        Log() << "Util::ToHexFast took: " << t0.usec() << " usec";
         res.clear(); res.reserve(vec1.size());
         // Qt toHex()
-        t0 = Util::getTimeNS();
+        t0 = Tic();
         for (const auto & ba : vec1) {
             res.emplace_back(ba.toHex());
         }
-        elapsed = (Util::getTimeNS() - t0)/1000LL;
-        Log() << "Qt toHex took: " << elapsed << " usec";
+        t0.fin();
+        Log() << "Qt toHex took: " << t0.usec() << " usec";
         // bitcoind HexStr()
         res.clear();
         {
             std::vector<std::string> res;
             res.reserve(vec1.size());
-            t0 = Util::getTimeNS();
+            t0 = Tic();
             for (const auto & ba : vec1) {
                 res.emplace_back(bitcoin::HexStr(ba.cbegin(), ba.cend()));
             }
-            elapsed = (Util::getTimeNS() - t0)/1000LL;
-            Log() << "bitcoind HexStr took: " << elapsed << " usec";
+            t0.fin();
+            Log() << "bitcoind HexStr took: " << t0.usec() << " usec";
         }
     }
 

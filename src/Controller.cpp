@@ -661,12 +661,12 @@ void SynchMempoolTask::processResults()
     ConfirmedSpendCache cache;
     cache.reserve(128); // reserve a bit of memory so we don't start from 0 and so we don't have to rehash right away
     struct { std::size_t nTxs, nHashXs; } sizes; // save the numeber of txs in mempool to detect if another thread modified mempool
-    qint64 cachet0, cachetf;
+    Tic cachet0;
     {
         // we do this with the shared lock (read lock) -- this at least prevents block processing from taking mempool away as we run
         // but it also allows concurrency with clients, etc that want their requests serviced while we read from disk.
         auto [mempool, lock] = storage->mempool();
-        cachet0 = Util::getTimeMicros();
+        cachet0 = Tic(); // start timestamp
         // save mempool size to detect mempool change after we relese and re-acquire the lock in exclusive mode
         // this hopefully detects if the block processing task somehow ran in between the time we release and reacquire
         std::tie(sizes.nTxs, sizes.nHashXs) = std::tuple(mempool.txs.size(), mempool.hashXTxs.size());
@@ -682,11 +682,11 @@ void SynchMempoolTask::processResults()
                 cache.emplace(txo, storage->utxoGetFromDB(txo, false)); // may throw on very low level db error; returns nullopt if not found
             }
         }
-        cachetf = Util::getTimeMicros();
+        cachet0.fin(); // end timestamp
     }
     if (cache.size())
         DebugM("Mempool: pre-cache of ", cache.size(), Util::Pluralize(" confirmed spend", cache.size()),
-               " from db took ", QString::number((cachetf-cachet0) / 1e3, 'f', 3), " msec");
+               " from db took ", cachet0.msecStr(), " msec");
 
     // At this point we pre-cached all the confirmed spends (we hope) with the shared lock held. We did this
     // because holding the exclusive lock for all this time while accessing the db would be *very* slow on

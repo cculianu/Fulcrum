@@ -28,6 +28,7 @@
 
 #include <memory>
 #include <optional>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -67,9 +68,19 @@ struct Mempool
             /// item that gets deleted from here in their own IOInfo::unconfirmedSpends map).
             /// + Items here get _added_ to the "unconfirmed" balance in RPC get_balance.
             std::unordered_set<IONum> utxo; ///< IONums which are indices into the txos vector declared above. We use an unordered_set here because it's more efficient than a regular set, and we don't care about order anyway.
+
+            bool operator==(const IOInfo &o) const noexcept {
+                return std::tie(confirmedSpends, unconfirmedSpends, utxo) == std::tie(o.confirmedSpends, o.unconfirmedSpends, o.utxo);
+            }
+            bool operator!=(const IOInfo &o) const noexcept { return !(*this == o); }
         };
 
-        bool operator<(const Tx &o) const {
+        /// This should always contain all the HashX's involved in this tx. Note the use of unordered_map which can
+        /// save space vs. robin_hood for immutable maps (which this is, once built)
+        std::unordered_map<HashX, IOInfo, HashHasher> hashXs;
+
+
+        bool operator<(const Tx &o) const noexcept {
             // paranoia -- bools may sometimes not always be 1 or 0 in pathological circumstances.
             const uint8_t nParentMe = hasUnconfirmedParentTx ? 1 : 0,
                           nParentOther = o.hasUnconfirmedParentTx ? 1 : 0;
@@ -77,9 +88,12 @@ struct Mempool
             return std::tie(nParentMe, hash) < std::tie(nParentOther, o.hash);
         }
 
-        /// This should always contain all the HashX's involved in this tx. Note the use of unordered_map which can
-        /// save space vs. robin_hood for immutable maps (which this is, once built)
-        std::unordered_map<HashX, IOInfo, HashHasher> hashXs;
+        bool operator==(const Tx &o) const noexcept {
+            return std::tie(hash, sizeBytes, fee, hasUnconfirmedParentTx, txos, hashXs)
+                    == std::tie(o.hash, o.sizeBytes, o.fee, o.hasUnconfirmedParentTx, o.txos, o.hashXs);
+        }
+        bool operator!=(const Tx &o) const noexcept { return !(*this == o); }
+
     };
 
     using TxRef = std::shared_ptr<Tx>;
@@ -170,16 +184,25 @@ struct Mempool
 
     // -- Misc. utility
 
+    /// Note: clearing the mempool is only done on block undo. Client code should in general just use dropTxs().
+    void clear();
+
+protected:
     /// Given a set of txids in this Mempool, grow the set to encompass all descendant tx's that spend
     /// from the initial set.  Will keep iterating until it cennot grow the set any longer.
     /// dropTxs() implicitly calls this.
     std::size_t growTxHashSetToIncludeDescendants(TxHashSet &txids, bool TRACE = false) const;
 
-    /// Note: clearing the mempool is only done on block undo. Client code should in general just use dropTxs().
-    void clear();
-
-protected:
 
     // Actual implementation of same-named function
     std::size_t growTxHashSetToIncludeDescendants(const char *const logprefix, TxHashSet &txids, bool TRACE) const;
+
+#ifdef ENABLE_TESTS
+public:
+    /// Returns true if this compares equal to `other`, does a deep compare of the underlying
+    /// Tx objects (and not the TxRef shared_ptrs -- but the actual underlying Tx data).
+    ///
+    /// This is very slow -- used only in the mempool bench.
+    bool deepCompareEqual(const Mempool &other) const noexcept;
+#endif
 };

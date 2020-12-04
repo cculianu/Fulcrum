@@ -239,11 +239,11 @@ public:
 namespace Util {
     extern QString basename(const QString &);
 
-    qint64 getTime(); ///< returns a timestamp in milliseconds
-    qint64 getTimeMicros(); ///< returns a timestamp in microseconds
-    qint64 getTimeNS(); ///< returns a timestamp in nanoseconds
-    double getTimeSecs(); ///< returns a timestamp in seconds (resolution is milliseconds precision)
-    bool isClockSteady(); ///< returns true if the above timestamp clock is steady (monotonic).
+    qint64 getTime() noexcept; ///< returns a timestamp in milliseconds
+    qint64 getTimeMicros() noexcept; ///< returns a timestamp in microseconds
+    qint64 getTimeNS() noexcept; ///< returns a timestamp in nanoseconds
+    double getTimeSecs() noexcept; ///< returns a timestamp in seconds (resolution is milliseconds precision)
+    bool isClockSteady() noexcept; ///< returns true if the above timestamp clock is steady (monotonic).
 
     /// returns the number of virtual processors on the system
     unsigned getNVirtualProcessors();
@@ -811,7 +811,7 @@ namespace Util {
         /// On other platforms is a no-op.  Use this with SBuf() to compose a string to output to stderr
         /// immediately.  If writeNewLine is true, then the platform-specific "\r\n" or "\n" will be also written
         /// in a second write all.
-        void writeStdErr(const std::string_view &, bool writeNewLine = true);
+        void writeStdErr(const std::string_view &, bool writeNewLine = true) noexcept;
 
         /// A very rudimentary primitive for signaling a condition from a signal handler,
         /// which is intended to get picked-up later by a monitoring thread.
@@ -914,6 +914,57 @@ struct RAII : public Defer<> {
     RAII(const VoidFunc & initFunc, const VoidFunc &cleanupFunc) : Defer(cleanupFunc) { if (initFunc) initFunc(); valid = bool(cleanupFunc); }
     /// initFunc called immediately, cleanupFunc called in this instance's destructor
     RAII(const VoidFunc & initFunc, VoidFunc && cleanupFunc) : Defer(std::move(cleanupFunc)) { if (initFunc) initFunc(); valid = bool(cleanupFunc); }
+};
+
+
+/// Used to time code. Takes a timestamp (via getTimeNS) when it is constructed. Provides various utility
+/// methods to read back the elapsed time since construction.
+class Tic {
+    static constexpr auto Invalid = std::numeric_limits<qint64>::min();
+    qint64 t0 = Util::getTimeNS(), tf = Invalid;
+    static qint64 now() noexcept { return Util::getTimeNS(); }
+    template <typename T>
+    using T_if_is_arithmetic = std::enable_if_t<std::is_arithmetic_v<T>, T>; // SFINAE evaluates to T if T is an arithmetic type
+    template <typename T>
+    T_if_is_arithmetic<T> el(T factor) const noexcept {
+        return T((when() - t0) / factor);
+    }
+    qint64 when() const { return tf != Invalid ? tf : now(); }
+
+public:
+    /// Return the time since construction in seconds (note the default return type here is double)
+    template <typename T = double>
+    T_if_is_arithmetic<T>
+    /* T */ secs() const noexcept { return el(T(1e9)); }
+
+    /// Return the number of seconds formatted as a floating point string
+    QString secsStr(int precision = 3) const { return QString::number(secs(), 'f', precision); }
+
+    /// " milliseconds (note the default return type here is qint64)
+    template <typename T = qint64>
+    T_if_is_arithmetic<T>
+    /* T */ msec() const noexcept { return el(T(1e6)); }
+
+    /// Return the number of milliseconds formatted as a floating point string
+    QString msecStr(int precision = 3) const { return QString::number(msec<double>(), 'f', precision); }
+
+    /// " microseconds (note the default return type here is qint64)
+    template <typename T = qint64>
+    T_if_is_arithmetic<T>
+    /* T */ usec() const noexcept { return el(T(1e3)); }
+
+    /// Return the number of microseconds formatted as a floating point string
+    QString usecStr(int precision = 3) const { return QString::number(usec<double>(), 'f', precision); }
+
+    /// " nanoseconds
+    qint64 nsec() const noexcept { return el(qint64(1)); }
+
+    /// Return the number of nanoseconds formatted as an integer string
+    QString nsecStr() const { return QString::number(nsec()); }
+
+    /// Save the current time. After calling this, secs(), ms(), and us() above will return the time from
+    /// construction until this was called.
+    void fin() noexcept { tf = now(); }
 };
 
 // helper type for std::visit (currently unused in this code base due to lack of std::variant support)
