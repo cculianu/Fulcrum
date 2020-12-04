@@ -108,11 +108,6 @@ struct Mempool
     TxMap txs;
     HashXTxMap hashXTxs;
 
-protected:
-    // disallow clears from external code. Client code should always just use dropTxs.
-    void clear();
-
-public:
 
     // -- Add to mempool
 
@@ -145,8 +140,11 @@ public:
     /// Drop a bunch of tx's, deleting them from this data structure and reversing the effects of their spends
     /// in the mempool. This is called by the SynchMempoolTask whenever the bitcoind mempool has droped tx's.
     /// Note that this function executes much faster if the caller is not dropping any tx's in the middle of an
-    /// unconfirmed chain.  For unconfirmed chains, child tx's in the chain that are not in the specified
-    /// txids set will also be dropped (since they are spending txs that no longer are in the mempool).
+    /// unconfirmed chain.  This is because descendant txs not in `txids` but that spend from txs in `txids` will
+    /// also be removed, and they must be searched for recursively.
+    ///
+    /// Why is this?  This is because descendant tx's not appearing in `txids` must be removed since they are txs that
+    /// no longer are spending valid inputs (as far as this Mempool instance is concerned at least).
     Stats dropTxs(ScriptHashesAffectedSet & scriptHashesAffected, const TxHashSet & txids, bool TRACE = false,
                   std::optional<float> rehashMaxLoadFactor = {});
 
@@ -167,4 +165,19 @@ public:
 
     /// Dump to QVariantMap (used by Controller::debug(), see Controller.cpp)
     QVariantMap dump() const;
+
+
+    // -- Misc. utility
+
+    /// Given a set of txids in this Mempool, grow the set to encompass all descendant tx's that spend
+    /// from the initial set.  Will keep iterating until it cennot grow the set any longer.
+    /// dropTxs() implicitly calls this.
+    std::size_t growTxHashSetToIncludeDescendants(TxHashSet &txids, bool TRACE = false) const;
+
+protected:
+    // Disallow clears from external code. Client code should always just use dropTxs.
+    void clear();
+
+    // Implementation of same-named function
+    std::size_t growTxHashSetToIncludeDescendants(const char *const logprefix, TxHashSet &txids, bool TRACE) const;
 };

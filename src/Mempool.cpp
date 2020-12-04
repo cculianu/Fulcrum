@@ -63,7 +63,7 @@ auto Mempool::calcCompactFeeHistogram(double binSize) const -> FeeHistogramVec
 }
 
 auto Mempool::addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
-                        const NewTxsMap & txsDownloaded,
+                        const NewTxsMap & txsNew,
                         const GetTXOInfoFromDBFunc & getTXOInfo,
                         bool TRACE) -> Stats
 {
@@ -72,7 +72,7 @@ auto Mempool::addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
     oldSize = this->txs.size();
     oldNumAddresses = this->hashXTxs.size();
     // first, do new outputs for all tx's, and put the new tx's in the mempool struct
-    for (auto & [hash, pair] : txsDownloaded) {
+    for (auto & [hash, pair] : txsNew) {
         auto & [tx, ctx] = pair;
         assert(hash == tx->hash);
         this->txs[tx->hash] = tx; // save tx right now to map, since we need to find it later for possible spends, etc if subsequent tx's refer to this tx.
@@ -114,7 +114,7 @@ auto Mempool::addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
         // . <-- at this point the .txos vec is built, with everything isValid() except for the OP_RETURN outs, which are all !isValid()
     }
     // next, do new inputs for all tx's, debiting/crediting either a mempool tx or querying db for the relevant utxo
-    for (auto & [hash, pair] : txsDownloaded) {
+    for (auto & [hash, pair] : txsNew) {
         auto & [tx, ctx] = pair;
         assert(hash == tx->hash);
         IONum inNum = 0;
@@ -201,40 +201,53 @@ auto Mempool::addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
     return ret;
 }
 
+std::size_t Mempool::growTxHashSetToIncludeDescendants(const char *const logpfx, TxHashSet &txids, const bool TRACE) const
+{
+    std::size_t added = 0, iterct = 0;
+    // "recursively" find txids spending from a source set. Implicitly keeps adding
+    // to the resulting set until all dependant txs in mempool are covered.
+    const auto t0 = Debug::isEnabled() ? Util::getTimeMicros() : 0;
+    while (txids.size() && ++iterct) {
+        for (const auto & [txid, tx] : txs) {
+            if (!tx->hasUnconfirmedParentTx || txids.count(txid))
+                continue; // no unconf. parents or already added
+            for (const auto & [sh, ioinfo] : tx->hashXs) {
+                for (const auto & [txo, txoinfo] : ioinfo.unconfirmedSpends) {
+                    if (txids.count(txo.txHash)) {
+                        // this spends one of the ones in our set! add it since it's a child of something we want to remove.
+                        txids.emplace(txid);
+                        ++added;
+                        if (TRACE)
+                            DebugM(logpfx, ": additonal tx ", Util::ToHexFast(txid), " added to set because it spends ",
+                                   txo.toString(), " which is already in our removal set");
+                        goto outer_loop_iterate_again;
+                    }
+                }
+            }
+        }
+        break;
+    outer_loop_iterate_again:
+        continue;
+    }
+    using Util::Pluralize;
+    DebugM(logpfx, ": iterated ", iterct, Pluralize(" time", iterct), " to add ", added, Pluralize(" additional child tx", added),
+           " in ", QString::number((Util::getTimeMicros()-t0)/1e3, 'f', 2), " msec");
+    return added;
+}
+
+std::size_t Mempool::growTxHashSetToIncludeDescendants(TxHashSet &txids, const bool TRACE) const
+{
+    return growTxHashSetToIncludeDescendants("txDescendants", txids, TRACE);
+}
+
 auto Mempool::dropTxs(ScriptHashesAffectedSet & scriptHashesAffectedOut, const TxHashSet & txidsIn, bool TRACE,
                       std::optional<float> rehashMaxLoadFactor) -> Stats
 {
     auto txids = txidsIn;
     // also drop txs that spend from the txids in the above set as well -- since we
-    // cannot drop tx's in the middle of a chain of spends due to limitations in how
-    // we model the mempool
-    {
-        int iterct = 0, added = 0;
-        const auto t0 = Debug::isEnabled() ? Util::getTimeMicros() : 0;
-        while (txids.size() && ++iterct) {
-            for (const auto & [txid, tx] : txs) {
-                if (!tx->hasUnconfirmedParentTx || txids.count(txid))
-                    continue; // no unconf. parents or already added
-                for (const auto & [sh, ioinfo] : tx->hashXs) {
-                    for (const auto & [txo, txoinfo] : ioinfo.unconfirmedSpends) {
-                        if (txids.count(txo.txHash)) {
-                            // this spends one of the ones in our set! add it since it's a child of something we want to remove.
-                            txids.emplace(txid);
-                            ++added;
-                            DebugM("dropTxs: additonal tx ", Util::ToHexFast(txid), " added to set because it spends ",
-                                   txo.toString(), " which is already in our removal set");
-                            goto outer_loop_iterate_again;
-                        }
-                    }
-                }
-            }
-            break;
-        outer_loop_iterate_again:
-            continue;
-        }
-        DebugM("dropTxs: iterated ", iterct, " time(s) to add ", added, " additional child tx(s) in ",
-               QString::number((Util::getTimeMicros()-t0)/1e3, 'f', 2), " msec");
-    }
+    // cannot drop tx's in the middle of a chain of spends due to the inconsistency
+    // that would lead to (possible spends of non-existant outputs).
+    growTxHashSetToIncludeDescendants("dropTxs", txids, TRACE);
 
     Stats ret;
     ScriptHashesAffectedSet scriptHashesAffected;
@@ -509,17 +522,25 @@ namespace {
 
         if (isSegWit) bitcoin::SetCurrencyUnit("BTC");
 
-        for (int iter = 0; iter < 2; ++iter) { // we iterate twice. first iteraton is "leaf" mode, second is "drop any tx!!" mode.
+        enum IterMode { DropOnlyLeaves = 0, DropAnyTx = 1 };
+        static constexpr std::array<IterMode, 2> iterModes = { DropOnlyLeaves, DropAnyTx };
+
+        for (const auto iterMode : iterModes) { // we iterate twice. first iteraton is "leaf" mode, second is "drop any tx!!" mode.
+            static const Mempool::GetTXOInfoFromDBFunc getTXOInfo = [](const TXO &txo) -> std::optional<TXOInfo> {
+                // Return a "unique" but deterministic TXOInfo based on the txo's prevout:n.
+                // Note the amount here is totally wrong (and leads to txs that print money out of thin air),
+                // but for this test this is ok, since we care more about properly debiting/crediting spends
+                // and keeping track of utxos when testing Mempool.
+                TXOInfo ret;
+                ret.amount = 546 * bitcoin::Amount::satoshi();
+                ret.confirmedHeight = 1;
+                ret.hashX = BTC::HashXFromCScript(bitcoin::CScript() << Util::toVec<std::vector<uint8_t>>(txo.toBytes()));
+                return ret;
+            };
+
             Log() << QString(79, QChar{'-'});
             Mempool mempool;
             {
-                static const Mempool::GetTXOInfoFromDBFunc getTXOInfo = [](const TXO &txo) -> std::optional<TXOInfo> {
-                    TXOInfo ret;
-                    ret.amount = 546 * bitcoin::Amount::satoshi();
-                    ret.confirmedHeight = 1;
-                    ret.hashX = BTC::HashXFromCScript(bitcoin::CScript() << Util::toVec<std::vector<uint8_t>>(txo.toBytes()));
-                    return ret;
-                };
                 Mempool::ScriptHashesAffectedSet shset;
                 const auto t0 = Util::getTimeMicros();
                 const auto stats = mempool.addNewTxs(shset, mpd, getTXOInfo);
@@ -535,6 +556,16 @@ namespace {
 
 
             Log() << QString(79, QChar{'-'});
+            Log();
+            switch (iterMode) {
+            case DropOnlyLeaves:
+                Log() << "Running \"drop leaves\" test ...";
+                break;
+            case DropAnyTx:
+                Log() << "Running \"drop any\" test (this test is slow, please be patient) ...";
+                break;
+            }
+            Log();
 
             {
                 const auto t0 = Util::getTimeMicros();
@@ -543,13 +574,13 @@ namespace {
                 // iterate each time, dropping leaves from mempool
                 for (int ct = 1; !mempool.txs.empty(); ++ct) {
                     Mempool::TxHashSet txids;
-                    for (const auto & [txHash, tx] : mempool.txs) {
-                        std::unordered_set<IONum> ionums;
-                        for (const auto & [hashX, ioinfo] : tx->hashXs) {
-                            for (const auto & n : ioinfo.utxo)
-                                ionums.insert(n);
-                        }
-                        if (iter == 0) {
+                    if (iterMode == DropOnlyLeaves) {
+                        for (const auto & [txHash, tx] : mempool.txs) {
+                            std::unordered_set<IONum> ionums;
+                            for (const auto & [hashX, ioinfo] : tx->hashXs) {
+                                for (const auto & n : ioinfo.utxo)
+                                    ionums.insert(n);
+                            }
                             // drop only leaves mode
                             std::size_t validSize = 0;
                             for (const auto & txo : tx->txos)
@@ -558,10 +589,10 @@ namespace {
                                 // this is a leaf
                                 txids.insert(txHash);
                             }
-                        } else {
-                            // second iteration drop anything not just leaf! (slower)
-                            txids.insert(txHash);
                         }
+                    } else {
+                        // second iteration drop anything not just leaf! (slower)
+                        txids = Util::keySet<decltype(txids)>(mempool.txs);
                     }
                     if (txids.empty())
                         throw InternalError("Expected to find at least 1 leaf tx! This should not happen! FIXME!");
@@ -604,7 +635,8 @@ namespace {
                     bitcoin::Amount beforeAmt;
                     std::size_t beforeSize;
 
-                    { // build expected set to verify the results of calling dropTxs()
+                    // build expected set to verify the results of calling dropTxs() (works only in leaf mode (iter == 0)
+                    if (iterMode == DropOnlyLeaves) {
 
                         // build utxo set we have now
                         std::tie(expected.unconfUtxos, expected.unconfUtxoValue) = getUnconfUtxos();
@@ -673,9 +705,8 @@ namespace {
                         Log() << Json::toUtf8(dumpAfter);
                         Log() << QString(79, QChar{'-'});
                     }
-                    if (iter == 0) {
+                    if (iterMode == DropOnlyLeaves) {
                         // For now we do this sanity check only on "leaf" mode (first iteratiorn)
-                        // TODO: do some sanity checking for the "drop anything" mode as well.
                         if (stats.oldSize - stats.newSize != txids.size())
                             throw Exception("New tx counds are not as expected!");
                         if (shset != expected.affected)
@@ -684,6 +715,27 @@ namespace {
                             throw Exception("Resultant utxo set is not as expected!");
                         if (value != expected.unconfUtxoValue)
                             throw Exception("Resultant utxo totals are not as expected!");
+                    } else if (iterMode == DropAnyTx) {
+                        // In this mode the only way to verify is to build a second mempool with the same txid set
+                        // as the first -- this checks and spends and everything else is consistent.
+                        // This of course assumes that the "addTxs" code is bug-free and always leads to consistency
+                        // (whcih is the case since the addTxs code is very mature at this point).
+                        // Note: The below is very slow.
+                        Mempool mempool2;
+                        Mempool::NewTxsMap adds;
+                        for (const auto & [txid, _] : mempool.txs) {
+                            auto it = mpd.find(txid);
+                            if (it == mpd.end()) throw InternalError(QString("TxId %1 not found. This should never happen.").arg(QString(txid.toHex())));
+                            if (txids.count(txid))
+                                throw Exception("Drop verification failed -- a txid in the drop set is still in the mempool structure!");
+                            adds.insert(*it);
+                        }
+                        Mempool::ScriptHashesAffectedSet _;
+                        mempool2.addNewTxs(_, adds, getTXOInfo);
+                        if (mempool.txs != mempool2.txs)
+                            throw Exception("Drop verification failed -- mempool.txs != mempool2.txs");
+                        if (mempool.hashXTxs != mempool2.hashXTxs)
+                            throw Exception("Drop verification failed -- mempool.hashXTxs != mempool2.hashXTxs");
                     }
                 }
                 const auto tf = Util::getTimeMicros();
