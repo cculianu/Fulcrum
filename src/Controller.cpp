@@ -717,7 +717,7 @@ void SynchMempoolTask::processResults()
         }
         return mempool.addNewTxs(scriptHashesAffected, txsDownloaded, getFromCache, TRACE); // may throw
     }();
-    if ((oldSize != newSize && Debug::isEnabled()) || elapsedMsec > 1e3) {
+    if ((oldSize != newSize || elapsedMsec > 1e3) && Debug::isEnabled()) {
         Controller::printMempoolStatusToLog(newSize, newNumAddresses, elapsedMsec, true, true);
     }
     emit success();
