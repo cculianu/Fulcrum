@@ -437,8 +437,7 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
         if (hash.length() == HashLen) {
             submitRequest("getblock", {var, false}, [this, bnum, hash](const RPC::Message & resp){
                 try {
-                    QVariant var = resp.result();
-                    const auto rawblock = Util::ParseHexFast(var.toByteArray());
+                    auto rawblock = Util::ParseHexFast(resp.result().toByteArray());
                     const auto header = rawblock.left(HEADER_SIZE); // we need a deep copy of this anyway so might as well take it now.
                     QByteArray chkHash;
                     if (bool sizeOk = header.length() == HEADER_SIZE; sizeOk && (chkHash = BTC::HashRev(header)) == hash) {
@@ -468,6 +467,11 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
                         assert(bool(ppb));
 
                         if (TRACE) Trace() << "block " << bnum << " size: " << rawblock.size() << " nTx: " << ppb->txInfos.size();
+
+                        rawblock.clear(); // free memory right away (needed for ScaleNet huge blocks)
+
+                        // . <--- NOTE: rawblock not to be used beyond this point (it is now empty)
+
                         // update some stats for /stats endpoint
                         nTx += ppb->txInfos.size();
                         nOuts += ppb->outputs.size();

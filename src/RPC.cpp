@@ -25,6 +25,7 @@
 
 #include <atomic>
 #include <type_traits>
+#include <utility>
 
 namespace RPC {
 
@@ -360,7 +361,7 @@ namespace RPC {
         emit send( wrapForSend(json) );
     }
 
-    void ConnectionBase::processJson(const QByteArray &json)
+    void ConnectionBase::processJson(QByteArray &&json)
     {
         if (ignoreNewIncomingMessages) {
             // This is only ever latched to true in the "Client" subclass and it signifies that the client is being
@@ -372,6 +373,7 @@ namespace RPC {
         Message::Id msgId;
         try {
             Message message = Message::fromUtf8(json, &msgId, v1); // may throw
+            json.clear(); // release memory right away (needed for ScaleNet)
 
             static const auto ValidateParams = [](const Message &msg, const Method &m) {
                 if (!msg.hasParams()) {
@@ -552,7 +554,7 @@ namespace RPC {
             nReceived += data.length();
             // may be slow, so use the efficient TraceM
             TraceM("Got: ", (!ws ? data.trimmed() : data));
-            processJson(data);
+            processJson(std::move(data));
         }
         if (isBad()) { // this may have been set again by processJson() above
             DebugM(prettyName(), " is now bad, ignoring read (buf: ",
@@ -800,19 +802,23 @@ namespace RPC {
                            " MB in ", QString::number((Util::getTime() - sm->largeContentT0)/1e3, 'f', 3), " secs");
                 }
                 // got a full content packet!
-                const QByteArray json = sm->content;
-                if (sm->content.length() > sm->contentLength) {
-                    // this shouldn't happen. if we get here, likely below code will fail with nonsense and connection will be killed. this is here
-                    // just as a sanity check.
-                    Error() << "Content buffer has extra stuff at the end. Bug in code. FIXME! Crud was: '"
-                            << sm->content.mid(sm->contentLength) << "'";
+                {
+                    QByteArray json = sm->content;
+                    if (sm->content.length() > sm->contentLength) {
+                        // this shouldn't happen. if we get here, likely below code will fail with nonsense and connection will be killed. this is here
+                        // just as a sanity check.
+                        Error() << "Content buffer has extra stuff at the end. Bug in code. FIXME! Crud was: '"
+                                << sm->content.mid(sm->contentLength) << "'";
+                    }
+                    if (bool trace = Trace::isEnabled(); sm->logBad && !trace)
+                        Warning() << sm->status << " (content): " << json.trimmed();
+                    else if (trace)
+                        Trace() << "cl: " << sm->contentLength << " inbound JSON: " << json.trimmed();
+                    sm->clear(); // reset back to BEGIN state, empty buffers, clean slate.
+
+                    processJson(std::move(json));
+                    // `json` scope end to ensure not used after move.
                 }
-                if (bool trace = Trace::isEnabled(); sm->logBad && !trace)
-                    Warning() << sm->status << " (content): " << json.trimmed();
-                else if (trace)
-                    Trace() << "cl: " << sm->contentLength << " inbound JSON: " << json.trimmed();
-                sm->clear(); // reset back to BEGIN state, empty buffers, clean slate.
-                processJson(json);
                 // If bytesAvailable .. schedule a callback to this function again since we did a partial read just now,
                 // and the socket's buffers still have data.
                 if (auto avail = socket->bytesAvailable(); avail > 0 && (MAX_BUFFER <= 0 || avail <= MAX_BUFFER)) {

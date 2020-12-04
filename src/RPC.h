@@ -237,8 +237,12 @@ namespace RPC {
 
         Q_PROPERTY(bool v1 READ isV1 WRITE setV1)
     protected:
-        /// subclasses should call processJson to process what they think may be a complete json rpc message.
-        void processJson(const QByteArray &);
+        /// Subclasses should call processJson to process what they think may be a complete JSON-RPC message.
+        ///
+        /// Note the move semantics here. We take ownership of the passed-in QByteArray and clear it immediately
+        /// once JSON processing is done, but before callbacks are dispatched -- this is to reduce peak memory usage
+        /// if processing a huge JSON payload containing a big block (for networks like ScaleNet).
+        void processJson(QByteArray &&);
 
         /* --
          * -- Stuff subclasses must implement to make use of this class as base:
