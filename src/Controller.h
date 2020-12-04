@@ -150,7 +150,7 @@ private:
     size_t nBlocksDownloadedSoFar() const; ///< not 100% accurate. call this only from this thread
     std::tuple<size_t, size_t, size_t> nTxInOutSoFar() const; ///< not 100% accurate. call this only from this thread
 
-    volatile bool stopFlag = false;
+    std::atomic_bool stopFlag = false;
     bool lostConn = true;
     /// Master subscription notification flag. Initially we don't do notifications. However, after we start the srvmgr,
     /// this gets set to true permanently, and future blocks/undoes/mempool changes notify the app-wide SubsMgr, which
