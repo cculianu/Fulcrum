@@ -24,10 +24,10 @@
 #include "bitcoin/amount.h"
 #include "robin_hood/robin_hood.h"
 
-#include <list>
-#include <map>
+#include <QVariantMap>
+
 #include <memory>
-#include <set>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -74,9 +74,7 @@ struct Mempool
             const uint8_t nParentMe = hasUnconfirmedParentTx ? 1 : 0,
                           nParentOther = o.hasUnconfirmedParentTx ? 1 : 0;
             // always sort the unconf. parent tx's *after* the regular (confirmed parent-only) tx's.
-            if (nParentMe != nParentOther)
-                return nParentMe < nParentOther;
-            return hash < o.hash;
+            return std::tie(nParentMe, hash) < std::tie(nParentOther, o.hash);
         }
 
         /// This should always contain all the HashX's involved in this tx. Note the use of unordered_map which can
@@ -110,19 +108,46 @@ struct Mempool
     TxMap txs;
     HashXTxMap hashXTxs;
 
-    inline void clear() {
-        // Enforce a little hysteresis about what sizes we may need in the future; reserve 75% of the last size we saw.
-        // This means if mempool was full with thousands of txs, we do indeed maintain a largeish hash table for a
-        // few blocks, decaying memory usage over time.  We do it this way to eventually recover memory, but to also
-        // leave space in case we are in a situation where many tx's are coming in quickly.
-        // Note that the default implementation of robin_hood clear() never shrinks its hashtables, and requires
-        // explicit calles to reserve() even after a clear().
-        const auto txsSize = txs.size(), hxSize = hashXTxs.size();
-        txs.clear();
-        hashXTxs.clear();
-        txs.reserve(size_t(txsSize*0.75));
-        hashXTxs.reserve(size_t(hxSize*0.75));
-    }
+
+    // -- Add to mempool
+
+    /// Used by addNewTxs
+    using NewTxsMap = robin_hood::unordered_flat_map<TxHash, std::pair<Mempool::TxRef, bitcoin::CTransactionRef>, HashHasher>;
+    /// The scriptHashes that were affected by this refresh/synch cycle. Used for notifications.
+    using ScriptHashesAffectedSet = std::unordered_set<HashX, HashHasher>;
+    /// DB getter -- called to retrieve a utxo's scripthash & amount data from the DB. May throw.
+    using GetTXOInfoFromDBFunc = std::function<std::optional<TXOInfo>(const TXO &)>;
+
+    /// Results of add or drop -- some statustics for caller.
+    struct Stats {
+        std::size_t oldSize = 0, newSize = 0;
+        std::size_t oldNumAddresses = 0, newNumAddresses = 0;
+    };
+
+    /// Add a batch of tx's that are new (downloaded from bitcoind) and were not previously in this mempool structure
+    /// Note that all the txs in txsNew *must* be new (must not already exist in this mempool instance).
+    /// scriptHashesAffected is updated for all of the new tx's added.
+    /// This is called by the SynchMempoolTask in Controller.cpp.
+    Stats addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected, // will add to this set
+                    const NewTxsMap & txsNew, // txs to add
+                    const GetTXOInfoFromDBFunc & getTXOInfo, // callback to get DB confirmed utxos
+                    bool TRACE = false);
+
+
+    // -- Drop from mempool
+
+    using TxHashSet = std::unordered_set<TxHash, HashHasher>;
+    /// Drop a bunch of tx's, deleting them from this data structure and reversing the effects of their spends
+    /// in the mempool. This is called by the SynchMempoolTask whenever the bitcoind mempool has droped tx's.
+    /// Note that this function executes much faster if the caller is not dropping any tx's in the middle of an
+    /// unconfirmed chain.  This is because descendant txs not in `txids` but that spend from txs in `txids` will
+    /// also be removed, and they must be searched for recursively.
+    ///
+    /// Why is this?  This is because descendant tx's not appearing in `txids` must be removed since they are txs that
+    /// no longer are spending valid inputs (as far as this Mempool instance is concerned at least).
+    Stats dropTxs(ScriptHashesAffectedSet & scriptHashesAffected, const TxHashSet & txids, bool TRACE = false,
+                  std::optional<float> rehashMaxLoadFactor = {});
+
 
     // -- Fee histogram support (used by mempool.get_fee_histogram RPC) --
 
@@ -135,4 +160,25 @@ struct Mempool
     /// mempool takes under 1 ms on average hardware, so it's very fast. Storage calls this in refreshMempoolHistogram
     /// from a periodic background task kicked off in Controller.
     FeeHistogramVec calcCompactFeeHistogram(double binSize = 1e5 /* binSize in bytes */) const;
+
+    // -- Dump (for JSONesque debug support)
+
+    /// Dump to QVariantMap (used by Controller::debug(), see Controller.cpp)
+    QVariantMap dump() const;
+
+
+    // -- Misc. utility
+
+    /// Given a set of txids in this Mempool, grow the set to encompass all descendant tx's that spend
+    /// from the initial set.  Will keep iterating until it cennot grow the set any longer.
+    /// dropTxs() implicitly calls this.
+    std::size_t growTxHashSetToIncludeDescendants(TxHashSet &txids, bool TRACE = false) const;
+
+    /// Note: clearing the mempool is only done on block undo. Client code should in general just use dropTxs().
+    void clear();
+
+protected:
+
+    // Actual implementation of same-named function
+    std::size_t growTxHashSetToIncludeDescendants(const char *const logprefix, TxHashSet &txids, bool TRACE) const;
 };

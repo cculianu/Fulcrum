@@ -65,7 +65,6 @@ struct UndoInfoMissing : public Exception { using Exception::Exception; ~UndoInf
 /// Thrown by internally by getHistory and listUnspent if the history is too large (larger than max_history from config).
 struct HistoryTooLarge : public Exception { using Exception::Exception; ~HistoryTooLarge() override; };
 
-struct Mempool;
 class SubsMgr;
 
 /// Manages the db and all storage-related facilities.  Most of its public methods are fully reentrant and thread-safe.

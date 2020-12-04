@@ -162,8 +162,8 @@ size_t CTransaction::GetBillableSize() const {
     return bitcoin::GetSerializeSize(*this, SER_NETWORK, PROTOCOL_VERSION);
 }
 
-unsigned int CTransaction::GetTotalSize() const {
-    return bitcoin::GetSerializeSize(*this, SER_NETWORK, PROTOCOL_VERSION);
+unsigned int CTransaction::GetTotalSize(bool segwit) const {
+    return bitcoin::GetSerializeSize(*this, SER_NETWORK, PROTOCOL_VERSION | (segwit ? SERIALIZE_TRANSACTION_USE_WITNESS : 0));
 }
 
 std::string CTransaction::ToString() const {

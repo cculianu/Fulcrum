@@ -26,6 +26,7 @@
 #include "ThreadPool.h"
 #include "TXO.h"
 
+#include "bitcoin/amount.h"
 #include "bitcoin/transaction.h"
 #include "robin_hood/robin_hood.h"
 
@@ -78,6 +79,8 @@ void Controller::startup()
         }
         // set the atomic -- this affects how we parse blocks, etc
         coinType = ctype;
+        if (ctype != BTC::Coin::Unknown)
+            bitcoin::SetCurrencyUnit(coin.toStdString());
     }
 
 
@@ -197,7 +200,9 @@ void Controller::on_bitcoinCoreDetection(bool iscore)
         // We had no coin set in DB, but we just detected the coin, set it now and return.
         // This is the common case with no misconfiguration.
         coinType = detectedtype;
-        storage->setCoin(BTC::coinToName(detectedtype)); // thread-safe call to storage, ok to do here.
+        const auto coinName = BTC::coinToName(detectedtype);
+        storage->setCoin(coinName); // thread-safe call to storage, ok to do here.
+        bitcoin::SetCurrencyUnit(coinName.toStdString());
         return;
     }
     if (ourtype != detectedtype) {
@@ -529,9 +534,10 @@ struct SynchMempoolTask : public CtlTask
     const std::atomic_bool & notifyFlag;
     bool isdlingtxs = false;
     Mempool::TxMap txsNeedingDownload, txsWaitingForResponse;
-    using DldTxsMap = robin_hood::unordered_flat_map<TxHash, std::pair<Mempool::TxRef, bitcoin::CTransactionRef>, HashHasher>;
-    DldTxsMap txsDownloaded;
+    Mempool::NewTxsMap txsDownloaded;
     unsigned expectedNumTxsDownloaded = 0;
+    static constexpr int kRedoCtMax = 5; // if we have to retry this many times, error out.
+    int redoCt = 0;
     const bool TRACE = Trace::isEnabled(); // set this to true to print more debug
     const bool isBTC; ///< initted in c'tor. If true, deserialize tx's using the optional segwit extensons to the tx format.
 
@@ -540,12 +546,17 @@ struct SynchMempoolTask : public CtlTask
 
     void clear() {
         isdlingtxs = false;
-        txsNeedingDownload.clear(); txsWaitingForResponse.clear();
-        txsDownloaded.clear();
+        txsNeedingDownload.clear(); txsWaitingForResponse.clear(); txsDownloaded.clear();
         expectedNumTxsDownloaded = 0;
         // Note: we don't clear "scriptHashesAffected" intentionally in case we are retrying. We want to accumulate
         // all the droppedTx scripthashes for each retry, so we never clear the set.
+        // Note 2: we also never clear the redoCt since that counter needs to maintain state to abort too many redos.
     }
+
+    /// Called when getrawtransaction errors out or when we dropTxs() and the result is too many txs so we must
+    /// do getrawmempool again.  Increments redoCt. Note that if redoCt > kRedoCtMax, will implicitly error out.
+    /// Implicitly calls AGAIN().
+    void redoFromStart();
 
     void doGetRawMempool();
     void doDLNextTx();
@@ -559,6 +570,17 @@ SynchMempoolTask::~SynchMempoolTask() {
         // where we queued up some notifications and then we died on a retry due to errors from bitcoind)
         storage->subs()->enqueueNotifications(std::move(scriptHashesAffected));
 
+}
+
+void SynchMempoolTask::redoFromStart()
+{
+    clear();
+    if (++redoCt > kRedoCtMax) {
+        Error() << "SyncMempoolTask redo count exceeded (" << redoCt << "), aborting task";
+        emit errored();
+        return;
+    }
+    AGAIN();
 }
 
 void SynchMempoolTask::process()
@@ -628,134 +650,16 @@ void SynchMempoolTask::processResults()
         emit errored();
         return;
     }
-    size_t oldSize = 0, newSize = 0, oldNumAddresses = 0, newNumAddresses = 0;
-    {
+    const auto [oldSize, newSize, oldNumAddresses, newNumAddresses] = [this] {
+        const auto getFromDB = [this](const TXO &prevTXO) -> std::optional<TXOInfo> {
+            // this is a callback called from within addNewTxs() below when encountering
+            // a confirmed spend.
+            return storage->utxoGetFromDB(prevTXO, false); // this may throw on low-level db error
+        };
+        // exclusive lock; held from here until scope end
         auto [mempool, lock] = storage->mutableMempool(); // grab mempool struct exclusively
-        oldSize = mempool.txs.size();
-        oldNumAddresses = mempool.hashXTxs.size();
-        // first, do new outputs for all tx's, and put the new tx's in the mempool struct
-        for (auto & [hash, pair] : txsDownloaded) {
-            auto & [tx, ctx] = pair;
-            assert(hash == tx->hash);
-            mempool.txs[tx->hash] = tx; // save tx right now to map, since we need to find it later for possible spends, etc if subsequent tx's refer to this tx.
-            IONum n = 0;
-            const auto numTxo = ctx->vout.size();
-            if (LIKELY(tx->txos.size() != numTxo)) {
-                // we do it this way (reserve then resize) to avoid the automatic 2^N prealloc of normal vector .resize()
-                tx->txos.reserve(numTxo);
-                tx->txos.resize(numTxo);
-            }
-            for (const auto & out : ctx->vout) {
-                const auto & script = out.scriptPubKey;
-                if (!BTC::IsOpReturn(script)) {
-                    // UTXO only if it's not OP_RETURN -- can't do 'continue' here as that would throw off the 'n' counter
-                    HashX sh = BTC::HashXFromCScript(out.scriptPubKey);
-                    // the below is a hack to save memory by re-using the same shallow copy of 'sh' each time
-                    auto hxit = mempool.hashXTxs.find(sh);
-                    if (hxit != mempool.hashXTxs.end()) {
-                        // found existing, re-use sh as a shallow copy
-                        sh = hxit->first;
-                    } else {
-                        // new entry, insert, update hxit
-                        auto pair = mempool.hashXTxs.insert({sh, decltype(hxit->second)()});
-                        hxit = pair.first;
-                    }
-                    // end memory saving hack
-                    TXOInfo &txoInfo = tx->txos[n];
-                    txoInfo = TXOInfo{out.nValue, sh, {}, {}};
-                    tx->hashXs[sh].utxo.insert(n);
-                    hxit->second.push_back(tx); // save tx to hashx -> tx vector (amortized constant time insert at end -- we will sort and uniqueify this at end of this function)
-                    scriptHashesAffected.insert(sh);
-                    assert(txoInfo.isValid());
-                }
-                tx->fee -= out.nValue; // update fee (fee = ins - outs, so we "add" the outs as a negative)
-                ++n;
-            }
-            assert(n == numTxo);
-            // . <-- at this point the .txos vec is built, with everything isValid() except for the OP_RETURN outs, which are all !isValid()
-        }
-        // next, do new inputs for all tx's, debiting/crediting either a mempool tx or querying db for the relevant utxo
-        for (auto & [hash, pair] : txsDownloaded) {
-            auto & [tx, ctx] = pair;
-            assert(hash == tx->hash);
-            IONum inNum = 0;
-            for (const auto & in : ctx->vin) {
-                const IONum prevN = IONum(in.prevout.GetN());
-                const TxHash prevTxId = BTC::Hash2ByteArrayRev(in.prevout.GetTxId());
-                const TXO prevTXO{prevTxId, prevN};
-                TXOInfo prevInfo;
-                QByteArray sh; // shallow copy of prevInfo.hashX
-                if (auto it = mempool.txs.find(prevTxId); it != mempool.txs.end()) {
-                    // prev is a mempool tx
-                    tx->hasUnconfirmedParentTx = true; ///< mark the current tx we are processing as having an unconfirmed parent (this is used for sorting later and by the get_mempool & listUnspent code)
-                    auto prevTxRef = it->second;
-                    assert(bool(prevTxRef));
-                    if (prevN >= prevTxRef->txos.size()
-                            || !(prevInfo = prevTxRef->txos[prevN]).isValid())
-                        // defensive programming paranoia
-                        throw InternalError(QString("FAILED TO FIND A VALID PREVIOUS TXOUTN %1:%2 IN MEMPOOL for TxHash: %3 (input %4)")
-                                            .arg(QString(prevTxId.toHex())).arg(prevN).arg(QString(hash.toHex())).arg(inNum));
-                    sh = prevInfo.hashX;
-                    tx->hashXs[sh].unconfirmedSpends[prevTXO] = prevInfo;
-                    prevTxRef->hashXs[sh].utxo.erase(prevN); // remove this spend from utxo set for prevTx in mempool
-                    if (TRACE) Debug() << hash.toHex() << " unconfirmed spend: " << prevTXO.toString() << " " << prevInfo.amount.ToString().c_str();
-                } else {
-                    // prev is a confirmed tx
-                    const auto optTXOInfo = storage->utxoGetFromDB(prevTXO, false); // this may also throw on low-level db error
-                    if (UNLIKELY(!optTXOInfo.has_value())) {
-                        // Uh oh. If it wasn't in the mempool or in the db.. something is very wrong with our code.
-                        // We will throw if missing, and the synch process aborts and hopefully we recover with a reorg
-                        // or a new block or somesuch.
-                        throw InternalError(QString("FAILED TO FIND PREVIOUS TX %1 IN EITHER MEMPOOL OR DB for TxHash: %2 (input %3)")
-                                            .arg(prevTXO.toString()).arg(QString(hash.toHex())).arg(inNum));
-                    }
-                    prevInfo = *optTXOInfo;
-                    sh = prevInfo.hashX;
-                    // hack to save memory by re-using existing sh QByteArray and/or forcing a shallow-copy
-                    auto hxit = tx->hashXs.find(sh);
-                    if (hxit != tx->hashXs.end()) {
-                        // existing found, re-use same unerlying QByteArray memory for sh
-                        sh = prevInfo.hashX = hxit->first;
-                    } else {
-                        // new entry, insert, update hxit
-                        auto pair = tx->hashXs.insert({sh, decltype(hxit->second)()});
-                        hxit = pair.first;
-                    }
-                    // end memory saving hack
-                    hxit->second.confirmedSpends[prevTXO] = prevInfo;
-                    if (TRACE) Debug() << hash.toHex() << " confirmed spend: " << prevTXO.toString() << " " << prevInfo.amount.ToString().c_str();
-                }
-                tx->fee += prevInfo.amount;
-                assert(sh == prevInfo.hashX);
-                mempool.hashXTxs[sh].push_back(tx); // mark this hashX as having been "touched" because of this input (note we push dupes here out of order but sort and uniqueify at the end)
-                scriptHashesAffected.insert(sh);
-                ++inNum;
-            }
-
-            // Now, compactify some data structures to take up less memory by rehashing thier unordered_maps/unordered_sets..
-            // we do this once for each new tx we see.. and it can end up saving tons of space. Note the below structures
-            // are either fixed in size or will only ever shrink as the mempool evolves so this is a good time to do this.
-            tx->hashXs.rehash(tx->hashXs.size());
-            for (auto & [sh, ioinfo] : tx->hashXs) {
-                ioinfo.confirmedSpends.rehash(ioinfo.confirmedSpends.size());  // this is fixed once built
-                ioinfo.unconfirmedSpends.rehash(ioinfo.unconfirmedSpends.size()); // this is fixed once built
-                ioinfo.utxo.rehash(ioinfo.utxo.size()); // this may shrink but we rehash it once now to the largest size it will ever have
-            }
-        }
-
-        // now, sort and uniqueify data structures made temporarily inconsistent above (have dupes, are out-of-order)
-        for (const auto & sh : scriptHashesAffected) {
-            if (auto it = mempool.hashXTxs.find(sh); LIKELY(it != mempool.hashXTxs.end()))
-                Util::sortAndUniqueify<Mempool::TxRefOrdering>(it->second);
-            //else {}
-            // Note: It's possible for the scriptHashesAffected set to refer to sh's no longer in the mempool because
-            // we sometimes retry this task when we detect mempool drops, with the scriptHasesAffected set containing
-            // the dropped address hashes.  This is why the if conditional above exists.
-        }
-
-        newSize = mempool.txs.size();
-        newNumAddresses = mempool.hashXTxs.size();
-    } // release mempool lock
+        return mempool.addNewTxs(scriptHashesAffected, txsDownloaded, getFromDB, TRACE); // may throw
+    }();
     if (oldSize != newSize && Debug::isEnabled()) {
         Controller::printMempoolStatusToLog(newSize, newNumAddresses, true, true);
     }
@@ -823,91 +727,78 @@ void SynchMempoolTask::doDLNextTx()
         txsWaitingForResponse.erase(tx->hash);
         AGAIN();
     },
-    // Retry on error -- if we fail to retrieve the transaction then it's possible that there was some RBF action
-    // if on BTC, or the tx happened to drop out of mempool for some other reason.  Do an immediate retry in that case.
-    isBTC ? "Tx possibly dropped out of mempool due to RBF" : nullptr);
+    [this, hashHex, tx](const RPC::Message &resp) {
+        // Retry on error -- if we fail to retrieve the transaction then it's possible that there was some RBF action
+        // if on BTC, or the tx happened to drop out of mempool for some other reason. We must retry to ensure a
+        // consistent view of bitcoind's mempool.
+        const auto *const pre = isBTC ? "Tx dropped out of mempool (possibly due to RBF)" : "Tx dropped out of mempool";
+        Warning() << pre << ": " << QString(hashHex) << " (error response: " << resp.errorMessage()
+                  << "), retrying getrawmempool ...";
+        redoFromStart(); // proceed to getrawmempool unless redoCt exceeds kRedoCtMax, in which case errors out
+    });
 }
 
 void SynchMempoolTask::doGetRawMempool()
 {
     submitRequest("getrawmempool", {false}, [this](const RPC::Message & resp){
-        bool clearMempool = false; // this is set below in rare cases at the end of this lamba
-        Defer deferredClearMempoolIfNeeded(
-            [this, &clearMempool] {
-                if (clearMempool) {
-                    auto [mempool, lock] = storage->mutableMempool(); // take the lock exclusively here
-                    const auto sz = mempool.txs.size();
-                    mempool.clear();
-                    DebugM("Mempool cleared of ", sz, Util::Pluralize(" tx", sz));
-                }
-            });
-        int newCt = 0;
+        std::size_t newCt = 0, droppedCt = 0;
         const QVariantList txidList = resp.result().toList();
-        // Grab the mempool data struct and lock it *shared*.  This improves performance vs. an exclusive lock here.
-        // Since we aren't modifying it.. this is fine.  We are the only subsystem that ever modifies it anyway, so
-        // invariants will hold regardless.
-        auto [mempool, lock] = storage->mempool();
-        const auto oldCt = mempool.txs.size();
-        auto droppedTxs = Util::keySet<std::unordered_set<TxHash, HashHasher>>(mempool.txs);
+        Mempool::TxHashSet droppedTxs;
+        {
+            // Grab the mempool data struct and lock it *shared*.  This improves performance vs. an exclusive lock here.
+            // Since we aren't modifying it.. this is fine.  We are the only subsystem that ever modifies it anyway, so
+            // invariants will hold even if we release the lock early, regardless.
+            auto [mempool, lock] = storage->mempool();
+            droppedTxs = Util::keySet<Mempool::TxHashSet>(mempool.txs);
+        }
         for (const auto & var : txidList) {
             const auto txidHex = var.toString().trimmed().toLower();
             const TxHash hash = Util::ParseHexFast(txidHex.toUtf8());
             if (hash.length() != HashLen) {
-                Error() << resp.method << ": got an empty tx hash";
+                Error() << resp.method << ": got an invalid tx hash: " << txidHex;
                 emit errored();
                 return;
             }
-            static const QVariantList EmptyList; // avoid constructng this for each iteration
-            if (auto it = mempool.txs.find(hash); it != mempool.txs.end()) {
-                droppedTxs.erase(hash); // mark this tx as "not dropped" since it was in the mempool before and is in the mempool now.
+            if (auto it = droppedTxs.find(hash); it != droppedTxs.end()) {
+                droppedTxs.erase(it); // mark this tx as "not dropped" since it was in the mempool before and is in the mempool now.
                 if (TRACE) Debug() << "Existing mempool tx: " << hash.toHex();
             } else {
                 if (TRACE) Debug() << "New mempool tx: " << hash.toHex();
                 ++newCt;
                 Mempool::TxRef tx = std::make_shared<Mempool::Tx>();
-                tx->hashXs.max_load_factor(1.0); // hopefully this will save some memory by expicitly setting it to 1.0
+                tx->hashXs.max_load_factor(.9); // hopefully this will save some memory by expicitly setting max table size to 90%
                 tx->hash = hash;
                 // Note: we end up calculating the fee ourselves since I don't trust doubles here. I wish bitcoind would have returned sats.. :(
                 txsNeedingDownload[hash] = tx;
             }
-            // at this point we have a valid tx ptr
         }
-
-        if (UNLIKELY(!droppedTxs.empty())) {
-            // If tx's were dropped, we clear the mempool and try again. We also enqueue notifications for the dropped
-            // tx's.
-            const bool recommendFullRetry = oldCt >= 2 && droppedTxs.size() >= oldCt/2; // more than 50% of the mempool tx's dropped out. something is funny. likely a new block arrived.
-            DebugM(droppedTxs.size(), " txs dropped from mempool, resetting mempool and trying again ...");
-            // NOTIFICATION
-            if (recommendFullRetry) {
-                // NOTIFICATION of all ...
-                scriptHashesAffected.merge(Util::keySet<decltype(scriptHashesAffected)>(mempool.hashXTxs));
-                DebugM("Will notify for all ", scriptHashesAffected.size(), " addresses of mempool for notificatons ...");
-            } else {
-                // just the dropped tx's
-                for (const auto & txid : droppedTxs) {
-                    if (auto it = mempool.txs.find(txid); it != mempool.txs.end()) {
-                        const auto & tx = it->second;
-                        if (tx) // paranoia: tx will always be a valid reference.
-                            scriptHashesAffected.merge(Util::keySet<decltype(scriptHashesAffected)>(tx->hashXs));
-                    }
-                }
-                DebugM("Will notify for ", scriptHashesAffected.size(), " addresses belonging to the dropped tx's for notificatons ...");
-            }
-            clearMempool = true; // Defer object at top of this lamba above will clear the mempool on function return (taking an exclusive lock) if this is true.
-            if (recommendFullRetry) {
-                emit retryRecommended(); // this is an exit point for this task
+        if (!droppedTxs.empty()) {
+            // Some txs were dropped, update mempool with the drops, grabbing the lock exclusively.
+            // Note the release and re-acquisition of the lock should be ok since this Controller
+            // thread is the only thread that ever modifies the mempool, so a coherent view of the
+            // mempool is the case here even after having released and re-acquired the lock.
+            {
+                auto [mempool, lock] = storage->mutableMempool();
+                const auto res = mempool.dropTxs(scriptHashesAffected /* will upate set */, droppedTxs, TRACE);
+                droppedCt = res.oldSize - res.newSize;
+                DebugM("Dropped ", droppedCt, " txs from mempool (", res.oldNumAddresses-res.newNumAddresses,
+                       " addresses), new mempool size: ", res.newSize, " (", res.newNumAddresses, " addresses)");
+            } // release lock
+            if (UNLIKELY(droppedCt != droppedTxs.size())) {
+                Warning() << "Synch mempool expected to drop " << droppedTxs.size() << ", but in fact dropped "
+                          << droppedCt << " -- retrying getrawmempool";
+                redoFromStart(); // set state such that the next process() call will do getrawmempool again unless redoCt exceeds kRedoCtMax, in which case errors out
                 return;
             }
-            clear();
-            AGAIN();
-            return;
         }
 
-        if (newCt)
-            DebugM(resp.method, ": got reply with ", txidList.size(), " items, ", newCt, " new");
+        if (newCt || droppedCt)
+            DebugM(resp.method, ": got reply with ", txidList.size(), " items, ", droppedCt, " dropped, ", newCt, " new");
         isdlingtxs = true;
         expectedNumTxsDownloaded = unsigned(newCt);
+        txsDownloaded.reserve(expectedNumTxsDownloaded);
+        txsWaitingForResponse.reserve(expectedNumTxsDownloaded);
+
         // TX data will be downloaded now, if needed
         AGAIN();
     });
@@ -1452,16 +1343,16 @@ void CtlTask::on_failure(const RPC::Message::Id &id, const QString &msg)
     emit errored();
 }
 quint64 CtlTask::submitRequest(const QString &method, const QVariantList &params, const ResultsF &resultsFunc,
-                               const char *recommendRetryMsg)
+                               const ErrorF &errorFunc)
 {
     quint64 id = IdMixin::newId();
     using ErrorF = BitcoinDMgr::ErrorF;
     using MsgCRef = const RPC::Message &;
     ctl->bitcoindmgr->submitRequest(this, id, method, params,
                                     resultsFunc,
-                                    !recommendRetryMsg
+                                    !errorFunc
                                         ? ErrorF([this](MsgCRef m){ on_error(m); }) // more common case, just emit error on RPC error reply
-                                        : [this, recommendRetryMsg](MsgCRef m){ on_error_retry(m, recommendRetryMsg); }, // getrawtransaction for SynchMempool case on BTC, retry immediately because RBF
+                                        : errorFunc,
                                     [this](const RPC::Message::Id &id, const QString &msg){ on_failure(id, msg); },
                                     reqTimeout);
     return id;
@@ -1603,78 +1494,8 @@ auto Controller::debug(const StatsParams &p) const -> Stats // from StatsMixin
         ret["unspent_debug"] = l;
     }
     if (p.contains("mempool")) {
-        QVariantMap mp, txs;
         auto [mempool, lock] = storage->mempool();
-        for (const auto & [hash, tx] : mempool.txs) {
-            if (!tx) continue;
-            QVariantMap m;
-            m["hash"] = tx->hash.toHex();
-            m["sizeBytes"] = tx->sizeBytes;
-            m["fee"] = tx->fee.ToString().c_str();
-            m["hasUnconfirmedParentTx"] = tx->hasUnconfirmedParentTx;
-            static const auto TXOInfo2Map = [](const TXOInfo &info) -> QVariantMap {
-                return QVariantMap{
-                    { "amount", QString::fromStdString(info.amount.ToString()) },
-                    { "scriptHash", info.hashX.toHex() },
-                };
-            };
-            QVariantMap txos;
-            IONum num = 0;
-            for (const auto & info : tx->txos) {
-                QVariantMap infoMap;
-                if (info.isValid())
-                    infoMap = TXOInfo2Map(info);
-                else
-                    infoMap = QVariantMap{
-                        { "amount" , QVariant() },
-                        { "scriptHash", QVariant() },
-                        { "comment", "OP_RETURN output not indexed"},
-                    };
-                txos[QString::number(num++)] = infoMap;
-            }
-            m["txos"] = txos;
-            QVariantMap hxs;
-            static const auto IOInfo2Map = [](const Mempool::Tx::IOInfo &inf) -> QVariantMap {
-                QVariantMap ret;
-#if QT_VERSION < QT_VERSION_CHECK(5, 14, 0)
-                const auto vl = QVariantList::fromStdList( Util::toList<std::list<QVariant>>(inf.utxo) );
-#else
-                const auto vl = Util::toList<QVariantList>(inf.utxo);
-#endif
-                ret["utxos"] = vl;
-                ret["utxos (BucketCount)"] = qlonglong(inf.utxo.bucket_count());
-                ret["utxos (LoadFactor)"] = QString::number(double(inf.utxo.load_factor()), 'f', 4);
-                QVariantMap cs;
-                for (const auto & [txo, info] : inf.confirmedSpends)
-                    cs[txo.toString()] = TXOInfo2Map(info);
-                ret["confirmedSpends"] = cs;
-                ret["confirmedSpends (LoadFactor)"] = QString::number(double(inf.confirmedSpends.load_factor()), 'f', 4);
-                QVariantMap us;
-                for (const auto & [txo, info] : inf.unconfirmedSpends)
-                    us[txo.toString()] = TXOInfo2Map(info);
-                ret["unconfirmedSpends"] = us;
-                ret["unconfirmedSpends (LoadFactor)"] = QString::number(double(inf.unconfirmedSpends.load_factor()), 'f', 4);
-                return ret;
-            };
-            for (const auto & [sh, ioinfo] : tx->hashXs)
-                hxs[sh.toHex()] = IOInfo2Map(ioinfo);
-            m["hashXs"] = hxs;
-            m["hashXs (LoadFactor)"] = QString::number(double(tx->hashXs.load_factor()), 'f', 4);
-
-            txs[hash.toHex()] = m;
-        }
-        mp["txs"] = txs;
-        mp["txs (LoadFactor)"] = QString::number(double(mempool.txs.load_factor()), 'f', 4);
-        QVariantMap hxs;
-        for (const auto & [sh, txset] : mempool.hashXTxs) {
-            QVariantList l;
-            for (const auto & tx : txset)
-                if (tx) l.push_back(tx->hash.toHex());
-            hxs[sh.toHex()] = l;
-        }
-        mp["hashXTxs"] = hxs;
-        mp["hashXTxs (LoadFactor)"] = QString::number(double(mempool.hashXTxs.load_factor()), 'f', 4);
-        ret["mempool_debug"] = mp;
+        ret["mempool_debug"] = mempool.dump();
     }
     if (p.contains("subs")) {
         const auto timeLeft = kDefaultTimeout - (Util::getTime() - t0/1000000) - 50;

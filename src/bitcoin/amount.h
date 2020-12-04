@@ -147,7 +147,8 @@ static constexpr Amount CASH = 100 * SATOSHI;
 static constexpr Amount COIN = 100000000 * SATOSHI;
 static constexpr Amount CENT = COIN / 100;
 
-extern const std::string CURRENCY_UNIT;
+void SetCurrencyUnit(const std::string &); // added by Calin to allow for also supporting BTC -- this is thread-safe (uses rw-locks)
+std::string GetCurrencyUnit(); // added by Calin to allow for also supporting BTC -- this is thread-safe (uses rw-locks)
 
 /**
  * No amount larger than this (in satoshi) is valid.

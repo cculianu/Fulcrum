@@ -33,6 +33,7 @@
 #include <cstring> // for std::memcpy
 #include <functional> // for std::hash
 #include <optional>
+#include <tuple> // for std::tie
 
 /// A transaction output; A txHash:outN pair.
 struct TXO {
@@ -43,7 +44,7 @@ struct TXO {
     QString toString() const;
 
     bool operator==(const TXO &o) const noexcept { return txHash == o.txHash && outN == o.outN; }
-    bool operator<(const TXO &o) const noexcept { return txHash < o.txHash && outN < o.outN; }
+    bool operator<(const TXO &o) const noexcept { return std::tie(txHash, outN) < std::tie(o.txHash, o.outN); }
 
 
     // serialization/deserialization
@@ -101,6 +102,7 @@ struct TXOInfo {
     /// for debug, etc
     bool operator==(const TXOInfo &o) const
         { return amount == o.amount && hashX == o.hashX && confirmedHeight == o.confirmedHeight && txNum == o.txNum; }
+    bool operator!=(const TXOInfo &o) const { return !(*this == o); }
 
     QByteArray toBytes() const noexcept {
         QByteArray ret;

@@ -1275,11 +1275,19 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
     // take all locks now.. since this is a Big Deal. TODO: add more locks here?
     std::scoped_lock guard(p->blocksLock, p->headerVerifierLock, p->blkInfoLock, p->mempoolLock);
 
-    if (notify)
-        // mark ALL of mempool for notify so we can properly detect drops that weren't in block but also disappeared from mempool
-        notify->merge(Util::keySet<NotifySet>(p->mempool.hashXTxs));
-
-    p->mempool.clear(); // just make sure the mempool is clean
+    if (notify) {
+        // txs in block can never be in mempool. Ensure they are gone.
+        Mempool::TxHashSet txids;
+        const auto sz = ppb->txInfos.size();
+        txids.reserve(sz > 0 ? sz-1 : 0);
+        for (std::size_t i = 1 /* skip coinbase */; i < sz; ++i)
+            txids.insert(ppb->txInfos[i].hash);
+        const auto res = p->mempool.dropTxs(*notify, txids, Trace::isEnabled(), 0.5f /* shrink to fit load_factor threshold */);
+        if (const auto diff = res.oldSize - res.newSize; diff && Debug::isEnabled()) {
+            Debug() << "addBlock: removed " << diff << " txs from mempool involving "
+                    << (res.oldNumAddresses-res.newNumAddresses) << " addresses";
+        }
+    }
 
     const auto verifUndo = p->headerVerifier; // keep a copy of verifier state for undo purposes in case this fails
     // This object ensures that if an exception is thrown while we are in the below code, we undo the header verifier
@@ -1560,13 +1568,27 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
         // take all locks now.. since this is a Big Deal. TODO: add more locks here?
         std::scoped_lock guard(p->blocksLock, p->headerVerifierLock, p->blkInfoLock, p->mempoolLock);
 
+        const auto t0 = Util::getTimeNS();
+
+        // NOTE: For very full mempools, this clear has the potential to stall the app after the reorg
+        // completes since the app will have to re-download the whole mempool state again.
+        //
+        // However, since reorging is (hopefully) a rare event -- the potential performance hit here
+        // in doing a mempool clear (and subsequent redownload) is hopefully acceptable. We have to
+        // pick the lesser of two evils here.
+        //
+        // We decided to clear on reorg because reorging takes a few seconds (or more) and may end up
+        // walking back more than 1 block.. so if we didn't clear here, clients migh get a *very*
+        // inconsistent view of their tx histories -- with potential spends in mempool for tx's that
+        // don't exist or are double-spent, etc.  The safer option here is to clear, despite the
+        // performance hit.
+        //
         if (notify)
             // mark ALL of mempool for notify so we can detect drops that weren't in block but also disappeared from mempool properly
             notify->merge(Util::keySet<UndoInfo::ScriptHashSet>(p->mempool.hashXTxs));
 
-        p->mempool.clear(); // make sure mempool is clean
+        p->mempool.clear(); // make sure mempool is clean (see note above as to why)
 
-        const auto t0 = Util::getTimeNS();
 
         const auto [tip, header] = p->headerVerifier.lastHeaderProcessed();
         if (tip <= 0 || header.length() != p->blockHeaderSize()) throw UndoInfoMissing("No header to undo");
