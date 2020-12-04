@@ -146,7 +146,8 @@ auto Mempool::addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
                 // prev is a confirmed tx
                 const auto optTXOInfo = getTXOInfo(prevTXO); // this may also throw on low-level db error
                 if (UNLIKELY(!optTXOInfo.has_value())) {
-                    // Uh oh. If it wasn't in the mempool or in the db.. something is very wrong with our code.
+                    // Uh oh. If it wasn't in the mempool or in the db.. something is very wrong with our code...
+                    // (or there maybe was a race condition and a new block came in while we were doing this).
                     // We will throw if missing, and the synch process aborts and hopefully we recover with a reorg
                     // or a new block or somesuch.
                     throw InternalError(QString("FAILED TO FIND PREVIOUS TX %1 IN EITHER MEMPOOL OR DB for TxHash: %2 (input %3)")

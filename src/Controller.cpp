@@ -534,9 +534,10 @@ struct SynchMempoolTask : public CtlTask
     const std::atomic_bool & notifyFlag;
     bool isdlingtxs = false;
     Mempool::TxMap txsNeedingDownload, txsWaitingForResponse;
-    using DldTxsMap = robin_hood::unordered_flat_map<TxHash, std::pair<Mempool::TxRef, bitcoin::CTransactionRef>, HashHasher>;
-    DldTxsMap txsDownloaded;
+    Mempool::NewTxsMap txsDownloaded;
     unsigned expectedNumTxsDownloaded = 0;
+    static constexpr int kRedoCtMax = 5; // if we fail this many times, error out.
+    int redoCt = 0;
     const bool TRACE = Trace::isEnabled(); // set this to true to print more debug
     const bool isBTC; ///< initted in c'tor. If true, deserialize tx's using the optional segwit extensons to the tx format.
 
@@ -545,12 +546,17 @@ struct SynchMempoolTask : public CtlTask
 
     void clear() {
         isdlingtxs = false;
-        txsNeedingDownload.clear(); txsWaitingForResponse.clear();
-        txsDownloaded.clear();
+        txsNeedingDownload.clear(); txsWaitingForResponse.clear(); txsDownloaded.clear();
         expectedNumTxsDownloaded = 0;
         // Note: we don't clear "scriptHashesAffected" intentionally in case we are retrying. We want to accumulate
         // all the droppedTx scripthashes for each retry, so we never clear the set.
+        // Note 2: we also never clear the redoCt since that counter needs to maintain state to abort too many redos.
     }
+
+    /// Called when getrawtransaction errors out or when we dropTxs() and the result is too many txs so we must
+    /// do getrawmempool again.  Increments redoCt. Note that if redoCt > kRedoCtMax, will implicitly error out.
+    /// Implicitly calls AGAIN().
+    void redoFromStart();
 
     void doGetRawMempool();
     void doDLNextTx();
@@ -564,6 +570,17 @@ SynchMempoolTask::~SynchMempoolTask() {
         // where we queued up some notifications and then we died on a retry due to errors from bitcoind)
         storage->subs()->enqueueNotifications(std::move(scriptHashesAffected));
 
+}
+
+void SynchMempoolTask::redoFromStart()
+{
+    clear();
+    if (++redoCt > kRedoCtMax) {
+        Error() << "SyncMempoolTask redo count exceeded (" << redoCt << "), aborting task";
+        emit errored();
+        return;
+    }
+    AGAIN();
 }
 
 void SynchMempoolTask::process()
@@ -641,7 +658,7 @@ void SynchMempoolTask::processResults()
         };
         // exclusive lock; held from here until scope end
         auto [mempool, lock] = storage->mutableMempool(); // grab mempool struct exclusively
-        return mempool.addNewTxs(scriptHashesAffected, txsDownloaded, getFromDB, TRACE);
+        return mempool.addNewTxs(scriptHashesAffected, txsDownloaded, getFromDB, TRACE); // may throw
     }();
     if (oldSize != newSize && Debug::isEnabled()) {
         Controller::printMempoolStatusToLog(newSize, newNumAddresses, true, true);
@@ -715,22 +732,8 @@ void SynchMempoolTask::doDLNextTx()
         // if on BTC, or the tx happened to drop out of mempool for some other reason. We continue anyway.
         const auto *const pre = isBTC ? "Tx dropped out of mempool (possibly due to RBF)" : "Tx dropped out of mempool";
         Warning() << pre << ": " << QString(hashHex) << " (error response: " << resp.errorMessage()
-                  << "), continuing anyway ...";
-        // remove from sets
-        txsNeedingDownload.erase(tx->hash);
-        txsWaitingForResponse.erase(tx->hash);
-        txsDownloaded.erase(tx->hash);
-
-        // tell mempool just in case -- TODO: remove the below after testing is done since it is not really needed
-        {
-            auto [mempool, lock] = storage->mutableMempool();
-            const auto res = mempool.dropTxs(scriptHashesAffected, {tx->hash}, TRACE);
-            if (res.newSize != res.oldSize)
-                Error() << "UNEXPECTED: Tx was in mempool despite us expecting it to be a new tx! FIXME!  TXID: "
-                        << QString(hashHex);
-        }
-
-        AGAIN(); // proceed to next tx download anyway
+                  << "), retrying getrawmempool ...";
+        redoFromStart(); // proceed to getrawmempool unless redoCt exceeds kRedoCtMax, in which case errors out
     });
 }
 
@@ -775,21 +778,26 @@ void SynchMempoolTask::doGetRawMempool()
             // Note the release and re-acquisition of the lock should be ok since this Controller
             // thread is the only thread that ever modifies the mempool, so a coherent view of the
             // mempool is the case here even after having released and re-acquired the lock.
-            auto [mempool, lock] = storage->mutableMempool();
-            const auto res = mempool.dropTxs(scriptHashesAffected /* will upate set */, droppedTxs, TRACE);
-            droppedCt = res.oldSize - res.newSize;
+            {
+                auto [mempool, lock] = storage->mutableMempool();
+                const auto res = mempool.dropTxs(scriptHashesAffected /* will upate set */, droppedTxs, TRACE);
+                droppedCt = res.oldSize - res.newSize;
+                DebugM("Dropped ", droppedCt, " txs from mempool (", res.oldNumAddresses-res.newNumAddresses,
+                       " addresses), new mempool size: ", res.newSize, " (", res.newNumAddresses, " addresses)");
+            } // release lock
             if (UNLIKELY(droppedCt != droppedTxs.size())) {
-                Warning() << "WARNING: Synch mempool expected to drop " << droppedTxs.size() << ", but in fact dropped "
-                          << droppedCt << " -- This should never happen! FIXME!";
+                Warning() << "Synch mempool expected to drop " << droppedTxs.size() << ", but in fact dropped "
+                          << droppedCt << " -- retrying getrawmempool";
+                redoFromStart(); // reset back to getrawmempool again unless redoCt exceeds kRedoCtMax, in which case errors out
+                return;
             }
-            DebugM("Dropped ", droppedCt, " txs from mempool (", res.oldNumAddresses-res.newNumAddresses,
-                   " addresses), new mempool size: ", res.newSize, " (", res.newNumAddresses, " addresses)");
         }
 
         if (newCt || droppedCt)
             DebugM(resp.method, ": got reply with ", txidList.size(), " items, ", droppedCt, " dropped, ", newCt, " new");
         isdlingtxs = true;
         expectedNumTxsDownloaded = unsigned(newCt);
+
         // TX data will be downloaded now, if needed
         AGAIN();
     });
