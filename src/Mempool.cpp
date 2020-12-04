@@ -204,11 +204,18 @@ auto Mempool::addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
 
 std::size_t Mempool::growTxHashSetToIncludeDescendants(const char *const logpfx, TxHashSet &txids, const bool TRACE) const
 {
+    if (txids.empty())
+        return 0;
+
     std::size_t added = 0, iterct = 0;
+    bool found;
+
     // "recursively" find txids spending from a source set. Implicitly keeps adding
     // to the resulting set until all dependant txs in mempool are covered.
     const auto t0 = Debug::isEnabled() ? Util::getTimeMicros() : 0;
-    while (txids.size() && ++iterct) {
+    do {
+        ++iterct;
+        found = false;
         for (const auto & [txid, tx] : txs) {
             if (!tx->hasUnconfirmedParentTx || txids.count(txid))
                 continue; // no unconf. parents or already added
@@ -221,15 +228,16 @@ std::size_t Mempool::growTxHashSetToIncludeDescendants(const char *const logpfx,
                         if (TRACE)
                             DebugM(logpfx, ": additonal tx ", Util::ToHexFast(txid), " added to set because it spends ",
                                    txo.toString(), " which is already in our removal set");
-                        goto outer_loop_iterate_again;
+                        found = true;
+                        goto next_txid;
                     }
                 }
             }
+        next_txid:
+            continue;
         }
-        break;
-    outer_loop_iterate_again:
-        continue;
-    }
+    } while(found);
+
     using Util::Pluralize;
     DebugM(logpfx, ": iterated ", iterct, Pluralize(" time", iterct), " to add ", added, Pluralize(" additional child tx", added),
            " in ", QString::number((Util::getTimeMicros()-t0)/1e3, 'f', 2), " msec");
