@@ -536,7 +536,7 @@ struct SynchMempoolTask : public CtlTask
     Mempool::TxMap txsNeedingDownload, txsWaitingForResponse;
     Mempool::NewTxsMap txsDownloaded;
     unsigned expectedNumTxsDownloaded = 0;
-    static constexpr int kRedoCtMax = 5; // if we fail this many times, error out.
+    static constexpr int kRedoCtMax = 5; // if we have to retry this many times, error out.
     int redoCt = 0;
     const bool TRACE = Trace::isEnabled(); // set this to true to print more debug
     const bool isBTC; ///< initted in c'tor. If true, deserialize tx's using the optional segwit extensons to the tx format.
@@ -652,7 +652,7 @@ void SynchMempoolTask::processResults()
     }
     const auto [oldSize, newSize, oldNumAddresses, newNumAddresses] = [this] {
         const auto getFromDB = [this](const TXO &prevTXO) -> std::optional<TXOInfo> {
-            // this is a callback called from whithin addNewTxs() below when encountering
+            // this is a callback called from within addNewTxs() below when encountering
             // a confirmed spend.
             return storage->utxoGetFromDB(prevTXO, false); // this may throw on low-level db error
         };

@@ -1568,19 +1568,27 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
         // take all locks now.. since this is a Big Deal. TODO: add more locks here?
         std::scoped_lock guard(p->blocksLock, p->headerVerifierLock, p->blkInfoLock, p->mempoolLock);
 
-        // NOTE: We don't touch the mempool in this function since it's not clear which tx's we should notify for.
-        // Instead, we rely on the Controller task that will eventually see the drops and notify appropriately.
-        // There MAY be a race condition of sorts with clients where while we apply the undo, they may get
-        // an inconsistent view of the mempool and utxos -- however the more I think about it -- I realize
-        // in practice for very full mempools we prefer to not have to clear the mempool here which would be
-        // very slow in cases where most of it would have to be rebuilt anyway with the same data (such as on BTC
-        // mainnet). It's hoped that walking back/reorg is a rare enough event that we accept the potential
-        // for clients to get spazzy / inconsistent results here.
-        //
-        // *** TODO: perhaps clear mempool here anyway, just to prevent strangeness/non-exitant utxos, etc. ***
-        //
-
         const auto t0 = Util::getTimeNS();
+
+        // NOTE: For very full mempools, this clear has the potential to stall the app after the reorg
+        // completes since the app will have to re-download the whole mempool state again.
+        //
+        // However, since reorging is (hopefully) a rare event -- the potential performance hit here
+        // in doing a mempool clear (and subsequent redownload) is hopefully acceptable. We have to
+        // pick the lesser of two evils here.
+        //
+        // We decided to clear on reorg because reorging takes a few seconds (or more) and may end up
+        // walking back more than 1 block.. so if we didn't clear here, clients migh get a *very*
+        // inconsistent view of their tx histories -- with potential spends in mempool for tx's that
+        // don't exist or are double-spent, etc.  The safer option here is to clear, despite the
+        // performance hit.
+        //
+        if (notify)
+            // mark ALL of mempool for notify so we can detect drops that weren't in block but also disappeared from mempool properly
+            notify->merge(Util::keySet<UndoInfo::ScriptHashSet>(p->mempool.hashXTxs));
+
+        p->mempool.clear(); // make sure mempool is clean (see note above as to why)
+
 
         const auto [tip, header] = p->headerVerifier.lastHeaderProcessed();
         if (tip <= 0 || header.length() != p->blockHeaderSize()) throw UndoInfoMissing("No header to undo");

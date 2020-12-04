@@ -174,10 +174,11 @@ struct Mempool
     /// dropTxs() implicitly calls this.
     std::size_t growTxHashSetToIncludeDescendants(TxHashSet &txids, bool TRACE = false) const;
 
-protected:
-    // Disallow clears from external code. Client code should always just use dropTxs.
+    /// Note: clearing the mempool is only done on block undo. Client code should in general just use dropTxs().
     void clear();
 
-    // Implementation of same-named function
+protected:
+
+    // Actual implementation of same-named function
     std::size_t growTxHashSetToIncludeDescendants(const char *const logprefix, TxHashSet &txids, bool TRACE) const;
 };
