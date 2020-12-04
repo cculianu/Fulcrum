@@ -236,7 +236,7 @@ std::size_t Mempool::growTxHashSetToIncludeDescendants(const char *const logpfx,
         next_txid:
             continue;
         }
-    } while(found);
+    } while (found);
 
     using Util::Pluralize;
     DebugM(logpfx, ": iterated ", iterct, Pluralize(" time", iterct), " to add ", added, Pluralize(" additional child tx", added),
