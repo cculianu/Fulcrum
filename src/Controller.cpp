@@ -621,11 +621,11 @@ void Controller::printMempoolStatusToLog() const
             newSize = mempool.txs.size();
             numAddresses = mempool.hashXTxs.size();
         } // release mempool lock
-        printMempoolStatusToLog(newSize, numAddresses, false);
+        printMempoolStatusToLog(newSize, numAddresses, -1, false);
     }
 }
 // static
-void Controller::printMempoolStatusToLog(size_t newSize, size_t numAddresses, bool isDebug, bool force)
+void Controller::printMempoolStatusToLog(size_t newSize, size_t numAddresses, double msec, bool isDebug, bool force)
 {
     static std::atomic_size_t oldSize = 0, oldNumAddresses = 0;
     static std::atomic<double> lastTS = 0.;
@@ -638,6 +638,8 @@ void Controller::printMempoolStatusToLog(size_t newSize, size_t numAddresses, bo
         Log & log(*logger);
         log << newSize << Util::Pluralize(" mempool tx", newSize) << " involving " << numAddresses
             << Util::Pluralize(" address", numAddresses);
+        if (msec > 0.5) // only print this stat if the lock was held for >0.5 msec
+            log << " (exclusive lock held for " << QString::number(msec, 'f', 3) << " msec)";
         if (!force) {
             oldSize = newSize;
             oldNumAddresses = numAddresses;
@@ -646,7 +648,6 @@ void Controller::printMempoolStatusToLog(size_t newSize, size_t numAddresses, bo
     }
 }
 
-
 void SynchMempoolTask::processResults()
 {
     if (txsDownloaded.size() != expectedNumTxsDownloaded) {
@@ -654,18 +655,70 @@ void SynchMempoolTask::processResults()
         emit errored();
         return;
     }
-    const auto [oldSize, newSize, oldNumAddresses, newNumAddresses] = [this] {
-        const auto getFromDB = [this](const TXO &prevTXO) -> std::optional<TXOInfo> {
-            // this is a callback called from within addNewTxs() below when encountering
-            // a confirmed spend.
-            return storage->utxoGetFromDB(prevTXO, false); // this may throw on low-level db error
+
+    // precache the confirmed spends with the lock held in shared mode, allowing for concurrency during this slow operation
+    using ConfirmedSpendCache = std::unordered_map<TXO, std::optional<TXOInfo>>;
+    ConfirmedSpendCache cache;
+    cache.reserve(128); // reserve a bit of memory so we don't start from 0 and so we don't have to rehash right away
+    struct { std::size_t nTxs, nHashXs; } sizes; // save the numeber of txs in mempool to detect if another thread modified mempool
+    qint64 cachet0, cachetf;
+    {
+        // we do this with the shared lock (read lock) -- this at least prevents block processing from taking mempool away as we run
+        // but it also allows concurrency with clients, etc that want their requests serviced while we read from disk.
+        auto [mempool, lock] = storage->mempool();
+        cachet0 = Util::getTimeMicros();
+        // save mempool size to detect mempool change after we relese and re-acquire the lock in exclusive mode
+        // this hopefully detects if the block processing task somehow ran in between the time we release and reacquire
+        std::tie(sizes.nTxs, sizes.nHashXs) = std::tuple(mempool.txs.size(), mempool.hashXTxs.size());
+        // iterate through all vins for all txs and find the confirmed spends (not already in mempool) and
+        // read their TXOInfo's from the db.
+        for (const auto & [txid, pair] : txsDownloaded) {
+            const auto & [tx, ctx] = pair;
+            for (const auto & in : ctx->vin) {
+                const TXO txo{BTC::Hash2ByteArrayRev(in.prevout.GetTxId()), IONum(in.prevout.GetN())};
+                if (mempool.txs.count(txo.txHash) || txsDownloaded.count(txo.txHash))
+                    continue; // unconfirmed spend, we don't pre-cache this, continue
+                // otherwise look it up in the db and cache the resulting answer
+                cache.emplace(txo, storage->utxoGetFromDB(txo, false)); // may throw on very low level db error; returns nullopt if not found
+            }
+        }
+        cachetf = Util::getTimeMicros();
+    }
+    if (cache.size())
+        DebugM("Mempool: pre-cache of ", cache.size(), Util::Pluralize(" confirmed spend", cache.size()),
+               " from db took ", QString::number((cachetf-cachet0) / 1e3, 'f', 3), " msec");
+
+    // At this point we pre-cached all the confirmed spends (we hope) with the shared lock held. We did this
+    // because holding the exclusive lock for all this time while accessing the db would be *very* slow on
+    // full mempools the first time we get e.g. 20k txs.  Before we came up with this scheme, we held the
+    // exclusive lock while accessing the db and Fulcrum would freeze on chains such as BTC when first
+    // starting up as it built up the initial large mempool.  With this scheme, it runs much faster.
+
+    const auto [oldSize, newSize, oldNumAddresses, newNumAddresses, elapsedMsec] = [this, &cache, &sizes] {
+        const auto getFromCache = [&cache](const TXO &prevTXO) -> std::optional<TXOInfo> {
+            // This is a callback called from within addNewTxs() below when encountering a confirmed
+            // spend.  We just return whatever we precached for this entry.
+            //
+            // Note that if for some reason the spend is missing we return a null optional which
+            // the addTxs() code will throw on, which is what we want (rare but can happen if we
+            // are missing the coin due to race conditions with bitcoind on reorg).
+            return cache[prevTXO];
         };
-        // exclusive lock; held from here until scope end
+        // exclusive lock; held from here until scope end -- we use the cache above to minimize the amount
+        // of time we hold this lock -- so we hold it while accessing an in-memory data structure
+        // rather than the DB on disk (which would be slow).
         auto [mempool, lock] = storage->mutableMempool(); // grab mempool struct exclusively
-        return mempool.addNewTxs(scriptHashesAffected, txsDownloaded, getFromDB, TRACE); // may throw
+        // check that the mempool didn't change
+        if (UNLIKELY(std::tie(sizes.nTxs, sizes.nHashXs) != std::tuple(mempool.txs.size(), mempool.hashXTxs.size()))) {
+            // This size heuristic is enough because other subsystems can only drop or clear, never add.
+            // This branch should rarely be taken in practice but it pays to be defensive.
+            throw InternalError("Warning: Mempool changed in between the time we released the shared lock and "
+                                "re-acquired the lock exclusively.  We will try again later...");
+        }
+        return mempool.addNewTxs(scriptHashesAffected, txsDownloaded, getFromCache, TRACE); // may throw
     }();
-    if (oldSize != newSize && Debug::isEnabled()) {
-        Controller::printMempoolStatusToLog(newSize, newNumAddresses, true, true);
+    if ((oldSize != newSize && Debug::isEnabled()) || elapsedMsec > 1e3) {
+        Controller::printMempoolStatusToLog(newSize, newNumAddresses, elapsedMsec, true, true);
     }
     emit success();
 }

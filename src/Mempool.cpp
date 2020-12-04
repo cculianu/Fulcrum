@@ -67,8 +67,9 @@ auto Mempool::addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
                         const GetTXOInfoFromDBFunc & getTXOInfo,
                         bool TRACE) -> Stats
 {
+    const auto t0 = Util::getTimeMicros();
     Stats ret;
-    auto & [oldSize, newSize, oldNumAddresses, newNumAddresses] = ret;
+    auto & [oldSize, newSize, oldNumAddresses, newNumAddresses, elapsedMsec] = ret;
     oldSize = this->txs.size();
     oldNumAddresses = this->hashXTxs.size();
     // first, do new outputs for all tx's, and put the new tx's in the mempool struct
@@ -199,6 +200,7 @@ auto Mempool::addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
 
     newSize = this->txs.size();
     newNumAddresses = this->hashXTxs.size();
+    elapsedMsec = (Util::getTimeMicros() - t0) / 1e3;
     return ret;
 }
 
@@ -252,6 +254,7 @@ std::size_t Mempool::growTxHashSetToIncludeDescendants(TxHashSet &txids, const b
 auto Mempool::dropTxs(ScriptHashesAffectedSet & scriptHashesAffectedOut, const TxHashSet & txidsIn, bool TRACE,
                       std::optional<float> rehashMaxLoadFactor) -> Stats
 {
+    const auto t0 = Util::getTimeMicros();
     auto txids = txidsIn;
     // also drop txs that spend from the txids in the above set as well -- since we
     // cannot drop tx's in the middle of a chain of spends due to the inconsistency
@@ -260,7 +263,7 @@ auto Mempool::dropTxs(ScriptHashesAffectedSet & scriptHashesAffectedOut, const T
 
     Stats ret;
     ScriptHashesAffectedSet scriptHashesAffected;
-    auto & [oldSize, newSize, oldNumAddresses, newNumAddresses] = ret;
+    auto & [oldSize, newSize, oldNumAddresses, newNumAddresses, elapsedMsec] = ret;
     oldSize = this->txs.size();
     oldNumAddresses = this->hashXTxs.size();
 
@@ -373,6 +376,7 @@ auto Mempool::dropTxs(ScriptHashesAffectedSet & scriptHashesAffectedOut, const T
         if (hashXTxs.load_factor() <= *rehashMaxLoadFactor)
             hashXTxs.rehash(0);  // shrink to fit
     }
+    elapsedMsec = (Util::getTimeMicros() - t0) / 1e3;
     return ret;
 }
 

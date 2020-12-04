@@ -122,6 +122,7 @@ struct Mempool
     struct Stats {
         std::size_t oldSize = 0, newSize = 0;
         std::size_t oldNumAddresses = 0, newNumAddresses = 0;
+        double elapsedMsec = 0.;
     };
 
     /// Add a batch of tx's that are new (downloaded from bitcoind) and were not previously in this mempool structure

@@ -62,7 +62,7 @@ public:
 
     /// Helper for log printing mempool status. Called this instance (from a timer), also called from the SynchMempoolTask
     /// for debug printing when it receives new mempool tx's.
-    static void printMempoolStatusToLog(size_t newSize, size_t numAddresses, bool useDebugLogger, bool force = false);
+    static void printMempoolStatusToLog(size_t newSize, size_t numAddresses, double msec, bool useDebugLogger, bool force = false);
 
     /// Thread-safe, lock-free
     bool isCoinBTC() const { return coinType.load(std::memory_order_relaxed) == BTC::Coin::BTC; }
