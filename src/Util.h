@@ -322,7 +322,7 @@ namespace Util {
         constexpr auto DeduceSet = [] {
             if constexpr (std::is_void_v<Set>)
                 // default of void leads to std::set being used as the return type
-                return std::set<typename Map::mapped_type>();
+                return std::set<typename Map::key_type>();
             else
                 return Set();
         };

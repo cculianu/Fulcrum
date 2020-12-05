@@ -103,7 +103,8 @@ auto Mempool::addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
                 // end memory saving hack
                 TXOInfo &txoInfo = tx->txos[n];
                 txoInfo = TXOInfo{out.nValue, sh, {}, {}};
-                tx->hashXs[sh].utxo.insert(n);
+                auto & utxoset = tx->hashXs[sh].utxo;
+                utxoset.emplace_hint(utxoset.end(), n);
                 hxit->second.push_back(tx); // save tx to hashx -> tx vector (amortized constant time insert at end -- we will sort and uniqueify this at end of this function)
                 scriptHashesAffected.insert(sh);
                 assert(txoInfo.isValid());
@@ -181,11 +182,6 @@ auto Mempool::addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
         // we do this once for each new tx we see.. and it can end up saving tons of space. Note the below structures
         // are either fixed in size or will only ever shrink as the mempool evolves so this is a good time to do this.
         tx->hashXs.rehash(tx->hashXs.size());
-        for (auto & [sh, ioinfo] : tx->hashXs) {
-            ioinfo.confirmedSpends.rehash(ioinfo.confirmedSpends.size());  // this is fixed once built
-            ioinfo.unconfirmedSpends.rehash(ioinfo.unconfirmedSpends.size()); // this is fixed once built
-            ioinfo.utxo.rehash(ioinfo.utxo.size()); // this may shrink but we rehash it once now to the largest size it will ever have
-        }
     }
 
     // now, sort and uniqueify data structures made temporarily inconsistent above (have dupes, are out-of-order)
@@ -445,6 +441,7 @@ auto Mempool::confirmedInBlock(ScriptHashesAffectedSet & scriptHashesAffectedOut
             // This txid is *not* to be removed, but MAY possibly be spending from a tx we are going to remove.
             // Scan all of its unconfirmed spends to see if they spend from a tx in the removal set, and if so,
             // recategorize those spends as confirmed spends.
+            std::size_t nUnconfs = 0;
             for (auto & [sh, ioinfo] : tx->hashXs) {
                 int ctr = 0;
                 for (auto itUS = ioinfo.unconfirmedSpends.begin(); itUS != ioinfo.unconfirmedSpends.end(); /* see below */) {
@@ -461,16 +458,24 @@ auto Mempool::confirmedInBlock(ScriptHashesAffectedSet & scriptHashesAffectedOut
                         // prevout txid not in rm set, keep moving
                         ++itUS;
                 }
-                // no more unconf spends now for this tx, reset flag
-                if (ctr && ioinfo.unconfirmedSpends.empty()) {
-                    tx->hasUnconfirmedParentTx = false;
+                // sum up final size, so we can detect when there are no more unconf spends for this tx
+                // (this unconf spends map for this sh may have gone from N -> N-1, or N -> N-2, etc, or may now be empty)
+                nUnconfs += ioinfo.unconfirmedSpends.size();
+                if (ctr && TRACE)
+                    DebugM("confirmedInBlock: txid ", tx->hash.toHex(), ", scripthash ", sh.toHex(), " removed ", ctr,
+                           " unconf spends (unconf map size for this txid+sh now: ", ioinfo.unconfirmedSpends.size(), ")");
+            }
+            // check if no more unconf spends now for this tx; if so, reset flag & notify all sh's for this tx
+            if (!nUnconfs) {
+                tx->hasUnconfirmedParentTx = false;
+                for (const auto & [sh, _] : tx->hashXs) {
                     // and also need to add to affected set since clients use the "height" info for this tx which went from -1 -> 0 now.
                     scriptHashesAffected.insert(sh);
                     // and also flag it as needing sort because its sorting criteria changed
                     hashXTxsEntriesNeedingSort->insert(sh);
-                    if (TRACE)
-                        DebugM("confirmedInBlock: txid ", tx->hash.toHex(), " now recategorized as not spending any unconfirmed parents");
                 }
+                if (TRACE)
+                    DebugM("confirmedInBlock: txid ", tx->hash.toHex(), " now recategorized as not spending any unconfirmed parents");
             }
         }
         ++itTxs; // in this branch: nothing removed, keep iterating
@@ -536,18 +541,14 @@ QVariantMap Mempool::dump() const
             const auto vl = Util::toList<QVariantList>(inf.utxo);
 #endif
             ret["utxos"] = vl;
-            ret["utxos (BucketCount)"] = qlonglong(inf.utxo.bucket_count());
-            ret["utxos (LoadFactor)"] = QString::number(double(inf.utxo.load_factor()), 'f', 4);
             QVariantMap cs;
             for (const auto & [txo, info] : inf.confirmedSpends)
                 cs[txo.toString()] = TXOInfo2Map(info);
             ret["confirmedSpends"] = cs;
-            ret["confirmedSpends (LoadFactor)"] = QString::number(double(inf.confirmedSpends.load_factor()), 'f', 4);
             QVariantMap us;
             for (const auto & [txo, info] : inf.unconfirmedSpends)
                 us[txo.toString()] = TXOInfo2Map(info);
             ret["unconfirmedSpends"] = us;
-            ret["unconfirmedSpends (LoadFactor)"] = QString::number(double(inf.unconfirmedSpends.load_factor()), 'f', 4);
             return ret;
         };
         for (const auto & [sh, ioinfo] : tx->hashXs)
@@ -699,8 +700,8 @@ namespace {
             return ret;
         };
 
-        enum IterMode { DropOnlyLeaves = 0, DropAnyTx = 1 };
-        static constexpr std::array<IterMode, 2> iterModes = { DropOnlyLeaves, DropAnyTx };
+        enum IterMode { DropOnlyLeaves = 0, DropAnyTx = 1, ConfirmAnyTx = 2, };
+        static constexpr std::array<IterMode, 3> iterModes = { DropOnlyLeaves, ConfirmAnyTx, DropAnyTx, };
 
         for (const auto iterMode : iterModes) { // we iterate twice. first iteraton is "leaf" mode, second is "drop any tx!!" mode.
             static const Mempool::GetTXOInfoFromDBFunc getTXOInfo = [](const TXO &txo) -> std::optional<TXOInfo> {
@@ -740,6 +741,9 @@ namespace {
                 break;
             case DropAnyTx:
                 Log() << "Running \"drop any\" test (this test is slow, please be patient) ...";
+                break;
+            case ConfirmAnyTx:
+                Log() << "Running \"confirm any\" test ...";
                 break;
             }
             Log();
@@ -810,7 +814,7 @@ namespace {
                     };
 
                     bitcoin::Amount beforeAmt;
-                    std::size_t beforeSize;
+                    std::size_t beforeSize{};
 
                     // build expected set to verify the results of calling dropTxs() (works only in leaf mode (iter == 0)
                     if (iterMode == DropOnlyLeaves) {
@@ -863,16 +867,26 @@ namespace {
 
                     Mempool::ScriptHashesAffectedSet shset;
                     auto t1 = Tic();
-                    const auto stats = mempool.dropTxs(shset, txids, false);
+                    const auto stats = iterMode == ConfirmAnyTx
+                                       ? mempool.confirmedInBlock(shset, txids, false)
+                                       : mempool.dropTxs(shset, txids, false);
                     t1.fin();
                     actualTimeCost += t1.usec();
                     const auto [utxos, value] = getUnconfUtxos();
-                    Log() << "Iter " << ct << ": oldSize: " << stats.oldSize << " newSize: " << stats.newSize
-                          << " oldNumAddresses: " << stats.oldNumAddresses << " newNumAddresses: " << stats.newNumAddresses
-                          << " shsaffected: " << shset.size()  << " utxoSetSize: " << beforeSize << " -> " << utxos.size()
-                          << " value: " << QString::fromStdString(beforeAmt.ToString()) << " -> " << QString::fromStdString(value.ToString())
-                          << " (" << QString::fromStdString((value - beforeAmt).ToString()) << ")"
-                          << " in " << t1.msecStr(1) << " msec";
+                    if (iterMode == DropOnlyLeaves) {
+                        Log() << "Iter " << ct << ": oldSize: " << stats.oldSize << " newSize: " << stats.newSize
+                              << " oldNumAddresses: " << stats.oldNumAddresses << " newNumAddresses: " << stats.newNumAddresses
+                              << " shsaffected: " << shset.size()  << " utxoSetSize: " << beforeSize << " -> " << utxos.size()
+                              << " value: " << QString::fromStdString(beforeAmt.ToString()) << " -> " << QString::fromStdString(value.ToString())
+                              << " (" << QString::fromStdString((value - beforeAmt).ToString()) << ")"
+                              << " in " << t1.msecStr(1) << " msec";
+                    } else {
+                        Log() << "Iter " << ct << ": oldSize: " << stats.oldSize << " newSize: " << stats.newSize
+                              << " oldNumAddresses: " << stats.oldNumAddresses << " newNumAddresses: " << stats.newNumAddresses
+                              << " shsaffected: " << shset.size()  << " utxoSetSize: " << utxos.size()
+                              << " value: " << QString::fromStdString(value.ToString())
+                              << " in " << t1.msecStr(1) << " msec";
+                    }
                     if (!dumpBefore.isEmpty()) {
                         const QVariantMap dumpAfter = mempool.dump();
                         Log() << QString(79, QChar{'-'});
@@ -882,17 +896,60 @@ namespace {
                         Log() << Json::toUtf8(dumpAfter);
                         Log() << QString(79, QChar{'-'});
                     }
-                    if (iterMode == DropOnlyLeaves) {
-                        // For now we do this sanity check only on "leaf" mode (first iteratiorn)
+
+                    // general sanity checks
+                    {
+                        // check the sanity of the unconf flag, among other things
+                        for (const auto & [txid, tx] : mempool.txs) {
+                            std::size_t nUnconf = 0;
+                            for (const auto & [sh, ioinfo] : tx->hashXs) {
+                                nUnconf += ioinfo.unconfirmedSpends.size();
+                                for (const auto & [txo, txoinfo] : ioinfo.unconfirmedSpends)
+                                    if (!mempool.txs.count(txo.txHash))
+                                        throw Exception("A scripthash now refers to an unconfirmed spend that no longer exists");
+                                for (const auto & [txo, txoinfo] : ioinfo.confirmedSpends)
+                                    if (mempool.txs.count(txo.txHash))
+                                        throw Exception("A scripthash now refers to an \"confirmed spend\" that is still in mempool");
+                            }
+                            if (bool(nUnconf) != tx->hasUnconfirmedParentTx)
+                                throw Exception("A tx has bad \"hasUnconfirmedParentTx\" flag now!");
+                        }
+                        // check that hashXTxs doesn't refer to anything that has been removed and that hashXTxs
+                        // order is correct
+                        std::set<TxHash> setInVecs;
+                        for (const auto & [sh, txvec] : mempool.hashXTxs) {
+                            std::set<TxHash> setInVecsThisSh;
+                            const Mempool::TxRef *pprev = nullptr;
+                            for (const auto & tx : txvec) {
+                                if (!tx)
+                                    throw Exception("Encountered a nullptr txvec entry!");
+                                if (pprev && !(**pprev < *tx))
+                                    throw Exception("Encountered bad txvec ordering!");
+                                pprev = &tx;
+                                if (!mempool.txs.count(tx->hash))
+                                    throw Exception("Encountered a txvec entry pointing to a tx not in mempool!");
+                                if (!setInVecsThisSh.insert(tx->hash).second)
+                                    throw Exception("Dupe txhash in a txvec encountered");
+                            }
+                            setInVecs.merge(std::move(setInVecsThisSh));
+                        }
+                        if (Util::keySet(mempool.txs) != setInVecs)
+                            throw Exception("Some txs in mempool.txs are not in txvecs!");
+                    }
+                    if (iterMode == DropOnlyLeaves || iterMode == ConfirmAnyTx) {
                         if (stats.oldSize - stats.newSize != txids.size())
-                            throw Exception("New tx counds are not as expected!");
+                            throw Exception("New tx counts are not as expected!");
+                    }
+                    if (iterMode == DropOnlyLeaves) {
+                        // For now we do these sanity checks only on "leaf" mode (first iteratiorn)
                         if (shset != expected.affected)
                             throw Exception("ScriptHashes affected is not as expected!");
                         if (utxos != expected.unconfUtxos)
                             throw Exception("Resultant utxo set is not as expected!");
                         if (value != expected.unconfUtxoValue)
                             throw Exception("Resultant utxo totals are not as expected!");
-                    } else if (iterMode == DropAnyTx) {
+                    }
+                    if (iterMode == DropAnyTx) {
                         // In this mode the only way to verify is to build a second mempool with the same txid set
                         // as the first -- this checks that spends and everything else is consistent.
                         // This of course assumes that the "addTxs" code is bug-free and always leads to consistency

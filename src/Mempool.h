@@ -26,8 +26,10 @@
 
 #include <QVariantMap>
 
+#include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
@@ -43,8 +45,9 @@ struct Mempool
     struct Tx
     {
         TxHash hash; ///< in reverse bitcoind order (ready for hex encode), fixed value.
-        unsigned sizeBytes = 0;
+
         bitcoin::Amount fee{bitcoin::Amount::zero()}; ///< we calculate this fee ourselves since in the past I noticed we get a funny value sometimes that's off by 1 or 2 sats --  which I suspect is due limitations of doubles, perhaps?
+        unsigned sizeBytes = 0;
         bool hasUnconfirmedParentTx = false; ///< If true, this tx depends on another tx in the mempool. This is fixed once calculated properly by the SynchMempoolTask in Controller.cpp
 
         /// These are all the txos in this tx. Once set-up, this doesn't change (unlike IOInfo.utxo).
@@ -54,8 +57,9 @@ struct Mempool
         std::vector<TXOInfo> txos;
 
         struct IOInfo {
-            /// spends. .confirmedSpends here affects get_balance. We use unordered_map here because it wastes less space than robin_hood on fixed-sized maps
-            std::unordered_map<TXO, TXOInfo>
+            /// spends. .confirmedSpends here affects get_balance.
+            /// We use std::map here because it wastes less space than robin_hood or unordered_map (and may even be faster than hashing on TXO for small maps)
+            std::map<TXO, TXOInfo>
                 /// Spends of txo's from the db (confirmed) utxoset.
                 /// - Items here get _subtracted_ from the "unconfirmed" in RPC get_balance.
                 /// - Items appearing here also suppress confirmed utxo items from appearing in RPC listunspent (since they are spent in mempool).
@@ -67,7 +71,7 @@ struct Mempool
             /// the mempool evolves if new descendants appear that spend these txos (those descendants will list the
             /// item that gets deleted from here in their own IOInfo::unconfirmedSpends map).
             /// + Items here get _added_ to the "unconfirmed" balance in RPC get_balance.
-            std::unordered_set<IONum> utxo; ///< IONums which are indices into the txos vector declared above. We use an unordered_set here because it's more efficient than a regular set, and we don't care about order anyway.
+            std::set<IONum> utxo; ///< IONums which are indices into the txos vector declared above. We use a set here because it may be faster and use less memory than a hashtable variant.
 
             bool operator==(const IOInfo &o) const noexcept {
                 return std::tie(confirmedSpends, unconfirmedSpends, utxo) == std::tie(o.confirmedSpends, o.unconfirmedSpends, o.utxo);

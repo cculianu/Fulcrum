@@ -43,7 +43,7 @@ struct TXO {
     bool isValid() const { return txHash.length() == HashLen;  }
     QString toString() const;
 
-    bool operator==(const TXO &o) const noexcept { return txHash == o.txHash && outN == o.outN; }
+    bool operator==(const TXO &o) const noexcept { return std::tie(outN, txHash) == std::tie(o.outN, o.txHash); /* cheaper to compare the outNs first */ }
     bool operator<(const TXO &o) const noexcept { return std::tie(txHash, outN) < std::tie(o.txHash, o.outN); }
 
 
@@ -100,8 +100,9 @@ struct TXOInfo {
     bool isValid() const { return amount / bitcoin::Amount::satoshi() >= 0 && hashX.length() == HashLen; }
 
     /// for debug, etc
-    bool operator==(const TXOInfo &o) const
-        { return amount == o.amount && hashX == o.hashX && confirmedHeight == o.confirmedHeight && txNum == o.txNum; }
+    bool operator==(const TXOInfo &o) const {
+        return std::tie(amount, hashX, confirmedHeight, txNum) == std::tie(o.amount, o.hashX, o.confirmedHeight, o.txNum);
+    }
     bool operator!=(const TXOInfo &o) const { return !(*this == o); }
 
     QByteArray toBytes() const noexcept {
