@@ -834,13 +834,21 @@ void SynchMempoolTask::doGetRawMempool()
             // Note the release and re-acquisition of the lock should be ok since this Controller
             // thread is the only thread that ever modifies the mempool, so a coherent view of the
             // mempool is the case here even after having released and re-acquired the lock.
+            Mempool::ScriptHashesAffectedSet affected; affected.reserve(32);
+            Mempool::Stats res;
+            // exclusively-locked scope, do minimal work here
             {
                 auto [mempool, lock] = storage->mutableMempool();
-                const auto res = mempool.dropTxs(scriptHashesAffected /* will upate set */, droppedTxs, TRACE);
-                droppedCt = res.oldSize - res.newSize;
-                DebugM("Dropped ", droppedCt, " txs from mempool (", res.oldNumAddresses-res.newNumAddresses,
-                       " addresses), new mempool size: ", res.newSize, " (", res.newNumAddresses, " addresses)");
+                res = mempool.dropTxs(affected, droppedTxs, TRACE);
             } // release lock
+            // do bookkeeping, maybe print debug log
+            {
+                droppedCt = res.oldSize - res.newSize;
+                DebugM("Dropped ", droppedCt, " txs from mempool (", affected.size(), " addresses) in ",
+                       QString::number(res.elapsedMsec, 'f', 3), " msec, new mempool size: ", res.newSize,
+                       " (", res.newNumAddresses, " addresses)");
+                scriptHashesAffected.merge(std::move(affected)); /* update set here with lock not held */
+            }
             if (UNLIKELY(droppedCt != droppedTxs.size())) {
                 Warning() << "Synch mempool expected to drop " << droppedTxs.size() << ", but in fact dropped "
                           << droppedCt << " -- retrying getrawmempool";
