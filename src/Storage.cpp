@@ -40,6 +40,7 @@
 #include <atomic>
 #include <cstddef> // for std::byte
 #include <cstring> // for memcpy
+#include <limits>
 #include <list>
 #include <optional>
 #include <shared_mutex>
@@ -504,7 +505,9 @@ struct Storage::Pvt
 
     std::atomic<int64_t> utxoCt = 0;
 
-    std::atomic<uint32_t> earliestUndoHeight = UINT32_MAX; ///< the purpose of this is to control when we issue "delete" commands to the db for deleting expired undo infos from the undo db
+    static constexpr uint32_t InvalidUndoHeight = std::numeric_limits<uint32_t>::max();
+
+    std::atomic<uint32_t> earliestUndoHeight = InvalidUndoHeight; ///< the purpose of this is to control when we issue "delete" commands to the db for deleting expired undo infos from the undo db
 
     /// This cache is anticipated to see heavy use for get_history, so we may wish to make it larger. MAKE THIS CONFIGURABLE.
     static constexpr size_t kMaxNum2HashMemoryBytes = 100'000'000; ///< 100 MB max cache
@@ -1078,7 +1081,7 @@ void Storage::loadCheckEarliestUndo()
 {
     FatalAssert(!!p->db.undo,  __func__, ": Undo db is not open");
 
-    const auto t0 = Util::getTimeNS();
+    const Tic t0;
     int ctr = 0;
     {
         std::unique_ptr<rocksdb::Iterator> iter(p->db.undo->NewIterator(p->db.defReadOpts));
@@ -1094,12 +1097,12 @@ void Storage::loadCheckEarliestUndo()
     }
     if (ctr) {
         Debug() << "Undo db contains " << ctr << " entries, earliest is " << p->earliestUndoHeight.load() << ", "
-                << QString::number((Util::getTimeNS() - t0)/1e6, 'f', 2) << " msec elapsed.";
+                << t0.msecStr(2) << " msec elapsed.";
     }
 }
 
 bool Storage::hasUndo() const {
-    return p->earliestUndoHeight < UINT32_MAX;
+    return p->earliestUndoHeight != p->InvalidUndoHeight;
 }
 
 struct Storage::UTXOBatch::P {
@@ -1692,7 +1695,7 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
 
             if (p->earliestUndoHeight >= undo.height)
                 // oops, we're out of undos now!
-                p->earliestUndoHeight = UINT32_MAX;
+                p->earliestUndoHeight = p->InvalidUndoHeight;
             GenericDBDelete(p->db.undo.get(), uint32_t(undo.height)); // make sure to delete this undo info since it was just applied.
 
             // lastly, truncate the tx num file and re-set txNumNext to point to this block's txNum0 (thereby recycling it)
