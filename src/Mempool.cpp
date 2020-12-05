@@ -471,9 +471,14 @@ auto Mempool::confirmedInBlock(ScriptHashesAffectedSet & scriptHashesAffectedOut
             if (!nUnconfs) {
                 tx->hasUnconfirmedParentTx = false;
                 for (const auto & [sh, _] : tx->hashXs) {
-                    // and also need to add to affected set since clients use the "height" info for this tx which went from -1 -> 0 now.
+                    // We also need to add to affected set since clients use the "height" info for status -- and this
+                    // tx went from height == -1 -> height == 0 now.
+                    //
+                    // Note: this casts a slightly wide net because it informs all the scripthashes in child txs of this
+                    // tx -- which is what we want.  But it also means the debug log will show a larger address count
+                    // for this operation than the address count of the block itself.
                     scriptHashesAffected.insert(sh);
-                    // and also flag it as needing sort because its sorting criteria changed
+                    // We also flag it as needing sort because its sorting criteria changed.
                     hashXTxsEntriesNeedingSort->insert(sh);
                 }
                 if (TRACE)
