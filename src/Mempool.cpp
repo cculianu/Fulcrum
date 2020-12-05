@@ -367,7 +367,7 @@ std::size_t Mempool::rmTxsInHashXTxs(const TxHashSet &txids, const ScriptHashesA
 {
     Tic t0;
     std::size_t ct = 0, sortCt = 0;
-    qint64 sortTimeMicros = 0;
+    qint64 sortTimeNanos = 0;
 
     // next, scan hashXs, removing entries for the txids in question
     for (const auto & hashX : scriptHashesAffected) {
@@ -408,12 +408,12 @@ std::size_t Mempool::rmTxsInHashXTxs(const TxHashSet &txids, const ScriptHashesA
             Tic t1;
             std::sort(txvec.begin(), txvec.end(), Mempool::TxRefOrdering{});
             ++sortCt;
-            sortTimeMicros += t1.usec();
+            sortTimeNanos += t1.nsec();
         }
     }
     DebugM("rmTxsInHashXTxs: removed ", ct, " entries in ", t0.msecStr(), " msec",
            (sortCt ? QString(" sorted %1 entries").arg(sortCt) : ""),
-           (sortTimeMicros ? QString(" (sort time: %1 msec)").arg(QString::number(sortTimeMicros/1e3, 'f', 3)) : ""));
+           (sortTimeNanos ? QString(" (sort time: %1 msec)").arg(QString::number(sortTimeNanos/1e6, 'f', 3)) : ""));
     return ct;
 }
 
