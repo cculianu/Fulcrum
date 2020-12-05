@@ -369,10 +369,12 @@ std::size_t Mempool::rmTxsInHashXTxs(const TxHashSet &txids, const ScriptHashesA
     for (const auto & hashX : scriptHashesAffected) {
         auto it = hashXTxs.find(hashX);
         if (UNLIKELY(it == hashXTxs.end())) {
-            Warning() << "rmTxsInHashXTxs: Could not find hashX " << hashX.toHex() << " in hashXTxs map! FIXME!";
+            Warning() << "rmTxsInHashXTxs: Could not find scripthash " << hashX.toHex() << " in hashXTxs map! FIXME!";
             continue;
         }
         auto & txvec = it->second;
+        if (UNLIKELY(txvec.empty()))
+            Warning() << "rmTxsInHashXTxs: txvec for scripthash " << hashX.toHex() << " is empty! This should never happen! FIXME!";
         std::vector<TxRef> newvec;
         newvec.reserve(txvec.size());
         for (auto &txref : txvec) {
@@ -925,6 +927,8 @@ namespace {
                                     throw Exception("Encountered a nullptr txvec entry!");
                                 if (pprev && !(**pprev < *tx))
                                     throw Exception("Encountered bad txvec ordering!");
+                                if (pprev && *pprev == tx)
+                                    throw Exception("Encountered dupe tx entry in a txvec!");
                                 pprev = &tx;
                                 if (!mempool.txs.count(tx->hash))
                                     throw Exception("Encountered a txvec entry pointing to a tx not in mempool!");
