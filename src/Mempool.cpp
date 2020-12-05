@@ -455,8 +455,8 @@ auto Mempool::confirmedInBlock(ScriptHashesAffectedSet & scriptHashesAffectedOut
                         // transfer from unconfirmed spends -> confirmed spends
                         ioinfo.confirmedSpends.insert(ioinfo.unconfirmedSpends.extract(it2move)); // does not invalidate refs
                         ++ctr;
-                        // TODO: remove this when debugging done
-                        DebugM("confirmedInBlock: TXO ", txo.toString(), " now recategorized under \"confirmedSpends\" for txid ", tx->hash.toHex());
+                        if (TRACE)
+                            DebugM("confirmedInBlock: TXO ", txo.toString(), " now recategorized under \"confirmedSpends\" for txid ", tx->hash.toHex());
                     } else
                         // prevout txid not in rm set, keep moving
                         ++itUS;
@@ -468,8 +468,8 @@ auto Mempool::confirmedInBlock(ScriptHashesAffectedSet & scriptHashesAffectedOut
                     scriptHashesAffected.insert(sh);
                     // and also flag it as needing sort because its sorting criteria changed
                     hashXTxsEntriesNeedingSort->insert(sh);
-                    // TODO: remove this when debugging done
-                    DebugM("confirmedInBlock: txid ", tx->hash.toHex(), " now recategorized as not spending any unconfirmed parents");
+                    if (TRACE)
+                        DebugM("confirmedInBlock: txid ", tx->hash.toHex(), " now recategorized as not spending any unconfirmed parents");
                 }
             }
         }
