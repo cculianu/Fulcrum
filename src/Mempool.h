@@ -163,7 +163,7 @@ struct Mempool
     /// searched for recursively.  Normally when this is called, it's for RBF or full mempool eviction, and such tx's
     /// always drop out as an entire set if in a chain (so this aforementioned perf. penralty is not normally paid).
     ///
-    /// Why is the penalty?  This is because descendant tx's not appearing in `txids` must be removed since they are
+    /// Why the penalty?  This is because descendant tx's not appearing in `txids` must be removed since they are
     /// txs that no longer are spending valid inputs (as far as this Mempool instance is aware of, at least).
     Stats dropTxs(ScriptHashesAffectedSet & scriptHashesAffected, const TxHashSet & txids, bool TRACE = false,
                   std::optional<float> rehashMaxLoadFactor = {});
