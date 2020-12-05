@@ -1276,17 +1276,23 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
     std::scoped_lock guard(p->blocksLock, p->headerVerifierLock, p->blkInfoLock, p->mempoolLock);
 
     if (notify) {
-        // txs in block can never be in mempool. Ensure they are gone.
+        // Txs in block can never be in mempool. Ensure they are gone from mempool right away so that notifications
+        // to clients are as accurate as possible (notifications may happen after this function returns).
         Mempool::TxHashSet txids;
         const auto sz = ppb->txInfos.size();
         txids.reserve(sz > 0 ? sz-1 : 0);
         for (std::size_t i = 1 /* skip coinbase */; i < sz; ++i)
             txids.insert(ppb->txInfos[i].hash);
-        const auto res = p->mempool.dropTxs(*notify, txids, Trace::isEnabled(), 0.5f /* shrink to fit load_factor threshold */);
-        if (const auto diff = res.oldSize - res.newSize; diff && Debug::isEnabled()) {
+        Mempool::ScriptHashesAffectedSet affected;
+        // Pre-reserve some capacity for the tmp affected set to avoid much rehashing.
+        // Use the heuristic 3 x numtxs capped at the SubsMgr::kRecommendedPendingNotificationsReserveSize (2048).
+        affected.reserve(std::min(txids.size()*3, SubsMgr::kRecommendedPendingNotificationsReserveSize));
+        const auto res = p->mempool.confirmedInBlock(affected, txids, Trace::isEnabled(), 0.5f /* shrink to fit load_factor threshold */);
+        if (const auto diff = res.oldSize - res.newSize; (diff || res.elapsedMsec > 5.) && Debug::isEnabled()) {
             Debug() << "addBlock: removed " << diff << " txs from mempool involving "
-                    << (res.oldNumAddresses-res.newNumAddresses) << " addresses";
+                    << affected.size() << " addresses in " << QString::number(res.elapsedMsec, 'f', 3) << " msec";
         }
+        notify->merge(std::move(affected));
     }
 
     const auto verifUndo = p->headerVerifier; // keep a copy of verifier state for undo purposes in case this fails
@@ -1560,6 +1566,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
 BlockHeight Storage::undoLatestBlock(bool notifySubs)
 {
     BlockHeight prevHeight{0};
+    size_t nSH = 0; // for stats printing
     std::unique_ptr<UndoInfo::ScriptHashSet> notify;
     if (notifySubs)
         notify = std::make_unique<UndoInfo::ScriptHashSet>();
@@ -1697,15 +1704,17 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
             saveUtxoCt();
             setDirty(false); // phew. done.
 
+            nSH = undo.scriptHashes.size();
+
             if (notify) {
                 if (notify->empty())
                     notify->swap(undo.scriptHashes);
                 else
-                    notify->merge(undo.scriptHashes);
+                    notify->merge(std::move(undo.scriptHashes));
             }
         }
 
-        const size_t nTx = undo.blkInfo.nTx, nSH = undo.scriptHashes.size();
+        const size_t nTx = undo.blkInfo.nTx;
         const auto elapsedms = (Util::getTimeNS() - t0) / 1e6;
         Log() << "Applied undo for block " << undo.height << " hash " << Util::ToHexFast(undo.hash) << ", "
               << nTx << " " << Util::Pluralize("transaction", nTx)

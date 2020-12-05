@@ -102,7 +102,7 @@ struct Mempool
     /// ensures an ordering of TxRefs for the set below that are from fewest ancestors -> most ancestors
     struct TxRefOrdering {
         bool operator()(const TxRef &a, const TxRef &b) const {
-            if (a && b) {
+            if (LIKELY(a && b)) {
                 if (UNLIKELY(a == b))
                     return false;
                 return *a < *b;
@@ -114,7 +114,7 @@ struct Mempool
     };
     /// Note: The TxRefs here here point to the same object as the mapped_type in the TxMap above
     /// Note that while the mapped_type is a vector, it is guaranteed to contain unique TxRefs, ordered by
-    /// TxRefOrdering above.  This invariant is maintained in Controller.cpp, SynchMempoolTask::processResults().
+    /// TxRefOrdering above.  This invariant is maintained in addTxs() as well as confirmedInBlock().
     using HashXTxMap = robin_hood::unordered_node_map<HashX, std::vector<TxRef>, HashHasher>;
 
 
@@ -139,7 +139,8 @@ struct Mempool
         double elapsedMsec = 0.;
     };
 
-    /// Add a batch of tx's that are new (downloaded from bitcoind) and were not previously in this mempool structure
+    /// Add a batch of tx's that are new (downloaded from bitcoind) and were not previously in this mempool structure.
+    ///
     /// Note that all the txs in txsNew *must* be new (must not already exist in this mempool instance).
     /// scriptHashesAffected is updated for all of the new tx's added.
     /// This is called by the SynchMempoolTask in Controller.cpp.
@@ -151,18 +152,30 @@ struct Mempool
 
     // -- Drop from mempool
 
-    using TxHashSet = std::unordered_set<TxHash, HashHasher>;
+    using TxHashSet = std::unordered_set<TxHash, HashHasher>; ///< Used below by dropTxs() & confirmedInBlock()
+
     /// Drop a bunch of tx's, deleting them from this data structure and reversing the effects of their spends
-    /// in the mempool. This is called by the SynchMempoolTask whenever the bitcoind mempool has droped tx's.
-    /// Note that this function executes much faster if the caller is not dropping any tx's in the middle of an
-    /// unconfirmed chain.  This is because descendant txs not in `txids` but that spend from txs in `txids` will
-    /// also be removed, and they must be searched for recursively.
+    /// in the mempool.
     ///
-    /// Why is this?  This is because descendant tx's not appearing in `txids` must be removed since they are txs that
-    /// no longer are spending valid inputs (as far as this Mempool instance is concerned at least).
+    /// This is called by the SynchMempoolTask whenever the bitcoind mempool has droped tx's. Note that this function
+    /// executes much faster if the caller is not dropping any tx's in the middle of an unconfirmed chain.  This is
+    /// because descendant txs not in `txids` but that spend from txs in `txids` will also be removed, and they must be
+    /// searched for recursively.  Normally when this is called, it's for RBF or full mempool eviction, and such tx's
+    /// always drop out as an entire set if in a chain (so this aforementioned perf. penralty is not normally paid).
+    ///
+    /// Why the penalty?  This is because descendant tx's not appearing in `txids` must be removed since they are
+    /// txs that no longer are spending valid inputs (as far as this Mempool instance is aware of, at least).
     Stats dropTxs(ScriptHashesAffectedSet & scriptHashesAffected, const TxHashSet & txids, bool TRACE = false,
                   std::optional<float> rehashMaxLoadFactor = {});
 
+
+    /// Called by Storage::addBlock -- removes the txids in question, and also reassigns any txs spending them to
+    /// "confirmed spends".
+    ///
+    /// Note this is like dropTxs but doesn't drop child txs, just reassigns their spends. *Only* call this during
+    /// block processing when you know for a fact that the txids in `txids` are now confirmed!
+    Stats confirmedInBlock(ScriptHashesAffectedSet & scriptHashesAffected, const TxHashSet & txids, bool TRACE = false,
+                           std::optional<float> rehashMaxLoadFactor = {});
 
     // -- Fee histogram support (used by mempool.get_fee_histogram RPC) --
 
@@ -184,18 +197,22 @@ struct Mempool
 
     // -- Misc. utility
 
-    /// Note: clearing the mempool is only done on block undo. Client code should in general just use dropTxs().
+    /// Note: clearing the mempool is only done on block undo. Client code should in general just use dropTxs() and/or
+    /// confirmedInBlock().
     void clear();
 
-protected:
+private:
     /// Given a set of txids in this Mempool, grow the set to encompass all descendant tx's that spend
-    /// from the initial set.  Will keep iterating until it cennot grow the set any longer.
+    /// from the initial set.  Will keep iterating until it cannot grow the set any longer.
     /// dropTxs() implicitly calls this.
     std::size_t growTxHashSetToIncludeDescendants(TxHashSet &txids, bool TRACE = false) const;
 
-
-    // Actual implementation of same-named function
+    /// Actual implementation of same-named function
     std::size_t growTxHashSetToIncludeDescendants(const char *const logprefix, TxHashSet &txids, bool TRACE) const;
+
+    /// Internal use; called by dropTxs and confirmedInBlock to do some book-keeping; returns number of txs removed.
+    std::size_t rmTxsInHashXTxs(const TxHashSet &txids, const ScriptHashesAffectedSet &scriptHashesAffected, bool TRACE,
+                                const std::optional<ScriptHashesAffectedSet> &hashXsNeedingSort = {});
 
 #ifdef ENABLE_TESTS
 public:

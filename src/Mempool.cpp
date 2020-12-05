@@ -163,7 +163,7 @@ auto Mempool::addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
                     sh = prevInfo.hashX = hxit->first;
                 } else {
                     // new entry, insert, update hxit
-                    auto pair = tx->hashXs.insert({sh, decltype(hxit->second)()});
+                    auto pair = tx->hashXs.emplace(std::piecewise_construct, std::forward_as_tuple(sh), std::forward_as_tuple());
                     hxit = pair.first;
                 }
                 // end memory saving hack
@@ -263,6 +263,7 @@ auto Mempool::dropTxs(ScriptHashesAffectedSet & scriptHashesAffectedOut, const T
 
     Stats ret;
     ScriptHashesAffectedSet scriptHashesAffected;
+    int skipPrevCt = 0;
     auto & [oldSize, newSize, oldNumAddresses, newNumAddresses, elapsedMsec] = ret;
     oldSize = this->txs.size();
     oldNumAddresses = this->hashXTxs.size();
@@ -271,18 +272,26 @@ auto Mempool::dropTxs(ScriptHashesAffectedSet & scriptHashesAffectedOut, const T
     for (const auto & txid : txids) {
         auto it = txs.find(txid);
         if (UNLIKELY(it == txs.end())) {
-            // Note that it's ok to call this function for non-existant tx's -- we call it when adding new blocks
-            // and it's possible for txids in blocks to not be in mempool. Only print a message in debug mode.
+            // Note that it's ok to call this function for non-existant tx's -- if we call it when adding new blocks
+            // then it's possible for txids in blocks to not be in mempool. Only print a message in debug mode.
             DebugM("dropTxs: tx ", Util::ToHexFast(txid), " not found in mempool");
             continue;
         }
         auto & tx = it->second;
         // for each hashX this tx affects, look for unconfirmed spends
         for (const auto & [hashX, ioinfo]: tx->hashXs) {
-            scriptHashesAffected.insert(hashX); // update affected set with all addresses for this tx
-            // for each unconfirmed spend, go to the previous tx in mempool and add back the utxo to ioinfo.utxo for the parent tx hashx entry
+            // update affected set with all addresses involved with this tx (spends, outs, etc)
+            scriptHashesAffected.insert(hashX);
+            // for each unconfirmed spend, go to the previous tx in mempool and add back the utxo to ioinfo.utxo
+            // for the parent tx hashx entry
             for (const auto & [txo, txoinfo] : ioinfo.unconfirmedSpends) {
-                scriptHashesAffected.insert(txoinfo.hashX); // updated affected set with address of txo we spent as well
+                assert(txoinfo.hashX == hashX);
+                if (txids.count(txo.txHash)) {
+                    // prev tx will be (or has already been) removed, no sense in doing any utxo crediting for a tx
+                    // that will disappear shortly
+                    ++skipPrevCt;
+                    continue;
+                }
                 auto prevIt = txs.find(txo.txHash);
                 if (LIKELY(prevIt != txs.end())) {
                     auto & prevTx = prevIt->second;
@@ -323,13 +332,48 @@ auto Mempool::dropTxs(ScriptHashesAffectedSet & scriptHashesAffectedOut, const T
                 }
             }
         }
+
+        // and finally remove this tx from `txs` now, while we have its iterator .. this is faster
+        // than doing the remove later, since we already have the iterator now!
+        txs.erase(it);
     }
+
+    if (skipPrevCt)
+        DebugM("dropTxs: previous tx \"crediting\" skipped due to being in drop set: ", skipPrevCt);
+
+    // next, scan hashXs, removing entries for the txids in question
+    // -- note this helper function doesn't look at `txs` so it's fine that we removed already in the loop above.
+    rmTxsInHashXTxs(txids, scriptHashesAffected, TRACE);
+
+    // finally, update scriptHashesAffectedOut
+    scriptHashesAffectedOut.merge(std::move(scriptHashesAffected));
+
+    // update returned stats
+    newSize = this->txs.size();
+    newNumAddresses = this->hashXTxs.size();
+
+    if (rehashMaxLoadFactor) {
+        if (txs.load_factor() <= *rehashMaxLoadFactor)
+            txs.rehash(0); // shrink to fit
+        if (hashXTxs.load_factor() <= *rehashMaxLoadFactor)
+            hashXTxs.rehash(0);  // shrink to fit
+    }
+    elapsedMsec = t0.msec<decltype(elapsedMsec)>();
+    return ret;
+}
+
+std::size_t Mempool::rmTxsInHashXTxs(const TxHashSet &txids, const ScriptHashesAffectedSet &scriptHashesAffected, const bool TRACE,
+                                     const std::optional<ScriptHashesAffectedSet> &hashXsNeedingSort)
+{
+    Tic t0;
+    std::size_t ct = 0, sortCt = 0;
+    qint64 sortTimeNanos = 0;
 
     // next, scan hashXs, removing entries for the txids in question
     for (const auto & hashX : scriptHashesAffected) {
         auto it = hashXTxs.find(hashX);
         if (UNLIKELY(it == hashXTxs.end())) {
-            Warning() << "dtopTxs: Could not find hashX " << hashX.toHex() << " in hashXTxs map! FIXME!";
+            Warning() << "rmTxsInHashXTxs: Could not find hashX " << hashX.toHex() << " in hashXTxs map! FIXME!";
             continue;
         }
         auto & txvec = it->second;
@@ -340,31 +384,103 @@ auto Mempool::dropTxs(ScriptHashesAffectedSet & scriptHashesAffectedOut, const T
             if (txids.count(txref->hash) == 0)
                 // not in txid set; copy it to newvec
                 newvec.push_back(txref);
+            else
+                ++ct; // will be removed, tally count
         }
         if (!newvec.empty() && newvec.size() != txvec.size()) {
             // swap the vectors with the one not containing the affected txids
             if (TRACE) {
                 const auto oldsz = txvec.size(), newsz = newvec.size();
                 if (TRACE)
-                    Debug() << "dropTxs: Shrunk hashX " << Util::ToHexFast(hashX) << " txvec from size " << oldsz
+                    Debug() << "rmTxsInHashXTxs: Shrunk hashX " << Util::ToHexFast(hashX) << " txvec from size " << oldsz
                             << " to size " << newsz;
             }
             txvec.swap(newvec);
             txvec.shrink_to_fit();
-        } else if (newvec.empty()){
+        } else if (newvec.empty()) {
             // if the new vector is empty meaning this hashX should disappear from the hashXTxs map!
             hashXTxs.erase(it);
-            if (TRACE) Debug() << "dropTxs: Removed hashX " << Util::ToHexFast(hashX) << " which now has no txs in mempool";
+            if (TRACE) Debug() << "rmTxsInHashXTxs: Removed hashX " << Util::ToHexFast(hashX) << " which now has no txs in mempool";
+            continue; // removed; ensure we skip the below potential sort
+        }
+        // if sorting specified, sort if in set (and if not removed 2 lines above)
+        if (hashXsNeedingSort && hashXsNeedingSort->count(hashX)) {
+            Tic t1;
+            std::sort(txvec.begin(), txvec.end(), Mempool::TxRefOrdering{});
+            ++sortCt;
+            sortTimeNanos += t1.nsec();
         }
     }
+    DebugM("rmTxsInHashXTxs: removed ", ct, " entries in ", t0.msecStr(), " msec",
+           (sortCt ? QString(" sorted %1 entries").arg(sortCt) : ""),
+           (sortTimeNanos ? QString(" (sort time: %1 msec)").arg(QString::number(sortTimeNanos/1e6, 'f', 3)) : ""));
+    return ct;
+}
 
-    // next, erase the txid's in question from the txs map
-    for (const auto & txid : txids) {
-        txs.erase(txid);
+auto Mempool::confirmedInBlock(ScriptHashesAffectedSet & scriptHashesAffectedOut, const TxHashSet & txids, bool TRACE,
+                               std::optional<float> rehashMaxLoadFactor) -> Stats
+{
+    const auto t0 = Tic();
+
+    Stats ret;
+    ScriptHashesAffectedSet scriptHashesAffected;
+    std::optional<ScriptHashesAffectedSet> hashXTxsEntriesNeedingSort;
+    hashXTxsEntriesNeedingSort.emplace();
+    auto & [oldSize, newSize, oldNumAddresses, newNumAddresses, elapsedMsec] = ret;
+    oldSize = this->txs.size();
+    oldNumAddresses = this->hashXTxs.size();
+
+    // iterate through all txs in mempool
+    for (auto itTxs = txs.begin(); itTxs != txs.end(); /* may delete during iteration, see below */) {
+        const auto & [txid, tx] = *itTxs; // take refs for convenience (note they are invalidated after if erase(itTxs) )
+        const bool inRmSet = txids.count(txid);
+        if (inRmSet) {
+            // this txid is to be removed from mempool, tally its scripthashes as affected by the removal
+            for (const auto & [sh, _] : tx->hashXs)
+                scriptHashesAffected.insert(sh);
+            // and erase NOW!
+            itTxs = txs.erase(itTxs); // in this branch: removed, take next it and continue
+            continue;
+        } else if (tx->hasUnconfirmedParentTx) {
+            // This txid is *not* to be removed, but MAY possibly be spending from a tx we are going to remove.
+            // Scan all of its unconfirmed spends to see if they spend from a tx in the removal set, and if so,
+            // recategorize those spends as confirmed spends.
+            for (auto & [sh, ioinfo] : tx->hashXs) {
+                int ctr = 0;
+                for (auto itUS = ioinfo.unconfirmedSpends.begin(); itUS != ioinfo.unconfirmedSpends.end(); /* see below */) {
+                    const auto & [txo, _] = *itUS; // take refs for readibility below
+                    if (txids.count(txo.txHash)) {
+                        // and voila! This tx spends from one of the tx's we are going to remove. Recategorize unconf -> conf.
+                        auto it2move = itUS++;  // first make `it` point to `it` + 1, making `it2move` be previous value `it`
+                        // transfer from unconfirmed spends -> confirmed spends
+                        ioinfo.confirmedSpends.insert(ioinfo.unconfirmedSpends.extract(it2move)); // does not invalidate refs
+                        ++ctr;
+                        if (TRACE)
+                            DebugM("confirmedInBlock: TXO ", txo.toString(), " now recategorized under \"confirmedSpends\" for txid ", tx->hash.toHex());
+                    } else
+                        // prevout txid not in rm set, keep moving
+                        ++itUS;
+                }
+                // no more unconf spends now for this tx, reset flag
+                if (ctr && ioinfo.unconfirmedSpends.empty()) {
+                    tx->hasUnconfirmedParentTx = false;
+                    // and also need to add to affected set since clients use the "height" info for this tx which went from -1 -> 0 now.
+                    scriptHashesAffected.insert(sh);
+                    // and also flag it as needing sort because its sorting criteria changed
+                    hashXTxsEntriesNeedingSort->insert(sh);
+                    if (TRACE)
+                        DebugM("confirmedInBlock: txid ", tx->hash.toHex(), " now recategorized as not spending any unconfirmed parents");
+                }
+            }
+        }
+        ++itTxs; // in this branch: nothing removed, keep iterating
     }
 
+    // now, update hashXTxs as well
+    rmTxsInHashXTxs(txids, scriptHashesAffected, TRACE, hashXTxsEntriesNeedingSort);
+
     // finally, update scriptHashesAffectedOut
-    scriptHashesAffectedOut.merge(scriptHashesAffected);
+    scriptHashesAffectedOut.merge(std::move(scriptHashesAffected));
 
     // update returned stats
     newSize = this->txs.size();
