@@ -38,6 +38,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstddef> // for std::byte
 #include <cstring> // for memcpy
 #include <list>
 #include <optional>
@@ -105,7 +106,7 @@ namespace {
     }
 
     /// Return a shallow, temporary copy of the memory of an object as a QByteArray. This reduces typing of
-    /// the boilerplate: "QByteArray::FromRawData(reinterpret_cast...." etc everywhere in this file.
+    /// the boilerplate: "QByteArray::fromRawData(reinterpret_cast...." etc everywhere in this file.
     /// Note: It is unsafe to use this function for anything other than obtaining a weak reference to the memory of an
     /// object as a QByteArray for temporary purposes. The original object must live at least as long as this returned
     /// QByteArray.  Note that even copy-constructing a new QByteArray from this returned QByteArray will lead to
@@ -150,7 +151,7 @@ namespace {
         int & pos = pos_out ? *pos_out : dummy;
         if (pos >= 0 && pos + int(sizeof(ret)) <= ba.size()) {
             if (ok) *ok = true;
-            ret = *reinterpret_cast<const Scalar *>(ba.data() + pos);
+            std::memcpy(reinterpret_cast<std::byte *>(&ret), ba.constData() + pos, sizeof(ret));
             pos += sizeof(ret);
         } else {
             if (ok) *ok = false;
@@ -2321,7 +2322,7 @@ namespace {
             if (ok) *ok = false;
         } else {
             if (ok) *ok = true;
-            ret = *reinterpret_cast<const BlkInfo *>(ba.constData());
+            std::memcpy(reinterpret_cast<std::byte *>(&ret), ba.constData(), sizeof(ret));
         }
         return ret;
     }
@@ -2345,6 +2346,18 @@ namespace {
         }
         bool isLenSane() const { return size_t(len) == computeTotalSize(); }
     };
+
+    // Deserialize a header from bytes -- no checks are done other than length check.
+    template <> UndoInfoSerHeader Deserialize(const QByteArray &ba, bool *ok) {
+        UndoInfoSerHeader ret;
+        if (ba.length() < int(sizeof(ret))) {
+            if (ok) *ok = false;
+        } else {
+            if (ok) *ok = true;
+            std::memcpy(reinterpret_cast<std::byte *>(&ret), ba.constData(), sizeof(ret));
+        }
+        return ret;
+    }
 
     // UndoInfo
     template <> QByteArray Serialize(const UndoInfo &u) {
@@ -2410,14 +2423,14 @@ namespace {
         if (!chkAssertion(ba.size() > int(sizeof(UndoInfoSerHeader)), "Short byte count"))
             return ret;
 
+        bool myok = false;
         // 1. .header
-        const UndoInfoSerHeader *hdr = reinterpret_cast<decltype (hdr)>(ba.data());
-        if (!chkAssertion(int(hdr->len) == ba.size() && hdr->magic == hdr->defMagic && hdr->ver == hdr->defVer
-                          && hdr->isLenSane(), "Header sanity check fail"))
+        const UndoInfoSerHeader hdr = Deserialize<UndoInfoSerHeader>(ba, &myok);;
+        if (!chkAssertion(myok && int(hdr.len) == ba.size() && hdr.magic == hdr.defMagic && hdr.ver == hdr.defVer
+                          && hdr.isLenSane(), "Header sanity check fail"))
             return ret;
 
-        const char *cur = ba.data() + sizeof(*hdr), *const end = ba.data() + ba.length();
-        bool myok = false;
+        const char *cur = ba.data() + sizeof(hdr), *const end = ba.data() + ba.length();
         // 2. .height
         ret.height = DeserializeScalar<decltype(ret.height)>(ShallowTmp(cur, sizeof(ret.height)), &myok);
         if (!chkAssertion(myok && cur < end))
@@ -2434,15 +2447,15 @@ namespace {
             return ret;
         cur += sizeof(BlkInfo);
         // 5. .scriptHashes, 32 bytes each * hdr->nScriptHashes
-        ret.scriptHashes.reserve(hdr->nScriptHashes);
-        for (unsigned i = 0; i < hdr->nScriptHashes; ++i) {
+        ret.scriptHashes.reserve(hdr.nScriptHashes);
+        for (unsigned i = 0; i < hdr.nScriptHashes; ++i) {
             if (!chkAssertion(cur+HashLen <= end)) return ret;
             ret.scriptHashes.insert(DeepCpy(cur, HashLen)); // deep copy
             cur += HashLen;
         }
         // 6. .addUndos, 64 bytes each * nAddUndos
-        ret.addUndos.reserve(hdr->nAddUndos);
-        for (unsigned i = 0; i < hdr->nAddUndos; ++i) {
+        ret.addUndos.reserve(hdr.nAddUndos);
+        for (unsigned i = 0; i < hdr.nAddUndos; ++i) {
             if (!chkAssertion(cur+TXO::serSize() <= end)) return ret;
             TXO txo = Deserialize<TXO>(ShallowTmp(cur, TXO::serSize()), &myok);
             cur += TXO::serSize();
@@ -2456,8 +2469,8 @@ namespace {
             ret.addUndos.emplace_back(std::move(txo), std::move(hashX), std::move(ctxo));
         }
         // 7. .delUndos, 50 bytes each * nDelUndos
-        ret.delUndos.reserve(hdr->nDelUndos);
-        for (unsigned i = 0; i < hdr->nDelUndos; ++i) {
+        ret.delUndos.reserve(hdr.nDelUndos);
+        for (unsigned i = 0; i < hdr.nDelUndos; ++i) {
             if (!chkAssertion(cur+TXO::serSize() <= end)) return ret;
             TXO txo = Deserialize<TXO>(ShallowTmp(cur, TXO::serSize()), &myok);
             cur += TXO::serSize();
