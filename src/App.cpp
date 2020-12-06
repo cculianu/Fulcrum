@@ -463,7 +463,7 @@ void App::parseArgs()
                 " the default, be sure to also specify the option `rpcthreads=` to bitcoind so that there are enough"
                 " threads to accommodate the clients we spawn, otherwise you may get errors from bitcoind.\n")
                 .arg(Options::defaultBdNClients),
-        QString("seconds"),
+        QString("num"),
     },
     {
        "dump-sh",
