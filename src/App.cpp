@@ -1162,6 +1162,17 @@ void App::parseArgs()
         Util::AsyncOnObject(this, [n, name]{ DebugM("config: ", name, " = ", n); });
     }
 
+    // conf: max_reorg
+    if (conf.hasValue("max_reorg")) {
+        bool ok{};
+        const unsigned val = unsigned(conf.intValue("max_reorg", Options::defaultMaxReorg, &ok));
+        if (!ok || !options->isMaxReorgInRange(val))
+            throw BadArgs(QString("max_reorg: please specify a value in the range [%2, %3]")
+                          .arg(options->maxReorgMin).arg(options->maxReorgMax));
+        options->maxReorg = val;
+        Util::AsyncOnObject(this, [val]{ DebugM("config: max_reorg = ", val); });
+    }
+
     // parse --dump-*
     if (const auto outFile = parser.value("dump-sh"); !outFile.isEmpty()) {
         options->dumpScriptHashes = outFile; // we do no checking here, but Controller::startup will throw BadArgs if it cannot open this file for writing.

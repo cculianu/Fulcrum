@@ -242,6 +242,17 @@ public:
     static constexpr unsigned defaultBdNClients = 3, bdNClientsMax = 1024, bdNClientsMin = 1;
     static constexpr bool isBdNClientsInRange(unsigned n) { return n >= bdNClientsMin && n <= bdNClientsMax; }
     unsigned bdNClients = defaultBdNClients;
+
+    // config: max_reorg
+    /// Corresponds to the number of undo entries we keep in the DB. Older Fulcrum versions had this hard-coded
+    /// as 100, and assumed 100 was the magic number.  As such, 100 is the minimum we support.  The maximum
+    /// is arbitrarily chosen to be 500,000 (although even this number is obscenely huge, and 100 is fine for most
+    /// installs that don't arbitrarily switch between chains).
+    static constexpr unsigned oldFulcrumReorgDepth = 100; // do not change this value until a few versions after 1.3.2 -- it affects warnings to the user.
+    static constexpr unsigned defaultMaxReorg = oldFulcrumReorgDepth, maxReorgMax = 500'000, maxReorgMin = oldFulcrumReorgDepth;
+    static_assert(maxReorgMin == oldFulcrumReorgDepth, "Older Fulcrum installs expected 100 undo depth. Keep this minimum at 100.");
+    static constexpr bool isMaxReorgInRange(unsigned n) { return n >= maxReorgMin && n <= maxReorgMax; }
+    unsigned maxReorg = defaultMaxReorg;
 };
 
 /// A class encapsulating a simple read-only config file format.  The format is similar to the bitcoin.conf format

@@ -625,7 +625,7 @@ auto PeerMgr::headerToVerifyWithPeer() const -> std::optional<HeightHeaderPair>
     const auto optCurHeight = storage->latestHeight();
     if (optCurHeight.has_value()) {
         const auto curHeight = *optCurHeight;
-        constexpr unsigned cutoff = BTC::MaxReorgDepth + 1;
+        constexpr unsigned cutoff = BTC::DefaultBCHFinalizationDepth + 1;
         if (cutoff < curHeight) {
             const auto height = curHeight - cutoff;
             QString err = "Bad size";

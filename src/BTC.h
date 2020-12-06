@@ -207,9 +207,10 @@ namespace BTC
     using uint256HashHasher = GenericTrivialHashHasher<bitcoin::uint256>;
     using uint160HashHasher = GenericTrivialHashHasher<bitcoin::uint160>;
 
-    /// After Nov. 2018, reorgs beyond this depth can never occur. We use this constant to limit the configurable minimum
-    /// undo size.  For now, it's hard-coded at 100 blocks in Storage.h.
-    static constexpr unsigned MaxReorgDepth = 10;
+    /// After Nov. 2018, reorgs beyond this depth can not normally occur without user intervention.
+    /// We use this constant to decide how far back a peer's headers have to agree with our headers
+    /// before we disconnect from that peer in PeerMgr, declaring them as "serving up another chain".
+    static constexpr unsigned DefaultBCHFinalizationDepth = 10;
 
     // -- The below Net-related stuff is mainly used by the BTC::Address class, but may be of general interest so it's
     //    been placed here.  See BTC_Address.h for how it's used.

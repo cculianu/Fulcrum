@@ -1082,7 +1082,9 @@ void Storage::loadCheckEarliestUndo()
     FatalAssert(!!p->db.undo,  __func__, ": Undo db is not open");
 
     const Tic t0;
-    int ctr = 0;
+    unsigned ctr = 0;
+    using UIntSet = std::set<uint32_t>;
+    UIntSet swissCheeseDetector;
     {
         std::unique_ptr<rocksdb::Iterator> iter(p->db.undo->NewIterator(p->db.defReadOpts));
         if (!iter) throw DatabaseError("Unable to obtain an iterator to the undo db");
@@ -1092,12 +1094,64 @@ void Storage::loadCheckEarliestUndo()
                 throw DatabaseFormatError("Unexpected key in undo database. We expect only 32-bit unsigned ints!");
             const uint32_t height = DeserializeScalar<uint32_t>(FromSlice(keySlice));
             if (height < p->earliestUndoHeight) p->earliestUndoHeight = height;
+            swissCheeseDetector.insert(height);
             ++ctr;
         }
     }
     if (ctr) {
         Debug() << "Undo db contains " << ctr << " entries, earliest is " << p->earliestUndoHeight.load() << ", "
                 << t0.msecStr(2) << " msec elapsed.";
+    }
+    // Detect swiss cheese holes in the height range, and delete the non-contiguous area from undo db; they are useless.
+    // (This can happen in a very unlikely scenario where the user set max_reorg high then switched back to an old
+    // Fulcrum version then switched to a this new version again).
+    if (unsigned testval{}; !swissCheeseDetector.empty()
+                            && (testval = (*swissCheeseDetector.rbegin() - *swissCheeseDetector.begin()) + 1) != ctr) {
+        // uh-oh -- there are holes! Argh! User must have run an older Fulcrum version that didn't delete entries past
+        // 100 properly -- we need to delete all old undo entries before the first hole
+        auto eraseUntil = swissCheeseDetector.end();  --eraseUntil; // point to last element as last 1 by itself is "contiguous"!
+        Warning() << "Hole(s) detected in undo db: range (" << testval << ") != counted size (" << ctr << ")";
+        for (auto rit = swissCheeseDetector.rbegin(), rprev = rit++; rit != swissCheeseDetector.rend(); rprev = rit++) {
+            if (*rprev - *rit == 1) {
+                eraseUntil = rit.base(); // no hole here, move the firstContig iterator to point to this element
+                --eraseUntil; // rit points to it + 1 so move back 1 (grr)
+            } else
+                break; // found a hole, abort loop
+        }
+        // delete everything up until the first contiguous height we saw
+        int delctr = 0;
+        for (auto it = swissCheeseDetector.begin(); it != eraseUntil; ++delctr) {
+            GenericDBDelete(p->db.undo.get(), uint32_t(*it));
+            it = swissCheeseDetector.erase(it);
+        }
+        p->earliestUndoHeight = !swissCheeseDetector.empty() ? *swissCheeseDetector.begin() : p->InvalidUndoHeight;
+        ctr = swissCheeseDetector.size();
+        if (delctr) {
+            Warning() << "Deleted " << delctr << Util::Pluralize(" undo entry", delctr) << ", earliest undo entry is now "
+                      << p->earliestUndoHeight.load() << ", total undo entries now in db: " << ctr;
+        }
+    }
+    // heuristic to detect that the user changed the default on an already-synched dir
+    if (const auto legacy = Options::oldFulcrumReorgDepth; configuredUndoDepth() > legacy && ctr == legacy) {
+        Warning() << "You have specified max_reorg in the conf file as " << configuredUndoDepth() << "; older "
+                  << APPNAME << " versions may not cope well with this setting. As such, it is recommended that you "
+                  << "avoid using older versions of this program with this datadir now that you have set this option "
+                  << "beyond the default.";
+    }
+    if (ctr > configuredUndoDepth()) {
+        // User lowered undo config -- now configured for less undo depth than before.  Simply respect user wishes
+        // on startup and delete oldest entries if that happens.  Note the assumption here is that the undo entries
+        // are all without holes starting at p->earliestUndoHeight.  That assumption holds in the current code in
+        // addBlock(), as it's impossible to get holes due to the way we walk the blockchain history forward, adding
+        // blocks 1 at a time. However if the user runs older Fulcrum after having run this newer version on non-default
+        // settings, holes MAY appear, hence the warning above.
+        const unsigned n2del = ctr - configuredUndoDepth();
+        Warning() << "Found " << ctr << " undo entries in db, but max_reorg is " << configuredUndoDepth() << "; "
+                  << "deleting " << n2del << Util::Pluralize(" oldest entry", n2del) << " ...";
+        const Tic t1;
+        for (unsigned i = 0; i < n2del; ++i)
+            GenericDBDelete(p->db.undo.get(), uint32_t(p->earliestUndoHeight++));
+        Warning() << n2del << Util::Pluralize(" undo entry", n2del) << " deleted from db in " << t1.msecStr() << " msec";
     }
 }
 
@@ -1535,8 +1589,10 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                         << ", in " << QString::number(elapsedms, 'f', 2) << " msec.";
             }
         }
-        // Expire old undos >10 blocks ago to keep the db tidy.  We only do this if we know there is an old
-        // undo for said height in db.
+        // Expire old undos >configuredUndoDepth() blocks ago to keep the db tidy.
+        // We only do this if we know there is an old undo for said height in db.
+        // Note that the assumption here is that no holes exist, and that we always walk
+        // forward with addBlock() 1 block at a time (which is a valid assumption in this codebase).
         if (const auto expireUndoHeight = int(ppb->height) - int(configuredUndoDepth());
                 expireUndoHeight >= 0 && unsigned(expireUndoHeight) >= p->earliestUndoHeight) {
             // FIXME -- this runs for every block in between the last undo save and current tip.
@@ -1546,7 +1602,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
             static const QString errPrefix("Error deleting old/stale undo info from undo db");
             GenericDBDelete(p->db.undo.get(), uint32_t(expireUndoHeight), errPrefix, p->db.defWriteOpts);
             p->earliestUndoHeight = unsigned(expireUndoHeight + 1);
-            if constexpr (debugPrt) Debug() << "Deleted undo for block " << expireUndoHeight << ", earliest now " << p->earliestUndoHeight.load();
+            if constexpr (debugPrt) DebugM("Deleted undo for block ", expireUndoHeight, ", earliest now ", p->earliestUndoHeight.load());
         }
 
         appendHeader(rawHeader, ppb->height);

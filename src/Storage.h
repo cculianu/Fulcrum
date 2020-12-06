@@ -95,9 +95,8 @@ public:
     /// 100 million max headers for now.
     static constexpr size_t MAX_HEADERS = 100'000'000;
 
-    /// Hard-coded to 100 blocks of undo. TODO: have this come from actual config, and take into account
-    /// BTC::MaxReorgDepth (10) as a minimum.
-    inline unsigned configuredUndoDepth() const { return 100; }
+    /// Hard-coded to 100 blocks of undo in older Fulcrum.  Now it can be configured from a conf file setting: max_reorg
+    inline unsigned configuredUndoDepth() const { return options->maxReorg; }
     /// True if the DB contains any undo entries for blocks
     bool hasUndo() const;
 
