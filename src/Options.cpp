@@ -157,6 +157,10 @@ QVariantMap Options::toMap() const
     m["simdjson"] = isSimdJson();
     // bitcoind_timeout
     m["bitcoind_timeout"] = bdTimeoutMS;
+    // bitcoind_clients
+    m["bitcoind_clients"] = bdNClients;
+    // max_reorg
+    m["max_reorg"] = maxReorg;
     return m;
 }
 
