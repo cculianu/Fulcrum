@@ -1102,9 +1102,9 @@ void Storage::loadCheckEarliestUndo()
         Debug() << "Undo db contains " << ctr << " entries, earliest is " << p->earliestUndoHeight.load() << ", "
                 << t0.msecStr(2) << " msec elapsed.";
     }
-    // Detect swiss cheese holes in the height range, and delete the non-contiguous area from undo db; they are useless.
+    // Detect swiss cheese holes in the height range, and delete the unusable non-contiguous area from the undo db.
     // (This can happen in a very unlikely scenario where the user set max_reorg high then switched back to an old
-    // Fulcrum version then switched to a this new version again).
+    // Fulcrum version then switched to this new version again).
     if (unsigned testval{}; !swissCheeseDetector.empty()
                             && (testval = (*swissCheeseDetector.rbegin() - *swissCheeseDetector.begin()) + 1) != ctr) {
         // uh-oh -- there are holes! Argh! User must have run an older Fulcrum version that didn't delete entries past
