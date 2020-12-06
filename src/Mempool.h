@@ -74,7 +74,8 @@ struct Mempool
             std::set<IONum> utxo; ///< IONums which are indices into the txos vector declared above. We use a set here because it may be faster and use less memory than a hashtable variant.
 
             bool operator==(const IOInfo &o) const noexcept {
-                return std::tie(confirmedSpends, unconfirmedSpends, utxo) == std::tie(o.confirmedSpends, o.unconfirmedSpends, o.utxo);
+                return     std::tie(  confirmedSpends,   unconfirmedSpends,   utxo)
+                        == std::tie(o.confirmedSpends, o.unconfirmedSpends, o.utxo);
             }
             bool operator!=(const IOInfo &o) const noexcept { return !(*this == o); }
         };
@@ -86,14 +87,14 @@ struct Mempool
 
         bool operator<(const Tx &o) const noexcept {
             // paranoia -- bools may sometimes not always be 1 or 0 in pathological circumstances.
-            const uint8_t nParentMe = hasUnconfirmedParentTx ? 1 : 0,
+            const uint8_t nParentMe    =   hasUnconfirmedParentTx ? 1 : 0,
                           nParentOther = o.hasUnconfirmedParentTx ? 1 : 0;
             // always sort the unconf. parent tx's *after* the regular (confirmed parent-only) tx's.
             return std::tie(nParentMe, hash) < std::tie(nParentOther, o.hash);
         }
 
         bool operator==(const Tx &o) const noexcept {
-            return std::tie(hash, sizeBytes, fee, hasUnconfirmedParentTx, txos, hashXs)
+            return     std::tie(  hash,   sizeBytes,   fee,   hasUnconfirmedParentTx,   txos,   hashXs)
                     == std::tie(o.hash, o.sizeBytes, o.fee, o.hasUnconfirmedParentTx, o.txos, o.hashXs);
         }
         bool operator!=(const Tx &o) const noexcept { return !(*this == o); }

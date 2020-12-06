@@ -101,7 +101,8 @@ struct TXOInfo {
 
     /// for debug, etc
     bool operator==(const TXOInfo &o) const {
-        return std::tie(amount, hashX, confirmedHeight, txNum) == std::tie(o.amount, o.hashX, o.confirmedHeight, o.txNum);
+        return     std::tie(  amount,   hashX,   confirmedHeight,   txNum)
+                == std::tie(o.amount, o.hashX, o.confirmedHeight, o.txNum);
     }
     bool operator!=(const TXOInfo &o) const { return !(*this == o); }
 
