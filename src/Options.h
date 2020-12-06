@@ -250,7 +250,6 @@ public:
     /// installs that don't arbitrarily switch between chains).
     static constexpr unsigned oldFulcrumReorgDepth = 100; // do not change this value until a few versions after 1.3.2 -- it affects warnings to the user.
     static constexpr unsigned defaultMaxReorg = oldFulcrumReorgDepth, maxReorgMax = 500'000, maxReorgMin = oldFulcrumReorgDepth;
-    static_assert(maxReorgMin == oldFulcrumReorgDepth, "Older Fulcrum installs expected 100 undo depth. Keep this minimum at 100.");
     static constexpr bool isMaxReorgInRange(unsigned n) { return n >= maxReorgMin && n <= maxReorgMax; }
     unsigned maxReorg = defaultMaxReorg;
 };
