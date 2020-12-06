@@ -38,6 +38,8 @@ namespace ServerMisc
     inline constexpr double kMaxSubsWarningsRateLimitSecs = 0.251;
     /// The rate limit for suppression of dupe per-IP "max subs" warnings to log.
     inline constexpr double kMaxSubsPerIPWarningsRateLimitSecs = 1.0;
+    /// The rate limit for suppression of dupe per-IP "connection limit exceeded" warnings to log.
+    inline constexpr double kMaxClientsPerIPWarningRateLimitSecs = 5.0;
     /// This key is used in the stats() map for each Server instance to save bloom filter info
     inline constexpr auto kBloomFiltersKey = "bloom filters";
 }

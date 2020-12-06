@@ -445,12 +445,22 @@ bool ServerBase::attachPerIPDataAndCheckLimits(QTcpSocket *socket)
 {
     bool ok = true;
     if (const auto addr = socket->peerAddress(); LIKELY(!addr.isNull())) {
-        auto holder = new Client::PerIPDataHolder_Temp(srvmgr->getOrCreatePerIPData(addr), socket);
+        auto holder = new Client::PerIPDataHolder_Temp(srvmgr->getOrCreatePerIPData(addr), socket); // `new` ok; owned by `socket` (parent QObject)
         const auto maxPerIP = options->maxClientsPerIP;
-        // check limit immediately
-        if (maxPerIP > 0 && !holder->perIPData->isWhitelisted() && holder->perIPData->nClients > maxPerIP) {
-            // reject connection here
-            Log() << "Connection limit (" << maxPerIP << ") exceeded for " << addr.toString() << ", connection refused";
+        // check connection limit immediately
+        if (const auto & perIPData = holder->perIPData;
+                maxPerIP > 0 && !perIPData->isWhitelisted() && perIPData->nClients > maxPerIP) {
+            // limit reached -- reject connection here
+            if (const qint64 now = Util::getTime(), last = perIPData->lastConnectionLimitReachedWarning.load();
+                    !last || (now - last)/1e3 >= ServerMisc::kMaxClientsPerIPWarningRateLimitSecs) {
+                // Rate-limit the spam of this log message to once every 5 seconds, per IP.  We must do this rate-
+                // limiting of the log message because some port scanners (or abusers) ended up filling our logs with
+                // this message. (Note there is a potential race here in that 2 threads may enter here at once and
+                // update this timestamp simultaneously. This is acceptable for this code here which doesn't need to be
+                // 100% precise, just "good enough" to rate limit log messages most of the time).
+                perIPData->lastConnectionLimitReachedWarning.store(now);
+                Log() << "Connection limit (" << maxPerIP << ") exceeded for " << addr.toString() << ", connection refused";
+            }
             ok = false;
         }
     } else {
@@ -538,7 +548,7 @@ ServerBase::newClient(QTcpSocket *sock)
     auto ret = clientsById[clientId] = new Client(rpcMethods(), clientId, sock, options->maxBuffer.load());
     const auto addr = ret->peerAddress();
 
-    ret->perIPData = Client::PerIPDataHolder_Temp::take(sock); // take ownership of the PerIPData ref, implicitly delete the temp holder attacked to the socket
+    ret->perIPData = Client::PerIPDataHolder_Temp::take(sock); // take ownership of the PerIPData ref, implicitly delete the temp holder attached to the socket
     if (UNLIKELY(!ret->perIPData)) {
         // This branch should never happen.  But we left it in for defensive programming.
         Error() << "INTERNAL ERROR: Tcp Socket " << sock->peerAddress().toString() << ":" << sock->peerPort() << " had no PerIPData! FIXME!";
