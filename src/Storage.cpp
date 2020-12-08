@@ -462,9 +462,16 @@ namespace {
 
 struct Storage::Pvt
 {
-    /* NOTE: If taking multiple locks, all locks should be taken in the order they are declared, to avoid deadlocks. */
+    Pvt(const unsigned cacheSizeBytes)
+        : lruNum2Hash(std::max(unsigned(cacheSizeBytes*kLruNum2HashCacheMemoryWeight), 1u)),
+          lruHeight2Hashes_BitcoindMemOrder(std::max(unsigned(cacheSizeBytes*kLruHeight2HashesCacheMemoryWeight), 1u))
+    {}
+
+    Pvt(const Pvt &) = delete;
 
     constexpr int blockHeaderSize() { return BTC::GetBlockHeaderSize(); }
+
+    /* NOTE: If taking multiple locks, all locks should be taken in the order they are declared, to avoid deadlocks. */
 
     Meta meta;
     RWLock metaLock;
@@ -509,23 +516,38 @@ struct Storage::Pvt
 
     std::atomic<uint32_t> earliestUndoHeight = InvalidUndoHeight; ///< the purpose of this is to control when we issue "delete" commands to the db for deleting expired undo infos from the undo db
 
-    /// This cache is anticipated to see heavy use for get_history, so we may wish to make it larger. MAKE THIS CONFIGURABLE.
-    static constexpr size_t kMaxNum2HashMemoryBytes = 100'000'000; ///< 100 MB max cache
-    CostCache<TxNum, TxHash> lruNum2Hash{kMaxNum2HashMemoryBytes};
-    unsigned constexpr lruNum2HashSizeCalc(unsigned nItems = 1) {
-        // NB: each TxHash (aka QByteArray) actually stores HashLen+1 bytes (QByteArray always appends a nul byte)
-        return decltype(lruNum2Hash)::itemOverheadBytes() + (nItems * (HashLen+1));
+    /// Tells you the size of a QByteArray::QArrayData object which each QByteArray that is not null has a pointer to.
+    /// This function basically tells you how much extra space a QByteArray takes up just by existing, beyond its base
+    /// sizeof(QByteArray) + .size()+1.
+    static constexpr size_t qByteArrayPvtDataSize(bool isNull = false) {
+        static_assert (sizeof(decltype(std::declval<QByteArray>().size())) == sizeof(int),
+                       "Assumption here is that QByteArray uses ints for indexing (true in Qt5, not true in Qt6)");
+        constexpr size_t padding = sizeof(void *) > sizeof(int) ? sizeof(void *) - sizeof(int) : 0;
+        return isNull ? 0 // null uses a single shared object so basically 0 extra size
+                      : sizeof(int)*3 + padding + sizeof(void *); // not null -- QArrayData has 3 ints and 1 pointer (but pointer offset is padded for alignment on 64-bit)
     }
 
-    static constexpr size_t kMaxHeight2HashesMemoryBytes = 100'000'000; // 100 MB max cache
-    /// Cache BlockHeight -> vector of txHashes for the block (in bitcoind memory order). This gets cleared by
-    /// undoLatestBlock.  This is used by the txHashesForBlock function only (which is used by get_merkle and
-    /// id_from_pos in the protocol). TODO: MAKE THIS CACHE SIZE CONFIGURABLE.
-    CostCache<BlockHeight, QVector<TxHash>> lruHeight2Hashes_BitcoindMemOrder { kMaxHeight2HashesMemoryBytes };
+    // Ratios of cacheMemoryBytes that we give to each of the 2 lru caches -- we do 50/50
+    static constexpr double kLruNum2HashCacheMemoryWeight = 0.50;
+    static constexpr double kLruHeight2HashesCacheMemoryWeight = 1.0 - kLruNum2HashCacheMemoryWeight;
+
+    /// This cache is anticipated to see heavy use for get_history, so is configurable (config option: txhash_cache)
+    /// This gets cleared by undoLatestBlock.
+    CostCache<TxNum, TxHash> lruNum2Hash; // NOTE: max size in bytes initted in constructor
+    unsigned constexpr lruNum2HashSizeCalc(unsigned nItems = 1) {
+        // NB: each TxHash (aka QByteArray) actually stores HashLen+1 bytes (QByteArray always appends a nul byte)
+        // NB2: each TxHash also has the QArrayData overhead (qByteArrayPvtDataSize())
+        return unsigned( decltype(lruNum2Hash)::itemOverheadBytes() + (nItems * (qByteArrayPvtDataSize() + HashLen+1)) );
+    }
+
+    /// Cache BlockHeight -> vector of txHashes for the block (in bitcoind memory order -- little endian).
+    /// This is used by the txHashesForBlock function only (which is used by get_merkle and id_from_pos in the RPC protocol).
+    CostCache<BlockHeight, QVector<TxHash>> lruHeight2Hashes_BitcoindMemOrder; // NOTE: max size in bytes initted in constructor
     /// returns the cost for a particular cache item based on the number of hashes in the vector
     unsigned constexpr lruHeight2HashSizeCalc(size_t nHashes) {
         // each cache item with nHashes takes roughly this much memory
-        return unsigned( (nHashes * ((HashLen+1) + sizeof(TxHash))) + decltype(lruHeight2Hashes_BitcoindMemOrder)::itemOverheadBytes() );
+        return unsigned( (nHashes * ((HashLen+1) + sizeof(TxHash) + qByteArrayPvtDataSize()))
+                         + decltype(lruHeight2Hashes_BitcoindMemOrder)::itemOverheadBytes() );
     }
 
     struct LRUCacheStats {
@@ -544,7 +566,7 @@ struct Storage::Pvt
 };
 
 Storage::Storage(const std::shared_ptr<const Options> & options_)
-    : Mgr(nullptr), options(options_), subsmgr(new SubsMgr(options, this)), p(std::make_unique<Pvt>())
+    : Mgr(nullptr), options(options_), subsmgr(new SubsMgr(options, this)), p(std::make_unique<Pvt>(options->txHashCacheBytes))
 {
     setObjectName("Storage");
     _thread.setObjectName(objectName());
@@ -682,18 +704,21 @@ auto Storage::stats() const -> Stats
     {
         QVariantMap m;
 
-        const auto sz = p->lruNum2Hash.size(), szBytes = p->lruNum2Hash.totalCost();
-        m["nItems"] = qlonglong(sz);
+        const auto sz = p->lruNum2Hash.size(), szBytes = p->lruNum2Hash.totalCost(), maxSzBytes = p->lruNum2Hash.maxCost();
         m["Size bytes"] = qlonglong(szBytes);
+        m["max bytes"] = qlonglong(maxSzBytes);
+        m["nItems"] = qlonglong(sz);
         m["~hits"] = qlonglong(p->lruCacheStats.num2HashHits);
         m["~misses"] = qlonglong(p->lruCacheStats.num2HashMisses);
         caches["LRU Cache: TxNum -> TxHash"] = m;
     }
     {
         QVariantMap m;
-        const unsigned nItems = p->lruHeight2Hashes_BitcoindMemOrder.size(), szBytes = p->lruHeight2Hashes_BitcoindMemOrder.totalCost();
-        m["nBlocks"] = nItems;
+        const unsigned nItems = p->lruHeight2Hashes_BitcoindMemOrder.size(), szBytes = p->lruHeight2Hashes_BitcoindMemOrder.totalCost(),
+                       maxSzBytes = p->lruHeight2Hashes_BitcoindMemOrder.maxCost();
         m["Size bytes"] = szBytes;
+        m["max bytes"] = qlonglong(maxSzBytes);
+        m["nBlocks"] = nItems;
         m["~hits"] = qlonglong(p->lruCacheStats.height2HashesHits);
         m["~misses"] = qlonglong(p->lruCacheStats.height2HashesMisses);
         caches["LRU Cache: Block Height -> TxHashes"] = m;
@@ -1877,7 +1902,7 @@ std::optional<TxHash> Storage::hashForHeightAndPos(BlockHeight height, unsigned 
     return ret;
 }
 
-// NOTE: the returned vector has hashes in bitcoind memory order (unlike every other function in this file!)
+// NOTE: the returned vector has hashes in bitcoind memory order (little endian -- unlike every other function in this file!)
 std::vector<TxHash> Storage::txHashesForBlockInBitcoindMemoryOrder(BlockHeight height) const
 {
     std::vector<TxHash> ret;

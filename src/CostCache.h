@@ -24,6 +24,8 @@
 #include <QList>
 
 #include <cassert>
+#include <limits>
+#include <memory> // for unique_ptr
 #include <mutex> // for lock_guard
 #include <optional>
 #include <shared_mutex> // for shared_lock, shared_mutex
@@ -63,13 +65,16 @@ class CostCache : protected QCache<Key, Value>
     using SharedLockGuard = std::shared_lock<RWLock>;
     mutable RWLock lock;
 
-    void chkMaxCost(unsigned maxCost) noexcept(false) {
+    static constexpr unsigned kCostLimit = unsigned(std::numeric_limits<int>::max());
+
+    void chkMaxCost(unsigned maxCost) const {
         if (!maxCost) throw BadArgs("CostCache cannot use maxCost == 0!");
-        if (maxCost >= unsigned(INT_MAX)) throw BadArgs(QString("CostCache cannot have maxCost >= INT_MAX (%1)!").arg(INT_MAX));
+        if (maxCost >= kCostLimit)
+            throw BadArgs(QString("CostCache cannot have maxCost >= INT_MAX (%1)!").arg(kCostLimit));
     }
 public:
     /// May throw if maxCost is 0 or >= INT_MAX
-    CostCache(unsigned maxCost) noexcept(false) : Base(maxCost) { chkMaxCost(maxCost); }
+    CostCache(unsigned maxCost) : Base(maxCost) { chkMaxCost(maxCost); }
     ~CostCache() { clear(); /* paranoia: call our impl. to take the lock to clear */ }
 
     /// The base size in bytes of a single item in the cache.  Client code can use this base size + whatever extra data
@@ -91,23 +96,23 @@ public:
     /// Cache takes ownership of `object` and will delete it when this instance is destructed or the cache overflows and
     /// it is purged. Note that this method may implicitly lead to a cache purge if the cache overflows as a result
     /// of this insert. Items whose cost exceeds maxCost will always fail to be inserted.
-    /// If this method returns false, `object` is deleted already as a convenience.
-    bool insert(const Key & k, Value * object, unsigned cost) {
-        if (cost < unsigned(INT_MAX)) {
+    /// If this method returns false, the underlying object managed by `object` is deleted implicitly.
+    bool insert(const Key & k, std::unique_ptr<Value> && object, unsigned cost) {
+        if (cost < unsigned(kCostLimit)) {
             ExclusiveLockGuard g(lock);
-            return Base::insert(k, object, int(cost));
+            return Base::insert(k, object.release(), int(cost));
         } else {
-            qWarning("CostCache::insert -- cost argument, %u, cannot exceed %d", cost, INT_MAX);
-            delete object;
+            qWarning("CostCache::insert -- cost argument, %u, cannot exceed %u", cost, kCostLimit);
+            object.reset(); // ensure deletion since we don't want caller to still have it in case they called with std::move(lvalue)
             return false;
         }
     }
     /// Copy-constructs `v` (via new) and inserts it into the cache.  A failed insertion will lead to the new instance
     /// being deleted and false being returned.
-    bool insert(const Key & k, const Value & v, unsigned cost) { return insert(k, new Value(v), cost); }
+    bool insert(const Key & k, const Value & v, unsigned cost) { return insert(k, std::make_unique<Value>(v), cost); }
     /// Move-constructs `v` (via new) and inserts it into the cache.  A failed insertion will lead to the new instance
     /// being deleted and false being returned.
-    bool insert(const Key & k, Value &&v, unsigned cost) { return insert(k, new Value(std::move(v)), cost);  }
+    bool insert(const Key & k, Value &&v, unsigned cost) { return insert(k, std::make_unique<Value>(std::move(v)), cost);  }
 
     bool isEmpty() const {
         SharedLockGuard g(lock);
@@ -136,7 +141,7 @@ public:
         return Base::remove(k);
     }
     /// May throw if maxCost is 0 or >= INT_MAX
-    void setMaxCost(unsigned maxCost) noexcept(false) {
+    void setMaxCost(unsigned maxCost) {
         chkMaxCost(maxCost);
         ExclusiveLockGuard g(lock);
         Base::setMaxCost(int(maxCost));
@@ -147,7 +152,7 @@ public:
     }
     /// Take an object out of the cache, transfering ownership of it to the caller.  Returns nullptr if `k` was not in
     /// the cache.
-    Value *take(const Key & k) {
+    std::unique_ptr<Value> take(const Key & k) {
         ExclusiveLockGuard g(lock);
         return Base::take(k);
     }

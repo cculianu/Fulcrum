@@ -161,6 +161,8 @@ QVariantMap Options::toMap() const
     m["bitcoind_clients"] = bdNClients;
     // max_reorg
     m["max_reorg"] = maxReorg;
+    // txhash_cache
+    m["txhash_cache"] = txHashCacheBytes / 1e6; // this comes in as a MB value from config, so spit it back out in the same MB unit
     return m;
 }
 
