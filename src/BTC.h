@@ -243,7 +243,7 @@ namespace BTC
 inline bool operator==(const bitcoin::uint256 &hash, const QByteArray &ba) noexcept {
     constexpr int sz = bitcoin::uint256::width();
     if (ba.size() != sz) return false;
-    return std::memcmp(hash.data(), ba.data(), size_t(sz)) == 0;
+    return std::memcmp(hash.data(), ba.constData(), size_t(sz)) == 0;
 }
 inline bool operator==(const QByteArray &ba, const bitcoin::uint256 &hash) noexcept { return hash == ba; }
 inline bool operator!=(const bitcoin::uint256 &hash, const QByteArray &ba) noexcept { return !(hash == ba); }

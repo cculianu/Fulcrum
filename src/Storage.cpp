@@ -2514,7 +2514,7 @@ namespace {
                           && hdr.isLenSane(), "Header sanity check fail"))
             return ret;
 
-        const char *cur = ba.data() + sizeof(hdr), *const end = ba.data() + ba.length();
+        const char *cur = ba.constData() + sizeof(hdr), *const end = ba.constData() + ba.length();
         // 2. .height
         ret.height = DeserializeScalar<decltype(ret.height)>(ShallowTmp(cur, sizeof(ret.height)), &myok);
         if (!chkAssertion(myok && cur < end))

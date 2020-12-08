@@ -53,7 +53,7 @@ struct TXO {
         if (!isValid()) return ret;
         const int hlen = txHash.length();
         ret.resize(int(serSize()));
-        std::memcpy(ret.data(), txHash.data(), size_t(hlen));
+        std::memcpy(ret.data(), txHash.constData(), size_t(hlen));
         std::memcpy(ret.data() + hlen, reinterpret_cast<const char *>(&outN), sizeof(outN));
         return ret;
     }
@@ -61,9 +61,9 @@ struct TXO {
     static TXO fromBytes(const QByteArray &ba) noexcept {
         TXO ret;
         if (ba.length() != int(serSize())) return ret;
-        ret.txHash = QByteArray(ba.data(), HashLen);
+        ret.txHash = QByteArray(ba.constData(), HashLen);
         // we memcpy rather than reinterpret_cast in order to guard against unaligned access
-        std::memcpy(reinterpret_cast<char *>(&ret.outN), ba.data()+HashLen, sizeof(ret.outN));
+        std::memcpy(reinterpret_cast<char *>(&ret.outN), ba.constData()+HashLen, sizeof(ret.outN));
         return ret;
     }
 

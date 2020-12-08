@@ -29,6 +29,7 @@ QString TXO::toString() const
 
 #ifdef ENABLE_TESTS
 #include "App.h"
+#include "TXO_Compact.h"
 
 #include <QByteArray>
 #include <QRandomGenerator>
@@ -42,25 +43,48 @@ namespace {
     void test()
     {
         // basic hasher test
-        std::unordered_set<TXO> set;
+        std::unordered_set<TXO> set; // checks that TXOs hash correctly
+        std::unordered_set<CompactTXO> setctxo; // checks that CompactTXOs hash correctly
+        std::set<TXO> oset; // checks that operator< is correct
+        std::set<CompactTXO> osetctxo; // checks that CompactTXOs have correct operator<
         std::vector<QByteArray> hashes;
+        std::map<QByteArray, IONum> ioNums;
+        std::map<QByteArray, TxNum> txNums;
         constexpr int n = 100'000;
         Log() << "Testing TXO hasher for correctness with " << n << " items...";
         for (int i = 0; i < n; ++i) {
             QByteArray buf;
             buf.resize(32);
             QRandomGenerator::global()->fillRange(reinterpret_cast<uint32_t *>(buf.data()), buf.size() / sizeof(uint32_t));
+            const IONum randIoNum = IONum(QRandomGenerator::global()->generate());
+            const TxNum randTxNum = TxNum(QRandomGenerator::global()->generate64());
             hashes.push_back(buf);
-            TXO t = { buf, IONum(i) };
+            ioNums[buf] = randIoNum;
+            txNums[buf] = randTxNum;
+            const TXO t = {buf, randIoNum};
             set.insert(t);
+            oset.insert(t);
+            const CompactTXO ct{randTxNum, t.outN};
+            setctxo.insert(ct);
+            osetctxo.insert(ct);
         }
         Log() << "Set has " << set.size() << " items, verifying...";
         for (int i = n-1; i >= 0; --i) {
-            auto &buf = hashes[i];
-            TXO t = { buf, IONum(i) };
+            const auto &hash = hashes.at(i);
+            const IONum & ioNum = ioNums[hash];
+            const TxNum & txNum = txNums[hash];
+            const TXO t = { hash, ioNum };
             if (set.count(t) != 1) {
-                throw Exception(QString("Missing a txo from the set for item %1!").arg(i));
+                throw Exception(QString("Missing a txo from the unordered set for item %1!").arg(i));
             }
+            if (oset.count(t) != 1) {
+                throw Exception(QString("Missing a txo from the ordered set for item %1!").arg(i));
+            }
+            const CompactTXO ct{txNum, t.outN};
+            if (setctxo.count(ct) != 1)
+                throw Exception(QString("Missing a compact txo from the unordered set for item %1!").arg(i));
+            if (osetctxo.count(ct) != 1)
+                throw Exception(QString("Missing a compact txo from the ordered set for item %1!").arg(i));
         }
         Log() << "All " << n << " items verified ok";
     }

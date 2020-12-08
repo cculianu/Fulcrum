@@ -778,7 +778,7 @@ namespace {
         if (vec3.size() != vec2.size())
             throw Exception("The bitcoind method vector is of the wrong size");
         for (size_t i = 0; i < vec3.size(); ++i) {
-            if (std::memcmp(vec3[i].data(), vec2[i].data(), vec3[i].size()) != 0)
+            if (std::memcmp(vec3[i].data(), vec2[i].constData(), vec3[i].size()) != 0)
                 throw Exception(QString("The bitcoind method hex string %1 does not match").arg(i));
         }
         Log() << "The bitcoind method data matches the other two data sets ok";

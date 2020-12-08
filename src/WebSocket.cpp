@@ -37,6 +37,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstddef>
 #include <cstring>
 #include <limits>
 #include <memory>
@@ -949,7 +950,11 @@ namespace WebSocket
                     return;
                 }
                 QByteArray data(sizeof(quint32), Qt::Uninitialized);
-                *reinterpret_cast<quint32 *>(data.data()) = QRandomGenerator::global()->generate();
+                {
+                    const quint32 randVal = QRandomGenerator::global()->generate();
+                    // prevent unaligned access
+                    std::memcpy(data.data(), reinterpret_cast<const std::byte *>(&randVal), sizeof(randVal));
+                }
                 sendPing(data);
                 if (Util::getTime() - lastPongRecvd >= pingTimer->interval()*2) {
                     DebugM("Ping timeout for ", peerAddress().toString(), ":", peerPort());

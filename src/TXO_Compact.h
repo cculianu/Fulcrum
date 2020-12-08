@@ -87,7 +87,7 @@ struct CompactTXO {
         // the below is excessively wordy but it forces 8 byte little-endian style deserialization
         CompactTXO ret;
         if (b.size() == serSize()) {
-            const std::byte * cur = reinterpret_cast<const std::byte *>(b.data());
+            const std::byte * cur = reinterpret_cast<const std::byte *>(b.constData());
             ret.compact.txNum = txNumFromCompactBytes(cur);
             ret.compact.n = IONum(cur[6]) | IONum(IONum(cur[7]) << 8u);
         }

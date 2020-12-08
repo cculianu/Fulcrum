@@ -136,40 +136,6 @@ namespace Merkle {
         return ret;
     }
 
-    void test() {
-        Merkle::HashVec txs = {
-            "5b357a2f1f18955e8fd08dc2d8443b0806cbbe6d60b29a7370844e4815ff0efb",
-            "001dd1663f777a646190959122bcfd69ad6160c28bc3e99e3df65b1cb26bcc6d",
-            "036ec76bdcd873d70f31c95637624c9ec975622cd2a7f34ff0130b36f51f87bb",
-            "9e7ea0aa7df987ebafa2d392bee9bd5076a7b787bd450295cbcfc029224ed5e7",
-            "e92c4f0a7e04ef1e65141c59343006f384a91b79605ca98dfe5caef7404481d5",
-            "fdc2657742610dbc3dbea05f3e072b33811248b01a1b8de397fb68b0d67af4be",
-            "768df8f9ef6226f3dddb2f532c28565b5d4f4d3e575d88f0cf7df8e3bf76a9b3",
-            "590b32aaefb8ddf113ad6be70934381b951931a3076fa82ab199416eb01dcb48",
-            "00000000f8bf61018ddd77d23c112e874682704a290252f635e7df06c8a317b8",
-        };
-        for (auto & tx : txs) tx = QByteArray::fromHex(tx);
-        auto pair = Merkle::branchAndRoot(txs, 0);
-        static const auto ba2quoted = [](const auto &b){return QString("'%1'").arg(QString::fromUtf8(b.toHex()));};
-        Log() << "Txs: [ " << Util::Stringify(txs, ba2quoted) << " ]";
-        Log() << "Branch: [ " << Util::Stringify(pair.first, ba2quoted) << " ]";
-        Log() << "Root: '" << pair.second.toHex() << "'";
-        Log() << "Level1: [ " << Util::Stringify(Merkle::level(txs, 1), ba2quoted) << " ]";
-
-        const size_t num = 64000;
-        Log() << "Testing performance, filling " << num << " hashes and computing merkle...";
-        // next, test perfromance -- by
-        Merkle::HashVec txs2(num);
-        for (size_t i = 0; i < txs2.size(); ++i) {
-            QByteArray & ba = txs2[i];
-            ba.resize(HashLen);
-            QRandomGenerator::securelySeeded().fillRange(reinterpret_cast<uint32_t *>(ba.data()), HashLen/sizeof(uint32_t));
-        }
-        const auto t0 = Util::getTimeNS();
-        auto pair2 = Merkle::branchAndRoot(txs2, 0);
-        Log() << "Merkle took: " << QString::number((Util::getTimeNS() - t0)/1e6, 'f', 4) << " msec";
-    }
-
 
     Cache::Cache(const GetHashesFunc & f)
         : getHashesFunc(f)
@@ -309,6 +275,49 @@ namespace Merkle {
         DebugM("Merkle cache truncated to length ", length);
     }
 
-
 } // end namespace Merkle
 
+#ifdef ENABLE_TESTS
+#include "App.h"
+namespace {
+    void test() {
+        Merkle::HashVec txs = {
+            "5b357a2f1f18955e8fd08dc2d8443b0806cbbe6d60b29a7370844e4815ff0efb",
+            "001dd1663f777a646190959122bcfd69ad6160c28bc3e99e3df65b1cb26bcc6d",
+            "036ec76bdcd873d70f31c95637624c9ec975622cd2a7f34ff0130b36f51f87bb",
+            "9e7ea0aa7df987ebafa2d392bee9bd5076a7b787bd450295cbcfc029224ed5e7",
+            "e92c4f0a7e04ef1e65141c59343006f384a91b79605ca98dfe5caef7404481d5",
+            "fdc2657742610dbc3dbea05f3e072b33811248b01a1b8de397fb68b0d67af4be",
+            "768df8f9ef6226f3dddb2f532c28565b5d4f4d3e575d88f0cf7df8e3bf76a9b3",
+            "590b32aaefb8ddf113ad6be70934381b951931a3076fa82ab199416eb01dcb48",
+            "00000000f8bf61018ddd77d23c112e874682704a290252f635e7df06c8a317b8",
+        };
+        for (auto & tx : txs) tx = QByteArray::fromHex(tx);
+        auto pair = Merkle::branchAndRoot(txs, 0);
+        static const auto ba2quoted = [](const auto &b){return QString("'%1'").arg(QString::fromUtf8(b.toHex()));};
+        Log() << "Txs: [ " << Util::Stringify(txs, ba2quoted) << " ]";
+        Log() << "Branch: [ " << Util::Stringify(pair.first, ba2quoted) << " ]";
+        Log() << "Root: '" << pair.second.toHex() << "'";
+        Log() << "Level1: [ " << Util::Stringify(Merkle::level(txs, 1), ba2quoted) << " ]";
+        if (Util::ParseHexFast("de2a609fd92defb4b696dda3f4a88d0bb486e791c8b6eb4283bd14f2c83e4f90") != pair.second)
+            throw Exception("Merkle root does not match expected value!");
+        Log() << "merkle root verified ok";
+    }
+    void bench() {
+        const size_t num = 64000;
+        Log() << "Testing performance, filling " << num << " hashes and computing merkle...";
+        // next, test perfromance
+        Merkle::HashVec txs(num);
+        for (size_t i = 0; i < txs.size(); ++i) {
+            QByteArray & ba = txs[i];
+            ba.resize(HashLen);
+            QRandomGenerator::securelySeeded().fillRange(reinterpret_cast<uint32_t *>(ba.data()), HashLen/sizeof(uint32_t));
+        }
+        const Tic t0;
+        auto pair2 = Merkle::branchAndRoot(txs, 0);
+        Log() << "Merkle took: " << t0.msecStr(4) << " msec";
+    }
+    static const auto test_ = App::registerTest("merkle", &test);
+    static const auto bench_ = App::registerBench("merkle", &bench);
+} // namespace
+#endif // ENABLE_TESTS
