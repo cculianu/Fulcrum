@@ -37,6 +37,7 @@
 #include <iterator>
 #include <list>
 #include <map>
+#include <mutex>
 
 
 Controller::Controller(const std::shared_ptr<const Options> &o)
@@ -593,6 +594,7 @@ struct SynchMempoolTask : public CtlTask
     void clear() {
         isdlingtxs = false;
         txsNeedingDownload.clear(); txsWaitingForResponse.clear(); txsDownloaded.clear();
+        txsNeedingDownload.compact(); txsWaitingForResponse.compact(); txsDownloaded.compact();
         expectedNumTxsDownloaded = 0;
         // Note: we don't clear "scriptHashesAffected" intentionally in case we are retrying. We want to accumulate
         // all the droppedTx scripthashes for each retry, so we never clear the set.

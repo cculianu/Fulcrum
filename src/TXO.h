@@ -22,8 +22,6 @@
 #include "BTC.h"
 #include "TXO_Compact.h"
 
-#include "robin_hood/robin_hood.h"
-
 #include <QString>
 
 #include <algorithm>

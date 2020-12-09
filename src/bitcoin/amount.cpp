@@ -8,6 +8,7 @@
 
 #include "tinyformat.h"
 
+#include <mutex>
 #include <shared_mutex>
 
 namespace bitcoin {

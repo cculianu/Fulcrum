@@ -26,6 +26,8 @@
 #include "bitcoin/amount.h"
 #include "bitcoin/block.h"
 
+#include "robin_hood/robin_hood.h"
+
 #include <QByteArray>
 
 #include <cassert>

@@ -621,6 +621,8 @@ void Storage::startup()
             const size_t mem = std::max(size_t(options->db.maxMem * memFactor), size_t(64*1024));
             Debug() << "DB \"" << name << "\" mem: " << QString::number(mem / 1024. / 1024., 'f', 2) << " MiB";
             opts.OptimizeLevelStyleCompaction(mem);
+            for (auto & comp : opts.compression_per_level)
+                comp = rocksdb::CompressionType::kNoCompression; // paranoia -- enforce no compression since our data compresses so poorly
             memTotal += mem;
             rocksdb::Status s;
             // try and open database

@@ -27,8 +27,8 @@
 void Mempool::clear() {
     txs.clear();
     hashXTxs.clear();
-    txs.reserve(0); // this should free previous capacity
-    hashXTxs.reserve(0);
+    txs.compact(); // this should free previous capacity
+    hashXTxs.compact();
 }
 
 auto Mempool::calcCompactFeeHistogram(double binSize) const -> FeeHistogramVec
@@ -350,9 +350,9 @@ auto Mempool::dropTxs(ScriptHashesAffectedSet & scriptHashesAffectedOut, const T
 
     if (rehashMaxLoadFactor) {
         if (txs.load_factor() <= *rehashMaxLoadFactor)
-            txs.rehash(0); // shrink to fit
+            txs.compact(); // shrink to fit
         if (hashXTxs.load_factor() <= *rehashMaxLoadFactor)
-            hashXTxs.rehash(0);  // shrink to fit
+            hashXTxs.compact();  // shrink to fit
     }
     elapsedMsec = t0.msec<decltype(elapsedMsec)>();
     return ret;
@@ -500,9 +500,9 @@ auto Mempool::confirmedInBlock(ScriptHashesAffectedSet & scriptHashesAffectedOut
 
     if (rehashMaxLoadFactor) {
         if (txs.load_factor() <= *rehashMaxLoadFactor)
-            txs.rehash(0); // shrink to fit
+            txs.compact(); // shrink to fit
         if (hashXTxs.load_factor() <= *rehashMaxLoadFactor)
-            hashXTxs.rehash(0);  // shrink to fit
+            hashXTxs.compact();  // shrink to fit
     }
     elapsedMsec = t0.msec<decltype(elapsedMsec)>();
     return ret;

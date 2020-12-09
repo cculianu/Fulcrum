@@ -402,7 +402,8 @@ void SubsMgr::removeZombies(bool forced)
             ++it;
     }
     if (ctr) {
-        p->subs.reserve(p->kSubsReserveSize); // shrink_to_fit if over kSubsReserveSize
+        if (p->subs.load_factor() <= 0.5)
+            p->subs.compact(); // shrink_to_fit, reclaim memory, etc
         DebugM("SubsMgr: Removed ", ctr, " zombie ", Util::Pluralize("sub", ctr), " out of ", total,
                " in ", t0.msecStr(4), " msec");
     }

@@ -57,6 +57,7 @@
 
 #include <cstring>             // for strerror
 #include <iostream>
+#include <mutex>
 #include <thread>
 
 #if __has_include(<pthread.h>) && !defined(Q_OS_WIN)

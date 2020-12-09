@@ -28,6 +28,7 @@
 #include <QHash>
 #include <QHashFunctions>
 
+#include <mutex>
 #include <utility>
 
 #ifdef ENABLE_TESTS
