@@ -111,7 +111,7 @@ void SubsMgr::on_finished()
 // this runs in our thread
 void SubsMgr::doNotifyAllPending()
 {
-    const auto t0 = Util::getTimeNS();
+    const Tic t0;
     size_t ctr = 0, ctrSH = 0;
     bool emitQueueEmpty = false;
     std::vector<SubRef> pending; // this ends up being the intersection of the sh's in p->pendingNotifications and p->subs
@@ -190,9 +190,8 @@ void SubsMgr::doNotifyAllPending()
         }
     }
     if (ctr || ctrSH) {
-        const auto elapsedMS = (Util::getTimeNS() - t0)/1e6;
         DebugM(__func__, ": ", ctr, Util::Pluralize(" client", ctr), ", ", ctrSH, Util::Pluralize(" scripthash", ctrSH),
-               " in ", QString::number(elapsedMS, 'f', 4), " msec");
+               " in ", t0.msecStr(4), " msec");
     }
 }
 
@@ -360,7 +359,7 @@ std::pair<bool, bool> SubsMgr::globalSubsLimitFlags() const
 
 auto SubsMgr::getFullStatus(const HashX &sh) const -> StatusHash
 {
-    const auto t0 = Util::getTimeNS();
+    const Tic t0;
     StatusHash ret;
     const auto hist = storage->getHistory(sh, true, true);
     if (hist.empty())
@@ -375,17 +374,16 @@ auto SubsMgr::getFullStatus(const HashX &sh) const -> StatusHash
     }
     // status is non-reversed, single sha256 (32 bytes)
     ret = BTC::HashOnce(historyString.toUtf8());
-    const auto elapsed = Util::getTimeNS() - t0;
-    constexpr qint64 kTookKindaLongNS = 7500000LL; // 7.5mec -- if it takes longer than this, log it to debug log, otherwise don't as this can get spammy.
-    if (elapsed > kTookKindaLongNS) {
-        DebugM("full status for ",  Util::ToHexFast(sh), " ", hist.size(), " items in ", QString::number(elapsed/1e6, 'f', 4), " msec");
+    constexpr qint64 kTookKindaLongNS = 7'500'000LL; // 7.5mec -- if it takes longer than this, log it to debug log, otherwise don't as this can get spammy.
+    if (t0.nsec() > kTookKindaLongNS) {
+        DebugM("full status for ",  Util::ToHexFast(sh), " ", hist.size(), " items in ", t0.msecStr(4), " msec");
     }
     return ret;
 }
 
 void SubsMgr::removeZombies(bool forced)
 {
-    const auto t0 = Util::getTimeNS();
+    const Tic t0;
     int ctr = 0;
     const auto now = Util::getTime();
     LockGuard g(p->mut);
@@ -405,9 +403,8 @@ void SubsMgr::removeZombies(bool forced)
     }
     if (ctr) {
         p->subs.reserve(p->kSubsReserveSize); // shrink_to_fit if over kSubsReserveSize
-        const auto elapsed = Util::getTimeNS() - t0;
-        DebugM( "SubsMgr: Removed ", ctr, " zombie ", Util::Pluralize("sub", ctr), " out of ", total,
-                " in ", QString::number(elapsed/1e6, 'f', 4), " msec");
+        DebugM("SubsMgr: Removed ", ctr, " zombie ", Util::Pluralize("sub", ctr), " out of ", total,
+               " in ", t0.msecStr(4), " msec");
     }
 }
 
