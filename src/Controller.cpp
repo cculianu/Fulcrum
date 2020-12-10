@@ -566,7 +566,7 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
 
 
 /// We use the "getrawmempool false" (nonverbose) call to get the initial list of mempool tx's.  This is the
-/// most efficient.  With fill mempools bitcoind CPU usage could spike to 100% if we use the verbose more.
+/// most efficient.  With full mempools bitcoind CPU usage could spike to 100% if we use the verbose mode.
 /// It turns out we don't need that verbose data anyway (such as a full ancestor count) -- it's enough to have a bool
 /// flag for "has unconfirmed parent tx", and be done with it.  Everything else we can calculate.
 struct SynchMempoolTask : public CtlTask
