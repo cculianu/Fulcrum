@@ -70,7 +70,7 @@ If you are still having trouble, [file an issue here in this github](https://git
 
 You may optionally build against the **system rocksdb** (Linux only) if your distribution offers `rocksdb` version `6.6.4` or newer.
 
-1. `qmake features=`  (to generate the Makefile **without** the `staticlibs` feature)
+1. `qmake LIBS=-lrocksdb`  (to generate the Makefile **without** linking to the included static lib)
 2. `make clean && make -j8` (replace 8 here with the number of cores on your machine)
 
 **Note**: Some Linux distributions have been known to package `librocksdb.so` incorrectly. [See here for an example](https://bugs.archlinux.org/task/65093), so until I can be confident most distributions do it right, I am considering using the system `librocksdb.so` an ***experimental feature*** for the time being (in principle it should work ok if the library is compiled correctly).

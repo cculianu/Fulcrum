@@ -114,32 +114,38 @@ linux-g++ {
         #
         # Build information --
         #
-        # Currently this was built from github sources of the v6.6.4 rocksdb release:
+        # Currently this was built from github sources of the v6.14.6 rocksdb release:
         #     https://github.com/facebook/rocksdb.git
-        # Commit tag v6.6.4, commit hash (from Fri Jan 31 13:03:51 2020 -0800):
-        #     551a110918493a19d11243f53408b97485de1411
+        # Commit tag v6.14.6, commit hash (from Tue Dec 1 15:05:35 2020 -0800):
+        #     ed4316166f67ec892603014634840d29f460f611
         #
         # OSX:
         #   Built on Apple clang version 11.0.0 (clang-1100.0.33.17), from Xcode 113.1.
-        #   command: USE_RTTI=1 PORTABLE=1 make static_lib -j4 V=1
+        #   command: USE_RTTI=1 PORTABLE=1 DEBUG_LEVEL=0 make static_lib -j4 V=1
         #   Annoyingly, the produced .a file has debug symbols which we strip with: strip -S.
         #
         # Linux:
         #   Built on Ubuntu 18.10, g++ (Ubuntu 8.2.0-7ubuntu1) 8.2.0.
-        #   command: USE_RTTI=1 PORTABLE=1 make static_lib -j4 V=1
+        #   command: USE_RTTI=1 PORTABLE=1 DEBUG_LEVEL=0 make static_lib -j4 V=1
         #   Annoyingly, the produced .a file has debug symbols which we strip with: strip -g.
         #
         # Windows:
-        #   Built using the MinGW G++ 7.3.0 (compiler that ships with Qt), from a cmd.exe prompt, via cmake.exe by following
-        #   these steps:
+        #   Built using the MinGW G++ 8.1.0 (compiler that ships with Qt 5.15+), from a cmd.exe prompt, via cmake.exe by
+        #   following these steps:
         #   - Install a recent cmake into eg c:\cmake
-        #   - Open up a Qt cmd.exe prompt that points to MinGW G++ 7.3.0 in the path (using the Start menu shortcut installed by
-        #     Qt 5.13.2+ or Qt 5.14.1+ is easiest).
+        #   - Open up a Qt cmd.exe prompt that points to MinGW G++ 8.1.0 in the path (using the Start menu shortcut
+        #     installed by Qt 5.15+ is easiest).
         #   - Put installed 'c:\cmake\bin' in the path so that 'cmake.exe' works from the cmd prompt, eg:
         #         set PATH=c:\cmake\bin;%PATH%
         #   - Checkout rocksdb (commit hash above), cd rocksdb
-        #   - Edit CMakeLists.txt and search for '-fno-asynchronous-unwind-tables' and remove that compile option since it
-        #     breaks building on MinGW against Qt, and replace it with -O3 for maximal speed.
+        #   - Edit CMakeLists.txt
+        #     - Search for '-fno-asynchronous-unwind-tables' and remove that compile option since it
+        #       breaks building on MinGW against Qt, and replace it with -O3 for maximal speed.
+        #     - In that same MINGW section where you removed the above, add: '-Wno-cast-function-type -Wno-error=cast-function-type'
+        #       since MinGW 8.1 seems to not like the function pointer casts in port/win/env_win.cc.
+        #     - Look for a section that contains 'if(NOT MINGW' and rename MINGW to XX_MINGW:
+        #             if(NOT XX_MINGW)
+        #       This ensures that port/win/win_thread.cc does get compiled and linked into the lib.
         #   - mkdir build, cd build
         #   - Run this command from within the rocksdb/build dir that you just created:
         #         cmake .. -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_SYSTEM_NAME=Windows -G"MinGW Makefiles" -DWITH_GFLAGS=0 -DWITH_JNI=0  -DCMAKE_BUILD_TYPE=Release -DUSE_RTTI=1 -DPORTABLE=1

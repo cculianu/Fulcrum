@@ -39,7 +39,7 @@ printok "jemalloc static library built and installed in $JEMALLOC_LIBDIR"
 
 info "Building RocksDB ..."
 cd "$top/$ROCKSDB_PACKAGE" || fail "Could not cd tp $ROCKSDB_PACKAGE"
-USE_RTTI=1 PORTABLE=1 make static_lib -j`nproc` V=1 \
+USE_RTTI=1 PORTABLE=1 DEBUG_LEVEL=0 make static_lib -j`nproc` V=1 \
     || fail "Could not build RocksDB"
 
 info "Stripping librocksdb.a ..."

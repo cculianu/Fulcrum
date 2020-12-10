@@ -745,7 +745,15 @@ auto Storage::stats() const -> Stats
             if (auto fact = db->GetOptions().table_factory; LIKELY(fact) ) {
                 // parse the table factory options string, which is of the form "     opt1: val1\n     opt2: val2\n  ... "
                 QVariantMap m3;
-                for (const auto & line : QString::fromStdString( fact->GetPrintableTableOptions() ).split("\n")) {
+                QString rocksdbOptionsString;
+#if __has_include(<rocksdb/configurable.h>)
+                // Newer rocksdb API uses GetPrintableOptions
+                rocksdbOptionsString = QString::fromStdString( fact->GetPrintableOptions() );
+#else
+                // Older rocksdb API used GetPrintableTableOptions
+                rocksdbOptionsString = QString::fromStdString( fact->GetPrintableTableOptions() );
+#endif
+                for (const auto & line : rocksdbOptionsString.split("\n")) {
                     const auto nvp = line.split(":");
                     if (nvp.size() < 2)
                         continue;

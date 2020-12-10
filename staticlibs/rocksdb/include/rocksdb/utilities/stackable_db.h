@@ -14,7 +14,7 @@
 #undef DeleteFile
 #endif
 
-namespace rocksdb {
+namespace ROCKSDB_NAMESPACE {
 
 // This class contains APIs to stack rocksdb wrappers.Eg. Stack TTL over base d
 class StackableDB : public DB {
@@ -299,6 +299,10 @@ class StackableDB : public DB {
 
   virtual Env* GetEnv() const override { return db_->GetEnv(); }
 
+  virtual FileSystem* GetFileSystem() const override {
+    return db_->GetFileSystem();
+  }
+
   using DB::GetOptions;
   virtual Options GetOptions(ColumnFamilyHandle* column_family) const override {
     return db_->GetOptions(column_family);
@@ -341,6 +345,11 @@ class StackableDB : public DB {
   virtual void GetLiveFilesMetaData(
       std::vector<LiveFileMetaData>* metadata) override {
     db_->GetLiveFilesMetaData(metadata);
+  }
+
+  virtual Status GetLiveFilesChecksumInfo(
+      FileChecksumList* checksum_list) override {
+    return db_->GetLiveFilesChecksumInfo(checksum_list);
   }
 
   virtual void GetColumnFamilyMetaData(ColumnFamilyHandle* column_family,
@@ -388,12 +397,23 @@ class StackableDB : public DB {
     return db_->GetCreationTimeOfOldestFile(creation_time);
   }
 
+  // WARNING: This API is planned for removal in RocksDB 7.0 since it does not
+  // operate at the proper level of abstraction for a key-value store, and its
+  // contract/restrictions are poorly documented. For example, it returns non-OK
+  // `Status` for non-bottommost files and files undergoing compaction. Since we
+  // do not plan to maintain it, the contract will likely remain underspecified
+  // until its removal. Any user is encouraged to read the implementation
+  // carefully and migrate away from it when possible.
   virtual Status DeleteFile(std::string name) override {
     return db_->DeleteFile(name);
   }
 
   virtual Status GetDbIdentity(std::string& identity) const override {
     return db_->GetDbIdentity(identity);
+  }
+
+  virtual Status GetDbSessionId(std::string& session_id) const override {
+    return db_->GetDbSessionId(session_id);
   }
 
   using DB::SetOptions;
@@ -458,4 +478,4 @@ class StackableDB : public DB {
   std::shared_ptr<DB> shared_db_ptr_;
 };
 
-}  //  namespace rocksdb
+}  // namespace ROCKSDB_NAMESPACE

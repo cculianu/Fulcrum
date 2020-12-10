@@ -8,7 +8,7 @@
 #include <stdint.h>
 #include "rocksdb/slice.h"
 
-namespace rocksdb {
+namespace ROCKSDB_NAMESPACE {
 
 // Define all public custom types here.
 
@@ -18,6 +18,7 @@ typedef uint64_t SequenceNumber;
 const SequenceNumber kMinUnCommittedSeq = 1;  // 0 is always committed
 
 // User-oriented representation of internal key types.
+// Ordering of this enum entries should not change.
 enum EntryType {
   kEntryPut,
   kEntryDelete,
@@ -25,6 +26,7 @@ enum EntryType {
   kEntryMerge,
   kEntryRangeDeletion,
   kEntryBlobIndex,
+  kEntryDeleteWithTimestamp,
   kEntryOther,
 };
 
@@ -51,4 +53,4 @@ struct FullKey {
 // internal_key is alive.
 bool ParseFullKey(const Slice& internal_key, FullKey* result);
 
-}  //  namespace rocksdb
+}  // namespace ROCKSDB_NAMESPACE
