@@ -138,31 +138,47 @@ linux-g++ {
         #   - Put installed 'c:\cmake\bin' in the path so that 'cmake.exe' works from the cmd prompt, eg:
         #         set PATH=c:\cmake\bin;%PATH%
         #   - Checkout rocksdb (commit hash above), cd rocksdb
-        #   - Edit CMakeLists.txt
-        #     - Search for '-fno-asynchronous-unwind-tables' and remove that compile option since it
-        #       breaks building on MinGW against Qt, and replace it with -O3 for maximal speed.
-        #     - In that same MINGW section where you removed the above, add: '-Wno-cast-function-type -Wno-error=cast-function-type'
-        #       since MinGW 8.1 seems to not like the function pointer casts in port/win/env_win.cc.
-        #     - Look for a section that contains 'if(NOT MINGW' and rename MINGW to XX_MINGW:
+        #   - Now you will need to edit CMakeLists.txt:
+        #     1. Open CMakeLists.txt in a text editor
+        #     2. Search for '-fno-asynchronous-unwind-tables' and remove that compile option since it
+        #        breaks building on MinGW against Qt, and replace it with -O3 for maximal speed.
+        #     3. In that same MINGW section where you removed the above, add: '-Wno-cast-function-type -Wno-error=cast-function-type'
+        #        since MinGW 8.1 seems to not like the function pointer casts in port/win/env_win.cc.
+        #     4. Look for a section that contains 'if(NOT MINGW' and rename MINGW to XX_MINGW:
         #             if(NOT XX_MINGW)
-        #       This ensures that port/win/win_thread.cc does get compiled and linked into the lib.
+        #        This ensures that port/win/win_thread.cc does get compiled and linked into the lib.
         #   - mkdir build, cd build
         #   - Run this command from within the rocksdb/build dir that you just created:
         #         cmake .. -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_SYSTEM_NAME=Windows -G"MinGW Makefiles" -DWITH_GFLAGS=0 -DWITH_JNI=0  -DCMAKE_BUILD_TYPE=Release -DUSE_RTTI=1 -DPORTABLE=1
         #   - Build with this command:
         #         mingw32-make -j4 V=1 rocksdb  <-- will build static lib only
-        #   The generated librocksdb.a will be in the build/ directory you are currently in, ready to be put into the project.
+        #   The generated librocksdb.a will be in the build/ directory you are currently in, ready to be put into the
+        #   Fulcrum directory staticlibs/rocksdb/bin/win64.
         macx {
             LIBS += -L$$PWD/staticlibs/rocksdb/bin/osx
         }
         linux {
-            LIBS += -L$$PWD/staticlibs/rocksdb/bin/linux
+            # We support aarch64 (for RPis, etc) but the user needs to run a shell script to compile librocksdb.a
+            # themselves: contrib/build/rocksdb-staticlib.sh
+            contains(QMAKE_HOST.arch, aarch64) {
+                aarch64_rocksdb = staticlibs/rocksdb/bin/linux/aarch64
+                aarch64_rocksdb_path = $$PWD/$$aarch64_rocksdb
+                exists($$aarch64_rocksdb_path/librocksdb.a) {
+                    LIBS += -L$$aarch64_rocksdb_path
+                    message("Linux-ARM64 detected: Using librocksdb.a from $$aarch64_rocksdb")
+                } else {
+                   message("Linux-ARM64 detected but missing librocksdb.a in $$aarch64_rocksdb")
+                   error("Please run the shell script contrib/build/rocksdb-staticlib.sh to build it.")
+                }
+            } else {
+                LIBS += -L$$PWD/staticlibs/rocksdb/bin/linux
+            }
         }
         win32 {
             win32-g++ {
                 LIBS += -L$$PWD/staticlibs/rocksdb/bin/win64
             } else {
-                error("This project lacks a pre-compiled static librocksdb.a for this compiler! Either add one to staticlib/rocksdb/bin/win64/ or use MinGW G++ 7.3.0.")
+                error("This project lacks a pre-compiled static librocksdb.a for this compiler! Either add one to staticlib/rocksdb/bin/win64/ or use MinGW G++ 8.1.0.")
             }
         }
         INCLUDEPATH += $$PWD/staticlibs/rocksdb/include
