@@ -19,8 +19,6 @@
 #include "SubsMgr.h"
 #include "Util.h"
 
-#include "robin_hood/robin_hood.h"
-
 #include <QThread>
 
 #include <algorithm>
@@ -49,7 +47,7 @@ namespace {
 struct SubsMgr::Pvt
 {
     std::mutex mut;
-    robin_hood::unordered_flat_map<HashX, SubsMgr::SubRef, HashHasher> subs;
+    std::unordered_map<HashX, SubsMgr::SubRef, HashHasher> subs;
     std::unordered_set<HashX, HashHasher> pendingNotificatons;
 
     std::atomic_int64_t nClientSubsActive{0};
@@ -403,7 +401,7 @@ void SubsMgr::removeZombies(bool forced)
     }
     if (ctr) {
         if (p->subs.load_factor() <= 0.5)
-            p->subs.compact(); // shrink_to_fit, reclaim memory, etc
+            p->subs.rehash(p->kSubsReserveSize); // shrink_to_fit down toward kSubsReserveSize (reclaim memory)
         DebugM("SubsMgr: Removed ", ctr, " zombie ", Util::Pluralize("sub", ctr), " out of ", total,
                " in ", t0.msecStr(4), " msec");
     }
@@ -413,26 +411,38 @@ auto SubsMgr::debug(const StatsParams &params) const -> Stats
 {
     QVariant ret;
     if (params.contains("subs")) {
-        QVariantMap m;
-        LockGuard g(p->mut);
-        for (const auto & [sh, sub] : p->subs) {
-            QVariantMap m2;
-            {
-                LockGuard g2(sub->mut);
-                m2["count"] = qlonglong(sub->subscribedClientIds.size());
-                m2["lastStatusNotified"] = sub->lastStatusNotified.value_or(StatusHash()).toHex();
-                m2["idleSecs"] = (Util::getTime() - sub->tsMsec)/1e3;
-                const auto & clients = sub->subscribedClientIds;
+        QVariantMap subs;
+        qulonglong collisions{}, largestBucket{}, medianBucket{}, medianNonzeroBucket{};
+        {
+            LockGuard g(p->mut);
+            for (const auto & [sh, sub] : p->subs) {
+                QVariantMap m2;
+                {
+                    LockGuard g2(sub->mut);
+                    m2["count"] = qlonglong(sub->subscribedClientIds.size());
+                    m2["lastStatusNotified"] = sub->lastStatusNotified.value_or(StatusHash()).toHex();
+                    m2["idleSecs"] = (Util::getTime() - sub->tsMsec)/1e3;
+                    const auto & clients = sub->subscribedClientIds;
 #if QT_VERSION < QT_VERSION_CHECK(5, 14, 0)
-                // Qt < 5.14 lacks the ranged constructors for containers so we must do this.
-                m2["clientIds"] = QVariantList::fromStdList(Util::toList<std::list<QVariant>>(clients));
+                    // Qt < 5.14 lacks the ranged constructors for containers so we must do this.
+                    m2["clientIds"] = QVariantList::fromStdList(Util::toList<std::list<QVariant>>(clients));
 #else
-                m2["clientIds"] = Util::toList<QVariantList>(clients);
+                    m2["clientIds"] = Util::toList<QVariantList>(clients);
 #endif
+                }
+                subs[QString(Util::ToHexFast(sh))] = m2;
             }
-            m[QString(Util::ToHexFast(sh))] = m2;
+            std::tie(collisions, largestBucket, medianBucket, medianNonzeroBucket) = Util::bucketStats(p->subs);
         }
-        ret = m;
+        QVariantMap m;
+        m["subs"] = std::move(subs);
+        auto stats = this->stats().toMap();
+        stats["subscriptions bucket collisions"] = collisions;
+        stats["subscriptions largest bucket"] = largestBucket;
+        stats["subscriptions median bucket"] = medianBucket;
+        stats["subscriptions median non-zero bucket"] = medianNonzeroBucket;
+        m["stats"] = std::move(stats);
+        ret = std::move(m);
     }
     return ret;
 }
@@ -443,6 +453,7 @@ auto SubsMgr::stats() const -> Stats
     {
         LockGuard g(p->mut);
         ret["subscriptions load factor"] = p->subs.load_factor();
+        ret["subscriptions bucket count"] = qulonglong(p->subs.bucket_count());
         QVariantList l;
         for (const auto & sh : p->pendingNotificatons) {
             l.push_back(Util::ToHexFast(sh));

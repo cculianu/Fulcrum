@@ -30,6 +30,7 @@
 #include <QHash>
 #include <QString>
 
+#include <cstddef> // for std::byte, etc
 #include <cstring> // for memcpy
 #include <type_traits>
 #include <utility> // for pair, etc
@@ -183,18 +184,22 @@ namespace BTC
     };
 
     /// Trivial hasher for sha256, rmd160, etc hashed byte arrays (for use with std::unordered_map,
-    /// std::unordered_set, etc) -- just returns the first 8 bytes reinterpreted as size_t since hashed data is
+    /// std::unordered_set, etc) -- just returns the middle 8 bytes reinterpreted as size_t since hashed data is
     /// already randomized.
     template <typename BytesT>
     struct GenericTrivialHashHasher {
         static_assert(std::is_convertible_v<BytesT, ByteView>, "Assumption here is that BytesT has an implicit conversion to ByteView");
 
         std::size_t operator()(const ByteView &bv) const noexcept {
-            if (LIKELY(bv.size() >= sizeof(std::size_t))) {
-                // common case, just return the first 8 bytes reinterpreted as size_t since this is already
+            if (const auto bvsz = bv.size(); LIKELY(bvsz >= sizeof(std::size_t))) {
+                // common case, just return the middle 8 bytes reinterpreted as size_t since this is already
                 // a random hash.
                 std::size_t ret;
-                std::memcpy(reinterpret_cast<char *>(&ret), bv.data(), sizeof(ret));
+                // We take the middle bytes of the hash just to prevent some strange sorts of hash collisions if people
+                // "mine" txids (or hash160 addresses) or somesuch, or in case this hasher was inadvertently used with
+                // a blockhash instead of a txid or hash160.
+                const auto offset = bvsz / 2 - sizeof(ret) / 2;
+                std::memcpy(reinterpret_cast<std::byte *>(&ret), bv.data() + offset, sizeof(ret));
                 return ret;
             }
             // this should not normally be reached.

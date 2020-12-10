@@ -22,7 +22,6 @@
 #include "TXO.h"
 
 #include "bitcoin/amount.h"
-#include "robin_hood/robin_hood.h"
 
 #include <QVariantMap>
 
@@ -103,7 +102,7 @@ struct Mempool
 
     using TxRef = std::shared_ptr<Tx>;
     /// master mapping of TxHash -> TxRef
-    using TxMap = robin_hood::unordered_flat_map<TxHash, TxRef, HashHasher>;
+    using TxMap = std::unordered_map<TxHash, TxRef, HashHasher>;
     /// ensures an ordering of TxRefs for the set below that are from fewest ancestors -> most ancestors
     struct TxRefOrdering {
         bool operator()(const TxRef &a, const TxRef &b) const {
@@ -120,7 +119,7 @@ struct Mempool
     /// Note: The TxRefs here here point to the same object as the mapped_type in the TxMap above
     /// Note that while the mapped_type is a vector, it is guaranteed to contain unique TxRefs, ordered by
     /// TxRefOrdering above.  This invariant is maintained in addTxs() as well as confirmedInBlock().
-    using HashXTxMap = robin_hood::unordered_node_map<HashX, std::vector<TxRef>, HashHasher>;
+    using HashXTxMap = std::unordered_map<HashX, std::vector<TxRef>, HashHasher>;
 
 
     // -- Data members of struct Mempool --
@@ -131,13 +130,13 @@ struct Mempool
     // -- Add to mempool
 
     /// Used by addNewTxs
-    using NewTxsMap = robin_hood::unordered_flat_map<TxHash, std::pair<Mempool::TxRef, bitcoin::CTransactionRef>, HashHasher>;
+    using NewTxsMap = std::unordered_map<TxHash, std::pair<Mempool::TxRef, bitcoin::CTransactionRef>, HashHasher>;
     /// The scriptHashes that were affected by this refresh/synch cycle. Used for notifications.
     using ScriptHashesAffectedSet = std::unordered_set<HashX, HashHasher>;
     /// DB getter -- called to retrieve a utxo's scripthash & amount data from the DB. May throw.
     using GetTXOInfoFromDBFunc = std::function<std::optional<TXOInfo>(const TXO &)>;
 
-    /// Results of add or drop -- some statustics for caller.
+    /// Results of add or drop -- some statistics for caller.
     struct Stats {
         std::size_t oldSize = 0, newSize = 0;
         std::size_t oldNumAddresses = 0, newNumAddresses = 0;

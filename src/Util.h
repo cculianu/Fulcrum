@@ -743,6 +743,46 @@ namespace Util {
         }
     }
 
+    /// Hash a pointer for use with a std::unordered_map using murmur3 or cityhash64 (depending if 32bit or 64bit).
+    /// Hashing a pointer is to prevent situations where patholically-spaced pointers lead to hashtable collisions.
+    struct PtrHasher {
+        template <typename T>
+        std::size_t operator()(const T * const t) const {
+            return hashForStd(ByteView{reinterpret_cast<const std::byte *>(&t), sizeof(t)});
+        }
+    };
+
+    /// Template of use with unordered_map or unordered_set or similar.
+    /// Returns a tuple of: [number_of_collisions_total, largest_single_bucket, median_bucket_size, median_nonzero_bucket_size]
+    /// Note: this is slow-ish so it should be used for debug purposes only and not in a critical path.
+    template<typename UnorderedSetOrMap>
+    auto bucketStats(const UnorderedSetOrMap &m) -> std::tuple<decltype(std::declval<UnorderedSetOrMap>().bucket_size(0)), std::size_t, std::size_t, std::size_t> /* rely on SFINAE here */ {
+        std::size_t collisions{}, max{};
+        std::vector<std::size_t> sizes;
+        sizes.reserve(m.bucket_count());
+        for (std::size_t i = 0; i < m.bucket_count(); ++i) {
+            const auto bsz = m.bucket_size(i); // this call itself is linear to the number of elements in the bucket
+            if (bsz > 1) collisions += bsz;
+            if (bsz > max) max = bsz;
+            sizes.push_back(bsz);
+        }
+        // get median
+        std::sort(sizes.begin(), sizes.end());
+        const std::size_t median = sizes.empty() ? 0 : sizes[sizes.size()/2];
+        // get median nonzero
+        std::size_t medianNonzero = 0;
+        if (!sizes.empty()) {
+            // find first nonzero
+            auto it = std::find_if(sizes.begin(), sizes.end(), [](auto num){ return num != 0; });
+            if (it != sizes.end()) {
+                // get middle element of that range
+                const auto n = std::distance(it, sizes.end()), offset = std::distance(sizes.begin(), it);
+                medianNonzero = sizes[offset + n/2];
+            }
+        }
+        return {collisions, max, median, medianNonzero};
+    }
+
     struct MemUsage { std::size_t phys{}, virt{}; };
     MemUsage getProcessMemoryUsage();
 

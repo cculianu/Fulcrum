@@ -27,8 +27,8 @@
 void Mempool::clear() {
     txs.clear();
     hashXTxs.clear();
-    txs.compact(); // this should free previous capacity
-    hashXTxs.compact();
+    txs.rehash(0); // this should free previous capacity
+    hashXTxs.rehash(0);
 }
 
 auto Mempool::calcCompactFeeHistogram(double binSize) const -> FeeHistogramVec
@@ -350,9 +350,9 @@ auto Mempool::dropTxs(ScriptHashesAffectedSet & scriptHashesAffectedOut, const T
 
     if (rehashMaxLoadFactor) {
         if (txs.load_factor() <= *rehashMaxLoadFactor)
-            txs.compact(); // shrink to fit
+            txs.rehash(0); // shrink to fit
         if (hashXTxs.load_factor() <= *rehashMaxLoadFactor)
-            hashXTxs.compact();  // shrink to fit
+            hashXTxs.rehash(0);  // shrink to fit
     }
     elapsedMsec = t0.msec<decltype(elapsedMsec)>();
     return ret;
@@ -500,9 +500,9 @@ auto Mempool::confirmedInBlock(ScriptHashesAffectedSet & scriptHashesAffectedOut
 
     if (rehashMaxLoadFactor) {
         if (txs.load_factor() <= *rehashMaxLoadFactor)
-            txs.compact(); // shrink to fit
+            txs.rehash(0); // shrink to fit
         if (hashXTxs.load_factor() <= *rehashMaxLoadFactor)
-            hashXTxs.compact();  // shrink to fit
+            hashXTxs.rehash(0);  // shrink to fit
     }
     elapsedMsec = t0.msec<decltype(elapsedMsec)>();
     return ret;
@@ -562,11 +562,19 @@ QVariantMap Mempool::dump() const
             hxs[sh.toHex()] = IOInfo2Map(ioinfo);
         m["hashXs"] = hxs;
         m["hashXs (LoadFactor)"] = QString::number(double(tx->hashXs.load_factor()), 'f', 4);
+        m["hashXs (BucketCount)"] = qulonglong(tx->hashXs.bucket_count());
 
         txMap[hash.toHex()] = m;
     }
     mp["txs"] = txMap;
     mp["txs (LoadFactor)"] = QString::number(double(txs.load_factor()), 'f', 4);
+    mp["txs (BucketCount)"] = qulonglong(txs.bucket_count());
+    qulonglong collisions, largestBucket, medianBucket, medianNonzero;
+    std::tie(collisions, largestBucket, medianBucket, medianNonzero) = Util::bucketStats(txs);
+    mp["txs (BucketCollisions)"] = collisions;
+    mp["txs (BucketLargest)"] = largestBucket;
+    mp["txs (BucketMedian)"] = medianBucket;
+    mp["txs (BucketMedianNonzero)"] = medianNonzero;
     QVariantMap hxs;
     for (const auto & [sh, txset] : hashXTxs) {
         QVariantList l;
@@ -576,6 +584,12 @@ QVariantMap Mempool::dump() const
     }
     mp["hashXTxs"] = hxs;
     mp["hashXTxs (LoadFactor)"] = QString::number(double(hashXTxs.load_factor()), 'f', 4);
+    mp["hashXTxs (BucketCount)"] = qulonglong(hashXTxs.bucket_count());
+    std::tie(collisions, largestBucket, medianBucket, medianNonzero) = Util::bucketStats(hashXTxs);
+    mp["hashXTxs (BucketCollisions)"] = collisions;
+    mp["hashXTxs (BucketLargest)"] = largestBucket;
+    mp["hashXTxs (BucketMedian)"] = medianBucket;
+    mp["hashXTxs (BucketMedianNonzero)"] = medianNonzero;
 
     return mp;
 }
@@ -588,7 +602,6 @@ QVariantMap Mempool::dump() const
 
 #include "bitcoin/streams.h"
 #include "bitcoin/transaction.h"
-#include "robin_hood/robin_hood.h"
 
 #include <cstdio>
 #include <set>

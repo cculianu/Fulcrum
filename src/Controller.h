@@ -26,13 +26,12 @@
 #include "Storage.h"
 #include "SrvMgr.h"
 
-#include "robin_hood/robin_hood.h"
-
 #include <atomic>
 #include <memory>
 #include <tuple>
 #include <shared_mutex>
 #include <type_traits>
+#include <unordered_map>
 #include <vector>
 
 class CtlTask;
@@ -139,7 +138,7 @@ private:
     std::unique_ptr<StateMachine> sm;
     mutable std::shared_mutex smLock;
 
-    robin_hood::unordered_flat_map<CtlTask *, std::unique_ptr<CtlTask>> tasks;
+    std::unordered_map<CtlTask *, std::unique_ptr<CtlTask>, Util::PtrHasher> tasks;
 
     void add_DLHeaderTask(unsigned from, unsigned to, size_t nTasks);
     void process_DownloadingBlocks();
