@@ -23,8 +23,8 @@ private:
     explicit constexpr Amount(int64_t _amount) : amount(_amount) {}
 
 public:
-    constexpr Amount() : amount(0) {}
-    constexpr Amount(const Amount &_camount) : amount(_camount.amount) {}
+    constexpr Amount() noexcept : amount(0) {}
+    constexpr Amount(const Amount &_camount) noexcept : amount(_camount.amount) {}
 
     static constexpr Amount zero() { return Amount(0); }
     static constexpr Amount satoshi() { return Amount(1); }
@@ -32,6 +32,11 @@ public:
     /**
      * Implement standard operators
      */
+    Amount &operator=(const Amount &a) {
+        amount = a.amount;
+        return *this;
+    }
+
     Amount &operator+=(const Amount a) {
         amount += a.amount;
         return *this;
