@@ -24,12 +24,14 @@
 #include "Storage.h"
 #include "SubsMgr.h"
 
+#include <rocksdb/cache.h>
 #include <rocksdb/db.h>
 #include <rocksdb/iterator.h>
 #include <rocksdb/merge_operator.h>
 #include <rocksdb/options.h>
 #include <rocksdb/slice.h>
 #include <rocksdb/table.h>
+#include <rocksdb/write_buffer_manager.h>
 
 #include <QByteArray>
 #include <QDir>
@@ -483,6 +485,8 @@ struct Storage::Pvt
         const rocksdb::WriteOptions defWriteOpts; ///< avoid creating this each time
 
         rocksdb::Options opts, shistOpts;
+        std::weak_ptr<rocksdb::Cache> blockCache; ///< shared across all dbs, caps total block cache size across all db instances
+        std::weak_ptr<rocksdb::WriteBufferManager> writeBufferManager; ///< shared across all dbs, caps total memtable buffer size across all db instances
 
         std::shared_ptr<ConcatOperator> concatOperator;
 
@@ -631,10 +635,27 @@ void Storage::startup()
 
     {   // open all db's ...
 
-        rocksdb::Options & opts(p->db.opts), &shistOpts(p->db.shistOpts);
         // Optimize RocksDB. This is the easiest way to get RocksDB to perform well
+        rocksdb::Options & opts(p->db.opts), &shistOpts(p->db.shistOpts);
         opts.IncreaseParallelism(int(Util::getNPhysicalProcessors()));
         opts.OptimizeLevelStyleCompaction();
+
+        // setup shared block cache
+        rocksdb::BlockBasedTableOptions tableOptions;
+        tableOptions.block_cache = rocksdb::NewLRUCache(options->db.maxMem /* capacity limit */, -1, false /* strict capacity limit=off, turning it on made db writes sometimes fail */);
+        p->db.blockCache = tableOptions.block_cache; // save shared_ptr to weak_ptr
+        tableOptions.cache_index_and_filter_blocks = true; // from the docs: this may be a large consumer of memory, cost & cap its memory usage to the cache
+        std::shared_ptr<rocksdb::TableFactory> tableFactory{rocksdb::NewBlockBasedTableFactory(tableOptions)};
+        // shared TableFactory for all db instances
+        opts.table_factory = tableFactory;
+
+        // setup shared write buffer manager (for memtables memory budgeting)
+        // - TODO cost this to the cache here? Or not? make sure both together don't exceed db.maxMem?!
+        // - TODO right now we fix the cap of the write buffer manager's buffer size at db.maxMem / 2; tweak this.
+        auto writeBufferManager = std::make_shared<rocksdb::WriteBufferManager>(options->db.maxMem / 2, tableOptions.block_cache /* cost to block cache: hopefully this caps memory better? it appears to use locks though so many this will be slow?! TODO: experiment with and without this!! */);
+        p->db.writeBufferManager = writeBufferManager; // save shared_ptr to weak_ptr
+        opts.write_buffer_manager = writeBufferManager; // will be shared across all DB instances
+
         // create the DB if it's not already present
         opts.create_if_missing = true;
         opts.error_if_exists = false;
@@ -642,7 +663,7 @@ void Storage::startup()
         opts.keep_log_file_num = options->db.keepLogFileNum;
         opts.compression = rocksdb::CompressionType::kNoCompression; // for now we test without compression. TODO: characterize what is fastest and best..
         opts.use_fsync = options->db.useFsync; // the false default is perfectly safe, but Jt asked for this as an option, so here it is.
-        shistOpts = opts; // copy what we just did
+        shistOpts = opts; // copy what we just did (will implicitly copy over the shared table_factory and write_buffer_manager)
         shistOpts.merge_operator = p->db.concatOperator = std::make_shared<ConcatOperator>(); // this set of options uses the concat merge operator (we use this to append to history entries in the db)
 
         using DBInfoTup = std::tuple<QString, std::unique_ptr<rocksdb::DB> &, const rocksdb::Options &, double>;
@@ -811,6 +832,24 @@ auto Storage::stats() const -> Stats
             m[name] = m2;
         }
         ret["DB Stats"] = m;
+        if (const auto cache = p->db.blockCache.lock(); cache) {
+            QVariantMap cmap;
+            cmap["usage"] = qulonglong(cache->GetUsage());
+            cmap["capacity"] = qulonglong(cache->GetCapacity());
+            ret["DB Shared Block Cache"] = cmap;
+        }
+        if (const auto wbm = p->db.writeBufferManager.lock(); wbm) {
+            QVariantMap wmap;
+            const bool en = wbm->enabled();
+            wmap["enabled"] = en;
+            if (en) {
+                // these stats are invalid if not enabled, so only add them if enabled
+                wmap["is costed to cache"] = wbm->cost_to_cache();
+                wmap["buffer size"] = qulonglong(wbm->buffer_size());
+                wmap["memory usage"] = qulonglong(wbm->memory_usage());
+            }
+            ret["DB Shared Write Buffer Manager"] = wmap;
+        }
     }
     return ret;
 }
