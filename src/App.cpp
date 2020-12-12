@@ -30,6 +30,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QHostInfo>
 #include <QLocale>
 #include <QRegExp>
 #include <QSemaphore>
@@ -648,13 +649,32 @@ void App::parseArgs()
             throw BadArgs(msg1);
         return {hostStr, parsePort(portStr)};
     };
-    const auto parseInterface = [&options = options](const QString &s, bool allowImplicitLoopback = false) -> Options::Interface {
+    const auto parseInterface = [&options = options](const QString &s, bool allowImplicitLoopback = false,
+                                                     bool allowHostNameLookup = false) -> Options::Interface {
         const auto pair = parseHostnamePortPair(s, allowImplicitLoopback);
         const auto & hostStr = pair.first;
         const auto port = pair.second;
         QHostAddress h(hostStr);
+        if (h.isNull() && allowHostNameLookup) {
+            Log() << "Resolving hostname: " << hostStr << " ...";
+            // Hmm. Try and look up the host -- this is slow and blocks. We use this for tor_proxy currently.
+            QHostInfo hi = QHostInfo::fromName(hostStr);
+            if (const auto addrs = hi.addresses(); hi.error() == QHostInfo::HostInfoError::NoError && !addrs.isEmpty()) {
+                // prefer ipv4 to ipv6
+                for (const auto & addr : addrs) {
+                    if (addr.protocol() == QAbstractSocket::NetworkLayerProtocol::IPv4Protocol) {
+                        h = addr;
+                        break;
+                    }
+                }
+                if (h.isNull())
+                    h = addrs.front();
+                if (!h.isNull())
+                    Log() << hostStr << " -> " << h.toString();
+            }
+        }
         if (h.isNull())
-            throw BadArgs(QString("Bad interface address: %1").arg(hostStr));
+            throw BadArgs(QString("Bad %1: %2").arg(allowHostNameLookup ? "host" : "interface address", hostStr));
         options->hasIPv6Listener = options->hasIPv6Listener || h.protocol() == QAbstractSocket::NetworkLayerProtocol::IPv6Protocol;
         return {h, port};
     };
@@ -989,7 +1009,7 @@ void App::parseArgs()
         }
     }
     if (conf.hasValue("tor_proxy")) {
-        options->torProxy = parseInterface(conf.value("tor_proxy"), true); // may throw if bad
+        options->torProxy = parseInterface(conf.value("tor_proxy"), true, true /* allow hostname lookups */); // may throw if bad
         Util::AsyncOnObject(this, [val=options->torProxy]{ Debug() << "config: tor_proxy = " << val.first.toString() << ":" << val.second; });
     }
     if (conf.hasValue("tor_user")) {
