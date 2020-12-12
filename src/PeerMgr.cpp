@@ -483,7 +483,9 @@ void PeerMgr::on_connectFailed(PeerClient *c)
 {
     if (c->info.hostName.isEmpty())
         return;
-    if (const auto r = c->socket ? c->socket->errorString() : QString();
+    if (c->info.failureReason.startsWith("!!")) {
+        c->info.failureReason = c->info.failureReason.mid(2); // pick up reason override (timed-out connections override the reason)
+    } else if (const auto r = c->socket ? c->socket->errorString() : QString();
             // pick up the new failure reason, but only if it's not empty.. however if we had no failureReason before,
             // then we synthesize one here so /stats looks informative
             !r.isEmpty() || c->info.failureReason.isEmpty()) {
@@ -664,8 +666,7 @@ PeerClient::PeerClient(bool announce, const PeerInfo &pi, IdMixin::Id id_, PeerM
         ssl->setSslConfiguration(conf);
     }
     // on any errors we just assume the connection is down, tell PeerMgr to put it in the connect failed list
-    connect(socket, Compat::SocketErrorSignalFunctionPtr(), this,
-            [this](QAbstractSocket::SocketError){ emit connectFailed(this); });
+    connect(socket, Compat::SocketErrorSignalFunctionPtr(), this, [this](QAbstractSocket::SocketError){ emit connectFailed(this); });
 
     if (socket) {
         socketConnectSignals();
@@ -681,6 +682,10 @@ PeerClient::PeerClient(bool announce, const PeerInfo &pi, IdMixin::Id id_, PeerM
     };
     connect(this, &RPC::ConnectionBase::gotErrorMessage, this, OnErr);
     connect(this, &RPC::ConnectionBase::peerError, this, OnErr);
+
+    // if the connection either fails or succeeds, unconditionally kill the timeout timer
+    connect(this, &PeerClient::connectFailed, this, [this]{ stopTimer(kConnectTimerName); });
+    connect(this, &PeerClient::connectionEstablished, this, [this]{ stopTimer(kConnectTimerName); });
 }
 
 PeerClient::~PeerClient() {
@@ -693,6 +698,9 @@ void PeerClient::connectToPeer()
     if (!socket) return;
     QSslSocket *ssl = dynamic_cast<QSslSocket *>(socket);
     QString msgXtra = "", connectAddr = info.addr.toString(); // default is to use the address as the "host" for connecting
+
+    info.failureReason.clear(); // clear reason now, start with no reason
+
     if (info.isTor()) {
         msgXtra = " via Tor proxy";
         socket->setProxy(mgr->getProxy());
@@ -711,6 +719,17 @@ void PeerClient::connectToPeer()
         DebugM(info.hostName, ": connecting to TCP ", connectAddr, ":", info.tcp, msgXtra);
         socket->connectToHost(connectAddr, info.tcp);
     }
+
+    // 30 second timer -- if we fail to connect in this time, emit this signal.
+    // This was added after Fulcrum 1.3.2 when it was observed that in particular with bad tor_proxy settings, it was
+    // possible for the PeerClient to remain in limbo forever on socket connect, never connecting but never failing
+    // either.
+    callOnTimerSoonNoRepeat(kConnectTimeoutMS, kConnectTimerName, [this]{
+        if (socket) socket->abort(); // immediately kill connection attempt
+        // reasons prefixed with !! override any socket errors we may get from abort()
+        info.failureReason = "!!Connection failed: timed out";
+        emit connectFailed(this);
+    }, true);
 }
 
 void PeerClient::do_disconnect([[maybe_unused]] bool graceful)

@@ -135,6 +135,16 @@ void TimersByNameMixin::callOnTimerSoonNoRepeat(int ms, const QString &name, con
     callOnTimerSoon(ms, name, [fn]() -> bool { fn(); return false; }, force, ttype);
 }
 
+bool TimersByNameMixin::stopTimer(const QString &name) {
+    if (auto timer = _timerMap.take(name); timer) {
+        // immediately stop since we do deleteLater in shared_ptr deleter, and it's not clear from Qt docs if timer
+        // may fire between now and when deletion is done on the QTimer.
+        timer->stop();
+        return true;
+    }
+    return false;
+}
+
 int TimersByNameMixin::stopAllTimers() {
     int ctr = 0;
     for (const auto & name : activeTimers()) {

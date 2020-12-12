@@ -230,13 +230,16 @@ protected:
     void on_connected() override;
     void do_disconnect(bool graceful = false) override; ///< calls base, also does this->deleteLater
 
-    Stats stats() const override; /// adds more stats to base class's stats map
+    Stats stats() const override; ///< adds more stats to base class's stats map
 
     PeerMgr *mgr;
 private:
     void refresh();
     /// Updates the updateable fields in this->info from the remote "features" response
     void updateInfoFromRemoteFeaturesMap(const PeerInfo &);
+
+    static constexpr int kConnectTimeoutMS = 30'000; ///< If we fail to establish a TCP connection in this time (msec), give up.
+    static constexpr auto kConnectTimerName = "+ConnectionTimeoutTimer";
 };
 
 Q_DECLARE_METATYPE(PeerInfo);

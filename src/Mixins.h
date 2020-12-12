@@ -167,7 +167,7 @@ protected:
     QVariantMap activeTimerMapForStats() const;
 
     /// Stops the named timer and immediately deletes it.
-    bool stopTimer(const QString &name) { auto timer = _timerMap.take(name); return bool(timer); }
+    bool stopTimer(const QString &name);
 
     /// Stops all extant timers immediately.  Note that this implicitly uses deleteLater to delete the timer objects.
     /// Returns the number of timers that were stopped.
