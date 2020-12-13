@@ -79,8 +79,9 @@ public:
     bool bitcoindUsesTls = false; ///< CLI: --bitcoind-tls. If true, we will connect to the remote bitcoind via SSL/TLS. See BitcoinD.cpp.
     QString rpcuser, rpcpassword;
     QString datadir; ///< The directory to store the database. It exists and has appropriate permissions (otherwise the app would have quit on startup).
-    /// If true, on db open/startup, we will perform some slow/paranoid db consistency checks
-    bool doSlowDbChecks = false;
+    /// If > 0, on db open/startup, we will perform some slow/paranoid db consistency checks
+    /// If 2, we do reverse-shunspent checks as well (even slower)
+    int doSlowDbChecks = 0;
 
     static constexpr double minPollTimeSecs = 0.5, maxPollTimeSecs = 30., defaultPollTimeSecs = 2.;
     /// bitcoin poll time interval. This value will always be in the range [minPollTimeSecs, maxPollTimeSecs] aka [0.5, 30]

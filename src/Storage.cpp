@@ -178,7 +178,7 @@ namespace {
     template <> TxNumVec Deserialize(const QByteArray &, bool *);
 
     // CompactTXO -- not currently used since we prefer toBytes() directly (TODO: remove if we end up never using this)
-    template <> QByteArray Serialize(const CompactTXO &);
+    //template <> QByteArray Serialize(const CompactTXO &);
     template <> CompactTXO Deserialize(const QByteArray &, bool *);
 
 
@@ -565,6 +565,46 @@ struct Storage::Pvt
     RWLock mempoolLock;
 };
 
+namespace {
+    /// returns a key that is hashX concatenated with the serializd ctxo -> size 40 or 41 byte vector
+    /// Note hashX must be valid and sized HashLen otherwise this throws.
+    QByteArray mkShunspentKey(const QByteArray & hashX, const CompactTXO &ctxo) {
+        // we do it this way for performance:
+        const int hxlen = hashX.length();
+        if (UNLIKELY(hxlen != HashLen))
+            throw InternalError(QString("mkShunspentKey -- scripthash is not exactly %1 bytes: %2").arg(HashLen).arg(QString(hashX.toHex())));
+        QByteArray key(hxlen + int(ctxo.serializedSize(false /* no force wide */)), Qt::Uninitialized);
+        std::memcpy(key.data(), hashX.constData(), size_t(hxlen));
+        ctxo.toBytesInPlace(reinterpret_cast<std::byte *>(key.data()+hxlen), ctxo.serializedSize(false), false /* no force wide */);
+        return key;
+    }
+    /// throws if key is not the correct size (must be exactly 40 or 41 bytes)
+    CompactTXO extractCompactTXOFromShunspentKey(const rocksdb::Slice &key) {
+        static const auto ExtractHashXHex = [](const rocksdb::Slice &key) -> QString {
+            if (key.size() >= HashLen)
+                return QString(FromSlice(key).left(HashLen).toHex());
+            else
+                return "<undecipherable scripthash>";
+        };
+        if (const auto ksz = key.size();
+                UNLIKELY(ksz != HashLen + CompactTXO::minSize() && ksz != HashLen + CompactTXO::maxSize()))
+            // should never happen, indicates db corruption
+            throw InternalError(QString("Key size for scripthash %1 is invalid").arg(ExtractHashXHex(key)));
+        static_assert (sizeof(*key.data()) == 1, "Assumption is rocksdb::Slice is basically a byte vector");
+        const CompactTXO ctxo =
+            CompactTXO::fromBytesInPlaceExactSizeRequired(reinterpret_cast<const std::byte *>(key.data()) + HashLen,
+                                                          key.size() - HashLen);
+        if (UNLIKELY(!ctxo.isValid()))
+            // should never happen, indicates db corruption
+            throw InternalError(QString("Deserialized CompactTXO is invalid for scripthash %1").arg(ExtractHashXHex(key)));
+        return ctxo;
+    }
+    std::pair<HashX, CompactTXO> extractShunspentKey(const rocksdb::Slice & key) {
+        const CompactTXO ctxo = extractCompactTXOFromShunspentKey(key); // throws if wrong size
+        return {DeepCpy(key.data(), HashLen), ctxo}; // if we get here size ok, can extract HashX
+    }
+}
+
 Storage::Storage(const std::shared_ptr<const Options> & options_)
     : Mgr(nullptr), options(options_), subsmgr(new SubsMgr(options, this)), p(std::make_unique<Pvt>(options->txHashCacheBytes))
 {
@@ -682,6 +722,8 @@ void Storage::startup()
     loadCheckTxNumsFileAndBlkInfo();
     // count utxos -- note this depends on "blkInfos" being filled in so it much be called after loadCheckTxNumsFileAndBlkInfo()
     loadCheckUTXOsInDB();
+    // very slow check, only runs if -C -C (specified twice)
+    loadCheckShunspentInDB();
     // load check earliest undo to populate earliestUndoHeight
     loadCheckEarliestUndo();
 
@@ -1039,7 +1081,7 @@ void Storage::loadCheckUTXOsInDB()
     if (options->doSlowDbChecks) {
         Log() << "CheckDB: Verifying utxo set (this may take some time) ...";
 
-        const auto t0 = Util::getTimeNS();
+        const Tic t0;
         {
             const int currentHeight = latestTip().first;
 
@@ -1060,9 +1102,9 @@ void Storage::loadCheckUTXOsInDB()
                                                             " This may be due to a database format mismatch."
                                                             "\n\nDelete the datadir and resynch to bitcoind.\n")
                                                      .arg(txo.toString()));
-                // uncomment this to do a deep test: TODO: Make this configurable from the CLI -- this last check is very slow.
+                // this is a deep test: only happens if -C / --checkdb is specified on CLI or in conf.
                 const CompactTXO ctxo = CompactTXO(info.txNum, txo.outN);
-                const QByteArray shuKey = info.hashX + ctxo.toBytes();
+                const QByteArray shuKey = mkShunspentKey(info.hashX, ctxo);
                 static const QString errPrefix("Error reading scripthash_unspent");
                 QByteArray tmpBa;
                 if (bool fail1 = false, fail2 = false, fail3 = false, fail4 = false;
@@ -1100,17 +1142,71 @@ void Storage::loadCheckUTXOsInDB()
                                         .arg(metact).arg(p->utxoCt.load()));
 
         }
-        const auto elapsed = Util::getTimeNS();
-        Debug() << "CheckDB: Verified utxos in " << QString::number((elapsed-t0)/1e6, 'f', 3) << " msec";
+        Debug() << "CheckDB: Verified utxos in " << t0.msecStr() << " msec";
 
     } else {
         p->utxoCt = readUtxoCtFromDB();
     }
 
     if (const auto ct = utxoSetSize(); ct)
-        Log() << "UTXO set: "  << ct << Util::Pluralize(" utxo", ct)
-              << ", " << QString::number(utxoSetSizeMB(), 'f', 3) << " MB";
+        Log() << "UTXO set: "  << ct << Util::Pluralize(" utxo", ct) << ", " << QString::number(utxoSetSizeMB(), 'f', 3) << " MB";
 }
+
+// NOTE: this must be called *after* loadCheckTxNumsFileAndBlkInfo(), because it needs a valid p->txNumNext
+void Storage::loadCheckShunspentInDB()
+{
+    FatalAssert(!!p->db.shunspent, __func__, ": Shunspent db is not open");
+
+    if (options->doSlowDbChecks < 2) // this is so slow it requires -C -C be specified
+        return;
+
+    Log() << "CheckDB: Verifying scripthash_unspent (this may take some time) ...";
+
+    const Tic t0;
+
+    std::unique_ptr<rocksdb::Iterator> iter(p->db.shunspent->NewIterator(p->db.defReadOpts));
+    if (!iter) throw DatabaseError("Unable to obtain an iterator to the scripthash unspent db");
+
+    constexpr auto errMsg = "This may be due to either a database format mismatch or data corruption."
+                            "\n\nDelete the datadir and resynch to bitcoind.\n";
+    size_t ctr = 0;
+    for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
+        const auto &[hashx, ctxo] = extractShunspentKey(iter->key());
+        if (!ctxo.isValid())
+            throw DatabaseError(QString("Read an invalid compact txo from the scripthash_unspent database. %1").arg(errMsg));
+        const bitcoin::Amount amount = Deserialize<bitcoin::Amount>(FromSlice(iter->value()));
+        if (UNLIKELY(!bitcoin::MoneyRange(amount)))
+            throw DatabaseError(QString("Read an invalid amount from the scripthash_unspent database for scripthash: %1. %2")
+                                .arg(QString(hashx.toHex()), errMsg));
+        TXOInfo info;
+        info.txNum = ctxo.txNum();
+        info.hashX = hashx;
+        info.amount = amount;
+        info.confirmedHeight = heightForTxNum(ctxo.txNum());
+        const TxHash txHash = hashForTxNum(ctxo.txNum(), true, nullptr, true).value_or(QByteArray()); // throws if missing
+        const TXO txo{txHash, ctxo.N()};
+        // look for this in the UTXO db
+        const auto optInfo = GenericDBGet<TXOInfo>(p->db.utxoset.get(), ToSlice(Serialize(txo)), true, "", false, p->db.defReadOpts);
+        if (!optInfo)
+            throw DatabaseError(QString("The scripthash_unspent table is missing a corresponding entry in the UTXO table for TXO \"%1\". %2")
+                                .arg(txo.toString(), errMsg));
+
+        if (!info.isValid() || !optInfo->isValid() || *optInfo != info)
+            throw DatabaseError(QString("TXO \"%1\" mismatch between scripthash_unspent and the UTXO table. %2")
+                                .arg(txo.toString(), errMsg));
+        if (0 == ++ctr % 10000) {
+            *(0 == ctr % 200000 ? std::make_unique<Log>() : std::make_unique<Debug>())
+                    << "CheckDB: Verified " << ctr << " scripthash_unspent entries ...";
+        }
+    }
+
+    if (const auto metact = readUtxoCtFromDB(); ctr != size_t(metact))
+            throw DatabaseError(QString("UTXO count in meta table (%1) does not match the actual number of UTXOs in shunspent (%2). %3")
+                                .arg(metact).arg(ctr).arg(errMsg));
+
+    Log() << "Verified " << ctr << " scripthash_unspent " << Util::Pluralize("entry", ctr)
+          << " in " << t0.secsStr() << " sec";
+ }
 
 void Storage::loadCheckEarliestUndo()
 {
@@ -1217,18 +1313,6 @@ void Storage::issueUpdates(UTXOBatch &b)
     b.p->defunct = true;
 }
 
-namespace {
-    inline QByteArray mkShunspentKey(const QByteArray & hashX, const CompactTXO &ctxo) {
-        // we do it this way for performance:
-        const int hxlen = hashX.length();
-        assert(hxlen == HashLen);
-        QByteArray key(hxlen + int(ctxo.serSize()), Qt::Uninitialized);
-        std::memcpy(key.data(), hashX.constData(), size_t(hxlen));
-        ctxo.toBytesInPlace(reinterpret_cast<std::byte *>(key.data()+hxlen), ctxo.serSize());
-        return key;
-    }
-}
-
 void Storage::UTXOBatch::add(const TXO &txo, const TXOInfo &info, const CompactTXO &ctxo)
 {
     {
@@ -1240,7 +1324,7 @@ void Storage::UTXOBatch::add(const TXO &txo, const TXOInfo &info, const CompactT
     {
         // Update the scripthash unspent. This is a very simple table which we scan by hashX prefix using
         // an iterator in listUnspent.  Each entry's key is prefixed with the HashX bytes (32) but suffixed with the
-        // serialized CompactTXO bytes (8). Each entry's data is a 8-byte int64_t of the amount of the utxo to save
+        // serialized CompactTXO bytes (8 or 9). Each entry's data is a 8-byte int64_t of the amount of the utxo to save
         // on lookup cost for getBalance().
         static const QString errMsgPrefix("Failed to add an entry to the scripthash_unspent batch");
 
@@ -1278,7 +1362,7 @@ std::optional<TXOInfo> Storage::utxoGetFromDB(const TXO &txo, bool throwIfMissin
 
 int64_t Storage::utxoSetSize() const { return p->utxoCt; }
 double Storage::utxoSetSizeMB() const {
-    constexpr int64_t elemSize = TXO::serSize() + TXOInfo::serSize();
+    constexpr int64_t elemSize = TXOInfo::serSize() + TXO::minSize() /*<-- assumption is most utxos use 16-bit IONums */;
     return (utxoSetSize()*elemSize) / 1e6;
 }
 
@@ -1618,7 +1702,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
             } else {
                 const auto elapsedms = (Util::getTimeNS() - t0)/1e6;
                 const size_t nTx = undo->blkInfo.nTx, nSH = undo->scriptHashes.size();
-                Debug() << "Saved undo for block " << undo->height << ", "
+                Debug() << "Saved V2 undo for block " << undo->height << ", "
                         << nTx << " " << Util::Pluralize("transaction", nTx)
                         << " involving " << nSH << " " << Util::Pluralize("scripthash", nSH)
                         << ", in " << QString::number(elapsedms, 'f', 2) << " msec.";
@@ -2084,13 +2168,7 @@ auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
                 // we do it this way as two separate loops in order to avoid the expensive heightForTxNum lookups below in
                 // the case where the history is huge.
                 for (iter->Seek(prefix); iter->Valid() && (key = iter->key()).starts_with(prefix); iter->Next()) {
-                    if (key.size() != HashLen + CompactTXO::serSize())
-                        // should never happen, indicates db corruption
-                        throw InternalError("Key size for hashx is invalid");
-                    const CompactTXO ctxo = CompactTXO::fromBytes(reinterpret_cast<const std::byte *>(key.data() + HashLen), CompactTXO::serSize());
-                    if (!ctxo.isValid())
-                        // should never happen, indicates db corruption
-                        throw InternalError("Deserialized CompactTXO is invalid");
+                    const CompactTXO ctxo = extractCompactTXOFromShunspentKey(key); // may throw if size is bad, etc
                     ctxoList.emplace_back(ctxo);
                     if (UNLIKELY(++ctxoListSize + ret.size() > maxHistory)) {
                         throw HistoryTooLarge(QString("Unspent history too large for %1, exceeds MaxHistory of %2")
@@ -2145,13 +2223,7 @@ auto Storage::getBalance(const HashX &hashX) const -> std::pair<bitcoin::Amount,
             // See: https://github.com/facebook/rocksdb/wiki/Prefix-Seek-API-Changes#transition-to-the-new-usage
             rocksdb::Slice key;
             for (iter->Seek(prefix); iter->Valid() && (key = iter->key()).starts_with(prefix); iter->Next()) {
-                if (key.size() != HashLen + CompactTXO::serSize())
-                    // should never happen, indicates db corruption
-                    throw InternalError(QString("Key size for scripthash %1 is invalid").arg(QString(hashX.toHex())));
-                const CompactTXO ctxo = CompactTXO::fromBytes(reinterpret_cast<const std::byte *>(key.data() + HashLen), CompactTXO::serSize());
-                if (!ctxo.isValid())
-                    // should never happen, indicates db corruption
-                    throw InternalError(QString("Deserialized CompactTXO is invalid for scripthash %1").arg(QString(hashX.toHex())));
+                const CompactTXO ctxo = extractCompactTXOFromShunspentKey(key); // may throw if key has the wrong size, etc
                 bool ok;
                 const bitcoin::Amount amount = Deserialize<bitcoin::Amount>(FromSlice(iter->value()), &ok);
                 if (UNLIKELY(!ok))
@@ -2392,9 +2464,9 @@ namespace {
         return m;
     }
 
-    template <> QByteArray Serialize (const TXO &txo) { return txo.toBytes(); }
+    template <> QByteArray Serialize(const TXO &txo) { return txo.toBytes(false); }
     template <> TXO Deserialize(const QByteArray &ba, bool *ok) {
-        TXO ret = TXO::fromBytes(ba); // requires exact size, fails if extra bytes at the end
+        TXO ret = TXO::fromBytes(ba); // requires 34 or 35 byte size
         if (ok) *ok = ret.isValid();
         return ret;
     }
@@ -2422,23 +2494,40 @@ namespace {
     }
 
     struct UndoInfoSerHeader {
-        static constexpr uint16_t defMagic = 0xf12c, defVer = 0x1;
+        static constexpr uint16_t defMagic = 0xf12c, defVer = 0x2, v1Ver = 0x1;
         uint16_t magic = defMagic; ///< sanity check
         uint16_t ver = defVer; ///< sanity check
         uint32_t len = 0; ///< the length of the entire buffer, including this struct and all data to follow. A sanity check.
         uint32_t nScriptHashes = 0, nAddUndos = 0, nDelUndos = 0; ///< the number of elements in each of the 3 arrays in question.
 
-        static constexpr size_t addUndoItemSerSize = TXO::serSize() + HashLen + CompactTXO::serSize();
-        static constexpr size_t delUndoItemSerSize = TXO::serSize() + TXOInfo::serSize();
+        /* ----------- V1 format (back when we had 2 byte IONums) */
+        static constexpr size_t addUndoItemSerSize_V1 = TXO::minSize() + HashLen + CompactTXO::minSize();
+        static constexpr size_t delUndoItemSerSize_V1 = TXO::minSize() + TXOInfo::serSize();
 
-        /// computes the total size given the ser size of the blkInfo struct. Requires that nScriptHashes, nAddUndos, and nDelUndos be already filled-in.
-        size_t computeTotalSize() const {
+        /// computes the total size given the ser size of the blkInfo struct.
+        /// Requires that nScriptHashes, nAddUndos, and nDelUndos be already filled-in.
+        size_t computeTotalSize_V1() const {
             const auto shSize = nScriptHashes * HashLen;
-            const auto addsSize = nAddUndos * addUndoItemSerSize;
-            const auto delsSize = nDelUndos * delUndoItemSerSize;
+            const auto addsSize = nAddUndos * addUndoItemSerSize_V1;
+            const auto delsSize = nDelUndos * delUndoItemSerSize_V1;
             return sizeof(*this) + sizeof(UndoInfo::height) + HashLen + sizeof(BlkInfo) + shSize + addsSize + delsSize;
         }
-        bool isLenSane() const { return size_t(len) == computeTotalSize(); }
+        bool isLenSane_V1() const { return size_t(len) == computeTotalSize_V1(); }
+
+
+        /* ----------- V2 format (3-byte IONums) */
+        static constexpr size_t addUndoItemSerSize_V2 = TXO::maxSize() + HashLen + CompactTXO::maxSize();
+        static constexpr size_t delUndoItemSerSize_V2 = TXO::maxSize() + TXOInfo::serSize();
+
+        /// computes the total size given the ser size of the blkInfo struct. Requires that nScriptHashes, nAddUndos, and nDelUndos be already filled-in.
+        size_t computeTotalSize_V2() const {
+            const auto shSize = nScriptHashes * HashLen;
+            const auto addsSize = nAddUndos * addUndoItemSerSize_V2;
+            const auto delsSize = nDelUndos * delUndoItemSerSize_V2;
+            return sizeof(*this) + sizeof(UndoInfo::height) + HashLen + sizeof(BlkInfo) + shSize + addsSize + delsSize;
+        }
+        bool isLenSane_V2() const { return size_t(len) == computeTotalSize_V2(); }
+
     };
 
     // Deserialize a header from bytes -- no checks are done other than length check.
@@ -2453,14 +2542,14 @@ namespace {
         return ret;
     }
 
-    // UndoInfo
+    // UndoInfo -- serialize to V2 format (fixed 3-byte IONums)
     template <> QByteArray Serialize(const UndoInfo &u) {
         UndoInfoSerHeader hdr;
         // fill these in now so that hdr.computeTotalSize works
         hdr.nScriptHashes = uint32_t(u.scriptHashes.size());
         hdr.nAddUndos = uint32_t(u.addUndos.size());
         hdr.nDelUndos = uint32_t(u.delUndos.size());
-        hdr.len = uint32_t(hdr.computeTotalSize());
+        hdr.len = uint32_t(hdr.computeTotalSize_V2());
         QByteArray ret;
         ret.reserve(int(hdr.len));
         // 1. header
@@ -2486,16 +2575,16 @@ namespace {
             if (UNLIKELY(!chkHashLen(sh))) return ret;
             ret.append(sh);
         }
-        // 6. .addUndos, 64 bytes each * nAddUndos
+        // 6. .addUndos, 76 bytes each * nAddUndos
         for (const auto & [txo, hashX, ctxo] : u.addUndos) {
             if (UNLIKELY(!chkHashLen(hashX))) return ret;
-            ret.append(Serialize(txo));
+            ret.append(txo.toBytes(true  /* force wide (3 byte IONum) */));
             ret.append(hashX);
-            ret.append(Serialize(ctxo));
+            ret.append(ctxo.toBytes(true /* force wide (3 byte IONum) */));
         }
-        // 7. .delUndos, 50 bytes each * nDelUndos
+        // 7. .delUndos, 85 bytes each * nDelUndos
         for (const auto & [txo, txoInfo] : u.delUndos) {
-            ret.append(Serialize(txo));
+            ret.append(txo.toBytes(true));
             if (UNLIKELY(!chkHashLen(txoInfo.hashX))) return ret;
             ret.append(Serialize(txoInfo));
         }
@@ -2520,10 +2609,24 @@ namespace {
         bool myok = false;
         // 1. .header
         const UndoInfoSerHeader hdr = Deserialize<UndoInfoSerHeader>(ba, &myok);;
-        if (!chkAssertion(myok && int(hdr.len) == ba.size() && hdr.magic == hdr.defMagic && hdr.ver == hdr.defVer
-                          && hdr.isLenSane(), "Header sanity check fail"))
+        if (!chkAssertion(myok && int(hdr.len) == ba.size() && hdr.magic == hdr.defMagic
+                          && ( (hdr.ver == hdr.defVer && hdr.isLenSane_V2())
+                               || (hdr.ver == hdr.v1Ver && hdr.isLenSane_V1()) ),
+                          "Header sanity check fail"))
             return ret;
 
+        // for v1 we deserialize 2-byte fixed-size IONums, for v2 3-byte fixed-size IONums
+        const bool isV1 = hdr.ver == hdr.v1Ver;
+
+        // print to debug if encountering V1 vs V2
+        DebugM("Deserializing ", isV1 ? "V1" : "V2", " undo info of length ", hdr.len);
+
+        const size_t TXOSerSize = isV1 ? TXO::minSize() : TXO::maxSize();
+        const size_t CompactTXOSerSize = isV1 ? CompactTXO::minSize() : CompactTXO::maxSize();
+        //
+        // deserialize V1 data -> fixed 2-byte IONums
+        // deserialize V2 data -> fixed 3-byte IONums
+        //
         const char *cur = ba.constData() + sizeof(hdr), *const end = ba.constData() + ba.length();
         // 2. .height
         ret.height = DeserializeScalar<decltype(ret.height)>(ShallowTmp(cur, sizeof(ret.height)), &myok);
@@ -2547,27 +2650,27 @@ namespace {
             ret.scriptHashes.insert(DeepCpy(cur, HashLen)); // deep copy
             cur += HashLen;
         }
-        // 6. .addUndos, 64 bytes each * nAddUndos
+        // 6. .addUndos, 74 (v1) or 76 (v2) bytes each * nAddUndos
         ret.addUndos.reserve(hdr.nAddUndos);
         for (unsigned i = 0; i < hdr.nAddUndos; ++i) {
-            if (!chkAssertion(cur+TXO::serSize() <= end)) return ret;
-            TXO txo = Deserialize<TXO>(ShallowTmp(cur, TXO::serSize()), &myok);
-            cur += TXO::serSize();
+            if (!chkAssertion(cur+TXOSerSize <= end)) return ret;
+            TXO txo = Deserialize<TXO>(ShallowTmp(cur, TXOSerSize), &myok);
+            cur += TXOSerSize;
             if (!chkAssertion(myok && cur+HashLen <= end)) return ret;
             QByteArray hashX = DeepCpy(cur, HashLen); // deep copy
             cur += HashLen;
-            if (!chkAssertion(cur+CompactTXO::serSize() <= end)) return ret;
-            CompactTXO ctxo = Deserialize<CompactTXO>(ShallowTmp(cur, CompactTXO::serSize()), &myok);
-            cur += CompactTXO::serSize();
+            if (!chkAssertion(cur+CompactTXOSerSize <= end)) return ret;
+            CompactTXO ctxo = Deserialize<CompactTXO>(ShallowTmp(cur, CompactTXOSerSize), &myok);
+            cur += CompactTXOSerSize;
             if (!chkAssertion(myok)) return ret;
             ret.addUndos.emplace_back(std::move(txo), std::move(hashX), std::move(ctxo));
         }
-        // 7. .delUndos, 50 bytes each * nDelUndos
+        // 7. .delUndos, 84 (v1) or 85 (v2) bytes each * nDelUndos
         ret.delUndos.reserve(hdr.nDelUndos);
         for (unsigned i = 0; i < hdr.nDelUndos; ++i) {
-            if (!chkAssertion(cur+TXO::serSize() <= end)) return ret;
-            TXO txo = Deserialize<TXO>(ShallowTmp(cur, TXO::serSize()), &myok);
-            cur += TXO::serSize();
+            if (!chkAssertion(cur+TXOSerSize <= end)) return ret;
+            TXO txo = Deserialize<TXO>(ShallowTmp(cur, TXOSerSize), &myok);
+            cur += TXOSerSize;
             if (!chkAssertion(myok && cur+TXOInfo::serSize() <= end)) return ret;
             TXOInfo info = Deserialize<TXOInfo>(ShallowTmp(cur, TXOInfo::serSize()), &myok);
             cur += TXOInfo::serSize();
@@ -2617,7 +2720,7 @@ namespace {
         return ret;
     }
 
-    template <> QByteArray Serialize(const CompactTXO &c) { return c.toBytes(); }
+    //template <> QByteArray Serialize(const CompactTXO &c) { return c.toBytes(false); }
     template <> CompactTXO Deserialize(const QByteArray &b, bool *ok) {
         CompactTXO ret = CompactTXO::fromBytes(b);
         if (ok) *ok = ret.isValid();

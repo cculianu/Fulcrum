@@ -87,21 +87,41 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bi
             ++outN;
         }
 
+        // Defensive programming -- we only support up to 24-bit IONum due to the database format we use.
+        if (UNLIKELY(outN-1 > IONumMax)) {
+            // This should never happen -- outN larger than 16.7 million
+            throw InternalError(QString("Block %1 tx %2 has outN larger than %3 (%4). This should never happen."
+                                        " Please contact the developers and report this issue.")
+                                .arg(height).arg(QString(info.hash.toHex())).arg(IONumMax).arg(outN));
+        }
+
         // process inputs
         if (!tx->vin.empty())
             // remember input0Index position for this tx
             info.input0Index.emplace( unsigned(inputs.size()) );
 
+        IONum maxIONumSeen = 0;
         for (const auto & in : tx->vin) {
             // note we do place the coinbase tx here even though we ignore it later on -- we keep it to have accurate indices
             inputs.emplace_back(InputPt{
                     unsigned(txIdx),
                     BTC::Hash2ByteArrayRev(in.prevout.GetTxId()),  // .prevoutHash
-                    uint16_t(in.prevout.GetN()), // .prevoutN
+                    IONum(in.prevout.GetN()), // .prevoutN
                     {}, // .parentTxOutIdx (start out undefined)
             });
             estimatedThisSizeBytes += sizeof(InputPt);
+            if (txIdx > 0 /* skip check for coinbase tx */ && in.prevout.GetN() > maxIONumSeen)
+                maxIONumSeen = in.prevout.GetN();
         }
+
+        // Defensive programming -- we only support up to 24-bit IONum due to the database format we use.
+        if (UNLIKELY(maxIONumSeen > IONumMax)) {
+            // This should never happen -- outN larger than 16.7 million
+            throw InternalError(QString("Block %1 tx %2 has input prevoutN larger than %3 (%4). This should never happen."
+                                        " Please contact the developers and report this issue.")
+                                .arg(height).arg(QString(info.hash.toHex())).arg(IONumMax).arg(maxIONumSeen));
+        }
+
         estimatedThisSizeBytes += sizeof(info) + size_t(info.hash.size());
         txInfos.emplace_back(std::move(info));
         ++txIdx;
