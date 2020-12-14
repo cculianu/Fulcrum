@@ -21,7 +21,6 @@
 #include "Util.h"
 
 #include "bitcoin/transaction.h"
-#include "robin_hood/robin_hood.h"
 
 #include <QTextStream>
 
@@ -40,7 +39,8 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bi
     header = b.GetBlockHeader();
     estimatedThisSizeBytes = sizeof(*this) + size_t(BTC::GetBlockHeaderSize());
     txInfos.reserve(b.vtx.size());
-    robin_hood::unordered_flat_map<TxHash, unsigned, HashHasher, std::equal_to<TxHash>, 99> txHashToIndex; // since we know the size ahead of time here, we can set max_load_factor to 99% and avoid over-allocating the hash table
+    std::unordered_map<TxHash, unsigned, HashHasher> txHashToIndex; // since we know the size ahead of time here, we can set max_load_factor to 1.0 and avoid over-allocating the hash table
+    txHashToIndex.max_load_factor(1.0);
     txHashToIndex.reserve(b.vtx.size());
 
     // run through all tx's, build inputs and outputs lists
@@ -145,7 +145,9 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bi
             inp.prevoutHash = prevInfo.hash; //<--- ensure shallow copy that points to same underlying data (saves memory)
             if (prevInfo.output0Index.has_value())
                 inp.parentTxOutIdx.emplace( *prevInfo.output0Index + inp.prevoutN ); // save the index into the `outputs` array where the parent tx to this spend occurred
-            else { assert(0); }
+            else
+                throw InternalError(QString("Unexpected state: prevInfo has no output0Index for txid: %1 in block %2")
+                                    .arg(QString(prevInfo.hash.toHex())).arg(height));
             auto & outp = outputs[ inp.parentTxOutIdx.value() ];
             outp.spentInInputIndex.emplace( inIdx ); // mark the output as spent by this index
             const auto & prevTx = b.vtx[prevTxIdx];

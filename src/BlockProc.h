@@ -26,8 +26,6 @@
 #include "bitcoin/amount.h"
 #include "bitcoin/block.h"
 
-#include "robin_hood/robin_hood.h"
-
 #include <QByteArray>
 
 #include <cassert>
@@ -35,6 +33,7 @@
 #include <memory>
 #include <optional>
 #include <unordered_set>
+#include <unordered_map>
 #include <vector>
 
 
@@ -54,7 +53,7 @@ struct PreProcessedBlock
 
     struct TxInfo {
         TxHash hash; ///< 32 byte txid. These txid's are *reversed* from bitcoind's internal memory order. (so as to be closer to the final hex encoded format).
-        IONum nInputs = 0, nOutputs = 0; ///< the number of inputs and outputs in the tx -- all tx's are guaranteed to have <=65535 inputs or outputs currently and for the foreseeable future. If that changes, fixme.
+        IONum nInputs = 0, nOutputs = 0; ///< the number of inputs and outputs in the tx -- all tx's are guaranteed to have <= ~111k inputs or outputs currently and for the foreseeable future. If that changes, fixme.
         std::optional<unsigned> input0Index, output0Index; ///< if either of these have a value, they point into the `inputs` and `outputs` arrays below, respectively
     };
 
@@ -63,7 +62,7 @@ struct PreProcessedBlock
 
     struct OutPt {
         unsigned txIdx = 0;  ///< this is an index into the `txInfos` vector declared above
-        IONum outN = 0; ///< this is an index into the tx's vout vector (*NOT* this class's `outputs`!) (again, tx's can't have more than 65535 inputs -- if that changes, fixme!)
+        IONum outN = 0; ///< this is an index into the tx's vout vector (*NOT* this class's `outputs`!) (again, tx's can't have more than ~111k inputs -- if that changes, fixme!)
         bitcoin::Amount amount;
         std::optional<unsigned> spentInInputIndex; ///< if has_value, the output was spent this block in input index (index into the `inputs` array)
     };
@@ -71,7 +70,7 @@ struct PreProcessedBlock
     struct InputPt {
         unsigned txIdx = 0; ///< index into the `txInfos` vector above for the tx where this input appears
         TxHash prevoutHash; ///< 32-byte prevoutHash.  In *reversed* memory order (hex-encoding ready!) (May be a shallow copy of a byte array in `txInfos` if the prevout tx was in this block.). May be empty if coinbase
-        IONum prevoutN = 0; ///< the index in the prevout tx for this input (again, tx's can't have more than 65535 inputs -- if that changes, fixme!)
+        IONum prevoutN = 0; ///< the index in the prevout tx for this input (again, tx's can't have more than ~111k inputs -- if that changes, fixme!)
         std::optional<unsigned> parentTxOutIdx; ///< if the input's prevout was in this block, the index into the `outputs` array declared in BlockProcBase, otherwise undefined.
     };
 
@@ -99,7 +98,7 @@ struct PreProcessedBlock
     /// Node map preferable here. Even though a flat map uses move construction, it would still have to move ~72
     /// bytes around (3 pointers per std::vector * 3 vectors * 8 bytes per pointer), so the Node* of the node map is
     /// preferred here.
-    robin_hood::unordered_node_map<HashX, AggregatedOutsIns, HashHasher> hashXAggregated;
+    std::unordered_map<HashX, AggregatedOutsIns, HashHasher> hashXAggregated;
 
     /*
     // If we decide to track OpReturn:
