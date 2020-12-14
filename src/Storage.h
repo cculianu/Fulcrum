@@ -364,6 +364,9 @@ private:
 
     /// thread-safe helper that returns hashed headers starting from start up until count (hashes are in bitcoin memory order)
     std::vector<QByteArray> merkleCacheHelperFunc(unsigned start, unsigned count, QString *err);
+
+    /// Called from cleanup. Does some flushing and gently closes all open DBs.
+    void gentlyCloseAllDBs();
 };
 
 Q_DECLARE_OPERATORS_FOR_FLAGS(Storage::SaveSpec)

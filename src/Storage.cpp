@@ -751,10 +751,32 @@ void Storage::startup()
     start(); // starts our thread
 }
 
+void Storage::gentlyCloseAllDBs()
+{
+    // do FlushWAL() and Close() to gently close the dbs
+    using NVP = std::pair<const char *, std::unique_ptr<rocksdb::DB> &>;
+    std::list<NVP> dbs = {
+        NVP{"undo", p->db.undo}, NVP{"scripthash_unspent", p->db.shunspent}, NVP{"scripthash_history", p->db.shist},
+        NVP{"utxoset", p->db.utxoset}, NVP{"blkinfo", p->db.blkinfo}, NVP{"meta", p->db.meta},
+    };
+    for (auto &[name, db] : dbs) {
+        if (!db) continue;
+        Debug() << "Calling FlushWAL() then Close() on " << name << " ...";
+        rocksdb::Status status = db->FlushWAL(true);
+        if (!status.ok())
+            Warning() << "FlushWAL of " << name << ": " << QString::fromStdString(status.ToString());
+        status = db->Close();
+        if (!status.ok())
+            Warning() << "Close of " << name << ": " << QString::fromStdString(status.ToString());
+        db.reset();
+    }
+}
+
 void Storage::cleanup()
 {
     stop(); // joins our thread
     if (subsmgr) subsmgr->cleanup();
+    gentlyCloseAllDBs();
     // TODO: unsaved/"dirty state" detection here -- and forced save, if needed.
 }
 
