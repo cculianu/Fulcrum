@@ -17,7 +17,6 @@
 // <https://www.gnu.org/licenses/>.
 //
 #include "BTC.h"
-#include "BTC_Address.h"
 #include "CostCache.h"
 #include "Mempool.h"
 #include "Merkle.h"
