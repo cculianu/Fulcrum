@@ -191,7 +191,7 @@ public:
     QString dumpScriptHashes;  ///< if specified, a file path to which to dump all scripthashes as JSON, corresponds to --dump-sh CLI arg
 
     struct DBOpts {
-        static constexpr int defaultMaxOpenFiles = 30, maxOpenFilesMin = 20, maxOpenFilesMax = std::numeric_limits<int>::max();
+        static constexpr int defaultMaxOpenFiles = 20, maxOpenFilesMin = 20, maxOpenFilesMax = std::numeric_limits<int>::max();
         /// comes from config db_max_open_files -- default in rocksdb is -1 meaning unlimited.
         /// See: https://github.com/facebook/rocksdb/wiki/Memory-usage-in-RocksDB#indexes-and-filter-blocks
         int maxOpenFiles = defaultMaxOpenFiles;
@@ -202,7 +202,7 @@ public:
         unsigned keepLogFileNum = defaultKeepLogFileNum;
         static constexpr bool isKeepLogFileNumInBounds(int64_t k) { return k >= int64_t(minKeepLogFileNum) && k <= int64_t(maxKeepLogFileNum); }
 
-        static constexpr size_t defaultMaxMem = 768 * 1024 * 1024, maxMemMin = 50 * 1024 * 1024, maxMemMax = std::numeric_limits<size_t>::max();
+        static constexpr size_t defaultMaxMem = 384 * 1024 * 1024, maxMemMin = 50 * 1024 * 1024, maxMemMax = std::numeric_limits<size_t>::max();
         size_t maxMem = defaultMaxMem;
         static constexpr bool isMaxMemInBounds(size_t mem) { return mem >= maxMemMin && mem <= maxMemMax; }
 
@@ -256,7 +256,7 @@ public:
 
     // config: txhash_cache
     /// Corresponds to the number of bytes total we give the txhash caches (lruNum2Hash and lruHeight2TxHashes in Storage.cpp)
-    static constexpr unsigned defaultTxHashCacheBytes = 256'000'000, ///< 256 MB default
+    static constexpr unsigned defaultTxHashCacheBytes = 128'000'000, ///< 128 MB default
                               txHashCacheBytesMax = 2'000'000'000, ///< 2GB max
                               txHashCacheBytesMin = 20'000'000; ///< 20 MB minimum
     static constexpr bool isTxHashCacheBytesInRange(unsigned n) { return n >= txHashCacheBytesMin && n <= txHashCacheBytesMax; }
