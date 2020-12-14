@@ -355,6 +355,7 @@ private:
 
     void loadCheckHeadersInDB(); ///< may throw -- called from startup()
     void loadCheckUTXOsInDB(); ///< may throw -- called from startup()
+    void loadCheckShunspentInDB(); ///< may throw -- called from startup()
     void loadCheckTxNumsFileAndBlkInfo(); ///< may throw -- called from startup()
     void loadCheckEarliestUndo(); ///< may throw -- called from startup()
 
@@ -411,11 +412,11 @@ RocksDB: "scripthash_history"
 
 RocksDB: "utxoset"
   Purpose: serialize the UTXOSet structure as seen in the sources. loading this involves iterating over entire table.
-  Key: "prevouHashoutN (see struct TXO) (40 bytes)
+  Key: "prevoutHash+outN (see struct TXO) (34 or 35 bytes)
   Value:  8-byte amount , 32-byte hashX .. see struct TXOInfo.
 
 RocksDB: "scripthash_unspent"
-  Key: scripthash_raw_bytes + serialized CompactTXO (40 bytes)
+  Key: scripthash_raw_bytes + serialized CompactTXO (40 or 41 bytes)
   Value: 8-byte amount field (64-bit signed integer)
   Comments: It turns out scanning by prefix over a table is blazingly fast in rocksdb, so we can easily do listunspent
   using this scheme. I tried a read-modify-write approach (keying off just HashX) and it was painfully slow on synch.

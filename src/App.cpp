@@ -423,7 +423,8 @@ void App::parseArgs()
     },
     { { "C", "checkdb" },
        QString("If specified, database consistency will be checked thoroughly for sanity & integrity."
-               " Note that these checks are somewhat slow to perform and under normal operation are not necessary.\n"),
+               " Note that these checks are somewhat slow to perform and under normal operation are not necessary."
+               " May be specified twice to do even more thorough checks.\n"),
     },
     { { "T", "polltime" },
        QString("The number of seconds for the bitcoind poll interval. Bitcoind is polled once every `polltime`"
@@ -596,7 +597,12 @@ void App::parseArgs()
     }
     if (parser.isSet("q") || conf.boolValue("quiet")) options->verboseDebug = false;
     if (parser.isSet("S") || conf.boolValue("syslog")) options->syslogMode = true;
-    if (parser.isSet("C") || conf.boolValue("checkdb")) options->doSlowDbChecks = true;
+    if (const auto pset = parser.isSet("C"); pset || conf.boolValue("checkdb")) {
+        if (pset)
+            options->doSlowDbChecks = parser.optionNames().count("C");
+        else
+            options->doSlowDbChecks = conf.values("checkdb").size();
+    }
     // parse --polltime
     // note despite how confusingly the below line reads, the CLI parser value takes precedence over the conf file here.
     const QString polltimeStr = conf.value("polltime", parser.value("T"));

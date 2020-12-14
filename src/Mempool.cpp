@@ -732,7 +732,7 @@ namespace {
                 TXOInfo ret;
                 ret.amount = 546 * bitcoin::Amount::satoshi();
                 ret.confirmedHeight = 1;
-                ret.hashX = BTC::HashXFromCScript(bitcoin::CScript() << Util::toVec<std::vector<uint8_t>>(txo.toBytes()));
+                ret.hashX = BTC::HashXFromCScript(bitcoin::CScript() << Util::toVec<std::vector<uint8_t>>(txo.toBytes(false)));
                 return ret;
             };
 
