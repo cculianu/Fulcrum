@@ -762,7 +762,13 @@ void Storage::gentlyCloseAllDBs()
     for (auto &[name, db] : dbs) {
         if (!db) continue;
         Debug() << "Flushing and closing " << name << " ...";
-        rocksdb::Status status = db->FlushWAL(true);
+        rocksdb::Status status;
+        rocksdb::FlushOptions fopts;
+        fopts.wait = true; fopts.allow_write_stall = true;
+        status = db->Flush(fopts);
+        if (!status.ok())
+            Warning() << "Flush of " << name << ": " << QString::fromStdString(status.ToString());
+        status = db->FlushWAL(true);
         if (!status.ok())
             Warning() << "FlushWAL of " << name << ": " << QString::fromStdString(status.ToString());
         status = db->Close();
