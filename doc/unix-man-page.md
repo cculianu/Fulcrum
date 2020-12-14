@@ -92,7 +92,7 @@ Once the server finishes synching it will behave like an ElectronX/ElectrumX ser
 :   Syslog mode. If on Unix, use the syslog() facility to produce log messages. This option currently has no effect on Windows.
 
 -C, --checkdb
-:   If specified, database consistency will be checked thoroughly for sanity & integrity. Note that these checks are somewhat slow to perform and under normal operation are not necessary.
+:   If specified, database consistency will be checked thoroughly for sanity & integrity. Note that these checks are somewhat slow to perform and under normal operation are not necessary. May be specified twice to do even more thorough checks.
 
 -T, --polltime <polltime>
 :   The number of seconds for the bitcoind poll interval. Bitcoind is polled once every `polltime` seconds to detect mempool and blockchain changes. This value must be at least 0.5 and cannot exceed 30. If not specified, defaults to 2 seconds.
