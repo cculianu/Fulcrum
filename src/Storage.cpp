@@ -17,6 +17,7 @@
 // <https://www.gnu.org/licenses/>.
 //
 #include "BTC.h"
+#include "BTC_Address.h"
 #include "CostCache.h"
 #include "Mempool.h"
 #include "Merkle.h"
@@ -41,10 +42,13 @@
 #include <algorithm>
 #include <atomic>
 #include <cstddef> // for std::byte
+#include <cstdlib>
 #include <cstring> // for memcpy
 #include <limits>
 #include <list>
+#include <map>
 #include <optional>
+#include <set>
 #include <shared_mutex>
 #include <string>
 #include <tuple>
@@ -1148,6 +1152,38 @@ void Storage::loadCheckUTXOsInDB()
     if (options->doSlowDbChecks) {
         Log() << "CheckDB: Verifying utxo set (this may take some time) ...";
 
+        // Note: Before the BIP that imposed uniqueness on coinbase tx's,
+        // Bitcoin coinbase tx's for heights 91842 and 91812 both have outpoint:
+        //      d5d27987d2a3dfc724e359870c6644b40e497bdc0589a033220fe15429d88599:0
+        // And coinbase tx's for heights 91880 and 91722 both have outpoint:
+        //      e3bf3d07d4b0375638d5f1db5255fe07ba2c4cb067cd81b84ee974b6585fb468:0
+        // Thus the counts may be off by as much as 2 here. So we must detect these
+        // utxos and compensate by fudging the count check a little bit if we see
+        // the utxo + heights in question.
+        const std::map<TXO, std::pair<HashX, std::set<unsigned>>> fudgeDueToBitcoinBugs = {
+            {TXO{Util::ParseHexFast("e3bf3d07d4b0375638d5f1db5255fe07ba2c4cb067cd81b84ee974b6585fb468"), 0},
+             { Util::ParseHexFast("49df7a6bfea6c409a5f03fd734a1f1a13cb8fafee6a3e08dd94db352498f99a6"), {91880, 91722} } },
+            {TXO{Util::ParseHexFast("d5d27987d2a3dfc724e359870c6644b40e497bdc0589a033220fe15429d88599"), 0},
+             { Util::ParseHexFast("76d95f02197b7c685b972104f6d7688a78bdcbb6a757fd5a139a195e59505fab"), {91842, 91812} } },
+        };
+        std::set<TXO> seenExceptions;
+        // scan shunspent to see if our counts may be off
+        // (this scan guards against these coins being spent in future throwing off our counts yet again!)
+        for (const auto & [txo, pair] : fudgeDueToBitcoinBugs) {
+            const auto & [hashx, heights] = pair;
+            for (const auto & height : heights) {
+                if (height >= p->blkInfos.size())
+                    continue;
+                const TxNum txNum = p->blkInfos[height].txNum0;
+                const CompactTXO ctxo(txNum, txo.outN);
+                auto opt = GenericDBGet<QByteArray>(p->db.shunspent.get(), mkShunspentKey(hashx, ctxo), true, "", false, p->db.defReadOpts);
+                if (opt.has_value()) {
+                    if (seenExceptions.insert(txo).second)
+                        Debug() << "Seen exception: " << txo.toString() << ", height: " << height;
+                }
+            }
+        }
+
         const Tic t0;
         {
             const int currentHeight = latestTip().first;
@@ -1169,6 +1205,16 @@ void Storage::loadCheckUTXOsInDB()
                                                             " This may be due to a database format mismatch."
                                                             "\n\nDelete the datadir and resynch to bitcoind.\n")
                                                      .arg(txo.toString()));
+
+                // compensate for counts being off due to historical bugs in blockchain
+                // these outpoints actually generate 2 entries in shunspent and 1 entry here
+                // we must tolerate counts being off if we see this utxo.
+                if (auto it = fudgeDueToBitcoinBugs.find(txo);
+                        it != fudgeDueToBitcoinBugs.end() && it->second.second.count(info.confirmedHeight.value_or(0))) {
+                    if (seenExceptions.insert(txo).second)
+                        Debug() << "Seen exception: " << txo.toString();
+                }
+
                 // this is a deep test: only happens if -C / --checkdb is specified on CLI or in conf.
                 const CompactTXO ctxo = CompactTXO(info.txNum, txo.outN);
                 const QByteArray shuKey = mkShunspentKey(info.hashX, ctxo);
@@ -1203,7 +1249,11 @@ void Storage::loadCheckUTXOsInDB()
                 }
             }
 
-            if (const auto metact = readUtxoCtFromDB(); p->utxoCt != metact)
+            if (const auto metact = readUtxoCtFromDB();
+                    // counts may be slightly off due to the dupe tx's outlined above -- after this is run
+                    // the utxoset will have the right count (although shunspent will disagree with this,
+                    // which we also tolerate). So we tolerate being off due to the "exceptions" above.
+                    std::abs(long(p->utxoCt) - long(metact)) > long(seenExceptions.size()))
                     throw DatabaseError(QString("UTXO count in meta table (%1) does not match the actual number of UTXOs in the utxoset (%2)."
                                                 "\n\nThe database has been corrupted. Please delete the datadir and resynch to bitcoind.\n")
                                         .arg(metact).arg(p->utxoCt.load()));
@@ -1234,6 +1284,20 @@ void Storage::loadCheckShunspentInDB()
     std::unique_ptr<rocksdb::Iterator> iter(p->db.shunspent->NewIterator(p->db.defReadOpts));
     if (!iter) throw DatabaseError("Unable to obtain an iterator to the scripthash unspent db");
 
+    // Note: Before the BIP that imposed uniqueness on coinbase tx's,
+    // Bitcoin coinbase tx's for heights 91842 and 91812 both have outpoint:
+    //      d5d27987d2a3dfc724e359870c6644b40e497bdc0589a033220fe15429d88599:0
+    // And coinbase tx's for heights 91880 and 91722 both have outpoint:
+    //      e3bf3d07d4b0375638d5f1db5255fe07ba2c4cb067cd81b84ee974b6585fb468:0
+    // Thus the TXOInfo may be wrong for these entries since we get 2 shunspent
+    // entries for each of these coins but only 1 entry in utxodb for each coin.
+    // Thus, we just must ignore sanity check for these two coins outright.
+    const std::set<TXO> exceptionsDueToBitcoinBugs = {
+        TXO{Util::ParseHexFast("e3bf3d07d4b0375638d5f1db5255fe07ba2c4cb067cd81b84ee974b6585fb468"), 0},
+        TXO{Util::ParseHexFast("d5d27987d2a3dfc724e359870c6644b40e497bdc0589a033220fe15429d88599"), 0},
+    };
+    std::set<TXO> seenExceptions;
+
     constexpr auto errMsg = "This may be due to either a database format mismatch or data corruption."
                             "\n\nDelete the datadir and resynch to bitcoind.\n";
     size_t ctr = 0;
@@ -1254,20 +1318,36 @@ void Storage::loadCheckShunspentInDB()
         const TXO txo{txHash, ctxo.N()};
         // look for this in the UTXO db
         const auto optInfo = GenericDBGet<TXOInfo>(p->db.utxoset.get(), ToSlice(Serialize(txo)), true, "", false, p->db.defReadOpts);
-        if (!optInfo)
-            throw DatabaseError(QString("The scripthash_unspent table is missing a corresponding entry in the UTXO table for TXO \"%1\". %2")
-                                .arg(txo.toString(), errMsg));
+        if (!optInfo) {
+            // we permit the buggy utxos above to be off -- those are due to collisions in historical blockchain
+            if (!exceptionsDueToBitcoinBugs.count(txo))
+                throw DatabaseError(QString("The scripthash_unspent table is missing a corresponding entry in the UTXO table for TXO \"%1\". %2")
+                                    .arg(txo.toString(), errMsg));
+            else {
+                seenExceptions.insert(txo);
+                Debug() << "Seen exception: " << txo.toString() << ", height: " << info.confirmedHeight.value_or(0);
+            }
+        }
 
-        if (!info.isValid() || !optInfo->isValid() || *optInfo != info)
-            throw DatabaseError(QString("TXO \"%1\" mismatch between scripthash_unspent and the UTXO table. %2")
-                                .arg(txo.toString(), errMsg));
+        if (!info.isValid() || !optInfo->isValid() || *optInfo != info) {
+            // we permit the buggy utxos above to be off -- those are due to collisions in historical blockchain
+            if (!exceptionsDueToBitcoinBugs.count(txo))
+                throw DatabaseError(QString("TXO \"%1\" mismatch between scripthash_unspent and the UTXO table. %2")
+                                    .arg(txo.toString(), errMsg));
+            else {
+                seenExceptions.insert(txo);
+                Debug() << "Seen exception: " << txo.toString() << ", height: " << info.confirmedHeight.value_or(0);
+            }
+        }
         if (0 == ++ctr % 10000) {
             *(0 == ctr % 200000 ? std::make_unique<Log>() : std::make_unique<Debug>())
                     << "CheckDB: Verified " << ctr << " scripthash_unspent entries ...";
         }
     }
 
-    if (const auto metact = readUtxoCtFromDB(); ctr != size_t(metact))
+    if (const auto metact = readUtxoCtFromDB();
+            // tolerate being off by as much as 2 in case the exceptional utxos get spent!
+            std::abs(long(ctr) - long(metact)) > long(seenExceptions.size()))
             throw DatabaseError(QString("UTXO count in meta table (%1) does not match the actual number of UTXOs in shunspent (%2). %3")
                                 .arg(metact).arg(ctr).arg(errMsg));
 
