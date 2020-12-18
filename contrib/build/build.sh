@@ -23,13 +23,13 @@ suffix=""
 case "$plat" in
     "windows"|"win")
         plat=win  # normalize to 'win'
-        docker_img_name="fulcrum-builder/qt:windows"
-        docker_cont_name="fulcrum_cont_qt_windows_$$"
+        docker_img_name="fulcrum-builder/qt5152:windows"
+        docker_cont_name="fulcrum_cont_qt_5_15_2_windows_$$"
         ;;
     "linux"|"lin")
         plat=linux
-        docker_img_name="fulcrum-builder/qt:linux"
-        docker_cont_name="fulcrum_cont_qt_linux_$$"
+        docker_img_name="fulcrum-builder/qt5152:linux"
+        docker_cont_name="fulcrum_cont_qt_5_15_2_linux_$$"
         ;;
     "linux_ub16"|"oldlinux"|"oldlin"|"lin_ub16")
         plat=linux

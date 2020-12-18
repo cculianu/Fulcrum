@@ -22,6 +22,7 @@ apt -y clean
 
 RUN \
     cd /opt && \
+    echo "💬  \033[1;36mCloning MXE repository ...\033[0m" && \
     git clone https://github.com/mxe/mxe.git && \
     echo "💬  \033[1;36mBuilding dependencies for static linking ...\033[0m" && \
     cd /opt/mxe && \
@@ -34,6 +35,8 @@ RUN \
 # Ubuntu bionic (which is 18.04 LTS). If we decide to upgrade the base Ubuntu
 # tag at the top of this file, then this will just need slight modification.
 RUN \
+    apt -y update && \
+    apt -y upgrade && \
     apt install -qy software-properties-common && \
     echo "💬  \033[1;36mInstalling Wine ...\033[0m" && \
     wget -nc https://dl.winehq.org/wine-builds/Release.key && \
