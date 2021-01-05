@@ -124,8 +124,9 @@ public:
     }
 
     /// Deserialize a byte sequence. May throw std::invalid_argument if b is of the wrong format or is empty.
+    /// Note: Unlike fromBytes(), the specified byte sequence may contain extra data at the end.
     /// On success, Span b is updated to point after the consumed byte(s).
-    template<typename Byte, std::enable_if_t<sizeof(Byte) == 1, int> = 0>
+    template<typename Byte, std::enable_if_t<sizeof(Byte) == 1 && !std::is_same_v<std::remove_cv_t<Byte>, bool>, int> = 0>
     static VarInt deserialize(Span<Byte> &b) {
         const int byteLen = validate<std::invalid_argument>(b, true) + 1;
         // accepted construct (takes a deep copy of bytes in span)
@@ -134,7 +135,7 @@ public:
         return ret;
     }
 
-    VarInt() : ba(1, char(0)) {}
+    VarInt() : ba(1, char(0)) {} // default c'tor: represent the value 0
     VarInt(const VarInt &) = default;
     VarInt(VarInt &&) = default;
     VarInt &operator=(const VarInt &) = default;

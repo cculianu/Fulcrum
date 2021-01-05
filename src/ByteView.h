@@ -50,7 +50,7 @@ class ByteView: public std::basic_string_view<std::byte>
     }
     // type trait to exclude C arrays but accept std::array
     template<typename T> struct is_std_array : std::false_type {};
-    template<typename T, std::size_t N> struct is_std_array<std::array<T,N>> : std::true_type{};
+    template<typename T, std::size_t N> struct is_std_array<std::array<T,N>> : std::true_type {};
     template<typename T> static constexpr bool is_std_array_v = is_std_array<T>::value;
 
 public:
