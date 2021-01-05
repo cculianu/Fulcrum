@@ -262,6 +262,7 @@ SOURCES += \
     ThreadPool.cpp \
     TXO.cpp \
     Util.cpp \
+    VarInt.cpp \
     Version.cpp \
     WebSocket.cpp \
     register_MetaTypes.cpp
@@ -294,6 +295,7 @@ HEADERS += \
     RPCMsgId.h \
     ServerMisc.h \
     Servers.h \
+    Span.h \
     SrvMgr.h \
     Storage.h \
     SubsMgr.h \
@@ -302,6 +304,7 @@ HEADERS += \
     TXO.h \
     TXO_Compact.h \
     Util.h \
+    VarInt.h \
     Version.h \
     WebSocket.h
 
