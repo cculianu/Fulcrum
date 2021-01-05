@@ -58,7 +58,7 @@ constexpr std::uint64_t bmax() {
     } while (0)
 
 template <typename Int>
-void doTest(int n = 10'000)
+void doTest(int n = 200)
 {
     auto * const rgen = QRandomGenerator::system();
     static_assert (sizeof(Int) <= sizeof(quint64));
