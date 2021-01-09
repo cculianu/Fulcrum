@@ -1,6 +1,6 @@
 //
 // Fulcrum - A fast & nimble SPV Server for Electron Cash
-// Copyright (C) 2019-2020  Calin A. Culianu <calin.culianu@gmail.com>
+// Copyright (C) 2019-2021  Calin A. Culianu <calin.culianu@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
