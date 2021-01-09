@@ -1,6 +1,6 @@
 /*
 Json - A lightweight JSON parser and serializer for Qt.
-Copyright (c) 2020 Calin A. Culianu <calin.culianu@gmail.com>
+Copyright (c) 2020-2021 Calin A. Culianu <calin.culianu@gmail.com>
 
 The MIT License (MIT)
 
@@ -51,8 +51,8 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define EXPECT(expr, constant) (expr)
 #endif
 
-#define LIKELY(bool_expr)   EXPECT(bool(bool_expr), 1)
-#define UNLIKELY(bool_expr) EXPECT(bool(bool_expr), 0)
+#define LIKELY(bool_expr)   EXPECT(int(bool(bool_expr)), 1)
+#define UNLIKELY(bool_expr) EXPECT(int(bool(bool_expr)), 0)
 
 // embed simdjson here, if we are on a known 64-bit platform and the header & sources are available
 #if defined(__x86_64__) || defined(_M_AMD64) || defined(__aarch64__) || defined(_M_ARM64)
@@ -130,7 +130,7 @@ inline constexpr size_t MAX_JSON_DEPTH = 512;
 inline bool json_isdigit(uint8_t ch) noexcept { return ch >= '0' && ch <= '9'; }
 
 // convert hexadecimal (big endian) string to unsigned integer (machine byte orer)
-const char *hextouint(const char *first, const char *last, unsigned &out) noexcept
+const char *hextouint(const char *first, const char *last, uint32_t &out) noexcept
 {
     out = 0;
     for (; first < last; ++first)
@@ -194,19 +194,19 @@ public:
         }
     }
     // Write codepoint directly, possibly collating surrogate pairs
-    void push_back_u(unsigned int codepoint_)
+    void push_back_u(uint32_t cp)
     {
         if (state) // Only accept full codepoints in open state
             is_valid = false;
-        if (codepoint_ >= 0xD800 && codepoint_ < 0xDC00) { // First half of surrogate pair
+        if (cp >= 0xD800 && cp < 0xDC00) { // First half of surrogate pair
             if (surpair) // Two subsequent surrogate pair openers - fail
                 is_valid = false;
             else
-                surpair = codepoint_;
-        } else if (codepoint_ >= 0xDC00 && codepoint_ < 0xE000) { // Second half of surrogate pair
+                surpair = cp;
+        } else if (cp >= 0xDC00 && cp < 0xE000) { // Second half of surrogate pair
             if (surpair) { // Open surrogate pair, expect second half
                 // Compute code point from UTF-16 surrogate pair
-                append_codepoint(0x10000 | ((surpair - 0xD800)<<10) | (codepoint_ - 0xDC00));
+                append_codepoint(0x10000 | ((surpair - 0xD800)<<10) | (cp - 0xDC00));
                 surpair = 0;
             } else // Second half doesn't follow a first half - fail
                 is_valid = false;
@@ -214,7 +214,7 @@ public:
             if (surpair) // First half of surrogate pair not followed by second - fail
                 is_valid = false;
             else
-                append_codepoint(codepoint_);
+                append_codepoint(cp);
         }
     }
     // Check that we're in a state where the string can be ended
@@ -229,7 +229,7 @@ private:
     QByteArray &str;
     bool is_valid;
     // Current UTF-8 decoding state
-    unsigned int codepoint;
+    uint32_t codepoint;
     int state; // Top bit to be filled in for next UTF-8 byte, or 0
 
     // Keep track of the following state to handle the following section of
@@ -242,24 +242,24 @@ private:
     //    "\uD834\uDD1E".
     //
     //  Two subsequent \u.... may have to be replaced with one actual codepoint.
-    unsigned int surpair; // First half of open UTF-16 surrogate pair, or 0
+    uint32_t surpair; // First half of open UTF-16 surrogate pair, or 0
 
-    void append_codepoint(unsigned int codepoint_)
+    void append_codepoint(uint32_t cp)
     {
-        if (codepoint_ <= 0x7f)
-            str.push_back(char(codepoint_));
-        else if (codepoint_ <= 0x7FF) {
-            str.push_back(char(0xC0 | (codepoint_ >> 6)));
-            str.push_back(char(0x80 | (codepoint_ & 0x3F)));
-        } else if (codepoint_ <= 0xFFFF) {
-            str.push_back(char(0xE0 | (codepoint_ >> 12)));
-            str.push_back(char(0x80 | ((codepoint_ >> 6) & 0x3F)));
-            str.push_back(char(0x80 | (codepoint_ & 0x3F)));
-        } else if (codepoint_ <= 0x1FFFFF) {
-            str.push_back(char(0xF0 | (codepoint_ >> 18)));
-            str.push_back(char(0x80 | ((codepoint_ >> 12) & 0x3F)));
-            str.push_back(char(0x80 | ((codepoint_ >> 6) & 0x3F)));
-            str.push_back(char(0x80 | (codepoint_ & 0x3F)));
+        if (cp <= 0x7f)
+            str.push_back(char(cp));
+        else if (cp <= 0x7FF) {
+            str.push_back(char(0xC0 | (cp >> 6)));
+            str.push_back(char(0x80 | (cp & 0x3F)));
+        } else if (cp <= 0xFFFF) {
+            str.push_back(char(0xE0 | (cp >> 12)));
+            str.push_back(char(0x80 | ((cp >> 6) & 0x3F)));
+            str.push_back(char(0x80 | (cp & 0x3F)));
+        } else if (cp <= 0x1FFFFF) {
+            str.push_back(char(0xF0 | (cp >> 18)));
+            str.push_back(char(0x80 | ((cp >> 12) & 0x3F)));
+            str.push_back(char(0x80 | ((cp >> 6) & 0x3F)));
+            str.push_back(char(0x80 | (cp & 0x3F)));
         }
     }
 };
@@ -306,22 +306,26 @@ jtokentype getJsonToken(QByteArray &tokenVal, unsigned &consumed, const char *ra
         return JTOK_COMMA;
 
     case 'n':
-    case 't':
-    case 'f':
         if (0 == std::strncmp(raw, "null", 4)) {
             raw += 4;
             consumed = raw - rawStart;
             return JTOK_KW_NULL;
-        } else if (0 == std::strncmp(raw, "true", 4)) {
+        }
+        return JTOK_ERR;
+    case 't':
+        if (0 == std::strncmp(raw, "true", 4)) {
             raw += 4;
             consumed = raw - rawStart;
             return JTOK_KW_TRUE;
-        } else if (0 == std::strncmp(raw, "false", 5)) {
+        }
+        return JTOK_ERR;
+    case 'f':
+        if (0 == std::strncmp(raw, "false", 5)) {
             raw += 5;
             consumed = raw - rawStart;
             return JTOK_KW_FALSE;
-        } else
-            return JTOK_ERR;
+        }
+        return JTOK_ERR;
 
     case '-':
     case '0':
@@ -457,7 +461,7 @@ jtokentype getJsonToken(QByteArray &tokenVal, unsigned &consumed, const char *ra
                 if (UNLIKELY(raw >= end))
                     return JTOK_ERR;
 
-                switch (*raw) {
+                switch (*raw++) {             // read then skip esc'd char
                 case '"':  writer.push_back('"'); break;
                 case '\\': writer.push_back('\\'); break;
                 case '/':  writer.push_back('/'); break;
@@ -468,19 +472,18 @@ jtokentype getJsonToken(QByteArray &tokenVal, unsigned &consumed, const char *ra
                 case 't':  writer.push_back('\t'); break;
 
                 case 'u': {
-                    unsigned int codepoint;
-                    if (raw + 1 + 4 >= end || hextouint(raw + 1, raw + 1 + 4, codepoint) != raw + 1 + 4)
+                    uint32_t codepoint;
+                    if (auto * const cpend = raw + 4; cpend >= end || hextouint(raw, cpend, codepoint) != cpend)
                         return JTOK_ERR;
                     writer.push_back_u(codepoint);
-                    raw += 4;
+                    raw += 4;                 // skip hex chars
                     break;
                 }
+
                 default:
                     return JTOK_ERR;
 
-                }
-
-                ++raw;                        // skip esc'd char
+                } // switch
             }
 
             else if (*raw == '"') {
