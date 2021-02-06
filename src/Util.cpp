@@ -573,7 +573,15 @@ Log::~Log()
             emit logger->log(level, theString);
         } else {
             // just print to console for now..
-            std::cerr << Q2C(theString) << std::endl << std::flush;
+            static std::mutex mut;
+            {
+                std::unique_lock g(mut);
+                std::cerr << Q2C(theString) << std::endl << std::flush;
+            }
+            // Fatal should signal a quit even here
+            if (level == Logger::Level::Fatal && qApp) {
+                QTimer::singleShot(0, qApp, []{ qApp->quit(); });
+            }
         }
     }
 }

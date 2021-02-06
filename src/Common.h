@@ -41,11 +41,22 @@ struct BadArgs : Exception { using Exception::Exception; ~BadArgs() override; };
 #define APPNAME "Fulcrum"
 #define VERSION "1.4.0"
 #ifdef QT_DEBUG
-#  define VERSION_EXTRA "(Debug)"
 inline constexpr bool isReleaseBuild() { return false; }
 #else
-#  define VERSION_EXTRA "(Release)"
 inline constexpr bool isReleaseBuild() { return true; }
+#endif
+#ifdef GIT_COMMIT
+#  ifdef QT_DEBUG
+#    define VERSION_EXTRA "(Debug " GIT_COMMIT ")"
+#  else
+#    define VERSION_EXTRA "(Release " GIT_COMMIT ")"
+#  endif
+#else
+#  ifdef QT_DEBUG
+#    define VERSION_EXTRA "(Debug)"
+#  else
+#    define VERSION_EXTRA "(Release)"
+#  endif
 #endif
 
 #if (QT_VERSION < QT_VERSION_CHECK(5, 12, 5)) || (QT_VERSION == QT_VERSION_CHECK(5, 13, 0))

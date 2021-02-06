@@ -23,8 +23,10 @@
 #include "Json/Json.h"
 #include "Logger.h"
 #include "Servers.h"
+#include "Storage.h"
 #include "ThreadPool.h"
 #include "Util.h"
+#include "ZmqSubNotifier.h"
 
 #include <QCommandLineParser>
 #include <QDir>
@@ -37,12 +39,14 @@
 #include <QSslCipher>
 #include <QSslEllipticCurve>
 #include <QSslSocket>
+#include <QTextStream>
 
 #include <array>
 #include <cassert>
 #include <clocale>
 #include <csignal>
 #include <cstdlib>
+#include <iostream>
 #include <list>
 #include <locale>
 #include <mutex>
@@ -215,6 +219,11 @@ void App::startup()
             ts << applicationName() << " " << applicationVersion() << " - " << QDateTime::currentDateTime().toString("ddd MMM d, yyyy hh:mm:ss.zzz t");
         } return ret;
     };
+
+    // print the libs we are using to log now
+    for (const auto &line : extendedVersionString(true).split("\n", Compat::SplitBehaviorSkipEmptyParts))
+        Log() << line;
+
     // print banner to log now
     Log() << getBannerWithTimeStamp() << " - starting up ...";
 
@@ -301,7 +310,6 @@ void App::parseArgs()
     QCommandLineParser parser;
     parser.setApplicationDescription("A Bitcoin Cash Blockchain SPV Server.");
     parser.addHelpOption();
-    parser.addVersionOption();
 
     static constexpr auto RPCUSER = "RPCUSER", RPCPASSWORD = "RPCPASSWORD"; // optional env vars we use below
 
@@ -470,8 +478,11 @@ void App::parseArgs()
     {
        "dump-sh",
        QString("*** This is an advanced debugging option ***   Dump script hashes. If specified, after the database"
-               " is loaded, all of the script hashes in the database will be written to outputfile as a JSON array."),
+               " is loaded, all of the script hashes in the database will be written to outputfile as a JSON array.\n"),
        QString("outputfile"),
+    },
+    { { "v", "version" },
+       QString("Print version information and exit.\n"),
     },
     };
 
@@ -500,6 +511,12 @@ void App::parseArgs()
     parser.addOptions(allOptions);
     parser.addPositionalArgument("config", "Configuration file (optional).", "[config]");
     parser.process(*this);
+
+    // handle --version first, this exits immediately
+    if (parser.isSet("v")) {
+        std::cout << extendedVersionString().toStdString();
+        std::exit(0);
+    }
 
     // handle possible --test or --bench args before doing anything else, since
     // those immediately exit the app if they do run.
@@ -1586,4 +1603,45 @@ bool App::logSimdJsonInfo()
     }
     Log() << "active implementation: " << info->active.name;
     return true;
+}
+
+/* static */
+QString App::extendedVersionString(bool justLibs)
+{
+    QString ret;
+    QTextStream ts(&ret, QIODevice::WriteOnly);
+
+    if (!justLibs)
+        ts << applicationName() << " " << applicationVersion() << "\n";
+
+    ts << "jemalloc: ";
+    if (auto v = jemallocStats().value("version").toString(); !v.isEmpty()) {
+        if (v.contains("-g")) {
+            // simplify: 5.2.1-0-gea6b3e973b477b8061e0076bb257dbd7f3faa756 -> 5.2.1-0-gea6b3e9
+            const auto parts = v.split("-g");
+            if (parts.length() > 1)
+                v = (parts.mid(0, parts.length()-1) + QStringList{{parts.back().left(7)}}).join("-g");
+        }
+        ts << "version " << v;
+    } else
+        ts << "unavailable";
+    ts << "\n";
+
+    ts << "rocksdb: version " << Storage::rocksdbVersion() << "\n";
+
+    ts << "simdjson: ";
+    if (auto v = Json::SimdJson::versionString(); !v.isEmpty())
+        ts << "version " << v;
+    else
+        ts << "unavailable";
+    ts << "\n";
+
+    ts << "zmq: ";
+    if (auto v = ZmqSubNotifier::versionString(); !v.isEmpty())
+        ts << v;
+    else
+        ts << "unavailable";
+    ts << "\n";
+
+    return ret;
 }

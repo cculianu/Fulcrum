@@ -99,6 +99,35 @@ linux-g++ {
     CONFIG += warn_off
 }
 
+# Handle or add GIT_COMMIT=
+unix {
+    DEFINES += GIT_COMMIT="\\\"$(shell git -C \""$$_PRO_FILE_PWD_"\" describe --always --dirty --match 'NOT A TAG')\\\""
+} else {
+    # NB: for Windows, caller should set DEFINES+=GIT_COMMIT=\"xxx\"
+    #warning("Be sure to set DEFINES+=GIT_COMMIT=\\\"xxx\\\" in the final release build to embed the commit hash into the final application.")
+}
+# /GIT_COMMIT=
+
+# ZMQ
+!contains(LIBS, -lzmq) {
+    # Test for ZMQ, and if found, add pkg-config which we will rely upon to find libs
+    qtCompileTest(zmq)
+    contains(CONFIG, config_zmq) {
+        QT_CONFIG -= no-pkg-config
+        CONFIG += link_pkgconfig
+        PKGCONFIG += libzmq
+        DEFINES += ENABLE_ZMQ
+        message("ZMQ version: $$system($$pkgConfigExecutable() --modversion libzmq)")
+    }
+} else {
+    DEFINES += ENABLE_ZMQ
+    message("ZMQ: using CLI override")
+}
+!contains(DEFINES, ENABLE_ZMQ) {
+    message("ZMQ not found, install pkg-config and libzmq to enable ZMQ notifications.")
+}
+# /ZMQ
+
 # - Try and detect rocksdb and if not, fall back to the staticlib.
 # - User can suppress this behavior by specifying a "LIBS+=-lrocksdb..." on the
 #   CLI when they invoked qmake. In that case, they must set-up the LIBS+= and
@@ -265,6 +294,7 @@ SOURCES += \
     VarInt.cpp \
     Version.cpp \
     WebSocket.cpp \
+    ZmqSubNotifier.cpp \
     register_MetaTypes.cpp
 
 HEADERS += \
@@ -306,7 +336,8 @@ HEADERS += \
     Util.h \
     VarInt.h \
     Version.h \
-    WebSocket.h
+    WebSocket.h \
+    ZmqSubNotifier.h
 
 # Robin Hood unordered_flat_map implememntation (single header and MUCH more efficient than unordered_map!)
 HEADERS += robin_hood/robin_hood.h

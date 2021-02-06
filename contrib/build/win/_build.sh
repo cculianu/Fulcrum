@@ -57,7 +57,10 @@ info "Stripping librocksdb.a ..."
 x86_64-w64-mingw32.static-strip -g librocksdb.a || fail "Could not strip librocksdb.a"
 
 info "Copying librocksdb.a to Fulcrum directory ..."
-cp -fpva librocksdb.a "$top"/"$PACKAGE"/staticlibs/rocksdb/bin/win64 || fail "Could not copy librocksdb.a"
+ROCKSDB_LIBDIR="$top"/"$PACKAGE"/staticlibs/rocksdb/bin/custom_win64  # prevents -dirty git commit hash
+ROCKSDB_INCDIR="$top"/"$PACKAGE"/staticlibs/rocksdb/include
+mkdir -p "${ROCKSDB_LIBDIR}" || fail "Could not create directory ${ROCKSDB_LIBDIR}"
+cp -fpva librocksdb.a "${ROCKSDB_LIBDIR}" || fail "Could not copy librocksdb.a"
 printok "RocksDB built and moved to Fulcrum staticlibs directory"
 
 cd "$top"/"$PACKAGE" || fail "Could not chdir to Fulcrum dir"
@@ -66,8 +69,14 @@ info "Building Fulcrum ..."
 mkdir build && cd build || fail "Could not create/change-to build/"
 qmake ../Fulcrum.pro "CONFIG-=debug" \
                      "CONFIG+=release" \
+                     "LIBS+=-L${ROCKSDB_LIBDIR} -lrocksdb" \
+                     "INCLUDEPATH+=${ROCKSDB_INCDIR}" \
                      "LIBS+=-L${JEMALLOC_LIBDIR} -ljemalloc" \
                      "INCLUDEPATH+=${JEMALLOC_INCDIR}" \
+                     "LIBS+=-L/opt/mxe/usr/x86_64-w64-mingw32.static/lib -lzmq -lsodium" \
+                     "INCLUDEPATH+=/opt/mxe/usr/x86_64-w64-mingw32.static/include" \
+                     "DEFINES+=ZMQ_STATIC" \
+                     'DEFINES+=GIT_COMMIT="\\\"$(shell git -C \""$$_PRO_FILE_PWD_"\" describe --always --dirty --match NOT_A_TAG)\\\""' \
     || fail "Could not run qmake"
 make -j`nproc`  || fail "Could not run make"
 

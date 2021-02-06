@@ -31,6 +31,7 @@
 #include <rocksdb/options.h>
 #include <rocksdb/slice.h>
 #include <rocksdb/table.h>
+#include <rocksdb/version.h>
 #include <rocksdb/write_buffer_manager.h>
 
 #include <QByteArray>
@@ -620,6 +621,14 @@ Storage::Storage(const std::shared_ptr<const Options> & options_)
 }
 
 Storage::~Storage() { Debug() << __func__; cleanup(); }
+
+extern const char* rocksdb_build_git_sha; // internal to rocksdb lib -- if this breaks remove me
+/* static */
+QString Storage::rocksdbVersion()
+{
+    return QString("%1.%2.%3-%4").arg(ROCKSDB_MAJOR).arg(ROCKSDB_MINOR).arg(ROCKSDB_PATCH)
+            .arg(QString(rocksdb_build_git_sha).split(':').back().left(7));
+}
 
 void Storage::startup()
 {

@@ -102,6 +102,9 @@ public:
     /// suppression handle is invalidated. Thread-safe.
     static void rmQtLogSuppression(QtLogSuppression &);
 
+    /// Returns the extended version string suitable for display for the --version CLI arg
+    static QString extendedVersionString(bool justLibs=false);
+
 signals:
     // other code emits the below two to tell the app (main) thread to call the corresponding protected slot to set
     // the corresponding values in the shared Options object.

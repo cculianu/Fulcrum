@@ -121,6 +121,9 @@ namespace Json {
         /// If isParserAvailable(ParserBackend::SimdJson), will return a valid optional with information on the simdjson
         /// backend.  Otherwise will return an empty optional.
         extern std::optional<const Info> getInfo(); // implemented in Json_Parser.cpp
+        /// If isParserAvailable(ParserBackend::SimdJson), will return a version string e.g. "0.6.0", or the empty
+        /// string otherwise.
+        extern QString versionString();
     }
 
     /// Call this to check and/or force LC_NUMERIC to use decimal points otherwise parsing/serializing may produce

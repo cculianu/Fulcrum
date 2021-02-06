@@ -1028,5 +1028,13 @@ std::optional<const Info> getInfo()
 #endif
     return ret;
 }
+QString versionString()
+{
+    QString ret;
+#if HAVE_SIMDJSON
+    ret = QString("%1.%2.%3").arg(simdjson::SIMDJSON_VERSION_MAJOR).arg(simdjson::SIMDJSON_VERSION_MINOR).arg(simdjson::SIMDJSON_VERSION_REVISION);
+#endif
+    return ret;
+}
 } // namespace SimdJson
 } // namespace Json

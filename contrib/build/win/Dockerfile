@@ -31,6 +31,12 @@ RUN \
     make --jobs=$NPROC JOBS=$NPROC MXE_TARGETS='x86_64-w64-mingw32.static' qtbase && \
     ln -s /opt/mxe/usr/bin/x86_64-w64-mingw32.static-qmake-qt5 /usr/bin/qmake
 
+RUN \
+    echo "💬  \033[1;36mInstalling LibZMQ ...\033[0m" && \
+    cd /opt/mxe && \
+    NPROC=$(($(nproc))) && \
+    make --jobs=$NPROC JOBS=$NPROC MXE_TARGETS='x86_64-w64-mingw32.static' libzmq
+
 # This bit taken from Electron Cash's Windows build Dockerfile -- requires
 # Ubuntu bionic (which is 18.04 LTS). If we decide to upgrade the base Ubuntu
 # tag at the top of this file, then this will just need slight modification.
