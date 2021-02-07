@@ -1,2 +1,4 @@
 #!/bin/sh
 brew link qt --force
+brew install zeromq --force
+brew link zeromq --force

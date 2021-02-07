@@ -14,6 +14,7 @@ BuildRequires: bzip2-devel
 BuildRequires: zlib-devel
 BuildRequires: rocksdb-devel
 BuildRequires: jemalloc-devel
+BuildRequires: zeromq-devel
 
 BuildRequires: pandoc
 
