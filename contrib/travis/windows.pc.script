@@ -1,7 +1,9 @@
 #!/bin/sh
 set -e
 export PATH=/C/tools/msys64/$TARGET_MINGW/bin:$PATH
-qmake -makefile CONFIG+=release DEFINES+=ENABLE_TESTS Fulcrum.pro
+LIBDIR="C:/tools/msys64/$TARGET_MINGW/lib"
+INCDIR="C:/tools/msys64/$TARGET_MINGW/include"
+qmake -makefile CONFIG+=release DEFINES+=ENABLE_TESTS LIBS+="-L${LIBDIR} -lzmq" INCLUDEPATH+="${INCDIR}" Fulcrum.pro
 mingw32-make
 mingw32-make install
 ./release/Fulcrum.exe -v
