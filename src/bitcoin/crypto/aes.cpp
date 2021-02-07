@@ -5,7 +5,6 @@
 #include "aes.h"
 #include "common.h"
 
-#include <cassert>
 #include <cstring>
 
 //extern "C" {
@@ -19,7 +18,7 @@ AES128Encrypt::AES128Encrypt(const uint8_t key[16]) {
 }
 
 AES128Encrypt::~AES128Encrypt() {
-    memset(&ctx, 0, sizeof(ctx));
+    std::memset(&ctx, 0, sizeof(ctx));
 }
 
 void AES128Encrypt::Encrypt(uint8_t ciphertext[16],
@@ -32,7 +31,7 @@ AES128Decrypt::AES128Decrypt(const uint8_t key[16]) {
 }
 
 AES128Decrypt::~AES128Decrypt() {
-    memset(&ctx, 0, sizeof(ctx));
+    std::memset(&ctx, 0, sizeof(ctx));
 }
 
 void AES128Decrypt::Decrypt(uint8_t plaintext[16],
@@ -45,7 +44,7 @@ AES256Encrypt::AES256Encrypt(const uint8_t key[32]) {
 }
 
 AES256Encrypt::~AES256Encrypt() {
-    memset(&ctx, 0, sizeof(ctx));
+    std::memset(&ctx, 0, sizeof(ctx));
 }
 
 void AES256Encrypt::Encrypt(uint8_t ciphertext[16],
@@ -58,7 +57,7 @@ AES256Decrypt::AES256Decrypt(const uint8_t key[32]) {
 }
 
 AES256Decrypt::~AES256Decrypt() {
-    memset(&ctx, 0, sizeof(ctx));
+    std::memset(&ctx, 0, sizeof(ctx));
 }
 
 void AES256Decrypt::Decrypt(uint8_t plaintext[16],
@@ -77,14 +76,14 @@ static int CBCEncrypt(const T &enc, const uint8_t iv[AES_BLOCKSIZE],
 
     if (!pad && padsize != 0) return 0;
 
-    memcpy(mixed, iv, AES_BLOCKSIZE);
+    std::memcpy(mixed, iv, AES_BLOCKSIZE);
 
     // Write all but the last block
     while (written + AES_BLOCKSIZE <= size) {
         for (int i = 0; i != AES_BLOCKSIZE; i++)
             mixed[i] ^= *data++;
         enc.Encrypt(out + written, mixed);
-        memcpy(mixed, out + written, AES_BLOCKSIZE);
+        std::memcpy(mixed, out + written, AES_BLOCKSIZE);
         written += AES_BLOCKSIZE;
     }
     if (pad) {
@@ -144,7 +143,7 @@ AES256CBCEncrypt::AES256CBCEncrypt(const uint8_t key[AES256_KEYSIZE],
                                    const uint8_t ivIn[AES_BLOCKSIZE],
                                    bool padIn)
     : enc(key), pad(padIn) {
-    memcpy(iv, ivIn, AES_BLOCKSIZE);
+    std::memcpy(iv, ivIn, AES_BLOCKSIZE);
 }
 
 int AES256CBCEncrypt::Encrypt(const uint8_t *data, int size,
@@ -153,14 +152,14 @@ int AES256CBCEncrypt::Encrypt(const uint8_t *data, int size,
 }
 
 AES256CBCEncrypt::~AES256CBCEncrypt() {
-    memset(iv, 0, sizeof(iv));
+    std::memset(iv, 0, sizeof(iv));
 }
 
 AES256CBCDecrypt::AES256CBCDecrypt(const uint8_t key[AES256_KEYSIZE],
                                    const uint8_t ivIn[AES_BLOCKSIZE],
                                    bool padIn)
     : dec(key), pad(padIn) {
-    memcpy(iv, ivIn, AES_BLOCKSIZE);
+    std::memcpy(iv, ivIn, AES_BLOCKSIZE);
 }
 
 int AES256CBCDecrypt::Decrypt(const uint8_t *data, int size,
@@ -169,18 +168,18 @@ int AES256CBCDecrypt::Decrypt(const uint8_t *data, int size,
 }
 
 AES256CBCDecrypt::~AES256CBCDecrypt() {
-    memset(iv, 0, sizeof(iv));
+    std::memset(iv, 0, sizeof(iv));
 }
 
 AES128CBCEncrypt::AES128CBCEncrypt(const uint8_t key[AES128_KEYSIZE],
                                    const uint8_t ivIn[AES_BLOCKSIZE],
                                    bool padIn)
     : enc(key), pad(padIn) {
-    memcpy(iv, ivIn, AES_BLOCKSIZE);
+    std::memcpy(iv, ivIn, AES_BLOCKSIZE);
 }
 
 AES128CBCEncrypt::~AES128CBCEncrypt() {
-    memset(iv, 0, AES_BLOCKSIZE);
+    std::memset(iv, 0, AES_BLOCKSIZE);
 }
 
 int AES128CBCEncrypt::Encrypt(const uint8_t *data, int size,
@@ -192,11 +191,11 @@ AES128CBCDecrypt::AES128CBCDecrypt(const uint8_t key[AES128_KEYSIZE],
                                    const uint8_t ivIn[AES_BLOCKSIZE],
                                    bool padIn)
     : dec(key), pad(padIn) {
-    memcpy(iv, ivIn, AES_BLOCKSIZE);
+    std::memcpy(iv, ivIn, AES_BLOCKSIZE);
 }
 
 AES128CBCDecrypt::~AES128CBCDecrypt() {
-    memset(iv, 0, AES_BLOCKSIZE);
+    std::memset(iv, 0, AES_BLOCKSIZE);
 }
 
 int AES128CBCDecrypt::Decrypt(const uint8_t *data, int size,

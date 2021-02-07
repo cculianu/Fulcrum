@@ -10,7 +10,6 @@
 #include "prevector.h"
 
 #include <algorithm>
-#include <cassert>
 #include <cstdint>
 #include <cstring>
 #include <ios>

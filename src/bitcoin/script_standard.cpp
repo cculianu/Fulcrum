@@ -29,7 +29,7 @@
 
 namespace bitcoin {
 
-typedef std::vector<uint8_t> valtype;
+using valtype = std::vector<uint8_t>;
 
 bool fAcceptDatacarrier = DEFAULT_ACCEPT_DATACARRIER;
 

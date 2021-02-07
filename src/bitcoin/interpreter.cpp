@@ -16,6 +16,8 @@
 #include "sigencoding.h"
 #include "uint256.h"
 
+#include <cassert>
+
 #ifdef __clang__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wold-style-cast"

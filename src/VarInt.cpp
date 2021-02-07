@@ -84,7 +84,7 @@ void doTest(int n = 200)
             const VarInt vi = val;
             hex = vi.hex();
             const Int val2 = vi.value<Int>();
-            Log() << "Value: " << val <<  " hex: " << vi.hex() << " deserialized: " << val2 << " byteLen: " << vi.bytes().length();
+            Trace() << "Value: " << val <<  " hex: " << vi.hex() << " deserialized: " << val2 << " byteLen: " << vi.bytes().length();
             if (val != val2)
                 throw std::runtime_error("Ser/deser mistmatch!");
             int expectedLen = 1;

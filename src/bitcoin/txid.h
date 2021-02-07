@@ -17,6 +17,7 @@ namespace bitcoin {
 struct TxId : public uint256 {
     explicit constexpr TxId() noexcept : uint256() {}
     explicit constexpr TxId(const uint256 &b) noexcept : uint256(b) {}
+    explicit constexpr TxId(Uninitialized_t u) noexcept : uint256(u) {}
 };
 
 /**
@@ -25,6 +26,7 @@ struct TxId : public uint256 {
 struct TxHash : public uint256 {
     explicit constexpr TxHash() noexcept : uint256() {}
     explicit constexpr TxHash(const uint256 &b) noexcept : uint256(b) {}
+    explicit constexpr TxHash(Uninitialized_t u) noexcept : uint256(u) {}
 };
 
 } // end namespace bitcoin

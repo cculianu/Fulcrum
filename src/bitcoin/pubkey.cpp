@@ -12,6 +12,8 @@
 
 #include "pubkey.h"
 
+#include <cassert>
+
 #ifndef DISABLE_SECP256K1
 #include "secp256k1/secp256k1.h"
 #include "secp256k1/secp256k1_recovery.h"

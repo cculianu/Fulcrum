@@ -9,6 +9,8 @@
 #include "amount.h"
 #include "tinyformat.h"
 
+#include <cassert>
+
 namespace bitcoin {
 CFeeRate::CFeeRate(const Amount nFeePaid, size_t nBytes_) {
     assert(nBytes_ <= uint64_t(std::numeric_limits<int64_t>::max()));

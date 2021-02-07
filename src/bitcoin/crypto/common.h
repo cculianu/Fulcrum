@@ -22,73 +22,73 @@
 #endif
 
 namespace bitcoin {
-static inline uint16_t ReadLE16(const uint8_t *ptr) {
+inline uint16_t ReadLE16(const uint8_t *ptr) noexcept {
     uint16_t x;
-    memcpy((char *)&x, ptr, 2);
+    std::memcpy((char *)&x, ptr, 2);
     return le16toh(x);
 }
 
-static inline uint32_t ReadLE32(const uint8_t *ptr) {
+inline uint32_t ReadLE32(const uint8_t *ptr) noexcept {
     uint32_t x;
-    memcpy((char *)&x, ptr, 4);
+    std::memcpy((char *)&x, ptr, 4);
     return le32toh(x);
 }
 
-static inline uint64_t ReadLE64(const uint8_t *ptr) {
+inline uint64_t ReadLE64(const uint8_t *ptr) noexcept {
     uint64_t x;
-    memcpy((char *)&x, ptr, 8);
+    std::memcpy((char *)&x, ptr, 8);
     return le64toh(x);
 }
 
-static inline void WriteLE16(uint8_t *ptr, uint16_t x) {
+inline void WriteLE16(uint8_t *ptr, uint16_t x) noexcept {
     uint16_t v = htole16(x);
-    memcpy(ptr, (char *)&v, 2);
+    std::memcpy(ptr, (char *)&v, 2);
 }
 
-static inline void WriteLE32(uint8_t *ptr, uint32_t x) {
+inline void WriteLE32(uint8_t *ptr, uint32_t x) noexcept {
     uint32_t v = htole32(x);
-    memcpy(ptr, (char *)&v, 4);
+    std::memcpy(ptr, (char *)&v, 4);
 }
 
-static inline void WriteLE64(uint8_t *ptr, uint64_t x) {
+inline void WriteLE64(uint8_t *ptr, uint64_t x) noexcept {
     uint64_t v = htole64(x);
-    memcpy(ptr, (char *)&v, 8);
+    std::memcpy(ptr, (char *)&v, 8);
 }
 
-static inline uint32_t ReadBE32(const uint8_t *ptr) {
+inline uint32_t ReadBE32(const uint8_t *ptr) noexcept {
     uint32_t x;
-    memcpy((char *)&x, ptr, 4);
+    std::memcpy((char *)&x, ptr, 4);
     return be32toh(x);
 }
 
-static inline uint64_t ReadBE64(const uint8_t *ptr) {
+inline uint64_t ReadBE64(const uint8_t *ptr) noexcept {
     uint64_t x;
-    memcpy((char *)&x, ptr, 8);
+    std::memcpy((char *)&x, ptr, 8);
     return be64toh(x);
 }
 
-static inline void WriteBE32(uint8_t *ptr, uint32_t x) {
+inline void WriteBE32(uint8_t *ptr, uint32_t x) noexcept {
     uint32_t v = htobe32(x);
-    memcpy(ptr, (char *)&v, 4);
+    std::memcpy(ptr, (char *)&v, 4);
 }
 
-static inline void WriteBE64(uint8_t *ptr, uint64_t x) {
+inline void WriteBE64(uint8_t *ptr, uint64_t x) noexcept {
     uint64_t v = htobe64(x);
-    memcpy(ptr, (char *)&v, 8);
+    std::memcpy(ptr, (char *)&v, 8);
 }
 
 /**
  * Return the smallest number n such that (x >> n) == 0 (or 64 if the highest
  * bit in x is set.
  */
-uint64_t static inline CountBits(uint64_t x) {
+inline uint64_t CountBits(uint64_t x) noexcept {
 #ifdef HAVE_DECL___BUILTIN_CLZL
-    if (sizeof(unsigned long) >= sizeof(uint64_t)) {
+    if constexpr (sizeof(unsigned long) >= sizeof(uint64_t)) {
         return x ? 8 * sizeof(unsigned long) - __builtin_clzl(x) : 0;
     }
 #endif
 #ifdef HAVE_DECL___BUILTIN_CLZLL
-    if (sizeof(unsigned long long) >= sizeof(uint64_t)) {
+    if constexpr (sizeof(unsigned long long) >= sizeof(uint64_t)) {
         return x ? 8 * sizeof(unsigned long long) - __builtin_clzll(x) : 0;
     }
 #endif

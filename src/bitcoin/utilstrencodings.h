@@ -43,12 +43,12 @@ std::string SanitizeString(const std::string &str,
                            int rule = SAFE_CHARS_DEFAULT);
 std::vector<uint8_t> ParseHex(const char *psz);
 std::vector<uint8_t> ParseHex(const std::string &str);
-signed char HexDigit(char c);
+signed char HexDigit(char c) noexcept;
 /**
  * Returns true if each character in str is a hex character, and has an even
  * number of hex digits.
  */
-bool IsHex(const std::string &str);
+bool IsHex(const std::string &str) noexcept;
 /**
  * Return true if the string is a hex number, optionally prefixed with "0x"
  */

@@ -493,7 +493,7 @@ void App::parseArgs()
         allOptions.push_back({
             "test",
             QString("Run a test and exit. This option may be specified multiple times. Specify \"all\" to run all tests."
-                    " Available tests: \"%1\"").arg(tests.join("\", \"")),
+                    " Available tests: \"%1\"\n").arg(tests.join("\", \"")),
             QString("test")
         });
     }
@@ -503,7 +503,7 @@ void App::parseArgs()
         allOptions.push_back({
             "bench",
             QString("Run a benchmark and exit. This option may be specified multiple times. Specify \"all\" to run all benchmarks."
-                    " Available benchmarks: \"%1\"").arg(benches.join("\", \"")),
+                    " Available benchmarks: \"%1\"\n").arg(benches.join("\", \"")),
             QString("benchmark")
         });
     }
@@ -522,8 +522,21 @@ void App::parseArgs()
     // those immediately exit the app if they do run.
     try {
         int setCtr = 0;
+        auto handleDebugPrtOpts = [&] {
+            // custom hack used only for test/bench mode to enable/disable debug output in test mode from CLI args
+            static std::once_flag once;
+            std::call_once(once, [&] {
+                if (auto found = parser.optionNames(); const auto dbgct = (found.count("d") + found.count("debug"))) {
+                    if (dbgct) options->verboseDebug = true;
+                    if (dbgct > 1) options->verboseTrace = true;
+                } else if (found.count("q") || found.count("quiet")) {
+                    options->verboseDebug = options->verboseTrace = false;
+                }
+            });
+        };
         if (haveTests && parser.isSet("test")) {
             ++setCtr;
+            handleDebugPrtOpts();
             auto vals = parser.values("test");
             if (vals.length() == 1 && vals.front() == "all") {
                 // special keyword "all" means run all tests
@@ -541,6 +554,7 @@ void App::parseArgs()
         }
         if (haveBenches && parser.isSet("bench")) {
             ++setCtr;
+            handleDebugPrtOpts();
             auto vals = parser.values("bench");
             if (vals.length() == 1 && vals.front() == "all") {
                 // special keyword "all" means run all benchmarks
@@ -1487,7 +1501,7 @@ void App::registerTestBenchCommon(const char *fname, const char *brief, NameFunc
         return;
     }
     if (!map) map = std::make_unique<NameFuncMap>(); // construct the map the first time through
-    const auto & [_, inserted] = map->insert({name, func});
+    const auto & [it, inserted] = map->insert({name, func});
     if (!inserted)
         Error() << fname << ": ignoring duplicate " << brief << " \"" << name << "\"";
 }
