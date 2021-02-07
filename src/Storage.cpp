@@ -626,8 +626,11 @@ extern const char* rocksdb_build_git_sha; // internal to rocksdb lib -- if this 
 /* static */
 QString Storage::rocksdbVersion()
 {
-    return QString("%1.%2.%3-%4").arg(ROCKSDB_MAJOR).arg(ROCKSDB_MINOR).arg(ROCKSDB_PATCH)
-            .arg(QString(rocksdb_build_git_sha).split(':').back().left(7));
+    QString sha(rocksdb_build_git_sha);
+    // rocksdb git commit sha: try and pop off the front part, and keep the rest and take the first 7 characters of that
+    if (auto l = sha.split(':'); l.size() == 2) // must match what we expect otherwise don't truncate
+        sha = l.back().left(7);
+    return QString("%1.%2.%3-%4").arg(ROCKSDB_MAJOR).arg(ROCKSDB_MINOR).arg(ROCKSDB_PATCH).arg(sha);
 }
 
 void Storage::startup()
