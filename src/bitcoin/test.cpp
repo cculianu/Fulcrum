@@ -560,7 +560,7 @@ namespace {
             Hasher(h).Write((uint8_t *)&in[0], in.size()).Finalize(&hash[0]);
             BOOST_CHECK(hash == out);
         }
-        for (int i = 0; i < 32; i++) {
+        for (int i = 0; i < 32; ++i) {
             // Test that writing the string broken up in random pieces works.
             Hasher hasher(h);
             size_t pos = 0;
@@ -602,13 +602,11 @@ namespace {
         };
         auto TestHMACSHA256 = [](const std::string &hexkey, const std::string &hexin, const std::string &hexout) {
             std::vector<uint8_t> key = ParseHex(hexkey);
-            TestVector(CHMAC_SHA256(key.data(), key.size()), ParseHex(hexin),
-                       ParseHex(hexout));
+            TestVector(CHMAC_SHA256(key.data(), key.size()), ParseHex(hexin), ParseHex(hexout));
         };
         auto TestHMACSHA512 = [](const std::string &hexkey, const std::string &hexin, const std::string &hexout) {
             std::vector<uint8_t> key = ParseHex(hexkey);
-            TestVector(CHMAC_SHA512(key.data(), key.size()), ParseHex(hexin),
-                       ParseHex(hexout));
+            TestVector(CHMAC_SHA512(key.data(), key.size()), ParseHex(hexin), ParseHex(hexout));
         };
         auto TestAES128 = [](const std::string &hexkey, const std::string &hexin, const std::string &hexout) {
             std::vector<uint8_t> key = ParseHex(hexkey);
@@ -675,17 +673,15 @@ namespace {
             for (std::vector<uint8_t>::iterator i(in.begin()); i != in.end(); ++i) {
                 std::vector<uint8_t> sub(i, in.end());
                 std::vector<uint8_t> subout(sub.size() + AES_BLOCKSIZE);
-                int _size = enc.Encrypt(sub.data(), sub.size(), subout.data());
-                if (_size != 0) {
-                    subout.resize(_size);
+                int size_ = enc.Encrypt(sub.data(), sub.size(), subout.data());
+                if (size_ != 0) {
+                    subout.resize(size_);
                     std::vector<uint8_t> subdecrypted(subout.size());
-                    _size =
-                        dec.Decrypt(subout.data(), subout.size(), subdecrypted.data());
-                    subdecrypted.resize(_size);
+                    size_ = dec.Decrypt(subout.data(), subout.size(), subdecrypted.data());
+                    subdecrypted.resize(size_);
                     BOOST_CHECK(decrypted.size() == in.size());
-                    BOOST_CHECK_MESSAGE(subdecrypted == sub, HexStr(subdecrypted) +
-                                                                 std::string(" != ") +
-                                                                 HexStr(sub));
+                    BOOST_CHECK_MESSAGE(subdecrypted == sub,
+                                        HexStr(subdecrypted) + std::string(" != ") + HexStr(sub));
                 }
             }
         };
@@ -719,17 +715,15 @@ namespace {
             for (std::vector<uint8_t>::iterator i(in.begin()); i != in.end(); ++i) {
                 std::vector<uint8_t> sub(i, in.end());
                 std::vector<uint8_t> subout(sub.size() + AES_BLOCKSIZE);
-                int _size = enc.Encrypt(sub.data(), sub.size(), subout.data());
-                if (_size != 0) {
-                    subout.resize(_size);
+                int size_ = enc.Encrypt(sub.data(), sub.size(), subout.data());
+                if (size_ != 0) {
+                    subout.resize(size_);
                     std::vector<uint8_t> subdecrypted(subout.size());
-                    _size =
-                        dec.Decrypt(subout.data(), subout.size(), subdecrypted.data());
-                    subdecrypted.resize(_size);
+                    size_ = dec.Decrypt(subout.data(), subout.size(), subdecrypted.data());
+                    subdecrypted.resize(size_);
                     BOOST_CHECK(decrypted.size() == in.size());
-                    BOOST_CHECK_MESSAGE(subdecrypted == sub, HexStr(subdecrypted) +
-                                                                 std::string(" != ") +
-                                                                 HexStr(sub));
+                    BOOST_CHECK_MESSAGE(subdecrypted == sub,
+                                        HexStr(subdecrypted) + std::string(" != ") + HexStr(sub));
                 }
             }
         };
@@ -1189,7 +1183,7 @@ namespace {
                         BOOST_CHECK_EQUAL(CountBits(j), i);
                     }
                 } else {
-                    for (int k = 0; k < 1000; k++) {
+                    for (int k = 0; k < 1000; ++k) {
                         // Randomly test 1000 samples of each length above 10 bits.
                         uint64_t j = uint64_t(1) << (i - 1) | InsecureRandBits(i - 1);
                         BOOST_CHECK_EQUAL(CountBits(j), i);
@@ -1209,7 +1203,7 @@ namespace {
                     CHash256().Write(in + 64 * j, 64).Finalize(out1 + 32 * j);
                 }
                 SHA256D64(out2, in, i);
-                BOOST_CHECK(memcmp(out1, out2, 32 * i) == 0);
+                BOOST_CHECK(std::memcmp(out1, out2, 32 * i) == 0);
             }
         };
 
