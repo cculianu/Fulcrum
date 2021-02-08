@@ -38,6 +38,7 @@
 
 
 struct ZmqSubNotifier::Pvt {
+    ~Pvt();
     std::thread thr;
     zmq::context_t ctx;
 
@@ -48,6 +49,8 @@ struct ZmqSubNotifier::Pvt {
     QByteArray procAddress() const { return QString::asprintf("inproc://%lx%x", static_cast<long>(reinterpret_cast<std::size_t>(this)), salt).toLatin1(); }
 };
 
+ZmqSubNotifier::Pvt::~Pvt() { DebugM(__PRETTY_FUNCTION__); }
+
 bool ZmqSubNotifier::isAvailable() { return true; }
 bool ZmqSubNotifier::start(const QString &addr, const QString &topic, long retryMsec) {
     if (isRunning()) return false;
@@ -56,9 +59,19 @@ bool ZmqSubNotifier::start(const QString &addr, const QString &topic, long retry
     auto promise = std::make_unique<std::promise<bool>>();
     auto fut = promise->get_future();
     retryMsec = retryMsec <= 0 ? -1 /* forever */ : retryMsec;
-    p->thr = std::thread([this, addr = addr.toLatin1(), topic = topic.toLatin1(), retryMsec](std::unique_ptr<std::promise<bool>> promise) {
+    p->thr = std::thread([this, addr = addr.toLatin1(), topic = topic.toLatin1(), retryMsec, oname = objectName()](auto promise) {
+        if (auto *qthr = QThread::currentThread(); qthr) {
+            const QString name = oname.isEmpty() ? "ZMQ" : oname;
+            // set thread name for debug print
+            if (UNLIKELY(qthr->thread() != qthr)) {
+                // this should never happen, but we guard against thread-unsafe access here...
+                Warning() << name << " subordinate thread does not \"live\" in itself, applying workaround to set thread name ...";
+                Util::AsyncOnObject(qthr, [name, qthr] { qthr->setObjectName(name); });
+            } else
+                qthr->setObjectName(name);
+        }
         std::size_t nMsgs = 0, nBytes = 0;
-        Debug() << "ZMQ: thread started for addr: " << addr << " topic: " << topic << " (procaddress: " << p->procAddress() << ")";
+        Debug() << "thread started for addr: " << addr << " topic: " << topic << " (procaddress: " << p->procAddress() << ")";
         try {
             p->interruptSock.bind(p->procAddress());
             zmq::socket_t socket;
@@ -79,7 +92,7 @@ bool ZmqSubNotifier::start(const QString &addr, const QString &topic, long retry
                     { socket, 0, ZMQ_POLLIN|ZMQ_POLLERR, 0 },
                     { p->interruptSock, 0, ZMQ_POLLIN, 0 },
                 };
-                const int nready = zmq::poll(pitems, std::size(pitems), promise ? 1L : retryMsec);
+                const int nready = zmq::poll(pitems, std::size(pitems), promise ? 0L : retryMsec);
                 if (promise) {
                     if (nready < 0)
                         // we throw here to break out of this code and tell client code that first poll failed
@@ -92,34 +105,35 @@ bool ZmqSubNotifier::start(const QString &addr, const QString &topic, long retry
                 }
                 if (nready < 0) {
                     const auto err = getZmqError();
-                    Warning() << "ZMQ: " << err;
+                    Warning() << err;
                     emit errored(err);
                     reconnect();
                     continue;
                 } else if (nready == 0) {
-                    Debug() << "ZMQ: No data, reconnecting socket after " << retryMsec << " msec timeout ...";
+                    Debug() << "Idle timeout elapsed (" << QString::number(retryMsec / 1e3, 'f', 1)
+                            << " sec), reconnecting socket ...";
                     reconnect();
                     continue;
                 }
                 if (pitems[1].revents & ZMQ_POLLIN) {
                     // exit requested
-                    Debug() << "ZMQ: received thread exit request, breaking out of loop ...";
+                    Debug() << "received thread exit request, breaking out of loop ...";
                     break;
                 }
                 if (pitems[0].revents & ZMQ_POLLERR) { // I could never get this branch to be taken; left in for completeness...
                     // Sadly, this never triggers (even if connection lost) -- hence the need for the retry mechanism
                     const auto err = "got pollerr from socket";
-                    Warning() << "ZMQ: " << err;
+                    Warning() << err;
                     emit errored(err);
                     reconnect();
                     continue;
                 }
                 if (!(pitems[0].revents & ZMQ_POLLIN)) {
                     // spurious wakeup?
-                    Debug() << "ZMQ: spurious wakeup ...";
+                    Debug() << "spurious wakeup ...";
                     if (++spuriousCt >= 5) {
                         const auto err = "exceeded spurious wakeup limit";
-                        Warning() << "ZMQ: " << err;
+                        Warning() << err;
                         emit errored(err);
                         reconnect();
                     }
@@ -129,26 +143,31 @@ bool ZmqSubNotifier::start(const QString &addr, const QString &topic, long retry
                 ++nMsgs;
                 QByteArrayList parts;
                 bool keepgoing = true;
+                std::size_t nBytesNow = 0;
                 for (zmq::message_t msg; keepgoing && socket.recv(msg, zmq::recv_flags::dontwait); keepgoing = msg.more()) {
                     parts.append(QByteArray(msg.data<const char>(), int(msg.size())));
-                    nBytes += msg.size();
-                    TraceM("ZMQ: Got message part ", parts.size(), " of size ", msg.size());
+                    nBytesNow += msg.size();
+                    TraceM("Got message part ", parts.size(), " of size ", msg.size());
                 }
-                if (!parts.empty())
+                nBytes += nBytesNow;
+                if (!parts.empty()) {
+                    DebugM("topic: \"", topic, "\", parts: ", parts.size(), ", bytes: ", nBytesNow);
                     emit gotMessage(topic, parts);
+                }
             }
         } catch (const std::exception &e) {
-            Debug() << "ZMQ: thread caught exception: " << e.what();
+            Debug() << "thread caught exception: " << e.what();
             emit errored(e.what());
         }
 
-        Debug() << "ZMQ: thead exiting after processing " << nMsgs << " msgs, " << nBytes << " bytes ...";
+        Debug() << "thread exiting after processing " << nMsgs << " msgs, " << nBytes << " bytes ...";
         if (promise)
             // if promise is still valid, it indicates an error condition, set false
             promise->set_value(false);
     }, std::move(promise));
     bool ret = false;
-    if (constexpr auto timeoutSecs = 5; fut.wait_for(std::chrono::seconds(timeoutSecs)) != std::future_status::ready) {
+    if (constexpr auto timeoutSecs = 20; fut.wait_for(std::chrono::seconds(timeoutSecs)) != std::future_status::ready) {
+        // shuld never happen
         Fatal() << "ZMQ: Failed to start thread in " << timeoutSecs << " seconds!";
     } else if (!(ret = fut.get())) {
         stop();
@@ -170,7 +189,8 @@ void ZmqSubNotifier::stop() {
             Debug() << "ZMQ: Joining thread ...";
             p->thr.join();
         } catch (const std::exception &e) {
-            Fatal() << "ZMQL Exception joining thread: " << e.what();
+            // should never happen
+            Fatal() << "ZMQ: Exception joining thread: " << e.what();
             return;
         }
     }
@@ -199,4 +219,4 @@ ZmqSubNotifier::ZmqSubNotifier(QObject *parent)
     : QObject(parent)
 {}
 
-ZmqSubNotifier::~ZmqSubNotifier() { stop(); }
+ZmqSubNotifier::~ZmqSubNotifier() { stop(); DebugM(__func__); }

@@ -35,6 +35,7 @@
 #include <vector>
 
 class CtlTask;
+class ZmqSubNotifier;
 
 class Controller : public Mgr, public ThreadObjectMixin, public TimersByNameMixin, public ProcessAgainMixin
 {
@@ -107,6 +108,10 @@ protected slots:
     /// we may end up aborting the app and logging an error in this slot.
     void on_bitcoinCoreDetection(bool); //< NB: Connected via DirectConnection an may run in the BitcoinDMgr thread!
 
+    /// Called from the poll timer to restart the state machine and get latest blocks and mempool (process());
+    /// Also called if we received a zmq hashblock notification
+    void on_Poll();
+
 private:
     friend class CtlTask;
     /// \brief newTask - Create a specific task using this template factory function. The task will be auto-started the
@@ -156,6 +161,9 @@ private:
     /// notifies subscribed clients (if any).
     std::atomic_bool masterNotifySubsFlag = false;
 
+    /// Permanently latched to true after the first time we start the ZMQ notifier (to suppress logging for subsequent re-starts)
+    bool zmqHashBlockDidLogStartup = false;
+
     /// Comes from DB. If DB had no entry (newly initialized DB), then we update this variable whe we first connect
     /// to the BitcoinD.  We look for "/Satoshi..." in the useragen to set BTC, otherwise everything else is BCH.
     std::atomic<BTC::Coin> coinType = BTC::Coin::Unknown;
@@ -165,6 +173,19 @@ private:
 
     /// If --dump-sh was specified on CLI, this will execute at startup() time right after storage has been loaded. May throw.
     void dumpScriptHashes(const QString &fileName) const;
+
+    /// Will be nullptr if zmq disabled or bitcoind lacks a "hashblock" endpoint
+    std::unique_ptr<ZmqSubNotifier> zmqHashBlockNotifier;
+    /// Populated from bitcoindmgr's zmqNotificationsChanged signal. If empty, remote has no hashblock notifications
+    /// advertised in `getzmqnotifications`
+    QString lastKnownZmqHashBlockAddr;
+    /// (re)starts listening for notifications from the zmqHashBlockNotifier; called if we received a valid zmq address
+    /// from BitcoinDMgr, after servers are started.
+    void zmqHashBlockStart();
+private slots:
+    /// Stops the zmqHashBlockNotifier; called if we received an empty hashblock endpoint address from BitcoinDMgr or
+    /// when all connections to bitcoind are lost
+    void zmqHashBlockStop();
 };
 
 /// Abstract base class for our private internal tasks. Concrete implementations are in Controller.cpp.

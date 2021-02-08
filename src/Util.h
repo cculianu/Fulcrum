@@ -905,6 +905,12 @@ namespace Util {
     /// POSIX RLIMIT_NOFILE limit from the soft limit to the hard limit.
     MaxOpenFilesResult raiseMaxOpenFilesToHardLimit();
 
+    /// Parses a <host>:<port> or <ip>:<port> pair and returns the parsed data. Throws BadArgs if data is bad such as
+    /// the port being non-numeric or out of range.
+    ///
+    /// If allowImplicitLoopback=true then "<port>" by itself is interpreted as "127.0.0.1:<port>"
+    QPair<QString, quint16> ParseHostPortPair(const QString &hostColonPort, bool allowImplicitLoopback = false);
+
 } // end namespace Util
 
 /// Kind of like Go's "defer" statement. Call a lambda (for clean-up code) at scope end.

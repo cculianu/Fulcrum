@@ -18,8 +18,11 @@
 //
 
 #include "BitcoinD.h"
+#include "ZmqSubNotifier.h"
+
 #include "bitcoin/rpc/protocol.h"
 
+#include <QHostAddress>
 #include <QHostInfo>
 #include <QMetaType>
 #include <QPointer>
@@ -188,7 +191,7 @@ BitcoinD *BitcoinDMgr::getBitcoinD()
 
 namespace {
     struct BitcoinDVersionParseResult {
-        bool isBchd, isCore;
+        bool isBchd{}, isCore{}, isBU{};
         Version version;
     };
 
@@ -210,11 +213,12 @@ namespace {
             if (!version.isValid())
                 // hmm.. subversion isn't "/bchd:x.y.z.../" -> fall back to unpacking the integer value (only works on newer bchd)
                 version = Version::BitcoinDCompact(val);
-            return {true, false, version};
+            return {true, false, false, version};
         } else {
             const bool isCore = subversion.startsWith("/Satoshi:");
-            // regular bitcoind, "version" is reliable
-            return {false, isCore, Version::BitcoinDCompact(val)};
+            const bool isBU = subversion.startsWith("/BCH Unlimited:");
+            // regular bitcoind, "version" is reliable and always the same format
+            return {false, isCore, isBU, Version::BitcoinDCompact(val)};
         }
     }
 }
@@ -224,37 +228,37 @@ void BitcoinDMgr::refreshBitcoinDNetworkInfo()
     submitRequest(this, newId(), "getnetworkinfo", QVariantList{},
         // success
         [this](const RPC::Message & reply) {
-            bool isBchd{}, isCore{};
+            BitcoinDVersionParseResult res;
+            bool lacksGetZmqNotifications{};
             {
                 const QVariantMap networkInfo = reply.result().toMap();
                 // --- EXCLUSIVE-LOCKED SCOPE below this line ---
                 std::unique_lock g(bitcoinDInfoLock);
                 bitcoinDInfo.subversion = networkInfo.value("subversion", "").toString();
-                // try and determine version major/minor/revision
-                std::tie(bitcoinDInfo.isBchd, bitcoinDInfo.isCore) = [&networkInfo, this] {
+                // try and determine version major/minor/revision, and write result to 'res'
+                res = [](const auto &subversion, const auto &networkInfo) -> BitcoinDVersionParseResult {
                     bool ok = false;
                     const auto val = networkInfo.value("version", 0).toUInt(&ok);
 
                     if (ok) {
-                        const auto res = parseBitcoindDVersion(val, bitcoinDInfo.subversion);
-                        bitcoinDInfo.version = res.version;
-                        DebugM("Refreshed version info from bitcoind, version: ", bitcoinDInfo.version.toString(true),
-                               ", subversion: ", bitcoinDInfo.subversion);
-                        return std::pair{res.isBchd, res.isCore};
+                        const auto res = parseBitcoindDVersion(val, subversion);
+                        DebugM("Refreshed version info from bitcoind, version: ", res.version.toString(true),
+                               ", subversion: ", subversion);
+                        return res;
                     } else {
-                        bitcoinDInfo.version = Version();
                         Warning() << "Failed to parse version info from bitcoind";
+                        return {};
                     }
-                    return std::pair{false, false};
-                }();
-                isBchd = bitcoinDInfo.isBchd;
-                isCore = bitcoinDInfo.isCore;
+                }(bitcoinDInfo.subversion, networkInfo);
+                // assign to shared object now from stack object BitcoinDVersionParseResult
+                std::tie(bitcoinDInfo.isBchd, bitcoinDInfo.isCore, bitcoinDInfo.isBU, bitcoinDInfo.version)
+                    = std::tie(res.isBchd, res.isCore, res.isBU, res.version);
                 bitcoinDInfo.relayFee = networkInfo.value("relayfee", 0.0).toDouble();
                 bitcoinDInfo.warnings = networkInfo.value("warnings", "").toString();
                 // set quirk flags: requires 0 arg `estimatefee`?
-                static const auto isZeroArgEstimateFee = [](const Version &version, const QString &subversion) -> bool {
+                auto isZeroArgEstimateFee = [](const Version &version, const QString &subversion) -> bool {
                     static const QString zeroArgSubversionPrefixes[] = { "/Bitcoin ABC", "/Bitcoin Cash Node", };
-                    static const Version minVersion{0, 20, 2};
+                    constexpr Version minVersion{0, 20, 2};
                     if (version < minVersion)
                         return false;
                     for (const auto & prefix : zeroArgSubversionPrefixes)
@@ -262,14 +266,28 @@ void BitcoinDMgr::refreshBitcoinDNetworkInfo()
                             return true;
                     return false;
                 };
-                bitcoinDInfo.isZeroArgEstimateFee = !isCore && isZeroArgEstimateFee(bitcoinDInfo.version, bitcoinDInfo.subversion);
+                bitcoinDInfo.isZeroArgEstimateFee = !res.isCore && isZeroArgEstimateFee(bitcoinDInfo.version, bitcoinDInfo.subversion);
+                // Implementations known to lack `getzmqnotifications`:
+                // - bchd (all versions)
+                // - BU before version 1.9.1.0
+                bitcoinDInfo.lacksGetZmqNotifications
+                    = lacksGetZmqNotifications
+                    = res.isBchd || (res.isBU && res.version < Version{1, 9, 1});
             } // end lock scope
             // be sure to announce whether remote bitcoind is bitcoin core (this determines whether we use segwit or not)
-            emit bitcoinCoreDetection(isCore);
+            emit bitcoinCoreDetection(res.isCore);
             // next, be sure to set up the ping time appropriately for bchd vs bitcoind
-            resetPingTimers(int(isBchd ? PingTimes::BCHD : PingTimes::Normal));
+            resetPingTimers(int(res.isBchd ? PingTimes::BCHD : PingTimes::Normal));
             // next up, do this query
             refreshBitcoinDGenesisHash();
+            // and also this one, if we were compiled with libzmq and remote bitcoind may have `getzmqnotifications`
+            if (ZmqSubNotifier::isAvailable()) {
+                if (lacksGetZmqNotifications) {
+                    DebugM("remote bitcoind lacks RPC method: getzmqnotifications");
+                    setZmqNotifications({}); // clear it -- tells client code no zmq
+                } else
+                    refreshBitcoinDZmqNotifications(); // query since we think bitcoind maybe has the RPC method
+            }
         },
         // error
         [](const RPC::Message &msg) {
@@ -330,6 +348,75 @@ void BitcoinDMgr::refreshBitcoinDGenesisHash()
     );
 }
 
+// this is only ever called if we are compiled with zmq support
+void BitcoinDMgr::refreshBitcoinDZmqNotifications()
+{
+    submitRequest(this, newId(), "getzmqnotifications", {},
+        // success
+        [this](const RPC::Message & reply) {
+            BitcoinDZmqNotifications zmqs;
+            bool badFormat = !reply.result().canConvert<QVariantList>();
+            for (const auto &var : reply.result().toList()) {
+                const auto obj = var.toMap();
+                QString type, addr;
+                if (obj.isEmpty() || (type = obj.value("type").toString()).isEmpty() || (addr = obj.value("address").toString()).isEmpty()) {
+                    badFormat = true;
+                    continue;
+                }
+                DebugM("getzmqnotifications: got type: ", type, " address: ", addr);
+                if (type.startsWith("pub")) {
+                    // rewrite e.g. "pubhashblock" -> "hashblock"
+                    const QString type2 = type.mid(3);
+                    DebugM("getzmqnotifications: rewriting ", type, " -> ", type2);
+                    type = type2;
+                } else
+                    Warning() << "getzmqnotifications: unknown zmq notification type \"" << type << "\"";
+                if (addr.startsWith("tcp://")) {
+                    const QString hostPortPart = addr.mid(6).split("/").front(); // in case there are trailing slashes?
+                    try {
+                        auto [host, port] = Util::ParseHostPortPair(hostPortPart);
+                        // rewrite IPADDR_ANY -> what we think the remote bitcoind is
+                        if (host == QHostAddress(QHostAddress::AnyIPv4).toString() || host == QHostAddress(QHostAddress::AnyIPv6).toString()) {
+                            DebugM("getzmqnotifications: rewriting ", host, " -> ", this->hostName);
+                            host = this->hostName;
+                        }
+                        addr = QString("tcp://%1:%2").arg(host, QString::number(port));
+                    } catch (const std::exception &e) {
+                        Error() << "failed to parse zmq notification address: " << addr << " (" << e.what() << ")";
+                        badFormat = true;
+                        continue; // skip this one -- it will likely confuse libzmq
+                    }
+                } else {
+                    Warning() << "getzmqnotifications: unknown endpoint protocol " << addr << " for type " << type;
+                    badFormat = true;
+                    continue; // skip this one -- it will likely confuse libzmq
+                }
+
+                // if we get here, safe to add to our map
+                zmqs.insert(type, addr);
+            }
+            if (badFormat)
+                Error() << "getzmqnotifications: query to bitcoind returned a result in an unexpected format";
+            setZmqNotifications(zmqs);
+        },
+        // error
+        [this](const RPC::Message &msg) {
+            // TODO: offer up a conf file and/or CLI arg for bchd users and other bitcoind users that want
+            // to force zmq querying off if these warnings bother them.
+            Warning() << "getzmqnotifications query to bitcoind failed, code: " << msg.errorCode() << ", error: "
+                      << msg.errorMessage();
+            setZmqNotifications({}); // clear current, if any
+            std::unique_lock g(bitcoinDInfoLock);
+            bitcoinDInfo.lacksGetZmqNotifications = true; // flag that we think remote lacks this RPC
+        },
+        // failure
+        [this](const RPC::Message::Id &, const QString &reason) {
+            Error() << "getzmqnotifications failed: " << reason;
+            setZmqNotifications({}); // clear current, if any
+        }
+    );
+}
+
 BitcoinDInfo BitcoinDMgr::getBitcoinDInfo() const
 {
     std::shared_lock g(bitcoinDInfoLock);
@@ -359,6 +446,27 @@ BlockHash BitcoinDMgr::getBitcoinDGenesisHash() const
     std::shared_lock g(bitcoinDGenesisHashLock);
     return bitcoinDGenesisHash;
 }
+
+BitcoinDZmqNotifications BitcoinDMgr::getBitcoinDZmqNotifications() const
+{
+    std::shared_lock g(bitcoinDInfoLock);
+    return bitcoinDInfo.zmqNotifications;
+}
+
+void BitcoinDMgr::setZmqNotifications(const BitcoinDZmqNotifications &zmqs)
+{
+    bool changed = false;
+    {
+        std::unique_lock g(bitcoinDInfoLock);
+        if (setZmqNotificationsWasNeverCalled || zmqs != bitcoinDInfo.zmqNotifications) {
+            bitcoinDInfo.zmqNotifications = zmqs;
+            changed = true;
+            setZmqNotificationsWasNeverCalled = false;
+        }
+    }
+    if (changed) emit zmqNotificationsChanged(zmqs);
+}
+
 
 /// This is safe to call from any thread. Internally it dispatches messages to this obejct's thread.
 /// Does not throw. Results/Error/Fail functions are called in the context of the `sender` thread.
@@ -713,5 +821,10 @@ QVariantMap BitcoinDInfo::toVariandMap() const
     ret["isZeroArgEstimateFee"] = isZeroArgEstimateFee;
     ret["isBchd"] = isBchd;
     ret["isCore"] = isCore;
+    ret["lacksGetZmqNotifications"] = lacksGetZmqNotifications;
+    QVariantList zmqs;
+    for (auto it = zmqNotifications.begin(); it != zmqNotifications.end(); ++it)
+        zmqs.push_back(QVariantList{it.key(), it.value()});
+    ret["zmqNotifications"] = zmqs;
     return ret;
 }

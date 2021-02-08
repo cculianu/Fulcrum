@@ -663,32 +663,9 @@ void App::parseArgs()
         else if (conf.values(l).count() > 1)
             throw BadArgs(QString("This option cannot be specified multiple times in the config file: %1").arg(l));
     }
-    static const auto parseHostnamePortPair = [](const QString &s, bool allowImplicitLoopback = false) -> QPair<QString, quint16> {
-        constexpr auto parsePort = [](const QString & portStr) -> quint16 {
-            bool ok;
-            quint16 port = portStr.toUShort(&ok);
-            if (!ok || port == 0)
-                throw BadArgs(QString("Bad port: %1").arg(portStr));
-            return port;
-        };
-        auto toks = s.split(":");
-        constexpr const char *msg1 = "Malformed host:port spec. Please specify a string of the form <host>:<port>";
-        if (const auto len = toks.length(); len < 2) {
-            if (allowImplicitLoopback && len == 1)
-                // this option allows bare port number with the implicit ipv4 127.0.0.1 -- try that (may throw if bad port number)
-                return QPair<QString, quint16>{QHostAddress(QHostAddress::LocalHost).toString(), parsePort(toks.front())};
-            throw BadArgs(msg1);
-        }
-        QString portStr = toks.last();
-        toks.removeLast(); // pop off port
-        QString hostStr = toks.join(':'); // rejoin on ':' in case it was IPv6 which is full of colons
-        if (hostStr.isEmpty())
-            throw BadArgs(msg1);
-        return {hostStr, parsePort(portStr)};
-    };
     const auto parseInterface = [&options = options](const QString &s, bool allowImplicitLoopback = false,
                                                      bool allowHostNameLookup = false) -> Options::Interface {
-        const auto pair = parseHostnamePortPair(s, allowImplicitLoopback);
+        const auto pair = Util::ParseHostPortPair(s, allowImplicitLoopback);
         const auto & hostStr = pair.first;
         const auto port = pair.second;
         QHostAddress h(hostStr);
@@ -741,7 +718,7 @@ void App::parseArgs()
     }
 
     // parse bitcoind - conf.value is always unset if parser.value is set, hence this strange constrcution below (parser.value takes precedence)
-    options->bitcoind = parseHostnamePortPair(conf.value("bitcoind", parser.value("b")));
+    options->bitcoind = Util::ParseHostPortPair(conf.value("bitcoind", parser.value("b")));
     // --bitcoind-tls
     if ((options->bitcoindUsesTls = parser.isSet("bitcoind-tls") || conf.boolValue("bitcoind-tls"))) {
         // check that Qt actually supports SSL since we now know that we require it to proceed

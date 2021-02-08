@@ -25,8 +25,10 @@
 #include "SubsMgr.h"
 #include "ThreadPool.h"
 #include "TXO.h"
+#include "ZmqSubNotifier.h"
 
 #include "bitcoin/amount.h"
+#include "bitcoin/crypto/common.h"  // ReadLE32
 #include "bitcoin/transaction.h"
 #include "robin_hood/robin_hood.h"
 
@@ -107,6 +109,7 @@ void Controller::startup()
         conns += connect(bitcoindmgr.get(), &BitcoinDMgr::bitcoinCoreDetection, this, &Controller::on_bitcoinCoreDetection,
                          /* NOTE --> */ Qt::DirectConnection);
         conns += connect(bitcoindmgr.get(), &BitcoinDMgr::allConnectionsLost, this, waitForBitcoinD);
+        conns += connect(bitcoindmgr.get(), &BitcoinDMgr::allConnectionsLost, this, &Controller::zmqHashBlockStop); // stop zmq unconditionally
         conns += connect(bitcoindmgr.get(), &BitcoinDMgr::gotFirstGoodConnection, this, [this](quint64 id) {
             // connection to kick off our 'process' method once the first auth is received
             if (lostConn) {
@@ -114,8 +117,33 @@ void Controller::startup()
                 stopTimer(waitTimer);
                 DebugM("Auth recvd from bicoind with id: ", id, ", proceeding with processing ...");
                 callOnTimerSoonNoRepeat(smallDelay, callProcessTimer, [this]{process();}, true);
+
+                // also (re)start the zmq notifier if we had one before and bitcoind came back (but only if we are
+                // "ready" and able to serve connections)
+                if (!lastKnownZmqHashBlockAddr.isEmpty() && srvmgr)
+                    zmqHashBlockStart();
             }
         });
+
+        conns += connect(bitcoindmgr.get(), &BitcoinDMgr::zmqNotificationsChanged, this, [this](BitcoinDZmqNotifications zmqs) {
+            // NB: this only fires if ZmqSubNotifier::isAvailable() == true
+            if (!(lastKnownZmqHashBlockAddr = zmqs.value("hashblock")).isEmpty()) {
+                DebugM("\"hashblock\" topic address: ", lastKnownZmqHashBlockAddr);
+                // We only start the ZMQ notifier once we are "ready" and the servers are started
+                // (see also one of the upToDate triggered slots below)
+                if (srvmgr) {
+                    // maybe restart if it was running (to apply new address)
+                    if (zmqHashBlockNotifier && zmqHashBlockNotifier->isRunning()) {
+                        DebugM("applying new hashblock address to already-running zmq notifier");
+                    }
+                    zmqHashBlockStart(); // may re-start existing notifier, or create a new one if none exists
+                }
+            } else {
+                // bitcoind lacks the "hashblock" endpoint -- stop existing hashblock notifier, if it exists
+                zmqHashBlockStop();
+            }
+        });
+
         conns += connect(bitcoindmgr.get(), &BitcoinDMgr::inWarmUp, this, [last = -1.0](const QString &msg) mutable {
             // just print a message to the log as to why we keep dropping conn. -- if bitcoind is still warming up
             auto now = Util::getTimeSecs();
@@ -158,6 +186,11 @@ void Controller::startup()
 
             // connect the header subscribe signal
             conns += connect(this, &Controller::newHeader, srvmgr.get(), &SrvMgr::newHeader);
+
+            // If BitcoinDMgr told us about a ZMQ hashblock notification address, start the ZMQ notifier
+            // (this does not happen if no ZMQ enabled at compile-time)
+            if (!lastKnownZmqHashBlockAddr.isEmpty())
+                zmqHashBlockStart();
         }
     }, Qt::QueuedConnection);
 
@@ -282,6 +315,7 @@ void Controller::cleanup()
     stopFlag = true;
     stop();
     tasks.clear(); // deletes all tasks asap
+    if (zmqHashBlockNotifier) { Log("Stopping ZMQ notifier ..."); zmqHashBlockNotifier.reset(); }
     if (srvmgr) { Log("Stopping SrvMgr ... "); srvmgr->cleanup(); srvmgr.reset(); }
     if (bitcoindmgr) { Log("Stopping BitcoinDMgr ... "); bitcoindmgr->cleanup(); bitcoindmgr.reset(); }
     if (storage) { Log("Closing storage ..."); storage->cleanup(); storage.reset(); }
@@ -1261,7 +1295,12 @@ void Controller::process(bool beSilentIfUpToDate)
     }
 
     if (enablePollTimer)
-        callOnTimerSoonNoRepeat(polltimeout, pollTimerName, [this]{if (!sm) process(true);});
+        callOnTimerSoonNoRepeat(polltimeout, pollTimerName, [this]{ on_Poll(); });
+}
+
+void Controller::on_Poll()
+{
+    if (!sm) process(true);
 }
 
 // runs in our thread as the slot for putBlock
@@ -1535,6 +1574,12 @@ auto Controller::stats() const -> Stats
         }
         Util::updateMap(m, QVariantMap{{"tasks" , l}});
     }
+    { // ZMQ
+        QVariantMap m2;
+        if (zmqHashBlockNotifier && zmqHashBlockNotifier->isRunning())
+            m2["hashblock"] = lastKnownZmqHashBlockAddr;
+        m["ZMQ Notifiers (active)"] = m2;
+    }
     st["Controller"] = m;
     st["Storage"] = storage->statsSafe();
     QVariantMap misc;
@@ -1639,6 +1684,62 @@ std::tuple<size_t, size_t, size_t> Controller::nTxInOutSoFar() const
         }
     }
     return {nTx, nIn, nOut};
+}
+
+void Controller::zmqHashBlockStart()
+{
+    if (!ZmqSubNotifier::isAvailable()) {
+        DebugM(__func__, ": zmq unavailable, ignoring start request");
+        zmqHashBlockNotifier.reset(); // ensure it's dead -- should never be alive in this case (indicates a bug).
+        return;
+    }
+    if (!zmqHashBlockNotifier) {
+        // first time through, create a new notifier
+        zmqHashBlockNotifier = std::make_unique<ZmqSubNotifier>(this);
+        zmqHashBlockNotifier->setObjectName("ZMQ Notifier (hashblock)");
+        // connect signals
+        conns += connect(zmqHashBlockNotifier.get(), &ZmqSubNotifier::errored, this, [](const QString &errMsg){
+            Warning() << "zmqHashBlockNotifier: " << errMsg;
+        });
+        conns += connect(zmqHashBlockNotifier.get(), &ZmqSubNotifier::gotMessage, this, [this](const QString &topic, const QByteArrayList &parts) {
+            if (Debug::isEnabled()) {
+                Debug d;
+                d << "got zmq " << topic << " notification: ";
+                int i = 0;
+                for (const auto & part : parts) {
+                    if (i++) d << ", ";
+                    if (i == 1) // topic string
+                        d << QString(part);
+                    else if (i == 3) // sequence number (little endian)
+                        d << bitcoin::ReadLE32(reinterpret_cast<const uint8_t *>(part.constData()));
+                    else // block hash (binary, big endian byte order)
+                        d << QString(Util::ToHexFast(part));
+                 }
+            }
+            // notify (may end up calling this->process())
+            on_Poll();
+        });
+    }
+    if (zmqHashBlockNotifier->isRunning())
+        zmqHashBlockNotifier->stop();
+    if (lastKnownZmqHashBlockAddr.isEmpty()) {
+        DebugM(__func__, ": zmq hashblock address is empty, ignoring start request");
+        return;
+    }
+    if (!zmqHashBlockDidLogStartup) {
+        zmqHashBlockDidLogStartup = true;
+        Log() << "Starting " << zmqHashBlockNotifier->objectName() << " ...";
+    }
+    if (!zmqHashBlockNotifier->start(lastKnownZmqHashBlockAddr, "hashblock", 30 * 60 * 1000 /* idle timeout: 30 mins in msecs */)) {
+        Warning() << __func__ << ": start failed";
+    }
+}
+
+void Controller::zmqHashBlockStop()
+{
+    if (!zmqHashBlockNotifier || !zmqHashBlockNotifier->isRunning())
+        return;
+    zmqHashBlockNotifier->stop();
 }
 
 // --- Debug dump support

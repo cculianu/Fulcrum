@@ -26,6 +26,7 @@
 
 #include <QHash>
 #include <QHostAddress>
+#include <QMultiHash>
 #include <QVariantMap>
 
 #include <atomic>
@@ -37,6 +38,8 @@
 class BitcoinD;
 namespace BitcoinDMgrHelper { class ReqCtxObj; }
 
+using BitcoinDZmqNotifications = QMultiHash<QString, QString>; ///< "topic"-> "endpoint" e.g. "hashblock" -> "tcp://192.168.0.2:8333"
+
 /// This basically all comes from bitcoind RPC `getnetworkinfo`
 struct BitcoinDInfo {
     Version version {0,0,0}; ///> major, minor, revision e.g. {0, 20, 6} for v0.20.6
@@ -46,6 +49,15 @@ struct BitcoinDInfo {
     bool isBchd = false; ///< true if remote bitcoind subversion is: /bchd:...
     bool isZeroArgEstimateFee = false; ///< true if remote bitcoind expects 0 argument "estimatefee" RPC.
     bool isCore = false; ///< true if we are actually connected to /Satoshi.. node (Bitcoin Core)
+    bool isBU = false; ///< true if subversion string starts with "/BCH Unlimited:"
+    bool lacksGetZmqNotifications = false; ///< true if bchd or BU < 1.9.1.0, or if we got an RPC error the last time we queried
+
+    /// The below field is populated from bitcoind RPC `getzmqnotifications` (if supported and if we are compiled to
+    /// use libzmq).  Note that entires in here are auto-transformed by BitcoinDMgr such that:
+    ///     {"pubhashblock" : "tcp://0.0.0.0:8433"} -> { "hashblock" : "tcp://192.68.10.4:8433" }
+    /// In other words, the topic has the "pub" prefix chopped off, and the 0.0.0.0 IP that bitcoind reports
+    /// gets automatically transformed to the IP or hostname that we know we can use to connect to bitcoind.
+    BitcoinDZmqNotifications zmqNotifications;
 
     /// Return all the information in this obejct as a QVariantMap suitable for placing into JSON results, etc (used by /stats and `getinfo`)
     QVariantMap toVariandMap() const;
@@ -105,11 +117,14 @@ public:
     /// Thread-safe.  Convenient method to avoid an extra copy. Returns getBitcoinDInfo().isZeroArgEstimateFee
     bool isZeroArgEstimateFee() const;
 
-    /// Thread-safe.  Convenient method to avoid an extra copy. Returns getBitcoinDInfio().isCore
+    /// Thread-safe.  Convenient method to avoid an extra copy. Returns getBitcoinDInfo().isCore
     bool isBitcoinCore() const;
 
-    /// Thread-safe.  Convenient method to avoid an extra copy. Returns getBitcoinDInfio().version
+    /// Thread-safe.  Convenient method to avoid an extra copy. Returns getBitcoinDInfo().version
     Version getBitcoinDVersion() const;
+
+    /// Thread-safe.  Convenient method to avoid an extra copy. Returns getBitcoinDInfo().zmqNotifications
+    BitcoinDZmqNotifications getBitcoinDZmqNotifications() const;
 
 signals:
     void gotFirstGoodConnection(quint64 bitcoindId); // emitted whenever the first bitcoind after a "down" state (or after startup) gets its first good status (after successful authentication)
@@ -121,6 +136,10 @@ signals:
     /// Emitted as soon as we read the bitcoind subversion. If it starts with /Satoshi:.., we emit this
     /// with true, Otherwise, we emit it with false.
     void bitcoinCoreDetection(bool);
+
+    /// Emitted whenever the BitcoinDZmqNotifications change (this is also emitted the first time we retrieve them
+    /// via getzmqnotifications). Note: this is never emitted if we are compiled without zmq support.
+    void zmqNotificationsChanged(BitcoinDZmqNotifications);
 
 protected:
     Stats stats() const override; // from Mgr
@@ -161,6 +180,9 @@ private:
     /// called whenever bitcoind comes back alive, updates bitcoinDGenesisHash
     void refreshBitcoinDGenesisHash();
 
+    /// called whenever bitcoind comes back alive, updates bitcoinDInfo.zmqNotifications (only called if we are compiled with zmq support)
+    void refreshBitcoinDZmqNotifications();
+
     /// Calls resetPingTimer on each BitcionD -- used by quirk fixup code since bchd vs bitcoind require different
     /// pingtimes
     void resetPingTimers(int timeout_ms);
@@ -180,6 +202,12 @@ private:
     void requestTimeoutChecker();
     /// Called from lostConnection() and destroyed() on a BitcoinD in order to notify all extant requests of the failure
     void notifyFailForRequestsMatchingBitcoinD(const BitcoinD *bd, const QString &errorMessage);
+
+    /// Thread-safe. Called internally when a new map retrieved from bitcoind. If the map changed, zmqNotificationsChanged will be emitted.
+    void setZmqNotifications(const BitcoinDZmqNotifications &);
+    /// Latched to false after the first time setZmqNotifications() is called.
+    /// Used to unconditionally emit the signal the first time through, even if we got an empty map.
+    bool setZmqNotificationsWasNeverCalled = true;
 };
 
 class BitcoinD : public RPC::HttpConnection, public ThreadObjectMixin /* NB: also inherits TimersByNameMixin via AbstractConnection base */

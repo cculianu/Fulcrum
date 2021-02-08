@@ -507,6 +507,31 @@ namespace Util {
 #endif
     }
 
+    QPair<QString, quint16> ParseHostPortPair(const QString &s, bool allowImplicitLoopback)
+    {
+        constexpr auto parsePort = [](const QString & portStr) -> quint16 {
+            bool ok;
+            quint16 port = portStr.toUShort(&ok);
+            if (!ok || port == 0)
+                throw BadArgs(QString("Bad port: %1").arg(portStr));
+            return port;
+        };
+        auto toks = s.split(":");
+        constexpr const char *msg1 = "Malformed host:port spec. Please specify a string of the form <host>:<port>";
+        if (const auto len = toks.length(); len < 2) {
+            if (allowImplicitLoopback && len == 1)
+                // this option allows bare port number with the implicit ipv4 127.0.0.1 -- try that (may throw if bad port number)
+                return QPair<QString, quint16>{QHostAddress(QHostAddress::LocalHost).toString(), parsePort(toks.front())};
+            throw BadArgs(msg1);
+        }
+        QString portStr = toks.last();
+        toks.removeLast(); // pop off port
+        QString hostStr = toks.join(':'); // rejoin on ':' in case it was IPv6 which is full of colons
+        if (hostStr.isEmpty())
+            throw BadArgs(msg1);
+        return {hostStr, parsePort(portStr)};
+    }
+
 } // end namespace Util
 
 Log::Log() {}

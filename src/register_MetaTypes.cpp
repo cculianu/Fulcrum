@@ -18,6 +18,7 @@
 //
 #include "App.h"
 #include "BlockProc.h"
+#include "BitcoinD.h"
 #include "BTC.h"
 #include "BTC_Address.h"
 #include "Controller.h"
@@ -50,6 +51,8 @@ void App::register_MetaTypes()
         qRegisterMetaType<PeerInfoList>("PeerInfoList");
 
         qRegisterMetaType<BTC::Address>();
+
+        qRegisterMetaType<BitcoinDZmqNotifications>("BitcoinDZmqNotifications");
 
         registered = true;
     }
