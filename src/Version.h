@@ -46,23 +46,34 @@ struct Version
     constexpr Version(unsigned maj, unsigned min, unsigned rev) noexcept
         : major(maj), minor(min), revision(rev) {}
 
-    enum CompactType { BitcoinD/*, BCHD */};
+    /// used for c'tor that deserializes Bitcoin compact "version" field (CLIENT_VERSION)
+    enum BitcoinDCompact : unsigned {};
     /// To explicitly construct an instance from the version number returned by bitcoind's getnetworkinfo RPC call
-    /// e.g.: 200600 becomes -> 0.20.6
-    explicit Version(unsigned compactVersion, CompactType);
+    /// e.g.: 200600 becomes -> 0.20.6. Possible usage syntax: Version v = Version::BitcoinDCompact(num);
+    Version(BitcoinDCompact) noexcept;
+
+    // unused
+    //enum BCHDCompact : uint32_t {};
+    //Version(BCHDCompact) noexcept;
+
     /// Accepts e.g. "1.0" or "v1.7". Note that strings like "3.1.1.1" or "3.1.1CS" become "3,1,1"
     /// (extra stuff at the end is ignored).  An initial 'v' or 'V' character is also ok and simply ignored.
     /// Also note: If the string contains a '/' character, everything *after* the first '/' is parsed!
     Version(const QString & versionString);
 
+    /// Returns the bitcoind compact representation (aka bitcoind CLIENT_VERSION representation).
+    /// This is the inverse of the BitcoinDCompact c'tor. Note this can't store minor or revision fields >= 100.
+    unsigned toCompact() const noexcept;
+
     /// back to e.g. "1.2.3".  Note that 1.0.0 is returned as simply "1.0" even if originally parsed from "1.0.0",
     /// unless alwaysIncludeRevEvenIfZero = true.
     QString toString(bool alwaysIncludeRevEvenIfZero = false) const;
 
-    constexpr bool isValid() const { return major || minor || revision; }
-    constexpr bool operator==(const Version & o) const { return std::tie(major, minor, revision) == std::tie(o.major, o.minor, o.revision); }
-    constexpr bool operator<(const Version & o) const { return std::tie(major, minor, revision) < std::tie(o.major, o.minor, o.revision); }
-    constexpr bool operator<=(const Version & o) const { return *this < o || *this == o; }
-    constexpr bool operator>(const Version & o) const { return !(*this <= o); }
-    constexpr bool operator>=(const Version & o) const { return !(*this < o); }
+    constexpr bool isValid() const noexcept { return major || minor || revision; }
+    constexpr bool operator==(const Version & o) const noexcept { return std::tie(major, minor, revision) == std::tie(o.major, o.minor, o.revision); }
+    constexpr bool operator<(const Version & o) const noexcept { return std::tie(major, minor, revision) < std::tie(o.major, o.minor, o.revision); }
+    constexpr bool operator!=(const Version & o) const noexcept { return !(*this == o); }
+    constexpr bool operator<=(const Version & o) const noexcept { return *this < o || *this == o; }
+    constexpr bool operator>(const Version & o) const noexcept { return !(*this <= o); }
+    constexpr bool operator>=(const Version & o) const noexcept { return !(*this < o); }
 };

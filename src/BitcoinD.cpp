@@ -209,12 +209,12 @@ namespace {
             }
             if (!version.isValid())
                 // hmm.. subversion isn't "/bchd:x.y.z.../" -> fall back to unpacking the integer value (only works on newer bchd)
-                version = Version(val, Version::BitcoinD);
+                version = Version::BitcoinDCompact(val);
             return {true, false, version};
         } else {
             const bool isCore = subversion.startsWith("/Satoshi:");
             // regular bitcoind, "version" is reliable
-            return {false, isCore, Version(val, Version::BitcoinD)};
+            return {false, isCore, Version::BitcoinDCompact(val)};
         }
     }
 }
