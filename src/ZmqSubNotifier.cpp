@@ -17,14 +17,13 @@
 // <https://www.gnu.org/licenses/>.
 //
 
+#include "Util.h"
 #include "ZmqSubNotifier.h"
 
 #if defined(ENABLE_ZMQ)
 // real implementation
 #define ZMQ_CPP11
 #include "zmq/zmq.hpp"
-
-#include "Util.h"
 
 #include <QRandomGenerator>
 

@@ -8,7 +8,7 @@ RUN apt-get update -y && \
     add-apt-repository ppa:beineri/opt-qt-5.13.2-bionic && \
     apt-get update -y && \
     apt-get install -y qt513base openssl && \
-    apt-get install -y git build-essential zlib1g-dev libbz2-dev libjemalloc-dev libjemalloc1 libzmq3-dev && \
+    apt-get install -y git build-essential pkg-config zlib1g-dev libbz2-dev libjemalloc-dev libjemalloc1 libzmq3-dev && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
