@@ -21,6 +21,7 @@
 
 #include <QString>
 
+#include <cstdint>
 #include <tuple> // for std::tie
 
 /* On some Linux setups, sys/sysmacros.h ends up here and clashes with these names. */
@@ -47,13 +48,13 @@ struct Version
         : major(maj), minor(min), revision(rev) {}
 
     /// used for c'tor that deserializes Bitcoin compact "version" field (CLIENT_VERSION)
-    enum BitcoinDCompact : unsigned {};
+    enum class BitcoinDCompact : std::uint32_t {};
     /// To explicitly construct an instance from the version number returned by bitcoind's getnetworkinfo RPC call
     /// e.g.: 200600 becomes -> 0.20.6. Possible usage syntax: Version v = Version::BitcoinDCompact(num);
     Version(BitcoinDCompact) noexcept;
 
     // unused
-    //enum BCHDCompact : uint32_t {};
+    //enum class BCHDCompact : std::uint32_t {};
     //Version(BCHDCompact) noexcept;
 
     /// Accepts e.g. "1.0" or "v1.7". Note that strings like "3.1.1.1" or "3.1.1CS" become "3,1,1"
