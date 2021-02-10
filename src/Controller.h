@@ -28,6 +28,7 @@
 
 #include <atomic>
 #include <memory>
+#include <optional>
 #include <tuple>
 #include <shared_mutex>
 #include <type_traits>
@@ -96,6 +97,11 @@ protected:
     Stats stats() const override; // from StatsMixin
     Stats debug(const StatsParams &) const override; // from StatsMixin
 
+    /// Called from the poll timer to restart the state machine and get latest blocks and mempool (process());
+    /// Also called if we received a zmq hashblock notification (in which case it will be called with the valid
+    /// header hash, already in big endian byte order).
+    void on_Poll(std::optional<QByteArray> zmqBlockHash = std::nullopt);
+
 protected slots:
     void process(bool beSilentIfUpToDate); ///< generic callback to advance state
     void process() override { process(false); } ///< from ProcessAgainMixin
@@ -107,10 +113,6 @@ protected slots:
     /// Slot for the BitcoinDMgr::bitcoinCoreDetection. This is compared to coinIsBTC and if there is a mismatch there,
     /// we may end up aborting the app and logging an error in this slot.
     void on_bitcoinCoreDetection(bool); //< NB: Connected via DirectConnection an may run in the BitcoinDMgr thread!
-
-    /// Called from the poll timer to restart the state machine and get latest blocks and mempool (process());
-    /// Also called if we received a zmq hashblock notification
-    void on_Poll();
 
 private:
     friend class CtlTask;

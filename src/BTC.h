@@ -127,13 +127,13 @@ namespace BTC
     /// Helper -- returns the size of a block header. Should always be 80. Update this if that changes.
     constexpr int GetBlockHeaderSize() noexcept { return 80; }
 
-    /// Returns the sha256 double hash (not reveresed) of the input QByteArray. The results are copied once from the
-    /// hasher into the returned QByteArray.  This is faster than obtaining a uint256 from bitcoin::Hash then converting
-    /// to a QByteArray manually.
+    /// Returns the sha256 double hash (not reveresed -- little endian) of the input QByteArray. The results are copied
+    /// once from the hasher into the returned QByteArray.  This is faster than obtaining a uint256 from bitcoin::Hash
+    /// then converting to a QByteArray manually.
     /// Optionally, can hash once (a-la ElectrumX) if once=true
     extern QByteArray Hash(const QByteArray &, bool once = false);
     /// Identical to the above except it returns the REVERSED hash (which is what bitcoind gives you via JSON RPC or
-    /// when doing uint256.ToString()).
+    /// when doing uint256.ToString()). That is, this hash is in big-endian byte order.
     extern QByteArray HashRev(const QByteArray &, bool once = false);
     /// Convenient alias for Hash(b, true)
     inline QByteArray HashOnce(const QByteArray &b) { return Hash(b, true); }

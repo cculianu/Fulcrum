@@ -116,8 +116,8 @@ public:
     /// Implicitly takes a lock to return this. Thread safe. Breakdown of info returned:
     ///   .first - the latest valid height we have synched or -1 if no headers.
     ///   .second - the latest valid chainTip 32-byte sha256 double hash of the header (the chainTip as it's called in
-    ///             bitcoind parlance), in bitcoind REVERSED memory order (that is, ready for json sending/receiving).
-    ///             (Empty if no headers yet).
+    ///             bitcoind parlance), in bitcoind REVERSED memory order (that is, big endian order, ready for json
+    ///             sending/receiving). (Empty if no headers yet).
     std::pair<int, HeaderHash> latestTip(Header *header = nullptr) const;
 
     /// Returns the current block height, or an empty optional if no genesisHash and no blocks;

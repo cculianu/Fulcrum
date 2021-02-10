@@ -1035,6 +1035,9 @@ struct Controller::StateMachine
     /// this pointer should *not* be dereferenced (which is why it's void *), but rather is just used to filter out
     /// old/stale GetChainInfoTask responses in Controller::process()
     void * mostRecentGetChainInfoTask = nullptr;
+
+    /// will be valid and not empty only if a zmq hashblock notification happened while we were running the block & mempool synch task
+    QByteArray mostRecentZmqNotif;
 };
 
 unsigned Controller::downloadTaskRecommendedThrottleTimeMsec(unsigned bnum) const
@@ -1308,6 +1311,16 @@ void Controller::process(bool beSilentIfUpToDate)
         enablePollTimer = true;
         emit synchFailure();
     } else if (sm->state == State::End) {
+        if (!sm->mostRecentZmqNotif.isEmpty()) {
+            if (sm->mostRecentZmqNotif != storage->latestTip().second) {
+                // While we were synching -- a zmq notification happened -- and it told us about a block header that is
+                // not our latest tip. Just to be sure, schedule us to run again immediately.
+                polltimeout = 0;
+                DebugM("zmq hashblock received with a (possibly) new header while we were synching, re-scheduling"
+                       " another bitcoind update immediately ...");
+            } else
+                DebugM("zmq hashblock received while we were synching, however it matches our latest tip, ignoring ...");
+        }
         {
             std::lock_guard g(smLock);
             sm.reset();  // great success!
@@ -1346,9 +1359,12 @@ void Controller::process(bool beSilentIfUpToDate)
         callOnTimerSoonNoRepeat(polltimeout, pollTimerName, [this]{ on_Poll(); });
 }
 
-void Controller::on_Poll()
+void Controller::on_Poll(std::optional<QByteArray> zmqBlockHash)
 {
-    if (!sm) process(true);
+    if (!sm)
+        process(true); // process immediately
+    else if (zmqBlockHash)
+        sm->mostRecentZmqNotif = std::move(*zmqBlockHash); // deferred processing for when current task completes
 }
 
 // runs in our thread as the slot for putBlock
@@ -1749,6 +1765,7 @@ void Controller::zmqHashBlockStart()
             Warning() << "zmqHashBlockNotifier: " << errMsg;
         });
         conns += connect(zmqHashBlockNotifier.get(), &ZmqSubNotifier::gotMessage, this, [this](const QString &topic, const QByteArrayList &parts) {
+            std::optional<QByteArray> optHash;
             if (Debug::isEnabled()) {
                 Debug d;
                 d << "got zmq " << topic << " notification: ";
@@ -1759,12 +1776,21 @@ void Controller::zmqHashBlockStart()
                         d << QString(part);
                     else if (i == 3) // sequence number (little endian)
                         d << bitcoin::ReadLE32(reinterpret_cast<const uint8_t *>(part.constData()));
-                    else // block hash (binary, big endian byte order)
+                    else { // block hash (binary, big endian byte order)
+                        optHash = part;
                         d << QString(Util::ToHexFast(part));
+                    }
                  }
             }
+            if (!optHash && parts.size() >= 2) {
+                const auto &part = parts[1]; // blockhash is second element
+                if (part.size() == 32) // ensure proper format
+                    optHash = part; // this is already in big endian order (which is how we also store them)
+            }
+            if (UNLIKELY(!optHash))
+                Error() << "Unexpected format: got zmq hashblock notification but it is missing the block hash!";
             // notify (may end up calling this->process())
-            on_Poll();
+            on_Poll(std::move(optHash));
         });
     }
     if (zmqHashBlockNotifier->isRunning())
