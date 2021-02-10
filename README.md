@@ -202,6 +202,9 @@ Everything should just work (I use MacOS as my dev machine).
 
 **A:** Yes, I know.  However, Qt is a very robust, cross-platform and fast application framework.  You can use its "Core" library for console apps, servers, etc.  It has great network support and other basic things a programmer needs to get stuff done.
 
+**Q:** Why is the compiled binary called `Fulcrum` (capital `F`) and not `fulcrum` (lowercase `f`) as is customary on Linux/Unix?
+
+**A:** Because I like capiral letters, even on Linux.  I also develop (this and other software) for macOS and Windows and over there the Linux/Unix lowecase thing looks a little out-of-place.  Perhaps my sensibilities have been affected by my win32 and macOS dev work, or perhaps I'm just unconventional.  Embrace the lack of convention here! That being said, if the capital `F` bothers you, feel free to rename it or represent it as `fulcrum` wherever you like.
 
 ---
 
