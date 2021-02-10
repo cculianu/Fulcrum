@@ -201,7 +201,7 @@ public:
 
     std::atomic<double> lastProgress = 0.0;
 
-    const qint64 ts = Util::getTime(); ///< timestamp -- when the task was created
+    const Tic elapsed; ///< to keep track of when the task was created
 
     using ThreadObjectMixin::start;
     using ThreadObjectMixin::stop;

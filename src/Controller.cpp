@@ -29,6 +29,7 @@
 
 #include "bitcoin/amount.h"
 #include "bitcoin/crypto/common.h"  // ReadLE32
+#include "bitcoin/rpc/protocol.h" // for RPC_INVALID_ADDRESS_OR_KEY
 #include "bitcoin/transaction.h"
 #include "robin_hood/robin_hood.h"
 
@@ -40,6 +41,8 @@
 #include <list>
 #include <map>
 #include <mutex>
+#include <optional>
+#include <unordered_set>
 
 
 Controller::Controller(const std::shared_ptr<const Options> &o)
@@ -616,8 +619,10 @@ struct SynchMempoolTask : public CtlTask
     bool isdlingtxs = false;
     Mempool::TxMap txsNeedingDownload, txsWaitingForResponse;
     Mempool::NewTxsMap txsDownloaded;
+    std::unordered_set<TxHash, HashHasher> txsFailedDownload; ///< set of tx's dropped due to RBF and/or mempool pressure as we were downloading
     unsigned expectedNumTxsDownloaded = 0;
     static constexpr int kRedoCtMax = 5; // if we have to retry this many times, error out.
+    static constexpr unsigned kFailedDownloadMax = 50; // if we have more than this many consecutive failures on getrawtransaction, and no successes, abort with error.
     int redoCt = 0;
     const bool TRACE = Trace::isEnabled(); // set this to true to print more debug
     const bool isBTC; ///< initted in c'tor. If true, deserialize tx's using the optional segwit extensons to the tx format.
@@ -627,8 +632,9 @@ struct SynchMempoolTask : public CtlTask
 
     void clear() {
         isdlingtxs = false;
-        txsNeedingDownload.clear(); txsWaitingForResponse.clear(); txsDownloaded.clear();
+        txsNeedingDownload.clear(); txsWaitingForResponse.clear(); txsDownloaded.clear(); txsFailedDownload.clear();
         expectedNumTxsDownloaded = 0;
+        lastProgress = 0.;
         // Note: we don't clear "scriptHashesAffected" intentionally in case we are retrying. We want to accumulate
         // all the droppedTx scripthashes for each retry, so we never clear the set.
         // Note 2: we also never clear the redoCt since that counter needs to maintain state to abort too many redos.
@@ -642,6 +648,9 @@ struct SynchMempoolTask : public CtlTask
     void doGetRawMempool();
     void doDLNextTx();
     void processResults();
+
+    /// Update the lastProgress stat for /stats endpoint
+    void updateLastProgress(std::optional<double> val = std::nullopt);
 };
 
 SynchMempoolTask::~SynchMempoolTask() {
@@ -651,13 +660,25 @@ SynchMempoolTask::~SynchMempoolTask() {
         // where we queued up some notifications and then we died on a retry due to errors from bitcoind)
         storage->subs()->enqueueNotifications(std::move(scriptHashesAffected));
 
+    if (elapsed.secs() >= 1.0) {
+        // if total runtime for task >1s, log for debug
+        DebugM(objectName(), " elapsed total: ", elapsed.secsStr(), " secs");
+    }
+}
+
+void SynchMempoolTask::updateLastProgress(std::optional<double> val)
+{
+    double p;
+    if (val) p = *val;
+    else p = 0.5 * (txsDownloaded.size() + txsFailedDownload.size()) / std::max(double(expectedNumTxsDownloaded), 1.0);
+    lastProgress = std::clamp(p, 0.0, 1.0);
 }
 
 void SynchMempoolTask::redoFromStart()
 {
     clear();
     if (++redoCt > kRedoCtMax) {
-        Error() << "SyncMempoolTask redo count exceeded (" << redoCt << "), aborting task";
+        Error() << "SyncMempoolTask redo count exceeded (" << redoCt << "), aborting task (elapsed: " <<  elapsed.secsStr() << " secs)";
         emit errored();
         return;
     }
@@ -727,16 +748,21 @@ void Controller::printMempoolStatusToLog(size_t newSize, size_t numAddresses, do
 
 void SynchMempoolTask::processResults()
 {
-    if (txsDownloaded.size() != expectedNumTxsDownloaded) {
-        Error() << __PRETTY_FUNCTION__ << ": Expected to downlaod " << expectedNumTxsDownloaded << ", instead got " << txsDownloaded.size() << ". FIXME!";
+    if (const auto total = txsDownloaded.size() + txsFailedDownload.size(); total != expectedNumTxsDownloaded) {
+        Error() << __PRETTY_FUNCTION__ << ": Expected to downlaod " << expectedNumTxsDownloaded << ", instead got "
+                << total << ". FIXME!";
         emit errored();
         return;
+    } else if (total) {
+        DebugM("downloaded ", txsDownloaded.size(), " txs (failed: ", txsFailedDownload.size(), "), elapsed so far: ",
+               elapsed.secsStr(), " secs");
     }
 
     // precache the confirmed spends with the lock held in shared mode, allowing for concurrency during this slow operation
     using ConfirmedSpendCache = std::unordered_map<TXO, std::optional<TXOInfo>>;
     ConfirmedSpendCache cache;
     cache.reserve(128); // reserve a bit of memory so we don't start from 0 and so we don't have to rehash right away
+    updateLastProgress(0.6);
     struct { std::size_t nTxs, nHashXs; } sizes; // save the numeber of txs in mempool to detect if another thread modified mempool
     Tic cachet0;
     {
@@ -765,6 +791,8 @@ void SynchMempoolTask::processResults()
         DebugM("Mempool: pre-cache of ", cache.size(), Util::Pluralize(" confirmed spend", cache.size()),
                " from db took ", cachet0.msecStr(), " msec");
 
+    updateLastProgress(0.75);
+
     // At this point we pre-cached all the confirmed spends (we hope) with the shared lock held. We did this
     // because holding the exclusive lock for all this time while accessing the db would be *very* slow on
     // full mempools the first time we get e.g. 20k txs.  Before we came up with this scheme, we held the
@@ -792,11 +820,13 @@ void SynchMempoolTask::processResults()
             throw InternalError("Warning: Mempool changed in between the time we released the shared lock and "
                                 "re-acquired the lock exclusively.  We will try again later...");
         }
+        updateLastProgress(0.80);
         return mempool.addNewTxs(scriptHashesAffected, txsDownloaded, getFromCache, TRACE); // may throw
     }();
     if ((oldSize != newSize || elapsedMsec > 1e3) && Debug::isEnabled()) {
         Controller::printMempoolStatusToLog(newSize, newNumAddresses, elapsedMsec, true, true);
     }
+    updateLastProgress(1.0);
     emit success();
 }
 
@@ -859,16 +889,34 @@ void SynchMempoolTask::doDLNextTx()
         }
 
         txsWaitingForResponse.erase(tx->hash);
+        updateLastProgress();
         AGAIN();
     },
     [this, hashHex, tx](const RPC::Message &resp) {
-        // Retry on error -- if we fail to retrieve the transaction then it's possible that there was some RBF action
-        // if on BTC, or the tx happened to drop out of mempool for some other reason. We must retry to ensure a
-        // consistent view of bitcoind's mempool.
+        if (resp.errorCode() != bitcoin::RPCErrorCode::RPC_INVALID_ADDRESS_OR_KEY) {
+            // Probably an unknown bitcoind implementation (not: BCHN, BU, or Core); warn here so I get bug reports
+            // about this, hopefully, and we can handle it properly in future versions.
+            Warning() << "Unexpected error code from getrawtransaction: " << resp.errorCode();
+        }
+        // Tolerate missing tx's as we download them -- if we fail to retrieve the transaction then it's possible
+        // that there was some RBF action if on BTC, or the tx happened to drop out of mempool due to mempool pressure.
+        // Since bitcoind doesn't have the tx -- then it and its children will also fail, which is fine. It's as if
+        // it never existed and as if we never got it in the original list from `getrawmempool`!
         const auto *const pre = isBTC ? "Tx dropped out of mempool (possibly due to RBF)" : "Tx dropped out of mempool";
         Warning() << pre << ": " << QString(hashHex) << " (error response: " << resp.errorMessage()
-                  << "), retrying getrawmempool ...";
-        redoFromStart(); // proceed to getrawmempool unless redoCt exceeds kRedoCtMax, in which case errors out
+                  << "), ignoring mempool tx ...";
+        txsFailedDownload.insert(tx->hash);
+        txsWaitingForResponse.erase(tx->hash);
+        if (txsDownloaded.empty() && txsFailedDownload.size() > kFailedDownloadMax) {
+            // Too many failures without any successes. Likely some RPC API issue with bitcoind or a new block arrived
+            // full of double-spends for previous mempool view (unlikely but possible).  Something is very wrong.
+            Warning() << "Too many download failures (" << kFailedDownloadMax << "), aborting task";
+            emit errored();
+            return;
+        }
+        // otherwise, keep going
+        updateLastProgress();
+        AGAIN();
     });
 }
 
@@ -1564,11 +1612,10 @@ auto Controller::stats() const -> Stats
     m["activeTimers"] = activeTimerMapForStats();
     QVariantList l;
     { // task list
-        const auto now = Util::getTime();
         for (const auto & [task, ign] : tasks) {
             Q_UNUSED(ign)
             l.push_back(QVariantMap{{ task->objectName(), QVariantMap{
-                {"age", QString("%1 sec").arg(double((now-task->ts)/1e3))} ,
+                {"age", QString("%1 sec").arg(task->elapsed.secsStr())} ,
                 {"progress" , QString("%1%").arg(QString::number(task->lastProgress*100.0, 'f', 1)) }}
             }});
         }
