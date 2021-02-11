@@ -53,7 +53,7 @@ public:
     /// exception message).
     bool start(const QString &address, const QString &topic, long retryInverval = 0 /* msec */);
 
-    /// If the norifier was running, joins its listener thread and stops the notifier.
+    /// If the notifier was running, joins its listener thread and stops the notifier.
     /// @post Blocks until the zmq listener thread is fully joined. isRunning() is false after this returns.
     void stop();
 
