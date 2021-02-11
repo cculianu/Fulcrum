@@ -29,9 +29,11 @@ GPLv3. See the included `LICENSE.txt` file or [visit gnu.org and read the licens
     - *For **BTC***: Bitcoin Core v0.17.0 or later.  No other full nodes are supported by this software for BTC.
     - The node must have txindex enabled e.g. `txindex=1`.
     - The node must not be a pruning node.
+    - *Optional*: For best results, enable zmq for the "hasblock" topic using e.g. `zmqpubhashblock=tcp://0.0.0.0:8433` in your `bitcoin.conf` file (zmq is only available on: Core, BCHN, or BU 1.9.1+).
   - *Recommended hardware*: Minimum 1GB RAM, 64-bit CPU, ~40GB disk space for mainnet BCH (slightly more for BTC). For best results, use an SSD rather than an HDD.
 - *For compiling*: 
-  - `Qt Core` & `Qt Networking` libraries `5.12.5` or above (I use `5.14.2` myself).  Qt `5.12.4` (or earlier) is not supported.
+  - `Qt Core` & `Qt Networking` libraries `5.12.5` or above (I use `5.15.2` myself).  Qt `5.12.4` (or earlier) is not supported.
+  - *Optional but recommended*: `libzmq 4.x` development headers and library (also known as `libzmq3-dev` on Debian/Ubuntu and `zeromq-devel` on Fedora). Fulcrum will run just fine without linking against `libzmq`, but it will run better if you do link against `libzmq` and also turn on `zmqpubhashblock` notifications in `bitcoind` (zmq is only available on: Core, BCHN, or BU 1.9.1+).
   - A modern, 64-bit `C++17` compiler.  `clang` is recommended but `G++` also works. MSVC on Windows is not supported (please use `MinGW G++` instead, which ships with Qt Open Source Edition for Windows).
 
 ### Quickstart
@@ -55,7 +57,7 @@ You may also build from the CLI (on Linux and MacOS):
 2. `qmake` (to generate the Makefile)
 3. `make -j8`  (replace 8 here with the number of cores on your machine)
 
-**A note for Linux users**: You may have to install the Qt5 networking package separately such as `libqt5network5` (depending on your distribution). You also need `libbz2-dev` otherwise compilation will fail. If you are having trouble finding the required Qt versions, you can try this link: https://launchpad.net/~beineri (for Ubuntu/Debian ppas).
+**A note for Linux users**: You may have to install the Qt5 networking package separately such as `libqt5network5` (depending on your distribution). You also need `libbz2-dev` otherwise compilation will fail. If you are having trouble finding the required Qt versions, you can try this link: https://launchpad.net/~beineri (for Ubuntu/Debian ppas). For best results, you may wish to also ensure you have `pkg-config` and `libzmq` installed (aka `libzmq3-dev` on Debian/Ubuntu, `zeromq-devel` on Fedora).
 
 **A note for Windows users**: `Qt 5.13.2` (or above) with `MinGW G++ 7.x.x` is the compiler/Qt kit you should be using.  MSVC is not supported by this codebase at the present time.
 
@@ -74,6 +76,10 @@ You may optionally build against the **system rocksdb** (Linux only) if your dis
 2. `make clean && make -j8` (replace 8 here with the number of cores on your machine)
 
 **Note**: Some Linux distributions have been known to package `librocksdb.so` incorrectly. [See here for an example](https://bugs.archlinux.org/task/65093), so until I can be confident most distributions do it right, I am considering using the system `librocksdb.so` an ***experimental feature*** for the time being (in principle it should work ok if the library is compiled correctly).
+
+#### Making sure `libzmq` is detected and used (optional but recommended)
+
+Ensure that `libzmq3` (Debian/Ubuntu) and/or `zeromq-devel` (Fedora/Redhat) is installed, and that `pkg-config` is also installed.  If on Unix (macOS, Linux, or Windows MinGW), then ideally the `qmake` step will find `libzmq` on your system and automatically use it. If that is not the case, you may try passing flags to `qmake` such as `LIBS+="-L/path/to/libdir_containting_libzmq -lzmq"` and `INCLUDEPATH+="/path/to/dir_containing_zmq_h"` as arguments when you invoke `qmake`.  Using `libzmq` is optional but highly recommended. If you have trouble getting Fulcrum to compile against your `libzmq`, [open a new issue](https://github.com/cculianu/Fulcrum/issues) and maybe I can help.
 
 ### Building the Windows static `Fulcrum.exe`
 
