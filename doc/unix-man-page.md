@@ -1,6 +1,6 @@
-% FULCRUM(1) Version 1.4.0 | Fulcrum Manual
+% FULCRUM(1) Version 1.4.1 | Fulcrum Manual
 % Fulcrum is written by Calin Culianu (cculianu)
-% December 14, 2020
+% February 11, 2021
 
 # NAME
 
