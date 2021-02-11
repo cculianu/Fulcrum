@@ -1639,8 +1639,12 @@ auto Controller::stats() const -> Stats
     }
     { // ZMQ
         QVariantMap m2;
-        if (zmqHashBlockNotifier && zmqHashBlockNotifier->isRunning())
-            m2["hashblock"] = lastKnownZmqHashBlockAddr;
+        if (zmqHashBlockNotifier && zmqHashBlockNotifier->isRunning()) {
+            QVariantMap m3;
+            m3["address"] = lastKnownZmqHashBlockAddr;
+            m3["notifications"] = zmqHashBlockNotifCt;
+            m2["hashblock"] = m3;
+        }
         m["ZMQ Notifiers (active)"] = m2;
     }
     st["Controller"] = m;
@@ -1789,6 +1793,8 @@ void Controller::zmqHashBlockStart()
             }
             if (UNLIKELY(!optHash))
                 Error() << "Unexpected format: got zmq hashblock notification but it is missing the block hash!";
+            else
+                ++zmqHashBlockNotifCt;
             // notify (may end up calling this->process())
             on_Poll(std::move(optHash));
         });

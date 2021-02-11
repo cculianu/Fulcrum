@@ -163,9 +163,6 @@ private:
     /// notifies subscribed clients (if any).
     std::atomic_bool masterNotifySubsFlag = false;
 
-    /// Permanently latched to true after the first time we start the ZMQ notifier (to suppress logging for subsequent re-starts)
-    bool zmqHashBlockDidLogStartup = false;
-
     /// Comes from DB. If DB had no entry (newly initialized DB), then we update this variable whe we first connect
     /// to the BitcoinD.  We look for "/Satoshi..." in the useragen to set BTC, otherwise everything else is BCH.
     std::atomic<BTC::Coin> coinType = BTC::Coin::Unknown;
@@ -181,6 +178,11 @@ private:
     /// Populated from bitcoindmgr's zmqNotificationsChanged signal. If empty, remote has no hashblock notifications
     /// advertised in `getzmqnotifications`
     QString lastKnownZmqHashBlockAddr;
+    /// Permanently latched to true after the first time we start the ZMQ notifier (to suppress logging for subsequent re-starts)
+    bool zmqHashBlockDidLogStartup = false;
+    /// The number of notifications received from bitcoind via ZMQ total since app start.
+    unsigned zmqHashBlockNotifCt = 0;
+
     /// (re)starts listening for notifications from the zmqHashBlockNotifier; called if we received a valid zmq address
     /// from BitcoinDMgr, after servers are started.
     void zmqHashBlockStart();
