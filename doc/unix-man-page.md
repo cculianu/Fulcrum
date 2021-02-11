@@ -4,7 +4,7 @@
 
 # NAME
 
-**fulcrum** - SPV server for Bitcoin Cash.
+**fulcrum** - SPV server for Bitcoin Cash and Bitcoin BTC.
 
 # SYNOPSIS
 
@@ -17,7 +17,7 @@ DESCRIPTION
 
 
 **NOTE:**
-Electron Cash at this time no longer supports connecting to non-SSL servers, so you should probably configure SSL for production use.
+Electron Cash and/or Electrum at this time no longer support connecting to non-SSL servers, so you should probably configure SSL for production use.
 
 It is recommended you specify a data dir (`-D` via CLI or `datadir-` via config file)
 on an SSD drive for best results.
