@@ -82,21 +82,22 @@ inline void WriteBE64(uint8_t *ptr, uint64_t x) noexcept {
  * bit in x is set.
  */
 inline uint64_t CountBits(uint64_t x) noexcept {
+    if (!x) return 0;
 #ifdef HAVE_DECL___BUILTIN_CLZL
     if constexpr (sizeof(unsigned long) >= sizeof(uint64_t)) {
-        return x ? 8 * sizeof(unsigned long) - __builtin_clzl(x) : 0;
+        return 8 * sizeof(unsigned long) - __builtin_clzl(x);
     }
 #endif
 #ifdef HAVE_DECL___BUILTIN_CLZLL
     if constexpr (sizeof(unsigned long long) >= sizeof(uint64_t)) {
-        return x ? 8 * sizeof(unsigned long long) - __builtin_clzll(x) : 0;
+        return 8 * sizeof(unsigned long long) - __builtin_clzll(x);
     }
 #endif
     int ret = 0;
-    while (x) {
+    do {
         x >>= 1;
         ++ret;
-    }
+    } while (x);
     return ret;
 }
 
