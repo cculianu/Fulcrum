@@ -32,20 +32,20 @@
 namespace bitcoin {
 
 // Maximum number of bytes pushable to the stack
-constexpr unsigned int MAX_SCRIPT_ELEMENT_SIZE = 520;
+inline constexpr unsigned int MAX_SCRIPT_ELEMENT_SIZE = 520;
 
 // Maximum number of non-push operations per script
-constexpr int MAX_OPS_PER_SCRIPT = 201;
+inline constexpr int MAX_OPS_PER_SCRIPT = 201;
 
 // Maximum number of public keys per multisig
-constexpr int MAX_PUBKEYS_PER_MULTISIG = 20;
+inline constexpr int MAX_PUBKEYS_PER_MULTISIG = 20;
 
 // Maximum script length in bytes
-constexpr int MAX_SCRIPT_SIZE = 10000;
+inline constexpr int MAX_SCRIPT_SIZE = 10000;
 
 // Threshold for nLockTime: below this value it is interpreted as block number,
 // otherwise as UNIX timestamp. Thresold is Tue Nov 5 00:53:20 1985 UTC
-constexpr unsigned int LOCKTIME_THRESHOLD = 500000000;
+inline constexpr unsigned int LOCKTIME_THRESHOLD = 500000000;
 
 template <typename T> std::vector<uint8_t> ToByteVector(const T &in) {
     return std::vector<uint8_t>(in.begin(), in.end());
@@ -415,7 +415,7 @@ private:
     int64_t m_value;
 };
 
-typedef prevector<28, uint8_t> CScriptBase;
+using CScriptBase = prevector<28, uint8_t>;
 
 /** Serialized script, used inside transaction inputs and outputs */
 class CScript : public CScriptBase {

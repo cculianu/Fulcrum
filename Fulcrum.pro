@@ -412,6 +412,7 @@ HEADERS += \
     bitcoin/interpreter.h \
     bitcoin/prevector.h \
     bitcoin/pubkey.h \
+    bitcoin/reverse_iterator.h \
     bitcoin/rpc/protocol.h \
     bitcoin/script.h \
     bitcoin/script_error.h \

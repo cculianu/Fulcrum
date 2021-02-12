@@ -31,7 +31,7 @@
 
 namespace bitcoin {
 
-static const bool DEFAULT_ACCEPT_DATACARRIER = true;
+inline constexpr bool DEFAULT_ACCEPT_DATACARRIER = true;
 
 class CKeyID;
 class CScript;
@@ -45,7 +45,7 @@ public:
 };
 
 //!< bytes (+1 for OP_RETURN, +2 for the pushdata opcodes)
-static const unsigned int MAX_OP_RETURN_RELAY = 223;
+inline constexpr unsigned int MAX_OP_RETURN_RELAY = 223;
 extern bool fAcceptDatacarrier;
 
 /**
@@ -89,7 +89,7 @@ public:
  *  A CTxDestination is the internal data type encoded in a bitcoin address
  */
 //typedef boost::variant<CNoDestination, CKeyID, CScriptID> CTxDestination;
-typedef std::variant<CNoDestination, CKeyID, CScriptID> CTxDestination;
+using CTxDestination = std::variant<CNoDestination, CKeyID, CScriptID>;
 
 const char *GetTxnOutputType(txnouttype t);
 bool IsValidDestination(const CTxDestination &dest);

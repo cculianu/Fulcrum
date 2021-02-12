@@ -73,7 +73,11 @@ namespace bitcoin {
 #include "crypto/sha256.h"
 #include "crypto/sha512.h"
 #include "hash.h"
+#include "prevector.h"
+#include "reverse_iterator.h"
+#include "serialize.h"
 #include "streams.h"
+#include "transaction.h"
 #include "uint256.h"
 #include "utilstrencodings.h"
 #include "version.h"
@@ -84,8 +88,10 @@ namespace bitcoin {
 #include <cassert>
 #include <cstring>
 #include <iomanip>
+#include <iostream>
 #include <functional>
 #include <list>
+#include <stdexcept>
 #include <sstream>
 #include <tuple>
 #include <type_traits>
@@ -174,6 +180,14 @@ namespace {
 #       define BOOST_CHECK_MESSAGE(expr, msg) TestContext::cur().checkExpr(#expr, (expr), 0, "???", msg)
 #   endif
 #   define BOOST_CHECK_EQUAL(a, b) BOOST_CHECK((a) == (b))
+#   define BOOST_CHECK_EXCEPTION(expr, exc, pred) \
+            do { \
+                try { \
+                    expr; \
+                } catch (const exc &e) { \
+                    BOOST_CHECK_MESSAGE(pred(e), "Expression: \"" #expr "\" did not throw \"" #exc "\" as expected"); \
+                } \
+            } while (0)
 #   define BOOST_AUTO_TEST_CASE(name) \
             TestContext::cur().tests.emplace_back( #name, TestContext::VoidFunc{} ); \
             TestContext::cur().tests.back().second = [&]
@@ -377,8 +391,8 @@ namespace {
             BOOST_CHECK(OneL.begin() + 32 == OneL.end());
             BOOST_CHECK(MaxL.begin() + 32 == MaxL.end());
             BOOST_CHECK(TmpL.begin() + 32 == TmpL.end());
-            BOOST_CHECK(GetSerializeSize(R1L, PROTOCOL_VERSION) == 32);
-            BOOST_CHECK(GetSerializeSize(ZeroL, PROTOCOL_VERSION) == 32);
+            BOOST_CHECK(GetSerializeSize(R1L, SER_DISK, PROTOCOL_VERSION) == 32);
+            BOOST_CHECK(GetSerializeSize(ZeroL, SER_DISK, PROTOCOL_VERSION) == 32);
 
             CDataStream ss(0, PROTOCOL_VERSION);
             ss << R1L;
@@ -425,8 +439,8 @@ namespace {
             BOOST_CHECK(OneS.begin() + 20 == OneS.end());
             BOOST_CHECK(MaxS.begin() + 20 == MaxS.end());
             BOOST_CHECK(TmpS.begin() + 20 == TmpS.end());
-            BOOST_CHECK(GetSerializeSize(R1S, PROTOCOL_VERSION) == 20);
-            BOOST_CHECK(GetSerializeSize(ZeroS, PROTOCOL_VERSION) == 20);
+            BOOST_CHECK(GetSerializeSize(R1S, SER_DISK, PROTOCOL_VERSION) == 20);
+            BOOST_CHECK(GetSerializeSize(ZeroS, SER_DISK, PROTOCOL_VERSION) == 20);
 
             ss << R1S;
             BOOST_CHECK(ss.str() == std::string(R1Array, R1Array + 20));
@@ -1212,5 +1226,602 @@ namespace {
 
     const auto t3 = App::registerTest("crypto", crypto_tests); // register test with app-wide test system
 
+    // -- prevectror_tests utility
+    auto InsecureRand256() {
+        bitcoin::uint256 ret{bitcoin::uint256::Uninitialized};
+        QRandomGenerator::global()->generate(ret.begin(), ret.end());
+        return ret;
+    }
+    template <unsigned int N, typename T> class prevector_tester {
+        using realtype = std::vector<T>;
+        realtype real_vector;
+        realtype real_vector_alt;
+
+        using pretype = bitcoin::prevector<N, T>;
+        pretype pre_vector;
+        pretype pre_vector_alt;
+
+        using Size = typename pretype::size_type;
+        bool passed = true;
+        bitcoin::uint256 rand_seed;
+
+        template <typename A, typename B> void local_check_equal(A a, B b) {
+            local_check(a == b);
+        }
+        void local_check(bool b) { passed &= b; }
+        void test() {
+            const pretype &const_pre_vector = pre_vector;
+            local_check_equal(real_vector.size(), pre_vector.size());
+            local_check_equal(real_vector.empty(), pre_vector.empty());
+            for (Size s = 0; s < real_vector.size(); ++s) {
+                local_check(real_vector[s] == pre_vector[s]);
+                local_check(&(pre_vector[s]) == &(pre_vector.begin()[s]));
+                local_check(&(pre_vector[s]) == &*(pre_vector.begin() + s));
+                local_check(&(pre_vector[s]) ==
+                            &*((pre_vector.end() + s) - real_vector.size()));
+            }
+            // local_check(realtype(pre_vector) == real_vector);
+            local_check(pretype(real_vector.begin(), real_vector.end()) ==
+                        pre_vector);
+            local_check(pretype(pre_vector.begin(), pre_vector.end()) ==
+                        pre_vector);
+            size_t pos = 0;
+            for (const T &v : pre_vector) {
+                local_check(v == real_vector[pos++]);
+            }
+            for (const T &v : reverse_iterate(pre_vector)) {
+                local_check(v == real_vector[--pos]);
+            }
+            for (const T &v : const_pre_vector) {
+                local_check(v == real_vector[pos++]);
+            }
+            for (const T &v : reverse_iterate(const_pre_vector)) {
+                local_check(v == real_vector[--pos]);
+            }
+            bitcoin::CDataStream ss1(bitcoin::SER_DISK, 0);
+            bitcoin::CDataStream ss2(bitcoin::SER_DISK, 0);
+            ss1 << real_vector;
+            ss2 << pre_vector;
+            local_check_equal(ss1.size(), ss2.size());
+            for (Size s = 0; s < ss1.size(); ++s) {
+                local_check_equal(ss1[s], ss2[s]);
+            }
+        }
+
+    public:
+        void resize(Size s) {
+            real_vector.resize(s);
+            local_check_equal(real_vector.size(), s);
+            pre_vector.resize(s);
+            local_check_equal(pre_vector.size(), s);
+            test();
+        }
+
+        void reserve(Size s) {
+            real_vector.reserve(s);
+            local_check(real_vector.capacity() >= s);
+            pre_vector.reserve(s);
+            local_check(pre_vector.capacity() >= s);
+            test();
+        }
+
+        void insert(Size position, const T &value) {
+            real_vector.insert(real_vector.begin() + position, value);
+            pre_vector.insert(pre_vector.begin() + position, value);
+            test();
+        }
+
+        void insert(Size position, Size count, const T &value) {
+            real_vector.insert(real_vector.begin() + position, count, value);
+            pre_vector.insert(pre_vector.begin() + position, count, value);
+            test();
+        }
+
+        template <typename I> void insert_range(Size position, I first, I last) {
+            real_vector.insert(real_vector.begin() + position, first, last);
+            pre_vector.insert(pre_vector.begin() + position, first, last);
+            test();
+        }
+
+        void erase(Size position) {
+            real_vector.erase(real_vector.begin() + position);
+            pre_vector.erase(pre_vector.begin() + position);
+            test();
+        }
+
+        void erase(Size first, Size last) {
+            real_vector.erase(real_vector.begin() + first,
+                              real_vector.begin() + last);
+            pre_vector.erase(pre_vector.begin() + first, pre_vector.begin() + last);
+            test();
+        }
+
+        void update(Size pos, const T &value) {
+            real_vector[pos] = value;
+            pre_vector[pos] = value;
+            test();
+        }
+
+        void push_back(const T &value) {
+            real_vector.push_back(value);
+            pre_vector.push_back(value);
+            test();
+        }
+
+        void pop_back() {
+            real_vector.pop_back();
+            pre_vector.pop_back();
+            test();
+        }
+
+        void clear() {
+            real_vector.clear();
+            pre_vector.clear();
+        }
+
+        void assign(Size n, const T &value) {
+            real_vector.assign(n, value);
+            pre_vector.assign(n, value);
+        }
+
+        Size size() const { return real_vector.size(); }
+
+        Size capacity() const { return pre_vector.capacity(); }
+
+        void shrink_to_fit() {
+            pre_vector.shrink_to_fit();
+            test();
+        }
+
+        void swap() {
+            real_vector.swap(real_vector_alt);
+            pre_vector.swap(pre_vector_alt);
+            test();
+        }
+
+        void move() {
+            real_vector = std::move(real_vector_alt);
+            real_vector_alt.clear();
+            pre_vector = std::move(pre_vector_alt);
+            pre_vector_alt.clear();
+        }
+
+        void copy() {
+            real_vector = real_vector_alt;
+            pre_vector = pre_vector_alt;
+        }
+
+        ~prevector_tester() {
+            BOOST_CHECK_MESSAGE(passed, "insecure_rand: " + rand_seed.ToString());
+        }
+
+        prevector_tester() {
+            rand_seed = InsecureRand256();
+        }
+    };
+
+    std::uint32_t InsecureRand32() { return QRandomGenerator::global()->generate(); }
+    std::uint32_t InsecureRandBool() { return QRandomGenerator::global()->generate() & 0x1; }
+
+    void prevectorTests()
+    {
+
+        SETUP_CONTEXT("crypto");
+
+        using namespace bitcoin;
+        BOOST_AUTO_TEST_CASE(PrevectorTestInt) {
+            for (int j = 0; j < 64; j++) {
+                prevector_tester<8, int> test;
+                for (int i = 0; i < 2048; i++) {
+                    if (InsecureRandBits(2) == 0) {
+                        test.insert(InsecureRandRange(test.size() + 1),
+                                    InsecureRand32());
+                    }
+                    if (test.size() > 0 && InsecureRandBits(2) == 1) {
+                        test.erase(InsecureRandRange(test.size()));
+                    }
+                    if (InsecureRandBits(3) == 2) {
+                        int new_size = std::max(
+                            0, std::min(30, int(test.size()) +
+                                                int(InsecureRandRange(5)) - 2));
+                        test.resize(new_size);
+                    }
+                    if (InsecureRandBits(3) == 3) {
+                        test.insert(InsecureRandRange(test.size() + 1),
+                                    1 + InsecureRandBool(), InsecureRand32());
+                    }
+                    if (InsecureRandBits(3) == 4) {
+                        int del = std::min<int>(test.size(), 1 + (InsecureRandBool()));
+                        int beg = InsecureRandRange(test.size() + 1 - del);
+                        test.erase(beg, beg + del);
+                    }
+                    if (InsecureRandBits(4) == 5) {
+                        test.push_back(InsecureRand32());
+                    }
+                    if (test.size() > 0 && InsecureRandBits(4) == 6) {
+                        test.pop_back();
+                    }
+                    if (InsecureRandBits(5) == 7) {
+                        int values[4];
+                        int num = 1 + (InsecureRandBits(2));
+                        for (int k = 0; k < num; k++) {
+                            values[k] = InsecureRand32();
+                        }
+                        test.insert_range(InsecureRandRange(test.size() + 1), values,
+                                          values + num);
+                    }
+                    if (InsecureRandBits(5) == 8) {
+                        int del = std::min<int>(test.size(), 1 + (InsecureRandBits(2)));
+                        int beg = InsecureRandRange(test.size() + 1 - del);
+                        test.erase(beg, beg + del);
+                    }
+                    if (InsecureRandBits(5) == 9) {
+                        test.reserve(InsecureRandBits(5));
+                    }
+                    if (InsecureRandBits(6) == 10) {
+                        test.shrink_to_fit();
+                    }
+                    if (test.size() > 0) {
+                        test.update(InsecureRandRange(test.size()), InsecureRand32());
+                    }
+                    if (InsecureRandBits(10) == 11) {
+                        test.clear();
+                    }
+                    if (InsecureRandBits(9) == 12) {
+                        test.assign(InsecureRandBits(5), InsecureRand32());
+                    }
+                    if (InsecureRandBits(3) == 3) {
+                        test.swap();
+                    }
+                    if (InsecureRandBits(4) == 8) {
+                        test.copy();
+                    }
+                    if (InsecureRandBits(5) == 18) {
+                        test.move();
+                    }
+                }
+            }
+        };
+        BOOST_AUTO_TEST_CASE(PrevectorTestShort) {
+            for (int j = 0; j < 64; j++) {
+                prevector_tester<18, short> test;
+                for (int i = 0; i < 2048; i++) {
+                    if (InsecureRandBits(2) == 0) {
+                        test.insert(InsecureRandRange(test.size() + 1),
+                                    InsecureRand32());
+                    }
+                    if (test.size() > 0 && InsecureRandBits(2) == 1) {
+                        test.erase(InsecureRandRange(test.size()));
+                    }
+                    if (InsecureRandBits(3) == 2) {
+                        int new_size = std::max(
+                            0, std::min(30, int(test.size()) +
+                                                int(InsecureRandRange(5)) - 2));
+                        test.resize(new_size);
+                    }
+                    if (InsecureRandBits(3) == 3) {
+                        test.insert(InsecureRandRange(test.size() + 1),
+                                    1 + InsecureRandBool(), InsecureRand32());
+                    }
+                    if (InsecureRandBits(3) == 4) {
+                        int del = std::min<int>(test.size(), 1 + (InsecureRandBool()));
+                        int beg = InsecureRandRange(test.size() + 1 - del);
+                        test.erase(beg, beg + del);
+                    }
+                    if (InsecureRandBits(4) == 5) {
+                        test.push_back(InsecureRand32());
+                    }
+                    if (test.size() > 0 && InsecureRandBits(4) == 6) {
+                        test.pop_back();
+                    }
+                    if (InsecureRandBits(5) == 7) {
+                        int values[4];
+                        int num = 1 + (InsecureRandBits(2));
+                        for (int k = 0; k < num; k++) {
+                            values[k] = InsecureRand32();
+                        }
+                        test.insert_range(InsecureRandRange(test.size() + 1), values,
+                                          values + num);
+                    }
+                    if (InsecureRandBits(5) == 8) {
+                        int del = std::min<int>(test.size(), 1 + (InsecureRandBits(2)));
+                        int beg = InsecureRandRange(test.size() + 1 - del);
+                        test.erase(beg, beg + del);
+                    }
+                    if (InsecureRandBits(5) == 9) {
+                        test.reserve(InsecureRandBits(5));
+                    }
+                    if (InsecureRandBits(6) == 10) {
+                        test.shrink_to_fit();
+                    }
+                    if (test.size() > 0) {
+                        test.update(InsecureRandRange(test.size()), InsecureRand32());
+                    }
+                    if (InsecureRandBits(10) == 11) {
+                        test.clear();
+                    }
+                    if (InsecureRandBits(9) == 12) {
+                        test.assign(InsecureRandBits(5), InsecureRand32());
+                    }
+                    if (InsecureRandBits(3) == 3) {
+                        test.swap();
+                    }
+                    if (InsecureRandBits(4) == 8) {
+                        test.copy();
+                    }
+                    if (InsecureRandBits(5) == 18) {
+                        test.move();
+                    }
+                }
+            }
+        };
+        BOOST_AUTO_TEST_CASE(PrevectorTestUInt8) {
+            for (int j = 0; j < 64; j++) {
+                prevector_tester<28, uint8_t> test;
+                for (int i = 0; i < 2048; i++) {
+                    if (InsecureRandBits(2) == 0) {
+                        test.insert(InsecureRandRange(test.size() + 1),
+                                    InsecureRand32());
+                    }
+                    if (test.size() > 0 && InsecureRandBits(2) == 1) {
+                        test.erase(InsecureRandRange(test.size()));
+                    }
+                    if (InsecureRandBits(3) == 2) {
+                        int new_size = std::max(
+                            0, std::min(30, int(test.size()) +
+                                                int(InsecureRandRange(5)) - 2));
+                        test.resize(new_size);
+                    }
+                    if (InsecureRandBits(3) == 3) {
+                        test.insert(InsecureRandRange(test.size() + 1),
+                                    1 + InsecureRandBool(), InsecureRand32());
+                    }
+                    if (InsecureRandBits(3) == 4) {
+                        int del = std::min<int>(test.size(), 1 + (InsecureRandBool()));
+                        int beg = InsecureRandRange(test.size() + 1 - del);
+                        test.erase(beg, beg + del);
+                    }
+                    if (InsecureRandBits(4) == 5) {
+                        test.push_back(InsecureRand32());
+                    }
+                    if (test.size() > 0 && InsecureRandBits(4) == 6) {
+                        test.pop_back();
+                    }
+                    if (InsecureRandBits(5) == 7) {
+                        int values[4];
+                        int num = 1 + (InsecureRandBits(2));
+                        for (int k = 0; k < num; k++) {
+                            values[k] = InsecureRand32();
+                        }
+                        test.insert_range(InsecureRandRange(test.size() + 1), values,
+                                          values + num);
+                    }
+                    if (InsecureRandBits(5) == 8) {
+                        int del = std::min<int>(test.size(), 1 + (InsecureRandBits(2)));
+                        int beg = InsecureRandRange(test.size() + 1 - del);
+                        test.erase(beg, beg + del);
+                    }
+                    if (InsecureRandBits(5) == 9) {
+                        test.reserve(InsecureRandBits(5));
+                    }
+                    if (InsecureRandBits(6) == 10) {
+                        test.shrink_to_fit();
+                    }
+                    if (test.size() > 0) {
+                        test.update(InsecureRandRange(test.size()), InsecureRand32());
+                    }
+                    if (InsecureRandBits(10) == 11) {
+                        test.clear();
+                    }
+                    if (InsecureRandBits(9) == 12) {
+                        test.assign(InsecureRandBits(5), InsecureRand32());
+                    }
+                    if (InsecureRandBits(3) == 3) {
+                        test.swap();
+                    }
+                    if (InsecureRandBits(4) == 8) {
+                        test.copy();
+                    }
+                    if (InsecureRandBits(5) == 18) {
+                        test.move();
+                    }
+                }
+            }
+        };
+        BOOST_AUTO_TEST_CASE(PrevectorTestInt64) {
+            for (int j = 0; j < 64; j++) {
+                prevector_tester<99, std::int64_t> test;
+                for (int i = 0; i < 2048; i++) {
+                    if (InsecureRandBits(2) == 0) {
+                        test.insert(InsecureRandRange(test.size() + 1),
+                                    InsecureRand32());
+                    }
+                    if (test.size() > 0 && InsecureRandBits(2) == 1) {
+                        test.erase(InsecureRandRange(test.size()));
+                    }
+                    if (InsecureRandBits(3) == 2) {
+                        int new_size = std::max(
+                            0, std::min(30, int(test.size()) +
+                                                int(InsecureRandRange(5)) - 2));
+                        test.resize(new_size);
+                    }
+                    if (InsecureRandBits(3) == 3) {
+                        test.insert(InsecureRandRange(test.size() + 1),
+                                    1 + InsecureRandBool(), InsecureRand32());
+                    }
+                    if (InsecureRandBits(3) == 4) {
+                        int del = std::min<int>(test.size(), 1 + (InsecureRandBool()));
+                        int beg = InsecureRandRange(test.size() + 1 - del);
+                        test.erase(beg, beg + del);
+                    }
+                    if (InsecureRandBits(4) == 5) {
+                        test.push_back(InsecureRand32());
+                    }
+                    if (test.size() > 0 && InsecureRandBits(4) == 6) {
+                        test.pop_back();
+                    }
+                    if (InsecureRandBits(5) == 7) {
+                        int values[4];
+                        int num = 1 + (InsecureRandBits(2));
+                        for (int k = 0; k < num; k++) {
+                            values[k] = InsecureRand32();
+                        }
+                        test.insert_range(InsecureRandRange(test.size() + 1), values,
+                                          values + num);
+                    }
+                    if (InsecureRandBits(5) == 8) {
+                        int del = std::min<int>(test.size(), 1 + (InsecureRandBits(2)));
+                        int beg = InsecureRandRange(test.size() + 1 - del);
+                        test.erase(beg, beg + del);
+                    }
+                    if (InsecureRandBits(5) == 9) {
+                        test.reserve(InsecureRandBits(5));
+                    }
+                    if (InsecureRandBits(6) == 10) {
+                        test.shrink_to_fit();
+                    }
+                    if (test.size() > 0) {
+                        test.update(InsecureRandRange(test.size()), InsecureRand32());
+                    }
+                    if (InsecureRandBits(10) == 11) {
+                        test.clear();
+                    }
+                    if (InsecureRandBits(9) == 12) {
+                        test.assign(InsecureRandBits(5), InsecureRand32());
+                    }
+                    if (InsecureRandBits(3) == 3) {
+                        test.swap();
+                    }
+                    if (InsecureRandBits(4) == 8) {
+                        test.copy();
+                    }
+                    if (InsecureRandBits(5) == 18) {
+                        test.move();
+                    }
+                }
+            }
+        };
+        BOOST_AUTO_TEST_CASE(PrevectorTestChar) {
+            for (int j = 0; j < 64; j++) {
+                prevector_tester<17, char> test;
+                for (int i = 0; i < 2048; i++) {
+                    if (InsecureRandBits(2) == 0) {
+                        test.insert(InsecureRandRange(test.size() + 1),
+                                    InsecureRand32());
+                    }
+                    if (test.size() > 0 && InsecureRandBits(2) == 1) {
+                        test.erase(InsecureRandRange(test.size()));
+                    }
+                    if (InsecureRandBits(3) == 2) {
+                        int new_size = std::max(
+                            0, std::min(30, int(test.size()) +
+                                                int(InsecureRandRange(5)) - 2));
+                        test.resize(new_size);
+                    }
+                    if (InsecureRandBits(3) == 3) {
+                        test.insert(InsecureRandRange(test.size() + 1),
+                                    1 + InsecureRandBool(), InsecureRand32());
+                    }
+                    if (InsecureRandBits(3) == 4) {
+                        int del = std::min<int>(test.size(), 1 + (InsecureRandBool()));
+                        int beg = InsecureRandRange(test.size() + 1 - del);
+                        test.erase(beg, beg + del);
+                    }
+                    if (InsecureRandBits(4) == 5) {
+                        test.push_back(InsecureRand32());
+                    }
+                    if (test.size() > 0 && InsecureRandBits(4) == 6) {
+                        test.pop_back();
+                    }
+                    if (InsecureRandBits(5) == 7) {
+                        int values[4];
+                        int num = 1 + (InsecureRandBits(2));
+                        for (int k = 0; k < num; k++) {
+                            values[k] = InsecureRand32();
+                        }
+                        test.insert_range(InsecureRandRange(test.size() + 1), values,
+                                          values + num);
+                    }
+                    if (InsecureRandBits(5) == 8) {
+                        int del = std::min<int>(test.size(), 1 + (InsecureRandBits(2)));
+                        int beg = InsecureRandRange(test.size() + 1 - del);
+                        test.erase(beg, beg + del);
+                    }
+                    if (InsecureRandBits(5) == 9) {
+                        test.reserve(InsecureRandBits(5));
+                    }
+                    if (InsecureRandBits(6) == 10) {
+                        test.shrink_to_fit();
+                    }
+                    if (test.size() > 0) {
+                        test.update(InsecureRandRange(test.size()), InsecureRand32());
+                    }
+                    if (InsecureRandBits(10) == 11) {
+                        test.clear();
+                    }
+                    if (InsecureRandBits(9) == 12) {
+                        test.assign(InsecureRandBits(5), InsecureRand32());
+                    }
+                    if (InsecureRandBits(3) == 3) {
+                        test.swap();
+                    }
+                    if (InsecureRandBits(4) == 8) {
+                        test.copy();
+                    }
+                    if (InsecureRandBits(5) == 18) {
+                        test.move();
+                    }
+                }
+            }
+        };
+
+        BOOST_AUTO_TEST_CASE(ThrowsBadAllocPlusComparisons) {
+            auto LogBadAlloc = [](const std::bad_alloc &e) {
+                Debug() << "Caught bad_alloc as expected: " << e.what();
+                return true;
+            };
+            using PV = prevector<28, uint8_t, std::size_t, std::ptrdiff_t>;
+            PV pv;
+            pv.assign(100u, uint8_t(0x2f));
+            BOOST_CHECK(pv == PV(100u, uint8_t(0x2f)));
+            const auto *origptr = pv.data();
+            BOOST_CHECK_EXCEPTION(pv.assign(std::numeric_limits<std::size_t>::max()-29, uint8_t(0)), std::bad_alloc,
+                                  LogBadAlloc);
+            // ensure that catching the bad_alloc didn't leak the old pointer
+            BOOST_CHECK(pv.data() == origptr);
+            BOOST_CHECK(pv.size() == 0); // but it should have set size to 0
+            BOOST_CHECK(pv != PV(100u, uint8_t(0x2f))); // ensure !=
+            BOOST_CHECK(pv != PV(100u, uint8_t(0))); // also not cleared
+            BOOST_CHECK(pv == PV(0u, uint8_t(0))); // also should == empty vector
+            BOOST_CHECK(std::memcmp(pv.data(), PV(100u, uint8_t(0x2f)).data(), 100) == 0);
+
+            // check throws in c'tor
+            BOOST_CHECK_EXCEPTION(PV(std::numeric_limits<std::size_t>::max()-29, uint8_t(0)), std::bad_alloc,
+                                  LogBadAlloc);
+
+            pv = PV(40u, uint8_t(1));
+            PV pv2(40u, uint8_t(1));
+
+            BOOST_CHECK(pv == pv2);
+            BOOST_CHECK(!(pv < pv2));
+            pv2[39] = 2;
+            BOOST_CHECK(pv != pv2);
+            BOOST_CHECK(pv < pv2);
+            pv[39] = 2;
+            BOOST_CHECK(pv == pv2);
+            BOOST_CHECK(!(pv < pv2));
+            pv[38] = 0;
+            BOOST_CHECK(pv != pv2);
+            BOOST_CHECK(pv < pv2);
+
+            pv2.resize(35);
+            BOOST_CHECK(pv != pv2);
+            BOOST_CHECK(pv2 < pv);
+        };
+
+        RUN_CONTEXT();
+    }
+
+    const auto t4 = App::registerTest("prevector", prevectorTests); // register test with app-wide test system
 }
 #endif

@@ -35,7 +35,7 @@ namespace bitcoin {
  * script supports up to 75 for single byte push
  */
 
-const unsigned int BIP32_EXTKEY_SIZE = 74;
+inline constexpr unsigned int BIP32_EXTKEY_SIZE = 74;
 
 /** A reference to a CKey: the Hash160 of its serialized public key */
 class CKeyID : public uint160 {
@@ -43,8 +43,6 @@ public:
     constexpr CKeyID() noexcept : uint160() {}
     explicit constexpr CKeyID(const uint160 &in) noexcept : uint160(in) {}
 };
-
-typedef uint256 ChainCode;
 
 /** An encapsulated secp256k1 public key. */
 class CPubKey {

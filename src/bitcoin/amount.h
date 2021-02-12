@@ -147,10 +147,10 @@ public:
     }
 };
 
-static constexpr Amount SATOSHI = Amount::satoshi();
-static constexpr Amount CASH = 100 * SATOSHI;
-static constexpr Amount COIN = 100000000 * SATOSHI;
-static constexpr Amount CENT = COIN / 100;
+inline constexpr Amount SATOSHI = Amount::satoshi();
+inline constexpr Amount CASH = 100 * SATOSHI;
+inline constexpr Amount COIN = 100000000 * SATOSHI;
+inline constexpr Amount CENT = COIN / 100;
 
 void SetCurrencyUnit(const std::string &); // added by Calin to allow for also supporting BTC -- this is thread-safe (uses rw-locks)
 std::string GetCurrencyUnit(); // added by Calin to allow for also supporting BTC -- this is thread-safe (uses rw-locks)
@@ -165,7 +165,7 @@ std::string GetCurrencyUnit(); // added by Calin to allow for also supporting BT
  * critical; in unusual circumstances like a(nother) overflow bug that allowed
  * for the creation of coins out of thin air modification could lead to a fork.
  */
-static const Amount MAX_MONEY = 21000000 * COIN;
+inline const Amount MAX_MONEY = 21000000 * COIN;
 inline bool MoneyRange(const Amount nValue) {
     return nValue >= Amount::zero() && nValue <= MAX_MONEY;
 }

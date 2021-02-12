@@ -30,7 +30,7 @@
 #endif
 
 namespace bitcoin {
-constexpr uint64_t MAX_SIZE = 0x02000000;
+inline constexpr uint64_t MAX_SIZE = 0x02000000;
 
 /**
  * Dummy data type to identify deserializing constructors.
@@ -43,7 +43,7 @@ constexpr uint64_t MAX_SIZE = 0x02000000;
  * from s. If T contains const fields, this is likely the only way to do so.
  */
 struct deserialize_type {};
-constexpr deserialize_type deserialize{};
+inline constexpr deserialize_type deserialize{};
 
 /**
  * Used to bypass the rule against non-const reference to temporary where it
@@ -262,7 +262,7 @@ template <typename Stream> inline void Unserialize(Stream &s, bool &a) {
  * size <= UINT_MAX   -- 5 bytes  (254 + 4 bytes)
  * size >  UINT_MAX   -- 9 bytes  (255 + 8 bytes)
  */
-inline uint32_t GetSizeOfCompactSize(uint64_t nSize) {
+inline constexpr uint32_t GetSizeOfCompactSize(uint64_t nSize) noexcept {
     if (nSize < 253) {
         return sizeof(uint8_t);
     }
@@ -344,7 +344,7 @@ template <typename Stream> uint64_t ReadCompactSize(Stream &is) {
  * 255:  [0x80 0x7F]  65535: [0x82 0xFE 0x7F]
  * 2^32:           [0x8E 0xFE 0xFE 0xFF 0x00]
  */
-template <typename I> inline unsigned int GetSizeOfVarInt(I n) {
+template <typename I> inline unsigned int GetSizeOfVarInt(I n) noexcept {
     int nRet = 0;
     while (true) {
         nRet++;
@@ -400,7 +400,7 @@ protected:
     char *pend;
 
 public:
-    CFlatData(void *pbeginIn, void *pendIn)
+    constexpr CFlatData(void *pbeginIn, void *pendIn) noexcept
         : pbegin((char *)pbeginIn), pend((char *)pendIn) {}
     template <class T, class TAl> explicit CFlatData(std::vector<T, TAl> &v) {
         pbegin = (char *)v.data();
