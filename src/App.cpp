@@ -33,6 +33,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QHostInfo>
+#include <QLibraryInfo>
 #include <QLocale>
 #include <QRegExp>
 #include <QSemaphore>
@@ -1601,9 +1602,21 @@ QString App::extendedVersionString(bool justLibs)
 {
     QString ret;
     QTextStream ts(&ret, QIODevice::WriteOnly);
+    auto getCompiler = [] {
+        QString compiler;
+#ifdef __clang_version__
+        compiler = QString("clang ") + __clang_version__;
+#elif defined(__GNUC__) && defined(__GNUC_MINOR__) && defined(__GNUC_PATCHLEVEL__)
+        compiler = QString("gcc %1.%2.%3").arg(__GNUC__).arg(__GNUC_MINOR__).arg(__GNUC_PATCHLEVEL__);
+#endif
+        return compiler;
+    };
 
-    if (!justLibs)
+    if (!justLibs) {
         ts << applicationName() << " " << applicationVersion() << "\n";
+        if (auto compiler = getCompiler(); !compiler.isEmpty())
+            ts << "compiled: " << compiler << "\n";
+    }
 
     ts << "jemalloc: ";
     if (auto v = jemallocStats().value("version").toString(); !v.isEmpty()) {
@@ -1616,6 +1629,9 @@ QString App::extendedVersionString(bool justLibs)
         ts << "version " << v;
     } else
         ts << "unavailable";
+    ts << "\n";
+
+    ts << "Qt: version " << QLibraryInfo::version().toString();
     ts << "\n";
 
     ts << "rocksdb: version " << Storage::rocksdbVersion() << "\n";
