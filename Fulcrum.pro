@@ -99,6 +99,16 @@ linux-g++ {
     CONFIG += warn_off
 }
 
+# define HAVE_DECL___BUILTIN_CLZL and HAVE_DECL___BUILTIN_CLZLL used by embedded bitcoin/ sources
+qtCompileTest(builtin_clzl)
+contains(CONFIG, config_builtin_clzl) {
+    DEFINES += HAVE_DECL___BUILTIN_CLZL
+}
+qtCompileTest(builtin_clzll)
+contains(CONFIG, config_builtin_clzll) {
+    DEFINES += HAVE_DECL___BUILTIN_CLZLL
+}
+
 # Handle or add GIT_COMMIT=
 unix {
     DEFINES += GIT_COMMIT="\\\"$(shell git -C \""$$_PRO_FILE_PWD_"\" describe --always --dirty --match 'NOT A TAG')\\\""
