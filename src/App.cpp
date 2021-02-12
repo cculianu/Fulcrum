@@ -1631,8 +1631,7 @@ QString App::extendedVersionString(bool justLibs)
         ts << "unavailable";
     ts << "\n";
 
-    ts << "Qt: version " << QLibraryInfo::version().toString();
-    ts << "\n";
+    ts << "Qt: version " << QLibraryInfo::version().toString() << "\n";
 
     ts << "rocksdb: version " << Storage::rocksdbVersion() << "\n";
 
