@@ -87,10 +87,11 @@ namespace bitcoin {
 #include <array>
 #include <cassert>
 #include <cstring>
+#include <functional>
 #include <iomanip>
 #include <iostream>
-#include <functional>
 #include <list>
+#include <new>
 #include <stdexcept>
 #include <sstream>
 #include <tuple>
@@ -1784,6 +1785,7 @@ namespace {
             PV pv;
             pv.assign(100u, uint8_t(0x2f));
             BOOST_CHECK(pv == PV(100u, uint8_t(0x2f)));
+
             const auto *origptr = pv.data();
             BOOST_CHECK_EXCEPTION(pv.assign(std::numeric_limits<std::size_t>::max()-29, uint8_t(0)), std::bad_alloc,
                                   LogBadAlloc);
@@ -1798,6 +1800,22 @@ namespace {
             // check throws in c'tor
             BOOST_CHECK_EXCEPTION(PV(std::numeric_limits<std::size_t>::max()-29, uint8_t(0)), std::bad_alloc,
                                   LogBadAlloc);
+
+            // check that our new handler was called on alloc failure
+            static unsigned newHandlerCtr;
+            auto myNewHandler = [] {
+                if (++newHandlerCtr >= 5) {
+                    Debug() << "New handler called 5 times, setting to nullptr to exit alloc-fail loop";
+                    std::set_new_handler(nullptr);
+                }
+            };
+            newHandlerCtr = 0;
+            auto *oldHandler = std::set_new_handler(myNewHandler);
+            BOOST_CHECK_EXCEPTION(PV(std::numeric_limits<std::size_t>::max()-29, uint8_t(0)), std::bad_alloc,
+                                  LogBadAlloc);
+            BOOST_CHECK(newHandlerCtr == 5);
+            newHandlerCtr = 0;
+            std::set_new_handler(oldHandler);
 
             pv = PV(40u, uint8_t(1));
             PV pv2(40u, uint8_t(1));

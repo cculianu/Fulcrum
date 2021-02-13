@@ -251,6 +251,21 @@ private:
     }
     constexpr bool is_direct() const noexcept { return _size <= N; }
 
+    static byte *reallocate(byte *ptr, std::size_t nbytes) {
+        // Modified by Calin: the original code asserted to check malloc.
+        // Instead, we follow the C++ spec and call new_handler until
+        // the allocation succeeds if there is a new_handler. If not, we
+        // throw bad_alloc().
+        for (;;) {
+            if (byte *ret = static_cast<byte *>(std::realloc(ptr, nbytes)); ret)
+                return ret;
+            if (auto *new_handler = std::get_new_handler(); new_handler)
+                new_handler();
+            else
+                throw std::bad_alloc();
+        }
+    }
+
     void change_capacity(size_type new_capacity) {
         if (new_capacity <= N) {
             if (!is_direct()) {
@@ -263,20 +278,10 @@ private:
             }
         } else {
             if (!is_direct()) {
-                // FIXME: Because malloc/realloc here won't call new_handler if
-                // allocation fails, assert success. These should instead use an
-                // allocator or new/delete so that handlers are called as
-                // necessary, but performance would be slightly degraded by
-                // doing so.
-                // Modified by Calin: the original code asserted here to check
-                // malloc. Instead, we throw bad_alloc() on failed allocation.
-                byte *new_indirect = static_cast<byte *>(std::realloc(_union.indirect, sizeof(T) * new_capacity));
-                if (!new_indirect) throw std::bad_alloc();
-                _union.indirect = new_indirect;
+                _union.indirect = reallocate(_union.indirect, sizeof(T) * new_capacity);
                 _union.capacity = new_capacity;
             } else {
-                byte *new_indirect = static_cast<byte *>(std::malloc(sizeof(T) * new_capacity));
-                if (!new_indirect) throw std::bad_alloc();
+                byte *new_indirect = reallocate(nullptr, sizeof(T) * new_capacity);
                 T *src = direct_ptr(0);
                 T *dst = reinterpret_cast<T *>(new_indirect);
                 std::memcpy(dst, src, size() * sizeof(T));
