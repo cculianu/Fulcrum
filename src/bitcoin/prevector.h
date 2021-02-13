@@ -15,14 +15,7 @@
 #include <new> // for std::bad_alloc
 #include <type_traits>
 
-#ifdef __clang__
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wold-style-cast"
-#pragma clang diagnostic ignored "-Wgnu-anonymous-struct"
-#endif
-
 namespace bitcoin {
-#pragma pack(push,1) // push alignment 1 onto alignment stack /* Calin asks: Is this always safe on every arch?! */
 /**
  * Implements a drop-in replacement for std::vector<T> which stores up to N
  * elements directly (without heap allocation). The types Size and Diff are used
@@ -228,14 +221,21 @@ public:
     };
 
 private:
-    size_type _size;
+#pragma pack(push,1) // push alignment 1 onto alignment stack /* Calin asks: Is this always safe on every arch?! */
     union direct_or_indirect {
         byte direct[sizeof(T) * N];
         struct {
-            size_type capacity;
             byte *indirect;
+            size_type capacity;
         };
-    } _union;
+    };
+#pragma pack(pop)
+    alignas(char *) direct_or_indirect _union = {};
+    size_type _size = 0;
+    static_assert (alignof(char *) % alignof(size_type) == 0 && sizeof(char *) % alignof(size_type) == 0,
+                   "size_type cannot have more restrictive alignment requirement than pointer");
+    static_assert (alignof(char *) % alignof(T) == 0,
+                   "value_type T cannot have more restrictive alignment requirement than pointer");
 
     T *direct_ptr(difference_type pos) noexcept {
         return reinterpret_cast<T *>(_union.direct) + pos;
@@ -332,34 +332,32 @@ public:
         fill(item_ptr(0), first, last);
     }
 
-    constexpr prevector() noexcept : _size(0), _union{{}} {}
+    constexpr prevector() noexcept = default;
 
-    explicit prevector(size_type n) : prevector() { resize(n); }
+    explicit prevector(size_type n) { resize(n); }
 
-    explicit prevector(size_type n, const T &val) : prevector() {
+    explicit prevector(size_type n, const T &val) {
         change_capacity(n);
         _size += n;
         fill(item_ptr(0), n, val);
     }
 
     template <typename InputIterator>
-    prevector(InputIterator first, InputIterator last) : prevector() {
+    prevector(InputIterator first, InputIterator last) {
         size_type n = last - first;
         change_capacity(n);
         _size += n;
         fill(item_ptr(0), first, last);
     }
 
-    prevector(const prevector &other) : prevector() {
+    prevector(const prevector &other) {
         size_type n = other.size();
         change_capacity(n);
         _size += n;
         fill(item_ptr(0), other.begin(), other.end());
     }
 
-    prevector(prevector &&other) noexcept : prevector() {
-        swap(other);
-    }
+    prevector(prevector &&other) noexcept { swap(other); }
 
     prevector &operator=(const prevector &other) {
         if (&other == this) {
@@ -550,10 +548,6 @@ public:
 
     const value_type *data() const noexcept { return item_ptr(0); }
 };
-#pragma pack(pop) // pop back previous alignment
 } // namespace bitcoin
-#ifdef __clang__
-#pragma clang diagnostic pop
-#endif
 
 #endif // BITCOIN_PREVECTOR_H
