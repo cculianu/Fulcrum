@@ -1402,7 +1402,7 @@ namespace {
     };
 
     std::uint32_t InsecureRand32() { return QRandomGenerator::global()->generate(); }
-    std::uint32_t InsecureRandBool() { return QRandomGenerator::global()->generate() & 0x1; }
+    bool InsecureRandBool() { return QRandomGenerator::global()->generate() & 0x1; }
 
     void prevectorTests()
     {
