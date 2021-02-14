@@ -1610,19 +1610,21 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
     // take all locks now.. since this is a Big Deal. TODO: add more locks here?
     std::scoped_lock guard(p->blocksLock, p->headerVerifierLock, p->blkInfoLock, p->mempoolLock);
 
+    const auto blockTxNum0 = p->txNumNext.load();
+
     if (notify) {
         // Txs in block can never be in mempool. Ensure they are gone from mempool right away so that notifications
         // to clients are as accurate as possible (notifications may happen after this function returns).
-        Mempool::TxHashSet txids;
         const auto sz = ppb->txInfos.size();
-        txids.reserve(sz > 0 ? sz-1 : 0);
+        Mempool::TxHashNumMap txidMap(/* bucket_count: */ static_cast<Mempool::TxHashNumMap::size_type>(sz > 0 ? sz-1 : 0));
         for (std::size_t i = 1 /* skip coinbase */; i < sz; ++i)
-            txids.insert(ppb->txInfos[i].hash);
+            txidMap.emplace(ppb->txInfos[i].hash, blockTxNum0 + i);
         Mempool::ScriptHashesAffectedSet affected;
         // Pre-reserve some capacity for the tmp affected set to avoid much rehashing.
         // Use the heuristic 3 x numtxs capped at the SubsMgr::kRecommendedPendingNotificationsReserveSize (2048).
-        affected.reserve(std::min(txids.size()*3, SubsMgr::kRecommendedPendingNotificationsReserveSize));
-        const auto res = p->mempool.confirmedInBlock(affected, txids, Trace::isEnabled(), 0.5f /* shrink to fit load_factor threshold */);
+        affected.reserve(std::min(txidMap.size()*3, SubsMgr::kRecommendedPendingNotificationsReserveSize));
+        const auto res = p->mempool.confirmedInBlock(affected, txidMap, ppb->height,
+                                                     Trace::isEnabled(), 0.5f /* shrink to fit load_factor threshold */);
         if (const auto diff = res.oldSize - res.newSize; (diff || res.elapsedMsec > 5.) && Debug::isEnabled()) {
             Debug() << "addBlock: removed " << diff << " txs from mempool involving "
                     << affected.size() << " addresses in " << QString::number(res.elapsedMsec, 'f', 3) << " msec";
@@ -1637,8 +1639,6 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
 
     // code in the below block may throw -- exceptions are propagated out to caller.
     {
-        const auto blockTxNum0 = p->txNumNext.load();
-
         // Verify header chain makes sense (by checking hashes, using the shared header verifier)
         QByteArray rawHeader;
         {

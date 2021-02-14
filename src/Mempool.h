@@ -30,6 +30,7 @@
 #include <optional>
 #include <set>
 #include <tuple>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -156,7 +157,7 @@ struct Mempool
 
     // -- Drop from mempool
 
-    using TxHashSet = std::unordered_set<TxHash, HashHasher>; ///< Used below by dropTxs() & confirmedInBlock()
+    using TxHashSet = std::unordered_set<TxHash, HashHasher>; ///< Used below by dropTxs()
 
     /// Drop a bunch of tx's, deleting them from this data structure and reversing the effects of their spends
     /// in the mempool.
@@ -173,13 +174,16 @@ struct Mempool
                   std::optional<float> rehashMaxLoadFactor = {});
 
 
+    using TxHashNumMap = std::unordered_map<TxHash, TxNum, HashHasher>; ///< Used below by confirmedInBlock()
+
     /// Called by Storage::addBlock -- removes the txids in question, and also reassigns any txs spending them to
     /// "confirmed spends".
     ///
     /// Note this is like dropTxs but doesn't drop child txs, just reassigns their spends. *Only* call this during
     /// block processing when you know for a fact that the txids in `txids` are now confirmed!
-    Stats confirmedInBlock(ScriptHashesAffectedSet & scriptHashesAffected, const TxHashSet & txids, bool TRACE = false,
-                           std::optional<float> rehashMaxLoadFactor = {});
+    Stats confirmedInBlock(ScriptHashesAffectedSet & scriptHashesAffected,
+                           const TxHashNumMap & txidMap, BlockHeight confirmedHeight,
+                           bool TRACE = false, std::optional<float> rehashMaxLoadFactor = {});
 
     // -- Fee histogram support (used by mempool.get_fee_histogram RPC) --
 
@@ -215,8 +219,21 @@ private:
     std::size_t growTxHashSetToIncludeDescendants(const char *const logprefix, TxHashSet &txids, bool TRACE) const;
 
     /// Internal use; called by dropTxs and confirmedInBlock to do some book-keeping; returns number of txs removed.
+    template <typename SetLike>
+    std::enable_if_t<std::is_same_v<SetLike, TxHashSet> || std::is_same_v<SetLike, TxHashNumMap>, std::size_t>
+    /*std::size_t*/ rmTxsInHashXTxs_impl(const SetLike &txids, const ScriptHashesAffectedSet &scriptHashesAffected,
+                                         bool TRACE, const std::optional<ScriptHashesAffectedSet> &hashXsNeedingSort);
+
+    /// Convenient alias for above, accepts a TxHashSet as first-arg
     std::size_t rmTxsInHashXTxs(const TxHashSet &txids, const ScriptHashesAffectedSet &scriptHashesAffected, bool TRACE,
                                 const std::optional<ScriptHashesAffectedSet> &hashXsNeedingSort = {});
+
+    /// Convenient alias for above, accepts a TxHashNumMap as first-arg
+    std::size_t rmTxsInHashXTxs(const TxHashNumMap &txidMap, const ScriptHashesAffectedSet &scriptHashesAffected,
+                                bool TRACE, const std::optional<ScriptHashesAffectedSet> &hashXsNeedingSort = {});
+
+    /// Internal: called by dump()
+    static QVariantMap dumpTx(const TxRef &tx);
 
 #ifdef ENABLE_TESTS
 public:
@@ -224,6 +241,6 @@ public:
     /// Tx objects (and not the TxRef shared_ptrs -- but the actual underlying Tx data).
     ///
     /// This is very slow -- used only in the mempool bench.
-    bool deepCompareEqual(const Mempool &other) const noexcept;
+    bool deepCompareEqual(const Mempool &other, QString *differenceExplanation = nullptr) const noexcept;
 #endif
 };
