@@ -550,7 +550,7 @@ QVariantMap Mempool::dumpTx(const TxRef &tx)
                 { "scriptHash", info.hashX.toHex() },
                 // NEW -- it's useful to see this info in mempool debug to catch bugs
                 { "confirmedHeight", info.confirmedHeight ? QVariant(qlonglong(*info.confirmedHeight)) : QVariant()},
-                { "txNum", info.txNum},
+                { "txNum", qlonglong(info.txNum)},
             };
         };
         QVariantMap txos;
