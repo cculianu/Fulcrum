@@ -230,11 +230,11 @@ private:
         };
     };
 #pragma pack(pop)
-    alignas(char *) direct_or_indirect _union = {};
+    alignas(byte *) direct_or_indirect _union = {};
     size_type _size = 0;
-    static_assert (alignof(char *) % alignof(size_type) == 0 && sizeof(char *) % alignof(size_type) == 0,
+    static_assert (alignof(byte *) % alignof(size_type) == 0 && sizeof(byte *) % alignof(size_type) == 0,
                    "size_type cannot have more restrictive alignment requirement than pointer");
-    static_assert (alignof(char *) % alignof(T) == 0,
+    static_assert (alignof(byte *) % alignof(T) == 0,
                    "value_type T cannot have more restrictive alignment requirement than pointer");
 
     T *direct_ptr(difference_type pos) noexcept {
