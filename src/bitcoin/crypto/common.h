@@ -9,72 +9,66 @@
 #include <config/bitcoin-config.h>
 #endif
 
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 
 #include "endian.h"
 
-#ifdef __clang__
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wunused-function"
-#pragma clang diagnostic ignored "-Wold-style-cast"
-#pragma clang diagnostic ignored "-Wsign-conversion"
-#endif
-
 namespace bitcoin {
 inline uint16_t ReadLE16(const uint8_t *ptr) noexcept {
     uint16_t x;
-    std::memcpy((char *)&x, ptr, 2);
+    std::memcpy(reinterpret_cast<std::byte *>(&x), ptr, 2);
     return le16toh(x);
 }
 
 inline uint32_t ReadLE32(const uint8_t *ptr) noexcept {
     uint32_t x;
-    std::memcpy((char *)&x, ptr, 4);
+    std::memcpy(reinterpret_cast<std::byte *>(&x), ptr, 4);
     return le32toh(x);
 }
 
 inline uint64_t ReadLE64(const uint8_t *ptr) noexcept {
     uint64_t x;
-    std::memcpy((char *)&x, ptr, 8);
+    std::memcpy(reinterpret_cast<std::byte *>(&x), ptr, 8);
     return le64toh(x);
 }
 
 inline void WriteLE16(uint8_t *ptr, uint16_t x) noexcept {
-    uint16_t v = htole16(x);
-    std::memcpy(ptr, (char *)&v, 2);
+    const uint16_t v = htole16(x);
+    std::memcpy(ptr, reinterpret_cast<const std::byte *>(&v), 2);
 }
 
 inline void WriteLE32(uint8_t *ptr, uint32_t x) noexcept {
-    uint32_t v = htole32(x);
-    std::memcpy(ptr, (char *)&v, 4);
+    const uint32_t v = htole32(x);
+    std::memcpy(ptr, reinterpret_cast<const std::byte *>(&v), 4);
 }
 
 inline void WriteLE64(uint8_t *ptr, uint64_t x) noexcept {
-    uint64_t v = htole64(x);
-    std::memcpy(ptr, (char *)&v, 8);
+    const uint64_t v = htole64(x);
+    std::memcpy(ptr, reinterpret_cast<const std::byte *>(&v), 8);
 }
 
 inline uint32_t ReadBE32(const uint8_t *ptr) noexcept {
     uint32_t x;
-    std::memcpy((char *)&x, ptr, 4);
+    std::memcpy(reinterpret_cast<std::byte *>(&x), ptr, 4);
     return be32toh(x);
 }
 
 inline uint64_t ReadBE64(const uint8_t *ptr) noexcept {
     uint64_t x;
-    std::memcpy((char *)&x, ptr, 8);
+    std::memcpy(reinterpret_cast<std::byte *>(&x), ptr, 8);
     return be64toh(x);
 }
 
 inline void WriteBE32(uint8_t *ptr, uint32_t x) noexcept {
-    uint32_t v = htobe32(x);
-    std::memcpy(ptr, (char *)&v, 4);
+    const uint32_t v = htobe32(x);
+    std::memcpy(ptr, reinterpret_cast<const std::byte *>(&v), 4);
 }
 
 inline void WriteBE64(uint8_t *ptr, uint64_t x) noexcept {
-    uint64_t v = htobe64(x);
-    std::memcpy(ptr, (char *)&v, 8);
+    const uint64_t v = htobe64(x);
+    std::memcpy(ptr, reinterpret_cast<const std::byte *>(&v), 8);
 }
 
 /**
@@ -102,9 +96,5 @@ inline uint64_t CountBits(uint64_t x) noexcept {
 }
 
 } // end namespace bitcoin
-
-#ifdef __clang__
-#pragma clang diagnostic pop
-#endif
 
 #endif // BITCOIN_CRYPTO_COMMON_H

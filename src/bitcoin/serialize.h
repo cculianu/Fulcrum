@@ -6,7 +6,7 @@
 #ifndef BITCOIN_SERIALIZE_H
 #define BITCOIN_SERIALIZE_H
 
-#include "compat/endian.h"
+#include "crypto/endian.h"
 #include "prevector.h"
 
 #include <algorithm>

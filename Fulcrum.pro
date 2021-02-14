@@ -393,8 +393,6 @@ HEADERS += \
     bitcoin/cashaddr.h \
     bitcoin/cashaddrenc.h \
     bitcoin/compat.h \
-    bitcoin/compat/byteswap.h \
-    bitcoin/compat/endian.h \
     bitcoin/crypto/byteswap.h \
     bitcoin/crypto/endian.h \
     bitcoin/crypto/aes.h \
