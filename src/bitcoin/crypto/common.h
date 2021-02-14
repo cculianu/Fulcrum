@@ -34,17 +34,17 @@ inline uint64_t ReadLE64(const uint8_t *ptr) noexcept {
     return le64toh(x);
 }
 
-inline void WriteLE16(uint8_t *ptr, uint16_t x) noexcept {
+inline void WriteLE16(uint8_t *ptr, const uint16_t x) noexcept {
     const uint16_t v = htole16(x);
     std::memcpy(ptr, reinterpret_cast<const std::byte *>(&v), 2);
 }
 
-inline void WriteLE32(uint8_t *ptr, uint32_t x) noexcept {
+inline void WriteLE32(uint8_t *ptr, const uint32_t x) noexcept {
     const uint32_t v = htole32(x);
     std::memcpy(ptr, reinterpret_cast<const std::byte *>(&v), 4);
 }
 
-inline void WriteLE64(uint8_t *ptr, uint64_t x) noexcept {
+inline void WriteLE64(uint8_t *ptr, const uint64_t x) noexcept {
     const uint64_t v = htole64(x);
     std::memcpy(ptr, reinterpret_cast<const std::byte *>(&v), 8);
 }
@@ -61,12 +61,12 @@ inline uint64_t ReadBE64(const uint8_t *ptr) noexcept {
     return be64toh(x);
 }
 
-inline void WriteBE32(uint8_t *ptr, uint32_t x) noexcept {
+inline void WriteBE32(uint8_t *ptr, const uint32_t x) noexcept {
     const uint32_t v = htobe32(x);
     std::memcpy(ptr, reinterpret_cast<const std::byte *>(&v), 4);
 }
 
-inline void WriteBE64(uint8_t *ptr, uint64_t x) noexcept {
+inline void WriteBE64(uint8_t *ptr, const uint64_t x) noexcept {
     const uint64_t v = htobe64(x);
     std::memcpy(ptr, reinterpret_cast<const std::byte *>(&v), 8);
 }

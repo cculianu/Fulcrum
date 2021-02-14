@@ -19,11 +19,6 @@
 #include <sys/endian.h>
 #endif
 
-#ifdef __clang__
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wundef"
-#endif
-
 namespace bitcoin {
 #if defined(WORDS_BIGENDIAN)
 
@@ -176,9 +171,5 @@ inline uint64_t le64toh(uint64_t little_endian_64bits) {
 #endif // WORDS_BIGENDIAN
 
 } // namespace bitcoin
-
-#ifdef __clang__
-#pragma clang diagnostic pop
-#endif
 
 #endif // BITCOIN_COMPAT_ENDIAN_H
