@@ -278,6 +278,7 @@ SOURCES += \
     CityHash.cpp \
     Common.cpp \
     Controller.cpp \
+    DSProof.cpp \
     Json/Json.cpp \
     Json/Json_Parser.cpp \
     Json/tests.cpp \
@@ -321,6 +322,7 @@ HEADERS += \
     Compat.h \
     Controller.h \
     CostCache.h \
+    DSProof.h \
     Json/Json.h \
     Logger.h \
     Mempool.h \
@@ -373,6 +375,7 @@ SOURCES += \
     bitcoin/crypto/sha256.cpp \
     bitcoin/crypto/sha256_sse4.cpp \
     bitcoin/crypto/sha512.cpp \
+    bitcoin/doublespendproof.cpp \
     bitcoin/feerate.cpp \
     bitcoin/hash.cpp \
     bitcoin/interpreter.cpp \
@@ -405,6 +408,7 @@ HEADERS += \
     bitcoin/crypto/sha1.h \
     bitcoin/crypto/sha256.h \
     bitcoin/crypto/sha512.h \
+    bitcoin/doublespendproof.h \
     bitcoin/feerate.h \
     bitcoin/hash.h \
     bitcoin/interpreter.h \
