@@ -49,7 +49,7 @@ struct Mempool
 
         bitcoin::Amount fee{bitcoin::Amount::zero()}; ///< we calculate this fee ourselves since in the past I noticed we get a funny value sometimes that's off by 1 or 2 sats --  which I suspect is due limitations of doubles, perhaps?
         unsigned sizeBytes = 0;
-        bool hasUnconfirmedParentTx = false; ///< If true, this tx depends on another tx in the mempool. This is fixed once calculated properly by the SynchMempoolTask in Controller.cpp
+        bool hasUnconfirmedParentTx = false; ///< If true, this tx depends on another tx in the mempool. This is not always fixed (confirmedInBlock may change this)
 
         /// These are all the txos in this tx. Once set-up, this doesn't change (unlike IOInfo.utxo).
         /// Note that this vector is always sized to the number of txouts in the tx. It may, however, contain !isValid
@@ -247,6 +247,6 @@ public:
     /// Tx objects (and not the TxRef shared_ptrs -- but the actual underlying Tx data).
     ///
     /// This is very slow -- used only in the mempool bench.
-    bool deepCompareEqual(const Mempool &other, QString *differenceExplanation = nullptr) const noexcept;
+    bool deepCompareEqual(const Mempool &other, QString *differenceExplanation = nullptr) const;
 #endif
 };

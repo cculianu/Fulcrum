@@ -689,7 +689,7 @@ QVariantMap Mempool::dump() const
 #include <cstdio>
 #include <set>
 
-bool Mempool::deepCompareEqual(const Mempool &o, QString *estr) const noexcept
+bool Mempool::deepCompareEqual(const Mempool &o, QString *estr) const
 {
     if (estr) estr->clear();
     if (this == &o)
