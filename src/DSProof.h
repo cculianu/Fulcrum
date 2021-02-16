@@ -29,11 +29,19 @@
 #include <unordered_map>
 #include <vector>
 
-using DspHash = QByteArray;
+/// We wrap QByteArray with this type for type safety; so as to not confuse TxHash with DspHash
+struct DspHash {
+    QByteArray bytes; ///< should always have .size() == HashLen!
+
+    bool operator==(const DspHash &o) const { return bytes == o.bytes; }
+    bool operator!=(const DspHash &o) const { return bytes != o.bytes; }
+
+    struct Hasher { std::size_t operator()(const DspHash &d) const { return HashHasher{}(d.bytes); } };
+};
 
 struct DSProof {
     DspHash hash; ///< big endian memory order (ready for Json)
-    QByteArray serializedProof; ///< raw proof bytes
+    QByteArray serializedProof; ///< raw proof bytes (as retrieved from bitcoind getdsproof RPC)
     TXO txo; ///< the coin that was double-spent (spent in txHash)
 
     TxHash txHash; ///< the tx that this proof goes with (big endian memory order, ready for Json)
@@ -42,24 +50,16 @@ struct DSProof {
     TxHashSet descendants; ///< all tx's affected by this dsproof (includes txHash)
 
     DSProof() = default;
-
-    /// Convenience c'tor; calls deserialize() (thus it may throw)
-    explicit DSProof(const QByteArray &rawBytes);
-
-    /// Deserialize byte data (as retrieved from bitcoind getdsproof RPC).
-    /// On success, modifies: dspHash, serializedProof, and txo. Does not touch txHash & descendants.
-    /// @exceptions throw std::ios_base::failure or std::runtime_error on failure.
-    void deserialize(const QByteArray &rawBytes);
 };
 
 /// Maintains association between DSProofs and their descendant tx's for quick lookup. Ideally we would use a boost
 /// multi-indexed container here, but since we don't want to bring in boost as a dependency, we must roll our own.
 struct DSPs {
-    using DspHashSet = std::unordered_set<DspHash, HashHasher>;
+    using DspHashSet = std::unordered_set<DspHash, DspHash::Hasher>;
 
 private:
     std::unordered_map<TxHash, DspHashSet, HashHasher> txDspsMap; ///< set of dsproofs that affect a particular tx (we call it "linked" below)
-    std::unordered_map<DspHash, DSProof, HashHasher> dsproofs;
+    std::unordered_map<DspHash, DSProof, DspHash::Hasher> dsproofs;
 
     DSProof * get(const DspHash &hash);
 

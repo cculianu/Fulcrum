@@ -20,37 +20,14 @@
 #include "BTC.h"
 #include "DSProof.h"
 
-#include "bitcoin/doublespendproof.h"
-
 #include <algorithm>
 #include <type_traits>
 #include <utility>
 
-DSProof::DSProof(const QByteArray &raw)
-{
-    deserialize(raw);
-}
-
-void DSProof::deserialize(const QByteArray &raw)
-{
-    bitcoin::DoubleSpendProof dsp;
-    BTC::Deserialize(dsp, raw); // throws on error
-
-    serializedProof = raw;
-    const auto &dspId = dsp.GetId();
-    static_assert(HashLen == std::remove_reference_t<decltype(dspId)>::size());
-    hash.resize(HashLen);
-    std::reverse_copy(dspId.begin(), dspId.end(), reinterpret_cast<uint8_t *>(hash.data())); // copy reversed for big endian order
-    const auto &prevTxId = dsp.prevTxId();
-    static_assert(HashLen == std::remove_reference_t<decltype(prevTxId)>::size());
-    txo.txHash.resize(HashLen);
-    std::reverse_copy(prevTxId.begin(), prevTxId.end(), reinterpret_cast<uint8_t *>(txo.txHash.data())); // copy reversed for big endian order
-    txo.outN = dsp.prevOutIndex();
-}
 
 bool DSPs::add(DSProof && dspIn)
 {
-    if (dspIn.hash.size() != HashLen)
+    if (dspIn.hash.bytes.size() != HashLen)
         throw BadArgs("Bad dsp hash");
     if (dspIn.txHash.size() != HashLen || !dspIn.descendants.count(dspIn.txHash))
         throw BadArgs("Expected dsp txHash to be valid and in its own descendant set");
@@ -109,7 +86,7 @@ std::size_t DSPs::rmTx(const TxHash &txHash)
         auto *dsp = get(dspHash);
         if (!dsp) {
             // this should never happen
-            Error() << "FIXME: missing dsp " << dspHash.toHex() << " for tx " << txHash.toHex();
+            Error() << "FIXME: missing dsp " << dspHash.bytes.toHex() << " for tx " << txHash.toHex();
             continue;
         }
         if (dsp->txHash == txHash) {
@@ -119,7 +96,7 @@ std::size_t DSPs::rmTx(const TxHash &txHash)
             // descendant tx, erase from set
             if (!dsp->descendants.erase(txHash))
                 // this should never happen
-                Error() << "FIXME: dsp " << dspHash.toHex() << " missing tx " << txHash.toHex() << " in its descendants list";
+                Error() << "FIXME: dsp " << dspHash.bytes.toHex() << " missing tx " << txHash.toHex() << " in its descendants list";
         }
         ++ret;
     }
