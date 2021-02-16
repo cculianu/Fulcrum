@@ -31,7 +31,9 @@
 
 /// We wrap QByteArray with this type for type safety; so as to not confuse TxHash with DspHash
 struct DspHash {
-    QByteArray bytes; ///< should always have .size() == HashLen!
+    QByteArray bytes; ///< should always have .size() == HashLen, otherwise is not considered valid.
+
+    bool isValid() const { return bytes.size() == HashLen; }
 
     bool operator==(const DspHash &o) const { return bytes == o.bytes; }
     bool operator!=(const DspHash &o) const { return bytes != o.bytes; }
@@ -56,14 +58,18 @@ struct DSProof {
 /// multi-indexed container here, but since we don't want to bring in boost as a dependency, we must roll our own.
 struct DSPs {
     using DspHashSet = std::unordered_set<DspHash, DspHash::Hasher>;
+    using DspMap = std::unordered_map<DspHash, DSProof, DspHash::Hasher>;
 
 private:
     std::unordered_map<TxHash, DspHashSet, HashHasher> txDspsMap; ///< set of dsproofs that affect a particular tx (we call it "linked" below)
-    std::unordered_map<DspHash, DSProof, DspHash::Hasher> dsproofs;
+    DspMap dsproofs;
 
     DSProof * get(const DspHash &hash);
 
 public:
+    /// @returns a const reference to the internal map. Useful for iteration to list all known proofs for e.g. /stats.
+    const DspMap & getAll() const { return dsproofs; }
+
     /// Adds a dsp by move construction. All of the descendants in its descendant set are also added to the txDspsMap.
     /// The dsp is expected to be valid, have a dspHash, a txHash, and a valid descendants set.
     /// @returns true on success. Note that if the object already exists this does nothing and will return false.
@@ -90,6 +96,8 @@ public:
     std::vector<const DSProof *> proofsLinkedToTx(const TxHash &txHash) const;
 
     /// @returns a pointer to the primary proof associated with a txHash. A primary proof is a proof for the tx itself,
-    ///     rather than one of its ancestors.
+    ///     rather than one of its ancestors. Note that currently in BCHN, a tx may only have one and only 1 primary
+    ///     proof. However nothing in these data structures enforces that. If a tx has more than one primary proof,
+    ///     only the first one encountered in the internal set is returned.
     const DSProof * proofForTx(const TxHash &txHash) const;
 };

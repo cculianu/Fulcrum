@@ -27,7 +27,7 @@
 
 bool DSPs::add(DSProof && dspIn)
 {
-    if (dspIn.hash.bytes.size() != HashLen)
+    if (!dspIn.hash.isValid())
         throw BadArgs("Bad dsp hash");
     if (dspIn.txHash.size() != HashLen || !dspIn.descendants.count(dspIn.txHash))
         throw BadArgs("Expected dsp txHash to be valid and in its own descendant set");
