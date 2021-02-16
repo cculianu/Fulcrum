@@ -25,6 +25,7 @@
 #include <QByteArray>
 
 #include <cstdint>
+#include <tuple> // for std::tie
 #include <unordered_set>
 #include <unordered_map>
 #include <vector>
@@ -34,6 +35,7 @@ struct DspHash {
     QByteArray bytes; ///< should always have .size() == HashLen, otherwise is not considered valid.
 
     bool isValid() const { return bytes.size() == HashLen; }
+    QByteArray toHex() const { return Util::ToHexFast(bytes); } // conveneience, faster than bytes.toHex()
 
     bool operator==(const DspHash &o) const { return bytes == o.bytes; }
     bool operator!=(const DspHash &o) const { return bytes != o.bytes; }
@@ -52,6 +54,11 @@ struct DSProof {
     TxHashSet descendants; ///< all tx's affected by this dsproof (includes txHash)
 
     DSProof() = default;
+    bool operator==(const DSProof &o) const {
+        return     std::tie(  hash,   serializedProof,   txo,   txHash,   descendants)
+                == std::tie(o.hash, o.serializedProof, o.txo, o.txHash, o.descendants);
+    }
+    bool operator!=(const DSProof &o) const { return !(*this == o); }
 };
 
 /// Maintains association between DSProofs and their descendant tx's for quick lookup. Ideally we would use a boost
@@ -69,6 +76,12 @@ private:
 public:
     /// @returns a const reference to the internal map. Useful for iteration to list all known proofs for e.g. /stats.
     const DspMap & getAll() const { return dsproofs; }
+    bool empty() const { return dsproofs.empty(); }
+    auto size() const { return dsproofs.size(); }
+    void clear() { *this = DSPs(); /* <--- this clears & rehashes both tables to default bucket_count */ }
+
+    bool operator==(const DSPs &o) const { return std::tie(txDspsMap, dsproofs) == std::tie(o.txDspsMap, o.dsproofs); }
+    bool operator!=(const DSPs &o) const { return !(*this == o); }
 
     /// Adds a dsp by move construction. All of the descendants in its descendant set are also added to the txDspsMap.
     /// The dsp is expected to be valid, have a dspHash, a txHash, and a valid descendants set.

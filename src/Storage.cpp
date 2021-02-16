@@ -1626,8 +1626,12 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
         const auto res = p->mempool.confirmedInBlock(affected, txidMap, ppb->height,
                                                      Trace::isEnabled(), 0.5f /* shrink to fit load_factor threshold */);
         if (const auto diff = res.oldSize - res.newSize; (diff || res.elapsedMsec > 5.) && Debug::isEnabled()) {
-            Debug() << "addBlock: removed " << diff << " txs from mempool involving "
-                    << affected.size() << " addresses in " << QString::number(res.elapsedMsec, 'f', 3) << " msec";
+            Debug d;
+            d << "addBlock: removed " << diff << " txs from mempool involving "
+              << affected.size() << " addresses";
+            if (res.dspRmCt || res.dspTxRmCt)
+                d << " (also removed dsps: " << res.dspRmCt << " txidDspLinks: " << res.dspTxRmCt << ")";
+            d << " in " << QString::number(res.elapsedMsec, 'f', 3) << " msec";
         }
         notify->merge(std::move(affected));
     }

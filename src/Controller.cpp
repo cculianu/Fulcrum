@@ -799,7 +799,7 @@ void SynchMempoolTask::processResults()
     // exclusive lock while accessing the db and Fulcrum would freeze on chains such as BTC when first
     // starting up as it built up the initial large mempool.  With this scheme, it runs much faster.
 
-    const auto [oldSize, newSize, oldNumAddresses, newNumAddresses, elapsedMsec] = [this, &cache, &sizes] {
+    const auto [oldSize, newSize, oldNumAddresses, newNumAddresses, elapsedMsec, x, xx] = [this, &cache, &sizes] {
         const auto getFromCache = [&cache](const TXO &prevTXO) -> std::optional<TXOInfo> {
             // This is a callback called from within addNewTxs() below when encountering a confirmed
             // spend.  We just return whatever we precached for this entry.

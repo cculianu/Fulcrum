@@ -27,6 +27,7 @@
 void Mempool::clear() {
     txs.clear();
     hashXTxs.clear();
+    dsps.clear(); // <-- this always frees capacity
     txs.rehash(0); // this should free previous capacity
     hashXTxs.rehash(0);
 }
@@ -69,7 +70,7 @@ auto Mempool::addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
 {
     const auto t0 = Tic();
     Stats ret;
-    auto & [oldSize, newSize, oldNumAddresses, newNumAddresses, elapsedMsec] = ret;
+    auto & [oldSize, newSize, oldNumAddresses, newNumAddresses, elapsedMsec, dspTxRmCt, dspRmCt] = ret;
     oldSize = this->txs.size();
     oldNumAddresses = this->hashXTxs.size();
     // first, do new outputs for all tx's, and put the new tx's in the mempool struct
@@ -260,7 +261,7 @@ auto Mempool::dropTxs(ScriptHashesAffectedSet & scriptHashesAffectedOut, const T
     Stats ret;
     ScriptHashesAffectedSet scriptHashesAffected;
     int skipPrevCt = 0;
-    auto & [oldSize, newSize, oldNumAddresses, newNumAddresses, elapsedMsec] = ret;
+    auto & [oldSize, newSize, oldNumAddresses, newNumAddresses, elapsedMsec, dspTxRmCt, dspRmCt] = ret;
     oldSize = this->txs.size();
     oldNumAddresses = this->hashXTxs.size();
 
@@ -340,6 +341,21 @@ auto Mempool::dropTxs(ScriptHashesAffectedSet & scriptHashesAffectedOut, const T
     // next, scan hashXs, removing entries for the txids in question
     // -- note this helper function doesn't look at `txs` so it's fine that we removed already in the loop above.
     rmTxsInHashXTxs(txids, scriptHashesAffected, TRACE);
+
+    // next, remove txids from dsproof data structure
+    if (!dsps.empty()) { // fast path for common case of no dsproofs in most mempools, or for BTC mempools where the dsproof feature does not exist
+        const Tic trm;
+        const auto b4 = dsps.size();
+        for (const auto & txid : txids) {
+            dspTxRmCt += dsps.rmTx(txid);
+            if (dsps.empty()) break; // short circuit loop end in case we emptied it out
+        }
+        const auto after = dsps.size();
+        dspRmCt = b4 > after ? b4 - after : 0;
+        if (dspTxRmCt || dspRmCt)
+            DebugM("dropTxs: removed ", dspTxRmCt, " dsproof <-> tx associations (", dspRmCt, " dsps) in ",
+                   trm.msecStr(), " msec");
+    }
 
     // finally, update scriptHashesAffectedOut
     scriptHashesAffectedOut.merge(std::move(scriptHashesAffected));
@@ -440,9 +456,15 @@ auto Mempool::confirmedInBlock(ScriptHashesAffectedSet & scriptHashesAffectedOut
     ScriptHashesAffectedSet scriptHashesAffected;
     std::optional<ScriptHashesAffectedSet> hashXTxsEntriesNeedingSort;
     hashXTxsEntriesNeedingSort.emplace();
-    auto & [oldSize, newSize, oldNumAddresses, newNumAddresses, elapsedMsec] = ret;
+    auto & [oldSize, newSize, oldNumAddresses, newNumAddresses, elapsedMsec, dspTxRmCt, dspRmCt] = ret;
     oldSize = this->txs.size();
     oldNumAddresses = this->hashXTxs.size();
+    const std::size_t dspCtBefore = dsps.size();
+    const auto rmTxFromDsps = [this, TRACE](const TxHash &txid) -> std::size_t {
+        const auto ct = dsps.rmTx(txid);
+        if (ct && TRACE) DebugM("confirmedInBlock: removed dsp <-> txid association for tx ", Util::ToHexFast(txid));
+        return ct;
+    };
 
     // iterate through all txs in mempool
     for (auto itTxs = txs.begin(); itTxs != txs.end(); /* may delete during iteration, see below */) {
@@ -452,6 +474,8 @@ auto Mempool::confirmedInBlock(ScriptHashesAffectedSet & scriptHashesAffectedOut
             // this txid is to be removed from mempool, tally its scripthashes as affected by the removal
             for (const auto & [sh, xx] : tx->hashXs)
                 scriptHashesAffected.insert(sh);
+            // also tell the dsps data structure this tx will be gone
+            dspTxRmCt += rmTxFromDsps(txid);
             // and erase NOW!
             itTxs = txs.erase(itTxs); // in this branch: removed, take next it and continue
             continue;
@@ -532,10 +556,13 @@ auto Mempool::confirmedInBlock(ScriptHashesAffectedSet & scriptHashesAffectedOut
         if (hashXTxs.load_factor() <= *rehashMaxLoadFactor)
             hashXTxs.rehash(0);  // shrink to fit
     }
+    if (const auto dspCtAfter = dsps.size(); dspCtBefore > dspCtAfter)
+        dspRmCt = dspCtBefore - dspCtAfter;
     elapsedMsec = t0.msec<decltype(elapsedMsec)>();
     return ret;
 }
 
+/* static */
 QVariantMap Mempool::dumpTx(const TxRef &tx)
 {
     QVariantMap m;
@@ -596,6 +623,21 @@ QVariantMap Mempool::dumpTx(const TxRef &tx)
     return m;
 }
 
+/* static */
+QVariantMap Mempool::dumpDSProof(const DSProof &d)
+{
+    QVariantMap ret;
+    ret["hash"] = d.hash.toHex();
+    ret["hex"] = Util::ToHexFast(d.serializedProof);
+    ret["txo"] = d.txo.toString();
+    ret["txHash"] = Util::ToHexFast(d.txHash);
+    QVariantList l;
+    for (const auto &txid : d.descendants)
+        l.append(QString(Util::ToHexFast(txid)));
+    ret["descendants"] = l;
+    return ret;
+}
+
 QVariantMap Mempool::dump() const
 {
     QVariantMap mp, txMap;
@@ -626,6 +668,11 @@ QVariantMap Mempool::dump() const
     mp["hashXTxs (BucketLargest)"] = largestBucket;
     mp["hashXTxs (BucketMedian)"] = medianBucket;
     mp["hashXTxs (BucketMedianNonzero)"] = medianNonzero;
+
+    QVariantMap dm;
+    for (const auto & [hash, dsp] : dsps.getAll())
+        dm[hash.toHex()] = dumpDSProof(dsp);
+    mp["dsps"] = dm;
 
     return mp;
 }
@@ -697,6 +744,10 @@ bool Mempool::deepCompareEqual(const Mempool &o, QString *estr) const noexcept
             }
         }
         // otherwise equal so far...
+    }
+    if (dsps != o.dsps) {
+        if (estr) *estr = "DSPs members differ";
+        return false;
     }
     // couldn't find an inequality, return true
     return true;

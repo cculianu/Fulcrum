@@ -19,6 +19,7 @@
 #pragma once
 
 #include "BlockProcTypes.h"
+#include "DSProof.h"
 #include "TXO.h"
 
 #include "bitcoin/amount.h"
@@ -126,6 +127,7 @@ struct Mempool
     // -- Data members of struct Mempool --
     TxMap txs;
     HashXTxMap hashXTxs;
+    DSPs dsps;
 
 
     // -- Add to mempool
@@ -141,6 +143,7 @@ struct Mempool
     struct Stats {
         std::size_t oldSize = 0, newSize = 0;
         std::size_t oldNumAddresses = 0, newNumAddresses = 0;
+        std::size_t dspTxRmCt = 0, dspRmCt = 0; // dsp stats: dsp <-> txid associations killed as well as dsps removed
         double elapsedMsec = 0.;
     };
 
@@ -234,6 +237,9 @@ private:
 
     /// Internal: called by dump()
     static QVariantMap dumpTx(const TxRef &tx);
+
+    /// Internal: called by dump()
+    static QVariantMap dumpDSProof(const DSProof &dsp);
 
 #ifdef ENABLE_TESTS
 public:

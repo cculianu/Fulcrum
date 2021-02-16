@@ -86,7 +86,7 @@ std::size_t DSPs::rmTx(const TxHash &txHash)
         auto *dsp = get(dspHash);
         if (!dsp) {
             // this should never happen
-            Error() << "FIXME: missing dsp " << dspHash.bytes.toHex() << " for tx " << txHash.toHex();
+            Error() << "FIXME: missing dsp " << dspHash.toHex() << " for tx " << txHash.toHex();
             continue;
         }
         if (dsp->txHash == txHash) {
@@ -96,7 +96,7 @@ std::size_t DSPs::rmTx(const TxHash &txHash)
             // descendant tx, erase from set
             if (!dsp->descendants.erase(txHash))
                 // this should never happen
-                Error() << "FIXME: dsp " << dspHash.bytes.toHex() << " missing tx " << txHash.toHex() << " in its descendants list";
+                Error() << "FIXME: dsp " << dspHash.toHex() << " missing tx " << txHash.toHex() << " in its descendants list";
         }
         ++ret;
     }
