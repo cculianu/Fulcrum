@@ -34,7 +34,7 @@ SynchDSPsTask::~SynchDSPsTask() {
 
     if (!dspsDownloaded.empty() || !dspsFailed.empty())
         DebugM(objectName(), ": downloaded: ", dspsDownloaded.size(), ", failed: ", dspsFailed.size(), " in ", elapsed.msecStr(), " msec");
-    if (notifyFlag.load() /* && ... More stuff */) {
+    if (notifyFlag.load() && !txsAffected.empty()) {
         // TODO here: emit signal related to txs added / removed...
     }
 
@@ -50,11 +50,11 @@ void SynchDSPsTask::process()
     case End: return; // end state means ignore further process() events coming in
     case GetDSPList: doGetDSPList(); break;
     case DownloadingNewDSPs: doDownloadNewDSPs(); break;
+    case ProcessDownloads: doProcessDownloads(); break;
     // all below are TODO
     case WaitingForDSPList:
     case WaitingforRefreshDSPInfo:
     case RefreshDSPInfo:
-    case ProcessDownloads:
         emit success(); // TODO: this is temporary while testing
         break;
     }
@@ -106,12 +106,11 @@ void SynchDSPsTask::doGetDSPList()
                 for (const auto &hash : droppedDSPs) {
                     const auto *proof = mempool.dsps.get(hash);
                     if (!proof) { Error() << "FIXME: dsphash not found: " << hash.toHex(); continue; }
-                    for (const auto & txhash : proof->descendants)
-                    { txsLostDsp[txhash].emplace(hash); ++ctr; }
+                    for (const auto & txhash : proof->descendants) { txsAffected.insert(txhash); ++ctr; }
                     mempool.dsps.rm(hash); // `proof` pointer invalidated after this line
                 }
             }
-            DebugM("dsp<->tx links dropped: ", ctr, ", num txs: ", txsLostDsp.size());
+            DebugM("dsp<->tx links dropped: ", ctr, ", num txs: ", txsAffected.size());
         }
         // if we have any new dsps needing download, proceed to download state
         if (!dspsNeedingDownload.empty()) {
@@ -199,7 +198,7 @@ void SynchDSPsTask::doDownloadNewDSPs()
         if (!dspsNeedingRefresh.empty()) {
             state = RefreshDSPInfo;
             AGAIN();
-        } else if (!dspsNeedingDownload.empty()){
+        } else if (!dspsDownloaded.empty()){
             // finished downloading, move on to process downloads
             state = ProcessDownloads;
             AGAIN();
@@ -212,4 +211,20 @@ void SynchDSPsTask::doDownloadNewDSPs()
         Error() << "INTERNAL ERROR: expceted to download " << dspDlsExpected << " dsps, instead downloaded: " << sum;
         emit errored();
     }
+}
+
+void SynchDSPsTask::doProcessDownloads()
+{
+    unsigned ctr = 0;
+    {
+        auto [mempool, lock] = storage->mutableMempool();
+        for (auto & [hash, proof] : dspsDownloaded) {
+            for (const auto & txid : proof.descendants)
+                ctr += txsAffected.insert(txid).second; // flag txids affected
+            mempool.dsps.add(std::move(proof));
+        }
+    }
+    DebugM("added ", dspsDownloaded.size(), " new dsps with ", ctr, " newly affected txs");
+    // todo: next state...
+    emit success();
 }

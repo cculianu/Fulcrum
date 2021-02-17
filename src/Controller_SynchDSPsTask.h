@@ -20,6 +20,7 @@
 
 #include "Controller.h"
 #include "DSProof.h"
+#include "Mempool.h"
 #include "Storage.h"
 
 #include <atomic>
@@ -51,7 +52,7 @@ private:
 
     State state = GetDSPList;
 
-    DSPs::TxDspsMap txsNewDsp, txsLostDsp;
+    Mempool::TxHashSet txsAffected;
     DSPs::DspMap dspsNeedingDownload, dspsDownloaded;
     unsigned dspDlsExpected = 0;
     DSPs::DspHashSet dspsNeedingRefresh, dspsFailed;
@@ -60,4 +61,5 @@ private:
     void doDownloadNewDSPs();
     void dlNext(bool phase2, std::shared_ptr<DSPs::DspMap::node_type> node);
     void dlNext(bool phase2, DSPs::DspMap::node_type && node) { dlNext(phase2, std::make_shared<DSPs::DspMap::node_type>(std::move(node))); }
+    void doProcessDownloads();
 };

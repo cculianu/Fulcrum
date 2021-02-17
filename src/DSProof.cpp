@@ -122,10 +122,36 @@ std::vector<const DSProof *> DSPs::proofsLinkedToTx(const TxHash &txHash) const
     return ret;
 }
 
-const DSProof * DSPs::proofForTx(const TxHash &txHash) const
+const DSProof * DSPs::bestProofForTx(const TxHash &txHash) const
 {
-    for (auto *dsp : proofsLinkedToTx(txHash))
+    const DSProof *ret{};
+    std::size_t bestSize = std::numeric_limits<std::size_t>::max();
+    for (auto *dsp : proofsLinkedToTx(txHash)) {
         if (dsp->txHash == txHash)
             return dsp;
-    return nullptr;
+        else if (!ret || dsp->descendants.size() < bestSize) {
+            bestSize = dsp->descendants.size();
+            ret = dsp;
+        }
+    }
+    return ret;
+}
+
+QVariantMap DSProof::toVarMap() const
+{
+    QVariantMap ret;
+    ret["dspid"] = hash.toHex();
+    ret["hex"] = Util::ToHexFast(serializedProof);
+    if (txo.isValid()) {
+        QVariantMap outpoint;
+        outpoint["txid"] = Util::ToHexFast(txo.txHash);
+        outpoint["voud"] = quint32(txo.outN);
+        ret["outpoint"] = outpoint;
+    }
+    ret["txid"] = Util::ToHexFast(txHash);
+    QVariantList l;
+    for (const auto &txid : descendants)
+        l.append(QString(Util::ToHexFast(txid)));
+    ret["descendants"] = l;
+    return ret;
 }

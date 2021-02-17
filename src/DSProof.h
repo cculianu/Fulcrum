@@ -24,6 +24,7 @@
 #include "Util.h"
 
 #include <QByteArray>
+#include <QVariantMap>
 
 #include <cstdint>
 #include <tuple> // for std::tie
@@ -68,6 +69,8 @@ struct DSProof {
                 == std::tie(o.hash, o.serializedProof, o.txo, o.txHash, o.descendants);
     }
     bool operator!=(const DSProof &o) const { return !(*this == o); }
+
+    QVariantMap toVarMap() const; ///< for serializing to json
 };
 
 /// Maintains association between DSProofs and their descendant tx's for quick lookup. Ideally we would use a boost
@@ -119,9 +122,13 @@ public:
     /// @returns a vector of pointers to all the actual proofs linked with a txHash, or an empty vector if none were found.
     std::vector<const DSProof *> proofsLinkedToTx(const TxHash &txHash) const;
 
-    /// @returns a pointer to the primary proof associated with a txHash. A primary proof is a proof for the tx itself,
-    ///     rather than one of its ancestors. Note that currently in BCHN, a tx may only have one and only 1 primary
-    ///     proof. However nothing in these data structures enforces that. If a tx has more than one primary proof,
-    ///     only the first one encountered in the internal set is returned.
-    const DSProof * proofForTx(const TxHash &txHash) const;
+    /// @returns a pointer to the primary proof associated with a txHash, or the "best" proof if there is no primary.
+    ///     A primary proof is a proof for the tx itself, rather than one of its ancestors. A "best" proof is one that
+    ///     has the smallest descendants set containing txHash (and thus is likely "closest" in terms of ancestry to
+    ///     txHash). If txHash has no proofs, nullptr is returned.
+    ///
+    ///     About primary proofs: Note that currently in BCHN, a tx may only have one and only 1 primary proof. However
+    ///     nothing in these data structures enforces that. If a tx has more than one primary proof, only the first one
+    ///     encountered in the internal set is returned.
+    const DSProof * bestProofForTx(const TxHash &txHash) const;
 };

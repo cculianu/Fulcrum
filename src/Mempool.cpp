@@ -623,21 +623,6 @@ QVariantMap Mempool::dumpTx(const TxRef &tx)
     return m;
 }
 
-/* static */
-QVariantMap Mempool::dumpDSProof(const DSProof &d)
-{
-    QVariantMap ret;
-    ret["hash"] = d.hash.toHex();
-    ret["hex"] = Util::ToHexFast(d.serializedProof);
-    ret["txo"] = d.txo.toString();
-    ret["txHash"] = Util::ToHexFast(d.txHash);
-    QVariantList l;
-    for (const auto &txid : d.descendants)
-        l.append(QString(Util::ToHexFast(txid)));
-    ret["descendants"] = l;
-    return ret;
-}
-
 QVariantMap Mempool::dump() const
 {
     QVariantMap mp, txMap;
@@ -671,7 +656,7 @@ QVariantMap Mempool::dump() const
 
     QVariantMap dm;
     for (const auto & [hash, dsp] : dsps.getAll())
-        dm[hash.toHex()] = dumpDSProof(dsp);
+        dm[hash.toHex()] = dsp.toVarMap();
     mp["dsps"] = dm;
 
     return mp;

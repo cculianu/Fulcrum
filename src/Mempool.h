@@ -238,9 +238,6 @@ private:
     /// Internal: called by dump()
     static QVariantMap dumpTx(const TxRef &tx);
 
-    /// Internal: called by dump()
-    static QVariantMap dumpDSProof(const DSProof &dsp);
-
 #ifdef ENABLE_TESTS
 public:
     /// Returns true if this compares equal to `other`, does a deep compare of the underlying
