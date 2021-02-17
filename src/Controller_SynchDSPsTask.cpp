@@ -205,7 +205,6 @@ void SynchDSPsTask::doDownloadNewDSPs()
             AGAIN();
         } else {
             // nothing left to do, success!
-            state = End;
             emit success();
         }
     } else if (sum > dspDlsExpected) {
