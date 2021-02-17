@@ -35,7 +35,7 @@
 struct DspHash {
     QByteArray bytes; ///< In big-endian memory order (for Json). Should always have .size() == HashLen, otherwise is not considered valid.
 
-    static DspHash fromSerializedProof(const QByteArray &serdata) { return DspHash{BTC::HashRev(serdata)}; }
+    static DspHash fromSerializedProof(const QByteArray &serdata) { return DspHash{!serdata.isEmpty() ? BTC::HashRev(serdata) : QByteArray()}; }
     static DspHash fromHex(const QByteArray &hex) {
         DspHash ret{Util::ParseHexFast(hex)};
         if (!ret.isValid()) ret = DspHash{}; // ensure empty if invalid

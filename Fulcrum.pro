@@ -278,6 +278,7 @@ SOURCES += \
     CityHash.cpp \
     Common.cpp \
     Controller.cpp \
+    Controller_SynchDSPsTask.cpp \
     DSProof.cpp \
     Json/Json.cpp \
     Json/Json_Parser.cpp \
@@ -321,6 +322,7 @@ HEADERS += \
     Common.h \
     Compat.h \
     Controller.h \
+    Controller_SynchDSPsTask.h \
     CostCache.h \
     DSProof.h \
     Json/Json.h \
