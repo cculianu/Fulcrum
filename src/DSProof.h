@@ -19,6 +19,7 @@
 #pragma once
 
 #include "BlockProcTypes.h"
+#include "BTC.h"
 #include "TXO.h"
 #include "Util.h"
 
@@ -32,7 +33,15 @@
 
 /// We wrap QByteArray with this type for type safety; so as to not confuse TxHash with DspHash
 struct DspHash {
-    QByteArray bytes; ///< should always have .size() == HashLen, otherwise is not considered valid.
+    QByteArray bytes; ///< In big-endian memory order (for Json). Should always have .size() == HashLen, otherwise is not considered valid.
+
+    static DspHash fromSerializedProof(const QByteArray &serdata) { return DspHash{BTC::HashRev(serdata)}; }
+    static DspHash fromHex(const QByteArray &hex) {
+        DspHash ret{Util::ParseHexFast(hex)};
+        if (!ret.isValid()) ret = DspHash{}; // ensure empty if invalid
+        return ret;
+    }
+    static DspHash fromHex(const QString &hexString) { return fromHex(hexString.toUtf8()); }
 
     bool isValid() const { return bytes.size() == HashLen; }
     QByteArray toHex() const { return Util::ToHexFast(bytes); } // conveneience, faster than bytes.toHex()
@@ -66,16 +75,18 @@ struct DSProof {
 struct DSPs {
     using DspHashSet = std::unordered_set<DspHash, DspHash::Hasher>;
     using DspMap = std::unordered_map<DspHash, DSProof, DspHash::Hasher>;
+    using TxDspsMap = std::unordered_map<TxHash, DspHashSet, HashHasher>;
 
 private:
-    std::unordered_map<TxHash, DspHashSet, HashHasher> txDspsMap; ///< set of dsproofs that affect a particular tx (we call it "linked" below)
+    TxDspsMap txDspsMap; ///< set of dsproofs that affect a particular tx (we call it "linked" below)
     DspMap dsproofs;
 
-    DSProof * get(const DspHash &hash);
+    DSProof * getMutable(const DspHash &hash);
 
 public:
     /// @returns a const reference to the internal map. Useful for iteration to list all known proofs for e.g. /stats.
     const DspMap & getAll() const { return dsproofs; }
+
     bool empty() const { return dsproofs.empty(); }
     auto size() const { return dsproofs.size(); }
     void clear() { *this = DSPs(); /* <--- this clears & rehashes both tables to default bucket_count */ }

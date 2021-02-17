@@ -39,13 +39,13 @@ bool DSPs::add(DSProof && dspIn)
         txDspsMap[txHash].emplace(dsp.hash);
     return true;
 }
-DSProof * DSPs::get(const DspHash &hash) // private
+DSProof * DSPs::getMutable(const DspHash &hash) // private
 {
     if (auto it = dsproofs.find(hash); it != dsproofs.end())
         return &it->second;
     return nullptr;
 }
-const DSProof * DSPs::get(const DspHash &hash) const { return const_cast<DSPs *>(this)->get(hash); }
+const DSProof * DSPs::get(const DspHash &hash) const { return const_cast<DSPs *>(this)->getMutable(hash); }
 std::size_t DSPs::rm(const DspHash &hash)
 {
     auto it = dsproofs.find(hash);
@@ -68,7 +68,7 @@ std::size_t DSPs::rm(const DspHash &hash)
 bool DSPs::addTx(const DspHash &dspHash, const TxHash &txHash)
 {
     DSProof *dsp;
-    if (txHash.size() != HashLen || !(dsp = get(dspHash)))
+    if (txHash.size() != HashLen || !(dsp = getMutable(dspHash)))
         return false;
     txDspsMap[txHash].emplace(dsp->hash);
     dsp->descendants.emplace(txHash); // this is how calling code adds new descendants it learns about
@@ -83,7 +83,7 @@ std::size_t DSPs::rmTx(const TxHash &txHash)
     // remove from descendant set for all associated dsps
     std::size_t ret{};
     for (const auto &dspHash : dspHashes) {
-        auto *dsp = get(dspHash);
+        auto *dsp = getMutable(dspHash);
         if (!dsp) {
             // this should never happen
             Error() << "FIXME: missing dsp " << dspHash.toHex() << " for tx " << txHash.toHex();

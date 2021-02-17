@@ -20,6 +20,7 @@
 #include "BlockProc.h"
 #include "BTC.h"
 #include "Controller.h"
+#include "DSProof.h"
 #include "Mempool.h"
 #include "Merkle.h"
 #include "SubsMgr.h"
@@ -994,11 +995,143 @@ void SynchMempoolTask::doGetRawMempool()
     });
 }
 
+/// This runs after the SynchMempool task to download new DSProofs and also update existing proofs
+/// with new descendant info.
+struct SynchDSPsTask : public CtlTask {
+
+    SynchDSPsTask(Controller *ctl_, std::shared_ptr<Storage> storage, const std::atomic_bool & notifyFlag)
+        : CtlTask(ctl_, "SynchDSPs"), storage(storage), notifyFlag(notifyFlag) {
+        // force emit of success or errored to lead to immediate state=End assignment as a side-effect
+        connect(this, &CtlTask::success, this, [this]{state = End;});
+        connect(this, &CtlTask::errored, this, [this]{state = End;});
+    }
+    ~SynchDSPsTask() override;
+    void process() override;
+
+
+    const std::shared_ptr<Storage> storage;
+    const std::atomic_bool & notifyFlag;
+
+    enum State {
+        GetDSPList, WaitingForDSPList,
+        GetNewDSPs, WaitingforNewDSPs,
+        RefreshDSPInfo, WaitingforRefreshDSPInfo,
+        End,
+    };
+
+    State state = GetDSPList;
+
+    DSPs::TxDspsMap txsNewDsp, txsLostDsp;
+    DSPs::DspMap dspsNeedingDownload, dspsNeedingDownloadPhase2, dspsDownloaded;
+    DSPs::DspHashSet dspsNeedingRefresh;
+
+    void doGetDSPList();
+};
+
+SynchDSPsTask::~SynchDSPsTask() {
+    stop();
+
+    // TODO here: emit signal related to txs added / removed...
+    //if (!txNewDsp.empty()) // ...
+
+    if (elapsed.secs() >= 1.0) {
+        // if total runtime for task >1s, log for debug
+        DebugM(objectName(), " elapsed total: ", elapsed.secsStr(), " secs");
+    }
+}
+
+void SynchDSPsTask::process()
+{
+    switch (state) {
+    case End: return; // end state means ignore further process() events coming in
+    case GetDSPList: doGetDSPList(); break;
+    // all below are TODO
+    case WaitingForDSPList:
+    case WaitingforRefreshDSPInfo:
+    case WaitingforNewDSPs:
+    case GetNewDSPs:
+    case RefreshDSPInfo:
+        emit success(); // TODO: this is temporary while testing
+        break;
+    }
+}
+
+void SynchDSPsTask::doGetDSPList()
+{
+    state = WaitingForDSPList;
+    dspsNeedingDownload.clear(); // paranoia
+    dspsNeedingRefresh.clear(); // paranoia
+    submitRequest("getdsprooflist", {0}, [this](const RPC::Message & resp){
+        if (state != WaitingForDSPList) {
+            Error() << "FIXME: Spurious getdsprooflist reply, ignoring... ";
+            return;
+        }
+        const auto knownDSPs = Util::keySet<DSPs::DspHashSet>(storage->mempool().first.dsps.getAll()); // this is guarded access, lock held until statement end (C++ temporary lifetime rules)
+        auto droppedDSPs = knownDSPs; // start off assuming *all* are dropped until proven otherwise
+        // scan thru all downloaded dsp hashes and figure out what's new and what needs refresh
+        for (const auto & var : resp.result().toList()) {
+            const DspHash hash = DspHash::fromHex(var.toString());
+            if (!hash.isValid()) {
+                // should never happen
+                Warning() << "Got an invalid dsp hash from bitcoind: \"" << var.toString() << "\"";
+                continue;
+            }
+            if (!knownDSPs.count(hash)) {
+                auto [it, inserted] = dspsNeedingDownload.emplace(
+                        std::piecewise_construct, std::forward_as_tuple(hash), std::forward_as_tuple());
+                if (!inserted) {
+                    // should never happen
+                    Warning() << "Got dupe dsp hash in results from bitcoin for dsp: " << hash.toHex();
+                    continue;
+                }
+                DSProof & dspNew = it->second;
+                dspNew.hash = it->first; // re-use same QByteArray memory (copy-on-write)
+            } else {
+                // flag this one for needing refresh now
+                dspsNeedingRefresh.emplace(hash);
+                droppedDSPs.erase(hash);
+            }
+        }
+        // handle drops, if any
+        if (!droppedDSPs.empty()) {
+            DebugM("dropped dsps:", droppedDSPs.size());
+            // flag them as dropped now -- remove from dsp store
+            unsigned ctr = 0;
+            {
+                auto [mempool, lock] = storage->mutableMempool(); // exclusive lock
+                for (const auto &hash : droppedDSPs) {
+                    const auto *proof = mempool.dsps.get(hash);
+                    if (!proof) { Error() << "FIXME: dsphash not found: " << hash.toHex(); continue; }
+                    for (const auto & txhash : proof->descendants)
+                    { txsLostDsp[txhash].emplace(hash); ++ctr; }
+                    mempool.dsps.rm(hash); // `proof` pointer invalidated after this line
+                }
+            }
+            DebugM("dsp<->tx links dropped: ", ctr, ", num txs: ", txsLostDsp.size());
+        }
+        // if we have any new dsps needing download, proceed to download state
+        if (!dspsNeedingDownload.empty()) {
+            DebugM("new dsps: ", dspsNeedingDownload.size());
+            state = GetNewDSPs;
+            AGAIN();
+        } else if (!dspsNeedingRefresh.empty()) { // otherwise if we have dsps needing refresh, skip to that state
+            DebugM("no new dsps, refreshing existing: ", dspsNeedingRefresh.size());
+            state = RefreshDSPInfo;
+            AGAIN();
+        } else {
+            // dsp results from bitcoind is empty and our dsp set is empty, just end the task
+            emit success();
+        }
+    });
+}
+
 struct Controller::StateMachine
 {
     enum State : uint8_t {
         Begin=0, WaitingForChainInfo, GetBlocks, DownloadingBlocks, FinishedDL, End, Failure, BitcoinDIsInHeaderDL,
-        Retry, RetryInIBD, SynchMempool, SynchingMempool, SynchMempoolFinished
+        Retry, RetryInIBD,
+        SynchMempool, SynchingMempool, SynchMempoolFinished,
+        SynchDSPs, SynchingDSPs, SynchDSPsFinished, // happens after synch mempool; only reached if bitcoind has the dsproof rpc
     };
     State state = Begin;
     bool suppressSaveUndo = false; ///< true if bitcoind is in IBD, in which case we don't save undo info.
@@ -1347,9 +1480,36 @@ void Controller::process(bool beSilentIfUpToDate)
             AGAIN();
         });
         sm->state = State::SynchingMempool;
-    } else if (sm->state == State::SynchingMempool) {
+    } else if (sm->state == State::SynchDSPs) {
+        auto task = newTask<SynchDSPsTask>(false, this, storage, masterNotifySubsFlag);
+        task->threadObjectDebugLifecycle = Trace::isEnabled(); // suppress verbose lifecycle prints unless trace mode
+        connect(task, &CtlTask::success, this, [this, task]{
+            if (UNLIKELY(!sm || isTaskDeleted(task) || sm->state != State::SynchingDSPs))
+                // task was stopped from underneath us and/or this response is stale.. so return and ignore
+                return;
+            sm->state = State::SynchDSPsFinished;
+            AGAIN();
+        });
+        // synch mempool task is an optional task, not critical. tolerate errors as if they were successes
+        connect(task, &CtlTask::errored, this, [this, task]{
+            if (UNLIKELY(!sm || isTaskDeleted(task) || sm->state != State::SynchingDSPs))
+                // task was stopped from underneath us and/or this response is stale.. so return and ignore
+                return;
+            Warning() << "getdsprooflist RPC error, ignoring...";
+            sm->state = State::SynchDSPsFinished;
+            AGAIN();
+        });
+        sm->state = State::SynchingDSPs;
+    } else if (sm->state == State::SynchingMempool || sm->state == State::SynchingDSPs) {
         // ... nothing..
     } else if (sm->state == State::SynchMempoolFinished) {
+        // ...
+        if (bitcoindmgr->hasDSProofRPC())
+            sm->state = State::SynchDSPs; // remote bitcoind has dsproof rpc, proceed to synch dsps
+        else
+            sm->state = State::End; // remote bitcoind lacks dsproof rpc, finish successfully
+        AGAIN();
+    } else if (sm->state == State::SynchDSPsFinished) {
         // ...
         sm->state = State::End;
         AGAIN();
