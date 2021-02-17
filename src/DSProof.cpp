@@ -157,7 +157,7 @@ QVariantMap DSProof::toVarMap() const
     if (txo.isValid()) {
         QVariantMap outpoint;
         outpoint["txid"] = Util::ToHexFast(txo.txHash);
-        outpoint["voud"] = quint32(txo.outN);
+        outpoint["vout"] = quint32(txo.outN);
         ret["outpoint"] = outpoint;
     }
     ret["txid"] = Util::ToHexFast(txHash);
