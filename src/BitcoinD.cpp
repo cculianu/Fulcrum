@@ -191,11 +191,16 @@ BitcoinD *BitcoinDMgr::getBitcoinD()
 
 namespace {
     struct BitcoinDVersionParseResult {
-        bool isBchd{}, isCore{}, isBU{};
+        bool isBchd{}, isCore{}, isBU{}, isBCHN{};
         Version version;
+
+        constexpr BitcoinDVersionParseResult() noexcept = default;
+        BitcoinDVersionParseResult(unsigned val, const QString &subversion);
+
+        bool definitelyLacksDSProofRPC() const;
     };
 
-    BitcoinDVersionParseResult parseBitcoindDVersion(unsigned val, const QString &subversion) {
+    BitcoinDVersionParseResult::BitcoinDVersionParseResult(unsigned val, const QString &subversion) {
         // e.g. 0.20.6 comes in like this from bitcoind (as an unsigned int): 200600 (millions, 10-thousands, hundreds).
         // Note: some bchd versions have a weird version int with a different format than above, so we handle bchd
         // differently.
@@ -203,7 +208,6 @@ namespace {
             // bchd is quirky. We can't rely on its "version" integer since the algorithm for its packing
             // is bizarre in older versions. (In newer versons Josh says he changed it to match bitcoind).
             // Instead, we parse the subversion string: "/bchd:maj.min.rev.../"
-            Version version;
             if (const int colon = subversion.indexOf(':'), trailSlash = subversion.lastIndexOf('/'); colon == 5 && trailSlash > colon) {
                 const int len = trailSlash - (colon + 1);
                 if (len > 0)
@@ -213,13 +217,30 @@ namespace {
             if (!version.isValid())
                 // hmm.. subversion isn't "/bchd:x.y.z.../" -> fall back to unpacking the integer value (only works on newer bchd)
                 version = Version::BitcoinDCompact(val);
-            return {true, false, false, version};
+            isBchd = true;
         } else {
-            const bool isCore = subversion.startsWith("/Satoshi:");
-            const bool isBU = subversion.startsWith("/BCH Unlimited:");
+            isCore = subversion.startsWith("/Satoshi:");
+            isBU = subversion.startsWith("/BCH Unlimited:");
+            isBCHN = subversion.startsWith("/Bitcoin Cash Node:");
             // regular bitcoind, "version" is reliable and always the same format
-            return {false, isCore, isBU, Version::BitcoinDCompact(val)};
+            version = Version::BitcoinDCompact(val);
         }
+    }
+
+    bool BitcoinDVersionParseResult::definitelyLacksDSProofRPC() const {
+        // BCHN before 22.3.0 lacks this rpc
+        if (isBCHN && version < Version{22, 3, 0})
+            return true;
+        // at the time of this writing, 0.17.1 is latest bchd and it definitely lacks this rpc, but leave room for future bchd to add it.
+        if (isBchd && version < Version{0, 17, 2})
+            return true;
+        // at the time of this writing, released BU is 1.9.0 and it definitely lacks the dsproof RPC
+        if (isBU && version < Version{1, 9, 1})
+            return true;
+        if (isCore) // core will definitely never add this feature
+            return true;
+        // for all other remote daemons, we don't know so return false so that calling code will probe.
+        return false;
     }
 }
 
@@ -241,7 +262,7 @@ void BitcoinDMgr::refreshBitcoinDNetworkInfo()
                     const auto val = networkInfo.value("version", 0).toUInt(&ok);
 
                     if (ok) {
-                        const auto res = parseBitcoindDVersion(val, subversion);
+                        const BitcoinDVersionParseResult res(val, subversion);
                         DebugM("Refreshed version info from bitcoind, version: ", res.version.toString(true),
                                ", subversion: ", subversion);
                         return res;
@@ -273,6 +294,8 @@ void BitcoinDMgr::refreshBitcoinDNetworkInfo()
                 bitcoinDInfo.lacksGetZmqNotifications
                     = lacksGetZmqNotifications
                     = res.isBchd || (res.isBU && res.version < Version{1, 9, 1});
+                // clear hasDSProofRPC until proven to have it via a query
+                bitcoinDInfo.hasDSProofRPC = false;
             } // end lock scope
             // be sure to announce whether remote bitcoind is bitcoin core (this determines whether we use segwit or not)
             emit bitcoinCoreDetection(res.isCore);
@@ -288,6 +311,9 @@ void BitcoinDMgr::refreshBitcoinDNetworkInfo()
                 } else
                     refreshBitcoinDZmqNotifications(); // query since we think bitcoind maybe has the RPC method
             }
+            // also see about refreshing whether remote bitcoind has dsproof rpc, but don't query for versions we know don't have it.
+            if (!res.definitelyLacksDSProofRPC())
+                probeBitcoinDHasDSProofRPC();
         },
         // error
         [](const RPC::Message &msg) {
@@ -401,8 +427,7 @@ void BitcoinDMgr::refreshBitcoinDZmqNotifications()
         },
         // error
         [this](const RPC::Message &msg) {
-            // TODO: offer up a conf file and/or CLI arg for bchd users and other bitcoind users that want
-            // to force zmq querying off if these warnings bother them.
+            // TODO: offer up a conf file and/or CLI arg to suppress this warning and/or probing?
             Warning() << "getzmqnotifications query to bitcoind failed, code: " << msg.errorCode() << ", error: "
                       << msg.errorMessage();
             setZmqNotifications({}); // clear current, if any
@@ -413,6 +438,33 @@ void BitcoinDMgr::refreshBitcoinDZmqNotifications()
         [this](const RPC::Message::Id &, const QString &reason) {
             Error() << "getzmqnotifications failed: " << reason;
             setZmqNotifications({}); // clear current, if any
+        }
+    );
+}
+
+// this is only ever called if we are compiled with zmq support
+void BitcoinDMgr::probeBitcoinDHasDSProofRPC()
+{
+    submitRequest(this, newId(), "getdsprooflist", {0},
+        // success
+        [this](const RPC::Message & reply) {
+            if (!reply.result().canConvert<QVariantList>()) {
+                Warning() << "getdsprooflist: query to bitcoind returned a result in an unexpected format";
+                setHasDSProofRPC(false);
+            } else {
+                Debug() << "getdsprooflist: remote bitcoind has the RPC";
+                setHasDSProofRPC(true);
+            }
+        },
+        // error -- probe basically returned a negative result (error details will be automatically logged to debug log)
+        [this](const RPC::Message &) {
+            Debug() << "getdsprooflist: remote bitcoind lacks the RPC";
+            setHasDSProofRPC(false);
+        },
+        // failure -- connection dropped just as we were doing this
+        [this](const RPC::Message::Id &, const QString &reason) {
+            Error() << "getdsprooflist failed: " << reason;
+            setHasDSProofRPC(false);
         }
     );
 }
@@ -447,7 +499,7 @@ BlockHash BitcoinDMgr::getBitcoinDGenesisHash() const
     return bitcoinDGenesisHash;
 }
 
-BitcoinDZmqNotifications BitcoinDMgr::getBitcoinDZmqNotifications() const
+BitcoinDZmqNotifications BitcoinDMgr::getZmqNotifications() const
 {
     std::shared_lock g(bitcoinDInfoLock);
     return bitcoinDInfo.zmqNotifications;
@@ -467,6 +519,17 @@ void BitcoinDMgr::setZmqNotifications(const BitcoinDZmqNotifications &zmqs)
     if (changed) emit zmqNotificationsChanged(zmqs);
 }
 
+bool BitcoinDMgr::hasDSProofRPC() const
+{
+    std::shared_lock g(bitcoinDInfoLock);
+    return bitcoinDInfo.hasDSProofRPC;
+}
+
+void BitcoinDMgr::setHasDSProofRPC(bool b)
+{
+    std::unique_lock g(bitcoinDInfoLock);
+    bitcoinDInfo.hasDSProofRPC = b;
+}
 
 /// This is safe to call from any thread. Internally it dispatches messages to this obejct's thread.
 /// Does not throw. Results/Error/Fail functions are called in the context of the `sender` thread.
@@ -822,6 +885,7 @@ QVariantMap BitcoinDInfo::toVariandMap() const
     ret["isBchd"] = isBchd;
     ret["isCore"] = isCore;
     ret["lacksGetZmqNotifications"] = lacksGetZmqNotifications;
+    ret["hasDSProofRPC"] = hasDSProofRPC;
     QVariantList zmqs;
     for (auto it = zmqNotifications.begin(); it != zmqNotifications.end(); ++it)
         zmqs.push_back(QVariantList{it.key(), it.value()});
