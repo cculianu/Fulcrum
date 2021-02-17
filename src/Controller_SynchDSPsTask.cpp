@@ -184,7 +184,7 @@ void SynchDSPsTask::dlNext(bool phase2, std::shared_ptr<DSPs::DspMap::node_type>
     },
     [this, hash, phase2](const RPC::Message &){
         // ignore errors, keep going
-        DebugM("failed to download dsp ", hash.toHex(), " phase ", phase2 ? "2" : "1", ", ignoring dsp ...");
+        DebugM("failed to download dsp ", hash.toHex(), " phase ", int(phase2)+1, ", ignoring dsp ...");
         dspsFailed.insert(hash);
         AGAIN();
     });
