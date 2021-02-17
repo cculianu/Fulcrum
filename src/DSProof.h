@@ -93,6 +93,11 @@ public:
     bool empty() const { return dsproofs.empty(); }
     auto size() const { return dsproofs.size(); }
     void clear() { *this = DSPs(); /* <--- this clears & rehashes both tables to default bucket_count */ }
+    void shrink_to_fit(); ///< reclaim memory (causes a rehash, invalidates iterators, pointers, etc)
+    float load_factor() const { return (txDspsMap.load_factor() + dsproofs.load_factor()) / 2.f; }
+
+    /// @returns the total number of TxHash <-> DSProof "links" or associations in this data-structure.
+    std::size_t numTxDspLinks() const;
 
     bool operator==(const DSPs &o) const { return std::tie(txDspsMap, dsproofs) == std::tie(o.txDspsMap, o.dsproofs); }
     bool operator!=(const DSPs &o) const { return !(*this == o); }

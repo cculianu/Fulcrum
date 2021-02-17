@@ -32,39 +32,38 @@ SynchDSPsTask::SynchDSPsTask(Controller *ctl_, std::shared_ptr<Storage> storage,
 SynchDSPsTask::~SynchDSPsTask() {
     stop();
 
-    if (!dspsDownloaded.empty() || !dspsFailed.empty())
-        DebugM(objectName(), ": downloaded: ", dspsDownloaded.size(), ", failed: ", dspsFailed.size(), " in ", elapsed.msecStr(), " msec");
+    if (!dspsDownloaded.empty() || !downloadsFailed.empty() || !dspsUpdated.empty() || !updatesFailed.empty() || !txsAffected.empty()) {
+        DebugM(objectName(), ": downloaded: ", dspsDownloaded.size(), ", failed: ", downloadsFailed.size(),
+               ", updated: ", dspsUpdated.size(), ", updated failed: ", updatesFailed.size(),
+               ", txsAffecteed: ", txsAffected.size(), ", dsp count now: ", storage->mempool().first.dsps.size(),
+               ", elapsed: ", elapsed.msecStr(), " msec");
+    } else if (elapsed.msec() >= 50) {
+        // if total runtime for task >=50ms, log for debug
+        DebugM(objectName(), " elapsed: ", elapsed.msecStr(), " msec");
+    }
+
     if (notifyFlag.load() && !txsAffected.empty()) {
         // TODO here: emit signal related to txs added / removed...
     }
-
-    //if (elapsed.secs() >= 1.0) {
-    //    // if total runtime for task >1s, log for debug
-    //    DebugM(objectName(), " elapsed total: ", elapsed.secsStr(), " secs");
-    //}
 }
 
 void SynchDSPsTask::process()
 {
     switch (state) {
+    case WaitingForDSPList: // this state is suprious, ignore
+        DebugM("spurious WaitingForDSPList wakeup in ", __PRETTY_FUNCTION__);
+        [[fallthrough]];
     case End: return; // end state means ignore further process() events coming in
     case GetDSPList: doGetDSPList(); break;
     case DownloadingNewDSPs: doDownloadNewDSPs(); break;
     case ProcessDownloads: doProcessDownloads(); break;
-    // all below are TODO
-    case WaitingForDSPList:
-    case WaitingforRefreshDSPInfo:
-    case RefreshDSPInfo:
-        emit success(); // TODO: this is temporary while testing
-        break;
+    case UpdatingExistingDSPs: doUpdateExistingDSPs(); break;
     }
 }
 
 void SynchDSPsTask::doGetDSPList()
 {
     state = WaitingForDSPList;
-    dspsNeedingDownload.clear(); // paranoia
-    dspsNeedingRefresh.clear(); // paranoia
     submitRequest("getdsprooflist", {0}, [this](const RPC::Message & resp){
         if (state != WaitingForDSPList) {
             Error() << "FIXME: Spurious getdsprooflist reply, ignoring... ";
@@ -92,7 +91,7 @@ void SynchDSPsTask::doGetDSPList()
                 dspNew.hash = it->first; // re-use same QByteArray memory (copy-on-write)
             } else {
                 // flag this one for needing refresh now
-                dspsNeedingRefresh.emplace(hash);
+                dspsNeedingUpdate.emplace(hash);
                 droppedDSPs.erase(hash);
             }
         }
@@ -114,13 +113,13 @@ void SynchDSPsTask::doGetDSPList()
         }
         // if we have any new dsps needing download, proceed to download state
         if (!dspsNeedingDownload.empty()) {
-            DebugM("new dsps: ", dspsNeedingDownload.size());
+            //DebugM("new dsps: ", dspsNeedingDownload.size());
             dspDlsExpected = dspsNeedingDownload.size();
             state = DownloadingNewDSPs;
             AGAIN();
-        } else if (!dspsNeedingRefresh.empty()) { // otherwise if we have dsps needing refresh, skip to that state
-            DebugM("no new dsps, refreshing existing: ", dspsNeedingRefresh.size());
-            state = RefreshDSPInfo;
+        } else if (!dspsNeedingUpdate.empty()) { // otherwise if we have dsps needing refresh, skip to that state
+            //DebugM("no new dsps, refreshing existing: ", dspsNeedingUpdate.size());
+            state = UpdatingExistingDSPs;
             AGAIN();
         } else {
             // dsp results from bitcoind is empty and our dsp set is empty, just end the task
@@ -132,7 +131,7 @@ void SynchDSPsTask::doGetDSPList()
 void SynchDSPsTask::dlNext(bool phase2, std::shared_ptr<DSPs::DspMap::node_type> node)
 {
     const auto &hash = node->key();
-    submitRequest("getdsproof", {hash.toHex(), phase2 ? 2 : 0}, [this, node, phase2](const RPC::Message &reply)  {
+    submitRequest("getdsproof", {hash.toHex(), !phase2 ? 0 : 2}, [this, node, phase2](const RPC::Message &reply)  {
         const auto &hash = node->key();
         auto &proof = node->mapped();
         try {
@@ -177,14 +176,14 @@ void SynchDSPsTask::dlNext(bool phase2, std::shared_ptr<DSPs::DspMap::node_type>
             }
         } catch (const std::exception &e) {
             Warning() << "bad dsp " << hash.toHex() << ", (exc: " << e.what() << "), ignoring dsp ...";
-            dspsFailed.insert(hash);
+            downloadsFailed.insert(hash);
             AGAIN();
         }
     },
     [this, hash, phase2](const RPC::Message &){
         // ignore errors, keep going
-        DebugM("failed to download dsp ", hash.toHex(), " phase ", int(phase2)+1, ", ignoring dsp ...");
-        dspsFailed.insert(hash);
+        DebugM("failed to download dsp ", hash.toHex(), " phase ", 1+int(phase2), ", ignoring dsp ...");
+        downloadsFailed.insert(hash);
         AGAIN();
     });
 }
@@ -193,38 +192,110 @@ void SynchDSPsTask::doDownloadNewDSPs()
 {
     if (!dspsNeedingDownload.empty())
         dlNext(false, dspsNeedingDownload.extract(dspsNeedingDownload.begin()));
-    else if (const auto sum = dspsDownloaded.size() + dspsFailed.size(); sum == dspDlsExpected) {
-        // end state, move on
-        if (!dspsNeedingRefresh.empty()) {
-            state = RefreshDSPInfo;
-            AGAIN();
-        } else if (!dspsDownloaded.empty()){
-            // finished downloading, move on to process downloads
-            state = ProcessDownloads;
-            AGAIN();
-        } else {
-            // nothing left to do, success!
-            emit success();
-        }
-    } else if (sum > dspDlsExpected) {
+    else if (const auto sum = dspsDownloaded.size() + downloadsFailed.size(); sum == dspDlsExpected) {
+        // end this state, move on to next
+        state = UpdatingExistingDSPs;
+        AGAIN();
+    } else {
         // should never happen
         Error() << "INTERNAL ERROR: expceted to download " << dspDlsExpected << " dsps, instead downloaded: " << sum;
         emit errored();
     }
 }
 
+void SynchDSPsTask::doUpdateExistingDSPs()
+{
+    if (dspsNeedingUpdate.empty()) {
+        // nothing left, proceed to next state
+        state = ProcessDownloads;
+        AGAIN();
+        return;
+    }
+
+    const DspHash hash = dspsNeedingUpdate.extract(dspsNeedingUpdate.begin()).value();
+
+    submitRequest("getdsproof", {hash.toHex(), 2}, [this, hash](const RPC::Message &reply)  {
+        const QVariantMap vm = reply.result().toMap();
+        const DspHash chk = DspHash::fromHex(vm.value("dspid").toString());
+        const TxHash txidChk = Util::ParseHexFast(vm.value("txid").toString().toUtf8());
+        const auto descs = vm.value("descendants").toStringList();
+        unsigned ctrDescs = 0, ctrNewAffected = 0;
+        // grab exclusive lock to do this
+        try {
+            auto [mempool, lock] = storage->mutableMempool();
+            Tic t0;
+            auto *dsp = mempool.dsps.get(hash);
+
+            if (!dsp || chk != hash || txidChk != dsp->txHash || descs.isEmpty())
+                throw Exception(QString("basic sanity check failed for update of dsp %1").arg(QString(hash.toHex())));
+            for (const auto &desc : descs) {
+                const TxHash txid = Util::ParseHexFast(desc.toUtf8());
+                if (txid.length() != HashLen) {
+                    Warning() << __func__ << ": txid \"" << desc << "\" is not valid, ignoring ...";
+                    continue;
+                }
+                if (!dsp->descendants.count(txid) && mempool.txs.count(txid)) {
+                    ++ctrDescs;
+                    ctrNewAffected += txsAffected.insert(txid).second;
+                    if (!mempool.dsps.addTx(hash, txid))
+                        // this should never happen..
+                        Warning() << "Failed to add txid " << txid.toHex() << " to dsp " << hash.toHex();
+                }
+            }
+            if (ctrDescs) {
+                dspsUpdated.insert(hash); // only add to dspsUpdated set if there was a change
+                DebugM("updated dsp ", hash.toHex(), " new descendants: ", ctrDescs, ", new txids affected: ", ctrNewAffected,
+                       ", descendants now: ", dsp->descendants.size(), " (exc. lock held for: ", t0.msecStr(), " msec)");
+            }
+        } catch (const std::exception &e) {
+            DebugM("failed to update dsp ", hash.toHex(), "(exc: ", e.what(), ") ignoring error ...");
+            updatesFailed.insert(hash);
+        }
+        AGAIN(); //< regrdless of success or failure, keep going...
+    },
+    [this, hash](const RPC::Message &){
+        // ignore errors, keep going
+        DebugM("failed to update dsp ", hash.toHex(), " ignoring error ...");
+        updatesFailed.insert(hash);
+        AGAIN();
+    });
+}
+
 void SynchDSPsTask::doProcessDownloads()
 {
-    unsigned ctr = 0;
+    unsigned ctr = 0, notAdded = 0;
     {
         auto [mempool, lock] = storage->mutableMempool();
         for (auto & [hash, proof] : dspsDownloaded) {
-            for (const auto & txid : proof.descendants)
-                ctr += txsAffected.insert(txid).second; // flag txids affected
-            mempool.dsps.add(std::move(proof));
+            if (!mempool.txs.count(proof.txHash)) {
+                // unknown txid (it's new and we haven't seen it in SynchMempoolTask yet!)
+                DebugM("skipping dsp ", hash.toHex(), " because its associated txid ", proof.txHash.toHex(),
+                       " is not yet known to us");
+                ++notAdded;
+                continue;
+            }
+
+            decltype(proof.descendants) skipped;
+            for (const auto & txid : proof.descendants) {
+                if (!mempool.txs.count(txid))
+                    skipped.insert(txid);
+                else
+                    ctr += txsAffected.insert(txid).second; // flag txids affected
+            }
+            if (!skipped.empty()) {
+                DebugM("skipped ", skipped.size(), " descendant txs for dsp ", hash.toHex(), " (unknown txids)");
+                for (const auto &txid: skipped)
+                    proof.descendants.erase(txid);
+            }
+            try {
+                mempool.dsps.add(std::move(proof));
+            } catch (const std::exception &e) {
+                // this should never happen, but since the above can throw, it's best to guard against it.
+                Error() << "INTERNAL ERROR: failed to add dsp " << hash.toHex() << ", exception: " << e.what();
+            }
         }
     }
-    DebugM("added ", dspsDownloaded.size(), " new dsps with ", ctr, " newly affected txs");
-    // todo: next state...
-    emit success();
+    if (auto total = long(dspsDownloaded.size()) - long(notAdded); total > 0)
+        DebugM("added ", total, " new dsps with ", ctr, " newly affected txs");
+    emit success(); // final state
 }

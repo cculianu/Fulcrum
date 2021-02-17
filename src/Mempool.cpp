@@ -70,7 +70,7 @@ auto Mempool::addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
 {
     const auto t0 = Tic();
     Stats ret;
-    auto & [oldSize, newSize, oldNumAddresses, newNumAddresses, elapsedMsec, dspTxRmCt, dspRmCt] = ret;
+    auto & [oldSize, newSize, oldNumAddresses, newNumAddresses, dspRmCt, dspTxRmCt, elapsedMsec] = ret;
     oldSize = this->txs.size();
     oldNumAddresses = this->hashXTxs.size();
     // first, do new outputs for all tx's, and put the new tx's in the mempool struct
@@ -261,7 +261,7 @@ auto Mempool::dropTxs(ScriptHashesAffectedSet & scriptHashesAffectedOut, const T
     Stats ret;
     ScriptHashesAffectedSet scriptHashesAffected;
     int skipPrevCt = 0;
-    auto & [oldSize, newSize, oldNumAddresses, newNumAddresses, elapsedMsec, dspTxRmCt, dspRmCt] = ret;
+    auto & [oldSize, newSize, oldNumAddresses, newNumAddresses, dspRmCt, dspTxRmCt, elapsedMsec] = ret;
     oldSize = this->txs.size();
     oldNumAddresses = this->hashXTxs.size();
 
@@ -345,13 +345,14 @@ auto Mempool::dropTxs(ScriptHashesAffectedSet & scriptHashesAffectedOut, const T
     // next, remove txids from dsproof data structure
     if (!dsps.empty()) { // fast path for common case of no dsproofs in most mempools, or for BTC mempools where the dsproof feature does not exist
         const Tic trm;
-        const auto b4 = dsps.size();
+        const auto b4 = dsps.size(), txb4 = dsps.numTxDspLinks();
         for (const auto & txid : txids) {
-            dspTxRmCt += dsps.rmTx(txid);
+            dsps.rmTx(txid);
             if (dsps.empty()) break; // short circuit loop end in case we emptied it out
         }
-        const auto after = dsps.size();
+        const auto after = dsps.size(), txafter = dsps.numTxDspLinks();
         dspRmCt = b4 > after ? b4 - after : 0;
+        dspTxRmCt = txb4 > txafter ? txb4 - txafter : 0;
         if (dspTxRmCt || dspRmCt)
             DebugM("dropTxs: removed ", dspTxRmCt, " dsproof <-> tx associations (", dspRmCt, " dsps) in ",
                    trm.msecStr(), " msec");
@@ -369,6 +370,8 @@ auto Mempool::dropTxs(ScriptHashesAffectedSet & scriptHashesAffectedOut, const T
             txs.rehash(0); // shrink to fit
         if (hashXTxs.load_factor() <= *rehashMaxLoadFactor)
             hashXTxs.rehash(0);  // shrink to fit
+        if (dsps.load_factor() <= *rehashMaxLoadFactor)
+            dsps.shrink_to_fit();
     }
     elapsedMsec = t0.msec<decltype(elapsedMsec)>();
     return ret;
@@ -456,15 +459,11 @@ auto Mempool::confirmedInBlock(ScriptHashesAffectedSet & scriptHashesAffectedOut
     ScriptHashesAffectedSet scriptHashesAffected;
     std::optional<ScriptHashesAffectedSet> hashXTxsEntriesNeedingSort;
     hashXTxsEntriesNeedingSort.emplace();
-    auto & [oldSize, newSize, oldNumAddresses, newNumAddresses, elapsedMsec, dspTxRmCt, dspRmCt] = ret;
+    auto & [oldSize, newSize, oldNumAddresses, newNumAddresses, dspRmCt, dspTxRmCt, elapsedMsec] = ret;
     oldSize = this->txs.size();
     oldNumAddresses = this->hashXTxs.size();
     const std::size_t dspCtBefore = dsps.size();
-    const auto rmTxFromDsps = [this, TRACE](const TxHash &txid) -> std::size_t {
-        const auto ct = dsps.rmTx(txid);
-        if (ct && TRACE) DebugM("confirmedInBlock: removed dsp <-> txid association for tx ", Util::ToHexFast(txid));
-        return ct;
-    };
+    const std::size_t dspTxCtBefore = dsps.numTxDspLinks();
 
     // iterate through all txs in mempool
     for (auto itTxs = txs.begin(); itTxs != txs.end(); /* may delete during iteration, see below */) {
@@ -475,7 +474,7 @@ auto Mempool::confirmedInBlock(ScriptHashesAffectedSet & scriptHashesAffectedOut
             for (const auto & [sh, xx] : tx->hashXs)
                 scriptHashesAffected.insert(sh);
             // also tell the dsps data structure this tx will be gone
-            dspTxRmCt += rmTxFromDsps(txid);
+            dsps.rmTx(txid);
             // and erase NOW!
             itTxs = txs.erase(itTxs); // in this branch: removed, take next it and continue
             continue;
@@ -555,9 +554,13 @@ auto Mempool::confirmedInBlock(ScriptHashesAffectedSet & scriptHashesAffectedOut
             txs.rehash(0); // shrink to fit
         if (hashXTxs.load_factor() <= *rehashMaxLoadFactor)
             hashXTxs.rehash(0);  // shrink to fit
+        if (dsps.load_factor() <= *rehashMaxLoadFactor)
+            dsps.shrink_to_fit();
     }
     if (const auto dspCtAfter = dsps.size(); dspCtBefore > dspCtAfter)
         dspRmCt = dspCtBefore - dspCtAfter;
+    if (const auto dspTxCtAfter = dsps.numTxDspLinks(); dspTxCtBefore > dspTxCtAfter)
+        dspTxRmCt = dspTxCtBefore - dspTxCtAfter;
     elapsedMsec = t0.msec<decltype(elapsedMsec)>();
     return ret;
 }

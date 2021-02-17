@@ -25,6 +25,18 @@
 #include <utility>
 
 
+void DSPs::shrink_to_fit() {
+    txDspsMap.rehash(0);
+    dsproofs.rehash(0);
+}
+
+std::size_t DSPs::numTxDspLinks() const {
+    std::size_t ret{};
+    for (const auto & [txhash, hashset] : txDspsMap)
+        ret += hashset.size();
+    return ret;
+}
+
 bool DSPs::add(DSProof && dspIn)
 {
     if (!dspIn.hash.isValid())

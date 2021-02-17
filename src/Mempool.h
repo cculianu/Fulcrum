@@ -143,7 +143,7 @@ struct Mempool
     struct Stats {
         std::size_t oldSize = 0, newSize = 0;
         std::size_t oldNumAddresses = 0, newNumAddresses = 0;
-        std::size_t dspTxRmCt = 0, dspRmCt = 0; // dsp stats: dsp <-> txid associations killed as well as dsps removed
+        std::size_t dspRmCt = 0, dspTxRmCt = 0; // dsp stats: number of dsproofs removed, number of dsp <-> tx links removed
         double elapsedMsec = 0.;
     };
 

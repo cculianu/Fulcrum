@@ -45,7 +45,7 @@ private:
     enum State {
         GetDSPList, WaitingForDSPList,
         DownloadingNewDSPs,
-        RefreshDSPInfo, WaitingforRefreshDSPInfo,
+        UpdatingExistingDSPs,
         ProcessDownloads,
         End,
     };
@@ -55,11 +55,12 @@ private:
     Mempool::TxHashSet txsAffected;
     DSPs::DspMap dspsNeedingDownload, dspsDownloaded;
     unsigned dspDlsExpected = 0;
-    DSPs::DspHashSet dspsNeedingRefresh, dspsFailed;
+    DSPs::DspHashSet dspsNeedingUpdate, downloadsFailed, updatesFailed, dspsUpdated;
 
     void doGetDSPList();
     void doDownloadNewDSPs();
     void dlNext(bool phase2, std::shared_ptr<DSPs::DspMap::node_type> node);
     void dlNext(bool phase2, DSPs::DspMap::node_type && node) { dlNext(phase2, std::make_shared<DSPs::DspMap::node_type>(std::move(node))); }
     void doProcessDownloads();
+    void doUpdateExistingDSPs();
 };
