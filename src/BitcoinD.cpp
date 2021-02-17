@@ -239,7 +239,7 @@ namespace {
             return true;
         if (isCore) // core will definitely never add this feature
             return true;
-        // for all other remote daemons, we don't know so return false so that calling code will probe.
+        // for all other remote daemons, return false so that calling code will probe.
         return false;
     }
 }
