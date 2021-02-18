@@ -23,6 +23,7 @@
 #include <cassert>
 #include <functional>
 #include <map>
+#include <utility>
 
 void Mempool::clear() {
     txs.clear();
@@ -313,11 +314,10 @@ std::size_t Mempool::growTxHashSetToIncludeDescendants(TxHashSet &txids, const b
     return growTxHashSetToIncludeDescendants("txDescendants", txids, TRACE);
 }
 
-auto Mempool::dropTxs(ScriptHashesAffectedSet & scriptHashesAffectedOut, const TxHashSet & txidsIn, bool TRACE,
+auto Mempool::dropTxs(ScriptHashesAffectedSet & scriptHashesAffectedOut, TxHashSet & txids, bool TRACE,
                       std::optional<float> rehashMaxLoadFactor) -> Stats
 {
     const auto t0 = Tic();
-    auto txids = txidsIn;
     // also drop txs that spend from the txids in the above set as well -- since we
     // cannot drop tx's in the middle of a chain of spends due to the inconsistency
     // that would lead to (possible spends of non-existant outputs).
@@ -934,7 +934,7 @@ namespace {
         };
 
         enum IterMode { DropOnlyLeaves, DropAnyTx, ConfirmOnlyRoots, ConfirmAnyTx, ConfirmPackages, };
-        static constexpr std::array<IterMode, 5> iterModes = { DropOnlyLeaves, ConfirmOnlyRoots, ConfirmPackages, ConfirmAnyTx, DropAnyTx, };
+        constexpr IterMode iterModes[] = { DropOnlyLeaves, ConfirmOnlyRoots, ConfirmPackages, ConfirmAnyTx, DropAnyTx, };
 
         for (const auto iterMode : iterModes) { // try all modes
 
@@ -1195,7 +1195,7 @@ namespace {
                     const auto stats = isConfirmMode
                                        ? okConfHeights.insert(confirmedHeightCur),
                                          mempool.confirmedInBlock(shset, txidMap, confirmedHeightCur, false)
-                                       : mempool.dropTxs(shset, txids, false);
+                                       : mempool.dropTxs(shset, std::as_const(txids), false);
                     t1.fin();
                     actualTimeCost += t1.usec();
 

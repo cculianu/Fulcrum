@@ -174,9 +174,22 @@ struct Mempool
     ///
     /// Why the penalty?  This is because descendant tx's not appearing in `txids` must be removed since they are
     /// txs that no longer are spending valid inputs (as far as this Mempool instance is aware of, at least).
-    Stats dropTxs(ScriptHashesAffectedSet & scriptHashesAffected, const TxHashSet & txids, bool TRACE = false,
+    ///
+    /// This function modifies its `txids` argument to expand it to the set of all descendants of txids as well.
+    /// (The caller may use this information to know precisely which txids are now gone).
+    Stats dropTxs(ScriptHashesAffectedSet & scriptHashesAffected, TxHashSet & txids, bool TRACE = false,
                   std::optional<float> rehashMaxLoadFactor = {});
 
+    /// Convenient alias for the above function which accepts a TxHashSet && temporary.
+    Stats dropTxs(ScriptHashesAffectedSet & scriptHashesAffected, TxHashSet && txids, bool TRACE = false,
+                  std::optional<float> rehashMaxLoadFactor = {}) {
+        return dropTxs(scriptHashesAffected, txids, TRACE, rehashMaxLoadFactor);
+    }
+    /// Convenient alias for the above function which accepts a const TxHashSet & instead. (But does incur the cost of a copy).
+    Stats dropTxs(ScriptHashesAffectedSet & scriptHashesAffected, const TxHashSet & txids, bool TRACE = false,
+                  std::optional<float> rehashMaxLoadFactor = {}) {
+        return dropTxs(scriptHashesAffected, TxHashSet{txids}, TRACE, rehashMaxLoadFactor);
+    }
 
     using TxHashNumMap = std::unordered_map<TxHash, TxNum, HashHasher>; ///< Used below by confirmedInBlock()
 

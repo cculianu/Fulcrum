@@ -631,6 +631,7 @@ struct SynchMempoolTask : public CtlTask
 
     /// The scriptHashes that were affected by this refresh/synch cycle. Used for notifications.
     std::unordered_set<HashX, HashHasher> scriptHashesAffected;
+    Mempool::TxHashSet txidsDropped; ///< the txids that were dropped for this run of the task (cumulative across retries, like scriptHashesAffected)
     Mempool::TxHashSet dspTxsAdded; ///< the txids in the adds that also have dsproofs now associated with them
 
     void clear() {
@@ -641,6 +642,7 @@ struct SynchMempoolTask : public CtlTask
         // Note: we don't clear "scriptHashesAffected" intentionally in case we are retrying. We want to accumulate
         // all the droppedTx scripthashes for each retry, so we never clear the set.
         // Note 2: we also never clear the redoCt since that counter needs to maintain state to abort too many redos.
+        // Note 3: we also never clear txidsDropped
     }
 
     /// Called when getrawtransaction errors out or when we dropTxs() and the result is too many txs so we must
@@ -663,6 +665,9 @@ SynchMempoolTask::~SynchMempoolTask() {
             // notify status change for affected sh's, regardless of how this task exited (this catches corner cases
             // where we queued up some notifications and then we died on a retry due to errors from bitcoind)
             storage->subs()->enqueueNotifications(std::move(scriptHashesAffected));
+        if (!txidsDropped.empty()) {
+            // TODO .. notify a future txid-based subscription subsystem about the txids that are now gone
+        }
         if (!dspTxsAdded.empty()) {
             DebugM(objectName(), ": dspTx adds: ", dspTxsAdded.size());
             // TODO ... notify here? These are new txs so they can't have any dsptx notify subs.. can they? (TODO: figure this out)
@@ -965,6 +970,7 @@ void SynchMempoolTask::doGetRawMempool()
             }
         }
         if (!droppedTxs.empty()) {
+            const auto expectedDropCt = droppedTxs.size();
             // Some txs were dropped, update mempool with the drops, grabbing the lock exclusively.
             // Note the release and re-acquisition of the lock should be ok since this Controller
             // thread is the only thread that ever modifies the mempool, so a coherent view of the
@@ -988,8 +994,10 @@ void SynchMempoolTask::doGetRawMempool()
                         d << " (also dropped dsps: " << res.dspRmCt << " dspTxs: " << res.dspTxRmCt << ")";
                 }
                 scriptHashesAffected.merge(std::move(affected)); /* update set here with lock not held */
+                txidsDropped.merge(std::move(droppedTxs)); /* update this set too */
+                // . <--- NB: at this point both affected and droppedTxs are moved-from
             }
-            if (UNLIKELY(droppedCt != droppedTxs.size())) {
+            if (UNLIKELY(droppedCt != expectedDropCt)) { // This invariant is checked to detect bugs.
                 Warning() << "Synch mempool expected to drop " << droppedTxs.size() << ", but in fact dropped "
                           << droppedCt << " -- retrying getrawmempool";
                 redoFromStart(); // set state such that the next process() call will do getrawmempool again unless redoCt exceeds kRedoCtMax, in which case errors out
