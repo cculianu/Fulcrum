@@ -26,17 +26,17 @@ namespace {
     /// forth to constantly poll data that mostly never changes). Instead, we grow the descendants set directly in
     /// Mempool.cpp addNewTxs() more efficiently. We grow the descendants set there as we add new tx's.
     inline constexpr bool UpdatingEnabled = false;
-    /// We may elect to disable dropping dsps from here. Rationale: bitcoind may restart and lose dsps, but they are
-    /// still relevant.  We instead may want to rely on dropping dsps when the actual "owning" txs go out of "scope"
+    /// We have elected to disable dropping dsps from here. Rationale: bitcoind may restart and lose dsps, but they are
+    /// still relevant.  We instead only want to rely on dropping dsps when the actual "owning" txs go out of "scope"
     /// (that is, they get confirmed in a block or evicted from mempool).  Mempool.cpp already takes care of removing
-    /// dsps for dropped/confirmed tx's for us. Perhaps we should set this to false and rely on that for the dsp
-    /// lifecycle. The reason we may want to do it that way is that a DSP that was once associated with an in-mempool tx
+    /// dsps for dropped/confirmed tx's for us. So we will just then set this to false and rely on that for the dsp
+    /// lifecycle. The reason we want to do it that way is that a DSP that was once associated with an in-mempool tx
     /// will always be relevant, regardless of bitcoind's inability to remember it existed (after a restart).
-    inline constexpr bool DropsEnabled = true;
-    /// We may want to set this to false -- notifying clients of a drop may have little practicle utility for the same
+    inline constexpr bool DropsEnabled = false;
+    /// We decided to set this to false -- notifying clients of a drop may have little practical utility for the same
     /// rationale as given above: a valid dsproof is always relevant.  The fact that we lost track of it doesn't mean
     /// the client shouldn't still be wary of the potential for a double-spend.
-    inline constexpr bool DropsNotifyEnabled = true;
+    inline constexpr bool DropsNotifyEnabled = false;
 }
 
 SynchDSPsTask::SynchDSPsTask(Controller *ctl_, std::shared_ptr<Storage> storage, const std::atomic_bool & notifyFlag)
