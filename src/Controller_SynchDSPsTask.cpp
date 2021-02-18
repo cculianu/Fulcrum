@@ -26,6 +26,17 @@ namespace {
     /// forth to constantly poll data that mostly never changes). Instead, we grow the descendants set directly in
     /// Mempool.cpp addNewTxs() more efficiently. We grow the descendants set there as we add new tx's.
     inline constexpr bool UpdatingEnabled = false;
+    /// We may elect to disable dropping dsps from here. Rationale: bitcoind may restart and lose dsps, but they are
+    /// still relevant.  We instead may want to rely on dropping dsps when the actual "owning" txs go out of "scope"
+    /// (that is, they get confirmed in a block or evicted from mempool).  Mempool.cpp already takes care of removing
+    /// dsps for dropped/confirmed tx's for us. Perhaps we should set this to false and rely on that for the dsp
+    /// lifecycle. The reason we may want to do it that way is that a DSP that was once associated with an in-mempool tx
+    /// will always be relevant, regardless of bitcoind's inability to remember it existed (after a restart).
+    inline constexpr bool DropsEnabled = true;
+    /// We may want to set this to false -- notifying clients of a drop may have little practicle utility for the same
+    /// rationale as given above: a valid dsproof is always relevant.  The fact that we lost track of it doesn't mean
+    /// the client shouldn't still be wary of the potential for a double-spend.
+    inline constexpr bool DropsNotifyEnabled = true;
 }
 
 SynchDSPsTask::SynchDSPsTask(Controller *ctl_, std::shared_ptr<Storage> storage, const std::atomic_bool & notifyFlag)
@@ -81,7 +92,10 @@ void SynchDSPsTask::doGetDSPList()
             return;
         }
         const auto knownDSPs = Util::keySet<DSPs::DspHashSet>(storage->mempool().first.dsps.getAll()); // this is guarded access, lock held until statement end (C++ temporary lifetime rules)
-        auto droppedDSPs = knownDSPs; // start off assuming *all* are dropped until proven otherwise
+        DSPs::DspHashSet droppedDSPs;
+        if constexpr (DropsEnabled)
+            // if drops are enabled: start off assuming *all* are dropped until proven otherwise
+            droppedDSPs = knownDSPs;
         // scan thru all downloaded dsp hashes and figure out what's new and what needs refresh
         for (const auto & var : resp.result().toList()) {
             const DspHash hash = DspHash::fromHex(var.toString());
@@ -91,8 +105,7 @@ void SynchDSPsTask::doGetDSPList()
                 continue;
             }
             if (!knownDSPs.count(hash)) {
-                auto [it, inserted] = dspsNeedingDownload.emplace(
-                        std::piecewise_construct, std::forward_as_tuple(hash), std::forward_as_tuple());
+                auto [it, inserted] = dspsNeedingDownload.emplace(std::piecewise_construct, std::forward_as_tuple(hash), std::forward_as_tuple());
                 if (!inserted) {
                     // should never happen
                     Warning() << "Got dupe dsp hash in results from bitcoin for dsp: " << hash.toHex();
@@ -103,26 +116,39 @@ void SynchDSPsTask::doGetDSPList()
             } else {
                 // flag this one for needing refresh now (but only if updating is enabled)
                 if constexpr (UpdatingEnabled)
-                        dspsNeedingUpdate.insert(hash);
+                    dspsNeedingUpdate.insert(hash);
                 // remove from drop set
-                droppedDSPs.erase(hash);
+                if constexpr (DropsEnabled)
+                    droppedDSPs.erase(hash);
             }
         }
-        // handle drops, if any
-        if (!droppedDSPs.empty()) {
-            DebugM("dropped dsps:", droppedDSPs.size());
-            // flag them as dropped now -- remove from dsp store
-            unsigned ctr = 0;
-            {
-                auto [mempool, lock] = storage->mutableMempool(); // exclusive lock
-                for (const auto &hash : droppedDSPs) {
-                    const auto *proof = mempool.dsps.get(hash);
-                    if (!proof) { Error() << "FIXME: dsphash not found: " << hash.toHex(); continue; }
-                    for (const auto & txhash : proof->descendants) { txsAffected.insert(txhash); ++ctr; }
-                    mempool.dsps.rm(hash); // `proof` pointer invalidated after this line
+        if constexpr (DropsEnabled) {
+            // handle drops, if any
+            if (!droppedDSPs.empty()) {
+                DebugM("dropped dsps:", droppedDSPs.size());
+                // flag them as dropped now -- remove from dsp store
+                unsigned ctr = 0;
+                {
+                    auto [mempool, lock] = storage->mutableMempool(); // exclusive lock
+                    for (const auto &hash : droppedDSPs) {
+                        const auto *proof = mempool.dsps.get(hash);
+                        if (!proof) { Error() << "FIXME: dsphash not found: " << hash.toHex(); continue; }
+                        if constexpr (DropsNotifyEnabled) {
+                            for (const auto & txhash : proof->descendants) {
+                                txsAffected.insert(txhash);
+                                ++ctr;
+                            }
+                        } else {
+                            ctr += proof->descendants.size();
+                        }
+                        mempool.dsps.rm(hash); // `proof` pointer invalidated after this line
+                    }
                 }
+                if constexpr (DropsNotifyEnabled)
+                    DebugM("dsp<->tx links dropped: ", ctr, ", num txs: ", txsAffected.size());
+                else
+                    DebugM("dsp<->tx links dropped: ", ctr);
             }
-            DebugM("dsp<->tx links dropped: ", ctr, ", num txs: ", txsAffected.size());
         }
         // if we have any new dsps needing download, proceed to download state
         if (!dspsNeedingDownload.empty()) {
