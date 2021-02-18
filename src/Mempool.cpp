@@ -225,7 +225,7 @@ auto Mempool::addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
     }
 
     // DSP handling (BCH only)
-    if (!dsps.empty() && !newTxsNewParents.empty()) {
+    if (!dsps.empty() && !newTxsNewParents.empty() && !ret.dspTxAdds.empty()) {
         Tic t0;
         unsigned addCt, iters = 0, innerIters = 0, addsTotal = 0;
         do {
