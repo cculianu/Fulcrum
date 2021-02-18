@@ -48,7 +48,7 @@ bool DSPs::add(DSProof && dspIn)
         return false;
     const auto &dsp = it->second;
     for (const auto & txHash : dsp.descendants)
-        txDspsMap[txHash].emplace(dsp.hash);
+        txDspsMap[txHash].insert(dsp.hash);
     return true;
 }
 DSProof * DSPs::getMutable(const DspHash &hash) // private
@@ -82,9 +82,16 @@ bool DSPs::addTx(const DspHash &dspHash, const TxHash &txHash)
     DSProof *dsp;
     if (txHash.size() != HashLen || !(dsp = getMutable(dspHash)))
         return false;
-    txDspsMap[txHash].emplace(dsp->hash);
-    dsp->descendants.emplace(txHash); // this is how calling code adds new descendants it learns about
-    return true;
+    int ct = 0;
+    ct += txDspsMap[txHash].insert(dsp->hash).second;
+    ct += dsp->descendants.insert(txHash).second; // this is how calling code adds new descendants it learns about
+    if (UNLIKELY(ct == 1))
+        // this indicates a bug in this code -- invariant not maintained
+        Warning() << "DSPs::addTx -- bug in code. Invariant violated: the associations in txDspsMap and dsp->descendants disagree!";
+    // *** NOTE ***
+    // Mempool::addNewTxs relies on this function's return value semantics being true if insertion happened,
+    // false otherwise.  See Mempool::addNewTxs if you change the semantics of this return value.
+    return ct > 0;
 }
 std::size_t DSPs::rmTx(const TxHash &txHash)
 {

@@ -113,7 +113,8 @@ public:
     /// @returns the number of tx's that were previously linked with this dsp.
     std::size_t rm(const DspHash &hash);
     /// Links a txHash to an existing dspHash. Updates its DSProof::descendants set to include txHash.
-    /// @returns false if dspHash does not exist, of if txHash is not 32 bytes
+    /// @returns false if dspHash does not exist, of if txHash is not 32 bytes, or if the txHash was already linked to
+    ///     dspHash; true otherwise.
     bool addTx(const DspHash &dspHash, const TxHash &txHash);
     /// Unlinks a tx from all its dsps. If txHash is the actual double-spend tx for any dsps, and not a descendant,
     /// all such dsps will be removed as well.

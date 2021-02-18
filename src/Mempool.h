@@ -139,11 +139,14 @@ struct Mempool
     /// DB getter -- called to retrieve a utxo's scripthash & amount data from the DB. May throw.
     using GetTXOInfoFromDBFunc = std::function<std::optional<TXOInfo>(const TXO &)>;
 
+    using TxHashSet = std::unordered_set<TxHash, HashHasher>; ///< Used below by Stats & dropTxs()
+
     /// Results of add or drop -- some statistics for caller.
     struct Stats {
         std::size_t oldSize = 0, newSize = 0;
         std::size_t oldNumAddresses = 0, newNumAddresses = 0;
-        std::size_t dspRmCt = 0, dspTxRmCt = 0; // dsp stats: number of dsproofs removed, number of dsp <-> tx links removed
+        std::size_t dspRmCt = 0, dspTxRmCt = 0; // dsp stats: number of dsproofs removed, number of dsp <-> tx links removed (dropTxs, confirmedInBlock updates these)
+        TxHashSet dspTxAdds; // only ever populated by addTxs()
         double elapsedMsec = 0.;
     };
 
@@ -159,8 +162,6 @@ struct Mempool
 
 
     // -- Drop from mempool
-
-    using TxHashSet = std::unordered_set<TxHash, HashHasher>; ///< Used below by dropTxs()
 
     /// Drop a bunch of tx's, deleting them from this data structure and reversing the effects of their spends
     /// in the mempool.

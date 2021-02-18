@@ -21,6 +21,13 @@
 
 #include <utility>
 
+namespace {
+    /// We disabled updates (which grow the descendants set) since they are inefficient (too much network back and
+    /// forth to constantly poll data that mostly never changes). Instead, we grow the descendants set directly in
+    /// Mempool.cpp addNewTxs() more efficiently. We grow the descendants set there as we add new tx's.
+    inline constexpr bool UpdatingEnabled = false;
+}
+
 SynchDSPsTask::SynchDSPsTask(Controller *ctl_, std::shared_ptr<Storage> storage, const std::atomic_bool & notifyFlag)
     : CtlTask(ctl_, "SynchDSPs"), storage(storage), notifyFlag(notifyFlag)
 {
@@ -33,10 +40,14 @@ SynchDSPsTask::~SynchDSPsTask() {
     stop();
 
     if (!dspsDownloaded.empty() || !downloadsFailed.empty() || !dspsUpdated.empty() || !updatesFailed.empty() || !txsAffected.empty()) {
-        DebugM(objectName(), ": downloaded: ", dspsDownloaded.size(), ", failed: ", downloadsFailed.size(),
-               ", updated: ", dspsUpdated.size(), ", updated failed: ", updatesFailed.size(),
-               ", txsAffecteed: ", txsAffected.size(), ", dsp count now: ", storage->mempool().first.dsps.size(),
-               ", elapsed: ", elapsed.msecStr(), " msec");
+        if (Debug::isEnabled()) {
+            Debug d;
+            d << objectName() << ": downloaded: " << dspsDownloaded.size() << ", failed: " << downloadsFailed.size();
+            if constexpr (UpdatingEnabled)
+                    d << ", updated: " << dspsUpdated.size() << ", updated failed: " << updatesFailed.size();
+            d << ", txsAffecteed: " << txsAffected.size() << ", dsp count now: " << storage->mempool().first.dsps.size()
+              << ", elapsed: " << elapsed.msecStr() << " msec";
+        }
     } else if (elapsed.msec() >= 50) {
         // if total runtime for task >=50ms, log for debug
         DebugM(objectName(), " elapsed: ", elapsed.msecStr(), " msec");
@@ -90,8 +101,10 @@ void SynchDSPsTask::doGetDSPList()
                 DSProof & dspNew = it->second;
                 dspNew.hash = it->first; // re-use same QByteArray memory (copy-on-write)
             } else {
-                // flag this one for needing refresh now
-                dspsNeedingUpdate.emplace(hash);
+                // flag this one for needing refresh now (but only if updating is enabled)
+                if constexpr (UpdatingEnabled)
+                        dspsNeedingUpdate.insert(hash);
+                // remove from drop set
                 droppedDSPs.erase(hash);
             }
         }
@@ -288,7 +301,8 @@ void SynchDSPsTask::doProcessDownloads()
                     proof.descendants.erase(txid);
             }
             try {
-                mempool.dsps.add(std::move(proof));
+                if (! mempool.dsps.add(std::move(proof)) ) // this itself may throw
+                    throw InternalError("DSPs::add() returned false"); // but also we will throw if it returns false since it indicates a bug in code
             } catch (const std::exception &e) {
                 // this should never happen, but since the above can throw, it's best to guard against it.
                 Error() << "INTERNAL ERROR: failed to add dsp " << hash.toHex() << ", exception: " << e.what();

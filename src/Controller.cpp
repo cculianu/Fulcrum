@@ -631,6 +631,7 @@ struct SynchMempoolTask : public CtlTask
 
     /// The scriptHashes that were affected by this refresh/synch cycle. Used for notifications.
     std::unordered_set<HashX, HashHasher> scriptHashesAffected;
+    Mempool::TxHashSet dspTxsAdded; ///< the txids in the adds that also have dsproofs now associated with them
 
     void clear() {
         isdlingtxs = false;
@@ -657,10 +658,16 @@ struct SynchMempoolTask : public CtlTask
 
 SynchMempoolTask::~SynchMempoolTask() {
     stop(); // paranoia
-    if (!scriptHashesAffected.empty() && notifyFlag.load()) // this is false until Controller enables the servers that listen for connections
-        // notify status change for affected sh's, regardless of how this task exited (this catches corner cases
-        // where we queued up some notifications and then we died on a retry due to errors from bitcoind)
-        storage->subs()->enqueueNotifications(std::move(scriptHashesAffected));
+    if (notifyFlag.load()) { // this is false until Controller enables the servers that listen for connections
+        if (!scriptHashesAffected.empty())
+            // notify status change for affected sh's, regardless of how this task exited (this catches corner cases
+            // where we queued up some notifications and then we died on a retry due to errors from bitcoind)
+            storage->subs()->enqueueNotifications(std::move(scriptHashesAffected));
+        if (!dspTxsAdded.empty()) {
+            DebugM(objectName(), ": dspTx adds: ", dspTxsAdded.size());
+            // TODO ... notify here? These are new txs so they can't have any dsptx notify subs.. can they? (TODO: figure this out)
+        }
+    }
 
     if (elapsed.secs() >= 1.0) {
         // if total runtime for task >1s, log for debug
@@ -801,7 +808,7 @@ void SynchMempoolTask::processResults()
     // exclusive lock while accessing the db and Fulcrum would freeze on chains such as BTC when first
     // starting up as it built up the initial large mempool.  With this scheme, it runs much faster.
 
-    const auto [oldSize, newSize, oldNumAddresses, newNumAddresses, elapsedMsec, x, xx] = [this, &cache, &sizes] {
+    auto res = [this, &cache, &sizes] {
         const auto getFromCache = [&cache](const TXO &prevTXO) -> std::optional<TXOInfo> {
             // This is a callback called from within addNewTxs() below when encountering a confirmed
             // spend.  We just return whatever we precached for this entry.
@@ -825,8 +832,9 @@ void SynchMempoolTask::processResults()
         updateLastProgress(0.80);
         return mempool.addNewTxs(scriptHashesAffected, txsDownloaded, getFromCache, TRACE); // may throw
     }();
-    if ((oldSize != newSize || elapsedMsec > 1e3) && Debug::isEnabled()) {
-        Controller::printMempoolStatusToLog(newSize, newNumAddresses, elapsedMsec, true, true);
+    dspTxsAdded.merge(res.dspTxAdds);
+    if ((res.oldSize != res.newSize || res.elapsedMsec > 1e3) && Debug::isEnabled()) {
+        Controller::printMempoolStatusToLog(res.newSize, res.newNumAddresses, res.elapsedMsec, true, true);
     }
     updateLastProgress(1.0);
     emit success();
@@ -971,9 +979,14 @@ void SynchMempoolTask::doGetRawMempool()
             // do bookkeeping, maybe print debug log
             {
                 droppedCt = res.oldSize - res.newSize;
-                DebugM("Dropped ", droppedCt, " txs from mempool (", affected.size(), " addresses) in ",
-                       QString::number(res.elapsedMsec, 'f', 3), " msec, new mempool size: ", res.newSize,
-                       " (", res.newNumAddresses, " addresses)");
+                if (Debug::isEnabled()) {
+                    Debug d;
+                    d << "Dropped " << droppedCt << " txs from mempool (" << affected.size() << " addresses) in "
+                      << QString::number(res.elapsedMsec, 'f', 3) << " msec, new mempool size: " << res.newSize
+                      << " (" << res.newNumAddresses << " addresses)";
+                    if (res.dspRmCt || res.dspTxRmCt)
+                        d << " (also dropped dsps: " << res.dspRmCt << " dspTxs: " << res.dspTxRmCt << ")";
+                }
                 scriptHashesAffected.merge(std::move(affected)); /* update set here with lock not held */
             }
             if (UNLIKELY(droppedCt != droppedTxs.size())) {

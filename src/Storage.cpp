@@ -1630,7 +1630,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
             d << "addBlock: removed " << diff << " txs from mempool involving "
               << affected.size() << " addresses";
             if (res.dspRmCt || res.dspTxRmCt)
-                d << " (also removed dsps: " << res.dspRmCt << ", dspTx links: " << res.dspTxRmCt << ")";
+                d << " (also removed dsps: " << res.dspRmCt << ", dspTxs: " << res.dspTxRmCt << ")";
             d << " in " << QString::number(res.elapsedMsec, 'f', 3) << " msec";
         }
         notify->merge(std::move(affected));
