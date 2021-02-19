@@ -531,6 +531,10 @@ namespace {
         Log() << "Iterating " << iters << " times ...";
         int64_t elapsedUsecOld{}, elapsedUsecNew{};
         for (int i = 0; i < iters; ++i) {
+            if (i > 0) {
+                Log() << "Shuffling history items ...";
+                Util::shuffle(hist.begin(), hist.end());
+            }
             QByteArray s1, s2;
             Log() << "Calculating status hash the old way ...";
             {
