@@ -92,9 +92,6 @@ void ThreadPool::submitWork(QObject *context, const VoidFunc & work, const VoidF
         delete job; // will decrement extant on delete
         const auto msg = QString("Job limit exceeded (%1)").arg(njobs);
         failFuncToUse(msg);
-        if (&failFuncToUse != &defaultFail)
-            // make sure log gets the error
-            Warning() << msg;
         return;
     } else if (UNLIKELY(njobs < 0)) {
         // should absolutely never happen.
