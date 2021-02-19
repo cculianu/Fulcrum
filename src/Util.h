@@ -852,38 +852,37 @@ namespace Util {
                 return *this;
             }
             // Append an integer converted to decimal string. If there is no room for the full decimal representation
-            // of the integer, including possible minus sign, the buffer will be left unchanged.
+            // of the integer, including possible minus sign, the decimal number will be truncated at the end.
             template <typename T, typename std::enable_if_t<std::is_integral_v<T>, int> = 0>
             SBuf & append(T n) noexcept {
                 /* Note: ideally we'd just use C++17 std::to_chars here -- however on some compilers we target, the
                  * implementation is missing from libstdc++!  So.. we must roll our own here... */
-                if (len+1 >= MaxLen)
-                    return *this; // cannot append.. no room left.. need space for at least 1 digit
-                const auto origLen = len;
-                auto first = len;
+                static_assert(sizeof(T) <= 16, "This function assumes <= 128 bit ints for T");
+                constexpr unsigned TmpMaxLen = 64; // should be enough even for 128 bit values
+                char tmpBuf[TmpMaxLen];
+                unsigned tmpLen = 0;
+                bool neg = false;
                 if (std::is_signed_v<T> && n < 0) { // special handling for negatives.. prepend minus, normalize to positive value
-                    if (len+2 >= MaxLen) {
-                        // give up, won't fit: need space for minus sign, plus 1 digit
-                        return *this;
-                    }
-                    strBuf[len++] = '-';
-                    first = len; // start after the minus sign
+                    neg = true;
                     if (UNLIKELY(n == std::numeric_limits<T>::min())) { // special case for most negative `n`
                         // add digit accounting for its negativeness, then divide n by 10 so that its absolute value
                         // can fit in a positive T
-                        strBuf[len++] = '0' - n % 10;
+                        tmpBuf[tmpLen++] = '0' - n % 10;
                         n /= 10;
                     }
                     n = -n; // when we get here, `-n` is guaranteed to fit in a positive T
                 }
                 do {
-                    strBuf[len++] = '0' + n % 10;
+                    tmpBuf[tmpLen++] = '0' + n % 10;
                     n /= 10;
-                } while (n && len < MaxLen);
-                if (n) // if n, it didn't fit. give up, leave original buffer unchanged
-                    first = len = origLen;
+                } while (n); /* <-- no need to check if looping past end of tmpBuf; 64 chars is enough for at least 128 bit; see above static_assert */
+                if (neg) tmpBuf[tmpLen++] = '-'; // append negative at end
+                const long nBytes = std::max(std::min(long(MaxLen) - long(len), long(tmpLen)), 0L);
+                const auto rbegin = std::make_reverse_iterator(tmpBuf + tmpLen),
+                           rend   = std::make_reverse_iterator(tmpBuf + (long(tmpLen) - nBytes)); // handle truncation in cases where it doesn't fit
+                std::copy(rbegin, rend, strBuf.begin() + len); // append in reverse to strBuf
+                len += nBytes;
                 strBuf[len] = 0; // terminating nul (there is always room for this char)
-                std::reverse(strBuf.begin() + first, strBuf.begin() + len);
                 return *this;
             }
             constexpr operator const char *() const noexcept { return strBuf.data(); }
