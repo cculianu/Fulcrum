@@ -355,6 +355,40 @@ std::pair<bool, bool> SubsMgr::globalSubsLimitFlags() const
     return { numActiveClientSubscriptions() > thresh, numScripthashesSubscribed() > thresh };
 }
 
+namespace {
+// assumption: `hist` is not empty!
+inline QByteArray optimizedStatusHashCalc(const Storage::History &hist) {
+    /*
+    // This is the original implementation: it is 2x slower than the optimized version
+    QString historyString;
+    {
+        QTextStream ts(&historyString, QIODevice::WriteOnly);
+        for (const auto & item : hist) {
+            ts << Util::ToHexFast(item.hash) << ":" << item.height << ":";
+        }
+    }
+    */
+    // optimized version:
+    QByteArray historyBuffer;
+    static_assert (sizeof(decltype(hist.front().height)) <= 4, "Assumption below is for 32-bit heights");
+    constexpr size_t WorstCaseElementSize = HashLen*2 + 11 + 2; // worse case: 11 bytes max for sign & int, 2 colons, plus 64 bytes for hashHex
+    historyBuffer.reserve(hist.size() * WorstCaseElementSize);
+    for (const auto & item : hist) {
+        constexpr size_t BufSize = WorstCaseElementSize + 10; // leave a little room (this happens to align sbuf to cache on 64-bit)
+        Util::AsyncSignalSafe::SBuf<BufSize> sbuf; // fast stack-based buffer
+        if (const auto hexLen = item.hash.length() * 2; LIKELY(hexLen <= HashLen * 2)) {
+            Util::ToHexFastInPlace(item.hash, sbuf.strBuf.data(), hexLen);
+            sbuf.len += hexLen;
+        }
+        sbuf.append(':').append(item.height).append(':');
+        historyBuffer.append(std::as_const(sbuf.strBuf).data(), sbuf.len);
+    }
+
+    // status is non-reversed, single sha256 (32 bytes)
+    return BTC::HashOnce(historyBuffer);
+}
+}
+
 auto SubsMgr::getFullStatus(const HashX &sh) const -> StatusHash
 {
     const Tic t0;
@@ -363,15 +397,7 @@ auto SubsMgr::getFullStatus(const HashX &sh) const -> StatusHash
     if (hist.empty())
         // no history, return an empty QByteArray
         return ret;
-    QString historyString;
-    {
-        QTextStream ts(&historyString, QIODevice::WriteOnly);
-        for (const auto & item : hist) {
-            ts << Util::ToHexFast(item.hash) << ":" << item.height << ":";
-        }
-    }
-    // status is non-reversed, single sha256 (32 bytes)
-    ret = BTC::HashOnce(historyString.toUtf8());
+    ret = optimizedStatusHashCalc(hist);
     constexpr qint64 kTookKindaLongNS = 7'500'000LL; // 7.5mec -- if it takes longer than this, log it to debug log, otherwise don't as this can get spammy.
     if (t0.nsec() > kTookKindaLongNS) {
         DebugM("full status for ",  Util::ToHexFast(sh), " ", hist.size(), " items in ", t0.msecStr(4), " msec");
@@ -468,3 +494,67 @@ auto SubsMgr::stats() const -> Stats
     ret["activeTimers"] = activeTimerMapForStats();
     return ret;
 }
+
+#ifdef ENABLE_TESTS
+#include "App.h"
+#include "BlockProcTypes.h"
+#include <utility>
+#include <vector>
+
+namespace {
+    void testStatusHash() {
+        constexpr std::size_t N = Options::defaultMaxHistory * 2;
+        Log() << "Generating " << N << " random history items ...";
+        using History = Storage::History;
+        using HistoryItem = Storage::HistoryItem;
+        History hist;
+        hist.reserve(N);
+        // append a few special-cases to ensure correctness at corner cases
+        hist.push_back(HistoryItem{BTC::Hash160("123132"), std::numeric_limits<decltype(HistoryItem().height)>::min(), {}});
+        hist.push_back(HistoryItem{BTC::Hash160("Calin"), std::numeric_limits<decltype(HistoryItem().height)>::max(), {}});
+        hist.push_back(HistoryItem{"", 0, {}});
+        hist.push_back(HistoryItem{QByteArray{}, 11111, {}});
+        hist.push_back(HistoryItem{QByteArray(HashLen, char(-1)), -1, {}});
+        while (hist.size() < N) {
+            QByteArray hash(HashLen, Qt::Uninitialized);
+            int height;
+            Util::getRandomBytes(hash.data(), HashLen);
+            Util::getRandomBytes(reinterpret_cast<std::byte *>(&height), sizeof(height));
+            hist.push_back(HistoryItem{std::move(hash), height, std::nullopt});
+        }
+        constexpr int iters = 5;
+        Log() << "Iterating " << iters << " times ...";
+        int64_t elapsedUsecOld{}, elapsedUsecNew{};
+        for (int i = 0; i < iters; ++i) {
+            QByteArray s1, s2;
+            Log() << "Calculating status hash the old way ...";
+            {
+                Tic t0;
+                QString historyString;
+                QTextStream ts(&historyString, QIODevice::WriteOnly);
+                for (const auto & [hash, height, xx] : hist) {
+                    ts << Util::ToHexFast(hash) << ":" << height << ":";
+                }
+                // status is non-reversed, single sha256 (32 bytes)
+                s1 = BTC::HashOnce(historyString.toUtf8());
+                t0.fin();
+                elapsedUsecOld += t0.usec<int64_t>();
+                Log() << "Elapsed: " << t0.msecStr(6) << " msec";
+            }
+            Log() << "Calculating status hash the new way ...";
+            {
+                Tic t0;
+                s2 = optimizedStatusHashCalc(hist);
+                t0.fin();
+                elapsedUsecNew += t0.usec<int64_t>();
+                Log() << "Elapsed: " << t0.msecStr(6) << " msec";
+            }
+            if (s1 != s2) throw Exception("results do not compare ok!");
+        }
+        Log() << "Elapsed totals: old way: " << QString::number(elapsedUsecOld/1e3, 'f', 3) << " msec"
+              <<  ", new way: " << QString::number(elapsedUsecNew/1e3, 'f', 3) << " msec";
+    }
+
+    const auto b1 = App::registerTest("statushash", testStatusHash);
+}
+#endif

@@ -259,6 +259,22 @@ namespace Util {
         std::shuffle(begin, end, std::default_random_engine(seed));
     }
 
+    template <typename T, typename std::enable_if_t<std::is_pod_v<T> && sizeof(T) == 1, int> = 0>
+    void getRandomBytes(T *buf, std::size_t n) {
+        int ctr = 0;
+        quint64 bits = 0;
+        std::generate_n(buf, n, [&]{
+            if (ctr == 0) {
+                bits = QRandomGenerator::global()->generate64();
+                ctr = 8;
+            }
+            const T ret = static_cast<T>(bits & 0xffu);
+            bits >>= 8;
+            --ctr;
+            return ret;
+        });
+    }
+
     template <typename Map>
     Map & updateMap(Map &map, const Map &updates) {
         for (auto it = updates.cbegin(); it != updates.cend(); ++it) {
@@ -799,15 +815,15 @@ namespace Util {
         struct SBuf {
             static_assert (N < std::size_t(std::numeric_limits<long>::max())); // ensure no signed overflow
             static constexpr std::size_t MaxLen = N;
-            std::array<char, MaxLen + 1> strBuf;
             std::size_t len = 0;
+            std::array<char, MaxLen + 1> strBuf;
 
             constexpr SBuf() noexcept { clear(); }
 
             /// Construct by formatting the args to this buffer.
             /// Usage: SBuf("A string: ", anum, " another string\n", anotherNum), etc.
             template <typename ... Args>
-            SBuf(Args && ...args) : SBuf() {
+            SBuf(Args && ...args) noexcept : SBuf() {
                 // fold expression: calls append() for each argument in the pack
                 (append(std::forward<Args>(args)),...);
             }
@@ -827,22 +843,51 @@ namespace Util {
                 strBuf[len] = 0;
                 return *this;
             }
-            // append an integer converting to decimal string
-            SBuf & append(int n) noexcept {
-                std::array<char, 20> buf;
-                buf[0] = 0;
-                long len = 0;
-                if (n < 0) { n = -n; buf[len++] = '-'; buf[len] = 0; }
+            // append a single character
+            SBuf & append(char c) noexcept {
+                if (len >= MaxLen)
+                    return *this;
+                strBuf[len++] = c;
+                strBuf[len] = 0;
+                return *this;
+            }
+            // Append an integer converted to decimal string. If there is no room for the full decimal representation
+            // of the integer, including possible minus sign, the buffer will be left unchanged.
+            template <typename T, typename std::enable_if_t<std::is_integral_v<T>, int> = 0>
+            SBuf & append(T n) noexcept {
+                /* Note: ideally we'd just use C++17 std::to_chars here -- however on some compilers we target, the
+                 * implementation is missing from libstdc++!  So.. we must roll our own here... */
+                if (len+1 >= MaxLen)
+                    return *this; // cannot append.. no room left.. need space for at least 1 digit
+                const auto origLen = len;
+                auto first = len;
+                if (std::is_signed_v<T> && n < 0) { // special handling for negatives.. prepend minus, normalize to positive value
+                    if (len+2 >= MaxLen) {
+                        // give up, won't fit: need space for minus sign, plus 1 digit
+                        return *this;
+                    }
+                    strBuf[len++] = '-';
+                    first = len; // start after the minus sign
+                    if (UNLIKELY(n == std::numeric_limits<T>::min())) { // special case for most negative `n`
+                        // add digit accounting for its negativeness, then divide n by 10 so that its absolute value
+                        // can fit in a positive T
+                        strBuf[len++] = '0' - n % 10;
+                        n /= 10;
+                    }
+                    n = -n; // when we get here, `-n` is guaranteed to fit in a positive T
+                }
                 do {
-                    buf[len++] = '0' + n % 10;
+                    strBuf[len++] = '0' + n % 10;
                     n /= 10;
-                } while (n && len < long(MaxLen));
-                buf[len] = 0; // terminating nul
-                std::reverse(buf.begin(), buf.begin() + len);
-                return append({buf.data(), std::size_t(len)});
+                } while (n && len < MaxLen);
+                if (n) // if n, it didn't fit. give up, leave original buffer unchanged
+                    first = len = origLen;
+                strBuf[len] = 0; // terminating nul (there is always room for this char)
+                std::reverse(strBuf.begin() + first, strBuf.begin() + len);
+                return *this;
             }
             constexpr operator const char *() const noexcept { return strBuf.data(); }
-            operator std::string_view() const noexcept { return {strBuf.data(), len}; }
+            constexpr operator std::string_view() const noexcept { return {strBuf.data(), len}; }
             SBuf &operator=(const std::string_view &sv) noexcept { clear(); return append(sv); }
             SBuf &operator+=(const std::string_view &sv) noexcept { return append(sv); }
         };
