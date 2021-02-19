@@ -713,6 +713,7 @@ void ServerBase::onPeersUpdated(const PeerInfoList &pl)
 namespace {
     ThreadPool::FailFunc defaultTPFailFunc(Client *c, const RPC::Message::Id &id) {
         return [c, id](const QString &what) {
+            Warning() << "ThreadPool job for client " << c->id << " failed: " << what;
             emit c->sendError(false, RPC::Code_InternalError, QString("internal error: %1").arg(what), id);
         };
     }
