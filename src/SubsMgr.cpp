@@ -375,8 +375,10 @@ inline QByteArray optimizedStatusHashCalc(const Storage::History &hist) {
     */
     // optimized version:
     QByteArray historyBuffer;
-    static_assert (sizeof(decltype(hist.front().height)) <= 4, "Assumption below is for 32-bit heights");
+    static_assert (sizeof(decltype(hist.front().height)) <= 4, "Assumption below is for at most 32-bit heights");
     constexpr size_t WorstCaseElementSize = HashLen*2 + 11 + 2; // worse case: 11 bytes max for sign & int, 2 colons, plus 64 bytes for hashHex
+    static_assert (size_t(Options::maxHistoryMax) * WorstCaseElementSize <= size_t(std::numeric_limits<int32_t>::max()),
+                   "maxHistoryMax cannot be so large that it requires a >2GiB QByteArray to store the history string");
     historyBuffer.reserve(hist.size() * WorstCaseElementSize);
     for (const auto & item : hist) {
         constexpr size_t BufSize = WorstCaseElementSize + 10; // leave a little room (this happens to align sbuf to cache on 64-bit)
@@ -564,6 +566,6 @@ namespace {
               <<  ", new way: " << QString::number(elapsedUsecNew/1e3, 'f', 3) << " msec";
     }
 
-    const auto b1 = App::registerTest("statushash", testStatusHash);
+    const auto t1 = App::registerTest("statushash", testStatusHash);
 }
 #endif
