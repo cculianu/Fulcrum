@@ -664,9 +664,13 @@ void ServerBase::onMessage(IdMixin::Id clientId, const RPC::Message &m)
             } catch (const RPCError & e) {
                 emit c->sendError(e.disconnect, e.code, e.what(), m.id);
             } catch (const std::exception & e) {
+                // log this unexpected exception, so we get bug reports hopefully if this ever happens
+                Warning() << "Unexpected exception thrown while processing RPC request \"" << m.method
+                          << "\" for client " << c->id << ", exception: " << e.what();
                 emit c->sendError(false, RPC::ErrorCodes::Code_InternalError,
                                   QString("internal error: %1").arg(e.what()),  m.id);
             } catch (...) {
+                Warning() << "Unknown exception thrown while processing RPC request \"" << m.method << "\" for client " << c->id;
                 emit c->sendError(false, RPC::ErrorCodes::Code_InternalError, "internal error: unknown", m.id);
             }
         }

@@ -169,22 +169,27 @@ void SubsMgr::doNotifyAllPending()
         // ^^^ We must release the above lock here temporarily because we do not want to hold it while also implicitly
         // grabbing the Storage 'blocksLock' below for getFullStatus* (storage->getHistory acquires that lock in
         // read-only mode).
-        const auto status = getFullStatus(sh);
-        // Now, re-acquire sub lock. Temporarily having released it above should be fine for our purposes, since the
-        // above empty() check was only a performance optimization and the predicate not holding for the duration of
-        // this code block is fine. In the unlikely event that a sub lost its clients while the lock was released, the
-        // below emit sub->statusChanged(...) will just be a no-op.
-        LockGuard g(sub->mut);
-        const bool doemit = !sub->lastStatusNotified.has_value() || *sub->lastStatusNotified != status;
-        // we basically cache 2 statuses but they are implicitly shared copies of the same memory so it's ok.
-        sub->lastStatusNotified = status;
-        sub->cachedStatus = status;
-        if (doemit) {
-            const auto nClients = sub->subscribedClientIds.size();
-            ctr += nClients;
-            DebugM("Notifying ", nClients, Util::Pluralize(" client", nClients), " of status for ", Util::ToHexFast(sh));
-            sub->updateTS();
-            emit sub->statusChanged(sh, status);
+        try {
+            const auto status = getFullStatus(sh);
+            // Now, re-acquire sub lock. Temporarily having released it above should be fine for our purposes, since the
+            // above empty() check was only a performance optimization and the predicate not holding for the duration of
+            // this code block is fine. In the unlikely event that a sub lost its clients while the lock was released, the
+            // below emit sub->statusChanged(...) will just be a no-op.
+            LockGuard g(sub->mut);
+            const bool doemit = !sub->lastStatusNotified.has_value() || *sub->lastStatusNotified != status;
+            // we basically cache 2 statuses but they are implicitly shared copies of the same memory so it's ok.
+            sub->lastStatusNotified = status;
+            sub->cachedStatus = status;
+            if (doemit) {
+                const auto nClients = sub->subscribedClientIds.size();
+                ctr += nClients;
+                DebugM("Notifying ", nClients, Util::Pluralize(" client", nClients), " of status for ", Util::ToHexFast(sh));
+                sub->updateTS();
+                emit sub->statusChanged(sh, status);
+            }
+        } catch (const std::exception & e) {
+            // getFullStatus() may throw in pathological circumstances e.g. std::bad_alloc (unlikely but possible)
+            Error() << "ERROR: Caught exception attempting to calculate status for scripthash: " << sh.toHex();
         }
     }
     if (ctr || ctrSH) {

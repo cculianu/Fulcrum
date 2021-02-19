@@ -131,7 +131,7 @@ public:
 
     // Max history & max buffer
     static constexpr int defaultMaxBuffer = 4'000'000, maxBufferMin = 64'000, maxBufferMax = 100'000'000;
-    static constexpr int defaultMaxHistory = 125'000, maxHistoryMin = 1000, maxHistoryMax = 100'000'000;
+    static constexpr int defaultMaxHistory = 125'000, maxHistoryMin = 1000, maxHistoryMax = 25'000'000;
 
     static constexpr bool isMaxBufferSettingInBounds(int m) { return m >= maxBufferMin && m <= maxBufferMax; }
     static constexpr int clampMaxBufferSetting(const qint64 m64, const bool noClampMax=false) {
