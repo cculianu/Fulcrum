@@ -19,6 +19,8 @@
 #include "SubsMgr.h"
 #include "Util.h"
 
+#include "bitcoin/hash.h"
+
 #include <QThread>
 
 #include <algorithm>
@@ -188,7 +190,7 @@ void SubsMgr::doNotifyAllPending()
                 emit sub->statusChanged(sh, status);
             }
         } catch (const std::exception & e) {
-            // getFullStatus() may throw in pathological circumstances e.g. std::bad_alloc (unlikely but possible)
+            // Defensive programming here in case getFullStatus() or other functions throw (extremely unlikely)
             Error() << "ERROR: Caught exception attempting to calculate status for scripthash: " << sh.toHex();
         }
     }
@@ -374,12 +376,9 @@ inline QByteArray optimizedStatusHashCalc(const Storage::History &hist) {
     }
     */
     // optimized version:
-    QByteArray historyBuffer;
     static_assert (sizeof(decltype(hist.front().height)) <= 4, "Assumption below is for at most 32-bit heights");
     constexpr size_t WorstCaseElementSize = HashLen*2 + 11 + 2; // worse case: 11 bytes max for sign & int, 2 colons, plus 64 bytes for hashHex
-    static_assert (size_t(Options::maxHistoryMax) * WorstCaseElementSize <= size_t(std::numeric_limits<int32_t>::max()),
-                   "maxHistoryMax cannot be so large that it requires a >2GiB QByteArray to store the history string");
-    historyBuffer.reserve(hist.size() * WorstCaseElementSize);
+    bitcoin::CHash256 hasher(true /* hash once */);
     for (const auto & item : hist) {
         constexpr size_t BufSize = WorstCaseElementSize + 10; // leave a little room (this happens to align sbuf to cache on 64-bit)
         Util::AsyncSignalSafe::SBuf<BufSize> sbuf; // fast stack-based buffer
@@ -388,11 +387,15 @@ inline QByteArray optimizedStatusHashCalc(const Storage::History &hist) {
             sbuf.len += hexLen;
         }
         sbuf.append(':').append(item.height).append(':');
-        historyBuffer.append(std::as_const(sbuf.strBuf).data(), sbuf.len);
+        hasher.Write(reinterpret_cast<const uint8_t *>(std::as_const(sbuf.strBuf).data()), sbuf.len);
     }
 
+    static_assert (hasher.OUTPUT_SIZE == HashLen, "Assumption is that HashLen is the sha256 output size (32 bytes)");
+    QByteArray ret{HashLen, Qt::Uninitialized};
+    hasher.Finalize(reinterpret_cast<uint8_t *>(ret.data()));
+
     // status is non-reversed, single sha256 (32 bytes)
-    return BTC::HashOnce(historyBuffer);
+    return ret;
 }
 }
 
@@ -404,7 +407,7 @@ auto SubsMgr::getFullStatus(const HashX &sh) const -> StatusHash
     if (hist.empty())
         // no history, return an empty QByteArray
         return ret;
-    ret = optimizedStatusHashCalc(hist); // note: may throw std::bad_alloc (unlikely), since it generates a large string to compute the statusHash
+    ret = optimizedStatusHashCalc(hist);
     constexpr qint64 kTookKindaLongNS = 7'500'000LL; // 7.5mec -- if it takes longer than this, log it to debug log, otherwise don't as this can get spammy.
     if (t0.nsec() > kTookKindaLongNS) {
         DebugM("full status for ",  Util::ToHexFast(sh), " ", hist.size(), " items in ", t0.msecStr(4), " msec");
@@ -538,8 +541,9 @@ namespace {
                 Util::shuffle(hist.begin(), hist.end());
             }
             QByteArray s1, s2;
+            bool gotbadalloc = false;
             Log() << "Calculating status hash the old way ...";
-            {
+            try {
                 Tic t0;
                 QString historyString;
                 QTextStream ts(&historyString, QIODevice::WriteOnly);
@@ -551,7 +555,11 @@ namespace {
                 t0.fin();
                 elapsedUsecOld += t0.usec<int64_t>();
                 Log() << "Elapsed: " << t0.msecStr(6) << " msec";
+            } catch (const std::bad_alloc &e) {
+                Error() << e.what();
+                gotbadalloc = true;
             }
+
             Log() << "Calculating status hash the new way ...";
             {
                 Tic t0;
@@ -560,6 +568,7 @@ namespace {
                 elapsedUsecNew += t0.usec<int64_t>();
                 Log() << "Elapsed: " << t0.msecStr(6) << " msec";
             }
+            if (gotbadalloc) throw Exception("old way threw bad_alloc, aborting");
             if (s1 != s2) throw Exception("results do not compare ok!");
         }
         Log() << "Elapsed totals: old way: " << QString::number(elapsedUsecOld/1e3, 'f', 3) << " msec"
