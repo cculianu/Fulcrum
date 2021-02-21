@@ -148,4 +148,13 @@ public:
     const DSProof * dsproof() const noexcept { return t == DSP ? u.dsp.get() : nullptr; }
 };
 
+/// Specialization of std::hash so we can use SubStatus with std::unordered_map, std::unordered_set, etc
+template <> struct std::hash<SubStatus> {
+    std::size_t operator()(const SubStatus &s) const {
+        if (auto *ba = s.byteArray(); ba) return HashHasher{}(*ba);
+        else if (auto *dsp = s.dsproof(); dsp) return DspHash::Hasher{}(dsp->hash);
+        return 0; // !has_value hashes to 0 always
+    }
+};
+
 Q_DECLARE_METATYPE(SubStatus);

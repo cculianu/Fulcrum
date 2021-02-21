@@ -718,11 +718,9 @@ Fatal::~Fatal()
 #include <vector>
 
 #if QT_VERSION < QT_VERSION_CHECK(5, 14, 0)
-namespace std {
-    template<> struct hash<QString> {
-        std::size_t operator()(const QString &s) const { return Util::hashForStd(s); }
-    };
-}
+template<> struct std::hash<QString> {
+    std::size_t operator()(const QString &s) const { return Util::hashForStd(s); }
+};
 #endif
 
 namespace {

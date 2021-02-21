@@ -139,10 +139,9 @@ struct CompactTXO {
 #pragma pack(pop)
 #endif
 
-namespace std {
 /// specialization of std::hash to be able to add struct CompactTXO to any unordered_set or unordered_map
-template<> struct hash<CompactTXO> {
-    size_t operator()(const CompactTXO &ctxo) const {
+template<> struct std::hash<CompactTXO> {
+    std::size_t operator()(const CompactTXO &ctxo) const {
         const std::uint64_t val1 = ctxo.txNum();
         const std::uint32_t val2 = ctxo.N();
         // We must copy the txNum and the ionum to a temporary buffer and hash that.
@@ -155,4 +154,3 @@ template<> struct hash<CompactTXO> {
         return Util::hashForStd(buf);
     }
 };
-} // namespace std
