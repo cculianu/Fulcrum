@@ -154,6 +154,7 @@ public:
     ///
     /// Note that this implicitly will take the Storage "blocksLock" as a shared lock -- so bear that in mind if calling
     /// this from `Storage` with that lock already held.
+    /// @exceptions std::bad_alloc (very unlikely) If the status string was very large and there was not enough memory.
     StatusHash getFullStatus(const HashX &scriptHash) const;
 
     /// Thread-safe.  Client calls this to maybe save the status hash it just got from getFullStatus. We don't always

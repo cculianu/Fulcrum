@@ -404,7 +404,7 @@ auto SubsMgr::getFullStatus(const HashX &sh) const -> StatusHash
     if (hist.empty())
         // no history, return an empty QByteArray
         return ret;
-    ret = optimizedStatusHashCalc(hist);
+    ret = optimizedStatusHashCalc(hist); // note: may throw std::bad_alloc (unlikely), since it generates a large string to compute the statusHash
     constexpr qint64 kTookKindaLongNS = 7'500'000LL; // 7.5mec -- if it takes longer than this, log it to debug log, otherwise don't as this can get spammy.
     if (t0.nsec() > kTookKindaLongNS) {
         DebugM("full status for ",  Util::ToHexFast(sh), " ", hist.size(), " items in ", t0.msecStr(4), " msec");
