@@ -661,16 +661,17 @@ struct SynchMempoolTask : public CtlTask
 SynchMempoolTask::~SynchMempoolTask() {
     stop(); // paranoia
     if (notifyFlag.load()) { // this is false until Controller enables the servers that listen for connections
-        if (!scriptHashesAffected.empty())
+        if (!scriptHashesAffected.empty()) {
             // notify status change for affected sh's, regardless of how this task exited (this catches corner cases
             // where we queued up some notifications and then we died on a retry due to errors from bitcoind)
             storage->subs()->enqueueNotifications(std::move(scriptHashesAffected));
+        }
         if (!txidsDropped.empty()) {
-            // TODO .. notify a future txid-based subscription subsystem about the txids that are now gone
+            storage->dspSubs()->unsubscribeClientsForKeys(txidsDropped);
         }
         if (!dspTxsAdded.empty()) {
             DebugM(objectName(), ": dspTx adds: ", dspTxsAdded.size());
-            // TODO ... notify here? These are new txs so they can't have any dsptx notify subs.. can they? (TODO: figure this out)
+            storage->dspSubs()->enqueueNotifications(std::move(dspTxsAdded));
         }
     }
 

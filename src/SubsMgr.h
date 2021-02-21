@@ -85,6 +85,13 @@ signals:
     /// @param status is raw 32 bytes as well if the manager is ScriptHashSubsMgr, otherwise it is whatever is
     ///     specified for that SubsMgr  (e.g. if DSProofSubsMgr, then it's a DSProof object).
     void statusChanged(const HashX &key, const SubStatus &status);
+
+    /// This is a private signal. Do not emit this in code outside SubsMgr.cpp internals.
+    ///
+    /// It is connected to a lambda that will execute in the thread for all the subscribed clients for this sub.
+    /// It will automatically unsubscribe them. Used by the DSProofSubsMgr when txids get confirmed and are no longer
+    /// in the mempool.
+    void unsubscribeRequested();
 };
 
 using StatusCallback = std::function<void(const HashX &, const SubStatus &)>;
@@ -118,7 +125,7 @@ public:
     /// Thread-safe. Subscribes client to a key (such as a scripthash). Call this from the client's thread (not doing
     /// so is undefined behavior).
     ///
-    /// The exact meaning of `sh` depends on the concrete subclass, but the ScriptHashSubsMgr will subscribe to a
+    /// The exact meaning of `key` depends on the concrete subclass, but the ScriptHashSubsMgr will subscribe to a
     /// ScriptHash, for instance, the below description is for ScriptHashSubsMgr's behavior:
     ///
     /// `notifyCB` is called for update notifications asynchronously as the tx history for `sh` changes. It will always
@@ -142,10 +149,10 @@ public:
     ///
     /// Will throw LimitReached if the subs table is full.  Calling code should catch this exception.
     /// (May also throw BadArgs).
-    SubscribeResult subscribe(RPC::ConnectionBase *client, const HashX &sh, const StatusCallback &notifyCB);
+    virtual SubscribeResult subscribe(RPC::ConnectionBase *client, const HashX &key, const StatusCallback &notifyCB);
     /// Thread-safe. The inverse of subscribe. Returns true if the client was previously subscribed, false otherwise.
     /// Always call this from the client's thread otherwise undefined behavior may result.
-    bool unsubscribe(RPC::ConnectionBase *client, const HashX &sh);
+    bool unsubscribe(RPC::ConnectionBase *client, const HashX &key);
 
     /// Returns the total number of (sh, client) subscriptions that are active for this instance (non-zombie).
     int64_t numActiveClientSubscriptions() const;
@@ -184,6 +191,7 @@ public:
     void enqueueNotifications(std::unordered_set<HashX, HashHasher> & s);
     /// Like the above but uses move.  After this call, s can be considered to be invalidated.
     void enqueueNotifications(std::unordered_set<HashX, HashHasher> && s);
+
 signals:
     /// Public signal.  Emitted by SrvMgr to tell us to run removeZombies() right now outside the normal timer rate limit.
     /// See SrvMgr::globalSubsLimitReached().
@@ -193,7 +201,16 @@ signals:
     void queueEmpty();
     /// Private signal.  Used to indicate the notification queue is no longer empty (and thus associated timers should be started).
     void queueNoLongerEmpty();
+
 protected:
+    /// Thread-safe. Takes exclusive locks. Unsubscribes all clients currently subscribed for keys in subKeys. This
+    /// effectively iterates over all the subs matching subKeys and emits the unsubscribeRequested() private signal.
+    /// The actual unsubscribe is effectuated in the thread for each subscribed client.
+    ///
+    /// Only for use with the DSProofSubsMgr.
+    void unsubscribeClientsForKeys(const std::unordered_set<HashX, HashHasher> & subKeys);
+
+
     void on_started() override; ///< from ThreadObjectMixin
     void on_finished() override; ///< from ThreadObjectMixin
     Stats stats() const override; ///< from StatsMixin -- show some subs stats
@@ -202,17 +219,17 @@ protected:
     const std::shared_ptr<const Options> options;
     Storage * const storage; ///< pointer guaranteed to be valid since Storage "owns" us and if we are alive, it is alive.
 
+    using SubRef = std::shared_ptr<Subscription>;
+    SubRef findExistingSubRef(const HashX &) const; // takes locks, returns an existing subref or empty ref.
+
 private:
     struct Pvt;
     std::unique_ptr<Pvt> p;
 
-    using SubRef = std::shared_ptr<Subscription>;
     SubRef makeSubRef(const HashX &key);
     std::pair<SubRef, bool> getOrMakeSubRef(const HashX &key); // takes locks, returns a new subref or an existing subref, may throw LimitReached
-    SubRef findExistingSubRef(const HashX &) const; // takes locks, returns an existing subref or empty ref.
 
     void doNotifyAllPending();
-
     void removeZombies(bool forced);
 };
 
@@ -250,4 +267,9 @@ public:
     /// Note that this implicitly will take the Storage "mempool lock" as a shared lock -- so bear that in mind if
     /// calling this from `Storage` with that lock already held.
     SubStatus getFullStatus(const HashX &txHash) const override;
+    /// Identical to superclass implementation but it also attaches the unsubscribeRequested() signal to a lambda
+    /// for client, so that SubsMgr::unsubscribeClientsForKeys() is not a no-op.
+    SubscribeResult subscribe(RPC::ConnectionBase *client, const HashX &sh, const StatusCallback &notifyCB) override;
+
+    using SubsMgr::unsubscribeClientsForKeys; // promoted to public, since it only is not a no-op for this class
 };

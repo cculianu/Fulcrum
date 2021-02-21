@@ -17,6 +17,7 @@
 // <https://www.gnu.org/licenses/>.
 //
 #include "Controller_SynchDSPsTask.h"
+#include "SubsMgr.h"
 #include "Util.h"
 
 #include <utility>
@@ -65,7 +66,8 @@ SynchDSPsTask::~SynchDSPsTask() {
     }
 
     if (notifyFlag.load() && !txsAffected.empty()) {
-        // TODO here: emit signal related to txs added / removed...
+        // tell any subscribed clients
+        storage->dspSubs()->enqueueNotifications(std::move(txsAffected));
     }
 }
 

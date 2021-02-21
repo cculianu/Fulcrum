@@ -66,6 +66,7 @@ struct UndoInfoMissing : public Exception { using Exception::Exception; ~UndoInf
 struct HistoryTooLarge : public Exception { using Exception::Exception; ~HistoryTooLarge() override; };
 
 class ScriptHashSubsMgr;
+class DSProofSubsMgr;
 
 /// Manages the db and all storage-related facilities.  Most of its public methods are fully reentrant and thread-safe.
 class Storage final : public Mgr, public ThreadObjectMixin
@@ -273,7 +274,9 @@ public:
     /// It is exposed this way publicly because other classes that hold references to Storage need to access
     /// the shared SubsMgr (which itself exposes a public thread-safe interface intented to be called from multiple
     /// subsystems and multiple threads).
-    inline ScriptHashSubsMgr * subs() const { return subsmgr.get(); }
+    ScriptHashSubsMgr * subs() const { return subsmgr.get(); }
+    /// Identical to above, but points to the DSProofSubsMgr for this instance.
+    DSProofSubsMgr *dspSubs() const { return dspsubsmgr.get(); }
 
     /// called from a timer periodically from Controller (see Controller.cpp)
     /// -- takes locks, updates compact fee histogram for the mempool
@@ -350,6 +353,7 @@ protected:
 private:
     const std::shared_ptr<const Options> options;
     const std::unique_ptr<ScriptHashSubsMgr> subsmgr;
+    const std::unique_ptr<DSProofSubsMgr> dspsubsmgr;
 
     struct Pvt;
     const std::unique_ptr<Pvt> p;

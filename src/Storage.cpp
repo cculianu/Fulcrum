@@ -614,7 +614,9 @@ namespace {
 }
 
 Storage::Storage(const std::shared_ptr<const Options> & options_)
-    : Mgr(nullptr), options(options_), subsmgr(new ScriptHashSubsMgr(options, this)), p(std::make_unique<Pvt>(options->txHashCacheBytes))
+    : Mgr(nullptr), options(options_),
+      subsmgr(new ScriptHashSubsMgr(options, this)), dspsubsmgr(new DSProofSubsMgr(options, this)),
+      p(std::make_unique<Pvt>(options->txHashCacheBytes))
 {
     setObjectName("Storage");
     _thread.setObjectName(objectName());
@@ -637,10 +639,11 @@ void Storage::startup()
 {
     Log() << "Loading database ...";
 
-    if (UNLIKELY(!subsmgr || !options))
-        throw BadArgs("Storage instance constructed with nullptr for `options` and/or `subsmgr` -- FIXME!");
+    if (UNLIKELY(!subsmgr || !options || !dspsubsmgr))
+        throw BadArgs("Storage instance constructed with nullptr for `options` and/or `subsmgr` and/or `dspsubsmgr` -- FIXME!");
 
     subsmgr->startup(); // trivial, always succeeds if constructed correctly
+    dspsubsmgr->startup(); // trivial, always succeeds if constructed correctly
 
     {
         // set up the merkle cache object
@@ -796,6 +799,7 @@ void Storage::gentlyCloseAllDBs()
 void Storage::cleanup()
 {
     stop(); // joins our thread
+    if (dspsubsmgr) dspsubsmgr->cleanup();
     if (subsmgr) subsmgr->cleanup();
     gentlyCloseAllDBs();
     // TODO: unsaved/"dirty state" detection here -- and forced save, if needed.

@@ -231,6 +231,41 @@ void SubsMgr::enqueueNotifications(std::unordered_set<HashX, HashHasher> &&s)
         emit queueNoLongerEmpty();
 }
 
+void SubsMgr::unsubscribeClientsForKeys(const std::unordered_set<HashX, HashHasher> & keys)
+{
+    if (UNLIKELY(!dynamic_cast<DSProofSubsMgr *>(this))) {
+        // this only is set up to work for the DSProofsSubMgr currently. Print error to log end return.
+        Error() << "INTERNAL ERROR: " << " currently " << __func__ << " is only supported for the DSProofSubsMgr. FIXME!";
+        return;
+    }
+    if (keys.empty()) return;
+    const Tic t0;
+    std::vector<SubRef> matchedSubs;
+    matchedSubs.reserve(std::min(keys.size(), kRecommendedPendingNotificationsReserveSize));
+    size_t subsSize;
+    {
+        LockGuard g(p->mut);
+        subsSize = p->subs.size();
+        if (keys.size() < subsSize) {
+            // iterate over keys
+            for (const auto &key : keys)
+                if (auto it = p->subs.find(key); it != p->subs.end())
+                    matchedSubs.push_back(it->second);
+        } else {
+            // iterate over subs
+            for (const auto &[key, sub] : p->subs)
+                if (keys.count(key))
+                    matchedSubs.push_back(sub);
+        }
+    }
+    // now, emit the signal with locks not held
+    for (const auto &sub : matchedSubs)
+        emit sub->unsubscribeRequested(); // will run in subscribed client thread(s)
+    //if (!matchedSubs.empty())
+    DebugM(__func__, ": enqueued unsubscribe for ", matchedSubs.size(), "/", subsSize, " txids in ", t0.msecStr(), " msec");
+}
+
+
 auto SubsMgr::makeSubRef(const HashX &key) -> SubRef
 {
     static const auto Deleter = [](Subscription *s){ s->deleteLater(); };
@@ -272,14 +307,14 @@ auto SubsMgr::findExistingSubRef(const HashX &key) const -> SubRef
     return ret;
 }
 
-auto SubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &sh, const StatusCallback &notifyCB) -> SubscribeResult
+auto SubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &key, const StatusCallback &notifyCB) -> SubscribeResult
 {
     const auto t0 = debugPrint ? Util::getTimeNS() : 0LL;
     if (UNLIKELY(!notifyCB))
         throw BadArgs("SubsMgr::subscribe must be called with a valid notifyCB. FIXME!");
 
     SubscribeResult ret = { false, {} };
-    auto [sub, wasnew] = getOrMakeSubRef(sh); // may throw LimitReached
+    auto [sub, wasnew] = getOrMakeSubRef(key); // may throw LimitReached
     {
         LockGuard g(sub->mut);
         if (!wasnew && sub->subscribedClientIds.count(c->id)) {
@@ -321,7 +356,25 @@ auto SubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &sh, const StatusCal
 
     if constexpr (debugPrint) {
         const auto elapsed = Util::getTimeNS() - t0;
-        Debug() << "subscribed " << Util::ToHexFast(sh) << " in " << QString::number(elapsed/1e6, 'f', 4) << " msec";
+        Debug() << "subscribed " << Util::ToHexFast(key) << " in " << QString::number(elapsed/1e6, 'f', 4) << " msec";
+    }
+    return ret;
+}
+
+auto DSProofSubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &key, const StatusCallback &notifyCB) -> SubscribeResult
+{
+    auto ret = SubsMgr::subscribe(c, key, notifyCB);
+    if (ret.first) { // was new, attach signal for unsubscribeAllClients() to work
+        if (SubRef sub = findExistingSubRef(key)) {
+            auto conn = QObject::connect(sub.get(), &Subscription::unsubscribeRequested, c, [this, c, key]{
+                // DEBUG TESTING REMOVE BELOW PRINT
+                DebugM("unsubscribeRequested signal invoked lambda, proceeding to unsubscribe client ", c->id, " ...");
+                unsubscribe(c, key); // just call unsubscribe. this will zombify this sub and it will eventually be deleted
+            });
+        } else {
+            // should never happen
+            Error() << "INTERNAL ERROR: sub immediately lost its subref for " << key.toHex() << ". FIXME!";
+        }
     }
     return ret;
 }
@@ -344,11 +397,11 @@ void SubsMgr::maybeCacheStatusResult(const HashX &sh, const SubStatus &status)
     }
 }
 
-bool SubsMgr::unsubscribe(RPC::ConnectionBase *c, const HashX &sh)
+bool SubsMgr::unsubscribe(RPC::ConnectionBase *c, const HashX &key)
 {
     bool ret = false;
     const auto t0 = debugPrint ? Util::getTimeNS() : 0LL;
-    SubRef sub = findExistingSubRef(sh);
+    SubRef sub = findExistingSubRef(key);
     if (sub) {
         // found
         LockGuard g(sub->mut);
@@ -364,7 +417,7 @@ bool SubsMgr::unsubscribe(RPC::ConnectionBase *c, const HashX &sh)
     }
     if constexpr (debugPrint) {
         const auto elapsed = Util::getTimeNS() - t0;
-        Debug() << int(ret) << " unsubscribed " << Util::ToHexFast(sh) << " in " << QString::number(elapsed/1e6, 'f', 4) << " msec";
+        Debug() << int(ret) << " unsubscribed " << Util::ToHexFast(key) << " in " << QString::number(elapsed/1e6, 'f', 4) << " msec";
     }
     return ret;
 }
