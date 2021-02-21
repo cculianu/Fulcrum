@@ -614,7 +614,7 @@ namespace {
 }
 
 Storage::Storage(const std::shared_ptr<const Options> & options_)
-    : Mgr(nullptr), options(options_), subsmgr(new SubsMgr(options, this)), p(std::make_unique<Pvt>(options->txHashCacheBytes))
+    : Mgr(nullptr), options(options_), subsmgr(new ScriptHashSubsMgr(options, this)), p(std::make_unique<Pvt>(options->txHashCacheBytes))
 {
     setObjectName("Storage");
     _thread.setObjectName(objectName());

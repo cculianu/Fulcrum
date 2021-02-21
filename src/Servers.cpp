@@ -2238,7 +2238,7 @@ void AdminServer::rpc_getinfo(Client *c, const RPC::Message &m)
     res["txs_sent"] = qulonglong(srvmgr->txBroadcasts());
     res["txs_sent_bytes"] = qulonglong(srvmgr->txBroadcastBytes());
     res["uptime"] = QString::number(Util::getTimeSecs(), 'f', 1) + " secs";
-    res["subscriptions"] = qlonglong(storage->subs()->numActiveClientSubscriptions());
+    res["subscriptions"] = qlonglong(storage->subs()->numGlobalActiveClientSubscriptions());
     res["peers"] = peers.size();
     res["config"] = options->toMap();
     { // mempool

@@ -28,6 +28,7 @@
 
 #include <QObject>
 
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -40,24 +41,33 @@ using StatusHash = QByteArray;
 
 class SubsMgr;
 
-/// A class encapsulating a single subscription to a scripthash. It acts as a signal "fusebox" where many Clients
-/// can sign up to the `statusChanged` signal.
+/// A class encapsulating a single subscription to a "HashX" key. Originally this was designed to work with
+/// ElectrumX-style scripthashes but has been extended whereby a client can subscribe to any "key" that is a
+/// 32-byte hash (such as scripthash, txid, etc).
+///
+/// This class acts as a signal "fusebox" where many Clients can sign up to the `statusChanged` signal given
+/// a particular HashX key.
 class Subscription : public QObject
 {
     Q_OBJECT
 protected:
     friend class SubsMgr;
-    Subscription(const HashX & scriptHash);
+
+    /// The number of global Subscription instances. This is the total across all SubsMgrs that exist (zombie + active subs)
+    static std::atomic_int64_t nGlobalInstances;
+
+    explicit Subscription(const HashX & key);
     ~Subscription() override;
+
+    const HashX key; ///< This is typically an implicitly shared copy of the same bytes as in the map key pointing to this instance (thus it's cheap to keep around here too)
 
     std::mutex mut; ///< this mutex guards the below data structures.
 
-    const HashX scriptHash; ///< This is typically an implicitly shared copy of the same bytes as in the map key pointing to this instance (thus it's cheap to keep around here too)
     std::unordered_set<quint64> subscribedClientIds; ///< this is atomically updated as clients subscribe/unsubscribe or as they are deleted/disconnected
     /// The last status sent out as a notification. If it has_value, it's guaranteed to be the most recent one announced
     /// to clients, so it is suitable for use in the respone to e.g. blockchain.scripthash.subscribe (iff has_value).
     std::optional<StatusHash> lastStatusNotified;
-    /// The last status that was computed as the result of a blockchain.scripthash.subscribe RPC call.
+    /// The last status that was computed as the result of a blockchain.[scripthash|dsproof].subscribe RPC call
     /// This status is returned as the immediate result for subsequent .subscribe calls after the first client
     /// subscribes (as a performance optimization).  This value is correctly maintained by the notification mechanism
     /// in collaboration with Servers.cpp.  In rare cases it is not the most recent possible status since it is a
@@ -69,11 +79,13 @@ protected:
     int64_t tsMsec = Util::getTime();
 
     /// Call this with the lock held.
-    inline void updateTS() { tsMsec = Util::getTime(); }
+    void updateTS() { tsMsec = Util::getTime(); }
 
 signals:
-    /// sh is the scripthash (raw 32 bytes). The status is raw 32 bytes as well.
-    void statusChanged(const HashX &sh, const StatusHash &status);
+    /// @param key is the subscription key (ScriptHash or TxHash) (raw 32 bytes).
+    /// @param status is raw 32 bytes as well if the manager is ScriptHashSubsMgr, otherwise it is whatever is
+    ///     specified for that SubsMgr  (e.g. if DSProofSubsMgr, then it's a serialized JSON object for the DSProof).
+    void statusChanged(const HashX &key, const StatusHash &status);
 };
 
 using StatusCallback = std::function<void(const HashX &, const StatusHash &)>;
@@ -89,7 +101,7 @@ using StatusCallback = std::function<void(const HashX &, const StatusHash &)>;
 class SubsMgr : public Mgr, public ThreadObjectMixin, public TimersByNameMixin
 {
     Q_OBJECT
-    friend class ::Storage;
+protected:
     /// Only Storage can construct one of these -- Storage is guaranteed to remain alive at least as long as this instance.
     SubsMgr(const std::shared_ptr<const Options> & opts, Storage * storage, const QString &name = "SubsMgr");
 public:
@@ -104,7 +116,11 @@ public:
     struct LimitReached : public Exception { using Exception::Exception; ~LimitReached() override; /**< for vtable */ };
 
     using SubscribeResult = std::pair<bool, std::optional<StatusHash>>; ///< used by "subscribe" below as the return value.
-    /// Thread-safe. Subscribes client to a scripthash. Call this from the client's thread (not doing so is undefined).
+    /// Thread-safe. Subscribes client to a key (such as a scripthash). Call this from the client's thread (not doing
+    /// so is undefined behavior).
+    ///
+    /// The exact meaning of `sh` depends on the concrete subclass, but the ScriptHashSubsMgr will subscribe to a
+    /// ScriptHash, for instance, the below description is for ScriptHashSubsMgr's behavior:
     ///
     /// `notifyCB` is called for update notifications asynchronously as the tx history for `sh` changes. It will always
     /// be called in the `client`'s thread.  If the client is deleted, all context for the client is cleaned-up
@@ -123,7 +139,7 @@ public:
     /// get the updated status.
     ///
     /// Doesn't normally throw but may throw BadArgs if notifyCB is invalid, or InternalError if it failed to
-    /// make a QMetaObject::Connection for the subscription.
+    /// make a QMetaObject::Connection for the subscription (or some other invariant failed to be satisfied).
     ///
     /// Will throw LimitReached if the subs table is full.  Calling code should catch this exception.
     /// (May also throw BadArgs).
@@ -132,7 +148,7 @@ public:
     /// Always call this from the client's thread otherwise undefined behavior may result.
     bool unsubscribe(RPC::ConnectionBase *client, const HashX &sh);
 
-    /// Returns the total number of (sh, client) subscriptions that are active (non-zombie).
+    /// Returns the total number of (sh, client) subscriptions that are active for this instance (non-zombie).
     int64_t numActiveClientSubscriptions() const;
     /// Returns the total number of unique scripthashes subscribed-to.  A scripthash may be subscribe-to by more than 1
     /// client simultaneously, in which case it counts once towards this total.  This number may be <=
@@ -142,6 +158,10 @@ public:
     /// as well since it includes the aforementioned "zombies".
     int64_t numScripthashesSubscribed() const;
 
+    /// Returns the number of Subscription objects extant across all instances of SubsMgr (and its subclasses), app-wide.
+    static int64_t numGlobalSubscriptions() { return Subscription::nGlobalInstances.load(); }
+    static int64_t numGlobalActiveClientSubscriptions();
+
     /// Returns a pair of (limitActive, limitAll)
     /// `limitActive` - is true if the number of active client subscriptions is near the global subs limit (>80% of global limit).
     /// `limitAll` - is true if the subs table (including zombies) is near the global subs limit (>80% of global limit).
@@ -149,12 +169,12 @@ public:
     std::pair<bool, bool> globalSubsLimitFlags() const;
 
 
-    /// Thread-safe. Returns the status hash bytes (32 bytes single sha256 hash of the status text). Will return
-    /// an empty byte vector if the scriptHash in question has no history.
+    /// Thread-safe. Returns the status hash bytes. The meaning of the StatusHash and what data is returned depends on
+    /// the Subscription::Type for the concrete SubsMgr class.
     ///
-    /// Note that this implicitly will take the Storage "blocksLock" as a shared lock -- so bear that in mind if calling
-    /// this from `Storage` with that lock already held.
-    StatusHash getFullStatus(const HashX &scriptHash) const;
+    /// Note that for ScriptHashSubsMgr, this implicitly will take the Storage "blocksLock" as a shared lock -- so bear
+    /// that in mind if calling this from `Storage` with that lock already held.
+    virtual StatusHash getFullStatus(const HashX &key) const = 0;
 
     /// Thread-safe.  Client calls this to maybe save the status hash it just got from getFullStatus. We don't always
     /// take the value and cache it -- only under very specific conditions.
@@ -181,18 +201,36 @@ protected:
     Stats stats() const override; ///< from StatsMixin -- show some subs stats
     Stats debug(const StatsParams &) const override; ///< from StatsMixin -- returns a QVariantMap of *all* subs iff param "subs" is present.
 
-private:
     const std::shared_ptr<const Options> options;
     Storage * const storage; ///< pointer guaranteed to be valid since Storage "owns" us and if we are alive, it is alive.
+
+private:
     struct Pvt;
     std::unique_ptr<Pvt> p;
 
     using SubRef = std::shared_ptr<Subscription>;
-    SubRef makeSubRef(const HashX &sh);
-    std::pair<SubRef, bool> getOrMakeSubRef(const HashX &sh); // takes locks, returns a new subref or an existing subref, may throw LimitReached
+    SubRef makeSubRef(const HashX &key);
+    std::pair<SubRef, bool> getOrMakeSubRef(const HashX &key); // takes locks, returns a new subref or an existing subref, may throw LimitReached
     SubRef findExistingSubRef(const HashX &) const; // takes locks, returns an existing subref or empty ref.
 
     void doNotifyAllPending();
 
     void removeZombies(bool forced);
+};
+
+class ScriptHashSubsMgr final : public SubsMgr {
+protected:
+    friend class ::Storage;
+    /// Only Storage can construct one of these -- Storage is guaranteed to remain alive at least as long as this instance.
+    using SubsMgr::SubsMgr;
+
+public:
+    ~ScriptHashSubsMgr() override;
+
+    /// Thread-safe. Returns the status hash bytes (32 bytes single sha256 hash of the status text). Will return
+    /// an empty byte vector if the scriptHash in question has no history.
+    ///
+    /// Note that this implicitly will take the Storage "blocksLock" as a shared lock -- so bear that in mind if calling
+    /// this from `Storage` with that lock already held.
+    StatusHash getFullStatus(const HashX &scriptHash) const override;
 };
