@@ -1469,20 +1469,20 @@ void Server::impl_sh_subscribe(Client *c, const RPC::Message &m, const HashX &sh
             if (!optAlias.has_value()) { // common case
                 // regular blockchain.scripthash.subscribe callback does no aliasing/rewriting and simply echoes the sh back to client as hex.
                 ret =
-                    [c, method=m.method](const HashX &sh, const StatusHash &status) {
+                    [c, method=m.method](const HashX &sh, const SubStatus &status) {
                         QVariant statusHexMaybeNull; // if empty we simply notify as 'null' (this is unlikely in practice but may happen on reorg)
-                        if (!status.isEmpty())
-                            statusHexMaybeNull = Util::ToHexFast(status);
+                        if (auto *ba = status.byteArray(); ba && !ba->isEmpty())
+                            statusHexMaybeNull = Util::ToHexFast(*ba);
                         const QByteArray shHex = Util::ToHexFast(sh);
                         emit c->sendNotification(method, QVariantList{shHex, statusHexMaybeNull});
                     };
             } else {
                 // When notifying, blockchain.address.subscribe callback must rewrite the sh arg -> the original address argument given by the client.
                 ret =
-                    [c, method=m.method, alias=optAlias->toUtf8()](const HashX &, const StatusHash &status) {
+                    [c, method=m.method, alias=optAlias->toUtf8()](const HashX &, const SubStatus &status) {
                         QVariant statusHexMaybeNull; // if empty we simply notify as 'null' (this is unlikely in practice but may happen on reorg)
-                        if (!status.isEmpty())
-                            statusHexMaybeNull = Util::ToHexFast(status);
+                        if (auto *ba = status.byteArray(); ba && !ba->isEmpty())
+                            statusHexMaybeNull = Util::ToHexFast(*ba);
                         emit c->sendNotification(method, QVariantList{alias, statusHexMaybeNull});
                     };
             }
@@ -1500,7 +1500,7 @@ void Server::impl_sh_subscribe(Client *c, const RPC::Message &m, const HashX &sh
         emit globalSubsLimitReached(); // connected to the SrvMgr, which will loop through all IPs and kick all clients for the most-subscribed IP
         throw RPCError("Subscription limit reached", RPC::Code_App_LimitExceeded); // send error to client
     }
-    const auto & [wasNew, optStatus] = result;
+    const auto & [wasNew, status] = result;
     if (wasNew) {
         if (++c->nShSubs == 1)
             DebugM(c->prettyName(false, false), " is now subscribed to at least one scripthash");
@@ -1510,22 +1510,22 @@ void Server::impl_sh_subscribe(Client *c, const RPC::Message &m, const HashX &sh
         // (in practice it won't be a huge problem).
         CheckSubsLimit( ++c->perIPData->nShSubs, true ); // may throw RPCError
     }
-    if (!optStatus.has_value()) {
+    if (!status.has_value()) {
         // no known/cached status -- do the work ourselves asynch in the thread pool.
         generic_do_async(c, m.id, [sh, this] {
             QVariant ret;
             const auto status = storage->subs()->getFullStatus(sh);
             storage->subs()->maybeCacheStatusResult(sh, status);
-            if (!status.isEmpty()) // if empty we return `null`, otherwise we return hex encoded bytes as the immediate status.
-                ret = Util::ToHexFast(status);
+            if (auto *ba = status.byteArray(); ba && !ba->isEmpty()) // if empty we return `null`, otherwise we return hex encoded bytes as the immediate status.
+                ret = Util::ToHexFast(*ba);
             return ret;
         });
     } else {
         // SubsMgr reported a cached status -- immediately return that as the result!
         QVariant result;
-        if (!optStatus->isEmpty())
+        if (auto *ba = status.byteArray(); ba && !ba->isEmpty())
             // not empty, so we return the hex-encoded string
-            result = QString(Util::ToHexFast(*optStatus));
+            result = QString(Util::ToHexFast(*ba));
         // commented out because it is spammy
         //DebugM("Sending cached status to client for scripthash: ", Util::ToHexFast(sh), " status: ", result.toString());
         //

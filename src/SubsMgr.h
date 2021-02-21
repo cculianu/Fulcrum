@@ -23,6 +23,7 @@
 #include "Mgr.h"
 #include "Options.h"
 #include "RPC.h"
+#include "SubStatus.h"
 #include "Storage.h"
 #include "Util.h"
 
@@ -36,8 +37,6 @@
 #include <type_traits>
 #include <unordered_set>
 #include <utility> // for pair
-
-using StatusHash = QByteArray;
 
 class SubsMgr;
 
@@ -66,14 +65,14 @@ protected:
     std::unordered_set<quint64> subscribedClientIds; ///< this is atomically updated as clients subscribe/unsubscribe or as they are deleted/disconnected
     /// The last status sent out as a notification. If it has_value, it's guaranteed to be the most recent one announced
     /// to clients, so it is suitable for use in the respone to e.g. blockchain.scripthash.subscribe (iff has_value).
-    std::optional<StatusHash> lastStatusNotified;
+    SubStatus lastStatusNotified;
     /// The last status that was computed as the result of a blockchain.[scripthash|dsproof].subscribe RPC call
     /// This status is returned as the immediate result for subsequent .subscribe calls after the first client
     /// subscribes (as a performance optimization).  This value is correctly maintained by the notification mechanism
     /// in collaboration with Servers.cpp.  In rare cases it is not the most recent possible status since it is a
     /// slightly delayed value -- but that's ok as a future notification to a client will rectify the situation with
     /// the most up-to-date status in the near future anyway.
-    std::optional<StatusHash> cachedStatus;
+    SubStatus cachedStatus;
     /// The last time this sub was accessed in milliseconds (Util::getTime()). If the ts goes beyond 1 minute in the
     /// past, and it has no clients attached, its entry may be removed.
     int64_t tsMsec = Util::getTime();
@@ -84,11 +83,11 @@ protected:
 signals:
     /// @param key is the subscription key (ScriptHash or TxHash) (raw 32 bytes).
     /// @param status is raw 32 bytes as well if the manager is ScriptHashSubsMgr, otherwise it is whatever is
-    ///     specified for that SubsMgr  (e.g. if DSProofSubsMgr, then it's a serialized JSON object for the DSProof).
-    void statusChanged(const HashX &key, const StatusHash &status);
+    ///     specified for that SubsMgr  (e.g. if DSProofSubsMgr, then it's a DSProof object).
+    void statusChanged(const HashX &key, const SubStatus &status);
 };
 
-using StatusCallback = std::function<void(const HashX &, const StatusHash &)>;
+using StatusCallback = std::function<void(const HashX &, const SubStatus &)>;
 
 /// The Subscriptions Manager. Thread-safe operations for managing subscriptions and doing notifications.
 ///
@@ -115,7 +114,7 @@ public:
     /// Thrown by subsribe() if the global Options::maxSubsGlobally limit is reached.
     struct LimitReached : public Exception { using Exception::Exception; ~LimitReached() override; /**< for vtable */ };
 
-    using SubscribeResult = std::pair<bool, std::optional<StatusHash>>; ///< used by "subscribe" below as the return value.
+    using SubscribeResult = std::pair<bool, SubStatus>; ///< used by "subscribe" below as the return value.
     /// Thread-safe. Subscribes client to a key (such as a scripthash). Call this from the client's thread (not doing
     /// so is undefined behavior).
     ///
@@ -134,9 +133,9 @@ public:
     /// In either case the client is now subscribed to the scripthash in question.
     ///
     /// The .second of the pair is a cached StatusHash (if known).  Note the StatusHash may be defined but an empty
-    /// QByteArray if there is no history.  If the optional !has_value, then we don't have a known StatusHash for the
-    /// scripthash in question (but one still may exist!) -- client code should follow up with a getFullStatus() call to
-    /// get the updated status.
+    /// QByteArray if there is no history for the scripthash.  If the SubStatus !has_value, then we don't have a cached
+    /// status for the scripthash in question (but one still may exist!) -- client code should follow up with a
+    /// getFullStatus() call to get the updated (non-cached) status.
     ///
     /// Doesn't normally throw but may throw BadArgs if notifyCB is invalid, or InternalError if it failed to
     /// make a QMetaObject::Connection for the subscription (or some other invariant failed to be satisfied).
@@ -169,16 +168,15 @@ public:
     std::pair<bool, bool> globalSubsLimitFlags() const;
 
 
-    /// Thread-safe. Returns the status hash bytes. The meaning of the StatusHash and what data is returned depends on
-    /// the Subscription::Type for the concrete SubsMgr class.
+    /// Thread-safe. Returns the status. Will always return an object that .has_value().
     ///
     /// Note that for ScriptHashSubsMgr, this implicitly will take the Storage "blocksLock" as a shared lock -- so bear
     /// that in mind if calling this from `Storage` with that lock already held.
-    virtual StatusHash getFullStatus(const HashX &key) const = 0;
+    virtual SubStatus getFullStatus(const HashX &key) const = 0;
 
     /// Thread-safe.  Client calls this to maybe save the status hash it just got from getFullStatus. We don't always
     /// take the value and cache it -- only under very specific conditions.
-    void maybeCacheStatusResult(const HashX &, const StatusHash &);
+    void maybeCacheStatusResult(const HashX &, const SubStatus &);
 
     /// Thread-safe. We do it this way because it's the fastest approach (uses C++17 unordered_set:::merge). After this
     /// call, s is modified and contains only the elements that were already pending (thus were not enqueued as they
@@ -228,9 +226,28 @@ public:
     ~ScriptHashSubsMgr() override;
 
     /// Thread-safe. Returns the status hash bytes (32 bytes single sha256 hash of the status text). Will return
-    /// an empty byte vector if the scriptHash in question has no history.
+    /// a status containing a zero-length QByteArray if the scriptHash in question has no history. The returned object
+    /// will always have non-nullptr .byteArray().
     ///
     /// Note that this implicitly will take the Storage "blocksLock" as a shared lock -- so bear that in mind if calling
     /// this from `Storage` with that lock already held.
-    StatusHash getFullStatus(const HashX &scriptHash) const override;
+    SubStatus getFullStatus(const HashX &scriptHash) const override;
+};
+
+class DSProofSubsMgr final : public SubsMgr {
+protected:
+    friend class ::Storage;
+    /// Only Storage can construct one of these -- Storage is guaranteed to remain alive at least as long as this instance.
+    using SubsMgr::SubsMgr;
+
+public:
+    ~DSProofSubsMgr() override;
+
+    /// Thread-safe. Returns a SubStatus object which .has_value() and where .dsproof() is not nullptr.
+    /// Will return an object with a dsproof which is not isComplete() (default constructed) if there are no dsproofs
+    /// for the given txHash.
+    ///
+    /// Note that this implicitly will take the Storage "mempool lock" as a shared lock -- so bear that in mind if
+    /// calling this from `Storage` with that lock already held.
+    SubStatus getFullStatus(const HashX &txHash) const override;
 };

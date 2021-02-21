@@ -190,7 +190,7 @@ void SubsMgr::doNotifyAllPending()
             // this code block is fine. In the unlikely event that a sub lost its clients while the lock was released, the
             // below emit sub->statusChanged(...) will just be a no-op.
             LockGuard g(sub->mut);
-            const bool doemit = !sub->lastStatusNotified.has_value() || *sub->lastStatusNotified != status;
+            const bool doemit = !sub->lastStatusNotified.has_value() || sub->lastStatusNotified != status;
             // we basically cache 2 statuses but they are implicitly shared copies of the same memory so it's ok.
             sub->lastStatusNotified = status;
             sub->cachedStatus = status;
@@ -326,10 +326,15 @@ auto SubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &sh, const StatusCal
     return ret;
 }
 
-void SubsMgr::maybeCacheStatusResult(const HashX &sh, const StatusHash &status)
+void SubsMgr::maybeCacheStatusResult(const HashX &sh, const SubStatus &status)
 {
-    if (status.length() != HashLen && !status.isEmpty())
+    if (!status.has_value())
+        return;
+    if (auto *ba = status.byteArray(); ba && ba->length() != HashLen && !ba->isEmpty())
         // we only allow empty (null) or 32 bytes.. otherwise reject
+        return;
+    else if (auto *dsp = status.dsproof(); dsp && !dsp->isComplete() && !dsp->isEmpty())
+        // we only allow empty (default constructred) DSProofs or ones that are isComplete(), otherwise reject
         return;
     SubRef sub = findExistingSubRef(sh);
     if (sub) {
@@ -417,10 +422,10 @@ inline QByteArray optimizedStatusHashCalc(const Storage::History &hist) {
 }
 }
 
-auto ScriptHashSubsMgr::getFullStatus(const HashX &sh) const -> StatusHash
+auto ScriptHashSubsMgr::getFullStatus(const HashX &sh) const -> SubStatus
 {
     const Tic t0;
-    StatusHash ret;
+    QByteArray ret;
     const auto hist = storage->getHistory(sh, true, true);
     if (hist.empty())
         // no history, return an empty QByteArray
@@ -474,7 +479,12 @@ auto SubsMgr::debug(const StatsParams &params) const -> Stats
                 {
                     LockGuard g2(sub->mut);
                     m2["count"] = qlonglong(sub->subscribedClientIds.size());
-                    m2["lastStatusNotified"] = sub->lastStatusNotified.value_or(StatusHash()).toHex();
+                    if (auto *ba = sub->lastStatusNotified.byteArray())
+                        m2["lastStatusNotified"] = ba->toHex();
+                    else if (auto *dsp = sub->lastStatusNotified.dsproof())
+                        m2["lastStatusNotified"] = dsp->toVarMap();
+                    else
+                        m2["lastStatusNotified"] = "";
                     m2["idleSecs"] = (Util::getTime() - sub->tsMsec)/1e3;
                     const auto & clients = sub->subscribedClientIds;
 #if QT_VERSION < QT_VERSION_CHECK(5, 14, 0)
@@ -523,6 +533,16 @@ auto SubsMgr::stats() const -> Stats
     ret["Num. unique subscriptions (global; including zombies)"] = qlonglong(numGlobalSubscriptions());
     ret["activeTimers"] = activeTimerMapForStats();
     return ret;
+}
+
+DSProofSubsMgr::~DSProofSubsMgr() {} // for vtable
+
+auto DSProofSubsMgr::getFullStatus(const HashX &txHash) const -> SubStatus
+{
+    auto [mempool, lock] = storage->mempool();
+    if (auto *dsproof = mempool.dsps.bestProofForTx(txHash))
+        return *dsproof;
+    return DSProof{}; // a SubStatus with a .isEmpty() indicates no proof for this txhash
 }
 
 #ifdef ENABLE_TESTS

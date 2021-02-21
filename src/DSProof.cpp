@@ -174,3 +174,8 @@ QVariantMap DSProof::toVarMap() const
     ret["descendants"] = l;
     return ret;
 }
+
+bool DSProof::isEmpty() const {
+    static const DSProof null;
+    return *this == null;
+}

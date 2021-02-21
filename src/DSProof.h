@@ -70,6 +70,12 @@ struct DSProof {
     }
     bool operator!=(const DSProof &o) const { return !(*this == o); }
 
+    bool isComplete() const {
+        return hash.isValid() && txo.isValid() && !serializedProof.isEmpty() && !descendants.empty() && txHash.length() == HashLen;
+    }
+
+    bool isEmpty() const; ///< true iff *this is equivalent to a default constructed value
+
     QVariantMap toVarMap() const; ///< for serializing to json
 };
 

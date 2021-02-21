@@ -343,6 +343,7 @@ HEADERS += \
     SrvMgr.h \
     Storage.h \
     SubsMgr.h \
+    SubStatus.h \
     ThreadPool.h \
     ThreadSafeHashTable.h \
     TXO.h \
