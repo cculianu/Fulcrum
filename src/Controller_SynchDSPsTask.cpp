@@ -22,24 +22,6 @@
 
 #include <utility>
 
-namespace {
-    /// We disabled updates (which grow the descendants set) since they are inefficient (too much network back and
-    /// forth to constantly poll data that mostly never changes). Instead, we grow the descendants set directly in
-    /// Mempool.cpp addNewTxs() more efficiently. We grow the descendants set there as we add new tx's.
-    inline constexpr bool UpdatingEnabled = false;
-    /// We have elected to disable dropping dsps from here. Rationale: bitcoind may restart and lose dsps, but they are
-    /// still relevant.  We instead only want to rely on dropping dsps when the actual "owning" txs go out of "scope"
-    /// (that is, they get confirmed in a block or evicted from mempool).  Mempool.cpp already takes care of removing
-    /// dsps for dropped/confirmed tx's for us. So we will just then set this to false and rely on that for the dsp
-    /// lifecycle. The reason we want to do it that way is that a DSP that was once associated with an in-mempool tx
-    /// will always be relevant, regardless of bitcoind's inability to remember it existed (after a restart).
-    inline constexpr bool DropsEnabled = false;
-    /// We decided to set this to false -- notifying clients of a drop may have little practical utility for the same
-    /// rationale as given above: a valid dsproof is always relevant.  The fact that we lost track of it doesn't mean
-    /// the client shouldn't still be wary of the potential for a double-spend.
-    inline constexpr bool DropsNotifyEnabled = false;
-}
-
 SynchDSPsTask::SynchDSPsTask(Controller *ctl_, std::shared_ptr<Storage> storage, const std::atomic_bool & notifyFlag)
     : CtlTask(ctl_, "SynchDSPs"), storage(storage), notifyFlag(notifyFlag)
 {
@@ -51,15 +33,10 @@ SynchDSPsTask::SynchDSPsTask(Controller *ctl_, std::shared_ptr<Storage> storage,
 SynchDSPsTask::~SynchDSPsTask() {
     stop();
 
-    if (!dspsDownloaded.empty() || !downloadsFailed.empty() || !dspsUpdated.empty() || !updatesFailed.empty() || !txsAffected.empty()) {
-        if (Debug::isEnabled()) {
-            Debug d;
-            d << objectName() << ": downloaded: " << dspsDownloaded.size() << ", failed: " << downloadsFailed.size();
-            if constexpr (UpdatingEnabled)
-                    d << ", updated: " << dspsUpdated.size() << ", updated failed: " << updatesFailed.size();
-            d << ", txsAffecteed: " << txsAffected.size() << ", dsp count now: " << storage->mempool().first.dsps.size()
-              << ", elapsed: " << elapsed.msecStr() << " msec";
-        }
+    if (!dspsDownloaded.empty() || !downloadsFailed.empty() || !txsAffected.empty()) {
+        DebugM(objectName(), ": downloaded: ", dspsDownloaded.size(),", failed: ", downloadsFailed.size(),
+               ", txsAffecteed: ", txsAffected.size(), ", dsp count now: ", storage->mempool().first.dsps.size(),
+               ", elapsed: ", elapsed.msecStr(), " msec");
     } else if (elapsed.msec() >= 50) {
         // if total runtime for task >=50ms, log for debug
         DebugM(objectName(), " elapsed: ", elapsed.msecStr(), " msec");
@@ -81,7 +58,6 @@ void SynchDSPsTask::process()
     case GetDSPList: doGetDSPList(); break;
     case DownloadingNewDSPs: doDownloadNewDSPs(); break;
     case ProcessDownloads: doProcessDownloads(); break;
-    case UpdatingExistingDSPs: doUpdateExistingDSPs(); break;
     }
 }
 
@@ -94,10 +70,6 @@ void SynchDSPsTask::doGetDSPList()
             return;
         }
         const auto knownDSPs = Util::keySet<DSPs::DspHashSet>(storage->mempool().first.dsps.getAll()); // this is guarded access, lock held until statement end (C++ temporary lifetime rules)
-        DSPs::DspHashSet droppedDSPs;
-        if constexpr (DropsEnabled)
-            // if drops are enabled: start off assuming *all* are dropped until proven otherwise
-            droppedDSPs = knownDSPs;
         // scan thru all downloaded dsp hashes and figure out what's new and what needs refresh
         for (const auto & var : resp.result().toList()) {
             const DspHash hash = DspHash::fromHex(var.toString());
@@ -115,41 +87,6 @@ void SynchDSPsTask::doGetDSPList()
                 }
                 DSProof & dspNew = it->second;
                 dspNew.hash = it->first; // re-use same QByteArray memory (copy-on-write)
-            } else {
-                // flag this one for needing refresh now (but only if updating is enabled)
-                if constexpr (UpdatingEnabled)
-                    dspsNeedingUpdate.insert(hash);
-                // remove from drop set
-                if constexpr (DropsEnabled)
-                    droppedDSPs.erase(hash);
-            }
-        }
-        if constexpr (DropsEnabled) {
-            // handle drops, if any
-            if (!droppedDSPs.empty()) {
-                DebugM("dropped dsps:", droppedDSPs.size());
-                // flag them as dropped now -- remove from dsp store
-                unsigned ctr = 0;
-                {
-                    auto [mempool, lock] = storage->mutableMempool(); // exclusive lock
-                    for (const auto &hash : droppedDSPs) {
-                        const auto *proof = mempool.dsps.get(hash);
-                        if (!proof) { Error() << "FIXME: dsphash not found: " << hash.toHex(); continue; }
-                        if constexpr (DropsNotifyEnabled) {
-                            for (const auto & txhash : proof->descendants) {
-                                txsAffected.insert(txhash);
-                                ++ctr;
-                            }
-                        } else {
-                            ctr += proof->descendants.size();
-                        }
-                        mempool.dsps.rm(hash); // `proof` pointer invalidated after this line
-                    }
-                }
-                if constexpr (DropsNotifyEnabled)
-                    DebugM("dsp<->tx links dropped: ", ctr, ", num txs: ", txsAffected.size());
-                else
-                    DebugM("dsp<->tx links dropped: ", ctr);
             }
         }
         // if we have any new dsps needing download, proceed to download state
@@ -158,12 +95,8 @@ void SynchDSPsTask::doGetDSPList()
             dspDlsExpected = dspsNeedingDownload.size();
             state = DownloadingNewDSPs;
             AGAIN();
-        } else if (!dspsNeedingUpdate.empty()) { // otherwise if we have dsps needing refresh, skip to that state
-            //DebugM("no new dsps, refreshing existing: ", dspsNeedingUpdate.size());
-            state = UpdatingExistingDSPs;
-            AGAIN();
         } else {
-            // dsp results from bitcoind is empty and our dsp set is empty, just end the task
+            // dsp results from bitcoind -- no new dsps, just end the task
             emit success();
         }
     });
@@ -235,71 +168,13 @@ void SynchDSPsTask::doDownloadNewDSPs()
         dlNext(false, dspsNeedingDownload.extract(dspsNeedingDownload.begin()));
     else if (const auto sum = dspsDownloaded.size() + downloadsFailed.size(); sum == dspDlsExpected) {
         // end this state, move on to next
-        state = UpdatingExistingDSPs;
+        state = ProcessDownloads;
         AGAIN();
     } else {
         // should never happen
         Error() << "INTERNAL ERROR: expceted to download " << dspDlsExpected << " dsps, instead downloaded: " << sum;
         emit errored();
     }
-}
-
-void SynchDSPsTask::doUpdateExistingDSPs()
-{
-    if (dspsNeedingUpdate.empty()) {
-        // nothing left, proceed to next state
-        state = ProcessDownloads;
-        AGAIN();
-        return;
-    }
-
-    const DspHash hash = dspsNeedingUpdate.extract(dspsNeedingUpdate.begin()).value();
-
-    submitRequest("getdsproof", {hash.toHex(), 2}, [this, hash](const RPC::Message &reply)  {
-        const QVariantMap vm = reply.result().toMap();
-        const DspHash chk = DspHash::fromHex(vm.value("dspid").toString());
-        const TxHash txidChk = Util::ParseHexFast(vm.value("txid").toString().toUtf8());
-        const auto descs = vm.value("descendants").toStringList();
-        unsigned ctrDescs = 0, ctrNewAffected = 0;
-        // grab exclusive lock to do this
-        try {
-            auto [mempool, lock] = storage->mutableMempool();
-            Tic t0;
-            auto *dsp = mempool.dsps.get(hash);
-
-            if (!dsp || chk != hash || txidChk != dsp->txHash || descs.isEmpty())
-                throw Exception(QString("basic sanity check failed for update of dsp %1").arg(QString(hash.toHex())));
-            for (const auto &desc : descs) {
-                const TxHash txid = Util::ParseHexFast(desc.toUtf8());
-                if (txid.length() != HashLen) {
-                    Warning() << __func__ << ": txid \"" << desc << "\" is not valid, ignoring ...";
-                    continue;
-                }
-                if (!dsp->descendants.count(txid) && mempool.txs.count(txid)) {
-                    ++ctrDescs;
-                    ctrNewAffected += txsAffected.insert(txid).second;
-                    if (!mempool.dsps.addTx(hash, txid))
-                        // this should never happen..
-                        Warning() << "Failed to add txid " << txid.toHex() << " to dsp " << hash.toHex();
-                }
-            }
-            if (ctrDescs) {
-                dspsUpdated.insert(hash); // only add to dspsUpdated set if there was a change
-                DebugM("updated dsp ", hash.toHex(), " new descendants: ", ctrDescs, ", new txids affected: ", ctrNewAffected,
-                       ", descendants now: ", dsp->descendants.size(), " (exc. lock held for: ", t0.msecStr(), " msec)");
-            }
-        } catch (const std::exception &e) {
-            DebugM("failed to update dsp ", hash.toHex(), "(exc: ", e.what(), ") ignoring error ...");
-            updatesFailed.insert(hash);
-        }
-        AGAIN(); //< regrdless of success or failure, keep going...
-    },
-    [this, hash](const RPC::Message &){
-        // ignore errors, keep going
-        DebugM("failed to update dsp ", hash.toHex(), " ignoring error ...");
-        updatesFailed.insert(hash);
-        AGAIN();
-    });
 }
 
 void SynchDSPsTask::doProcessDownloads()
