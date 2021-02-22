@@ -87,7 +87,7 @@ private:
 
 /// specialization of std::hash to be able to add struct TXO to any unordered_set or unordered_map as a key
 template<> struct std::hash<TXO> {
-    std::size_t operator()(const TXO &txo) const {
+    std::size_t operator()(const TXO &txo) const noexcept {
         const auto val1 = BTC::QByteArrayHashHasher{}(txo.txHash);
         const auto val2 = txo.outN;
         // We must copy the hash bytes and the ionum to a temporary buffer and hash that.

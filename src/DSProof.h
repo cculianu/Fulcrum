@@ -50,7 +50,7 @@ struct DspHash {
     bool operator==(const DspHash &o) const { return bytes == o.bytes; }
     bool operator!=(const DspHash &o) const { return bytes != o.bytes; }
 
-    struct Hasher { std::size_t operator()(const DspHash &d) const { return HashHasher{}(d.bytes); } };
+    struct Hasher { std::size_t operator()(const DspHash &d) const noexcept { return !d.bytes.isEmpty() ? HashHasher{}(d.bytes) : 0; } };
 };
 
 struct DSProof {

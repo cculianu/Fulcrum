@@ -350,12 +350,16 @@ namespace Util {
         const HashSeed hashSeed;
     } // namespace (anonymous)
 
-    uint32_t hashData32(const ByteView &bv)
+    uint32_t hashData32(const ByteView &bv) noexcept
     {
+        // bitcoin::MurmurHash3 is not marked noexcept but it will never throw -- it does not allocate and
+        // just uses basic arithmetic ops on the data in-place.
         return bitcoin::MurmurHash3(hashSeed.get<uint32_t>(), bv.ucharData(), bv.size());
     }
-    uint64_t hashData64(const ByteView &bv)
+    uint64_t hashData64(const ByteView &bv) noexcept
     {
+        // CityHash::CityHash64WithSeed is not marked noexcept but it will never throw -- it does not allocate and
+        // just uses basic arithmetic ops on the data in-place.
         return uint64_t(CityHash::CityHash64WithSeed(bv.charData(), bv.size(), hashSeed.get<CityHash::uint64>()));
     }
 
@@ -719,7 +723,7 @@ Fatal::~Fatal()
 
 #if QT_VERSION < QT_VERSION_CHECK(5, 14, 0)
 template<> struct std::hash<QString> {
-    std::size_t operator()(const QString &s) const { return Util::hashForStd(s); }
+    std::size_t operator()(const QString &s) const noexcept { return Util::hashForStd(s); }
 };
 #endif
 
