@@ -1397,7 +1397,7 @@ void Controller::process(bool beSilentIfUpToDate)
             if (UNLIKELY(!sm || isTaskDeleted(task) || sm->state != State::SynchingDSPs))
                 // task was stopped from underneath us and/or this response is stale.. so return and ignore
                 return;
-            Warning() << "getdsprooflist RPC error, ignoring...";
+            Warning() << "SynchDSPs RPC error, ignoring...";
             sm->state = State::SynchDSPsFinished;
             AGAIN();
         });

@@ -1843,7 +1843,7 @@ void Server::rpc_blockchain_transaction_dsproof_get(Client *c, const RPC::Messag
 {
     if (isBTC || !bitcoindmgr->hasDSProofRPC())
         throw RPCError("This server lacks dsproof support", RPC::ErrorCodes::Code_MethodNotFound);
-    const auto dspid_or_txid = parseFirstHashParamCommon(m, "Invalid dspid or txhash");
+    const auto dspid_or_txid = parseFirstHashParamCommon(m, "Invalid dsp hash or tx hash");
     generic_do_async(c, m.id, [this, dspid_or_txid] {
         QVariant ret;
         auto [mempool, lock] = storage->mempool(); // shared lock
@@ -1879,14 +1879,14 @@ void Server::rpc_blockchain_transaction_dsproof_subscribe(Client *c, const RPC::
 {
     if (isBTC || !bitcoindmgr->hasDSProofRPC())
         throw RPCError("This server lacks dsproof support", RPC::ErrorCodes::Code_MethodNotFound);
-    const auto txid = parseFirstHashParamCommon(m, "Invalid txhash");
+    const auto txid = parseFirstHashParamCommon(m, "Invalid tx hash");
     impl_generic_subscribe(storage->dspSubs(), c, m, txid);
 }
 void Server::rpc_blockchain_transaction_dsproof_unsubscribe(Client *c, const RPC::Message &m)
 {
     if (isBTC || !bitcoindmgr->hasDSProofRPC())
         throw RPCError("This server lacks dsproof support", RPC::ErrorCodes::Code_MethodNotFound);
-    const auto txid = parseFirstHashParamCommon(m, "Invalid txhash");
+    const auto txid = parseFirstHashParamCommon(m, "Invalid tx hash");
     impl_generic_unsubscribe(storage->dspSubs(), c, m, txid);
 }
 // /DSPROOF

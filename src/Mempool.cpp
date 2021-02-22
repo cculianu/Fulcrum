@@ -162,7 +162,7 @@ auto Mempool::addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
                                 } else {
                                     // should never happen -- this is a new txid! It should have no associations to existing dsps...
                                     // (invariant is maintained in SynchDSPsTask that only "known" txids are ever added)
-                                    Warning() << __func__ << "dsp addTx returned false for dspHash: " << dspHash.toHex()
+                                    Warning() << __func__ << ": dsp addTx returned false for dspHash: " << dspHash.toHex()
                                               << ", txid: " << hash.toHex() << ". FIXME!";
                                 }
                             }
