@@ -366,7 +366,8 @@ auto DSProofSubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &key, const S
         if (SubRef sub = findExistingSubRef(key)) {
             auto conn = QObject::connect(sub.get(), &Subscription::unsubscribeRequested, c, [this, c, key]{
                 // DEBUG TESTING REMOVE BELOW PRINT
-                DebugM("unsubscribeRequested signal invoked lambda, proceeding to unsubscribe client ", c->id, " ...");
+                DebugM("unsubscribeRequested signal invoked lambda, proceeding to unsubscribe client ", c->id,
+                       " for key ", key.toHex(), " ...");
                 unsubscribe(c, key); // just call unsubscribe. this will zombify this sub and it will eventually be deleted
             });
         } else {
