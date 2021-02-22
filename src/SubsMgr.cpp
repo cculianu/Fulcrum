@@ -124,6 +124,7 @@ void SubsMgr::on_finished()
 void SubsMgr::doNotifyAllPending()
 {
     const Tic t0;
+    aboutToNotifyAllPending(); // no-op except for in DSProofSubsMgr subclass which takes the dspHashSet and enqueues as txids
     size_t ctr = 0, ctrSH = 0;
     bool emitQueueEmpty = false;
     const bool useCache = useStatusCache();
@@ -261,8 +262,8 @@ void SubsMgr::unsubscribeClientsForKeys(const std::unordered_set<HashX, HashHash
         }
         emit sub->unsubscribeRequested(); // will run in client thread(s) for subscribed client(s)
     }
-    //if (!matchedSubs.empty())
-    DebugM(__func__, ": enqueued unsubscribe for ", matchedSubs.size(), "/", subsSize, " txids in ", t0.msecStr(), " msec");
+    if (!matchedSubs.empty())
+        DebugM(__func__, ": enqueued unsubscribe for ", matchedSubs.size(), "/", subsSize, " txids in ", t0.msecStr(), " msec");
 }
 
 
@@ -384,7 +385,8 @@ auto DSProofSubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &key, const S
                 // DEBUG TESTING REMOVE BELOW PRINT
                 DebugM("unsubscribeRequested signal invoked lambda, proceeding to unsubscribe client ", c->id,
                        " for key ", key.toHex(), " ...");
-                unsubscribe(c, key); // just call unsubscribe. this will zombify this sub and it will eventually be deleted
+                // just call unsubscribe. this will zombify this sub and it will be deleted
+                unsubscribe(c, key, false /* don't update ts */);
             });
             if (UNLIKELY(!conn)) {
                 // this should never happen
@@ -416,7 +418,7 @@ void SubsMgr::maybeCacheStatusResult(const HashX &sh, const SubStatus &status)
     }
 }
 
-bool SubsMgr::unsubscribe(RPC::ConnectionBase *c, const HashX &key)
+bool SubsMgr::unsubscribe(RPC::ConnectionBase *c, const HashX &key, bool updateTS)
 {
     bool ret = false;
     const auto t0 = debugPrint ? Util::getTimeNS() : 0LL;
@@ -426,7 +428,7 @@ bool SubsMgr::unsubscribe(RPC::ConnectionBase *c, const HashX &key)
         LockGuard g(sub->mut);
         if (auto it = sub->subscribedClientIds.find(c->id); it != sub->subscribedClientIds.end()) {
             sub->subscribedClientIds.erase(it);
-            sub->updateTS();
+            if (updateTS) sub->updateTS();
             QObject::disconnect(sub.get(), &Subscription::statusChanged, c, nullptr);
             QObject::disconnect(c, &QObject::destroyed, sub.get(), nullptr);
             QObject::disconnect(sub.get(), &Subscription::unsubscribeRequested, c, nullptr);
@@ -539,6 +541,20 @@ void SubsMgr::removeZombies(bool forced)
     }
 }
 
+std::unordered_set<HashX, HashHasher> SubsMgr::nonZombieKeysOlderThan(const int64_t msec) const
+{
+    std::unordered_set<HashX, HashHasher> ret;
+    const auto now = Util::getTime();
+    LockGuard g(p->mut);
+    for (const auto & [key, sub] : p->subs) {
+        LockGuard g(sub->mut);
+        if (!sub->subscribedClientIds.empty() && now - sub->tsMsec > msec)
+            ret.insert(key); // it is not a zombie and it's older than msec, add to return set
+    }
+    return ret;
+}
+
+
 auto SubsMgr::debug(const StatsParams &params) const -> Stats
 {
     QVariant ret;
@@ -610,6 +626,53 @@ auto SubsMgr::stats() const -> Stats
 
 DSProofSubsMgr::~DSProofSubsMgr() {} // for vtable
 
+namespace {
+    inline constexpr int64_t kExpireSubsNotInMempoolAgeMsec = 150'000; ///< we expire subs >2.5 minutes old that point to txids not in mempool
+    inline constexpr auto kExpireSubsNotInMempoolTimerName = "ExireSubsNotInMempoolTimer";
+}
+
+void DSProofSubsMgr::on_started()
+{
+    SubsMgr::on_started();
+    callOnTimerSoon(kExpireSubsNotInMempoolAgeMsec / 2, kExpireSubsNotInMempoolTimerName, [this]{ expireSubsNotInMempool(); return true;}, true);
+}
+void DSProofSubsMgr::on_finished()
+{
+    stopTimer(kExpireSubsNotInMempoolTimerName);
+    SubsMgr::on_finished();
+}
+
+void DSProofSubsMgr::expireSubsNotInMempool()
+{
+    const Tic t0;
+    auto candidates = nonZombieKeysOlderThan(kExpireSubsNotInMempoolAgeMsec);
+    if (!candidates.empty()) {
+        auto [mempool, lock] = storage->mempool(); // shared, read-only lock
+        if (candidates.size() < mempool.txs.size()) {
+            // loop over candidates
+            for (auto it = candidates.begin(); it != candidates.end(); /* see below */) {
+                if (mempool.txs.count(*it)) {
+                    // candidate has a mempool tx -- erase
+                    it = candidates.erase(it);
+                } else {
+                    // candidate has no mempool tx, keep!
+                    ++it;
+                }
+            }
+        } else {
+            // loop over mempool
+            for (const auto &[txid, tx] : mempool.txs)
+                candidates.erase(txid); // if txid was in candidates, remove it (candidates must not be in mempool)
+        }
+    }
+    if (!candidates.empty()) {
+        DebugM(__func__, ": ", candidates.size(), " txid subscriptions do not correspond to any mempool tx and are >",
+               QString::number(kExpireSubsNotInMempoolAgeMsec / 1e3, 'f', 2), " secs old, forcing unsubscribe now",
+               " (elapsed: ", t0.msecStr(), " msec)");
+        unsubscribeClientsForKeys(candidates);
+    }
+}
+
 auto DSProofSubsMgr::getFullStatus(const HashX &txHash) const -> SubStatus
 {
     auto [mempool, lock] = storage->mempool();
@@ -618,9 +681,15 @@ auto DSProofSubsMgr::getFullStatus(const HashX &txHash) const -> SubStatus
     return DSProof{}; // a SubStatus with a .isEmpty() indicates no proof for this txhash
 }
 
-void DSProofSubsMgr::enqueueNotificationsForAllDescendantsOfDSPsInSet(const DSPs::DspHashSet &ds)
+void DSProofSubsMgr::enqueueNotificationsForAllDescendantsOfDSPsInSet(DSPs::DspHashSet &&ds)
 {
     if (ds.empty()) return;
+    LockGuard g(dspHashMut);
+    dspHashSet.merge(std::move(ds));
+}
+
+std::unordered_set<HashX, HashHasher> DSProofSubsMgr::calculateAllDescendantsOfDSPs(const DSPs::DspHashSet &ds) const
+{
     std::unordered_set<HashX, HashHasher> txids;
     {
         auto [mempool, lock] = storage->mempool(); // shared lock
@@ -638,6 +707,17 @@ void DSProofSubsMgr::enqueueNotificationsForAllDescendantsOfDSPsInSet(const DSPs
             }
         }
     }
+    return txids;
+}
+
+void DSProofSubsMgr::aboutToNotifyAllPending()
+{
+    DSPs::DspHashSet ds;
+    {
+        LockGuard g(dspHashMut);
+        ds.swap(dspHashSet);
+    }
+    auto txids = calculateAllDescendantsOfDSPs(ds);
     if (!txids.empty()) {
         DebugM(__func__, ": enqueuing notifs for ", txids.size(), " tx(s) which are descendant(s) of ", ds.size(), " dsp(s)");
         enqueueNotifications(std::move(txids));

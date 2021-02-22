@@ -412,11 +412,15 @@ auto Mempool::dropTxs(ScriptHashesAffectedSet & scriptHashesAffectedOut, TxHashS
     if (!dsps.empty()) { // fast path for common case of no dsproofs in most mempools, or for BTC mempools where the dsproof feature does not exist
         const Tic trm;
         const auto b4 = dsps.size(), txb4 = dsps.numTxDspLinks();
+        TxHashSet txids2rm;
         for (const auto & txid : txids) {
             if (auto *dspHashSet = dsps.dspHashesForTx(txid)) {
                 // tell caller about all the dsps that lost descendants
                 ret.dspsAffected.insert(dspHashSet->begin(), dspHashSet->end());
+                txids2rm.insert(txid); // enqueue for removal in next loop below
             }
+        }
+        for (const auto & txid : txids2rm) {
             dsps.rmTx(txid);
             if (dsps.empty()) break; // short circuit loop end in case we emptied it out
         }
@@ -533,6 +537,7 @@ auto Mempool::confirmedInBlock(ScriptHashesAffectedSet & scriptHashesAffectedOut
     ret.oldNumAddresses = this->hashXTxs.size();
     const std::size_t dspCtBefore = dsps.size();
     const std::size_t dspTxCtBefore = dsps.numTxDspLinks();
+    TxHashSet dspTxids;
 
     // iterate through all txs in mempool
     for (auto itTxs = txs.begin(); itTxs != txs.end(); /* may delete during iteration, see below */) {
@@ -545,9 +550,10 @@ auto Mempool::confirmedInBlock(ScriptHashesAffectedSet & scriptHashesAffectedOut
             if (auto *dspHashSet = dsps.dspHashesForTx(txid)) {
                 // tell caller all the dsps that were affedcted
                 ret.dspsAffected.insert(dspHashSet->begin(), dspHashSet->end());
+                // add to dspTxids so we can call dsps.rmTx() on this txid after this loop finishes -- we must do that
+                // at the end after this loop is done.
+                dspTxids.insert(txid);
             }
-            // also tell the dsps data structure this tx will be gone
-            dsps.rmTx(txid);
             // and erase NOW!
             itTxs = txs.erase(itTxs); // in this branch: removed, take next it and continue
             continue;
@@ -614,6 +620,10 @@ auto Mempool::confirmedInBlock(ScriptHashesAffectedSet & scriptHashesAffectedOut
 
     // now, update hashXTxs as well
     rmTxsInHashXTxs(txidMap, scriptHashesAffected, TRACE, hashXTxsEntriesNeedingSort);
+
+    // now, do dsps.rmTx for any txids that we removed that happened to have dsps associated
+    for (const auto &txid : dspTxids)
+        dsps.rmTx(txid); // may end up deleting dspHashes as well if the primary txid goes away
 
     // finally, update scriptHashesAffectedOut
     scriptHashesAffectedOut.merge(std::move(scriptHashesAffected));

@@ -1914,7 +1914,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
         }
     } /// release locks
 
-    // now, do notifications with locks not held
+    // now, do notifications with locks NOT held (we are being defensive: in the future we may modify below to take e.g. mempool lock)
     if (notify) {
         if (subsmgr && !notify->scriptHashesAffected.empty())
             subsmgr->enqueueNotifications(std::move(notify->scriptHashesAffected));
@@ -1922,7 +1922,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
             if (!notify->unsubDspTxids.empty())
                 dspsubsmgr->unsubscribeClientsForKeys(notify->unsubDspTxids);
             if (!notify->dspsAffected.empty())
-                dspsubsmgr->enqueueNotificationsForAllDescendantsOfDSPsInSet(notify->dspsAffected);
+                dspsubsmgr->enqueueNotificationsForAllDescendantsOfDSPsInSet(std::move(notify->dspsAffected));
         }
     }
 }

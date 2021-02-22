@@ -152,7 +152,7 @@ public:
     virtual SubscribeResult subscribe(RPC::ConnectionBase *client, const HashX &key, const StatusCallback &notifyCB);
     /// Thread-safe. The inverse of subscribe. Returns true if the client was previously subscribed, false otherwise.
     /// Always call this from the client's thread otherwise undefined behavior may result.
-    bool unsubscribe(RPC::ConnectionBase *client, const HashX &key);
+    bool unsubscribe(RPC::ConnectionBase *client, const HashX &key, bool updateTS = true);
 
     /// Returns the total number of (sh, client) subscriptions that are active for this instance (non-zombie).
     int64_t numActiveClientSubscriptions() const;
@@ -214,6 +214,10 @@ protected:
     /// it reimplements this to false.
     virtual bool useStatusCache() const { return true; }
 
+    /// Called from within doNotifyAllPending(), reimplemented in DSProofSubsMgr to grab all the dsps in the dspHashSet
+    /// and enqueue them as txids.
+    virtual void aboutToNotifyAllPending() {}
+
     /// This is here in case we ever need to implement per-derived-class subs limit checks.
     ///
     /// If we ever need that, we can make this virtual and then reimplement this in subclasses to customize global
@@ -231,6 +235,10 @@ protected:
 
     using SubRef = std::shared_ptr<Subscription>;
     SubRef findExistingSubRef(const HashX &) const; // takes locks, returns an existing subref or empty ref.
+
+    /// Used by the DSProofSubsMgr expireSubsNotInMempool() function to get a set of txids that maybe should be expired
+    /// because they are subscribed but have no mempool tx.
+    std::unordered_set<HashX, HashHasher> nonZombieKeysOlderThan(int64_t msec) const;
 
 private:
     struct Pvt;
@@ -288,9 +296,23 @@ public:
 
     using SubsMgr::unsubscribeClientsForKeys; // promoted to public, since it only is not a no-op for this class
 
-    /// Thread-safe. Takes the mempool lock (in shared-mode), however.
-    void enqueueNotificationsForAllDescendantsOfDSPsInSet(const DSPs::DspHashSet &);
+    /// Thread-safe. Enqueues the dspids in the set. When the notifier runs later, it will look at dspHashes in the
+    /// specified set and enqueue all descendant txids (as seen at that time) of those dsps for notification.
+    void enqueueNotificationsForAllDescendantsOfDSPsInSet(DSPs::DspHashSet &&);
 
 protected:
+    void on_started() override;
+    void on_finished() override;
+
     bool useStatusCache() const override { return false; }
+    void aboutToNotifyAllPending() override; ///< called from super class doNotifyAllPending -- grabs dspHashSet and enqueues txids for those dsps
+
+private:
+    std::mutex dspHashMut; // guards dspHashSet
+    DSPs::DspHashSet dspHashSet;
+
+    /// Thread-safe but takes mempool lock in shared mode.
+    std::unordered_set<HashX, HashHasher> calculateAllDescendantsOfDSPs(const DSPs::DspHashSet &) const;
+
+    void expireSubsNotInMempool(); // takes mempool lock in shared mode
 };

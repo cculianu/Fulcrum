@@ -676,8 +676,8 @@ SynchMempoolTask::~SynchMempoolTask() {
             storage->dspSubs()->enqueueNotifications(std::move(dspTxsAdded));
         }
         if (!dspHashesAffected.empty()) {
-            DebugM(objectName(), ": dspTx affected: ", dspHashesAffected.size());
-            storage->dspSubs()->enqueueNotificationsForAllDescendantsOfDSPsInSet(dspHashesAffected);
+            DebugM(objectName(), ": dspHashes affected: ", dspHashesAffected.size());
+            storage->dspSubs()->enqueueNotificationsForAllDescendantsOfDSPsInSet(std::move(dspHashesAffected));
         }
     }
 
@@ -1715,6 +1715,7 @@ auto Controller::stats() const -> Stats
     misc["Job Queue (Thread Pool)"] = ::AppThreadPool()->stats();
     st["Misc"] = misc;
     st["SubsMgr"] = storage->subs()->statsSafe(kDefaultTimeout/2);
+    st["SubsMgr (DSPs)"] = storage->dspSubs()->statsSafe(kDefaultTimeout/2);
     // Config (Options) map
     st["Config"] = options->toMap();
     { // Process memory usage
