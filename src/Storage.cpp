@@ -1605,11 +1605,12 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
     }
 
     using NotifySet = std::unordered_set<HashX, HashHasher>;
-    std::unique_ptr<NotifySet> notify;
+    std::unique_ptr<NotifySet> notify, unsubDspSet;
 
-    if (notifySubs)
-        notify = std::make_unique<NotifySet>();
-        // note we don't reserve here -- we will reserve at the end when we run through the hashXAggregated set one final time...
+    if (notifySubs) {
+        notify = std::make_unique<NotifySet>(); // note we don't reserve here -- we will reserve at the end when we run through the hashXAggregated set one final time...
+        unsubDspSet = std::make_unique<NotifySet>();
+    }
 
     // take all locks now.. since this is a Big Deal. TODO: add more locks here?
     std::scoped_lock guard(p->blocksLock, p->headerVerifierLock, p->blkInfoLock, p->mempoolLock);
@@ -1620,9 +1621,13 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
         // Txs in block can never be in mempool. Ensure they are gone from mempool right away so that notifications
         // to clients are as accurate as possible (notifications may happen after this function returns).
         const auto sz = ppb->txInfos.size();
-        Mempool::TxHashNumMap txidMap(/* bucket_count: */ static_cast<Mempool::TxHashNumMap::size_type>(sz > 0 ? sz-1 : 0));
-        for (std::size_t i = 1 /* skip coinbase */; i < sz; ++i)
+        const auto rsvsz = static_cast<Mempool::TxHashNumMap::size_type>(sz > 0 ? sz-1 : 0);
+        Mempool::TxHashNumMap txidMap(/* bucket_count: */ rsvsz);
+        unsubDspSet->reserve(rsvsz);
+        for (std::size_t i = 1 /* skip coinbase */; i < sz; ++i) {
             txidMap.emplace(ppb->txInfos[i].hash, blockTxNum0 + i);
+            unsubDspSet->insert(ppb->txInfos[i].hash);
+        }
         Mempool::ScriptHashesAffectedSet affected;
         // Pre-reserve some capacity for the tmp affected set to avoid much rehashing.
         // Use the heuristic 3 x numtxs capped at the SubsMgr::kRecommendedPendingNotificationsReserveSize (2048).
@@ -1906,15 +1911,20 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
     // now, do notifications
     if (notify && subsmgr && !notify->empty())
         subsmgr->enqueueNotifications(std::move(*notify));
+    if (unsubDspSet && dspsubsmgr && !unsubDspSet->empty())
+        dspsubsmgr->unsubscribeClientsForKeys(*unsubDspSet);
 }
 
 BlockHeight Storage::undoLatestBlock(bool notifySubs)
 {
     BlockHeight prevHeight{0};
     size_t nSH = 0; // for stats printing
-    std::unique_ptr<UndoInfo::ScriptHashSet> notify;
-    if (notifySubs)
-        notify = std::make_unique<UndoInfo::ScriptHashSet>();
+    using NotifySet = std::unordered_set<HashX, HashHasher>;
+    std::unique_ptr<NotifySet> notify, unsubDspSet;
+    if (notifySubs) {
+        notify = std::make_unique<NotifySet>();
+        unsubDspSet = std::make_unique<NotifySet>();
+    }
 
     {
         // take all locks now.. since this is a Big Deal. TODO: add more locks here?
@@ -1935,10 +1945,11 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
         // don't exist or are double-spent, etc.  The safer option here is to clear, despite the
         // performance hit.
         //
-        if (notify)
+        if (notify) {
             // mark ALL of mempool for notify so we can detect drops that weren't in block but also disappeared from mempool properly
-            notify->merge(Util::keySet<UndoInfo::ScriptHashSet>(p->mempool.hashXTxs));
-
+            notify->merge(Util::keySet<NotifySet>(p->mempool.hashXTxs));
+            unsubDspSet->merge(Util::keySet<NotifySet>(p->mempool.txs));
+        }
         p->mempool.clear(); // make sure mempool is clean (see note above as to why)
 
 
@@ -2070,6 +2081,8 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
     // now, do notifications
     if (notify && subsmgr && !notify->empty())
         subsmgr->enqueueNotifications(std::move(*notify));
+    if (unsubDspSet && dspsubsmgr && !unsubDspSet->empty())
+        dspsubsmgr->unsubscribeClientsForKeys(*unsubDspSet);
 
     return prevHeight;
 }

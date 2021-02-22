@@ -259,8 +259,15 @@ void SubsMgr::unsubscribeClientsForKeys(const std::unordered_set<HashX, HashHash
         }
     }
     // now, emit the signal with locks not held
-    for (const auto &sub : matchedSubs)
-        emit sub->unsubscribeRequested(); // will run in subscribed client thread(s)
+    for (const auto &sub : matchedSubs) {
+        {
+            LockGuard g(sub->mut);
+            // clear cached status since this sub is going away very sooon because the associated txid is gone;
+            // as such, if a new sub comes in right after this runs, we want to return a fresh status not a cached one.
+            sub->cachedStatus.reset();
+        }
+        emit sub->unsubscribeRequested(); // will run in client thread(s) for subscribed client(s)
+    }
     //if (!matchedSubs.empty())
     DebugM(__func__, ": enqueued unsubscribe for ", matchedSubs.size(), "/", subsSize, " txids in ", t0.msecStr(), " msec");
 }
