@@ -209,6 +209,17 @@ protected:
     /// Only for use with the DSProofSubsMgr.
     void unsubscribeClientsForKeys(const std::unordered_set<HashX, HashHasher> & subKeys);
 
+    /// Reimplement in subclasses to disable caching. called by subscribe and doNotifications to decide if it should
+    /// cache statuses or not, or used cached statuses.  Since the DSProofSubsMgr has a very cheap "getFullStatus()",
+    /// it reimplements this to false.
+    virtual bool useStatusCache() const { return true; }
+
+    /// This is here in case we ever need to implement per-derived-class subs limit checks.
+    ///
+    /// If we ever need that, we can make this virtual and then reimplement this in subclasses to customize global
+    /// limit checks. The default implementation checks the number of extant subs globally for all SubsMgr instances
+    /// against the limit specified in options->maxSubsGlobally.
+    bool isSubsLimitExceeded(int64_t & limit) const;
 
     void on_started() override; ///< from ThreadObjectMixin
     void on_finished() override; ///< from ThreadObjectMixin
@@ -254,7 +265,8 @@ class DSProofSubsMgr final : public SubsMgr {
 protected:
     friend class ::Storage;
     /// Only Storage can construct one of these -- Storage is guaranteed to remain alive at least as long as this instance.
-    using SubsMgr::SubsMgr;
+    DSProofSubsMgr(const std::shared_ptr<const Options> & opts, Storage * storage, const QString &name = "SubsMgr (DSPs)")
+        : SubsMgr(opts, storage, name) {}
 
 public:
     ~DSProofSubsMgr() override;
@@ -268,7 +280,17 @@ public:
     SubStatus getFullStatus(const HashX &txHash) const override;
     /// Identical to superclass implementation but it also attaches the unsubscribeRequested() signal to a lambda
     /// for client, so that SubsMgr::unsubscribeClientsForKeys() is not a no-op.
+    ///
+    /// Note that for the DSProofSubsMgr, we never return a cached value here -- SubscribeResult.second is always
+    /// !has_value() (empty).  Calling code can just query getFullStatus() (this is because getFullStatus() is very
+    /// cheap to call for this SubsMgr, and caching just wastes memory).
     SubscribeResult subscribe(RPC::ConnectionBase *client, const HashX &sh, const StatusCallback &notifyCB) override;
 
     using SubsMgr::unsubscribeClientsForKeys; // promoted to public, since it only is not a no-op for this class
+
+    /// Thread-safe. Takes the mempool lock (in shared-mode), however.
+    void enqueueNotificationsForAllDescendantsOfDSPsInSet(const DSPs::DspHashSet &);
+
+protected:
+    bool useStatusCache() const override { return false; }
 };

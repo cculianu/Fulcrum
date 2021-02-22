@@ -157,6 +157,7 @@ auto Mempool::addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
                             for (const auto &dspHash : *dspHashes) {
                                 if (dsps.addTx(dspHash, hash)) {
                                     ret.dspTxAdds.insert(hash);
+                                    ret.dspsAffected.insert(dspHash);
                                     DebugM(__func__, ": added tx ", hash.toHex(), " to descendants for dsp ", dspHash.toHex());
                                 } else {
                                     // should never happen -- this is a new txid! It should have no associations to existing dsps...
@@ -247,6 +248,7 @@ auto Mempool::addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
                                 ++addCt;
                                 ++addsTotal;
                                 ret.dspTxAdds.insert(hash);
+                                ret.dspsAffected.insert(dspHash);
                                 DebugM(__func__, ": added tx ", hash.toHex(), " to descendants for dsp ", dspHash.toHex());
                             }
                         }
@@ -411,6 +413,10 @@ auto Mempool::dropTxs(ScriptHashesAffectedSet & scriptHashesAffectedOut, TxHashS
         const Tic trm;
         const auto b4 = dsps.size(), txb4 = dsps.numTxDspLinks();
         for (const auto & txid : txids) {
+            if (auto *dspHashSet = dsps.dspHashesForTx(txid)) {
+                // tell caller about all the dsps that lost descendants
+                ret.dspsAffected.insert(dspHashSet->begin(), dspHashSet->end());
+            }
             dsps.rmTx(txid);
             if (dsps.empty()) break; // short circuit loop end in case we emptied it out
         }
@@ -536,6 +542,10 @@ auto Mempool::confirmedInBlock(ScriptHashesAffectedSet & scriptHashesAffectedOut
             // this txid is to be removed from mempool, tally its scripthashes as affected by the removal
             for (const auto & [sh, xx] : tx->hashXs)
                 scriptHashesAffected.insert(sh);
+            if (auto *dspHashSet = dsps.dspHashesForTx(txid)) {
+                // tell caller all the dsps that were affedcted
+                ret.dspsAffected.insert(dspHashSet->begin(), dspHashSet->end());
+            }
             // also tell the dsps data structure this tx will be gone
             dsps.rmTx(txid);
             // and erase NOW!

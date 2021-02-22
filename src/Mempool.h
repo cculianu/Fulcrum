@@ -146,7 +146,8 @@ struct Mempool
         std::size_t oldSize = 0, newSize = 0;
         std::size_t oldNumAddresses = 0, newNumAddresses = 0;
         std::size_t dspRmCt = 0, dspTxRmCt = 0; // dsp stats: number of dsproofs removed, number of dsp <-> tx links removed (dropTxs, confirmedInBlock updates these)
-        TxHashSet dspTxAdds; // only ever populated by addTxs()
+        TxHashSet dspTxAdds; // only ever populated by addNewTxs()
+        DSPs::DspHashSet dspsAffected; // populated by addNewTxs(), dropTxs(), & confirmedInBlock()
         double elapsedMsec = 0.;
     };
 

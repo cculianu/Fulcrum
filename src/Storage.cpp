@@ -1604,315 +1604,327 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
         undo->height = ppb->height;
     }
 
-    using NotifySet = std::unordered_set<HashX, HashHasher>;
-    std::unique_ptr<NotifySet> notify, unsubDspSet;
+    struct NotifyData {
+        using NotifySet = std::unordered_set<HashX, HashHasher>;
+        NotifySet scriptHashesAffected, unsubDspTxids;
+        DSPs::DspHashSet dspsAffected;
+    };
+    std::unique_ptr<NotifyData> notify;
 
     if (notifySubs) {
-        notify = std::make_unique<NotifySet>(); // note we don't reserve here -- we will reserve at the end when we run through the hashXAggregated set one final time...
-        unsubDspSet = std::make_unique<NotifySet>();
+        notify = std::make_unique<NotifyData>(); // note we don't reserve here -- we will reserve at the end when we run through the hashXAggregated set one final time...
     }
 
-    // take all locks now.. since this is a Big Deal. TODO: add more locks here?
-    std::scoped_lock guard(p->blocksLock, p->headerVerifierLock, p->blkInfoLock, p->mempoolLock);
-
-    const auto blockTxNum0 = p->txNumNext.load();
-
-    if (notify) {
-        // Txs in block can never be in mempool. Ensure they are gone from mempool right away so that notifications
-        // to clients are as accurate as possible (notifications may happen after this function returns).
-        const auto sz = ppb->txInfos.size();
-        const auto rsvsz = static_cast<Mempool::TxHashNumMap::size_type>(sz > 0 ? sz-1 : 0);
-        Mempool::TxHashNumMap txidMap(/* bucket_count: */ rsvsz);
-        unsubDspSet->reserve(rsvsz);
-        for (std::size_t i = 1 /* skip coinbase */; i < sz; ++i) {
-            txidMap.emplace(ppb->txInfos[i].hash, blockTxNum0 + i);
-            unsubDspSet->insert(ppb->txInfos[i].hash);
-        }
-        Mempool::ScriptHashesAffectedSet affected;
-        // Pre-reserve some capacity for the tmp affected set to avoid much rehashing.
-        // Use the heuristic 3 x numtxs capped at the SubsMgr::kRecommendedPendingNotificationsReserveSize (2048).
-        affected.reserve(std::min(txidMap.size()*3, SubsMgr::kRecommendedPendingNotificationsReserveSize));
-        const auto res = p->mempool.confirmedInBlock(affected, txidMap, ppb->height,
-                                                     Trace::isEnabled(), 0.5f /* shrink to fit load_factor threshold */);
-        if (const auto diff = res.oldSize - res.newSize; (diff || res.elapsedMsec > 5.) && Debug::isEnabled()) {
-            Debug d;
-            d << "addBlock: removed " << diff << " txs from mempool involving "
-              << affected.size() << " addresses";
-            if (res.dspRmCt || res.dspTxRmCt)
-                d << " (also removed dsps: " << res.dspRmCt << ", dspTxs: " << res.dspTxRmCt << ")";
-            d << " in " << QString::number(res.elapsedMsec, 'f', 3) << " msec";
-        }
-        notify->merge(std::move(affected));
-    }
-
-    const auto verifUndo = p->headerVerifier; // keep a copy of verifier state for undo purposes in case this fails
-    // This object ensures that if an exception is thrown while we are in the below code, we undo the header verifier
-    // and return it to its previous state.  Note the defer'd functor is called with the above scoped_lock held.
-    Defer undoVerifierOnScopeEnd([&verifUndo, this] { p->headerVerifier = verifUndo; });
-
-    // code in the below block may throw -- exceptions are propagated out to caller.
     {
-        // Verify header chain makes sense (by checking hashes, using the shared header verifier)
-        QByteArray rawHeader;
-        {
-            QString errMsg;
-            if (!p->headerVerifier(ppb->header, &errMsg) ) {
-                // XXX possible reorg point. Caller will/should roll back the db state via issuing calls to undoLatestBlock()
-                throw HeaderVerificationFailure(errMsg);
+        // take all locks now.. since this is a Big Deal. TODO: add more locks here?
+        std::scoped_lock guard(p->blocksLock, p->headerVerifierLock, p->blkInfoLock, p->mempoolLock);
+
+        const auto blockTxNum0 = p->txNumNext.load();
+
+        if (notify) {
+            // Txs in block can never be in mempool. Ensure they are gone from mempool right away so that notifications
+            // to clients are as accurate as possible (notifications may happen after this function returns).
+            const auto sz = ppb->txInfos.size();
+            const auto rsvsz = static_cast<Mempool::TxHashNumMap::size_type>(sz > 0 ? sz-1 : 0);
+            Mempool::TxHashNumMap txidMap(/* bucket_count: */ rsvsz);
+            notify->unsubDspTxids.reserve(rsvsz);
+            for (std::size_t i = 1 /* skip coinbase */; i < sz; ++i) {
+                txidMap.emplace(ppb->txInfos[i].hash, blockTxNum0 + i);
+                notify->unsubDspTxids.insert(ppb->txInfos[i].hash);
             }
-            // save raw header back to our buffer -- this will be used at the end of this function to add it to the db
-            // after everything completes successfully.
-            rawHeader = p->headerVerifier.lastHeaderProcessed().second;
+            Mempool::ScriptHashesAffectedSet affected;
+            // Pre-reserve some capacity for the tmp affected set to avoid much rehashing.
+            // Use the heuristic 3 x numtxs capped at the SubsMgr::kRecommendedPendingNotificationsReserveSize (2048).
+            affected.reserve(std::min(txidMap.size()*3, SubsMgr::kRecommendedPendingNotificationsReserveSize));
+            auto res = p->mempool.confirmedInBlock(affected, txidMap, ppb->height,
+                                                   Trace::isEnabled(), 0.5f /* shrink to fit load_factor threshold */);
+            if (const auto diff = res.oldSize - res.newSize; (diff || res.elapsedMsec > 5.) && Debug::isEnabled()) {
+                Debug d;
+                d << "addBlock: removed " << diff << " txs from mempool involving "
+                  << affected.size() << " addresses";
+                if (res.dspRmCt || res.dspTxRmCt)
+                    d << " (also removed dsps: " << res.dspRmCt << ", dspTxs: " << res.dspTxRmCt << ")";
+                d << " in " << QString::number(res.elapsedMsec, 'f', 3) << " msec";
+            }
+            notify->scriptHashesAffected.merge(std::move(affected));
+            notify->dspsAffected.merge(std::move(res.dspsAffected));
         }
 
-        setDirty(true); // <--  no turning back. if the app crashes unexpectedly while this is set, on next restart it will refuse to run and insist on a clean resynch.
+        const auto verifUndo = p->headerVerifier; // keep a copy of verifier state for undo purposes in case this fails
+        // This object ensures that if an exception is thrown while we are in the below code, we undo the header verifier
+        // and return it to its previous state.  Note the defer'd functor is called with the above scoped_lock held.
+        Defer undoVerifierOnScopeEnd([&verifUndo, this] { p->headerVerifier = verifUndo; });
 
-        {  // add txnum -> txhash association to the TxNumsFile...
-            auto batch = p->txNumsFile->beginBatchAppend(); // may throw if io error in c'tor here.
-            QString errStr;
-            for (const auto & txInfo : ppb->txInfos) {
-                if (!batch.append(txInfo.hash, &errStr)) // does not throw here, but we do.
-                    throw InternalError(QString("Batch append for txNums failed: %1.").arg(errStr));
-            }
-            // <-- The batch d'tor may close the app on error here with Fatal() if a low-level file error occurs now
-            //     on header update (see: RecordFile.cpp, ~BatchAppendContext()).
-        }
-
-        p->txNumNext += ppb->txInfos.size(); // update internal counter
-
-        if (p->txNumNext != p->txNumsFile->numRecords())
-            throw InternalError("TxNum file and internal txNumNext counter disagree! FIXME!");
-
-
-        constexpr bool debugPrt = false;
-
-        // update utxoSet & scritphash history
+        // code in the below block may throw -- exceptions are propagated out to caller.
         {
-            std::unordered_set<HashX, HashHasher> newHashXInputsResolved;
-            newHashXInputsResolved.reserve(1024); ///< todo: tune this magic number?
+            // Verify header chain makes sense (by checking hashes, using the shared header verifier)
+            QByteArray rawHeader;
+            {
+                QString errMsg;
+                if (!p->headerVerifier(ppb->header, &errMsg) ) {
+                    // XXX possible reorg point. Caller will/should roll back the db state via issuing calls to undoLatestBlock()
+                    throw HeaderVerificationFailure(errMsg);
+                }
+                // save raw header back to our buffer -- this will be used at the end of this function to add it to the db
+                // after everything completes successfully.
+                rawHeader = p->headerVerifier.lastHeaderProcessed().second;
+            }
+
+            setDirty(true); // <--  no turning back. if the app crashes unexpectedly while this is set, on next restart it will refuse to run and insist on a clean resynch.
+
+            {  // add txnum -> txhash association to the TxNumsFile...
+                auto batch = p->txNumsFile->beginBatchAppend(); // may throw if io error in c'tor here.
+                QString errStr;
+                for (const auto & txInfo : ppb->txInfos) {
+                    if (!batch.append(txInfo.hash, &errStr)) // does not throw here, but we do.
+                        throw InternalError(QString("Batch append for txNums failed: %1.").arg(errStr));
+                }
+                // <-- The batch d'tor may close the app on error here with Fatal() if a low-level file error occurs now
+                //     on header update (see: RecordFile.cpp, ~BatchAppendContext()).
+            }
+
+            p->txNumNext += ppb->txInfos.size(); // update internal counter
+
+            if (p->txNumNext != p->txNumsFile->numRecords())
+                throw InternalError("TxNum file and internal txNumNext counter disagree! FIXME!");
+
+
+            constexpr bool debugPrt = false;
+
+            // update utxoSet & scritphash history
+            {
+                std::unordered_set<HashX, HashHasher> newHashXInputsResolved;
+                newHashXInputsResolved.reserve(1024); ///< todo: tune this magic number?
+
+                {
+                    // utxo batch block (updtes utxoset & scripthash_unspent tables)
+                    UTXOBatch utxoBatch;
+
+                    // reserve space in undo, if in saveUndo mode
+                    if (undo) {
+                        undo->addUndos.reserve(ppb->outputs.size());
+                        undo->delUndos.reserve(ppb->inputs.size());
+                    }
+
+                    // add outputs
+                    for (const auto & [hashX, ag] : ppb->hashXAggregated) {
+                        for (const auto oidx : ag.outs) {
+                            const auto & out = ppb->outputs[oidx];
+                            if (out.spentInInputIndex.has_value()) {
+                                if constexpr (debugPrt)
+                                    Debug() << "Skipping output #: " << oidx << " for " << ppb->txInfos[out.txIdx].hash.toHex() << " (was spent in same block tx: " << ppb->txInfos[ppb->inputs[*out.spentInInputIndex].txIdx].hash.toHex() << ")";
+                                continue;
+                            }
+                            const TxHash & hash = ppb->txInfos[out.txIdx].hash;
+                            TXOInfo info;
+                            info.hashX = hashX;
+                            info.amount = out.amount;
+                            info.confirmedHeight = ppb->height;
+                            info.txNum = blockTxNum0 + out.txIdx;
+                            const TXO txo{ hash, out.outN };
+                            const CompactTXO ctxo(info.txNum, txo.outN);
+                            utxoBatch.add(txo, info, ctxo); // add to db
+                            if (undo) { // save undo info if we are in saveUndo mode
+                                undo->addUndos.emplace_back(txo, info.hashX, ctxo);
+                            }
+                            if constexpr (debugPrt)
+                                Debug() << "Added txo: " << txo.toString()
+                                        << " (txid: " << hash.toHex() << " height: " << ppb->height << ") "
+                                        << " amount: " << info.amount.ToString() << " for HashX: " << info.hashX.toHex();
+                        }
+                    }
+
+                    // add spends (process inputs)
+                    unsigned inum = 0;
+                    for (auto & in : ppb->inputs) {
+                        const TXO txo{in.prevoutHash, in.prevoutN};
+                        if (!inum) {
+                            // coinbase.. skip
+                        } else if (in.parentTxOutIdx.has_value()) {
+                            // was an input that was spent in this block so it's ok to skip.. we never added it to utxo set
+                            if constexpr (debugPrt)
+                                Debug() << "Skipping input " << txo.toString() << ", spent in this block (output # " << *in.parentTxOutIdx << ")";
+                        } else if (const auto opt = utxoGetFromDB(txo); opt.has_value()) {
+                            const auto & info = *opt;
+                            if (info.confirmedHeight.has_value() && *info.confirmedHeight != ppb->height) {
+                                // was a prevout from a previos block.. so the ppb didn't have it in the 'involving hashx' set..
+                                // mark the spend as having involved this hashX for this ppb now.
+                                auto & ag = ppb->hashXAggregated[info.hashX];
+                                ag.ins.emplace_back(inum);
+                                newHashXInputsResolved.insert(info.hashX);
+                                // mark its txidx
+                                if (auto & vec = ag.txNumsInvolvingHashX; vec.empty() || vec.back() != in.txIdx)
+                                    vec.emplace_back(in.txIdx);
+
+                            }
+                            if constexpr (debugPrt) {
+                                const auto dbgTxIdHex = ppb->txHashForInputIdx(inum).toHex();
+                                Debug() << "Spent " << txo.toString() << " amount: " << info.amount.ToString()
+                                        << " in txid: "  << dbgTxIdHex << " height: " << ppb->height
+                                        << " input number: " << ppb->numForInputIdx(inum).value_or(0xffff)
+                                        << " HashX: " << info.hashX.toHex();
+                            }
+                            // delete from db
+                            utxoBatch.remove(txo, info.hashX, CompactTXO(info.txNum, txo.outN)); // delete from db
+                            if (undo) { // save undo info, if we are in saveUndo mode
+                                undo->delUndos.emplace_back(txo, info);
+                            }
+                        } else {
+                            QString s;
+                            {
+                                const auto dbgTxIdHex = ppb->txHashForInputIdx(inum).toHex();
+                                QTextStream ts(&s);
+                                ts << "Failed to spend: " << in.prevoutHash.toHex() << ":" << in.prevoutN << " (spending txid: " << dbgTxIdHex << ")";
+                            }
+                            throw InternalError(s);
+                        }
+                        ++inum;
+                    }
+
+                    // commit the utxoset updates now.. this issues the writes to the db and also updates
+                    // p->utxoCt. This may throw.
+                    issueUpdates(utxoBatch);
+                }
+
+                // sort and shrink_to_fit new hashX inputs added
+                for (const auto & hashX : newHashXInputsResolved) {
+                    auto & ag = ppb->hashXAggregated[hashX];
+                    std::sort(ag.ins.begin(), ag.ins.end()); // make sure they are sorted
+                    std::sort(ag.txNumsInvolvingHashX.begin(), ag.txNumsInvolvingHashX.end());
+                    auto last = std::unique(ag.txNumsInvolvingHashX.begin(), ag.txNumsInvolvingHashX.end());
+                    ag.txNumsInvolvingHashX.erase(last, ag.txNumsInvolvingHashX.end());
+                    ag.ins.shrink_to_fit();
+                    ag.txNumsInvolvingHashX.shrink_to_fit();
+                }
+
+                if constexpr (debugPrt)
+                    Debug() << "utxoset size: " << utxoSetSize() << " block: " << ppb->height;
+            }
 
             {
-                // utxo batch block (updtes utxoset & scripthash_unspent tables)
-                UTXOBatch utxoBatch;
+                // now.. update the txNumsInvolvingHashX to be offset from txNum0 for this block, and save history to db table
+                // history is hashX -> TxNumVec (serialized) as a serities of 6-bytes txNums in blockchain order as they appeared.
+                if (notify)
+                    // first, reserve space for notifications
+                    notify->scriptHashesAffected.reserve(notify->scriptHashesAffected.size() + ppb->hashXAggregated.size());
+                rocksdb::WriteBatch batch;
+                for (auto & [hashX, ag] : ppb->hashXAggregated) {
+                    if (notify) notify->scriptHashesAffected.insert(hashX); // fast O(1) insertion because we reserved the right size above.
+                    for (auto & txNum : ag.txNumsInvolvingHashX) {
+                        txNum += blockTxNum0; // transform local txIdx to -> txNum (global mapping)
+                    }
+                    // save scripthash history for this hashX, by appending to existing history. Note that this uses
+                    // the 'ConcatOperator' class we defined in this file, which requires rocksdb be compiled with RTTI.
+                    if (auto st = batch.Merge(ToSlice(hashX), ToSlice(Serialize(ag.txNumsInvolvingHashX))); !st.ok())
+                        throw DatabaseError(QString("batch merge fail for hashX %1, block height %2: %3")
+                                            .arg(QString(hashX.toHex())).arg(ppb->height).arg(StatusString(st)));
+                }
+                if (auto st = p->db.shist->Write(p->db.defWriteOpts, &batch) ; !st.ok())
+                    throw DatabaseError(QString("batch merge fail for block height %1: %2")
+                                        .arg(ppb->height).arg(StatusString(st)));
+            }
 
-                // reserve space in undo, if in saveUndo mode
+
+            {
+                // update BlkInfo
+                if (nReserve) {
+                    if (const auto size = p->blkInfos.size(); size + 1 > p->blkInfos.capacity())
+                        p->blkInfos.reserve(size + nReserve); // reserve space for new blkinfos in 1 go to save on copying
+                }
+
+                p->blkInfos.emplace_back(
+                    blockTxNum0, // .txNum0
+                    unsigned(ppb->txInfos.size())
+                );
+
+                const auto & blkInfo = p->blkInfos.back();
+
+                p->blkInfosByTxNum[blkInfo.txNum0] = unsigned(p->blkInfos.size()-1);
+
+                // save BlkInfo to db
+                static const QString blkInfoErrMsg("Error writing BlkInfo to db");
+                GenericDBPut(p->db.blkinfo.get(), uint32_t(ppb->height), blkInfo, blkInfoErrMsg, p->db.defWriteOpts);
+
                 if (undo) {
-                    undo->addUndos.reserve(ppb->outputs.size());
-                    undo->delUndos.reserve(ppb->inputs.size());
+                    // save blkInfo to undo information, if in saveUndo mode
+                    undo->blkInfo = p->blkInfos.back();
                 }
-
-                // add outputs
-                for (const auto & [hashX, ag] : ppb->hashXAggregated) {
-                    for (const auto oidx : ag.outs) {
-                        const auto & out = ppb->outputs[oidx];
-                        if (out.spentInInputIndex.has_value()) {
-                            if constexpr (debugPrt)
-                                Debug() << "Skipping output #: " << oidx << " for " << ppb->txInfos[out.txIdx].hash.toHex() << " (was spent in same block tx: " << ppb->txInfos[ppb->inputs[*out.spentInInputIndex].txIdx].hash.toHex() << ")";
-                            continue;
-                        }
-                        const TxHash & hash = ppb->txInfos[out.txIdx].hash;
-                        TXOInfo info;
-                        info.hashX = hashX;
-                        info.amount = out.amount;
-                        info.confirmedHeight = ppb->height;
-                        info.txNum = blockTxNum0 + out.txIdx;
-                        const TXO txo{ hash, out.outN };
-                        const CompactTXO ctxo(info.txNum, txo.outN);
-                        utxoBatch.add(txo, info, ctxo); // add to db
-                        if (undo) { // save undo info if we are in saveUndo mode
-                            undo->addUndos.emplace_back(txo, info.hashX, ctxo);
-                        }
-                        if constexpr (debugPrt)
-                            Debug() << "Added txo: " << txo.toString()
-                                    << " (txid: " << hash.toHex() << " height: " << ppb->height << ") "
-                                    << " amount: " << info.amount.ToString() << " for HashX: " << info.hashX.toHex();
-                    }
-                }
-
-                // add spends (process inputs)
-                unsigned inum = 0;
-                for (auto & in : ppb->inputs) {
-                    const TXO txo{in.prevoutHash, in.prevoutN};
-                    if (!inum) {
-                        // coinbase.. skip
-                    } else if (in.parentTxOutIdx.has_value()) {
-                        // was an input that was spent in this block so it's ok to skip.. we never added it to utxo set
-                        if constexpr (debugPrt)
-                            Debug() << "Skipping input " << txo.toString() << ", spent in this block (output # " << *in.parentTxOutIdx << ")";
-                    } else if (const auto opt = utxoGetFromDB(txo); opt.has_value()) {
-                        const auto & info = *opt;
-                        if (info.confirmedHeight.has_value() && *info.confirmedHeight != ppb->height) {
-                            // was a prevout from a previos block.. so the ppb didn't have it in the 'involving hashx' set..
-                            // mark the spend as having involved this hashX for this ppb now.
-                            auto & ag = ppb->hashXAggregated[info.hashX];
-                            ag.ins.emplace_back(inum);
-                            newHashXInputsResolved.insert(info.hashX);
-                            // mark its txidx
-                            if (auto & vec = ag.txNumsInvolvingHashX; vec.empty() || vec.back() != in.txIdx)
-                                vec.emplace_back(in.txIdx);
-
-                        }
-                        if constexpr (debugPrt) {
-                            const auto dbgTxIdHex = ppb->txHashForInputIdx(inum).toHex();
-                            Debug() << "Spent " << txo.toString() << " amount: " << info.amount.ToString()
-                                    << " in txid: "  << dbgTxIdHex << " height: " << ppb->height
-                                    << " input number: " << ppb->numForInputIdx(inum).value_or(0xffff)
-                                    << " HashX: " << info.hashX.toHex();
-                        }
-                        // delete from db
-                        utxoBatch.remove(txo, info.hashX, CompactTXO(info.txNum, txo.outN)); // delete from db
-                        if (undo) { // save undo info, if we are in saveUndo mode
-                            undo->delUndos.emplace_back(txo, info);
-                        }
-                    } else {
-                        QString s;
-                        {
-                            const auto dbgTxIdHex = ppb->txHashForInputIdx(inum).toHex();
-                            QTextStream ts(&s);
-                            ts << "Failed to spend: " << in.prevoutHash.toHex() << ":" << in.prevoutN << " (spending txid: " << dbgTxIdHex << ")";
-                        }
-                        throw InternalError(s);
-                    }
-                    ++inum;
-                }
-
-                // commit the utxoset updates now.. this issues the writes to the db and also updates
-                // p->utxoCt. This may throw.
-                issueUpdates(utxoBatch);
             }
 
-            // sort and shrink_to_fit new hashX inputs added
-            for (const auto & hashX : newHashXInputsResolved) {
-                auto & ag = ppb->hashXAggregated[hashX];
-                std::sort(ag.ins.begin(), ag.ins.end()); // make sure they are sorted
-                std::sort(ag.txNumsInvolvingHashX.begin(), ag.txNumsInvolvingHashX.end());
-                auto last = std::unique(ag.txNumsInvolvingHashX.begin(), ag.txNumsInvolvingHashX.end());
-                ag.txNumsInvolvingHashX.erase(last, ag.txNumsInvolvingHashX.end());
-                ag.ins.shrink_to_fit();
-                ag.txNumsInvolvingHashX.shrink_to_fit();
-            }
-
-            if constexpr (debugPrt)
-                Debug() << "utxoset size: " << utxoSetSize() << " block: " << ppb->height;
-        }
-
-        {
-            // now.. update the txNumsInvolvingHashX to be offset from txNum0 for this block, and save history to db table
-            // history is hashX -> TxNumVec (serialized) as a serities of 6-bytes txNums in blockchain order as they appeared.
-            if (notify)
-                // first, reserve space for notifications
-                notify->reserve(notify->size() + ppb->hashXAggregated.size());
-            rocksdb::WriteBatch batch;
-            for (auto & [hashX, ag] : ppb->hashXAggregated) {
-                if (notify) notify->insert(hashX); // fast O(1) insertion because we reserved the right size above.
-                for (auto & txNum : ag.txNumsInvolvingHashX) {
-                    txNum += blockTxNum0; // transform local txIdx to -> txNum (global mapping)
-                }
-                // save scripthash history for this hashX, by appending to existing history. Note that this uses
-                // the 'ConcatOperator' class we defined in this file, which requires rocksdb be compiled with RTTI.
-                if (auto st = batch.Merge(ToSlice(hashX), ToSlice(Serialize(ag.txNumsInvolvingHashX))); !st.ok())
-                    throw DatabaseError(QString("batch merge fail for hashX %1, block height %2: %3")
-                                        .arg(QString(hashX.toHex())).arg(ppb->height).arg(StatusString(st)));
-            }
-            if (auto st = p->db.shist->Write(p->db.defWriteOpts, &batch) ; !st.ok())
-                throw DatabaseError(QString("batch merge fail for block height %1: %2")
-                                    .arg(ppb->height).arg(StatusString(st)));
-        }
-
-
-        {
-            // update BlkInfo
-            if (nReserve) {
-                if (const auto size = p->blkInfos.size(); size + 1 > p->blkInfos.capacity())
-                    p->blkInfos.reserve(size + nReserve); // reserve space for new blkinfos in 1 go to save on copying
-            }
-
-            p->blkInfos.emplace_back(
-                blockTxNum0, // .txNum0
-                unsigned(ppb->txInfos.size())
-            );
-
-            const auto & blkInfo = p->blkInfos.back();
-
-            p->blkInfosByTxNum[blkInfo.txNum0] = unsigned(p->blkInfos.size()-1);
-
-            // save BlkInfo to db
-            static const QString blkInfoErrMsg("Error writing BlkInfo to db");
-            GenericDBPut(p->db.blkinfo.get(), uint32_t(ppb->height), blkInfo, blkInfoErrMsg, p->db.defWriteOpts);
-
+            // save the last of the undo info, if in saveUndo mode
             if (undo) {
-                // save blkInfo to undo information, if in saveUndo mode
-                undo->blkInfo = p->blkInfos.back();
+                const auto t0 = Util::getTimeNS();
+                undo->hash = BTC::HashRev(rawHeader);
+                undo->scriptHashes = Util::keySet<decltype (undo->scriptHashes)>(ppb->hashXAggregated);
+                static const QString errPrefix("Error saving undo info to undo db");
+
+                GenericDBPut(p->db.undo.get(), uint32_t(ppb->height), *undo, errPrefix, p->db.defWriteOpts); // save undo to db
+                if (ppb->height < p->earliestUndoHeight) {
+                    // remember earliest for delete clause below...
+                    p->earliestUndoHeight = ppb->height;
+                }
+
+                if constexpr (debugPrt) {
+                    // testing undo ser/deser
+                    Debug() << "Undo info 1: " << undo->toDebugString();
+                    QByteArray ba = Serialize(*undo);
+                    Debug() << "Undo info 1 serSize: " << ba.length();
+                    bool ok;
+                    auto undo2 = Deserialize<UndoInfo>(ba, &ok);
+                    ba.fill('z'); // ensure no shallow copies of buffer exist in deserialized object. if they do below tests will fail
+                    FatalAssert(ok && undo2.isValid(), "Deser of undo info failed!");
+                    Debug() << "Undo info 2: " << undo2.toDebugString();
+                    Debug() << "Undo info 1 == undo info 2: " << (*undo == undo2);
+                } else {
+                    const auto elapsedms = (Util::getTimeNS() - t0)/1e6;
+                    const size_t nTx = undo->blkInfo.nTx, nSH = undo->scriptHashes.size();
+                    Debug() << "Saved V2 undo for block " << undo->height << ", "
+                            << nTx << " " << Util::Pluralize("transaction", nTx)
+                            << " involving " << nSH << " " << Util::Pluralize("scripthash", nSH)
+                            << ", in " << QString::number(elapsedms, 'f', 2) << " msec.";
+                }
             }
-        }
-
-        // save the last of the undo info, if in saveUndo mode
-        if (undo) {
-            const auto t0 = Util::getTimeNS();
-            undo->hash = BTC::HashRev(rawHeader);
-            undo->scriptHashes = Util::keySet<decltype (undo->scriptHashes)>(ppb->hashXAggregated);
-            static const QString errPrefix("Error saving undo info to undo db");
-
-            GenericDBPut(p->db.undo.get(), uint32_t(ppb->height), *undo, errPrefix, p->db.defWriteOpts); // save undo to db
-            if (ppb->height < p->earliestUndoHeight) {
-                // remember earliest for delete clause below...
-                p->earliestUndoHeight = ppb->height;
+            // Expire old undos >configuredUndoDepth() blocks ago to keep the db tidy.
+            // We only do this if we know there is an old undo for said height in db.
+            // Note that the assumption here is that no holes exist, and that we always walk
+            // forward with addBlock() 1 block at a time (which is a valid assumption in this codebase).
+            if (const auto expireUndoHeight = int(ppb->height) - int(configuredUndoDepth());
+                    expireUndoHeight >= 0 && unsigned(expireUndoHeight) >= p->earliestUndoHeight) {
+                // FIXME -- this runs for every block in between the last undo save and current tip.
+                // If the node was off for a while then restarted this just hits the db with useless deletes for non-existant
+                // keys as we catch up.  It's not the end of the world, as each call here is on the order of microseconds..
+                // but perhaps we need to see about fixing this to not do that.
+                static const QString errPrefix("Error deleting old/stale undo info from undo db");
+                GenericDBDelete(p->db.undo.get(), uint32_t(expireUndoHeight), errPrefix, p->db.defWriteOpts);
+                p->earliestUndoHeight = unsigned(expireUndoHeight + 1);
+                if constexpr (debugPrt) DebugM("Deleted undo for block ", expireUndoHeight, ", earliest now ", p->earliestUndoHeight.load());
             }
 
-            if constexpr (debugPrt) {
-                // testing undo ser/deser
-                Debug() << "Undo info 1: " << undo->toDebugString();
-                QByteArray ba = Serialize(*undo);
-                Debug() << "Undo info 1 serSize: " << ba.length();
-                bool ok;
-                auto undo2 = Deserialize<UndoInfo>(ba, &ok);
-                ba.fill('z'); // ensure no shallow copies of buffer exist in deserialized object. if they do below tests will fail
-                FatalAssert(ok && undo2.isValid(), "Deser of undo info failed!");
-                Debug() << "Undo info 2: " << undo2.toDebugString();
-                Debug() << "Undo info 1 == undo info 2: " << (*undo == undo2);
-            } else {
-                const auto elapsedms = (Util::getTimeNS() - t0)/1e6;
-                const size_t nTx = undo->blkInfo.nTx, nSH = undo->scriptHashes.size();
-                Debug() << "Saved V2 undo for block " << undo->height << ", "
-                        << nTx << " " << Util::Pluralize("transaction", nTx)
-                        << " involving " << nSH << " " << Util::Pluralize("scripthash", nSH)
-                        << ", in " << QString::number(elapsedms, 'f', 2) << " msec.";
+            appendHeader(rawHeader, ppb->height);
+
+            if (UNLIKELY(ppb->height == 0)) {
+                // update genesis hash now if block 0 -- this info is used by rpc method server.features
+                p->genesisHash = BTC::HashRev(rawHeader); // this variable is guarded by p->headerVerifierLock
             }
+
+            saveUtxoCt();
+            setDirty(false);
+
+            undoVerifierOnScopeEnd.disable(); // indicate to the "Defer" object declared at the top of this function that it shouldn't undo anything anymore as we are happy now with the db state now.
         }
-        // Expire old undos >configuredUndoDepth() blocks ago to keep the db tidy.
-        // We only do this if we know there is an old undo for said height in db.
-        // Note that the assumption here is that no holes exist, and that we always walk
-        // forward with addBlock() 1 block at a time (which is a valid assumption in this codebase).
-        if (const auto expireUndoHeight = int(ppb->height) - int(configuredUndoDepth());
-                expireUndoHeight >= 0 && unsigned(expireUndoHeight) >= p->earliestUndoHeight) {
-            // FIXME -- this runs for every block in between the last undo save and current tip.
-            // If the node was off for a while then restarted this just hits the db with useless deletes for non-existant
-            // keys as we catch up.  It's not the end of the world, as each call here is on the order of microseconds..
-            // but perhaps we need to see about fixing this to not do that.
-            static const QString errPrefix("Error deleting old/stale undo info from undo db");
-            GenericDBDelete(p->db.undo.get(), uint32_t(expireUndoHeight), errPrefix, p->db.defWriteOpts);
-            p->earliestUndoHeight = unsigned(expireUndoHeight + 1);
-            if constexpr (debugPrt) DebugM("Deleted undo for block ", expireUndoHeight, ", earliest now ", p->earliestUndoHeight.load());
-        }
-
-        appendHeader(rawHeader, ppb->height);
-
-        if (UNLIKELY(ppb->height == 0)) {
-            // update genesis hash now if block 0 -- this info is used by rpc method server.features
-            p->genesisHash = BTC::HashRev(rawHeader); // this variable is guarded by p->headerVerifierLock
-        }
-
-        saveUtxoCt();
-        setDirty(false);
-
-        undoVerifierOnScopeEnd.disable(); // indicate to the "Defer" object declared at the top of this function that it shouldn't undo anything anymore as we are happy now with the db state now.
     } /// release locks
 
-    // now, do notifications
-    if (notify && subsmgr && !notify->empty())
-        subsmgr->enqueueNotifications(std::move(*notify));
-    if (unsubDspSet && dspsubsmgr && !unsubDspSet->empty())
-        dspsubsmgr->unsubscribeClientsForKeys(*unsubDspSet);
+    // now, do notifications with locks not held
+    if (notify) {
+        if (subsmgr && !notify->scriptHashesAffected.empty())
+            subsmgr->enqueueNotifications(std::move(notify->scriptHashesAffected));
+        if (dspsubsmgr) {
+            if (!notify->unsubDspTxids.empty())
+                dspsubsmgr->unsubscribeClientsForKeys(notify->unsubDspTxids);
+            if (!notify->dspsAffected.empty())
+                dspsubsmgr->enqueueNotificationsForAllDescendantsOfDSPsInSet(notify->dspsAffected);
+        }
+    }
 }
 
 BlockHeight Storage::undoLatestBlock(bool notifySubs)
@@ -1920,10 +1932,14 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
     BlockHeight prevHeight{0};
     size_t nSH = 0; // for stats printing
     using NotifySet = std::unordered_set<HashX, HashHasher>;
-    std::unique_ptr<NotifySet> notify, unsubDspSet;
+    struct NotifyData {
+        using NotifySet = std::unordered_set<HashX, HashHasher>;
+        NotifySet scriptHashesAffected, unsubDspTxids;
+    };
+    std::unique_ptr<NotifyData> notify;
+
     if (notifySubs) {
-        notify = std::make_unique<NotifySet>();
-        unsubDspSet = std::make_unique<NotifySet>();
+        notify = std::make_unique<NotifyData>(); // note we don't reserve here -- we will reserve at the end when we run through the hashXAggregated set one final time...
     }
 
     {
@@ -1947,8 +1963,8 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
         //
         if (notify) {
             // mark ALL of mempool for notify so we can detect drops that weren't in block but also disappeared from mempool properly
-            notify->merge(Util::keySet<NotifySet>(p->mempool.hashXTxs));
-            unsubDspSet->merge(Util::keySet<NotifySet>(p->mempool.txs));
+            notify->scriptHashesAffected.merge(Util::keySet<NotifySet>(p->mempool.hashXTxs));
+            notify->unsubDspTxids.merge(Util::keySet<NotifySet>(p->mempool.txs));
         }
         p->mempool.clear(); // make sure mempool is clean (see note above as to why)
 
@@ -2063,10 +2079,10 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
             nSH = undo.scriptHashes.size();
 
             if (notify) {
-                if (notify->empty())
-                    notify->swap(undo.scriptHashes);
+                if (notify->scriptHashesAffected.empty())
+                    notify->scriptHashesAffected.swap(undo.scriptHashes);
                 else
-                    notify->merge(std::move(undo.scriptHashes));
+                    notify->scriptHashesAffected.merge(std::move(undo.scriptHashes));
             }
         }
 
@@ -2079,10 +2095,12 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
     } // release locks
 
     // now, do notifications
-    if (notify && subsmgr && !notify->empty())
-        subsmgr->enqueueNotifications(std::move(*notify));
-    if (unsubDspSet && dspsubsmgr && !unsubDspSet->empty())
-        dspsubsmgr->unsubscribeClientsForKeys(*unsubDspSet);
+    if (notify) {
+        if (subsmgr && !notify->scriptHashesAffected.empty())
+        subsmgr->enqueueNotifications(std::move(notify->scriptHashesAffected));
+        if (dspsubsmgr && !notify->unsubDspTxids.empty())
+            dspsubsmgr->unsubscribeClientsForKeys(notify->unsubDspTxids);
+    }
 
     return prevHeight;
 }

@@ -633,6 +633,7 @@ struct SynchMempoolTask : public CtlTask
     std::unordered_set<HashX, HashHasher> scriptHashesAffected;
     Mempool::TxHashSet txidsDropped; ///< the txids that were dropped for this run of the task (cumulative across retries, like scriptHashesAffected)
     Mempool::TxHashSet dspTxsAdded; ///< the txids in the adds that also have dsproofs now associated with them
+    DSPs::DspHashSet dspHashesAffected; ///<  the dspids that had adds or drops (cumulative; we need this because we must notify ALL descendant subs since the set changed)
 
     void clear() {
         isdlingtxs = false;
@@ -643,6 +644,7 @@ struct SynchMempoolTask : public CtlTask
         // all the droppedTx scripthashes for each retry, so we never clear the set.
         // Note 2: we also never clear the redoCt since that counter needs to maintain state to abort too many redos.
         // Note 3: we also never clear txidsDropped
+        // Note 4: we also never clear dspHashesAffected
     }
 
     /// Called when getrawtransaction errors out or when we dropTxs() and the result is too many txs so we must
@@ -672,6 +674,10 @@ SynchMempoolTask::~SynchMempoolTask() {
         if (!dspTxsAdded.empty()) {
             DebugM(objectName(), ": dspTx adds: ", dspTxsAdded.size());
             storage->dspSubs()->enqueueNotifications(std::move(dspTxsAdded));
+        }
+        if (!dspHashesAffected.empty()) {
+            DebugM(objectName(), ": dspTx affected: ", dspHashesAffected.size());
+            storage->dspSubs()->enqueueNotificationsForAllDescendantsOfDSPsInSet(dspHashesAffected);
         }
     }
 
@@ -839,6 +845,7 @@ void SynchMempoolTask::processResults()
         return mempool.addNewTxs(scriptHashesAffected, txsDownloaded, getFromCache, TRACE); // may throw
     }();
     dspTxsAdded.merge(res.dspTxAdds);
+    dspHashesAffected.merge(res.dspsAffected);
     if ((res.oldSize != res.newSize || res.elapsedMsec > 1e3) && Debug::isEnabled()) {
         Controller::printMempoolStatusToLog(res.newSize, res.newNumAddresses, res.elapsedMsec, true, true);
     }
@@ -996,7 +1003,8 @@ void SynchMempoolTask::doGetRawMempool()
                 }
                 scriptHashesAffected.merge(std::move(affected)); /* update set here with lock not held */
                 txidsDropped.merge(std::move(droppedTxs)); /* update this set too */
-                // . <--- NB: at this point both affected and droppedTxs are moved-from
+                dspHashesAffected.merge(std::move(res.dspsAffected)); /* also update this */
+                // . <--- NB: at this point: affected, droppedTxs, and res.dspsAffected are moved-from
             }
             if (UNLIKELY(droppedCt != expectedDropCt)) { // This invariant is checked to detect bugs.
                 Warning() << "Synch mempool expected to drop " << droppedTxs.size() << ", but in fact dropped "
@@ -1774,6 +1782,10 @@ auto Controller::debug(const StatsParams &p) const -> Stats // from StatsMixin
     if (p.contains("subs")) {
         const auto timeLeft = kDefaultTimeout - (Util::getTime() - t0/1000000) - 50;
         ret["subscriptions"] = storage->subs()->debugSafe(p, std::max(5, int(timeLeft)));
+    }
+    if (p.contains("dspsubs")) {
+        const auto timeLeft = kDefaultTimeout - (Util::getTime() - t0/1000000) - 50;
+        ret["subscriptions (DSProof)"] = storage->dspSubs()->debugSafe(p, std::max(5, int(timeLeft)));
     }
     const auto elapsed = Util::getTimeNS() - t0;
     ret["elapsed"] = QString::number(elapsed/1e6, 'f', 6) + " msec";

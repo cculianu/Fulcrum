@@ -126,6 +126,7 @@ void SubsMgr::doNotifyAllPending()
     const Tic t0;
     size_t ctr = 0, ctrSH = 0;
     bool emitQueueEmpty = false;
+    const bool useCache = useStatusCache();
     std::vector<SubRef> pending; // this ends up being the intersection of the sh's in p->pendingNotifications and p->subs
     {
         LockGuard g(p->mut);
@@ -193,7 +194,8 @@ void SubsMgr::doNotifyAllPending()
             const bool doemit = !sub->lastStatusNotified.has_value() || sub->lastStatusNotified != status;
             // we basically cache 2 statuses but they are implicitly shared copies of the same memory so it's ok.
             sub->lastStatusNotified = status;
-            sub->cachedStatus = status;
+            if (useCache)
+                sub->cachedStatus = status;
             if (doemit) {
                 const auto nClients = sub->subscribedClientIds.size();
                 ctr += nClients;
@@ -274,16 +276,21 @@ auto SubsMgr::makeSubRef(const HashX &key) -> SubRef
     return ret;
 }
 
+bool SubsMgr::isSubsLimitExceeded(int64_t & limit) const {
+    limit = options->maxSubsGlobally;
+    return numGlobalSubscriptions() >= limit;
+}
+
 // may throw LimitReached
 auto SubsMgr::getOrMakeSubRef(const HashX &key) -> std::pair<SubRef, bool>
 {
-    std::pair<SubRef, bool> ret;
-    LockGuard g(p->mut);
-
-    if (UNLIKELY(numGlobalSubscriptions() >= options->maxSubsGlobally))
+    if (int64_t limit; UNLIKELY(isSubsLimitExceeded(limit)))
         // Note we check the limit against all subs (including zombies) to prevent a DoS attack that circumvents
         // the limit by repeatedly creating subs, disconnecting, reconnecting, creating a different set of subs, etc.
-        throw LimitReached(QString("Global subs limit of %1 has been reached").arg(options->maxSubsGlobally));
+        throw LimitReached(QString("Subs limit of %1 has been reached").arg(limit));
+
+    std::pair<SubRef, bool> ret;
+    LockGuard g(p->mut);
 
     if (auto it = p->subs.find(key); it != p->subs.end()) {
         ret.first = it->second;
@@ -308,6 +315,7 @@ auto SubsMgr::findExistingSubRef(const HashX &key) const -> SubRef
 auto SubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &key, const StatusCallback &notifyCB) -> SubscribeResult
 {
     const auto t0 = debugPrint ? Util::getTimeNS() : 0LL;
+    const bool useCache = useStatusCache();
     if (UNLIKELY(!notifyCB))
         throw BadArgs("SubsMgr::subscribe must be called with a valid notifyCB. FIXME!");
 
@@ -338,19 +346,23 @@ auto SubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &key, const StatusCa
             ++p->nClientSubsActive;
             ++Pvt::nGlobalClientSubsActive;
         }
-        // Always copy the last known StatusHash to caller. This is guaranteed to either be a recent status since the
-        // last notification sent (if known), or !has_value if not known.
-        ret.second = sub->cachedStatus;
+        if (useCache) {
+            // Copy the last known StatusHash to caller. This is guaranteed to either be a recent status since the
+            // last notification sent (if known), or !has_value if not known.
+            ret.second = sub->cachedStatus;
+        }
         sub->updateTS(); // our basic 'mtime'
         auto conn = QObject::connect(sub.get(), &Subscription::statusChanged, c, notifyCB, Qt::QueuedConnection); // QueuedConnection paranoia in case client 'c' "lives" in our thread
         if (UNLIKELY(!conn))
             throw InternalError("SubsMgr::subscribe: Failed to make the 'statusChanged' connection to the notifyCB functor! FIXME!");
     }
 
-    if (ret.second.has_value())
-        ++p->cacheHits;
-    else
-        ++p->cacheMisses;
+    if (useCache) {
+        if (ret.second.has_value())
+            ++p->cacheHits;
+        else
+            ++p->cacheMisses;
+    }
 
     if constexpr (debugPrint) {
         const auto elapsed = Util::getTimeNS() - t0;
@@ -364,12 +376,20 @@ auto DSProofSubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &key, const S
     auto ret = SubsMgr::subscribe(c, key, notifyCB);
     if (ret.first) { // was new, attach signal for unsubscribeAllClients() to work
         if (SubRef sub = findExistingSubRef(key)) {
-            auto conn = QObject::connect(sub.get(), &Subscription::unsubscribeRequested, c, [this, c, key]{
+            auto conn = QObject::connect(sub.get(), &Subscription::unsubscribeRequested, c, [this, c, key, notifyCB] {
+                if (notifyCB) {
+                    // tell client the sub is gone -- send them an empty status immediately
+                    notifyCB(key, {});
+                }
                 // DEBUG TESTING REMOVE BELOW PRINT
                 DebugM("unsubscribeRequested signal invoked lambda, proceeding to unsubscribe client ", c->id,
                        " for key ", key.toHex(), " ...");
                 unsubscribe(c, key); // just call unsubscribe. this will zombify this sub and it will eventually be deleted
             });
+            if (UNLIKELY(!conn)) {
+                // this should never happen
+                Error() << "INTERNAL ERROR: failed to make the connecttion to the 'unsubscribeRequested' signal for client " << c->id << ". FIXME!";
+            }
         } else {
             // should never happen
             Error() << "INTERNAL ERROR: sub immediately lost its subref for " << key.toHex() << ". FIXME!";
@@ -380,7 +400,7 @@ auto DSProofSubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &key, const S
 
 void SubsMgr::maybeCacheStatusResult(const HashX &sh, const SubStatus &status)
 {
-    if (!status.has_value())
+    if (!status.has_value() || !useStatusCache())
         return;
     if (auto *ba = status.byteArray(); ba && ba->length() != HashLen && !ba->isEmpty())
         // we only allow empty (null) or 32 bytes.. otherwise reject
@@ -407,8 +427,9 @@ bool SubsMgr::unsubscribe(RPC::ConnectionBase *c, const HashX &key)
         if (auto it = sub->subscribedClientIds.find(c->id); it != sub->subscribedClientIds.end()) {
             sub->subscribedClientIds.erase(it);
             sub->updateTS();
-            bool res = QObject::disconnect(sub.get(), &Subscription::statusChanged, c, nullptr);
-            res = QObject::disconnect(c, &QObject::destroyed, sub.get(), nullptr);
+            QObject::disconnect(sub.get(), &Subscription::statusChanged, c, nullptr);
+            QObject::disconnect(c, &QObject::destroyed, sub.get(), nullptr);
+            QObject::disconnect(sub.get(), &Subscription::unsubscribeRequested, c, nullptr);
             ret = true;
             --p->nClientSubsActive;
             --Pvt::nGlobalClientSubsActive;
@@ -513,7 +534,7 @@ void SubsMgr::removeZombies(bool forced)
     if (ctr) {
         if (p->subs.load_factor() <= 0.5)
             p->subs.rehash(p->kSubsReserveSize); // shrink_to_fit down toward kSubsReserveSize (reclaim memory)
-        DebugM("SubsMgr: Removed ", ctr, " zombie ", Util::Pluralize("sub", ctr), " out of ", total,
+        DebugM(objectName(), ": Removed ", ctr, " zombie ", Util::Pluralize("sub", ctr), " out of ", total,
                " in ", t0.msecStr(4), " msec");
     }
 }
@@ -521,7 +542,7 @@ void SubsMgr::removeZombies(bool forced)
 auto SubsMgr::debug(const StatsParams &params) const -> Stats
 {
     QVariant ret;
-    if (params.contains("subs")) {
+    if (params.contains("subs") || params.contains("dspsubs")) {
         QVariantMap subs;
         qulonglong collisions{}, largestBucket{}, medianBucket{}, medianNonzeroBucket{};
         {
@@ -536,7 +557,7 @@ auto SubsMgr::debug(const StatsParams &params) const -> Stats
                     else if (auto *dsp = sub->lastStatusNotified.dsproof())
                         m2["lastStatusNotified"] = dsp->toVarMap();
                     else
-                        m2["lastStatusNotified"] = "";
+                        m2["lastStatusNotified"] = QVariant{};
                     m2["idleSecs"] = (Util::getTime() - sub->tsMsec)/1e3;
                     const auto & clients = sub->subscribedClientIds;
 #if QT_VERSION < QT_VERSION_CHECK(5, 14, 0)
@@ -595,6 +616,32 @@ auto DSProofSubsMgr::getFullStatus(const HashX &txHash) const -> SubStatus
     if (auto *dsproof = mempool.dsps.bestProofForTx(txHash))
         return *dsproof;
     return DSProof{}; // a SubStatus with a .isEmpty() indicates no proof for this txhash
+}
+
+void DSProofSubsMgr::enqueueNotificationsForAllDescendantsOfDSPsInSet(const DSPs::DspHashSet &ds)
+{
+    if (ds.empty()) return;
+    std::unordered_set<HashX, HashHasher> txids;
+    {
+        auto [mempool, lock] = storage->mempool(); // shared lock
+        if (mempool.dsps.size() < ds.size()) {
+            // loop over dsps since that set is smaller
+            for (const auto &[dsphash, proof] : mempool.dsps.getAll()) {
+                if (ds.count(dsphash))
+                    txids.insert(proof.descendants.begin(), proof.descendants.end());
+            }
+        } else {
+            // loop over the input set since that set is smaller
+            for (const auto &dspHash : ds) {
+                if (auto *dsp = mempool.dsps.get(dspHash))
+                    txids.insert(dsp->descendants.begin(), dsp->descendants.end());
+            }
+        }
+    }
+    if (!txids.empty()) {
+        DebugM(__func__, ": enqueuing notifs for ", txids.size(), " tx(s) which are descendant(s) of ", ds.size(), " dsp(s)");
+        enqueueNotifications(std::move(txids));
+    }
 }
 
 #ifdef ENABLE_TESTS
