@@ -212,15 +212,6 @@ void SubsMgr::doNotifyAllPending()
     }
 }
 
-void SubsMgr::enqueueNotifications(std::unordered_set<HashX, HashHasher> &s)
-{
-    if (s.empty()) return;
-    LockGuard g(p->mut);
-    const bool wasEmpty = p->pendingNotificatons.empty();
-    p->pendingNotificatons.merge(s);
-    if (wasEmpty)
-        emit queueNoLongerEmpty();
-}
 void SubsMgr::enqueueNotifications(std::unordered_set<HashX, HashHasher> &&s)
 {
     if (s.empty()) return;

@@ -187,9 +187,8 @@ public:
 
     /// Thread-safe. We do it this way because it's the fastest approach (uses C++17 unordered_set:::merge). After this
     /// call, s is modified and contains only the elements that were already pending (thus were not enqueued as they
-    /// were already in the queue).
-    void enqueueNotifications(std::unordered_set<HashX, HashHasher> & s);
-    /// Like the above but uses move.  After this call, s can be considered to be invalidated.
+    /// were already in the queue).  However since this is a move-based operation, s should officially be considered
+    /// moved-from and thus in a "valid but unspecified state".
     void enqueueNotifications(std::unordered_set<HashX, HashHasher> && s);
 
 signals:
