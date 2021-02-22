@@ -46,7 +46,7 @@ class SubStatus {
         QByteArray qba;
         std::unique_ptr<DSProof> dsp; // we use unique_ptr here to save memory in the common case where most of these instances are QByteArray
         void *dummy; // required for C++17 so we can at least have 1 active member even if no value is set
-        constexpr U() noexcept : dummy(nullptr) {}
+        constexpr U() noexcept : dummy{nullptr} {}
         ~U() noexcept {}
     };
     enum T : uint8_t { NoValue, QBA, DSP };
@@ -97,10 +97,22 @@ public:
     constexpr SubStatus() noexcept : t{NoValue} { }
     SubStatus(SubStatus &&o) { move(std::move(o)); }
     SubStatus(const SubStatus &o) { copy(o); }
-    SubStatus(const QByteArray &oq) { *this = oq; }
-    SubStatus(QByteArray &&oq) { *this = std::move(oq); }
-    SubStatus(const DSProof &od) { *this = od; }
-    SubStatus(DSProof &&od) { *this = std::move(od); }
+    SubStatus(const QByteArray &oq) noexcept {
+        new (reinterpret_cast<std::byte *>(&u.qba)) QByteArray(oq);
+        t = QBA;
+    }
+    SubStatus(QByteArray &&oq) noexcept {
+        new (reinterpret_cast<std::byte *>(&u.qba)) QByteArray(std::move(oq));
+        t = QBA;
+    }
+    SubStatus(const DSProof &od) {
+        new (reinterpret_cast<std::byte *>(&u.dsp)) std::unique_ptr<DSProof>(new DSProof(od));
+        t = DSP;
+    }
+    SubStatus(DSProof &&od) {
+        new (reinterpret_cast<std::byte *>(&u.dsp)) std::unique_ptr<DSProof>(new DSProof(std::move(od)));
+        t = DSP;
+    }
     ~SubStatus() { destruct(); }
 
     SubStatus &operator=(const SubStatus &o) { copy(o); return *this; }
