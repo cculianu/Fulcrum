@@ -227,7 +227,7 @@ void SubsMgr::enqueueNotifications(std::unordered_set<HashX, HashHasher> &&s)
 void SubsMgr::unsubscribeClientsForKeys(const std::unordered_set<HashX, HashHasher> & keys)
 {
     if (UNLIKELY(!dynamic_cast<DSProofSubsMgr *>(this))) {
-        // this only is set up to work for the DSProofsSubMgr currently. Print error to log end return.
+        // this only is set up to work only for the DSProofsSubMgr currently. Print error to log and return.
         Error() << "INTERNAL ERROR: " << " currently " << __func__ << " is only supported for the DSProofSubsMgr. FIXME!";
         return;
     }
@@ -374,14 +374,13 @@ auto SubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &key, const StatusCa
 auto DSProofSubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &key, const StatusCallback &notifyCB) -> SubscribeResult
 {
     auto ret = SubsMgr::subscribe(c, key, notifyCB);
-    if (ret.first) { // was new, attach signal for unsubscribeAllClients() to work
+    if (ret.first) { // this sub <-> client association is new, attach signal for unsubscribeAllClients() to work
         if (SubRef sub = findExistingSubRef(key)) {
             auto conn = QObject::connect(sub.get(), &Subscription::unsubscribeRequested, c, [this, c, key, notifyCB] {
                 if (notifyCB) {
                     // tell client the sub is gone -- send them an empty status immediately
                     notifyCB(key, {});
                 }
-                // DEBUG TESTING REMOVE BELOW PRINT
                 DebugM("unsubscribeRequested signal invoked lambda, proceeding to unsubscribe client ", c->id,
                        " for key ", key.toHex(), " ...");
                 // just call unsubscribe. this will zombify this sub and it will be deleted
