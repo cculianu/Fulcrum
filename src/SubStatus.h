@@ -102,7 +102,7 @@ class SubStatus {
     }
 public:
     constexpr SubStatus() noexcept {}
-    SubStatus(SubStatus &&o) { move(std::move(o)); }
+    SubStatus(SubStatus &&o) noexcept { move(std::move(o)); }
     SubStatus(const SubStatus &o) { copy(o); }
     SubStatus(const QByteArray &oq) noexcept : qba(oq), t{QBA} {}
     SubStatus(QByteArray &&oq) noexcept : qba(std::move(oq)), t{QBA} {}
