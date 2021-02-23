@@ -294,7 +294,7 @@ namespace WebSocket
             // cf_a df1_a df1_b cf_b df1_c df0_d df0_d df1_d cf_c df0_e df0_e -> cf_a cf_b cf_c df_a df_b df_c df_d [with df0_e left over]
             while (auto optFrame = parseFrame(d + pos, len - pos, maskEnforcement)) {
                 {
-                    PartialFrame & pf = optFrame.value();
+                    PartialFrame & pf = *optFrame;
                     pos += pf.srcWireLen();
                     allFrames.emplace_back( std::move(pf) );
                 }
