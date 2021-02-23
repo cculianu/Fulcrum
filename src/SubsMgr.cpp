@@ -27,13 +27,19 @@
 #include <cmath>
 #include <mutex>
 
-Subscription::Subscription(const HashX &sh)
-    : QObject(nullptr), scriptHash(sh)
+/* static */ std::atomic_int64_t Subscription::nGlobalInstances = 0;
+
+Subscription::Subscription(const HashX &k)
+    : QObject(nullptr), key(k)
 {
+    ++nGlobalInstances;
 }
 
 Subscription::~Subscription()
 {
+    if (const auto n = --nGlobalInstances; UNLIKELY(n < 0))
+        // should never happen
+        Error() << "BUG! Subscription::nGlobalInstances (" << n << ") is negative! FIXME!";
 }
 
 namespace {
@@ -52,6 +58,7 @@ struct SubsMgr::Pvt
     std::unordered_map<HashX, SubsMgr::SubRef, HashHasher> subs;
     std::unordered_set<HashX, HashHasher> pendingNotificatons;
 
+    static std::atomic_int64_t nGlobalClientSubsActive;
     std::atomic_int64_t nClientSubsActive{0};
     std::atomic_uint64_t cacheHits{0}, cacheMisses{0};
 
@@ -67,6 +74,8 @@ struct SubsMgr::Pvt
         pendingNotificatons.reserve(kRecommendedPendingNotificationsReserveSize);
     }
 };
+
+/*static*/ std::atomic_int64_t SubsMgr::Pvt::nGlobalClientSubsActive{0};
 
 SubsMgr::LimitReached::~LimitReached() {} // vtable
 
@@ -88,6 +97,9 @@ void SubsMgr::cleanup() {
          Debug() << "Stopping " << objectName() << " ...";
     stop();
 }
+
+ScriptHashSubsMgr::~ScriptHashSubsMgr() {} // for vtable
+
 
 void SubsMgr::on_started()
 {
@@ -114,6 +126,7 @@ void SubsMgr::doNotifyAllPending()
     const Tic t0;
     size_t ctr = 0, ctrSH = 0;
     bool emitQueueEmpty = false;
+    const bool useCache = useStatusCache();
     std::vector<SubRef> pending; // this ends up being the intersection of the sh's in p->pendingNotifications and p->subs
     {
         LockGuard g(p->mut);
@@ -166,7 +179,7 @@ void SubsMgr::doNotifyAllPending()
                 sub->cachedStatus.reset(); // forget the cached status as it is now very definitely wrong.
                 continue;
             } // else..
-            sh = sub->scriptHash;
+            sh = sub->key;
         }
         // ^^^ We must release the above lock here temporarily because we do not want to hold it while also implicitly
         // grabbing the Storage 'blocksLock' below for getFullStatus* (storage->getHistory acquires that lock in
@@ -178,10 +191,11 @@ void SubsMgr::doNotifyAllPending()
             // this code block is fine. In the unlikely event that a sub lost its clients while the lock was released, the
             // below emit sub->statusChanged(...) will just be a no-op.
             LockGuard g(sub->mut);
-            const bool doemit = !sub->lastStatusNotified.has_value() || *sub->lastStatusNotified != status;
+            const bool doemit = !sub->lastStatusNotified.has_value() || sub->lastStatusNotified != status;
             // we basically cache 2 statuses but they are implicitly shared copies of the same memory so it's ok.
             sub->lastStatusNotified = status;
-            sub->cachedStatus = status;
+            if (useCache)
+                sub->cachedStatus = status;
             if (doemit) {
                 const auto nClients = sub->subscribedClientIds.size();
                 ctr += nClients;
@@ -200,15 +214,6 @@ void SubsMgr::doNotifyAllPending()
     }
 }
 
-void SubsMgr::enqueueNotifications(std::unordered_set<HashX, HashHasher> &s)
-{
-    if (s.empty()) return;
-    LockGuard g(p->mut);
-    const bool wasEmpty = p->pendingNotificatons.empty();
-    p->pendingNotificatons.merge(s);
-    if (wasEmpty)
-        emit queueNoLongerEmpty();
-}
 void SubsMgr::enqueueNotifications(std::unordered_set<HashX, HashHasher> &&s)
 {
     if (s.empty()) return;
@@ -219,55 +224,103 @@ void SubsMgr::enqueueNotifications(std::unordered_set<HashX, HashHasher> &&s)
         emit queueNoLongerEmpty();
 }
 
-auto SubsMgr::makeSubRef(const HashX &sh) -> SubRef
+void SubsMgr::unsubscribeClientsForKeys(const std::unordered_set<HashX, HashHasher> & keys)
+{
+    if (UNLIKELY(!dynamic_cast<DSProofSubsMgr *>(this))) {
+        // this only is set up to work only for the DSProofsSubMgr currently. Print error to log and return.
+        Error() << "INTERNAL ERROR: " << " currently " << __func__ << " is only supported for the DSProofSubsMgr. FIXME!";
+        return;
+    }
+    if (keys.empty()) return;
+    const Tic t0;
+    std::vector<SubRef> matchedSubs;
+    matchedSubs.reserve(std::min(keys.size(), kRecommendedPendingNotificationsReserveSize));
+    size_t subsSize;
+    {
+        LockGuard g(p->mut);
+        subsSize = p->subs.size();
+        if (keys.size() < subsSize) {
+            // iterate over keys
+            for (const auto &key : keys)
+                if (auto it = p->subs.find(key); it != p->subs.end())
+                    matchedSubs.push_back(it->second);
+        } else {
+            // iterate over subs
+            for (const auto &[key, sub] : p->subs)
+                if (keys.count(key))
+                    matchedSubs.push_back(sub);
+        }
+    }
+    // now, emit the signal with locks not held
+    for (const auto &sub : matchedSubs) {
+        {
+            LockGuard g(sub->mut);
+            // clear cached status since this sub is going away very sooon because the associated txid is gone;
+            // as such, if a new sub comes in right after this runs, we want to return a fresh status not a cached one.
+            sub->cachedStatus.reset();
+        }
+        emit sub->unsubscribeRequested(); // will run in client thread(s) for subscribed client(s)
+    }
+    if (!matchedSubs.empty())
+        DebugM(__func__, ": enqueued unsubscribe for ", matchedSubs.size(), "/", subsSize, " txids in ", t0.msecStr(), " msec");
+}
+
+
+auto SubsMgr::makeSubRef(const HashX &key) -> SubRef
 {
     static const auto Deleter = [](Subscription *s){ s->deleteLater(); };
-    SubRef ret(new Subscription(sh), Deleter);
+    SubRef ret(new Subscription(key), Deleter);
     if (QThread::currentThread() != this->thread()) {
         ret->moveToThread(this->thread());
     }
     return ret;
 }
 
+bool SubsMgr::isSubsLimitExceeded(int64_t & limit) const {
+    limit = options->maxSubsGlobally;
+    return numGlobalSubscriptions() >= limit;
+}
+
 // may throw LimitReached
-auto SubsMgr::getOrMakeSubRef(const HashX &sh) -> std::pair<SubRef, bool>
+auto SubsMgr::getOrMakeSubRef(const HashX &key) -> std::pair<SubRef, bool>
 {
+    if (int64_t limit; UNLIKELY(isSubsLimitExceeded(limit)))
+        // Note we check the limit against all subs (including zombies) to prevent a DoS attack that circumvents
+        // the limit by repeatedly creating subs, disconnecting, reconnecting, creating a different set of subs, etc.
+        throw LimitReached(QString("Subs limit of %1 has been reached").arg(limit));
+
     std::pair<SubRef, bool> ret;
     LockGuard g(p->mut);
 
-    if (UNLIKELY(p->subs.size() >= size_t(options->maxSubsGlobally)))
-        // Note we check the limit against all subs (including zombies) to prevent a DoS attack that circumvents
-        // the limit by repeatedly creating subs, disconnecting, reconnecting, creating a different set of subs, etc.
-        throw LimitReached(QString("Global subs limit of %1 has been reached").arg(options->maxSubsGlobally));
-
-    if (auto it = p->subs.find(sh); it != p->subs.end()) {
+    if (auto it = p->subs.find(key); it != p->subs.end()) {
         ret.first = it->second;
         ret.second = false; // was not new
     } else {
-        ret.first = makeSubRef(sh);
-        p->subs[sh] = ret.first;
+        ret.first = makeSubRef(key);
+        p->subs[key] = ret.first;
         ret.second = true; // was new
     }
     return ret;
 }
 
-auto SubsMgr::findExistingSubRef(const HashX &sh) const -> SubRef
+auto SubsMgr::findExistingSubRef(const HashX &key) const -> SubRef
 {
     SubRef ret;
     LockGuard g(p->mut);
-    if (auto it = p->subs.find(sh); it != p->subs.end())
+    if (auto it = p->subs.find(key); it != p->subs.end())
         ret = it->second;
     return ret;
 }
 
-auto SubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &sh, const StatusCallback &notifyCB) -> SubscribeResult
+auto SubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &key, const StatusCallback &notifyCB) -> SubscribeResult
 {
     const auto t0 = debugPrint ? Util::getTimeNS() : 0LL;
+    const bool useCache = useStatusCache();
     if (UNLIKELY(!notifyCB))
         throw BadArgs("SubsMgr::subscribe must be called with a valid notifyCB. FIXME!");
 
     SubscribeResult ret = { false, {} };
-    auto [sub, wasnew] = getOrMakeSubRef(sh); // may throw LimitReached
+    auto [sub, wasnew] = getOrMakeSubRef(key); // may throw LimitReached
     {
         LockGuard g(sub->mut);
         if (!wasnew && sub->subscribedClientIds.count(c->id)) {
@@ -281,41 +334,79 @@ auto SubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &sh, const StatusCal
             sub->subscribedClientIds.insert(c->id);
             auto conn = QObject::connect(c, &QObject::destroyed, sub.get(), [sub=sub.get(), id=c->id, this](QObject *){
                 --p->nClientSubsActive;
+                --Pvt::nGlobalClientSubsActive;
                 LockGuard g(sub->mut);
                 sub->subscribedClientIds.erase(id);
                 sub->updateTS();
-                //Debug() << "client id " << id << " destroyed, implicitly unsubbed from " << sub->scriptHash.toHex()
+                //Debug() << "client id " << id << " destroyed, implicitly unsubbed from " << sub->key.toHex()
                 //        << ", " << sub->subscribedClientIds.size() << " sub(s) remain";
             });
             if (UNLIKELY(!conn))
                 throw InternalError("SubsMgr::subscribe: Failed to make the 'destroyed' connection for the client object! FIXME!");
             ++p->nClientSubsActive;
+            ++Pvt::nGlobalClientSubsActive;
         }
-        // Always copy the last known StatusHash to caller. This is guaranteed to either be a recent status since the
-        // last notification sent (if known), or !has_value if not known.
-        ret.second = sub->cachedStatus;
+        if (useCache) {
+            // Copy the last known StatusHash to caller. This is guaranteed to either be a recent status since the
+            // last notification sent (if known), or !has_value if not known.
+            ret.second = sub->cachedStatus;
+        }
         sub->updateTS(); // our basic 'mtime'
         auto conn = QObject::connect(sub.get(), &Subscription::statusChanged, c, notifyCB, Qt::QueuedConnection); // QueuedConnection paranoia in case client 'c' "lives" in our thread
         if (UNLIKELY(!conn))
             throw InternalError("SubsMgr::subscribe: Failed to make the 'statusChanged' connection to the notifyCB functor! FIXME!");
     }
 
-    if (ret.second.has_value())
-        ++p->cacheHits;
-    else
-        ++p->cacheMisses;
+    if (useCache) {
+        if (ret.second.has_value())
+            ++p->cacheHits;
+        else
+            ++p->cacheMisses;
+    }
 
     if constexpr (debugPrint) {
         const auto elapsed = Util::getTimeNS() - t0;
-        Debug() << "subscribed " << Util::ToHexFast(sh) << " in " << QString::number(elapsed/1e6, 'f', 4) << " msec";
+        Debug() << "subscribed " << Util::ToHexFast(key) << " in " << QString::number(elapsed/1e6, 'f', 4) << " msec";
     }
     return ret;
 }
 
-void SubsMgr::maybeCacheStatusResult(const HashX &sh, const StatusHash &status)
+auto DSProofSubsMgr::subscribe(RPC::ConnectionBase *c, const HashX &key, const StatusCallback &notifyCB) -> SubscribeResult
 {
-    if (status.length() != HashLen && !status.isEmpty())
+    auto ret = SubsMgr::subscribe(c, key, notifyCB);
+    if (ret.first) { // this sub <-> client association is new, attach signal for unsubscribeAllClients() to work
+        if (SubRef sub = findExistingSubRef(key)) {
+            auto conn = QObject::connect(sub.get(), &Subscription::unsubscribeRequested, c, [this, c, key, notifyCB] {
+                if (notifyCB) {
+                    // tell client the sub is gone -- send them an empty status immediately
+                    notifyCB(key, {});
+                }
+                DebugM("unsubscribeRequested signal invoked lambda, proceeding to unsubscribe client ", c->id,
+                       " for key ", key.toHex(), " ...");
+                // just call unsubscribe. this will zombify this sub and it will be deleted
+                unsubscribe(c, key, false /* don't update ts */);
+            });
+            if (UNLIKELY(!conn)) {
+                // this should never happen
+                Error() << "INTERNAL ERROR: failed to make the connecttion to the 'unsubscribeRequested' signal for client " << c->id << ". FIXME!";
+            }
+        } else {
+            // should never happen
+            Error() << "INTERNAL ERROR: sub immediately lost its subref for " << key.toHex() << ". FIXME!";
+        }
+    }
+    return ret;
+}
+
+void SubsMgr::maybeCacheStatusResult(const HashX &sh, const SubStatus &status)
+{
+    if (!status.has_value() || !useStatusCache())
+        return;
+    if (auto *ba = status.byteArray(); ba && ba->length() != HashLen && !ba->isEmpty())
         // we only allow empty (null) or 32 bytes.. otherwise reject
+        return;
+    else if (auto *dsp = status.dsproof(); dsp && !dsp->isComplete() && !dsp->isEmpty())
+        // we only allow empty (default constructred) DSProofs or ones that are isComplete(), otherwise reject
         return;
     SubRef sub = findExistingSubRef(sh);
     if (sub) {
@@ -325,26 +416,28 @@ void SubsMgr::maybeCacheStatusResult(const HashX &sh, const StatusHash &status)
     }
 }
 
-bool SubsMgr::unsubscribe(RPC::ConnectionBase *c, const HashX &sh)
+bool SubsMgr::unsubscribe(RPC::ConnectionBase *c, const HashX &key, bool updateTS)
 {
     bool ret = false;
     const auto t0 = debugPrint ? Util::getTimeNS() : 0LL;
-    SubRef sub = findExistingSubRef(sh);
+    SubRef sub = findExistingSubRef(key);
     if (sub) {
         // found
         LockGuard g(sub->mut);
         if (auto it = sub->subscribedClientIds.find(c->id); it != sub->subscribedClientIds.end()) {
             sub->subscribedClientIds.erase(it);
-            sub->updateTS();
-            bool res = QObject::disconnect(sub.get(), &Subscription::statusChanged, c, nullptr);
-            res = QObject::disconnect(c, &QObject::destroyed, sub.get(), nullptr);
+            if (updateTS) sub->updateTS();
+            QObject::disconnect(sub.get(), &Subscription::statusChanged, c, nullptr);
+            QObject::disconnect(c, &QObject::destroyed, sub.get(), nullptr);
+            QObject::disconnect(sub.get(), &Subscription::unsubscribeRequested, c, nullptr);
             ret = true;
             --p->nClientSubsActive;
+            --Pvt::nGlobalClientSubsActive;
         }
     }
     if constexpr (debugPrint) {
         const auto elapsed = Util::getTimeNS() - t0;
-        Debug() << int(ret) << " unsubscribed " << Util::ToHexFast(sh) << " in " << QString::number(elapsed/1e6, 'f', 4) << " msec";
+        Debug() << int(ret) << " unsubscribed " << Util::ToHexFast(key) << " in " << QString::number(elapsed/1e6, 'f', 4) << " msec";
     }
     return ret;
 }
@@ -355,11 +448,14 @@ int64_t SubsMgr::numScripthashesSubscribed() const {
     return int64_t(p->subs.size());
 }
 
+/*static*/
+int64_t SubsMgr::numGlobalActiveClientSubscriptions() { return Pvt::nGlobalClientSubsActive.load(); }
+
 std::pair<bool, bool> SubsMgr::globalSubsLimitFlags() const
 {
     constexpr double factor = .8;
     const auto thresh = int64_t(std::round(options->maxSubsGlobally * factor));
-    return { numActiveClientSubscriptions() > thresh, numScripthashesSubscribed() > thresh };
+    return { numGlobalActiveClientSubscriptions() > thresh, numGlobalSubscriptions() > thresh };
 }
 
 namespace {
@@ -399,10 +495,10 @@ inline QByteArray optimizedStatusHashCalc(const Storage::History &hist) {
 }
 }
 
-auto SubsMgr::getFullStatus(const HashX &sh) const -> StatusHash
+auto ScriptHashSubsMgr::getFullStatus(const HashX &sh) const -> SubStatus
 {
     const Tic t0;
-    StatusHash ret;
+    QByteArray ret;
     const auto hist = storage->getHistory(sh, true, true);
     if (hist.empty())
         // no history, return an empty QByteArray
@@ -438,15 +534,29 @@ void SubsMgr::removeZombies(bool forced)
     if (ctr) {
         if (p->subs.load_factor() <= 0.5)
             p->subs.rehash(p->kSubsReserveSize); // shrink_to_fit down toward kSubsReserveSize (reclaim memory)
-        DebugM("SubsMgr: Removed ", ctr, " zombie ", Util::Pluralize("sub", ctr), " out of ", total,
+        DebugM(objectName(), ": Removed ", ctr, " zombie ", Util::Pluralize("sub", ctr), " out of ", total,
                " in ", t0.msecStr(4), " msec");
     }
 }
 
+std::unordered_set<HashX, HashHasher> SubsMgr::nonZombieKeysOlderThan(const int64_t msec) const
+{
+    std::unordered_set<HashX, HashHasher> ret;
+    const auto now = Util::getTime();
+    LockGuard g(p->mut);
+    for (const auto & [key, sub] : p->subs) {
+        LockGuard g(sub->mut);
+        if (!sub->subscribedClientIds.empty() && now - sub->tsMsec > msec)
+            ret.insert(key); // it is not a zombie and it's older than msec, add to return set
+    }
+    return ret;
+}
+
+
 auto SubsMgr::debug(const StatsParams &params) const -> Stats
 {
     QVariant ret;
-    if (params.contains("subs")) {
+    if (params.contains("subs") || params.contains("dspsubs")) {
         QVariantMap subs;
         qulonglong collisions{}, largestBucket{}, medianBucket{}, medianNonzeroBucket{};
         {
@@ -456,7 +566,12 @@ auto SubsMgr::debug(const StatsParams &params) const -> Stats
                 {
                     LockGuard g2(sub->mut);
                     m2["count"] = qlonglong(sub->subscribedClientIds.size());
-                    m2["lastStatusNotified"] = sub->lastStatusNotified.value_or(StatusHash()).toHex();
+                    if (auto *ba = sub->lastStatusNotified.byteArray())
+                        m2["lastStatusNotified"] = ba->toHex();
+                    else if (auto *dsp = sub->lastStatusNotified.dsproof())
+                        m2["lastStatusNotified"] = dsp->toVarMap();
+                    else
+                        m2["lastStatusNotified"] = QVariant{};
                     m2["idleSecs"] = (Util::getTime() - sub->tsMsec)/1e3;
                     const auto & clients = sub->subscribedClientIds;
 #if QT_VERSION < QT_VERSION_CHECK(5, 14, 0)
@@ -501,9 +616,69 @@ auto SubsMgr::stats() const -> Stats
     // these below 2 take the above lock again so we do them without the lock held
     ret["Num. active client subscriptions"] = qlonglong(numActiveClientSubscriptions());
     ret["Num. unique scripthashes subscribed (including zombies)"] = qlonglong(numScripthashesSubscribed());
+    ret["Num. active client subscriptions (global)"] = qlonglong(numGlobalActiveClientSubscriptions());
+    ret["Num. unique subscriptions (global; including zombies)"] = qlonglong(numGlobalSubscriptions());
     ret["activeTimers"] = activeTimerMapForStats();
     return ret;
 }
+
+DSProofSubsMgr::~DSProofSubsMgr() {} // for vtable
+
+namespace {
+    inline constexpr int64_t kExpireSubsNotInMempoolAgeMsec = 150'000; ///< we expire subs >2.5 minutes old that point to txids not in mempool
+    inline constexpr auto kExpireSubsNotInMempoolTimerName = "ExireSubsNotInMempoolTimer";
+}
+
+void DSProofSubsMgr::on_started()
+{
+    SubsMgr::on_started();
+    callOnTimerSoon(kExpireSubsNotInMempoolAgeMsec / 2, kExpireSubsNotInMempoolTimerName, [this]{ expireSubsNotInMempool(); return true;}, true);
+}
+void DSProofSubsMgr::on_finished()
+{
+    stopTimer(kExpireSubsNotInMempoolTimerName);
+    SubsMgr::on_finished();
+}
+
+void DSProofSubsMgr::expireSubsNotInMempool()
+{
+    const Tic t0;
+    auto candidates = nonZombieKeysOlderThan(kExpireSubsNotInMempoolAgeMsec);
+    if (!candidates.empty()) {
+        auto [mempool, lock] = storage->mempool(); // shared, read-only lock
+        if (candidates.size() < mempool.txs.size()) {
+            // loop over candidates
+            for (auto it = candidates.begin(); it != candidates.end(); /* see below */) {
+                if (mempool.txs.count(*it)) {
+                    // candidate has a mempool tx -- erase
+                    it = candidates.erase(it);
+                } else {
+                    // candidate has no mempool tx, keep!
+                    ++it;
+                }
+            }
+        } else {
+            // loop over mempool
+            for (const auto &[txid, tx] : mempool.txs)
+                candidates.erase(txid); // if txid was in candidates, remove it (candidates must not be in mempool)
+        }
+    }
+    if (!candidates.empty()) {
+        DebugM(__func__, ": ", candidates.size(), " txid subscriptions do not correspond to any mempool tx and are >",
+               QString::number(kExpireSubsNotInMempoolAgeMsec / 1e3, 'f', 1), " secs old, forcing unsubscribe now",
+               " (elapsed: ", t0.msecStr(), " msec)");
+        unsubscribeClientsForKeys(candidates);
+    }
+}
+
+auto DSProofSubsMgr::getFullStatus(const HashX &txHash) const -> SubStatus
+{
+    auto [mempool, lock] = storage->mempool();
+    if (auto *dsproof = mempool.dsps.bestProofForTx(txHash))
+        return *dsproof;
+    return DSProof{}; // a SubStatus with a .isEmpty() indicates no proof for this txhash
+}
+
 
 #ifdef ENABLE_TESTS
 #include "App.h"

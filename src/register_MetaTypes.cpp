@@ -26,6 +26,7 @@
 #include "PeerMgr.h"
 #include "RPC.h"
 #include "SrvMgr.h"
+#include "SubStatus.h"
 
 #include <QMetaType>
 
@@ -53,6 +54,8 @@ void App::register_MetaTypes()
         qRegisterMetaType<BTC::Address>();
 
         qRegisterMetaType<BitcoinDZmqNotifications>("BitcoinDZmqNotifications");
+
+        qRegisterMetaType<SubStatus>("SubStatus");
 
         registered = true;
     }

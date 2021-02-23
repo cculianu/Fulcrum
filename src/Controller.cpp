@@ -20,6 +20,8 @@
 #include "BlockProc.h"
 #include "BTC.h"
 #include "Controller.h"
+#include "Controller_SynchDSPsTask.h"
+#include "DSProof.h"
 #include "Mempool.h"
 #include "Merkle.h"
 #include "SubsMgr.h"
@@ -629,6 +631,8 @@ struct SynchMempoolTask : public CtlTask
 
     /// The scriptHashes that were affected by this refresh/synch cycle. Used for notifications.
     std::unordered_set<HashX, HashHasher> scriptHashesAffected;
+    /// The txids in the adds or drops that also have dsproofs associated with them (cumulative across retries, like scriptHashesAffected)
+    Mempool::TxHashSet dspTxsAffected;
 
     void clear() {
         isdlingtxs = false;
@@ -638,6 +642,7 @@ struct SynchMempoolTask : public CtlTask
         // Note: we don't clear "scriptHashesAffected" intentionally in case we are retrying. We want to accumulate
         // all the droppedTx scripthashes for each retry, so we never clear the set.
         // Note 2: we also never clear the redoCt since that counter needs to maintain state to abort too many redos.
+        // Note 3: we also never clear dspTxsAffected
     }
 
     /// Called when getrawtransaction errors out or when we dropTxs() and the result is too many txs so we must
@@ -655,10 +660,17 @@ struct SynchMempoolTask : public CtlTask
 
 SynchMempoolTask::~SynchMempoolTask() {
     stop(); // paranoia
-    if (!scriptHashesAffected.empty() && notifyFlag.load()) // this is false until Controller enables the servers that listen for connections
-        // notify status change for affected sh's, regardless of how this task exited (this catches corner cases
-        // where we queued up some notifications and then we died on a retry due to errors from bitcoind)
-        storage->subs()->enqueueNotifications(std::move(scriptHashesAffected));
+    if (notifyFlag.load()) { // this is false until Controller enables the servers that listen for connections
+        if (!scriptHashesAffected.empty()) {
+            // notify status change for affected sh's, regardless of how this task exited (this catches corner cases
+            // where we queued up some notifications and then we died on a retry due to errors from bitcoind)
+            storage->subs()->enqueueNotifications(std::move(scriptHashesAffected));
+        }
+        if (!dspTxsAffected.empty()) {
+            DebugM(objectName(), ": dspTxsAffected: ", dspTxsAffected.size());
+            storage->dspSubs()->enqueueNotifications(std::move(dspTxsAffected));
+        }
+    }
 
     if (elapsed.secs() >= 1.0) {
         // if total runtime for task >1s, log for debug
@@ -799,7 +811,7 @@ void SynchMempoolTask::processResults()
     // exclusive lock while accessing the db and Fulcrum would freeze on chains such as BTC when first
     // starting up as it built up the initial large mempool.  With this scheme, it runs much faster.
 
-    const auto [oldSize, newSize, oldNumAddresses, newNumAddresses, elapsedMsec] = [this, &cache, &sizes] {
+    auto res = [this, &cache, &sizes] {
         const auto getFromCache = [&cache](const TXO &prevTXO) -> std::optional<TXOInfo> {
             // This is a callback called from within addNewTxs() below when encountering a confirmed
             // spend.  We just return whatever we precached for this entry.
@@ -823,8 +835,9 @@ void SynchMempoolTask::processResults()
         updateLastProgress(0.80);
         return mempool.addNewTxs(scriptHashesAffected, txsDownloaded, getFromCache, TRACE); // may throw
     }();
-    if ((oldSize != newSize || elapsedMsec > 1e3) && Debug::isEnabled()) {
-        Controller::printMempoolStatusToLog(newSize, newNumAddresses, elapsedMsec, true, true);
+    dspTxsAffected.merge(std::move(res.dspTxsAffected));
+    if ((res.oldSize != res.newSize || res.elapsedMsec > 1e3) && Debug::isEnabled()) {
+        Controller::printMempoolStatusToLog(res.newSize, res.newNumAddresses, res.elapsedMsec, true, true);
     }
     updateLastProgress(1.0);
     emit success();
@@ -955,6 +968,7 @@ void SynchMempoolTask::doGetRawMempool()
             }
         }
         if (!droppedTxs.empty()) {
+            const auto expectedDropCt = droppedTxs.size();
             // Some txs were dropped, update mempool with the drops, grabbing the lock exclusively.
             // Note the release and re-acquisition of the lock should be ok since this Controller
             // thread is the only thread that ever modifies the mempool, so a coherent view of the
@@ -969,12 +983,19 @@ void SynchMempoolTask::doGetRawMempool()
             // do bookkeeping, maybe print debug log
             {
                 droppedCt = res.oldSize - res.newSize;
-                DebugM("Dropped ", droppedCt, " txs from mempool (", affected.size(), " addresses) in ",
-                       QString::number(res.elapsedMsec, 'f', 3), " msec, new mempool size: ", res.newSize,
-                       " (", res.newNumAddresses, " addresses)");
+                if (Debug::isEnabled()) {
+                    Debug d;
+                    d << "Dropped " << droppedCt << " txs from mempool (" << affected.size() << " addresses) in "
+                      << QString::number(res.elapsedMsec, 'f', 3) << " msec, new mempool size: " << res.newSize
+                      << " (" << res.newNumAddresses << " addresses)";
+                    if (res.dspRmCt || res.dspTxRmCt)
+                        d << " (also dropped dsps: " << res.dspRmCt << " dspTxs: " << res.dspTxRmCt << ")";
+                }
                 scriptHashesAffected.merge(std::move(affected)); /* update set here with lock not held */
+                dspTxsAffected.merge(std::move(res.dspTxsAffected)); /* also update this */
+                // . <--- NB: at this point: affected and res.dspsTxsAffected are moved-from
             }
-            if (UNLIKELY(droppedCt != droppedTxs.size())) {
+            if (UNLIKELY(droppedCt != expectedDropCt)) { // This invariant is checked to detect bugs.
                 Warning() << "Synch mempool expected to drop " << droppedTxs.size() << ", but in fact dropped "
                           << droppedCt << " -- retrying getrawmempool";
                 redoFromStart(); // set state such that the next process() call will do getrawmempool again unless redoCt exceeds kRedoCtMax, in which case errors out
@@ -994,11 +1015,14 @@ void SynchMempoolTask::doGetRawMempool()
     });
 }
 
+
 struct Controller::StateMachine
 {
     enum State : uint8_t {
         Begin=0, WaitingForChainInfo, GetBlocks, DownloadingBlocks, FinishedDL, End, Failure, BitcoinDIsInHeaderDL,
-        Retry, RetryInIBD, SynchMempool, SynchingMempool, SynchMempoolFinished
+        Retry, RetryInIBD,
+        SynchMempool, SynchingMempool, SynchMempoolFinished,
+        SynchDSPs, SynchingDSPs, SynchDSPsFinished, // happens after synch mempool; only reached if bitcoind has the dsproof rpc
     };
     State state = Begin;
     bool suppressSaveUndo = false; ///< true if bitcoind is in IBD, in which case we don't save undo info.
@@ -1347,9 +1371,36 @@ void Controller::process(bool beSilentIfUpToDate)
             AGAIN();
         });
         sm->state = State::SynchingMempool;
-    } else if (sm->state == State::SynchingMempool) {
+    } else if (sm->state == State::SynchDSPs) {
+        auto task = newTask<SynchDSPsTask>(false, this, storage, masterNotifySubsFlag);
+        task->threadObjectDebugLifecycle = Trace::isEnabled(); // suppress verbose lifecycle prints unless trace mode
+        connect(task, &CtlTask::success, this, [this, task]{
+            if (UNLIKELY(!sm || isTaskDeleted(task) || sm->state != State::SynchingDSPs))
+                // task was stopped from underneath us and/or this response is stale.. so return and ignore
+                return;
+            sm->state = State::SynchDSPsFinished;
+            AGAIN();
+        });
+        // synch mempool task is an optional task, not critical. tolerate errors as if they were successes
+        connect(task, &CtlTask::errored, this, [this, task]{
+            if (UNLIKELY(!sm || isTaskDeleted(task) || sm->state != State::SynchingDSPs))
+                // task was stopped from underneath us and/or this response is stale.. so return and ignore
+                return;
+            Warning() << "SynchDSPs RPC error, ignoring...";
+            sm->state = State::SynchDSPsFinished;
+            AGAIN();
+        });
+        sm->state = State::SynchingDSPs;
+    } else if (sm->state == State::SynchingMempool || sm->state == State::SynchingDSPs) {
         // ... nothing..
     } else if (sm->state == State::SynchMempoolFinished) {
+        // ...
+        if (bitcoindmgr->hasDSProofRPC())
+            sm->state = State::SynchDSPs; // remote bitcoind has dsproof rpc, proceed to synch dsps
+        else
+            sm->state = State::End; // remote bitcoind lacks dsproof rpc, finish successfully
+        AGAIN();
+    } else if (sm->state == State::SynchDSPsFinished) {
         // ...
         sm->state = State::End;
         AGAIN();
@@ -1653,6 +1704,7 @@ auto Controller::stats() const -> Stats
     misc["Job Queue (Thread Pool)"] = ::AppThreadPool()->stats();
     st["Misc"] = misc;
     st["SubsMgr"] = storage->subs()->statsSafe(kDefaultTimeout/2);
+    st["SubsMgr (DSPs)"] = storage->dspSubs()->statsSafe(kDefaultTimeout/2);
     // Config (Options) map
     st["Config"] = options->toMap();
     { // Process memory usage
@@ -1720,6 +1772,10 @@ auto Controller::debug(const StatsParams &p) const -> Stats // from StatsMixin
     if (p.contains("subs")) {
         const auto timeLeft = kDefaultTimeout - (Util::getTime() - t0/1000000) - 50;
         ret["subscriptions"] = storage->subs()->debugSafe(p, std::max(5, int(timeLeft)));
+    }
+    if (p.contains("dspsubs")) {
+        const auto timeLeft = kDefaultTimeout - (Util::getTime() - t0/1000000) - 50;
+        ret["subscriptions (DSProof)"] = storage->dspSubs()->debugSafe(p, std::max(5, int(timeLeft)));
     }
     const auto elapsed = Util::getTimeNS() - t0;
     ret["elapsed"] = QString::number(elapsed/1e6, 'f', 6) + " msec";

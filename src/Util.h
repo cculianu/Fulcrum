@@ -743,13 +743,13 @@ namespace Util {
         return ret;
     }
 
-    /// uses MurmurHash3 with the unique seed initialized at app start
-    uint32_t hashData32(const ByteView &);
+    /// uses MurmurHash3 with the unique seed initialized at app start.  Not safe to call before main() is entered.
+    uint32_t hashData32(const ByteView &) noexcept;
 
-    /// uses CityHash64 with the unique seed initialized at app start
-    uint64_t hashData64(const ByteView &);
+    /// uses CityHash64 with the unique seed initialized at app start  Not safe to call before main() is entered.
+    uint64_t hashData64(const ByteView &) noexcept;
 
-    inline std::size_t hashForStd(const ByteView &bv) {
+    inline std::size_t hashForStd(const ByteView &bv) noexcept {
         constexpr auto size_t_size = sizeof(std::size_t);
         static_assert(size_t_size == sizeof(uint32_t) || size_t_size == sizeof(uint64_t));
         if constexpr (size_t_size == sizeof(uint64_t)) {
@@ -763,7 +763,7 @@ namespace Util {
     /// Hashing a pointer is to prevent situations where patholically-spaced pointers lead to hashtable collisions.
     struct PtrHasher {
         template <typename T>
-        std::size_t operator()(const T * const t) const {
+        std::size_t operator()(const T * const t) const noexcept {
             return hashForStd(ByteView{reinterpret_cast<const std::byte *>(&t), sizeof(t)});
         }
     };

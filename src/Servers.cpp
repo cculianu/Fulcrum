@@ -578,7 +578,7 @@ ServerBase::newClient(QTcpSocket *sock)
         if (UNLIKELY(nSubsIP < 0))
             Error() << "nShSubs for IP " << addr.toString() << " is " << nSubsIP << ". FIXME!";
         if (nSubsIP == 0 && c->nShSubs)
-            DebugM("PerIP: ", addr.toString(), " is no longer subscribed to any scripthashes");
+            DebugM("PerIP: ", addr.toString(), " is no longer subscribed to any subscribables");
         --c->perIPData->nClients; // decrement client counter
         // tell SrvMgr this client is gone so it can decrement its clients-per-ip count.
         emit clientDisconnected(clientId, addr);
@@ -956,7 +956,7 @@ void Server::rpc_server_donation_address(Client *c, const RPC::Message &m)
     emit c->sendResult(m.id, options->donationAddress);
 }
 /* static */
-QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const QByteArray &genesisHash, const Options &opts)
+QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const QByteArray &genesisHash, const Options &opts, bool dsproof)
 {
     QVariantMap r;
     if (!c) {
@@ -970,6 +970,7 @@ QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const Q
     r["protocol_min"] = ServerMisc::MinProtocolVersion.toString();
     r["protocol_max"] = ServerMisc::MaxProtocolVersion.toString();
     r["hash_function"] = ServerMisc::HashFunction;
+    r["dsproof"] = dsproof;
 
     QVariantMap hmap, hmapTor;
     if (opts.publicTcp.has_value())
@@ -1015,7 +1016,7 @@ QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const Q
 }
 void Server::rpc_server_features(Client *c, const RPC::Message &m)
 {
-    emit c->sendResult(m.id, makeFeaturesDictForConnection(c, storage->genesisHash(), *options));
+    emit c->sendResult(m.id, makeFeaturesDictForConnection(c, storage->genesisHash(), *options, bitcoindmgr->hasDSProofRPC()));
 }
 void Server::rpc_server_peers_subscribe(Client *c, const RPC::Message &m)
 {
@@ -1268,7 +1269,8 @@ void Server::rpc_blockchain_relayfee(Client *c, const RPC::Message &m)
 HashX Server::parseFirstAddrParamToShCommon(const RPC::Message &m, QString *addrStrOut) const
 {
     if (isBTC)
-        throw RPCError("blockchain.address.* methods are not available on BTC"); // unsupported on BTC (for now)
+        // unsupported on BTC (for now)
+        throw RPCError("blockchain.address.* methods are not available on BTC", RPC::ErrorCodes::Code_MethodNotFound);
     const auto net = srvmgr->net();
     if (UNLIKELY(net == BTC::Net::Invalid))
         // This should never happen in practice, but it pays to be paranoid.
@@ -1286,19 +1288,19 @@ HashX Server::parseFirstAddrParamToShCommon(const RPC::Message &m, QString *addr
     if (addrStrOut) *addrStrOut = addrStr;
     return sh;
 }
-HashX Server::parseFirstShParamCommon(const RPC::Message &m) const
+HashX Server::parseFirstHashParamCommon(const RPC::Message &m, const char *const errMsg) const
 {
     QVariantList l(m.paramsList());
     assert(!l.isEmpty());
     const HashX sh = validateHashHex( l.front().toString() );
     if (sh.length() != HashLen)
-        throw RPCError("Invalid scripthash");
+        throw RPCError(!errMsg ? "Invalid scripthash" : errMsg);
     return sh;
 }
 // ---
 void Server::rpc_blockchain_scripthash_get_balance(Client *c, const RPC::Message &m)
 {
-    const auto sh = parseFirstShParamCommon(m);
+    const auto sh = parseFirstHashParamCommon(m);
     impl_get_balance(c, m, sh);
 }
 void Server::rpc_blockchain_address_get_balance(Client *c, const RPC::Message &m)
@@ -1341,7 +1343,7 @@ QVariantList Server::getHistoryCommon(const HashX &sh, bool mempoolOnly)
 
 void Server::rpc_blockchain_scripthash_get_history(Client *c, const RPC::Message &m)
 {
-    const auto sh = parseFirstShParamCommon(m);
+    const auto sh = parseFirstHashParamCommon(m);
     impl_get_history(c, m, sh);
 }
 void Server::rpc_blockchain_address_get_history(Client *c, const RPC::Message &m)
@@ -1358,7 +1360,7 @@ void Server::impl_get_history(Client *c, const RPC::Message &m, const HashX &sh)
 
 void Server::rpc_blockchain_scripthash_get_mempool(Client *c, const RPC::Message &m)
 {
-    const auto sh = parseFirstShParamCommon(m);
+    const auto sh = parseFirstHashParamCommon(m);
     impl_get_mempool(c, m, sh);
 }
 void Server::rpc_blockchain_address_get_mempool(Client *c, const RPC::Message &m)
@@ -1379,7 +1381,7 @@ void Server::impl_get_mempool(Client *c, const RPC::Message &m, const HashX &sh)
 }
 void Server::rpc_blockchain_scripthash_listunspent(Client *c, const RPC::Message &m)
 {
-    const auto sh = parseFirstShParamCommon(m);
+    const auto sh = parseFirstHashParamCommon(m);
     impl_listunspent(c, m, sh);
 }
 void Server::rpc_blockchain_address_listunspent(Client *c, const RPC::Message &m)
@@ -1405,19 +1407,19 @@ void Server::impl_listunspent(Client *c, const RPC::Message &m, const HashX &sh)
 }
 void Server::rpc_blockchain_scripthash_subscribe(Client *c, const RPC::Message &m)
 {
-    const auto sh = parseFirstShParamCommon(m);
-    impl_sh_subscribe(c, m, sh);
+    const auto sh = parseFirstHashParamCommon(m);
+    impl_generic_subscribe(storage->subs(), c, m, sh);
 }
 void Server::rpc_blockchain_address_subscribe(Client *c, const RPC::Message &m)
 {
     QString addrStr;
     const auto sh = parseFirstAddrParamToShCommon(m, &addrStr);
     assert(!addrStr.isEmpty());
-    impl_sh_subscribe(c, m, sh, addrStr);
+    impl_generic_subscribe(storage->subs(), c, m, sh, addrStr);
 }
-void Server::impl_sh_subscribe(Client *c, const RPC::Message &m, const HashX &sh, const std::optional<QString> &optAlias)
+void Server::impl_generic_subscribe(SubsMgr *subs, Client *c, const RPC::Message &m, const HashX &key, const std::optional<QString> &optAlias)
 {
-    const auto CheckSubsLimit = [c, &sh, this](int64_t nShSubs, bool doUnsub) {
+    const auto CheckSubsLimit = [c, &key, this, subs](int64_t nShSubs, bool doUnsub) {
         if (UNLIKELY(nShSubs > options->maxSubsPerIP)) {
             if (c->perIPData->isWhitelisted()) {
                 // White-listed, let it go, but print to debug log
@@ -1433,13 +1435,13 @@ void Server::impl_sh_subscribe(Client *c, const RPC::Message &m, const HashX &sh
                 }
                 if (doUnsub) {
                     // unsubscribe client right away
-                    if (LIKELY(storage->subs()->unsubscribe(c, sh))) {
+                    if (LIKELY(subs->unsubscribe(c, key))) {
                         // decrement counters
                         --c->nShSubs;
                         --c->perIPData->nShSubs;
                     } else
                         // This should never happen but we'll print debug/warning info if it does.
-                        Warning() << c->prettyName(false, false) << " failed to unsubscribe client from a scripthash we just subscribed him to! FIXME!";
+                        Warning() << c->prettyName(false, false) << " failed to unsubscribe client from a subscribable we just subscribed him to! FIXME!";
                 }
                 throw RPCError("Subscription limit reached", RPC::Code_App_LimitExceeded); // send error to client
             }
@@ -1469,28 +1471,32 @@ void Server::impl_sh_subscribe(Client *c, const RPC::Message &m, const HashX &sh
             if (!optAlias.has_value()) { // common case
                 // regular blockchain.scripthash.subscribe callback does no aliasing/rewriting and simply echoes the sh back to client as hex.
                 ret =
-                    [c, method=m.method](const HashX &sh, const StatusHash &status) {
-                        QVariant statusHexMaybeNull; // if empty we simply notify as 'null' (this is unlikely in practice but may happen on reorg)
-                        if (!status.isEmpty())
-                            statusHexMaybeNull = Util::ToHexFast(status);
-                        const QByteArray shHex = Util::ToHexFast(sh);
-                        emit c->sendNotification(method, QVariantList{shHex, statusHexMaybeNull});
+                    [c, method=m.method](const HashX &key, const SubStatus &status) {
+                        QVariant statusMaybeNull; // if empty we simply notify as 'null' (this is unlikely in practice but may happen on reorg)
+                        if (auto *ba = status.byteArray(); ba && !ba->isEmpty())
+                            statusMaybeNull = Util::ToHexFast(*ba);
+                        else if (auto *dsp = status.dsproof(); dsp && !dsp->isEmpty())
+                            statusMaybeNull = dsp->toVarMap();
+                        const QByteArray keyHex = Util::ToHexFast(key);
+                        emit c->sendNotification(method, QVariantList{keyHex, statusMaybeNull});
                     };
             } else {
                 // When notifying, blockchain.address.subscribe callback must rewrite the sh arg -> the original address argument given by the client.
                 ret =
-                    [c, method=m.method, alias=optAlias->toUtf8()](const HashX &, const StatusHash &status) {
-                        QVariant statusHexMaybeNull; // if empty we simply notify as 'null' (this is unlikely in practice but may happen on reorg)
-                        if (!status.isEmpty())
-                            statusHexMaybeNull = Util::ToHexFast(status);
-                        emit c->sendNotification(method, QVariantList{alias, statusHexMaybeNull});
+                    [c, method=m.method, alias=optAlias->toUtf8()](const HashX &, const SubStatus &status) {
+                        QVariant statusMaybeNull; // if empty we simply notify as 'null' (this is unlikely in practice but may happen on reorg)
+                        if (auto *ba = status.byteArray(); ba && !ba->isEmpty())
+                            statusMaybeNull = Util::ToHexFast(*ba);
+                        else if (auto *dsp = status.dsproof(); dsp && !dsp->isEmpty())
+                            statusMaybeNull = dsp->toVarMap();
+                        emit c->sendNotification(method, QVariantList{alias, statusMaybeNull});
                     };
             }
             return ret;
         };
         /// Note: potential race condition here whereby notification can arrive BEFORE the status result. In practice this
         /// is fine since clients will cope with the situation, but... ideally, fixme.
-        result = storage->subs()->subscribe(c, sh, MkNotifierLambda());
+        result = subs->subscribe(c, key, MkNotifierLambda());
     } catch (const SubsMgr::LimitReached &e) {
         if (Util::getTimeSecs() - lastSubsWarningPrintTime > ServerMisc::kMaxSubsWarningsRateLimitSecs /* ~250 ms */) {
             // rate limit printing
@@ -1500,56 +1506,60 @@ void Server::impl_sh_subscribe(Client *c, const RPC::Message &m, const HashX &sh
         emit globalSubsLimitReached(); // connected to the SrvMgr, which will loop through all IPs and kick all clients for the most-subscribed IP
         throw RPCError("Subscription limit reached", RPC::Code_App_LimitExceeded); // send error to client
     }
-    const auto & [wasNew, optStatus] = result;
+    const auto & [wasNew, status] = result;
     if (wasNew) {
         if (++c->nShSubs == 1)
-            DebugM(c->prettyName(false, false), " is now subscribed to at least one scripthash");
+            DebugM(c->prettyName(false, false), " is now subscribed to at least one subscribable");
         // increment per ip counter ...
         // ... and check if they hit the limit again. This catches races.  Note that if the limit is reached this will
         // throw and after unsubscribing -- but the zombie sub will be left around for a time until it is reaped
         // (in practice it won't be a huge problem).
         CheckSubsLimit( ++c->perIPData->nShSubs, true ); // may throw RPCError
     }
-    if (!optStatus.has_value()) {
+    if (!status.has_value()) {
         // no known/cached status -- do the work ourselves asynch in the thread pool.
-        generic_do_async(c, m.id, [sh, this] {
+        generic_do_async(c, m.id, [key, subs] {
             QVariant ret;
-            const auto status = storage->subs()->getFullStatus(sh);
-            storage->subs()->maybeCacheStatusResult(sh, status);
-            if (!status.isEmpty()) // if empty we return `null`, otherwise we return hex encoded bytes as the immediate status.
-                ret = Util::ToHexFast(status);
+            const auto status = subs->getFullStatus(key);
+            subs->maybeCacheStatusResult(key, status);
+            if (auto *ba = status.byteArray(); ba && !ba->isEmpty()) // if empty we return `null`, otherwise we return hex encoded bytes as the immediate status.
+                ret = Util::ToHexFast(*ba);
+            else if (auto *dsp = status.dsproof(); dsp && !dsp->isEmpty())
+                ret = dsp->toVarMap();
             return ret;
         });
     } else {
         // SubsMgr reported a cached status -- immediately return that as the result!
         QVariant result;
-        if (!optStatus->isEmpty())
+        if (auto *ba = status.byteArray(); ba && !ba->isEmpty())
             // not empty, so we return the hex-encoded string
-            result = QString(Util::ToHexFast(*optStatus));
+            result = QString(Util::ToHexFast(*ba));
+        else if (auto *dsp = status.dsproof(); dsp && !dsp->isEmpty())
+            result = dsp->toVarMap();
         // commented out because it is spammy
-        //DebugM("Sending cached status to client for scripthash: ", Util::ToHexFast(sh), " status: ", result.toString());
+        //DebugM("Sending cached status to client for subscribable: ", Util::ToHexFast(key), " status: ", result.toString());
         //
-        emit c->sendResult(m.id, result); ///<  may be 'null' if status was empty (indicates no history for scripthash)
+        emit c->sendResult(m.id, result); ///<  may be 'null' if status was empty (indicates no history for scripthash or no proof for txid)
     }
 }
 void Server::rpc_blockchain_scripthash_unsubscribe(Client *c, const RPC::Message &m)
 {
-    const auto sh = parseFirstShParamCommon(m);
-    impl_sh_unsubscribe(c, m, sh);
+    const auto sh = parseFirstHashParamCommon(m);
+    impl_generic_unsubscribe(storage->subs(), c, m, sh);
 }
 void Server::rpc_blockchain_address_unsubscribe(Client *c, const RPC::Message &m)
 {
     const auto sh = parseFirstAddrParamToShCommon(m);
-    impl_sh_unsubscribe(c, m, sh);
+    impl_generic_unsubscribe(storage->subs(), c, m, sh);
 }
-void Server::impl_sh_unsubscribe(Client *c, const RPC::Message &m, const HashX &sh)
+void Server::impl_generic_unsubscribe(SubsMgr *subs, Client *c, const RPC::Message &m, const HashX &key)
 {
-    const bool result = storage->subs()->unsubscribe(c, sh);
+    const bool result = subs->unsubscribe(c, key);
     if (result) {
         if (--c->nShSubs == 0)
-            DebugM(c->prettyName(false, false), " is no longer subscribed to any scripthashes");
+            DebugM(c->prettyName(false, false), " is no longer subscribed to any subscribables");
         if (--c->perIPData->nShSubs == 0)
-            DebugM("PerIP: ", c->peerAddress().toString(), " is no longer subscribed to any scripthashes");
+            DebugM("PerIP: ", c->peerAddress().toString(), " is no longer subscribed to any subscribables");
     }
     emit c->sendResult(m.id, QVariant(result));
 }
@@ -1829,6 +1839,58 @@ void Server::rpc_blockchain_transaction_id_from_pos(Client *c, const RPC::Messag
         }
     });
 }
+// DSPROOF
+void Server::rpc_blockchain_transaction_dsproof_get(Client *c, const RPC::Message &m)
+{
+    if (isBTC || !bitcoindmgr->hasDSProofRPC())
+        throw RPCError("This server lacks dsproof support", RPC::ErrorCodes::Code_MethodNotFound);
+    const auto dspid_or_txid = parseFirstHashParamCommon(m, "Invalid dsp hash or tx hash");
+    generic_do_async(c, m.id, [this, dspid_or_txid] {
+        QVariant ret;
+        auto [mempool, lock] = storage->mempool(); // shared lock
+        const DSProof *dsp{};
+        if (!(dsp = mempool.dsps.bestProofForTx(dspid_or_txid))) // try txid first
+            dsp = mempool.dsps.get(DspHash{dspid_or_txid});
+        if (dsp && !dsp->isEmpty())
+            ret = dsp->toVarMap();
+        return ret;
+    });
+}
+void Server::rpc_blockchain_transaction_dsproof_list(Client *c, const RPC::Message &m)
+{
+    if (isBTC || !bitcoindmgr->hasDSProofRPC())
+        throw RPCError("This server lacks dsproof support", RPC::ErrorCodes::Code_MethodNotFound);
+    generic_do_async(c, m.id, [this] {
+        DSProof::TxHashSet allDescendants;
+        {
+            auto [mempool, lock] = storage->mempool(); // shared lock
+            const auto &dsps = mempool.dsps.getAll();
+            allDescendants.reserve(dsps.size()); // start out preallocing for at least 1 descendant per dsp
+            for (const auto & [dspHash, dsp] : dsps)
+                allDescendants.insert(dsp.descendants.begin(), dsp.descendants.end());
+        }
+        QVariantList ret;
+        ret.reserve(allDescendants.size());
+        for (const auto &txid : allDescendants)
+            ret.append(Util::ToHexFast(txid));
+        return ret;
+    });
+}
+void Server::rpc_blockchain_transaction_dsproof_subscribe(Client *c, const RPC::Message &m)
+{
+    if (isBTC || !bitcoindmgr->hasDSProofRPC())
+        throw RPCError("This server lacks dsproof support", RPC::ErrorCodes::Code_MethodNotFound);
+    const auto txid = parseFirstHashParamCommon(m, "Invalid tx hash");
+    impl_generic_subscribe(storage->dspSubs(), c, m, txid);
+}
+void Server::rpc_blockchain_transaction_dsproof_unsubscribe(Client *c, const RPC::Message &m)
+{
+    if (isBTC || !bitcoindmgr->hasDSProofRPC())
+        throw RPCError("This server lacks dsproof support", RPC::ErrorCodes::Code_MethodNotFound);
+    const auto txid = parseFirstHashParamCommon(m, "Invalid tx hash");
+    impl_generic_unsubscribe(storage->dspSubs(), c, m, txid);
+}
+// /DSPROOF
 void Server::rpc_blockchain_utxo_get_info(Client *c, const RPC::Message &m)
 {
     QVariantList l = m.paramsList();
@@ -1910,6 +1972,12 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
     { {"blockchain.transaction.get",        true,               false,    PR{1,2},                    },          MP(rpc_blockchain_transaction_get) },
     { {"blockchain.transaction.get_merkle", true,               false,    PR{2,2},                    },          MP(rpc_blockchain_transaction_get_merkle) },
     { {"blockchain.transaction.id_from_pos",true,               false,    PR{2,3},                    },          MP(rpc_blockchain_transaction_id_from_pos) },
+    // DSPROOF
+    { {"blockchain.transaction.dsproof.get",         true,      false,    PR{1,1},                    },          MP(rpc_blockchain_transaction_dsproof_get) },
+    { {"blockchain.transaction.dsproof.list",        true,      false,    PR{0,0},                    },          MP(rpc_blockchain_transaction_dsproof_list) },
+    { {"blockchain.transaction.dsproof.subscribe",   true,      false,    PR{1,1},                    },          MP(rpc_blockchain_transaction_dsproof_subscribe) },
+    { {"blockchain.transaction.dsproof.unsubscribe", true,      false,    PR{1,1},                    },          MP(rpc_blockchain_transaction_dsproof_unsubscribe) },
+    // /DSPROOF
 
     { {"blockchain.utxo.get_info",          true,               false,    PR{2,2},                    },          MP(rpc_blockchain_utxo_get_info) },
 
@@ -2238,7 +2306,7 @@ void AdminServer::rpc_getinfo(Client *c, const RPC::Message &m)
     res["txs_sent"] = qulonglong(srvmgr->txBroadcasts());
     res["txs_sent_bytes"] = qulonglong(srvmgr->txBroadcastBytes());
     res["uptime"] = QString::number(Util::getTimeSecs(), 'f', 1) + " secs";
-    res["subscriptions"] = qlonglong(storage->subs()->numActiveClientSubscriptions());
+    res["subscriptions"] = qlonglong(storage->subs()->numGlobalActiveClientSubscriptions());
     res["peers"] = peers.size();
     res["config"] = options->toMap();
     { // mempool

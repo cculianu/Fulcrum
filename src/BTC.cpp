@@ -91,7 +91,7 @@ namespace BTC
     QByteArray HashRev(const QByteArray &b, bool once)
     {
         QByteArray ret = Hash(b, once);
-        std::reverse(std::begin(ret), std::end(ret));
+        std::reverse(ret.begin(), ret.end());
         return ret;
     }
 

@@ -19,6 +19,7 @@
 #pragma once
 
 #include "BlockProcTypes.h"
+#include "DSProof.h"
 #include "TXO.h"
 
 #include "bitcoin/amount.h"
@@ -48,7 +49,7 @@ struct Mempool
 
         bitcoin::Amount fee{bitcoin::Amount::zero()}; ///< we calculate this fee ourselves since in the past I noticed we get a funny value sometimes that's off by 1 or 2 sats --  which I suspect is due limitations of doubles, perhaps?
         unsigned sizeBytes = 0;
-        bool hasUnconfirmedParentTx = false; ///< If true, this tx depends on another tx in the mempool. This is fixed once calculated properly by the SynchMempoolTask in Controller.cpp
+        bool hasUnconfirmedParentTx = false; ///< If true, this tx depends on another tx in the mempool. This is not always fixed (confirmedInBlock may change this)
 
         /// These are all the txos in this tx. Once set-up, this doesn't change (unlike IOInfo.utxo).
         /// Note that this vector is always sized to the number of txouts in the tx. It may, however, contain !isValid
@@ -126,6 +127,7 @@ struct Mempool
     // -- Data members of struct Mempool --
     TxMap txs;
     HashXTxMap hashXTxs;
+    DSPs dsps;
 
 
     // -- Add to mempool
@@ -137,10 +139,14 @@ struct Mempool
     /// DB getter -- called to retrieve a utxo's scripthash & amount data from the DB. May throw.
     using GetTXOInfoFromDBFunc = std::function<std::optional<TXOInfo>(const TXO &)>;
 
+    using TxHashSet = std::unordered_set<TxHash, HashHasher>; ///< Used below by Stats & dropTxs()
+
     /// Results of add or drop -- some statistics for caller.
     struct Stats {
         std::size_t oldSize = 0, newSize = 0;
         std::size_t oldNumAddresses = 0, newNumAddresses = 0;
+        std::size_t dspRmCt = 0, dspTxRmCt = 0; // dsp stats: number of dsproofs removed, number of dsp <-> tx links removed (dropTxs, confirmedInBlock updates these)
+        TxHashSet dspTxsAffected; // populated by addNewTxs(), dropTxs(), & confirmedInBlock() -- used ultimately bu DSProofSubsMgr to notify linked txs.
         double elapsedMsec = 0.;
     };
 
@@ -157,8 +163,6 @@ struct Mempool
 
     // -- Drop from mempool
 
-    using TxHashSet = std::unordered_set<TxHash, HashHasher>; ///< Used below by dropTxs()
-
     /// Drop a bunch of tx's, deleting them from this data structure and reversing the effects of their spends
     /// in the mempool.
     ///
@@ -170,9 +174,24 @@ struct Mempool
     ///
     /// Why the penalty?  This is because descendant tx's not appearing in `txids` must be removed since they are
     /// txs that no longer are spending valid inputs (as far as this Mempool instance is aware of, at least).
-    Stats dropTxs(ScriptHashesAffectedSet & scriptHashesAffected, const TxHashSet & txids, bool TRACE = false,
+    ///
+    /// `scriptHashesAffected` is modified to add any additional scripthashes not in the set already.
+    ///
+    /// This function modifies its `txids` argument to expand it to the set of all descendants of txids as well.
+    /// (The caller may use this information to know precisely which txids are now gone).
+    Stats dropTxs(ScriptHashesAffectedSet & scriptHashesAffected, TxHashSet & txids, bool TRACE = false,
                   std::optional<float> rehashMaxLoadFactor = {});
 
+    /// Convenient alias for the above function which accepts a TxHashSet && temporary.
+    Stats dropTxs(ScriptHashesAffectedSet & scriptHashesAffected, TxHashSet && txids, bool TRACE = false,
+                  std::optional<float> rehashMaxLoadFactor = {}) {
+        return dropTxs(scriptHashesAffected, txids, TRACE, rehashMaxLoadFactor);
+    }
+    /// Convenient alias for the above function which accepts a const TxHashSet & instead. (But does incur the cost of a copy).
+    Stats dropTxs(ScriptHashesAffectedSet & scriptHashesAffected, const TxHashSet & txids, bool TRACE = false,
+                  std::optional<float> rehashMaxLoadFactor = {}) {
+        return dropTxs(scriptHashesAffected, TxHashSet{txids}, TRACE, rehashMaxLoadFactor);
+    }
 
     using TxHashNumMap = std::unordered_map<TxHash, TxNum, HashHasher>; ///< Used below by confirmedInBlock()
 
@@ -241,6 +260,6 @@ public:
     /// Tx objects (and not the TxRef shared_ptrs -- but the actual underlying Tx data).
     ///
     /// This is very slow -- used only in the mempool bench.
-    bool deepCompareEqual(const Mempool &other, QString *differenceExplanation = nullptr) const noexcept;
+    bool deepCompareEqual(const Mempool &other, QString *differenceExplanation = nullptr) const;
 #endif
 };

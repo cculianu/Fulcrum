@@ -134,6 +134,7 @@ class BitcoinDMgr;
 class Client;
 class QSslSocket;
 class Storage;
+class SubsMgr;
 class ThreadPool;
 
 /// Base class for the Electrum-server-style linefeed-based JSON-RPC service.
@@ -317,7 +318,8 @@ public:
     /// This is refactored code that is called both from here (rpc_server_features) and from the PeerMgr
     /// which also needs a features dict when *it* calls add_peer on peer servers.
     /// NOTE: Be sure to only ever call this function from the same thread as the AbstractConnection (first arg) instance!
-    static QVariantMap makeFeaturesDictForConnection(AbstractConnection *, const QByteArray &genesisHash, const Options & options);
+    static QVariantMap makeFeaturesDictForConnection(AbstractConnection *, const QByteArray &genesisHash,
+                                                     const Options & options, bool hasDSProofRPC);
 
     virtual QString prettyName() const override;
 
@@ -373,6 +375,12 @@ private:
     void rpc_blockchain_transaction_get(Client *, const RPC::Message &); // fully implemented
     void rpc_blockchain_transaction_get_merkle(Client *, const RPC::Message &); // fully implemented
     void rpc_blockchain_transaction_id_from_pos(Client *, const RPC::Message &); // fully implemented
+    // transaction.dsproof
+    void rpc_blockchain_transaction_dsproof_get(Client *, const RPC::Message &); // fully implemented
+    void rpc_blockchain_transaction_dsproof_list(Client *, const RPC::Message &); // fully implemented
+    void rpc_blockchain_transaction_dsproof_subscribe(Client *, const RPC::Message &); // fully implemented
+    void rpc_blockchain_transaction_dsproof_unsubscribe(Client *, const RPC::Message &); // fully implemented
+    /* / */
     // utxo
     void rpc_blockchain_utxo_get_info(Client *, const RPC::Message &); // fully implemented
     // mempool
@@ -384,21 +392,22 @@ private:
     void impl_get_history(Client *, const RPC::Message &, const HashX &scriptHash);
     void impl_get_mempool(Client *, const RPC::Message &, const HashX &scriptHash);
     void impl_listunspent(Client *, const RPC::Message &, const HashX &scriptHash);
-    void impl_sh_subscribe(Client *, const RPC::Message &, const HashX &scriptHash,
-                           const std::optional<QString> & aliasUsedForNotifications = {});
-    void impl_sh_unsubscribe(Client *, const RPC::Message &, const HashX &scriptHash);
+    void impl_generic_subscribe(SubsMgr *, Client *, const RPC::Message &, const HashX &key,
+                                const std::optional<QString> & aliasUsedForNotifications = {});
+    void impl_generic_unsubscribe(SubsMgr *, Client *, const RPC::Message &, const HashX &key);
     /// Commonly used by above methods.  Takes the first address argument in the m.paramsList() and converts it to
     /// a scripthash, returning the raw bytes.  Will throw RPCError on invalid argument.
     /// It is assumed the caller already ensured m.paramsList() has at least 1 item in it (which the RPC machinery
     /// does normally if the params spec is correctly written).  Validation is done on the argument, however, and
     /// it will throw RPCError in all parse/failure cases and only ever returns a valid scripthash on success.
     HashX parseFirstAddrParamToShCommon(const RPC::Message &m, QString *addrStrOut = nullptr) const;
-    /// Commonly used by above methods.  Takes the first scripthash hex argument in the m.paramsList() and converts it to
-    /// a scripthash, returning the raw bytes.  Will throw RPCError on invalid argument.
+    /// Commonly used by above methods.  Takes the first hex argument in the m.paramsList() and hes decodes it to
+    /// a hash, returning the raw bytes.  Will throw RPCError on invalid argument. The error will be
+    /// "Invalid scripthash" unless errMsg is specified, in which case it will be errMsg.
     /// It is assumed the caller already ensured m.paramsList() has at least 1 item in it (which the RPC machinery
     /// does normally if the params spec is correctly written).  Validation is done on the argument, however, and
-    /// it will throw RPCError in all parse/failure cases and only ever returns a valid scripthash on success.
-    HashX parseFirstShParamCommon(const RPC::Message &m) const;
+    /// it will throw RPCError in all parse/failure cases and only ever returns a valid hash on success.
+    HashX parseFirstHashParamCommon(const RPC::Message &m, const char *const errMsg = nullptr) const;
 
 
     /// Basically a namespace for our rpc dispatch tables, etc

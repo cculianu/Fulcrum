@@ -41,7 +41,7 @@
 /// `const std::byte *`.  As such, do *not* keep instances around unless the
 /// data being pointed-to is guaranteed to live for longer than the lifetime of
 /// the ByteView instance.
-class ByteView: public std::basic_string_view<std::byte>
+class ByteView : public std::basic_string_view<std::byte>
 {
     template <typename CharT, typename T, typename = std::enable_if_t<sizeof(CharT) == 1>>
     static const CharT *ptr_cast(const T *t) noexcept {
