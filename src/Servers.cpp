@@ -578,7 +578,7 @@ ServerBase::newClient(QTcpSocket *sock)
         if (UNLIKELY(nSubsIP < 0))
             Error() << "nShSubs for IP " << addr.toString() << " is " << nSubsIP << ". FIXME!";
         if (nSubsIP == 0 && c->nShSubs)
-            DebugM("PerIP: ", addr.toString(), " is no longer subscribed to any scripthashes");
+            DebugM("PerIP: ", addr.toString(), " is no longer subscribed to any subscribables");
         --c->perIPData->nClients; // decrement client counter
         // tell SrvMgr this client is gone so it can decrement its clients-per-ip count.
         emit clientDisconnected(clientId, addr);
