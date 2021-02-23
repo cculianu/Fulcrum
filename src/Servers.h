@@ -318,7 +318,8 @@ public:
     /// This is refactored code that is called both from here (rpc_server_features) and from the PeerMgr
     /// which also needs a features dict when *it* calls add_peer on peer servers.
     /// NOTE: Be sure to only ever call this function from the same thread as the AbstractConnection (first arg) instance!
-    static QVariantMap makeFeaturesDictForConnection(AbstractConnection *, const QByteArray &genesisHash, const Options & options);
+    static QVariantMap makeFeaturesDictForConnection(AbstractConnection *, const QByteArray &genesisHash,
+                                                     const Options & options, bool hasDSProofRPC);
 
     virtual QString prettyName() const override;
 

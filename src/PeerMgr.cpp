@@ -65,7 +65,7 @@ PeerMgr::~PeerMgr() { cleanup(); /* noop if already stopped */ DebugM(__func__);
 
 QVariantMap PeerMgr::makeFeaturesDict(PeerClient *c) const
 {
-    return Server::makeFeaturesDictForConnection(c, _genesisHash, *options);
+    return Server::makeFeaturesDictForConnection(c, _genesisHash, *options, srvmgr->hasDSProofRPC());
 }
 
 QString PeerMgr::publicHostNameForConnection(PeerClient *c) const

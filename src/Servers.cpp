@@ -956,7 +956,7 @@ void Server::rpc_server_donation_address(Client *c, const RPC::Message &m)
     emit c->sendResult(m.id, options->donationAddress);
 }
 /* static */
-QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const QByteArray &genesisHash, const Options &opts)
+QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const QByteArray &genesisHash, const Options &opts, bool dsproof)
 {
     QVariantMap r;
     if (!c) {
@@ -970,6 +970,7 @@ QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const Q
     r["protocol_min"] = ServerMisc::MinProtocolVersion.toString();
     r["protocol_max"] = ServerMisc::MaxProtocolVersion.toString();
     r["hash_function"] = ServerMisc::HashFunction;
+    r["dsproof"] = dsproof;
 
     QVariantMap hmap, hmapTor;
     if (opts.publicTcp.has_value())
@@ -1015,7 +1016,7 @@ QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const Q
 }
 void Server::rpc_server_features(Client *c, const RPC::Message &m)
 {
-    emit c->sendResult(m.id, makeFeaturesDictForConnection(c, storage->genesisHash(), *options));
+    emit c->sendResult(m.id, makeFeaturesDictForConnection(c, storage->genesisHash(), *options, bitcoindmgr->hasDSProofRPC()));
 }
 void Server::rpc_server_peers_subscribe(Client *c, const RPC::Message &m)
 {

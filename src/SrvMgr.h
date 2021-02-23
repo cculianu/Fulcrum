@@ -55,7 +55,7 @@ public:
     /// cases where for some reason bitcoind has renamed its networks from the canonical "main", "test", "regtest"
     /// in some future scenario, this may return BTC::Net::Invalid, so callers should check for that possibility.
     /// (Used by the blockchain.address.* RPC methods to figure out which addresses to accept and which to reject.)
-    inline BTC::Net net() const noexcept { return _net; }
+    BTC::Net net() const noexcept { return _net; }
 
     /// Must be called in this object's thread -- does a blocking call to all the Server instances that are started
     /// (timeout_ms, specify timeout_ms <= 0 to block forever), and prepares the QVariantList RPC response appropriate
@@ -77,7 +77,11 @@ public:
     /// per-ip address shared data for all clients from a particular IP address.
     std::shared_ptr<Client::PerIPData> getOrCreatePerIPData(const QHostAddress &address);
     /// Thread-Safe. Like the above but returns an invalid shared_ptr if the per-IP data for address does not exist.
-    inline std::shared_ptr<Client::PerIPData> findExistingPerIPData(const QHostAddress &address) { return perIPData.getOrCreate(address, false); }
+    std::shared_ptr<Client::PerIPData> findExistingPerIPData(const QHostAddress &address) { return perIPData.getOrCreate(address, false); }
+
+    /// Thread-Safe. Returns whether bitcoind currently probes as having the dsproof RPC.
+    /// This just forwards the call to BitcoinDMgr::hasDSProofRPC().
+    bool hasDSProofRPC() const;
 
 signals:
     /// Notifies all blockchain.headers.subscribe'd clients for the entire server about a new header.
