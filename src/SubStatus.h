@@ -72,13 +72,24 @@ class SubStatus {
     }
     void move(SubStatus &&o) {
         if (this == &o) return;
-        if (t != o.t)
-            construct(o.t);
+        if (t != o.t) {
+            if (o.t == DSP) {
+                // optimization for DSP: in the move case we want to avoid constructing a new DSProof, and
+                // just transfer ownership of the DSProof owned by o.dsp
+                destruct();
+                new (&dsp) std::unique_ptr<DSProof>;
+                t = DSP;
+                // fall thru to below code to transfer pointer
+            } else {
+                // normal case: QBA or NoValue
+                construct(o.t);
+            }
+        }
         // at this point t == o.t
         if (t == QBA)
             qba = std::move(o.qba);
         else if (t == DSP)
-            *dsp = std::move(*o.dsp);
+            dsp = std::move(o.dsp); // cheap pointer transfer
     }
     void copy(const SubStatus &o) {
         if (this == &o) return;
