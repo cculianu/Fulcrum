@@ -23,7 +23,6 @@
 #include <QByteArray>
 #include <QMetaType>
 
-#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <type_traits>
@@ -66,10 +65,10 @@ class SubStatus {
         switch (tt) {
         case NoValue: return;
         case QBA:
-            new (reinterpret_cast<std::byte *>(&u.qba)) QByteArray;
+            new (&u.qba) QByteArray;
             break;
         case DSP:
-            new (reinterpret_cast<std::byte *>(&u.dsp)) std::unique_ptr<DSProof>(new DSProof);
+            new (&u.dsp) std::unique_ptr<DSProof>(new DSProof);
             break;
         }
         t = tt;
@@ -98,19 +97,19 @@ public:
     SubStatus(SubStatus &&o) { move(std::move(o)); }
     SubStatus(const SubStatus &o) { copy(o); }
     SubStatus(const QByteArray &oq) noexcept {
-        new (reinterpret_cast<std::byte *>(&u.qba)) QByteArray(oq);
+        new (&u.qba) QByteArray(oq);
         t = QBA;
     }
     SubStatus(QByteArray &&oq) noexcept {
-        new (reinterpret_cast<std::byte *>(&u.qba)) QByteArray(std::move(oq));
+        new (&u.qba) QByteArray(std::move(oq));
         t = QBA;
     }
     SubStatus(const DSProof &od) {
-        new (reinterpret_cast<std::byte *>(&u.dsp)) std::unique_ptr<DSProof>(new DSProof(od));
+        new (&u.dsp) std::unique_ptr<DSProof>(new DSProof(od));
         t = DSP;
     }
     SubStatus(DSProof &&od) {
-        new (reinterpret_cast<std::byte *>(&u.dsp)) std::unique_ptr<DSProof>(new DSProof(std::move(od)));
+        new (&u.dsp) std::unique_ptr<DSProof>(new DSProof(std::move(od)));
         t = DSP;
     }
     ~SubStatus() { destruct(); }
