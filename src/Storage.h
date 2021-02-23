@@ -276,7 +276,7 @@ public:
     /// subsystems and multiple threads).
     ScriptHashSubsMgr * subs() const { return subsmgr.get(); }
     /// Identical to above, but points to the DSProofSubsMgr for this instance.
-    DSProofSubsMgr *dspSubs() const { return dspsubsmgr.get(); }
+    DSProofSubsMgr * dspSubs() const { return dspsubsmgr.get(); }
 
     /// called from a timer periodically from Controller (see Controller.cpp)
     /// -- takes locks, updates compact fee histogram for the mempool
