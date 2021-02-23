@@ -41,23 +41,20 @@
 ///   that is, dsproof() will always be a valid pointer.
 ///
 class SubStatus {
-    union U {
+    union {
         QByteArray qba;
         std::unique_ptr<DSProof> dsp; // we use unique_ptr here to save memory in the common case where most of these instances are QByteArray
-        void *dummy; // required for C++17 so we can at least have 1 active member even if no value is set
-        constexpr U() noexcept : dummy{nullptr} {}
-        ~U() noexcept {}
+        void *dummy = nullptr;
     };
     enum T : uint8_t { NoValue, QBA, DSP };
     T t = NoValue;
-    U u;
     void destruct() {
         switch (t) {
         case NoValue: return;
-        case QBA: u.qba.~QByteArray(); break;
-        case DSP: u.dsp.~unique_ptr(); break;
+        case QBA: qba.~QByteArray(); break;
+        case DSP: dsp.~unique_ptr(); break;
         }
-        u.dummy = nullptr;
+        dummy = nullptr;
         t = NoValue;
     }
     void construct(const T tt) {
@@ -65,10 +62,10 @@ class SubStatus {
         switch (tt) {
         case NoValue: return;
         case QBA:
-            new (&u.qba) QByteArray;
+            new (&qba) QByteArray;
             break;
         case DSP:
-            new (&u.dsp) std::unique_ptr<DSProof>(new DSProof);
+            new (&dsp) std::unique_ptr<DSProof>(new DSProof);
             break;
         }
         t = tt;
@@ -79,61 +76,49 @@ class SubStatus {
             construct(o.t);
         // at this point t == o.t
         if (t == QBA)
-            u.qba = std::move(o.u.qba);
+            qba = std::move(o.qba);
         else if (t == DSP)
-            *u.dsp = std::move(*o.u.dsp);
+            *dsp = std::move(*o.dsp);
     }
     void copy(const SubStatus &o) {
         if (this == &o) return;
         if (t != o.t)
             construct(o.t);
         if (t == QBA)
-            u.qba = o.u.qba;
+            qba = o.qba;
         else if (t == DSP)
-            *u.dsp = *o.u.dsp;
+            *dsp = *o.dsp;
     }
 public:
-    constexpr SubStatus() noexcept : t{NoValue} { }
+    constexpr SubStatus() noexcept {}
     SubStatus(SubStatus &&o) { move(std::move(o)); }
     SubStatus(const SubStatus &o) { copy(o); }
-    SubStatus(const QByteArray &oq) noexcept {
-        new (&u.qba) QByteArray(oq);
-        t = QBA;
-    }
-    SubStatus(QByteArray &&oq) noexcept {
-        new (&u.qba) QByteArray(std::move(oq));
-        t = QBA;
-    }
-    SubStatus(const DSProof &od) {
-        new (&u.dsp) std::unique_ptr<DSProof>(new DSProof(od));
-        t = DSP;
-    }
-    SubStatus(DSProof &&od) {
-        new (&u.dsp) std::unique_ptr<DSProof>(new DSProof(std::move(od)));
-        t = DSP;
-    }
+    SubStatus(const QByteArray &oq) noexcept : qba(oq), t{QBA} {}
+    SubStatus(QByteArray &&oq) noexcept : qba(std::move(oq)), t{QBA} {}
+    SubStatus(const DSProof &od) : dsp(new DSProof(od)), t{DSP} {}
+    SubStatus(DSProof &&od) : dsp(new DSProof(std::move(od))), t{DSP} {}
     ~SubStatus() { destruct(); }
 
     SubStatus &operator=(const SubStatus &o) { copy(o); return *this; }
     SubStatus &operator=(SubStatus && o) { move(std::move(o)); return *this; }
     SubStatus &operator=(const QByteArray &oq) {
         if (t != QBA) construct(QBA);
-        u.qba = oq;
+        qba = oq;
         return *this;
     }
     SubStatus &operator=(QByteArray &&oq) {
         if (t != QBA) construct(QBA);
-        u.qba = std::move(oq);
+        qba = std::move(oq);
         return *this;
     }
     SubStatus &operator=(const DSProof &od) {
         if (t != DSP) construct(DSP);
-        *u.dsp = od;
+        *dsp = od;
         return *this;
     }
     SubStatus &operator=(DSProof &&od) {
         if (t != DSP) construct(DSP);
-        *u.dsp = std::move(od);
+        *dsp = std::move(od);
         return *this;
     }
 
@@ -141,8 +126,8 @@ public:
         if (t != o.t) return false;
         switch (t) { // t == o.t
         case NoValue: return true; // all NoValues are always equal
-        case QBA: return u.qba == o.u.qba;
-        case DSP: return *u.dsp == *o.u.dsp;
+        case QBA: return qba == o.qba;
+        case DSP: return *dsp == *o.dsp;
         }
     }
     bool operator!=(const SubStatus &o) const { return !(*this == o); }
@@ -152,11 +137,11 @@ public:
     bool has_value() const noexcept { return t != NoValue; }
     void reset() { destruct(); }
 
-    QByteArray * byteArray() noexcept { return t == QBA ? &u.qba : nullptr; }
-    const QByteArray * byteArray() const noexcept { return t == QBA ? &u.qba : nullptr; }
+    QByteArray * byteArray() noexcept { return t == QBA ? &qba : nullptr; }
+    const QByteArray * byteArray() const noexcept { return t == QBA ? &qba : nullptr; }
 
-    DSProof * dsproof()  noexcept { return t == DSP ? u.dsp.get() : nullptr; }
-    const DSProof * dsproof() const noexcept { return t == DSP ? u.dsp.get() : nullptr; }
+    DSProof * dsproof()  noexcept { return t == DSP ? dsp.get() : nullptr; }
+    const DSProof * dsproof() const noexcept { return t == DSP ? dsp.get() : nullptr; }
 };
 
 /// Specialization of std::hash so we can use SubStatus with std::unordered_map, std::unordered_set, etc
