@@ -1606,8 +1606,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
 
     struct NotifyData {
         using NotifySet = std::unordered_set<HashX, HashHasher>;
-        NotifySet scriptHashesAffected, unsubDspTxids;
-        DSPs::DspHashSet dspsAffected;
+        NotifySet scriptHashesAffected, dspTxsAffected;
     };
     std::unique_ptr<NotifyData> notify;
 
@@ -1627,10 +1626,8 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
             const auto sz = ppb->txInfos.size();
             const auto rsvsz = static_cast<Mempool::TxHashNumMap::size_type>(sz > 0 ? sz-1 : 0);
             Mempool::TxHashNumMap txidMap(/* bucket_count: */ rsvsz);
-            notify->unsubDspTxids.reserve(rsvsz);
             for (std::size_t i = 1 /* skip coinbase */; i < sz; ++i) {
                 txidMap.emplace(ppb->txInfos[i].hash, blockTxNum0 + i);
-                notify->unsubDspTxids.insert(ppb->txInfos[i].hash);
             }
             Mempool::ScriptHashesAffectedSet affected;
             // Pre-reserve some capacity for the tmp affected set to avoid much rehashing.
@@ -1647,7 +1644,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                 d << " in " << QString::number(res.elapsedMsec, 'f', 3) << " msec";
             }
             notify->scriptHashesAffected.merge(std::move(affected));
-            notify->dspsAffected.merge(std::move(res.dspsAffected));
+            notify->dspTxsAffected.merge(std::move(res.dspTxsAffected));
         }
 
         const auto verifUndo = p->headerVerifier; // keep a copy of verifier state for undo purposes in case this fails
@@ -1918,12 +1915,8 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
     if (notify) {
         if (subsmgr && !notify->scriptHashesAffected.empty())
             subsmgr->enqueueNotifications(std::move(notify->scriptHashesAffected));
-        if (dspsubsmgr) {
-            if (!notify->unsubDspTxids.empty())
-                dspsubsmgr->unsubscribeClientsForKeys(notify->unsubDspTxids);
-            if (!notify->dspsAffected.empty())
-                dspsubsmgr->enqueueNotificationsForAllDescendantsOfDSPsInSet(std::move(notify->dspsAffected));
-        }
+        if (dspsubsmgr && !notify->dspTxsAffected.empty())
+            dspsubsmgr->enqueueNotifications(std::move(notify->dspTxsAffected));
     }
 }
 
@@ -1934,7 +1927,7 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
     using NotifySet = std::unordered_set<HashX, HashHasher>;
     struct NotifyData {
         using NotifySet = std::unordered_set<HashX, HashHasher>;
-        NotifySet scriptHashesAffected, unsubDspTxids;
+        NotifySet scriptHashesAffected, dspTxsAffected;
     };
     std::unique_ptr<NotifyData> notify;
 
@@ -1964,7 +1957,9 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
         if (notify) {
             // mark ALL of mempool for notify so we can detect drops that weren't in block but also disappeared from mempool properly
             notify->scriptHashesAffected.merge(Util::keySet<NotifySet>(p->mempool.hashXTxs));
-            notify->unsubDspTxids.merge(Util::keySet<NotifySet>(p->mempool.txs));
+            if (!p->mempool.dsps.empty())
+                // since we will be clearing, just flag all in-mempool dspTxs as affected
+                notify->dspTxsAffected.merge(Util::keySet<NotifySet>(p->mempool.dsps.getTxDspsMap()));
         }
         p->mempool.clear(); // make sure mempool is clean (see note above as to why)
 
@@ -2097,9 +2092,9 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
     // now, do notifications
     if (notify) {
         if (subsmgr && !notify->scriptHashesAffected.empty())
-        subsmgr->enqueueNotifications(std::move(notify->scriptHashesAffected));
-        if (dspsubsmgr && !notify->unsubDspTxids.empty())
-            dspsubsmgr->unsubscribeClientsForKeys(notify->unsubDspTxids);
+            subsmgr->enqueueNotifications(std::move(notify->scriptHashesAffected));
+        if (dspsubsmgr && !notify->dspTxsAffected.empty())
+            dspsubsmgr->enqueueNotifications(std::move(notify->dspTxsAffected));
     }
 
     return prevHeight;

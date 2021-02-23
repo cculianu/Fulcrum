@@ -124,7 +124,6 @@ void SubsMgr::on_finished()
 void SubsMgr::doNotifyAllPending()
 {
     const Tic t0;
-    aboutToNotifyAllPending(); // no-op except for in DSProofSubsMgr subclass which takes the dspHashSet and enqueues as txids
     size_t ctr = 0, ctrSH = 0;
     bool emitQueueEmpty = false;
     const bool useCache = useStatusCache();
@@ -667,7 +666,7 @@ void DSProofSubsMgr::expireSubsNotInMempool()
     }
     if (!candidates.empty()) {
         DebugM(__func__, ": ", candidates.size(), " txid subscriptions do not correspond to any mempool tx and are >",
-               QString::number(kExpireSubsNotInMempoolAgeMsec / 1e3, 'f', 2), " secs old, forcing unsubscribe now",
+               QString::number(kExpireSubsNotInMempoolAgeMsec / 1e3, 'f', 1), " secs old, forcing unsubscribe now",
                " (elapsed: ", t0.msecStr(), " msec)");
         unsubscribeClientsForKeys(candidates);
     }
@@ -681,48 +680,6 @@ auto DSProofSubsMgr::getFullStatus(const HashX &txHash) const -> SubStatus
     return DSProof{}; // a SubStatus with a .isEmpty() indicates no proof for this txhash
 }
 
-void DSProofSubsMgr::enqueueNotificationsForAllDescendantsOfDSPsInSet(DSPs::DspHashSet &&ds)
-{
-    if (ds.empty()) return;
-    LockGuard g(dspHashMut);
-    dspHashSet.merge(std::move(ds));
-}
-
-std::unordered_set<HashX, HashHasher> DSProofSubsMgr::calculateAllDescendantsOfDSPs(const DSPs::DspHashSet &ds) const
-{
-    std::unordered_set<HashX, HashHasher> txids;
-    {
-        auto [mempool, lock] = storage->mempool(); // shared lock
-        if (mempool.dsps.size() < ds.size()) {
-            // loop over dsps since that set is smaller
-            for (const auto &[dsphash, proof] : mempool.dsps.getAll()) {
-                if (ds.count(dsphash))
-                    txids.insert(proof.descendants.begin(), proof.descendants.end());
-            }
-        } else {
-            // loop over the input set since that set is smaller
-            for (const auto &dspHash : ds) {
-                if (auto *dsp = mempool.dsps.get(dspHash))
-                    txids.insert(dsp->descendants.begin(), dsp->descendants.end());
-            }
-        }
-    }
-    return txids;
-}
-
-void DSProofSubsMgr::aboutToNotifyAllPending()
-{
-    DSPs::DspHashSet ds;
-    {
-        LockGuard g(dspHashMut);
-        ds.swap(dspHashSet);
-    }
-    auto txids = calculateAllDescendantsOfDSPs(ds);
-    if (!txids.empty()) {
-        DebugM(__func__, ": enqueuing notifs for ", txids.size(), " tx(s) which are descendant(s) of ", ds.size(), " dsp(s)");
-        enqueueNotifications(std::move(txids));
-    }
-}
 
 #ifdef ENABLE_TESTS
 #include "App.h"

@@ -95,6 +95,7 @@ private:
 public:
     /// @returns a const reference to the internal map. Useful for iteration to list all known proofs for e.g. /stats.
     const DspMap & getAll() const { return dsproofs; }
+    const TxDspsMap & getTxDspsMap() const { return txDspsMap; }
 
     bool empty() const { return dsproofs.empty(); }
     auto size() const { return dsproofs.size(); }
@@ -128,11 +129,16 @@ public:
     std::size_t rmTx(const TxHash &txHash);
 
     /// @returns a pointer to the internal set of all of the DspHashes linked to a TxHash, or nullptr if txHash has
-    /// no associated dsps.
+    /// no associated dsps. The complexity of this call is constant-time.
     const DspHashSet * dspHashesForTx(const TxHash &txHash) const;
 
     /// @returns a vector of pointers to all the actual proofs linked with a txHash, or an empty vector if none were found.
     std::vector<const DSProof *> proofsLinkedToTx(const TxHash &txHash) const;
+
+    /// @returns A set containing all the txids that are linked to all the txids in txHashes via common dsproofs. That
+    /// is, for each txHash in `txHashes`, all of its linked proofs are examined and all of the descendants in each
+    /// proof are added to the returned TxHashSet. This is used by Mempool.cpp.
+    DSProof::TxHashSet txsLinkedToTxs(const DSProof::TxHashSet &txHashes) const;
 
     /// @returns a pointer to the primary proof associated with a txHash, or the "best" proof if there is no primary.
     ///     A primary proof is a proof for the tx itself, rather than one of its ancestors. A "best" proof is one that

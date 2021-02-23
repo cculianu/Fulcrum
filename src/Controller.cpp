@@ -631,9 +631,8 @@ struct SynchMempoolTask : public CtlTask
 
     /// The scriptHashes that were affected by this refresh/synch cycle. Used for notifications.
     std::unordered_set<HashX, HashHasher> scriptHashesAffected;
-    Mempool::TxHashSet txidsDropped; ///< the txids that were dropped for this run of the task (cumulative across retries, like scriptHashesAffected)
-    Mempool::TxHashSet dspTxsAdded; ///< the txids in the adds that also have dsproofs now associated with them
-    DSPs::DspHashSet dspHashesAffected; ///<  the dspids that had adds or drops (cumulative; we need this because we must notify ALL descendant subs since the set changed)
+    /// The txids in the adds or drops that also have dsproofs associated with them (cumulative across retries, like scriptHashesAffected)
+    Mempool::TxHashSet dspTxsAffected;
 
     void clear() {
         isdlingtxs = false;
@@ -643,8 +642,7 @@ struct SynchMempoolTask : public CtlTask
         // Note: we don't clear "scriptHashesAffected" intentionally in case we are retrying. We want to accumulate
         // all the droppedTx scripthashes for each retry, so we never clear the set.
         // Note 2: we also never clear the redoCt since that counter needs to maintain state to abort too many redos.
-        // Note 3: we also never clear txidsDropped
-        // Note 4: we also never clear dspHashesAffected
+        // Note 3: we also never clear dspTxsAffected
     }
 
     /// Called when getrawtransaction errors out or when we dropTxs() and the result is too many txs so we must
@@ -668,16 +666,9 @@ SynchMempoolTask::~SynchMempoolTask() {
             // where we queued up some notifications and then we died on a retry due to errors from bitcoind)
             storage->subs()->enqueueNotifications(std::move(scriptHashesAffected));
         }
-        if (!txidsDropped.empty()) {
-            storage->dspSubs()->unsubscribeClientsForKeys(txidsDropped);
-        }
-        if (!dspTxsAdded.empty()) {
-            DebugM(objectName(), ": dspTx adds: ", dspTxsAdded.size());
-            storage->dspSubs()->enqueueNotifications(std::move(dspTxsAdded));
-        }
-        if (!dspHashesAffected.empty()) {
-            DebugM(objectName(), ": dspHashes affected: ", dspHashesAffected.size());
-            storage->dspSubs()->enqueueNotificationsForAllDescendantsOfDSPsInSet(std::move(dspHashesAffected));
+        if (!dspTxsAffected.empty()) {
+            DebugM(objectName(), ": dspTxsAffected: ", dspTxsAffected.size());
+            storage->dspSubs()->enqueueNotifications(std::move(dspTxsAffected));
         }
     }
 
@@ -844,8 +835,7 @@ void SynchMempoolTask::processResults()
         updateLastProgress(0.80);
         return mempool.addNewTxs(scriptHashesAffected, txsDownloaded, getFromCache, TRACE); // may throw
     }();
-    dspTxsAdded.merge(res.dspTxAdds);
-    dspHashesAffected.merge(res.dspsAffected);
+    dspTxsAffected.merge(std::move(res.dspTxsAffected));
     if ((res.oldSize != res.newSize || res.elapsedMsec > 1e3) && Debug::isEnabled()) {
         Controller::printMempoolStatusToLog(res.newSize, res.newNumAddresses, res.elapsedMsec, true, true);
     }
@@ -1002,9 +992,8 @@ void SynchMempoolTask::doGetRawMempool()
                         d << " (also dropped dsps: " << res.dspRmCt << " dspTxs: " << res.dspTxRmCt << ")";
                 }
                 scriptHashesAffected.merge(std::move(affected)); /* update set here with lock not held */
-                txidsDropped.merge(std::move(droppedTxs)); /* update this set too */
-                dspHashesAffected.merge(std::move(res.dspsAffected)); /* also update this */
-                // . <--- NB: at this point: affected, droppedTxs, and res.dspsAffected are moved-from
+                dspTxsAffected.merge(std::move(res.dspTxsAffected)); /* also update this */
+                // . <--- NB: at this point: affected and res.dspsTxsAffected are moved-from
             }
             if (UNLIKELY(droppedCt != expectedDropCt)) { // This invariant is checked to detect bugs.
                 Warning() << "Synch mempool expected to drop " << droppedTxs.size() << ", but in fact dropped "

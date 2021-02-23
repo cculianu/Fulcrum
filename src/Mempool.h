@@ -146,8 +146,7 @@ struct Mempool
         std::size_t oldSize = 0, newSize = 0;
         std::size_t oldNumAddresses = 0, newNumAddresses = 0;
         std::size_t dspRmCt = 0, dspTxRmCt = 0; // dsp stats: number of dsproofs removed, number of dsp <-> tx links removed (dropTxs, confirmedInBlock updates these)
-        TxHashSet dspTxAdds; // only ever populated by addNewTxs()
-        DSPs::DspHashSet dspsAffected; // populated by addNewTxs(), dropTxs(), & confirmedInBlock()
+        TxHashSet dspTxsAffected; // populated by addNewTxs(), dropTxs(), & confirmedInBlock() -- used ultimately bu DSProofSubsMgr to notify linked txs.
         double elapsedMsec = 0.;
     };
 
@@ -175,6 +174,8 @@ struct Mempool
     ///
     /// Why the penalty?  This is because descendant tx's not appearing in `txids` must be removed since they are
     /// txs that no longer are spending valid inputs (as far as this Mempool instance is aware of, at least).
+    ///
+    /// `scriptHashesAffected` is modified to add any additional scripthashes not in the set already.
     ///
     /// This function modifies its `txids` argument to expand it to the set of all descendants of txids as well.
     /// (The caller may use this information to know precisely which txids are now gone).

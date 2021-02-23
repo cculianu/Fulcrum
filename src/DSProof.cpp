@@ -156,6 +156,25 @@ const DSProof * DSPs::bestProofForTx(const TxHash &txHash) const
     return ret;
 }
 
+DSProof::TxHashSet DSPs::txsLinkedToTxs(const DSProof::TxHashSet &txids) const
+{
+    DSProof::TxHashSet ret;
+    DspHashSet linkedDspHashes;
+    // for each txid in txids, get the linked dsp hashes
+    linkedDspHashes.reserve(txids.size() * 2); // reserve heuristic: est. on avg no more than 2 dsps per txid
+    for (const auto & txid : txids) {
+        if (auto *dspHashes = dspHashesForTx(txid))
+            linkedDspHashes.insert(dspHashes->begin(), dspHashes->end());
+    }
+    // for each dsp in linkedDspHashes, do the union of all their descendant sets
+    ret.reserve(linkedDspHashes.size() * 2); // reserve heuristic
+    for (const auto & dspHash : linkedDspHashes)
+        if (auto *dsp = get(dspHash))
+            ret.insert(dsp->descendants.begin(), dsp->descendants.end());
+    return ret;
+}
+
+
 QVariantMap DSProof::toVarMap() const
 {
     QVariantMap ret;
