@@ -90,25 +90,39 @@ QByteArray RecordFile::readRecord(uint64_t recNum, QString *errStr) const
     return ret;
 }
 
-std::vector<QByteArray> RecordFile::readRandomRecords(const std::vector<uint64_t> & recNums, QString *errStr) const
+std::vector<QByteArray> RecordFile::readRandomRecords(const std::vector<uint64_t> & recNums, QString *errStr,
+                                                      bool continueOnError) const
 {
     std::shared_lock g(rwlock);
     std::vector<QByteArray> ret;
     ret.reserve(recNums.size());
     QFile f(fileName());
     if (!f.open(QIODevice::ReadOnly|QIODevice::ExistingOnly)) {
-        if (errStr) *errStr = QString("Unable to open file %1 (error was: '%2')").arg(fileName()).arg(f.errorString());
+        if (errStr) *errStr = QString("Unable to open file %1 (error was: '%2')").arg(fileName(), f.errorString());
     } else {
         // good status
-        for (const auto recNum : recNums) {
-            if (recNum >= nrecs) {
-                if (errStr) *errStr = QString("%1 is outside the record file, which only contains %2 records").arg(recNum).arg(nrecs);
-                break;
+        if (!continueOnError) {
+            // in this branch, caller wants us to abort right away on error
+            for (const auto recNum : recNums) {
+                if (recNum >= nrecs) {
+                    if (errStr) *errStr = QString("%1 is outside the record file, which only contains %2 records").arg(recNum).arg(nrecs);
+                    break;
+                }
+                ret.emplace_back(readRandomCommon(f, recNum, errStr));
+                if (ret.back().isEmpty()) {
+                    ret.pop_back();
+                    break;
+                }
             }
-            ret.emplace_back(readRandomCommon(f, recNum, errStr));
-            if (ret.back().isEmpty()) {
-                ret.pop_back();
-                break;
+        } else {
+            // in this branch we simply keep values on error and insert them as empty QByteArrays
+            for (const auto recNum : recNums) {
+                if (recNum >= nrecs) {
+                    if (errStr) *errStr = QString("%1 is outside the record file, which only contains %2 records").arg(recNum).arg(nrecs);
+                    ret.emplace_back(); // empty QByteArray
+                    continue;
+                }
+                ret.emplace_back(readRandomCommon(f, recNum, errStr));
             }
         }
     }
