@@ -202,7 +202,7 @@ public:
         unsigned keepLogFileNum = defaultKeepLogFileNum;
         static constexpr bool isKeepLogFileNumInBounds(int64_t k) { return k >= int64_t(minKeepLogFileNum) && k <= int64_t(maxKeepLogFileNum); }
 
-        static constexpr size_t defaultMaxMem = 384 * 1024 * 1024, maxMemMin = 50 * 1024 * 1024, maxMemMax = std::numeric_limits<size_t>::max();
+        static constexpr size_t defaultMaxMem = 420 * 1024 * 1024, maxMemMin = 50 * 1024 * 1024, maxMemMax = std::numeric_limits<size_t>::max();
         size_t maxMem = defaultMaxMem;
         static constexpr bool isMaxMemInBounds(size_t mem) { return mem >= maxMemMin && mem <= maxMemMax; }
 

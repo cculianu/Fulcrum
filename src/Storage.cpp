@@ -17,12 +17,15 @@
 // <https://www.gnu.org/licenses/>.
 //
 #include "BTC.h"
+#include "ByteView.h"
 #include "CostCache.h"
 #include "Mempool.h"
 #include "Merkle.h"
 #include "RecordFile.h"
+#include "Span.h"
 #include "Storage.h"
 #include "SubsMgr.h"
+#include "VarInt.h"
 
 #include <rocksdb/cache.h>
 #include <rocksdb/db.h>
@@ -41,9 +44,11 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cassert>
 #include <cstddef> // for std::byte
 #include <cstdlib>
 #include <cstring> // for memcpy
+#include <future> // for std::launch, std::future
 #include <limits>
 #include <list>
 #include <map>
@@ -51,6 +56,7 @@
 #include <set>
 #include <shared_mutex>
 #include <string>
+#include <system_error>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -470,17 +476,265 @@ namespace {
         return true;
     }
 
+    /// Manages the txhash2txnum rocksdb table.  The schema is:
+    /// Key: N bytes from POS position from the big-endian ordered (JSON ordered) txhash (default 6 from the End)
+    /// Value: One or more serialized VarInts. Each VarInt represents a "TxNum" (which tells us where the actual hash
+    ///     lives in the txnum2txhash flat file).
+    ///
+    /// This class is mainly a thin wrapper around the rocksdb and RecordFile facilities and they are both
+    /// thread-safe and reentrant. It takes no locks itself.
+    class TxHash2TxNumMgr {
+        rocksdb::DB * const db;
+        const rocksdb::ReadOptions & rdOpts; // references into Storage::Pvt
+        const rocksdb::WriteOptions & wrOpts;
+        RecordFile * const rf;
+        std::shared_ptr<rocksdb::MergeOperator> mergeOp;
+        ConcatOperator * concatOp;  // this is a "weak" pointer into above, dynamic casted down. always valid.
+        Tic lastWarnTime; ///< this is not guarded by any locks. Assumption is calling code always holds an exclusive lock when calling truncateForUndo()
+    public:
+        const size_t keyBytes;
 
-    /// Tells you the size of a QByteArray::QArrayData object which each QByteArray that is not null has a pointer to.
-    /// This function basically tells you how much extra space a QByteArray takes up just by existing, beyond its base
-    /// sizeof(QByteArray) + .size()+1.
-    inline constexpr size_t qByteArrayPvtDataSize(bool isNull = false) {
-        static_assert (sizeof(decltype(std::declval<QByteArray>().size())) == sizeof(int),
-                       "Assumption here is that QByteArray uses ints for indexing (true in Qt5, not true in Qt6)");
-        constexpr size_t padding = sizeof(void *) > sizeof(int) ? sizeof(void *) - sizeof(int) : 0;
-        return isNull ? 0 // null uses a single shared object so basically 0 extra size
-                      : sizeof(int)*3 + padding + sizeof(void *); // not null -- QArrayData has 3 ints and 1 pointer (but pointer offset is padded for alignment on 64-bit)
-    }
+        enum KeyPos : uint8_t { Beginning=0, Middle=1, End=2, KP_Invalid=3 };
+        const KeyPos keyPos;
+
+        TxHash2TxNumMgr(rocksdb::DB *db, const rocksdb::ReadOptions & rdOpts, const rocksdb::WriteOptions &wrOpts,
+                     RecordFile *txnum2txhash, size_t keyBytes /*= 6*/, KeyPos keyPos /*= End*/)
+            : db(db), rdOpts(rdOpts), wrOpts(wrOpts), rf(txnum2txhash), keyBytes(keyBytes), keyPos(keyPos)
+        {
+            if (!this->db || !rf || !this->keyBytes || this->keyBytes > HashLen || this->keyPos >= KP_Invalid)
+                throw BadArgs("Bad argumnets supplied to TxHash2TxNumMgr constructor");
+            mergeOp = db->GetOptions().merge_operator;
+            if (!mergeOp || ! (concatOp = dynamic_cast<ConcatOperator *>(mergeOp.get())))
+                throw BadArgs("This db lacks a merge operator of type `ConcatOperator`");
+        }
+
+        unsigned mergeCount() const { return concatOp->merges.load(); }
+
+        QString dbName() const { return QString::fromStdString(db->GetName()); }
+
+        void insertForBlock(TxNum blockTxNum0, const std::vector<PreProcessedBlock::TxInfo> &txInfos) {
+            const Tic t0;
+            rocksdb::WriteBatch batch;
+            for (TxNum i = 0; i < txInfos.size(); ++i) {
+                const ByteView key = makeKeyFromHash(txInfos[i].hash);
+                const VarInt val(blockTxNum0 + i);
+                // save by appending VarInt. Note that this uses the 'ConcatOperator' class we defined in this file,
+                // which requires rocksdb be compiled with RTTI.
+                if (auto st = batch.Merge(ToSlice(key), ToSlice(val.byteView())); !st.ok())
+                    throw DatabaseError(QString("%1: batch merge fail for txHash %2: %3")
+                                        .arg(dbName(), QString(txInfos[i].hash.toHex()), QString::fromStdString(st.ToString())));
+            }
+            if (auto st = db->Write(wrOpts, &batch) ; !st.ok())
+                throw DatabaseError(QString("%1: batch merge fail: %2").arg(dbName(), QString::fromStdString(st.ToString())));
+            if (t0.msec() >= 50)
+                DebugM(__func__, ": inserted ", txInfos.size(), Util::Pluralize(" hash", txInfos.size()),
+                       " in ", t0.msecStr(), " msec");
+        }
+
+        /// This is called during blockundo. Deletes records from the db having their TxNum >= `txNum`. Requires that
+        /// rf not yet be truncated. This is slow so don't call it with huge numbers of records beyond what fits into a block.
+        void truncateForUndo(const TxNum txNum) {
+            const auto rfNR = rf->numRecords();
+            if (rfNR < txNum) throw DatabaseError(dbName() + ": RecordFile does not have the hashes required for the specified truncation");
+            else if (rfNR == txNum) {
+                // defensive programming warning -- this should never happen
+                Warning() << __func__ << ": called with txNum == RecordFile->numRecords -- FIXME!";
+                return;
+            }
+            const Tic t0;
+            QString err;
+            const auto recs = rf->readRecords(txNum, rfNR - txNum, &err);
+            if (recs.size() != rfNR - txNum || !err.isEmpty())
+                throw DatabaseError(QString("%1: short read count or error reading record file: %2").arg(dbName(), err));
+
+            DebugM(__func__, ": read ", recs.size(), " record(s) from txNums file, elapsed: ", t0.msecStr(), " msec");
+
+            // first read all existing entries from the db -- we must delete the VarInts in their data blobs that
+            // have TxNums > txNum
+            std::vector<rocksdb::Slice> keySlices; keySlices.reserve(recs.size());
+            std::vector<std::string> dbValues;
+            for (size_t i = 0; i < recs.size(); ++i) {
+                const auto bv = makeKeyFromHash(recs[i]);
+                keySlices.emplace_back(bv.charData(), bv.size());
+            }
+            std::vector<rocksdb::Status> statuses = db->MultiGet(rdOpts, keySlices, &dbValues);
+            DebugM(__func__, ": MultiGet on ", statuses.size(), " key(s), elapsed: ", t0.msecStr(), " msec");
+            if (statuses.size() != recs.size() || dbValues.size() != recs.size())
+                throw DatabaseError(dbName() + ": RocksDB MultiGet did not return the proper number of records");
+
+            // next filter out all VarInts >= txNum, deleting records that have no more VarInts left and writing
+            // back records that still have VarInts in them
+            rocksdb::WriteBatch batch;
+            int dels{}, keeps{}, filts{}; // for DEBUG print
+            for (size_t i = 0; i < dbValues.size(); ++i) {
+                if (!statuses[i].ok()) {
+                    if (lastWarnTime.secs() >= 1.0) {
+                        lastWarnTime = Tic();
+                        // not sure what to do here... this should never happen. But warn anyway.
+                        Warning() << __func__ << ": " << dbName() << ", got a non-ok status when reading a key for txhash "
+                                  << recs[i].toHex() << ". Proceeding anyway but there may be DB corruption. "
+                                  << "Start " << APPNAME << " again with -C -C to check the database for consistency.";
+                    }
+                    continue;
+                }
+                auto span = MakeCSpan(dbValues[i]);
+                std::string valBackToDb;
+                while (!span.empty()) {
+                    try {
+                        const VarInt val = VarInt::deserialize(span); // this may throw
+                        if (val.value<TxNum>() >= txNum) {
+                            // skip, filter out...
+                            ++filts;
+                        } else {
+                            // was a collision, keep
+                            valBackToDb.append(val.byteView().charData(), val.size());
+                            ++keeps;
+                        }
+                    } catch (const std::exception &e) {
+                        throw DatabaseFormatError(QString("%1: caught exception in %2: %3").arg(dbName(), __func__, e.what()));
+                    }
+                }
+                if (valBackToDb.empty()) {
+                    // delete, key now has no VarInts
+                    if (auto st = batch.Delete(keySlices[i]); !st.ok()) {
+                        if (lastWarnTime.secs() >= 1.0) {
+                            lastWarnTime = Tic();
+                            Warning() << __func__ << ": " << dbName() << " failed to delete a key from db: "
+                                      << QString::fromStdString(st.ToString()) << ". Continuing anyway ...";
+                        }
+                    }
+                    ++dels;
+                } else {
+                    // keep key, key has some VarInts left
+                    if (auto st = batch.Put(keySlices[i], valBackToDb); !st.ok())
+                        throw DatabaseError(dbName() + ": failed to write back a key to the db: " + QString::fromStdString(st.ToString()));
+                }
+            }
+
+            // and, finally, commit the updates to the DB
+            if (auto st = db->Write(wrOpts, &batch) ; !st.ok())
+                throw DatabaseError(dbName() + ": batch write fail: " + QString::fromStdString(st.ToString()));
+
+            DebugM(__func__, ": txNum: ", txNum, ", nrecs: ", recs.size(), ", dels: ", dels, ", keeps: ", keeps, ", filts: ", filts,
+                   ", elapsed: ", t0.msecStr(), " msec");
+        }
+
+        /// Returns a valid optional containing the TxNum of txHash if txHash is found in the db. A nullopt otherwise.
+        /// May throw DatabaseError if there is a low-level deserialization error.
+        std::optional<TxNum> find(const TxHash &txHash) const {
+            std::optional<TxNum> ret;
+            const auto key = makeKeyFromHash(txHash);
+            auto optBytes = GenericDBGet<QByteArray>(db, key, true, dbName(), true, rdOpts);
+            if (!optBytes) return ret; // missing
+            auto span = MakeCSpan(*optBytes);
+            std::vector<uint64_t> txNums;
+            txNums.reserve(1 + span.size() / 5); // rough heuristic
+            try {
+                while (!span.empty())
+                    txNums.push_back(VarInt::deserialize(span).value<uint64_t>()); // this may throw
+                if (UNLIKELY(txNums.empty())) throw DatabaseFormatError(QString("Missing data for txHash: ") + QString(txHash.toHex()));
+                QString errStr;
+                // we may get more than 1 txNum for a particular key, so examine them all
+                const auto recs = rf->readRandomRecords(txNums, &errStr, true);
+                if (UNLIKELY(recs.size() != txNums.size())) throw DatabaseError("Expected recs.size() == txNums.size()!");
+                size_t i = 0;
+                for (const auto & rec : recs) {
+                    if (rec == txHash) {
+                        // found!
+                        ret = txNums[i];
+                        return ret;
+                    }
+                    ++i;
+                }
+            } catch (const std::exception &e) {
+                throw DatabaseError(dbName() + ": failed lookup for txHash " + QString(txHash.toHex()) + ": " + e.what());
+            }
+            return ret; // if we get here, ret is nullopt and txHash does not exist in db
+        }
+
+        /// Find the TxNums for a batch of hashes. Returns a vector that is exactly the same size as hashes.
+        /// Not-found hashes are std::nullopt optionals. Found hashes will have the correct TxNum for that hash
+        /// filled-in.
+        ///
+        /// May throw DatabaseError on low-level db error.
+        std::vector<std::optional<TxNum>> findMany(const std::vector<TxHash> &hashes) const {
+            std::vector<std::optional<TxNum>> ret;
+            if (hashes.empty()) return ret; // short-circuit return on no work to do
+            const Tic t0;
+            ret.resize(hashes.size());
+            std::vector<rocksdb::Slice> keySlices;
+            std::vector<std::string> dbResults;
+            keySlices.reserve(hashes.size());
+            // build keys
+            for (const auto & hash : hashes)
+                keySlices.push_back(ToSlice(makeKeyFromHash(hash))); // shallow view into bytes in hashes
+            auto statuses = db->MultiGet(rdOpts, keySlices, &dbResults); // this should be faster than single gets..?
+            //DebugM(__func__, ": MultiGet of ", keySlices.size(), " items took ", t0.msecStr(), " msec");
+            if (statuses.size() != hashes.size() || dbResults.size() != hashes.size())
+                throw DatabaseError(dbName() + ": db returned an unexpected number of results"); // should never happen
+            std::vector<uint64_t> recNums;
+            std::vector<std::optional<std::pair<size_t, size_t>>> idx2RecNums;
+            idx2RecNums.resize(hashes.size());
+            recNums.reserve(hashes.size());
+            for (size_t i = 0; i < statuses.size(); ++i) {
+                auto & st = statuses[i];
+                if (st.IsNotFound()) continue; // skip NotFound
+                if (!st.ok()) throw DatabaseError(dbName() + ": got a status that is not ok in findMany: "
+                                                  + QString::fromStdString(st.ToString()));
+                auto & dataBlob = dbResults[i];
+                if (dataBlob.empty()) {
+                    Warning() << dbName() << ": Empty record for " << hashes[i].toHex() << ". FIXME!";
+                    continue;
+                }
+                auto span = MakeCSpan(dataBlob);
+                std::pair<size_t, size_t> p(recNums.size(), recNums.size());
+                while (!span.empty()) {
+                    try {
+                        recNums.push_back(VarInt::deserialize(span).value<uint64_t>());
+                    } catch (const std::exception &e) {
+                        throw DatabaseSerializationError(dbName() + ": failed to deserialize a VarInt: " + e.what());
+                    }
+                    ++p.second;
+                }
+                if (p.second > p.first)
+                    idx2RecNums[i] = p;
+            }
+            QString errStr;
+            const auto recs = rf->readRandomRecords(recNums, &errStr, true);
+            if (!errStr.isEmpty()) DebugM(__func__, ": ", errStr); // DEBUG TODO: Remove me
+            if (UNLIKELY(recs.size() != recNums.size())) throw DatabaseError("Expected recs.size() == recNums.size()!");
+            assert(ret.size() == hashes.size() && ret.size() == idx2RecNums.size());
+            for (size_t i = 0; i < ret.size(); ++i) {
+                auto & optRange = idx2RecNums[i];
+                if (!optRange) continue; // key not found, skip
+                for (size_t j = optRange->first; j < optRange->second; ++j) {
+                    if (recs[j] == hashes[i]) {
+                        // found!
+                        ret[i] = recNums[j]; // mark this in the return set
+                        break;
+                    }
+                }
+            }
+            DebugM(__func__, ": ", ret.size(), " result(s), elapsed ", t0.msecStr(), " msec");
+            return ret;
+        }
+
+        bool exists(const TxHash &txHash) const { return bool(find(txHash)); }
+
+    private:
+        ByteView makeKeyFromHash(const ByteView &bv) const {
+            const auto len = bv.size();
+            if (UNLIKELY(len != HashLen))
+                throw DatabaseFormatError(QString("Hash \"%1\" is not %2 bytes").arg(QString(Util::ToHexFast(bv.substr(0, 80).toByteArray(false)))).arg(HashLen));
+            if (keyPos == End)
+                return bv.substr(len - keyBytes, keyBytes);
+            else if (keyPos == Middle)
+                return bv.substr(len/2 - keyBytes/2, keyBytes);
+            else // Beginning
+                return bv.substr(0, keyBytes);
+        }
+    }; // end class TxHash2TxNumMgr
+
 } // namespace
 
 
@@ -506,16 +760,20 @@ struct Storage::Pvt
         const rocksdb::ReadOptions defReadOpts; ///< avoid creating this each time
         const rocksdb::WriteOptions defWriteOpts; ///< avoid creating this each time
 
-        rocksdb::Options opts, shistOpts;
+        rocksdb::Options opts, shistOpts, txhash2txnumOpts;
         std::weak_ptr<rocksdb::Cache> blockCache; ///< shared across all dbs, caps total block cache size across all db instances
         std::weak_ptr<rocksdb::WriteBufferManager> writeBufferManager; ///< shared across all dbs, caps total memtable buffer size across all db instances
 
-        std::shared_ptr<ConcatOperator> concatOperator;
+        std::shared_ptr<ConcatOperator> concatOperator, concatOperatorTxHash2TxNum;
 
         std::unique_ptr<rocksdb::DB> meta, blkinfo, utxoset,
                                      shist, shunspent, // scripthash_history and scripthash_unspent
-                                     undo; // undo (reorg rewind)
-    } db;
+                                     undo, // undo (reorg rewind)
+                                     txhash2txnum; // new: index of txhash -> txNumsFile
+
+        std::unique_ptr<TxHash2TxNumMgr> txhash2txnumMgr; ///< provides a bit of a higher-level interface into the db
+    };
+    RocksDBs db;
 
     std::unique_ptr<RecordFile> txNumsFile;
     std::unique_ptr<RecordFile> headersFile;
@@ -552,7 +810,7 @@ struct Storage::Pvt
     static constexpr unsigned lruNum2HashSizeCalc(unsigned nItems = 1) {
         // NB: each TxHash (aka QByteArray) actually stores HashLen+1 bytes (QByteArray always appends a nul byte)
         // NB2: each TxHash also has the QArrayData overhead (qByteArrayPvtDataSize())
-        return unsigned( decltype(lruNum2Hash)::itemOverheadBytes() + (nItems * (qByteArrayPvtDataSize() + HashLen+1)) );
+        return unsigned( decltype(lruNum2Hash)::itemOverheadBytes() + (nItems * (Util::qByteArrayPvtDataSize() + HashLen+1)) );
     }
 
     /// Cache BlockHeight -> vector of txHashes for the block (in bitcoind memory order -- little endian).
@@ -561,7 +819,7 @@ struct Storage::Pvt
     /// returns the cost for a particular cache item based on the number of hashes in the vector
     static constexpr unsigned lruHeight2HashSizeCalc(size_t nHashes) {
         // each cache item with nHashes takes roughly this much memory
-        return unsigned( (nHashes * ((HashLen+1) + sizeof(TxHash) + qByteArrayPvtDataSize()))
+        return unsigned( (nHashes * ((HashLen+1) + sizeof(TxHash) + Util::qByteArrayPvtDataSize()))
                          + decltype(lruHeight2Hashes_BitcoindMemOrder)::itemOverheadBytes() );
     }
 
@@ -578,6 +836,8 @@ struct Storage::Pvt
     Mempool mempool; ///< app-wide mempool data -- does not get saved to db. Controller.cpp writes to this
     Mempool::FeeHistogramVec mempoolFeeHistogram; ///< refreshed periodically by refreshMempoolHistogram()
     RWLock mempoolLock;
+
+    Tic lastWarned; ///< to rate-limit potentially spammy warning messages (guarded by blocksLock)
 };
 
 namespace {
@@ -661,7 +921,7 @@ void Storage::startup()
     {   // open all db's ...
 
         // Optimize RocksDB. This is the easiest way to get RocksDB to perform well
-        rocksdb::Options & opts(p->db.opts), &shistOpts(p->db.shistOpts);
+        rocksdb::Options & opts(p->db.opts), &shistOpts(p->db.shistOpts), &txhash2txnumOpts(p->db.txhash2txnumOpts);
         opts.IncreaseParallelism(int(Util::getNPhysicalProcessors()));
         opts.OptimizeLevelStyleCompaction();
 
@@ -688,17 +948,23 @@ void Storage::startup()
         opts.keep_log_file_num = options->db.keepLogFileNum;
         opts.compression = rocksdb::CompressionType::kNoCompression; // for now we test without compression. TODO: characterize what is fastest and best..
         opts.use_fsync = options->db.useFsync; // the false default is perfectly safe, but Jt asked for this as an option, so here it is.
+
         shistOpts = opts; // copy what we just did (will implicitly copy over the shared table_factory and write_buffer_manager)
         shistOpts.merge_operator = p->db.concatOperator = std::make_shared<ConcatOperator>(); // this set of options uses the concat merge operator (we use this to append to history entries in the db)
+
+        txhash2txnumOpts = opts;
+        txhash2txnumOpts.merge_operator = p->db.concatOperatorTxHash2TxNum = std::make_shared<ConcatOperator>();
+
 
         using DBInfoTup = std::tuple<QString, std::unique_ptr<rocksdb::DB> &, const rocksdb::Options &, double>;
         const std::list<DBInfoTup> dbs2open = {
             { "meta", p->db.meta, opts, 0.0005 },
             { "blkinfo" , p->db.blkinfo , opts, 0.02 },
-            { "utxoset", p->db.utxoset, opts, 0.305 },
-            { "scripthash_history", p->db.shist, shistOpts, 0.33 },
-            { "scripthash_unspent", p->db.shunspent, opts, 0.305 },
+            { "utxoset", p->db.utxoset, opts, 0.27 },
+            { "scripthash_history", p->db.shist, shistOpts, 0.30 },
+            { "scripthash_unspent", p->db.shunspent, opts, 0.27 },
             { "undo", p->db.undo, opts, 0.0395 },
+            { "txhash2txnum", p->db.txhash2txnum, txhash2txnumOpts, 0.1 },
         };
         std::size_t memTotal = 0;
         const auto OpenDB = [this, &memTotal](const DBInfoTup &tup) {
@@ -766,6 +1032,8 @@ void Storage::startup()
     loadCheckHeadersInDB();
     // check txnums
     loadCheckTxNumsFileAndBlkInfo();
+    // construct the TxHash2TxNum manager -- depends on the above function having constructed the txNumFile
+    loadCheckTxHash2TxNumMgr();
     // count utxos -- note this depends on "blkInfos" being filled in so it much be called after loadCheckTxNumsFileAndBlkInfo()
     loadCheckUTXOsInDB();
     // very slow check, only runs if -C -C (specified twice)
@@ -783,6 +1051,7 @@ void Storage::gentlyCloseAllDBs()
     std::list<NVP> dbs = {
         NVP{"undo", p->db.undo}, NVP{"scripthash_unspent", p->db.shunspent}, NVP{"scripthash_history", p->db.shist},
         NVP{"utxoset", p->db.utxoset}, NVP{"blkinfo", p->db.blkinfo}, NVP{"meta", p->db.meta},
+        NVP{"txhash2txnum", p->db.txhash2txnum},
     };
     for (auto &[name, db] : dbs) {
         if (!db) continue;
@@ -817,8 +1086,9 @@ auto Storage::stats() const -> Stats
 {
     // TODO ... more stuff here, perhaps
     QVariantMap ret;
-    auto & c = p->db.concatOperator;
+    auto & c = p->db.concatOperator, & c2 = p->db.concatOperatorTxHash2TxNum;
     ret["merge calls"] = c ? c->merges.load() : QVariant();
+    ret["merge calls (txhash2txnum)"] = c2 ? c2->merges.load() : QVariant();
     QVariantMap caches;
     {
         QVariantMap m;
@@ -851,7 +1121,8 @@ auto Storage::stats() const -> Stats
     {
         // db stats
         QVariantMap m;
-        for (const auto ptr : { &p->db.blkinfo, &p->db.meta, &p->db.shist, &p->db.shunspent, &p->db.undo, &p->db.utxoset, }) {
+        for (const auto ptr : { &p->db.blkinfo, &p->db.meta, &p->db.shist, &p->db.shunspent, &p->db.undo, &p->db.utxoset,
+                                &p->db.txhash2txnum }) {
             QVariantMap m2;
             const auto & db = *ptr;
             const QString name = QFileInfo(QString::fromStdString(db->GetName())).fileName();
@@ -1163,6 +1434,23 @@ void Storage::loadCheckTxNumsFileAndBlkInfo()
         throw DatabaseFormatError(QString("BlkInfo txNums do not add up to expected value of %1 != %2."
                                           "\n\nThe database may be corrupted. Delete the datadir and resynch it.\n")
                                   .arg(ct).arg(p->txNumNext.load()));
+    }
+}
+
+// this depends on the above function having been run already
+void Storage::loadCheckTxHash2TxNumMgr()
+{
+    // the below may throw
+    p->db.txhash2txnumMgr = std::make_unique<TxHash2TxNumMgr>(p->db.txhash2txnum.get(), p->db.defReadOpts, p->db.defWriteOpts,
+                                                              p->txNumsFile.get(), 6, TxHash2TxNumMgr::KeyPos::End);
+    // basic sanity checks -- ensure we can read the first, middle, and last hash in the txNumsFile,
+    // and that those hashes exist in the txhash2txnum db
+    if (auto nrecs = p->txNumsFile->numRecords(); nrecs) {
+        for (auto recNum : {uint64_t(0), uint64_t(nrecs/2), uint64_t(nrecs-1)}) {
+            if (!p->db.txhash2txnumMgr->exists(p->txNumsFile->readRecord(recNum)))
+                throw DatabaseError("The txhash2txnum database failed basic sanity checks -- it is missing some records."
+                                    "\n\nThe database may be corrupted. Delete the datadir and resynch it.\n");
+        }
     }
 }
 
@@ -1692,6 +1980,20 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
             if (p->txNumNext != p->txNumsFile->numRecords())
                 throw InternalError("TxNum file and internal txNumNext counter disagree! FIXME!");
 
+            // Asynch task -- the future will automatically be awaited on scope end (even if we throw here!)
+            std::future<void> fut;
+            const auto insertTxHash2TxNum = [&]{  p->db.txhash2txnumMgr->insertForBlock(blockTxNum0, ppb->txInfos); };
+            try {
+                fut = std::async(std::launch::async, insertTxHash2TxNum);
+            } catch (const std::system_error & e) {
+                // failed to launch async, fall-back to synchronous operation
+                if (p->lastWarned.secs() >= 1.0) {
+                    p->lastWarned = Tic();
+                    Warning() << "Failed to launch the txhash2txnumMgr async insertion thread, falling back to synchronous operation: " << e.what();
+                }
+                // do it synchronously
+                insertTxHash2TxNum();
+            }
 
             constexpr bool debugPrt = false;
 
@@ -1970,7 +2272,6 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
         }
         p->mempool.clear(); // make sure mempool is clean (see note above as to why)
 
-
         const auto [tip, header] = p->headerVerifier.lastHeaderProcessed();
         if (tip <= 0 || header.length() != p->blockHeaderSize()) throw UndoInfoMissing("No header to undo");
         prevHeight = unsigned(tip-1);
@@ -2012,6 +2313,22 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
             p->lruHeight2Hashes_BitcoindMemOrder.remove(undo.height);
 
             const auto txNum0 = undo.blkInfo.txNum0;
+
+            // Asynch tast -- the future will automatically be awaited on scope end (even if we throw here!)
+            std::future<void> fut;
+            const auto rmTxHash2TxNum = [&]{  p->db.txhash2txnumMgr->truncateForUndo(txNum0); };
+            try {
+                fut = std::async(std::launch::async, rmTxHash2TxNum);
+            } catch (const std::system_error & e) {
+                // failed to launch async, fall-back to synchronous operation
+                if (p->lastWarned.secs() >= 1.0) {
+                    p->lastWarned = Tic();
+                    Warning() << "Failed to launch the txhash2txnumMgr async undo thread, falling back to synchronous operation: " << e.what();
+                }
+                // do it synchronously
+                rmTxHash2TxNum();
+            }
+
 
             // undo the scripthash histories
             for (const auto & sh : undo.scriptHashes) {
@@ -2067,6 +2384,10 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
                 // oops, we're out of undos now!
                 p->earliestUndoHeight = p->InvalidUndoHeight;
             GenericDBDelete(p->db.undo.get(), uint32_t(undo.height)); // make sure to delete this undo info since it was just applied.
+
+            // wait for the txhash2txnum truncate to finish before we proceed
+            if (fut.valid())
+                fut.wait(); // this may throw if task threw
 
             // lastly, truncate the tx num file and re-set txNumNext to point to this block's txNum0 (thereby recycling it)
             assert(long(p->txNumNext) - long(txNum0) == long(undo.blkInfo.nTx));
@@ -2942,6 +3263,7 @@ namespace {
 #include <csignal>
 namespace {
     // TODO: This is a deadlock handgrenade waiting to go off -- it's not clear how to lock this.. etc.. FIXME
+#if 0
     class [[maybe_unused]] RecentlyConfirmedTxHashCache
     {
         const Storage * const storage;
@@ -3062,261 +3384,10 @@ namespace {
         size_t estMemoryUsage() const {
             // this is a very rough estimate -- note that some of these hashes are shared copies with from the cache we get them from
             return numBlocksCached() * sizeof(Height2TxMap::value_type)
-                    + numTxsCached() * (HashLen + 1 + qByteArrayPvtDataSize() + sizeof(LeTxHashSet::value_type));
+                    + numTxsCached() * (HashLen + 1 + Util::qByteArrayPvtDataSize() + sizeof(LeTxHashSet::value_type));
         }
     };
-
-    namespace DB {
-    /// Manages the txhash2txnum rocksdb table.  The schema is:
-    /// Key: N bytes from POS position from the big-endian ordered (JSON ordered) txhash (default 6 from the End)
-    /// Value: One or more serialized VarInts. Each VarInt represents a "TxNum" (which tells us where the actual hash
-    ///     lives in the txnum2txhash flat file).
-    ///
-    /// This class is mainly a thin wrapper around the rocksdb and RecordFile facilities and they are both
-    /// thread-safe and reentrant. It takes no locks itself.
-    class TxHash2TxNum {
-        rocksdb::DB * const db;
-        const rocksdb::ReadOptions & rdOpts; // references into Storage::Pvt
-        const rocksdb::WriteOptions & wrOpts;
-        RecordFile * const rf;
-        std::shared_ptr<rocksdb::MergeOperator> mergeOp;
-        ConcatOperator * concatOp;  // this is a "weak" pointer into above, dynamic casted down. always valid.
-        mutable Tic lastWarnTime;
-    public:
-        const size_t keyBytes;
-
-        enum KeyPos : uint8_t { Beginning=0, Middle=1, End=2, KP_Invalid=3 };
-        const KeyPos keyPos;
-
-        TxHash2TxNum(rocksdb::DB *db, const rocksdb::ReadOptions & rdOpts, const rocksdb::WriteOptions &wrOpts,
-                     RecordFile *txnum2txhash, size_t keyBytes = 6, KeyPos keyPos = End)
-            : db(db), rdOpts(rdOpts), wrOpts(wrOpts), rf(txnum2txhash), keyBytes(keyBytes), keyPos(keyPos)
-        {
-            if (!this->db || !rf || !this->keyBytes || this->keyBytes > HashLen || this->keyPos >= KP_Invalid)
-                throw BadArgs("Bad argumnets supplied to TxHash2TxNum constructor");
-            mergeOp = db->GetOptions().merge_operator;
-            if (!mergeOp || ! (concatOp = dynamic_cast<ConcatOperator *>(mergeOp.get())))
-                throw BadArgs("This db lacks a merge operator of type `ConcatOperator`");
-        }
-
-        unsigned mergeCount() const { return concatOp->merges.load(); }
-
-        QString dbName() const { return QString::fromStdString(db->GetName()); }
-
-        void insertForBlock(TxNum blockTxNum0, const std::vector<PreProcessedBlock::TxInfo> &txInfos) const {
-            const Tic t0; // DEBUG REMOVE ME
-            rocksdb::WriteBatch batch;
-            for (TxNum i = 0; i < txInfos.size(); ++i) {
-                const ByteView key = makeKeyFromHash(txInfos[i].hash);
-                const VarInt val(blockTxNum0 + i);
-                // save by appending VarInt. Note that this uses the 'ConcatOperator' class we defined in this file,
-                // which requires rocksdb be compiled with RTTI.
-                if (auto st = batch.Merge(ToSlice(key), ToSlice(val.byteView())); !st.ok())
-                    throw DatabaseError(QString("%1: batch merge fail for txHash %2: %3")
-                                        .arg(dbName(), QString(txInfos[i].hash.toHex()), QString::fromStdString(st.ToString())));
-            }
-            if (auto st = db->Write(wrOpts, &batch) ; !st.ok())
-                throw DatabaseError(QString("%1: batch merge fail: %2").arg(dbName(), QString::fromStdString(st.ToString())));
-            //DebugM(__func__, ": inserted ", txInfos.size(), " hashes in ", t0.msecStr(), " msec"); // DEBUG REMOVE ME
-        }
-
-        /// This is called during blockundo. Deletes records from the db having their TxNum >= `txNum`. Requires that
-        /// rf not yet be truncated. This is slow so don't call it with huge numbers of records beyond what fits into a block.
-        void truncateForUndo(const TxNum txNum) const {
-            const auto rfNR = rf->numRecords();
-            if (rfNR < txNum) throw DatabaseError(dbName() + ": RecordFile does not have the hashes required for the specified truncation");
-            else if (rfNR == txNum) {
-                // defensive programming warning -- this should never happen
-                Warning() << __func__ << ": called with txNum == RecordFile->numRecords -- FIXME!";
-                return;
-            }
-            const Tic t0; // DEBUG REMOVE ME
-            QString err;
-            const auto recs = rf->readRecords(txNum, rfNR - txNum, &err);
-            if (recs.size() != rfNR - txNum || !err.isEmpty())
-                throw DatabaseError(QString("%1: short read count or error reading record file: %2").arg(dbName(), err));
-
-            DebugM(__func__, ": read ", recs.size(), " records from txNums file, elapsed: ", t0.msecStr(), " msec");
-
-            // first read all existing entries from the db -- we must delete the VarInts in their data blobs that
-            // have TxNums > txNum
-            std::vector<rocksdb::Slice> keySlices; keySlices.reserve(recs.size());
-            std::vector<std::string> dbValues;
-            for (size_t i = 0; i < recs.size(); ++i) {
-                const auto bv = makeKeyFromHash(recs[i]);
-                keySlices.emplace_back(bv.charData(), bv.size());
-            }
-            std::vector<rocksdb::Status> statuses = db->MultiGet(rdOpts, keySlices, &dbValues);
-            DebugM(__func__, ": MultiGet on ", statuses.size(), " keys, elapsed: ", t0.msecStr(), " msec");
-            if (statuses.size() != recs.size() || dbValues.size() != recs.size())
-                throw DatabaseError(dbName() + ": RocksDB MultiGet did not return the proper number of records");
-
-            // next filter out all VarInts >= txNum, deleting records that have no more VarInts left and writing
-            // back records that still have VarInts in them
-            rocksdb::WriteBatch batch;
-            int dels{}, keeps{}, filts{}; // for DEBUG print
-            for (size_t i = 0; i < dbValues.size(); ++i) {
-                if (!statuses[i].ok()) {
-                    if (lastWarnTime.secs() >= 1.0) {
-                        lastWarnTime = Tic();
-                        // not sure what to do here... this should never happen. But warn anyway.
-                        Warning() << __func__ << ": " << dbName() << ", got a non-ok status when reading a key for txhash "
-                                  << recs[i].toHex() << ". Proceeding anyway but there may be DB corruption. "
-                                  << "Start " << APPNAME << " again with -C -C to check the database for consistency.";
-                    }
-                    continue;
-                }
-                auto span = MakeCSpan(dbValues[i]);
-                std::string valBackToDb;
-                while (!span.empty()) {
-                    try {
-                        const VarInt val = VarInt::deserialize(span); // this may throw
-                        if (val.value<TxNum>() >= txNum) {
-                            // skip, filter out...
-                            ++filts;
-                        } else {
-                            // was a collision, keep
-                            valBackToDb.append(val.byteView().charData(), val.size());
-                            ++keeps;
-                        }
-                    } catch (const std::exception &e) {
-                        throw DatabaseFormatError(QString("%1: caught exception in %2: %3").arg(dbName(), __func__, e.what()));
-                    }
-                }
-                if (valBackToDb.empty()) {
-                    // delete, key now has no VatInts
-                    batch.Delete(keySlices[i]);
-                    ++dels;
-                } else {
-                    // keep key, key has some VarInts left
-                    batch.Put(keySlices[i], valBackToDb);
-                }
-            }
-
-            // and, finally, commit the updates to the DB
-            if (auto st = db->Write(wrOpts, &batch) ; !st.ok())
-                throw DatabaseError(dbName() + ": batch write fail");
-
-            DebugM(__func__, ": txNum: ", txNum, ", nrecs: ", recs.size(), ", dels: ", dels, ", keeps: ", keeps, ", filts: ", filts,
-                   ", elapsed: ", t0.msecStr(), " msec");
-        }
-
-        /// Returns a valid optional containing the TxNum of txHash if txHash is found in the db. A nullopt otherwise.
-        /// May throw DatabaseError if there is a low-level deserialization error.
-        std::optional<TxNum> find(const TxHash &txHash) const {
-            std::optional<TxNum> ret;
-            const auto key = makeKeyFromHash(txHash);
-            auto optBytes = GenericDBGet<QByteArray>(db, key, true, dbName(), true, rdOpts);
-            if (!optBytes) return ret; // missing
-            auto span = MakeCSpan(*optBytes);
-            std::vector<uint64_t> txNums;
-            txNums.reserve(1 + span.size() / 5); // rough heuristic
-            try {
-                while (!span.empty())
-                    txNums.push_back(VarInt::deserialize(span).value<uint64_t>()); // this may throw
-                if (UNLIKELY(txNums.empty())) throw DatabaseFormatError(QString("Missing data for txHash: ") + QString(txHash.toHex()));
-                QString errStr;
-                // we may get more than 1 txNum for a particular key, so examine them all
-                const auto recs = rf->readRandomRecords(txNums, &errStr, true);
-                if (UNLIKELY(recs.size() != txNums.size())) throw DatabaseError("Expected recs.size() == txNums.size()!");
-                size_t i = 0;
-                for (const auto & rec : recs) {
-                    if (rec == txHash) {
-                        // found!
-                        ret = txNums[i];
-                        return ret;
-                    }
-                    ++i;
-                }
-            } catch (const std::exception &e) {
-                throw DatabaseError(dbName() + ": failed lookup for txHash " + QString(txHash.toHex()) + ": " + e.what());
-            }
-            return ret; // if we get here, ret is nullopt and txHash does not exist in db
-        }
-
-        /// Find the TxNums for a batch of hashes. Returns a vector that is exactly the same size as hashes.
-        /// Not-found hashes are std::nullopt optionals. Found hashes will have the correct TxNum for that hash
-        /// filled-in.
-        ///
-        /// May throw DatabaseError on low-level db error.
-        std::vector<std::optional<TxNum>> findMany(const std::vector<TxHash> &hashes) const {
-            std::vector<std::optional<TxNum>> ret;
-            if (hashes.empty()) return ret; // short-circuit return on no work to do
-            const Tic t0; // DEBUG REMOVE ME
-            ret.resize(hashes.size());
-            std::vector<rocksdb::Slice> keySlices;
-            std::vector<std::string> dbResults;
-            keySlices.reserve(hashes.size());
-            // build keys
-            for (const auto & hash : hashes)
-                keySlices.push_back(ToSlice(makeKeyFromHash(hash))); // shallow view into bytes in hashes
-            auto statuses = db->MultiGet(rdOpts, keySlices, &dbResults); // this should be faster than single gets..?
-            //DebugM(__func__, ": MultiGet of ", keySlices.size(), " items took ", t0.msecStr(), " msec");
-            if (statuses.size() != hashes.size() || dbResults.size() != hashes.size())
-                throw DatabaseError(dbName() + ": db returned an unexpected number of results"); // should never happen
-            std::vector<uint64_t> recNums;
-            std::vector<std::optional<std::pair<size_t, size_t>>> idx2RecNums;
-            idx2RecNums.resize(hashes.size());
-            recNums.reserve(hashes.size());
-            for (size_t i = 0; i < statuses.size(); ++i) {
-                auto & st = statuses[i];
-                if (st.IsNotFound()) continue; // skip NotFound
-                if (!st.ok()) throw DatabaseError(dbName() + ": got a status that is not ok in findMany: "
-                                                  + QString::fromStdString(st.ToString()));
-                auto & dataBlob = dbResults[i];
-                if (dataBlob.empty()) {
-                    Warning() << dbName() << ": Empty record for " << hashes[i].toHex() << ". FIXME!";
-                    continue;
-                }
-                auto span = MakeCSpan(dataBlob);
-                std::pair<size_t, size_t> p(recNums.size(), recNums.size());
-                while (!span.empty()) {
-                    try {
-                        recNums.push_back(VarInt::deserialize(span).value<uint64_t>());
-                    } catch (const std::exception &e) {
-                        throw DatabaseSerializationError(dbName() + ": failed to deserialize a VarInt: " + e.what());
-                    }
-                    ++p.second;
-                }
-                if (p.second > p.first)
-                    idx2RecNums[i] = p;
-            }
-            QString errStr;
-            const auto recs = rf->readRandomRecords(recNums, &errStr, true);
-            if (!errStr.isEmpty()) DebugM(__func__, ": ", errStr); // DEBUG TODO: Remove me
-            if (UNLIKELY(recs.size() != recNums.size())) throw DatabaseError("Expected recs.size() == recNums.size()!");
-            assert(ret.size() == hashes.size() && ret.size() == idx2RecNums.size());
-            for (size_t i = 0; i < ret.size(); ++i) {
-                auto & optRange = idx2RecNums[i];
-                if (!optRange) continue; // key not found, skip
-                for (size_t j = optRange->first; j < optRange->second; ++j) {
-                    if (recs[j] == hashes[i]) {
-                        // found!
-                        ret[i] = recNums[j]; // mark this in the return set
-                        break;
-                    }
-                }
-            }
-            DebugM(__func__, ": ", ret.size(), " results, elapsed ", t0.msecStr(), " msec");
-            return ret;
-        }
-
-        bool exists(const TxHash &txHash) const { return bool(find(txHash)); }
-
-    private:
-        ByteView makeKeyFromHash(const ByteView &bv) const {
-            const auto len = bv.size();
-            if (UNLIKELY(len != HashLen))
-                throw DatabaseFormatError(QString("Hash \"%1\" is not %2 bytes").arg(QString(Util::ToHexFast(bv.substr(0, 80).toByteArray(false)))).arg(HashLen));
-            if (keyPos == End)
-                return bv.substr(len - keyBytes, keyBytes);
-            else if (keyPos == Middle)
-                return bv.substr(len/2 - keyBytes/2, keyBytes);
-            else // Beginning
-                return bv.substr(0, keyBytes);
-        }
-    };
-    }; // end namespace DB
+#endif // 0
 
     template<size_t NB>
     auto DeduceSmallestTypeForNumBytes() {
@@ -3552,7 +3623,7 @@ namespace {
         const rocksdb::WriteOptions defWriteOpts;
         const rocksdb::ReadOptions defReadOpts;
 
-        DB::TxHash2TxNum dbhelper(db.get(), defReadOpts, defWriteOpts, rf.get(), NB, DB::TxHash2TxNum::KeyPos(POS));
+        TxHash2TxNumMgr dbhelper(db.get(), defReadOpts, defWriteOpts, rf.get(), NB, TxHash2TxNumMgr::KeyPos(POS));
 
         constexpr size_t batchSize = 50'000;
         Log() << "Using key bytes: " << NB << ", batchSize: " << batchSize;
@@ -3832,7 +3903,7 @@ namespace {
         const Tic t0;
         const rocksdb::ReadOptions defReadOpts;
         const rocksdb::WriteOptions defWriteOpts;
-        DB::TxHash2TxNum dbreader(db.get(), defReadOpts, defWriteOpts, rf.get(), NB, DB::TxHash2TxNum::KeyPos(POS));
+        TxHash2TxNumMgr dbreader(db.get(), defReadOpts, defWriteOpts, rf.get(), NB, TxHash2TxNumMgr::KeyPos(POS));
         /* Testing..
         Log() << "Truncating past 300000000 ...";
         dbreader.truncateForUndo(300000000);

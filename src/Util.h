@@ -955,6 +955,17 @@ namespace Util {
     /// If allowImplicitLoopback=true then "<port>" by itself is interpreted as "127.0.0.1:<port>"
     QPair<QString, quint16> ParseHostPortPair(const QString &hostColonPort, bool allowImplicitLoopback = false);
 
+    /// Tells you the size of a QByteArray::QArrayData object which each QByteArray that is not null has a pointer to.
+    /// This function basically tells you how much extra space a QByteArray takes up just by existing, beyond its base
+    /// sizeof(QByteArray) + .size()+1.
+    inline constexpr size_t qByteArrayPvtDataSize(bool isNull = false) {
+        static_assert (sizeof(decltype(std::declval<QByteArray>().size())) == sizeof(int),
+                       "Assumption here is that QByteArray uses ints for indexing (true in Qt5, not true in Qt6)");
+        constexpr size_t padding = sizeof(void *) > sizeof(int) ? sizeof(void *) - sizeof(int) : 0;
+        return isNull ? 0 // null uses a single shared object so basically 0 extra size
+                      : sizeof(int)*3 + padding + sizeof(void *); // not null -- QArrayData has 3 ints and 1 pointer (but pointer offset is padded for alignment on 64-bit)
+    }
+
 } // end namespace Util
 
 /// Kind of like Go's "defer" statement. Call a lambda (for clean-up code) at scope end.
