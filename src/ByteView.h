@@ -88,6 +88,9 @@ public:
         return deepCopy ? QByteArray{charData(), int(size())}
                         : QByteArray::fromRawData(charData(), int(size()));
     }
+
+    /// Convenience: reimplements super class, but in this case to return a ByteView
+    ByteView substr(size_type pos = 0, size_type count = npos) const { return Base::substr(pos, count); }
 };
 
 /// String literal -> ByteView e.g.: "foo"_bv or "\x01\xff\x07\xab"_bv

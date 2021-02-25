@@ -201,6 +201,9 @@ namespace {
         } else if constexpr (std::is_base_of_v<QByteArray, Thing>) {
             // QByteArray conversion, return reference to data in QByteArray
             return rocksdb::Slice(thing.constData(), size_t(thing.size()));
+        } else if constexpr (std::is_same_v<ByteView, Thing>) {
+            // ByteView conversion, return reference to data in ByteView
+            return rocksdb::Slice(thing.charData(), size_t(thing.size()));
         } else if constexpr (!safeScalar && std::is_scalar_v<Thing> && !std::is_pointer_v<Thing>) {
             return rocksdb::Slice(reinterpret_cast<const char *>(&thing), sizeof(thing)); // returned slice points to raw scalar memory itself
         } else {
@@ -463,7 +466,18 @@ namespace {
         return true;
     }
 
-}
+
+    /// Tells you the size of a QByteArray::QArrayData object which each QByteArray that is not null has a pointer to.
+    /// This function basically tells you how much extra space a QByteArray takes up just by existing, beyond its base
+    /// sizeof(QByteArray) + .size()+1.
+    inline constexpr size_t qByteArrayPvtDataSize(bool isNull = false) {
+        static_assert (sizeof(decltype(std::declval<QByteArray>().size())) == sizeof(int),
+                       "Assumption here is that QByteArray uses ints for indexing (true in Qt5, not true in Qt6)");
+        constexpr size_t padding = sizeof(void *) > sizeof(int) ? sizeof(void *) - sizeof(int) : 0;
+        return isNull ? 0 // null uses a single shared object so basically 0 extra size
+                      : sizeof(int)*3 + padding + sizeof(void *); // not null -- QArrayData has 3 ints and 1 pointer (but pointer offset is padded for alignment on 64-bit)
+    }
+} // namespace
 
 
 struct Storage::Pvt
@@ -524,17 +538,6 @@ struct Storage::Pvt
 
     std::atomic<uint32_t> earliestUndoHeight = InvalidUndoHeight; ///< the purpose of this is to control when we issue "delete" commands to the db for deleting expired undo infos from the undo db
 
-    /// Tells you the size of a QByteArray::QArrayData object which each QByteArray that is not null has a pointer to.
-    /// This function basically tells you how much extra space a QByteArray takes up just by existing, beyond its base
-    /// sizeof(QByteArray) + .size()+1.
-    static constexpr size_t qByteArrayPvtDataSize(bool isNull = false) {
-        static_assert (sizeof(decltype(std::declval<QByteArray>().size())) == sizeof(int),
-                       "Assumption here is that QByteArray uses ints for indexing (true in Qt5, not true in Qt6)");
-        constexpr size_t padding = sizeof(void *) > sizeof(int) ? sizeof(void *) - sizeof(int) : 0;
-        return isNull ? 0 // null uses a single shared object so basically 0 extra size
-                      : sizeof(int)*3 + padding + sizeof(void *); // not null -- QArrayData has 3 ints and 1 pointer (but pointer offset is padded for alignment on 64-bit)
-    }
-
     // Ratios of cacheMemoryBytes that we give to each of the 2 lru caches -- we do 50/50
     static constexpr double kLruNum2HashCacheMemoryWeight = 0.50;
     static constexpr double kLruHeight2HashesCacheMemoryWeight = 1.0 - kLruNum2HashCacheMemoryWeight;
@@ -542,7 +545,7 @@ struct Storage::Pvt
     /// This cache is anticipated to see heavy use for get_history, so is configurable (config option: txhash_cache)
     /// This gets cleared by undoLatestBlock.
     CostCache<TxNum, TxHash> lruNum2Hash; // NOTE: max size in bytes initted in constructor
-    unsigned constexpr lruNum2HashSizeCalc(unsigned nItems = 1) {
+    static constexpr unsigned lruNum2HashSizeCalc(unsigned nItems = 1) {
         // NB: each TxHash (aka QByteArray) actually stores HashLen+1 bytes (QByteArray always appends a nul byte)
         // NB2: each TxHash also has the QArrayData overhead (qByteArrayPvtDataSize())
         return unsigned( decltype(lruNum2Hash)::itemOverheadBytes() + (nItems * (qByteArrayPvtDataSize() + HashLen+1)) );
@@ -552,7 +555,7 @@ struct Storage::Pvt
     /// This is used by the txHashesForBlock function only (which is used by get_merkle and id_from_pos in the RPC protocol).
     CostCache<BlockHeight, QVector<TxHash>> lruHeight2Hashes_BitcoindMemOrder; // NOTE: max size in bytes initted in constructor
     /// returns the cost for a particular cache item based on the number of hashes in the vector
-    unsigned constexpr lruHeight2HashSizeCalc(size_t nHashes) {
+    static constexpr unsigned lruHeight2HashSizeCalc(size_t nHashes) {
         // each cache item with nHashes takes roughly this much memory
         return unsigned( (nHashes * ((HashLen+1) + sizeof(TxHash) + qByteArrayPvtDataSize()))
                          + decltype(lruHeight2Hashes_BitcoindMemOrder)::itemOverheadBytes() );
@@ -2926,3 +2929,446 @@ namespace {
     }
 
 } // end anon namespace
+
+#ifdef ENABLE_TESTS
+#include "App.h"
+#include "Span.h"
+#include "VarInt.h"
+#include "robin_hood/robin_hood.h"
+#include <csignal>
+namespace {
+    // TODO: This is a deadlock handgrenade waiting to go off -- it's not clear how to lock this.. etc.. FIXME
+    class [[maybe_unused]] RecentlyConfirmedTxHashCache
+    {
+        const Storage * const storage;
+        const size_t nTxLimit, nBlocksMinimum;
+
+        using LeTxHash = TxHash;
+        using LeTxHashSet = std::unordered_set<LeTxHash, HashHasher>;
+        using Height2TxMap = std::map<BlockHeight, LeTxHashSet>;
+
+        // To save memory (implicit sharing in Qt), we store tx hashes in the same order as the other cache:
+        // txHashesForBlockInBitcoindMemoryOrder -- this is different than the rest of the app which stores
+        // txhashes in JSON order (big endian).
+        Height2TxMap h2tx; // we store these in bitcoind memory order (little endian!)
+        size_t nTxs = 0;
+
+        mutable size_t cacheHits = 0, cacheMisses = 0;
+
+        const BlockHeight *earliestHeight() const { return !h2tx.empty() ? &h2tx.begin()->first : nullptr; }
+        const BlockHeight *latestHeight() const { return !h2tx.empty() ? &h2tx.rbegin()->first : nullptr; }
+
+        bool loadHeight(const BlockHeight h, const LeTxHash *findTx = nullptr) {
+            auto hashes = storage->txHashesForBlockInBitcoindMemoryOrder(h); // takes blocksLock + blkInfo lock (shared)
+            if (hashes.empty()) throw InternalError(QString("RecentlyConfirmedTxHashCache: height %1 has no txHashes!").arg(h));
+            auto & set = h2tx[h];
+            if (const auto nOld = set.size(); nOld) {
+                // this shouldn't really happen
+                Warning() << "RecentlyConfirmedTxHashCache: nOld is: " << nOld << " for height: " << h << ". FIXME!";
+                nTxs -= nOld;
+                set.clear();
+            }
+            set.insert(hashes.cbegin(), hashes.cend());
+            nTxs += set.size();
+            if (findTx)
+                return set.count(*findTx);
+            return false;
+        }
+
+        bool exceedsLimits() const {
+            if (h2tx.empty()) return false;
+            if (nBlocksMinimum <= h2tx.size()) return false;
+            return nTxs > nTxLimit;
+        }
+
+        void trim() {
+            // trim from oldest first
+            while (exceedsLimits()) {
+                auto it = h2tx.begin();
+                const auto nRm = it->second.size();
+                assert(nTxs >= nRm);
+                nTxs -= nRm;
+                h2tx.erase(it);
+            }
+        }
+
+    public:
+        RecentlyConfirmedTxHashCache(const Storage *storage, size_t nTxSoftLimit, size_t nBlocksMinimum)
+            : storage(storage), nTxLimit(nTxSoftLimit), nBlocksMinimum(nBlocksMinimum) {}
+
+        // Removes all blocks in cache greater than or equal to height (for undo support)
+        size_t popGte(BlockHeight h) {
+            size_t nRm = 0;
+            for (auto it = h2tx.lower_bound(h); it != h2tx.end(); it = h2tx.erase(it))
+                nRm += it->second.size();
+            assert(nTxs >= nRm);
+            nTxs -= nRm;
+            return nRm;
+        }
+
+        // Checks if `tx` exists in cache. If `tx` doesn't exist, it will attempt to go back up to nBlocksMinimum blocks
+        // to find `tx`. If that fails, it will return nullopt.  Returns a valid block height for when `tx` was confirmed
+        // if the `tx` is found.  A nullopt return may or may not mean `tx` exists in the block chain. It does mean that
+        // if it does exist, it was confirmed >nBlockMinimum blocks ago, so we refuse to cache it or even search for it.
+        std::optional<BlockHeight> find(const TxHash &txIn) {
+            const LeTxHash tx = [](auto & txIn) {
+                LeTxHash ret(txIn);
+                std::reverse(ret.begin(), ret.end());  // ensure tx is in little endian order (external code refers to it in big endian order)
+                return ret;
+            }(txIn);
+
+            // search in reverse from latest to oldest blocks we have in cache
+            for (auto rit = h2tx.rbegin(); rit != h2tx.rend(); ++rit) {
+                if (rit->second.count(tx)) {
+                    ++cacheHits;
+                    return rit->first;
+                }
+            }
+            ++cacheMisses;
+
+            const auto optChainHeight = storage->latestHeight(); // takes blkInfo lock (shared)
+            if (!optChainHeight)
+                return std::nullopt; // no blocks yet, return early
+
+            Defer deferedTrim([this]{ trim(); }); // trim on function return, unless we disable this in last loop below
+
+            // catch up -- fast-forward from our latest cached height to blockchain tip
+            // the below code also handles the case where we are empty()
+            for (BlockHeight ht = latestHeight() ? *latestHeight() + 1 : *optChainHeight; ht <= *optChainHeight; ++ht) {
+                if (loadHeight(ht, &tx))
+                    // found in height we just loaded
+                    return ht;
+            }
+
+            // go backward until we hit the limit or we find `tx`, whichever comes first
+            while (!exceedsLimits()) {
+                auto ht = *earliestHeight();
+                if (ht == 0) break; // new chain, ran out of blocks to add
+                deferedTrim.disable(); // disable trimming -- we are going add only 1 past the end so it makes no sense to remove it again on return
+                if (loadHeight(--ht, &tx))
+                    // found in height we just loaded
+                    return ht;
+            }
+            return std::nullopt;
+        }
+
+        size_t numTxsCached() const { return nTxs; }
+        size_t numBlocksCached() const { return h2tx.size(); }
+
+        size_t estMemoryUsage() const {
+            // this is a very rough estimate -- note that some of these hashes are shared copies with from the cache we get them from
+            return numBlocksCached() * sizeof(Height2TxMap::value_type)
+                    + numTxsCached() * (HashLen + 1 + qByteArrayPvtDataSize() + sizeof(LeTxHashSet::value_type));
+        }
+    };
+
+    template<size_t NB>
+    auto DeduceSmallestTypeForNumBytes() {
+        if constexpr (NB == 1) return uint8_t{};
+        else if constexpr (NB == 2) return uint16_t{};
+        else if constexpr (NB <= 4) return uint32_t{};
+        else if constexpr (NB <= 8) return uint64_t{};
+    #ifdef __SIZEOF_INT128__
+        else if constexpr (NB <= 16) return __uint128_t{};
+    #endif
+        else throw std::domain_error("too big");
+    }
+
+    enum class MyPos { Beginning, Middle, End};
+
+    template <size_t NB, MyPos where = MyPos::End>
+    ByteView MakeTxHashByteKey(const ByteView &bv) {
+        const auto len = bv.size();
+        if (UNLIKELY(len != HashLen))
+            throw BadArgs(QString("%1... is not %2 bytes").arg(QString(Util::ToHexFast(bv.substr(0, 8).toByteArray(false)))).arg(HashLen));
+        static_assert(NB > 0 && NB <= HashLen);
+        if constexpr (where == MyPos::End)
+            return bv.substr(len - NB, NB);
+        else if constexpr (where == MyPos::Middle)
+            return bv.substr(len/2 - NB/2, NB);
+        else // Beginning
+            return bv.substr(0, NB);
+    }
+
+    template <size_t NB, MyPos where = MyPos::End, typename KeyType = decltype(DeduceSmallestTypeForNumBytes<NB>())>
+    KeyType MakeTxHashNumericKey(const ByteView &bv) {
+        static_assert(NB <= sizeof(KeyType));
+        static_assert(std::is_pod_v<KeyType> && !std::is_floating_point_v<KeyType>);
+        KeyType ret{};
+        std::memcpy(reinterpret_cast<std::byte *>(&ret), MakeTxHashByteKey<NB, where>(bv).data(), NB);
+        return ret;
+    }
+
+    void findCollisions() {
+        Debug::forceEnable = true;
+        const QString txnumsFile = std::getenv("TFILE") ? std::getenv("TFILE") : "";
+        if (txnumsFile.isEmpty() || !QFile::exists(txnumsFile))
+            throw Exception("Please pass the TFILE env var as a path to an existing \"txnum2hash\" data record file");
+        std::unique_ptr<RecordFile> rf;
+        rf = std::make_unique<RecordFile>(txnumsFile, HashLen, 0x000012e2); // this may throw
+        constexpr size_t NB = 6;
+        using KeyType = decltype(DeduceSmallestTypeForNumBytes<NB>());
+        using CtrType = decltype(DeduceSmallestTypeForNumBytes<NB <= 2 ? (NB == 1 ? 4 : 2) : 1>());
+        const auto nrec = rf->numRecords();
+        Log() << "Records: " << nrec;
+        //std::unordered_map<KeyType, CtrType> cols;
+        robin_hood::unordered_flat_map<KeyType, CtrType> cols;
+        Log() << "Reserving table ...";
+        //std::vector<CtrType> cols(std::numeric_limits<KeyType>::max(), CtrType{0});
+        size_t nCols = 0, maxCol = 0;
+        KeyType maxColVal = 0;
+        cols.reserve(std::min<size_t>(nrec, std::numeric_limits<KeyType>::max()));
+        constexpr size_t batchSize = 50'000;
+        Log() << "Using key bytes: " << NB << ", batchSize: " << batchSize;
+        const Tic t0;
+        for (size_t i = 0; i < nrec; i += batchSize) {
+            if (i && 0 == i % 1'000'000) Debug() << i << "/" << nrec << ", collisions so far: " << nCols << " ...";
+            QString err;
+            const auto recs = rf->readRecords(i, batchSize, &err);
+            for (const auto & rec : recs) {
+                const auto key = MakeTxHashNumericKey<NB, MyPos::Middle>(rec);
+                const auto val = ++cols[key];
+                if (val > 1) {
+                    if (val > maxCol) {
+                        maxCol = size_t(val);
+                        maxColVal = key;
+                    }
+                    ++nCols;
+                    //Log() << "Collision (" << unsigned(val) << ") for bytes: " << rec.toHex().constData() << ", hash value: " << hash;
+                }
+            }
+        }
+        Log() << "Collisions total: " << nCols << ", max col: " << maxCol << ", most common key bytes: "
+              << QByteArray::fromRawData(reinterpret_cast<const char *>(&maxColVal), NB).toHex()
+              << " elapsed: " << t0.secsStr(2) << " sec";
+    }
+    const auto b1 = App::registerBench("txcol", findCollisions);
+
+    auto OpenDB(bool createIfMissing, bool errorIfExists, const QString &path, const QString &name, double memFactor = 0.15)
+    {
+        // Optimize RocksDB. This is the easiest way to get RocksDB to perform well
+        rocksdb::Options opts;
+        opts.IncreaseParallelism(int(Util::getNPhysicalProcessors()));
+        opts.OptimizeLevelStyleCompaction();
+
+        // setup shared block cache
+        rocksdb::BlockBasedTableOptions tableOptions;
+        tableOptions.block_cache = rocksdb::NewLRUCache(Options::DBOpts::defaultMaxMem, -1, false /* strict capacity limit=off, turning it on made db writes sometimes fail */);
+        //std::weak_ptr<rocksdb::Cache> blockCache = tableOptions.block_cache; // save shared_ptr to weak_ptr
+        tableOptions.cache_index_and_filter_blocks = true; // from the docs: this may be a large consumer of memory, cost & cap its memory usage to the cache
+        std::shared_ptr<rocksdb::TableFactory> tableFactory{rocksdb::NewBlockBasedTableFactory(tableOptions)};
+        // shared TableFactory for all db instances
+        opts.table_factory = tableFactory;
+
+        auto writeBufferManager = std::make_shared<rocksdb::WriteBufferManager>(Options::DBOpts::defaultMaxMem / 2, tableOptions.block_cache);
+        opts.write_buffer_manager = writeBufferManager; // will be shared across all DB instances
+
+        // create the DB if it's not already present
+        opts.create_if_missing = createIfMissing;
+        opts.error_if_exists = errorIfExists;
+        opts.max_open_files = Options::DBOpts::defaultMaxOpenFiles; ///< this affects memory usage see: https://github.com/facebook/rocksdb/issues/4112
+        opts.keep_log_file_num = Options::DBOpts::defaultKeepLogFileNum;
+        opts.compression = rocksdb::CompressionType::kNoCompression; // for now we test without compression. TODO: characterize what is fastest and best..
+        opts.use_fsync = Options::DBOpts::defaultUseFsync; // the false default is perfectly safe, but Jt asked for this as an option, so here it is.
+        opts.merge_operator = std::make_shared<ConcatOperator>(); // this set of options uses the concat merge operator (we use this to append to history entries in the db)
+        const size_t mem = std::max(size_t(Options::DBOpts::defaultMaxMem * memFactor), size_t(64*1024));
+        Debug() << "DB \"" << name << "\" mem: " << QString::number(mem / 1024. / 1024., 'f', 2) << " MiB";
+        opts.OptimizeLevelStyleCompaction(mem);
+        for (auto & comp : opts.compression_per_level)
+            comp = rocksdb::CompressionType::kNoCompression; // paranoia -- enforce no compression since our data compresses so poorly
+        rocksdb::Status s;
+        // try and open database
+        std::unique_ptr<rocksdb::DB> db;
+        {
+            // open db, immediately placing the new'd pointer (if any) into a unique_ptr
+            rocksdb::DB *dbraw = nullptr;
+            s = rocksdb::DB::Open(opts, path.toStdString(), &dbraw);
+            db.reset(dbraw);
+        }
+        if (!s.ok() || !db)
+            throw DatabaseError(QString("Error opening %1 database: %2 (path: %3)").arg(name).arg(StatusString(s)).arg(path));
+
+        return std::make_pair(std::move(db), std::move(opts));
+    }
+
+    unsigned mergeOpCt(const rocksdb::Options & opts) {
+        auto *op = opts.merge_operator.get() ? dynamic_cast<const ConcatOperator *>(opts.merge_operator.get()) : nullptr;
+        if (!op) throw BadArgs("opts does not have a merge_operator that is a ConcatOperator *");
+        return op->merges.load();
+    }
+
+    void mkTxDb() {
+        Debug::forceEnable = true;
+        const QString txnumsFile = std::getenv("TFILE") ? std::getenv("TFILE") : "";
+        if (txnumsFile.isEmpty() || !QFile::exists(txnumsFile))
+            throw Exception("Please pass the TFILE env var as a path to an existing \"txnum2hash\" data record file");
+        const QString dbOut = std::getenv("OUTDIR") ? std::getenv("OUTDIR") : "";
+        if (dbOut.isEmpty())
+            throw Exception("Please pass the OUTDIR env var as a path to a directory to create for the tmp db");
+        std::unique_ptr<RecordFile> rf;
+        rf = std::make_unique<RecordFile>(txnumsFile, HashLen, 0x000012e2); // this may throw
+        const auto nrec = rf->numRecords();
+        Log() << "Records: " << nrec;
+
+        Log() << "Opening db ...";
+
+        static std::atomic_bool caughtSig = false;
+        static auto sighandler = [](int sig) {
+            caughtSig = true;
+            Util::AsyncSignalSafe::writeStdErr(Util::AsyncSignalSafe::SBuf{}.append("Caught signal ").append(sig).append(", exiting ..."));
+        };
+        std::signal(SIGINT, sighandler);
+#if defined(Q_OS_UNIX) || defined(SIGQUIT)
+        std::signal(SIGQUIT, sighandler);
+#endif
+        auto [db, opts] = OpenDB(true, true, dbOut, "tmpdb");
+
+        constexpr size_t NB = 6;
+        constexpr size_t batchSize = 50'000;
+        Log() << "Using key bytes: " << NB << ", batchSize: " << batchSize;
+        const Tic t0;
+        const rocksdb::WriteOptions defWriteOpts;
+        for (size_t i = 0; i < nrec; /*i += batchSize*/) {
+            if (UNLIKELY(caughtSig)) break;
+            if (i && 0 == i % 1'000'000) Debug() << i << "/" << nrec << ", merge ops so far: " << mergeOpCt(opts) << " ...";
+            QString err;
+            rocksdb::WriteBatch batch;
+            const auto recs = rf->readRecords(i, batchSize, &err);
+            for (const auto & rec : recs) {
+                const auto key = MakeTxHashByteKey<NB, MyPos::Middle>(rec);
+                const auto val = VarInt(i);
+
+                // save scripthash history for this hashX, by appending to existing history. Note that this uses
+                // the 'ConcatOperator' class we defined in this file, which requires rocksdb be compiled with RTTI.
+                if (auto st = batch.Merge(ToSlice(key), ToSlice(val.bytes())); !st.ok())
+                    throw DatabaseError(QString("batch merge fail for %1").arg(QString(rec.toHex())));
+                ++i;
+            }
+            if (auto st = db->Write(defWriteOpts, &batch) ; !st.ok())
+                throw DatabaseError("batch merge fail");
+        }
+        Log() << "merge operations: " << mergeOpCt(opts) << ", elapsed: " << t0.secsStr(2) << " sec";
+        Log() << "Closing db ...";
+        rocksdb::Status status;
+        rocksdb::FlushOptions fopts;
+        fopts.wait = true; fopts.allow_write_stall = true;
+        status = db->Flush(fopts);
+        if (!status.ok())
+            Warning() << "Flush: " << QString::fromStdString(status.ToString());
+        status = db->FlushWAL(true);
+        if (!status.ok())
+            Warning() << "FlushWAL: " << QString::fromStdString(status.ToString());
+        status = db->Close();
+        if (!status.ok())
+            Warning() << "Close: " << QString::fromStdString(status.ToString());
+        db.reset();
+        rf.reset();
+    }
+
+    const auto b2 = App::registerBench("mktxdb", mkTxDb);
+
+    void chkTxDb() {
+        Debug::forceEnable = true;
+        const QString txnumsFile = std::getenv("TFILE") ? std::getenv("TFILE") : "";
+        if (txnumsFile.isEmpty() || !QFile::exists(txnumsFile))
+            throw Exception("Please pass the TFILE env var as a path to an existing \"txnum2hash\" data record file");
+        const QString dbOut = std::getenv("OUTDIR") ? std::getenv("OUTDIR") : "";
+        if (dbOut.isEmpty())
+            throw Exception("Please pass the OUTDIR env var as a path to a directory to open the db created with mktxdb");
+        std::unique_ptr<RecordFile> rf;
+        rf = std::make_unique<RecordFile>(txnumsFile, HashLen, 0x000012e2); // this may throw
+        const auto nrec = rf->numRecords();
+        Log() << "Records: " << nrec;
+
+        Log() << "Opening db ...";
+
+        static std::atomic_bool caughtSig = false;
+        static auto sighandler = [](int sig) {
+            caughtSig = true;
+            Util::AsyncSignalSafe::writeStdErr(Util::AsyncSignalSafe::SBuf{}.append("Caught signal ").append(sig).append(", exiting ..."));
+        };
+        std::signal(SIGINT, sighandler);
+#if defined(Q_OS_UNIX) || defined(SIGQUIT)
+        std::signal(SIGQUIT, sighandler);
+#endif
+        auto [db, opts] = OpenDB(false, false, dbOut, "tmpdb");
+
+        constexpr size_t NB = 6;
+        constexpr size_t batchSize = 50'000;
+        std::vector<std::pair<std::string, uint64_t>> batch;
+        std::vector<uint64_t> batchNums;
+        batch.reserve(batchSize + 500);
+        batchNums.reserve(batchSize + 500);
+        Log() << "Using key bytes: " << NB << ", batchSize: " << batchSize;
+        const Tic t0;
+        const rocksdb::ReadOptions defReadOpts;
+        std::unique_ptr<rocksdb::Iterator> iter(db->NewIterator(defReadOpts));
+        size_t i = 0, verified = 0;
+        QString err;
+        auto ProcBatch = [&batch, &batchNums, &rf, &err, &verified]{
+            std::sort(batch.begin(), batch.end(), [](const auto & a, const auto & b){
+                return a.second < b.second;
+            });
+            std::sort(batchNums.begin(), batchNums.end());
+            const auto recs = rf->readRandomRecords(batchNums, &err);
+            if (recs.size() != batchNums.size()) throw Exception(QString("short read of records: ") + err);
+            for (size_t i = 0; i < recs.size(); ++i) {
+                const auto &hash = recs[i];
+                const auto txNum = batchNums[i];
+                if (batch[i].second != txNum) throw Exception("txNum mismatch");
+                if (hash.length() != HashLen) throw Exception("bad record");
+                const auto expect = MakeTxHashByteKey<NB, MyPos::Middle>(hash).toByteArray();
+                const auto &keyStr = batch[i].first;
+                const auto key = QByteArray::fromRawData(keyStr.data(), keyStr.size());
+                if (key != expect)
+                    throw Exception(QString("record %1 does not match key. expected: %2, got: %3")
+                                    .arg(txNum).arg(QString(expect.toHex())).arg(QString(key.toHex())));
+                ++verified;
+            }
+            batch.resize(0);
+            batchNums.resize(0);
+        };
+        for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
+            if (UNLIKELY(caughtSig)) break;
+            if (0 == i % 1'000'000) Debug() << "Verified " << verified << "/" << nrec << ", merge ops so far: " << mergeOpCt(opts) << " ...";
+            const auto keySlice = iter->key();
+            const auto valSlice = iter->value();
+            //const auto key = FromSlice(keySlice);
+            const auto val = FromSlice(valSlice);
+            Span<const std::byte> bytes(reinterpret_cast<const std::byte *>(val.constData()), val.size());
+            if (bytes.empty()) throw Exception("Empty db data!");
+            while (!bytes.empty()) {
+                auto vint = VarInt::deserialize(bytes);
+                auto txNum = vint.value<uint64_t>();
+                batch.emplace_back(keySlice.ToString(), txNum);
+                batchNums.push_back(txNum);
+                ++i;
+            }
+            if (batch.size() >= batchSize) {
+                ProcBatch();
+            }
+        }
+        if (!batch.empty()) ProcBatch();
+        iter->Reset();
+        iter.reset();
+
+        Log() << "Read: " << verified << " total, merge operations: " << mergeOpCt(opts) << ", elapsed: " << t0.secsStr(2) << " sec";
+        Log() << "Closing db ...";
+        rocksdb::Status status;
+        rocksdb::FlushOptions fopts;
+        fopts.wait = true; fopts.allow_write_stall = true;
+        status = db->Flush(fopts);
+        if (!status.ok())
+            Warning() << "Flush: " << QString::fromStdString(status.ToString());
+        status = db->FlushWAL(true);
+        if (!status.ok())
+            Warning() << "FlushWAL: " << QString::fromStdString(status.ToString());
+        status = db->Close();
+        if (!status.ok())
+            Warning() << "Close: " << QString::fromStdString(status.ToString());
+    }
+
+    const auto b3 = App::registerBench("chktxdb", chkTxDb);
+
+} // end anon namespace
+#endif
