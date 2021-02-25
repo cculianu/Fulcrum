@@ -3240,7 +3240,7 @@ namespace {
 
                 // save scripthash history for this hashX, by appending to existing history. Note that this uses
                 // the 'ConcatOperator' class we defined in this file, which requires rocksdb be compiled with RTTI.
-                if (auto st = batch.Merge(ToSlice(key), ToSlice(val.bytes())); !st.ok())
+                if (auto st = batch.Merge(ToSlice(key), ToSlice(val.byteView())); !st.ok())
                     throw DatabaseError(QString("batch merge fail for %1").arg(QString(rec.toHex())));
                 ++i;
             }
@@ -3352,7 +3352,7 @@ namespace {
         iter->Reset();
         iter.reset();
 
-        Log() << "Read: " << verified << " total, merge operations: " << mergeOpCt(opts) << ", elapsed: " << t0.secsStr(2) << " sec";
+        Log() << "Verified: " << verified << " total, merge operations: " << mergeOpCt(opts) << ", elapsed: " << t0.secsStr(2) << " sec";
         Log() << "Closing db ...";
         rocksdb::Status status;
         rocksdb::FlushOptions fopts;
