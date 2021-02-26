@@ -1982,18 +1982,24 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
 
             // Asynch task -- the future will automatically be awaited on scope end (even if we throw here!)
             std::future<void> fut;
-            const auto insertTxHash2TxNum = [&]{  p->db.txhash2txnumMgr->insertForBlock(blockTxNum0, ppb->txInfos); };
-            try {
-                fut = std::async(std::launch::async, insertTxHash2TxNum);
-            } catch (const std::system_error & e) {
-                // failed to launch async, fall-back to synchronous operation
-                if (p->lastWarned.secs() >= 1.0) {
-                    p->lastWarned = Tic();
-                    Warning() << "Failed to launch the txhash2txnumMgr async insertion thread, falling back to synchronous operation: " << e.what();
+            if (ppb->txInfos.size() >= 30'000) {
+                const auto insertTxHash2TxNum = [&]{  p->db.txhash2txnumMgr->insertForBlock(blockTxNum0, ppb->txInfos); };
+                try {
+                    fut = std::async(std::launch::async, insertTxHash2TxNum);
+                } catch (const std::system_error & e) {
+                    // failed to launch async, fall-back to synchronous operation
+                    if (p->lastWarned.secs() >= 1.0) {
+                        p->lastWarned = Tic();
+                        Warning() << "Failed to launch the txhash2txnumMgr async insertion thread, falling back to synchronous operation: " << e.what();
+                    }
+                    // do it synchronously
+                    insertTxHash2TxNum();
                 }
-                // do it synchronously
-                insertTxHash2TxNum();
+            } else {
+                // it's faster to do it directly for smaller blocks (avoids thread creation overhead)
+                p->db.txhash2txnumMgr->insertForBlock(blockTxNum0, ppb->txInfos);
             }
+
 
             constexpr bool debugPrt = false;
 
@@ -3262,132 +3268,6 @@ namespace {
 #include "robin_hood/robin_hood.h"
 #include <csignal>
 namespace {
-    // TODO: This is a deadlock handgrenade waiting to go off -- it's not clear how to lock this.. etc.. FIXME
-#if 0
-    class [[maybe_unused]] RecentlyConfirmedTxHashCache
-    {
-        const Storage * const storage;
-        const size_t nTxLimit, nBlocksMinimum;
-
-        using LeTxHash = TxHash;
-        using LeTxHashSet = std::unordered_set<LeTxHash, HashHasher>;
-        using Height2TxMap = std::map<BlockHeight, LeTxHashSet>;
-
-        // To save memory (implicit sharing in Qt), we store tx hashes in the same order as the other cache:
-        // txHashesForBlockInBitcoindMemoryOrder -- this is different than the rest of the app which stores
-        // txhashes in JSON order (big endian).
-        Height2TxMap h2tx; // we store these in bitcoind memory order (little endian!)
-        size_t nTxs = 0;
-
-        mutable size_t cacheHits = 0, cacheMisses = 0;
-
-        const BlockHeight *earliestHeight() const { return !h2tx.empty() ? &h2tx.begin()->first : nullptr; }
-        const BlockHeight *latestHeight() const { return !h2tx.empty() ? &h2tx.rbegin()->first : nullptr; }
-
-        bool loadHeight(const BlockHeight h, const LeTxHash *findTx = nullptr) {
-            auto hashes = storage->txHashesForBlockInBitcoindMemoryOrder(h); // takes blocksLock + blkInfo lock (shared)
-            if (hashes.empty()) throw InternalError(QString("RecentlyConfirmedTxHashCache: height %1 has no txHashes!").arg(h));
-            auto & set = h2tx[h];
-            if (const auto nOld = set.size(); nOld) {
-                // this shouldn't really happen
-                Warning() << "RecentlyConfirmedTxHashCache: nOld is: " << nOld << " for height: " << h << ". FIXME!";
-                nTxs -= nOld;
-                set.clear();
-            }
-            set.insert(hashes.cbegin(), hashes.cend());
-            nTxs += set.size();
-            if (findTx)
-                return set.count(*findTx);
-            return false;
-        }
-
-        bool exceedsLimits() const {
-            if (h2tx.empty()) return false;
-            if (nBlocksMinimum <= h2tx.size()) return false;
-            return nTxs > nTxLimit;
-        }
-
-        void trim() {
-            // trim from oldest first
-            while (exceedsLimits()) {
-                auto it = h2tx.begin();
-                const auto nRm = it->second.size();
-                assert(nTxs >= nRm);
-                nTxs -= nRm;
-                h2tx.erase(it);
-            }
-        }
-
-    public:
-        RecentlyConfirmedTxHashCache(const Storage *storage, size_t nTxSoftLimit, size_t nBlocksMinimum)
-            : storage(storage), nTxLimit(nTxSoftLimit), nBlocksMinimum(nBlocksMinimum) {}
-
-        // Removes all blocks in cache greater than or equal to height (for undo support)
-        size_t popGte(BlockHeight h) {
-            size_t nRm = 0;
-            for (auto it = h2tx.lower_bound(h); it != h2tx.end(); it = h2tx.erase(it))
-                nRm += it->second.size();
-            assert(nTxs >= nRm);
-            nTxs -= nRm;
-            return nRm;
-        }
-
-        // Checks if `tx` exists in cache. If `tx` doesn't exist, it will attempt to go back up to nBlocksMinimum blocks
-        // to find `tx`. If that fails, it will return nullopt.  Returns a valid block height for when `tx` was confirmed
-        // if the `tx` is found.  A nullopt return may or may not mean `tx` exists in the block chain. It does mean that
-        // if it does exist, it was confirmed >nBlockMinimum blocks ago, so we refuse to cache it or even search for it.
-        std::optional<BlockHeight> find(const TxHash &txIn) {
-            const LeTxHash tx = [](auto & txIn) {
-                LeTxHash ret(txIn);
-                std::reverse(ret.begin(), ret.end());  // ensure tx is in little endian order (external code refers to it in big endian order)
-                return ret;
-            }(txIn);
-
-            // search in reverse from latest to oldest blocks we have in cache
-            for (auto rit = h2tx.rbegin(); rit != h2tx.rend(); ++rit) {
-                if (rit->second.count(tx)) {
-                    ++cacheHits;
-                    return rit->first;
-                }
-            }
-            ++cacheMisses;
-
-            const auto optChainHeight = storage->latestHeight(); // takes blkInfo lock (shared)
-            if (!optChainHeight)
-                return std::nullopt; // no blocks yet, return early
-
-            Defer deferedTrim([this]{ trim(); }); // trim on function return, unless we disable this in last loop below
-
-            // catch up -- fast-forward from our latest cached height to blockchain tip
-            // the below code also handles the case where we are empty()
-            for (BlockHeight ht = latestHeight() ? *latestHeight() + 1 : *optChainHeight; ht <= *optChainHeight; ++ht) {
-                if (loadHeight(ht, &tx))
-                    // found in height we just loaded
-                    return ht;
-            }
-
-            // go backward until we hit the limit or we find `tx`, whichever comes first
-            while (!exceedsLimits()) {
-                auto ht = *earliestHeight();
-                if (ht == 0) break; // new chain, ran out of blocks to add
-                deferedTrim.disable(); // disable trimming -- we are going add only 1 past the end so it makes no sense to remove it again on return
-                if (loadHeight(--ht, &tx))
-                    // found in height we just loaded
-                    return ht;
-            }
-            return std::nullopt;
-        }
-
-        size_t numTxsCached() const { return nTxs; }
-        size_t numBlocksCached() const { return h2tx.size(); }
-
-        size_t estMemoryUsage() const {
-            // this is a very rough estimate -- note that some of these hashes are shared copies with from the cache we get them from
-            return numBlocksCached() * sizeof(Height2TxMap::value_type)
-                    + numTxsCached() * (HashLen + 1 + Util::qByteArrayPvtDataSize() + sizeof(LeTxHashSet::value_type));
-        }
-    };
-#endif // 0
 
     template<size_t NB>
     auto DeduceSmallestTypeForNumBytes() {
