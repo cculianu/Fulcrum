@@ -19,6 +19,7 @@
 #include "BTC.h"
 #include "ByteView.h"
 #include "CostCache.h"
+#include "CoTask.h"
 #include "Mempool.h"
 #include "Merkle.h"
 #include "RecordFile.h"
@@ -48,7 +49,6 @@
 #include <cstddef> // for std::byte
 #include <cstdlib>
 #include <cstring> // for memcpy
-#include <future> // for std::launch, std::future
 #include <limits>
 #include <list>
 #include <map>
@@ -56,7 +56,6 @@
 #include <set>
 #include <shared_mutex>
 #include <string>
-#include <system_error>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -838,6 +837,8 @@ struct Storage::Pvt
     RWLock mempoolLock;
 
     Tic lastWarned; ///< to rate-limit potentially spammy warning messages (guarded by blocksLock)
+
+    std::unique_ptr<CoTask> blocksWorker; ///< work to be done in parallel can be submitted to this co-task in addBlock and undoLatestBlock
 };
 
 namespace {
@@ -1041,6 +1042,9 @@ void Storage::startup()
     // load check earliest undo to populate earliestUndoHeight
     loadCheckEarliestUndo();
 
+    // start up the co-task we use in addBlock and undoLatestBlock
+    p->blocksWorker = std::make_unique<CoTask>("Storage Worker");
+
     start(); // starts our thread
 }
 
@@ -1075,6 +1079,7 @@ void Storage::gentlyCloseAllDBs()
 void Storage::cleanup()
 {
     stop(); // joins our thread
+    if (p->blocksWorker) p->blocksWorker.reset(); // stop the co-task
     if (dspsubsmgr) dspsubsmgr->cleanup();
     if (subsmgr) subsmgr->cleanup();
     gentlyCloseAllDBs();
@@ -1981,25 +1986,18 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                 throw InternalError("TxNum file and internal txNumNext counter disagree! FIXME!");
 
             // Asynch task -- the future will automatically be awaited on scope end (even if we throw here!)
-            std::future<void> fut;
-            if (ppb->txInfos.size() >= 30'000) {
-                const auto insertTxHash2TxNum = [&]{  p->db.txhash2txnumMgr->insertForBlock(blockTxNum0, ppb->txInfos); };
-                try {
-                    fut = std::async(std::launch::async, insertTxHash2TxNum);
-                } catch (const std::system_error & e) {
-                    // failed to launch async, fall-back to synchronous operation
-                    if (p->lastWarned.secs() >= 1.0) {
-                        p->lastWarned = Tic();
-                        Warning() << "Failed to launch the txhash2txnumMgr async insertion thread, falling back to synchronous operation: " << e.what();
-                    }
-                    // do it synchronously
-                    insertTxHash2TxNum();
-                }
+            // NOTE: The assumption here is that ppb->txInfos is ok to share amongst threads -- that is, the assumption
+            // is that nothing mutates it.  If that changes, please re-examine this code.
+            CoTask::Future fut; // if valid, will auto-wait for us on scope end
+            if (ppb->txInfos.size() > 1000) {
+                // submit this to the co-task for blocks with enough txs
+                fut = p->blocksWorker->submitWork([&]{
+                    p->db.txhash2txnumMgr->insertForBlock(blockTxNum0, ppb->txInfos);
+                });
             } else {
-                // it's faster to do it directly for smaller blocks (avoids thread creation overhead)
+                // otherwise just do the work ourselves immediately here
                 p->db.txhash2txnumMgr->insertForBlock(blockTxNum0, ppb->txInfos);
             }
-
 
             constexpr bool debugPrt = false;
 
@@ -2321,20 +2319,9 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
             const auto txNum0 = undo.blkInfo.txNum0;
 
             // Asynch tast -- the future will automatically be awaited on scope end (even if we throw here!)
-            std::future<void> fut;
-            const auto rmTxHash2TxNum = [&]{  p->db.txhash2txnumMgr->truncateForUndo(txNum0); };
-            try {
-                fut = std::async(std::launch::async, rmTxHash2TxNum);
-            } catch (const std::system_error & e) {
-                // failed to launch async, fall-back to synchronous operation
-                if (p->lastWarned.secs() >= 1.0) {
-                    p->lastWarned = Tic();
-                    Warning() << "Failed to launch the txhash2txnumMgr async undo thread, falling back to synchronous operation: " << e.what();
-                }
-                // do it synchronously
-                rmTxHash2TxNum();
-            }
-
+            // Note: we await the result later down in this function before we truncate the txNumsFile. (Assumption
+            // here is that the txNumsFile has all the hashes we want to delete until the below operation is done).
+            CoTask::Future fut = p->blocksWorker->submitWork([&]{ p->db.txhash2txnumMgr->truncateForUndo(txNum0);});
 
             // undo the scripthash histories
             for (const auto & sh : undo.scriptHashes) {
@@ -2391,9 +2378,10 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
                 p->earliestUndoHeight = p->InvalidUndoHeight;
             GenericDBDelete(p->db.undo.get(), uint32_t(undo.height)); // make sure to delete this undo info since it was just applied.
 
-            // wait for the txhash2txnum truncate to finish before we proceed
-            if (fut.valid())
-                fut.wait(); // this may throw if task threw
+            // Wait for the txhash2txnum truncate to finish before we proceed, since that co-task assumes the txNumsFile
+            // won't change.
+            if (fut.future.valid())
+                fut.future.get(); // this may throw if task threw
 
             // lastly, truncate the tx num file and re-set txNumNext to point to this block's txNum0 (thereby recycling it)
             assert(long(p->txNumNext) - long(txNum0) == long(undo.blkInfo.nTx));
