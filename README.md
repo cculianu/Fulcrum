@@ -223,3 +223,9 @@ Sure!  Send **BCH** here:
 [![bitcoincash:qphax4s4n9h60jxj2fkrjs35w2tvgd4wzvf52cgtzc](https://raw.githubusercontent.com/cculianu/DonateSpareChange/master/donate.png)](bitcoincash:qphax4s4n9h60jxj2fkrjs35w2tvgd4wzvf52cgtzc)
 
 You may also send **BTC** to the BTC-equivalent of the above address, which is: **`1BCHBCH6TXBaXyc5HReLBm1sNytBF2kkPD`**
+
+---
+
+### Sponsors
+
+![General Protocols](https://c3-soft.com/imgs/general-protocols.png)
