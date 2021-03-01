@@ -476,6 +476,10 @@ namespace {
         return true;
     }
 
+    /// Thrown if user hits Ctrl-C / app gets a signal while we run the slow db checks
+    struct UserInterrupted : public Exception { using Exception::Exception; ~UserInterrupted() override; };
+    UserInterrupted::~UserInterrupted() {} // weak vtable warning suppression
+
     /// Manages the txhash2txnum rocksdb table.  The schema is:
     /// Key: N bytes from POS position from the big-endian ordered (JSON ordered) txhash (default 6 from the End)
     /// Value: One or more serialized VarInts. Each VarInt represents a "TxNum" (which tells us where the actual hash
@@ -769,8 +773,39 @@ namespace {
             else
                 GenericDBDelete(db, key, QString{}, wrOpts);
         }
+        // Deletes *all* keys from db! May throw.
+        void deleteAllEntries() {
+            std::string firstKey, endKey;
+            {
+                std::unique_ptr<rocksdb::Iterator> iter(db->NewIterator(rdOpts));
+                iter->SeekToFirst();
+                if (iter->Valid())
+                    firstKey = iter->key().ToString();
+                iter->SeekToLast();
+                if (iter->Valid())
+                    endKey = iter->key().ToString();
+            }
+            if (!endKey.empty()) {
+                endKey.insert(endKey.end(), char(0xff)); // make sure our lastKey spec is larger than the actual lastKey
+                Debug() << "Deleting keys in the range [" << Util::ToHexFast(QByteArray::fromStdString(firstKey)) << ", "
+                        << Util::ToHexFast(QByteArray::fromStdString(endKey)) << "] ...";
+            }
+            rocksdb::FlushOptions fopts;
+            fopts.wait = true; fopts.allow_write_stall = true;
+            if (auto st = db->DeleteRange(wrOpts, db->DefaultColumnFamily(), firstKey, endKey);
+                    !st.ok() || !(st = db->Flush(fopts)).ok())
+                throw DatabaseError(dbName() + ": failed to delete all keys: " + QString::fromStdString(st.ToString()));
+            std::unique_ptr<rocksdb::Iterator> iter(db->NewIterator(rdOpts));
+            iter->SeekToFirst();
+            if (iter->Valid())
+                throw InternalError(dbName() + ": delete all keys failed -- iterator still points to a row! FIXME!");
+            largestTxNumSeen = -1;
+            saveLargestTxNumSeen();
+        }
 
     public:
+        // -- Utility / consistency check, etc ..
+
         void consistencyCheck() { // this throws if the checks fail
             const Tic t0;
             Log() << "CheckDB: Verifying txhash index (this may take some time) ...";
@@ -809,7 +844,7 @@ namespace {
             const auto nrec = rf->numRecords();
             for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
                 if (UNLIKELY(0 == i % 100 && ourApp && ourApp->signalsCaught()))
-                    throw Exception("User interrupted, aborting check"); // if the user hits Ctrl-C, stop the operation
+                    throw UserInterrupted("User interrupted, aborting check"); // if the user hits Ctrl-C, stop the operation
                 if (i && 0 == i % 1'000'000) {
                     *(0 == i % 5'000'000 ? std::make_unique<Log>() : std::make_unique<Debug>())
                     << "Verified " << verified << "/" << nrec << ", merge ops so far: " << mergeCount() << " ...";
@@ -838,34 +873,38 @@ namespace {
             Log() << "CheckDB: txhash index verified " << verified << " entries in " << t0.secsStr(1) << " secs";
         }
 
-        // Deletes *all* keys from db! May throw.
-        void deleteAllEntries() {
-            std::string firstKey, endKey;
-            {
-                std::unique_ptr<rocksdb::Iterator> iter(db->NewIterator(rdOpts));
-                iter->SeekToFirst();
-                if (iter->Valid())
-                    firstKey = iter->key().ToString();
-                iter->SeekToLast();
-                if (iter->Valid())
-                    endKey = iter->key().ToString();
+        void rebuildDB() {
+            deleteAllEntries();
+
+            constexpr size_t batchSize = 50'000;
+            Debug() << "Using key bytes: " << keyBytes << ", batchSize: " << batchSize;
+            const Tic t0;
+            App *ourApp = app();
+            const auto nrec = rf->numRecords();
+            std::vector<PreProcessedBlock::TxInfo> fakeInfos;
+            for (size_t i = 0; i < nrec; /*i += batchSize*/) {
+                if (UNLIKELY(0 == i % 100 && ourApp && ourApp->signalsCaught()))
+                    throw UserInterrupted("User interrupted, aborting check"); // if the user hits Ctrl-C, stop the operation
+                if (i && 0 == i % 1'000'000) {
+                    const double pct = double(i) * 100. / nrec;
+                    Log() << "Progress: " << QString::number(pct, 'f', 1) << "%, merge ops so far: " << mergeCount();
+                }
+                QString err;
+                const auto recs = rf->readRecords(i, std::min<size_t>(batchSize, rf->numRecords() - i), &err);
+                if (!err.isEmpty()) throw InternalError(QString("Got error from RecordFile: ") + err);
+                // fake it
+                fakeInfos.resize(recs.size());
+                for (size_t j = 0; j < recs.size(); ++j)
+                    fakeInfos[j].hash = recs[j];
+                insertForBlock(i, fakeInfos); // this throws on error
+                i += fakeInfos.size();
             }
-            if (!endKey.empty()) {
-                endKey.insert(endKey.end(), char(0xff)); // make sure our lastKey spec is larger than the actual lastKey
-                Debug() << "Deleting keys in the range [" << Util::ToHexFast(QByteArray::fromStdString(firstKey)) << ", "
-                        << Util::ToHexFast(QByteArray::fromStdString(endKey)) << "] ...";
-            }
+            fakeInfos.clear();
             rocksdb::FlushOptions fopts;
             fopts.wait = true; fopts.allow_write_stall = true;
-            if (auto st = db->DeleteRange(wrOpts, db->DefaultColumnFamily(), firstKey, endKey);
-                    !st.ok() || !(st = db->Flush(fopts)).ok())
-                throw DatabaseError(dbName() + ": failed to delete all keys: " + QString::fromStdString(st.ToString()));
-            std::unique_ptr<rocksdb::Iterator> iter(db->NewIterator(rdOpts));
-            iter->SeekToFirst();
-            if (iter->Valid())
-                throw InternalError(dbName() + ": delete all keys failed -- iterator still points to a row! FIXME!");
-            largestTxNumSeen = -1;
-            saveLargestTxNumSeen();
+            if (auto st = db->Flush(fopts); !st.ok())
+                Warning() << "DB Flush error: " << QString::fromStdString(st.ToString());
+            Log() << "Indexed " << nrec << " txhash entries, elapsed: " << t0.secsStr(2) << " sec";
         }
     }; // end class TxHash2TxNumMgr
 
@@ -1589,29 +1628,44 @@ void Storage::loadCheckTxHash2TxNumMgr()
         Warning() << "The txhash index is disabled. Some RPC commands will not be available to clients.";
         return;
     }
-    // basic sanity checks -- ensure we can read the first, middle, and last hash in the txNumsFile,
-    // and that those hashes exist in the txhash2txnum db
-    const QString errMsg = "The txhash2txnum database failed basic sanity checks -- it is missing some records."
-                           "\n\nThe database may be corrupted. Delete the datadir and resynch it.\n";
-    const auto nrecs = p->txNumsFile->numRecords();
-    if (nrecs) {
-        for (auto recNum : {uint64_t(0), uint64_t(nrecs/2), uint64_t(nrecs-1)}) {
-            if (!p->db.txhash2txnumMgr->exists(p->txNumsFile->readRecord(recNum)))
-                throw DatabaseError(errMsg);
+
+    try {
+        // basic sanity checks -- ensure we can read the first, middle, and last hash in the txNumsFile,
+        // and that those hashes exist in the txhash2txnum db
+        const QString errMsg = "The txhash index failed basic sanity checks -- it is missing some records.";
+        const auto nrecs = p->txNumsFile->numRecords();
+        if (nrecs) {
+            for (auto recNum : {uint64_t(0), uint64_t(nrecs/2), uint64_t(nrecs-1)}) {
+                if (!p->db.txhash2txnumMgr->exists(p->txNumsFile->readRecord(recNum)))
+                    throw DatabaseError(errMsg);
+            }
+        } else {
+            // sanity check on empty db: if no records, db should also have no rows
+            std::unique_ptr<rocksdb::Iterator> it(p->db.txhash2txnum->NewIterator(p->db.defReadOpts));
+            for (it->SeekToFirst(); it->Valid(); it->Next()) {
+                throw DatabaseFormatError(QString("Failed invariant: empty txNum file should mean empty db; ") + errMsg);
+            }
         }
-    } else {
-        // sanity check on empty db: if no records, db should also have no rows
-        std::unique_ptr<rocksdb::Iterator> it(p->db.txhash2txnum->NewIterator(p->db.defReadOpts));
-        for (it->SeekToFirst(); it->Valid(); it->Next()) {
-            throw DatabaseFormatError(QString("Failed invariant: empty txNum file should mean empty db; ") + errMsg);
+
+        if (p->db.txhash2txnumMgr->maxTxNumSeenInDB()+1 != int64_t(nrecs))
+            throw DatabaseFormatError(QString("Failed invariant: txNumCount != nrecs; ") + errMsg);
+
+        if (options->doSlowDbChecks) // require the slow check for this one
+            p->db.txhash2txnumMgr->consistencyCheck();
+    } catch (const DatabaseError &e) {
+        // Database error -- user either lacks the database (upgrade needed) or they have it and it is corrupted --
+        // attempt to rebuild it.
+        if (p->db.txhash2txnumMgr->maxTxNumSeenInDB() > -1) {
+            Warning() << e.what();
+            Log() << "Rebuilding txhash index, please wait ...";
+        } else {
+            Debug() << e.what();
+            Log() << "Upgrading database, this may take from 1-10 minutes, please wait ...";
+            Log() << "If you wish to decline this database upgrade, then restart " << APPNAME << " with argument "
+                  << "\"--no-txhash-index\"";
         }
+        p->db.txhash2txnumMgr->rebuildDB();
     }
-
-    if (p->db.txhash2txnumMgr->maxTxNumSeenInDB()+1 != int64_t(nrecs))
-        throw DatabaseFormatError(QString("Failed invariant: txNumCount != nrecs; ") + errMsg);
-
-    if (options->doSlowDbChecks) // require the slow check for this one
-        p->db.txhash2txnumMgr->consistencyCheck();
 }
 
 // NOTE: this must be called *after* loadCheckTxNumsFileAndBlkInfo(), because it needs a valid p->txNumNext
@@ -1715,9 +1769,10 @@ void Storage::loadCheckUTXOsInDB()
                     throw DatabaseError(msg);
                 }
                 if (0 == ++p->utxoCt % 100'000) {
-                    *(0 == p->utxoCt % 2'500'000 ? std::make_unique<Log>() : std::make_unique<Debug>()) << "CheckDB: Verified " << p->utxoCt << " utxos ...";
+                    *(0 == p->utxoCt % 2'500'000 ? std::make_unique<Log>() : std::make_unique<Debug>())
+                            << "CheckDB: Verified " << p->utxoCt << " utxos ...";
                 } else if (0 == p->utxoCt % 1'000 && app() && app()->signalsCaught()) {
-                    throw Exception("User interrupted, aborting check");
+                    throw UserInterrupted("User interrupted, aborting check");
                 }
             }
 
