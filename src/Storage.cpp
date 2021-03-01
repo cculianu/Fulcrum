@@ -490,6 +490,7 @@ namespace {
         std::shared_ptr<rocksdb::MergeOperator> mergeOp;
         ConcatOperator * concatOp;  // this is a "weak" pointer into above, dynamic casted down. always valid.
         Tic lastWarnTime; ///< this is not guarded by any locks. Assumption is calling code always holds an exclusive lock when calling truncateForUndo()
+        int64_t largestTxNumSeen = -1;
     public:
         const size_t keyBytes;
 
@@ -505,11 +506,16 @@ namespace {
             mergeOp = db->GetOptions().merge_operator;
             if (!mergeOp || ! (concatOp = dynamic_cast<ConcatOperator *>(mergeOp.get())))
                 throw BadArgs("This db lacks a merge operator of type `ConcatOperator`");
+            loadLargestTxNumSeen();
+            Debug() << "TxHash2TxNumMgr: largestTxNumSeen = " << largestTxNumSeen;
         }
 
         unsigned mergeCount() const { return concatOp->merges.load(); }
 
         QString dbName() const { return QString::fromStdString(db->GetName()); }
+
+        /// Returns the largest tx num we have ever inserted into the db, or -1 if no txnums were inserted
+        int64_t maxTxNumSeenInDB() const { return largestTxNumSeen; }
 
         void insertForBlock(TxNum blockTxNum0, const std::vector<PreProcessedBlock::TxInfo> &txInfos) {
             const Tic t0;
@@ -525,6 +531,10 @@ namespace {
             }
             if (auto st = db->Write(wrOpts, &batch) ; !st.ok())
                 throw DatabaseError(QString("%1: batch merge fail: %2").arg(dbName(), QString::fromStdString(st.ToString())));
+            if (!txInfos.empty()) {
+                largestTxNumSeen = blockTxNum0 + txInfos.size() - 1;
+                saveLargestTxNumSeen();
+            }
             if (t0.msec() >= 50)
                 DebugM(__func__, ": inserted ", txInfos.size(), Util::Pluralize(" hash", txInfos.size()),
                        " in ", t0.msecStr(), " msec");
@@ -613,6 +623,11 @@ namespace {
             // and, finally, commit the updates to the DB
             if (auto st = db->Write(wrOpts, &batch) ; !st.ok())
                 throw DatabaseError(dbName() + ": batch write fail: " + QString::fromStdString(st.ToString()));
+
+            const int64_t txNumI = int64_t(txNum);
+             // we always add at the end and truncare at the end; this invariant should always hold
+            largestTxNumSeen = std::max(txNumI - 1, int64_t{-1});
+            saveLargestTxNumSeen();
 
             DebugM(__func__, ": txNum: ", txNum, ", nrecs: ", recs.size(), ", dels: ", dels, ", keeps: ", keeps, ", filts: ", filts,
                    ", elapsed: ", t0.msecStr(), " msec");
@@ -731,6 +746,25 @@ namespace {
                 return bv.substr(len/2 - keyBytes/2, keyBytes);
             else // Beginning
                 return bv.substr(0, keyBytes);
+        }
+        QByteArray makeLargestTxNumSeenKey() const {
+            auto ret = QByteArrayLiteral("+largestTxNumSeen");
+            if (size_t(ret.length()) <= keyBytes)
+                // ensure a key that can never exist in db for a real tx hash (> keyBytes)
+                ret.append(keyBytes - size_t(ret.length()) + 1, '-');
+            return ret;
+        }
+        void loadLargestTxNumSeen() {
+            auto opt = GenericDBGet<int64_t>(db, makeLargestTxNumSeenKey(), true, QString{}, false, rdOpts);
+            if (opt && *opt >= 0) largestTxNumSeen = *opt;
+            else largestTxNumSeen = -1;
+        }
+        void saveLargestTxNumSeen() const {
+            const auto key = makeLargestTxNumSeenKey();
+            if (largestTxNumSeen > -1)
+                GenericDBPut(db, key, largestTxNumSeen, QString{}, wrOpts);
+            else
+                GenericDBDelete(db, key, QString{}, wrOpts);
         }
     }; // end class TxHash2TxNumMgr
 
@@ -1448,15 +1482,30 @@ void Storage::loadCheckTxHash2TxNumMgr()
     // the below may throw
     p->db.txhash2txnumMgr = std::make_unique<TxHash2TxNumMgr>(p->db.txhash2txnum.get(), p->db.defReadOpts, p->db.defWriteOpts,
                                                               p->txNumsFile.get(), 6, TxHash2TxNumMgr::KeyPos::End);
+    if (!hashTxHashIndex()) {
+        Warning() << "The txhash index is disabled. Some RPC commands will not be available to clients.";
+        return;
+    }
     // basic sanity checks -- ensure we can read the first, middle, and last hash in the txNumsFile,
     // and that those hashes exist in the txhash2txnum db
-    if (auto nrecs = p->txNumsFile->numRecords(); nrecs) {
+    const QString errMsg = "The txhash2txnum database failed basic sanity checks -- it is missing some records."
+                           "\n\nThe database may be corrupted. Delete the datadir and resynch it.\n";
+    const auto nrecs = p->txNumsFile->numRecords();
+    if (nrecs) {
         for (auto recNum : {uint64_t(0), uint64_t(nrecs/2), uint64_t(nrecs-1)}) {
             if (!p->db.txhash2txnumMgr->exists(p->txNumsFile->readRecord(recNum)))
-                throw DatabaseError("The txhash2txnum database failed basic sanity checks -- it is missing some records."
-                                    "\n\nThe database may be corrupted. Delete the datadir and resynch it.\n");
+                throw DatabaseError(errMsg);
+        }
+    } else {
+        // sanity check on empty db: if no records, db should also have no rows
+        std::unique_ptr<rocksdb::Iterator> it(p->db.txhash2txnum->NewIterator(p->db.defReadOpts));
+        for (it->SeekToFirst(); it->Valid(); it->Next()) {
+            throw DatabaseFormatError(QString("Failed invariant: empty txNum file should mean empty db; ") + errMsg);
         }
     }
+
+    if (p->db.txhash2txnumMgr->maxTxNumSeenInDB()+1 != int64_t(nrecs))
+        throw DatabaseFormatError(QString("Failed invariant: txNumCount != nrecs; ") + errMsg);
 }
 
 // NOTE: this must be called *after* loadCheckTxNumsFileAndBlkInfo(), because it needs a valid p->txNumNext
@@ -1989,14 +2038,16 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
             // NOTE: The assumption here is that ppb->txInfos is ok to share amongst threads -- that is, the assumption
             // is that nothing mutates it.  If that changes, please re-examine this code.
             CoTask::Future fut; // if valid, will auto-wait for us on scope end
-            if (ppb->txInfos.size() > 1000) {
-                // submit this to the co-task for blocks with enough txs
-                fut = p->blocksWorker->submitWork([&]{
+            if (hashTxHashIndex()) {
+                if (ppb->txInfos.size() > 1000) {
+                    // submit this to the co-task for blocks with enough txs
+                    fut = p->blocksWorker->submitWork([&]{
+                        p->db.txhash2txnumMgr->insertForBlock(blockTxNum0, ppb->txInfos);
+                    });
+                } else {
+                    // otherwise just do the work ourselves immediately here
                     p->db.txhash2txnumMgr->insertForBlock(blockTxNum0, ppb->txInfos);
-                });
-            } else {
-                // otherwise just do the work ourselves immediately here
-                p->db.txhash2txnumMgr->insertForBlock(blockTxNum0, ppb->txInfos);
+                }
             }
 
             constexpr bool debugPrt = false;
@@ -2318,10 +2369,13 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
 
             const auto txNum0 = undo.blkInfo.txNum0;
 
-            // Asynch tast -- the future will automatically be awaited on scope end (even if we throw here!)
+            // Asynch task -- the future will automatically be awaited on scope end (even if we throw here!)
             // Note: we await the result later down in this function before we truncate the txNumsFile. (Assumption
             // here is that the txNumsFile has all the hashes we want to delete until the below operation is done).
-            CoTask::Future fut = p->blocksWorker->submitWork([&]{ p->db.txhash2txnumMgr->truncateForUndo(txNum0);});
+            CoTask::Future fut;
+
+            if (hashTxHashIndex())
+                fut = p->blocksWorker->submitWork([&]{ p->db.txhash2txnumMgr->truncateForUndo(txNum0);});
 
             // undo the scripthash histories
             for (const auto & sh : undo.scriptHashes) {
@@ -3500,7 +3554,7 @@ namespace {
             if (UNLIKELY(caughtSig)) break;
             if (i && 0 == i % 1'000'000) Debug() << i << "/" << nrec << ", merge ops so far: " << mergeOpCt(opts) << " ...";
             QString err;
-            const auto recs = rf->readRecords(i, batchSize, &err);
+            const auto recs = rf->readRecords(i, std::min<size_t>(batchSize, rf->numRecords() - i), &err);
             if (!err.isEmpty()) throw Exception(QString("Got error from RecordFile: ") + err);
             // fake it
             std::vector<PreProcessedBlock::TxInfo> fakeInfos;

@@ -285,6 +285,9 @@ public:
     /// Takes a shared lock and returns the cached mempool histogram (calculated periodically in refreshMempoolHistogram above)
     Mempool::FeeHistogramVec mempoolHistogram() const;
 
+    /// Thread-safe. Test whether the txhash index is enabled. Default true. Comes from CLI options: --no-txhash-index.
+    bool hashTxHashIndex() const { return !options->noTxHashIndex; }
+
     // --- DUMP methods --- (used for debugging, largely)
 
     using DumpProgressFunc = std::function<void(size_t)>;
@@ -368,6 +371,8 @@ private:
     void loadCheckTxHash2TxNumMgr(); ///< may throw -- called from startup()
     void loadCheckEarliestUndo(); ///< may throw -- called from startup()
 
+    void rebuildTxHash2TxNumTable(); ///< called from startup(), does a full rebuild of the txhash2num table from the TxNumsFile.
+
     std::optional<Header> headerForHeight_nolock(BlockHeight height, QString *errMsg = nullptr) const;
     std::vector<Header> headersFromHeight_nolock_nocheck(BlockHeight height, unsigned count, QString *errMsg = nullptr) const;
 
@@ -434,6 +439,17 @@ RocksDB: "scripthash_unspent"
   using this scheme. I tried a read-modify-write approach (keying off just HashX) and it was painfully slow on synch.
   This is much faster to synch.
 
+RocksDB: "txhash2txnum"
+  Key: The last 6 bytes of the txhash in question (txhash bytes being in big endian byte order, i.e. JSON byte order).
+  Value: One or more serialized VarInts. Each VarInt represents a "TxNum" (which tells us where the actual hash lives
+    in the txnum2txhash flat file).
+  Comments: This table is basically a hash table of txhash -> txNum and it allows us to answer questions such as whether
+    a particular tx exists in the blockchain, and if so, which block it was confirmed in.  Used by some of the newer
+    RPCs. Note that to save space the keys of our hash table are just the last 6 bytes of the txhash, which is fine
+    since collisions will be relatively rare for quite some time in the future. If there is a collision then simply
+    there will be more than 1 VarInt(TxNum) in that particular bucket, and we have to check each txNum in the bucket
+    for that key in series versus the txnum flat-file.  The performance penalty for this is extremely small since the
+    txnum flat-file is extremely fast to query given a txNum.
 
 A note about ACID: (atomic, consistent, isolated, durable)
 

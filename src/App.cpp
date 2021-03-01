@@ -477,6 +477,12 @@ void App::parseArgs()
         QString("num"),
     },
     {
+        "no-txhash-index",
+        QString("Disable the txhash index. Some RPC methods will be unavailable to clients as a result, so this is not"
+                " recommended. This option is provided for admins wishing to opt-out of the db upgrade required to"
+                " enable the txhash index.\n")
+    },
+    {
        "dump-sh",
        QString("*** This is an advanced debugging option ***   Dump script hashes. If specified, after the database"
                " is loaded, all of the script hashes in the database will be written to outputfile as a JSON array.\n"),
@@ -1218,6 +1224,12 @@ void App::parseArgs()
                           .arg(options->txHashCacheBytesMin/1e6).arg(options->txHashCacheBytesMax/1e6));
         options->txHashCacheBytes = val;
         Util::AsyncOnObject(this, [val=val/1e6]{ DebugM("config: txhash_cache = ", val); });
+    }
+
+    // CLI: --no-txhash-index
+    if (parser.isSet("no-txhash-index")) {
+        options->noTxHashIndex = true;
+        Util::AsyncOnObject(this, []{ DebugM("no-txhash-index: true"); });
     }
 
     // parse --dump-*
