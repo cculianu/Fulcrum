@@ -1753,15 +1753,22 @@ namespace {
 void Server::rpc_blockchain_transaction_get_merkle(Client *c, const RPC::Message &m)
 {
     QVariantList l = m.paramsList();
-    assert(l.size() == 2);
+    assert(l.size() >= 1 && l.size() <= 2);
     QByteArray txHash = validateHashHex( l.front().toString() );
     if (txHash.length() != HashLen)
         throw RPCError("Invalid tx hash");
-    bool ok = false;
-    unsigned height = l.back().toUInt(&ok);
-    if (!ok || height >= Storage::MAX_HEADERS)
+    if (l.size() < 2 && !storage->hashTxHashIndex())
+        throw RPCError("Server lacks a tx hash index, please specify a height");
+    bool ok = true;
+    std::optional<BlockHeight> optHeight;
+    if (l.size() == 2) optHeight = l.back().toUInt(&ok);
+    if (!ok || (optHeight && *optHeight >= Storage::MAX_HEADERS))
         throw RPCError("Invalid height argument; expected non-negative numeric value");
-    generic_do_async(c, m.id, [txHash, height, this] () mutable {
+    generic_do_async(c, m.id, [txHash, optHeight, this] () mutable {
+        if (!optHeight) optHeight = storage->getTxHeight(txHash);
+        if (!optHeight || !*optHeight)
+            throw RPCError("No confirmed transaction matching the requested hash was found");
+        const auto height = *optHeight;
         auto txHashes = storage->txHashesForBlockInBitcoindMemoryOrder(height);
         std::reverse(txHash.begin(), txHash.end()); // we need to compare to bitcoind memory order so reverse specified hash
         constexpr unsigned NO_POS = ~0U;
@@ -1970,7 +1977,7 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
 
     { {"blockchain.transaction.broadcast",  true,               false,    PR{1,1},                    },          MP(rpc_blockchain_transaction_broadcast) },
     { {"blockchain.transaction.get",        true,               false,    PR{1,2},                    },          MP(rpc_blockchain_transaction_get) },
-    { {"blockchain.transaction.get_merkle", true,               false,    PR{2,2},                    },          MP(rpc_blockchain_transaction_get_merkle) },
+    { {"blockchain.transaction.get_merkle", true,               false,    PR{1,2},                    },          MP(rpc_blockchain_transaction_get_merkle) },
     { {"blockchain.transaction.id_from_pos",true,               false,    PR{2,3},                    },          MP(rpc_blockchain_transaction_id_from_pos) },
     // DSPROOF
     { {"blockchain.transaction.dsproof.get",         true,      false,    PR{1,1},                    },          MP(rpc_blockchain_transaction_dsproof_get) },

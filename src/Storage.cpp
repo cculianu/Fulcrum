@@ -69,6 +69,7 @@ DatabaseKeyNotFound::~DatabaseKeyNotFound() {} // weak vtable warning suppressio
 HeaderVerificationFailure::~HeaderVerificationFailure() {} // weak vtable warning suppression
 UndoInfoMissing::~UndoInfoMissing() {} // weak vtable warning suppression
 HistoryTooLarge::~HistoryTooLarge() {} // weak vtable warning suppression
+IndexDisabled::~IndexDisabled() {} // weak vtable warning suppression
 
 namespace {
     /// Encapsulates the 'meta' db table
@@ -2740,6 +2741,11 @@ std::optional<TxHash> Storage::hashForTxNum(TxNum n, bool throwIfMissing, bool *
 std::optional<unsigned> Storage::heightForTxNum(TxNum n) const
 {
     SharedLockGuard g(p->blkInfoLock);
+    return heightForTxNum_nolock(n);
+}
+
+std::optional<unsigned> Storage::heightForTxNum_nolock(TxNum n) const
+{
     std::optional<unsigned> ret;
     auto it = p->blkInfosByTxNum.upper_bound(n);  // O(logN) search; find the block *AFTER* n, then go backw on to find the block in range
     if (it != p->blkInfosByTxNum.begin()) {
@@ -3134,6 +3140,49 @@ auto Storage::mempoolHistogram() const -> Mempool::FeeHistogramVec
 {
     SharedLockGuard g(p->mempoolLock);
     return p->mempoolFeeHistogram;
+}
+
+
+auto Storage::getTxHeights(const std::vector<TxHash> &txHashes) const -> TxHeightsResult
+{
+    if (!hashTxHashIndex())
+        throw IndexDisabled("The txhash index has been disabled, unable to return result");
+
+    TxHeightsResult ret;
+    ret.reserve(txHashes.size());
+
+    SharedLockGuard g(p->blocksLock);
+    auto txNums = p->db.txhash2txnumMgr->findMany(txHashes);
+    if (UNLIKELY(txNums.size() != txHashes.size()))
+        // this should never happen
+        throw InternalError("FIXME: findMany() returned an unexpected number of elements!");
+
+    // missing txNums need a mempool check; check in mempool
+    {
+        auto [mempool, lock] =  this->mempool(); // mempool lock is ok to take with blocksLock held
+        for (size_t i = 0; i < txHashes.size(); ++i) {
+            if (!txNums[i] && mempool.txs.count(txHashes[i]))
+                txNums[i] = 0; // 0 = mempool tx
+        }
+    }
+
+    // next, transform all non-0 valid txNums to a height (below takes blkInfoLock which is ok to take after blocksLock)
+    SharedLockGuard g2(p->blkInfoLock);
+    for (const auto & txNum : txNums) {
+        ret.emplace_back();
+        auto &optHeight = ret.back();
+        if (txNum)
+            optHeight = *txNum ? heightForTxNum_nolock(*txNum) : 0; // transform to txNum -> height .. note that 0 already indicates mempool
+    }
+    return ret;
+}
+
+auto Storage::getTxHeight(const TxHash &h) const -> std::optional<BlockHeight>
+{
+    std::optional<BlockHeight> ret;
+    auto vec = getTxHeights({h});
+    if (!vec.empty()) ret = std::move(vec.front());
+    return ret;
 }
 
 size_t Storage::dumpAllScriptHashes(QIODevice *outDev, unsigned int indent, unsigned int ilvl,
