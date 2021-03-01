@@ -16,6 +16,7 @@
 // along with this program (see LICENSE.txt).  If not, see
 // <https://www.gnu.org/licenses/>.
 //
+#include "App.h"
 #include "BTC.h"
 #include "ByteView.h"
 #include "CostCache.h"
@@ -768,6 +769,104 @@ namespace {
             else
                 GenericDBDelete(db, key, QString{}, wrOpts);
         }
+
+    public:
+        void consistencyCheck() { // this throws if the checks fail
+            const Tic t0;
+            Log() << "CheckDB: Verifying txhash index (this may take some time) ...";
+            std::unique_ptr<rocksdb::Iterator> iter(db->NewIterator(rdOpts));
+            size_t i = 0, verified = 0;
+            QString err;
+            constexpr size_t batchSize = 50'000;
+            std::vector<std::pair<std::string, uint64_t>> batch;
+            std::vector<uint64_t> batchNums;
+            batch.reserve(batchSize + 500);
+            batchNums.reserve(batchSize + 500);
+            auto ProcBatch = [this, &batch, &batchNums, &err, &verified]{
+                std::sort(batch.begin(), batch.end(), [](const auto & a, const auto & b){
+                    return a.second < b.second;
+                });
+                std::sort(batchNums.begin(), batchNums.end());
+                const auto recs = rf->readRandomRecords(batchNums, &err);
+                if (recs.size() != batchNums.size()) throw InternalError(QString("short read of records: ") + err);
+                for (size_t i = 0; i < recs.size(); ++i) {
+                    const auto &hash = recs[i];
+                    const auto txNum = batchNums[i];
+                    if (batch[i].second != txNum) throw DatabaseError("txNum mismatch");
+                    if (hash.length() != HashLen) throw DatabaseFormatError("bad record");
+                    const auto expect = makeKeyFromHash(hash).toByteArray();
+                    const auto &keyStr = batch[i].first;
+                    const auto key = QByteArray::fromRawData(keyStr.data(), keyStr.size());
+                    if (key != expect)
+                        throw DatabaseError(QString("record %1 does not match key. expected: %2, got: %3")
+                                            .arg(txNum).arg(QString(expect.toHex())).arg(QString(key.toHex())));
+                    ++verified;
+                }
+                batch.resize(0);
+                batchNums.resize(0);
+            };
+            App *ourApp = app();
+            const auto nrec = rf->numRecords();
+            for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
+                if (UNLIKELY(0 == i % 100 && ourApp && ourApp->signalsCaught()))
+                    throw Exception("User interrupted, aborting check"); // if the user hits Ctrl-C, stop the operation
+                if (i && 0 == i % 1'000'000) {
+                    *(0 == i % 5'000'000 ? std::make_unique<Log>() : std::make_unique<Debug>())
+                    << "Verified " << verified << "/" << nrec << ", merge ops so far: " << mergeCount() << " ...";
+                }
+                const auto keySlice = iter->key();
+                const auto valSlice = iter->value();
+                const auto key = FromSlice(keySlice);
+                if (key.startsWith(kLargestTxNumSeenKeyPrefix))
+                    continue; // skip this meta entry
+                const auto val = FromSlice(valSlice);
+                Span<const std::byte> bytes(reinterpret_cast<const std::byte *>(val.constData()), val.size());
+                if (bytes.empty()) throw DatabaseFormatError("Empty db data!");
+                while (!bytes.empty()) {
+                    auto vint = VarInt::deserialize(bytes);
+                    auto txNum = vint.value<uint64_t>();
+                    batch.emplace_back(keySlice.ToString(), txNum);
+                    batchNums.push_back(txNum);
+                    ++i;
+                }
+                if (batch.size() >= batchSize) {
+                    ProcBatch();
+                }
+            }
+            if (!batch.empty()) ProcBatch();
+            iter->Reset();
+            Log() << "CheckDB: txhash index verified " << verified << " entries in " << t0.secsStr(1) << " secs";
+        }
+
+        // Deletes *all* keys from db! May throw.
+        void deleteAllEntries() {
+            std::string firstKey, endKey;
+            {
+                std::unique_ptr<rocksdb::Iterator> iter(db->NewIterator(rdOpts));
+                iter->SeekToFirst();
+                if (iter->Valid())
+                    firstKey = iter->key().ToString();
+                iter->SeekToLast();
+                if (iter->Valid())
+                    endKey = iter->key().ToString();
+            }
+            if (!endKey.empty()) {
+                endKey.insert(endKey.end(), char(0xff)); // make sure our lastKey spec is larger than the actual lastKey
+                Debug() << "Deleting keys in the range [" << Util::ToHexFast(QByteArray::fromStdString(firstKey)) << ", "
+                        << Util::ToHexFast(QByteArray::fromStdString(endKey)) << "] ...";
+            }
+            rocksdb::FlushOptions fopts;
+            fopts.wait = true; fopts.allow_write_stall = true;
+            if (auto st = db->DeleteRange(wrOpts, db->DefaultColumnFamily(), firstKey, endKey);
+                    !st.ok() || !(st = db->Flush(fopts)).ok())
+                throw DatabaseError(dbName() + ": failed to delete all keys: " + QString::fromStdString(st.ToString()));
+            std::unique_ptr<rocksdb::Iterator> iter(db->NewIterator(rdOpts));
+            iter->SeekToFirst();
+            if (iter->Valid())
+                throw InternalError(dbName() + ": delete all keys failed -- iterator still points to a row! FIXME!");
+            largestTxNumSeen = -1;
+            saveLargestTxNumSeen();
+        }
     }; // end class TxHash2TxNumMgr
 
     /* static */ const QByteArray TxHash2TxNumMgr::kLargestTxNumSeenKeyPrefix = "+largestTxNumSeen";
@@ -1510,6 +1609,9 @@ void Storage::loadCheckTxHash2TxNumMgr()
 
     if (p->db.txhash2txnumMgr->maxTxNumSeenInDB()+1 != int64_t(nrecs))
         throw DatabaseFormatError(QString("Failed invariant: txNumCount != nrecs; ") + errMsg);
+
+    if (options->doSlowDbChecks) // require the slow check for this one
+        p->db.txhash2txnumMgr->consistencyCheck();
 }
 
 // NOTE: this must be called *after* loadCheckTxNumsFileAndBlkInfo(), because it needs a valid p->txNumNext
@@ -1612,8 +1714,10 @@ void Storage::loadCheckUTXOsInDB()
                     }
                     throw DatabaseError(msg);
                 }
-                if (0 == ++p->utxoCt % 100000) {
-                    *(0 == p->utxoCt % 2500000 ? std::make_unique<Log>() : std::make_unique<Debug>()) << "CheckDB: Verified " << p->utxoCt << " utxos ...";
+                if (0 == ++p->utxoCt % 100'000) {
+                    *(0 == p->utxoCt % 2'500'000 ? std::make_unique<Log>() : std::make_unique<Debug>()) << "CheckDB: Verified " << p->utxoCt << " utxos ...";
+                } else if (0 == p->utxoCt % 1'000 && app() && app()->signalsCaught()) {
+                    throw Exception("User interrupted, aborting check");
                 }
             }
 
