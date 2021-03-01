@@ -373,6 +373,7 @@ private:
     // transaction
     void rpc_blockchain_transaction_broadcast(Client *, const RPC::Message &); // fully implemented
     void rpc_blockchain_transaction_get(Client *, const RPC::Message &); // fully implemented
+    void rpc_blockchain_transaction_get_height(Client *, const RPC::Message &); // fully implemented
     void rpc_blockchain_transaction_get_merkle(Client *, const RPC::Message &); // fully implemented
     void rpc_blockchain_transaction_id_from_pos(Client *, const RPC::Message &); // fully implemented
     // transaction.dsproof

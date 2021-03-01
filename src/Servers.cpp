@@ -1750,6 +1750,23 @@ namespace {
     }
 }
 
+void Server::rpc_blockchain_transaction_get_height(Client *c, const RPC::Message &m)
+{
+    if (!storage->hashTxHashIndex())
+        throw RPCError("Server lacks a tx hash index, method unavailable", RPC::ErrorCodes::Code_MethodNotFound);
+    QVariantList l = m.paramsList();
+    assert(l.size() == 1);
+    QByteArray txHash = validateHashHex( l.front().toString() );
+    if (txHash.length() != HashLen)
+        throw RPCError("Invalid tx hash");
+    generic_do_async(c, m.id, [txHash, this] {
+        const auto optHeight = storage->getTxHeight(txHash);
+        if (!optHeight)
+            throw RPCError("No transaction matching the requested hash was found");
+        return qlonglong(*optHeight);
+    });
+}
+
 void Server::rpc_blockchain_transaction_get_merkle(Client *c, const RPC::Message &m)
 {
     QVariantList l = m.paramsList();
@@ -1977,6 +1994,7 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
 
     { {"blockchain.transaction.broadcast",  true,               false,    PR{1,1},                    },          MP(rpc_blockchain_transaction_broadcast) },
     { {"blockchain.transaction.get",        true,               false,    PR{1,2},                    },          MP(rpc_blockchain_transaction_get) },
+    { {"blockchain.transaction.get_height", true,               false,    PR{1,1},                    },          MP(rpc_blockchain_transaction_get_height) },
     { {"blockchain.transaction.get_merkle", true,               false,    PR{1,2},                    },          MP(rpc_blockchain_transaction_get_merkle) },
     { {"blockchain.transaction.id_from_pos",true,               false,    PR{2,3},                    },          MP(rpc_blockchain_transaction_id_from_pos) },
     // DSPROOF
