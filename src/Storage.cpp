@@ -735,6 +735,8 @@ namespace {
 
         bool exists(const TxHash &txHash) const { return bool(find(txHash)); }
 
+        static const QByteArray kLargestTxNumSeenKeyPrefix;
+
     private:
         ByteView makeKeyFromHash(const ByteView &bv) const {
             const auto len = bv.size();
@@ -748,7 +750,7 @@ namespace {
                 return bv.substr(0, keyBytes);
         }
         QByteArray makeLargestTxNumSeenKey() const {
-            auto ret = QByteArrayLiteral("+largestTxNumSeen");
+            auto ret = kLargestTxNumSeenKeyPrefix;
             if (size_t(ret.length()) <= keyBytes)
                 // ensure a key that can never exist in db for a real tx hash (> keyBytes)
                 ret.append(keyBytes - size_t(ret.length()) + 1, '-');
@@ -767,6 +769,8 @@ namespace {
                 GenericDBDelete(db, key, QString{}, wrOpts);
         }
     }; // end class TxHash2TxNumMgr
+
+    /* static */ const QByteArray TxHash2TxNumMgr::kLargestTxNumSeenKeyPrefix = "+largestTxNumSeen";
 
 } // namespace
 
@@ -3649,7 +3653,9 @@ namespace {
             if (0 == i % 1'000'000) Debug() << "Verified " << verified << "/" << nrec << ", merge ops so far: " << mergeOpCt(opts) << " ...";
             const auto keySlice = iter->key();
             const auto valSlice = iter->value();
-            //const auto key = FromSlice(keySlice);
+            const auto key = FromSlice(keySlice);
+            if (key.startsWith(TxHash2TxNumMgr::kLargestTxNumSeenKeyPrefix))
+                continue; // skip this meta entry
             const auto val = FromSlice(valSlice);
             Span<const std::byte> bytes(reinterpret_cast<const std::byte *>(val.constData()), val.size());
             if (bytes.empty()) throw Exception("Empty db data!");
