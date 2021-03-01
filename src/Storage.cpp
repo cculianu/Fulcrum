@@ -906,6 +906,46 @@ namespace {
                 Warning() << "DB Flush error: " << QString::fromStdString(st.ToString());
             Log() << "Indexed " << nrec << " txhash entries, elapsed: " << t0.secsStr(2) << " sec";
         }
+
+        void consistencyCheckSlowRev() {
+            Log() << "CheckDB: Verifying txhash index using the thorough reverse-check (this may take a long time) ...";
+            const Tic t0;
+            size_t i = 0, verified = 0;
+            QString err;
+            const auto nrec = rf->numRecords();
+            constexpr size_t batchSize = 50'000;
+            App *ourApp = app();
+            for (i = 0; i < nrec; /*i += batchSize*/) {
+                if (i && 0 == i % 100'000)
+                    Log() << "Verified: " << verified << "/" << nrec << ", merge ops so far: " << mergeCount() << " ...";
+                QString err;
+                auto recs = rf->readRecords(i, batchSize, &err);
+                recs.emplace_back(HashLen, char(0)); // add a dummy at the end
+                Util::getRandomBytes(recs.back().data(), HashLen); // put a random hash at the end
+                auto results = findMany(recs);
+                if (results.size() != recs.size()) throw InternalError("size mismatch");
+                for (size_t j = 0; j < results.size()-1; ++j) {
+                    if (!results[j]) throw DatabaseError("Expected a value not nullopt");
+                    if (*results[j] != i) {
+                        static const std::set<QByteArray> DupeTxHashes = {
+                            // Before BIP34, there were dupe coinbase tx's... so we tolerate those here.
+                            Util::ParseHexFast("d5d27987d2a3dfc724e359870c6644b40e497bdc0589a033220fe15429d88599"),
+                            Util::ParseHexFast("e3bf3d07d4b0375638d5f1db5255fe07ba2c4cb067cd81b84ee974b6585fb468"),
+                        };
+                        if (!DupeTxHashes.count(recs[j]))
+                            throw DatabaseError(QString("Mismatched TxNum for hash: ") + QString(recs[j].toHex()));
+                    }
+                    ++verified;
+                    ++i;
+                    if (UNLIKELY(0 == i % 10 && ourApp && ourApp->signalsCaught()))
+                        throw UserInterrupted("User interrupted, aborting check"); // if the user hits Ctrl-C, stop the operation
+                }
+                if (results.back()) Warning() << "Expected last entry to be \"not found\"!";
+            }
+
+            Log() << "CheckDB: Verified " << verified << " total tx hashes, merge operations: " << mergeCount()
+                  << ", elapsed: " << t0.secsStr(2) << " sec";
+        }
     }; // end class TxHash2TxNumMgr
 
     /* static */ const QByteArray TxHash2TxNumMgr::kLargestTxNumSeenKeyPrefix = "+largestTxNumSeen";
@@ -1652,6 +1692,8 @@ void Storage::loadCheckTxHash2TxNumMgr()
 
         if (options->doSlowDbChecks) // require the slow check for this one
             p->db.txhash2txnumMgr->consistencyCheck();
+        if (options->doSlowDbChecks >= 3) // the below check is very slow so we require -C -C -C
+            p->db.txhash2txnumMgr->consistencyCheckSlowRev();
     } catch (const DatabaseError &e) {
         // Database error -- user either lacks the database (upgrade needed) or they have it and it is corrupted --
         // attempt to rebuild it.
@@ -3467,11 +3509,7 @@ namespace {
 } // end anon namespace
 
 #ifdef ENABLE_TESTS
-#include "App.h"
-#include "Span.h"
-#include "VarInt.h"
 #include "robin_hood/robin_hood.h"
-#include <csignal>
 namespace {
 
     template<size_t NB>
@@ -3557,489 +3595,5 @@ namespace {
               << " elapsed: " << t0.secsStr(2) << " sec";
     }
     const auto b1 = App::registerBench("txcol", findCollisions);
-
-    auto OpenDB(bool createIfMissing, bool errorIfExists, const QString &path, const QString &name, double memFactor = 0.15)
-    {
-        // Optimize RocksDB. This is the easiest way to get RocksDB to perform well
-        rocksdb::Options opts;
-        opts.IncreaseParallelism(int(Util::getNPhysicalProcessors()));
-        opts.OptimizeLevelStyleCompaction();
-
-        // setup shared block cache
-        rocksdb::BlockBasedTableOptions tableOptions;
-        tableOptions.block_cache = rocksdb::NewLRUCache(Options::DBOpts::defaultMaxMem, -1, false /* strict capacity limit=off, turning it on made db writes sometimes fail */);
-        //std::weak_ptr<rocksdb::Cache> blockCache = tableOptions.block_cache; // save shared_ptr to weak_ptr
-        tableOptions.cache_index_and_filter_blocks = true; // from the docs: this may be a large consumer of memory, cost & cap its memory usage to the cache
-        std::shared_ptr<rocksdb::TableFactory> tableFactory{rocksdb::NewBlockBasedTableFactory(tableOptions)};
-        // shared TableFactory for all db instances
-        opts.table_factory = tableFactory;
-
-        auto writeBufferManager = std::make_shared<rocksdb::WriteBufferManager>(Options::DBOpts::defaultMaxMem / 2, tableOptions.block_cache);
-        opts.write_buffer_manager = writeBufferManager; // will be shared across all DB instances
-
-        // create the DB if it's not already present
-        opts.create_if_missing = createIfMissing;
-        opts.error_if_exists = errorIfExists;
-        opts.max_open_files = Options::DBOpts::defaultMaxOpenFiles; ///< this affects memory usage see: https://github.com/facebook/rocksdb/issues/4112
-        opts.keep_log_file_num = Options::DBOpts::defaultKeepLogFileNum;
-        opts.compression = rocksdb::CompressionType::kNoCompression; // for now we test without compression. TODO: characterize what is fastest and best..
-        opts.use_fsync = Options::DBOpts::defaultUseFsync; // the false default is perfectly safe, but Jt asked for this as an option, so here it is.
-        opts.merge_operator = std::make_shared<ConcatOperator>(); // this set of options uses the concat merge operator (we use this to append to history entries in the db)
-        const size_t mem = std::max(size_t(Options::DBOpts::defaultMaxMem * memFactor), size_t(64*1024));
-        Debug() << "DB \"" << name << "\" mem: " << QString::number(mem / 1024. / 1024., 'f', 2) << " MiB";
-        opts.OptimizeLevelStyleCompaction(mem);
-        for (auto & comp : opts.compression_per_level)
-            comp = rocksdb::CompressionType::kNoCompression; // paranoia -- enforce no compression since our data compresses so poorly
-        rocksdb::Status s;
-        // try and open database
-        std::unique_ptr<rocksdb::DB> db;
-        {
-            // open db, immediately placing the new'd pointer (if any) into a unique_ptr
-            rocksdb::DB *dbraw = nullptr;
-            s = rocksdb::DB::Open(opts, path.toStdString(), &dbraw);
-            db.reset(dbraw);
-        }
-        if (!s.ok() || !db)
-            throw DatabaseError(QString("Error opening %1 database: %2 (path: %3)").arg(name).arg(StatusString(s)).arg(path));
-
-        return std::make_pair(std::move(db), std::move(opts));
-    }
-
-    unsigned mergeOpCt(const rocksdb::Options & opts) {
-        auto *op = opts.merge_operator.get() ? dynamic_cast<const ConcatOperator *>(opts.merge_operator.get()) : nullptr;
-        if (!op) throw BadArgs("opts does not have a merge_operator that is a ConcatOperator *");
-        return op->merges.load();
-    }
-
-    void mkTxDb() {
-        Debug::forceEnable = true;
-        const QString txnumsFile = std::getenv("TFILE") ? std::getenv("TFILE") : "";
-        if (txnumsFile.isEmpty() || !QFile::exists(txnumsFile))
-            throw Exception("Please pass the TFILE env var as a path to an existing \"txnum2hash\" data record file");
-        const QString dbOut = std::getenv("OUTDIR") ? std::getenv("OUTDIR") : "";
-        if (dbOut.isEmpty())
-            throw Exception("Please pass the OUTDIR env var as a path to a directory to create for the tmp db");
-        std::unique_ptr<RecordFile> rf;
-        rf = std::make_unique<RecordFile>(txnumsFile, HashLen, 0x000012e2); // this may throw
-        const auto nrec = rf->numRecords();
-        Log() << "Records: " << nrec;
-
-        Log() << "Opening db ...";
-
-        static std::atomic_bool caughtSig = false;
-        static auto sighandler = [](int sig) {
-            caughtSig = true;
-            Util::AsyncSignalSafe::writeStdErr(Util::AsyncSignalSafe::SBuf{}.append("Caught signal ").append(sig).append(", exiting ..."));
-        };
-        std::signal(SIGINT, sighandler);
-#if defined(Q_OS_UNIX) || defined(SIGQUIT)
-        std::signal(SIGQUIT, sighandler);
-#endif
-        auto [db, opts] = OpenDB(true, true, dbOut, "tmpdb");
-
-        constexpr size_t batchSize = 50'000;
-        Log() << "Using key bytes: " << NB << ", batchSize: " << batchSize;
-        const Tic t0;
-        const rocksdb::WriteOptions defWriteOpts;
-        for (size_t i = 0; i < nrec; /*i += batchSize*/) {
-            if (UNLIKELY(caughtSig)) break;
-            if (i && 0 == i % 1'000'000) Debug() << i << "/" << nrec << ", merge ops so far: " << mergeOpCt(opts) << " ...";
-            QString err;
-            rocksdb::WriteBatch batch;
-            const auto recs = rf->readRecords(i, batchSize, &err);
-            for (const auto & rec : recs) {
-                const auto key = MakeTxHashByteKey<NB, POS>(rec);
-                const auto val = VarInt(i);
-
-                // Note that this uses the 'ConcatOperator' class we defined in this file, which requires rocksdb be compiled with RTTI.
-                if (auto st = batch.Merge(ToSlice(key), ToSlice(val.byteView())); !st.ok())
-                    throw DatabaseError(QString("batch merge fail for %1").arg(QString(rec.toHex())));
-                ++i;
-            }
-            if (auto st = db->Write(defWriteOpts, &batch) ; !st.ok())
-                throw DatabaseError("batch merge fail");
-        }
-        Log() << "merge operations: " << mergeOpCt(opts) << ", elapsed: " << t0.secsStr(2) << " sec";
-        Log() << "Closing db ...";
-        rocksdb::Status status;
-        rocksdb::FlushOptions fopts;
-        fopts.wait = true; fopts.allow_write_stall = true;
-        status = db->Flush(fopts);
-        if (!status.ok())
-            Warning() << "Flush: " << QString::fromStdString(status.ToString());
-        status = db->FlushWAL(true);
-        if (!status.ok())
-            Warning() << "FlushWAL: " << QString::fromStdString(status.ToString());
-        status = db->Close();
-        if (!status.ok())
-            Warning() << "Close: " << QString::fromStdString(status.ToString());
-        db.reset();
-        rf.reset();
-    }
-
-    const auto b2 = App::registerBench("mktxdb", mkTxDb);
-
-    void mkTxDb2() {
-        Debug::forceEnable = true;
-        const QString txnumsFile = std::getenv("TFILE") ? std::getenv("TFILE") : "";
-        if (txnumsFile.isEmpty() || !QFile::exists(txnumsFile))
-            throw Exception("Please pass the TFILE env var as a path to an existing \"txnum2hash\" data record file");
-        const QString dbOut = std::getenv("OUTDIR") ? std::getenv("OUTDIR") : "";
-        if (dbOut.isEmpty())
-            throw Exception("Please pass the OUTDIR env var as a path to a directory to create for the tmp db");
-        std::unique_ptr<RecordFile> rf;
-        rf = std::make_unique<RecordFile>(txnumsFile, HashLen, 0x000012e2); // this may throw
-        const auto nrec = rf->numRecords();
-        Log() << "Records: " << nrec;
-
-        Log() << "Opening db ...";
-
-        static std::atomic_bool caughtSig = false;
-        static auto sighandler = [](int sig) {
-            caughtSig = true;
-            Util::AsyncSignalSafe::writeStdErr(Util::AsyncSignalSafe::SBuf{}.append("Caught signal ").append(sig).append(", exiting ..."));
-        };
-        std::signal(SIGINT, sighandler);
-#if defined(Q_OS_UNIX) || defined(SIGQUIT)
-        std::signal(SIGQUIT, sighandler);
-#endif
-        auto [db, opts] = OpenDB(true, true, dbOut, "tmpdb");
-
-        const rocksdb::WriteOptions defWriteOpts;
-        const rocksdb::ReadOptions defReadOpts;
-
-        TxHash2TxNumMgr dbhelper(db.get(), defReadOpts, defWriteOpts, rf.get(), NB, TxHash2TxNumMgr::KeyPos(POS));
-
-        constexpr size_t batchSize = 50'000;
-        Log() << "Using key bytes: " << NB << ", batchSize: " << batchSize;
-        const Tic t0;
-        for (size_t i = 0; i < nrec; /*i += batchSize*/) {
-            if (UNLIKELY(caughtSig)) break;
-            if (i && 0 == i % 1'000'000) Debug() << i << "/" << nrec << ", merge ops so far: " << mergeOpCt(opts) << " ...";
-            QString err;
-            const auto recs = rf->readRecords(i, std::min<size_t>(batchSize, rf->numRecords() - i), &err);
-            if (!err.isEmpty()) throw Exception(QString("Got error from RecordFile: ") + err);
-            // fake it
-            std::vector<PreProcessedBlock::TxInfo> fakeInfos;
-            fakeInfos.resize(recs.size());
-            for (size_t j = 0; j < recs.size(); ++j)
-                fakeInfos[j].hash = recs[j];
-            dbhelper.insertForBlock(i, fakeInfos); // this throws on error
-            i += fakeInfos.size();
-        }
-        Log() << "merge operations: " << mergeOpCt(opts) << ", elapsed: " << t0.secsStr(2) << " sec";
-        Log() << "Closing db ...";
-        rocksdb::Status status;
-        rocksdb::FlushOptions fopts;
-        fopts.wait = true; fopts.allow_write_stall = true;
-        status = db->Flush(fopts);
-        if (!status.ok())
-            Warning() << "Flush: " << QString::fromStdString(status.ToString());
-        status = db->FlushWAL(true);
-        if (!status.ok())
-            Warning() << "FlushWAL: " << QString::fromStdString(status.ToString());
-        status = db->Close();
-        if (!status.ok())
-            Warning() << "Close: " << QString::fromStdString(status.ToString());
-        db.reset();
-        rf.reset();
-    }
-
-    const auto b22 = App::registerBench("mktxdb2", mkTxDb2);
-
-    void chkTxDb() {
-        Debug::forceEnable = true;
-        const QString txnumsFile = std::getenv("TFILE") ? std::getenv("TFILE") : "";
-        if (txnumsFile.isEmpty() || !QFile::exists(txnumsFile))
-            throw Exception("Please pass the TFILE env var as a path to an existing \"txnum2hash\" data record file");
-        const QString dbOut = std::getenv("OUTDIR") ? std::getenv("OUTDIR") : "";
-        if (dbOut.isEmpty())
-            throw Exception("Please pass the OUTDIR env var as a path to a directory to open the db created with mktxdb");
-        std::unique_ptr<RecordFile> rf;
-        rf = std::make_unique<RecordFile>(txnumsFile, HashLen, 0x000012e2); // this may throw
-        const auto nrec = rf->numRecords();
-        Log() << "Records: " << nrec;
-
-        Log() << "Opening db ...";
-
-        static std::atomic_bool caughtSig = false;
-        static auto sighandler = [](int sig) {
-            caughtSig = true;
-            Util::AsyncSignalSafe::writeStdErr(Util::AsyncSignalSafe::SBuf{}.append("Caught signal ").append(sig).append(", exiting ..."));
-        };
-        std::signal(SIGINT, sighandler);
-#if defined(Q_OS_UNIX) || defined(SIGQUIT)
-        std::signal(SIGQUIT, sighandler);
-#endif
-        auto [db, opts] = OpenDB(false, false, dbOut, "tmpdb");
-
-        constexpr size_t batchSize = 50'000;
-        std::vector<std::pair<std::string, uint64_t>> batch;
-        std::vector<uint64_t> batchNums;
-        batch.reserve(batchSize + 500);
-        batchNums.reserve(batchSize + 500);
-        Log() << "Using key bytes: " << NB << ", batchSize: " << batchSize;
-        const Tic t0;
-        const rocksdb::ReadOptions defReadOpts;
-        std::unique_ptr<rocksdb::Iterator> iter(db->NewIterator(defReadOpts));
-        size_t i = 0, verified = 0;
-        QString err;
-        auto ProcBatch = [&batch, &batchNums, &rf, &err, &verified]{
-            std::sort(batch.begin(), batch.end(), [](const auto & a, const auto & b){
-                return a.second < b.second;
-            });
-            std::sort(batchNums.begin(), batchNums.end());
-            const auto recs = rf->readRandomRecords(batchNums, &err);
-            if (recs.size() != batchNums.size()) throw Exception(QString("short read of records: ") + err);
-            for (size_t i = 0; i < recs.size(); ++i) {
-                const auto &hash = recs[i];
-                const auto txNum = batchNums[i];
-                if (batch[i].second != txNum) throw Exception("txNum mismatch");
-                if (hash.length() != HashLen) throw Exception("bad record");
-                const auto expect = MakeTxHashByteKey<NB, POS>(hash).toByteArray();
-                const auto &keyStr = batch[i].first;
-                const auto key = QByteArray::fromRawData(keyStr.data(), keyStr.size());
-                if (key != expect)
-                    throw Exception(QString("record %1 does not match key. expected: %2, got: %3")
-                                    .arg(txNum).arg(QString(expect.toHex())).arg(QString(key.toHex())));
-                ++verified;
-            }
-            batch.resize(0);
-            batchNums.resize(0);
-        };
-        for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
-            if (UNLIKELY(caughtSig)) break;
-            if (0 == i % 1'000'000) Debug() << "Verified " << verified << "/" << nrec << ", merge ops so far: " << mergeOpCt(opts) << " ...";
-            const auto keySlice = iter->key();
-            const auto valSlice = iter->value();
-            const auto key = FromSlice(keySlice);
-            if (key.startsWith(TxHash2TxNumMgr::kLargestTxNumSeenKeyPrefix))
-                continue; // skip this meta entry
-            const auto val = FromSlice(valSlice);
-            Span<const std::byte> bytes(reinterpret_cast<const std::byte *>(val.constData()), val.size());
-            if (bytes.empty()) throw Exception("Empty db data!");
-            while (!bytes.empty()) {
-                auto vint = VarInt::deserialize(bytes);
-                auto txNum = vint.value<uint64_t>();
-                batch.emplace_back(keySlice.ToString(), txNum);
-                batchNums.push_back(txNum);
-                ++i;
-            }
-            if (batch.size() >= batchSize) {
-                ProcBatch();
-            }
-        }
-        if (!batch.empty()) ProcBatch();
-        iter->Reset();
-        iter.reset();
-
-        Log() << "Verified: " << verified << " total, merge operations: " << mergeOpCt(opts) << ", elapsed: " << t0.secsStr(2) << " sec";
-        Log() << "Closing db ...";
-        rocksdb::Status status;
-        rocksdb::FlushOptions fopts;
-        fopts.wait = true; fopts.allow_write_stall = true;
-        status = db->Flush(fopts);
-        if (!status.ok())
-            Warning() << "Flush: " << QString::fromStdString(status.ToString());
-        status = db->FlushWAL(true);
-        if (!status.ok())
-            Warning() << "FlushWAL: " << QString::fromStdString(status.ToString());
-        status = db->Close();
-        if (!status.ok())
-            Warning() << "Close: " << QString::fromStdString(status.ToString());
-    }
-
-    const auto b3 = App::registerBench("chktxdb", chkTxDb);
-
-    void chkTxDb2() { // like the above but checks by reading keys from the txnum2hash file and looking them up in db
-        Debug::forceEnable = true;
-        const QString txnumsFile = std::getenv("TFILE") ? std::getenv("TFILE") : "";
-        if (txnumsFile.isEmpty() || !QFile::exists(txnumsFile))
-            throw Exception("Please pass the TFILE env var as a path to an existing \"txnum2hash\" data record file");
-        const QString dbOut = std::getenv("OUTDIR") ? std::getenv("OUTDIR") : "";
-        if (dbOut.isEmpty())
-            throw Exception("Please pass the OUTDIR env var as a path to a directory to open the db created with mktxdb");
-        std::unique_ptr<RecordFile> rf;
-        rf = std::make_unique<RecordFile>(txnumsFile, HashLen, 0x000012e2); // this may throw
-        const auto nrec = rf->numRecords();
-        Log() << "Records: " << nrec;
-
-        Log() << "Opening db ...";
-
-        static std::atomic_bool caughtSig = false;
-        static auto sighandler = [](int sig) {
-            caughtSig = true;
-            Util::AsyncSignalSafe::writeStdErr(Util::AsyncSignalSafe::SBuf{}.append("Caught signal ").append(sig).append(", exiting ..."));
-        };
-        std::signal(SIGINT, sighandler);
-#if defined(Q_OS_UNIX) || defined(SIGQUIT)
-        std::signal(SIGQUIT, sighandler);
-#endif
-        auto [db, opts] = OpenDB(false, false, dbOut, "tmpdb", 0.999);
-
-        constexpr size_t batchSize = 50'000;
-        std::vector<std::pair<std::string, uint64_t>> batch;
-        std::vector<uint64_t> batchNums;
-        batch.reserve(batchSize + 500);
-        batchNums.reserve(batchSize + 500);
-        Log() << "Using key bytes: " << NB << ", batchSize: " << batchSize;
-        const Tic t0;
-        const rocksdb::ReadOptions defReadOpts;
-        size_t i = 0, verified = 0;
-        QString err;
-        for ( i = 0; i < nrec; /*i += batchSize*/) {
-            if (UNLIKELY(caughtSig)) break;
-            if (i && 0 == i % 100'000) Debug() << "Verified: " << verified << "/" << nrec << ", merge ops so far: " << mergeOpCt(opts) << " ...";
-            QString err;
-            const auto recs = rf->readRecords(i, batchSize, &err);
-            std::vector<rocksdb::Slice> keySlices; keySlices.reserve(recs.size());
-            std::vector<std::string> dbValues; dbValues.reserve(recs.size());
-            std::multimap<ByteView, VarInt> expectedValues;
-            for (const auto & rec : recs) {
-                const auto key = MakeTxHashByteKey<NB, POS>(rec);
-                const auto val = VarInt(i++);
-                expectedValues.insert(std::make_pair(key, val));
-            }
-            for (const auto & [k, v] : expectedValues) {
-                keySlices.emplace_back(k.charData(), k.size());
-            }
-            auto statuses = db->MultiGet(defReadOpts, keySlices, &dbValues); // this should be faster than single gets..
-            if (statuses.size() != recs.size() || dbValues.size() != recs.size())
-                throw Exception("Db returned an unexpected number of results"); // should never happen
-            for (size_t j = 0; j < statuses.size() ; ++j) {
-                auto & st = statuses[j];
-                auto & rec = recs[j];
-                if (!st.ok())
-                    throw DatabaseError(QString("error on Get for %1: %2").arg(QString(rec.toHex())).arg(QString::fromStdString(st.ToString())));
-                auto & dbVal = dbValues[j];
-                auto & dbKey = keySlices[j];
-                std::set<VarInt> expectSet;
-                const ByteView bvDbKey{dbKey};
-                for (auto it = expectedValues.find(bvDbKey); it != expectedValues.end(); ++it) {
-                    if (it->first != bvDbKey) break;
-                    expectSet.insert(it->second);
-                }
-                if (expectSet.empty()) throw InternalError("fixme");
-                auto span = MakeCSpan(dbVal);
-                while (!span.empty()) {
-                    const VarInt dbvarint = VarInt::deserialize(span);
-                    if (auto it = expectSet.find(dbvarint); it != expectSet.end()) {
-                        expectSet.erase(it);
-                    } else {
-                        // possible collision -- verify it is sane
-                        QString err;
-                        auto r = rf->readRecord(dbvarint.value<uint64_t>(), &err);
-                        if (r.isEmpty() || !err.isEmpty())
-                            throw Exception(QString("Unknown value %1 in db record for: %2").arg(dbvarint.hex()).arg(QString(rec.toHex())));
-                        if (MakeTxHashByteKey<NB, POS>(r) != bvDbKey)
-                            throw Exception(QString("Db record is not sane for: %1 ").arg(QString(rec.toHex())));
-                    }
-                }
-                if (!expectSet.empty())
-                    throw Exception(QString("Failed to find %1 in the db. Db entry has the following bytes: %2")
-                                    .arg(QString(rec.toHex())).arg(QString(QByteArray::fromRawData(dbVal.data(), dbVal.size()).toHex())));
-                ++verified;
-            }
-        }
-        Log() << "Verified: " << verified << " total, merge operations: " << mergeOpCt(opts) << ", elapsed: " << t0.secsStr(2) << " sec";
-        Log() << "Closing db ...";
-        rocksdb::Status status;
-        rocksdb::FlushOptions fopts;
-        fopts.wait = true; fopts.allow_write_stall = true;
-        status = db->Flush(fopts);
-        if (!status.ok())
-            Warning() << "Flush: " << QString::fromStdString(status.ToString());
-        status = db->FlushWAL(true);
-        if (!status.ok())
-            Warning() << "FlushWAL: " << QString::fromStdString(status.ToString());
-        status = db->Close();
-        if (!status.ok())
-            Warning() << "Close: " << QString::fromStdString(status.ToString());
-    }
-
-    const auto b4 = App::registerBench("chktxdb2", chkTxDb2);
-
-    void chkTxDb3() { // like the above but checks by reading keys from the txnum2hash file and looking them up in db
-        Debug::forceEnable = true;
-        const QString txnumsFile = std::getenv("TFILE") ? std::getenv("TFILE") : "";
-        if (txnumsFile.isEmpty() || !QFile::exists(txnumsFile))
-            throw Exception("Please pass the TFILE env var as a path to an existing \"txnum2hash\" data record file");
-        const QString dbOut = std::getenv("OUTDIR") ? std::getenv("OUTDIR") : "";
-        if (dbOut.isEmpty())
-            throw Exception("Please pass the OUTDIR env var as a path to a directory to open the db created with mktxdb");
-        std::unique_ptr<RecordFile> rf;
-        rf = std::make_unique<RecordFile>(txnumsFile, HashLen, 0x000012e2); // this may throw
-        const auto nrec = rf->numRecords();
-        Log() << "Records: " << nrec;
-
-        Log() << "Opening db ...";
-
-        static std::atomic_bool caughtSig = false;
-        static auto sighandler = [](int sig) {
-            caughtSig = true;
-            Util::AsyncSignalSafe::writeStdErr(Util::AsyncSignalSafe::SBuf{}.append("Caught signal ").append(sig).append(", exiting (please wait)..."));
-        };
-        std::signal(SIGINT, sighandler);
-#if defined(Q_OS_UNIX) || defined(SIGQUIT)
-        std::signal(SIGQUIT, sighandler);
-#endif
-        auto [db, opts] = OpenDB(false, false, dbOut, "tmpdb", 0.999);
-
-        constexpr size_t batchSize = 50'000;
-        Log() << "Using key bytes: " << NB << ", batchSize: " << batchSize;
-        const Tic t0;
-        const rocksdb::ReadOptions defReadOpts;
-        const rocksdb::WriteOptions defWriteOpts;
-        TxHash2TxNumMgr dbreader(db.get(), defReadOpts, defWriteOpts, rf.get(), NB, TxHash2TxNumMgr::KeyPos(POS));
-        /* Testing..
-        Log() << "Truncating past 300000000 ...";
-        dbreader.truncateForUndo(300000000);
-        return;*/
-        size_t i = 0, verified = 0;
-        QString err;
-        for ( i = 0; i < nrec; /*i += batchSize*/) {
-            if (UNLIKELY(caughtSig)) break;
-            if (i && 0 == i % 100'000) Debug() << "Verified: " << verified << "/" << nrec << ", merge ops so far: " << mergeOpCt(opts) << " ...";
-            QString err;
-            auto recs = rf->readRecords(i, batchSize, &err);
-            recs.emplace_back(HashLen, char(0)); // add a dummy at the end
-            Util::getRandomBytes(recs.back().data(), HashLen); // put a random hash at the end
-            auto results = dbreader.findMany(recs);
-            if (results.size() != recs.size()) throw Exception("size mismatch");
-            for (size_t j = 0; j < results.size()-1; ++j) {
-                if (!results[j]) throw Exception("Expected a value not nullopt");
-                if (*results[j] != i) {
-                    static const std::set<QByteArray> DupeTxHashes = {
-                        // Before BIP34, there were dupe coinbase tx's... so we tolerate those here.
-                        Util::ParseHexFast("d5d27987d2a3dfc724e359870c6644b40e497bdc0589a033220fe15429d88599"),
-                        Util::ParseHexFast("e3bf3d07d4b0375638d5f1db5255fe07ba2c4cb067cd81b84ee974b6585fb468"),
-                    };
-                    if (!DupeTxHashes.count(recs[j]))
-                        throw Exception(QString("Mismatched TxNum for hash: ") + QString(recs[j].toHex()));
-                }
-                ++verified;
-                ++i;
-                if (UNLIKELY(caughtSig)) break;
-            }
-            if (results.back()) throw Exception("Expected last entry to be \"not found\"!");
-        }
-
-        Log() << "Verified: " << verified << " total, merge operations: " << mergeOpCt(opts) << ", elapsed: " << t0.secsStr(2) << " sec";
-        Log() << "Closing db ...";
-        rocksdb::Status status;
-        rocksdb::FlushOptions fopts;
-        fopts.wait = true; fopts.allow_write_stall = true;
-        status = db->Flush(fopts);
-        if (!status.ok())
-            Warning() << "Flush: " << QString::fromStdString(status.ToString());
-        status = db->FlushWAL(true);
-        if (!status.ok())
-            Warning() << "FlushWAL: " << QString::fromStdString(status.ToString());
-        status = db->Close();
-        if (!status.ok())
-            Warning() << "Close: " << QString::fromStdString(status.ToString());
-    }
-
-    const auto b5 = App::registerBench("chktxdb3", chkTxDb3);
 } // end anon namespace
 #endif
