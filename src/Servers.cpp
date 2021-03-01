@@ -1477,6 +1477,8 @@ void Server::impl_generic_subscribe(SubsMgr *subs, Client *c, const RPC::Message
                             statusMaybeNull = Util::ToHexFast(*ba);
                         else if (auto *dsp = status.dsproof(); dsp && !dsp->isEmpty())
                             statusMaybeNull = dsp->toVarMap();
+                        else if (auto *bh = status.blockHeight(); bh && *bh)
+                            statusMaybeNull = **bh; // ptr -> optional -> value
                         const QByteArray keyHex = Util::ToHexFast(key);
                         emit c->sendNotification(method, QVariantList{keyHex, statusMaybeNull});
                     };
@@ -1489,6 +1491,8 @@ void Server::impl_generic_subscribe(SubsMgr *subs, Client *c, const RPC::Message
                             statusMaybeNull = Util::ToHexFast(*ba);
                         else if (auto *dsp = status.dsproof(); dsp && !dsp->isEmpty())
                             statusMaybeNull = dsp->toVarMap();
+                        else if (auto *bh = status.blockHeight(); bh && *bh)
+                            statusMaybeNull = **bh; // ptr -> optional -> value
                         emit c->sendNotification(method, QVariantList{alias, statusMaybeNull});
                     };
             }
@@ -1526,6 +1530,8 @@ void Server::impl_generic_subscribe(SubsMgr *subs, Client *c, const RPC::Message
                 ret = Util::ToHexFast(*ba);
             else if (auto *dsp = status.dsproof(); dsp && !dsp->isEmpty())
                 ret = dsp->toVarMap();
+            else if (auto *bh = status.blockHeight(); bh && *bh)
+                ret = **bh; // ptr -> optional -> value
             return ret;
         });
     } else {
@@ -1536,6 +1542,8 @@ void Server::impl_generic_subscribe(SubsMgr *subs, Client *c, const RPC::Message
             result = QString(Util::ToHexFast(*ba));
         else if (auto *dsp = status.dsproof(); dsp && !dsp->isEmpty())
             result = dsp->toVarMap();
+        else if (auto *bh = status.blockHeight(); bh && *bh)
+            result = **bh; // ptr -> optional -> value
         // commented out because it is spammy
         //DebugM("Sending cached status to client for subscribable: ", Util::ToHexFast(key), " status: ", result.toString());
         //
@@ -1752,7 +1760,7 @@ namespace {
 
 void Server::rpc_blockchain_transaction_get_height(Client *c, const RPC::Message &m)
 {
-    if (!storage->hashTxHashIndex())
+    if (!storage->hasTxHashIndex())
         throw RPCError("Server lacks a tx hash index, method unavailable", RPC::ErrorCodes::Code_MethodNotFound);
     QVariantList l = m.paramsList();
     assert(l.size() == 1);
@@ -1774,7 +1782,7 @@ void Server::rpc_blockchain_transaction_get_merkle(Client *c, const RPC::Message
     QByteArray txHash = validateHashHex( l.front().toString() );
     if (txHash.length() != HashLen)
         throw RPCError("Invalid tx hash");
-    if (l.size() < 2 && !storage->hashTxHashIndex())
+    if (l.size() < 2 && !storage->hasTxHashIndex())
         throw RPCError("Server lacks a tx hash index, please specify a height");
     bool ok = true;
     std::optional<BlockHeight> optHeight;
@@ -1862,6 +1870,20 @@ void Server::rpc_blockchain_transaction_id_from_pos(Client *c, const RPC::Messag
             return QVariant(txHashHex);
         }
     });
+}
+void Server::rpc_blockchain_transaction_subscribe(Client *c, const RPC::Message &m)
+{
+    if (!storage->hasTxHashIndex())
+        throw RPCError("Server lacks a tx hash index, method unavailable", RPC::ErrorCodes::Code_MethodNotFound);
+    const auto txid = parseFirstHashParamCommon(m, "Invalid tx hash");
+    impl_generic_subscribe(storage->txSubs(), c, m, txid);
+}
+void Server::rpc_blockchain_transaction_unsubscribe(Client *c, const RPC::Message &m)
+{
+    if (!storage->hasTxHashIndex())
+        throw RPCError("Server lacks a tx hash index, method unavailable", RPC::ErrorCodes::Code_MethodNotFound);
+    const auto txid = parseFirstHashParamCommon(m, "Invalid tx hash");
+    impl_generic_unsubscribe(storage->txSubs(), c, m, txid);
 }
 // DSPROOF
 void Server::rpc_blockchain_transaction_dsproof_get(Client *c, const RPC::Message &m)
@@ -1997,6 +2019,8 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
     { {"blockchain.transaction.get_height", true,               false,    PR{1,1},                    },          MP(rpc_blockchain_transaction_get_height) },
     { {"blockchain.transaction.get_merkle", true,               false,    PR{1,2},                    },          MP(rpc_blockchain_transaction_get_merkle) },
     { {"blockchain.transaction.id_from_pos",true,               false,    PR{2,3},                    },          MP(rpc_blockchain_transaction_id_from_pos) },
+    { {"blockchain.transaction.subscribe",   true,              false,    PR{1,1},                    },          MP(rpc_blockchain_transaction_subscribe) },
+    { {"blockchain.transaction.unsubscribe", true,              false,    PR{1,1},                    },          MP(rpc_blockchain_transaction_unsubscribe) },
     // DSPROOF
     { {"blockchain.transaction.dsproof.get",         true,      false,    PR{1,1},                    },          MP(rpc_blockchain_transaction_dsproof_get) },
     { {"blockchain.transaction.dsproof.list",        true,      false,    PR{0,0},                    },          MP(rpc_blockchain_transaction_dsproof_list) },

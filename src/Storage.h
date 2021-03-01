@@ -70,6 +70,7 @@ struct IndexDisabled : public Exception { using Exception::Exception; ~IndexDisa
 
 class ScriptHashSubsMgr;
 class DSProofSubsMgr;
+class TransactionSubsMgr;
 
 /// Manages the db and all storage-related facilities.  Most of its public methods are fully reentrant and thread-safe.
 class Storage final : public Mgr, public ThreadObjectMixin
@@ -280,6 +281,8 @@ public:
     ScriptHashSubsMgr * subs() const { return subsmgr.get(); }
     /// Identical to above, but points to the DSProofSubsMgr for this instance.
     DSProofSubsMgr * dspSubs() const { return dspsubsmgr.get(); }
+    /// Identical to above, but points to the TransactionSubsMgr for this instance.
+    TransactionSubsMgr * txSubs() const { return txsubsmgr.get(); }
 
     /// called from a timer periodically from Controller (see Controller.cpp)
     /// -- takes locks, updates compact fee histogram for the mempool
@@ -291,7 +294,7 @@ public:
     // -- Tx Hash index based methods
 
     /// Thread-safe. Test whether the txhash index is enabled. Default true. Comes from CLI options: --no-txhash-index.
-    bool hashTxHashIndex() const { return !options->noTxHashIndex; }
+    bool hasTxHashIndex() const { return !options->noTxHashIndex; }
 
     using TxHeightsResult = std::vector<std::optional<BlockHeight>>;
     /// Thread-safe. Does take mempool, blkInfo, and blocksLock locks in shared mode. Returns an array whose length is
@@ -375,6 +378,7 @@ private:
     const std::shared_ptr<const Options> options;
     const std::unique_ptr<ScriptHashSubsMgr> subsmgr;
     const std::unique_ptr<DSProofSubsMgr> dspsubsmgr;
+    const std::unique_ptr<TransactionSubsMgr> txsubsmgr;
 
     struct Pvt;
     const std::unique_ptr<Pvt> p;

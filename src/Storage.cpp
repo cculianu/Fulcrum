@@ -1100,7 +1100,9 @@ namespace {
 
 Storage::Storage(const std::shared_ptr<const Options> & options_)
     : Mgr(nullptr), options(options_),
-      subsmgr(new ScriptHashSubsMgr(options, this)), dspsubsmgr(new DSProofSubsMgr(options, this)),
+      subsmgr(new ScriptHashSubsMgr(options, this)),
+      dspsubsmgr(new DSProofSubsMgr(options, this)),
+      txsubsmgr(new TransactionSubsMgr(options, this)),
       p(std::make_unique<Pvt>(options->txHashCacheBytes))
 {
     setObjectName("Storage");
@@ -1129,6 +1131,7 @@ void Storage::startup()
 
     subsmgr->startup(); // trivial, always succeeds if constructed correctly
     dspsubsmgr->startup(); // trivial, always succeeds if constructed correctly
+    txsubsmgr->startup(); // trivial, always succeeds if constructed correctly
 
     {
         // set up the merkle cache object
@@ -1665,7 +1668,7 @@ void Storage::loadCheckTxHash2TxNumMgr()
     // the below may throw
     p->db.txhash2txnumMgr = std::make_unique<TxHash2TxNumMgr>(p->db.txhash2txnum.get(), p->db.defReadOpts, p->db.defWriteOpts,
                                                               p->txNumsFile.get(), 6, TxHash2TxNumMgr::KeyPos::End);
-    if (!hashTxHashIndex()) {
+    if (!hasTxHashIndex()) {
         Warning() << "The txhash index is disabled. Some RPC commands will not be available to clients.";
         return;
     }
@@ -2161,7 +2164,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
 
     struct NotifyData {
         using NotifySet = std::unordered_set<HashX, HashHasher>;
-        NotifySet scriptHashesAffected, dspTxsAffected;
+        NotifySet scriptHashesAffected, dspTxsAffected, txidsAffected;
     };
     std::unique_ptr<NotifyData> notify;
 
@@ -2181,8 +2184,11 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
             const auto sz = ppb->txInfos.size();
             const auto rsvsz = static_cast<Mempool::TxHashNumMap::size_type>(sz > 0 ? sz-1 : 0);
             Mempool::TxHashNumMap txidMap(/* bucket_count: */ rsvsz);
+            notify->txidsAffected.reserve(rsvsz);
             for (std::size_t i = 1 /* skip coinbase */; i < sz; ++i) {
-                txidMap.emplace(ppb->txInfos[i].hash, blockTxNum0 + i);
+                const auto & txHash = ppb->txInfos[i].hash;
+                txidMap.emplace(txHash, blockTxNum0 + i);
+                notify->txidsAffected.insert(txHash); // add to notify set for txSubsMgr
             }
             Mempool::ScriptHashesAffectedSet affected;
             // Pre-reserve some capacity for the tmp affected set to avoid much rehashing.
@@ -2200,6 +2206,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
             }
             notify->scriptHashesAffected.merge(std::move(affected));
             notify->dspTxsAffected.merge(std::move(res.dspTxsAffected));
+            // ^^ notify->txidsAffected is updated in the above loop
         }
 
         const auto verifUndo = p->headerVerifier; // keep a copy of verifier state for undo purposes in case this fails
@@ -2244,7 +2251,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
             // NOTE: The assumption here is that ppb->txInfos is ok to share amongst threads -- that is, the assumption
             // is that nothing mutates it.  If that changes, please re-examine this code.
             CoTask::Future fut; // if valid, will auto-wait for us on scope end
-            if (hashTxHashIndex()) {
+            if (hasTxHashIndex()) {
                 if (ppb->txInfos.size() > 1000) {
                     // submit this to the co-task for blocks with enough txs
                     fut = p->blocksWorker->submitWork([&]{
@@ -2487,6 +2494,8 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
             subsmgr->enqueueNotifications(std::move(notify->scriptHashesAffected));
         if (dspsubsmgr && !notify->dspTxsAffected.empty())
             dspsubsmgr->enqueueNotifications(std::move(notify->dspTxsAffected));
+        if (txsubsmgr && !notify->txidsAffected.empty())
+            txsubsmgr->enqueueNotifications(std::move(notify->txidsAffected));
     }
 }
 
@@ -2497,7 +2506,7 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
     using NotifySet = std::unordered_set<HashX, HashHasher>;
     struct NotifyData {
         using NotifySet = std::unordered_set<HashX, HashHasher>;
-        NotifySet scriptHashesAffected, dspTxsAffected;
+        NotifySet scriptHashesAffected, dspTxsAffected, txidsAffected;
     };
     std::unique_ptr<NotifyData> notify;
 
@@ -2530,6 +2539,7 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
             if (!p->mempool.dsps.empty())
                 // since we will be clearing, just flag all in-mempool dspTxs as affected
                 notify->dspTxsAffected.merge(Util::keySet<NotifySet>(p->mempool.dsps.getTxDspsMap()));
+            notify->txidsAffected.merge(Util::keySet<NotifySet>(p->mempool.txs)); // for txSubsMgr
         }
         p->mempool.clear(); // make sure mempool is clean (see note above as to why)
 
@@ -2580,7 +2590,7 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
             // here is that the txNumsFile has all the hashes we want to delete until the below operation is done).
             CoTask::Future fut;
 
-            if (hashTxHashIndex())
+            if (hasTxHashIndex())
                 fut = p->blocksWorker->submitWork([&]{ p->db.txhash2txnumMgr->truncateForUndo(txNum0);});
 
             // undo the scripthash histories
@@ -2638,6 +2648,12 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
                 p->earliestUndoHeight = p->InvalidUndoHeight;
             GenericDBDelete(p->db.undo.get(), uint32_t(undo.height)); // make sure to delete this undo info since it was just applied.
 
+            // add all tx hashes that we are rolling back to the notify set for the txSubsMgr
+            if (notify) {
+                const auto txHashes = p->txNumsFile->readRecords(txNum0, undo.blkInfo.nTx);
+                notify->txidsAffected.insert(txHashes.begin(), txHashes.end());
+            }
+
             // Wait for the txhash2txnum truncate to finish before we proceed, since that co-task assumes the txNumsFile
             // won't change.
             if (fut.future.valid())
@@ -2677,6 +2693,8 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
             subsmgr->enqueueNotifications(std::move(notify->scriptHashesAffected));
         if (dspsubsmgr && !notify->dspTxsAffected.empty())
             dspsubsmgr->enqueueNotifications(std::move(notify->dspTxsAffected));
+        if (txsubsmgr && !notify->txidsAffected.empty())
+            txsubsmgr->enqueueNotifications(std::move(notify->txidsAffected));
     }
 
     return prevHeight;
@@ -3145,7 +3163,7 @@ auto Storage::mempoolHistogram() const -> Mempool::FeeHistogramVec
 
 auto Storage::getTxHeights(const std::vector<TxHash> &txHashes) const -> TxHeightsResult
 {
-    if (!hashTxHashIndex())
+    if (!hasTxHashIndex())
         throw IndexDisabled("The txhash index has been disabled, unable to return result");
 
     TxHeightsResult ret;

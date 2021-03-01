@@ -205,7 +205,7 @@ void SubsMgr::doNotifyAllPending()
             }
         } catch (const std::exception & e) {
             // Defensive programming here in case getFullStatus() or other functions throw (extremely unlikely)
-            Error() << "ERROR: Caught exception attempting to calculate status for scripthash: " << sh.toHex();
+            Error() << "ERROR: Caught exception attempting to calculate status for subscribable: " << sh.toHex();
         }
     }
     if (ctr || ctrSH) {
@@ -679,6 +679,12 @@ auto DSProofSubsMgr::getFullStatus(const HashX &txHash) const -> SubStatus
     return DSProof{}; // a SubStatus with a .isEmpty() indicates no proof for this txhash
 }
 
+TransactionSubsMgr::~TransactionSubsMgr() {}
+
+SubStatus TransactionSubsMgr::getFullStatus(const HashX &txHash) const
+{
+    return storage->getTxHeight(txHash);
+}
 
 #ifdef ENABLE_TESTS
 #include "App.h"

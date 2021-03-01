@@ -299,3 +299,20 @@ protected:
 private:
     void expireSubsNotInMempool(); // takes mempool lock in shared mode, called from a timer
 };
+
+class TransactionSubsMgr final : public SubsMgr {
+protected:
+    friend class ::Storage;
+    /// Only Storage can construct one of these -- Storage is guaranteed to remain alive at least as long as this instance.
+    TransactionSubsMgr(const std::shared_ptr<const Options> & opts, Storage * storage, const QString &name = "SubsMgr (Txs)")
+        : SubsMgr(opts, storage, name) {}
+public:
+    ~TransactionSubsMgr() override;
+
+    /// Thread-safe. Returns a SubStatus object which .has_value() and where .blockHeight() is not nullptr.
+    /// Will return an object with a *blockHeight() which is itself nullopt (default constructed) if the tx in question
+    /// is not known. Otherwise the **blockHeight() will be a height where 0=mempool and >0=confirmed_height.
+    ///
+    /// Note that this implicitly will take some of the Storage locks: blocksLock, blkInfoLock, and mempoolLock.
+    SubStatus getFullStatus(const HashX &txHash) const override;
+};
