@@ -1472,11 +1472,8 @@ void Server::impl_generic_subscribe(SubsMgr *subs, Client *c, const RPC::Message
                 // regular blockchain.scripthash.subscribe callback does no aliasing/rewriting and simply echoes the sh back to client as hex.
                 ret =
                     [c, method=m.method](const HashX &key, const SubStatus &status) {
-                        QVariant statusMaybeNull; // if empty we simply notify as 'null' (this is unlikely in practice but may happen on reorg)
-                        if (auto *ba = status.byteArray(); ba && !ba->isEmpty())
-                            statusMaybeNull = Util::ToHexFast(*ba);
-                        else if (auto *dsp = status.dsproof(); dsp && !dsp->isEmpty())
-                            statusMaybeNull = dsp->toVarMap();
+                        // if empty we simply notify as 'null' (this is unlikely in practice but may happen on reorg)
+                        const QVariant statusMaybeNull = status.toVariant();
                         const QByteArray keyHex = Util::ToHexFast(key);
                         emit c->sendNotification(method, QVariantList{keyHex, statusMaybeNull});
                     };
@@ -1484,11 +1481,8 @@ void Server::impl_generic_subscribe(SubsMgr *subs, Client *c, const RPC::Message
                 // When notifying, blockchain.address.subscribe callback must rewrite the sh arg -> the original address argument given by the client.
                 ret =
                     [c, method=m.method, alias=optAlias->toUtf8()](const HashX &, const SubStatus &status) {
-                        QVariant statusMaybeNull; // if empty we simply notify as 'null' (this is unlikely in practice but may happen on reorg)
-                        if (auto *ba = status.byteArray(); ba && !ba->isEmpty())
-                            statusMaybeNull = Util::ToHexFast(*ba);
-                        else if (auto *dsp = status.dsproof(); dsp && !dsp->isEmpty())
-                            statusMaybeNull = dsp->toVarMap();
+                        // if empty we simply notify as 'null' (this is unlikely in practice but may happen on reorg)
+                        const QVariant statusMaybeNull = status.toVariant();
                         emit c->sendNotification(method, QVariantList{alias, statusMaybeNull});
                     };
             }
@@ -1519,26 +1513,14 @@ void Server::impl_generic_subscribe(SubsMgr *subs, Client *c, const RPC::Message
     if (!status.has_value()) {
         // no known/cached status -- do the work ourselves asynch in the thread pool.
         generic_do_async(c, m.id, [key, subs] {
-            QVariant ret;
             const auto status = subs->getFullStatus(key);
             subs->maybeCacheStatusResult(key, status);
-            if (auto *ba = status.byteArray(); ba && !ba->isEmpty()) // if empty we return `null`, otherwise we return hex encoded bytes as the immediate status.
-                ret = Util::ToHexFast(*ba);
-            else if (auto *dsp = status.dsproof(); dsp && !dsp->isEmpty())
-                ret = dsp->toVarMap();
-            return ret;
+            // if empty we return `null`, otherwise we return hex encoded bytes, json object, or numeric as the immediate status.
+            return status.toVariant();
         });
     } else {
         // SubsMgr reported a cached status -- immediately return that as the result!
-        QVariant result;
-        if (auto *ba = status.byteArray(); ba && !ba->isEmpty())
-            // not empty, so we return the hex-encoded string
-            result = QString(Util::ToHexFast(*ba));
-        else if (auto *dsp = status.dsproof(); dsp && !dsp->isEmpty())
-            result = dsp->toVarMap();
-        // commented out because it is spammy
-        //DebugM("Sending cached status to client for subscribable: ", Util::ToHexFast(key), " status: ", result.toString());
-        //
+        const QVariant result = status.toVariant();
         emit c->sendResult(m.id, result); ///<  may be 'null' if status was empty (indicates no history for scripthash or no proof for txid)
     }
 }
@@ -1750,18 +1732,38 @@ namespace {
     }
 }
 
-void Server::rpc_blockchain_transaction_get_merkle(Client *c, const RPC::Message &m)
+void Server::rpc_blockchain_transaction_get_height(Client *c, const RPC::Message &m)
 {
     QVariantList l = m.paramsList();
-    assert(l.size() == 2);
+    assert(l.size() == 1);
     QByteArray txHash = validateHashHex( l.front().toString() );
     if (txHash.length() != HashLen)
         throw RPCError("Invalid tx hash");
-    bool ok = false;
-    unsigned height = l.back().toUInt(&ok);
-    if (!ok || height >= Storage::MAX_HEADERS)
+    generic_do_async(c, m.id, [txHash, this] {
+        const auto optHeight = storage->getTxHeight(txHash);
+        if (!optHeight)
+            throw RPCError("No transaction matching the requested hash was found");
+        return qlonglong(*optHeight);
+    });
+}
+
+void Server::rpc_blockchain_transaction_get_merkle(Client *c, const RPC::Message &m)
+{
+    QVariantList l = m.paramsList();
+    assert(l.size() >= 1 && l.size() <= 2);
+    QByteArray txHash = validateHashHex( l.front().toString() );
+    if (txHash.length() != HashLen)
+        throw RPCError("Invalid tx hash");
+    bool ok = true;
+    std::optional<BlockHeight> optHeight;
+    if (l.size() == 2) optHeight = l.back().toUInt(&ok); // they specified a height
+    if (!ok || (optHeight && *optHeight >= Storage::MAX_HEADERS))
         throw RPCError("Invalid height argument; expected non-negative numeric value");
-    generic_do_async(c, m.id, [txHash, height, this] () mutable {
+    generic_do_async(c, m.id, [txHash, optHeight, this] () mutable {
+        if (!optHeight) optHeight = storage->getTxHeight(txHash); // if no height specified, grab it from tx hash index
+        if (!optHeight || !*optHeight)
+            throw RPCError("No confirmed transaction matching the requested hash was found");
+        const auto height = *optHeight;
         auto txHashes = storage->txHashesForBlockInBitcoindMemoryOrder(height);
         std::reverse(txHash.begin(), txHash.end()); // we need to compare to bitcoind memory order so reverse specified hash
         constexpr unsigned NO_POS = ~0U;
@@ -1838,6 +1840,16 @@ void Server::rpc_blockchain_transaction_id_from_pos(Client *c, const RPC::Messag
             return QVariant(txHashHex);
         }
     });
+}
+void Server::rpc_blockchain_transaction_subscribe(Client *c, const RPC::Message &m)
+{
+    const auto txid = parseFirstHashParamCommon(m, "Invalid tx hash");
+    impl_generic_subscribe(storage->txSubs(), c, m, txid);
+}
+void Server::rpc_blockchain_transaction_unsubscribe(Client *c, const RPC::Message &m)
+{
+    const auto txid = parseFirstHashParamCommon(m, "Invalid tx hash");
+    impl_generic_unsubscribe(storage->txSubs(), c, m, txid);
 }
 // DSPROOF
 void Server::rpc_blockchain_transaction_dsproof_get(Client *c, const RPC::Message &m)
@@ -1970,8 +1982,11 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
 
     { {"blockchain.transaction.broadcast",  true,               false,    PR{1,1},                    },          MP(rpc_blockchain_transaction_broadcast) },
     { {"blockchain.transaction.get",        true,               false,    PR{1,2},                    },          MP(rpc_blockchain_transaction_get) },
-    { {"blockchain.transaction.get_merkle", true,               false,    PR{2,2},                    },          MP(rpc_blockchain_transaction_get_merkle) },
+    { {"blockchain.transaction.get_height", true,               false,    PR{1,1},                    },          MP(rpc_blockchain_transaction_get_height) },
+    { {"blockchain.transaction.get_merkle", true,               false,    PR{1,2},                    },          MP(rpc_blockchain_transaction_get_merkle) },
     { {"blockchain.transaction.id_from_pos",true,               false,    PR{2,3},                    },          MP(rpc_blockchain_transaction_id_from_pos) },
+    { {"blockchain.transaction.subscribe",   true,              false,    PR{1,1},                    },          MP(rpc_blockchain_transaction_subscribe) },
+    { {"blockchain.transaction.unsubscribe", true,              false,    PR{1,1},                    },          MP(rpc_blockchain_transaction_unsubscribe) },
     // DSPROOF
     { {"blockchain.transaction.dsproof.get",         true,      false,    PR{1,1},                    },          MP(rpc_blockchain_transaction_dsproof_get) },
     { {"blockchain.transaction.dsproof.list",        true,      false,    PR{0,0},                    },          MP(rpc_blockchain_transaction_dsproof_list) },

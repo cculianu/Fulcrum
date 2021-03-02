@@ -30,6 +30,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <stdexcept>
 #include <type_traits>
@@ -60,6 +61,10 @@ constexpr std::uint64_t bmax() {
 template <typename Int>
 void doTest(int n = 200)
 {
+    if (const auto empty = VarInt{}; empty.value<int>() != 0 || empty.size() != 1)
+        throw std::runtime_error("Default constructed value should represent 0");
+    else if (0 != std::memcmp(empty.data(), std::vector<char>(empty.maxSize, 0).data(), empty.maxSize))
+        throw std::runtime_error("Expected empty VarInt to be all 0's");
     auto * const rgen = QRandomGenerator::system();
     static_assert (sizeof(Int) <= sizeof(quint64));
     constexpr quint64 max = sizeof(Int) < sizeof(quint64) || std::is_signed_v<Int>
@@ -84,7 +89,7 @@ void doTest(int n = 200)
             const VarInt vi = val;
             hex = vi.hex();
             const Int val2 = vi.value<Int>();
-            Trace() << "Value: " << val <<  " hex: " << vi.hex() << " deserialized: " << val2 << " byteLen: " << vi.bytes().length();
+            Trace() << "Value: " << val <<  " hex: " << vi.hex() << " deserialized: " << val2 << " byteLen: " << vi.byteView().size();
             if (val != val2)
                 throw std::runtime_error("Ser/deser mistmatch!");
             int expectedLen = 1;
@@ -140,12 +145,12 @@ void doTest(int n = 200)
                 EXCPECT_EXCEPTION(std::overflow_error, vi.value<uint16_t>());
                 EXCPECT_EXCEPTION(std::overflow_error, vi.value<uint32_t>());
             }
-            if (vi.bytes().length() != expectedLen)
+            if (int(vi.byteView().size()) != expectedLen)
                 throw std::runtime_error("Length is not as expected!");
 
             // check deserialize method every 'checkEvery' iterations
             vals.push_back(val);
-            byteBlob.append(vi.bytes());
+            byteBlob.append(vi.byteArray(false));
             if (vals.size() % checkEvery == 0) {
                 Log() << "Validating serialization of " << vals.size() << " items, " << byteBlob.size() << " bytes ...";
                 auto byteSpan1 = MakeCSpan(byteBlob);

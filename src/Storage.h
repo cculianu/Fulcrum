@@ -67,6 +67,7 @@ struct HistoryTooLarge : public Exception { using Exception::Exception; ~History
 
 class ScriptHashSubsMgr;
 class DSProofSubsMgr;
+class TransactionSubsMgr;
 
 /// Manages the db and all storage-related facilities.  Most of its public methods are fully reentrant and thread-safe.
 class Storage final : public Mgr, public ThreadObjectMixin
@@ -277,6 +278,8 @@ public:
     ScriptHashSubsMgr * subs() const { return subsmgr.get(); }
     /// Identical to above, but points to the DSProofSubsMgr for this instance.
     DSProofSubsMgr * dspSubs() const { return dspsubsmgr.get(); }
+    /// Identical to above, but points to the TransactionSubsMgr for this instance.
+    TransactionSubsMgr * txSubs() const { return txsubsmgr.get(); }
 
     /// called from a timer periodically from Controller (see Controller.cpp)
     /// -- takes locks, updates compact fee histogram for the mempool
@@ -284,6 +287,20 @@ public:
 
     /// Takes a shared lock and returns the cached mempool histogram (calculated periodically in refreshMempoolHistogram above)
     Mempool::FeeHistogramVec mempoolHistogram() const;
+
+    // -- Tx Hash index based methods
+    using TxHeightsResult = std::vector<std::optional<BlockHeight>>;
+    /// Thread-safe. Does take mempool, blkInfo, and blocksLock locks in shared mode. Returns an array whose length is
+    /// equal to txHashes.size(), and for each element: if the optional is valid, then BlockHeight=0 means mempool,
+    /// and >0 means a confirmed height. If a particular TxHash was not found in the mempool or blockchain, that element
+    /// will have a std::nullopt.
+    ///
+    /// May throw DatabaseError (unlikely) or some other Exception subclass.  Note that txHashes should contain 0 or
+    /// more 32-byte hashes in big-endian (JSON) memory order, otherwise this may throw if the hashes are of the wrong
+    /// length.
+    TxHeightsResult getTxHeights(const std::vector<TxHash> &txHashes) const;
+    /// Convenience function. Same as above but optimized to query a single txhash.
+    std::optional<BlockHeight> getTxHeight(const TxHash &) const;
 
     // --- DUMP methods --- (used for debugging, largely)
 
@@ -354,6 +371,7 @@ private:
     const std::shared_ptr<const Options> options;
     const std::unique_ptr<ScriptHashSubsMgr> subsmgr;
     const std::unique_ptr<DSProofSubsMgr> dspsubsmgr;
+    const std::unique_ptr<TransactionSubsMgr> txsubsmgr;
 
     struct Pvt;
     const std::unique_ptr<Pvt> p;
@@ -365,6 +383,7 @@ private:
     void loadCheckUTXOsInDB(); ///< may throw -- called from startup()
     void loadCheckShunspentInDB(); ///< may throw -- called from startup()
     void loadCheckTxNumsFileAndBlkInfo(); ///< may throw -- called from startup()
+    void loadCheckTxHash2TxNumMgr(); ///< may throw -- called from startup()
     void loadCheckEarliestUndo(); ///< may throw -- called from startup()
 
     std::optional<Header> headerForHeight_nolock(BlockHeight height, QString *errMsg = nullptr) const;
@@ -375,6 +394,9 @@ private:
 
     /// Called from cleanup. Does some flushing and gently closes all open DBs.
     void gentlyCloseAllDBs();
+
+    // Called by heightForTxNum which calls this with the blockInfo lock held
+    std::optional<unsigned> heightForTxNum_nolock(TxNum) const;
 };
 
 Q_DECLARE_OPERATORS_FOR_FLAGS(Storage::SaveSpec)
@@ -433,6 +455,17 @@ RocksDB: "scripthash_unspent"
   using this scheme. I tried a read-modify-write approach (keying off just HashX) and it was painfully slow on synch.
   This is much faster to synch.
 
+RocksDB: "txhash2txnum"
+  Key: The last 6 bytes of the txhash in question (txhash bytes being in big endian byte order, i.e. JSON byte order).
+  Value: One or more serialized VarInts. Each VarInt represents a "TxNum" (which tells us where the actual hash lives
+    in the txnum2txhash flat file).
+  Comments: This table is basically a hash table of txhash -> txNum and it allows us to answer questions such as whether
+    a particular tx exists in the blockchain, and if so, which block it was confirmed in.  Used by some of the newer
+    RPCs. Note that to save space the keys of our hash table are just the last 6 bytes of the txhash, which is fine
+    since collisions will be relatively rare for quite some time in the future. If there is a collision then simply
+    there will be more than 1 VarInt(TxNum) in that particular bucket, and we have to check each txNum in the bucket
+    for that key in series versus the txnum flat-file.  The performance penalty for this is extremely small since the
+    txnum flat-file is extremely fast to query given a txNum.
 
 A note about ACID: (atomic, consistent, isolated, durable)
 

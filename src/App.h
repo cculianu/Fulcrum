@@ -56,18 +56,23 @@ public:
     std::shared_ptr<Options> options;
 
     /// app-global ids used for JSON-RPC 'id', as well as app-level objects we wish to track by id rather than pointer
-    inline quint64 newId() { return ++globalId; }
+    quint64 newId() { return ++globalId; }
 
     /// This is only ever true if the aboutToQuit signal has fired (as a result of this->exit() or this->quit())
-    inline bool isQuitting() const { return quitting; }
+    bool isQuitting() const { return quitting; }
 
-    inline ThreadPool *threadPool() const { return tpool.get(); }
+    /// This is thread-safe. Returns the number of SIGINT, etc signals that were caught. If this is ever above
+    /// 0, the app is about to exit. This is provided in case long-running tasks may wish to check this value
+    /// periodically.
+    int signalsCaught() const { return int(sigCtr); }
+
+    ThreadPool *threadPool() const { return tpool.get(); }
 
     /// Performance optimization to avoid dynamic_cast<App *>(qApp) in ::app() below.
-    static inline App * globalInstance() { return _globalInstance; }
+    static App * globalInstance() { return _globalInstance; }
 
     /// Convenience to obtain our singleton ThreadPool instance that goes with this singleton App instance.
-    static inline ThreadPool *globalThreadPool() { return _globalInstance ? _globalInstance->threadPool() : nullptr; }
+    static ThreadPool *globalThreadPool() { return _globalInstance ? _globalInstance->threadPool() : nullptr; }
 
     // -- Test & Bench support (requires -DENABLE_TESTS) --
     using RegisteredTest = struct{};

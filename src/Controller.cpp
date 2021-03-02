@@ -612,7 +612,10 @@ struct SynchMempoolTask : public CtlTask
 {
     SynchMempoolTask(Controller *ctl_, std::shared_ptr<Storage> storage, const std::atomic_bool & notifyFlag)
         : CtlTask(ctl_, "SynchMempool"), storage(storage), notifyFlag(notifyFlag), isBTC(ctl_->isCoinBTC())
-        { scriptHashesAffected.reserve(SubsMgr::kRecommendedPendingNotificationsReserveSize); }
+    {
+        scriptHashesAffected.reserve(SubsMgr::kRecommendedPendingNotificationsReserveSize);
+        txidsAffected.reserve(SubsMgr::kRecommendedPendingNotificationsReserveSize);
+    }
     ~SynchMempoolTask() override;
     void process() override;
 
@@ -633,6 +636,8 @@ struct SynchMempoolTask : public CtlTask
     std::unordered_set<HashX, HashHasher> scriptHashesAffected;
     /// The txids in the adds or drops that also have dsproofs associated with them (cumulative across retries, like scriptHashesAffected)
     Mempool::TxHashSet dspTxsAffected;
+    /// The txids either added or dropped -- for the txSubsMgr
+    std::unordered_set<TxHash, HashHasher> txidsAffected;
 
     void clear() {
         isdlingtxs = false;
@@ -643,6 +648,7 @@ struct SynchMempoolTask : public CtlTask
         // all the droppedTx scripthashes for each retry, so we never clear the set.
         // Note 2: we also never clear the redoCt since that counter needs to maintain state to abort too many redos.
         // Note 3: we also never clear dspTxsAffected
+        // Note 4: we never clear txidsAffected
     }
 
     /// Called when getrawtransaction errors out or when we dropTxs() and the result is too many txs so we must
@@ -669,6 +675,10 @@ SynchMempoolTask::~SynchMempoolTask() {
         if (!dspTxsAffected.empty()) {
             DebugM(objectName(), ": dspTxsAffected: ", dspTxsAffected.size());
             storage->dspSubs()->enqueueNotifications(std::move(dspTxsAffected));
+        }
+        if (!txidsAffected.empty()) {
+            //DebugM(objectName(), ": txidsAffected: ", txidsAffected.size());
+            storage->txSubs()->enqueueNotifications(std::move(txidsAffected));
         }
     }
 
@@ -901,6 +911,7 @@ void SynchMempoolTask::doDLNextTx()
             return;
         }
 
+        txidsAffected.insert(tx->hash);
         txsWaitingForResponse.erase(tx->hash);
         updateLastProgress();
         AGAIN();
@@ -980,6 +991,10 @@ void SynchMempoolTask::doGetRawMempool()
                 auto [mempool, lock] = storage->mutableMempool();
                 res = mempool.dropTxs(affected, droppedTxs, TRACE);
             } // release lock
+
+            // update this set too for txSubsMgr
+            txidsAffected.insert(droppedTxs.begin(), droppedTxs.end());
+
             // do bookkeeping, maybe print debug log
             {
                 droppedCt = res.oldSize - res.newSize;
@@ -1704,7 +1719,8 @@ auto Controller::stats() const -> Stats
     misc["Job Queue (Thread Pool)"] = ::AppThreadPool()->stats();
     st["Misc"] = misc;
     st["SubsMgr"] = storage->subs()->statsSafe(kDefaultTimeout/2);
-    st["SubsMgr (DSPs)"] = storage->dspSubs()->statsSafe(kDefaultTimeout/2);
+    st["SubsMgr (DSPs)"] = storage->dspSubs()->statsSafe(kDefaultTimeout/4);
+    st["SubsMgr (Txs)"] = storage->txSubs()->statsSafe(kDefaultTimeout/4);
     // Config (Options) map
     st["Config"] = options->toMap();
     { // Process memory usage
@@ -1776,6 +1792,10 @@ auto Controller::debug(const StatsParams &p) const -> Stats // from StatsMixin
     if (p.contains("dspsubs")) {
         const auto timeLeft = kDefaultTimeout - (Util::getTime() - t0/1000000) - 50;
         ret["subscriptions (DSProof)"] = storage->dspSubs()->debugSafe(p, std::max(5, int(timeLeft)));
+    }
+    if (p.contains("txsubs")) {
+        const auto timeLeft = kDefaultTimeout - (Util::getTime() - t0/1000000) - 50;
+        ret["subscriptions (Txs)"] = storage->txSubs()->debugSafe(p, std::max(5, int(timeLeft)));
     }
     const auto elapsed = Util::getTimeNS() - t0;
     ret["elapsed"] = QString::number(elapsed/1e6, 'f', 6) + " msec";

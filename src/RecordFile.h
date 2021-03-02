@@ -68,7 +68,12 @@ public:
     /// circumstances, the returned array will be of the same size as the recNums array, with corresponding indices
     /// containing the data obtained per recNum.  On error the returned array will be shorter than anticipated
     /// and *errStr (if specified) will be set appropriately.  Note that the recNums array is not "de-duplicated".
-    std::vector<QByteArray> readRandomRecords(const std::vector<uint64_t> & recNums, QString *errStr = nullptr) const;
+    ///
+    /// New: If `continueOnError` is true, the returned vector will always be sized exactly the same as recNums.
+    /// Any errors encountered will simply have empty QByteArrays inserted into the resulting vector. *errStr
+    /// will be the last error encountered if there are errors.
+    std::vector<QByteArray> readRandomRecords(const std::vector<uint64_t> & recNums, QString *errStr = nullptr,
+                                              bool continueOnError = false) const;
 
     /// Thread-safe, but it does take an exclusive lock.  Appends data to the file. The new record number is returned.
     /// Note that an error leads to an optional with no value being returned.  Data *must* be recordSize() bytes.

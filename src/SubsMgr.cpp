@@ -192,7 +192,8 @@ void SubsMgr::doNotifyAllPending()
             // below emit sub->statusChanged(...) will just be a no-op.
             LockGuard g(sub->mut);
             const bool doemit = !sub->lastStatusNotified.has_value() || sub->lastStatusNotified != status;
-            // we basically cache 2 statuses but they are implicitly shared copies of the same memory so it's ok.
+            // we basically cache 2 statuses -- one for what we return immediately to new subs and one to
+            // keep track of not notifying twice on the same sub.
             sub->lastStatusNotified = status;
             if (useCache)
                 sub->cachedStatus = status;
@@ -205,11 +206,11 @@ void SubsMgr::doNotifyAllPending()
             }
         } catch (const std::exception & e) {
             // Defensive programming here in case getFullStatus() or other functions throw (extremely unlikely)
-            Error() << "ERROR: Caught exception attempting to calculate status for scripthash: " << sh.toHex();
+            Error() << "ERROR: Caught exception attempting to calculate status for subscribable: " << sh.toHex();
         }
     }
     if (ctr || ctrSH) {
-        DebugM(__func__, ": ", ctr, Util::Pluralize(" client", ctr), ", ", ctrSH, Util::Pluralize(" scripthash", ctrSH),
+        DebugM(__func__, ": ", ctr, Util::Pluralize(" client", ctr), ", ", ctrSH, Util::Pluralize(" subscribable", ctrSH),
                " in ", t0.msecStr(4), " msec");
     }
 }
@@ -408,6 +409,7 @@ void SubsMgr::maybeCacheStatusResult(const HashX &sh, const SubStatus &status)
     else if (auto *dsp = status.dsproof(); dsp && !dsp->isComplete() && !dsp->isEmpty())
         // we only allow empty (default constructred) DSProofs or ones that are isComplete(), otherwise reject
         return;
+    // else .. we always cache status.blockHeight() ..
     SubRef sub = findExistingSubRef(sh);
     if (sub) {
         LockGuard g(sub->mut);
@@ -556,7 +558,7 @@ std::unordered_set<HashX, HashHasher> SubsMgr::nonZombieKeysOlderThan(const int6
 auto SubsMgr::debug(const StatsParams &params) const -> Stats
 {
     QVariant ret;
-    if (params.contains("subs") || params.contains("dspsubs")) {
+    if (params.contains("subs") || params.contains("dspsubs") || params.contains("txsubs")) {
         QVariantMap subs;
         qulonglong collisions{}, largestBucket{}, medianBucket{}, medianNonzeroBucket{};
         {
@@ -566,12 +568,8 @@ auto SubsMgr::debug(const StatsParams &params) const -> Stats
                 {
                     LockGuard g2(sub->mut);
                     m2["count"] = qlonglong(sub->subscribedClientIds.size());
-                    if (auto *ba = sub->lastStatusNotified.byteArray())
-                        m2["lastStatusNotified"] = ba->toHex();
-                    else if (auto *dsp = sub->lastStatusNotified.dsproof())
-                        m2["lastStatusNotified"] = dsp->toVarMap();
-                    else
-                        m2["lastStatusNotified"] = QVariant{};
+                    m2["lastStatusNotified"] = sub->lastStatusNotified.toVariant();
+                    m2["cachedStatus"] = sub->cachedStatus.toVariant();
                     m2["idleSecs"] = (Util::getTime() - sub->tsMsec)/1e3;
                     const auto & clients = sub->subscribedClientIds;
 #if QT_VERSION < QT_VERSION_CHECK(5, 14, 0)
@@ -679,6 +677,12 @@ auto DSProofSubsMgr::getFullStatus(const HashX &txHash) const -> SubStatus
     return DSProof{}; // a SubStatus with a .isEmpty() indicates no proof for this txhash
 }
 
+TransactionSubsMgr::~TransactionSubsMgr() {}
+
+SubStatus TransactionSubsMgr::getFullStatus(const HashX &txHash) const
+{
+    return storage->getTxHeight(txHash);
+}
 
 #ifdef ENABLE_TESTS
 #include "App.h"
