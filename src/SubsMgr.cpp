@@ -192,7 +192,8 @@ void SubsMgr::doNotifyAllPending()
             // below emit sub->statusChanged(...) will just be a no-op.
             LockGuard g(sub->mut);
             const bool doemit = !sub->lastStatusNotified.has_value() || sub->lastStatusNotified != status;
-            // we basically cache 2 statuses but they are implicitly shared copies of the same memory so it's ok.
+            // we basically cache 2 statuses -- one for what we return immediately to new subs and one to
+            // keep track of not notifying twice on the same sub.
             sub->lastStatusNotified = status;
             if (useCache)
                 sub->cachedStatus = status;
@@ -568,6 +569,7 @@ auto SubsMgr::debug(const StatsParams &params) const -> Stats
                     LockGuard g2(sub->mut);
                     m2["count"] = qlonglong(sub->subscribedClientIds.size());
                     m2["lastStatusNotified"] = sub->lastStatusNotified.toVariant();
+                    m2["cachedStatus"] = sub->cachedStatus.toVariant();
                     m2["idleSecs"] = (Util::getTime() - sub->tsMsec)/1e3;
                     const auto & clients = sub->subscribedClientIds;
 #if QT_VERSION < QT_VERSION_CHECK(5, 14, 0)
