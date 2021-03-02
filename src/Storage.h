@@ -386,8 +386,6 @@ private:
     void loadCheckTxHash2TxNumMgr(); ///< may throw -- called from startup()
     void loadCheckEarliestUndo(); ///< may throw -- called from startup()
 
-    void rebuildTxHash2TxNumTable(); ///< called from startup(), does a full rebuild of the txhash2num table from the TxNumsFile.
-
     std::optional<Header> headerForHeight_nolock(BlockHeight height, QString *errMsg = nullptr) const;
     std::vector<Header> headersFromHeight_nolock_nocheck(BlockHeight height, unsigned count, QString *errMsg = nullptr) const;
 
