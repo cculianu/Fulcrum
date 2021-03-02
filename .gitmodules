@@ -1,0 +1,3 @@
+[submodule "doc/electrum-cash-protocol"]
+	path = doc/electrum-cash-protocol
+	url = https://github.com/cculianu/electrum-cash-protocol.git
