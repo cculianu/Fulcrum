@@ -482,6 +482,7 @@ void SrvMgr::globalSubsLimitReached()
                 // we do it with a delay to give the kick code time to run.
                 emit storage->subs()->requestRemoveZombiesSoon(when);
                 emit storage->dspSubs()->requestRemoveZombiesSoon(when);
+                emit storage->txSubs()->requestRemoveZombiesSoon(when);
             }
         };
 
