@@ -69,7 +69,6 @@ DatabaseKeyNotFound::~DatabaseKeyNotFound() {} // weak vtable warning suppressio
 HeaderVerificationFailure::~HeaderVerificationFailure() {} // weak vtable warning suppression
 UndoInfoMissing::~UndoInfoMissing() {} // weak vtable warning suppression
 HistoryTooLarge::~HistoryTooLarge() {} // weak vtable warning suppression
-IndexDisabled::~IndexDisabled() {} // weak vtable warning suppression
 
 namespace {
     /// Encapsulates the 'meta' db table
@@ -1668,11 +1667,6 @@ void Storage::loadCheckTxHash2TxNumMgr()
     // the below may throw
     p->db.txhash2txnumMgr = std::make_unique<TxHash2TxNumMgr>(p->db.txhash2txnum.get(), p->db.defReadOpts, p->db.defWriteOpts,
                                                               p->txNumsFile.get(), 6, TxHash2TxNumMgr::KeyPos::End);
-    if (!hasTxHashIndex()) {
-        Warning() << "The txhash index is disabled. Some RPC commands will not be available to clients.";
-        return;
-    }
-
     try {
         // basic sanity checks -- ensure we can read the first, middle, and last hash in the txNumsFile,
         // and that those hashes exist in the txhash2txnum db
@@ -1707,8 +1701,6 @@ void Storage::loadCheckTxHash2TxNumMgr()
         } else {
             Debug() << e.what();
             Log() << "Upgrading database, this may take from 1-10 minutes, please wait ...";
-            Log() << "If you wish to decline this database upgrade, then restart " << APPNAME << " with argument "
-                  << "\"--no-txhash-index\"";
         }
         p->db.txhash2txnumMgr->rebuildDB();
     }
@@ -2251,16 +2243,14 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
             // NOTE: The assumption here is that ppb->txInfos is ok to share amongst threads -- that is, the assumption
             // is that nothing mutates it.  If that changes, please re-examine this code.
             CoTask::Future fut; // if valid, will auto-wait for us on scope end
-            if (hasTxHashIndex()) {
-                if (ppb->txInfos.size() > 1000) {
-                    // submit this to the co-task for blocks with enough txs
-                    fut = p->blocksWorker->submitWork([&]{
-                        p->db.txhash2txnumMgr->insertForBlock(blockTxNum0, ppb->txInfos);
-                    });
-                } else {
-                    // otherwise just do the work ourselves immediately here
+            if (ppb->txInfos.size() > 1000) {
+                // submit this to the co-task for blocks with enough txs
+                fut = p->blocksWorker->submitWork([&]{
                     p->db.txhash2txnumMgr->insertForBlock(blockTxNum0, ppb->txInfos);
-                }
+                });
+            } else {
+                // otherwise just do the work ourselves immediately here since this is likely faster (less overhead)
+                p->db.txhash2txnumMgr->insertForBlock(blockTxNum0, ppb->txInfos);
             }
 
             constexpr bool debugPrt = false;
@@ -2588,10 +2578,7 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
             // Asynch task -- the future will automatically be awaited on scope end (even if we throw here!)
             // Note: we await the result later down in this function before we truncate the txNumsFile. (Assumption
             // here is that the txNumsFile has all the hashes we want to delete until the below operation is done).
-            CoTask::Future fut;
-
-            if (hasTxHashIndex())
-                fut = p->blocksWorker->submitWork([&]{ p->db.txhash2txnumMgr->truncateForUndo(txNum0);});
+            CoTask::Future fut = p->blocksWorker->submitWork([&]{ p->db.txhash2txnumMgr->truncateForUndo(txNum0);});
 
             // undo the scripthash histories
             for (const auto & sh : undo.scriptHashes) {
@@ -3163,9 +3150,6 @@ auto Storage::mempoolHistogram() const -> Mempool::FeeHistogramVec
 
 auto Storage::getTxHeights(const std::vector<TxHash> &txHashes) const -> TxHeightsResult
 {
-    if (!hasTxHashIndex())
-        throw IndexDisabled("The txhash index has been disabled, unable to return result");
-
     TxHeightsResult ret;
     ret.reserve(txHashes.size());
 
@@ -3173,7 +3157,7 @@ auto Storage::getTxHeights(const std::vector<TxHash> &txHashes) const -> TxHeigh
     auto txNums = p->db.txhash2txnumMgr->findMany(txHashes);
     if (UNLIKELY(txNums.size() != txHashes.size()))
         // this should never happen
-        throw InternalError("FIXME: findMany() returned an unexpected number of elements!");
+        throw InternalError("findMany() returned an unexpected number of elements! FIXME!");
 
     // missing txNums need a mempool check; check in mempool
     {

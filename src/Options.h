@@ -261,9 +261,6 @@ public:
                               txHashCacheBytesMin = 20'000'000; ///< 20 MB minimum
     static constexpr bool isTxHashCacheBytesInRange(unsigned n) { return n >= txHashCacheBytesMin && n <= txHashCacheBytesMax; }
     unsigned txHashCacheBytes = defaultTxHashCacheBytes;
-
-    // CLI: --no-txhash-index (default: false)
-    bool noTxHashIndex = false;
 };
 
 /// A class encapsulating a simple read-only config file format.  The format is similar to the bitcoin.conf format

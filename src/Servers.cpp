@@ -1760,8 +1760,6 @@ namespace {
 
 void Server::rpc_blockchain_transaction_get_height(Client *c, const RPC::Message &m)
 {
-    if (!storage->hasTxHashIndex())
-        throw RPCError("Server lacks a tx hash index, method unavailable", RPC::ErrorCodes::Code_MethodNotFound);
     QVariantList l = m.paramsList();
     assert(l.size() == 1);
     QByteArray txHash = validateHashHex( l.front().toString() );
@@ -1782,15 +1780,13 @@ void Server::rpc_blockchain_transaction_get_merkle(Client *c, const RPC::Message
     QByteArray txHash = validateHashHex( l.front().toString() );
     if (txHash.length() != HashLen)
         throw RPCError("Invalid tx hash");
-    if (l.size() < 2 && !storage->hasTxHashIndex())
-        throw RPCError("Server lacks a tx hash index, please specify a height");
     bool ok = true;
     std::optional<BlockHeight> optHeight;
-    if (l.size() == 2) optHeight = l.back().toUInt(&ok);
+    if (l.size() == 2) optHeight = l.back().toUInt(&ok); // they specified a height
     if (!ok || (optHeight && *optHeight >= Storage::MAX_HEADERS))
         throw RPCError("Invalid height argument; expected non-negative numeric value");
     generic_do_async(c, m.id, [txHash, optHeight, this] () mutable {
-        if (!optHeight) optHeight = storage->getTxHeight(txHash);
+        if (!optHeight) optHeight = storage->getTxHeight(txHash); // if no height specified, grab it from tx hash index
         if (!optHeight || !*optHeight)
             throw RPCError("No confirmed transaction matching the requested hash was found");
         const auto height = *optHeight;
@@ -1873,15 +1869,11 @@ void Server::rpc_blockchain_transaction_id_from_pos(Client *c, const RPC::Messag
 }
 void Server::rpc_blockchain_transaction_subscribe(Client *c, const RPC::Message &m)
 {
-    if (!storage->hasTxHashIndex())
-        throw RPCError("Server lacks a tx hash index, method unavailable", RPC::ErrorCodes::Code_MethodNotFound);
     const auto txid = parseFirstHashParamCommon(m, "Invalid tx hash");
     impl_generic_subscribe(storage->txSubs(), c, m, txid);
 }
 void Server::rpc_blockchain_transaction_unsubscribe(Client *c, const RPC::Message &m)
 {
-    if (!storage->hasTxHashIndex())
-        throw RPCError("Server lacks a tx hash index, method unavailable", RPC::ErrorCodes::Code_MethodNotFound);
     const auto txid = parseFirstHashParamCommon(m, "Invalid tx hash");
     impl_generic_unsubscribe(storage->txSubs(), c, m, txid);
 }

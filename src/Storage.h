@@ -65,9 +65,6 @@ struct UndoInfoMissing : public Exception { using Exception::Exception; ~UndoInf
 /// Thrown by internally by getHistory and listUnspent if the history is too large (larger than max_history from config).
 struct HistoryTooLarge : public Exception { using Exception::Exception; ~HistoryTooLarge() override; };
 
-/// Thrown by methods such as getTxHeights() if e.g. the txhash index is missing.
-struct IndexDisabled : public Exception { using Exception::Exception; ~IndexDisabled() override; };
-
 class ScriptHashSubsMgr;
 class DSProofSubsMgr;
 class TransactionSubsMgr;
@@ -292,19 +289,15 @@ public:
     Mempool::FeeHistogramVec mempoolHistogram() const;
 
     // -- Tx Hash index based methods
-
-    /// Thread-safe. Test whether the txhash index is enabled. Default true. Comes from CLI options: --no-txhash-index.
-    bool hasTxHashIndex() const { return !options->noTxHashIndex; }
-
     using TxHeightsResult = std::vector<std::optional<BlockHeight>>;
     /// Thread-safe. Does take mempool, blkInfo, and blocksLock locks in shared mode. Returns an array whose length is
     /// equal to txHashes.size(), and for each element: if the optional is valid, then BlockHeight=0 means mempool,
     /// and >0 means a confirmed height. If a particular TxHash was not found in the mempool or blockchain, that element
     /// will have a std::nullopt.
     ///
-    /// Note that if the tx hash index is not enabled, this will throw IndexDisabled.  May throw DatabaseError (unlikely)
-    /// or some other Exception subclass.  Note that txHashes should contain 0 or more 32-byte hashes in big-endian
-    /// (JSON) memory order, otherwise this may throw if the hashes are of the wrong length.
+    /// May throw DatabaseError (unlikely) or some other Exception subclass.  Note that txHashes should contain 0 or
+    /// more 32-byte hashes in big-endian (JSON) memory order, otherwise this may throw if the hashes are of the wrong
+    /// length.
     TxHeightsResult getTxHeights(const std::vector<TxHash> &txHashes) const;
     /// Convenience function. Calls above.
     std::optional<BlockHeight> getTxHeight(const TxHash &) const;
