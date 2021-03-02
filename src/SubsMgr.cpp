@@ -408,6 +408,7 @@ void SubsMgr::maybeCacheStatusResult(const HashX &sh, const SubStatus &status)
     else if (auto *dsp = status.dsproof(); dsp && !dsp->isComplete() && !dsp->isEmpty())
         // we only allow empty (default constructred) DSProofs or ones that are isComplete(), otherwise reject
         return;
+    // else .. we always cache status.blockHeight() ..
     SubRef sub = findExistingSubRef(sh);
     if (sub) {
         LockGuard g(sub->mut);
@@ -566,14 +567,7 @@ auto SubsMgr::debug(const StatsParams &params) const -> Stats
                 {
                     LockGuard g2(sub->mut);
                     m2["count"] = qlonglong(sub->subscribedClientIds.size());
-                    if (auto *ba = sub->lastStatusNotified.byteArray())
-                        m2["lastStatusNotified"] = ba->toHex();
-                    else if (auto *dsp = sub->lastStatusNotified.dsproof())
-                        m2["lastStatusNotified"] = dsp->toVarMap();
-                    else if (auto *bh = sub->lastStatusNotified.blockHeight())
-                        m2["lastStatusNotified"] = *bh ? QVariant(qlonglong(**bh)) : QVariant{""};
-                    else
-                        m2["lastStatusNotified"] = QVariant{};
+                    m2["lastStatusNotified"] = sub->lastStatusNotified.toVariant();
                     m2["idleSecs"] = (Util::getTime() - sub->tsMsec)/1e3;
                     const auto & clients = sub->subscribedClientIds;
 #if QT_VERSION < QT_VERSION_CHECK(5, 14, 0)

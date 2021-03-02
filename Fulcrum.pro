@@ -301,6 +301,7 @@ SOURCES += \
     SrvMgr.cpp \
     Storage.cpp \
     SubsMgr.cpp \
+    SubStatus.cpp \
     ThreadPool.cpp \
     TXO.cpp \
     Util.cpp \

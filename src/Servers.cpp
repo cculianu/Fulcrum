@@ -1472,13 +1472,8 @@ void Server::impl_generic_subscribe(SubsMgr *subs, Client *c, const RPC::Message
                 // regular blockchain.scripthash.subscribe callback does no aliasing/rewriting and simply echoes the sh back to client as hex.
                 ret =
                     [c, method=m.method](const HashX &key, const SubStatus &status) {
-                        QVariant statusMaybeNull; // if empty we simply notify as 'null' (this is unlikely in practice but may happen on reorg)
-                        if (auto *ba = status.byteArray(); ba && !ba->isEmpty())
-                            statusMaybeNull = Util::ToHexFast(*ba);
-                        else if (auto *dsp = status.dsproof(); dsp && !dsp->isEmpty())
-                            statusMaybeNull = dsp->toVarMap();
-                        else if (auto *bh = status.blockHeight(); bh && *bh)
-                            statusMaybeNull = **bh; // ptr -> optional -> value
+                        // if empty we simply notify as 'null' (this is unlikely in practice but may happen on reorg)
+                        const QVariant statusMaybeNull = status.toVariant();
                         const QByteArray keyHex = Util::ToHexFast(key);
                         emit c->sendNotification(method, QVariantList{keyHex, statusMaybeNull});
                     };
@@ -1486,13 +1481,8 @@ void Server::impl_generic_subscribe(SubsMgr *subs, Client *c, const RPC::Message
                 // When notifying, blockchain.address.subscribe callback must rewrite the sh arg -> the original address argument given by the client.
                 ret =
                     [c, method=m.method, alias=optAlias->toUtf8()](const HashX &, const SubStatus &status) {
-                        QVariant statusMaybeNull; // if empty we simply notify as 'null' (this is unlikely in practice but may happen on reorg)
-                        if (auto *ba = status.byteArray(); ba && !ba->isEmpty())
-                            statusMaybeNull = Util::ToHexFast(*ba);
-                        else if (auto *dsp = status.dsproof(); dsp && !dsp->isEmpty())
-                            statusMaybeNull = dsp->toVarMap();
-                        else if (auto *bh = status.blockHeight(); bh && *bh)
-                            statusMaybeNull = **bh; // ptr -> optional -> value
+                        // if empty we simply notify as 'null' (this is unlikely in practice but may happen on reorg)
+                        const QVariant statusMaybeNull = status.toVariant();
                         emit c->sendNotification(method, QVariantList{alias, statusMaybeNull});
                     };
             }
@@ -1523,30 +1513,14 @@ void Server::impl_generic_subscribe(SubsMgr *subs, Client *c, const RPC::Message
     if (!status.has_value()) {
         // no known/cached status -- do the work ourselves asynch in the thread pool.
         generic_do_async(c, m.id, [key, subs] {
-            QVariant ret;
             const auto status = subs->getFullStatus(key);
             subs->maybeCacheStatusResult(key, status);
-            if (auto *ba = status.byteArray(); ba && !ba->isEmpty()) // if empty we return `null`, otherwise we return hex encoded bytes as the immediate status.
-                ret = Util::ToHexFast(*ba);
-            else if (auto *dsp = status.dsproof(); dsp && !dsp->isEmpty())
-                ret = dsp->toVarMap();
-            else if (auto *bh = status.blockHeight(); bh && *bh)
-                ret = **bh; // ptr -> optional -> value
-            return ret;
+            // if empty we return `null`, otherwise we return hex encoded bytes, json object, or numeric as the immediate status.
+            return status.toVariant();
         });
     } else {
         // SubsMgr reported a cached status -- immediately return that as the result!
-        QVariant result;
-        if (auto *ba = status.byteArray(); ba && !ba->isEmpty())
-            // not empty, so we return the hex-encoded string
-            result = QString(Util::ToHexFast(*ba));
-        else if (auto *dsp = status.dsproof(); dsp && !dsp->isEmpty())
-            result = dsp->toVarMap();
-        else if (auto *bh = status.blockHeight(); bh && *bh)
-            result = **bh; // ptr -> optional -> value
-        // commented out because it is spammy
-        //DebugM("Sending cached status to client for subscribable: ", Util::ToHexFast(key), " status: ", result.toString());
-        //
+        const QVariant result = status.toVariant();
         emit c->sendResult(m.id, result); ///<  may be 'null' if status was empty (indicates no history for scripthash or no proof for txid)
     }
 }

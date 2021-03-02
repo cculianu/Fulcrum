@@ -22,6 +22,7 @@
 
 #include <QByteArray>
 #include <QMetaType>
+#include <QVariant>
 
 #include <cstdint>
 #include <memory>
@@ -176,6 +177,11 @@ public:
 
     const std::optional<BlockHeight> * blockHeight() const noexcept { return t == BH ? &bh : nullptr; }
     std::optional<BlockHeight> * blockHeight() noexcept { return t == BH ? &bh : nullptr; }
+
+    /// Render this for JSON RPC (as a status result for notifications).  If !has_value() then it will be null,
+    /// otherwise if it has a valid value it will be rendered as a string, or a dsproof object, or a number.
+    /// Note that even if has_value(), this may still be a QVariant() (null).
+    QVariant toVariant() const;
 };
 
 /// Specialization of std::hash so we can use SubStatus with std::unordered_map, std::unordered_set, etc
