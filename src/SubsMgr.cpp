@@ -556,7 +556,7 @@ std::unordered_set<HashX, HashHasher> SubsMgr::nonZombieKeysOlderThan(const int6
 auto SubsMgr::debug(const StatsParams &params) const -> Stats
 {
     QVariant ret;
-    if (params.contains("subs") || params.contains("dspsubs")) {
+    if (params.contains("subs") || params.contains("dspsubs") || params.contains("txsubs")) {
         QVariantMap subs;
         qulonglong collisions{}, largestBucket{}, medianBucket{}, medianNonzeroBucket{};
         {
