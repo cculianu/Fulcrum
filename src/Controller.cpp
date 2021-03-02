@@ -1719,7 +1719,8 @@ auto Controller::stats() const -> Stats
     misc["Job Queue (Thread Pool)"] = ::AppThreadPool()->stats();
     st["Misc"] = misc;
     st["SubsMgr"] = storage->subs()->statsSafe(kDefaultTimeout/2);
-    st["SubsMgr (DSPs)"] = storage->dspSubs()->statsSafe(kDefaultTimeout/2);
+    st["SubsMgr (DSPs)"] = storage->dspSubs()->statsSafe(kDefaultTimeout/4);
+    st["SubsMgr (Transactions)"] = storage->txSubs()->statsSafe(kDefaultTimeout/4);
     // Config (Options) map
     st["Config"] = options->toMap();
     { // Process memory usage
@@ -1791,6 +1792,10 @@ auto Controller::debug(const StatsParams &p) const -> Stats // from StatsMixin
     if (p.contains("dspsubs")) {
         const auto timeLeft = kDefaultTimeout - (Util::getTime() - t0/1000000) - 50;
         ret["subscriptions (DSProof)"] = storage->dspSubs()->debugSafe(p, std::max(5, int(timeLeft)));
+    }
+    if (p.contains("txsubs")) {
+        const auto timeLeft = kDefaultTimeout - (Util::getTime() - t0/1000000) - 50;
+        ret["subscriptions (Transactions)"] = storage->txSubs()->debugSafe(p, std::max(5, int(timeLeft)));
     }
     const auto elapsed = Util::getTimeNS() - t0;
     ret["elapsed"] = QString::number(elapsed/1e6, 'f', 6) + " msec";

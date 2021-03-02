@@ -740,8 +740,6 @@ namespace {
 
         bool exists(const TxHash &txHash) const { return bool(find(txHash)); }
 
-        static const QByteArray kLargestTxNumSeenKeyPrefix;
-
     private:
         ByteView makeKeyFromHash(const ByteView &bv) const {
             const auto len = bv.size();
@@ -754,6 +752,7 @@ namespace {
             else // Beginning
                 return bv.substr(0, keyBytes);
         }
+        static const QByteArray kLargestTxNumSeenKeyPrefix;
         QByteArray makeLargestTxNumSeenKey() const {
             auto ret = kLargestTxNumSeenKeyPrefix;
             if (size_t(ret.length()) <= keyBytes)
@@ -1125,8 +1124,8 @@ void Storage::startup()
 {
     Log() << "Loading database ...";
 
-    if (UNLIKELY(!subsmgr || !options || !dspsubsmgr))
-        throw BadArgs("Storage instance constructed with nullptr for `options` and/or `subsmgr` and/or `dspsubsmgr` -- FIXME!");
+    if (UNLIKELY(!subsmgr || !options || !dspsubsmgr || !txsubsmgr))
+        throw BadArgs("Storage instance constructed with nullptr for `options` and/or `subsmgr` and/or `dspsubsmgr` and/or `txsubsmgr` -- FIXME!");
 
     subsmgr->startup(); // trivial, always succeeds if constructed correctly
     dspsubsmgr->startup(); // trivial, always succeeds if constructed correctly
@@ -1299,6 +1298,7 @@ void Storage::cleanup()
 {
     stop(); // joins our thread
     if (p->blocksWorker) p->blocksWorker.reset(); // stop the co-task
+    if (txsubsmgr) txsubsmgr->cleanup();
     if (dspsubsmgr) dspsubsmgr->cleanup();
     if (subsmgr) subsmgr->cleanup();
     gentlyCloseAllDBs();
@@ -3181,9 +3181,19 @@ auto Storage::getTxHeights(const std::vector<TxHash> &txHashes) const -> TxHeigh
 
 auto Storage::getTxHeight(const TxHash &h) const -> std::optional<BlockHeight>
 {
+    // We could have just called the above function but the below is a bit faster since it calls TxHash2TxNumMgr::find()
+    // rather than findMany(), which is slightly faster.
     std::optional<BlockHeight> ret;
-    auto vec = getTxHeights({h});
-    if (!vec.empty()) ret = std::move(vec.front());
+    SharedLockGuard g(p->blocksLock);
+    const auto optTxNum = p->db.txhash2txnumMgr->find(h);
+    if (optTxNum) {
+        // resolve txNum -> height; this ends up taking blkInfoLock (shared mode)
+        ret = heightForTxNum(*optTxNum);
+    } else {
+        // check mempool, this ends up taking the mempool lock (shared mode)
+        if (mempool().first.txs.count(h)) // lock held until statement end
+            ret = 0; // 0 = mempool tx
+    }
     return ret;
 }
 

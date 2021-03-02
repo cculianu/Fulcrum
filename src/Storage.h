@@ -299,7 +299,7 @@ public:
     /// more 32-byte hashes in big-endian (JSON) memory order, otherwise this may throw if the hashes are of the wrong
     /// length.
     TxHeightsResult getTxHeights(const std::vector<TxHash> &txHashes) const;
-    /// Convenience function. Calls above.
+    /// Convenience function. Same as above but optimized to query a single txhash.
     std::optional<BlockHeight> getTxHeight(const TxHash &) const;
 
     // --- DUMP methods --- (used for debugging, largely)
