@@ -570,6 +570,8 @@ auto SubsMgr::debug(const StatsParams &params) const -> Stats
                         m2["lastStatusNotified"] = ba->toHex();
                     else if (auto *dsp = sub->lastStatusNotified.dsproof())
                         m2["lastStatusNotified"] = dsp->toVarMap();
+                    else if (auto *bh = sub->lastStatusNotified.blockHeight())
+                        m2["lastStatusNotified"] = *bh ? QVariant(qlonglong(**bh)) : QVariant{""};
                     else
                         m2["lastStatusNotified"] = QVariant{};
                     m2["idleSecs"] = (Util::getTime() - sub->tsMsec)/1e3;
