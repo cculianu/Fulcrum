@@ -209,7 +209,7 @@ void SubsMgr::doNotifyAllPending()
         }
     }
     if (ctr || ctrSH) {
-        DebugM(__func__, ": ", ctr, Util::Pluralize(" client", ctr), ", ", ctrSH, Util::Pluralize(" subscribables", ctrSH),
+        DebugM(__func__, ": ", ctr, Util::Pluralize(" client", ctr), ", ", ctrSH, Util::Pluralize(" subscribable", ctrSH),
                " in ", t0.msecStr(4), " msec");
     }
 }
