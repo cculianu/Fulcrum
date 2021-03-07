@@ -1240,7 +1240,7 @@ void Storage::startup()
             saveMeta_impl();
         }
         if (isDirty()) {
-            throw DatabaseError("It appears that " APPNAME " was forcefully killed in the middle of committng a block to the db. "
+            throw DatabaseError("It appears that " APPNAME " was forcefully killed in the middle of committing a block to the db. "
                                 "We cannot figure out where exactly in the update process " APPNAME " was killed, so we "
                                 "cannot undo the inconsistent state caused by the unexpected shutdown. Sorry!"
                                 "\n\nThe database has been corrupted. Please delete the datadir and resynch to bitcoind.\n");
