@@ -34,7 +34,6 @@
 /// for work to be submitted to it via a lambda.
 class CoTask
 {
-    Q_DISABLE_COPY_MOVE(CoTask);
 public:
     CoTask(const QString &name = {});
     ~CoTask();
@@ -93,4 +92,3 @@ private:
         return ret;
     }
 };
-
