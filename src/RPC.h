@@ -31,6 +31,7 @@
 
 #include <memory>
 #include <optional>
+#include <unordered_map>
 #include <utility> // for std::pair
 #include <variant>
 
@@ -186,8 +187,7 @@ namespace RPC {
         QString jsonRpcVersion() const { return data.value(s_jsonrpc).toString(); }
     };
 
-
-    using MethodMap = QHash<QString, Method>;
+    using MethodMap = std::unordered_map<QString, Method, Util::StdQStringHasher>;
 
     /// A semi-concrete derived class of AbstractConnection implementing a
     /// JSON-RPC based method<->result protocol.  This class is client/server

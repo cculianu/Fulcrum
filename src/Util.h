@@ -768,6 +768,11 @@ namespace Util {
         }
     };
 
+    /// Helper to allow us to use QStrings as keys in std::unorderd_map
+    struct StdQStringHasher {
+        std::size_t operator()(const QString &qs) const { return Util::hashForStd(qs); }
+    };
+
     /// Template of use with unordered_map or unordered_set or similar.
     /// Returns a tuple of: [number_of_collisions_total, largest_single_bucket, median_bucket_size, median_nonzero_bucket_size]
     /// Note: this is slow-ish so it should be used for debug purposes only and not in a critical path.
