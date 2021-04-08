@@ -1,4 +1,4 @@
-/* auto-generated on 2021-04-05 11:55:39 -0400. Do not edit! */
+/* auto-generated on 2021-03-31 14:38:52 -0400. Do not edit! */
 /* begin file src/simdjson.cpp */
 #include "simdjson.h"
 
@@ -9,8 +9,6 @@ SIMDJSON_DISABLE_UNDESIRED_WARNINGS
 #include <cstring>
 #include <cstdint>
 #include <array>
-#include <cmath>
-
 namespace simdjson {
 namespace internal {
 /*!
@@ -868,9 +866,9 @@ inline char *format_buffer(char *buf, int len, int decimal_exponent,
 
     std::memset(buf + k, '0', static_cast<size_t>(n) - static_cast<size_t>(k));
     // Make it look like a floating-point number (#362, #378)
-    // buf[n + 0] = '.';
-    // buf[n + 1] = '0';
-    return buf + (static_cast<size_t>(n));
+    buf[n + 0] = '.';
+    buf[n + 1] = '0';
+    return buf + (static_cast<size_t>(n) + 2);
   }
 
   if (0 < n && n <= max_exp) {
@@ -923,8 +921,7 @@ format. Returns an iterator pointing past-the-end of the decimal representation.
 */
 char *to_chars(char *first, const char *last, double value) {
   static_cast<void>(last); // maybe unused - fix warning
-  bool negative = std::signbit(value);
-  if (negative) {
+  if (value <= -0) {
     value = -value;
     *first++ = '-';
   }
@@ -933,10 +930,8 @@ char *to_chars(char *first, const char *last, double value) {
   {
     *first++ = '0';
     // Make it look like a floating-point number (#362, #378)
-    if(negative) {
-      *first++ = '.';
-      *first++ = '0';
-    }
+    *first++ = '.';
+    *first++ = '0';
     return first;
   }
   // Compute v = buffer * 10^decimal_exponent.
@@ -4064,12 +4059,12 @@ simdjson_warn_unused simdjson_really_inline error_code json_iterator::walk_docum
   {
     auto value = advance();
 
-    // Make sure the outer object or array is closed before continuing; otherwise, there are ways we
+    // Make sure the outer hash or array is closed before continuing; otherwise, there are ways we
     // could get into memory corruption. See https://github.com/simdjson/simdjson/issues/906
     if (!STREAMING) {
       switch (*value) {
-        case '{': if (last_structural() != '}') { log_value("starting brace unmatched"); return TAPE_ERROR; }; break;
-        case '[': if (last_structural() != ']') { log_value("starting bracket unmatched"); return TAPE_ERROR; }; break;
+        case '{': if (last_structural() != '}') { return TAPE_ERROR; }; break;
+        case '[': if (last_structural() != ']') { return TAPE_ERROR; }; break;
       }
     }
 
@@ -5338,12 +5333,12 @@ simdjson_warn_unused simdjson_really_inline error_code json_iterator::walk_docum
   {
     auto value = advance();
 
-    // Make sure the outer object or array is closed before continuing; otherwise, there are ways we
+    // Make sure the outer hash or array is closed before continuing; otherwise, there are ways we
     // could get into memory corruption. See https://github.com/simdjson/simdjson/issues/906
     if (!STREAMING) {
       switch (*value) {
-        case '{': if (last_structural() != '}') { log_value("starting brace unmatched"); return TAPE_ERROR; }; break;
-        case '[': if (last_structural() != ']') { log_value("starting bracket unmatched"); return TAPE_ERROR; }; break;
+        case '{': if (last_structural() != '}') { return TAPE_ERROR; }; break;
+        case '[': if (last_structural() != ']') { return TAPE_ERROR; }; break;
       }
     }
 
@@ -7352,12 +7347,12 @@ simdjson_warn_unused simdjson_really_inline error_code json_iterator::walk_docum
   {
     auto value = advance();
 
-    // Make sure the outer object or array is closed before continuing; otherwise, there are ways we
+    // Make sure the outer hash or array is closed before continuing; otherwise, there are ways we
     // could get into memory corruption. See https://github.com/simdjson/simdjson/issues/906
     if (!STREAMING) {
       switch (*value) {
-        case '{': if (last_structural() != '}') { log_value("starting brace unmatched"); return TAPE_ERROR; }; break;
-        case '[': if (last_structural() != ']') { log_value("starting bracket unmatched"); return TAPE_ERROR; }; break;
+        case '{': if (last_structural() != '}') { return TAPE_ERROR; }; break;
+        case '[': if (last_structural() != ']') { return TAPE_ERROR; }; break;
       }
     }
 
@@ -9358,12 +9353,12 @@ simdjson_warn_unused simdjson_really_inline error_code json_iterator::walk_docum
   {
     auto value = advance();
 
-    // Make sure the outer object or array is closed before continuing; otherwise, there are ways we
+    // Make sure the outer hash or array is closed before continuing; otherwise, there are ways we
     // could get into memory corruption. See https://github.com/simdjson/simdjson/issues/906
     if (!STREAMING) {
       switch (*value) {
-        case '{': if (last_structural() != '}') { log_value("starting brace unmatched"); return TAPE_ERROR; }; break;
-        case '[': if (last_structural() != ']') { log_value("starting bracket unmatched"); return TAPE_ERROR; }; break;
+        case '{': if (last_structural() != '}') { return TAPE_ERROR; }; break;
+        case '[': if (last_structural() != ']') { return TAPE_ERROR; }; break;
       }
     }
 
@@ -11398,12 +11393,12 @@ simdjson_warn_unused simdjson_really_inline error_code json_iterator::walk_docum
   {
     auto value = advance();
 
-    // Make sure the outer object or array is closed before continuing; otherwise, there are ways we
+    // Make sure the outer hash or array is closed before continuing; otherwise, there are ways we
     // could get into memory corruption. See https://github.com/simdjson/simdjson/issues/906
     if (!STREAMING) {
       switch (*value) {
-        case '{': if (last_structural() != '}') { log_value("starting brace unmatched"); return TAPE_ERROR; }; break;
-        case '[': if (last_structural() != ']') { log_value("starting bracket unmatched"); return TAPE_ERROR; }; break;
+        case '{': if (last_structural() != '}') { return TAPE_ERROR; }; break;
+        case '[': if (last_structural() != ']') { return TAPE_ERROR; }; break;
       }
     }
 
