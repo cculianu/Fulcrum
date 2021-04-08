@@ -1601,6 +1601,7 @@ bool App::logSimdJsonInfo()
 QString App::extendedVersionString(bool justLibs)
 {
     QString ret;
+    const QString kUnavailable{"unavailable"};
     QTextStream ts(&ret, QIODevice::WriteOnly);
     auto getCompiler = [] {
         QString compiler;
@@ -1628,7 +1629,7 @@ QString App::extendedVersionString(bool justLibs)
         }
         ts << "version " << v;
     } else
-        ts << "unavailable";
+        ts << kUnavailable;
     ts << "\n";
 
     ts << "Qt: version " << QLibraryInfo::version().toString() << "\n";
@@ -1639,14 +1640,21 @@ QString App::extendedVersionString(bool justLibs)
     if (auto v = Json::SimdJson::versionString(); !v.isEmpty())
         ts << "version " << v;
     else
-        ts << "unavailable";
+        ts << kUnavailable;
+    ts << "\n";
+
+    ts << "ssl: ";
+    if (QString v; QSslSocket::supportsSsl() && !(v = QSslSocket::sslLibraryVersionString()).isEmpty())
+        ts << v;
+    else
+        ts << kUnavailable;
     ts << "\n";
 
     ts << "zmq: ";
     if (auto v = ZmqSubNotifier::versionString(); !v.isEmpty())
         ts << v;
     else
-        ts << "unavailable";
+        ts << kUnavailable;
     ts << "\n";
 
     return ret;
