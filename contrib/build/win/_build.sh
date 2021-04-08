@@ -14,6 +14,11 @@ ROCKSDB_PACKAGE="$2"
 JEMALLOC_PACKAGE="$3"
 TARGET_BINARY=Fulcrum.exe
 TARGET_ADMIN_SCRIPT=FulcrumAdmin
+if [ -n "$4" ]; then
+    DEBUG_BUILD=1  # optional 4th arg, if not empty, is debug
+else
+    DEBUG_BUILD=0
+fi
 
 top=/work
 cd "$top" || fail "Could not cd $top"
@@ -32,11 +37,13 @@ JEMALLOC_LIBDIR=$(jemalloc-config --libdir)
 [ -n "$JEMALLOC_LIBDIR" ] || fail "Could not determine JEMALLOC_LIBDIR"
 JEMALLOC_INCDIR=$(jemalloc-config --includedir)
 [ -n "$JEMALLOC_INCDIR" ] || fail "Could not determine JEMALLOC_INCDIR"
-for a in "$JEMALLOC_LIBDIR"/jemalloc*.lib; do
-    bn=`basename $a`
-    info "Stripping $bn ..."
-    x86_64-w64-mingw32.static-strip -g "$a" || fail "Failed to strip $a"
-done
+if ((! DEBUG_BUILD)); then
+    for a in "$JEMALLOC_LIBDIR"/jemalloc*.lib; do
+        bn=`basename $a`
+        info "Stripping $bn ..."
+        x86_64-w64-mingw32.static-strip -g "$a" || fail "Failed to strip $a"
+    done
+fi
 printok "jemalloc static library built and installed in $JEMALLOC_LIBDIR"
 
 cd "$top" || fail "Could not cd $top"  # back to top to proceed to rocksdb build
@@ -46,15 +53,17 @@ cd "$ROCKSDB_PACKAGE" && mkdir build/ && cd build || fail "Could not change to b
 /opt/mxe/usr/x86_64-pc-linux-gnu/bin/cmake  .. -DCMAKE_C_COMPILER=x86_64-w64-mingw32.static-gcc \
     -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32.static-g++ -DCMAKE_SYSTEM_NAME=Windows \
     -DCMAKE_HOST_SYSTEM_NAME=Linux -G"Unix Makefiles" -DWITH_GFLAGS=0 -DWITH_JNI=0  \
-    -DCMAKE_BUILD_TYPE=Release -DUSE_RTTI=1 -DPORTABLE=1 -DWITH_JEMALLOC=OFF \
+    -DCMAKE_BUILD_TYPE="Release" -DUSE_RTTI=1 -DPORTABLE=1 -DWITH_JEMALLOC=OFF \
 || fail "Could not run CMake"
 
 info "Building RocksDB ..."
 #make -j`nproc` VERBOSE=1 rocksdb || fail "Could not build RocksDB"  # Uncomment this for verbose compile
 make -j`nproc` rocksdb || fail "Could not build RocksDB"
 
-info "Stripping librocksdb.a ..."
-x86_64-w64-mingw32.static-strip -g librocksdb.a || fail "Could not strip librocksdb.a"
+if ((! DEBUG_BUILD)); then
+    info "Stripping librocksdb.a ..."
+    x86_64-w64-mingw32.static-strip -g librocksdb.a || fail "Could not strip librocksdb.a"
+fi
 
 info "Copying librocksdb.a to Fulcrum directory ..."
 ROCKSDB_LIBDIR="$top"/"$PACKAGE"/staticlibs/rocksdb/bin/custom_win64  # prevents -dirty git commit hash
@@ -65,10 +74,19 @@ printok "RocksDB built and moved to Fulcrum staticlibs directory"
 
 cd "$top"/"$PACKAGE" || fail "Could not chdir to Fulcrum dir"
 
-info "Building Fulcrum ..."
+if ((DEBUG_BUILD)); then
+    dbg_opts="CONFIG+=debug CONFIG-=release"
+    dbg_blurb="(Debug)"
+    out_dir="debug"
+else
+    dbg_opts="CONFIG-=debug CONFIG+=release"
+    dbg_blurb="(Release)"
+    out_dir="release"
+fi
+
+info "Building Fulcrum ${dbg_blurb} ..."
 mkdir build && cd build || fail "Could not create/change-to build/"
-qmake ../Fulcrum.pro "CONFIG-=debug" \
-                     "CONFIG+=release" \
+qmake ../Fulcrum.pro ${dbg_opts} \
                      "LIBS+=-L${ROCKSDB_LIBDIR} -lrocksdb" \
                      "INCLUDEPATH+=${ROCKSDB_INCDIR}" \
                      "LIBS+=-L${JEMALLOC_LIBDIR} -ljemalloc" \
@@ -80,12 +98,12 @@ qmake ../Fulcrum.pro "CONFIG-=debug" \
     || fail "Could not run qmake"
 make -j`nproc`  || fail "Could not run make"
 
-ls -al "release/$TARGET_BINARY" || fail "$TARGET_BINARY not found"
+ls -al "${out_dir}/$TARGET_BINARY" || fail "$TARGET_BINARY not found"
 printok "$TARGET_BINARY built"
 
 info "Copying to top level ..."
 mkdir -p "$top/built" || fail "Could not create build products directory"
-cp -fpva "release/$TARGET_BINARY" "$top/built/." || fail "Could not copy $TARGET_BINARY"
+cp -fpva "${out_dir}/$TARGET_BINARY" "$top/built/." || fail "Could not copy $TARGET_BINARY"
 cd "$top" || fail "Could not cd to $top"
 
 function build_AdminScript {
