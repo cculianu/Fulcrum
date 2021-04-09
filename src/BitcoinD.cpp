@@ -731,7 +731,7 @@ auto BitcoinD::stats() const -> Stats
 }
 
 BitcoinD::BitcoinD(const QString &host, quint16 port, const QString & user, const QString &pass, bool useSsl_)
-    : RPC::HttpConnection(RPC::MethodMap{}, newId(), nullptr, 0 /* = unlimited read buffer -- no limit to response size */),
+    : RPC::HttpConnection(nullptr, newId(), nullptr, 0 /* = unlimited read buffer -- no limit to response size */),
       host(host), port(port), useSsl(useSsl_)
 {
     static int N = 1;

@@ -172,7 +172,8 @@ protected:
 public:
     ~ServerBase() override;
 
-    inline const RPC::MethodMap & rpcMethods() const { return methods; }
+    /// @returns a reference to the long-lived rpc method map
+    const RPC::MethodMap & rpcMethods() const { return methods; }
 
     /// From StatsMixin. This must be called in the thread context of this thread (use statsSafe() for the blocking, thread-safe version!)
     QVariant stats() const override;
@@ -562,7 +563,7 @@ protected:
     friend class ::ServerBase;
     friend class ::Server;
     /// NB: sock should be in an already connected state.
-    explicit Client(const RPC::MethodMap & methods, IdMixin::Id id, QTcpSocket *sock, int maxBuffer);
+    explicit Client(const RPC::MethodMap * methods, IdMixin::Id id, QTcpSocket *sock, int maxBuffer);
 public:
     ~Client() override;
 

@@ -42,6 +42,11 @@ namespace RPC {
     /*static*/ const QString Message::s_params("params");
     /*static*/ const QString Message::s_result("result");
 
+    namespace {
+        // used internally
+        const MethodMap EmptyMethodMap{};
+    }
+
     /* Note that we set `ParserBackend::Default` here, however the actual app default for Fulcrum is
      * `ParserBackend::FastestAvailable` which is set in App.cpp on startup. */
     static std::atomic<Json::ParserBackend> jsonParserBackend = Json::ParserBackend::Default;
@@ -235,8 +240,8 @@ namespace RPC {
         return ret;
     }
 
-    ConnectionBase::ConnectionBase(const MethodMap & methods, IdMixin::Id id_in, QObject *parent, qint64 maxBuffer_)
-        : AbstractConnection(id_in, parent, maxBuffer_), methods(methods)
+    ConnectionBase::ConnectionBase(const MethodMap * methods_, IdMixin::Id id_in, QObject *parent, qint64 maxBuffer_)
+        : AbstractConnection(id_in, parent, maxBuffer_), methods(methods_ ? *methods_ : EmptyMethodMap)
     {
     }
 

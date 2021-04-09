@@ -50,6 +50,7 @@
 #include <limits>
 #include <list>
 #include <mutex>
+#include <shared_mutex>
 #include <type_traits>
 #include <utility>
 
@@ -546,7 +547,7 @@ Client *
 ServerBase::newClient(QTcpSocket *sock)
 {
     const auto clientId = newId();
-    auto ret = clientsById[clientId] = new Client(rpcMethods(), clientId, sock, options->maxBuffer.load());
+    auto ret = clientsById[clientId] = new Client(&rpcMethods(), clientId, sock, options->maxBuffer.load());
     const auto addr = ret->peerAddress();
 
     ret->perIPData = Client::PerIPDataHolder_Temp::take(sock); // take ownership of the PerIPData ref, implicitly delete the temp holder attached to the socket
@@ -2004,10 +2005,19 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
 #undef PR
 #undef HEY_COMPILER_PUT_STATIC_HERE
 namespace {
+    std::shared_mutex staticInitGuard;
+
     template <typename DTable, typename MMap, typename Registry>
     void InitStaticDataCommon(DTable & dispatchTable, MMap & methodMap, const Registry & registry) {
-        if (!dispatchTable.empty())
-            return;
+        {
+            std::shared_lock g(staticInitGuard);
+            // common-case
+            if (!dispatchTable.empty())
+                return;
+        }
+        // take lock exclusively now to initialize (ensure only 1 thread ever does this work)
+        std::lock_guard g(staticInitGuard);
+        if (!dispatchTable.empty()) return; // check again with exclusive lock held to avoid race conditions here
         dispatchTable.reserve(registry.size());
         methodMap.reserve(registry.size());
         for (const auto & r : registry) {
@@ -2552,7 +2562,7 @@ void AdminServer::StaticData::init() { InitStaticDataCommon(dispatchTable, metho
 
 /*static*/ std::atomic_size_t Client::numClients{0}, Client::numClientsMax{0}, Client::numClientsCtr{0};
 
-Client::Client(const RPC::MethodMap & mm, IdMixin::Id id_in, QTcpSocket *sock, int maxBuffer)
+Client::Client(const RPC::MethodMap * mm, IdMixin::Id id_in, QTcpSocket *sock, int maxBuffer)
     : RPC::ElectrumConnection(mm, id_in, sock, /* ensure sane --> */ qMax(maxBuffer, Options::maxBufferMin))
 {
     ++numClientsCtr;

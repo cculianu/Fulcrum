@@ -644,7 +644,7 @@ auto PeerMgr::headerToVerifyWithPeer() const -> std::optional<HeightHeaderPair>
 }
 
 PeerClient::PeerClient(bool announce, const PeerInfo &pi, IdMixin::Id id_, PeerMgr *mgr, int maxBuffer)
-    : RPC::ElectrumConnection({}, id_, mgr, maxBuffer), announceSelf(announce), info(pi), mgr(mgr)
+    : RPC::ElectrumConnection(nullptr, id_, mgr, maxBuffer), announceSelf(announce), info(pi), mgr(mgr)
 {
     setObjectName(QStringLiteral("Peer %1").arg(pi.hostName));
 

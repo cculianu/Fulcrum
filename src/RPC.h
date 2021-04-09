@@ -260,10 +260,14 @@ namespace RPC {
          */
 
     public:
-        ConnectionBase(const MethodMap & methods, IdMixin::Id id, QObject *parent = nullptr, qint64 maxBuffer = DEFAULT_MAX_BUFFER);
+        ConnectionBase(const MethodMap * methods /* null ok */, IdMixin::Id id,
+                       QObject *parent = nullptr, qint64 maxBuffer = DEFAULT_MAX_BUFFER);
         ~ConnectionBase() override;
 
-        const MethodMap & methods; //< Note: this map needs to remain alive for the lifetime of this connection (and all connections) .. so it should point to static or long-lived data, ideally
+        /// Points to either the passed-in methods pointer (if not-null), or if it was nullptr, to a static empty
+        /// map. Note: this map needs to remain alive for the lifetime of this connection (and all connections)
+        /// .. so it should point to static or long-lived data!
+        const MethodMap & methods;
 
         struct BadPeer : public Exception {
             using Exception::Exception;  // bring in c'tor
