@@ -653,9 +653,7 @@ void ServerBase::onMessage(IdMixin::Id clientId, const RPC::Message &m)
 {
     TraceM("onMessage: ", clientId, " json: ", m.toJsonUtf8());
     if (Client *c = getClient(clientId); c) {
-        Member_t member = nullptr;
-        if (const auto it = dispatchTable.find(m.method); it != dispatchTable.end())
-            member = it->second;
+        const auto member = dispatchTable.value(m.method);
         if (!member)
             Error() << "Unknown method: \"" << m.method << "\". This shouldn't happen. FIXME! Json: " << m.toJsonUtf8();
         else {

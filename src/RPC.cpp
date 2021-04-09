@@ -435,7 +435,7 @@ namespace RPC {
                     const auto it = methods.find(message.method);
                     if (it == methods.end())
                         throw UnknownMethod("Unknown method");
-                    const Method & m = it->second;
+                    const Method & m = it.value();
                     if (m.allowsNotifications) {
                         ValidateParams(message, m);
                         emit gotMessage(id, message);
@@ -449,7 +449,7 @@ namespace RPC {
                 }
             } else if (message.isRequest()) {
                 const auto it = methods.find(message.method);
-                const Method *m = it != methods.end() ? &it->second : nullptr;
+                const Method *m = it != methods.end() ? &it.value() : nullptr;
                 if (!m || !m->allowsRequests)
                     throw UnknownMethod(QString("Unsupported request: %1").arg(message.method));
                 ValidateParams(message, *m);

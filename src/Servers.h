@@ -38,7 +38,6 @@
 #include <optional>
 #include <shared_mutex>
 #include <type_traits>
-#include <unordered_map>
 
 struct TcpServerError : public Exception
 {
@@ -149,7 +148,7 @@ class ServerBase : public AbstractTcpServer, public StatsMixin
     Q_OBJECT
 protected:
     using Member_t = void (ServerBase::*)(Client *, const RPC::Message &); ///< ptr to member function
-    using DispatchTable = std::unordered_map<QString, Member_t, Util::StdQStringHasher>; ///< this dispatch table mechanism which relies on ptr to member is a slight performance optimization over std::function with std::bind
+    using DispatchTable = QHash<QString, Member_t>; ///< this dispatch table mechanism which relies on ptr to member is a slight performance optimization over std::function with std::bind
 
     SrvMgr * const srvmgr; ///< basically a weak reference -- this is guaranteed to be alive for the entire lifetime of this instance, however.
     const RPC::MethodMap & methods; ///< must be valid for the lifetime of this instance
