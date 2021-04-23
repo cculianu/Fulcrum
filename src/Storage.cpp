@@ -3778,7 +3778,7 @@ auto Storage::getReusableHistory(const BlockHeight start_height, const size_t co
                 // TODO: Similarly to getHistory the below could use some optimization.  A batched version of hashForTxNum and
                 // is low-hanging fruit for optimization.  Each call to the below takes a shared lock.  /TODO
                 for (auto & num : nums) {
-                    auto hash = hashForTxNum(num).value(); // may throw, but that indicates some database inconsistency. we catch below
+                    auto hash = hashForHeightAndPos(height, num).value(); // may throw, but that indicates some database inconsistency. we catch below
                     ret.emplace_back(ReusableHistoryItem{hash, int(height)});
                 }
             }
