@@ -40,8 +40,8 @@ namespace {
     };
 }
 
-BitcoinDMgr::BitcoinDMgr(unsigned nClients, const QString &hostName, quint16 port, const QString &user, const QString &pass, bool useSsl)
-    : Mgr(nullptr), IdMixin(newId()), nClients(nClients), hostName(hostName), port(port), user(user), pass(pass), useSsl(useSsl)
+BitcoinDMgr::BitcoinDMgr(unsigned nClients, const BitcoinD_RPCInfo &rinf)
+    : Mgr(nullptr), IdMixin(newId()), nClients(nClients), rpcInfo(rinf)
 {
     setObjectName("BitcoinDMgr");
     _thread.setObjectName(objectName());
@@ -63,7 +63,7 @@ void BitcoinDMgr::startup() {
     for (auto & client : clients) {
         // initial resolvedAddress may be invalid if user specified a hostname, in which case we will resolve it and
         // tell bitcoind's to update themselves and reconnect
-        client = std::make_unique<BitcoinD>(hostName, port, user, pass, useSsl);
+        client = std::make_unique<BitcoinD>(rpcInfo);
 
         // connect client to us -- TODO: figure out workflow: how requests for work and results will get dispatched
         connect(client.get(), &BitcoinD::gotMessage, this, &BitcoinDMgr::on_Message);
@@ -403,8 +403,9 @@ void BitcoinDMgr::refreshBitcoinDZmqNotifications()
                         auto [host, port] = Util::ParseHostPortPair(hostPortPart);
                         // rewrite IPADDR_ANY -> what we think the remote bitcoind is
                         if (host == QHostAddress(QHostAddress::AnyIPv4).toString() || host == QHostAddress(QHostAddress::AnyIPv6).toString()) {
-                            DebugM("getzmqnotifications: rewriting ", host, " -> ", this->hostName);
-                            host = this->hostName;
+                            const QString &rpcHostName = rpcInfo.hostPort.first;
+                            DebugM("getzmqnotifications: rewriting ", host, " -> ", rpcHostName);
+                            host = rpcHostName;
                         }
                         addr = QString("tcp://%1:%2").arg(host, QString::number(port));
                     } catch (const std::exception &e) {
@@ -730,15 +731,15 @@ auto BitcoinD::stats() const -> Stats
     return m;
 }
 
-BitcoinD::BitcoinD(const QString &host, quint16 port, const QString & user, const QString &pass, bool useSsl_)
+BitcoinD::BitcoinD(const BitcoinD_RPCInfo &rinfo)
     : RPC::HttpConnection(nullptr, newId(), nullptr, 0 /* = unlimited read buffer -- no limit to response size */),
-      host(host), port(port), useSsl(useSsl_)
+      rpcInfo(rinfo)
 {
     static int N = 1;
     setObjectName(QString("BitcoinD.%1").arg(N++));
     _thread.setObjectName(objectName());
 
-    setAuth(user, pass);
+    const auto & [host, port] = rpcInfo.hostPort;
     setHeaderHost(QString("%1:%2").arg(host).arg(port)); // for HTTP RFC 2616 Host: field
     setV1(true); // bitcoind uses jsonrpc v1
     resetPingTimer(int(PingTimes::Normal)); // just sets pingtime_ms and stale_threshold = pingtime_ms * 2
@@ -804,7 +805,13 @@ void BitcoinD::on_started()
 void BitcoinD::reconnect()
 {
     if (socket) delete socket;
-    if (useSsl) {
+    // set the basic authentication token each time (may re-read the .cookie file if we are using that file)
+    {
+        const auto & [user, pass] = rpcInfo.getUserPass();
+        setAuth(user, pass);
+    }
+    const auto & [host, port] = rpcInfo.hostPort;
+    if (rpcInfo.tls) {
         // remote bitcoind expects https (--bitcoind-tls CLI option); usually this is only for bchd
         QSslSocket *ssl;
         socket = ssl = new QSslSocket(this);

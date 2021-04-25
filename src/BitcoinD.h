@@ -18,6 +18,7 @@
 //
 #pragma once
 
+#include "BitcoinD_RPCInfo.h"
 #include "BlockProcTypes.h"
 #include "Mixins.h"
 #include "Mgr.h"
@@ -68,7 +69,7 @@ class BitcoinDMgr : public Mgr, public IdMixin, public ThreadObjectMixin, public
 {
     Q_OBJECT
 public:
-    BitcoinDMgr(unsigned nClients, const QString &hostnameOrIP, quint16 port, const QString &user, const QString &pass, bool useSsl);
+    BitcoinDMgr(unsigned nClients, const BitcoinD_RPCInfo &rpcInfo);
     ~BitcoinDMgr() override;
 
     void startup() override; ///< from Mgr
@@ -158,10 +159,7 @@ protected slots:
     void on_ErrorMessage(quint64 bitcoindId, const RPC::Message &msg);
 
 private:
-    const QString hostName;
-    const quint16 port;
-    const QString user, pass;
-    const bool useSsl;
+    const BitcoinD_RPCInfo rpcInfo;
 
     static constexpr int miniTimeout = 333, tinyTimeout = 167, medTimeout = 500, longTimeout = 1000;
 
@@ -225,7 +223,7 @@ class BitcoinD : public RPC::HttpConnection, public ThreadObjectMixin /* NB: als
     Q_OBJECT
 
 public:
-    explicit BitcoinD(const QString &host, quint16 port, const QString & user, const QString &pass, bool useSsl);
+    explicit BitcoinD(const BitcoinD_RPCInfo &rpcInfo);
     ~BitcoinD() override;
 
     using ThreadObjectMixin::start;
@@ -262,9 +260,7 @@ protected:
 private:
     void connectMiscSignals(); ///< some signals/slots to self to do bookkeeping
 
-    const QString host;
-    const quint16 port;
-    const bool useSsl;
+    const BitcoinD_RPCInfo rpcInfo;
     std::atomic_bool badAuth = false, needAuth = true;
 };
 

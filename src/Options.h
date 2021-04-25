@@ -18,6 +18,8 @@
 //
 #pragma once
 
+#include "BitcoinD_RPCInfo.h"
+
 #include <QtGlobal>
 #include <QHostAddress>
 #include <QList>
@@ -75,9 +77,7 @@ public:
     };
     CertInfo certInfo;
     std::optional<CertInfo> wssCertInfo; ///< if valid, then the user specified --wss-cert and --wss-key on CLI or in config, and these are those.
-    QPair<QString, quint16> bitcoind; ///< hostname, port pair. We resolve bitcoind's actual IP address each time if it's a hostname and not an IP address string.
-    bool bitcoindUsesTls = false; ///< CLI: --bitcoind-tls. If true, we will connect to the remote bitcoind via SSL/TLS. See BitcoinD.cpp.
-    QString rpcuser, rpcpassword;
+    BitcoinD_RPCInfo bdRPCInfo; ///< contains: rpcs user, rpc pass, host, port, and usesTls (see BitcoinD_RPCInfo.h)
     QString datadir; ///< The directory to store the database. It exists and has appropriate permissions (otherwise the app would have quit on startup).
     /// If > 0, on db open/startup, we will perform some slow/paranoid db consistency checks
     /// If 2, we do reverse-shunspent checks as well (even slower)

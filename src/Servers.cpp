@@ -2314,7 +2314,7 @@ void AdminServer::rpc_clients(Client *c, const RPC::Message &m)
 void AdminServer::rpc_getinfo(Client *c, const RPC::Message &m)
 {
     QVariantMap res;
-    res["bitcoind"] = QString("%1:%2").arg(options->bitcoind.first).arg(options->bitcoind.second);
+    res["bitcoind"] = QString("%1:%2").arg(options->bdRPCInfo.hostPort.first, QString::number(options->bdRPCInfo.hostPort.second));
     res["bitcoind_info"] = bitcoindmgr->getBitcoinDInfo().toVariandMap();
     {
         const auto opt = storage->latestHeight();

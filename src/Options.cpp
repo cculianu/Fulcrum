@@ -100,11 +100,16 @@ QVariantMap Options::toMap() const
         m["wss-cert"] = wssCertInfo->file;
         m["wss-key"] = wssCertInfo->keyFile;
     }
-    m["bitcoind"] = QString("%1:%2").arg(bitcoind.first).arg(bitcoind.second);
-    m["bitcoind-tls"] = bitcoindUsesTls;
+    m["bitcoind"] = QString("%1:%2").arg(bdRPCInfo.hostPort.first, QString::number(bdRPCInfo.hostPort.second));
+    m["bitcoind-tls"] = bdRPCInfo.tls;
     m["hasIPv6 listener"] = hasIPv6Listener;
-    m["rpcuser"] = rpcuser.isNull() ? QVariant() : QVariant("<hidden>");
-    m["rpcpassword"] = rpcpassword.isNull() ? QVariant() : QVariant("<hidden>");
+    if (const auto cf = bdRPCInfo.getCookieFile(); !cf.isEmpty()) {
+        m["rpccookie"] = QVariant(cf);
+    } else {
+        const auto & [rpcuser, rpcpassword] = bdRPCInfo.getUserPass();
+        m["rpcuser"] = rpcuser.isNull() ? QVariant() : QVariant("<hidden>");
+        m["rpcpassword"] = rpcpassword.isNull() ? QVariant() : QVariant("<hidden>");
+    }
     m["datadir"] = datadir;
     m["checkdb"] = doSlowDbChecks;
     m["polltime"] = pollTimeSecs;
