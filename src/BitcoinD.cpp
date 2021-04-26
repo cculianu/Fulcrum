@@ -790,7 +790,8 @@ void BitcoinD::on_started()
             SetTimer();
         });
         conns += connect(this, &BitcoinD::authFailure, this, [SetTimer, this] {
-            Error() << "Authentication to bitcoind rpc failed. Please check the rpcuser and rpcpass are correct and restart!";
+            const auto errorOption = rpcInfo.hasCookieFile() ? "rpccookie is" : "rpcuser and rpcpass are";
+            Error() << "Authentication to bitcoind rpc failed. Please check the " << errorOption << " correct and restart!";
             badAuth = true;
             SetTimer();
         });
