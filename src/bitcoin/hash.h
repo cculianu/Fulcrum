@@ -154,7 +154,7 @@ inline uint160 Hash160(const prevector<N, uint8_t> &vch) {
 
 class CHashWriter {
 private:
-    CHash256 ctx;
+    CSHA256 ctx;
 
     const int nType;
     const int nVersion;
@@ -170,10 +170,26 @@ public:
         ctx.Write((const uint8_t *)pch, size);
     }
 
-    // invalidates the object
+    /** Compute the double-SHA256 hash of all data written to this object.
+     *
+     * Invalidates this object.
+     */
     uint256 GetHash() {
         uint256 result;
-        ctx.Finalize((uint8_t *)&result);
+        ctx.Finalize(result.begin());
+        ctx.Reset()
+            .Write(result.begin(), CSHA256::OUTPUT_SIZE)
+            .Finalize(result.begin());
+        return result;
+    }
+
+    /** Compute the SHA256 hash of all data written to this object.
+     *
+     * Invalidates this object.
+     */
+    uint256 GetSHA256() {
+        uint256 result;
+        ctx.Finalize(result.begin());
         return result;
     }
 
