@@ -20,6 +20,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <array>
 
 #ifdef __clang__
 #pragma clang diagnostic push
@@ -44,6 +45,20 @@ inline constexpr uint64_t MAX_SIZE = 0x02000000;
  */
 struct deserialize_type {};
 inline constexpr deserialize_type deserialize{};
+
+//! Safely convert odd char pointer types to standard ones.
+inline char *CharCast(char *c) {
+    return c;
+}
+inline char *CharCast(uint8_t *c) {
+    return (char *)c;
+}
+inline const char *CharCast(const char *c) {
+    return c;
+}
+inline const char *CharCast(const uint8_t *c) {
+    return (const char *)c;
+}
 
 /**
  * Used to bypass the rule against non-const reference to temporary where it
@@ -535,6 +550,30 @@ void Unserialize_impl(Stream &is, std::vector<T, A> &v, const V &);
 template <typename Stream, typename T, typename A>
 inline void Unserialize(Stream &is, std::vector<T, A> &v);
 
+/**
+  * array
+  *
+  */
+template <typename Stream, size_t N>
+inline void Serialize(Stream &s, const std::array<int8_t, N> &a) {
+    s.write(a.data(), N);
+}
+template <typename Stream, size_t N>
+inline void Serialize(Stream &s, const std::array<uint8_t, N> &a) {
+    s.write(CharCast(a.data()), N);
+}
+template <typename Stream, size_t N>
+inline void Serialize(Stream &s, const std::array<char, N> &a) {
+    s.write(a.data(), N);
+}
+template <typename Stream, size_t N>
+inline void Unserialize(Stream &s, std::array<int8_t, N> &a) {
+    s.read(a.data(), N);
+}
+template <typename Stream, size_t N>
+inline void Unserialize(Stream &s, std::array<uint8_t, N> &a) {
+    s.read(CharCast(a.data()), N);
+}
 /**
  * pair
  */

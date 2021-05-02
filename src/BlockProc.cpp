@@ -189,7 +189,7 @@ QString PreProcessedBlock::toDebugString() const
     {
         QTextStream ts(&ret, QIODevice::ReadOnly|QIODevice::Truncate|QIODevice::Text);
         ts << "<PreProcessedBlock --"
-           << " height: " << height << " " << " size: " << sizeBytes << " header_nTime: " << header.nTime << " hash: " << header.GetHash().ToString().c_str()
+           << " height: " << height << " " << " size: " << sizeBytes << " header_nTime: " << header.GetBlockTime() << " hash: " << header.GetHash().ToString().c_str()
            << " nTx: " << txInfos.size() << " nIns: " << inputs.size() << " nOuts: " << outputs.size() << " nScriptHash: " << hashXAggregated.size();
         int i = 0;
         for (const auto & [hashX, ag] : hashXAggregated) {
