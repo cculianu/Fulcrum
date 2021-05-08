@@ -31,6 +31,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <optional>
 #include <vector>
 
 namespace BTC {
@@ -56,6 +57,11 @@ namespace BTC {
         static Address fromPubKey(const Byte *pbegin, const Byte *pend, Kind, Net = MainNet);
         static Address fromPubKey(const QByteArray &pubKey, Kind kind, Net net = MainNet) { return fromPubKey(reinterpret_cast<const Byte *>(pubKey.constData()), reinterpret_cast<const Byte *>(pubKey.constData() + pubKey.length()), kind, net); }
         static Address fromPubKey(const std::vector<Byte> &pubKey, Kind kind, Net net = MainNet) { return fromPubKey(&*pubKey.begin(), &*pubKey.end(), kind, net); }
+        /// Will return a valid P2PKH address only if the entire specified scriptSig matches
+        /// the <push: sig><push: pubkey> heuristic, or an invalid optional otherwise.
+        /// Note that the returned address is only a guess based on the above heuristic.
+        static std::optional<Address> guessFromP2PKHScriptSig(const bitcoin::CScript &scriptSig, Net net = MainNet,
+                                                              std::vector<Byte> *pubKeyOut = nullptr);
 
         const QByteArray & hash160() const noexcept { return h160; }
 

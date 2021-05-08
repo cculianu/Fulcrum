@@ -193,6 +193,45 @@ namespace BTC
         return ret;
     }
 
+    namespace {
+        // helper for Address::fromP2PKHScriptSig
+        std::optional<std::vector<uint8_t>> extractPubKeyFromP2PKHScriptSig(const bitcoin::CScript & scriptSig) {
+            std::optional<std::vector<uint8_t>> ret;
+            auto pc = scriptSig.begin();
+            bitcoin::opcodetype op{};
+            if (!scriptSig.GetOp(pc, op) || op > bitcoin::OP_PUSHDATA4) // expect push of signature
+                return ret; // fail
+            std::vector<uint8_t> vch;
+            if (!scriptSig.GetOp(pc, op, vch) || op > bitcoin::OP_PUSHDATA4) // expect push of pubkey
+                return ret; // fail
+            if (pc != scriptSig.end()) // expect the pubkey was the last push
+                return ret; // fail
+
+            if (   (vch.size() == 65 && vch[0] == 0x4) /* uncompressed */
+                || (vch.size() == 33 && (vch[0] == 0x2 || vch[0] == 0x3)) /* compressed */)
+                ret = std::move(vch); // success
+
+            return ret;
+        }
+    }
+
+    /* static */
+    std::optional<Address>
+    Address::guessFromP2PKHScriptSig(const bitcoin::CScript &scriptSig, Net net /* = MainNet */,
+                                     std::vector<Byte> *pk /* = nullptr */)
+    {
+        std::optional<Address> ret;
+        if (auto opt = extractPubKeyFromP2PKHScriptSig(scriptSig)) {
+            ret = BTC::Address::fromPubKey(*opt, BTC::Address::Kind::P2PKH, net);
+            if (!ret->isValid())
+                ret.reset();
+            else if (pk)
+                pk->swap(*opt); // caller wants the pubkey
+        }
+        return ret;
+    }
+
+
     // Used internally in one branch when parsing Legacy.  If it fails it will clear the address to default constructed values.
     bool Address::autosetKind()
     {

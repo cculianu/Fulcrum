@@ -17,12 +17,15 @@
 // <https://www.gnu.org/licenses/>.
 //
 #include "Mempool.h"
+
+#include "BTC_Address.h"
 #include "Util.h"
 
 #include <algorithm>
 #include <cassert>
 #include <functional>
 #include <map>
+#include <tuple>
 #include <utility>
 
 void Mempool::clear() {
@@ -62,6 +65,15 @@ auto Mempool::calcCompactFeeHistogram(double binSize) const -> FeeHistogramVec
     }
     ret.shrink_to_fit(); // save memory
     return ret;
+}
+
+namespace {
+    HashX guessHashXFromScriptSigOnlyIfP2PKH(const bitcoin::CScript & scriptSig) {
+        HashX ret;
+        if (const auto addr = BTC::Address::guessFromP2PKHScriptSig(scriptSig /*, net = MainNet <-- net here is irrelevant for HashX calculation */))
+            ret = addr->toHashX();
+        return ret;
+    }
 }
 
 auto Mempool::addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
@@ -125,6 +137,7 @@ auto Mempool::addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
         assert(hash == tx->hash);
         IONum inNum = 0;
         TxHashSet seenParents; // DSP handling, otherwise unused if no dsp
+        size_t p2pkhInputCount = 0; // To be able to correctly set tx->allInputsSpendP2PKH (DSP support)
         for (const auto & in : ctx->vin) {
             const IONum prevN = IONum(in.prevout.GetN());
             const TxHash prevTxId = BTC::Hash2ByteArrayRev(in.prevout.GetTxId());
@@ -193,7 +206,7 @@ auto Mempool::addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
                     // We will throw if missing, and the synch process aborts and hopefully we recover with a reorg
                     // or a new block or somesuch.
                     throw InternalError(QString("FAILED TO FIND PREVIOUS TX %1 IN EITHER MEMPOOL OR DB for TxHash: %2 (input %3)")
-                                        .arg(prevTXO.toString()).arg(QString(hash.toHex())).arg(inNum));
+                                        .arg(prevTXO.toString(), QString(hash.toHex()), QString::number(inNum)));
                 }
                 prevInfo = *optTXOInfo;
                 sh = prevInfo.hashX;
@@ -213,10 +226,23 @@ auto Mempool::addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
             }
             tx->fee += prevInfo.amount;
             assert(sh == prevInfo.hashX);
+            assert(!sh.isEmpty());
             this->hashXTxs[sh].push_back(tx); // mark this hashX as having been "touched" because of this input (note we push dupes here out of order but sort and uniqueify at the end)
             scriptHashesAffected.insert(sh);
+            // DSP scoring support
+            if (sh == guessHashXFromScriptSigOnlyIfP2PKH(in.scriptSig)) {
+                // this is a heuristic match and is definitely a p2pkh spend -- because the scriptSig looks like a
+                // canonical p2pkh signature + pubkey combination -- and, more importantly, the pubkey we extracted
+                // from the scriptSig matches the scripthash we have saved for the prevOut.
+                ++p2pkhInputCount;
+            }
             ++inNum;
         }
+
+        // If all of the inputs we scanned above matched our p2pkh heuristics, mark this tx as only spending p2pkh
+        // (this information is used for DSP scoring, only if DSPs are enabled).
+        tx->allInputsSpendP2PKH = p2pkhInputCount > 0 && ctx->vin.size() == p2pkhInputCount;
+        if (TRACE) Debug() << hash.toHex() << " allInputsSpendP2PKH: " << int(tx->allInputsSpendP2PKH);
 
         // Now, compactify some data structures to take up less memory by rehashing thier unordered_maps/unordered_sets..
         // we do this once for each new tx we see.. and it can end up saving tons of space. Note the below structures
@@ -671,6 +697,7 @@ QVariantMap Mempool::dumpTx(const TxRef &tx)
         m["sizeBytes"] = tx->sizeBytes;
         m["fee"] = tx->fee.ToString().c_str();
         m["hasUnconfirmedParentTx"] = tx->hasUnconfirmedParentTx;
+        m["allInputsSpendP2PKH"] = tx->allInputsSpendP2PKH;
         static const auto TXOInfo2Map = [](const TXOInfo &info) -> QVariantMap {
             return QVariantMap{
                 { "amount", QString::fromStdString(info.amount.ToString()) },
@@ -840,8 +867,10 @@ bool Mempool::deepCompareEqual(const Mempool &o, QString *estr) const
 
 namespace {
     using MPData = Mempool::NewTxsMap;
+    using InputHashXGuessesMap = std::unordered_map<TXO, HashX>;
 
-    std::pair<MPData, bool> loadMempoolDat(const QString &fname) {
+    std::tuple<MPData, bool, InputHashXGuessesMap> loadMempoolDat(const QString &fname) {
+        InputHashXGuessesMap guessMap;
         // Below code taken from BCHN validation.cpp, but adopted to also support segwit
         FILE *pfile = std::fopen(fname.toUtf8().constData(), "rb");
         bitcoin::CAutoFile file(pfile, bitcoin::SER_DISK, bitcoin::PROTOCOL_VERSION | bitcoin::SERIALIZE_TRANSACTION_USE_WITNESS);
@@ -875,6 +904,16 @@ namespace {
                 auto rtx = std::make_shared<Mempool::Tx>();
                 rtx->hash = BTC::Hash2ByteArrayRev(ctx->GetHashRef());
                 dataTotal += rtx->sizeBytes = ctx->GetTotalSize(true);
+
+                // also look at input scriptSigs and try and guess P2PKH addresses
+                for (const auto &in : ctx->vin) {
+                    if (const auto optAddr = BTC::Address::guessFromP2PKHScriptSig(in.scriptSig)) {
+                        const auto &outPoint = in.prevout;
+                        guessMap.emplace(TXO{BTC::Hash2ByteArrayRev(outPoint.GetTxId()), outPoint.GetN()},
+                                         optAddr->toHashX());
+                    }
+                }
+
                 ret.emplace(std::piecewise_construct,
                             std::forward_as_tuple(rtx->hash),
                             std::forward_as_tuple(std::move(rtx), std::move(ctx)));
@@ -882,8 +921,9 @@ namespace {
         } catch (const std::exception &e) {
             throw Exception(QString("Failed to deserialize mempool data: %1").arg(e.what()));
         }
-        Log("Imported mempool: %d txs, %1.2f MB in %1.3f msec", int(ret.size()), dataTotal / 1e6, t0.msec<double>());
-        return {std::move(ret), isSegWit};
+        Log("Imported mempool: %d txs, guessed %d addresses from input scriptSigs, %1.2f MB in %1.3f msec",
+            int(ret.size()), int(guessMap.size()), dataTotal / 1e6, t0.msec<double>());
+        return {std::move(ret), isSegWit, std::move(guessMap)};
     }
 
     // given a set of root txids, adds all the txids for every tx involved in the full descendant and sibling dag
@@ -952,7 +992,8 @@ namespace {
               << " KiB, virtual " << QString::number(mem0.virt / 1024.0, 'f', 1) << " KiB";
 
 
-        const auto && [mpd, isSegWit] = loadMempoolDat(mpdat);
+        const auto && [mpd, isSegWit, guessMap_] = loadMempoolDat(mpdat);
+        const auto & guessMap{guessMap_}; // work-around for inability to lambda-capture a structured binding
 
         if (isSegWit) bitcoin::SetCurrencyUnit("BTC");
 
@@ -988,7 +1029,7 @@ namespace {
                 }
                 return it->second;
             };
-            auto getTXOInfo = [&getTxNum, &confirmedHeightCur, &confirmedTXOInfos](const TXO &txo) -> std::optional<TXOInfo> {
+            auto getTXOInfo = [&getTxNum, &confirmedHeightCur, &confirmedTXOInfos, &guessMap](const TXO &txo) -> std::optional<TXOInfo> {
                 // Return a "unique" but deterministic TXOInfo based on the txo's prevout:n.
                 // Note the amount here is totally wrong (and leads to txs that print money out of thin air),
                 // but for this test this is ok, since we care more about properly debiting/crediting spends
@@ -1003,8 +1044,13 @@ namespace {
                 ret.confirmedHeight = confirmedHeightCur;
                 // set of 50 unique hashx's, based upon the txo's hash value
                 constexpr int64_t NAddressTarget = 50;
-                const bitcoin::CScriptNum scriptNum{int64_t(1 + std::hash<TXO>{}(txo) % NAddressTarget)};
-                ret.hashX = BTC::HashXFromCScript(bitcoin::CScript() << scriptNum);
+                if (auto it = guessMap.find(txo); it != guessMap.end())
+                    ret.hashX = it->second; // use what we guessed
+                else {
+                    // synthesize from fake set
+                    const bitcoin::CScriptNum scriptNum{int64_t(1 + std::hash<TXO>{}(txo) % NAddressTarget)};
+                    ret.hashX = BTC::HashXFromCScript(bitcoin::CScript() << scriptNum);
+                }
                 //ret.hashX = BTC::HashXFromCScript(bitcoin::CScript() << Util::toVec<std::vector<uint8_t>>(txo.toBytes(false)));
                 ret.txNum = *getTxNum(txo.txHash, true);
                 // cache
