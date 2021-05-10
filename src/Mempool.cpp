@@ -789,6 +789,62 @@ QVariantMap Mempool::dump() const
     return mp;
 }
 
+Mempool::DspEligibility Mempool::calculateDspEligibility(const TxHash &txId, CDEStats *statsOut) const
+{
+    if (auto it = txs.find(txId); it != txs.end())
+        return calculateDspEligibility(it, statsOut);
+    return DspEligibility::Unknown;
+}
+Mempool::DspEligibility Mempool::calculateDspEligibility(TxMap::const_iterator it, CDEStats *statsOut) const
+{
+    constexpr size_t iterLimit = 100'000; ///< I observed about million iterations per sec here, so we limit this call to <100msec
+    CDEStats dummy;
+    CDEStats &stats = statsOut ? *statsOut : dummy;
+    if (statsOut) *statsOut = dummy; // clear
+
+    if (dsps.dspHashesForTx(it->first))
+        return DspEligibility::HasDSroof;
+    if (!it->second->allInputsSpendP2PKH)
+        return DspEligibility::IneligibleThis;
+    // Examine this tx and all its ancestors
+    if (it->second->hasUnconfirmedParentTx) {
+        using TxMapIter = TxMap::const_iterator;
+        struct CmpTxId {
+            bool operator()(const TxMapIter &a, const TxMapIter &b) const {
+                return a->first < b->first;
+            }
+        };
+        using Stage = std::set<TxMapIter, CmpTxId>;
+        Stage stage{{it}}, seen;
+        while (!stage.empty()) {
+            stats.maxStage = std::max(stats.maxStage, stage.size());
+            { const auto f = stage.begin(); it = *f; stage.erase(f); }
+            if (!seen.insert(it).second)
+                continue; // skip this tx, we already examined it
+            if (!it->second->allInputsSpendP2PKH)
+                return DspEligibility::IneligibleUnconfirmedAncestor;
+            if (it->second->hasUnconfirmedParentTx) {
+                // examine all parents
+                // Note: This could be made faster if we were to maintain a "mapLinks" to link parent<->child txs
+                for (const auto & [hx, ioinfo] : it->second->hashXs) {
+                    ++stats.iters;
+                    for (const auto & [txo, txoinfo] : ioinfo.unconfirmedSpends) {
+                        if (auto it2 = txs.find(txo.txHash); it2 != txs.end())
+                            stage.insert(it2);
+                        ++stats.iters;
+                    }
+                    if (stats.iters > iterLimit)
+                        return DspEligibility::LimitHit;
+                }
+            }
+        }
+        stats.seenTxs = seen.size();
+    }
+
+    return DspEligibility::Eligible;
+}
+
+
 #ifdef ENABLE_TESTS
 #include "App.h"
 #include "BTC.h"
@@ -1072,6 +1128,40 @@ namespace {
                 Log() << "Mem usage: physical " << QString::number(mem.phys / 1024.0, 'f', 1)
                       << " KiB, virtual " << QString::number(mem.virt / 1024.0, 'f', 1) << " KiB";
                 Log() << "Delta phys: " << QString::number((mem.phys - mem0.phys) / 1024.0, 'f', 1) << " KiB";
+            }
+
+            // calculateDspEligibility
+            {
+                std::map<Mempool::DspEligibility, int> counts;
+                std::optional<Tic> most, least;
+                Tic total;
+                Mempool::CDEStats maxStats, cumStats;
+                Debug() << "calculateDspEligibility ...";
+                for (auto it = mempool.txs.cbegin(); it != mempool.txs.cend(); ++it) {
+                    Mempool::CDEStats stats;
+                    Tic tic;
+                    const auto res = mempool.calculateDspEligibility(it, &stats);
+                    tic.fin();
+                    ++counts[res];
+                    if (!most || tic > *most) most = tic;
+                    if (!least || tic < *least) least = tic;
+                    maxStats.iters = std::max(maxStats.iters, stats.iters);
+                    maxStats.maxStage = std::max(maxStats.maxStage, stats.maxStage);
+                    maxStats.seenTxs = std::max(maxStats.seenTxs, stats.seenTxs);
+                    cumStats.iters += stats.iters;
+                    cumStats.seenTxs += stats.seenTxs;
+                }
+                total.fin();
+                QString ctstr;
+                for (const auto & [elg, ct] : counts) {
+                    if (!ctstr.isEmpty()) ctstr += ", ";
+                    ctstr += QString::number(int(elg)) + ": " + QString::number(ct);
+                }
+                Log() << "calculateDspEligibility: took " << total.msecStr() << " msec in " << mempool.txs.size() << " txs"
+                      << ", <maxStats iters=" << maxStats.iters << " maxStage=" << maxStats.maxStage << " seenTxs=" << maxStats.seenTxs << ">"
+                      << ", <cumStats iters=" << cumStats.iters << " seenTxs=" << cumStats.seenTxs << ">"
+                      << ", most: " << (most ? most->msecStr() : "?") << " msec, least: " << (least ? least->msecStr() : "?")
+                      << ", <counts " << ctstr << ">";
             }
 
             Log() << QString(79, QChar{'-'});

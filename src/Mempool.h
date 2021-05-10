@@ -30,13 +30,11 @@
 #include <memory>
 #include <optional>
 #include <set>
-#include <tuple>
 #include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
-
 
 /// Models the mempool
 struct Mempool
@@ -228,6 +226,30 @@ struct Mempool
     /// Note: clearing the mempool is only done on block undo. Client code should in general just use dropTxs() and/or
     /// confirmedInBlock().
     void clear();
+
+
+    //  -- Dsp utility
+
+    enum class DspEligibility : uint8_t {
+        Unknown = 0, ///< returned if the tx in question is not known to this mempool instance
+
+        Eligible, ///< this tx and all unconfirmed ancestors (if any) support dsproof, but have no extant dsproofs
+        HasDSroof, ///< this tx or one of its unconfirmed ancestors has an extant dsproof
+        IneligibleThis, ///< this tx does not support dsproof (spends non-P2PKH)
+        IneligibleUnconfirmedAncestor, ///< while this tx is eligible, one its unconfirmed ancestors is ineligible (spends non-P2PKH)
+        /// the complexity limit for this tx's DAG was hit when walking back to calculate eligibility;
+        /// of the ancestors examined, every tx is ok, but some deep ancestor may not be
+        LimitHit,
+    };
+    struct CDEStats {
+        size_t maxStage{};
+        size_t iters{};
+        size_t seenTxs{};
+    };
+    // may also return "Unknown" aside from the other 5 values
+    DspEligibility calculateDspEligibility(const TxHash &, CDEStats *statsOut = nullptr) const;
+    // `it` must be a valid iterator in the txs map, returns one of the known 5 members of the above enum
+    DspEligibility calculateDspEligibility(TxMap::const_iterator it, CDEStats *statsOut = nullptr) const;
 
 private:
     /// Given a set of txids in this Mempool, grow the set to encompass all descendant tx's that spend

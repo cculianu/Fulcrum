@@ -1068,6 +1068,20 @@ public:
     /// Save the current time. After calling this, secs(), ms(), and us() above will return the time from
     /// construction until this was called.
     void fin() noexcept { tf = now(); }
+
+
+    // -- comparison
+    int compare(const Tic &o) const {
+        if (const qint64 diff = nsec() - o.nsec(); diff > 0) return 1;
+        else if (diff < 0) return -1;
+        else return 0;
+    }
+    bool operator<(const Tic &o) const { return compare(o) < 0; }
+    bool operator<=(const Tic &o) const { return compare(o) <= 0; }
+    bool operator==(const Tic &o) const { return compare(o) == 0; }
+    bool operator!=(const Tic &o) const { return compare(o) != 0; }
+    bool operator>=(const Tic &o) const { return compare(o) >= 0; }
+    bool operator>(const Tic &o) const { return compare(o) > 0; }
 };
 
 /// Atomic wrapper for any struct, for multiple readers, one writer.
