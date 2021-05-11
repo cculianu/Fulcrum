@@ -52,14 +52,6 @@ struct Mempool
         LimitHit,
     };
 
-    struct DspEligibilityCachedAnswer {
-        DspEligibility eligibility = DspEligibility::Unknown;
-        int height = -1;
-        bool valid() const { return eligibility != DspEligibility::Unknown && height >= 0; }
-        operator bool() const { return valid(); }
-    };
-
-
     /// This info, with the exception of `hashXs` comes from bitcoind via the "getrawmempool false" RPC call.
     struct Tx
     {
@@ -112,15 +104,21 @@ struct Mempool
             // always sort the unconf. parent tx's *after* the regular (confirmed parent-only) tx's.
             return std::tie(nParentMe, hash) < std::tie(nParentOther, o.hash);
         }
-
         bool operator==(const Tx &o) const noexcept {
-            return     std::tie(  hash,   sizeBytes,   fee,   hasUnconfirmedParentTx,   txos,   hashXs)
-                    == std::tie(o.hash, o.sizeBytes, o.fee, o.hasUnconfirmedParentTx, o.txos, o.hashXs);
+            // NB: we don't compare dspEligibilityCachedAnswer
+            return     std::tie(  hash,   sizeBytes,   fee,   hasUnconfirmedParentTx,   txos,   hashXs,   allInputsSpendP2PKH)
+                    == std::tie(o.hash, o.sizeBytes, o.fee, o.hasUnconfirmedParentTx, o.txos, o.hashXs, o.allInputsSpendP2PKH);
         }
         bool operator!=(const Tx &o) const noexcept { return !(*this == o); }
 
     protected:
         friend struct ::Mempool;
+        struct DspEligibilityCachedAnswer {
+            DspEligibility eligibility = DspEligibility::Unknown;
+            int height = -1;
+            bool valid() const { return eligibility != DspEligibility::Unknown && height >= 0; }
+            operator bool() const { return valid(); }
+        };
         mutable DspEligibilityCachedAnswer dspEligibilityCachedAnswer; ///< used by Mempool::calculateDspEligibility
     };
 
@@ -262,6 +260,10 @@ struct Mempool
             size_t seenTxs{};
         };
         Stats stats{};
+
+        // operator== ignores stats
+        bool operator==(const DspEligibilityResult &o) const { return std::tie(eligibility, dspHash) == std::tie(o.eligibility, o.dspHash); }
+        bool operator!=(const DspEligibilityResult &o) const { return !(*this == o); }
     };
 
     // may also return "Unknown" aside from the other 5 values
@@ -300,7 +302,7 @@ private:
     /// Tx objects (and not the TxRef shared_ptrs -- but the actual underlying Tx data).
     ///
     /// This is very slow -- used only in the mempool bench.
-    bool deepCompareEqual(const Mempool &other, QString *differenceExplanation = nullptr) const;
+    bool deepCompareEqual(const Mempool &other, QString *differenceExplanation = nullptr, std::optional<BlockHeight> tipHeight = std::nullopt) const;
 public:
     static void bench();
 #endif

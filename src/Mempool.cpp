@@ -699,6 +699,12 @@ QVariantMap Mempool::dumpTx(const TxRef &tx)
         m["fee"] = tx->fee.ToString().c_str();
         m["hasUnconfirmedParentTx"] = tx->hasUnconfirmedParentTx;
         m["allInputsSpendP2PKH"] = tx->allInputsSpendP2PKH;
+        {
+            QVariantMap m2;
+            m2["eligibility"] = int(tx->dspEligibilityCachedAnswer.eligibility);
+            m2["height"] = tx->dspEligibilityCachedAnswer.height;
+            m["dspEligibilityCachedAnswer"] = m2;
+        }
         static const auto TXOInfo2Map = [](const TXOInfo &info) -> QVariantMap {
             return QVariantMap{
                 { "amount", QString::fromStdString(info.amount.ToString()) },
@@ -869,8 +875,8 @@ Mempool::DspEligibilityResult Mempool::calculateDspEligibility(const TxMap::cons
                         case DspEligibility::IneligibleThis:
                             res = DspEligibility::IneligibleUnconfirmedAncestor; // rewrite this -> ancestor
                             [[fallthrough]];
-                        case DspEligibility::IneligibleUnconfirmedAncestor:
                         case DspEligibility::LimitHit:
+                        case DspEligibility::IneligibleUnconfirmedAncestor:
                             return res; // end recursion
                         case DspEligibility::Eligible:
                             break; // ok, continue
@@ -931,7 +937,7 @@ Mempool::DspEligibilityResult Mempool::calculateDspEligibility(const TxMap::cons
 #include <cstdio>
 #include <set>
 
-bool Mempool::deepCompareEqual(const Mempool &o, QString *estr) const
+bool Mempool::deepCompareEqual(const Mempool &o, QString *estr, const std::optional<BlockHeight> tipHeight) const
 {
     if (estr) estr->clear();
     if (this == &o)
@@ -961,6 +967,21 @@ bool Mempool::deepCompareEqual(const Mempool &o, QString *estr) const
                         .arg(QString(txid.toHex()), QString(Json::toUtf8(dumpTx(tx))), QString(Json::toUtf8(dumpTx(otx))));
             }
             return false;
+        }
+        // also compare their dsp eligibility result (code sanity test), iff tipHeight was specified
+        if (tipHeight) {
+            if (DspEligibilityResult r1, r2;
+                    (r1 = calculateDspEligibility(txid, *tipHeight)) != (r2 = o.calculateDspEligibility(it, *tipHeight))) {
+                if (estr) {
+                    *estr = QString("txid: %1 differ in their dspEligibilityResult: r1 = (%2, %3) != r2 = (%4, %5)\n"
+                                    "---- Tx1 ----\n%6\n---- Tx2 ----\n%7")
+                            .arg(QString(txid.toHex()),
+                                 QString::number(int(r1.eligibility)), r1.dspHash ? QString(r1.dspHash->toHex()) : "",
+                                 QString::number(int(r2.eligibility)), r2.dspHash ? QString(r2.dspHash->toHex()) : "",
+                                 QString(Json::toUtf8(dumpTx(tx))), QString(Json::toUtf8(dumpTx(otx))));
+                }
+                return false;
+            }
         }
         // otherwise equal so far...
     }
@@ -1209,10 +1230,15 @@ void Mempool::bench() {
             Log() << "Delta phys: " << QString::number((mem.phys - mem0.phys) / 1024.0, 'f', 1) << " KiB";
         }
 
+        bool checkDspEligibilityInDeepCompare = true;
+
         // calculateDspEligibility
-        if (!mempool.txs.empty()) {
+        if (!mempool.txs.empty()
+                && std::all_of(mempool.txs.begin(), mempool.txs.end(),
+                               [](const auto &v){ return v.second->allInputsSpendP2PKH; }))
+        {
+            // all are eligible... randomly set first (and second) txs to ineligible to test code
             auto it = mempool.txs.begin();
-            // randomly set first (and second) txs to ineligible to test code
             it->second->allInputsSpendP2PKH = false;
             Mempool::TxHashSet set1{{it->first}};
             mempool.growTxHashSetToIncludeDescendants(set1);
@@ -1226,16 +1252,18 @@ void Mempool::bench() {
                 set2.merge(set1);
                 Debug() << "union of both sets: " << set2.size();
             }
+            // we can't reliably do this test since we fudged the input
+            checkDspEligibilityInDeepCompare = false;
         }
-        for (int i = 0; i < 3; ++i) {
+        const auto benchCalcDspEligibility = [&checkDspEligibilityInDeepCompare](const Mempool &mempool, BlockHeight tipHeight) {
             std::map<Mempool::DspEligibility, int> counts;
             std::optional<Tic> most, least;
             Tic total;
             Mempool::DspEligibilityResult::Stats maxStats, cumStats;
-            Debug() << "calculateDspEligibility (" << i << ") ...";
+            Debug() << "calculateDspEligibility (" << tipHeight << ") ...";
             for (auto it = mempool.txs.cbegin(); it != mempool.txs.cend(); ++it) {
                 Tic tic;
-                const auto & [eligibility, optHash, stats] = mempool.calculateDspEligibility(it, i <= 1 ? 1 : 2 /* blockHeight */);
+                const auto & [eligibility, optHash, stats] = mempool.calculateDspEligibility(it, tipHeight);
                 tic.fin();
                 ++counts[eligibility];
                 if (!most || tic > *most) most = tic;
@@ -1247,17 +1275,27 @@ void Mempool::bench() {
                 cumStats.seenTxs += stats.seenTxs;
             }
             total.fin();
+            if (counts.find(DspEligibility::LimitHit) != counts.end()) {
+                // we can't reliably do this test if the limit was hit
+                // (cached answer state is a bit non-deterministic when the limit is hit, depending on query order)
+                checkDspEligibilityInDeepCompare = false;
+            }
             QString ctstr;
             for (const auto & [elg, ct] : counts) {
                 if (!ctstr.isEmpty()) ctstr += ", ";
                 ctstr += QString::number(int(elg)) + ": " + QString::number(ct);
             }
-            Log() << "calculateDspEligibility (" << i << "): took " << total.msecStr() << " msec in " << mempool.txs.size() << " txs"
-                  << ", <maxStats iters=" << maxStats.iters << " maxPath=" << maxStats.maxPath << " seenTxs=" << maxStats.seenTxs << ">"
-                  << ", <cumStats iters=" << cumStats.iters << " seenTxs=" << cumStats.seenTxs << ">"
-                  << ", most: " << (most ? most->msecStr() : "?") << " msec, least: " << (least ? least->msecStr() : "?")
-                  << ", <counts " << ctstr << ">";
-        }
+            Log() << "calculateDspEligibility (" << tipHeight << "): took " << total.msecStr() << " msec for " << mempool.txs.size() << " txs";
+            Debug() << "calculateDspEligibility (" << tipHeight << "): "
+                    << "<maxStats iters=" << maxStats.iters << " maxPath=" << maxStats.maxPath << " seenTxs=" << maxStats.seenTxs << ">"
+                    << ", <cumStats iters=" << cumStats.iters << " seenTxs=" << cumStats.seenTxs << ">"
+                    << ", most: " << (most ? most->msecStr() : "?") << " msec, least: " << (least ? least->msecStr() : "?")
+                    << ", <counts " << ctstr << ">";
+        };
+
+        for (int i = 0; i < 3; ++i)
+            benchCalcDspEligibility(mempool, i <= 1 ? 1 : 2);
+
 
         Log() << QString(79, QChar{'-'});
         Log();
@@ -1493,6 +1531,8 @@ void Mempool::bench() {
                     Log() << QString(79, QChar{'-'});
                 }
 
+                benchCalcDspEligibility(mempool, iterCt);
+
                 // general sanity checks
                 {
                     // check the sanity of the unconf flag, among other things
@@ -1587,7 +1627,9 @@ void Mempool::bench() {
                     auto t1 = Tic();
                     mempool2.addNewTxs(xx, adds, getTXOInfo);
                     Debug() << "Added to a dupe mempool in " << t1.msecStr() << " msec";
-                    if (QString estr; !mempool.deepCompareEqual(mempool2, &estr)) {
+                    std::optional<BlockHeight> tipHeight;
+                    if (checkDspEligibilityInDeepCompare) tipHeight = iterCt;
+                    if (QString estr; !mempool.deepCompareEqual(mempool2, &estr, tipHeight)) {
                         const QStringList lines = estr.split("\n");
                         if (lines.size() > 1) {
                             Log(Log::Color::Cyan) << "Difference info:\n" << lines.mid(1).join("\n");
