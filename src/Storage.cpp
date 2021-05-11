@@ -2563,6 +2563,8 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
                 notify->dspTxsAffected.merge(Util::keySet<NotifySet>(p->mempool.dsps.getTxDspsMap()));
             notify->txidsAffected.merge(Util::keySet<NotifySet>(p->mempool.txs)); // for txSubsMgr
         }
+        // Note: Mempool::calculateDspEligibility uses height heuristics that assume the mempool is cleared on reorg.
+        // If this invariant changes, please update Mempool::calculateDspEligibility.
         p->mempool.clear(); // make sure mempool is clean (see note above as to why)
 
         const auto [tip, header] = p->headerVerifier.lastHeaderProcessed();

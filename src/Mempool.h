@@ -39,6 +39,26 @@
 /// Models the mempool
 struct Mempool
 {
+    /// Used for dsp subsystem
+    enum class DspEligibility : uint8_t {
+        Unknown = 0, ///< returned if the tx in question is not known to this mempool instance
+
+        Eligible, ///< this tx and all unconfirmed ancestors (if any) support dsproof, but have no extant dsproofs
+        HasDSroof, ///< this tx or one of its unconfirmed ancestors has an extant dsproof
+        IneligibleThis, ///< this tx does not support dsproof (spends non-P2PKH)
+        IneligibleUnconfirmedAncestor, ///< while this tx is eligible, one its unconfirmed ancestors is ineligible (spends non-P2PKH)
+        /// the complexity limit for this tx's DAG was hit when walking back to calculate eligibility;
+        /// of the ancestors examined, every tx is ok, but some deep ancestor may not be
+        LimitHit,
+    };
+
+    struct DspEligibilityCachedAnswer {
+        DspEligibility eligibility = DspEligibility::Unknown;
+        int height = -1;
+        bool valid() const { return eligibility != DspEligibility::Unknown && height >= 0; }
+        operator bool() const { return valid(); }
+    };
+
 
     /// This info, with the exception of `hashXs` comes from bitcoind via the "getrawmempool false" RPC call.
     struct Tx
@@ -99,6 +119,9 @@ struct Mempool
         }
         bool operator!=(const Tx &o) const noexcept { return !(*this == o); }
 
+    protected:
+        friend struct ::Mempool;
+        mutable DspEligibilityCachedAnswer dspEligibilityCachedAnswer; ///< used by Mempool::calculateDspEligibility
     };
 
     using TxRef = std::shared_ptr<Tx>;
@@ -230,26 +253,21 @@ struct Mempool
 
     //  -- Dsp utility
 
-    enum class DspEligibility : uint8_t {
-        Unknown = 0, ///< returned if the tx in question is not known to this mempool instance
+    struct DspEligibilityResult {
+        DspEligibility eligibility = DspEligibility::Unknown;
+        std::optional<DspHash> dspHash; ///< only if eligibility == HasDSProof
+        struct Stats {
+            size_t maxPath{};
+            size_t iters{};
+            size_t seenTxs{};
+        };
+        Stats stats{};
+    };
 
-        Eligible, ///< this tx and all unconfirmed ancestors (if any) support dsproof, but have no extant dsproofs
-        HasDSroof, ///< this tx or one of its unconfirmed ancestors has an extant dsproof
-        IneligibleThis, ///< this tx does not support dsproof (spends non-P2PKH)
-        IneligibleUnconfirmedAncestor, ///< while this tx is eligible, one its unconfirmed ancestors is ineligible (spends non-P2PKH)
-        /// the complexity limit for this tx's DAG was hit when walking back to calculate eligibility;
-        /// of the ancestors examined, every tx is ok, but some deep ancestor may not be
-        LimitHit,
-    };
-    struct CDEStats {
-        size_t maxStage{};
-        size_t iters{};
-        size_t seenTxs{};
-    };
     // may also return "Unknown" aside from the other 5 values
-    DspEligibility calculateDspEligibility(const TxHash &, CDEStats *statsOut = nullptr) const;
+    DspEligibilityResult calculateDspEligibility(const TxHash &, BlockHeight tipHeight) const;
     // `it` must be a valid iterator in the txs map, returns one of the known 5 members of the above enum
-    DspEligibility calculateDspEligibility(TxMap::const_iterator it, CDEStats *statsOut = nullptr) const;
+    DspEligibilityResult calculateDspEligibility(TxMap::const_iterator it, BlockHeight tipHeight) const;
 
 private:
     /// Given a set of txids in this Mempool, grow the set to encompass all descendant tx's that spend
@@ -278,11 +296,12 @@ private:
     static QVariantMap dumpTx(const TxRef &tx);
 
 #ifdef ENABLE_TESTS
-public:
     /// Returns true if this compares equal to `other`, does a deep compare of the underlying
     /// Tx objects (and not the TxRef shared_ptrs -- but the actual underlying Tx data).
     ///
     /// This is very slow -- used only in the mempool bench.
     bool deepCompareEqual(const Mempool &other, QString *differenceExplanation = nullptr) const;
+public:
+    static void bench();
 #endif
 };
