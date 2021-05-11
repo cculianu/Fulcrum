@@ -24,7 +24,6 @@
 #include <algorithm>
 #include <cassert>
 #include <functional>
-#include <limits>
 #include <map>
 #include <tuple>
 #include <utility>
@@ -702,7 +701,8 @@ QVariantMap Mempool::dumpTx(const TxRef &tx)
         {
             QVariantMap m2;
             m2["eligibility"] = int(tx->dspEligibilityCachedAnswer.eligibility);
-            m2["height"] = tx->dspEligibilityCachedAnswer.height;
+            m2["height"] = unsigned(tx->dspEligibilityCachedAnswer.height);
+            m2["valid"] = tx->dspEligibilityCachedAnswer.valid;
             m["dspEligibilityCachedAnswer"] = m2;
         }
         static const auto TXOInfo2Map = [](const TXOInfo &info) -> QVariantMap {
@@ -805,7 +805,6 @@ Mempool::DspEligibilityResult Mempool::calculateDspEligibility(const TxHash &txI
 }
 Mempool::DspEligibilityResult Mempool::calculateDspEligibility(const TxMap::const_iterator it, const BlockHeight tipHeight) const
 {
-    assert(tipHeight <= BlockHeight(std::numeric_limits<int>::max()));
     constexpr size_t iterLimit = 100'000; ///< I observed about 2 million iterations per sec here, so we limit this call to <~50msec
     constexpr size_t recursonLimit = 250; ///< We want to avoid the possibility of stack overflow
     DspEligibilityResult ret;
@@ -852,7 +851,7 @@ Mempool::DspEligibilityResult Mempool::calculateDspEligibility(const TxMap::cons
                 return cached.eligibility;
             case DspEligibility::LimitHit:
             case DspEligibility::IneligibleUnconfirmedAncestor:
-                if (it->second->hasUnconfirmedParentTx && BlockHeight(cached.height) == tipHeight)
+                if (it->second->hasUnconfirmedParentTx && cached.height == tipHeight)
                     return cached.eligibility;
                 break;
             // this should be caught above when examining allInputsSpendP2PKH.. and never reached!
@@ -896,6 +895,7 @@ Mempool::DspEligibilityResult Mempool::calculateDspEligibility(const TxMap::cons
         auto & cache = it->second->dspEligibilityCachedAnswer;
         cache.eligibility = res;
         cache.height = tipHeight;
+        cache.valid = true;
     };
 
     auto res = recurse(it);

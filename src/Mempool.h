@@ -114,10 +114,10 @@ struct Mempool
     protected:
         friend struct ::Mempool;
         struct DspEligibilityCachedAnswer {
+            bool valid = false;
             DspEligibility eligibility = DspEligibility::Unknown;
-            int height = -1;
-            bool valid() const { return eligibility != DspEligibility::Unknown && height >= 0; }
-            operator bool() const { return valid(); }
+            BlockHeight height{};
+            operator bool() const { return valid; }
         };
         mutable DspEligibilityCachedAnswer dspEligibilityCachedAnswer; ///< used by Mempool::calculateDspEligibility
     };
