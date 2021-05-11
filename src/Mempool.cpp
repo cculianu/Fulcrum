@@ -24,6 +24,7 @@
 #include <algorithm>
 #include <cassert>
 #include <functional>
+#include <limits>
 #include <map>
 #include <tuple>
 #include <utility>
@@ -798,6 +799,7 @@ Mempool::DspEligibilityResult Mempool::calculateDspEligibility(const TxHash &txI
 }
 Mempool::DspEligibilityResult Mempool::calculateDspEligibility(const TxMap::const_iterator it, const BlockHeight tipHeight) const
 {
+    assert(tipHeight <= BlockHeight(std::numeric_limits<int>::max()));
     constexpr size_t iterLimit = 100'000; ///< I observed about 2 million iterations per sec here, so we limit this call to <~50msec
     constexpr size_t recursonLimit = 250; ///< We want to avoid the possibility of stack overflow
     DspEligibilityResult ret;
