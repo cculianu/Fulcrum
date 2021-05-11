@@ -978,8 +978,8 @@ bool Mempool::deepCompareEqual(const Mempool &o, QString *estr, const std::optio
                     *estr = QString("txid: %1 differ in their dspEligibilityResult: r1 = (%2, %3) != r2 = (%4, %5)\n"
                                     "---- Tx1 ----\n%6\n---- Tx2 ----\n%7")
                             .arg(QString(txid.toHex()),
-                                 QString::number(int(r1.eligibility)), r1.dspHash ? QString(r1.dspHash->toHex()) : "",
-                                 QString::number(int(r2.eligibility)), r2.dspHash ? QString(r2.dspHash->toHex()) : "",
+                                 QString::number(int(r1.eligibility)), QString(r1.dspHash.toHex()),
+                                 QString::number(int(r2.eligibility)), QString(r2.dspHash.toHex()),
                                  QString(Json::toUtf8(dumpTx(tx))), QString(Json::toUtf8(dumpTx(otx))));
                 }
                 return false;
@@ -1266,7 +1266,7 @@ void Mempool::bench() {
             for (auto it = mempool.txs.cbegin(); it != mempool.txs.cend(); ++it) {
                 Tic tic;
                 CDEStats stats;
-                const auto & [eligibility, optHash] = mempool.calculateDspEligibility(it, tipHeight, &stats);
+                const auto & [eligibility, dspHash] = mempool.calculateDspEligibility(it, tipHeight, &stats);
                 tic.fin();
                 ++counts[eligibility];
                 if (!most || tic > *most) most = tic;

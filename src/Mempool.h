@@ -253,7 +253,7 @@ struct Mempool
 
     struct DspEligibilityResult {
         DspEligibility eligibility = DspEligibility::Unknown;
-        std::optional<DspHash> dspHash; ///< only if eligibility == HasDSProof
+        DspHash dspHash; ///< empty unless eligibility == HasDSProof
         bool operator==(const DspEligibilityResult &o) const { return std::tie(eligibility, dspHash) == std::tie(o.eligibility, o.dspHash); }
         bool operator!=(const DspEligibilityResult &o) const { return !(*this == o); }
     };
