@@ -796,19 +796,21 @@ QVariantMap Mempool::dump() const
     return mp;
 }
 
-Mempool::DspEligibilityResult Mempool::calculateDspEligibility(const TxHash &txId, const BlockHeight tipHeight) const
+Mempool::DspEligibilityResult Mempool::calculateDspEligibility(const TxHash &txId, const BlockHeight tipHeight, CDEStats *stats) const
 {
     DspEligibilityResult ret;
     if (auto it = txs.find(txId); it != txs.end())
-        ret = calculateDspEligibility(it, tipHeight);
+        ret = calculateDspEligibility(it, tipHeight, stats);
     return ret;
 }
-Mempool::DspEligibilityResult Mempool::calculateDspEligibility(const TxMap::const_iterator it, const BlockHeight tipHeight) const
+Mempool::DspEligibilityResult Mempool::calculateDspEligibility(const TxMap::const_iterator it, const BlockHeight tipHeight,  CDEStats *statsOut ) const
 {
     constexpr size_t iterLimit = 100'000; ///< I observed about 2 million iterations per sec here, so we limit this call to <~50msec
     constexpr size_t recursonLimit = 250; ///< We want to avoid the possibility of stack overflow
     DspEligibilityResult ret;
-    auto &stats = ret.stats;
+    CDEStats dummy{};
+    auto &stats = statsOut ? *statsOut : dummy;
+    if (statsOut) stats = dummy; // zero-initialize
 
     if (const DSProof *proof; dsps.dspHashesForTx(it->first) && (proof = dsps.bestProofForTx(it->first))) {
         ret.eligibility = DspEligibility::HasDSroof;
@@ -1259,11 +1261,12 @@ void Mempool::bench() {
             std::map<Mempool::DspEligibility, int> counts;
             std::optional<Tic> most, least;
             Tic total;
-            Mempool::DspEligibilityResult::Stats maxStats, cumStats;
+            Mempool::CDEStats maxStats, cumStats;
             Debug() << "calculateDspEligibility (" << tipHeight << ") ...";
             for (auto it = mempool.txs.cbegin(); it != mempool.txs.cend(); ++it) {
                 Tic tic;
-                const auto & [eligibility, optHash, stats] = mempool.calculateDspEligibility(it, tipHeight);
+                CDEStats stats;
+                const auto & [eligibility, optHash] = mempool.calculateDspEligibility(it, tipHeight, &stats);
                 tic.fin();
                 ++counts[eligibility];
                 if (!most || tic > *most) most = tic;

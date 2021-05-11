@@ -254,22 +254,18 @@ struct Mempool
     struct DspEligibilityResult {
         DspEligibility eligibility = DspEligibility::Unknown;
         std::optional<DspHash> dspHash; ///< only if eligibility == HasDSProof
-        struct Stats {
-            size_t maxPath{};
-            size_t iters{};
-            size_t seenTxs{};
-        };
-        Stats stats{};
-
-        // operator== ignores stats
         bool operator==(const DspEligibilityResult &o) const { return std::tie(eligibility, dspHash) == std::tie(o.eligibility, o.dspHash); }
         bool operator!=(const DspEligibilityResult &o) const { return !(*this == o); }
     };
-
+    struct CDEStats {
+        size_t maxPath{};
+        size_t iters{};
+        size_t seenTxs{};
+    };
     // may also return "Unknown" aside from the other 5 values
-    DspEligibilityResult calculateDspEligibility(const TxHash &, BlockHeight tipHeight) const;
+    DspEligibilityResult calculateDspEligibility(const TxHash &, BlockHeight tipHeight, CDEStats *stats = nullptr) const;
     // `it` must be a valid iterator in the txs map, returns one of the known 5 members of the above enum
-    DspEligibilityResult calculateDspEligibility(TxMap::const_iterator it, BlockHeight tipHeight) const;
+    DspEligibilityResult calculateDspEligibility(TxMap::const_iterator it, BlockHeight tipHeight,  CDEStats *stats = nullptr) const;
 
 private:
     /// Given a set of txids in this Mempool, grow the set to encompass all descendant tx's that spend
