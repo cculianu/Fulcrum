@@ -1285,12 +1285,12 @@ void Mempool::bench() {
                 if (!ctstr.isEmpty()) ctstr += ", ";
                 ctstr += QString::number(int(elg)) + ": " + QString::number(ct);
             }
-            Log() << "calculateDspEligibility (" << tipHeight << "): took " << total.msecStr() << " msec for " << mempool.txs.size() << " txs";
+            Log() << "calculateDspEligibility (" << tipHeight << "): took " << total.msecStr() << " msec for " << mempool.txs.size() << " txs"
+                  << " <counts " << ctstr << ">";
             Debug() << "calculateDspEligibility (" << tipHeight << "): "
                     << "<maxStats iters=" << maxStats.iters << " maxPath=" << maxStats.maxPath << " seenTxs=" << maxStats.seenTxs << ">"
                     << ", <cumStats iters=" << cumStats.iters << " seenTxs=" << cumStats.seenTxs << ">"
-                    << ", most: " << (most ? most->msecStr() : "?") << " msec, least: " << (least ? least->msecStr() : "?")
-                    << ", <counts " << ctstr << ">";
+                    << ", most: " << (most ? most->msecStr() : "?") << " msec, least: " << (least ? least->msecStr() : "?");
         };
 
         for (int i = 0; i < 3; ++i)
