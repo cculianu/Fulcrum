@@ -215,6 +215,7 @@ public:
     struct HistoryItem {
         TxHash hash;
         int height = 0; ///< block height. 0 = unconfirmed, -1 = unconfirmed with unconfirmed parent. Note this is ambiguous with block 0 :(
+        bitcoin::Amount credit_debit = bitcoin::Amount::zero();
         std::optional<bitcoin::Amount> fee; ///< fee, if known. this is only ever populated with a value for unconfirmed (mempool) tx's
 
         // for sort & maps

@@ -189,6 +189,9 @@ namespace {
     // this deserializes a vector of TxNums from a compact representation (6 bytes, eg 48 bits per TxNum), assuming little endian byte order
     template <> TxNumVec Deserialize(const QByteArray &, bool *);
 
+    template <> QByteArray Serialize(const TxNumWithValue &a);
+    template <> TxNumWithValue Deserialize(const QByteArray &ba, bool *ok);
+
     // CompactTXO -- not currently used since we prefer toBytes() directly (TODO: remove if we end up never using this)
     //template <> QByteArray Serialize(const CompactTXO &);
     template <> CompactTXO Deserialize(const QByteArray &, bool *);
@@ -2208,6 +2211,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
 
         // code in the below block may throw -- exceptions are propagated out to caller.
         {
+            std::map<HashX, bitcoin::Amount> credit_debits;
             // Verify header chain makes sense (by checking hashes, using the shared header verifier)
             QByteArray rawHeader;
             {
@@ -2283,6 +2287,14 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                             TXOInfo info;
                             info.hashX = hashX;
                             info.amount = out.amount;
+
+                            auto has_hashx = credit_debits.find(hashX);
+                            if (has_hashx != credit_debits.end()) {
+                               credit_debits[hashX] += out.amount; 
+                            } else {
+                                credit_debits[hashX] = out.amount;
+                            }
+
                             info.confirmedHeight = ppb->height;
                             info.txNum = blockTxNum0 + out.txIdx;
                             const TXO txo{ hash, out.outN };
@@ -2310,6 +2322,14 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                                 Debug() << "Skipping input " << txo.toString() << ", spent in this block (output # " << *in.parentTxOutIdx << ")";
                         } else if (const auto opt = utxoGetFromDB(txo); opt.has_value()) {
                             const auto & info = *opt;
+
+                            auto has_hashx = credit_debits.find(info.hashX);
+                            if (has_hashx != credit_debits.end()) {
+                               credit_debits[info.hashX] += -1 * info.amount;
+                            } else {
+                                credit_debits[info.hashX] = -1 * info.amount;
+                            }
+
                             if (info.confirmedHeight.has_value() && *info.confirmedHeight != ppb->height) {
                                 // was a prevout from a previos block.. so the ppb didn't have it in the 'involving hashx' set..
                                 // mark the spend as having involved this hashX for this ppb now.
@@ -2317,7 +2337,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                                 ag.ins.emplace_back(inum);
                                 newHashXInputsResolved.insert(info.hashX);
                                 // mark its txidx
-                                if (auto & vec = ag.txNumsInvolvingHashX; vec.empty() || vec.back() != in.txIdx)
+                                if (auto & vec = ag.txNumsInvolvingHashX; vec.empty() || vec.back().txnum != in.txIdx)
                                     vec.emplace_back(in.txIdx);
 
                             }
@@ -2375,7 +2395,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                 for (auto & [hashX, ag] : ppb->hashXAggregated) {
                     if (notify) notify->scriptHashesAffected.insert(hashX); // fast O(1) insertion because we reserved the right size above.
                     for (auto & txNum : ag.txNumsInvolvingHashX) {
-                        txNum += blockTxNum0; // transform local txIdx to -> txNum (global mapping)
+                        txNum.txnum += blockTxNum0; // transform local txIdx to -> txNum (global mapping)
                     }
                     // save scripthash history for this hashX, by appending to existing history. Note that this uses
                     // the 'ConcatOperator' class we defined in this file, which requires rocksdb be compiled with RTTI.
@@ -3565,6 +3585,24 @@ namespace {
     template <> bitcoin::Amount Deserialize(const QByteArray &ba, bool *ok) {
         const int64_t amt = DeserializeScalar<int64_t>(ba, ok);
         return amt * bitcoin::Amount::satoshi();
+    }
+
+    template <> QByteArray Serialize(const TxNumWithValue &a) 
+    {
+        QByteArray ba;
+        {
+            QDataStream ds(&ba, QIODevice::WriteOnly|QIODevice::Truncate);
+            // we serialize the 'magic' value as a simple scalar as a sort of endian check for the DB
+            // ds << SerializeScalarNoCopy(a.txnum) << a.amount;
+            ds << a.txnum << Serialize(a.amount);
+        }
+        return ba;
+    } 
+
+    template <> TxNumWithValue Deserialize(const QByteArray &ba, bool *ok) {
+        //const int64_t amt = DeserializeScalar<int64_t>(ba, ok);
+        //return amt * bitcoin::Amount::satoshi();
+        
     }
 
 } // end anon namespace

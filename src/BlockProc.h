@@ -40,6 +40,11 @@
 struct PreProcessedBlock;
 using PreProcessedBlockPtr = std::shared_ptr<PreProcessedBlock>;  ///< For clarity/convenience
 
+struct TxNumWithValue {
+            TxNum txnum;
+            bitcoin::Amount amount = bitcoin::Amount::zero();
+};
+
 /// Note all hashes below are in *reversed* order from bitcoind's internal memory order.
 /// The reason for that is so that we have this PreProcessedBlock ready with the right format for putting into the db
 /// for later serving up to EX clients.
@@ -92,7 +97,7 @@ struct PreProcessedBlock
         /// Tx indices, always sorted. Initially it's just a list of txIdx into the txInfos array but gets transformed
         /// down the block processing pipeline (in addBlock) to be a list of globally-mapped TxNums involving this
         /// HashX.
-        std::vector<TxNum> txNumsInvolvingHashX;
+        std::vector<TxNumWithValue> txNumsInvolvingHashX;
     };
 
     /// Node map preferable here. Even though a flat map uses move construction, it would still have to move ~72

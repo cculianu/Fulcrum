@@ -74,7 +74,7 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bi
                 // add this output to the hashX -> outputs association for later
                 auto & ag = hashXAggregated[ hashX ];
                 ag.outs.emplace_back( outputIdx );
-                if (auto & vec = ag.txNumsInvolvingHashX; vec.empty() || vec.back() != txIdx)
+                if (auto & vec = ag.txNumsInvolvingHashX; vec.empty() || vec.back().txnum != txIdx)
                     vec.emplace_back(txIdx);
             }
             else {
@@ -159,7 +159,7 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bi
                 const HashX hashX = BTC::HashXFromCScript(cscript);
                 auto & ag = hashXAggregated[ hashX ];
                 ag.ins.emplace_back(inIdx);
-                if (auto & vec = ag.txNumsInvolvingHashX; vec.empty() || vec.back() != inp.txIdx)
+                if (auto & vec = ag.txNumsInvolvingHashX; vec.empty() || vec.back().txnum != inp.txIdx)
                     vec.emplace_back(inp.txIdx);  // now that we resolved the input's spending address, mark this input's txIdx as having touched this hashX
             }
         }
