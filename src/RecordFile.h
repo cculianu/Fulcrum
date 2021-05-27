@@ -122,7 +122,6 @@ private:
     const uint32_t magic;
     QFile file; ///< this is kept open throughout the lifetime of this instance; and is the instance used to write to the file. readers open up a new QFile each time.
     std::atomic<uint64_t> nrecs = 0;
-    std::atomic_bool ok = false;
 
     static constexpr size_t hdrsz = sizeof(magic) + sizeof(uint64_t);
 
