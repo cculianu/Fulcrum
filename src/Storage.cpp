@@ -984,8 +984,8 @@ struct Storage::Pvt
                                      shist, shunspent, // scripthash_history and scripthash_unspent
                                      undo, // undo (reorg rewind)
                                      txhash2txnum; // new: index of txhash -> txNumsFile
-        using NameDBPair = std::pair<QString, std::unique_ptr<rocksdb::DB> &>;
-        std::list<NameDBPair> openDBs; ///< a bit of introspection to track which dbs are currently open (used by gentlyCloseAllDBs())
+        using DBPtrRef = std::tuple<std::unique_ptr<rocksdb::DB> &>;
+        std::list<DBPtrRef> openDBs; ///< a bit of introspection to track which dbs are currently open (used by gentlyCloseAllDBs())
 
         std::unique_ptr<TxHash2TxNumMgr> txhash2txnumMgr; ///< provides a bit of a higher-level interface into the db
     };
@@ -1211,7 +1211,7 @@ void Storage::startup()
                 throw DatabaseError(QString("Error opening %1 database: %2 (path: %3)")
                                     .arg(name, StatusString(s), path));
             uptr = std::move(tmpPtr); // everything ok, move tmpPtr
-            p->db.openDBs.emplace_back(name, uptr); // mark db as open
+            p->db.openDBs.emplace_back(uptr); // mark db as open
         };
 
         // open all db's defined above
@@ -1278,9 +1278,11 @@ void Storage::compactAllDBs()
     App *ourApp = app();
     Tic t0;
     Log() << "Compacting DBs, please wait ...";
-    for (const auto & [name, db] : p->db.openDBs) {
+    for (const auto & [db] : p->db.openDBs) {
         if (ourApp->signalsCaught())
             break;
+        if (!db) continue;
+        const auto name = DBName(db.get());
         Log() << "Compacting " << name << " ...";
         rocksdb::CompactRangeOptions opts;
         opts.allow_write_stall = true;
@@ -1299,8 +1301,9 @@ void Storage::compactAllDBs()
 void Storage::gentlyCloseAllDBs()
 {
     // do FlushWAL() and Close() to gently close the dbs
-    for (auto &[name, db] : p->db.openDBs) {
+    for (auto & [db] : p->db.openDBs) {
         if (!db) continue;
+        const auto name = DBName(db.get());
         Debug() << "Flushing and closing " << name << " ...";
         rocksdb::Status status;
         rocksdb::FlushOptions fopts;
