@@ -984,6 +984,8 @@ struct Storage::Pvt
                                      shist, shunspent, // scripthash_history and scripthash_unspent
                                      undo, // undo (reorg rewind)
                                      txhash2txnum; // new: index of txhash -> txNumsFile
+        using NameDBPair = std::pair<QString, std::unique_ptr<rocksdb::DB> &>;
+        std::list<NameDBPair> openDBs; ///< a bit of introspection to track which dbs are currently open (used by gentlyCloseAllDBs())
 
         std::unique_ptr<TxHash2TxNumMgr> txhash2txnumMgr; ///< provides a bit of a higher-level interface into the db
     };
@@ -1207,8 +1209,9 @@ void Storage::startup()
             }
             if (!s.ok() || !tmpPtr)
                 throw DatabaseError(QString("Error opening %1 database: %2 (path: %3)")
-                                    .arg(name).arg(StatusString(s)).arg(path));
+                                    .arg(name, StatusString(s), path));
             uptr = std::move(tmpPtr); // everything ok, move tmpPtr
+            p->db.openDBs.emplace_back(name, uptr); // mark db as open
         };
 
         // open all db's defined above
@@ -1216,7 +1219,6 @@ void Storage::startup()
             OpenDB(tup);
 
         Log() << "DB memory: " << QString::number(memTotal / 1024. / 1024., 'f', 2) << " MiB";
-
     }  // /open db's
 
     // load/check meta
@@ -1259,6 +1261,8 @@ void Storage::startup()
     loadCheckShunspentInDB();
     // load check earliest undo to populate earliestUndoHeight
     loadCheckEarliestUndo();
+    // if user specified --compact-dbs on CLI, run the compaction now before returning
+    compactAllDBs();
 
     // start up the co-task we use in addBlock and undoLatestBlock
     p->blocksWorker = std::make_unique<CoTask>("Storage Worker");
@@ -1266,16 +1270,36 @@ void Storage::startup()
     start(); // starts our thread
 }
 
+void Storage::compactAllDBs()
+{
+    if (!options->compactDBs)
+        return;
+    size_t ctr = 0;
+    App *ourApp = app();
+    Tic t0;
+    Log() << "Compacting DBs, please wait ...";
+    for (const auto & [name, db] : p->db.openDBs) {
+        if (ourApp->signalsCaught())
+            break;
+        Log() << "Compacting " << name << " ...";
+        rocksdb::CompactRangeOptions opts;
+        opts.allow_write_stall = true;
+        opts.exclusive_manual_compaction = true;
+        opts.change_level = true;
+        auto s = db->CompactRange(opts, nullptr, nullptr);
+        if (!s.ok()) {
+            throw DatabaseError(QString("Error compacting %1 database: %2")
+                                .arg(name, StatusString(s)));
+        }
+        ++ctr;
+    }
+    Log() << "Compacted " << ctr << " databases in " << t0.secsStr(1) << " seconds";
+}
+
 void Storage::gentlyCloseAllDBs()
 {
     // do FlushWAL() and Close() to gently close the dbs
-    using NVP = std::pair<const char *, std::unique_ptr<rocksdb::DB> &>;
-    std::list<NVP> dbs = {
-        NVP{"undo", p->db.undo}, NVP{"scripthash_unspent", p->db.shunspent}, NVP{"scripthash_history", p->db.shist},
-        NVP{"utxoset", p->db.utxoset}, NVP{"blkinfo", p->db.blkinfo}, NVP{"meta", p->db.meta},
-        NVP{"txhash2txnum", p->db.txhash2txnum},
-    };
-    for (auto &[name, db] : dbs) {
+    for (auto &[name, db] : p->db.openDBs) {
         if (!db) continue;
         Debug() << "Flushing and closing " << name << " ...";
         rocksdb::Status status;
@@ -1292,6 +1316,7 @@ void Storage::gentlyCloseAllDBs()
             Warning() << "Close of " << name << ": " << QString::fromStdString(status.ToString());
         db.reset();
     }
+    p->db.openDBs.clear();
 }
 
 void Storage::cleanup()

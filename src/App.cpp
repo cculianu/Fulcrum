@@ -486,6 +486,13 @@ void App::parseArgs()
         QString("num"),
     },
     {
+       "compact-dbs",
+       QString("If specified, " APPNAME " will compact all databases on startup. The compaction process reduces"
+               " database disk space usage by removing redundant/unused data. Note that rocksdb normally compacts the"
+               " databases in the background while " APPNAME " is running, so using this option to explicitly compact"
+               " the database files on startup is not strictly necessary.\n"),
+    },
+    {
        "dump-sh",
        QString("*** This is an advanced debugging option ***   Dump script hashes. If specified, after the database"
                " is loaded, all of the script hashes in the database will be written to outputfile as a JSON array.\n"),
@@ -1239,6 +1246,12 @@ void App::parseArgs()
                           .arg(options->txHashCacheBytesMin/1e6).arg(options->txHashCacheBytesMax/1e6));
         options->txHashCacheBytes = val;
         Util::AsyncOnObject(this, [val=val/1e6]{ DebugM("config: txhash_cache = ", val); });
+    }
+
+    // CLI: --compact-dbs
+    if (parser.isSet("compact-dbs")) {
+        options->compactDBs = true;
+        Util::AsyncOnObject(this, []{ DebugM("config: compact-dbs = true"); });
     }
 
     // parse --dump-*

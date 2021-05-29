@@ -395,6 +395,9 @@ private:
     /// Called from cleanup. Does some flushing and gently closes all open DBs.
     void gentlyCloseAllDBs();
 
+    /// Only does something if options->compactDBs is true (iff --compact-dbs specified on CLI)
+    void compactAllDBs();
+
     // Called by heightForTxNum which calls this with the blockInfo lock held
     std::optional<unsigned> heightForTxNum_nolock(TxNum) const;
 };

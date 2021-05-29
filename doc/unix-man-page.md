@@ -1,6 +1,6 @@
 % FULCRUM(1) Version 1.5.2 | Fulcrum Manual
 % Fulcrum is written by Calin Culianu (cculianu)
-% April 24, 2021
+% May 29, 2021
 
 # NAME
 
@@ -114,6 +114,9 @@ Once the server finishes synching it will behave like an ElectronX/ElectrumX ser
 
 --bd-clients
 :   Corresponds to the configuration file variable "bitcoind_clients". The number of simultaneous bitcoin RPC clients that we spawn to connect to bitcoind (default: 3). If you raise this value from the default, be sure to also specify the option `rpcthreads=` to bitcoind so that there are enough threads to accommodate the clients we spawn, otherwise you may get errors from bitcoind.
+
+--compact-dbs
+:   If specified, Fulcrum will compact all databases on startup. The compaction process reduces database disk space usage by removing redundant/unused data. Note that rocksdb normally compacts the databases in the background while Fulcrum is running, so using this option to explicitly compact the database files on startup is not strictly necessary.
 
 --dump-sh <outputfile>
 :    *This is an advanced debugging option*. Dump script hashes. If specified, after the database is loaded, all of the script hashes in the database will be written to outputfile as a JSON array.

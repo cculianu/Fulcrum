@@ -261,6 +261,10 @@ public:
                               txHashCacheBytesMin = 20'000'000; ///< 20 MB minimum
     static constexpr bool isTxHashCacheBytesInRange(unsigned n) { return n >= txHashCacheBytesMin && n <= txHashCacheBytesMax; }
     unsigned txHashCacheBytes = defaultTxHashCacheBytes;
+
+    // CLI: --compact-dbs
+    /// If specified, we compact all of the databases on startup
+    bool compactDBs = false;
 };
 
 /// A class encapsulating a simple read-only config file format.  The format is similar to the bitcoin.conf format
