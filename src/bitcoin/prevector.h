@@ -224,10 +224,10 @@ private:
 #pragma pack(push,1) // push alignment 1 onto alignment stack /* Calin asks: Is this always safe on every arch?! */
     union direct_or_indirect {
         byte direct[sizeof(T) * N];
-        struct {
+        struct S {
             byte *indirect;
             size_type capacity;
-        };
+        } s;
     };
 #pragma pack(pop)
     alignas(byte *) direct_or_indirect _union = {};
@@ -244,10 +244,10 @@ private:
         return reinterpret_cast<const T *>(_union.direct) + pos;
     }
     T *indirect_ptr(difference_type pos) noexcept {
-        return reinterpret_cast<T *>(_union.indirect) + pos;
+        return reinterpret_cast<T *>(_union.s.indirect) + pos;
     }
     const T *indirect_ptr(difference_type pos) const noexcept {
-        return reinterpret_cast<const T *>(_union.indirect) + pos;
+        return reinterpret_cast<const T *>(_union.s.indirect) + pos;
     }
     constexpr bool is_direct() const noexcept { return _size <= N; }
 
@@ -278,15 +278,15 @@ private:
             }
         } else {
             if (!is_direct()) {
-                _union.indirect = reallocate(_union.indirect, sizeof(T) * new_capacity);
-                _union.capacity = new_capacity;
+                _union.s.indirect = reallocate(_union.s.indirect, sizeof(T) * new_capacity);
+                _union.s.capacity = new_capacity;
             } else {
                 byte *new_indirect = reallocate(nullptr, sizeof(T) * new_capacity);
                 T *src = direct_ptr(0);
                 T *dst = reinterpret_cast<T *>(new_indirect);
                 std::memcpy(dst, src, size() * sizeof(T));
-                _union.indirect = new_indirect;
-                _union.capacity = new_capacity;
+                _union.s.indirect = new_indirect;
+                _union.s.capacity = new_capacity;
                 _size += N + 1;
             }
         }
@@ -399,7 +399,7 @@ public:
         if (is_direct()) {
             return N;
         } else {
-            return _union.capacity;
+            return _union.s.capacity;
         }
     }
 
@@ -517,8 +517,8 @@ public:
 
     ~prevector() noexcept {
         if (!is_direct()) {
-            std::free(_union.indirect);
-            _union.indirect = nullptr;
+            std::free(_union.s.indirect);
+            _union.s.indirect = nullptr;
         }
     }
 
@@ -545,7 +545,7 @@ public:
         if (is_direct()) {
             return 0;
         } else {
-            return sizeof(T) * _union.capacity;
+            return sizeof(T) * _union.s.capacity;
         }
     }
 
