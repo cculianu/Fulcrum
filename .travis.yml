@@ -6,6 +6,11 @@ jobs:
   fast_finish: true
   include:
     - os: linux
+      arch: amd64
+      dist: bionic
+      env: TARGET_OS=ubuntu
+    - os: linux
+      arch: arm64
       dist: bionic
       env: TARGET_OS=ubuntu
     - os: osx

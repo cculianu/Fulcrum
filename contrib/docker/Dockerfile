@@ -1,11 +1,11 @@
-FROM ubuntu:bionic
+FROM --platform=$BUILDPLATFORM ubuntu:bionic
 LABEL maintainer="Axel Gembe <derago@gmail.com>"
 
 ARG MAKEFLAGS
 
 RUN apt-get update -y && \
     apt-get install -y software-properties-common && \
-    add-apt-repository ppa:beineri/opt-qt-5.13.2-bionic && \
+    add-apt-repository ppa:mainnet-pat/opt-qt-5.13.2-bionic && \
     apt-get update -y && \
     apt-get install -y qt513base openssl && \
     apt-get install -y git build-essential pkg-config zlib1g-dev libbz2-dev libjemalloc-dev libjemalloc1 libzmq3-dev && \
