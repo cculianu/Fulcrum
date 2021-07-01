@@ -1,11 +1,17 @@
 language: cpp
 compiler: gcc
+arch:
+  - amd64
+  - arm64
 os: linux
 dist: bionic
 jobs:
   fast_finish: true
   include:
     - os: linux
+    - arch:
+      - amd64
+      - arm64
       dist: bionic
       env: TARGET_OS=ubuntu
     - os: osx
