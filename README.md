@@ -1,7 +1,7 @@
 # Fulcrum
 
 [![Travis CI Build](https://img.shields.io/travis/cculianu/Fulcrum/master)](https://travis-ci.org/cculianu/Fulcrum)
-[![Docker Build](https://img.shields.io/docker/cloud/build/cculianu/fulcrum)](https://hub.docker.com/r/cculianu/fulcrum)
+[![Docker Build](https://github.com/cculianu/Fulcrum/actions/workflows/publish.yml/badge.svg)](https://github.com/cculianu/Fulcrum/actions/workflows/publish.yml)
 [![Copr build status](https://copr.fedorainfracloud.org/coprs/jonny/BitcoinCash/package/fulcrum/status_image/last_build.png)](https://copr.fedorainfracloud.org/coprs/jonny/BitcoinCash/package/fulcrum/)
 
 A fast & nimble SPV server for Bitcoin Cash & Bitcoin BTC.
