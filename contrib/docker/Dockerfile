@@ -1,4 +1,4 @@
-FROM --platform=$BUILDPLATFORM ubuntu:bionic
+FROM ubuntu:bionic
 LABEL maintainer="Axel Gembe <derago@gmail.com>"
 
 ARG MAKEFLAGS
