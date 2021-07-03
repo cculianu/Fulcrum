@@ -33,6 +33,10 @@ jobs:
           username: cculianu
           password: ${{secrets.DOCKERHUB_PASSWORD}}
 
+      # If you want support for more platforms you can use our setup-qemu action:
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v1
+
       - name: Create buildx worker node
         run: docker buildx create --use
 
