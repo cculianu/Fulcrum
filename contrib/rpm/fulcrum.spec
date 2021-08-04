@@ -75,7 +75,7 @@ exit 0
 %doc README.md
 %license LICENSE.txt
 %{_mandir}/man1/fulcrum.1*
-%config %attr(640, root, fulcrum) %{_sysconfdir}/fulcrum.conf
+%config(noreplace) %attr(640, root, fulcrum) %{_sysconfdir}/fulcrum.conf
 %{_bindir}/fulcrum
 %attr(700, fulcrum, fulcrum) %{_sharedstatedir}/fulcrum
 %{_unitdir}/fulcrum.service
