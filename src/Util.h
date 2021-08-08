@@ -932,11 +932,6 @@ namespace Util {
         };
     } // end namespace AsyncSignalSafe
 
-    /// Returns the minimum stack size in bytes for this platform, suitable for passing to QThread::setStackSize.
-    /// If the platform is unknown to this codebase, then 0 is returned (which if passed to QThread::setStackSize
-    /// just results in using the default thread stack settings).
-    unsigned getPlatformMinimumThreadStackSize();
-
     struct MaxOpenFilesResult {
         enum Status {
             Ok = 0, NotRelevant, Error
