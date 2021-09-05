@@ -207,9 +207,15 @@ namespace {
                 throw Json::Error(QString("Unable to serialize double for '%1' (%2, %3)").arg(v.toString()).arg(int(ok1)).arg(int(ok2)));
             break;
         }
-        default:
-            throw Json::Error(QString("Unsupported type %1 (%2) for '%3'").arg(int(typ)).arg(QMetaType(typ).name(), v.toString()));
+        default: {
+#if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
+            const QString tname(QMetaType(typ).name());
+#else
+            const QString tname(QMetaType::typeName(typ));
+#endif
+            throw Json::Error(QString("Unsupported type %1 (%2) for '%3'").arg(int(typ)).arg(tname, v.toString()));
         }
+        } // end switch
     }
 
     template<typename List>
