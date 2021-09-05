@@ -1111,7 +1111,11 @@ Storage::Storage(const std::shared_ptr<const Options> & options_)
 
 Storage::~Storage() { Debug() << __func__; cleanup(); }
 
+#if ((ROCKSDB_MAJOR << 16)|(ROCKSDB_MINOR << 8)|(ROCKSDB_PATCH)) > ((6 << 16)|(17 << 8)|(3)) // 6.17.3
+static const char* rocksdb_build_git_sha = "unk"; // this doesn't exist on rocksdb > 6.17.3
+#else
 extern const char* rocksdb_build_git_sha; // internal to rocksdb lib -- if this breaks remove me
+#endif
 /* static */
 QString Storage::rocksdbVersion()
 {
