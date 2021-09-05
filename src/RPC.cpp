@@ -87,7 +87,7 @@ namespace RPC {
         }
 
         if (auto var = map.value(s_method);
-                map.contains(s_method) && (QMetaType::Type(var.type()) != QMetaType::QString
+                map.contains(s_method) && (!Compat::IsMetaType(var, QMetaType::QString)
                                            || (ret.method = var.toString()).isEmpty()
                                            || ret.method.startsWith(rpcDot/*="rpc."*/)))
             throw InvalidError("Invalid method");

@@ -19,6 +19,7 @@
 #pragma once
 
 #include "BTC.h"
+#include "Compat.h"
 
 #include "bitcoin/cashaddrenc.h"  // for bitcoin::CashAddrType
 #include "bitcoin/uint256.h"
@@ -145,7 +146,7 @@ template <> struct std::hash<BTC::Address> {
 };
 
 /// for Qt QSet/QHash support of type BTC::Address
-inline uint qHash(const BTC::Address &key, uint seed = 0) {
+inline Compat::qhuint qHash(const BTC::Address &key, Compat::qhuint seed = 0) {
     return qHash(std::hash<BTC::Address>{}(key), seed);
 }
 

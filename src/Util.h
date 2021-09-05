@@ -954,11 +954,16 @@ namespace Util {
     /// This function basically tells you how much extra space a QByteArray takes up just by existing, beyond its base
     /// sizeof(QByteArray) + .size()+1.
     inline constexpr size_t qByteArrayPvtDataSize(bool isNull = false) {
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
         static_assert (sizeof(decltype(std::declval<QByteArray>().size())) == sizeof(int),
                        "Assumption here is that QByteArray uses ints for indexing (true in Qt5, not true in Qt6)");
         constexpr size_t padding = sizeof(void *) > sizeof(int) ? sizeof(void *) - sizeof(int) : 0;
         return isNull ? 0 // null uses a single shared object so basically 0 extra size
                       : sizeof(int)*3 + padding + sizeof(void *); // not null -- QArrayData has 3 ints and 1 pointer (but pointer offset is padded for alignment on 64-bit)
+#else
+        // Qt6 QByteArray private data pointer has 2 ints and a qsizetype
+        return isNull ? 0 : sizeof(int) * 2 + sizeof(qsizetype);
+#endif
     }
 
 } // end namespace Util

@@ -19,6 +19,7 @@
 #pragma once
 
 #include "AbstractConnection.h"
+#include "Compat.h"
 #include "Json/Json.h"
 #include "RPCMsgId.h"
 #include "Util.h"
@@ -171,8 +172,8 @@ namespace RPC {
         bool hasId() const { return data.contains(s_id); }
 
         bool hasParams() const { return data.contains(s_params); }
-        bool isParamsList() const { return QMetaType::Type(data.value(s_params).type()) == QMetaType::QVariantList; }
-        bool isParamsMap() const { return QMetaType::Type(data.value(s_params).type()) == QMetaType::QVariantMap; }
+        bool isParamsList() const { return Compat::IsMetaType(data.value(s_params), QMetaType::QVariantList); }
+        bool isParamsMap() const { return Compat::IsMetaType(data.value(s_params), QMetaType::QVariantMap); }
         QVariant params() const { return data.value(s_params); }
         QVariantList paramsList() const { return params().toList(); }
         QVariantMap paramsMap() const { return params().toMap(); }

@@ -35,7 +35,7 @@
 #include <QHostInfo>
 #include <QLibraryInfo>
 #include <QLocale>
-#include <QRegExp>
+#include <QRegularExpression>
 #include <QSemaphore>
 #include <QSslCipher>
 #include <QSslEllipticCurve>
@@ -1066,7 +1066,7 @@ void App::parseArgs()
     // /Tor params
 
     if (conf.hasValue("bitcoind_throttle")) {
-        const QStringList vals = conf.value("bitcoind_throttle").trimmed().simplified().split(QRegExp("\\W+"), Compat::SplitBehaviorSkipEmptyParts);
+        const QStringList vals = conf.value("bitcoind_throttle").trimmed().simplified().split(QRegularExpression("\\W+"), Compat::SplitBehaviorSkipEmptyParts);
         constexpr size_t N = 3;
         std::array<int, N> parsed = {0,0,0};
         size_t i = 0;

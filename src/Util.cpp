@@ -55,6 +55,8 @@
 #  endif
 #endif
 
+#include <QRegularExpression>
+
 #include <cstring>             // for strerror
 #include <iostream>
 #include <mutex>
@@ -62,7 +64,7 @@
 
 namespace Util {
     QString basename(const QString &s) {
-        QRegExp re("[\\/]");
+        const QRegularExpression re("[\\/]");
         auto toks = s.split(re);
         return toks.last();
     }

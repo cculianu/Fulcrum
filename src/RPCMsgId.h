@@ -17,6 +17,7 @@
 // <https://www.gnu.org/licenses/>.
 //
 #pragma once
+#include "Compat.h"
 #include "Util.h"
 
 #include <QHash>
@@ -95,7 +96,7 @@ private:
     int64_t idata{};
     QString sdata{};
 
-    friend uint qHash(const RPCMsgId &, uint);
+    friend Compat::qhuint qHash(const RPCMsgId &, Compat::qhuint);
     friend struct std::hash<RPCMsgId>;
 };
 
@@ -110,7 +111,7 @@ template<> struct std::hash<RPCMsgId> {
     }
 };
 /// overload for Qt's hashtable containers (QHash, QMultiHash, etc)
-inline uint qHash(const RPCMsgId &r, uint seed = 0)  {
+inline Compat::qhuint qHash(const RPCMsgId &r, Compat::qhuint seed = 0)  {
     switch(r.typ) {
     case RPCMsgId::String: return qHash(r.sdata, seed);
     case RPCMsgId::Integer: return qHash(r.idata, seed);

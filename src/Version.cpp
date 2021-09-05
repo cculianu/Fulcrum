@@ -1,5 +1,6 @@
 #include "Version.h"
 
+#include <QRegularExpression>
 #include <QStringList>
 
 // Again, on some Linux setups, sys/sysmacros.h defines these symbols :/
@@ -60,7 +61,7 @@ Version::Version(const QString &s_)
             if (!ok)
                 minor = 0;
             else if (sl.length() >= 3) {
-                const QRegExp nonNumericRE("[^0-9]");
+                const QRegularExpression nonNumericRE("[^0-9]");
                 QString s2 = sl.at(2).trimmed();
                 if (int pos = s2.indexOf(nonNumericRE); pos > -1)
                     // only take the numeric part of the string eg 3.3."4CS" -> 3.3."4"

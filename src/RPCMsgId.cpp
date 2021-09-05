@@ -40,7 +40,7 @@ RPCMsgId RPCMsgId::fromVariant(const QVariant &var)
         // we will throw if the id is not a string, integer, or null
         bool ok{};
         int64_t id_ll;
-        if (auto mtype = QMetaType::Type(var.type()); mtype == QMetaType::QString) {
+        if (auto mtype = Compat::GetVarType(var); mtype == QMetaType::QString) {
             ret = var.toString();
         } else if (UNLIKELY(mtype == QMetaType::QByteArray)) {
             ret = QString::fromUtf8(var.toByteArray());

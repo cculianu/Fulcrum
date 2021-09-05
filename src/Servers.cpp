@@ -22,6 +22,7 @@
 #include "BitcoinD.h"
 #include "BTC.h"
 #include "BTC_Address.h"
+#include "Compat.h"
 #include "Merkle.h"
 #include "PeerMgr.h"
 #include "ServerMisc.h"
@@ -39,7 +40,6 @@
 #include <QSslCertificate>
 #include <QSslKey>
 #include <QString>
-#include <QTextCodec>
 #include <QTextStream>
 #include <QTimer>
 
@@ -223,7 +223,11 @@ void SimpleHttpServer::on_newConnection(QTcpSocket *sock)
                     QByteArray responseHeader;
                     {
                         QTextStream ss(&responseHeader, QIODevice::WriteOnly);
-                        ss.setCodec(QTextCodec::codecForName("UTF-8"));
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+                        ss.setCodec("UTF-8");
+#else
+                        ss.setEncoding(QStringConverter::Utf8);
+#endif
                         ss << "HTTP/1.1 " << response.status << " " << req.response.statusText.trimmed() << "\r\n";
                         ss << "Content-Type: " << response.contentType.trimmed() << "\r\n";
                         ss << "Content-Length: " << response.data.length() << "\r\n";
@@ -300,9 +304,9 @@ namespace {
                       kMaxErrorCount = 10; ///< The maximum number of errors we tolerate from a Client before disconnecting them.
 
         // types in a Message.params object that we accept as booleans
-        const std::set<QVariant::Type> acceptableBoolVariantTypes = {
-            QVariant::Type::Bool, QVariant::Type::Int, QVariant::Type::UInt, QVariant::Type::LongLong,
-            QVariant::Type::ULongLong, QVariant::Type::Double,
+        const std::set<QMetaType::Type> acceptableBoolVariantTypes = {
+            QMetaType::Type::Bool, QMetaType::Type::Int, QMetaType::Type::UInt, QMetaType::Type::LongLong,
+            QMetaType::Type::ULongLong, QMetaType::Type::Double,
         };
 
     }
@@ -310,7 +314,7 @@ namespace {
 
     std::pair<bool, bool> parseBoolSemiLooselyButNotTooLoosely(const QVariant &v) {
         std::pair<bool, bool> ret{false, false};
-        if (acceptableBoolVariantTypes.count(v.type()))
+        if (acceptableBoolVariantTypes.count(Compat::GetVarType(v)))
             ret = {v.toBool(), true};
         return ret;
     }
@@ -690,11 +694,11 @@ void ServerBase::onErrorMessage(IdMixin::Id clientId, const RPC::Message &m)
 void ServerBase::onPeerError(IdMixin::Id clientId, const QString &what)
 {
     if (Debug::isEnabled()) {
-        int num = what.size();
+        auto num = what.size();
         // clean up the message so that it doesn't contain trailing newlines (we don't want to pollute our log with extra newlines)
         for (QChar c; num > 0 && ((c=what[num-1]) == '\n' || c == '\r'); --num) {}
         // and finally log it
-        Debug() << "onPeerError, client " << clientId << " error: " << what.leftRef(num);
+        Debug() << "onPeerError, client " << clientId << " error: " << what.left(num);
     }
     if (Client *c = getClient(clientId); c) {
         if (++c->info.errCt - c->info.nRequestsRcv >= kMaxErrorCount) {
@@ -2495,7 +2499,7 @@ void AdminServer::rpc_simdjson(Client *c, const RPC::Message &m)
     } else {
         // set
         const QVariant arg = l.front();
-        if (arg.type() != QVariant::Bool)
+        if (Compat::GetVarType(arg) != QMetaType::Bool)
             throw RPCError("Invalid argument, please specify a boolean value to enable/disable the simdjson parser");
         emit c->sendResult(m.id, Options::setSimdJson(arg.toBool()));
     }

@@ -18,8 +18,10 @@
 //
 #pragma once
 #include <QAbstractSocket>
+#include <QMetaType>
 #include <QtCore>
 
+#include <type_traits>
 #include <utility>
 
 /// This is here to manage API differences between Qt 5.15 and earlier.
@@ -45,9 +47,14 @@ namespace Compat {
     /// deprecated calls.
     template <typename K, typename V>
     QMap<K,V> & MapUnite(QMap<K, V> & m, const QMap<K, V> & other) {
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
         QMultiMap<K, V> mm{std::move(m)};
         mm.unite(other); // this one warns on Qt 5.15 if not done to a QMultiMap
         m = std::move(mm);
+#else
+        for (auto it = other.begin(); it != other.end(); ++it)
+            m.insert(it.key(), it.value());
+#endif
         return m;
     }
 
@@ -58,6 +65,21 @@ namespace Compat {
 #else
         return qOverload<QAbstractSocket::SocketError>(&SocketClass::error);  // Deprecated in Qt 5.15
 #endif
+    }
+
+    // qHash return/seed type differs: Qt5 == uint, Qt6 == size_t
+    using qhuint = decltype(qHash(std::declval<QString>(), 0));
+
+    inline auto GetVarType(const QVariant &var) {
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+        return QMetaType::Type(var.type());
+#else
+        return QMetaType::Type(var.typeId());
+#endif
+    }
+
+    inline bool IsMetaType(const QVariant & var, QMetaType::Type type) {
+        return GetVarType(var) == type;
     }
 
 } // end namespace Compat

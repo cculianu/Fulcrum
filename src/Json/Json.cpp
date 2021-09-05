@@ -59,6 +59,14 @@ namespace {
     // JSON escapes -- used in jsonEscape()
     extern const std::array<const char *, 256> escapes;
 
+    inline auto GetVarType(const QVariant &var) {
+#if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+        return QMetaType::Type(var.type());
+#else
+        return QMetaType::Type(var.typeId());
+#endif
+    }
+
     // Opaque type used for writing. This can be further optimized later.
     struct Writer {
         QByteArray & buf; // this is a reference for RVO to always work in write() below
@@ -125,7 +133,7 @@ namespace {
 
     void Writer::writeVariant(const QVariant &v, unsigned prettyIndent, unsigned indentLevel) noexcept(false)
     {
-        const auto typ = QMetaType::Type(v.type());
+        const auto typ = GetVarType(v);
 
         if (v.isNull()) {
             // Note that QString.isNull() in the QVariant can also satisfy this, so we must
@@ -200,7 +208,7 @@ namespace {
             break;
         }
         default:
-            throw Json::Error(QString("Unsupported type %1 (%2) for '%3'").arg(int(typ)).arg(QMetaType::typeName(typ)).arg(v.toString()));
+            throw Json::Error(QString("Unsupported type %1 (%2) for '%3'").arg(int(typ)).arg(QMetaType(typ).name(), v.toString()));
         }
     }
 
@@ -326,9 +334,9 @@ namespace Json {
         if (!detail::parse(ret, ba, backend))
             throw ParseError(QString("Failed to parse Json from string: %1%2").arg(QString(ba.left(80)))
                              .arg(ba.size() > 80 ? "..." : ""));
-        if (opt == ParseOption::RequireObject && QMetaType::Type(ret.type()) != QMetaType::QVariantMap)
+        if (opt == ParseOption::RequireObject && GetVarType(ret) != QMetaType::QVariantMap)
             throw Error("Json Error: expected object");
-        if (opt == ParseOption::RequireArray && QMetaType::Type(ret.type()) != QMetaType::QVariantList)
+        if (opt == ParseOption::RequireArray && GetVarType(ret) != QMetaType::QVariantList)
             throw Error("Json Error: expected array");
         return ret;
     }

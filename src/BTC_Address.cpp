@@ -33,6 +33,7 @@
 
 #ifdef ENABLE_TESTS
 #  include "App.h"
+#  include "Compat.h"
 #  include <QRandomGenerator>
 #  include <iostream>
 #  include <thread>
@@ -41,7 +42,7 @@
 
 namespace BTC
 {
-    inline uint qHash(BTC::Net n, uint seed = 0) noexcept { return ::qHash(uchar(n), seed); }
+    inline Compat::qhuint qHash(BTC::Net n, Compat::qhuint seed = 0) noexcept { return ::qHash(uchar(n), seed); }
 
     namespace {
         // Hash of Net -> [Hash of VerByte -> Kind]
