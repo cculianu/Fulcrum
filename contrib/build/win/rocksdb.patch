@@ -25,3 +25,31 @@ index 676192913..105ba1acf 100644
      # Mingw only supports std::thread when using
      # posix threads.
      list(APPEND SOURCES
+diff --git a/port/win/env_win.cc b/port/win/env_win.cc
+index f7d8f9ce3..0125c773f 100644
+--- a/port/win/env_win.cc
++++ b/port/win/env_win.cc
+@@ -99,7 +99,7 @@ WinEnvIO::WinEnvIO(Env* hosted_env)
+   HMODULE module = GetModuleHandle("kernel32.dll");
+   if (module != NULL) {
+     GetSystemTimePreciseAsFileTime_ =
+-      (FnGetSystemTimePreciseAsFileTime)GetProcAddress(
++      (FnGetSystemTimePreciseAsFileTime)(void *)GetProcAddress(
+           module, "GetSystemTimePreciseAsFileTime");
+   }
+ }
+diff --git a/table/block_based/block_based_table_builder.cc b/table/block_based/block_based_table_builder.cc
+index 28bfbb7b2..ba59ef094 100644
+--- a/table/block_based/block_based_table_builder.cc
++++ b/table/block_based/block_based_table_builder.cc
+@@ -1551,8 +1551,9 @@ void BlockBasedTableBuilder::EnterUnbuffered() {
+     assert(!keys.empty());
+ 
+     if (r->compression_opts.parallel_threads > 1) {
+-      ParallelCompressionRep::BlockRep* block_rep;
++      ParallelCompressionRep::BlockRep* block_rep{};
+       r->pc_rep->block_rep_pool.pop(block_rep);
++      assert(block_rep != nullptr);
+ 
+       std::swap(*(block_rep->data), data_block);
+       block_rep->contents = *(block_rep->data);

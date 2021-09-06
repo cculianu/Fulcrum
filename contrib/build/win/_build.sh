@@ -26,7 +26,7 @@ cd "$top" || fail "Could not cd $top"
 
 info "Running configure for jemalloc ..."
 cd "$JEMALLOC_PACKAGE" || fail "Could not change dir to $JEMALLOC_PACKAGE"
-CXX=x86_64-w64-mingw32.static-g++ LD=x86_64-w64-mingw32.static-ld CC=x86_64-w64-mingw32.static-gcc-7.5.0 \
+CXX=x86_64-w64-mingw32.static-g++ LD=x86_64-w64-mingw32.static-ld CC=x86_64-w64-mingw32.static-gcc \
     ./autogen.sh --host x86_64-w64-mingw32 --with-jemalloc-prefix= --disable-shared --enable-static \
 || fail "Configure of jemalloc failed"
 
@@ -54,6 +54,7 @@ cd "$ROCKSDB_PACKAGE" && mkdir build/ && cd build || fail "Could not change to b
     -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32.static-g++ -DCMAKE_SYSTEM_NAME=Windows \
     -DCMAKE_HOST_SYSTEM_NAME=Linux -G"Unix Makefiles" -DWITH_GFLAGS=0 -DWITH_JNI=0  \
     -DCMAKE_BUILD_TYPE="Release" -DUSE_RTTI=1 -DPORTABLE=1 -DWITH_JEMALLOC=OFF \
+    -DFAIL_ON_WARNINGS=OFF \
 || fail "Could not run CMake"
 
 info "Building RocksDB ..."
@@ -86,15 +87,30 @@ fi
 
 info "Building Fulcrum ${dbg_blurb} ..."
 mkdir build && cd build || fail "Could not create/change-to build/"
-qmake ../Fulcrum.pro ${dbg_opts} \
-                     "LIBS+=-L${ROCKSDB_LIBDIR} -lrocksdb" \
-                     "INCLUDEPATH+=${ROCKSDB_INCDIR}" \
-                     "LIBS+=-L${JEMALLOC_LIBDIR} -ljemalloc" \
-                     "INCLUDEPATH+=${JEMALLOC_INCDIR}" \
-                     "LIBS+=-L/opt/mxe/usr/x86_64-w64-mingw32.static/lib -lzmq -lsodium" \
-                     "INCLUDEPATH+=/opt/mxe/usr/x86_64-w64-mingw32.static/include" \
-                     "DEFINES+=ZMQ_STATIC" \
-                     'DEFINES+=GIT_COMMIT="\\\"$(shell git -C \""$$_PRO_FILE_PWD_"\" describe --always --dirty --match NOT_A_TAG)\\\""' \
+
+# Hack/workaround for Qt6 qmake which, if it's a symlink, ends up
+# not being able to find its own qmakespec.
+# The below tries to dereference the symlink and find the actual
+# path that qmake lives at, and call it using that, since that
+# apparently makes Qt6 qmake happy.
+ACTUAL_QMAKE=$(stat --format '%N' `which qmake` | cut -f4 -d "'")
+if [ -z "${ACTUAL_QMAKE}" ]; then
+    # not a symlink, just use "qmake"
+    ACTUAL_QMAKE=qmake
+fi
+
+# Figure out the git commit hash
+GIT_COMMIT=$(git -C .. describe --always --dirty --match NOT_A_TAG)
+
+${ACTUAL_QMAKE} -makefile ../Fulcrum.pro ${dbg_opts} \
+                     LIBS+="-L${ROCKSDB_LIBDIR}" LIBS+="-lrocksdb" \
+                     INCLUDEPATH+="${ROCKSDB_INCDIR}" \
+                     LIBS+="-L${JEMALLOC_LIBDIR}" LIBS+="-ljemalloc" \
+                     INCLUDEPATH+="${JEMALLOC_INCDIR}" \
+                     LIBS+="-L/opt/mxe/usr/x86_64-w64-mingw32.static/lib" LIBS+="-lzmq" LIBS+="-lsodium" \
+                     INCLUDEPATH+="/opt/mxe/usr/x86_64-w64-mingw32.static/include" \
+                     DEFINES+="ZMQ_STATIC" \
+                     DEFINES+='GIT_COMMIT="\\\"'${GIT_COMMIT}'\\\""' \
     || fail "Could not run qmake"
 make -j`nproc`  || fail "Could not run make"
 

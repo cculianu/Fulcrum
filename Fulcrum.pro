@@ -110,11 +110,13 @@ contains(CONFIG, config_builtin_clzll) {
 }
 
 # Handle or add GIT_COMMIT=
-unix {
-    DEFINES += GIT_COMMIT="\\\"$(shell git -C \""$$_PRO_FILE_PWD_"\" describe --always --dirty --match 'NOT A TAG')\\\""
-} else {
-    # NB: for Windows, caller should set DEFINES+=GIT_COMMIT=\"xxx\"
-    #warning("Be sure to set DEFINES+=GIT_COMMIT=\\\"xxx\\\" in the final release build to embed the commit hash into the final application.")
+!contains(DEFINES, GIT_COMMIT.*) {
+    unix {
+        DEFINES += GIT_COMMIT="\\\"$(shell git -C \""$$_PRO_FILE_PWD_"\" describe --always --dirty --match 'NOT A TAG')\\\""
+    } else {
+        # NB: for Windows, caller should set DEFINES+=GIT_COMMIT=\"xxx\"
+        #warning("Be sure to set DEFINES+=GIT_COMMIT=\\\"xxx\\\" in the final release build to embed the commit hash into the final application.")
+    }
 }
 # /GIT_COMMIT=
 

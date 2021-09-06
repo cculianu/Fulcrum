@@ -20,3 +20,18 @@ index 2995f491b..ed9b30a2c 100644
  # Skip for archs that don't support -momit-leaf-frame-pointer
  ifeq (,$(shell $(CXX) -fsyntax-only -momit-leaf-frame-pointer -xc /dev/null 2>&1))
  OPT += -momit-leaf-frame-pointer
+diff --git a/table/block_based/block_based_table_builder.cc b/table/block_based/block_based_table_builder.cc
+index 28bfbb7b2..ba59ef094 100644
+--- a/table/block_based/block_based_table_builder.cc
++++ b/table/block_based/block_based_table_builder.cc
+@@ -1551,8 +1551,9 @@ void BlockBasedTableBuilder::EnterUnbuffered() {
+     assert(!keys.empty());
+ 
+     if (r->compression_opts.parallel_threads > 1) {
+-      ParallelCompressionRep::BlockRep* block_rep;
++      ParallelCompressionRep::BlockRep* block_rep{};
+       r->pc_rep->block_rep_pool.pop(block_rep);
++      assert(block_rep != nullptr);
+ 
+       std::swap(*(block_rep->data), data_block);
+       block_rep->contents = *(block_rep->data);

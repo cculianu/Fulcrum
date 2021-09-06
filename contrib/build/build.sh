@@ -21,6 +21,12 @@ tag="$2"
 
 suffix=""
 case "$plat" in
+    "windows_qt6"|"win_qt6")
+        plat=win  # normalize to 'win'
+        docker_img_name="fulcrum-builder/qt620beta3:windows"
+        docker_cont_name="fulcrum_cont_qt_6_2_0beta3_windows_$$"
+        suffix="_qt6"
+        ;;
     "windows"|"win")
         plat=win  # normalize to 'win'
         docker_img_name="fulcrum-builder/qt5152:windows"
