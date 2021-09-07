@@ -1282,7 +1282,7 @@ Options::CertInfo App::makeCertInfo(const QObject *context, const QString &cert,
     // proble key algorithm by trying all the algorithms Qt supports
     for (auto algo : {QSsl::KeyAlgorithm::Rsa, QSsl::KeyAlgorithm::Ec, QSsl::KeyAlgorithm::Dsa,
 #if (QT_VERSION >= QT_VERSION_CHECK(5, 13, 0))
-             // This was added in Qt 5.13+
+         // This was added in Qt 5.13+
          QSsl::KeyAlgorithm::Dh,
 #endif
                      }) {

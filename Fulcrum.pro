@@ -428,12 +428,12 @@ HEADERS += \
     bitcoin/script_error.h \
     bitcoin/script_flags.h \
     bitcoin/script_standard.h \
-    bitcoin/streams.h \
-    bitcoin/support/cleanse.h \
-    bitcoin/support/zeroafterfree.h \
     bitcoin/serialize.h \
     bitcoin/sigencoding.h \
     bitcoin/sighashtype.h \
+    bitcoin/streams.h \
+    bitcoin/support/cleanse.h \
+    bitcoin/support/zeroafterfree.h \
     bitcoin/tinyformat.h \
     bitcoin/transaction.h \
     bitcoin/txid.h \
