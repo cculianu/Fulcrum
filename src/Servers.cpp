@@ -2059,9 +2059,10 @@ QString ServerSSL::prettyName() const
 }
 void ServerSSL::setupSslConfiguration()
 {
-    const QSslCertificate & cert = usesWS && options->wssCertInfo.has_value() ? options->wssCertInfo->cert : options->certInfo.cert;
-    const QList<QSslCertificate> & chain = usesWS && options->wssCertInfo.has_value() ? options->wssCertInfo->certChain : options->certInfo.certChain;
-    const QSslKey & key = usesWS && options->wssCertInfo.has_value() ? options->wssCertInfo->key : options->certInfo.key;
+    const auto & [certInfo, wssCertInfo] = options->certs.load(); // thread-safety: take a local copy
+    const QSslCertificate & cert = usesWS && wssCertInfo.has_value() ? wssCertInfo->cert : certInfo.cert;
+    const QList<QSslCertificate> & chain = usesWS && wssCertInfo.has_value() ? wssCertInfo->certChain : certInfo.certChain;
+    const QSslKey & key = usesWS && wssCertInfo.has_value() ? wssCertInfo->key : certInfo.key;
 
     if (cert.isNull() || key.isNull())
         throw BadArgs("ServerSSL cannot be constructed: Key or cert is null!");

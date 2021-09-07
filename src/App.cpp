@@ -831,12 +831,14 @@ void App::parseArgs()
         // sanity check
         if (cert.isEmpty() || key.isEmpty()) throw InternalError("Internal Error: cert and/or key is empty");
 
+        Options::Certs certs;
         // the below always either returns a good certInfo object, or throws on error
-        options->certInfo = makeCertInfo(this, cert, key);
+        certs.certInfo = makeCertInfo(this, cert, key);
         if (!wssCert.isEmpty()) {
             if (wssKey.isEmpty()) throw InternalError("Internal Error: wss-key is empty"); // sanity check
-            options->wssCertInfo = makeCertInfo(this, wssCert, wssKey);
+            certs.wssCertInfo = makeCertInfo(this, wssCert, wssKey);
         }
+        options->certs.store(std::move(certs));
     }
     // stats port -- this supports <port> by itself as well
     parseInterfaces(options->statsInterfaces, conf.hasValue("stats")

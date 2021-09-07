@@ -19,6 +19,7 @@
 #pragma once
 
 #include "BitcoinD_RPCInfo.h"
+#include "Util.h"
 
 #include <QtGlobal>
 #include <QHostAddress>
@@ -75,8 +76,13 @@ public:
         QSslKey key; ///< this must be valid if we have any SSL or WSS interfaces.
         QString keyFile; ///< saved here for toMap() to remember what was specified in config file
     };
-    CertInfo certInfo;
-    std::optional<CertInfo> wssCertInfo; ///< if valid, then the user specified --wss-cert and --wss-key on CLI or in config, and these are those.
+    struct Certs {
+        /// used as the cert info for the SSL server, as well as the WSS server if the below is !is_valid()
+        CertInfo certInfo;
+        /// if valid, then the user specified --wss-cert and --wss-key on CLI or in config, and these are those.
+        std::optional<CertInfo> wssCertInfo;
+    };
+    AtomicStruct<Certs> certs; ///< gets writeen-to at App init and also by the SSLCertMonitor
     BitcoinD_RPCInfo bdRPCInfo; ///< contains: rpcs user, rpc pass, host, port, and usesTls (see BitcoinD_RPCInfo.h)
     QString datadir; ///< The directory to store the database. It exists and has appropriate permissions (otherwise the app would have quit on startup).
     /// If > 0, on db open/startup, we will perform some slow/paranoid db consistency checks
@@ -164,22 +170,8 @@ public:
             decay = defaultBDReqDecayPerSec; ///< decay - how much to decay from the bitcoind request counter, per second
         bool isValid() const noexcept;
     };
-    // Atomic version of above. We could't use C++ atomic here because GCC 7.3.x lacks support for std::atomic<struct>.
-    class AtomicBdReqThrottleParams : protected BdReqThrottleParams
-    {
-        mutable std::shared_mutex rwlock;
-    public:
-        inline BdReqThrottleParams load() const {
-            std::shared_lock guard(rwlock);
-            return *this;
-        }
-        inline void store(const BdReqThrottleParams &p) {
-            std::unique_lock guard(rwlock);
-            std::tie(hi, lo, decay) = std::tuple(p.hi, p.lo, p.decay);
-        }
-    };
     /// Comes from a triplet in config, if specified e.g.: "bitcoind_throttle = 50, 20, 10"
-    AtomicBdReqThrottleParams bdReqThrottleParams;
+    AtomicStruct<BdReqThrottleParams> bdReqThrottleParams;
 
     static constexpr int64_t defaultMaxSubsPerIP = 50'000, maxSubsPerIPMin = 500, maxSubsPerIPMax = std::numeric_limits<int>::max()/2; // 50k, 500, 10^30 (~1bln) respectively
     static constexpr int64_t defaultMaxSubsGlobally = 10'000'000, maxSubsGloballyMin = 5000, maxSubsGloballyMax = std::numeric_limits<int>::max(); // 10 mln, 5k, 10^31 (~2bln) respectively

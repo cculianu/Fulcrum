@@ -32,8 +32,10 @@
 #include <functional>
 #include <future>
 #include <list>
+#include <mutex>
 #include <optional>
 #include <random>
+#include <shared_mutex>
 #include <set>
 #include <string>
 #include <tuple>
@@ -1066,6 +1068,24 @@ public:
     /// Save the current time. After calling this, secs(), ms(), and us() above will return the time from
     /// construction until this was called.
     void fin() noexcept { tf = now(); }
+};
+
+/// Atomic wrapper for any struct, for multiple readers, one writer.
+template <class T>
+class AtomicStruct
+{
+    T t;
+    mutable std::shared_mutex rwlock;
+
+    // return a reference to the data item t, along with a scoped lock guard
+    auto lockExclusively() { return std::pair<T &, std::unique_lock<std::shared_mutex>>(t, rwlock); }
+    auto lock() const { return std::pair<const T &, std::shared_lock<std::shared_mutex>>(t, rwlock); }
+
+public:
+    // load/store atomically
+    T load() const { return lock().first; }
+    void store(const T & o) { lockExclusively().first = o; }
+    void store(T && o) { lockExclusively().first = std::move(o); }
 };
 
 // helper type for std::visit (currently unused in this code base due to lack of std::variant support)
