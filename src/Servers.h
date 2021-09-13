@@ -358,6 +358,8 @@ private:
     void rpc_blockchain_address_listunspent(Client *, const RPC::Message &); // fully implemented
     void rpc_blockchain_address_subscribe(Client *, const RPC::Message &); // fully implemented
     void rpc_blockchain_address_unsubscribe(Client *, const RPC::Message &); // fully implemented
+    void rpc_blockchain_address_transactions_subscribe(Client *, const RPC::Message &); // fully implemented
+    void rpc_blockchain_address_transactions_unsubscribe(Client *, const RPC::Message &); // fully implemented
     // blockchain misc
     void rpc_blockchain_block_header(Client *, const RPC::Message &);  // fully implemented
     void rpc_blockchain_block_headers(Client *, const RPC::Message &); // fully implemented
@@ -371,6 +373,9 @@ private:
     void rpc_blockchain_scripthash_listunspent(Client *, const RPC::Message &); // fully implemented
     void rpc_blockchain_scripthash_subscribe(Client *, const RPC::Message &); // fully implemented
     void rpc_blockchain_scripthash_unsubscribe(Client *, const RPC::Message &); // fully implemented
+    void rpc_blockchain_scripthash_transactions_subscribe(Client *, const RPC::Message &); // fully implemented
+    void rpc_blockchain_scripthash_transactions_unsubscribe(Client *, const RPC::Message &); // fully implemented
+
     // transaction
     void rpc_blockchain_transaction_broadcast(Client *, const RPC::Message &); // fully implemented
     void rpc_blockchain_transaction_get(Client *, const RPC::Message &); // fully implemented

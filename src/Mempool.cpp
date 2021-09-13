@@ -108,6 +108,12 @@ auto Mempool::addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
                 utxoset.emplace_hint(utxoset.end(), n);
                 hxit->second.push_back(tx); // save tx to hashx -> tx vector (amortized constant time insert at end -- we will sort and uniqueify this at end of this function)
                 scriptHashesAffected.insert(sh);
+                auto shIt = scriptHashTransactionsAffected.find(sh);
+                if (shIt == scriptHashTransactionsAffected.end()) {
+                    scriptHashTransactionsAffected.insert({ sh, { hash }});
+                } else {
+                    shIt->second.insert( {hash} );
+                }
                 assert(txoInfo.isValid());
             }
             tx->fee -= out.nValue; // update fee (fee = ins - outs, so we "add" the outs as a negative)

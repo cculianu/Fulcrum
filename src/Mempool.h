@@ -136,10 +136,14 @@ struct Mempool
     using NewTxsMap = std::unordered_map<TxHash, std::pair<Mempool::TxRef, bitcoin::CTransactionRef>, HashHasher>;
     /// The scriptHashes that were affected by this refresh/synch cycle. Used for notifications.
     using ScriptHashesAffectedSet = std::unordered_set<HashX, HashHasher>;
+    /// The scriptHash transactions that were affected by this refresh/synch cycle. Used for notifications.
+    using ScriptHashTransactionsAffectedMap = std::unordered_map<HashX, std::set<TxHash>, HashHasher>;
     /// DB getter -- called to retrieve a utxo's scripthash & amount data from the DB. May throw.
     using GetTXOInfoFromDBFunc = std::function<std::optional<TXOInfo>(const TXO &)>;
 
     using TxHashSet = std::unordered_set<TxHash, HashHasher>; ///< Used below by Stats & dropTxs()
+
+    Mempool::ScriptHashTransactionsAffectedMap scriptHashTransactionsAffected;
 
     /// Results of add or drop -- some statistics for caller.
     struct Stats {
@@ -159,7 +163,6 @@ struct Mempool
                     const NewTxsMap & txsNew, // txs to add
                     const GetTXOInfoFromDBFunc & getTXOInfo, // callback to get DB confirmed utxos
                     bool TRACE = false);
-
 
     // -- Drop from mempool
 

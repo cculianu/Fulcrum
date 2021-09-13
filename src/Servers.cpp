@@ -1422,6 +1422,18 @@ void Server::rpc_blockchain_address_subscribe(Client *c, const RPC::Message &m)
     assert(!addrStr.isEmpty());
     impl_generic_subscribe(storage->subs(), c, m, sh, addrStr);
 }
+void Server::rpc_blockchain_scripthash_transactions_subscribe(Client *c, const RPC::Message &m) // fully implemented
+{
+    const auto sh = parseFirstHashParamCommon(m);
+    impl_generic_subscribe(storage->subs(), c, m, sh);
+}
+void Server::rpc_blockchain_address_transactions_subscribe(Client *c, const RPC::Message &m) // fully implemented
+{
+    QString addrStr;
+    const auto sh = parseFirstAddrParamToShCommon(m, &addrStr);
+    assert(!addrStr.isEmpty());
+    impl_generic_subscribe(storage->subs(), c, m, sh, addrStr);
+}
 void Server::impl_generic_subscribe(SubsMgr *subs, Client *c, const RPC::Message &m, const HashX &key, const std::optional<QString> &optAlias)
 {
     const auto CheckSubsLimit = [c, &key, this, subs](int64_t nShSubs, bool doUnsub) {
@@ -1535,6 +1547,16 @@ void Server::rpc_blockchain_scripthash_unsubscribe(Client *c, const RPC::Message
     impl_generic_unsubscribe(storage->subs(), c, m, sh);
 }
 void Server::rpc_blockchain_address_unsubscribe(Client *c, const RPC::Message &m)
+{
+    const auto sh = parseFirstAddrParamToShCommon(m);
+    impl_generic_unsubscribe(storage->subs(), c, m, sh);
+}
+void Server::rpc_blockchain_scripthash_transactions_unsubscribe(Client *c, const RPC::Message &m) // fully implemented
+{
+    const auto sh = parseFirstHashParamCommon(m);
+    impl_generic_unsubscribe(storage->subs(), c, m, sh);
+}
+void Server::rpc_blockchain_address_transactions_unsubscribe(Client *c, const RPC::Message &m) // fully implemented
 {
     const auto sh = parseFirstAddrParamToShCommon(m);
     impl_generic_unsubscribe(storage->subs(), c, m, sh);
@@ -1971,6 +1993,8 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
     { {"blockchain.address.listunspent",    true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_listunspent) },
     { {"blockchain.address.subscribe",      true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_subscribe) },
     { {"blockchain.address.unsubscribe",    true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_unsubscribe) },
+    { {"blockchain.address.transactions.subscribe",   true,     false,    PR{1,1},                    },          MP(rpc_blockchain_address_transactions_subscribe) },
+    { {"blockchain.address.transactions.unsubscribe", true,     false,    PR{1,1},                    },          MP(rpc_blockchain_address_transactions_unsubscribe) },
 
     { {"blockchain.block.header",           true,               false,    PR{1,2},                    },          MP(rpc_blockchain_block_header) },
     { {"blockchain.block.headers",          true,               false,    PR{2,3},                    },          MP(rpc_blockchain_block_headers) },
@@ -1984,6 +2008,8 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
     { {"blockchain.scripthash.listunspent", true,               false,    PR{1,1},                    },          MP(rpc_blockchain_scripthash_listunspent) },
     { {"blockchain.scripthash.subscribe",   true,               false,    PR{1,1},                    },          MP(rpc_blockchain_scripthash_subscribe) },
     { {"blockchain.scripthash.unsubscribe", true,               false,    PR{1,1},                    },          MP(rpc_blockchain_scripthash_unsubscribe) },
+    { {"blockchain.scripthash.transactions.subscribe",   true,  false,    PR{1,1},                    },          MP(rpc_blockchain_scripthash_transactions_subscribe) },
+    { {"blockchain.scripthash.transactions.unsubscribe", true,  false,    PR{1,1},                    },          MP(rpc_blockchain_scripthash_transactions_unsubscribe) },
 
     { {"blockchain.transaction.broadcast",  true,               false,    PR{1,1},                    },          MP(rpc_blockchain_transaction_broadcast) },
     { {"blockchain.transaction.get",        true,               false,    PR{1,2},                    },          MP(rpc_blockchain_transaction_get) },

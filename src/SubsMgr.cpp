@@ -409,6 +409,9 @@ void SubsMgr::maybeCacheStatusResult(const HashX &sh, const SubStatus &status)
     else if (auto *dsp = status.dsproof(); dsp && !dsp->isComplete() && !dsp->isEmpty())
         // we only allow empty (default constructred) DSProofs or ones that are isComplete(), otherwise reject
         return;
+    else if (auto *hs = status.hashSet(); hs && !(*hs)->size())
+        // we only allow empty hash sets, otherwise reject
+        return;
     // else .. we always cache status.blockHeight() ..
     SubRef sub = findExistingSubRef(sh);
     if (sub) {
@@ -682,6 +685,19 @@ TransactionSubsMgr::~TransactionSubsMgr() {}
 SubStatus TransactionSubsMgr::getFullStatus(const HashX &txHash) const
 {
     return storage->getTxHeight(txHash);
+}
+
+ScriptHashTransactionsSubsMgr::~ScriptHashTransactionsSubsMgr() {}
+
+auto ScriptHashTransactionsSubsMgr::getFullStatus(const HashX &sh) const -> SubStatus
+{
+    auto [mempool, lock] = storage->mempool();
+    const auto shIt = mempool.scriptHashTransactionsAffected.find(sh);
+    if (shIt == mempool.scriptHashTransactionsAffected.end()) {
+        return {};
+    }
+
+    return {shIt->second};
 }
 
 #ifdef ENABLE_TESTS

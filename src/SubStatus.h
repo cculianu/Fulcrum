@@ -18,7 +18,10 @@
 //
 #pragma once
 
+#include "Util.h"
 #include "DSProof.h"
+
+#include "bitcoin/hash.h"
 
 #include <QByteArray>
 #include <QMetaType>
@@ -45,14 +48,47 @@
 /// - TransactionSubsMgr::getFullStatus() always returns one of these objects with the std::optional<BlockHeight> as
 ///   the active value, that is, blockHeight() will always be a valid pointer (even if it itself !has_value()).
 ///
+/// - ScriptHashTransactionSubsMgr::getFullStatus() always returns one of these objects with the std::optional<HashSet> as
+///   the active value, that is, hashSet() will always be a valid pointer (even if it itself !has_value()).
+///
+
+using HashSet = std::set<HashX>;
+
+namespace {
+    // assumption: `hashSet` is not empty!
+    // set is ordered to prevent different outcome of the same element composition
+    inline QByteArray HashSetHash(const HashSet &hashSet) {
+//        static_assert (sizeof(decltype(hashSet.front())) <= 4, "Assumption below is for at most 32-bit heights");
+        constexpr size_t WorstCaseElementSize = HashLen*2 + 11 + 2; // worse case: 11 bytes max for sign & int, 2 colons, plus 64 bytes for hashHex
+        bitcoin::CHash256 hasher(true /* hash once */);
+        for (const auto & hash : hashSet) {
+            constexpr size_t BufSize = WorstCaseElementSize + 10; // leave a little room (this happens to align sbuf to cache on 64-bit)
+            Util::AsyncSignalSafe::SBuf<BufSize> sbuf; // fast stack-based buffer
+            if (const auto hexLen = hash.length() * 2; LIKELY(hexLen <= HashLen * 2)) {
+                Util::ToHexFastInPlace(hash, sbuf.strBuf.data(), hexLen);
+                sbuf.len += hexLen;
+            }
+            hasher.Write(reinterpret_cast<const uint8_t *>(std::as_const(sbuf.strBuf).data()), sbuf.len);
+        }
+
+        static_assert (hasher.OUTPUT_SIZE == HashLen, "Assumption is that HashLen is the sha256 output size (32 bytes)");
+        QByteArray ret{HashLen, Qt::Uninitialized};
+        hasher.Finalize(reinterpret_cast<uint8_t *>(ret.data()));
+
+        // status is non-reversed, single sha256 (32 bytes)
+        return ret;
+    }
+}
+
 class SubStatus {
     union {
         QByteArray qba;
         std::unique_ptr<DSProof> dsp; // we use unique_ptr here to save memory in the common case where most of these instances are QByteArray
         std::optional<BlockHeight> bh; // !has_value indicates unknown txhash, otherwise 0 = mempool, >0 = confirmed height
+        std::optional<HashSet> hs; // hashset, !has_value indicates unknown txhash, otherwise 0 = mempool, >0 = confirmed height
         void *dummy = nullptr;
     };
-    enum T : uint8_t { NoValue, QBA, DSP, BH };
+    enum T : uint8_t { NoValue, QBA, DSP, BH, HS };
     T t = NoValue;
     void destruct() {
         switch (t) {
@@ -60,6 +96,7 @@ class SubStatus {
         case QBA: qba.~QByteArray(); break;
         case DSP: dsp.~unique_ptr(); break;
         case BH : bh.~optional(); break;
+        case HS : hs.~optional(); break;
         }
         dummy = nullptr;
         t = NoValue;
@@ -77,6 +114,8 @@ class SubStatus {
         case BH:
             new (&bh) std::optional<BlockHeight>;
             break;
+        case HS:
+            new (&hs) std::optional<HashSet>;
         }
         t = tt;
     }
@@ -101,6 +140,7 @@ class SubStatus {
         case QBA: qba = std::move(o.qba); break;
         case DSP: dsp = std::move(o.dsp); break; // cheap pointer transfer
         case BH: bh = std::move(o.bh); break;
+        case HS: hs = std::move(o.hs); break;
         }
     }
     void copy(const SubStatus &o) {
@@ -112,6 +152,7 @@ class SubStatus {
         case QBA: qba = o.qba; break;
         case DSP: *dsp = *o.dsp; break;
         case BH: bh = o.bh; break;
+        case HS: hs = o.hs; break;
         }
     }
 public:
@@ -123,6 +164,7 @@ public:
     SubStatus(const DSProof &od) : dsp(new DSProof(od)), t{DSP} {}
     SubStatus(DSProof &&od) : dsp(new DSProof(std::move(od))), t{DSP} {}
     SubStatus(const std::optional<BlockHeight> &obh) noexcept : bh(obh), t{BH} {}
+    SubStatus(const std::optional<HashSet> &ohs) noexcept : hs(ohs), t{HS} {}
     ~SubStatus() { destruct(); }
 
     SubStatus &operator=(const SubStatus &o) { copy(o); return *this; }
@@ -152,6 +194,11 @@ public:
         bh = obh;
         return *this;
     }
+    SubStatus &operator=(const std::optional<HashSet> &ohs) {
+        if (t != HS) construct(HS);
+        hs = ohs;
+        return *this;
+    }
 
    bool operator==(const SubStatus &o) const {
         if (t != o.t) return false;
@@ -160,6 +207,7 @@ public:
         case QBA: return qba == o.qba;
         case DSP: return *dsp == *o.dsp;
         case BH: return bh == o.bh;
+        case HS: return hs == o.hs;
         }
     }
     bool operator!=(const SubStatus &o) const { return !(*this == o); }
@@ -178,6 +226,9 @@ public:
     const std::optional<BlockHeight> * blockHeight() const noexcept { return t == BH ? &bh : nullptr; }
     std::optional<BlockHeight> * blockHeight() noexcept { return t == BH ? &bh : nullptr; }
 
+    const std::optional<HashSet> * hashSet() const noexcept { return t == HS ? &hs : nullptr; }
+    std::optional<HashSet> * hashSet() noexcept { return t == HS ? &hs : nullptr; }
+
     /// Render this for JSON RPC (as a status result for notifications).  If !has_value() then it will be null,
     /// otherwise if it has a valid value it will be rendered as a string, or a dsproof object, or a number.
     /// Note that even if has_value(), this may still be a QVariant() (null).
@@ -190,6 +241,7 @@ template <> struct std::hash<SubStatus> {
         if (auto *ba = s.byteArray(); ba) return HashHasher{}(*ba);
         else if (auto *dsp = s.dsproof(); dsp) return DspHash::Hasher{}(dsp->hash);
         else if (auto *bh = s.blockHeight(); bh && *bh) return Util::hashForStd(**bh);
+        else if (auto *hs = s.hashSet(); hs && *hs) return HashHasher{}(HashSetHash(hs->value()));
         return 0; // !this->has_value() and/or !bh->has_value() hashes to 0 always
     }
 };

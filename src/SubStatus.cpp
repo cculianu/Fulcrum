@@ -29,6 +29,14 @@ QVariant SubStatus::toVariant() const
             ret = dsp->toVarMap();
         else if (auto *bh = blockHeight(); bh && *bh)
             ret = **bh; // ptr -> optional -> value
+        else if (auto *hs = hashSet(); hs && *hs) {
+#if QT_VERSION < QT_VERSION_CHECK(5, 14, 0)
+            // Qt < 5.14 lacks the ranged constructors for containers so we must do this.
+            ret = QVariantList::fromStdList(Util::toList<std::list<QVariant>>(**hs));
+#else
+            ret = Util::toList<QVariantList>(**hs);
+#endif
+        }
     }
     return ret;
 }

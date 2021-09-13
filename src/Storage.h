@@ -68,7 +68,7 @@ struct HistoryTooLarge : public Exception { using Exception::Exception; ~History
 class ScriptHashSubsMgr;
 class DSProofSubsMgr;
 class TransactionSubsMgr;
-
+class ScriptHashTransactionsSubsMgr;
 /// Manages the db and all storage-related facilities.  Most of its public methods are fully reentrant and thread-safe.
 class Storage final : public Mgr, public ThreadObjectMixin
 {
@@ -280,6 +280,8 @@ public:
     DSProofSubsMgr * dspSubs() const { return dspsubsmgr.get(); }
     /// Identical to above, but points to the TransactionSubsMgr for this instance.
     TransactionSubsMgr * txSubs() const { return txsubsmgr.get(); }
+    /// Identical to above, but points to the ScriptHashTransactionSubsMgr for this instance.
+    ScriptHashTransactionsSubsMgr * shTxSubs() const { return shtxsubsmgr.get(); }
 
     /// called from a timer periodically from Controller (see Controller.cpp)
     /// -- takes locks, updates compact fee histogram for the mempool
@@ -372,6 +374,7 @@ private:
     const std::unique_ptr<ScriptHashSubsMgr> subsmgr;
     const std::unique_ptr<DSProofSubsMgr> dspsubsmgr;
     const std::unique_ptr<TransactionSubsMgr> txsubsmgr;
+    const std::unique_ptr<ScriptHashTransactionsSubsMgr> shtxsubsmgr;
 
     struct Pvt;
     const std::unique_ptr<Pvt> p;

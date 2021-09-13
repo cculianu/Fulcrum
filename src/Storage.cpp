@@ -1103,6 +1103,7 @@ Storage::Storage(const std::shared_ptr<const Options> & options_)
       subsmgr(new ScriptHashSubsMgr(options, this)),
       dspsubsmgr(new DSProofSubsMgr(options, this)),
       txsubsmgr(new TransactionSubsMgr(options, this)),
+      shtxsubsmgr(new ScriptHashTransactionsSubsMgr(options, this)),
       p(std::make_unique<Pvt>(options->txHashCacheBytes))
 {
     setObjectName("Storage");
@@ -1130,12 +1131,13 @@ void Storage::startup()
 {
     Log() << "Loading database ...";
 
-    if (UNLIKELY(!subsmgr || !options || !dspsubsmgr || !txsubsmgr))
-        throw BadArgs("Storage instance constructed with nullptr for `options` and/or `subsmgr` and/or `dspsubsmgr` and/or `txsubsmgr` -- FIXME!");
+    if (UNLIKELY(!subsmgr || !options || !dspsubsmgr || !txsubsmgr || !shtxsubsmgr))
+        throw BadArgs("Storage instance constructed with nullptr for `options` and/or `subsmgr` and/or `dspsubsmgr` and/or `txsubsmgr` and/or `shtxsubsmgr` -- FIXME!");
 
     subsmgr->startup(); // trivial, always succeeds if constructed correctly
     dspsubsmgr->startup(); // trivial, always succeeds if constructed correctly
     txsubsmgr->startup(); // trivial, always succeeds if constructed correctly
+    shtxsubsmgr->startup(); // trivial, always succeeds if constructed correctly
 
     {
         // set up the merkle cache object
@@ -1333,6 +1335,7 @@ void Storage::cleanup()
     if (txsubsmgr) txsubsmgr->cleanup();
     if (dspsubsmgr) dspsubsmgr->cleanup();
     if (subsmgr) subsmgr->cleanup();
+    if (shtxsubsmgr) shtxsubsmgr->cleanup();
     gentlyCloseAllDBs();
     // TODO: unsaved/"dirty state" detection here -- and forced save, if needed.
 }
@@ -2188,7 +2191,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
 
     struct NotifyData {
         using NotifySet = std::unordered_set<HashX, HashHasher>;
-        NotifySet scriptHashesAffected, dspTxsAffected, txidsAffected;
+        NotifySet scriptHashesAffected, dspTxsAffected, txidsAffected, shtxAffected;
     };
     std::unique_ptr<NotifyData> notify;
 
@@ -2518,6 +2521,8 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
             dspsubsmgr->enqueueNotifications(std::move(notify->dspTxsAffected));
         if (txsubsmgr && !notify->txidsAffected.empty())
             txsubsmgr->enqueueNotifications(std::move(notify->txidsAffected));
+        if (shtxsubsmgr && !notify->shtxAffected.empty())
+            shtxsubsmgr->enqueueNotifications(std::move(notify->shtxAffected));
     }
 }
 
@@ -2528,7 +2533,7 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
     using NotifySet = std::unordered_set<HashX, HashHasher>;
     struct NotifyData {
         using NotifySet = std::unordered_set<HashX, HashHasher>;
-        NotifySet scriptHashesAffected, dspTxsAffected, txidsAffected;
+        NotifySet scriptHashesAffected, dspTxsAffected, txidsAffected, shtxAffected;
     };
     std::unique_ptr<NotifyData> notify;
 
@@ -2714,6 +2719,8 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
             dspsubsmgr->enqueueNotifications(std::move(notify->dspTxsAffected));
         if (txsubsmgr && !notify->txidsAffected.empty())
             txsubsmgr->enqueueNotifications(std::move(notify->txidsAffected));
+        if (shtxsubsmgr && !notify->shtxAffected.empty())
+            shtxsubsmgr->enqueueNotifications(std::move(notify->shtxAffected));
     }
 
     return prevHeight;
