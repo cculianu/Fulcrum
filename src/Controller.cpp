@@ -669,7 +669,7 @@ SynchMempoolTask::~SynchMempoolTask() {
         if (!scriptHashesAffected.empty()) {
             // notify status change for affected sh's, regardless of how this task exited (this catches corner cases
             // where we queued up some notifications and then we died on a retry due to errors from bitcoind)
-            auto copy = std::unordered_set<HashX, HashHasher>(scriptHashesAffected);
+            auto copy = scriptHashesAffected;
             storage->subs()->enqueueNotifications(std::move(scriptHashesAffected));
             storage->shTxSubs()->enqueueNotifications(std::move(copy));
         }

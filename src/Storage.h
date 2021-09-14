@@ -69,6 +69,7 @@ class ScriptHashSubsMgr;
 class DSProofSubsMgr;
 class TransactionSubsMgr;
 class ScriptHashTransactionsSubsMgr;
+
 /// Manages the db and all storage-related facilities.  Most of its public methods are fully reentrant and thread-safe.
 class Storage final : public Mgr, public ThreadObjectMixin
 {

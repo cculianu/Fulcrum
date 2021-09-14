@@ -143,7 +143,7 @@ struct Mempool
 
     using TxHashSet = std::unordered_set<TxHash, HashHasher>; ///< Used below by Stats & dropTxs()
 
-    Mempool::ScriptHashTransactionsAffectedMap scriptHashTransactionsAffected;
+    ScriptHashTransactionsAffectedMap scriptHashTransactionsAffected;
 
     /// Results of add or drop -- some statistics for caller.
     struct Stats {

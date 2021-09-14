@@ -689,15 +689,15 @@ SubStatus TransactionSubsMgr::getFullStatus(const HashX &txHash) const
 
 ScriptHashTransactionsSubsMgr::~ScriptHashTransactionsSubsMgr() {}
 
-auto ScriptHashTransactionsSubsMgr::getFullStatus(const HashX &sh) const -> SubStatus
+auto ScriptHashTransactionsSubsMgr::getFullStatus(const HashX &scriptHash) const -> SubStatus
 {
     auto [mempool, lock] = storage->mempool();
-    const auto shIt = mempool.scriptHashTransactionsAffected.find(sh);
-    if (shIt == mempool.scriptHashTransactionsAffected.end()) {
+    const auto scriptHashIt = mempool.scriptHashTransactionsAffected.find(scriptHash);
+    if (scriptHashIt == mempool.scriptHashTransactionsAffected.end()) {
         return {};
     }
 
-    return {shIt->second};
+    return {scriptHashIt->second};
 }
 
 #ifdef ENABLE_TESTS
