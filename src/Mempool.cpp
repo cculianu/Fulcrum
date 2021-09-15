@@ -70,6 +70,8 @@ auto Mempool::addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
                         bool TRACE) -> Stats
 {
     const auto t0 = Tic();
+    if (txsNew.size())
+        scriptHashTransactionsAffected.clear();
     Stats ret;
     ret.oldSize = this->txs.size();
     ret.oldNumAddresses = this->hashXTxs.size();

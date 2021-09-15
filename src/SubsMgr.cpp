@@ -691,17 +691,13 @@ ScriptHashTransactionsSubsMgr::~ScriptHashTransactionsSubsMgr() {}
 
 auto ScriptHashTransactionsSubsMgr::getFullStatus(const HashX &scriptHash) const -> SubStatus
 {
-    auto [mempool, lock] = storage->mutableMempool();
+    auto [mempool, lock] = storage->mempool();
     const auto scriptHashIt = mempool.scriptHashTransactionsAffected.find(scriptHash);
     if (scriptHashIt == mempool.scriptHashTransactionsAffected.end()) {
         return {};
     }
 
-    const auto hashSet = scriptHashIt->second;
-
-    mempool.scriptHashTransactionsAffected.erase(scriptHashIt);
-
-    return {hashSet};
+    return {scriptHashIt->second};
 }
 
 #ifdef ENABLE_TESTS
