@@ -1425,14 +1425,14 @@ void Server::rpc_blockchain_address_subscribe(Client *c, const RPC::Message &m)
 void Server::rpc_blockchain_scripthash_transactions_subscribe(Client *c, const RPC::Message &m) // fully implemented
 {
     const auto sh = parseFirstHashParamCommon(m);
-    impl_generic_subscribe(storage->subs(), c, m, sh);
+    impl_generic_subscribe(storage->shTxSubs(), c, m, sh);
 }
 void Server::rpc_blockchain_address_transactions_subscribe(Client *c, const RPC::Message &m) // fully implemented
 {
     QString addrStr;
     const auto sh = parseFirstAddrParamToShCommon(m, &addrStr);
     assert(!addrStr.isEmpty());
-    impl_generic_subscribe(storage->subs(), c, m, sh, addrStr);
+    impl_generic_subscribe(storage->shTxSubs(), c, m, sh, addrStr);
 }
 void Server::impl_generic_subscribe(SubsMgr *subs, Client *c, const RPC::Message &m, const HashX &key, const std::optional<QString> &optAlias)
 {
@@ -1554,12 +1554,12 @@ void Server::rpc_blockchain_address_unsubscribe(Client *c, const RPC::Message &m
 void Server::rpc_blockchain_scripthash_transactions_unsubscribe(Client *c, const RPC::Message &m) // fully implemented
 {
     const auto sh = parseFirstHashParamCommon(m);
-    impl_generic_unsubscribe(storage->subs(), c, m, sh);
+    impl_generic_unsubscribe(storage->shTxSubs(), c, m, sh);
 }
 void Server::rpc_blockchain_address_transactions_unsubscribe(Client *c, const RPC::Message &m) // fully implemented
 {
     const auto sh = parseFirstAddrParamToShCommon(m);
-    impl_generic_unsubscribe(storage->subs(), c, m, sh);
+    impl_generic_unsubscribe(storage->shTxSubs(), c, m, sh);
 }
 void Server::impl_generic_unsubscribe(SubsMgr *subs, Client *c, const RPC::Message &m, const HashX &key)
 {

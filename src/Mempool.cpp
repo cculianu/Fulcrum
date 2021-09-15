@@ -108,11 +108,11 @@ auto Mempool::addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
                 utxoset.emplace_hint(utxoset.end(), n);
                 hxit->second.push_back(tx); // save tx to hashx -> tx vector (amortized constant time insert at end -- we will sort and uniqueify this at end of this function)
                 scriptHashesAffected.insert(sh);
-                auto shIt = scriptHashTransactionsAffected.find(sh);
-                if (shIt == scriptHashTransactionsAffected.end()) {
+                auto shTxIt = scriptHashTransactionsAffected.find(sh);
+                if (shTxIt == scriptHashTransactionsAffected.end()) {
                     scriptHashTransactionsAffected.insert({ sh, { hash }});
                 } else {
-                    shIt->second.insert( {hash} );
+                    shTxIt->second.insert( {hash} );
                 }
                 assert(txoInfo.isValid());
             }
@@ -211,6 +211,12 @@ auto Mempool::addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
             assert(sh == prevInfo.hashX);
             this->hashXTxs[sh].push_back(tx); // mark this hashX as having been "touched" because of this input (note we push dupes here out of order but sort and uniqueify at the end)
             scriptHashesAffected.insert(sh);
+            auto shTxIt = scriptHashTransactionsAffected.find(sh);
+            if (shTxIt == scriptHashTransactionsAffected.end()) {
+                scriptHashTransactionsAffected.insert({ sh, { hash }});
+            } else {
+                shTxIt->second.insert( {hash} );
+            }
             ++inNum;
         }
 

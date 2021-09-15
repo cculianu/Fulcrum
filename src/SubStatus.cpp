@@ -30,11 +30,18 @@ QVariant SubStatus::toVariant() const
         else if (auto *bh = blockHeight(); bh && *bh)
             ret = **bh; // ptr -> optional -> value
         else if (auto *hs = hashSet(); hs && *hs) {
+            const HashSet& source = **hs;
+            std::vector<HashX> transformed;
+            transformed.reserve( source.size() );
+            std::transform( source.begin(), source.end(),
+                            std::back_inserter(transformed),
+                            [](const TxHash& hash) { return Util::ToHexFast(hash); });
+
 #if QT_VERSION < QT_VERSION_CHECK(5, 14, 0)
             // Qt < 5.14 lacks the ranged constructors for containers so we must do this.
-            ret = QVariantList::fromStdList(Util::toList<std::list<QVariant>>(**hs));
+            ret = QVariantList::fromStdList(Util::toList<std::list<QVariant>>(transformed));
 #else
-            ret = Util::toList<QVariantList>(**hs);
+            ret = Util::toList<QVariantList>(transformed);
 #endif
         }
     }
