@@ -158,11 +158,21 @@ auto Mempool::addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
                                 if (dsps.addTx(dspHash, hash)) {
                                     ret.dspTxsAffected.insert(hash);
                                     DebugM(__func__, ": added tx ", hash.toHex(), " to descendants for dsp ", dspHash.toHex());
-                                } else {
-                                    // should never happen -- this is a new txid! It should have no associations to existing dsps...
-                                    // (invariant is maintained in SynchDSPsTask that only "known" txids are ever added)
-                                    Warning() << __func__ << ": dsp addTx returned false for dspHash: " << dspHash.toHex()
-                                              << ", txid: " << hash.toHex() << ". FIXME!";
+                                } else if (Debug::isEnabled() || inNum == 0) {
+                                    // This may happen rarely. Even though this is a new txid, if there is a diamond
+                                    // pattern with the prevTxId's, then this tx may have already been added as a
+                                    // descendant tx for this dspHash by one of our other inputs.
+                                    //
+                                    // Note that an invariant is maintained in SynchDSPsTask that only "known" txids
+                                    // are ever added, so this branch *must* be the result of a different previous
+                                    // input having already added us in the enclosing for() loop. (We warn if that
+                                    // is not the case as it would indicate a bug in this code.)
+                                    QString msg("%1: dsp addTx returned false for dspHash: %2, txid: %3.");
+                                    msg = msg.arg(__func__, dspHash.toHex(), hash.toHex());
+                                    if (LIKELY(inNum > 0))
+                                        Debug() << msg;
+                                    else
+                                        Warning() << msg << " This should never happen! FIXME!";
                                 }
                             }
                         }
