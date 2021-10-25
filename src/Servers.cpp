@@ -470,8 +470,13 @@ bool ServerBase::attachPerIPDataAndCheckLimits(QTcpSocket *socket)
             ok = false;
         }
     } else {
-        // this should never happen
-        Error() << "INTERNAL ERROR: Could not create per-IP data object in " << __func__ << " -- invalid peer address!";
+        const auto msg = QString("Could not create per-IP data object in %1 -- ").arg(__func__);
+        if (socket->state() != QAbstractSocket::SocketState::ConnectedState)
+            // may happen rarely -- the peer disconnected immediately before we could even begin processing
+            Warning() << msg << "peer is no longer connected";
+        else
+            // this should never happen
+            Error() << msg << "invalid peer address!";
         ok = false;
     }
     if (!ok) {
