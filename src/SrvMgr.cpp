@@ -24,6 +24,7 @@
 #include "PeerMgr.h"
 #include "ServerMisc.h"
 #include "Servers.h"
+#include "SSLCertMonitor.h"
 #include "Storage.h"
 #include "SubsMgr.h"
 #include "Util.h"
@@ -37,10 +38,12 @@ namespace {
 }
 
 SrvMgr::SrvMgr(const std::shared_ptr<const Options> & options,
+               const SSLCertMonitor * certMon,
                const std::shared_ptr<Storage> & s,
                const std::shared_ptr<BitcoinDMgr> & bdm,
                QObject *parent)
-    : Mgr(parent), options(options), storage(s), bitcoindmgr(bdm), perIPData(this, tableSqueezeThreshold /* initialCapacity */, tableSqueezeThreshold)
+    : Mgr(parent), options(options), sslCertMonitor(certMon), storage(s), bitcoindmgr(bdm),
+      perIPData(this, tableSqueezeThreshold /* initialCapacity */, tableSqueezeThreshold)
 {
     addrIdMap.reserve(tableSqueezeThreshold); // initial capacity
     perIPData.setObjectName("PerIPData");
@@ -140,6 +143,7 @@ void SrvMgr::startServers()
             servers.back()->setUsesWebSockets(true);
         }
         Server *srv = servers.back().get();
+        ServerSSL *srvSSL = dynamic_cast<ServerSSL *>(srv);
 
         // connect blockchain.headers.subscribe signal
         connect(this, &SrvMgr::newHeader, srv, &Server::newHeader);
@@ -166,6 +170,11 @@ void SrvMgr::startServers()
         if (peermgr) {
             connect(srv, &ServerBase::gotRpcAddPeer, peermgr.get(), &PeerMgr::on_rpcAddPeer);
             connect(peermgr.get(), &PeerMgr::updated, srv, &ServerBase::onPeersUpdated);
+        }
+
+        if (srvSSL && sslCertMonitor) {
+            // if the cert files change on disk, the server will re-load the cert into into its own class state
+            connect(sslCertMonitor, &SSLCertMonitor::certInfoChanged, srvSSL, &ServerSSL::setupSslConfiguration);
         }
 
         srv->tryStart();

@@ -2059,6 +2059,7 @@ QString ServerSSL::prettyName() const
 }
 void ServerSSL::setupSslConfiguration()
 {
+    const bool wasEmptyConf = sslConfiguration.isNull();
     const auto & [certInfo, wssCertInfo] = options->certs.load(); // thread-safety: take a local copy
     const QSslCertificate & cert = usesWS && wssCertInfo.has_value() ? wssCertInfo->cert : certInfo.cert;
     const QList<QSslCertificate> & chain = usesWS && wssCertInfo.has_value() ? wssCertInfo->certChain : certInfo.certChain;
@@ -2080,6 +2081,8 @@ void ServerSSL::setupSslConfiguration()
     else
         sslConfiguration.setProtocol(QSsl::SslProtocol::AnyProtocol);
     sslConfiguration.setPeerVerifyMode(QSslSocket::VerifyNone);
+
+    if (!wasEmptyConf) DebugM("Reloaded SSL configuration");
 }
 void ServerSSL::setUsesWebSockets(bool b) /* override */
 {

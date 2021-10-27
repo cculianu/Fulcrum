@@ -24,6 +24,7 @@
 #include "Logger.h"
 #include "Servers.h"
 #include "Storage.h"
+#include "SSLCertMonitor.h"
 #include "ThreadPool.h"
 #include "Util.h"
 #include "ZmqSubNotifier.h"
@@ -37,8 +38,6 @@
 #include <QLocale>
 #include <QRegularExpression>
 #include <QSemaphore>
-#include <QSslCipher>
-#include <QSslEllipticCurve>
 #include <QSslSocket>
 #include <QTextStream>
 
@@ -251,7 +250,7 @@ void App::startup()
 
         startup_Sighandlers(); // register our signal handlers (SIGINT, SIGTERM, etc)
 
-        controller = std::make_unique<Controller>(options);
+        controller = std::make_unique<Controller>(options, sslCertMonitor.get());
         controller->startup(); // may throw
 
         if (!options->statsInterfaces.isEmpty()) {
@@ -823,22 +822,11 @@ void App::parseArgs()
         if ( !wssCert.isEmpty() && !hasWSS )
             throw BadArgs("wss-cert option specified but no WSS listening ports defined");
 
-        if (cert.isEmpty() && !wssCert.isEmpty()) {
-            // copy over wssCert/wssKey to cert/key, clear wssCert/wssKey
-            cert = wssCert;  wssCert.clear();
-            key  = wssKey;   wssKey.clear();
-        }
-        // sanity check
-        if (cert.isEmpty() || key.isEmpty()) throw InternalError("Internal Error: cert and/or key is empty");
-
-        Options::Certs certs;
-        // the below always either returns a good certInfo object, or throws on error
-        certs.certInfo = makeCertInfo(this, cert, key);
-        if (!wssCert.isEmpty()) {
-            if (wssKey.isEmpty()) throw InternalError("Internal Error: wss-key is empty"); // sanity check
-            certs.wssCertInfo = makeCertInfo(this, wssCert, wssKey);
-        }
-        options->certs.store(std::move(certs));
+        // This sets up the actual ssl certificates, and also starts the monitoring task to
+        // detect filesystem changes. Below may throw if there is a problem reading/processing
+        // the certs.
+        if (!sslCertMonitor) sslCertMonitor = std::make_unique<SSLCertMonitor>(options, this);
+        sslCertMonitor->start(cert, key, wssCert, wssKey);
     }
     // stats port -- this supports <port> by itself as well
     parseInterfaces(options->statsInterfaces, conf.hasValue("stats")
@@ -1260,117 +1248,6 @@ void App::parseArgs()
     if (const auto outFile = parser.value("dump-sh"); !outFile.isEmpty()) {
         options->dumpScriptHashes = outFile; // we do no checking here, but Controller::startup will throw BadArgs if it cannot open this file for writing.
     }
-}
-
-/*static*/
-Options::CertInfo App::makeCertInfo(const QObject *context, const QString &cert, const QString &key)
-{
-    Options::CertInfo ret;
-
-    if (!context)
-        throw InternalError("`context` may not be nullptr! FIXME!");
-    if (!QFile::exists(cert))
-        throw BadArgs(QString("Cert file not found: %1").arg(cert));
-    if (!QFile::exists(key))
-        throw BadArgs(QString("Key file not found: %1").arg(key));
-
-    QFile certf(cert), keyf(key);
-    if (!certf.open(QIODevice::ReadOnly))
-        throw BadArgs(QString("Unable to open cert file %1: %2").arg(cert).arg(certf.errorString()));
-    if (!keyf.open(QIODevice::ReadOnly))
-        throw BadArgs(QString("Unable to open key file %1: %2").arg(key).arg(keyf.errorString()));
-
-    ret.cert = QSslCertificate(&certf, QSsl::EncodingFormat::Pem);
-    // proble key algorithm by trying all the algorithms Qt supports
-    for (auto algo : {QSsl::KeyAlgorithm::Rsa, QSsl::KeyAlgorithm::Ec, QSsl::KeyAlgorithm::Dsa,
-#if (QT_VERSION >= QT_VERSION_CHECK(5, 13, 0))
-         // This was added in Qt 5.13+
-         QSsl::KeyAlgorithm::Dh,
-#endif
-                     }) {
-        keyf.seek(0);
-        ret.key = QSslKey(&keyf, algo, QSsl::EncodingFormat::Pem);
-        if (!ret.key.isNull())
-            break;
-    }
-    // check key is ok
-    if (ret.key.isNull()) {
-        throw BadArgs(QString("Unable to read private key from %1. Please make sure the file is readable and "
-                              "contains an RSA, DSA, EC, or DH private key in PEM format.").arg(key));
-    } else if (ret.key.algorithm() == QSsl::KeyAlgorithm::Ec && QSslConfiguration::supportedEllipticCurves().isEmpty()) {
-        throw BadArgs(QString("Private key `%1` is an elliptic curve key, however this Qt installation lacks"
-                              " elliptic curve support. Please recompile and link Qt against the OpenSSL library"
-                              " in order to enable elliptic curve support in Qt.").arg(key));
-    }
-    ret.file = cert; // this is only used for /stats port advisory info
-    ret.keyFile = key; // this is only used for /stats port advisory info
-    if (ret.cert.isNull())
-        throw BadArgs(QString("Unable to read ssl certificate from %1. Please make sure the file is readable and "
-                              "contains a valid certificate in PEM format.").arg(cert));
-    else {
-        if (!ret.cert.isSelfSigned()) {
-            certf.seek(0);
-            ret.certChain = QSslCertificate::fromDevice(&certf, QSsl::EncodingFormat::Pem);
-            if (ret.certChain.size() < 2)
-                throw BadArgs(QString("File '%1' does not appear to be a full certificate chain.\n"
-                                      "Please make sure your CA signed certificate is the fullchain.pem file.")
-                              .arg(cert));
-        }
-        Util::AsyncOnObject(context, [ret]{
-            // We do this logging later. This is to ensure that it ends up in the syslog if user specified -S
-            QString name;
-#if (QT_VERSION >= QT_VERSION_CHECK(5, 12, 0))
-            // Was added Qt 5.12+
-            name = ret.cert.subjectDisplayName();
-#else
-            name = ret.cert.subjectInfo(QSslCertificate::Organization).join(", ");
-#endif
-            Log() << "Loaded SSL certificate: " << name << " "
-                  << ret.cert.subjectInfo(QSslCertificate::SubjectInfo::EmailAddress).join(",")
-                  //<< " self-signed: " << (options->sslCert.isSelfSigned() ? "YES" : "NO")
-                  << " expires: " << (ret.cert.expiryDate().toString("ddd MMMM d yyyy hh:mm:ss"));
-            if (Debug::isEnabled()) {
-                QString cipherStr;
-                for (const auto & ciph : QSslConfiguration::supportedCiphers()) {
-                    if (!cipherStr.isEmpty()) cipherStr += ", ";
-                    cipherStr += ciph.name();
-                }
-                if (cipherStr.isEmpty()) cipherStr = "(None)";
-                Debug() << "Supported ciphers: " << cipherStr;
-                QString curvesStr;
-                for (const auto & curve : QSslConfiguration::supportedEllipticCurves()) {
-                    if (!curvesStr.isEmpty()) curvesStr += ", ";
-                    curvesStr += curve.longName();
-                }
-                if (curvesStr.isEmpty()) curvesStr = "(None)";
-                Debug() << "Supported curves: " << curvesStr;
-            }
-        });
-    }
-    static const auto KeyAlgoStr = [](QSsl::KeyAlgorithm a) {
-        switch (a) {
-#if (QT_VERSION >= QT_VERSION_CHECK(5, 13, 0))
-        // This was added in Qt 5.13+
-        case QSsl::KeyAlgorithm::Dh: return "DH";
-#endif
-        case QSsl::KeyAlgorithm::Ec: return "EC";
-        case QSsl::KeyAlgorithm::Dsa: return "DSA";
-        case QSsl::KeyAlgorithm::Rsa: return "RSA";
-        default: return "Other";
-        }
-    };
-    Util::AsyncOnObject(context, [ret]{
-        // We do this logging later. This is to ensure that it ends up in the syslog if user specified -S
-        const auto algo = ret.key.algorithm();
-        const auto algoName = KeyAlgoStr(algo);
-        const auto keyTypeName = (ret.key.type() == QSsl::KeyType::PrivateKey ? "private" : "public");
-        Log() << "Loaded key type: " << keyTypeName << " algorithm: " << algoName;
-        if (algo != QSsl::KeyAlgorithm::Rsa)
-            Warning() << "Warning: " << algoName << " key support is experimental."
-                      << " Please consider switching your SSL certificate and key to use 2048-bit RSA.";
-    });
-
-    return ret;
 }
 
 namespace {

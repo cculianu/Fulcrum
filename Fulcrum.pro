@@ -303,6 +303,7 @@ SOURCES += \
     Servers.cpp \
     SrvMgr.cpp \
     Storage.cpp \
+    SSLCertMonitor.cpp \
     SubsMgr.cpp \
     SubStatus.cpp \
     ThreadPool.cpp \
@@ -349,6 +350,7 @@ HEADERS += \
     Span.h \
     SrvMgr.h \
     Storage.h \
+    SSLCertMonitor.h \
     SubsMgr.h \
     SubStatus.h \
     ThreadPool.h \

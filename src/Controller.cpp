@@ -47,8 +47,8 @@
 #include <unordered_set>
 
 
-Controller::Controller(const std::shared_ptr<const Options> &o)
-    : Mgr(nullptr), polltimeMS(int(o->pollTimeSecs * 1e3)), options(o)
+Controller::Controller(const std::shared_ptr<const Options> &o, const SSLCertMonitor *certMon)
+    : Mgr(nullptr), polltimeMS(int(o->pollTimeSecs * 1e3)), options(o), sslCertMonitor(certMon)
 {
     setObjectName("Controller");
     _thread.setObjectName(objectName());
@@ -174,7 +174,7 @@ void Controller::startup()
 
             masterNotifySubsFlag = true; // permanently latch this to true. notifications enabled.
 
-            srvmgr = std::make_unique<SrvMgr>(options, storage, bitcoindmgr);
+            srvmgr = std::make_unique<SrvMgr>(options, sslCertMonitor, storage, bitcoindmgr);
             // this object will live on our creation thread (normally the main thread)
             srvmgr->moveToThread(origThread);
             // now, start it up on our creation thread (normally the main thread)

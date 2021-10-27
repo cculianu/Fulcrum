@@ -480,13 +480,17 @@ public:
     /// Do not call this after the server has already been started.
     void setUsesWebSockets(bool b) override;
 
+public slots:
+    /// Normally called from c'tor, but may be called as a result of a connection to SSLCertMonitor's certInfoChanged()
+    /// signal.
+    void setupSslConfiguration();
+
 protected:
     /// overrides ServerBase to create a QSslSocket wrapping the passed-in file descriptor, and then initiate the TLS
     /// server-side handshake.
     void incomingConnection(qintptr) override;
 private:
     QSslConfiguration sslConfiguration;
-    void setupSslConfiguration();
 };
 
 class SrvMgr;

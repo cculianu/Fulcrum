@@ -36,13 +36,14 @@
 #include <vector>
 
 class CtlTask;
+class SSLCertMonitor;
 class ZmqSubNotifier;
 
 class Controller : public Mgr, public ThreadObjectMixin, public TimersByNameMixin, public ProcessAgainMixin
 {
     Q_OBJECT
 public:
-    explicit Controller(const std::shared_ptr<const Options> & options);
+    explicit Controller(const std::shared_ptr<const Options> & options, const SSLCertMonitor *certMon /* nullable */);
     ~Controller() override;
 
     void startup() override; ///< may throw
@@ -137,6 +138,7 @@ private:
     static constexpr auto pollTimerName = "pollForNewHeaders";
 
     const std::shared_ptr<const Options> options;
+    const SSLCertMonitor * const sslCertMonitor;
     std::shared_ptr<Storage> storage; ///< shared with srvmgr, but we control its lifecycle
     std::shared_ptr<BitcoinDMgr> bitcoindmgr; ///< shared with srvmgr, but we control its lifecycle
     std::unique_ptr<SrvMgr> srvmgr; ///< NB: this may be nullptr if we haven't yet synched up and started listening.  Additionally, this should be destructed before storage or bitcoindmgr.

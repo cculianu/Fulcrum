@@ -37,6 +37,7 @@
 class Controller;
 class Logger;
 class SimpleHttpServer;
+class SSLCertMonitor;
 class ThreadPool;
 
 extern "C" void signal_trampoline(int sig); ///< signal handler must be extern "C" according to the C++ standard.
@@ -142,6 +143,7 @@ private:
     std::unique_ptr<Controller> controller;
     QList<std::shared_ptr<SimpleHttpServer> > httpServers;
     std::atomic_bool quitting = false;
+    std::unique_ptr<SSLCertMonitor> sslCertMonitor; ///< may be nullptr if no SSL. Once created, instance is persistent.
 
     void startup();
     void cleanup();
@@ -149,9 +151,6 @@ private:
     void cleanup_WaitForThreadPoolWorkers();
 
     void parseArgs();
-
-    /// Called from parseArgs().  Returns a valid CertInfo object given a cert & key filename, or throws on error.
-    static Options::CertInfo makeCertInfo(const QObject *context, const QString &certFile, const QString &keyFile);
 
     /// This is defined in register_MetaTypes.cpp
     void register_MetaTypes();
