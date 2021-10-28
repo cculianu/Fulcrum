@@ -31,21 +31,21 @@ class QFileSystemWatcher;
 /// This class allows for admins to swap out the cert files before their certs expire, without needing to restart
 /// Fulcrum.
 ///
-/// Monitors filesystem changes for the cert files specified in options. If they change, and are loaded successfully,
-/// populates options->certInfo atomically and emits certInfoChanged(). ServerSSL is connected to this signal.
+/// Monitors filesystem changes for the cert files specified in `options`. If they change, and are loaded successfully,
+/// populates options->certs atomically and emits certInfoChanged(). ServerSSL is connected to this signal.
 class SSLCertMonitor : public QObject, public TimersByNameMixin
 {
     Q_OBJECT
 public:
     explicit SSLCertMonitor(std::shared_ptr<Options> options, QObject *parent = nullptr);
 
-    /// Actually starts the monitoring task and also populates the app-global Options::CertInfo object with valid certs.
+    /// Actually starts the monitoring task and also populates the options->certs object with valid certs.
     /// May throw on error.
     void start(const QString &certFile, const QString &keyFile, const QString &wssCertFile, const QString &wssKeyFile);
 
 signals:
     /// This is emitted when the (valid) cert files on disk have changed and been re-read by this class.
-    /// Before this is emitted, the new certInfo in the options object has already been atomically updated.
+    /// Before this is emitted, the new CertInfo in the options object has already been atomically updated.
     void certInfoChanged();
 
 private slots:

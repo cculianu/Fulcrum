@@ -138,7 +138,7 @@ void SSLCertMonitor::on_fileChanged(const QString &path)
 Options::Certs SSLCertMonitor::readCerts() const
 {
     Options::Certs certs;
-    // the below always either returns a good certInfo object, or throws on error
+    // the below always either returns a good CertInfo object, or throws on error
     certs.certInfo = SSLCertMonitor::makeCertInfo(this, cert, key);
     if (!wssCert.isEmpty()) {
         if (wssKey.isEmpty()) throw InternalError("Internal Error: wss-key is empty"); // sanity check
@@ -161,9 +161,9 @@ Options::CertInfo SSLCertMonitor::makeCertInfo(const QObject *context, const QSt
 
     QFile certf(cert), keyf(key);
     if (!certf.open(QIODevice::ReadOnly))
-        throw BadArgs(QString("Unable to open cert file %1: %2").arg(cert).arg(certf.errorString()));
+        throw BadArgs(QString("Unable to open cert file %1: %2").arg(cert, certf.errorString()));
     if (!keyf.open(QIODevice::ReadOnly))
-        throw BadArgs(QString("Unable to open key file %1: %2").arg(key).arg(keyf.errorString()));
+        throw BadArgs(QString("Unable to open key file %1: %2").arg(key, keyf.errorString()));
 
     ret.cert = QSslCertificate(&certf, QSsl::EncodingFormat::Pem);
     // proble key algorithm by trying all the algorithms Qt supports
