@@ -90,7 +90,7 @@ namespace {
     static const bool falseMem = false, trueMem = true;
     static const rocksdb::Slice kMeta{"meta"}, kDirty{"dirty"}, kUtxoCount{"utxo_count"},
                                 kTrue(reinterpret_cast<const char *>(&trueMem), sizeof(trueMem)),
-                                kFalse(reinterpret_cast<const char *>(&falseMem), sizeof(trueMem));
+                                kFalse(reinterpret_cast<const char *>(&falseMem), sizeof(falseMem));
 
     // serialize/deser -- for basic types we use QDataStream, but we also have specializations at the end of this file
     template <typename Type>
