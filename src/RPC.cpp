@@ -52,15 +52,15 @@ namespace RPC {
     static std::atomic<Json::ParserBackend> jsonParserBackend = Json::ParserBackend::Default;
 
     /* static */
-    Message Message::fromUtf8(const QByteArray &ba, Id *id_out, bool v1)
+    Message Message::fromUtf8(const QByteArray &ba, Id *id_out, bool v1, bool strict)
     {
         const auto backend = jsonParserBackend.load(std::memory_order_relaxed);
         // may throw
-        return fromJsonData(Json::parseUtf8(ba, Json::ParseOption::RequireObject, backend).toMap(), id_out, v1);
+        return fromJsonData(Json::parseUtf8(ba, Json::ParseOption::RequireObject, backend).toMap(), id_out, v1, strict);
     }
 
     /* static */
-    Message Message::fromJsonData(const QVariantMap & map, Id * id_out, bool v1)
+    Message Message::fromJsonData(const QVariantMap & map, Id * id_out, bool v1, bool strict)
     {
         Message ret;
         ret.v1 = v1;
@@ -74,16 +74,38 @@ namespace RPC {
             if (id_out)
                 *id_out = ret.id;
         } catch (const BadArgs & e) {
-            throw InvalidError(QString("Error parsing JSON key \"%1\": %2").arg(s_id).arg(e.what()));
+            throw InvalidError(QString("Error parsing JSON key \"%1\": %2").arg(s_id, e.what()));
         }
 
         if (QString ver; !v1 && (ver=ret.jsonRpcVersion()) != RPC::jsonRpcVersion) {// we ignore this key in v1
-            if (!ver.isEmpty())
-                throw InvalidError(QString("Expected jsonrpc version %1").arg(RPC::jsonRpcVersion));
-            // It turns out Electron Cash doesn't even send this key, even though JSON 2.0 spec specifies it. We accept
-            // requests without it if the key is missing entirely, and "fake" it so below code works (what follows is
-            // code that was originally written assuming the key is there).
-            ret.data[s_jsonrpc] = RPC::jsonRpcVersion;
+            if (!ver.isEmpty()) {
+                constexpr auto errMsg = "Expected jsonrpc version \"%1\", instead got \"%2\"";
+                auto shortVer = ver; // shallow copy
+                if (ver.length() > 10)
+                    // prevent log file spam DoS by only logging a partial string...
+                    shortVer = ver.left(10);
+                if (strict)
+                    throw InvalidError(QString(errMsg).arg(RPC::jsonRpcVersion, shortVer));
+                // Phoenix wallet on BTC actually sends the out-of-spec key: "jsonrpc": "1.0" here. It's not clear
+                // what to do here. We will just proceed along as if nothing happened, keeping the same string for
+                // "jsonrpc" that they gave us and hope for the best!  We won't parse the string at all and we won't
+                // even change the protocol version internally to `ret.v1 = true`.  Phoenix seems to work ok if we do
+                // things this way.  Previously Fulcrum used to throw an error here and refuse to proceed, but we
+                // decided to be more permissive. See issue: https://github.com/cculianu/Fulcrum/issues/91
+                DebugM(QString(errMsg).arg(RPC::jsonRpcVersion, shortVer));
+                if (shortVer.length() < ver.length()) {
+                    // However, we *DO* prevent memory exhaustion DoS by not "remembering" a potentially huge version
+                    // string that we can't even understand.. instead, we accept up to 10 characters of it.
+                    ret.data[s_jsonrpc] = shortVer;
+                    DebugM("Got excessively long, out-of-spec \"jsonrpc\" value of length ", ver.length(),
+                           " (we truncated it to length ", shortVer.length(), ")");
+                }
+            } else {
+                // It turns out Electron Cash doesn't even send this key, even though JSON 2.0 spec specifies it. We
+                // accept requests without it if the key is missing entirely, and "fake" it so below code works (what
+                // follows is code that was originally written assuming the key is there).
+                ret.data[s_jsonrpc] = RPC::jsonRpcVersion;
+            }
         }
 
         if (auto var = map.value(s_method);
@@ -377,7 +399,7 @@ namespace RPC {
         }
         Message::Id msgId;
         try {
-            Message message = Message::fromUtf8(json, &msgId, v1); // may throw
+            Message message = Message::fromUtf8(json, &msgId, v1, strict); // may throw
             json.clear(); // release memory right away (needed for ScaleNet)
 
             static const auto ValidateParams = [](const Message &msg, const Method &m) {

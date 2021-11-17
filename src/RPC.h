@@ -118,9 +118,10 @@ namespace RPC {
         // -- METHODS --
 
         /// may throw Exception. This factory method should be the way one of the 6 ways one constructs this object
-        static Message fromUtf8(const QByteArray &, Id *id_out = nullptr, bool v1 = false);
+        static Message fromUtf8(const QByteArray &, Id *id_out = nullptr, bool v1 = false, bool strict = false);
         /// may throw Exception. This factory method should be the way one of the 6 ways one constructs this object
-        static Message fromJsonData(const QVariantMap &jsonData, Id *id_parsed_even_if_failed = nullptr, bool v1 = false);
+        static Message fromJsonData(const QVariantMap &jsonData, Id *id_parsed_even_if_failed = nullptr,
+                                    bool v1 = false, bool strict = false);
         // 4 more factories below..
         /// will not throw exceptions
         static Message makeError(int code, const QString & message, const Id & id = Id(), bool v1 = false);
@@ -345,6 +346,7 @@ namespace RPC {
         int errorPolicy = ErrorPolicyDisconnect;
 
         bool v1 = false; // if true, will generate v1 style messages and respond to v1 only
+        bool strict = false; // if true, we will be more strict and reject some malformed JSON-RPC messages
 
         QString lastPeerError;
         quint64 nRequestsSent = 0, nNotificationsSent = 0, nResultsSent = 0, nErrorsSent = 0;
