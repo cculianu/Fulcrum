@@ -237,6 +237,8 @@ namespace RPC {
         Q_OBJECT
 
         Q_PROPERTY(bool v1 READ isV1 WRITE setV1)
+        Q_PROPERTY(bool strict READ isStrict WRITE setStrict)
+
     protected:
         /// Subclasses should call processJson to process what they think may be a complete JSON-RPC message.
         ///
@@ -287,6 +289,9 @@ namespace RPC {
 
         bool isV1() const { return v1; }
         void setV1(bool b) { v1 = b; }
+
+        bool isStrict() const { return strict; }
+        void setStrict(bool b) { strict = b; }
 
     signals:
         /// call (emit) this to send a request to the peer
