@@ -1949,6 +1949,24 @@ void Server::rpc_mempool_get_fee_histogram(Client *c, const RPC::Message &m)
     }
     emit c->sendResult(m.id, result);
 }
+void Server::rpc_bchn_getdsproofscore(Client *c, const RPC::Message &m)
+{
+    if (isBTC || !bitcoindmgr->hasDSProofRPC() || bitcoindmgr->getBitcoinDVersion() < Version{23, 1, 0})
+        throw RPCError("This server lacks the getdsproofscore rpc call", RPC::ErrorCodes::Code_MethodNotFound);
+    QVariantList l = m.paramsList();
+    assert(l.size() == 1);
+    const QByteArray txHash = validateHashHex( l.front().toString() );
+    if (txHash.length() != HashLen)
+        throw RPCError("Invalid tx hash");
+    generic_async_to_bitcoind(c, m.id, "getdsproofscore", QVariantList{{ Util::ToHexFast(txHash) }},
+        // use the default success func, which just echoes the bitcoind reply to the client
+        BitcoinDSuccessFunc(),
+        // use the default error func, return error response to client based on daemon error message
+        BitcoinDErrorFunc()
+    );
+    // <-- do nothing right now, return without replying. Will respond when daemon calls us back in callbacks above.
+}
+
 // --- Server::StaticData Definitions ---
 #define HEY_COMPILER_PUT_STATIC_HERE(x) decltype(x) x
 #define PR RPC::Method::PosParamRange
@@ -2004,6 +2022,9 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
     { {"blockchain.utxo.get_info",          true,               false,    PR{2,2},                    },          MP(rpc_blockchain_utxo_get_info) },
 
     { {"mempool.get_fee_histogram",         true,               false,    PR{0,0},                    },          MP(rpc_mempool_get_fee_histogram) },
+
+    // Custom extension for General Protocols
+    { {"bchn.getdsproofscore",              true,               false,    PR{1,1},                    },          MP(rpc_bchn_getdsproofscore) },
 };
 #undef MP
 #undef PR

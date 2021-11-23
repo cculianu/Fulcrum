@@ -389,6 +389,8 @@ private:
     void rpc_blockchain_utxo_get_info(Client *, const RPC::Message &); // fully implemented
     // mempool
     void rpc_mempool_get_fee_histogram(Client *, const RPC::Message &); // fully implemented
+    // Custom extension for General Protocols
+    void rpc_bchn_getdsproofscore(Client *, const RPC::Message &); // fully implemented
 
     // Impl. for blockchain.scripthash.* & blockchain.address.* methods (both sets call into these).
     // Note: Validation should have already been done by caller.
