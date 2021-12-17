@@ -3,8 +3,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef BITCOIN_PREVECTOR_H
-#define BITCOIN_PREVECTOR_H
+#pragma once
 
 #include <algorithm>
 #include <cstddef>
@@ -37,8 +36,8 @@ namespace bitcoin {
  */
 template <unsigned int N, typename T, typename Size = uint32_t, typename Diff = int32_t>
 class prevector {
-    static_assert (std::is_pod_v<T> && std::is_trivially_destructible_v<T> && std::is_trivially_copyable_v<T>
-                   && std::is_trivially_constructible_v<T> && sizeof(Size) == sizeof(Diff) && std::is_integral_v<Size>
+    static_assert (std::is_pod_v<T> && std::is_trivially_destructible_v<T> && std::is_trivial_v<T>
+                   && sizeof(Size) == sizeof(Diff) && std::is_integral_v<Size>
                    && std::is_integral_v<Diff> && std::is_unsigned_v<Size> && std::is_signed_v<Diff>
                    && sizeof(Size) >= 4);
     using byte = std::byte;
@@ -316,6 +315,24 @@ private:
             new (static_cast<void *>(dst++)) T(*first++);
     }
 
+    void resize_common(const size_type new_size, const bool uninitialized) {
+        const size_type cur_size = size();
+        if (cur_size == new_size) {
+            return;
+        }
+        if (cur_size > new_size) {
+            erase(item_ptr(new_size), end());
+            return;
+        }
+        if (new_size > capacity()) {
+            change_capacity(new_size);
+        }
+        const size_type increase = new_size - cur_size;
+        if (!uninitialized) fill(item_ptr(cur_size), increase);
+        _size += increase;
+    }
+
+
 public:
     void assign(size_type n, const T &val) {
         clear();
@@ -407,22 +424,8 @@ public:
 
     const T &operator[](size_type pos) const noexcept { return *item_ptr(pos); }
 
-    void resize(size_type new_size) {
-        size_type cur_size = size();
-        if (cur_size == new_size) {
-            return;
-        }
-        if (cur_size > new_size) {
-            erase(item_ptr(new_size), end());
-            return;
-        }
-        if (new_size > capacity()) {
-            change_capacity(new_size);
-        }
-        size_type increase = new_size - cur_size;
-        fill(item_ptr(cur_size), increase);
-        _size += increase;
-    }
+    void resize(size_type new_size) { resize_common(new_size, false); }
+    void resize_uninitialized(size_type new_size) { resize_common(new_size, true); }
 
     void reserve(size_type new_capacity) {
         if (new_capacity > capacity()) {
@@ -554,5 +557,3 @@ public:
     const value_type *data() const noexcept { return item_ptr(0); }
 };
 } // namespace bitcoin
-
-#endif // BITCOIN_PREVECTOR_H

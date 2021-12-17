@@ -1249,7 +1249,7 @@ namespace {
         template <typename A, typename B> void local_check_equal(A a, B b) {
             local_check(a == b);
         }
-        void local_check(bool b) { passed &= b; }
+        void local_check(bool b) { passed = passed && b; }
         void test() {
             const pretype &const_pre_vector = pre_vector;
             local_check_equal(real_vector.size(), pre_vector.size());
@@ -1287,6 +1287,13 @@ namespace {
             for (Size s = 0; s < ss1.size(); ++s) {
                 local_check_equal(ss1[s], ss2[s]);
             }
+            // check that unserialing again works, and yields identical results
+            realtype deser_real_vector;
+            pretype deser_pre_vector;
+            ss1 >> deser_pre_vector;
+            ss2 >> deser_real_vector;
+            local_check_equal(real_vector, deser_real_vector);
+            local_check_equal(pre_vector, deser_pre_vector);
         }
 
     public:

@@ -3,8 +3,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef BITCOIN_SERIALIZE_H
-#define BITCOIN_SERIALIZE_H
+#pragma once
 
 #include "crypto/endian.h"
 #include "prevector.h"
@@ -18,6 +17,7 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -31,6 +31,8 @@
 
 namespace bitcoin {
 inline constexpr uint64_t MAX_SIZE = 0x02000000;
+/** Maximum amount of memory (in bytes) to allocate at once when deserializing vectors. */
+inline constexpr size_t MAX_VECTOR_ALLOCATE = 5'000'000;
 
 /**
  * Dummy data type to identify deserializing constructors.
@@ -640,12 +642,13 @@ void Unserialize_impl(Stream &is, prevector<N, T> &v, const uint8_t &) {
     size_t nSize = ReadCompactSize(is);
     size_t i = 0;
     while (i < nSize) {
-        size_t blk = std::min(nSize - i, size_t(1 + 4999999 / sizeof(T)));
-        v.resize(i + blk);
+        size_t blk = std::min(nSize - i, size_t(1 + (MAX_VECTOR_ALLOCATE - 1) / sizeof(T)));
+        v.resize_uninitialized(i + blk);
         is.read((char *)&v[i], blk * sizeof(T));
         i += blk;
     }
 }
+
 
 template <typename Stream, unsigned int N, typename T, typename V>
 void Unserialize_impl(Stream &is, prevector<N, T> &v, const V &) {
@@ -654,12 +657,16 @@ void Unserialize_impl(Stream &is, prevector<N, T> &v, const V &) {
     size_t i = 0;
     size_t nMid = 0;
     while (nMid < nSize) {
-        nMid += 5000000 / sizeof(T);
+        static_assert (sizeof(T) <= MAX_VECTOR_ALLOCATE);
+        nMid += MAX_VECTOR_ALLOCATE / sizeof(T);
         if (nMid > nSize) {
             nMid = nSize;
         }
-        v.resize(nMid);
-        for (; i < nMid; i++) {
+        if constexpr(std::is_trivial_v<V>)
+            v.resize_uninitialized(nMid);
+        else
+            v.resize(nMid);
+        for (; i < nMid; ++i) {
             Unserialize(is, v[i]);
         }
     }
@@ -701,7 +708,7 @@ void Unserialize_impl(Stream &is, std::vector<T, A> &v, const uint8_t &) {
     size_t nSize = ReadCompactSize(is);
     size_t i = 0;
     while (i < nSize) {
-        size_t blk = std::min(nSize - i, size_t(1 + 4999999 / sizeof(T)));
+        size_t blk = std::min(nSize - i, size_t(1 + (MAX_VECTOR_ALLOCATE - 1) / sizeof(T)));
         v.resize(i + blk);
         is.read((char *)&v[i], blk * sizeof(T));
         i += blk;
@@ -715,12 +722,13 @@ void Unserialize_impl(Stream &is, std::vector<T, A> &v, const V &) {
     size_t i = 0;
     size_t nMid = 0;
     while (nMid < nSize) {
-        nMid += 5000000 / sizeof(T);
+        static_assert (sizeof(T) <= MAX_VECTOR_ALLOCATE);
+        nMid += MAX_VECTOR_ALLOCATE / sizeof(T);
         if (nMid > nSize) {
             nMid = nSize;
         }
         v.resize(nMid);
-        for (; i < nMid; i++) {
+        for (; i < nMid; ++i) {
             Unserialize(is, v[i]);
         }
     }
@@ -762,7 +770,7 @@ void Unserialize(Stream &is, std::map<K, T, Pred, A> &m) {
     m.clear();
     size_t nSize = ReadCompactSize(is);
     typename std::map<K, T, Pred, A>::iterator mi = m.begin();
-    for (size_t i = 0; i < nSize; i++) {
+    for (size_t i = 0; i < nSize; ++i) {
         std::pair<K, T> item;
         Unserialize(is, item);
         mi = m.insert(mi, item);
@@ -785,7 +793,7 @@ void Unserialize(Stream &is, std::set<K, Pred, A> &m) {
     m.clear();
     size_t nSize = ReadCompactSize(is);
     typename std::set<K, Pred, A>::iterator it = m.begin();
-    for (size_t i = 0; i < nSize; i++) {
+    for (size_t i = 0; i < nSize; ++i) {
         K key;
         Unserialize(is, key);
         it = m.insert(it, key);
@@ -939,4 +947,3 @@ size_t GetSerializeSize(const S &s, const T &t) {
 #ifdef __clang__
 #pragma clang diagnostic pop
 #endif
-#endif // BITCOIN_SERIALIZE_H
