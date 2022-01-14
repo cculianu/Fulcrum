@@ -1122,7 +1122,8 @@ namespace RPC {
             return;
         }
         if (batch.hasNext()) {
-            DebugM(objectName(), " processing batch item ", batch.nextItem + 1);
+            DebugM(objectName(), " processing batch item ", batch.nextItem + 1, ", memory footprint is now: ",
+                   Json::estimateMemoryFootprint(batch.items));
             auto var = batch.getNextAndIncrement();
             const auto origSize = batch.responses.size();
             bool gotDisconnectFlag = false;
@@ -1165,7 +1166,7 @@ namespace RPC {
             }
             AGAIN();
         } else if (batch.isComplete()) {
-            DebugM(objectName(), " completed");
+            DebugM(objectName(), " completed", ", memory footprint is now: ", Json::estimateMemoryFootprint(batch.items));
             QVariantList l;
             QVariantList::size_type errCt = 0;
             for (const auto &msg : qAsConst(batch.responses)) {

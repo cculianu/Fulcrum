@@ -368,6 +368,98 @@ namespace Json {
         return serialize(v, compact ? 0 : 4); // may throw on low-level error or if !v.isValid()
     }
 
+    // Called by publicly visible estimateMemoryFootprint (this one tracks recursion depth)
+    static size_t estimateMemoryFootprint(const QVariant & v, unsigned recursionDepth)
+    {
+        if (UNLIKELY(recursionDepth > Writer::MAX_RECURSION_DEPTH))
+            throw Json::NestingLimitExceeded("The nesting limit of 1024 was exceeded in lowerBoundMemoryFootprint");
+
+        const auto typ = GetVarType(v);
+        size_t ret = sizeof(QVariant);
+
+        if (v.isNull()) {
+            // Note that QString.isNull() in the QVariant can also satisfy this, so we must special-case this.
+            if (typ == QMetaType::QString)
+                return ret + sizeof(QString);
+            else
+                return ret;
+        }
+
+        if (UNLIKELY(!v.isValid())) {
+            throw Json::Error("Variant is not valid");
+        }
+
+        switch (typ) {
+        case QMetaType::QByteArray:
+            return ret + sizeof(QByteArray) + (v.toByteArray().length()+1) * sizeof(char);
+        case QMetaType::QString:
+            return ret + sizeof(QString) + v.toString().length() * sizeof(QChar);
+        case QMetaType::QStringList: { // unlikely
+            const QStringList qsl = v.toStringList();
+            ret += sizeof(qsl);
+            for (const auto & qs : qsl)
+                ret += sizeof(QString) + qs.length() * sizeof(QChar);
+            return ret;
+        }
+        case QMetaType::QByteArrayList: { // uncommon
+            const QByteArrayList qbal = v.value<QByteArrayList>();
+            ret += sizeof(qbal);
+            for (const auto & ba : qbal)
+                ret += sizeof(QByteArray) + (ba.length()+1) * sizeof(char);
+            return ret;
+        }
+        case QMetaType::QVariantList: { // common case for arrays
+            const QVariantList vl = v.toList();
+            ret += sizeof(vl);
+            for (const auto & nested_v : vl)
+                ret += estimateMemoryFootprint(nested_v, recursionDepth + 1U);
+            return ret;
+        }
+        case QMetaType::QVariantMap: { // common case for maps
+            const QVariantMap vm = v.toMap();
+            ret += sizeof(vm);
+            for (auto it = vm.begin(); it != vm.end(); ++it) {
+                const QString & key = it.key();
+                ret += sizeof(QString) + key.length() * sizeof(QChar);
+                ret += estimateMemoryFootprint(*it, recursionDepth + 1U);
+            }
+            return ret;
+        }
+        case QMetaType::QVariantHash: { // uncommon
+            const QVariantHash vh = v.toHash();
+            ret += sizeof(vh);
+            for (auto it = vh.begin(); it != vh.end(); ++it) {
+                const QString & key = it.key();
+                ret += sizeof(QString) + key.length() * sizeof(QChar);
+                ret += estimateMemoryFootprint(*it, recursionDepth + 1U);
+            }
+            return ret;
+        }
+        // assumption: bool, int, long, double etc all fit within QVariant itself
+        case QMetaType::Bool:
+        case QMetaType::Int:
+        case QMetaType::Long:
+        case QMetaType::LongLong:
+        case QMetaType::UInt:
+        case QMetaType::ULong:
+        case QMetaType::ULongLong:
+        case QMetaType::Double:
+        case QMetaType::Float:
+            return ret;
+        default: {
+#if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
+            const QString tname(QMetaType(typ).name());
+#else
+            const QString tname(QMetaType::typeName(typ));
+#endif
+            qWarning() << QString("Unsupported type %1 (%2) for '%3'").arg(int(typ)).arg(tname, v.toString());
+            return ret;
+        }
+        } // end switch
+    }
+
+    size_t estimateMemoryFootprint(const QVariant & v) { return estimateMemoryFootprint(v, 0); }
+
 } // end namespace Json
 
 namespace {

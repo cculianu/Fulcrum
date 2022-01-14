@@ -31,6 +31,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <QString>
 #include <QVariant>
 
+#include <cstdint>
 #include <optional>
 #include <stdexcept>
 #include <vector>
@@ -93,6 +94,7 @@ namespace Json {
     enum class SerOption { NoBareNull, BareNullOk };
     /// Serialization, may throw Error, may throw std::exception on low-level error (bad_alloc, etc).
     /// Will throw also if given an empty QVariant{}, unless BareNullOk is specified.
+    /// May throw NestingLimitExceeded if the supplied QVariant has a recursive nesting depth larger than 1024.
     /// If compact = true, the generated JSON will have no whitespace between tokens.
     /// If compact = false, the generated JSON will have newlines and 4-spaces as indentation per indentation level.
     extern QByteArray toUtf8(const QVariant &, bool compact = false, SerOption = SerOption::BareNullOk);
@@ -100,8 +102,15 @@ namespace Json {
     /// Low-level function -- like toUtf8() but lets you control the indentation level, etc.
     /// prettyIndent = 0 - compact (no whitespace), otherwise it will be the amount to indent at each level
     /// May throw Error or std::exception, or return an empty QByteArray on error.
+    /// May throw NestingLimitExceeded if the supplied QVariant has a recursive nesting depth larger than 1024.
     extern QByteArray serialize(const QVariant &v, unsigned prettyIndent = 0, unsigned indentLevel = 0);
 
+    /// Returns a rough estimate of the amount of memory a particular JSON-compatible QVariant
+    /// consumes.  This is a Fulcrum extension (which may end up ported to the main lib -Calin).
+    /// Note that if the QVariant contains types we don't support for serialization, they will
+    /// be costed as simply sizeof(QVariant).
+    /// May throw NestingLimitExceeded if the supplied QVariant has a recursive nesting depth larger than 1024.
+    extern size_t estimateMemoryFootprint(const QVariant &);
 
     // --
     // -- Below are extra utility and other functions for querying the simdjson impl, checking the locale, etc.
