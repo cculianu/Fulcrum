@@ -415,7 +415,7 @@ namespace RPC {
     bool ConnectionBase::batchResponseFilter(const Message & msg)
     {
         // first, see if the response corresponds to an extant batch request
-        for (auto * batch : extantBatchProcessors)
+        for (auto * batch : qAsConst(extantBatchProcessors))
             if (batch->acceptResponse(msg))
                 return true;
         return false;
@@ -465,7 +465,7 @@ namespace RPC {
                 // Note: This branch can only be taken if batchPermitted == true
                 // Handle error immediately. Note that older Fulcrum (or Fulcrum with batchinPermitted = false)
                 // would throw Json::Error here, which technically isn't quite correct.  As per JSON-RPC 2.0 specs,
-                // the Invalid request error should happen when a request isn't properly formatted or is of the wrongt
+                // the Invalid request error should happen when a request isn't properly formatted or is of the wrong
                 // JSON type.
                 throw InvalidRequest{};
             }
@@ -508,7 +508,7 @@ namespace RPC {
                 Error() << "Deleted extant batch processor with id " << bpId
                         << ", but the passed-in QObject pointer differs from the pointer in our table! FIXME!";
             }
-        }, Qt::QueuedConnection);
+        });
         extantBatchProcessors[batch->id] = batch;
         connect(batch, &BatchProcessor::finished, this, [this, bpId = batch->id]{
             if (auto *batch = extantBatchProcessors.take(bpId))
