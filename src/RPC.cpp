@@ -24,6 +24,7 @@
 #include <QSslSocket>
 
 #include <atomic>
+#include <memory>
 #include <type_traits>
 #include <utility>
 
@@ -309,7 +310,7 @@ namespace RPC {
             do_disconnect();
             return;
         }
-        const QByteArray jsonData = Message::makeRequest(reqid, method, params, v1).toJsonUtf8();
+        QByteArray jsonData = Message::makeRequest(reqid, method, params, v1).toJsonUtf8();
         if (jsonData.isEmpty()) {
             Error() << __func__ << " method: " << method << "; Unable to generate request JSON! FIXME!";
             return;
@@ -324,7 +325,7 @@ namespace RPC {
         TraceM("Sending json: ", Util::Ellipsify(jsonData));
         ++nRequestsSent;
         // below send() ends up calling do_write immediately (which is connected to send)
-        emit send( wrapForSend(jsonData) );
+        emit send( wrapForSend(std::move(jsonData)) );
     }
     void ConnectionBase::_sendNotification(const QString &method, const QVariant & params)
     {
@@ -350,7 +351,7 @@ namespace RPC {
         TraceM("Sending json: ", Util::Ellipsify(json));
         ++nNotificationsSent;
         // below send() ends up calling do_write immediately (which is connected to send)
-        emit send( wrapForSend(json) );
+        emit send( wrapForSend(std::move(json)) );
     }
     void ConnectionBase::_sendError(bool disc, int code, const QString &msg, const Message::Id & reqId)
     {
@@ -360,11 +361,22 @@ namespace RPC {
             do_disconnect();
             return;
         }
-        const QByteArray json = Message::makeError(code, msg, reqId, v1).toJsonUtf8();
+        QByteArray json;
+        {
+            Message m = Message::makeError(code, msg, reqId, v1);
+
+            // first, see if the response corresponds to an extant batch request
+            if (batchResponseFilter(m))
+                // an extant batch slurped up this response. Don't sned it to client.
+                return;
+
+            // otherwise produce some Json right now and send it out to the client
+            json = m.toJsonUtf8();
+        }
         TraceM("Sending json: ", Util::Ellipsify(json));
         ++nErrorsSent;
         // below send() ends up calling do_write immediately (which is connected to send)
-        emit send( wrapForSend(json) );
+        emit send( wrapForSend(std::move(json)) );
         if (disc) {
             do_disconnect(true); // graceful disconnect
         }
@@ -377,7 +389,19 @@ namespace RPC {
             do_disconnect();
             return;
         }
-        const QByteArray json = Message::makeResponse(reqid, result, v1).toJsonUtf8();
+
+        QByteArray json;
+        {
+            Message m = Message::makeResponse(reqid, result, v1);
+
+            // first, see if the response corresponds to an extant batch request
+            if (batchResponseFilter(m))
+                // an extant batch slurped up this response. Don't sned it to client.
+                return;
+
+            // otherwise produce some Json right now and send it out to the client
+            json = m.toJsonUtf8();
+        }
         if (json.isEmpty()) {
             Error() << __func__ << ": Unable to generate result JSON! FIXME!";
             return;
@@ -385,7 +409,16 @@ namespace RPC {
         TraceM("Sending result json: ", Util::Ellipsify(json));
         ++nResultsSent;
         // below send() ends up calling do_write immediately (which is connected to send)
-        emit send( wrapForSend(json) );
+        emit send( wrapForSend(std::move(json)) );
+    }
+
+    bool ConnectionBase::batchResponseFilter(const Message & msg)
+    {
+        // first, see if the response corresponds to an extant batch request
+        for (auto * batch : extantBatchProcessors)
+            if (batch->acceptResponse(msg))
+                return true;
+        return false;
     }
 
     void ConnectionBase::processJson(QByteArray &&json)
@@ -398,9 +431,99 @@ namespace RPC {
             return;
         }
         Message::Id msgId;
+        std::optional<ProcessObjectResult::Error> error;
         try {
-            Message message = Message::fromUtf8(json, &msgId, v1, strict); // may throw
+            const auto backend = jsonParserBackend.load(std::memory_order_relaxed);
+            const Json::ParseOption parseOpt = batchPermitted ? Json::ParseOption::AcceptAnyValue
+                                                              : Json::ParseOption::RequireObject;
+            QVariant var = Json::parseUtf8(json, parseOpt, backend); // may throw
             json.clear(); // release memory right away (needed for ScaleNet)
+
+            if (var.canConvert<QVariantMap>()) {
+                // handle immediate request
+                const auto res = processObject(var.toMap()); // may throw
+                var.clear(); // release unused memory immediately
+                msgId = res.parsedMsgId; // copy parsed message id so possible error-sending code below has it (if not null)
+                if (res.error) {
+                    error = std::move(res.error);
+                } else if (res.message) {
+                    if (res.message->isError())
+                        emit gotErrorMessage(id, *res.message);
+                    else
+                        emit gotMessage(id, *res.message);
+                } else {
+                    // No error or no message means callee is telling us to do nothing with this.
+                    // This can happen if unexpected/unsupported notification, in which case peerError() was
+                    // already emitted by `processObject()`.
+                    return;
+                }
+            } else if (var.canConvert<QVariantList>()) {
+                // Note: This branch can only be taken if batchPermitted == true
+                enqueueNewBatch(var.toList()); // This may throw InvalidRequest if list is empty
+                return;
+            } else {
+                // Note: This branch can only be taken if batchPermitted == true
+                // Handle error immediately. Note that older Fulcrum (or Fulcrum with batchinPermitted = false)
+                // would throw Json::Error here, which technically isn't quite correct.  As per JSON-RPC 2.0 specs,
+                // the Invalid request error should happen when a request isn't properly formatted or is of the wrongt
+                // JSON type.
+                throw InvalidRequest{};
+            }
+        } catch (const Json::ParseError & e) {
+            error.emplace(Code_ParseError, e.what(), errorPolicy & ErrorPolicyDisconnect);
+        } catch (const InvalidRequest & e) {
+            error.emplace(Code_InvalidRequest, "Invalid request", errorPolicy & ErrorPolicyDisconnect);
+        } catch (const Exception & e) {
+            error.emplace(Code_Custom, e.what(), errorPolicy & ErrorPolicyDisconnect);
+        } catch (const std::exception & e) {
+            error.emplace(Code_InternalError, e.what(), errorPolicy & ErrorPolicyDisconnect);
+        }
+        if (error) {
+            bool doDisconnect = error->disconnect;
+            if (errorPolicy & ErrorPolicySendErrorMessage) {
+                emit sendError(doDisconnect, error->code, error->message.left(120), msgId);
+                if (!doDisconnect)
+                    emit peerError(id, lastPeerError=error->message);
+                doDisconnect = false; // if was true, already enqueued graceful disconnect after error reply, if was false, no-op here
+            }
+            if (doDisconnect) {
+                Error() << "Error reading/parsing data coming in: " << (lastPeerError=error->message);
+                do_disconnect();
+                status = Bad;
+            }
+        }
+    }
+
+    void ConnectionBase::enqueueNewBatch(QVariantList && varList)
+    {
+        // handle Batch request -- add it to the extant batches
+        if (varList.empty())
+            // empty batch lists are a JSON-RPC error
+            throw InvalidRequest();
+
+        auto *batch = new RPC::BatchProcessor(*this, std::move(varList));
+        connect(batch, &QObject::destroyed, this, [this, bpId = batch->id](QObject *o) {
+            if (auto *ptr = extantBatchProcessors.take(bpId); UNLIKELY(ptr && ptr != o)) {
+                // this should never happen
+                Error() << "Deleted extant batch processor with id " << bpId
+                        << ", but the passed-in QObject pointer differs from the pointer in our table! FIXME!";
+            }
+        }, Qt::QueuedConnection);
+        extantBatchProcessors[batch->id] = batch;
+        connect(batch, &BatchProcessor::finished, this, [this, bpId = batch->id]{
+            if (auto *batch = extantBatchProcessors.take(bpId))
+                batch->deleteLater();
+        });
+        // start the batch from event loop  after the current event loop stack returns
+        Util::AsyncOnObject(batch, [batch]{ batch->process(); });
+    }
+
+    auto ConnectionBase::processObject_internal(QVariantMap && vmap) -> ProcessObjectResult
+    {
+        Message::Id msgId;
+        try {
+            Message message = Message::fromJsonData(vmap, &msgId, v1, strict); // may throw
+            vmap.clear(); // release memory right away
 
             static const auto ValidateParams = [](const Message &msg, const Method &m) {
                 if (!msg.hasParams()) {
@@ -427,11 +550,11 @@ namespace RPC {
                     if (!m.opt_kwParams.has_value())
                         throw InvalidParameters("Named params are not supported for this method");
                     const auto nameset =
- #if QT_VERSION < QT_VERSION_CHECK(5, 14, 0)
+#if QT_VERSION < QT_VERSION_CHECK(5, 14, 0)
                             KeySet::fromList(msg.paramsMap().keys()); // TODO: this is not the most efficient -- for now this isn't used except for AdminServer, so it's fine.
- #else
+#else
                             Util::toCont<KeySet>(msg.paramsMap().keys());
- #endif
+#endif
                     const auto & kwSet = *m.opt_kwParams;
                     if (m.allowUnknownNamedParams) {
                         if (!(kwSet - nameset).isEmpty())
@@ -451,7 +574,7 @@ namespace RPC {
                 if (!message.id.isNull() && message.method.isEmpty())
                     // Hmm. Error with no corresponding request id.. log that fact to debug log
                     DebugM("Got unexpected error reply for id: ", message.id);
-                emit gotErrorMessage(id, message);
+                return {std::move(message), msgId};
             } else if (message.isNotif()) {
                 try {
                     const auto it = methods.find(message.method);
@@ -460,7 +583,7 @@ namespace RPC {
                     const Method & m = it.value();
                     if (m.allowsNotifications) {
                         ValidateParams(message, m);
-                        emit gotMessage(id, message);
+                        return {std::move(message), msgId};
                     } else {
                         throw Exception(QString("Ignoring unexpected notification"));
                     }
@@ -468,6 +591,7 @@ namespace RPC {
                     // Note: we emit peerError here so that the tally of number of errors goes up and we eventually disconnect the offending peer.
                     // This should not cause an error message to be sent to the peer.
                     emit peerError(this->id, lastPeerError=QString("Error processing notification '%1' from %2: %3").arg(message.method, prettyName(), e.what()));
+                    return msgId; // tell caller to do nothing with this since we already emitted peerError
                 }
             } else if (message.isRequest()) {
                 const auto it = methods.find(message.method);
@@ -475,50 +599,43 @@ namespace RPC {
                 if (!m || !m->allowsRequests)
                     throw UnknownMethod(QString("Unsupported request: %1").arg(message.method));
                 ValidateParams(message, *m);
-                emit gotMessage(id, message);
+                return {std::move(message), msgId};
             } else if (message.isResponse()) {
                 QString meth = idMethodMap.take(message.id);
                 if (meth.isEmpty()) {
                     throw BadPeer(QString("Unexpected response (id: %1)").arg(message.id.toString()));
                 }
                 message.method = meth;
-                emit gotMessage(id, message);
+                return {std::move(message), msgId};
             } else {
                 // Not a Request and not a Response or Notification or Error. Not JSON-RPC 2.0.
                 throw InvalidRequest("Invalid JSON");
             }
-            lastGood = Util::getTime(); // update "lastGood" as this is used to determine if stale or not.
         } catch (const Exception &e) {
-            static_assert (std::is_base_of_v<Exception, Json::ParseError>,
-                           "Please ensure that Json::Error and Json::ParseError are derived from Exception!");
             // TODO: clean this up. It's rather inelegant. :/
-            const bool wasJsonParse = dynamic_cast<const Json::ParseError *>(&e);
             const bool wasUnk = dynamic_cast<const UnknownMethod *>(&e);
             const bool wasInv = dynamic_cast<const InvalidRequest *>(&e) || dynamic_cast<const InvalidError *>(&e);
             const bool wasInvParms = dynamic_cast<const InvalidParameters *>(&e);
             int code = Code_Custom;
-            if (wasJsonParse) code = Code_ParseError;
-            else if (wasInvParms) code = Code_InvalidParams;
+            if (wasInvParms) code = Code_InvalidParams;
             else if (wasUnk) code = Code_MethodNotFound;
             else if (wasInv) code = Code_InvalidRequest;
             bool doDisconnect = errorPolicy & ErrorPolicyDisconnect;
-            if (errorPolicy & ErrorPolicySendErrorMessage) {
-                emit sendError(doDisconnect, code, QString(e.what()).left(120), msgId);
-                if (!doDisconnect)
-                    emit peerError(id, lastPeerError=e.what());
-                doDisconnect = false; // if was true, already enqueued graceful disconnect after error reply, if was false, no-op here
-            }
-            if (doDisconnect) {
-                Error() << "Error reading/parsing data coming in: " << (lastPeerError=e.what());
-                do_disconnect();
-                status = Bad;
-            }
+            return {ProcessObjectResult::Error{code, e.what(), doDisconnect}, msgId};
         } catch (const std::exception &e) {
             // Other low-level error such as bad_alloc, etc. This is very unlikely. We simply disconnect and give up.
             Error() << prettyName(false, true) << ": Low-level error reading/parsing data coming in: " << (lastPeerError=e.what());
             do_disconnect();
             status = Bad;
+            return msgId; // tell caller to do nothing (we already handled it)
         } // end try/catch
+    }
+
+    auto ConnectionBase::processObject(QVariantMap && vmap) -> ProcessObjectResult
+    {
+        auto ret = processObject_internal(std::move(vmap));
+        if (!ret.error) lastGood = Util::getTime(); // update "lastGood" as this is used to determine if stale or not.
+        return ret;
     }
 
     /* --- LinefeedConnection --- */
@@ -656,7 +773,7 @@ namespace RPC {
                             << " exceeded its \"memory waste threshold\" by filling our receive buffer with "
                             << avail << " bytes for longer than "
                             << QString::number(memoryWasteTimeout/1e3, 'f', 1) << " seconds -- kicking client!";
-                    // the below also sets ignoreIncomingMessage = true iff this is of type Client *
+                    // the below also sets ignoreNewIncomingMessages = true iff this is of type Client *
                     emit sendError(true, RPC::ErrorCodes::Code_App_ExcessiveFlood,
                                    "Excessive flood, please throttle your client implementation to not do this");
                     status = Bad;
@@ -670,14 +787,15 @@ namespace RPC {
         }
     }
 
-    QByteArray ElectrumConnection::wrapForSend(const QByteArray &d)
+    QByteArray ElectrumConnection::wrapForSend(QByteArray && d)
     {
         if (checkSetGetWebSocket()) {
             // in websocket mode we don't wrap anything -- it's already framed.
             return d;
         }
         // regular classic Electrum Cash socket -- newline delimited.
-        return d + QByteArrayLiteral("\r\n");
+        d.append(QByteArrayLiteral("\r\n"));
+        return d;
     }
 
     /* --- HttpConnection --- */
@@ -866,7 +984,7 @@ namespace RPC {
             if (sm) sm->clear(); // ensure state machine is "fresh" if we get here
         }
     }
-    QByteArray HttpConnection::wrapForSend(const QByteArray &data)
+    QByteArray HttpConnection::wrapForSend(QByteArray && data)
     {
         static const QByteArray NL("\r\n"), SLASHN("\n"), EMPTY("");
         static const QByteArray POST("POST / HTTP/1.1");
@@ -918,6 +1036,7 @@ namespace RPC {
         payload += NL;
         // actual data payload
         payload += data;
+        data.clear(); // release data right away to save memory
         // optional suffix (\r\n because JSON needs this)
         payload += suffix;
 
@@ -963,6 +1082,138 @@ namespace RPC {
             return true;
         }
     }
+
+    BatchProcessor::BatchProcessor(ConnectionBase & parent, Batch && batch_)
+        : QObject(&parent), IdMixin(newId()), conn(parent), batch(std::move(batch_))
+    {
+        setObjectName(parent.objectName() + " BatchProcessor." + QString::number(id)
+                      + " (" + QString::number(batch.items.size()) + ")");
+    }
+
+    BatchProcessor::~BatchProcessor() {
+        DebugM(objectName(), " ", __func__, ", elapsed: ", t0.msecStr(6), " msec");
+    }
+
+    bool ConnectionBase::hasMessageIdInBatchProcs(const Message::Id &msgId) const
+    {
+        for (const auto *proc : extantBatchProcessors) {
+            if (!proc || proc->isFinished()) continue;
+            const auto & batch = proc->getBatch();
+            if (!batch.isComplete() && (batch.submittedRequests.contains(msgId) || batch.answeredRequests.contains(msgId)))
+                return true;
+        }
+        return false;
+    }
+
+    void BatchProcessor::process()
+    {
+        // !!! TODO : add throttling support (perhaps read from conn.isPaused) !!!
+        if (done) {
+            DebugM(objectName(), " ", __func__, ", done = true, aborting early...");
+            return;
+        }
+        if (UNLIKELY(conn.ignoreNewIncomingMessages)) {
+            // This is only ever latched to true in the "Client" subclass and it signifies that the client is being
+            // dropped and so we have this short-circuit conditional to save on cycles in that situation and not
+            // bother processing further messages.
+            DebugM(objectName(), ": ignoring ", batch.items.size() - batch.nextItem, " batch message(s) from ", conn.id);
+            done = true;
+            emit finished();
+            return;
+        }
+        if (batch.hasNext()) {
+            DebugM(objectName(), " processing batch item ", batch.nextItem + 1);
+            auto var = batch.getNextAndIncrement();
+            const auto origSize = batch.responses.size();
+            bool gotDisconnectFlag = false;
+            if (!var.canConvert<QVariantMap>()) {
+                batch.responses.push_back(Message::makeError(Code_InvalidRequest, "Invalid request", {}, conn.isV1()));
+            } else {
+                auto res = conn.processObject(var.toMap());
+                if (res.error) {
+                    batch.responses.push_back(Message::makeError(res.error->code, res.error->message.left(120),
+                                                                 res.parsedMsgId, conn.isV1()));
+                    if (res.error->disconnect) {
+                        gotDisconnectFlag = true;
+                        ++batch.disconnectErrCt;
+                    }
+                } else if (res.message) {
+                    const auto & m = *res.message;
+                    if (m.isRequest()) {
+                        if (!conn.hasMessageIdInBatchProcs(m.id)) {
+                            batch.submittedRequests.insert(m.id);
+                            emit conn.gotMessage(conn.id, m);
+                        } else {
+                            // error, dupe
+                            batch.responses.push_back(Message::makeError(Code_Custom, "Duplicate id", m.id, conn.isV1()));
+                        }
+                    } else if (m.isNotif()) {
+                        ++batch.skippedCt;
+                        emit conn.gotMessage(conn.id, m);
+                    } else {
+                        batch.responses.push_back(Message::makeError(Code_InvalidRequest, "Invalid request", m.id, conn.isV1()));
+                    }
+                } else {
+                    // do nothing, indicate we are not expecting a response
+                    ++batch.skippedCt;
+                }
+            }
+            if (batch.responses.size() > origSize && batch.responses.back().isError()) {
+                conn.lastPeerError = batch.responses.back().errorMessage();
+                if (!gotDisconnectFlag)
+                    emit conn.peerError(conn.id, conn.lastPeerError);
+            }
+            AGAIN();
+        } else if (batch.isComplete()) {
+            DebugM(objectName(), " completed");
+            QVariantList l;
+            QVariantList::size_type errCt = 0;
+            for (const auto &msg : qAsConst(batch.responses)) {
+                if (msg.isError()) { ++errCt; ++conn.nErrorsSent; }
+                else ++conn.nRequestsSent;
+                l.push_back(msg.data);
+            }
+            batch.responses.clear(); // clear memory right away
+            if (!l.empty()) {
+                // only send if the response list is not empty
+                auto json = Json::toUtf8(l, true);
+                l.clear(); // clear memory right away
+                TraceM("Sending result json: ", Util::Ellipsify(json));
+                // below send() ends up calling do_write immediately (which is connected to send)
+                emit conn.send( conn.wrapForSend(std::move(json)) );
+            }
+            if (batch.disconnectErrCt || (errCt && (conn.errorPolicy & conn.ErrorPolicyDisconnect))) {
+                Error() << "Error from " << conn.prettyName(true) << " in batch request, disconnecting";
+                conn.do_disconnect();
+                conn.status = conn.Bad;
+            }
+            done = true;
+            emit finished();
+        } else {
+            // this may happen when we haven't yet received all the responses we expect
+            DebugM(objectName(), " lifecycle state: idle");
+            callOnTimerSoonNoRepeat(20000 /* TODO: have this come from config?!*/, "+InactivityTimeout",[this]{
+                Error() << objectName() << " timed out after not receiving a batch response for 20 seconds.";
+                emit conn.sendError(true, Code_InternalError, "Batch request timed out");
+                conn.status = conn.Bad;
+                this->deleteLater();
+            });
+        }
+    }
+
+    bool BatchProcessor::acceptResponse(const Message &m)
+    {
+        if (!m.isResponse() && !m.isError()) return false;
+        if (auto it = batch.submittedRequests.find(m.id); it != batch.submittedRequests.end()) {
+            batch.submittedRequests.erase(it);
+            batch.answeredRequests.insert(m.id);
+            batch.responses.push_back(m);
+            if (batch.isComplete()) AGAIN();
+            return true;
+        }
+        return false;
+    }
+
 } // end namespace RPC
 
 #if 0

@@ -2653,6 +2653,7 @@ Client::Client(const RPC::MethodMap * mm, IdMixin::Id id_in, QTcpSocket *sock, i
     status = Connected ; // we are always connected at construction time.
     errorPolicy = ErrorPolicySendErrorMessage;
     setObjectName(QStringLiteral("Client.%1").arg(id_in));
+    setBatchPermitted(true); // TODO: make this come from config!
     on_connected();
     Log() << "New " << prettyName(false, false) << ", " << N << Util::Pluralize(QStringLiteral(" client"), N) << " total";
 }
