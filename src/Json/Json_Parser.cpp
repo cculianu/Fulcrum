@@ -567,7 +567,7 @@ QVariant Container::toVariant() const {
         //   See: https://stackoverflow.com/questions/1701055/what-is-the-maximum-length-in-chars-needed-to-represent-any-double-value
         // - int64's need about ~22 bytes, so 47 is plenty
         std::array<char, 48> dcopy;
-        const int len = std::min(int(dcopy.size()-1), int(data.size()));
+        const QByteArray::size_type len = std::min<QByteArray::size_type>(dcopy.size()-1, data.size());
         std::memcpy(dcopy.data(), data.constData(), len);
         dcopy[len] = 0; // ensure nul termination
         const char * const begin = dcopy.data(); char *parseEnd = nullptr;

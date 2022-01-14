@@ -67,6 +67,9 @@ namespace Json {
     /// Thrown by the parseUtf8 and parseFile functions if the parser SimdJson was selected but it is unavailable.
     struct ParserUnavailable : Error { using Error::Error; ~ParserUnavailable() override; };
 
+    /// Thrown by serialize and toUff8 if the JSON object is nested too deeply (>1024 deep)
+    struct NestingLimitExceeded : Error { using Error::Error; ~NestingLimitExceeded() override; };
+
     enum class ParseOption {
         RequireObject,     ///< Reject any JSON that is not embeded in a JSON object { ... }
         RequireArray,      ///< Reject any JSON that is not embeded in a JSON array [ ... ]

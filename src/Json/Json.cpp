@@ -71,8 +71,8 @@ namespace {
     struct Writer {
         QByteArray & buf; // this is a reference for RVO to always work in write() below
         void put(char c) { buf.push_back(c); }
-        void put(char c, size_t nFill) { buf.append(int(nFill), c); }
-        void write(const char *s, size_t len) { buf.append(s, len); }
+        void put(char c, size_t nFill) { buf.append(QByteArray::size_type(nFill), c); }
+        void write(const char *s, size_t len) { buf.append(s, QByteArray::size_type(len)); }
         void write(const QByteArray &ba) { buf.append(ba); }
         Writer & operator<<(const char *s) { buf.append(s); return *this; }
         Writer & operator<<(const QString &s) { buf.append(s.toUtf8()); return *this; }
@@ -114,13 +114,18 @@ namespace {
             }
         }
 
+        /// In order to ensure we can read back what we write, and also to avoid stack overflow, we limit
+        /// the nesting level of QVarianMap and QVarianList to this recursion depth. If this is exceeded,
+        /// writeArray, writeObject, and/or writeVariant below will throw
+        static constexpr unsigned MAX_RECURSION_DEPTH = 1024;
+
         void indentStr(unsigned prettyIndent, unsigned indentLevel) { put(' ', prettyIndent * indentLevel); }
 
         template <typename List>
-        void writeArray(const List &vl, unsigned prettyIndent, unsigned indentLevel);
+        void writeArray(const List &vl, unsigned prettyIndent, unsigned indentLevel, unsigned recursionDepth);
         template <typename Map>
-        void writeObject(const Map &vm, unsigned prettyIndent, unsigned indentLevel);
-        void writeVariant(const QVariant &v, unsigned prettyIndent, unsigned indentLevel);
+        void writeObject(const Map &vm, unsigned prettyIndent, unsigned indentLevel, unsigned recursionDepth);
+        void writeVariant(const QVariant &v, unsigned prettyIndent, unsigned indentLevel, unsigned recursionDepth);
         void writeString(const QByteArray &ba) { put('"'); jsonEscape(ba); put('"'); };
         void writeString(const QString &qs) { writeString(qs.toUtf8()); }
     };
@@ -131,8 +136,11 @@ namespace {
     const QByteArray FalseLiteral = QByteArrayLiteral("false");
 
 
-    void Writer::writeVariant(const QVariant &v, unsigned prettyIndent, unsigned indentLevel) noexcept(false)
+    void Writer::writeVariant(const QVariant &v, unsigned prettyIndent, unsigned indentLevel, unsigned recursionDepth)
     {
+        if (UNLIKELY(recursionDepth > MAX_RECURSION_DEPTH))
+            throw Json::NestingLimitExceeded("The nesting limit of 1024 was exceeded in writeVariant");
+
         const auto typ = GetVarType(v);
 
         if (v.isNull()) {
@@ -164,19 +172,19 @@ namespace {
             writeString(v.toString());
             break;
         case QMetaType::QStringList: // unlikely
-            writeArray(v.toStringList(), prettyIndent, std::max(indentLevel, 1U));
+            writeArray(v.toStringList(), prettyIndent, std::max(indentLevel, 1U), recursionDepth);
             break;
         case QMetaType::QByteArrayList: // uncommon
-            writeArray(v.value<QByteArrayList>(), prettyIndent, std::max(indentLevel, 1U));
+            writeArray(v.value<QByteArrayList>(), prettyIndent, std::max(indentLevel, 1U), recursionDepth);
             break;
         case QMetaType::QVariantList: // common case for arrays
-            writeArray(v.toList(), prettyIndent, std::max(indentLevel, 1U));
+            writeArray(v.toList(), prettyIndent, std::max(indentLevel, 1U), recursionDepth);
             break;
         case QMetaType::QVariantMap: // common case for maps
-            writeObject(v.toMap(), prettyIndent, std::max(indentLevel, 1U));
+            writeObject(v.toMap(), prettyIndent, std::max(indentLevel, 1U), recursionDepth);
             break;
         case QMetaType::QVariantHash: // uncommon
-            writeObject(v.toHash(), prettyIndent, std::max(indentLevel, 1U));
+            writeObject(v.toHash(), prettyIndent, std::max(indentLevel, 1U), recursionDepth);
             break;
         case QMetaType::Bool:
             write(v.toBool() ? TrueLiteral : FalseLiteral);
@@ -219,13 +227,13 @@ namespace {
     }
 
     template<typename List>
-    void Writer::writeArray(const List &v, unsigned prettyIndent, unsigned indentLevel)
+    void Writer::writeArray(const List &v, unsigned prettyIndent, unsigned indentLevel, unsigned recursionDepth)
     {
         put('[');
         if (prettyIndent)
             put('\n');
 
-        for (int i = 0, nValues = v.size(); i < nValues; ++i) {
+        for (typename List::size_type i = 0, nValues = v.size(); i < nValues; ++i) {
             if (prettyIndent)
                 indentStr(prettyIndent, indentLevel);
             if constexpr (std::is_same_v<QString, typename List::value_type>) {
@@ -237,7 +245,7 @@ namespace {
                 // special "" -> null treatment in writeVariant() below.
                 static_assert (std::is_same_v<QVariant, typename List::value_type>
                                || std::is_same_v<QByteArray, typename List::value_type>);
-                writeVariant(v[i], prettyIndent, indentLevel + 1);
+                writeVariant(v[i], prettyIndent, indentLevel + 1U, recursionDepth + 1U);
             }
             if (i != (nValues - 1)) {
                 put(',');
@@ -247,19 +255,19 @@ namespace {
         }
 
         if (prettyIndent)
-            indentStr(prettyIndent, indentLevel - 1);
+            indentStr(prettyIndent, indentLevel - 1U);
         put(']');
     }
 
     template<typename Map>
-    void Writer::writeObject(const Map &v, unsigned prettyIndent, unsigned indentLevel)
+    void Writer::writeObject(const Map &v, unsigned prettyIndent, unsigned indentLevel, unsigned recursionDepth)
     {
         static_assert(std::is_same_v<QVariantMap, Map> || std::is_same_v<QVariantHash, Map>); // enforce supported types
         put('{');
         if (prettyIndent)
             put('\n');
 
-        int i = 0, nEntries = v.size();
+        typename Map::size_type i = 0, nEntries = v.size();
         for (auto it = v.begin(); i < nEntries; ++i, ++it) {
             if (prettyIndent)
                 indentStr(prettyIndent, indentLevel);
@@ -268,7 +276,7 @@ namespace {
             put('"'); jsonEscape(key.toUtf8()); write("\":", 2);
             if (prettyIndent)
                 put(' ');
-            writeVariant(value, prettyIndent, indentLevel + 1);
+            writeVariant(value, prettyIndent, indentLevel + 1U, recursionDepth + 1U);
             if (i != (nEntries - 1))
                 put(',');
             if (prettyIndent)
@@ -276,15 +284,16 @@ namespace {
         }
 
         if (prettyIndent)
-            indentStr(prettyIndent, indentLevel - 1);
+            indentStr(prettyIndent, indentLevel - 1U);
         put('}');
     }
 
 }
 namespace Json {
-    Error::~Error() {}                         // for vtable
-    ParseError::~ParseError() {}               // for vtable
-    ParserUnavailable::~ParserUnavailable() {} // for vtable
+    Error::~Error() {}                               // for vtable
+    ParseError::~ParseError() {}                     // for vtable
+    ParserUnavailable::~ParserUnavailable() {}       // for vtable
+    NestingLimitExceeded::~NestingLimitExceeded() {} // for vtable
 
     bool autoFixLocale = true; // Not atomic for performance. Assumption is this is set by client code before threads are started.
 
@@ -326,7 +335,7 @@ namespace Json {
         QByteArray ba; // we do it this way for RVO to work on all compilers
         Writer writer{ba};
         ba.reserve(1024);
-        writer.writeVariant(v, prettyIndent, indentLevel); // this may throw
+        writer.writeVariant(v, prettyIndent, indentLevel, 0); // this may throw
         return ba;
     }
 
