@@ -404,6 +404,7 @@ namespace RPC {
         // Internally called by processObject()
         [[nodiscard]] ProcessObjectResult processObject_internal(QVariantMap &&);
         // Internally called by _sendResult and _sendError
+        // Precondition: Message must be either: isError() or isResponse() (this is not checked here for performance)
         [[nodiscard]] bool batchResponseFilter(const Message & msg);
         // Internally called to enqueue a new batch -- this may throw InvalidRequest if the QVariantList is empty
         void enqueueNewBatch(QVariantList &&);
@@ -457,6 +458,7 @@ namespace RPC {
         explicit BatchProcessor(ConnectionBase & parent, Batch && batch);
         ~BatchProcessor() override;
 
+        /// Precondition: Message must be either: isError() or isResponse() (this is not checked here for performance)
         bool acceptResponse(const Message &);
         void process() override;
 

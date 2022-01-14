@@ -365,7 +365,7 @@ namespace RPC {
         {
             Message m = Message::makeError(code, msg, reqId, v1);
 
-            // first, see if the response corresponds to an extant batch request
+            // first, see if the error response corresponds to an extant batch request
             if (batchResponseFilter(m))
                 // an extant batch slurped up this response. Don't sned it to client.
                 return;
@@ -1203,7 +1203,6 @@ namespace RPC {
 
     bool BatchProcessor::acceptResponse(const Message &m)
     {
-        if (!m.isResponse() && !m.isError()) return false;
         if (auto it = batch.submittedRequests.find(m.id); it != batch.submittedRequests.end()) {
             batch.submittedRequests.erase(it);
             batch.answeredRequests.insert(m.id);
