@@ -344,13 +344,13 @@ namespace RPC {
     protected slots:
         /// Actual implentation that prepares the request. Is connected to sendRequest() above. Runs in this object's
         /// thread context. Eventually calls send() -> do_write() (from superclass).
-        virtual void _sendRequest(const RPC::Message::Id & reqid, const QString &method, const QVariantList & params = QVariantList());
+        void _sendRequest(const RPC::Message::Id & reqid, const QString &method, const QVariantList & params = QVariantList());
         // ditto for notifications
-        virtual void _sendNotification(const QString &method, const QVariant & params);
+        void _sendNotification(const QString &method, const QVariant & params);
         /// Actual implementation of sendError, runs in our thread context.
-        virtual void _sendError(bool disconnect, int errorCode, const QString &message, const RPC::Message::Id &reqid = Message::Id());
+        void _sendError(bool disconnect, int errorCode, const QString &message, const RPC::Message::Id &reqid = Message::Id());
         /// Actual implementation of sendResult, runs in our thread context.
-        virtual void _sendResult(const RPC::Message::Id & reqid, const QVariant & result = QVariant());
+        void _sendResult(const RPC::Message::Id & reqid, const QVariant & result = QVariant());
 
     protected:
         /// chains to base, connects sendRequest signal to _sendRequest slot
