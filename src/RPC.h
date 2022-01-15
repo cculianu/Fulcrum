@@ -109,7 +109,7 @@ namespace RPC {
 
         // -- DATA --
 
-        Id id; ///< guaranteed to be either string, qint64, or nullptr
+        Id id; ///< guaranteed to be either string, qint64, or null
         QString method; /**< methodName extracted from data['method'] if it was present. If this is empty then no
                              'method' key was present in JSON. May also contain the "matched" method on a response
                              object where we matched the id to a method we knew about in Connection::idMethodMap. */
@@ -255,8 +255,7 @@ namespace RPC {
             struct Error {
                 int code{};
                 QString message;
-                bool disconnect{};
-                Error(int c, const QString & m, bool d) : code(c), message(m), disconnect(d) {}
+                Error(int c, const QString & m) : code(c), message(m) {}
             };
             // only 0 or 1 of the below 2 optionals will ever be valid at a time.
             std::optional<Error> error;
@@ -418,8 +417,8 @@ namespace RPC {
         /// The number of `items` that we have processed thus far that are notifications or that don't warrant a
         /// response in the batch response.
         QVariantList::size_type skippedCt = 0;
-        /// The number of responses that contained "disconnect" errors (there the disconnect flag is set)
-        QVariantList::size_type disconnectErrCt = 0;
+        /// The number of responses in the batch response that were error responses.
+        QVariantList::size_type errCt = 0;
 
         QSet<RPC::Message::Id> submittedRequests, answeredRequests;
         /// Responses enqueued for sending back to the client, may also include error responses aside from results

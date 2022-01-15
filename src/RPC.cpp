@@ -470,16 +470,16 @@ namespace RPC {
                 throw InvalidRequest{};
             }
         } catch (const Json::ParseError & e) {
-            error.emplace(Code_ParseError, e.what(), errorPolicy & ErrorPolicyDisconnect);
+            error.emplace(Code_ParseError, e.what());
         } catch (const InvalidRequest & e) {
-            error.emplace(Code_InvalidRequest, "Invalid request", errorPolicy & ErrorPolicyDisconnect);
+            error.emplace(Code_InvalidRequest, "Invalid request");
         } catch (const Exception & e) {
-            error.emplace(Code_Custom, e.what(), errorPolicy & ErrorPolicyDisconnect);
+            error.emplace(Code_Custom, e.what());
         } catch (const std::exception & e) {
-            error.emplace(Code_InternalError, e.what(), errorPolicy & ErrorPolicyDisconnect);
+            error.emplace(Code_InternalError, e.what());
         }
         if (error) {
-            bool doDisconnect = error->disconnect;
+            bool doDisconnect = errorPolicy & ErrorPolicyDisconnect;
             if (errorPolicy & ErrorPolicySendErrorMessage) {
                 emit sendError(doDisconnect, error->code, error->message.left(120), msgId);
                 if (!doDisconnect)
@@ -497,6 +497,9 @@ namespace RPC {
     void ConnectionBase::enqueueNewBatch(QVariantList && varList)
     {
         // handle Batch request -- add it to the extant batches
+
+        // TODO: limit the number of extant batches here, or the complexity of any single batch
+
         if (varList.empty())
             // empty batch lists are a JSON-RPC error
             throw InvalidRequest();
@@ -620,8 +623,7 @@ namespace RPC {
             if (wasInvParms) code = Code_InvalidParams;
             else if (wasUnk) code = Code_MethodNotFound;
             else if (wasInv) code = Code_InvalidRequest;
-            bool doDisconnect = errorPolicy & ErrorPolicyDisconnect;
-            return {ProcessObjectResult::Error{code, e.what(), doDisconnect}, msgId};
+            return {ProcessObjectResult::Error{code, e.what()}, msgId};
         } catch (const std::exception &e) {
             // Other low-level error such as bad_alloc, etc. This is very unlikely. We simply disconnect and give up.
             Error() << prettyName(false, true) << ": Low-level error reading/parsing data coming in: " << (lastPeerError=e.what());
@@ -1126,7 +1128,6 @@ namespace RPC {
                    Json::estimateMemoryFootprint(batch.items));
             auto var = batch.getNextAndIncrement();
             const auto origSize = batch.responses.size();
-            bool gotDisconnectFlag = false;
             if (!var.canConvert<QVariantMap>()) {
                 batch.responses.push_back(Message::makeError(Code_InvalidRequest, "Invalid request", {}, conn.isV1()));
             } else {
@@ -1134,10 +1135,6 @@ namespace RPC {
                 if (res.error) {
                     batch.responses.push_back(Message::makeError(res.error->code, res.error->message.left(120),
                                                                  res.parsedMsgId, conn.isV1()));
-                    if (res.error->disconnect) {
-                        gotDisconnectFlag = true;
-                        ++batch.disconnectErrCt;
-                    }
                 } else if (res.message) {
                     const auto & m = *res.message;
                     if (m.isRequest()) {
@@ -1160,18 +1157,21 @@ namespace RPC {
                 }
             }
             if (batch.responses.size() > origSize && batch.responses.back().isError()) {
+                ++batch.errCt;
                 conn.lastPeerError = batch.responses.back().errorMessage();
-                if (!gotDisconnectFlag)
+                if ( ! (conn.errorPolicy & conn.ErrorPolicyDisconnect))
                     emit conn.peerError(conn.id, conn.lastPeerError);
             }
-            AGAIN();
+            if (LIKELY(conn.isGood()))
+                // keep sending requests to the conn, but only if we didn't go "Bad" (may happen in corner cases in the
+                // conn.processObject() call above, or if the connection went down asynchronously between calls)
+                AGAIN();
         } else if (batch.isComplete()) {
             DebugM(objectName(), " completed", ", memory footprint is now: ", Json::estimateMemoryFootprint(batch.items));
             QVariantList l;
-            QVariantList::size_type errCt = 0;
             for (const auto &msg : qAsConst(batch.responses)) {
-                if (msg.isError()) { ++errCt; ++conn.nErrorsSent; }
-                else ++conn.nRequestsSent;
+                if (msg.isError()) ++conn.nErrorsSent;
+                else ++conn.nResultsSent;
                 l.push_back(msg.data);
             }
             batch.responses.clear(); // clear memory right away
@@ -1183,18 +1183,22 @@ namespace RPC {
                 // below send() ends up calling do_write immediately (which is connected to send)
                 emit conn.send( conn.wrapForSend(std::move(json)) );
             }
-            if (batch.disconnectErrCt || (errCt && (conn.errorPolicy & conn.ErrorPolicyDisconnect))) {
-                Error() << "Error from " << conn.prettyName(true) << " in batch request, disconnecting";
+            if (batch.errCt && (conn.errorPolicy & conn.ErrorPolicyDisconnect)) {
+                Error() << "Error sent to " << conn.prettyName(true)
+                        << " in batch request, disconnecting due to ErrorPolicyDisconnect";
                 conn.do_disconnect();
                 conn.status = conn.Bad;
             }
             done = true;
             emit finished();
         } else {
-            // this may happen when we haven't yet received all the responses we expect
+            // This branch is taken when we have sent out all the requests to the observer(s) but we haven't yet
+            // received all the responses we expect. For now, we just time-out the batch request after 20 seconds.
+            constexpr int timeoutSec = 20; // TODO: have this come from config?!
             DebugM(objectName(), " lifecycle state: idle");
-            callOnTimerSoonNoRepeat(20000 /* TODO: have this come from config?!*/, "+InactivityTimeout",[this]{
-                Error() << objectName() << " timed out after not receiving a batch response for 20 seconds.";
+            callOnTimerSoonNoRepeat(timeoutSec * 1000, "+InactivityTimeout", [this, timeoutSec]{
+                Error() << objectName() << " timed out after not receiving a batch response for "
+                        << timeoutSec << " seconds.";
                 emit conn.sendError(true, Code_InternalError, "Batch request timed out");
                 conn.status = conn.Bad;
                 this->deleteLater();
