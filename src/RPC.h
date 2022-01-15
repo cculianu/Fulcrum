@@ -420,7 +420,7 @@ namespace RPC {
         /// The number of responses in the batch response that were error responses.
         QVariantList::size_type errCt = 0;
 
-        QSet<RPC::Message::Id> submittedRequests, answeredRequests;
+        QSet<RPC::Message::Id> unansweredRequests, answeredRequests;
         /// Responses enqueued for sending back to the client, may also include error responses aside from results
         QVector<Message> responses;
 
@@ -444,7 +444,8 @@ namespace RPC {
 
     /// An individual batch request is managed by this object. Instances of this class are always children of
     /// `ConnectionBase`. They  appear in the ConnectionBase parent's `extantBatchProcessors` table.
-    class BatchProcessor : public QObject, public IdMixin, public ProcessAgainMixin, public TimersByNameMixin
+    class BatchProcessor : public QObject, public IdMixin, public ProcessAgainMixin, public TimersByNameMixin,
+                           public StatsMixin
     {
         Q_OBJECT
 
@@ -463,6 +464,9 @@ namespace RPC {
 
         const Batch & getBatch() const { return batch; }
         bool isFinished() const { return done; }
+
+    protected:
+        Stats stats() const override;
 
     signals:
         void finished();

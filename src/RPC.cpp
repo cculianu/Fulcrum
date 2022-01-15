@@ -299,6 +299,12 @@ namespace RPC {
         m["nNotificationsSent"] = nNotificationsSent;
         m["nUnansweredRequests"] = nUnansweredLifetime + quint64(idMethodMap.size()); // we may care about this
         m["nErrorReplies"] = nErrorReplies;
+        m["extantBatchProcessors"] = [this]{
+            QVariantMap bps;
+            for (auto *bp : extantBatchProcessors)
+                bps[bp->objectName()] = bp->statsSafe();
+            return bps;
+        }();
         return m;
     }
 
@@ -1101,7 +1107,7 @@ namespace RPC {
         for (const auto *proc : extantBatchProcessors) {
             if (!proc || proc->isFinished()) continue;
             const auto & batch = proc->getBatch();
-            if (!batch.isComplete() && (batch.submittedRequests.contains(msgId) || batch.answeredRequests.contains(msgId)))
+            if (!batch.isComplete() && (batch.unansweredRequests.contains(msgId) || batch.answeredRequests.contains(msgId)))
                 return true;
         }
         return false;
@@ -1118,7 +1124,7 @@ namespace RPC {
             // This is only ever latched to true in the "Client" subclass and it signifies that the client is being
             // dropped and so we have this short-circuit conditional to save on cycles in that situation and not
             // bother processing further messages.
-            DebugM(objectName(), ": ignoring ", batch.items.size() - batch.nextItem, " batch message(s) from ", conn.id);
+            DebugM(objectName(), ": ignoring ", batch.items.size() - batch.nextItem, " batch message(s)");
             done = true;
             emit finished();
             return;
@@ -1139,7 +1145,7 @@ namespace RPC {
                     const auto & m = *res.message;
                     if (m.isRequest()) {
                         if (!conn.hasMessageIdInBatchProcs(m.id)) {
-                            batch.submittedRequests.insert(m.id);
+                            batch.unansweredRequests.insert(m.id);
                             emit conn.gotMessage(conn.id, m);
                         } else {
                             // error, dupe
@@ -1175,8 +1181,8 @@ namespace RPC {
                 l.push_back(msg.data);
             }
             batch.responses.clear(); // clear memory right away
-            if (!l.empty()) {
-                // only send if the response list is not empty
+            if (!l.empty() && conn.isGood()) {
+                // only send if the response list is not empty and if the connection is still good.
                 auto json = Json::toUtf8(l, true);
                 l.clear(); // clear memory right away
                 TraceM("Sending result json: ", Util::Ellipsify(json));
@@ -1208,14 +1214,39 @@ namespace RPC {
 
     bool BatchProcessor::acceptResponse(const Message &m)
     {
-        if (auto it = batch.submittedRequests.find(m.id); it != batch.submittedRequests.end()) {
-            batch.submittedRequests.erase(it);
+        if (auto it = batch.unansweredRequests.find(m.id); it != batch.unansweredRequests.end()) {
+            batch.unansweredRequests.erase(it);
             batch.answeredRequests.insert(m.id);
             batch.responses.push_back(m);
             if (batch.isComplete()) AGAIN();
             return true;
         }
         return false;
+    }
+
+    auto BatchProcessor::stats() const -> Stats
+    {
+        QVariantMap ret;
+        ret["done"] = done;
+        ret["elapsed (msec)"] = t0.msec<qreal>();
+        ret["batch"] = [this]{
+            QVariantMap bm;
+            bm["size"] = qlonglong(batch.items.size());
+            bm["nextItem"] = qlonglong(batch.nextItem);
+            bm["unansweredRequests"] = qlonglong(batch.unansweredRequests.size());
+            bm["answeredRequests"] = qlonglong(batch.answeredRequests.size());
+            bm["responses"] = qlonglong(batch.responses.size());
+            bm["state"] = [this]{
+                if (batch.hasNext()) return "processing";
+                else if (batch.isComplete()) return "completed";
+                return "idle";
+            }();
+            bm["errCt"] = batch.errCt;
+            bm["skippedCt"] = batch.skippedCt;
+            return bm;
+        }();
+        ret["timers"] = activeTimerMapForStats();
+        return ret;
     }
 
 } // end namespace RPC
