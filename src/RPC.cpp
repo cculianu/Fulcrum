@@ -465,7 +465,7 @@ namespace RPC {
                 }
             } else if (var.canConvert<QVariantList>()) {
                 // Note: This branch can only be taken if batchPermitted == true
-                enqueueNewBatch(var.toList()); // This may throw InvalidRequest if list is empty, or BatchLimitExceeded
+                enqueueNewBatch(var.toList()); // This may throw InvalidRequest (if list is empty), or BatchLimitExceeded
                 return;
             } else {
                 // Note: This branch can only be taken if batchPermitted == true
