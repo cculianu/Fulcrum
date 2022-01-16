@@ -465,7 +465,7 @@ namespace RPC {
                 }
             } else if (var.canConvert<QVariantList>()) {
                 // Note: This branch can only be taken if batchPermitted == true
-                enqueueNewBatch(var.toList()); // This may throw InvalidRequest if list is empty
+                enqueueNewBatch(var.toList()); // This may throw InvalidRequest if list is empty, or BatchLimitExceeded
                 return;
             } else {
                 // Note: This branch can only be taken if batchPermitted == true
@@ -475,6 +475,8 @@ namespace RPC {
                 // JSON type.
                 throw InvalidRequest{};
             }
+        } catch (const BatchLimitExceeded & e) {
+            error.emplace(Code_App_LimitExceeded, "Batch limit exceeded");
         } catch (const Json::ParseError & e) {
             error.emplace(Code_ParseError, e.what());
         } catch (const InvalidRequest & e) {
@@ -510,7 +512,12 @@ namespace RPC {
             // empty batch lists are a JSON-RPC error
             throw InvalidRequest();
 
-        auto *batch = new RPC::BatchProcessor(*this, std::move(varList));
+        auto batch_exception_guard = std::make_unique<RPC::BatchProcessor>(*this, std::move(varList));
+        auto *batch = batch_exception_guard.get();
+        if ( ! canAcceptBatch(batch) ) {
+            DebugM("rejecting batch ", batch->objectName());
+            throw BatchLimitExceeded();
+        }
         connect(batch, &QObject::destroyed, this, [this, bpId = batch->id](QObject *o) {
             if (auto *ptr = extantBatchProcessors.take(bpId); UNLIKELY(ptr && ptr != o)) {
                 // this should never happen
@@ -525,6 +532,7 @@ namespace RPC {
         });
         // start the batch from event loop after the current event loop stack returns
         Util::AsyncOnObject(batch, [batch]{ batch->process(); });
+        batch_exception_guard.release(); // owner is now `this`, as part of Qt QObject ownership model.
     }
 
     auto ConnectionBase::processObject_internal(QVariantMap && vmap) -> ProcessObjectResult
@@ -1141,7 +1149,7 @@ namespace RPC {
                 // ElectrumConnection subclasses may enter this "read paused" state when the bitcoind request queue
                 // backs up. We respect that flag and pause processing. We will be signalled to resume via the
                 // `readPausedStateChanged` signal when the backlog clears up in the near future.
-                DebugM(objectName(), " paused on batch item ", batch.nextItem + 1, ", returning early");
+                DebugM(objectName(), " paused on batch item ", batch.nextItem + 1, ", returning early ...");
                 isProcessingPaused = true;
                 return;
             } else if (isProcessingPaused) {

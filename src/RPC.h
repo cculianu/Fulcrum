@@ -307,7 +307,8 @@ namespace RPC {
         struct InvalidRequest : public BadPeer { using BadPeer::BadPeer; };
         /// If peer request object has invalid number of params
         struct InvalidParameters : public BadPeer { using BadPeer::BadPeer; };
-
+        /// If the batch limit has been exceeded
+        struct BatchLimitExceeded : public BadPeer { using BadPeer::BadPeer; };
 
         static constexpr int MAX_UNANSWERED_REQUESTS = 20000; ///< TODO: tune this down. For testing we leave this high for now.
 
@@ -406,6 +407,13 @@ namespace RPC {
 
         /// Returns true if `msgId` is in any of the extantBatchProcessors in either the submitted or answered request set.
         [[nodiscard]] bool hasMessageIdInBatchProcs(const Message::Id &msgId) const;
+
+        /// Subclasses may reimplement this to reject or accept a new JSON-RPC batch.
+        /// - If this method returns false, the passed-in batch will be immediately deleted, and a JSON-RPC message will
+        ///   be sent to the client, indicating that limits have been exceeded.
+        /// - If it returns true, then the batch will be added to the extantBatchProcessors table immediately and it
+        ///   will begin processing when the current event loop becomes free.  Reimplemented in the `Client` subclass.
+        [[nodiscard]] virtual bool canAcceptBatch(BatchProcessor *) { return true; }
 
     private:
         // Internally called by processObject()

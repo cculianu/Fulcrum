@@ -1247,6 +1247,17 @@ void App::parseArgs()
         Util::AsyncOnObject(this, []{ DebugM("config: compact-dbs = true"); });
     }
 
+    // conf: max_batch
+    if (conf.hasValue("max_batch")) {
+        bool ok{};
+        const unsigned val = unsigned(conf.intValue("max_batch", Options::defaultMaxBatch, &ok));
+        if (!ok || !options->isMaxBatchInRange(val))
+            throw BadArgs(QString("max_batch: please specify a value in the range [%1, %2]")
+                          .arg(options->maxBatchMin).arg(options->maxBatchMax));
+        options->maxBatch = val;
+        Util::AsyncOnObject(this, [val]{ DebugM("config: max_batch = ", val); });
+    }
+
     // parse --dump-*
     if (const auto outFile = parser.value("dump-sh"); !outFile.isEmpty()) {
         options->dumpScriptHashes = outFile; // we do no checking here, but Controller::startup will throw BadArgs if it cannot open this file for writing.

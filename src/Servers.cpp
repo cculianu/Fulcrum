@@ -393,14 +393,15 @@ QVariant ServerBase::stats() const
         map["nTxBytesSent"] = client->info.nTxBytesSent;
         map["nTxBroadcastErrors"] = client->info.nTxBroadcastErrors;
         // data from the per-ip structure
-        {
+        map["perIPData"] = [client]{
             QVariantMap m;
             m["nClients"] = qlonglong(client->perIPData->nClients.load());
             m["nSubscriptions"] = qlonglong(client->perIPData->nShSubs.load());
             m["nBitcoinDRequests"] = qlonglong(client->perIPData->bdReqCtr_cum.load());
             m["isWhiteListed"] = client->perIPData->isWhitelisted();
-            map["perIPData"] = m;
-        }
+            m["nExtantBatchRequests"] = qlonglong(client->perIPData->nExtantBatchRequests.load());
+            return m;
+        }();
         // the below don't really make much sense for this class (they are always 0 or empty)
         map.remove("nDisconnects");
         map.remove("nSocketErrors");
@@ -555,7 +556,7 @@ Client *
 ServerBase::newClient(QTcpSocket *sock)
 {
     const auto clientId = newId();
-    auto ret = clientsById[clientId] = new Client(&rpcMethods(), clientId, sock, options->maxBuffer.load());
+    auto ret = clientsById[clientId] = new Client(&rpcMethods(), clientId, sock, options->maxBuffer.load(), options->maxBatch);
     const auto addr = ret->peerAddress();
 
     ret->perIPData = Client::PerIPDataHolder_Temp::take(sock); // take ownership of the PerIPData ref, implicitly delete the temp holder attached to the socket
@@ -2632,8 +2633,9 @@ void AdminServer::StaticData::init() { InitStaticDataCommon(dispatchTable, metho
 
 /*static*/ std::atomic_size_t Client::numClients{0}, Client::numClientsMax{0}, Client::numClientsCtr{0};
 
-Client::Client(const RPC::MethodMap * mm, IdMixin::Id id_in, QTcpSocket *sock, int maxBuffer)
-    : RPC::ElectrumConnection(mm, id_in, sock, /* ensure sane --> */ qMax(maxBuffer, Options::maxBufferMin))
+Client::Client(const RPC::MethodMap * mm, IdMixin::Id id_in, QTcpSocket *sock, int maxBuffer, unsigned maxBatch_)
+    : RPC::ElectrumConnection(mm, id_in, sock, /* ensure sane --> */ qMax(maxBuffer, Options::maxBufferMin)),
+      maxBatch{maxBatch_}
 {
     ++numClientsCtr;
     const auto N = ++numClients;
@@ -2653,7 +2655,7 @@ Client::Client(const RPC::MethodMap * mm, IdMixin::Id id_in, QTcpSocket *sock, i
     status = Connected ; // we are always connected at construction time.
     errorPolicy = ErrorPolicySendErrorMessage;
     setObjectName(QStringLiteral("Client.%1").arg(id_in));
-    setBatchPermitted(true); // TODO: make this come from config!
+    setBatchPermitted(maxBatch > 0);
     on_connected();
     Log() << "New " << prettyName(false, false) << ", " << N << Util::Pluralize(QStringLiteral(" client"), N) << " total";
 }
@@ -2693,6 +2695,34 @@ void Client::do_ping()
         do_disconnect();
         return;
     }
+}
+
+bool Client::canAcceptBatch(RPC::BatchProcessor *batch)
+{
+    if (UNLIKELY( ! perIPData )) {
+        // not properly initialized? Should never happen.
+        Error() << "INTERNAL ERROR:" << prettyName() << " is missing per-ip data in " << __func__ << ". FIXME!";
+        return false;
+    }
+    const uint64_t size = uint64_t(batch->getBatch().items.size());
+    const QString name = Debug::isEnabled() ? batch->objectName() : QString{};
+    connect(batch, &QObject::destroyed, [size, weakp = std::weak_ptr(perIPData), name](QObject *){
+        // this lambda runs in `batch`'s object context immediately
+        DebugM(name, ": destroyed signal received in Client lambda");
+        if (auto strongp = weakp.lock()) {
+            const auto newVal = strongp->nExtantBatchRequests -= size;
+            DebugM(name, ": decremented nExtantBatchRequests by ", size, ", value is now: ", newVal);
+        } else {
+            DebugM(name, ": per-ip data already gone, doing nothing.");
+        }
+    });
+    const auto newVal = perIPData->nExtantBatchRequests += size;
+    DebugM(name, ": incremented nExtantBatchRequests by ", size, ", value is now: ", perIPData->nExtantBatchRequests.load());
+    if (!perIPData->isWhitelisted() && newVal > maxBatch) {
+        DebugM("batch limit exceeded (", newVal, " > ", maxBatch, ") for ", name);
+        return false;
+    }
+    return true;
 }
 
 

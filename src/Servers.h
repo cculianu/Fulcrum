@@ -566,7 +566,7 @@ protected:
     friend class ::ServerBase;
     friend class ::Server;
     /// NB: sock should be in an already connected state.
-    explicit Client(const RPC::MethodMap * methods, IdMixin::Id id, QTcpSocket *sock, int maxBuffer);
+    explicit Client(const RPC::MethodMap * methods, IdMixin::Id id, QTcpSocket *sock, int maxBuffer, unsigned maxBatch);
 public:
     ~Client() override;
 
@@ -603,11 +603,18 @@ public:
         std::atomic_int64_t bdReqCtr{0}; ///< the number bitcoind requests active right now for all clients coming from this IP address.
         std::atomic_uint64_t bdReqCtr_cum{0}; ///< the number bitcoind requests, cumulatively, for all clients coming from this IP address.
         std::atomic_int64_t lastConnectionLimitReachedWarning{0}; ///< timstamp (in msec) of the last "connection limit exceeded" warning printed to the log for this IP address.
+        /// The number of batch requests that are currently active.
+        /// As RPC::BatchProcessors are created they increment this, and as they are deleted they decrement this.
+        std::atomic_uint64_t nExtantBatchRequests{0};
     };
 
     std::shared_ptr<PerIPData> perIPData;
 
     bool isSubscribedToHeaders = false;
+private:
+    const unsigned maxBatch : 24; // Nit: we use a 24-bit bitfield here to save space in this class.
+    static_assert (Options::maxBatchMax < 1U << 24); // ensure above bitfield can store max value
+public:
     std::atomic_int nShSubs{0};  ///< the number of unique scripthash subscriptions for this client.
 
     //bitcoind_throttle counter, per client
@@ -647,4 +654,7 @@ protected:
         /// found.
         static std::shared_ptr<PerIPData> take(QTcpSocket *s);
     };
+
+    /// Does some per-IP book-keeping. If everything checks out, returns true. Otherwise returns false.
+    [[nodiscard]] bool canAcceptBatch(RPC::BatchProcessor *) override;
 };
