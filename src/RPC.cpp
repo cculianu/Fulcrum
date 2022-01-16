@@ -1138,6 +1138,9 @@ namespace RPC {
         }
         if (batch.hasNext()) {
             if (conn.isReadPaused()) {
+                // ElectrumConnection subclasses may enter this "read paused" state when the bitcoind request queue
+                // backs up. We respect that flag and pause processing. We will be signalled to resume via the
+                // `readPausedStateChanged` signal when the backlog clears up in the near future.
                 DebugM(objectName(), " paused on batch item ", batch.nextItem + 1, ", returning early");
                 isProcessingPaused = true;
                 return;
