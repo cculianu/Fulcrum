@@ -523,7 +523,7 @@ namespace RPC {
             if (auto *batch = extantBatchProcessors.take(bpId))
                 batch->deleteLater();
         });
-        // start the batch from event loop  after the current event loop stack returns
+        // start the batch from event loop after the current event loop stack returns
         Util::AsyncOnObject(batch, [batch]{ batch->process(); });
     }
 
