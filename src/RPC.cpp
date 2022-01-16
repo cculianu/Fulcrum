@@ -1100,6 +1100,17 @@ namespace RPC {
         }
     }
 
+    QVariant Batch::getNextAndIncrement()
+    {
+        QVariant ret;
+        if (hasNext()) {
+            auto & v = items[nextItem++];
+            ret = v;
+            v.clear(); // consume array member right away to free up mmemory
+        }
+        return ret;
+    }
+
     BatchProcessor::BatchProcessor(ConnectionBase & parent, Batch && batch_)
         : QObject(&parent), IdMixin(newId()), conn(parent), batch(std::move(batch_))
     {
@@ -1159,13 +1170,14 @@ namespace RPC {
             DebugM(objectName(), " processing batch item ", batch.nextItem + 1, ", memory footprint is now: ",
                    Json::estimateMemoryFootprint(batch.items));
             auto var = batch.getNextAndIncrement();
-            const auto origSize = batch.responses.size();
+            std::optional<QString> error;
             if (!var.canConvert<QVariantMap>()) {
-                batch.responses.push_back(Message::makeError(Code_InvalidRequest, "Invalid request", {}, conn.isV1()));
+                batch.responses.push_back(Message::makeError(Code_InvalidRequest, *(error="Invalid request"), {},
+                                                             conn.isV1()));
             } else {
                 auto res = conn.processObject(var.toMap());
                 if (res.error) {
-                    batch.responses.push_back(Message::makeError(res.error->code, res.error->message.left(120),
+                    batch.responses.push_back(Message::makeError(res.error->code, (error=res.error->message)->left(120),
                                                                  res.parsedMsgId, conn.isV1()));
                 } else if (res.message) {
                     const auto & m = *res.message;
@@ -1175,28 +1187,30 @@ namespace RPC {
                             emit conn.gotMessage(conn.id, m);
                         } else {
                             // error, dupe
-                            batch.responses.push_back(Message::makeError(Code_Custom, "Duplicate id", m.id, conn.isV1()));
+                            batch.responses.push_back(Message::makeError(Code_Custom, *(error="Duplicate id"), m.id,
+                                                                         conn.isV1()));
                         }
                     } else if (m.isNotif()) {
                         ++batch.skippedCt;
                         emit conn.gotMessage(conn.id, m);
                     } else {
-                        batch.responses.push_back(Message::makeError(Code_InvalidRequest, "Invalid request", m.id, conn.isV1()));
+                        batch.responses.push_back(Message::makeError(Code_InvalidRequest, *(error="Invalid request"),
+                                                                     m.id, conn.isV1()));
                     }
                 } else {
                     // do nothing, indicate we are not expecting a response
                     ++batch.skippedCt;
                 }
             }
-            if (batch.responses.size() > origSize && batch.responses.back().isError()) {
+            if (error) {
                 ++batch.errCt;
-                conn.lastPeerError = batch.responses.back().errorMessage();
+                conn.lastPeerError = *error;
                 if ( ! (conn.errorPolicy & conn.ErrorPolicyDisconnect))
                     emit conn.peerError(conn.id, conn.lastPeerError);
             }
             if (LIKELY(conn.isGood()))
-                // keep sending requests to the conn, but only if we didn't go "Bad" (may happen in corner cases in the
-                // conn.processObject() call above, or if the connection went down asynchronously between calls)
+                // keep sending requests to the conn, but only if we didn't go "Bad" (may happen in corner cases above,
+                // or if the connection went down asynchronously between calls)
                 AGAIN();
         } else if (batch.isComplete()) {
             DebugM(objectName(), " completed", ", memory footprint is now: ", Json::estimateMemoryFootprint(batch.items));

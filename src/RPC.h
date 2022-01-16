@@ -441,17 +441,7 @@ namespace RPC {
         QVector<Message> responses;
 
         bool hasNext() const { return nextItem < items.size(); }
-
-        QVariant getNextAndIncrement() {
-            QVariant ret;
-            if (hasNext()) {
-                auto & v = items[nextItem++];
-                ret = v;
-                v.clear(); // consume array member right away to free up mmemory
-            }
-            return ret;
-        }
-
+        QVariant getNextAndIncrement();
         bool isComplete() const { return !hasNext() && skippedCt + responses.size() >= items.size(); }
 
         Batch() = default;

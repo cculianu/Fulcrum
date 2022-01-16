@@ -706,8 +706,8 @@ void ServerBase::onPeerError(IdMixin::Id clientId, const QString &what)
         Debug() << "onPeerError, client " << clientId << " error: " << what.left(num);
     }
     if (Client *c = getClient(clientId); c) {
-        if (++c->info.errCt - c->info.nRequestsRcv >= kMaxErrorCount) {
-            Warning() << "Excessive errors (" << kMaxErrorCount << ") for: " << c->prettyName() << ", disconnecting";
+        if (const auto diff = ++c->info.errCt - c->info.nRequestsRcv; diff >= kMaxErrorCount) {
+            Warning() << "Excessive errors (" << diff << ") for: " << c->prettyName() << ", disconnecting";
             killClient(c);
             return;
         }
