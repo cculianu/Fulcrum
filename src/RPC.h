@@ -378,7 +378,7 @@ namespace RPC {
             /// Send an error RPC message on protocol errors.
             /// If this is set and ErrorPolicyDisconnect is set, the disconnect will be graceful.
             /// Note that within a batch request this flag is ignored and errors are always sent
-            /// inside the batch response array (as psr JSON-RPC spec).
+            /// inside the batch response array (as per JSON-RPC spec).
             ErrorPolicySendErrorMessage = 1,
             /// Disconnect on RPC protocol errors. If this is set along with ErrorPolicySendErrorMessage,
             /// the disconnect will be graceful.

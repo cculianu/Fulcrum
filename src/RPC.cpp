@@ -373,7 +373,7 @@ namespace RPC {
 
             // first, see if the error response corresponds to an extant batch request
             if (batchResponseFilter(m))
-                // an extant batch slurped up this response. Don't sned it to client.
+                // an extant batch slurped up this response. Don't send it to client.
                 return;
 
             // otherwise produce some Json right now and send it out to the client
@@ -402,7 +402,7 @@ namespace RPC {
 
             // first, see if the response corresponds to an extant batch request
             if (batchResponseFilter(m))
-                // an extant batch slurped up this response. Don't sned it to client.
+                // an extant batch slurped up this response. Don't send it to client.
                 return;
 
             // otherwise produce some Json right now and send it out to the client
