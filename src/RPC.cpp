@@ -1144,7 +1144,7 @@ namespace RPC {
     void BatchProcessor::process()
     {
         if (done) {
-            DebugM(objectName(), " ", __func__, ", done = true, aborting early...");
+            DebugM(objectName(), " ", __func__, ", done = true, aborting early ...");
             return;
         }
         if (UNLIKELY(conn.ignoreNewIncomingMessages)) {
