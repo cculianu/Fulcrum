@@ -33,7 +33,7 @@
 
 #include <memory>
 #include <optional>
-#include <utility> // for std::pair
+#include <utility> // for std::pair, std::move
 
 namespace WebSocket { class Wrapper; } ///< fwd decl
 
@@ -402,9 +402,6 @@ namespace RPC {
         /// disconnected and to just throw away any future messages from this client.
         bool ignoreNewIncomingMessages = false;
 
-        /// Table used to store the extant batch processors running.
-        QHash<IdMixin::Id, BatchProcessor *> extantBatchProcessors;
-
         /// Returns true if `msgId` is in any of the extantBatchProcessors in either the submitted or answered request set.
         [[nodiscard]] bool hasMessageIdInBatchProcs(const Message::Id &msgId) const;
 
@@ -416,6 +413,9 @@ namespace RPC {
         [[nodiscard]] virtual bool canAcceptBatch(BatchProcessor *) { return true; }
 
     private:
+        /// Table used to store the extant batch processors running.
+        QHash<IdMixin::Id, BatchProcessor *> extantBatchProcessors;
+
         // Internally called by processObject()
         [[nodiscard]] ProcessObjectResult processObject_internal(QVariantMap &&);
         // Internally called by _sendResult and _sendError
