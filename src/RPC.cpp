@@ -519,6 +519,7 @@ namespace RPC {
             throw BatchLimitExceeded();
         }
         connect(batch, &QObject::destroyed, this, [this, bpId = batch->id](QObject *o) {
+            // NB: Qt doesn't deliver this signal to us if `this` is no longer is a ConnectionBase * (which is good)
             if (auto *ptr = extantBatchProcessors.take(bpId); UNLIKELY(ptr && ptr != o)) {
                 // this should never happen
                 Error() << "Deleted extant batch processor with id " << bpId
