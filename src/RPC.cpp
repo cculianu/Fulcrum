@@ -739,6 +739,7 @@ namespace RPC {
         if (!readPaused && hadSkips)
             // we had some skipped on_readyReads() -- resume
             QTimer::singleShot(0, this, [this]{on_readyRead();} );
+        emit readPausedStateChanged(readPaused);
     }
 
     void ElectrumConnection::memoryWasteDoSProtection()
@@ -1096,6 +1097,13 @@ namespace RPC {
     {
         setObjectName(parent.objectName() + " BatchProcessor." + QString::number(id)
                       + " (" + QString::number(batch.items.size()) + ")");
+        connect(&conn, &ConnectionBase::readPausedStateChanged, this, [this](bool readPaused){
+            if (!readPaused && isProcessingPaused) {
+                // kick-start a paused state back to unpaused
+                DebugM(objectName(), " was paused, unpausing due to readPausedStateChanged signal from parent");
+                AGAIN();
+            }
+        });
     }
 
     BatchProcessor::~BatchProcessor() {
@@ -1115,7 +1123,6 @@ namespace RPC {
 
     void BatchProcessor::process()
     {
-        // !!! TODO : add throttling support (perhaps read from conn.isPaused) !!!
         if (done) {
             DebugM(objectName(), " ", __func__, ", done = true, aborting early...");
             return;
@@ -1130,6 +1137,14 @@ namespace RPC {
             return;
         }
         if (batch.hasNext()) {
+            if (conn.isReadPaused()) {
+                DebugM(objectName(), " paused on batch item ", batch.nextItem + 1, ", returning early");
+                isProcessingPaused = true;
+                return;
+            } else if (isProcessingPaused) {
+                DebugM(objectName(), " unpaused");
+                isProcessingPaused = false;
+            }
             DebugM(objectName(), " processing batch item ", batch.nextItem + 1, ", memory footprint is now: ",
                    Json::estimateMemoryFootprint(batch.items));
             auto var = batch.getNextAndIncrement();
@@ -1237,7 +1252,8 @@ namespace RPC {
             bm["answeredRequests"] = qlonglong(batch.answeredRequests.size());
             bm["responses"] = qlonglong(batch.responses.size());
             bm["state"] = [this]{
-                if (batch.hasNext()) return "processing";
+                if (isProcessingPaused) return "paused";
+                else if (batch.hasNext()) return "processing";
                 else if (batch.isComplete()) return "completed";
                 return "idle";
             }();

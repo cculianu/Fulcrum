@@ -311,6 +311,9 @@ namespace RPC {
 
         static constexpr int MAX_UNANSWERED_REQUESTS = 20000; ///< TODO: tune this down. For testing we leave this high for now.
 
+        /// Subclasses, such as ElectrumConnection, reimplement this
+        virtual bool isReadPaused() const { return false; }
+
         bool isV1() const { return v1; }
         void setV1(bool b) { v1 = b; }
 
@@ -339,6 +342,11 @@ namespace RPC {
         /// This is emitted when the peer sent malformed data to us and we didn't disconnect
         /// because errorPolicy is not ErrorPolicyDisconnect
         void peerError(IdMixin::Id thisId, const QString &what);
+
+        /// This is only ever really emitted by ElectrumConnection and subclasses. `newState` indicates the new
+        /// paused state which has already been put into effect before this signal is emitted. This is only emitted on
+        /// state changes so the old state was always !newState.
+        void readPausedStateChanged(bool newState);
 
     protected slots:
         /// Actual implentation that prepares the request. Is connected to sendRequest() above. Runs in this object's
@@ -453,6 +461,7 @@ namespace RPC {
         Batch batch;
         bool done = false;
         const Tic t0;
+        bool isProcessingPaused = false;
 
     public:
         explicit BatchProcessor(ConnectionBase & parent, Batch && batch);
@@ -483,7 +492,7 @@ namespace RPC {
 
         // the below two can/should only be called from the same thread as this object's thread
         void setReadPaused(bool);
-        bool isReadPaused() const { return readPaused; }
+        bool isReadPaused() const override { return readPaused; }
 
         /// Reimplemented from AbstractConnection.
         /// Returns true if the socket is wrapped by a WebSocket::Wrapper, false otherwise.
