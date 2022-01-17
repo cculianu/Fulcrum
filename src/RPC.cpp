@@ -809,11 +809,11 @@ namespace RPC {
     {
         if (checkSetGetWebSocket()) {
             // in websocket mode we don't wrap anything -- it's already framed.
-            return d;
+            return std::move(d);
         }
         // regular classic Electrum Cash socket -- newline delimited.
         d.append(QByteArrayLiteral("\r\n"));
-        return d;
+        return std::move(d);
     }
 
     /* --- HttpConnection --- */
