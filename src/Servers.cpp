@@ -109,7 +109,7 @@ void AbstractTcpServer::on_started()
     conns.push_back(connect(this, &QTcpServer::acceptError, this, [this](QAbstractSocket::SocketError e){ on_acceptError(e);}));
     if (!listen(addr, port)) {
         result = errorString();
-        result = result.isEmpty() ? "Error binding/listening for connections" : QString("Could not bind to %1: %2").arg(hostPort()).arg(result);
+        result = result.isEmpty() ? "Error binding/listening for connections" : QString("Could not bind to %1: %2").arg(hostPort(), result);
         Debug() << __func__ << " listen failed";
     } else {
         Debug() << "started ok";
@@ -514,7 +514,7 @@ bool ServerBase::startWebSocketHandshake(QTcpSocket *socket)
     // do not access `socket` below this line, use `ws` instead.
     auto tmpConnections = std::make_shared<QList<QMetaObject::Connection>>();
     *tmpConnections += connect(ws, &WebSocket::Wrapper::handshakeSuccess, this, [this, ws, tmpConnections] {
-        for (const auto & conn : *tmpConnections)
+        for (const auto & conn : qAsConst(*tmpConnections))
             disconnect(conn);
         addPendingConnection(ws);
         emit newConnection(); // <-- we must emit here because we went asynch and are doing this 'some time later', and the calling code emitted a spurous newConnection() on our behalf previously.. and this is the *real* newConnection()
@@ -899,7 +899,7 @@ QVariant Server::stats() const
 
 void Server::rpc_server_add_peer(Client *c, const RPC::Message &m)
 {
-    const auto map = m.paramsList().front().toMap();
+    const auto map = m.paramsList().constFirst().toMap();
     if (map.isEmpty())
         throw RPCError(QString("%1 expected a non-empty dictionary argument").arg(m.method));
     bool retval = true;
@@ -1175,7 +1175,7 @@ auto Server::getHeadersBranchAndRoot(unsigned height, unsigned cp_height) -> Hea
 
 void Server::rpc_blockchain_block_header(Client *c, const RPC::Message &m)
 {
-    QVariantList l = m.paramsList();
+    const QVariantList l = m.paramsList();
     assert(!l.isEmpty());
     bool ok;
     const unsigned height = l.front().toUInt(&ok);
@@ -1216,7 +1216,7 @@ void Server::rpc_blockchain_block_header(Client *c, const RPC::Message &m)
 
 void Server::rpc_blockchain_block_headers(Client *c, const RPC::Message &m)
 {
-    QVariantList l = m.paramsList();
+    const QVariantList l = m.paramsList();
     assert(l.size() >= 2);
     bool ok;
     const unsigned height = l.front().toUInt(&ok);
@@ -1273,7 +1273,7 @@ void Server::rpc_blockchain_block_headers(Client *c, const RPC::Message &m)
 }
 void Server::rpc_blockchain_estimatefee(Client *c, const RPC::Message &m)
 {
-    QVariantList l = m.paramsList();
+    const QVariantList l = m.paramsList();
     assert(!l.isEmpty());
     bool ok;
     int n = l.front().toInt(&ok);
@@ -1318,7 +1318,7 @@ void Server::rpc_blockchain_headers_subscribe(Client *c, const RPC::Message &m) 
         // connect to signal. Will be emitted directly to object until it dies.
         connect(this, &Server::newHeader, c, [c, meth=m.method](unsigned height, const QByteArray &header){
             // the notification is a list of size 1, with a dict in it. :/
-            c->sendNotification(meth, QVariantList({mkResp(height, header)}));
+            emit c->sendNotification(meth, QVariantList({mkResp(height, header)}));
         });
         DebugM(c->prettyName(false, false), " is now subscribed to headers");
     } else {
@@ -1345,7 +1345,7 @@ HashX Server::parseFirstAddrParamToShCommon(const RPC::Message &m, QString *addr
         // This should never happen in practice, but it pays to be paranoid.
         throw RPCError("Server cannot parse addresses at this time", RPC::ErrorCodes::Code_InternalError);
     constexpr int kAddrLenLimit = 128; // no address is ever really over 64 chars, let alone 128
-    QVariantList l(m.paramsList());
+    const QVariantList l(m.paramsList());
     assert(!l.isEmpty());
     const QString addrStr = l.front().toString().left(kAddrLenLimit).trimmed();
     const BTC::Address address(addrStr);
@@ -1359,7 +1359,7 @@ HashX Server::parseFirstAddrParamToShCommon(const RPC::Message &m, QString *addr
 }
 HashX Server::parseFirstHashParamCommon(const RPC::Message &m, const char *const errMsg) const
 {
-    QVariantList l(m.paramsList());
+    const QVariantList l(m.paramsList());
     assert(!l.isEmpty());
     const HashX sh = validateHashHex( l.front().toString() );
     if (sh.length() != HashLen)
@@ -1751,7 +1751,7 @@ void Server::rpc_blockchain_transaction_broadcast(Client *c, const RPC::Message 
 }
 void Server::rpc_blockchain_transaction_get(Client *c, const RPC::Message &m)
 {
-    QVariantList l = m.paramsList();
+    const QVariantList l = m.paramsList();
     assert(l.size() <= 2);
     QByteArray txHash = validateHashHex( l.front().toString() );
     if (txHash.length() != HashLen)
@@ -1803,7 +1803,7 @@ namespace {
 
 void Server::rpc_blockchain_transaction_get_height(Client *c, const RPC::Message &m)
 {
-    QVariantList l = m.paramsList();
+    const QVariantList l = m.paramsList();
     assert(l.size() == 1);
     QByteArray txHash = validateHashHex( l.front().toString() );
     if (txHash.length() != HashLen)
@@ -1818,7 +1818,7 @@ void Server::rpc_blockchain_transaction_get_height(Client *c, const RPC::Message
 
 void Server::rpc_blockchain_transaction_get_merkle(Client *c, const RPC::Message &m)
 {
-    QVariantList l = m.paramsList();
+    const QVariantList l = m.paramsList();
     assert(l.size() >= 1 && l.size() <= 2);
     QByteArray txHash = validateHashHex( l.front().toString() );
     if (txHash.length() != HashLen)
@@ -1860,7 +1860,7 @@ void Server::rpc_blockchain_transaction_get_merkle(Client *c, const RPC::Message
 
 void Server::rpc_blockchain_transaction_id_from_pos(Client *c, const RPC::Message &m)
 {
-    QVariantList l = m.paramsList();
+    const QVariantList l = m.paramsList();
     assert(!l.isEmpty());
 
     bool ok = false;
@@ -1974,7 +1974,7 @@ void Server::rpc_blockchain_transaction_dsproof_unsubscribe(Client *c, const RPC
 // /DSPROOF
 void Server::rpc_blockchain_utxo_get_info(Client *c, const RPC::Message &m)
 {
-    QVariantList l = m.paramsList();
+    const QVariantList l = m.paramsList();
     assert(l.size() == 2);
 
     QByteArray txHash = validateHashHex( l.front().toString() ); // arg0: prevoutHash
@@ -2203,7 +2203,7 @@ void ServerSSL::incomingConnection(qintptr socketDescriptor)
         if (tmpConnections) {
             // tmpConnections will get auto-deleted after this lambda returns because the QObject connection holding
             // it alive will be disconnected.
-            for (const auto & conn : *tmpConnections)
+            for (const auto & conn : qAsConst(*tmpConnections))
                 disconnect(conn);
         }
         if (!usesWS) {
@@ -2489,7 +2489,7 @@ void AdminServer::rpc_listbanned(Client *c, const RPC::Message &m)
 void AdminServer::rpc_loglevel(Client *c, const RPC::Message &m)
 {
     bool ok;
-    const int level = m.paramsList().front().toInt(&ok);
+    const int level = m.paramsList().constFirst().toInt(&ok);
     if (!ok || level < 0 || level > 2)
         throw RPCError("Invalid log level, please specify an integer from 0 to 2");
     App *app = ::app();

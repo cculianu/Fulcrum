@@ -72,7 +72,7 @@ void ThreadObjectMixin::stop()
         _thread.wait();
     }
     int ct = 0;
-    for (const auto & c : conns) {
+    for (const auto & c : qAsConst(conns)) {
         QObject::disconnect(c);
         ++ct;
     }

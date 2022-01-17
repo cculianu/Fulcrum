@@ -288,7 +288,7 @@ bool ConfigFile::open(const QString &filePath)
             return f.error() == QFile::FileError::NoError;
         lines = fileData.split('\n');
     }
-    for (const auto & lineData : lines) {
+    for (const auto & lineData : qAsConst(lines)) {
         QString line = QString::fromUtf8(lineData).trimmed();
         if (!line.isEmpty() && line.at(0) == bracket)
             continue; // ignore "[section]" headers in case the user thinks we support these

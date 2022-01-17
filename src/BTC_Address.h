@@ -145,9 +145,11 @@ template <> struct std::hash<BTC::Address> {
     }
 };
 
-/// for Qt QSet/QHash support of type BTC::Address
-inline Compat::qhuint qHash(const BTC::Address &key, Compat::qhuint seed = 0) {
-    return qHash(std::hash<BTC::Address>{}(key), seed);
-}
+namespace BTC {
+    /// for Qt QSet/QHash support of type BTC::Address (must be in BTC namespace for ADL lookup to work)
+    inline Compat::qhuint qHash(const Address &key, Compat::qhuint seed = 0) {
+        return ::qHash(std::hash<Address>{}(key), seed);
+    }
+} // namespace BTC
 
 Q_DECLARE_METATYPE(BTC::Address);

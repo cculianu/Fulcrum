@@ -78,8 +78,7 @@ void Controller::startup()
                 throw InternalError(QString("This database was synched to a bitcoind for the coin \"%1\", yet that coin"
                                             " is unknown to this version of %2. Please use the version of %2 that was"
                                             " used to create this database, or specify a different datadir to create"
-                                            " a new database.")
-                                    .arg(coin).arg(APPNAME));
+                                            " a new database.").arg(coin, QString{APPNAME}));
             } else {
                 // this should never happen for not-newly-initialized DBs. Indicates programming error in codebase.
                 throw InternalError("Database \"Coin\" field is empty yet the database has data! This should never happen. FIXME!!");
@@ -1471,7 +1470,7 @@ void Controller::process_PrintProgress(unsigned height, size_t nTx, size_t nIns,
                 unit = QStringLiteral("hour");
             }
             static const auto format = [](double rate) { return QString::number(rate, 'f', rate < 10. ? (rate < 1.0 ? 3 : 2) : 1); };
-            return rate > 0.0 ? QStringLiteral("%1%2 %3/%4").arg(addComma ? ", " : "").arg(format(rate)).arg(thing).arg(unit) : QString();
+            return rate > 0.0 ? QStringLiteral("%1%2 %3/%4").arg(QString{addComma ? ", " : ""}, format(rate), thing, unit) : QString{};
         };
         const double now = Util::getTimeSecs();
         const double elapsed = std::max(now - sm->lastProgTs, 0.00001); // ensure no division by zero

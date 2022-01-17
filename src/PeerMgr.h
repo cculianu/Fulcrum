@@ -170,7 +170,7 @@ struct PeerInfo
     std::optional<double> failureTs;
 
     void clear() { *this = PeerInfo(); }
-    bool isTor() const { return hostName.toLower().endsWith(".onion"); }
+    bool isTor() const { return hostName.endsWith(".onion", Qt::CaseInsensitive); }
     /// minimal checking that hostname is not empty and that at least an ssl or a tcp port are defined.
     bool isMinimallyValid() const { return !hostName.isEmpty() && (ssl || tcp) && hashFunction == ServerMisc::HashFunction; }
     /// only sets the failureTs if missing, otherwise does nothing.
