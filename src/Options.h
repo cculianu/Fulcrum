@@ -262,8 +262,11 @@ public:
     // config: max_batch
     /// Per-IP limit on the size of batch requests. Note that all extant batch requests from a given IP together
     /// cannot exceed this limit at any one time.  This limit is not applied to clients in the per-ip exclusion list.
-    /// If this limit is set to 0, then batching is disabled for the server.
-    static constexpr unsigned defaultMaxBatch = 200, ///< TODO: tweak this number. Is it too high? Too low? Follow-up with BlueWallet team?
+    /// If this limit is set to 0, then batching is disabled for the server (even for whitelisted clients).
+    /// Note: we set the default to 345 here because BlueWallet sends batches of 200, 100, and 45 depending on the
+    /// request and it's not clear to me if it sends all 3 of them at once or if it sends them in series.
+    /// TODO: Follow up with BlueWallet team on this.  I'd like to set this limit lower (perhaps to 200).
+    static constexpr unsigned defaultMaxBatch = 345,
                               maxBatchMin = 0,
                               maxBatchMax = 100'000; ///< This 100k limit is ridiculous, but we will allow it.
     static constexpr bool isMaxBatchInRange(unsigned n) { return n >= maxBatchMin && n <= maxBatchMax; }
