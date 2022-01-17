@@ -417,10 +417,9 @@ namespace RPC {
         QString headerHost() const { return header.host; }
         void clearHeaderHost() { header.host.clear(); }
 
-        //static void Test();
     signals:
         /// emitted when the other side (usually bitcoind) didn't accept our auth cookie.
-        void authFailure(HttpConnection *me);
+        void authFailure(RPC::HttpConnection *me);
 
     protected:
         void on_readyRead() override;

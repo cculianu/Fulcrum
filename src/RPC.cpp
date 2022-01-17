@@ -971,7 +971,7 @@ namespace RPC {
 namespace RPC {
     /* static */ void HttpConnection::Test()
     {
-        std::shared_ptr<HttpConnection> h(new HttpConnection(MethodMap{}, 1), [](HttpConnection *h){
+        std::shared_ptr<HttpConnection> h(new HttpConnection(nullptr, 1), [](HttpConnection *h){
             Debug() << "Calling h->deleteLater...";
             h->deleteLater();
         });
@@ -984,22 +984,16 @@ namespace RPC {
         connect(h->socket, &QAbstractSocket::connected, h.get(), [h]{
             Debug() << h->prettyName() << " connected";
             h->connectedConns.push_back(
-                connect(h.get(), &RPC::ConnectionBase::gotMessage, h.get(),
-                        [h](qint64 id_in, const RPC::Message &m)
-                    {
-                        Debug() << "Got message from server: id: " << id_in << " json: " << m.toJsonString();
-                    })
+                connect(h.get(), &RPC::ConnectionBase::gotMessage, h.get(), [h](qint64 id_in, const RPC::Message &m) {
+                            Debug() << "Got message from server: id: " << id_in << " json: " << m.toJsonUtf8();
+                        })
             ); // connection will be auto-disconnected on socket disconnect in superclass  on_disconnected impl.
             h->connectedConns.push_back(
-                connect(h.get(), &RPC::ConnectionBase::gotErrorMessage, h.get(),
-                        [](qint64 id_in, const RPC::Message &m)
-                    {
-                        Debug() << "Got ERROR message from server: id: " << id_in << " json: " << m.toJsonString();
-                    })
+                connect(h.get(), &RPC::ConnectionBase::gotErrorMessage, h.get(), [](qint64 id_in, const RPC::Message &m) {
+                            Debug() << "Got ERROR message from server: id: " << id_in << " json: " << m.toJsonUtf8();
+                        })
             ); // connection will be auto-disconnected on socket disconnect in superclass  on_disconnected impl.
-            connect(h.get(), &AbstractConnection::lostConnection, h.get(),
-                    [](AbstractConnection *a)
-            {
+            connect(h.get(), &AbstractConnection::lostConnection, h.get(), [](AbstractConnection *a) {
                 if (auto h = dynamic_cast<HttpConnection *>(a)) {
                     Debug() << "lost connection, deleting socket. We should also die sometime later...";
                     if (h->socket) { h->socket->deleteLater(); h->socket = nullptr; }
@@ -1027,4 +1021,4 @@ namespace RPC {
         h->socket->connectToHost("192.168.0.15", static_cast<quint16>(8332));
     }
 }
-#endif
+#endif // if 0

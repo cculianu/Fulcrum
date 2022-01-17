@@ -40,6 +40,7 @@
 #include <QSslCertificate>
 #include <QSslKey>
 #include <QString>
+#include <QStringView>
 #include <QTextStream>
 #include <QTimer>
 
@@ -49,6 +50,7 @@
 #include <iostream>
 #include <limits>
 #include <list>
+#include <map>
 #include <mutex>
 #include <shared_mutex>
 #include <type_traits>
@@ -351,7 +353,7 @@ namespace {
             ret.clear();
         return ret;
     }
-}
+} // namespace
 
 ServerBase::ServerBase(SrvMgr *sm,
                        const RPC::MethodMap & methods, const DispatchTable & dispatchTable,
@@ -731,7 +733,7 @@ namespace {
             emit c->sendError(false, RPC::Code_InternalError, QString("internal error: %1").arg(what), id);
         };
     }
-}
+} // namespace
 
 ServerBase::RPCError::~RPCError() {}
 ServerBase::RPCErrorWithDisconnect::~RPCErrorWithDisconnect() {}
@@ -935,6 +937,52 @@ namespace {
         }
         return ret;
     }
+
+    QString performVariableSubstitutionsForBannerFile(QString && s, const QString::size_type maxBannerData,
+                                                      const QString & donationAddress, const Version & daemonVersion,
+                                                      const QString & daemonSubversion)
+    {
+        // we do it this complicated way below so as to prevent recursive expansion of variables
+        std::map<QStringView, QString> substs; // this is lazy-initted below
+        const QChar sigil{'$'};
+        using qsizeT = QString::size_type;
+        qsizeT smallestSubst = 1, largestSubst = 0;
+        static_assert (std::is_signed_v<qsizeT>);
+        for (qsizeT i = 0; i + smallestSubst < s.size() && i < maxBannerData; ++i) {
+            if (s[i] == sigil) {
+                if (substs.empty()) {
+                    // lazy-init once, only bothering to build the table if we actually find a '$' in the source text
+                    substs.emplace_hint(substs.end(), QStringLiteral("DAEMON_SUBVERSION"), daemonSubversion);
+                    substs.emplace_hint(substs.end(), QStringLiteral("DAEMON_VERSION"), daemonVersion.toString(true));
+                    substs.emplace_hint(substs.end(), QStringLiteral("DONATION_ADDRESS"), donationAddress);
+                    substs.emplace_hint(substs.end(), QStringLiteral("SERVER_SUBVERSION"), ServerMisc::AppSubVersion);
+                    substs.emplace_hint(substs.end(), QStringLiteral("SERVER_VERSION"), ServerMisc::AppVersion);
+                    smallestSubst = std::numeric_limits<qsizeT>::max(); // reset for min() below
+                    for (const auto & [k, v] : substs) {
+                        const qsizeT klen = k.length();
+                        smallestSubst = std::min(smallestSubst, klen);
+                        largestSubst = std::max(largestSubst, klen);
+                    }
+                    --i; // try again, now that we populated the substitution table
+                    continue;
+                }
+                // try and match a variable substitution in the table
+                for (qsizeT len = smallestSubst, sz = s.size(); len <= largestSubst && i + 1 + len <= sz; ++len) {
+                    // loop from the smallest to the largest sized variable name in our substitution map, and take
+                    // the substring of the master string s of that size and look it up in the map.
+                    const auto substr = QStringView{s}.mid(i + 1, len);
+                    if (const auto it = std::as_const(substs).find(substr); it != substs.end()) {
+                        // match! replace the sigl plus substring  of length `len` with the substitution string
+                        s.replace(i, len + 1, it->second); // <--- at this point QStringView `substr` is invalidated!
+                        i += it->second.length() - 1; // jump to end of substituted text (avoids recursive expansion), minus 1 for the deleted sigil
+                        break;
+                    }
+                }
+            }
+        }
+        // Note this ".left()" is really not in bytes but unicode codepoints, that's fine, the limit is a soft limit
+        return s.left(maxBannerData);
+    }
 } // namespace
 
 void Server::rpc_server_banner(Client *c, const RPC::Message &m)
@@ -953,7 +1001,7 @@ void Server::rpc_server_banner(Client *c, const RPC::Message &m)
                         [bannerFile,
                          donationAddress = transformDefaultDonationAddressToBTCOrBCH(*options, isBTC),
                          daemonVersion = bitcoinDInfo.version,
-                         subversion = bitcoinDInfo.subversion] {
+                         daemonSubversion = bitcoinDInfo.subversion] {
                 QVariant ret;
                 QFile bf(bannerFile);
                 if (QByteArray bannerFileData;
@@ -964,13 +1012,8 @@ void Server::rpc_server_banner(Client *c, const RPC::Message &m)
                     ret = bannerFallback;
                 } else {
                     // read banner file ok, perform variable substitutions
-                    ret = QString::fromUtf8(bannerFileData)
-                            .replace("$SERVER_VERSION", ServerMisc::AppVersion)
-                            .replace("$SERVER_SUBVERSION", ServerMisc::AppSubVersion)
-                            .replace("$DONATION_ADDRESS", donationAddress)
-                            .replace("$DAEMON_VERSION", daemonVersion.toString(true))
-                            .replace("$DAEMON_SUBVERSION", subversion)
-                            .left(MAX_BANNER_DATA); ///< Note this ".left()" is really not in bytes but unicode codepoints, that's fine, the limit is a soft limit
+                    ret = performVariableSubstitutionsForBannerFile(QString::fromUtf8(bannerFileData), MAX_BANNER_DATA,
+                                                                    donationAddress, daemonVersion, daemonSubversion);
                 }
                 // send result to client (either the fallback or the real deal)
                 return ret;
@@ -2472,7 +2515,7 @@ void AdminServer::rpc_maxbuffer(Client *c, const RPC::Message &m)
 
     if (const auto l = m.paramsList(); !l.empty()) {
         bool ok;
-        const int arg = m.paramsList().front().toInt(&ok);
+        const int arg = l.front().toInt(&ok);
         if (!ok || !Options::isMaxBufferSettingInBounds(arg))
             throw RPCError(QString("Invalid maxbuffer, please specify an integer in the range [%1, %2]").arg(Options::maxBufferMin).arg(Options::maxBufferMax));
         emit srvmgr->requestMaxBufferChange(Options::clampMaxBufferSetting(arg)); // has a slot connected via DirectConnection so takes effect immediately
@@ -2650,3 +2693,89 @@ void Client::do_ping()
         return;
     }
 }
+
+
+#ifdef ENABLE_TESTS
+namespace {
+    void bannerfile()
+    {
+        const QByteArray banner(R"EOF(Welcome to a Fulcrum server.
+
+This is a test banner.
+
+Variable substitutions:
+
+Server version: $SERVER_VERSION
+Server sub-version: $SERVER_SUBVERSION
+Donation address: $DONATION_ADDRESS
+Daemon version: $DAEMON_VERSION
+Daemon sub-version: $DAEMON_SUBVERSION
+
+aaand.. again:
+
+Server version: $SERVER_VERSION Server sub-version: $SERVER_SUBVERSION Donation address: $DONATION_ADDRESS Daemon version: $DAEMON_VERSION Daemon sub-version: $DAEMON_SUBVERSION
+
+Emoji Render Test:
+
+👻🐒🐕🐈🐎🐄🐖🐐🐪🐘🐀🐇🐿🦇🐓🐧🦆🦉🐢🐍🐟🐙🐌🦋🐝🐞🕷🌻🌲🌴🌵🍁🍀🍇🍉🍋🍌🍎🍒🍓🥝🥥🥕🌽🌶🍄🧀🥚🦀🍪🎂🍭🏠🚗🚲⛵✈🚁🚀⌚☀⭐🌈☂🎈🎀⚽♠♥♦♣👓👑🎩🔔🎵🎤🎧🎸🎺🥁🔍🕯💡📖✉📦✏💼📋✂🔑🔒🔨🔧⚖☯🚩👣🍞
+
+$nosubst $SERVER_VERSIO$SERVER_SUBVERSION$DAEMON_SUBVERSION
+$DAEMON_SUBVERSION$DAEMON_VERSION$DONATION_ADDRESS$SERVER_VERSION$SERVER_SUBVERSION)EOF");
+
+        const auto chk1 = performVariableSubstitutionsForBannerFile(banner, 16384, "<donation!>", Version{3,1,4},
+                                                                    "/a daemon subversion nested $SERVER_VERSION/");
+        const auto serverVersion = ServerMisc::AppVersion, serverSubVersion = ServerMisc::AppSubVersion;
+        const auto expected1 = QString::fromUtf8(R"EOF(Welcome to a Fulcrum server.
+
+This is a test banner.
+
+Variable substitutions:
+
+Server version: )EOF") + serverVersion + QString::fromUtf8(R"EOF(
+Server sub-version: )EOF") + serverSubVersion + QString::fromUtf8(R"EOF(
+Donation address: <donation!>
+Daemon version: 3.1.4
+Daemon sub-version: /a daemon subversion nested $SERVER_VERSION/
+
+aaand.. again:
+
+Server version: )EOF") + serverVersion + QString::fromUtf8(R"EOF( Server sub-version: )EOF") + serverSubVersion + QString::fromUtf8(R"EOF( Donation address: <donation!> Daemon version: 3.1.4 Daemon sub-version: /a daemon subversion nested $SERVER_VERSION/
+
+Emoji Render Test:
+
+👻🐒🐕🐈🐎🐄🐖🐐🐪🐘🐀🐇🐿🦇🐓🐧🦆🦉🐢🐍🐟🐙🐌🦋🐝🐞🕷🌻🌲🌴🌵🍁🍀🍇🍉🍋🍌🍎🍒🍓🥝🥥🥕🌽🌶🍄🧀🥚🦀🍪🎂🍭🏠🚗🚲⛵✈🚁🚀⌚☀⭐🌈☂🎈🎀⚽♠♥♦♣👓👑🎩🔔🎵🎤🎧🎸🎺🥁🔍🕯💡📖✉📦✏💼📋✂🔑🔒🔨🔧⚖☯🚩👣🍞
+
+$nosubst $SERVER_VERSIO)EOF") + serverSubVersion + QString::fromUtf8(R"EOF(/a daemon subversion nested $SERVER_VERSION/
+/a daemon subversion nested $SERVER_VERSION/3.1.4<donation!>)EOF") + serverVersion + serverSubVersion;
+
+        if (chk1 == expected1)
+            Log() << "bannerfile variable substitution test1 ... passed";
+        else
+            throw Exception("bannerfile variable substitution test1 FAILED");
+
+        const auto chk2 = performVariableSubstitutionsForBannerFile("hello$DAEMON_SUBVERSION", 12, "", Version{}, "/a daemon subversion that is very long/");
+        const auto expected2 = "hello/a daem";
+        if (chk2 == expected2)
+            Log() << "bannerfile variable substitution test2 ... passed";
+        else
+            throw Exception("bannerfile variable substitution test2 FAILED");
+
+        const auto chk3 = performVariableSubstitutionsForBannerFile("hello$DAEMON_SUBVERSION", 6, "", Version{}, "/a daemon subversion that is very long/");
+        const auto expected3 = "hello/";
+        if (chk3 == expected3)
+            Log() << "bannerfile variable substitution test3 ... passed";
+        else
+            throw Exception("bannerfile variable substitution test2 FAILED");
+
+        const auto chk4 = performVariableSubstitutionsForBannerFile("hello$DAEMON_SUBVERSION", 5, "", Version{}, "/a daemon subversion that is very long/");
+        const auto expected4 = "hello";
+        if (chk4 == expected4)
+            Log() << "bannerfile variable substitution test4 ... passed";
+        else
+            throw Exception("bannerfile variable substitution test3 FAILED");
+    } // end function bannerfile
+
+    static const auto test_bannerfile = App::registerTest("bannerfile", &bannerfile);
+
+} // namespace
+#endif // ENABLE_TESTS
