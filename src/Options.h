@@ -95,6 +95,7 @@ public:
 
     /// Used for the server.donation_address RPC response. Specified via conf file only via the "donation=" variable.
     QString donationAddress = "bitcoincash:qplw0d304x9fshz420lkvys2jxup38m9symky6k028";
+    bool isDefaultDonationAddress = true;
     /// Used for the server.banner RPC response. Specified via conf file only via the "banner=" variable. If empty,
     /// or if the file cannot be opened, the default banner text will be emitted to the client as a fallback.
     QString bannerFile = "",

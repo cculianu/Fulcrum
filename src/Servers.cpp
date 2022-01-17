@@ -918,6 +918,25 @@ void Server::rpc_server_add_peer(Client *c, const RPC::Message &m)
     emit c->sendResult(m.id, retval);
 
 }
+
+namespace {
+    // In case the donation address was default, we transform it correctly to the correct network in the hopes
+    // that the author of this software (me) might get some BTC and/or BCH appropriately.
+    QString transformDefaultDonationAddressToBTCOrBCH(const Options &options, bool isBTC)
+    {
+        QString ret = options.donationAddress;
+        if (!options.isDefaultDonationAddress) return ret; // do nothing if it wasn't the default.
+        if (!ret.isEmpty()) {
+            try {
+                const BTC::Address addr(ret);
+                if (addr.isValid())
+                    ret = addr.toString(isBTC /* if BTC, then legacy, otherwise cashaddr */);
+            } catch (...) {}
+        }
+        return ret;
+    }
+} // namespace
+
 void Server::rpc_server_banner(Client *c, const RPC::Message &m)
 {
     constexpr int MAX_BANNER_DATA = 16384;
@@ -932,7 +951,7 @@ void Server::rpc_server_banner(Client *c, const RPC::Message &m)
         const auto bitcoinDInfo = bitcoindmgr->getBitcoinDInfo();
         generic_do_async(c, m.id,
                         [bannerFile,
-                         donationAddress = options->donationAddress,
+                         donationAddress = transformDefaultDonationAddressToBTCOrBCH(*options, isBTC),
                          daemonVersion = bitcoinDInfo.version,
                          subversion = bitcoinDInfo.subversion] {
                 QVariant ret;
@@ -960,7 +979,7 @@ void Server::rpc_server_banner(Client *c, const RPC::Message &m)
 }
 void Server::rpc_server_donation_address(Client *c, const RPC::Message &m)
 {
-    emit c->sendResult(m.id, options->donationAddress);
+    emit c->sendResult(m.id, transformDefaultDonationAddressToBTCOrBCH(*options, isBTC));
 }
 /* static */
 QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const QByteArray &genesisHash, const Options &opts, bool dsproof)
