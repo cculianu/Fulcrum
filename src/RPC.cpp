@@ -281,6 +281,10 @@ namespace RPC {
         connectedConns.push_back(connect(this, &ConnectionBase::sendError, this, &ConnectionBase::_sendError));
         // connection will be auto-disconnected on socket disconnect
         connectedConns.push_back(connect(this, &ConnectionBase::sendResult, this, &ConnectionBase::_sendResult));
+
+        if (batchPermitted && !(errorPolicy & ErrorPolicySendErrorMessage || errorPolicy & ErrorPolicyDisconnect))
+            Warning() << prettyName() << ": batching enabled for connection but error policy flags (" << errorPolicy
+                      << ") may lead to out-of-spec or confusing JSON-RPC behavior. FIXME!";
     }
 
     void ConnectionBase::on_disconnected()
@@ -486,19 +490,23 @@ namespace RPC {
         } catch (const std::exception & e) {
             error.emplace(Code_InternalError, e.what());
         }
-        if (error) {
-            bool doDisconnect = errorPolicy & ErrorPolicyDisconnect;
-            if (errorPolicy & ErrorPolicySendErrorMessage) {
-                emit sendError(doDisconnect, error->code, error->message.left(120), msgId);
-                if (!doDisconnect)
-                    emit peerError(id, lastPeerError=error->message);
-                doDisconnect = false; // if was true, already enqueued graceful disconnect after error reply, if was false, no-op here
-            }
-            if (doDisconnect) {
-                Error() << "Error reading/parsing data coming in: " << (lastPeerError=error->message);
-                do_disconnect();
-                status = Bad;
-            }
+        if (error)
+            on_processJsonFailure(error->code, error->message, msgId);
+    }
+
+    void ConnectionBase::on_processJsonFailure(int code, const QString & message, const Message::Id &msgId)
+    {
+        bool doDisconnect = errorPolicy & ErrorPolicyDisconnect;
+        if (errorPolicy & ErrorPolicySendErrorMessage) {
+            emit sendError(doDisconnect,code, message.left(120), msgId);
+            if (!doDisconnect)
+                emit peerError(id, lastPeerError=message);
+            doDisconnect = false; // if was true, already enqueued graceful disconnect after error reply, if was false, no-op here
+        }
+        if (doDisconnect) {
+            Error() << "Error processing data coming in: " << (lastPeerError=message);
+            do_disconnect();
+            status = Bad;
         }
     }
 
@@ -1156,7 +1164,12 @@ namespace RPC {
             emit finished();
             return;
         }
-        if (batch.hasNext()) {
+        if (killed) {
+            // as the batch executed it exceeded a limit, so just return an error to the client
+            done = true; // set this flag first so we don't stand a chance of filtering below error message
+            conn.on_processJsonFailure(Code_App_LimitExceeded, "Batch limit exceeded");
+            emit finished();
+        } else if (batch.hasNext()) {
             if (conn.isReadPaused()) {
                 // ElectrumConnection subclasses may enter this "read paused" state when the bitcoind request queue
                 // backs up. We respect that flag and pause processing. We will be signalled to resume via the
@@ -1278,7 +1291,8 @@ namespace RPC {
             bm["answeredRequests"] = qlonglong(batch.answeredRequests.size());
             bm["responses"] = qlonglong(batch.responses.size());
             bm["state"] = [this]{
-                if (isProcessingPaused) return "paused";
+                if (killed) return "killed";
+                else if (isProcessingPaused) return "paused";
                 else if (batch.hasNext()) return "processing";
                 else if (batch.isComplete()) return "completed";
                 return "idle";

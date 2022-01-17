@@ -412,6 +412,9 @@ namespace RPC {
         ///   will begin processing when the current event loop becomes free.  Reimplemented in the `Client` subclass.
         [[nodiscard]] virtual bool canAcceptBatch(BatchProcessor *) { return true; }
 
+        /// This is called internally by either processJson() or by the BatchProcessor when it is killed.
+        void on_processJsonFailure(int code, const QString & message, const Message::Id &msgId = {});
+
     private:
         /// Table used to store the extant batch processors running.
         QHash<IdMixin::Id, BatchProcessor *> extantBatchProcessors;
@@ -460,6 +463,7 @@ namespace RPC {
         const Tic t0;
         bool done = false;
         bool isProcessingPaused = false;
+        bool killed = false;
 
     public:
         explicit BatchProcessor(ConnectionBase & parent, Batch && batch);
@@ -471,6 +475,8 @@ namespace RPC {
 
         const Batch & getBatch() const { return batch; }
         bool isFinished() const { return done; }
+
+        void killForExceedngLimit() { killed = true; }
 
     protected:
         Stats stats() const override;
