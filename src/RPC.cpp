@@ -1215,12 +1215,19 @@ namespace RPC {
                 } else if (res.message) {
                     const auto & m = *res.message;
                     if (m.isRequest()) {
-                        if (!conn.hasMessageIdInBatchProcs(m.id)) {
-                            batch.unansweredRequests.insert(m.id);
-                            emit conn.gotMessage(conn.id, m);
-                        } else {
+                        if (m.id.isNull()) {
+                            // error, null message id (not supported due to potential for clashing with error results)
+                            pushResponse(Message::makeError(Code_Custom, *(error="Null id not supported in batch requests"),
+                                                            m.id, conn.isV1()));
+                        } else if (conn.hasMessageIdInBatchProcs(m.id)) {
                             // error, dupe
                             pushResponse(Message::makeError(Code_Custom, *(error="Duplicate id"), m.id, conn.isV1()));
+                        } else {
+                            // Ok, proceed to pass the message along to the `conn` instance. We will be notified in
+                            // our `acceptResponse()` method by `ConnectionBase::batchResponseFilter` when the result
+                            // (or error) is ready.
+                            batch.unansweredRequests.insert(m.id);
+                            emit conn.gotMessage(conn.id, m);
                         }
                     } else if (m.isNotif()) {
                         ++batch.skippedCt;
