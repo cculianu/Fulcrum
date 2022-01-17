@@ -565,8 +565,8 @@ protected:
     /// Only Server instances can construct us
     friend class ::ServerBase;
     friend class ::Server;
-    /// NB: sock should be in an already connected state.
-    explicit Client(const RPC::MethodMap * methods, IdMixin::Id id, QTcpSocket *sock, int maxBuffer, unsigned maxBatch);
+    /// NB: sock should be in an already connected state. `options` should be guaranteed to outlive this instance.
+    explicit Client(const RPC::MethodMap * methods, IdMixin::Id id, QTcpSocket *sock, const Options &options);
 public:
     ~Client() override;
 
@@ -611,10 +611,6 @@ public:
     std::shared_ptr<PerIPData> perIPData;
 
     bool isSubscribedToHeaders = false;
-private:
-    const unsigned maxBatch : 24; // Nit: we use a 24-bit bitfield here to save space in this class.
-    static_assert (Options::maxBatchMax < 1U << 24); // ensure above bitfield can store max value
-public:
     std::atomic_int nShSubs{0};  ///< the number of unique scripthash subscriptions for this client.
 
     //bitcoind_throttle counter, per client
@@ -657,4 +653,6 @@ protected:
 
     /// Does some per-IP book-keeping. If everything checks out, returns true. Otherwise returns false.
     [[nodiscard]] bool canAcceptBatch(RPC::BatchProcessor *) override;
+private:
+    const Options & options;
 };

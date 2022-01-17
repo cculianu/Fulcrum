@@ -556,7 +556,7 @@ Client *
 ServerBase::newClient(QTcpSocket *sock)
 {
     const auto clientId = newId();
-    auto ret = clientsById[clientId] = new Client(&rpcMethods(), clientId, sock, options->maxBuffer.load(), options->maxBatch);
+    auto ret = clientsById[clientId] = new Client(&rpcMethods(), clientId, sock, *options);
     const auto addr = ret->peerAddress();
 
     ret->perIPData = Client::PerIPDataHolder_Temp::take(sock); // take ownership of the PerIPData ref, implicitly delete the temp holder attached to the socket
@@ -2633,9 +2633,9 @@ void AdminServer::StaticData::init() { InitStaticDataCommon(dispatchTable, metho
 
 /*static*/ std::atomic_size_t Client::numClients{0}, Client::numClientsMax{0}, Client::numClientsCtr{0};
 
-Client::Client(const RPC::MethodMap * mm, IdMixin::Id id_in, QTcpSocket *sock, int maxBuffer, unsigned maxBatch_)
-    : RPC::ElectrumConnection(mm, id_in, sock, /* ensure sane --> */ qMax(maxBuffer, Options::maxBufferMin)),
-      maxBatch{maxBatch_}
+Client::Client(const RPC::MethodMap * mm, IdMixin::Id id_in, QTcpSocket *sock, const Options & options_)
+    : RPC::ElectrumConnection(mm, id_in, sock, /* ensure sane --> */ qMax(options_.maxBuffer.load(), Options::maxBufferMin)),
+      options{options_}
 {
     ++numClientsCtr;
     const auto N = ++numClients;
@@ -2655,7 +2655,7 @@ Client::Client(const RPC::MethodMap * mm, IdMixin::Id id_in, QTcpSocket *sock, i
     status = Connected ; // we are always connected at construction time.
     errorPolicy = ErrorPolicySendErrorMessage;
     setObjectName(QStringLiteral("Client.%1").arg(id_in));
-    setBatchPermitted(maxBatch > 0);
+    setBatchPermitted(options.maxBatch > 0);
     on_connected();
     Log() << "New " << prettyName(false, false) << ", " << N << Util::Pluralize(QStringLiteral(" client"), N) << " total";
 }
@@ -2718,8 +2718,8 @@ bool Client::canAcceptBatch(RPC::BatchProcessor *batch)
     });
     const auto newVal = perIPData->nExtantBatchRequests += size;
     DebugM(name, ": incremented nExtantBatchRequests by ", size, ", value is now: ", perIPData->nExtantBatchRequests.load());
-    if (!perIPData->isWhitelisted() && newVal > maxBatch) {
-        DebugM("batch limit exceeded (", newVal, " > ", maxBatch, ") for ", name);
+    if (!perIPData->isWhitelisted() && newVal > options.maxBatch) {
+        DebugM("batch limit exceeded (", newVal, " > ", options.maxBatch, ") for ", name);
         return false;
     }
     return true;

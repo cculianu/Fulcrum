@@ -394,13 +394,13 @@ namespace RPC {
         bool strict = false; // if true, we will be more strict and reject some malformed JSON-RPC messages
         bool batchPermitted = false; // if true, we will accept JSON-RPC Batches
 
-        QString lastPeerError;
-        quint64 nRequestsSent = 0, nNotificationsSent = 0, nResultsSent = 0, nErrorsSent = 0;
-        quint64 nErrorReplies = 0, nUnansweredLifetime = 0;
-
         /// New in 1.0.1: This is latched to true in Client::on_disconnect to signal that the client is being
         /// disconnected and to just throw away any future messages from this client.
         bool ignoreNewIncomingMessages = false;
+
+        QString lastPeerError;
+        quint64 nRequestsSent = 0, nNotificationsSent = 0, nResultsSent = 0, nErrorsSent = 0;
+        quint64 nErrorReplies = 0, nUnansweredLifetime = 0;
 
         /// Returns true if `msgId` is in any of the extantBatchProcessors in either the submitted or answered request set.
         [[nodiscard]] bool hasMessageIdInBatchProcs(const Message::Id &msgId) const;
@@ -457,8 +457,8 @@ namespace RPC {
 
         ConnectionBase & conn;
         Batch batch;
-        bool done = false;
         const Tic t0;
+        bool done = false;
         bool isProcessingPaused = false;
 
     public:
@@ -506,8 +506,8 @@ namespace RPC {
         QByteArray wrapForSend(QByteArray &&) override;
 
     private:
-        bool memoryWasteTimerActive = false;  ///< inticates the DoS protection timer is active, used by memoryWasteDoSProtection
         qint64 memoryWasteThreshold = -1; ///< gets lazy-initialized in memoryWasteDoSProtection below
+        bool memoryWasteTimerActive = false;  ///< inticates the DoS protection timer is active, used by memoryWasteDoSProtection
         void memoryWasteDoSProtection(); ///< must be called from on_readyRead only.
 
         bool readPaused = false;
