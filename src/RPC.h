@@ -419,6 +419,10 @@ namespace RPC {
     private:
         /// Table used to store the extant batch processors running.
         QHash<IdMixin::Id, BatchProcessor *> extantBatchProcessors;
+        /// Message id's for "batch zombies". That is, messages that were emitted via gotMessage() but
+        /// for which the batch processor was killed before a response was generated asynchronously.  We
+        /// need to filter these out from the client, to avoid a buggy corner case.
+        QSet<Message::Id> batchZombies;
 
         // Internally called by processObject()
         [[nodiscard]] ProcessObjectResult processObject_internal(QVariantMap &&);

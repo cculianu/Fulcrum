@@ -427,9 +427,18 @@ namespace RPC {
     bool ConnectionBase::batchResponseFilter(const Message & msg)
     {
         // first, see if the response corresponds to an extant batch request
-        for (auto * batch : qAsConst(extantBatchProcessors))
-            if (batch->acceptResponse(msg))
+        for (auto * batch : qAsConst(extantBatchProcessors)) {
+            if (batch->acceptResponse(msg)) {
+                batchZombies.remove(msg.id); // also remove from batchZombies, just in case (this should never happen)
                 return true;
+            }
+        }
+        if (batchZombies.contains(msg.id)) {
+            batchZombies.remove(msg.id);
+            DebugM(prettyName(), ": message id \"", msg.id.toString(), "\" found in batchZombies.",
+                   " Removed and message filtered. batchZombies size now: ", batchZombies.size());
+            return true;
+        }
         return false;
     }
 
@@ -538,8 +547,13 @@ namespace RPC {
         });
         extantBatchProcessors[batch->id] = batch;
         connect(batch, &BatchProcessor::finished, this, [this, bpId = batch->id]{
-            if (auto *batch = extantBatchProcessors.take(bpId))
+            if (auto *batch = extantBatchProcessors.take(bpId)) {
+                if (const auto & zombies = batch->getBatch().unansweredRequests; !zombies.isEmpty()) {
+                    batchZombies.unite(zombies);
+                    DebugM(batch->objectName(), ": had ", zombies.size(), " zombie requests added to batchZombies set");
+                }
                 batch->deleteLater();
+            }
         });
         // start the batch from event loop after the current event loop stack returns
         Util::AsyncOnObject(batch, [batch]{ batch->process(); });
@@ -1149,6 +1163,8 @@ namespace RPC {
 
     bool ConnectionBase::hasMessageIdInBatchProcs(const Message::Id &msgId) const
     {
+        if (batchZombies.contains(msgId))
+            return true;
         for (const auto *proc : extantBatchProcessors) {
             if (!proc || proc->isFinished()) continue;
             const auto & batch = proc->getBatch();
