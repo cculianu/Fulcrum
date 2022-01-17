@@ -2699,54 +2699,61 @@ void Client::do_ping()
 namespace {
     void bannerfile()
     {
-        const QByteArray banner(R"EOF(Welcome to a Fulcrum server.
+        const QByteArray banner(R"EOF(
+            Welcome to a Fulcrum server.
 
-This is a test banner.
+            This is a test banner.
 
-Variable substitutions:
+            Variable substitutions:
 
-Server version: $SERVER_VERSION
-Server sub-version: $SERVER_SUBVERSION
-Donation address: $DONATION_ADDRESS
-Daemon version: $DAEMON_VERSION
-Daemon sub-version: $DAEMON_SUBVERSION
+            Server version: $SERVER_VERSION
+            Server sub-version: $SERVER_SUBVERSION
+            Donation address: $DONATION_ADDRESS
+            Daemon version: $DAEMON_VERSION
+            Daemon sub-version: $DAEMON_SUBVERSION
 
-aaand.. again:
+            aaand.. again:
 
-Server version: $SERVER_VERSION Server sub-version: $SERVER_SUBVERSION Donation address: $DONATION_ADDRESS Daemon version: $DAEMON_VERSION Daemon sub-version: $DAEMON_SUBVERSION
+            Server version: $SERVER_VERSION Server sub-version: $SERVER_SUBVERSION Donation address: $DONATION_ADDRESS
+            Daemon version: $DAEMON_VERSION Daemon sub-version: $DAEMON_SUBVERSION
 
-Emoji Render Test:
+            Emoji Render Test:
 
-👻🐒🐕🐈🐎🐄🐖🐐🐪🐘🐀🐇🐿🦇🐓🐧🦆🦉🐢🐍🐟🐙🐌🦋🐝🐞🕷🌻🌲🌴🌵🍁🍀🍇🍉🍋🍌🍎🍒🍓🥝🥥🥕🌽🌶🍄🧀🥚🦀🍪🎂🍭🏠🚗🚲⛵✈🚁🚀⌚☀⭐🌈☂🎈🎀⚽♠♥♦♣👓👑🎩🔔🎵🎤🎧🎸🎺🥁🔍🕯💡📖✉📦✏💼📋✂🔑🔒🔨🔧⚖☯🚩👣🍞
+            👻🐒🐕🐈🐎🐄🐖🐐🐪🐘🐀🐇🐿🦇🐓🐧🦆🦉🐢🐍🐟🐙🐌🦋🐝🐞🕷🌻🌲🌴🌵🍁🍀🍇🍉🍋🍌🍎🍒🍓🥝🥥🥕🌽🌶🍄🧀
+            🥚🦀🍪🎂🍭🏠🚗🚲⛵✈🚁🚀⌚☀⭐🌈☂🎈🎀⚽♠♥♦♣👓👑🎩🔔🎵🎤🎧🎸🎺🥁🔍🕯💡📖✉📦✏💼📋✂🔑🔒🔨🔧⚖☯🚩👣🍞
 
-$nosubst $SERVER_VERSIO$SERVER_SUBVERSION$DAEMON_SUBVERSION
-$DAEMON_SUBVERSION$DAEMON_VERSION$DONATION_ADDRESS$SERVER_VERSION$SERVER_SUBVERSION)EOF");
+            $nosubst $SERVER_VERSIO$SERVER_SUBVERSION$DAEMON_SUBVERSION
+            $DAEMON_SUBVERSION$DAEMON_VERSION$DONATION_ADDRESS$SERVER_VERSION$SERVER_SUBVERSION)EOF");
 
         const auto chk1 = performVariableSubstitutionsForBannerFile(banner, 16384, "<donation!>", Version{3,1,4},
                                                                     "/a daemon subversion nested $SERVER_VERSION/");
         const auto serverVersion = ServerMisc::AppVersion, serverSubVersion = ServerMisc::AppSubVersion;
-        const auto expected1 = QString::fromUtf8(R"EOF(Welcome to a Fulcrum server.
+        const auto expected1 = QString::fromUtf8(R"EOF(
+            Welcome to a Fulcrum server.
 
-This is a test banner.
+            This is a test banner.
 
-Variable substitutions:
+            Variable substitutions:
 
-Server version: )EOF") + serverVersion + QString::fromUtf8(R"EOF(
-Server sub-version: )EOF") + serverSubVersion + QString::fromUtf8(R"EOF(
-Donation address: <donation!>
-Daemon version: 3.1.4
-Daemon sub-version: /a daemon subversion nested $SERVER_VERSION/
+            Server version: )EOF") + serverVersion + QString::fromUtf8(R"EOF(
+            Server sub-version: )EOF") + serverSubVersion + QString::fromUtf8(R"EOF(
+            Donation address: <donation!>
+            Daemon version: 3.1.4
+            Daemon sub-version: /a daemon subversion nested $SERVER_VERSION/
 
-aaand.. again:
+            aaand.. again:
 
-Server version: )EOF") + serverVersion + QString::fromUtf8(R"EOF( Server sub-version: )EOF") + serverSubVersion + QString::fromUtf8(R"EOF( Donation address: <donation!> Daemon version: 3.1.4 Daemon sub-version: /a daemon subversion nested $SERVER_VERSION/
+            Server version: )EOF") + serverVersion + QString::fromUtf8(R"EOF( Server sub-version: )EOF") + serverSubVersion
+                + QString::fromUtf8(R"EOF( Donation address: <donation!>
+            Daemon version: 3.1.4 Daemon sub-version: /a daemon subversion nested $SERVER_VERSION/
 
-Emoji Render Test:
+            Emoji Render Test:
 
-👻🐒🐕🐈🐎🐄🐖🐐🐪🐘🐀🐇🐿🦇🐓🐧🦆🦉🐢🐍🐟🐙🐌🦋🐝🐞🕷🌻🌲🌴🌵🍁🍀🍇🍉🍋🍌🍎🍒🍓🥝🥥🥕🌽🌶🍄🧀🥚🦀🍪🎂🍭🏠🚗🚲⛵✈🚁🚀⌚☀⭐🌈☂🎈🎀⚽♠♥♦♣👓👑🎩🔔🎵🎤🎧🎸🎺🥁🔍🕯💡📖✉📦✏💼📋✂🔑🔒🔨🔧⚖☯🚩👣🍞
+            👻🐒🐕🐈🐎🐄🐖🐐🐪🐘🐀🐇🐿🦇🐓🐧🦆🦉🐢🐍🐟🐙🐌🦋🐝🐞🕷🌻🌲🌴🌵🍁🍀🍇🍉🍋🍌🍎🍒🍓🥝🥥🥕🌽🌶🍄🧀
+            🥚🦀🍪🎂🍭🏠🚗🚲⛵✈🚁🚀⌚☀⭐🌈☂🎈🎀⚽♠♥♦♣👓👑🎩🔔🎵🎤🎧🎸🎺🥁🔍🕯💡📖✉📦✏💼📋✂🔑🔒🔨🔧⚖☯🚩👣🍞
 
-$nosubst $SERVER_VERSIO)EOF") + serverSubVersion + QString::fromUtf8(R"EOF(/a daemon subversion nested $SERVER_VERSION/
-/a daemon subversion nested $SERVER_VERSION/3.1.4<donation!>)EOF") + serverVersion + serverSubVersion;
+            $nosubst $SERVER_VERSIO)EOF") + serverSubVersion + QString::fromUtf8(R"EOF(/a daemon subversion nested $SERVER_VERSION/
+            /a daemon subversion nested $SERVER_VERSION/3.1.4<donation!>)EOF") + serverVersion + serverSubVersion;
 
         if (chk1 == expected1)
             Log() << "bannerfile variable substitution test1 ... passed";
