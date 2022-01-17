@@ -303,12 +303,14 @@ namespace RPC {
         m["nNotificationsSent"] = nNotificationsSent;
         m["nUnansweredRequests"] = nUnansweredLifetime + quint64(idMethodMap.size()); // we may care about this
         m["nErrorReplies"] = nErrorReplies;
-        m["extantBatchProcessors"] = [this]{
-            QVariantMap bps;
-            for (auto *bp : extantBatchProcessors)
-                bps[bp->objectName()] = bp->statsSafe();
-            return bps;
-        }();
+        if (batchPermitted || !extantBatchProcessors.isEmpty()) {
+            m["extantBatchProcessors"] = [this]{
+                QVariantMap bps;
+                for (auto *bp : extantBatchProcessors)
+                    bps[bp->objectName()] = bp->statsSafe();
+                return bps;
+            }();
+        }
         return m;
     }
 
@@ -523,7 +525,7 @@ namespace RPC {
         auto batch_exception_guard = std::make_unique<RPC::BatchProcessor>(*this, std::move(varList));
         auto *batch = batch_exception_guard.get();
         if ( ! canAcceptBatch(batch) ) {
-            DebugM("rejecting batch ", batch->objectName());
+            DebugM(batch->objectName(), ": rejecting batch ");
             throw BatchLimitExceeded();
         }
         connect(batch, &QObject::destroyed, this, [this, bpId = batch->id](QObject *o) {
@@ -1123,6 +1125,11 @@ namespace RPC {
     BatchProcessor::BatchProcessor(ConnectionBase & parent, Batch && batch_)
         : QObject(&parent), IdMixin(newId()), conn(parent), batch(std::move(batch_))
     {
+        try {
+            cumCost = Json::estimateMemoryFootprint(batch.items);
+        } catch (const std::exception &e) {
+            Error() << "Exception calculating base cost in " << __func__ << ": " << e.what();
+        }
         setObjectName(parent.objectName() + " BatchProcessor." + QString::number(id)
                       + " (" + QString::number(batch.items.size()) + ")");
         connect(&conn, &ConnectionBase::readPausedStateChanged, this, [this](bool readPaused){
@@ -1136,6 +1143,8 @@ namespace RPC {
 
     BatchProcessor::~BatchProcessor() {
         DebugM(objectName(), " ", __func__, ", elapsed: ", t0.msecStr(6), " msec");
+        // signal to listeners that cost is now 0
+        addCost(-cumCost);
     }
 
     bool ConnectionBase::hasMessageIdInBatchProcs(const Message::Id &msgId) const
@@ -1149,10 +1158,22 @@ namespace RPC {
         return false;
     }
 
+    void BatchProcessor::addCost(qsizetype cost)
+    {
+        cumCost += cost;
+        emit costDelta(cost);
+    }
+
+    void BatchProcessor::pushResponse(Message && response)
+    {
+        batch.responses.push_back(std::move(response));
+        addCost(Json::estimateMemoryFootprint(std::as_const(batch.responses).back().data));
+    }
+
     void BatchProcessor::process()
     {
         if (done) {
-            DebugM(objectName(), " ", __func__, ", done = true, aborting early ...");
+            DebugM(objectName(), ": (", __func__, ") done = true, aborting early ...");
             return;
         }
         if (UNLIKELY(conn.ignoreNewIncomingMessages)) {
@@ -1174,25 +1195,23 @@ namespace RPC {
                 // ElectrumConnection subclasses may enter this "read paused" state when the bitcoind request queue
                 // backs up. We respect that flag and pause processing. We will be signalled to resume via the
                 // `readPausedStateChanged` signal when the backlog clears up in the near future.
-                DebugM(objectName(), " paused on batch item ", batch.nextItem + 1, ", returning early ...");
+                DebugM(objectName(), ": paused on batch item ", batch.nextItem + 1, ", returning early ...");
                 isProcessingPaused = true;
                 return;
             } else if (isProcessingPaused) {
-                DebugM(objectName(), " unpaused");
+                DebugM(objectName(), ": unpaused");
                 isProcessingPaused = false;
             }
-            DebugM(objectName(), " processing batch item ", batch.nextItem + 1, ", memory footprint is now: ",
-                   Json::estimateMemoryFootprint(batch.items));
+            DebugM(objectName(), ": processing batch item ", batch.nextItem + 1);
             auto var = batch.getNextAndIncrement();
             std::optional<QString> error;
             if (!var.canConvert<QVariantMap>()) {
-                batch.responses.push_back(Message::makeError(Code_InvalidRequest, *(error="Invalid request"), {},
-                                                             conn.isV1()));
+                pushResponse(Message::makeError(Code_InvalidRequest, *(error="Invalid request"), {}, conn.isV1()));
             } else {
                 auto res = conn.processObject(var.toMap());
                 if (res.error) {
-                    batch.responses.push_back(Message::makeError(res.error->code, (error=res.error->message)->left(120),
-                                                                 res.parsedMsgId, conn.isV1()));
+                    pushResponse(Message::makeError(res.error->code, (error=res.error->message)->left(120),
+                                                    res.parsedMsgId, conn.isV1()));
                 } else if (res.message) {
                     const auto & m = *res.message;
                     if (m.isRequest()) {
@@ -1201,15 +1220,13 @@ namespace RPC {
                             emit conn.gotMessage(conn.id, m);
                         } else {
                             // error, dupe
-                            batch.responses.push_back(Message::makeError(Code_Custom, *(error="Duplicate id"), m.id,
-                                                                         conn.isV1()));
+                            pushResponse(Message::makeError(Code_Custom, *(error="Duplicate id"), m.id, conn.isV1()));
                         }
                     } else if (m.isNotif()) {
                         ++batch.skippedCt;
                         emit conn.gotMessage(conn.id, m);
                     } else {
-                        batch.responses.push_back(Message::makeError(Code_InvalidRequest, *(error="Invalid request"),
-                                                                     m.id, conn.isV1()));
+                        pushResponse(Message::makeError(Code_InvalidRequest, *(error="Invalid request"), m.id, conn.isV1()));
                     }
                 } else {
                     // do nothing, indicate we are not expecting a response
@@ -1227,7 +1244,7 @@ namespace RPC {
                 // or if the connection went down asynchronously between calls)
                 AGAIN();
         } else if (batch.isComplete()) {
-            DebugM(objectName(), " completed", ", memory footprint is now: ", Json::estimateMemoryFootprint(batch.items));
+            DebugM(objectName(), ": completed");
             QVariantList l;
             for (const auto &msg : qAsConst(batch.responses)) {
                 if (msg.isError()) ++conn.nErrorsSent;
@@ -1255,9 +1272,9 @@ namespace RPC {
             // This branch is taken when we have sent out all the requests to the observer(s) but we haven't yet
             // received all the responses we expect. For now, we just time-out the batch request after 20 seconds.
             constexpr int timeoutSec = 20; // TODO: have this come from config?!
-            DebugM(objectName(), " lifecycle state: idle");
+            DebugM(objectName(), ": lifecycle state is now idle");
             callOnTimerSoonNoRepeat(timeoutSec * 1000, "+InactivityTimeout", [this, timeoutSec]{
-                Error() << objectName() << " timed out after not receiving a batch response for "
+                Error() << objectName() << ": timed out after not receiving a batch response for "
                         << timeoutSec << " seconds.";
                 emit conn.sendError(true, Code_InternalError, "Batch request timed out");
                 conn.status = conn.Bad;
@@ -1271,11 +1288,18 @@ namespace RPC {
         if (auto it = batch.unansweredRequests.find(m.id); it != batch.unansweredRequests.end()) {
             batch.unansweredRequests.erase(it);
             batch.answeredRequests.insert(m.id);
-            batch.responses.push_back(m);
+            pushResponse(m);
             if (batch.isComplete()) AGAIN();
             return true;
         }
         return false;
+    }
+
+    void BatchProcessor::killForExceedngLimit()
+    {
+        if (killed || done || conn.ignoreNewIncomingMessages) return;
+        killed = true;
+        AGAIN(); // to ensure we die ASAP
     }
 
     auto BatchProcessor::stats() const -> Stats
@@ -1285,6 +1309,7 @@ namespace RPC {
         ret["elapsed (msec)"] = t0.msec<qreal>();
         ret["batch"] = [this]{
             QVariantMap bm;
+            bm["cost"] = qlonglong(cost());
             bm["size"] = qlonglong(batch.items.size());
             bm["nextItem"] = qlonglong(batch.nextItem);
             bm["unansweredRequests"] = qlonglong(batch.unansweredRequests.size());

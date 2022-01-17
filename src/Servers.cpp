@@ -400,6 +400,7 @@ QVariant ServerBase::stats() const
             m["nBitcoinDRequests"] = qlonglong(client->perIPData->bdReqCtr_cum.load());
             m["isWhiteListed"] = client->perIPData->isWhitelisted();
             m["nExtantBatchRequests"] = qlonglong(client->perIPData->nExtantBatchRequests.load());
+            m["extantBatchRequestCosts"] = qlonglong(client->perIPData->extantBatchRequestCosts.load());
             return m;
         }();
         // the below don't really make much sense for this class (they are always 0 or empty)
@@ -2701,26 +2702,52 @@ bool Client::canAcceptBatch(RPC::BatchProcessor *batch)
 {
     if (UNLIKELY( ! perIPData )) {
         // not properly initialized? Should never happen.
-        Error() << "INTERNAL ERROR:" << prettyName() << " is missing per-ip data in " << __func__ << ". FIXME!";
+        Error() << "INTERNAL ERROR:" << prettyName() << " is missing per-IP data in " << __func__ << ". FIXME!";
         return false;
     }
     const uint64_t size = uint64_t(batch->getBatch().items.size());
     const QString name = Debug::isEnabled() ? batch->objectName() : QString{};
-    connect(batch, &QObject::destroyed, [size, weakp = std::weak_ptr(perIPData), name](QObject *){
+    const auto weakp = std::weak_ptr(perIPData);
+    connect(batch, &QObject::destroyed, [size, weakp, name](QObject *){
         // this lambda runs in `batch`'s object context immediately
-        DebugM(name, ": destroyed signal received in Client lambda");
         if (auto strongp = weakp.lock()) {
             const auto newVal = strongp->nExtantBatchRequests -= size;
-            DebugM(name, ": decremented nExtantBatchRequests by ", size, ", value is now: ", newVal);
+            DebugM(name, ": (destroyed handler) decremented nExtantBatchRequests by ", size, ", value is now: ", newVal);
         } else {
-            DebugM(name, ": per-ip data already gone, doing nothing.");
+            DebugM(name, ": (destroyed handler) per-IP data already gone, doing nothing");
         }
     });
-    const auto newVal = perIPData->nExtantBatchRequests += size;
-    DebugM(name, ": incremented nExtantBatchRequests by ", size, ", value is now: ", perIPData->nExtantBatchRequests.load());
-    if (!perIPData->isWhitelisted() && newVal > options.maxBatch) {
-        DebugM("batch limit exceeded (", newVal, " > ", options.maxBatch, ") for ", name);
-        return false;
+    { // size check
+        const auto newVal = perIPData->nExtantBatchRequests += size;
+        DebugM(name, ": incremented nExtantBatchRequests by ", size, ", value is now: ", perIPData->nExtantBatchRequests.load());
+        if (!perIPData->isWhitelisted() && newVal > options.maxBatch) {
+            DebugM("batch limit exceeded (", newVal, " > ", options.maxBatch, ") for ", name);
+            return false; // on return the nExtantBatchRequests above will be decremented properly
+        }
+    }
+    { // cost check
+        const auto newVal = perIPData->extantBatchRequestCosts += int64_t(batch->cost());;
+        // Attach the lambda now since we already tallied its base cost. When batch processor destructs it's guaranteed
+        // to send us this signal so long as we attach it via a direct connection.
+        connect(batch, &RPC::BatchProcessor::costDelta,
+                [maxBuffer = int64_t(this->MAX_BUFFER), weakp, name, bptr = QPointer(batch)](qsizetype delta) {
+                    // this lambda runs in `batch`'s object context immediately
+                    if (auto strongp = weakp.lock()) {
+                        const int64_t newVal = strongp->extantBatchRequestCosts += int64_t(delta);
+                        if (!strongp->isWhitelisted() && maxBuffer > 0 && newVal > maxBuffer) {
+                            Warning() << name << ": cost for this IP (" << newVal << ") exceeds limit (" << maxBuffer << "), killing batch processor";
+                            if (!bptr.isNull()) bptr->killForExceedngLimit();
+                        } else {
+                            DebugM(name, ": (costDelta handler) cost += ", delta, "; cost for this IP is now ", newVal);
+                        }
+                    } else {
+                        DebugM(name, ": (costDelta handler) per-IP data already gone, doing nothing");
+                    }
+        });
+        if (!perIPData->isWhitelisted() && this->MAX_BUFFER > 0 && newVal > this->MAX_BUFFER) {
+            DebugM(name, ": batch cost exceeded (", newVal, " > ", this->MAX_BUFFER, ")");
+            return false;  // on return our costDelta lamba above will receive an event to decrement the cost we just added
+        }
     }
     return true;
 }

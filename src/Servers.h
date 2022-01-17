@@ -603,9 +603,11 @@ public:
         std::atomic_int64_t bdReqCtr{0}; ///< the number bitcoind requests active right now for all clients coming from this IP address.
         std::atomic_uint64_t bdReqCtr_cum{0}; ///< the number bitcoind requests, cumulatively, for all clients coming from this IP address.
         std::atomic_int64_t lastConnectionLimitReachedWarning{0}; ///< timstamp (in msec) of the last "connection limit exceeded" warning printed to the log for this IP address.
-        /// The number of batch requests that are currently active.
-        /// As RPC::BatchProcessors are created they increment this, and as they are deleted they decrement this.
+        /// The cumulative `batch.items.size()` for all batch requests currently active for this IP.
+        /// As RPC::BatchProcessors are created this is increased, and as they are deleted this is decreased.
         std::atomic_uint64_t nExtantBatchRequests{0};
+        /// The total estimated memory footprint of all extant batch requests for this IP
+        std::atomic_int64_t extantBatchRequestCosts{0};
     };
 
     std::shared_ptr<PerIPData> perIPData;

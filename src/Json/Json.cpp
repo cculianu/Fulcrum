@@ -369,13 +369,13 @@ namespace Json {
     }
 
     // Called by publicly visible estimateMemoryFootprint (this one tracks recursion depth)
-    static size_t estimateMemoryFootprint(const QVariant & v, unsigned recursionDepth)
+    static qsizetype estimateMemoryFootprint(const QVariant & v, unsigned recursionDepth)
     {
         if (UNLIKELY(recursionDepth > Writer::MAX_RECURSION_DEPTH))
             throw Json::NestingLimitExceeded("The nesting limit of 1024 was exceeded in lowerBoundMemoryFootprint");
 
         const auto typ = GetVarType(v);
-        size_t ret = sizeof(QVariant);
+        qsizetype ret = sizeof(QVariant);
 
         if (v.isNull()) {
             // Note that QString.isNull() in the QVariant can also satisfy this, so we must special-case this.
@@ -458,7 +458,7 @@ namespace Json {
         } // end switch
     }
 
-    size_t estimateMemoryFootprint(const QVariant & v) { return estimateMemoryFootprint(v, 0); }
+    qsizetype estimateMemoryFootprint(const QVariant & v) { return estimateMemoryFootprint(v, 0); }
 
 } // end namespace Json
 

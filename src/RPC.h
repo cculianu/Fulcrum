@@ -24,6 +24,7 @@
 #include "RPCMsgId.h"
 #include "Util.h"
 
+#include <QtGlobal> // for qsizetype (and other typedefs)
 #include <QHash>
 #include <QMap>
 #include <QSet>
@@ -464,6 +465,7 @@ namespace RPC {
         bool done = false;
         bool isProcessingPaused = false;
         bool killed = false;
+        qsizetype cumCost = 0; ///< The cost of the JSON batch array itself initially, but it accumulates response costs too.
 
     public:
         explicit BatchProcessor(ConnectionBase & parent, Batch && batch);
@@ -476,13 +478,31 @@ namespace RPC {
         const Batch & getBatch() const { return batch; }
         bool isFinished() const { return done; }
 
-        void killForExceedngLimit() { killed = true; }
+        qsizetype cost() const { return cumCost; }
+
+        void killForExceedngLimit();
 
     protected:
         Stats stats() const override;
 
     signals:
+        /// Tells observers that this object's lifecycle has ended. Will always eventually be emitted regardless of
+        /// reason for lifecycle termination.
         void finished();
+        /// Update observers on this instance's on-going cost. `delta` may be positive or negative. A negative delta
+        /// is always emitted from this class's d'tor, to tell observers to deduct all the previously-seen cumulative
+        /// costs.  To use this properly to track cumulative costs:
+        /// (1) First take the current `cost()` and save it.
+        /// (2) Connect to this signal and each time the signal is delivered, add `delta` to your tracked cost.
+        /// (3) The final time this signal fires, `delta` will always be negative, e.g.: `-cost()`.
+        /// Note: Ensure the connection in (2) above is via a direct connection to be guaranteed delivery on destruction
+        /// of this instance.
+        void costDelta(qsizetype delta);
+
+    private:
+        void addCost(qsizetype cost);
+        void pushResponse(Message && m);
+        void pushResponse(const Message & m) { pushResponse(Message{m}); }
     };
 
 

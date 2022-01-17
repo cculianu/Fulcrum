@@ -27,11 +27,11 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include "Common.h"
 
+#include <QtGlobal> // for qsizetype (and other typedefs)
 #include <QByteArray>
 #include <QString>
 #include <QVariant>
 
-#include <cstdint>
 #include <optional>
 #include <stdexcept>
 #include <vector>
@@ -110,7 +110,7 @@ namespace Json {
     /// Note that if the QVariant contains types we don't support for serialization, they will
     /// be costed as simply sizeof(QVariant).
     /// May throw NestingLimitExceeded if the supplied QVariant has a recursive nesting depth larger than 1024.
-    extern size_t estimateMemoryFootprint(const QVariant &);
+    extern qsizetype estimateMemoryFootprint(const QVariant &);
 
     // --
     // -- Below are extra utility and other functions for querying the simdjson impl, checking the locale, etc.
