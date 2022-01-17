@@ -139,7 +139,8 @@ namespace {
     void Writer::writeVariant(const QVariant &v, unsigned prettyIndent, unsigned indentLevel, unsigned recursionDepth)
     {
         if (UNLIKELY(recursionDepth > MAX_RECURSION_DEPTH))
-            throw Json::NestingLimitExceeded("The nesting limit of 1024 was exceeded in writeVariant");
+            throw Json::NestingLimitExceeded(QString("The nesting limit of %1 was exceeded in %2")
+                                             .arg(QString::number(MAX_RECURSION_DEPTH), __func__));
 
         const auto typ = GetVarType(v);
 
@@ -372,7 +373,8 @@ namespace Json {
     static qsizetype estimateMemoryFootprint(const QVariant & v, unsigned recursionDepth)
     {
         if (UNLIKELY(recursionDepth > Writer::MAX_RECURSION_DEPTH))
-            throw Json::NestingLimitExceeded("The nesting limit of 1024 was exceeded in lowerBoundMemoryFootprint");
+            throw NestingLimitExceeded(QString("The nesting limit of %1 was exceeded in %2")
+                                       .arg(QString::number(Writer::MAX_RECURSION_DEPTH), __func__));
 
         const auto typ = GetVarType(v);
         qsizetype ret = sizeof(QVariant);
