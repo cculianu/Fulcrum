@@ -671,7 +671,7 @@ namespace RPC {
     auto ConnectionBase::processObject(QVariantMap && vmap) -> ProcessObjectResult
     {
         auto ret = processObject_internal(std::move(vmap));
-        if (!ret.error) lastGood = Util::getTime(); // update "lastGood" as this is used to determine if stale or not.
+        if (ret.message) lastGood = Util::getTime(); // update "lastGood" as this is used to determine if stale or not.
         return ret;
     }
 
