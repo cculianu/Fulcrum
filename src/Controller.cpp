@@ -1086,7 +1086,7 @@ unsigned Controller::downloadTaskRecommendedThrottleTimeMsec(unsigned bnum) cons
             // mainnet
             if (bnum > 150'000) // beyond this height the blocks are starting to be big enough that we want to not eat memory.
                 maxBackLog = 250;
-            else if (bnum > 550'000) // beyond this height we may start to see 32MB blocks in the future
+            else if (bnum > 550'000 && !isCoinBTC()) // beyond this height we may start to see 32MB blocks in the future
                 maxBackLog = 100;
         } else if (sm->net == BTC::ScaleNet) {
             if (bnum > 10'000)
@@ -1096,7 +1096,7 @@ unsigned Controller::downloadTaskRecommendedThrottleTimeMsec(unsigned bnum) cons
         } else {
             // testnet
             if (bnum > 1'300'000) // beyond this height 32MB blocks may be common, esp. in the future
-                maxBackLog = 100;
+                maxBackLog = isCoinBTC() ? 250 : 100;
         }
 
         const int diff = int(bnum) - int(sm->ppBlkHtNext.load()); // note: ppBlkHtNext is not guarded by the lock but it is an atomic value, so that's fine.
