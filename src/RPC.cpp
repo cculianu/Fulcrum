@@ -435,7 +435,7 @@ namespace RPC {
         }
         if (batchZombies.contains(msg.id)) {
             batchZombies.remove(msg.id);
-            DebugM(prettyName(), ": message id \"", msg.id.toString(), "\" found in batchZombies.",
+            DebugM(objectName(), ": message id \"", msg.id.toString(), "\" found in batchZombies.",
                    " Removed and message filtered. batchZombies size now: ", batchZombies.size());
             return true;
         }
