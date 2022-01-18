@@ -524,9 +524,6 @@ namespace RPC {
     void ConnectionBase::enqueueNewBatch(QVariantList && varList)
     {
         // handle Batch request -- add it to the extant batches
-
-        // TODO: limit the number of extant batches here, or the complexity of any single batch
-
         if (varList.empty())
             // empty batch lists are a JSON-RPC error
             throw InvalidRequest();
@@ -654,7 +651,6 @@ namespace RPC {
                 throw InvalidRequest("Invalid JSON");
             }
         } catch (const Exception &e) {
-            // TODO: clean this up. It's rather inelegant. :/
             const bool wasUnk = dynamic_cast<const UnknownMethod *>(&e);
             const bool wasInv = dynamic_cast<const InvalidRequest *>(&e) || dynamic_cast<const InvalidError *>(&e);
             const bool wasInvParms = dynamic_cast<const InvalidParameters *>(&e);
