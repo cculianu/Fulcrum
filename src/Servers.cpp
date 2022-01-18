@@ -2712,14 +2712,16 @@ bool Client::canAcceptBatch(RPC::BatchProcessor *batch)
         // this lambda runs in `batch`'s object context immediately
         if (auto strongp = weakp.lock()) {
             const auto newVal = strongp->nExtantBatchRequests -= size;
-            DebugM(name, ": (destroyed handler) decremented nExtantBatchRequests by ", size, ", value is now: ", newVal);
+            if constexpr (RPC::debugBatchExtra)
+                DebugM(name, ": (destroyed handler) decremented nExtantBatchRequests by ", size, ", value is now: ", newVal);
         } else {
             DebugM(name, ": (destroyed handler) per-IP data already gone, doing nothing");
         }
     });
     { // size check
         const auto newVal = perIPData->nExtantBatchRequests += size;
-        DebugM(name, ": incremented nExtantBatchRequests by ", size, ", value is now: ", perIPData->nExtantBatchRequests.load());
+        if constexpr (RPC::debugBatchExtra)
+            DebugM(name, ": incremented nExtantBatchRequests by ", size, ", value is now: ", perIPData->nExtantBatchRequests.load());
         if (!perIPData->isWhitelisted() && newVal > options.maxBatch) {
             DebugM("batch limit exceeded (", newVal, " > ", options.maxBatch, ") for ", name);
             return false; // on return the nExtantBatchRequests above will be decremented properly
@@ -2738,7 +2740,8 @@ bool Client::canAcceptBatch(RPC::BatchProcessor *batch)
                             Warning() << name << ": cost for this IP (" << newVal << ") exceeds limit (" << maxBuffer << "), killing batch processor";
                             if (!bptr.isNull()) bptr->killForExceedngLimit();
                         } else {
-                            DebugM(name, ": (costDelta handler) cost += ", delta, "; cost for this IP is now ", newVal);
+                            if constexpr (RPC::debugBatchExtra)
+                                DebugM(name, ": (costDelta handler) cost += ", delta, "; cost for this IP is now ", newVal);
                         }
                     } else {
                         DebugM(name, ": (costDelta handler) per-IP data already gone, doing nothing");

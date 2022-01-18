@@ -1152,7 +1152,7 @@ namespace RPC {
     }
 
     BatchProcessor::~BatchProcessor() {
-        DebugM(objectName(), " ", __func__, ", elapsed: ", t0.msecStr(6), " msec");
+        if constexpr (debugBatchExtra) DebugM(objectName(), " ", __func__, ", elapsed: ", t0.msecStr(6), " msec");
         // signal to listeners that cost is now 0
         addCost(-cumCost);
     }
@@ -1185,7 +1185,7 @@ namespace RPC {
     void BatchProcessor::process()
     {
         if (done) {
-            DebugM(objectName(), ": (", __func__, ") done = true, aborting early ...");
+            if constexpr (debugBatchExtra) DebugM(objectName(), ": (", __func__, ") done = true, aborting early ...");
             return;
         }
         if (UNLIKELY(conn.ignoreNewIncomingMessages)) {
@@ -1211,10 +1211,10 @@ namespace RPC {
                 isProcessingPaused = true;
                 return;
             } else if (isProcessingPaused) {
-                DebugM(objectName(), ": unpaused");
+                if constexpr (debugBatchExtra) DebugM(objectName(), ": unpaused");
                 isProcessingPaused = false;
             }
-            DebugM(objectName(), ": processing batch item ", batch.nextItem + 1);
+            if constexpr (debugBatchExtra) DebugM(objectName(), ": processing batch item ", batch.nextItem + 1);
             auto var = batch.getNextAndIncrement();
             std::optional<QString> error;
             if (!var.canConvert<QVariantMap>()) {
@@ -1263,7 +1263,7 @@ namespace RPC {
                 // or if the connection went down asynchronously between calls)
                 AGAIN();
         } else if (batch.isComplete()) {
-            DebugM(objectName(), ": completed");
+            if constexpr (debugBatchExtra) DebugM(objectName(), ": completed");
             QVariantList l;
             for (const auto &msg : qAsConst(batch.responses)) {
                 if (msg.isError()) ++conn.nErrorsSent;
@@ -1291,7 +1291,7 @@ namespace RPC {
             // This branch is taken when we have sent out all the requests to the observer(s) but we haven't yet
             // received all the responses we expect. For now, we just time-out the batch request after 20 seconds.
             constexpr int timeoutSec = 20; // We hard-code this value for now.
-            DebugM(objectName(), ": lifecycle state is now idle");
+            if constexpr (debugBatchExtra) DebugM(objectName(), ": lifecycle state is now idle");
             callOnTimerSoonNoRepeat(timeoutSec * 1000, "+InactivityTimeout", [this, timeoutSec]{
                 Error() << objectName() << ": timed out after not receiving a batch response for "
                         << timeoutSec << " seconds.";

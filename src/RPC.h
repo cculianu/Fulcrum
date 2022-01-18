@@ -311,7 +311,7 @@ namespace RPC {
         /// If the batch limit has been exceeded
         struct BatchLimitExceeded : public BadPeer { using BadPeer::BadPeer; };
 
-        static constexpr int MAX_UNANSWERED_REQUESTS = 20000; ///< TODO: tune this down. For testing we leave this high for now.
+        static constexpr int MAX_UNANSWERED_REQUESTS = 20000; ///< TODO: tune this down?
 
         /// Subclasses, such as ElectrumConnection, reimplement this
         virtual bool isReadPaused() const { return false; }
@@ -432,6 +432,8 @@ namespace RPC {
         // Internally called to enqueue a new batch -- this may throw InvalidRequest if the QVariantList is empty
         void enqueueNewBatch(QVariantList &&);
     };
+
+    inline constexpr bool debugBatchExtra = false; ///< if true, Debug() log will print extra info for the batch processing feature
 
     /// Structure to hold a "batch request" context
     struct Batch

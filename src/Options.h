@@ -265,7 +265,6 @@ public:
     /// If this limit is set to 0, then batching is disabled for the server (even for whitelisted clients).
     /// Note: we set the default to 345 here because BlueWallet sends batches of 200, 100, and 45 depending on the
     /// request and it's not clear to me if it sends all 3 of them at once or if it sends them in series.
-    /// TODO: Follow up with BlueWallet team on this.  I'd like to set this limit lower (perhaps to 200).
     static constexpr unsigned defaultMaxBatch = 345,
                               maxBatchMin = 0,
                               maxBatchMax = 100'000; ///< This 100k limit is ridiculous, but we will allow it.
