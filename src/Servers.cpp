@@ -2706,7 +2706,7 @@ bool Client::canAcceptBatch(RPC::BatchProcessor *batch)
         return false;
     }
     const uint64_t size = uint64_t(batch->getBatch().items.size());
-    const QString name = Debug::isEnabled() ? batch->objectName() : QString{};
+    const QString name = batch->objectName();
     const auto weakp = std::weak_ptr(perIPData);
     connect(batch, &QObject::destroyed, [size, weakp, name](QObject *){
         // this lambda runs in `batch`'s object context immediately
