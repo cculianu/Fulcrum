@@ -509,7 +509,7 @@ namespace RPC {
     {
         bool doDisconnect = errorPolicy & ErrorPolicyDisconnect;
         if (errorPolicy & ErrorPolicySendErrorMessage) {
-            emit sendError(doDisconnect,code, message.left(120), msgId);
+            emit sendError(doDisconnect, code, message.left(120), msgId);
             if (!doDisconnect)
                 emit peerError(id, lastPeerError=message);
             doDisconnect = false; // if was true, already enqueued graceful disconnect after error reply, if was false, no-op here
@@ -1294,14 +1294,15 @@ namespace RPC {
         } else {
             // This branch is taken when we have sent out all the requests to the observer(s) but we haven't yet
             // received all the responses we expect. For now, we just time-out the batch request after 20 seconds.
-            constexpr int timeoutSec = 20; // TODO: have this come from config?!
+            constexpr int timeoutSec = 20; // We hard-code this value for now.
             DebugM(objectName(), ": lifecycle state is now idle");
             callOnTimerSoonNoRepeat(timeoutSec * 1000, "+InactivityTimeout", [this, timeoutSec]{
                 Error() << objectName() << ": timed out after not receiving a batch response for "
                         << timeoutSec << " seconds.";
+                done = true;
                 emit conn.sendError(true, Code_InternalError, "Batch request timed out");
                 conn.status = conn.Bad;
-                this->deleteLater();
+                emit finished();
             });
         }
     }
