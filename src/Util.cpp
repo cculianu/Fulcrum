@@ -33,6 +33,7 @@
 #elif defined(Q_OS_LINUX)
 #  include <array>
 #  include <fstream>
+#  include <locale>
 #  include <sstream>
 #  include <strings.h>
 #  include <time.h>
@@ -315,16 +316,19 @@ namespace Util {
         MemUsage ret;
         std::ifstream file("/proc/self/status", std::ios_base::in);
         if (!file) return ret;
+        file.imbue(std::locale::classic());
         std::array<char, 256> buf;
         buf[0] = 0;
         // sizes are in kB
         while (file.getline(buf.data(), buf.size()) && (ret.phys == 0 || ret.virt == 0)) {
             if (strncasecmp(buf.data(), "VmSize:", 7) == 0) {
                 std::istringstream is(buf.data() + 7);
+                is.imbue(std::locale::classic());
                 is >> std::skipws >> ret.virt;
                 ret.virt *= std::size_t(1024);
             } else if (strncasecmp(buf.data(), "VmRSS:", 6) == 0) {
                 std::istringstream is(buf.data() + 6);
+                is.imbue(std::locale::classic());
                 is >> std::skipws >> ret.phys;
                 ret.phys *= std::size_t(1024);
             }
