@@ -1034,19 +1034,19 @@ class Storage::UTXOCache
         return ret;
     }
 
-    bool rm(const TXO &txo, bool addToRmSet) {
+    bool rm(const TXO &txo) {
         bool ret = false;
-        //bool wasInAdds = false;
+        bool wasInAdds = false;
         if (auto it = utxos.find(&txo); it != utxos.end()) {
             if (auto ait = adds.find(it); ait != adds.end()) {
-                //wasInAdds = true;
+                wasInAdds = true;
                 adds.erase(ait);
             }
             ordering.erase(it->second);
             utxos.erase(it);
             ret = true;
         }
-        if (addToRmSet /*&& !wasInAdds*/) rms.insert(txo);
+        if (!wasInAdds) rms.insert(txo);
         return ret;
     }
 
@@ -1185,7 +1185,7 @@ public:
         return ret;
     }
 
-    bool remove(const TXO & txo, bool isNotInDb) { return rm(txo, !isNotInDb); }
+    bool remove(const TXO & txo) { return rm(txo); }
 
     bool put(const TXO & txo, const TXOInfo & info, bool isNotInDb) { return add({txo, info}, isNotInDb); }
 
@@ -2362,7 +2362,7 @@ void Storage::UTXOBatch::remove(const TXO &txo, const HashX &hashX, const Compac
         static const QString errMsgPrefix("Failed to issue a batch delete for a utxo");
         GenericBatchDelete(p->utxosetBatch, txo, errMsgPrefix);
     } else {
-        p->cache->remove(txo, /* Hack ---> */ p->cache->cacheMisses == 0 ? true : false);
+        p->cache->remove(txo);
     }
     {
         // enqueue delete from scripthash_unspent db
