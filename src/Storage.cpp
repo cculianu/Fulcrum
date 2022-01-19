@@ -2362,7 +2362,7 @@ void Storage::UTXOBatch::remove(const TXO &txo, const HashX &hashX, const Compac
         static const QString errMsgPrefix("Failed to issue a batch delete for a utxo");
         GenericBatchDelete(p->utxosetBatch, txo, errMsgPrefix);
     } else {
-        p->cache->remove(txo, false /* TODO: optimize this to sometimes pass true here??? */);
+        p->cache->remove(txo, /* Hack ---> */ p->cache->cacheMisses == 0 ? true : false);
     }
     {
         // enqueue delete from scripthash_unspent db
