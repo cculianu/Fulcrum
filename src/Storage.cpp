@@ -50,6 +50,7 @@
 #include <cstddef> // for std::byte
 #include <cstdlib>
 #include <cstring> // for memcpy
+#include <future>
 #include <limits>
 #include <list>
 #include <map>
@@ -57,6 +58,7 @@
 #include <set>
 #include <shared_mutex>
 #include <string>
+#include <thread>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -973,7 +975,7 @@ class Storage::UTXOCache
     NodeList ordering;
     Table utxos; //< points to Nodes in `ordering`
     ItSet adds; ///< entries in above table that are new and are not in the DB yet
-    Set rms; ///< queued deletions, not yet deleted in DB
+    Set rms; ///< queued deletions, not yet deleted from DB
 
     static constexpr size_t EntrySize = sizeof(NodeList::value_type) + sizeof(Table::value_type) + HashLen * size_t{2U};
     static constexpr size_t ItSetItemSize = sizeof(ItSet::value_type);
@@ -986,8 +988,8 @@ class Storage::UTXOCache
     using ShunspentTable = std::unordered_map<ShunspentKey, int64_t, ShunspentKeyHasher>;
     using ShunspentSet = std::unordered_set<ShunspentKey, ShunspentKeyHasher>;
 
-    ShunspentTable shunspentAdds; ///< queued additions, not yet added to db
-    ShunspentSet shunspentRms; ///< queued deletions, not yet deleted in DB
+    ShunspentTable shunspentAdds; ///< queued additions, not yet added to DB
+    ShunspentSet shunspentRms; ///< queued deletions, not yet deleted from DB
 
     static constexpr size_t ShunspentTableNodeSize = sizeof(ShunspentTable::value_type) + HashLen + 8;
     static constexpr size_t ShunspentSetNodeSize = sizeof(ShunspentSet::value_type) + HashLen + 8;
@@ -1011,23 +1013,25 @@ class Storage::UTXOCache
         if (!adds.empty() || !rms.empty())
             t1 = std::thread([&]{
                 try {
-                    for (auto tit : adds) {
+                    for (auto it = adds.begin(); it != adds.end() ; /* incremented by erase */) {
                         // Update db utxoset, keyed off txo -> txoinfo
-                        static const QString errMsgPrefix("Failed to add a utxo to the utxo batch");
-                        const auto & [txo, info] = *(tit->second);
-                        GenericBatchPut(batch, txo, info, errMsgPrefix); // may throw on failure
+                        {
+                            static const QString errMsgPrefix("Failed to add a utxo to the utxo batch");
+                            const auto & [txo, info] = *((*it)->second);
+                            GenericBatchPut(batch, txo, info, errMsgPrefix); // may throw on failure
+                        }
+                        it = adds.erase(it);  // delete as we iterate to save memory
                         ++addCt;
                     }
-                    for (const auto & txo : rms) {
+                    adds.rehash(0); // reclaim memory
+                    for (auto it = rms.begin(); it != rms.end();  /* incremented by erase */) {
                         // enqueue delete from utxoset db -- may throw.
                         static const QString errMsgPrefix("Failed to issue a batch delete for a utxo");
-                        GenericBatchDelete(batch, txo, errMsgPrefix); // may throw on failure
+                        GenericBatchDelete(batch, *it /* txo */, errMsgPrefix); // may throw on failure
+                        it = rms.erase(it);
                         ++rmCt;
                     }
-
-                    adds.clear();
-                    rms.clear();
-                    // TODO: shink_to_fit here?
+                    rms.rehash(0); // reclaim memory
 
                     DebugM(__func__, ": batch write of ", addCt + rmCt, Util::Pluralize(" utxo item", addCt + rmCt), " ...");
                     static const QString errMsg("Error issuing batch write to utxoset db for a utxo update");
@@ -1049,20 +1053,25 @@ class Storage::UTXOCache
         if (!shunspentAdds.empty() || !shunspentRms.empty())
             t2 = std::thread([&]{
                 try {
-                    for (const auto & [dbkey, amount] : shunspentAdds) {
+                    for (auto it = shunspentAdds.begin(); it != shunspentAdds.end(); /**/) {
                         // Update db utxoset, keyed off txo -> txoinfo
-                        static const QString errMsgPrefix("Failed to add an item to the shunspent batch");
-                        GenericBatchPut(shunspentBatch, dbkey, amount, errMsgPrefix); // may throw on failure
+                        {
+                            static const QString errMsgPrefix("Failed to add an item to the shunspent batch");
+                            const auto & [dbkey, amount]  = *it;
+                            GenericBatchPut(shunspentBatch, dbkey, amount, errMsgPrefix); // may throw on failure
+                        }
+                        it = shunspentAdds.erase(it);
                         ++shunspentAddCt;
                     }
-                    for (const auto & dbkey : shunspentRms) {
+                    shunspentAdds.rehash(0); // reclaim memory
+                    for (auto it = shunspentRms.begin(); it != shunspentRms.end(); /**/) {
                         // enqueue delete from utxoset db -- may throw.
                         static const QString errMsgPrefix("Failed to issue a batch delete for a shunspent item");
-                        GenericBatchDelete(shunspentBatch, dbkey, errMsgPrefix);
+                        GenericBatchDelete(shunspentBatch, *it /* dbkey */, errMsgPrefix);
+                        it = shunspentRms.erase(it);
                         ++shunspentRmCt;
                     }
-                    shunspentAdds.clear();
-                    shunspentRms.clear();
+                    shunspentRms.rehash(0); // reclaim memory
 
                     DebugM(__func__, ": batch write of ", shunspentAddCt + shunspentRmCt,
                            Util::Pluralize(" shunspent item", shunspentAddCt + shunspentRmCt), " ...");

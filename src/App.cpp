@@ -1265,8 +1265,8 @@ void App::parseArgs()
     }
 
     // TESTING utxocache
-    if (const auto memfree = Util::getAvailablePhysicalRAM(); memfree > options->utxocache && (memfree * 3ull / 4ull) <= std::numeric_limits<size_t>::max()) {
-        options->utxocache = static_cast<size_t>(memfree * 3ull / 4ull); // take 3/4 of what system reported as memfree
+    if (const auto memfree = Util::getAvailablePhysicalRAM(); memfree > options->utxocache && (memfree / 2ull) <= std::numeric_limits<size_t>::max()) {
+        options->utxocache = static_cast<size_t>(memfree / 2ull); // take 1/2 of what system reported as memfree (we need extra to commit to DB)
         Util::AsyncOnObject(this, [memfree, u=options->utxocache]{
             DebugM("utxo cache size set to: ", u, " (available physical ram: ", memfree, ")");
         });
