@@ -47,6 +47,7 @@
 #include <csignal>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <list>
 #include <locale>
 #include <mutex>
@@ -1261,6 +1262,18 @@ void App::parseArgs()
     // parse --dump-*
     if (const auto outFile = parser.value("dump-sh"); !outFile.isEmpty()) {
         options->dumpScriptHashes = outFile; // we do no checking here, but Controller::startup will throw BadArgs if it cannot open this file for writing.
+    }
+
+    // TESTING utxocache
+    if (const auto memfree = Util::getAvailablePhysicalRAM(); memfree > options->utxocache && (memfree * 3ull / 4ull) <= std::numeric_limits<size_t>::max()) {
+        options->utxocache = static_cast<size_t>(memfree * 3ull / 4ull); // take 3/4 of what system reported as memfree
+        Util::AsyncOnObject(this, [memfree, u=options->utxocache]{
+            DebugM("utxo cache size set to: ", u, " (available physical ram: ", memfree, ")");
+        });
+    } else {
+        Util::AsyncOnObject(this, [memfree, u=options->utxocache]{
+            DebugM("utxo cache size left at default: ", u, " (available physical ram: ", memfree, ")");
+        });
     }
 }
 

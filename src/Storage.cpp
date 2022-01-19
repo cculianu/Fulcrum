@@ -2789,7 +2789,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
             }
 
             // TODO FIXME HAVE THIS COME FROM CONFIG?
-            constexpr size_t UTXO_MEM_LIMIT = 4ULL * 1000ULL * 1000ULL * 1000ULL;
+            const size_t UTXO_MEM_LIMIT = options->utxocache;
             if (p->db.utxoCache && p->db.utxoCache->memUsage() > UTXO_MEM_LIMIT)
                 p->db.utxoCache->limitSize(UTXO_MEM_LIMIT * 3 / 4 /* chop down to 3/4 size */);
 

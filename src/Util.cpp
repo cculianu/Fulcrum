@@ -347,6 +347,47 @@ namespace Util {
 #endif
     }
 
+    uint64_t getAvailablePhysicalRAM()
+    {
+        uint64_t ret = 512u * 1024u * 1024u; // just return 512MB, even if it's wrong, for unknown platforms
+#if defined(Q_OS_WINDOWS)
+        MEMORYSTATUSEX statex;
+        statex.dwLength = sizeof(statex);
+        GlobalMemoryStatusEx(&statex);
+        ret = static_cast<uint64_t>(statex.ullAvailPhys);
+#elif defined(Q_OS_DARWIN)
+        // can't easily query memory on darwin, just take 1/2 of physical memory
+        char buf[8];
+        size_t bufsz = 8;
+        if ( 0 == ::sysctlbyname("hw.memsize", buf, &bufsz, nullptr, 0) ) {
+            switch (bufsz) {
+            case 4: { uint32_t tmp; std::memcpy(&tmp, buf, 4); ret = tmp; ret /= uint64_t(2); break; }
+            case 8: { std::memcpy(&ret, buf, 8); ret /= uint64_t(2); break; }
+            default: qWarning() << "Failed to query physical RAM, kernel returned unexpected bufsize: " << bufsz;
+            }
+        }
+#elif defined(Q_OS_LINUX)
+        std::ifstream file("/proc/meminfo", std::ios_base::in);
+        if (!file) return ret;
+        file.imbue(std::locale::classic());
+        std::array<char, 256> buf;
+        buf[0] = 0;
+        // sizes are in kB
+        while (file.getline(buf.data(), buf.size())) {
+            if (strncasecmp(buf.data(), "MemAvailable:", 13) == 0) {
+                std::istringstream is(buf.data() + 13);
+                is.imbue(std::locale::classic());
+                uint64_t tmp = 0;
+                is >> std::skipws >> tmp;
+                tmp *= uint64_t(1024);
+                if (tmp > 0) ret = tmp;
+                break;
+            }
+        }
+#endif
+        return ret;
+    }
+
     namespace AsyncSignalSafe {
         namespace {
 #if defined(Q_OS_WIN)
