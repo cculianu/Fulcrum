@@ -1667,7 +1667,7 @@ void Storage::compactAllDBs()
 
 void Storage::gentlyCloseAllDBs()
 {
-    if (p->db.utxoCache) p->db.utxoCache.reset(); // implicitly flushes to DB...
+    p->db.utxoCache.reset(); // if was valid, implicitly flushes UTXO Cache pending writes to DB...
 
     // do FlushWAL() and Close() to gently close the dbs
     for (auto & [db] : p->db.openDBs) {
