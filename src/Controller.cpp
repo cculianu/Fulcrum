@@ -1075,6 +1075,9 @@ struct Controller::StateMachine
 
     /// will be valid and not empty only if a zmq hashblock notification happened while we were running the block & mempool synch task
     QByteArray mostRecentZmqNotif;
+
+    /// TODO: Add description HERE
+    std::optional<Storage::InitialSyncRAII> initialSyncRaii;
 };
 
 unsigned Controller::downloadTaskRecommendedThrottleTimeMsec(unsigned bnum) const
@@ -1270,10 +1273,16 @@ void Controller::process(bool beSilentIfUpToDate)
                 //   old undo is deleted is only when new undo is added -- hard to explain why in this comment but read
                 //   the `process_VerifyAndAddBlock` code in this file to see why this last bullet point
                 //   invariant must be satisfied).
-                if (task->info.initialBlockDownload && !storage->hasUndo()) {
+                const bool hasUndo = storage->hasUndo();
+                if (task->info.initialBlockDownload && !hasUndo) {
                     sm->suppressSaveUndo = sm->nHeaders > 0 && sm->ht > 0 && sm->nHeaders >= sm->ht
                                            && unsigned(sm->nHeaders - sm->ht) > storage->configuredUndoDepth();
                 }
+                // TESTING TODO FIXME ADD COMMENTS HERE OR PUT THIS IN A DIFFERENT PLACE?!
+                if (!hasUndo && !sm->initialSyncRaii)
+                    sm->initialSyncRaii.emplace( storage->setInitialSync() );
+                else if (sm->initialSyncRaii && hasUndo)
+                    sm->initialSyncRaii.reset();
             }
             AGAIN();
         });

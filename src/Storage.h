@@ -36,6 +36,7 @@
 
 #include <QByteArray>
 #include <QFlags>
+#include <QPointer>
 
 #include <functional>
 #include <memory>
@@ -311,6 +312,21 @@ public:
     /// optionally indented by `indent*indentLevel` spaces.  If indent is 0, the output will all be on 1 line with no padding.
     size_t dumpAllScriptHashes(QIODevice *outDev, unsigned indent=0, unsigned indentLevel=0, const DumpProgressFunc & = {}, size_t progInterval = 100000) const;
 
+    class InitialSyncRAII {
+        friend class Storage;
+        QPointer<Storage> storage;
+        InitialSyncRAII(Storage &storage_) : storage{&storage_} { storage->setInitialSync(true); }
+        InitialSyncRAII(const InitialSyncRAII &) = delete;
+    public:
+        InitialSyncRAII(InitialSyncRAII && o) : storage{std::move(o.storage)} { o.storage = nullptr; }
+        ~InitialSyncRAII() { if (storage) storage->setInitialSync(false); }
+
+        InitialSyncRAII &operator=(const InitialSyncRAII &) = delete;
+        InitialSyncRAII &operator=(InitialSyncRAII &&) = delete;
+    };
+
+    [[nodiscard]] InitialSyncRAII setInitialSync() { return InitialSyncRAII{*this}; }
+
 protected:
     virtual Stats stats() const override; ///< from StatsMixin
 
@@ -323,11 +339,12 @@ protected:
 
 
     // -- the below are used inside addBlock (and undoLatestBlock) to maintain the UTXO set & Headers
+    class UTXOCache;
 
     /// Used to store (in an opaque fashion) the rocksdb::WriteBatch objects used for updating the db.
     /// Called internally from addBlock and undoLatestBlock().
     struct UTXOBatch {
-        UTXOBatch();
+        UTXOBatch(UTXOCache *cache = nullptr);
         UTXOBatch(UTXOBatch &&);
         /// Enqueue an add of a utxo -- does not take effect in db until Storage::issueUpdates() is called -- may throw.
         void add(const TXO &, const TXOInfo &, const CompactTXO &);
@@ -366,6 +383,10 @@ protected:
     void saveUtxoCt();
     /// Reads the UtxoCt from the meta db. If they key is missing it will return 0.  May throw on low-level db error.
     int64_t readUtxoCtFromDB() const;
+
+    /// TODO: DESCRIPTION HERE
+    void setInitialSync(bool);
+    friend class InitialSyncRAII;
 
 private:
     const std::shared_ptr<const Options> options;
