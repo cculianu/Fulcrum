@@ -38,6 +38,7 @@
 #include <QFlags>
 #include <QPointer>
 
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -313,16 +314,19 @@ public:
     size_t dumpAllScriptHashes(QIODevice *outDev, unsigned indent=0, unsigned indentLevel=0, const DumpProgressFunc & = {}, size_t progInterval = 100000) const;
 
     class InitialSyncRAII {
-        friend class Storage;
         QPointer<Storage> storage;
-        InitialSyncRAII(Storage &storage_) : storage{&storage_} { storage->setInitialSync(true); }
-        InitialSyncRAII(const InitialSyncRAII &) = delete;
+        static inline std::atomic_int instanceCtr{0};
+        void constructed() { if (++instanceCtr == 1) storage->setInitialSync(true); }
+    protected:
+        friend class Storage;
+        InitialSyncRAII(Storage &storage_) : storage{&storage_} { constructed(); }
     public:
-        InitialSyncRAII(InitialSyncRAII && o) : storage{std::move(o.storage)} { o.storage = nullptr; }
-        ~InitialSyncRAII() { if (storage) storage->setInitialSync(false); }
+        InitialSyncRAII(const InitialSyncRAII & o) : storage(o.storage) { constructed(); }
+        InitialSyncRAII(InitialSyncRAII && o) : InitialSyncRAII(std::as_const(o)) {}
+        ~InitialSyncRAII() { if (--instanceCtr == 0 && storage) storage->setInitialSync(false); }
 
-        InitialSyncRAII &operator=(const InitialSyncRAII &) = delete;
-        InitialSyncRAII &operator=(InitialSyncRAII &&) = delete;
+        InitialSyncRAII &operator=(const InitialSyncRAII &) = default;
+        InitialSyncRAII &operator=(InitialSyncRAII && o) { return this->operator=(std::as_const(o)); }
     };
 
     [[nodiscard]] InitialSyncRAII setInitialSync() { return InitialSyncRAII{*this}; }
