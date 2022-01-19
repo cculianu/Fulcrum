@@ -71,6 +71,7 @@ public:
                               (std::is_pointer_v<decltype(std::declval<const T>().data())>
                                && std::is_integral_v<decltype(std::declval<const T>().size())>
                                && std::is_pod_v<std::remove_pointer_t<decltype(std::declval<const T>().data())>>
+                               && std::has_unique_object_representations_v<std::remove_pointer_t<decltype(std::declval<const T>().data())>>
                                && !std::is_pointer_v<std::remove_pointer_t<decltype(std::declval<const T>().data())>>), int> = 0>
     ByteView(const T &t) noexcept
         : ByteView(ptr_cast<std::byte>(t.data()), t.size() * sizeof(*t.data())) {
