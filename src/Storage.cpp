@@ -949,6 +949,8 @@ namespace {
 
     /* static */ const QByteArray TxHash2TxNumMgr::kLargestTxNumSeenKeyPrefix = "+largestTxNumSeen";
 
+    // Forward declaration (defined later in this file)
+    QByteArray mkShunspentKey(const QByteArray & hashX, const CompactTXO &ctxo);
 
 } // namespace
 
@@ -977,41 +979,110 @@ class Storage::UTXOCache
     static constexpr size_t ItSetItemSize = sizeof(ItSet::value_type);
     static constexpr size_t SetItemSize = sizeof(Set::value_type) + HashLen;
 
+    using ShunspentKey = QByteArray;
+    struct ShunspentKeyHasher {
+        size_t operator()(const ShunspentKey & k) const noexcept { return Util::hashForStd(static_cast<ByteView>(k)); }
+    };
+    using ShunspentTable = std::unordered_map<ShunspentKey, int64_t, ShunspentKeyHasher>;
+    using ShunspentSet = std::unordered_set<ShunspentKey, ShunspentKeyHasher>;
+
+    ShunspentTable shunspentAdds; ///< queued additions, not yet added to db
+    ShunspentSet shunspentRms; ///< queued deletions, not yet deleted in DB
+
+    static constexpr size_t ShunspentTableNodeSize = sizeof(ShunspentTable::value_type) + HashLen + 8;
+    static constexpr size_t ShunspentSetNodeSize = sizeof(ShunspentSet::value_type) + HashLen + 8;
+
     void do_flush() {
-        if (const auto ct = adds.size() + rms.size(); ct) {
-            Log() << name <<  ": Flushing " << ct << Util::Pluralize(" item", ct) << " to UTXO db ...";
+        if (const auto ct = adds.size() + rms.size() + shunspentAdds.size() + shunspentRms.size(); ct) {
+            Log() << name <<  ": Flushing " << ct << Util::Pluralize(" item", ct) << " to UTXO & ScriptHashUnspent dbs ...";
         } else {
             // nothing to do!
             return;
         }
         const Tic t0;
-        size_t addCt = 0, rmCt = 0;
-        rocksdb::WriteBatch batch;
-        for (auto tit : adds) {
-            // Update db utxoset, keyed off txo -> txoinfo
-            static const QString errMsgPrefix("Failed to add a utxo to the utxo batch");
-            const auto & [txo, info] = *(tit->second);
-            GenericBatchPut(batch, txo, info, errMsgPrefix); // may throw on failure
-            ++addCt;
-        }
-        for (const auto & txo : rms) {
-            // enqueue delete from utxoset db -- may throw.
-            static const QString errMsgPrefix("Failed to issue a batch delete for a utxo");
-            GenericBatchDelete(batch, txo, errMsgPrefix);
-            ++rmCt;
-        }
+        size_t addCt = 0, rmCt = 0, shunspentAddCt = 0, shunspentRmCt = 9;
+        rocksdb::WriteBatch batch, shunspentBatch;
 
-        adds.clear();
-        rms.clear();
-        // TODO: shink_to_fit here?
+        // do utxos in a thread
+        std::promise<void> p1;
+        auto f1 = p1.get_future();
+        std::thread t1;
+        Defer d1([&t1] { if (t1.joinable()) t1.join(); });
+        if (!adds.empty() || !rms.empty())
+            t1 = std::thread([&]{
+                try {
+                    for (auto tit : adds) {
+                        // Update db utxoset, keyed off txo -> txoinfo
+                        static const QString errMsgPrefix("Failed to add a utxo to the utxo batch");
+                        const auto & [txo, info] = *(tit->second);
+                        GenericBatchPut(batch, txo, info, errMsgPrefix); // may throw on failure
+                        ++addCt;
+                    }
+                    for (const auto & txo : rms) {
+                        // enqueue delete from utxoset db -- may throw.
+                        static const QString errMsgPrefix("Failed to issue a batch delete for a utxo");
+                        GenericBatchDelete(batch, txo, errMsgPrefix); // may throw on failure
+                        ++rmCt;
+                    }
 
-        DebugM(__func__, ": batch write of ", addCt + rmCt, Util::Pluralize(" item", addCt + rmCt), " ...");
-        static const QString errMsg("Error issuing batch write to utxoset db for a utxo update");
-        assert(bool(db));
-        GenericBatchWrite(db.get(), batch, errMsg, writeOpts); // may throw
+                    adds.clear();
+                    rms.clear();
+                    // TODO: shink_to_fit here?
+
+                    DebugM(__func__, ": batch write of ", addCt + rmCt, Util::Pluralize(" utxo item", addCt + rmCt), " ...");
+                    static const QString errMsg("Error issuing batch write to utxoset db for a utxo update");
+                    assert(bool(db));
+                    GenericBatchWrite(db.get(), batch, errMsg, writeOpts); // may throw
+
+                    p1.set_value();
+                } catch (...) {
+                    p1.set_exception(std::current_exception());
+                }
+            });
+        else p1.set_value();
+
+        // do scripthash_unspent in a thread
+        std::promise<void> p2;
+        auto f2 = p2.get_future();
+        std::thread t2;
+        Defer d2([&t2] { if (t2.joinable()) t2.join(); });
+        if (!shunspentAdds.empty() || !shunspentRms.empty())
+            t2 = std::thread([&]{
+                try {
+                    for (const auto & [dbkey, amount] : shunspentAdds) {
+                        // Update db utxoset, keyed off txo -> txoinfo
+                        static const QString errMsgPrefix("Failed to add an item to the shunspent batch");
+                        GenericBatchPut(shunspentBatch, dbkey, amount, errMsgPrefix); // may throw on failure
+                        ++shunspentAddCt;
+                    }
+                    for (const auto & dbkey : shunspentRms) {
+                        // enqueue delete from utxoset db -- may throw.
+                        static const QString errMsgPrefix("Failed to issue a batch delete for a shunspent item");
+                        GenericBatchDelete(shunspentBatch, dbkey, errMsgPrefix);
+                        ++shunspentRmCt;
+                    }
+                    shunspentAdds.clear();
+                    shunspentRms.clear();
+
+                    DebugM(__func__, ": batch write of ", shunspentAddCt + shunspentRmCt,
+                           Util::Pluralize(" shunspent item", shunspentAddCt + shunspentRmCt), " ...");
+                    static const QString errMsg2("Error issuing batch write to scripthash_unspent db for a shunspent update");
+                    assert(bool(shunspentdb));
+                    GenericBatchWrite(shunspentdb.get(), shunspentBatch, errMsg2, writeOpts); // may throw
+
+                    p2.set_value();
+                } catch (...) {
+                    p2.set_exception(std::current_exception());
+                }
+            });
+        else p2.set_value();
+
+        f1.get();
+        f2.get();
 
         if (t0.msec<int>() >= 50)
             DebugM(__func__, ": added ", addCt, " and deleted ", rmCt, Util::Pluralize(" utxo", addCt + rmCt),
+                   "; added ", shunspentAddCt, " and deleted ", shunspentRmCt, Util::Pluralize(" shunspent", shunspentAddCt + shunspentRmCt),
                    " in ", t0.msecStr(3), " msec");
     }
 
@@ -1025,13 +1096,19 @@ class Storage::UTXOCache
             ordering.erase(it);
             ret = false;
         }
-        rms.erase(txo);
+        rms.erase(txo); // TODO: is this needed? Might be a wasteful call. Maybe remove.
         if (isNotInDBYet) {
             adds.insert(tit);
         } else {
             adds.erase(tit);
         }
         return ret;
+    }
+
+    bool addShunspent(ShunspentKey && k, int64_t amt) {
+        const auto & [it, inserted] = shunspentAdds.emplace(std::move(k), amt);
+        shunspentRms.erase(it->first); // TODO: is this needed? Might be a wasteful call. Maybe remove.
+        return inserted;
     }
 
     bool rm(const TXO &txo) {
@@ -1050,6 +1127,15 @@ class Storage::UTXOCache
         return ret;
     }
 
+    bool rmShunspent(const ShunspentKey & k) {
+        if (auto it = shunspentAdds.find(k); it != shunspentAdds.end()) {
+            shunspentAdds.erase(it);
+            return true;
+        } else
+            shunspentRms.insert(k);
+        return false;
+    }
+
     bool contains(const TXO & t) const { return utxos.find(&t) != utxos.end(); }
 
     std::optional<TXOInfo> get_from_cache(const TXO & t) const {
@@ -1062,7 +1148,7 @@ class Storage::UTXOCache
     CoTask prefetcher;
     CoTask::Future prefetcherFut;
 
-    const std::unique_ptr<rocksdb::DB> & db;
+    const std::unique_ptr<rocksdb::DB> & db, & shunspentdb;
     const rocksdb::ReadOptions & readOpts;
     const rocksdb::WriteOptions & writeOpts;
 
@@ -1136,9 +1222,10 @@ class Storage::UTXOCache
     }
 
 public:
-    UTXOCache(const QString &name, const std::unique_ptr<rocksdb::DB> & pdb, const rocksdb::ReadOptions & readOpts,
+    UTXOCache(const QString &name, const std::unique_ptr<rocksdb::DB> & pdb,
+              const std::unique_ptr<rocksdb::DB> & pshunspentdb, const rocksdb::ReadOptions & readOpts,
               const rocksdb::WriteOptions & writeOpts)
-        : name{name}, prefetcher{name + " Prefetcher"}, db{pdb}, readOpts{readOpts}, writeOpts{writeOpts} {
+        : name{name}, prefetcher{name + " Prefetcher"}, db{pdb}, shunspentdb{pshunspentdb}, readOpts{readOpts}, writeOpts{writeOpts} {
         DebugM(name, ": created");
     }
 
@@ -1157,7 +1244,10 @@ public:
         adds.rehash(0);
         rms.rehash(0);
     }
-    size_t memUsage() const { return utxos.size() * EntrySize + adds.size() * ItSetItemSize + rms.size() * SetItemSize; }
+    size_t memUsage() const {
+        return utxos.size() * EntrySize + adds.size() * ItSetItemSize + rms.size() * SetItemSize
+                + shunspentAdds.size() * ShunspentTableNodeSize + shunspentRms.size() * ShunspentSetNodeSize;
+    }
 
     /// NB: no locks on ppb are used for now. While this is alive ppb->inputs must not be mutated
     /// NB2: call waitForPrefetchToComplete() after this is called sometime later.
@@ -1185,9 +1275,15 @@ public:
         return ret;
     }
 
+    bool put(const TXO & txo, const TXOInfo & info, bool isNotInDb) { return add({txo, info}, isNotInDb); }
     bool remove(const TXO & txo) { return rm(txo); }
 
-    bool put(const TXO & txo, const TXOInfo & info, bool isNotInDb) { return add({txo, info}, isNotInDb); }
+    bool putShunspent(const CompactTXO &ctxo, const TXOInfo & info) {
+        return addShunspent(mkShunspentKey(info.hashX, ctxo),
+                            int64_t( info.amount / info.amount.satoshi() ) ///< we do it this way because it avoids a memcpy. this is the right way: Serialize(info.amount)
+                            );
+    }
+    bool removeShunspent(const HashX & hashX, const CompactTXO & ctxo) { return rmShunspent(mkShunspentKey(hashX, ctxo)); }
 
     void flush() { do_flush(); }
 
@@ -2313,7 +2409,7 @@ void Storage::issueUpdates(UTXOBatch &b)
         throw InternalError("Misuse of Storage::issueUpdates. Cannot issue the same updates using the same context more than once. FIXME!");
     assert(bool(p->db.utxoset) && bool(p->db.shunspent));
     if (!b.p->cache) GenericBatchWrite(p->db.utxoset.get(), b.p->utxosetBatch, errMsg1, p->db.defWriteOpts); // may throw
-    GenericBatchWrite(p->db.shunspent.get(), b.p->shunspentBatch, errMsg2, p->db.defWriteOpts); // may throw
+    if (!b.p->cache) GenericBatchWrite(p->db.shunspent.get(), b.p->shunspentBatch, errMsg2, p->db.defWriteOpts); // may throw
     p->utxoCt += b.p->addCt - b.p->rmCt; // tally up adds and deletes
     b.p->defunct = true;
 }
@@ -2323,7 +2419,7 @@ void Storage::setInitialSync(bool b) {
     std::scoped_lock guard(p->blocksLock, p->headerVerifierLock, p->blkInfoLock, p->mempoolLock);
     assert(bool(p->db.utxoset));
     if (b && !p->db.utxoCache)
-        p->db.utxoCache.reset(new UTXOCache("Storage UTXO Cache", p->db.utxoset, p->db.defReadOpts, p->db.defWriteOpts));
+        p->db.utxoCache.reset(new UTXOCache("Storage UTXO Cache", p->db.utxoset, p->db.shunspent, p->db.defReadOpts, p->db.defWriteOpts));
     else if (!b && p->db.utxoCache) {
         Log() << "Initial sync is off, flushing and deleting UTXO Cache ...";
         p->db.utxoCache.reset(); // implicitly flushes
@@ -2340,7 +2436,7 @@ void Storage::UTXOBatch::add(const TXO &txo, const TXOInfo &info, const CompactT
         p->cache->put(txo, info, true);
     }
 
-    {
+    if (!p->cache) {
         // Update the scripthash unspent. This is a very simple table which we scan by hashX prefix using
         // an iterator in listUnspent.  Each entry's key is prefixed with the HashX bytes (32) but suffixed with the
         // serialized CompactTXO bytes (8 or 9). Each entry's data is a 8-byte int64_t of the amount of the utxo to save
@@ -2351,6 +2447,8 @@ void Storage::UTXOBatch::add(const TXO &txo, const TXOInfo &info, const CompactT
                         mkShunspentKey(info.hashX, ctxo),
                         int64_t( info.amount / info.amount.satoshi() ), ///< we do it this way because it avoids a memcpy. this is the right way: Serialize(info.amount)
                         errMsgPrefix); // may throw, which is what we want
+    } else {
+        p->cache->putShunspent(ctxo, info);
     }
     ++p->addCt;
 }
@@ -2364,10 +2462,12 @@ void Storage::UTXOBatch::remove(const TXO &txo, const HashX &hashX, const Compac
     } else {
         p->cache->remove(txo);
     }
-    {
+    if (!p->cache) {
         // enqueue delete from scripthash_unspent db
         static const QString errMsgPrefix("Failed to issue a batch delete for a utxo to the scripthash_unspent db");
         GenericBatchDelete(p->shunspentBatch, mkShunspentKey(hashX, ctxo), errMsgPrefix);
+    } else {
+        p->cache->removeShunspent(hashX, ctxo);
     }
     ++p->rmCt;
 }
