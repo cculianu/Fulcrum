@@ -349,7 +349,7 @@ namespace Util {
 
     uint64_t getAvailablePhysicalRAM()
     {
-        uint64_t ret = 512u * 1024u * 1024u; // just return 512MB, even if it's wrong, for unknown platforms
+        uint64_t ret = 2048u * 1024u * 1024u; // just return 2GB, even if it's wrong, for unknown platforms
 #if defined(Q_OS_WINDOWS)
         MEMORYSTATUSEX statex;
         statex.dwLength = sizeof(statex);
