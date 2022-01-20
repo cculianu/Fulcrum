@@ -29,8 +29,6 @@
 #include "SubsMgr.h"
 #include "VarInt.h"
 
-#include "robin_hood/robin_hood.h"
-
 #include <rocksdb/cache.h>
 #include <rocksdb/db.h>
 #include <rocksdb/iterator.h>
@@ -968,12 +966,12 @@ class Storage::UTXOCache
         bool operator()(const TXO &a, const TXO &b) const noexcept { return a == b; }
         size_t operator()(const TXO &t) const noexcept { return std::hash<TXO>{}(t); }
     };
-    using Table = robin_hood::unordered_flat_map<TXORef, NodeList::iterator, TableHasherAndEq, TableHasherAndEq>;
+    using Table = std::unordered_map<TXORef, NodeList::iterator, TableHasherAndEq, TableHasherAndEq>;
     struct ItSetHasher {
         size_t operator()(NodeList::iterator it) const noexcept { return std::hash<TXO>{}(it->first); }
     };
-    using ItSet = robin_hood::unordered_flat_set<NodeList::iterator, ItSetHasher>;
-    using Set = robin_hood::unordered_flat_set<TXO>;
+    using ItSet = std::unordered_set<NodeList::iterator, ItSetHasher>;
+    using Set = std::unordered_set<TXO>;
 
     NodeList ordering;
     Table utxos; //< points to Nodes in `ordering`
@@ -988,8 +986,8 @@ class Storage::UTXOCache
     struct ShunspentKeyHasher {
         size_t operator()(const ShunspentKey & k) const noexcept { return Util::hashForStd(static_cast<ByteView>(k)); }
     };
-    using ShunspentTable = robin_hood::unordered_flat_map<ShunspentKey, int64_t, ShunspentKeyHasher>;
-    using ShunspentSet = robin_hood::unordered_flat_set<ShunspentKey, ShunspentKeyHasher>;
+    using ShunspentTable = std::unordered_map<ShunspentKey, int64_t, ShunspentKeyHasher>;
+    using ShunspentSet = std::unordered_set<ShunspentKey, ShunspentKeyHasher>;
 
     ShunspentTable shunspentAdds; ///< queued additions, not yet added to DB
     ShunspentSet shunspentRms; ///< queued deletions, not yet deleted from DB
@@ -1007,6 +1005,18 @@ class Storage::UTXOCache
         const Tic t0;
         size_t addCt = 0, rmCt = 0, shunspentAddCt = 0, shunspentRmCt = 9;
         rocksdb::WriteBatch batch, shunspentBatch;
+        constexpr size_t batchSize = 100'000;  // to limit the memory used for batching, we limit the batch size
+        const auto commitBatch = [](rocksdb::DB *db, rocksdb::WriteBatch &batch, const QString &errMsg,
+                                    const rocksdb::WriteOptions &writeOpts, size_t &batchCount) {
+            const Tic t;
+            GenericBatchWrite(db, batch, errMsg, writeOpts); // may throw
+            batch.Clear();
+            if (t.msec<int>() >= 50) {
+                const auto ct = batchCount;
+                DebugM("do_flush: batch write of ", ct, Util::Pluralize(" item", ct), " took ", t.msecStr(), " msec");
+            }
+            batchCount = 0;
+        };
 
         // do utxos in a thread
         std::promise<void> p1;
@@ -1016,6 +1026,9 @@ class Storage::UTXOCache
         if (!adds.empty() || !rms.empty())
             t1 = std::thread([&]{
                 try {
+                    static const QString errMsgBatchWrite("Error issuing batch write to utxoset db for a utxo update");
+                    if (!db) throw InternalError("utxoset db is nullptr! FIXME!");
+                    size_t batchCount = 0;
                     for (auto it = adds.begin(); it != adds.end() ; /* incremented by erase */) {
                         // Update db utxoset, keyed off txo -> txoinfo
                         {
@@ -1025,6 +1038,8 @@ class Storage::UTXOCache
                         }
                         it = adds.erase(it);  // delete as we iterate to save memory
                         ++addCt;
+                        if (++batchCount >= batchSize)
+                            commitBatch(db.get(), batch, errMsgBatchWrite, writeOpts, batchCount);
                     }
                     for (auto it = rms.begin(); it != rms.end();  /* incremented by erase */) {
                         // enqueue delete from utxoset db -- may throw.
@@ -1032,12 +1047,11 @@ class Storage::UTXOCache
                         GenericBatchDelete(batch, *it /* txo */, errMsgPrefix); // may throw on failure
                         it = rms.erase(it);
                         ++rmCt;
+                        if (++batchCount >= batchSize)
+                            commitBatch(db.get(), batch, errMsgBatchWrite, writeOpts, batchCount);
                     }
 
-                    DebugM(__func__, ": batch write of ", addCt + rmCt, Util::Pluralize(" utxo item", addCt + rmCt), " ...");
-                    static const QString errMsg("Error issuing batch write to utxoset db for a utxo update");
-                    assert(bool(db));
-                    GenericBatchWrite(db.get(), batch, errMsg, writeOpts); // may throw
+                    if (batchCount) commitBatch(db.get(), batch, errMsgBatchWrite, writeOpts, batchCount);
 
                     p1.set_value();
                 } catch (...) {
@@ -1054,6 +1068,9 @@ class Storage::UTXOCache
         if (!shunspentAdds.empty() || !shunspentRms.empty())
             t2 = std::thread([&]{
                 try {
+                    static const QString errMsgBatchWrite("Error issuing batch write to scripthash_unspent db for a shunspent update");
+                    if (!shunspentdb) throw InternalError("scripthash_unspent db is nullptr! FIXME!");
+                    size_t batchCount = 0;
                     for (auto it = shunspentAdds.begin(); it != shunspentAdds.end(); /**/) {
                         // Update db utxoset, keyed off txo -> txoinfo
                         {
@@ -1063,6 +1080,8 @@ class Storage::UTXOCache
                         }
                         it = shunspentAdds.erase(it);
                         ++shunspentAddCt;
+                        if (++batchCount >= batchSize)
+                            commitBatch(shunspentdb.get(), shunspentBatch, errMsgBatchWrite, writeOpts, batchCount);
                     }
                     for (auto it = shunspentRms.begin(); it != shunspentRms.end(); /**/) {
                         // enqueue delete from utxoset db -- may throw.
@@ -1070,13 +1089,11 @@ class Storage::UTXOCache
                         GenericBatchDelete(shunspentBatch, *it /* dbkey */, errMsgPrefix);
                         it = shunspentRms.erase(it);
                         ++shunspentRmCt;
+                        if (++batchCount >= batchSize)
+                            commitBatch(shunspentdb.get(), shunspentBatch, errMsgBatchWrite, writeOpts, batchCount);
                     }
 
-                    DebugM(__func__, ": batch write of ", shunspentAddCt + shunspentRmCt,
-                           Util::Pluralize(" shunspent item", shunspentAddCt + shunspentRmCt), " ...");
-                    static const QString errMsg2("Error issuing batch write to scripthash_unspent db for a shunspent update");
-                    assert(bool(shunspentdb));
-                    GenericBatchWrite(shunspentdb.get(), shunspentBatch, errMsg2, writeOpts); // may throw
+                    if (batchCount) commitBatch(shunspentdb.get(), shunspentBatch, errMsgBatchWrite, writeOpts, batchCount);
 
                     p2.set_value();
                 } catch (...) {
@@ -1238,8 +1255,8 @@ public:
               const rocksdb::WriteOptions & writeOpts)
         : name{name}, prefetcher{name + " Prefetcher"}, db{pdb}, shunspentdb{pshunspentdb}, readOpts{readOpts}, writeOpts{writeOpts} {
         DebugM(name, ": created");
-        // Tune this? (so far 32 million doesn't eat that much RAM in practice so it's ok)
-        constexpr size_t rsv = 1ul << 25; // ~32 million
+        // Tune this? (so far 33 million doesn't eat that much RAM in practice so it's ok)
+        constexpr size_t rsv = 1ul << 25; // ~33 million
         utxos.reserve(rsv);
         adds.reserve(rsv);
         rms.reserve(rsv);
