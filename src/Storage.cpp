@@ -1135,26 +1135,29 @@ class Storage::UTXOCache
                 ret = false;
             }
         }
-        /* As a performance optimization we removed the below check because on any extant chain
-         * even pre-BIP34, this branch is not taken, ever.
-        if (const auto rit = rms.find(txo); UNLIKELY(rit != rms.end())) {
-            // Is this a wasteful call? We use debug code here to determine it it was.
-            DebugM(__func__, ": added txo ", txo.toString(), ", but already was in rms set (will remove from rms set)");
-            rms.erase(rit);
+        if constexpr (false) {
+            /* As a performance optimization we removed the below check because on any extant chain
+             * even pre-BIP34, this branch is not taken, ever.*/
+            if (const auto rit = rms.find(txo); UNLIKELY(rit != rms.end())) {
+                // Is this a wasteful call? We use debug code here to determine it it was.
+                DebugM(__func__, ": added txo ", txo.toString(), ", but already was in rms set (will remove from rms set)");
+                rms.erase(rit);
+            }
         }
-        */
         if (isNotInDBYet) {
             adds.insert(it);
         } else {
             // This branch may be taken on prefetch or on cache miss, which can happen if the UTXOCache is too small on
             // a small memory system).
-            // TODO: Determine if the below call is even needed, since both on prefetch and cache miss the item should
-            //       NOT be here already, so this add() call is redundant. We only need it if this code has bugs.
-            if (const auto ait = adds.find(it); ait != adds.end()) {
-                Warning() << __func__ << ": added txo " << txo.toString() << " as \"isNotInDbYet = false\","
-                          << " but it was already in `adds` (which presumes \"isNotInDbYet = true\"!"
-                          << " INVARIANT VIOLATED! FIXME!";
-                adds.erase(ait);
+            // Note: It was determined this check is not needed.  Re-enable this check if we modify the code
+            //       significantly, as a sanity/testing check.
+            if constexpr (false) {
+                if (const auto ait = adds.find(it); ait != adds.end()) {
+                    Warning() << __func__ << ": added txo " << txo.toString() << " as \"isNotInDbYet = false\","
+                              << " but it was already in `adds` (which presumes \"isNotInDbYet = true\"!"
+                              << " INVARIANT VIOLATED! FIXME!";
+                    adds.erase(ait);
+                }
             }
         }
         return ret;
@@ -2952,7 +2955,6 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                 p->genesisHash = BTC::HashRev(rawHeader); // this variable is guarded by p->headerVerifierLock
             }
 
-            // TODO FIXME HAVE THIS COME FROM CONFIG?
             const size_t UTXO_MEM_LIMIT = options->utxocache;
             if (p->db.utxoCache && p->db.utxoCache->memUsage() > UTXO_MEM_LIMIT)
                 p->db.utxoCache->limitSize(UTXO_MEM_LIMIT * 3 / 4 /* chop down to 3/4 size */);
