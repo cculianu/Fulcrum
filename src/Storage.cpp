@@ -29,6 +29,8 @@
 #include "SubsMgr.h"
 #include "VarInt.h"
 
+#include "robin_hood/robin_hood.h"
+
 #include <rocksdb/cache.h>
 #include <rocksdb/db.h>
 #include <rocksdb/iterator.h>
@@ -966,12 +968,12 @@ class Storage::UTXOCache
         bool operator()(const TXO &a, const TXO &b) const noexcept { return a == b; }
         size_t operator()(const TXO &t) const noexcept { return std::hash<TXO>{}(t); }
     };
-    using Table = std::unordered_map<TXORef, NodeList::iterator, TableHasherAndEq, TableHasherAndEq>;
+    using Table = robin_hood::unordered_flat_map<TXORef, NodeList::iterator, TableHasherAndEq, TableHasherAndEq>;
     struct ItSetHasher {
         size_t operator()(NodeList::iterator it) const noexcept { return std::hash<TXO>{}(it->first); }
     };
-    using ItSet = std::unordered_set<NodeList::iterator, ItSetHasher>;
-    using Set = std::unordered_set<TXO>;
+    using ItSet = robin_hood::unordered_flat_set<NodeList::iterator, ItSetHasher>;
+    using Set = robin_hood::unordered_flat_set<TXO>;
 
     NodeList ordering;
     Table utxos; //< points to Nodes in `ordering`
@@ -986,8 +988,8 @@ class Storage::UTXOCache
     struct ShunspentKeyHasher {
         size_t operator()(const ShunspentKey & k) const noexcept { return Util::hashForStd(static_cast<ByteView>(k)); }
     };
-    using ShunspentTable = std::unordered_map<ShunspentKey, int64_t, ShunspentKeyHasher>;
-    using ShunspentSet = std::unordered_set<ShunspentKey, ShunspentKeyHasher>;
+    using ShunspentTable = robin_hood::unordered_flat_map<ShunspentKey, int64_t, ShunspentKeyHasher>;
+    using ShunspentSet = robin_hood::unordered_flat_set<ShunspentKey, ShunspentKeyHasher>;
 
     ShunspentTable shunspentAdds; ///< queued additions, not yet added to DB
     ShunspentSet shunspentRms; ///< queued deletions, not yet deleted from DB
@@ -1201,7 +1203,7 @@ class Storage::UTXOCache
             std::vector<QByteArray> keyData;
             std::vector<rocksdb::PinnableSlice> values;
             std::vector<rocksdb::Status> statuses;
-            std::unordered_map<unsigned, TXO> index2TXO;
+            robin_hood::unordered_flat_map<unsigned, TXO> index2TXO;
             /* Note: we anticipate not ever needing to prefetch any coins, so we won't reserve here to save cycles.
             index2TXO.reserve(ppb->inputs.size());
             keys.reserve(ppb->inputs.size());
