@@ -1131,7 +1131,7 @@ class Storage::UTXOCache
                 utxos.erase(tit);
                 ordering.erase(oit);
                 const auto & [tit2, inserted2] = utxos.try_emplace(txo, it);
-                if (UNLIKELY(!inserted2)) throw InternalError("Tried overwriting existing TXO in cache but faile! THIS SHOULD NEVER HAPPEN!");
+                if (UNLIKELY(!inserted2)) /* paranoia */ throw InternalError("Tried overwriting existing TXO in cache but failed! THIS SHOULD NEVER HAPPEN!");
                 ret = false;
             }
         }
