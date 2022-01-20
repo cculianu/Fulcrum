@@ -1116,18 +1116,18 @@ class Storage::UTXOCache
     bool add(Node && n, bool isNotInDBYet) {
         // to prevent UB, should add in this order
         const auto it = ordering.insert(ordering.end(), std::move(n));
-        const auto & txo = it->first;
+        const auto & txo = it->first; // `txo` here must be a reference to the above-inserted node
         bool ret = true;
         {
-            const auto & [tit, inserted] = utxos.try_emplace(txo, it);
-            if (!inserted) {
-                // already there! this can happen on mainnet due to dupe txos pre-BIP34
+            const auto & [tit, inserted] = utxos.try_emplace(txo /* txoref to Node in `ordering` */, it);
+            if (UNLIKELY(!inserted)) {
+                // already there! this can happen on mainnet due to dupe txos pre-BIP34 (two txos are like this on mainnet only)
                 DebugM(__func__, ": WARNING dupe txo encountered: [", it->first.toString(), ", ", it->second.confirmedHeight.value_or(0),
                        "] vs [", tit->second->first.toString(), ", ", tit->second->second.confirmedHeight.value_or(0), "]");
                 // we must emulate the behavior of previous code (before UTXOCache) which would overwrite existing
                 const auto oit = tit->second;
                 adds.erase(oit);
-                //rms.erase(txo); // NB: this happens below too but we leave it here to avoid bugs in case below changes
+                rms.erase(txo); // paranoia (not needed for mainnet)
                 utxos.erase(tit);
                 ordering.erase(oit);
                 const auto & [tit2, inserted2] = utxos.try_emplace(txo, it);
@@ -1135,11 +1135,14 @@ class Storage::UTXOCache
                 ret = false;
             }
         }
-        if (const auto rit = rms.find(txo); rit != rms.end()) {
+        /* As a performance optimization we removed the below check because on any extant chain
+         * even pre-BIP34, this branch is not taken, ever.
+        if (const auto rit = rms.find(txo); UNLIKELY(rit != rms.end())) {
             // Is this a wasteful call? We use debug code here to determine it it was.
             DebugM(__func__, ": added txo ", txo.toString(), ", but already was in rms set (will remove from rms set)");
             rms.erase(rit);
         }
+        */
         if (isNotInDBYet) {
             adds.insert(it);
         } else {
