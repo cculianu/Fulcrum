@@ -29,6 +29,8 @@
 #include "SubsMgr.h"
 #include "VarInt.h"
 
+#include "robin_hood/robin_hood.h"
+
 #include <rocksdb/cache.h>
 #include <rocksdb/db.h>
 #include <rocksdb/iterator.h>
@@ -50,6 +52,7 @@
 #include <cstddef> // for std::byte
 #include <cstdlib>
 #include <cstring> // for memcpy
+#include <functional>
 #include <future>
 #include <limits>
 #include <list>
@@ -960,21 +963,21 @@ class Storage::UTXOCache
 {
     using Node = std::pair<TXO, TXOInfo>;
     using NodeList = std::list<Node>;
+    using TXORef = std::reference_wrapper<const TXO>; /* ref always to a Node in NodeList */
     struct TableHasherAndEq {
-        bool operator()(const TXO *a, const TXO *b) const noexcept { return *a == *b; }
-        size_t operator()(const TXO *t) const noexcept { return std::hash<TXO>{}(*t); }
+        bool operator()(const TXO &a, const TXO &b) const noexcept { return a == b; }
+        size_t operator()(const TXO &t) const noexcept { return std::hash<TXO>{}(t); }
     };
-    using Table = std::unordered_map<const TXO * /* ptr always to a Node in NodeList */,
-                                     NodeList::iterator, TableHasherAndEq, TableHasherAndEq>;
-    struct ItHasher {
-        size_t operator()(Table::iterator it) const noexcept { return std::hash<TXO>{}(*(it->first)); }
+    using Table = robin_hood::unordered_flat_map<TXORef, NodeList::iterator, TableHasherAndEq, TableHasherAndEq>;
+    struct ItSetHasher {
+        size_t operator()(NodeList::iterator it) const noexcept { return std::hash<TXO>{}(it->first); }
     };
-    using ItSet = std::unordered_set<Table::iterator, ItHasher>;
-    using Set = std::unordered_set<TXO>;
+    using ItSet = robin_hood::unordered_flat_set<NodeList::iterator, ItSetHasher>;
+    using Set = robin_hood::unordered_flat_set<TXO>;
 
     NodeList ordering;
     Table utxos; //< points to Nodes in `ordering`
-    ItSet adds; ///< entries in above table that are new and are not in the DB yet
+    ItSet adds; ///< entries in above NodeList that are new and are not in the DB yet
     Set rms; ///< queued deletions, not yet deleted from DB
 
     static constexpr size_t EntrySize = sizeof(NodeList::value_type) + sizeof(Table::value_type) + HashLen * size_t{2U};
@@ -985,8 +988,8 @@ class Storage::UTXOCache
     struct ShunspentKeyHasher {
         size_t operator()(const ShunspentKey & k) const noexcept { return Util::hashForStd(static_cast<ByteView>(k)); }
     };
-    using ShunspentTable = std::unordered_map<ShunspentKey, int64_t, ShunspentKeyHasher>;
-    using ShunspentSet = std::unordered_set<ShunspentKey, ShunspentKeyHasher>;
+    using ShunspentTable = robin_hood::unordered_flat_map<ShunspentKey, int64_t, ShunspentKeyHasher>;
+    using ShunspentSet = robin_hood::unordered_flat_set<ShunspentKey, ShunspentKeyHasher>;
 
     ShunspentTable shunspentAdds; ///< queued additions, not yet added to DB
     ShunspentSet shunspentRms; ///< queued deletions, not yet deleted from DB
@@ -1017,13 +1020,12 @@ class Storage::UTXOCache
                         // Update db utxoset, keyed off txo -> txoinfo
                         {
                             static const QString errMsgPrefix("Failed to add a utxo to the utxo batch");
-                            const auto & [txo, info] = *((*it)->second);
+                            const auto & [txo, info] = **it;
                             GenericBatchPut(batch, txo, info, errMsgPrefix); // may throw on failure
                         }
                         it = adds.erase(it);  // delete as we iterate to save memory
                         ++addCt;
                     }
-                    adds.rehash(0); // reclaim memory
                     for (auto it = rms.begin(); it != rms.end();  /* incremented by erase */) {
                         // enqueue delete from utxoset db -- may throw.
                         static const QString errMsgPrefix("Failed to issue a batch delete for a utxo");
@@ -1031,7 +1033,6 @@ class Storage::UTXOCache
                         it = rms.erase(it);
                         ++rmCt;
                     }
-                    rms.rehash(0); // reclaim memory
 
                     DebugM(__func__, ": batch write of ", addCt + rmCt, Util::Pluralize(" utxo item", addCt + rmCt), " ...");
                     static const QString errMsg("Error issuing batch write to utxoset db for a utxo update");
@@ -1063,7 +1064,6 @@ class Storage::UTXOCache
                         it = shunspentAdds.erase(it);
                         ++shunspentAddCt;
                     }
-                    shunspentAdds.rehash(0); // reclaim memory
                     for (auto it = shunspentRms.begin(); it != shunspentRms.end(); /**/) {
                         // enqueue delete from utxoset db -- may throw.
                         static const QString errMsgPrefix("Failed to issue a batch delete for a shunspent item");
@@ -1071,7 +1071,6 @@ class Storage::UTXOCache
                         it = shunspentRms.erase(it);
                         ++shunspentRmCt;
                     }
-                    shunspentRms.rehash(0); // reclaim memory
 
                     DebugM(__func__, ": batch write of ", shunspentAddCt + shunspentRmCt,
                            Util::Pluralize(" shunspent item", shunspentAddCt + shunspentRmCt), " ...");
@@ -1096,9 +1095,10 @@ class Storage::UTXOCache
     }
 
     bool add(Node && n, bool isNotInDBYet) {
+        // to prevent UB, should add in this order
         const auto it = ordering.insert(ordering.end(), std::move(n));
         const auto & [txo, info] = *it;
-        const auto & [tit, inserted] = utxos.try_emplace(&txo, it);
+        const auto & [tit, inserted] = utxos.try_emplace(txo, it);
         bool ret = true;
         if (!inserted) {
             // already there! what to do here?
@@ -1107,9 +1107,9 @@ class Storage::UTXOCache
         }
         rms.erase(txo); // TODO: is this needed? Might be a wasteful call. Maybe remove.
         if (isNotInDBYet) {
-            adds.insert(tit);
+            adds.insert(it);
         } else {
-            adds.erase(tit);
+            adds.erase(it);
         }
         return ret;
     }
@@ -1123,13 +1123,15 @@ class Storage::UTXOCache
     bool rm(const TXO &txo) {
         bool ret = false;
         bool wasInAdds = false;
-        if (auto it = utxos.find(&txo); it != utxos.end()) {
-            if (auto ait = adds.find(it); ait != adds.end()) {
+        if (auto it = utxos.find(txo); it != utxos.end()) {
+            if (auto ait = adds.find(it->second); ait != adds.end()) {
                 wasInAdds = true;
                 adds.erase(ait);
             }
-            ordering.erase(it->second);
+            // to prevent UB, should erase in this order
+            const auto oit = it->second;
             utxos.erase(it);
+            ordering.erase(oit);
             ret = true;
         }
         if (!wasInAdds) rms.insert(txo);
@@ -1145,10 +1147,10 @@ class Storage::UTXOCache
         return false;
     }
 
-    bool contains(const TXO & t) const { return utxos.find(&t) != utxos.end(); }
+    bool contains(const TXO & t) const { return utxos.find(t) != utxos.end(); }
 
     std::optional<TXOInfo> get_from_cache(const TXO & t) const {
-        if (const auto it = utxos.find(&t); it != utxos.end())
+        if (const auto it = utxos.find(t); it != utxos.end())
             return it->second->second;
         return std::nullopt;
     }
@@ -1236,6 +1238,13 @@ public:
               const rocksdb::WriteOptions & writeOpts)
         : name{name}, prefetcher{name + " Prefetcher"}, db{pdb}, shunspentdb{pshunspentdb}, readOpts{readOpts}, writeOpts{writeOpts} {
         DebugM(name, ": created");
+        // Tune this? (so far 32 million doesn't eat that much RAM in practice so it's ok)
+        constexpr size_t rsv = 1ul << 25; // ~32 million
+        utxos.reserve(rsv);
+        adds.reserve(rsv);
+        rms.reserve(rsv);
+        shunspentAdds.reserve(rsv);
+        shunspentRms.reserve(rsv);
     }
 
     ~UTXOCache() {
@@ -1306,7 +1315,7 @@ public:
         // assumption: flush() above clears `rms` and clears `adds`
         while (memUsage() > bytes && !ordering.empty()) {
             auto oit = ordering.begin();
-            utxos.erase(&(oit->first));
+            utxos.erase(oit->first);
             ordering.erase(oit);
         }
     }
