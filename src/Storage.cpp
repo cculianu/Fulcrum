@@ -1013,9 +1013,9 @@ class Storage::UTXOCache
             const Tic t;
             GenericBatchWrite(db, batch, errMsg, writeOpts); // may throw
             batch.Clear();
-            if (t.msec<int>() >= 150) {
+            if (t.msec<int>() >= 200) {
                 const auto ct = batchCount;
-                DebugM("do_flush: batch write of ", ct, DBName(db), Util::Pluralize(" item", ct), " took ", t.msecStr(), " msec");
+                DebugM("do_flush: batch write of ", ct, " ", DBName(db), Util::Pluralize(" item", ct), " took ", t.msecStr(), " msec");
             }
             batchCount = 0;
         };
@@ -1146,7 +1146,16 @@ class Storage::UTXOCache
         if (isNotInDBYet) {
             adds.insert(it);
         } else {
-            adds.erase(it);
+            // This branch may be taken on prefetch or on cache miss, which can happen if the UTXOCache is too small on
+            // a small memory system).
+            // TODO: Determine if the below call is even needed, since both on prefetch and cache miss the item should
+            //       NOT be here already, so this add() call is redundant. We only need it if this code has bugs.
+            if (const auto ait = adds.find(it); ait != adds.end()) {
+                Warning() << __func__ << ": added txo " << txo.toString() << " as \"isNotInDbYet = false\","
+                          << " but it was already in `adds` (which presumes \"isNotInDbYet = true\"!"
+                          << " INVARIANT VIOLATED! FIXME!";
+                adds.erase(ait);
+            }
         }
         return ret;
     }
