@@ -1013,9 +1013,9 @@ class Storage::UTXOCache
             const Tic t;
             GenericBatchWrite(db, batch, errMsg, writeOpts); // may throw
             batch.Clear();
-            if (t.msec<int>() >= 50) {
+            if (t.msec<int>() >= 150) {
                 const auto ct = batchCount;
-                DebugM("do_flush: batch write of ", ct, Util::Pluralize(" item", ct), " took ", t.msecStr(), " msec");
+                DebugM("do_flush: batch write of ", ct, DBName(db), Util::Pluralize(" item", ct), " took ", t.msecStr(), " msec");
             }
             batchCount = 0;
         };
@@ -1115,19 +1115,31 @@ class Storage::UTXOCache
 
     bool add(Node && n, bool isNotInDBYet) {
         // to prevent UB, should add in this order
-        auto it = ordering.insert(ordering.end(), std::move(n));
-        const auto & [tit, inserted] = utxos.try_emplace(std::as_const(it->first), it);
-        bool ret = true;
-        if (!inserted) {
-            // already there! this can happen on mainnet due to dupe txos. what to do here?
-            DebugM(__func__, ": WARNING dupe txo encountered: [", it->first.toString(), ", ", it->second.confirmedHeight.value_or(0),
-                   "] vs [", tit->second->first.toString(), ", ", tit->second->second.confirmedHeight.value_or(0), "]");
-            ordering.erase(it); // kill it (invalidating it)
-            it = tit->second; // and just proceeed using the old existing iterator
-            ret = false;
-        }
+        const auto it = ordering.insert(ordering.end(), std::move(n));
         const auto & txo = it->first;
-        rms.erase(txo); // TODO: is this needed? Might be a wasteful call. Maybe remove.
+        bool ret = true;
+        {
+            const auto & [tit, inserted] = utxos.try_emplace(txo, it);
+            if (!inserted) {
+                // already there! this can happen on mainnet due to dupe txos pre-BIP34
+                DebugM(__func__, ": WARNING dupe txo encountered: [", it->first.toString(), ", ", it->second.confirmedHeight.value_or(0),
+                       "] vs [", tit->second->first.toString(), ", ", tit->second->second.confirmedHeight.value_or(0), "]");
+                // we must emulate the behavior of previous code (before UTXOCache) which would overwrite existing
+                const auto oit = tit->second;
+                adds.erase(oit);
+                //rms.erase(txo); // NB: this happens below too but we leave it here to avoid bugs in case below changes
+                utxos.erase(tit);
+                ordering.erase(oit);
+                const auto & [tit2, inserted2] = utxos.try_emplace(txo, it);
+                if (UNLIKELY(!inserted2)) throw InternalError("Tried overwriting existing TXO in cache but faile! THIS SHOULD NEVER HAPPEN!");
+                ret = false;
+            }
+        }
+        if (const auto rit = rms.find(txo); rit != rms.end()) {
+            // Is this a wasteful call? We use debug code here to determine it it was.
+            DebugM(__func__, ": added txo ", txo.toString(), ", but already was in rms set (will remove from rms set)");
+            rms.erase(rit);
+        }
         if (isNotInDBYet) {
             adds.insert(it);
         } else {
