@@ -1142,7 +1142,6 @@ class Storage::UTXOCache
             /* As a performance optimization we removed the below check because on any extant chain
              * even pre-BIP34, this branch is not taken, ever.*/
             if (const auto rit = rms.find(txo); UNLIKELY(rit != rms.end())) {
-                // Is this a wasteful call? We use debug code here to determine it it was.
                 DebugM(__func__, ": WARNING added txo ", txo.toString(), ", but already was in rms set (will remove from rms set)");
                 rms.erase(rit);
             }
