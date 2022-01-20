@@ -1296,11 +1296,7 @@ public:
         DebugM(name, ": created");
         // Tune this? (so far 33 million doesn't eat that much RAM in practice so it's ok.. we want to avoid rehashing)
         constexpr size_t rsv = 1ul << 25; // ~33 million
-        utxos.reserve(rsv);
-        adds.reserve(rsv);
-        rms.reserve(rsv);
-        shunspentAdds.reserve(rsv);
-        shunspentRms.reserve(rsv);
+        reserve(rsv);
     }
 
     ~UTXOCache() {
