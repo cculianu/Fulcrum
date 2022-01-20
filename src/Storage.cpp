@@ -997,6 +997,8 @@ class Storage::UTXOCache
     static constexpr size_t ShunspentTableNodeSize = sizeof(ShunspentTable::value_type) + HashLen + 8;
     static constexpr size_t ShunspentSetNodeSize = sizeof(ShunspentSet::value_type) + HashLen + 8;
 
+    static constexpr bool CHECK_SANITY = false; ///< enable this for extra sanity checks (slightly slows down the cache)
+
     void do_flush() {
         if (const auto ct = adds.size() + rms.size() + shunspentAdds.size() + shunspentRms.size(); ct) {
             Log() << name <<  ": Flushing " << ct << Util::Pluralize(" item", ct) << " to UTXO & ScriptHashUnspent dbs ...";
@@ -1131,16 +1133,17 @@ class Storage::UTXOCache
                 utxos.erase(tit);
                 ordering.erase(oit);
                 const auto & [tit2, inserted2] = utxos.try_emplace(txo, it);
-                if (UNLIKELY(!inserted2)) /* paranoia */ throw InternalError("Tried overwriting existing TXO in cache but failed! THIS SHOULD NEVER HAPPEN!");
+                if (UNLIKELY(!inserted2)) /* paranoia */
+                    throw InternalError("Tried overwriting existing TXO in cache but failed! THIS SHOULD NEVER HAPPEN!");
                 ret = false;
             }
         }
-        if constexpr (false) {
+        if constexpr (CHECK_SANITY) {
             /* As a performance optimization we removed the below check because on any extant chain
              * even pre-BIP34, this branch is not taken, ever.*/
             if (const auto rit = rms.find(txo); UNLIKELY(rit != rms.end())) {
                 // Is this a wasteful call? We use debug code here to determine it it was.
-                DebugM(__func__, ": added txo ", txo.toString(), ", but already was in rms set (will remove from rms set)");
+                DebugM(__func__, ": WARNING added txo ", txo.toString(), ", but already was in rms set (will remove from rms set)");
                 rms.erase(rit);
             }
         }
@@ -1151,9 +1154,9 @@ class Storage::UTXOCache
             // a small memory system).
             // Note: It was determined this check is not needed.  Re-enable this check if we modify the code
             //       significantly, as a sanity/testing check.
-            if constexpr (false) {
+            if constexpr (CHECK_SANITY) {
                 if (const auto ait = adds.find(it); ait != adds.end()) {
-                    Warning() << __func__ << ": added txo " << txo.toString() << " as \"isNotInDbYet = false\","
+                    Warning() << __func__ << ": WARNING added txo " << txo.toString() << " as \"isNotInDbYet = false\","
                               << " but it was already in `adds` (which presumes \"isNotInDbYet = true\"!"
                               << " INVARIANT VIOLATED! FIXME!";
                     adds.erase(ait);
@@ -1171,10 +1174,13 @@ class Storage::UTXOCache
                    " amt2: ", amt, "], overwriting existing with amt2.");
             it->second = amt; // overwrite existing to preserve behavior of pre-UTXOCache code.
         }
-        // TODO: is this needed? Might be a wasteful call. Maybe remove.
-        if (const auto rit = shunspentRms.find(it->first); UNLIKELY(rit != shunspentRms.end())) {
-            Warning() << __func__ << ": shunspentRms entry exists for \"" << it->first.toHex() << "\", but we are told to add it now! FIXME!";
-            shunspentRms.erase(rit);
+        if constexpr (CHECK_SANITY) {
+            // Removed for performance since it is a wasteful call. Only needed if code is incorrect.
+            if (const auto rit = shunspentRms.find(it->first); UNLIKELY(rit != shunspentRms.end())) {
+                Warning() << __func__ << ": WARNING shunspentRms entry exists for \"" << it->first.toHex()
+                          << "\", but we are told to add it now! FIXME!";
+                shunspentRms.erase(rit);
+            }
         }
         return inserted;
     }
