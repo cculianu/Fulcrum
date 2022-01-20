@@ -973,29 +973,29 @@ class Storage::UTXOCache
         size_t operator()(NodeList::iterator it) const noexcept { return std::hash<TXO>{}(it->first); }
     };
     using ItSet = robin_hood::unordered_flat_set<NodeList::iterator, ItSetHasher>;
-    using Set = robin_hood::unordered_flat_set<TXO>;
+    using RmVec = std::vector<TXO>;
 
     NodeList ordering;
     Table utxos; //< points to Nodes in `ordering`
     ItSet adds; ///< entries in above NodeList that are new and are not in the DB yet
-    Set rms; ///< queued deletions, not yet deleted from DB
+    RmVec rms; ///< queued deletions, not yet deleted from DB
 
     static constexpr size_t EntrySize = sizeof(NodeList::value_type) + sizeof(Table::value_type) + HashLen * size_t{2U};
     static constexpr size_t ItSetItemSize = sizeof(ItSet::value_type);
-    static constexpr size_t SetItemSize = sizeof(Set::value_type) + HashLen;
+    static constexpr size_t RmVecItemSize = sizeof(RmVec::value_type) + HashLen;
 
     using ShunspentKey = QByteArray;
     struct ShunspentKeyHasher {
         size_t operator()(const ShunspentKey & k) const noexcept { return Util::hashForStd(static_cast<ByteView>(k)); }
     };
     using ShunspentTable = robin_hood::unordered_flat_map<ShunspentKey, int64_t, ShunspentKeyHasher>;
-    using ShunspentSet = robin_hood::unordered_flat_set<ShunspentKey, ShunspentKeyHasher>;
+    using ShunspentRmVec = std::vector<ShunspentKey>;
 
     ShunspentTable shunspentAdds; ///< queued additions, not yet added to DB
-    ShunspentSet shunspentRms; ///< queued deletions, not yet deleted from DB
+    ShunspentRmVec shunspentRms; ///< queued deletions, not yet deleted from DB
 
     static constexpr size_t ShunspentTableNodeSize = sizeof(ShunspentTable::value_type) + HashLen + 8;
-    static constexpr size_t ShunspentSetNodeSize = sizeof(ShunspentSet::value_type) + HashLen + 8;
+    static constexpr size_t ShunspentRmVecNodeSize = sizeof(ShunspentRmVec::value_type) + HashLen + 8;
 
     static constexpr bool CHECK_SANITY = false; ///< enable this for extra sanity checks (slightly slows down the cache)
 
@@ -1045,15 +1045,17 @@ class Storage::UTXOCache
                         if (++batchCount >= batchSize)
                             commitBatch(db.get(), batch, errMsgBatchWrite, writeOpts, batchCount);
                     }
-                    for (auto it = rms.begin(); it != rms.end();  /* incremented by erase */) {
+                    const TXO empty;
+                    for (auto  & txo : rms) {
                         // enqueue delete from utxoset db -- may throw.
                         static const QString errMsgPrefix("Failed to issue a batch delete for a utxo");
-                        GenericBatchDelete(batch, *it /* txo */, errMsgPrefix); // may throw on failure
-                        it = rms.erase(it);
+                        GenericBatchDelete(batch,  txo, errMsgPrefix); // may throw on failure
+                        txo = empty; // to recover memory now
                         ++rmCt;
                         if (++batchCount >= batchSize)
                             commitBatch(db.get(), batch, errMsgBatchWrite, writeOpts, batchCount);
                     }
+                    rms.clear(); // wipe vector, it has been processed
 
                     if (batchCount) commitBatch(db.get(), batch, errMsgBatchWrite, writeOpts, batchCount);
 
@@ -1087,15 +1089,16 @@ class Storage::UTXOCache
                         if (++batchCount >= batchSize)
                             commitBatch(shunspentdb.get(), shunspentBatch, errMsgBatchWrite, writeOpts, batchCount);
                     }
-                    for (auto it = shunspentRms.begin(); it != shunspentRms.end(); /**/) {
+                    for (auto & dbKey : shunspentRms) {
                         // enqueue delete from utxoset db -- may throw.
                         static const QString errMsgPrefix("Failed to issue a batch delete for a shunspent item");
-                        GenericBatchDelete(shunspentBatch, *it /* dbkey */, errMsgPrefix);
-                        it = shunspentRms.erase(it);
+                        GenericBatchDelete(shunspentBatch, dbKey, errMsgPrefix);
+                        dbKey.clear(); // to recover memory now
                         ++shunspentRmCt;
                         if (++batchCount >= batchSize)
                             commitBatch(shunspentdb.get(), shunspentBatch, errMsgBatchWrite, writeOpts, batchCount);
                     }
+                    shunspentRms.clear(); // wipe vector, it has been processed.
 
                     if (batchCount) commitBatch(shunspentdb.get(), shunspentBatch, errMsgBatchWrite, writeOpts, batchCount);
 
@@ -1129,7 +1132,6 @@ class Storage::UTXOCache
                 // we must emulate the behavior of previous code (before UTXOCache) which would overwrite existing
                 const auto oit = tit->second;
                 adds.erase(oit);
-                rms.erase(txo); // paranoia (not needed for mainnet)
                 utxos.erase(tit);
                 ordering.erase(oit);
                 const auto & [tit2, inserted2] = utxos.try_emplace(txo, it);
@@ -1138,14 +1140,10 @@ class Storage::UTXOCache
                 ret = false;
             }
         }
-        if constexpr (CHECK_SANITY) {
-            /* As a performance optimization we removed the below check because on any extant chain
-             * even pre-BIP34, this branch is not taken, ever.*/
-            if (const auto rit = rms.find(txo); UNLIKELY(rit != rms.end())) {
-                DebugM(__func__, ": WARNING added txo ", txo.toString(), ", but already was in rms set (will remove from rms set)");
-                rms.erase(rit);
-            }
-        }
+        // NOTE: Assumption is that this txo was not in `rms`.  On mainnet the dupe txos are unspent
+        //       between the 2 times they appear, so this assumption holds, and since BIP34 has been
+        //       activated, it will always hold, since only 1 of them can ever be spent in the future.
+
         if (isNotInDBYet) {
             adds.insert(it);
         } else {
@@ -1173,14 +1171,8 @@ class Storage::UTXOCache
                    " amt2: ", amt, "], overwriting existing with amt2.");
             it->second = amt; // overwrite existing to preserve behavior of pre-UTXOCache code.
         }
-        if constexpr (CHECK_SANITY) {
-            // Removed for performance since it is a wasteful call. Only needed if code is incorrect.
-            if (const auto rit = shunspentRms.find(it->first); UNLIKELY(rit != shunspentRms.end())) {
-                Warning() << __func__ << ": WARNING shunspentRms entry exists for \"" << it->first.toHex()
-                          << "\", but we are told to add it now! FIXME!";
-                shunspentRms.erase(rit);
-            }
-        }
+        // NOTE: Assumption is that an add will never add a shunspent key that is in the shunspentRms vector.
+        // (this is not checked for performance.)
         return inserted;
     }
 
@@ -1198,7 +1190,7 @@ class Storage::UTXOCache
             ordering.erase(oit);
             ret = true;
         }
-        if (!wasInAdds) rms.insert(txo);
+        if (!wasInAdds) rms.push_back(txo);
         return ret;
     }
 
@@ -1207,7 +1199,7 @@ class Storage::UTXOCache
             shunspentAdds.erase(it);
             return true;
         } else
-            shunspentRms.insert(std::move(k));
+            shunspentRms.push_back(std::move(k));
         return false;
     }
 
@@ -1320,15 +1312,19 @@ public:
         utxos.reserve(n);
         adds.reserve(n);
         rms.reserve(n);
+        shunspentAdds.reserve(n);
+        shunspentRms.reserve(n);
     }
     void shrink_to_fit() {
         utxos.rehash(0);
         adds.rehash(0);
-        rms.rehash(0);
+        rms.shrink_to_fit();
+        shunspentAdds.rehash(0);
+        shunspentRms.shrink_to_fit();
     }
     size_t memUsage() const {
-        return utxos.size() * EntrySize + adds.size() * ItSetItemSize + rms.size() * SetItemSize
-                + shunspentAdds.size() * ShunspentTableNodeSize + shunspentRms.size() * ShunspentSetNodeSize;
+        return utxos.size() * EntrySize + adds.size() * ItSetItemSize + rms.size() * RmVecItemSize
+                + shunspentAdds.size() * ShunspentTableNodeSize + shunspentRms.size() * ShunspentRmVecNodeSize;
     }
 
     /// NB: no locks on ppb are used for now. While this is alive ppb->inputs must not be mutated
@@ -1376,7 +1372,7 @@ public:
         if (size_t m; Debug::isEnabled() && (m = memUsage()) > bytes) {
             DebugM(name, ": limiting size to ", bytes, ", current size: ", m);
         }
-        // assumption: flush() above clears `rms` and clears `adds`
+        // assumption: flush() above clears `rms`, `adds`, `shunspentAdds`, and `shunspentRms`
         while (memUsage() > bytes && !ordering.empty()) {
             auto oit = ordering.begin();
             utxos.erase(oit->first);
