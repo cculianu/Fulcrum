@@ -1165,7 +1165,17 @@ class Storage::UTXOCache
 
     bool addShunspent(ShunspentKey && k, int64_t amt) {
         const auto & [it, inserted] = shunspentAdds.emplace(std::move(k), amt);
-        shunspentRms.erase(it->first); // TODO: is this needed? Might be a wasteful call. Maybe remove.
+        if (UNLIKELY(!inserted)) {
+            // already there! paranoia check here ... may happen in pre-BIP34 txns on mainnet
+            DebugM(__func__, ": WARNING dupe txo encountered with key: \"", it->first.toHex(), "\" [amt1: ", it->second,
+                   " amt2: ", amt, "], overwriting existing with amt2.");
+            it->second = amt; // overwrite existing to preserve behavior of pre-UTXOCache code.
+        }
+        // TODO: is this needed? Might be a wasteful call. Maybe remove.
+        if (const auto rit = shunspentRms.find(it->first); UNLIKELY(rit != shunspentRms.end())) {
+            Warning() << __func__ << ": shunspentRms entry exists for \"" << it->first.toHex() << "\", but we are told to add it now! FIXME!";
+            shunspentRms.erase(rit);
+        }
         return inserted;
     }
 
