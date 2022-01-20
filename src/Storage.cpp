@@ -1113,15 +1113,18 @@ class Storage::UTXOCache
 
     bool add(Node && n, bool isNotInDBYet) {
         // to prevent UB, should add in this order
-        const auto it = ordering.insert(ordering.end(), std::move(n));
-        const auto & [txo, info] = *it;
-        const auto & [tit, inserted] = utxos.try_emplace(txo, it);
+        auto it = ordering.insert(ordering.end(), std::move(n));
+        const auto & [tit, inserted] = utxos.try_emplace(std::as_const(it->first), it);
         bool ret = true;
         if (!inserted) {
-            // already there! what to do here?
-            ordering.erase(it);
+            // already there! this can happen on mainnet due to dupe txos. what to do here?
+            DebugM(__func__, ": WARNING dupe txo encountered: [", it->first.toString(), ", ", it->second.confirmedHeight.value_or(0),
+                   "] vs [", tit->second->first.toString(), ", ", tit->second->second.confirmedHeight.value_or(0), "]");
+            ordering.erase(it); // kill it (invalidating it)
+            it = tit->second; // and just proceeed using the old existing iterator
             ret = false;
         }
+        const auto & txo = it->first;
         rms.erase(txo); // TODO: is this needed? Might be a wasteful call. Maybe remove.
         if (isNotInDBYet) {
             adds.insert(it);
@@ -1155,12 +1158,12 @@ class Storage::UTXOCache
         return ret;
     }
 
-    bool rmShunspent(const ShunspentKey & k) {
+    bool rmShunspent(ShunspentKey && k) {
         if (auto it = shunspentAdds.find(k); it != shunspentAdds.end()) {
             shunspentAdds.erase(it);
             return true;
         } else
-            shunspentRms.insert(k);
+            shunspentRms.insert(std::move(k));
         return false;
     }
 
@@ -1255,7 +1258,7 @@ public:
               const rocksdb::WriteOptions & writeOpts)
         : name{name}, prefetcher{name + " Prefetcher"}, db{pdb}, shunspentdb{pshunspentdb}, readOpts{readOpts}, writeOpts{writeOpts} {
         DebugM(name, ": created");
-        // Tune this? (so far 33 million doesn't eat that much RAM in practice so it's ok)
+        // Tune this? (so far 33 million doesn't eat that much RAM in practice so it's ok.. we want to avoid rehashing)
         constexpr size_t rsv = 1ul << 25; // ~33 million
         utxos.reserve(rsv);
         adds.reserve(rsv);
