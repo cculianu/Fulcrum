@@ -127,7 +127,7 @@ private:
     std::atomic_int extant = 0, extantMaxSeen = 0;
     std::atomic_bool blockNewWork = false;
     /// maximum number of extant jobs we allow before failing and not enqueuing more.
-    std::atomic_int extantLimit = 10000;
+    std::atomic_int extantLimit = 15'000;
 };
 
 /// Semi-private class not intended to be constructed by client code, but used inside ThreadPool::SubmitWork.

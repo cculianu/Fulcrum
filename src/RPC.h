@@ -24,16 +24,17 @@
 #include "RPCMsgId.h"
 #include "Util.h"
 
+#include <QtGlobal> // for qsizetype (and other typedefs)
 #include <QHash>
 #include <QMap>
 #include <QSet>
 #include <QString>
 #include <QVariant>
+#include <QVector>
 
 #include <memory>
 #include <optional>
-#include <utility> // for std::pair
-#include <variant>
+#include <utility> // for std::pair, std::move
 
 namespace WebSocket { class Wrapper; } ///< fwd decl
 
@@ -109,7 +110,7 @@ namespace RPC {
 
         // -- DATA --
 
-        Id id; ///< guaranteed to be either string, qint64, or nullptr
+        Id id; ///< guaranteed to be either string, qint64, or null
         QString method; /**< methodName extracted from data['method'] if it was present. If this is empty then no
                              'method' key was present in JSON. May also contain the "matched" method on a response
                              object where we matched the id to a method we knew about in Connection::idMethodMap. */
@@ -190,6 +191,8 @@ namespace RPC {
 
     using MethodMap = QHash<QString, Method>;
 
+    class BatchProcessor; ///< forward declaration because this is used in ConnectionBase
+
     /// A semi-concrete derived class of AbstractConnection implementing a
     /// JSON-RPC based method<->result protocol.  This class is client/server
     /// agnostic and it just operates in terms of JSON RPC methods and results.
@@ -239,6 +242,8 @@ namespace RPC {
         Q_PROPERTY(bool v1 READ isV1 WRITE setV1)
         Q_PROPERTY(bool strict READ isStrict WRITE setStrict)
 
+        friend class BatchProcessor;
+
     protected:
         /// Subclasses should call processJson to process what they think may be a complete JSON-RPC message.
         ///
@@ -247,13 +252,33 @@ namespace RPC {
         /// if processing a huge JSON payload containing a big block (for networks like ScaleNet).
         void processJson(QByteArray &&);
 
+        struct ProcessObjectResult {
+            struct Error {
+                int code{};
+                QString message;
+                Error(int c, const QString & m) : code(c), message(m) {}
+            };
+            // only 0 or 1 of the below 2 optionals will ever be valid at a time.
+            std::optional<Error> error;
+            std::optional<Message> message;
+            Message::Id parsedMsgId;
+
+            ProcessObjectResult(Error && e, const Message::Id &mid) : error{std::move(e)}, parsedMsgId{mid} {}
+            ProcessObjectResult(Message && m, const Message::Id &mid) : message{std::move(m)}, parsedMsgId{mid} {}
+            ProcessObjectResult(const Message::Id &mid) : parsedMsgId{mid} {}
+        };
+
+        /// Process an individual JSON object.
+        /// May be called in either batch context or immediate context.
+        [[nodiscard]] ProcessObjectResult processObject(QVariantMap &&);
+
         /* --
          * -- Stuff subclasses must implement to make use of this class as base:
          * --
          */
 
         /// subclasses must implement this to wrap outgoing data for sending.
-        virtual QByteArray wrapForSend(const QByteArray &) = 0;
+        virtual QByteArray wrapForSend(QByteArray &&) = 0;
 
         /* subclasses must also implement this pure virtual inherited from base:
              void on_readyRead() override; */
@@ -283,15 +308,22 @@ namespace RPC {
         struct InvalidRequest : public BadPeer { using BadPeer::BadPeer; };
         /// If peer request object has invalid number of params
         struct InvalidParameters : public BadPeer { using BadPeer::BadPeer; };
+        /// If the batch limit has been exceeded
+        struct BatchLimitExceeded : public BadPeer { using BadPeer::BadPeer; };
 
+        static constexpr int MAX_UNANSWERED_REQUESTS = 20000; ///< TODO: tune this down?
 
-        static constexpr int MAX_UNANSWERED_REQUESTS = 20000; ///< TODO: tune this down. For testing we leave this high for now.
+        /// Subclasses, such as ElectrumConnection, reimplement this
+        virtual bool isReadPaused() const { return false; }
 
         bool isV1() const { return v1; }
         void setV1(bool b) { v1 = b; }
 
         bool isStrict() const { return strict; }
         void setStrict(bool b) { strict = b; }
+
+        bool isBatchPermitted() const { return batchPermitted; }
+        void setBatchPermitted(bool b) { batchPermitted = b; }
 
     signals:
         /// call (emit) this to send a request to the peer
@@ -313,16 +345,21 @@ namespace RPC {
         /// because errorPolicy is not ErrorPolicyDisconnect
         void peerError(IdMixin::Id thisId, const QString &what);
 
+        /// This is only ever really emitted by ElectrumConnection and subclasses. `newState` indicates the new
+        /// paused state which has already been put into effect before this signal is emitted. This is only emitted on
+        /// state changes so the old state was always !newState.
+        void readPausedStateChanged(bool newState);
+
     protected slots:
         /// Actual implentation that prepares the request. Is connected to sendRequest() above. Runs in this object's
         /// thread context. Eventually calls send() -> do_write() (from superclass).
-        virtual void _sendRequest(const RPC::Message::Id & reqid, const QString &method, const QVariantList & params = QVariantList());
+        void _sendRequest(const RPC::Message::Id & reqid, const QString &method, const QVariantList & params = QVariantList());
         // ditto for notifications
-        virtual void _sendNotification(const QString &method, const QVariant & params);
+        void _sendNotification(const QString &method, const QVariant & params);
         /// Actual implementation of sendError, runs in our thread context.
-        virtual void _sendError(bool disconnect, int errorCode, const QString &message, const RPC::Message::Id &reqid = Message::Id());
+        void _sendError(bool disconnect, int errorCode, const QString &message, const RPC::Message::Id &reqid = Message::Id());
         /// Actual implementation of sendResult, runs in our thread context.
-        virtual void _sendResult(const RPC::Message::Id & reqid, const QVariant & result = QVariant());
+        void _sendResult(const RPC::Message::Id & reqid, const QVariant & result = QVariant());
 
     protected:
         /// chains to base, connects sendRequest signal to _sendRequest slot
@@ -341,9 +378,13 @@ namespace RPC {
         enum ErrorPolicy {
             /// Send an error RPC message on protocol errors.
             /// If this is set and ErrorPolicyDisconnect is set, the disconnect will be graceful.
+            /// Note that within a batch request this flag is ignored and errors are always sent
+            /// inside the batch response array (as per JSON-RPC spec).
             ErrorPolicySendErrorMessage = 1,
             /// Disconnect on RPC protocol errors. If this is set along with ErrorPolicySendErrorMessage,
             /// the disconnect will be graceful.
+            /// Note that within a batch request this flag will lead to a disconnect only after the batch completes
+            /// and returns results to the client.
             ErrorPolicyDisconnect = 2,
         };
         /// derived classes can set this internally (bitwise or of ErrorPolicy*)
@@ -352,15 +393,124 @@ namespace RPC {
 
         bool v1 = false; // if true, will generate v1 style messages and respond to v1 only
         bool strict = false; // if true, we will be more strict and reject some malformed JSON-RPC messages
+        bool batchPermitted = false; // if true, we will accept JSON-RPC Batches
+
+        /// New in 1.0.1: This is latched to true in Client::on_disconnect to signal that the client is being
+        /// disconnected and to just throw away any future messages from this client.
+        bool ignoreNewIncomingMessages = false;
 
         QString lastPeerError;
         quint64 nRequestsSent = 0, nNotificationsSent = 0, nResultsSent = 0, nErrorsSent = 0;
         quint64 nErrorReplies = 0, nUnansweredLifetime = 0;
 
-        /// New in 1.0.1: This is latched to true in Client::on_disconnect to signal that the client is being
-        /// disconnected and to just throw away any future messages from this client.
-        bool ignoreNewIncomingMessages = false;
+        /// Returns true if `msgId` is in any of the extantBatchProcessors in either the submitted or answered request set.
+        [[nodiscard]] bool hasMessageIdInBatchProcs(const Message::Id &msgId) const;
+
+        /// Subclasses may reimplement this to reject or accept a new JSON-RPC batch.
+        /// - If this method returns false, the passed-in batch will be immediately deleted, and a JSON-RPC message will
+        ///   be sent to the client, indicating that limits have been exceeded.
+        /// - If it returns true, then the batch will be added to the extantBatchProcessors table immediately and it
+        ///   will begin processing when the current event loop becomes free.  Reimplemented in the `Client` subclass.
+        [[nodiscard]] virtual bool canAcceptBatch(BatchProcessor *) { return true; }
+
+        /// This is called internally by either processJson() or by the BatchProcessor when it is killed.
+        void on_processJsonFailure(int code, const QString & message, const Message::Id &msgId = {});
+
+    private:
+        /// Table used to store the extant batch processors running.
+        QHash<IdMixin::Id, BatchProcessor *> extantBatchProcessors;
+        /// Message id's for "batch zombies". That is, messages that were emitted via gotMessage() but
+        /// for which the batch processor was killed before a response was generated asynchronously.  We
+        /// need to filter these out from the client, to avoid a buggy corner case.
+        QSet<Message::Id> batchZombies;
+
+        // Internally called by processObject()
+        [[nodiscard]] ProcessObjectResult processObject_internal(QVariantMap &&);
+        // Internally called by _sendResult and _sendError
+        // Precondition: Message must be either: isError() or isResponse() (this is not checked here for performance)
+        [[nodiscard]] bool batchResponseFilter(const Message & msg);
+        // Internally called to enqueue a new batch -- this may throw InvalidRequest if the QVariantList is empty
+        void enqueueNewBatch(QVariantList &&);
     };
+
+    inline constexpr bool debugBatchExtra = false; ///< if true, Debug() log will print extra info for the batch processing feature
+
+    /// Structure to hold a "batch request" context
+    struct Batch
+    {
+        QVariantList items; ///< the contents of the original batch request list. Data items may be any JSON type.
+        QVariantList::size_type nextItem = 0; ///< index into above array
+        /// The number of `items` that we have processed thus far that are notifications or that don't warrant a
+        /// response in the batch response.
+        QVariantList::size_type skippedCt = 0;
+        /// The number of responses in the batch response that were error responses.
+        QVariantList::size_type errCt = 0;
+
+        QSet<RPC::Message::Id> unansweredRequests, answeredRequests;
+        /// Responses enqueued for sending back to the client, may also include error responses aside from results
+        QVector<Message> responses;
+
+        bool hasNext() const { return nextItem < items.size(); }
+        QVariant getNextAndIncrement();
+        bool isComplete() const { return !hasNext() && skippedCt + responses.size() >= items.size(); }
+
+        Batch() = default;
+        Batch(QVariantList && items_) : items{std::move(items_)} {}
+    };
+
+    /// An individual batch request is managed by this object. Instances of this class are always children of
+    /// `ConnectionBase`. They  appear in the ConnectionBase parent's `extantBatchProcessors` table.
+    class BatchProcessor : public QObject, public IdMixin, public ProcessAgainMixin, public TimersByNameMixin,
+                           public StatsMixin
+    {
+        Q_OBJECT
+
+        ConnectionBase & conn;
+        Batch batch;
+        const Tic t0;
+        bool done = false;
+        bool isProcessingPaused = false;
+        bool killed = false;
+        qsizetype cumCost = 0; ///< The cost of the JSON batch array itself initially, but it accumulates response costs too.
+
+    public:
+        explicit BatchProcessor(ConnectionBase & parent, Batch && batch);
+        ~BatchProcessor() override;
+
+        /// Precondition: Message must be either: isError() or isResponse() (this is not checked here for performance)
+        bool acceptResponse(const Message &);
+        void process() override;
+
+        const Batch & getBatch() const { return batch; }
+        bool isFinished() const { return done; }
+
+        qsizetype cost() const { return cumCost; }
+
+        void killForExceedngLimit();
+
+    protected:
+        Stats stats() const override;
+
+    signals:
+        /// Tells observers that this object's lifecycle has ended. Will always eventually be emitted regardless of
+        /// reason for lifecycle termination.
+        void finished();
+        /// Update observers on this instance's on-going cost. `delta` may be positive or negative. A negative delta
+        /// is always emitted from this class's d'tor, to tell observers to deduct all the previously-seen cumulative
+        /// costs.  To use this properly to track cumulative costs:
+        /// (1) First take the current `cost()` and save it.
+        /// (2) Connect to this signal and each time the signal is delivered, add `delta` to your tracked cost.
+        /// (3) The final time this signal fires, `delta` will always be negative, e.g.: `-cost()`.
+        /// Note: Ensure the connection in (2) above is via a direct connection to be guaranteed delivery on destruction
+        /// of this instance.
+        void costDelta(qsizetype delta);
+
+    private:
+        void addCost(qsizetype cost);
+        void pushResponse(Message && m);
+        void pushResponse(const Message & m) { pushResponse(Message{m}); }
+    };
+
 
     /// Concrete class. For Electrum Cash style JSON RPC.
     /// This class can be used either with a bare QTcpSocket/QSslSocket in which case newlines delimit RPC messages.
@@ -372,7 +522,7 @@ namespace RPC {
 
         // the below two can/should only be called from the same thread as this object's thread
         void setReadPaused(bool);
-        bool isReadPaused() const { return readPaused; }
+        bool isReadPaused() const override { return readPaused; }
 
         /// Reimplemented from AbstractConnection.
         /// Returns true if the socket is wrapped by a WebSocket::Wrapper, false otherwise.
@@ -385,11 +535,11 @@ namespace RPC {
     protected:
         /// implements pure virtual from super to handle linefeed-based JSON. When a full line arrives, calls ConnectionBase::processJson
         void on_readyRead() override;
-        QByteArray wrapForSend(const QByteArray &) override;
+        QByteArray wrapForSend(QByteArray &&) override;
 
     private:
-        bool memoryWasteTimerActive = false;  ///< inticates the DoS protection timer is active, used by memoryWasteDoSProtection
         qint64 memoryWasteThreshold = -1; ///< gets lazy-initialized in memoryWasteDoSProtection below
+        bool memoryWasteTimerActive = false;  ///< inticates the DoS protection timer is active, used by memoryWasteDoSProtection
         void memoryWasteDoSProtection(); ///< must be called from on_readyRead only.
 
         bool readPaused = false;
@@ -423,7 +573,7 @@ namespace RPC {
 
     protected:
         void on_readyRead() override;
-        QByteArray wrapForSend(const QByteArray &) override;
+        QByteArray wrapForSend(QByteArray &&) override;
 
     private:
         /// These end up verbatim in the HTTP/1.1 POST header.

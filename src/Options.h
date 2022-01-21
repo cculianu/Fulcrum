@@ -137,7 +137,7 @@ public:
     bool isAddrInPerIPLimitExcludeSet(const QHostAddress & addr, Subnet * matched = nullptr) const;
 
     // Max history & max buffer
-    static constexpr int defaultMaxBuffer = 4'000'000, maxBufferMin = 64'000, maxBufferMax = 100'000'000;
+    static constexpr int defaultMaxBuffer = 8'000'000, maxBufferMin = 64'000, maxBufferMax = 100'000'000;
     static constexpr int defaultMaxHistory = 125'000, maxHistoryMin = 1000, maxHistoryMax = 25'000'000;
 
     static constexpr bool isMaxBufferSettingInBounds(int m) { return m >= maxBufferMin && m <= maxBufferMax; }
@@ -174,9 +174,9 @@ public:
     /// Comes from a triplet in config, if specified e.g.: "bitcoind_throttle = 50, 20, 10"
     AtomicStruct<BdReqThrottleParams> bdReqThrottleParams;
 
-    static constexpr int64_t defaultMaxSubsPerIP = 50'000, maxSubsPerIPMin = 500, maxSubsPerIPMax = std::numeric_limits<int>::max()/2; // 50k, 500, 10^30 (~1bln) respectively
+    static constexpr int64_t defaultMaxSubsPerIP = 75'000, maxSubsPerIPMin = 500, maxSubsPerIPMax = std::numeric_limits<int>::max()/2; // 75k, 500, 10^30 (~1bln) respectively
     static constexpr int64_t defaultMaxSubsGlobally = 10'000'000, maxSubsGloballyMin = 5000, maxSubsGloballyMax = std::numeric_limits<int>::max(); // 10 mln, 5k, 10^31 (~2bln) respectively
-    int64_t maxSubsPerIP = defaultMaxSubsPerIP; // 50k subs per IP ought to be plenty. User can set this in `max_subs_per_ip` in conf.
+    int64_t maxSubsPerIP = defaultMaxSubsPerIP; // 75k subs per IP ought to be plenty. User can set this in `max_subs_per_ip` in conf.
     int64_t maxSubsGlobally = defaultMaxSubsGlobally; // 10 million subs max globally.  User can set this in `max_subs` in conf.
     static constexpr bool isMaxSubsPerIPSettingInBounds(int64_t m) { return m >= maxSubsPerIPMin && m <= maxSubsPerIPMax; }
     static constexpr bool isMaxSubsGloballySettingInBounds(int64_t m) { return m >= maxSubsGloballyMin && m <= maxSubsGloballyMax; }
@@ -184,7 +184,7 @@ public:
     QString dumpScriptHashes;  ///< if specified, a file path to which to dump all scripthashes as JSON, corresponds to --dump-sh CLI arg
 
     struct DBOpts {
-        static constexpr int defaultMaxOpenFiles = 20, maxOpenFilesMin = 20, maxOpenFilesMax = std::numeric_limits<int>::max();
+        static constexpr int defaultMaxOpenFiles = 40, maxOpenFilesMin = 20, maxOpenFilesMax = std::numeric_limits<int>::max();
         /// comes from config db_max_open_files -- default in rocksdb is -1 meaning unlimited.
         /// See: https://github.com/facebook/rocksdb/wiki/Memory-usage-in-RocksDB#indexes-and-filter-blocks
         int maxOpenFiles = defaultMaxOpenFiles;
@@ -195,7 +195,7 @@ public:
         unsigned keepLogFileNum = defaultKeepLogFileNum;
         static constexpr bool isKeepLogFileNumInBounds(int64_t k) { return k >= int64_t(minKeepLogFileNum) && k <= int64_t(maxKeepLogFileNum); }
 
-        static constexpr size_t defaultMaxMem = 420 * 1024 * 1024, maxMemMin = 50 * 1024 * 1024, maxMemMax = std::numeric_limits<size_t>::max();
+        static constexpr size_t defaultMaxMem = 512 * 1024 * 1024, maxMemMin = 50 * 1024 * 1024, maxMemMax = std::numeric_limits<size_t>::max();
         size_t maxMem = defaultMaxMem;
         static constexpr bool isMaxMemInBounds(size_t mem) { return mem >= maxMemMin && mem <= maxMemMax; }
 
@@ -258,6 +258,18 @@ public:
     // CLI: --compact-dbs
     /// If specified, we compact all of the databases on startup
     bool compactDBs = false;
+
+    // config: max_batch
+    /// Per-IP limit on the size of batch requests. Note that all extant batch requests from a given IP together
+    /// cannot exceed this limit at any one time.  This limit is not applied to clients in the per-ip exclusion list.
+    /// If this limit is set to 0, then batching is disabled for the server (even for whitelisted clients).
+    /// Note: we set the default to 345 here because BlueWallet sends batches of 200, 100, and 45 depending on the
+    /// request and it's not clear to me if it sends all 3 of them at once or if it sends them in series.
+    static constexpr unsigned defaultMaxBatch = 345,
+                              maxBatchMin = 0,
+                              maxBatchMax = 100'000; ///< This 100k limit is ridiculous, but we will allow it.
+    static constexpr bool isMaxBatchInRange(unsigned n) { return n >= maxBatchMin && n <= maxBatchMax; }
+    unsigned maxBatch = defaultMaxBatch;
 };
 
 /// A class encapsulating a simple read-only config file format.  The format is similar to the bitcoin.conf format

@@ -565,8 +565,8 @@ protected:
     /// Only Server instances can construct us
     friend class ::ServerBase;
     friend class ::Server;
-    /// NB: sock should be in an already connected state.
-    explicit Client(const RPC::MethodMap * methods, IdMixin::Id id, QTcpSocket *sock, int maxBuffer);
+    /// NB: sock should be in an already connected state. `options` should be guaranteed to outlive this instance.
+    explicit Client(const RPC::MethodMap * methods, IdMixin::Id id, QTcpSocket *sock, const Options &options);
 public:
     ~Client() override;
 
@@ -603,6 +603,11 @@ public:
         std::atomic_int64_t bdReqCtr{0}; ///< the number bitcoind requests active right now for all clients coming from this IP address.
         std::atomic_uint64_t bdReqCtr_cum{0}; ///< the number bitcoind requests, cumulatively, for all clients coming from this IP address.
         std::atomic_int64_t lastConnectionLimitReachedWarning{0}; ///< timstamp (in msec) of the last "connection limit exceeded" warning printed to the log for this IP address.
+        /// The cumulative `batch.items.size()` for all batch requests currently active for this IP.
+        /// As RPC::BatchProcessors are created this is increased, and as they are deleted this is decreased.
+        std::atomic_uint64_t nExtantBatchRequests{0};
+        /// The total estimated memory footprint of all extant batch requests for this IP
+        std::atomic_int64_t extantBatchRequestCosts{0};
     };
 
     std::shared_ptr<PerIPData> perIPData;
@@ -647,4 +652,9 @@ protected:
         /// found.
         static std::shared_ptr<PerIPData> take(QTcpSocket *s);
     };
+
+    /// Does some per-IP book-keeping. If everything checks out, returns true. Otherwise returns false.
+    [[nodiscard]] bool canAcceptBatch(RPC::BatchProcessor *) override;
+private:
+    const Options & options;
 };
