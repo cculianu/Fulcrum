@@ -1540,19 +1540,16 @@ public:
 
     size_t cacheMisses = 0, cacheHits = 0;
 
-    /// NB: this currently takes no locks. Maybe add locks here if we must?
-    std::optional<TXOInfo> get(const TXO & txo, bool addToCache = true, bool throwIfMissing = false) {
+    /// Get a UTXO from the cache. Will return a null optional if the requested TXO was not in the cache.
+    /// Does not fall-back to looking in the DB. Caller should explicitly call utxoGetFromDB() themselves
+    /// for that purpose. Note: this currently takes no locks. Assumption is calling code is locking
+    /// things correctly. (This function is currently called only inside Storage::addBlock.)
+    /// Precondition: prefetcher must not be running.
+    std::optional<TXOInfo> get(const TXO & txo) {
         std::optional<TXOInfo> ret = get_from_cache(txo);
-        if (!ret) {
+        if (!ret)
             ++cacheMisses;
-            assert(bool(db));
-            static const QString errMsgPrefix("Failed to read a utxo from the utxo db");
-            ret = GenericDBGet<TXOInfo>(db.get(), txo, !throwIfMissing, errMsgPrefix, false, readOpts);
-            if (ret && addToCache) {
-                // add to cache (this takes an extra copy but it's ok since this branch is not currently taken in this codebase)
-                add(false, txo, *ret);
-            }
-        } else
+        else
             ++cacheHits;
         return ret;
     }
@@ -1643,6 +1640,7 @@ void Storage::startup()
     }
 
     {   // open all db's ...
+        p->db.utxoCache.reset(); // this should already be nullptr, but this reset() is just here to be defensive.
 
         // Optimize RocksDB. This is the easiest way to get RocksDB to perform well
         rocksdb::Options & opts(p->db.opts), &shistOpts(p->db.shistOpts), &txhash2txnumOpts(p->db.txhash2txnumOpts);
@@ -2562,9 +2560,9 @@ void Storage::issueUpdates(UTXOBatch &b)
 }
 
 void Storage::setInitialSync(bool b) {
-    // take all locks now.. since this is a Big Deal. TODO: add more locks here?
+    // take all locks now.. since this is a Big Deal.
     std::scoped_lock guard(p->blocksLock, p->headerVerifierLock, p->blkInfoLock, p->mempoolLock);
-    assert(bool(p->db.utxoset));
+    assert(bool(p->db.utxoset) && bool(p->db.shunspent));
     if (b && !p->db.utxoCache) {
         if (options->utxoCache > 0) {
             Log() << "experimental-fast-sync: Enabled; UTXO cache size set to " << options->utxoCache
@@ -2881,7 +2879,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                             if constexpr (debugPrt)
                                 Debug() << "Skipping input " << txo.toString() << ", spent in this block (output # " << *in.parentTxOutIdx << ")";
                         } else if (std::optional<TXOInfo> opt;
-                                   (p->db.utxoCache && (opt = p->db.utxoCache->get(txo, false))) || (opt = utxoGetFromDB(txo))) {
+                                   (p->db.utxoCache && (opt = p->db.utxoCache->get(txo))) || (opt = utxoGetFromDB(txo))) {
                             const auto & info = *opt;
                             if (info.confirmedHeight.has_value() && *info.confirmedHeight != ppb->height) {
                                 // was a prevout from a previos block.. so the ppb didn't have it in the 'involving hashx' set..
