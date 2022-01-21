@@ -804,7 +804,7 @@ namespace Util {
     struct MemUsage { std::size_t phys{}, virt{}; };
     MemUsage getProcessMemoryUsage();
     /// On Linux and Windows, this will be accurate. On OSX will just be 1/2 of physical RAM.
-    /// If unknown platform, or as a fallback on error, will return 512MiB.
+    /// If unknown platform, or as a fallback on error, will return 2GiB.
     uint64_t getAvailablePhysicalRAM();
 
     /// A namespace for a bunch of functionality that can be used from an async POSIX signal handler.
