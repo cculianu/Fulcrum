@@ -954,9 +954,157 @@ namespace {
 
     /* static */ const QByteArray TxHash2TxNumMgr::kLargestTxNumSeenKeyPrefix = "+largestTxNumSeen";
 
-    // Forward declaration (defined later in this file)
-    QByteArray mkShunspentKey(const QByteArray & hashX, const CompactTXO &ctxo);
+} // namespace
 
+struct Storage::Pvt
+{
+    Pvt(const unsigned cacheSizeBytes)
+        : lruNum2Hash(std::max(unsigned(cacheSizeBytes*kLruNum2HashCacheMemoryWeight), 1u)),
+          lruHeight2Hashes_BitcoindMemOrder(std::max(unsigned(cacheSizeBytes*kLruHeight2HashesCacheMemoryWeight), 1u))
+    {}
+
+    Pvt(const Pvt &) = delete;
+
+    constexpr int blockHeaderSize() { return BTC::GetBlockHeaderSize(); }
+
+    /* NOTE: If taking multiple locks, all locks should be taken in the order they are declared, to avoid deadlocks. */
+
+    Meta meta;
+    RWLock metaLock;
+
+    std::atomic<std::underlying_type_t<SaveItem>> pendingSaves{0};
+
+    struct RocksDBs {
+        const rocksdb::ReadOptions defReadOpts; ///< avoid creating this each time
+        const rocksdb::WriteOptions defWriteOpts; ///< avoid creating this each time
+
+        rocksdb::Options opts, shistOpts, txhash2txnumOpts;
+        std::weak_ptr<rocksdb::Cache> blockCache; ///< shared across all dbs, caps total block cache size across all db instances
+        std::weak_ptr<rocksdb::WriteBufferManager> writeBufferManager; ///< shared across all dbs, caps total memtable buffer size across all db instances
+
+        std::shared_ptr<ConcatOperator> concatOperator, concatOperatorTxHash2TxNum;
+
+        std::unique_ptr<rocksdb::DB> meta, blkinfo, utxoset,
+                                     shist, shunspent, // scripthash_history and scripthash_unspent
+                                     undo, // undo (reorg rewind)
+                                     txhash2txnum; // new: index of txhash -> txNumsFile
+        using DBPtrRef = std::tuple<std::unique_ptr<rocksdb::DB> &>;
+        std::list<DBPtrRef> openDBs; ///< a bit of introspection to track which dbs are currently open (used by gentlyCloseAllDBs())
+
+        std::unique_ptr<TxHash2TxNumMgr> txhash2txnumMgr; ///< provides a bit of a higher-level interface into the db
+
+        /// One of these is alive if we are in an initial sync and user specified --experimental-fast-sync
+        /// It caches UTXOs in memory and delays UTXO writes to DB so we don't have to do so much back-and-forth to
+        /// rocksdb.
+        std::unique_ptr<UTXOCache> utxoCache;
+    };
+    RocksDBs db;
+
+    std::unique_ptr<RecordFile> txNumsFile;
+    std::unique_ptr<RecordFile> headersFile;
+
+    /// Big lock used for block/history updates. Public methods that read the history such as getHistory and listUnspent
+    /// take this as read-only (shared), and addBlock and undoLatestBlock take this as read/write (exclusively).
+    /// This is intended to be a coarse lock.  Currently the update code takes this along with headerVerifierLock and
+    /// blkInfoLock at the same time, so it's (as of now) equivalent to either of those two locks.
+    /// TODO: See about removing all the other locks and keeping one general RWLock for all updates?
+    mutable RWLock blocksLock;
+
+    BTC::HeaderVerifier headerVerifier;
+    mutable RWLock headerVerifierLock;
+
+    std::atomic<TxNum> txNumNext{0};
+
+    std::vector<BlkInfo> blkInfos;
+    std::map<TxNum, unsigned> blkInfosByTxNum; ///< ordered map of TxNum0 for a block -> index into above blkInfo array
+    RWLock blkInfoLock; ///< locks blkInfos and blkInfosByTxNum
+
+    std::atomic<int64_t> utxoCt = 0;
+
+    static constexpr uint32_t InvalidUndoHeight = std::numeric_limits<uint32_t>::max();
+
+    std::atomic<uint32_t> earliestUndoHeight = InvalidUndoHeight; ///< the purpose of this is to control when we issue "delete" commands to the db for deleting expired undo infos from the undo db
+
+    // Ratios of cacheMemoryBytes that we give to each of the 2 lru caches -- we do 50/50
+    static constexpr double kLruNum2HashCacheMemoryWeight = 0.50;
+    static constexpr double kLruHeight2HashesCacheMemoryWeight = 1.0 - kLruNum2HashCacheMemoryWeight;
+
+    /// This cache is anticipated to see heavy use for get_history, so is configurable (config option: txhash_cache)
+    /// This gets cleared by undoLatestBlock.
+    CostCache<TxNum, TxHash> lruNum2Hash; // NOTE: max size in bytes initted in constructor
+    static constexpr unsigned lruNum2HashSizeCalc(unsigned nItems = 1) {
+        // NB: each TxHash (aka QByteArray) actually stores HashLen+1 bytes (QByteArray always appends a nul byte)
+        // NB2: each TxHash also has the QArrayData overhead (qByteArrayPvtDataSize())
+        return unsigned( decltype(lruNum2Hash)::itemOverheadBytes() + (nItems * (Util::qByteArrayPvtDataSize() + HashLen+1)) );
+    }
+
+    /// Cache BlockHeight -> vector of txHashes for the block (in bitcoind memory order -- little endian).
+    /// This is used by the txHashesForBlock function only (which is used by get_merkle and id_from_pos in the RPC protocol).
+    CostCache<BlockHeight, QVector<TxHash>> lruHeight2Hashes_BitcoindMemOrder; // NOTE: max size in bytes initted in constructor
+    /// returns the cost for a particular cache item based on the number of hashes in the vector
+    static constexpr unsigned lruHeight2HashSizeCalc(size_t nHashes) {
+        // each cache item with nHashes takes roughly this much memory
+        return unsigned( (nHashes * ((HashLen+1) + sizeof(TxHash) + Util::qByteArrayPvtDataSize()))
+                         + decltype(lruHeight2Hashes_BitcoindMemOrder)::itemOverheadBytes() );
+    }
+
+    struct LRUCacheStats {
+        std::atomic_size_t num2HashHits = 0, num2HashMisses = 0,
+                           height2HashesHits = 0, height2HashesMisses = 0;
+    } lruCacheStats;
+
+    /// this object is thread safe, but it needs to be initialized with headers before allowing client connections.
+    std::unique_ptr<Merkle::Cache> merkleCache;
+
+    HeaderHash genesisHash; // written-to once by either loadHeaders code or addBlock for block 0. Guarded by headerVerifierLock.
+
+    Mempool mempool; ///< app-wide mempool data -- does not get saved to db. Controller.cpp writes to this
+    Mempool::FeeHistogramVec mempoolFeeHistogram; ///< refreshed periodically by refreshMempoolHistogram()
+    RWLock mempoolLock;
+
+    Tic lastWarned; ///< to rate-limit potentially spammy warning messages (guarded by blocksLock)
+
+    std::unique_ptr<CoTask> blocksWorker; ///< work to be done in parallel can be submitted to this co-task in addBlock and undoLatestBlock
+};
+
+namespace {
+    /// returns a key that is hashX concatenated with the serializd ctxo -> size 40 or 41 byte vector
+    /// Note hashX must be valid and sized HashLen otherwise this throws.
+    QByteArray mkShunspentKey(const QByteArray & hashX, const CompactTXO &ctxo) {
+        // we do it this way for performance:
+        const int hxlen = hashX.length();
+        if (UNLIKELY(hxlen != HashLen))
+            throw InternalError(QString("mkShunspentKey -- scripthash is not exactly %1 bytes: %2").arg(HashLen).arg(QString(hashX.toHex())));
+        QByteArray key(hxlen + int(ctxo.serializedSize(false /* no force wide */)), Qt::Uninitialized);
+        std::memcpy(key.data(), hashX.constData(), size_t(hxlen));
+        ctxo.toBytesInPlace(reinterpret_cast<std::byte *>(key.data()+hxlen), ctxo.serializedSize(false), false /* no force wide */);
+        return key;
+    }
+    /// throws if key is not the correct size (must be exactly 40 or 41 bytes)
+    CompactTXO extractCompactTXOFromShunspentKey(const rocksdb::Slice &key) {
+        static const auto ExtractHashXHex = [](const rocksdb::Slice &key) -> QString {
+            if (key.size() >= HashLen)
+                return QString(FromSlice(key).left(HashLen).toHex());
+            else
+                return "<undecipherable scripthash>";
+        };
+        if (const auto ksz = key.size();
+                UNLIKELY(ksz != HashLen + CompactTXO::minSize() && ksz != HashLen + CompactTXO::maxSize()))
+            // should never happen, indicates db corruption
+            throw InternalError(QString("Key size for scripthash %1 is invalid").arg(ExtractHashXHex(key)));
+        static_assert (sizeof(*key.data()) == 1, "Assumption is rocksdb::Slice is basically a byte vector");
+        const CompactTXO ctxo =
+            CompactTXO::fromBytesInPlaceExactSizeRequired(reinterpret_cast<const std::byte *>(key.data()) + HashLen,
+                                                          key.size() - HashLen);
+        if (UNLIKELY(!ctxo.isValid()))
+            // should never happen, indicates db corruption
+            throw InternalError(QString("Deserialized CompactTXO is invalid for scripthash %1").arg(ExtractHashXHex(key)));
+        return ctxo;
+    }
+    std::pair<HashX, CompactTXO> extractShunspentKey(const rocksdb::Slice & key) {
+        const CompactTXO ctxo = extractCompactTXOFromShunspentKey(key); // throws if wrong size
+        return {DeepCpy(key.data(), HashLen), ctxo}; // if we get here size ok, can extract HashX
+    }
 } // namespace
 
 class Storage::UTXOCache
@@ -1125,8 +1273,8 @@ class Storage::UTXOCache
 
         if (t0.msec<int>() >= 50)
             DebugM(__func__, ": added ", addCt, " and deleted ", rmCt, Util::Pluralize(" utxo", addCt + rmCt),
-                   "; added ", shunspentAddCt, " and deleted ", shunspentRmCt, Util::Pluralize(" shunspent", shunspentAddCt + shunspentRmCt),
-                   " in ", t0.msecStr(3), " msec");
+                   "; added ", shunspentAddCt, " and deleted ", shunspentRmCt,
+                   Util::Pluralize(" shunspent", shunspentAddCt + shunspentRmCt), " in ", t0.msecStr(3), " msec");
     }
 
     /// Used to splice in the previously-populated `deferredAdds`, called by `waitForPrefetchToComplete()`
@@ -1350,6 +1498,7 @@ public:
         shunspentRms.reserve(vectors);
     }
 
+    /// Figures out the best capacity to reserve based on a desired memory size.
     void autoReserve(size_t memoryBytes) {
         constexpr auto perEntryEstimatedCost = EntrySize + ShunspentTableNodeSize + ItSetItemSize; // ~280 on 64 bit
         static_assert (perEntryEstimatedCost > 0);
@@ -1364,6 +1513,8 @@ public:
         shunspentAdds.rehash(0);
         shunspentRms.shrink_to_fit();
     }
+
+    /// Returns the estimated memory usage, in bytes
     size_t memUsage() const {
         return utxos.size() * EntrySize + adds.size() * ItSetItemSize + rms.size() * RmVecItemSize
                 + shunspentAdds.size() * ShunspentTableNodeSize + shunspentRms.size() * ShunspentRmVecNodeSize;
@@ -1373,7 +1524,8 @@ public:
     /// NB2: call waitForPrefetchToComplete() after this is called sometime later.
     void prefetch(const PreProcessedBlockPtr & ppb) { do_prefetch(ppb); }
 
-    /// May throw if the underlying CoTask work unit threw
+    /// May throw if the underlying CoTask work unit threw.
+    /// This is called by Storage::addBlock before we need to get and/or add UTXOs to the cache.
     void waitForPrefetchToComplete() {
         if (prefetcherFut.future.valid())
             prefetcherFut.future.get();
@@ -1438,158 +1590,8 @@ public:
             ordering.erase(oit);
         }
     }
-};
+}; // class Storage::UTXOCache
 
-struct Storage::Pvt
-{
-    Pvt(const unsigned cacheSizeBytes)
-        : lruNum2Hash(std::max(unsigned(cacheSizeBytes*kLruNum2HashCacheMemoryWeight), 1u)),
-          lruHeight2Hashes_BitcoindMemOrder(std::max(unsigned(cacheSizeBytes*kLruHeight2HashesCacheMemoryWeight), 1u))
-    {}
-
-    Pvt(const Pvt &) = delete;
-
-    constexpr int blockHeaderSize() { return BTC::GetBlockHeaderSize(); }
-
-    /* NOTE: If taking multiple locks, all locks should be taken in the order they are declared, to avoid deadlocks. */
-
-    Meta meta;
-    RWLock metaLock;
-
-    std::atomic<std::underlying_type_t<SaveItem>> pendingSaves{0};
-
-    struct RocksDBs {
-        const rocksdb::ReadOptions defReadOpts; ///< avoid creating this each time
-        const rocksdb::WriteOptions defWriteOpts; ///< avoid creating this each time
-
-        rocksdb::Options opts, shistOpts, txhash2txnumOpts;
-        std::weak_ptr<rocksdb::Cache> blockCache; ///< shared across all dbs, caps total block cache size across all db instances
-        std::weak_ptr<rocksdb::WriteBufferManager> writeBufferManager; ///< shared across all dbs, caps total memtable buffer size across all db instances
-
-        std::shared_ptr<ConcatOperator> concatOperator, concatOperatorTxHash2TxNum;
-
-        std::unique_ptr<rocksdb::DB> meta, blkinfo, utxoset,
-                                     shist, shunspent, // scripthash_history and scripthash_unspent
-                                     undo, // undo (reorg rewind)
-                                     txhash2txnum; // new: index of txhash -> txNumsFile
-        using DBPtrRef = std::tuple<std::unique_ptr<rocksdb::DB> &>;
-        std::list<DBPtrRef> openDBs; ///< a bit of introspection to track which dbs are currently open (used by gentlyCloseAllDBs())
-
-        std::unique_ptr<TxHash2TxNumMgr> txhash2txnumMgr; ///< provides a bit of a higher-level interface into the db
-
-        /// One of these is alive if we are in an initial sync and user specified --experimental-fast-sync
-        /// It caches UTXOs in memory and delays UTXO writes to DB so we don't have to do so much back-and-forth to
-        /// rocksdb.
-        std::unique_ptr<UTXOCache> utxoCache;
-    };
-    RocksDBs db;
-
-    std::unique_ptr<RecordFile> txNumsFile;
-    std::unique_ptr<RecordFile> headersFile;
-
-    /// Big lock used for block/history updates. Public methods that read the history such as getHistory and listUnspent
-    /// take this as read-only (shared), and addBlock and undoLatestBlock take this as read/write (exclusively).
-    /// This is intended to be a coarse lock.  Currently the update code takes this along with headerVerifierLock and
-    /// blkInfoLock at the same time, so it's (as of now) equivalent to either of those two locks.
-    /// TODO: See about removing all the other locks and keeping one general RWLock for all updates?
-    mutable RWLock blocksLock;
-
-    BTC::HeaderVerifier headerVerifier;
-    mutable RWLock headerVerifierLock;
-
-    std::atomic<TxNum> txNumNext{0};
-
-    std::vector<BlkInfo> blkInfos;
-    std::map<TxNum, unsigned> blkInfosByTxNum; ///< ordered map of TxNum0 for a block -> index into above blkInfo array
-    RWLock blkInfoLock; ///< locks blkInfos and blkInfosByTxNum
-
-    std::atomic<int64_t> utxoCt = 0;
-
-    static constexpr uint32_t InvalidUndoHeight = std::numeric_limits<uint32_t>::max();
-
-    std::atomic<uint32_t> earliestUndoHeight = InvalidUndoHeight; ///< the purpose of this is to control when we issue "delete" commands to the db for deleting expired undo infos from the undo db
-
-    // Ratios of cacheMemoryBytes that we give to each of the 2 lru caches -- we do 50/50
-    static constexpr double kLruNum2HashCacheMemoryWeight = 0.50;
-    static constexpr double kLruHeight2HashesCacheMemoryWeight = 1.0 - kLruNum2HashCacheMemoryWeight;
-
-    /// This cache is anticipated to see heavy use for get_history, so is configurable (config option: txhash_cache)
-    /// This gets cleared by undoLatestBlock.
-    CostCache<TxNum, TxHash> lruNum2Hash; // NOTE: max size in bytes initted in constructor
-    static constexpr unsigned lruNum2HashSizeCalc(unsigned nItems = 1) {
-        // NB: each TxHash (aka QByteArray) actually stores HashLen+1 bytes (QByteArray always appends a nul byte)
-        // NB2: each TxHash also has the QArrayData overhead (qByteArrayPvtDataSize())
-        return unsigned( decltype(lruNum2Hash)::itemOverheadBytes() + (nItems * (Util::qByteArrayPvtDataSize() + HashLen+1)) );
-    }
-
-    /// Cache BlockHeight -> vector of txHashes for the block (in bitcoind memory order -- little endian).
-    /// This is used by the txHashesForBlock function only (which is used by get_merkle and id_from_pos in the RPC protocol).
-    CostCache<BlockHeight, QVector<TxHash>> lruHeight2Hashes_BitcoindMemOrder; // NOTE: max size in bytes initted in constructor
-    /// returns the cost for a particular cache item based on the number of hashes in the vector
-    static constexpr unsigned lruHeight2HashSizeCalc(size_t nHashes) {
-        // each cache item with nHashes takes roughly this much memory
-        return unsigned( (nHashes * ((HashLen+1) + sizeof(TxHash) + Util::qByteArrayPvtDataSize()))
-                         + decltype(lruHeight2Hashes_BitcoindMemOrder)::itemOverheadBytes() );
-    }
-
-    struct LRUCacheStats {
-        std::atomic_size_t num2HashHits = 0, num2HashMisses = 0,
-                           height2HashesHits = 0, height2HashesMisses = 0;
-    } lruCacheStats;
-
-    /// this object is thread safe, but it needs to be initialized with headers before allowing client connections.
-    std::unique_ptr<Merkle::Cache> merkleCache;
-
-    HeaderHash genesisHash; // written-to once by either loadHeaders code or addBlock for block 0. Guarded by headerVerifierLock.
-
-    Mempool mempool; ///< app-wide mempool data -- does not get saved to db. Controller.cpp writes to this
-    Mempool::FeeHistogramVec mempoolFeeHistogram; ///< refreshed periodically by refreshMempoolHistogram()
-    RWLock mempoolLock;
-
-    Tic lastWarned; ///< to rate-limit potentially spammy warning messages (guarded by blocksLock)
-
-    std::unique_ptr<CoTask> blocksWorker; ///< work to be done in parallel can be submitted to this co-task in addBlock and undoLatestBlock
-};
-
-namespace {
-    /// returns a key that is hashX concatenated with the serializd ctxo -> size 40 or 41 byte vector
-    /// Note hashX must be valid and sized HashLen otherwise this throws.
-    QByteArray mkShunspentKey(const QByteArray & hashX, const CompactTXO &ctxo) {
-        // we do it this way for performance:
-        const int hxlen = hashX.length();
-        if (UNLIKELY(hxlen != HashLen))
-            throw InternalError(QString("mkShunspentKey -- scripthash is not exactly %1 bytes: %2").arg(HashLen).arg(QString(hashX.toHex())));
-        QByteArray key(hxlen + int(ctxo.serializedSize(false /* no force wide */)), Qt::Uninitialized);
-        std::memcpy(key.data(), hashX.constData(), size_t(hxlen));
-        ctxo.toBytesInPlace(reinterpret_cast<std::byte *>(key.data()+hxlen), ctxo.serializedSize(false), false /* no force wide */);
-        return key;
-    }
-    /// throws if key is not the correct size (must be exactly 40 or 41 bytes)
-    CompactTXO extractCompactTXOFromShunspentKey(const rocksdb::Slice &key) {
-        static const auto ExtractHashXHex = [](const rocksdb::Slice &key) -> QString {
-            if (key.size() >= HashLen)
-                return QString(FromSlice(key).left(HashLen).toHex());
-            else
-                return "<undecipherable scripthash>";
-        };
-        if (const auto ksz = key.size();
-                UNLIKELY(ksz != HashLen + CompactTXO::minSize() && ksz != HashLen + CompactTXO::maxSize()))
-            // should never happen, indicates db corruption
-            throw InternalError(QString("Key size for scripthash %1 is invalid").arg(ExtractHashXHex(key)));
-        static_assert (sizeof(*key.data()) == 1, "Assumption is rocksdb::Slice is basically a byte vector");
-        const CompactTXO ctxo =
-            CompactTXO::fromBytesInPlaceExactSizeRequired(reinterpret_cast<const std::byte *>(key.data()) + HashLen,
-                                                          key.size() - HashLen);
-        if (UNLIKELY(!ctxo.isValid()))
-            // should never happen, indicates db corruption
-            throw InternalError(QString("Deserialized CompactTXO is invalid for scripthash %1").arg(ExtractHashXHex(key)));
-        return ctxo;
-    }
-    std::pair<HashX, CompactTXO> extractShunspentKey(const rocksdb::Slice & key) {
-        const CompactTXO ctxo = extractCompactTXOFromShunspentKey(key); // throws if wrong size
-        return {DeepCpy(key.data(), HashLen), ctxo}; // if we get here size ok, can extract HashX
-    }
-}
 
 Storage::Storage(const std::shared_ptr<const Options> & options_)
     : Mgr(nullptr), options(options_),
