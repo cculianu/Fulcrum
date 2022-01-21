@@ -999,6 +999,10 @@ class Storage::UTXOCache
 
     static constexpr bool CHECK_SANITY = false; ///< enable this for extra sanity checks (slightly slows down the cache)
 
+    /// When put() is called but the prefetcher is active, the put() calls are deferred here and the adds will happen
+    /// when the prefetcher is done.
+    std::vector<std::pair<Node, bool>> deferredAdds;
+
     void do_flush() {
         if (const auto ct = adds.size() + rms.size() + shunspentAdds.size() + shunspentRms.size(); ct) {
             Log() << name <<  ": Flushing " << ct << Util::Pluralize(" item", ct) << " to UTXO & ScriptHashUnspent dbs ...";
@@ -1122,7 +1126,6 @@ class Storage::UTXOCache
         // to prevent UB, should add in this order
         const auto it = ordering.insert(ordering.end(), std::move(n));
         const auto & txo = it->first; // `txo` here must be a reference to the above-inserted node
-        bool ret = true;
         {
             const auto & [tit, inserted] = utxos.try_emplace(txo /* txoref to Node in `ordering` */, it);
             if (UNLIKELY(!inserted)) {
@@ -1137,7 +1140,6 @@ class Storage::UTXOCache
                 const auto & [tit2, inserted2] = utxos.try_emplace(txo, it);
                 if (UNLIKELY(!inserted2)) /* paranoia */
                     throw InternalError("Tried overwriting existing TXO in cache but failed! THIS SHOULD NEVER HAPPEN!");
-                ret = false;
             }
         }
         // NOTE: Assumption is that this txo was not in `rms`.  On mainnet the dupe txos are unspent
@@ -1160,7 +1162,7 @@ class Storage::UTXOCache
                 }
             }
         }
-        return ret;
+        return true;
     }
 
     bool addShunspent(ShunspentKey && k, int64_t amt) {
@@ -1219,6 +1221,15 @@ class Storage::UTXOCache
     const rocksdb::ReadOptions & readOpts;
     const rocksdb::WriteOptions & writeOpts;
 
+    // persistent data structures we use in order to avoid having to continually re-reserve memory
+    struct PFData {
+        std::vector<rocksdb::Slice> keys;
+        std::vector<QByteArray> keyData;
+        std::vector<rocksdb::PinnableSlice> values;
+        std::vector<rocksdb::Status> statuses;
+        robin_hood::unordered_flat_map<unsigned, TXO> index2TXO;
+    } pf;
+
     void do_prefetch(PreProcessedBlockPtr ppb) {
         if (prefetcherFut.future.valid()) {
             // wait for it to complete?
@@ -1233,18 +1244,18 @@ class Storage::UTXOCache
                     DebugM("Fetched ", num_ok, " UTXOs from DB in ", t0.msecStr(3), " msec");
             });
 
-            std::vector<rocksdb::Slice> keys;
-            std::vector<QByteArray> keyData;
-            std::vector<rocksdb::PinnableSlice> values;
-            std::vector<rocksdb::Status> statuses;
-            robin_hood::unordered_flat_map<unsigned, TXO> index2TXO;
-            /* Note: we anticipate not ever needing to prefetch any coins, so we won't reserve here to save cycles.
-            index2TXO.reserve(ppb->inputs.size());
-            keys.reserve(ppb->inputs.size());
-            keyData.reserve(ppb->inputs.size());
-            values.reserve(ppb->inputs.size());
-            statuses.reserve(ppb->inputs.size());
-            */
+            std::vector<rocksdb::Slice> & keys = pf.keys;
+            std::vector<QByteArray> & keyData = pf.keyData;
+            std::vector<rocksdb::PinnableSlice> & values = pf.values;
+            std::vector<rocksdb::Status> & statuses = pf.statuses;
+            robin_hood::unordered_flat_map<unsigned, TXO> & index2TXO = pf.index2TXO;
+            Defer d2([&]{
+                index2TXO.clear();
+                keys.clear();
+                keyData.clear();
+                values.clear();
+                statuses.clear();
+            });
             {
                 unsigned inum = 0;
                 for (const auto & in : std::as_const(ppb->inputs)) {
@@ -1328,7 +1339,21 @@ public:
     void prefetch(const PreProcessedBlockPtr & ppb) { do_prefetch(ppb); }
 
     /// May throw if the underlying CoTask work unit threw
-    void wairForPrefetchToComplete() { if (prefetcherFut.future.valid()) prefetcherFut.future.get(); }
+    void waitForPrefetchToComplete() {
+        if (prefetcherFut.future.valid())
+            prefetcherFut.future.get();
+
+        // do any deferred adds now that the prefetcher is done/inactive
+        if (!deferredAdds.empty()) {
+            const Tic t0;
+            const auto ct = deferredAdds.size();
+            for (auto & [node, isNotInDBYet] : deferredAdds)
+                add(std::move(node), isNotInDBYet);
+            deferredAdds.clear();
+            if (t0.msec<int>() >= 50 || ct >= 20000)
+                DebugM(__func__, ": added ", ct, Util::Pluralize(" UTXO", ct), " to hashmap in ", t0.msecStr(), " msec");
+        }
+    }
 
     size_t cacheMisses = 0, cacheHits = 0;
 
@@ -1349,7 +1374,15 @@ public:
         return ret;
     }
 
-    bool put(const TXO & txo, const TXOInfo & info, bool isNotInDb) { return add({txo, info}, isNotInDb); }
+    bool put(const TXO & txo, const TXOInfo & info, bool isNotInDb) {
+        if (prefetcherFut.future.valid()) {
+            // Prefetcher is busy, can't touch the data structures it is modifying now. Defer this until later.
+            deferredAdds.emplace_back(std::piecewise_construct, std::forward_as_tuple(txo, info), std::forward_as_tuple(isNotInDb));
+            return false;
+        }
+        return add({txo, info}, isNotInDb);
+    }
+
     bool remove(const TXO & txo) { return rm(txo); }
 
     bool putShunspent(const CompactTXO &ctxo, const TXOInfo & info) {
@@ -2492,10 +2525,16 @@ void Storage::setInitialSync(bool b) {
     // take all locks now.. since this is a Big Deal. TODO: add more locks here?
     std::scoped_lock guard(p->blocksLock, p->headerVerifierLock, p->blkInfoLock, p->mempoolLock);
     assert(bool(p->db.utxoset));
-    if (b && !p->db.utxoCache)
-        p->db.utxoCache.reset(new UTXOCache("Storage UTXO Cache", p->db.utxoset, p->db.shunspent, p->db.defReadOpts, p->db.defWriteOpts));
-    else if (!b && p->db.utxoCache) {
-        Log() << "Initial sync is off, flushing and deleting UTXO Cache ...";
+    if (b && !p->db.utxoCache) {
+        if (options->utxoCache > 0) {
+            Log() << "experimental-fast-sync: Enabled; UTXO cache size set to " << options->utxoCache
+                  << " bytes (available physical RAM: " << Util::getAvailablePhysicalRAM() << " bytes)";
+            p->db.utxoCache.reset(new UTXOCache("Storage UTXO Cache", p->db.utxoset, p->db.shunspent, p->db.defReadOpts, p->db.defWriteOpts));
+        } else {
+            Log() << "experimental-fast-sync: Not enabled";
+        }
+    } else if (!b && p->db.utxoCache) {
+        Log() << "Initial sync ended, flushing and deleting UTXO Cache ...";
         p->db.utxoCache.reset(); // implicitly flushes
     }
 }
@@ -2747,9 +2786,6 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                 std::unordered_set<HashX, HashHasher> newHashXInputsResolved;
                 newHashXInputsResolved.reserve(1024); ///< todo: tune this magic number?
 
-                // we need the inputs and outputs now, so end the prefetch
-                if (p->db.utxoCache) p->db.utxoCache->wairForPrefetchToComplete();
-
                 {
                     // utxo batch block (updtes utxoset & scripthash_unspent tables)
                     UTXOBatch utxoBatch{p->db.utxoCache.get()};
@@ -2761,7 +2797,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                     }
 
                     // add outputs
-                    for (const auto & [hashX, ag] : ppb->hashXAggregated) {
+                    for (const auto & [hashX, ag] : std::as_const(ppb->hashXAggregated)) {
                         for (const auto oidx : ag.outs) {
                             const auto & out = ppb->outputs[oidx];
                             if (out.spentInInputIndex.has_value()) {
@@ -2787,6 +2823,11 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                                         << " amount: " << info.amount.ToString() << " for HashX: " << info.hashX.toHex();
                         }
                     }
+
+                    if (p->db.utxoCache)
+                        // we need the inputs resolved now, so end the prefetch
+                        // note this may stall and also will empty out p->db.utxoCache->deferredAdds
+                        p->db.utxoCache->waitForPrefetchToComplete();
 
                     // add spends (process inputs)
                     unsigned inum = 0;
@@ -2962,9 +3003,8 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                 p->genesisHash = BTC::HashRev(rawHeader); // this variable is guarded by p->headerVerifierLock
             }
 
-            const size_t UTXO_MEM_LIMIT = options->utxocache;
-            if (p->db.utxoCache && p->db.utxoCache->memUsage() > UTXO_MEM_LIMIT)
-                p->db.utxoCache->limitSize(UTXO_MEM_LIMIT * 3 / 4 /* chop down to 3/4 size */);
+            if (size_t limit; p->db.utxoCache && (limit = options->utxoCache) && p->db.utxoCache->memUsage() > limit)
+                p->db.utxoCache->limitSize(static_cast<size_t>(limit * 0.75) /* chop down to 3/4 size */);
 
             saveUtxoCt();
             setDirty(false);

@@ -493,6 +493,19 @@ void App::parseArgs()
                " the database files on startup is not strictly necessary.\n"),
     },
     {
+       "experimental-fast-sync",
+       QString("If specified, " APPNAME " will use an experimental new feature that consumes extra memory but syncs up"
+               " to 40% faster. To use this feature, you must specify a memory value in MB to allocate to this"
+               " facility. You should give this facility at least 2 GB for it to really pay off. Note that this feature"
+               " is currently experimental and the tradeoffs are: it is faster because it avoids redundant disk I/O,"
+               " however, this comes at the price of considerable memory consumption as well as a sync that is less"
+               " resilient to crashes mid-sync. If the process is killed mid-sync, the database may become corrupt"
+               " and lose UTXO data. Use this feature only if you are 100% sure that won't happen during a sync."
+               " Specify as much memory as you can, in MB, here, e.g.: 3000 to allocate 3000 MB (3 GB). The default is"
+               " off (0). This option only takes effect on initial sync, otherwise this option does nothing.\n"),
+       QString("MB"),
+    },
+    {
        "dump-sh",
        QString("*** This is an advanced debugging option ***   Dump script hashes. If specified, after the database"
                " is loaded, all of the script hashes in the database will be written to outputfile as a JSON array.\n"),
@@ -968,7 +981,7 @@ void App::parseArgs()
         if (!ok || val < 0)
             throw BadArgs("worker_threads: bad value. Specify an integer >= 0");
         if (val > int(Util::getNVirtualProcessors()))
-            throw BadArgs(QString("worker_threads: specified value of %1 exceeds the detected number of virtual processors of %2")
+            throw BadArgs(QString("worker_threads: Specified value of %1 exceeds the detected number of virtual processors of %2")
                           .arg(val).arg(Util::getNVirtualProcessors()));
         if (val > 0 && !tpool->setMaxThreadCount(val))
             throw BadArgs(QString("worker_threads: Unable to set worker threads to %1").arg(val));
@@ -1264,16 +1277,21 @@ void App::parseArgs()
         options->dumpScriptHashes = outFile; // we do no checking here, but Controller::startup will throw BadArgs if it cannot open this file for writing.
     }
 
-    // TESTING utxocache
-    if (const auto memfree = Util::getAvailablePhysicalRAM(); memfree > options->utxocache && (memfree / 2ull) <= std::numeric_limits<size_t>::max()) {
-        options->utxocache = static_cast<size_t>(memfree / 2ull); // take 1/2 of what system reported as memfree (we need extra to commit to DB)
-        Util::AsyncOnObject(this, [memfree, u=options->utxocache]{
-            DebugM("utxo cache size set to: ", u, " (available physical ram: ", memfree, ")");
-        });
-    } else {
-        Util::AsyncOnObject(this, [memfree, u=options->utxocache]{
-            DebugM("utxo cache size left at default: ", u, " (available physical ram: ", memfree, ")");
-        });
+    // CLI: --experimental-fast-sync (experimental)
+    if (parser.isSet("experimental-fast-sync")) {
+        bool ok{};
+        const QString strVal = parser.value("experimental-fast-sync");
+        const double val = strVal.toDouble(&ok);
+        if (!ok || val < 0.)
+            throw BadArgs(QString("experimental-fast-sync: Slease specify a positive numeric value in MB, or 0 to disable"));
+        const uint64_t bytes = static_cast<uint64_t>(val * 1e6);
+        if (uint64_t memfree; bytes > (memfree = std::numeric_limits<size_t>::max()) || bytes > (memfree = Util::getAvailablePhysicalRAM()))
+            throw BadArgs(QString("experimental-fast-sync: Specified value (%1 bytes) is too large to fit in available"
+                                  " system memory (limit is: %2 bytes)").arg(bytes).arg(qulonglong(memfree)));
+        else if (bytes > 0 && bytes < Options::minUtxoCache)
+            throw BadArgs(QString("experimental-fast-sync: Specified value %1 is too small (minimum: %2 MB)")
+                          .arg(strVal, QString::number(Options::minUtxoCache / 1e6, 'f', 1)));
+        options->utxoCache = static_cast<size_t>(bytes);
     }
 }
 

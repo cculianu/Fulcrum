@@ -271,8 +271,9 @@ public:
     static constexpr bool isMaxBatchInRange(unsigned n) { return n >= maxBatchMin && n <= maxBatchMax; }
     unsigned maxBatch = defaultMaxBatch;
 
-    // TESTING: utxocache
-    size_t utxocache = 512 * 1024 * 1024;
+    // CLI: --experimental-fast-sync (experimental)
+    static constexpr size_t defaultUtxoCache = 0, minUtxoCache = 512ull * 1000ull * 1000ull; // 0 is off, otherwise 512 MB min
+    size_t utxoCache = defaultUtxoCache;
 };
 
 /// A class encapsulating a simple read-only config file format.  The format is similar to the bitcoin.conf format
