@@ -309,7 +309,7 @@ void App::cleanup_WaitForThreadPoolWorkers()
 void App::parseArgs()
 {
     QCommandLineParser parser;
-    parser.setApplicationDescription("A Bitcoin Cash Blockchain SPV Server.");
+    parser.setApplicationDescription("A Bitcoin Cash (and Bitcoin BTC) Blockchain SPV Server");
     parser.addHelpOption();
 
     static constexpr auto RPCUSER = "RPCUSER", RPCPASSWORD = "RPCPASSWORD"; // optional env vars we use below

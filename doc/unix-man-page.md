@@ -1,10 +1,10 @@
 % FULCRUM(1) Version 1.6.0 | Fulcrum Manual
 % Fulcrum is written by Calin Culianu (cculianu)
-% January 17, 2022
+% January 21, 2022
 
 # NAME
 
-**fulcrum** - SPV server for Bitcoin Cash and Bitcoin BTC.
+**fulcrum** - A Bitcoin Cash (and Bitcoin BTC) Blockchain SPV Server
 
 # SYNOPSIS
 
