@@ -980,9 +980,14 @@ class Storage::UTXOCache
     ItSet adds; ///< entries in above NodeList that are new and are not in the DB yet
     RmVec rms; ///< queued deletions, not yet deleted from DB
 
-    static constexpr size_t EntrySize = sizeof(NodeList::value_type) + sizeof(Table::value_type) + HashLen * size_t{2U};
+    static_assert (std::is_same_v<decltype(std::declval<TXO>().txHash), QByteArray>
+                   && std::is_same_v<decltype(std::declval<TXOInfo>().hashX), QByteArray>,
+                   "Below assumes we are using QByteArray");
+    static constexpr size_t EntrySize = sizeof(NodeList::value_type) + sizeof(Table::value_type)
+                                        + (HashLen + Util::qByteArrayPvtDataSize()) * size_t{2U} // account for txHash and hashX
+                                        + sizeof(void *) * size_t{2U} /* account for list node next/prev ptrs */;
     static constexpr size_t ItSetItemSize = sizeof(ItSet::value_type);
-    static constexpr size_t RmVecItemSize = sizeof(RmVec::value_type) + HashLen;
+    static constexpr size_t RmVecItemSize = sizeof(RmVec::value_type) + HashLen + Util::qByteArrayPvtDataSize();
 
     using ShunspentKey = QByteArray;
     struct ShunspentKeyHasher {
@@ -994,8 +999,10 @@ class Storage::UTXOCache
     ShunspentTable shunspentAdds; ///< queued additions, not yet added to DB
     ShunspentRmVec shunspentRms; ///< queued deletions, not yet deleted from DB
 
-    static constexpr size_t ShunspentTableNodeSize = sizeof(ShunspentTable::value_type) + HashLen + 8;
-    static constexpr size_t ShunspentRmVecNodeSize = sizeof(ShunspentRmVec::value_type) + HashLen + 8;
+    static constexpr size_t ShunspentTableNodeSize = sizeof(ShunspentTable::value_type) + HashLen + CompactTXO::minSize()
+                                                     + Util::qByteArrayPvtDataSize();
+    static constexpr size_t ShunspentRmVecNodeSize = sizeof(ShunspentRmVec::value_type) + HashLen + CompactTXO::minSize()
+                                                     + Util::qByteArrayPvtDataSize();
 
     static constexpr bool CHECK_SANITY = false; ///< enable this for extra sanity checks (slightly slows down the cache)
 
