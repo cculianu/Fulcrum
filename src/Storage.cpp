@@ -1005,7 +1005,7 @@ class Storage::UTXOCache
 
     void do_flush() {
         if (const auto ct = adds.size() + rms.size() + shunspentAdds.size() + shunspentRms.size(); ct) {
-            Log() << name <<  ": Flushing " << ct << Util::Pluralize(" item", ct) << " to UTXO & ScriptHashUnspent dbs ...";
+            Log() << name <<  ": Flushing " << ct << Util::Pluralize(" item", ct) << " to UTXO & ScriptHashUnspent DBs ...";
         } else {
             // nothing to do!
             return;
