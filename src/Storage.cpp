@@ -1349,6 +1349,14 @@ public:
         shunspentAdds.reserve(hashMaps);
         shunspentRms.reserve(vectors);
     }
+
+    void autoReserve(size_t memoryBytes) {
+        constexpr auto perEntryEstimatedCost = EntrySize + ShunspentTableNodeSize + ItSetItemSize; // ~280 on 64 bit
+        static_assert (perEntryEstimatedCost > 0);
+        reserve(memoryBytes / perEntryEstimatedCost, // about 3.6 million per GB of memory
+                1u << 15 /* ~32,000 reserve for vectors */);
+    }
+
     void shrink_to_fit() {
         utxos.rehash(0);
         adds.rehash(0);
@@ -2555,10 +2563,9 @@ void Storage::setInitialSync(bool b) {
             Log() << "experimental-fast-sync: Enabled; UTXO cache size set to " << options->utxoCache
                   << " bytes (available physical RAM: " << Util::getAvailablePhysicalRAM() << " bytes)";
             p->db.utxoCache.reset(new UTXOCache("Storage UTXO Cache", p->db.utxoset, p->db.shunspent, p->db.defReadOpts, p->db.defWriteOpts));
-            // Reserve about 1 million entries per GB of utxoCache memory given to us
+            // Reserve about 3.6 million entries per GB of utxoCache memory given to us
             // We need to do this, despite the extra memory bloat, because it turns out rehashing is very painful.
-            p->db.utxoCache->reserve( options->utxoCache / size_t(1000u) /* hashmaps = 1 mln per GB */,
-                                      1u << 15 /* vectors = fixed reserve of 32k */ );
+            p->db.utxoCache->autoReserve(options->utxoCache);
         } else {
             Log() << "experimental-fast-sync: Not enabled";
         }
