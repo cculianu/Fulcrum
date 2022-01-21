@@ -1159,6 +1159,12 @@ class Storage::UTXOCache
     NodeList deferredAdds;
 
     void do_flush() {
+        if (UNLIKELY(prefetcherFut.future.valid())) {
+            // paranoia: wait for prefetcher to end if it was running
+            // this branch can only be taken in stack-unwinding and/or "exception"-al circumstances
+            Warning() << name << ": Prefetcher was active when " << __func__ << " was called. Waiting for prefetch to complete ...";
+            prefetcherFut.future.wait();
+        }
         if (const auto ct = adds.size() + rms.size() + shunspentAdds.size() + shunspentRms.size(); ct) {
             Log() << name <<  ": Flushing " << ct << Util::Pluralize(" item", ct) << " to UTXO & ScriptHashUnspent DBs ...";
         } else {
@@ -1411,11 +1417,8 @@ class Storage::UTXOCache
     } pf;
 
     void do_prefetch(PreProcessedBlockPtr ppb) {
-        if (prefetcherFut.future.valid()) {
-            // wait for it to complete?
-            Warning() << name << ": prefetcher is already active in " << __func__ << ", waiting for it to finish...";
-            prefetcherFut.future.get(); // may throw if underlying work threw
-        }
+        // Below call to subitWork will throw std::domain_error if we are being called while the prefetcher is still
+        // active ... which is what we want here, because it indicates a programming error.
         prefetcherFut = prefetcher.submitWork([this, ppb]{
             const Tic t0;
             size_t num_ok = 0;
@@ -1526,6 +1529,7 @@ public:
 
     /// NB: no locks on ppb are used for now. While this is alive ppb->inputs must not be mutated
     /// NB2: call waitForPrefetchToComplete() after this is called sometime later.
+    /// Precondition: prefetcher must *not* already be running. If it is, this will throw std::domain_error.
     void prefetch(const PreProcessedBlockPtr & ppb) { do_prefetch(ppb); }
 
     /// May throw if the underlying CoTask work unit threw.
