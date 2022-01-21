@@ -999,9 +999,9 @@ class Storage::UTXOCache
 
     static constexpr bool CHECK_SANITY = false; ///< enable this for extra sanity checks (slightly slows down the cache)
 
-    /// When put() is called but the prefetcher is active, the put() calls are deferred here and the adds will happen
-    /// when the prefetcher is done.
-    std::vector<std::pair<Node, bool>> deferredAdds;
+    /// When put() is called but the prefetcher is active, the put() calls are deferred here and the actual add()s will
+    /// happen when the prefetcher is done. This is a NodeList so it can be quickly spliced into the `ordering` list.
+    NodeList deferredAdds;
 
     void do_flush() {
         if (const auto ct = adds.size() + rms.size() + shunspentAdds.size() + shunspentRms.size(); ct) {
@@ -1122,9 +1122,32 @@ class Storage::UTXOCache
                    " in ", t0.msecStr(3), " msec");
     }
 
-    bool add(Node && n, bool isNotInDBYet) {
+    /// Used to splice in the previously-populated `deferredAdds`, called by `waitForPrefetchToComplete()`
+    void addAllDeferred() {
+        if (deferredAdds.empty()) return;
+        const Tic t0;
+        const size_t n = deferredAdds.size();
+        ordering.splice(ordering.end(), deferredAdds);
+        auto it = ordering.end();
+        for (size_t i = 0; i < n; ++i)
+            linkNode(--it, true /* isNotInDbYet - always `true` otherwise we wouldn't be here! */);
+        if (t0.msec<int>() >= 50 || n >= 20000)
+            DebugM(__func__, ": added ", n, Util::Pluralize(" UTXO", n), " to hashmap in ", t0.msecStr(), " msec");
+    }
+
+    template<typename ...Args>
+    bool add(bool isNotInDBYet, Args && ...args) {
         // to prevent UB, should add in this order
-        const auto it = ordering.insert(ordering.end(), std::move(n));
+        // 1. add to `ordering` list first
+        // 2. then add to `utxos` and possibly `adds`
+        ordering.emplace_back(std::forward<Args>(args)...);
+        auto it = ordering.end();
+        return linkNode(--it, isNotInDBYet);
+    }
+
+    /// Associades a freshly created `ordering` item with the `utxos` table and possibly the `adds` set.
+    /// Precondition: `it` must be a valid iterator in the `ordering` NodeList
+    bool linkNode(const NodeList::iterator it, bool isNotInDBYet) {
         const auto & txo = it->first; // `txo` here must be a reference to the above-inserted node
         {
             const auto & [tit, inserted] = utxos.try_emplace(txo /* txoref to Node in `ordering` */, it);
@@ -1286,7 +1309,7 @@ class Storage::UTXOCache
                         if (!ok) throw DatabaseSerializationError(QString("%1: Failed to deserialize TXOInfo for TXO \"%2\"")
                                                                   .arg(name, txo.toString()));
                         else {
-                            add({std::move(txo), std::move(info)}, false);
+                            add(false, std::move(txo), std::move(info));
                             ++num_ok;
                         }
                     } else {
@@ -1341,15 +1364,7 @@ public:
             prefetcherFut.future.get();
 
         // do any deferred adds now that the prefetcher is done/inactive
-        if (!deferredAdds.empty()) {
-            const Tic t0;
-            const auto ct = deferredAdds.size();
-            for (auto & [node, isNotInDBYet] : deferredAdds)
-                add(std::move(node), isNotInDBYet);
-            deferredAdds.clear();
-            if (t0.msec<int>() >= 50 || ct >= 20000)
-                DebugM(__func__, ": added ", ct, Util::Pluralize(" UTXO", ct), " to hashmap in ", t0.msecStr(), " msec");
-        }
+        addAllDeferred();
     }
 
     size_t cacheMisses = 0, cacheHits = 0;
@@ -1363,21 +1378,24 @@ public:
             static const QString errMsgPrefix("Failed to read a utxo from the utxo db");
             ret = GenericDBGet<TXOInfo>(db.get(), txo, !throwIfMissing, errMsgPrefix, false, readOpts);
             if (ret && addToCache) {
-                // add to cache
-                add({txo, *ret}, false);
+                // add to cache (this takes an extra copy but it's ok since this branch is not currently taken in this codebase)
+                add(false, txo, *ret);
             }
         } else
             ++cacheHits;
         return ret;
     }
 
-    bool put(const TXO & txo, const TXOInfo & info, bool isNotInDb) {
+    /// Add a TXO <-> TXOInfo pair to the cache and enqueue it for writing to DB.  It will be written to the DB the
+    /// next time we flush.
+    /// Precondition: TXO is not yet in the DB and should be added to the DB.
+    bool put(const TXO & txo, const TXOInfo & info) {
         if (prefetcherFut.future.valid()) {
             // Prefetcher is busy, can't touch the data structures it is modifying now. Defer this until later.
-            deferredAdds.emplace_back(std::piecewise_construct, std::forward_as_tuple(txo, info), std::forward_as_tuple(isNotInDb));
+            deferredAdds.emplace_back(txo, info);
             return false;
         }
-        return add({txo, info}, isNotInDb);
+        return add(true, txo, info);
     }
 
     bool remove(const TXO & txo) { return rm(txo); }
@@ -2562,7 +2580,7 @@ void Storage::UTXOBatch::add(const TXO &txo, const TXOInfo &info, const CompactT
                         errMsgPrefix2); // may throw, which is what we want
     } else {
         // put in cache (in case these get deleted later on, it's a win to do this rather than hit the DB, if using cache)
-        p->cache->put(txo, info, true);
+        p->cache->put(txo, info);
         p->cache->putShunspent(ctxo, info);
     }
 
