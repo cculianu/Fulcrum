@@ -2555,10 +2555,10 @@ void Storage::setInitialSync(bool b) {
             Log() << "experimental-fast-sync: Enabled; UTXO cache size set to " << options->utxoCache
                   << " bytes (available physical RAM: " << Util::getAvailablePhysicalRAM() << " bytes)";
             p->db.utxoCache.reset(new UTXOCache("Storage UTXO Cache", p->db.utxoset, p->db.shunspent, p->db.defReadOpts, p->db.defWriteOpts));
-            // Reserve about 10 million entries per GB of utxoCache memory given to us
+            // Reserve about 1 million entries per GB of utxoCache memory given to us
             // We need to do this, despite the extra memory bloat, because it turns out rehashing is very painful.
-            p->db.utxoCache->reserve( options->utxoCache / size_t(100u) /* hashmaps = 10 mln per GB */,
-                                      8192 /* vectors = fixed reserve */ );
+            p->db.utxoCache->reserve( options->utxoCache / size_t(1000u) /* hashmaps = 1 mln per GB */,
+                                      1u << 15 /* vectors = fixed reserve of 32k */ );
         } else {
             Log() << "experimental-fast-sync: Not enabled";
         }
