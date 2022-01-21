@@ -41,6 +41,7 @@
 #include <QSslSocket>
 #include <QTextStream>
 
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <clocale>
@@ -1285,7 +1286,7 @@ void App::parseArgs()
         if (!ok || val < 0.)
             throw BadArgs(QString("experimental-fast-sync: Slease specify a positive numeric value in MB, or 0 to disable"));
         const uint64_t bytes = static_cast<uint64_t>(val * 1e6);
-        if (uint64_t memfree; bytes > (memfree = std::numeric_limits<size_t>::max()) || bytes > (memfree = Util::getAvailablePhysicalRAM()))
+        if (uint64_t memfree; bytes > (memfree = std::min<uint64_t>(Util::getAvailablePhysicalRAM(), std::numeric_limits<size_t>::max())))
             throw BadArgs(QString("experimental-fast-sync: Specified value (%1 bytes) is too large to fit in available"
                                   " system memory (limit is: %2 bytes)").arg(bytes).arg(qulonglong(memfree)));
         else if (bytes > 0 && bytes < Options::minUtxoCache)
