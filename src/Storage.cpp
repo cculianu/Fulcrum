@@ -1305,9 +1305,6 @@ public:
               const rocksdb::WriteOptions & writeOpts)
         : name{name}, prefetcher{name + " Prefetcher"}, db{pdb}, shunspentdb{pshunspentdb}, readOpts{readOpts}, writeOpts{writeOpts} {
         DebugM(name, ": created");
-        // Tune this? (so far 33 million doesn't eat that much RAM in practice so it's ok.. we want to avoid rehashing)
-        constexpr size_t rsv = 1ul << 25; // ~33 million
-        reserve(rsv);
     }
 
     ~UTXOCache() {
@@ -1396,7 +1393,6 @@ public:
 
     /// will implicitly write to DB to flush
     void limitSize(size_t bytes) {
-        if (memUsage() <= bytes) return;
         flush();
         if (size_t m; Debug::isEnabled() && (m = memUsage()) > bytes) {
             DebugM(name, ": limiting size to ", bytes, ", current size: ", m);
@@ -2530,6 +2526,9 @@ void Storage::setInitialSync(bool b) {
             Log() << "experimental-fast-sync: Enabled; UTXO cache size set to " << options->utxoCache
                   << " bytes (available physical RAM: " << Util::getAvailablePhysicalRAM() << " bytes)";
             p->db.utxoCache.reset(new UTXOCache("Storage UTXO Cache", p->db.utxoset, p->db.shunspent, p->db.defReadOpts, p->db.defWriteOpts));
+            // Reserve about 10 million entries per GB of utxoCache memory given to us
+            // We need to do this, despite the extra memory bloat, because it turns out rehashing is very painful.
+            p->db.utxoCache->reserve( options->utxoCache / size_t(100u) );
         } else {
             Log() << "experimental-fast-sync: Not enabled";
         }
