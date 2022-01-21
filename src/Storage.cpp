@@ -1137,24 +1137,24 @@ class Storage::UTXOCache
         ordering.splice(ordering.end(), deferredAdds);
         auto it = ordering.end();
         for (size_t i = 0; i < n; ++i)
-            linkNode(--it, true /* isNotInDbYet - always `true` otherwise we wouldn't be here! */);
+            link_node(--it, true /* isNotInDbYet - always `true` otherwise we wouldn't be here! */);
         if (t0.msec<int>() >= 50 || n >= 20000)
             DebugM(__func__, ": added ", n, Util::Pluralize(" UTXO", n), " to hashmap in ", t0.msecStr(), " msec");
     }
 
     template<typename ...Args>
-    bool add(bool isNotInDBYet, Args && ...args) {
+    void add(bool isNotInDBYet, Args && ...args) {
         // to prevent UB, should add in this order
         // 1. add to `ordering` list first
         // 2. then add to `utxos` and possibly `adds`
         ordering.emplace_back(std::forward<Args>(args)...);
         auto it = ordering.end();
-        return linkNode(--it, isNotInDBYet);
+        link_node(--it, isNotInDBYet);
     }
 
-    /// Associades a freshly created `ordering` item with the `utxos` table and possibly the `adds` set.
+    /// Associates a freshly created `ordering` item with the `utxos` table and possibly the `adds` set.
     /// Precondition: `it` must be a valid iterator in the `ordering` NodeList
-    bool linkNode(const NodeList::iterator it, bool isNotInDBYet) {
+    void link_node(const NodeList::iterator it, bool isNotInDBYet) {
         const auto & txo = it->first; // `txo` here must be a reference to the above-inserted node
         {
             const auto & [tit, inserted] = utxos.try_emplace(txo /* txoref to Node in `ordering` */, it);
@@ -1192,20 +1192,20 @@ class Storage::UTXOCache
                 }
             }
         }
-        return true;
     }
 
-    bool addShunspent(ShunspentKey && k, int64_t amt) {
+    void addShunspent(ShunspentKey && k, int64_t amt) {
         const auto & [it, inserted] = shunspentAdds.emplace(std::move(k), amt);
         if (UNLIKELY(!inserted)) {
-            // already there! paranoia check here ... may happen in pre-BIP34 txns on mainnet
+            // Already there! Paranoia check here ... it turns out even in pre-BIP34 txns, this cannot happen
+            // because we uniquely identify txns by unique id number, so dupe tx-hash's (as was possible pre-BIP34)
+            // cannot trigger this branch.  This branch is here strictly for paranoia.
             DebugM(__func__, ": WARNING dupe txo encountered with key: \"", it->first.toHex(), "\" [amt1: ", it->second,
                    " amt2: ", amt, "], overwriting existing with amt2.");
             it->second = amt; // overwrite existing to preserve behavior of pre-UTXOCache code.
         }
         // NOTE: Assumption is that an add will never add a shunspent key that is in the shunspentRms vector.
         // (this is not checked for performance.)
-        return inserted;
     }
 
     bool rm(const TXO &txo) {
@@ -1216,7 +1216,7 @@ class Storage::UTXOCache
                 wasInAdds = true;
                 adds.erase(ait);
             }
-            // to prevent UB, should erase in this order
+            // to prevent UB, should erase in this order (with `ordering` entries always being erased last!)
             const auto oit = it->second;
             utxos.erase(it);
             ordering.erase(oit);
@@ -1410,15 +1410,16 @@ public:
             deferredAdds.emplace_back(txo, info);
             return false;
         }
-        return add(true, txo, info);
+        add(true, txo, info);
+        return true;
     }
 
     bool remove(const TXO & txo) { return rm(txo); }
 
-    bool putShunspent(const CompactTXO &ctxo, const TXOInfo & info) {
-        return addShunspent(mkShunspentKey(info.hashX, ctxo),
-                            int64_t( info.amount / info.amount.satoshi() ) ///< we do it this way because it avoids a memcpy. this is the right way: Serialize(info.amount)
-                            );
+    void putShunspent(const CompactTXO &ctxo, const TXOInfo & info) {
+        addShunspent(mkShunspentKey(info.hashX, ctxo),
+                     // we do it this way because it avoids a memcpy. this is the right way: Serialize(info.amount)
+                     static_cast<int64_t>(info.amount / info.amount.satoshi()) );
     }
     bool removeShunspent(const HashX & hashX, const CompactTXO & ctxo) { return rmShunspent(mkShunspentKey(hashX, ctxo)); }
 
