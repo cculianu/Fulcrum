@@ -1176,7 +1176,7 @@ class Storage::UTXOCache
             batch.Clear();
             if (t.msec<int>() >= 200) {
                 const auto ct = batchCount;
-                DebugM("do_flush: batch write of ", ct, " ", DBName(db), Util::Pluralize(" item", ct), " took ", t.msecStr(), " msec");
+                DebugM("batch write of ", ct, " ", DBName(db), Util::Pluralize(" item", ct), " took ", t.msecStr(), " msec");
             }
             batchCount = 0;
         };
