@@ -313,6 +313,7 @@ public:
     /// optionally indented by `indent*indentLevel` spaces.  If indent is 0, the output will all be on 1 line with no padding.
     size_t dumpAllScriptHashes(QIODevice *outDev, unsigned indent=0, unsigned indentLevel=0, const DumpProgressFunc & = {}, size_t progInterval = 100000) const;
 
+    /// Leverage RAII to have this class auto-notified when initial sync has ended.
     class InitialSyncRAII {
         QPointer<Storage> storage;
         static inline std::atomic_int instanceCtr{0};
@@ -329,6 +330,8 @@ public:
         InitialSyncRAII &operator=(InitialSyncRAII && o) { return this->operator=(std::as_const(o)); }
     };
 
+    /// Called by Controller, if it thinks it's in an intitial sync. Controller hangs on to the return value until
+    /// initial sync has ended.
     [[nodiscard]] InitialSyncRAII setInitialSync() { return InitialSyncRAII{*this}; }
 
 protected:
@@ -388,7 +391,7 @@ protected:
     /// Reads the UtxoCt from the meta db. If they key is missing it will return 0.  May throw on low-level db error.
     int64_t readUtxoCtFromDB() const;
 
-    /// TODO: DESCRIPTION HERE
+    /// Internally called to create or destroy the UTXO Cache, if --experimental-fast-sync is enabled
     void setInitialSync(bool);
     friend class InitialSyncRAII;
 

@@ -1443,7 +1443,9 @@ struct Storage::Pvt
 
         std::unique_ptr<TxHash2TxNumMgr> txhash2txnumMgr; ///< provides a bit of a higher-level interface into the db
 
-        /// WIP TODO ADD DESCRIPTION HERE
+        /// One of these is alive if we are in an initial sync and user specified --experimental-fast-sync
+        /// It caches UTXOs in memory and delays UTXO writes to DB so we don't have to do so much back-and-forth to
+        /// rocksdb.
         std::unique_ptr<UTXOCache> utxoCache;
     };
     RocksDBs db;
@@ -2498,7 +2500,7 @@ struct Storage::UTXOBatch::P {
     rocksdb::WriteBatch shunspentBatch; ///< batch writes/deletes end up in the shunspent db (keyed off HashX+CompactTXO)
     int addCt = 0, rmCt = 0;
     bool defunct = false;
-    UTXOCache *cache{};
+    UTXOCache *cache{}; ///< if not nullptr, there is a UTXOCache active and we should give it the batch writes.
 };
 
 Storage::UTXOBatch::UTXOBatch(UTXOCache *cache) : p(new P) { p->cache = cache; }
@@ -2511,8 +2513,10 @@ void Storage::issueUpdates(UTXOBatch &b)
     if (UNLIKELY(b.p->defunct))
         throw InternalError("Misuse of Storage::issueUpdates. Cannot issue the same updates using the same context more than once. FIXME!");
     assert(bool(p->db.utxoset) && bool(p->db.shunspent));
-    if (!b.p->cache) GenericBatchWrite(p->db.utxoset.get(), b.p->utxosetBatch, errMsg1, p->db.defWriteOpts); // may throw
-    if (!b.p->cache) GenericBatchWrite(p->db.shunspent.get(), b.p->shunspentBatch, errMsg2, p->db.defWriteOpts); // may throw
+    if (!b.p->cache) {
+        GenericBatchWrite(p->db.utxoset.get(), b.p->utxosetBatch, errMsg1, p->db.defWriteOpts); // may throw
+        GenericBatchWrite(p->db.shunspent.get(), b.p->shunspentBatch, errMsg2, p->db.defWriteOpts); // may throw
+    }
     p->utxoCt += b.p->addCt - b.p->rmCt; // tally up adds and deletes
     b.p->defunct = true;
 }
@@ -2545,24 +2549,23 @@ void Storage::UTXOBatch::add(const TXO &txo, const TXOInfo &info, const CompactT
         // Update db utxoset, keyed off txo -> txoinfo
         static const QString errMsgPrefix("Failed to add a utxo to the utxo batch");
         GenericBatchPut(p->utxosetBatch, txo, info, errMsgPrefix); // may throw on failure
-    } else {
-        p->cache->put(txo, info, true);
-    }
 
-    if (!p->cache) {
         // Update the scripthash unspent. This is a very simple table which we scan by hashX prefix using
         // an iterator in listUnspent.  Each entry's key is prefixed with the HashX bytes (32) but suffixed with the
         // serialized CompactTXO bytes (8 or 9). Each entry's data is a 8-byte int64_t of the amount of the utxo to save
         // on lookup cost for getBalance().
-        static const QString errMsgPrefix("Failed to add an entry to the scripthash_unspent batch");
+        static const QString errMsgPrefix2("Failed to add an entry to the scripthash_unspent batch");
 
         GenericBatchPut(p->shunspentBatch,
                         mkShunspentKey(info.hashX, ctxo),
                         int64_t( info.amount / info.amount.satoshi() ), ///< we do it this way because it avoids a memcpy. this is the right way: Serialize(info.amount)
-                        errMsgPrefix); // may throw, which is what we want
+                        errMsgPrefix2); // may throw, which is what we want
     } else {
+        // put in cache (in case these get deleted later on, it's a win to do this rather than hit the DB, if using cache)
+        p->cache->put(txo, info, true);
         p->cache->putShunspent(ctxo, info);
     }
+
     ++p->addCt;
 }
 
@@ -2572,14 +2575,13 @@ void Storage::UTXOBatch::remove(const TXO &txo, const HashX &hashX, const Compac
         // enqueue delete from utxoset db -- may throw.
         static const QString errMsgPrefix("Failed to issue a batch delete for a utxo");
         GenericBatchDelete(p->utxosetBatch, txo, errMsgPrefix);
-    } else {
-        p->cache->remove(txo);
-    }
-    if (!p->cache) {
+
         // enqueue delete from scripthash_unspent db
-        static const QString errMsgPrefix("Failed to issue a batch delete for a utxo to the scripthash_unspent db");
-        GenericBatchDelete(p->shunspentBatch, mkShunspentKey(hashX, ctxo), errMsgPrefix);
+        static const QString errMsgPrefix2("Failed to issue a batch delete for a utxo to the scripthash_unspent db");
+        GenericBatchDelete(p->shunspentBatch, mkShunspentKey(hashX, ctxo), errMsgPrefix2);
     } else {
+        // use cache which may end up doing no actual work if the utxo & shunspent was in cache and not yet committed to db
+        p->cache->remove(txo);
         p->cache->removeShunspent(hashX, ctxo);
     }
     ++p->rmCt;
@@ -3044,6 +3046,11 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
         std::scoped_lock guard(p->blocksLock, p->headerVerifierLock, p->blkInfoLock, p->mempoolLock);
 
         const auto t0 = Util::getTimeNS();
+
+        // First, disable the UTXO Cache, if it happened to be enabled (implicitly causes it to flush to DB).
+        // We must do this because the way the UTXO Cache works is fundamentally at odds with assumption we have
+        // while we undo.
+        p->db.utxoCache.reset(); // if valid, delete causes implicit flush to DB
 
         // NOTE: For very full mempools, this clear has the potential to stall the app after the reorg
         // completes since the app will have to re-download the whole mempool state again.
