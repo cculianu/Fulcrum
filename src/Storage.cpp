@@ -1189,6 +1189,7 @@ class Storage::UTXOCache
         if (!adds.empty() || !rms.empty())
             t1 = std::thread([&]{
                 try {
+                    if (auto *t = QThread::currentThread()) t->setObjectName(this->name + " - Writer.1"); // for logger
                     static const QString errMsgBatchWrite("Error issuing batch write to utxoset db for a utxo update");
                     if (!db) throw InternalError("utxoset db is nullptr! FIXME!");
                     size_t batchCount = 0;
@@ -1233,6 +1234,7 @@ class Storage::UTXOCache
         if (!shunspentAdds.empty() || !shunspentRms.empty())
             t2 = std::thread([&]{
                 try {
+                    if (auto *t = QThread::currentThread()) t->setObjectName(this->name + " - Writer.2"); // for logger
                     static const QString errMsgBatchWrite("Error issuing batch write to scripthash_unspent db for a shunspent update");
                     if (!shunspentdb) throw InternalError("scripthash_unspent db is nullptr! FIXME!");
                     size_t batchCount = 0;
