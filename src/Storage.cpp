@@ -1442,6 +1442,7 @@ class Storage::UTXOCache
                     if (!inum) { /* coinbase, skip */ }
                     else if (in.parentTxOutIdx.has_value()) { /* spent in this block, skip */ }
                     else if (TXO t{in.prevoutHash, in.prevoutN}; !contains(t)) {
+                        ++cacheMisses;
                         const unsigned index = keys.size();
                         const TXO & txo = index2TXO.try_emplace(index, std::move(t)).first->second;
                         keyData.push_back(Serialize(txo));
@@ -1449,7 +1450,8 @@ class Storage::UTXOCache
                         keys.emplace_back(ser.constData(), size_t(ser.size()));
                         values.emplace_back();
                         statuses.emplace_back();
-                    }
+                    } else
+                        ++cacheHits;
                     ++inum;
                 }
             }
