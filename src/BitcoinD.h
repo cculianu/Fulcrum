@@ -206,7 +206,9 @@ private:
     /// Periodically checks the reqContextTable and expires extant requests that have timed out.
     void requestTimeoutChecker();
     /// Called from lostConnection() and destroyed() on a BitcoinD in order to notify all extant requests of the failure
-    void notifyFailForRequestsMatchingBitcoinD(const BitcoinD *bd, const QString &errorMessage);
+    /// Note that `bd` pointer is never dereferenced, and it can be any QObject, but it should be a `BitcoinD`.
+    /// (it's ok to pass a `BitcoinD` that is destructing and is now a `QObject`)
+    void notifyFailForRequestsMatchingBitcoinD(const QObject *bd, const QString &errorMessage);
 
     /// Thread-safe. Called internally when a new map retrieved from bitcoind. If the map changed, zmqNotificationsChanged will be emitted.
     void setZmqNotifications(const BitcoinDZmqNotifications &);
@@ -280,7 +282,11 @@ namespace BitcoinDMgrHelper {
         bool timedOut = false;
         const int timeout; //< request timeout in milliseconds. Must be >= 0.
         qint64 ts; ///<--- intentionally uninitialized to save cycles
-        const BitcoinD *bd = nullptr; ///< the bitcoind that is handling our request. This pointer should *not* be dereferenced but only be used for == compare.
+        /// The BitcoinD instance that is handling our request. This pointer should *not* be dereferenced but only be
+        /// used for == compare (since it's running in another thread). The reason why it's a QObject * and not a
+        /// BitcoinD * is because we connect to the `destroyed` signal and check for equality on the (now) QObject
+        /// (which was once a BitcoinD).
+        const QObject *bd = nullptr;
 
         /// Mainly used for debugging the lifecycle of this class's instances.
         static std::atomic_int extant;

@@ -81,13 +81,11 @@ void BitcoinDMgr::startup() {
         });
         connect(client.get(), &BitcoinD::lostConnection, this, [this](AbstractConnection *c){
             // tell all extant requests being serviced by this BitcoinD about this failure
-            notifyFailForRequestsMatchingBitcoinD(static_cast<BitcoinD *>(c) /* guaranteed to be a BitcoinD * */,
-                                                  "bitcoind connection lost");
+            notifyFailForRequestsMatchingBitcoinD(c, "bitcoind connection lost");
         });
         connect(client.get(), &QObject::destroyed, this, [this](QObject *o){
             // just in case there are any extant requests up when this has been deleted (unlikely)
-            notifyFailForRequestsMatchingBitcoinD(static_cast<BitcoinD *>(o) /* guaranteed to be a BitcoinD * */,
-                                                  "bitcoind client deleted");
+            notifyFailForRequestsMatchingBitcoinD(o, "bitcoind client deleted");
         });
         connect(client.get(), &BitcoinD::lostConnection, this, [this](AbstractConnection *c){
             // guard against stale/old signal
@@ -553,7 +551,7 @@ void BitcoinDMgr::submitRequest(QObject *sender, const RPC::Message::Id &rid, co
         }
         context->deleteLater(); // thread-safe
     });
-    context->setObjectName(QStringLiteral("context for '%1' request id: %2").arg(sender ? sender->objectName() : QString()).arg(rid.toString()));
+    context->setObjectName(QStringLiteral("context for '%1' request id: %2").arg(sender ? sender->objectName() : QString{}, rid.toString()));
 
     // result handler (runs in sender thread), captures context and keeps it alive as long as signal/slot connection is alive
     connect(context.get(), &ReqCtxObj::results, sender, [context, resf, sender](const RPC::Message &response) {
@@ -633,7 +631,7 @@ void BitcoinDMgr::submitRequest(QObject *sender, const RPC::Message::Id &rid, co
                notify the sender of a timeout.
         */
 
-        bd->sendRequest(rid, method, params);
+        emit bd->sendRequest(rid, method, params);
     });
 
     // .. aand.. return right away
@@ -662,7 +660,7 @@ void BitcoinDMgr::requestTimeoutChecker()
     }
 }
 
-void BitcoinDMgr::notifyFailForRequestsMatchingBitcoinD(const BitcoinD *bd, const QString &errorMessage)
+void BitcoinDMgr::notifyFailForRequestsMatchingBitcoinD(const QObject *bd, const QString &errorMessage)
 {
     for (auto it = reqContextTable.begin(); it != reqContextTable.end(); ++it)
         if (auto context = it.value().lock(); context && context->bd == bd)
