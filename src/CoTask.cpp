@@ -21,9 +21,10 @@
 
 #include <QThread>
 
-CoTask::CoTask(const QString &name)
+CoTask::CoTask(const QString &name_)
+    : name{name_}
 {
-    thr = std::thread([this, name] {
+    thr = std::thread([this] {
         if (QThread *qthr; !name.isEmpty() && (qthr = QThread::currentThread()))
             qthr->setObjectName(name);
         thrFunc();

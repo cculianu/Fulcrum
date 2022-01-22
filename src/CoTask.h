@@ -35,6 +35,8 @@
 class CoTask
 {
 public:
+    const QString name;
+
     CoTask(const QString &name = {});
     ~CoTask();
 
