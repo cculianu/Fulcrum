@@ -1181,7 +1181,7 @@ class Storage::UTXOCache
             // nothing to do!
             return;
         }
-        if (memUsageTarget && memUsageForSizes(utxos.size(), as, rs, 0, 0) <= memUsageTarget)
+        if (as + rs == 0u || (memUsageTarget && memUsageForSizes(utxos.size(), as, rs, 0, 0) <= memUsageTarget))
             // flush to the shunspents since we prefer to evict those over the utxos
             do_shunspent_flush(memUsageTarget, [this]{ return memUsage(); });
         else
@@ -1215,22 +1215,6 @@ class Storage::UTXOCache
         auto fshunspentRmsDone = pshunspentRmsDone.get_future();
         auto frmsDone = prmsDone.get_future();
 
-        // called only if an exception was thrown, to avoid double-exceptions on stack unwinding in pathological cases
-        auto cleanFut = [](const CoTask &t, CoTask::Future &f){
-            if (f.future.valid()) {
-                QString what;
-                try {
-                    f.future.get();
-                    return;
-                } catch (const std::exception & e) {
-                    what = e.what();
-                } catch (...) {
-                    what = "Unknown exception";
-                }
-                Error() << "Exception caught waiting for future for task: " << t.name << ": " << what;
-            }
-        };
-
         // do scripthash_unspent first in a CoTask thread, since those are "cheaper" and don't require us to read them
         // back from DB, so they can be evicted first
         std::optional<Defer<>> d1;
@@ -1239,65 +1223,55 @@ class Storage::UTXOCache
                 do_shunspent_flush(memUsageTarget, threadSafeMemUsage, &pshunspentRmsDone, &frmsDone, &shunspentRmsSize,
                                    &shunspentAddsSize);
             });
-            d1.emplace([this, &cleanFut]{ cleanFut(flusherShunspent, flusherShunspentFut); });
+            // This is here if an exception was thrown, to properly clean up the parallel task that is pointing
+            // to variables on the stack frame.
+            d1.emplace([this]{
+                if (flusherShunspentFut.future.valid()) {
+                    // Catch all exceptions here to avoid double-exceptions on stack unwinding
+                    QString what;
+                    try {
+                        flusherShunspentFut.future.get();
+                        return;
+                    } catch (const std::exception & e) { what = e.what(); } catch (...) { what = "Unknown exception"; }
+                    Error() << "Exception caught waiting for future for task: " << flusherShunspent.name << ": " << what;
+                }
+            });
         } else {
             pshunspentRmsDone.set_value();
         }
 
-        // do utxos in a thread
-        std::optional<Defer<>> d2;
+        // do utxos in this thread since it's otherwise going to block anyway
         if (!adds.empty() || !rms.empty()) {
-            flusherUtxosetFut = flusherUtxoset.submitWork([&]{
-                static const QString errMsgBatchWrite("Error issuing batch write to utxoset db for a utxo update");
-                if (!db) throw InternalError("utxoset db is nullptr! FIXME!");
-                size_t batchCount = 0;
-                // rms first (loop in reverse to shrink vector as we loop)
-                for (size_t i = rms.size(); i-- > 0; /**/) {
+            static const QString errMsgBatchWrite("Error issuing batch write to utxoset db for a utxo update");
+            if (!db) throw InternalError("utxoset db is nullptr! FIXME!");
+            size_t batchCount = 0;
+            // rms first (loop in reverse to shrink vector as we loop)
+            for (size_t i = rms.size(); i-- > 0; /**/) {
+                if (memUsageTarget && threadSafeMemUsage() <= memUsageTarget)
+                    break; // abort loop early
+                // enqueue delete from utxoset db -- may throw.
+                static const QString errMsgPrefix("Failed to issue a batch delete for a utxo");
+                const auto & txo = rms[i];
+                GenericBatchDelete(batch, txo, errMsgPrefix); // may throw on failure
+                rms.resize(i);
+                --rmsSize;
+                ++rmCt;
+                if (++batchCount >= batchSize)
+                    commitBatch(db.get(), batch, errMsgBatchWrite, writeOpts, batchCount);
+            }
+
+            // synchronize with parallel thread so that we both do the rms first (we like to keep the adds sticky)
+            prmsDone.set_value();
+            fshunspentRmsDone.get();
+
+            // next, adds
+            if (optAddsOrder) {
+                // caller specified an order for adds that they prefer for deletion
+                auto & order = *optAddsOrder;
+                for (const auto oit : order) {
                     if (memUsageTarget && threadSafeMemUsage() <= memUsageTarget)
                         break; // abort loop early
-                    // enqueue delete from utxoset db -- may throw.
-                    static const QString errMsgPrefix("Failed to issue a batch delete for a utxo");
-                    const auto & txo = rms[i];
-                    GenericBatchDelete(batch, txo, errMsgPrefix); // may throw on failure
-                    rms.resize(i);
-                    --rmsSize;
-                    ++rmCt;
-                    if (++batchCount >= batchSize)
-                        commitBatch(db.get(), batch, errMsgBatchWrite, writeOpts, batchCount);
-                }
-
-                // synchronize with parallel thread so that we both do the rms first (we like to keep the adds sticky)
-                prmsDone.set_value();
-                fshunspentRmsDone.get();
-
-                // next, adds
-                if (optAddsOrder) {
-                    // caller specified an order for adds that they prefer for deletion
-                    auto & order = *optAddsOrder;
-                    for (const auto oit : order) {
-                        if (memUsageTarget && threadSafeMemUsage() <= memUsageTarget)
-                            break; // abort loop early
-                        if (auto it = adds.find(oit); it != adds.end()) {
-                            // Update db utxoset, keyed off txo -> txoinfo
-                            {
-                                static const QString errMsgPrefix("Failed to add a utxo to the utxo batch");
-                                const auto & [txo, info] = **it;
-                                GenericBatchPut(batch, txo, info, errMsgPrefix); // may throw on failure
-                            }
-                            it = adds.erase(it);
-                            --addsSize;
-                            ++addCt;
-                            if (++batchCount >= batchSize)
-                                commitBatch(db.get(), batch, errMsgBatchWrite, writeOpts, batchCount);
-                        }
-                    }
-                    order.clear();
-                    order.shrink_to_fit();
-                } else {
-                    // no order specified, just iterate in "random" order of the hash set
-                    for (auto it = adds.begin(); it != adds.end(); /**/) {
-                        if (memUsageTarget && threadSafeMemUsage() <= memUsageTarget)
-                            break; // abort loop early
+                    if (auto it = adds.find(oit); it != adds.end()) {
                         // Update db utxoset, keyed off txo -> txoinfo
                         {
                             static const QString errMsgPrefix("Failed to add a utxo to the utxo batch");
@@ -1311,16 +1285,33 @@ class Storage::UTXOCache
                             commitBatch(db.get(), batch, errMsgBatchWrite, writeOpts, batchCount);
                     }
                 }
-                if (batchCount) commitBatch(db.get(), batch, errMsgBatchWrite, writeOpts, batchCount);
-            });
-            d2.emplace([this, &cleanFut]{ cleanFut(flusherUtxoset, flusherUtxosetFut); });
+                order.clear();
+                order.shrink_to_fit();
+            } else {
+                // no order specified, just iterate in "random" order of the hash set
+                for (auto it = adds.begin(); it != adds.end(); /**/) {
+                    if (memUsageTarget && threadSafeMemUsage() <= memUsageTarget)
+                        break; // abort loop early
+                    // Update db utxoset, keyed off txo -> txoinfo
+                    {
+                        static const QString errMsgPrefix("Failed to add a utxo to the utxo batch");
+                        const auto & [txo, info] = **it;
+                        GenericBatchPut(batch, txo, info, errMsgPrefix); // may throw on failure
+                    }
+                    it = adds.erase(it);
+                    --addsSize;
+                    ++addCt;
+                    if (++batchCount >= batchSize)
+                        commitBatch(db.get(), batch, errMsgBatchWrite, writeOpts, batchCount);
+                }
+            }
+            if (batchCount) commitBatch(db.get(), batch, errMsgBatchWrite, writeOpts, batchCount);
         } else {
             prmsDone.set_value();
             if (optAddsOrder) { optAddsOrder->clear(); optAddsOrder->shrink_to_fit(); }
         }
 
         if (flusherShunspentFut.future.valid()) flusherShunspentFut.future.get(); // may throw it task threw
-        if (flusherUtxosetFut.future.valid()) flusherUtxosetFut.future.get(); // may throw
 
         if (t0.msec<int>() >= 50)
             DebugM(__func__, ": added ", addCt, " and deleted ", rmCt, Util::Pluralize(" utxo", addCt + rmCt),
@@ -1551,8 +1542,8 @@ class Storage::UTXOCache
     }
 
     const QString name;
-    CoTask prefetcher, flusherShunspent, flusherUtxoset;
-    CoTask::Future prefetcherFut, flusherShunspentFut, flusherUtxosetFut;
+    CoTask prefetcher, flusherShunspent;
+    CoTask::Future prefetcherFut, flusherShunspentFut;
 
     const std::unique_ptr<rocksdb::DB> & db, & shunspentdb;
     const rocksdb::ReadOptions & readOpts;
@@ -1639,8 +1630,7 @@ public:
     UTXOCache(const QString &name, const std::unique_ptr<rocksdb::DB> & pdb,
               const std::unique_ptr<rocksdb::DB> & pshunspentdb, const rocksdb::ReadOptions & readOpts,
               const rocksdb::WriteOptions & writeOpts)
-        : name{name}, prefetcher{name + " Prefetcher"},
-          flusherShunspent{name + ".Worker1"}, flusherUtxoset{name + ".Worker2"},
+        : name{name}, prefetcher{name + ".Prefetcher"}, flusherShunspent{name + ".ShunspentFlusher"},
           db{pdb}, shunspentdb{pshunspentdb}, readOpts{readOpts}, writeOpts{writeOpts} {
         DebugM(name, ": created");
     }
