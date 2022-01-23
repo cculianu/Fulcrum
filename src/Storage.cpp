@@ -1171,21 +1171,31 @@ class Storage::UTXOCache
             Warning() << name << ": Prefetcher was active when " << __func__ << " was called. Waiting for prefetch to complete ...";
             prefetcherFut.future.wait();
         }
-        const size_t as = adds.size(), rs = rms.size(), sas = shunspentAdds.size(), srs = shunspentRms.size();
-        if (const size_t ct = as + rs + sas + srs; memUsageForSizes(utxos.size(), as, rs, sas, srs) > memUsageTarget) {
-            if (!memUsageTarget)
-                Log() << name <<  ": Flushing " << ct << Util::Pluralize(" item", ct) << " to UTXO & ScriptHashUnspent DBs ...";
-            else
-                Log() << name << ": Flushing some items to UTXO & ScriptHashUnspent DBs ...";
+        const size_t us = utxos.size(), as = adds.size(), rs = rms.size(), sas = shunspentAdds.size(), srs = shunspentRms.size();
+        if (const size_t ct = as + rs + sas + srs; memUsageForSizes(us, as, rs, sas, srs) > memUsageTarget) {
+            Log() << name <<  ": Flushing to DB ...";
         } else {
             // nothing to do!
             return;
         }
-        if (as + rs == 0u || (memUsageTarget && memUsageForSizes(utxos.size(), as, rs, 0, 0) <= memUsageTarget))
+        if (as + rs == 0u || (memUsageTarget && memUsageForSizes(us, as, rs, 0, 0) <= memUsageTarget)) {
             // flush to the shunspents since we prefer to evict those over the utxos
-            do_shunspent_flush(memUsageTarget, [this]{ return memUsage(); });
-        else
-            do_parallel_flush(memUsageTarget, optAddsOrder);
+            const bool doAdds = !memUsageTarget || memUsageForSizes(us, as, rs, sas, 0) > memUsageTarget; // we prefer rms over adds
+            do_shunspent_flush(doAdds, memUsageTarget, [this]{ return memUsage(); });
+        } else {
+            bool doAdds = true, doShAdds = true;
+            // we prefer rms over adds, so try to optimize to do rms only if we can
+            if (memUsageTarget) {
+                if (memUsageForSizes(us, as, 0, sas, 0) <= memUsageTarget) {
+                    doAdds = doShAdds = false;
+                } else if (memUsageForSizes(us, 0, 0, sas, 0) <= memUsageTarget) {
+                    doShAdds = false;
+                } else if (memUsageForSizes(us, as, 0, 0, 0) <= memUsageTarget) {
+                    doAdds = false;
+                }
+            }
+            do_parallel_flush(doAdds, doShAdds, memUsageTarget, optAddsOrder);
+        }
     }
     static constexpr size_t batchSize = 100'000;  // to limit the memory used for batching, we limit the batch size
     static void commitBatch(rocksdb::DB *db, rocksdb::WriteBatch &batch, const QString &errMsg,
@@ -1199,7 +1209,8 @@ class Storage::UTXOCache
         }
         batchCount = 0;
     }
-    void do_parallel_flush(const size_t memUsageTarget, std::vector<NodeList::iterator> * const optAddsOrder) {
+    void do_parallel_flush(bool doAdds, bool doShunspentAdds, const size_t memUsageTarget,
+                           std::vector<NodeList::iterator> * const optAddsOrder) {
         const Tic t0;
         size_t addCt = 0, rmCt = 0;
         rocksdb::WriteBatch batch;
@@ -1218,10 +1229,10 @@ class Storage::UTXOCache
         // do scripthash_unspent first in a CoTask thread, since those are "cheaper" and don't require us to read them
         // back from DB, so they can be evicted first
         std::optional<Defer<>> d1;
-        if (!shunspentAdds.empty() || !shunspentRms.empty()) {
+        if ((doShunspentAdds && !shunspentAdds.empty()) || !shunspentRms.empty()) {
             flusherShunspentFut = flusherShunspent.submitWork([&]{
-                do_shunspent_flush(memUsageTarget, threadSafeMemUsage, &pshunspentRmsDone, &frmsDone, &shunspentRmsSize,
-                                   &shunspentAddsSize);
+                do_shunspent_flush(doShunspentAdds, memUsageTarget, threadSafeMemUsage, &pshunspentRmsDone, &frmsDone,
+                                   &shunspentRmsSize, &shunspentAddsSize);
             });
             // This is here if an exception was thrown, to properly clean up the parallel task that is pointing
             // to variables on the stack frame.
@@ -1241,7 +1252,7 @@ class Storage::UTXOCache
         }
 
         // do utxos in this thread since it's otherwise going to block anyway
-        if (!adds.empty() || !rms.empty()) {
+        if ((doAdds && !adds.empty()) || !rms.empty()) {
             static const QString errMsgBatchWrite("Error issuing batch write to utxoset db for a utxo update");
             if (!db) throw InternalError("utxoset db is nullptr! FIXME!");
             size_t batchCount = 0;
@@ -1265,13 +1276,33 @@ class Storage::UTXOCache
             fshunspentRmsDone.get();
 
             // next, adds
-            if (optAddsOrder) {
-                // caller specified an order for adds that they prefer for deletion
-                auto & order = *optAddsOrder;
-                for (const auto oit : order) {
-                    if (memUsageTarget && threadSafeMemUsage() <= memUsageTarget)
-                        break; // abort loop early
-                    if (auto it = adds.find(oit); it != adds.end()) {
+            if (doAdds) {
+                if (optAddsOrder) {
+                    // caller specified an order for adds that they prefer for deletion
+                    auto & order = *optAddsOrder;
+                    for (const auto oit : order) {
+                        if (memUsageTarget && threadSafeMemUsage() <= memUsageTarget)
+                            break; // abort loop early
+                        if (auto it = adds.find(oit); it != adds.end()) {
+                            // Update db utxoset, keyed off txo -> txoinfo
+                            {
+                                static const QString errMsgPrefix("Failed to add a utxo to the utxo batch");
+                                const auto & [txo, info] = **it;
+                                GenericBatchPut(batch, txo, info, errMsgPrefix); // may throw on failure
+                            }
+                            it = adds.erase(it);
+                            --addsSize;
+                            ++addCt;
+                            if (++batchCount >= batchSize)
+                                commitBatch(db.get(), batch, errMsgBatchWrite, writeOpts, batchCount);
+                        }
+                    }
+                    order.clear(); order.shrink_to_fit();
+                } else {
+                    // no order specified, just iterate in "random" order of the hash set
+                    for (auto it = adds.begin(); it != adds.end(); /**/) {
+                        if (memUsageTarget && threadSafeMemUsage() <= memUsageTarget)
+                            break; // abort loop early
                         // Update db utxoset, keyed off txo -> txoinfo
                         {
                             static const QString errMsgPrefix("Failed to add a utxo to the utxo batch");
@@ -1284,24 +1315,6 @@ class Storage::UTXOCache
                         if (++batchCount >= batchSize)
                             commitBatch(db.get(), batch, errMsgBatchWrite, writeOpts, batchCount);
                     }
-                }
-                order.clear(); order.shrink_to_fit();
-            } else {
-                // no order specified, just iterate in "random" order of the hash set
-                for (auto it = adds.begin(); it != adds.end(); /**/) {
-                    if (memUsageTarget && threadSafeMemUsage() <= memUsageTarget)
-                        break; // abort loop early
-                    // Update db utxoset, keyed off txo -> txoinfo
-                    {
-                        static const QString errMsgPrefix("Failed to add a utxo to the utxo batch");
-                        const auto & [txo, info] = **it;
-                        GenericBatchPut(batch, txo, info, errMsgPrefix); // may throw on failure
-                    }
-                    it = adds.erase(it);
-                    --addsSize;
-                    ++addCt;
-                    if (++batchCount >= batchSize)
-                        commitBatch(db.get(), batch, errMsgBatchWrite, writeOpts, batchCount);
                 }
             }
             if (batchCount) commitBatch(db.get(), batch, errMsgBatchWrite, writeOpts, batchCount);
@@ -1317,7 +1330,7 @@ class Storage::UTXOCache
                    " in ", t0.msecStr(3), " msec");
     }
     template <typename Func>
-    void do_shunspent_flush(const size_t memUsageTarget, const Func &getMemUsage,
+    void do_shunspent_flush(bool doAdds, const size_t memUsageTarget, const Func &getMemUsage,
                             std::promise<void> * pshunspentRmsDone = nullptr,
                             std::future<void> * frmsDone = nullptr,
                             std::atomic_size_t * shunspentRmsSize = nullptr,
@@ -1349,20 +1362,22 @@ class Storage::UTXOCache
         if (frmsDone) frmsDone->get(); // wait for parallel task, if any
 
         // next, shunspentAdds
-        for (auto it = shunspentAdds.begin(); it != shunspentAdds.end(); /**/) {
-            if (memUsageTarget && getMemUsage() <= memUsageTarget)
-                break; // abort loop early
-            // Update db scripthash_unspent, keyed off hashX|ctxo
-            {
-                static const QString errMsgPrefix("Failed to add an item to the shunspent batch");
-                const auto & [dbkey, amount]  = *it;
-                GenericBatchPut(shunspentBatch, dbkey, amount, errMsgPrefix); // may throw on failure
+        if (doAdds) {
+            for (auto it = shunspentAdds.begin(); it != shunspentAdds.end(); /**/) {
+                if (memUsageTarget && getMemUsage() <= memUsageTarget)
+                    break; // abort loop early
+                // Update db scripthash_unspent, keyed off hashX|ctxo
+                {
+                    static const QString errMsgPrefix("Failed to add an item to the shunspent batch");
+                    const auto & [dbkey, amount]  = *it;
+                    GenericBatchPut(shunspentBatch, dbkey, amount, errMsgPrefix); // may throw on failure
+                }
+                it = shunspentAdds.erase(it);
+                ++shunspentAddCt;
+                if (shunspentAddsSize) --*shunspentAddsSize;
+                if (++batchCount >= batchSize)
+                    commitBatch(shunspentdb.get(), shunspentBatch, errMsgBatchWrite, writeOpts, batchCount);
             }
-            it = shunspentAdds.erase(it);
-            ++shunspentAddCt;
-            if (shunspentAddsSize) --*shunspentAddsSize;
-            if (++batchCount >= batchSize)
-                commitBatch(shunspentdb.get(), shunspentBatch, errMsgBatchWrite, writeOpts, batchCount);
         }
 
         if (batchCount) commitBatch(shunspentdb.get(), shunspentBatch, errMsgBatchWrite, writeOpts, batchCount);
