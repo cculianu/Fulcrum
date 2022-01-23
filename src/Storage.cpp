@@ -1285,8 +1285,7 @@ class Storage::UTXOCache
                             commitBatch(db.get(), batch, errMsgBatchWrite, writeOpts, batchCount);
                     }
                 }
-                order.clear();
-                order.shrink_to_fit();
+                order.clear(); order.shrink_to_fit();
             } else {
                 // no order specified, just iterate in "random" order of the hash set
                 for (auto it = adds.begin(); it != adds.end(); /**/) {
@@ -1383,9 +1382,10 @@ class Storage::UTXOCache
         std::vector<NodeList::iterator> addsOrder;
         const bool justDoShunspents = memUsageForSizes(utxos.size(), adds.size(), rms.size(), 0, 0) <= bytes;
         if (!justDoShunspents) {
-            addsOrder.reserve(ordering.size());
+            addsOrder.reserve(adds.size());
+            const bool definitelyNotInAdds = adds.empty(), definitelyInAdds = ordering.size() == adds.size();
             for (auto oit = ordering.begin(); m > bytes && oit != ordering.end(); ++iters) {
-                if (adds.count(oit) == 0) {
+                if (!definitelyInAdds && (definitelyNotInAdds || adds.count(oit) == 0)) {
                     // only erase cached UTXOs that exist in DB and are not in "add" set
                     // also only erase if this is the second time through (try to make UTXO cache "stickier")
                     if (tryCt > 0) {
@@ -1512,6 +1512,7 @@ class Storage::UTXOCache
         if (auto it = utxos.find(txo); it != utxos.end()) {
             if (auto ait = adds.find(it->second); ait != adds.end()) {
                 wasInAdds = true;
+                utxoDbOpsSaved += 3; // we saved an add, a read, and a delete here!
                 adds.erase(ait);
             }
             // to prevent UB, should erase in this order (with `ordering` entries always being erased last!)
@@ -1527,6 +1528,7 @@ class Storage::UTXOCache
     bool rmShunspent(ShunspentKey && k) {
         if (auto it = shunspentAdds.find(k); it != shunspentAdds.end()) {
             shunspentAdds.erase(it);
+            shunspentDbOpsSaved += 2; // we saved an add then a delete here!
             return true;
         } else
             shunspentRms.push_back(std::move(k));
@@ -1636,7 +1638,8 @@ public:
     }
 
     ~UTXOCache() {
-        DebugM(name, ": ", __func__);
+        DebugM(name, ": ", __func__, " - stats - cache hits: ", cacheHits, ", cache misses: ", cacheMisses,
+               ", utxoDbOpsSaved: ", utxoDbOpsSaved, ", shunspentDbOpsSaved: ", shunspentDbOpsSaved);
         do_flush();
     }
 
@@ -1684,7 +1687,7 @@ public:
         addAllDeferred();
     }
 
-    size_t cacheMisses = 0, cacheHits = 0;
+    size_t cacheMisses = 0, cacheHits = 0, utxoDbOpsSaved = 0, shunspentDbOpsSaved = 0;
 
     /// Get a UTXO from the cache. Will return a null optional if the requested TXO was not in the cache.
     /// Does not fall-back to looking in the DB. Caller should explicitly call utxoGetFromDB() themselves
