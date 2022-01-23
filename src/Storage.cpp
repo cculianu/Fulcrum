@@ -1172,12 +1172,9 @@ class Storage::UTXOCache
             prefetcherFut.future.wait();
         }
         const size_t us = utxos.size(), as = adds.size(), rs = rms.size(), sas = shunspentAdds.size(), srs = shunspentRms.size();
-        if (const size_t ct = as + rs + sas + srs; memUsageForSizes(us, as, rs, sas, srs) > memUsageTarget) {
-            Log() << name <<  ": Flushing to DB ...";
-        } else {
-            // nothing to do!
-            return;
-        }
+        if (memUsageForSizes(us, as, rs, sas, srs) < memUsageTarget)
+             return;  // nothing to do!
+        Log() << name <<  ": Flushing to DB ...";
         if (as + rs == 0u || (memUsageTarget && memUsageForSizes(us, as, rs, 0, 0) <= memUsageTarget)) {
             // flush to the shunspents since we prefer to evict those over the utxos
             const bool doAdds = !memUsageTarget || memUsageForSizes(us, as, rs, sas, 0) > memUsageTarget; // we prefer rms over adds
@@ -1222,17 +1219,12 @@ class Storage::UTXOCache
             return memUsageForSizes(utxosSize, addsSize, rmsSize, shunspentAddsSize, shunspentRmsSize);
         };
 
-        std::promise<void> pshunspentRmsDone, prmsDone;
-        auto fshunspentRmsDone = pshunspentRmsDone.get_future();
-        auto frmsDone = prmsDone.get_future();
-
         // do scripthash_unspent first in a CoTask thread, since those are "cheaper" and don't require us to read them
         // back from DB, so they can be evicted first
         std::optional<Defer<>> d1;
         if ((doShunspentAdds && !shunspentAdds.empty()) || !shunspentRms.empty()) {
             flusherShunspentFut = flusherShunspent.submitWork([&]{
-                do_shunspent_flush(doShunspentAdds, memUsageTarget, threadSafeMemUsage, &pshunspentRmsDone, &frmsDone,
-                                   &shunspentRmsSize, &shunspentAddsSize);
+                do_shunspent_flush(doShunspentAdds, memUsageTarget, threadSafeMemUsage, &shunspentRmsSize, &shunspentAddsSize);
             });
             // This is here if an exception was thrown, to properly clean up the parallel task that is pointing
             // to variables on the stack frame.
@@ -1247,8 +1239,6 @@ class Storage::UTXOCache
                     Error() << "Exception caught waiting for future for task: " << flusherShunspent.name << ": " << what;
                 }
             });
-        } else {
-            pshunspentRmsDone.set_value();
         }
 
         // do utxos in this thread since it's otherwise going to block anyway
@@ -1270,10 +1260,6 @@ class Storage::UTXOCache
                 if (++batchCount >= batchSize)
                     commitBatch(db.get(), batch, errMsgBatchWrite, writeOpts, batchCount);
             }
-
-            // synchronize with parallel thread so that we both do the rms first (we like to keep the adds sticky)
-            prmsDone.set_value();
-            fshunspentRmsDone.get();
 
             // next, adds
             if (doAdds) {
@@ -1319,7 +1305,6 @@ class Storage::UTXOCache
             }
             if (batchCount) commitBatch(db.get(), batch, errMsgBatchWrite, writeOpts, batchCount);
         } else {
-            prmsDone.set_value();
             if (optAddsOrder) { optAddsOrder->clear(); optAddsOrder->shrink_to_fit(); }
         }
 
@@ -1331,8 +1316,6 @@ class Storage::UTXOCache
     }
     template <typename Func>
     void do_shunspent_flush(bool doAdds, const size_t memUsageTarget, const Func &getMemUsage,
-                            std::promise<void> * pshunspentRmsDone = nullptr,
-                            std::future<void> * frmsDone = nullptr,
                             std::atomic_size_t * shunspentRmsSize = nullptr,
                             std::atomic_size_t * shunspentAddsSize = nullptr) {
         const Tic t0;
@@ -1357,9 +1340,6 @@ class Storage::UTXOCache
             if (++batchCount >= batchSize)
                 commitBatch(shunspentdb.get(), shunspentBatch, errMsgBatchWrite, writeOpts, batchCount);
         }
-
-        if (pshunspentRmsDone) pshunspentRmsDone->set_value();
-        if (frmsDone) frmsDone->get(); // wait for parallel task, if any
 
         // next, shunspentAdds
         if (doAdds) {
