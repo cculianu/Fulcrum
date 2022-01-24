@@ -147,7 +147,7 @@ class ServerBase : public AbstractTcpServer, public StatsMixin
 {
     Q_OBJECT
 protected:
-    using Member_t = void (ServerBase::*)(Client *, const RPC::Message &); ///< ptr to member function
+    using Member_t = void (ServerBase::*)(Client *, RPC::BatchId, const RPC::Message &); ///< ptr to member function
     using DispatchTable = QHash<QString, Member_t>; ///< this dispatch table mechanism which relies on ptr to member is a slight performance optimization over std::function with std::bind
 
     SrvMgr * const srvmgr; ///< basically a weak reference -- this is guaranteed to be alive for the entire lifetime of this instance, however.
@@ -210,7 +210,7 @@ public slots:
     void applyMaxBufferToAllClients(int newMax);
 
 protected slots:
-    void onMessage(IdMixin::Id clientId, const RPC::Message &m);
+    void onMessage(IdMixin::Id clientId, RPC::BatchId batchId, const RPC::Message &m);
     void onErrorMessage(IdMixin::Id clientId, const RPC::Message &m);
     void onPeerError(IdMixin::Id clientId, const QString &what);
 
@@ -275,8 +275,9 @@ protected:
     /// the work for later and handles sending the response (returned from work) to the client as well as sending
     /// any errors to the client. The `work` functor may throw RPCError, in which case code and message will be
     /// sent instead.  Note that all other exceptions also end up sent to the client as "internal error: MESSAGE".
-    void generic_do_async(Client *client, const RPC::Message::Id &reqId,  const AsyncWorkFunc & work, int priority = 0);
+    void generic_do_async(Client *client, RPC::BatchId, const RPC::Message::Id &reqId,  const AsyncWorkFunc & work, int priority = 0);
     void generic_async_to_bitcoind(Client *client,
+                                   RPC::BatchId batchId, ///< if running in batch context, will be !batchId.isNull()
                                    const RPC::Message::Id & reqId,  ///< the original client request id
                                    const QString &method, ///< bitcoind method to invoke
                                    const QVariantList &params, ///< params for bitcoind method
@@ -343,62 +344,62 @@ signals:
 private:
     // RPC methods below
     // server
-    void rpc_server_add_peer(Client *, const RPC::Message &); // fully implemented
-    void rpc_server_banner(Client *, const RPC::Message &); // fully implemented (comes from a text file specified by config banner=)
-    void rpc_server_donation_address(Client *, const RPC::Message &); // fully implemented (comes from config donation=)
-    void rpc_server_features(Client *, const RPC::Message &); // fully implemented (comes from config)
-    void rpc_server_peers_subscribe(Client *, const RPC::Message &); // fully implemented
-    void rpc_server_ping(Client *, const RPC::Message &); // fully implemented
-    void rpc_server_version(Client *, const RPC::Message &); // fully implemented
+    void rpc_server_add_peer(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+    void rpc_server_banner(Client *, RPC::BatchId, const RPC::Message &); // fully implemented (comes from a text file specified by config banner=)
+    void rpc_server_donation_address(Client *, RPC::BatchId, const RPC::Message &); // fully implemented (comes from config donation=)
+    void rpc_server_features(Client *, RPC::BatchId, const RPC::Message &); // fully implemented (comes from config)
+    void rpc_server_peers_subscribe(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+    void rpc_server_ping(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+    void rpc_server_version(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     // address (resurrected in protocol 1.4.3)
-    void rpc_blockchain_address_get_balance(Client *, const RPC::Message &); // fully implemented
-    void rpc_blockchain_address_get_history(Client *, const RPC::Message &); // fully implemented
-    void rpc_blockchain_address_get_mempool(Client *, const RPC::Message &); // fully implemented
-    void rpc_blockchain_address_get_scripthash(Client *, const RPC::Message &); // fully implemented
-    void rpc_blockchain_address_listunspent(Client *, const RPC::Message &); // fully implemented
-    void rpc_blockchain_address_subscribe(Client *, const RPC::Message &); // fully implemented
-    void rpc_blockchain_address_unsubscribe(Client *, const RPC::Message &); // fully implemented
+    void rpc_blockchain_address_get_balance(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+    void rpc_blockchain_address_get_history(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+    void rpc_blockchain_address_get_mempool(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+    void rpc_blockchain_address_get_scripthash(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+    void rpc_blockchain_address_listunspent(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+    void rpc_blockchain_address_subscribe(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+    void rpc_blockchain_address_unsubscribe(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     // blockchain misc
-    void rpc_blockchain_block_header(Client *, const RPC::Message &);  // fully implemented
-    void rpc_blockchain_block_headers(Client *, const RPC::Message &); // fully implemented
-    void rpc_blockchain_estimatefee(Client *, const RPC::Message &); // fully implemented
-    void rpc_blockchain_headers_subscribe(Client *, const RPC::Message &); // fully implemented
-    void rpc_blockchain_relayfee(Client *, const RPC::Message &); // fully implemented
+    void rpc_blockchain_block_header(Client *, RPC::BatchId, const RPC::Message &);  // fully implemented
+    void rpc_blockchain_block_headers(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+    void rpc_blockchain_estimatefee(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+    void rpc_blockchain_headers_subscribe(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+    void rpc_blockchain_relayfee(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     // scripthash
-    void rpc_blockchain_scripthash_get_balance(Client *, const RPC::Message &); // fully implemented
-    void rpc_blockchain_scripthash_get_history(Client *, const RPC::Message &); // fully implemented
-    void rpc_blockchain_scripthash_get_mempool(Client *, const RPC::Message &); // fully implemented
-    void rpc_blockchain_scripthash_listunspent(Client *, const RPC::Message &); // fully implemented
-    void rpc_blockchain_scripthash_subscribe(Client *, const RPC::Message &); // fully implemented
-    void rpc_blockchain_scripthash_unsubscribe(Client *, const RPC::Message &); // fully implemented
+    void rpc_blockchain_scripthash_get_balance(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+    void rpc_blockchain_scripthash_get_history(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+    void rpc_blockchain_scripthash_get_mempool(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+    void rpc_blockchain_scripthash_listunspent(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+    void rpc_blockchain_scripthash_subscribe(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+    void rpc_blockchain_scripthash_unsubscribe(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     // transaction
-    void rpc_blockchain_transaction_broadcast(Client *, const RPC::Message &); // fully implemented
-    void rpc_blockchain_transaction_get(Client *, const RPC::Message &); // fully implemented
-    void rpc_blockchain_transaction_get_height(Client *, const RPC::Message &); // fully implemented
-    void rpc_blockchain_transaction_get_merkle(Client *, const RPC::Message &); // fully implemented
-    void rpc_blockchain_transaction_id_from_pos(Client *, const RPC::Message &); // fully implemented
-    void rpc_blockchain_transaction_subscribe(Client *, const RPC::Message &); // fully implemented
-    void rpc_blockchain_transaction_unsubscribe(Client *, const RPC::Message &); // fully implemented
+    void rpc_blockchain_transaction_broadcast(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+    void rpc_blockchain_transaction_get(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+    void rpc_blockchain_transaction_get_height(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+    void rpc_blockchain_transaction_get_merkle(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+    void rpc_blockchain_transaction_id_from_pos(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+    void rpc_blockchain_transaction_subscribe(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+    void rpc_blockchain_transaction_unsubscribe(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     // transaction.dsproof
-    void rpc_blockchain_transaction_dsproof_get(Client *, const RPC::Message &); // fully implemented
-    void rpc_blockchain_transaction_dsproof_list(Client *, const RPC::Message &); // fully implemented
-    void rpc_blockchain_transaction_dsproof_subscribe(Client *, const RPC::Message &); // fully implemented
-    void rpc_blockchain_transaction_dsproof_unsubscribe(Client *, const RPC::Message &); // fully implemented
+    void rpc_blockchain_transaction_dsproof_get(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+    void rpc_blockchain_transaction_dsproof_list(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+    void rpc_blockchain_transaction_dsproof_subscribe(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+    void rpc_blockchain_transaction_dsproof_unsubscribe(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     /* / */
     // utxo
-    void rpc_blockchain_utxo_get_info(Client *, const RPC::Message &); // fully implemented
+    void rpc_blockchain_utxo_get_info(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     // mempool
-    void rpc_mempool_get_fee_histogram(Client *, const RPC::Message &); // fully implemented
+    void rpc_mempool_get_fee_histogram(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
 
     // Impl. for blockchain.scripthash.* & blockchain.address.* methods (both sets call into these).
     // Note: Validation should have already been done by caller.
-    void impl_get_balance(Client *, const RPC::Message &, const HashX &scriptHash);
-    void impl_get_history(Client *, const RPC::Message &, const HashX &scriptHash);
-    void impl_get_mempool(Client *, const RPC::Message &, const HashX &scriptHash);
-    void impl_listunspent(Client *, const RPC::Message &, const HashX &scriptHash);
-    void impl_generic_subscribe(SubsMgr *, Client *, const RPC::Message &, const HashX &key,
+    void impl_get_balance(Client *, RPC::BatchId, const RPC::Message &, const HashX &scriptHash);
+    void impl_get_history(Client *, RPC::BatchId, const RPC::Message &, const HashX &scriptHash);
+    void impl_get_mempool(Client *, RPC::BatchId, const RPC::Message &, const HashX &scriptHash);
+    void impl_listunspent(Client *, RPC::BatchId, const RPC::Message &, const HashX &scriptHash);
+    void impl_generic_subscribe(SubsMgr *, Client *, RPC::BatchId, const RPC::Message &, const HashX &key,
                                 const std::optional<QString> & aliasUsedForNotifications = {});
-    void impl_generic_unsubscribe(SubsMgr *, Client *, const RPC::Message &, const HashX &key);
+    void impl_generic_unsubscribe(SubsMgr *, Client *, RPC::BatchId, const RPC::Message &, const HashX &key);
     /// Commonly used by above methods.  Takes the first address argument in the m.paramsList() and converts it to
     /// a scripthash, returning the raw bytes.  Will throw RPCError on invalid argument.
     /// It is assumed the caller already ensured m.paramsList() has at least 1 item in it (which the RPC machinery
@@ -519,22 +520,22 @@ private:
 
     enum BanOp { Kick, Ban, Unban };
     void kickBanBoilerPlate(const RPC::Message &, BanOp);
-    void rpc_addpeer(Client *, const RPC::Message &);
-    void rpc_ban(Client *, const RPC::Message &);
-    void rpc_banpeer(Client *, const RPC::Message &);
-    void rpc_bitcoind_throttle(Client *, const RPC::Message &); // getter / setter in 1 method
-    void rpc_clients(Client *, const RPC::Message &);
-    void rpc_getinfo(Client *, const RPC::Message &);
-    void rpc_kick(Client *, const RPC::Message &);
-    void rpc_listbanned(Client *, const RPC::Message &);
-    void rpc_loglevel(Client *, const RPC::Message &);
-    void rpc_maxbuffer(Client *, const RPC::Message &);
-    void rpc_peers(Client *, const RPC::Message &);
-    void rpc_rmpeer(Client *, const RPC::Message &);
-    void rpc_simdjson(Client *, const RPC::Message &);
-    void rpc_shutdown(Client *, const RPC::Message &);
-    void rpc_unban(Client *, const RPC::Message &);
-    void rpc_unbanpeer(Client *, const RPC::Message &);
+    void rpc_addpeer(Client *, RPC::BatchId, const RPC::Message &);
+    void rpc_ban(Client *, RPC::BatchId, const RPC::Message &);
+    void rpc_banpeer(Client *, RPC::BatchId, const RPC::Message &);
+    void rpc_bitcoind_throttle(Client *, RPC::BatchId, const RPC::Message &); // getter / setter in 1 method
+    void rpc_clients(Client *, RPC::BatchId, const RPC::Message &);
+    void rpc_getinfo(Client *, RPC::BatchId, const RPC::Message &);
+    void rpc_kick(Client *, RPC::BatchId, const RPC::Message &);
+    void rpc_listbanned(Client *, RPC::BatchId, const RPC::Message &);
+    void rpc_loglevel(Client *, RPC::BatchId, const RPC::Message &);
+    void rpc_maxbuffer(Client *, RPC::BatchId, const RPC::Message &);
+    void rpc_peers(Client *, RPC::BatchId, const RPC::Message &);
+    void rpc_rmpeer(Client *, RPC::BatchId, const RPC::Message &);
+    void rpc_simdjson(Client *, RPC::BatchId, const RPC::Message &);
+    void rpc_shutdown(Client *, RPC::BatchId, const RPC::Message &);
+    void rpc_unban(Client *, RPC::BatchId, const RPC::Message &);
+    void rpc_unbanpeer(Client *, RPC::BatchId, const RPC::Message &);
 
     /// Basically a namespace for our rpc dispatch tables, etc, private to this class
     struct StaticData {

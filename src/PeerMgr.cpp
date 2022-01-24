@@ -30,6 +30,7 @@
 #include <QSet>
 #include <QSslConfiguration>
 #include <QSslSocket>
+#include <QStringView>
 #include <QTcpSocket>
 #include <QVector>
 
@@ -392,7 +393,7 @@ void PeerMgr::updateSoon()
     callOnTimerSoonNoRepeat(int(kProcessSoonInterval * 1e3), __func__, [this]{
         // the below happens in a rate-limited fashion after a small delay (currently 1 sec)
         PeerInfoList peers;
-        for (const auto & client : clients) {
+        for (const auto & client : qAsConst(clients)) {
             if (client->isGood() && !client->isStale() && client->verified)
                 peers.push_back(client->info);
         }
@@ -520,7 +521,7 @@ void PeerMgr::on_kickByAddress(const QHostAddress &addr)
         }
     }
     // lastly, loop through the active/connected clients and tell them all to delete themselves
-    for (PeerClient *c : clients) {
+    for (PeerClient *c : qAsConst(clients)) {
         if (c->peerAddress() == addr || c->info.addr == addr) {
             DebugM(__func__, " kicked connected peer ", c->info.hostName, " ", addr.toString());
             hostnames.insert(c->info.hostName);
@@ -553,7 +554,7 @@ void PeerMgr::on_kickBySuffix(const QString &suffix)
         }
     }
     // lastly, loop through the active/connected clients and tell them all to delete themselves
-    for (PeerClient *c : clients) {
+    for (PeerClient *c : qAsConst(clients)) {
         if (c->info.hostName.endsWith(suffix)) {
             DebugM(__func__, " kicked connected peer ", c->info.hostName, " ", c->info.addr.toString());
             hostnames.insert(c->info.hostName);
@@ -776,7 +777,7 @@ void PeerClient::refresh()
 
 }
 
-void PeerClient::handleReply(IdMixin::Id, const RPC::Message & reply)
+void PeerClient::handleReply(IdMixin::Id, const RPC::BatchId, const RPC::Message & reply)
 {
     auto Bad = [this](const QString & reason = QString()) {
         QString res = reason;
@@ -831,7 +832,7 @@ void PeerClient::handleReply(IdMixin::Id, const RPC::Message & reply)
         bool found = false;
         const bool weAreSsl = isSsl();
         const quint16 remotePort = peerPort();
-        for (const auto & pi : pl) {
+        for (const auto & pi : qAsConst(pl)) {
             // find a hostname match and also port match for what we are connected to
             if (pi.hostName == info.hostName
                     // see if ports match what we are connected to
@@ -905,7 +906,7 @@ void PeerClient::handleReply(IdMixin::Id, const RPC::Message & reply)
         if (announceSelf) {
             bool foundMe = false;
             const QString phn = mgr->publicHostNameForConnection(this);
-            for (const auto & pi : candidates) {
+            for (const auto & pi : qAsConst(candidates)) {
                 if (!foundMe && pi.hostName == phn) {
                     foundMe = true;
                     break;
@@ -918,7 +919,7 @@ void PeerClient::handleReply(IdMixin::Id, const RPC::Message & reply)
         if (!verified) {
             verified = true;
             info.clearFailureTs(); // make sure all failure timestamps are cleared
-            mgr->needUpdateSoon();
+            emit mgr->needUpdateSoon();
             Log() << "Verified peer " << info.hostName << " (" << info.addr.toString() << ")";
         }
     } else
@@ -957,17 +958,17 @@ PeerInfoList PeerInfo::fromPeersSubscribeList(const QVariantList &l)
                 pi.protocolVersion = s;
             } else if (s.startsWith('t', Qt::CaseInsensitive)) {
                 bool ok;
-                unsigned p = s.mid(1).toUInt(&ok);
+                unsigned p = QStringView{s}.mid(1).toUInt(&ok);
                 if (!p || !ok || p > std::numeric_limits<quint16>::max())
                     continue;
                 pi.tcp = quint16(p);
             } else if (s.startsWith('s', Qt::CaseInsensitive)) {
                     bool ok;
-                    unsigned p = s.mid(1).toUInt(&ok);
+                    unsigned p = QStringView{s}.mid(1).toUInt(&ok);
                     if (!p || !ok || p > std::numeric_limits<quint16>::max())
                         continue;
                     pi.ssl = quint16(p);
-            } else if (s.startsWith('p', Qt::CaseInsensitive) && s.mid(1).toInt()) {
+            } else if (s.startsWith('p', Qt::CaseInsensitive) && QStringView{s}.mid(1).toInt()) {
                 // skip 'p' = pruning
                 isPruning = true;
                 break;

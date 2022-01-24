@@ -224,7 +224,7 @@ signals:
     /// connected to PeerMgr -> lambda to detectProtocol() (so we learn if we have IPv6 as the app runs)
     void connectionEstablished(PeerClient *me);
 protected slots:
-    void handleReply(IdMixin::Id myid, const RPC::Message & reply);
+    void handleReply(IdMixin::Id myid, RPC::BatchId, const RPC::Message & reply);
 protected:
     void do_ping() override;
     void on_connected() override;

@@ -154,7 +154,7 @@ protected:
 
 protected slots:
     // connected to BitcoinD gotMessage signal
-    void on_Message(quint64 bitcoindId, const RPC::Message &msg);
+    void on_Message(quint64 bitcoindId, const RPC::BatchId batchId, const RPC::Message &msg);
     // connected to BitcoinD gotErrorMessage signal
     void on_ErrorMessage(quint64 bitcoindId, const RPC::Message &msg);
 

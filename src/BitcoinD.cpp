@@ -690,7 +690,7 @@ void BitcoinDMgr::handleMessageCommon(const RPC::Message &msg, ReqCtxResultsOrEr
     emit (context.get()->*resultsOrErrorFunc)(msg);
 }
 
-void BitcoinDMgr::on_Message(quint64 bid, const RPC::Message &msg)
+void BitcoinDMgr::on_Message(quint64 bid, const RPC::BatchId /* unused */, const RPC::Message &msg)
 {
     TraceM("Msg from: ", bid, " (reqId: ", msg.id, " method: ", msg.method, ")");
 

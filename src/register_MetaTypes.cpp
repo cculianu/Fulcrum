@@ -40,6 +40,7 @@ void App::register_MetaTypes()
         qRegisterMetaType<RPC::Message>("RPC::Message");
         qRegisterMetaType<RPC::Message::Id>("RPC::Message::Id"); // for some reason when this is an alias for QVariant it needs this string here
         qRegisterMetaType<IdMixin::Id>("IdMixin::Id");
+        qRegisterMetaType<RPC::BatchId>("RPC::BatchId");
 
         // Used by the Controller::putBlock signal
         qRegisterMetaType<CtlTask *>("CtlTask *");

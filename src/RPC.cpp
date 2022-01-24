@@ -365,7 +365,7 @@ namespace RPC {
         // below send() ends up calling do_write immediately (which is connected to send)
         emit send( wrapForSend(std::move(json)) );
     }
-    void ConnectionBase::_sendError(bool disc, int code, const QString &msg, const Message::Id & reqId)
+    void ConnectionBase::_sendError(bool disc, int code, const QString &msg, BatchId batchId, const Message::Id & reqId)
     {
         if (status != Connected || !socket) {
             DebugM(__func__, "; Not connected! ", "(id: ", this->id, "), forcing on_disconnect ...");
@@ -377,8 +377,10 @@ namespace RPC {
         {
             Message m = Message::makeError(code, msg, reqId, v1);
 
-            // first, see if the error response corresponds to an extant batch request
-            if (batchResponseFilter(m))
+            // First, see if the error response corresponds to an extant batch request
+            // Note: for "disconnect" errors we just reply immediately and don't respond in
+            // the batch request context, so we skip this filter altogether in that case.
+            if (!disc && batchResponseFilter(batchId, m))
                 // an extant batch slurped up this response. Don't send it to client.
                 return;
 
@@ -393,7 +395,7 @@ namespace RPC {
             do_disconnect(true); // graceful disconnect
         }
     }
-    void ConnectionBase::_sendResult(const Message::Id & reqid, const QVariant & result)
+    void ConnectionBase::_sendResult(BatchId batchId, const Message::Id & reqid, const QVariant & result)
     {
         if (status != Connected || !socket) {
             DebugM(__func__, ":  Not connected! ", "(id: ", this->id, "), forcing on_disconnect ...");
@@ -407,7 +409,7 @@ namespace RPC {
             Message m = Message::makeResponse(reqid, result, v1);
 
             // first, see if the response corresponds to an extant batch request
-            if (batchResponseFilter(m))
+            if (batchResponseFilter(batchId, m))
                 // an extant batch slurped up this response. Don't send it to client.
                 return;
 
@@ -424,22 +426,22 @@ namespace RPC {
         emit send( wrapForSend(std::move(json)) );
     }
 
-    bool ConnectionBase::batchResponseFilter(const Message & msg)
+    bool ConnectionBase::batchResponseFilter(BatchId batchId, const Message & msg)
     {
+        if (batchId.isNull()) return false; // batchId.isNull() means to not filter.
         // first, see if the response corresponds to an extant batch request
-        for (auto * batch : qAsConst(extantBatchProcessors)) {
-            if (batch->acceptResponse(msg)) {
-                batchZombies.remove(msg.id); // also remove from batchZombies, just in case (this should never happen)
-                return true;
+        if (auto * const batch = qAsConst(extantBatchProcessors).value(batchId)) {
+            if (UNLIKELY(batch->id != batchId.get())) {
+                // Defensive programming: Log and detect invariant violations. batchId should always be batch->id
+                Error() << __func__ << ": batchId " << batchId.get() << " != batch->id " << batch->id << "! FIXME!";
             }
+            batch->gotResponse(msg);
+        } else {
+            // Was a "zombie" reply to a batch request that was killed. Log the situation.
+            DebugM(objectName(), ": message id \"", msg.id.toString(), "\", is a zombie (batchId: ", batchId.get(),
+                   ") to a previously killed batch request. Removed and message filtered.");
         }
-        if (batchZombies.contains(msg.id)) {
-            batchZombies.remove(msg.id);
-            DebugM(objectName(), ": message id \"", msg.id.toString(), "\" found in batchZombies.",
-                   " Removed and message filtered. batchZombies size now: ", batchZombies.size());
-            return true;
-        }
-        return false;
+        return true;
     }
 
     void ConnectionBase::processJson(QByteArray &&json)
@@ -471,7 +473,7 @@ namespace RPC {
                     if (res.message->isError())
                         emit gotErrorMessage(id, *res.message);
                     else
-                        emit gotMessage(id, *res.message);
+                        emit gotMessage(id, BatchId{} /* no batchId in immediate mode */, *res.message);
                 } else {
                     // No error or no message means callee is telling us to do nothing with this.
                     // This can happen if unexpected/unsupported notification, in which case peerError() was
@@ -502,14 +504,14 @@ namespace RPC {
             error.emplace(Code_InternalError, e.what());
         }
         if (error)
-            on_processJsonFailure(error->code, error->message, msgId);
+            on_processJsonFailure(error->code, error->message,  msgId);
     }
 
     void ConnectionBase::on_processJsonFailure(int code, const QString & message, const Message::Id &msgId)
     {
         bool doDisconnect = errorPolicy & ErrorPolicyDisconnect;
         if (errorPolicy & ErrorPolicySendErrorMessage) {
-            emit sendError(doDisconnect, code, message.left(120), msgId);
+            emit sendError(doDisconnect, code, message.left(120), BatchId{} /* send outside any batch context */, msgId);
             if (!doDisconnect)
                 emit peerError(id, lastPeerError=message);
             doDisconnect = false; // if was true, already enqueued graceful disconnect after error reply, if was false, no-op here
@@ -530,24 +532,25 @@ namespace RPC {
 
         auto batch_exception_guard = std::make_unique<RPC::BatchProcessor>(*this, std::move(varList));
         auto *batch = batch_exception_guard.get();
+        const BatchId batchId{batch->batchId()};
         if ( ! canAcceptBatch(batch) ) {
-            DebugM(batch->objectName(), ": rejecting batch ");
+            DebugM(batch->objectName(), ": rejecting batch ", batchId.get());
             throw BatchLimitExceeded();
         }
-        connect(batch, &QObject::destroyed, this, [this, bpId = batch->id](QObject *o) {
+        connect(batch, &QObject::destroyed, this, [this, batchId](QObject *o) {
             // NB: Qt doesn't deliver this signal to us if `this` is no longer is a ConnectionBase * (which is good)
-            if (auto *ptr = extantBatchProcessors.take(bpId); UNLIKELY(ptr && ptr != o)) {
+            if (auto *ptr = extantBatchProcessors.take(batchId); UNLIKELY(ptr && ptr != o)) {
                 // this should never happen
-                Error() << "Deleted extant batch processor with id " << bpId
+                Error() << "Deleted extant batch processor with id " << batchId.get()
                         << ", but the passed-in QObject pointer differs from the pointer in our table! FIXME!";
             }
         });
-        extantBatchProcessors[batch->id] = batch;
-        connect(batch, &BatchProcessor::finished, this, [this, bpId = batch->id]{
-            if (auto *batch = extantBatchProcessors.take(bpId)) {
-                if (const auto & zombies = batch->getBatch().unansweredRequests; !zombies.isEmpty()) {
-                    batchZombies.unite(zombies);
-                    DebugM(batch->objectName(), ": had ", zombies.size(), " zombie requests added to batchZombies set");
+        extantBatchProcessors[batchId] = batch;
+        connect(batch, &BatchProcessor::finished, this, [this, batchId]{
+            if (auto *batch = extantBatchProcessors.take(batchId)) {
+                if (const auto n = batch->getBatch().unansweredRequests) {
+                    DebugM(batch->objectName(), ": has ", n,
+                           " extant zombie requests, will filter subsequent responses matching this BatchId");
                 }
                 batch->deleteLater();
             }
@@ -578,12 +581,12 @@ namespace RPC {
                     if (maxParams < minParams) maxParams = minParams;
                     if (num < minParams)
                         throw InvalidParameters(QString("Expected at least %1 %2 for %3, got %4 instead")
-                                                .arg(minParams).arg(Util::Pluralize("parameter", minParams))
-                                                .arg(m.method).arg(num));
+                                                .arg(minParams).arg(Util::Pluralize("parameter", minParams), m.method)
+                                                .arg(num));
                     if (num > maxParams)
                         throw InvalidParameters(QString("Expected at most %1 %2 for %3, got %4 instead")
-                                                .arg(maxParams).arg(Util::Pluralize("parameter", maxParams))
-                                                .arg(m.method).arg(num));
+                                                .arg(maxParams).arg(Util::Pluralize("parameter", maxParams), m.method)
+                                                .arg(num));
                 } else if (msg.isParamsMap()) {
                     // named args specified
                     if (!m.opt_kwParams.has_value())
@@ -813,7 +816,8 @@ namespace RPC {
                             << QString::number(memoryWasteTimeout/1e3, 'f', 1) << " seconds -- kicking client!";
                     // the below also sets ignoreNewIncomingMessages = true iff this is of type Client *
                     emit sendError(true, RPC::ErrorCodes::Code_App_ExcessiveFlood,
-                                   "Excessive flood, please throttle your client implementation to not do this");
+                                   "Excessive flood, please throttle your client implementation to not do this",
+                                   BatchId{} /* no batch id here -- reply outside of batch */);
                     status = Bad;
                 } else
                     StopTimer(this, avail);
@@ -1135,6 +1139,8 @@ namespace RPC {
     BatchProcessor::BatchProcessor(ConnectionBase & parent, Batch && batch_)
         : QObject(&parent), IdMixin(newId()), conn(parent), batch(std::move(batch_))
     {
+        batch.batchId.set(this->id); // assign to this processor
+        assert(!batch.batchId.isNull());
         try {
             cumCost = Json::estimateMemoryFootprint(batch.items);
         } catch (const std::exception &e) {
@@ -1155,19 +1161,6 @@ namespace RPC {
         if constexpr (debugBatchExtra) DebugM(objectName(), " ", __func__, ", elapsed: ", t0.msecStr(6), " msec");
         // signal to listeners that cost is now 0
         addCost(-cumCost);
-    }
-
-    bool ConnectionBase::hasMessageIdInBatchProcs(const Message::Id &msgId) const
-    {
-        if (batchZombies.contains(msgId))
-            return true;
-        for (const auto *proc : extantBatchProcessors) {
-            if (!proc || proc->isFinished()) continue;
-            const auto & batch = proc->getBatch();
-            if (!batch.isComplete() && (batch.unansweredRequests.contains(msgId) || batch.answeredRequests.contains(msgId)))
-                return true;
-        }
-        return false;
     }
 
     void BatchProcessor::addCost(qsizetype cost)
@@ -1227,23 +1220,14 @@ namespace RPC {
                 } else if (res.message) {
                     const auto & m = *res.message;
                     if (m.isRequest()) {
-                        if (m.id.isNull()) {
-                            // error, null message id (not supported due to potential for clashing with error results)
-                            pushResponse(Message::makeError(Code_Custom, *(error="Null id not supported in batch requests"),
-                                                            m.id, conn.isV1()));
-                        } else if (conn.hasMessageIdInBatchProcs(m.id)) {
-                            // error, dupe
-                            pushResponse(Message::makeError(Code_Custom, *(error="Duplicate id"), m.id, conn.isV1()));
-                        } else {
-                            // Ok, proceed to pass the message along to the `conn` instance. We will be notified in
-                            // our `acceptResponse()` method by `ConnectionBase::batchResponseFilter` when the result
-                            // (or error) is ready.
-                            batch.unansweredRequests.insert(m.id);
-                            emit conn.gotMessage(conn.id, m);
-                        }
+                        // Ok, proceed to pass the message along to the `conn` instance. We will be notified in
+                        // our `acceptResponse()` method by `ConnectionBase::batchResponseFilter` when the result
+                        // (or error) is ready.
+                        ++batch.unansweredRequests;
+                        emit conn.gotMessage(conn.id, batch.batchId, m);
                     } else if (m.isNotif()) {
                         ++batch.skippedCt;
-                        emit conn.gotMessage(conn.id, m);
+                        emit conn.gotMessage(conn.id, BatchId{} /* <-- notifs *never* have a batchId (since we don't need to track that) */, m);
                     } else {
                         pushResponse(Message::makeError(Code_InvalidRequest, *(error="Invalid request"), m.id, conn.isV1()));
                     }
@@ -1296,23 +1280,18 @@ namespace RPC {
                 Error() << objectName() << ": timed out after not receiving a batch response for "
                         << timeoutSec << " seconds.";
                 done = true;
-                emit conn.sendError(true, Code_InternalError, "Batch request timed out");
+                emit conn.sendError(true, Code_InternalError, "Batch request timed out", BatchId{});
                 conn.status = conn.Bad;
                 emit finished();
             });
         }
     }
 
-    bool BatchProcessor::acceptResponse(const Message &m)
+    void BatchProcessor::gotResponse(const Message &m)
     {
-        if (auto it = batch.unansweredRequests.find(m.id); it != batch.unansweredRequests.end()) {
-            batch.unansweredRequests.erase(it);
-            batch.answeredRequests.insert(m.id);
-            pushResponse(m);
-            if (batch.isComplete()) AGAIN();
-            return true;
-        }
-        return false;
+        --batch.unansweredRequests;
+        pushResponse(m);
+        if (batch.isComplete()) AGAIN();
     }
 
     void BatchProcessor::killForExceedngLimit()
@@ -1332,8 +1311,7 @@ namespace RPC {
             bm["cost"] = qlonglong(cost());
             bm["size"] = qlonglong(batch.items.size());
             bm["nextItem"] = qlonglong(batch.nextItem);
-            bm["unansweredRequests"] = qlonglong(batch.unansweredRequests.size());
-            bm["answeredRequests"] = qlonglong(batch.answeredRequests.size());
+            bm["unansweredRequests"] = qlonglong(batch.unansweredRequests);
             bm["responses"] = qlonglong(batch.responses.size());
             bm["state"] = [this]{
                 if (killed) return "killed";

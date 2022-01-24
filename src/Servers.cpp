@@ -659,9 +659,9 @@ void ServerBase::applyMaxBufferToAllClients(int newMax)
 }
 
 
-void ServerBase::onMessage(IdMixin::Id clientId, const RPC::Message &m)
+void ServerBase::onMessage(IdMixin::Id clientId, RPC::BatchId batchId, const RPC::Message &m)
 {
-    TraceM("onMessage: ", clientId, " json: ", m.toJsonUtf8());
+    TraceM("onMessage: ", clientId, ", ", batchId.get(), " json: ", m.toJsonUtf8());
     if (Client *c = getClient(clientId); c) {
         const auto member = dispatchTable.value(m.method);
         if (!member)
@@ -671,18 +671,18 @@ void ServerBase::onMessage(IdMixin::Id clientId, const RPC::Message &m)
             ++c->info.nRequestsRcv;
             try {
                 // call ptr to member -- note member is free to throw if it wants to send an error immediately
-                (this->*member)(c, m);
+                (this->*member)(c, batchId, m);
             } catch (const RPCError & e) {
-                emit c->sendError(e.disconnect, e.code, e.what(), m.id);
+                emit c->sendError(e.disconnect, e.code, e.what(), batchId, m.id);
             } catch (const std::exception & e) {
                 // log this unexpected exception, so we get bug reports hopefully if this ever happens
                 Warning() << "Unexpected exception thrown while processing RPC request \"" << m.method
                           << "\" for client " << c->id << ", exception: " << e.what();
                 emit c->sendError(false, RPC::ErrorCodes::Code_InternalError,
-                                  QString("internal error: %1").arg(e.what()),  m.id);
+                                  QString("internal error: %1").arg(e.what()),  batchId, m.id);
             } catch (...) {
                 Warning() << "Unknown exception thrown while processing RPC request \"" << m.method << "\" for client " << c->id;
-                emit c->sendError(false, RPC::ErrorCodes::Code_InternalError, "internal error: unknown", m.id);
+                emit c->sendError(false, RPC::ErrorCodes::Code_InternalError, "internal error: unknown", batchId, m.id);
             }
         }
     } else {
@@ -694,7 +694,7 @@ void ServerBase::onErrorMessage(IdMixin::Id clientId, const RPC::Message &m)
     TraceM("onErrorMessage: ", clientId, " json: ", m.toJsonUtf8());
     if (Client *c = getClient(clientId); c) {
         // we never expect client to send us errors. Always return invalid request, disconnect client.
-        emit c->sendError(true, RPC::Code_InvalidRequest, "Not a valid request object");
+        emit c->sendError(true, RPC::Code_InvalidRequest, "Not a valid request object", RPC::BatchId{});
     }
 }
 void ServerBase::onPeerError(IdMixin::Id clientId, const QString &what)
@@ -722,17 +722,17 @@ void ServerBase::onPeersUpdated(const PeerInfoList &pl)
 
 // --- RPC METHODS ---
 namespace {
-    ThreadPool::FailFunc defaultTPFailFunc(Client *c, const RPC::Message::Id &id) {
-        return [c, id](const QString &what) {
+    ThreadPool::FailFunc defaultTPFailFunc(Client *c, RPC::BatchId batchId, const RPC::Message::Id &id) {
+        return [c, batchId, id](const QString &what) {
             Warning() << "ThreadPool job for client " << c->id << " failed: " << what;
-            emit c->sendError(false, RPC::Code_InternalError, QString("internal error: %1").arg(what), id);
+            emit c->sendError(false, RPC::Code_InternalError, QString("internal error: %1").arg(what), batchId, id);
         };
     }
-    BitcoinDMgr::FailF defaultBDFailFunc(Client *c, const RPC::Message::Id &id) {
-        return [c, id](const RPC::Message::Id &, const QString &what) {
+    BitcoinDMgr::FailF defaultBDFailFunc(Client *c, RPC::BatchId batchId, const RPC::Message::Id &id) {
+        return [c, batchId, id](const RPC::Message::Id &, const QString &what) {
             c->bdReqCtr -= std::min(c->bdReqCtr, 1LL); // decrease throttle counter (per-client, owned by this thread)
             --c->perIPData->bdReqCtr; // decrease bitcoind request counter (per-IP, owned by multiple threads)
-            emit c->sendError(false, RPC::Code_InternalError, QString("internal error: %1").arg(what), id);
+            emit c->sendError(false, RPC::Code_InternalError, QString("internal error: %1").arg(what), batchId, id);
         };
     }
 } // namespace
@@ -740,7 +740,8 @@ namespace {
 ServerBase::RPCError::~RPCError() {}
 ServerBase::RPCErrorWithDisconnect::~RPCErrorWithDisconnect() {}
 
-void ServerBase::generic_do_async(Client *c, const RPC::Message::Id &reqId, const std::function<QVariant ()> &work, int priority)
+void ServerBase::generic_do_async(Client *c, RPC::BatchId batchId, const RPC::Message::Id &reqId,
+                                  const std::function<QVariant ()> &work, int priority)
 {
     if (LIKELY(work)) {
         struct ResErr {
@@ -767,16 +768,16 @@ void ServerBase::generic_do_async(Client *c, const RPC::Message::Id &reqId, cons
                 }
             },
             // completion: runs in client thread (only called if client not already deleted)
-            [c, reqId, reserr] {
+            [c, batchId, reqId, reserr] {
                 if (reserr->error) {
-                    emit c->sendError(reserr->doDisconnect, reserr->errCode, reserr->errMsg, reqId);
+                    emit c->sendError(reserr->doDisconnect, reserr->errCode, reserr->errMsg, batchId, reqId);
                     return;
                 }
                 // no error, send results to client
-                emit c->sendResult(reqId, reserr->results);
+                emit c->sendResult(batchId, reqId, reserr->results);
             },
             // default fail function just sends json rpc error "internal error: <message>"
-            defaultTPFailFunc(c, reqId),
+            defaultTPFailFunc(c, batchId, reqId),
             // lower is sooner, higher is later. Default 0.
             priority
         );
@@ -784,7 +785,8 @@ void ServerBase::generic_do_async(Client *c, const RPC::Message::Id &reqId, cons
         Error() << "INTERNAL ERROR: work must be valid! FIXME!";
 }
 
-void ServerBase::generic_async_to_bitcoind(Client *c, const RPC::Message::Id & reqId, const QString &method,
+void ServerBase::generic_async_to_bitcoind(Client *c, const RPC::BatchId batchId, const RPC::Message::Id & reqId,
+                                           const QString &method,
                                            const QVariantList & params,
                                            const BitcoinDSuccessFunc & successFunc,
                                            const BitcoinDErrorFunc & errorFunc)
@@ -823,20 +825,20 @@ void ServerBase::generic_async_to_bitcoind(Client *c, const RPC::Message::Id & r
     // /Throttling support
     bitcoindmgr->submitRequest(c, newId(), method, params,
         // success
-        [c, reqId, successFunc](const RPC::Message & reply) {
+        [c, batchId, reqId, successFunc](const RPC::Message & reply) {
             c->bdReqCtr -= std::min(c->bdReqCtr, 1LL); // decrease throttle counter
             --c->perIPData->bdReqCtr; // decrease bitcoind request counter (per-IP, owned by multiple threads)
             try {
                 const QVariant result = successFunc ? successFunc(reply) : reply.result(); // if no successFunc specified, use default which just copies the result to the client.
-                emit c->sendResult(reqId, result);
+                emit c->sendResult(batchId, reqId, result);
             } catch (const RPCError &e) {
-                emit c->sendError(e.disconnect, e.code, e.what(), reqId);
+                emit c->sendError(e.disconnect, e.code, e.what(), batchId, reqId);
             } catch (const std::exception &e) {
-                emit c->sendError(false, RPC::ErrorCodes::Code_InternalError, e.what(), reqId);
+                emit c->sendError(false, RPC::ErrorCodes::Code_InternalError, e.what(), batchId, reqId);
             }
         },
         // error
-        [c, reqId, errorFunc](const RPC::Message & errorReply) {
+        [c, batchId, reqId, errorFunc](const RPC::Message & errorReply) {
             c->bdReqCtr -= std::min(c->bdReqCtr, 1LL); // decrease throttle counter
             --c->perIPData->bdReqCtr; // decrease bitcoind request counter (per-IP, owned by multiple threads)
             try {
@@ -844,14 +846,14 @@ void ServerBase::generic_async_to_bitcoind(Client *c, const RPC::Message::Id & r
                     errorFunc(errorReply); // this should throw RPCError
                 throw RPCError(errorReply.errorMessage(), RPC::Code_App_DaemonError);
             } catch (const RPCError &e) {
-                emit c->sendError(e.disconnect, e.code, e.what(), reqId);
+                emit c->sendError(e.disconnect, e.code, e.what(), batchId, reqId);
             } catch (const std::exception &e) {
                 emit c->sendError(false, RPC::ErrorCodes::Code_InternalError, QString("internal error: %1").arg(e.what()),
-                                  reqId);
+                                  batchId, reqId);
             }
         },
         // use default function on failure, sends json rpc error "internal error: <message>"
-        defaultBDFailFunc(c, reqId)
+        defaultBDFailFunc(c, batchId, reqId)
     );
 }
 
@@ -899,7 +901,7 @@ QVariant Server::stats() const
     return v;
 }
 
-void Server::rpc_server_add_peer(Client *c, const RPC::Message &m)
+void Server::rpc_server_add_peer(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const auto map = m.paramsList().constFirst().toMap();
     if (map.isEmpty())
@@ -919,7 +921,7 @@ void Server::rpc_server_add_peer(Client *c, const RPC::Message &m)
         DebugM("Refusing add_peer ", hostNamePart, " for reason: ", e.what());
         retval = false;
     }
-    emit c->sendResult(m.id, retval);
+    emit c->sendResult(batchId, m.id, retval);
 
 }
 
@@ -987,7 +989,7 @@ namespace {
     }
 } // namespace
 
-void Server::rpc_server_banner(Client *c, const RPC::Message &m)
+void Server::rpc_server_banner(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     constexpr int MAX_BANNER_DATA = 16384;
     static const QString bannerFallback = QString("Connected to a %1 server").arg(ServerMisc::AppSubVersion);
@@ -995,11 +997,11 @@ void Server::rpc_server_banner(Client *c, const RPC::Message &m)
                              ? options->torBannerFile : options->bannerFile);
     if (bannerFile.isEmpty() || !QFile::exists(bannerFile) || !QFileInfo(bannerFile).isReadable()) {
         // fallback -- banner file invalid/not readable/not specified
-        emit c->sendResult(m.id, bannerFallback);
+        emit c->sendResult(batchId, m.id, bannerFallback);
     } else {
         // banner file specified, now let's open it up in a worker thread to keep the server responsive and return immediately
         const auto bitcoinDInfo = bitcoindmgr->getBitcoinDInfo();
-        generic_do_async(c, m.id,
+        generic_do_async(c, batchId, m.id,
                         [bannerFile,
                          donationAddress = transformDefaultDonationAddressToBTCOrBCH(*options, isBTC),
                          daemonVersion = bitcoinDInfo.version,
@@ -1022,9 +1024,9 @@ void Server::rpc_server_banner(Client *c, const RPC::Message &m)
         });
     }
 }
-void Server::rpc_server_donation_address(Client *c, const RPC::Message &m)
+void Server::rpc_server_donation_address(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
-    emit c->sendResult(m.id, transformDefaultDonationAddressToBTCOrBCH(*options, isBTC));
+    emit c->sendResult(batchId, m.id, transformDefaultDonationAddressToBTCOrBCH(*options, isBTC));
 }
 /* static */
 QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const QByteArray &genesisHash, const Options &opts, bool dsproof)
@@ -1085,11 +1087,11 @@ QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const Q
     r["hosts"] = hostsMap;
     return r;
 }
-void Server::rpc_server_features(Client *c, const RPC::Message &m)
+void Server::rpc_server_features(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
-    emit c->sendResult(m.id, makeFeaturesDictForConnection(c, storage->genesisHash(), *options, bitcoindmgr->hasDSProofRPC()));
+    emit c->sendResult(batchId, m.id, makeFeaturesDictForConnection(c, storage->genesisHash(), *options, bitcoindmgr->hasDSProofRPC()));
 }
-void Server::rpc_server_peers_subscribe(Client *c, const RPC::Message &m)
+void Server::rpc_server_peers_subscribe(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     // See: https://electrumx.readthedocs.io/en/latest/protocol-methods.html#server-peers-subscribe
     QVariantList res;
@@ -1109,13 +1111,13 @@ void Server::rpc_server_peers_subscribe(Client *c, const RPC::Message &m)
         item.push_back(nested);
         res.push_back(item);
     }
-    emit c->sendResult(m.id, res);
+    emit c->sendResult(batchId, m.id, res);
 }
-void Server::rpc_server_ping(Client *c, const RPC::Message &m)
+void Server::rpc_server_ping(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
-    emit c->sendResult(m.id);
+    emit c->sendResult(batchId, m.id);
 }
-void Server::rpc_server_version(Client *c, const RPC::Message &m)
+void Server::rpc_server_version(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     QVariantList l = m.paramsList();
     if (l.size() == 0)
@@ -1149,7 +1151,7 @@ void Server::rpc_server_version(Client *c, const RPC::Message &m)
     c->info.userAgent = l[0].toString().left(kMaxServerVersionLen);
     c->info.protocolVersion = pver;
     c->info.alreadySentVersion = true;
-    emit c->sendResult(m.id, QStringList({ServerMisc::AppSubVersion, pver.toString()}));
+    emit c->sendResult(batchId, m.id, QStringList({ServerMisc::AppSubVersion, pver.toString()}));
 }
 
 /// returns the 'branch' and 'root' keys ready to be put in the results dictionary
@@ -1175,7 +1177,7 @@ auto Server::getHeadersBranchAndRoot(unsigned height, unsigned cp_height) -> Hea
 }
 
 
-void Server::rpc_blockchain_block_header(Client *c, const RPC::Message &m)
+void Server::rpc_blockchain_block_header(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const QVariantList l = m.paramsList();
     assert(!l.isEmpty());
@@ -1194,7 +1196,7 @@ void Server::rpc_blockchain_block_header(Client *c, const RPC::Message &m)
             throw RPCError(QString("header height %1 must be <= cp_height %2 which must be <= chain height %3")
                            .arg(height).arg(cp_height).arg(tip));
     }
-    generic_do_async(c, m.id, [height, cp_height, this] {
+    generic_do_async(c, batchId, m.id, [height, cp_height, this] {
         QString err;
         const auto optHdr = storage->headerForHeight(height, &err); // may return nothing (but will set err) if height is now beyond chain height due to reorg
         if (QByteArray hdr; err.isEmpty() && optHdr.has_value() && !(hdr = *optHdr).isEmpty()) {
@@ -1216,7 +1218,7 @@ void Server::rpc_blockchain_block_header(Client *c, const RPC::Message &m)
     });
 }
 
-void Server::rpc_blockchain_block_headers(Client *c, const RPC::Message &m)
+void Server::rpc_blockchain_block_headers(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const QVariantList l = m.paramsList();
     assert(l.size() >= 2);
@@ -1240,7 +1242,7 @@ void Server::rpc_blockchain_block_headers(Client *c, const RPC::Message &m)
             throw RPCError(QString("header height + (count - 1) %1 must be <= cp_height %2 which must be <= chain height %3")
                            .arg(height + (count - 1)).arg(cp_height).arg(tip));
     }
-    generic_do_async(c, m.id, [height, count, cp_height, this] {
+    generic_do_async(c, batchId, m.id, [height, count, cp_height, this] {
         // EX doesn't seem to return error here if invalid height/no results, so we will do same.
         const auto hdrs = storage->headersFromHeight(height, std::min(count, MAX_COUNT));
         const size_t nHdrs = hdrs.size(), hdrSz = size_t(BTC::GetBlockHeaderSize()), hdrHexSz = hdrSz*2;
@@ -1273,7 +1275,7 @@ void Server::rpc_blockchain_block_headers(Client *c, const RPC::Message &m)
         return resp;
     });
 }
-void Server::rpc_blockchain_estimatefee(Client *c, const RPC::Message &m)
+void Server::rpc_blockchain_estimatefee(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const QVariantList l = m.paramsList();
     assert(!l.isEmpty());
@@ -1289,7 +1291,7 @@ void Server::rpc_blockchain_estimatefee(Client *c, const RPC::Message &m)
 
     if (bitcoindmgr->isBitcoinCore() && bitcoindmgr->getBitcoinDVersion() >= Version{0,17,0}) {
         // Bitcoin Core removed the "estimatefee" RPC method entirely in version 0.17.0, in favor of "estimatesmartfee"
-        generic_async_to_bitcoind(c, m.id, "estimatesmartfee", params, [](const RPC::Message &response){
+        generic_async_to_bitcoind(c, batchId, m.id, "estimatesmartfee", params, [](const RPC::Message &response){
             // We don't validate what bitcoind returns. Sometimes if it has not enough information, it may
             // return no "feerate" but instead return an "errors" entry in the dict. This is fine.
             // ElectrumX just returns -1 in that case here, so we do the same.
@@ -1299,11 +1301,11 @@ void Server::rpc_blockchain_estimatefee(Client *c, const RPC::Message &m)
     }
 
     // regular Bitcoin Cash daemons
-    generic_async_to_bitcoind(c, m.id, "estimatefee", params, [](const RPC::Message &response){
+    generic_async_to_bitcoind(c, batchId, m.id, "estimatefee", params, [](const RPC::Message &response){
         return response.result();
     });
 }
-void Server::rpc_blockchain_headers_subscribe(Client *c, const RPC::Message &m) // fully implemented
+void Server::rpc_blockchain_headers_subscribe(Client *c, const RPC::BatchId batchId, const RPC::Message &m) // fully implemented
 {
     // helper used both for this response and for notifications
     static const auto mkResp = [](unsigned height, const QByteArray & header) -> QVariantMap {
@@ -1326,13 +1328,13 @@ void Server::rpc_blockchain_headers_subscribe(Client *c, const RPC::Message &m) 
     } else {
         DebugM(c->prettyName(false, false), " was already subscribed to headers, ignoring duplicate subscribe request");
     }
-    emit c->sendResult(m.id, mkResp(unsigned(std::max(0, height)), hdr));
+    emit c->sendResult(batchId, m.id, mkResp(unsigned(std::max(0, height)), hdr));
 }
-void Server::rpc_blockchain_relayfee(Client *c, const RPC::Message &m)
+void Server::rpc_blockchain_relayfee(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     // This value never changes unless bitcoind is restarted, in which case we will pick up the new value when it comes
     // back. See: BitcoinDMgr::refreshBitcoinDNetworkInfo()
-    emit c->sendResult(m.id, bitcoindmgr->getBitcoinDInfo().relayFee);
+    emit c->sendResult(batchId, m.id, bitcoindmgr->getBitcoinDInfo().relayFee);
 }
 
 // ---- The below two methods are used by both the blockchain.scripthash.* and blockchain.address.* sets of methods
@@ -1369,19 +1371,19 @@ HashX Server::parseFirstHashParamCommon(const RPC::Message &m, const char *const
     return sh;
 }
 // ---
-void Server::rpc_blockchain_scripthash_get_balance(Client *c, const RPC::Message &m)
+void Server::rpc_blockchain_scripthash_get_balance(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const auto sh = parseFirstHashParamCommon(m);
-    impl_get_balance(c, m, sh);
+    impl_get_balance(c, batchId, m, sh);
 }
-void Server::rpc_blockchain_address_get_balance(Client *c, const RPC::Message &m)
+void Server::rpc_blockchain_address_get_balance(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const auto sh = parseFirstAddrParamToShCommon(m);
-    impl_get_balance(c, m, sh);
+    impl_get_balance(c, batchId, m, sh);
 }
-void Server::impl_get_balance(Client *c, const RPC::Message &m, const HashX &sh)
+void Server::impl_get_balance(Client *c, const RPC::BatchId batchId, const RPC::Message &m, const HashX &sh)
 {
-    generic_do_async(c, m.id, [sh, this] {
+    generic_do_async(c, batchId, m.id, [sh, this] {
         const auto [amt, uamt] = storage->getBalance(sh);
         /* Note: ElectrumX protocol docs are incorrect. They claim a string in coin units is returned here.
          * It is not. Instead a number in satoshis is returned!
@@ -1412,57 +1414,57 @@ QVariantList Server::getHistoryCommon(const HashX &sh, bool mempoolOnly)
     return resp;
 }
 
-void Server::rpc_blockchain_scripthash_get_history(Client *c, const RPC::Message &m)
+void Server::rpc_blockchain_scripthash_get_history(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const auto sh = parseFirstHashParamCommon(m);
-    impl_get_history(c, m, sh);
+    impl_get_history(c, batchId, m, sh);
 }
-void Server::rpc_blockchain_address_get_history(Client *c, const RPC::Message &m)
+void Server::rpc_blockchain_address_get_history(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const auto sh = parseFirstAddrParamToShCommon(m);
-    impl_get_history(c, m, sh);
+    impl_get_history(c, batchId, m, sh);
 }
-void Server::impl_get_history(Client *c, const RPC::Message &m, const HashX &sh)
+void Server::impl_get_history(Client *c, const RPC::BatchId batchId, const RPC::Message &m, const HashX &sh)
 {
-    generic_do_async(c, m.id, [sh, this] {
+    generic_do_async(c, batchId, m.id, [sh, this] {
         return getHistoryCommon(sh, false);
     });
 }
 
-void Server::rpc_blockchain_scripthash_get_mempool(Client *c, const RPC::Message &m)
+void Server::rpc_blockchain_scripthash_get_mempool(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const auto sh = parseFirstHashParamCommon(m);
-    impl_get_mempool(c, m, sh);
+    impl_get_mempool(c, batchId, m, sh);
 }
-void Server::rpc_blockchain_address_get_mempool(Client *c, const RPC::Message &m)
+void Server::rpc_blockchain_address_get_mempool(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const auto sh = parseFirstAddrParamToShCommon(m);
-    impl_get_mempool(c, m, sh);
+    impl_get_mempool(c, batchId, m, sh);
 }
-void Server::rpc_blockchain_address_get_scripthash(Client *c, const RPC::Message &m)
+void Server::rpc_blockchain_address_get_scripthash(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const auto sh = parseFirstAddrParamToShCommon(m);
-    emit c->sendResult(m.id, Util::ToHexFast(sh));
+    emit c->sendResult(batchId, m.id, Util::ToHexFast(sh));
 }
-void Server::impl_get_mempool(Client *c, const RPC::Message &m, const HashX &sh)
+void Server::impl_get_mempool(Client *c, const RPC::BatchId batchId, const RPC::Message &m, const HashX &sh)
 {
-    generic_do_async(c, m.id, [sh, this] {
+    generic_do_async(c, batchId, m.id, [sh, this] {
         return getHistoryCommon(sh, true);
     });
 }
-void Server::rpc_blockchain_scripthash_listunspent(Client *c, const RPC::Message &m)
+void Server::rpc_blockchain_scripthash_listunspent(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const auto sh = parseFirstHashParamCommon(m);
-    impl_listunspent(c, m, sh);
+    impl_listunspent(c, batchId, m, sh);
 }
-void Server::rpc_blockchain_address_listunspent(Client *c, const RPC::Message &m)
+void Server::rpc_blockchain_address_listunspent(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const auto sh = parseFirstAddrParamToShCommon(m);
-    impl_listunspent(c, m, sh);
+    impl_listunspent(c, batchId, m, sh);
 }
-void Server::impl_listunspent(Client *c, const RPC::Message &m, const HashX &sh)
+void Server::impl_listunspent(Client *c, const RPC::BatchId batchId, const RPC::Message &m, const HashX &sh)
 {
-    generic_do_async(c, m.id, [sh, this] {
+    generic_do_async(c, batchId, m.id, [sh, this] {
         QVariantList resp;
         const auto items = storage->listUnspent(sh); // these are already sorted
         for (const auto & item : items) {
@@ -1476,19 +1478,20 @@ void Server::impl_listunspent(Client *c, const RPC::Message &m, const HashX &sh)
         return resp;
     });
 }
-void Server::rpc_blockchain_scripthash_subscribe(Client *c, const RPC::Message &m)
+void Server::rpc_blockchain_scripthash_subscribe(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const auto sh = parseFirstHashParamCommon(m);
-    impl_generic_subscribe(storage->subs(), c, m, sh);
+    impl_generic_subscribe(storage->subs(), c, batchId, m, sh);
 }
-void Server::rpc_blockchain_address_subscribe(Client *c, const RPC::Message &m)
+void Server::rpc_blockchain_address_subscribe(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     QString addrStr;
     const auto sh = parseFirstAddrParamToShCommon(m, &addrStr);
     assert(!addrStr.isEmpty());
-    impl_generic_subscribe(storage->subs(), c, m, sh, addrStr);
+    impl_generic_subscribe(storage->subs(), c, batchId, m, sh, addrStr);
 }
-void Server::impl_generic_subscribe(SubsMgr *subs, Client *c, const RPC::Message &m, const HashX &key, const std::optional<QString> &optAlias)
+void Server::impl_generic_subscribe(SubsMgr *subs, Client *c, const RPC::BatchId batchId, const RPC::Message &m,
+                                    const HashX &key, const std::optional<QString> &optAlias)
 {
     const auto CheckSubsLimit = [c, &key, this, subs](int64_t nShSubs, bool doUnsub) {
         if (UNLIKELY(nShSubs > options->maxSubsPerIP)) {
@@ -1583,7 +1586,7 @@ void Server::impl_generic_subscribe(SubsMgr *subs, Client *c, const RPC::Message
     }
     if (!status.has_value()) {
         // no known/cached status -- do the work ourselves asynch in the thread pool.
-        generic_do_async(c, m.id, [key, subs] {
+        generic_do_async(c, batchId, m.id, [key, subs] {
             const auto status = subs->getFullStatus(key);
             subs->maybeCacheStatusResult(key, status);
             // if empty we return `null`, otherwise we return hex encoded bytes, json object, or numeric as the immediate status.
@@ -1592,20 +1595,20 @@ void Server::impl_generic_subscribe(SubsMgr *subs, Client *c, const RPC::Message
     } else {
         // SubsMgr reported a cached status -- immediately return that as the result!
         const QVariant result = status.toVariant();
-        emit c->sendResult(m.id, result); ///<  may be 'null' if status was empty (indicates no history for scripthash or no proof for txid)
+        emit c->sendResult(batchId, m.id, result); ///<  may be 'null' if status was empty (indicates no history for scripthash or no proof for txid)
     }
 }
-void Server::rpc_blockchain_scripthash_unsubscribe(Client *c, const RPC::Message &m)
+void Server::rpc_blockchain_scripthash_unsubscribe(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const auto sh = parseFirstHashParamCommon(m);
-    impl_generic_unsubscribe(storage->subs(), c, m, sh);
+    impl_generic_unsubscribe(storage->subs(), c, batchId, m, sh);
 }
-void Server::rpc_blockchain_address_unsubscribe(Client *c, const RPC::Message &m)
+void Server::rpc_blockchain_address_unsubscribe(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const auto sh = parseFirstAddrParamToShCommon(m);
-    impl_generic_unsubscribe(storage->subs(), c, m, sh);
+    impl_generic_unsubscribe(storage->subs(), c, batchId, m, sh);
 }
-void Server::impl_generic_unsubscribe(SubsMgr *subs, Client *c, const RPC::Message &m, const HashX &key)
+void Server::impl_generic_unsubscribe(SubsMgr *subs, Client *c, const RPC::BatchId batchId, const RPC::Message &m, const HashX &key)
 {
     const bool result = subs->unsubscribe(c, key);
     if (result) {
@@ -1614,7 +1617,7 @@ void Server::impl_generic_unsubscribe(SubsMgr *subs, Client *c, const RPC::Messa
         if (--c->perIPData->nShSubs == 0)
             DebugM("PerIP: ", c->peerAddress().toString(), " is no longer subscribed to any subscribables");
     }
-    emit c->sendResult(m.id, QVariant(result));
+    emit c->sendResult(batchId, m.id, QVariant(result));
 }
 
 /* static */ std::weak_ptr<Server::LogFilter> Server::weakLogFilter;
@@ -1671,7 +1674,7 @@ void Server::LogFilter::Broadcast::onNewBlock()
         success.reset();
 }
 
-void Server::rpc_blockchain_transaction_broadcast(Client *c, const RPC::Message &m)
+void Server::rpc_blockchain_transaction_broadcast(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const QVariantList l = m.paramsList();
     assert(l.size() == 1);
@@ -1681,7 +1684,7 @@ void Server::rpc_blockchain_transaction_broadcast(Client *c, const RPC::Message 
     // -- filter may end up applying murmur3 hash to the entire key we give it from 20-50 times!
     const QByteArray txkey = (!rawtxhex.isEmpty() ? BTC::HashOnce(Util::ParseHexFast(rawtxhex)).left(16) : QByteArrayLiteral("xx"));
     // no need to validate hex here -- bitcoind does validation for us!
-    generic_async_to_bitcoind(c, m.id, "sendrawtransaction", QVariantList{ rawtxhex },
+    generic_async_to_bitcoind(c, batchId, m.id, "sendrawtransaction", QVariantList{ rawtxhex },
         // print to log, echo bitcoind's reply to client
         [size=rawtxhex.length()/2, c, this, txkey](const RPC::Message & reply){
             QVariant ret = reply.result();
@@ -1751,7 +1754,7 @@ void Server::rpc_blockchain_transaction_broadcast(Client *c, const RPC::Message 
     );
     // <-- do nothing right now, return without replying. Will respond when daemon calls us back in callbacks above.
 }
-void Server::rpc_blockchain_transaction_get(Client *c, const RPC::Message &m)
+void Server::rpc_blockchain_transaction_get(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const QVariantList l = m.paramsList();
     assert(l.size() <= 2);
@@ -1765,7 +1768,7 @@ void Server::rpc_blockchain_transaction_get(Client *c, const RPC::Message &m)
             throw RPCError("Invalid verbose argument; expected boolean");
         verbose = verbArg;
     }
-    generic_async_to_bitcoind(c, m.id, "getrawtransaction", QVariantList{ Util::ToHexFast(txHash), verbose },
+    generic_async_to_bitcoind(c, batchId, m.id, "getrawtransaction", QVariantList{ Util::ToHexFast(txHash), verbose },
         // use the default success func, which just echoes the bitcoind reply to the client
         BitcoinDSuccessFunc(),
         // error func, throw an RPCError
@@ -1803,14 +1806,14 @@ namespace {
     }
 }
 
-void Server::rpc_blockchain_transaction_get_height(Client *c, const RPC::Message &m)
+void Server::rpc_blockchain_transaction_get_height(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const QVariantList l = m.paramsList();
     assert(l.size() == 1);
     QByteArray txHash = validateHashHex( l.front().toString() );
     if (txHash.length() != HashLen)
         throw RPCError("Invalid tx hash");
-    generic_do_async(c, m.id, [txHash, this] {
+    generic_do_async(c, batchId, m.id, [txHash, this] {
         const auto optHeight = storage->getTxHeight(txHash);
         if (!optHeight)
             throw RPCError("No transaction matching the requested hash was found");
@@ -1818,7 +1821,7 @@ void Server::rpc_blockchain_transaction_get_height(Client *c, const RPC::Message
     });
 }
 
-void Server::rpc_blockchain_transaction_get_merkle(Client *c, const RPC::Message &m)
+void Server::rpc_blockchain_transaction_get_merkle(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const QVariantList l = m.paramsList();
     assert(l.size() >= 1 && l.size() <= 2);
@@ -1830,7 +1833,7 @@ void Server::rpc_blockchain_transaction_get_merkle(Client *c, const RPC::Message
     if (l.size() == 2) optHeight = l.back().toUInt(&ok); // they specified a height
     if (!ok || (optHeight && *optHeight >= Storage::MAX_HEADERS))
         throw RPCError("Invalid height argument; expected non-negative numeric value");
-    generic_do_async(c, m.id, [txHash, optHeight, this] () mutable {
+    generic_do_async(c, batchId, m.id, [txHash, optHeight, this] () mutable {
         if (!optHeight) optHeight = storage->getTxHeight(txHash); // if no height specified, grab it from tx hash index
         if (!optHeight || !*optHeight)
             throw RPCError("No confirmed transaction matching the requested hash was found");
@@ -1860,7 +1863,7 @@ void Server::rpc_blockchain_transaction_get_merkle(Client *c, const RPC::Message
     });
 }
 
-void Server::rpc_blockchain_transaction_id_from_pos(Client *c, const RPC::Message &m)
+void Server::rpc_blockchain_transaction_id_from_pos(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const QVariantList l = m.paramsList();
     assert(!l.isEmpty());
@@ -1880,7 +1883,7 @@ void Server::rpc_blockchain_transaction_id_from_pos(Client *c, const RPC::Messag
             throw RPCError("Invalid merkle argument; expected boolean");
         merkle = arg;
     }
-    generic_do_async(c, m.id, [height, pos, merkle, this] {
+    generic_do_async(c, batchId, m.id, [height, pos, merkle, this] {
         static const QString missingErr("No transaction at position %1 for height %2");
         if (merkle) {
             // merkle=true is a dict, see: https://electrumx.readthedocs.io/en/latest/protocol-methods.html#blockchain-transaction-id-from-pos
@@ -1912,23 +1915,23 @@ void Server::rpc_blockchain_transaction_id_from_pos(Client *c, const RPC::Messag
         }
     });
 }
-void Server::rpc_blockchain_transaction_subscribe(Client *c, const RPC::Message &m)
+void Server::rpc_blockchain_transaction_subscribe(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const auto txid = parseFirstHashParamCommon(m, "Invalid tx hash");
-    impl_generic_subscribe(storage->txSubs(), c, m, txid);
+    impl_generic_subscribe(storage->txSubs(), c, batchId, m, txid);
 }
-void Server::rpc_blockchain_transaction_unsubscribe(Client *c, const RPC::Message &m)
+void Server::rpc_blockchain_transaction_unsubscribe(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const auto txid = parseFirstHashParamCommon(m, "Invalid tx hash");
-    impl_generic_unsubscribe(storage->txSubs(), c, m, txid);
+    impl_generic_unsubscribe(storage->txSubs(), c, batchId, m, txid);
 }
 // DSPROOF
-void Server::rpc_blockchain_transaction_dsproof_get(Client *c, const RPC::Message &m)
+void Server::rpc_blockchain_transaction_dsproof_get(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     if (isBTC || !bitcoindmgr->hasDSProofRPC())
         throw RPCError("This server lacks dsproof support", RPC::ErrorCodes::Code_MethodNotFound);
     const auto dspid_or_txid = parseFirstHashParamCommon(m, "Invalid dsp hash or tx hash");
-    generic_do_async(c, m.id, [this, dspid_or_txid] {
+    generic_do_async(c, batchId, m.id, [this, dspid_or_txid] {
         QVariant ret;
         auto [mempool, lock] = storage->mempool(); // shared lock
         const DSProof *dsp{};
@@ -1939,11 +1942,11 @@ void Server::rpc_blockchain_transaction_dsproof_get(Client *c, const RPC::Messag
         return ret;
     });
 }
-void Server::rpc_blockchain_transaction_dsproof_list(Client *c, const RPC::Message &m)
+void Server::rpc_blockchain_transaction_dsproof_list(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     if (isBTC || !bitcoindmgr->hasDSProofRPC())
         throw RPCError("This server lacks dsproof support", RPC::ErrorCodes::Code_MethodNotFound);
-    generic_do_async(c, m.id, [this] {
+    generic_do_async(c, batchId, m.id, [this] {
         DSProof::TxHashSet allDescendants;
         {
             auto [mempool, lock] = storage->mempool(); // shared lock
@@ -1959,22 +1962,22 @@ void Server::rpc_blockchain_transaction_dsproof_list(Client *c, const RPC::Messa
         return ret;
     });
 }
-void Server::rpc_blockchain_transaction_dsproof_subscribe(Client *c, const RPC::Message &m)
+void Server::rpc_blockchain_transaction_dsproof_subscribe(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     if (isBTC || !bitcoindmgr->hasDSProofRPC())
         throw RPCError("This server lacks dsproof support", RPC::ErrorCodes::Code_MethodNotFound);
     const auto txid = parseFirstHashParamCommon(m, "Invalid tx hash");
-    impl_generic_subscribe(storage->dspSubs(), c, m, txid);
+    impl_generic_subscribe(storage->dspSubs(), c, batchId, m, txid);
 }
-void Server::rpc_blockchain_transaction_dsproof_unsubscribe(Client *c, const RPC::Message &m)
+void Server::rpc_blockchain_transaction_dsproof_unsubscribe(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     if (isBTC || !bitcoindmgr->hasDSProofRPC())
         throw RPCError("This server lacks dsproof support", RPC::ErrorCodes::Code_MethodNotFound);
     const auto txid = parseFirstHashParamCommon(m, "Invalid tx hash");
-    impl_generic_unsubscribe(storage->dspSubs(), c, m, txid);
+    impl_generic_unsubscribe(storage->dspSubs(), c, batchId, m, txid);
 }
 // /DSPROOF
-void Server::rpc_blockchain_utxo_get_info(Client *c, const RPC::Message &m)
+void Server::rpc_blockchain_utxo_get_info(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const QVariantList l = m.paramsList();
     assert(l.size() == 2);
@@ -1989,7 +1992,7 @@ void Server::rpc_blockchain_utxo_get_info(Client *c, const RPC::Message &m)
     if (!ok || outN > outNMax)
         throw RPCError(QString("Invalid tx out number: expected a value >= 0 and <= %1").arg(qlonglong(outNMax)));
     const TXO txo{txHash, IONum(outN)};
-    generic_do_async(c, m.id, [txo, this] {
+    generic_do_async(c, batchId, m.id, [txo, this] {
         QVariant ret;
         if (auto optInfo = storage->utxoGet(txo); optInfo.has_value() && optInfo->isValid()) {
             QVariantMap m;
@@ -2004,14 +2007,14 @@ void Server::rpc_blockchain_utxo_get_info(Client *c, const RPC::Message &m)
         return ret;
     });
 }
-void Server::rpc_mempool_get_fee_histogram(Client *c, const RPC::Message &m)
+void Server::rpc_mempool_get_fee_histogram(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const auto hist = storage->mempoolHistogram();
     QVariantList result;
     for  (const auto & [feeRate, cumSize] : hist) {
         result.push_back(QVariantList{feeRate, cumSize});
     }
-    emit c->sendResult(m.id, result);
+    emit c->sendResult(batchId, m.id, result);
 }
 // --- Server::StaticData Definitions ---
 #define HEY_COMPILER_PUT_STATIC_HERE(x) decltype(x) x
@@ -2303,7 +2306,7 @@ void AdminServer::kickBanBoilerPlate(const RPC::Message &m, BanOp banOp)
         }
     }
 }
-void AdminServer::rpc_addpeer(Client *c, const RPC::Message &m)
+void AdminServer::rpc_addpeer(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     if (peerMgr.expired())
         throw RPCError("This server has peering disabled");
@@ -2330,14 +2333,14 @@ void AdminServer::rpc_addpeer(Client *c, const RPC::Message &m)
     if (!pi.ssl && !pi.tcp)
         throw RPCError("Must specify at least one TCP or SSL port");
     emit gotRpcAddPeer(PeerInfoList{pi}, QHostAddress());
-    emit c->sendResult(m.id, true);
+    emit c->sendResult(batchId, m.id, true);
 }
-void AdminServer::rpc_ban(Client *c, const RPC::Message &m)
+void AdminServer::rpc_ban(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     kickBanBoilerPlate(m, BanOp::Ban);
-    emit c->sendResult(m.id, true);
+    emit c->sendResult(batchId, m.id, true);
 }
-void AdminServer::rpc_banpeer(Client *c, const RPC::Message &m)
+void AdminServer::rpc_banpeer(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     if (peerMgr.expired())
         throw RPCError("This server has peering disabled");
@@ -2349,9 +2352,9 @@ void AdminServer::rpc_banpeer(Client *c, const RPC::Message &m)
         ++ctr;
         emit srvmgr->banPeersWithSuffix(suf);
     }
-    emit c->sendResult(m.id, bool(ctr));
+    emit c->sendResult(batchId, m.id, bool(ctr));
 }
-void AdminServer::rpc_bitcoind_throttle(Client *c, const RPC::Message &m)
+void AdminServer::rpc_bitcoind_throttle(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const QVariantList l = m.paramsList();
     if (!l.isEmpty()) {
@@ -2374,18 +2377,18 @@ err:
     }
     // get
     const auto [hi, lo, decay] = options->bdReqThrottleParams.load();
-    emit c->sendResult(m.id, QVariantList{hi, lo, decay});
+    emit c->sendResult(batchId, m.id, QVariantList{hi, lo, decay});
 }
-void AdminServer::rpc_clients(Client *c, const RPC::Message &m)
+void AdminServer::rpc_clients(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
-    generic_do_async(c, m.id, [srvmgr = QPointer(this->srvmgr)]{
+    generic_do_async(c, batchId, m.id, [srvmgr = QPointer(this->srvmgr)]{
         if (!srvmgr) throw InternalError("SrvMgr pointer is null"); // this should never happen but it pays to be paranoid
         // this blocks, but it will block in this worker thread. It may throw, but that's ok as the generic_do_async() wrapper
         // in ServerBase handles catching any and all exceptions and will just send an error response to the client.
         return srvmgr->adminRPC_getClients_blocking(kBlockingCallTimeoutMS);
     });
 }
-void AdminServer::rpc_getinfo(Client *c, const RPC::Message &m)
+void AdminServer::rpc_getinfo(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     QVariantMap res;
     res["bitcoind"] = QString("%1:%2").arg(options->bdRPCInfo.hostPort.first, QString::number(options->bdRPCInfo.hostPort.second));
@@ -2455,7 +2458,7 @@ void AdminServer::rpc_getinfo(Client *c, const RPC::Message &m)
     }
 
     // storage stats -- for this we need to go asynch because we need to block to grab them using the StatsMixin API
-    generic_do_async(c, m.id, [storage = this->storage, res]() mutable {
+    generic_do_async(c, batchId, m.id, [storage = this->storage, res]() mutable {
         QVariant v = storage->statsSafe(kBlockingCallTimeoutMS);
         // Here we do this contorted thing to delete the "table factory options" dict for each of the db's, to make
         // the `getinfo` call not be as verbose. (We also delete "keep_log_file_num" and "max_open_files" since they
@@ -2479,16 +2482,16 @@ void AdminServer::rpc_getinfo(Client *c, const RPC::Message &m)
         return res; // returns result to client
     });
 }
-void AdminServer::rpc_kick(Client *c, const RPC::Message &m)
+void AdminServer::rpc_kick(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     kickBanBoilerPlate(m, BanOp::Kick);
-    emit c->sendResult(m.id, true);
+    emit c->sendResult(batchId, m.id, true);
 }
-void AdminServer::rpc_listbanned(Client *c, const RPC::Message &m)
+void AdminServer::rpc_listbanned(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
-    emit c->sendResult(m.id, srvmgr->adminRPC_banInfo_threadSafe());
+    emit c->sendResult(batchId, m.id, srvmgr->adminRPC_banInfo_threadSafe());
 }
-void AdminServer::rpc_loglevel(Client *c, const RPC::Message &m)
+void AdminServer::rpc_loglevel(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     bool ok;
     const int level = m.paramsList().constFirst().toInt(&ok);
@@ -2510,9 +2513,9 @@ void AdminServer::rpc_loglevel(Client *c, const RPC::Message &m)
         emit app->setVerboseTrace(true);
         break;
     }
-    emit c->sendResult(m.id, true);
+    emit c->sendResult(batchId, m.id, true);
 }
-void AdminServer::rpc_maxbuffer(Client *c, const RPC::Message &m)
+void AdminServer::rpc_maxbuffer(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
 
     if (const auto l = m.paramsList(); !l.empty()) {
@@ -2523,19 +2526,19 @@ void AdminServer::rpc_maxbuffer(Client *c, const RPC::Message &m)
         emit srvmgr->requestMaxBufferChange(Options::clampMaxBufferSetting(arg)); // has a slot connected via DirectConnection so takes effect immediately
     }
     // return the current setting
-    emit c->sendResult(m.id, options->maxBuffer.load());
+    emit c->sendResult(batchId, m.id, options->maxBuffer.load());
 }
-void AdminServer::rpc_peers(Client *c, const RPC::Message &m)
+void AdminServer::rpc_peers(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     auto strongPeerMgr = peerMgr.lock();
     if (!strongPeerMgr)
         throw RPCError("This server has peering disabled");
     // We do this async in our worker thread since it blocks (briefly)
-    generic_do_async(c, m.id, [peerMgr = strongPeerMgr]{
+    generic_do_async(c, batchId, m.id, [peerMgr = strongPeerMgr]{
         return peerMgr->statsSafe(kBlockingCallTimeoutMS);
     });
 }
-void AdminServer::rpc_rmpeer(Client *c, const RPC::Message &m)
+void AdminServer::rpc_rmpeer(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     if (peerMgr.expired())
         throw RPCError("This server has peering disabled");
@@ -2547,9 +2550,9 @@ void AdminServer::rpc_rmpeer(Client *c, const RPC::Message &m)
         ++ctr;
         emit srvmgr->kickPeersWithSuffix(suffix);
     }
-    emit c->sendResult(m.id, bool(ctr));
+    emit c->sendResult(batchId, m.id, bool(ctr));
 }
-void AdminServer::rpc_shutdown(Client *c, const RPC::Message &m)
+void AdminServer::rpc_shutdown(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     App *app = ::app();
     // send the signal after 100ms to the QCoreApplication instance to quit.  this allows time for the result to be sent to the client, hopefully.
@@ -2557,29 +2560,29 @@ void AdminServer::rpc_shutdown(Client *c, const RPC::Message &m)
         Log() << "Received 'stop' command from admin RPC, shutting down ...";
         emit app->requestQuit();
     }, 100);
-    emit c->sendResult(m.id, true);
+    emit c->sendResult(batchId, m.id, true);
 }
 // query or set simdjson option at runtime
-void AdminServer::rpc_simdjson(Client *c, const RPC::Message &m)
+void AdminServer::rpc_simdjson(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const auto l = m.paramsList();
     if (l.isEmpty()) {
         // query -- return the info map if it's set, or null if it is not set
-        emit c->sendResult(m.id, Options::isSimdJson() ? App::simdJsonStats() : QVariant());
+        emit c->sendResult(batchId, m.id, Options::isSimdJson() ? App::simdJsonStats() : QVariant());
     } else {
         // set
         const QVariant arg = l.front();
         if (Compat::GetVarType(arg) != QMetaType::Bool)
             throw RPCError("Invalid argument, please specify a boolean value to enable/disable the simdjson parser");
-        emit c->sendResult(m.id, Options::setSimdJson(arg.toBool()));
+        emit c->sendResult(batchId, m.id, Options::setSimdJson(arg.toBool()));
     }
 }
-void AdminServer::rpc_unban(Client *c, const RPC::Message &m)
+void AdminServer::rpc_unban(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     kickBanBoilerPlate(m, BanOp::Unban);
-    emit c->sendResult(m.id, true);
+    emit c->sendResult(batchId, m.id, true);
 }
-void AdminServer::rpc_unbanpeer(Client *c, const RPC::Message &m)
+void AdminServer::rpc_unbanpeer(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     if (peerMgr.expired())
         throw RPCError("This server has peering disabled");
@@ -2591,7 +2594,7 @@ void AdminServer::rpc_unbanpeer(Client *c, const RPC::Message &m)
         ++ctr;
         emit srvmgr->liftPeerSuffixBan(suf);
     }
-    emit c->sendResult(m.id, bool(ctr));
+    emit c->sendResult(batchId, m.id, bool(ctr));
 }
 
 // --- AdminServer::StaticData Definitions ---

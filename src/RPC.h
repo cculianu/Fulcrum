@@ -191,7 +191,37 @@ namespace RPC {
 
     using MethodMap = QHash<QString, Method>;
 
-    class BatchProcessor; ///< forward declaration because this is used in ConnectionBase
+    // forward declarations because these are used in ConnectionBase
+    class BatchProcessor;
+
+    /// Encapsulates a BatchId, which is really the same `id` as the BatchProcessor that is handling this batch. This
+    /// starts life out as "isNull()" (id == 0) until a BatchProcessor takes the Batch at which point it gets given the
+    /// same `id` as the BatchProcessor instance handling it.
+    ///
+    /// This could very well just have been a type alias for IdMixin::Id, but adding this feature involved a big
+    /// refactor and we wanted to simplify the refactor by adding extra type safety via a wrapper class.
+    class BatchId
+    {
+        static constexpr IdMixin::Id Unassigned = 0;
+        IdMixin::Id id = Unassigned;
+    public:
+        /// true if a BatchProcessor exists (or once existed) for this instance
+        constexpr IdMixin::Id get() const noexcept { return id; }
+        constexpr bool isNull() const noexcept { return id == Unassigned; }
+
+        constexpr bool operator<(const BatchId & o) const noexcept { return id < o.id; }
+        constexpr bool operator<=(const BatchId & o) const noexcept { return id <= o.id; }
+        constexpr bool operator>(const BatchId & o) const noexcept { return id > o.id; }
+        constexpr bool operator>=(const BatchId & o) const noexcept { return id >= o.id; }
+        constexpr bool operator==(const BatchId & o) const noexcept { return id == o.id; }
+        constexpr bool operator!=(const BatchId & o) const noexcept { return id != o.id; }
+    protected:
+        friend class BatchProcessor;
+        constexpr void set(IdMixin::Id newId) noexcept { id = newId; } ///< only BatchProcessor calls this
+    };
+
+    /// For QHash/QSet etc support
+    inline Compat::qhuint qHash(const BatchId b, Compat::qhuint seed = 0) { return ::qHash(quint64(b.get()), seed); }
 
     /// A semi-concrete derived class of AbstractConnection implementing a
     /// JSON-RPC based method<->result protocol.  This class is client/server
@@ -326,19 +356,24 @@ namespace RPC {
         void setBatchPermitted(bool b) { batchPermitted = b; }
 
     signals:
-        /// call (emit) this to send a request to the peer
-        void sendRequest(const RPC::Message::Id & reqid, const QString &method, const QVariantList & params = QVariantList());
-        /// call (emit) this to send a notification to the peer
+        /// Call (emit) this to send a request to the peer. Note sending doesn't support batching.
+        void sendRequest(const RPC::Message::Id & reqid, const QString &method, const QVariantList & params = {});
+        /// Call (emit) this to send a notification to the peer
         void sendNotification(const QString &method, const QVariant & params);
-        /// call (emit) this to send a request to the peer
-        void sendError(bool disconnectAfterSend, int errorCode, const QString &message, const RPC::Message::Id & reqid = Message::Id());
-        /// call (emit) this to send a result reply to the peer (result= message)
-        void sendResult(const RPC::Message::Id & reqid, const QVariant & result = QVariant());
+        /// Call (emit) this to send an error message to the peer.
+        /// @param `batchId` is the batch this error pertains to, if it is in response to a request from a batch,
+        /// otherwise may be .isNull() (response will be sent immediately, and not collated to any batch in that case)
+        void sendError(bool disconnectAfterSend, int errorCode, const QString &message, RPC::BatchId batchId,
+                       const RPC::Message::Id & reqid = {});
+        /// Call (emit) this to send a result reply to the peer (`"result" : result` JSON RPC message).
+        /// @param `batchId` is the batch this result pertains to, if it is in response to a request from a batch,
+        /// otherwise may be .isNull() (response will be sent immediately, and not collated to any batch in that case)
+        void sendResult(RPC::BatchId batchId, const RPC::Message::Id & reqid, const QVariant & result = {});
 
         /// this is emitted when a new message arrives that was successfully parsed and matches
         /// a known method described in the 'methods' MethodMap. Unknown messages will eventually result
         /// in auto-disconnect.
-        void gotMessage(IdMixin::Id thisId, const RPC::Message & m);
+        void gotMessage(IdMixin::Id thisId, RPC::BatchId batchId, const RPC::Message & m);
         /// Same as a above, but for 'error' replies
         void gotErrorMessage(IdMixin::Id thisId, const RPC::Message &em);
         /// This is emitted when the peer sent malformed data to us and we didn't disconnect
@@ -353,13 +388,13 @@ namespace RPC {
     protected slots:
         /// Actual implentation that prepares the request. Is connected to sendRequest() above. Runs in this object's
         /// thread context. Eventually calls send() -> do_write() (from superclass).
-        void _sendRequest(const RPC::Message::Id & reqid, const QString &method, const QVariantList & params = QVariantList());
+        void _sendRequest(const RPC::Message::Id & reqid, const QString &method, const QVariantList & params = {});
         // ditto for notifications
         void _sendNotification(const QString &method, const QVariant & params);
         /// Actual implementation of sendError, runs in our thread context.
-        void _sendError(bool disconnect, int errorCode, const QString &message, const RPC::Message::Id &reqid = Message::Id());
+        void _sendError(bool disconnect, int errorCode, const QString &message, RPC::BatchId batchId, const RPC::Message::Id &reqid = {});
         /// Actual implementation of sendResult, runs in our thread context.
-        void _sendResult(const RPC::Message::Id & reqid, const QVariant & result = QVariant());
+        void _sendResult(RPC::BatchId batchId, const RPC::Message::Id & reqid, const QVariant & result = {});
 
     protected:
         /// chains to base, connects sendRequest signal to _sendRequest slot
@@ -403,9 +438,6 @@ namespace RPC {
         quint64 nRequestsSent = 0, nNotificationsSent = 0, nResultsSent = 0, nErrorsSent = 0;
         quint64 nErrorReplies = 0, nUnansweredLifetime = 0;
 
-        /// Returns true if `msgId` is in any of the extantBatchProcessors in either the submitted or answered request set.
-        [[nodiscard]] bool hasMessageIdInBatchProcs(const Message::Id &msgId) const;
-
         /// Subclasses may reimplement this to reject or accept a new JSON-RPC batch.
         /// - If this method returns false, the passed-in batch will be immediately deleted, and a JSON-RPC message will
         ///   be sent to the client, indicating that limits have been exceeded.
@@ -418,17 +450,14 @@ namespace RPC {
 
     private:
         /// Table used to store the extant batch processors running.
-        QHash<IdMixin::Id, BatchProcessor *> extantBatchProcessors;
-        /// Message id's for "batch zombies". That is, messages that were emitted via gotMessage() but
-        /// for which the batch processor was killed before a response was generated asynchronously.  We
-        /// need to filter these out from the client, to avoid a buggy corner case.
-        QSet<Message::Id> batchZombies;
+        /// Keyed off of the BatchId (which has same id as the BackProcessor->id())
+        QHash<BatchId, BatchProcessor *> extantBatchProcessors;
 
         // Internally called by processObject()
         [[nodiscard]] ProcessObjectResult processObject_internal(QVariantMap &&);
         // Internally called by _sendResult and _sendError
         // Precondition: Message must be either: isError() or isResponse() (this is not checked here for performance)
-        [[nodiscard]] bool batchResponseFilter(const Message & msg);
+        [[nodiscard]] bool batchResponseFilter(RPC::BatchId batchId, const Message & msg);
         // Internally called to enqueue a new batch -- this may throw InvalidRequest if the QVariantList is empty
         void enqueueNewBatch(QVariantList &&);
     };
@@ -438,6 +467,7 @@ namespace RPC {
     /// Structure to hold a "batch request" context
     struct Batch
     {
+        BatchId batchId; ///< the object id of the BatchProcessor instance that is handling this batch request.
         QVariantList items; ///< the contents of the original batch request list. Data items may be any JSON type.
         QVariantList::size_type nextItem = 0; ///< index into above array
         /// The number of `items` that we have processed thus far that are notifications or that don't warrant a
@@ -445,8 +475,9 @@ namespace RPC {
         QVariantList::size_type skippedCt = 0;
         /// The number of responses in the batch response that were error responses.
         QVariantList::size_type errCt = 0;
+        /// The number of messages we sent asynch to observers but for which we have yet to receive a reply
+        QVariantList::size_type unansweredRequests{};
 
-        QSet<RPC::Message::Id> unansweredRequests, answeredRequests;
         /// Responses enqueued for sending back to the client, may also include error responses aside from results
         QVector<Message> responses;
 
@@ -459,7 +490,11 @@ namespace RPC {
     };
 
     /// An individual batch request is managed by this object. Instances of this class are always children of
-    /// `ConnectionBase`. They  appear in the ConnectionBase parent's `extantBatchProcessors` table.
+    /// `ConnectionBase`. They appear in the ConnectionBase parent's `extantBatchProcessors` table.
+    ///
+    /// Limitation: For now, the BatchProcessor only knows how to handle batch requests coming from the other side,
+    /// and cannot (yet) process batch replies.  As such, it will reject batches containing 'error' and 'result'
+    /// messages.
     class BatchProcessor : public QObject, public IdMixin, public ProcessAgainMixin, public TimersByNameMixin,
                            public StatsMixin
     {
@@ -478,10 +513,11 @@ namespace RPC {
         ~BatchProcessor() override;
 
         /// Precondition: Message must be either: isError() or isResponse() (this is not checked here for performance)
-        bool acceptResponse(const Message &);
+        void gotResponse(const Message &);
         void process() override;
 
         const Batch & getBatch() const { return batch; }
+        BatchId batchId() const { return batch.batchId; } // NB: the actual batchId.get() value should be always same as this->id!
         bool isFinished() const { return done; }
 
         qsizetype cost() const { return cumCost; }
@@ -597,3 +633,4 @@ namespace RPC {
 /// So that Qt signal/slots work with this type.  Metatypes are also registered at startup via qRegisterMetatype
 Q_DECLARE_METATYPE(RPC::Message);
 Q_DECLARE_METATYPE(RPC::Message::Id);
+Q_DECLARE_METATYPE(RPC::BatchId);
