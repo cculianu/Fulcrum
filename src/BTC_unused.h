@@ -24,7 +24,9 @@
  * These all live in BTC_unused.cpp but are not exposed in the regular BTC.h
  */
 
+#include "Compat.h"
 #include "BTC.h"
+#include "BTC_Address.h"
 
 #include <QList>
 #include <QMetaType>
@@ -155,7 +157,7 @@ namespace BTC {
     };
 
     /// for Qt QSet support of type UTXO
-    inline uint qHash(const UTXO &key, uint seed = 0) {
+    inline Compat::qhuint qHash(const UTXO &key, Compat::qhuint seed = 0) {
         if (key.isValid())
             return ::qHash(QPair<quint32, quint32>(key.txid().left(8).toUInt(nullptr, 16) , key.n()), seed);
             //return key.txid().left(8).toUInt(nullptr, 16) + key.n();
