@@ -30,7 +30,6 @@
 #include <QSet>
 #include <QSslConfiguration>
 #include <QSslSocket>
-#include <QStringView>
 #include <QTcpSocket>
 #include <QVector>
 
@@ -958,17 +957,17 @@ PeerInfoList PeerInfo::fromPeersSubscribeList(const QVariantList &l)
                 pi.protocolVersion = s;
             } else if (s.startsWith('t', Qt::CaseInsensitive)) {
                 bool ok;
-                unsigned p = QStringView{s}.mid(1).toUInt(&ok);
+                unsigned p = s.mid(1).toUInt(&ok);
                 if (!p || !ok || p > std::numeric_limits<quint16>::max())
                     continue;
                 pi.tcp = quint16(p);
             } else if (s.startsWith('s', Qt::CaseInsensitive)) {
                     bool ok;
-                    unsigned p = QStringView{s}.mid(1).toUInt(&ok);
+                    unsigned p = s.mid(1).toUInt(&ok);
                     if (!p || !ok || p > std::numeric_limits<quint16>::max())
                         continue;
                     pi.ssl = quint16(p);
-            } else if (s.startsWith('p', Qt::CaseInsensitive) && QStringView{s}.mid(1).toInt()) {
+            } else if (s.startsWith('p', Qt::CaseInsensitive) && s.mid(1).toInt()) {
                 // skip 'p' = pruning
                 isPruning = true;
                 break;
