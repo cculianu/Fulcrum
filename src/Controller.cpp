@@ -1043,7 +1043,7 @@ struct Controller::StateMachine
     int nHeaders = -1; ///< the number of headers our bitcoind has, in the chain we are synching
     BTC::Net net = BTC::Net::Invalid;  ///< This gets set by calls to getblockchaininfo by parsing the "chain" in the resulting dict
 
-    robin_hood::unordered_flat_map<unsigned, PreProcessedBlockPtr> ppBlocks; // mapping of height -> PreProcessedBlock (we use an unordered_flat_map because it's faster for frequent updates)
+    robin_hood::unordered_map<unsigned, PreProcessedBlockPtr> ppBlocks; // mapping of height -> PreProcessedBlock (we use robin_hood because it's faster for frequent updates)
     unsigned startheight = 0, ///< the height we started at
              endHeight = 0; ///< the final (inclusive) block height we expect to receive to pronounce the synch done
 

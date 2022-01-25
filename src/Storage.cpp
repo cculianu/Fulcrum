@@ -4336,10 +4336,8 @@ namespace {
         using CtrType = decltype(DeduceSmallestTypeForNumBytes<NB <= 2 ? (NB == 1 ? 4 : 2) : 1>());
         const auto nrec = rf->numRecords();
         Log() << "Records: " << nrec;
-        //std::unordered_map<KeyType, CtrType> cols;
         robin_hood::unordered_flat_map<KeyType, CtrType> cols;
         Log() << "Reserving table ...";
-        //std::vector<CtrType> cols(std::numeric_limits<KeyType>::max(), CtrType{0});
         size_t nCols = 0, maxCol = 0;
         KeyType maxColVal = 0;
         cols.reserve(std::min<size_t>(nrec, std::numeric_limits<KeyType>::max()));
