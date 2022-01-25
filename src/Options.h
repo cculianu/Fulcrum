@@ -270,6 +270,10 @@ public:
                               maxBatchMax = 100'000; ///< This 100k limit is ridiculous, but we will allow it.
     static constexpr bool isMaxBatchInRange(unsigned n) { return n >= maxBatchMin && n <= maxBatchMax; }
     unsigned maxBatch = defaultMaxBatch;
+
+    // CLI: --fast-sync (experimental)
+    static constexpr size_t defaultUtxoCache = 0, minUtxoCache = 200ull * 1000ull * 1000ull; // 0 is off, otherwise 200 MB min
+    size_t utxoCache = defaultUtxoCache;
 };
 
 /// A class encapsulating a simple read-only config file format.  The format is similar to the bitcoin.conf format

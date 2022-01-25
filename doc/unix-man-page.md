@@ -1,10 +1,10 @@
 % FULCRUM(1) Version 1.6.0 | Fulcrum Manual
 % Fulcrum is written by Calin Culianu (cculianu)
-% January 17, 2022
+% January 24, 2022
 
 # NAME
 
-**fulcrum** - SPV server for Bitcoin Cash and Bitcoin BTC.
+**fulcrum** - A Bitcoin Cash (and Bitcoin BTC) Blockchain SPV Server
 
 # SYNOPSIS
 
@@ -117,6 +117,9 @@ Once the server finishes synching it will behave like an ElectronX/ElectrumX ser
 
 --compact-dbs
 :   If specified, Fulcrum will compact all databases on startup. The compaction process reduces database disk space usage by removing redundant/unused data. Note that rocksdb normally compacts the databases in the background while Fulcrum is running, so using this option to explicitly compact the database files on startup is not strictly necessary.
+
+--fast-sync
+:   If specified, Fulcrum will use a UTXO Cache that consumes extra memory but syncs up to to 2X faster. To use this feature, you must specify a memory value in MB to allocate to the cache. It is recommended that you give this facility at least 2000 MB for it to really pay off, although any amount of memory given (minimum 200 MB) should be beneficial. Note that this feature is currently experimental and the tradeoffs are: it is faster because it avoids redundant disk I/O, however, this comes at the price of considerable memory consumption as well as a sync that is less resilient to crashes mid-sync. If the process is killed mid-sync, the database may become corrupt and lose UTXO data. Use this feature only if you are 100% sure that won't happen during a sync. Specify as much memory as you can, in MB, here, e.g.: 3000 to allocate 3000 MB (3 GB). The default is off (0). This option only takes effect on initial sync, otherwise this option has no effect.
 
 --dump-sh <outputfile>
 :    *This is an advanced debugging option*. Dump script hashes. If specified, after the database is loaded, all of the script hashes in the database will be written to outputfile as a JSON array.

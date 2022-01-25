@@ -36,7 +36,9 @@
 
 #include <QByteArray>
 #include <QFlags>
+#include <QPointer>
 
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -290,12 +292,13 @@ public:
 
     // -- Tx Hash index based methods
     using TxHeightsResult = std::vector<std::optional<BlockHeight>>;
+
     /// Thread-safe. Does take mempool, blkInfo, and blocksLock locks in shared mode. Returns an array whose length is
-    /// equal to txHashes.size(), and for each element: if the optional is valid, then BlockHeight=0 means mempool,
-    /// and >0 means a confirmed height. If a particular TxHash was not found in the mempool or blockchain, that element
+    /// equal to txHashes.size(), and for each element: if the optional is valid, then BlockHeight=0 means mempool, and
+    /// >0 means a confirmed height. If a particular TxHash was not found in the mempool or blockchain, that element
     /// will have a std::nullopt.
     ///
-    /// May throw DatabaseError (unlikely) or some other Exception subclass.  Note that txHashes should contain 0 or
+    /// May throw DatabaseError (unlikely) or some other Exception subclass. Note that txHashes should contain 0 or
     /// more 32-byte hashes in big-endian (JSON) memory order, otherwise this may throw if the hashes are of the wrong
     /// length.
     TxHeightsResult getTxHeights(const std::vector<TxHash> &txHashes) const;
@@ -305,11 +308,40 @@ public:
     // --- DUMP methods --- (used for debugging, largely)
 
     using DumpProgressFunc = std::function<void(size_t)>;
-    /// Thread-safe.  Call this from any thread, but ideally call it from a threadPool worker thread, since it may
-    /// take a while.
-    /// Dumps all scripthashes as JSON data to output device outDev as an array of hex-encoded JSON strings,
-    /// optionally indented by `indent*indentLevel` spaces.  If indent is 0, the output will all be on 1 line with no padding.
+    /// Thread-safe. Call this from any thread, but ideally call it from a threadPool worker thread, since it may take
+    /// a while. Dumps all scripthashes as JSON data to output device outDev as an array of hex-encoded JSON strings,
+    /// optionally indented by `indent*indentLevel` spaces. If indent is 0, the output will all be on 1 line with no
+    /// padding.
     size_t dumpAllScriptHashes(QIODevice *outDev, unsigned indent=0, unsigned indentLevel=0, const DumpProgressFunc & = {}, size_t progInterval = 100000) const;
+
+    /// Leverages RAII to have the Storage class auto-notified when initial sync has started & ended.
+    class InitialSyncRAII {
+        QPointer<Storage> storage;
+        static inline std::atomic_int instanceCtr{0};
+        void constructed() { if (++instanceCtr == 1) storage->setInitialSync(true); }
+    protected:
+        friend class Storage;
+        InitialSyncRAII(Storage &storage_) : storage{&storage_} { constructed(); }
+    public:
+        InitialSyncRAII(const InitialSyncRAII & o) : storage(o.storage) { constructed(); }
+        InitialSyncRAII(InitialSyncRAII && o) : InitialSyncRAII(std::as_const(o)) {}
+        ~InitialSyncRAII() { if (--instanceCtr == 0 && storage) storage->setInitialSync(false); }
+
+        InitialSyncRAII &operator=(const InitialSyncRAII &) = default;
+        InitialSyncRAII &operator=(InitialSyncRAII && o) { return this->operator=(std::as_const(o)); }
+    };
+
+    /// Called by Controller, if it thinks it's in an intitial sync. Controller keeps an instance of the returned value
+    /// until initial sync has ended. (In other words, callers are expected to end the lifetime of the returned value
+    /// when they wish to assert that "InitialSync" has ended).
+    ///
+    /// Note: If multiple threads in the application attempt to manage the high-level concept of "InitialSync" at the
+    /// same time, there may be race conditions as to whether "InitialSync" is really actually still asserted after
+    /// this call has returned, or whether it really is false after the lifetime of the returned `InitialSyncRAII`
+    /// value has ended. This is because execution may be interleaved in any order, including ones in which another
+    /// thread may swoop in and change things around from underneath out feet. Long story short: this is a quick and
+    /// lightweight mechanism intended to be used and "owned" by the Controller object *only*.
+    [[nodiscard]] InitialSyncRAII setInitialSync() { return InitialSyncRAII{*this}; }
 
 protected:
     virtual Stats stats() const override; ///< from StatsMixin
@@ -323,11 +355,12 @@ protected:
 
 
     // -- the below are used inside addBlock (and undoLatestBlock) to maintain the UTXO set & Headers
+    class UTXOCache;
 
     /// Used to store (in an opaque fashion) the rocksdb::WriteBatch objects used for updating the db.
     /// Called internally from addBlock and undoLatestBlock().
     struct UTXOBatch {
-        UTXOBatch();
+        UTXOBatch(UTXOCache *cache = nullptr);
         UTXOBatch(UTXOBatch &&);
         /// Enqueue an add of a utxo -- does not take effect in db until Storage::issueUpdates() is called -- may throw.
         void add(const TXO &, const TXOInfo &, const CompactTXO &);
@@ -366,6 +399,10 @@ protected:
     void saveUtxoCt();
     /// Reads the UtxoCt from the meta db. If they key is missing it will return 0.  May throw on low-level db error.
     int64_t readUtxoCtFromDB() const;
+
+    /// Internally called to create or destroy the UTXO Cache, if --fast-sync is enabled
+    void setInitialSync(bool);
+    friend class InitialSyncRAII;
 
 private:
     const std::shared_ptr<const Options> options;

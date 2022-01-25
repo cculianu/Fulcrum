@@ -1043,7 +1043,7 @@ struct Controller::StateMachine
     int nHeaders = -1; ///< the number of headers our bitcoind has, in the chain we are synching
     BTC::Net net = BTC::Net::Invalid;  ///< This gets set by calls to getblockchaininfo by parsing the "chain" in the resulting dict
 
-    robin_hood::unordered_flat_map<unsigned, PreProcessedBlockPtr> ppBlocks; // mapping of height -> PreProcessedBlock (we use an unordered_flat_map because it's faster for frequent updates)
+    robin_hood::unordered_map<unsigned, PreProcessedBlockPtr> ppBlocks; // mapping of height -> PreProcessedBlock (we use robin_hood because it's faster for frequent updates)
     unsigned startheight = 0, ///< the height we started at
              endHeight = 0; ///< the final (inclusive) block height we expect to receive to pronounce the synch done
 
@@ -1075,6 +1075,9 @@ struct Controller::StateMachine
 
     /// will be valid and not empty only if a zmq hashblock notification happened while we were running the block & mempool synch task
     QByteArray mostRecentZmqNotif;
+
+    /// This is valid only if we are in an initial sync
+    std::optional<Storage::InitialSyncRAII> initialSyncRaii;
 };
 
 unsigned Controller::downloadTaskRecommendedThrottleTimeMsec(unsigned bnum) const
@@ -1270,10 +1273,19 @@ void Controller::process(bool beSilentIfUpToDate)
                 //   old undo is deleted is only when new undo is added -- hard to explain why in this comment but read
                 //   the `process_VerifyAndAddBlock` code in this file to see why this last bullet point
                 //   invariant must be satisfied).
-                if (task->info.initialBlockDownload && !storage->hasUndo()) {
+                const bool hasUndo = storage->hasUndo();
+                if (task->info.initialBlockDownload && !hasUndo) {
                     sm->suppressSaveUndo = sm->nHeaders > 0 && sm->ht > 0 && sm->nHeaders >= sm->ht
                                            && unsigned(sm->nHeaders - sm->ht) > storage->configuredUndoDepth();
                 }
+
+                // Set initial sync flag, if we are in initial sync (heuristic is: initial sync == we have no undo data)
+                // Note: This may not be the best place for this. Also, if assumptions change, this will not
+                // work as before. TODO: revisit the placement of where this logic goes.
+                if (!hasUndo && !sm->initialSyncRaii)
+                    sm->initialSyncRaii.emplace( storage->setInitialSync() );
+                else if (sm->initialSyncRaii && hasUndo)
+                    sm->initialSyncRaii.reset();
             }
             AGAIN();
         });
