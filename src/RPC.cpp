@@ -504,7 +504,7 @@ namespace RPC {
             error.emplace(Code_InternalError, e.what());
         }
         if (error)
-            on_processJsonFailure(error->code, error->message,  msgId);
+            on_processJsonFailure(error->code, error->message, msgId);
     }
 
     void ConnectionBase::on_processJsonFailure(int code, const QString & message, const Message::Id &msgId)
