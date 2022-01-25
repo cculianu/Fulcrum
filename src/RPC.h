@@ -486,7 +486,7 @@ namespace RPC {
         bool isComplete() const { return !hasNext() && skippedCt + responses.size() >= items.size(); }
 
         Batch() = default;
-        Batch(QVariantList && items_) : items{std::move(items_)} {}
+        Batch(QVariantList && items_) : items(std::move(items_)) {}
     };
 
     /// An individual batch request is managed by this object. Instances of this class are always children of
