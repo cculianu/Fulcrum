@@ -494,16 +494,17 @@ void App::parseArgs()
                " the database files on startup is not strictly necessary.\n"),
     },
     {
-       "experimental-fast-sync",
-       QString("If specified, " APPNAME " will use an experimental new feature that consumes extra memory but syncs up"
-               " to to 2X faster. To use this feature, you must specify a memory value in MB to allocate to this"
-               " facility. You should give this facility at least 2 GB for it to really pay off. Note that this feature"
-               " is currently experimental and the tradeoffs are: it is faster because it avoids redundant disk I/O,"
-               " however, this comes at the price of considerable memory consumption as well as a sync that is less"
-               " resilient to crashes mid-sync. If the process is killed mid-sync, the database may become corrupt"
-               " and lose UTXO data. Use this feature only if you are 100% sure that won't happen during a sync."
-               " Specify as much memory as you can, in MB, here, e.g.: 3000 to allocate 3000 MB (3 GB). The default is"
-               " off (0). This option only takes effect on initial sync, otherwise this option has no effect.\n"),
+       "fast-sync",
+       QString("If specified, " APPNAME " will use a UTXO Cache that consumes extra memory but syncs up to to 2X"
+               " faster. To use this feature, you must specify a memory value in MB to allocate to the cache. It is"
+               " recommended that you give this facility at least 2000 MB for it to really pay off, although any amount"
+               " of memory given (minimum 200 MB) should be beneficial. Note that this feature is currently"
+               " experimental and the tradeoffs are: it is faster because it avoids redundant disk I/O, however, this"
+               " comes at the price of considerable memory consumption as well as a sync that is less resilient to"
+               " crashes mid-sync. If the process is killed mid-sync, the database may become corrupt and lose UTXO"
+               " data. Use this feature only if you are 100% sure that won't happen during a sync. Specify as much"
+               " memory as you can, in MB, here, e.g.: 3000 to allocate 3000 MB (3 GB). The default is off (0). This"
+               " option only takes effect on initial sync, otherwise this option has no effect.\n"),
        QString("MB"),
     },
     {
@@ -1278,19 +1279,20 @@ void App::parseArgs()
         options->dumpScriptHashes = outFile; // we do no checking here, but Controller::startup will throw BadArgs if it cannot open this file for writing.
     }
 
-    // CLI: --experimental-fast-sync (experimental)
-    if (parser.isSet("experimental-fast-sync")) {
+    // CLI: --fast-sync (experimental)
+    // conf: fast-sync
+    if (const bool pset = parser.isSet("fast-sync"); pset || conf.hasValue("fast-sync")) {
         bool ok{};
-        const QString strVal = parser.value("experimental-fast-sync");
+        const QString strVal = pset ? parser.value("fast-sync") : conf.value("fast-sync");
         const double val = strVal.toDouble(&ok);
         if (!ok || val < 0.)
-            throw BadArgs(QString("experimental-fast-sync: Slease specify a positive numeric value in MB, or 0 to disable"));
+            throw BadArgs(QString("fast-sync: Slease specify a positive numeric value in MB, or 0 to disable"));
         const uint64_t bytes = static_cast<uint64_t>(val * 1e6);
         if (uint64_t memfree; bytes > (memfree = std::min<uint64_t>(Util::getAvailablePhysicalRAM(), std::numeric_limits<size_t>::max())))
-            throw BadArgs(QString("experimental-fast-sync: Specified value (%1 bytes) is too large to fit in available"
+            throw BadArgs(QString("fast-sync: Specified value (%1 bytes) is too large to fit in available"
                                   " system memory (limit is: %2 bytes)").arg(bytes).arg(qulonglong(memfree)));
         else if (bytes > 0 && bytes < Options::minUtxoCache)
-            throw BadArgs(QString("experimental-fast-sync: Specified value %1 is too small (minimum: %2 MB)")
+            throw BadArgs(QString("fast-sync: Specified value %1 is too small (minimum: %2 MB)")
                           .arg(strVal, QString::number(Options::minUtxoCache / 1e6, 'f', 1)));
         options->utxoCache = static_cast<size_t>(bytes);
     }

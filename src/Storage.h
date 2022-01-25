@@ -400,7 +400,7 @@ protected:
     /// Reads the UtxoCt from the meta db. If they key is missing it will return 0.  May throw on low-level db error.
     int64_t readUtxoCtFromDB() const;
 
-    /// Internally called to create or destroy the UTXO Cache, if --experimental-fast-sync is enabled
+    /// Internally called to create or destroy the UTXO Cache, if --fast-sync is enabled
     void setInitialSync(bool);
     friend class InitialSyncRAII;
 

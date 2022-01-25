@@ -993,7 +993,7 @@ struct Storage::Pvt
 
         std::unique_ptr<TxHash2TxNumMgr> txhash2txnumMgr; ///< provides a bit of a higher-level interface into the db
 
-        /// One of these is alive if we are in an initial sync and user specified --experimental-fast-sync
+        /// One of these is alive if we are in an initial sync and user specified --fast-sync
         /// It caches UTXOs in memory and delays UTXO writes to DB so we don't have to do so much back-and-forth to
         /// rocksdb.
         std::unique_ptr<UTXOCache> utxoCache;
@@ -2699,14 +2699,14 @@ void Storage::setInitialSync(bool b) {
     assert(bool(p->db.utxoset) && bool(p->db.shunspent));
     if (b && !p->db.utxoCache) {
         if (options->utxoCache > 0) {
-            Log() << "experimental-fast-sync: Enabled; UTXO cache size set to " << options->utxoCache
+            Log() << "fast-sync: Enabled; UTXO cache size set to " << options->utxoCache
                   << " bytes (available physical RAM: " << Util::getAvailablePhysicalRAM() << " bytes)";
             p->db.utxoCache.reset(new UTXOCache("Storage UTXO Cache", p->db.utxoset, p->db.shunspent, p->db.defReadOpts, p->db.defWriteOpts));
             // Reserve about 3.6 million entries per GB of utxoCache memory given to us
             // We need to do this, despite the extra memory bloat, because it turns out rehashing is very painful.
             p->db.utxoCache->autoReserve(options->utxoCache);
         } else {
-            Log() << "experimental-fast-sync: Not enabled";
+            Log() << "fast-sync: Not enabled";
         }
     } else if (!b && p->db.utxoCache) {
         Log() << "Initial sync ended, flushing and deleting UTXO Cache ...";
