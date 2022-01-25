@@ -1374,25 +1374,18 @@ class Storage::UTXOCache
         DebugM(name, ": limiting size to ", bytes, ", current size: ", m);
         size_t iters = 0, deletions = 0;
         std::vector<NodeList::iterator> addsOrder;
-        const bool justDoShunspents = memUsageForSizes(utxos.size(), adds.size(), rms.size(), 0, 0) <= bytes;
-        if (!justDoShunspents) {
-            addsOrder.reserve(adds.size());
-            const bool definitelyNotInAdds = adds.empty(), definitelyInAdds = ordering.size() == adds.size();
-            for (auto oit = ordering.begin(); m > bytes && oit != ordering.end(); ++iters) {
-                if (!definitelyInAdds && (definitelyNotInAdds || adds.count(oit) == 0)) {
-                    // only erase cached UTXOs that exist in DB and are not in "add" set
-                    // also only erase if this is the second time through (try to make UTXO cache "stickier")
-                    if (tryCt > 0) {
-                        utxos.erase(oit->first);
-                        oit = ordering.erase(oit);
-                        ++deletions;
-                        m = memUsage();
-                    } else
-                        ++oit;
-                } else {
-                    // remember the ordering encountered since do_flush will use this information to save "oldest first" to DB
-                    addsOrder.push_back(oit++);
-                }
+        addsOrder.reserve(adds.size());
+        const bool definitelyNotInAdds = adds.empty(), definitelyInAdds = ordering.size() == adds.size();
+        for (auto oit = ordering.begin(); m > bytes && oit != ordering.end(); ++iters) {
+            if (!definitelyInAdds && (definitelyNotInAdds || adds.count(oit) == 0)) {
+                // only erase cached UTXOs that exist in DB and are not in "add" set
+                utxos.erase(oit->first);
+                oit = ordering.erase(oit);
+                ++deletions;
+                m = memUsage();
+            } else {
+                // remember the ordering encountered since do_flush will use this information to save "oldest first" to DB
+                addsOrder.push_back(oit++);
             }
         }
         auto PrintStats = [&] {
@@ -1402,13 +1395,9 @@ class Storage::UTXOCache
                    ", shunspentRms: ", shunspentRms.size(), ", memUsage: ", QString::number(memUsage()/1000.0/1000.0, 'f', 3), " MB");
         };
         if (m > bytes) {
-            if (!justDoShunspents) {
-                DebugM(name, ": after ", iters, " iters and ", deletions, " deletions, size is still over limit (",
-                       m, " > ", bytes, "), doing limited flush now ...");
-                do_flush(bytes, &addsOrder);
-            } else {
-                do_flush(bytes, nullptr);
-            }
+            DebugM(name, ": after ", iters, " iters and ", deletions, " deletions, size is still over limit (",
+                   m, " > ", bytes, "), doing limited flush now ...");
+            do_flush(bytes, &addsOrder);
             m = memUsage();
             if (m > bytes) {
                 // memusage still high, try again, this time do_flush should reap more
