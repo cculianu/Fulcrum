@@ -53,7 +53,6 @@
 #include <cstdlib>
 #include <cstring> // for memcpy
 #include <functional>
-#include <future>
 #include <limits>
 #include <list>
 #include <map>
