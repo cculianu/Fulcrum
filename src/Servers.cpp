@@ -49,12 +49,12 @@
 #include <cstdlib>
 #include <iostream>
 #include <limits>
-#include <list>
 #include <map>
 #include <mutex>
 #include <shared_mutex>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 TcpServerError::~TcpServerError() {} // for vtable
 
@@ -631,18 +631,16 @@ void ServerBase::killClient(IdMixin::Id clientId)
 // public slot
 void ServerBase::killClientsByAddress(const QHostAddress &address)
 {
-    std::list<Client *> clientsMatched;
-    int ctr = 0;
+    std::vector<Client *> clientsMatched;
     for (auto it = clientsById.begin(); it != clientsById.end(); ++it) {
         if (auto client = it.value(); client->peerAddress() == address)
             clientsMatched.push_back(client); // save to list so as to not mutate hashtable while iterating...
     }
-    for (auto & client : clientsMatched) {
+    for (auto * client : clientsMatched) {
         killClient(client);
-        ++ctr;
     }
-    if (ctr)
-        DebugM("Killed ", ctr, Util::Pluralize(" client", ctr), " matching address: ", address.toString());
+    if (const size_t ct = clientsMatched.size())
+        DebugM("Killed ", ct, Util::Pluralize(" client", ct), " matching address: ", address.toString());
 }
 // public slot
 void ServerBase::applyMaxBufferToAllClients(int newMax)
@@ -651,7 +649,7 @@ void ServerBase::applyMaxBufferToAllClients(int newMax)
         return;
     newMax = Options::clampMaxBufferSetting(newMax);
     int ctr = 0;
-    for (auto & client : clientsById) {
+    for (auto * client : clientsById) {
         client->setMaxBuffer(newMax);
         ++ctr;
     }
@@ -2269,8 +2267,8 @@ auto AdminServer::stats() const -> Stats
 void AdminServer::kickBanBoilerPlate(const RPC::Message &m, BanOp banOp)
 {
     const auto list = m.paramsList();
-    std::list<IdMixin::Id> ids;
-    std::list<QHostAddress> addrs;
+    std::vector<IdMixin::Id> ids;
+    std::vector<QHostAddress> addrs;
     int argNum = 0;
     for (const auto & var : list) {
         ++argNum;
