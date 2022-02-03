@@ -68,11 +68,6 @@ DEFINES += QT_DEPRECATED_WARNINGS
 # This enables those functions.
 DEFINES += USE_QT_IN_BITCOIN
 
-### It is recommended you use Qt Creator to build, and that you set
-### your compiler to a clang variant for maximal benefit.
-### NOTE: If on a BIG ENDIAN architecture that isn't Linux, be sure to set this:
-# DEFINES += WORDS_BIGENDIAN
-
 # You can also make your code fail to compile if it uses deprecated APIs.
 # In order to do so, uncomment the following line.
 # You can also select to disable deprecated APIs only up to a certain version of Qt.
@@ -107,6 +102,22 @@ contains(CONFIG, config_builtin_clzl) {
 qtCompileTest(builtin_clzll)
 contains(CONFIG, config_builtin_clzll) {
     DEFINES += HAVE_DECL___BUILTIN_CLZLL
+}
+
+# Detect endianness and set WORDS_BIGENDIAN if on a big endian platform
+qtCompileTest(endian_big)
+qtCompileTest(endian_little)
+contains(CONFIG, config_endian_big) {
+    DEFINES += WORDS_BIGENDIAN
+    contains(CONFIG, config_endian_little) {
+        error("Detected both BIG and LITTLE endian at the same time. This should not happen. FIXME!")
+    }
+} else {
+    contains(CONFIG, config_endian_little) {
+        DEFINES -= WORDS_BIGENDIAN
+    } else {
+        error("Failed to detect either BIG or LITTLE endian. Unknown compiler? FIXME!")
+    }
 }
 
 # Handle or add GIT_COMMIT=
