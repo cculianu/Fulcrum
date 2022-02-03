@@ -7,7 +7,7 @@
 A fast & nimble SPV server for Bitcoin Cash & Bitcoin BTC.
 
 #### Copyright
-(C) 2019-2021 Calin Culianu <calin.culianu@gmail.com>
+(C) 2019-2022 Calin Culianu <calin.culianu@gmail.com>
 
 #### License:
 GPLv3. See the included `LICENSE.txt` file or [visit gnu.org and read the license](https://www.gnu.org/licenses/gpl-3.0.html).
