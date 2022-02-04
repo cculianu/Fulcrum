@@ -131,5 +131,10 @@ private:
 
     QByteArray readRandomCommon(QFile & f, uint64_t recNum, QString *errStr = nullptr) const;
     bool writeNewSizeToHeader(QString *errStr = nullptr, bool flush = false);
+
+    /// Write the full header at position 0 to `f` (magic + nRecs, in little endian order).
+    /// @pre `f` must be isOpen() (this is not checked)
+    /// @throws FileError
+    static void writeFullHeader(QFile & f, uint32_t magic, uint64_t nRecs);
 };
 
