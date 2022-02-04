@@ -312,3 +312,203 @@ RecordFile::BatchAppendContext::~BatchAppendContext()
     if (!errStr.isEmpty())
         Fatal() << errStr; // app will quit in main event loop after printing error.
 }
+
+#ifdef ENABLE_TESTS
+#include "App.h"
+#include <QTemporaryFile>
+#include <algorithm>
+#include <atomic>
+#include <cstddef>
+#include <cstring>
+#include <thread>
+#include <type_traits>
+#include <vector>
+
+namespace {
+    void testRecordFile() {
+        size_t nChecksOK = 0;
+
+        const auto fileName = []{
+            QTemporaryFile tmp(APPNAME "_XXXXXX.tmp");
+            tmp.open();
+            auto ret = tmp.fileName();
+            tmp.setAutoRemove(false); // keep file around so we can pass it to RecordFile instance
+            return ret;
+        }();
+        constexpr size_t HashLen = 32;
+        constexpr size_t N = 100'000; // 100k items
+        Log() << "Testing Recordfile \"" << fileName << "\" with " << N << " " << HashLen << "-byte random records ...";
+        // delete tmp file at scope end
+        Defer d([&fileName] {
+            QFile::remove(fileName);
+            Log() << "Temporary file: \"" << fileName << "\" deleted";
+        });
+
+        Tic t0;
+        std::vector<QByteArray> hashes(N, QByteArray(HashLen, Qt::Uninitialized));
+        // randomize hashes
+        QByteArray *lastH = nullptr;
+        for (auto & h : hashes) {
+            Util::getRandomBytes(h.data(), h.size());
+            if (lastH && *lastH == h)
+                throw Exception("Something went wrong generating random hashes.. previous hash and this hash match!");
+            lastH = &h;
+        }
+        Log() << "Generated " << hashes.size() << " random hahses in " << t0.msecStr() << " msec";
+        {
+            t0 = Tic();
+            RecordFile f(fileName, HashLen);
+            auto batch = f.beginBatchAppend();
+            QString err;
+            for (const auto & h : hashes)
+                if (!batch.append(h, &err))
+                    throw Exception(QString("Failed to append a record using batch append to RecordFile: %1").arg(err));
+            Log() << "Wrote " << f.numRecords() << " hahses in " << t0.msecStr() << " msec";
+        }
+        {
+            t0 = Tic();
+            // Read 1 record at a time randomly from 3 threads concurrently
+            std::vector<std::thread> thrds;
+            RecordFile f(fileName, HashLen);
+            if (f.numRecords() != N) throw Exception("RecordFile has wrong number of records!");
+            std::atomic_size_t ctr{0};
+            QString fail_shared;
+            std::mutex fail_shared_mut;
+            for (size_t i = 0; i < 3; ++i) {
+                thrds.emplace_back([&]{
+                    QString fail;
+                    for (size_t i = 0; fail.isEmpty() && i < hashes.size() * 7 / 20; ++i) {
+                        size_t idx;
+                        Util::getRandomBytes(reinterpret_cast<std::byte *>(&idx), sizeof(idx));
+                        idx = idx % hashes.size();
+                        if (f.readRecord(idx, &fail) != hashes[idx]) {
+                            fail = QString("Failed to read an individual record at position %1 correctly: %2").arg(idx).arg(fail);
+                            break;
+                        }
+                        ++ctr;
+                    }
+                    if (!fail.isEmpty()) {
+                        std::unique_lock l(fail_shared_mut);
+                        fail_shared = fail;
+                    }
+                });
+            }
+            for (auto & t : thrds) t.join();
+            if (!fail_shared.isEmpty()) throw Exception(fail_shared);
+            Log() << "Read " << ctr.load() << " individual records randomly using " << thrds.size() << " concurrent threads in "
+                  << t0.msecStr() << " msec";
+            ++nChecksOK;
+        }
+        {
+            t0 = Tic();
+            // Read 1000 records at a time randomly from 3 threads concurrently
+            std::vector<std::thread> thrds;
+            RecordFile f(fileName, HashLen);
+            if (f.numRecords() != N) throw Exception("RecordFile has wrong number of records!");
+            QString fail;
+            std::atomic_size_t ctr{0};
+            QString fail_shared;
+            std::mutex fail_shared_mut;
+            for (size_t i = 0; i < 3; ++i) {
+                thrds.emplace_back([&]{
+                    QString fail;
+                    constexpr size_t NBatch = 1000;
+                    for (size_t i = 0; fail.isEmpty() && i < hashes.size() * 2; i += NBatch) {
+                        std::vector<uint64_t> recNums(NBatch);
+                        for (size_t j = 0; fail.isEmpty() && j < NBatch; ++j) {
+                            size_t idx;
+                            Util::getRandomBytes(reinterpret_cast<std::byte *>(&idx), sizeof(idx));
+                            idx = idx % N;
+                            recNums[j] = idx;
+                            ++ctr;
+                        }
+                        const auto results = f.readRandomRecords(recNums, &fail, false);
+                        if (results.size() != recNums.size())
+                            fail = QString("Failed to read random records: ") + fail;
+                        for (size_t i = 0; fail.isEmpty() && i < results.size(); ++i) {
+                            if (results[i] != hashes[recNums[i]])
+                                fail = QString("Record #%1, index %2 failed to compare equal!").arg(i).arg(recNums[i]);
+                        }
+                    }
+                    if (!fail.isEmpty()) {
+                        std::unique_lock l(fail_shared_mut);
+                        fail_shared = fail;
+                    }
+                });
+            }
+            for (auto & t : thrds) t.join();
+            if (!fail.isEmpty()) throw Exception(fail);
+            Log() << "Read " << ctr.load() << " batched records randomly using " << thrds.size() << " concurrent threads in "
+                  << t0.msecStr() << " msec";
+            ++nChecksOK;
+        }
+        {
+            t0 = Tic();
+            // truncate to N / 2, and verify
+            {
+                RecordFile f(fileName, HashLen);
+                f.truncate(hashes.size() / 2);
+            }
+            RecordFile f(fileName, HashLen);
+            if (f.numRecords() != hashes.size() / 2) throw Exception("Trunace failed");
+            QString fail;
+            const auto results = f.readRecords(0, hashes.size() / 2, &fail);
+            if (!fail.isEmpty() || results.size() != hashes.size() / 2) throw Exception(QString("Failed to verify truncated data: %1").arg(fail));
+            for (size_t i = 0; i < results.size(); ++i)
+                if (results[i] != hashes[i])
+                    throw Exception(QString("After truncation, record %1 no longer compares equal!").arg(i));
+            Log() << "Truncated file to size " << f.numRecords() << " and verified in "<< t0.msecStr() << " msec";
+            ++nChecksOK;
+        }
+        {
+            t0 = Tic();
+            // truncate the file to 0, then write N / 10 records using single-append calls and verify
+            {
+                RecordFile f(fileName, HashLen);
+                f.truncate(0);
+            }
+            RecordFile f(fileName, HashLen);
+            if (f.numRecords() != 0) throw Exception("Failed to truncate file to 0");
+            const auto NN = hashes.size() / 10;
+            for (size_t i = 0; i < NN; ++i) {
+                QString err;
+                const auto res = f.appendRecord(hashes[i], true, &err);
+                if (!res || *res != i || !err.isEmpty() || f.numRecords() != i + 1)
+                    throw Exception(QString("Failed to append record %1: %2").arg(i).arg(err));
+            }
+            QString fail;
+            const auto results = f.readRecords(0, NN, &fail);
+            if (!fail.isEmpty() || results.size() != NN) throw Exception(QString("Failed to verify truncated data: %1").arg(fail));
+            for (size_t i = 0; i < results.size(); ++i)
+                if (results[i] != hashes[i])
+                    throw Exception(QString("After truncation, record %1 no longer compares equal!").arg(i));
+            Log() << "Truncated file to size 0, appended using single-append calls to size " << f.numRecords() << ", and verified in "<< t0.msecStr() << " msec";
+            ++nChecksOK;
+        }
+        {
+            // try mismatch on recSz
+            static_assert (!std::is_base_of_v<RecordFile::FileFormatError, Exception>); // to ensure below works.. this is obviously always the case
+            try {
+                RecordFile f(fileName, HashLen + 1 /* bad recsz */);
+                throw Exception("Failed to catch expected exception!");
+            } catch (const RecordFile::FileFormatError &e) {
+                Log() << "Got expected exception: \"" << e.what() << "\" ok";
+            }
+            ++nChecksOK;
+        }
+        {
+            // try mismatch on recSz
+            static_assert (!std::is_base_of_v<RecordFile::FileFormatError, Exception>); // to ensure below works.. this is obviously always the case
+            try {
+                RecordFile f(fileName, HashLen, 0x01020304 /* bad magic */);
+                throw Exception("Failed to catch expected exception!");
+            } catch (const RecordFile::FileFormatError &e) {
+                Log() << "Got expected exception: \"" << e.what() << "\" ok";
+            }
+            ++nChecksOK;
+        }
+        Log() << nChecksOK << " RecordFile checks passed ok";
+    }
+    const auto test = App::registerTest("recordfile", testRecordFile);
+}
+#endif
