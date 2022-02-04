@@ -497,7 +497,7 @@ namespace {
             ++nChecksOK;
         }
         {
-            // try mismatch on recSz
+            // try mismatch on magic
             static_assert (!std::is_base_of_v<RecordFile::FileFormatError, Exception>); // to ensure below works.. this is obviously always the case
             try {
                 RecordFile f(fileName, HashLen, 0x01020304 /* bad magic */);
