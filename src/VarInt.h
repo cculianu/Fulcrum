@@ -129,7 +129,7 @@ public:
         // accepted construct (takes a deep copy of bytes in span)
         const std::byte *spanAcceptedBytes = reinterpret_cast<const std::byte *>(const_cast<const Byte *>(b.data()));
         VarInt ret(Unchecked{}, ByteView{spanAcceptedBytes, byteLen});
-        b = b.subspan(byteLen); // uodate b (consume bytes)
+        b = b.subspan(byteLen); // update b (consume bytes)
         return ret;
     }
 
