@@ -1,26 +1,27 @@
-FROM ubuntu:bionic
+FROM debian:bullseye as builder
+
 LABEL maintainer="Axel Gembe <derago@gmail.com>"
 
 ARG MAKEFLAGS
 
-RUN apt-get update -y && \
-    apt-get install -y software-properties-common && \
-    add-apt-repository ppa:mainnet-pat/opt-qt-5.13.2-bionic && \
-    apt-get update -y && \
-    apt-get install -y qt513base openssl && \
-    apt-get install -y git build-essential pkg-config zlib1g-dev libbz2-dev libjemalloc-dev libjemalloc1 libzmq3-dev && \
+RUN apt update -y && \
+    apt install -y openssl git build-essential pkg-config zlib1g-dev libbz2-dev libjemalloc-dev libzmq3-dev qtbase5-dev qt5-qmake
+
+WORKDIR /src
+
+COPY . .
+
+RUN qmake -makefile PREFIX=/usr Fulcrum.pro && \
+    make $MAKEFLAGS install
+
+FROM debian:bullseye-slim
+
+RUN apt update && \
+    apt install -y openssl libqt5network5 zlib1g libbz2-1.0 libjemalloc2 libzmq5 && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-COPY . /src
-
-RUN cd /src && \
-    /opt/qt513/bin/qmake -makefile PREFIX=/usr Fulcrum.pro && \
-    make $MAKEFLAGS install
-
-RUN rm -rf /src && \
-    apt-get remove -y git build-essential zlib1g-dev libbz2-dev libjemalloc-dev && \
-    apt-get autoremove -y
+COPY --from=builder /src/Fulcrum /usr/bin/Fulcrum
 
 VOLUME ["/data"]
 ENV DATA_DIR /data
