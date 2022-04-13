@@ -167,15 +167,15 @@ namespace BTC
             { RegTestNet, "regtest"},
         }};
         const QMap<QString, Net> nameNetMap = {{
-            {"main",     MainNet},     // BCHN, BU, ABC
+            {"main",     MainNet},     // BCHN, BU, ABC, Core
             {"mainnet",  MainNet},     // bchd
-            {"test",     TestNet},     // BCHN, BU, ABC
+            {"test",     TestNet},     // BCHN, BU, ABC, Core
             {"test4",    TestNet4},    // BCHN, BU
             {"scale",    ScaleNet},    // BCHN, BU
             {"testnet3", TestNet},     // bchd
             {"testnet4", TestNet4},    // possible future bchd
             {"regtest",  RegTestNet},  // BCHN, BU, ABC, bchd
-            {"signet",  TestNet},      // Bitcoin Core signet
+            {"signet",   TestNet},     // Core only
         }};
         const QString invalidNetName = "invalid";
     };
