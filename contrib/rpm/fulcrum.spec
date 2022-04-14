@@ -18,8 +18,6 @@ BuildRequires: zeromq-devel
 
 BuildRequires: pandoc
 
-Obsoletes:     Fulcrum-contrib-rpm
-
 Requires(pre): shadow-utils
 
 BuildRequires: systemd systemd-rpm-macros
