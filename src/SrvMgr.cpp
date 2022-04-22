@@ -108,7 +108,7 @@ void SrvMgr::startServers()
 
         try {
             peermgr->startup();
-        } catch (Exception & e) {
+        } catch (const Exception & e) {
              // startup failed, proceed without PeerMgr, but log the error
             Error() << "ERROR: PeerMgr startup failed: " << e.what();
             Warning() << "SrvMgr: Proceeding anyway, with peering disabled";
