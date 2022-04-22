@@ -105,17 +105,28 @@ void SrvMgr::startServers()
     if (options->peerDiscovery) {
         Log() << "SrvMgr: starting PeerMgr ...";
         peermgr = std::make_shared<PeerMgr>(this, storage, options);
-        peermgr->startup(); // may throw
-        connect(this, &SrvMgr::allServersStarted, peermgr.get(), &PeerMgr::on_allServersStarted);
-        connect(this, &SrvMgr::kickByAddress, peermgr.get(), &PeerMgr::on_kickByAddress);
-        connect(this, &SrvMgr::kickPeersWithSuffix, peermgr.get(), [peermgr=peermgr.get()](const QString &sufIn){
-            // we must intercept this signal and do this here because AdminServer also emits this with a potentially
-            // un-normalized hostname suffix. Note this lambda executes in the peermgr thread context and thus should
-            // *NOT* capture 'this' or touch 'this'.
-            const auto suf = normalizeHostNameSuffix(sufIn);
-            if (!suf.isEmpty())
-                peermgr->on_kickBySuffix(suf);
-        });
+
+        try {
+            peermgr->startup();
+        } catch (Exception & e) {
+             // startup failed, proceed without PeerMgr, but log the error
+            Error() << "ERROR: PeerMgr startup failed: " << e.what();
+            Warning() << "SrvMgr: Proceeding anyway, with peering disabled";
+            peermgr.reset();
+        }
+
+        if (peermgr) {
+            connect(this, &SrvMgr::allServersStarted, peermgr.get(), &PeerMgr::on_allServersStarted);
+            connect(this, &SrvMgr::kickByAddress, peermgr.get(), &PeerMgr::on_kickByAddress);
+            connect(this, &SrvMgr::kickPeersWithSuffix, peermgr.get(), [peermgr=peermgr.get()](const QString &sufIn){
+                // we must intercept this signal and do this here because AdminServer also emits this with a potentially
+                // un-normalized hostname suffix. Note this lambda executes in the peermgr thread context and thus should
+                // *NOT* capture 'this' or touch 'this'.
+                const auto suf = normalizeHostNameSuffix(sufIn);
+                if (!suf.isEmpty())
+                    peermgr->on_kickBySuffix(suf);
+            });
+        }
     } else peermgr.reset();
 
     const auto num =   options->interfaces.length() + options->sslInterfaces.length()
