@@ -7,7 +7,7 @@ License:    GPLv3
 URL:        https://github.com/cculianu/Fulcrum
 VCS:        {{{ git_repo_vcs }}}
 
-Source:     {{{ git_repo_pack }}}
+Source:     {{{ GIT_DIRTY=1 git_repo_pack }}}
 
 BuildRequires: qt5-qtbase-devel
 BuildRequires: bzip2-devel
