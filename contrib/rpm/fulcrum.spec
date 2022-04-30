@@ -1,13 +1,13 @@
-Name:    {{{ git_cwd_name name="fulcrum" }}}
+Name:    {{{ git_repo_name name="fulcrum" }}}
 Version: 1.6.0
-Release: {{{ git_cwd_version }}}%{?dist}
+Release: {{{ git_repo_version }}}%{?dist}
 Summary: A fast & nimble SPV server for Bitcoin Cash
 
 License:    GPLv3
 URL:        https://github.com/cculianu/Fulcrum
-VCS:        {{{ git_cwd_vcs }}}
+VCS:        {{{ git_repo_vcs }}}
 
-Source:     {{{ git_cwd_pack }}}
+Source:     {{{ git_repo_pack }}}
 
 BuildRequires: qt5-qtbase-devel
 BuildRequires: bzip2-devel
@@ -33,7 +33,7 @@ Summary: Includes admin tool for fulcrum
 %{summary}.
 
 %prep
-{{{ git_cwd_setup_macro }}}
+{{{ git_repo_setup_macro }}}
 
 rm -rfv staticlibs/
 
@@ -84,4 +84,4 @@ exit 0
 %{_bindir}/fulcrumctl
 
 %changelog
-{{{ git_cwd_changelog }}}
+{{{ git_repo_changelog }}}
