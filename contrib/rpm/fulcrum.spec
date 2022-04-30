@@ -1,7 +1,7 @@
 Name:    {{{ git_repo_name name="fulcrum" }}}
 Version: 1.6.0
 Release: {{{ git_repo_version }}}%{?dist}
-Summary: A fast & nimble SPV server for Bitcoin Cash
+Summary: A fast & nimble SPV server for Bitcoin Cash & Bitcoin BTC
 
 License:    GPLv3
 URL:        https://github.com/cculianu/Fulcrum
