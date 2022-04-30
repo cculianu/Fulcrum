@@ -51,7 +51,7 @@ install -dm 750 %{buildroot}/%{_sharedstatedir}/fulcrum
 install -Dm 644 fulcrum.1 %{buildroot}/%{_mandir}/man1/fulcrum.1
 
 #admin
-install -Dm 755 FulcrumAdmin %{buildroot}/%{_bindir}/fulcrumctl
+install -Dm 755 FulcrumAdmin %{buildroot}/%{_bindir}/fulcrum-admin
 
 %pre
 getent group fulcrum >/dev/null || groupadd -r fulcrum
@@ -81,7 +81,7 @@ exit 0
 %files admin
 %doc README.md
 %license LICENSE.txt
-%{_bindir}/fulcrumctl
+%{_bindir}/fulcrum-admin
 
 %changelog
 {{{ git_repo_changelog }}}
