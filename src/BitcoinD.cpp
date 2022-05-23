@@ -400,7 +400,9 @@ void BitcoinDMgr::refreshBitcoinDZmqNotifications()
                     try {
                         auto [host, port] = Util::ParseHostPortPair(hostPortPart);
                         // rewrite IPADDR_ANY -> what we think the remote bitcoind is
-                        if (host == QHostAddress(QHostAddress::AnyIPv4).toString() || host == QHostAddress(QHostAddress::AnyIPv6).toString()) {
+                        if (host == QHostAddress(QHostAddress::AnyIPv4).toString()
+                                || host == QHostAddress(QHostAddress::AnyIPv6).toString()
+                                || host == "*" /* See issue #102 -- sometimes ZMQ "any" address is specified as "*" */) {
                             const QString &rpcHostName = rpcInfo.hostPort.first;
                             DebugM("getzmqnotifications: rewriting ", host, " -> ", rpcHostName);
                             host = rpcHostName;
