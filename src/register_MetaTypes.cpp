@@ -52,7 +52,8 @@ void App::register_MetaTypes()
         qRegisterMetaType<PeerInfo>("PeerInfo");
         qRegisterMetaType<PeerInfoList>("PeerInfoList");
 
-        qRegisterMetaType<BTC::Address>();
+        qRegisterMetaType<BTC::Address>("BTC::Address");
+        qRegisterMetaType<BTC::Coin>("BTC::Coin");
 
         qRegisterMetaType<BitcoinDZmqNotifications>("BitcoinDZmqNotifications");
 

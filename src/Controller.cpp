@@ -109,7 +109,7 @@ void Controller::startup()
             callOnTimerSoon(msgPeriod, waitTimer, []{ Log("Waiting for bitcoind..."); return true; }, false, Qt::TimerType::VeryCoarseTimer);
         };
         waitForBitcoinD();
-        conns += connect(bitcoindmgr.get(), &BitcoinDMgr::bitcoinCoreDetection, this, &Controller::on_bitcoinCoreDetection,
+        conns += connect(bitcoindmgr.get(), &BitcoinDMgr::coinDetected, this, &Controller::on_coinDetected,
                          /* NOTE --> */ Qt::DirectConnection);
         conns += connect(bitcoindmgr.get(), &BitcoinDMgr::allConnectionsLost, this, waitForBitcoinD);
         conns += connect(bitcoindmgr.get(), &BitcoinDMgr::allConnectionsLost, this, &Controller::zmqHashBlockStop); // stop zmq unconditionally
@@ -209,7 +209,7 @@ void Controller::startup()
             bitcoin::CMutableTransaction tx;
             constexpr auto kErrLine2 = "Something is wrong with either BitcoinD or our ability to understand its RPC responses.";
             try {
-                BTC::Deserialize(tx, Util::ParseHexFast(resp.result().toByteArray()), 0, isCoinBTC());
+                BTC::Deserialize(tx, Util::ParseHexFast(resp.result().toByteArray()), 0, isSegWitCoin());
             } catch (const std::exception &e) {
                 Error() << "Failed to deserialize tx #1 with txid " << hash.toHex() << ": " << e.what();
                 Error() << kErrLine2;
@@ -271,10 +271,9 @@ void Controller::startup()
     start();  // start our thread
 }
 
-void Controller::on_bitcoinCoreDetection(bool iscore)
+void Controller::on_coinDetected(const BTC::Coin detectedtype)
 {
     const auto ourtype = coinType.load(std::memory_order_relaxed);
-    const auto detectedtype = !iscore ? BTC::Coin::BCH : BTC::Coin::BTC;
     if (ourtype == BTC::Coin::Unknown) {
         // We had no coin set in DB, but we just detected the coin, set it now and return.
         // This is the common case with no misconfiguration.
@@ -305,10 +304,10 @@ void Controller::on_bitcoinCoreDetection(bool iscore)
                        "Please either connect to the appropriate bitcoind for this database, or delete\n"
                        "the datadir and resynch.\n";
         } else {
-            // defensive programming -- should never be reached. This is here in case we
-            // add new coin types yet we forget to update this code.
-            Fatal() << "INTERNAL ERROR: Unexpected coin combination: ourtype=" << BTC::coinToName(ourtype)
-                    << " detectedtype=" <<  BTC::coinToName(detectedtype) << " -- FIXME!";
+            // Generic message for LTC/BCH/BTC mismatch.
+            Fatal() << "Unexpected coin combination: ourtype=" << BTC::coinToName(ourtype)
+                    << ", rpc daemon's type=" <<  BTC::coinToName(detectedtype) << ". Are you connected to the"
+                    << " right node for this " << APPNAME << " database?";
         }
     }
 }
@@ -474,7 +473,7 @@ struct DownloadBlocksTask : public CtlTask
 
 DownloadBlocksTask::DownloadBlocksTask(unsigned from, unsigned to, unsigned stride, unsigned nClients, Controller *ctl_)
     : CtlTask(ctl_, QStringLiteral("Task.DL %1 -> %2").arg(from).arg(to)), from(from), to(to), stride(stride),
-      expectedCt(unsigned(nToDL(from, to, stride))), max_q(int(nClients)+1), allowSegWit(ctl_->isCoinBTC())
+      expectedCt(unsigned(nToDL(from, to, stride))), max_q(int(nClients)+1), allowSegWit(ctl_->isSegWitCoin())
 {
     FatalAssert( (to >= from) && (ctl_) && (stride > 0), "Invalid params to DonloadBlocksTask c'tor, FIXME!");
 
@@ -609,7 +608,8 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
 struct SynchMempoolTask : public CtlTask
 {
     SynchMempoolTask(Controller *ctl_, std::shared_ptr<Storage> storage, const std::atomic_bool & notifyFlag)
-        : CtlTask(ctl_, "SynchMempool"), storage(storage), notifyFlag(notifyFlag), isBTC(ctl_->isCoinBTC())
+        : CtlTask(ctl_, "SynchMempool"), storage(storage), notifyFlag(notifyFlag),
+          isSegWit(ctl_->isSegWitCoin())
     {
         scriptHashesAffected.reserve(SubsMgr::kRecommendedPendingNotificationsReserveSize);
         txidsAffected.reserve(SubsMgr::kRecommendedPendingNotificationsReserveSize);
@@ -628,7 +628,7 @@ struct SynchMempoolTask : public CtlTask
     static constexpr unsigned kFailedDownloadMax = 50; // if we have more than this many consecutive failures on getrawtransaction, and no successes, abort with error.
     int redoCt = 0;
     const bool TRACE = Trace::isEnabled(); // set this to true to print more debug
-    const bool isBTC; ///< initted in c'tor. If true, deserialize tx's using the optional segwit extensons to the tx format.
+    const bool isSegWit; ///< initted in c'tor. If true, deserialize tx's using the optional segwit extensons to the tx format.
 
     /// The scriptHashes that were affected by this refresh/synch cycle. Used for notifications.
     std::unordered_set<HashX, HashHasher> scriptHashesAffected;
@@ -878,7 +878,7 @@ void SynchMempoolTask::doDLNextTx()
         // deserialize tx, catching any deser errors
         bitcoin::CMutableTransaction ctx;
         try {
-            ctx = BTC::Deserialize<bitcoin::CMutableTransaction>(txdata, 0, isBTC);
+            ctx = BTC::Deserialize<bitcoin::CMutableTransaction>(txdata, 0, isSegWit);
         } catch (const std::exception &e) {
             Error() << "Error deserializing tx: " << tx->hash.toHex() << ", exception: " << e.what();
             emit errored();
@@ -924,7 +924,7 @@ void SynchMempoolTask::doDLNextTx()
         // that there was some RBF action if on BTC, or the tx happened to drop out of mempool due to mempool pressure.
         // Since bitcoind doesn't have the tx -- then it and its children will also fail, which is fine. It's as if
         // it never existed and as if we never got it in the original list from `getrawmempool`!
-        const auto *const pre = isBTC ? "Tx dropped out of mempool (possibly due to RBF)" : "Tx dropped out of mempool";
+        const auto *const pre = isSegWit ? "Tx dropped out of mempool (possibly due to RBF)" : "Tx dropped out of mempool";
         Warning() << pre << ": " << QString(hashHex) << " (error response: " << resp.errorMessage()
                   << "), ignoring mempool tx ...";
         txsFailedDownload.insert(tx->hash);
@@ -1089,7 +1089,7 @@ unsigned Controller::downloadTaskRecommendedThrottleTimeMsec(unsigned bnum) cons
             // mainnet
             if (bnum > 150'000) // beyond this height the blocks are starting to be big enough that we want to not eat memory.
                 maxBackLog = 250;
-            else if (bnum > 550'000 && !isCoinBTC()) // beyond this height we may start to see 32MB blocks in the future
+            else if (bnum > 550'000 && !isSegWitCoin()) // beyond this height we may start to see 32MB blocks in the future
                 maxBackLog = 100;
         } else if (sm->net == BTC::ScaleNet) {
             if (bnum > 10'000)
@@ -1099,7 +1099,7 @@ unsigned Controller::downloadTaskRecommendedThrottleTimeMsec(unsigned bnum) cons
         } else {
             // testnet
             if (bnum > 1'300'000) // beyond this height 32MB blocks may be common, esp. in the future
-                maxBackLog = isCoinBTC() ? 250 : 100;
+                maxBackLog = isSegWitCoin() ? 250 : 100;
         }
 
         const int diff = int(bnum) - int(sm->ppBlkHtNext.load()); // note: ppBlkHtNext is not guarded by the lock but it is an atomic value, so that's fine.

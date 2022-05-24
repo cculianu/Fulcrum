@@ -6,5 +6,7 @@
         <file>resources/bch/servers_scalenet.json</file>
         <file>resources/btc/servers.json</file>
         <file>resources/btc/servers_testnet.json</file>
+        <file>resources/ltc/servers.json</file>
+        <file>resources/ltc/servers_testnet.json</file>
     </qresource>
 </RCC>

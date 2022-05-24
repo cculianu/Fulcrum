@@ -66,8 +66,11 @@ public:
     /// for debug printing when it receives new mempool tx's.
     static void printMempoolStatusToLog(size_t newSize, size_t numAddresses, double msec, bool useDebugLogger, bool force = false);
 
-    /// Thread-safe, lock-free
-    bool isCoinBTC() const { return coinType.load(std::memory_order_relaxed) == BTC::Coin::BTC; }
+    /// Thread-safe, lock-free, returns true for BTC and LTC
+    bool isSegWitCoin() const {
+        auto const c = coinType.load(std::memory_order_relaxed);
+        return c == BTC::Coin::BTC || c == BTC::Coin::LTC;
+    }
 
 signals:
     /// Emitted whenever bitcoind is detected to be up-to-date, and everything is synched up.
@@ -111,9 +114,9 @@ protected slots:
     /// the supplied block was the next one by height).
     void on_putBlock(CtlTask *, PreProcessedBlockPtr);
 
-    /// Slot for the BitcoinDMgr::bitcoinCoreDetection. This is compared to coinIsBTC and if there is a mismatch there,
-    /// we may end up aborting the app and logging an error in this slot.
-    void on_bitcoinCoreDetection(bool); //< NB: Connected via DirectConnection an may run in the BitcoinDMgr thread!
+    /// Slot for the BitcoinDMgr::bitcoinCoreDetection. This is compared to this->coinType and if there is a
+    /// mismatch there, we may end up aborting the app and logging an error in this slot.
+    void on_coinDetected(BTC::Coin); //< NB: Connected via DirectConnection an may run in the BitcoinDMgr thread!
 
 private:
     friend class CtlTask;

@@ -28,6 +28,7 @@
 
 #include <QByteArray>
 #include <QHash>
+#include <QMetaType>
 #include <QString>
 
 #include <cstddef> // for std::byte, etc
@@ -39,8 +40,8 @@
 /// this namespace is not specific to Bitcoin (Core), but applies to BCH as well.
 namespace BTC
 {
-    /// Used by the Storage and Controller subsystem to figure out what coin we are on (BCH vs BTC)
-    enum class Coin { Unknown = 0, BCH, BTC };
+    /// Used by the Storage and Controller subsystem to figure out what coin we are on (BCH vs BTC vs LTC)
+    enum class Coin { Unknown = 0, BCH, BTC, LTC };
 
     QString coinToName(Coin);
     Coin coinFromName(const QString &);
@@ -253,3 +254,5 @@ inline bool operator==(const bitcoin::uint256 &hash, const QByteArray &ba) noexc
 inline bool operator==(const QByteArray &ba, const bitcoin::uint256 &hash) noexcept { return hash == ba; }
 inline bool operator!=(const bitcoin::uint256 &hash, const QByteArray &ba) noexcept { return !(hash == ba); }
 inline bool operator!=(const QByteArray &ba, const bitcoin::uint256 &hash) noexcept { return !(hash == ba); }
+
+Q_DECLARE_METATYPE(BTC::Coin);

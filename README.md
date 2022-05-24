@@ -4,7 +4,7 @@
 [![Docker Build](https://github.com/cculianu/Fulcrum/actions/workflows/publish.yml/badge.svg)](https://github.com/cculianu/Fulcrum/actions/workflows/publish.yml)
 [![Copr build status](https://copr.fedorainfracloud.org/coprs/jonny/BitcoinCash/package/fulcrum/status_image/last_build.png)](https://copr.fedorainfracloud.org/coprs/jonny/BitcoinCash/package/fulcrum/)
 
-A fast & nimble SPV server for Bitcoin Cash & Bitcoin BTC.
+A fast & nimble SPV server for Bitcoin Cash, Bitcoin BTC, and Litecoin.
 
 #### Copyright
 (C) 2019-2022 Calin Culianu <calin.culianu@gmail.com>
@@ -19,7 +19,7 @@ GPLv3. See the included `LICENSE.txt` file or [visit gnu.org and read the licens
 - *Fast:* Written in 100% modern `C++17` using multi-threaded and asynchronous programming techniques.
 - *A drop-in replacement for ElectronX/ElectrumX:* Fulcrum is 100% protocol-level compatible with the [Electrum Cash 1.4.5 protocol](https://electrum-cash-protocol.readthedocs.io/en/latest/). Existing server admins should feel right at home with this software since installation and management of it is nearly identical to ElectronX/ElectrumX server.
 - *Cross-platform:* While this codebase was mainly developed and tested on MacOS, Windows and Linux, it should theoretically work on any modern OS (such as *BSD) that has Qt5 Core and Qt5 Networking available.
-- ***NEW!*** *Dual-coin:* Supports both BCH and BTC.
+- ***NEW!*** *Triple-coin:* Supports BCH, BTC and LTC.
 
 ### Requirements
 
@@ -27,9 +27,10 @@ GPLv3. See the included `LICENSE.txt` file or [visit gnu.org and read the licens
   - A supported bitcoin full node with its JSON-RPC service enabled, preferably running on the same machine.
     - *For **BCH***: Bitcoin Cash Node, Bitcoin Unlimited Cash, Flowee, and bchd have all been tested extensively and are known to work well with this software.
     - *For **BTC***: Bitcoin Core v0.17.0 or later.  No other full nodes are supported by this software for BTC.
+    - *For **LTC***: Litecoin Core v0.17.0 or later.  No other full nodes are supported by this software for LTC.
     - The node must have txindex enabled e.g. `txindex=1`.
     - The node must not be a pruning node.
-    - *Optional*: For best results, enable zmq for the "hasblock" topic using e.g. `zmqpubhashblock=tcp://0.0.0.0:8433` in your `bitcoin.conf` file (zmq is only available on: Core, BCHN, or BU 1.9.1+).
+    - *Optional*: For best results, enable zmq for the "hasblock" topic using e.g. `zmqpubhashblock=tcp://0.0.0.0:8433` in your `bitcoin.conf` file (zmq is only available on: Core, BCHN, BU 1.9.1+, or Litecoin Core).
   - *Recommended hardware*: Minimum 1GB RAM, 64-bit CPU, ~40GB disk space for mainnet BCH (slightly more for BTC). For best results, use an SSD rather than an HDD.
 - *For compiling*: 
   - `Qt Core` & `Qt Networking` libraries `5.12.5` or above (I use `5.15.2` myself).  Qt `5.12.4` (or earlier) is not supported.
