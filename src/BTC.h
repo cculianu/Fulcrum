@@ -83,18 +83,20 @@ namespace BTC
     template <typename BitcoinObject,
               /// NB: This in-place Deserialization does *NOT* work with CTransaction because if has const-fields. (use the non-in-place specialization instead)
               std::enable_if_t<!std::is_same_v<BitcoinObject, bitcoin::CTransaction>, int> = 0 >
-    void Deserialize(BitcoinObject &thing, const QByteArray &bytes, int pos = 0, bool allowSegWit = false)
+    void Deserialize(BitcoinObject &thing, const QByteArray &bytes, int pos = 0, bool allowSegWit = false, bool allowMW = false)
     {
-        const int version = bitcoin::PROTOCOL_VERSION | (allowSegWit ? bitcoin::SERIALIZE_TRANSACTION_USE_WITNESS : 0);
+        int version = bitcoin::PROTOCOL_VERSION;
+        if (allowSegWit) version |= bitcoin::SERIALIZE_TRANSACTION_USE_WITNESS;
+        if (allowMW) version |= bitcoin::SERIALIZE_TRANSACTION_USE_MWEB;
         bitcoin::GenericVectorReader<QByteArray> vr(bitcoin::SER_NETWORK, version, bytes, pos);
         thing.Unserialize(vr);
     }
     /// Convenience for above.  Create an instance of object and deserialize to it
     template <typename BitcoinObject>
-    BitcoinObject Deserialize(const QByteArray &bytes, int pos = 0, bool allowSegWit = false)
+    BitcoinObject Deserialize(const QByteArray &bytes, int pos = 0, bool allowSegWit = false, bool allowMW = false)
     {
         BitcoinObject ret;
-        Deserialize(ret, bytes, pos, allowSegWit);
+        Deserialize(ret, bytes, pos, allowSegWit, allowMW);
         return ret;
     }
 
@@ -109,20 +111,20 @@ namespace BTC
     inline constexpr bool is_block_or_tx_v = is_block_or_tx<BitcoinObject>::value;
 
     /// Template specialization for CTransaction which has const fields and works a little differently (impl. in BTC.cpp)
-    template <> bitcoin::CTransaction Deserialize(const QByteArray &, int pos, bool allowSegWit);
+    template <> bitcoin::CTransaction Deserialize(const QByteArray &, int pos, bool allowSegWit, bool allowMW);
 
     /// Convenience to deserialize segwit object (block or tx) (Core only)
     template <typename BitcoinObject>
     std::enable_if_t<is_block_or_tx_v<BitcoinObject>, BitcoinObject>
     /* BitcoinObject */ DeserializeSegWit(const QByteArray &ba, int pos = 0) {
-        return Deserialize<BitcoinObject>(ba, pos, true);
+        return Deserialize<BitcoinObject>(ba, pos, true, false);
     }
 
     /// Convenience to serialize segwit object (block or tx) (Core only)
     template <typename BitcoinObject>
     std::enable_if_t<is_block_or_tx_v<BitcoinObject>, QByteArray>
     /* QByteArray */ SerializeSegWit(const BitcoinObject &bo, int pos = -1) {
-        return Serialize<BitcoinObject>(bo, pos, true);
+        return Serialize<BitcoinObject>(bo, pos, true, false);
     }
 
     /// Helper -- returns the size of a block header. Should always be 80. Update this if that changes.

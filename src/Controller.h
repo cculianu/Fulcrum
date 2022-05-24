@@ -72,6 +72,9 @@ public:
         return c == BTC::Coin::BTC || c == BTC::Coin::LTC;
     }
 
+    /// Thread-safe, lock-free, returns true for LTC
+    bool isMimbleWimbleCoin() const { return coinType.load(std::memory_order_relaxed) == BTC::Coin::LTC; }
+
 signals:
     /// Emitted whenever bitcoind is detected to be up-to-date, and everything is synched up.
     /// note this is not emitted during regular polling, but only after `synchronizing` was emitted previously.

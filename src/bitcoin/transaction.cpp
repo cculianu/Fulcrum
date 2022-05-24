@@ -72,7 +72,7 @@ CMutableTransaction::CMutableTransaction()
     : nVersion(CTransaction::CURRENT_VERSION), nLockTime(0) {}
 CMutableTransaction::CMutableTransaction(const CTransaction &tx)
     : nVersion(tx.nVersion), vin(tx.vin), vout(tx.vout),
-      nLockTime(tx.nLockTime) {}
+      nLockTime(tx.nLockTime), mw_blob(tx.mw_blob) {}
 
 static uint256 ComputeCMutableTransactionHash(const CMutableTransaction &tx) {
     return SerializeHash(tx, SER_GETHASH, 0);
@@ -108,13 +108,13 @@ uint256 CTransaction::ComputeWitnessHash() const {
  */
 CTransaction::CTransaction()
     : nVersion(CTransaction::CURRENT_VERSION), vin(), vout(), nLockTime(0),
-      hash() {}
+      mw_blob{}, hash() {}
 CTransaction::CTransaction(const CMutableTransaction &tx)
     : nVersion(tx.nVersion), vin(tx.vin), vout(tx.vout),
-      nLockTime(tx.nLockTime), hash(ComputeHash()) {}
+      nLockTime(tx.nLockTime), mw_blob(tx.mw_blob), hash(ComputeHash()) {}
 CTransaction::CTransaction(CMutableTransaction &&tx)
     : nVersion(tx.nVersion), vin(std::move(tx.vin)), vout(std::move(tx.vout)),
-      nLockTime(tx.nLockTime), hash(ComputeHash()) {}
+      nLockTime(tx.nLockTime), mw_blob(std::move(tx.mw_blob)), hash(ComputeHash()) {}
 
 Amount CTransaction::GetValueOut() const {
     Amount nValueOut = Amount::zero();

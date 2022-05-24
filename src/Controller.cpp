@@ -209,7 +209,7 @@ void Controller::startup()
             bitcoin::CMutableTransaction tx;
             constexpr auto kErrLine2 = "Something is wrong with either BitcoinD or our ability to understand its RPC responses.";
             try {
-                BTC::Deserialize(tx, Util::ParseHexFast(resp.result().toByteArray()), 0, isSegWitCoin());
+                BTC::Deserialize(tx, Util::ParseHexFast(resp.result().toByteArray()), 0, isSegWitCoin(), isMimbleWimbleCoin());
             } catch (const std::exception &e) {
                 Error() << "Failed to deserialize tx #1 with txid " << hash.toHex() << ": " << e.what();
                 Error() << kErrLine2;
@@ -455,6 +455,7 @@ struct DownloadBlocksTask : public CtlTask
     std::atomic<size_t> nTx = 0, nIns = 0, nOuts = 0;
 
     const bool allowSegWit; ///< initted in c'tor. If true, deserialize blocks using the optional segwit extensons to the tx format.
+    const bool allowMimble; ///< like above, but if true we allow mimblewimble (litecoin)
 
     void do_get(unsigned height);
 
@@ -473,7 +474,8 @@ struct DownloadBlocksTask : public CtlTask
 
 DownloadBlocksTask::DownloadBlocksTask(unsigned from, unsigned to, unsigned stride, unsigned nClients, Controller *ctl_)
     : CtlTask(ctl_, QStringLiteral("Task.DL %1 -> %2").arg(from).arg(to)), from(from), to(to), stride(stride),
-      expectedCt(unsigned(nToDL(from, to, stride))), max_q(int(nClients)+1), allowSegWit(ctl_->isSegWitCoin())
+      expectedCt(unsigned(nToDL(from, to, stride))), max_q(int(nClients)+1),
+      allowSegWit(ctl_->isSegWitCoin()), allowMimble(ctl_->isMimbleWimbleCoin())
 {
     FatalAssert( (to >= from) && (ctl_) && (stride > 0), "Invalid params to DonloadBlocksTask c'tor, FIXME!");
 
@@ -522,19 +524,29 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
                     if (bool sizeOk = header.length() == HEADER_SIZE; sizeOk && (chkHash = BTC::HashRev(header)) == hash) {
                         PreProcessedBlockPtr ppb;
                         try {
-                            ppb = PreProcessedBlock::makeShared(bnum, size_t(rawblock.size()),
-                                                                BTC::Deserialize<bitcoin::CBlock>(rawblock, 0, allowSegWit));
+                            const auto cblock = BTC::Deserialize<bitcoin::CBlock>(rawblock, 0, allowSegWit, allowMimble);
+                            if (cblock.vtx.size() > 1 && cblock.vtx.back()->HasMimble()
+                                    && (cblock.vtx.back()->mw_blob->size() > 1 || cblock.vtx.back()->nLockTime != 0)) {
+                                // TODO REMOVE ME -- DEBUG ONLY
+                                Log(Log::BrightGreen) << "MimbleBlock -- hash: " << QString::fromStdString(cblock.GetHash().ToString())
+                                                      << ", nTx: " << cblock.vtx.size() << ", mweb size: " << cblock.vtx.back()->mw_blob->size()
+                                                      << ", nLockTime: " << cblock.vtx.back()->nLockTime
+                                                      << ", nIn: " << cblock.vtx.back()->vin.size()
+                                                      << ", nOut: " << cblock.vtx.back()->vout.size()
+                                                      << ", txHash: " << QString::fromStdString(cblock.vtx.back()->GetId().ToString());
+                            }
+                            ppb = PreProcessedBlock::makeShared(bnum, size_t(rawblock.size()), cblock);
                         } catch (const std::ios_base::failure &e) {
                             // deserialization error -- check if block is segwit and we are not segwit
                             if (!allowSegWit) {
                                 try {
-                                    const auto cblock = BTC::DeserializeSegWit<bitcoin::CBlock>(rawblock);
+                                    const auto cblock2 = BTC::DeserializeSegWit<bitcoin::CBlock>(rawblock);
                                     // If we get here the block deserialized ok as segwit but not ok as non-segwit.
                                     // We must assume that there is some misconfiguration e.g. the remote is BTC
                                     // but DB is not expecting BTC. This can happen if user is using non-Satoshi
                                     // bitcoind with BTC.  We only support /Satoshi... as uagent for BTC due to the
                                     // way that our auto-detection works.
-                                    if (std::any_of(cblock.vtx.begin(), cblock.vtx.end(),
+                                    if (std::any_of(cblock2.vtx.begin(), cblock2.vtx.end(),
                                                     [](const auto &tx){ return tx->HasWitness(); }))
                                         throw InternalError("SegWit block encountered for non-SegWit coin."
                                                             " If you wish to use BTC, please delete the datadir and"
