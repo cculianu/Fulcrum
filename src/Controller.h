@@ -201,7 +201,7 @@ private:
     /// from BitcoinDMgr, after servers are started.
     void zmqHashBlockStart();
 
-    /// Litecoin only: Ignor these txhashes from mempool (don't download them). This gets cleared each time
+    /// Litecoin only: Ignore these txhashes from mempool (don't download them). This gets cleared each time
     /// before the first SynchMempool after we receive a new block, then is persisted for all the SynchMempools
     /// for that block, until a new block arrives, then is cleared again.
     std::unordered_set<TxHash, HashHasher> mempoolIgnoreTxns;
