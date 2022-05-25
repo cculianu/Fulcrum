@@ -1094,7 +1094,7 @@ void SynchMempoolTask::doGetRawMempool()
                 // . <--- NB: at this point: affected and res.dspsTxsAffected are moved-from
             }
             if (UNLIKELY(droppedCt != expectedDropCt)) { // This invariant is checked to detect bugs.
-                Warning() << "Synch mempool expected to drop " << droppedTxs.size() << ", but in fact dropped "
+                Warning() << "Synch mempool expected to drop " << expectedDropCt << ", but in fact dropped "
                           << droppedCt << " -- retrying getrawmempool";
                 redoFromStart(); // set state such that the next process() call will do getrawmempool again unless redoCt exceeds kRedoCtMax, in which case errors out
                 return;
