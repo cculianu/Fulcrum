@@ -63,20 +63,22 @@ namespace BTC
     /// Specify from_pos=-1 for appending at the end.  Returns a reference to the passed-in buffer.  This is very fast
     /// and done in-place.
     template <typename BitcoinObject>
-    QByteArray & Serialize(QByteArray &buf, const BitcoinObject &thing, int from_pos = -1, bool allowSegWit = false)
+    QByteArray & Serialize(QByteArray &buf, const BitcoinObject &thing, int from_pos = -1, bool allowSegWit = false, bool allowMW = false)
     {
         if (from_pos < 0) from_pos = buf.size();
-        const int version = bitcoin::PROTOCOL_VERSION | (allowSegWit ? bitcoin::SERIALIZE_TRANSACTION_USE_WITNESS : 0);
+        int version = bitcoin::PROTOCOL_VERSION;
+        if (allowSegWit) version |=  bitcoin::SERIALIZE_TRANSACTION_USE_WITNESS;
+        if (allowMW) version |= bitcoin::SERIALIZE_TRANSACTION_USE_MWEB;
         bitcoin::GenericVectorWriter<QByteArray> vw(bitcoin::SER_NETWORK, version, buf, from_pos);
         thing.Serialize(vw);
         return buf;
     }
     /// Convenience for above -- serialize to a new QByteArray directly
     template <typename BitcoinObject>
-    QByteArray Serialize(const BitcoinObject &thing, bool allowSegWit = false)
+    QByteArray Serialize(const BitcoinObject &thing, bool allowSegWit = false, bool allowMW = false)
     {
         QByteArray ret;
-        Serialize(ret, thing, -1, allowSegWit);
+        Serialize(ret, thing, -1, allowSegWit, allowMW);
         return ret;
     }
     /// Deserialize to a pre-allocated bitcoin object such as bitcoin::CBlock, bitcoin::CBlockHeader, bitcoin::CMutableTransaction, etc

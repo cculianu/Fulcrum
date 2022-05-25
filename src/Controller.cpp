@@ -526,6 +526,23 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
                         try {
                             const auto cblock = BTC::Deserialize<bitcoin::CBlock>(rawblock, 0, allowSegWit, allowMimble);
                             ppb = PreProcessedBlock::makeShared(bnum, size_t(rawblock.size()), cblock);
+                            if (cblock.mw_blob) {
+                                const auto n = std::min(cblock.mw_blob->size(), size_t(60));
+                                Log(Log::Green) << "MimbleBlock: " << bnum << ", data_size: " << cblock.mw_blob->size()
+                                                << ", first " << n << " bytes: "
+                                                << Util::ToHexFast(QByteArray::fromRawData(reinterpret_cast<const char *>(cblock.mw_blob->data()), n));
+                                FatalAssert(rawblock == BTC::Serialize(cblock, allowSegWit, allowMimble),
+                                            "Block re-serialized to different data! FIXME!");
+                            }
+                            if (cblock.vtx.size() >= 2 && cblock.vtx.back()->mw_blob && cblock.vtx.back()->mw_blob->size() > 1) {
+                                const auto & tx = *cblock.vtx.back();
+                                const auto n = std::min(tx.mw_blob->size(), size_t(60));
+                                Log(Log::Cyan) << "MimbleTxn in block: " << bnum << ", hash: " << QString::fromStdString(tx.GetId().ToString())
+                                               << ", data_size: " << tx.mw_blob->size() << ", first " << n << " bytes: "
+                                               << Util::ToHexFast(QByteArray::fromRawData(reinterpret_cast<const char *>(tx.mw_blob->data()), n));
+                                FatalAssert(rawblock == BTC::Serialize(cblock, allowSegWit, allowMimble),
+                                            "Block re-serialized to different data! FIXME!");
+                            }
                         } catch (const std::ios_base::failure &e) {
                             // deserialization error -- check if block is segwit and we are not segwit
                             if (!allowSegWit) {

@@ -10,6 +10,8 @@
 #include "serialize.h"
 #include "uint256.h"
 
+#include <utility>
+
 namespace bitcoin {
 /**
  * Nodes collect new transactions into a block, hash them into a hash tree, and
@@ -64,6 +66,9 @@ public:
     // network and disk
     std::vector<CTransactionRef> vtx;
 
+    /// Litecoin only
+    litecoin_bits::MimbleBlobPtr mw_blob;
+
     // memory only
     mutable bool fChecked;
 
@@ -80,11 +85,23 @@ public:
     inline void SerializationOp(Stream &s, Operation ser_action) {
         READWRITEAS(CBlockHeader, *this);
         READWRITE(vtx);
+        // Litecoin only -- Deserialize the mimble-wimble blob at the end under certain conditions (post-activation).
+        if constexpr (ser_action.ForRead()) mw_blob.reset();
+        if (s.GetVersion() & SERIALIZE_TRANSACTION_USE_MWEB && vtx.size() >= 2 && vtx.back()->IsHogEx()) {
+            if constexpr (ser_action.ForRead()) {
+                mw_blob = litecoin_bits::EatBlockMimbleBlob(s);
+            } else {
+                if (mw_blob) {
+                    s.write(reinterpret_cast<const char *>(std::as_const(*mw_blob).data()), mw_blob->size());
+                }
+            }
+        }
     }
 
     void SetNull() {
         CBlockHeader::SetNull();
         vtx.clear();
+        mw_blob.reset();
         fChecked = false;
     }
 

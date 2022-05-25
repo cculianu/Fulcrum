@@ -308,7 +308,7 @@ inline void UnserializeTransaction(TxType &tx, Stream &s) {
         /* mweb data, Litecoin only.  We don't really process it, we just slurp up the binarry data for eventual
            serialization later. */
         flags ^= 0x8;
-        tx.mw_blob = litecoin_bits::EatMimbleBlob(tx, s);
+        tx.mw_blob = litecoin_bits::EatTxMimbleBlob(tx, s);
     }
 
     if (flags) {
@@ -471,6 +471,9 @@ public:
 
     /// Added by Calin to support Litecoin
     bool HasMimble() const { return bool(mw_blob); }
+    /// Litecoin only: "IsHogEx" is defined as an "IsNull" but present mimble blob. This tells the block
+    /// deserializer later to deserialize mimble block extention data at the end of the CBlock stream.
+    bool IsHogEx() const { return HasMimble() && mw_blob->size() == 1 && *mw_blob->data() == 0; }
 };
 
 /**
@@ -522,6 +525,9 @@ public:
 
     /// Added by Calin to support Litecoin
     bool HasMimble() const { return bool(mw_blob); }
+    /// Litecoin only: "IsHogEx" is defined as an "IsNull" but present mimble blob. This tells the block
+    /// deserializer later to deserialize mimble block extention data at the end of the CBlock stream.
+    bool IsHogEx() const { return HasMimble() && mw_blob->size() == 1 && *mw_blob->data() == 0; }
 
     std::string ToString() const { return CTransaction(*this).ToString(); }
 };
