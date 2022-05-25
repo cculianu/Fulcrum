@@ -269,10 +269,10 @@ namespace BTC
 
     QString Address::toLitecoinString() const
     {
-        std::optional<Byte> override;
+        std::optional<Byte> verByteOverride;
         if (_net == Net::MainNet && _kind == Kind::P2PKH)
-            override = Byte{48}; // p2psh on mainnet is the only one that differs for litecoin
-        return toString(true, override);
+            verByteOverride = Byte{48}; // p2psh on mainnet is the only one that differs for litecoin
+        return toString(true, verByteOverride);
     }
 
 
