@@ -916,7 +916,8 @@ void SynchMempoolTask::doDLNextTx()
                 DebugM("MimbleTxn in mempool:  hash: ", tx->hash.toHex(), ", IsWebOnly: ", int(ctx.IsMWEBOnly()),
                        ", vin,vout sizes: [", ctx.vin.size(), ", ", ctx.vout.size(), "]", ", data_size: ",
                        ctx.mw_blob->size(), ", first ", n, " bytes: ",
-                       Util::ToHexFast(QByteArray::fromRawData(reinterpret_cast<const char *>(ctx.mw_blob->data()), n)));
+                       Util::ToHexFast(QByteArray::fromRawData(reinterpret_cast<const char *>(ctx.mw_blob->data()), n)),
+                       ", nLockTime: ", ctx.nLockTime);
                 // Litecoin only -- discard MWEB-only txns (they are useless to us for now)
                 if (ctx.IsMWEBOnly()) {
                     // Ignore MWEB-only txns completely:
