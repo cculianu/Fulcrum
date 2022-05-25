@@ -268,6 +268,22 @@ void Controller::startup()
         conns += connect(this, &Controller::synchronizing, this, [this]{ stopTimer(feeHistogramTimer); });
     }
 
+    {
+        // Small utility function to add "ignore" txhashes coming from SynchMempoolTask to our somewhat-persistent
+        // mempoolIgnoreTxns set (this set is cleared each time the tip changes, but persists across mempool synchs
+        // for a given tip).
+        conns += connect(this, &Controller::ignoreMempoolTxn, this, [this] (const QByteArray & txHash) {
+            if (mempoolIgnoreTxns.insert(txHash).second)
+                DebugM("Added txHash: ", txHash.toHex(), " to mempool ignore set, set size now: ", mempoolIgnoreTxns.size());
+        });
+        // Another small utility function: clears the mempoolIgnoreTxns set whenever we see a new tip
+        conns += connect(this, &Controller::newHeader, this, [this] {
+            // we just got to a new tip, clear this (will be repopulated in SynchMempoolTask if need be)
+            if (!mempoolIgnoreTxns.empty()) DebugM("mempoolIgnoreTxns: ", mempoolIgnoreTxns.size(), Util::Pluralize(" txHash", mempoolIgnoreTxns.size()), " cleared");
+            mempoolIgnoreTxns.clear();
+        });
+    }
+
     start();  // start our thread
 }
 
@@ -635,9 +651,10 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
 /// flag for "has unconfirmed parent tx", and be done with it.  Everything else we can calculate.
 struct SynchMempoolTask : public CtlTask
 {
-    SynchMempoolTask(Controller *ctl_, std::shared_ptr<Storage> storage, const std::atomic_bool & notifyFlag)
+    SynchMempoolTask(Controller *ctl_, std::shared_ptr<Storage> storage, const std::atomic_bool & notifyFlag,
+                     const std::unordered_set<TxHash, HashHasher> & ignoreTxns)
         : CtlTask(ctl_, "SynchMempool"), storage(storage), notifyFlag(notifyFlag),
-          isSegWit(ctl_->isSegWitCoin()), isMimble(ctl_->isMimbleWimbleCoin())
+          txnIgnoreSet(ignoreTxns), isSegWit(ctl_->isSegWitCoin()), isMimble(ctl_->isMimbleWimbleCoin())
     {
         scriptHashesAffected.reserve(SubsMgr::kRecommendedPendingNotificationsReserveSize);
         txidsAffected.reserve(SubsMgr::kRecommendedPendingNotificationsReserveSize);
@@ -652,6 +669,7 @@ struct SynchMempoolTask : public CtlTask
     Mempool::NewTxsMap txsDownloaded;
     std::unordered_set<TxHash, HashHasher> txsFailedDownload, ///< set of tx's dropped due to RBF and/or mempool pressure as we were downloading
                                            txsIgnored; ///< Litecoin only -- MWEB-only txns we are completely ignoring.
+    const std::unordered_set<TxHash, HashHasher> txnIgnoreSet; ///< Litecoin only -- comes from Controller::mempoolIgnoreTxns
     unsigned expectedNumTxsDownloaded = 0;
     static constexpr int kRedoCtMax = 5; // if we have to retry this many times, error out.
     static constexpr unsigned kFailedDownloadMax = 50; // if we have more than this many consecutive failures on getrawtransaction, and no successes, abort with error.
@@ -930,6 +948,7 @@ void SynchMempoolTask::doDLNextTx()
                     // fast and lightweight, this is acceptable for now.
                     DebugM("Ignoring MWEB-only txn: ", tx->hash.toHex());
                     // mark this as "ignored"
+                    emit ctl->ignoreMempoolTxn(tx->hash); // tell Controller in a thread-safe way to remember this across SynchMempoolTask invocations
                     txsIgnored.insert(tx->hash);
                     txsWaitingForResponse.erase(tx->hash);
                     // keep going
@@ -1004,7 +1023,7 @@ void SynchMempoolTask::doDLNextTx()
 void SynchMempoolTask::doGetRawMempool()
 {
     submitRequest("getrawmempool", {false}, [this](const RPC::Message & resp){
-        std::size_t newCt = 0, droppedCt = 0;
+        std::size_t newCt = 0, droppedCt = 0, ignoredCt = 0;
         const QVariantList txidList = resp.result().toList();
         Mempool::TxHashSet droppedTxs;
         {
@@ -1026,13 +1045,20 @@ void SynchMempoolTask::doGetRawMempool()
                 droppedTxs.erase(it); // mark this tx as "not dropped" since it was in the mempool before and is in the mempool now.
                 if (TRACE) Debug() << "Existing mempool tx: " << hash.toHex();
             } else {
-                if (TRACE) Debug() << "New mempool tx: " << hash.toHex();
-                ++newCt;
-                Mempool::TxRef tx = std::make_shared<Mempool::Tx>();
-                tx->hashXs.max_load_factor(.9); // hopefully this will save some memory by expicitly setting max table size to 90%
-                tx->hash = hash;
-                // Note: we end up calculating the fee ourselves since I don't trust doubles here. I wish bitcoind would have returned sats.. :(
-                txsNeedingDownload[hash] = tx;
+                if (txnIgnoreSet.find(hash) != txnIgnoreSet.end()) {
+                    // suppressed txn (in ignore set)
+                    if (TRACE) Debug() << "Ignored mempool tx: " << hash.toHex();
+                    ++ignoredCt;
+                } else {
+                    // new txn
+                    if (TRACE) Debug() << "New mempool tx: " << hash.toHex();
+                    ++newCt;
+                    Mempool::TxRef tx = std::make_shared<Mempool::Tx>();
+                    tx->hashXs.max_load_factor(.9); // hopefully this will save some memory by expicitly setting max table size to 90%
+                    tx->hash = hash;
+                    // Note: we end up calculating the fee ourselves since I don't trust doubles here. I wish bitcoind would have returned sats.. :(
+                    txsNeedingDownload[hash] = tx;
+                }
             }
         }
         if (!droppedTxs.empty()) {
@@ -1076,7 +1102,8 @@ void SynchMempoolTask::doGetRawMempool()
         }
 
         if (newCt || droppedCt)
-            DebugM(resp.method, ": got reply with ", txidList.size(), " items, ", droppedCt, " dropped, ", newCt, " new");
+            DebugM(resp.method, ": got reply with ", txidList.size(), " items, ", ignoredCt, " ignored, ",
+                   droppedCt, " dropped, ", newCt, " new");
         isdlingtxs = true;
         expectedNumTxsDownloaded = unsigned(newCt);
         txsDownloaded.reserve(expectedNumTxsDownloaded);
@@ -1445,7 +1472,7 @@ void Controller::process(bool beSilentIfUpToDate)
         emit synchFailure();
     } else if (sm->state == State::SynchMempool) {
         // ...
-        auto task = newTask<SynchMempoolTask>(true, this, storage, masterNotifySubsFlag);
+        auto task = newTask<SynchMempoolTask>(true, this, storage, masterNotifySubsFlag, mempoolIgnoreTxns);
         task->threadObjectDebugLifecycle = Trace::isEnabled(); // suppress verbose lifecycle prints unless trace mode
         connect(task, &CtlTask::success, this, [this, task]{
             if (UNLIKELY(!sm || isTaskDeleted(task) || sm->state != State::SynchingMempool))

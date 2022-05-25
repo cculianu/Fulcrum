@@ -33,6 +33,7 @@
 #include <shared_mutex>
 #include <type_traits>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 class CtlTask;
@@ -99,6 +100,11 @@ signals:
 
     /// Emitted only iff the user specified --dump-sh on the CLI. This is emitted once the script hash dump has completed.
     void dumpScriptHashesComplete() const;
+
+    /// "Private" signal, not intended to be used by outside code.  Used internally to mark a txHash as to be "ignored"
+    /// and not downloaded from the mempool.  The private SynchMempoolTask emits this to add hashes to our mempoolIgnoreTxns
+    /// set in a thread-safe manner
+    void ignoreMempoolTxn(const QByteArray & txhash);
 
 protected:
     Stats stats() const override; // from StatsMixin
@@ -194,6 +200,12 @@ private:
     /// (re)starts listening for notifications from the zmqHashBlockNotifier; called if we received a valid zmq address
     /// from BitcoinDMgr, after servers are started.
     void zmqHashBlockStart();
+
+    /// Litecoin only: Ignored these txhashes from mempool (don't download them). This gets cleared each time
+    /// before the first SynchMempool after we receive a new block, then is persisted for all the SynchMempools
+    /// for that block, until a new block arrives, then is cleared again.
+    std::unordered_set<TxHash, HashHasher> mempoolIgnoreTxns;
+
 private slots:
     /// Stops the zmqHashBlockNotifier; called if we received an empty hashblock endpoint address from BitcoinDMgr or
     /// when all connections to bitcoind are lost
