@@ -641,7 +641,8 @@ struct SynchMempoolTask : public CtlTask
     bool isdlingtxs = false;
     Mempool::TxMap txsNeedingDownload, txsWaitingForResponse;
     Mempool::NewTxsMap txsDownloaded;
-    std::unordered_set<TxHash, HashHasher> txsFailedDownload; ///< set of tx's dropped due to RBF and/or mempool pressure as we were downloading
+    std::unordered_set<TxHash, HashHasher> txsFailedDownload, ///< set of tx's dropped due to RBF and/or mempool pressure as we were downloading
+                                           txsIgnored; ///< Litecoin only -- MWEB-only txns we are completely ignoring.
     unsigned expectedNumTxsDownloaded = 0;
     static constexpr int kRedoCtMax = 5; // if we have to retry this many times, error out.
     static constexpr unsigned kFailedDownloadMax = 50; // if we have more than this many consecutive failures on getrawtransaction, and no successes, abort with error.
@@ -660,6 +661,7 @@ struct SynchMempoolTask : public CtlTask
     void clear() {
         isdlingtxs = false;
         txsNeedingDownload.clear(); txsWaitingForResponse.clear(); txsDownloaded.clear(); txsFailedDownload.clear();
+        txsIgnored.clear();
         expectedNumTxsDownloaded = 0;
         lastProgress = 0.;
         // Note: we don't clear "scriptHashesAffected" intentionally in case we are retrying. We want to accumulate
@@ -710,7 +712,7 @@ void SynchMempoolTask::updateLastProgress(std::optional<double> val)
 {
     double p;
     if (val) p = *val;
-    else p = 0.5 * (txsDownloaded.size() + txsFailedDownload.size()) / std::max(double(expectedNumTxsDownloaded), 1.0);
+    else p = 0.5 * (txsDownloaded.size() + txsFailedDownload.size() + txsIgnored.size()) / std::max(double(expectedNumTxsDownloaded), 1.0);
     lastProgress = std::clamp(p, 0.0, 1.0);
 }
 
@@ -788,14 +790,14 @@ void Controller::printMempoolStatusToLog(size_t newSize, size_t numAddresses, do
 
 void SynchMempoolTask::processResults()
 {
-    if (const auto total = txsDownloaded.size() + txsFailedDownload.size(); total != expectedNumTxsDownloaded) {
+    if (const auto total = txsDownloaded.size() + txsFailedDownload.size() + txsIgnored.size(); total != expectedNumTxsDownloaded) {
         Error() << __PRETTY_FUNCTION__ << ": Expected to downlaod " << expectedNumTxsDownloaded << ", instead got "
                 << total << ". FIXME!";
         emit errored();
         return;
     } else if (total) {
-        DebugM("downloaded ", txsDownloaded.size(), " txs (failed: ", txsFailedDownload.size(), "), elapsed so far: ",
-               elapsed.secsStr(), " secs");
+        DebugM("downloaded ", txsDownloaded.size(), " txs (failed: ", txsFailedDownload.size(), ", ignored: ",
+               txsIgnored.size(), "), elapsed so far: ", elapsed.secsStr(), " secs");
     }
 
     // precache the confirmed spends with the lock held in shared mode, allowing for concurrency during this slow operation
@@ -917,8 +919,8 @@ void SynchMempoolTask::doDLNextTx()
                     // the codebase.  Since Litecoin is not our supreme focus right now, and since downloading txns is
                     // fast and lightweight, this is acceptable for now.
                     Debug() << "Ignoring MWEB-only txn: " << tx->hash.toHex();
-                    // mark this as a "failure"
-                    txsFailedDownload.insert(tx->hash);
+                    // mark this as "ignored"
+                    txsIgnored.insert(tx->hash);
                     txsWaitingForResponse.erase(tx->hash);
                     // keep going
                     updateLastProgress();
