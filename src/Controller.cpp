@@ -544,9 +544,12 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
                                                       << Util::ToHexFast(QByteArray::fromRawData(reinterpret_cast<const char *>(tx.mw_blob->data()), n));
                                     doSerChk = true;
                                 }
-                                if (doSerChk && rawblock != BTC::Serialize(cblock, allowSegWit, allowMimble)) {
-                                    Fatal() << "Block re-serialized to different data! FIXME!";
-                                    return;
+                                // check sanity (debug builds only)
+                                if constexpr (!isReleaseBuild()) {
+                                    if (doSerChk && rawblock != BTC::Serialize(cblock, allowSegWit, allowMimble)) {
+                                        Fatal() << "Block re-serialized to different data! FIXME!";
+                                        return;
+                                    }
                                 }
                             } // /Litecoin only
                         } catch (const std::ios_base::failure &e) {
@@ -907,15 +910,15 @@ void SynchMempoolTask::doDLNextTx()
         bitcoin::CMutableTransaction ctx;
         try {
             ctx = BTC::Deserialize<bitcoin::CMutableTransaction>(txdata, 0, isSegWit, isMimble, true /* nojunk */);
-            if (ctx.mw_blob && ctx.mw_blob->size() > 1) {
-                // Litecoin only
+            // Litecoin-only
+            if (isMimble && ctx.mw_blob && ctx.mw_blob->size() > 1) {
                 const auto n = std::min(size_t(60), ctx.mw_blob->size());
                 DebugM("MimbleTxn in mempool:  hash: ", tx->hash.toHex(), ", IsWebOnly: ", int(ctx.IsMWEBOnly()),
                        ", vin,vout sizes: [", ctx.vin.size(), ", ", ctx.vout.size(), "]", ", data_size: ",
                        ctx.mw_blob->size(), ", first ", n, " bytes: ",
                        Util::ToHexFast(QByteArray::fromRawData(reinterpret_cast<const char *>(ctx.mw_blob->data()), n)));
                 // Litecoin only -- discard MWEB-only txns (they are useless to us for now)
-                if (isMimble && ctx.IsMWEBOnly()) {
+                if (ctx.IsMWEBOnly()) {
                     // Ignore MWEB-only txns completely:
                     // - their txid is weird and hard to calculate for us (requires blake3 hasher, which we lack)
                     // - they contain empty vins and vouts, and since Electrum-LTC doesn't grok MWEB, we cannot do anything
