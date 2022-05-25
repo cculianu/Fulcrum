@@ -28,6 +28,7 @@ GPLv3. See the included `LICENSE.txt` file or [visit gnu.org and read the licens
     - *For **BCH***: Bitcoin Cash Node, Bitcoin Unlimited Cash, Flowee, and bchd have all been tested extensively and are known to work well with this software.
     - *For **BTC***: Bitcoin Core v0.17.0 or later.  No other full nodes are supported by this software for BTC.
     - *For **LTC***: Litecoin Core v0.17.0 or later.  No other full nodes are supported by this software for LTC.
+      - If using Litcoin Core v0.21.2 or above, your daemon is serializing data using mweb extensions. While Fulcrum understands this serialization format, your Electrum-LTC clients may not. You may run the server with `-rpcserialversion=1` to have your daemon return transactions in pre-mweb format which is understood by most Electrum-LTC clients.
     - The node must have txindex enabled e.g. `txindex=1`.
     - The node must not be a pruning node.
     - *Optional*: For best results, enable zmq for the "hasblock" topic using e.g. `zmqpubhashblock=tcp://0.0.0.0:8433` in your `bitcoin.conf` file (zmq is only available on: Core, BCHN, BU 1.9.1+, or Litecoin Core).

@@ -525,16 +525,6 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
                         PreProcessedBlockPtr ppb;
                         try {
                             const auto cblock = BTC::Deserialize<bitcoin::CBlock>(rawblock, 0, allowSegWit, allowMimble);
-                            if (cblock.vtx.size() > 1 && cblock.vtx.back()->HasMimble()
-                                    && (cblock.vtx.back()->mw_blob->size() > 1 || cblock.vtx.back()->nLockTime != 0)) {
-                                // TODO REMOVE ME -- DEBUG ONLY
-                                Log(Log::BrightGreen) << "MimbleBlock -- hash: " << QString::fromStdString(cblock.GetHash().ToString())
-                                                      << ", nTx: " << cblock.vtx.size() << ", mweb size: " << cblock.vtx.back()->mw_blob->size()
-                                                      << ", nLockTime: " << cblock.vtx.back()->nLockTime
-                                                      << ", nIn: " << cblock.vtx.back()->vin.size()
-                                                      << ", nOut: " << cblock.vtx.back()->vout.size()
-                                                      << ", txHash: " << QString::fromStdString(cblock.vtx.back()->GetId().ToString());
-                            }
                             ppb = PreProcessedBlock::makeShared(bnum, size_t(rawblock.size()), cblock);
                         } catch (const std::ios_base::failure &e) {
                             // deserialization error -- check if block is segwit and we are not segwit
