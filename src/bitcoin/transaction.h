@@ -10,9 +10,9 @@
 #include "amount.h"
 #include "feerate.h"
 #include "litecoin_bits.h"
-#include "txid.h"
 #include "script.h"
 #include "serialize.h"
+#include "txid.h"
 
 #ifdef USE_QT_IN_BITCOIN
 #include <QString>

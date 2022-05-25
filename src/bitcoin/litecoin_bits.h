@@ -19,7 +19,7 @@
 #pragma once
 
 // This file contains some helpers used mainly to grok litecoin
-// mimble-wimble data in transactions.
+// mimble-wimble data in transactions and blocks.
 
 #include "copyable_ptr.h"
 #include "serialize.h"
