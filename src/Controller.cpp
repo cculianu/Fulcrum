@@ -526,23 +526,29 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
                         try {
                             const auto cblock = BTC::Deserialize<bitcoin::CBlock>(rawblock, 0, allowSegWit, allowMimble, true /* nojunk */);
                             ppb = PreProcessedBlock::makeShared(bnum, size_t(rawblock.size()), cblock);
-                            if (cblock.mw_blob) {
-                                const auto n = std::min(cblock.mw_blob->size(), size_t(60));
-                                Log(Log::Green) << "MimbleBlock: " << bnum << ", data_size: " << cblock.mw_blob->size()
-                                                << ", first " << n << " bytes: "
-                                                << Util::ToHexFast(QByteArray::fromRawData(reinterpret_cast<const char *>(cblock.mw_blob->data()), n));
-                                FatalAssert(rawblock == BTC::Serialize(cblock, allowSegWit, allowMimble),
-                                            "Block re-serialized to different data! FIXME!");
-                            }
-                            if (cblock.vtx.size() >= 2 && cblock.vtx.back()->mw_blob && cblock.vtx.back()->mw_blob->size() > 1) {
-                                const auto & tx = *cblock.vtx.back();
-                                const auto n = std::min(tx.mw_blob->size(), size_t(60));
-                                Log(Log::Cyan) << "MimbleTxn in block: " << bnum << ", hash: " << QString::fromStdString(tx.GetId().ToString())
-                                               << ", data_size: " << tx.mw_blob->size() << ", first " << n << " bytes: "
-                                               << Util::ToHexFast(QByteArray::fromRawData(reinterpret_cast<const char *>(tx.mw_blob->data()), n));
-                                FatalAssert(rawblock == BTC::Serialize(cblock, allowSegWit, allowMimble),
-                                            "Block re-serialized to different data! FIXME!");
-                            }
+                            if (allowMimble && Debug::isEnabled()) {
+                                // Litecoin only
+                                bool doSerChk{};
+                                if (cblock.mw_blob) {
+                                    const auto n = std::min(cblock.mw_blob->size(), size_t(60));
+                                    Debug(Log::Green) << "MimbleBlock: " << bnum << ", data_size: " << cblock.mw_blob->size()
+                                                      << ", first " << n << " bytes: "
+                                                      << Util::ToHexFast(QByteArray::fromRawData(reinterpret_cast<const char *>(cblock.mw_blob->data()), n));
+                                    doSerChk = true;
+                                }
+                                if (cblock.vtx.size() >= 2 && cblock.vtx.back()->mw_blob && cblock.vtx.back()->mw_blob->size() > 1) {
+                                    const auto & tx = *cblock.vtx.back();
+                                    const auto n = std::min(tx.mw_blob->size(), size_t(60));
+                                    Debug(Log::Green) << "MimbleTxn in block: " << bnum << ", hash: " << QString::fromStdString(tx.GetId().ToString())
+                                                      << ", data_size: " << tx.mw_blob->size() << ", first " << n << " bytes: "
+                                                      << Util::ToHexFast(QByteArray::fromRawData(reinterpret_cast<const char *>(tx.mw_blob->data()), n));
+                                    doSerChk = true;
+                                }
+                                if (doSerChk && rawblock != BTC::Serialize(cblock, allowSegWit, allowMimble)) {
+                                    Fatal() << "Block re-serialized to different data! FIXME!";
+                                    return;
+                                }
+                            } // /Litecoin only
                         } catch (const std::ios_base::failure &e) {
                             // deserialization error -- check if block is segwit and we are not segwit
                             if (!allowSegWit) {
@@ -902,12 +908,12 @@ void SynchMempoolTask::doDLNextTx()
         try {
             ctx = BTC::Deserialize<bitcoin::CMutableTransaction>(txdata, 0, isSegWit, isMimble, true /* nojunk */);
             if (ctx.mw_blob && ctx.mw_blob->size() > 1) {
-                // Litecoin only -- TODO: delete the below Logging!!
+                // Litecoin only
                 const auto n = std::min(size_t(60), ctx.mw_blob->size());
-                Debug() << "MimbleTxn in mempool:  hash: " << tx->hash.toHex()
-                        << ", IsWebOnly: " << int(ctx.IsMWEBOnly()) << ", vin,vout sizes: [" << ctx.vin.size() << ", " << ctx.vout.size() << "]"
-                        << ", data_size: " << ctx.mw_blob->size() << ", first " << n << " bytes: "
-                        << Util::ToHexFast(QByteArray::fromRawData(reinterpret_cast<const char *>(ctx.mw_blob->data()), n));
+                DebugM("MimbleTxn in mempool:  hash: ", tx->hash.toHex(), ", IsWebOnly: ", int(ctx.IsMWEBOnly()),
+                       ", vin,vout sizes: [", ctx.vin.size(), ", ", ctx.vout.size(), "]", ", data_size: ",
+                       ctx.mw_blob->size(), ", first ", n, " bytes: ",
+                       Util::ToHexFast(QByteArray::fromRawData(reinterpret_cast<const char *>(ctx.mw_blob->data()), n)));
                 // Litecoin only -- discard MWEB-only txns (they are useless to us for now)
                 if (isMimble && ctx.IsMWEBOnly()) {
                     // Ignore MWEB-only txns completely:
@@ -918,7 +924,7 @@ void SynchMempoolTask::doDLNextTx()
                     // away immediately. We accept this in the interests of reducing Litecoin-specific code in
                     // the codebase.  Since Litecoin is not our supreme focus right now, and since downloading txns is
                     // fast and lightweight, this is acceptable for now.
-                    Debug() << "Ignoring MWEB-only txn: " << tx->hash.toHex();
+                    DebugM("Ignoring MWEB-only txn: ", tx->hash.toHex());
                     // mark this as "ignored"
                     txsIgnored.insert(tx->hash);
                     txsWaitingForResponse.erase(tx->hash);
