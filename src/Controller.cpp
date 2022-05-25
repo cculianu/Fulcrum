@@ -942,10 +942,6 @@ void SynchMempoolTask::doDLNextTx()
                     // - their txid is weird and hard to calculate for us (requires blake3 hasher, which we lack)
                     // - they contain empty vins and vouts, and since Electrum-LTC doesn't grok MWEB, we cannot do anything
                     //   with their spend info anyway.
-                    // NOTE: For now, this means we re-download the txn each time we poll mempool, only to throw it
-                    // away immediately. We accept this in the interests of reducing Litecoin-specific code in
-                    // the codebase.  Since Litecoin is not our supreme focus right now, and since downloading txns is
-                    // fast and lightweight, this is acceptable for now.
                     DebugM("Ignoring MWEB-only txn: ", tx->hash.toHex());
                     // mark this as "ignored"
                     emit ctl->ignoreMempoolTxn(tx->hash); // tell Controller in a thread-safe way to remember this across SynchMempoolTask invocations
