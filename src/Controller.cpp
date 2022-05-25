@@ -900,13 +900,31 @@ void SynchMempoolTask::doDLNextTx()
         try {
             ctx = BTC::Deserialize<bitcoin::CMutableTransaction>(txdata, 0, isSegWit, isMimble, true /* nojunk */);
             if (ctx.mw_blob && ctx.mw_blob->size() > 1) {
+                // Litecoin only -- TODO: delete the below Logging!!
                 const auto n = std::min(size_t(60), ctx.mw_blob->size());
-                const auto txid = ctx.GetId();
-                Log(Log::Cyan) << "MimbleTxn in mempool:  hash: " << QString::fromStdString(txid.ToString())
-                               << ", IsWebOnly: " << int(ctx.IsMWEBOnly()) << ", vin,vout sizes: [" << ctx.vin.size() << ", " << ctx.vout.size() << "]"
-                               << ", data_size: " << ctx.mw_blob->size() << ", first " << n << " bytes: "
-                               << Util::ToHexFast(QByteArray::fromRawData(reinterpret_cast<const char *>(ctx.mw_blob->data()), n));
-                FatalAssert(tx->hash == Util::reversedCopy(txid), "Tx hash mismatch! FIXME!");
+                Debug() << "MimbleTxn in mempool:  hash: " << tx->hash.toHex()
+                        << ", IsWebOnly: " << int(ctx.IsMWEBOnly()) << ", vin,vout sizes: [" << ctx.vin.size() << ", " << ctx.vout.size() << "]"
+                        << ", data_size: " << ctx.mw_blob->size() << ", first " << n << " bytes: "
+                        << Util::ToHexFast(QByteArray::fromRawData(reinterpret_cast<const char *>(ctx.mw_blob->data()), n));
+                // Litecoin only -- discard MWEB-only txns (they are useless to us for now)
+                if (isMimble && ctx.IsMWEBOnly()) {
+                    // Ignore MWEB-only txns completely:
+                    // - their txid is weird and hard to calculate for us (requires blake3 hasher, which we lack)
+                    // - they contain empty vins and vouts, and since Electrum-LTC doesn't grok MWEB, we cannot do anything
+                    //   with their spend info anyway.
+                    // NOTE: For now, this means we re-download the txn each time we poll mempool, only to throw it
+                    // away immediately. We accept this in the interests of reducing Litecoin-specific code in
+                    // the codebase.  Since Litecoin is not our supreme focus right now, and since downloading txns is
+                    // fast and lightweight, this is acceptable for now.
+                    Debug() << "Ignoring MWEB-only txn: " << tx->hash.toHex();
+                    // mark this as a "failure"
+                    txsFailedDownload.insert(tx->hash);
+                    txsWaitingForResponse.erase(tx->hash);
+                    // keep going
+                    updateLastProgress();
+                    AGAIN();
+                    return;
+                }
             }
         } catch (const std::exception &e) {
             Error() << "Error deserializing tx: " << tx->hash.toHex() << ", exception: " << e.what();
