@@ -628,7 +628,7 @@ struct SynchMempoolTask : public CtlTask
 {
     SynchMempoolTask(Controller *ctl_, std::shared_ptr<Storage> storage, const std::atomic_bool & notifyFlag)
         : CtlTask(ctl_, "SynchMempool"), storage(storage), notifyFlag(notifyFlag),
-          isSegWit(ctl_->isSegWitCoin())
+          isSegWit(ctl_->isSegWitCoin()), isMimble(ctl_->isMimbleWimbleCoin())
     {
         scriptHashesAffected.reserve(SubsMgr::kRecommendedPendingNotificationsReserveSize);
         txidsAffected.reserve(SubsMgr::kRecommendedPendingNotificationsReserveSize);
@@ -648,6 +648,7 @@ struct SynchMempoolTask : public CtlTask
     int redoCt = 0;
     const bool TRACE = Trace::isEnabled(); // set this to true to print more debug
     const bool isSegWit; ///< initted in c'tor. If true, deserialize tx's using the optional segwit extensons to the tx format.
+    const bool isMimble; ///< initted in c'tor. If true, deserialize tx's using the optional mimble-wimble extensons to the tx format.
 
     /// The scriptHashes that were affected by this refresh/synch cycle. Used for notifications.
     std::unordered_set<HashX, HashHasher> scriptHashesAffected;
@@ -897,7 +898,16 @@ void SynchMempoolTask::doDLNextTx()
         // deserialize tx, catching any deser errors
         bitcoin::CMutableTransaction ctx;
         try {
-            ctx = BTC::Deserialize<bitcoin::CMutableTransaction>(txdata, 0, isSegWit);
+            ctx = BTC::Deserialize<bitcoin::CMutableTransaction>(txdata, 0, isSegWit, isMimble);
+            if (ctx.mw_blob && ctx.mw_blob->size() > 1) {
+                const auto n = std::min(size_t(60), ctx.mw_blob->size());
+                const auto txid = ctx.GetId();
+                Log(Log::Cyan) << "MimbleTxn in mempool:  hash: " << QString::fromStdString(txid.ToString())
+                               << ", data_size: " << ctx.mw_blob->size() << ", first " << n << " bytes: "
+                               << Util::ToHexFast(QByteArray::fromRawData(reinterpret_cast<const char *>(ctx.mw_blob->data()), n));
+                FatalAssert(tx->hash == QByteArray::fromRawData(reinterpret_cast<const char *>(txid.data()), txid.size()),
+                            "Tx hash mismatch! FIXME!");
+            }
         } catch (const std::exception &e) {
             Error() << "Error deserializing tx: " << tx->hash.toHex() << ", exception: " << e.what();
             emit errored();
