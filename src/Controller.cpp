@@ -524,7 +524,7 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
                     if (bool sizeOk = header.length() == HEADER_SIZE; sizeOk && (chkHash = BTC::HashRev(header)) == hash) {
                         PreProcessedBlockPtr ppb;
                         try {
-                            const auto cblock = BTC::Deserialize<bitcoin::CBlock>(rawblock, 0, allowSegWit, allowMimble);
+                            const auto cblock = BTC::Deserialize<bitcoin::CBlock>(rawblock, 0, allowSegWit, allowMimble, true /* nojunk */);
                             ppb = PreProcessedBlock::makeShared(bnum, size_t(rawblock.size()), cblock);
                             if (cblock.mw_blob) {
                                 const auto n = std::min(cblock.mw_blob->size(), size_t(60));
@@ -898,15 +898,14 @@ void SynchMempoolTask::doDLNextTx()
         // deserialize tx, catching any deser errors
         bitcoin::CMutableTransaction ctx;
         try {
-            ctx = BTC::Deserialize<bitcoin::CMutableTransaction>(txdata, 0, isSegWit, isMimble);
+            ctx = BTC::Deserialize<bitcoin::CMutableTransaction>(txdata, 0, isSegWit, isMimble, true /* nojunk */);
             if (ctx.mw_blob && ctx.mw_blob->size() > 1) {
                 const auto n = std::min(size_t(60), ctx.mw_blob->size());
                 const auto txid = ctx.GetId();
                 Log(Log::Cyan) << "MimbleTxn in mempool:  hash: " << QString::fromStdString(txid.ToString())
                                << ", data_size: " << ctx.mw_blob->size() << ", first " << n << " bytes: "
                                << Util::ToHexFast(QByteArray::fromRawData(reinterpret_cast<const char *>(ctx.mw_blob->data()), n));
-                FatalAssert(tx->hash == QByteArray::fromRawData(reinterpret_cast<const char *>(txid.data()), txid.size()),
-                            "Tx hash mismatch! FIXME!");
+                FatalAssert(tx->hash == Util::reversedCopy(txid), "Tx hash mismatch! FIXME!");
             }
         } catch (const std::exception &e) {
             Error() << "Error deserializing tx: " << tx->hash.toHex() << ", exception: " << e.what();
