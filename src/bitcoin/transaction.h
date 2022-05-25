@@ -474,6 +474,7 @@ public:
     /// Litecoin only: "IsHogEx" is defined as an "IsNull" but present mimble blob. This tells the block
     /// deserializer later to deserialize mimble block extention data at the end of the CBlock stream.
     bool IsHogEx() const { return HasMimble() && mw_blob->size() == 1 && *mw_blob->data() == 0; }
+    bool IsMWEBOnly() const { return HasMimble() && mw_blob->size() > 1 && vin.empty() && vout.empty(); }
 };
 
 /**
@@ -528,6 +529,7 @@ public:
     /// Litecoin only: "IsHogEx" is defined as an "IsNull" but present mimble blob. This tells the block
     /// deserializer later to deserialize mimble block extention data at the end of the CBlock stream.
     bool IsHogEx() const { return HasMimble() && mw_blob->size() == 1 && *mw_blob->data() == 0; }
+    bool IsMWEBOnly() const { return HasMimble() && mw_blob->size() > 1 && vin.empty() && vout.empty(); }
 
     std::string ToString() const { return CTransaction(*this).ToString(); }
 };

@@ -903,6 +903,7 @@ void SynchMempoolTask::doDLNextTx()
                 const auto n = std::min(size_t(60), ctx.mw_blob->size());
                 const auto txid = ctx.GetId();
                 Log(Log::Cyan) << "MimbleTxn in mempool:  hash: " << QString::fromStdString(txid.ToString())
+                               << ", IsWebOnly: " << int(ctx.IsMWEBOnly()) << ", vin,vout sizes: [" << ctx.vin.size() << ", " << ctx.vout.size() << "]"
                                << ", data_size: " << ctx.mw_blob->size() << ", first " << n << " bytes: "
                                << Util::ToHexFast(QByteArray::fromRawData(reinterpret_cast<const char *>(ctx.mw_blob->data()), n));
                 FatalAssert(tx->hash == Util::reversedCopy(txid), "Tx hash mismatch! FIXME!");
