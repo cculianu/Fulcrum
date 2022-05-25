@@ -1994,7 +1994,7 @@ void Controller::zmqHashBlockStop()
 }
 
 // --- Debug dump support
-void Controller::dumpScriptHashes(const QString &fileName) const
+void Controller::dumpScriptHashes(const QString &fileName)
 {
     if (!storage)
         throw InternalError("Dump: Storage is not started");

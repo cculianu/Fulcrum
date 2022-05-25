@@ -99,7 +99,7 @@ signals:
     void putBlock(CtlTask *sender, PreProcessedBlockPtr);
 
     /// Emitted only iff the user specified --dump-sh on the CLI. This is emitted once the script hash dump has completed.
-    void dumpScriptHashesComplete() const;
+    void dumpScriptHashesComplete();
 
     /// "Private" signal, not intended to be used by outside code.  Used internally to mark a txHash as to be "ignored"
     /// and not downloaded from the mempool.  The private SynchMempoolTask emits this to add hashes to our mempoolIgnoreTxns
@@ -125,7 +125,7 @@ protected slots:
 
     /// Slot for the BitcoinDMgr::bitcoinCoreDetection. This is compared to this->coinType and if there is a
     /// mismatch there, we may end up aborting the app and logging an error in this slot.
-    void on_coinDetected(BTC::Coin); //< NB: Connected via DirectConnection an may run in the BitcoinDMgr thread!
+    void on_coinDetected(BTC::Coin); //< NB: Connected via DirectConnection and may run in the BitcoinDMgr thread!
 
 private:
     friend class CtlTask;
@@ -185,7 +185,7 @@ private:
     void printMempoolStatusToLog() const;
 
     /// If --dump-sh was specified on CLI, this will execute at startup() time right after storage has been loaded. May throw.
-    void dumpScriptHashes(const QString &fileName) const;
+    void dumpScriptHashes(const QString &fileName);
 
     /// Will be nullptr if zmq disabled or bitcoind lacks a "hashblock" endpoint
     std::unique_ptr<ZmqSubNotifier> zmqHashBlockNotifier;
