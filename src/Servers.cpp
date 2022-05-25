@@ -924,15 +924,17 @@ void Server::rpc_server_add_peer(Client *c, const RPC::BatchId batchId, const RP
 namespace {
     // In case the donation address was default, we transform it correctly to the correct network in the hopes
     // that the author of this software (me) might get some BTC and/or BCH appropriately.
-    QString transformDefaultDonationAddressToBTCOrBCH(const Options &options, bool isBTC)
+    QString transformDefaultDonationAddressToBTCOrBCH(const Options &options, bool isBTC, bool isLTC)
     {
         QString ret = options.donationAddress;
         if (!options.isDefaultDonationAddress) return ret; // do nothing if it wasn't the default.
         if (!ret.isEmpty()) {
             try {
                 const BTC::Address addr(ret);
-                if (addr.isValid())
-                    ret = addr.toString(isBTC /* if BTC, then legacy, otherwise cashaddr */);
+                if (addr.isValid()) {
+                    if (isLTC) ret = addr.toLitecoinString();
+                    else ret = addr.toString(isBTC /* if BTC, then legacy, otherwise cashaddr */);
+                }
             } catch (...) {}
         }
         return ret;
@@ -999,7 +1001,7 @@ void Server::rpc_server_banner(Client *c, const RPC::BatchId batchId, const RPC:
         const auto bitcoinDInfo = bitcoindmgr->getBitcoinDInfo();
         generic_do_async(c, batchId, m.id,
                         [bannerFile,
-                         donationAddress = transformDefaultDonationAddressToBTCOrBCH(*options, isNonBCH()),
+                         donationAddress = transformDefaultDonationAddressToBTCOrBCH(*options, isNonBCH(), isLTC()),
                          daemonVersion = bitcoinDInfo.version,
                          daemonSubversion = bitcoinDInfo.subversion] {
                 QVariant ret;
@@ -1022,7 +1024,7 @@ void Server::rpc_server_banner(Client *c, const RPC::BatchId batchId, const RPC:
 }
 void Server::rpc_server_donation_address(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
-    emit c->sendResult(batchId, m.id, transformDefaultDonationAddressToBTCOrBCH(*options, isNonBCH()));
+    emit c->sendResult(batchId, m.id, transformDefaultDonationAddressToBTCOrBCH(*options, isNonBCH(), isLTC()));
 }
 /* static */
 QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const QByteArray &genesisHash, const Options &opts, bool dsproof)

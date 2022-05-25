@@ -307,6 +307,7 @@ protected:
     BTC::Coin coin = BTC::Coin::Unknown;
     /// If true we are on the BTC or LTC chains.
     bool isNonBCH() const { return coin != BTC::Coin::BCH; }
+    bool isLTC() const { return coin == BTC::Coin::LTC; }
 };
 
 /// Implements the ElectrumX/ElectronX JSON-RPC protocol, version 1.4.4.

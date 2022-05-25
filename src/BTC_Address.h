@@ -31,6 +31,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <optional>
 #include <vector>
 
 namespace BTC {
@@ -85,13 +86,16 @@ namespace BTC {
 
         /// If isValid, returns the address as a string (either cash address w/ prefix, or legacy address string).
         /// Returns an empty QString if !isValid.
-        QString toString(bool legacy=false) const;
+        QString toString(bool legacy=false) const { return toString(legacy, std::nullopt); }
 
         /// If isValid, returns the address as a cash address string, without the bitcoincash: or bchtest:, etc, prefix.
         QString toShortString() const;
 
         /// Alias for toString(true)
         QString toLegacyString() const { return toString(true); }
+
+        /// Hack to support converting any address to LTC TODO: Proper support for LTC addresses
+        QString toLitecoinString() const;
 
         Address & operator=(const QString &legacyOrCash) { return (*this = Address::fromString(legacyOrCash)); }
         Address & operator=(const char *legacyOrCash) { return (*this = QString(legacyOrCash)); }
@@ -124,6 +128,9 @@ namespace BTC {
         QByteArray h160;
         Kind _kind = Kind::Invalid;
         bool autosetKind();
+
+        QString toString(bool legacy, std::optional<Byte> verByteOverride) const;
+
 #ifdef ENABLE_TESTS
     public:
         static bool test();
