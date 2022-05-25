@@ -540,7 +540,7 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
                     if (bool sizeOk = header.length() == HEADER_SIZE; sizeOk && (chkHash = BTC::HashRev(header)) == hash) {
                         PreProcessedBlockPtr ppb;
                         try {
-                            const auto cblock = BTC::Deserialize<bitcoin::CBlock>(rawblock, 0, allowSegWit, allowMimble, true /* nojunk */);
+                            const auto cblock = BTC::Deserialize<bitcoin::CBlock>(rawblock, 0, allowSegWit, allowMimble, allowMimble /* thorw if junk at end if Litecoin (catch deser. bugs) */);
                             ppb = PreProcessedBlock::makeShared(bnum, size_t(rawblock.size()), cblock);
                             if (allowMimble && Debug::isEnabled()) {
                                 // Litecoin only
