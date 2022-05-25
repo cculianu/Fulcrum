@@ -547,9 +547,9 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
                                 bool doSerChk{};
                                 if (cblock.mw_blob) {
                                     const auto n = std::min(cblock.mw_blob->size(), size_t(60));
-                                    Debug(Log::Green) << "MimbleBlock: " << bnum << ", data_size: " << cblock.mw_blob->size()
-                                                      << ", first " << n << " bytes: "
-                                                      << Util::ToHexFast(QByteArray::fromRawData(reinterpret_cast<const char *>(cblock.mw_blob->data()), n));
+                                    Debug() << "MimbleBlock: " << bnum << ", data_size: " << cblock.mw_blob->size()
+                                            << ", first " << n << " bytes: "
+                                            << Util::ToHexFast(QByteArray::fromRawData(reinterpret_cast<const char *>(cblock.mw_blob->data()), n));
                                     doSerChk = true;
                                 }
                                 if (cblock.vtx.size() >= 2 && cblock.vtx.back()->mw_blob && cblock.vtx.back()->mw_blob->size() > 1) {
