@@ -547,14 +547,16 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
                                 bool doSerChk{};
                                 if (cblock.mw_blob) {
                                     const auto n = std::min(cblock.mw_blob->size(), size_t(60));
-                                    Debug() << "MimbleBlock: " << bnum << ", data_size: " << cblock.mw_blob->size()
-                                            << ", first " << n << " bytes: "
-                                            << Util::ToHexFast(QByteArray::fromRawData(reinterpret_cast<const char *>(cblock.mw_blob->data()), n));
+                                    TraceM("MimbleBlock: ", bnum, ", data_size: ", cblock.mw_blob->size(),
+                                           ", first ", n, " bytes: ",
+                                           Util::ToHexFast(QByteArray::fromRawData(reinterpret_cast<const char *>(cblock.mw_blob->data()), n)));
                                     doSerChk = true;
                                 }
                                 if (cblock.vtx.size() >= 2 && cblock.vtx.back()->mw_blob && cblock.vtx.back()->mw_blob->size() > 1) {
                                     const auto & tx = *cblock.vtx.back();
                                     const auto n = std::min(tx.mw_blob->size(), size_t(60));
+                                    // We debug out in Green here to catch this very rare thing which I have never seen before
+                                    // to see if it's possible. Someday can demote this to Trace.
                                     Debug(Log::Green) << "MimbleTxn in block: " << bnum << ", hash: " << QString::fromStdString(tx.GetId().ToString())
                                                       << ", data_size: " << tx.mw_blob->size() << ", first " << n << " bytes: "
                                                       << Util::ToHexFast(QByteArray::fromRawData(reinterpret_cast<const char *>(tx.mw_blob->data()), n));
