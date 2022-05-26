@@ -154,7 +154,7 @@ namespace litecoin_bits {
         }; // struct Eater
     } // namespace detail
 
-    /// Eat the mimblewimble data from stream s for a tx, returning a byte blob (as an MwTxBlobPtr)
+    /// Eat the mimblewimble data from stream s for a tx, returning a byte blob (as a MimbleBlobPtr)
     template <typename TxType, typename Stream>
     MimbleBlobPtr EatTxMimbleBlob(const TxType &tx, Stream &s) {
         MimbleBlobPtr ret = MimbleBlobPtr::Make();
