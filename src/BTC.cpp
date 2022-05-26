@@ -72,11 +72,17 @@ namespace BTC
 
 
     /// specialization for CTransaction which works differently
-    template <> bitcoin::CTransaction Deserialize(const QByteArray &bytes, int pos, bool allowSegWit)
+    template <> bitcoin::CTransaction Deserialize(const QByteArray &bytes, int pos, bool allowSegWit, bool allowMW,
+                                                  bool noJunkAtEnd)
     {
-        const int version = bitcoin::PROTOCOL_VERSION | (allowSegWit ? bitcoin::SERIALIZE_TRANSACTION_USE_WITNESS : 0);
+        int version = bitcoin::PROTOCOL_VERSION;
+        if (allowSegWit) version |= bitcoin::SERIALIZE_TRANSACTION_USE_WITNESS;
+        if (allowMW) version |= bitcoin::SERIALIZE_TRANSACTION_USE_MWEB;
         bitcoin::GenericVectorReader<QByteArray> vr(bitcoin::SER_NETWORK, version, bytes, pos);
-        return bitcoin::CTransaction(bitcoin::deserialize, vr);
+        auto ret = bitcoin::CTransaction(bitcoin::deserialize, vr);
+        if (noJunkAtEnd && !vr.empty())
+            throw std::ios_base::failure("Got unprocessed bytes at the end when deserializeing a bitcoin object");
+        return ret;
     }
 
     QByteArray Hash(const QByteArray &b, bool once)
@@ -167,14 +173,14 @@ namespace BTC
             { RegTestNet, "regtest"},
         }};
         const QMap<QString, Net> nameNetMap = {{
-            {"main",     MainNet},     // BCHN, BU, ABC, Core
+            {"main",     MainNet},     // BCHN, BU, ABC, Core, LitecoinCore
             {"mainnet",  MainNet},     // bchd
-            {"test",     TestNet},     // BCHN, BU, ABC, Core
+            {"test",     TestNet},     // BCHN, BU, ABC, Core, LitecoinCore
             {"test4",    TestNet4},    // BCHN, BU
             {"scale",    ScaleNet},    // BCHN, BU
             {"testnet3", TestNet},     // bchd
             {"testnet4", TestNet4},    // possible future bchd
-            {"regtest",  RegTestNet},  // BCHN, BU, ABC, bchd
+            {"regtest",  RegTestNet},  // BCHN, BU, ABC, bchd, Core, LitecoinCore
             {"signet",   TestNet},     // Core only
         }};
         const QString invalidNetName = "invalid";
@@ -188,12 +194,13 @@ namespace BTC
         return nameNetMap.value(name, Net::Invalid /* default if not found */);
     }
 
-    namespace { const QString coinNameBCH{"BCH"}, coinNameBTC{"BTC"}; }
+    namespace { const QString coinNameBCH{"BCH"}, coinNameBTC{"BTC"}, coinNameLTC{"LTC"}; }
     QString coinToName(Coin c) {
         QString ret; // for NRVO
         switch (c) {
         case Coin::BCH: ret = coinNameBCH; break;
         case Coin::BTC: ret = coinNameBTC; break;
+        case Coin::LTC: ret = coinNameLTC; break;
         case Coin::Unknown: break;
         }
         return ret;
@@ -201,6 +208,7 @@ namespace BTC
     Coin coinFromName(const QString &s) {
         if (s == coinNameBCH) return Coin::BCH;
         if (s == coinNameBTC) return Coin::BTC;
+        if (s == coinNameLTC) return Coin::LTC;
         return Coin::Unknown;
     }
 

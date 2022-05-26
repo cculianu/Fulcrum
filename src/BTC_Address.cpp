@@ -238,13 +238,13 @@ namespace BTC
     /// if isValid:  Returns the legacy address string, base58 encoded if legacy==true,
     ///              otherwise returns the cash address with prefix
     /// if !isValid: Returns the empty string.
-    QString Address::toString(bool legacy) const {
+    QString Address::toString(bool legacy, std::optional<Byte> verByteOverride) const {
         QString ret;
         if (isValid()) {
             if (legacy) {
                 std::vector<Byte> vch;
                 vch.reserve(1 + size_t(h160.size()));
-                vch.push_back(verByte);
+                vch.push_back(verByteOverride.value_or(verByte));
                 vch.insert(vch.end(), h160.begin(), h160.end());
                 ret = QString::fromStdString(bitcoin::EncodeBase58Check(vch));
             } else {
@@ -266,6 +266,15 @@ namespace BTC
         }
         return ret;
     }
+
+    QString Address::toLitecoinString() const
+    {
+        std::optional<Byte> verByteOverride;
+        if (_net == Net::MainNet && _kind == Kind::P2PKH)
+            verByteOverride = Byte{48}; // p2psh on mainnet is the only one that differs for litecoin
+        return toString(true, verByteOverride);
+    }
+
 
     QString Address::toShortString() const
     {

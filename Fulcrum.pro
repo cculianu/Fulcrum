@@ -418,6 +418,7 @@ HEADERS += \
     bitcoin/cashaddr.h \
     bitcoin/cashaddrenc.h \
     bitcoin/compat.h \
+    bitcoin/copyable_ptr.h \
     bitcoin/crypto/byteswap.h \
     bitcoin/crypto/endian.h \
     bitcoin/crypto/aes.h \
@@ -433,6 +434,7 @@ HEADERS += \
     bitcoin/feerate.h \
     bitcoin/hash.h \
     bitcoin/interpreter.h \
+    bitcoin/litecoin_bits.h \
     bitcoin/prevector.h \
     bitcoin/pubkey.h \
     bitcoin/reverse_iterator.h \

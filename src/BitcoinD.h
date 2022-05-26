@@ -50,6 +50,7 @@ struct BitcoinDInfo {
     bool isBchd = false; ///< true if remote bitcoind subversion is: /bchd:...
     bool isZeroArgEstimateFee = false; ///< true if remote bitcoind expects 0 argument "estimatefee" RPC.
     bool isCore = false; ///< true if we are actually connected to /Satoshi.. node (Bitcoin Core)
+    bool isLTC = false; ///< true if we are actually connected to /LitecoinCore.. node (Litecoin)
     bool isBU = false; ///< true if subversion string starts with "/BCH Unlimited:"
     bool lacksGetZmqNotifications = false; ///< true if bchd or BU < 1.9.1.0, or if we got an RPC error the last time we queried
     bool hasDSProofRPC = false; ///< true if the RPC query to `getdsprooflist` didn't return an error.
@@ -119,8 +120,8 @@ public:
     /// Thread-safe.  Convenient method to avoid an extra copy. Returns getBitcoinDInfo().isZeroArgEstimateFee
     bool isZeroArgEstimateFee() const;
 
-    /// Thread-safe.  Convenient method to avoid an extra copy. Returns getBitcoinDInfo().isCore
-    bool isBitcoinCore() const;
+    /// Thread-safe.  Convenient method to avoid an extra copy. Returns true iff getBitcoinDInfo().isCore || getBitcoinDInfo().isLTC.
+    bool isCoreLike() const;
 
     /// Thread-safe.  Convenient method to avoid an extra copy. Returns getBitcoinDInfo().version
     Version getBitcoinDVersion() const;
@@ -139,8 +140,9 @@ signals:
     void inWarmUp(const QString &);
 
     /// Emitted as soon as we read the bitcoind subversion. If it starts with /Satoshi:.., we emit this
-    /// with true, Otherwise, we emit it with false.
-    void bitcoinCoreDetection(bool);
+    /// with Coin::BTC, if subversion is /LitecoinCore... we emit Coin::LTC, otherwise, we emit it with
+    /// Coin::BCH.
+    void coinDetected(BTC::Coin);
 
     /// Emitted whenever the BitcoinDZmqNotifications change (this is also emitted the first time we retrieve them
     /// via getzmqnotifications). Note: this is never emitted if we are compiled without zmq support.

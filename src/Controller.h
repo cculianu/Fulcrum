@@ -33,6 +33,7 @@
 #include <shared_mutex>
 #include <type_traits>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 class CtlTask;
@@ -66,8 +67,14 @@ public:
     /// for debug printing when it receives new mempool tx's.
     static void printMempoolStatusToLog(size_t newSize, size_t numAddresses, double msec, bool useDebugLogger, bool force = false);
 
-    /// Thread-safe, lock-free
-    bool isCoinBTC() const { return coinType.load(std::memory_order_relaxed) == BTC::Coin::BTC; }
+    /// Thread-safe, lock-free, returns true for BTC and LTC
+    bool isSegWitCoin() const {
+        auto const c = coinType.load(std::memory_order_relaxed);
+        return c == BTC::Coin::BTC || c == BTC::Coin::LTC;
+    }
+
+    /// Thread-safe, lock-free, returns true for LTC
+    bool isMimbleWimbleCoin() const { return coinType.load(std::memory_order_relaxed) == BTC::Coin::LTC; }
 
 signals:
     /// Emitted whenever bitcoind is detected to be up-to-date, and everything is synched up.
@@ -92,7 +99,12 @@ signals:
     void putBlock(CtlTask *sender, PreProcessedBlockPtr);
 
     /// Emitted only iff the user specified --dump-sh on the CLI. This is emitted once the script hash dump has completed.
-    void dumpScriptHashesComplete() const;
+    void dumpScriptHashesComplete();
+
+    /// "Private" signal, not intended to be used by outside code.  Used internally to mark a txHash as to be "ignored"
+    /// and not downloaded from the mempool.  The private SynchMempoolTask emits this to add hashes to our mempoolIgnoreTxns
+    /// set in a thread-safe manner
+    void ignoreMempoolTxn(const QByteArray & txhash);
 
 protected:
     Stats stats() const override; // from StatsMixin
@@ -111,9 +123,9 @@ protected slots:
     /// the supplied block was the next one by height).
     void on_putBlock(CtlTask *, PreProcessedBlockPtr);
 
-    /// Slot for the BitcoinDMgr::bitcoinCoreDetection. This is compared to coinIsBTC and if there is a mismatch there,
-    /// we may end up aborting the app and logging an error in this slot.
-    void on_bitcoinCoreDetection(bool); //< NB: Connected via DirectConnection an may run in the BitcoinDMgr thread!
+    /// Slot for the BitcoinDMgr::bitcoinCoreDetection. This is compared to this->coinType and if there is a
+    /// mismatch there, we may end up aborting the app and logging an error in this slot.
+    void on_coinDetected(BTC::Coin); //< NB: Connected via DirectConnection and may run in the BitcoinDMgr thread!
 
 private:
     friend class CtlTask;
@@ -173,7 +185,7 @@ private:
     void printMempoolStatusToLog() const;
 
     /// If --dump-sh was specified on CLI, this will execute at startup() time right after storage has been loaded. May throw.
-    void dumpScriptHashes(const QString &fileName) const;
+    void dumpScriptHashes(const QString &fileName);
 
     /// Will be nullptr if zmq disabled or bitcoind lacks a "hashblock" endpoint
     std::unique_ptr<ZmqSubNotifier> zmqHashBlockNotifier;
@@ -188,6 +200,12 @@ private:
     /// (re)starts listening for notifications from the zmqHashBlockNotifier; called if we received a valid zmq address
     /// from BitcoinDMgr, after servers are started.
     void zmqHashBlockStart();
+
+    /// Litecoin only: Ignore these txhashes from mempool (don't download them). This gets cleared each time
+    /// before the first SynchMempool after we receive a new block, then is persisted for all the SynchMempools
+    /// for that block, until a new block arrives, then is cleared again.
+    std::unordered_set<TxHash, HashHasher> mempoolIgnoreTxns;
+
 private slots:
     /// Stops the zmqHashBlockNotifier; called if we received an empty hashblock endpoint address from BitcoinDMgr or
     /// when all connections to bitcoind are lost

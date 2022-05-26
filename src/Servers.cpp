@@ -364,11 +364,9 @@ ServerBase::ServerBase(SrvMgr *sm,
     if (!options || !storage || !bitcoindmgr)
         // defensive programming
         throw BadArgs("ServerBase cannot be constructed with nullptr arguments!");
-    // setup the isBTC flag -- node that assumption is that storage was aleady setup properly
-    if (const auto coin = BTC::coinFromName(storage->getCoin()); coin == BTC::Coin::Unknown)
+    // setup this->coin flag -- note that assumption is that storage was aleady setup properly
+    if ((coin = BTC::coinFromName(storage->getCoin())) == BTC::Coin::Unknown)
         throw InternalError("ServerBase cannot be constructed without a valid \"Coin\" in the database!");
-    else
-        isBTC = coin == BTC::Coin::BTC;
 }
 ServerBase::~ServerBase() { stop(); }
 
@@ -926,15 +924,17 @@ void Server::rpc_server_add_peer(Client *c, const RPC::BatchId batchId, const RP
 namespace {
     // In case the donation address was default, we transform it correctly to the correct network in the hopes
     // that the author of this software (me) might get some BTC and/or BCH appropriately.
-    QString transformDefaultDonationAddressToBTCOrBCH(const Options &options, bool isBTC)
+    QString transformDefaultDonationAddressToBTCOrBCHOrLTC(const Options &options, bool isNonBCH, bool isLTC)
     {
         QString ret = options.donationAddress;
         if (!options.isDefaultDonationAddress) return ret; // do nothing if it wasn't the default.
         if (!ret.isEmpty()) {
             try {
                 const BTC::Address addr(ret);
-                if (addr.isValid())
-                    ret = addr.toString(isBTC /* if BTC, then legacy, otherwise cashaddr */);
+                if (addr.isValid()) {
+                    if (isLTC) ret = addr.toLitecoinString();
+                    else ret = addr.toString(isNonBCH /* if !BCH, then legacy, otherwise cashaddr */);
+                }
             } catch (...) {}
         }
         return ret;
@@ -1001,7 +1001,7 @@ void Server::rpc_server_banner(Client *c, const RPC::BatchId batchId, const RPC:
         const auto bitcoinDInfo = bitcoindmgr->getBitcoinDInfo();
         generic_do_async(c, batchId, m.id,
                         [bannerFile,
-                         donationAddress = transformDefaultDonationAddressToBTCOrBCH(*options, isBTC),
+                         donationAddress = transformDefaultDonationAddressToBTCOrBCHOrLTC(*options, isNonBCH(), isLTC()),
                          daemonVersion = bitcoinDInfo.version,
                          daemonSubversion = bitcoinDInfo.subversion] {
                 QVariant ret;
@@ -1024,7 +1024,7 @@ void Server::rpc_server_banner(Client *c, const RPC::BatchId batchId, const RPC:
 }
 void Server::rpc_server_donation_address(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
-    emit c->sendResult(batchId, m.id, transformDefaultDonationAddressToBTCOrBCH(*options, isBTC));
+    emit c->sendResult(batchId, m.id, transformDefaultDonationAddressToBTCOrBCHOrLTC(*options, isNonBCH(), isLTC()));
 }
 /* static */
 QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const QByteArray &genesisHash, const Options &opts, bool dsproof)
@@ -1287,7 +1287,8 @@ void Server::rpc_blockchain_estimatefee(Client *c, const RPC::BatchId batchId, c
     if (!bitcoindmgr->isZeroArgEstimateFee())
         params.push_back(unsigned(n));
 
-    if (bitcoindmgr->isBitcoinCore() && bitcoindmgr->getBitcoinDVersion() >= Version{0,17,0}) {
+    if ((bitcoindmgr->isCoreLike())
+            && bitcoindmgr->getBitcoinDVersion() >= Version{0,17,0}) {
         // Bitcoin Core removed the "estimatefee" RPC method entirely in version 0.17.0, in favor of "estimatesmartfee"
         generic_async_to_bitcoind(c, batchId, m.id, "estimatesmartfee", params, [](const RPC::Message &response){
             // We don't validate what bitcoind returns. Sometimes if it has not enough information, it may
@@ -1339,9 +1340,9 @@ void Server::rpc_blockchain_relayfee(Client *c, const RPC::BatchId batchId, cons
 //      below for boilerplate checking & parsing.
 HashX Server::parseFirstAddrParamToShCommon(const RPC::Message &m, QString *addrStrOut) const
 {
-    if (isBTC)
-        // unsupported on BTC (for now)
-        throw RPCError("blockchain.address.* methods are not available on BTC", RPC::ErrorCodes::Code_MethodNotFound);
+    if (isNonBCH())
+        // unsupported on non-BCH (for now)
+        throw RPCError("blockchain.address.* methods are only available on BCH", RPC::ErrorCodes::Code_MethodNotFound);
     const auto net = srvmgr->net();
     if (UNLIKELY(net == BTC::Net::Invalid))
         // This should never happen in practice, but it pays to be paranoid.
@@ -1702,9 +1703,12 @@ void Server::rpc_blockchain_transaction_broadcast(Client *c, const RPC::BatchId 
                 // https://github.com/Electron-Cash/electrumx/blob/fbd00416d804c286eb7de856e9399efb07a2ceaf/electrumx/server/session.py#L1526
                 // https://github.com/Electron-Cash/electrumx/blob/fbd00416d804c286eb7de856e9399efb07a2ceaf/electrumx/lib/coins.py#L397
                 QString clientName, website;
-                if (isBTC) {
+                if (coin == BTC::Coin::BTC) {
                     clientName = "Electrum";
                     website = "https://electrum.org/";
+                } else if (coin == BTC::Coin::LTC) {
+                    clientName = "Electrum-LTC";
+                    website = "https://electrum-ltc.org/";
                 } else {
                     clientName = "Electron Cash";
                     website = "https://electroncash.org/";
@@ -1926,7 +1930,7 @@ void Server::rpc_blockchain_transaction_unsubscribe(Client *c, const RPC::BatchI
 // DSPROOF
 void Server::rpc_blockchain_transaction_dsproof_get(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
-    if (isBTC || !bitcoindmgr->hasDSProofRPC())
+    if (isNonBCH() || !bitcoindmgr->hasDSProofRPC())
         throw RPCError("This server lacks dsproof support", RPC::ErrorCodes::Code_MethodNotFound);
     const auto dspid_or_txid = parseFirstHashParamCommon(m, "Invalid dsp hash or tx hash");
     generic_do_async(c, batchId, m.id, [this, dspid_or_txid] {
@@ -1942,7 +1946,7 @@ void Server::rpc_blockchain_transaction_dsproof_get(Client *c, const RPC::BatchI
 }
 void Server::rpc_blockchain_transaction_dsproof_list(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
-    if (isBTC || !bitcoindmgr->hasDSProofRPC())
+    if (isNonBCH() || !bitcoindmgr->hasDSProofRPC())
         throw RPCError("This server lacks dsproof support", RPC::ErrorCodes::Code_MethodNotFound);
     generic_do_async(c, batchId, m.id, [this] {
         DSProof::TxHashSet allDescendants;
@@ -1962,14 +1966,14 @@ void Server::rpc_blockchain_transaction_dsproof_list(Client *c, const RPC::Batch
 }
 void Server::rpc_blockchain_transaction_dsproof_subscribe(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
-    if (isBTC || !bitcoindmgr->hasDSProofRPC())
+    if (isNonBCH() || !bitcoindmgr->hasDSProofRPC())
         throw RPCError("This server lacks dsproof support", RPC::ErrorCodes::Code_MethodNotFound);
     const auto txid = parseFirstHashParamCommon(m, "Invalid tx hash");
     impl_generic_subscribe(storage->dspSubs(), c, batchId, m, txid);
 }
 void Server::rpc_blockchain_transaction_dsproof_unsubscribe(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
-    if (isBTC || !bitcoindmgr->hasDSProofRPC())
+    if (isNonBCH() || !bitcoindmgr->hasDSProofRPC())
         throw RPCError("This server lacks dsproof support", RPC::ErrorCodes::Code_MethodNotFound);
     const auto txid = parseFirstHashParamCommon(m, "Invalid tx hash");
     impl_generic_unsubscribe(storage->dspSubs(), c, batchId, m, txid);

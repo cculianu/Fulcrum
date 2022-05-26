@@ -1,0 +1,22 @@
+{
+    "backup.electrum-ltc.org": {
+        "t": "50001",
+        "s": "443"
+    },
+    "electrum.ltc.xurious.com": {
+        "t": "50001",
+        "s": "50002"
+    },
+    "electrum1.cipig.net": {
+        "t": "10063",
+        "s": "20063"
+    },
+    "electrum2.cipig.net": {
+        "t": "10063",
+        "s": "20063"
+    },
+    "electrum3.cipig.net": {
+        "t": "10063",
+        "s": "20063"
+    }
+}
