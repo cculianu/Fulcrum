@@ -930,18 +930,26 @@ void SynchMempoolTask::doDLNextTx()
         bitcoin::CMutableTransaction ctx;
         try {
             ctx = BTC::Deserialize<bitcoin::CMutableTransaction>(txdata, 0, isSegWit, isMimble, true /* nojunk */);
-            // Litecoin-only
-            if (isMimble && ctx.mw_blob && ctx.mw_blob->size() > 1) {
-                const auto n = std::min(size_t(60), ctx.mw_blob->size());
-                DebugM("MimbleTxn in mempool:  hash: ", tx->hash.toHex(), ", IsWebOnly: ", int(ctx.IsMWEBOnly()),
-                       ", vin,vout sizes: [", ctx.vin.size(), ", ", ctx.vout.size(), "]", ", data_size: ",
-                       ctx.mw_blob->size(), ", first ", n, " bytes: ",
-                       Util::ToHexFast(QByteArray::fromRawData(reinterpret_cast<const char *>(ctx.mw_blob->data()), n)),
-                       ", nLockTime: ", ctx.nLockTime);
-                // Litecoin only -- discard MWEB-only txns (they are useless to us for now)
-                if (ctx.IsMWEBOnly()) {
+            // Below branch is taken only for Litecoin
+            if (isMimble) {
+                if (ctx.mw_blob && ctx.mw_blob->size() > 1) {
+                    const auto n = std::min(size_t(60), ctx.mw_blob->size());
+                    DebugM("MimbleTxn in mempool:  hash: ", tx->hash.toHex(), ", IsWebOnly: ", int(ctx.IsMWEBOnly()),
+                           ", vin,vout sizes: [", ctx.vin.size(), ", ", ctx.vout.size(), "]", ", data_size: ",
+                           ctx.mw_blob->size(), ", first ", n, " bytes: ",
+                           Util::ToHexFast(QByteArray::fromRawData(reinterpret_cast<const char *>(ctx.mw_blob->data()), n)),
+                           ", nLockTime: ", ctx.nLockTime);
+                }
+                // Discard MWEB-only txns (they are useless to us for now)
+                if (/* Note: we would normally check ctx.IsMWEBOnly() here, but if litecoind is using
+                       -rpcserialversion=1, then that will return false. So instead we reduce the check to considering
+                       MWEB-only as any txn lacking CTxIns and CTxOuts.  (Only mweb-only txns look that way on LTC.) */
+                    ctx.vin.empty() && ctx.vout.empty()) {
                     // Ignore MWEB-only txns completely:
                     // - their txid is weird and hard to calculate for us (requires blake3 hasher, which we lack)
+                    //   - if remote litecoind is running rpcserialversion=1, then we wouldn't be able to calculate
+                    //     their hash anyway since the mweb data is omitted (even though they are listed in mempool
+                    //     in that serialization mode anyway -- which makes no sense!!).
                     // - they contain empty vins and vouts, and since Electrum-LTC doesn't grok MWEB, we cannot do anything
                     //   with their spend info anyway.
                     DebugM("Ignoring MWEB-only txn: ", tx->hash.toHex());
