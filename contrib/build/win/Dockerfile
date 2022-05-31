@@ -23,7 +23,7 @@ apt -y clean
 RUN \
     cd /opt && \
     echo "💬  \033[1;36mCloning MXE repository ...\033[0m" && \
-    git clone https://github.com/mxe/mxe.git && \
+    git clone https://github.com/mxe/mxe.git && cd mxe && git checkout fc6f4f5fb134ed65b6a2ed87b40a24233bb742bd && cd .. && \
     echo "💬  \033[1;36mBuilding dependencies for static linking ...\033[0m" && \
     cd /opt/mxe && \
     echo 'override MXE_PLUGIN_DIRS += plugins/gcc7' >> settings.mk && \
