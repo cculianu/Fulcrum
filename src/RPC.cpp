@@ -882,6 +882,7 @@ namespace RPC {
                 nReceived += data.size();
                 data = data.simplified();
                 TraceM(__func__, " Got: ", data);
+                lastGood = Util::getTime(); // update "last good" here to avoid going stale
                 if (sm->state == St::BEGIN) {
                     // read "HTTP/1.1 200 OK" line
                     auto toks = data.split(' ');

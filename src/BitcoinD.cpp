@@ -560,7 +560,13 @@ void BitcoinDMgr::submitRequest(QObject *sender, const RPC::Message::Id &rid, co
     context->setObjectName(QStringLiteral("context for '%1' request id: %2").arg(sender ? sender->objectName() : QString{}, rid.toString()));
 
     // result handler (runs in sender thread), captures context and keeps it alive as long as signal/slot connection is alive
-    connect(context.get(), &ReqCtxObj::results, sender, [context, resf, sender](const RPC::Message &response) {
+    connect(context.get(), &ReqCtxObj::results, sender, [context, resf, sender, method, params, timeout](const RPC::Message &response) {
+        // Debug code for troubleshooting the extent of bitcoind backlogs in servicing requests
+        const auto now = Util::getTime();
+        if (const auto diff = now - context->ts; diff > 5000) {
+            Debug(Log::Green) << context->objectName() << " took " << diff << " msec (timeout was: " << timeout
+                              << "), method: " << method << ", params: " << Json::serialize(params);
+        }
         if (!context->replied.exchange(true) && resf)
             resf(response);
         // kill lambdas and shared_ptr captures, should cause deleter to execute
@@ -689,6 +695,9 @@ void BitcoinDMgr::handleMessageCommon(const RPC::Message &msg, ReqCtxResultsOrEr
             DebugM(__func__, " - request id ", msg.id, " method `", msg.method, "` not found in request context table "
                    "(sender object may have already been deleted)");
             ++requestZombieCtr; // increment this counter for /stats
+        } else {
+            if constexpr (BitcoinD::DEBUG_PINGTIMER)
+                Debug(Log::Magenta) << __func__ << ": Got ping reply (sender: " << (sender() ? sender()->objectName() : "") << ")";
         }
         return;
     }
@@ -746,7 +755,7 @@ BitcoinD::BitcoinD(const BitcoinD_RPCInfo &rinfo)
     const auto & [host, port] = rpcInfo.hostPort;
     setHeaderHost(QString("%1:%2").arg(host).arg(port)); // for HTTP RFC 2616 Host: field
     setV1(true); // bitcoind uses jsonrpc v1
-    resetPingTimer(int(PingTimes::Normal)); // just sets pingtime_ms and stale_threshold = pingtime_ms * 2
+    resetPingTimer(int(PingTimes::Normal)); // just sets pingtime_ms and stale_threshold = pingtime_ms * 3 + 100
 
     connectMiscSignals();
 }
@@ -858,6 +867,7 @@ void BitcoinD::on_connected()
 
 void BitcoinD::do_ping()
 {
+    if constexpr (DEBUG_PINGTIMER) Debug(Log::Magenta) << __func__ << ": lastGoodAge: " << (Util::getTime() - lastGood);
     if (isStale()) {
         DebugM("Stale connection, reconnecting.");
         reconnect();
@@ -871,8 +881,11 @@ void BitcoinD::resetPingTimer(int time_ms)
         if (pingtime_ms != time_ms)
             DebugM("Changed pingtime_ms: ", time_ms);
         pingtime_ms = time_ms;
-        stale_threshold = pingtime_ms * 2;
+        stale_threshold = pingtime_ms * 3 + 100 /* allow for +100 msec fuzz due to use of CoarseTimer */;
         if (pingtime_ms > 0) {
+            if constexpr (DEBUG_PINGTIMER)
+                Debug(Log::Magenta) << __func__ << ": " << pingTimer << " set to " << pingtime_ms
+                                    << " (stale threshold: " << stale_threshold << ")";
             resetTimerInterval(pingTimer, pingtime_ms); // no-op if pingTimer not active
         } else {
             stopTimer(pingTimer); // no-op if pingTimer not active

@@ -54,12 +54,20 @@ public:
 
     inline bool isStopping() const { return stopFlag; }
 
-    /// Returns a positive nonzero value if the calling download task should throttle because the backlog is too large.
-    /// In that case the caller should try again in the returned value ms.
-    /// If the return value is 0, the caller may proceed immediately to continue downloading headers.
+    /// Struct that captures the return values for `downloadTaskRecommendedThrottleTimeMsec`
+    struct RecThrottleTime {
+        unsigned backoffMs{}, ///< if nonzero, then throttle
+                 deltaReqTimeoutMs{}; ///< add this time in msec to the request timeout time
+    };
     /// This function is not intended to be used by code outside this subsystem -- it is intended to be called by the
     /// internal DownloadBlocksTask only.
-    unsigned downloadTaskRecommendedThrottleTimeMsec(unsigned forBlockHeight) const;
+    ///
+    /// Returns a positive nonzero value for `backoffMs` if the calling download task should throttle because the
+    /// backlog is too large. In that case the caller should try again in the returned value ms.  Otherwise, if the
+    /// returned backoffMs is 0, the caller may proceed immediately to continue downloading headers and/or blocks. In
+    /// that case, deltaReqTimeoutMs will be nonzero and will be a recommended amount of time for the BitcoinDMgr
+    /// request timeout delta (passed to submitRequest).
+    RecThrottleTime downloadTaskRecommendedThrottleTimeMsec(unsigned forBlockHeight) const;
 
     QVariantMap statsDebug(const QMap<QString, QString> & params) const;
 
@@ -261,7 +269,7 @@ protected:
     using ResultsF = BitcoinDMgr::ResultsF;
     using ErrorF = BitcoinDMgr::ErrorF;
     quint64 submitRequest(const QString &method, const QVariantList &params, const ResultsF &resultsFunc,
-                          const ErrorF &errorFunc = {});
+                          const ErrorF &errorFunc = {}, unsigned timeOutDelta = 0);
 
     Controller * const ctl; ///< initted in c'tor. Is always valid since all tasks' lifecycles are managed by the Controller.
     const int reqTimeout; ///< initted in c'tor, cached from ctl->options->bdTimeout

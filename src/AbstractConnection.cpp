@@ -227,13 +227,16 @@ void AbstractConnection::on_connected()
     );
     {  // set up the "pingTimer"
         auto on_pingTimer = [this]{
-            if (Util::getTime() - lastGood > pingtime_ms)
-                // only call do_ping if we've been idle for longer than pingtime_ms
+            const auto diff = Util::getTime() - lastGood;
+            if constexpr (DEBUG_PINGTIMER) Debug(Log::Magenta) << "on_pingTimer: staleness = " << diff;
+            if (diff + 100 >= pingtime_ms)
+                // only call do_ping if we've been idle for longer than approximately pingtime_ms
+                // (+/- 100 msec, since we are using a CoarseTimer)
                 do_ping();
             return true;
         };
         const int period_ms = pingtime_ms/* default: 1 minute */ / 2;
-        callOnTimerSoon(period_ms, pingTimer, on_pingTimer, true, Qt::TimerType::VeryCoarseTimer); // method inherited from TimersByNameMixin
+        callOnTimerSoon(period_ms, pingTimer, on_pingTimer, true, Qt::TimerType::CoarseTimer); // method inherited from TimersByNameMixin
     }
 }
 

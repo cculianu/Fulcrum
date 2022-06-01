@@ -520,15 +520,16 @@ void DownloadBlocksTask::process()
 void DownloadBlocksTask::do_get(unsigned int bnum)
 {
     if (ctl->isStopping())  return; // short-circuit early return if controller is stopping
-    if (unsigned msec = ctl->downloadTaskRecommendedThrottleTimeMsec(bnum); msec > 0) {
+    const auto rec = ctl->downloadTaskRecommendedThrottleTimeMsec(bnum);
+    if (rec.backoffMs > 0) {
         // Controller told us to back off because it is backlogged.
         // Schedule ourselves to run again soon and return.
         Util::AsyncOnObject(this, [this, bnum]{
             do_get(bnum);
-        }, msec, Qt::TimerType::PreciseTimer);
+        }, rec.backoffMs, Qt::TimerType::PreciseTimer);
         return;
     }
-    submitRequest("getblockhash", {bnum}, [this, bnum](const RPC::Message & resp){
+    submitRequest("getblockhash", {bnum}, [this, bnum, deltaTimeOut = rec.deltaReqTimeoutMs](const RPC::Message & resp){
         QVariant var = resp.result();
         const auto hash = Util::ParseHexFast(var.toByteArray());
         if (hash.length() == HashLen) {
@@ -636,14 +637,14 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
                 } catch (const std::exception &e) {
                     Fatal() << QString("Caught exception processing block %1: %2").arg(bnum).arg(e.what());
                 }
-            });
+            }, {}, deltaTimeOut);
         } else {
             Warning() << resp.method << ": at height " << bnum << " hash not valid (decoded size: " << hash.length() << ")";
             errorCode = int(bnum);
             errorMessage = QString("invalid hash for height %1").arg(bnum);
             emit errored();
         }
-    });
+    }, {}, rec.deltaReqTimeoutMs);
 }
 
 
@@ -1172,8 +1173,9 @@ struct Controller::StateMachine
     std::optional<Storage::InitialSyncRAII> initialSyncRaii;
 };
 
-unsigned Controller::downloadTaskRecommendedThrottleTimeMsec(unsigned bnum) const
+auto Controller::downloadTaskRecommendedThrottleTimeMsec(unsigned bnum) const -> RecThrottleTime
 {
+    RecThrottleTime ret;
     std::shared_lock g(smLock); // this lock guarantees that 'sm' won't be deleted from underneath us
     if (sm) {
         int maxBackLog = 1000; // <--- TODO: have this be a more dynamic value based on current average blocksize.
@@ -1199,11 +1201,15 @@ unsigned Controller::downloadTaskRecommendedThrottleTimeMsec(unsigned bnum) cons
             // Make the backoff time be from 10ms to 50ms, depending on how far in the future this block height is from
             // what we are processing.  The hope is that this enforces some order on future block arrivals and also
             // prevents excessive polling for blocks that are too far ahead of us.
-            return std::min(10u + 5*unsigned(diff - maxBackLog - 1), 50u); // TODO: also have this be tuneable.
+            ret.backoffMs = std::min(10u + 5*unsigned(diff - maxBackLog - 1), 50u); // TODO: also have this be tuneable.
+        } else if (diff > 0) {
+            // Calculate how much to tolerate getblockhash and/or getblock request response delays.
+            // If we are asking for blocks far ahead, tolerate more of an unanswered request delay.
+            // We allow up to 600 seconds for the last block, and less for blocks closer to the front of the queue.
+            ret.deltaReqTimeoutMs = unsigned(diff/double(maxBackLog) * 600'000.0);
         }
-
     }
-    return 0u;
+    return ret;
 }
 
 void Controller::rmTask(CtlTask *t)
@@ -1722,7 +1728,7 @@ void CtlTask::on_failure(const RPC::Message::Id &id, const QString &msg)
     emit errored();
 }
 quint64 CtlTask::submitRequest(const QString &method, const QVariantList &params, const ResultsF &resultsFunc,
-                               const ErrorF &errorFunc)
+                               const ErrorF &errorFunc, unsigned timeOutDelta)
 {
     quint64 id = IdMixin::newId();
     using ErrorF = BitcoinDMgr::ErrorF;
@@ -1733,7 +1739,7 @@ quint64 CtlTask::submitRequest(const QString &method, const QVariantList &params
                                         ? ErrorF([this](MsgCRef m){ on_error(m); }) // more common case, just emit error on RPC error reply
                                         : errorFunc,
                                     [this](const RPC::Message::Id &id, const QString &msg){ on_failure(id, msg); },
-                                    reqTimeout);
+                                    reqTimeout + int(timeOutDelta));
     return id;
 }
 
