@@ -38,6 +38,10 @@ namespace {
         Normal = 10'000,  /**< Normal bitcoind -- we send a ping every 10 seconds */
         BCHD   =  3'333,  /**< bchd has a short idle timeout of 10 secs. 3.333 sec pingtime ensures no dropped conns. */
     };
+
+    const auto kPingMethodFast = QStringLiteral("uptime");
+    const auto kPingMethodSlow = QStringLiteral("help");
+    const QVariantList kPingParamsFast = {}, kPingParamsSlow = {{"help"}};
 }
 
 BitcoinDMgr::BitcoinDMgr(unsigned nClients, const BitcoinD_RPCInfo &rinf)
@@ -101,6 +105,7 @@ void BitcoinDMgr::startup() {
                     emit allConnectionsLost();
             }, true);
         });
+        connect(this, &BitcoinDMgr::detectedFastPingMethod, client.get(), &BitcoinD::on_detectedFastPingMethod);
 
         client->start();
     }
@@ -189,7 +194,7 @@ BitcoinD *BitcoinDMgr::getBitcoinD()
 
 namespace {
     struct BitcoinDVersionParseResult {
-        bool isBchd{}, isCore{}, isBU{}, isBCHN{}, isLTC{};
+        bool isBchd{}, isCore{}, isBU{}, isBCHN{}, isLTC{}, isFlowee{};
         Version version;
 
         constexpr BitcoinDVersionParseResult() noexcept = default;
@@ -221,6 +226,7 @@ namespace {
             isBU = subversion.startsWith("/BCH Unlimited:");
             isBCHN = subversion.startsWith("/Bitcoin Cash Node:");
             isLTC = subversion.startsWith("/LitecoinCore:");
+            isFlowee = subversion.startsWith("/Flowee:");
             // regular bitcoind, "version" is reliable and always the same format
             version = Version::BitcoinDCompact(val);
         }
@@ -271,8 +277,9 @@ void BitcoinDMgr::refreshBitcoinDNetworkInfo()
                     }
                 }(bitcoinDInfo.subversion, networkInfo);
                 // assign to shared object now from stack object BitcoinDVersionParseResult
-                std::tie(bitcoinDInfo.isBchd, bitcoinDInfo.isCore, bitcoinDInfo.isBU, bitcoinDInfo.isLTC, bitcoinDInfo.version)
-                    = std::tie(res.isBchd, res.isCore, res.isBU, res.isLTC, res.version);
+                std::tie(bitcoinDInfo.isBchd, bitcoinDInfo.isCore, bitcoinDInfo.isBU, bitcoinDInfo.isLTC,
+                         bitcoinDInfo.isFlowee, bitcoinDInfo.version)
+                    = std::tie(res.isBchd, res.isCore, res.isBU, res.isLTC, res.isFlowee, res.version);
                 bitcoinDInfo.relayFee = networkInfo.value("relayfee", 0.0).toDouble();
                 bitcoinDInfo.warnings = networkInfo.value("warnings", "").toString();
                 // set quirk flags: requires 0 arg `estimatefee`?
@@ -296,6 +303,8 @@ void BitcoinDMgr::refreshBitcoinDNetworkInfo()
                 // clear hasDSProofRPC until proven to have it via a query
                 bitcoinDInfo.hasDSProofRPC = false;
             } // end lock scope
+            // announce whether to use the "fast" ping method
+            emit detectedFastPingMethod( ! res.isFlowee );
             // be sure to announce whether remote bitcoind is bitcoin core (this determines whether we use segwit or not)
             BTC::Coin coin = BTC::Coin::BCH; // default BCH if unknown (not segwit)
             if (res.isCore) coin = BTC::Coin::BTC; // segwit
@@ -689,7 +698,7 @@ void BitcoinDMgr::handleMessageCommon(const RPC::Message &msg, ReqCtxResultsOrEr
     // find message context in map
     auto context = reqContextTable.take(msg.id).lock();
     if (!context) {
-        if (msg.method != QStringLiteral("ping")) { // <--- pings don't go through our req layer so they always come through without a table entry here
+        if (msg.method != kPingMethodFast && msg.method != kPingMethodSlow) { // <--- pings don't go through our req layer so they always come through without a table entry here
             // this can happen in rare cases if the sender object was deleted before bitcoind responded.
             // log the situation but don't warn or anything like that
             DebugM(__func__, " - request id ", msg.id, " method `", msg.method, "` not found in request context table "
@@ -697,7 +706,7 @@ void BitcoinDMgr::handleMessageCommon(const RPC::Message &msg, ReqCtxResultsOrEr
             ++requestZombieCtr; // increment this counter for /stats
         } else {
             if constexpr (BitcoinD::DEBUG_PINGTIMER)
-                Debug(Log::Magenta) << __func__ << ": Got ping reply (sender: " << (sender() ? sender()->objectName() : "") << ")";
+                Debug(Log::Magenta) << __func__ << ": Got ping reply (sender: " << (sender() ? sender()->objectName() : "") << ", method: \"" << msg.method << "\")";
         }
         return;
     }
@@ -860,6 +869,7 @@ void BitcoinD::on_connected()
     lastSocketError.clear();
     badAuth = false;
     needAuth = true;
+    fastPing = false; // reset since we don't know if fast is supported
     emit connected(this);
     // note that the 'authenticated' signal is only emitted after good auth is confirmed via the reply from the do_ping below
     do_ping();
@@ -867,12 +877,16 @@ void BitcoinD::on_connected()
 
 void BitcoinD::do_ping()
 {
-    if constexpr (DEBUG_PINGTIMER) Debug(Log::Magenta) << __func__ << ": lastGoodAge: " << (Util::getTime() - lastGood);
+    if constexpr (DEBUG_PINGTIMER)
+        Debug(Log::Magenta) << __func__ << ": lastGoodAge: " << (Util::getTime() - lastGood);
     if (isStale()) {
         DebugM("Stale connection, reconnecting.");
         reconnect();
-    } else
-        emit sendRequest(newId(), "ping");
+    } else {
+        const QString & method(fastPing ? kPingMethodFast : kPingMethodSlow);
+        const QVariantList & params(fastPing ? kPingParamsFast : kPingParamsSlow);
+        emit sendRequest(newId(), method, params);
+    }
 }
 
 void BitcoinD::resetPingTimer(int time_ms)

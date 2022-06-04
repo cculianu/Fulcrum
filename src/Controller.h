@@ -54,20 +54,12 @@ public:
 
     inline bool isStopping() const { return stopFlag; }
 
-    /// Struct that captures the return values for `downloadTaskRecommendedThrottleTimeMsec`
-    struct RecThrottleTime {
-        unsigned backoffMs{}, ///< if nonzero, then throttle
-                 deltaReqTimeoutMs{}; ///< add this time in msec to the request timeout time
-    };
+    /// Returns a positive nonzero value if the calling download task should throttle because the backlog is too large.
+    /// In that case the caller should try again in the returned value ms.
+    /// If the return value is 0, the caller may proceed immediately to continue downloading headers.
     /// This function is not intended to be used by code outside this subsystem -- it is intended to be called by the
     /// internal DownloadBlocksTask only.
-    ///
-    /// Returns a positive nonzero value for `backoffMs` if the calling download task should throttle because the
-    /// backlog is too large. In that case the caller should try again in the returned value ms.  Otherwise, if the
-    /// returned backoffMs is 0, the caller may proceed immediately to continue downloading headers and/or blocks. In
-    /// that case, deltaReqTimeoutMs will be nonzero and will be a recommended amount of time for the BitcoinDMgr
-    /// request timeout delta (passed to submitRequest).
-    RecThrottleTime downloadTaskRecommendedThrottleTimeMsec(unsigned forBlockHeight) const;
+    unsigned downloadTaskRecommendedThrottleTimeMsec(unsigned forBlockHeight) const;
 
     QVariantMap statsDebug(const QMap<QString, QString> & params) const;
 
@@ -169,7 +161,7 @@ private:
 
     std::unordered_map<CtlTask *, std::unique_ptr<CtlTask>, Util::PtrHasher> tasks;
 
-    void add_DLHeaderTask(unsigned from, unsigned to, size_t nTasks);
+    void add_DLBlocksTask(unsigned from, unsigned to, size_t nTasks);
     void process_DownloadingBlocks();
     bool process_VerifyAndAddBlock(PreProcessedBlockPtr); ///< helper called from within DownloadingBlocks state -- makes sure block is sane and adds it to db
     void process_PrintProgress(unsigned height, size_t nTx, size_t nIns, size_t nOuts, size_t nSH);

@@ -456,7 +456,6 @@ struct DownloadBlocksTask : public CtlTask
     ~DownloadBlocksTask() override { stop(); } // paranoia
     void process() override;
 
-
     const unsigned from = 0, to = 0, stride = 1, expectedCt = 1;
     unsigned next = 0;
     std::atomic_uint goodCt = 0;
@@ -466,7 +465,7 @@ struct DownloadBlocksTask : public CtlTask
     int q_ct = 0;
     const int max_q; // todo: tune this, for now it is numBitcoinDClients + 1
 
-    static const int HEADER_SIZE;
+    static constexpr int HEADER_SIZE = BTC::GetBlockHeaderSize();
 
     std::atomic<size_t> nTx = 0, nIns = 0, nOuts = 0;
 
@@ -484,9 +483,6 @@ struct DownloadBlocksTask : public CtlTask
     // given a block height, return the index into our array
     size_t height2Index(size_t h) { return size_t( ((h-from) + stride-1) / stride ); }
 };
-
-
-/*static*/ const int DownloadBlocksTask::HEADER_SIZE = BTC::GetBlockHeaderSize();
 
 DownloadBlocksTask::DownloadBlocksTask(unsigned from, unsigned to, unsigned stride, unsigned nClients, Controller *ctl_)
     : CtlTask(ctl_, QStringLiteral("Task.DL %1 -> %2").arg(from).arg(to)), from(from), to(to), stride(stride),
@@ -520,16 +516,15 @@ void DownloadBlocksTask::process()
 void DownloadBlocksTask::do_get(unsigned int bnum)
 {
     if (ctl->isStopping())  return; // short-circuit early return if controller is stopping
-    const auto rec = ctl->downloadTaskRecommendedThrottleTimeMsec(bnum);
-    if (rec.backoffMs > 0) {
+    if (unsigned msec = ctl->downloadTaskRecommendedThrottleTimeMsec(bnum); msec > 0) {
         // Controller told us to back off because it is backlogged.
         // Schedule ourselves to run again soon and return.
         Util::AsyncOnObject(this, [this, bnum]{
             do_get(bnum);
-        }, rec.backoffMs, Qt::TimerType::PreciseTimer);
+        }, msec, Qt::TimerType::PreciseTimer);
         return;
     }
-    submitRequest("getblockhash", {bnum}, [this, bnum, deltaTimeOut = rec.deltaReqTimeoutMs](const RPC::Message & resp){
+    submitRequest("getblockhash", {bnum}, [this, bnum](const RPC::Message & resp){
         QVariant var = resp.result();
         const auto hash = Util::ParseHexFast(var.toByteArray());
         if (hash.length() == HashLen) {
@@ -637,14 +632,14 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
                 } catch (const std::exception &e) {
                     Fatal() << QString("Caught exception processing block %1: %2").arg(bnum).arg(e.what());
                 }
-            }, {}, deltaTimeOut);
+            }, {}, 600'000 /* hard-code a 10 minute timeout to fix issue #116 */);
         } else {
             Warning() << resp.method << ": at height " << bnum << " hash not valid (decoded size: " << hash.length() << ")";
             errorCode = int(bnum);
             errorMessage = QString("invalid hash for height %1").arg(bnum);
             emit errored();
         }
-    }, {}, rec.deltaReqTimeoutMs);
+    }, {}, 600'000 /* hard-code a 10 minute timeout to fix issue #116 */);
 }
 
 
@@ -1173,9 +1168,8 @@ struct Controller::StateMachine
     std::optional<Storage::InitialSyncRAII> initialSyncRaii;
 };
 
-auto Controller::downloadTaskRecommendedThrottleTimeMsec(unsigned bnum) const -> RecThrottleTime
+unsigned Controller::downloadTaskRecommendedThrottleTimeMsec(unsigned bnum) const
 {
-    RecThrottleTime ret;
     std::shared_lock g(smLock); // this lock guarantees that 'sm' won't be deleted from underneath us
     if (sm) {
         int maxBackLog = 1000; // <--- TODO: have this be a more dynamic value based on current average blocksize.
@@ -1201,15 +1195,10 @@ auto Controller::downloadTaskRecommendedThrottleTimeMsec(unsigned bnum) const ->
             // Make the backoff time be from 10ms to 50ms, depending on how far in the future this block height is from
             // what we are processing.  The hope is that this enforces some order on future block arrivals and also
             // prevents excessive polling for blocks that are too far ahead of us.
-            ret.backoffMs = std::min(10u + 5*unsigned(diff - maxBackLog - 1), 50u); // TODO: also have this be tuneable.
-        } else if (diff > 0) {
-            // Calculate how much to tolerate getblockhash and/or getblock request response delays.
-            // If we are asking for blocks far ahead, tolerate more of an unanswered request delay.
-            // We allow up to 600 seconds for the last block, and less for blocks closer to the front of the queue.
-            ret.deltaReqTimeoutMs = unsigned(diff/double(maxBackLog) * 600'000.0);
+            return std::min(10u + 5u*unsigned(diff - maxBackLog - 1), 50u); // TODO: also have this be tuneable
         }
     }
-    return ret;
+    return 0u;
 }
 
 void Controller::rmTask(CtlTask *t)
@@ -1223,7 +1212,7 @@ void Controller::rmTask(CtlTask *t)
 
 bool Controller::isTaskDeleted(CtlTask *t) const { return tasks.count(t) == 0; }
 
-void Controller::add_DLHeaderTask(unsigned int from, unsigned int to, size_t nTasks)
+void Controller::add_DLBlocksTask(unsigned int from, unsigned int to, size_t nTasks)
 {
     DownloadBlocksTask *t = newTask<DownloadBlocksTask>(false, unsigned(from), unsigned(to), unsigned(nTasks), options->bdNClients, this);
     connect(t, &CtlTask::success, this, [t, this]{
@@ -1406,7 +1395,7 @@ void Controller::process(bool beSilentIfUpToDate)
         sm->ppBlkHtNext = sm->startheight = unsigned(base);
         sm->endHeight = unsigned(sm->ht);
         for (size_t i = 0; i < nTasks; ++i) {
-            add_DLHeaderTask(unsigned(base + i), unsigned(sm->ht), nTasks);
+            add_DLBlocksTask(unsigned(base + i), unsigned(sm->ht), nTasks);
         }
         sm->state = State::DownloadingBlocks; // advance state now. we will be called back by download task in on_putBlock()
     } else if (sm->state == State::DownloadingBlocks) {
