@@ -261,7 +261,7 @@ protected:
     using ResultsF = BitcoinDMgr::ResultsF;
     using ErrorF = BitcoinDMgr::ErrorF;
     quint64 submitRequest(const QString &method, const QVariantList &params, const ResultsF &resultsFunc,
-                          const ErrorF &errorFunc = {}, unsigned timeOutDelta = 0);
+                          const ErrorF &errorFunc = {}, int timeoutOverride = -1 /* <=0 -> no override */);
 
     Controller * const ctl; ///< initted in c'tor. Is always valid since all tasks' lifecycles are managed by the Controller.
     const int reqTimeout; ///< initted in c'tor, cached from ctl->options->bdTimeout

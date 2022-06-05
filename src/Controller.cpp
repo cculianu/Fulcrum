@@ -1717,7 +1717,7 @@ void CtlTask::on_failure(const RPC::Message::Id &id, const QString &msg)
     emit errored();
 }
 quint64 CtlTask::submitRequest(const QString &method, const QVariantList &params, const ResultsF &resultsFunc,
-                               const ErrorF &errorFunc, unsigned timeOutDelta)
+                               const ErrorF &errorFunc, const int timeOutOverride)
 {
     quint64 id = IdMixin::newId();
     using ErrorF = BitcoinDMgr::ErrorF;
@@ -1728,7 +1728,7 @@ quint64 CtlTask::submitRequest(const QString &method, const QVariantList &params
                                         ? ErrorF([this](MsgCRef m){ on_error(m); }) // more common case, just emit error on RPC error reply
                                         : errorFunc,
                                     [this](const RPC::Message::Id &id, const QString &msg){ on_failure(id, msg); },
-                                    reqTimeout + int(timeOutDelta));
+                                    timeOutOverride > 0 ? timeOutOverride : reqTimeout);
     return id;
 }
 
