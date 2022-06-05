@@ -106,6 +106,7 @@ void BitcoinDMgr::startup() {
             }, true);
         });
         connect(this, &BitcoinDMgr::detectedFastPingMethod, client.get(), &BitcoinD::on_detectedFastPingMethod);
+        connect(this, &BitcoinDMgr::inBlockDownload, client.get(), &BitcoinD::on_inBlockDownload);
 
         client->start();
     }
@@ -698,15 +699,15 @@ void BitcoinDMgr::handleMessageCommon(const RPC::Message &msg, ReqCtxResultsOrEr
     // find message context in map
     auto context = reqContextTable.take(msg.id).lock();
     if (!context) {
-        if (msg.method != kPingMethodFast && msg.method != kPingMethodSlow) { // <--- pings don't go through our req layer so they always come through without a table entry here
+        if (msg.method == kPingMethodFast || msg.method == kPingMethodSlow) { // <--- pings don't go through our req layer so they always come through without a table entry here
+            if constexpr (BitcoinD::DEBUG_PINGS)
+                Debug(Log::Magenta) << __func__ << ": Got ping reply (sender: " << (sender() ? sender()->objectName() : "") << ", method: \"" << msg.method << "\")";
+        } else {
             // this can happen in rare cases if the sender object was deleted before bitcoind responded.
             // log the situation but don't warn or anything like that
             DebugM(__func__, " - request id ", msg.id, " method `", msg.method, "` not found in request context table "
                    "(sender object may have already been deleted)");
             ++requestZombieCtr; // increment this counter for /stats
-        } else {
-            if constexpr (BitcoinD::DEBUG_PINGTIMER)
-                Debug(Log::Magenta) << __func__ << ": Got ping reply (sender: " << (sender() ? sender()->objectName() : "") << ", method: \"" << msg.method << "\")";
         }
         return;
     }
@@ -750,6 +751,8 @@ auto BitcoinD::stats() const -> Stats
     m.remove("nErrorsSent"); // should always be 0
     m.remove("nNotificationsSent"); // again, 0
     m.remove("nResultsSent"); // again, 0
+    m["fastPing"] = fastPing;
+    m["inBlockDownload"] = inBlockDownload;
     return m;
 }
 
@@ -877,12 +880,17 @@ void BitcoinD::on_connected()
 
 void BitcoinD::do_ping()
 {
-    if constexpr (DEBUG_PINGTIMER)
+    if constexpr (DEBUG_PINGS)
         Debug(Log::Magenta) << __func__ << ": lastGoodAge: " << (Util::getTime() - lastGood);
-    if (isStale()) {
+    // Note: see issue #116. If we are in block download, on particularly slow systems with HDD, sometimes
+    // we spuriously detected the BitcoinD connection as "stale".  In order to avoid this situation, we disable
+    // auto-reconnection due to "staleness".  Instead, we rely on request timeouts (10 mins for block dls) to
+    // eventually detect the edge case of a bitcoind that is stopped/deadlocked (should never happen in practice).
+    if (const bool stale = isStale(); stale && !inBlockDownload) {
         DebugM("Stale connection, reconnecting.");
         reconnect();
     } else {
+        if (stale && inBlockDownload) DebugM("Stale connection, suppressed reconnect because inBlockDownload = true");
         const QString & method(fastPing ? kPingMethodFast : kPingMethodSlow);
         const QVariantList & params(fastPing ? kPingParamsFast : kPingParamsSlow);
         emit sendRequest(newId(), method, params);
@@ -897,7 +905,7 @@ void BitcoinD::resetPingTimer(int time_ms)
         pingtime_ms = time_ms;
         stale_threshold = pingtime_ms * 3 + 100 /* allow for +100 msec fuzz due to use of CoarseTimer */;
         if (pingtime_ms > 0) {
-            if constexpr (DEBUG_PINGTIMER)
+            if constexpr (DEBUG_PINGS)
                 Debug(Log::Magenta) << __func__ << ": " << pingTimer << " set to " << pingtime_ms
                                     << " (stale threshold: " << stale_threshold << ")";
             resetTimerInterval(pingTimer, pingtime_ms); // no-op if pingTimer not active
@@ -910,6 +918,14 @@ void BitcoinD::resetPingTimer(int time_ms)
         setter();
     else
         Util::AsyncOnObject(this, setter, 0);
+}
+
+void BitcoinD::on_inBlockDownload(bool b)
+{
+    if (inBlockDownload != b) {
+        DebugM(__func__, ": ", int(inBlockDownload), " -> ", int(b));
+        inBlockDownload = b;
+    }
 }
 
 

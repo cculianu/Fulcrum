@@ -228,7 +228,7 @@ void AbstractConnection::on_connected()
     {  // set up the "pingTimer"
         auto on_pingTimer = [this]{
             const auto diff = Util::getTime() - lastGood;
-            if constexpr (DEBUG_PINGTIMER) Debug(Log::Magenta) << "on_pingTimer: staleness = " << diff;
+            if constexpr (DEBUG_PINGS) Debug(Log::Magenta) << "on_pingTimer: staleness = " << diff;
             if (diff + 100 >= pingtime_ms)
                 // only call do_ping if we've been idle for longer than approximately pingtime_ms
                 // (+/- 100 msec, since we are using a CoarseTimer)

@@ -106,6 +106,9 @@ signals:
     /// set in a thread-safe manner
     void ignoreMempoolTxn(const QByteArray & txhash);
 
+    /// Emitted whenever we begin downloading blocks, and whenever we end the last DownloadBlocksTask (for whatever reason)
+    void downloadingBlocks(bool b);
+
 protected:
     Stats stats() const override; // from StatsMixin
     Stats debug(const StatsParams &) const override; // from StatsMixin
@@ -160,6 +163,7 @@ private:
     mutable std::shared_mutex smLock;
 
     std::unordered_map<CtlTask *, std::unique_ptr<CtlTask>, Util::PtrHasher> tasks;
+    size_t nDLBlocksTasks = 0;
 
     void add_DLBlocksTask(unsigned from, unsigned to, size_t nTasks);
     void process_DownloadingBlocks();
@@ -261,10 +265,10 @@ protected:
     using ResultsF = BitcoinDMgr::ResultsF;
     using ErrorF = BitcoinDMgr::ErrorF;
     quint64 submitRequest(const QString &method, const QVariantList &params, const ResultsF &resultsFunc,
-                          const ErrorF &errorFunc = {}, int timeoutOverride = -1 /* <=0 -> no override */);
+                          const ErrorF &errorFunc = {});
 
     Controller * const ctl; ///< initted in c'tor. Is always valid since all tasks' lifecycles are managed by the Controller.
-    const int reqTimeout; ///< initted in c'tor, cached from ctl->options->bdTimeout
+    int reqTimeout; ///< initted in c'tor, cached from ctl->options->bdTimeout. DownloadBlocksTask overrides this with a custom value if doing multi-block DL
 };
 
 Q_DECLARE_METATYPE(CtlTask *);

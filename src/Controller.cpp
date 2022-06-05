@@ -155,6 +155,9 @@ void Controller::startup()
                 Log() << "bitcoind is still warming up: " << msg;
             }
         });
+
+        // notify the bitcoind mgr when we enter/exit block download phase so that it treats connections differently
+        conns += connect(this, &Controller::downloadingBlocks, bitcoindmgr.get(), &BitcoinDMgr::inBlockDownload);
     }
 
     bitcoindmgr->startup(); // may throw
@@ -490,7 +493,13 @@ DownloadBlocksTask::DownloadBlocksTask(unsigned from, unsigned to, unsigned stri
       allowSegWit(ctl_->isSegWitCoin()), allowMimble(ctl_->isMimbleWimbleCoin())
 {
     FatalAssert( (to >= from) && (ctl_) && (stride > 0), "Invalid params to DonloadBlocksTask c'tor, FIXME!");
-
+    if (stride > 1 || expectedCt > 1) {
+        // tolerate slow request responses (up to 10 mins) if downloading multiple blocks
+        // fixes issue #116
+        reqTimeout = Options::bdTimeoutMax; // 10 mins
+        DebugM(objectName(), ": multi-block download, will use very long RPC request timeout of ",
+               QString::number(reqTimeout/1e3, 'f', 1), " sec");
+    }
     next = from;
 }
 
@@ -632,14 +641,14 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
                 } catch (const std::exception &e) {
                     Fatal() << QString("Caught exception processing block %1: %2").arg(bnum).arg(e.what());
                 }
-            }, {}, 600'000 /* hard-code a 10 minute timeout to fix issue #116 */);
+            });
         } else {
             Warning() << resp.method << ": at height " << bnum << " hash not valid (decoded size: " << hash.length() << ")";
             errorCode = int(bnum);
             errorMessage = QString("invalid hash for height %1").arg(bnum);
             emit errored();
         }
-    }, {}, 600'000 /* hard-code a 10 minute timeout to fix issue #116 */);
+    });
 }
 
 
@@ -1215,6 +1224,10 @@ bool Controller::isTaskDeleted(CtlTask *t) const { return tasks.count(t) == 0; }
 void Controller::add_DLBlocksTask(unsigned int from, unsigned int to, size_t nTasks)
 {
     DownloadBlocksTask *t = newTask<DownloadBlocksTask>(false, unsigned(from), unsigned(to), unsigned(nTasks), options->bdNClients, this);
+    // notify BitcoinDMgr that we are in a block download when the first task starts
+    connect(t, &CtlTask::started, this, [this]{ if (++nDLBlocksTasks == 1) emit downloadingBlocks(true); });
+    // when the last DownloadBlocksTask ends, notify that block download is done.
+    connect(t, &CtlTask::finished, this, [this]{ if (--nDLBlocksTasks == 0) emit downloadingBlocks(false); });
     connect(t, &CtlTask::success, this, [t, this]{
         // NOTE: this callback is sometimes delivered after the sm has been reset(), so we don't check or use it here.
         if (UNLIKELY(isTaskDeleted(t))) return; // task was stopped from underneath us, this is stale.. abort.
@@ -1717,7 +1730,7 @@ void CtlTask::on_failure(const RPC::Message::Id &id, const QString &msg)
     emit errored();
 }
 quint64 CtlTask::submitRequest(const QString &method, const QVariantList &params, const ResultsF &resultsFunc,
-                               const ErrorF &errorFunc, const int timeOutOverride)
+                               const ErrorF &errorFunc)
 {
     quint64 id = IdMixin::newId();
     using ErrorF = BitcoinDMgr::ErrorF;
@@ -1728,7 +1741,7 @@ quint64 CtlTask::submitRequest(const QString &method, const QVariantList &params
                                         ? ErrorF([this](MsgCRef m){ on_error(m); }) // more common case, just emit error on RPC error reply
                                         : errorFunc,
                                     [this](const RPC::Message::Id &id, const QString &msg){ on_failure(id, msg); },
-                                    timeOutOverride > 0 ? timeOutOverride : reqTimeout);
+                                    reqTimeout);
     return id;
 }
 

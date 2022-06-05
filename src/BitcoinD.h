@@ -153,6 +153,11 @@ signals:
     /// Emitted whenever we detected the optimal ping method to use: "uptime" (fast)  or "help help" (slower, more compatible)
     void detectedFastPingMethod(bool fast);
 
+    /// Emitted by Controller whenever a block download starts and ends. This ends up controlling whether BitcoinD's
+    /// disconnect the socket if they go "stale". Sometimes we get spurious "staleness" in BitcoinD when it's busy
+    /// servicing a getblock request.  So during block download, we never disconnect if "stale".
+    void inBlockDownload(bool b);
+
 protected:
     Stats stats() const override; // from Mgr
 
@@ -251,6 +256,7 @@ public:
 public slots:
     /// Connected to BitcoinDMgr::detectedFastPingMethod (via AutoConnection -> QueuedConnection)
     void on_detectedFastPingMethod(bool b) { fastPing = b; }
+    void on_inBlockDownload(bool b);
 
 signals:
     /// This is emitted immediately after successful socket connect but before auth. After this signal, client code
@@ -276,6 +282,7 @@ private:
     const BitcoinD_RPCInfo rpcInfo;
     std::atomic_bool badAuth = false, needAuth = true;
     bool fastPing = false;
+    bool inBlockDownload = false;
 };
 
 
