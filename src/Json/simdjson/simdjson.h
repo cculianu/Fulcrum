@@ -8268,10 +8268,10 @@ simdjson_really_inline void mini_formatter::string(std::string_view unescaped) {
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
   for(;i + 8 <= unescaped.length(); i += 8) { 
     // Poor's man vectorization. This could get much faster if we used SIMD.
-    if(needs_escaping[uint8_t(unescaped[i])] | needs_escaping[uint8_t(unescaped[i+1])] 
-      | needs_escaping[uint8_t(unescaped[i+2])] | needs_escaping[uint8_t(unescaped[i+3])]
-      | needs_escaping[uint8_t(unescaped[i+4])] | needs_escaping[uint8_t(unescaped[i+5])] 
-      | needs_escaping[uint8_t(unescaped[i+6])] | needs_escaping[uint8_t(unescaped[i+7])]
+    if(needs_escaping[uint8_t(unescaped[i])] || needs_escaping[uint8_t(unescaped[i+1])]
+       || needs_escaping[uint8_t(unescaped[i+2])] || needs_escaping[uint8_t(unescaped[i+3])]
+       || needs_escaping[uint8_t(unescaped[i+4])] || needs_escaping[uint8_t(unescaped[i+5])]
+       || needs_escaping[uint8_t(unescaped[i+6])] || needs_escaping[uint8_t(unescaped[i+7])]
       ) { break; }
   }
   for(;i < unescaped.length(); i++) { 
