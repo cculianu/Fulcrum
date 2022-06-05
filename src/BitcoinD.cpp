@@ -304,8 +304,6 @@ void BitcoinDMgr::refreshBitcoinDNetworkInfo()
                 // clear hasDSProofRPC until proven to have it via a query
                 bitcoinDInfo.hasDSProofRPC = false;
             } // end lock scope
-            // announce whether to use the "fast" ping method
-            emit detectedFastPingMethod( ! res.isFlowee );
             // be sure to announce whether remote bitcoind is bitcoin core (this determines whether we use segwit or not)
             BTC::Coin coin = BTC::Coin::BCH; // default BCH if unknown (not segwit)
             if (res.isCore) coin = BTC::Coin::BTC; // segwit
@@ -326,6 +324,8 @@ void BitcoinDMgr::refreshBitcoinDNetworkInfo()
             // also see about refreshing whether remote bitcoind has dsproof rpc, but don't query for versions we know don't have it.
             if (!res.definitelyLacksDSProofRPC())
                 probeBitcoinDHasDSProofRPC();
+            // determine if we can use the "fast" ping method, "uptime", or whether we fall back to "help help"
+            probeBitcoinDHasUptimeRPC();
         },
         // error
         [](const RPC::Message &msg) {
@@ -457,7 +457,6 @@ void BitcoinDMgr::refreshBitcoinDZmqNotifications()
     );
 }
 
-// this is only ever called if we are compiled with zmq support
 void BitcoinDMgr::probeBitcoinDHasDSProofRPC()
 {
     submitRequest(this, newId(), "getdsprooflist", {0},
@@ -480,6 +479,27 @@ void BitcoinDMgr::probeBitcoinDHasDSProofRPC()
         [this](const RPC::Message::Id &, const QString &reason) {
             Error() << "getdsprooflist failed: " << reason;
             setHasDSProofRPC(false);
+        }
+    );
+}
+
+void BitcoinDMgr::probeBitcoinDHasUptimeRPC()
+{
+    submitRequest(this, newId(), "uptime", {},
+        // success
+        [this](const RPC::Message &) {
+            Debug() << "uptime: remote bitcoind has the RPC";
+            emit detectedFastPingMethod(true);
+        },
+        // error -- probe basically returned a negative result (error details will be automatically logged to debug log)
+        [this](const RPC::Message &) {
+            Debug() << "uptime: remote bitcoind lacks the RPC";
+            emit detectedFastPingMethod(false);
+        },
+        // failure -- connection dropped just as we were doing this
+        [this](const RPC::Message::Id &, const QString &reason) {
+            Error() << "uptime failed: " << reason;
+            emit detectedFastPingMethod(false);
         }
     );
 }

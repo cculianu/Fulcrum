@@ -200,6 +200,10 @@ private:
     /// called whenever bitcoind comes back alive, updates bitcoinDInfo.hasDSProofRPC
     void probeBitcoinDHasDSProofRPC();
 
+    /// called whenever bitcoind comes back alive, detects whether bitcoind has the 'uptime' RPC call. And if so,
+    /// emits detectedFastPingMethod(true), otherwise emits detectedFastPingMethod(false) if it lacks the RPC.
+    void probeBitcoinDHasUptimeRPC();
+
     /// Calls resetPingTimer on each BitcionD -- used by quirk fixup code since bchd vs bitcoind require different
     /// pingtimes
     void resetPingTimers(int timeout_ms);
