@@ -31,6 +31,7 @@
 #include <QVariantMap>
 
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <set>
 #include <shared_mutex>
@@ -52,6 +53,7 @@ struct BitcoinDInfo {
     bool isCore = false; ///< true if we are actually connected to /Satoshi.. node (Bitcoin Core)
     bool isLTC = false; ///< true if we are actually connected to /LitecoinCore.. node (Litecoin)
     bool isBU = false; ///< true if subversion string starts with "/BCH Unlimited:"
+    bool isFlowee = false; ///< true if subversion string starts with "/Flowee"
     bool lacksGetZmqNotifications = false; ///< true if bchd or BU < 1.9.1.0, or if we got an RPC error the last time we queried
     bool hasDSProofRPC = false; ///< true if the RPC query to `getdsprooflist` didn't return an error.
 
@@ -148,6 +150,14 @@ signals:
     /// via getzmqnotifications). Note: this is never emitted if we are compiled without zmq support.
     void zmqNotificationsChanged(BitcoinDZmqNotifications);
 
+    /// Emitted whenever we detected the optimal ping method to use: "uptime" (fast)  or "help help" (slower, more compatible)
+    void detectedFastPingMethod(bool fast);
+
+    /// Emitted by Controller whenever a block download starts and ends. This ends up controlling whether BitcoinD's
+    /// disconnect the socket if they go "stale". Sometimes we get spurious "staleness" in BitcoinD when it's busy
+    /// servicing a getblock request.  So during block download, we never disconnect if "stale".
+    void inBlockDownload(bool b);
+
 protected:
     Stats stats() const override; // from Mgr
 
@@ -189,6 +199,10 @@ private:
 
     /// called whenever bitcoind comes back alive, updates bitcoinDInfo.hasDSProofRPC
     void probeBitcoinDHasDSProofRPC();
+
+    /// called whenever bitcoind comes back alive, detects whether bitcoind has the 'uptime' RPC call. And if so,
+    /// emits detectedFastPingMethod(true), otherwise emits detectedFastPingMethod(false) if it lacks the RPC.
+    void probeBitcoinDHasUptimeRPC();
 
     /// Calls resetPingTimer on each BitcionD -- used by quirk fixup code since bchd vs bitcoind require different
     /// pingtimes
@@ -243,6 +257,11 @@ public:
     /// the specified interval.
     void resetPingTimer(int time_ms);
 
+public slots:
+    /// Connected to BitcoinDMgr::detectedFastPingMethod (via AutoConnection -> QueuedConnection)
+    void on_detectedFastPingMethod(bool b) { fastPing = b; }
+    void on_inBlockDownload(bool b);
+
 signals:
     /// This is emitted immediately after successful socket connect but before auth. After this signal, client code
     /// can expect either one of the two following signals to be emitted: either the authenticated() signal below,
@@ -254,7 +273,7 @@ protected:
     void on_started() override;
     void on_connected() override;
 
-    void do_ping() override; // testing
+    void do_ping() override;
 
     void reconnect();
 
@@ -266,6 +285,8 @@ private:
 
     const BitcoinD_RPCInfo rpcInfo;
     std::atomic_bool badAuth = false, needAuth = true;
+    bool fastPing = false;
+    bool inBlockDownload = false;
 };
 
 

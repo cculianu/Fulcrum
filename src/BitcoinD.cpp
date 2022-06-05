@@ -38,6 +38,10 @@ namespace {
         Normal = 10'000,  /**< Normal bitcoind -- we send a ping every 10 seconds */
         BCHD   =  3'333,  /**< bchd has a short idle timeout of 10 secs. 3.333 sec pingtime ensures no dropped conns. */
     };
+
+    const auto kPingMethodFast = QStringLiteral("uptime");
+    const auto kPingMethodSlow = QStringLiteral("help");
+    const QVariantList kPingParamsFast = {}, kPingParamsSlow = {{"help"}};
 }
 
 BitcoinDMgr::BitcoinDMgr(unsigned nClients, const BitcoinD_RPCInfo &rinf)
@@ -101,6 +105,8 @@ void BitcoinDMgr::startup() {
                     emit allConnectionsLost();
             }, true);
         });
+        connect(this, &BitcoinDMgr::detectedFastPingMethod, client.get(), &BitcoinD::on_detectedFastPingMethod);
+        connect(this, &BitcoinDMgr::inBlockDownload, client.get(), &BitcoinD::on_inBlockDownload);
 
         client->start();
     }
@@ -189,7 +195,7 @@ BitcoinD *BitcoinDMgr::getBitcoinD()
 
 namespace {
     struct BitcoinDVersionParseResult {
-        bool isBchd{}, isCore{}, isBU{}, isBCHN{}, isLTC{};
+        bool isBchd{}, isCore{}, isBU{}, isBCHN{}, isLTC{}, isFlowee{};
         Version version;
 
         constexpr BitcoinDVersionParseResult() noexcept = default;
@@ -221,6 +227,7 @@ namespace {
             isBU = subversion.startsWith("/BCH Unlimited:");
             isBCHN = subversion.startsWith("/Bitcoin Cash Node:");
             isLTC = subversion.startsWith("/LitecoinCore:");
+            isFlowee = subversion.startsWith("/Flowee:");
             // regular bitcoind, "version" is reliable and always the same format
             version = Version::BitcoinDCompact(val);
         }
@@ -271,8 +278,9 @@ void BitcoinDMgr::refreshBitcoinDNetworkInfo()
                     }
                 }(bitcoinDInfo.subversion, networkInfo);
                 // assign to shared object now from stack object BitcoinDVersionParseResult
-                std::tie(bitcoinDInfo.isBchd, bitcoinDInfo.isCore, bitcoinDInfo.isBU, bitcoinDInfo.isLTC, bitcoinDInfo.version)
-                    = std::tie(res.isBchd, res.isCore, res.isBU, res.isLTC, res.version);
+                std::tie(bitcoinDInfo.isBchd, bitcoinDInfo.isCore, bitcoinDInfo.isBU, bitcoinDInfo.isLTC,
+                         bitcoinDInfo.isFlowee, bitcoinDInfo.version)
+                    = std::tie(res.isBchd, res.isCore, res.isBU, res.isLTC, res.isFlowee, res.version);
                 bitcoinDInfo.relayFee = networkInfo.value("relayfee", 0.0).toDouble();
                 bitcoinDInfo.warnings = networkInfo.value("warnings", "").toString();
                 // set quirk flags: requires 0 arg `estimatefee`?
@@ -316,6 +324,8 @@ void BitcoinDMgr::refreshBitcoinDNetworkInfo()
             // also see about refreshing whether remote bitcoind has dsproof rpc, but don't query for versions we know don't have it.
             if (!res.definitelyLacksDSProofRPC())
                 probeBitcoinDHasDSProofRPC();
+            // determine if we can use the "fast" ping method, "uptime", or whether we fall back to "help help"
+            probeBitcoinDHasUptimeRPC();
         },
         // error
         [](const RPC::Message &msg) {
@@ -447,7 +457,6 @@ void BitcoinDMgr::refreshBitcoinDZmqNotifications()
     );
 }
 
-// this is only ever called if we are compiled with zmq support
 void BitcoinDMgr::probeBitcoinDHasDSProofRPC()
 {
     submitRequest(this, newId(), "getdsprooflist", {0},
@@ -470,6 +479,27 @@ void BitcoinDMgr::probeBitcoinDHasDSProofRPC()
         [this](const RPC::Message::Id &, const QString &reason) {
             Error() << "getdsprooflist failed: " << reason;
             setHasDSProofRPC(false);
+        }
+    );
+}
+
+void BitcoinDMgr::probeBitcoinDHasUptimeRPC()
+{
+    submitRequest(this, newId(), "uptime", {},
+        // success
+        [this](const RPC::Message &) {
+            Debug() << "uptime: remote bitcoind has the RPC";
+            emit detectedFastPingMethod(true);
+        },
+        // error -- probe basically returned a negative result (error details will be automatically logged to debug log)
+        [this](const RPC::Message &) {
+            Debug() << "uptime: remote bitcoind lacks the RPC";
+            emit detectedFastPingMethod(false);
+        },
+        // failure -- connection dropped just as we were doing this
+        [this](const RPC::Message::Id &, const QString &reason) {
+            Error() << "uptime failed: " << reason;
+            emit detectedFastPingMethod(false);
         }
     );
 }
@@ -560,7 +590,15 @@ void BitcoinDMgr::submitRequest(QObject *sender, const RPC::Message::Id &rid, co
     context->setObjectName(QStringLiteral("context for '%1' request id: %2").arg(sender ? sender->objectName() : QString{}, rid.toString()));
 
     // result handler (runs in sender thread), captures context and keeps it alive as long as signal/slot connection is alive
-    connect(context.get(), &ReqCtxObj::results, sender, [context, resf, sender](const RPC::Message &response) {
+    connect(context.get(), &ReqCtxObj::results, sender, [context, resf, sender/*, method, params, timeout*/](const RPC::Message &response) {
+        // Debug code for troubleshooting the extent of bitcoind backlogs in servicing requests
+        /*
+        const auto now = Util::getTime();
+        if (const auto diff = now - context->ts; diff > 5000) {
+            Debug(Log::Green) << context->objectName() << " took " << diff << " msec (timeout was: " << timeout
+                              << "), method: " << method << ", params: " << Json::serialize(params);
+        }
+        */
         if (!context->replied.exchange(true) && resf)
             resf(response);
         // kill lambdas and shared_ptr captures, should cause deleter to execute
@@ -683,7 +721,10 @@ void BitcoinDMgr::handleMessageCommon(const RPC::Message &msg, ReqCtxResultsOrEr
     // find message context in map
     auto context = reqContextTable.take(msg.id).lock();
     if (!context) {
-        if (msg.method != QStringLiteral("ping")) { // <--- pings don't go through our req layer so they always come through without a table entry here
+        if (msg.method == kPingMethodFast || msg.method == kPingMethodSlow) { // <--- pings don't go through our req layer so they always come through without a table entry here
+            if constexpr (BitcoinD::DEBUG_PINGS)
+                Debug(Log::Magenta) << __func__ << ": Got ping reply (sender: " << (sender() ? sender()->objectName() : "") << ", method: \"" << msg.method << "\")";
+        } else {
             // this can happen in rare cases if the sender object was deleted before bitcoind responded.
             // log the situation but don't warn or anything like that
             DebugM(__func__, " - request id ", msg.id, " method `", msg.method, "` not found in request context table "
@@ -732,6 +773,8 @@ auto BitcoinD::stats() const -> Stats
     m.remove("nErrorsSent"); // should always be 0
     m.remove("nNotificationsSent"); // again, 0
     m.remove("nResultsSent"); // again, 0
+    m["fastPing"] = fastPing;
+    m["inBlockDownload"] = inBlockDownload;
     return m;
 }
 
@@ -746,7 +789,7 @@ BitcoinD::BitcoinD(const BitcoinD_RPCInfo &rinfo)
     const auto & [host, port] = rpcInfo.hostPort;
     setHeaderHost(QString("%1:%2").arg(host).arg(port)); // for HTTP RFC 2616 Host: field
     setV1(true); // bitcoind uses jsonrpc v1
-    resetPingTimer(int(PingTimes::Normal)); // just sets pingtime_ms and stale_threshold = pingtime_ms * 2
+    resetPingTimer(int(PingTimes::Normal)); // just sets pingtime_ms and stale_threshold = pingtime_ms * 3 + 100
 
     connectMiscSignals();
 }
@@ -851,6 +894,7 @@ void BitcoinD::on_connected()
     lastSocketError.clear();
     badAuth = false;
     needAuth = true;
+    fastPing = false; // reset since we don't know if fast is supported
     emit connected(this);
     // note that the 'authenticated' signal is only emitted after good auth is confirmed via the reply from the do_ping below
     do_ping();
@@ -858,11 +902,21 @@ void BitcoinD::on_connected()
 
 void BitcoinD::do_ping()
 {
-    if (isStale()) {
+    if constexpr (DEBUG_PINGS)
+        Debug(Log::Magenta) << __func__ << ": lastGoodAge: " << (Util::getTime() - lastGood);
+    // Note: see issue #116. If we are in block download, on particularly slow systems with HDD, sometimes
+    // we spuriously detected the BitcoinD connection as "stale".  In order to avoid this situation, we disable
+    // auto-reconnection due to "staleness".  Instead, we rely on request timeouts (10 mins for block dls) to
+    // eventually detect the edge case of a bitcoind that is stopped/deadlocked (should never happen in practice).
+    if (const bool stale = isStale(); stale && !inBlockDownload) {
         DebugM("Stale connection, reconnecting.");
         reconnect();
-    } else
-        emit sendRequest(newId(), "ping");
+    } else {
+        if (stale && inBlockDownload) DebugM("Stale connection, suppressed reconnect because inBlockDownload = true");
+        const QString & method(fastPing ? kPingMethodFast : kPingMethodSlow);
+        const QVariantList & params(fastPing ? kPingParamsFast : kPingParamsSlow);
+        emit sendRequest(newId(), method, params);
+    }
 }
 
 void BitcoinD::resetPingTimer(int time_ms)
@@ -871,8 +925,11 @@ void BitcoinD::resetPingTimer(int time_ms)
         if (pingtime_ms != time_ms)
             DebugM("Changed pingtime_ms: ", time_ms);
         pingtime_ms = time_ms;
-        stale_threshold = pingtime_ms * 2;
+        stale_threshold = pingtime_ms * 3 + 100 /* allow for +100 msec fuzz due to use of CoarseTimer */;
         if (pingtime_ms > 0) {
+            if constexpr (DEBUG_PINGS)
+                Debug(Log::Magenta) << __func__ << ": " << pingTimer << " set to " << pingtime_ms
+                                    << " (stale threshold: " << stale_threshold << ")";
             resetTimerInterval(pingTimer, pingtime_ms); // no-op if pingTimer not active
         } else {
             stopTimer(pingTimer); // no-op if pingTimer not active
@@ -883,6 +940,14 @@ void BitcoinD::resetPingTimer(int time_ms)
         setter();
     else
         Util::AsyncOnObject(this, setter, 0);
+}
+
+void BitcoinD::on_inBlockDownload(bool b)
+{
+    if (inBlockDownload != b) {
+        DebugM(__func__, ": ", int(inBlockDownload), " -> ", int(b));
+        inBlockDownload = b;
+    }
 }
 
 

@@ -155,6 +155,9 @@ void Controller::startup()
                 Log() << "bitcoind is still warming up: " << msg;
             }
         });
+
+        // notify the bitcoind mgr when we enter/exit block download phase so that it treats connections differently
+        conns += connect(this, &Controller::downloadingBlocks, bitcoindmgr.get(), &BitcoinDMgr::inBlockDownload);
     }
 
     bitcoindmgr->startup(); // may throw
@@ -456,7 +459,6 @@ struct DownloadBlocksTask : public CtlTask
     ~DownloadBlocksTask() override { stop(); } // paranoia
     void process() override;
 
-
     const unsigned from = 0, to = 0, stride = 1, expectedCt = 1;
     unsigned next = 0;
     std::atomic_uint goodCt = 0;
@@ -466,7 +468,7 @@ struct DownloadBlocksTask : public CtlTask
     int q_ct = 0;
     const int max_q; // todo: tune this, for now it is numBitcoinDClients + 1
 
-    static const int HEADER_SIZE;
+    static constexpr int HEADER_SIZE = BTC::GetBlockHeaderSize();
 
     std::atomic<size_t> nTx = 0, nIns = 0, nOuts = 0;
 
@@ -485,16 +487,19 @@ struct DownloadBlocksTask : public CtlTask
     size_t height2Index(size_t h) { return size_t( ((h-from) + stride-1) / stride ); }
 };
 
-
-/*static*/ const int DownloadBlocksTask::HEADER_SIZE = BTC::GetBlockHeaderSize();
-
 DownloadBlocksTask::DownloadBlocksTask(unsigned from, unsigned to, unsigned stride, unsigned nClients, Controller *ctl_)
     : CtlTask(ctl_, QStringLiteral("Task.DL %1 -> %2").arg(from).arg(to)), from(from), to(to), stride(stride),
       expectedCt(unsigned(nToDL(from, to, stride))), max_q(int(nClients)+1),
       allowSegWit(ctl_->isSegWitCoin()), allowMimble(ctl_->isMimbleWimbleCoin())
 {
     FatalAssert( (to >= from) && (ctl_) && (stride > 0), "Invalid params to DonloadBlocksTask c'tor, FIXME!");
-
+    if (stride > 1 || expectedCt > 1) {
+        // tolerate slow request responses (up to 10 mins) if downloading multiple blocks
+        // fixes issue #116
+        reqTimeout = Options::bdTimeoutMax; // 10 mins
+        DebugM(objectName(), ": multi-block download, will use very long RPC request timeout of ",
+               QString::number(reqTimeout/1e3, 'f', 1), " sec");
+    }
     next = from;
 }
 
@@ -1199,9 +1204,8 @@ unsigned Controller::downloadTaskRecommendedThrottleTimeMsec(unsigned bnum) cons
             // Make the backoff time be from 10ms to 50ms, depending on how far in the future this block height is from
             // what we are processing.  The hope is that this enforces some order on future block arrivals and also
             // prevents excessive polling for blocks that are too far ahead of us.
-            return std::min(10u + 5*unsigned(diff - maxBackLog - 1), 50u); // TODO: also have this be tuneable.
+            return std::min(10u + 5u*unsigned(diff - maxBackLog - 1), 50u); // TODO: also have this be tuneable
         }
-
     }
     return 0u;
 }
@@ -1217,9 +1221,23 @@ void Controller::rmTask(CtlTask *t)
 
 bool Controller::isTaskDeleted(CtlTask *t) const { return tasks.count(t) == 0; }
 
-void Controller::add_DLHeaderTask(unsigned int from, unsigned int to, size_t nTasks)
+void Controller::add_DLBlocksTask(unsigned int from, unsigned int to, size_t nTasks)
 {
     DownloadBlocksTask *t = newTask<DownloadBlocksTask>(false, unsigned(from), unsigned(to), unsigned(nTasks), options->bdNClients, this);
+    // notify BitcoinDMgr that we are in a block download when the first task starts
+    connect(t, &CtlTask::started, this, [this]{
+        const auto nTasksExtant = ++nDLBlocksTasks;
+        if (nTasksExtant == 1) emit downloadingBlocks(true);
+        // defensive programming
+        FatalAssert(size_t(nTasksExtant) <= tasks.size(), "nTasksExtant = ", nTasksExtant, ", tasks.size() = ", tasks.size(), "! FIXME!");
+    });
+    // when the last DownloadBlocksTask ends, notify that block download is done.
+    connect(t, &CtlTask::finished, this, [this]{
+        const auto nTasksRemaining = --nDLBlocksTasks;
+        if (nTasksRemaining == 0) emit downloadingBlocks(false);
+        // defensive programming, detect asymmetry between started/finished signals
+        FatalAssert(nTasksRemaining >= 0, "nTasksRemaining = ", nTasksRemaining, "! FIXME!");
+    });
     connect(t, &CtlTask::success, this, [t, this]{
         // NOTE: this callback is sometimes delivered after the sm has been reset(), so we don't check or use it here.
         if (UNLIKELY(isTaskDeleted(t))) return; // task was stopped from underneath us, this is stale.. abort.
@@ -1400,7 +1418,7 @@ void Controller::process(bool beSilentIfUpToDate)
         sm->ppBlkHtNext = sm->startheight = unsigned(base);
         sm->endHeight = unsigned(sm->ht);
         for (size_t i = 0; i < nTasks; ++i) {
-            add_DLHeaderTask(unsigned(base + i), unsigned(sm->ht), nTasks);
+            add_DLBlocksTask(unsigned(base + i), unsigned(sm->ht), nTasks);
         }
         sm->state = State::DownloadingBlocks; // advance state now. we will be called back by download task in on_putBlock()
     } else if (sm->state == State::DownloadingBlocks) {
