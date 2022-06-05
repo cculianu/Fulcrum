@@ -1263,8 +1263,12 @@ void Controller::genericTaskErrored()
 template <typename CtlTaskT, typename ...Args, typename /* enable_if... */>
 CtlTaskT *Controller::newTask(bool connectErroredSignal, Args && ...args)
 {
-    CtlTaskT *task = new CtlTaskT(std::forward<Args>(args)...);
-    tasks.emplace(task, task);
+    CtlTaskT *task{};
+    {
+        auto uptr = std::make_unique<CtlTaskT>(std::forward<Args>(args)...); // idiomatic way to avoid leaks if exceptions are thrown
+        task = uptr.get();
+        tasks.emplace(task, std::move(uptr));
+    }
     if (connectErroredSignal)
         connect(task, &CtlTask::errored, this, &Controller::genericTaskErrored);
     connect(task, &CtlTask::retryRecommended, this, [this]{  // only the SynchMempoolTask ever emits this.
