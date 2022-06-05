@@ -34,7 +34,7 @@ class AbstractConnection : public QObject, public IdMixin, public TimersByNameMi
     Q_OBJECT
 public:
     static constexpr qint64 DEFAULT_MAX_BUFFER = 64*1024*1024; ///< 64MB, may change default in derived classes by setting maxBuffer in c'tor TODO: tune this.
-    static constexpr bool DEBUG_PINGS = true; ///< set this to true to debug the "staleness" / "pingtimer" mechanism
+    static constexpr bool DEBUG_PINGS = false; ///< set this to true to debug the "staleness" / "pingtimer" mechanism
 
     explicit AbstractConnection(IdMixin::Id id, QObject *parent = nullptr, qint64 maxBuffer = DEFAULT_MAX_BUFFER);
 

@@ -590,13 +590,15 @@ void BitcoinDMgr::submitRequest(QObject *sender, const RPC::Message::Id &rid, co
     context->setObjectName(QStringLiteral("context for '%1' request id: %2").arg(sender ? sender->objectName() : QString{}, rid.toString()));
 
     // result handler (runs in sender thread), captures context and keeps it alive as long as signal/slot connection is alive
-    connect(context.get(), &ReqCtxObj::results, sender, [context, resf, sender, method, params, timeout](const RPC::Message &response) {
+    connect(context.get(), &ReqCtxObj::results, sender, [context, resf, sender/*, method, params, timeout*/](const RPC::Message &response) {
         // Debug code for troubleshooting the extent of bitcoind backlogs in servicing requests
+        /*
         const auto now = Util::getTime();
         if (const auto diff = now - context->ts; diff > 5000) {
             Debug(Log::Green) << context->objectName() << " took " << diff << " msec (timeout was: " << timeout
                               << "), method: " << method << ", params: " << Json::serialize(params);
         }
+        */
         if (!context->replied.exchange(true) && resf)
             resf(response);
         // kill lambdas and shared_ptr captures, should cause deleter to execute
