@@ -1225,9 +1225,19 @@ void Controller::add_DLBlocksTask(unsigned int from, unsigned int to, size_t nTa
 {
     DownloadBlocksTask *t = newTask<DownloadBlocksTask>(false, unsigned(from), unsigned(to), unsigned(nTasks), options->bdNClients, this);
     // notify BitcoinDMgr that we are in a block download when the first task starts
-    connect(t, &CtlTask::started, this, [this]{ if (++nDLBlocksTasks == 1) emit downloadingBlocks(true); });
+    connect(t, &CtlTask::started, this, [this]{
+        const auto nTasksExtant = ++nDLBlocksTasks;
+        if (nTasksExtant == 1) emit downloadingBlocks(true);
+        // defensive programming
+        FatalAssert(size_t(nTasksExtant) <= tasks.size(), "nTasksExtant = ", nTasksExtant, ", tasks.size() = ", tasks.size(), "! FIXME!");
+    });
     // when the last DownloadBlocksTask ends, notify that block download is done.
-    connect(t, &CtlTask::finished, this, [this]{ if (--nDLBlocksTasks == 0) emit downloadingBlocks(false); });
+    connect(t, &CtlTask::finished, this, [this]{
+        const auto nTasksRemaining = --nDLBlocksTasks;
+        if (nTasksRemaining == 0) emit downloadingBlocks(false);
+        // defensive programming, detect asymmetry between started/finished signals
+        FatalAssert(nTasksRemaining >= 0, "nTasksRemaining = ", nTasksRemaining, "! FIXME!");
+    });
     connect(t, &CtlTask::success, this, [t, this]{
         // NOTE: this callback is sometimes delivered after the sm has been reset(), so we don't check or use it here.
         if (UNLIKELY(isTaskDeleted(t))) return; // task was stopped from underneath us, this is stale.. abort.

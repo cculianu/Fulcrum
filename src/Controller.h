@@ -163,7 +163,7 @@ private:
     mutable std::shared_mutex smLock;
 
     std::unordered_map<CtlTask *, std::unique_ptr<CtlTask>, Util::PtrHasher> tasks;
-    size_t nDLBlocksTasks = 0;
+    int nDLBlocksTasks = 0;
 
     void add_DLBlocksTask(unsigned from, unsigned to, size_t nTasks);
     void process_DownloadingBlocks();
