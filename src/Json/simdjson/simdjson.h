@@ -1,5 +1,7 @@
 /* auto-generated on Fri 23 Oct 2020 09:30:48 EDT. Do not edit! */
 /* begin file include/simdjson.h */
+// NOTE FROM CALIN: This has been modified by me. Added the following PR
+// to this file to fix a compiler warning: https://github.com/simdjson/simdjson/pull/1732
 #ifndef SIMDJSON_H
 #define SIMDJSON_H
 
@@ -8256,7 +8258,10 @@ simdjson_really_inline void mini_formatter::string(std::string_view unescaped) {
   size_t i = 0;
   // Fast path for the case where we have no control character, no ", and no backslash.
   // This should include most keys.
-  constexpr static bool needs_escaping[] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 
+  //
+  // We would like to use 'bool' but some compilers take offense to bitwise operation
+  // with bool types.
+  constexpr static char needs_escaping[] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
     1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 
@@ -8268,10 +8273,12 @@ simdjson_really_inline void mini_formatter::string(std::string_view unescaped) {
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
   for(;i + 8 <= unescaped.length(); i += 8) { 
     // Poor's man vectorization. This could get much faster if we used SIMD.
-    if(needs_escaping[uint8_t(unescaped[i])] || needs_escaping[uint8_t(unescaped[i+1])]
-       || needs_escaping[uint8_t(unescaped[i+2])] || needs_escaping[uint8_t(unescaped[i+3])]
-       || needs_escaping[uint8_t(unescaped[i+4])] || needs_escaping[uint8_t(unescaped[i+5])]
-       || needs_escaping[uint8_t(unescaped[i+6])] || needs_escaping[uint8_t(unescaped[i+7])]
+    //
+    // It is not the case that replacing '|' with '||' would be neutral performance-wise.
+    if(needs_escaping[uint8_t(unescaped[i])] | needs_escaping[uint8_t(unescaped[i+1])]
+       | needs_escaping[uint8_t(unescaped[i+2])] | needs_escaping[uint8_t(unescaped[i+3])]
+       | needs_escaping[uint8_t(unescaped[i+4])] | needs_escaping[uint8_t(unescaped[i+5])]
+       | needs_escaping[uint8_t(unescaped[i+6])] | needs_escaping[uint8_t(unescaped[i+7])]
       ) { break; }
   }
   for(;i < unescaped.length(); i++) { 
