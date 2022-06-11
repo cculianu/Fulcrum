@@ -595,7 +595,7 @@ namespace {
                     }
                     continue;
                 }
-                auto span = MakeCSpan(dbValues[i]);
+                auto span = Span<const char>{dbValues[i]};
                 std::string valBackToDb;
                 while (!span.empty()) {
                     try {
@@ -649,7 +649,7 @@ namespace {
             const auto key = makeKeyFromHash(txHash);
             auto optBytes = GenericDBGet<QByteArray>(db, key, true, dbName(), true, rdOpts);
             if (!optBytes) return ret; // missing
-            auto span = MakeCSpan(*optBytes);
+            auto span = Span<const char>{*optBytes};
             std::vector<uint64_t> txNums;
             txNums.reserve(1 + span.size() / 5); // rough heuristic
             try {
@@ -709,7 +709,7 @@ namespace {
                     Warning() << dbName() << ": Empty record for " << hashes[i].toHex() << ". FIXME!";
                     continue;
                 }
-                auto span = MakeCSpan(dataBlob);
+                auto span = Span<const char>{dataBlob};
                 std::pair<size_t, size_t> p(recNums.size(), recNums.size());
                 while (!span.empty()) {
                     try {

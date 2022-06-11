@@ -153,7 +153,7 @@ void doTest(int n = 200)
             byteBlob.append(vi.byteArray(false));
             if (vals.size() % checkEvery == 0) {
                 Log() << "Validating serialization of " << vals.size() << " items, " << byteBlob.size() << " bytes ...";
-                auto byteSpan1 = MakeCSpan(byteBlob);
+                auto byteSpan1 = Span<const char>{byteBlob};
                 Span<const std::byte> byteSpan2(reinterpret_cast<const std::byte *>(byteBlob.constData()), std::size_t(byteBlob.size()));
                 int i = 0;
                 for (const auto & v : vals) {

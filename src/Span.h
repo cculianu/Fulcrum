@@ -180,43 +180,23 @@ public:
     template <typename O> friend class Span;
 };
 
-/** Create a Span from a container exposing data() and size(), or from an array.
- *
- * This correctly deals with constness: the returned Span's element type will be
- * whatever data() returns a pointer to. If either the passed container is
- * const, or its element type is const, the resulting span will have a const
- * element type.
- *
- * std::span will have a constructor that implements this functionality
- * directly.
- */
-
-/** Create a span from a C-style array */
-template <typename A, std::size_t N>
-constexpr Span<A> MakeSpan(A (&a)[N]) { return Span<A>(a, N); }
-
-/** Like the above, but forces Span<const A> */
-template <typename A, std::size_t N>
-constexpr Span<A> MakeCSpan(const A (&a)[N]) { return Span<const A>(a, N); }
-
-/** MakeSpan from any container that has .data() and .size(). For temporaries / rvalue references, only supporting const output. */
-template <typename V>
-constexpr auto MakeSpan(V &&v) -> typename std::enable_if_t<!std::is_lvalue_reference_v<V>,
-                                                            Span<const typename std::remove_pointer_t<decltype(v.data())>>> {
-    return std::forward<V>(v);
-}
-
-/** MakeSpan from any container that has .data() and .size(). For (lvalue) references, supporting mutable output. */
-template <typename V>
-constexpr auto MakeSpan(V &v) -> Span<typename std::remove_pointer_t<decltype(v.data())>> { return v; }
-
-/** Create a Span<const value_type> from any container that has .data() and .size() */
-template <typename V>
-constexpr auto MakeCSpan(const V &v) { return MakeSpan(v); }
+// Deduction guides for Span
+// For the pointer/size based and iterator based constructor:
+template <typename T, typename EndOrSize> Span(T*, EndOrSize) -> Span<T>;
+// For the array constructor:
+template <typename T, std::size_t N> Span(T (&)[N]) -> Span<T>;
+// For the temporaries/rvalue references constructor, only supporting const output.
+template <typename T> Span(T&&)
+    -> Span<std::enable_if_t<!std::is_lvalue_reference_v<T>,
+                             std::add_const_t<std::remove_pointer_t<decltype(std::declval<T&&>().data())>>>>;
+// For (lvalue) references, supporting mutable output.
+template <typename T> Span(T&) -> Span<std::remove_pointer_t<decltype(std::declval<T&>().data())>>;
 
 namespace Span_detail {
     // Helper function to safely cast to uint8_t pointers from any character-like pointer.
-    template <typename C, typename std::enable_if_t<std::is_same_v<std::remove_const_t<C>, char> || std::is_same_v<std::remove_const_t<C>, signed char> || std::is_same_v<std::remove_const_t<C>, unsigned char>
+    template <typename C, typename std::enable_if_t<std::is_same_v<std::remove_const_t<C>, char>
+                                                    || std::is_same_v<std::remove_const_t<C>, signed char>
+                                                    || std::is_same_v<std::remove_const_t<C>, unsigned char>
                                                     || std::is_same_v<std::remove_const_t<C>, int8_t>
                                                     || std::is_same_v<std::remove_const_t<C>, uint8_t>
                                                     || std::is_same_v<std::remove_const_t<C>, std::byte>, int> = 0>
@@ -232,8 +212,8 @@ namespace Span_detail {
     }
 } // namespace Span_detail
 
-/** Like MakeSpan, but for [const] uint8_t member types only. Only works for character/byte containers. */
+/** Like the Span constructor, but for (const) uint8_t member types only. Only works for (un)signed char containers. */
 template <typename V>
-auto MakeUInt8Span(V &&v) -> decltype(Span_detail::UInt8SpanCast(MakeSpan(std::forward<V>(v)))) {
-    return Span_detail::UInt8SpanCast(MakeSpan(std::forward<V>(v)));
+auto MakeUInt8Span(V &&v) -> decltype(Span_detail::UInt8SpanCast(Span{std::forward<V>(v)})) {
+    return Span_detail::UInt8SpanCast(Span{std::forward<V>(v)});
 }
