@@ -157,7 +157,8 @@ namespace litecoin_bits {
     /// Eat the mimblewimble data from stream s for a tx, returning a byte blob (as a MimbleBlobPtr)
     template <typename TxType, typename Stream>
     MimbleBlobPtr EatTxMimbleBlob(const TxType &tx, Stream &s) {
-        MimbleBlobPtr ret = MimbleBlobPtr::Make();
+        MimbleBlobPtr ret;
+        ret.emplace();
         auto & data = *ret;
 
         detail::Eater eater(s, data);
@@ -179,7 +180,8 @@ namespace litecoin_bits {
 
     template <typename Stream>
     MimbleBlobPtr EatBlockMimbleBlob(Stream &s) {
-        MimbleBlobPtr ret = MimbleBlobPtr::Make();
+        MimbleBlobPtr ret{};
+        ret.emplace();
         auto & data = *ret;
 
         detail::Eater eater(s, data);
