@@ -32,13 +32,14 @@ namespace bitcoin {
     /// take non-trivial amounts of memory when they are not null.
     template <typename T>
     class CopyablePtr {
+        static_assert(!std::is_array_v<T>, "C-style array types are not supported");
         std::unique_ptr<T> p{};
     public:
         using element_type = T;
 
         constexpr CopyablePtr() noexcept = default;
         explicit CopyablePtr(const T & t) { *this = t; }
-        explicit CopyablePtr(T && t) { *this = t; }
+        explicit CopyablePtr(T && t) { *this = std::move(t); }
 
         /// Construct the CopyablePtr in-place using argument forwarding
         template <typename ...Args>
@@ -46,6 +47,10 @@ namespace bitcoin {
 
         CopyablePtr(const CopyablePtr & o) { *this = o; }
         CopyablePtr(CopyablePtr && o) = default;
+
+        /// Move constructor from a "pointer compatible" CopyablePtr<U>
+        template <typename U, typename = std::enable_if_t<std::is_convertible_v<U *, T *>>>
+        CopyablePtr(CopyablePtr<U> && o) { *this = std::move(o); }
 
         /// Create the new object in-place. Deletes previous object (if any) first.
         template <typename ...Args>
@@ -60,6 +65,10 @@ namespace bitcoin {
 
         CopyablePtr & operator=(const T & t) { p = std::make_unique<T>(t); return *this; }
         CopyablePtr & operator=(T && t) { p = std::make_unique<T>(std::move(t)); return *this; }
+
+        /// Move-assign from a "pointer compatible" CopyablePtr<U>
+        template <typename U, typename = std::enable_if_t<std::is_convertible_v<U *, T *>>>
+        CopyablePtr & operator=(CopyablePtr<U> && o) { reset(o.release()); return *this; }
 
         operator bool() const { return static_cast<bool>(p); }
         T & operator*() { return *p; }

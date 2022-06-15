@@ -1935,6 +1935,31 @@ namespace {
             BOOST_CHECK(CopyablePtr<std::vector<uint8_t>>(100, 0x80) == CopyablePtr<std::vector<uint8_t>>(100, 0x80));
             BOOST_CHECK(CopyablePtr<std::vector<uint8_t>>(100, 0x80) != CopyablePtr<std::vector<uint8_t>>(100, 0x81));
             BOOST_CHECK(CopyablePtr<std::vector<uint8_t>>(100, 0x80) < CopyablePtr<std::vector<uint8_t>>(100, 0x81));
+
+            // test move-assign and move-construct for "convertible" T types do what we expect
+            struct Foo {
+                std::vector<double> foo{{1.1, 2.2, 3.3, 4.4, 5.5}};
+            };
+            struct Bar : Foo {
+                std::vector<int> bar{{6, 7, 8, 9, 10}};
+            };
+
+            CopyablePtr<Foo> pbase(Foo{});
+            CopyablePtr<Bar> pder(Bar{});
+
+            const void *vptr_der = pder.get();
+
+            pbase = std::move(pder); // move-assign should work as we expect
+            BOOST_CHECK(pder.get() != vptr_der);
+            BOOST_CHECK_MESSAGE(pbase.get() == vptr_der,
+                                "Test that move-assigning from a derived to a base just swapped the pointer");
+
+            pder = Bar{};
+            vptr_der = pder.get();
+            CopyablePtr<Foo> pbase2(std::move(pder)); // move-construct should work as we expect
+            BOOST_CHECK(pder.get() != vptr_der);
+            BOOST_CHECK_MESSAGE(pbase2.get() == vptr_der,
+                                "Test that move-construct from a derived to a base just swapped the pointer");
         };
 
         RUN_CONTEXT();
