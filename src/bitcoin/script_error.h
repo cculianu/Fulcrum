@@ -3,8 +3,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef BITCOIN_SCRIPT_SCRIPT_ERROR_H
-#define BITCOIN_SCRIPT_SCRIPT_ERROR_H
+#pragma once
 
 #ifdef __clang__
 #pragma clang diagnostic push
@@ -13,78 +12,91 @@
 
 namespace bitcoin {
 
-typedef enum ScriptError_t {
-    SCRIPT_ERR_OK = 0,
-    SCRIPT_ERR_UNKNOWN_ERROR,
-    SCRIPT_ERR_EVAL_FALSE,
-    SCRIPT_ERR_OP_RETURN,
+enum class ScriptError {
+    OK = 0,
+    UNKNOWN,
+    EVAL_FALSE,
+    OP_RETURN,
 
     /* Max sizes */
-    SCRIPT_ERR_SCRIPT_SIZE,
-    SCRIPT_ERR_PUSH_SIZE,
-    SCRIPT_ERR_OP_COUNT,
-    SCRIPT_ERR_STACK_SIZE,
-    SCRIPT_ERR_SIG_COUNT,
-    SCRIPT_ERR_PUBKEY_COUNT,
+    SCRIPT_SIZE,
+    PUSH_SIZE,
+    OP_COUNT,
+    STACK_SIZE,
+    SIG_COUNT,
+    PUBKEY_COUNT,
+    INPUT_SIGCHECKS,
 
     /* Operands checks */
-    SCRIPT_ERR_INVALID_OPERAND_SIZE,
-    SCRIPT_ERR_INVALID_NUMBER_RANGE,
-    SCRIPT_ERR_IMPOSSIBLE_ENCODING,
-    SCRIPT_ERR_INVALID_SPLIT_RANGE,
+    INVALID_OPERAND_SIZE,
+    INVALID_NUMBER_RANGE,
+    IMPOSSIBLE_ENCODING,
+    INVALID_SPLIT_RANGE,
+    INVALID_BIT_COUNT,
 
     /* Failed verify operations */
-    SCRIPT_ERR_VERIFY,
-    SCRIPT_ERR_EQUALVERIFY,
-    SCRIPT_ERR_CHECKMULTISIGVERIFY,
-    SCRIPT_ERR_CHECKSIGVERIFY,
-    SCRIPT_ERR_CHECKDATASIGVERIFY,
-    SCRIPT_ERR_NUMEQUALVERIFY,
+    VERIFY,
+    EQUALVERIFY,
+    CHECKMULTISIGVERIFY,
+    CHECKSIGVERIFY,
+    CHECKDATASIGVERIFY,
+    NUMEQUALVERIFY,
 
     /* Logical/Format/Canonical errors */
-    SCRIPT_ERR_BAD_OPCODE,
-    SCRIPT_ERR_DISABLED_OPCODE,
-    SCRIPT_ERR_INVALID_STACK_OPERATION,
-    SCRIPT_ERR_INVALID_ALTSTACK_OPERATION,
-    SCRIPT_ERR_UNBALANCED_CONDITIONAL,
+    BAD_OPCODE,
+    DISABLED_OPCODE,
+    INVALID_STACK_OPERATION,
+    INVALID_ALTSTACK_OPERATION,
+    UNBALANCED_CONDITIONAL,
 
     /* Divisor errors */
-    SCRIPT_ERR_DIV_BY_ZERO,
-    SCRIPT_ERR_MOD_BY_ZERO,
+    DIV_BY_ZERO,
+    MOD_BY_ZERO,
+
+    /* Bitfield errors */
+    INVALID_BITFIELD_SIZE,
+    INVALID_BIT_RANGE,
 
     /* CHECKLOCKTIMEVERIFY and CHECKSEQUENCEVERIFY */
-    SCRIPT_ERR_NEGATIVE_LOCKTIME,
-    SCRIPT_ERR_UNSATISFIED_LOCKTIME,
+    NEGATIVE_LOCKTIME,
+    UNSATISFIED_LOCKTIME,
 
     /* Malleability */
-    SCRIPT_ERR_SIG_HASHTYPE,
-    SCRIPT_ERR_SIG_DER,
-    SCRIPT_ERR_MINIMALDATA,
-    SCRIPT_ERR_SIG_PUSHONLY,
-    SCRIPT_ERR_SIG_HIGH_S,
-    SCRIPT_ERR_SIG_NULLDUMMY,
-    SCRIPT_ERR_PUBKEYTYPE,
-    SCRIPT_ERR_CLEANSTACK,
-    SCRIPT_ERR_MINIMALIF,
-    SCRIPT_ERR_SIG_NULLFAIL,
+    SIG_HASHTYPE,
+    SIG_DER,
+    MINIMALDATA,
+    SIG_PUSHONLY,
+    SIG_HIGH_S,
+    PUBKEYTYPE,
+    CLEANSTACK,
+    MINIMALIF,
+    SIG_NULLFAIL,
 
     /* Schnorr */
-    SCRIPT_ERR_SIG_BADLENGTH,
+    SIG_BADLENGTH,
+    SIG_NONSCHNORR,
 
     /* softfork safeness */
-    SCRIPT_ERR_DISCOURAGE_UPGRADABLE_NOPS,
-
-    /* misc */
-    SCRIPT_ERR_NONCOMPRESSED_PUBKEY,
+    DISCOURAGE_UPGRADABLE_NOPS,
 
     /* anti replay */
-    SCRIPT_ERR_ILLEGAL_FORKID,
-    SCRIPT_ERR_MUST_USE_FORKID,
+    ILLEGAL_FORKID,
+    MUST_USE_FORKID,
 
-    SCRIPT_ERR_ERROR_COUNT
-} ScriptError;
+    /* Auxiliary errors (unused by interpreter) */
+    SIGCHECKS_LIMIT_EXCEEDED,
 
-#define SCRIPT_ERR_LAST SCRIPT_ERR_ERROR_COUNT
+    /* Operands checks Bigger Integers (64-bit) */
+    INVALID_NUMBER_RANGE_64_BIT,
+
+    /* Native Introspection */
+    CONTEXT_NOT_PRESENT,
+    LIMITED_CONTEXT_NO_SIBLING_INFO,
+    INVALID_TX_INPUT_INDEX,
+    INVALID_TX_OUTPUT_INDEX,
+
+    ERROR_COUNT,
+};
 
 const char *ScriptErrorString(const ScriptError error);
 
@@ -92,7 +104,7 @@ namespace {
 
 inline bool set_success(ScriptError *ret) {
     if (ret) {
-        *ret = SCRIPT_ERR_OK;
+        *ret = ScriptError::OK;
     }
     return true;
 }
@@ -111,5 +123,3 @@ inline bool set_error(ScriptError *ret, const ScriptError serror) {
 #ifdef __clang__
 #pragma clang diagnostic pop
 #endif
-
-#endif // BITCOIN_SCRIPT_SCRIPT_ERROR_H

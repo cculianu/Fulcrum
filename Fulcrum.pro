@@ -407,6 +407,7 @@ SOURCES += \
     bitcoin/script_standard.cpp \
     bitcoin/sigencoding.cpp \
     bitcoin/test.cpp \
+    bitcoin/token.cpp \
     bitcoin/transaction.cpp \
     bitcoin/uint256.cpp \
     bitcoin/utilstrencodings.cpp
@@ -450,6 +451,7 @@ HEADERS += \
     bitcoin/support/cleanse.h \
     bitcoin/support/zeroafterfree.h \
     bitcoin/tinyformat.h \
+    bitcoin/token.h \
     bitcoin/transaction.h \
     bitcoin/txid.h \
     bitcoin/uint256.h \

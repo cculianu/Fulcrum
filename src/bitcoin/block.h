@@ -3,8 +3,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef BITCOIN_PRIMITIVES_BLOCK_H
-#define BITCOIN_PRIMITIVES_BLOCK_H
+#pragma once
 
 #include "transaction.h"
 #include "serialize.h"
@@ -33,16 +32,13 @@ public:
 
     CBlockHeader() { SetNull(); }
 
-    ADD_SERIALIZE_METHODS
-
-    template <typename Stream, typename Operation>
-    inline void SerializationOp(Stream &s, Operation ser_action) {
-        READWRITE(this->nVersion);
-        READWRITE(hashPrevBlock);
-        READWRITE(hashMerkleRoot);
-        READWRITE(nTime);
-        READWRITE(nBits);
-        READWRITE(nNonce);
+    SERIALIZE_METHODS(CBlockHeader, obj) {
+        READWRITE(obj.nVersion);
+        READWRITE(obj.hashPrevBlock);
+        READWRITE(obj.hashMerkleRoot);
+        READWRITE(obj.nTime);
+        READWRITE(obj.nBits);
+        READWRITE(obj.nNonce);
     }
 
     void SetNull() {
@@ -79,20 +75,17 @@ public:
         *(static_cast<CBlockHeader *>(this)) = header;
     }
 
-    ADD_SERIALIZE_METHODS
-
-    template <typename Stream, typename Operation>
-    inline void SerializationOp(Stream &s, Operation ser_action) {
-        READWRITEAS(CBlockHeader, *this);
-        READWRITE(vtx);
+    SERIALIZE_METHODS(CBlock, obj) {
+        READWRITEAS(CBlockHeader, obj);
+        READWRITE(obj.vtx);
         // Litecoin only -- Deserialize the mimble-wimble blob at the end under certain conditions (post-activation).
-        if constexpr (ser_action.ForRead()) mw_blob.reset();
-        if (s.GetVersion() & SERIALIZE_TRANSACTION_USE_MWEB && vtx.size() >= 2 && vtx.back()->IsHogEx()) {
+        if constexpr (ser_action.ForRead()) obj.mw_blob.reset();
+        if (s.GetVersion() & SERIALIZE_TRANSACTION_USE_MWEB && obj.vtx.size() >= 2 && obj.vtx.back()->IsHogEx()) {
             if constexpr (ser_action.ForRead()) {
-                mw_blob = litecoin_bits::EatBlockMimbleBlob(s);
+                obj.mw_blob = litecoin_bits::EatBlockMimbleBlob(s);
             } else {
-                if (mw_blob) {
-                    s.write(reinterpret_cast<const char *>(std::as_const(*mw_blob).data()), mw_blob->size());
+                if (obj.mw_blob) {
+                    s.write(reinterpret_cast<const char *>(std::as_const(*obj.mw_blob).data()), obj.mw_blob->size());
                 }
             }
         }
@@ -132,13 +125,10 @@ struct CBlockLocator {
     explicit CBlockLocator(const std::vector<uint256> &vHaveIn)
         : vHave(vHaveIn) {}
 
-    ADD_SERIALIZE_METHODS
-
-    template <typename Stream, typename Operation>
-    inline void SerializationOp(Stream &s, Operation ser_action) {
+    SERIALIZE_METHODS(CBlockLocator, obj) {
         int nVersion = s.GetVersion();
         if (!(s.GetType() & SER_GETHASH)) READWRITE(nVersion);
-        READWRITE(vHave);
+        READWRITE(obj.vHave);
     }
 
     void SetNull() { vHave.clear(); }
@@ -147,4 +137,3 @@ struct CBlockLocator {
 };
 
 } // end namespace bitcoin
-#endif // BITCOIN_PRIMITIVES_BLOCK_H

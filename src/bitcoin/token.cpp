@@ -8,6 +8,8 @@
 #include "tinyformat.h"
 #include "utilstrencodings.h"
 
+#include <cassert>
+
 namespace bitcoin {
 namespace token {
 

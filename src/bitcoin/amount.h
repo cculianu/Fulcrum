@@ -4,8 +4,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef BITCOIN_AMOUNT_H
-#define BITCOIN_AMOUNT_H
+#pragma once
 
 #include "serialize.h"
 
@@ -139,12 +138,7 @@ public:
     std::string ToString() const;
 
     // serialization support
-    ADD_SERIALIZE_METHODS;
-
-    template <typename Stream, typename Operation>
-    inline void SerializationOp(Stream &s, Operation ser_action) {
-        READWRITE(amount);
-    }
+    SERIALIZE_METHODS(Amount, obj) { READWRITE(obj.amount); }
 };
 
 inline constexpr Amount SATOSHI = Amount::satoshi();
@@ -171,5 +165,3 @@ inline bool MoneyRange(const Amount nValue) {
 }
 
 } // end namespace bitcoin
-
-#endif //  BITCOIN_AMOUNT_H

@@ -4,8 +4,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef BITCOIN_FEERATE_H
-#define BITCOIN_FEERATE_H
+#pragma once
 
 #include "amount.h"
 #include "serialize.h"
@@ -85,13 +84,7 @@ public:
     }
     std::string ToString() const;
 
-    ADD_SERIALIZE_METHODS
-
-    template <typename Stream, typename Operation>
-    inline void SerializationOp(Stream &s, Operation ser_action) {
-        READWRITE(nSatoshisPerK);
-    }
+    SERIALIZE_METHODS(CFeeRate, obj) { READWRITE(obj.nSatoshisPerK); }
 };
 
 } // end namespace bitcoin
-#endif //  BITCOIN_FEERATE_H

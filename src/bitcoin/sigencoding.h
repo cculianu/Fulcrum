@@ -4,8 +4,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef BITCOIN_SCRIPT_SIGENCODING_H
-#define BITCOIN_SCRIPT_SIGENCODING_H
+#pragma once
 
 #include "script_error.h"
 #include "sighashtype.h"
@@ -20,9 +19,7 @@
 
 namespace bitcoin {
 
-typedef std::vector<uint8_t> valtype;
-
-namespace {
+using valtype = std::vector<uint8_t>;
 
 inline SigHashType GetHashType(const valtype &vchSig) {
     if (vchSig.size() == 0) {
@@ -31,8 +28,6 @@ inline SigHashType GetHashType(const valtype &vchSig) {
 
     return SigHashType(vchSig[vchSig.size() - 1]);
 }
-
-} // namespace
 
 /**
  * Check that the signature provided on some data is properly encoded.
@@ -60,6 +55,15 @@ bool CheckTransactionECDSASignatureEncoding(const valtype &vchSig,
                                             ScriptError *serror);
 
 /**
+ * Check that the signature provided to authentify a transaction is properly
+ * encoded Schnorr signature (or null). Signatures passed to the new-mode
+ * OP_CHECKMULTISIG and its verify variant must be checked using this function.
+ */
+bool CheckTransactionSchnorrSignatureEncoding(const valtype &vchSig,
+                                              uint32_t flags,
+                                              ScriptError *serror);
+
+/**
  * Check that a public key is encoded properly.
  */
 bool CheckPubKeyEncoding(const valtype &vchPubKey, uint32_t flags,
@@ -71,5 +75,3 @@ bool CheckPubKeyEncoding(const valtype &vchPubKey, uint32_t flags,
 #ifdef __clang__
 #pragma clang diagnostic pop
 #endif
-
-#endif // BITCOIN_SCRIPT_SIGENCODING_H

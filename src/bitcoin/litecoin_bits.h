@@ -65,10 +65,16 @@ namespace litecoin_bits {
                 return nbytes;
             }
 
+            template<typename Stream2, typename I>
+            static void WriteVarInt(Stream2 &os, I n) {
+                // hack to make this code compatible with updated serialize.h from BCHN sources
+                bitcoin::WriteVarInt<Stream2, VarIntMode::DEFAULT>(os, n);
+            }
+
             uint64_t RdWrVarInt() {
-                const auto vi = ReadVarInt<Stream, uint64_t>(s);
+                const auto vi = ReadVarInt<Stream, VarIntMode::DEFAULT, uint64_t>(s);
                 GenericVectorWriter vw(s.GetType(), s.GetVersion(), data, data.size());
-                WriteVarInt(vw, vi);
+                this->WriteVarInt(vw, vi);
                 return vi;
             }
 

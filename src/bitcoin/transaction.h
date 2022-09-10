@@ -12,6 +12,7 @@
 #include "litecoin_bits.h"
 #include "script.h"
 #include "serialize.h"
+#include "token.h"
 #include "txid.h"
 
 #ifdef USE_QT_IN_BITCOIN
@@ -37,13 +38,13 @@ namespace bitcoin {
  * or with `ADDRV2_FORMAT`.
  */
 
-inline constexpr int SERIALIZE_TRANSACTION = 0x00;
+static constexpr int SERIALIZE_TRANSACTION = 0x00;
 // Added by Calin, imported from Core. Note in Core this flag has the *opposite* meaning
 // (there it is called SERIALIZE_TRANSACTION_NO_WITNESS
-inline constexpr int SERIALIZE_TRANSACTION_USE_WITNESS = 0x40000000;
+static constexpr int SERIALIZE_TRANSACTION_USE_WITNESS = 0x40000000;
 // Added by Calin, imported from Litecoin. Note in Litecoin this flag has the *opposite* meaning
 // (there it is called SERIALIZE_NO_MWEB
-inline constexpr int SERIALIZE_TRANSACTION_USE_MWEB = 0x20000000;
+static constexpr int SERIALIZE_TRANSACTION_USE_MWEB = 0x20000000;
 
 static_assert (sizeof(int) >= 4);
 
@@ -57,18 +58,14 @@ private:
     uint32_t n;
 
 public:
-    COutPoint() : txid(), n(-1) {}
-    COutPoint(uint256 txidIn, uint32_t nIn) : txid(TxId(txidIn)), n(nIn) {}
+    static constexpr uint32_t NULL_INDEX = std::numeric_limits<uint32_t>::max();
 
-    ADD_SERIALIZE_METHODS
+    COutPoint() : txid(), n(NULL_INDEX) {}
+    COutPoint(TxId txidIn, uint32_t nIn) : txid(txidIn), n(nIn) {}
 
-    template <typename Stream, typename Operation>
-    inline void SerializationOp(Stream &s, Operation ser_action) {
-        READWRITE(txid);
-        READWRITE(n);
-    }
+    SERIALIZE_METHODS(COutPoint, obj) { READWRITE(obj.txid, obj.n); }
 
-    bool IsNull() const { return txid.IsNull() && n == uint32_t(-1); }
+    bool IsNull() const { return txid.IsNull() && n == NULL_INDEX; }
 
     const TxId &GetTxId() const { return txid; }
     uint32_t GetN() const { return n; }
@@ -86,7 +83,7 @@ public:
         return !(a == b);
     }
 
-    std::string ToString() const;
+    std::string ToString(bool fVerbose = false) const;
 #ifdef USE_QT_IN_BITCOIN
     /// construct it from a QString of "prevousHash:N" e.g.: "ab126fe4c....41ab6:3"
     COutPoint(const QString &prevoutColonNString) { SetQString(prevoutColonNString); }
@@ -159,14 +156,7 @@ public:
           uint32_t nSequenceIn = SEQUENCE_FINAL)
         : CTxIn(COutPoint(prevTxId, nOut), scriptSigIn, nSequenceIn) {}
 
-    ADD_SERIALIZE_METHODS
-
-    template <typename Stream, typename Operation>
-    inline void SerializationOp(Stream &s, Operation ser_action) {
-        READWRITE(prevout);
-        READWRITE(scriptSig);
-        READWRITE(nSequence);
-    }
+    SERIALIZE_METHODS(CTxIn, obj) { READWRITE(obj.prevout, obj.scriptSig, obj.nSequence); }
 
     friend bool operator==(const CTxIn &a, const CTxIn &b) {
         return (a.prevout == b.prevout && a.scriptSig == b.scriptSig &&
@@ -175,7 +165,7 @@ public:
 
     friend bool operator!=(const CTxIn &a, const CTxIn &b) { return !(a == b); }
 
-    std::string ToString() const;
+    std::string ToString(bool fVerbose = false) const;
 };
 
 /**
@@ -186,64 +176,50 @@ class CTxOut {
 public:
     Amount nValue;
     CScript scriptPubKey;
+    token::OutputDataPtr tokenDataPtr; ///< may be null (indicates no token data for this output)
 
     CTxOut() { SetNull(); }
 
-    CTxOut(Amount nValueIn, CScript scriptPubKeyIn)
-        : nValue(nValueIn), scriptPubKey(scriptPubKeyIn) {}
+    CTxOut(Amount nValueIn, const CScript &scriptPubKeyIn, const token::OutputDataPtr &tokenDataIn = {})
+        : nValue(nValueIn), scriptPubKey(scriptPubKeyIn), tokenDataPtr(tokenDataIn) {}
 
-    ADD_SERIALIZE_METHODS
+    CTxOut(Amount nValueIn, const CScript &scriptPubKeyIn, token::OutputDataPtr &&tokenDataIn)
+        : nValue(nValueIn), scriptPubKey(scriptPubKeyIn), tokenDataPtr(std::move(tokenDataIn)) {}
 
-    template <typename Stream, typename Operation>
-    inline void SerializationOp(Stream &s, Operation ser_action) {
-        READWRITE(nValue);
-        READWRITE(scriptPubKey);
+    SERIALIZE_METHODS(CTxOut, obj) {
+        READWRITE(obj.nValue);
+        if (!ser_action.ForRead() && !obj.tokenDataPtr) {
+            // fast-path for writing with no token data, just write out the scriptPubKey directly
+            READWRITE(obj.scriptPubKey);
+        } else {
+            token::WrappedScriptPubKey wspk;
+            SER_WRITE(obj, token::WrapScriptPubKey(wspk, obj.tokenDataPtr, obj.scriptPubKey, s.GetVersion()));
+            READWRITE(wspk);
+            SER_READ(obj, token::UnwrapScriptPubKey(wspk, obj.tokenDataPtr, obj.scriptPubKey, s.GetVersion()));
+        }
     }
 
     void SetNull() {
         nValue = -SATOSHI;
         scriptPubKey.clear();
+        tokenDataPtr.reset();
     }
 
     bool IsNull() const { return nValue == -SATOSHI; }
 
-    Amount GetDustThreshold(const CFeeRate &minRelayTxFee) const {
-        /**
-         * "Dust" is defined in terms of CTransaction::minRelayTxFee, which has
-         * units satoshis-per-kilobyte. If you'd pay more than 1/3 in fees to
-         * spend something, then we consider it dust. A typical spendable
-         * non-segwit txout is 34 bytes big, and will need a CTxIn of at least
-         * 148 bytes to spend: so dust is a spendable txout less than
-         * 546*minRelayTxFee/1000 (in satoshis). A typical spendable segwit
-         * txout is 31 bytes big, and will need a CTxIn of at least 67 bytes to
-         * spend: so dust is a spendable txout less than 294*minRelayTxFee/1000
-         * (in satoshis).
-         */
-        if (scriptPubKey.IsUnspendable()) {
-            return Amount::zero();
-        }
-
-        size_t nSize = GetSerializeSize(*this, SER_DISK, 0);
-
-        // the 148 mentioned above
-        nSize += (32 + 4 + 1 + 107 + 4);
-
-        return 3 * minRelayTxFee.GetFee(nSize);
-    }
-
-    bool IsDust(const CFeeRate &minRelayTxFee) const {
-        return (nValue < GetDustThreshold(minRelayTxFee));
+    bool HasUnparseableTokenData() const {
+        return !tokenDataPtr && !scriptPubKey.empty() && scriptPubKey[0] == token::PREFIX_BYTE;
     }
 
     friend bool operator==(const CTxOut &a, const CTxOut &b) {
-        return (a.nValue == b.nValue && a.scriptPubKey == b.scriptPubKey);
+        return a.nValue == b.nValue && a.scriptPubKey == b.scriptPubKey && a.tokenDataPtr == b.tokenDataPtr;
     }
 
     friend bool operator!=(const CTxOut &a, const CTxOut &b) {
         return !(a == b);
     }
 
-    std::string ToString() const;
+    std::string ToString(bool fVerbose = false) const;
 };
 
 class CMutableTransaction;
@@ -462,7 +438,7 @@ public:
         return a.hash != b.hash;
     }
 
-    std::string ToString() const;
+    std::string ToString(bool fVerbose = false) const;
 
     /// Added by Calin to support Core
     bool HasWitness() const {

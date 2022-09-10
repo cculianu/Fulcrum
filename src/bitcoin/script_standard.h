@@ -3,10 +3,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef BITCOIN_SCRIPT_STANDARD_H
-#define BITCOIN_SCRIPT_STANDARD_H
+#pragma once
 
-#include "amount.h"
 #include "pubkey.h"
 #include "script_flags.h"
 #include "uint256.h"
@@ -111,4 +109,3 @@ CScript GetScriptForMultisig(int nRequired, const std::vector<CPubKey> &keys);
 #ifdef __clang__
 #pragma clang diagnostic pop
 #endif
-#endif // BITCOIN_SCRIPT_STANDARD_H

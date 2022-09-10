@@ -3,6 +3,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#pragma once
+
 /**
  * Why base-58 instead of standard base-64 encoding?
  * - Don't want 0OIl characters that look the same in some fonts and
@@ -13,14 +15,6 @@
  * - Double-clicking selects the whole string as one word if it's all
  * alphanumeric.
  */
-#ifndef BITCOIN_BASE58_H
-#define BITCOIN_BASE58_H
-
-//#include <chainparams.h>
-//#include <key.h>
-//#include <pubkey.h>
-//#include <script/standard.h>
-//#include <support/allocators/zeroafterfree.h>
 
 #include <string>
 #include <vector>
@@ -68,5 +62,3 @@ bool DecodeBase58Check(const char *psz, std::vector<uint8_t> &vchRet);
 bool DecodeBase58Check(const std::string &str,
                        std::vector<uint8_t> &vchRet);
 }
-
-#endif // BITCOIN_BASE58_H

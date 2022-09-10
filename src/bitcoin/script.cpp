@@ -421,9 +421,7 @@ uint32_t CScript::GetSigOpCount(uint32_t flags, bool fAccurate) const {
 
             case OP_CHECKDATASIG:
             case OP_CHECKDATASIGVERIFY:
-                if (flags & SCRIPT_ENABLE_CHECKDATASIG) {
-                    n++;
-                }
+                n++;
                 break;
 
             case OP_CHECKMULTISIG:

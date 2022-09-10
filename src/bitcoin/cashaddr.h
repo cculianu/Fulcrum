@@ -4,6 +4,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 // Cashaddr is an address format inspired by bech32.
+#pragma once
 
 #include <cstdint>
 #include <string>
