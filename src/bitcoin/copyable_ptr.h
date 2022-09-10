@@ -38,7 +38,7 @@ namespace bitcoin {
 
         constexpr CopyablePtr() noexcept = default;
         explicit CopyablePtr(const T & t) { *this = t; }
-        explicit CopyablePtr(T && t) { *this = t; }
+        explicit CopyablePtr(T && t) noexcept { *this = t; }
 
         /// Construct the CopyablePtr in-place using argument forwarding
         template <typename ...Args>
@@ -56,7 +56,7 @@ namespace bitcoin {
             else p.reset();
             return *this;
         }
-        CopyablePtr & operator=(CopyablePtr && o) = default;
+        CopyablePtr & operator=(CopyablePtr && o) noexcept = default;
 
         CopyablePtr & operator=(const T & t) { p = std::make_unique<T>(t); return *this; }
         CopyablePtr & operator=(T && t) { p = std::make_unique<T>(std::move(t)); return *this; }
