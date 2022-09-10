@@ -387,8 +387,7 @@ template <typename Stream, typename I> I ReadVarInt(Stream &is) {
     }
 }
 
-#define FLATDATA(obj)                                                          \
-    REF(CFlatData((char *)&(obj), (char *)&(obj) + sizeof(obj)))
+#define FLATDATA(obj) REF(CFlatData((char *)&(obj), (char *)&(obj) + sizeof(obj)))
 #define VARINT(obj) REF(WrapVarInt(REF(obj)))
 #define COMPACTSIZE(obj) REF(CCompactSize(REF(obj)))
 #define LIMITED_STRING(obj, n) REF(LimitedString<n>(REF(obj)))

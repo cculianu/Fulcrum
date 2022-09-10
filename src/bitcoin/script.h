@@ -191,8 +191,47 @@ enum opcodetype {
     OP_CHECKDATASIG = 0xba,
     OP_CHECKDATASIGVERIFY = 0xbb,
 
+    // additional byte string operations
+    OP_REVERSEBYTES = 0xbc,
+
+    // Available codepoints
+    // 0xbd,
+    // 0xbe,
+    // 0xbf,
+
+    // Native Introspection opcodes
+    OP_INPUTINDEX = 0xc0,
+    OP_ACTIVEBYTECODE = 0xc1,
+    OP_TXVERSION = 0xc2,
+    OP_TXINPUTCOUNT = 0xc3,
+    OP_TXOUTPUTCOUNT = 0xc4,
+    OP_TXLOCKTIME = 0xc5,
+    OP_UTXOVALUE = 0xc6,
+    OP_UTXOBYTECODE = 0xc7,
+    OP_OUTPOINTTXHASH = 0xc8,
+    OP_OUTPOINTINDEX = 0xc9,
+    OP_INPUTBYTECODE = 0xca,
+    OP_INPUTSEQUENCENUMBER = 0xcb,
+    OP_OUTPUTVALUE = 0xcc,
+    OP_OUTPUTBYTECODE = 0xcd,
+
+    // Native Introspection of tokens (SCRIPT_ENABLE_TOKENS must be set)
+    OP_UTXOTOKENCATEGORY = 0xce,
+    OP_UTXOTOKENCOMMITMENT = 0xcf,
+    OP_UTXOTOKENAMOUNT = 0xd0,
+    OP_OUTPUTTOKENCATEGORY = 0xd1,
+    OP_OUTPUTTOKENCOMMITMENT = 0xd2,
+    OP_OUTPUTTOKENAMOUNT = 0xd3,
+
+    OP_RESERVED3 = 0xd4,
+    OP_RESERVED4 = 0xd5,
+
     // The first op_code value after all defined opcodes
     FIRST_UNDEFINED_OP_VALUE,
+
+    // Invalid opcode if executed, but used for special token prefix if at
+    // position 0 in scriptPubKey. See: primitives/token.h
+    SPECIAL_TOKEN_PREFIX = 0xef,
 
     // multi-byte opcodes
     OP_PREFIX_BEGIN = 0xf0,
@@ -213,6 +252,204 @@ class scriptnum_error : public std::runtime_error {
 public:
     explicit scriptnum_error(const std::string &str)
         : std::runtime_error(str) {}
+};
+
+/**
+ * NOTE: This was copied from BCHN for CashToken support (token::SafeAmount)
+ * but is not used for CScruptNum.  Original comment from BCHN follows:
+ *
+ * Base template class for CScriptNum and ScriptInt. This class implements
+ * some of the functionality common to both subclasses, and also captures
+ * some enforcement of the consensus rules related to:
+ *
+ *  - valid 64 bit range (INT64_MIN is forbidden)
+ *  - trapping for arithmetic operations that overflow or that produce a
+ *    result equal to INT64_MIN
+ */
+template <typename Derived>
+struct ScriptIntBase {
+public:
+    /**
+     * Factory method to safely construct an instance from a raw int64_t.
+     *
+     * Note the unusual enforcement of the rules regarding valid 64-bit
+     * ranges. We enforce a strict range of [INT64_MIN+1, INT64_MAX].
+     */
+    static constexpr
+    std::optional<Derived> fromInt(int64_t x) noexcept {
+        if ( ! valid64BitRange(x)) {
+            return std::nullopt;
+        }
+        return Derived(x);
+    }
+
+    /// Performance/convenience optimization: Construct an instance from a raw
+    /// int64_t where the caller already knows that the supplied value is in range.
+    static constexpr
+    Derived fromIntUnchecked(int64_t x) noexcept {
+        return Derived(x);
+    }
+
+    constexpr
+    bool operator==(int64_t x) const noexcept { return value_ == x; }
+
+    constexpr
+    bool operator!=(int64_t x) const noexcept { return value_ != x; }
+
+    constexpr
+    bool operator<=(int64_t x) const noexcept { return value_ <= x; }
+
+    constexpr
+    bool operator<(int64_t x) const noexcept { return value_ < x; }
+
+    constexpr
+    bool operator>=(int64_t x) const noexcept { return value_ >= x; }
+
+    constexpr
+    bool operator>(int64_t x) const noexcept { return value_ > x; }
+
+    constexpr
+    bool operator==(Derived const& x) const noexcept {
+        return operator==(x.value_);
+    }
+
+    constexpr
+    bool operator!=(Derived const& x) const noexcept {
+        return operator!=(x.value_);
+    }
+
+    constexpr
+    bool operator<=(Derived const& x) const noexcept {
+        return operator<=(x.value_);
+    }
+
+    constexpr
+    bool operator<(Derived const& x) const noexcept {
+        return operator<(x.value_);
+    }
+
+    constexpr
+    bool operator>=(Derived const& x) const noexcept {
+        return operator>=(x.value_);
+    }
+
+    constexpr
+    bool operator>(Derived const& x) const noexcept {
+        return operator>(x.value_);
+    }
+
+    // Arithmetic operations
+    std::optional<Derived> safeAdd(int64_t x) const noexcept {
+        bool const res = __builtin_add_overflow(value_, x, &x);
+        if (res) {
+            return std::nullopt;
+        }
+        if ( ! valid64BitRange(x)) {
+            return std::nullopt;
+        }
+        return Derived(x);
+    }
+
+    std::optional<Derived> safeAdd(Derived const& x) const noexcept {
+        return safeAdd(x.value_);
+    }
+
+    std::optional<Derived> safeSub(int64_t x) const noexcept {
+        bool const res = __builtin_sub_overflow(value_, x, &x);
+        if (res) {
+            return std::nullopt;
+        }
+        if ( ! valid64BitRange(x)) {
+            return std::nullopt;
+        }
+        return Derived(x);
+    }
+
+    std::optional<Derived> safeSub(Derived const& x) const noexcept {
+        return safeSub(x.value_);
+    }
+
+    std::optional<Derived> safeMul(int64_t x) const noexcept {
+        bool const res = __builtin_mul_overflow(value_, x, &x);
+        if (res) {
+            return std::nullopt;
+        }
+        if ( ! valid64BitRange(x)) {
+            return std::nullopt;
+        }
+        return Derived(x);
+    }
+
+    std::optional<Derived> safeMul(Derived const& x) const noexcept {
+        return safeMul(x.value_);
+    }
+
+    constexpr
+    Derived operator/(int64_t x) const noexcept {
+        if (x == -1 && ! valid64BitRange(value_)) {
+            // Guard against overflow, which can't normally happen unless class is misused
+            // by the fromIntUnchecked() factory method (may happen in tests).
+            // This will return INT64_MIN which is what ARM & x86 does anyway for INT64_MIN / -1.
+            return Derived(value_);
+        }
+        return Derived(value_ / x);
+    }
+
+    constexpr
+    Derived operator/(Derived const& x) const noexcept {
+        return operator/(x.value_);
+    }
+
+    constexpr
+    Derived operator%(int64_t x) const noexcept {
+        if (x == -1 && ! valid64BitRange(value_)) {
+            // INT64_MIN % -1 is UB in C++, but mathematically it would yield 0
+            return Derived(0);
+        }
+        return Derived(value_ % x);
+    }
+
+    constexpr
+    Derived operator%(Derived const& x) const noexcept {
+        return operator%(x.value_);
+    }
+
+    // Bitwise operations
+    std::optional<Derived> safeBitwiseAnd(int64_t x) const noexcept {
+        x = value_ & x;
+        if ( ! valid64BitRange(x)) {
+            return std::nullopt;
+        }
+        return Derived(x);
+    }
+
+    std::optional<Derived> safeBitwiseAnd(Derived const& x) const noexcept {
+        return safeBitwiseAnd(x.value_);
+    }
+
+    constexpr
+    Derived operator-() const noexcept {
+        // Defensive programming: -INT64_MIN is UB
+        return Derived(valid64BitRange(value_) ? -value_ : value_);
+    }
+
+    constexpr
+    int64_t getint64() const noexcept {
+        return value_;
+    }
+
+protected:
+    static constexpr
+    bool valid64BitRange(int64_t x) {
+        return x != std::numeric_limits<int64_t>::min();
+    }
+
+    explicit constexpr
+    ScriptIntBase(int64_t x)
+        : value_(x)
+    {}
+
+    int64_t value_;
 };
 
 class CScriptNum {

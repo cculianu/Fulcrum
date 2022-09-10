@@ -420,6 +420,8 @@ public:
         }
     }
 
+    static constexpr size_t static_capacity() { return N; }
+
     T &operator[](size_type pos) noexcept { return *item_ptr(pos); }
 
     const T &operator[](size_type pos) const noexcept { return *item_ptr(pos); }
