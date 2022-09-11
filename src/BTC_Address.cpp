@@ -54,6 +54,8 @@ namespace BTC
             { RegTestNet, { {111, Address::P2PKH }, {196, Address::P2SH} } },
         };
         Byte verByteForNetAndKind(Net net, Address::Kind kind) {
+            if (kind == Address::TOKEN_P2PKH) kind = Address::P2PKH; // hack to support TOKEN_P2PKH
+            else if (kind == Address::TOKEN_P2SH) kind = Address::P2SH; // hack to support TOKEN_P2SH
             if (const auto map = netVerByteKindMap.value(net); LIKELY(!map.isEmpty())) {
                 for (auto it = map.begin(); it != map.end(); ++it) {
                     if (it.value() == kind)
@@ -139,8 +141,8 @@ namespace BTC
                 if (UNLIKELY(a.verByte == InvalidVerByte))
                     // Defensive programming.. we should never reach this branch.
                     throw Exception("Unknown content.type or other missing data on cash addr decode attempt");
-                a.h160.clear();
-                a.h160.insert(0, reinterpret_cast<const char *>(content.hash.data()), int(content.hash.size()));
+                a._hash.clear();
+                a._hash.insert(0, reinterpret_cast<const char *>(content.hash.data()), int(content.hash.size()));
                 return a.isValid(); // this is here as a reduntant check -- this should always be true if we get here
             }
             return false;
@@ -156,8 +158,8 @@ namespace BTC
 #endif
             } else {
                 a.verByte = dec[0];
-                a.h160.resize(int(H160Len));
-                std::memcpy(a.h160.data(), &dec[1], H160Len);
+                a._hash.resize(int(H160Len));
+                std::memcpy(a._hash.data(), &dec[1], H160Len);
                 a._net = netForVerByte(a.verByte); // note this will not correctly differntiate between TestNet, TestNet4, ScaleNet and RegTestNet and always pick TestNet since they have the same verBytes.
                 a.autosetKind(); // this will clear the address if something is wrong
             }
@@ -185,7 +187,7 @@ namespace BTC
         Address ret;
         if (const auto vb = verByteForNetAndKind(net, k); LIKELY(vb != InvalidVerByte && pend > pbegin)) {
             const auto hash160 = bitcoin::Hash160(pbegin, pend);
-            ret.h160 = QByteArray(reinterpret_cast<const char *>(hash160.begin()), int(hash160.size()));
+            ret._hash = QByteArray(reinterpret_cast<const char *>(hash160.begin()), int(hash160.size()));
             ret.verByte = vb;
             ret._kind = k;
             ret._net = net;
@@ -196,9 +198,13 @@ namespace BTC
     // Used internally in one branch when parsing Legacy.  If it fails it will clear the address to default constructed values.
     bool Address::autosetKind()
     {
-        if (h160.length() == int(H160Len)) {
+        if (const auto len = _hash.length(); len == int(H160Len)) {
             _kind = kindForNetAndVerByte(_net, verByte);
             if (_kind != Kind::Invalid)
+                return true;
+        } else if (len == int(H256Len)) {
+            _kind = kindForNetAndVerByte(_net, verByte);
+            if (_kind == Kind::P2SH || _kind == Kind::TOKEN_P2SH)
                 return true;
         }
         // if we get here, there was a problem, so clear to default and return false.
@@ -211,18 +217,23 @@ namespace BTC
     {
         using namespace bitcoin;
         CScript ret;
-        if (h160.length() == int(H160Len)) {
-            if (_kind == P2PKH) {
+        if (const auto len = _hash.length(); len == int(H160Len)) {
+            if (_kind == P2PKH || _kind == TOKEN_P2PKH) {
                 ret << OP_DUP << OP_HASH160;
-                ret.insert(ret.end(), uint8_t(h160.length())); // push length
-                ret.insert(ret.end(), reinterpret_cast<const Byte *>(h160.begin()), reinterpret_cast<const Byte *>(h160.end())); // push h160
+                ret.insert(ret.end(), uint8_t(len)); // push length
+                ret.insert(ret.end(), reinterpret_cast<const Byte *>(_hash.begin()), reinterpret_cast<const Byte *>(_hash.end())); // push h160
                 ret << OP_EQUALVERIFY << OP_CHECKSIG;
-            } else if (_kind == P2SH) {
+            } else if (_kind == P2SH || _kind == TOKEN_P2SH) {
                 ret << OP_HASH160;
-                ret.insert(ret.end(), uint8_t(h160.length())); // push length
-                ret.insert(ret.end(), reinterpret_cast<const Byte *>(h160.begin()), reinterpret_cast<const Byte *>(h160.end())); // push h160
+                ret.insert(ret.end(), uint8_t(_hash.length())); // push length
+                ret.insert(ret.end(), reinterpret_cast<const Byte *>(_hash.begin()), reinterpret_cast<const Byte *>(_hash.end())); // push h160
                 ret << OP_EQUAL;
             }
+        } else if (len == int(H256Len) && (_kind == P2SH || _kind == TOKEN_P2SH)) {
+            ret << OP_HASH256;
+            ret.insert(ret.end(), uint8_t(len)); // push length
+            ret.insert(ret.end(), reinterpret_cast<const Byte *>(_hash.begin()), reinterpret_cast<const Byte *>(_hash.end())); // push 256
+            ret << OP_EQUAL;
         }
         return ret;
     }
@@ -243,9 +254,9 @@ namespace BTC
         if (isValid()) {
             if (legacy) {
                 std::vector<Byte> vch;
-                vch.reserve(1 + size_t(h160.size()));
+                vch.reserve(1 + size_t(_hash.size()));
                 vch.push_back(verByteOverride.value_or(verByte));
-                vch.insert(vch.end(), h160.begin(), h160.end());
+                vch.insert(vch.end(), _hash.begin(), _hash.end());
                 ret = QString::fromStdString(bitcoin::EncodeBase58Check(vch));
             } else {
                 const std::string *prefix = nullptr;
@@ -258,8 +269,8 @@ namespace BTC
                 case Net::Invalid:    break;
                 }
                 if (prefix) {
-                    const std::vector<Byte> content(h160.begin(), h160.end());
-                    const auto type = _kind == P2PKH ? bitcoin::PUBKEY_TYPE : bitcoin::SCRIPT_TYPE;
+                    const std::vector<Byte> content(_hash.begin(), _hash.end());
+                    const auto type = static_cast<bitcoin::CashAddrType>(_kind);
                     ret = QString::fromStdString( bitcoin::EncodeCashAddr(*prefix, { type, content }) );
                 }
             }
@@ -423,6 +434,8 @@ namespace BTC
         constexpr auto anAddress_leg = "1C3SoftYBC2bbDzCadZxDrfbnobEXLBLQZ";
         constexpr auto anAddress2 = "bitcoincash:prnc2exht3zxlrqqcat690tc85cvfuypngh7szx6mk";
         constexpr auto anAddress2_leg = "3NoBpEBHZq6YqwUBdPAMW41w5BTJSC7yuQ";
+        constexpr auto anAddress32 = "bitcoincash:pdw6p42faky24gczngpkghpycsmnz92zsmngvhh38mnpyqq6fx6ru2ktumc9l"; // p2sh32
+        constexpr auto payload32 = "5da0d549ed88aaa3029a03645c24c43731154286e6865ef13ee612001a49b43e";
         constexpr auto reg1 = "mxdxDXaKkdX4vFcMFVZKCcZwTLyykvYXir"; // this is regtest but lacks info on what network it is in verbyte so it will be parsed as testnet because legacy
         constexpr auto reg2 = "bchreg:qzmakj5v6pk8qqf50fv6tc8jc6ew3ldz0vz2n35u44"; // this is regtest and since it's cashaddr will be correctly detected as invalid
         Address a = anAddress, b, bad(badAddress);
@@ -468,15 +481,19 @@ namespace BTC
         }
 
         Address last;
-        using P = std::pair<const char * const, bool>;
-        for (const auto & [str, expectedValid] : {
-             P{badAddress, false}, P{anAddress, true}, P{anAddress_leg, true}, P{anAddress2, true}, P{anAddress2_leg, true}, P{testnetStr, true},
-             P{reg1, true}, P{reg2, false} }) {
+        struct P {
+            const char *str{};
+            bool expectedValid{};
+            const char *expectedPayload{};
+        };
+        for (const auto & [str, expectedValid, expectedPayload] : {
+             P{badAddress, false}, P{anAddress, true}, P{anAddress_leg, true}, P{anAddress2, true},
+             P{anAddress32, true, payload32}, P{anAddress2_leg, true}, P{testnetStr, true}, P{reg1, true}, P{reg2, false} }) {
             const Address a{str};
             Print() << "------------------------------------";
             Print() << "Orig string: " << str;
             Print() << "Cash address: " << a.toString().toUtf8().constData() << ", legacy: " << a.toLegacyString().toUtf8().constData() << ", short cashaddr: " << a.toShortString().toUtf8().constData();
-            Print() << "Decoded -> VerByte: " << int(a.verByte) <<  "  Hash160 (hex): " << a.h160.toHex().constData();
+            Print() << "Decoded -> VerByte: " << int(a.verByte) <<  "  HashPayload (hex): " << a._hash.toHex().constData();
             Print() << "IsValid: " << a.isValid() << " Kind: " << a.kind() << " Net: " << NetName(a.net()).toUtf8().constData();
             const auto cscript = a.toCScript();
             Print() << "Script Hex of: " << a.toString().toUtf8().constData() << " = " << QByteArray(reinterpret_cast<const char *>(&*cscript.begin()), int(cscript.size())).toHex().constData();
@@ -486,6 +503,8 @@ namespace BTC
             Print() << "c==a : " << int(c==a) << "  a==Address()? : " << int(a==Address()) << "  a>Address()?: " << int(a > Address()) << "  a<Address()?: " << int(a < Address());
             Print() << "last==a : " << int(last==a) << "  last>a?: " << int(last > a) << "  last<a?: " << int(last < a) << "  last==a?: " << int(last == a);
             if (a.isValid() != expectedValid)
+                return false;
+            if (expectedPayload && a.hash() != QByteArray::fromHex(expectedPayload))
                 return false;
             last = a;
         }

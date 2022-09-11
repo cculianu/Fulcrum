@@ -37,12 +37,15 @@
 namespace BTC {
     struct Address
     {
-        static constexpr std::size_t H160Len = bitcoin::uint160::width();
+        static constexpr std::size_t H160Len = bitcoin::uint160::size();
+        static constexpr std::size_t H256Len = bitcoin::uint256::size();
 
         enum Kind : Byte {
             Invalid = 0xff,
-            P2PKH = bitcoin::CashAddrType::PUBKEY_TYPE,  // 0
-            P2SH = bitcoin::CashAddrType::SCRIPT_TYPE    // 1
+            P2PKH = bitcoin::CashAddrType::PUBKEY_TYPE,             // 0
+            P2SH = bitcoin::CashAddrType::SCRIPT_TYPE,              // 1
+            TOKEN_P2PKH = bitcoin::CashAddrType::TOKEN_PUBKEY_TYPE, // 2
+            TOKEN_P2SH = bitcoin::CashAddrType::TOKEN_SCRIPT_TYPE,  // 3
         };
 
         static constexpr Byte InvalidVerByte = 0xff;
@@ -58,7 +61,7 @@ namespace BTC {
         static Address fromPubKey(const QByteArray &pubKey, Kind kind, Net net = MainNet) { return fromPubKey(reinterpret_cast<const Byte *>(pubKey.constData()), reinterpret_cast<const Byte *>(pubKey.constData() + pubKey.length()), kind, net); }
         static Address fromPubKey(const std::vector<Byte> &pubKey, Kind kind, Net net = MainNet) { return fromPubKey(&*pubKey.begin(), &*pubKey.end(), kind, net); }
 
-        const QByteArray & hash160() const noexcept { return h160; }
+        const QByteArray & hash() const noexcept { return _hash; }
 
         Kind kind() const noexcept { return _kind; }
         Net net() const noexcept { return _net; }
@@ -72,7 +75,10 @@ namespace BTC {
         bool isRegTestNet() const noexcept { return _net == RegTestNet; }
         bool isMainNet() const noexcept { return _net == MainNet; }
 
-        bool isValid() const noexcept {  return _kind != Kind::Invalid && h160.length() == H160Len && _net != Net::Invalid && verByte != InvalidVerByte; }
+        bool isValid() const noexcept {
+            return _kind != Kind::Invalid && (_hash.length() == H160Len || _hash.length() == H256Len)
+                    && _net != Net::Invalid && verByte != InvalidVerByte;
+        }
 
         /// test any string to see if it's a valid address for the specified network
         static bool isValid(const QString &legacyOrCashAddress, Net = MainNet);
@@ -101,19 +107,28 @@ namespace BTC {
         Address & operator=(const char *legacyOrCash) { return (*this = QString(legacyOrCash)); }
         Address & operator=(const QByteArray &legacyOrCash) { return (*this = QString(legacyOrCash)); }
 
-        bool operator==(const Address & o) const noexcept { return !isValid() && !o.isValid() ? true : _net == o._net && verByte == o.verByte && _kind == o._kind && h160 == o.h160; }
+        bool operator==(const Address & o) const noexcept {
+            if (isValid() != o.isValid()) return false;
+            else if (!isValid() && !o.isValid()) return true;
+            else return _net == o._net && verByte == o.verByte && _kind == o._kind && _hash == o._hash;
+        }
         bool operator!=(const Address & o) const noexcept { return !(*this == o); }
         /// less operator: for map support and also so that it sorts like the text address would.
         /// All invalid addresses sort before valid ones.
         bool operator<(const Address & o) const noexcept {
             if (isValid() && o.isValid()) {
-                // same h160, so compare net, verbyte, and kind
+                // first sort based on concatenation of: net + verbyte + kind bytes
                 const std::array<Byte, 3> a = { _net, verByte, _kind },
                                           b = { o._net, o.verByte, o._kind };
-                int cmp = std::memcmp(a.data(), b.data(), 3); // first sort based on concatenation of: net + verbyte + kind bytes
-                if (cmp == 0)
+                int cmp = std::memcmp(a.data(), b.data(), 3);
+                if (cmp == 0) {
                     // next, sort based on h160
-                    cmp = std::memcmp(h160.constData(), o.h160.constData(), std::min(size_t(h160.length()), size_t(o.h160.length())));
+                    const auto l1 = _hash.length(), l2 = o._hash.length();
+                    cmp = std::memcmp(_hash.constData(), o._hash.constData(),
+                                      std::min(size_t(l1), size_t(l2)));
+                    if (cmp == 0)
+                        return l1 < l2;
+                }
                 return cmp < 0;
             }
             return int(isValid()) < int(o.isValid()); // invalid always sorts before valid
@@ -125,7 +140,7 @@ namespace BTC {
     private:
         Net _net = BTC::Invalid;
         Byte verByte = InvalidVerByte;
-        QByteArray h160;
+        QByteArray _hash; // this holds either a p2pkh, p2sh, or a p2sh_32 payload
         Kind _kind = Kind::Invalid;
         bool autosetKind();
 
@@ -145,7 +160,7 @@ template <> struct std::hash<BTC::Address> {
     std::size_t operator()(const BTC::Address &a) const noexcept {
         if (a.isValid()) {
             // The below will produce a good value because isValid implies h160 length == 20
-            return BTC::QByteArrayHashHasher{}(a.hash160());
+            return BTC::QByteArrayHashHasher{}(a.hash());
         }
         // invalid will always hash to 0
         return 0;
