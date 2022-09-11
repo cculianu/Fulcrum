@@ -159,7 +159,7 @@ namespace BTC {
 template <> struct std::hash<BTC::Address> {
     std::size_t operator()(const BTC::Address &a) const noexcept {
         if (a.isValid()) {
-            // The below will produce a good value because isValid implies h160 length == 20
+            // The below will produce a good value because isValid implies hash() length is 20 or 32
             return BTC::QByteArrayHashHasher{}(a.hash());
         }
         // invalid will always hash to 0
