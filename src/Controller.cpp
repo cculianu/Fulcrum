@@ -212,7 +212,7 @@ void Controller::startup()
             bitcoin::CMutableTransaction tx;
             constexpr auto kErrLine2 = "Something is wrong with either BitcoinD or our ability to understand its RPC responses.";
             try {
-                BTC::Deserialize(tx, Util::ParseHexFast(resp.result().toByteArray()), 0, isSegWitCoin(), isMimbleWimbleCoin());
+                BTC::Deserialize(tx, Util::ParseHexFast(resp.result().toByteArray()), 0, isSegWitCoin(), isMimbleWimbleCoin(), isBCHCoin());
             } catch (const std::exception &e) {
                 Error() << "Failed to deserialize tx #1 with txid " << hash.toHex() << ": " << e.what();
                 Error() << kErrLine2;
@@ -474,6 +474,7 @@ struct DownloadBlocksTask : public CtlTask
 
     const bool allowSegWit; ///< initted in c'tor. If true, deserialize blocks using the optional segwit extensons to the tx format.
     const bool allowMimble; ///< like above, but if true we allow mimblewimble (litecoin)
+    const bool allowCashTokens; ///< allow special cashtoken deserialization rules (BCH only)
 
     void do_get(unsigned height);
 
@@ -490,7 +491,7 @@ struct DownloadBlocksTask : public CtlTask
 DownloadBlocksTask::DownloadBlocksTask(unsigned from, unsigned to, unsigned stride, unsigned nClients, Controller *ctl_)
     : CtlTask(ctl_, QStringLiteral("Task.DL %1 -> %2").arg(from).arg(to)), from(from), to(to), stride(stride),
       expectedCt(unsigned(nToDL(from, to, stride))), max_q(int(nClients)+1),
-      allowSegWit(ctl_->isSegWitCoin()), allowMimble(ctl_->isMimbleWimbleCoin())
+      allowSegWit(ctl_->isSegWitCoin()), allowMimble(ctl_->isMimbleWimbleCoin()), allowCashTokens(ctl_->isBCHCoin())
 {
     FatalAssert( (to >= from) && (ctl_) && (stride > 0), "Invalid params to DonloadBlocksTask c'tor, FIXME!");
     if (stride > 1 || expectedCt > 1) {
@@ -545,7 +546,7 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
                     if (bool sizeOk = header.length() == HEADER_SIZE; sizeOk && (chkHash = BTC::HashRev(header)) == hash) {
                         PreProcessedBlockPtr ppb;
                         try {
-                            const auto cblock = BTC::Deserialize<bitcoin::CBlock>(rawblock, 0, allowSegWit, allowMimble, allowMimble /* thorw if junk at end if Litecoin (catch deser. bugs) */);
+                            const auto cblock = BTC::Deserialize<bitcoin::CBlock>(rawblock, 0, allowSegWit, allowMimble, allowCashTokens, allowMimble /* throw if junk at end if Litecoin (catch deser. bugs) */);
                             ppb = PreProcessedBlock::makeShared(bnum, size_t(rawblock.size()), cblock);
                             if (allowMimble && Debug::isEnabled()) {
                                 // Litecoin only
@@ -661,7 +662,8 @@ struct SynchMempoolTask : public CtlTask
     SynchMempoolTask(Controller *ctl_, std::shared_ptr<Storage> storage, const std::atomic_bool & notifyFlag,
                      const std::unordered_set<TxHash, HashHasher> & ignoreTxns)
         : CtlTask(ctl_, "SynchMempool"), storage(storage), notifyFlag(notifyFlag),
-          txnIgnoreSet(ignoreTxns), isSegWit(ctl_->isSegWitCoin()), isMimble(ctl_->isMimbleWimbleCoin())
+          txnIgnoreSet(ignoreTxns), isSegWit(ctl_->isSegWitCoin()), isMimble(ctl_->isMimbleWimbleCoin()),
+          isCashTokens(ctl_->isBCHCoin())
     {
         scriptHashesAffected.reserve(SubsMgr::kRecommendedPendingNotificationsReserveSize);
         txidsAffected.reserve(SubsMgr::kRecommendedPendingNotificationsReserveSize);
@@ -684,6 +686,7 @@ struct SynchMempoolTask : public CtlTask
     const bool TRACE = Trace::isEnabled(); // set this to true to print more debug
     const bool isSegWit; ///< initted in c'tor. If true, deserialize tx's using the optional segwit extensons to the tx format.
     const bool isMimble; ///< initted in c'tor. If true, deserialize tx's using the optional mimble-wimble extensons to the tx format.
+    const bool isCashTokens; ///< initted in c'tor. True for BCH, false otherwise. Controls Deserialize rules for txns and blocks.
 
     /// The scriptHashes that were affected by this refresh/synch cycle. Used for notifications.
     std::unordered_set<HashX, HashHasher> scriptHashesAffected;
@@ -934,7 +937,7 @@ void SynchMempoolTask::doDLNextTx()
         // deserialize tx, catching any deser errors
         bitcoin::CMutableTransaction ctx;
         try {
-            ctx = BTC::Deserialize<bitcoin::CMutableTransaction>(txdata, 0, isSegWit, isMimble, true /* nojunk */);
+            ctx = BTC::Deserialize<bitcoin::CMutableTransaction>(txdata, 0, isSegWit, isMimble, isCashTokens, true /* nojunk */);
             // Below branch is taken only for Litecoin
             if (isMimble) {
                 if (ctx.mw_blob && ctx.mw_blob->size() > 1) {

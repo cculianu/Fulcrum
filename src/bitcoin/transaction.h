@@ -45,6 +45,8 @@ static constexpr int SERIALIZE_TRANSACTION_USE_WITNESS = 0x40000000;
 // Added by Calin, imported from Litecoin. Note in Litecoin this flag has the *opposite* meaning
 // (there it is called SERIALIZE_NO_MWEB
 static constexpr int SERIALIZE_TRANSACTION_USE_MWEB = 0x20000000;
+// Added by Calin to optionally enable/disbale token ser/deser (BCH-specific)
+static constexpr int SERIALIZE_TRANSACTION_USE_CASHTOKENS = 0x10000000;
 
 static_assert (sizeof(int) >= 4);
 
@@ -188,9 +190,19 @@ public:
 
     SERIALIZE_METHODS(CTxOut, obj) {
         READWRITE(obj.nValue);
-        if (!ser_action.ForRead() && !obj.tokenDataPtr) {
-            // fast-path for writing with no token data, just write out the scriptPubKey directly
+        const bool shortPath =
+                // Caller doesn't want to *read* CashTokens, so short-circuit out by just reading all
+                // remaining data into scriptPubKey. Note that this GetVersion check can only apply if
+                // reading. If serializing we don't rely on GetVersion() at all but instead must check
+                // whether obj.tokenDataPtr is not null and instead just serialize normally since
+                // sometimes SER_GETHASH will pass 0 for GetVersion() here... :/
+                (ser_action.ForRead() && !(s.GetVersion() & SERIALIZE_TRANSACTION_USE_CASHTOKENS))
+                // fast-path for writing with no token data, just write out the scriptPubKey directly
+                || (!ser_action.ForRead() && !obj.tokenDataPtr);
+        if (shortPath) {
             READWRITE(obj.scriptPubKey);
+            // If acturally reading, ensure tokenDataPtr is cleared to ensure proper object state
+            SER_READ(obj, obj.tokenDataPtr.reset());
         } else {
             token::WrappedScriptPubKey wspk;
             SER_WRITE(obj, token::WrapScriptPubKey(wspk, obj.tokenDataPtr, obj.scriptPubKey, s.GetVersion()));
