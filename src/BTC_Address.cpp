@@ -212,7 +212,6 @@ namespace BTC
         return false;
     }
 
-
     bitcoin::CScript Address::toCScript() const
     {
         using namespace bitcoin;
@@ -225,14 +224,15 @@ namespace BTC
                 ret << OP_EQUALVERIFY << OP_CHECKSIG;
             } else if (_kind == P2SH || _kind == TOKEN_P2SH) {
                 ret << OP_HASH160;
-                ret.insert(ret.end(), uint8_t(_hash.length())); // push length
+                ret.insert(ret.end(), uint8_t(len)); // push length
                 ret.insert(ret.end(), reinterpret_cast<const Byte *>(_hash.begin()), reinterpret_cast<const Byte *>(_hash.end())); // push h160
                 ret << OP_EQUAL;
             }
         } else if (len == int(H256Len) && (_kind == P2SH || _kind == TOKEN_P2SH)) {
+            ret.reserve(len + 3); // long script exceeds the 28-byte static_capacity of CScript, so pre-reserve.
             ret << OP_HASH256;
             ret.insert(ret.end(), uint8_t(len)); // push length
-            ret.insert(ret.end(), reinterpret_cast<const Byte *>(_hash.begin()), reinterpret_cast<const Byte *>(_hash.end())); // push 256
+            ret.insert(ret.end(), reinterpret_cast<const Byte *>(_hash.begin()), reinterpret_cast<const Byte *>(_hash.end())); // push h256
             ret << OP_EQUAL;
         }
         return ret;
