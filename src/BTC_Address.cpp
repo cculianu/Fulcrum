@@ -151,15 +151,15 @@ namespace BTC
         std::vector<Byte> dec;
         if (const auto ss = legacyOrCash.toStdString(); bitcoin::DecodeBase58Check(ss, dec)) {
             // Legacy address
-            if (dec.size() != 1 + H160Len) {
+            if (const auto decsize = dec.size(); !(decsize == 1 + H160Len || decsize == 1 + H256Len)) {
                 // this should never happen
 #ifdef QT_DEBUG
                 DebugM(__func__, ": bad decoded length  ", dec.size(), " for address ", legacyOrCash);
 #endif
             } else {
                 a.verByte = dec[0];
-                a._hash.resize(int(H160Len));
-                std::memcpy(a._hash.data(), &dec[1], H160Len);
+                a._hash.resize(decsize - 1);
+                std::memcpy(a._hash.data(), &dec[1], a._hash.size());
                 a._net = netForVerByte(a.verByte); // note this will not correctly differntiate between TestNet, TestNet4, ScaleNet and RegTestNet and always pick TestNet since they have the same verBytes.
                 a.autosetKind(); // this will clear the address if something is wrong
             }
@@ -500,6 +500,16 @@ namespace BTC
             Print() << "Decoded -> VerByte: " << int(a.verByte) <<  "  HashPayload (hex): " << a._hash.toHex().constData();
             Print() << "IsValid: " << a.isValid() << " Kind: " << a.kind() << " Net: " << NetName(a.net()).toUtf8().constData();
             const auto cscript = a.toCScript();
+            {
+                // ensure 2-way conversion works at least on the blockchain level
+                const Address aFromCash(a.toString(false)), aFromLegacy(a.toLegacyString());
+                if (aFromCash.toCScript() != cscript || aFromLegacy.toCScript() != cscript)
+                    return false;
+                // and if we specified an expected payload, ensure both legacy and cash parsing is sane
+                if (expectedPayload && (aFromCash.hash() != QByteArray::fromHex(expectedPayload)
+                                        || aFromLegacy.hash() != QByteArray::fromHex(expectedPayload)))
+                    return false;
+            }
             Print() << "Script Hex of: " << a.toString().toUtf8().constData() << " = " << QByteArray(reinterpret_cast<const char *>(&*cscript.begin()), int(cscript.size())).toHex().constData();
             Print() << "HashX of " << a.toString().toUtf8().constData() << " = " << a.toHashX().toHex().constData();
             c = a;
