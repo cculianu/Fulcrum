@@ -57,6 +57,7 @@ namespace BTC {
         Address(const QByteArray &legacyOrCashAddress) { *this = legacyOrCashAddress; }
 
         static Address fromString(const QString &legacyOrCash); ///< auto-detects Net based on decoded address contents
+        /// Note that for fromPubKey, kind must be P2PKH or TOKEN_P2PKH
         static Address fromPubKey(const Byte *pbegin, const Byte *pend, Kind, Net = MainNet);
         static Address fromPubKey(const QByteArray &pubKey, Kind kind, Net net = MainNet) { return fromPubKey(reinterpret_cast<const Byte *>(pubKey.constData()), reinterpret_cast<const Byte *>(pubKey.constData() + pubKey.length()), kind, net); }
         static Address fromPubKey(const std::vector<Byte> &pubKey, Kind kind, Net net = MainNet) { return fromPubKey(&*pubKey.begin(), &*pubKey.end(), kind, net); }

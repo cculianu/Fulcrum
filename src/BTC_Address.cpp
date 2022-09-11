@@ -185,12 +185,14 @@ namespace BTC
     Address Address::fromPubKey(const Byte *pbegin, const Byte *pend, Kind k, Net net)
     {
         Address ret;
-        if (const auto vb = verByteForNetAndKind(net, k); LIKELY(vb != InvalidVerByte && pend > pbegin)) {
-            const auto hash160 = bitcoin::Hash160(pbegin, pend);
-            ret._hash = QByteArray(reinterpret_cast<const char *>(hash160.begin()), int(hash160.size()));
-            ret.verByte = vb;
-            ret._kind = k;
-            ret._net = net;
+        if (LIKELY(k == Kind::P2PKH || k == Kind::TOKEN_P2PKH)) {
+            if (const auto vb = verByteForNetAndKind(net, k); LIKELY(vb != InvalidVerByte && pend > pbegin)) {
+                const auto hash160 = bitcoin::Hash160(pbegin, pend);
+                ret._hash = QByteArray(reinterpret_cast<const char *>(hash160.begin()), int(hash160.size()));
+                ret.verByte = vb;
+                ret._kind = k;
+                ret._net = net;
+            }
         }
         return ret;
     }
