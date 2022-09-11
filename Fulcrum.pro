@@ -410,7 +410,8 @@ SOURCES += \
     bitcoin/token.cpp \
     bitcoin/transaction.cpp \
     bitcoin/uint256.cpp \
-    bitcoin/utilstrencodings.cpp
+    bitcoin/utilstrencodings.cpp \
+    bitcoin/utilstring.cpp
 
 HEADERS += \
     bitcoin/amount.h \
@@ -456,6 +457,7 @@ HEADERS += \
     bitcoin/txid.h \
     bitcoin/uint256.h \
     bitcoin/utilstrencodings.h \
+    bitcoin/utilstring.h \
     bitcoin/version.h
 
 # Enable secp256k1 compilation on x86_64 only -- we don't actually use this lib

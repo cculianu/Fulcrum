@@ -826,6 +826,22 @@ std::string Capitalize(std::string str) {
     return str;
 }
 
+std::string ToLower(const std::string &str) {
+    std::string r;
+    r.reserve(str.size());
+    for (auto ch : str)
+        r += ToLower(static_cast<unsigned char>(ch));
+    return r;
+}
+
+std::string ToUpper(const std::string &str) {
+    std::string r;
+    r.reserve(str.size());
+    for (auto ch : str)
+        r += ToUpper(static_cast<unsigned char>(ch));
+    return r;
+}
+
 } // end namespace bitcoin
 
 #ifdef __clang__
