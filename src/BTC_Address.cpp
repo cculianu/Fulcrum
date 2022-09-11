@@ -435,6 +435,7 @@ namespace BTC
         constexpr auto anAddress2 = "bitcoincash:prnc2exht3zxlrqqcat690tc85cvfuypngh7szx6mk";
         constexpr auto anAddress2_leg = "3NoBpEBHZq6YqwUBdPAMW41w5BTJSC7yuQ";
         constexpr auto anAddress32 = "bitcoincash:pdw6p42faky24gczngpkghpycsmnz92zsmngvhh38mnpyqq6fx6ru2ktumc9l"; // p2sh32
+        constexpr auto anAddress32_tok = "bitcoincash:rdw6p42faky24gczngpkghpycsmnz92zsmngvhh38mnpyqq6fx6ruc9hazeu5"; // token-aware p2sh32
         constexpr auto payload32 = "5da0d549ed88aaa3029a03645c24c43731154286e6865ef13ee612001a49b43e";
         constexpr auto reg1 = "mxdxDXaKkdX4vFcMFVZKCcZwTLyykvYXir"; // this is regtest but lacks info on what network it is in verbyte so it will be parsed as testnet because legacy
         constexpr auto reg2 = "bchreg:qzmakj5v6pk8qqf50fv6tc8jc6ew3ldz0vz2n35u44"; // this is regtest and since it's cashaddr will be correctly detected as invalid
@@ -486,9 +487,12 @@ namespace BTC
             bool expectedValid{};
             const char *expectedPayload{};
         };
-        for (const auto & [str, expectedValid, expectedPayload] : {
-             P{badAddress, false}, P{anAddress, true}, P{anAddress_leg, true}, P{anAddress2, true},
-             P{anAddress32, true, payload32}, P{anAddress2_leg, true}, P{testnetStr, true}, P{reg1, true}, P{reg2, false} }) {
+        for (const auto & [str, expectedValid, expectedPayload]
+             : {
+                P{badAddress, false}, P{anAddress, true}, P{anAddress_leg, true}, P{anAddress2, true},
+                P{anAddress32, true, payload32}, P{anAddress32_tok, true, payload32}, P{anAddress2_leg, true},
+                P{testnetStr, true}, P{reg1, true}, P{reg2, false},
+               }) {
             const Address a{str};
             Print() << "------------------------------------";
             Print() << "Orig string: " << str;
