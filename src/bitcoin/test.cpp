@@ -86,11 +86,13 @@ namespace bitcoin {
 #include "utilstring.h"
 #include "version.h"
 
+#include "BTC.h"
 #include "Json/Json.h"
 
 #include <QByteArray>
 #include <QRandomGenerator>
 
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <clocale>
@@ -2997,6 +2999,61 @@ namespace {
                 // JSON "bchn_exception_message" key
                 BOOST_CHECK_EXCEPTION(token::UnwrapScriptPubKey(wspk, pdata, spk, INIT_PROTO_VERSION, true /* throws */),
                                       std::ios_base::failure, ExcMessageContains(expectedExcMsg));
+            }
+        };
+
+        BOOST_AUTO_TEST_CASE(cashtoken_flag_ser_deser_block) {
+            using namespace bitcoin;
+            const auto blockData = Util::ParseHexFast("000000209e244b25ff3e7462bbe0c12c14b7178b7f55675bf03748a095c2c61500000000810763ba26b56c8a5bb66e9729466a1647e0a0dc8e35cff3071305b5a6074b687bd31d636982361c6a4b564d0301000000010000000000000000000000000000000000000000000000000000000000000000ffffffff2703d9b7012f7434666f726b2e63332d736f66742e636f6d202d2d2043617368546f6b656e73212fffffffff03106462b8000000001976a9140a373caf0ab3c2b46cd05625b8d545c295b93d7a88ac1091a371000000001976a91472b46a63afc9917fbf4942b762591ca4a33d454f88ac0000000000000000166a143dd51c630000000000000000d32f7c3c190a0000000000000100000001957be2ec5ed5d97602f028d358cf22e16a3722b3e8d1fd7aaa9344f36fa246d5010000006441dfbb337849cad772ac7ddb1e8f6f5d4d0c5ce458ed9e342b35206725364cb66d93be0754bad34d53ac9ffb7be3bd9c6ee9c60a5c13cdc2ac1a2f46264f12cf404121022eebf1895d911e62c184a47c775ce8fe11fb42e38fd9c8d5f055a60620a25738feffffff01ac8401000000000044ef43c1044127e1274181e7458c70b02d5c75b49b31a337d85703d56480345cd2cc6208596f596f596f212176a91468ad9ed17ffe22b6a2cebb6eb8332add388e1ab288ac0000000001000000010b58cc128cff64cc45ea0d4a23020f511bcea24993b440666452882735218041000000006441c74c1ca636f349daabed8aa266f3af2ad69b7388f6c8fdc117ed6d9e4d085c68645e1ec230709f4354d564697b6da2e58fa96439ebfc1133010d93abe844a08e412103f1b17617586ccd70f742c7071518b8871907c6a115a4a4c044c2fcc6e672ae8bfeffffff0234e21600000000001976a914c793cf3f739c4cee16476abe1d1a5d10585446e688ac00e1f505000000001976a914a46bc981bfd309b4b50616030a8ebe24511d5e6688acd8b70100");
+            const auto nCtTxn = 1u;
+            const auto outN = 0u;
+            const auto hashBlock = "0000000026657a44a6056b8ad9ea9c0c9cbf0014fe1539403a8330ea516554e5";
+            const auto hashCtTxn = "a7709e46488ffff5b06ae2dd450ee5fd5edbf17afae4a067c3df46ba0a0df778";
+            const auto tokenBlob = ParseHex("ef43c1044127e1274181e7458c70b02d5c75b49b31a337d85703d56480345cd2cc6208596f596f596f212176a91468ad9ed17ffe22b6a2cebb6eb8332add388e1ab288ac");
+
+            // First, deserialize without CashTokens
+            {
+                const CBlock block = BTC::Deserialize<CBlock>(blockData, 0, false, false, false, true);
+                BOOST_CHECK_EQUAL(block.GetHash().ToString(), hashBlock);
+                const auto &tx = block.vtx.at(nCtTxn);
+                BOOST_CHECK_EQUAL(tx->GetHash().ToString(), hashCtTxn);
+                BOOST_CHECK(std::all_of(tx->vout.begin(), tx->vout.end(), [](const auto &out){
+                    return !out.tokenDataPtr;
+                }));
+                const auto &txout = tx->vout.at(outN);
+                BOOST_CHECK(std::equal(tokenBlob.begin(), tokenBlob.end(),
+                                       txout.scriptPubKey.begin(), txout.scriptPubKey.end()));
+                // ensure re-serialization works
+                BOOST_CHECK(BTC::Serialize(block, false, false) == blockData);
+                // ensure ser-reser is the same with or without cashtokens flag
+                const auto serTx = BTC::Serialize(*tx, false, false);
+                BOOST_CHECK(BTC::Serialize(BTC::Deserialize<CTransaction>(serTx, 0, false, false, true), false, false)
+                            == serTx);
+            }
+
+            // Next, deserialize *with* CashTokens
+            {
+                const CBlock block = BTC::Deserialize<CBlock>(blockData, 0, false, false, true, true);
+                BOOST_CHECK_EQUAL(block.GetHash().ToString(), hashBlock);
+                const auto &tx = block.vtx.at(nCtTxn);
+                BOOST_CHECK_EQUAL(tx->GetHash().ToString(), hashCtTxn);
+                const auto &txout = tx->vout.at(outN);
+                BOOST_CHECK(bool(txout.tokenDataPtr));
+                token::WrappedScriptPubKey wspk;
+                token::WrapScriptPubKey(wspk, txout.tokenDataPtr, txout.scriptPubKey, PROTOCOL_VERSION);
+                BOOST_CHECK(std::equal(tokenBlob.begin(), tokenBlob.end(),
+                                       wspk.begin(), wspk.end()));
+                token::WrapScriptPubKey(wspk, txout.tokenDataPtr, txout.scriptPubKey, PROTOCOL_VERSION | SERIALIZE_TRANSACTION_USE_CASHTOKENS);
+                BOOST_CHECK(std::equal(tokenBlob.begin(), tokenBlob.end(),
+                                       wspk.begin(), wspk.end()));
+                BOOST_CHECK(!std::equal(tokenBlob.begin(), tokenBlob.end(),
+                                        txout.scriptPubKey.begin(), txout.scriptPubKey.end()));
+                // ensure re-serialization works
+                BOOST_CHECK(BTC::Serialize(block, false, false) == blockData);
+                // ensure ser-reser is the same with or without cashtokens flag
+                const auto serTx = BTC::Serialize(*tx, false, false);
+                BOOST_CHECK(BTC::Serialize(BTC::Deserialize<CTransaction>(serTx, 0, false, false, false), false, false)
+                            == serTx);
             }
         };
 
