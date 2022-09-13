@@ -19,6 +19,7 @@
 #include "BTC.h"
 #include "BTC_Address.h"
 #include "Common.h"
+#include "Json/Json.h"
 #include "Util.h"
 
 #include "bitcoin/base58.h"
@@ -152,7 +153,6 @@ namespace BTC
         if (const auto ss = legacyOrCash.toStdString(); bitcoin::DecodeBase58Check(ss, dec)) {
             // Legacy address
             if (const auto decsize = dec.size(); !(decsize == 1 + H160Len || decsize == 1 + H256Len)) {
-                // this should never happen
 #ifdef QT_DEBUG
                 DebugM(__func__, ": bad decoded length  ", dec.size(), " for address ", legacyOrCash);
 #endif
@@ -524,6 +524,257 @@ namespace BTC
                 return false;
             last = a;
         }
+
+
+        Print() << "------------------------------------";
+        Print() << "Testing Cash Tokens CashAddr test vectors ...";
+        const auto jsondata = R"""([
+            {
+                "payloadSize": 20,
+                "type": 0,
+                "cashaddr": "bitcoincash:qr6m7j9njldwwzlg9v7v53unlr4jkmx6eylep8ekg2",
+                "payload": "F5BF48B397DAE70BE82B3CCA4793F8EB2B6CDAC9"
+            },
+            {
+                "payloadSize": 20,
+                "type": 2,
+                "cashaddr": "bitcoincash:zr6m7j9njldwwzlg9v7v53unlr4jkmx6eycnjehshe",
+                "payload": "F5BF48B397DAE70BE82B3CCA4793F8EB2B6CDAC9"
+            },
+            {
+                "payloadSize": 20,
+                "type": 1,
+                "cashaddr": "bchtest:pr6m7j9njldwwzlg9v7v53unlr4jkmx6eyvwc0uz5t",
+                "payload": "F5BF48B397DAE70BE82B3CCA4793F8EB2B6CDAC9"
+            },
+            {
+                "payloadSize": 20,
+                "type": 0,
+                "cashaddr": "bitcoincash:qr7fzmep8g7h7ymfxy74lgc0v950j3r2959lhtxxsl",
+                "payload": "FC916F213A3D7F1369313D5FA30F6168F9446A2D"
+            },
+            {
+                "payloadSize": 20,
+                "type": 2,
+                "cashaddr": "bitcoincash:zr7fzmep8g7h7ymfxy74lgc0v950j3r295z4y4gq0v",
+                "payload": "FC916F213A3D7F1369313D5FA30F6168F9446A2D"
+            },
+            {
+                "payloadSize": 20,
+                "type": 0,
+                "cashaddr": "bchtest:qr7fzmep8g7h7ymfxy74lgc0v950j3r295pdnvy3hr",
+                "payload": "FC916F213A3D7F1369313D5FA30F6168F9446A2D"
+            },
+            {
+                "payloadSize": 20,
+                "type": 2,
+                "cashaddr": "bchtest:zr7fzmep8g7h7ymfxy74lgc0v950j3r295x8qj2hgs",
+                "payload": "FC916F213A3D7F1369313D5FA30F6168F9446A2D"
+            },
+            {
+                "payloadSize": 20,
+                "type": 0,
+                "cashaddr": "bchreg:qr7fzmep8g7h7ymfxy74lgc0v950j3r295m39d8z59",
+                "payload": "FC916F213A3D7F1369313D5FA30F6168F9446A2D"
+            },
+            {
+                "payloadSize": 20,
+                "type": 2,
+                "cashaddr": "bchreg:zr7fzmep8g7h7ymfxy74lgc0v950j3r295umknfytk",
+                "payload": "FC916F213A3D7F1369313D5FA30F6168F9446A2D"
+            },
+            {
+                "payloadSize": 20,
+                "type": 0,
+                "cashaddr": "bitcoincash:qpagr634w55t4wp56ftxx53xukhqgl24yse53qxdge",
+                "payload": "7A81EA357528BAB834D256635226E5AE047D5524"
+            },
+            {
+                "payloadSize": 20,
+                "type": 2,
+                "cashaddr": "bitcoincash:zpagr634w55t4wp56ftxx53xukhqgl24ys77z7gth2",
+                "payload": "7A81EA357528BAB834D256635226E5AE047D5524"
+            },
+            {
+                "payloadSize": 20,
+                "type": 0,
+                "cashaddr": "bitcoincash:qq9l9e2dgkx0hp43qm3c3h252e9euugrfc6vlt3r9e",
+                "payload": "0BF2E54D458CFB86B106E388DD54564B9E71034E"
+            },
+            {
+                "payloadSize": 20,
+                "type": 2,
+                "cashaddr": "bitcoincash:zq9l9e2dgkx0hp43qm3c3h252e9euugrfcaxv4l962",
+                "payload": "0BF2E54D458CFB86B106E388DD54564B9E71034E"
+            },
+            {
+                "payloadSize": 20,
+                "type": 0,
+                "cashaddr": "bitcoincash:qre24q38ghy6k3pegpyvtxahu8q8hqmxmqqn28z85p",
+                "payload": "F2AA822745C9AB44394048C59BB7E1C07B8366D8"
+            },
+            {
+                "payloadSize": 20,
+                "type": 2,
+                "cashaddr": "bitcoincash:zre24q38ghy6k3pegpyvtxahu8q8hqmxmq8eeevptj",
+                "payload": "F2AA822745C9AB44394048C59BB7E1C07B8366D8"
+            },
+            {
+                "payloadSize": 20,
+                "type": 0,
+                "cashaddr": "bitcoincash:qz7xc0vl85nck65ffrsx5wvewjznp9lflgktxc5878",
+                "payload": "BC6C3D9F3D278B6A8948E06A399974853097E9FA"
+            },
+            {
+                "payloadSize": 20,
+                "type": 2,
+                "cashaddr": "bitcoincash:zz7xc0vl85nck65ffrsx5wvewjznp9lflg3p4x6pp5",
+                "payload": "BC6C3D9F3D278B6A8948E06A399974853097E9FA"
+            },
+            {
+                "payloadSize": 20,
+                "type": 1,
+                "cashaddr": "bitcoincash:ppawqn2h74a4t50phuza84kdp3794pq3ccvm92p8sh",
+                "payload": "7AE04D57F57B55D1E1BF05D3D6CD0C7C5A8411C6"
+            },
+            {
+                "payloadSize": 20,
+                "type": 3,
+                "cashaddr": "bitcoincash:rpawqn2h74a4t50phuza84kdp3794pq3cct3k50p0y",
+                "payload": "7AE04D57F57B55D1E1BF05D3D6CD0C7C5A8411C6"
+            },
+            {
+                "payloadSize": 20,
+                "type": 1,
+                "cashaddr": "bitcoincash:pqv53dwyatxse2xh7nnlqhyr6ryjgfdtagkd4vc388",
+                "payload": "1948B5C4EACD0CA8D7F4E7F05C83D0C92425ABEA"
+            },
+            {
+                "payloadSize": 20,
+                "type": 3,
+                "cashaddr": "bitcoincash:rqv53dwyatxse2xh7nnlqhyr6ryjgfdtag38xjkhc5",
+                "payload": "1948B5C4EACD0CA8D7F4E7F05C83D0C92425ABEA"
+            },
+            {
+                "payloadSize": 20,
+                "type": 1,
+                "cashaddr": "bitcoincash:prseh0a4aejjcewhc665wjqhppgwrz2lw5txgn666a",
+                "payload": "E19BBFB5EE652C65D7C6B54748170850E1895F75"
+            },
+            {
+                "payloadSize": 20,
+                "type": 3,
+                "cashaddr": "bitcoincash:rrseh0a4aejjcewhc665wjqhppgwrz2lw5vvmd5u9w",
+                "payload": "E19BBFB5EE652C65D7C6B54748170850E1895F75"
+            },
+            {
+                "payloadSize": 20,
+                "type": 1,
+                "cashaddr": "bitcoincash:pzltaslh7xnrsxeqm7qtvh0v53n3gfk0v5wwf6d7j4",
+                "payload": "BEBEC3F7F1A6381B20DF80B65DECA4671426CF65"
+            },
+            {
+                "payloadSize": 20,
+                "type": 3,
+                "cashaddr": "bitcoincash:rzltaslh7xnrsxeqm7qtvh0v53n3gfk0v5fy6yrcdx",
+                "payload": "BEBEC3F7F1A6381B20DF80B65DECA4671426CF65"
+            },
+            {
+                "payloadSize": 32,
+                "type": 1,
+                "cashaddr": "bitcoincash:pvqqqqqqqqqqqqqqqqqqqqqqzg69v7ysqqqqqqqqqqqqqqqqqqqqqpkp7fqn0",
+                "payload": "0000000000000000000000000000123456789000000000000000000000000000"
+            },
+            {
+                "payloadSize": 32,
+                "type": 3,
+                "cashaddr": "bitcoincash:rvqqqqqqqqqqqqqqqqqqqqqqzg69v7ysqqqqqqqqqqqqqqqqqqqqqn9alsp2y",
+                "payload": "0000000000000000000000000000123456789000000000000000000000000000"
+            },
+            {
+                "payloadSize": 32,
+                "type": 1,
+                "cashaddr": "bitcoincash:pdzyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3jh2p5nn",
+                "payload": "4444444444444444444444444444444444444444444444444444444444444444"
+            },
+            {
+                "payloadSize": 32,
+                "type": 3,
+                "cashaddr": "bitcoincash:rdzyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygrpttc42c",
+                "payload": "4444444444444444444444444444444444444444444444444444444444444444"
+            },
+            {
+                "payloadSize": 32,
+                "type": 1,
+                "cashaddr": "bitcoincash:pwyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygsh3sujgcr",
+                "payload": "8888888888888888888888888888888888888888888888888888888888888888"
+            },
+            {
+                "payloadSize": 32,
+                "type": 3,
+                "cashaddr": "bitcoincash:rwyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygs9zvatfpg",
+                "payload": "8888888888888888888888888888888888888888888888888888888888888888"
+            },
+            {
+                "payloadSize": 32,
+                "type": 1,
+                "cashaddr": "bitcoincash:p0xvenxvenxvenxvenxvenxvenxvenxvenxvenxvenxvenxvenxvcm6gz4t77",
+                "payload": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+            },
+            {
+                "payloadSize": 32,
+                "type": 3,
+                "cashaddr": "bitcoincash:r0xvenxvenxvenxvenxvenxvenxvenxvenxvenxvenxvenxvenxvcff5rv284",
+                "payload": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+            },
+            {
+                "payloadSize": 32,
+                "type": 1,
+                "cashaddr": "bitcoincash:p0llllllllllllllllllllllllllllllllllllllllllllllllll7x3vthu35",
+                "payload": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+            },
+            {
+                "payloadSize": 32,
+                "type": 3,
+                "cashaddr": "bitcoincash:r0llllllllllllllllllllllllllllllllllllllllllllllllll75zs2wagl",
+                "payload": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+            }
+        ])""";
+
+        const auto vectors = Json::parseUtf8(jsondata, Json::ParseOption::RequireArray).toList();
+        for (const auto &var : vectors) {
+            const auto m = var.toMap();
+            const auto type = m["type"].toUInt();
+            const auto payload = QByteArray::fromHex(m["payload"].toString().toUtf8());
+            const auto addrString = m["cashaddr"].toString();
+            Print() << "Testing \"" << addrString << "\" ...";
+
+            Address addr = Address::fromString(addrString);
+            if (!addr.isValid()) {
+                Error() << "Failed to parse";
+                return false;
+            }
+            if (type != addr.kind()) {
+                Error() << "Wrong type " << type << " != " << addr.kind();
+                return false;
+            }
+            if (payload != addr.hash()) {
+                Error() << "Payload is wrong " << payload.toHex() << " != " << addr.hash().toHex();
+                return false;
+            }
+            if (addr.toString(false) != addrString) {
+                Error() << "Failed to re-encode as cashaddr correctly";
+                return false;
+            }
+            if (Address a2; (addr.kind() == Address::Kind::P2PKH || addr.kind() == Address::Kind::P2SH)
+                             && (!(a2=Address::fromString(addr.toLegacyString())).isValid()
+                                 || a2.hash() != addr.hash() || a2.kind() != addr.kind()))  {
+                Error() << "Failed to encode as legacy then decode as the same address again: " << a2.toLegacyString();
+                return false;
+            }
+        }
+        Print() << vectors.size() << " test vectors passed";
+
         Print() << "------------------------------------";
         Print() << "address test success";
         return true;
