@@ -122,9 +122,14 @@ namespace BTC
     template <typename BitcoinObject>
     inline constexpr bool is_block_or_tx_v = is_block_or_tx<BitcoinObject>::value;
 
-    /// Template specialization for CTransaction which has const fields and works a little differently (impl. in BTC.cpp)
-    template <> bitcoin::CTransaction Deserialize(const QByteArray &, int pos, bool allowSegWit, bool allowMW,
-                                                  bool allowCashTokens, bool noJunkAtEnd);
+    /// Template specialization for CTransaction which has const fields and works a little differently
+    template <> inline bitcoin::CTransaction Deserialize(const QByteArray &ba, int pos, bool allowSegWit, bool allowMW,
+                                                         bool allowCashTokens, bool noJunkAtEnd)
+    {
+        // This *does* move the vectors from CMutableTransaction -> CTransaction
+        return bitcoin::CTransaction{Deserialize<bitcoin::CMutableTransaction>(ba, pos, allowSegWit, allowMW,
+                                                                               allowCashTokens, noJunkAtEnd)};
+    }
 
     /// Convenience to deserialize segwit object (block or tx) (Core only)
     template <typename BitcoinObject>
