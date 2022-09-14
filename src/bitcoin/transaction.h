@@ -1,23 +1,17 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2016 The Bitcoin Core developers
-// Copyright (c) 2017-2018 The Bitcoin developers
+// Copyright (c) 2017-2022 The Bitcoin developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef BITCOIN_PRIMITIVES_TRANSACTION_H
-#define BITCOIN_PRIMITIVES_TRANSACTION_H
+#pragma once
 
 #include "amount.h"
-#include "feerate.h"
 #include "litecoin_bits.h"
 #include "script.h"
 #include "serialize.h"
 #include "token.h"
 #include "txid.h"
-
-#ifdef USE_QT_IN_BITCOIN
-#include <QString>
-#endif
 
 #include <algorithm>
 #include <utility>
@@ -86,18 +80,6 @@ public:
     }
 
     std::string ToString(bool fVerbose = false) const;
-#ifdef USE_QT_IN_BITCOIN
-    /// construct it from a QString of "prevousHash:N" e.g.: "ab126fe4c....41ab6:3"
-    COutPoint(const QString &prevoutColonNString) { SetQString(prevoutColonNString); }
-    /// set this from a prevout:n string
-    COutPoint &SetQString(const QString &s);
-    /// construct from prevout:n string
-    static COutPoint FromQString(const QString &s) { return COutPoint(s); }
-    /// return prevoutHashHex:n string
-    QString ToQString() const;
-    /// support for *this = "prevouthash:n"
-    COutPoint &operator=(const QString &s) { SetQString(s); return *this; }
-#endif
 };
 
 /**
@@ -550,4 +532,3 @@ struct PrecomputedTransactionData {
 #ifdef __clang__
 #pragma clang diagnostic pop
 #endif
-#endif // BITCOIN_PRIMITIVES_TRANSACTION_H

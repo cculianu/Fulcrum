@@ -398,7 +398,6 @@ SOURCES += \
     bitcoin/crypto/sha256.cpp \
     bitcoin/crypto/sha256_sse4.cpp \
     bitcoin/crypto/sha512.cpp \
-    bitcoin/feerate.cpp \
     bitcoin/hash.cpp \
     bitcoin/interpreter.cpp \
     bitcoin/pubkey.cpp \
@@ -433,7 +432,6 @@ HEADERS += \
     bitcoin/crypto/sha1.h \
     bitcoin/crypto/sha256.h \
     bitcoin/crypto/sha512.h \
-    bitcoin/feerate.h \
     bitcoin/hash.h \
     bitcoin/interpreter.h \
     bitcoin/litecoin_bits.h \

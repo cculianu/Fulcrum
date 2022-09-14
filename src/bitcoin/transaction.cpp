@@ -9,10 +9,6 @@
 #include "tinyformat.h"
 #include "utilstrencodings.h"
 
-#ifdef USE_QT_IN_BITCOIN
-#include <QStringList>
-#endif
-
 #ifdef __clang__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunused-parameter"
@@ -26,25 +22,6 @@ std::string COutPoint::ToString(bool fVerbose) const {
     const std::string::size_type cutoff = fVerbose ? std::string::npos : 10;
     return strprintf("COutPoint(%s, %u)", txid.ToString().substr(0, cutoff), n);
 }
-
-#ifdef USE_QT_IN_BITCOIN
-QString COutPoint::ToQString() const {
-    return QStringLiteral("%1:%2").arg(txid.ToString().c_str()).arg(n);
-}
-COutPoint &COutPoint::SetQString(const QString &s)
-{
-    QStringList toks = s.split(':');
-    if (toks.length() == 2) {
-        bool ok;
-        auto tmp = toks[1].toUInt(&ok);
-        if (ok && toks[0].length() == (256/8)*2) {
-            n = tmp;
-            txid.SetHex(toks[0].toUtf8());
-        }
-    }
-    return *this;
-}
-#endif
 
 std::string CTxIn::ToString(bool fVerbose) const {
     const std::string::size_type cutoff = fVerbose ? std::string::npos : 24;

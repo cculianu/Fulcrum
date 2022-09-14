@@ -2,8 +2,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef BITCOIN_CRYPTO_HMAC_SHA256_H
-#define BITCOIN_CRYPTO_HMAC_SHA256_H
+#pragma once
 
 #include "sha256.h"
 
@@ -30,5 +29,3 @@ public:
 };
 
 }
-
-#endif // BITCOIN_CRYPTO_HMAC_SHA256_H

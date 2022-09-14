@@ -10,8 +10,7 @@
  * of all the possible RPC error codes and HTTP statuses we can expect from bitcoind.  -Calin, Nov. 24, 2019
 */
 
-#ifndef BITCOIN_RPC_PROTOCOL_H
-#define BITCOIN_RPC_PROTOCOL_H
+#pragma once
 
 namespace bitcoin {
 
@@ -124,5 +123,3 @@ enum RPCErrorCode {
 };
 
 } // end namespace bitcoin
-
-#endif // BITCOIN_RPC_PROTOCOL_H

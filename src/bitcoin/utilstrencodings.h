@@ -6,8 +6,7 @@
 /**
  * Utilities for converting data from/to strings.
  */
-#ifndef BITCOIN_UTILSTRENCODINGS_H
-#define BITCOIN_UTILSTRENCODINGS_H
+#pragma once
 
 #include <cstdint>
 #include <string>
@@ -272,4 +271,3 @@ std::string ToUpper(const std::string& str);
 std::string Capitalize(std::string str);
 
 } // end namespace bitcoin
-#endif // BITCOIN_UTILSTRENCODINGS_H
