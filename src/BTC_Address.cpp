@@ -19,7 +19,6 @@
 #include "BTC.h"
 #include "BTC_Address.h"
 #include "Common.h"
-#include "Json/Json.h"
 #include "Util.h"
 
 #include "bitcoin/base58.h"
@@ -35,6 +34,7 @@
 #ifdef ENABLE_TESTS
 #  include "App.h"
 #  include "Compat.h"
+#  include "Json/Json.h"
 #  include <QRandomGenerator>
 #  include <iostream>
 #  include <thread>
