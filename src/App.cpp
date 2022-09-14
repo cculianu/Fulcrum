@@ -1355,7 +1355,11 @@ void App::customQtMessageHandler(QtMsgType type, const QMessageLogContext &conte
 {
     // suppressions
     if ( msg.contains(QStringLiteral("QSslCertificate::isSelfSigned"))
-         || msg.contains(QStringLiteral("Type conversion already registered")))
+         || msg.contains(QStringLiteral("Type conversion already registered"))
+         // The below-two are safe to ignore. See: https://github.com/cculianu/Fulcrum/issues/132
+         || msg.contains(QStringLiteral("cannot call unresolved function SSL_get_peer_certificate"))
+         || msg.contains(QStringLiteral("cannot call unresolved function EVP_PKEY_base_id"))
+         )
         return;
     {  // client-code specified suppressions, if any
         std::shared_lock l(qlSuppressionsMut);
