@@ -118,18 +118,13 @@ namespace BTC {
         /// All invalid addresses sort before valid ones.
         bool operator<(const Address & o) const noexcept {
             if (isValid() && o.isValid()) {
-                // first sort based on concatenation of: net + verbyte + kind bytes
+                // sort based on concatenation of: net + verbyte + kind bytes, and if that is equal, lex compare
+                // the _hash.
                 const std::array<Byte, 3> a = { _net, verByte, _kind },
                                           b = { o._net, o.verByte, o._kind };
-                int cmp = std::memcmp(a.data(), b.data(), 3);
-                if (cmp == 0) {
-                    // next, sort based on h160
-                    const auto l1 = _hash.length(), l2 = o._hash.length();
-                    cmp = std::memcmp(_hash.constData(), o._hash.constData(),
-                                      std::min(size_t(l1), size_t(l2)));
-                    if (cmp == 0)
-                        return l1 < l2;
-                }
+                const int cmp = std::memcmp(a.data(), b.data(), 3);
+                if (cmp == 0) return std::lexicographical_compare(_hash.begin(), _hash.end(),
+                                                                  o._hash.begin(), o._hash.end());
                 return cmp < 0;
             }
             return int(isValid()) < int(o.isValid()); // invalid always sorts before valid
