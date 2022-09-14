@@ -101,9 +101,9 @@ struct SafeAmount : ScriptIntBase<SafeAmount> {
     using Base = ScriptIntBase<SafeAmount>;
     friend Base;
 
-    SafeAmount() : SafeAmount(0) {}
-    SafeAmount(const SafeAmount &) = default;
-    SafeAmount & operator=(const SafeAmount &) = default;
+    SafeAmount() noexcept : SafeAmount(0) {}
+    SafeAmount(const SafeAmount &) noexcept = default;
+    SafeAmount & operator=(const SafeAmount &) noexcept = default;
 
     SERIALIZE_METHODS(SafeAmount, obj) {
         uint64_t val;
@@ -138,7 +138,7 @@ class OutputData {
     NFTCommitment commitment; ///< may be empty
 
 public:
-    OutputData() = default;
+    OutputData() noexcept = default;
     OutputData(const Id &id_in, SafeAmount amt, const NFTCommitment &comm = {}, bool hasNFT = false,
                bool isMutableNFT = false, bool isMintingNFT = false, bool uncheckedNFT = false)
         : id(id_in) {
