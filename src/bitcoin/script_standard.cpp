@@ -7,8 +7,6 @@
 
 #include "pubkey.h"
 #include "script.h"
-//#include <util.h>
-#include "utilstrencodings.h"
 
 #ifdef USE_QT_IN_BITCOIN
 #include <QtCore>
@@ -33,8 +31,13 @@ using valtype = std::vector<uint8_t>;
 
 bool fAcceptDatacarrier = DEFAULT_ACCEPT_DATACARRIER;
 
-CScriptID::CScriptID(const CScript &in)
-    : uint160(Hash160(in.begin(), in.end())) {}
+ScriptHashID::ScriptHashID(const CScript &in, bool is32) : var{uint160{uint160::Uninitialized}} {
+    if (is32) {
+        var = Hash(in);
+    } else {
+        var = Hash160(in);
+    }
+}
 
 const char *GetTxnOutputType(txnouttype t) {
     switch (t) {
@@ -204,7 +207,14 @@ bool ExtractDestination(const CScript &scriptPubKey,
         return true;
     }
     if (whichType == TX_SCRIPTHASH) {
-        addressRet = CScriptID(uint160(vSolutions[0]));
+        if (vSolutions.size() == uint160::size())
+            addressRet = ScriptHashID(uint160(vSolutions[0]));
+        else if (vSolutions.size() == uint256::size())
+            addressRet = ScriptHashID(uint256(vSolutions[0]));
+        else {
+            // Should never be reached...
+            return false;
+        }
         return true;
     }
     // Multisig txns have more than one address...
@@ -272,9 +282,12 @@ public:
         return true;
     }
 
-    bool operator()(const CScriptID &scriptID) const {
+    bool operator()(const ScriptHashID &scriptID) const {
         script->clear();
-        *script << OP_HASH160 << ToByteVector(scriptID) << OP_EQUAL;
+        if (scriptID.IsP2SH_20())
+            *script << OP_HASH160 << ToByteVector(scriptID) << OP_EQUAL;
+        else
+            *script << OP_HASH256 << ToByteVector(scriptID) << OP_EQUAL;
         return true;
     }
 };

@@ -3,8 +3,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef BITCOIN_SUPPORT_ALLOCATORS_ZEROAFTERFREE_H
-#define BITCOIN_SUPPORT_ALLOCATORS_ZEROAFTERFREE_H
+#pragma once
 
 #include "cleanse.h"
 
@@ -43,6 +42,3 @@ struct zero_after_free_allocator : public std::allocator<T> {
 // Byte-vector that clears its contents before deletion.
 typedef std::vector<char, zero_after_free_allocator<char>> CSerializeData;
 } // end namespace bitcoin
-
-#endif // BITCOIN_SUPPORT_ALLOCATORS_ZEROAFTERFREE_H
-

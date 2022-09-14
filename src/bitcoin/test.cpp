@@ -78,20 +78,30 @@ namespace bitcoin {
 #include "reverse_iterator.h"
 #include "serialize.h"
 #include "streams.h"
+#include "token.h"
 #include "transaction.h"
+#include "tinyformat.h"
 #include "uint256.h"
 #include "utilstrencodings.h"
+#include "utilstring.h"
 #include "version.h"
 
+#include "BTC.h"
+#include "Json/Json.h"
+
+#include <QByteArray>
 #include <QRandomGenerator>
 
+#include <algorithm>
 #include <array>
 #include <cassert>
+#include <clocale>
 #include <cstring>
 #include <functional>
 #include <iomanip>
 #include <iostream>
 #include <list>
+#include <locale>
 #include <new>
 #include <stdexcept>
 #include <sstream>
@@ -185,11 +195,24 @@ namespace {
 #   define BOOST_CHECK_EQUAL(a, b) BOOST_CHECK((a) == (b))
 #   define BOOST_CHECK_EXCEPTION(expr, exc, pred) \
             do { \
+                bool is_ok_ = false; \
                 try { \
                     expr; \
                 } catch (const exc &e) { \
-                    BOOST_CHECK_MESSAGE(pred(e), "Expression: \"" #expr "\" did not throw \"" #exc "\" as expected"); \
+                    is_ok_ = pred(e); \
                 } \
+                BOOST_CHECK_MESSAGE(is_ok_, "Expression: \"" #expr "\" should throw \"" #exc "\" and satisfy pred"); \
+            } while (0)
+#   define BOOST_CHECK_THROW(expr, exc) BOOST_CHECK_EXCEPTION(expr, exc, [](auto &&){ return true; })
+#   define BOOST_CHECK_NO_THROW(expr) \
+            do { \
+                bool is_ok_ = true; \
+                try { \
+                    expr; \
+                } catch (...) { \
+                    is_ok_ = false; \
+                } \
+                BOOST_CHECK_MESSAGE(is_ok_, "Expression: \"" #expr "\" should not throw"); \
             } while (0)
 #   define BOOST_AUTO_TEST_CASE(name) \
             TestContext::cur().tests.emplace_back( #name, TestContext::VoidFunc{} ); \
@@ -394,8 +417,8 @@ namespace {
             BOOST_CHECK(OneL.begin() + 32 == OneL.end());
             BOOST_CHECK(MaxL.begin() + 32 == MaxL.end());
             BOOST_CHECK(TmpL.begin() + 32 == TmpL.end());
-            BOOST_CHECK(GetSerializeSize(R1L, SER_DISK, PROTOCOL_VERSION) == 32);
-            BOOST_CHECK(GetSerializeSize(ZeroL, SER_DISK, PROTOCOL_VERSION) == 32);
+            BOOST_CHECK(GetSerializeSize(R1L, PROTOCOL_VERSION) == 32);
+            BOOST_CHECK(GetSerializeSize(ZeroL, PROTOCOL_VERSION) == 32);
 
             CDataStream ss(0, PROTOCOL_VERSION);
             ss << R1L;
@@ -442,8 +465,8 @@ namespace {
             BOOST_CHECK(OneS.begin() + 20 == OneS.end());
             BOOST_CHECK(MaxS.begin() + 20 == MaxS.end());
             BOOST_CHECK(TmpS.begin() + 20 == TmpS.end());
-            BOOST_CHECK(GetSerializeSize(R1S, SER_DISK, PROTOCOL_VERSION) == 20);
-            BOOST_CHECK(GetSerializeSize(ZeroS, SER_DISK, PROTOCOL_VERSION) == 20);
+            BOOST_CHECK(GetSerializeSize(R1S, PROTOCOL_VERSION) == 20);
+            BOOST_CHECK(GetSerializeSize(ZeroS, PROTOCOL_VERSION) == 20);
 
             ss << R1S;
             BOOST_CHECK(ss.str() == std::string(R1Array, R1Array + 20));
@@ -1941,5 +1964,1777 @@ namespace {
     }
 
     const auto t5 = App::registerTest("copyable_ptr", copyablePtrTests); // register test with app-wide test system
+
+    void tokenTests() {
+        const auto jsondata_valid = R"""(
+[
+  {
+    "prefix": "efaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1001",
+    "data": {
+      "amount": "1",
+      "category": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  },
+  {
+    "prefix": "ef21430000000000000000000000000000000000000000000000000000000034121001",
+    "data": {
+      "amount": "1",
+      "category": "1234000000000000000000000000000000000000000000000000000000004321"
+    }
+  },
+  {
+    "prefix": "ef21436587090000000000000000000000000000000000000000000090785634121001",
+    "data": {
+      "amount": "1",
+      "category": "1234567890000000000000000000000000000000000000000000000987654321"
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1001",
+    "data": {
+      "amount": "1",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb10fc",
+    "data": {
+      "amount": "252",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb10fdfd00",
+    "data": {
+      "amount": "253",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb10fdffff",
+    "data": {
+      "amount": "65535",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb10fe00000100",
+    "data": {
+      "amount": "65536",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb10fe01000100",
+    "data": {
+      "amount": "65537",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb10feffffffff",
+    "data": {
+      "amount": "4294967295",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb10ff0000000001000000",
+    "data": {
+      "amount": "4294967296",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb10ff0100000001000000",
+    "data": {
+      "amount": "4294967297",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb10ffffffffffffffff7f",
+    "data": {
+      "amount": "9223372036854775807",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb20",
+    "data": {
+      "amount": "0",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "",
+        "capability": "none"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb3001",
+    "data": {
+      "amount": "1",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "",
+        "capability": "none"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb30fc",
+    "data": {
+      "amount": "252",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "",
+        "capability": "none"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb30fdfd00",
+    "data": {
+      "amount": "253",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "",
+        "capability": "none"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb30fdffff",
+    "data": {
+      "amount": "65535",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "",
+        "capability": "none"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb30fe00000100",
+    "data": {
+      "amount": "65536",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "",
+        "capability": "none"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb30feffffffff",
+    "data": {
+      "amount": "4294967295",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "",
+        "capability": "none"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb30ff0000000001000000",
+    "data": {
+      "amount": "4294967296",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "",
+        "capability": "none"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb30ffffffffffffffff7f",
+    "data": {
+      "amount": "9223372036854775807",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "",
+        "capability": "none"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb6001cc",
+    "data": {
+      "amount": "0",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "cc",
+        "capability": "none"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb60051234567890",
+    "data": {
+      "amount": "0",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "1234567890",
+        "capability": "none"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb7001cc01",
+    "data": {
+      "amount": "1",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "cc",
+        "capability": "none"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb7001ccfc",
+    "data": {
+      "amount": "252",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "cc",
+        "capability": "none"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb7001ccfdfd00",
+    "data": {
+      "amount": "253",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "cc",
+        "capability": "none"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb7001ccfdffff",
+    "data": {
+      "amount": "65535",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "cc",
+        "capability": "none"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb7001ccfe00000100",
+    "data": {
+      "amount": "65536",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "cc",
+        "capability": "none"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb7001ccfeffffffff",
+    "data": {
+      "amount": "4294967295",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "cc",
+        "capability": "none"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb7001ccff0000000001000000",
+    "data": {
+      "amount": "4294967296",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "cc",
+        "capability": "none"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb7001ccffffffffffffffff7f",
+    "data": {
+      "amount": "9223372036854775807",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "cc",
+        "capability": "none"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb700accccccccccccccccccccfdffff",
+    "data": {
+      "amount": "65535",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "cccccccccccccccccccc",
+        "capability": "none"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb7028ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccfe00000100",
+    "data": {
+      "amount": "65536",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "capability": "none"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb7029ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccfe00000100",
+    "data": {
+      "amount": "65536",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "capability": "none"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb60fdfd00cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "data": {
+      "amount": "0",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "capability": "none"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb70fdfd00ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccfe00000100",
+    "data": {
+      "amount": "65536",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "capability": "none"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb70fde903ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccfe00000100",
+    "data": {
+      "amount": "65536",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "capability": "none"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb21",
+    "data": {
+      "amount": "0",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "",
+        "capability": "mutable"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb31feffffffff",
+    "data": {
+      "amount": "4294967295",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "",
+        "capability": "mutable"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb6101cc",
+    "data": {
+      "amount": "0",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "cc",
+        "capability": "mutable"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb7101ccff0000000001000000",
+    "data": {
+      "amount": "4294967296",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "cc",
+        "capability": "mutable"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb7102ccccffffffffffffffff7f",
+    "data": {
+      "amount": "9223372036854775807",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "cccc",
+        "capability": "mutable"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb710acccccccccccccccccccc01",
+    "data": {
+      "amount": "1",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "cccccccccccccccccccc",
+        "capability": "mutable"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb7128ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccfc",
+    "data": {
+      "amount": "252",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "capability": "mutable"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb7129ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccfc",
+    "data": {
+      "amount": "252",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "capability": "mutable"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb71fdfd00cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc01",
+    "data": {
+      "amount": "1",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "capability": "mutable"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb22",
+    "data": {
+      "amount": "0",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "",
+        "capability": "minting"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb3201",
+    "data": {
+      "amount": "1",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "",
+        "capability": "minting"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb32fdfd00",
+    "data": {
+      "amount": "253",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "",
+        "capability": "minting"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb32fe00000100",
+    "data": {
+      "amount": "65536",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "",
+        "capability": "minting"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb32ff0000000001000000",
+    "data": {
+      "amount": "4294967296",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "",
+        "capability": "minting"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb32ffffffffffffffff7f",
+    "data": {
+      "amount": "9223372036854775807",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "",
+        "capability": "minting"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb6201cc",
+    "data": {
+      "amount": "0",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "cc",
+        "capability": "minting"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb6229cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "data": {
+      "amount": "0",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "capability": "minting"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb7201ccfdffff",
+    "data": {
+      "amount": "65535",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "cc",
+        "capability": "minting"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb7202ccccfe00000100",
+    "data": {
+      "amount": "65536",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "cccc",
+        "capability": "minting"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb720accccccccccccccccccccff0100000001000000",
+    "data": {
+      "amount": "4294967297",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "cccccccccccccccccccc",
+        "capability": "minting"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb7228ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccffffffffffffffff7f",
+    "data": {
+      "amount": "9223372036854775807",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "capability": "minting"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb7229ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccffffffffffffffff7f",
+    "data": {
+      "amount": "9223372036854775807",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "capability": "minting"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb62fdfd00cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "data": {
+      "amount": "0",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "capability": "minting"
+      }
+    }
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb72fdfd00ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccfe00000100",
+    "data": {
+      "amount": "65536",
+      "category": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "nft": {
+        "commitment": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "capability": "minting"
+      }
+    }
+  }
+]
+
+)""";
+        const auto jsondata_invalid = R"""(
+[
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb00",
+    "error": "Invalid token prefix: must encode at least one token. Bitfield: 0b0",
+    "bchn_exception_message": "Invalid token bitfield: 0x00"
+  },
+  {
+    "prefix": "ef",
+    "error": "Invalid token prefix: insufficient length. The minimum possible length is 34. Missing bytes: 33",
+    "bchn_exception_message": "end of data"
+  },
+  {
+    "prefix": "efbbbbbbbb1001",
+    "error": "Invalid token prefix: insufficient length. The minimum possible length is 34. Missing bytes: 27",
+    "bchn_exception_message": "end of data"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "error": "Invalid token prefix: insufficient length. The minimum possible length is 34. Missing bytes: 1",
+    "bchn_exception_message": "end of data"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb80",
+    "error": "Invalid token prefix: reserved bit is set. Bitfield: 0b10000000",
+    "bchn_exception_message": "Invalid token bitfield: 0x80"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbba0",
+    "error": "Invalid token prefix: reserved bit is set. Bitfield: 0b10100000",
+    "bchn_exception_message": "Invalid token bitfield: 0xa0"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb9001",
+    "error": "Invalid token prefix: reserved bit is set. Bitfield: 0b10010000",
+    "bchn_exception_message": "Invalid token bitfield: 0x90"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb23",
+    "error": "Invalid token prefix: capability must be none (0), mutable (1), or minting (2). Capability value: 3",
+    "bchn_exception_message": "Invalid token bitfield: 0x23"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb24",
+    "error": "Invalid token prefix: capability must be none (0), mutable (1), or minting (2). Capability value: 4",
+    "bchn_exception_message": "Invalid token bitfield: 0x24"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb25",
+    "error": "Invalid token prefix: capability must be none (0), mutable (1), or minting (2). Capability value: 5",
+    "bchn_exception_message": "Invalid token bitfield: 0x25"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb26",
+    "error": "Invalid token prefix: capability must be none (0), mutable (1), or minting (2). Capability value: 6",
+    "bchn_exception_message": "Invalid token bitfield: 0x26"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb27",
+    "error": "Invalid token prefix: capability must be none (0), mutable (1), or minting (2). Capability value: 7",
+    "bchn_exception_message": "Invalid token bitfield: 0x27"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb28",
+    "error": "Invalid token prefix: capability must be none (0), mutable (1), or minting (2). Capability value: 8",
+    "bchn_exception_message": "Invalid token bitfield: 0x28"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb29",
+    "error": "Invalid token prefix: capability must be none (0), mutable (1), or minting (2). Capability value: 9",
+    "bchn_exception_message": "Invalid token bitfield: 0x29"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2a",
+    "error": "Invalid token prefix: capability must be none (0), mutable (1), or minting (2). Capability value: 10",
+    "bchn_exception_message": "Invalid token bitfield: 0x2a"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2b",
+    "error": "Invalid token prefix: capability must be none (0), mutable (1), or minting (2). Capability value: 11",
+    "bchn_exception_message": "Invalid token bitfield: 0x2b"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2c",
+    "error": "Invalid token prefix: capability must be none (0), mutable (1), or minting (2). Capability value: 12",
+    "bchn_exception_message": "Invalid token bitfield: 0x2c"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2d",
+    "error": "Invalid token prefix: capability must be none (0), mutable (1), or minting (2). Capability value: 13",
+    "bchn_exception_message": "Invalid token bitfield: 0x2d"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2e",
+    "error": "Invalid token prefix: capability must be none (0), mutable (1), or minting (2). Capability value: 14",
+    "bchn_exception_message": "Invalid token bitfield: 0x2e"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2f",
+    "error": "Invalid token prefix: capability must be none (0), mutable (1), or minting (2). Capability value: 15",
+    "bchn_exception_message": "Invalid token bitfield: 0x2f"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1101",
+    "error": "Invalid token prefix: capability requires an NFT. Bitfield: 0b10001",
+    "bchn_exception_message": "Invalid token bitfield: 0x11"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1201",
+    "error": "Invalid token prefix: capability requires an NFT. Bitfield: 0b10010",
+    "bchn_exception_message": "Invalid token bitfield: 0x12"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb40",
+    "error": "Invalid token prefix: commitment requires an NFT. Bitfield: 0b1000000",
+    "bchn_exception_message": "Invalid token bitfield: 0x40"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb5001",
+    "error": "Invalid token prefix: commitment requires an NFT. Bitfield: 0b1010000",
+    "bchn_exception_message": "Invalid token bitfield: 0x50"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb60",
+    "error": "Invalid token prefix: invalid non-fungible token commitment. Error reading CompactSize-prefixed bin: invalid CompactSize. Error reading CompactSize: requires at least one byte.",
+    "bchn_exception_message": "end of data"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb61",
+    "error": "Invalid token prefix: invalid non-fungible token commitment. Error reading CompactSize-prefixed bin: invalid CompactSize. Error reading CompactSize: requires at least one byte.",
+    "bchn_exception_message": "end of data"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb62",
+    "error": "Invalid token prefix: invalid non-fungible token commitment. Error reading CompactSize-prefixed bin: invalid CompactSize. Error reading CompactSize: requires at least one byte.",
+    "bchn_exception_message": "end of data"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb60fd0100cc",
+    "error": "Invalid token prefix: invalid non-fungible token commitment. Error reading CompactSize-prefixed bin: invalid CompactSize. Error reading CompactSize: CompactSize is not minimally encoded. Value: 1, encoded length: 3, canonical length: 1",
+    "bchn_exception_message": "non-canonical ReadCompactSize"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb60fe01000000cc",
+    "error": "Invalid token prefix: invalid non-fungible token commitment. Error reading CompactSize-prefixed bin: invalid CompactSize. Error reading CompactSize: CompactSize is not minimally encoded. Value: 1, encoded length: 5, canonical length: 1",
+    "bchn_exception_message": "non-canonical ReadCompactSize"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb60ff0100000000000000cc",
+    "error": "Invalid token prefix: invalid non-fungible token commitment. Error reading CompactSize-prefixed bin: invalid CompactSize. Error reading CompactSize: CompactSize is not minimally encoded. Value: 1, encoded length: 9, canonical length: 1",
+    "bchn_exception_message": "non-canonical ReadCompactSize"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb6000",
+    "error": "Invalid token prefix: if encoded, commitment length must be greater than 0.",
+    "bchn_exception_message": "token commitment may not be empty"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb700001",
+    "error": "Invalid token prefix: if encoded, commitment length must be greater than 0.",
+    "bchn_exception_message": "token commitment may not be empty"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb6001",
+    "error": "Invalid token prefix: invalid non-fungible token commitment. Error reading CompactSize-prefixed bin: insufficient bytes. Required bytes: 1, remaining bytes: 0",
+    "bchn_exception_message": "end of data"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb6101",
+    "error": "Invalid token prefix: invalid non-fungible token commitment. Error reading CompactSize-prefixed bin: insufficient bytes. Required bytes: 1, remaining bytes: 0",
+    "bchn_exception_message": "end of data"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb6102cc",
+    "error": "Invalid token prefix: invalid non-fungible token commitment. Error reading CompactSize-prefixed bin: insufficient bytes. Required bytes: 2, remaining bytes: 1",
+    "bchn_exception_message": "end of data"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb6202cc",
+    "error": "Invalid token prefix: invalid non-fungible token commitment. Error reading CompactSize-prefixed bin: insufficient bytes. Required bytes: 2, remaining bytes: 1",
+    "bchn_exception_message": "end of data"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb10",
+    "error": "Invalid token prefix: invalid fungible token amount encoding. Error reading CompactSize: requires at least one byte.",
+    "bchn_exception_message": "end of data"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb10fd00",
+    "error": "Invalid token prefix: invalid fungible token amount encoding. Error reading CompactSize: insufficient bytes. CompactSize prefix 253 requires at least 3 bytes. Remaining bytes: 2",
+    "bchn_exception_message": "end of data"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb10fe000000",
+    "error": "Invalid token prefix: invalid fungible token amount encoding. Error reading CompactSize: insufficient bytes. CompactSize prefix 254 requires at least 5 bytes. Remaining bytes: 4",
+    "bchn_exception_message": "end of data"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb10ff00000000000000",
+    "error": "Invalid token prefix: invalid fungible token amount encoding. Error reading CompactSize: insufficient bytes. CompactSize prefix 255 requires at least 9 bytes. Remaining bytes: 8",
+    "bchn_exception_message": "end of data"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb7001cc",
+    "error": "Invalid token prefix: invalid fungible token amount encoding. Error reading CompactSize: requires at least one byte.",
+    "bchn_exception_message": "end of data"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb7001ccfd00",
+    "error": "Invalid token prefix: invalid fungible token amount encoding. Error reading CompactSize: insufficient bytes. CompactSize prefix 253 requires at least 3 bytes. Remaining bytes: 2",
+    "bchn_exception_message": "end of data"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb7001ccfe000000",
+    "error": "Invalid token prefix: invalid fungible token amount encoding. Error reading CompactSize: insufficient bytes. CompactSize prefix 254 requires at least 5 bytes. Remaining bytes: 4",
+    "bchn_exception_message": "end of data"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb7001ccff00000000000000",
+    "error": "Invalid token prefix: invalid fungible token amount encoding. Error reading CompactSize: insufficient bytes. CompactSize prefix 255 requires at least 9 bytes. Remaining bytes: 8",
+    "bchn_exception_message": "end of data"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb30",
+    "error": "Invalid token prefix: invalid fungible token amount encoding. Error reading CompactSize: requires at least one byte.",
+    "bchn_exception_message": "end of data"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1000",
+    "error": "Invalid token prefix: if encoded, fungible token amount must be greater than 0.",
+    "bchn_exception_message": "token amount may not be 0"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb3000",
+    "error": "Invalid token prefix: if encoded, fungible token amount must be greater than 0.",
+    "bchn_exception_message": "token amount may not be 0"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb10fd0100",
+    "error": "Invalid token prefix: invalid fungible token amount encoding. Error reading CompactSize: CompactSize is not minimally encoded. Value: 1, encoded length: 3, canonical length: 1",
+    "bchn_exception_message": "non-canonical ReadCompactSize"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb10fe01000000",
+    "error": "Invalid token prefix: invalid fungible token amount encoding. Error reading CompactSize: CompactSize is not minimally encoded. Value: 1, encoded length: 5, canonical length: 1",
+    "bchn_exception_message": "non-canonical ReadCompactSize"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb10ff0100000000000000",
+    "error": "Invalid token prefix: invalid fungible token amount encoding. Error reading CompactSize: CompactSize is not minimally encoded. Value: 1, encoded length: 9, canonical length: 1",
+    "bchn_exception_message": "non-canonical ReadCompactSize"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb30fd0100",
+    "error": "Invalid token prefix: invalid fungible token amount encoding. Error reading CompactSize: CompactSize is not minimally encoded. Value: 1, encoded length: 3, canonical length: 1",
+    "bchn_exception_message": "non-canonical ReadCompactSize"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb30fe01000000",
+    "error": "Invalid token prefix: invalid fungible token amount encoding. Error reading CompactSize: CompactSize is not minimally encoded. Value: 1, encoded length: 5, canonical length: 1",
+    "bchn_exception_message": "non-canonical ReadCompactSize"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb30ff0100000000000000",
+    "error": "Invalid token prefix: invalid fungible token amount encoding. Error reading CompactSize: CompactSize is not minimally encoded. Value: 1, encoded length: 9, canonical length: 1",
+    "bchn_exception_message": "non-canonical ReadCompactSize"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb10ff0000000000000080",
+    "error": "Invalid token prefix: exceeds maximum fungible token amount of 9223372036854775807. Encoded amount: 9223372036854775808",
+    "bchn_exception_message": "amount out of range"
+  },
+  {
+    "prefix": "efbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb30ff0000000000000080",
+    "error": "Invalid token prefix: exceeds maximum fungible token amount of 9223372036854775807. Encoded amount: 9223372036854775808",
+    "bchn_exception_message": "amount out of range"
+  }
+]
+
+)""";
+
+        SETUP_CONTEXT("token");
+
+        // paranoia: since we use std::atoll below, we need to ensure "C" locale
+        const std::string origLocale = std::setlocale(LC_ALL, nullptr);
+        std::setlocale(LC_ALL, "C");
+        Defer d0([&origLocale]{
+             std::setlocale(LC_ALL, origLocale.c_str());
+        });
+
+        BOOST_AUTO_TEST_CASE(prefix_token_encoding_json_test_vectors_valid) {
+            using namespace bitcoin;
+            // load json
+            auto tests = Json::parseUtf8(jsondata_valid, Json::ParseOption::RequireArray).toList();
+            BOOST_CHECK( ! tests.empty());
+            unsigned ctr = 0;
+            for (const QVariant &var : tests) {
+                const QVariantMap &tv = var.toMap();
+                BOOST_CHECK( ! tv.empty());
+                Log() << "Checking 'valid' test vector " << ctr++ << " ...";
+                token::OutputDataPtr pdata;
+                {
+                    // Unserialize the "prefix" hex into pdata
+                    const std::vector<uint8_t> serializedPrefix = ParseHex(tv["prefix"].toString().toStdString());
+                    token::WrappedScriptPubKey wspk;
+                    CScript spk;
+                    wspk.insert(wspk.end(), serializedPrefix.begin(), serializedPrefix.end());
+                    token::UnwrapScriptPubKey(wspk, pdata, spk, INIT_PROTO_VERSION, true /* throw if unparseable */);
+                    BOOST_CHECK(bool(pdata));
+                    BOOST_CHECK(spk.empty()); // all of the JSON test vectors omit the scriptPubKey data that would follow
+                    // check that re-serialization produces identical serialized data
+                    wspk.clear();
+                    token::WrapScriptPubKey(wspk, pdata, spk, INIT_PROTO_VERSION);
+                    BOOST_CHECK_EQUAL(HexStr(wspk), HexStr(serializedPrefix));
+                }
+
+                // Next, check the deserialized token data matches what is expected from the test vector
+                const QVariantMap &d = tv["data"].toMap();
+                // Check category id matches
+                // -- Note that the hex representation in the JSON is big endian but our memory order for
+                // -- hashes is little endian.  However uint256::GetHex() returns a big endian hex string.
+                // -- See: https://github.com/bitjson/cashtokens/issues/53
+                BOOST_CHECK_EQUAL(pdata->GetId().GetHex(), d["category"].toString().toStdString());
+                // Check amount
+                {
+                    int64_t amt = 0;
+                    if (const QVariant vamt = d["amount"]; !vamt.isNull()) {
+                        if (vamt.canConvert<qint64>()) {
+                            bool ok{};
+                            amt = vamt.toLongLong(&ok);
+                            BOOST_CHECK(ok);
+                        } else {
+                            // parse amount
+                            const auto amountString = vamt.toString().toStdString();
+                            amt = std::atoll(amountString.c_str());
+                            const auto verifyStr = strprintf("%d", amt);
+                            // paranoia to ensure there are no "surprises" in the test vectors with amounts we cannot parse
+                            BOOST_CHECK_EQUAL(verifyStr, amountString);
+                        }
+                    }
+                    BOOST_CHECK_EQUAL(pdata->HasAmount(), amt != 0LL);
+                    BOOST_CHECK_EQUAL(pdata->GetAmount().getint64(), amt);
+                }
+                // Check NFT (if any)
+                if (d.contains("nft")) {
+                    const QVariantMap vnft = d["nft"].toMap();
+                    BOOST_CHECK( ! vnft.empty());
+                    // Check commitment
+                    std::string commitment = "";
+                    if (vnft.contains("commitment")) {
+                        commitment = vnft["commitment"].toString().toStdString();
+                    }
+                    BOOST_CHECK_EQUAL(HexStr(pdata->GetCommitment()), commitment);
+                    BOOST_CHECK(pdata->HasCommitmentLength() == !commitment.empty());
+
+                    // Check capability
+                    std::string cap;
+                    switch (pdata->GetCapability()) {
+                    case token::Capability::None: cap = "none"; break;
+                    case token::Capability::Mutable: cap = "mutable"; break;
+                    case token::Capability::Minting: cap = "minting"; break;
+                    }
+                    const auto &expectedCap = vnft["capability"].toString().toStdString();
+                    BOOST_CHECK_EQUAL(cap, expectedCap);
+                }
+            }
+        };
+
+        BOOST_AUTO_TEST_CASE(prefix_token_encoding_json_test_vectors_invalid) {
+            using namespace bitcoin;
+            // returns a lambda that is the predicate which returns true if the exception message contains `txt` (case insensitive)
+            static auto ExcMessageContains = [](const std::string &txt) {
+                return [txt](const std::exception &e) {
+                    const auto msg = e.what();
+                    const auto info = strprintf("Exception message: \"%s\" must contain: \"%s\" (case insensitive)", msg, txt);
+                    Debug() << info;
+                    return ToLower(msg).find(ToLower(TrimString(txt))) != std::string::npos;
+                };
+            };
+            // load json
+            auto tests = Json::parseUtf8(jsondata_invalid, Json::ParseOption::RequireArray).toList();
+            BOOST_CHECK( ! tests.empty());
+            unsigned ctr = 0;
+            for (const QVariant &var : tests) {
+                const auto tv = var.toMap();
+                BOOST_CHECK( ! tv.empty());
+                Log() << "Checking 'invalid' test vector " << ctr++ << " ...";
+                const auto serializedPrefix = ParseHex(tv["prefix"].toString().toStdString());
+                const auto expectedExcMsg = TrimString(tv["bchn_exception_message"].toString().toStdString());
+                BOOST_CHECK( ! expectedExcMsg.empty()); // ensure the JSON entry specifies a non-empty exception message
+                token::WrappedScriptPubKey wspk;
+                wspk.insert(wspk.end(), serializedPrefix.begin(), serializedPrefix.end());
+                token::OutputDataPtr pdata;
+                CScript spk;
+                // All of the "invalid" tests should throw here, and the exception message we expect comes from the
+                // JSON "bchn_exception_message" key
+                BOOST_CHECK_EXCEPTION(token::UnwrapScriptPubKey(wspk, pdata, spk, INIT_PROTO_VERSION, true /* throws */),
+                                      std::ios_base::failure, ExcMessageContains(expectedExcMsg));
+            }
+        };
+
+        BOOST_AUTO_TEST_CASE(cashtoken_flag_ser_deser_block) {
+            using namespace bitcoin;
+            const auto blockData = Util::ParseHexFast("000000209e244b25ff3e7462bbe0c12c14b7178b7f55675bf03748a095c2c61500000000810763ba26b56c8a5bb66e9729466a1647e0a0dc8e35cff3071305b5a6074b687bd31d636982361c6a4b564d0301000000010000000000000000000000000000000000000000000000000000000000000000ffffffff2703d9b7012f7434666f726b2e63332d736f66742e636f6d202d2d2043617368546f6b656e73212fffffffff03106462b8000000001976a9140a373caf0ab3c2b46cd05625b8d545c295b93d7a88ac1091a371000000001976a91472b46a63afc9917fbf4942b762591ca4a33d454f88ac0000000000000000166a143dd51c630000000000000000d32f7c3c190a0000000000000100000001957be2ec5ed5d97602f028d358cf22e16a3722b3e8d1fd7aaa9344f36fa246d5010000006441dfbb337849cad772ac7ddb1e8f6f5d4d0c5ce458ed9e342b35206725364cb66d93be0754bad34d53ac9ffb7be3bd9c6ee9c60a5c13cdc2ac1a2f46264f12cf404121022eebf1895d911e62c184a47c775ce8fe11fb42e38fd9c8d5f055a60620a25738feffffff01ac8401000000000044ef43c1044127e1274181e7458c70b02d5c75b49b31a337d85703d56480345cd2cc6208596f596f596f212176a91468ad9ed17ffe22b6a2cebb6eb8332add388e1ab288ac0000000001000000010b58cc128cff64cc45ea0d4a23020f511bcea24993b440666452882735218041000000006441c74c1ca636f349daabed8aa266f3af2ad69b7388f6c8fdc117ed6d9e4d085c68645e1ec230709f4354d564697b6da2e58fa96439ebfc1133010d93abe844a08e412103f1b17617586ccd70f742c7071518b8871907c6a115a4a4c044c2fcc6e672ae8bfeffffff0234e21600000000001976a914c793cf3f739c4cee16476abe1d1a5d10585446e688ac00e1f505000000001976a914a46bc981bfd309b4b50616030a8ebe24511d5e6688acd8b70100");
+            const auto nCtTxn = 1u;
+            const auto outN = 0u;
+            const auto hashBlock = "0000000026657a44a6056b8ad9ea9c0c9cbf0014fe1539403a8330ea516554e5";
+            const auto hashCtTxn = "a7709e46488ffff5b06ae2dd450ee5fd5edbf17afae4a067c3df46ba0a0df778";
+            const auto tokenBlob = ParseHex("ef43c1044127e1274181e7458c70b02d5c75b49b31a337d85703d56480345cd2cc6208596f596f596f212176a91468ad9ed17ffe22b6a2cebb6eb8332add388e1ab288ac");
+
+            // First, deserialize without CashTokens
+            {
+                const CBlock block = BTC::Deserialize<CBlock>(blockData, 0, false, false, false, true);
+                BOOST_CHECK_EQUAL(block.GetHash().ToString(), hashBlock);
+                const auto &tx = block.vtx.at(nCtTxn);
+                BOOST_CHECK_EQUAL(tx->GetHash().ToString(), hashCtTxn);
+                BOOST_CHECK(std::all_of(tx->vout.begin(), tx->vout.end(), [](const auto &out){
+                    return !out.tokenDataPtr;
+                }));
+                const auto &txout = tx->vout.at(outN);
+                BOOST_CHECK(std::equal(tokenBlob.begin(), tokenBlob.end(),
+                                       txout.scriptPubKey.begin(), txout.scriptPubKey.end()));
+                // ensure re-serialization works
+                BOOST_CHECK(BTC::Serialize(block, false, false) == blockData);
+                // ensure ser-reser is the same with or without cashtokens flag
+                const auto serTx = BTC::Serialize(*tx, false, false);
+                BOOST_CHECK(BTC::Serialize(BTC::Deserialize<CTransaction>(serTx, 0, false, false, true), false, false)
+                            == serTx);
+            }
+
+            // Next, deserialize *with* CashTokens
+            {
+                const CBlock block = BTC::Deserialize<CBlock>(blockData, 0, false, false, true, true);
+                BOOST_CHECK_EQUAL(block.GetHash().ToString(), hashBlock);
+                const auto &tx = block.vtx.at(nCtTxn);
+                BOOST_CHECK_EQUAL(tx->GetHash().ToString(), hashCtTxn);
+                const auto &txout = tx->vout.at(outN);
+                BOOST_CHECK(bool(txout.tokenDataPtr));
+                token::WrappedScriptPubKey wspk;
+                token::WrapScriptPubKey(wspk, txout.tokenDataPtr, txout.scriptPubKey, PROTOCOL_VERSION);
+                BOOST_CHECK(std::equal(tokenBlob.begin(), tokenBlob.end(),
+                                       wspk.begin(), wspk.end()));
+                token::WrapScriptPubKey(wspk, txout.tokenDataPtr, txout.scriptPubKey, PROTOCOL_VERSION | SERIALIZE_TRANSACTION_USE_CASHTOKENS);
+                BOOST_CHECK(std::equal(tokenBlob.begin(), tokenBlob.end(),
+                                       wspk.begin(), wspk.end()));
+                BOOST_CHECK(!std::equal(tokenBlob.begin(), tokenBlob.end(),
+                                        txout.scriptPubKey.begin(), txout.scriptPubKey.end()));
+                // ensure re-serialization works
+                BOOST_CHECK(BTC::Serialize(block, false, false) == blockData);
+                // ensure ser-reser is the same with or without cashtokens flag
+                const auto serTx = BTC::Serialize(*tx, false, false);
+                BOOST_CHECK(BTC::Serialize(BTC::Deserialize<CTransaction>(serTx, 0, false, false, false), false, false)
+                            == serTx);
+            }
+        };
+
+        RUN_CONTEXT();
+    }
+
+    const auto t6 = App::registerTest("token", tokenTests);
+
+    template <typename VecT>
+    static bool test_generic_vector_writer() {
+        using namespace bitcoin;
+        uint8_t a(1);
+        uint8_t b(2);
+        uint8_t bytes[] = {3, 4, 5, 6};
+        VecT vch;
+        using T = typename VecT::value_type;
+
+        auto ToUInt8Vec = [](const auto &v) {
+            const uint8_t *begin = reinterpret_cast<const uint8_t *>(v.data());
+            const uint8_t *end = reinterpret_cast<const uint8_t *>(v.data() + v.size());
+            return std::vector<uint8_t>(begin, end);
+        };
+
+        // Each test runs twice. Serializing a second time at the same starting
+        // point should yield the same results, even if the first test grew the
+        // vector.
+
+        GenericVectorWriter(SER_NETWORK, INIT_PROTO_VERSION, vch, 0, a, b);
+        BOOST_CHECK((ToUInt8Vec(vch) == std::vector<uint8_t>{{1, 2}}));
+        GenericVectorWriter(SER_NETWORK, INIT_PROTO_VERSION, vch, 0, a, b);
+        BOOST_CHECK((ToUInt8Vec(vch) == std::vector<uint8_t>{{1, 2}}));
+        vch.clear();
+
+        GenericVectorWriter(SER_NETWORK, INIT_PROTO_VERSION, vch, 2, a, b);
+        BOOST_CHECK((ToUInt8Vec(vch) == std::vector<uint8_t>{{0, 0, 1, 2}}));
+        GenericVectorWriter(SER_NETWORK, INIT_PROTO_VERSION, vch, 2, a, b);
+        BOOST_CHECK((ToUInt8Vec(vch) == std::vector<uint8_t>{{0, 0, 1, 2}}));
+        vch.clear();
+
+        vch = VecT(typename VecT::size_type(5), T(0));
+        GenericVectorWriter(SER_NETWORK, INIT_PROTO_VERSION, vch, 2, a, b);
+        BOOST_CHECK((ToUInt8Vec(vch) == std::vector<uint8_t>{{0, 0, 1, 2, 0}}));
+        GenericVectorWriter(SER_NETWORK, INIT_PROTO_VERSION, vch, 2, a, b);
+        BOOST_CHECK((ToUInt8Vec(vch) == std::vector<uint8_t>{{0, 0, 1, 2, 0}}));
+        vch.clear();
+
+        vch = VecT(typename VecT::size_type(4), T(0));
+        GenericVectorWriter(SER_NETWORK, INIT_PROTO_VERSION, vch, 3, a, b);
+        BOOST_CHECK((ToUInt8Vec(vch) == std::vector<uint8_t>{{0, 0, 0, 1, 2}}));
+        GenericVectorWriter(SER_NETWORK, INIT_PROTO_VERSION, vch, 3, a, b);
+        BOOST_CHECK((ToUInt8Vec(vch) == std::vector<uint8_t>{{0, 0, 0, 1, 2}}));
+        vch.clear();
+
+        vch = VecT(typename VecT::size_type(4), T(0));
+        GenericVectorWriter(SER_NETWORK, INIT_PROTO_VERSION, vch, 4, a, b);
+        BOOST_CHECK((ToUInt8Vec(vch) == std::vector<uint8_t>{{0, 0, 0, 0, 1, 2}}));
+        GenericVectorWriter(SER_NETWORK, INIT_PROTO_VERSION, vch, 4, a, b);
+        BOOST_CHECK((ToUInt8Vec(vch) == std::vector<uint8_t>{{0, 0, 0, 0, 1, 2}}));
+        vch.clear();
+
+        GenericVectorWriter(SER_NETWORK, INIT_PROTO_VERSION, vch, 0, bytes);
+        BOOST_CHECK((ToUInt8Vec(vch) == std::vector<uint8_t>{{3, 4, 5, 6}}));
+        GenericVectorWriter(SER_NETWORK, INIT_PROTO_VERSION, vch, 0, bytes);
+        BOOST_CHECK((ToUInt8Vec(vch) == std::vector<uint8_t>{{3, 4, 5, 6}}));
+        vch.clear();
+
+        vch = VecT(typename VecT::size_type(4), T(8));
+        GenericVectorWriter(SER_NETWORK, INIT_PROTO_VERSION, vch, 2, a, bytes, b);
+        BOOST_CHECK((ToUInt8Vec(vch) == std::vector<uint8_t>{{8, 8, 1, 3, 4, 5, 6, 2}}));
+        GenericVectorWriter(SER_NETWORK, INIT_PROTO_VERSION, vch, 2, a, bytes, b);
+        BOOST_CHECK((ToUInt8Vec(vch) == std::vector<uint8_t>{{8, 8, 1, 3, 4, 5, 6, 2}}));
+        vch.clear();
+
+        return true;
+    }
+
+    template <typename VecT>
+    static bool test_generic_vector_reader() {
+        using namespace bitcoin;
+        VecT vch;
+        for (auto val : {1, 255, 3, 4, 5, 6}) vch.push_back(typename VecT::value_type(val));
+
+        GenericVectorReader reader(SER_NETWORK, INIT_PROTO_VERSION, vch, 0);
+        BOOST_CHECK_EQUAL(reader.size(), 6);
+        BOOST_CHECK(!reader.empty());
+
+        // Read a single byte as an uint8_t.
+        uint8_t a;
+        reader >> a;
+        BOOST_CHECK_EQUAL(a, 1);
+        BOOST_CHECK_EQUAL(reader.size(), 5);
+        BOOST_CHECK(!reader.empty());
+
+        // Read a single byte as a (signed) int8_t.
+        int8_t b;
+        reader >> b;
+        BOOST_CHECK_EQUAL(b, -1);
+        BOOST_CHECK_EQUAL(reader.size(), 4);
+        BOOST_CHECK(!reader.empty());
+
+        // Read a 4 bytes as an unsigned uint32_t.
+        uint32_t c;
+        reader >> c;
+        // 100992003 = 3,4,5,6 in little-endian base-256
+        BOOST_CHECK_EQUAL(c, htole32(100992003));
+        BOOST_CHECK_EQUAL(reader.size(), 0);
+        BOOST_CHECK(reader.empty());
+
+        // Reading after end of byte vector throws an error.
+        int32_t d;
+        BOOST_CHECK_THROW(reader >> d, std::ios_base::failure);
+
+        // Read a 4 bytes as a (signed) int32_t from the beginning of the buffer.
+        GenericVectorReader new_reader(SER_NETWORK, INIT_PROTO_VERSION, vch, 0);
+        new_reader >> d;
+        // 67370753 = 1,255,3,4 in little-endian base-256
+        BOOST_CHECK_EQUAL(uint32_t(d), htole32(67370753));
+        BOOST_CHECK_EQUAL(new_reader.size(), 2);
+        BOOST_CHECK(!new_reader.empty());
+
+        // Reading after end of byte vector throws an error even if the reader is
+        // not totally empty.
+        BOOST_CHECK_THROW(new_reader >> d, std::ios_base::failure);
+
+        return true;
+    }
+
+    struct SerTestsCommonBase {
+        using CSerActionSerialize = bitcoin::CSerActionSerialize;
+        using CSerActionUnserialize = bitcoin::CSerActionUnserialize;
+        using CTransactionRef = bitcoin::CTransactionRef;
+    };
+
+    struct CSerializeMethodsTestSingle : SerTestsCommonBase {
+    protected:
+        int intval;
+        bool boolval;
+        std::string stringval;
+        char charstrval[16];
+        CTransactionRef txval;
+
+    public:
+        CSerializeMethodsTestSingle() = default;
+        CSerializeMethodsTestSingle(int intvalin, bool boolvalin,
+                                    std::string stringvalin,
+                                    const char *charstrvalin,
+                                    const CTransactionRef &txvalin)
+            : intval(intvalin), boolval(boolvalin),
+              stringval(std::move(stringvalin)), txval(txvalin) {
+            memcpy(charstrval, charstrvalin, sizeof(charstrval));
+        }
+
+        SERIALIZE_METHODS(CSerializeMethodsTestSingle, obj) {
+            READWRITE(obj.intval);
+            READWRITE(obj.boolval);
+            READWRITE(obj.stringval);
+            READWRITE(obj.charstrval);
+            READWRITE(obj.txval);
+        }
+
+        bool operator==(const CSerializeMethodsTestSingle &rhs) {
+            return intval == rhs.intval && boolval == rhs.boolval &&
+                   stringval == rhs.stringval &&
+                   strcmp(charstrval, rhs.charstrval) == 0 && *txval == *rhs.txval;
+        }
+    };
+
+    struct CSerializeMethodsTestMany : CSerializeMethodsTestSingle {
+    public:
+        using CSerializeMethodsTestSingle::CSerializeMethodsTestSingle;
+
+        SERIALIZE_METHODS(CSerializeMethodsTestMany, obj) {
+            READWRITE(obj.intval, obj.boolval, obj.stringval, obj.charstrval, obj.txval);
+        }
+    };
+
+
+    void streamsTests() {
+        SETUP_CONTEXT("streams");
+
+        using namespace bitcoin;
+
+        BOOST_AUTO_TEST_CASE(streams_vector_writer) {
+            BOOST_CHECK(test_generic_vector_writer<std::vector<uint8_t>>());
+            BOOST_CHECK(test_generic_vector_writer<std::vector<char>>());
+            BOOST_CHECK((test_generic_vector_writer<prevector<28, uint8_t>>()));
+        };
+
+        BOOST_AUTO_TEST_CASE(streams_vector_reader) {
+            BOOST_CHECK(test_generic_vector_reader<std::vector<uint8_t>>());
+            BOOST_CHECK(test_generic_vector_reader<std::vector<char>>());
+            BOOST_CHECK((test_generic_vector_reader<prevector<28, uint8_t>>()));
+        };
+
+        BOOST_AUTO_TEST_CASE(bitstream_reader_writer) {
+            CDataStream data(SER_NETWORK, INIT_PROTO_VERSION);
+
+            BitStreamWriter<CDataStream> bit_writer(data);
+            bit_writer.Write(0, 1);
+            bit_writer.Write(2, 2);
+            bit_writer.Write(6, 3);
+            bit_writer.Write(11, 4);
+            bit_writer.Write(1, 5);
+            bit_writer.Write(32, 6);
+            bit_writer.Write(7, 7);
+            bit_writer.Write(30497, 16);
+            bit_writer.Flush();
+
+            CDataStream data_copy(data);
+            uint32_t serialized_int1;
+            data >> serialized_int1;
+            // NOTE: Serialized as LE
+            BOOST_CHECK_EQUAL(serialized_int1, (uint32_t)0x7700C35A);
+            uint16_t serialized_int2;
+            data >> serialized_int2;
+            // NOTE: Serialized as LE
+            BOOST_CHECK_EQUAL(serialized_int2, (uint16_t)0x1072);
+
+            BitStreamReader<CDataStream> bit_reader(data_copy);
+            BOOST_CHECK_EQUAL(bit_reader.Read(1), 0);
+            BOOST_CHECK_EQUAL(bit_reader.Read(2), 2);
+            BOOST_CHECK_EQUAL(bit_reader.Read(3), 6);
+            BOOST_CHECK_EQUAL(bit_reader.Read(4), 11);
+            BOOST_CHECK_EQUAL(bit_reader.Read(5), 1);
+            BOOST_CHECK_EQUAL(bit_reader.Read(6), 32);
+            BOOST_CHECK_EQUAL(bit_reader.Read(7), 7);
+            BOOST_CHECK_EQUAL(bit_reader.Read(16), 30497);
+            BOOST_CHECK_THROW(bit_reader.Read(8), std::ios_base::failure);
+        };
+
+        BOOST_AUTO_TEST_CASE(streams_serializedata_xor) {
+            std::vector<char> in;
+            std::vector<char> expected_xor;
+            std::vector<uint8_t> key;
+            CDataStream ds(in, 0, 0);
+
+            // Degenerate case
+
+            key.push_back('\x00');
+            key.push_back('\x00');
+            ds.Xor(key);
+            BOOST_CHECK_EQUAL(std::string(expected_xor.begin(), expected_xor.end()),
+                              std::string(ds.begin(), ds.end()));
+
+            in.push_back('\x0f');
+            in.push_back('\xf0');
+            expected_xor.push_back('\xf0');
+            expected_xor.push_back('\x0f');
+
+            // Single character key
+
+            ds.clear();
+            ds.insert(ds.begin(), in.begin(), in.end());
+            key.clear();
+
+            key.push_back('\xff');
+            ds.Xor(key);
+            BOOST_CHECK_EQUAL(std::string(expected_xor.begin(), expected_xor.end()),
+                              std::string(ds.begin(), ds.end()));
+
+            // Multi character key
+
+            in.clear();
+            expected_xor.clear();
+            in.push_back('\xf0');
+            in.push_back('\x0f');
+            expected_xor.push_back('\x0f');
+            expected_xor.push_back('\x00');
+
+            ds.clear();
+            ds.insert(ds.begin(), in.begin(), in.end());
+
+            key.clear();
+            key.push_back('\xff');
+            key.push_back('\x0f');
+
+            ds.Xor(key);
+            BOOST_CHECK_EQUAL(std::string(expected_xor.begin(), expected_xor.end()),
+                              std::string(ds.begin(), ds.end()));
+        };
+
+        BOOST_AUTO_TEST_CASE(streams_empty_vector) {
+            std::vector<char> in;
+            CDataStream ds(in, 0, 0);
+
+            // read 0 bytes used to cause a segfault on some older systems.
+            BOOST_CHECK_NO_THROW(ds.read(nullptr, 0));
+
+            // Same goes for writing 0 bytes from a vector ...
+            const std::vector<char> vdata{'f', 'o', 'o', 'b', 'a', 'r'};
+            BOOST_CHECK_NO_THROW(ds.insert(ds.begin(), vdata.begin(), vdata.begin()));
+            BOOST_CHECK_NO_THROW(ds.insert(ds.begin(), vdata.begin(), vdata.end()));
+
+            // ... or an array.
+            const char adata[6] = {'f', 'o', 'o', 'b', 'a', 'r'};
+            BOOST_CHECK_NO_THROW(ds.insert(ds.begin(), &adata[0], &adata[0]));
+            BOOST_CHECK_NO_THROW(ds.insert(ds.begin(), &adata[0], &adata[6]));
+        };
+
+        BOOST_AUTO_TEST_CASE(sizes) {
+            BOOST_CHECK_EQUAL(sizeof(char), GetSerializeSize(char(0)));
+            BOOST_CHECK_EQUAL(sizeof(int8_t), GetSerializeSize(int8_t(0)));
+            BOOST_CHECK_EQUAL(sizeof(uint8_t), GetSerializeSize(uint8_t(0)));
+            BOOST_CHECK_EQUAL(sizeof(int16_t), GetSerializeSize(int16_t(0)));
+            BOOST_CHECK_EQUAL(sizeof(uint16_t), GetSerializeSize(uint16_t(0)));
+            BOOST_CHECK_EQUAL(sizeof(int32_t), GetSerializeSize(int32_t(0)));
+            BOOST_CHECK_EQUAL(sizeof(uint32_t), GetSerializeSize(uint32_t(0)));
+            BOOST_CHECK_EQUAL(sizeof(int64_t), GetSerializeSize(int64_t(0)));
+            BOOST_CHECK_EQUAL(sizeof(uint64_t), GetSerializeSize(uint64_t(0)));
+            BOOST_CHECK_EQUAL(sizeof(float), GetSerializeSize(float(0)));
+            BOOST_CHECK_EQUAL(sizeof(double), GetSerializeSize(double(0)));
+            // Bool is serialized as char
+            BOOST_CHECK_EQUAL(sizeof(char), GetSerializeSize(bool(0)));
+
+            // Sanity-check GetSerializeSize and c++ type matching
+            BOOST_CHECK_EQUAL(GetSerializeSize(char(0)), 1U);
+            BOOST_CHECK_EQUAL(GetSerializeSize(int8_t(0)), 1U);
+            BOOST_CHECK_EQUAL(GetSerializeSize(uint8_t(0)), 1U);
+            BOOST_CHECK_EQUAL(GetSerializeSize(int16_t(0)), 2U);
+            BOOST_CHECK_EQUAL(GetSerializeSize(uint16_t(0)), 2U);
+            BOOST_CHECK_EQUAL(GetSerializeSize(int32_t(0)), 4U);
+            BOOST_CHECK_EQUAL(GetSerializeSize(uint32_t(0)), 4U);
+            BOOST_CHECK_EQUAL(GetSerializeSize(int64_t(0)), 8U);
+            BOOST_CHECK_EQUAL(GetSerializeSize(uint64_t(0)), 8U);
+            BOOST_CHECK_EQUAL(GetSerializeSize(float(0)), 4U);
+            BOOST_CHECK_EQUAL(GetSerializeSize(double(0)), 8U);
+            BOOST_CHECK_EQUAL(GetSerializeSize(bool(0)), 1U);
+        };
+
+        BOOST_AUTO_TEST_CASE(floats_conversion) {
+            // Choose values that map unambiguously to binary floating point to avoid
+            // rounding issues at the compiler side.
+            BOOST_CHECK_EQUAL(ser_uint32_to_float(0x00000000), 0.0F);
+            BOOST_CHECK_EQUAL(ser_uint32_to_float(0x3f000000), 0.5F);
+            BOOST_CHECK_EQUAL(ser_uint32_to_float(0x3f800000), 1.0F);
+            BOOST_CHECK_EQUAL(ser_uint32_to_float(0x40000000), 2.0F);
+            BOOST_CHECK_EQUAL(ser_uint32_to_float(0x40800000), 4.0F);
+            BOOST_CHECK_EQUAL(ser_uint32_to_float(0x44444444), 785.066650390625F);
+
+            BOOST_CHECK_EQUAL(ser_float_to_uint32(0.0F), 0x00000000U);
+            BOOST_CHECK_EQUAL(ser_float_to_uint32(0.5F), 0x3f000000U);
+            BOOST_CHECK_EQUAL(ser_float_to_uint32(1.0F), 0x3f800000U);
+            BOOST_CHECK_EQUAL(ser_float_to_uint32(2.0F), 0x40000000U);
+            BOOST_CHECK_EQUAL(ser_float_to_uint32(4.0F), 0x40800000U);
+            BOOST_CHECK_EQUAL(ser_float_to_uint32(785.066650390625F), 0x44444444U);
+        };
+
+        BOOST_AUTO_TEST_CASE(doubles_conversion) {
+            // Choose values that map unambiguously to binary floating point to avoid
+            // rounding issues at the compiler side.
+            BOOST_CHECK_EQUAL(ser_uint64_to_double(0x0000000000000000ULL), 0.0);
+            BOOST_CHECK_EQUAL(ser_uint64_to_double(0x3fe0000000000000ULL), 0.5);
+            BOOST_CHECK_EQUAL(ser_uint64_to_double(0x3ff0000000000000ULL), 1.0);
+            BOOST_CHECK_EQUAL(ser_uint64_to_double(0x4000000000000000ULL), 2.0);
+            BOOST_CHECK_EQUAL(ser_uint64_to_double(0x4010000000000000ULL), 4.0);
+            BOOST_CHECK_EQUAL(ser_uint64_to_double(0x4088888880000000ULL),
+                              785.066650390625);
+
+            BOOST_CHECK_EQUAL(ser_double_to_uint64(0.0), 0x0000000000000000ULL);
+            BOOST_CHECK_EQUAL(ser_double_to_uint64(0.5), 0x3fe0000000000000ULL);
+            BOOST_CHECK_EQUAL(ser_double_to_uint64(1.0), 0x3ff0000000000000ULL);
+            BOOST_CHECK_EQUAL(ser_double_to_uint64(2.0), 0x4000000000000000ULL);
+            BOOST_CHECK_EQUAL(ser_double_to_uint64(4.0), 0x4010000000000000ULL);
+            BOOST_CHECK_EQUAL(ser_double_to_uint64(785.066650390625),
+                              0x4088888880000000ULL);
+        };
+        /*
+        Python code to generate the below hashes:
+
+            def reversed_hex(x):
+                return binascii.hexlify(''.join(reversed(x)))
+            def dsha256(x):
+                return hashlib.sha256(hashlib.sha256(x).digest()).digest()
+
+            reversed_hex(dsha256(''.join(struct.pack('<f', x) for x in range(0,1000))))
+        == '8e8b4cf3e4df8b332057e3e23af42ebc663b61e0495d5e7e32d85099d7f3fe0c'
+            reversed_hex(dsha256(''.join(struct.pack('<d', x) for x in range(0,1000))))
+        == '43d0c82591953c4eafe114590d392676a01585d25b25d433557f0d7878b23f96'
+        */
+        BOOST_AUTO_TEST_CASE(floats) {
+            CDataStream ss(SER_DISK, 0);
+            // encode
+            for (int i = 0; i < 1000; i++) {
+                ss << float(i);
+            }
+            BOOST_CHECK(Hash(MakeUInt8Span(ss)) == uint256S("8e8b4cf3e4df8b332057e3e23af42ebc663b61e0495d5e7e32d85099d7f3fe0c"));
+
+            // decode
+            for (int i = 0; i < 1000; i++) {
+                float j;
+                ss >> j;
+                const auto msg = strprintf("decoded: %f expected: %f", j, i);
+                BOOST_CHECK_MESSAGE(i == j, msg);
+            }
+        };
+
+        BOOST_AUTO_TEST_CASE(doubles) {
+            CDataStream ss(SER_DISK, 0);
+            // encode
+            for (int i = 0; i < 1000; i++) {
+                ss << double(i);
+            }
+            BOOST_CHECK(Hash(MakeUInt8Span(ss)) == uint256S("43d0c82591953c4eafe114590d392676a01585d25b25d433557f0d7878b23f96"));
+
+            // decode
+            for (int i = 0; i < 1000; i++) {
+                double j;
+                ss >> j;
+                const auto msg = strprintf("decoded: %f expected: %f", j, i);
+                BOOST_CHECK_MESSAGE(i == j, msg);
+            }
+        };
+
+        BOOST_AUTO_TEST_CASE(varints) {
+            // encode
+
+            CDataStream ss(SER_DISK, 0);
+            CDataStream::size_type size = 0;
+            for (int i = 0; i < 100000; i++) {
+                ss << VARINT_MODE(i, VarIntMode::NONNEGATIVE_SIGNED);
+                size += bitcoin::GetSerializeSize(VARINT_MODE(i, VarIntMode::NONNEGATIVE_SIGNED));
+                BOOST_CHECK(size == ss.size());
+            }
+
+            for (uint64_t i = 0; i < 100000000000ULL; i += 999999937) {
+                ss << VARINT(i);
+                size += bitcoin::GetSerializeSize(VARINT(i));
+                BOOST_CHECK(size == ss.size());
+            }
+
+            // decode
+            for (int i = 0; i < 100000; i++) {
+                int j = -1;
+                ss >> VARINT_MODE(j, VarIntMode::NONNEGATIVE_SIGNED);
+                const auto msg = strprintf("decoded: %d expected: %d", j, i);
+                BOOST_CHECK_MESSAGE(i == j, msg);
+            }
+
+            for (uint64_t i = 0; i < 100000000000ULL; i += 999999937) {
+                uint64_t j = std::numeric_limits<uint64_t>::max();
+                ss >> VARINT(j);
+                const auto msg = strprintf("decoded: %u expected: %u", j, i);
+                BOOST_CHECK_MESSAGE(i == j, msg);
+            }
+        };
+
+        BOOST_AUTO_TEST_CASE(varints_bitpatterns) {
+            CDataStream ss(SER_DISK, 0);
+            ss << VARINT_MODE(0, VarIntMode::NONNEGATIVE_SIGNED);
+            BOOST_CHECK_EQUAL(HexStr(ss), "00");
+            ss.clear();
+            ss << VARINT_MODE(0x7f, VarIntMode::NONNEGATIVE_SIGNED);
+            BOOST_CHECK_EQUAL(HexStr(ss), "7f");
+            ss.clear();
+            ss << VARINT_MODE((int8_t)0x7f, VarIntMode::NONNEGATIVE_SIGNED);
+            BOOST_CHECK_EQUAL(HexStr(ss), "7f");
+            ss.clear();
+            ss << VARINT_MODE(0x80, VarIntMode::NONNEGATIVE_SIGNED);
+            BOOST_CHECK_EQUAL(HexStr(ss), "8000");
+            ss.clear();
+            ss << VARINT((uint8_t)0x80);
+            BOOST_CHECK_EQUAL(HexStr(ss), "8000");
+            ss.clear();
+            ss << VARINT_MODE(0x1234, VarIntMode::NONNEGATIVE_SIGNED);
+            BOOST_CHECK_EQUAL(HexStr(ss), "a334");
+            ss.clear();
+            ss << VARINT_MODE((int16_t)0x1234, VarIntMode::NONNEGATIVE_SIGNED);
+            BOOST_CHECK_EQUAL(HexStr(ss), "a334");
+            ss.clear();
+            ss << VARINT_MODE(0xffff, VarIntMode::NONNEGATIVE_SIGNED);
+            BOOST_CHECK_EQUAL(HexStr(ss), "82fe7f");
+            ss.clear();
+            ss << VARINT((uint16_t)0xffff);
+            BOOST_CHECK_EQUAL(HexStr(ss), "82fe7f");
+            ss.clear();
+            ss << VARINT_MODE(0x123456, VarIntMode::NONNEGATIVE_SIGNED);
+            BOOST_CHECK_EQUAL(HexStr(ss), "c7e756");
+            ss.clear();
+            ss << VARINT_MODE((int32_t)0x123456, VarIntMode::NONNEGATIVE_SIGNED);
+            BOOST_CHECK_EQUAL(HexStr(ss), "c7e756");
+            ss.clear();
+            ss << VARINT(0x80123456U);
+            BOOST_CHECK_EQUAL(HexStr(ss), "86ffc7e756");
+            ss.clear();
+            ss << VARINT((uint32_t)0x80123456U);
+            BOOST_CHECK_EQUAL(HexStr(ss), "86ffc7e756");
+            ss.clear();
+            ss << VARINT(0xffffffff);
+            BOOST_CHECK_EQUAL(HexStr(ss), "8efefefe7f");
+            ss.clear();
+            ss << VARINT_MODE(0x7fffffffffffffffLL, VarIntMode::NONNEGATIVE_SIGNED);
+            BOOST_CHECK_EQUAL(HexStr(ss), "fefefefefefefefe7f");
+            ss.clear();
+            ss << VARINT(0xffffffffffffffffULL);
+            BOOST_CHECK_EQUAL(HexStr(ss), "80fefefefefefefefe7f");
+            ss.clear();
+        };
+
+        const auto isTooLargeException = [](const std::ios_base::failure &ex) {
+            std::ios_base::failure expectedException(
+                "ReadCompactSize(): size too large");
+
+            // The string returned by what() can be different for different platforms.
+            // Instead of directly comparing the ex.what() with an expected string,
+            // create an instance of exception to see if ex.what() matches  the expected
+            // explanatory string returned by the exception instance.
+            return strcmp(expectedException.what(), ex.what()) == 0;
+        };
+
+        BOOST_AUTO_TEST_CASE(compactsize) {
+            CDataStream ss(SER_DISK, 0);
+            std::vector<char>::size_type i, j;
+
+            for (i = 1; i <= MAX_SIZE; i *= 2) {
+                WriteCompactSize(ss, i - 1);
+                WriteCompactSize(ss, i);
+            }
+            for (i = 1; i <= MAX_SIZE; i *= 2) {
+                j = ReadCompactSize(ss);
+                auto msg = strprintf("decoded: %i expected: %i", j, i - 1);
+                BOOST_CHECK_MESSAGE((i - 1) == j, msg);
+                j = ReadCompactSize(ss);
+                msg = strprintf("decoded: %i expected: %i", j, i);
+                BOOST_CHECK_MESSAGE(i == j, msg);
+            }
+
+            WriteCompactSize(ss, MAX_SIZE);
+            BOOST_CHECK_EQUAL(ReadCompactSize(ss), MAX_SIZE);
+
+            WriteCompactSize(ss, MAX_SIZE + 1);
+            BOOST_CHECK_EXCEPTION(ReadCompactSize(ss), std::ios_base::failure,
+                                  isTooLargeException);
+
+            WriteCompactSize(ss, std::numeric_limits<int64_t>::max());
+            BOOST_CHECK_EXCEPTION(ReadCompactSize(ss), std::ios_base::failure,
+                                  isTooLargeException);
+
+            WriteCompactSize(ss, std::numeric_limits<uint64_t>::max());
+            BOOST_CHECK_EXCEPTION(ReadCompactSize(ss), std::ios_base::failure,
+                                  isTooLargeException);
+        };
+
+        const auto isCanonicalException = [](const std::ios_base::failure &ex) {
+            const std::ios_base::failure expectedException("non-canonical ReadCompactSize()");
+
+            // The string returned by what() can be different for different platforms.
+            // Instead of directly comparing the ex.what() with an expected string,
+            // create an instance of exception to see if ex.what() matches  the expected
+            // explanatory string returned by the exception instance.
+            return strcmp(expectedException.what(), ex.what()) == 0;
+        };
+
+        BOOST_AUTO_TEST_CASE(vector_bool) {
+            std::vector<uint8_t> vec1{1, 0, 0, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 1, 1, 1, 1, 0, 1, 0, 0, 1};
+            std::vector<bool> vec2{1, 0, 0, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 1, 1, 1, 1, 0, 1, 0, 0, 1};
+
+            BOOST_CHECK(vec1 == std::vector<uint8_t>(vec2.begin(), vec2.end()));
+            BOOST_CHECK(SerializeHash(vec1) == SerializeHash(vec2));
+        };
+
+        BOOST_AUTO_TEST_CASE(noncanonical) {
+            // Write some non-canonical CompactSize encodings, and make sure an
+            // exception is thrown when read back.
+            CDataStream ss(SER_DISK, 0);
+            std::vector<char>::size_type n;
+
+            // zero encoded with three bytes:
+            ss.write("\xfd\x00\x00", 3);
+            BOOST_CHECK_EXCEPTION(ReadCompactSize(ss), std::ios_base::failure,
+                                  isCanonicalException);
+
+            // 0xfc encoded with three bytes:
+            ss.write("\xfd\xfc\x00", 3);
+            BOOST_CHECK_EXCEPTION(ReadCompactSize(ss), std::ios_base::failure,
+                                  isCanonicalException);
+
+            // 0xfd encoded with three bytes is OK:
+            ss.write("\xfd\xfd\x00", 3);
+            n = ReadCompactSize(ss);
+            BOOST_CHECK(n == 0xfd);
+
+            // zero encoded with five bytes:
+            ss.write("\xfe\x00\x00\x00\x00", 5);
+            BOOST_CHECK_EXCEPTION(ReadCompactSize(ss), std::ios_base::failure,
+                                  isCanonicalException);
+
+            // 0xffff encoded with five bytes:
+            ss.write("\xfe\xff\xff\x00\x00", 5);
+            BOOST_CHECK_EXCEPTION(ReadCompactSize(ss), std::ios_base::failure,
+                                  isCanonicalException);
+
+            // zero encoded with nine bytes:
+            ss.write("\xff\x00\x00\x00\x00\x00\x00\x00\x00", 9);
+            BOOST_CHECK_EXCEPTION(ReadCompactSize(ss), std::ios_base::failure,
+                                  isCanonicalException);
+
+            // 0x01ffffff encoded with nine bytes:
+            ss.write("\xff\xff\xff\xff\x01\x00\x00\x00\x00", 9);
+            BOOST_CHECK_EXCEPTION(ReadCompactSize(ss), std::ios_base::failure,
+                                  isCanonicalException);
+        };
+
+        BOOST_AUTO_TEST_CASE(insert_delete) {
+            // Test inserting/deleting bytes.
+            CDataStream ss(SER_DISK, 0);
+            BOOST_CHECK_EQUAL(ss.size(), 0U);
+
+            ss.write("\x00\x01\x02\xff", 4);
+            BOOST_CHECK_EQUAL(ss.size(), 4U);
+
+            char c = (char)11;
+
+            // Inserting at beginning/end/middle:
+            ss.insert(ss.begin(), c);
+            BOOST_CHECK_EQUAL(ss.size(), 5U);
+            BOOST_CHECK_EQUAL(ss[0], c);
+            BOOST_CHECK_EQUAL(ss[1], 0);
+
+            ss.insert(ss.end(), c);
+            BOOST_CHECK_EQUAL(ss.size(), 6U);
+            BOOST_CHECK_EQUAL(ss[4], (char)0xff);
+            BOOST_CHECK_EQUAL(ss[5], c);
+
+            ss.insert(ss.begin() + 2, c);
+            BOOST_CHECK_EQUAL(ss.size(), 7U);
+            BOOST_CHECK_EQUAL(ss[2], c);
+
+            // Delete at beginning/end/middle
+            ss.erase(ss.begin());
+            BOOST_CHECK_EQUAL(ss.size(), 6U);
+            BOOST_CHECK_EQUAL(ss[0], 0);
+
+            ss.erase(ss.begin() + ss.size() - 1);
+            BOOST_CHECK_EQUAL(ss.size(), 5U);
+            BOOST_CHECK_EQUAL(ss[4], (char)0xff);
+
+            ss.erase(ss.begin() + 1);
+            BOOST_CHECK_EQUAL(ss.size(), 4U);
+            BOOST_CHECK_EQUAL(ss[0], 0);
+            BOOST_CHECK_EQUAL(ss[1], 1);
+            BOOST_CHECK_EQUAL(ss[2], 2);
+            BOOST_CHECK_EQUAL(ss[3], (char)0xff);
+
+            // Make sure GetAndClear does the right thing:
+            CSerializeData d;
+            ss.GetAndClear(d);
+            BOOST_CHECK_EQUAL(ss.size(), 0U);
+        };
+
+        BOOST_AUTO_TEST_CASE(class_methods) {
+            int intval(100);
+            bool boolval(true);
+            std::string stringval("testing");
+            const char charstrval[16] = "testing charstr";
+            CMutableTransaction txval;
+            CTransactionRef tx_ref{MakeTransactionRef(txval)};
+            CSerializeMethodsTestSingle methodtest1(intval, boolval, stringval,
+                                                    charstrval, tx_ref);
+            CSerializeMethodsTestMany methodtest2(intval, boolval, stringval,
+                                                  charstrval, tx_ref);
+            CSerializeMethodsTestSingle methodtest3;
+            CSerializeMethodsTestMany methodtest4;
+            CDataStream ss(SER_DISK, PROTOCOL_VERSION);
+            BOOST_CHECK(methodtest1 == methodtest2);
+            ss << methodtest1;
+            ss >> methodtest4;
+            ss << methodtest2;
+            ss >> methodtest3;
+            BOOST_CHECK(methodtest1 == methodtest2);
+            BOOST_CHECK(methodtest2 == methodtest3);
+            BOOST_CHECK(methodtest3 == methodtest4);
+
+            CDataStream ss2(SER_DISK, PROTOCOL_VERSION, intval, boolval, stringval,
+                            charstrval, txval);
+            ss2 >> methodtest3;
+            BOOST_CHECK(methodtest3 == methodtest4);
+        };
+
+        RUN_CONTEXT();
+    }
+
+    const auto t7 = App::registerTest("streams", streamsTests);
 }
 #endif

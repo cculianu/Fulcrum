@@ -3,8 +3,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef BITCOIN_HASH_H
-#define BITCOIN_HASH_H
+#pragma once
 
 #include "crypto/ripemd160.h"
 #include "crypto/sha256.h"
@@ -95,6 +94,9 @@ template <typename T1> inline uint256 HashOnce(const T1 pbegin, const T1 pend) {
     return Hash(pbegin, pend, true);
 }
 
+inline uint256 Hash(Span<const uint8_t> sp) { return Hash(sp.begin(), sp.end()); }
+inline uint256 HashOnce(Span<const uint8_t> sp) { return Hash(sp.begin(), sp.end(), true); }
+
 /** Compute the 256-bit hash of the concatenation of two objects. */
 template <typename T1, typename T2>
 inline uint256 Hash(const T1 p1begin, const T1 p1end, const T2 p2begin,
@@ -138,16 +140,9 @@ template <typename T1> inline uint160 Hash160(const T1 pbegin, const T1 pend) {
     return result;
 }
 
-/** Compute the 160-bit hash of a vector. */
-inline uint160 Hash160(const std::vector<uint8_t> &vch) {
-    return Hash160(vch.begin(), vch.end());
-}
-
-/** Compute the 160-bit hash of a vector. */
-
-template <unsigned int N>
-inline uint160 Hash160(const prevector<N, uint8_t> &vch) {
-    return Hash160(vch.begin(), vch.end());
+/** Compute the 160-bit hash of a vector-like object. */
+inline uint160 Hash160(Span<const uint8_t> sp) {
+    return Hash160(sp.begin(), sp.end());
 }
 
 /** A writer stream (for serialization) that computes a 256-bit hash. */
@@ -244,5 +239,3 @@ void BIP32Hash(const ChainCode &chainCode, uint32_t nChild, uint8_t header,
 #ifdef __clang__
 #pragma clang diagnostic pop
 #endif
-
-#endif // BITCOIN_HASH_H

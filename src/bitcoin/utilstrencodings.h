@@ -6,8 +6,7 @@
 /**
  * Utilities for converting data from/to strings.
  */
-#ifndef BITCOIN_UTILSTRENCODINGS_H
-#define BITCOIN_UTILSTRENCODINGS_H
+#pragma once
 
 #include <cstdint>
 #include <string>
@@ -220,6 +219,17 @@ constexpr unsigned char ToLower(unsigned char c) {
 }
 
 /**
+ * Returns the lowercase equivalent of the given string.
+ * This function is locale independent. It only converts uppercase
+ * characters in the standard 7-bit ASCII range.
+ * This is a feature, not a limitation.
+ *
+ * @param[in] str   the string to convert to lowercase.
+ * @returns         lowercased equivalent of str
+ */
+std::string ToLower(const std::string &str);
+
+/**
  * Converts the given string to its lowercase equivalent.
  * This function is locale independent. It only converts uppercase
  * characters in the standard 7-bit ASCII range.
@@ -240,6 +250,17 @@ constexpr unsigned char ToUpper(unsigned char c) {
 }
 
 /**
+ * Returns the uppercase equivalent of the given string.
+ * This function is locale independent. It only converts lowercase
+ * characters in the standard 7-bit ASCII range.
+ * This is a feature, not a limitation.
+ *
+ * @param[in] str   the string to convert to uppercase.
+ * @returns         UPPERCASED EQUIVALENT OF str
+ */
+std::string ToUpper(const std::string& str);
+
+/**
  * Capitalizes the first character of the given string.
  * This function is locale independent. It only capitalizes the
  * first character of the argument if it has an uppercase equivalent
@@ -250,4 +271,3 @@ constexpr unsigned char ToUpper(unsigned char c) {
 std::string Capitalize(std::string str);
 
 } // end namespace bitcoin
-#endif // BITCOIN_UTILSTRENCODINGS_H

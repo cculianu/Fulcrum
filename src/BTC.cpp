@@ -71,20 +71,6 @@ namespace BTC
     }
 
 
-    /// specialization for CTransaction which works differently
-    template <> bitcoin::CTransaction Deserialize(const QByteArray &bytes, int pos, bool allowSegWit, bool allowMW,
-                                                  bool noJunkAtEnd)
-    {
-        int version = bitcoin::PROTOCOL_VERSION;
-        if (allowSegWit) version |= bitcoin::SERIALIZE_TRANSACTION_USE_WITNESS;
-        if (allowMW) version |= bitcoin::SERIALIZE_TRANSACTION_USE_MWEB;
-        bitcoin::GenericVectorReader<QByteArray> vr(bitcoin::SER_NETWORK, version, bytes, pos);
-        auto ret = bitcoin::CTransaction(bitcoin::deserialize, vr);
-        if (noJunkAtEnd && !vr.empty())
-            throw std::ios_base::failure("Got unprocessed bytes at the end when deserializeing a bitcoin object");
-        return ret;
-    }
-
     QByteArray Hash(const QByteArray &b, bool once)
     {
         bitcoin::CHash256 h(once);

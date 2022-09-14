@@ -4,12 +4,10 @@
 #include "cashaddrenc.h"
 
 #include "cashaddr.h"
-//#include <chainparams.h>
 #include "pubkey.h"
-#include "script.h"
 #include "utilstrencodings.h"
 
-//#include <boost/variant/static_visitor.hpp>
+#include "Span.h"
 
 #include <algorithm>
 #include <variant>
@@ -93,7 +91,7 @@ public:
         return cashaddr::Encode(params.CashAddrPrefix(), data);
     }
 
-    std::string operator()(const CScriptID &id) const {
+    std::string operator()(const ScriptHashID &id) const {
         std::vector<uint8_t> data = PackAddrData(id, SCRIPT_TYPE);
         return cashaddr::Encode(params.CashAddrPrefix(), data);
     }
@@ -196,19 +194,33 @@ CashAddrContent DecodeCashAddrContent(const std::string &addr,
 }
 
 CTxDestination DecodeCashAddrDestination(const CashAddrContent &content) {
-    if (content.hash.size() != 20) {
-        // Only 20 bytes hash are supported now.
+    uint160 hash20{uint160::Uninitialized};
+    uint256 hash32{uint256::Uninitialized};
+    Span<uint8_t> destHash; // references data in either hash20 or hash32 above
+    if (content.hash.size() == 20) {
+        // 20-byte hash, write results into hash20
+        destHash = Span<uint8_t>(hash20.data(), hash20.size());
+    } else if (content.hash.size() == 32 && (content.type == SCRIPT_TYPE || content.type == TOKEN_SCRIPT_TYPE)) {
+        // we accept 32-byte content for p2sh_32, write results into hash32
+        destHash = Span<uint8_t>(hash32.data(), hash32.size());
+    } else {
+        // Only 20 bytes hash are supported for p2sh & p2pkh, or 32-bytes for p2sh_32
         return CNoDestination{};
     }
 
-    uint160 hash;
-    std::copy(begin(content.hash), end(content.hash), hash.begin());
+    std::copy(content.hash.begin(), content.hash.end(), destHash.begin());
 
     switch (content.type) {
         case PUBKEY_TYPE:
-            return CKeyID(hash);
+        case TOKEN_PUBKEY_TYPE:
+            assert(destHash.data() == hash20.data());
+            return CKeyID(hash20);
         case SCRIPT_TYPE:
-            return CScriptID(hash);
+        case TOKEN_SCRIPT_TYPE:
+            if (destHash.data() == hash20.data()) return ScriptHashID(hash20); // p2sh
+            else if (destHash.data() == hash32.data()) return ScriptHashID(hash32); // p2sh_32
+            assert(!"Unexpected state");
+            [[fallthrough]]; // not reached
         default:
             return CNoDestination{};
     }

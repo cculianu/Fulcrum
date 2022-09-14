@@ -2,8 +2,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef BITCOIN_CRYPTO_SHA512_H
-#define BITCOIN_CRYPTO_SHA512_H
+#pragma once
 
 #include <cstdint>
 #include <cstdlib>
@@ -27,5 +26,3 @@ public:
 };
 
 } // end namespace bitcoin
-
-#endif // BITCOIN_CRYPTO_SHA512_H

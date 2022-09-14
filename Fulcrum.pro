@@ -398,7 +398,6 @@ SOURCES += \
     bitcoin/crypto/sha256.cpp \
     bitcoin/crypto/sha256_sse4.cpp \
     bitcoin/crypto/sha512.cpp \
-    bitcoin/feerate.cpp \
     bitcoin/hash.cpp \
     bitcoin/interpreter.cpp \
     bitcoin/pubkey.cpp \
@@ -407,9 +406,11 @@ SOURCES += \
     bitcoin/script_standard.cpp \
     bitcoin/sigencoding.cpp \
     bitcoin/test.cpp \
+    bitcoin/token.cpp \
     bitcoin/transaction.cpp \
     bitcoin/uint256.cpp \
-    bitcoin/utilstrencodings.cpp
+    bitcoin/utilstrencodings.cpp \
+    bitcoin/utilstring.cpp
 
 HEADERS += \
     bitcoin/amount.h \
@@ -431,7 +432,6 @@ HEADERS += \
     bitcoin/crypto/sha1.h \
     bitcoin/crypto/sha256.h \
     bitcoin/crypto/sha512.h \
-    bitcoin/feerate.h \
     bitcoin/hash.h \
     bitcoin/interpreter.h \
     bitcoin/litecoin_bits.h \
@@ -450,10 +450,12 @@ HEADERS += \
     bitcoin/support/cleanse.h \
     bitcoin/support/zeroafterfree.h \
     bitcoin/tinyformat.h \
+    bitcoin/token.h \
     bitcoin/transaction.h \
     bitcoin/txid.h \
     bitcoin/uint256.h \
     bitcoin/utilstrencodings.h \
+    bitcoin/utilstring.h \
     bitcoin/version.h
 
 # Enable secp256k1 compilation on x86_64 only -- we don't actually use this lib

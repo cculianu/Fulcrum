@@ -76,6 +76,14 @@ public:
     /// Thread-safe, lock-free, returns true for LTC
     bool isMimbleWimbleCoin() const { return coinType.load(std::memory_order_relaxed) == BTC::Coin::LTC; }
 
+    /// Thread-safe, lock-free, returns true for BCH. Note: also returns true for "Unknown" coins since we "prefer" BCH
+    /// if we happen to have a regression where the coin info is not propagated from BitcoinDMgr. This is to ensure
+    /// that on BCH, CashTokens always deserialize correctly.
+    bool isBCHCoin() const {
+        const auto type = coinType.load(std::memory_order_relaxed);
+        return type == BTC::Coin::BCH || type == BTC::Coin::Unknown;
+    }
+
 signals:
     /// Emitted whenever bitcoind is detected to be up-to-date, and everything is synched up.
     /// note this is not emitted during regular polling, but only after `synchronizing` was emitted previously.

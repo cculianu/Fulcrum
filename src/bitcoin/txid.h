@@ -2,8 +2,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef BITCOIN_PRIMITIVES_TXID_H
-#define BITCOIN_PRIMITIVES_TXID_H
+#pragma once
 
 #include "uint256.h"
 
@@ -30,4 +29,3 @@ struct TxHash : public uint256 {
 };
 
 } // end namespace bitcoin
-#endif // BITCOIN_PRIMITIVES_TXID_H

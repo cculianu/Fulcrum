@@ -9,10 +9,6 @@
 #include "tinyformat.h"
 #include "utilstrencodings.h"
 
-#ifdef USE_QT_IN_BITCOIN
-#include <QStringList>
-#endif
-
 #ifdef __clang__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunused-parameter"
@@ -22,38 +18,20 @@
 #endif
 namespace bitcoin {
 
-std::string COutPoint::ToString() const {
-    return strprintf("COutPoint(%s, %u)", txid.ToString().substr(0, 10), n);
+std::string COutPoint::ToString(bool fVerbose) const {
+    const std::string::size_type cutoff = fVerbose ? std::string::npos : 10;
+    return strprintf("COutPoint(%s, %u)", txid.ToString().substr(0, cutoff), n);
 }
 
-#ifdef USE_QT_IN_BITCOIN
-QString COutPoint::ToQString() const {
-    return QStringLiteral("%1:%2").arg(txid.ToString().c_str()).arg(n);
-}
-COutPoint &COutPoint::SetQString(const QString &s)
-{
-    QStringList toks = s.split(':');
-    if (toks.length() == 2) {
-        bool ok;
-        auto tmp = toks[1].toUInt(&ok);
-        if (ok && toks[0].length() == (256/8)*2) {
-            n = tmp;
-            txid.SetHex(toks[0].toUtf8());
-        }
-    }
-    return *this;
-}
-#endif
-
-
-std::string CTxIn::ToString() const {
+std::string CTxIn::ToString(bool fVerbose) const {
+    const std::string::size_type cutoff = fVerbose ? std::string::npos : 24;
     std::string str;
     str += "CTxIn(";
-    str += prevout.ToString();
+    str += prevout.ToString(fVerbose);
     if (prevout.IsNull()) {
         str += strprintf(", coinbase %s", HexStr(scriptSig));
     } else {
-        str += strprintf(", scriptSig=%s", HexStr(scriptSig).substr(0, 24));
+        str += strprintf(", scriptSig=%s", HexStr(scriptSig).substr(0, cutoff));
     }
     if (nSequence != SEQUENCE_FINAL) {
         str += strprintf(", nSequence=%u", nSequence);
@@ -62,10 +40,12 @@ std::string CTxIn::ToString() const {
     return str;
 }
 
-std::string CTxOut::ToString() const {
-    return strprintf("CTxOut(nValue=%d.%08d, scriptPubKey=%s)", nValue / COIN,
+std::string CTxOut::ToString(bool fVerbose) const {
+    const std::string::size_type cutoff = fVerbose ? std::string::npos : 30;
+    return strprintf("CTxOut(nValue=%d.%08d, scriptPubKey=%s%s)", nValue / COIN,
                      (nValue % COIN) / SATOSHI,
-                     HexStr(scriptPubKey).substr(0, 30));
+                     HexStr(scriptPubKey).substr(0, cutoff),
+                     tokenDataPtr ? (" " + tokenDataPtr->ToString(fVerbose)) : "");
 }
 
 CMutableTransaction::CMutableTransaction()
@@ -159,24 +139,25 @@ unsigned int CTransaction::CalculateModifiedSize(unsigned int nTxSize) const {
 }
 
 size_t CTransaction::GetBillableSize() const {
-    return bitcoin::GetSerializeSize(*this, SER_NETWORK, PROTOCOL_VERSION);
+    return bitcoin::GetSerializeSize(*this, PROTOCOL_VERSION);
 }
 
 unsigned int CTransaction::GetTotalSize(bool segwit) const {
-    return bitcoin::GetSerializeSize(*this, SER_NETWORK, PROTOCOL_VERSION | (segwit ? SERIALIZE_TRANSACTION_USE_WITNESS : 0));
+    return bitcoin::GetSerializeSize(*this, PROTOCOL_VERSION | (segwit ? SERIALIZE_TRANSACTION_USE_WITNESS : 0));
 }
 
-std::string CTransaction::ToString() const {
+std::string CTransaction::ToString(bool fVerbose) const {
+    const std::string::size_type cutoff = fVerbose ? std::string::npos : 10;
     std::string str;
     str += strprintf("CTransaction(txid=%s, ver=%d, vin.size=%u, vout.size=%u, "
                      "nLockTime=%u)\n",
-                     GetId().ToString().substr(0, 10), nVersion, vin.size(),
+                     GetId().ToString().substr(0, cutoff), nVersion, vin.size(),
                      vout.size(), nLockTime);
     for (const auto &nVin : vin) {
-        str += "    " + nVin.ToString() + "\n";
+        str += "    " + nVin.ToString(fVerbose) + "\n";
     }
     for (const auto &nVout : vout) {
-        str += "    " + nVout.ToString() + "\n";
+        str += "    " + nVout.ToString(fVerbose) + "\n";
     }
     return str;
 }

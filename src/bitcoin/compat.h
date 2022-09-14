@@ -3,8 +3,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef BITCOIN_COMPAT_H
-#define BITCOIN_COMPAT_H
+#pragma once
 
 #if defined(HAVE_CONFIG_H)
 #include <config/bitcoin-config.h>
@@ -97,4 +96,3 @@ inline bool IsSelectableSocket(const SOCKET &s) {
 #ifdef __clang__
 #pragma clang diagnostic pop
 #endif
-#endif // BITCOIN_COMPAT_H

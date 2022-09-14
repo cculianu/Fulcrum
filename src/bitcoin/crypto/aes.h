@@ -4,8 +4,7 @@
 //
 // C++ wrapper around ctaes, a constant-time AES implementation
 
-#ifndef BITCOIN_CRYPTO_AES_H
-#define BITCOIN_CRYPTO_AES_H
+#pragma once
 
 extern "C" {
 #include "ctaes/ctaes.h"
@@ -114,5 +113,3 @@ private:
 };
 
 } // end namespace bitcoin
-
-#endif // BITCOIN_CRYPTO_AES_H
