@@ -151,7 +151,7 @@ namespace BTC {
 
 } // end namespace BTC
 
-/// for std::hash support of type BTC::Address -- just take first 4/8 bytes of hash160
+/// for std::hash support of type BTC::Address -- just take middle 4 or 8 bytes of a.hash()
 template <> struct std::hash<BTC::Address> {
     std::size_t operator()(const BTC::Address &a) const noexcept {
         if (a.isValid()) {
