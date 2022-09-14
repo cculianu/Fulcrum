@@ -19,28 +19,28 @@ struct Amount {
 private:
     int64_t amount;
 
-    explicit constexpr Amount(int64_t _amount) : amount(_amount) {}
+    explicit constexpr Amount(int64_t _amount) noexcept : amount(_amount) {}
 
 public:
     constexpr Amount() noexcept : amount(0) {}
     constexpr Amount(const Amount &_camount) noexcept : amount(_camount.amount) {}
 
-    static constexpr Amount zero() { return Amount(0); }
-    static constexpr Amount satoshi() { return Amount(1); }
+    static constexpr Amount zero() noexcept { return Amount(0); }
+    static constexpr Amount satoshi() noexcept { return Amount(1); }
 
     /**
      * Implement standard operators
      */
-    Amount &operator=(const Amount &a) {
+    Amount &operator=(const Amount &a) noexcept {
         amount = a.amount;
         return *this;
     }
 
-    Amount &operator+=(const Amount a) {
+    Amount &operator+=(const Amount a) noexcept {
         amount += a.amount;
         return *this;
     }
-    Amount &operator-=(const Amount a) {
+    Amount &operator-=(const Amount a) noexcept {
         amount -= a.amount;
         return *this;
     }
