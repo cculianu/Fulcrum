@@ -20,11 +20,14 @@ RUN \
     mkdir -p /opt/local/qt && \
     cd /opt && \
     echo "💬  \033[1;36mDownloading Qt sources ...\033[0m" && \
-    wget -q http://download.qt.io/official_releases/qt/5.15/5.15.2/single/qt-everywhere-src-5.15.2.tar.xz && \
+    wget -q https://download.qt.io/official_releases/qt/5.15/5.15.6/single/qt-everywhere-opensource-src-5.15.6.tar.xz && \
     echo "💬  \033[1;36mExtracting archive ...\033[0m" && \
-    tar xf qt-everywhere-src-5.15.2.tar.xz && \
-    rm qt-everywhere-src-5.15.2.tar.xz && \
-    cd qt-everywhere-src-5.15.2 && \
+    tar xf qt-everywhere-opensource-src-5.15.6.tar.xz && \
+    rm qt-everywhere-opensource-src-5.15.6.tar.xz && \
+    cd qt-everywhere-src-5.15.6 && \
+    echo "💬  \033[1;36mPatching Qt ...\033[0m" && \
+    cd qtbase && wget https://download.qt.io/official_releases/qt/5.15/CVE-2022-37434-qtbase-5.15.patch  && \
+    patch -p1 < CVE-2022-37434-qtbase-5.15.patch && rm -vf CVE-2022-37434-qtbase-5.15.patch && cd .. \
     echo "💬  \033[1;36mConfiguring Qt ...\033[0m" && \
     ./configure -opensource -confirm-license -release -static -nomake tests -nomake examples -no-compile-examples \
         -prefix /opt/local/qt -no-gui -no-sse2 -ssl -no-shared -c++std c++17 -no-widgets -no-dbus -no-cups -no-freetype -no-fontconfig -no-gif \
@@ -39,7 +42,7 @@ RUN \
     make install && \
     cd /opt && \
     echo "" && echo "💬  \033[1;36mCleaning up ...\033[0m" && \
-    rm -rf qt-everywhere-src-5.15.2 && \
+    rm -rf qt-everywhere-src-5.15.6 && \
     echo "" && echo "👍  \033[1;32mGCC Version:\033[0m" && \
     gcc --version && \
     echo "👍  \033[1;32mQt Version:\033[0m" && \
