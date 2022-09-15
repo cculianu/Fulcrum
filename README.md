@@ -181,20 +181,13 @@ Documentation for the Electrum Cash protocol that Fulcrum uses is [available her
 
 ### Platform Notes
 
-#### Big Endian Architectures
-
-The code is more or less configured to assume a "little endian" architecture by default (which is what all Intel x86/x86_64 are).  If you're on a big endian machine, on Linux it should just auto-detect that fact.  However, on other OS's such as BSD, if you're on a big endian machine, you may need to uncomment this line from the `.pro` file:
-
-    # DEFINES += WORDS_BIGENDIAN
-
-
 #### Windows
 
 This codebase will not compile correctly (or at all) using MSVC. Please use the `MinGW` and/or `G++` kit in Qt Creator to build this software.
 
 #### Linux
 
-If you have `clang` on your system, configure the project to use it as the compiler preferentially over `G++`.  `G++` works too, but `clang` is preferred.
+If you have `clang` on your system, configure the project to use it as the compiler preferentially over `g++`.  `g++` works great too, but `clang` is preferred.
 
 #### MacOS
 
