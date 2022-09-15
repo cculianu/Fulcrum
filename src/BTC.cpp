@@ -74,8 +74,8 @@ namespace BTC
     QByteArray Hash(const QByteArray &b, bool once)
     {
         bitcoin::CHash256 h(once);
-        QByteArray ret(int(h.OUTPUT_SIZE), Qt::Initialization::Uninitialized);
-        h.Write(reinterpret_cast<const uint8_t *>(b.constData()), size_t(b.length()));
+        QByteArray ret(QByteArray::size_type(h.OUTPUT_SIZE), Qt::Initialization::Uninitialized);
+        h.Write(reinterpret_cast<const uint8_t *>(b.constData()), static_cast<size_t>(b.length()));
         h.Finalize(reinterpret_cast<uint8_t *>(ret.data()));
         return ret;
     }
@@ -87,10 +87,20 @@ namespace BTC
         return ret;
     }
 
+    QByteArray HashTwo(const QByteArray &a, const QByteArray &b)
+    {
+        bitcoin::CHash256 h(/* once = */false);
+        QByteArray ret(QByteArray::size_type(h.OUTPUT_SIZE), Qt::Initialization::Uninitialized);
+        h.Write(reinterpret_cast<const uint8_t *>(a.constData()), static_cast<size_t>(a.length()));
+        h.Write(reinterpret_cast<const uint8_t *>(b.constData()), static_cast<size_t>(b.length()));
+        h.Finalize(reinterpret_cast<uint8_t *>(ret.data()));
+        return ret;
+    }
+
     QByteArray Hash160(const QByteArray &b) {
         bitcoin::CHash160 h;
-        QByteArray ret(int(h.OUTPUT_SIZE), Qt::Initialization::Uninitialized);
-        h.Write(reinterpret_cast<const uint8_t *>(b.constData()), size_t(b.length()));
+        QByteArray ret(QByteArray::size_type(h.OUTPUT_SIZE), Qt::Initialization::Uninitialized);
+        h.Write(reinterpret_cast<const uint8_t *>(b.constData()), static_cast<size_t>(b.length()));
         h.Finalize(reinterpret_cast<uint8_t *>(ret.data()));
         return ret;
     }

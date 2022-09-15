@@ -51,7 +51,7 @@ namespace Merkle {
             const unsigned sz = unsigned(hashes.size());
             hv.reserve( (sz / 2) + 1 );
             for (unsigned i = 0; i < sz; i+=2) {
-                hv.emplace_back(BTC::Hash(hashes[i] + hashes[i+1]));
+                hv.emplace_back(BTC::HashTwo(hashes[i], hashes[i+1]));
             }
             hashes.swap(hv);
         };

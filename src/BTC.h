@@ -156,6 +156,8 @@ namespace BTC
     /// Identical to the above except it returns the REVERSED hash (which is what bitcoind gives you via JSON RPC or
     /// when doing uint256.ToString()). That is, this hash is in big-endian byte order.
     extern QByteArray HashRev(const QByteArray &, bool once = false);
+    /// sha256d of the concatenation of a and b. This is faster than but equivalent to doing: Hash(a + b, false).
+    extern QByteArray HashTwo(const QByteArray &a, const QByteArray &b);
     /// Convenient alias for Hash(b, true)
     inline QByteArray HashOnce(const QByteArray &b) { return Hash(b, true); }
     /// Like the Hash() function above, except does hash160 once. (not reversed).
