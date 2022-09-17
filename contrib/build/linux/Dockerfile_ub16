@@ -24,7 +24,8 @@ RUN \
     mkdir -p /opt && \
     cd /opt && \
     echo "💬  \033[1;36mDownloading Qt sources ...\033[0m" && \
-    wget -q https://download.qt.io/official_releases/qt/5.12/5.12.12/single/qt-everywhere-src-5.12.12.tar.xz && \
+    (wget -q https://download.qt.io/official_releases/qt/5.12/5.12.12/single/qt-everywhere-src-5.12.12.tar.xz \
+     || wget -q https://qt.mirror.constant.com/archive/qt/5.12/5.12.12/single/qt-everywhere-src-5.12.12.tar.xz) && \
     echo "💬  \033[1;36mExtracting archive ...\033[0m" && \
     tar xf qt-everywhere-src-5.12.12.tar.xz && \
     rm qt-everywhere-src-5.12.12.tar.xz && \
