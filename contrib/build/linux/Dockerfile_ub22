@@ -11,7 +11,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN \
     apt -qy update && \
     apt -qy upgrade && \
-    apt -qy install build-essential cmake gdb git iputils-ping nano perl python3 valgrind wget autoconf && \
+    apt -qy install build-essential pkg-config cmake gdb git iputils-ping nano perl python3 valgrind wget autoconf && \
     apt -qy install libbz2-dev zlib1g-dev libssl-dev libgnutls30 libnss3-dev libxslt-dev libxml2-dev  && \
     apt -qy autoremove && \
     apt -qy autoclean
@@ -30,7 +30,7 @@ RUN \
     patch -p1 < CVE-2022-37434-qtbase-5.15.patch && rm -vf CVE-2022-37434-qtbase-5.15.patch && cd .. \
     echo "💬  \033[1;36mConfiguring Qt ...\033[0m" && \
     ./configure -opensource -confirm-license -release -static -nomake tests -nomake examples -no-compile-examples \
-        -prefix /opt/local/qt -no-gui -no-sse2 -ssl -no-shared -c++std c++17 -no-widgets -no-dbus -no-cups -no-freetype -no-fontconfig -no-gif \
+        -prefix /opt/local/qt -no-gui -no-sse2 -openssl-linked -no-shared -c++std c++17 -no-widgets -no-dbus -no-cups -no-freetype -no-fontconfig -no-gif \
         -no-ico -no-libpng -no-libjpeg -strip -no-opengl -no-sqlite -no-glib -no-iconv -optimize-size -no-harfbuzz -no-sql-sqlite -no-sql-mysql \
         -qpa 'linuxfb' -no-feature-accessibility -nomake tools -no-linuxfb -no-xcb -no-feature-sqlmodel -no-feature-itemmodeltester \
         -no-feature-sessionmanager -no-feature-vnc -no-icu -skip qtconnectivity \
@@ -49,3 +49,4 @@ RUN \
     /opt/local/qt/bin/qmake --version
 
 ENV PATH="${PATH}:/opt/local/qt/bin"
+ENV FORCE_STATIC_SSL=1

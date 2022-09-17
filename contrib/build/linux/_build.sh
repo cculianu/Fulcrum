@@ -72,6 +72,15 @@ printok "RocksDB built and moved to Fulcrum staticlibs directory"
 
 cd "$top"/"$PACKAGE" || fail "Could not chdir to Fulcrum dir"
 
+# This is used by the Dockerfile for the regular Linux build for now to "force" linking to static libssl
+if [ -n "$FORCE_STATIC_SSL" ]; then
+    info "Moving dynamic OpenSSL libs out of the way ..."
+    SSL_LDIR=$(pkg-config --variable=libdir libssl)
+    [ -n "${SSL_LDIR}" ] || fail "Could not determine library directory for OpenSSL"
+    mkdir -p /tmp/ssl_dynlibs || fail "Could not make the tmp dir for the openssl dynamic libs"
+    mv -vf "${SSL_LDIR}"/libcrypto*.so* "${SSL_LDIR}"/libssl*.so* /tmp/ssl_dynlibs/. || fail "Could not move libs"
+fi
+
 info "Building Fulcrum ..."
 mkdir build && cd build || fail "Could not create/change-to build/"
 qmake ../Fulcrum.pro "CONFIG-=debug" \
@@ -85,6 +94,13 @@ qmake ../Fulcrum.pro "CONFIG-=debug" \
                      "INCLUDEPATH+=/tmp/include" \
     || fail "Could not run qmake"
 make -j`nproc` || fail "Could not run make"
+
+# Undo the "damage" from the above move of openssl libs
+if [ -n "$FORCE_STATIC_SSL" ] && [ -n "$SSL_LDIR" ]; then
+    info "Moving dynamic OpenSSL libs back ..."
+    mv -vf /tmp/ssl_dynlibs/* "${SSL_LDIR}"/.
+    rm -vfr /tmp/ssl_dynlibs
+fi
 
 ls -al "$TARGET_BINARY" || fail "$TARGET_BINARY not found"
 printok "$TARGET_BINARY built"
