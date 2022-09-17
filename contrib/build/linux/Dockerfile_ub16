@@ -12,7 +12,7 @@ RUN \
     apt install -qy software-properties-common && \
     add-apt-repository ppa:jonathonf/gcc && \
     apt-get update -qy && \
-    apt -qy install build-essential cmake gdb git iputils-ping nano perl python valgrind wget autoconf && \
+    apt -qy install build-essential cmake gdb git iputils-ping nano perl python valgrind wget autoconf pkg-config && \
     apt -qy install libbz2-dev zlib1g-dev libssl-dev libnss3-dev libxslt-dev libxml2-dev  && \
     apt install -qy gcc-7 g++-7 && \
     update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-7 60 \
@@ -31,7 +31,7 @@ RUN \
     cd qt-everywhere-src-5.12.12 && \
     echo "💬  \033[1;36mConfiguring Qt ...\033[0m" && \
     ./configure -opensource -confirm-license -release -static -nomake tests -nomake examples -no-compile-examples \
-        -prefix /opt/local/qt -no-gui -no-sse2 -ssl -no-shared -c++std c++1z -no-widgets -no-dbus -no-cups -no-freetype -no-fontconfig -no-gif \
+        -prefix /opt/local/qt -no-gui -no-sse2 -openssl-linked -no-shared -c++std c++1z -no-widgets -no-dbus -no-cups -no-freetype -no-fontconfig -no-gif \
         -no-ico -no-libpng -no-libjpeg -strip -no-opengl -no-sqlite -no-glib -no-iconv -optimize-size -no-harfbuzz -no-sql-sqlite -no-sql-mysql \
         -qpa 'linuxfb' -no-accessibility -nomake tools -no-linuxfb -no-xcb -no-feature-sqlmodel -no-feature-itemmodeltester \
         -no-feature-sessionmanager -no-feature-vnc -no-icu \
@@ -49,3 +49,4 @@ RUN \
     /opt/local/qt/bin/qmake --version
 
 ENV PATH="${PATH}:/opt/local/qt/bin"
+ENV FORCE_STATIC_SSL=1
