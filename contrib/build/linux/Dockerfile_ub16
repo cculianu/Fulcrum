@@ -14,9 +14,9 @@ RUN \
     apt-get update -qy && \
     apt -qy install build-essential cmake gdb git iputils-ping nano perl python valgrind wget autoconf pkg-config && \
     apt -qy install libbz2-dev zlib1g-dev libssl-dev libnss3-dev libxslt-dev libxml2-dev  && \
-    apt install -qy gcc-7 g++-7 && \
-    update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-7 60 \
-                        --slave /usr/bin/g++ g++ /usr/bin/g++-7 && \
+    apt install -qy gcc-8 g++-8 && \
+    update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-8 60 \
+                        --slave /usr/bin/g++ g++ /usr/bin/g++-8 && \
     apt -qy autoremove && \
     apt -qy autoclean
 
