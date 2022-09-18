@@ -29,18 +29,18 @@ case "$plat" in
         ;;
     "windows"|"win")
         plat=win  # normalize to 'win'
-        docker_img_name="fulcrum-builder/qt5152:windows"
-        docker_cont_name="fulcrum_cont_qt_5_15_2_windows_$$"
+        docker_img_name="fulcrum-builder/qt:windows"
+        docker_cont_name="fulcrum_cont_qt_windows_$$"
         ;;
     "linux"|"lin")
         plat=linux
-        docker_img_name="fulcrum-builder/qt5156:linux"
-        docker_cont_name="fulcrum_cont_qt_5_15_6_linux_$$"
+        docker_img_name="fulcrum-builder/qt:linux"
+        docker_cont_name="fulcrum_cont_qt_linux_$$"
         ;;
     "linux_ub22"|"newlinux"|"newlin"|"lin_ub22")
         plat=linux
-        docker_img_name="fulcrum-builder/qt5156:linux_ub22"
-        docker_cont_name="fulcrum_cont_qt_5_15_6_linux_$$"
+        docker_img_name="fulcrum-builder/qt:linux_ub22"
+        docker_cont_name="fulcrum_cont_qt_linux_ub22_$$"
         suffix="_ub22"
         ;;
     "linux_ub16"|"oldlinux"|"oldlin"|"lin_ub16")
