@@ -580,7 +580,7 @@ void App::parseArgs()
                 auto it = registeredTests->find(tname);
                 if (it == registeredTests->end())
                     throw BadArgs(QString("No such test: %1").arg(tname));
-                Log() << "Running test: " << it->first << " ...";
+                Log(Log::Color::BrightGreen) << "Running test: " << it->first << " ...";
                 it->second();
             }
         }
@@ -598,7 +598,7 @@ void App::parseArgs()
                 auto it = registeredBenches->find(tname);
                 if (it == registeredBenches->end())
                     throw BadArgs(QString("No such bench: %1").arg(tname));
-                Log() << "Running benchmark: " << it->first << " ...";
+                Log(Log::Color::BrightCyan) << "Running benchmark: " << it->first << " ...";
                 it->second();
             }
         }
