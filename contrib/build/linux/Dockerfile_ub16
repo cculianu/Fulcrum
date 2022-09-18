@@ -23,6 +23,14 @@ RUN \
 RUN \
     mkdir -p /opt && \
     cd /opt && \
+    echo "💬  \033[1;36mCloning OpenSSL sources ...\033[0m" && \
+    git clone https://github.com/openssl/openssl.git openssl-src && \
+    cd openssl-src && git checkout OpenSSL_1_1_1o && \
+    echo "💬  \033[1;36mBuilding and installing OpenSSL 1.1.1o ...\033[0m" && \
+    ./config --prefix=/opt/local/openssl no-shared no-tests no-dso no-dynamic-engine && \
+    make depend && make -j $(nproc) && make install_sw && \
+    echo "💬  \033[1;36mCleaning up OpenSSL sources ...\033[0m" && \
+    cd .. && rm -fr openssl-src && \
     echo "💬  \033[1;36mDownloading Qt sources ...\033[0m" && \
     (wget -q https://download.qt.io/official_releases/qt/5.12/5.12.12/single/qt-everywhere-src-5.12.12.tar.xz \
      || wget -q https://qt.mirror.constant.com/archive/qt/5.12/5.12.12/single/qt-everywhere-src-5.12.12.tar.xz) && \
@@ -36,7 +44,8 @@ RUN \
         -no-ico -no-libpng -no-libjpeg -strip -no-opengl -no-sqlite -no-glib -no-iconv -optimize-size -no-harfbuzz -no-sql-sqlite -no-sql-mysql \
         -qpa 'linuxfb' -no-accessibility -nomake tools -no-linuxfb -no-xcb -no-feature-sqlmodel -no-feature-itemmodeltester \
         -no-feature-sessionmanager -no-feature-vnc -no-icu \
-        -qt-pcre -qt-zlib -no-tiff -no-webp -no-gstreamer -no-libinput && \
+        -qt-pcre -qt-zlib -no-tiff -no-webp -no-gstreamer -no-libinput \
+        OPENSSL_PREFIX="/opt/local/openssl" OPENSSL_LIBS="-lssl -lcrypto -lpthread" && \
     echo "" && echo "💬  \033[1;36mCompiling Qt ...\033[0m" && \
     make -j $(nproc) && \
     echo "" && echo "💬  \033[1;36mInstalling Qt ...\033[0m" && \
@@ -50,4 +59,3 @@ RUN \
     /opt/local/qt/bin/qmake --version
 
 ENV PATH="${PATH}:/opt/local/qt/bin"
-ENV FORCE_STATIC_SSL=1
