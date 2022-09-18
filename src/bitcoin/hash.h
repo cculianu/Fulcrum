@@ -80,12 +80,12 @@ public:
 
 /** Compute the 256-bit hash of an object. */
 template <typename T1> inline uint256 Hash(const T1 pbegin, const T1 pend, bool once = false) {
-    static const uint8_t pblank[1] = {};
-    uint256 result;
+    const uint8_t pblank[1] = {};
+    uint256 result{uint256::Uninitialized};
     CHash256(once)
         .Write(pbegin == pend ? pblank : (const uint8_t *)&pbegin[0],
                (pend - pbegin) * sizeof(pbegin[0]))
-        .Finalize((uint8_t *)&result);
+        .Finalize(result.data());
     return result;
 }
 
@@ -101,14 +101,14 @@ inline uint256 HashOnce(Span<const uint8_t> sp) { return Hash(sp.begin(), sp.end
 template <typename T1, typename T2>
 inline uint256 Hash(const T1 p1begin, const T1 p1end, const T2 p2begin,
                     const T2 p2end) {
-    static const uint8_t pblank[1] = {};
-    uint256 result;
+    const uint8_t pblank[1] = {};
+    uint256 result{uint256::Uninitialized};
     CHash256()
         .Write(p1begin == p1end ? pblank : (const uint8_t *)&p1begin[0],
                (p1end - p1begin) * sizeof(p1begin[0]))
         .Write(p2begin == p2end ? pblank : (const uint8_t *)&p2begin[0],
                (p2end - p2begin) * sizeof(p2begin[0]))
-        .Finalize((uint8_t *)&result);
+        .Finalize(result.data());
     return result;
 }
 
@@ -116,8 +116,8 @@ inline uint256 Hash(const T1 p1begin, const T1 p1end, const T2 p2begin,
 template <typename T1, typename T2, typename T3>
 inline uint256 Hash(const T1 p1begin, const T1 p1end, const T2 p2begin,
                     const T2 p2end, const T3 p3begin, const T3 p3end) {
-    static const uint8_t pblank[1] = {};
-    uint256 result;
+    const uint8_t pblank[1] = {};
+    uint256 result{uint256::Uninitialized};
     CHash256()
         .Write(p1begin == p1end ? pblank : (const uint8_t *)&p1begin[0],
                (p1end - p1begin) * sizeof(p1begin[0]))
@@ -125,18 +125,18 @@ inline uint256 Hash(const T1 p1begin, const T1 p1end, const T2 p2begin,
                (p2end - p2begin) * sizeof(p2begin[0]))
         .Write(p3begin == p3end ? pblank : (const uint8_t *)&p3begin[0],
                (p3end - p3begin) * sizeof(p3begin[0]))
-        .Finalize((uint8_t *)&result);
+        .Finalize(result.data());
     return result;
 }
 
 /** Compute the 160-bit hash an object. */
 template <typename T1> inline uint160 Hash160(const T1 pbegin, const T1 pend) {
-    static uint8_t pblank[1] = {};
-    uint160 result;
+    const uint8_t pblank[1] = {};
+    uint160 result{uint160::Uninitialized};
     CHash160()
         .Write(pbegin == pend ? pblank : (const uint8_t *)&pbegin[0],
                (pend - pbegin) * sizeof(pbegin[0]))
-        .Finalize((uint8_t *)&result);
+        .Finalize(result.data());
     return result;
 }
 
@@ -167,15 +167,15 @@ public:
 
     // invalidates the object
     uint256 GetHash() {
-        uint256 result;
-        ctx.Finalize((uint8_t *)&result);
+        uint256 result{uint256::Uninitialized};
+        ctx.Finalize(result.data());
         return result;
     }
 
     template <typename T> CHashWriter &operator<<(const T &obj) {
         // Serialize to this stream
         bitcoin::Serialize(*this, obj);
-        return (*this);
+        return *this;
     }
 };
 
@@ -209,7 +209,7 @@ public:
     template <typename T> CHashVerifier<Source> &operator>>(T &obj) {
         // Unserialize from this stream
         bitcoin::Unserialize(*this, obj);
-        return (*this);
+        return *this;
     }
 };
 

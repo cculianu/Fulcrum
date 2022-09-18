@@ -19,7 +19,11 @@
 #include "Merkle.h"
 #include "Util.h"
 
+#include "bitcoin/hash.h"
+#include "bitcoin/uint256.h"
+
 #include <algorithm>
+#include <cstring>
 #include <list>
 
 namespace Merkle {
@@ -40,18 +44,31 @@ namespace Merkle {
         }
         HashVec branch;
         branch.reserve(length);
-        HashVec hashes;
+        using uint256 = bitcoin::uint256;
+        using UHashVec = std::vector<uint256>;
+        UHashVec hashes;
         hashes.reserve(hvsz+1);
 
         // Copy all hashVec to our working vector, to start. This vector mutates as we iterate below.
-        hashes.insert(hashes.end(), hashVec.begin(), hashVec.end());
+        for (const auto & h : hashVec) {
+            if (static_cast<size_t>(h.size()) == uint256::size()) {
+                auto & back = hashes.emplace_back(uint256::Uninitialized);
+                std::memcpy(back.data(), h.data(), std::min<size_t>(h.size(), back.size()));
+            } else {
+                // this should never happen -- indicates bad hash which is not of the right size.
+                Warning() << "Merkle::branchAndRoot encountered a hash that is not of size " << uint256::size()
+                          << " (size: " << h.size() << ", hash: " << QString::fromUtf8(h.toHex()) << ")";
+                hashes.emplace_back();
+            }
+        }
 
-        constexpr auto recomputeHashes = [](HashVec & hashes) {
-            HashVec hv;
+        constexpr auto recomputeHashes = [](UHashVec & hashes) {
+            UHashVec hv;
             const unsigned sz = unsigned(hashes.size());
             hv.reserve( (sz / 2) + 1 );
             for (unsigned i = 0; i < sz; i+=2) {
-                hv.emplace_back(BTC::HashTwo(hashes[i], hashes[i+1]));
+                const auto &a = hashes[i], &b = hashes[i+1];
+                hv.emplace_back(bitcoin::Hash(a.begin(), a.end(), b.begin(), b.end()));
             }
             hashes.swap(hv);
         };
@@ -60,7 +77,8 @@ namespace Merkle {
             if (hashes.size() & 0x1) // is odd, add the end twice
                 hashes.emplace_back(hashes.back());
 
-            branch.push_back(hashes[index ^ 1]);
+            const auto &h = hashes[index ^ 1];
+            branch.emplace_back(reinterpret_cast<const char *>(h.data()), QByteArray::size_type(h.size()));
             index >>= 1;
             recomputeHashes(hashes); // makes hashes be 1/2 the size each time
         }
@@ -68,7 +86,9 @@ namespace Merkle {
             Error() << __PRETTY_FUNCTION__ << ": INTERNAL ERROR. Output vector is empty! FIXME!";
             throw InternalError(QString("%1: Output hash vector is empty").arg(__func__));
         }
-        ret = { std::move(branch), hashes.front() };
+        const auto &f = hashes.front();
+        ret.first = std::move(branch);
+        ret.second = QByteArray(reinterpret_cast<const char *>(f.data()), QByteArray::size_type(f.size()));
         return ret;
     }
 
