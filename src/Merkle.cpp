@@ -92,23 +92,6 @@ namespace Merkle {
         return ret;
     }
 
-    Hash rootFromProof(const Hash & hashIn, const HashVec &branch, unsigned index)
-    {
-        Hash hash = hashIn; // shallow copy, working hash
-        for (const auto & h : branch) {
-            if (index & 1) // odd
-                hash = BTC::Hash(h + hash);
-            else
-                hash = BTC::Hash(hash + h);
-            index >>= 1;
-        }
-        if (index) {
-            Error() << __PRETTY_FUNCTION__ << ": INTERNAL ERROR. Passed-in index is out of range! FIXME!";
-            throw BadArgs(QString("%1: Index argument out of range").arg(__func__));
-        }
-        return hash;
-    }
-
     HashVec level(const HashVec &hashes, unsigned depthHigher)
     {
         HashVec ret;

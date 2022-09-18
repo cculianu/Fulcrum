@@ -132,12 +132,5 @@ namespace Merkle
         HashVec levelFor(unsigned length) const; ///< takes no locks, may throw
 
     };
-
-    // -- For Testing --
-
-    /// Used for testing. Return the merkle root given a hash, a merkle branch to it, and its index in the hashes array.
-    Hash rootFromProof(const Hash & hash, const HashVec &branch, unsigned index);
-    /// Used for testing.
-    void test();
-};
+} // namespace Merkle
 
