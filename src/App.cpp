@@ -161,6 +161,7 @@ void App::startup_Sighandlers()
                 if (const auto optErr = app->exitSem.acquire()) {
                     // should never happen -- here to defend against programming errors.
                     Error() << "Error in exitSem.acquire(): " << static_cast<const char *>(*optErr);
+                    return;
                 }
             }
             if (!deleting) emit app->requestQuit(true);
