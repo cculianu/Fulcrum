@@ -45,7 +45,8 @@ extern "C" void signal_trampoline(int sig); ///< signal handler must be extern "
 class App final : public QCoreApplication, public TimersByNameMixin
 {
     Q_OBJECT
-    static App *_globalInstance;
+    using AtomicInstanceT = std::conditional_t<std::atomic<App *>::is_always_lock_free, std::atomic<App *>, App * volatile>;
+    static AtomicInstanceT _globalInstance;
 public:
     explicit App(int argc, char *argv[]);
     ~App() override;
@@ -73,7 +74,7 @@ public:
     static App * globalInstance() { return _globalInstance; }
 
     /// Convenience to obtain our singleton ThreadPool instance that goes with this singleton App instance.
-    static ThreadPool *globalThreadPool() { return _globalInstance ? _globalInstance->threadPool() : nullptr; }
+    static ThreadPool *globalThreadPool() { App * a = globalInstance(); return a ? a->threadPool() : nullptr; }
 
     // -- Test & Bench support (requires -DENABLE_TESTS) --
     using RegisteredTest = struct{};

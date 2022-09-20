@@ -917,10 +917,11 @@ namespace Util {
         {
             Sem() = default; ///< may throw InternalError if it could not allocate necessary resources
             /// Call this from a monitoring thread -- blocks until realease() is called from e.g. a signal handler
-            /// or another thread.
-            void acquire();
+            /// or another thread.  Will return a non-empty optional containing an error message on error.
+            std::optional<SBuf<>> acquire() noexcept;
             /// Call this from a signal handler or from a thread that wants to wake up the monitoring thread.
-            void release();
+            /// Will return a non-empty optional containing an error message on error.
+            std::optional<SBuf<>> release() noexcept;
 
         private:
 #if defined(Q_OS_WIN) || defined(Q_OS_UNIX)

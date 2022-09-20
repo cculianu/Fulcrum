@@ -424,25 +424,33 @@ namespace Util {
                 throw InternalError(QString("Failed to create a Cond::Pipe: (%1) %2").arg(errno).arg(std::strerror(errno)));
         }
         Sem::Pipe::~Pipe() { closeFD(fds[0]), closeFD(fds[1]); }
-        void Sem::acquire() {
+        std::optional<SBuf<>> Sem::acquire() noexcept {
+            std::optional<SBuf<>> ret;
             char c;
             if (const int res = readFD(p.fds[0], &c, 1); res != 1)
-                throw InternalError(QString("Sem::acquire: readFD returned %1").arg(res));
+                ret.emplace("Sem::acquire: readFD returned ", res);
+            return ret;
         }
-        void Sem::release() {
+        std::optional<SBuf<>> Sem::release() noexcept {
+            std::optional<SBuf<>> ret;
             const char c = 0;
             if (const int res = writeFD(p.fds[1], &c, 1); res != 1)
-                throw InternalError(QString("Sem::release: writeFD returned %1").arg(res));
+                ret.emplace("Sem::release: writeFD returned ", res);
+            return ret;
         }
 #else
         // fallback to emulated -- use std C++ condition variable which is not technically
         // guaranteed async signal safe, but for all pratical purposes it's safe enough as a fallback.
-        void Sem::acquire() {
+        std::optional<SBuf<>> Sem::acquire() noexcept {
             std::mutex dummy; // hack, but works
             std::unique_lock l(dummy);
             p.cond.wait(l);
+            return std::nullopt;
         }
-        void Sem::release() { p.cond.notify_one(); }
+        std::optional<SBuf<>> Sem::release() noexcept {
+            p.cond.notify_one();
+            return std::nullopt;
+        }
 #endif // defined(Q_OS_WIN) || defined(Q_OS_UNIX)
     } // end namespace AsyncSignalSafe
 

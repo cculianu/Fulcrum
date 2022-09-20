@@ -55,7 +55,7 @@
 #include <tuple>
 #include <utility>
 
-App *App::_globalInstance = nullptr;
+App::AtomicInstanceT App::_globalInstance = nullptr;
 
 App::App(int argc, char *argv[])
     : QCoreApplication (argc, argv), tpool(std::make_unique<ThreadPool>(this))
@@ -72,7 +72,7 @@ App::App(int argc, char *argv[])
     options = std::make_shared<Options>();
     options->interfaces = {{QHostAddress("0.0.0.0"), Options::DEFAULT_PORT_TCP}}; // start with default, will be cleared if -t specified
     setApplicationName(APPNAME);
-    setApplicationVersion(QString("%1 %2").arg(VERSION).arg(VERSION_EXTRA));
+    setApplicationVersion(QString("%1 %2").arg(VERSION, VERSION_EXTRA));
 
     _logger = std::make_unique<ConsoleLogger>(this);
 
@@ -120,7 +120,9 @@ void App::signalHandler(int sig)
         writeStdErr(SBuf{" -- Caught signal ", sig, ". Caught ", thresh, " or more signals, aborting."});
         std::abort();
     }
-    try { exitSem.release(); } catch (...) {} // wake exitThr
+    if (const auto optError = exitSem.release()) { // wake exitThr
+        writeStdErr(*optError); // unlikely to occur, but there was an error here!
+    }
 }
 
 void App::startup_Sighandlers()
@@ -141,11 +143,9 @@ void App::startup_Sighandlers()
         ~ExitThr() override {
             deleting = true;
             if (isRunning()) {
-                try {
-                    app->exitSem.release();
-                } catch (const std::exception &e) {
+                if (const auto optErr = app->exitSem.release()) {
                     // should never happen -- here to defend against programming errors.
-                    Error() << "Exception in exitSem.release(): " << e.what();
+                    Error() << "Error in exitSem.release(): " << static_cast<const char *>(*optErr);
                     terminate();
                 }
                 if (!wait(500)) terminate(), wait();
@@ -156,15 +156,14 @@ void App::startup_Sighandlers()
             setTerminationEnabled(true); // applies to currently running thread
             DebugM("started with stack size: ", stackSize() ? QString::number(stackSize()) : QString("default"));
             Defer d([]{DebugM("exited");});
-            try {
-                while (!deleting && !app->sigCtr)
-                    // keep waiting to allow for spurious wake-ups -- stop waiting when either quitting or sigCtr != 0
-                    app->exitSem.acquire();
-                if (!deleting) emit app->requestQuit(true);
-            } catch (const std::exception &e) {
-                // should never happen -- here to defend against programming errors.
-                Error() << "Caught exception in exitThr: " << e.what();
+            while (!deleting && !app->sigCtr) {
+                // keep waiting to allow for spurious wake-ups -- stop waiting when either quitting or sigCtr != 0
+                if (const auto optErr = app->exitSem.acquire()) {
+                    // should never happen -- here to defend against programming errors.
+                    Error() << "Error in exitSem.acquire(): " << static_cast<const char *>(*optErr);
+                }
             }
+            if (!deleting) emit app->requestQuit(true);
         }
         void startSynched() {
             if (isRunning()) return;
@@ -211,7 +210,7 @@ void App::startup_Sighandlers()
 }
 
 /// The standard says we must use C linkage for POSIX signal handlers
-extern "C" void signal_trampoline(int sig) { if (App::_globalInstance) App::_globalInstance->signalHandler(sig); }
+extern "C" void signal_trampoline(int sig) { if (App *a = App::globalInstance()) a->signalHandler(sig); }
 
 void App::startup()
 {
@@ -1438,7 +1437,7 @@ std::unique_ptr<std::map<QString, std::function<void()>>> App::registeredTests, 
 void App::registerTestBenchCommon(const char *fname, const char *brief, NameFuncMapPtr &map,
                                   const NameFuncMap::key_type &name, const NameFuncMap::mapped_type &func)
 {
-    if (_globalInstance) {
+    if (globalInstance()) {
         Error() << fname << " cannot be called after the app has already started!"
                 << " Ignoring request to register " << brief << " \"" << name << "\"";
         return;
