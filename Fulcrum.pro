@@ -93,6 +93,11 @@ linux-g++ {
     # Linux g++ has too many warnings due to bitcoin sources, so just disable warnings
     CONFIG += warn_off
 }
+freebsd {
+    DEFINES += HAVE_SYS_ENDIAN_H HAVE_DECL_HTOBE16 HAVE_DECL_HTOLE16 HAVE_DECL_BE16TOH HAVE_DECL_LE16TOH HAVE_DECL_HTOBE32 \
+               HAVE_DECL_HTOLE32 HAVE_DECL_BE32TOH HAVE_DECL_LE32TOH HAVE_DECL_HTOBE64 HAVE_DECL_HTOLE64 HAVE_DECL_BE64TOH \
+               HAVE_DECL_LE64TOH
+}
 
 # define HAVE_DECL___BUILTIN_CLZL and HAVE_DECL___BUILTIN_CLZLL used by embedded bitcoin/ sources
 qtCompileTest(builtin_clzl)
@@ -241,6 +246,9 @@ contains(CONFIG, config_endian_big) {
         LIBS += -lrocksdb -lz -lbz2
     }
     linux {
+        LIBS += -lrocksdb -lz -lbz2
+    }
+    freebsd {
         LIBS += -lrocksdb -lz -lbz2
     }
     win32 {
