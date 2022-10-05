@@ -1316,17 +1316,8 @@ void Controller::process(bool beSilentIfUpToDate)
                 AGAIN();
                 return;
             }
-            const auto & chain = task->info.chain;
-            const auto normalizedChain = BTC::NetNameNormalize(chain);
-            const auto net = BTC::NetFromName(chain);
-            if (const auto dbchain = storage->getChain();
-                    dbchain.isEmpty() && !chain.isEmpty() && !normalizedChain.isEmpty() && net != BTC::Net::Invalid) {
-                // save the normalized chain to the db, if we were able to grok it. Older versions of Fulcrum
-                // will expect to see it in the DB since they use it to check sanity.  Newer versions >= 1.2.7
-                // instead query bitcoind for its genesish hash and compare it to db.
-                storage->setChain(normalizedChain);
-            }
 
+            // Ensure genesis hash matches what we have in DB (post-initial sync only)
             if (const auto hashDaemon = bitcoindmgr->getBitcoinDGenesisHash(), hashDb = storage->genesisHash();
                     !hashDb.isEmpty() && !hashDaemon.isEmpty() && hashDb != hashDaemon) {
                 Fatal() << "Bitcoind reports genesis hash: \"" << hashDaemon.toHex() << "\", which differs from our "
@@ -1335,6 +1326,25 @@ void Controller::process(bool beSilentIfUpToDate)
                         << "to resynch.";
                 return;
             }
+
+            // Check that "chain" didn't change, and if it did, warn and save new chain to db if it's one we
+            // understand.
+            const auto & chain = task->info.chain;
+            const auto normalizedChain = BTC::NetNameNormalize(chain);
+            const auto net = BTC::NetFromName(chain);
+            if (const auto dbchain = storage->getChain();
+                    dbchain != normalizedChain && !normalizedChain.isEmpty() && net != BTC::Net::Invalid) {
+                if (!dbchain.isEmpty()) {
+                    Warning() << "Database had chain \"" << dbchain << "\", but bitcoind reports chain \"" << normalizedChain
+                              << "\".  Persisting \"" << normalizedChain << "\" to database.  Please ensure that you"
+                              << " are connected to the correct bitcoind instance!";
+                }
+                // save the normalized chain to the db, if we were able to grok it. Older versions of Fulcrum
+                // will expect to see it in the DB since they use it to check sanity.  Newer versions >= 1.2.7
+                // instead query bitcoind for its genesish hash and compare it to db.
+                storage->setChain(normalizedChain);
+            }
+
             sm->net = net;
             if (UNLIKELY(sm->net == BTC::Net::Invalid)) {
                 // Unknown chain name. This shouldn't happen but it if does, warn the user since it will make all of
