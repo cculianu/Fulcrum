@@ -65,7 +65,7 @@ struct BitcoinDInfo {
     BitcoinDZmqNotifications zmqNotifications;
 
     /// Return all the information in this obejct as a QVariantMap suitable for placing into JSON results, etc (used by /stats and `getinfo`)
-    QVariantMap toVariandMap() const;
+    QVariantMap toVariantMap() const;
 };
 
 class BitcoinDMgr : public Mgr, public IdMixin, public ThreadObjectMixin, public TimersByNameMixin

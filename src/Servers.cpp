@@ -2394,7 +2394,7 @@ void AdminServer::rpc_getinfo(Client *c, const RPC::BatchId batchId, const RPC::
 {
     QVariantMap res;
     res["bitcoind"] = QString("%1:%2").arg(options->bdRPCInfo.hostPort.first, QString::number(options->bdRPCInfo.hostPort.second));
-    res["bitcoind_info"] = bitcoindmgr->getBitcoinDInfo().toVariandMap();
+    res["bitcoind_info"] = bitcoindmgr->getBitcoinDInfo().toVariantMap();
     {
         const auto opt = storage->latestHeight();
         res["height"] = opt.has_value() ? *opt : QVariant();

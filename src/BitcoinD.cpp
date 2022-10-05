@@ -171,7 +171,7 @@ auto BitcoinDMgr::stats() const -> Stats
     m["activeTimers"] = activeTimerMapForStats();
 
     // "bitcoind info"
-    m["bitcoind info"] = getBitcoinDInfo().toVariandMap(); // takes lock, makes a copy, releases lock;
+    m["bitcoind info"] = getBitcoinDInfo().toVariantMap(); // takes lock, makes a copy, releases lock;
 
     return m;
 }
@@ -951,7 +951,7 @@ void BitcoinD::on_inBlockDownload(bool b)
 }
 
 
-QVariantMap BitcoinDInfo::toVariandMap() const
+QVariantMap BitcoinDInfo::toVariantMap() const
 {
     QVariantMap ret;
     ret["version"] = version.toString(true);
