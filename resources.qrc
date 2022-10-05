@@ -4,6 +4,7 @@
         <file>resources/bch/servers_testnet.json</file>
         <file>resources/bch/servers_testnet4.json</file>
         <file>resources/bch/servers_scalenet.json</file>
+        <file>resources/bch/servers_chipnet.json</file>
         <file>resources/btc/servers.json</file>
         <file>resources/btc/servers_testnet.json</file>
         <file>resources/ltc/servers.json</file>

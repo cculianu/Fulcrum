@@ -167,6 +167,7 @@ namespace BTC
             { TestNet4, "test4"},
             { ScaleNet, "scale"},
             { RegTestNet, "regtest"},
+            { ChipNet, "chip"},
         }};
         const QMap<QString, Net> nameNetMap = {{
             {"main",     MainNet},     // BCHN, BU, ABC, Core, LitecoinCore
@@ -178,6 +179,7 @@ namespace BTC
             {"testnet4", TestNet4},    // possible future bchd
             {"regtest",  RegTestNet},  // BCHN, BU, ABC, bchd, Core, LitecoinCore
             {"signet",   TestNet},     // Core only
+            {"chip",     ChipNet},     // BCH only
         }};
         const QString invalidNetName = "invalid";
     };

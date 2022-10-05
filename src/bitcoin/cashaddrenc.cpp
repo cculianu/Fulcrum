@@ -27,6 +27,7 @@ namespace bitcoin {
 const CChainParams TestNetChainParams    = { "bchtest" },
                    TestNet4ChainParams   = { "bchtest" },
                    ScaleNetChainParams   = { "bchtest" },
+                   ChipNetChainParams    = { "bchtest" },
                    RegTestNetChainParams = { "bchreg" },
                    MainNetChainParams    = { "bitcoincash" };
 

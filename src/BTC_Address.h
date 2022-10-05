@@ -72,6 +72,7 @@ namespace BTC {
         bool isCompatibleWithNet(Net net) const;
 
         bool isTestNet() const noexcept { return _net == TestNet || _net == TestNet4; }
+        bool isChipNet() const noexcept { return _net == ChipNet; }
         bool isScaleNet() const noexcept { return _net == ScaleNet; }
         bool isRegTestNet() const noexcept { return _net == RegTestNet; }
         bool isMainNet() const noexcept { return _net == MainNet; }

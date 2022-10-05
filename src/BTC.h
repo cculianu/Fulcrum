@@ -252,6 +252,7 @@ namespace BTC
         TestNet4 = TestNet+1, ///< does not match anything in the bitcoin world, just an enum value
         ScaleNet = TestNet+2, ///< does not match anything in the bitcoin world, just an enum value
         RegTestNet = TestNet+3, ///< does not match anything in the bitcoin world, just an enum value
+        ChipNet = TestNet+4, ///< does not match anything in the bitcoin world, just an enum value
     };
 
     /// Given a Net, returns its name e.g. "main", "test", "regtest" (or "invalid" if parameter `net` is not valid).
