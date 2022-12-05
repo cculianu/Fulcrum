@@ -163,13 +163,24 @@ You may also wish to read the [Fulcrum manpage](https://github.com/cculianu/Fulc
 
 #### Admin Script: FulcrumAdmin
 
-`Fulcrum` comes with an admin script (`Python 3.6+` is required on the system to run this script).  You may send commands to `Fulcrum` using this script. The script requires that an **admin port** (config var `admin=`, CLI arg `-a`) be configured for your server.  To run the script, execute `./FulcrumAdmin -h` and you will see a list of possible subcommands that you can send to `Fulcrum`.  Here are two of the most popular commands to try (the below assumes the `admin` port is on port `8000`):
+`Fulcrum` comes with an admin script (`Python 3.6+` is required on the system to run this script).  You may send commands to `Fulcrum` using this script. The script requires that an **admin port** (config var `admin=`, CLI arg `-a`) be configured for your server.  To run the script, execute `./FulcrumAdmin -h` and you will see a list of possible subcommands that you can send to `Fulcrum`. Below you see all available commands (the below assumes the `admin` port is on port `8000`):
 
-    $ ./FulcrumAdmin -p 8000 peers
-    $ ./FulcrumAdmin -p 8000 clients
-    $ ./FulcrumAdmin -p 8000 getinfo
-
-***(This section is incomplete for now, all apologies -- more documentation is coming soon!)***
+    $ ./FulcrumAdmin -p 8000 addpeer              Add a peer to the server's list of peers
+    $ ./FulcrumAdmin -p 8000 ban                  Ban clients by ID and/or IP address
+    $ ./FulcrumAdmin -p 8000 banpeer              Ban peers by hostname suffix
+    $ ./FulcrumAdmin -p 8000 bitcoind_throttle    Query or set server bitcoind_throttle setting
+    $ ./FulcrumAdmin -p 8000 clients (sessions)   Print information on all the currently connected clients
+    $ ./FulcrumAdmin -p 8000 getinfo              Get server information
+    $ ./FulcrumAdmin -p 8000 kick                 Kick clients by ID and/or IP address
+    $ ./FulcrumAdmin -p 8000 listbanned (banlist) Print the list of banned IP addresses and peer hostnames
+    $ ./FulcrumAdmin -p 8000 loglevel             Set the server's logging verbosity
+    $ ./FulcrumAdmin -p 8000 maxbuffer            Query or set server max_buffer setting
+    $ ./FulcrumAdmin -p 8000 peers                Print peering information
+    $ ./FulcrumAdmin -p 8000 rmpeer               Remove peers by hostname suffix
+    $ ./FulcrumAdmin -p 8000 simdjson             Get or set the server's 'simdjson' (JSON parser) setting
+    $ ./FulcrumAdmin -p 8000 stop (shutdown)      Gracefully shut down the server
+    $ ./FulcrumAdmin -p 8000 unban                Unban IP addresses
+    $ ./FulcrumAdmin -p 8000 unbanpeer            Unban peers by hostname suffix
 
 ---
 
