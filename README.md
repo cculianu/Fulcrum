@@ -156,7 +156,7 @@ Execute the binary, with `-h` to see the built-in help, e.g. `./Fulcrum -h`. You
 
 It is recommended you specify a data dir (`-D` via CLI or `datadir=` via config file) on an SSD drive for best results.  Synching against `testnet` should take you about 10-20 minutes (more on slower machines), and mainnet can take anywhere from 4 hours to 20+ hours, depending on machine and drive speed.  I have not tried synching against mainnet on an HDD and it will probably take ***days*** if you are lucky.
 
-As long as the Fulcrum server is still synchronizing, an attempt to communicate with the server will fail with the error: "Connection refused". Once the server finishes synching it will behave like an ElectronX/ElectrumX server and it can receive requests from Electron Cash (or Electrum if on BTC).
+As long as the server is still synchronizing, all public-facing ports will not yet be bound for listening and as such an attempt to connect to one of the RPC ports will fail with a socket error such as e.g. "Connection refused". Once the server finishes synching it will behave like an ElectronX/ElectrumX server and it can receive requests from Electron Cash (or Electrum if on BTC).
 
 You may also wish to read the [Fulcrum manpage](https://github.com/cculianu/Fulcrum/blob/master/doc/unix-man-page.md).
 
