@@ -64,7 +64,7 @@ You may also build from the CLI (on Linux and MacOS):
 **A note for Windows users**: `Qt 5.13.2` (or above) with `MinGW G++ 7.x.x` is the compiler/Qt kit you should be using.  MSVC is not supported by this codebase at the present time.
 
 #### What to do if compiling fails
-If you have problems compiling, the most likely culprit would be your compiler not being `C++17` compliant (please use a recent verson of `GCC` or `clang` on Linux, Apple's `Xcode` on Mac, or `MinGW G++ 7.x` on Windows).
+If you have problems compiling, the most likely culprit would be your compiler not being `C++17` compliant (please use a recent version of `GCC` or `clang` on Linux, Apple's `Xcode` on Mac, or `MinGW G++ 7.x` on Windows).
 
 The other likely culprit is the fact that at the present time I have included a statically-built `librocksdb` in the codebase. There are versions of this library for Windows, Mac, and Linux included right in the source tree, and `Fulcrum.pro` looks for them and links to them. Instructions are included within the `Fulcrum.pro` project file about how to build your own static `librocksdb` if the bundled one does not work on your system.
 
@@ -156,7 +156,7 @@ Execute the binary, with `-h` to see the built-in help, e.g. `./Fulcrum -h`. You
 
 It is recommended you specify a data dir (`-D` via CLI or `datadir=` via config file) on an SSD drive for best results.  Synching against `testnet` should take you about 10-20 minutes (more on slower machines), and mainnet can take anywhere from 4 hours to 20+ hours, depending on machine and drive speed.  I have not tried synching against mainnet on an HDD and it will probably take ***days*** if you are lucky.
 
-Once the server finishes synching it will behave like an ElectronX/ElectrumX server and it can receive requests from Electron Cash (or Electrum if on BTC).
+As long as the server is still synchronizing, all public-facing ports will not yet be bound for listening and as such an attempt to connect to one of the RPC ports will fail with a socket error such as e.g. "Connection refused". Once the server finishes synching it will behave like an ElectronX/ElectrumX server and it can receive requests from Electron Cash (or Electrum if on BTC).
 
 You may also wish to read the [Fulcrum manpage](https://github.com/cculianu/Fulcrum/blob/master/doc/unix-man-page.md).
 
