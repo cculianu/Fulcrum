@@ -153,7 +153,7 @@ public:
         Span must not be empty(); span will decrease in size by 1, having its end() moved back by 1. */
     constexpr C & pop_back() noexcept { return m_data[--m_size]; }
 
-    /** Pop the last element off, and return a reference to that element.
+    /** Pop the first element off, and return a reference to that element.
         Span must not be empty(); span will decrease in size by 1, having its begin() moved up by 1. */
     constexpr C & pop_front() noexcept { --m_size; return *m_data++; }
 
