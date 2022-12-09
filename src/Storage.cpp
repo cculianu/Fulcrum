@@ -3648,19 +3648,21 @@ auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
                 // Search table for all keys that start with hashx's bytes. Note: the loop end-condition is strange.
                 // See: https://github.com/facebook/rocksdb/wiki/Prefix-Seek-API-Changes#transition-to-the-new-usage
                 rocksdb::Slice key;
-                std::list<CompactTXO> ctxoList;
+                std::vector<CompactTXO> ctxoVec;
+                constexpr size_t reserveBytes = 256u;
+                static_assert(sizeof(CompactTXO) < reserveBytes);
+                ctxoVec.reserve(reserveBytes / sizeof(CompactTXO)); // rough guess -- pre-allocate ~256 bytes
                 size_t ctxoListSize = 0;
                 // we do it this way as two separate loops in order to avoid the expensive heightForTxNum lookups below in
                 // the case where the history is huge.
                 for (iter->Seek(prefix); iter->Valid() && (key = iter->key()).starts_with(prefix); iter->Next()) {
-                    const CompactTXO ctxo = extractCompactTXOFromShunspentKey(key); // may throw if size is bad, etc
-                    ctxoList.emplace_back(ctxo);
+                    ctxoVec.push_back( extractCompactTXOFromShunspentKey(key) /* may throw if size is bad, etc */ );
                     if (UNLIKELY(++ctxoListSize + ret.size() > maxHistory)) {
                         throw HistoryTooLarge(QString("Unspent history too large for %1, exceeds MaxHistory of %2")
                                               .arg(QString(hashX.toHex())).arg(maxHistory));
                     }
                 }
-                for (const auto & ctxo : ctxoList) {
+                for (const auto & ctxo : ctxoVec) {
                     static const QString err("Error retrieving the utxo for an unspent item");
                     const auto hash = hashForTxNum(ctxo.txNum()).value(); // may throw, but that indicates some database inconsistency. we catch below
                     const auto height = heightForTxNum(ctxo.txNum()).value(); // may throw, same deal
