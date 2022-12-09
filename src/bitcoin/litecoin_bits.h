@@ -21,7 +21,7 @@
 // This file contains some helpers used mainly to grok litecoin
 // mimble-wimble data in transactions and blocks.
 
-#include "copyable_ptr.h"
+#include "heapoptional.h"
 #include "serialize.h"
 #include "streams.h"
 
@@ -30,7 +30,7 @@
 namespace bitcoin {
 namespace litecoin_bits {
 
-    using MimbleBlobPtr = CopyablePtr<std::vector<uint8_t>>;
+    using MimbleBlobPtr = HeapOptional<std::vector<uint8_t>>;
 
     namespace detail {
         template <typename Stream>

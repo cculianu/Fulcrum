@@ -25,41 +25,48 @@
 
 namespace bitcoin {
 
-    /// std::unique_ptr work-alike that is copy-constructible and copy-assignable (does a deep copy)
-    /// Also can be copy/move-constructed or copy/move-assigned from a T.
+    /// An optional that stores its value on the heap, rather than in-line, in
+    /// order to save memory. This is implemented using a std::unique_ptr. This
+    /// optional is intended to be a drop-in replacement for a std::optional
+    /// but with the in-line cost of a unique_ptr. Like an optional but unlike a
+    /// unique_ptr, it can be treated as a value type. It is copy-constructible
+    /// and copy-assignable (does a deep copy). It also can be
+    /// copy/move-constructed or copy/move-assigned from a T.
     ///
-    /// Intended to be used for "heavy" optional data members that are null in the common case, but
-    /// take non-trivial amounts of memory when they are not null.
+    /// Intended to be used for "heavy" optional data members that are null in the
+    /// common case, but take non-trivial amounts of memory when they are not
+    /// null. In this way, the common-case ends up using less memory than a normal
+    /// in-lined optional would.
     template <typename T>
-    class CopyablePtr {
+    class HeapOptional {
         std::unique_ptr<T> p{};
     public:
         using element_type = T;
 
-        constexpr CopyablePtr() noexcept = default;
-        explicit CopyablePtr(const T & t) { *this = t; }
-        explicit CopyablePtr(T && t) noexcept { *this = t; }
+        constexpr HeapOptional() noexcept = default;
+        explicit HeapOptional(const T & t) { *this = t; }
+        explicit HeapOptional(T && t) noexcept { *this = t; }
 
-        /// Construct the CopyablePtr in-place using argument forwarding
+        /// Construct the HeapOptional in-place using argument forwarding
         template <typename ...Args>
-        explicit CopyablePtr(Args && ...args) { emplace(std::forward<Args>(args)...); }
+        explicit HeapOptional(Args && ...args) { emplace(std::forward<Args>(args)...); }
 
-        CopyablePtr(const CopyablePtr & o) { *this = o; }
-        CopyablePtr(CopyablePtr && o) = default;
+        HeapOptional(const HeapOptional & o) { *this = o; }
+        HeapOptional(HeapOptional && o) = default;
 
         /// Create the new object in-place. Deletes previous object (if any) first.
         template <typename ...Args>
         void emplace(Args && ...args) { p = std::make_unique<T>(std::forward<Args>(args)...); }
 
-        CopyablePtr & operator=(const CopyablePtr & o) {
+        HeapOptional & operator=(const HeapOptional & o) {
             if (o.p) p = std::make_unique<T>(*o.p);
             else p.reset();
             return *this;
         }
-        CopyablePtr & operator=(CopyablePtr && o) noexcept = default;
+        HeapOptional & operator=(HeapOptional && o) noexcept = default;
 
-        CopyablePtr & operator=(const T & t) { p = std::make_unique<T>(t); return *this; }
-        CopyablePtr & operator=(T && t) { p = std::make_unique<T>(std::move(t)); return *this; }
+        HeapOptional & operator=(const T & t) { p = std::make_unique<T>(t); return *this; }
+        HeapOptional & operator=(T && t) { p = std::make_unique<T>(std::move(t)); return *this; }
 
         operator bool() const { return static_cast<bool>(p); }
         T & operator*() { return *p; }
@@ -76,8 +83,8 @@ namespace bitcoin {
         //--- Comparison operators: ==, !=, <, does deep compare of pointed-to T values
         //    (only SFINAE-enabled if underlying type T supports these ops)
 
-        auto operator==(const CopyablePtr & o) const -> decltype(std::declval<std::equal_to<T>>()(std::declval<T>(),
-                                                                                                  std::declval<T>())) {
+        auto operator==(const HeapOptional & o) const -> decltype(std::declval<std::equal_to<T>>()(std::declval<T>(),
+                                                                                                   std::declval<T>())) {
             if (p && o.p) return std::equal_to{}(*p, *o.p); // compare by pointed-to value if both are not null
             return std::equal_to{}(p, o.p); // compare the unique_ptr's if either are null
         }
@@ -88,8 +95,8 @@ namespace bitcoin {
             return std::equal_to{}(*p, t); // compare by pointed-to value if we not null
         }
 
-        auto operator!=(const CopyablePtr & o) const -> decltype(std::declval<std::not_equal_to<T>>()(std::declval<T>(),
-                                                                                                      std::declval<T>())) {
+        auto operator!=(const HeapOptional & o) const -> decltype(std::declval<std::not_equal_to<T>>()(std::declval<T>(),
+                                                                                                       std::declval<T>())) {
             if (p && o.p) return std::not_equal_to{}(*p, *o.p); // compare by pointed-to value if both are not null
             return std::not_equal_to{}(p, o.p); // compare the unique_ptr's if either are null
         }
@@ -100,8 +107,8 @@ namespace bitcoin {
             return std::not_equal_to{}(*p, t); // compare by pointed-to value
         }
 
-        auto operator<(const CopyablePtr & o) const -> decltype(std::declval<std::less<T>>()(std::declval<T>(),
-                                                                                             std::declval<T>())) {
+        auto operator<(const HeapOptional & o) const -> decltype(std::declval<std::less<T>>()(std::declval<T>(),
+                                                                                              std::declval<T>())) {
             if (p && o.p) return std::less{}(*p, *o.p); // compare by pointed-to value if both are not null
             return std::less{}(p, o.p); // compare the unique_ptr's if either are null
         }

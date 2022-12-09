@@ -4,12 +4,12 @@
 
 #pragma once
 
+#include "heapoptional.h"
 #include "prevector.h"
 #include "script.h"
 #include "serialize.h"
 #include "tinyformat.h"
 #include "uint256.h"
-#include "copyable_ptr.h"
 
 #include <algorithm>
 #include <cassert>
@@ -256,7 +256,7 @@ public:
     }
 };
 
-using OutputDataPtr = CopyablePtr<OutputData>;
+using OutputDataPtr = HeapOptional<OutputData>;
 
 /// A prevector intended to be used as a temporary byte blob object to which we serialize/unserialize the
 /// tokenData + scriptPubKey before reading/writing it from/to a stream. It has considerable static (on-stack) size so

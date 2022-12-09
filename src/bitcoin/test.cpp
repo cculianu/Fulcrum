@@ -63,7 +63,6 @@ namespace bitcoin {
 
 #ifdef ENABLE_TESTS
 
-#include "copyable_ptr.h"
 #include "crypto/aes.h"
 #include "crypto/chacha20.h"
 #include "crypto/common.h"
@@ -74,6 +73,7 @@ namespace bitcoin {
 #include "crypto/sha256.h"
 #include "crypto/sha512.h"
 #include "hash.h"
+#include "heapoptional.h"
 #include "prevector.h"
 #include "reverse_iterator.h"
 #include "serialize.h"
@@ -1874,17 +1874,17 @@ namespace {
 
     const auto t4 = App::registerTest("prevector", prevectorTests); // register test with app-wide test system
 
-    void copyablePtrTests() {
+    void heapOptionalTests() {
         static const auto RandomData = []() -> std::vector<uint8_t> {
             bitcoin::uint256 r = InsecureRand256();
             return {r.begin(), r.end()};
         };
-        SETUP_CONTEXT("copyable_ptr");
+        SETUP_CONTEXT("heapoptional");
 
-        BOOST_AUTO_TEST_CASE(copyable_ptr_test) {
-            using bitcoin::CopyablePtr;
+        BOOST_AUTO_TEST_CASE(basic_test) {
+            using bitcoin::HeapOptional;
             // Test basic operation
-            CopyablePtr<std::vector<uint8_t>> p, p2;
+            HeapOptional<std::vector<uint8_t>> p, p2;
             // default constructed value should have nothing in it
             BOOST_CHECK(!p);
             BOOST_CHECK(p.get() == nullptr);
@@ -1955,15 +1955,15 @@ namespace {
             BOOST_CHECK(p.get() == nullptr && p2.get() == nullptr);
 
             // test construction in-place
-            BOOST_CHECK(CopyablePtr<std::vector<uint8_t>>(100, 0x80) == CopyablePtr<std::vector<uint8_t>>(100, 0x80));
-            BOOST_CHECK(CopyablePtr<std::vector<uint8_t>>(100, 0x80) != CopyablePtr<std::vector<uint8_t>>(100, 0x81));
-            BOOST_CHECK(CopyablePtr<std::vector<uint8_t>>(100, 0x80) < CopyablePtr<std::vector<uint8_t>>(100, 0x81));
+            BOOST_CHECK(HeapOptional<std::vector<uint8_t>>(100, 0x80) == HeapOptional<std::vector<uint8_t>>(100, 0x80));
+            BOOST_CHECK(HeapOptional<std::vector<uint8_t>>(100, 0x80) != HeapOptional<std::vector<uint8_t>>(100, 0x81));
+            BOOST_CHECK(HeapOptional<std::vector<uint8_t>>(100, 0x80) < HeapOptional<std::vector<uint8_t>>(100, 0x81));
         };
 
         RUN_CONTEXT();
     }
 
-    const auto t5 = App::registerTest("copyable_ptr", copyablePtrTests); // register test with app-wide test system
+    const auto t5 = App::registerTest("heapoptional", heapOptionalTests); // register test with app-wide test system
 
     void tokenTests() {
         const auto jsondata_valid = R"""(
