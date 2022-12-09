@@ -21,9 +21,9 @@
 #include <QObject>
 #include <QString>
 
+/** Abstract base class for a line-based logger */
 class Logger : public QObject
 {
-    /** Abstract base class for a line-based logger */
     Q_OBJECT
 public:
     explicit Logger(QObject *parent = nullptr);
