@@ -42,7 +42,7 @@ void WrapScriptPubKey(WrappedScriptPubKey &wspk, const OutputDataPtr &tokenData,
     if (tokenData) {
         wspk.clear();
         GenericVectorWriter vw(SER_NETWORK, nVersion, wspk, 0);
-        vw << uint8_t(PREFIX_BYTE);
+        vw << static_cast<uint8_t>(PREFIX_BYTE);
         vw << *tokenData;
         vw << Span{scriptPubKey};
     } else {
@@ -52,7 +52,7 @@ void WrapScriptPubKey(WrappedScriptPubKey &wspk, const OutputDataPtr &tokenData,
 }
 
 void UnwrapScriptPubKey(const WrappedScriptPubKey &wspk, OutputDataPtr &tokenDataOut, CScript &scriptPubKeyOut,
-                        int nVersion, bool throwIfUnpareableTokenData) {
+                        int nVersion, bool throwIfUnparseableTokenData) {
     ssize_t token_data_size = 0;
     if (!wspk.empty() && wspk.front() == PREFIX_BYTE) {
         // Token data prefix encountered, so we deserialize the beginning of the CScript bytes as
@@ -64,11 +64,11 @@ void UnwrapScriptPubKey(const WrappedScriptPubKey &wspk, OutputDataPtr &tokenDat
             if (!tokenDataOut) tokenDataOut.emplace();
             vr >> *tokenDataOut; // deserialize the token_data
             // tally up the size of the bytes we just deserialized
-            token_data_size = ssize_t(wspk.size()) - ssize_t(vr.size());
-            assert(token_data_size > 0 && token_data_size <= ssize_t(wspk.size())); // sanity check
+            token_data_size = static_cast<ssize_t>(wspk.size()) - static_cast<ssize_t>(vr.size());
+            assert(token_data_size > 0 && token_data_size <= static_cast<ssize_t>(wspk.size())); // sanity check
         } catch (const std::ios_base::failure &e) {
             last_unwrap_exception = e; // save this value for (some) tests
-            if (throwIfUnpareableTokenData) {
+            if (throwIfUnparseableTokenData) {
                 // for other tests, bubble exception out
                 throw;
             }

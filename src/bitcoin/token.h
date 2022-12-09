@@ -11,13 +11,11 @@
 #include "tinyformat.h"
 #include "uint256.h"
 
-#include <algorithm>
-#include <cassert>
 #include <cstdint>
 #include <limits>
 #include <optional>
 #include <string>
-#include <tuple> //! for std::tie
+#include <tuple>
 
 namespace bitcoin {
 
@@ -54,9 +52,9 @@ struct Id : uint256 {
 /// is. These bitpatterns are bitwise-OR'd together to describe the data that follows in the token data payload.
 /// This nibble may not be 0 or may not have the `Reserved` bit set.
 enum class Structure : uint8_t {
-    HasAmount = 0x10,           //< The payload encodes an amount of fungible tokens.
-    HasNFT = 0x20,              //< The payload encodes a non-fungible token.
-    HasCommitmentLength = 0x40, //< The payload encodes a commitment-length and a commitment (HasNFT must also be set).
+    HasAmount = 0x10,           ///< The payload encodes an amount of fungible tokens.
+    HasNFT = 0x20,              ///< The payload encodes a non-fungible token.
+    HasCommitmentLength = 0x40, ///< The payload encodes a commitment-length and a commitment (HasNFT must also be set).
 
     Reserved = 0x80, ///< Must be unset.
 };
@@ -90,7 +88,7 @@ struct NFTCommitment : NFTCommitmentBase {
         // Read/write commitment as a standard prevector (CompactSize limited to 32MiB, followed by byte data)
         READWRITEAS(NFTCommitmentBase, obj);
         if (obj.empty()) {
-            // As per spec, never (un)serialize an empty commitment (HasCommitmentLength bit controls presnce/absence)
+            // As per spec, never (un)serialize an empty commitment (HasCommitmentLength bit controls presence/absence)
             throw CommitmentMustNotBeEmptyError("Serialized token commitment may not be empty");
         }
     }
@@ -200,7 +198,7 @@ public:
     void SetNFT(bool hasnft, bool ismutable = false, bool isminting = false, bool unchecked = false) {
         bitfield = hasnft ? (bitfield | uint8_t(Structure::HasNFT)) : (bitfield & ~uint8_t(Structure::HasNFT));
         if (!unchecked) {
-            // enforce santiy if not using "unchecked" mode
+            // enforce sanity if not using "unchecked" mode
             isminting = hasnft && isminting;
             ismutable = hasnft && ismutable && !isminting;
             bitfield &= 0xf0u; // clear low-order nibble now (will be set below)
@@ -241,8 +239,9 @@ public:
     }
     bool operator!=(const OutputData &o) const { return !this->operator==(o); }
     bool operator<(const OutputData &o) const {
-        // Note this ordering is used for BIP69 sorting
-        return std::tie(amount, bitfield, commitment, id) < std::tie(o.amount, o.bitfield, o.commitment, o.id);
+        // Note this ordering is used for BIP69 sorting. See: https://github.com/bitjson/cashtokens
+        return   std::tuple(  amount,   HasNFT(),   GetCapability(),   commitment,   id)
+               < std::tuple(o.amount, o.HasNFT(), o.GetCapability(), o.commitment, o.id);
     }
 
     /// If fVerbose is true, print the full token id hex and commitment hex, otherwise print only the first
@@ -251,7 +250,7 @@ public:
 
     /// This is a rough estimate and actual size may be smaller in the average case or larger in some cases.
     static constexpr size_t EstimatedSerialSize() {
-        return Id::size() + 1 /* Capability */ + sizeof(int64_t) /* Amount */
+        return Id::size() + 1 /* bitfield */ + sizeof(int64_t) /* Amount */
                 + 1 /* CompactSize */ + MAX_CONSENSUS_COMMITMENT_LENGTH;
     }
 };
@@ -272,7 +271,7 @@ void WrapScriptPubKey(WrappedScriptPubKey &wspkOut, const OutputDataPtr &tokenDa
 /// amount, invalid capability byte, bad commitment length, etc), and if that happens this function will throw.
 /// @throw if `throwIfUnparseableTokenData` is true, std::ios_base::failure, or one of its subclasses.
 void UnwrapScriptPubKey(const WrappedScriptPubKey &wspk, OutputDataPtr &tokenDataOut, CScript &scriptPubKeyOut,
-                        int nVersion, bool throwIfUnpareableTokenData = false /* set to true for (some) tests */);
+                        int nVersion, bool throwIfUnparseableTokenData = false /* set to true for (some) tests */);
 
 extern thread_local std::optional<std::ios_base::failure> last_unwrap_exception; ///< used by tests
 
