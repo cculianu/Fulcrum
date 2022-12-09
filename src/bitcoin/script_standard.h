@@ -34,28 +34,28 @@ class CKeyID;
 class CScript;
 
 /** A reference to a CScript: the Hash160 or Hash256 of its serialization (see script.h) */
-class ScriptHashID {
+class ScriptID {
     std::variant<uint160, uint256> var;
 public:
-    ScriptHashID() noexcept : var{uint160()} {}
-    ScriptHashID(const CScript &in, bool is32);
-    ScriptHashID(const uint160 &in) noexcept : var{in} {}
-    ScriptHashID(const uint256 &in) noexcept : var{in} {}
+    ScriptID() noexcept : var{uint160()} {}
+    ScriptID(const CScript &in, bool is32);
+    ScriptID(const uint160 &in) noexcept : var{in} {}
+    ScriptID(const uint256 &in) noexcept : var{in} {}
 
-    ScriptHashID & operator=(const uint160 &in) noexcept { var = in; return *this; }
-    ScriptHashID & operator=(const uint256 &in) noexcept { var = in; return *this; }
+    ScriptID & operator=(const uint160 &in) noexcept { var = in; return *this; }
+    ScriptID & operator=(const uint256 &in) noexcept { var = in; return *this; }
 
-    bool operator==(const ScriptHashID &o) const { return var == o.var; }
-    bool operator<(const ScriptHashID &o) const { return var < o.var; }
+    bool operator==(const ScriptID &o) const { return var == o.var; }
+    bool operator<(const ScriptID &o) const { return var < o.var; }
     bool operator==(const uint160 &o) const { return IsP2SH_20() && std::get<uint160>(var) == o; }
     bool operator==(const uint256 &o) const { return IsP2SH_32() && std::get<uint256>(var) == o; }
 
     uint8_t *begin() { return std::visit([](auto &&alt) { return alt.begin(); }, var); }
     uint8_t *end() { return std::visit([](auto &&alt) { return alt.end(); }, var); }
     uint8_t *data() { return std::visit([](auto &&alt) { return alt.data(); }, var); }
-    const uint8_t *begin() const { return const_cast<ScriptHashID *>(this)->begin(); }
-    const uint8_t *end() const { return const_cast<ScriptHashID *>(this)->end(); }
-    const uint8_t *data() const { return const_cast<ScriptHashID *>(this)->data(); }
+    const uint8_t *begin() const { return const_cast<ScriptID *>(this)->begin(); }
+    const uint8_t *end() const { return const_cast<ScriptID *>(this)->end(); }
+    const uint8_t *data() const { return const_cast<ScriptID *>(this)->data(); }
 
     size_t size() const { return end() - begin(); }
     uint8_t & operator[](size_t i) { return data()[i]; }
@@ -106,10 +106,10 @@ public:
  * A txout script template with a specific destination. It is either:
  *  * CNoDestination: no destination set
  *  * CKeyID: TX_PUBKEYHASH destination
- *  * ScriptHashID: TX_SCRIPTHASH destination
+ *  * ScriptID: TX_SCRIPTHASH destination
  *  A CTxDestination is the internal data type encoded in a bitcoin address
  */
-using CTxDestination = std::variant<CNoDestination, CKeyID, ScriptHashID>;
+using CTxDestination = std::variant<CNoDestination, CKeyID, ScriptID>;
 
 const char *GetTxnOutputType(txnouttype t);
 bool IsValidDestination(const CTxDestination &dest);

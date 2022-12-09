@@ -92,7 +92,7 @@ public:
         return cashaddr::Encode(params.CashAddrPrefix(), data);
     }
 
-    std::string operator()(const ScriptHashID &id) const {
+    std::string operator()(const ScriptID &id) const {
         std::vector<uint8_t> data = PackAddrData(id, SCRIPT_TYPE);
         return cashaddr::Encode(params.CashAddrPrefix(), data);
     }
@@ -218,8 +218,8 @@ CTxDestination DecodeCashAddrDestination(const CashAddrContent &content) {
             return CKeyID(hash20);
         case SCRIPT_TYPE:
         case TOKEN_SCRIPT_TYPE:
-            if (destHash.data() == hash20.data()) return ScriptHashID(hash20); // p2sh
-            else if (destHash.data() == hash32.data()) return ScriptHashID(hash32); // p2sh_32
+            if (destHash.data() == hash20.data()) return ScriptID(hash20); // p2sh
+            else if (destHash.data() == hash32.data()) return ScriptID(hash32); // p2sh_32
             assert(!"Unexpected state");
             [[fallthrough]]; // not reached
         default:

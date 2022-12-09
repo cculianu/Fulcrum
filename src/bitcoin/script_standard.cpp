@@ -31,7 +31,7 @@ using valtype = std::vector<uint8_t>;
 
 bool fAcceptDatacarrier = DEFAULT_ACCEPT_DATACARRIER;
 
-ScriptHashID::ScriptHashID(const CScript &in, bool is32) : var{uint160{uint160::Uninitialized}} {
+ScriptID::ScriptID(const CScript &in, bool is32) : var{uint160{uint160::Uninitialized}} {
     if (is32) {
         var = Hash(in);
     } else {
@@ -208,9 +208,9 @@ bool ExtractDestination(const CScript &scriptPubKey,
     }
     if (whichType == TX_SCRIPTHASH) {
         if (vSolutions.size() == uint160::size())
-            addressRet = ScriptHashID(uint160(vSolutions[0]));
+            addressRet = ScriptID(uint160(vSolutions[0]));
         else if (vSolutions.size() == uint256::size())
-            addressRet = ScriptHashID(uint256(vSolutions[0]));
+            addressRet = ScriptID(uint256(vSolutions[0]));
         else {
             // Should never be reached...
             return false;
@@ -282,7 +282,7 @@ public:
         return true;
     }
 
-    bool operator()(const ScriptHashID &scriptID) const {
+    bool operator()(const ScriptID &scriptID) const {
         script->clear();
         if (scriptID.IsP2SH_20())
             *script << OP_HASH160 << ToByteVector(scriptID) << OP_EQUAL;
