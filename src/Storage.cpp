@@ -49,7 +49,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cassert>
-#include <cstddef> // for std::byte
+#include <cstddef> // for std::byte, offsetof
 #include <cstdlib>
 #include <cstring> // for memcpy
 #include <functional>
@@ -177,15 +177,21 @@ namespace {
         return ret;
     }
 
+    struct SHUnspentValue {
+        bool valid = false;
+        bitcoin::Amount amount;
+        bitcoin::token::OutputDataPtr tokenDataPtr;
+    };
+
     // specializations
     template <> QByteArray Serialize(const Meta &);
     template <> Meta Deserialize(const QByteArray &, bool *);
     template <> QByteArray Serialize(const TXO &);
     template <> TXO Deserialize(const QByteArray &, bool *);
     template <> QByteArray Serialize(const TXOInfo &);
-    template <> TXOInfo Deserialize(const QByteArray &, bool *);
-    template <> [[maybe_unused]] QByteArray Serialize(const bitcoin::Amount &);
-    template <> bitcoin::Amount Deserialize(const QByteArray &, bool *);
+    TXOInfo DeserializeTXOInfo(const QByteArray &, bool *ok = nullptr, int *pos_out = nullptr);
+    QByteArray Serialize(const bitcoin::Amount &, const bitcoin::token::OutputData *);
+    template <> SHUnspentValue Deserialize(const QByteArray &, bool *);
     // TxNumVec
     using TxNumVec = std::vector<TxNum>;
     // this serializes a vector of TxNums to a compact representation (6 bytes, eg 48 bits per TxNum), in little endian byte order
@@ -291,7 +297,11 @@ namespace {
                     Debug() << "Warning:  Caller misuse of function '" << __func__
                             << "'. 'acceptExtraBytesAtEndOfData=true' is ignored when deserializing using QDataStream.";
                 bool ok;
-                ret.emplace( Deserialize<RetType>(FromSlice(datum), &ok) );
+                if constexpr (std::is_same_v<TXOInfo, RetType>) {
+                    ret.emplace( DeserializeTXOInfo(FromSlice(datum), &ok) );
+                } else {
+                    ret.emplace( Deserialize<RetType>(FromSlice(datum), &ok) );
+                }
                 if (!ok) {
                     throw DatabaseSerializationError(
                                 QString("%1: Key was retrieved ok, but data could not be deserialized")
@@ -1137,10 +1147,11 @@ class Storage::UTXOCache
     static constexpr size_t RmVecItemSize = sizeof(RmVec::value_type) + HashLen + Util::qByteArrayPvtDataSize();
 
     using ShunspentKey = QByteArray;
+    using ShunspentValue = QByteArray;
     struct ShunspentKeyHasher {
         size_t operator()(const ShunspentKey & k) const noexcept { return Util::hashForStd(static_cast<ByteView>(k)); }
     };
-    using ShunspentTable = robin_hood::unordered_flat_map<ShunspentKey, int64_t, ShunspentKeyHasher>;
+    using ShunspentTable = robin_hood::unordered_flat_map<ShunspentKey, ShunspentValue, ShunspentKeyHasher>;
     using ShunspentRmVec = std::vector<ShunspentKey>;
 
     ShunspentTable shunspentAdds; ///< queued additions, not yet added to DB
@@ -1348,8 +1359,8 @@ class Storage::UTXOCache
                 // Update db scripthash_unspent, keyed off hashX|ctxo
                 {
                     static const QString errMsgPrefix("Failed to add an item to the shunspent batch");
-                    const auto & [dbkey, amount]  = *it;
-                    GenericBatchPut(shunspentBatch, dbkey, amount, errMsgPrefix); // may throw on failure
+                    const auto & [dbkey, dbvalue] = *it;
+                    GenericBatchPut(shunspentBatch, dbkey, dbvalue, errMsgPrefix); // may throw on failure
                 }
                 it = shunspentAdds.erase(it);
                 ++shunspentAddCt;
@@ -1475,15 +1486,15 @@ class Storage::UTXOCache
         }
     }
 
-    void addShunspent(ShunspentKey && k, int64_t amt) {
-        const auto & [it, inserted] = shunspentAdds.emplace(std::move(k), amt);
+    void addShunspent(const ShunspentKey &k, const ShunspentValue &v) {
+        const auto & [it, inserted] = shunspentAdds.emplace(k, v);
         if (UNLIKELY(!inserted)) {
             // Already there! Paranoia check here ... it turns out even in pre-BIP34 txns, this cannot happen
             // because we uniquely identify txns by unique id number, so dupe tx-hash's (as was possible pre-BIP34)
             // cannot trigger this branch.  This branch is here strictly for paranoia.
-            Warning() << __func__ << ": WARNING dupe txo encountered with key: \"" << it->first.toHex() << "\" [amt1: "
-                      << it->second << " amt2: " << amt << "], overwriting existing with amt2.";
-            it->second = amt; // overwrite existing to preserve behavior of pre-UTXOCache code.
+            Warning() << __func__ << ": WARNING dupe txo encountered with key: \"" << it->first.toHex() << "\" [val1: "
+                      << it->second.toHex() << " val2: " << v.toHex() << "], overwriting existing with amt2.";
+            it->second = v; // overwrite existing to preserve behavior of pre-UTXOCache code.
         }
         // NOTE: Assumption is that an add will never add a shunspent key that is in the shunspentRms vector.
         // (this is not checked for performance.)
@@ -1594,7 +1605,7 @@ class Storage::UTXOCache
                     TXO & txo = index2TXO[index];
                     if (s.ok()) {
                         bool ok;
-                        TXOInfo info = Deserialize<TXOInfo>(FromSlice(values[index]), &ok);
+                        TXOInfo info = DeserializeTXOInfo(FromSlice(values[index]), &ok);
                         if (!ok) throw DatabaseSerializationError(QString("%1: Failed to deserialize TXOInfo for TXO \"%2\"")
                                                                   .arg(name, txo.toString()));
                         else {
@@ -1701,11 +1712,7 @@ public:
 
     bool remove(const TXO & txo) { return rm(txo); }
 
-    void putShunspent(const CompactTXO &ctxo, const TXOInfo & info) {
-        addShunspent(mkShunspentKey(info.hashX, ctxo),
-                     // we do it this way because it avoids a memcpy. this is the right way: Serialize(info.amount)
-                     static_cast<int64_t>(info.amount / info.amount.satoshi()) );
-    }
+    void putShunspent(const ShunspentKey &key, const ShunspentValue &val) { addShunspent(key, val); }
     bool removeShunspent(const HashX & hashX, const CompactTXO & ctxo) { return rmShunspent(mkShunspentKey(hashX, ctxo)); }
 
     void flush() { do_flush(); }
@@ -2414,7 +2421,7 @@ void Storage::loadCheckUTXOsInDB()
                                                      " This may be due to a database format mismatch."
                                                      "\n\nDelete the datadir and resynch to bitcoind.\n");
                 }
-                auto info = Deserialize<TXOInfo>(FromSlice(iter->value()));
+                auto info = DeserializeTXOInfo(FromSlice(iter->value()));
                 if (!info.isValid())
                     throw DatabaseSerializationError(QString("Txo %1 has invalid metadata in the db."
                                                             " This may be due to a database format mismatch."
@@ -2435,11 +2442,13 @@ void Storage::loadCheckUTXOsInDB()
                 const QByteArray shuKey = mkShunspentKey(info.hashX, ctxo);
                 static const QString errPrefix("Error reading scripthash_unspent");
                 QByteArray tmpBa;
-                if (bool fail1 = false, fail2 = false, fail3 = false, fail4 = false;
+                SHUnspentValue shval;
+                if (bool fail1 = false, fail2 = false, fail3 = false, fail4 = false, fail5 = false;
                         (fail1 = (info.confirmedHeight.has_value() && int(*info.confirmedHeight) > currentHeight))
                         || (fail2 = info.txNum >= p->txNumNext)
                         || (fail3 = (tmpBa = GenericDBGet<QByteArray>(p->db.shunspent.get(), shuKey, true, errPrefix, false, p->db.defReadOpts).value_or("")).isEmpty())
-                        || (fail4 = (info.amount != Deserialize<bitcoin::Amount>(tmpBa)))) {
+                        || (fail4 = (!(shval = Deserialize<SHUnspentValue>(tmpBa)).valid || info.amount != shval.amount))
+                        || (fail5 = (info.tokenDataPtr != shval.tokenDataPtr))) {
                     // TODO: reorg? Inconsisent db?  FIXME
                     QString msg;
                     {
@@ -2454,6 +2463,8 @@ void Storage::loadCheckUTXOsInDB()
                             ts << ". Failed to find ctxo " << ctxo.toString() << " in the scripthash_unspent db.";
                         } else if (fail4) {
                             ts << ". Utxo amount does not match the ctxo amount in the scripthash_unspent db.";
+                        } else if (fail5) {
+                            ts << ". Token data does not match the ctxo token_data in the scripthash_unspent db.";
                         }
                         ts << "\n\nThe database has been corrupted. Please delete the datadir and resynch to bitcoind.\n";
                     }
@@ -2523,15 +2534,18 @@ void Storage::loadCheckShunspentInDB()
         const auto &[hashx, ctxo] = extractShunspentKey(iter->key());
         if (!ctxo.isValid())
             throw DatabaseError(QString("Read an invalid compact txo from the scripthash_unspent database. %1").arg(errMsg));
-        const bitcoin::Amount amount = Deserialize<bitcoin::Amount>(FromSlice(iter->value()));
-        if (UNLIKELY(!bitcoin::MoneyRange(amount)))
-            throw DatabaseError(QString("Read an invalid amount from the scripthash_unspent database for scripthash: %1. %2")
-                                .arg(QString(hashx.toHex()), errMsg));
         TXOInfo info;
-        info.txNum = ctxo.txNum();
-        info.hashX = hashx;
-        info.amount = amount;
-        info.confirmedHeight = heightForTxNum(ctxo.txNum());
+        {
+            SHUnspentValue shuval = Deserialize<SHUnspentValue>(FromSlice(iter->value()));
+            if (UNLIKELY(!shuval.valid || !bitcoin::MoneyRange(shuval.amount)))
+                throw DatabaseError(QString("Read an invalid SHUnspentValue from the scripthash_unspent database for scripthash: %1. %2")
+                                    .arg(QString(hashx.toHex()), errMsg));
+            info.txNum = ctxo.txNum();
+            info.hashX = hashx;
+            info.amount = shuval.amount;
+            info.confirmedHeight = heightForTxNum(ctxo.txNum());
+            info.tokenDataPtr = std::move(shuval.tokenDataPtr);
+        }
         const TxHash txHash = hashForTxNum(ctxo.txNum(), true, nullptr, true).value_or(QByteArray()); // throws if missing
         const TXO txo{txHash, ctxo.N()};
         // look for this in the UTXO db
@@ -2704,6 +2718,8 @@ void Storage::setInitialSync(bool b) {
 
 void Storage::UTXOBatch::add(const TXO &txo, const TXOInfo &info, const CompactTXO &ctxo)
 {
+    const QByteArray shukey = mkShunspentKey(info.hashX, ctxo),
+                     shuval = Serialize(info.amount, info.tokenDataPtr.get());
     if (!p->cache) {
         // Update db utxoset, keyed off txo -> txoinfo
         static const QString errMsgPrefix("Failed to add a utxo to the utxo batch");
@@ -2714,15 +2730,11 @@ void Storage::UTXOBatch::add(const TXO &txo, const TXOInfo &info, const CompactT
         // serialized CompactTXO bytes (8 or 9). Each entry's data is a 8-byte int64_t of the amount of the utxo to save
         // on lookup cost for getBalance().
         static const QString errMsgPrefix2("Failed to add an entry to the scripthash_unspent batch");
-
-        GenericBatchPut(p->shunspentBatch,
-                        mkShunspentKey(info.hashX, ctxo),
-                        int64_t( info.amount / info.amount.satoshi() ), ///< we do it this way because it avoids a memcpy. this is the right way: Serialize(info.amount)
-                        errMsgPrefix2); // may throw, which is what we want
+        GenericBatchPut(p->shunspentBatch, shukey, shuval, errMsgPrefix2); // may throw, which is what we want
     } else {
         // put in cache (in case these get deleted later on, it's a win to do this rather than hit the DB, if using cache)
         p->cache->put(txo, info);
-        p->cache->putShunspent(ctxo, info);
+        p->cache->putShunspent(shukey, shuval);
     }
 
     ++p->addCt;
@@ -2757,7 +2769,8 @@ std::optional<TXOInfo> Storage::utxoGetFromDB(const TXO &txo, bool throwIfMissin
 
 int64_t Storage::utxoSetSize() const { return p->utxoCt; }
 double Storage::utxoSetSizeMB() const {
-    constexpr int64_t elemSize = TXOInfo::serSize() + TXO::minSize() /*<-- assumption is most utxos use 16-bit IONums */;
+    // TODO: the below is inaccurate because it does not account for any bitcoin::token::OutputDataPtr that may be in TXOInfo
+    constexpr int64_t elemSize = TXOInfo::minSerSize() + TXO::minSize() /*<-- assumption is most utxos use 16-bit IONums */;
     return (utxoSetSize()*elemSize) / 1e6;
 }
 
@@ -3712,12 +3725,13 @@ auto Storage::getBalance(const HashX &hashX) const -> std::pair<bitcoin::Amount,
             for (iter->Seek(prefix); iter->Valid() && (key = iter->key()).starts_with(prefix); iter->Next()) {
                 const CompactTXO ctxo = extractCompactTXOFromShunspentKey(key); // may throw if key has the wrong size, etc
                 bool ok;
-                const bitcoin::Amount amount = Deserialize<bitcoin::Amount>(FromSlice(iter->value()), &ok);
-                if (UNLIKELY(!ok))
-                    throw InternalError(QString("Bad amount in db for ctxo %1 (%2)").arg(ctxo.toString()).arg(QString(hashX.toHex())));
+                const auto & [valid, amount, tokenDataPtr] = Deserialize<SHUnspentValue>(FromSlice(iter->value()), &ok);
+                if (UNLIKELY(!ok || !valid))
+                    throw InternalError(QString("Bad SHUnspentValue in db for ctxo %1 (%2)").arg(ctxo.toString()).arg(QString(hashX.toHex())));
                 if (UNLIKELY(!bitcoin::MoneyRange(amount)))
                     throw InternalError(QString("Out-of-range amount in db for ctxo %1: %2").arg(ctxo.toString()).arg(amount / amount.satoshi()));
                 ret.first += amount; // tally the result
+                // TODO: Use tokenDataPtr here?
             }
             if (UNLIKELY(!bitcoin::MoneyRange(ret.first))) {
                 ret.first = bitcoin::Amount::zero();
@@ -4009,9 +4023,9 @@ namespace {
     }
 
     template <> QByteArray Serialize(const TXOInfo &inf) { return inf.toBytes(); }
-    template <> TXOInfo Deserialize(const QByteArray &ba, bool *ok)
+    TXOInfo DeserializeTXOInfo(const QByteArray &ba, bool *ok, int *pos_out)
     {
-        TXOInfo ret = TXOInfo::fromBytes(ba); // will fail if extra bytes at the end
+        TXOInfo ret = TXOInfo::fromBytes(ba, pos_out); // will fail if extra bytes at the end and pos_out == nullptr
         if (ok) *ok = ret.isValid();
         return ret;
     }
@@ -4039,7 +4053,7 @@ namespace {
 
         /* ----------- V1 format (back when we had 2 byte IONums) */
         static constexpr size_t addUndoItemSerSize_V1 = TXO::minSize() + HashLen + CompactTXO::minSize();
-        static constexpr size_t delUndoItemSerSize_V1 = TXO::minSize() + TXOInfo::serSize();
+        static constexpr size_t delUndoItemSerSize_V1 = TXO::minSize() + TXOInfo::minSerSize();
 
         /// computes the total size given the ser size of the blkInfo struct.
         /// Requires that nScriptHashes, nAddUndos, and nDelUndos be already filled-in.
@@ -4054,16 +4068,16 @@ namespace {
 
         /* ----------- V2 format (3-byte IONums) */
         static constexpr size_t addUndoItemSerSize_V2 = TXO::maxSize() + HashLen + CompactTXO::maxSize();
-        static constexpr size_t delUndoItemSerSize_V2 = TXO::maxSize() + TXOInfo::serSize();
+        static constexpr size_t delUndoItemMinSerSize_V2 = TXO::maxSize() + TXOInfo::minSerSize();
 
         /// computes the total size given the ser size of the blkInfo struct. Requires that nScriptHashes, nAddUndos, and nDelUndos be already filled-in.
-        size_t computeTotalSize_V2() const {
+        size_t computeMinimumSize_V2() const {
             const auto shSize = nScriptHashes * HashLen;
             const auto addsSize = nAddUndos * addUndoItemSerSize_V2;
-            const auto delsSize = nDelUndos * delUndoItemSerSize_V2;
-            return sizeof(*this) + sizeof(UndoInfo::height) + HashLen + sizeof(BlkInfo) + shSize + addsSize + delsSize;
+            const auto delsMinSize = nDelUndos * delUndoItemMinSerSize_V2;
+            return sizeof(*this) + sizeof(UndoInfo::height) + HashLen + sizeof(BlkInfo) + shSize + addsSize + delsMinSize;
         }
-        bool isLenSane_V2() const { return size_t(len) == computeTotalSize_V2(); }
+        bool isLenMinimallySane_V2() const { return size_t(len) >= computeMinimumSize_V2(); }
 
     };
 
@@ -4086,7 +4100,8 @@ namespace {
         hdr.nScriptHashes = uint32_t(u.scriptHashes.size());
         hdr.nAddUndos = uint32_t(u.addUndos.size());
         hdr.nDelUndos = uint32_t(u.delUndos.size());
-        hdr.len = uint32_t(hdr.computeTotalSize_V2());
+        hdr.len = uint32_t(hdr.computeMinimumSize_V2());
+        const size_t offset_of_len = offsetof(UndoInfoSerHeader, len);
         QByteArray ret;
         ret.reserve(int(hdr.len));
         // 1. header
@@ -4119,13 +4134,15 @@ namespace {
             ret.append(hashX);
             ret.append(ctxo.toBytes(true /* force wide (3 byte IONum) */));
         }
-        // 7. .delUndos, 85 bytes each * nDelUndos
+        // 7. .delUndos, >=85 bytes each * nDelUndos
         for (const auto & [txo, txoInfo] : u.delUndos) {
             ret.append(txo.toBytes(true));
             if (UNLIKELY(!chkHashLen(txoInfo.hashX))) return ret;
             ret.append(Serialize(txoInfo));
         }
-        assert(ret.length() == int(hdr.len));
+        assert(ret.length() >= int(hdr.len));
+        hdr.len = ret.length(); // update length since serializing potential token data for each TXOInfo has variable size
+        std::memcpy(ret.data() + offset_of_len, &hdr.len, sizeof(hdr.len));
         return ret;
     }
 
@@ -4147,7 +4164,7 @@ namespace {
         // 1. .header
         const UndoInfoSerHeader hdr = Deserialize<UndoInfoSerHeader>(ba, &myok);;
         if (!chkAssertion(myok && int(hdr.len) == ba.size() && hdr.magic == hdr.defMagic
-                          && ( (hdr.ver == hdr.defVer && hdr.isLenSane_V2())
+                          && ( (hdr.ver == hdr.defVer && hdr.isLenMinimallySane_V2())
                                || (hdr.ver == hdr.v1Ver && hdr.isLenSane_V1()) ),
                           "Header sanity check fail"))
             return ret;
@@ -4208,9 +4225,10 @@ namespace {
             if (!chkAssertion(cur+TXOSerSize <= end)) return ret;
             TXO txo = Deserialize<TXO>(ShallowTmp(cur, TXOSerSize), &myok);
             cur += TXOSerSize;
-            if (!chkAssertion(myok && cur+TXOInfo::serSize() <= end)) return ret;
-            TXOInfo info = Deserialize<TXOInfo>(ShallowTmp(cur, TXOInfo::serSize()), &myok);
-            cur += TXOInfo::serSize();
+            if (!chkAssertion(myok && cur + TXOInfo::minSerSize() <= end)) return ret;
+            int nbytes_read = 0;
+            TXOInfo info = DeserializeTXOInfo(ShallowTmp(cur, end - cur), &myok, &nbytes_read);
+            cur += nbytes_read;
             if (!chkAssertion(myok)) return ret;
             ret.delUndos.emplace_back(std::move(txo), std::move(info));
         }
@@ -4237,7 +4255,7 @@ namespace {
         return ret;
     }
     // this deserializes a vector of TxNums from a compact representation (6 bytes, eg 48 bits per TxNum), assuming little endian byte order
-    template <> TxNumVec Deserialize (const QByteArray &ba, bool *ok)
+    template <> TxNumVec Deserialize(const QByteArray &ba, bool *ok)
     {
         constexpr auto compactSize = CompactTXO::compactTxNumSize(); /* 6 */
         const size_t blen = size_t(ba.length());
@@ -4264,10 +4282,29 @@ namespace {
         return ret;
     }
 
-    template <> QByteArray Serialize(const bitcoin::Amount &a) { return SerializeScalar(a / a.satoshi()); }
-    template <> bitcoin::Amount Deserialize(const QByteArray &ba, bool *ok) {
-        const int64_t amt = DeserializeScalar<int64_t>(ba, ok);
-        return amt * bitcoin::Amount::satoshi();
+    QByteArray Serialize(const bitcoin::Amount &a, const bitcoin::token::OutputData *ptok) {
+        QByteArray ret = SerializeScalar(a / a.satoshi());
+        BTC::SerializeTokenDataWithPrefix(ret, ptok); // may be no-op if ptok is nullptr
+        return ret;
+    }
+    template <> SHUnspentValue Deserialize(const QByteArray &ba, bool *pok) {
+        int pos = 0;
+        bool ok;
+        const int64_t amt = DeserializeScalar<int64_t>(ba, &ok, &pos);
+        SHUnspentValue ret;
+        if (ok) {
+            ret.amount = amt * bitcoin::Amount::satoshi();
+            try {
+                ret.tokenDataPtr = BTC::DeserializeTokenDataWithPrefix(ba, pos);
+            } catch (const std::exception &e) {
+                throw DatabaseSerializationError(
+                    QString("Got exception deserializing token data in Storage.cpp::Deserialize(): %1 (from bytes: %2)")
+                    .arg(e.what(), ba.mid(pos).toHex().constData()));
+            }
+        }
+        if (pok) *pok = ok;
+        ret.valid = ok;
+        return ret;
     }
 
 } // end anon namespace

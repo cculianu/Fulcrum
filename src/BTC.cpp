@@ -210,4 +210,29 @@ namespace BTC
         return Coin::Unknown;
     }
 
+    bitcoin::token::OutputDataPtr DeserializeTokenDataWithPrefix(const QByteArray &ba, int pos, int *pos_out) {
+        bitcoin::token::OutputDataPtr ret;
+        if (ba.size() - pos > 0) {
+            // attempt to deserialize token data
+            if (uint8_t(ba[pos++]) != bitcoin::token::PREFIX_BYTE) // Expect: 0xef
+                throw std::ios_base::failure(
+                    strprintf("Expected token prefix byte 0x%02x, instead got 0x%02x in %s at position %i",
+                              bitcoin::token::PREFIX_BYTE, uint8_t(ba[pos-1]), __func__, pos-1));
+            ret.emplace();
+            BTC::Deserialize<bitcoin::token::OutputData>(*ret, ba, pos , false, false,
+                                                         true /* cashTokens */,
+                                                         pos_out == nullptr /* noJunkAtEnd */, pos_out);
+        }
+        return ret;
+    }
+
+    void SerializeTokenDataWithPrefix(QByteArray &ba, const bitcoin::token::OutputData *ptokenData) {
+        if (ptokenData) {
+            ba.reserve(ba.size() + 1 + ptokenData->EstimatedSerialSize());
+            ba.append(char(bitcoin::token::PREFIX_BYTE)); // append PREFIX_BYTE since we expect it on deser
+            BTC::Serialize(ba, *ptokenData); // append serialized token data
+        }
+    }
+
+
 } // end namespace BTC

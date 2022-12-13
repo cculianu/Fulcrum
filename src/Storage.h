@@ -490,7 +490,7 @@ RocksDB: "utxoset"
 
 RocksDB: "scripthash_unspent"
   Key: scripthash_raw_bytes + serialized CompactTXO (40 or 41 bytes)
-  Value: 8-byte amount field (64-bit signed integer)
+  Value: 8-byte amount field (64-bit signed integer), plus optional tokenData (prefixed by 0xef)
   Comments: It turns out scanning by prefix over a table is blazingly fast in rocksdb, so we can easily do listunspent
   using this scheme. I tried a read-modify-write approach (keying off just HashX) and it was painfully slow on synch.
   This is much faster to synch.

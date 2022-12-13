@@ -63,7 +63,7 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bi
         for (const auto & out : tx->vout) {
             // save the outputs seen
             outputs.emplace_back(
-                OutPt{ unsigned(txIdx), outN, out.nValue, {} }
+                OutPt{ unsigned(txIdx), outN, out.nValue, {}, out.tokenDataPtr }
             );
             estimatedThisSizeBytes += sizeof(OutPt);
             const size_t outputIdx = outputs.size()-1;
@@ -203,7 +203,10 @@ QString PreProcessedBlock::toDebugString() const
             }
             for (size_t j = 0; j < ag.outs.size(); ++j) {
                 const auto idx = ag.outs[j];
-                ts << " {out# " << j << " - " << txHashForOutputIdx(idx).toHex() << ":" << outputs[idx].outN << " amt: " << outputs[idx].amount.ToString().c_str() << " }";
+                ts << " {out# " << j << " - " << txHashForOutputIdx(idx).toHex() << ":" << outputs[idx].outN
+                   << " amt: " << outputs[idx].amount.ToString().c_str()
+                   << " tok: " << (outputs[idx].tokenDataPtr ? outputs[idx].tokenDataPtr->ToString().c_str() : "")
+                   << " }";
             }
             ts << ")";
             ++i;
