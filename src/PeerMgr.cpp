@@ -509,7 +509,6 @@ void PeerMgr::on_kickByAddress(const QHostAddress &addr)
 {
     if (addr.isNull())
         return;
-    int ctr = 0;
     QSet<QString> hostnames;
     // first, loop through all the inactive maps and search for this addr
     for (PeerInfoMap *m : {&seedPeers, &queued, &bad, &failed} ) {
@@ -518,7 +517,6 @@ void PeerMgr::on_kickByAddress(const QHostAddress &addr)
                 DebugM(__func__, " removing peer ", it.key(), " ", addr.toString());
                 hostnames.insert(it->hostName);
                 it = m->erase(it);
-                ++ctr;
             } else
                 ++it;
         }
@@ -530,7 +528,6 @@ void PeerMgr::on_kickByAddress(const QHostAddress &addr)
             hostnames.insert(c->info.hostName);
             c->wasKicked = true;
             c->deleteLater(); // this will call us back to remove it from the hashmap, etc
-            ++ctr;
         }
     }
     if (const auto uniqs = hostnames.size(); uniqs)
@@ -542,7 +539,6 @@ void PeerMgr::on_kickBySuffix(const QString &suffix)
     if (suffix.isEmpty())
         return;
     // NB: the suffix comes in pre-normalized from SrvMgr.
-    int ctr = 0;
     QSet<QString> hostnames;
     // first, loop through all the inactive maps and search for this addr
     for (PeerInfoMap *m : {&seedPeers, &queued, &bad, &failed} ) {
@@ -551,7 +547,6 @@ void PeerMgr::on_kickBySuffix(const QString &suffix)
                 DebugM(__func__, " removing peer ", it.key(), " ", it->hostName);
                 hostnames.insert(it->hostName);
                 it = m->erase(it);
-                ++ctr;
             } else
                 ++it;
         }
@@ -563,7 +558,6 @@ void PeerMgr::on_kickBySuffix(const QString &suffix)
             hostnames.insert(c->info.hostName);
             c->wasKicked = true;
             c->deleteLater(); // this will call us back to remove it from the hashmap, etc
-            ++ctr;
         }
     }
     if (const auto uniqs = hostnames.size(); uniqs)

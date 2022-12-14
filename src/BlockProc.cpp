@@ -62,10 +62,10 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bi
         IONum outN = 0;
         for (const auto & out : tx->vout) {
             // save the outputs seen
-            outputs.emplace_back(
+            outputs.push_back(
                 OutPt{ unsigned(txIdx), outN, out.nValue, {}, out.tokenDataPtr }
             );
-            estimatedThisSizeBytes += sizeof(OutPt);
+            estimatedThisSizeBytes += sizeof(OutPt) + (out.tokenDataPtr ? out.tokenDataPtr->GetMemSize() : 0u);
             const size_t outputIdx = outputs.size()-1;
             if (const auto cscript = out.scriptPubKey;
                     !BTC::IsOpReturn(cscript))  ///< skip OP_RETURN

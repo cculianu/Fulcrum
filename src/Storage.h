@@ -233,6 +233,7 @@ public:
         IONum tx_pos = 0;
         bitcoin::Amount value;
         TxNum txNum = 0; ///< the global txNum. This + tx_pos defines the order
+        bitcoin::token::OutputDataPtr tokenDataPtr; ///< may be null, not null for outputs containing tokens
 
         // for sort & maps
         bool operator<(const UnspentItem &o) const noexcept;
@@ -240,9 +241,11 @@ public:
     };
     using UnspentItems = std::vector<UnspentItem>;
 
+    enum class TokenFilterOption { IncludeTokens, FilterTokens, OnlyTokens };
+
     /// Thread-safe. Will return an empty vector if the confirmed unspent size exceeds MaxHistory items. It may also
     /// return a truncated vector if the overflow is as a result of confirmed+unconfirmed exceeding MaxHistory.
-    UnspentItems listUnspent(const HashX &) const;
+    UnspentItems listUnspent(const HashX &, TokenFilterOption) const;
 
     /// thread safe -- returns confirmd, unconfirmed balance for a scripthash
     std::pair<bitcoin::Amount, bitcoin::Amount> getBalance(const HashX &) const;

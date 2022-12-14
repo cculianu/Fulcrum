@@ -399,7 +399,7 @@ private:
     void impl_get_balance(Client *, RPC::BatchId, const RPC::Message &, const HashX &scriptHash);
     void impl_get_history(Client *, RPC::BatchId, const RPC::Message &, const HashX &scriptHash);
     void impl_get_mempool(Client *, RPC::BatchId, const RPC::Message &, const HashX &scriptHash);
-    void impl_listunspent(Client *, RPC::BatchId, const RPC::Message &, const HashX &scriptHash);
+    void impl_listunspent(Client *, RPC::BatchId, const RPC::Message &, const HashX &scriptHash, Storage::TokenFilterOption tokenFilter);
     void impl_generic_subscribe(SubsMgr *, Client *, RPC::BatchId, const RPC::Message &, const HashX &key,
                                 const std::optional<QString> & aliasUsedForNotifications = {});
     void impl_generic_unsubscribe(SubsMgr *, Client *, RPC::BatchId, const RPC::Message &, const HashX &key);
@@ -462,6 +462,11 @@ protected:
     };
     static std::weak_ptr<LogFilter> weakLogFilter;
     std::shared_ptr<LogFilter> logFilter;
+
+public:
+    /// Helper function called by blockchain.scripthash.listunspent RPC and by the Controller class for /debug/
+    /// @returns A QVariantMap that matches the output of `blockchain.scripthash.listunspent`
+    [[nodiscard]] static QVariantMap unspentItemToVariantMap(const Storage::UnspentItem &);
 };
 
 /// SSL version of the above Server class that just wraps tcp sockets with a QSslSocket.

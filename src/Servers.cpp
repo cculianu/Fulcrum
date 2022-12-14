@@ -353,6 +353,28 @@ namespace {
             ret.clear();
         return ret;
     }
+
+    QVariantMap tokenDataToVariantMap(const bitcoin::token::OutputData & tok) {
+        QVariantMap ret;
+        ret.insert(QByteArrayLiteral("category"), QString::fromStdString(tok.GetId().ToString()));
+        ret.insert(QByteArrayLiteral("amount"), QString::number(qlonglong(tok.GetAmount().getint64())));
+        if (tok.HasNFT()) {
+            QVariantMap nft_obj;
+            nft_obj.insert(QByteArrayLiteral("capability"), [&tok] {
+                if (tok.IsMutableNFT()) return QByteArrayLiteral("mutable");
+                else if (tok.IsMintingNFT()) return QByteArrayLiteral("minting");
+                else return QByteArrayLiteral("none");
+            }());
+            const auto &comm = tok.GetCommitment();
+            // NB: we use a QString for `hexComm` below to avoid the case where empty commitment hex "" ends up as `null` in JSON
+            const QString hexComm(Util::ToHexFast(QByteArray::fromRawData(reinterpret_cast<const char *>(comm.data()),
+                                                                          comm.size())));
+            nft_obj.insert(QByteArrayLiteral("commitment"), hexComm);
+
+            ret.insert(QByteArrayLiteral("nft"), std::move(nft_obj));
+        }
+        return ret;
+    }
 } // namespace
 
 ServerBase::ServerBase(SrvMgr *sm,
@@ -1454,26 +1476,35 @@ void Server::impl_get_mempool(Client *c, const RPC::BatchId batchId, const RPC::
 void Server::rpc_blockchain_scripthash_listunspent(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const auto sh = parseFirstHashParamCommon(m);
-    impl_listunspent(c, batchId, m, sh);
+    impl_listunspent(c, batchId, m, sh, /* TODO: read in from RPC params: */ Storage::TokenFilterOption::IncludeTokens);
 }
 void Server::rpc_blockchain_address_listunspent(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const auto sh = parseFirstAddrParamToShCommon(m);
-    impl_listunspent(c, batchId, m, sh);
+    impl_listunspent(c, batchId, m, sh, /* TODO: read in from RPC params: */ Storage::TokenFilterOption::IncludeTokens);
 }
-void Server::impl_listunspent(Client *c, const RPC::BatchId batchId, const RPC::Message &m, const HashX &sh)
+/* static */
+QVariantMap Server::unspentItemToVariantMap(const Storage::UnspentItem & item)
 {
-    generic_do_async(c, batchId, m.id, [sh, this] {
+    QVariantMap vm{
+        { QByteArrayLiteral("tx_hash") , Util::ToHexFast(item.hash) },
+        { QByteArrayLiteral("tx_pos")  , item.tx_pos },
+        { QByteArrayLiteral("height")  , item.height },  // confirmed height. Is 0 for mempool tx regardless of unconf. parent status. Note this differs from get_mempool or get_history where -1 is used for unconf. parent.
+        { QByteArrayLiteral("value")   , qlonglong(item.value / item.value.satoshi()) }, // amount (int64) in satoshis
+    };
+    if (item.tokenDataPtr)
+        vm.insert(QByteArrayLiteral("token_data"), tokenDataToVariantMap(*item.tokenDataPtr));
+    return vm;
+}
+void Server::impl_listunspent(Client *c, const RPC::BatchId batchId, const RPC::Message &m, const HashX &sh,
+                              const Storage::TokenFilterOption tokenFilter)
+{
+    generic_do_async(c, batchId, m.id, [sh, tokenFilter, this] {
         QVariantList resp;
-        const auto items = storage->listUnspent(sh); // these are already sorted
-        for (const auto & item : items) {
-            resp.push_back(QVariantMap{
-                { "tx_hash" , Util::ToHexFast(item.hash) },
-                { "tx_pos"  , item.tx_pos },
-                { "height", item.height },  // confirmed height. Is 0 for mempool tx regardless of unconf. parent status. Note this differs from get_mempool or get_history where -1 is used for unconf. parent.
-                { "value", qlonglong(item.value / item.value.satoshi()) }, // amount (int64) in satoshis
-            });
-        }
+        const auto items = storage->listUnspent(sh, tokenFilter); // these are already sorted
+        resp.reserve(items.size());
+        for (const auto & item : items)
+            resp.push_back(unspentItemToVariantMap(item));
         return resp;
     });
 }

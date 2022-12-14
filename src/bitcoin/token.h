@@ -253,6 +253,11 @@ public:
         return Id::size() + 1 /* bitfield */ + sizeof(int64_t) /* Amount */
                 + 1 /* CompactSize */ + MAX_CONSENSUS_COMMITMENT_LENGTH;
     }
+
+    /* Below three added by Calin */
+    size_t GetSerialSize() const { return bitcoin::GetSerializeSize(*this); }
+    size_t GetDynMemUsage() const { return commitment.capacity() > commitment.static_capacity() ? commitment.capacity() : 0u; }
+    size_t GetMemSize() const { return sizeof(*this) + GetDynMemUsage(); }
 };
 
 using OutputDataPtr = HeapOptional<OutputData>;

@@ -2985,6 +2985,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                             info.amount = out.amount;
                             info.confirmedHeight = ppb->height;
                             info.txNum = blockTxNum0 + out.txIdx;
+                            info.tokenDataPtr = out.tokenDataPtr;
                             const TXO txo{ hash, out.outN };
                             const CompactTXO ctxo(info.txNum, txo.outN);
                             utxoBatch.add(txo, info, ctxo); // add to db
@@ -3594,13 +3595,24 @@ auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf) const -> H
     return ret;
 }
 
-auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
+auto Storage::listUnspent(const HashX & hashX, const TokenFilterOption tokenFilter) const -> UnspentItems
 {
     UnspentItems ret;
     if (hashX.length() != HashLen)
         return ret;
     try {
+        auto ShouldFilter = [tokenFilter](const TXOInfo &info) {
+            switch (tokenFilter) {
+            case TokenFilterOption::FilterTokens:
+                return bool(info.tokenDataPtr);
+            case TokenFilterOption::IncludeTokens:
+                return false;
+            case TokenFilterOption::OnlyTokens:
+                return !info.tokenDataPtr;
+            }
+        };
         const size_t maxHistory = size_t(options->maxHistory);
+        size_t mempoolHistoryCount = 0u;
         constexpr size_t iota = 10; // we initially reserve this many items in the returned array in order to prevent redundant allocations in the common case.
         std::unordered_set<TXO> mempoolConfirmedSpends;
         mempoolConfirmedSpends.reserve(iota);
@@ -3631,13 +3643,17 @@ auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
                                 if (decltype(tx->txos.cbegin()) it3;
                                         LIKELY( ionum < tx->txos.size() && (it3 = tx->txos.cbegin() + ionum)->isValid() ))
                                 {
-                                    ret.emplace_back(UnspentItem{
-                                        { tx->hash, 0 /* always put 0 for height here */, tx->fee }, // base HistoryItem
-                                        ionum, // .tx_pos
-                                        it3->amount,  // .value
-                                        TxNum(1) + veryHighTxNum + TxNum(tx->hasUnconfirmedParentTx ? 1 : 0), // .txNum (this is fudged for sorting at the end properly)
-                                    });
-                                    if (UNLIKELY(ret.size() > maxHistory)) {
+                                    ++mempoolHistoryCount;
+                                    if (!ShouldFilter(*it3)) {
+                                        ret.push_back(UnspentItem{
+                                            { tx->hash, 0 /* always put 0 for height here */, tx->fee }, // base HistoryItem
+                                            ionum, // .tx_pos
+                                            it3->amount,  // .value
+                                            TxNum(1) + veryHighTxNum + TxNum(tx->hasUnconfirmedParentTx ? 1 : 0), // .txNum (this is fudged for sorting at the end properly)
+                                            it3->tokenDataPtr, // .token_data
+                                        });
+                                    }
+                                    if (UNLIKELY(mempoolHistoryCount > maxHistory)) {
                                         throw HistoryTooLarge(QString("Unspent history too large for %1, exceeds MaxHistory of %2")
                                                               .arg(QString(hashX.toHex())).arg(maxHistory));
                                     }
@@ -3670,7 +3686,7 @@ auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
                 // the case where the history is huge.
                 for (iter->Seek(prefix); iter->Valid() && (key = iter->key()).starts_with(prefix); iter->Next()) {
                     ctxoVec.push_back( extractCompactTXOFromShunspentKey(key) /* may throw if size is bad, etc */ );
-                    if (UNLIKELY(++ctxoListSize + ret.size() > maxHistory)) {
+                    if (UNLIKELY(++ctxoListSize + mempoolHistoryCount > maxHistory)) {
                         throw HistoryTooLarge(QString("Unspent history too large for %1, exceeds MaxHistory of %2")
                                               .arg(QString(hashX.toHex())).arg(maxHistory));
                     }
@@ -3685,12 +3701,15 @@ auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
                         // confirmed spends in the mempool were still appearing in the listunspent utxos.
                         continue;
                     auto info = GenericDBGetFailIfMissing<TXOInfo>(p->db.utxoset.get(), txo, err, false, p->db.defReadOpts); // may throw -- indicates db inconsistency
-                    ret.emplace_back(UnspentItem{
-                        { hash, int(height), {} }, // base HistoryItem
-                        txo.outN,  // .tx_pos
-                        info.amount, // .value
-                        info.txNum, // .txNum
-                    });
+                    if (!ShouldFilter(info)) {
+                        ret.push_back(UnspentItem{
+                            { hash, int(height), {} }, // base HistoryItem
+                            txo.outN,  // .tx_pos
+                            info.amount, // .value
+                            info.txNum, // .txNum
+                            std::move(info.tokenDataPtr), // .token_data
+                        });
+                    }
                 }
             } // end confirmed/db search
         } // release blocks lock
@@ -4078,8 +4097,9 @@ namespace {
             return sizeof(*this) + sizeof(UndoInfo::height) + HashLen + sizeof(BlkInfo) + shSize + addsSize + delsMinSize;
         }
         bool isLenMinimallySane_V2() const { return size_t(len) >= computeMinimumSize_V2(); }
-
     };
+
+    static_assert(std::has_unique_object_representations_v<UndoInfoSerHeader>, "This type is serialized as bytes in UndoInfo");
 
     // Deserialize a header from bytes -- no checks are done other than length check.
     template <> UndoInfoSerHeader Deserialize(const QByteArray &ba, bool *ok) {

@@ -678,13 +678,19 @@ QVariantMap Mempool::dumpTx(const TxRef &tx)
         m["fee"] = tx->fee.ToString().c_str();
         m["hasUnconfirmedParentTx"] = tx->hasUnconfirmedParentTx;
         static const auto TXOInfo2Map = [](const TXOInfo &info) -> QVariantMap {
-            return QVariantMap{
+            QVariantMap ret{
                 { "amount", QString::fromStdString(info.amount.ToString()) },
                 { "scriptHash", info.hashX.toHex() },
                 // NEW -- it's useful to see this info in mempool debug to catch bugs
                 { "confirmedHeight", info.confirmedHeight ? QVariant(qlonglong(*info.confirmedHeight)) : QVariant()},
                 { "txNum", qlonglong(info.txNum)},
             };
+            if (info.tokenDataPtr) {
+                QByteArray ba;
+                BTC::SerializeTokenDataWithPrefix(ba, info.tokenDataPtr.get());
+                ret.insert("tokenData", ba.toHex());
+            }
+            return ret;
         };
         QVariantMap txos;
         IONum num = 0;
