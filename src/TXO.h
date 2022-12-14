@@ -135,13 +135,14 @@ struct TXOInfo {
         cur += sizeof(cheight);
         CompactTXO::txNumToCompactBytes(reinterpret_cast<std::byte *>(cur), txNum);
         cur += CompactTXO::compactTxNumSize(); // always 6
-        std::memcpy(cur, hashX.constData(), size_t(hashX.length()));
+        std::memcpy(cur, hashX.constData(), size_t(hashX.length())); // always 32 (enforced by isValid() check above)
         // NOTE: `cur` may be invalidated below
         BTC::SerializeTokenDataWithPrefix(ret, tokenDataPtr.get());
         return ret;
     }
-    /// If pos_out is not nullptr, will not tolerate junk bytes at the end.
-    static TXOInfo fromBytes(const QByteArray &ba, int *pos_out = nullptr) {
+
+    /// `ba` must only contain the valid bytes for this object. Will not tolerate junk bytes at the end.
+    static TXOInfo fromBytes(const QByteArray &ba) {
         TXOInfo ret;
         if (size_t(ba.length()) < minSerSize()) {
             return ret;
@@ -161,9 +162,9 @@ struct TXOInfo {
         if (cheight > -1)
             ret.confirmedHeight.emplace(unsigned(cheight));
         try {
-            ret.tokenDataPtr = BTC::DeserializeTokenDataWithPrefix(ba, cur - ba.constData(), pos_out);
-            // TODO: delete this line
-            if (ret.tokenDataPtr) Debug() << "Deserialized token data: " << ret.tokenDataPtr->ToString(true).c_str();
+            ret.tokenDataPtr = BTC::DeserializeTokenDataWithPrefix(ba, cur - ba.constData());
+            if constexpr (false) // Left-in for debugging purposes
+                if (ret.tokenDataPtr) Debug() << "Deserialized token data: " << ret.tokenDataPtr->ToString(true).c_str();
         } catch (const std::exception &e) {
             // This should never happen. Indicate serious error.
             Error() << "Got exception deserializing token data: " << e.what() << " (bytearray hex: " << ba.toHex() << ")";
@@ -174,4 +175,3 @@ struct TXOInfo {
 
     static constexpr size_t minSerSize() noexcept { return sizeof(int64_t) + sizeof(int32_t) + CompactTXO::compactTxNumSize() + HashLen; }
 };
-

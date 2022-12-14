@@ -29,6 +29,8 @@
 #include "SubsMgr.h"
 #include "VarInt.h"
 
+#include "bitcoin/hash.h"
+
 #include "robin_hood/robin_hood.h"
 
 #include <rocksdb/cache.h>
@@ -189,7 +191,7 @@ namespace {
     template <> QByteArray Serialize(const TXO &);
     template <> TXO Deserialize(const QByteArray &, bool *);
     template <> QByteArray Serialize(const TXOInfo &);
-    TXOInfo DeserializeTXOInfo(const QByteArray &, bool *ok = nullptr, int *pos_out = nullptr);
+    template <> TXOInfo Deserialize(const QByteArray &, bool *);
     QByteArray Serialize(const bitcoin::Amount &, const bitcoin::token::OutputData *);
     template <> SHUnspentValue Deserialize(const QByteArray &, bool *);
     // TxNumVec
@@ -297,11 +299,7 @@ namespace {
                     Debug() << "Warning:  Caller misuse of function '" << __func__
                             << "'. 'acceptExtraBytesAtEndOfData=true' is ignored when deserializing using QDataStream.";
                 bool ok;
-                if constexpr (std::is_same_v<TXOInfo, RetType>) {
-                    ret.emplace( DeserializeTXOInfo(FromSlice(datum), &ok) );
-                } else {
-                    ret.emplace( Deserialize<RetType>(FromSlice(datum), &ok) );
-                }
+                ret.emplace( Deserialize<RetType>(FromSlice(datum), &ok) );
                 if (!ok) {
                     throw DatabaseSerializationError(
                                 QString("%1: Key was retrieved ok, but data could not be deserialized")
@@ -417,12 +415,14 @@ namespace {
         std::vector<UTXOAddUndo> addUndos;
         std::vector<UTXODelUndo> delUndos;
 
+        uint16_t deserVersion = 0u; ///< Only ever read-in from db, never written out (we write out the latest version always)
+
         [[maybe_unused]] QString toDebugString() const;
 
         [[maybe_unused]] bool operator==(const UndoInfo &) const; // for debug ser/deser
 
         bool isValid() const { return hash.size() == HashLen; } ///< cheap, imperfect check for validity
-        void clear() { height = 0; hash.clear(); blkInfo = BlkInfo(); scriptHashes.clear(); addUndos.clear(); delUndos.clear(); }
+        void clear() { height = 0; hash.clear(); blkInfo = BlkInfo(); scriptHashes.clear(); addUndos.clear(); delUndos.clear(); deserVersion = 0u; }
     };
 
     QString UndoInfo::toDebugString() const {
@@ -430,7 +430,7 @@ namespace {
         QTextStream ts(&ret);
         ts  << "<Undo info for height: " << height << " addUndos: " << addUndos.size() << " delUndos: " << delUndos.size()
             << " scriptHashes: " << scriptHashes.size() << " nTx: " << blkInfo.nTx << " txNum0: " << blkInfo.txNum0
-            << " hash: " << hash.toHex() << ">";
+            << " hash: " << hash.toHex() << " deserVersion: " << int(deserVersion) << ">";
         return ret;
     }
 
@@ -1605,7 +1605,7 @@ class Storage::UTXOCache
                     TXO & txo = index2TXO[index];
                     if (s.ok()) {
                         bool ok;
-                        TXOInfo info = DeserializeTXOInfo(FromSlice(values[index]), &ok);
+                        TXOInfo info = Deserialize<TXOInfo>(FromSlice(values[index]), &ok);
                         if (!ok) throw DatabaseSerializationError(QString("%1: Failed to deserialize TXOInfo for TXO \"%2\"")
                                                                   .arg(name, txo.toString()));
                         else {
@@ -2421,7 +2421,7 @@ void Storage::loadCheckUTXOsInDB()
                                                      " This may be due to a database format mismatch."
                                                      "\n\nDelete the datadir and resynch to bitcoind.\n");
                 }
-                auto info = DeserializeTXOInfo(FromSlice(iter->value()));
+                auto info = Deserialize<TXOInfo>(FromSlice(iter->value()));
                 if (!info.isValid())
                     throw DatabaseSerializationError(QString("Txo %1 has invalid metadata in the db."
                                                             " This may be due to a database format mismatch."
@@ -2647,6 +2647,14 @@ void Storage::loadCheckEarliestUndo()
                   << APPNAME << " versions may not cope well with this setting. As such, it is recommended that you "
                   << "avoid using older versions of this program with this datadir now that you have set this option "
                   << "beyond the default.";
+    }
+    // sanity check that the latest Undo block deserializes correctly (detects older Fulcrum loading newer db)
+    if (!swissCheeseDetector.empty()) {
+        const uint32_t height = *swissCheeseDetector.rbegin();
+        const QString errMsg(QString("Unable to read undo data for height %1").arg(height));
+        const UndoInfo undoInfo = GenericDBGetFailIfMissing<UndoInfo>(p->db.undo.get(), height, errMsg);
+        if (!undoInfo.isValid()) throw DatabaseFormatError(errMsg);
+        Debug() << "Latest undo verified ok: " << undoInfo.toDebugString();
     }
     if (ctr > configuredUndoDepth()) {
         // User lowered undo config -- now configured for less undo depth than before.  Simply respect user wishes
@@ -3149,7 +3157,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                 } else {
                     const auto elapsedms = (Util::getTimeNS() - t0)/1e6;
                     const size_t nTx = undo->blkInfo.nTx, nSH = undo->scriptHashes.size();
-                    Debug() << "Saved V2 undo for block " << undo->height << ", "
+                    Debug() << "Saved V3 undo for block " << undo->height << ", "
                             << nTx << " " << Util::Pluralize("transaction", nTx)
                             << " involving " << nSH << " " << Util::Pluralize("scripthash", nSH)
                             << ", in " << QString::number(elapsedms, 'f', 2) << " msec.";
@@ -3982,6 +3990,75 @@ size_t Storage::dumpAllScriptHashes(QIODevice *outDev, unsigned int indent, unsi
     return ctr;
 }
 
+auto Storage::calcUTXOSetStats(const DumpProgressFunc & progFunc, size_t progInterval) const -> UTXOSetStats
+{
+    UTXOSetStats ret;
+    if (!p->db.utxoset || !p->db.shunspent) return ret;
+    auto readOpts_utxo = p->db.defReadOpts;
+    auto readOpts_shunspent = p->db.defReadOpts;
+    auto [ss_utxo, ss_shunspent, bheight, bhash] = [&] {
+        SharedLockGuard g{p->blocksLock};
+        using CSnapshot = const rocksdb::Snapshot;
+        auto s1 = std::shared_ptr<CSnapshot>(p->db.utxoset->GetSnapshot(),
+                                                           [this](CSnapshot *ss){ p->db.utxoset->ReleaseSnapshot(ss); });
+        auto s2 = std::shared_ptr<CSnapshot>(p->db.utxoset->GetSnapshot(),
+                                             [this](CSnapshot *ss){ p->db.shunspent->ReleaseSnapshot(ss); });
+        const auto & [height, hash] = latestTip(); // takes a subordinate lock to blocksLock
+        return std::tuple(s1, s2, height, hash);
+    }();
+    readOpts_utxo.snapshot = ss_utxo.get();
+    readOpts_shunspent.snapshot = ss_shunspent.get();
+    std::unique_ptr<rocksdb::Iterator> it_utxo {p->db.utxoset->NewIterator(readOpts_utxo)};
+    std::unique_ptr<rocksdb::Iterator> it_shu {p->db.shunspent->NewIterator(readOpts_shunspent)};
+    if (!it_utxo || !it_shu) return ret;
+
+    ret.block_height = bheight >= 0 ? BlockHeight(bheight) : 0;
+    ret.block_hash = bhash;
+
+    // Handle app shutdown by aborting this operation asap if we get a quit signal
+    std::atomic_bool quitting = false;
+    QMetaObject::Connection conn;
+    Defer d([&conn]{ if (conn && ::app()) { ::app()->disconnect(conn); conn = QMetaObject::Connection{}; } });
+    if (auto *a = ::app())
+        conn = a->connect(a, &App::requestQuit, this, [&quitting] { quitting = true; }, Qt::DirectConnection);
+
+    auto UpdateProgress = [&, ctr = size_t{0u}]() mutable {
+        if (progInterval && (++ctr % progInterval == 0u) && progFunc) progFunc(ctr);
+        return !quitting;
+    };
+    {
+        bitcoin::CHash256 hasher;
+        for (it_utxo->SeekToFirst(); it_utxo->Valid(); it_utxo->Next()) {
+            auto const k = it_utxo->key();
+            auto const v = it_utxo->value();
+            hasher.Write(reinterpret_cast<const uint8_t *>(k.data()), k.size());
+            hasher.Write(reinterpret_cast<const uint8_t *>(v.data()), v.size());
+            ++ret.utxo_db_ct;
+            ret.utxo_db_size_bytes += k.size() + v.size();
+            if (UNLIKELY(!UpdateProgress())) { ret = UTXOSetStats{}; return ret; }
+        }
+        ret.utxo_db_shasum.resize(HashLen);
+        hasher.Finalize(reinterpret_cast<uint8_t *>(ret.utxo_db_shasum.data()));
+    }
+
+    {
+        bitcoin::CHash256 hasher;
+        for (it_shu->SeekToFirst(); it_shu->Valid(); it_shu->Next()) {
+            auto const k = it_shu->key();
+            auto const v = it_shu->value();
+            hasher.Write(reinterpret_cast<const uint8_t *>(k.data()), k.size());
+            hasher.Write(reinterpret_cast<const uint8_t *>(v.data()), v.size());
+            ++ret.shunspent_db_ct;
+            ret.shunspent_db_size_bytes += k.size() + v.size();
+            if (UNLIKELY(!UpdateProgress())) { ret = UTXOSetStats{}; return ret; }
+        }
+        ret.shunspent_db_shasum.resize(HashLen);
+        hasher.Finalize(reinterpret_cast<uint8_t *>(ret.shunspent_db_shasum.data()));
+    }
+
+    return ret;
+}
+
 namespace {
     // specializations of Serialize/Deserialize
     template <> QByteArray Serialize(const Meta &m)
@@ -4042,9 +4119,9 @@ namespace {
     }
 
     template <> QByteArray Serialize(const TXOInfo &inf) { return inf.toBytes(); }
-    TXOInfo DeserializeTXOInfo(const QByteArray &ba, bool *ok, int *pos_out)
+    template <> TXOInfo Deserialize(const QByteArray &ba, bool *ok)
     {
-        TXOInfo ret = TXOInfo::fromBytes(ba, pos_out); // will fail if extra bytes at the end and pos_out == nullptr
+        TXOInfo ret = TXOInfo::fromBytes(ba); // will fail if extra bytes at the end
         if (ok) *ok = ret.isValid();
         return ret;
     }
@@ -4064,7 +4141,8 @@ namespace {
     }
 
     struct UndoInfoSerHeader {
-        static constexpr uint16_t defMagic = 0xf12c, defVer = 0x2, v1Ver = 0x1;
+        static constexpr uint16_t defMagic = 0xf12cu, v1Ver = 0x1u, v2Ver = 0x2u, v3Ver = 0x3u;
+        static constexpr auto defVer = v3Ver;
         uint16_t magic = defMagic; ///< sanity check
         uint16_t ver = defVer; ///< sanity check
         uint32_t len = 0; ///< the length of the entire buffer, including this struct and all data to follow. A sanity check.
@@ -4087,19 +4165,24 @@ namespace {
 
         /* ----------- V2 format (3-byte IONums) */
         static constexpr size_t addUndoItemSerSize_V2 = TXO::maxSize() + HashLen + CompactTXO::maxSize();
-        static constexpr size_t delUndoItemMinSerSize_V2 = TXO::maxSize() + TXOInfo::minSerSize();
+        static constexpr size_t delUndoItemSerSize_V2 = TXO::maxSize() + TXOInfo::minSerSize();
 
         /// computes the total size given the ser size of the blkInfo struct. Requires that nScriptHashes, nAddUndos, and nDelUndos be already filled-in.
-        size_t computeMinimumSize_V2() const {
+        size_t computeTotalSize_V2() const {
             const auto shSize = nScriptHashes * HashLen;
             const auto addsSize = nAddUndos * addUndoItemSerSize_V2;
-            const auto delsMinSize = nDelUndos * delUndoItemMinSerSize_V2;
-            return sizeof(*this) + sizeof(UndoInfo::height) + HashLen + sizeof(BlkInfo) + shSize + addsSize + delsMinSize;
+            const auto delsSize = nDelUndos * delUndoItemSerSize_V2;
+            return sizeof(*this) + sizeof(UndoInfo::height) + HashLen + sizeof(BlkInfo) + shSize + addsSize + delsSize;
         }
-        bool isLenMinimallySane_V2() const { return size_t(len) >= computeMinimumSize_V2(); }
+        bool isLenSane_V2() const { return size_t(len) == computeTotalSize_V2(); }
+
+        /* ----------- V3 format (same as V3 but has dynamically-sized TXOInfo objects >= 50 bytes) */
+        /// computes the minimum size given the ser size of the blkInfo struct. Requires that nScriptHashes, nAddUndos, and nDelUndos be already filled-in.
+        size_t computeMinimumSize_V3() const { return computeTotalSize_V2(); }
+        bool isLenMinimallySane_V3() const { return size_t(len) >= computeMinimumSize_V3(); }
     };
 
-    static_assert(std::has_unique_object_representations_v<UndoInfoSerHeader>, "This type is serialized as bytes in UndoInfo");
+    static_assert(std::has_unique_object_representations_v<UndoInfoSerHeader>, "This type is serialized as bytes to db");
 
     // Deserialize a header from bytes -- no checks are done other than length check.
     template <> UndoInfoSerHeader Deserialize(const QByteArray &ba, bool *ok) {
@@ -4113,14 +4196,14 @@ namespace {
         return ret;
     }
 
-    // UndoInfo -- serialize to V2 format (fixed 3-byte IONums)
+    // UndoInfo -- serialize to V3 format (fixed 3-byte IONums, dynamically-sized TXOInfo objects)
     template <> QByteArray Serialize(const UndoInfo &u) {
         UndoInfoSerHeader hdr;
         // fill these in now so that hdr.computeTotalSize works
         hdr.nScriptHashes = uint32_t(u.scriptHashes.size());
         hdr.nAddUndos = uint32_t(u.addUndos.size());
         hdr.nDelUndos = uint32_t(u.delUndos.size());
-        hdr.len = uint32_t(hdr.computeMinimumSize_V2());
+        hdr.len = uint32_t(hdr.computeMinimumSize_V3());
         const size_t offset_of_len = offsetof(UndoInfoSerHeader, len);
         QByteArray ret;
         ret.reserve(int(hdr.len));
@@ -4158,11 +4241,19 @@ namespace {
         for (const auto & [txo, txoInfo] : u.delUndos) {
             ret.append(txo.toBytes(true));
             if (UNLIKELY(!chkHashLen(txoInfo.hashX))) return ret;
-            ret.append(Serialize(txoInfo));
+            const QByteArray serinfo = Serialize(txoInfo);
+            ret.append(VarInt(uint32_t(serinfo.size())).byteArray(false)); // append size as VarInt (our own internal compact int)
+            ret.append(serinfo);
         }
-        assert(ret.length() >= int(hdr.len));
-        hdr.len = ret.length(); // update length since serializing potential token data for each TXOInfo has variable size
+        if (UNLIKELY(ret.length() < QByteArray::size_type(hdr.len))) {
+            Warning() << "unexpected length when serializing an UndoInfo object: " << ret.length() << ". FIXME!";
+            ret.clear();
+            return ret;
+        }
+        // 8. update length since serializing potential token data for each TXOInfo has variable size
+        hdr.len = uint32_t(ret.length());
         std::memcpy(ret.data() + offset_of_len, &hdr.len, sizeof(hdr.len));
+
         return ret;
     }
 
@@ -4184,22 +4275,27 @@ namespace {
         // 1. .header
         const UndoInfoSerHeader hdr = Deserialize<UndoInfoSerHeader>(ba, &myok);;
         if (!chkAssertion(myok && int(hdr.len) == ba.size() && hdr.magic == hdr.defMagic
-                          && ( (hdr.ver == hdr.defVer && hdr.isLenMinimallySane_V2())
+                          && ( (hdr.ver == hdr.v3Ver && hdr.isLenMinimallySane_V3())
+                               || (hdr.ver == hdr.v2Ver && hdr.isLenSane_V2())
                                || (hdr.ver == hdr.v1Ver && hdr.isLenSane_V1()) ),
                           "Header sanity check fail"))
             return ret;
+        ret.deserVersion = hdr.ver;
 
         // for v1 we deserialize 2-byte fixed-size IONums, for v2 3-byte fixed-size IONums
         const bool isV1 = hdr.ver == hdr.v1Ver;
+        // for v2 we assume fixed-size TXOInfo objects (this was before token data existed), so we deserialize them
+        // as a flat array without any VarInt info as to the size of each
+        const bool isV2 = hdr.ver == hdr.v2Ver;
 
         // print to debug if encountering V1 vs V2
-        DebugM("Deserializing ", isV1 ? "V1" : "V2", " undo info of length ", hdr.len);
+        DebugM("Deserializing ", isV1 ? "V1" : (isV2 ? "V2" : "V3"), " undo info of length ", hdr.len);
 
         const size_t TXOSerSize = isV1 ? TXO::minSize() : TXO::maxSize();
         const size_t CompactTXOSerSize = isV1 ? CompactTXO::minSize() : CompactTXO::maxSize();
         //
         // deserialize V1 data -> fixed 2-byte IONums
-        // deserialize V2 data -> fixed 3-byte IONums
+        // deserialize V2 or V3 data -> fixed 3-byte IONums
         //
         const char *cur = ba.constData() + sizeof(hdr), *const end = ba.constData() + ba.length();
         // 2. .height
@@ -4239,20 +4335,37 @@ namespace {
             if (!chkAssertion(myok)) return ret;
             ret.addUndos.emplace_back(std::move(txo), std::move(hashX), std::move(ctxo));
         }
-        // 7. .delUndos, 84 (v1) or 85 (v2) bytes each * nDelUndos
+        // 7. .delUndos, 84 (v1) or 85 (v2) bytes each * nDelUndos, for v3 the size is dynamic but always >= 85
         ret.delUndos.reserve(hdr.nDelUndos);
         for (unsigned i = 0; i < hdr.nDelUndos; ++i) {
             if (!chkAssertion(cur+TXOSerSize <= end)) return ret;
             TXO txo = Deserialize<TXO>(ShallowTmp(cur, TXOSerSize), &myok);
             cur += TXOSerSize;
             if (!chkAssertion(myok && cur + TXOInfo::minSerSize() <= end)) return ret;
-            int nbytes_read = 0;
-            TXOInfo info = DeserializeTXOInfo(ShallowTmp(cur, end - cur), &myok, &nbytes_read);
-            cur += nbytes_read;
-            if (!chkAssertion(myok)) return ret;
+            int txoinfo_size{};
+            if (isV1 || isV2) {
+                txoinfo_size = int(TXOInfo::minSerSize());
+            } else {
+                // V3 or above: read the byte size as a VarInt.
+                Span sp{cur, size_t(end - cur)};
+                try {
+                    const VarInt vi = VarInt::deserialize(sp); // this may throw
+                    cur = sp.data(); // span was updated to point past the varint
+                    txoinfo_size = int(vi.value<uint32_t>()); // this may throw
+                } catch (const std::exception &e) {
+                    chkAssertion(false, e.what());
+                    return ret;
+                }
+            }
+            if (!chkAssertion(txoinfo_size >= int(TXOInfo::minSerSize()) && cur + txoinfo_size <= end,
+                              "deser of VarInt size for a TXOInfo returned an error"))
+                return ret;
+            TXOInfo info = Deserialize<TXOInfo>(ShallowTmp(cur, txoinfo_size), &myok);
+            if (!chkAssertion(myok, "deser fail on TXOInfo object")) return ret;
+            cur += txoinfo_size;
             ret.delUndos.emplace_back(std::move(txo), std::move(info));
         }
-        chkAssertion(cur == end, "cur != end");
+        if (!chkAssertion(cur == end, "cur != end")) return ret;
         setOk(true);
         return ret;
     }

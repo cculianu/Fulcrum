@@ -317,6 +317,20 @@ public:
     /// padding.
     size_t dumpAllScriptHashes(QIODevice *outDev, unsigned indent=0, unsigned indentLevel=0, const DumpProgressFunc & = {}, size_t progInterval = 100000) const;
 
+    struct UTXOSetStats {
+        BlockHeight block_height;
+        BlockHash block_hash;
+        size_t utxo_db_ct{}, shunspent_db_ct{};
+        size_t utxo_db_size_bytes{}, shunspent_db_size_bytes{};
+        QByteArray utxo_db_shasum, shunspent_db_shasum; // sha256d sum of all key/value pairs in both dbs
+    };
+    /// Thread-safe. Call this from any thread, but ideally call it from a threadPool worker thread, since it may take
+    /// a while. Will iterate over the entire utxoset db and scripthash_unspent db and return some stats. Used by
+    /// the /debug HTTP endpoint.
+    UTXOSetStats calcUTXOSetStats(const DumpProgressFunc & = {}, size_t progInterval = 100000) const;
+
+    // --- Initial synch support ---
+
     /// Leverages RAII to have the Storage class auto-notified when initial sync has started & ended.
     class InitialSyncRAII {
         QPointer<Storage> storage;

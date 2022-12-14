@@ -210,7 +210,7 @@ namespace BTC
         return Coin::Unknown;
     }
 
-    bitcoin::token::OutputDataPtr DeserializeTokenDataWithPrefix(const QByteArray &ba, int pos, int *pos_out) {
+    bitcoin::token::OutputDataPtr DeserializeTokenDataWithPrefix(const QByteArray &ba, int pos) {
         bitcoin::token::OutputDataPtr ret;
         if (ba.size() - pos > 0) {
             // attempt to deserialize token data
@@ -221,7 +221,7 @@ namespace BTC
             ret.emplace();
             BTC::Deserialize<bitcoin::token::OutputData>(*ret, ba, pos , false, false,
                                                          true /* cashTokens */,
-                                                         pos_out == nullptr /* noJunkAtEnd */, pos_out);
+                                                         true /* noJunkAtEnd */);
         }
         return ret;
     }
