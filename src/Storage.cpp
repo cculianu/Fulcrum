@@ -3609,14 +3609,14 @@ auto Storage::listUnspent(const HashX & hashX, const TokenFilterOption tokenFilt
     if (hashX.length() != HashLen)
         return ret;
     try {
-        auto ShouldFilter = [tokenFilter](const TXOInfo &info) {
+        auto ShouldFilter = [tokenFilter](const bitcoin::token::OutputDataPtr & p) {
             switch (tokenFilter) {
             case TokenFilterOption::ExcludeTokens:
-                return bool(info.tokenDataPtr);
+                return bool(p);
             case TokenFilterOption::IncludeTokens:
                 return false;
             case TokenFilterOption::OnlyTokens:
-                return !info.tokenDataPtr;
+                return !p;
             }
             // not normally reached unless there's a programming error of some sort
             throw InternalError(QString("Invalid TokenFilterOption encountered: %1. This shouldn't happen! FIXME!")
@@ -3654,20 +3654,19 @@ auto Storage::listUnspent(const HashX & hashX, const TokenFilterOption tokenFilt
                                 if (decltype(tx->txos.cbegin()) it3;
                                         LIKELY( ionum < tx->txos.size() && (it3 = tx->txos.cbegin() + ionum)->isValid() ))
                                 {
-                                    ++mempoolHistoryCount;
-                                    if (!ShouldFilter(*it3)) {
-                                        ret.push_back(UnspentItem{
-                                            { tx->hash, 0 /* always put 0 for height here */, tx->fee }, // base HistoryItem
-                                            ionum, // .tx_pos
-                                            it3->amount,  // .value
-                                            TxNum(1) + veryHighTxNum + TxNum(tx->hasUnconfirmedParentTx ? 1 : 0), // .txNum (this is fudged for sorting at the end properly)
-                                            it3->tokenDataPtr, // .token_data
-                                        });
-                                    }
-                                    if (UNLIKELY(mempoolHistoryCount > maxHistory)) {
-                                        throw HistoryTooLarge(QString("Unspent history too large for %1, exceeds MaxHistory of %2")
+                                    if (UNLIKELY(++mempoolHistoryCount > maxHistory)) {
+                                        throw HistoryTooLarge(QString("Unspent uxto list too large for %1, exceeds MaxHistory of %2")
                                                               .arg(QString(hashX.toHex())).arg(maxHistory));
                                     }
+                                    if (ShouldFilter(it3->tokenDataPtr))
+                                        continue;
+                                    ret.push_back(UnspentItem{
+                                        { tx->hash, 0 /* always put 0 for height here */, tx->fee }, // base HistoryItem
+                                        ionum, // .tx_pos
+                                        it3->amount,  // .value
+                                        TxNum(1) + veryHighTxNum + TxNum(tx->hasUnconfirmedParentTx ? 1 : 0), // .txNum (this is fudged for sorting at the end properly)
+                                        it3->tokenDataPtr, // .token_data
+                                    });
                                 } else {
                                     // this should never happen!
                                     Warning() << "Cannot find txo " << ionum << " for sh " << hashX.toHex() << " in tx " << tx->hash.toHex();
@@ -3688,22 +3687,37 @@ auto Storage::listUnspent(const HashX & hashX, const TokenFilterOption tokenFilt
                 // Search table for all keys that start with hashx's bytes. Note: the loop end-condition is strange.
                 // See: https://github.com/facebook/rocksdb/wiki/Prefix-Seek-API-Changes#transition-to-the-new-usage
                 rocksdb::Slice key;
-                std::vector<CompactTXO> ctxoVec;
+                size_t confirmedCount = 0;
+                using CTXOVec = std::vector<std::pair<CompactTXO, SHUnspentValue>>;
+                CTXOVec ctxoVec;
                 constexpr size_t reserveBytes = 256u;
-                static_assert(sizeof(CompactTXO) < reserveBytes);
-                ctxoVec.reserve(reserveBytes / sizeof(CompactTXO)); // rough guess -- pre-allocate ~256 bytes
-                size_t ctxoListSize = 0;
+                static_assert(sizeof(CTXOVec::value_type) < reserveBytes);
+                ctxoVec.reserve(reserveBytes / sizeof(CTXOVec::value_type)); // rough guess -- pre-allocate ~256 bytes
                 // we do it this way as two separate loops in order to avoid the expensive heightForTxNum lookups below in
                 // the case where the history is huge.
                 for (iter->Seek(prefix); iter->Valid() && (key = iter->key()).starts_with(prefix); iter->Next()) {
-                    ctxoVec.push_back( extractCompactTXOFromShunspentKey(key) /* may throw if size is bad, etc */ );
-                    if (UNLIKELY(++ctxoListSize + mempoolHistoryCount > maxHistory)) {
-                        throw HistoryTooLarge(QString("Unspent history too large for %1, exceeds MaxHistory of %2")
+                    if (UNLIKELY(++confirmedCount + mempoolHistoryCount > maxHistory)) {
+                        throw HistoryTooLarge(QString("Unspent utxo list too large for %1, exceeds MaxHistory of %2")
                                               .arg(QString(hashX.toHex())).arg(maxHistory));
                     }
+                    bool ok;
+                    auto shval = Deserialize<SHUnspentValue>(FromSlice(iter->value()), &ok);
+                    if (UNLIKELY(!ok || !shval.valid)) {
+                        auto ctxo = extractCompactTXOFromShunspentKey(key); /* may throw if size is bad, etc */
+                        throw InternalError(QString("Bad SHUnspentValue in db for ctxo %1, script_hash: %2")
+                                            .arg(ctxo.toString(), QString(hashX.toHex())));
+                    }
+                    if (UNLIKELY(!bitcoin::MoneyRange(shval.amount))) {
+                        auto ctxo = extractCompactTXOFromShunspentKey(key); /* may throw if size is bad, etc */
+                        throw InternalError(QString("Out-of-range amount in db for ctxo %1, script_hash %2: %3")
+                                            .arg(ctxo.toString(), QString(hashX.toHex())).arg(shval.amount / shval.amount.satoshi()));
+                    }
+                    if (ShouldFilter(shval.tokenDataPtr))
+                        continue;
+                    auto ctxo = extractCompactTXOFromShunspentKey(key); /* may throw if size is bad, etc */
+                    ctxoVec.emplace_back(std::move(ctxo), std::move(shval));
                 }
-                for (const auto & ctxo : ctxoVec) {
-                    static const QString err("Error retrieving the utxo for an unspent item");
+                for (auto & [ctxo, shval] : ctxoVec) {
                     const auto hash = hashForTxNum(ctxo.txNum()).value(); // may throw, but that indicates some database inconsistency. we catch below
                     const auto height = heightForTxNum(ctxo.txNum()).value(); // may throw, same deal
                     const TXO txo{ hash, ctxo.N() };
@@ -3711,16 +3725,13 @@ auto Storage::listUnspent(const HashX & hashX, const TokenFilterOption tokenFilt
                         // Skip items that are spent in mempool. This fixes a bug in Fulcrum 1.0.2 or earlier where the
                         // confirmed spends in the mempool were still appearing in the listunspent utxos.
                         continue;
-                    auto info = GenericDBGetFailIfMissing<TXOInfo>(p->db.utxoset.get(), txo, err, false, p->db.defReadOpts); // may throw -- indicates db inconsistency
-                    if (!ShouldFilter(info)) {
-                        ret.push_back(UnspentItem{
-                            { hash, int(height), {} }, // base HistoryItem
-                            txo.outN,  // .tx_pos
-                            info.amount, // .value
-                            info.txNum, // .txNum
-                            std::move(info.tokenDataPtr), // .token_data
-                        });
-                    }
+                    ret.push_back(UnspentItem{
+                        { hash, int(height), {} }, // base HistoryItem
+                        txo.outN, // .tx_pos
+                        shval.amount, // .value
+                        ctxo.txNum(), // .txNum
+                        std::move(shval.tokenDataPtr), // .token_data
+                    });
                 }
             } // end confirmed/db search
         } // release blocks lock
@@ -3841,28 +3852,18 @@ auto Storage::genesisHash() const -> HeaderHash
 
 // HistoryItem & UnspentItem -- operator< and operator== -- for sort.
 bool Storage::HistoryItem::operator<(const HistoryItem &o) const noexcept {
-    return height == o.height ? hash < o.hash : height < o.height;
+    return std::tie(height, hash) < std::tie(o.height, o.hash);
 }
 bool Storage::HistoryItem::operator==(const HistoryItem &o) const noexcept {
-    return height == o.height && hash == o.hash;
+    return std::tie(height, hash) == std::tie(o.height, o.hash);
 }
 bool Storage::UnspentItem::operator<(const UnspentItem &o) const noexcept {
-    if (txNum == o.txNum) { // order by txNum
-        if (tx_pos == o.tx_pos) { // then by tx_pos
-            // next by tx_hash, height (this branch shouldn't normally be reached with real blockchain data since
-            // txNum:tx_pos defines an UnspentItem completely...
-            if (HistoryItem::operator<(o))
-                return true;
-            else if (HistoryItem::operator==(o))
-                return value < o.value;
-            return false;
-        }
-        return tx_pos < o.tx_pos;
-    }
-    return txNum < o.txNum;
+    return    std::tie(  txNum,   tx_pos,   value,   tokenDataPtr,   height,   hash)
+            < std::tie(o.txNum, o.tx_pos, o.value, o.tokenDataPtr, o.height, o.hash);
 }
 bool Storage::UnspentItem::operator==(const UnspentItem &o) const noexcept {
-    return txNum == o.txNum && tx_pos == o.tx_pos && value == o.value && HistoryItem::operator==(o);
+    return    std::tie(  txNum,   tx_pos,   value,   tokenDataPtr,   height,   hash)
+           == std::tie(o.txNum, o.tx_pos, o.value, o.tokenDataPtr, o.height, o.hash);
 }
 
 auto Storage::mempool() const -> std::pair<const Mempool &, SharedLockGuard>
