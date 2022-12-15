@@ -291,8 +291,8 @@ namespace {
                 if (!ok) {
                     throw DatabaseSerializationError(
                                 QString("%1: Key was retrieved ok, but data could not be deserialized as a scalar '%2'")
-                                .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : QString("Error deserializing a scalar from db %1").arg(DBName(db)))
-                                .arg(typeid (RetType).name()));
+                                .arg((!errorMsgPrefix.isEmpty() ? errorMsgPrefix : QString("Error deserializing a scalar from db %1").arg(DBName(db))),
+                                     QString(typeid (RetType).name())));
                 }
             } else {
                 if (UNLIKELY(acceptExtraBytesAtEndOfData))
@@ -363,8 +363,8 @@ namespace {
         auto st = db->Write(opts, &batch);
         if (!st.ok())
             throw DatabaseError(QString("%1: %2")
-                                .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : QString("Error writing batch to db %1").arg(DBName(db)))
-                                .arg(StatusString(st)));
+                                .arg((!errorMsgPrefix.isEmpty() ? errorMsgPrefix : QString("Error writing batch to db %1").arg(DBName(db))),
+                                     StatusString(st)));
     }
     /// Throws on all errors. Otherwise deletes a key from db. It is not an error to delete a non-existing key.
     template <bool safeScalar = false, typename KeyType>
@@ -847,7 +847,7 @@ namespace {
                     const auto key = QByteArray::fromRawData(keyStr.data(), keyStr.size());
                     if (key != expect)
                         throw DatabaseError(QString("record %1 does not match key. expected: %2, got: %3")
-                                            .arg(txNum).arg(QString(expect.toHex())).arg(QString(key.toHex())));
+                                            .arg(txNum).arg(QString(expect.toHex()), QString(key.toHex())));
                     ++verified;
                 }
                 batch.resize(0);
@@ -924,7 +924,6 @@ namespace {
             Log() << "CheckDB: Verifying txhash index using the thorough reverse-check (this may take a long time) ...";
             const Tic t0;
             size_t i = 0, verified = 0;
-            QString err;
             const auto nrec = rf->numRecords();
             constexpr size_t batchSize = 50'000;
             App *ourApp = app();
@@ -936,7 +935,7 @@ namespace {
                 recs.emplace_back(HashLen, char(0)); // add a dummy at the end
                 Util::getRandomBytes(recs.back().data(), HashLen); // put a random hash at the end
                 auto results = findMany(recs);
-                if (results.size() != recs.size()) throw InternalError("size mismatch");
+                if (results.size() != recs.size()) throw InternalError("size mismatch: " + err);
                 for (size_t j = 0; j < results.size()-1; ++j) {
                     if (!results[j]) throw DatabaseError("Expected a value not nullopt");
                     if (*results[j] != i) {
@@ -2268,7 +2267,6 @@ void Storage::loadCheckHeadersInDB()
             // set genesis hash
             p->genesisHash = BTC::HashRev(hVec.front());
 
-            const QString errMsg("Error retrieving header from db");
             err.clear();
             // read db
             for (uint32_t i = 0; i < num; ++i) {
@@ -2837,8 +2835,7 @@ std::optional<TXOInfo> Storage::utxoGet(const TXO &txo)
                     } else {
                         // should never happen
                         throw InternalError(QString("scripthash %1 has inconsistent mempool state for tx %2! FIXME!")
-                                            .arg(QString(hxTxIt->first.toHex()))
-                                            .arg(QString(tx->hash.toHex())));
+                                            .arg(QString(hxTxIt->first.toHex()), QString(tx->hash.toHex())));
                     }
                 }
             }
@@ -3774,7 +3771,7 @@ auto Storage::getBalance(const HashX &hashX, TokenFilterOption tokenFilter) cons
                 bool ok;
                 const auto & [valid, amount, tokenDataPtr] = Deserialize<SHUnspentValue>(FromSlice(iter->value()), &ok);
                 if (UNLIKELY(!ok || !valid))
-                    throw InternalError(QString("Bad SHUnspentValue in db for ctxo %1 (%2)").arg(ctxo.toString()).arg(QString(hashX.toHex())));
+                    throw InternalError(QString("Bad SHUnspentValue in db for ctxo %1 (%2)").arg(ctxo.toString(), QString(hashX.toHex())));
                 if (UNLIKELY(!bitcoin::MoneyRange(amount)))
                     throw InternalError(QString("Out-of-range amount in db for ctxo %1: %2").arg(ctxo.toString()).arg(amount / amount.satoshi()));
                 if ( ! ShouldFilter(tokenDataPtr)) {
@@ -3797,7 +3794,7 @@ auto Storage::getBalance(const HashX &hashX, TokenFilterOption tokenFilter) cons
                     auto it2 = tx->hashXs.find(hashX);
                     if (UNLIKELY(it2 == tx->hashXs.end())) {
                         throw InternalError(QString("scripthash %1 lists tx %2, which then lacks the IOInfo for said hashX! FIXME!")
-                                            .arg(QString(hashX.toHex())).arg(QString(tx->hash.toHex())));
+                                            .arg(QString(hashX.toHex()), QString(tx->hash.toHex())));
                     }
                     auto & info = it2->second;
                     IncrementCtrAndThrowIfExceedsMaxHistory(info.confirmedSpends.size() + info.utxo.size()); // throw if >maxHistory
@@ -3810,7 +3807,7 @@ auto Storage::getBalance(const HashX &hashX, TokenFilterOption tokenFilter) cons
                                                                        || !(it3 = tx->txos.cbegin() + ionum)->isValid()) )
                         {
                             throw InternalError(QString("scripthash %1 lists tx %2, which then lacks a valid TXO IONum %3 for said hashX! FIXME!")
-                                                .arg(QString(hashX.toHex())).arg(QString(tx->hash.toHex())).arg(ionum));
+                                                .arg(QString(hashX.toHex()), QString(tx->hash.toHex())).arg(ionum));
                         } else if ( ! ShouldFilter(it3->tokenDataPtr)) {
                             utxos += it3->amount;
                         }
