@@ -79,7 +79,11 @@ HistoryTooLarge::~HistoryTooLarge() {} // weak vtable warning suppression
 namespace {
     /// Encapsulates the 'meta' db table
     struct Meta {
-        uint32_t magic = 0xf33db33f, version = 0x1;
+        static constexpr uint32_t kCurrentVersion = 0x2u;
+        static constexpr uint32_t kMinSupportedVersion = 0x1u;
+        static constexpr uint32_t kMinBCHUpgrade9Version = 0x2u;
+
+        uint32_t magic = 0xf33db33fu, version = kCurrentVersion;
         QString chain; ///< "test", "main", etc
         uint16_t platformBits = sizeof(long)*8U; ///< we save the platform wordsize to the db
 
@@ -90,6 +94,8 @@ namespace {
         /// On uninitialized, newly-created DB's this is present but empty "". The fact that it is empty allows us
         /// to auto-detect the Coin in question in Controller.
         QString coin = QString();
+
+        bool isVersionSupported() const { return version >= kMinSupportedVersion && version <= kCurrentVersion; }
     };
 
     // some database keys we use -- todo: if this grows large, move it elsewhere
@@ -1852,13 +1858,14 @@ void Storage::startup()
 
     // load/check meta
     {
-        static const QString errMsg{"Incompatible database format -- delete the datadir and resynch. RocksDB error"};
-        if (const auto opt = GenericDBGet<Meta>(p->db.meta.get(), kMeta, true, errMsg);
+        const QString errMsg1{"Incompatible database format -- delete the datadir and resynch."};
+        const QString errMsg2{errMsg1 + " RocksDB error"};
+        if (const auto opt = GenericDBGet<Meta>(p->db.meta.get(), kMeta, true, errMsg2);
                 opt.has_value())
         {
             const Meta &m_db = *opt;
-            if (m_db.magic != p->meta.magic || m_db.version != p->meta.version || m_db.platformBits != p->meta.platformBits) {
-                throw DatabaseFormatError(errMsg);
+            if (m_db.magic != p->meta.magic || !m_db.isVersionSupported() || m_db.platformBits != p->meta.platformBits) {
+                throw DatabaseFormatError(errMsg1);
             }
             p->meta = m_db;
             Debug () << "Read meta from db ok";
@@ -1896,7 +1903,49 @@ void Storage::startup()
     // start up the co-task we use in addBlock and undoLatestBlock
     p->blocksWorker = std::make_unique<CoTask>("Storage Worker");
 
+    // Detect old DB version and see if upgrade is permitted, and maybe do a DB upgrade...
+    checkUpgradeDBVersion();
+
     start(); // starts our thread
+}
+
+void Storage::checkUpgradeDBVersion()
+{
+    // Original Fulcrum db version before 1.9.0 was v1, and now we are on v2 which has CashToken data for BCH.
+    // Going from v1 on BTC/LTC -> v2 is ok without caveats. For BCH, we must warn the user if their db is v1
+    // and it's after the upgrade9 activation time, because then the DB will be missing token data and may have
+    // token-containing UTXOs indexed to the wrong script hash.
+    Log() << "DB version: v" << p->meta.version;
+    if (p->meta.version < Meta::kCurrentVersion) {
+        if (p->meta.coin == "BCH" && p->meta.version < Meta::kMinBCHUpgrade9Version) {
+            // Get the latest header to detect if we are after the activation time
+            const Header hdr = headerVerifier().first.lastHeaderProcessed().second;
+            if (hdr.size() == BTC::GetBlockHeaderSize()) {
+                const auto bhdr = [&hdr] {
+                    try {
+                        return BTC::Deserialize<bitcoin::CBlockHeader>(hdr, 0, false, false, true, true);
+                    } catch (const std::ios_base::failure &e) {
+                        throw InternalError(QString("checkUpgradeDBVersion: Failed to deserialize the latest block"
+                                                    " header: %1").arg(e.what()));
+                    }
+                }();
+                const int64_t upgrade9ActivationTime = p->meta.chain == "chip"
+                                                       ? 1668513600  // ChipNet: November 15, 2022 12:00:00 UTC
+                                                       : 1684152000; // MainNet, etc: May 15, 2023 12:00:00 UTC
+                if (bhdr.GetBlockTime() >= upgrade9ActivationTime) {
+                    // Uh-oh. They have a synched db that is v1, but the upgrade has already activated. Complain
+                    // and abort out, insisting that the user re-synch the DB.
+                    throw DatabaseError("This datadir was synched using an older version of " APPNAME " which lacked"
+                                        " full CashToken support, however Upgrade9 has already activated for this"
+                                        " chain.\n\nPlease delete the datadir and resynch to bitcoind.\n");
+                }
+            }
+        }
+
+        Log() << "DB version is older but compatible, updating version to v" << Meta::kCurrentVersion << " ...";
+        p->meta.version = Meta::kCurrentVersion;
+        saveMeta_impl();
+    }
 }
 
 void Storage::compactAllDBs()
@@ -2110,6 +2159,7 @@ void Storage::setCoin(const QString &coin) {
 TxNum Storage::getTxNum() const { return p->txNumNext.load(); }
 
 auto Storage::latestTip(Header *hdrOut) const -> std::pair<int, HeaderHash> {
+    static_assert(std::is_same_v<Header, HeaderHash> && std::is_same_v<Header, QByteArray>); // both must be QByteArray
     std::pair<int, HeaderHash> ret = headerVerifier().first.lastHeaderProcessed(); // ok; lock stays locked until statement end.
     if (hdrOut) *hdrOut = ret.second; // this is not a hash but the actual block header
     if (ret.second.isEmpty() || ret.first < 0) {
