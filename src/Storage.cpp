@@ -3552,12 +3552,24 @@ std::vector<TxHash> Storage::txHashesForBlockInBitcoindMemoryOrder(BlockHeight h
     return ret;
 }
 
+/// Returns a lambda that can be called to increment the counter. If the counter exceeds maxHistory, lambda will throw.
+/// Used below in getHistory(), listUnspent(), getBalance()
+static auto GetMaxHistoryCtrFunc(const QString &name, const HashX &hashX, size_t maxHistory)
+{
+    return [name, hashX, maxHistory, ctr = size_t{0u}](size_t incr = 1u) mutable {
+        if (UNLIKELY((ctr += incr) > maxHistory)) {
+            throw HistoryTooLarge(QString("%1 for scripthash %2 exceeds MaxHistory %3 with %4 items!")
+                                  .arg(name, QString(hashX.toHex())).arg(maxHistory).arg(ctr));
+        }
+    };
+}
+
 auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf) const -> History
 {
     History ret;
-    const size_t maxHistory = size_t(options->maxHistory);
     if (hashX.length() != HashLen)
         return ret;
+    auto IncrementCtrAndThrowIfExceedsMaxHistory = GetMaxHistoryCtrFunc("History", hashX, options->maxHistory);
     try {
         SharedLockGuard g(p->blocksLock);  // makes sure history doesn't mutate from underneath our feet
         if (conf) {
@@ -3565,10 +3577,7 @@ auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf) const -> H
             auto nums_opt = GenericDBGet<TxNumVec>(p->db.shist.get(), hashX, true, err, false, p->db.defReadOpts);
             if (nums_opt.has_value()) {
                 auto & nums = *nums_opt;
-                if (UNLIKELY(nums.size() > maxHistory)) {
-                    throw HistoryTooLarge(QString("History for scripthash %1 exceeds MaxHistory %2 with %3 items!")
-                                          .arg(QString(hashX.toHex())).arg(maxHistory).arg(nums.size()));
-                }
+                IncrementCtrAndThrowIfExceedsMaxHistory(nums.size());
                 ret.reserve(nums.size());
                 // TODO: The below could use some optimization.  A batched version of both hashForTxNum and
                 // heightForTxNum are low-hanging fruit for optimization.  Each call to the below takes a shared lock
@@ -3587,12 +3596,8 @@ auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf) const -> H
             auto [mempool, lock] = this->mempool();
             if (auto it = mempool.hashXTxs.find(hashX); it != mempool.hashXTxs.end()) {
                 const auto & txvec = it->second;
-                const size_t total = ret.size() + txvec.size();
-                if (UNLIKELY(total > maxHistory)) {
-                    throw HistoryTooLarge(QString("History for scripthash %1 exceeds MaxHistory %2 with %3 items!")
-                                          .arg(QString(hashX.toHex())).arg(maxHistory).arg(total));
-                }
-                ret.reserve(total);
+                IncrementCtrAndThrowIfExceedsMaxHistory(txvec.size());
+                ret.reserve(ret.size() + txvec.size());
                 for (const auto & tx : txvec)
                     ret.emplace_back(HistoryItem{tx->hash, tx->hasUnconfirmedParentTx ? -1 : 0, tx->fee});
             }
@@ -3622,8 +3627,7 @@ auto Storage::listUnspent(const HashX & hashX, const TokenFilterOption tokenFilt
             throw InternalError(QString("Invalid TokenFilterOption encountered: %1. This shouldn't happen! FIXME!")
                                 .arg(int(tokenFilter)));
         };
-        const size_t maxHistory = size_t(options->maxHistory);
-        size_t mempoolHistoryCount = 0u;
+        auto IncrementCtrAndThrowIfExceedsMaxHistory = GetMaxHistoryCtrFunc("Unspent UTXOs", hashX, options->maxHistory);
         constexpr size_t iota = 10; // we initially reserve this many items in the returned array in order to prevent redundant allocations in the common case.
         std::unordered_set<TXO> mempoolConfirmedSpends;
         mempoolConfirmedSpends.reserve(iota);
@@ -3650,14 +3654,14 @@ auto Storage::listUnspent(const HashX & hashX, const TokenFilterOption tokenFilt
                             for (const auto & [txo, txoinfo] : ioinfo.confirmedSpends) {
                                 mempoolConfirmedSpends.insert(txo);
                             }
+
+                            // throw if we would iterate too much below
+                            IncrementCtrAndThrowIfExceedsMaxHistory(ioinfo.utxo.size());
+
                             for (const auto ionum : ioinfo.utxo) {
                                 if (decltype(tx->txos.cbegin()) it3;
                                         LIKELY( ionum < tx->txos.size() && (it3 = tx->txos.cbegin() + ionum)->isValid() ))
                                 {
-                                    if (UNLIKELY(++mempoolHistoryCount > maxHistory)) {
-                                        throw HistoryTooLarge(QString("Unspent uxto list too large for %1, exceeds MaxHistory of %2")
-                                                              .arg(QString(hashX.toHex())).arg(maxHistory));
-                                    }
                                     if (ShouldFilter(it3->tokenDataPtr))
                                         continue;
                                     ret.push_back(UnspentItem{
@@ -3687,7 +3691,6 @@ auto Storage::listUnspent(const HashX & hashX, const TokenFilterOption tokenFilt
                 // Search table for all keys that start with hashx's bytes. Note: the loop end-condition is strange.
                 // See: https://github.com/facebook/rocksdb/wiki/Prefix-Seek-API-Changes#transition-to-the-new-usage
                 rocksdb::Slice key;
-                size_t confirmedCount = 0;
                 using CTXOVec = std::vector<std::pair<CompactTXO, SHUnspentValue>>;
                 CTXOVec ctxoVec;
                 constexpr size_t reserveBytes = 256u;
@@ -3696,10 +3699,7 @@ auto Storage::listUnspent(const HashX & hashX, const TokenFilterOption tokenFilt
                 // we do it this way as two separate loops in order to avoid the expensive heightForTxNum lookups below in
                 // the case where the history is huge.
                 for (iter->Seek(prefix); iter->Valid() && (key = iter->key()).starts_with(prefix); iter->Next()) {
-                    if (UNLIKELY(++confirmedCount + mempoolHistoryCount > maxHistory)) {
-                        throw HistoryTooLarge(QString("Unspent utxo list too large for %1, exceeds MaxHistory of %2")
-                                              .arg(QString(hashX.toHex())).arg(maxHistory));
-                    }
+                    IncrementCtrAndThrowIfExceedsMaxHistory();
                     bool ok;
                     auto shval = Deserialize<SHUnspentValue>(FromSlice(iter->value()), &ok);
                     if (UNLIKELY(!ok || !shval.valid)) {
@@ -3752,6 +3752,7 @@ auto Storage::getBalance(const HashX &hashX) const -> std::pair<bitcoin::Amount,
     std::pair<bitcoin::Amount, bitcoin::Amount> ret;
     if (hashX.length() != HashLen)
         return ret;
+    auto IncrementCtrAndThrowIfExceedsMaxHistory = GetMaxHistoryCtrFunc("GetBalance UTXOs", hashX, options->maxHistory);
     try {
         // take shared lock (ensure history doesn't mutate from underneath our feet)
         SharedLockGuard g(p->blocksLock);
@@ -3764,6 +3765,7 @@ auto Storage::getBalance(const HashX &hashX) const -> std::pair<bitcoin::Amount,
             // See: https://github.com/facebook/rocksdb/wiki/Prefix-Seek-API-Changes#transition-to-the-new-usage
             rocksdb::Slice key;
             for (iter->Seek(prefix); iter->Valid() && (key = iter->key()).starts_with(prefix); iter->Next()) {
+                IncrementCtrAndThrowIfExceedsMaxHistory(); // throw if we are iterating too much
                 const CompactTXO ctxo = extractCompactTXOFromShunspentKey(key); // may throw if key has the wrong size, etc
                 bool ok;
                 const auto & [valid, amount, tokenDataPtr] = Deserialize<SHUnspentValue>(FromSlice(iter->value()), &ok);
@@ -3793,6 +3795,7 @@ auto Storage::getBalance(const HashX &hashX) const -> std::pair<bitcoin::Amount,
                                             .arg(QString(hashX.toHex())).arg(QString(tx->hash.toHex())));
                     }
                     auto & info = it2->second;
+                    IncrementCtrAndThrowIfExceedsMaxHistory(info.confirmedSpends.size() + info.utxo.size()); // throw if >maxHistory
                     for (const auto & [txo, txoinfo] : info.confirmedSpends)
                         spends += txoinfo.amount;
                     for (const auto ionum : info.utxo) {
