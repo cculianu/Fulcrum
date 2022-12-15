@@ -417,6 +417,8 @@ private:
     /// it will throw RPCError in all parse/failure cases and only ever returns a valid hash on success.
     HashX parseFirstHashParamCommon(const RPC::Message &m, const char *const errMsg = nullptr) const;
 
+    /// Helper used by blockchain.*.listunspent *.get_balance to parse optional 2nd arg
+    Storage::TokenFilterOption parseTokenFilterOptionCommon(const RPC::Message &m, size_t argPos) const;
 
     /// Basically a namespace for our rpc dispatch tables, etc
     struct StaticData {

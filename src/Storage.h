@@ -241,7 +241,7 @@ public:
     };
     using UnspentItems = std::vector<UnspentItem>;
 
-    enum class TokenFilterOption { IncludeTokens, FilterTokens, OnlyTokens };
+    enum class TokenFilterOption { IncludeTokens, ExcludeTokens, OnlyTokens };
 
     /// Thread-safe. Will return an empty vector if the confirmed unspent size exceeds MaxHistory items. It may also
     /// return a truncated vector if the overflow is as a result of confirmed+unconfirmed exceeding MaxHistory.

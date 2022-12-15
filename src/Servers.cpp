@@ -1358,7 +1358,7 @@ void Server::rpc_blockchain_relayfee(Client *c, const RPC::BatchId batchId, cons
     emit c->sendResult(batchId, m.id, bitcoindmgr->getBitcoinDInfo().relayFee);
 }
 
-// ---- The below two methods are used by both the blockchain.scripthash.* and blockchain.address.* sets of methods
+// ---- The below three methods are used by both the blockchain.scripthash.* and blockchain.address.* sets of methods
 //      below for boilerplate checking & parsing.
 HashX Server::parseFirstAddrParamToShCommon(const RPC::Message &m, QString *addrStrOut) const
 {
@@ -1390,6 +1390,23 @@ HashX Server::parseFirstHashParamCommon(const RPC::Message &m, const char *const
     if (sh.length() != HashLen)
         throw RPCError(!errMsg ? "Invalid scripthash" : errMsg);
     return sh;
+}
+Storage::TokenFilterOption Server::parseTokenFilterOptionCommon(const RPC::Message &m, size_t argPos) const
+{
+    const QVariantList l(m.paramsList());
+    const bool hasArg = size_t(l.size()) > argPos;
+    if (isNonBCH() && hasArg)
+        // unsupported on non-BCH
+        throw RPCError("The token filtering option is only available on BCH", RPC::ErrorCodes::Code_InvalidParams);
+    else if (!hasArg)
+        return Storage::TokenFilterOption::ExcludeTokens; // default: exclude tokens
+    const auto arg = l[argPos].toString().trimmed().toLower();
+    if (arg == QStringLiteral("exclude_tokens")) return Storage::TokenFilterOption::ExcludeTokens;
+    else if (arg == QStringLiteral("include_tokens")) return Storage::TokenFilterOption::IncludeTokens;
+    else if (arg == QStringLiteral("tokens_only")) return Storage::TokenFilterOption::OnlyTokens;
+    else
+        throw RPCError("Invalid token filtering option. Specify one of: \"exclude_tokens\", \"include_tokens\", \"tokens_only\"",
+                       RPC::ErrorCodes::Code_InvalidParams);
 }
 // ---
 void Server::rpc_blockchain_scripthash_get_balance(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
@@ -1476,12 +1493,14 @@ void Server::impl_get_mempool(Client *c, const RPC::BatchId batchId, const RPC::
 void Server::rpc_blockchain_scripthash_listunspent(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const auto sh = parseFirstHashParamCommon(m);
-    impl_listunspent(c, batchId, m, sh, /* TODO: read in from RPC params: */ Storage::TokenFilterOption::IncludeTokens);
+    const auto tf = parseTokenFilterOptionCommon(m, 1);
+    impl_listunspent(c, batchId, m, sh, tf);
 }
 void Server::rpc_blockchain_address_listunspent(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const auto sh = parseFirstAddrParamToShCommon(m);
-    impl_listunspent(c, batchId, m, sh, /* TODO: read in from RPC params: */ Storage::TokenFilterOption::IncludeTokens);
+    const auto tf = parseTokenFilterOptionCommon(m, 1);
+    impl_listunspent(c, batchId, m, sh, tf);
 }
 /* static */
 QVariantMap Server::unspentItemToVariantMap(const Storage::UnspentItem & item)
@@ -2070,7 +2089,7 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
     { {"blockchain.address.get_history",    true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_get_history) },
     { {"blockchain.address.get_mempool",    true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_get_mempool) },
     { {"blockchain.address.get_scripthash", true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_get_scripthash) },
-    { {"blockchain.address.listunspent",    true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_listunspent) },
+    { {"blockchain.address.listunspent",    true,               false,    PR{1,2},                    },          MP(rpc_blockchain_address_listunspent) },
     { {"blockchain.address.subscribe",      true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_subscribe) },
     { {"blockchain.address.unsubscribe",    true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_unsubscribe) },
 
@@ -2083,7 +2102,7 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
     { {"blockchain.scripthash.get_balance", true,               false,    PR{1,1},                    },          MP(rpc_blockchain_scripthash_get_balance) },
     { {"blockchain.scripthash.get_history", true,               false,    PR{1,1},                    },          MP(rpc_blockchain_scripthash_get_history) },
     { {"blockchain.scripthash.get_mempool", true,               false,    PR{1,1},                    },          MP(rpc_blockchain_scripthash_get_mempool) },
-    { {"blockchain.scripthash.listunspent", true,               false,    PR{1,1},                    },          MP(rpc_blockchain_scripthash_listunspent) },
+    { {"blockchain.scripthash.listunspent", true,               false,    PR{1,2},                    },          MP(rpc_blockchain_scripthash_listunspent) },
     { {"blockchain.scripthash.subscribe",   true,               false,    PR{1,1},                    },          MP(rpc_blockchain_scripthash_subscribe) },
     { {"blockchain.scripthash.unsubscribe", true,               false,    PR{1,1},                    },          MP(rpc_blockchain_scripthash_unsubscribe) },
 

@@ -3475,7 +3475,7 @@ std::optional<unsigned> Storage::heightForTxNum(TxNum n) const
 std::optional<unsigned> Storage::heightForTxNum_nolock(TxNum n) const
 {
     std::optional<unsigned> ret;
-    auto it = p->blkInfosByTxNum.upper_bound(n);  // O(logN) search; find the block *AFTER* n, then go backw on to find the block in range
+    auto it = p->blkInfosByTxNum.upper_bound(n);  // O(logN) search; find the block *AFTER* n, then go back one to find the block in range
     if (it != p->blkInfosByTxNum.begin()) {
         --it;
         const auto & bi = p->blkInfos[it->second];
@@ -3611,13 +3611,16 @@ auto Storage::listUnspent(const HashX & hashX, const TokenFilterOption tokenFilt
     try {
         auto ShouldFilter = [tokenFilter](const TXOInfo &info) {
             switch (tokenFilter) {
-            case TokenFilterOption::FilterTokens:
+            case TokenFilterOption::ExcludeTokens:
                 return bool(info.tokenDataPtr);
             case TokenFilterOption::IncludeTokens:
                 return false;
             case TokenFilterOption::OnlyTokens:
                 return !info.tokenDataPtr;
             }
+            // not normally reached unless there's a programming error of some sort
+            throw InternalError(QString("Invalid TokenFilterOption encountered: %1. This shouldn't happen! FIXME!")
+                                .arg(int(tokenFilter)));
         };
         const size_t maxHistory = size_t(options->maxHistory);
         size_t mempoolHistoryCount = 0u;
