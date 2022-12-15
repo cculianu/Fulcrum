@@ -26,8 +26,11 @@ namespace ServerMisc
 {
     inline constexpr auto HashFunction = "sha256";
 
-    /// Used in various places to rejects old clients or incompatible peers. Currently 1.4 and 1.4.4 respectively.
+    /// Used in various places to rejects old clients or incompatible peers. Currently 1.4 and 1.4.6 respectively.
     extern const Version MinProtocolVersion, MaxProtocolVersion;
+    /// The first version where we expect clients to be "token aware" and thus we return token_data to them by default
+    /// in e.g. listunspent and get_balance: 1.4.6
+    extern const Version MinTokenAwareProtocolVersion;
 
     extern const QString AppVersion,  ///< in string form suitable for sending in protocol or banner e.g. "1.0"
                          AppSubVersion; ///< e.g. "Fulcrum 1.0"

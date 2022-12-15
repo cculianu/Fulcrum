@@ -19,6 +19,7 @@
 #pragma once
 
 #include "BlockProcTypes.h"
+#include "BTC.h"
 #include "Mixins.h"
 #include "Mgr.h"
 #include "RPC.h"
@@ -116,6 +117,8 @@ private:
     const std::shared_ptr<const Options> options; ///< from SrvMgr that creates us.
 
     QByteArray _genesisHash;
+
+    BTC::Coin coin = BTC::Coin::Unknown;
 
     bool hasip4 = false, hasip6 = false;
 

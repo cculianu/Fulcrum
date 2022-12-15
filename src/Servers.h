@@ -324,7 +324,7 @@ public:
     /// which also needs a features dict when *it* calls add_peer on peer servers.
     /// NOTE: Be sure to only ever call this function from the same thread as the AbstractConnection (first arg) instance!
     static QVariantMap makeFeaturesDictForConnection(AbstractConnection *, const QByteArray &genesisHash,
-                                                     const Options & options, bool hasDSProofRPC);
+                                                     const Options & options, bool hasDSProofRPC, bool hasCashTokens);
 
     virtual QString prettyName() const override;
 
@@ -418,7 +418,7 @@ private:
     HashX parseFirstHashParamCommon(const RPC::Message &m, const char *const errMsg = nullptr) const;
 
     /// Helper used by blockchain.*.listunspent *.get_balance to parse optional 2nd arg
-    Storage::TokenFilterOption parseTokenFilterOptionCommon(const RPC::Message &m, size_t argPos) const;
+    Storage::TokenFilterOption parseTokenFilterOptionCommon(Client *c, const RPC::Message &m, size_t argPos) const;
 
     /// Basically a namespace for our rpc dispatch tables, etc
     struct StaticData {
@@ -632,6 +632,9 @@ public:
     double lastWarnedAboutSubsLimit = 0.; ///< used to throttle log messages when client hits subs limit
 
     static std::atomic_size_t numClients, numClientsMax, numClientsCtr; // number of connected clients: current, max lifetime, accumulated counter
+
+    /// Returns true iff the client is token aware (protocol version >= 1.4.6). Note that this only makese sense on BCH.
+    bool hasMinimumTokenAwareVersion() const;
 
 signals:
     /// Used by ServerBase via a direct connection.  The class d'tor emits this.  This is better for us than

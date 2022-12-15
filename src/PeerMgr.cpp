@@ -65,7 +65,7 @@ PeerMgr::~PeerMgr() { cleanup(); /* noop if already stopped */ DebugM(__func__);
 
 QVariantMap PeerMgr::makeFeaturesDict(PeerClient *c) const
 {
-    return Server::makeFeaturesDictForConnection(c, _genesisHash, *options, srvmgr->hasDSProofRPC());
+    return Server::makeFeaturesDictForConnection(c, _genesisHash, *options, srvmgr->hasDSProofRPC(), coin == BTC::Coin::BCH);
 }
 
 QString PeerMgr::publicHostNameForConnection(PeerClient *c) const
@@ -80,7 +80,11 @@ void PeerMgr::startup()
         throw InternalError("PeerMgr cannot be started until we have a valid genesis hash! FIXME!");
 
     const auto chain = storage->getChain(); // Note: assumption is that this is always non-empty if PeerMgr was started! (PeerMgr is never started until the db is synched so this is fine)
-    const auto lcaseCoin = storage->getCoin().trimmed().toLower();
+    const auto coinStr = storage->getCoin();
+    // setup this->coin flag -- note that assumption is that storage was aleady setup properly
+    if (chain.isEmpty() || (this->coin = BTC::coinFromName(coinStr)) == BTC::Coin::Unknown)
+        throw InternalError("PeerMgr cannot be constructed without a valid \"Coin\" and/or \"Chain\" in the database!");
+    const auto lcaseCoin = coinStr.trimmed().toLower();
     const auto pathPrefix = QString(":resources/%1/").arg(lcaseCoin);
     const QVector<BTC::Net> knownNets{{BTC::Net::TestNet, BTC::Net::TestNet4, BTC::Net::ScaleNet, BTC::Net::MainNet,
                                        BTC::Net::ChipNet}};

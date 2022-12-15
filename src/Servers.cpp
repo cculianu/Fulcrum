@@ -1049,7 +1049,7 @@ void Server::rpc_server_donation_address(Client *c, const RPC::BatchId batchId, 
     emit c->sendResult(batchId, m.id, transformDefaultDonationAddressToBTCOrBCHOrLTC(*options, isNonBCH(), isLTC()));
 }
 /* static */
-QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const QByteArray &genesisHash, const Options &opts, bool dsproof)
+QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const QByteArray &genesisHash, const Options &opts, bool dsproof, bool hasCashTokens)
 {
     QVariantMap r;
     if (!c) {
@@ -1064,6 +1064,8 @@ QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const Q
     r["protocol_max"] = ServerMisc::MaxProtocolVersion.toString();
     r["hash_function"] = ServerMisc::HashFunction;
     r["dsproof"] = dsproof;
+    if (hasCashTokens)
+        r["cashtokens"] = true;
 
     QVariantMap hmap, hmapTor;
     if (opts.publicTcp.has_value())
@@ -1109,7 +1111,7 @@ QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const Q
 }
 void Server::rpc_server_features(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
-    emit c->sendResult(batchId, m.id, makeFeaturesDictForConnection(c, storage->genesisHash(), *options, bitcoindmgr->hasDSProofRPC()));
+    emit c->sendResult(batchId, m.id, makeFeaturesDictForConnection(c, storage->genesisHash(), *options, bitcoindmgr->hasDSProofRPC(), coin == BTC::Coin::BCH));
 }
 void Server::rpc_server_peers_subscribe(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
@@ -1391,15 +1393,24 @@ HashX Server::parseFirstHashParamCommon(const RPC::Message &m, const char *const
         throw RPCError(!errMsg ? "Invalid scripthash" : errMsg);
     return sh;
 }
-Storage::TokenFilterOption Server::parseTokenFilterOptionCommon(const RPC::Message &m, size_t argPos) const
+Storage::TokenFilterOption Server::parseTokenFilterOptionCommon(Client *c, const RPC::Message &m, size_t argPos) const
 {
     const QVariantList l(m.paramsList());
     const bool hasArg = size_t(l.size()) > argPos;
-    if (isNonBCH() && hasArg)
+    const bool isNotBCH = isNonBCH();
+    if (isNotBCH && hasArg)
         // unsupported on non-BCH
         throw RPCError("The token filtering option is only available on BCH", RPC::ErrorCodes::Code_InvalidParams);
-    else if (!hasArg)
-        return Storage::TokenFilterOption::IncludeTokens; // default: include tokens
+    else if (!hasArg) {
+        if (isNotBCH || c->hasMinimumTokenAwareVersion())
+            // Default for token-aware clients: include tokens
+            // Note that for BTC, LTC, etc -- we also "include tokens" so as to not apply any filtering here. Actual tx
+            // data should *not* have any tokens on these chains.
+            return Storage::TokenFilterOption::IncludeTokens;
+        else
+            // default for token-unaware clients: exclude tokens
+            return Storage::TokenFilterOption::ExcludeTokens;
+    }
     const auto arg = l[argPos].toString().trimmed().toLower();
     if (arg == QStringLiteral("exclude_tokens")) return Storage::TokenFilterOption::ExcludeTokens;
     else if (arg == QStringLiteral("include_tokens")) return Storage::TokenFilterOption::IncludeTokens;
@@ -1412,13 +1423,13 @@ Storage::TokenFilterOption Server::parseTokenFilterOptionCommon(const RPC::Messa
 void Server::rpc_blockchain_scripthash_get_balance(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const auto sh = parseFirstHashParamCommon(m);
-    const auto tf = parseTokenFilterOptionCommon(m, 1);
+    const auto tf = parseTokenFilterOptionCommon(c, m, 1);
     impl_get_balance(c, batchId, m, sh, tf);
 }
 void Server::rpc_blockchain_address_get_balance(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const auto sh = parseFirstAddrParamToShCommon(m);
-    const auto tf = parseTokenFilterOptionCommon(m, 1);
+    const auto tf = parseTokenFilterOptionCommon(c, m, 1);
     impl_get_balance(c, batchId, m, sh, tf);
 }
 void Server::impl_get_balance(Client *c, const RPC::BatchId batchId, const RPC::Message &m, const HashX &sh,
@@ -1496,13 +1507,13 @@ void Server::impl_get_mempool(Client *c, const RPC::BatchId batchId, const RPC::
 void Server::rpc_blockchain_scripthash_listunspent(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const auto sh = parseFirstHashParamCommon(m);
-    const auto tf = parseTokenFilterOptionCommon(m, 1);
+    const auto tf = parseTokenFilterOptionCommon(c, m, 1);
     impl_listunspent(c, batchId, m, sh, tf);
 }
 void Server::rpc_blockchain_address_listunspent(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const auto sh = parseFirstAddrParamToShCommon(m);
-    const auto tf = parseTokenFilterOptionCommon(m, 1);
+    const auto tf = parseTokenFilterOptionCommon(c, m, 1);
     impl_listunspent(c, batchId, m, sh, tf);
 }
 /* static */
@@ -2727,6 +2738,8 @@ Client::~Client()
     socket = nullptr; // NB: we are a child of socket, so socket is alread invalid here. This line here is added in case some day I make AbstractClient delete socket on destruct.
     emit clientDestructing(this); // This is currently connected to a lambda in ServerBase::newClient
 }
+
+bool Client::hasMinimumTokenAwareVersion() const { return info.protocolVersion >= ServerMisc::MinTokenAwareProtocolVersion; }
 
 void Client::do_disconnect(bool graceful)
 {
