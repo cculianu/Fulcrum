@@ -4007,11 +4007,11 @@ auto Storage::calcUTXOSetStats(const DumpProgressFunc & progFunc, size_t progInt
     if (!p->db.utxoset || !p->db.shunspent) return ret;
     auto readOpts_utxo = p->db.defReadOpts;
     auto readOpts_shunspent = p->db.defReadOpts;
-    auto [ss_utxo, ss_shunspent, bheight, bhash] = [&] {
+    const auto [ss_utxo, ss_shunspent, bheight, bhash] = [&] {
         SharedLockGuard g{p->blocksLock};
         using CSnapshot = const rocksdb::Snapshot;
         auto s1 = std::shared_ptr<CSnapshot>(p->db.utxoset->GetSnapshot(),
-                                                           [this](CSnapshot *ss){ p->db.utxoset->ReleaseSnapshot(ss); });
+                                             [this](CSnapshot *ss){ p->db.utxoset->ReleaseSnapshot(ss); });
         auto s2 = std::shared_ptr<CSnapshot>(p->db.utxoset->GetSnapshot(),
                                              [this](CSnapshot *ss){ p->db.shunspent->ReleaseSnapshot(ss); });
         const auto & [height, hash] = latestTip(); // takes a subordinate lock to blocksLock
