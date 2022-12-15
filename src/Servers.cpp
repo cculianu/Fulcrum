@@ -1399,7 +1399,7 @@ Storage::TokenFilterOption Server::parseTokenFilterOptionCommon(const RPC::Messa
         // unsupported on non-BCH
         throw RPCError("The token filtering option is only available on BCH", RPC::ErrorCodes::Code_InvalidParams);
     else if (!hasArg)
-        return Storage::TokenFilterOption::ExcludeTokens; // default: exclude tokens
+        return Storage::TokenFilterOption::IncludeTokens; // default: include tokens
     const auto arg = l[argPos].toString().trimmed().toLower();
     if (arg == QStringLiteral("exclude_tokens")) return Storage::TokenFilterOption::ExcludeTokens;
     else if (arg == QStringLiteral("include_tokens")) return Storage::TokenFilterOption::IncludeTokens;
