@@ -1412,17 +1412,20 @@ Storage::TokenFilterOption Server::parseTokenFilterOptionCommon(const RPC::Messa
 void Server::rpc_blockchain_scripthash_get_balance(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const auto sh = parseFirstHashParamCommon(m);
-    impl_get_balance(c, batchId, m, sh);
+    const auto tf = parseTokenFilterOptionCommon(m, 1);
+    impl_get_balance(c, batchId, m, sh, tf);
 }
 void Server::rpc_blockchain_address_get_balance(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const auto sh = parseFirstAddrParamToShCommon(m);
-    impl_get_balance(c, batchId, m, sh);
+    const auto tf = parseTokenFilterOptionCommon(m, 1);
+    impl_get_balance(c, batchId, m, sh, tf);
 }
-void Server::impl_get_balance(Client *c, const RPC::BatchId batchId, const RPC::Message &m, const HashX &sh)
+void Server::impl_get_balance(Client *c, const RPC::BatchId batchId, const RPC::Message &m, const HashX &sh,
+                              const Storage::TokenFilterOption tokenFilter)
 {
-    generic_do_async(c, batchId, m.id, [sh, this] {
-        const auto [amt, uamt] = storage->getBalance(sh);
+    generic_do_async(c, batchId, m.id, [sh, tokenFilter, this] {
+        const auto [amt, uamt] = storage->getBalance(sh, tokenFilter);
         /* Note: ElectrumX protocol docs are incorrect. They claim a string in coin units is returned here.
          * It is not. Instead a number in satoshis is returned!
          * Incorrect docs: https://electrumx.readthedocs.io/en/latest/protocol-methods.html#blockchain-scripthash-get-balance */
@@ -2085,7 +2088,7 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
     { {"server.ping",                       true,               false,    PR{0,0},                    },          MP(rpc_server_ping) },
     { {"server.version",                    true,               false,    PR{0,2},                    },          MP(rpc_server_version) },
 
-    { {"blockchain.address.get_balance",    true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_get_balance) },
+    { {"blockchain.address.get_balance",    true,               false,    PR{1,2},                    },          MP(rpc_blockchain_address_get_balance) },
     { {"blockchain.address.get_history",    true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_get_history) },
     { {"blockchain.address.get_mempool",    true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_get_mempool) },
     { {"blockchain.address.get_scripthash", true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_get_scripthash) },
@@ -2099,7 +2102,7 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
     { {"blockchain.headers.subscribe",      true,               false,    PR{0,0},                    },          MP(rpc_blockchain_headers_subscribe) },
     { {"blockchain.relayfee",               true,               false,    PR{0,0},                    },          MP(rpc_blockchain_relayfee) },
 
-    { {"blockchain.scripthash.get_balance", true,               false,    PR{1,1},                    },          MP(rpc_blockchain_scripthash_get_balance) },
+    { {"blockchain.scripthash.get_balance", true,               false,    PR{1,2},                    },          MP(rpc_blockchain_scripthash_get_balance) },
     { {"blockchain.scripthash.get_history", true,               false,    PR{1,1},                    },          MP(rpc_blockchain_scripthash_get_history) },
     { {"blockchain.scripthash.get_mempool", true,               false,    PR{1,1},                    },          MP(rpc_blockchain_scripthash_get_mempool) },
     { {"blockchain.scripthash.listunspent", true,               false,    PR{1,2},                    },          MP(rpc_blockchain_scripthash_listunspent) },

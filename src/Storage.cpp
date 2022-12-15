@@ -3608,25 +3608,28 @@ auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf) const -> H
     return ret;
 }
 
+static bool ShouldTokenFilter(const Storage::TokenFilterOption tokenFilter, const bitcoin::token::OutputDataPtr & p)
+{
+    switch (tokenFilter) {
+    case Storage::TokenFilterOption::ExcludeTokens:
+        return bool(p);
+    case Storage::TokenFilterOption::IncludeTokens:
+        return false;
+    case Storage::TokenFilterOption::OnlyTokens:
+        return !p;
+    }
+    // not normally reached unless there's a programming error of some sort
+    throw InternalError(QString("Invalid TokenFilterOption encountered: %1. This shouldn't happen! FIXME!")
+                        .arg(int(tokenFilter)));
+}
+
 auto Storage::listUnspent(const HashX & hashX, const TokenFilterOption tokenFilter) const -> UnspentItems
 {
     UnspentItems ret;
     if (hashX.length() != HashLen)
         return ret;
     try {
-        auto ShouldFilter = [tokenFilter](const bitcoin::token::OutputDataPtr & p) {
-            switch (tokenFilter) {
-            case TokenFilterOption::ExcludeTokens:
-                return bool(p);
-            case TokenFilterOption::IncludeTokens:
-                return false;
-            case TokenFilterOption::OnlyTokens:
-                return !p;
-            }
-            // not normally reached unless there's a programming error of some sort
-            throw InternalError(QString("Invalid TokenFilterOption encountered: %1. This shouldn't happen! FIXME!")
-                                .arg(int(tokenFilter)));
-        };
+        auto ShouldFilter = [tokenFilter](const bitcoin::token::OutputDataPtr & p) { return ShouldTokenFilter(tokenFilter, p); };
         auto IncrementCtrAndThrowIfExceedsMaxHistory = GetMaxHistoryCtrFunc("Unspent UTXOs", hashX, options->maxHistory);
         constexpr size_t iota = 10; // we initially reserve this many items in the returned array in order to prevent redundant allocations in the common case.
         std::unordered_set<TXO> mempoolConfirmedSpends;
@@ -3747,11 +3750,12 @@ auto Storage::listUnspent(const HashX & hashX, const TokenFilterOption tokenFilt
     return ret;
 }
 
-auto Storage::getBalance(const HashX &hashX) const -> std::pair<bitcoin::Amount, bitcoin::Amount>
+auto Storage::getBalance(const HashX &hashX, TokenFilterOption tokenFilter) const -> std::pair<bitcoin::Amount, bitcoin::Amount>
 {
     std::pair<bitcoin::Amount, bitcoin::Amount> ret;
     if (hashX.length() != HashLen)
         return ret;
+    auto ShouldFilter = [tokenFilter](const bitcoin::token::OutputDataPtr & p) { return ShouldTokenFilter(tokenFilter, p); };
     auto IncrementCtrAndThrowIfExceedsMaxHistory = GetMaxHistoryCtrFunc("GetBalance UTXOs", hashX, options->maxHistory);
     try {
         // take shared lock (ensure history doesn't mutate from underneath our feet)
@@ -3773,8 +3777,9 @@ auto Storage::getBalance(const HashX &hashX) const -> std::pair<bitcoin::Amount,
                     throw InternalError(QString("Bad SHUnspentValue in db for ctxo %1 (%2)").arg(ctxo.toString()).arg(QString(hashX.toHex())));
                 if (UNLIKELY(!bitcoin::MoneyRange(amount)))
                     throw InternalError(QString("Out-of-range amount in db for ctxo %1: %2").arg(ctxo.toString()).arg(amount / amount.satoshi()));
-                ret.first += amount; // tally the result
-                // TODO: Use tokenDataPtr here?
+                if ( ! ShouldFilter(tokenDataPtr)) {
+                    ret.first += amount; // tally the result
+                }
             }
             if (UNLIKELY(!bitcoin::MoneyRange(ret.first))) {
                 ret.first = bitcoin::Amount::zero();
@@ -3796,15 +3801,17 @@ auto Storage::getBalance(const HashX &hashX) const -> std::pair<bitcoin::Amount,
                     }
                     auto & info = it2->second;
                     IncrementCtrAndThrowIfExceedsMaxHistory(info.confirmedSpends.size() + info.utxo.size()); // throw if >maxHistory
-                    for (const auto & [txo, txoinfo] : info.confirmedSpends)
-                        spends += txoinfo.amount;
+                    for (const auto & [txo, txoinfo] : info.confirmedSpends) {
+                        if ( ! ShouldFilter(txoinfo.tokenDataPtr))
+                            spends += txoinfo.amount;
+                    }
                     for (const auto ionum : info.utxo) {
                         if (decltype(tx->txos.cbegin()) it3; UNLIKELY( ionum >= tx->txos.size()
                                                                        || !(it3 = tx->txos.cbegin() + ionum)->isValid()) )
                         {
                             throw InternalError(QString("scripthash %1 lists tx %2, which then lacks a valid TXO IONum %3 for said hashX! FIXME!")
                                                 .arg(QString(hashX.toHex())).arg(QString(tx->hash.toHex())).arg(ionum));
-                        } else {
+                        } else if ( ! ShouldFilter(it3->tokenDataPtr)) {
                             utxos += it3->amount;
                         }
                     }

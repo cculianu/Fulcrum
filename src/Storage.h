@@ -248,7 +248,7 @@ public:
     UnspentItems listUnspent(const HashX &, TokenFilterOption) const;
 
     /// thread safe -- returns confirmd, unconfirmed balance for a scripthash
-    std::pair<bitcoin::Amount, bitcoin::Amount> getBalance(const HashX &) const;
+    std::pair<bitcoin::Amount, bitcoin::Amount> getBalance(const HashX &, TokenFilterOption) const;
 
     /// thread safe, called from controller when we are up-to-date
     void updateMerkleCache(unsigned height);
