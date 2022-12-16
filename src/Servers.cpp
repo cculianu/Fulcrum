@@ -2046,7 +2046,6 @@ void Server::rpc_blockchain_transaction_dsproof_unsubscribe(Client *c, const RPC
 void Server::rpc_blockchain_utxo_get_info(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const QVariantList l = m.paramsList();
-    assert(l.size() == 2);
 
     QByteArray txHash = validateHashHex( l.front().toString() ); // arg0: prevoutHash
     if (txHash.length() != HashLen)
@@ -2066,6 +2065,8 @@ void Server::rpc_blockchain_utxo_get_info(Client *c, const RPC::BatchId batchId,
             m["scripthash"] = QString(Util::ToHexFast(optInfo->hashX));
             if (optInfo->confirmedHeight.has_value())
                 m["confirmed_height"] = qlonglong(optInfo->confirmedHeight.value());
+            if (optInfo->tokenDataPtr)
+                m["token_data"] = tokenDataToVariantMap(*optInfo->tokenDataPtr);
             // NB: unconfirmed utxos will lack a "confirmed_height" entry
             ret = m;
         }
