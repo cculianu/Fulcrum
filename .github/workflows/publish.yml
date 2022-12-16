@@ -4,9 +4,9 @@ name: Publish
 
 # Controls when the workflow will run
 on:
-  # Triggers the workflow on push or pull request events but only for the master branch
-  push:
-    branches: [ master ]
+  # Triggers the workflow on release creation
+  release:
+    types: [created]
 
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
@@ -26,6 +26,8 @@ jobs:
       # Setup environment
       - name: Set WORKER_COUNT env
         run: echo "WORKER_COUNT=$(nproc)" >> $GITHUB_ENV
+      - name: Set TAG_NAME env
+        run: echo "TAG_NAME=${GITHUB_REF#refs/*/}" >> $GITHUB_ENV
 
       - name: Login to docker hub
         uses: docker/login-action@v1.6.0
@@ -40,6 +42,10 @@ jobs:
       - name: Create buildx worker node
         run: docker buildx create --use
 
+      # publish version tagged image
       - name: Build docker image
-        run: docker buildx build --build-arg MAKEFLAGS="-j ${WORKER_COUNT}" -t cculianu/fulcrum -f contrib/docker/Dockerfile --platform linux/arm64/v8,linux/amd64 --push .
+        run: docker buildx build --build-arg MAKEFLAGS="-j ${WORKER_COUNT}" -t cculianu/fulcrum:${{ env.TAG_NAME }} -f contrib/docker/Dockerfile --platform linux/arm64/v8,linux/amd64 --push .
+      # publish 'latest' tagged image
+      - name: Build docker image
+        run: docker buildx build --build-arg MAKEFLAGS="-j ${WORKER_COUNT}" -t cculianu/fulcrum:latest -f contrib/docker/Dockerfile --platform linux/arm64/v8,linux/amd64 --push .
 
