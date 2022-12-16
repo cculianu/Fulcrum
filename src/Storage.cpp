@@ -1911,13 +1911,15 @@ void Storage::startup()
 
 void Storage::checkUpgradeDBVersion()
 {
+    // Note: a precondition for this function is that database, headers, etc are already loaded.
+
     // Original Fulcrum db version before 1.9.0 was v1, and now we are on v2 which has CashToken data for BCH.
     // Going from v1 on BTC/LTC -> v2 is ok without caveats. For BCH, we must warn the user if their db is v1
     // and it's after the upgrade9 activation time, because then the DB will be missing token data and may have
     // token-containing UTXOs indexed to the wrong script hash.
     Log() << "DB version: v" << p->meta.version;
     if (p->meta.version < Meta::kCurrentVersion) {
-        if (p->meta.coin == "BCH" && p->meta.version < Meta::kMinBCHUpgrade9Version) {
+        if (BTC::coinFromName(p->meta.coin) == BTC::Coin::BCH && p->meta.version < Meta::kMinBCHUpgrade9Version) {
             // Get the latest header to detect if we are after the activation time
             const Header hdr = headerVerifier().first.lastHeaderProcessed().second;
             if (hdr.size() == BTC::GetBlockHeaderSize()) {
@@ -1929,7 +1931,7 @@ void Storage::checkUpgradeDBVersion()
                                                     " header: %1").arg(e.what()));
                     }
                 }();
-                const int64_t upgrade9ActivationTime = p->meta.chain == "chip"
+                const int64_t upgrade9ActivationTime = BTC::NetFromName(p->meta.chain) == BTC::Net::ChipNet
                                                        ? 1668513600  // ChipNet: November 15, 2022 12:00:00 UTC
                                                        : 1684152000; // MainNet, etc: May 15, 2023 12:00:00 UTC
                 if (bhdr.GetBlockTime() >= upgrade9ActivationTime) {
