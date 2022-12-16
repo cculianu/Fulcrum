@@ -366,7 +366,9 @@ private:
     void rpc_blockchain_block_header(Client *, RPC::BatchId, const RPC::Message &);  // fully implemented
     void rpc_blockchain_block_headers(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     void rpc_blockchain_estimatefee(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+    void rpc_blockchain_headers_get_tip(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     void rpc_blockchain_headers_subscribe(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+    void rpc_blockchain_headers_unsubscribe(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     void rpc_blockchain_relayfee(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     // scripthash
     void rpc_blockchain_scripthash_get_balance(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
@@ -623,7 +625,7 @@ public:
 
     std::shared_ptr<PerIPData> perIPData;
 
-    bool isSubscribedToHeaders = false;
+    QMetaObject::Connection headerSubConnection; ///< if valid, this client is subscribed to headers (`Server::newHeader` signal)
     std::atomic_int nShSubs{0};  ///< the number of unique scripthash subscriptions for this client.
 
     //bitcoind_throttle counter, per client
