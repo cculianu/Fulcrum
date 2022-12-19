@@ -65,7 +65,7 @@ PeerMgr::~PeerMgr() { cleanup(); /* noop if already stopped */ DebugM(__func__);
 
 QVariantMap PeerMgr::makeFeaturesDict(PeerClient *c) const
 {
-    return Server::makeFeaturesDictForConnection(c, _genesisHash, *options, srvmgr->hasDSProofRPC());
+    return Server::makeFeaturesDictForConnection(c, _genesisHash, *options, srvmgr->hasDSProofRPC(), coin == BTC::Coin::BCH);
 }
 
 QString PeerMgr::publicHostNameForConnection(PeerClient *c) const
@@ -80,7 +80,11 @@ void PeerMgr::startup()
         throw InternalError("PeerMgr cannot be started until we have a valid genesis hash! FIXME!");
 
     const auto chain = storage->getChain(); // Note: assumption is that this is always non-empty if PeerMgr was started! (PeerMgr is never started until the db is synched so this is fine)
-    const auto lcaseCoin = storage->getCoin().trimmed().toLower();
+    const auto coinStr = storage->getCoin();
+    // setup this->coin flag -- note that assumption is that storage was aleady setup properly
+    if (chain.isEmpty() || (this->coin = BTC::coinFromName(coinStr)) == BTC::Coin::Unknown)
+        throw InternalError("PeerMgr cannot be constructed without a valid \"Coin\" and/or \"Chain\" in the database!");
+    const auto lcaseCoin = coinStr.trimmed().toLower();
     const auto pathPrefix = QString(":resources/%1/").arg(lcaseCoin);
     const QVector<BTC::Net> knownNets{{BTC::Net::TestNet, BTC::Net::TestNet4, BTC::Net::ScaleNet, BTC::Net::MainNet,
                                        BTC::Net::ChipNet}};
@@ -509,7 +513,6 @@ void PeerMgr::on_kickByAddress(const QHostAddress &addr)
 {
     if (addr.isNull())
         return;
-    int ctr = 0;
     QSet<QString> hostnames;
     // first, loop through all the inactive maps and search for this addr
     for (PeerInfoMap *m : {&seedPeers, &queued, &bad, &failed} ) {
@@ -518,7 +521,6 @@ void PeerMgr::on_kickByAddress(const QHostAddress &addr)
                 DebugM(__func__, " removing peer ", it.key(), " ", addr.toString());
                 hostnames.insert(it->hostName);
                 it = m->erase(it);
-                ++ctr;
             } else
                 ++it;
         }
@@ -530,7 +532,6 @@ void PeerMgr::on_kickByAddress(const QHostAddress &addr)
             hostnames.insert(c->info.hostName);
             c->wasKicked = true;
             c->deleteLater(); // this will call us back to remove it from the hashmap, etc
-            ++ctr;
         }
     }
     if (const auto uniqs = hostnames.size(); uniqs)
@@ -542,7 +543,6 @@ void PeerMgr::on_kickBySuffix(const QString &suffix)
     if (suffix.isEmpty())
         return;
     // NB: the suffix comes in pre-normalized from SrvMgr.
-    int ctr = 0;
     QSet<QString> hostnames;
     // first, loop through all the inactive maps and search for this addr
     for (PeerInfoMap *m : {&seedPeers, &queued, &bad, &failed} ) {
@@ -551,7 +551,6 @@ void PeerMgr::on_kickBySuffix(const QString &suffix)
                 DebugM(__func__, " removing peer ", it.key(), " ", it->hostName);
                 hostnames.insert(it->hostName);
                 it = m->erase(it);
-                ++ctr;
             } else
                 ++it;
         }
@@ -563,7 +562,6 @@ void PeerMgr::on_kickBySuffix(const QString &suffix)
             hostnames.insert(c->info.hostName);
             c->wasKicked = true;
             c->deleteLater(); // this will call us back to remove it from the hashmap, etc
-            ++ctr;
         }
     }
     if (const auto uniqs = hostnames.size(); uniqs)

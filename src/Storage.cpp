@@ -29,6 +29,8 @@
 #include "SubsMgr.h"
 #include "VarInt.h"
 
+#include "bitcoin/hash.h"
+
 #include "robin_hood/robin_hood.h"
 
 #include <rocksdb/cache.h>
@@ -49,7 +51,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cassert>
-#include <cstddef> // for std::byte
+#include <cstddef> // for std::byte, offsetof
 #include <cstdlib>
 #include <cstring> // for memcpy
 #include <functional>
@@ -77,7 +79,11 @@ HistoryTooLarge::~HistoryTooLarge() {} // weak vtable warning suppression
 namespace {
     /// Encapsulates the 'meta' db table
     struct Meta {
-        uint32_t magic = 0xf33db33f, version = 0x1;
+        static constexpr uint32_t kCurrentVersion = 0x2u;
+        static constexpr uint32_t kMinSupportedVersion = 0x1u;
+        static constexpr uint32_t kMinBCHUpgrade9Version = 0x2u;
+
+        uint32_t magic = 0xf33db33fu, version = kCurrentVersion;
         QString chain; ///< "test", "main", etc
         uint16_t platformBits = sizeof(long)*8U; ///< we save the platform wordsize to the db
 
@@ -88,6 +94,8 @@ namespace {
         /// On uninitialized, newly-created DB's this is present but empty "". The fact that it is empty allows us
         /// to auto-detect the Coin in question in Controller.
         QString coin = QString();
+
+        bool isVersionSupported() const { return version >= kMinSupportedVersion && version <= kCurrentVersion; }
     };
 
     // some database keys we use -- todo: if this grows large, move it elsewhere
@@ -177,6 +185,12 @@ namespace {
         return ret;
     }
 
+    struct SHUnspentValue {
+        bool valid = false;
+        bitcoin::Amount amount;
+        bitcoin::token::OutputDataPtr tokenDataPtr;
+    };
+
     // specializations
     template <> QByteArray Serialize(const Meta &);
     template <> Meta Deserialize(const QByteArray &, bool *);
@@ -184,8 +198,8 @@ namespace {
     template <> TXO Deserialize(const QByteArray &, bool *);
     template <> QByteArray Serialize(const TXOInfo &);
     template <> TXOInfo Deserialize(const QByteArray &, bool *);
-    template <> [[maybe_unused]] QByteArray Serialize(const bitcoin::Amount &);
-    template <> bitcoin::Amount Deserialize(const QByteArray &, bool *);
+    QByteArray Serialize(const bitcoin::Amount &, const bitcoin::token::OutputData *);
+    template <> SHUnspentValue Deserialize(const QByteArray &, bool *);
     // TxNumVec
     using TxNumVec = std::vector<TxNum>;
     // this serializes a vector of TxNums to a compact representation (6 bytes, eg 48 bits per TxNum), in little endian byte order
@@ -283,8 +297,8 @@ namespace {
                 if (!ok) {
                     throw DatabaseSerializationError(
                                 QString("%1: Key was retrieved ok, but data could not be deserialized as a scalar '%2'")
-                                .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : QString("Error deserializing a scalar from db %1").arg(DBName(db)))
-                                .arg(typeid (RetType).name()));
+                                .arg((!errorMsgPrefix.isEmpty() ? errorMsgPrefix : QString("Error deserializing a scalar from db %1").arg(DBName(db))),
+                                     QString(typeid (RetType).name())));
                 }
             } else {
                 if (UNLIKELY(acceptExtraBytesAtEndOfData))
@@ -355,8 +369,8 @@ namespace {
         auto st = db->Write(opts, &batch);
         if (!st.ok())
             throw DatabaseError(QString("%1: %2")
-                                .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : QString("Error writing batch to db %1").arg(DBName(db)))
-                                .arg(StatusString(st)));
+                                .arg((!errorMsgPrefix.isEmpty() ? errorMsgPrefix : QString("Error writing batch to db %1").arg(DBName(db))),
+                                     StatusString(st)));
     }
     /// Throws on all errors. Otherwise deletes a key from db. It is not an error to delete a non-existing key.
     template <bool safeScalar = false, typename KeyType>
@@ -407,12 +421,14 @@ namespace {
         std::vector<UTXOAddUndo> addUndos;
         std::vector<UTXODelUndo> delUndos;
 
+        uint16_t deserVersion = 0u; ///< Only ever read-in from db, never written out (we write out the latest version always)
+
         [[maybe_unused]] QString toDebugString() const;
 
         [[maybe_unused]] bool operator==(const UndoInfo &) const; // for debug ser/deser
 
         bool isValid() const { return hash.size() == HashLen; } ///< cheap, imperfect check for validity
-        void clear() { height = 0; hash.clear(); blkInfo = BlkInfo(); scriptHashes.clear(); addUndos.clear(); delUndos.clear(); }
+        void clear() { height = 0; hash.clear(); blkInfo = BlkInfo(); scriptHashes.clear(); addUndos.clear(); delUndos.clear(); deserVersion = 0u; }
     };
 
     QString UndoInfo::toDebugString() const {
@@ -420,7 +436,7 @@ namespace {
         QTextStream ts(&ret);
         ts  << "<Undo info for height: " << height << " addUndos: " << addUndos.size() << " delUndos: " << delUndos.size()
             << " scriptHashes: " << scriptHashes.size() << " nTx: " << blkInfo.nTx << " txNum0: " << blkInfo.txNum0
-            << " hash: " << hash.toHex() << ">";
+            << " hash: " << hash.toHex() << " deserVersion: " << int(deserVersion) << ">";
         return ret;
     }
 
@@ -837,7 +853,7 @@ namespace {
                     const auto key = QByteArray::fromRawData(keyStr.data(), keyStr.size());
                     if (key != expect)
                         throw DatabaseError(QString("record %1 does not match key. expected: %2, got: %3")
-                                            .arg(txNum).arg(QString(expect.toHex())).arg(QString(key.toHex())));
+                                            .arg(txNum).arg(QString(expect.toHex()), QString(key.toHex())));
                     ++verified;
                 }
                 batch.resize(0);
@@ -914,7 +930,6 @@ namespace {
             Log() << "CheckDB: Verifying txhash index using the thorough reverse-check (this may take a long time) ...";
             const Tic t0;
             size_t i = 0, verified = 0;
-            QString err;
             const auto nrec = rf->numRecords();
             constexpr size_t batchSize = 50'000;
             App *ourApp = app();
@@ -926,7 +941,7 @@ namespace {
                 recs.emplace_back(HashLen, char(0)); // add a dummy at the end
                 Util::getRandomBytes(recs.back().data(), HashLen); // put a random hash at the end
                 auto results = findMany(recs);
-                if (results.size() != recs.size()) throw InternalError("size mismatch");
+                if (results.size() != recs.size()) throw InternalError("size mismatch: " + err);
                 for (size_t j = 0; j < results.size()-1; ++j) {
                     if (!results[j]) throw DatabaseError("Expected a value not nullopt");
                     if (*results[j] != i) {
@@ -1137,10 +1152,11 @@ class Storage::UTXOCache
     static constexpr size_t RmVecItemSize = sizeof(RmVec::value_type) + HashLen + Util::qByteArrayPvtDataSize();
 
     using ShunspentKey = QByteArray;
+    using ShunspentValue = QByteArray;
     struct ShunspentKeyHasher {
         size_t operator()(const ShunspentKey & k) const noexcept { return Util::hashForStd(static_cast<ByteView>(k)); }
     };
-    using ShunspentTable = robin_hood::unordered_flat_map<ShunspentKey, int64_t, ShunspentKeyHasher>;
+    using ShunspentTable = robin_hood::unordered_flat_map<ShunspentKey, ShunspentValue, ShunspentKeyHasher>;
     using ShunspentRmVec = std::vector<ShunspentKey>;
 
     ShunspentTable shunspentAdds; ///< queued additions, not yet added to DB
@@ -1348,8 +1364,8 @@ class Storage::UTXOCache
                 // Update db scripthash_unspent, keyed off hashX|ctxo
                 {
                     static const QString errMsgPrefix("Failed to add an item to the shunspent batch");
-                    const auto & [dbkey, amount]  = *it;
-                    GenericBatchPut(shunspentBatch, dbkey, amount, errMsgPrefix); // may throw on failure
+                    const auto & [dbkey, dbvalue] = *it;
+                    GenericBatchPut(shunspentBatch, dbkey, dbvalue, errMsgPrefix); // may throw on failure
                 }
                 it = shunspentAdds.erase(it);
                 ++shunspentAddCt;
@@ -1475,15 +1491,15 @@ class Storage::UTXOCache
         }
     }
 
-    void addShunspent(ShunspentKey && k, int64_t amt) {
-        const auto & [it, inserted] = shunspentAdds.emplace(std::move(k), amt);
+    void addShunspent(const ShunspentKey &k, const ShunspentValue &v) {
+        const auto & [it, inserted] = shunspentAdds.emplace(k, v);
         if (UNLIKELY(!inserted)) {
             // Already there! Paranoia check here ... it turns out even in pre-BIP34 txns, this cannot happen
             // because we uniquely identify txns by unique id number, so dupe tx-hash's (as was possible pre-BIP34)
             // cannot trigger this branch.  This branch is here strictly for paranoia.
-            Warning() << __func__ << ": WARNING dupe txo encountered with key: \"" << it->first.toHex() << "\" [amt1: "
-                      << it->second << " amt2: " << amt << "], overwriting existing with amt2.";
-            it->second = amt; // overwrite existing to preserve behavior of pre-UTXOCache code.
+            Warning() << __func__ << ": WARNING dupe txo encountered with key: \"" << it->first.toHex() << "\" [val1: "
+                      << it->second.toHex() << " val2: " << v.toHex() << "], overwriting existing with amt2.";
+            it->second = v; // overwrite existing to preserve behavior of pre-UTXOCache code.
         }
         // NOTE: Assumption is that an add will never add a shunspent key that is in the shunspentRms vector.
         // (this is not checked for performance.)
@@ -1701,11 +1717,7 @@ public:
 
     bool remove(const TXO & txo) { return rm(txo); }
 
-    void putShunspent(const CompactTXO &ctxo, const TXOInfo & info) {
-        addShunspent(mkShunspentKey(info.hashX, ctxo),
-                     // we do it this way because it avoids a memcpy. this is the right way: Serialize(info.amount)
-                     static_cast<int64_t>(info.amount / info.amount.satoshi()) );
-    }
+    void putShunspent(const ShunspentKey &key, const ShunspentValue &val) { addShunspent(key, val); }
     bool removeShunspent(const HashX & hashX, const CompactTXO & ctxo) { return rmShunspent(mkShunspentKey(hashX, ctxo)); }
 
     void flush() { do_flush(); }
@@ -1846,13 +1858,14 @@ void Storage::startup()
 
     // load/check meta
     {
-        static const QString errMsg{"Incompatible database format -- delete the datadir and resynch. RocksDB error"};
-        if (const auto opt = GenericDBGet<Meta>(p->db.meta.get(), kMeta, true, errMsg);
+        const QString errMsg1{"Incompatible database format -- delete the datadir and resynch."};
+        const QString errMsg2{errMsg1 + " RocksDB error"};
+        if (const auto opt = GenericDBGet<Meta>(p->db.meta.get(), kMeta, true, errMsg2);
                 opt.has_value())
         {
             const Meta &m_db = *opt;
-            if (m_db.magic != p->meta.magic || m_db.version != p->meta.version || m_db.platformBits != p->meta.platformBits) {
-                throw DatabaseFormatError(errMsg);
+            if (m_db.magic != p->meta.magic || !m_db.isVersionSupported() || m_db.platformBits != p->meta.platformBits) {
+                throw DatabaseFormatError(errMsg1);
             }
             p->meta = m_db;
             Debug () << "Read meta from db ok";
@@ -1890,7 +1903,51 @@ void Storage::startup()
     // start up the co-task we use in addBlock and undoLatestBlock
     p->blocksWorker = std::make_unique<CoTask>("Storage Worker");
 
+    // Detect old DB version and see if upgrade is permitted, and maybe do a DB upgrade...
+    checkUpgradeDBVersion();
+
     start(); // starts our thread
+}
+
+void Storage::checkUpgradeDBVersion()
+{
+    // Note: a precondition for this function is that database, headers, etc are already loaded.
+
+    // Original Fulcrum db version before 1.9.0 was v1, and now we are on v2 which has CashToken data for BCH.
+    // Going from v1 on BTC/LTC -> v2 is ok without caveats. For BCH, we must warn the user if their db is v1
+    // and it's after the upgrade9 activation time, because then the DB will be missing token data and may have
+    // token-containing UTXOs indexed to the wrong script hash.
+    Log() << "DB version: v" << p->meta.version;
+    if (p->meta.version < Meta::kCurrentVersion) {
+        if (BTC::coinFromName(p->meta.coin) == BTC::Coin::BCH && p->meta.version < Meta::kMinBCHUpgrade9Version) {
+            // Get the latest header to detect if we are after the activation time
+            const Header hdr = headerVerifier().first.lastHeaderProcessed().second;
+            if (hdr.size() == BTC::GetBlockHeaderSize()) {
+                const auto bhdr = [&hdr] {
+                    try {
+                        return BTC::Deserialize<bitcoin::CBlockHeader>(hdr, 0, false, false, true, true);
+                    } catch (const std::ios_base::failure &e) {
+                        throw InternalError(QString("checkUpgradeDBVersion: Failed to deserialize the latest block"
+                                                    " header: %1").arg(e.what()));
+                    }
+                }();
+                const int64_t upgrade9ActivationTime = BTC::NetFromName(p->meta.chain) == BTC::Net::ChipNet
+                                                       ? 1668513600  // ChipNet: November 15, 2022 12:00:00 UTC
+                                                       : 1684152000; // MainNet, etc: May 15, 2023 12:00:00 UTC
+                if (bhdr.GetBlockTime() >= upgrade9ActivationTime) {
+                    // Uh-oh. They have a synched db that is v1, but the upgrade has already activated. Complain
+                    // and abort out, insisting that the user re-synch the DB.
+                    throw DatabaseError("This datadir was synched using an older version of " APPNAME " which lacked"
+                                        " full CashToken support, however Upgrade9 has already activated for this"
+                                        " chain.\n\nPlease delete the datadir and resynch to bitcoind.\n");
+                }
+            }
+        }
+
+        Log() << "DB version is older but compatible, updating version to v" << Meta::kCurrentVersion << " ...";
+        p->meta.version = Meta::kCurrentVersion;
+        saveMeta_impl();
+    }
 }
 
 void Storage::compactAllDBs()
@@ -2104,6 +2161,7 @@ void Storage::setCoin(const QString &coin) {
 TxNum Storage::getTxNum() const { return p->txNumNext.load(); }
 
 auto Storage::latestTip(Header *hdrOut) const -> std::pair<int, HeaderHash> {
+    static_assert(std::is_same_v<Header, HeaderHash> && std::is_same_v<Header, QByteArray>); // both must be QByteArray
     std::pair<int, HeaderHash> ret = headerVerifier().first.lastHeaderProcessed(); // ok; lock stays locked until statement end.
     if (hdrOut) *hdrOut = ret.second; // this is not a hash but the actual block header
     if (ret.second.isEmpty() || ret.first < 0) {
@@ -2261,7 +2319,6 @@ void Storage::loadCheckHeadersInDB()
             // set genesis hash
             p->genesisHash = BTC::HashRev(hVec.front());
 
-            const QString errMsg("Error retrieving header from db");
             err.clear();
             // read db
             for (uint32_t i = 0; i < num; ++i) {
@@ -2435,11 +2492,13 @@ void Storage::loadCheckUTXOsInDB()
                 const QByteArray shuKey = mkShunspentKey(info.hashX, ctxo);
                 static const QString errPrefix("Error reading scripthash_unspent");
                 QByteArray tmpBa;
-                if (bool fail1 = false, fail2 = false, fail3 = false, fail4 = false;
+                SHUnspentValue shval;
+                if (bool fail1 = false, fail2 = false, fail3 = false, fail4 = false, fail5 = false;
                         (fail1 = (info.confirmedHeight.has_value() && int(*info.confirmedHeight) > currentHeight))
                         || (fail2 = info.txNum >= p->txNumNext)
                         || (fail3 = (tmpBa = GenericDBGet<QByteArray>(p->db.shunspent.get(), shuKey, true, errPrefix, false, p->db.defReadOpts).value_or("")).isEmpty())
-                        || (fail4 = (info.amount != Deserialize<bitcoin::Amount>(tmpBa)))) {
+                        || (fail4 = (!(shval = Deserialize<SHUnspentValue>(tmpBa)).valid || info.amount != shval.amount))
+                        || (fail5 = (info.tokenDataPtr != shval.tokenDataPtr))) {
                     // TODO: reorg? Inconsisent db?  FIXME
                     QString msg;
                     {
@@ -2454,6 +2513,8 @@ void Storage::loadCheckUTXOsInDB()
                             ts << ". Failed to find ctxo " << ctxo.toString() << " in the scripthash_unspent db.";
                         } else if (fail4) {
                             ts << ". Utxo amount does not match the ctxo amount in the scripthash_unspent db.";
+                        } else if (fail5) {
+                            ts << ". Token data does not match the ctxo token_data in the scripthash_unspent db.";
                         }
                         ts << "\n\nThe database has been corrupted. Please delete the datadir and resynch to bitcoind.\n";
                     }
@@ -2523,15 +2584,18 @@ void Storage::loadCheckShunspentInDB()
         const auto &[hashx, ctxo] = extractShunspentKey(iter->key());
         if (!ctxo.isValid())
             throw DatabaseError(QString("Read an invalid compact txo from the scripthash_unspent database. %1").arg(errMsg));
-        const bitcoin::Amount amount = Deserialize<bitcoin::Amount>(FromSlice(iter->value()));
-        if (UNLIKELY(!bitcoin::MoneyRange(amount)))
-            throw DatabaseError(QString("Read an invalid amount from the scripthash_unspent database for scripthash: %1. %2")
-                                .arg(QString(hashx.toHex()), errMsg));
         TXOInfo info;
-        info.txNum = ctxo.txNum();
-        info.hashX = hashx;
-        info.amount = amount;
-        info.confirmedHeight = heightForTxNum(ctxo.txNum());
+        {
+            SHUnspentValue shuval = Deserialize<SHUnspentValue>(FromSlice(iter->value()));
+            if (UNLIKELY(!shuval.valid || !bitcoin::MoneyRange(shuval.amount)))
+                throw DatabaseError(QString("Read an invalid SHUnspentValue from the scripthash_unspent database for scripthash: %1. %2")
+                                    .arg(QString(hashx.toHex()), errMsg));
+            info.txNum = ctxo.txNum();
+            info.hashX = hashx;
+            info.amount = shuval.amount;
+            info.confirmedHeight = heightForTxNum(ctxo.txNum());
+            info.tokenDataPtr = std::move(shuval.tokenDataPtr);
+        }
         const TxHash txHash = hashForTxNum(ctxo.txNum(), true, nullptr, true).value_or(QByteArray()); // throws if missing
         const TXO txo{txHash, ctxo.N()};
         // look for this in the UTXO db
@@ -2634,6 +2698,14 @@ void Storage::loadCheckEarliestUndo()
                   << "avoid using older versions of this program with this datadir now that you have set this option "
                   << "beyond the default.";
     }
+    // sanity check that the latest Undo block deserializes correctly (detects older Fulcrum loading newer db)
+    if (!swissCheeseDetector.empty()) {
+        const uint32_t height = *swissCheeseDetector.rbegin();
+        const QString errMsg(QString("Unable to read undo data for height %1").arg(height));
+        const UndoInfo undoInfo = GenericDBGetFailIfMissing<UndoInfo>(p->db.undo.get(), height, errMsg);
+        if (!undoInfo.isValid()) throw DatabaseFormatError(errMsg);
+        Debug() << "Latest undo verified ok: " << undoInfo.toDebugString();
+    }
     if (ctr > configuredUndoDepth()) {
         // User lowered undo config -- now configured for less undo depth than before.  Simply respect user wishes
         // on startup and delete oldest entries if that happens.  Note the assumption here is that the undo entries
@@ -2704,6 +2776,8 @@ void Storage::setInitialSync(bool b) {
 
 void Storage::UTXOBatch::add(const TXO &txo, const TXOInfo &info, const CompactTXO &ctxo)
 {
+    const QByteArray shukey = mkShunspentKey(info.hashX, ctxo),
+                     shuval = Serialize(info.amount, info.tokenDataPtr.get());
     if (!p->cache) {
         // Update db utxoset, keyed off txo -> txoinfo
         static const QString errMsgPrefix("Failed to add a utxo to the utxo batch");
@@ -2714,15 +2788,11 @@ void Storage::UTXOBatch::add(const TXO &txo, const TXOInfo &info, const CompactT
         // serialized CompactTXO bytes (8 or 9). Each entry's data is a 8-byte int64_t of the amount of the utxo to save
         // on lookup cost for getBalance().
         static const QString errMsgPrefix2("Failed to add an entry to the scripthash_unspent batch");
-
-        GenericBatchPut(p->shunspentBatch,
-                        mkShunspentKey(info.hashX, ctxo),
-                        int64_t( info.amount / info.amount.satoshi() ), ///< we do it this way because it avoids a memcpy. this is the right way: Serialize(info.amount)
-                        errMsgPrefix2); // may throw, which is what we want
+        GenericBatchPut(p->shunspentBatch, shukey, shuval, errMsgPrefix2); // may throw, which is what we want
     } else {
         // put in cache (in case these get deleted later on, it's a win to do this rather than hit the DB, if using cache)
         p->cache->put(txo, info);
-        p->cache->putShunspent(ctxo, info);
+        p->cache->putShunspent(shukey, shuval);
     }
 
     ++p->addCt;
@@ -2757,7 +2827,8 @@ std::optional<TXOInfo> Storage::utxoGetFromDB(const TXO &txo, bool throwIfMissin
 
 int64_t Storage::utxoSetSize() const { return p->utxoCt; }
 double Storage::utxoSetSizeMB() const {
-    constexpr int64_t elemSize = TXOInfo::serSize() + TXO::minSize() /*<-- assumption is most utxos use 16-bit IONums */;
+    // TODO: the below is inaccurate because it does not account for any bitcoin::token::OutputDataPtr that may be in TXOInfo
+    constexpr int64_t elemSize = TXOInfo::minSerSize() + TXO::minSize() /*<-- assumption is most utxos use 16-bit IONums */;
     return (utxoSetSize()*elemSize) / 1e6;
 }
 
@@ -2816,8 +2887,7 @@ std::optional<TXOInfo> Storage::utxoGet(const TXO &txo)
                     } else {
                         // should never happen
                         throw InternalError(QString("scripthash %1 has inconsistent mempool state for tx %2! FIXME!")
-                                            .arg(QString(hxTxIt->first.toHex()))
-                                            .arg(QString(tx->hash.toHex())));
+                                            .arg(QString(hxTxIt->first.toHex()), QString(tx->hash.toHex())));
                     }
                 }
             }
@@ -2972,6 +3042,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                             info.amount = out.amount;
                             info.confirmedHeight = ppb->height;
                             info.txNum = blockTxNum0 + out.txIdx;
+                            info.tokenDataPtr = out.tokenDataPtr;
                             const TXO txo{ hash, out.outN };
                             const CompactTXO ctxo(info.txNum, txo.outN);
                             utxoBatch.add(txo, info, ctxo); // add to db
@@ -3135,7 +3206,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                 } else {
                     const auto elapsedms = (Util::getTimeNS() - t0)/1e6;
                     const size_t nTx = undo->blkInfo.nTx, nSH = undo->scriptHashes.size();
-                    Debug() << "Saved V2 undo for block " << undo->height << ", "
+                    Debug() << "Saved V3 undo for block " << undo->height << ", "
                             << nTx << " " << Util::Pluralize("transaction", nTx)
                             << " involving " << nSH << " " << Util::Pluralize("scripthash", nSH)
                             << ", in " << QString::number(elapsedms, 'f', 2) << " msec.";
@@ -3453,7 +3524,7 @@ std::optional<unsigned> Storage::heightForTxNum(TxNum n) const
 std::optional<unsigned> Storage::heightForTxNum_nolock(TxNum n) const
 {
     std::optional<unsigned> ret;
-    auto it = p->blkInfosByTxNum.upper_bound(n);  // O(logN) search; find the block *AFTER* n, then go backw on to find the block in range
+    auto it = p->blkInfosByTxNum.upper_bound(n);  // O(logN) search; find the block *AFTER* n, then go back one to find the block in range
     if (it != p->blkInfosByTxNum.begin()) {
         --it;
         const auto & bi = p->blkInfos[it->second];
@@ -3530,12 +3601,24 @@ std::vector<TxHash> Storage::txHashesForBlockInBitcoindMemoryOrder(BlockHeight h
     return ret;
 }
 
+/// Returns a lambda that can be called to increment the counter. If the counter exceeds maxHistory, lambda will throw.
+/// Used below in getHistory(), listUnspent(), getBalance()
+static auto GetMaxHistoryCtrFunc(const QString &name, const HashX &hashX, size_t maxHistory)
+{
+    return [name, hashX, maxHistory, ctr = size_t{0u}](size_t incr = 1u) mutable {
+        if (UNLIKELY((ctr += incr) > maxHistory)) {
+            throw HistoryTooLarge(QString("%1 for scripthash %2 exceeds MaxHistory %3 with %4 items!")
+                                  .arg(name, QString(hashX.toHex())).arg(maxHistory).arg(ctr));
+        }
+    };
+}
+
 auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf) const -> History
 {
     History ret;
-    const size_t maxHistory = size_t(options->maxHistory);
     if (hashX.length() != HashLen)
         return ret;
+    auto IncrementCtrAndThrowIfExceedsMaxHistory = GetMaxHistoryCtrFunc("History", hashX, options->maxHistory);
     try {
         SharedLockGuard g(p->blocksLock);  // makes sure history doesn't mutate from underneath our feet
         if (conf) {
@@ -3543,10 +3626,7 @@ auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf) const -> H
             auto nums_opt = GenericDBGet<TxNumVec>(p->db.shist.get(), hashX, true, err, false, p->db.defReadOpts);
             if (nums_opt.has_value()) {
                 auto & nums = *nums_opt;
-                if (UNLIKELY(nums.size() > maxHistory)) {
-                    throw HistoryTooLarge(QString("History for scripthash %1 exceeds MaxHistory %2 with %3 items!")
-                                          .arg(QString(hashX.toHex())).arg(maxHistory).arg(nums.size()));
-                }
+                IncrementCtrAndThrowIfExceedsMaxHistory(nums.size());
                 ret.reserve(nums.size());
                 // TODO: The below could use some optimization.  A batched version of both hashForTxNum and
                 // heightForTxNum are low-hanging fruit for optimization.  Each call to the below takes a shared lock
@@ -3565,12 +3645,8 @@ auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf) const -> H
             auto [mempool, lock] = this->mempool();
             if (auto it = mempool.hashXTxs.find(hashX); it != mempool.hashXTxs.end()) {
                 const auto & txvec = it->second;
-                const size_t total = ret.size() + txvec.size();
-                if (UNLIKELY(total > maxHistory)) {
-                    throw HistoryTooLarge(QString("History for scripthash %1 exceeds MaxHistory %2 with %3 items!")
-                                          .arg(QString(hashX.toHex())).arg(maxHistory).arg(total));
-                }
-                ret.reserve(total);
+                IncrementCtrAndThrowIfExceedsMaxHistory(txvec.size());
+                ret.reserve(ret.size() + txvec.size());
                 for (const auto & tx : txvec)
                     ret.emplace_back(HistoryItem{tx->hash, tx->hasUnconfirmedParentTx ? -1 : 0, tx->fee});
             }
@@ -3581,13 +3657,29 @@ auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf) const -> H
     return ret;
 }
 
-auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
+static bool ShouldTokenFilter(const Storage::TokenFilterOption tokenFilter, const bitcoin::token::OutputDataPtr & p)
+{
+    switch (tokenFilter) {
+    case Storage::TokenFilterOption::ExcludeTokens:
+        return bool(p);
+    case Storage::TokenFilterOption::IncludeTokens:
+        return false;
+    case Storage::TokenFilterOption::OnlyTokens:
+        return !p;
+    }
+    // not normally reached unless there's a programming error of some sort
+    throw InternalError(QString("Invalid TokenFilterOption encountered: %1. This shouldn't happen! FIXME!")
+                        .arg(int(tokenFilter)));
+}
+
+auto Storage::listUnspent(const HashX & hashX, const TokenFilterOption tokenFilter) const -> UnspentItems
 {
     UnspentItems ret;
     if (hashX.length() != HashLen)
         return ret;
     try {
-        const size_t maxHistory = size_t(options->maxHistory);
+        auto ShouldFilter = [tokenFilter](const bitcoin::token::OutputDataPtr & p) { return ShouldTokenFilter(tokenFilter, p); };
+        auto IncrementCtrAndThrowIfExceedsMaxHistory = GetMaxHistoryCtrFunc("Unspent UTXOs", hashX, options->maxHistory);
         constexpr size_t iota = 10; // we initially reserve this many items in the returned array in order to prevent redundant allocations in the common case.
         std::unordered_set<TXO> mempoolConfirmedSpends;
         mempoolConfirmedSpends.reserve(iota);
@@ -3614,20 +3706,23 @@ auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
                             for (const auto & [txo, txoinfo] : ioinfo.confirmedSpends) {
                                 mempoolConfirmedSpends.insert(txo);
                             }
+
+                            // throw if we would iterate too much below
+                            IncrementCtrAndThrowIfExceedsMaxHistory(ioinfo.utxo.size());
+
                             for (const auto ionum : ioinfo.utxo) {
                                 if (decltype(tx->txos.cbegin()) it3;
                                         LIKELY( ionum < tx->txos.size() && (it3 = tx->txos.cbegin() + ionum)->isValid() ))
                                 {
-                                    ret.emplace_back(UnspentItem{
+                                    if (ShouldFilter(it3->tokenDataPtr))
+                                        continue;
+                                    ret.push_back(UnspentItem{
                                         { tx->hash, 0 /* always put 0 for height here */, tx->fee }, // base HistoryItem
                                         ionum, // .tx_pos
                                         it3->amount,  // .value
                                         TxNum(1) + veryHighTxNum + TxNum(tx->hasUnconfirmedParentTx ? 1 : 0), // .txNum (this is fudged for sorting at the end properly)
+                                        it3->tokenDataPtr, // .token_data
                                     });
-                                    if (UNLIKELY(ret.size() > maxHistory)) {
-                                        throw HistoryTooLarge(QString("Unspent history too large for %1, exceeds MaxHistory of %2")
-                                                              .arg(QString(hashX.toHex())).arg(maxHistory));
-                                    }
                                 } else {
                                     // this should never happen!
                                     Warning() << "Cannot find txo " << ionum << " for sh " << hashX.toHex() << " in tx " << tx->hash.toHex();
@@ -3648,22 +3743,33 @@ auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
                 // Search table for all keys that start with hashx's bytes. Note: the loop end-condition is strange.
                 // See: https://github.com/facebook/rocksdb/wiki/Prefix-Seek-API-Changes#transition-to-the-new-usage
                 rocksdb::Slice key;
-                std::vector<CompactTXO> ctxoVec;
+                using CTXOVec = std::vector<std::pair<CompactTXO, SHUnspentValue>>;
+                CTXOVec ctxoVec;
                 constexpr size_t reserveBytes = 256u;
-                static_assert(sizeof(CompactTXO) < reserveBytes);
-                ctxoVec.reserve(reserveBytes / sizeof(CompactTXO)); // rough guess -- pre-allocate ~256 bytes
-                size_t ctxoListSize = 0;
+                static_assert(sizeof(CTXOVec::value_type) < reserveBytes);
+                ctxoVec.reserve(reserveBytes / sizeof(CTXOVec::value_type)); // rough guess -- pre-allocate ~256 bytes
                 // we do it this way as two separate loops in order to avoid the expensive heightForTxNum lookups below in
                 // the case where the history is huge.
                 for (iter->Seek(prefix); iter->Valid() && (key = iter->key()).starts_with(prefix); iter->Next()) {
-                    ctxoVec.push_back( extractCompactTXOFromShunspentKey(key) /* may throw if size is bad, etc */ );
-                    if (UNLIKELY(++ctxoListSize + ret.size() > maxHistory)) {
-                        throw HistoryTooLarge(QString("Unspent history too large for %1, exceeds MaxHistory of %2")
-                                              .arg(QString(hashX.toHex())).arg(maxHistory));
+                    IncrementCtrAndThrowIfExceedsMaxHistory();
+                    bool ok;
+                    auto shval = Deserialize<SHUnspentValue>(FromSlice(iter->value()), &ok);
+                    if (UNLIKELY(!ok || !shval.valid)) {
+                        auto ctxo = extractCompactTXOFromShunspentKey(key); /* may throw if size is bad, etc */
+                        throw InternalError(QString("Bad SHUnspentValue in db for ctxo %1, script_hash: %2")
+                                            .arg(ctxo.toString(), QString(hashX.toHex())));
                     }
+                    if (UNLIKELY(!bitcoin::MoneyRange(shval.amount))) {
+                        auto ctxo = extractCompactTXOFromShunspentKey(key); /* may throw if size is bad, etc */
+                        throw InternalError(QString("Out-of-range amount in db for ctxo %1, script_hash %2: %3")
+                                            .arg(ctxo.toString(), QString(hashX.toHex())).arg(shval.amount / shval.amount.satoshi()));
+                    }
+                    if (ShouldFilter(shval.tokenDataPtr))
+                        continue;
+                    auto ctxo = extractCompactTXOFromShunspentKey(key); /* may throw if size is bad, etc */
+                    ctxoVec.emplace_back(std::move(ctxo), std::move(shval));
                 }
-                for (const auto & ctxo : ctxoVec) {
-                    static const QString err("Error retrieving the utxo for an unspent item");
+                for (auto & [ctxo, shval] : ctxoVec) {
                     const auto hash = hashForTxNum(ctxo.txNum()).value(); // may throw, but that indicates some database inconsistency. we catch below
                     const auto height = heightForTxNum(ctxo.txNum()).value(); // may throw, same deal
                     const TXO txo{ hash, ctxo.N() };
@@ -3671,12 +3777,12 @@ auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
                         // Skip items that are spent in mempool. This fixes a bug in Fulcrum 1.0.2 or earlier where the
                         // confirmed spends in the mempool were still appearing in the listunspent utxos.
                         continue;
-                    auto info = GenericDBGetFailIfMissing<TXOInfo>(p->db.utxoset.get(), txo, err, false, p->db.defReadOpts); // may throw -- indicates db inconsistency
-                    ret.emplace_back(UnspentItem{
+                    ret.push_back(UnspentItem{
                         { hash, int(height), {} }, // base HistoryItem
-                        txo.outN,  // .tx_pos
-                        info.amount, // .value
-                        info.txNum, // .txNum
+                        txo.outN, // .tx_pos
+                        shval.amount, // .value
+                        ctxo.txNum(), // .txNum
+                        std::move(shval.tokenDataPtr), // .token_data
                     });
                 }
             } // end confirmed/db search
@@ -3693,11 +3799,13 @@ auto Storage::listUnspent(const HashX & hashX) const -> UnspentItems
     return ret;
 }
 
-auto Storage::getBalance(const HashX &hashX) const -> std::pair<bitcoin::Amount, bitcoin::Amount>
+auto Storage::getBalance(const HashX &hashX, TokenFilterOption tokenFilter) const -> std::pair<bitcoin::Amount, bitcoin::Amount>
 {
     std::pair<bitcoin::Amount, bitcoin::Amount> ret;
     if (hashX.length() != HashLen)
         return ret;
+    auto ShouldFilter = [tokenFilter](const bitcoin::token::OutputDataPtr & p) { return ShouldTokenFilter(tokenFilter, p); };
+    auto IncrementCtrAndThrowIfExceedsMaxHistory = GetMaxHistoryCtrFunc("GetBalance UTXOs", hashX, options->maxHistory);
     try {
         // take shared lock (ensure history doesn't mutate from underneath our feet)
         SharedLockGuard g(p->blocksLock);
@@ -3710,14 +3818,17 @@ auto Storage::getBalance(const HashX &hashX) const -> std::pair<bitcoin::Amount,
             // See: https://github.com/facebook/rocksdb/wiki/Prefix-Seek-API-Changes#transition-to-the-new-usage
             rocksdb::Slice key;
             for (iter->Seek(prefix); iter->Valid() && (key = iter->key()).starts_with(prefix); iter->Next()) {
+                IncrementCtrAndThrowIfExceedsMaxHistory(); // throw if we are iterating too much
                 const CompactTXO ctxo = extractCompactTXOFromShunspentKey(key); // may throw if key has the wrong size, etc
                 bool ok;
-                const bitcoin::Amount amount = Deserialize<bitcoin::Amount>(FromSlice(iter->value()), &ok);
-                if (UNLIKELY(!ok))
-                    throw InternalError(QString("Bad amount in db for ctxo %1 (%2)").arg(ctxo.toString()).arg(QString(hashX.toHex())));
+                const auto & [valid, amount, tokenDataPtr] = Deserialize<SHUnspentValue>(FromSlice(iter->value()), &ok);
+                if (UNLIKELY(!ok || !valid))
+                    throw InternalError(QString("Bad SHUnspentValue in db for ctxo %1 (%2)").arg(ctxo.toString(), QString(hashX.toHex())));
                 if (UNLIKELY(!bitcoin::MoneyRange(amount)))
                     throw InternalError(QString("Out-of-range amount in db for ctxo %1: %2").arg(ctxo.toString()).arg(amount / amount.satoshi()));
-                ret.first += amount; // tally the result
+                if ( ! ShouldFilter(tokenDataPtr)) {
+                    ret.first += amount; // tally the result
+                }
             }
             if (UNLIKELY(!bitcoin::MoneyRange(ret.first))) {
                 ret.first = bitcoin::Amount::zero();
@@ -3735,18 +3846,21 @@ auto Storage::getBalance(const HashX &hashX) const -> std::pair<bitcoin::Amount,
                     auto it2 = tx->hashXs.find(hashX);
                     if (UNLIKELY(it2 == tx->hashXs.end())) {
                         throw InternalError(QString("scripthash %1 lists tx %2, which then lacks the IOInfo for said hashX! FIXME!")
-                                            .arg(QString(hashX.toHex())).arg(QString(tx->hash.toHex())));
+                                            .arg(QString(hashX.toHex()), QString(tx->hash.toHex())));
                     }
                     auto & info = it2->second;
-                    for (const auto & [txo, txoinfo] : info.confirmedSpends)
-                        spends += txoinfo.amount;
+                    IncrementCtrAndThrowIfExceedsMaxHistory(info.confirmedSpends.size() + info.utxo.size()); // throw if >maxHistory
+                    for (const auto & [txo, txoinfo] : info.confirmedSpends) {
+                        if ( ! ShouldFilter(txoinfo.tokenDataPtr))
+                            spends += txoinfo.amount;
+                    }
                     for (const auto ionum : info.utxo) {
                         if (decltype(tx->txos.cbegin()) it3; UNLIKELY( ionum >= tx->txos.size()
                                                                        || !(it3 = tx->txos.cbegin() + ionum)->isValid()) )
                         {
                             throw InternalError(QString("scripthash %1 lists tx %2, which then lacks a valid TXO IONum %3 for said hashX! FIXME!")
-                                                .arg(QString(hashX.toHex())).arg(QString(tx->hash.toHex())).arg(ionum));
-                        } else {
+                                                .arg(QString(hashX.toHex()), QString(tx->hash.toHex())).arg(ionum));
+                        } else if ( ! ShouldFilter(it3->tokenDataPtr)) {
                             utxos += it3->amount;
                         }
                     }
@@ -3797,28 +3911,18 @@ auto Storage::genesisHash() const -> HeaderHash
 
 // HistoryItem & UnspentItem -- operator< and operator== -- for sort.
 bool Storage::HistoryItem::operator<(const HistoryItem &o) const noexcept {
-    return height == o.height ? hash < o.hash : height < o.height;
+    return std::tie(height, hash) < std::tie(o.height, o.hash);
 }
 bool Storage::HistoryItem::operator==(const HistoryItem &o) const noexcept {
-    return height == o.height && hash == o.hash;
+    return std::tie(height, hash) == std::tie(o.height, o.hash);
 }
 bool Storage::UnspentItem::operator<(const UnspentItem &o) const noexcept {
-    if (txNum == o.txNum) { // order by txNum
-        if (tx_pos == o.tx_pos) { // then by tx_pos
-            // next by tx_hash, height (this branch shouldn't normally be reached with real blockchain data since
-            // txNum:tx_pos defines an UnspentItem completely...
-            if (HistoryItem::operator<(o))
-                return true;
-            else if (HistoryItem::operator==(o))
-                return value < o.value;
-            return false;
-        }
-        return tx_pos < o.tx_pos;
-    }
-    return txNum < o.txNum;
+    return    std::tie(  txNum,   tx_pos,   value,   tokenDataPtr,   height,   hash)
+            < std::tie(o.txNum, o.tx_pos, o.value, o.tokenDataPtr, o.height, o.hash);
 }
 bool Storage::UnspentItem::operator==(const UnspentItem &o) const noexcept {
-    return txNum == o.txNum && tx_pos == o.tx_pos && value == o.value && HistoryItem::operator==(o);
+    return    std::tie(  txNum,   tx_pos,   value,   tokenDataPtr,   height,   hash)
+           == std::tie(o.txNum, o.tx_pos, o.value, o.tokenDataPtr, o.height, o.hash);
 }
 
 auto Storage::mempool() const -> std::pair<const Mempool &, SharedLockGuard>
@@ -3949,6 +4053,75 @@ size_t Storage::dumpAllScriptHashes(QIODevice *outDev, unsigned int indent, unsi
     return ctr;
 }
 
+auto Storage::calcUTXOSetStats(const DumpProgressFunc & progFunc, size_t progInterval) const -> UTXOSetStats
+{
+    UTXOSetStats ret;
+    if (!p->db.utxoset || !p->db.shunspent) return ret;
+    auto readOpts_utxo = p->db.defReadOpts;
+    auto readOpts_shunspent = p->db.defReadOpts;
+    const auto [ss_utxo, ss_shunspent, bheight, bhash] = [&] {
+        SharedLockGuard g{p->blocksLock};
+        using CSnapshot = const rocksdb::Snapshot;
+        auto s1 = std::shared_ptr<CSnapshot>(p->db.utxoset->GetSnapshot(),
+                                             [this](CSnapshot *ss){ p->db.utxoset->ReleaseSnapshot(ss); });
+        auto s2 = std::shared_ptr<CSnapshot>(p->db.utxoset->GetSnapshot(),
+                                             [this](CSnapshot *ss){ p->db.shunspent->ReleaseSnapshot(ss); });
+        const auto & [height, hash] = latestTip(); // takes a subordinate lock to blocksLock
+        return std::tuple(s1, s2, height, hash);
+    }();
+    readOpts_utxo.snapshot = ss_utxo.get();
+    readOpts_shunspent.snapshot = ss_shunspent.get();
+    std::unique_ptr<rocksdb::Iterator> it_utxo {p->db.utxoset->NewIterator(readOpts_utxo)};
+    std::unique_ptr<rocksdb::Iterator> it_shu {p->db.shunspent->NewIterator(readOpts_shunspent)};
+    if (!it_utxo || !it_shu) return ret;
+
+    ret.block_height = bheight >= 0 ? BlockHeight(bheight) : 0;
+    ret.block_hash = bhash;
+
+    // Handle app shutdown by aborting this operation asap if we get a quit signal
+    std::atomic_bool quitting = false;
+    QMetaObject::Connection conn;
+    Defer d([&conn]{ if (conn && ::app()) { ::app()->disconnect(conn); conn = QMetaObject::Connection{}; } });
+    if (auto *a = ::app())
+        conn = a->connect(a, &App::requestQuit, this, [&quitting] { quitting = true; }, Qt::DirectConnection);
+
+    auto UpdateProgress = [&, ctr = size_t{0u}]() mutable {
+        if (progInterval && (++ctr % progInterval == 0u) && progFunc) progFunc(ctr);
+        return !quitting;
+    };
+    {
+        bitcoin::CHash256 hasher;
+        for (it_utxo->SeekToFirst(); it_utxo->Valid(); it_utxo->Next()) {
+            auto const k = it_utxo->key();
+            auto const v = it_utxo->value();
+            hasher.Write(reinterpret_cast<const uint8_t *>(k.data()), k.size());
+            hasher.Write(reinterpret_cast<const uint8_t *>(v.data()), v.size());
+            ++ret.utxo_db_ct;
+            ret.utxo_db_size_bytes += k.size() + v.size();
+            if (UNLIKELY(!UpdateProgress())) { ret = UTXOSetStats{}; return ret; }
+        }
+        ret.utxo_db_shasum.resize(HashLen);
+        hasher.Finalize(reinterpret_cast<uint8_t *>(ret.utxo_db_shasum.data()));
+    }
+
+    {
+        bitcoin::CHash256 hasher;
+        for (it_shu->SeekToFirst(); it_shu->Valid(); it_shu->Next()) {
+            auto const k = it_shu->key();
+            auto const v = it_shu->value();
+            hasher.Write(reinterpret_cast<const uint8_t *>(k.data()), k.size());
+            hasher.Write(reinterpret_cast<const uint8_t *>(v.data()), v.size());
+            ++ret.shunspent_db_ct;
+            ret.shunspent_db_size_bytes += k.size() + v.size();
+            if (UNLIKELY(!UpdateProgress())) { ret = UTXOSetStats{}; return ret; }
+        }
+        ret.shunspent_db_shasum.resize(HashLen);
+        hasher.Finalize(reinterpret_cast<uint8_t *>(ret.shunspent_db_shasum.data()));
+    }
+
+    return ret;
+}
+
 namespace {
     // specializations of Serialize/Deserialize
     template <> QByteArray Serialize(const Meta &m)
@@ -4031,7 +4204,8 @@ namespace {
     }
 
     struct UndoInfoSerHeader {
-        static constexpr uint16_t defMagic = 0xf12c, defVer = 0x2, v1Ver = 0x1;
+        static constexpr uint16_t defMagic = 0xf12cu, v1Ver = 0x1u, v2Ver = 0x2u, v3Ver = 0x3u;
+        static constexpr auto defVer = v3Ver;
         uint16_t magic = defMagic; ///< sanity check
         uint16_t ver = defVer; ///< sanity check
         uint32_t len = 0; ///< the length of the entire buffer, including this struct and all data to follow. A sanity check.
@@ -4039,7 +4213,7 @@ namespace {
 
         /* ----------- V1 format (back when we had 2 byte IONums) */
         static constexpr size_t addUndoItemSerSize_V1 = TXO::minSize() + HashLen + CompactTXO::minSize();
-        static constexpr size_t delUndoItemSerSize_V1 = TXO::minSize() + TXOInfo::serSize();
+        static constexpr size_t delUndoItemSerSize_V1 = TXO::minSize() + TXOInfo::minSerSize();
 
         /// computes the total size given the ser size of the blkInfo struct.
         /// Requires that nScriptHashes, nAddUndos, and nDelUndos be already filled-in.
@@ -4054,7 +4228,7 @@ namespace {
 
         /* ----------- V2 format (3-byte IONums) */
         static constexpr size_t addUndoItemSerSize_V2 = TXO::maxSize() + HashLen + CompactTXO::maxSize();
-        static constexpr size_t delUndoItemSerSize_V2 = TXO::maxSize() + TXOInfo::serSize();
+        static constexpr size_t delUndoItemSerSize_V2 = TXO::maxSize() + TXOInfo::minSerSize();
 
         /// computes the total size given the ser size of the blkInfo struct. Requires that nScriptHashes, nAddUndos, and nDelUndos be already filled-in.
         size_t computeTotalSize_V2() const {
@@ -4065,7 +4239,13 @@ namespace {
         }
         bool isLenSane_V2() const { return size_t(len) == computeTotalSize_V2(); }
 
+        /* ----------- V3 format (same as V3 but has dynamically-sized TXOInfo objects >= 50 bytes) */
+        /// computes the minimum size given the ser size of the blkInfo struct. Requires that nScriptHashes, nAddUndos, and nDelUndos be already filled-in.
+        size_t computeMinimumSize_V3() const { return computeTotalSize_V2(); }
+        bool isLenMinimallySane_V3() const { return size_t(len) >= computeMinimumSize_V3(); }
     };
+
+    static_assert(std::has_unique_object_representations_v<UndoInfoSerHeader>, "This type is serialized as bytes to db");
 
     // Deserialize a header from bytes -- no checks are done other than length check.
     template <> UndoInfoSerHeader Deserialize(const QByteArray &ba, bool *ok) {
@@ -4079,14 +4259,15 @@ namespace {
         return ret;
     }
 
-    // UndoInfo -- serialize to V2 format (fixed 3-byte IONums)
+    // UndoInfo -- serialize to V3 format (fixed 3-byte IONums, dynamically-sized TXOInfo objects)
     template <> QByteArray Serialize(const UndoInfo &u) {
         UndoInfoSerHeader hdr;
         // fill these in now so that hdr.computeTotalSize works
         hdr.nScriptHashes = uint32_t(u.scriptHashes.size());
         hdr.nAddUndos = uint32_t(u.addUndos.size());
         hdr.nDelUndos = uint32_t(u.delUndos.size());
-        hdr.len = uint32_t(hdr.computeTotalSize_V2());
+        hdr.len = uint32_t(hdr.computeMinimumSize_V3());
+        const size_t offset_of_len = offsetof(UndoInfoSerHeader, len);
         QByteArray ret;
         ret.reserve(int(hdr.len));
         // 1. header
@@ -4119,13 +4300,23 @@ namespace {
             ret.append(hashX);
             ret.append(ctxo.toBytes(true /* force wide (3 byte IONum) */));
         }
-        // 7. .delUndos, 85 bytes each * nDelUndos
+        // 7. .delUndos, >=85 bytes each * nDelUndos
         for (const auto & [txo, txoInfo] : u.delUndos) {
             ret.append(txo.toBytes(true));
             if (UNLIKELY(!chkHashLen(txoInfo.hashX))) return ret;
-            ret.append(Serialize(txoInfo));
+            const QByteArray serinfo = Serialize(txoInfo);
+            ret.append(VarInt(uint32_t(serinfo.size())).byteArray(false)); // append size as VarInt (our own internal compact int)
+            ret.append(serinfo);
         }
-        assert(ret.length() == int(hdr.len));
+        if (UNLIKELY(ret.length() < QByteArray::size_type(hdr.len))) {
+            Warning() << "unexpected length when serializing an UndoInfo object: " << ret.length() << ". FIXME!";
+            ret.clear();
+            return ret;
+        }
+        // 8. update length since serializing potential token data for each TXOInfo has variable size
+        hdr.len = uint32_t(ret.length());
+        std::memcpy(ret.data() + offset_of_len, &hdr.len, sizeof(hdr.len));
+
         return ret;
     }
 
@@ -4147,22 +4338,27 @@ namespace {
         // 1. .header
         const UndoInfoSerHeader hdr = Deserialize<UndoInfoSerHeader>(ba, &myok);;
         if (!chkAssertion(myok && int(hdr.len) == ba.size() && hdr.magic == hdr.defMagic
-                          && ( (hdr.ver == hdr.defVer && hdr.isLenSane_V2())
+                          && ( (hdr.ver == hdr.v3Ver && hdr.isLenMinimallySane_V3())
+                               || (hdr.ver == hdr.v2Ver && hdr.isLenSane_V2())
                                || (hdr.ver == hdr.v1Ver && hdr.isLenSane_V1()) ),
                           "Header sanity check fail"))
             return ret;
+        ret.deserVersion = hdr.ver;
 
         // for v1 we deserialize 2-byte fixed-size IONums, for v2 3-byte fixed-size IONums
         const bool isV1 = hdr.ver == hdr.v1Ver;
+        // for v2 we assume fixed-size TXOInfo objects (this was before token data existed), so we deserialize them
+        // as a flat array without any VarInt info as to the size of each
+        const bool isV2 = hdr.ver == hdr.v2Ver;
 
         // print to debug if encountering V1 vs V2
-        DebugM("Deserializing ", isV1 ? "V1" : "V2", " undo info of length ", hdr.len);
+        DebugM("Deserializing ", isV1 ? "V1" : (isV2 ? "V2" : "V3"), " undo info of length ", hdr.len);
 
         const size_t TXOSerSize = isV1 ? TXO::minSize() : TXO::maxSize();
         const size_t CompactTXOSerSize = isV1 ? CompactTXO::minSize() : CompactTXO::maxSize();
         //
         // deserialize V1 data -> fixed 2-byte IONums
-        // deserialize V2 data -> fixed 3-byte IONums
+        // deserialize V2 or V3 data -> fixed 3-byte IONums
         //
         const char *cur = ba.constData() + sizeof(hdr), *const end = ba.constData() + ba.length();
         // 2. .height
@@ -4202,19 +4398,37 @@ namespace {
             if (!chkAssertion(myok)) return ret;
             ret.addUndos.emplace_back(std::move(txo), std::move(hashX), std::move(ctxo));
         }
-        // 7. .delUndos, 84 (v1) or 85 (v2) bytes each * nDelUndos
+        // 7. .delUndos, 84 (v1) or 85 (v2) bytes each * nDelUndos, for v3 the size is dynamic but always >= 85
         ret.delUndos.reserve(hdr.nDelUndos);
         for (unsigned i = 0; i < hdr.nDelUndos; ++i) {
             if (!chkAssertion(cur+TXOSerSize <= end)) return ret;
             TXO txo = Deserialize<TXO>(ShallowTmp(cur, TXOSerSize), &myok);
             cur += TXOSerSize;
-            if (!chkAssertion(myok && cur+TXOInfo::serSize() <= end)) return ret;
-            TXOInfo info = Deserialize<TXOInfo>(ShallowTmp(cur, TXOInfo::serSize()), &myok);
-            cur += TXOInfo::serSize();
-            if (!chkAssertion(myok)) return ret;
+            if (!chkAssertion(myok && cur + TXOInfo::minSerSize() <= end)) return ret;
+            int txoinfo_size{};
+            if (isV1 || isV2) {
+                txoinfo_size = int(TXOInfo::minSerSize());
+            } else {
+                // V3 or above: read the byte size as a VarInt.
+                Span sp{cur, size_t(end - cur)};
+                try {
+                    const VarInt vi = VarInt::deserialize(sp); // this may throw
+                    cur = sp.data(); // span was updated to point past the varint
+                    txoinfo_size = int(vi.value<uint32_t>()); // this may throw
+                } catch (const std::exception &e) {
+                    chkAssertion(false, e.what());
+                    return ret;
+                }
+            }
+            if (!chkAssertion(txoinfo_size >= int(TXOInfo::minSerSize()) && cur + txoinfo_size <= end,
+                              "deser of VarInt size for a TXOInfo returned an error"))
+                return ret;
+            TXOInfo info = Deserialize<TXOInfo>(ShallowTmp(cur, txoinfo_size), &myok);
+            if (!chkAssertion(myok, "deser fail on TXOInfo object")) return ret;
+            cur += txoinfo_size;
             ret.delUndos.emplace_back(std::move(txo), std::move(info));
         }
-        chkAssertion(cur == end, "cur != end");
+        if (!chkAssertion(cur == end, "cur != end")) return ret;
         setOk(true);
         return ret;
     }
@@ -4237,7 +4451,7 @@ namespace {
         return ret;
     }
     // this deserializes a vector of TxNums from a compact representation (6 bytes, eg 48 bits per TxNum), assuming little endian byte order
-    template <> TxNumVec Deserialize (const QByteArray &ba, bool *ok)
+    template <> TxNumVec Deserialize(const QByteArray &ba, bool *ok)
     {
         constexpr auto compactSize = CompactTXO::compactTxNumSize(); /* 6 */
         const size_t blen = size_t(ba.length());
@@ -4264,10 +4478,29 @@ namespace {
         return ret;
     }
 
-    template <> QByteArray Serialize(const bitcoin::Amount &a) { return SerializeScalar(a / a.satoshi()); }
-    template <> bitcoin::Amount Deserialize(const QByteArray &ba, bool *ok) {
-        const int64_t amt = DeserializeScalar<int64_t>(ba, ok);
-        return amt * bitcoin::Amount::satoshi();
+    QByteArray Serialize(const bitcoin::Amount &a, const bitcoin::token::OutputData *ptok) {
+        QByteArray ret = SerializeScalar(a / a.satoshi());
+        BTC::SerializeTokenDataWithPrefix(ret, ptok); // may be no-op if ptok is nullptr
+        return ret;
+    }
+    template <> SHUnspentValue Deserialize(const QByteArray &ba, bool *pok) {
+        int pos = 0;
+        bool ok;
+        const int64_t amt = DeserializeScalar<int64_t>(ba, &ok, &pos);
+        SHUnspentValue ret;
+        if (ok) {
+            ret.amount = amt * bitcoin::Amount::satoshi();
+            try {
+                ret.tokenDataPtr = BTC::DeserializeTokenDataWithPrefix(ba, pos);
+            } catch (const std::exception &e) {
+                throw DatabaseSerializationError(
+                    QString("Got exception deserializing token data in Storage.cpp::Deserialize(): %1 (from bytes: %2)")
+                    .arg(e.what(), ba.mid(pos).toHex().constData()));
+            }
+        }
+        if (pok) *pok = ok;
+        ret.valid = ok;
+        return ret;
     }
 
 } // end anon namespace

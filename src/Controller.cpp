@@ -1627,7 +1627,7 @@ void Controller::process_PrintProgress(unsigned height, size_t nTx, size_t nIns,
 
 void Controller::process_DownloadingBlocks()
 {
-    unsigned ct = 0;
+    unsigned ct [[maybe_unused]] = 0;
 
     for (auto it = sm->ppBlocks.find(sm->ppBlkHtNext); it != sm->ppBlocks.end() && !stopFlag; it = sm->ppBlocks.find(sm->ppBlkHtNext)) {
         auto ppb = it->second;
@@ -1907,16 +1907,24 @@ auto Controller::debug(const StatsParams &p) const -> Stats // from StatsMixin
     if (const auto hashx = QByteArray::fromHex(p.value("unspent").toLatin1()); hashx.length() == HashLen) {
         QVariantList l;
 
-        auto items = storage->listUnspent(hashx);
-        for (const auto & item : items) {
-            QVariantMap m;
-            m["tx_hash"] = Util::ToHexFast(item.hash);
-            m["height"] = item.height;
-            m["tx_pos"] = item.tx_pos;
-            m["value"] = qlonglong(item.value / item.value.satoshi());
-            l.push_back(m);
-        }
+        const auto items = storage->listUnspent(hashx, Storage::TokenFilterOption::IncludeTokens);
+        for (const auto & item : items)
+            l.push_back(Server::unspentItemToVariantMap(item));
         ret["unspent_debug"] = l;
+    }
+    if (p.contains("utxo_stats")) {
+        // Note: This is slow and times-out on mainnet or even testnet3. Was mainly used for testing on chipnet.
+        const auto stats = storage->calcUTXOSetStats([](size_t ctr){ DebugM("utxo_stats: progress counter = ", ctr); });
+        QVariantMap m;
+        m["block_height"] = qlonglong(stats.block_height);
+        m["block_hash"] = QString::fromLatin1(stats.block_hash.toHex());
+        m["utxo_db_ct"] = qlonglong(stats.utxo_db_ct);
+        m["utxo_db_size_bytes"] = qlonglong(stats.utxo_db_size_bytes);
+        m["utxo_db_shasum"] = QString::fromLatin1(stats.utxo_db_shasum.toHex());
+        m["shunspent_db_ct"] = qlonglong(stats.shunspent_db_ct);
+        m["shunspent_db_size_bytes"] = qlonglong(stats.shunspent_db_size_bytes);
+        m["shunspent_db_shasum"] = QString::fromLatin1(stats.shunspent_db_shasum.toHex());
+        ret["utxo_stats"] = m;
     }
     if (p.contains("mempool")) {
         auto [mempool, lock] = storage->mempool();

@@ -145,6 +145,14 @@ namespace BTC
         return Serialize<BitcoinObject>(bo, pos, true, false);
     }
 
+    /// Used for scripthash_unspent db value and/or for TXOInfo inside utxoset db. May throw on deser failure or will
+    /// return a null object if `pos` is at end already. Will throw if there is junk at the end after deserialization.
+    /// If the passed-in `ba` is not empty, the first byte MUST be bitcoin::token::PREFIX_BYTE otherwise this throws.
+    /// The number of bytes consumed is always ba.length().
+    bitcoin::token::OutputDataPtr DeserializeTokenDataWithPrefix(const QByteArray &ba, int pos);
+    /// Appends prefix + token data to the end of byte stream `ba`. Will pre-reserve space first. May throw (unlikely).
+    void SerializeTokenDataWithPrefix(QByteArray &ba, const bitcoin::token::OutputData *ptokenData);
+
     /// Helper -- returns the size of a block header. Should always be 80. Update this if that changes.
     constexpr int GetBlockHeaderSize() noexcept { return 80; }
 

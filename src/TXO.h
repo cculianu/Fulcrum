@@ -108,22 +108,26 @@ struct TXOInfo {
     HashX hashX; ///< the scripthash this output is sent to.  Note in most cases this can be compactified to be a shallow-copy of existing data (such that dupes point to the same underlying data in eg UTXOSet).
     std::optional<unsigned> confirmedHeight; ///< if unset, is mempool tx
     TxNum txNum = 0; ///< the globally mapped txNum (one for each TxHash). This is used to be able to delete the CompactTXO from the hashX's scripthash_unspent table
+    bitcoin::token::OutputDataPtr tokenDataPtr; ///< may be null, if not-null, output has token data on it
 
     bool isValid() const { return amount / bitcoin::Amount::satoshi() >= 0 && hashX.length() == HashLen; }
 
     /// for debug, etc
     bool operator==(const TXOInfo &o) const {
-        return     std::tie(  amount,   hashX,   confirmedHeight,   txNum)
-                == std::tie(o.amount, o.hashX, o.confirmedHeight, o.txNum);
+        return     std::tie(  amount,   hashX,   confirmedHeight,   txNum,   tokenDataPtr)
+                == std::tie(o.amount, o.hashX, o.confirmedHeight, o.txNum, o.tokenDataPtr);
     }
     bool operator!=(const TXOInfo &o) const { return !(*this == o); }
 
     QByteArray toBytes() const {
         QByteArray ret;
         if (!isValid()) return ret;
-        const auto amt_sats = amount / bitcoin::Amount::satoshi();
+        const int64_t amt_sats = amount / bitcoin::Amount::satoshi();
         const int32_t cheight = confirmedHeight.has_value() ? int(*confirmedHeight) : -1;
-        ret.resize(int(serSize()));
+        const int minSize = int(minSerSize());
+        const int rsvSize = minSize + (tokenDataPtr ? 1 + int(tokenDataPtr->EstimatedSerialSize()) : 0);
+        ret.reserve(rsvSize);
+        ret.resize(minSize);
         char *cur = ret.data();
         std::memcpy(cur, &amt_sats, sizeof(amt_sats));
         cur += sizeof(amt_sats);
@@ -131,12 +135,16 @@ struct TXOInfo {
         cur += sizeof(cheight);
         CompactTXO::txNumToCompactBytes(reinterpret_cast<std::byte *>(cur), txNum);
         cur += CompactTXO::compactTxNumSize(); // always 6
-        std::memcpy(cur, hashX.constData(), size_t(hashX.length()));
+        std::memcpy(cur, hashX.constData(), size_t(hashX.length())); // always 32 (enforced by isValid() check above)
+        // NOTE: `cur` may be invalidated below
+        BTC::SerializeTokenDataWithPrefix(ret, tokenDataPtr.get());
         return ret;
     }
+
+    /// `ba` must only contain the valid bytes for this object. Will not tolerate junk bytes at the end.
     static TXOInfo fromBytes(const QByteArray &ba) {
         TXOInfo ret;
-        if (size_t(ba.length()) != serSize()) {
+        if (size_t(ba.length()) < minSerSize()) {
             return ret;
         }
         int64_t amt;
@@ -149,12 +157,21 @@ struct TXOInfo {
         ret.txNum = CompactTXO::txNumFromCompactBytes(reinterpret_cast<const std::byte *>(cur));
         cur += CompactTXO::compactTxNumSize(); // always 6
         ret.hashX = QByteArray(cur, HashLen);
+        cur += HashLen;
         ret.amount = amt * bitcoin::Amount::satoshi();
         if (cheight > -1)
             ret.confirmedHeight.emplace(unsigned(cheight));
+        try {
+            ret.tokenDataPtr = BTC::DeserializeTokenDataWithPrefix(ba, cur - ba.constData());
+            if constexpr (false) // Left-in for debugging purposes
+                if (ret.tokenDataPtr) Debug() << "Deserialized token data: " << ret.tokenDataPtr->ToString(true).c_str();
+        } catch (const std::exception &e) {
+            // This should never happen. Indicate serious error.
+            Error() << "Got exception deserializing token data: " << e.what() << " (bytearray hex: " << ba.toHex() << ")";
+            ret = TXOInfo{};
+        }
         return ret;
     }
 
-    static constexpr size_t serSize() noexcept { return sizeof(int64_t) + sizeof(int32_t) + CompactTXO::compactTxNumSize() + HashLen; }
+    static constexpr size_t minSerSize() noexcept { return sizeof(int64_t) + sizeof(int32_t) + CompactTXO::compactTxNumSize() + HashLen; }
 };
-

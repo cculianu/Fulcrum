@@ -103,7 +103,7 @@ auto Mempool::addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
                 }
                 // end memory saving hack
                 TXOInfo &txoInfo = tx->txos[n];
-                txoInfo = TXOInfo{out.nValue, sh, {}, {}};
+                txoInfo = TXOInfo{out.nValue, sh, {}, {}, out.tokenDataPtr};
                 auto & utxoset = tx->hashXs[sh].utxo;
                 utxoset.emplace_hint(utxoset.end(), n);
                 hxit->second.push_back(tx); // save tx to hashx -> tx vector (amortized constant time insert at end -- we will sort and uniqueify this at end of this function)
@@ -129,7 +129,8 @@ auto Mempool::addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
             const IONum prevN = IONum(in.prevout.GetN());
             const TxHash prevTxId = BTC::Hash2ByteArrayRev(in.prevout.GetTxId());
             const TXO prevTXO{prevTxId, prevN};
-            TXOInfo prevInfo;
+            std::optional<TXOInfo> optTXOInfo;
+            const TXOInfo *pprevInfo{}; // points to either a TXOInfo from a prevTxRef, or to &*optTXOInfo
             QByteArray sh; // shallow copy of prevInfo.hashX
             if (auto it = this->txs.find(prevTxId); it != this->txs.end()) {
                 // prev is a mempool tx
@@ -137,18 +138,21 @@ auto Mempool::addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
                 auto prevTxRef = it->second;
                 assert(bool(prevTxRef));
                 if (prevN >= prevTxRef->txos.size()
-                        || !(prevInfo = prevTxRef->txos[prevN]).isValid())
+                        || !(pprevInfo = &prevTxRef->txos[prevN])->isValid())
                     // defensive programming paranoia
                     throw InternalError(QString("FAILED TO FIND A VALID PREVIOUS TXOUTN %1:%2 IN MEMPOOL for TxHash: %3 (input %4)")
                                         .arg(QString(prevTxId.toHex())).arg(prevN).arg(QString(hash.toHex())).arg(inNum));
-                sh = prevInfo.hashX;
-                tx->hashXs[sh].unconfirmedSpends[prevTXO] = prevInfo;
+                sh = pprevInfo->hashX;
+                const auto & refPrevInfo = tx->hashXs[sh].unconfirmedSpends[prevTXO] = *pprevInfo;
                 auto prevHashXIt = prevTxRef->hashXs.find(sh);
                 if (prevHashXIt == prevTxRef->hashXs.end())
                     throw InternalError(QString("PREV OUT %1 IS MISSING ITS HASHX ENTRY FOR HASHX %2 (txid: %3)")
                                         .arg(prevTXO.toString(), QString(sh.toHex()), QString(tx->hash.toHex())));
                 prevHashXIt->second.utxo.erase(prevN); // remove this spend from utxo set for prevTx in mempool
-                if (TRACE) Debug() << hash.toHex() << " unconfirmed spend: " << prevTXO.toString() << " " << prevInfo.amount.ToString().c_str();
+                if (TRACE) {
+                    Debug() << hash.toHex() << " unconfirmed spend: " << prevTXO.toString() << " " << refPrevInfo.amount.ToString().c_str()
+                            << (refPrevInfo.tokenDataPtr ? (" " + refPrevInfo.tokenDataPtr->ToString()).c_str() : "");
+                }
 
                 // DSP handling (BCH only)
                 if (!dsps.empty() && !seenParents.count(prevTxId)) {
@@ -186,7 +190,7 @@ auto Mempool::addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
                 // /DSP handling
             } else {
                 // prev is a confirmed tx
-                const auto optTXOInfo = getTXOInfo(prevTXO); // this may also throw on low-level db error
+                optTXOInfo = getTXOInfo(prevTXO); // this may also throw on low-level db error
                 if (UNLIKELY(!optTXOInfo.has_value())) {
                     // Uh oh. If it wasn't in the mempool or in the db.. something is very wrong with our code...
                     // (or there maybe was a race condition and a new block came in while we were doing this).
@@ -195,24 +199,26 @@ auto Mempool::addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
                     throw InternalError(QString("FAILED TO FIND PREVIOUS TX %1 IN EITHER MEMPOOL OR DB for TxHash: %2 (input %3)")
                                         .arg(prevTXO.toString()).arg(QString(hash.toHex())).arg(inNum));
                 }
-                prevInfo = *optTXOInfo;
-                sh = prevInfo.hashX;
+                pprevInfo = &*optTXOInfo;
+                sh = pprevInfo->hashX;
                 // hack to save memory by re-using existing sh QByteArray and/or forcing a shallow-copy
                 auto hxit = tx->hashXs.find(sh);
                 if (hxit != tx->hashXs.end()) {
                     // existing found, re-use same unerlying QByteArray memory for sh
-                    sh = prevInfo.hashX = hxit->first;
+                    sh = optTXOInfo->hashX = hxit->first;
                 } else {
                     // new entry, insert, update hxit
                     auto pair = tx->hashXs.emplace(std::piecewise_construct, std::forward_as_tuple(sh), std::forward_as_tuple());
                     hxit = pair.first;
                 }
                 // end memory saving hack
-                hxit->second.confirmedSpends[prevTXO] = prevInfo;
-                if (TRACE) Debug() << hash.toHex() << " confirmed spend: " << prevTXO.toString() << " " << prevInfo.amount.ToString().c_str();
+                const auto & refPrevInfo = hxit->second.confirmedSpends[prevTXO] = *pprevInfo;
+                if (TRACE) {
+                    Debug() << hash.toHex() << " confirmed spend: " << prevTXO.toString() << " " << refPrevInfo.amount.ToString().c_str();
+                }
             }
-            tx->fee += prevInfo.amount;
-            assert(sh == prevInfo.hashX);
+            tx->fee += pprevInfo->amount;
+            assert(sh == pprevInfo->hashX);
             this->hashXTxs[sh].push_back(tx); // mark this hashX as having been "touched" because of this input (note we push dupes here out of order but sort and uniqueify at the end)
             scriptHashesAffected.insert(sh);
             ++inNum;
@@ -672,13 +678,19 @@ QVariantMap Mempool::dumpTx(const TxRef &tx)
         m["fee"] = tx->fee.ToString().c_str();
         m["hasUnconfirmedParentTx"] = tx->hasUnconfirmedParentTx;
         static const auto TXOInfo2Map = [](const TXOInfo &info) -> QVariantMap {
-            return QVariantMap{
+            QVariantMap ret{
                 { "amount", QString::fromStdString(info.amount.ToString()) },
                 { "scriptHash", info.hashX.toHex() },
                 // NEW -- it's useful to see this info in mempool debug to catch bugs
                 { "confirmedHeight", info.confirmedHeight ? QVariant(qlonglong(*info.confirmedHeight)) : QVariant()},
                 { "txNum", qlonglong(info.txNum)},
             };
+            if (info.tokenDataPtr) {
+                QByteArray ba;
+                BTC::SerializeTokenDataWithPrefix(ba, info.tokenDataPtr.get());
+                ret.insert("tokenData", ba.toHex());
+            }
+            return ret;
         };
         QVariantMap txos;
         IONum num = 0;

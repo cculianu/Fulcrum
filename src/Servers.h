@@ -324,7 +324,7 @@ public:
     /// which also needs a features dict when *it* calls add_peer on peer servers.
     /// NOTE: Be sure to only ever call this function from the same thread as the AbstractConnection (first arg) instance!
     static QVariantMap makeFeaturesDictForConnection(AbstractConnection *, const QByteArray &genesisHash,
-                                                     const Options & options, bool hasDSProofRPC);
+                                                     const Options & options, bool hasDSProofRPC, bool hasCashTokens);
 
     virtual QString prettyName() const override;
 
@@ -366,7 +366,9 @@ private:
     void rpc_blockchain_block_header(Client *, RPC::BatchId, const RPC::Message &);  // fully implemented
     void rpc_blockchain_block_headers(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     void rpc_blockchain_estimatefee(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+    void rpc_blockchain_headers_get_tip(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     void rpc_blockchain_headers_subscribe(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+    void rpc_blockchain_headers_unsubscribe(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     void rpc_blockchain_relayfee(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     // scripthash
     void rpc_blockchain_scripthash_get_balance(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
@@ -396,10 +398,10 @@ private:
 
     // Impl. for blockchain.scripthash.* & blockchain.address.* methods (both sets call into these).
     // Note: Validation should have already been done by caller.
-    void impl_get_balance(Client *, RPC::BatchId, const RPC::Message &, const HashX &scriptHash);
+    void impl_get_balance(Client *, RPC::BatchId, const RPC::Message &, const HashX &scriptHash, Storage::TokenFilterOption tokenFilter);
     void impl_get_history(Client *, RPC::BatchId, const RPC::Message &, const HashX &scriptHash);
     void impl_get_mempool(Client *, RPC::BatchId, const RPC::Message &, const HashX &scriptHash);
-    void impl_listunspent(Client *, RPC::BatchId, const RPC::Message &, const HashX &scriptHash);
+    void impl_listunspent(Client *, RPC::BatchId, const RPC::Message &, const HashX &scriptHash, Storage::TokenFilterOption tokenFilter);
     void impl_generic_subscribe(SubsMgr *, Client *, RPC::BatchId, const RPC::Message &, const HashX &key,
                                 const std::optional<QString> & aliasUsedForNotifications = {});
     void impl_generic_unsubscribe(SubsMgr *, Client *, RPC::BatchId, const RPC::Message &, const HashX &key);
@@ -417,6 +419,8 @@ private:
     /// it will throw RPCError in all parse/failure cases and only ever returns a valid hash on success.
     HashX parseFirstHashParamCommon(const RPC::Message &m, const char *const errMsg = nullptr) const;
 
+    /// Helper used by blockchain.*.listunspent *.get_balance to parse optional 2nd arg
+    Storage::TokenFilterOption parseTokenFilterOptionCommon(Client *c, const RPC::Message &m, size_t argPos) const;
 
     /// Basically a namespace for our rpc dispatch tables, etc
     struct StaticData {
@@ -462,6 +466,11 @@ protected:
     };
     static std::weak_ptr<LogFilter> weakLogFilter;
     std::shared_ptr<LogFilter> logFilter;
+
+public:
+    /// Helper function called by blockchain.scripthash.listunspent RPC and by the Controller class for /debug/
+    /// @returns A QVariantMap that matches the output of `blockchain.scripthash.listunspent`
+    [[nodiscard]] static QVariantMap unspentItemToVariantMap(const Storage::UnspentItem &);
 };
 
 /// SSL version of the above Server class that just wraps tcp sockets with a QSslSocket.
@@ -616,7 +625,7 @@ public:
 
     std::shared_ptr<PerIPData> perIPData;
 
-    bool isSubscribedToHeaders = false;
+    QMetaObject::Connection headerSubConnection; ///< if valid, this client is subscribed to headers (`Server::newHeader` signal)
     std::atomic_int nShSubs{0};  ///< the number of unique scripthash subscriptions for this client.
 
     //bitcoind_throttle counter, per client
@@ -625,6 +634,9 @@ public:
     double lastWarnedAboutSubsLimit = 0.; ///< used to throttle log messages when client hits subs limit
 
     static std::atomic_size_t numClients, numClientsMax, numClientsCtr; // number of connected clients: current, max lifetime, accumulated counter
+
+    /// Returns true iff the client is token aware (protocol version >= 1.4.6). Note that this only makese sense on BCH.
+    bool hasMinimumTokenAwareVersion() const;
 
 signals:
     /// Used by ServerBase via a direct connection.  The class d'tor emits this.  This is better for us than

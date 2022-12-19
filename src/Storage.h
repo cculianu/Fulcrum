@@ -233,6 +233,7 @@ public:
         IONum tx_pos = 0;
         bitcoin::Amount value;
         TxNum txNum = 0; ///< the global txNum. This + tx_pos defines the order
+        bitcoin::token::OutputDataPtr tokenDataPtr; ///< may be null, not null for outputs containing tokens
 
         // for sort & maps
         bool operator<(const UnspentItem &o) const noexcept;
@@ -240,12 +241,14 @@ public:
     };
     using UnspentItems = std::vector<UnspentItem>;
 
+    enum class TokenFilterOption { IncludeTokens, ExcludeTokens, OnlyTokens };
+
     /// Thread-safe. Will return an empty vector if the confirmed unspent size exceeds MaxHistory items. It may also
     /// return a truncated vector if the overflow is as a result of confirmed+unconfirmed exceeding MaxHistory.
-    UnspentItems listUnspent(const HashX &) const;
+    UnspentItems listUnspent(const HashX &, TokenFilterOption) const;
 
     /// thread safe -- returns confirmd, unconfirmed balance for a scripthash
-    std::pair<bitcoin::Amount, bitcoin::Amount> getBalance(const HashX &) const;
+    std::pair<bitcoin::Amount, bitcoin::Amount> getBalance(const HashX &, TokenFilterOption) const;
 
     /// thread safe, called from controller when we are up-to-date
     void updateMerkleCache(unsigned height);
@@ -313,6 +316,20 @@ public:
     /// optionally indented by `indent*indentLevel` spaces. If indent is 0, the output will all be on 1 line with no
     /// padding.
     size_t dumpAllScriptHashes(QIODevice *outDev, unsigned indent=0, unsigned indentLevel=0, const DumpProgressFunc & = {}, size_t progInterval = 100000) const;
+
+    struct UTXOSetStats {
+        BlockHeight block_height;
+        BlockHash block_hash;
+        size_t utxo_db_ct{}, shunspent_db_ct{};
+        size_t utxo_db_size_bytes{}, shunspent_db_size_bytes{};
+        QByteArray utxo_db_shasum, shunspent_db_shasum; // sha256d sum of all key/value pairs in both dbs
+    };
+    /// Thread-safe. Call this from any thread, but ideally call it from a threadPool worker thread, since it may take
+    /// a while. Will iterate over the entire utxoset db and scripthash_unspent db and return some stats. Used by
+    /// the /debug HTTP endpoint.
+    UTXOSetStats calcUTXOSetStats(const DumpProgressFunc & = {}, size_t progInterval = 100000) const;
+
+    // --- Initial synch support ---
 
     /// Leverages RAII to have the Storage class auto-notified when initial sync has started & ended.
     class InitialSyncRAII {
@@ -422,6 +439,7 @@ private:
     void loadCheckTxNumsFileAndBlkInfo(); ///< may throw -- called from startup()
     void loadCheckTxHash2TxNumMgr(); ///< may throw -- called from startup()
     void loadCheckEarliestUndo(); ///< may throw -- called from startup()
+    void checkUpgradeDBVersion(); ///< may throw -- called from startup() as the last thing
 
     std::optional<Header> headerForHeight_nolock(BlockHeight height, QString *errMsg = nullptr) const;
     std::vector<Header> headersFromHeight_nolock_nocheck(BlockHeight height, unsigned count, QString *errMsg = nullptr) const;
@@ -490,7 +508,7 @@ RocksDB: "utxoset"
 
 RocksDB: "scripthash_unspent"
   Key: scripthash_raw_bytes + serialized CompactTXO (40 or 41 bytes)
-  Value: 8-byte amount field (64-bit signed integer)
+  Value: 8-byte amount field (64-bit signed integer), plus optional tokenData (prefixed by 0xef)
   Comments: It turns out scanning by prefix over a table is blazingly fast in rocksdb, so we can easily do listunspent
   using this scheme. I tried a read-modify-write approach (keying off just HashX) and it was painfully slow on synch.
   This is much faster to synch.

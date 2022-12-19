@@ -353,6 +353,28 @@ namespace {
             ret.clear();
         return ret;
     }
+
+    QVariantMap tokenDataToVariantMap(const bitcoin::token::OutputData & tok) {
+        QVariantMap ret;
+        ret.insert(QByteArrayLiteral("category"), QString::fromStdString(tok.GetId().ToString()));
+        ret.insert(QByteArrayLiteral("amount"), QString::number(qlonglong(tok.GetAmount().getint64())));
+        if (tok.HasNFT()) {
+            QVariantMap nft_obj;
+            nft_obj.insert(QByteArrayLiteral("capability"), [&tok] {
+                if (tok.IsMutableNFT()) return QByteArrayLiteral("mutable");
+                else if (tok.IsMintingNFT()) return QByteArrayLiteral("minting");
+                else return QByteArrayLiteral("none");
+            }());
+            const auto &comm = tok.GetCommitment();
+            // NB: we use a QString for `hexComm` below to avoid the case where empty commitment hex "" ends up as `null` in JSON
+            const QString hexComm(Util::ToHexFast(QByteArray::fromRawData(reinterpret_cast<const char *>(comm.data()),
+                                                                          comm.size())));
+            nft_obj.insert(QByteArrayLiteral("commitment"), hexComm);
+
+            ret.insert(QByteArrayLiteral("nft"), std::move(nft_obj));
+        }
+        return ret;
+    }
 } // namespace
 
 ServerBase::ServerBase(SrvMgr *sm,
@@ -385,7 +407,7 @@ QVariant ServerBase::stats() const
         map["userAgent"] = client->info.userAgent;
         map["errCt"] = client->info.errCt;
         map["nRequestsRcv"] = client->info.nRequestsRcv;
-        map["isSubscribedToHeaders"] = client->isSubscribedToHeaders;
+        map["isSubscribedToHeaders"] = bool(client->headerSubConnection);
         map["nSubscriptions"] = client->nShSubs.load();
         map["nTxSent"] = client->info.nTxSent;
         map["nTxBytesSent"] = client->info.nTxBytesSent;
@@ -1027,7 +1049,7 @@ void Server::rpc_server_donation_address(Client *c, const RPC::BatchId batchId, 
     emit c->sendResult(batchId, m.id, transformDefaultDonationAddressToBTCOrBCHOrLTC(*options, isNonBCH(), isLTC()));
 }
 /* static */
-QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const QByteArray &genesisHash, const Options &opts, bool dsproof)
+QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const QByteArray &genesisHash, const Options &opts, bool dsproof, bool hasCashTokens)
 {
     QVariantMap r;
     if (!c) {
@@ -1042,6 +1064,8 @@ QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const Q
     r["protocol_max"] = ServerMisc::MaxProtocolVersion.toString();
     r["hash_function"] = ServerMisc::HashFunction;
     r["dsproof"] = dsproof;
+    if (hasCashTokens)
+        r["cashtokens"] = true;
 
     QVariantMap hmap, hmapTor;
     if (opts.publicTcp.has_value())
@@ -1087,7 +1111,7 @@ QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const Q
 }
 void Server::rpc_server_features(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
-    emit c->sendResult(batchId, m.id, makeFeaturesDictForConnection(c, storage->genesisHash(), *options, bitcoindmgr->hasDSProofRPC()));
+    emit c->sendResult(batchId, m.id, makeFeaturesDictForConnection(c, storage->genesisHash(), *options, bitcoindmgr->hasDSProofRPC(), coin == BTC::Coin::BCH));
 }
 void Server::rpc_server_peers_subscribe(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
@@ -1304,30 +1328,58 @@ void Server::rpc_blockchain_estimatefee(Client *c, const RPC::BatchId batchId, c
         return response.result();
     });
 }
-void Server::rpc_blockchain_headers_subscribe(Client *c, const RPC::BatchId batchId, const RPC::Message &m) // fully implemented
+// helper used blockchain.headers.get_tip and blockchain.headers.subscribe
+static QVariantMap mkHeadersTipResponse(unsigned height, const QByteArray & header)
 {
-    // helper used both for this response and for notifications
-    static const auto mkResp = [](unsigned height, const QByteArray & header) -> QVariantMap {
-        return QVariantMap{
-            { "height" , height },
-            { "hex" , Util::ToHexFast(header) }
-        };
-    };
+    QVariantMap m;
+    m.insert(QByteArrayLiteral("height"), height);
+    m.insert(QByteArrayLiteral("hex"), Util::ToHexFast(header));
+    return m;
+}
+void Server::rpc_blockchain_headers_get_tip(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
+{
+    Storage::Header hdr;
+    const auto [height, _] = storage->latestTip(&hdr);
+    emit c->sendResult(batchId, m.id, mkHeadersTipResponse(unsigned(std::max(0, height)), hdr));
+}
+void Server::rpc_blockchain_headers_subscribe(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
+{
     Storage::Header hdr;
     const auto [height, hhash] = storage->latestTip(&hdr);
     // we assume everything is peachy and don't check header size, etc as we can't really get here until we have synched at least *some* headers.
-    if (!c->isSubscribedToHeaders) {
-        c->isSubscribedToHeaders = true;
-        // connect to signal. Will be emitted directly to object until it dies.
-        connect(this, &Server::newHeader, c, [c, meth=m.method](unsigned height, const QByteArray &header){
-            // the notification is a list of size 1, with a dict in it. :/
-            emit c->sendNotification(meth, QVariantList({mkResp(height, header)}));
-        });
+    if (!c->headerSubConnection) {
+        c->headerSubConnection =
+            // connect to signal. Will be emitted directly to object until it dies, or until unsubscribed.
+            connect(this, &Server::newHeader, c, [c, meth=m.method](unsigned height, const QByteArray &header){
+                // the notification is a list of size 1, with a dict in it. :/
+                emit c->sendNotification(meth, QVariantList({mkHeadersTipResponse(height, header)}));
+            });
+        if (!c->headerSubConnection) {
+            // This should never happen but it pays to be paranoid and always check return values
+            Error() << "Failed to subscribe to headers for " << c->prettyName(false, false) << ". QObject::connect failed!";
+            throw RPCError("Subscribe to headers failed due to an internal error", RPC::ErrorCodes::Code_InternalError);
+        }
         DebugM(c->prettyName(false, false), " is now subscribed to headers");
     } else {
         DebugM(c->prettyName(false, false), " was already subscribed to headers, ignoring duplicate subscribe request");
     }
-    emit c->sendResult(batchId, m.id, mkResp(unsigned(std::max(0, height)), hdr));
+    emit c->sendResult(batchId, m.id, mkHeadersTipResponse(unsigned(std::max(0, height)), hdr));
+}
+void Server::rpc_blockchain_headers_unsubscribe(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
+{
+    const bool result = c->headerSubConnection;
+    if (result) {
+        if (!disconnect(c->headerSubConnection)) {
+            // This should never happen but it pays to always check return values
+            Error() << "Failed to unsubscribe from headers for " << c->prettyName(false, false) << ". QObject::disconnect failed!";
+            throw RPCError("Unsubscribe from headers failed due to an internal error", RPC::ErrorCodes::Code_InternalError);
+        }
+        c->headerSubConnection = QMetaObject::Connection{}; // invalidate
+        DebugM(c->prettyName(false, false), " is no longer subscribed to headers");
+    } else {
+        DebugM(c->prettyName(false, false), " was not subscribed to headers, ignoring unsubscribe request");
+    }
+    emit c->sendResult(batchId, m.id, QVariant(result));
 }
 void Server::rpc_blockchain_relayfee(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
@@ -1336,7 +1388,7 @@ void Server::rpc_blockchain_relayfee(Client *c, const RPC::BatchId batchId, cons
     emit c->sendResult(batchId, m.id, bitcoindmgr->getBitcoinDInfo().relayFee);
 }
 
-// ---- The below two methods are used by both the blockchain.scripthash.* and blockchain.address.* sets of methods
+// ---- The below three methods are used by both the blockchain.scripthash.* and blockchain.address.* sets of methods
 //      below for boilerplate checking & parsing.
 HashX Server::parseFirstAddrParamToShCommon(const RPC::Message &m, QString *addrStrOut) const
 {
@@ -1369,21 +1421,50 @@ HashX Server::parseFirstHashParamCommon(const RPC::Message &m, const char *const
         throw RPCError(!errMsg ? "Invalid scripthash" : errMsg);
     return sh;
 }
+Storage::TokenFilterOption Server::parseTokenFilterOptionCommon(Client *c, const RPC::Message &m, size_t argPos) const
+{
+    const QVariantList l(m.paramsList());
+    const bool hasArg = size_t(l.size()) > argPos;
+    const bool isNotBCH = isNonBCH();
+    if (isNotBCH && hasArg)
+        // unsupported on non-BCH
+        throw RPCError("The token filtering option is only available on BCH", RPC::ErrorCodes::Code_InvalidParams);
+    else if (!hasArg) {
+        if (isNotBCH || c->hasMinimumTokenAwareVersion())
+            // Default for token-aware clients: include tokens
+            // Note that for BTC, LTC, etc -- we also "include tokens" so as to not apply any filtering here. Actual tx
+            // data should *not* have any tokens on these chains.
+            return Storage::TokenFilterOption::IncludeTokens;
+        else
+            // default for token-unaware clients: exclude tokens
+            return Storage::TokenFilterOption::ExcludeTokens;
+    }
+    const auto arg = l[argPos].toString().trimmed().toLower();
+    if (arg == QStringLiteral("exclude_tokens")) return Storage::TokenFilterOption::ExcludeTokens;
+    else if (arg == QStringLiteral("include_tokens")) return Storage::TokenFilterOption::IncludeTokens;
+    else if (arg == QStringLiteral("tokens_only")) return Storage::TokenFilterOption::OnlyTokens;
+    else
+        throw RPCError("Invalid token filtering option. Specify one of: \"exclude_tokens\", \"include_tokens\", \"tokens_only\"",
+                       RPC::ErrorCodes::Code_InvalidParams);
+}
 // ---
 void Server::rpc_blockchain_scripthash_get_balance(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const auto sh = parseFirstHashParamCommon(m);
-    impl_get_balance(c, batchId, m, sh);
+    const auto tf = parseTokenFilterOptionCommon(c, m, 1);
+    impl_get_balance(c, batchId, m, sh, tf);
 }
 void Server::rpc_blockchain_address_get_balance(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const auto sh = parseFirstAddrParamToShCommon(m);
-    impl_get_balance(c, batchId, m, sh);
+    const auto tf = parseTokenFilterOptionCommon(c, m, 1);
+    impl_get_balance(c, batchId, m, sh, tf);
 }
-void Server::impl_get_balance(Client *c, const RPC::BatchId batchId, const RPC::Message &m, const HashX &sh)
+void Server::impl_get_balance(Client *c, const RPC::BatchId batchId, const RPC::Message &m, const HashX &sh,
+                              const Storage::TokenFilterOption tokenFilter)
 {
-    generic_do_async(c, batchId, m.id, [sh, this] {
-        const auto [amt, uamt] = storage->getBalance(sh);
+    generic_do_async(c, batchId, m.id, [sh, tokenFilter, this] {
+        const auto [amt, uamt] = storage->getBalance(sh, tokenFilter);
         /* Note: ElectrumX protocol docs are incorrect. They claim a string in coin units is returned here.
          * It is not. Instead a number in satoshis is returned!
          * Incorrect docs: https://electrumx.readthedocs.io/en/latest/protocol-methods.html#blockchain-scripthash-get-balance */
@@ -1454,26 +1535,37 @@ void Server::impl_get_mempool(Client *c, const RPC::BatchId batchId, const RPC::
 void Server::rpc_blockchain_scripthash_listunspent(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const auto sh = parseFirstHashParamCommon(m);
-    impl_listunspent(c, batchId, m, sh);
+    const auto tf = parseTokenFilterOptionCommon(c, m, 1);
+    impl_listunspent(c, batchId, m, sh, tf);
 }
 void Server::rpc_blockchain_address_listunspent(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const auto sh = parseFirstAddrParamToShCommon(m);
-    impl_listunspent(c, batchId, m, sh);
+    const auto tf = parseTokenFilterOptionCommon(c, m, 1);
+    impl_listunspent(c, batchId, m, sh, tf);
 }
-void Server::impl_listunspent(Client *c, const RPC::BatchId batchId, const RPC::Message &m, const HashX &sh)
+/* static */
+QVariantMap Server::unspentItemToVariantMap(const Storage::UnspentItem & item)
 {
-    generic_do_async(c, batchId, m.id, [sh, this] {
+    QVariantMap vm{
+        { QByteArrayLiteral("tx_hash") , Util::ToHexFast(item.hash) },
+        { QByteArrayLiteral("tx_pos")  , item.tx_pos },
+        { QByteArrayLiteral("height")  , item.height },  // confirmed height. Is 0 for mempool tx regardless of unconf. parent status. Note this differs from get_mempool or get_history where -1 is used for unconf. parent.
+        { QByteArrayLiteral("value")   , qlonglong(item.value / item.value.satoshi()) }, // amount (int64) in satoshis
+    };
+    if (item.tokenDataPtr)
+        vm.insert(QByteArrayLiteral("token_data"), tokenDataToVariantMap(*item.tokenDataPtr));
+    return vm;
+}
+void Server::impl_listunspent(Client *c, const RPC::BatchId batchId, const RPC::Message &m, const HashX &sh,
+                              const Storage::TokenFilterOption tokenFilter)
+{
+    generic_do_async(c, batchId, m.id, [sh, tokenFilter, this] {
         QVariantList resp;
-        const auto items = storage->listUnspent(sh); // these are already sorted
-        for (const auto & item : items) {
-            resp.push_back(QVariantMap{
-                { "tx_hash" , Util::ToHexFast(item.hash) },
-                { "tx_pos"  , item.tx_pos },
-                { "height", item.height },  // confirmed height. Is 0 for mempool tx regardless of unconf. parent status. Note this differs from get_mempool or get_history where -1 is used for unconf. parent.
-                { "value", qlonglong(item.value / item.value.satoshi()) }, // amount (int64) in satoshis
-            });
-        }
+        const auto items = storage->listUnspent(sh, tokenFilter); // these are already sorted
+        resp.reserve(items.size());
+        for (const auto & item : items)
+            resp.push_back(unspentItemToVariantMap(item));
         return resp;
     });
 }
@@ -1982,7 +2074,6 @@ void Server::rpc_blockchain_transaction_dsproof_unsubscribe(Client *c, const RPC
 void Server::rpc_blockchain_utxo_get_info(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const QVariantList l = m.paramsList();
-    assert(l.size() == 2);
 
     QByteArray txHash = validateHashHex( l.front().toString() ); // arg0: prevoutHash
     if (txHash.length() != HashLen)
@@ -2002,6 +2093,8 @@ void Server::rpc_blockchain_utxo_get_info(Client *c, const RPC::BatchId batchId,
             m["scripthash"] = QString(Util::ToHexFast(optInfo->hashX));
             if (optInfo->confirmedHeight.has_value())
                 m["confirmed_height"] = qlonglong(optInfo->confirmedHeight.value());
+            if (optInfo->tokenDataPtr)
+                m["token_data"] = tokenDataToVariantMap(*optInfo->tokenDataPtr);
             // NB: unconfirmed utxos will lack a "confirmed_height" entry
             ret = m;
         }
@@ -2035,24 +2128,26 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
     { {"server.ping",                       true,               false,    PR{0,0},                    },          MP(rpc_server_ping) },
     { {"server.version",                    true,               false,    PR{0,2},                    },          MP(rpc_server_version) },
 
-    { {"blockchain.address.get_balance",    true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_get_balance) },
+    { {"blockchain.address.get_balance",    true,               false,    PR{1,2},                    },          MP(rpc_blockchain_address_get_balance) },
     { {"blockchain.address.get_history",    true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_get_history) },
     { {"blockchain.address.get_mempool",    true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_get_mempool) },
     { {"blockchain.address.get_scripthash", true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_get_scripthash) },
-    { {"blockchain.address.listunspent",    true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_listunspent) },
+    { {"blockchain.address.listunspent",    true,               false,    PR{1,2},                    },          MP(rpc_blockchain_address_listunspent) },
     { {"blockchain.address.subscribe",      true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_subscribe) },
     { {"blockchain.address.unsubscribe",    true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_unsubscribe) },
 
     { {"blockchain.block.header",           true,               false,    PR{1,2},                    },          MP(rpc_blockchain_block_header) },
     { {"blockchain.block.headers",          true,               false,    PR{2,3},                    },          MP(rpc_blockchain_block_headers) },
     { {"blockchain.estimatefee",            true,               false,    PR{1,1},                    },          MP(rpc_blockchain_estimatefee) },
+    { {"blockchain.headers.get_tip",        true,               false,    PR{0,0},                    },          MP(rpc_blockchain_headers_get_tip) },
     { {"blockchain.headers.subscribe",      true,               false,    PR{0,0},                    },          MP(rpc_blockchain_headers_subscribe) },
+    { {"blockchain.headers.unsubscribe",    true,               false,    PR{0,0},                    },          MP(rpc_blockchain_headers_unsubscribe) },
     { {"blockchain.relayfee",               true,               false,    PR{0,0},                    },          MP(rpc_blockchain_relayfee) },
 
-    { {"blockchain.scripthash.get_balance", true,               false,    PR{1,1},                    },          MP(rpc_blockchain_scripthash_get_balance) },
+    { {"blockchain.scripthash.get_balance", true,               false,    PR{1,2},                    },          MP(rpc_blockchain_scripthash_get_balance) },
     { {"blockchain.scripthash.get_history", true,               false,    PR{1,1},                    },          MP(rpc_blockchain_scripthash_get_history) },
     { {"blockchain.scripthash.get_mempool", true,               false,    PR{1,1},                    },          MP(rpc_blockchain_scripthash_get_mempool) },
-    { {"blockchain.scripthash.listunspent", true,               false,    PR{1,1},                    },          MP(rpc_blockchain_scripthash_listunspent) },
+    { {"blockchain.scripthash.listunspent", true,               false,    PR{1,2},                    },          MP(rpc_blockchain_scripthash_listunspent) },
     { {"blockchain.scripthash.subscribe",   true,               false,    PR{1,1},                    },          MP(rpc_blockchain_scripthash_subscribe) },
     { {"blockchain.scripthash.unsubscribe", true,               false,    PR{1,1},                    },          MP(rpc_blockchain_scripthash_unsubscribe) },
 
@@ -2674,6 +2769,8 @@ Client::~Client()
     socket = nullptr; // NB: we are a child of socket, so socket is alread invalid here. This line here is added in case some day I make AbstractClient delete socket on destruct.
     emit clientDestructing(this); // This is currently connected to a lambda in ServerBase::newClient
 }
+
+bool Client::hasMinimumTokenAwareVersion() const { return info.protocolVersion >= ServerMisc::MinTokenAwareProtocolVersion; }
 
 void Client::do_disconnect(bool graceful)
 {

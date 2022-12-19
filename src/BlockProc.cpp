@@ -62,10 +62,10 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bi
         IONum outN = 0;
         for (const auto & out : tx->vout) {
             // save the outputs seen
-            outputs.emplace_back(
-                OutPt{ unsigned(txIdx), outN, out.nValue, {} }
+            outputs.push_back(
+                OutPt{ unsigned(txIdx), outN, out.nValue, {}, out.tokenDataPtr }
             );
-            estimatedThisSizeBytes += sizeof(OutPt);
+            estimatedThisSizeBytes += sizeof(OutPt) + (out.tokenDataPtr ? out.tokenDataPtr->GetMemSize() : 0u);
             const size_t outputIdx = outputs.size()-1;
             if (const auto cscript = out.scriptPubKey;
                     !BTC::IsOpReturn(cscript))  ///< skip OP_RETURN
@@ -203,7 +203,10 @@ QString PreProcessedBlock::toDebugString() const
             }
             for (size_t j = 0; j < ag.outs.size(); ++j) {
                 const auto idx = ag.outs[j];
-                ts << " {out# " << j << " - " << txHashForOutputIdx(idx).toHex() << ":" << outputs[idx].outN << " amt: " << outputs[idx].amount.ToString().c_str() << " }";
+                ts << " {out# " << j << " - " << txHashForOutputIdx(idx).toHex() << ":" << outputs[idx].outN
+                   << " amt: " << outputs[idx].amount.ToString().c_str()
+                   << " tok: " << (outputs[idx].tokenDataPtr ? outputs[idx].tokenDataPtr->ToString().c_str() : "")
+                   << " }";
             }
             ts << ")";
             ++i;

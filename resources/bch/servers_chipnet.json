@@ -10,5 +10,9 @@
     "chipnet.imaginary.cash": {
         "t": "50001",
         "s": "50002"
+    },
+    "ryzen.electroncash.de": {
+        "t": "50001",
+        "s": "50002"
     }
 }
