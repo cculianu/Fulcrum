@@ -1498,7 +1498,7 @@ class Storage::UTXOCache
             // because we uniquely identify txns by unique id number, so dupe tx-hash's (as was possible pre-BIP34)
             // cannot trigger this branch.  This branch is here strictly for paranoia.
             Warning() << __func__ << ": WARNING dupe txo encountered with key: \"" << it->first.toHex() << "\" [val1: "
-                      << it->second.toHex() << " val2: " << v.toHex() << "], overwriting existing with amt2.";
+                      << it->second.toHex() << " val2: " << v.toHex() << "], overwriting existing with val2.";
             it->second = v; // overwrite existing to preserve behavior of pre-UTXOCache code.
         }
         // NOTE: Assumption is that an add will never add a shunspent key that is in the shunspentRms vector.
