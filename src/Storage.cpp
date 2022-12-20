@@ -1163,7 +1163,7 @@ class Storage::UTXOCache
     ShunspentRmVec shunspentRms; ///< queued deletions, not yet deleted from DB
 
     static constexpr size_t ShunspentTableNodeSize = sizeof(ShunspentTable::value_type) + HashLen + CompactTXO::minSize()
-                                                     + Util::qByteArrayPvtDataSize();
+                                                     + Util::qByteArrayPvtDataSize()*size_t{2u} + sizeof(int64_t); // not guaranteed accurate: doesn't take possible tokenData serialization into account
     static constexpr size_t ShunspentRmVecNodeSize = sizeof(ShunspentRmVec::value_type) + HashLen + CompactTXO::minSize()
                                                      + Util::qByteArrayPvtDataSize();
 
