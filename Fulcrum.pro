@@ -465,6 +465,7 @@ HEADERS += \
     bitcoin/uint256.h \
     bitcoin/utilstrencodings.h \
     bitcoin/utilstring.h \
+    bitcoin/utilvector.h \
     bitcoin/version.h
 
 # Enable secp256k1 compilation on x86_64 only -- we don't actually use this lib

@@ -4,6 +4,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include "cashaddr.h"
+#include "utilvector.h"
 
 #ifdef __clang__
 #pragma clang diagnostic push
@@ -14,12 +15,16 @@ namespace bitcoin {
 
 namespace {
 
-typedef std::vector<uint8_t> data;
+using data = std::vector<uint8_t>;
 
 /**
  * The cashaddr character set for encoding.
  */
-const char *CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
+const char CHARSET[] = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
+
+// Ensure basic sanity as per the spec. This should match the strlen() of above.
+constexpr const uint8_t PACKED_VAL_LIMIT = 32u;
+static_assert(std::size(CHARSET) - 1u == PACKED_VAL_LIMIT);
 
 /**
  * The cashaddr character set for decoding.
@@ -32,14 +37,6 @@ const int8_t CHARSET_REV[128] = {
     31, 27, 19, -1, 1,  0,  3,  16, 11, 28, 12, 14, 6,  4,  2,  -1, -1, -1, -1,
     -1, -1, 29, -1, 24, 13, 25, 9,  8,  23, -1, 18, 22, 31, 27, 19, -1, 1,  0,
     3,  16, 11, 28, 12, 14, 6,  4,  2,  -1, -1, -1, -1, -1};
-
-/**
- * Concatenate two byte arrays.
- */
-data Cat(data x, const data &y) {
-    x.insert(x.end(), y.begin(), y.end());
-    return x;
-}
 
 /**
  * This function will compute what 8 5-bit values to XOR into the last 8 input
@@ -215,8 +212,8 @@ std::string Encode(const std::string &prefix, const data &payload) {
     std::string ret = prefix + ':';
 
     ret.reserve(ret.size() + combined.size());
-    for (uint8_t c : combined) {
-        ret += CHARSET[c];
+    for (const uint8_t c : combined) {
+        ret += CHARSET[c % PACKED_VAL_LIMIT];
     }
 
     return ret;
