@@ -23,6 +23,7 @@
 #include "Json/Json.h"
 #include "Logger.h"
 #include "Servers.h"
+#include "ServerMisc.h"
 #include "Storage.h"
 #include "SSLCertMonitor.h"
 #include "ThreadPool.h"
@@ -1580,6 +1581,8 @@ QString App::extendedVersionString(bool justLibs)
 
     if (!justLibs) {
         ts << applicationName() << " " << applicationVersion() << "\n";
+        ts << "Protocol: version min: " << ServerMisc::MinProtocolVersion.toString()
+           << ", version max: " << ServerMisc::MaxProtocolVersion.toString() << "\n";
         if (auto compiler = getCompiler(); !compiler.isEmpty())
             ts << "compiled: " << compiler << "\n";
     }
