@@ -18,7 +18,6 @@
 //
 #include "AbstractConnection.h"
 #include "Compat.h"
-#include "Options.h"
 #include "Util.h"
 #include <QTcpSocket>
 #include <QSslSocket>
@@ -37,16 +36,23 @@ AbstractConnection::AbstractConnection(IdMixin::Id id_in, QObject *parent, qint6
 
 
 /// this should only be called from our thread, because it accesses socket which should only be touched from thread
-QString AbstractConnection::prettyName(bool dontTouchSocket, bool showId) const
+QString AbstractConnection::prettyName(bool dontTouchSocket, bool showId, AnonymizeIP anonip) const
 {
-    QString type = socket && !dontTouchSocket
-                   ? (isSsl() ? (isWebSocket() ? QStringLiteral("WSS") : QStringLiteral("SSL"))
-                              : (isWebSocket() ? QStringLiteral("WS")  : QStringLiteral("TCP")))
-                   : QStringLiteral("(NoSocket)");
-    QString port = socket && !dontTouchSocket && socket->peerPort() ? QStringLiteral(":%1").arg(socket->peerPort()) : QString();
-    QString ip = socket && !dontTouchSocket && !socket->peerAddress().isNull() ? socket->peerAddress().toString() : QString();
-    QString idStr = showId ? QStringLiteral(" (id: %1)").arg(id) : QString();
-    return QStringLiteral("%1 %2%3 %4%5").arg(type).arg(!objectName().isNull()?objectName():QStringLiteral("(AbstractSocket)")).arg(idStr).arg(ip).arg(port);
+    const bool anon = anonip == AnonymizeIP::Yes;
+    const QString type = socket && !dontTouchSocket
+                         ? (isSsl() ? (isWebSocket() ? QStringLiteral("WSS") : QStringLiteral("SSL"))
+                                    : (isWebSocket() ? QStringLiteral("WS")  : QStringLiteral("TCP")))
+                         : QStringLiteral("(NoSocket)");
+    QString ip, port, idStr;
+    if (!anon && socket && !dontTouchSocket && !socket->peerAddress().isNull())
+        ip =  socket->peerAddress().toString();
+    if (!anon && socket && !dontTouchSocket && socket->peerPort())
+        port = QStringLiteral(":%1").arg(socket->peerPort());
+    if (showId)
+        idStr = QStringLiteral(" (id: %1)").arg(id);
+    const QString objNam = !objectName().isNull() ? objectName() : QStringLiteral("(AbstractSocket)");
+    return QStringLiteral("%1 %2%3%4").arg(type, objNam, idStr,
+                                           ip.isEmpty() && port.isEmpty() ? QString() : QStringLiteral(" %1%2").arg(ip, port));
 }
 
 bool AbstractConnection::isGood() const

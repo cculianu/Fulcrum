@@ -1297,6 +1297,16 @@ void App::parseArgs()
                           .arg(strVal, QString::number(Options::minUtxoCache / 1e6, 'f', 1)));
         options->utxoCache = static_cast<size_t>(bytes);
     }
+
+    // conf: anon_logs
+    if (conf.hasValue("anon_logs")) {
+        bool ok{};
+        const bool val = conf.boolValue("anon_logs", Options::defaultAnonLogs, &ok);
+        if (!ok)
+            throw BadArgs("anon_logs: bad value. Specify a boolean value such as 0, 1, true, false, yes, no");
+        options->anonLogs = val;
+        Util::AsyncOnObject(this, [val]{ DebugM("config: anon_logs = ", val); });
+    }
 }
 
 namespace {

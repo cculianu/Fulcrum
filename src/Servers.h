@@ -638,6 +638,9 @@ public:
     /// Returns true iff the client is token aware (protocol version >= 1.4.6). Note that this only makese sense on BCH.
     bool hasMinimumTokenAwareVersion() const;
 
+    /// Reimplements base class, defaulting `anon` to whatever is set in options, and then calls base class impl.
+    QString prettyName(bool dontTouchSocket=false, bool showId=true, AnonymizeIP anon=AnonymizeIP::Auto) const override;
+
 signals:
     /// Used by ServerBase via a direct connection.  The class d'tor emits this.  This is better for us than
     /// QObject::destroyed because that runs after this type no longer is a "Client", wheras this is emitted

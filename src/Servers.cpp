@@ -1783,8 +1783,11 @@ void Server::rpc_blockchain_transaction_broadcast(Client *c, const RPC::BatchId 
             c->info.nTxBytesSent += unsigned(size);
             emit broadcastTxSuccess(unsigned(size));
             QByteArray logLine;
-            QTextStream{&logLine, QIODevice::WriteOnly}
-                << "Broadcast tx for client " << c->id << ", size: " << size << " bytes, response: " << ret.toString();
+            {
+                QTextStream ts{&logLine, QIODevice::WriteOnly};
+                ts << "Broadcast tx for client " << c->id;
+                if (!options->anonLogs) ts << ", size: " << size << " bytes, response: " << ret.toString();
+            }
             logFilter->broadcast(true, logLine, txkey);
             // Next, check if client is old and has the phishing exploit:
             // version 3.3.4 was the first one that was good for both Electron Cash and Electrum
@@ -2768,6 +2771,12 @@ Client::~Client()
         DebugM(__func__, " ", id);
     socket = nullptr; // NB: we are a child of socket, so socket is alread invalid here. This line here is added in case some day I make AbstractClient delete socket on destruct.
     emit clientDestructing(this); // This is currently connected to a lambda in ServerBase::newClient
+}
+
+QString Client::prettyName(bool dontTouchSocket, bool showId, AnonymizeIP anon) const
+{
+    if (anon == AnonymizeIP::Auto) anon = options.anonLogs ? AnonymizeIP::Yes : AnonymizeIP::No;
+    return RPC::ElectrumConnection::prettyName(dontTouchSocket, showId, anon);
 }
 
 bool Client::hasMinimumTokenAwareVersion() const { return info.protocolVersion >= ServerMisc::MinTokenAwareProtocolVersion; }

@@ -274,6 +274,10 @@ public:
     // CLI: --fast-sync (experimental)
     static constexpr size_t defaultUtxoCache = 0, minUtxoCache = 200ull * 1000ull * 1000ull; // 0 is off, otherwise 200 MB min
     size_t utxoCache = defaultUtxoCache;
+
+    // config: anon_logs
+    static constexpr bool defaultAnonLogs = false;
+    bool anonLogs = defaultAnonLogs; ///< if true, we hide IP addresses, Bitcoin addresses, and txid's from the Log()
 };
 
 /// A class encapsulating a simple read-only config file format.  The format is similar to the bitcoin.conf format
