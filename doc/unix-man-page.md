@@ -125,7 +125,7 @@ Once the server finishes synching it will behave like an ElectronX/ElectrumX ser
 :    *This is an advanced debugging option*. Dump script hashes. If specified, after the database is loaded, all of the script hashes in the database will be written to outputfile as a JSON array.
 
 [config]
-:   Configuration file (optional).
+:   Configuration file (optional). To read configuration variables from the environment instead, specify _ENV_ for this argument.
 
 
 # FILES

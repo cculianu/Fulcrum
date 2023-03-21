@@ -37,9 +37,12 @@
 #include <QHostInfo>
 #include <QLibraryInfo>
 #include <QLocale>
+#include <QProcessEnvironment>
 #include <QRegularExpression>
 #include <QSemaphore>
+#include <QSet>
 #include <QSslSocket>
+#include <QTemporaryFile>
 #include <QTextStream>
 
 #include <algorithm>
@@ -542,7 +545,14 @@ void App::parseArgs()
     }
 
     parser.addOptions(allOptions);
-    parser.addPositionalArgument("config", "Configuration file (optional).", "[config]");
+    QString configArgDesc = "Configuration file (optional). To read configuration variables from the environment instead, ";
+#ifdef Q_OS_LINUX
+    configArgDesc += "specify either _ENV_ or /proc/self/environ";
+#else
+    configArgDesc += "specify _ENV_";
+#endif
+    configArgDesc += " for this argument.";
+    parser.addPositionalArgument("config", configArgDesc, "[config]");
     parser.process(*this);
 
     // handle --version first, this exits immediately
@@ -623,7 +633,24 @@ void App::parseArgs()
     if (auto posArgs = parser.positionalArguments(); !posArgs.isEmpty()) {
         if (posArgs.size() > 1)
             throw BadArgs("More than 1 config file was specified. Please specify at most 1 config file.");
-        const auto file = posArgs.first();
+        QString file = posArgs.first();
+        QTemporaryFile tmpFile;
+        QSet<QString> specialEnvTokens;
+        specialEnvTokens.insert("_ENV_"); // support for _ENV_ as a "special" file where we read from the environment instead
+#ifdef Q_OS_LINUX
+        // Hack to support /proc/self/environ without actually reading it (since it has embedded nuls)
+        specialEnvTokens.insert("/proc/self/environ");
+#endif
+        if (specialEnvTokens.contains(file)) {
+            if (!tmpFile.open()) throw InternalError("Error opening temporary file");
+            tmpFile.setAutoRemove(true);
+            // convert env vars "name=value" items into a temp file of "name=value\n", so the conf parser works.
+            for (const auto & item : QProcessEnvironment::systemEnvironment().toStringList()) {
+                tmpFile.write(item.toUtf8() + '\n');
+            }
+            tmpFile.flush();
+            file = tmpFile.fileName(); // overwrite the variable to point to our generated temporary file
+        }
         if (!conf.open(file))
             throw BadArgs(QString("Unable to open config file %1").arg(file));
         // ok, at this point the config file is slurped up and we can check it below
