@@ -174,6 +174,10 @@ QVariantMap Options::toMap() const
     m["txhash_cache"] = txHashCacheBytes / 1e6; // this comes in as a MB value from config, so spit it back out in the same MB unit
     // max_batch
     m["max_batch"] = maxBatch;
+    // anon_logs
+    m["anon_logs"] = anonLogs;
+    // pidfile
+    m["pidfile"] = pidFileAbsPath;
     return m;
 }
 

@@ -104,9 +104,9 @@ App::App(int argc, char *argv[])
 
 App::~App()
 {
-    if (!pidFileAbsPath.isEmpty()) {
-        if (!QFile::remove(pidFileAbsPath)) Warning() << "Failed to delete pid file: " << pidFileAbsPath;
-        else DebugM("Deleted pid file: ", pidFileAbsPath);
+    if (options && !options->pidFileAbsPath.isEmpty()) {
+        if (!QFile::remove(options->pidFileAbsPath)) Warning() << "Failed to delete pid file: " << options->pidFileAbsPath;
+        else DebugM("Deleted pid file: ", options->pidFileAbsPath);
     }
     Debug() << "App d'tor";
     Log() << "Shutdown complete";
@@ -1353,11 +1353,11 @@ void App::parseArgs()
         if (!pidFile.open(QFile::WriteOnly|QFile::Truncate|QFile::Text))
             throw BadArgs(QString("pidfile: Cannot open file \"%1\"").arg(pidFile.fileName()));
         QFileInfo fi(pidFile.fileName());
-        pidFileAbsPath = fi.absoluteFilePath(); // save pid file path so we can delete it later
+        options->pidFileAbsPath = fi.absoluteFilePath(); // save pid file path so we can delete it later
         if (pidFile.write(QByteArray::number(applicationPid()) + '\n') <= 0)
             throw BadArgs(QString("pidfile: Cannot write to file \"%1\"").arg(pidFile.fileName()));
         Util::AsyncOnObject(this, [this] {
-            DebugM("config: pidfile = ", pidFileAbsPath, " (size: ", QFileInfo(pidFileAbsPath).size(), " bytes)");
+            DebugM("config: pidfile = ", options->pidFileAbsPath, " (size: ", QFileInfo(options->pidFileAbsPath).size(), " bytes)");
         });
     }
 }

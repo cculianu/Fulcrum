@@ -278,6 +278,10 @@ public:
     // config: anon_logs
     static constexpr bool defaultAnonLogs = false;
     bool anonLogs = defaultAnonLogs; ///< if true, we hide IP addresses, Bitcoin addresses, and txid's from the Log()
+
+    // CLI: --pidfile
+    // config: pidfile
+    QString pidFileAbsPath; ///< If non-empty, app will write PID to this file and delete this file on shutdown
 };
 
 /// A class encapsulating a simple read-only config file format.  The format is similar to the bitcoin.conf format
