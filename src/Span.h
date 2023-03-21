@@ -1,6 +1,6 @@
 // Copyright (c) 2018 The Bitcoin Core developers
 // Copyright (c) 2020 The Bitcoin developers
-// Copyright (c) 2021-2022 Calin A. Culianu <calin.culianu@gmail.com>
+// Copyright (C) 2019-2023 Calin A. Culianu <calin.culianu@gmail.com>
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 #pragma once

@@ -1,6 +1,6 @@
 /*
 Json - A lightweight JSON parser and serializer for Qt.
-Copyright (c) 2020-2022 Calin A. Culianu <calin.culianu@gmail.com>
+Copyright (c) 2020-2023 Calin A. Culianu <calin.culianu@gmail.com>
 
 The MIT License (MIT)
 
