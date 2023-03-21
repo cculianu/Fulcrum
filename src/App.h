@@ -145,6 +145,7 @@ private:
     QList<std::shared_ptr<SimpleHttpServer> > httpServers;
     std::atomic_bool quitting = false;
     std::unique_ptr<SSLCertMonitor> sslCertMonitor; ///< may be nullptr if no SSL. Once created, instance is persistent.
+    QString pidFileAbsPath;
 
     void startup();
     void cleanup();

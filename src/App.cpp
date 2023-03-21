@@ -104,6 +104,10 @@ App::App(int argc, char *argv[])
 
 App::~App()
 {
+    if (!pidFileAbsPath.isEmpty()) {
+        if (!QFile::remove(pidFileAbsPath)) Warning() << "Failed to delete pid file: " << pidFileAbsPath;
+        else DebugM("Deleted pid file: ", pidFileAbsPath);
+    }
     Debug() << "App d'tor";
     Log() << "Shutdown complete";
     _globalInstance = nullptr;
@@ -496,6 +500,12 @@ void App::parseArgs()
                " database disk space usage by removing redundant/unused data. Note that rocksdb normally compacts the"
                " databases in the background while " APPNAME " is running, so using this option to explicitly compact"
                " the database files on startup is not strictly necessary.\n"),
+    },
+    {
+        "pidfile",
+        QString("If specified, " APPNAME " will write its process ID to this file on startup. Useful for integration"
+                " with monitoring software.\n"),
+        QString("filename")
     },
     {
        "fast-sync",
@@ -1314,7 +1324,7 @@ void App::parseArgs()
         const QString strVal = pset ? parser.value("fast-sync") : conf.value("fast-sync");
         const double val = strVal.toDouble(&ok);
         if (!ok || val < 0.)
-            throw BadArgs(QString("fast-sync: Slease specify a positive numeric value in MB, or 0 to disable"));
+            throw BadArgs(QString("fast-sync: Please specify a positive numeric value in MB, or 0 to disable"));
         const uint64_t bytes = static_cast<uint64_t>(val * 1e6);
         if (uint64_t memfree; bytes > (memfree = std::min<uint64_t>(Util::getAvailablePhysicalRAM(), std::numeric_limits<size_t>::max())))
             throw BadArgs(QString("fast-sync: Specified value (%1 bytes) is too large to fit in available"
@@ -1333,6 +1343,22 @@ void App::parseArgs()
             throw BadArgs("anon_logs: bad value. Specify a boolean value such as 0, 1, true, false, yes, no");
         options->anonLogs = val;
         Util::AsyncOnObject(this, [val]{ DebugM("config: anon_logs = ", val); });
+    }
+
+    // CLI: --pidfile
+    // conf: pidfile
+    if (const bool pset = parser.isSet("pidfile"); pset || conf.hasValue("pidfile")) {
+        const QString strVal = pset ? parser.value("pidfile") : conf.value("pidfile");
+        QFile pidFile(strVal);
+        if (!pidFile.open(QFile::WriteOnly|QFile::Truncate|QFile::Text))
+            throw BadArgs(QString("pidfile: Cannot open file \"%1\"").arg(pidFile.fileName()));
+        QFileInfo fi(pidFile.fileName());
+        pidFileAbsPath = fi.absoluteFilePath(); // save pid file path so we can delete it later
+        if (pidFile.write(QByteArray::number(applicationPid()) + '\n') <= 0)
+            throw BadArgs(QString("pidfile: Cannot write to file \"%1\"").arg(pidFile.fileName()));
+        Util::AsyncOnObject(this, [this] {
+            DebugM("config: pidfile = ", pidFileAbsPath, " (size: ", QFileInfo(pidFileAbsPath).size(), " bytes)");
+        });
     }
 }
 
