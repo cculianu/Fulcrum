@@ -8,7 +8,7 @@
 #include <cstdint>
 #include <cstdlib>
 
-#if defined(__x86_64__) || defined(__amd64__)
+#if defined(USE_ASM) && (defined(__x86_64__) || defined(__amd64__))
 
 namespace sha256_sse4 {
 void Transform(uint32_t *s, const uint8_t *chunk, size_t blocks) {
