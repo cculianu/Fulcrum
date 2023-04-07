@@ -187,9 +187,8 @@ namespace BTC
         return cs.size() > 0 && *cs.begin() == bitcoin::opcodetype::OP_RETURN;
     }
 
-    inline QByteArray HashXFromCScript(const bitcoin::CScript &cs) {
-        return QByteArray(BTC::HashRev(QByteArray::fromRawData(reinterpret_cast<const char *>(cs.data()), int(cs.size())), true));
-    }
+    inline QByteArray HashXFromByteView(const ByteView &bv) { return BTC::HashRev(bv.toByteArray(false), true); }
+    inline QByteArray HashXFromCScript(const bitcoin::CScript &cs) { return HashXFromByteView(cs); }
 
     /// Header Chain Verifier -
     /// To use: Basically keep calling operator() on it with subsequent headers and it will make sure

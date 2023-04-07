@@ -1092,6 +1092,6 @@ public:
     void store(T && o) { lockExclusively().first = std::move(o); }
 };
 
-// helper type for std::visit (currently unused in this code base due to lack of std::variant support)
+// helper type for std::visit
 template<class... Ts> struct Overloaded : Ts... { using Ts::operator()...; };
 template<class... Ts> Overloaded(Ts...) -> Overloaded<Ts...>;
