@@ -9,9 +9,8 @@
 #include "script_flags.h"
 #include "uint256.h"
 
-#include <variant> // C++17, added by Calin as boost::variant work-alike
-
 #include <cstdint>
+#include <variant> // C++17, added by Calin as boost::variant work-alike
 
 #ifdef __clang__
 #pragma clang diagnostic push
