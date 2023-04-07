@@ -601,6 +601,11 @@ namespace Util {
     /// 2x the length of bytes.  `buf` must not overlap with `bytes`.
     bool ToHexFastInPlace(const QByteArray & bytes, char *buf, size_t bufsz);
 
+    /// Returns true iff:
+    /// - all chars in the string are in the set: 0123456789abcdefABCDEF
+    /// - the string has an even number of characters (or is empty)
+    bool IsValidHex(const QByteArray &maybeHexStr);
+
     /// For each item in a QByteArray Container, hex encode each item using Util::ToHexFast().
     template <typename Container,
               std::enable_if_t<std::is_base_of_v<QByteArray, typename Container::value_type>, int> = 0>

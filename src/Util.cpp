@@ -58,6 +58,7 @@
 
 #include <QRegularExpression>
 
+#include <cctype>
 #include <cstring>             // for strerror
 #include <iostream>
 #include <mutex>
@@ -268,6 +269,12 @@ namespace Util {
         }
         return true;
     }
+
+    bool IsValidHex(const QByteArray &s)
+    {
+        return s.size() % 2 == 0 && std::all_of(s.begin(), s.end(), [](char const c) { return std::isxdigit(c); });
+    }
+
 
     namespace {
         /// Stores a hash seed that we will use for our hash tables.

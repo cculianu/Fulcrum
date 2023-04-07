@@ -2664,9 +2664,35 @@ void AdminServer::rpc_query_address(Client *c, const RPC::BatchId batchId, const
 {
     const auto l = m.paramsList();
     assert(l.size() == 1);
+
+    // This either runs asynch after the bitcoind `validateaddress` response, or asynch without the bitcoind callback
+    auto prepareResult = [this](const QString &address, const QByteArray &scriptPubKey) {
+        const auto hashX = BTC::HashXFromByteView(scriptPubKey);
+        QVariantMap reply;
+        if (!address.isEmpty()) reply["address"] = address;
+        else reply["script"] = Util::ToHexFast(scriptPubKey);
+        reply["history"] = getHistoryCommon(hashX, false);
+        reply["unspent"] = listUnspentCommon(hashX, Storage::TokenFilterOption::IncludeTokens);
+        reply["balance"] = getBalanceCommon(hashX, Storage::TokenFilterOption::IncludeTokens);
+        return reply;
+    };
+
+    const QString param = l.front().toString();
+
+    // If the client specified a hex scriptPubKey, no need to query bitcoind
+    if (QByteArray scriptPubKey; Util::IsValidHex(scriptPubKey = param.toLatin1()) && !scriptPubKey.isEmpty()) {
+        scriptPubKey = Util::ParseHexFast(scriptPubKey);
+        generic_do_async(c, batchId, m.id, [prepareResult, scriptPubKey]{
+            return prepareResult({}, scriptPubKey);
+        });
+        return;
+    }
+
+    // Otherwise, client may have specified an address ... so query bitcoind to validate it
+
     // Step 1: Rely on the bitcoin daemon to parse the address (so we don't have to)
     generic_async_to_bitcoind(c, batchId, m.id, "validateaddress", l,
-                              [this, c, batchId, reqId = m.id, param = l.front().toString()](const RPC::Message &reply){
+                              [this, c, batchId, prepareResult, param, reqId = m.id](const RPC::Message &reply) {
         const QVariantMap resp = reply.result().toMap();
         if (!resp.value("isvalid", false).toBool())
             throw RPCError(QString("Invalid address: %1").arg(param), RPC::Code_InvalidParams);
@@ -2678,15 +2704,8 @@ void AdminServer::rpc_query_address(Client *c, const RPC::BatchId batchId, const
         }
 
         // Step 2: After we got the scriptPubKey from the daemon, use it to get a hashX and the balance, history, etc
-        generic_do_async(c, batchId, reqId, [this, address, hashX = BTC::HashXFromByteView(scriptPubKey)]{
-            QVariantMap reply;
-
-            reply["address"] = address;
-            reply["history"] = getHistoryCommon(hashX, false);
-            reply["unspent"] = listUnspentCommon(hashX, Storage::TokenFilterOption::IncludeTokens);
-            reply["balance"] = getBalanceCommon(hashX, Storage::TokenFilterOption::IncludeTokens);
-
-            return reply;
+        generic_do_async(c, batchId, reqId, [prepareResult, address, scriptPubKey]{
+            return prepareResult(address, scriptPubKey);
         });
 
         // we don't auto-send any reply to client because we do more asynch stuff above
