@@ -55,7 +55,14 @@ macx {
     # which requires newer Mojave+ C++ libs.  On a recent compiler SDK, this will
     # compile ok even on High Sierra with latest Xcode for High Sierra, so this requirement
     # isn't too bad.  It just affects what C++ runtime we link to on MacOS.
-    QMAKE_MACOSX_DEPLOYMENT_TARGET = 10.14
+    versionAtMost(QT_VERSION, 6.4.3) {
+        # Qt 6.4.3 was OK with this setting
+        QMAKE_MACOSX_DEPLOYMENT_TARGET = 10.14
+    } else {
+        # It appears Qt 6.5.0 requires at least 10.15 otherwise we get compile-time errors about std::filesystem
+        # Since 6.5.0 is linked-to 11.0, we will just use that.
+        QMAKE_MACOSX_DEPLOYMENT_TARGET = 11.0
+    }
 }
 
 # The following define makes your compiler emit warnings if you use
