@@ -13,33 +13,72 @@ ID_NEXT = random.randint(0, 262144)
 JSON = False
 EXITSTATUS = 0
 
+
 class ErrorResponse(RuntimeError):
     pass
 
+
+def make_new_request(method, params=None):
+    global ID_NEXT
+    reqid = ID_NEXT
+    ID_NEXT += 1
+    outj = {"id": reqid, "jsonrpc": "2.0", "method": method, "params": params or []}
+    return outj
+
+
+def sndrecv_json(sock, outj):
+    verb = False
+    msg = json.dumps(outj, indent=None).encode("utf8") + b'\n'
+    if verb:
+        print(f"Srv --> {msg[:2048]}")
+    sock.send(msg)
+    resp = bytearray()
+    seen_nl = False
+    while not seen_nl:
+        chunk = sock.recv(4096)
+        nl_index = chunk.find(b'\n')
+        if nl_index > -1:
+            seen_nl = True
+            chunk = chunk[:nl_index]
+        resp += chunk
+    if verb:
+        print(f"Srv <-- {resp[:2048]}")
+    j = json.loads(resp.decode("utf8").strip())
+    return j
+
+
 def send_request(method, params=None):
-    verb = False#not args.q
     with socket.create_connection((HOST, PORT), timeout=10.0) as sock:
-        def sndrecv(_id, method, params=None):
-            outj = { "id" : _id, "jsonrpc" : "2.0", "method" : method, "params": params or [] }
-            msg = json.dumps(outj, indent=None).encode("utf8") + b'\n'
-            if verb: print(f"Srv --> {msg[:2048]}")
-            sock.send(msg)
-            resp = bytearray()
-            while b'\n' not in resp:
-                resp += sock.recv(4096)
-            if verb: print(f"Srv <-- {resp[:2048]}")
-            j = json.loads(resp.decode("utf8").strip())
-            if j.get("error") or j.get("id") != _id:
-                raise ErrorResponse("Error response from Fulcrum:\n\n" + (json.dumps(j.get("error"), indent=4) or j))
-            return j.get("result")
-        global ID_NEXT
-        reqid = ID_NEXT; ID_NEXT += 1
-        return sndrecv(reqid, method, params)
+        req = make_new_request(method, params)
+        reqid = req['id']
+        j = sndrecv_json(sock, req)
+        if j.get("error") or j.get("id") != reqid:
+            raise ErrorResponse("Error response from Fulcrum:\n\n" + (json.dumps(j.get("error"), indent=4) or j))
+        return j.get("result")
+
+
+def send_request_batch(method_params_tuples):
+    batch = []
+    for method, params in method_params_tuples:
+        batch.append(make_new_request(method, params))
+    with socket.create_connection((HOST, PORT), timeout=10.0) as sock:
+        jarray = sndrecv_json(sock, batch)
+        ret = []
+        if not isinstance(jarray, (list, tuple)):
+            raise ErrorResponse("Error response from Fulcrum:\n\n" + jarray)
+        # Sort the responses with respect to the 'id' so they are in the order caller specified
+        jarray = sorted(jarray, key=lambda x: x.get('id') or -1)
+        for item in jarray:
+            if item.get("error") or 'result' not in item:
+                raise ErrorResponse("Error response from Fulcrum:\n\n" + (json.dumps(item.get("error"), indent=4)
+                                                                          or item))
+            ret.append(item["result"])
+        return ret
 
 
 def main():
     global HOST, PORT, JSON, EXITSTATUS
-    parser = argparse.ArgumentParser(prog="FulcrumAdmin.py", description="Fulcrum CLI admin tool")
+    parser = argparse.ArgumentParser(prog="FulcrumAdmin", description="Fulcrum CLI admin tool")
     parser.add_argument('-p', type=int, metavar="port", nargs=1, required=True, help=f"Specify the port for the Fulcrum admin RPC service. This is a required argument.")
     parser.add_argument('-j', action='store_true', dest="json", help=f"Print the response from the server as JSON, not as formatted text")
     parser.add_argument('-H', type=str, metavar="host", nargs='?', default=HOST, help=f"Specify the host for the Fulcrum admin RPC service. Defaults to {HOST}.")
@@ -64,6 +103,9 @@ def main():
     maxbuffer = subparsers.add_parser('maxbuffer', help="Query or set server max_buffer setting")
     maxbuffer.add_argument('bytes', metavar='bytes', type=int, nargs='?', help='The new desired max_buffer setting in bytes. Must be >= 64KB and <= 100MB. If omitted, then this script will just query the current value.')
     peers = subparsers.add_parser('peers', help="Print peering information")
+    query = subparsers.add_parser('query', help="Query for balance, UTXO, and history information for one or more addresses")
+    query.add_argument('address', metavar='address', nargs='+', help="Address to query")
+    query.add_argument('-l', metavar='limit', type=int, nargs='?', help="UTXO and history output limit")
     rmpeer = subparsers.add_parser('rmpeer', help="Remove peers by hostname suffix")
     rmpeer.add_argument('hostnames', metavar='hostname', nargs='+', help="A hostname or hostname suffix e.g. somehost.com or *some.host.com.")
     simdjson = subparsers.add_parser('simdjson', help="Get or set the server's 'simdjson' (JSON parser) setting")
@@ -91,6 +133,7 @@ def main():
     if command == 'banlist' : command = 'listbanned'
     command_params = tuple()
     response_handler = lambda r: json.dumps(r, indent = 4)  # default handler just pretty-prints the JSON
+    my_send_request = send_request
 
     if command is None:
         print("Please specify a command to run.\n")
@@ -221,8 +264,33 @@ possibly peer with this Fulcrum server, then please use the 'banpeer' command.
                     return f"Unexpected response from Fulcrum server: {r}"
             response_handler = handler
 
+    elif command == 'query':
+        if args.l is not None:
+            limit = int(args.l)
+            if limit <= 0:
+                print('query requires limit be >= 1.')
+                sys.exit(1)
+        else:
+            limit = 1 << 63
+        if not JSON:
+            response_handler = lambda r: query_address_handler(r, limit=limit)
+        command_params = args.address
+        command = 'query_address'
+
+        def send_request_override(method, params):
+            batch = []
+            if not JSON:
+                # First request is the getinfo which tells us the "coin" and "chain" we are on, which is used
+                # by the pretty formatter to output the balance as xx.xx BCH, etc.
+                batch.append(('getinfo', []))
+            for addr in params:
+                batch.append((method, [addr]))
+            return send_request_batch(batch)
+
+        my_send_request = send_request_override
+
     try:
-        print(response_handler(send_request(command, command_params)))
+        print(response_handler(my_send_request(command, command_params)))
         sys.exit(EXITSTATUS)
     except OSError as e:
         print(f"Error communicating with the admin RPC port at {HOST}:{PORT}\n\n    {e}\n")
@@ -231,6 +299,75 @@ possibly peer with this Fulcrum server, then please use the 'banpeer' command.
         print(f"{e}")
         sys.exit(1)
 
+
+def query_address_handler(response_list, limit):
+    """Reproduce electrumx output verbatim. Note that it has quirks such that the history list is indexed at 0
+    and the utxo list is indexed at 1 :( """
+    assert isinstance(response_list, (list, tuple))
+    assert isinstance(limit, int) and limit > 0
+    lines = []
+
+    coin_str = "(COIN UNITS)"
+    if response_list:
+        # Query the coin for proper units e.g. "BCH"
+        info = response_list[0]
+        if 'chain' in info and 'coin' in info:
+            response_list = response_list[1:]  # pop first item which is the getinfo reply
+            coin = info['coin']
+            chain = info['chain']
+            prefix = ''
+            lchain = chain.lower()
+            if not lchain.startswith('main'):
+                if lchain.startswith('scale') or lchain.startswith('sig'):
+                    prefix = 's'
+                elif lchain.startswith('reg'):
+                    prefix = 'r'
+                else:
+                    prefix = 't'
+            coin_str = prefix + coin
+
+    def format_coin_str(value):
+        neg = value < 0
+        sign = '-' if neg else ''
+        if neg:
+            value = -value
+        integral_part = value // int(1e8)
+        frac_part_str = f'{value % int(1e8):d}'
+        while len(frac_part_str) > 1 and frac_part_str[-1] == '0':  # Trim trailing zeroes
+            frac_part_str = frac_part_str[:-1]
+        return f'{sign}{integral_part:,d}.{frac_part_str} {coin_str}'
+
+    for r in response_list:
+        assert isinstance(r, dict)
+        assert 'address' in r and 'balance' in r and 'history' in r and 'unspent' in r
+        address = r['address']
+        lines.append(f'Address: {address}')
+        history = r['history']
+        if history:
+            for n, d in enumerate(history):
+                height = d['height']
+                tx_hash = d['tx_hash']
+                lines.append(f'History #{n:,d}: height {height:,d} tx_hash {tx_hash}')
+                if n + 1 >= limit:
+                    break
+        else:
+            lines.append("No history found")
+        utxos = r['unspent']
+        if utxos:
+            for n, d in enumerate(utxos, start=1):
+                tx_hash = d['tx_hash']
+                tx_pos = d['tx_pos']
+                height = d['height']
+                value = d['value']
+                lines.append(f'UTXO #{n:,d}: tx_hash {tx_hash} tx_pos {tx_pos:,d} height {height:,d} value {value:,d}')
+                if n >= limit:
+                    break
+        else:
+            lines.append("No UTXOs found")
+        bal = r['balance']
+        balance_value = int(bal['confirmed']) + int(bal['unconfirmed'])
+        lines.append(f'Balance: {format_coin_str(balance_value)}')
+    return '\n'.join(lines)
 
 
 def clients_handler(r):
