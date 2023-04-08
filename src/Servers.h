@@ -38,6 +38,7 @@
 #include <optional>
 #include <shared_mutex>
 #include <type_traits>
+#include <variant>
 
 struct TcpServerError : public Exception
 {
@@ -268,7 +269,10 @@ protected:
     };
 
     using AsyncWorkFunc = std::function<QVariant()>;
-    using BitcoinDSuccessFunc = std::function<QVariant(const RPC::Message &)>;
+    struct DontAutoSendReply_t {};
+    static constexpr DontAutoSendReply_t DontAutoSendReply;
+    using BitcoinDSuccessFuncResult = std::variant<QVariant, DontAutoSendReply_t>;
+    using BitcoinDSuccessFunc = std::function<BitcoinDSuccessFuncResult(const RPC::Message &)>;
     using BitcoinDErrorFunc = std::function<void(const RPC::Message &)>; // errfunc should always throw RPCError to indicate the exact error it wants to send.
 
     /// Used by some of the slower rpc methods to do work in a threadpool thread. This returns right away but schedules
@@ -308,6 +312,23 @@ protected:
     /// If true we are on the BTC or LTC chains.
     bool isNonBCH() const { return coin != BTC::Coin::BCH; }
     bool isLTC() const { return coin == BTC::Coin::LTC; }
+
+
+    // --- Helpers used by Server* and AdminServer subclasses ---
+
+    /// Called from get_mempool and get_history to retrieve the mempool and/or history for a hashx synchronously.
+    /// Also called by Admin server's 'query_address'
+    /// Returns the QVariantMap suitable for placing into the resulting response.
+    QVariantList getHistoryCommon(const HashX & scriptHash, bool mempoolOnly);
+    /// Called for get_balance and also Admin server's query_address
+    QVariantMap getBalanceCommon(const HashX & scriptHash, Storage::TokenFilterOption tokenFilter);
+    /// Called for listunspent and also Admin server's query_address
+    QVariantList listUnspentCommon(const HashX & scriptHash, Storage::TokenFilterOption tokenFilter);
+
+public:
+    /// Helper function called by blockchain.scripthash.listunspent RPC and by the Controller class for /debug/
+    /// @returns A QVariantMap that matches the output of `blockchain.scripthash.listunspent`
+    [[nodiscard]] static QVariantMap unspentItemToVariantMap(const Storage::UnspentItem &);
 };
 
 /// Implements the ElectrumX/ElectronX JSON-RPC protocol, version 1.4.4.
@@ -442,10 +463,6 @@ private:
     /// Helper for rpc block_header* methods -- returns the 'branch' and 'root' keys ready to be put in the results dictionary
     HeadersBranchAndRootPair getHeadersBranchAndRoot(unsigned height, unsigned cp_height);
 
-    /// called from get_mempool and get_history to retrieve the mempool and/or history for a hashx synchronously.
-    /// Returns the QVariantMap suitable for placing into the resulting response.
-    QVariantList getHistoryCommon(const HashX & sh, bool mempoolOnly);
-
     double lastSubsWarningPrintTime = 0.; ///< used internally to rate-limit "max subs exceeded" message spam to log
 
 protected:
@@ -466,11 +483,6 @@ protected:
     };
     static std::weak_ptr<LogFilter> weakLogFilter;
     std::shared_ptr<LogFilter> logFilter;
-
-public:
-    /// Helper function called by blockchain.scripthash.listunspent RPC and by the Controller class for /debug/
-    /// @returns A QVariantMap that matches the output of `blockchain.scripthash.listunspent`
-    [[nodiscard]] static QVariantMap unspentItemToVariantMap(const Storage::UnspentItem &);
 };
 
 /// SSL version of the above Server class that just wraps tcp sockets with a QSslSocket.
@@ -543,6 +555,7 @@ private:
     void rpc_loglevel(Client *, RPC::BatchId, const RPC::Message &);
     void rpc_maxbuffer(Client *, RPC::BatchId, const RPC::Message &);
     void rpc_peers(Client *, RPC::BatchId, const RPC::Message &);
+    void rpc_query_address(Client *, RPC::BatchId, const RPC::Message &);
     void rpc_rmpeer(Client *, RPC::BatchId, const RPC::Message &);
     void rpc_simdjson(Client *, RPC::BatchId, const RPC::Message &);
     void rpc_shutdown(Client *, RPC::BatchId, const RPC::Message &);

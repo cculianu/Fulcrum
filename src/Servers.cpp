@@ -847,8 +847,21 @@ void ServerBase::generic_async_to_bitcoind(Client *c, const RPC::BatchId batchId
             c->bdReqCtr -= std::min(c->bdReqCtr, 1LL); // decrease throttle counter
             --c->perIPData->bdReqCtr; // decrease bitcoind request counter (per-IP, owned by multiple threads)
             try {
-                const QVariant result = successFunc ? successFunc(reply) : reply.result(); // if no successFunc specified, use default which just copies the result to the client.
-                emit c->sendResult(batchId, reqId, result);
+                QVariant result;
+                bool send = true;
+                if (!successFunc)
+                    // if no successFunc specified, use default which just copies the result to the client.
+                    result = reply.result();
+                else {
+                    const auto res = successFunc(reply);
+                    std::visit(Overloaded {
+                        // successFunct() returned a valid QVariant, so we auto-send a reply to the client
+                        [&](const QVariant &var) { result = var; },
+                        // successFunc() specified to not auto-send a reply to client (it will handle the reply itself)
+                        [&](const DontAutoSendReply_t &) { send = false; }
+                    }, res);
+                }
+                if (send) emit c->sendResult(batchId, reqId, result);
             } catch (const RPCError &e) {
                 emit c->sendError(e.disconnect, e.code, e.what(), batchId, reqId);
             } catch (const std::exception &e) {
@@ -1460,25 +1473,31 @@ void Server::rpc_blockchain_address_get_balance(Client *c, const RPC::BatchId ba
     const auto tf = parseTokenFilterOptionCommon(c, m, 1);
     impl_get_balance(c, batchId, m, sh, tf);
 }
+
+QVariantMap ServerBase::getBalanceCommon(const HashX &sh, Storage::TokenFilterOption tokenFilter)
+{
+    const auto [amt, uamt] = storage->getBalance(sh, tokenFilter);
+    /* Note: ElectrumX protocol docs are incorrect. They claim a string in coin units is returned here.
+     * It is not. Instead a number in satoshis is returned!
+     * Incorrect docs: https://electrumx.readthedocs.io/en/latest/protocol-methods.html#blockchain-scripthash-get-balance */
+    QVariantMap resp{
+        { "confirmed" , qlonglong(amt / amt.satoshi()) },
+        { "unconfirmed" , qlonglong(uamt / uamt.satoshi()) },
+    };
+    return resp;
+}
+
 void Server::impl_get_balance(Client *c, const RPC::BatchId batchId, const RPC::Message &m, const HashX &sh,
                               const Storage::TokenFilterOption tokenFilter)
 {
     generic_do_async(c, batchId, m.id, [sh, tokenFilter, this] {
-        const auto [amt, uamt] = storage->getBalance(sh, tokenFilter);
-        /* Note: ElectrumX protocol docs are incorrect. They claim a string in coin units is returned here.
-         * It is not. Instead a number in satoshis is returned!
-         * Incorrect docs: https://electrumx.readthedocs.io/en/latest/protocol-methods.html#blockchain-scripthash-get-balance */
-        QVariantMap resp{
-          { "confirmed" , qlonglong(amt / amt.satoshi()) },
-          { "unconfirmed" , qlonglong(uamt / uamt.satoshi()) },
-        };
-        return resp;
+        return getBalanceCommon(sh, tokenFilter);
     });
 }
 
 /// called from get_mempool and get_history to retrieve the mempool for a hashx synchronously.  Returns the
 /// QVariantMap suitable for placing into the resulting response.
-QVariantList Server::getHistoryCommon(const HashX &sh, bool mempoolOnly)
+QVariantList ServerBase::getHistoryCommon(const HashX &sh, bool mempoolOnly)
 {
     QVariantList resp;
     const auto items = storage->getHistory(sh, !mempoolOnly, true); // these are already sorted
@@ -1545,7 +1564,7 @@ void Server::rpc_blockchain_address_listunspent(Client *c, const RPC::BatchId ba
     impl_listunspent(c, batchId, m, sh, tf);
 }
 /* static */
-QVariantMap Server::unspentItemToVariantMap(const Storage::UnspentItem & item)
+QVariantMap ServerBase::unspentItemToVariantMap(const Storage::UnspentItem & item)
 {
     QVariantMap vm{
         { QByteArrayLiteral("tx_hash") , Util::ToHexFast(item.hash) },
@@ -1557,16 +1576,20 @@ QVariantMap Server::unspentItemToVariantMap(const Storage::UnspentItem & item)
         vm.insert(QByteArrayLiteral("token_data"), tokenDataToVariantMap(*item.tokenDataPtr));
     return vm;
 }
+QVariantList  ServerBase::listUnspentCommon(const HashX &sh, Storage::TokenFilterOption tokenFilter)
+{
+    QVariantList resp;
+    const auto items = storage->listUnspent(sh, tokenFilter); // these are already sorted
+    resp.reserve(items.size());
+    for (const auto & item : items)
+        resp.push_back(unspentItemToVariantMap(item));
+    return resp;
+}
 void Server::impl_listunspent(Client *c, const RPC::BatchId batchId, const RPC::Message &m, const HashX &sh,
                               const Storage::TokenFilterOption tokenFilter)
 {
     generic_do_async(c, batchId, m.id, [sh, tokenFilter, this] {
-        QVariantList resp;
-        const auto items = storage->listUnspent(sh, tokenFilter); // these are already sorted
-        resp.reserve(items.size());
-        for (const auto & item : items)
-            resp.push_back(unspentItemToVariantMap(item));
-        return resp;
+        return listUnspentCommon(sh, tokenFilter);
     });
 }
 void Server::rpc_blockchain_scripthash_subscribe(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
@@ -2638,6 +2661,58 @@ void AdminServer::rpc_peers(Client *c, const RPC::BatchId batchId, const RPC::Me
         return peerMgr->statsSafe(kBlockingCallTimeoutMS);
     });
 }
+void AdminServer::rpc_query_address(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
+{
+    const auto l = m.paramsList();
+    assert(l.size() == 1);
+
+    // This either runs asynch after the bitcoind `validateaddress` response, or asynch without the bitcoind callback
+    auto prepareResult = [this](const QString &address, const QByteArray &scriptPubKey) {
+        const auto hashX = BTC::HashXFromByteView(scriptPubKey);
+        QVariantMap reply;
+        if (!address.isEmpty()) reply["address"] = address;
+        else reply["script"] = Util::ToHexFast(scriptPubKey);
+        reply["history"] = getHistoryCommon(hashX, false);
+        reply["unspent"] = listUnspentCommon(hashX, Storage::TokenFilterOption::IncludeTokens);
+        reply["balance"] = getBalanceCommon(hashX, Storage::TokenFilterOption::IncludeTokens);
+        return reply;
+    };
+
+    const QString param = l.front().toString();
+
+    // If the client specified a hex scriptPubKey, no need to query bitcoind
+    if (QByteArray scriptPubKey; Util::IsValidHex(scriptPubKey = param.toLatin1()) && !scriptPubKey.isEmpty()) {
+        scriptPubKey = Util::ParseHexFast(scriptPubKey);
+        generic_do_async(c, batchId, m.id, [prepareResult, scriptPubKey]{
+            return prepareResult({}, scriptPubKey);
+        });
+        return;
+    }
+
+    // Otherwise, client may have specified an address ... so query bitcoind to validate it
+
+    // Step 1: Rely on the bitcoin daemon to parse the address (so we don't have to)
+    generic_async_to_bitcoind(c, batchId, m.id, "validateaddress", l,
+                              [this, c, batchId, prepareResult, param, reqId = m.id](const RPC::Message &reply) {
+        const QVariantMap resp = reply.result().toMap();
+        if (!resp.value("isvalid", false).toBool())
+            throw RPCError(QString("Invalid address: %1").arg(param), RPC::Code_InvalidParams);
+        QString address;
+        QByteArray scriptPubKey;
+        if ((address = resp.value("address").toString()).isEmpty()
+            || (scriptPubKey = Util::ParseHexFast(resp.value("scriptPubKey").toString().toLatin1(), true)).isEmpty()) {
+            throw RPCError(QString("Unexpected response from remote daemon"), RPC::Code_InternalError);
+        }
+
+        // Step 2: After we got the scriptPubKey from the daemon, use it to get a hashX and the balance, history, etc
+        generic_do_async(c, batchId, reqId, [prepareResult, address, scriptPubKey]{
+            return prepareResult(address, scriptPubKey);
+        });
+
+        // we don't auto-send any reply to client because we do more asynch stuff above
+        return DontAutoSendReply;
+    });
+}
 void AdminServer::rpc_rmpeer(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     if (peerMgr.expired())
@@ -2719,6 +2794,7 @@ HEY_COMPILER_PUT_STATIC_HERE(AdminServer::StaticData::registry){
     { {"loglevel",                          true,               false,    PR{1,1},                 {} },          MP(rpc_loglevel) },
     { {"maxbuffer",                         true,               false,    PR{0,1},                 {} },          MP(rpc_maxbuffer) },
     { {"peers",                             true,               false,    PR{0,0},                 {} },          MP(rpc_peers) },
+    { {"query_address",                     true,               false,    PR{1,1},                 {} },          MP(rpc_query_address) },
     { {"rmpeer",                            true,               false,    PR{1,UNLIMITED},         {} },          MP(rpc_rmpeer) },
     { {"shutdown",                          true,               false,    PR{0,0},                 {} },          MP(rpc_shutdown) },
     { {"simdjson",                          true,               false,    PR{0,1},                 {} },          MP(rpc_simdjson) },

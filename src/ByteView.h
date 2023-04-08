@@ -86,8 +86,8 @@ public:
     std::string_view toStringView() const noexcept { return std::string_view{charData(), size()}; }
 
     QByteArray toByteArray(bool deepCopy = true) const {
-        return deepCopy ? QByteArray{charData(), int(size())}
-                        : QByteArray::fromRawData(charData(), int(size()));
+        return deepCopy ? QByteArray{charData(), QByteArray::size_type(size())}
+                        : QByteArray::fromRawData(charData(), QByteArray::size_type(size()));
     }
 
     /// Convenience: reimplements super class, but in this case to return a ByteView
