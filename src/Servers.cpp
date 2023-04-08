@@ -1473,6 +1473,7 @@ void Server::rpc_blockchain_address_get_balance(Client *c, const RPC::BatchId ba
     const auto tf = parseTokenFilterOptionCommon(c, m, 1);
     impl_get_balance(c, batchId, m, sh, tf);
 }
+
 QVariantMap ServerBase::getBalanceCommon(const HashX &sh, Storage::TokenFilterOption tokenFilter)
 {
     const auto [amt, uamt] = storage->getBalance(sh, tokenFilter);
@@ -1484,8 +1485,8 @@ QVariantMap ServerBase::getBalanceCommon(const HashX &sh, Storage::TokenFilterOp
         { "unconfirmed" , qlonglong(uamt / uamt.satoshi()) },
     };
     return resp;
-
 }
+
 void Server::impl_get_balance(Client *c, const RPC::BatchId batchId, const RPC::Message &m, const HashX &sh,
                               const Storage::TokenFilterOption tokenFilter)
 {

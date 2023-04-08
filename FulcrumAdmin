@@ -105,7 +105,7 @@ def main():
     peers = subparsers.add_parser('peers', help="Print peering information")
     query = subparsers.add_parser('query', help="Query for balance, UTXO, and history information for one or more addresses")
     query.add_argument('address', metavar='address', nargs='+', help="Address or hex-encoded scriptPubKey to query")
-    query.add_argument('-l', metavar='limit', type=int, nargs='?', help="UTXO and history output limit")
+    query.add_argument('-l', metavar='limit', type=int, nargs='?', default=1 << 63, help="UTXO and history output limit")
     rmpeer = subparsers.add_parser('rmpeer', help="Remove peers by hostname suffix")
     rmpeer.add_argument('hostnames', metavar='hostname', nargs='+', help="A hostname or hostname suffix e.g. somehost.com or *some.host.com.")
     simdjson = subparsers.add_parser('simdjson', help="Get or set the server's 'simdjson' (JSON parser) setting")
@@ -265,13 +265,10 @@ possibly peer with this Fulcrum server, then please use the 'banpeer' command.
             response_handler = handler
 
     elif command == 'query':
-        if args.l is not None:
-            limit = int(args.l)
-            if limit <= 0:
-                print('query requires limit be >= 1.')
-                sys.exit(1)
-        else:
-            limit = 1 << 63
+        limit = int(args.l)
+        if limit <= 0:
+            print('query requires limit be >= 1.')
+            sys.exit(1)
         if not JSON:
             response_handler = lambda r: query_address_handler(r, limit=limit)
         command_params = args.address
@@ -312,7 +309,7 @@ def query_address_handler(response_list, limit):
         # Query the coin for proper units e.g. "BCH"
         info = response_list[0]
         if 'chain' in info and 'coin' in info:
-            response_list = response_list[1:]  # pop first item which is the getinfo reply
+            del response_list[0]  # pop first item which is the getinfo reply
             coin = info['coin']
             chain = info['chain']
             prefix = ''
