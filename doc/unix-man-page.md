@@ -1,6 +1,6 @@
-% FULCRUM(1) Version 1.9.0 | Fulcrum Manual
+% FULCRUM(1) Version 1.9.1 | Fulcrum Manual
 % Fulcrum is written by Calin Culianu (cculianu)
-% March 21, 2023
+% April 08, 2023
 
 # NAME
 
@@ -19,7 +19,7 @@ DESCRIPTION
 **NOTE:**
 Electron Cash and/or Electrum at this time no longer support connecting to non-SSL servers, so you should probably configure SSL for production use.
 
-It is recommended you specify a data dir (`-D` via CLI or `datadir-` via config file)
+It is recommended you specify a data dir (`-D` via CLI or `datadir=` via config file)
 on an SSD drive for best results.
 Synching against `testnet` should take you about 10-20 minutes (more on slower
 machines), and mainnet can take anywhere from 4 hours to 20+ hours, depending on
