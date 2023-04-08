@@ -175,6 +175,7 @@ You may also wish to read the [Fulcrum manpage](https://github.com/cculianu/Fulc
     $ ./FulcrumAdmin -p 8000 loglevel             Set the server's logging verbosity
     $ ./FulcrumAdmin -p 8000 maxbuffer            Query or set server max_buffer setting
     $ ./FulcrumAdmin -p 8000 peers                Print peering information
+    $ ./FulcrumAdmin -p 8000 query                Query for balance, UTXO, and history information for one or more addresses
     $ ./FulcrumAdmin -p 8000 rmpeer               Remove peers by hostname suffix
     $ ./FulcrumAdmin -p 8000 simdjson             Get or set the server's 'simdjson' (JSON parser) setting
     $ ./FulcrumAdmin -p 8000 stop (shutdown)      Gracefully shut down the server
