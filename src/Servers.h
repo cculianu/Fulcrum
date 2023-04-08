@@ -270,7 +270,7 @@ protected:
 
     using AsyncWorkFunc = std::function<QVariant()>;
     struct DontAutoSendReply_t {};
-    static constexpr DontAutoSendReply_t DontAutoSendReply;
+    static constexpr DontAutoSendReply_t DontAutoSendReply{};
     using BitcoinDSuccessFuncResult = std::variant<QVariant, DontAutoSendReply_t>;
     using BitcoinDSuccessFunc = std::function<BitcoinDSuccessFuncResult(const RPC::Message &)>;
     using BitcoinDErrorFunc = std::function<void(const RPC::Message &)>; // errfunc should always throw RPCError to indicate the exact error it wants to send.
