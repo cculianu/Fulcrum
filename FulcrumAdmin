@@ -329,7 +329,7 @@ def query_address_handler(response_list, limit):
         if neg:
             value = -value
         integral_part = value // int(1e8)
-        frac_part_str = f'{value % int(1e8):d}'
+        frac_part_str = f'{value % int(1e8):08d}'
         while len(frac_part_str) > 1 and frac_part_str[-1] == '0':  # Trim trailing zeroes
             frac_part_str = frac_part_str[:-1]
         return f'{sign}{integral_part:,d}.{frac_part_str} {coin_str}'
