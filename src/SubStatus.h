@@ -18,6 +18,7 @@
 //
 #pragma once
 
+#include "bitcoin/heapoptional.h"
 #include "DSProof.h"
 
 #include <QByteArray>
@@ -25,10 +26,12 @@
 #include <QVariant>
 
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <type_traits>
 #include <utility> // for move
+#include <variant>
 
 /// This class is sort of like a variant/optional combination. It can store either "No Value" (!.has_value()) or
 /// either a: QByteArray, DSProof or a std::optional<BlockHeight>. It is optimized for minimal memory usage in the
@@ -43,140 +46,69 @@
 ///   that is, dsproof() will always be a valid pointer.
 ///
 /// - TransactionSubsMgr::getFullStatus() always returns one of these objects with the std::optional<BlockHeight> as
-///   the active value, that is, blockHeight() will always be a valid pointer (even if it itself !has_value()).
+///   the active value, that is, blockHeight() will always be a valid optional (even if it itself !has_value()).
 ///
 class SubStatus {
-    union {
-        QByteArray qba;
-        std::unique_ptr<DSProof> dsp; // we use unique_ptr here to save memory in the common case where most of these instances are QByteArray
-        std::optional<BlockHeight> bh; // !has_value indicates unknown txhash, otherwise 0 = mempool, >0 = confirmed height
-        void *dummy = nullptr;
-    };
-    enum T : uint8_t { NoValue, QBA, DSP, BH };
-    T t = NoValue;
-    void destruct() {
-        switch (t) {
-        case NoValue: return;
-        case QBA: qba.~QByteArray(); break;
-        case DSP: dsp.~unique_ptr(); break;
-        case BH : bh.~optional(); break;
-        }
-        dummy = nullptr;
-        t = NoValue;
+    using NoValue = std::monostate;
+    using QBA = QByteArray;
+    using DSP = bitcoin::HeapOptional<DSProof>;
+    // we "simulate" a std::optional<BlockHeight> in this class to save memory, by making values out of the uint32_t
+    // range act "as if" !block_height.has_value()
+    using BH = int64_t;
+    static_assert(std::is_same_v<uint32_t, BlockHeight>);
+
+    std::variant<NoValue, QBA, DSP, BH> var;
+
+    static constexpr bool isValidBlockHeight(BH bh) noexcept {
+        return    bh >= static_cast<BH>(std::numeric_limits<BlockHeight>::min())
+               && bh <= static_cast<BH>(std::numeric_limits<BlockHeight>::max());
     }
-    void construct(const T tt) {
-        destruct();
-        switch (tt) {
-        case NoValue: return;
-        case QBA:
-            new (&qba) QByteArray;
-            break;
-        case DSP:
-            new (&dsp) std::unique_ptr<DSProof>(new DSProof);
-            break;
-        case BH:
-            new (&bh) std::optional<BlockHeight>;
-            break;
-        }
-        t = tt;
-    }
-    void move(SubStatus &&o) {
-        if (this == &o) return;
-        if (t != o.t) {
-            if (o.t == DSP) {
-                // optimization for DSP: in the move case we want to avoid constructing a new DSProof, and
-                // just transfer ownership of the DSProof owned by o.dsp
-                destruct();
-                new (&dsp) std::unique_ptr<DSProof>;
-                t = DSP;
-                // fall thru to below code to transfer pointer
-            } else {
-                // normal case: QBA, BH, or NoValue
-                construct(o.t);
-            }
-        }
-        // at this point t == o.t
-        switch (t) {
-        case NoValue: break; // nothing to do
-        case QBA: qba = std::move(o.qba); break;
-        case DSP: dsp = std::move(o.dsp); break; // cheap pointer transfer
-        case BH: bh = std::move(o.bh); break;
-        }
-    }
-    void copy(const SubStatus &o) {
-        if (this == &o) return;
-        if (t != o.t)
-            construct(o.t);
-        switch (t) {
-        case NoValue: break;
-        case QBA: qba = o.qba; break;
-        case DSP: *dsp = *o.dsp; break;
-        case BH: bh = o.bh; break;
-        }
-    }
+
+    static constexpr BH InvalidBlockHeight = static_cast<BH>(-1);
+
 public:
-    constexpr SubStatus() noexcept {}
-    SubStatus(SubStatus &&o) noexcept { move(std::move(o)); }
-    SubStatus(const SubStatus &o) { copy(o); }
-    SubStatus(const QByteArray &oq) noexcept : qba(oq), t{QBA} {}
-    SubStatus(QByteArray &&oq) noexcept : qba(std::move(oq)), t{QBA} {}
-    SubStatus(const DSProof &od) : dsp(new DSProof(od)), t{DSP} {}
-    SubStatus(DSProof &&od) : dsp(new DSProof(std::move(od))), t{DSP} {}
-    SubStatus(const std::optional<BlockHeight> &obh) noexcept : bh(obh), t{BH} {}
-    ~SubStatus() { destruct(); }
+    SubStatus() noexcept {}
+    SubStatus(SubStatus &&o) noexcept = default;
+    SubStatus(const SubStatus &o) = default;
+    SubStatus(const QByteArray &oq) noexcept : var{oq} {}
+    SubStatus(QByteArray &&oq) noexcept : var{std::move(oq)} {}
+    SubStatus(const DSProof &od) { var.emplace<DSP>(od); }
+    SubStatus(DSProof &&od) { var.emplace<DSP>(std::move(od)); }
+    SubStatus(const std::optional<BlockHeight> &obh) noexcept { this->operator=(obh); }
 
-    SubStatus &operator=(const SubStatus &o) { copy(o); return *this; }
-    SubStatus &operator=(SubStatus && o) { move(std::move(o)); return *this; }
-    SubStatus &operator=(const QByteArray &oq) {
-        if (t != QBA) construct(QBA);
-        qba = oq;
-        return *this;
-    }
-    SubStatus &operator=(QByteArray &&oq) {
-        if (t != QBA) construct(QBA);
-        qba = std::move(oq);
-        return *this;
-    }
-    SubStatus &operator=(const DSProof &od) {
-        if (t != DSP) construct(DSP);
-        *dsp = od;
-        return *this;
-    }
-    SubStatus &operator=(DSProof &&od) {
-        if (t != DSP) construct(DSP);
-        *dsp = std::move(od);
-        return *this;
-    }
+    SubStatus &operator=(const SubStatus &o) = default;
+    SubStatus &operator=(SubStatus && o) = default;
+    SubStatus &operator=(const QByteArray &oq) { var = oq; return *this; }
+    SubStatus &operator=(QByteArray &&oq) { var = std::move(oq); return *this; }
+    SubStatus &operator=(const DSProof &od) { var.emplace<DSP>(od); return *this; }
+    SubStatus &operator=(DSProof &&od) { var.emplace<DSP>(std::move(od)); return *this; }
     SubStatus &operator=(const std::optional<BlockHeight> &obh) {
-        if (t != BH) construct(BH);
-        bh = obh;
+        static_assert(!isValidBlockHeight(InvalidBlockHeight)); /* We are forced to put this assertion here rather than
+                                                                   at class-level due to C++ compile-time quirks. */
+        var = obh ? static_cast<BH>(*obh) : InvalidBlockHeight;
         return *this;
     }
 
-   bool operator==(const SubStatus &o) const {
-        if (t != o.t) return false;
-        switch (t) { // t == o.t
-        case NoValue: return true; // all NoValues are always equal
-        case QBA: return qba == o.qba;
-        case DSP: return *dsp == *o.dsp;
-        case BH: return bh == o.bh;
-        }
-    }
-    bool operator!=(const SubStatus &o) const { return !(*this == o); }
+    bool operator==(const SubStatus &o) const { return var == o.var; }
+    bool operator!=(const SubStatus &o) const { return var != o.var; }
 
     explicit operator bool() const noexcept { return has_value(); }
 
-    bool has_value() const noexcept { return t != NoValue; }
-    void reset() { destruct(); }
+    bool has_value() const noexcept { return !std::holds_alternative<NoValue>(var); }
+    void reset() { var.emplace<NoValue>(); }
 
-    QByteArray * byteArray() noexcept { return t == QBA ? &qba : nullptr; }
-    const QByteArray * byteArray() const noexcept { return t == QBA ? &qba : nullptr; }
+    const QByteArray * byteArray() const noexcept { return std::get_if<QBA>(&var); }
 
-    DSProof * dsproof() noexcept { return t == DSP ? dsp.get() : nullptr; }
-    const DSProof * dsproof() const noexcept { return t == DSP ? dsp.get() : nullptr; }
+    const DSProof * dsproof() const noexcept {
+        auto *pdsp = std::get_if<DSP>(&var);
+        return pdsp ? pdsp->get() : nullptr;
+    }
 
-    const std::optional<BlockHeight> * blockHeight() const noexcept { return t == BH ? &bh : nullptr; }
-    std::optional<BlockHeight> * blockHeight() noexcept { return t == BH ? &bh : nullptr; }
+    std::optional<BlockHeight> blockHeight() const noexcept {
+        if (auto *p = std::get_if<BH>(&var); p && isValidBlockHeight(*p))
+            return static_cast<BlockHeight>(*p);
+        return std::nullopt;
+    }
 
     /// Render this for JSON RPC (as a status result for notifications).  If !has_value() then it will be null,
     /// otherwise if it has a valid value it will be rendered as a string, or a dsproof object, or a number.
@@ -189,7 +121,7 @@ template <> struct std::hash<SubStatus> {
     std::size_t operator()(const SubStatus &s) const {
         if (auto *ba = s.byteArray(); ba) return HashHasher{}(*ba);
         else if (auto *dsp = s.dsproof(); dsp) return DspHash::Hasher{}(dsp->hash);
-        else if (auto *bh = s.blockHeight(); bh && *bh) return Util::hashForStd(**bh);
+        else if (auto bh = s.blockHeight(); bh) return Util::hashForStd(*bh);
         return 0; // !this->has_value() and/or !bh->has_value() hashes to 0 always
     }
 };

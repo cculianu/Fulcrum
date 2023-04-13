@@ -495,7 +495,7 @@ inline QByteArray optimizedStatusHashCalc(const Storage::History &hist) {
     // status is non-reversed, single sha256 (32 bytes)
     return ret;
 }
-}
+} // namespace
 
 auto ScriptHashSubsMgr::getFullStatus(const HashX &sh) const -> SubStatus
 {
