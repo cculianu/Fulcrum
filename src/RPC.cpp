@@ -67,13 +67,11 @@ namespace RPC {
         ret.v1 = v1;
         ret.data = map;
 
-        if (id_out)
-            id_out->clear();
+        if (id_out) id_out->setNull();
 
         try {
             ret.id = Id::fromVariant(map.value(s_id));
-            if (id_out)
-                *id_out = ret.id;
+            if (id_out) *id_out = ret.id;
         } catch (const BadArgs & e) {
             throw InvalidError(QString("Error parsing JSON key \"%1\": %2").arg(s_id, e.what()));
         }
