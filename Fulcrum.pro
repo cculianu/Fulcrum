@@ -136,7 +136,12 @@ contains(CONFIG, config_endian_big) {
 # Handle or add GIT_COMMIT=
 !contains(DEFINES, GIT_COMMIT.*) {
     unix {
-        DEFINES += GIT_COMMIT="\\\"$(shell git -C \""$$_PRO_FILE_PWD_"\" describe --always --dirty --match 'NOT A TAG')\\\""
+        exists( $$_PRO_FILE_PWD_/.git ) {  # If we have a .git directory at the top level
+            system( git -v ) {  # And `git` is a valid command...
+                # Then we define the git commit we are compiling against
+                DEFINES += GIT_COMMIT="\\\"$(shell git -C \""$$_PRO_FILE_PWD_"\" describe --always --dirty --match 'NOT A TAG')\\\""
+            }
+        }
     } else {
         # NB: for Windows, caller should set DEFINES+=GIT_COMMIT=\"xxx\"
         #warning("Be sure to set DEFINES+=GIT_COMMIT=\\\"xxx\\\" in the final release build to embed the commit hash into the final application.")
