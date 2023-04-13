@@ -25,58 +25,43 @@
 #include <QVariant>
 
 #include <cstdint>
-#include <functional>
-#include <type_traits>
 #include <utility>
+#include <variant>
 
-/// This class is designed to be a constrained sort of variant: either an integer or string
-/// suitable for using with a JSONRPC 2.0 "id".
+/// This class is designed to be basically a constrained variant: either null,
+/// an integer, or a string suitable for using with a JSON-RPC 2.0 "id".
 class RPCMsgId
 {
+    using Null = std::monostate;
+    std::variant<Null, int64_t, QString> var;
+
+    friend Compat::qhuint qHash(const RPCMsgId &, Compat::qhuint);
+    friend struct std::hash<RPCMsgId>;
+
 public:
-    enum Type : uint8_t {
-        Null = 0, Integer, String
-    };
     RPCMsgId() = default;
-    RPCMsgId(int64_t intVal) : typ(Integer), idata(intVal) {}
-    RPCMsgId(const QString &str) : typ(Integer), sdata(str) {}
-    RPCMsgId(QString &&str) : typ(String) , sdata(std::move(str)) {}
+    RPCMsgId(int64_t intVal) : var{intVal} {}
+    RPCMsgId(const QString &str) : var{str} {}
+    RPCMsgId(QString &&str) : var{std::move(str)} {}
 
     // copy/move
     RPCMsgId(const RPCMsgId &) = default;
     RPCMsgId(RPCMsgId &&) = default;
 
-    bool isNull() const { return typ == Null; }
-    Type type() const { return typ; }
+    bool isNull() const { return std::holds_alternative<Null>(var); }
+    void setNull() { var = Null{}; }
 
-    void clear() { *this = RPCMsgId(); }
-
-    bool operator<(const RPCMsgId & o) const;
-    bool operator>(const RPCMsgId & o) const;
-    bool operator<=(const RPCMsgId & o) const;
-    bool operator>=(const RPCMsgId & o) const;
-    bool operator==(const RPCMsgId & o) const;
-    bool operator!=(const RPCMsgId & o) const;
+    bool operator<(const RPCMsgId & o) const { return var < o.var; }
+    bool operator>(const RPCMsgId & o) const { return var > o.var; }
+    bool operator<=(const RPCMsgId & o) const { return var <= o.var; }
+    bool operator>=(const RPCMsgId & o) const { return var >= o.var; }
+    bool operator==(const RPCMsgId & o) const { return var == o.var; }
+    bool operator!=(const RPCMsgId & o) const { return var != o.var; }
 
     // assign from compatible type
-    RPCMsgId &operator=(const QString &s) {
-        typ = String;
-        sdata = s;
-        idata = {};
-        return *this;
-    }
-    RPCMsgId &operator=(QString &&s) {
-        typ = String;
-        sdata = std::move(s);
-        idata = {};
-        return *this;
-    }
-    RPCMsgId &operator=(int64_t i) {
-        typ = Integer;
-        sdata.clear();
-        idata = i;
-        return *this;
-    }
+    RPCMsgId &operator=(const QString &s) { var = s; return *this; }
+    RPCMsgId &operator=(QString &&s) { var = std::move(s); return *this; }
+    RPCMsgId &operator=(int64_t i) { var = i; return *this; }
 
     // copy assign/move assign
     RPCMsgId &operator=(const RPCMsgId &) = default;
@@ -90,37 +75,28 @@ public:
     // getters
     int64_t toInt() const; // returns the value if type() == Integer, or tries to parse the value if String, or returns 0 if cannot parse or Null
     QString toString() const; // returns the string value (may return a number string if type() == Integer or 'null' if type() == Null
-
-private:
-    Type typ = Null;
-    int64_t idata{};
-    QString sdata{};
-
-    friend Compat::qhuint qHash(const RPCMsgId &, Compat::qhuint);
-    friend struct std::hash<RPCMsgId>;
 };
 
 /// template specialization for std::hash of RPCMsgId (for std::unordered_map, std::unordered_set, etc)
 template<> struct std::hash<RPCMsgId> {
     std::size_t operator()(const RPCMsgId &r) const {
-        switch(r.typ) {
-        case RPCMsgId::String: return Util::hashForStd(r.sdata);
-        case RPCMsgId::Integer: return Util::hashForStd(r.idata);
-        case RPCMsgId::Null: return 0;
-        }
+        return std::visit(Overloaded{
+                              [](const QString &s) { return Util::hashForStd(s); },
+                              [](const int64_t i) { return Util::hashForStd(i); },
+                              [](RPCMsgId::Null) { return std::size_t{0u}; }
+                          }, r.var);
     }
 };
+
 /// overload for Qt's hashtable containers (QHash, QMultiHash, etc)
-inline Compat::qhuint qHash(const RPCMsgId &r, Compat::qhuint seed = 0)  {
-    switch(r.typ) {
-    case RPCMsgId::String: return qHash(r.sdata, seed);
-    case RPCMsgId::Integer: return qHash(r.idata, seed);
-    case RPCMsgId::Null: return seed;
-    }
+inline Compat::qhuint qHash(const RPCMsgId &r, Compat::qhuint seed = 0)
+{
+    return std::visit(Overloaded{
+                          [seed](const QString &s) { return qHash(s, seed); },
+                          [seed](const int64_t i) { return qHash(i, seed); },
+                          [seed](RPCMsgId::Null) { return seed; }
+                      }, r.var);
 }
 
 /// overload to support writing RpcMsgId to a text stream
-inline QTextStream &operator<<(QTextStream &ts, const RPCMsgId &rid)
-{
-    return ts << rid.toString();
-}
+inline QTextStream &operator<<(QTextStream &ts, const RPCMsgId &rid) { return ts << rid.toString(); }

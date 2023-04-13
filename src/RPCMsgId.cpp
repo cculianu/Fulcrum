@@ -28,34 +28,34 @@
 #include <limits>
 
 /* static */
-RPCMsgId RPCMsgId::fromVariant(const QVariant &var)
+RPCMsgId RPCMsgId::fromVariant(const QVariant &qvar)
 {
     static const double Epsilon = std::nextafter(0., 1.);
     RPCMsgId ret;
 
-    if (!var.isNull()) {
-        if (!var.isValid())
+    if (!qvar.isNull()) {
+        if (!qvar.isValid())
             throw BadArgs(QString("Invalid QVariant specified in %1").arg(__func__));
         // note as per JSON-RPC 2.0 spec, we squash floats down to ints, discarding the fractional part
         // we will throw if the id is not a string, integer, or null
         bool ok{};
         int64_t id_ll;
-        if (auto mtype = Compat::GetVarType(var); mtype == QMetaType::QString) {
-            ret = var.toString();
+        if (auto mtype = Compat::GetVarType(qvar); mtype == QMetaType::QString) {
+            ret = qvar.toString();
         } else if (UNLIKELY(mtype == QMetaType::QByteArray)) {
-            ret = QString::fromUtf8(var.toByteArray());
+            ret = QString::fromUtf8(qvar.toByteArray());
         } else if (mtype == QMetaType::Bool) {
             throw BadArgs("Booleans are not supported");
         } else if (mtype == QMetaType::Int || mtype == QMetaType::UInt || mtype == QMetaType::Long || mtype == QMetaType::LongLong) {
-            ret = int64_t(var.toLongLong(&ok));
+            ret = int64_t(qvar.toLongLong(&ok));
             if (!ok) throw BadArgs("QVariant::toLongLong returned false");
         } else if (mtype == QMetaType::ULong || mtype == QMetaType::ULongLong) {
-            qulonglong qull = var.toULongLong(&ok);
+            qulonglong qull = qvar.toULongLong(&ok);
             if (!ok || qull > qulonglong(std::numeric_limits<int64_t>::max()))
                 throw BadArgs("Unable to convert to int64 from qulong/qulonglong");
             ret = int64_t(qull);
         // note the below will fail at non-fractional integers > 2^53 (or 9 quadrillion)
-        } else if (double id_dbl = var.toDouble(&ok); ok && std::abs(double(id_ll=int64_t(id_dbl)) - id_dbl) <= Epsilon) { // this checks that fractional part not present
+        } else if (double id_dbl = qvar.toDouble(&ok); ok && std::abs(double(id_ll=int64_t(id_dbl)) - id_dbl) <= Epsilon) { // this checks that fractional part not present
             ret = id_ll;
         } else {
             // if we get here, id is not a valid type as per our restricted JSON RPC 2.0 (we don't accept fractional parts for id)
@@ -68,71 +68,29 @@ RPCMsgId RPCMsgId::fromVariant(const QVariant &var)
 
 QVariant RPCMsgId::toVariant() const
 {
-   QVariant ret;
-   switch(typ) {
-   case Integer:
-       ret.setValue(idata);
-       break;
-   case String:
-       ret.setValue(sdata);
-       break;
-   case Null: break; /* ret is already null */
-   }
-   return ret;
-}
-
-bool RPCMsgId::operator<(const RPCMsgId & o) const
-{
-    if (typ == o.typ) {
-        switch(typ) {
-        case String: return sdata < o.sdata;
-        case Integer: return idata < o.idata;
-        case Null: return false;
-        }
-    }
-    return typ < o.typ;
-}
-bool RPCMsgId::operator>(const RPCMsgId & o) const
-{
-    return !(*this < o) && *this != o;
-}
-bool RPCMsgId::operator<=(const RPCMsgId & o) const
-{
-    return *this < o || *this == o;
-}
-bool RPCMsgId::operator>=(const RPCMsgId & o) const
-{
-    return !(*this < o);
-}
-bool RPCMsgId::operator==(const RPCMsgId & o) const
-{
-    if (typ == o.typ) {
-        switch(typ) {
-        case String: return sdata == o.sdata;
-        case Integer: return idata == o.idata;
-        case Null: return true;
-        }
-    }
-    return false;
-}
-bool RPCMsgId::operator!=(const RPCMsgId & o) const
-{
-    return !(*this == o);
+    QVariant ret;
+    std::visit(Overloaded{
+                   [](Null) {},
+                   [&ret](const QString &s) { ret.setValue(s); },
+                   [&ret](const int64_t i) { ret.setValue(i); }
+               }, var);
+    return ret;
 }
 
 int64_t RPCMsgId::toInt() const
 {
-    switch (typ) {
-    case String: return sdata.toLongLong();
-    case Integer: return idata;
-    case Null: return 0;
-    }
+    return std::visit(Overloaded{
+                          [](Null) { return int64_t{0}; },
+                          [](const QString &s) { return int64_t(s.toLongLong()); },
+                          [](const int64_t i) { return i; }
+                      }, var);
 }
+
 QString RPCMsgId::toString() const
 {
-    switch (typ) {
-    case String: return sdata;
-    case Integer: return QString::number(idata);
-    case Null: return QStringLiteral("null");
-    }
+    return std::visit(Overloaded{
+                          [](Null) { return QStringLiteral("null"); },
+                          [](const QString &s) { return s; },
+                          [](const int64_t i) { return QString::number(qint64(i)); }
+                      }, var);
 }

@@ -110,7 +110,7 @@ namespace RPC {
 
         // -- DATA --
 
-        Id id; ///< guaranteed to be either string, qint64, or null
+        Id id; ///< guaranteed to be either string, int64_t, or null
         QString method; /**< methodName extracted from data['method'] if it was present. If this is empty then no
                              'method' key was present in JSON. May also contain the "matched" method on a response
                              object where we matched the id to a method we knew about in Connection::idMethodMap. */
