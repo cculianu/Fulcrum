@@ -26,6 +26,7 @@
 #include <QVariant>
 
 #include <cstdint>
+#include <functional> // for std::hash
 #include <limits>
 #include <memory>
 #include <optional>
