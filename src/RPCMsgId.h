@@ -49,7 +49,10 @@ public:
     RPCMsgId(RPCMsgId &&) = default;
 
     bool isNull() const { return std::holds_alternative<Null>(var); }
-    void setNull() { var = Null{}; }
+    void setNull() { var.emplace<Null>(); }
+
+    bool isInt() const { return std::holds_alternative<int64_t>(var); }
+    bool isString() const { return std::holds_alternative<QString>(var); }
 
     bool operator<(const RPCMsgId & o) const { return var < o.var; }
     bool operator>(const RPCMsgId & o) const { return var > o.var; }
@@ -73,8 +76,8 @@ public:
     static RPCMsgId fromVariant(const QVariant &) noexcept(false);
 
     // getters
-    int64_t toInt() const; // returns the value if type() == Integer, or tries to parse the value if String, or returns 0 if cannot parse or Null
-    QString toString() const; // returns the string value (may return a number string if type() == Integer or 'null' if type() == Null
+    int64_t toInt() const; // returns the value if it was an integer, or tries to parse the value if QString, or returns 0 if cannot parse or Null
+    QString toString() const; // returns the string value (may return a number string if we have an integer, or 'null' if .isNull())
 };
 
 /// template specialization for std::hash of RPCMsgId (for std::unordered_map, std::unordered_set, etc)
