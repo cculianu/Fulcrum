@@ -406,7 +406,6 @@ SOURCES += \
     bitcoin/amount.cpp \
     bitcoin/base58.cpp \
     bitcoin/block.cpp \
-    bitcoin/support/cleanse.cpp \
     bitcoin/cashaddr.cpp \
     bitcoin/cashaddrenc.cpp \
     bitcoin/crypto/aes.cpp \
@@ -468,8 +467,6 @@ HEADERS += \
     bitcoin/sigencoding.h \
     bitcoin/sighashtype.h \
     bitcoin/streams.h \
-    bitcoin/support/cleanse.h \
-    bitcoin/support/zeroafterfree.h \
     bitcoin/tinyformat.h \
     bitcoin/token.h \
     bitcoin/transaction.h \

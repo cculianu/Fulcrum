@@ -6,7 +6,6 @@
 #pragma once
 
 #include "serialize.h"
-#include "support/zeroafterfree.h"
 
 #include <algorithm>
 #include <cassert>
@@ -208,6 +207,7 @@ public:
  */
 using VectorReader = GenericVectorReader<std::vector<uint8_t>>;
 
+using CSerializeData = std::vector<char>; ///< for compatibility with legacy code
 /**
  * Double ended buffer combining vector and stream-like interfaces.
  *
@@ -217,7 +217,7 @@ using VectorReader = GenericVectorReader<std::vector<uint8_t>>;
  */
 class CDataStream {
 protected:
-    typedef CSerializeData vector_type;
+    using vector_type = CSerializeData;
     vector_type vch;
     unsigned int nReadPos;
 
@@ -248,11 +248,6 @@ public:
     CDataStream(const char *pbegin, const char *pend, int nTypeIn,
                 int nVersionIn)
         : vch(pbegin, pend) {
-        Init(nTypeIn, nVersionIn);
-    }
-
-    CDataStream(const vector_type &vchIn, int nTypeIn, int nVersionIn)
-        : vch(vchIn.begin(), vchIn.end()) {
         Init(nTypeIn, nVersionIn);
     }
 
