@@ -33,6 +33,10 @@
 
 #include "robin_hood/robin_hood.h"
 
+#if __has_include(<rocksdb/advanced_cache.h>)
+// Newer rocksdb 8.1 defines the `Cache` class in this header. :/
+#include <rocksdb/advanced_cache.h>
+#endif
 #include <rocksdb/cache.h>
 #include <rocksdb/db.h>
 #include <rocksdb/iterator.h>
