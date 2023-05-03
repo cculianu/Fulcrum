@@ -164,8 +164,10 @@ issues. But I managed to work around them. Here is what I did:
 
 3. Build and compile Fulcrum by executing:
 
-  `qmake LIBS=-lrocksdb INCLUDEPATH=/opt/homebrew/include LIBPATH=/opt/homebrew/lib`
-  `make clean && make -j8`
+  ```
+  qmake LIBS=-lrocksdb INCLUDEPATH=/opt/homebrew/include LIBPATH=/opt/homebrew/lib
+  make clean && make -j8
+  ```
 
   This will build Fulcrum and link it with `rocksdb` from Homebrew as
   it was installed in step 1. If you do not do this you will get errors like:
