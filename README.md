@@ -177,7 +177,7 @@ Undefined symbols for architecture arm64:
       Storage::UTXOBatch::UTXOBatch(Storage::UTXOCache*) in Storage.o
       Storage::UTXOBatch::UTXOBatch(Storage::UTXOCache*) in Storage.o
       Storage::addBlock(std::__1::shared_ptr<PreProcessedBlock>, bool, unsigned int, bool) in Storage.o
-      ```
+  ```
 
   The error indicates that for some reason `rocksdb` was compiled as
   an Intel exectuable (which will not work, we're on Apple Silicon
