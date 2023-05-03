@@ -32,7 +32,7 @@ GPLv3. See the included `LICENSE.txt` file or [visit gnu.org and read the licens
     - The node must not be a pruning node.
     - *Optional*: For best results, enable zmq for the "hasblock" topic using e.g. `zmqpubhashblock=tcp://0.0.0.0:8433` in your `bitcoin.conf` file (zmq is only available on: Core, BCHN, BU 1.9.1+, or Litecoin Core).
   - *Recommended hardware*: Minimum 1GB RAM, 64-bit CPU, ~40GB disk space for mainnet BCH (slightly more for BTC). For best results, use an SSD rather than an HDD.
-- *For compiling*: 
+- *For compiling*:
   - `Qt Core` & `Qt Networking` libraries `5.12.5` or above (I use `5.15.2` myself).  Qt `5.12.4` (or earlier) is not supported.
   - *Optional but recommended*: `libzmq 4.x` development headers and library (also known as `libzmq3-dev` on Debian/Ubuntu and `zeromq-devel` on Fedora). Fulcrum will run just fine without linking against `libzmq`, but it will run better if you do link against `libzmq` and also turn on `zmqpubhashblock` notifications in `bitcoind` (zmq is only available on: Core, BCHN, or BU 1.9.1+).
   - A modern, 64-bit `C++17` compiler.  `clang` is recommended but `G++` also works. MSVC on Windows is not supported (please use `MinGW G++` instead, which ships with Qt Open Source Edition for Windows).
@@ -141,6 +141,48 @@ script is a git `branch` or `tag` to build.
     `$ GIT_REPO=https://github.com/myusername/MyFulcrumFork contrib/build/build.sh linux master`
 
     `$ GIT_REPO=$(pwd) contrib/build/build.sh linux master`
+
+### Building for Macs with Apple Silicon (M1 etc) with Homebrew
+
+When I tried the instructions for building with modern Macs I had some
+issues. But I managed to work around them. Here is what I did:
+
+1. Install dependencies by running:
+
+  `brew install qt rocksdb`
+
+  As instructed you need qt to build. I also encountered an issue when trying
+  to build the bundled rocksdb that comes with the repo.
+
+2. Modify `Fulcum.pro` by simply making sure that:
+
+  `QMAKE_MACOSX_DEPLOYMENT_TARGET = 10.15`
+
+  Without this in place compilation with fail with an error like:
+
+  `error: 'path' is unavailable: introduced in macOS 10.15`
+
+3. Build and compile Fulcrum by executing:
+
+  `qmake LIBS=-lrocksdb INCLUDEPATH=/opt/homebrew/include LIBPATH=/opt/homebrew/lib`
+  `make clean && make -j8`
+
+  This will build Fulcrum and link it with `rocksdb` from Homebrew as
+  it was installed in step 1. If you do not do this you will get errors like:
+
+  ```
+ld: warning: ignoring file /Users/marius/p/Fulcrum/staticlibs/rocksdb/bin/osx/librocksdb.a, building for macOS-arm64 but attempting to link with file built for macOS-x86_64
+Undefined symbols for architecture arm64:
+  "rocksdb::WriteBatch::WriteBatch(unsigned long, unsigned long)", referenced from:
+      Storage::UTXOBatch::UTXOBatch(Storage::UTXOCache*) in Storage.o
+      Storage::UTXOBatch::UTXOBatch(Storage::UTXOCache*) in Storage.o
+      Storage::addBlock(std::__1::shared_ptr<PreProcessedBlock>, bool, unsigned int, bool) in Storage.o
+      ```
+
+  The error indicates that for some reason `rocksdb` was compiled as
+  an Intel exectuable (which will not work, we're on Apple Silicon
+  here). Since it was easy to link it with the Homebrew build of
+  rocksdb I did not dig into this.
 
 ---
 
