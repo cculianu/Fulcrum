@@ -3627,7 +3627,7 @@ auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf) const -> H
             static const QString err("Error retrieving history for a script hash");
             auto nums_opt = GenericDBGet<TxNumVec>(p->db.shist.get(), hashX, true, err, false, p->db.defReadOpts);
             if (nums_opt.has_value()) {
-                auto & nums = *nums_opt;
+                const auto & nums = *nums_opt;
                 IncrementCtrAndThrowIfExceedsMaxHistory(nums.size());
                 ret.reserve(nums.size());
                 // TODO: The below could use some optimization.  A batched version of both hashForTxNum and
