@@ -1530,7 +1530,9 @@ auto Server::parseFromToBlockHeightCommon(const RPC::Message &m) const -> GetHis
         bool ok;
         const int tmp = l[2].toInt(&ok);
         if (ok && tmp > -1) ret.second = static_cast<BlockHeight>(tmp);
-        if (!ok || (ret.second && ret.first > *ret.second))
+        if (!ok
+            || (ret.second && ret.first > *ret.second) /* iff to_height, then from_height <= to_height invariant must hold */
+            || (tmp < 0 && tmp != -1) /* restrict negatives to -1, reject any other negative value */)
             throw RPCError("Bad to_height argument at position 3", RPC::ErrorCodes::Code_InvalidParams);
     }
     return ret;
