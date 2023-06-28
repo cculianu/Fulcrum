@@ -55,7 +55,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cassert>
-#include <cstddef> // for std::byte, offsetof
+#include <cstddef> // for std::byte, offsetof, ptrdiff_t
 #include <cstdlib>
 #include <cstring> // for memcpy
 #include <functional>
@@ -3164,12 +3164,10 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                         p->blkInfos.reserve(size + nReserve); // reserve space for new blkinfos in 1 go to save on copying
                 }
 
-                p->blkInfos.emplace_back(
+                const auto & blkInfo = p->blkInfos.emplace_back(
                     blockTxNum0, // .txNum0
                     unsigned(ppb->txInfos.size())
                 );
-
-                const auto & blkInfo = p->blkInfos.back();
 
                 p->blkInfosByTxNum[blkInfo.txNum0] = unsigned(p->blkInfos.size()-1);
 
@@ -4193,16 +4191,38 @@ namespace {
         return ret;
     }
 
-    // deep copy, raw bytes
-    template <> QByteArray Serialize(const BlkInfo &b) { return DeepCpy(&b); }
-    // will fail if extra bytes at the end
+    // essentially takes a byte copy of the data of BlkInfo; note that we waste some space at the end for legacy compat.
+    template <> QByteArray Serialize(const BlkInfo &b) {
+        QByteArray ret(QByteArray::size_type(sizeof(b)), Qt::Uninitialized);
+        auto *cur = ret.data();
+        std::memcpy(cur, &b.txNum0, sizeof(b.txNum0));
+        cur += sizeof(b.txNum0);
+        std::memcpy(cur, &b.nTx, sizeof(b.nTx));
+        cur += sizeof(b.nTx);
+        // On most platforms, the end is padded with 4 bytes because in previous versions of this code we wrote the raw
+        // BlkInfo struct to the byte array (which had padding for alignment). We don't do this anymore for
+        // privacy/security reasons but emulate the old behavior and pad with zeroes at the end.
+        ptrdiff_t padding = (ret.data() + ret.size()) - cur;
+        if (padding > 0) {
+            std::memset(cur, 0, padding);
+            cur += padding;
+        }
+        assert(cur == ret.data() + ret.size());
+        return ret;
+    }
+    // will fail if the size doesn't match size of BlkInfo exactly
     template <> BlkInfo Deserialize(const QByteArray &ba, bool *ok) {
         BlkInfo ret;
         if (ba.length() != sizeof(ret)) {
             if (ok) *ok = false;
         } else {
             if (ok) *ok = true;
-            std::memcpy(reinterpret_cast<std::byte *>(&ret), ba.constData(), sizeof(ret));
+            auto *cur = ba.constData();
+            std::memcpy(reinterpret_cast<std::byte *>(&ret.txNum0), cur, sizeof(ret.txNum0));
+            cur += sizeof(ret.txNum0);
+            std::memcpy(reinterpret_cast<std::byte *>(&ret.nTx), cur, sizeof(ret.nTx));
+            cur += sizeof(ret.nTx);
+            assert(cur <= ba.constData() + ba.size());
         }
         return ret;
     }
