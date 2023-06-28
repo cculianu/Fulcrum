@@ -4462,7 +4462,7 @@ namespace {
         // this serializes a vector of TxNums to a compact representation (6 bytes, eg 48 bits per TxNum), in little endian byte order
         constexpr auto compactSize = CompactTXO::compactTxNumSize(); /* 6 */
         const size_t nBytes = v.size() * compactSize;
-        QByteArray ret(int(nBytes), Qt::Uninitialized);
+        QByteArray ret(QByteArray::size_type(nBytes), Qt::Uninitialized);
         if (UNLIKELY(nBytes != size_t(ret.size()))) {
             throw DatabaseSerializationError(QString("Overflow or other error when attempting to serialize a TxNumVec"
                                                      " of %1 bytes").arg(qulonglong(nBytes)));
@@ -4487,7 +4487,8 @@ namespace {
             return ret;
         }
         if (ok) *ok = true;
-        auto *cur = reinterpret_cast<const std::byte *>(ba.begin()), * const end = reinterpret_cast<const std::byte *>(ba.end());
+        auto * cur = reinterpret_cast<const std::byte *>(ba.constData());
+        auto * const end = reinterpret_cast<const std::byte *>(ba.constData() + blen);
         ret.reserve(N);
         for ( ; cur < end; cur += compactSize) {
             ret.push_back( CompactTXO::txNumFromCompactBytes(cur) );
