@@ -1497,10 +1497,13 @@ void Server::impl_get_balance(Client *c, const RPC::BatchId batchId, const RPC::
 
 /// called from get_mempool and get_history to retrieve the mempool for a hashx synchronously.  Returns the
 /// QVariantMap suitable for placing into the resulting response.
-QVariantList ServerBase::getHistoryCommon(const HashX &sh, bool mempoolOnly)
+QVariantList ServerBase::getHistoryCommon(const HashX &sh, bool mempoolOnly, const GetHistory_FromToBH &fromTo)
 {
     QVariantList resp;
-    const auto items = storage->getHistory(sh, !mempoolOnly, true); // these are already sorted
+    const bool includeConfirmed = !mempoolOnly;
+    const bool includeMempool = mempoolOnly || !fromTo.second.has_value();
+    // the `items` result is already sorted
+    const auto items = storage->getHistory(sh, includeConfirmed, includeMempool, fromTo.first, fromTo.second);
     for (const auto & item : items) {
         QVariantMap m{
             { "tx_hash" , Util::ToHexFast(item.hash) },
@@ -1513,20 +1516,43 @@ QVariantList ServerBase::getHistoryCommon(const HashX &sh, bool mempoolOnly)
     return resp;
 }
 
+auto Server::parseFromToBlockHeightCommon(const RPC::Message &m) const -> GetHistory_FromToBH
+{
+    GetHistory_FromToBH ret{0u, std::nullopt};
+    const QVariantList l(m.paramsList());
+    if (l.size() > 1) {
+        bool ok;
+        const int tmp = l[1].toInt(&ok);
+        if (tmp >= 0) ret.first = static_cast<BlockHeight>(tmp);
+        if (!ok || tmp < 0) throw RPCError("Bad from_height argument at position 2", RPC::ErrorCodes::Code_InvalidParams);
+    }
+    if (l.size() > 2) {
+        bool ok;
+        const int tmp = l[2].toInt(&ok);
+        if (ok && tmp > -1) ret.second = static_cast<BlockHeight>(tmp);
+        if (!ok || (ret.second && ret.first > *ret.second))
+            throw RPCError("Bad to_height argument at position 3", RPC::ErrorCodes::Code_InvalidParams);
+    }
+    return ret;
+}
+
 void Server::rpc_blockchain_scripthash_get_history(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const auto sh = parseFirstHashParamCommon(m);
-    impl_get_history(c, batchId, m, sh);
+    const auto fromTo = parseFromToBlockHeightCommon(m);
+    impl_get_history(c, batchId, m, sh, fromTo);
 }
 void Server::rpc_blockchain_address_get_history(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const auto sh = parseFirstAddrParamToShCommon(m);
-    impl_get_history(c, batchId, m, sh);
+    const auto fromTo = parseFromToBlockHeightCommon(m);
+    impl_get_history(c, batchId, m, sh, fromTo);
 }
-void Server::impl_get_history(Client *c, const RPC::BatchId batchId, const RPC::Message &m, const HashX &sh)
+void Server::impl_get_history(Client *c, const RPC::BatchId batchId, const RPC::Message &m, const HashX &sh,
+                              const GetHistory_FromToBH &fromTo)
 {
-    generic_do_async(c, batchId, m.id, [sh, this] {
-        return getHistoryCommon(sh, false);
+    generic_do_async(c, batchId, m.id, [sh, fromTo, this] {
+        return getHistoryCommon(sh, false, fromTo);
     });
 }
 
@@ -2155,7 +2181,7 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
     { {"server.version",                    true,               false,    PR{0,2},                    },          MP(rpc_server_version) },
 
     { {"blockchain.address.get_balance",    true,               false,    PR{1,2},                    },          MP(rpc_blockchain_address_get_balance) },
-    { {"blockchain.address.get_history",    true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_get_history) },
+    { {"blockchain.address.get_history",    true,               false,    PR{1,3},                    },          MP(rpc_blockchain_address_get_history) },
     { {"blockchain.address.get_mempool",    true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_get_mempool) },
     { {"blockchain.address.get_scripthash", true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_get_scripthash) },
     { {"blockchain.address.listunspent",    true,               false,    PR{1,2},                    },          MP(rpc_blockchain_address_listunspent) },
@@ -2171,7 +2197,7 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
     { {"blockchain.relayfee",               true,               false,    PR{0,0},                    },          MP(rpc_blockchain_relayfee) },
 
     { {"blockchain.scripthash.get_balance", true,               false,    PR{1,2},                    },          MP(rpc_blockchain_scripthash_get_balance) },
-    { {"blockchain.scripthash.get_history", true,               false,    PR{1,1},                    },          MP(rpc_blockchain_scripthash_get_history) },
+    { {"blockchain.scripthash.get_history", true,               false,    PR{1,3},                    },          MP(rpc_blockchain_scripthash_get_history) },
     { {"blockchain.scripthash.get_mempool", true,               false,    PR{1,1},                    },          MP(rpc_blockchain_scripthash_get_mempool) },
     { {"blockchain.scripthash.listunspent", true,               false,    PR{1,2},                    },          MP(rpc_blockchain_scripthash_listunspent) },
     { {"blockchain.scripthash.subscribe",   true,               false,    PR{1,1},                    },          MP(rpc_blockchain_scripthash_subscribe) },

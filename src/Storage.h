@@ -230,7 +230,8 @@ public:
 
     /// Thread-safe. Will return an empty vector if the confirmed history size exceeds MaxHistory, or a truncated
     /// vector if the confirmed + unconfirmed history exceeds MaxHistory.
-    History getHistory(const HashX &, bool includeConfirmed, bool includeMempool) const;
+    History getHistory(const HashX &, bool includeConfirmed, bool includeMempool, BlockHeight fromHeight = 0,
+                       std::optional<BlockHeight> optToHeight = std::nullopt) const;
 
     struct UnspentItem : HistoryItem {
         IONum tx_pos = 0;

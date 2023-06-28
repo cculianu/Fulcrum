@@ -3615,7 +3615,8 @@ static auto GetMaxHistoryCtrFunc(const QString &name, const HashX &hashX, size_t
     };
 }
 
-auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf) const -> History
+auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf, BlockHeight fromHeight,
+                         std::optional<BlockHeight> optToHeight) const -> History
 {
     History ret;
     if (hashX.length() != HashLen)
@@ -3637,8 +3638,13 @@ auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf) const -> H
                 // low hanging fruit for optimization -- thus I am leaving this comment here so I can remember to come
                 // back and optmize the below.  /TODO
                 for (auto num : nums) {
-                    auto hash = hashForTxNum(num).value(); // may throw, but that indicates some database inconsistency. we catch below
-                    auto height = heightForTxNum(num).value(); // may throw, same deal
+                    const BlockHeight height = heightForTxNum(num).value(); // may throw, same deal
+
+                    // Assumption for this loop: the nums are in order!
+                    if (optToHeight && height >= *optToHeight) break; // threshold of "to height" reached
+                    else if (height < fromHeight) continue; // keep looping until we hit a height that at least "from height"
+
+                    const auto hash = hashForTxNum(num).value(); // may throw, but that indicates some database inconsistency. we catch below
                     ret.emplace_back(/* HistoryItem: */ hash, int(height));
                 }
             }

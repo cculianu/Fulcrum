@@ -38,6 +38,7 @@
 #include <optional>
 #include <shared_mutex>
 #include <type_traits>
+#include <utility>
 #include <variant>
 
 struct TcpServerError : public Exception
@@ -315,11 +316,13 @@ protected:
 
 
     // --- Helpers used by Server* and AdminServer subclasses ---
+    using GetHistory_FromToBH = std::pair<BlockHeight, std::optional<BlockHeight>>;
+    static constexpr GetHistory_FromToBH default_GetHistory_FromToBH{0, std::nullopt};
 
     /// Called from get_mempool and get_history to retrieve the mempool and/or history for a hashx synchronously.
     /// Also called by Admin server's 'query_address'
     /// Returns the QVariantMap suitable for placing into the resulting response.
-    QVariantList getHistoryCommon(const HashX & scriptHash, bool mempoolOnly);
+    QVariantList getHistoryCommon(const HashX & scriptHash, bool mempoolOnly, const GetHistory_FromToBH & = default_GetHistory_FromToBH);
     /// Called for get_balance and also Admin server's query_address
     QVariantMap getBalanceCommon(const HashX & scriptHash, Storage::TokenFilterOption tokenFilter);
     /// Called for listunspent and also Admin server's query_address
@@ -420,7 +423,7 @@ private:
     // Impl. for blockchain.scripthash.* & blockchain.address.* methods (both sets call into these).
     // Note: Validation should have already been done by caller.
     void impl_get_balance(Client *, RPC::BatchId, const RPC::Message &, const HashX &scriptHash, Storage::TokenFilterOption tokenFilter);
-    void impl_get_history(Client *, RPC::BatchId, const RPC::Message &, const HashX &scriptHash);
+    void impl_get_history(Client *, RPC::BatchId, const RPC::Message &, const HashX &scriptHash, const GetHistory_FromToBH &);
     void impl_get_mempool(Client *, RPC::BatchId, const RPC::Message &, const HashX &scriptHash);
     void impl_listunspent(Client *, RPC::BatchId, const RPC::Message &, const HashX &scriptHash, Storage::TokenFilterOption tokenFilter);
     void impl_generic_subscribe(SubsMgr *, Client *, RPC::BatchId, const RPC::Message &, const HashX &key,
@@ -442,6 +445,9 @@ private:
 
     /// Helper used by blockchain.*.listunspent *.get_balance to parse optional 2nd arg
     Storage::TokenFilterOption parseTokenFilterOptionCommon(Client *c, const RPC::Message &m, size_t argPos) const;
+
+    /// Helper used by blockchain.*.get_history to get the from_height and to_height optional params, if any
+    GetHistory_FromToBH parseFromToBlockHeightCommon(const RPC::Message &m) const;
 
     /// Basically a namespace for our rpc dispatch tables, etc
     struct StaticData {
