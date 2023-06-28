@@ -3639,7 +3639,7 @@ auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf) const -> H
                 for (auto num : nums) {
                     auto hash = hashForTxNum(num).value(); // may throw, but that indicates some database inconsistency. we catch below
                     auto height = heightForTxNum(num).value(); // may throw, same deal
-                    ret.emplace_back(HistoryItem{hash, int(height), {}});
+                    ret.emplace_back(/* HistoryItem: */ hash, int(height));
                 }
             }
         }
@@ -3650,7 +3650,7 @@ auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf) const -> H
                 IncrementCtrAndThrowIfExceedsMaxHistory(txvec.size());
                 ret.reserve(ret.size() + txvec.size());
                 for (const auto & tx : txvec)
-                    ret.emplace_back(HistoryItem{tx->hash, tx->hasUnconfirmedParentTx ? -1 : 0, tx->fee});
+                    ret.emplace_back(/* HistoryItem: */ tx->hash, tx->hasUnconfirmedParentTx ? -1 : 0, tx->fee);
             }
         }
     } catch (const std::exception &e) {

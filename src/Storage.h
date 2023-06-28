@@ -219,6 +219,9 @@ public:
         int height = 0; ///< block height. 0 = unconfirmed, -1 = unconfirmed with unconfirmed parent. Note this is ambiguous with block 0 :(
         std::optional<bitcoin::Amount> fee; ///< fee, if known. this is only ever populated with a value for unconfirmed (mempool) tx's
 
+        HistoryItem(const TxHash & h = {}, int ht = 0, const std::optional<bitcoin::Amount> & f = std::nullopt)
+            : hash(h), height(ht), fee(f) {}
+
         // for sort & maps
         bool operator<(const HistoryItem &o) const noexcept;
         bool operator==(const HistoryItem &o) const noexcept;
