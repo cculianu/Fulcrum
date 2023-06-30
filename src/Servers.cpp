@@ -1826,7 +1826,16 @@ void Server::rpc_blockchain_transaction_broadcast(Client *c, const RPC::BatchId 
     // -- filter may end up applying murmur3 hash to the entire key we give it from 20-50 times!
     const QByteArray txkey = (!rawtxhex.isEmpty() ? BTC::HashOnce(Util::ParseHexFast(rawtxhex)).left(16) : QByteArrayLiteral("xx"));
     // no need to validate hex here -- bitcoind does validation for us!
-    generic_async_to_bitcoind(c, batchId, m.id, "sendrawtransaction", QVariantList{ rawtxhex },
+    QVariantList params { rawtxhex } ;
+    if ((bitcoindmgr->isCoreLike())
+            && bitcoindmgr->getBitcoinDVersion() >= Version{0,25,0}) {
+        // bitcoin core 25.0+ requires specifying maxburnamount in sendrawtransaction call
+        // which also requires first sending maxfeerate, set to 0.1btc by default in core
+        params.append(0.1);
+        // set maxburnrate to max btc supply to preserve pre-25.0 functionality
+        params.append(21000000);
+    }
+    generic_async_to_bitcoind(c, batchId, m.id, "sendrawtransaction", params,
         // print to log, echo bitcoind's reply to client
         [size=rawtxhex.length()/2, c, this, txkey](const RPC::Message & reply){
             QVariant ret = reply.result();
@@ -1842,8 +1851,8 @@ void Server::rpc_blockchain_transaction_broadcast(Client *c, const RPC::BatchId 
             logFilter->broadcast(true, logLine, txkey);
             // Next, check if client is old and has the phishing exploit:
             // version 3.3.4 was the first one that was good for both Electron Cash and Electrum
-            constexpr Version FirstNonVulberableVersion(3,3,4);
-            if (const auto uaVersion = c->info.uaVersion(); uaVersion.isValid() && uaVersion < FirstNonVulberableVersion) {
+            constexpr Version FirstNonVulnerableVersion(3,3,4);
+            if (const auto uaVersion = c->info.uaVersion(); uaVersion.isValid() && uaVersion < FirstNonVulnerableVersion) {
                 // The below is to warn old clients that they are vulnerable to a phishing attack.
                 // This logic is also used by the ElectronX implementations here:
                 // https://github.com/Electron-Cash/electrumx/blob/fbd00416d804c286eb7de856e9399efb07a2ceaf/electrumx/server/session.py#L1526
