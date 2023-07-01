@@ -313,6 +313,7 @@ protected:
     /// If true we are on the BTC or LTC chains.
     bool isNonBCH() const { return coin != BTC::Coin::BCH; }
     bool isLTC() const { return coin == BTC::Coin::LTC; }
+    bool isBTC() const { return coin == BTC::Coin::BTC; }
 
 
     // --- Helpers used by Server* and AdminServer subclasses ---
