@@ -480,7 +480,7 @@ HEADERS += \
 # Enable secp256k1 compilation on x86_64 only -- we don't actually use this lib
 # yet in Fulcrum, so on platforms that aren't x86_64 it's ok to exclude it; it
 # was included in case we wish to someday verify signatures in Fulcrum, etc.
-contains(QT_ARCH, x86_64):!win32-msvc {
+contains(QT_ARCH, x86_64):!contains(CONFIG, config_without_bundled_secp256k1):!win32-msvc {
     message("Including embedded secp256k1")
 
     SOURCES += bitcoin/secp256k1/secp256k1.c
