@@ -31,7 +31,7 @@
 
 #include "bitcoin/hash.h"
 
-#include "robin_hood/robin_hood.h"
+#include <robin_hood.h>
 
 #if __has_include(<rocksdb/advanced_cache.h>)
 // Newer rocksdb 8.1 defines the `Cache` class in this header. :/
@@ -4537,7 +4537,7 @@ namespace {
 } // end anon namespace
 
 #ifdef ENABLE_TESTS
-#include "robin_hood/robin_hood.h"
+#include <robin_hood.h>
 namespace {
 
     template<size_t NB>

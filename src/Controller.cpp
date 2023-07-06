@@ -33,7 +33,7 @@
 #include "bitcoin/crypto/common.h"  // ReadLE32
 #include "bitcoin/rpc/protocol.h" // for RPC_INVALID_ADDRESS_OR_KEY
 #include "bitcoin/transaction.h"
-#include "robin_hood/robin_hood.h"
+#include <robin_hood.h>
 
 #include <algorithm>
 #include <cassert>
