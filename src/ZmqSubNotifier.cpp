@@ -23,7 +23,7 @@
 #if defined(ENABLE_ZMQ)
 // real implementation
 #define ZMQ_CPP11
-#include "zmq/zmq.hpp"
+#include <zmq.hpp>
 
 #include <QRandomGenerator>
 

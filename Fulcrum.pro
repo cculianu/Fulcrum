@@ -186,6 +186,14 @@ contains(LIBS, -lsimdjson) {
 }
 # /ZMQ
 
+# cppzmq
+!contains(CONFIG, config_without_bundled_cppzmq) {
+    INCLUDEPATH += src/zmq
+} else {
+    message("cppzmq: Using CLI override")
+}
+# /cppzmq
+
 # - Try and detect rocksdb and if not, fall back to the staticlib.
 # - User can suppress this behavior by specifying a "LIBS+=-lrocksdb..." on the
 #   CLI when they invoked qmake. In that case, they must set-up the LIBS+= and
