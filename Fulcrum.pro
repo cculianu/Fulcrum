@@ -149,6 +149,13 @@ contains(CONFIG, config_endian_big) {
 }
 # /GIT_COMMIT=
 
+# simdjson
+contains(LIBS, -lsimdjson) {
+    message("simdjson: Using CLI override")
+    DEFINES += SYSTEM_SIMDJSON
+}
+# /simdjson
+
 # ZMQ
 !contains(LIBS, -lzmq) {
     # Test for ZMQ, and if found, add pkg-config which we will rely upon to find libs

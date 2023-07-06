@@ -56,7 +56,10 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 // embed simdjson here, if we are on a known 64-bit platform and the header & sources are available
 #if defined(__x86_64__) || defined(_M_AMD64) || defined(__aarch64__) || defined(_M_ARM64)
-#if __has_include("simdjson/simdjson.h") && __has_include("simdjson/simdjson.cpp")
+#if defined(SYSTEM_SIMDJSON)
+#include <simdjson.h>
+#define HAVE_SIMDJSON 1
+#elif __has_include("simdjson/simdjson.h") && __has_include("simdjson/simdjson.cpp")
 #include "simdjson/simdjson.h"
 #include "simdjson/simdjson.cpp"
 #define HAVE_SIMDJSON 1
