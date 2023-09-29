@@ -334,7 +334,7 @@ public:
     [[nodiscard]] static QVariantMap unspentItemToVariantMap(const Storage::UnspentItem &);
 };
 
-/// Implements the ElectrumX/ElectronX JSON-RPC protocol, version 1.4.4.
+/// Implements the Electrum Cash JSON-RPC protocol: https://electrum-cash-protocol.readthedocs.io/en/latest/index.html
 /// See also ServerSSL (subclass) which is identical but serves to SSL clients.  (This class serves to TCP clients).
 class Server : public ServerBase
 {
