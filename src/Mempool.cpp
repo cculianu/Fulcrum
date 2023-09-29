@@ -23,6 +23,7 @@
 #include <cassert>
 #include <functional>
 #include <map>
+#include <optional>
 #include <utility>
 
 void Mempool::clear() {
@@ -33,32 +34,42 @@ void Mempool::clear() {
     hashXTxs.rehash(0);
 }
 
-auto Mempool::calcCompactFeeHistogram(double binSize) const -> FeeHistogramVec
+auto Mempool::calcCompactFeeHistogram(unsigned binSizeBytes) const -> FeeHistogramVec
 {
-    // this algorithm is taken from:
-    // https://github.com/Electron-Cash/electrumx/blob/fbd00416d804c286eb7de856e9399efb07a2ceaf/electrumx/server/mempool.py#L139
+    // This algorithm is taken from:
+    // https://github.com/spesmilo/electrumx/blob/bbd985a95db63cada13254bb766f174e9ab674d0/electrumx/server/mempool.py#L154
     FeeHistogramVec ret;
     std::map<unsigned, unsigned, std::greater<unsigned>> histogram; // sorted map, descending order by key
 
     for (const auto & [txid, tx] : txs) {
+        if (tx->fee < bitcoin::Amount::zero()) continue; // skip negative fees (coinbase txn, etc)
         const auto feeRate = unsigned(tx->fee / bitcoin::Amount::satoshi()) // sats
                              /  std::max(tx->sizeBytes, 1u); // per byte
         histogram[feeRate] += tx->sizeBytes; // accumulate size by feeRate
     }
 
-    // now, compact the bins
+    // Now, compact the bins
     ret.reserve(8);
     unsigned cumSize = 0;
-    double r = 0.;
+    double binSize = static_cast<double>(binSizeBytes);
+    std::optional<unsigned> prevFeeRate;
 
     for (const auto & [feeRate, size] : histogram) {
-        cumSize += size;
-        if (cumSize + r > binSize) {
-            ret.push_back(FeeHistogramItem{feeRate, cumSize});
-            r += double(cumSize) - binSize;
+        // If there is a big lump of txns at this specific size,
+        // add the previous item now (if not added already)
+        if (double(size) > 2.0 * binSize && prevFeeRate && cumSize > 0) {
+            ret.emplace_back(*prevFeeRate, cumSize);
             cumSize = 0;
             binSize *= 1.1;
         }
+        // Now work on perhaps adding this item
+        cumSize += size;
+        if (cumSize > binSize) {
+            ret.emplace_back(feeRate, cumSize);
+            cumSize = 0;
+            binSize *= 1.1;
+        }
+        prevFeeRate = feeRate;
     }
     ret.shrink_to_fit(); // save memory
     return ret;
