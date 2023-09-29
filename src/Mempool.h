@@ -209,12 +209,13 @@ struct Mempool
     struct FeeHistogramItem {
         unsigned feeRate = 0; // in sats/B, quotient truncated to uint.
         unsigned cumulativeSize = 0; // bin size, cumulative bytes
+        FeeHistogramItem(unsigned fr, unsigned cs) : feeRate{fr}, cumulativeSize{cs} {}
     };
     using FeeHistogramVec = std::vector<FeeHistogramItem>;
     /// This function is potentially going to take a couple of ms at worst on very large mempools.  Even a 1.5k tx
     /// mempool takes under 1 ms on average hardware, so it's very fast. Storage calls this in refreshMempoolHistogram
     /// from a periodic background task kicked off in Controller.
-    FeeHistogramVec calcCompactFeeHistogram(double binSize = 1e5 /* binSize in bytes */) const;
+    FeeHistogramVec calcCompactFeeHistogram(unsigned binSize = 30'000 /* binSize in bytes */) const;
 
     // -- Dump (for JSONesque debug support)
 
