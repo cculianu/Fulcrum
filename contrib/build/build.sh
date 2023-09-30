@@ -19,31 +19,50 @@ if [ -z "$2" ]; then
 fi
 tag="$2"
 
+arch_arg=""
+arch_suffix=""
+arch="$3"
+if [ -n "$arch" ]; then
+    case "$arch" in
+        "arm64")
+            arch_arg="--platform linux/arm64"
+            arch_suffix="_arm64"
+            ;;
+        *)
+            fail "Unknown arch \"$arch\", specify either nothing or \"arm64\""
+            ;;
+    esac
+fi
+
 suffix=""
 case "$plat" in
     "windows_qt6"|"win_qt6")
+        [ -z "$arch_arg" ] || fail "Cannot use platform \"$plat\" with \"$arch\""
         plat=win  # normalize to 'win'
         docker_img_name="fulcrum-builder/qt620beta3:windows"
         docker_cont_name="fulcrum_cont_qt_6_2_0beta3_windows_$$"
         suffix="_qt6"
         ;;
     "windows"|"win")
+        [ -z "$arch_arg" ] || fail "Cannot use platform \"$plat\" with \"$arch\""
         plat=win  # normalize to 'win'
         docker_img_name="fulcrum-builder/qt:windows"
         docker_cont_name="fulcrum_cont_qt_windows_$$"
         ;;
     "linux"|"lin")
+        [ -z "$arch_arg" ] || fail "Cannot use platform \"$plat\" with \"$arch\"; please use \"linux_ub22\" instead"
         plat=linux
         docker_img_name="fulcrum-builder/qt:linux"
         docker_cont_name="fulcrum_cont_qt_linux_$$"
         ;;
     "linux_ub22"|"newlinux"|"newlin"|"lin_ub22")
         plat=linux
-        docker_img_name="fulcrum-builder/qt:linux_ub22"
-        docker_cont_name="fulcrum_cont_qt_linux_ub22_$$"
+        docker_img_name="fulcrum-builder/qt:linux_ub22${arch_suffix}"
+        docker_cont_name="fulcrum_cont_qt_linux_ub22${arch_suffix}_$$"
         suffix="_ub22"
         ;;
     "linux_ub16"|"oldlinux"|"oldlin"|"lin_ub16")
+        [ -z "$arch_arg" ] || fail "Cannot use platform \"$plat\" with \"$arch\""
         plat=linux
         docker_img_name="fulcrum-builder/qt:linux_ub16"
         docker_cont_name="fulcrum_cont_qt_linux_ub16_$$"
@@ -131,14 +150,14 @@ popd 1> /dev/null
 cd "${workdir}/${PACKAGE}/contrib/build/${plat}" || fail "Could not chdir to Dockerfile directory"
 [ -e "$dockerfile" ] || fail "Could not find $dockerfile in $(pwd)"
 info "Creating docker image: $docker_img_name ..."
-docker build -t "$docker_img_name" - < "$dockerfile" \
+docker build $arch_arg -t "$docker_img_name" - < "$dockerfile" \
   || fail "Could not build docker image. Check that docker is installed and that you can run docker without sudo on this system."
 printok "Docker image created: $docker_img_name"
 
 # Run _build.sh from the specified commit inside Docker image, with $workdir (usually ./work) mapped to /work
 cd "$workdir/.." || fail "Could not chdir"
 info "Building inside docker container: $docker_cont_name ($docker_img_name) ..."
-docker run --rm -it -v "$workdir":/work${osxfs_option} \
+docker run $arch_arg --rm -it -v "$workdir":/work${osxfs_option} \
     --name "$docker_cont_name" \
     "$docker_img_name" /work/"$PACKAGE"/contrib/build/${plat}/_build.sh "$PACKAGE" "$ROCKSDB_PACKAGE" "$JEMALLOC_PACKAGE" "$DEBUG_BUILD"
 
