@@ -30,7 +30,7 @@ jobs:
       - name: Login to docker hub
         uses: docker/login-action@v1.6.0
         with:
-          username: cculianu
+          username: openoms
           password: ${{secrets.DOCKERHUB_PASSWORD}}
 
       # If you want support for more platforms you can use our setup-qemu action:
@@ -42,8 +42,8 @@ jobs:
 
       # publish version tagged image
       - name: Build docker image
-        run: docker buildx build --build-arg MAKEFLAGS="-j ${WORKER_COUNT}" -t cculianu/fulcrum:${{ env.TAG_NAME }} -f contrib/docker/Dockerfile --platform linux/arm64/v8,linux/amd64 --push .
+        run: docker buildx build --build-arg MAKEFLAGS="-j ${WORKER_COUNT}" -t openoms/fulcrum:${{ env.TAG_NAME }} -f contrib/docker/Dockerfile --platform linux/arm64/v8,linux/amd64 --push .
       # publish 'latest' tagged image
       - name: Build docker image
-        run: docker buildx build --build-arg MAKEFLAGS="-j ${WORKER_COUNT}" -t cculianu/fulcrum:latest -f contrib/docker/Dockerfile --platform linux/arm64/v8,linux/amd64 --push .
+        run: docker buildx build --build-arg MAKEFLAGS="-j ${WORKER_COUNT}" -t openoms/fulcrum:latest -f contrib/docker/Dockerfile --platform linux/arm64/v8,linux/amd64 --push .
 
