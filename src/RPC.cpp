@@ -428,7 +428,7 @@ namespace RPC {
     {
         if (batchId.isNull()) return false; // batchId.isNull() means to not filter.
         // first, see if the response corresponds to an extant batch request
-        if (auto * const batch = qAsConst(extantBatchProcessors).value(batchId)) {
+        if (auto * const batch = std::as_const(extantBatchProcessors).value(batchId)) {
             if (UNLIKELY(batch->id != batchId.get())) {
                 // Defensive programming: Log and detect invariant violations. batchId should always be batch->id
                 Error() << __func__ << ": batchId " << batchId.get() << " != batch->id " << batch->id << "! FIXME!";
@@ -1248,7 +1248,7 @@ namespace RPC {
         } else if (batch.isComplete()) {
             if constexpr (debugBatchExtra) DebugM(objectName(), ": completed");
             QVariantList l;
-            for (const auto &msg : qAsConst(batch.responses)) {
+            for (const auto &msg : std::as_const(batch.responses)) {
                 if (msg.isError()) ++conn.nErrorsSent;
                 else ++conn.nResultsSent;
                 l.push_back(msg.data);

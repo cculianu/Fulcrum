@@ -400,7 +400,7 @@ void PeerMgr::updateSoon()
     callOnTimerSoonNoRepeat(int(kProcessSoonInterval * 1e3), __func__, [this]{
         // the below happens in a rate-limited fashion after a small delay (currently 1 sec)
         PeerInfoList peers;
-        for (const auto & client : qAsConst(clients)) {
+        for (const auto & client : std::as_const(clients)) {
             if (client->isGood() && !client->isStale() && client->verified)
                 peers.push_back(client->info);
         }
@@ -526,7 +526,7 @@ void PeerMgr::on_kickByAddress(const QHostAddress &addr)
         }
     }
     // lastly, loop through the active/connected clients and tell them all to delete themselves
-    for (PeerClient *c : qAsConst(clients)) {
+    for (PeerClient *c : std::as_const(clients)) {
         if (c->peerAddress() == addr || c->info.addr == addr) {
             DebugM(__func__, " kicked connected peer ", c->info.hostName, " ", addr.toString());
             hostnames.insert(c->info.hostName);
@@ -556,7 +556,7 @@ void PeerMgr::on_kickBySuffix(const QString &suffix)
         }
     }
     // lastly, loop through the active/connected clients and tell them all to delete themselves
-    for (PeerClient *c : qAsConst(clients)) {
+    for (PeerClient *c : std::as_const(clients)) {
         if (c->info.hostName.endsWith(suffix)) {
             DebugM(__func__, " kicked connected peer ", c->info.hostName, " ", c->info.addr.toString());
             hostnames.insert(c->info.hostName);
@@ -833,7 +833,7 @@ void PeerClient::handleReply(IdMixin::Id, const RPC::BatchId, const RPC::Message
         bool found = false;
         const bool weAreSsl = isSsl();
         const quint16 remotePort = peerPort();
-        for (const auto & pi : qAsConst(pl)) {
+        for (const auto & pi : std::as_const(pl)) {
             // find a hostname match and also port match for what we are connected to
             if (pi.hostName == info.hostName
                     // see if ports match what we are connected to
@@ -907,7 +907,7 @@ void PeerClient::handleReply(IdMixin::Id, const RPC::BatchId, const RPC::Message
         if (announceSelf) {
             bool foundMe = false;
             const QString phn = mgr->publicHostNameForConnection(this);
-            for (const auto & pi : qAsConst(candidates)) {
+            for (const auto & pi : std::as_const(candidates)) {
                 if (!foundMe && pi.hostName == phn) {
                     foundMe = true;
                     break;

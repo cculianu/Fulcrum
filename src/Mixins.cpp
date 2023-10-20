@@ -19,6 +19,8 @@
 #include "App.h"
 #include "Mixins.h"
 
+#include <utility>
+
 QObjectMixin::~QObjectMixin() {}
 QObject *QObjectMixin::qobj() const
 {
@@ -72,7 +74,7 @@ void ThreadObjectMixin::stop()
         _thread.wait();
     }
     int ct = 0;
-    for (const auto & c : qAsConst(conns)) {
+    for (const auto & c : std::as_const(conns)) {
         QObject::disconnect(c);
         ++ct;
     }

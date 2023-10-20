@@ -24,6 +24,8 @@
 #include <QIODevice>
 #include <QTextStream>
 
+#include <utility>
+
 /* static */ void Options::test()
 {
     // paranoia
@@ -294,7 +296,7 @@ bool ConfigFile::open(const QString &filePath)
             return f.error() == QFile::FileError::NoError;
         lines = fileData.split('\n');
     }
-    for (const auto & lineData : qAsConst(lines)) {
+    for (const auto & lineData : std::as_const(lines)) {
         QString line = QString::fromUtf8(lineData).trimmed();
         if (!line.isEmpty() && line.at(0) == bracket)
             continue; // ignore "[section]" headers in case the user thinks we support these

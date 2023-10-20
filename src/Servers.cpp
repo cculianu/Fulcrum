@@ -536,7 +536,7 @@ bool ServerBase::startWebSocketHandshake(QTcpSocket *socket)
     // do not access `socket` below this line, use `ws` instead.
     auto tmpConnections = std::make_shared<QList<QMetaObject::Connection>>();
     *tmpConnections += connect(ws, &WebSocket::Wrapper::handshakeSuccess, this, [this, ws, tmpConnections] {
-        for (const auto & conn : qAsConst(*tmpConnections))
+        for (const auto & conn : std::as_const(*tmpConnections))
             disconnect(conn);
         addPendingConnection(ws);
         emit newConnection(); // <-- we must emit here because we went asynch and are doing this 'some time later', and the calling code emitted a spurous newConnection() on our behalf previously.. and this is the *real* newConnection()
@@ -2368,7 +2368,7 @@ void ServerSSL::incomingConnection(qintptr socketDescriptor)
         if (tmpConnections) {
             // tmpConnections will get auto-deleted after this lambda returns because the QObject connection holding
             // it alive will be disconnected.
-            for (const auto & conn : qAsConst(*tmpConnections))
+            for (const auto & conn : std::as_const(*tmpConnections))
                 disconnect(conn);
         }
         if (!usesWS) {
