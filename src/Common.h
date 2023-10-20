@@ -31,7 +31,7 @@
 /// All of the custom exceptions we define in this app inherit from this base.
 struct Exception : std::runtime_error
 {
-    Exception(const QString & what = "Error") : std::runtime_error(what.toUtf8()) {}
+    Exception(const QString & what = "Error") : std::runtime_error(what.toStdString()) {}
     ~Exception() override; ///< for vtable
 };
 
