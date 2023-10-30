@@ -673,7 +673,7 @@ struct SynchMempoolTask : public CtlTask
 
     const std::shared_ptr<Storage> storage;
     const std::atomic_bool & notifyFlag;
-    const size_t maxDLBacklogSize = std::clamp(std::thread::hardware_concurrency(), 1u, 16u /* cap at default work queue limit */);
+    const size_t maxDLBacklogSize = std::clamp(std::thread::hardware_concurrency(), 2u, 16u /* cap at default work queue limit */);
     bool isdlingtxs = false, isProcessingResults = false;
     Mempool::TxMap txsNeedingDownload, txsWaitingForResponse;
     Mempool::NewTxsMap txsDownloaded;
