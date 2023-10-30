@@ -953,7 +953,7 @@ void SynchMempoolTask::doDLNextTx()
         const auto hashHex = Util::ToHexFast(tx->hash);
         txsWaitingForResponse.emplace(tx->hash, tx);
         submitRequest("getrawtransaction", {hashHex, false}, [this, hashHex, tx, t0 = Tic()](const RPC::Message & resp){
-            if (TRACE || t0.msec() >= 100)
+            if (TRACE)
                 DebugM(resp.method, ": got reply for ", QString::fromLatin1(hashHex).left(8), " in ", t0.msecStr(), " msec",
                        ", needDL: ", txsNeedingDownload.size(), ", waitingForResp: ", txsWaitingForResponse.size());
             QByteArray txdata = resp.result().toByteArray();
