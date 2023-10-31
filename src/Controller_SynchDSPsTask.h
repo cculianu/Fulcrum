@@ -30,7 +30,7 @@
 /// This runs after the SynchMempoolTask to download new DSProofs and also update existing proofs
 /// with new descendant info. This task is only run if the bitcoind we are connected to supports
 /// the `getdsprooflist` and `getdsproof` RPC methods.
-class SynchDSPsTask : public CtlTask {
+class SynchDSPsTask final : public CtlTask {
 public:
     SynchDSPsTask(Controller *ctl_, std::shared_ptr<Storage> storage, const std::atomic_bool & notifyFlag);
     ~SynchDSPsTask() override;

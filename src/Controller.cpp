@@ -361,7 +361,7 @@ struct ChainInfo {
     QString warnings;
 };
 
-struct GetChainInfoTask : public CtlTask
+struct GetChainInfoTask final : public CtlTask
 {
     GetChainInfoTask(Controller *ctl_) : CtlTask(ctl_, "Task.GetChainInfo") {}
     ~GetChainInfoTask() override { stop(); } // paranoia
@@ -453,7 +453,7 @@ QString ChainInfo::toString() const
     return ret;
 }
 
-struct DownloadBlocksTask : public CtlTask
+struct DownloadBlocksTask final : public CtlTask
 {
     DownloadBlocksTask(unsigned from, unsigned to, unsigned stride, unsigned numBitcoinDClients, Controller *ctl);
     ~DownloadBlocksTask() override { stop(); } // paranoia
@@ -657,7 +657,7 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
 /// most efficient.  With full mempools bitcoind CPU usage could spike to 100% if we use the verbose mode.
 /// It turns out we don't need that verbose data anyway (such as a full ancestor count) -- it's enough to have a bool
 /// flag for "has unconfirmed parent tx", and be done with it.  Everything else we can calculate.
-struct SynchMempoolTask : public CtlTask
+struct SynchMempoolTask final : public CtlTask
 {
     SynchMempoolTask(Controller *ctl_, std::shared_ptr<Storage> storage, const std::atomic_bool & notifyFlag,
                      const std::unordered_set<TxHash, HashHasher> & ignoreTxns)
@@ -674,7 +674,6 @@ struct SynchMempoolTask : public CtlTask
     const std::shared_ptr<Storage> storage;
     const std::atomic_bool & notifyFlag;
     const size_t maxDLBacklogSize = std::clamp(std::thread::hardware_concurrency(), 2u, 16u /* cap at default work queue limit */);
-    bool isdlingtxs = false, isProcessingResults = false;
     Mempool::TxMap txsNeedingDownload, txsWaitingForResponse;
     Mempool::NewTxsMap txsDownloaded;
     std::unordered_set<TxHash, HashHasher> txsFailedDownload, ///< set of tx's dropped due to RBF and/or mempool pressure as we were downloading
@@ -696,8 +695,13 @@ struct SynchMempoolTask : public CtlTask
     /// The txids either added or dropped -- for the txSubsMgr
     std::unordered_set<TxHash, HashHasher> txidsAffected;
 
+    enum class State : uint8_t {
+        Start = 0u, AwaitingGrmp, DlTxs, FinishedDlTxs, ProcessingResults
+    };
+    State state = State::Start;
+
     void clear() {
-        isdlingtxs = false;
+        state = State::Start;
         txsNeedingDownload.clear(); txsWaitingForResponse.clear(); txsDownloaded.clear(); txsFailedDownload.clear();
         txsIgnored.clear();
         expectedNumTxsDownloaded = 0;
@@ -716,9 +720,6 @@ struct SynchMempoolTask : public CtlTask
 
     void doGetRawMempool();
     void doDLNextTx();
-    void doTxDataResponseNext();
-    bool maybeProcessResults();
-    bool maybeDoDLNextTx();
     void processResults();
 
     /// Update the lastProgress stat for /stats endpoint
@@ -772,43 +773,28 @@ void SynchMempoolTask::process()
 {
     if (ctl->isStopping())
         return; // short-circuit early return if controller is stopping
-    if (!isdlingtxs)
+    if (state == State::Start) {
+        state = State::AwaitingGrmp;
         doGetRawMempool();
-    else if (maybeDoDLNextTx()) {
-        // OK
-    } else if (maybeProcessResults()) {
-        // OK
-    } else {
-        Error() << "Unexpected state in " << __PRETTY_FUNCTION__ << ". FIXME!";
-        emit errored();
-        return;
-    }
-}
-
-bool SynchMempoolTask::maybeDoDLNextTx()
-{
-    if (!txsNeedingDownload.empty()) {
-        doDLNextTx();
-        return true;
-    }
-    return false;
-}
-
-bool SynchMempoolTask::maybeProcessResults()
-{
-    if (txsWaitingForResponse.empty() && !isProcessingResults) {
-        isProcessingResults = true;
+    } else if (state == State::DlTxs) {
+        updateLastProgress();
+        if (!txsNeedingDownload.empty())
+            doDLNextTx();
+        else if (txsWaitingForResponse.empty()) {
+            state = State::FinishedDlTxs;
+            process(); // direct-call to self again for perf, to take the last if condition
+            return;
+        }
+    } else if (state == State::FinishedDlTxs) {
+        state = State::ProcessingResults;
         try {
             processResults();
         } catch (const std::exception & e) {
             Error() << "Caught exception when processing mempool tx's: " << e.what();
             emit errored();
         }
-        return true;
     }
-    return false;
 }
-
 
 /// takes locks, prints to Log() every 30 seconds if there were changes
 void Controller::printMempoolStatusToLog() const
@@ -996,8 +982,8 @@ void SynchMempoolTask::doDLNextTx()
                         emit ctl->ignoreMempoolTxn(tx->hash); // tell Controller in a thread-safe way to remember this across SynchMempoolTask invocations
                         txsIgnored.insert(tx->hash);
                         txsWaitingForResponse.erase(tx->hash);
-                        // keep going
-                        doTxDataResponseNext();
+                        // keep going (do a direct call for better performance, rather than calling AGAIN)
+                        process();
                         return;
                     }
                 }
@@ -1040,8 +1026,8 @@ void SynchMempoolTask::doDLNextTx()
 
             txidsAffected.insert(tx->hash);
             txsWaitingForResponse.erase(tx->hash);
-            // keep going
-            doTxDataResponseNext();
+            // keep going (do a direct call for better performance, rather than calling AGAIN)
+            process();
         },
         [this, hashHex, tx](const RPC::Message &resp) {
             if (resp.errorCode() != bitcoin::RPCErrorCode::RPC_INVALID_ADDRESS_OR_KEY) {
@@ -1065,20 +1051,9 @@ void SynchMempoolTask::doDLNextTx()
                 emit errored();
                 return;
             }
-            // otherwise, keep going
-            doTxDataResponseNext();
+            // otherwise, keep going (do a direct call for better performance, rather than calling AGAIN)
+            process();
         });
-    }
-}
-
-void SynchMempoolTask::doTxDataResponseNext()
-{
-    updateLastProgress();
-    // direct-calls below are faster than going through event-loop again via AGAIN()
-    if (maybeDoDLNextTx()) {
-        // OK
-    } else if (maybeProcessResults()) {
-        // OK
     }
 }
 
@@ -1173,13 +1148,13 @@ void SynchMempoolTask::doGetRawMempool()
             DebugM(resp.method, ": got reply with ", txidList.size(), " items, ", ignoredCt, " ignored, ",
                    droppedCt, " dropped, ", newCt, " new",
                    " (reply took: ", t0.msecStr(), " msec, processing took: ", t1.msecStr(), " msec)");
-        isdlingtxs = true;
         expectedNumTxsDownloaded = unsigned(newCt);
         txsDownloaded.reserve(expectedNumTxsDownloaded);
         txsWaitingForResponse.reserve(expectedNumTxsDownloaded);
 
         // TX data will be downloaded now, if needed
-        AGAIN();
+        state = State::DlTxs;
+        process();
     });
 }
 
