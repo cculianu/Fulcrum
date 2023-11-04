@@ -310,6 +310,7 @@ SOURCES += \
     Common.cpp \
     Controller.cpp \
     Controller_SynchDSPsTask.cpp \
+    Controller_SynchMempoolTask.cpp \
     CoTask.cpp \
     DSProof.cpp \
     Json/Json.cpp \

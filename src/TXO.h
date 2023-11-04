@@ -90,6 +90,8 @@ template<> struct std::hash<TXO> {
     std::size_t operator()(const TXO &txo) const noexcept {
         const auto val1 = BTC::QByteArrayHashHasher{}(txo.txHash);
         const auto val2 = txo.outN;
+        static_assert(std::has_unique_object_representations_v<decltype(val1)>
+                      && std::has_unique_object_representations_v<decltype(val2)>);
         // We must copy the hash bytes and the ionum to a temporary buffer and hash that.
         // Previously, we put these two items in a struct but it didn't have a unique
         // objected repr and that led to bugs.  See Fulcrum issue #47 on GitHub.
