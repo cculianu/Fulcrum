@@ -736,35 +736,28 @@ private:
     std::condition_variable condPrecache;
     std::mutex mutPrecache;
     std::vector<bitcoin::CTransactionRef> precacheTxns; ///< guarded by mutPrecache, signaled by condPrecache
-    std::atomic_bool precacheStopFlag = false, precacheDoneSubmittingWorkFlag = false;
+    std::atomic_bool precacheStopFlag = false, precacheDoneSubmittingWorkFlag = false, precacheThreadRunning = false;
     std::thread precacheThread;
 
-    void restartPrecacheTxns(size_t reserve = 0);
+    void restartPrecacheTxns(size_t reserve, Mempool::TxHashSet && tentativeMempoolTxHashes);
     void stopPrecacheTxns();
     void precacheSubmitWork(const bitcoin::CTransactionRef &tx);
-    void precacheThreadFunc();
+    void precacheThreadFunc(size_t reserve, Mempool::TxHashSet tentativeMempoolTxHashes);
 };
 
-void SynchMempoolTask::restartPrecacheTxns(size_t reserve)
+void SynchMempoolTask::restartPrecacheTxns(const size_t reserve, Mempool::TxHashSet && tentativeMempoolTxHashes)
 {
-    bool needJoin = false;
-    {
-        std::unique_lock g(mutPrecache);
-        precacheTxns.clear();
-        needJoin = precacheThread.joinable() && (precacheStopFlag || precacheDoneSubmittingWorkFlag);
-        precacheStopFlag = precacheDoneSubmittingWorkFlag = false;
-    }
-    if (needJoin) stopPrecacheTxns();
-    if (!precacheThread.joinable()) {
-        precacheThread = std::thread([this, reserve]{
-            if (reserve) confirmedSpendCache.reserve(reserve);
-            precacheThreadFunc();
-        });
-    }
+    stopPrecacheTxns();
+    precacheThreadRunning = true;
+    precacheThread = std::thread([this, reserve, &tentativeMempoolTxHashes]{
+        Defer d([this]{ precacheThreadRunning = false; });
+        precacheThreadFunc(reserve, std::move(tentativeMempoolTxHashes));
+    });
 }
 
 void SynchMempoolTask::precacheSubmitWork(const bitcoin::CTransactionRef &tx)
 {
+    assert(precacheThreadRunning);
     {
         std::unique_lock g(mutPrecache);
         precacheTxns.emplace_back(tx);
@@ -772,7 +765,7 @@ void SynchMempoolTask::precacheSubmitWork(const bitcoin::CTransactionRef &tx)
     condPrecache.notify_one();
 }
 
-void SynchMempoolTask::precacheThreadFunc()
+void SynchMempoolTask::precacheThreadFunc(const size_t reserve, const Mempool::TxHashSet tentativeMempoolTxHashes)
 {
     if (QThread *t = QThread::currentThread(); t && t != this->thread() && t != qApp->thread()) {
         t->setObjectName("SyncMempoolPreCache");
@@ -788,8 +781,7 @@ void SynchMempoolTask::precacheThreadFunc()
         DebugM("Precached ", ctr, "/" , tot, " inputs in ", t0.msecStr(), " msec, of which ",
                QString::number(tProc, 'f', 3), " msec was spent processing, thread exiting.");
     });
-    std::unordered_set<TxHash, HashHasher> seenTxs;
-    seenTxs.reserve(confirmedSpendCache.bucket_count());
+    if (reserve) confirmedSpendCache.reserve(reserve);
     auto pred = [this] { return !precacheTxns.empty() || precacheStopFlag.load() || precacheDoneSubmittingWorkFlag.load(); };
     std::vector<bitcoin::CTransactionRef> txns;
     while (!precacheStopFlag) {
@@ -805,29 +797,23 @@ void SynchMempoolTask::precacheThreadFunc()
         // Otherwise process enqueued precache lookups
         Tic t1;
         for (const auto & tx : txns) {
-            TxHash txHash = BTC::Hash2ByteArrayRev(tx->GetId());
-            {
-                // Lock mempool for reading (shared mode), so we can look things up in mempool
-                auto [mempool, lock] = storage->mempool();
-                for (const auto & in : tx->vin) {
-                    const TXO txo{BTC::Hash2ByteArrayRev(in.prevout.GetTxId()), IONum(in.prevout.GetN())};
-                    ++tot;
-                    if (!seenTxs.count(txo.txHash) && !mempool.txs.count(txo.txHash)) {
-                        // if doesn't appear to be in mempool, look it up in the db and cache the resulting answer
-                        // may throw on very low level db error; returns nullopt if not found (may be not found for mempool txn)
-                        try {
-                            // we intentionally use unordered_map::operator[] here to overwrite existing (if any)
-                            auto & opt = confirmedSpendCache[txo] = storage->utxoGetFromDB(txo, false);
-                            ctr += opt.has_value();
-                        } catch (const std::exception & e) {
-                            Error() << __func__ << ": Got low-level DB error retrieving " << txo.toString() << ": " << e.what();
-                            emit errored();
-                            return;
-                        }
+            for (const auto & in : tx->vin) {
+                const TXO txo{BTC::Hash2ByteArrayRev(in.prevout.GetTxId()), IONum(in.prevout.GetN())};
+                ++tot;
+                if (tentativeMempoolTxHashes.find(txo.txHash) == tentativeMempoolTxHashes.end()) {
+                    // if doesn't appear to be in mempool, look it up in the db and cache the resulting answer
+                    // may throw on very low level db error; returns nullopt if not found (may be not found for mempool txn)
+                    try {
+                        // we intentionally use unordered_map::operator[] here to overwrite existing (if any)
+                        auto & opt = confirmedSpendCache[txo] = storage->utxoGetFromDB(txo, false);
+                        ctr += opt.has_value();
+                    } catch (const std::exception & e) {
+                        Error() << __func__ << ": Got low-level DB error retrieving " << txo.toString() << ": " << e.what();
+                        emit errored();
+                        return;
                     }
                 }
             }
-            seenTxs.emplace(std::move(txHash));
         }
         tProc += t1.msec<double>();
     }
@@ -839,8 +825,10 @@ void SynchMempoolTask::stopPrecacheTxns()
         precacheStopFlag = true;
         condPrecache.notify_all();
         precacheThread.join();
-        precacheStopFlag = false;
     }
+    std::unique_lock g(mutPrecache); // keep TSAN happy
+    precacheDoneSubmittingWorkFlag = precacheStopFlag = precacheThreadRunning = false;
+    precacheTxns.clear();
 }
 
 void SynchMempoolTask::stop()
@@ -1166,13 +1154,13 @@ void SynchMempoolTask::doGetRawMempool()
         const Tic t1;
         std::size_t newCt = 0, droppedCt = 0, ignoredCt = 0;
         const QVariantList txidList = resp.result().toList();
-        Mempool::TxHashSet droppedTxs;
+        Mempool::TxHashSet droppedTxs, tentativeMempoolTxHashesForPrecacher;
         {
             // Grab the mempool data struct and lock it *shared*.  This improves performance vs. an exclusive lock here.
             // Since we aren't modifying it.. this is fine.  We are the only subsystem that ever modifies it anyway, so
             // invariants will hold even if we release the lock early, regardless.
             auto [mempool, lock] = storage->mempool();
-            droppedTxs = Util::keySet<Mempool::TxHashSet>(mempool.txs);
+            droppedTxs = tentativeMempoolTxHashesForPrecacher = Util::keySet<Mempool::TxHashSet>(mempool.txs);
         }
         for (const auto & var : txidList) {
             const auto txidHex = var.toString().trimmed().toLower();
@@ -1193,6 +1181,7 @@ void SynchMempoolTask::doGetRawMempool()
                 } else {
                     // new txn
                     if (TRACE) Debug() << "New mempool tx: " << hash.toHex();
+                    tentativeMempoolTxHashesForPrecacher.emplace(hash);
                     ++newCt;
                     const auto & [it2, inserted] = txsNeedingDownload.try_emplace(hash, std::make_shared<Mempool::Tx>());
                     Mempool::TxRef & tx = it2->second;
@@ -1256,8 +1245,8 @@ void SynchMempoolTask::doGetRawMempool()
 
         // TX data will be downloaded now, if needed
         state = State::DlTxs;
-        if (expectedNumTxsDownloaded && !precacheThread.joinable()) {
-            restartPrecacheTxns(expectedNumTxsDownloaded);
+        if (expectedNumTxsDownloaded) {
+            restartPrecacheTxns(expectedNumTxsDownloaded, std::move(tentativeMempoolTxHashesForPrecacher));
         }
         process();
     });
