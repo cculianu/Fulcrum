@@ -739,19 +739,19 @@ private:
     std::atomic_bool precacheStopFlag = false, precacheDoneSubmittingWorkFlag = false, precacheThreadRunning = false;
     std::thread precacheThread;
 
-    void restartPrecacheTxns(size_t reserve, Mempool::TxHashSet && tentativeMempoolTxHashes);
+    void restartPrecacheTxns(size_t reserve, Mempool::TxHashSet tentativeMempoolTxHashes);
     void stopPrecacheTxns();
     void precacheSubmitWork(const bitcoin::CTransactionRef &tx);
     void precacheThreadFunc(size_t reserve, Mempool::TxHashSet tentativeMempoolTxHashes);
 };
 
-void SynchMempoolTask::restartPrecacheTxns(const size_t reserve, Mempool::TxHashSet && tentativeMempoolTxHashes)
+void SynchMempoolTask::restartPrecacheTxns(const size_t reserve, Mempool::TxHashSet tentativeMempoolTxHashes)
 {
     stopPrecacheTxns();
     precacheThreadRunning = true;
-    precacheThread = std::thread([this, reserve, &tentativeMempoolTxHashes]{
+    precacheThread = std::thread([this, reserve, txHashes = std::move(tentativeMempoolTxHashes)]() mutable {
         Defer d([this]{ precacheThreadRunning = false; });
-        precacheThreadFunc(reserve, std::move(tentativeMempoolTxHashes));
+        precacheThreadFunc(reserve, std::move(txHashes));
     });
 }
 
