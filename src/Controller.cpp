@@ -745,6 +745,18 @@ private:
     void precacheThreadFunc(size_t reserve, Mempool::TxHashSet tentativeMempoolTxHashes);
 };
 
+void SynchMempoolTask::stopPrecacheTxns()
+{
+    if (precacheThread.joinable()) {
+        precacheStopFlag = true;
+        condPrecache.notify_all();
+        precacheThread.join();
+    }
+    std::unique_lock g(mutPrecache); // keep TSAN happy
+    precacheDoneSubmittingWorkFlag = precacheStopFlag = precacheThreadRunning = false;
+    precacheTxns.clear();
+}
+
 void SynchMempoolTask::restartPrecacheTxns(const size_t reserve, Mempool::TxHashSet tentativeMempoolTxHashes)
 {
     stopPrecacheTxns();
@@ -827,18 +839,6 @@ void SynchMempoolTask::precacheThreadFunc(const size_t reserve, const Mempool::T
         }
         tProc += t1.msec<double>();
     }
-}
-
-void SynchMempoolTask::stopPrecacheTxns()
-{
-    if (precacheThread.joinable()) {
-        precacheStopFlag = true;
-        condPrecache.notify_all();
-        precacheThread.join();
-    }
-    std::unique_lock g(mutPrecache); // keep TSAN happy
-    precacheDoneSubmittingWorkFlag = precacheStopFlag = precacheThreadRunning = false;
-    precacheTxns.clear();
 }
 
 void SynchMempoolTask::stop()
