@@ -671,6 +671,10 @@ struct SynchMempoolTask final : public CtlTask
     ~SynchMempoolTask() override;
     void process() override;
 
+protected:
+    void stop() override;
+
+private:
     const std::shared_ptr<Storage> storage;
     const std::atomic_bool & notifyFlag;
     const size_t maxDLBacklogSize = std::clamp(std::thread::hardware_concurrency(), 2u, 16u /* cap at default work queue limit */);
@@ -726,11 +730,9 @@ struct SynchMempoolTask final : public CtlTask
     /// Update the lastProgress stat for /stats endpoint
     void updateLastProgress(std::optional<double> val = std::nullopt);
 
-protected:
-    void stop() override;
-
-private:
-    // precache the confirmed spends with the lock held in shared mode, allowing for concurrency during this slow operation
+    // --- Pre-Cache thread mechanism ---
+    // Precache the confirmed spends with the lock held in shared mode, allowing for concurrency during this slow
+    // operation.
     using ConfirmedSpendCache = std::unordered_map<TXO, std::optional<TXOInfo>>;
     ConfirmedSpendCache confirmedSpendCache; ///< written-to by the precache thread, when done, read by this object in processResults()
     std::condition_variable condPrecache;
@@ -739,7 +741,7 @@ private:
     std::atomic_bool precacheStopFlag = false, precacheDoneSubmittingWorkFlag = false, precacheThreadRunning = false;
     std::thread precacheThread;
 
-    void restartPrecacheTxns(size_t reserve, Mempool::TxHashSet tentativeMempoolTxHashes);
+    void startPrecacheTxns(size_t reserve, Mempool::TxHashSet tentativeMempoolTxHashes);
     void waitForPrecacheThread();
     void stopPrecacheTxns();
     void precacheSubmitWork(const bitcoin::CTransactionRef &tx);
@@ -758,7 +760,7 @@ void SynchMempoolTask::stopPrecacheTxns()
     precacheTxns.clear();
 }
 
-void SynchMempoolTask::restartPrecacheTxns(const size_t reserve, Mempool::TxHashSet tentativeMempoolTxHashes)
+void SynchMempoolTask::startPrecacheTxns(const size_t reserve, Mempool::TxHashSet tentativeMempoolTxHashes)
 {
     stopPrecacheTxns();
     precacheThreadRunning = true;
@@ -1297,7 +1299,7 @@ void SynchMempoolTask::doGetRawMempool()
         // TX data will be downloaded now, if needed
         state = State::DlTxs;
         if (expectedNumTxsDownloaded) {
-            restartPrecacheTxns(expectedNumTxsDownloaded, std::move(tentativeMempoolTxHashesForPrecacher));
+            startPrecacheTxns(expectedNumTxsDownloaded, std::move(tentativeMempoolTxHashesForPrecacher));
         }
         process();
     });
