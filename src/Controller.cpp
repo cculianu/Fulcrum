@@ -706,6 +706,7 @@ struct SynchMempoolTask final : public CtlTask
         txsIgnored.clear();
         expectedNumTxsDownloaded = 0;
         lastProgress = 0.;
+        stopPrecacheTxns();
         // Note: we don't clear "scriptHashesAffected" intentionally in case we are retrying. We want to accumulate
         // all the droppedTx scripthashes for each retry, so we never clear the set.
         // Note 2: we also never clear the redoCt since that counter needs to maintain state to abort too many redos.
@@ -724,10 +725,133 @@ struct SynchMempoolTask final : public CtlTask
 
     /// Update the lastProgress stat for /stats endpoint
     void updateLastProgress(std::optional<double> val = std::nullopt);
+
+protected:
+    void stop() override;
+
+private:
+    // precache the confirmed spends with the lock held in shared mode, allowing for concurrency during this slow operation
+    using ConfirmedSpendCache = std::unordered_map<TXO, std::optional<TXOInfo>>;
+    ConfirmedSpendCache confirmedSpendCache; ///< written-to by the precache thread, when done, read by this object in processResults()
+    std::condition_variable condPrecache;
+    std::mutex mutPrecache;
+    std::vector<bitcoin::CTransactionRef> precacheTxns; ///< guarded by mutPrecache, signaled by condPrecache
+    std::atomic_bool precacheStopFlag = false, precacheDoneSubmittingWorkFlag = false;
+    std::thread precacheThread;
+
+    void restartPrecacheTxns(size_t reserve = 0);
+    void stopPrecacheTxns();
+    void precacheSubmitWork(const bitcoin::CTransactionRef &tx);
+    void precacheThreadFunc();
 };
 
-SynchMempoolTask::~SynchMempoolTask() {
-    stop(); // paranoia
+void SynchMempoolTask::restartPrecacheTxns(size_t reserve)
+{
+    bool needJoin = false;
+    {
+        std::unique_lock g(mutPrecache);
+        precacheTxns.clear();
+        needJoin = precacheThread.joinable() && (precacheStopFlag || precacheDoneSubmittingWorkFlag);
+        precacheStopFlag = precacheDoneSubmittingWorkFlag = false;
+    }
+    if (needJoin) stopPrecacheTxns();
+    if (!precacheThread.joinable()) {
+        precacheThread = std::thread([this, reserve]{
+            if (reserve) confirmedSpendCache.reserve(reserve);
+            precacheThreadFunc();
+        });
+    }
+}
+
+void SynchMempoolTask::precacheSubmitWork(const bitcoin::CTransactionRef &tx)
+{
+    {
+        std::unique_lock g(mutPrecache);
+        precacheTxns.emplace_back(tx);
+    }
+    condPrecache.notify_one();
+}
+
+void SynchMempoolTask::precacheThreadFunc()
+{
+    if (QThread *t = QThread::currentThread(); t && t != this->thread() && t != qApp->thread()) {
+        t->setObjectName("SyncMempoolPreCache");
+    } else {
+        Fatal() << __func__ << ": Expected this function to run in its own thread!";
+        return;
+    }
+    DebugM("Thread started");
+    size_t tot = 0u, ctr = 0u;
+    Tic t0;
+    double tProc = 0.;
+    Defer d([&ctr, &tot, &t0, &tProc] {
+        DebugM("Precached ", ctr, "/" , tot, " inputs in ", t0.msecStr(), " msec, of which ",
+               QString::number(tProc, 'f', 3), " msec was spent processing, thread exiting.");
+    });
+    std::unordered_set<TxHash, HashHasher> seenTxs;
+    seenTxs.reserve(confirmedSpendCache.bucket_count());
+    auto pred = [this] { return !precacheTxns.empty() || precacheStopFlag.load() || precacheDoneSubmittingWorkFlag.load(); };
+    std::vector<bitcoin::CTransactionRef> txns;
+    while (!precacheStopFlag) {
+        txns.clear();
+        {
+            std::unique_lock g(mutPrecache);
+            condPrecache.wait(g, pred);
+            txns.swap(precacheTxns);
+            if (precacheStopFlag) return;
+        }
+        // If finished processing work, exit thread.
+        if (precacheDoneSubmittingWorkFlag && txns.empty()) return;
+        // Otherwise process enqueued precache lookups
+        Tic t1;
+        for (const auto & tx : txns) {
+            TxHash txHash = BTC::Hash2ByteArrayRev(tx->GetId());
+            {
+                // Lock mempool for reading (shared mode), so we can look things up in mempool
+                auto [mempool, lock] = storage->mempool();
+                for (const auto & in : tx->vin) {
+                    const TXO txo{BTC::Hash2ByteArrayRev(in.prevout.GetTxId()), IONum(in.prevout.GetN())};
+                    ++tot;
+                    if (!seenTxs.count(txo.txHash) && !mempool.txs.count(txo.txHash)) {
+                        // if doesn't appear to be in mempool, look it up in the db and cache the resulting answer
+                        // may throw on very low level db error; returns nullopt if not found (may be not found for mempool txn)
+                        try {
+                            // we intentionally use unordered_map::operator[] here to overwrite existing (if any)
+                            auto & opt = confirmedSpendCache[txo] = storage->utxoGetFromDB(txo, false);
+                            ctr += opt.has_value();
+                        } catch (const std::exception & e) {
+                            Error() << __func__ << ": Got low-level DB error retrieving " << txo.toString() << ": " << e.what();
+                            emit errored();
+                            return;
+                        }
+                    }
+                }
+            }
+            seenTxs.emplace(std::move(txHash));
+        }
+        tProc += t1.msec<double>();
+    }
+}
+
+void SynchMempoolTask::stopPrecacheTxns()
+{
+    if (precacheThread.joinable()) {
+        precacheStopFlag = true;
+        condPrecache.notify_all();
+        precacheThread.join();
+        precacheStopFlag = false;
+    }
+}
+
+void SynchMempoolTask::stop()
+{
+    stopPrecacheTxns();
+    CtlTask::stop(); // call superclass
+}
+
+SynchMempoolTask::~SynchMempoolTask()
+{
+    stop(); // cleanup
     if (notifyFlag.load()) { // this is false until Controller enables the servers that listen for connections
         if (!scriptHashesAffected.empty()) {
             // notify status change for affected sh's, regardless of how this task exited (this catches corner cases
@@ -845,40 +969,24 @@ void SynchMempoolTask::processResults()
                txsIgnored.size(), "), elapsed so far: ", elapsed.secsStr(), " secs");
     }
 
-    // precache the confirmed spends with the lock held in shared mode, allowing for concurrency during this slow operation
-    using ConfirmedSpendCache = std::unordered_map<TXO, std::optional<TXOInfo>>;
-    ConfirmedSpendCache cache;
-    cache.reserve(128); // reserve a bit of memory so we don't start from 0 and so we don't have to rehash right away
     updateLastProgress(0.6);
-    struct { std::size_t nTxs, nHashXs; } sizes; // save the numeber of txs in mempool to detect if another thread modified mempool
-    Tic cachet0;
-    {
-        // we do this with the shared lock (read lock) -- this at least prevents block processing from taking mempool away as we run
-        // but it also allows concurrency with clients, etc that want their requests serviced while we read from disk.
-        auto [mempool, lock] = storage->mempool();
-        cachet0 = Tic(); // start timestamp
-        // save mempool size to detect mempool change after we relese and re-acquire the lock in exclusive mode
-        // this hopefully detects if the block processing task somehow ran in between the time we release and reacquire
-        std::tie(sizes.nTxs, sizes.nHashXs) = std::tuple(mempool.txs.size(), mempool.hashXTxs.size());
-        // iterate through all vins for all txs and find the confirmed spends (not already in mempool) and
-        // read their TXOInfo's from the db.
-        for (const auto & [txid, pair] : txsDownloaded) {
-            const auto & [tx, ctx] = pair;
-            for (const auto & in : ctx->vin) {
-                const TXO txo{BTC::Hash2ByteArrayRev(in.prevout.GetTxId()), IONum(in.prevout.GetN())};
-                if (mempool.txs.count(txo.txHash) || txsDownloaded.count(txo.txHash))
-                    continue; // unconfirmed spend, we don't pre-cache this, continue
-                // otherwise look it up in the db and cache the resulting answer
-                cache.emplace(txo, storage->utxoGetFromDB(txo, false)); // may throw on very low level db error; returns nullopt if not found
-            }
-        }
-        cachet0.fin(); // end timestamp
-    }
-    if (cache.size())
-        DebugM("Mempool: pre-cache of ", cache.size(), Util::Pluralize(" confirmed spend", cache.size()),
-               " from db took ", cachet0.msecStr(), " msec");
 
+    // precache of the confirmed spends done in another thread, wait for it to complete now
+    if (!txsDownloaded.empty()) {
+        if (!precacheThread.joinable()) {
+            Error() << __PRETTY_FUNCTION__ << " precacheThread should be running -- FIXME!";
+            emit errored();
+            return;
+        }
+        Tic t0;
+        precacheDoneSubmittingWorkFlag = true;
+        condPrecache.notify_all();
+        precacheThread.join();
+        if (const double el = t0.msec<double>(); el >= 500.)
+            DebugM("Waited ", QString::number(el, 'f', 3), " msec for precache thread to finish");
+    }
     updateLastProgress(0.75);
+    auto & cache = confirmedSpendCache;
 
     // At this point we pre-cached all the confirmed spends (we hope) with the shared lock held. We did this
     // because holding the exclusive lock for all this time while accessing the db would be *very* slow on
@@ -886,7 +994,7 @@ void SynchMempoolTask::processResults()
     // exclusive lock while accessing the db and Fulcrum would freeze on chains such as BTC when first
     // starting up as it built up the initial large mempool.  With this scheme, it runs much faster.
 
-    auto res = [this, &cache, &sizes] {
+    auto res = [this, &cache] {
         const auto getFromCache = [&cache](const TXO &prevTXO) -> std::optional<TXOInfo> {
             // This is a callback called from within addNewTxs() below when encountering a confirmed
             // spend.  We just return whatever we precached for this entry.
@@ -900,13 +1008,6 @@ void SynchMempoolTask::processResults()
         // of time we hold this lock -- so we hold it while accessing an in-memory data structure
         // rather than the DB on disk (which would be slow).
         auto [mempool, lock] = storage->mutableMempool(); // grab mempool struct exclusively
-        // check that the mempool didn't change
-        if (UNLIKELY(std::tie(sizes.nTxs, sizes.nHashXs) != std::tuple(mempool.txs.size(), mempool.hashXTxs.size()))) {
-            // This size heuristic is enough because other subsystems can only drop or clear, never add.
-            // This branch should rarely be taken in practice but it pays to be defensive.
-            throw InternalError("Warning: Mempool changed in between the time we released the shared lock and "
-                                "re-acquired the lock exclusively.  We will try again later...");
-        }
         updateLastProgress(0.80);
         return mempool.addNewTxs(scriptHashesAffected, txsDownloaded, getFromCache, TRACE); // may throw
     }();
@@ -1026,6 +1127,7 @@ void SynchMempoolTask::doDLNextTx()
 
             txidsAffected.insert(tx->hash);
             txsWaitingForResponse.erase(tx->hash);
+            precacheSubmitWork(txref);
             // keep going (do a direct call for better performance, rather than calling AGAIN)
             process();
         },
@@ -1154,6 +1256,9 @@ void SynchMempoolTask::doGetRawMempool()
 
         // TX data will be downloaded now, if needed
         state = State::DlTxs;
+        if (expectedNumTxsDownloaded && !precacheThread.joinable()) {
+            restartPrecacheTxns(expectedNumTxsDownloaded);
+        }
         process();
     });
 }
