@@ -986,11 +986,44 @@ void SynchMempoolTask::processResults()
     updateLastProgress(0.75);
     auto & cache = confirmedSpendCache;
 
-    // At this point we pre-cached all the confirmed spends (we hope) with the shared lock held. We did this
-    // because holding the exclusive lock for all this time while accessing the db would be *very* slow on
-    // full mempools the first time we get e.g. 20k txs.  Before we came up with this scheme, we held the
-    // exclusive lock while accessing the db and Fulcrum would freeze on chains such as BTC when first
-    // starting up as it built up the initial large mempool.  With this scheme, it runs much faster.
+    // At this point we pre-cached all the confirmed spends (we hope). Now ensure that no downloaded children
+    // depended on a failed-to-download parent (can only happen on BTC with RBF). If we fail to do this mempool
+    // can end up in an inconsistent state and some scripthashes won't get notifications.
+    if (!txsFailedDownload.empty() || !txsIgnored.empty()) {
+        Tic t0;
+        auto hasFailedParent = [this](const bitcoin::CTransaction &ctx) {
+            for (const auto &in : ctx.vin) {
+                const TxHash prevoutHash = BTC::Hash2ByteArrayRev(in.prevout.GetTxId());
+                if (txsFailedDownload.count(prevoutHash) || txsIgnored.count(prevoutHash)) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        const size_t origFailSize = txsFailedDownload.size();
+        size_t prevFailsSz, iters = 0;
+        // keep looping and growing the failed parent set until it won't grow anymore.
+        do {
+            prevFailsSz = txsFailedDownload.size();
+            auto const end = txsDownloaded.end();
+            for (auto it = txsDownloaded.begin(); it != end; /* see below */) {
+                const auto & [txHash, item] = *it;
+                if (hasFailedParent(*item.second)) {
+                    // txn has a failed parent, mark it
+                    txsFailedDownload.insert(txHash);
+                    it = txsDownloaded.erase(it); // NB: `txHash` and `item` are now invalidated
+                } else {
+                    ++it;
+                }
+                ++iters;
+            }
+        } while (prevFailsSz != txsFailedDownload.size());
+        const size_t finalFailSize = txsFailedDownload.size();
+        if (finalFailSize > origFailSize || t0.msec<double>() > 250.) {
+            DebugM("Removed ", finalFailSize - origFailSize, " txns with failed parents in ", iters,
+                   " iters ", t0.msecStr(), " msec");
+        }
+    }
 
     auto res = [this, &cache] {
         const auto getFromCache = [&cache](const TXO &prevTXO) -> std::optional<TXOInfo> {
