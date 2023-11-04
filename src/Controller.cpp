@@ -732,69 +732,44 @@ protected:
 private:
     // precache the confirmed spends with the lock held in shared mode, allowing for concurrency during this slow operation
     using ConfirmedSpendCache = std::unordered_map<TXO, std::optional<TXOInfo>>;
-    ConfirmedSpendCache confirmedSpendCache; ///< written-to by the precache threads, when done, read by this object in processResults()
-    std::mutex confirmedSpendCacheMut; ///< guards confirmedSpendCache
+    ConfirmedSpendCache confirmedSpendCache; ///< written-to by the precache thread, when done, read by this object in processResults()
     std::condition_variable condPrecache;
     std::mutex mutPrecache;
     std::vector<bitcoin::CTransactionRef> precacheTxns; ///< guarded by mutPrecache, signaled by condPrecache
-    std::atomic_bool precacheStopFlag = false, precacheDoneSubmittingWorkFlag = false;
-    std::atomic_int nPrecacheThreadsRunning = 0;
-    static constexpr size_t kNumPrecacheThreads = 3u;
-    std::array<std::thread, kNumPrecacheThreads> precacheThreads = {};
+    std::atomic_bool precacheStopFlag = false, precacheDoneSubmittingWorkFlag = false, precacheThreadRunning = false;
+    std::thread precacheThread;
 
     void restartPrecacheTxns(size_t reserve, Mempool::TxHashSet tentativeMempoolTxHashes);
     void stopPrecacheTxns();
     void precacheSubmitWork(const bitcoin::CTransactionRef &tx);
-    using TxHashSetRef = std::shared_ptr<const Mempool::TxHashSet>;
-    void precacheThreadFunc(int num, size_t reserve, TxHashSetRef tentativeMempoolTxHashes);
-    void waitForPrecacheThreads();
+    void precacheThreadFunc(size_t reserve, Mempool::TxHashSet tentativeMempoolTxHashes);
 };
 
 void SynchMempoolTask::stopPrecacheTxns()
 {
-    precacheStopFlag = true;
-    condPrecache.notify_all();
-    for (auto & t : precacheThreads) {
-        if (t.joinable()) t.join();
-        t = std::thread{}; // paranoia, clean up any lambda captures
+    if (precacheThread.joinable()) {
+        precacheStopFlag = true;
+        condPrecache.notify_all();
+        precacheThread.join();
     }
     std::unique_lock g(mutPrecache); // keep TSAN happy
-    precacheDoneSubmittingWorkFlag = precacheStopFlag = false;
-    nPrecacheThreadsRunning = 0;
+    precacheDoneSubmittingWorkFlag = precacheStopFlag = precacheThreadRunning = false;
     precacheTxns.clear();
 }
 
 void SynchMempoolTask::restartPrecacheTxns(const size_t reserve, Mempool::TxHashSet tentativeMempoolTxHashes)
 {
     stopPrecacheTxns();
-    const TxHashSetRef sharedHashSet = std::make_shared<Mempool::TxHashSet>(std::move(tentativeMempoolTxHashes));
-    for (auto & t : precacheThreads) {
-        const int num = ++nPrecacheThreadsRunning;
-        t = std::thread([this, num, reserve, sharedHashSet] {
-            Defer d([this]{ --nPrecacheThreadsRunning; });
-            precacheThreadFunc(num, reserve, sharedHashSet);
-        });
-    }
-}
-
-void SynchMempoolTask::waitForPrecacheThreads()
-{
-    Tic t0;
-    precacheDoneSubmittingWorkFlag = true;
-    condPrecache.notify_all();
-    for (auto & t : precacheThreads) {
-        if (!t.joinable())
-            throw InternalError(QString("%1: precacheThread should be running -- FIXME!").arg(__func__));
-        t.join();
-        t = std::thread{}; // paranoia, clean up any lambda captures
-    }
-    if (const double el = t0.msec<double>(); el >= 500.)
-        DebugM("Waited ", QString::number(el, 'f', 3), " msec for precache threads to finish");
+    precacheThreadRunning = true;
+    precacheThread = std::thread([this, reserve, txHashes = std::move(tentativeMempoolTxHashes)]() mutable {
+        Defer d([this]{ precacheThreadRunning = false; });
+        precacheThreadFunc(reserve, std::move(txHashes));
+    });
 }
 
 void SynchMempoolTask::precacheSubmitWork(const bitcoin::CTransactionRef &tx)
 {
-    assert(nPrecacheThreadsRunning > 0);
+    assert(precacheThreadRunning);
     {
         std::unique_lock g(mutPrecache);
         precacheTxns.emplace_back(tx);
@@ -802,10 +777,10 @@ void SynchMempoolTask::precacheSubmitWork(const bitcoin::CTransactionRef &tx)
     condPrecache.notify_one();
 }
 
-void SynchMempoolTask::precacheThreadFunc(const int num, const size_t reserve, const TxHashSetRef tentativeMempoolTxHashes)
+void SynchMempoolTask::precacheThreadFunc(const size_t reserve, const Mempool::TxHashSet tentativeMempoolTxHashes)
 {
     if (QThread *t = QThread::currentThread(); t && t != this->thread() && t != qApp->thread()) {
-        t->setObjectName(QString("SyncMempoolPreCache.%1").arg(num));
+        t->setObjectName("SyncMempoolPreCache");
     } else {
         Fatal() << __func__ << ": Expected this function to run in its own thread!";
         return;
@@ -818,10 +793,7 @@ void SynchMempoolTask::precacheThreadFunc(const int num, const size_t reserve, c
         DebugM("Precached ", ctr, "/" , tot, " inputs in ", t0.msecStr(), " msec, of which ",
                QString::number(tProc, 'f', 3), " msec was spent processing, thread exiting.");
     });
-    if (reserve && num <= 1) {
-        std::unique_lock g(confirmedSpendCacheMut);
-        confirmedSpendCache.reserve(reserve);
-    }
+    if (reserve) confirmedSpendCache.reserve(reserve);
     auto pred = [this] { return !precacheTxns.empty() || precacheStopFlag.load() || precacheDoneSubmittingWorkFlag.load(); };
     std::vector<bitcoin::CTransactionRef> txns;
     while (!precacheStopFlag) {
@@ -829,32 +801,23 @@ void SynchMempoolTask::precacheThreadFunc(const int num, const size_t reserve, c
         {
             std::unique_lock g(mutPrecache);
             condPrecache.wait(g, pred);
+            txns.swap(precacheTxns);
             if (precacheStopFlag) return;
-            // just pop 1 at a time
-            if (!precacheTxns.empty()) {
-                txns.push_back(precacheTxns.back());
-                precacheTxns.resize(precacheTxns.size() - 1u);
-            }
         }
-        if (txns.empty()) {
-            // If finished processing work, exit thread.
-            if (precacheDoneSubmittingWorkFlag) return;
-            // Otherwise, this was a spurious wake-up
-            continue;
-        }
+        // If finished processing work, exit thread.
+        if (precacheDoneSubmittingWorkFlag && txns.empty()) return;
         // Otherwise process enqueued precache lookups
         Tic t1;
         for (const auto & tx : txns) {
             for (const auto & in : tx->vin) {
                 const TXO txo{BTC::Hash2ByteArrayRev(in.prevout.GetTxId()), IONum(in.prevout.GetN())};
                 ++tot;
-                if (tentativeMempoolTxHashes->find(txo.txHash) != tentativeMempoolTxHashes->end())
+                if (tentativeMempoolTxHashes.find(txo.txHash) != tentativeMempoolTxHashes.end())
                     continue; // unconfirmed spend, we don't pre-cache this, continue
                 // if doesn't appear to be in mempool, look it up in the db and cache the resulting answer
                 // may throw on very low level db error; returns nullopt if not found (may be not found for mempool txn)
                 try {
                     // we intentionally use unordered_map::operator[] here to overwrite existing (if any)
-                    std::unique_lock g(confirmedSpendCacheMut);
                     const auto & opt = confirmedSpendCache[txo] = storage->utxoGetFromDB(txo, false);
                     if (!opt.has_value()) {
                         // Potential race-condition with bitcoind confirming blocks before we realized it,
@@ -1008,18 +971,20 @@ void SynchMempoolTask::processResults()
 
     // precache of the confirmed spends done in another thread, wait for it to complete now
     if (!txsDownloaded.empty()) {
+        if (!precacheThread.joinable()) {
+            Error() << __PRETTY_FUNCTION__ << " precacheThread should be running -- FIXME!";
+            emit errored();
+            return;
+        }
         Tic t0;
-        waitForPrecacheThreads();
+        precacheDoneSubmittingWorkFlag = true;
+        condPrecache.notify_all();
+        precacheThread.join();
         if (const double el = t0.msec<double>(); el >= 500.)
             DebugM("Waited ", QString::number(el, 'f', 3), " msec for precache thread to finish");
     }
     updateLastProgress(0.75);
-    ConfirmedSpendCache cache;
-    {
-        // Even though the prefetcher threads have ended, grab the lock anyway to keep any future thread safety analysis happy
-        std::unique_lock g(confirmedSpendCacheMut);
-        cache.swap(confirmedSpendCache);
-    }
+    auto & cache = confirmedSpendCache;
 
     // At this point we pre-cached all the confirmed spends (we hope) with the shared lock held. We did this
     // because holding the exclusive lock for all this time while accessing the db would be *very* slow on
