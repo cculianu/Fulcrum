@@ -800,18 +800,28 @@ void SynchMempoolTask::precacheThreadFunc(const size_t reserve, const Mempool::T
             for (const auto & in : tx->vin) {
                 const TXO txo{BTC::Hash2ByteArrayRev(in.prevout.GetTxId()), IONum(in.prevout.GetN())};
                 ++tot;
-                if (tentativeMempoolTxHashes.find(txo.txHash) == tentativeMempoolTxHashes.end()) {
-                    // if doesn't appear to be in mempool, look it up in the db and cache the resulting answer
-                    // may throw on very low level db error; returns nullopt if not found (may be not found for mempool txn)
-                    try {
-                        // we intentionally use unordered_map::operator[] here to overwrite existing (if any)
-                        auto & opt = confirmedSpendCache[txo] = storage->utxoGetFromDB(txo, false);
-                        ctr += opt.has_value();
-                    } catch (const std::exception & e) {
-                        Error() << __func__ << ": Got low-level DB error retrieving " << txo.toString() << ": " << e.what();
+                if (tentativeMempoolTxHashes.find(txo.txHash) != tentativeMempoolTxHashes.end())
+                    continue; // unconfirmed spend, we don't pre-cache this, continue
+                // if doesn't appear to be in mempool, look it up in the db and cache the resulting answer
+                // may throw on very low level db error; returns nullopt if not found (may be not found for mempool txn)
+                try {
+                    // we intentionally use unordered_map::operator[] here to overwrite existing (if any)
+                    const auto & opt = confirmedSpendCache[txo] = storage->utxoGetFromDB(txo, false);
+                    if (!opt.has_value()) {
+                        // Potential race-condition with bitcoind confirming blocks before we realized it,
+                        // and then a mempool txn appearing refering to a txn that was block-only.
+                        // Signal error and on retry things should settle ok.
+                        Warning() << __func__ << ": Unable to find prevout " << txo.toString()
+                                  << " in DB for tx " << tx->GetId().ToString()
+                                  << " (possibly a block arrived while synching mempool, will retry)";
                         emit errored();
                         return;
                     }
+                    ++ctr;
+                } catch (const std::exception & e) {
+                    Error() << __func__ << ": Got low-level DB error retrieving " << txo.toString() << ": " << e.what();
+                    emit errored();
+                    return;
                 }
             }
         }
