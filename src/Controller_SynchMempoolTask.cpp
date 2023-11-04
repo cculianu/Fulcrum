@@ -20,6 +20,7 @@
 
 #include "BTC.h"
 #include "Storage.h"
+#include "SubsMgr.h"
 #include "TXO.h"
 #include "Util.h"
 
@@ -32,6 +33,49 @@
 #include <cassert>
 #include <exception>
 
+SynchMempoolTask::SynchMempoolTask(Controller *ctl_, std::shared_ptr<Storage> storage, const std::atomic_bool & notifyFlag,
+                                   const std::unordered_set<TxHash, HashHasher> & ignoreTxns)
+    : CtlTask(ctl_, "SynchMempool"), storage(storage), notifyFlag(notifyFlag),
+      txnIgnoreSet(ignoreTxns), isSegWit(ctl_->isSegWitCoin()), isMimble(ctl_->isMimbleWimbleCoin()),
+      isCashTokens(ctl_->isBCHCoin())
+{
+    scriptHashesAffected.reserve(SubsMgr::kRecommendedPendingNotificationsReserveSize);
+    txidsAffected.reserve(SubsMgr::kRecommendedPendingNotificationsReserveSize);
+}
+
+SynchMempoolTask::~SynchMempoolTask()
+{
+    stop(); // cleanup
+    if (notifyFlag.load()) { // this is false until Controller enables the servers that listen for connections
+        if (!scriptHashesAffected.empty()) {
+            // notify status change for affected sh's, regardless of how this task exited (this catches corner cases
+            // where we queued up some notifications and then we died on a retry due to errors from bitcoind)
+            storage->subs()->enqueueNotifications(std::move(scriptHashesAffected));
+        }
+        if (!dspTxsAffected.empty()) {
+            DebugM(objectName(), ": dspTxsAffected: ", dspTxsAffected.size());
+            storage->dspSubs()->enqueueNotifications(std::move(dspTxsAffected));
+        }
+        if (!txidsAffected.empty()) {
+            storage->txSubs()->enqueueNotifications(std::move(txidsAffected));
+        }
+    }
+
+    if (elapsed.secs() >= 1.0) {
+        // if total runtime for task >1s, log for debug
+        DebugM(objectName(), " elapsed total: ", elapsed.secsStr(), " secs");
+    }
+}
+
+void SynchMempoolTask::startPrecacheTxns(const size_t reserve, Mempool::TxHashSet tentativeMempoolTxHashes)
+{
+    stopPrecacheTxns();
+    precacheThreadRunning = true;
+    precacheThread = std::thread([this, reserve, txHashes = std::move(tentativeMempoolTxHashes)]() mutable {
+        Defer d([this]{ precacheThreadRunning = false; });
+        precacheThreadFunc(reserve, std::move(txHashes));
+    });
+}
 
 void SynchMempoolTask::stopPrecacheTxns()
 {
@@ -43,16 +87,6 @@ void SynchMempoolTask::stopPrecacheTxns()
     std::unique_lock g(mutPrecache); // keep TSAN happy
     precacheDoneSubmittingWorkFlag = precacheStopFlag = precacheThreadRunning = false;
     precacheTxns.clear();
-}
-
-void SynchMempoolTask::startPrecacheTxns(const size_t reserve, Mempool::TxHashSet tentativeMempoolTxHashes)
-{
-    stopPrecacheTxns();
-    precacheThreadRunning = true;
-    precacheThread = std::thread([this, reserve, txHashes = std::move(tentativeMempoolTxHashes)]() mutable {
-        Defer d([this]{ precacheThreadRunning = false; });
-        precacheThreadFunc(reserve, std::move(txHashes));
-    });
 }
 
 void SynchMempoolTask::waitForPrecacheThread()
@@ -145,31 +179,6 @@ void SynchMempoolTask::stop()
 {
     stopPrecacheTxns();
     CtlTask::stop(); // call superclass
-}
-
-SynchMempoolTask::~SynchMempoolTask()
-{
-    stop(); // cleanup
-    if (notifyFlag.load()) { // this is false until Controller enables the servers that listen for connections
-        if (!scriptHashesAffected.empty()) {
-            // notify status change for affected sh's, regardless of how this task exited (this catches corner cases
-            // where we queued up some notifications and then we died on a retry due to errors from bitcoind)
-            storage->subs()->enqueueNotifications(std::move(scriptHashesAffected));
-        }
-        if (!dspTxsAffected.empty()) {
-            DebugM(objectName(), ": dspTxsAffected: ", dspTxsAffected.size());
-            storage->dspSubs()->enqueueNotifications(std::move(dspTxsAffected));
-        }
-        if (!txidsAffected.empty()) {
-            //DebugM(objectName(), ": txidsAffected: ", txidsAffected.size());
-            storage->txSubs()->enqueueNotifications(std::move(txidsAffected));
-        }
-    }
-
-    if (elapsed.secs() >= 1.0) {
-        // if total runtime for task >1s, log for debug
-        DebugM(objectName(), " elapsed total: ", elapsed.secsStr(), " secs");
-    }
 }
 
 void SynchMempoolTask::updateLastProgress(std::optional<double> val)
@@ -284,10 +293,10 @@ void SynchMempoolTask::doGetRawMempool()
                 res = mempool.dropTxs(affected, droppedTxs, TRACE);
             } // release lock
 
-                   // update this set too for txSubsMgr
+            // update this set too for txSubsMgr
             txidsAffected.insert(droppedTxs.begin(), droppedTxs.end());
 
-                   // do bookkeeping, maybe print debug log
+            // do bookkeeping, maybe print debug log
             {
                 droppedCt = res.oldSize - res.newSize;
                 if (Debug::isEnabled()) {
@@ -318,7 +327,7 @@ void SynchMempoolTask::doGetRawMempool()
         txsDownloaded.reserve(expectedNumTxsDownloaded);
         txsWaitingForResponse.reserve(expectedNumTxsDownloaded);
 
-               // TX data will be downloaded now, if needed
+        // TX data will be downloaded now, if needed
         state = State::DlTxs;
         if (expectedNumTxsDownloaded) {
             startPrecacheTxns(expectedNumTxsDownloaded, std::move(tentativeMempoolTxHashesForPrecacher));
@@ -348,122 +357,122 @@ void SynchMempoolTask::doDLNextTx()
         const auto hashHex = Util::ToHexFast(tx->hash);
         txsWaitingForResponse.emplace(tx->hash, tx);
         submitRequest("getrawtransaction", {hashHex, false}, [this, hashHex, tx, t0 = Tic()](const RPC::Message & resp){
-                if (TRACE)
-                    DebugM(resp.method, ": got reply for ", QString::fromLatin1(hashHex).left(8), " in ", t0.msecStr(), " msec",
-                           ", needDL: ", txsNeedingDownload.size(), ", waitingForResp: ", txsWaitingForResponse.size());
-                QByteArray txdata = resp.result().toByteArray();
-                const int expectedLen = txdata.length() / 2;
-                txdata = Util::ParseHexFast(txdata);
-                if (txdata.length() != expectedLen) {
-                    Error() << "Received tx data is of the wrong length -- bad hex? FIXME";
-                    emit errored();
-                    return;
-                }
+            if (TRACE)
+                DebugM(resp.method, ": got reply for ", QString::fromLatin1(hashHex).left(8), " in ", t0.msecStr(), " msec",
+                       ", needDL: ", txsNeedingDownload.size(), ", waitingForResp: ", txsWaitingForResponse.size());
+            QByteArray txdata = resp.result().toByteArray();
+            const int expectedLen = txdata.length() / 2;
+            txdata = Util::ParseHexFast(txdata);
+            if (txdata.length() != expectedLen) {
+                Error() << "Received tx data is of the wrong length -- bad hex? FIXME";
+                emit errored();
+                return;
+            }
 
-                       // deserialize tx, catching any deser errors
-                bitcoin::CMutableTransaction ctx;
-                try {
-                    ctx = BTC::Deserialize<bitcoin::CMutableTransaction>(txdata, 0, isSegWit, isMimble, isCashTokens, true /* nojunk */);
-                    // Below branch is taken only for Litecoin
-                    if (isMimble) {
-                        if (ctx.mw_blob && ctx.mw_blob->size() > 1) {
-                            const auto n = std::min(size_t(60), ctx.mw_blob->size());
-                            DebugM("MimbleTxn in mempool:  hash: ", tx->hash.toHex(), ", IsWebOnly: ", int(ctx.IsMWEBOnly()),
-                                   ", vin,vout sizes: [", ctx.vin.size(), ", ", ctx.vout.size(), "]", ", data_size: ",
-                                   ctx.mw_blob->size(), ", first ", n, " bytes: ",
-                                   Util::ToHexFast(QByteArray::fromRawData(reinterpret_cast<const char *>(ctx.mw_blob->data()), n)),
-                                   ", nLockTime: ", ctx.nLockTime);
-                        }
-                        // Discard MWEB-only txns (they are useless to us for now)
-                        if (/* Note: we would normally check ctx.IsMWEBOnly() here, but if litecoind is using
-                               -rpcserialversion=1, then that will return false. So instead we reduce the check to considering
-                               MWEB-only as any txn lacking CTxIns and CTxOuts.  (Only mweb-only txns look that way on LTC.) */
-                            ctx.vin.empty() && ctx.vout.empty()) {
-                            // Ignore MWEB-only txns completely:
-                            // - their txid is weird and hard to calculate for us (requires blake3 hasher, which we lack)
-                            //   - if remote litecoind is running rpcserialversion=1, then we wouldn't be able to calculate
-                            //     their hash anyway since the mweb data is omitted (even though they are listed in mempool
-                            //     in that serialization mode anyway -- which makes no sense!!).
-                            // - they contain empty vins and vouts, and since Electrum-LTC doesn't grok MWEB, we cannot do anything
-                            //   with their spend info anyway.
-                            DebugM("Ignoring MWEB-only txn: ", tx->hash.toHex());
-                            // mark this as "ignored"
-                            emit ctl->ignoreMempoolTxn(tx->hash); // tell Controller in a thread-safe way to remember this across SynchMempoolTask invocations
-                            txsIgnored.insert(tx->hash);
-                            txsWaitingForResponse.erase(tx->hash);
-                            // keep going (do a direct call for better performance, rather than calling AGAIN)
-                            process();
-                            return;
-                        }
+            // deserialize tx, catching any deser errors
+            bitcoin::CMutableTransaction ctx;
+            try {
+                ctx = BTC::Deserialize<bitcoin::CMutableTransaction>(txdata, 0, isSegWit, isMimble, isCashTokens, true /* nojunk */);
+                // Below branch is taken only for Litecoin
+                if (isMimble) {
+                    if (ctx.mw_blob && ctx.mw_blob->size() > 1) {
+                        const auto n = std::min(size_t(60), ctx.mw_blob->size());
+                        DebugM("MimbleTxn in mempool:  hash: ", tx->hash.toHex(), ", IsWebOnly: ", int(ctx.IsMWEBOnly()),
+                               ", vin,vout sizes: [", ctx.vin.size(), ", ", ctx.vout.size(), "]", ", data_size: ",
+                               ctx.mw_blob->size(), ", first ", n, " bytes: ",
+                               Util::ToHexFast(QByteArray::fromRawData(reinterpret_cast<const char *>(ctx.mw_blob->data()), n)),
+                               ", nLockTime: ", ctx.nLockTime);
                     }
-                } catch (const std::exception &e) {
-                    Error() << "Error deserializing tx: " << tx->hash.toHex() << ", exception: " << e.what();
-                    emit errored();
-                    return;
+                    // Discard MWEB-only txns (they are useless to us for now)
+                    if (/* Note: we would normally check ctx.IsMWEBOnly() here, but if litecoind is using
+                           -rpcserialversion=1, then that will return false. So instead we reduce the check to considering
+                           MWEB-only as any txn lacking CTxIns and CTxOuts.  (Only mweb-only txns look that way on LTC.) */
+                        ctx.vin.empty() && ctx.vout.empty()) {
+                        // Ignore MWEB-only txns completely:
+                        // - their txid is weird and hard to calculate for us (requires blake3 hasher, which we lack)
+                        //   - if remote litecoind is running rpcserialversion=1, then we wouldn't be able to calculate
+                        //     their hash anyway since the mweb data is omitted (even though they are listed in mempool
+                        //     in that serialization mode anyway -- which makes no sense!!).
+                        // - they contain empty vins and vouts, and since Electrum-LTC doesn't grok MWEB, we cannot do anything
+                        //   with their spend info anyway.
+                        DebugM("Ignoring MWEB-only txn: ", tx->hash.toHex());
+                        // mark this as "ignored"
+                        emit ctl->ignoreMempoolTxn(tx->hash); // tell Controller in a thread-safe way to remember this across SynchMempoolTask invocations
+                        txsIgnored.insert(tx->hash);
+                        txsWaitingForResponse.erase(tx->hash);
+                        // keep going (do a direct call for better performance, rather than calling AGAIN)
+                        process();
+                        return;
+                    }
                 }
+            } catch (const std::exception &e) {
+                Error() << "Error deserializing tx: " << tx->hash.toHex() << ", exception: " << e.what();
+                emit errored();
+                return;
+            }
 
-                       // save size now -- this is needed later to calculate fees and for everything else.
-                       // note: for btc core with segwit this size is not the same "virtual" size as what bitcoind would report
-                tx->sizeBytes = unsigned(expectedLen);
+            // save size now -- this is needed later to calculate fees and for everything else.
+            // note: for btc core with segwit this size is not the same "virtual" size as what bitcoind would report
+            tx->sizeBytes = unsigned(expectedLen);
 
-                if (TRACE)
-                    Debug() << "got reply for tx: " << hashHex << " " << txdata.length() << " bytes";
+            if (TRACE)
+                Debug() << "got reply for tx: " << hashHex << " " << txdata.length() << " bytes";
 
-                       // ctx is moved into CTransactionRef below via move construction
-                const auto & [it, inserted] = txsDownloaded.try_emplace(tx->hash, tx, bitcoin::MakeTransactionRef(std::move(ctx)));
-                const auto & txref = it->second.second;
-                if (UNLIKELY(!inserted)) {
-                    // this should never happen
-                    Error() << "FIXME: Error inserting tx into txsDownloaded map, already there! TxId: " << tx->hash.toHex();
-                    emit errored();
-                    return;
-                }
+            // ctx is moved into CTransactionRef below via move construction
+            const auto & [it, inserted] = txsDownloaded.try_emplace(tx->hash, tx, bitcoin::MakeTransactionRef(std::move(ctx)));
+            const auto & txref = it->second.second;
+            if (UNLIKELY(!inserted)) {
+                // this should never happen
+                Error() << "FIXME: Error inserting tx into txsDownloaded map, already there! TxId: " << tx->hash.toHex();
+                emit errored();
+                return;
+            }
 
-                       // Check txdata is sane -- its hash should match the hash we asked for.
-                       //
-                       // We do this last because we want to reduce the number of hash operations done by this code -- constructing
-                       // the CTransaction necessarily causes it to compute its own (segwit-stripped) hash on construction, so we get
-                       // that hash "for free" here as it were -- and we can use it to ensure sanity that the tx matches what we
-                       // expected without the need to do BTC::HashRev(txdata) above (which would be redundant).
-                if (Util::reversedCopy(txref->GetHashRef()) != tx->hash) {
-                    txsDownloaded.erase(tx->hash); // remove the object we just inserted
-                    // WARNING! `txref` is now a dangling reference at this point!
-                    Error() << "Received tx data appears to not match requested tx for txhash: " << tx->hash.toHex() << "! FIXME!!";
-                    emit errored();
-                    return;
-                }
+            // Check txdata is sane -- its hash should match the hash we asked for.
+            //
+            // We do this last because we want to reduce the number of hash operations done by this code -- constructing
+            // the CTransaction necessarily causes it to compute its own (segwit-stripped) hash on construction, so we get
+            // that hash "for free" here as it were -- and we can use it to ensure sanity that the tx matches what we
+            // expected without the need to do BTC::HashRev(txdata) above (which would be redundant).
+            if (Util::reversedCopy(txref->GetHashRef()) != tx->hash) {
+                txsDownloaded.erase(tx->hash); // remove the object we just inserted
+                // WARNING! `txref` is now a dangling reference at this point!
+                Error() << "Received tx data appears to not match requested tx for txhash: " << tx->hash.toHex() << "! FIXME!!";
+                emit errored();
+                return;
+            }
 
-                txidsAffected.insert(tx->hash);
-                txsWaitingForResponse.erase(tx->hash);
-                precacheSubmitWork(txref);
-                // keep going (do a direct call for better performance, rather than calling AGAIN)
-                process();
-            },
-            [this, hashHex, tx](const RPC::Message &resp) {
-                if (resp.errorCode() != bitcoin::RPCErrorCode::RPC_INVALID_ADDRESS_OR_KEY) {
-                    // Probably an unknown bitcoind implementation (not: BCHN, BU, or Core); warn here so I get bug reports
-                    // about this, hopefully, and we can handle it properly in future versions.
-                    Warning() << "Unexpected error code from getrawtransaction: " << resp.errorCode();
-                }
-                // Tolerate missing tx's as we download them -- if we fail to retrieve the transaction then it's possible
-                // that there was some RBF action if on BTC, or the tx happened to drop out of mempool due to mempool pressure.
-                // Since bitcoind doesn't have the tx -- then it and its children will also fail, which is fine. It's as if
-                // it never existed and as if we never got it in the original list from `getrawmempool`!
-                const auto *const pre = isSegWit ? "Tx dropped out of mempool (possibly due to RBF)" : "Tx dropped out of mempool";
-                Warning() << pre << ": " << QString(hashHex) << " (error response: " << resp.errorMessage()
-                          << "), ignoring mempool tx ...";
-                txsFailedDownload.insert(tx->hash);
-                txsWaitingForResponse.erase(tx->hash);
-                if (txsDownloaded.empty() && txsFailedDownload.size() > kFailedDownloadMax) {
-                    // Too many failures without any successes. Likely some RPC API issue with bitcoind or a new block arrived
-                    // full of double-spends for previous mempool view (unlikely but possible).  Something is very wrong.
-                    Warning() << "Too many download failures (" << kFailedDownloadMax << "), aborting task";
-                    emit errored();
-                    return;
-                }
-                // otherwise, keep going (do a direct call for better performance, rather than calling AGAIN)
-                process();
-            });
+            txidsAffected.insert(tx->hash);
+            txsWaitingForResponse.erase(tx->hash);
+            precacheSubmitWork(txref);
+            // keep going (do a direct call for better performance, rather than calling AGAIN)
+            process();
+        },
+        [this, hashHex, tx](const RPC::Message &resp) {
+            if (resp.errorCode() != bitcoin::RPCErrorCode::RPC_INVALID_ADDRESS_OR_KEY) {
+                // Probably an unknown bitcoind implementation (not: BCHN, BU, or Core); warn here so I get bug reports
+                // about this, hopefully, and we can handle it properly in future versions.
+                Warning() << "Unexpected error code from getrawtransaction: " << resp.errorCode();
+            }
+            // Tolerate missing tx's as we download them -- if we fail to retrieve the transaction then it's possible
+            // that there was some RBF action if on BTC, or the tx happened to drop out of mempool due to mempool pressure.
+            // Since bitcoind doesn't have the tx -- then it and its children will also fail, which is fine. It's as if
+            // it never existed and as if we never got it in the original list from `getrawmempool`!
+            const auto *const pre = isSegWit ? "Tx dropped out of mempool (possibly due to RBF)" : "Tx dropped out of mempool";
+            Warning() << pre << ": " << QString(hashHex) << " (error response: " << resp.errorMessage()
+                      << "), ignoring mempool tx ...";
+            txsFailedDownload.insert(tx->hash);
+            txsWaitingForResponse.erase(tx->hash);
+            if (txsDownloaded.empty() && txsFailedDownload.size() > kFailedDownloadMax) {
+                // Too many failures without any successes. Likely some RPC API issue with bitcoind or a new block arrived
+                // full of double-spends for previous mempool view (unlikely but possible).  Something is very wrong.
+                Warning() << "Too many download failures (" << kFailedDownloadMax << "), aborting task";
+                emit errored();
+                return;
+            }
+            // otherwise, keep going (do a direct call for better performance, rather than calling AGAIN)
+            process();
+        });
     }
 }
 
@@ -481,7 +490,7 @@ void SynchMempoolTask::processResults()
 
     updateLastProgress(0.6);
 
-           // precache of the confirmed spends done in another thread, wait for it to complete now
+    // precache of the confirmed spends done in another thread, wait for it to complete now
     if (!txsDownloaded.empty()) {
         if (!precacheThread.joinable()) {
             Error() << __PRETTY_FUNCTION__ << " precacheThread should be running -- FIXME!";
@@ -493,9 +502,9 @@ void SynchMempoolTask::processResults()
     updateLastProgress(0.75);
     auto & cache = confirmedSpendCache;
 
-           // At this point we pre-cached all the confirmed spends (we hope). Now ensure that no downloaded children
-           // depended on a failed-to-download parent (can only happen on BTC with RBF). If we fail to do this mempool
-           // can end up in an inconsistent state and some scripthashes won't get notifications.
+    // At this point we pre-cached all the confirmed spends (we hope). Now ensure that no downloaded children
+    // depended on a failed-to-download parent (usually happens on BTC with RBF). If we fail to do this mempool
+    // can end up in an inconsistent state and some scripthashes won't get notifications.
     if (!txsFailedDownload.empty() || !txsIgnored.empty()) {
         Tic t0;
         auto hasFailedParent = [this](const bitcoin::CTransaction &ctx) {

@@ -22,7 +22,6 @@
 #include "BlockProcTypes.h"
 #include "Controller.h"
 #include "Mempool.h"
-#include "SubsMgr.h"
 
 #include <algorithm>
 #include <atomic>
@@ -42,14 +41,7 @@ class Storage;
 struct SynchMempoolTask final : public CtlTask
 {
     SynchMempoolTask(Controller *ctl_, std::shared_ptr<Storage> storage, const std::atomic_bool & notifyFlag,
-                     const std::unordered_set<TxHash, HashHasher> & ignoreTxns)
-        : CtlTask(ctl_, "SynchMempool"), storage(storage), notifyFlag(notifyFlag),
-          txnIgnoreSet(ignoreTxns), isSegWit(ctl_->isSegWitCoin()), isMimble(ctl_->isMimbleWimbleCoin()),
-          isCashTokens(ctl_->isBCHCoin())
-    {
-        scriptHashesAffected.reserve(SubsMgr::kRecommendedPendingNotificationsReserveSize);
-        txidsAffected.reserve(SubsMgr::kRecommendedPendingNotificationsReserveSize);
-    }
+                     const std::unordered_set<TxHash, HashHasher> & ignoreTxns);
     ~SynchMempoolTask() override;
     void process() override;
 
