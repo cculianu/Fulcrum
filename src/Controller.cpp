@@ -740,6 +740,7 @@ private:
     std::thread precacheThread;
 
     void restartPrecacheTxns(size_t reserve, Mempool::TxHashSet tentativeMempoolTxHashes);
+    void waitForPrecacheThread();
     void stopPrecacheTxns();
     void precacheSubmitWork(const bitcoin::CTransactionRef &tx);
     void precacheThreadFunc(size_t reserve, Mempool::TxHashSet tentativeMempoolTxHashes);
@@ -765,6 +766,18 @@ void SynchMempoolTask::restartPrecacheTxns(const size_t reserve, Mempool::TxHash
         Defer d([this]{ precacheThreadRunning = false; });
         precacheThreadFunc(reserve, std::move(txHashes));
     });
+}
+
+void SynchMempoolTask::waitForPrecacheThread()
+{
+    if (precacheThread.joinable()) {
+        Tic t0;
+        precacheDoneSubmittingWorkFlag = true;
+        condPrecache.notify_all();
+        precacheThread.join();
+        if (const double el = t0.msec<double>(); el >= 500.)
+            DebugM("Waited ", QString::number(el, 'f', 3), " msec for precache thread to finish");
+    }
 }
 
 void SynchMempoolTask::precacheSubmitWork(const bitcoin::CTransactionRef &tx)
@@ -976,12 +989,7 @@ void SynchMempoolTask::processResults()
             emit errored();
             return;
         }
-        Tic t0;
-        precacheDoneSubmittingWorkFlag = true;
-        condPrecache.notify_all();
-        precacheThread.join();
-        if (const double el = t0.msec<double>(); el >= 500.)
-            DebugM("Waited ", QString::number(el, 'f', 3), " msec for precache thread to finish");
+        waitForPrecacheThread();
     }
     updateLastProgress(0.75);
     auto & cache = confirmedSpendCache;
