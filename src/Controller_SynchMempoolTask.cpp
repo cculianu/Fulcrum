@@ -30,14 +30,43 @@
 #include <QString>
 #include <QThread>
 
+#include <algorithm>
 #include <cassert>
+#include <condition_variable>
 #include <exception>
+#include <mutex>
+#include <thread>
+#include <unordered_map>
+#include <vector>
+
+
+/// --- Pre-Cache thread mechanism ---
+/// Precache the confirmed spends with the mempool lock held in shared mode, for concurrency during mempool synch.
+struct SynchMempoolTask::Precache {
+    Precache(SynchMempoolTask &parent_) : parent{parent_} {}
+    ~Precache() { stopThread(); /* paranoia */ }
+    SynchMempoolTask &parent;
+
+    using ConfirmedSpendCache = std::unordered_map<TXO, std::optional<TXOInfo>>;
+    ConfirmedSpendCache cache; ///< written-to by the precache thread, when done, read by parent object in processResults()
+    std::condition_variable cond;
+    std::mutex mut;
+    std::vector<bitcoin::CTransactionRef> workQueue; ///< guarded by mut, signaled by cond
+    std::atomic_bool stopFlag = false, doneSubmittingWorkFlag = false, threadIsRunning = false;
+    std::thread thread;
+
+    void startThread(size_t reserve, Mempool::TxHashSet tentativeMempoolTxHashes);
+    void waitUntilDone();
+    void stopThread();
+    void submitWork(const bitcoin::CTransactionRef &tx);
+    void threadFunc(size_t reserve, Mempool::TxHashSet tentativeMempoolTxHashes);
+};
 
 SynchMempoolTask::SynchMempoolTask(Controller *ctl_, std::shared_ptr<Storage> storage, const std::atomic_bool & notifyFlag,
                                    const std::unordered_set<TxHash, HashHasher> & ignoreTxns)
     : CtlTask(ctl_, "SynchMempool"), storage(storage), notifyFlag(notifyFlag),
       txnIgnoreSet(ignoreTxns), isSegWit(ctl_->isSegWitCoin()), isMimble(ctl_->isMimbleWimbleCoin()),
-      isCashTokens(ctl_->isBCHCoin())
+      isCashTokens(ctl_->isBCHCoin()), precache{std::make_unique<Precache>(*this)}
 {
     scriptHashesAffected.reserve(SubsMgr::kRecommendedPendingNotificationsReserveSize);
     txidsAffected.reserve(SubsMgr::kRecommendedPendingNotificationsReserveSize);
@@ -67,53 +96,67 @@ SynchMempoolTask::~SynchMempoolTask()
     }
 }
 
-void SynchMempoolTask::startPrecacheTxns(const size_t reserve, Mempool::TxHashSet tentativeMempoolTxHashes)
+void SynchMempoolTask::clear() {
+    state = State::Start;
+    txsNeedingDownload.clear(); txsWaitingForResponse.clear(); txsDownloaded.clear(); txsFailedDownload.clear();
+    txsIgnored.clear();
+    expectedNumTxsDownloaded = 0;
+    lastProgress = 0.;
+    precache->stopThread();
+    // Note: we don't clear "scriptHashesAffected" intentionally in case we are retrying. We want to accumulate
+    // all the droppedTx scripthashes for each retry, so we never clear the set.
+    // Note 2: we also never clear the redoCt since that counter needs to maintain state to abort too many redos.
+    // Note 3: we also never clear dspTxsAffected
+    // Note 4: we never clear txidsAffected
+}
+
+void SynchMempoolTask::Precache::startThread(const size_t reserve, Mempool::TxHashSet tentativeMempoolTxHashes)
 {
-    stopPrecacheTxns();
-    precacheThreadRunning = true;
-    precacheThread = std::thread([this, reserve, txHashes = std::move(tentativeMempoolTxHashes)]() mutable {
-        Defer d([this]{ precacheThreadRunning = false; });
-        precacheThreadFunc(reserve, std::move(txHashes));
+    stopThread();
+    threadIsRunning = true;
+    thread = std::thread([this, reserve, txHashes = std::move(tentativeMempoolTxHashes)]() mutable {
+        Defer d([this]{ threadIsRunning = false; });
+        threadFunc(reserve, std::move(txHashes));
     });
 }
 
-void SynchMempoolTask::stopPrecacheTxns()
+void SynchMempoolTask::Precache::stopThread()
 {
-    if (precacheThread.joinable()) {
-        precacheStopFlag = true;
-        condPrecache.notify_all();
-        precacheThread.join();
+    if (thread.joinable()) {
+        stopFlag = true;
+        cond.notify_all();
+        thread.join();
     }
-    std::unique_lock g(mutPrecache); // keep TSAN happy
-    precacheDoneSubmittingWorkFlag = precacheStopFlag = precacheThreadRunning = false;
-    precacheTxns.clear();
+    std::unique_lock g(mut); // keep TSAN happy
+    doneSubmittingWorkFlag = stopFlag = threadIsRunning = false;
+    workQueue.clear();
 }
 
-void SynchMempoolTask::waitForPrecacheThread()
+void SynchMempoolTask::Precache::waitUntilDone()
 {
-    if (precacheThread.joinable()) {
+    if (thread.joinable()) {
         Tic t0;
-        precacheDoneSubmittingWorkFlag = true;
-        condPrecache.notify_all();
-        precacheThread.join();
+        doneSubmittingWorkFlag = true;
+        cond.notify_all();
+        thread.join();
         if (const double el = t0.msec<double>(); el >= 500.)
             DebugM("Waited ", QString::number(el, 'f', 3), " msec for precache thread to finish");
     }
 }
 
-void SynchMempoolTask::precacheSubmitWork(const bitcoin::CTransactionRef &tx)
+void SynchMempoolTask::Precache::submitWork(const bitcoin::CTransactionRef &tx)
 {
-    assert(precacheThreadRunning);
+    assert(threadIsRunning);
     {
-        std::unique_lock g(mutPrecache);
-        precacheTxns.emplace_back(tx);
+        std::unique_lock g(mut);
+        workQueue.emplace_back(tx);
     }
-    condPrecache.notify_one();
+    cond.notify_one();
 }
 
-void SynchMempoolTask::precacheThreadFunc(const size_t reserve, const Mempool::TxHashSet tentativeMempoolTxHashes)
+void SynchMempoolTask::Precache::threadFunc(const size_t reserve, const Mempool::TxHashSet tentativeMempoolTxHashes)
 {
-    if (QThread *t = QThread::currentThread(); t && t != this->thread() && t != qApp->thread()) {
+    if (QThread *t = QThread::currentThread(); t && t != parent.thread() && t != qApp->thread()) {
         t->setObjectName("SyncMempoolPreCache");
     } else {
         Fatal() << __func__ << ": Expected this function to run in its own thread!";
@@ -127,19 +170,19 @@ void SynchMempoolTask::precacheThreadFunc(const size_t reserve, const Mempool::T
         DebugM("Precached ", ctr, "/" , tot, " inputs in ", t0.msecStr(), " msec, of which ",
                QString::number(tProc, 'f', 3), " msec was spent processing, thread exiting.");
     });
-    if (reserve) confirmedSpendCache.reserve(reserve);
-    auto pred = [this] { return !precacheTxns.empty() || precacheStopFlag.load() || precacheDoneSubmittingWorkFlag.load(); };
+    if (reserve && reserve < cache.bucket_count()) cache.reserve(reserve);
+    auto pred = [this] { return !workQueue.empty() || stopFlag.load() || doneSubmittingWorkFlag.load(); };
     std::vector<bitcoin::CTransactionRef> txns;
-    while (!precacheStopFlag) {
+    while (!stopFlag) {
         txns.clear();
         {
-            std::unique_lock g(mutPrecache);
-            condPrecache.wait(g, pred);
-            txns.swap(precacheTxns);
-            if (precacheStopFlag) return;
+            std::unique_lock g(mut);
+            cond.wait(g, pred);
+            txns.swap(workQueue);
+            if (stopFlag) return;
         }
         // If finished processing work, exit thread.
-        if (precacheDoneSubmittingWorkFlag && txns.empty()) return;
+        if (doneSubmittingWorkFlag && txns.empty()) return;
         // Otherwise process enqueued precache lookups
         Tic t1;
         for (const auto & tx : txns) {
@@ -152,7 +195,7 @@ void SynchMempoolTask::precacheThreadFunc(const size_t reserve, const Mempool::T
                 // may throw on very low level db error; returns nullopt if not found (may be not found for mempool txn)
                 try {
                     // we intentionally use unordered_map::operator[] here to overwrite existing (if any)
-                    const auto & opt = confirmedSpendCache[txo] = storage->utxoGetFromDB(txo, false);
+                    const auto & opt = cache[txo] = parent.storage->utxoGetFromDB(txo, false);
                     if (!opt.has_value()) {
                         // Potential race-condition with bitcoind confirming blocks before we realized it,
                         // and then a mempool txn appearing refering to a txn that was block-only.
@@ -160,13 +203,13 @@ void SynchMempoolTask::precacheThreadFunc(const size_t reserve, const Mempool::T
                         Warning() << __func__ << ": Unable to find prevout " << txo.toString()
                                   << " in DB for tx " << tx->GetId().ToString()
                                   << " (possibly a block arrived while synching mempool, will retry)";
-                        emit errored();
+                        emit parent.errored();
                         return;
                     }
                     ++ctr;
                 } catch (const std::exception & e) {
                     Error() << __func__ << ": Got low-level DB error retrieving " << txo.toString() << ": " << e.what();
-                    emit errored();
+                    emit parent.errored();
                     return;
                 }
             }
@@ -177,7 +220,7 @@ void SynchMempoolTask::precacheThreadFunc(const size_t reserve, const Mempool::T
 
 void SynchMempoolTask::stop()
 {
-    stopPrecacheTxns();
+    precache->stopThread();
     CtlTask::stop(); // call superclass
 }
 
@@ -330,7 +373,7 @@ void SynchMempoolTask::doGetRawMempool()
         // TX data will be downloaded now, if needed
         state = State::DlTxs;
         if (expectedNumTxsDownloaded) {
-            startPrecacheTxns(expectedNumTxsDownloaded, std::move(tentativeMempoolTxHashesForPrecacher));
+            precache->startThread(expectedNumTxsDownloaded, std::move(tentativeMempoolTxHashesForPrecacher));
         }
         process();
     });
@@ -444,7 +487,7 @@ void SynchMempoolTask::doDLNextTx()
 
             txidsAffected.insert(tx->hash);
             txsWaitingForResponse.erase(tx->hash);
-            precacheSubmitWork(txref);
+            precache->submitWork(txref);
             // keep going (do a direct call for better performance, rather than calling AGAIN)
             process();
         },
@@ -492,15 +535,15 @@ void SynchMempoolTask::processResults()
 
     // precache of the confirmed spends done in another thread, wait for it to complete now
     if (!txsDownloaded.empty()) {
-        if (!precacheThread.joinable()) {
-            Error() << __PRETTY_FUNCTION__ << " precacheThread should be running -- FIXME!";
+        if (!precache->thread.joinable()) {
+            Error() << __PRETTY_FUNCTION__ << " precache->thread should be running -- FIXME!";
             emit errored();
             return;
         }
-        waitForPrecacheThread();
+        precache->waitUntilDone();
     }
     updateLastProgress(0.75);
-    auto & cache = confirmedSpendCache;
+    auto & cache = precache->cache;
 
     // At this point we pre-cached all the confirmed spends (we hope). Now ensure that no downloaded children
     // depended on a failed-to-download parent (usually happens on BTC with RBF). If we fail to do this mempool

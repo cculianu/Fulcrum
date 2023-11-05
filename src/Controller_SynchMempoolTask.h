@@ -23,17 +23,11 @@
 #include "Controller.h"
 #include "Mempool.h"
 
-#include <algorithm>
 #include <atomic>
 #include <cstdint>
-#include <condition_variable>
 #include <memory>
-#include <mutex>
 #include <optional>
-#include <thread>
-#include <unordered_map>
 #include <unordered_set>
-#include <vector>
 
 class Storage;
 
@@ -55,7 +49,7 @@ private:
     Mempool::TxMap txsNeedingDownload, txsWaitingForResponse;
     Mempool::NewTxsMap txsDownloaded;
     std::unordered_set<TxHash, HashHasher> txsFailedDownload, ///< set of tx's dropped due to RBF and/or mempool pressure as we were downloading
-        txsIgnored; ///< Litecoin only -- MWEB-only txns we are completely ignoring.
+                                           txsIgnored; ///< Litecoin only -- MWEB-only txns we are completely ignoring.
     const std::unordered_set<TxHash, HashHasher> txnIgnoreSet; ///< Litecoin only -- comes from Controller::mempoolIgnoreTxns
     unsigned expectedNumTxsDownloaded = 0;
     static constexpr int kRedoCtMax = 5; // if we have to retry this many times, error out.
@@ -78,19 +72,7 @@ private:
     };
     State state = State::Start;
 
-    void clear() {
-        state = State::Start;
-        txsNeedingDownload.clear(); txsWaitingForResponse.clear(); txsDownloaded.clear(); txsFailedDownload.clear();
-        txsIgnored.clear();
-        expectedNumTxsDownloaded = 0;
-        lastProgress = 0.;
-        stopPrecacheTxns();
-        // Note: we don't clear "scriptHashesAffected" intentionally in case we are retrying. We want to accumulate
-        // all the droppedTx scripthashes for each retry, so we never clear the set.
-        // Note 2: we also never clear the redoCt since that counter needs to maintain state to abort too many redos.
-        // Note 3: we also never clear dspTxsAffected
-        // Note 4: we never clear txidsAffected
-    }
+    void clear();
 
     /// Called when getrawtransaction errors out or when we dropTxs() and the result is too many txs so we must
     /// do getrawmempool again.  Increments redoCt. Note that if redoCt > kRedoCtMax, will implicitly error out.
@@ -104,20 +86,8 @@ private:
     /// Update the lastProgress stat for /stats endpoint
     void updateLastProgress(std::optional<double> val = std::nullopt);
 
-    // --- Pre-Cache thread mechanism ---
-    // Precache the confirmed spends with the lock held in shared mode, allowing for concurrency during this slow
-    // operation.
-    using ConfirmedSpendCache = std::unordered_map<TXO, std::optional<TXOInfo>>;
-    ConfirmedSpendCache confirmedSpendCache; ///< written-to by the precache thread, when done, read by this object in processResults()
-    std::condition_variable condPrecache;
-    std::mutex mutPrecache;
-    std::vector<bitcoin::CTransactionRef> precacheTxns; ///< guarded by mutPrecache, signaled by condPrecache
-    std::atomic_bool precacheStopFlag = false, precacheDoneSubmittingWorkFlag = false, precacheThreadRunning = false;
-    std::thread precacheThread;
-
-    void startPrecacheTxns(size_t reserve, Mempool::TxHashSet tentativeMempoolTxHashes);
-    void waitForPrecacheThread();
-    void stopPrecacheTxns();
-    void precacheSubmitWork(const bitcoin::CTransactionRef &tx);
-    void precacheThreadFunc(size_t reserve, Mempool::TxHashSet tentativeMempoolTxHashes);
+    // Parallel pre-cacher of confirmed utxo spends
+    struct Precache;
+    friend struct SynchMempoolTask::Precache;
+    std::unique_ptr<Precache> precache;
 };
