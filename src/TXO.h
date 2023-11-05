@@ -32,6 +32,7 @@
 #include <functional> // for std::hash
 #include <optional>
 #include <tuple> // for std::tie
+#include <type_traits> // for std::has_unique_object_representations_v
 
 /// A transaction output; A txHash:outN pair.
 struct TXO {
