@@ -32,6 +32,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <chrono>
 #include <condition_variable>
 #include <exception>
 #include <mutex>
@@ -123,7 +124,10 @@ void SynchMempoolTask::Precache::startThread(const size_t reserve, Mempool::TxHa
 void SynchMempoolTask::Precache::stopThread()
 {
     if (thread.joinable()) {
-        stopFlag = true;
+        {
+            std::unique_lock g(mut);
+            stopFlag = true;
+        }
         cond.notify_all();
         thread.join();
     }
@@ -136,7 +140,10 @@ void SynchMempoolTask::Precache::waitUntilDone()
 {
     if (thread.joinable()) {
         Tic t0;
-        doneSubmittingWorkFlag = true;
+        {
+            std::unique_lock g(mut);
+            doneSubmittingWorkFlag = true;
+        }
         cond.notify_all();
         thread.join();
         if (const double el = t0.msec<double>(); el >= 500.)
@@ -177,7 +184,7 @@ void SynchMempoolTask::Precache::threadFunc(const size_t reserve, const Mempool:
         txns.clear();
         {
             std::unique_lock g(mut);
-            cond.wait(g, pred);
+            while ( ! cond.wait_for(g, std::chrono::seconds{1}, pred)) {} // paranoia: loop in a wait_for just in case future updates to code introduce lost cond signaling
             txns.swap(workQueue);
             if (stopFlag) return;
         }
