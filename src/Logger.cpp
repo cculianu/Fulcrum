@@ -16,13 +16,25 @@
 // along with this program (see LICENSE.txt).  If not, see
 // <https://www.gnu.org/licenses/>.
 //
+#include "Common.h"
+#include "Logger.h"
+
 #include <QCoreApplication>
 #include <QTimer>
 
 #include <cstdlib>
+#include <iostream>
 
-#include "Common.h"
-#include "Logger.h"
+#ifdef Q_OS_UNIX
+#  include <stdio.h>   // fileno
+#  include <syslog.h>
+#  include <unistd.h>  // isatty, etc
+#elif defined(Q_OS_WIN)
+#  define WIN32_LEAN_AND_MEAN 1
+#  include <stdio.h>   // _fileno
+#  include <io.h>      // _isatty
+#  include <windows.h> // win32api
+#endif
 
 namespace {
     void loggerCommon(int level, const QString &)
@@ -46,30 +58,39 @@ Logger::Logger(QObject *parent) : QObject(parent)
 
 Logger::~Logger() {}
 
-#include <iostream>
-#include <stdio.h>
-#ifdef Q_OS_UNIX
-#  include <unistd.h>
-#  include <syslog.h>
-#endif
-ConsoleLogger::ConsoleLogger(QObject *p, bool stdOut)
-    : Logger(p), stdOut(stdOut)
+ConsoleLogger::ConsoleLogger(QObject *p, bool stdOut_)
+    : Logger(p), stdOut(stdOut_), isATty(calcIsATty(stdOut_))
 {}
 
-void ConsoleLogger::gotLine(int level, const QString &l) {
-    (stdOut ? std::cout : std::cerr)
-            << l.toUtf8().constData()
-            << std::endl << std::flush;
-    loggerCommon(level, l);
+/* static */
+bool ConsoleLogger::calcIsATty(bool stdOut)
+{
+#ifdef Q_OS_WIN
+    const int fd = _fileno(stdOut ? stdout : stderr);
+    if (fd >= 0 && _isatty(fd)) {
+        HANDLE h = GetStdHandle(stdOut ? STD_OUTPUT_HANDLE : STD_ERROR_HANDLE); // handle h should not be CloseHandle'd
+        if (h != INVALID_HANDLE_VALUE) {
+            DWORD mode{};
+            if (GetConsoleMode(h, &mode) && SetConsoleMode(h, mode | 0x0004 /* ENABLE_VIRTUAL_TERMINAL_PROCESSING */)) {
+                return true;
+            }
+        }
+    }
+#else
+    const int fd = fileno(stdOut ? stdout : stderr);
+    if (fd >= 0) return isatty(fd);
+#endif
+    return false;
 }
 
-bool ConsoleLogger::isaTTY() const {
-#ifdef Q_OS_WIN
-    return false; // console control chars don't reliably work on windows. disable color always
-#else
-    int fd = fileno(stdOut ? stdout : stderr);
-    return isatty(fd);
-#endif
+void ConsoleLogger::gotLine(int level, const QString &l)
+{
+    auto * const strm = stdOut ? stdout : stderr;
+    const auto bytes = l.toUtf8();
+    std::fwrite(bytes.constData(), 1, bytes.size(), strm);
+    std::fwrite("\n", 1, 1, strm);
+    std::fflush(strm);
+    loggerCommon(level, l);
 }
 
 #ifdef Q_OS_UNIX

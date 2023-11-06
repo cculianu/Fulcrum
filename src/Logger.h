@@ -48,12 +48,13 @@ class ConsoleLogger : public Logger
 public:
     explicit ConsoleLogger(QObject *parent = nullptr, bool stdOut = true);
 
-    bool isaTTY() const override;
-
-public:
+    bool isaTTY() const override { return isATty; }
     void gotLine(int level, const QString &) override;
+
 private:
-    bool stdOut = true;
+    const bool stdOut;
+    const bool isATty;
+    static bool calcIsATty(bool stdOut);
 };
 
 /// On Windows this just prints to stdout. On Unix, calls syslog()

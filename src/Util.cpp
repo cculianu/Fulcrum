@@ -603,11 +603,14 @@ Log::~Log()
         if (logger) {
             emit logger->log(level, theString);
         } else {
-            // just print to console for now..
+            // logger not active yet; just print to console for now..
             static std::mutex mut;
             {
+                const auto bytes = theString.toUtf8();
                 std::unique_lock g(mut);
-                std::cerr << Q2C(theString) << std::endl << std::flush;
+                std::fwrite(bytes.constData(), 1, bytes.size(), stderr);
+                std::fwrite("\n", 1, 1, stderr);
+                std::fflush(stderr);
             }
             // Fatal should signal a quit even here
             if (level == Logger::Level::Fatal && qApp) {
