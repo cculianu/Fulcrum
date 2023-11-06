@@ -1326,9 +1326,10 @@ void App::parseArgs()
         if (!ok || val < 0.)
             throw BadArgs(QString("fast-sync: Please specify a positive numeric value in MB, or 0 to disable"));
         const uint64_t bytes = static_cast<uint64_t>(val * 1e6);
-        if (uint64_t memfree; bytes > (memfree = std::min<uint64_t>(Util::getAvailablePhysicalRAM(), std::numeric_limits<size_t>::max())))
-            throw BadArgs(QString("fast-sync: Specified value (%1 bytes) is too large to fit in available"
-                                  " system memory (limit is: %2 bytes)").arg(bytes).arg(qulonglong(memfree)));
+        if (constexpr auto limit = uint64_t(std::numeric_limits<size_t>::max()); bytes > limit)
+            // Check for 32-bit archs: in case we ever decide to support them (this branch is never taken in current codebase)
+            throw BadArgs(QString("fast-sync: Specified value (%1 bytes) is too large to be addressed by this machine"
+                                  " (limit is: %2 bytes)").arg(bytes).arg(qulonglong(limit)));
         else if (bytes > 0 && bytes < Options::minUtxoCache)
             throw BadArgs(QString("fast-sync: Specified value %1 is too small (minimum: %2 MB)")
                           .arg(strVal, QString::number(Options::minUtxoCache / 1e6, 'f', 1)));

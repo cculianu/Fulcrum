@@ -2763,12 +2763,19 @@ void Storage::setInitialSync(bool b) {
     assert(bool(p->db.utxoset) && bool(p->db.shunspent));
     if (b && !p->db.utxoCache) {
         if (options->utxoCache > 0) {
-            Log() << "fast-sync: Enabled; UTXO cache size set to " << options->utxoCache
-                  << " bytes (available physical RAM: " << Util::getAvailablePhysicalRAM() << " bytes)";
+            // enforce that the limit should be the lesser of max size_t and the amount of physical RAM available
+            uint64_t bytes = options->utxoCache;
+            const uint64_t limit = std::min<uint64_t>(Util::getAvailablePhysicalRAM(), std::numeric_limits<size_t>::max());
+            if (bytes > limit) {
+                Warning() << "fast-sync: Requested UTXO cache size of " << bytes << " bytes exceeds available"
+                          << " physical memory; will limit the UTXO cache size to not exceed physical RAM.";
+                bytes = limit;
+            }
+            Log() << "fast-sync: Enabled; UTXO cache size set to " << bytes << " bytes (available physical RAM: " << limit << " bytes)";
             p->db.utxoCache.reset(new UTXOCache("Storage UTXO Cache", p->db.utxoset, p->db.shunspent, p->db.defReadOpts, p->db.defWriteOpts));
             // Reserve about 3.6 million entries per GB of utxoCache memory given to us
             // We need to do this, despite the extra memory bloat, because it turns out rehashing is very painful.
-            p->db.utxoCache->autoReserve(options->utxoCache);
+            p->db.utxoCache->autoReserve(bytes);
         } else {
             Log() << "fast-sync: Not enabled";
         }
