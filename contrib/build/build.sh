@@ -61,6 +61,12 @@ case "$plat" in
         docker_cont_name="fulcrum_cont_qt_linux_ub22${arch_suffix}_$$"
         suffix="_ub22"
         ;;
+    "linux_ub20"|"lin_ub20")
+        plat=linux
+        docker_img_name="fulcrum-builder/qt:linux_ub20${arch_suffix}"
+        docker_cont_name="fulcrum_cont_qt_linux_ub20${arch_suffix}_$$"
+        suffix="_ub20"
+        ;;
     "linux_ub16"|"oldlinux"|"oldlin"|"lin_ub16")
         [ -z "$arch_arg" ] || fail "Cannot use platform \"$plat\" with \"$arch\""
         plat=linux
