@@ -3889,6 +3889,46 @@ auto Storage::getBalance(const HashX &hashX, TokenFilterOption tokenFilter) cons
     return ret;
 }
 
+auto Storage::getFirstUse(const HashX & hashX) const -> std::optional<FirstUse>
+{
+    static const QString err("Database error retrieving history for a script hash");
+    try {
+        SharedLockGuard g(p->blocksLock);  // makes sure history doesn't mutate from underneath our feet
+
+        // try confirmed txns from db
+        if (const auto optba = GenericDBGet<QByteArray>(p->db.shist.get(), hashX, true, err, true, p->db.defReadOpts)) {
+            // the history is a bunch of CompactTXO TxNums concatenated, grab the first one
+            if (size_t(optba->size()) < CompactTXO::compactTxNumSize()) {
+                throw DatabaseSerializationError(QString("Scripthash %1 has a db entry in scripthash_history that is too short: %2")
+                                                     .arg(hashX.toHex(), optba->toHex()));
+            }
+            const TxNum txNum = CompactTXO::txNumFromCompactBytes(reinterpret_cast<const std::byte *>(optba->constData()));
+            // NB: Below opt.value() calls may throw, which is what we want.
+            const BlockHeight blockHeight = heightForTxNum(txNum).value(); // may throw
+            return FirstUse(hashForTxNum(txNum).value(), /* .txHash */
+                            blockHeight, /* .height */
+                            BTC::HashRev(headerForHeight(blockHeight).value()) /* .blockHash */);
+        } else {
+            // try unconfirmed (mempool)
+            auto [mempool, lock] = this->mempool();
+            if (auto it = mempool.hashXTxs.find(hashX); it != mempool.hashXTxs.end()) {
+                for (const auto & tx : it->second) { // Note: txs are sorted by (hasUnfonfirmedParentTx, hash)
+                    for (const auto & txoinfo : tx->txos) {
+                        if (txoinfo.hashX == hashX) {
+                            // found a mempool tx that sends an output to `hashX`
+                            static const QByteArray zeroes32(QByteArray::size_type(HashLen), char(0));
+                            return FirstUse(tx->hash, tx->hasUnconfirmedParentTx ? -1 : 0, zeroes32);
+                        }
+                    }
+                }
+            }
+        }
+    } catch (const std::exception &e) {
+        Warning(Log::Magenta) << __func__ << ": " << e.what();
+    }
+    return std::nullopt;
+}
+
 std::vector<QByteArray> Storage::merkleCacheHelperFunc(unsigned int start, unsigned int count, QString *err)
 {
     auto vec = headersFromHeight_nolock_nocheck(start, count, err); // despite the name of this function, it does take a small lock internally and is thread-safe. we cannot use the public one as that would potentially cause a deadlock here

@@ -1539,6 +1539,41 @@ void Server::impl_get_balance(Client *c, const RPC::BatchId batchId, const RPC::
     });
 }
 
+// --- get_first_use --
+void Server::rpc_blockchain_scripthash_get_first_use(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
+{
+    const HashX scriptHash = parseFirstHashParamCommon(m);
+    return impl_get_first_use(c, batchId, m, scriptHash);
+}
+void Server::rpc_blockchain_address_get_first_use(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
+{
+    QString addr;
+    const HashX scriptHash = parseFirstAddrParamToShCommon(m, &addr);
+    return impl_get_first_use(c, batchId, m, scriptHash, addr);
+}
+void Server::impl_get_first_use(Client *c, const RPC::BatchId batchId, const RPC::Message &m, const HashX &scriptHash,
+                                const QString &addr)
+{
+    generic_do_async(c, batchId, m.id, [scriptHash, addr, this] {
+        const auto optfu = storage->getFirstUse(scriptHash);
+        if (!optfu) {
+            // note that we are implementing this the way Electrs does, which throws an error here rather than
+            // returning null for unknown scripthash and/or address.
+            const auto msg = addr.isEmpty()
+                                 ? QString("scripthash %1 not found").arg(Util::ToHexFast(scriptHash))
+                                 : QString("address %1 not found").arg(addr);
+            throw RPCError(msg, RPC::ErrorCodes::Code_ItemNotFound);
+        }
+        const int height = std::max<int>(optfu->height, 0); // flatten [-1,0] -> 0
+        return QVariantMap{
+            {"block_hash", Util::ToHexFast(optfu->blockHash)},
+            {"height", height},
+            {"block_height", height}, // deprecated key, for Electrs compat.
+            {"tx_hash", Util::ToHexFast(optfu->txHash)},
+        };
+    });
+}
+
 /// called from get_mempool and get_history to retrieve the mempool for a hashx synchronously.  Returns the
 /// QVariantMap suitable for placing into the resulting response.
 QVariantList ServerBase::getHistoryCommon(const HashX &sh, bool mempoolOnly, const GetHistory_FromToBH &fromTo)
@@ -2236,6 +2271,7 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
     { {"server.version",                    true,               false,    PR{0,2},                    },          MP(rpc_server_version) },
 
     { {"blockchain.address.get_balance",    true,               false,    PR{1,2},                    },          MP(rpc_blockchain_address_get_balance) },
+    { {"blockchain.address.get_first_use",  true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_get_first_use) },
     { {"blockchain.address.get_history",    true,               false,    PR{1,3},                    },          MP(rpc_blockchain_address_get_history) },
     { {"blockchain.address.get_mempool",    true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_get_mempool) },
     { {"blockchain.address.get_scripthash", true,               false,    PR{1,1},                    },          MP(rpc_blockchain_address_get_scripthash) },
@@ -2253,6 +2289,7 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
     { {"blockchain.relayfee",               true,               false,    PR{0,0},                    },          MP(rpc_blockchain_relayfee) },
 
     { {"blockchain.scripthash.get_balance", true,               false,    PR{1,2},                    },          MP(rpc_blockchain_scripthash_get_balance) },
+    { {"blockchain.scripthash.get_first_use",  true,            false,    PR{1,1},                    },          MP(rpc_blockchain_scripthash_get_first_use) },
     { {"blockchain.scripthash.get_history", true,               false,    PR{1,3},                    },          MP(rpc_blockchain_scripthash_get_history) },
     { {"blockchain.scripthash.get_mempool", true,               false,    PR{1,1},                    },          MP(rpc_blockchain_scripthash_get_mempool) },
     { {"blockchain.scripthash.listunspent", true,               false,    PR{1,2},                    },          MP(rpc_blockchain_scripthash_listunspent) },
