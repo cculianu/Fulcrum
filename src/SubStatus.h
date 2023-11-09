@@ -76,6 +76,7 @@ public:
     SubStatus(const DSProof &od) { var.emplace<DSP>(od); }
     SubStatus(DSProof &&od) { var.emplace<DSP>(std::move(od)); }
     SubStatus(const std::optional<BlockHeight> &obh) noexcept { this->operator=(obh); }
+    SubStatus(BlockHeight bh) noexcept : var{static_cast<BH>(bh)} {}
 
     SubStatus &operator=(const SubStatus &o) = default;
     SubStatus &operator=(SubStatus && o) = default;

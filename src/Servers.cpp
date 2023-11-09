@@ -1560,7 +1560,7 @@ void Server::impl_get_first_use(Client *c, const RPC::BatchId batchId, const RPC
             // note that we are implementing this the way Electrs does, which throws an error here rather than
             // returning null for unknown scripthash and/or address.
             const auto msg = addr.isEmpty()
-                                 ? QString("scripthash %1 not found").arg(Util::ToHexFast(scriptHash))
+                                 ? QString("scripthash %1 not found").arg(QString::fromLatin1(Util::ToHexFast(scriptHash)))
                                  : QString("address %1 not found").arg(addr);
             throw RPCError(msg, RPC::ErrorCodes::Code_ItemNotFound);
         }
