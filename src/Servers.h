@@ -394,6 +394,7 @@ private:
     void rpc_blockchain_headers_get_tip(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     void rpc_blockchain_headers_subscribe(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     void rpc_blockchain_headers_unsubscribe(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+    void rpc_blockchain_header_get(Client *, RPC::BatchId, const RPC::Message &); // protocol v1.5.2
     void rpc_blockchain_relayfee(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     // scripthash
     void rpc_blockchain_scripthash_get_balance(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
@@ -430,6 +431,7 @@ private:
     void impl_generic_subscribe(SubsMgr *, Client *, RPC::BatchId, const RPC::Message &, const HashX &key,
                                 const std::optional<QString> & aliasUsedForNotifications = {});
     void impl_generic_unsubscribe(SubsMgr *, Client *, RPC::BatchId, const RPC::Message &, const HashX &key);
+    void impl_blockchain_header_get(Client *, RPC::BatchId, const RPC::Message::Id &, BlockHeight);
     /// Commonly used by above methods.  Takes the first address argument in the m.paramsList() and converts it to
     /// a scripthash, returning the raw bytes.  Will throw RPCError on invalid argument.
     /// It is assumed the caller already ensured m.paramsList() has at least 1 item in it (which the RPC machinery

@@ -1341,8 +1341,8 @@ void Server::rpc_blockchain_estimatefee(Client *c, const RPC::BatchId batchId, c
         return response.result();
     });
 }
-// helper used blockchain.headers.get_tip and blockchain.headers.subscribe
-static QVariantMap mkHeadersTipResponse(unsigned height, const QByteArray & header)
+// helper used by blockchain.headers.get_tip, blockchain.headers.subscribe, and blockchain.header.get
+static QVariantMap mkHeaderHexResponse(unsigned height, const QByteArray & header)
 {
     QVariantMap m;
     m.insert(QByteArrayLiteral("height"), height);
@@ -1353,7 +1353,7 @@ void Server::rpc_blockchain_headers_get_tip(Client *c, const RPC::BatchId batchI
 {
     Storage::Header hdr;
     const auto [height, _] = storage->latestTip(&hdr);
-    emit c->sendResult(batchId, m.id, mkHeadersTipResponse(unsigned(std::max(0, height)), hdr));
+    emit c->sendResult(batchId, m.id, mkHeaderHexResponse(unsigned(std::max(0, height)), hdr));
 }
 void Server::rpc_blockchain_headers_subscribe(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
@@ -1365,7 +1365,7 @@ void Server::rpc_blockchain_headers_subscribe(Client *c, const RPC::BatchId batc
             // connect to signal. Will be emitted directly to object until it dies, or until unsubscribed.
             connect(this, &Server::newHeader, c, [c, meth=m.method](unsigned height, const QByteArray &header){
                 // the notification is a list of size 1, with a dict in it. :/
-                emit c->sendNotification(meth, QVariantList({mkHeadersTipResponse(height, header)}));
+                emit c->sendNotification(meth, QVariantList({mkHeaderHexResponse(height, header)}));
             });
         if (!c->headerSubConnection) {
             // This should never happen but it pays to be paranoid and always check return values
@@ -1376,7 +1376,7 @@ void Server::rpc_blockchain_headers_subscribe(Client *c, const RPC::BatchId batc
     } else {
         DebugM(c->prettyName(false, false), " was already subscribed to headers, ignoring duplicate subscribe request");
     }
-    emit c->sendResult(batchId, m.id, mkHeadersTipResponse(unsigned(std::max(0, height)), hdr));
+    emit c->sendResult(batchId, m.id, mkHeaderHexResponse(unsigned(std::max(0, height)), hdr));
 }
 void Server::rpc_blockchain_headers_unsubscribe(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
@@ -1394,6 +1394,50 @@ void Server::rpc_blockchain_headers_unsubscribe(Client *c, const RPC::BatchId ba
     }
     emit c->sendResult(batchId, m.id, QVariant(result));
 }
+void Server::rpc_blockchain_header_get(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
+{
+    const QVariantList l(m.paramsList());
+    assert(!l.isEmpty());
+    // We support the first arg as either a 64-character hash or a numeric height
+    if (const auto var = l[0]; Compat::IsMetaType(var, QMetaType::Type::QString) || Compat::IsMetaType(var, QMetaType::Type::QByteArray)) {
+        const BlockHash blockHash = parseFirstHashParamCommon(m, "Invalid block hash");
+        // first we need to figure out the height of this block hash -- query bitcoind
+        generic_async_to_bitcoind(c, batchId, m.id, "getblockheader", {var, true},
+                                  [blockHash, this, c, batchId, msgId = m.id](const RPC::Message &resp){
+            const auto map = resp.result().toMap();
+            bool ok;
+            if (!map.contains("confirmations") || map.value("confirmations", -1).toInt(&ok) < 0 || !ok)
+                // not on main chain, give up
+                throw RPCError("Block not in active chain");
+            // parse height
+            const BlockHeight height = map.value("height", "").toUInt(&ok);
+            if (!ok)
+                throw RPCError("Unable to parse height response from bitcoind", RPC::ErrorCodes::Code_InternalError);
+            // now call into the common implementation, which will return a map of {"height": xxx, "hex": "xxx"}
+            impl_blockchain_header_get(c, batchId, msgId, height);
+            return DontAutoSendReply;
+        });
+    } else if (var.canConvert<int>()) {
+        bool ok;
+        const int height = var.toInt(&ok);
+        if (!ok || height < 0)
+            throw RPCError("Invalid height");
+        impl_blockchain_header_get(c, batchId, m.id, height);
+    } else {
+        throw RPCError("Invalid height or hash specified", RPC::ErrorCodes::Code_InvalidParams);
+    }
+}
+void Server::impl_blockchain_header_get(Client *c, const RPC::BatchId batchId, const RPC::Message::Id &msgId, const BlockHeight height)
+{
+    generic_do_async(c, batchId, msgId, [height, this]{
+        QString err;
+        const auto optHdr = storage->headerForHeight(height, &err);
+        if (!optHdr)
+            throw RPCError(err);
+        return mkHeaderHexResponse(height, *optHdr);
+    });
+}
+
 void Server::rpc_blockchain_relayfee(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     // This value never changes unless bitcoind is restarted, in which case we will pick up the new value when it comes
@@ -2205,6 +2249,7 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
     { {"blockchain.headers.get_tip",        true,               false,    PR{0,0},                    },          MP(rpc_blockchain_headers_get_tip) },
     { {"blockchain.headers.subscribe",      true,               false,    PR{0,0},                    },          MP(rpc_blockchain_headers_subscribe) },
     { {"blockchain.headers.unsubscribe",    true,               false,    PR{0,0},                    },          MP(rpc_blockchain_headers_unsubscribe) },
+    { {"blockchain.header.get",             true,               false,    PR{1,1},                    },          MP(rpc_blockchain_header_get) },
     { {"blockchain.relayfee",               true,               false,    PR{0,0},                    },          MP(rpc_blockchain_relayfee) },
 
     { {"blockchain.scripthash.get_balance", true,               false,    PR{1,2},                    },          MP(rpc_blockchain_scripthash_get_balance) },
