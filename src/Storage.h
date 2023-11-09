@@ -312,6 +312,9 @@ public:
     /// Convenience function. Same as above but optimized to query a single txhash.
     std::optional<BlockHeight> getTxHeight(const TxHash &) const;
 
+    /// Thread-safe. Retrieve the block header and block height for a confirmed transaction.
+    std::optional<std::pair<BlockHeight, Header>> getConfirmedTxBlockHeightAndHeader(const TxHash &) const;
+
     // --- DUMP methods --- (used for debugging, largely)
 
     using DumpProgressFunc = std::function<void(size_t)>;

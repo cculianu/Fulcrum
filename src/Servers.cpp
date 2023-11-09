@@ -1982,6 +1982,33 @@ void Server::rpc_blockchain_transaction_get(Client *c, const RPC::BatchId batchI
     );
     // <-- do nothing right now, return without replying. Will respond when daemon calls us back in callbacks above.
 }
+void Server::rpc_blockchain_transaction_get_confirmed_blockhash(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
+{
+    const QVariantList l = m.paramsList();
+    assert(l.size() <= 2);
+    QByteArray txHash = validateHashHex( l.front().toString() );
+    if (txHash.length() != HashLen)
+        throw RPCError("Invalid tx hash");
+    bool includeHeader = false;
+    if (l.size() >= 2) {
+        const auto [arg, argOk] = parseBoolSemiLooselyButNotTooLoosely(l[1]);
+        if (!argOk)
+            throw RPCError("Invalid second argument; expected boolean");
+        includeHeader = arg;
+    }
+    generic_do_async(c, batchId, m.id, [txHash, includeHeader, this]{
+        const auto optPair = storage->getConfirmedTxBlockHeightAndHeader(txHash);
+        if (!optPair)
+            throw RPCError("No confirmed transaction matching the requested hash was found");
+        const auto & [blockHeight, blockHeader] = *optPair;
+        QVariantMap ret{
+            { "block_hash", Util::ToHexFast(BTC::HashRev(blockHeader)) },
+            { "block_height", blockHeight },
+        };
+        if (includeHeader) ret.insert("block_header", Util::ToHexFast(blockHeader));
+        return ret;
+    });
+}
 
 namespace {
     /// Note: pos must be within the txHashes array, otherwise a BadArgs exception will be thrown.
@@ -2261,6 +2288,7 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
 
     { {"blockchain.transaction.broadcast",  true,               false,    PR{1,1},                    },          MP(rpc_blockchain_transaction_broadcast) },
     { {"blockchain.transaction.get",        true,               false,    PR{1,2},                    },          MP(rpc_blockchain_transaction_get) },
+    { {"blockchain.transaction.get_confirmed_blockhash", true,  false,    PR{1,2},                    },          MP(rpc_blockchain_transaction_get_confirmed_blockhash) },
     { {"blockchain.transaction.get_height", true,               false,    PR{1,1},                    },          MP(rpc_blockchain_transaction_get_height) },
     { {"blockchain.transaction.get_merkle", true,               false,    PR{1,2},                    },          MP(rpc_blockchain_transaction_get_merkle) },
     { {"blockchain.transaction.id_from_pos",true,               false,    PR{2,3},                    },          MP(rpc_blockchain_transaction_id_from_pos) },

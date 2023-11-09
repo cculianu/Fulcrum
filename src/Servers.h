@@ -406,6 +406,7 @@ private:
     // transaction
     void rpc_blockchain_transaction_broadcast(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     void rpc_blockchain_transaction_get(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+    void rpc_blockchain_transaction_get_confirmed_blockhash(Client *, RPC::BatchId, const RPC::Message &); // protocol v1.5.2
     void rpc_blockchain_transaction_get_height(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     void rpc_blockchain_transaction_get_merkle(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     void rpc_blockchain_transaction_id_from_pos(Client *, RPC::BatchId, const RPC::Message &); // fully implemented

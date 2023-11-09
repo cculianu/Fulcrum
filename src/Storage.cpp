@@ -4019,6 +4019,19 @@ auto Storage::getTxHeight(const TxHash &h) const -> std::optional<BlockHeight>
     return ret;
 }
 
+auto Storage::getConfirmedTxBlockHeightAndHeader(const TxHash &h) const -> std::optional<std::pair<BlockHeight, Header>>
+{
+    std::optional<std::pair<BlockHeight, Header>> ret;
+    SharedLockGuard g(p->blocksLock); // Take the blocksLock to make this operation atomic and guaranteed consistent
+    if (const auto optTxNum = p->db.txhash2txnumMgr->find(h))
+        // resolve txNum -> height; this ends up taking blkInfoLock (shared mode)
+        if (const auto optHeight = heightForTxNum(*optTxNum))
+            // resolve blockHeight -> blockHeader; this ends up taking headerVerifierLock (shared mode)
+            if (const auto optHeader = headerForHeight(*optHeight))
+                ret.emplace(*optHeight, *optHeader);
+    return ret;
+}
+
 size_t Storage::dumpAllScriptHashes(QIODevice *outDev, unsigned int indent, unsigned int ilvl,
                                     const DumpProgressFunc &progFunc, size_t progInterval) const
 {
