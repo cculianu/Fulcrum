@@ -254,6 +254,19 @@ public:
     /// thread safe -- returns confirmd, unconfirmed balance for a scripthash
     std::pair<bitcoin::Amount, bitcoin::Amount> getBalance(const HashX &, TokenFilterOption) const;
 
+    //-- scriptHash first use
+    struct FirstUse {
+        TxHash txHash;
+        int height; ///< block height. 0 = unconfirmed, -1 = unconfirmed with unconfirmed parent. Note this is ambiguous with block 0 :(
+        BlockHash blockHash; ///< the hash of the block at `height`. Will be 32-bytes of 0 for mempool txn.
+        FirstUse(const TxHash &th, int h, const BlockHash &bh) : txHash(th), height(h), blockHash(bh) {}
+    };
+
+    /// Thread-safe. Will return the first time a scripthash was used (as an output) either from the blockchain or
+    /// in mempool if never seen in a confirmed block, or a std::nullopt if the scriptHash in question was never used
+    /// as an output to a txn.
+    std::optional<FirstUse> getFirstUse(const HashX & scriptHash) const;
+
     /// thread safe, called from controller when we are up-to-date
     void updateMerkleCache(unsigned height);
 

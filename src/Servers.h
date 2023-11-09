@@ -381,6 +381,7 @@ private:
     void rpc_server_version(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     // address (resurrected in protocol 1.4.3)
     void rpc_blockchain_address_get_balance(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+    void rpc_blockchain_address_get_first_use(Client *, RPC::BatchId, const RPC::Message &); // protocol v1.5.2
     void rpc_blockchain_address_get_history(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     void rpc_blockchain_address_get_mempool(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     void rpc_blockchain_address_get_scripthash(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
@@ -398,6 +399,7 @@ private:
     void rpc_blockchain_relayfee(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     // scripthash
     void rpc_blockchain_scripthash_get_balance(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+    void rpc_blockchain_scripthash_get_first_use(Client *, RPC::BatchId, const RPC::Message &); // protocol v1.5.2
     void rpc_blockchain_scripthash_get_history(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     void rpc_blockchain_scripthash_get_mempool(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     void rpc_blockchain_scripthash_listunspent(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
@@ -426,6 +428,7 @@ private:
     // Impl. for blockchain.scripthash.* & blockchain.address.* methods (both sets call into these).
     // Note: Validation should have already been done by caller.
     void impl_get_balance(Client *, RPC::BatchId, const RPC::Message &, const HashX &scriptHash, Storage::TokenFilterOption tokenFilter);
+    void impl_get_first_use(Client *, RPC::BatchId, const RPC::Message &, const HashX &scriptHash, const QString &address = {});
     void impl_get_history(Client *, RPC::BatchId, const RPC::Message &, const HashX &scriptHash, const GetHistory_FromToBH &);
     void impl_get_mempool(Client *, RPC::BatchId, const RPC::Message &, const HashX &scriptHash);
     void impl_listunspent(Client *, RPC::BatchId, const RPC::Message &, const HashX &scriptHash, Storage::TokenFilterOption tokenFilter);
