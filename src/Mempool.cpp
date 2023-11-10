@@ -804,8 +804,8 @@ QVariantMap Mempool::dump() const
 #include <csignal>
 #include <cstdio>
 #include <future>
-#include <list>
 #include <set>
+#include <vector>
 
 bool Mempool::deepCompareEqual(const Mempool &o, QString *estr) const
 {
@@ -1025,28 +1025,28 @@ namespace {
             // NB: we leave .txNum and .confirmedHeight blank for now...
             ctr += ret.try_emplace(txo, std::move(info)).second;
         };
-        using ListTXOFutures = std::list<std::pair<TXO, std::future<QString>>>;
-        using InTransitTxMap = std::unordered_map<bitcoin::uint256, ListTXOFutures, BTC::uint256HashHasher>;
+        using PairFutureAndTXOs = std::pair<std::future<QString>, std::vector<TXO>>;
+        using InTransitTxMap = std::unordered_map<bitcoin::uint256, PairFutureAndTXOs, BTC::uint256HashHasher>;
         InTransitTxMap inTransit;
         auto waitForFutures = [&inTransit, &prevTxs, &mutPrevTxs, &add] {
             for (auto it = inTransit.begin(); it != inTransit.end(); it = inTransit.erase(it)) {
-                for (auto & [txo, future] : it->second) {
-                    if (future.valid()) {
-                        if (auto res = future.wait_for(std::chrono::seconds{10}); res != std::future_status::ready)
-                            throw Exception("Timeout waiting for tx for " + txo.toString());
-                        else if (const QString errStr = future.get(); !errStr.isEmpty())
-                            throw Exception("Failed to get tx for " + txo.toString() + ": " + errStr);
-                    } // else: not a valid future because it was a dupe input from a prevtx
-                    bitcoin::CTransactionRef prevTx;
-                    {
-                        const auto &prevTxId = it->first;
-                        std::unique_lock g(mutPrevTxs);
-                        if (const auto it = prevTxs.find(prevTxId); it != prevTxs.end())
-                            prevTx = it->second;
-                    }
-                    if (!prevTx) throw Exception("Could not find prevtx for " + txo.toString());
-                    add(txo, prevTx);
+                const auto & txId = it->first;
+                auto & [future, txoVec] = it->second;
+                if (!future.valid())
+                    throw Exception("Invalid future for " + QString::fromStdString(txId.ToString()));
+                if (auto res = future.wait_for(std::chrono::seconds{10}); res != std::future_status::ready)
+                    throw Exception("Timeout waiting for tx for " + QString::fromStdString(txId.ToString()));
+                else if (const QString errStr = future.get(); !errStr.isEmpty())
+                    throw Exception("Failed to get tx for " + QString::fromStdString(txId.ToString()) + ": " + errStr);
+                bitcoin::CTransactionRef prevTx;
+                {
+                    std::unique_lock g(mutPrevTxs);
+                    if (const auto it = prevTxs.find(txId); it != prevTxs.end())
+                        prevTx = it->second;
                 }
+                if (!prevTx) throw Exception("Could not find prevtx for " + QString::fromStdString(txId.ToString()));
+                for (const auto & txo : txoVec)
+                    add(txo, prevTx);
             }
             qApp->processEvents();
         };
@@ -1068,17 +1068,19 @@ namespace {
                 if (!prevTx) {
                     // retrieve from bitcoind
                     if (auto it = inTransit.find(prevoutTxId); it != inTransit.end()) {
-                        auto & l = it->second;
-                        l.emplace_back(std::piecewise_construct, std::forward_as_tuple(std::move(txo)), std::forward_as_tuple());
+                        if (!it->second.first.valid()) Error() << "Expected valid future for txId: " << prevoutTxId.ToString();
+                        it->second.second.push_back(std::move(txo));
                     } else {
+                        auto & [future, txoVec] = inTransit[prevoutTxId];
+                        if (future.valid()) Error() << "Expected invalid future for txId: " << prevoutTxId.ToString();
+                        if (!txoVec.empty()) Error() << "Expected empty txoVec for txId: " << prevoutTxId.ToString();
                         auto promiseRef = std::make_shared<std::promise<QString>>();
-                        auto & l = inTransit[prevoutTxId];
-                        if (!l.empty()) Error() << "Expected empty list for txId: " << prevoutTxId.ToString();
-                        l.emplace_back(txo, promiseRef->get_future());
+                        future = promiseRef->get_future();
                         const auto hashHex = QString::fromLatin1(Util::ToHexFast(txo.txHash));
+                        txoVec.push_back(std::move(txo));
                         bitcoindMgr.submitRequest(
                             &context, ::app()->newId(), "getrawtransaction", {hashHex, false},
-                            [&totalBytes, &prevTxs, &mutPrevTxs, &txnsDld, txo, promiseRef] (const RPC::Message &msg) mutable {
+                            [&totalBytes, &prevTxs, &mutPrevTxs, &txnsDld, promiseRef] (const RPC::Message &msg) mutable {
                                 ++txnsDld;
                                 try {
                                     const auto bytes = Util::ParseHexFast(msg.result().toString().toLatin1());
