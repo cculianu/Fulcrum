@@ -1547,22 +1547,16 @@ void Server::rpc_blockchain_scripthash_get_first_use(Client *c, const RPC::Batch
 }
 void Server::rpc_blockchain_address_get_first_use(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
-    QString addr;
-    const HashX scriptHash = parseFirstAddrParamToShCommon(m, &addr);
-    return impl_get_first_use(c, batchId, m, scriptHash, addr);
+    const HashX scriptHash = parseFirstAddrParamToShCommon(m);
+    return impl_get_first_use(c, batchId, m, scriptHash);
 }
-void Server::impl_get_first_use(Client *c, const RPC::BatchId batchId, const RPC::Message &m, const HashX &scriptHash,
-                                const QString &addr)
+void Server::impl_get_first_use(Client *c, const RPC::BatchId batchId, const RPC::Message &m, const HashX &scriptHash)
 {
-    generic_do_async(c, batchId, m.id, [scriptHash, addr, this] {
+    generic_do_async(c, batchId, m.id, [scriptHash, this]() -> QVariant {
         const auto optfu = storage->getFirstUse(scriptHash);
         if (!optfu) {
-            // note that we are implementing this the way Electrs does, which throws an error here rather than
-            // returning null for unknown scripthash and/or address.
-            const auto msg = addr.isEmpty()
-                                 ? QString("scripthash %1 not found").arg(QString::fromLatin1(Util::ToHexFast(scriptHash)))
-                                 : QString("address %1 not found").arg(addr);
-            throw RPCError(msg, RPC::ErrorCodes::Code_ItemNotFound);
+            // no address history, return null
+            return QVariant{};
         }
         const int height = std::max<int>(optfu->height, 0); // flatten [-1,0] -> 0
         return QVariantMap{

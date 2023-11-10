@@ -428,7 +428,7 @@ private:
     // Impl. for blockchain.scripthash.* & blockchain.address.* methods (both sets call into these).
     // Note: Validation should have already been done by caller.
     void impl_get_balance(Client *, RPC::BatchId, const RPC::Message &, const HashX &scriptHash, Storage::TokenFilterOption tokenFilter);
-    void impl_get_first_use(Client *, RPC::BatchId, const RPC::Message &, const HashX &scriptHash, const QString &address = {});
+    void impl_get_first_use(Client *, RPC::BatchId, const RPC::Message &, const HashX &scriptHash);
     void impl_get_history(Client *, RPC::BatchId, const RPC::Message &, const HashX &scriptHash, const GetHistory_FromToBH &);
     void impl_get_mempool(Client *, RPC::BatchId, const RPC::Message &, const HashX &scriptHash);
     void impl_listunspent(Client *, RPC::BatchId, const RPC::Message &, const HashX &scriptHash, Storage::TokenFilterOption tokenFilter);

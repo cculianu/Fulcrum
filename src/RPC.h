@@ -60,8 +60,6 @@ namespace RPC {
         Code_ReservedError = -32000,
         /// Anything above this number is ok for us to use for application-specific errors.
         Code_Custom = -31999,
-        /// Requested item not found
-        Code_ItemNotFound = -32004,
         /// Application-level bad request, eg request a header out of range, etc
         Code_App_BadRequest = 1,
         /// Daemon problem
