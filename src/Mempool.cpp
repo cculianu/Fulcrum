@@ -787,14 +787,24 @@ QVariantMap Mempool::dump() const
 
 #ifdef ENABLE_TESTS
 #include "App.h"
+#include "BitcoinD.h"
 #include "BTC.h"
 #include "Json/Json.h"
+#include "Options.h"
+#include "RPC.h"
 #include "Util.h"
 
 #include "bitcoin/streams.h"
 #include "bitcoin/transaction.h"
 
+#include <QThread>
+
+#include <atomic>
+#include <chrono>
+#include <csignal>
 #include <cstdio>
+#include <future>
+#include <list>
 #include <set>
 
 bool Mempool::deepCompareEqual(const Mempool &o, QString *estr) const
@@ -862,7 +872,9 @@ bool Mempool::deepCompareEqual(const Mempool &o, QString *estr) const
 }
 
 namespace {
+    std::atomic_bool interrupted = false;
     using MPData = Mempool::NewTxsMap;
+    using TXOMap = std::unordered_map<TXO, TXOInfo>;
 
     std::pair<MPData, bool> loadMempoolDat(const QString &fname) {
         // Below code taken from BCHN validation.cpp, but adopted to also support segwit
@@ -886,6 +898,7 @@ namespace {
             uint64_t num;
             file >> num;
             while (num--) {
+                if (interrupted) throw Exception("Interrupted");
                 bitcoin::CTransactionRef ctx;
                 int64_t nTime;
                 int64_t nFeeDelta;
@@ -954,10 +967,158 @@ namespace {
                 }
             }
         };
-        for (const auto & txid : txidsIn)
+        for (const auto & txid : txidsIn) {
+            if (interrupted) throw Exception("Interrupted");
             txids.merge(getDescendants(txid));
+        }
         mogrifyToPackage();
         return txids;
+    }
+
+    TXOMap getCoinsFromBitcoinD(const QString &bitciondEnvSpec, const MPData &mpd) {
+        TXOMap ret;
+        // format is: user:pass@ip:port
+        const auto sl = bitciondEnvSpec.split('@');
+        constexpr auto *msg = "Excpected BITCOIND user:pass@ip:port";
+        if (sl.size() != 2) throw Exception(msg);
+        const auto upl = sl.front().split(':');
+        if (upl.size() != 2) throw Exception(msg);
+        const QString user = upl.front(), pass = upl.back();
+        const auto hostPort = Util::ParseHostPortPair(sl.back(), true);
+        Debug() << "BitcoinD host:port: " << hostPort.first << ":" << hostPort.second;
+        BitcoinD_RPCInfo info;
+        info.setStaticUserPass(user, pass);
+        info.hostPort = hostPort;
+        QThread dummyThr;
+        Defer d([&dummyThr]{
+            dummyThr.quit();
+            Debug() << "Waiting for thread ...";
+            dummyThr.wait();
+        });
+        BitcoinDMgr bitcoindMgr(Options::defaultBdNClients, info);
+        dummyThr.start();
+        std::promise<bool> promise;
+        auto future = promise.get_future();
+        QObject context;
+        context.moveToThread(&dummyThr);
+        bitcoindMgr.connect(&bitcoindMgr, &BitcoinDMgr::gotFirstGoodConnection, &context, [&promise]{ promise.set_value(true); });
+        bitcoindMgr.connect(&bitcoindMgr, &BitcoinDMgr::allConnectionsLost, &context, [&promise]{ promise.set_value(false); });
+        Debug() << "Starting BitcoinDMgr ...";
+        bitcoindMgr.startup();
+        if (auto res = future.wait_for(std::chrono::seconds{5}); res != std::future_status::ready)
+            throw Exception("No BitcoinD connections are ready after 5 seconds");
+        else if (!future.get())
+            throw Exception("Failed to connect to BitcoinD at " + bitciondEnvSpec);
+        using PrevTxMap = std::unordered_map<bitcoin::uint256, bitcoin::CTransactionRef, BTC::uint256HashHasher>;
+        PrevTxMap prevTxs;
+        std::mutex mutPrevTxs;
+        Log() << "Retrieving coins from bitcoind for " << mpd.size() << " txns ...";
+        Tic t0;
+        std::atomic_size_t totalBytes = 0u, txnsDld = 0u;
+        size_t ctr = 0u, lastPrt = 0u;
+        auto add = [&ret, &ctr](const TXO &txo, const bitcoin::CTransactionRef &prevTx) {
+            TXOInfo info;
+            const auto & txout = prevTx->vout.at(txo.outN);
+            info.hashX = BTC::HashXFromCScript(txout.scriptPubKey);
+            info.amount = txout.nValue;
+            info.tokenDataPtr = txout.tokenDataPtr;
+            // NB: we leave .txNum and .confirmedHeight blank for now...
+            ctr += ret.try_emplace(txo, std::move(info)).second;
+        };
+        using ListTXOFutures = std::list<std::pair<TXO, std::future<QString>>>;
+        using InTransitTxMap = std::unordered_map<bitcoin::uint256, ListTXOFutures, BTC::uint256HashHasher>;
+        InTransitTxMap inTransit;
+        auto waitForFutures = [&inTransit, &prevTxs, &mutPrevTxs, &add] {
+            for (auto it = inTransit.begin(); it != inTransit.end(); it = inTransit.erase(it)) {
+                for (auto & [txo, future] : it->second) {
+                    if (future.valid()) {
+                        if (auto res = future.wait_for(std::chrono::seconds{10}); res != std::future_status::ready)
+                            throw Exception("Timeout waiting for tx for " + txo.toString());
+                        else if (const QString errStr = future.get(); !errStr.isEmpty())
+                            throw Exception("Failed to get tx for " + txo.toString() + ": " + errStr);
+                    } // else: not a valid future because it was a dupe input from a prevtx
+                    bitcoin::CTransactionRef prevTx;
+                    {
+                        const auto &prevTxId = it->first;
+                        std::unique_lock g(mutPrevTxs);
+                        if (const auto it = prevTxs.find(prevTxId); it != prevTxs.end())
+                            prevTx = it->second;
+                    }
+                    if (!prevTx) throw Exception("Could not find prevtx for " + txo.toString());
+                    add(txo, prevTx);
+                }
+            }
+            qApp->processEvents();
+        };
+        for (const auto & [txHash, item] : mpd) {
+            if (interrupted) throw Exception("Interrupted");
+            const auto & [mtx, tx] = item;
+            for (const auto & in : tx->vin) {
+                TXO txo;
+                const auto &prevoutTxId = in.prevout.GetTxId();
+                txo.txHash = BTC::Hash2ByteArrayRev(prevoutTxId);
+                if (mpd.count(txo.txHash) != 0) continue; // mempool txn, no need to retrieve anything
+                txo.outN = in.prevout.GetN();
+                bitcoin::CTransactionRef prevTx;
+                {
+                    std::unique_lock g(mutPrevTxs);
+                    if (auto it = prevTxs.find(in.prevout.GetTxId()); it != prevTxs.end())
+                        prevTx = it->second;
+                }
+                if (!prevTx) {
+                    // retrieve from bitcoind
+                    if (auto it = inTransit.find(prevoutTxId); it != inTransit.end()) {
+                        auto & l = it->second;
+                        l.emplace_back(std::piecewise_construct, std::forward_as_tuple(std::move(txo)), std::forward_as_tuple());
+                    } else {
+                        auto promiseRef = std::make_shared<std::promise<QString>>();
+                        auto & l = inTransit[prevoutTxId];
+                        if (!l.empty()) Error() << "Expected empty list for txId: " << prevoutTxId.ToString();
+                        l.emplace_back(txo, promiseRef->get_future());
+                        const auto hashHex = QString::fromLatin1(Util::ToHexFast(txo.txHash));
+                        bitcoindMgr.submitRequest(
+                            &context, ::app()->newId(), "getrawtransaction", {hashHex, false},
+                            [&totalBytes, &prevTxs, &mutPrevTxs, &txnsDld, txo, promiseRef] (const RPC::Message &msg) mutable {
+                                ++txnsDld;
+                                try {
+                                    const auto bytes = Util::ParseHexFast(msg.result().toString().toLatin1());
+                                    totalBytes += bytes.length();
+                                    bitcoin::CMutableTransaction mtx;
+                                    BTC::Deserialize(mtx, bytes, 0, true);
+                                    auto txref = bitcoin::MakeTransactionRef(std::move(mtx));
+                                    {
+                                        std::unique_lock g(mutPrevTxs);
+                                        prevTxs.try_emplace(txref->GetHashRef(), std::move(txref));
+                                    }
+                                    promiseRef->set_value(QStringLiteral(""));
+                                } catch (const std::exception &e) {
+                                    promiseRef->set_value(QString("Exception: ") + QString::fromUtf8(e.what()));
+                                }
+                            },
+                            [promiseRef](const RPC::Message &m) {
+                                promiseRef->set_value("BitcoinD Error result: " + m.errorMessage());
+                            },
+                            [promiseRef](const RPC::Message::Id &, const QString & failureReason){
+                                promiseRef->set_value("BitcoinD Failure: " + failureReason);
+                            }
+                        );
+                    }
+                } else { /* prevTx != nullptr */
+                    // already have the tx, add the coin we need from it
+                    add(txo, prevTx);
+                }
+                if ((ctr - lastPrt) >= 1000u) {
+                    Debug() << (lastPrt = ctr) << " inputs, " << txnsDld.load() << " txns, "
+                            << QString::number(totalBytes.load() / 1e6, 'f', 3) << " MB, " << t0.secsStr() << " secs";
+                    qApp->processEvents();
+                }
+                if (inTransit.size() >= 16)
+                    waitForFutures();
+            }
+        }
+        waitForFutures();
+        Log() << "Got " << ret.size() << " coins, " << txnsDld.load() << " txns, in " << t0.secsStr() << " secs";
+        return ret;
     }
 
     void bench() {
@@ -970,6 +1131,16 @@ namespace {
                             "mempool.dat taken from either BCHN, BU, or a BTC (Core) bitcoind..");
         }
 
+        // If user hits CTRL-C, exit gracefully
+        const auto prevHandler = std::signal(SIGINT, [](int sig) {
+            if (bool expected = false; interrupted.compare_exchange_strong(expected, true))
+                Util::AsyncSignalSafe::writeStdErr(Util::AsyncSignalSafe::SBuf("\n--- Caught signal ", sig, ", exiting ..."));
+        });
+        Defer d([prevHandler]{
+            std::signal(SIGINT, prevHandler);
+            interrupted = false; // reset
+        });
+
         const auto mem0 = Util::getProcessMemoryUsage();
         Log() << "Mem usage: physical " << QString::number(mem0.phys / 1024.0, 'f', 1)
               << " KiB, virtual " << QString::number(mem0.virt / 1024.0, 'f', 1) << " KiB";
@@ -978,6 +1149,12 @@ namespace {
         const auto && [mpd, isSegWit] = loadMempoolDat(mpdat);
 
         if (isSegWit) bitcoin::SetCurrencyUnit("BTC");
+
+        TXOMap realCoins;
+
+        if (auto const * envbdinfo = std::getenv("BITCOIND"))
+            // may throw, otherwise will reach out to bitcoin daemon for prevtxs to populate coin map
+            realCoins = getCoinsFromBitcoinD(QString::fromUtf8(envbdinfo), mpd);
 
         static const auto deepCopyMPD = [](const MPData &other) -> MPData {
             MPData ret;
@@ -998,7 +1175,7 @@ namespace {
             Mempool::TxHashNumMap txNumMap;
             const BlockHeight confirmedHeightStart = 2 + QRandomGenerator::global()->generate() % 1'000'000; // random blockHeight for conf
             std::unordered_set<BlockHeight> okConfHeights; okConfHeights.insert(confirmedHeightStart);
-            std::unordered_map<TXO, TXOInfo> confirmedTXOInfos;
+            TXOMap confirmedTXOInfos = realCoins; // realCoins is empty unless we got them from bitcoind via (BITCOIND env var)
             TxNum txNumLast = 0;
             BlockHeight confirmedHeightCur = confirmedHeightStart;
 
@@ -1019,8 +1196,13 @@ namespace {
                 TXOInfo ret;
                 if (auto it = confirmedTXOInfos.find(txo); it != confirmedTXOInfos.end()) {
                     // use cached
-                    ret = it->second;
-                    return ret;
+                    auto & txoInfo = it->second;
+                    if (!txoInfo.confirmedHeight) {
+                        // needs a confirmedHeight, update
+                        txoInfo.confirmedHeight = confirmedHeightCur;
+                        txoInfo.txNum = *getTxNum(txo.txHash, true);
+                    }
+                    return txoInfo;
                 }
                 ret.amount = 546 * bitcoin::Amount::satoshi();
                 ret.confirmedHeight = confirmedHeightCur;
@@ -1078,6 +1260,7 @@ namespace {
                 bool dumped = false;
                 // iterate each time, dropping leaves from mempool
                 for (int iterCt = 1; !mempool.txs.empty(); ++iterCt) {
+                    if (interrupted) throw Exception("Interrupted");
                     Mempool::TxHashSet txids;
                     Mempool::TxHashNumMap txidMap;
                     if (iterMode == DropOnlyLeaves) {
@@ -1131,15 +1314,15 @@ namespace {
                             txidMap.emplace(txid, *getTxNum(txid, true));
                     }
 
-                    using UTXOMap = std::map<TXO, TXOInfo>;
                     struct Expected {
-                        UTXOMap unconfUtxos;
+                        TXOMap unconfUtxos;
                         bitcoin::Amount unconfUtxoValue;
                         Mempool::ScriptHashesAffectedSet affected;
                     } expected;
 
-                    const auto getUnconfUtxos = [&mempool]() -> std::pair<UTXOMap, bitcoin::Amount> {
-                        UTXOMap ret;
+                    const auto getUnconfUtxos = [&mempool]() -> std::pair<TXOMap, bitcoin::Amount> {
+                        TXOMap ret;
+                        ret.reserve(mempool.txs.size() * 4); // rough guess
                         bitcoin::Amount value;
                         for (const auto &[txid, tx] : mempool.txs) {
                             for (const auto &[sh, ioinfo] : tx->hashXs) {
