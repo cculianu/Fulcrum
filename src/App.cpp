@@ -982,6 +982,24 @@ void App::parseArgs()
             Debug() << "config: subnets_to_exclude_from_per_ip_limits = " << (parsed.isEmpty() ? "None" : parsed.join(", "));
         });
     }
+    if (conf.hasValue("daemon_passthrough_subnets")) {
+        options->subnetsDaemonPassthrough.clear();
+        const auto sl = conf.value("daemon_passthrough_subnets").split(",");
+        QStringList parsed;
+        for (const auto & s : sl) {
+            if (s.isEmpty())
+                continue;
+            auto subnet = Options::Subnet::fromString(s);
+            if (!subnet.isValid())
+                throw BadArgs(QString("daemon_passthrough_subnets: Failed to parse %1").arg(s));
+            options->subnetsDaemonPassthrough.push_back(subnet);
+            parsed.push_back(subnet.toString());
+        }
+        // log this later in case we are in syslog mode
+        Util::AsyncOnObject(this, [parsed]{
+            Debug() << "config: daemon_passthrough_subnets = " << (parsed.isEmpty() ? "None" : parsed.join(", "));
+        });
+    }
     if (conf.hasValue("max_history")) {
         bool ok;
         int mh = conf.intValue("max_history", -1, &ok);

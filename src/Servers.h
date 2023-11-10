@@ -424,6 +424,8 @@ private:
     void rpc_blockchain_utxo_get_info(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     // mempool
     void rpc_mempool_get_fee_histogram(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+    // daemon
+    void rpc_daemon_passthrough(Client *, RPC::BatchId, const RPC::Message &); // protocol v1.5.2
 
     // Impl. for blockchain.scripthash.* & blockchain.address.* methods (both sets call into these).
     // Note: Validation should have already been done by caller.

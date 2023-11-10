@@ -2274,6 +2274,34 @@ void Server::rpc_mempool_get_fee_histogram(Client *c, const RPC::BatchId batchId
     }
     emit c->sendResult(batchId, m.id, result);
 }
+void Server::rpc_daemon_passthrough(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
+{
+    Options::Subnet subnet;
+    QHostAddress addr;
+    if (options->subnetsDaemonPassthrough.empty() || !options->isAddrInDaemonPassthroughSet(addr = c->socket->peerAddress(), &subnet)) {
+        DebugM("daemon.passthrough: Client IP not in allowed set, disallowing passthrough method: ",
+               m.paramsMap().value("method", "<None>").toString());
+        throw RPCError("Method disabled for this client", RPC::ErrorCodes::Code_MethodNotFound);
+    }
+    QVariantMap pm;
+    QVariant method, params;
+    if (!m.isParamsMap() || (pm = m.paramsMap()).size() < 1
+        || (!Compat::IsMetaType(method = pm.value("method"), QMetaType::QString) && !Compat::IsMetaType(method, QMetaType::QByteArray))
+        || (!Compat::IsMetaType(params = pm.value("params"), QMetaType::QVariantList) && !params.isNull()))
+        throw RPCError("Expected a dictionary of the form: { \"method\": \"string\", \"params\": [...] }");
+    const QString methodStr = method.toString();
+    if (methodStr == "stop") {
+        // special case, disallow 'stop' as that would be bad.
+        throw RPCError("Method \"stop\" not allowed for daemon.passthrough");
+    }
+    DebugM("daemon.passthrough: Client IP ", addr.toString(), " matches subnet: ", subnet.toString(),
+           ", allowing passthrough method: ", methodStr);
+    // pass request through to daemon
+    generic_async_to_bitcoind(c, batchId, m.id, methodStr, params.toList(), [](const RPC::Message &response){
+        // forward daemon response to client
+        return response.result();
+    });
+}
 // --- Server::StaticData Definitions ---
 #define HEY_COMPILER_PUT_STATIC_HERE(x) decltype(x) x
 #define PR RPC::Method::PosParamRange
@@ -2331,9 +2359,8 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
     { {"blockchain.transaction.dsproof.subscribe",   true,      false,    PR{1,1},                    },          MP(rpc_blockchain_transaction_dsproof_subscribe) },
     { {"blockchain.transaction.dsproof.unsubscribe", true,      false,    PR{1,1},                    },          MP(rpc_blockchain_transaction_dsproof_unsubscribe) },
     // /DSPROOF
-
     { {"blockchain.utxo.get_info",          true,               false,    PR{2,2},                    },          MP(rpc_blockchain_utxo_get_info) },
-
+    { {"daemon.passthrough",                true,               false,    PR{0,0}, RPC::KeySet{{"method"}}, true /* allow unknown kwargs, since "params" is optional */ }, MP(rpc_daemon_passthrough) },
     { {"mempool.get_fee_histogram",         true,               false,    PR{0,0},                    },          MP(rpc_mempool_get_fee_histogram) },
 };
 #undef MP

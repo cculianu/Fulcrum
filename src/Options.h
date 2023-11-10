@@ -136,6 +136,11 @@ public:
     /// multiple threads and is thread-safe, since subnetsExcludedFromPerIPLimits is never changes after app init.
     bool isAddrInPerIPLimitExcludeSet(const QHostAddress & addr, Subnet * matched = nullptr) const;
 
+    /// Default: nothing -- disallow the `daemon.passthrough` RPC
+    QList<Subnet> subnetsDaemonPassthrough = {};
+    /// Returns true if `addr` is in the allow set for RPC `daemon.passhtrough`
+    bool isAddrInDaemonPassthroughSet(const QHostAddress & addr, Subnet * matched = nullptr) const;
+
     // Max history & max buffer
     static constexpr int defaultMaxBuffer = 8'000'000, maxBufferMin = 64'000, maxBufferMax = 100'000'000;
     static constexpr int defaultMaxHistory = 125'000, maxHistoryMin = 1000, maxHistoryMax = 25'000'000;

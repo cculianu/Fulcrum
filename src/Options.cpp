@@ -64,6 +64,17 @@ bool Options::isAddrInPerIPLimitExcludeSet(const QHostAddress &addr, Subnet *mat
     return false;
 }
 
+bool Options::isAddrInDaemonPassthroughSet(const QHostAddress & addr, Subnet * matched) const
+{
+    for (const auto & sn : subnetsDaemonPassthrough) {
+        if (addr.isInSubnet(sn.subnet, sn.mask)) {
+            if (matched) *matched = sn;
+            return true;
+        }
+    }
+    return false;
+}
+
 QVariantMap Options::toMap() const
 {
     QVariantMap m;
