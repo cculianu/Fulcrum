@@ -1017,13 +1017,14 @@ namespace {
         std::atomic_size_t totalBytes = 0u, txnsDld = 0u;
         size_t ctr = 0u, lastPrt = 0u;
         auto add = [&ret, &ctr](const TXO &txo, const bitcoin::CTransactionRef &prevTx) {
-            TXOInfo info;
+            const auto & [it, inserted] = ret.try_emplace(txo);
+            ctr += inserted;
+            TXOInfo & info = it->second;
             const auto & txout = prevTx->vout.at(txo.outN);
             info.hashX = BTC::HashXFromCScript(txout.scriptPubKey);
             info.amount = txout.nValue;
             info.tokenDataPtr = txout.tokenDataPtr;
             // NB: we leave .txNum and .confirmedHeight blank for now...
-            ctr += ret.try_emplace(txo, std::move(info)).second;
         };
         using PairFutureAndTXOs = std::pair<std::future<QString>, std::vector<TXO>>;
         using InTransitTxMap = std::unordered_map<bitcoin::uint256, PairFutureAndTXOs, BTC::uint256HashHasher>;
