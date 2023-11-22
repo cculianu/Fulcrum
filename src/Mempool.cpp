@@ -26,6 +26,8 @@
 #include <optional>
 #include <utility>
 
+Mempool::ConsistencyError::~ConsistencyError() {} // for vtable
+
 void Mempool::clear() {
     txs.clear();
     hashXTxs.clear();
@@ -151,14 +153,14 @@ auto Mempool::addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
                 if (prevN >= prevTxRef->txos.size()
                         || !(pprevInfo = &prevTxRef->txos[prevN])->isValid())
                     // defensive programming paranoia
-                    throw InternalError(QString("FAILED TO FIND A VALID PREVIOUS TXOUTN %1:%2 IN MEMPOOL for TxHash: %3 (input %4)")
-                                        .arg(QString(prevTxId.toHex())).arg(prevN).arg(QString(hash.toHex())).arg(inNum));
+                    throw ConsistencyError(QString("FAILED TO FIND A VALID PREVIOUS TXOUTN %1:%2 IN MEMPOOL for TxHash: %3 (input %4)")
+                                           .arg(QString(prevTxId.toHex())).arg(prevN).arg(QString(hash.toHex())).arg(inNum));
                 sh = pprevInfo->hashX;
                 const auto & refPrevInfo = tx->hashXs[sh].unconfirmedSpends[prevTXO] = *pprevInfo;
                 auto prevHashXIt = prevTxRef->hashXs.find(sh);
                 if (prevHashXIt == prevTxRef->hashXs.end())
-                    throw InternalError(QString("PREV OUT %1 IS MISSING ITS HASHX ENTRY FOR HASHX %2 (txid: %3)")
-                                        .arg(prevTXO.toString(), QString(sh.toHex()), QString(tx->hash.toHex())));
+                    throw ConsistencyError(QString("PREV OUT %1 IS MISSING ITS HASHX ENTRY FOR HASHX %2 (txid: %3)")
+                                           .arg(prevTXO.toString(), QString(sh.toHex()), QString(tx->hash.toHex())));
                 prevHashXIt->second.utxo.erase(prevN); // remove this spend from utxo set for prevTx in mempool
                 if (TRACE) {
                     Debug() << hash.toHex() << " unconfirmed spend: " << prevTXO.toString() << " " << refPrevInfo.amount.ToString().c_str()
@@ -207,8 +209,8 @@ auto Mempool::addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
                     // (or there maybe was a race condition and a new block came in while we were doing this).
                     // We will throw if missing, and the synch process aborts and hopefully we recover with a reorg
                     // or a new block or somesuch.
-                    throw InternalError(QString("FAILED TO FIND PREVIOUS TX %1 IN EITHER MEMPOOL OR DB for TxHash: %2 (input %3)")
-                                        .arg(prevTXO.toString()).arg(QString(hash.toHex())).arg(inNum));
+                    throw ConsistencyError(QString("FAILED TO FIND PREVIOUS TX %1 IN EITHER MEMPOOL OR DB for TxHash: %2 (input %3)")
+                                           .arg(prevTXO.toString()).arg(QString(hash.toHex())).arg(inNum));
                 }
                 pprevInfo = &*optTXOInfo;
                 sh = pprevInfo->hashX;

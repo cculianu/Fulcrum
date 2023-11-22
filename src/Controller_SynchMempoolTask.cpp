@@ -55,9 +55,10 @@ struct SynchMempoolTask::Precache {
     std::vector<bitcoin::CTransactionRef> workQueue; ///< guarded by mut, signaled by cond
     std::atomic_bool stopFlag = false, doneSubmittingWorkFlag = false, threadIsRunning = false;
     std::thread thread;
+    std::atomic_bool didErrorOut = false;
 
     void startThread(size_t reserve, Mempool::TxHashSet tentativeMempoolTxHashes);
-    void waitUntilDone();
+    [[nodiscard]] bool waitUntilDone();
     void stopThread();
     void submitWork(const bitcoin::CTransactionRef &tx);
     void threadFunc(size_t reserve, Mempool::TxHashSet tentativeMempoolTxHashes);
@@ -132,11 +133,11 @@ void SynchMempoolTask::Precache::stopThread()
         thread.join();
     }
     std::unique_lock g(mut); // keep TSAN happy
-    doneSubmittingWorkFlag = stopFlag = threadIsRunning = false;
+    doneSubmittingWorkFlag = stopFlag = threadIsRunning = didErrorOut = false;
     workQueue.clear();
 }
 
-void SynchMempoolTask::Precache::waitUntilDone()
+bool SynchMempoolTask::Precache::waitUntilDone()
 {
     if (thread.joinable()) {
         Tic t0;
@@ -149,6 +150,7 @@ void SynchMempoolTask::Precache::waitUntilDone()
         if (const double el = t0.msec<double>(); el >= 500.)
             DebugM("Waited ", QString::number(el, 'f', 3), " msec for precache thread to finish");
     }
+    return !didErrorOut;
 }
 
 void SynchMempoolTask::Precache::submitWork(const bitcoin::CTransactionRef &tx)
@@ -163,12 +165,15 @@ void SynchMempoolTask::Precache::submitWork(const bitcoin::CTransactionRef &tx)
 
 void SynchMempoolTask::Precache::threadFunc(const size_t reserve, const Mempool::TxHashSet tentativeMempoolTxHashes)
 {
+    static auto constexpr funcName = "SynchMempoolTask::Precache::threadFunc";
     if (QThread *t = QThread::currentThread(); t && t != parent.thread() && t != qApp->thread()) {
         t->setObjectName("SyncMempoolPreCache");
     } else {
-        Fatal() << __func__ << ": Expected this function to run in its own thread!";
+        Fatal() << funcName << ": Expected this function to run in its own thread!";
+        didErrorOut = true;
         return;
     }
+    didErrorOut = false;
     DebugM("Thread started");
     size_t tot = 0u, ctr = 0u;
     Tic t0;
@@ -207,15 +212,17 @@ void SynchMempoolTask::Precache::threadFunc(const size_t reserve, const Mempool:
                         // Potential race-condition with bitcoind confirming blocks before we realized it,
                         // and then a mempool txn appearing refering to a txn that was block-only.
                         // Signal error and on retry things should settle ok.
-                        Warning() << __func__ << ": Unable to find prevout " << txo.toString()
+                        Warning() << funcName << ": Unable to find prevout " << txo.toString()
                                   << " in DB for tx " << tx->GetId().ToString()
                                   << " (possibly a block arrived while synching mempool, will retry)";
+                        didErrorOut = true;
                         emit parent.errored();
                         return;
                     }
                     ++ctr;
                 } catch (const std::exception & e) {
-                    Error() << __func__ << ": Got low-level DB error retrieving " << txo.toString() << ": " << e.what();
+                    Error() << funcName << ": Got low-level DB error retrieving " << txo.toString() << ": " << e.what();
+                    didErrorOut = true;
                     emit parent.errored();
                     return;
                 }
@@ -227,8 +234,9 @@ void SynchMempoolTask::Precache::threadFunc(const size_t reserve, const Mempool:
 
 void SynchMempoolTask::stop()
 {
-    precache->stopThread();
     CtlTask::stop(); // call superclass
+    // Note: below should only be called here *after* our thread has stopped to avoid race conditions (see issue #214)
+    precache->stopThread();
 }
 
 void SynchMempoolTask::updateLastProgress(std::optional<double> val)
@@ -270,6 +278,14 @@ void SynchMempoolTask::process()
         state = State::ProcessingResults;
         try {
             processResults();
+        } catch (const Mempool::ConsistencyError & e) {
+            Error() << "Mempool consistency error: " << e.what();
+            Error() << "Clearing mempool and restarting SynchMempoolTask";
+            {
+                auto [mempool, lock] = storage->mutableMempool(); // grab mempool struct exclusively
+                mempool.clear();
+            }
+            redoFromStart();
         } catch (const std::exception & e) {
             Error() << "Caught exception when processing mempool tx's: " << e.what();
             emit errored();
@@ -543,11 +559,15 @@ void SynchMempoolTask::processResults()
     // precache of the confirmed spends done in another thread, wait for it to complete now
     if (!txsDownloaded.empty()) {
         if (!precache->thread.joinable()) {
-            Error() << __PRETTY_FUNCTION__ << " precache->thread should be running -- FIXME!";
+            Error() << __PRETTY_FUNCTION__ << ": precache->thread should be running -- FIXME!";
             emit errored();
             return;
         }
-        precache->waitUntilDone();
+        if (!precache->waitUntilDone()) {
+            Error() << __func__ << ": precache->thread errored out, aborting SynchMempoolTask";
+            emit errored();
+            return;
+        }
     }
     updateLastProgress(0.75);
     auto & cache = precache->cache;

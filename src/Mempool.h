@@ -19,6 +19,7 @@
 #pragma once
 
 #include "BlockProcTypes.h"
+#include "Common.h"
 #include "DSProof.h"
 #include "TXO.h"
 
@@ -36,7 +37,6 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
-
 
 /// Models the mempool
 struct Mempool
@@ -148,6 +148,13 @@ struct Mempool
         std::size_t dspRmCt = 0, dspTxRmCt = 0; // dsp stats: number of dsproofs removed, number of dsp <-> tx links removed (dropTxs, confirmedInBlock updates these)
         TxHashSet dspTxsAffected; // populated by addNewTxs(), dropTxs(), & confirmedInBlock() -- used ultimately bu DSProofSubsMgr to notify linked txs.
         double elapsedMsec = 0.;
+    };
+
+    /// Thrown by addNewTxs if we cannot retrieve a coin from the mempool or DB. Appropriate recovery is to clear
+    /// the entire mempool and start over since the mempool now is likely in an inconsistent state.
+    struct ConsistencyError : InternalError {
+        using InternalError::InternalError;
+        ~ConsistencyError() override;
     };
 
     /// Add a batch of tx's that are new (downloaded from bitcoind) and were not previously in this mempool structure.
