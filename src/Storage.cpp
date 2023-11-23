@@ -3900,7 +3900,7 @@ auto Storage::getFirstUse(const HashX & hashX) const -> std::optional<FirstUse>
             // the history is a bunch of CompactTXO TxNums concatenated, grab the first one
             if (size_t(optba->size()) < CompactTXO::compactTxNumSize()) {
                 throw DatabaseSerializationError(QString("Scripthash %1 has a db entry in scripthash_history that is too short: %2")
-                                                     .arg(hashX.toHex(), optba->toHex()));
+                                                     .arg(QString::fromLatin1(hashX.toHex()), QString::fromLatin1(optba->toHex())));
             }
             const TxNum txNum = CompactTXO::txNumFromCompactBytes(reinterpret_cast<const std::byte *>(optba->constData()));
             // NB: Below opt.value() calls may throw, which is what we want.
