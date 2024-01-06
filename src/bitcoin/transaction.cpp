@@ -108,43 +108,16 @@ Amount CTransaction::GetValueOut() const {
     return nValueOut;
 }
 
-double CTransaction::ComputePriority(double dPriorityInputs,
-                                     unsigned int nTxSize) const {
-    nTxSize = CalculateModifiedSize(nTxSize);
-    if (nTxSize == 0) {
-        return 0.0;
-    }
-
-    return dPriorityInputs / nTxSize;
+template <typename TxType>
+size_t GetTotalSizeCommon(const TxType &tx, bool segwit, bool mweb) {
+    static_assert(std::is_same_v<TxType, CTransaction> || std::is_same_v<TxType, CMutableTransaction>);
+    return GetSerializeSize(tx, PROTOCOL_VERSION
+                                    | (segwit ? SERIALIZE_TRANSACTION_USE_WITNESS : 0)
+                                    | (mweb ? SERIALIZE_TRANSACTION_USE_MWEB : 0));
 }
 
-unsigned int CTransaction::CalculateModifiedSize(unsigned int nTxSize) const {
-    // In order to avoid disincentivizing cleaning up the UTXO set we don't
-    // count the constant overhead for each txin and up to 110 bytes of
-    // scriptSig (which is enough to cover a compressed pubkey p2sh redemption)
-    // for priority. Providing any more cleanup incentive than making additional
-    // inputs free would risk encouraging people to create junk outputs to
-    // redeem later.
-    if (nTxSize == 0) {
-        nTxSize = GetTotalSize();
-    }
-    for (const auto &nVin : vin) {
-        unsigned int offset =
-            41U + std::min(110U, (unsigned int)nVin.scriptSig.size());
-        if (nTxSize > offset) {
-            nTxSize -= offset;
-        }
-    }
-    return nTxSize;
-}
-
-size_t CTransaction::GetBillableSize() const {
-    return bitcoin::GetSerializeSize(*this, PROTOCOL_VERSION);
-}
-
-unsigned int CTransaction::GetTotalSize(bool segwit) const {
-    return bitcoin::GetSerializeSize(*this, PROTOCOL_VERSION | (segwit ? SERIALIZE_TRANSACTION_USE_WITNESS : 0));
-}
+size_t CTransaction::GetTotalSize(bool segwit, bool mweb) const { return GetTotalSizeCommon(*this, segwit, mweb); }
+size_t CMutableTransaction::GetTotalSize(bool segwit, bool mweb) const { return GetTotalSizeCommon(*this, segwit, mweb); }
 
 std::string CTransaction::ToString(bool fVerbose) const {
     const std::string::size_type cutoff = fVerbose ? std::string::npos : 10;

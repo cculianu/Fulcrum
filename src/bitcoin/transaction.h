@@ -14,6 +14,8 @@
 #include "txid.h"
 
 #include <algorithm>
+#include <optional>
+#include <type_traits>
 #include <utility>
 
 #ifdef __clang__
@@ -402,23 +404,11 @@ public:
     // GetValueIn() is a method on CCoinsViewCache, because
     // inputs must be known to compute value in.
 
-    // Compute priority, given priority of inputs and (optionally) tx size
-    double ComputePriority(double dPriorityInputs,
-                           unsigned int nTxSize = 0) const;
-
-    // Compute modified tx size for priority calculation (optionally given tx
-    // size)
-    unsigned int CalculateModifiedSize(unsigned int nTxSize = 0) const;
-
-    // Computes an adjusted tx size so that the UTXIs are billed partially
-    // upfront.
-    size_t GetBillableSize() const;
-
     /**
      * Get the total transaction size in bytes.
-     * @return Total transaction size in bytes
+     * @return Total transaction size in bytes, with or without segwit and/or mweb data included
      */
-    unsigned int GetTotalSize(bool segwit = false) const;
+    size_t GetTotalSize(bool segwit = false, bool mweb = false) const;
 
     bool IsCoinBase() const {
         return (vin.size() == 1 && vin[0].prevout.IsNull());
@@ -484,6 +474,8 @@ public:
     TxHash GetHash() const;
     TxHash GetWitnessHash() const; ///< Added by Calin to support Core
 
+    size_t GetTotalSize(bool segwit = false, bool mweb = false) const;
+
     friend bool operator==(const CMutableTransaction &a,
                            const CMutableTransaction &b) {
         return a.GetId() == b.GetId();
@@ -526,6 +518,23 @@ struct PrecomputedTransactionData {
 
     explicit PrecomputedTransactionData(const CTransaction &tx);
 };
+
+// Added by Calin to calculate virtual size for a SegWit txn which is: (3 * stripped_size + total_size) / 4
+template <typename TxType>
+size_t GetTxVirtualSize(const TxType &tx, const std::optional<size_t> unstrippedSizeIfKnown = std::nullopt) {
+    static_assert(std::is_same_v<TxType, CTransaction> || std::is_same_v<TxType, CMutableTransaction>);
+    constexpr size_t WITNESS_SCALE_FACTOR = 4; // Taken from Core consensus/consensus.h, added by Calin here.
+
+    size_t weight = tx.GetTotalSize(false, false); // stripped of segwit and/or mweb
+
+    if (unstrippedSizeIfKnown.has_value()) {
+        weight += *unstrippedSizeIfKnown;
+    } else {
+        weight += tx.GetTotalSize(true, true); // add unstripped size (include segwit and/or mweb data)
+    }
+
+    return weight / WITNESS_SCALE_FACTOR;
+}
 
 } // end namespace bitcoin
 

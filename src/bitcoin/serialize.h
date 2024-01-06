@@ -1083,7 +1083,7 @@ public:
 
     template <typename T> CSizeComputer &operator<<(const T &obj) {
         bitcoin::Serialize(*this, obj);
-        return (*this);
+        return *this;
     }
 
     size_t size() const { return nSize; }

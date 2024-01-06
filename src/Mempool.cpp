@@ -46,8 +46,8 @@ auto Mempool::calcCompactFeeHistogram(unsigned binSizeBytes) const -> FeeHistogr
     for (const auto & [txid, tx] : txs) {
         if (tx->fee < bitcoin::Amount::zero()) continue; // skip negative fees (coinbase txn, etc)
         const auto feeRate = unsigned(tx->fee / bitcoin::Amount::satoshi()) // sats
-                             /  std::max(tx->sizeBytes, 1u); // per byte
-        histogram[feeRate] += tx->sizeBytes; // accumulate size by feeRate
+                             / std::max(tx->vsizeBytes, 1u); // per vbyte
+        histogram[feeRate] += tx->vsizeBytes; // accumulate size by feeRate
     }
 
     // Now, compact the bins
@@ -912,7 +912,7 @@ namespace {
 
                 auto rtx = std::make_shared<Mempool::Tx>();
                 rtx->hash = BTC::Hash2ByteArrayRev(ctx->GetHashRef());
-                dataTotal += rtx->sizeBytes = ctx->GetTotalSize(true);
+                dataTotal += rtx->sizeBytes = ctx->GetTotalSize(true, true);
                 ret.emplace(std::piecewise_construct,
                             std::forward_as_tuple(rtx->hash),
                             std::forward_as_tuple(std::move(rtx), std::move(ctx)));

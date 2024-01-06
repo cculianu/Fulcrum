@@ -2707,14 +2707,21 @@ void AdminServer::rpc_getinfo(Client *c, const RPC::BatchId batchId, const RPC::
         auto [mempool, lock] = storage->mempool();
         mp["txs"] = qulonglong(mempool.txs.size());
         mp["addresses"] = qulonglong(mempool.hashXTxs.size());
-        std::size_t sizeTotal = 0;
+        std::size_t sizeTotal = 0, vsizeTotal = 0;
         std::int64_t feeTotal = 0;
-        std::for_each(mempool.txs.begin(), mempool.txs.end(), [&sizeTotal, &feeTotal](const auto &pair){
-            sizeTotal += pair.second->sizeBytes;
-            feeTotal += pair.second->fee / bitcoin::Amount::satoshi();
+        std::for_each(mempool.txs.begin(), mempool.txs.end(), [&sizeTotal, &vsizeTotal, &feeTotal](const auto &pair){
+            const auto & [_, tx] = pair;
+            sizeTotal += tx->sizeBytes;
+            vsizeTotal += tx->vsizeBytes;
+            feeTotal += tx->fee / bitcoin::Amount::satoshi();
         });
         mp["size_bytes"] = qulonglong(sizeTotal);
         mp["avg_fee_sats_B"] = sizeTotal ? long(std::round(double(feeTotal) / double(sizeTotal) * 100.0)) / 100.0 : 0.0;
+        if (sizeTotal != vsizeTotal) {
+            // add these elements to the info map if BTC, LTC, etc
+            mp["size_vbytes"] = qulonglong(vsizeTotal);
+            mp["avg_fee_sats_vB"] = vsizeTotal ? long(std::round(double(feeTotal) / double(vsizeTotal) * 100.0)) / 100.0 : 0.0;
+        }
         res["mempool"] = mp;
     }
     { // utxoset
