@@ -341,8 +341,13 @@ template <class Derived>
 class CTransactionBase {
     const Derived &tx() const { return *static_cast<const Derived *>(this); }
 
+protected:
+    uint256 ComputeHash(bool segwit = false) const;
+    uint256 ComputeWitnessHash() const { return ComputeHash(true); }
+
 public:
-    template <typename Stream> void Serialize(Stream &s) const { SerializeTransaction(tx(), s); }
+    template <typename Stream>
+    void Serialize(Stream &s) const { SerializeTransaction(tx(), s); }
 
     /**
      * Get the total transaction size in bytes.
@@ -367,6 +372,9 @@ public:
     bool HasWitness() const {
         return std::any_of(tx().vin.begin(), tx().vin.end(), [](const CTxIn & txin){ return !txin.scriptWitness.IsNull(); });
     }
+
+    /// Added by Calin -- to support Core. Not cached, computed on-the-fly (this is not the case in Core code)
+    TxHash GetWitnessHash() const { return TxHash{ComputeWitnessHash()}; }
 
     /// Added by Calin to support Litecoin
     bool HasMimble() const { return static_cast<bool>(tx().mw_blob); }
@@ -409,9 +417,6 @@ private:
     /** Memory only. */
     const uint256 hash;
 
-    uint256 ComputeHash() const;
-    uint256 ComputeWitnessHash() const;
-
 public:
     /** Construct a CTransaction that qualifies as IsNull() */
     CTransaction();
@@ -432,8 +437,7 @@ public:
     const TxHash GetHash() const { return TxHash(hash); }
     /// added by Calin to avoid extra copying
     const uint256 &GetHashRef() const { return hash; }
-    /// Added by Calin -- to support Core. Not cached, computed on-the-fly (this is not the case in Core code)
-    const TxHash GetWitnessHash() const { return TxHash{ComputeWitnessHash()}; }
+    // See: base class GetWitnessHash() for an additional getter...
 };
 
 /**
@@ -451,9 +455,11 @@ public:
     CMutableTransaction();
     CMutableTransaction(const CTransaction &tx);
 
-    template <typename Stream> void Unserialize(Stream &s) { UnserializeTransaction(*this, s); }
+    template <typename Stream>
+    void Unserialize(Stream &s) { UnserializeTransaction(*this, s); }
 
-    template <typename Stream> CMutableTransaction(deserialize_type, Stream &s) { Unserialize(s); }
+    template <typename Stream>
+    CMutableTransaction(deserialize_type, Stream &s) { Unserialize(s); }
 
     /**
      * Compute the id and hash of this CMutableTransaction. This is computed on
@@ -462,10 +468,10 @@ public:
      */
     TxId GetId() const;
     TxHash GetHash() const;
-    TxHash GetWitnessHash() const; ///< Added by Calin to support Core
+    // See: base class GetWitnessHash() for an additional getter...
 };
 
-typedef std::shared_ptr<const CTransaction> CTransactionRef;
+using CTransactionRef = std::shared_ptr<const CTransaction>;
 static inline CTransactionRef MakeTransactionRef() {
     return std::make_shared<const CTransaction>();
 }

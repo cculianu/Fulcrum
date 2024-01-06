@@ -50,59 +50,16 @@ std::string CTxOut::ToString(bool fVerbose) const {
                      tokenDataPtr ? (" " + tokenDataPtr->ToString(fVerbose)) : "");
 }
 
-CMutableTransaction::CMutableTransaction()
-    : nVersion(CTransaction::CURRENT_VERSION), nLockTime(0) {}
-CMutableTransaction::CMutableTransaction(const CTransaction &tx)
-    : nVersion(tx.nVersion), vin(tx.vin), vout(tx.vout),
-      nLockTime(tx.nLockTime), mw_blob(tx.mw_blob) {}
-
-static uint256 ComputeCMutableTransactionHash(const CMutableTransaction &tx) {
-    return SerializeHash(tx, SER_GETHASH, 0);
+template <class Derived>
+uint256 CTransactionBase<Derived>::ComputeHash(bool segwit) const {
+    return SerializeHash(tx(), SER_GETHASH, segwit ? SERIALIZE_TRANSACTION_USE_WITNESS : 0);
 }
-
-static uint256 ComputeCMutableTransactionWitnessHash(const CMutableTransaction &tx) {
-    return SerializeHash(tx, SER_GETHASH, SERIALIZE_TRANSACTION_USE_WITNESS);
-}
-
-TxId CMutableTransaction::GetId() const {
-    return TxId(ComputeCMutableTransactionHash(*this));
-}
-
-TxHash CMutableTransaction::GetHash() const {
-    return TxHash(ComputeCMutableTransactionHash(*this));
-}
-
-TxHash CMutableTransaction::GetWitnessHash() const {
-    return TxHash(ComputeCMutableTransactionWitnessHash(*this));
-}
-
-uint256 CTransaction::ComputeHash() const {
-    return SerializeHash(*this, SER_GETHASH, 0);
-}
-
-uint256 CTransaction::ComputeWitnessHash() const {
-    return SerializeHash(*this, SER_GETHASH, SERIALIZE_TRANSACTION_USE_WITNESS);
-}
-
-/**
- * For backward compatibility, the hash is initialized to 0.
- * TODO: remove the need for this default constructor entirely.
- */
-CTransaction::CTransaction()
-    : nVersion(CTransaction::CURRENT_VERSION), vin(), vout(), nLockTime(0),
-      mw_blob{}, hash() {}
-CTransaction::CTransaction(const CMutableTransaction &tx)
-    : nVersion(tx.nVersion), vin(tx.vin), vout(tx.vout),
-      nLockTime(tx.nLockTime), mw_blob(tx.mw_blob), hash(ComputeHash()) {}
-CTransaction::CTransaction(CMutableTransaction &&tx)
-    : nVersion(tx.nVersion), vin(std::move(tx.vin)), vout(std::move(tx.vout)),
-      nLockTime(tx.nLockTime), mw_blob(std::move(tx.mw_blob)), hash(ComputeHash()) {}
 
 template <class Derived>
 size_t CTransactionBase<Derived>::GetTotalSize(const bool segwit, const bool mweb) const {
     return GetSerializeSize(tx(), PROTOCOL_VERSION
-                                    | (segwit ? SERIALIZE_TRANSACTION_USE_WITNESS : 0)
-                                    | (mweb ? SERIALIZE_TRANSACTION_USE_MWEB : 0));
+                                      | (segwit ? SERIALIZE_TRANSACTION_USE_WITNESS : 0)
+                                      | (mweb ? SERIALIZE_TRANSACTION_USE_MWEB : 0));
 }
 
 template <class Derived>
@@ -143,10 +100,8 @@ std::string CTransactionBase<Derived>::ToString(bool fVerbose) const {
     const auto &me = tx();
     std::string str;
     const std::string classname = std::is_same_v<Derived, CMutableTransaction> ? "CMutableTransaction" : "CTransaction";
-    str += strprintf("%s(txid=%s, ver=%d, vin.size=%u, vout.size=%u, "
-                     "nLockTime=%u)\n",
-                     classname,
-                     me.GetId().ToString().substr(0, cutoff), me.nVersion, me.vin.size(),
+    str += strprintf("%s(txid=%s, ver=%d, vin.size=%u, vout.size=%u, nLockTime=%u)\n",
+                     classname, me.GetId().ToString().substr(0, cutoff), me.nVersion, me.vin.size(),
                      me.vout.size(), me.nLockTime);
     for (const auto &nVin : me.vin) {
         str += "    " + nVin.ToString(fVerbose) + "\n";
@@ -157,10 +112,32 @@ std::string CTransactionBase<Derived>::ToString(bool fVerbose) const {
     return str;
 }
 
-
 // Explicit template instantiations (required)
 template class CTransactionBase<CTransaction>;
 template class CTransactionBase<CMutableTransaction>;
+
+
+CMutableTransaction::CMutableTransaction()
+    : nVersion(CTransaction::CURRENT_VERSION), nLockTime(0) {}
+
+CMutableTransaction::CMutableTransaction(const CTransaction &tx)
+    : nVersion(tx.nVersion), vin(tx.vin), vout(tx.vout), nLockTime(tx.nLockTime), mw_blob(tx.mw_blob) {}
+
+TxId CMutableTransaction::GetId() const { return TxId(ComputeHash(false)); }
+TxHash CMutableTransaction::GetHash() const { return TxHash(ComputeHash(false)); }
+
+/**
+ * For backward compatibility, the hash is initialized to 0.
+ * TODO: remove the need for this default constructor entirely.
+ */
+CTransaction::CTransaction()
+    : nVersion(CTransaction::CURRENT_VERSION), vin(), vout(), nLockTime(0), mw_blob{}, hash() {}
+CTransaction::CTransaction(const CMutableTransaction &tx)
+    : nVersion(tx.nVersion), vin(tx.vin), vout(tx.vout), nLockTime(tx.nLockTime), mw_blob(tx.mw_blob),
+      hash(ComputeHash(false)) {}
+CTransaction::CTransaction(CMutableTransaction &&tx)
+    : nVersion(tx.nVersion), vin(std::move(tx.vin)), vout(std::move(tx.vout)), nLockTime(tx.nLockTime),
+      mw_blob(std::move(tx.mw_blob)), hash(ComputeHash(false)) {}
 
 } // end namespace bitcoin
 #ifdef __clang__

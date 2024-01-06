@@ -1504,8 +1504,7 @@ uint256 GetOutputsHash(const CTransaction &txTo) {
 
 } // namespace
 
-PrecomputedTransactionData::PrecomputedTransactionData(
-    const CTransaction &txTo) {
+PrecomputedTransactionData::PrecomputedTransactionData(const CTransaction &txTo) {
     hashPrevouts = GetPrevoutHash(txTo);
     hashSequence = GetSequenceHash(txTo);
     hashOutputs = GetOutputsHash(txTo);
