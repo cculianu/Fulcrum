@@ -164,6 +164,15 @@ QVariantMap TimersByNameMixin::activeTimerMapForStats() const
     return ret;
 }
 
+bool TimersByNameMixin::restartTimer(const QString &name)
+{
+    if (auto it = _timerMap.find(name); it != _timerMap.end()) {
+        it->get()->start(); // restart from "now"
+        return true;
+    }
+    return false;
+}
+
 /// --- StatsMixin
 StatsMixin::~StatsMixin() {}
 

@@ -85,11 +85,11 @@ public:
     }
 
 signals:
-    /// Emitted whenever bitcoind is detected to be up-to-date, and everything is synched up.
+    /// Emitted whenever bitcoind is detected to be up-to-date, and everything (except mempool) is synched up.
     /// note this is not emitted during regular polling, but only after `synchronizing` was emitted previously.
     void upToDate();
-    /// Emitted whenever we begin synching to bitcoind. After this completes successfully, upToDate will be emitted
-    /// exactly once.
+    /// Emitted whenever we begin dl'ing blocks from bitcoind. After this completes successfully, upToDate will be
+    /// emitted exactly once.
     /// This signal may be emitted multiple times if there were errors and we are periodically retrying.
     void synchronizing();
     /// Emitted whenever we failed to synchronize to bitcoind.
@@ -116,6 +116,10 @@ signals:
 
     /// Emitted whenever we begin downloading blocks, and whenever we end the last DownloadBlocksTask (for whatever reason)
     void downloadingBlocks(bool b);
+
+    /// Emitted after a successful mempool synch. This is emitted more often than upToDate() (which is only emitted
+    /// when new blocks arrive); this is emitted every time we successfully poll the mempool for new txns.
+    void synchedMempool();
 
 protected:
     Stats stats() const override; // from StatsMixin
@@ -217,6 +221,9 @@ private:
     /// before the first SynchMempool after we receive a new block, then is persisted for all the SynchMempools
     /// for that block, until a new block arrives, then is cleared again.
     std::unordered_set<TxHash, HashHasher> mempoolIgnoreTxns;
+
+    /// Used to update the mempool fee histogram early right after the synchedMempool() signal is emitted
+    bool needFeeHistogramUpdate = true;
 
 private slots:
     /// Stops the zmqHashBlockNotifier; called if we received an empty hashblock endpoint address from BitcoinDMgr or
