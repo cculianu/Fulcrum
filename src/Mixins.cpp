@@ -105,7 +105,7 @@ void TimersByNameMixin::callOnTimerSoon(int ms, const QString &name, const std::
 {
     if (auto it = _timerMap.find(name); it != _timerMap.end()) {
         if (force) {
-            it->get()->stop(); // immediately stop timer
+            it.value()->stop(); // immediately stop timer
             it = _timerMap.erase(it); // shared_ptr refs will go away immediately, which ends up calling deleteLater on timer
             callOnTimerSoon(ms, name, func, false, ttype); // immediately call self recursively once to re-enqueue timer
         }
@@ -167,7 +167,7 @@ QVariantMap TimersByNameMixin::activeTimerMapForStats() const
 bool TimersByNameMixin::restartTimer(const QString &name)
 {
     if (auto it = _timerMap.find(name); it != _timerMap.end()) {
-        it->get()->start(); // restart from "now"
+        it.value()->start(); // restart from "now"
         return true;
     }
     return false;
