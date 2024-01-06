@@ -15,7 +15,6 @@
 
 #include <algorithm>
 #include <optional>
-#include <type_traits>
 #include <utility>
 
 #ifdef __clang__
@@ -336,10 +335,54 @@ inline void SerializeTransaction(const TxType &tx, Stream &s) {
 }
 
 /**
+ * A CRTP-based refactor by Calin to unify common methods and other logic here for both CTransaction and CMutableTransaction.
+ */
+template <class Derived>
+class CTransactionBase {
+    const Derived &tx() const { return *static_cast<const Derived *>(this); }
+
+public:
+    template <typename Stream> void Serialize(Stream &s) const { SerializeTransaction(tx(), s); }
+
+    /**
+     * Get the total transaction size in bytes.
+     * @return Total transaction size in bytes, with or without segwit and/or mweb data included
+     */
+    size_t GetTotalSize(bool segwit = false, bool mweb = false) const;
+
+    // Added by Calin to calculate virtual size for a SegWit txn which is: (3 * stripped_size + total_size) / 4
+    size_t GetVirtualSize(std::optional<size_t> unstrippedSizeIfKnown = std::nullopt) const;
+
+    friend bool operator==(const Derived &a, const Derived &b) { return a.GetId() == b.GetId(); }
+    friend bool operator!=(const Derived &a, const Derived &b) { return !(a == b); }
+
+    bool IsNull() const { return tx().vin.empty() && tx().vout.empty(); }
+    bool IsCoinBase() const { return tx().vin.size() == 1 && tx().vin[0].prevout.IsNull(); }
+
+    // Return sum of txouts.
+    Amount GetValueOut() const;
+    // Note: GetValueIn() is a method on CCoinsViewCache, because inputs must be known to compute value in.
+
+    /// Added by Calin to support Core
+    bool HasWitness() const {
+        return std::any_of(tx().vin.begin(), tx().vin.end(), [](const CTxIn & txin){ return !txin.scriptWitness.IsNull(); });
+    }
+
+    /// Added by Calin to support Litecoin
+    bool HasMimble() const { return static_cast<bool>(tx().mw_blob); }
+    /// Litecoin only: "IsHogEx" is defined as an "IsNull" but present mimble blob. This tells the block
+    /// deserializer later to deserialize mimble block extention data at the end of the CBlock stream.
+    bool IsHogEx() const { return HasMimble() && tx().mw_blob->size() == 1 && tx().mw_blob->front() == 0; }
+    bool IsMWEBOnly() const { return HasMimble() && tx().mw_blob->size() > 1 && IsNull(); }
+
+    std::string ToString(bool fVerbose = false) const;
+};
+
+/**
  * The basic transaction that is broadcasted on the network and contained in
  * blocks. A transaction can contain multiple inputs and outputs.
  */
-class CTransaction {
+class CTransaction : public CTransactionBase<CTransaction> {
 public:
     // Default transaction version.
     static constexpr int32_t CURRENT_VERSION = 2;
@@ -377,20 +420,13 @@ public:
     explicit CTransaction(const CMutableTransaction &tx);
     explicit CTransaction(CMutableTransaction &&tx);
 
-    template <typename Stream> inline void Serialize(Stream &s) const {
-        SerializeTransaction(*this, s);
-    }
-
     /**
      * This deserializing constructor is provided instead of an Unserialize
      * method. Unserialize is not possible, since it would require overwriting
      * const fields.
      */
     template <typename Stream>
-    CTransaction(deserialize_type, Stream &s)
-        : CTransaction(CMutableTransaction(deserialize, s)) {}
-
-    bool IsNull() const { return vin.empty() && vout.empty(); }
+    CTransaction(deserialize_type, Stream &s) : CTransaction(CMutableTransaction(deserialize, s)) {}
 
     const TxId GetId() const { return TxId(hash); }
     const TxHash GetHash() const { return TxHash(hash); }
@@ -398,49 +434,12 @@ public:
     const uint256 &GetHashRef() const { return hash; }
     /// Added by Calin -- to support Core. Not cached, computed on-the-fly (this is not the case in Core code)
     const TxHash GetWitnessHash() const { return TxHash{ComputeWitnessHash()}; }
-
-    // Return sum of txouts.
-    Amount GetValueOut() const;
-    // GetValueIn() is a method on CCoinsViewCache, because
-    // inputs must be known to compute value in.
-
-    /**
-     * Get the total transaction size in bytes.
-     * @return Total transaction size in bytes, with or without segwit and/or mweb data included
-     */
-    size_t GetTotalSize(bool segwit = false, bool mweb = false) const;
-
-    bool IsCoinBase() const {
-        return (vin.size() == 1 && vin[0].prevout.IsNull());
-    }
-
-    friend bool operator==(const CTransaction &a, const CTransaction &b) {
-        return a.hash == b.hash;
-    }
-
-    friend bool operator!=(const CTransaction &a, const CTransaction &b) {
-        return a.hash != b.hash;
-    }
-
-    std::string ToString(bool fVerbose = false) const;
-
-    /// Added by Calin to support Core
-    bool HasWitness() const {
-        return std::any_of(vin.begin(), vin.end(), [](const CTxIn & txin){ return !txin.scriptWitness.IsNull(); });
-    }
-
-    /// Added by Calin to support Litecoin
-    bool HasMimble() const { return bool(mw_blob); }
-    /// Litecoin only: "IsHogEx" is defined as an "IsNull" but present mimble blob. This tells the block
-    /// deserializer later to deserialize mimble block extention data at the end of the CBlock stream.
-    bool IsHogEx() const { return HasMimble() && mw_blob->size() == 1 && *mw_blob->data() == 0; }
-    bool IsMWEBOnly() const { return HasMimble() && mw_blob->size() > 1 && vin.empty() && vout.empty(); }
 };
 
 /**
  * A mutable version of CTransaction.
  */
-class CMutableTransaction {
+class CMutableTransaction : public CTransactionBase<CMutableTransaction> {
 public:
     int32_t nVersion;
     std::vector<CTxIn> vin;
@@ -452,18 +451,9 @@ public:
     CMutableTransaction();
     CMutableTransaction(const CTransaction &tx);
 
-    template <typename Stream> inline void Serialize(Stream &s) const {
-        SerializeTransaction(*this, s);
-    }
+    template <typename Stream> void Unserialize(Stream &s) { UnserializeTransaction(*this, s); }
 
-    template <typename Stream> inline void Unserialize(Stream &s) {
-        UnserializeTransaction(*this, s);
-    }
-
-    template <typename Stream>
-    CMutableTransaction(deserialize_type, Stream &s) {
-        Unserialize(s);
-    }
+    template <typename Stream> CMutableTransaction(deserialize_type, Stream &s) { Unserialize(s); }
 
     /**
      * Compute the id and hash of this CMutableTransaction. This is computed on
@@ -473,27 +463,6 @@ public:
     TxId GetId() const;
     TxHash GetHash() const;
     TxHash GetWitnessHash() const; ///< Added by Calin to support Core
-
-    size_t GetTotalSize(bool segwit = false, bool mweb = false) const;
-
-    friend bool operator==(const CMutableTransaction &a,
-                           const CMutableTransaction &b) {
-        return a.GetId() == b.GetId();
-    }
-
-    /// Added by Calin to support Core
-    bool HasWitness() const {
-        return std::any_of(vin.begin(), vin.end(), [](const CTxIn & txin){ return !txin.scriptWitness.IsNull(); });
-    }
-
-    /// Added by Calin to support Litecoin
-    bool HasMimble() const { return bool(mw_blob); }
-    /// Litecoin only: "IsHogEx" is defined as an "IsNull" but present mimble blob. This tells the block
-    /// deserializer later to deserialize mimble block extention data at the end of the CBlock stream.
-    bool IsHogEx() const { return HasMimble() && mw_blob->size() == 1 && *mw_blob->data() == 0; }
-    bool IsMWEBOnly() const { return HasMimble() && mw_blob->size() > 1 && vin.empty() && vout.empty(); }
-
-    std::string ToString() const { return CTransaction(*this).ToString(); }
 };
 
 typedef std::shared_ptr<const CTransaction> CTransactionRef;
@@ -518,23 +487,6 @@ struct PrecomputedTransactionData {
 
     explicit PrecomputedTransactionData(const CTransaction &tx);
 };
-
-// Added by Calin to calculate virtual size for a SegWit txn which is: (3 * stripped_size + total_size) / 4
-template <typename TxType>
-size_t GetTxVirtualSize(const TxType &tx, const std::optional<size_t> unstrippedSizeIfKnown = std::nullopt) {
-    static_assert(std::is_same_v<TxType, CTransaction> || std::is_same_v<TxType, CMutableTransaction>);
-    constexpr size_t WITNESS_SCALE_FACTOR = 4; // Taken from Core consensus/consensus.h, added by Calin here.
-
-    size_t weight = tx.GetTotalSize(false, false); // stripped of segwit and/or mweb
-
-    if (unstrippedSizeIfKnown.has_value()) {
-        weight += *unstrippedSizeIfKnown;
-    } else {
-        weight += tx.GetTotalSize(true, true); // add unstripped size (include segwit and/or mweb data)
-    }
-
-    return weight / WITNESS_SCALE_FACTOR;
-}
 
 } // end namespace bitcoin
 

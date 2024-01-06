@@ -9,6 +9,8 @@
 #include "tinyformat.h"
 #include "utilstrencodings.h"
 
+#include <type_traits>
+
 #ifdef __clang__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunused-parameter"
@@ -96,44 +98,69 @@ CTransaction::CTransaction(CMutableTransaction &&tx)
     : nVersion(tx.nVersion), vin(std::move(tx.vin)), vout(std::move(tx.vout)),
       nLockTime(tx.nLockTime), mw_blob(std::move(tx.mw_blob)), hash(ComputeHash()) {}
 
-Amount CTransaction::GetValueOut() const {
+template <class Derived>
+size_t CTransactionBase<Derived>::GetTotalSize(const bool segwit, const bool mweb) const {
+    return GetSerializeSize(tx(), PROTOCOL_VERSION
+                                    | (segwit ? SERIALIZE_TRANSACTION_USE_WITNESS : 0)
+                                    | (mweb ? SERIALIZE_TRANSACTION_USE_MWEB : 0));
+}
+
+template <class Derived>
+size_t CTransactionBase<Derived>::GetVirtualSize(const std::optional<size_t> unstrippedSizeIfKnown) const {
+    constexpr size_t WITNESS_SCALE_FACTOR = 4; // Taken from Core consensus/consensus.h, added by Calin here.
+
+    // The weight = (stripped_size * 4) + witness_size formula, using only serialization with and without witness data.
+    // As witness_size is equal to total_size - stripped_size, this formula is identical to:
+    // weight = (stripped_size * 3) + total_size.
+
+    size_t weight = tx().GetTotalSize(false, false) * (WITNESS_SCALE_FACTOR - 1); // stripped of segwit and/or mweb
+
+    if (unstrippedSizeIfKnown.has_value()) {
+        weight += *unstrippedSizeIfKnown;
+    } else {
+        weight += tx().GetTotalSize(true, true); // add unstripped size (include segwit and/or mweb data)
+    }
+
+    return weight / WITNESS_SCALE_FACTOR; // vsize = weight / 4
+}
+
+template <class Derived>
+Amount CTransactionBase<Derived>::GetValueOut() const {
+    const auto &vout = tx().vout;
     Amount nValueOut = Amount::zero();
     for (const auto &tx_out : vout) {
         nValueOut += tx_out.nValue;
         if (!MoneyRange(tx_out.nValue) || !MoneyRange(nValueOut)) {
-            throw std::runtime_error(std::string(__func__) +
-                                     ": value out of range");
+            throw std::runtime_error(std::string(__func__) + ": value out of range");
         }
     }
     return nValueOut;
 }
 
-template <typename TxType>
-size_t GetTotalSizeCommon(const TxType &tx, bool segwit, bool mweb) {
-    static_assert(std::is_same_v<TxType, CTransaction> || std::is_same_v<TxType, CMutableTransaction>);
-    return GetSerializeSize(tx, PROTOCOL_VERSION
-                                    | (segwit ? SERIALIZE_TRANSACTION_USE_WITNESS : 0)
-                                    | (mweb ? SERIALIZE_TRANSACTION_USE_MWEB : 0));
-}
-
-size_t CTransaction::GetTotalSize(bool segwit, bool mweb) const { return GetTotalSizeCommon(*this, segwit, mweb); }
-size_t CMutableTransaction::GetTotalSize(bool segwit, bool mweb) const { return GetTotalSizeCommon(*this, segwit, mweb); }
-
-std::string CTransaction::ToString(bool fVerbose) const {
+template <class Derived>
+std::string CTransactionBase<Derived>::ToString(bool fVerbose) const {
     const std::string::size_type cutoff = fVerbose ? std::string::npos : 10;
+    const auto &me = tx();
     std::string str;
-    str += strprintf("CTransaction(txid=%s, ver=%d, vin.size=%u, vout.size=%u, "
+    const std::string classname = std::is_same_v<Derived, CMutableTransaction> ? "CMutableTransaction" : "CTransaction";
+    str += strprintf("%s(txid=%s, ver=%d, vin.size=%u, vout.size=%u, "
                      "nLockTime=%u)\n",
-                     GetId().ToString().substr(0, cutoff), nVersion, vin.size(),
-                     vout.size(), nLockTime);
-    for (const auto &nVin : vin) {
+                     classname,
+                     me.GetId().ToString().substr(0, cutoff), me.nVersion, me.vin.size(),
+                     me.vout.size(), me.nLockTime);
+    for (const auto &nVin : me.vin) {
         str += "    " + nVin.ToString(fVerbose) + "\n";
     }
-    for (const auto &nVout : vout) {
+    for (const auto &nVout : me.vout) {
         str += "    " + nVout.ToString(fVerbose) + "\n";
     }
     return str;
 }
+
+
+// Explicit template instantiations (required)
+template class CTransactionBase<CTransaction>;
+template class CTransactionBase<CMutableTransaction>;
 
 } // end namespace bitcoin
 #ifdef __clang__

@@ -480,7 +480,7 @@ void SynchMempoolTask::doDLNextTx()
             // Save size now -- this is needed later to calculate fees and for everything else.
             tx->sizeBytes = unsigned(expectedLen);
             if (isSegWit) {
-                tx->vsizeBytes = bitcoin::GetTxVirtualSize(ctx, tx->sizeBytes);
+                tx->vsizeBytes = ctx.GetVirtualSize(tx->sizeBytes);
             } else {
                tx->vsizeBytes = tx->sizeBytes;
             }
