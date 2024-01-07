@@ -3991,16 +3991,19 @@ auto Storage::mutableMempool() -> std::pair<Mempool &, ExclusiveLockGuard>
 
 void Storage::refreshMempoolHistogram()
 {
+    Tic t0;
     Mempool::FeeHistogramVec hist;
+    // shared lock
     {
-        // shared lock
         auto [mempool, lock] = this->mempool();
-        auto histTmp = mempool.calcCompactFeeHistogram();
-        hist.swap(histTmp);
+        hist = mempool.calcCompactFeeHistogram();
     }
     // lock exclusively to do the final swap
-    ExclusiveLockGuard g(p->mempoolLock);
-    p->mempoolFeeHistogram.swap(hist);
+    {
+        ExclusiveLockGuard g(p->mempoolLock);
+        p->mempoolFeeHistogram.swap(hist);
+    }
+    if (t0.msec() >= 10) DebugM("Storage::refreshMempoolHistogram took ", t0.msecStr(), " msec");
 }
 
 auto Storage::mempoolHistogram() const -> Mempool::FeeHistogramVec

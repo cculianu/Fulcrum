@@ -25,6 +25,8 @@
 
 #include <cstring>
 #include <string>
+#include <tuple>
+#include <utility>
 #include <vector>
 
 namespace bitcoin {
@@ -3732,6 +3734,136 @@ namespace {
                             charstrval, txval);
             ss2 >> methodtest3;
             BOOST_CHECK(methodtest3 == methodtest4);
+        };
+
+        BOOST_AUTO_TEST_CASE(txn_ser_deser) {
+            using TestTup = std::tuple<const char *, const char *, bool, bool, size_t>;
+            auto tests = {
+                // Bitcoin Cash & Bitcoin Legacy txn
+                TestTup{R"(01000000016bff7fcd4f8565ef406dd5d63d4ff94f318fe82027fd4dc451b04474019f74b4000000008c49304602
+                           2100da0dc6aecefe1e06efdf05773757deb168820930e3b0d03f46f5fcf150bf990c022100d25b5c87040076e4f2
+                           53f8262e763e2dd51e7ff0be157727c4bc42807f17bd39014104e6c26ef67dc610d2cd192484789a6cf9aea9930b
+                           944b7e2db5342b9d9e5b9ff79aff9a2ee1978dd7fd01dfc522ee02283d3b06a9d03acf8096968d7dbb0f9178ffff
+                           ffff028ba7940e000000001976a914badeecfdef0507247fc8f74241d73bc039972d7b88ac4094a8020000000019
+                           76a914c10932483fec93ed51f5fe95e72559f2cc7043f988ac00000000)",
+                        "e2769b09e784f32f62ef849763d4f45b98e07ba658647343b915ff832b110436",
+                        false, false, 259},
+                // A Bitcoin SegWit txn
+                TestTup{R"(020000000001017fca10937571ed2ae3a67005f831c307b7f502f9c5f6cae42fcbf2bdf7b457960200000000fdffffff02d9bd0000000000001976a9
+                           14d3d71dcf7fa27bb9375f52ffad5162c0d0da7ee988ac4dc20e0000000000220020e8c919a22e5fc0c47c068b1b607dcf6fa4550198e85a2cd87041
+                           d050c6eccd3904004730440220595f52506c43f8a95cb6d9646d7b4fc0f0ca069187062b5d560fa6d93871a2ed02200433af68e712a77cc79eb56c65
+                           cd9d87714570fb78f83e25c575650f0203c3cc01473044022050737e97df6987195d6640324dba7db497c7699d39cebc570f6998b4cd8d4767022046
+                           673edf45ac3c6464883abaa413432a31d080a6e94885d9bf79e129c7fb96c90169522103522f48da32df8881f8886da53d817ce311df251455747c23
+                           3b1aaee2066e33352103552a0b1c0465a14754c3298d5dd3bbbdb74f54ba75493e08f556e64ac1dbab7c210374f3e239bf6a0b988d6bbd1798fa3282
+                           9ceec30f4d345b4be172190d9e805ece53ae00000000)",
+                        "fd525706b54f42498ad2c51236e3aa1b74ec2dd043a1b7bbc443c06455414a31",
+                        true, false, 191},
+                // A Bitcoin SegWit txn
+                TestTup{R"(01000000000101ba0ef439a946f417940dd0fb26c54692a00e5f263f63af2a837fc25e6250580c0100000000ffffffff0df769080000000000160014
+                           0b6bca0325d34401c96b457d1213997ad0003b93b9217a1600000000160014dc6bf86354105de2fcd9868a2b0376d6731cb92f247e7a000000000016
+                           0014a16fc51def44e43b8bcadf37442c8d483345d623384b02000000000017a91489a37047517719e3d6fc088df3ead8d94ce3962a87389d03000000
+                           0000160014f1ffc0b350d1b6af453f014fa091f6df1b54695102c802000000000022512028526cbd06ab270e20d52415499d6cdeb993016ea3a8ce8c
+                           0ff0e4057e8c155f9075030000000000160014fd40f7464d08fc547610fdc63a0cf7310d35e6fbb15c1c0000000000160014cf7624316cdd383c337b
+                           172df3e90348084bb951d7e608000000000022512018d9736f0f1d68401b3039a4d75800914f1a1828b60a1aa910b7d7afd220355e9bdbb200000000
+                           001976a914042d15f069fdecbe39e86f58e7cc53ea3f3cc18888ac6e210c00000000001976a9149b0b69131e5677aba4262659ba4b53cd07b167f488
+                           ace97006000000000017a914dac9d62d4eead1a1a93ecbefa11bccc9ffadeab78790d00300000000001600148c2aef88d249738a69918bd452a8780b
+                           3214cb9502473044022024b90895e4f791f5a09c5a56b8df5e870a80c4754db6d270d0337b26ef6e6b9802205ec897137df02d8d2b47c39d005c399f
+                           297db618f17e210d06cdd39cf07f4a94012102174ee672429ff94304321cdae1fc1e487edf658b34bd1d36da03761658a2bb0900000000)",
+                        "6f5119f2b8172ec27500b14bc452231d73b339762491e68c5ee5e6abc43769c9",
+                        true, false, 513},
+                // A Bitcoin SegWit txn
+                TestTup{R"(01000000000105434572a59309747eaaad5a4f0b039ce085821325e099173ae1cbd9db4fe8872a00000000171600146948ad786cfdd82d4150c8a0e6
+                           96a138916c3e37ffffffff22fabb0c1cb2fede0be9561b38e87f83294c72dc9c6a6b96803d9496eef93df40b00000017160014a881b2c49c31aea9eb
+                           55d5d968f5b64170837b63ffffffff434572a59309747eaaad5a4f0b039ce085821325e099173ae1cbd9db4fe8872a03000000171600146948ad786c
+                           fdd82d4150c8a0e696a138916c3e37ffffffff434572a59309747eaaad5a4f0b039ce085821325e099173ae1cbd9db4fe8872a020000001716001469
+                           48ad786cfdd82d4150c8a0e696a138916c3e37ffffffff22fabb0c1cb2fede0be9561b38e87f83294c72dc9c6a6b96803d9496eef93df40a00000017
+                           160014a881b2c49c31aea9eb55d5d968f5b64170837b63ffffffff02328e4f160000000016001453e5753a4e47fe67f69e9a33f5635b4cdad76306ee
+                           e04cba000000001976a914359c1dd488b69b606ece40d820aa324374a4565488ac0247304402207ac00e052d7e381dc3d02a2009e6ca6d57895c087d
+                           c244d217e532b3fdd4494a02200da7664e68f074ad0bc800c8070e67a3e3f75af0f13ea1edc4ed36efbc1902cc0121039af70f4f593641a180ef5742
+                           3ba83ac3832ec6aad14ea4c36883b110624372d30247304402201a678b9e9ec4e736738b2eec160a9c59a18cbbb4d88dbd3674a43d6f7be0a9e10220
+                           01fa1a893b2c3a5811ca1bbfa22f12b3db91d65bcab1cab7738334b72f9d2937012103025f0a710c685e3a1941b9479b2dfc934ddf72b3666e0b19a7
+                           c96f32af290e170247304402205d3433b1ab5c54963868f73175d788337c080213e720261acd6b00c2437caece022062242f1a6b74d3c5eebbd8712f
+                           58d3edbd8ec8a0966289d4c932b3f06fdcf0990121039af70f4f593641a180ef57423ba83ac3832ec6aad14ea4c36883b110624372d3024730440220
+                           6243711bb76ca0430b33289a66c6279bc6db2c08a6816be441054cfc7aad12fd02205513d55d4dac868be50f87e6747f68eb52bf96135ab2e2d7747d
+                           9a9ba3f1ce360121039af70f4f593641a180ef57423ba83ac3832ec6aad14ea4c36883b110624372d30247304402204d69a33091dabfd068de81e5cb
+                           6a48cd49b7c2c3df8a20eb27f8f6ca70d2037502201ab1ee98611aae0eec3e071532057870a031be18594c303edf455c9776244ad8012103025f0a71
+                           0c685e3a1941b9479b2dfc934ddf72b3666e0b19a7c96f32af290e1700000000)",
+                        "4a3c65776ea58fde4bf07f5cffcd8c87d43f9efa4cbe2336dc56dbd7f19789fd",
+                        true, false, 529},
+                // A Bitcoin SegWit + TapScript txn
+                TestTup{R"(0200000000010ce5313805cd7b8c29483fb1e3623cc08a583333dba43fd338b275c414abecff5e0300000000ffffffff1ebd47bdc9ddde53335d97b2
+                           a504ea45f497f3da2b5fbc1cb6cf23228fe414270000000000ffffffff29e04008cf3d701b6141561926303064065ba93481561f44465c750fd6a7ef
+                           440000000000ffffffff93bd7cb61712298b1c3a6b4dd7019893b74d319762a560781a0def03eff89a070000000000ffffffffe51dcbf7cb7dcee0ed
+                           08abea7257a28fbbe539e4b21160cc95ec2d0e9af868ed0000000000ffffffffed49431722b1cc30a9fd71580e9a943cbe8ea866e62370c12651ebd0
+                           899ce1dd0000000000ffffffff3cc64d75cafb06b89df77b4900b319cb96b6bd78f8d79110cc1bcb181e804a8a0000000000ffffffff6918743d094b
+                           63ec0f78e4c19811ca062f7e935b81911c88e575e694a7edbc1c0000000000ffffffff4cdd674178f4b5282cf844bd44c0d9056d256b6dd17b810a78
+                           22de55d4d363ad0000000000ffffffff5d68062d1df544183e006a31d7221f3f19c934eecc9f0c3175f08f216e10711d0000000000ffffffff9a3661
+                           7eb0394ef3059e8b2704190b81a2627958cdd2d61fd4eaa97935a3f5cb0000000000ffffffff08962e38d40df032b3b824dfc18fa5e620840e2e5403
+                           5b3fd9c455ac3a3b13b90100000000ffffffff0e2202000000000000225120c95a9df7d4d38d256ede84b94de84a88cb0701a532d0c6abf5b174b2e8
+                           f9cf071bd10000000000001600142df828e185f63f390d38efdfa8f5b9f898b43d3c05d10000000000002251209dd907844a6be57cbff09acee3dde5
+                           2f9611d8d71e139eb32d0d77a4ce521a1605d10000000000002251209dd907844a6be57cbff09acee3dde52f9611d8d71e139eb32d0d77a4ce521a16
+                           05d10000000000002251209dd907844a6be57cbff09acee3dde52f9611d8d71e139eb32d0d77a4ce521a1605d10000000000002251209dd907844a6b
+                           e57cbff09acee3dde52f9611d8d71e139eb32d0d77a4ce521a1605d1000000000000225120d295632891ae2d8cf661be25d5ff3a1d51fa19d897a262
+                           b5ad0557e6f28a5c3405d1000000000000225120d295632891ae2d8cf661be25d5ff3a1d51fa19d897a262b5ad0557e6f28a5c3405d1000000000000
+                           225120d295632891ae2d8cf661be25d5ff3a1d51fa19d897a262b5ad0557e6f28a5c3405d1000000000000225120d295632891ae2d8cf661be25d5ff
+                           3a1d51fa19d897a262b5ad0557e6f28a5c3405d1000000000000225120d295632891ae2d8cf661be25d5ff3a1d51fa19d897a262b5ad0557e6f28a5c
+                           340000000000000000116a0150015403abbd6900000531303030308a34000000000000225120080ed232d2aff2f63d956576db394f477df7f0a9bb4e
+                           e5b75ec36f1d1b43c5d74560010000000000225120c95a9df7d4d38d256ede84b94de84a88cb0701a532d0c6abf5b174b2e8f9cf070140ce93177784
+                           30cb375103ba069593e1ba1ee1d27f6cd81ada27fec6dacfaf34b100c7dec0d94b8a511fb0f68b93caa02329f25f4fd8f4711f159a5c1c183edef802
+                           483045022100ea97fda55e7422d3f4aeb9e3d1470b8117f2597d68ab9727dd548925e87f3333022049db2c06d518ea8fb1ce8af4ffdc7d9588dc78f3
+                           0597c3480eb589bbcd3162d5832102d420bfc1e090507253374e8cb8427f9e63cd1a3e3ba69925ec2917cbba46836d0141b0c3c002138da199cf60a7
+                           55b9a004f0da8fc616a90e89a0da3fa247c6440093d75706a1782726702add0514be1311da3a0178396f380411bff6d5c9f2bc3af5830141bdc4622f
+                           8714ab99647d1e887c9a801ba3388b8e6cd51a97c0f2e46997308e388e167a7a439b107a308e7c691f37ad0833e79ebe4bb9be1bf2c9c1db705df5b8
+                           830141de326b906dea7c12ee8c5eb0e6e448234a9aa0200ef354b340170c401a8a0f7be7288a3854355dce418d841e6da23db849bb7511af79fed645
+                           f86008ce689e4c8301417a774177bc02fcb3ea4efb1d7703547e2ef92813d9072073a386b4f9b70b466d19d0fec876abf5237d6f6cd0f73e59197ce8
+                           831d30058207239b72a2faa92f3c83014156a416be4aff0350790ebebf39ef2a21ab4929d113312ffe11ab0a14bcaeff3079d4b289eb02ae33dff53c
+                           340a17c7db098a47abac8d98ad11baaa12ad773fcf830141aad8fa1fdddef34220aed308f35b130edd8fb681ebf025517b2498f3a1eff9515332f355
+                           fcc29c3a8bd1bec14f0bd60e9af23c9df0ed23da455a2c9a172edf138301418e69b478d99fea97fb44f813e8a29ae07afbe18a48986b7a23a88bda1e
+                           0ecad33bbd4240adc9f1f59fac9c1bc3777fc5f8ff715a555a732f99a727977db96459830141cf1d22978b92cb3b059b1f3af104c55d14813dcfda68
+                           de186396cf1b02860fedb0314ed28b831acb5d0dc98c114dac5b5f5fc669734ae8f39a3093609407020b830141be0bec7ece6049266f5d470fa59144
+                           6edc2a8dc659d685cc52b982ced5f5dd7570d70c75d782cf1688a8d9590af0bd8a7e4d9b4872def81fc126bbb0f2f3841e830140fcf7f2e5a89d382f
+                           f640e05635cb99201502e94a5b5977e8477852a8d2e978ec2ec82ad6991777a3128399c12a20bedce67304a9373a2163c9e03559138556e500000000)",
+                        "454d3ae7cad101e2e3f25e48284ed71004bc11ab209752f1d552d40b11c5bc9f",
+                        true, false, 1286},
+                // A Litecoin SegWit txn
+                TestTup{R"(010000000001016b4d406ef4d1decf7e4c83267047fde1cdb05920ad3dbf6b729811e25af79cb50100000000fdffffff020032000000000000225120ad5e3045b5331bd06c30d44566b253709e174c0330f2f8b6d12e079703ec15aec8c71000000000001600148961f139b8da0710236be0ecbc32f2e21718271502473044022038d499eabf23e31174e4c076a254b033c4f3ede93b8eb17ef19c950683208dcb02207d5d9b82d482167b30501e99d02a35c3908b1f13564cd97f4d79eefe2ed834c2012102d9bd4c712605e7f2fcd12b4c99d76db895b116e27565ddfa79234847b6a27c9700000000)",
+                        "04eb55e09c99e5dd8c98c82cd8294d8eaa3bc474e5d4f88b27935fbcd2115e82", true, false, 152}
+            };
+            for (const auto & [hex, txid, segwit, mweb, expected_vsize] : tests) {
+                const std::vector<uint8_t> txndata = ParseHex(hex);
+                std::vector<uint8_t> data;
+                CMutableTransaction tx;
+                const int version = PROTOCOL_VERSION | SERIALIZE_TRANSACTION_USE_WITNESS | SERIALIZE_TRANSACTION_USE_MWEB | SERIALIZE_TRANSACTION_USE_CASHTOKENS;
+                VectorReader(SER_DISK, version, txndata, 0) >> tx;
+                VectorReader vr(SER_DISK, version, txndata, 0);
+                CTransaction ctx(deserialize, vr);
+                BOOST_CHECK(tx.GetId().ToString() == txid);
+                BOOST_CHECK(tx.GetHash().ToString() == txid);
+                BOOST_CHECK(tx.HasMimble() == mweb);
+                BOOST_CHECK(tx.HasWitness() == segwit);
+                BOOST_CHECK(ctx.GetId().ToString() == txid);
+                BOOST_CHECK(ctx.GetHash().ToString() == txid);
+                BOOST_CHECK(ctx.HasMimble() == mweb);
+                BOOST_CHECK(ctx.HasWitness() == segwit);
+                BOOST_CHECK(tx == ctx); // this does a check vs the hash
+                BOOST_CHECK(tx.GetWitnessHash() == ctx.GetWitnessHash());
+                VectorWriter(SER_DISK, version, data, 0) << tx; // ser mutable tx
+                BOOST_CHECK(txndata == data);
+                data.clear();
+                VectorWriter(SER_DISK, version, data, 0) << ctx; // ser constant tx
+                BOOST_CHECK(txndata == data);
+                const size_t rawSize = txndata.size(), vsize = tx.GetVirtualSize(), strippedSize = tx.GetTotalSize(false, false);
+                //DebugM("Tx rawSize: ", rawSize, ", vsize: ", vsize, " stripped size: ", strippedSize);
+                BOOST_CHECK(vsize == expected_vsize);
+                BOOST_CHECK(tx.GetTotalSize(segwit, mweb) == rawSize);
+                if (segwit || mweb) {
+                    BOOST_CHECK(vsize != rawSize && rawSize > strippedSize);
+                    BOOST_CHECK(tx.GetHash() != tx.GetWitnessHash());
+                } else {
+                    BOOST_CHECK(vsize == rawSize && rawSize == strippedSize);
+                    BOOST_CHECK(tx.GetHash() == tx.GetWitnessHash());
+                }
+            }
         };
 
         RUN_CONTEXT();

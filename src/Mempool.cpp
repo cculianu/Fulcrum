@@ -46,8 +46,8 @@ auto Mempool::calcCompactFeeHistogram(unsigned binSizeBytes) const -> FeeHistogr
     for (const auto & [txid, tx] : txs) {
         if (tx->fee < bitcoin::Amount::zero()) continue; // skip negative fees (coinbase txn, etc)
         const auto feeRate = unsigned(tx->fee / bitcoin::Amount::satoshi()) // sats
-                             /  std::max(tx->sizeBytes, 1u); // per byte
-        histogram[feeRate] += tx->sizeBytes; // accumulate size by feeRate
+                             / std::max(tx->vsizeBytes, 1u); // per vbyte
+        histogram[feeRate] += tx->vsizeBytes; // accumulate size by feeRate
     }
 
     // Now, compact the bins
@@ -881,7 +881,7 @@ namespace {
     std::pair<MPData, bool> loadMempoolDat(const QString &fname) {
         // Below code taken from BCHN validation.cpp, but adopted to also support segwit
         FILE *pfile = std::fopen(fname.toUtf8().constData(), "rb");
-        bitcoin::CAutoFile file(pfile, bitcoin::SER_DISK, bitcoin::PROTOCOL_VERSION | bitcoin::SERIALIZE_TRANSACTION_USE_WITNESS);
+        bitcoin::CAutoFile file(pfile, bitcoin::SER_DISK, bitcoin::PROTOCOL_VERSION | bitcoin::SERIALIZE_TRANSACTION_USE_WITNESS | bitcoin::SERIALIZE_TRANSACTION_USE_CASHTOKENS);
         if (file.IsNull())
             throw Exception(QString("Failed to open mempool file '%1'").arg(fname));
 
@@ -912,7 +912,8 @@ namespace {
 
                 auto rtx = std::make_shared<Mempool::Tx>();
                 rtx->hash = BTC::Hash2ByteArrayRev(ctx->GetHashRef());
-                dataTotal += rtx->sizeBytes = ctx->GetTotalSize(true);
+                dataTotal += rtx->sizeBytes = ctx->GetTotalSize(isSegWit, false);
+                rtx->vsizeBytes = isSegWit ? ctx->GetVirtualSize(rtx->sizeBytes) : rtx->sizeBytes;
                 ret.emplace(std::piecewise_construct,
                             std::forward_as_tuple(rtx->hash),
                             std::forward_as_tuple(std::move(rtx), std::move(ctx)));

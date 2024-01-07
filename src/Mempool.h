@@ -48,7 +48,8 @@ struct Mempool
         TxHash hash; ///< in reverse bitcoind order (ready for hex encode), fixed value.
 
         bitcoin::Amount fee{bitcoin::Amount::zero()}; ///< we calculate this fee ourselves since in the past I noticed we get a funny value sometimes that's off by 1 or 2 sats --  which I suspect is due limitations of doubles, perhaps?
-        unsigned sizeBytes = 0;
+        unsigned sizeBytes = 0; // the actual serialized size
+        unsigned vsizeBytes = 0; // for segwit coins, the virtual size, for non-segwit, identical to sizeBytes
         bool hasUnconfirmedParentTx = false; ///< If true, this tx depends on another tx in the mempool. This is not always fixed (confirmedInBlock may change this)
 
         /// These are all the txos in this tx. Once set-up, this doesn't change (unlike IOInfo.utxo).

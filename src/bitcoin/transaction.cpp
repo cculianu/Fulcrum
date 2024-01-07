@@ -9,6 +9,8 @@
 #include "tinyformat.h"
 #include "utilstrencodings.h"
 
+#include <type_traits>
+
 #ifdef __clang__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wunused-parameter"
@@ -48,119 +50,94 @@ std::string CTxOut::ToString(bool fVerbose) const {
                      tokenDataPtr ? (" " + tokenDataPtr->ToString(fVerbose)) : "");
 }
 
+template <class Derived>
+uint256 CTransactionBase<Derived>::ComputeHash(bool segwit) const {
+    return SerializeHash(tx(), SER_GETHASH, segwit ? SERIALIZE_TRANSACTION_USE_WITNESS : 0);
+}
+
+template <class Derived>
+size_t CTransactionBase<Derived>::GetTotalSize(const bool segwit, const bool mweb) const {
+    return GetSerializeSize(tx(), PROTOCOL_VERSION
+                                      | (segwit ? SERIALIZE_TRANSACTION_USE_WITNESS : 0)
+                                      | (mweb ? SERIALIZE_TRANSACTION_USE_MWEB : 0));
+}
+
+template <class Derived>
+size_t CTransactionBase<Derived>::GetVirtualSize(const std::optional<size_t> unstrippedSizeIfKnown) const {
+    constexpr size_t WITNESS_SCALE_FACTOR = 4; // Taken from Core consensus/consensus.h, added by Calin here.
+
+    // The weight = (stripped_size * 4) + witness_size formula, using only serialization with and without witness data.
+    // As witness_size is equal to total_size - stripped_size, this formula is identical to:
+    // weight = (stripped_size * 3) + total_size.
+
+    size_t weight = tx().GetTotalSize(false, false) * (WITNESS_SCALE_FACTOR - 1); // stripped of segwit and/or mweb
+
+    if (unstrippedSizeIfKnown.has_value()) {
+        weight += *unstrippedSizeIfKnown;
+    } else {
+        weight += tx().GetTotalSize(true, true); // add unstripped size (include segwit and/or mweb data)
+    }
+
+    return weight / WITNESS_SCALE_FACTOR; // vsize = weight / 4
+}
+
+template <class Derived>
+Amount CTransactionBase<Derived>::GetValueOut() const {
+    const auto &vout = tx().vout;
+    Amount nValueOut = Amount::zero();
+    for (const auto &tx_out : vout) {
+        nValueOut += tx_out.nValue;
+        if (!MoneyRange(tx_out.nValue) || !MoneyRange(nValueOut)) {
+            throw std::runtime_error(std::string(__func__) + ": value out of range");
+        }
+    }
+    return nValueOut;
+}
+
+template <class Derived>
+std::string CTransactionBase<Derived>::ToString(bool fVerbose) const {
+    const std::string::size_type cutoff = fVerbose ? std::string::npos : 10;
+    const auto &me = tx();
+    std::string str;
+    const std::string classname = std::is_same_v<Derived, CMutableTransaction> ? "CMutableTransaction" : "CTransaction";
+    str += strprintf("%s(txid=%s, ver=%d, vin.size=%u, vout.size=%u, nLockTime=%u)\n",
+                     classname, me.GetId().ToString().substr(0, cutoff), me.nVersion, me.vin.size(),
+                     me.vout.size(), me.nLockTime);
+    for (const auto &nVin : me.vin) {
+        str += "    " + nVin.ToString(fVerbose) + "\n";
+    }
+    for (const auto &nVout : me.vout) {
+        str += "    " + nVout.ToString(fVerbose) + "\n";
+    }
+    return str;
+}
+
+// Explicit template instantiations (required)
+template class CTransactionBase<CTransaction>;
+template class CTransactionBase<CMutableTransaction>;
+
+
 CMutableTransaction::CMutableTransaction()
     : nVersion(CTransaction::CURRENT_VERSION), nLockTime(0) {}
+
 CMutableTransaction::CMutableTransaction(const CTransaction &tx)
-    : nVersion(tx.nVersion), vin(tx.vin), vout(tx.vout),
-      nLockTime(tx.nLockTime), mw_blob(tx.mw_blob) {}
+    : nVersion(tx.nVersion), vin(tx.vin), vout(tx.vout), nLockTime(tx.nLockTime), mw_blob(tx.mw_blob) {}
 
-static uint256 ComputeCMutableTransactionHash(const CMutableTransaction &tx) {
-    return SerializeHash(tx, SER_GETHASH, 0);
-}
-
-static uint256 ComputeCMutableTransactionWitnessHash(const CMutableTransaction &tx) {
-    return SerializeHash(tx, SER_GETHASH, SERIALIZE_TRANSACTION_USE_WITNESS);
-}
-
-TxId CMutableTransaction::GetId() const {
-    return TxId(ComputeCMutableTransactionHash(*this));
-}
-
-TxHash CMutableTransaction::GetHash() const {
-    return TxHash(ComputeCMutableTransactionHash(*this));
-}
-
-TxHash CMutableTransaction::GetWitnessHash() const {
-    return TxHash(ComputeCMutableTransactionWitnessHash(*this));
-}
-
-uint256 CTransaction::ComputeHash() const {
-    return SerializeHash(*this, SER_GETHASH, 0);
-}
-
-uint256 CTransaction::ComputeWitnessHash() const {
-    return SerializeHash(*this, SER_GETHASH, SERIALIZE_TRANSACTION_USE_WITNESS);
-}
+TxId CMutableTransaction::GetId() const { return TxId(ComputeHash(false)); }
+TxHash CMutableTransaction::GetHash() const { return TxHash(ComputeHash(false)); }
 
 /**
  * For backward compatibility, the hash is initialized to 0.
  * TODO: remove the need for this default constructor entirely.
  */
 CTransaction::CTransaction()
-    : nVersion(CTransaction::CURRENT_VERSION), vin(), vout(), nLockTime(0),
-      mw_blob{}, hash() {}
+    : nVersion(CTransaction::CURRENT_VERSION), vin(), vout(), nLockTime(0), mw_blob{}, hash() {}
 CTransaction::CTransaction(const CMutableTransaction &tx)
-    : nVersion(tx.nVersion), vin(tx.vin), vout(tx.vout),
-      nLockTime(tx.nLockTime), mw_blob(tx.mw_blob), hash(ComputeHash()) {}
+    : nVersion(tx.nVersion), vin(tx.vin), vout(tx.vout), nLockTime(tx.nLockTime), mw_blob(tx.mw_blob),
+      hash(ComputeHash(false)) {}
 CTransaction::CTransaction(CMutableTransaction &&tx)
-    : nVersion(tx.nVersion), vin(std::move(tx.vin)), vout(std::move(tx.vout)),
-      nLockTime(tx.nLockTime), mw_blob(std::move(tx.mw_blob)), hash(ComputeHash()) {}
-
-Amount CTransaction::GetValueOut() const {
-    Amount nValueOut = Amount::zero();
-    for (const auto &tx_out : vout) {
-        nValueOut += tx_out.nValue;
-        if (!MoneyRange(tx_out.nValue) || !MoneyRange(nValueOut)) {
-            throw std::runtime_error(std::string(__func__) +
-                                     ": value out of range");
-        }
-    }
-    return nValueOut;
-}
-
-double CTransaction::ComputePriority(double dPriorityInputs,
-                                     unsigned int nTxSize) const {
-    nTxSize = CalculateModifiedSize(nTxSize);
-    if (nTxSize == 0) {
-        return 0.0;
-    }
-
-    return dPriorityInputs / nTxSize;
-}
-
-unsigned int CTransaction::CalculateModifiedSize(unsigned int nTxSize) const {
-    // In order to avoid disincentivizing cleaning up the UTXO set we don't
-    // count the constant overhead for each txin and up to 110 bytes of
-    // scriptSig (which is enough to cover a compressed pubkey p2sh redemption)
-    // for priority. Providing any more cleanup incentive than making additional
-    // inputs free would risk encouraging people to create junk outputs to
-    // redeem later.
-    if (nTxSize == 0) {
-        nTxSize = GetTotalSize();
-    }
-    for (const auto &nVin : vin) {
-        unsigned int offset =
-            41U + std::min(110U, (unsigned int)nVin.scriptSig.size());
-        if (nTxSize > offset) {
-            nTxSize -= offset;
-        }
-    }
-    return nTxSize;
-}
-
-size_t CTransaction::GetBillableSize() const {
-    return bitcoin::GetSerializeSize(*this, PROTOCOL_VERSION);
-}
-
-unsigned int CTransaction::GetTotalSize(bool segwit) const {
-    return bitcoin::GetSerializeSize(*this, PROTOCOL_VERSION | (segwit ? SERIALIZE_TRANSACTION_USE_WITNESS : 0));
-}
-
-std::string CTransaction::ToString(bool fVerbose) const {
-    const std::string::size_type cutoff = fVerbose ? std::string::npos : 10;
-    std::string str;
-    str += strprintf("CTransaction(txid=%s, ver=%d, vin.size=%u, vout.size=%u, "
-                     "nLockTime=%u)\n",
-                     GetId().ToString().substr(0, cutoff), nVersion, vin.size(),
-                     vout.size(), nLockTime);
-    for (const auto &nVin : vin) {
-        str += "    " + nVin.ToString(fVerbose) + "\n";
-    }
-    for (const auto &nVout : vout) {
-        str += "    " + nVout.ToString(fVerbose) + "\n";
-    }
-    return str;
-}
+    : nVersion(tx.nVersion), vin(std::move(tx.vin)), vout(std::move(tx.vout)), nLockTime(tx.nLockTime),
+      mw_blob(std::move(tx.mw_blob)), hash(ComputeHash(false)) {}
 
 } // end namespace bitcoin
 #ifdef __clang__

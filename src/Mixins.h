@@ -172,6 +172,10 @@ protected:
     /// Stops all extant timers immediately.  Note that this implicitly uses deleteLater to delete the timer objects.
     /// Returns the number of timers that were stopped.
     int stopAllTimers();
+
+    /// Stops the named timer, and immediately restarts it with the same interval and oneshot status, effectively
+    /// re-offsetting the next time the timer will run as offset from *now*.
+    bool restartTimer(const QString &name);
 };
 
 

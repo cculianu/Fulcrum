@@ -257,15 +257,27 @@ void Controller::startup()
     {
         // set up periodic refresh of mempool fee histogram
         constexpr const char *feeHistogramTimer = "feeHistogramTimer";
-        constexpr int feeHistogramTimerInterval = 30 * 1000; // every 30 seconds
+        constexpr int feeHistogramTimerInterval = 10 * 1000; // every 10 seconds
         conns += connect(this, &Controller::upToDate, this, [this] {
             callOnTimerSoon(feeHistogramTimerInterval, feeHistogramTimer, [this]{
                 storage->refreshMempoolHistogram();
                 return true;
-            }, false, Qt::TimerType::VeryCoarseTimer);
+            }, false, Qt::TimerType::CoarseTimer);
+        });
+        conns += connect(this, &Controller::synchedMempool, this, [this]{
+            // If we just synched the mempool after a new block arrived, or for the first time after app start,
+            // refresh the fee histogram immediately.
+            if (needFeeHistogramUpdate) {
+                needFeeHistogramUpdate = false;
+                storage->refreshMempoolHistogram();
+                restartTimer(feeHistogramTimer);
+            }
         });
         // disable the timer if downloading blocks and restart it later when up-to-date
-        conns += connect(this, &Controller::synchronizing, this, [this]{ stopTimer(feeHistogramTimer); });
+        conns += connect(this, &Controller::synchronizing, this, [this]{
+            stopTimer(feeHistogramTimer);
+            needFeeHistogramUpdate = true; // indicate that the next time synchedMempool() is emitted, do a fee histogram refresh
+        });
     }
 
     {
@@ -1106,11 +1118,14 @@ void Controller::process(bool beSilentIfUpToDate)
         // ...
         if (bitcoindmgr->hasDSProofRPC())
             sm->state = State::SynchDSPs; // remote bitcoind has dsproof rpc, proceed to synch dsps
-        else
+        else {
+            emit synchedMempool();
             sm->state = State::End; // remote bitcoind lacks dsproof rpc, finish successfully
+        }
         AGAIN();
     } else if (sm->state == State::SynchDSPsFinished) {
         // ...
+        emit synchedMempool();
         sm->state = State::End;
         AGAIN();
     }

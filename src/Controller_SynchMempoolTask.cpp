@@ -477,9 +477,13 @@ void SynchMempoolTask::doDLNextTx()
                 return;
             }
 
-            // save size now -- this is needed later to calculate fees and for everything else.
-            // note: for btc core with segwit this size is not the same "virtual" size as what bitcoind would report
+            // Save size now -- this is needed later to calculate fees and for everything else.
             tx->sizeBytes = unsigned(expectedLen);
+            if (isSegWit) {
+                tx->vsizeBytes = ctx.GetVirtualSize(tx->sizeBytes);
+            } else {
+               tx->vsizeBytes = tx->sizeBytes;
+            }
 
             if (TRACE)
                 Debug() << "got reply for tx: " << hashHex << " " << txdata.length() << " bytes";
