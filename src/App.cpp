@@ -1010,6 +1010,16 @@ void App::parseArgs()
         // log this later in case we are in syslog mode
         Util::AsyncOnObject(this, [mh]{ Debug() << "config: max_history = " << mh; });
     }
+    if (conf.hasValue("max_reusable_history")) {
+        bool ok;
+        int mrh = conf.intValue("max_reusable_history", -1, &ok);
+        if (!ok || mrh < options->maxReusableHistoryMin || mrh > options->maxReusableHistoryMax)
+            throw BadArgs(QString("max_reusable_history: bad value. Specify a value in the range [%1, %2]")
+                          .arg(options->maxReusableHistoryMin).arg(options->maxReusableHistoryMax));
+        options->maxReusableHistory = mrh;
+        // log this later in case we are in syslog mode
+        Util::AsyncOnObject(this, [mrh]{ Debug() << "config: max_reusable_history = " << mrh; });
+    }
     if (conf.hasValue("max_buffer")) {
         bool ok;
         int mb = conf.intValue("max_buffer", -1, &ok);
