@@ -4400,6 +4400,13 @@ namespace {
         return ret;
     }
 
+    template <> QByteArray Serialize(const ReusableBlock &ru) { return ru.toBytes(); }
+    template <> ReusableBlock Deserialize(const QByteArray &ba, bool *ok) {
+        ReusableBlock ret = ReusableBlock::fromBytes(ba); // requires exact size, fails if extra bytes at the end
+        if (ok) *ok = ret.isValid();
+        return ret;
+    }
+
     // essentially takes a byte copy of the data of BlkInfo; note that we waste some space at the end for legacy compat.
     template <> QByteArray Serialize(const BlkInfo &b) {
         QByteArray ret(QByteArray::size_type(sizeof(b)), Qt::Uninitialized);
