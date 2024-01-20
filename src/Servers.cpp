@@ -2471,6 +2471,12 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
     { {"blockchain.transaction.dsproof.unsubscribe", true,      false,    PR{1,1},                    },          MP(rpc_blockchain_transaction_dsproof_unsubscribe) },
     // /DSPROOF
     { {"blockchain.utxo.get_info",          true,               false,    PR{2,2},                    },          MP(rpc_blockchain_utxo_get_info) },
+
+    { {"blockchain.reusable.get_history",   true,               false,    PR{3,4},                    },          MP(rpc_blockchain_reusable_get_history) },
+    { {"blockchain.reusable.get_mempool",   true,               false,    PR{1,2},                    },          MP(rpc_blockchain_reusable_get_mempool) },
+    { {"blockchain.reusable.subscribe",     true,               false,    PR{1,1},                    },          MP(rpc_blockchain_reusable_subscribe) },
+    { {"blockchain.reusable.unsubscribe",   true,               false,    PR{1,1},                    },          MP(rpc_blockchain_reusable_unsubscribe) },
+
     { {"daemon.passthrough",                true,               false,    PR{0,0}, RPC::KeySet{{"method"}}, true /* allow unknown kwargs, since "params" is optional */ }, MP(rpc_daemon_passthrough) },
     { {"mempool.get_fee_histogram",         true,               false,    PR{0,0},                    },          MP(rpc_mempool_get_fee_histogram) },
 };
