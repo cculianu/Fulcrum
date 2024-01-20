@@ -244,6 +244,18 @@ public:
         bool operator==(const UnspentItem &o) const noexcept;
     };
     using UnspentItems = std::vector<UnspentItem>;
+    
+    //-- reusable history
+    struct ReusableHistoryItem {
+        TxHash hash;
+        int height = 0; ///< block height. 0 = unconfirmed
+    };
+    using ReusableHistory = std::vector<ReusableHistoryItem>;
+
+    /// TODO document better
+    /// Thread-safe. Will return an empty vector if the confirmed history size exceeds MaxHistory, or a truncated
+    /// vector if the confirmed + unconfirmed history exceeds MaxHistory.
+    ReusableHistory getReusableHistory(const BlockHeight height, const size_t count, const std::string & prefix, bool includeConfirmed, bool includeMempool) const;
 
     enum class TokenFilterOption { IncludeTokens, ExcludeTokens, OnlyTokens };
 
