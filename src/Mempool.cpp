@@ -31,6 +31,8 @@ Mempool::ConsistencyError::~ConsistencyError() {} // for vtable
 void Mempool::clear() {
     txs.clear();
     hashXTxs.clear();
+    txsOrdered.clear();
+    ruBlk.clear();
     dsps.clear(); // <-- this always frees capacity
     txs.rehash(0); // this should free previous capacity
     hashXTxs.rehash(0);
@@ -137,6 +139,9 @@ auto Mempool::addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
         auto & [tx, ctx] = pair;
         assert(hash == tx->hash);
         IONum inNum = 0;
+        TxNum ruTxNum = HashHasher{}(tx->hash); // TODO document
+        ruNum2Hash[ruTxNum] = tx->hash;
+        ruNum2PrefixSet[ruTxNum] = {};
         TxHashSet seenParents; // DSP handling, otherwise unused if no dsp
         for (const auto & in : ctx->vin) {
             const IONum prevN = IONum(in.prevout.GetN());
@@ -145,6 +150,11 @@ auto Mempool::addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
             std::optional<TXOInfo> optTXOInfo;
             const TXOInfo *pprevInfo{}; // points to either a TXOInfo from a prevTxRef, or to &*optTXOInfo
             QByteArray sh; // shallow copy of prevInfo.hashX
+            {
+                const auto ser = ReusableBlock::serializeInput(in);
+                this->ruBlk.add(ser, ruTxNum);
+                this->ruNum2PrefixSet[ruTxNum].insert(ser);
+            }
             if (auto it = this->txs.find(prevTxId); it != this->txs.end()) {
                 // prev is a mempool tx
                 tx->hasUnconfirmedParentTx = true; ///< mark the current tx we are processing as having an unconfirmed parent (this is used for sorting later and by the get_mempool & listUnspent code)
