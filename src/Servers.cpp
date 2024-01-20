@@ -2286,6 +2286,96 @@ void Server::rpc_blockchain_utxo_get_info(Client *c, const RPC::BatchId batchId,
         return ret;
     });
 }
+
+
+QVariantList Server::getReusableHistoryCommon(const BlockHeight height, const size_t count, const std::string& prefix, bool mempoolOnly)
+{
+    QVariantList resp;
+    const auto items = storage->getReusableHistory(height, count, prefix, !mempoolOnly, mempoolOnly);
+    for (const auto & item : items) {
+        QVariantMap m{
+            { "tx_hash" , Util::ToHexFast(item.hash) }, // TODO this should be full tx
+            { "height", int(item.height) },  // confirmed height. Is 0 for mempool tx regardless of unconf. parent status. Note this differs from get_mempool or get_history where -1 is used for unconf. parent.
+        };
+        resp.push_back(m);
+    }
+    return resp;
+}
+
+void Server::rpc_blockchain_reusable_get_history(Client *c, const RPC::Message &m)
+{
+    QVariantList l = m.paramsList();
+    assert(l.size() >= 3);
+    bool ok;
+    const unsigned height = l.front().toUInt(&ok); // arg0
+    if (!ok || height >= Storage::MAX_HEADERS)
+        throw RPCError("Invalid height argument; expected non-negative numeric value");
+    unsigned count = l[1].toUInt(&ok); // arg1
+    if (!ok || count >= Storage::MAX_HEADERS)
+        throw RPCError("Invalid count argument; expected non-negative numeric value");
+    const std::optional<std::string> prefix = decodeReusablePrefixHex( l[2].toString() ); // arg2
+    if (!prefix.has_value())
+        throw RPCError("Invalid prefix argument; expected hex string");
+    if ((*prefix).size() > ReusableBlock::MAX_PREFIX_SIZE)
+        throw RPCError("Invalid prefix argument; too long");
+    bool unspentOnly = false;
+    if (l.size() == 4) { //optional arg3
+        const auto [arg, argOk] = parseBoolSemiLooselyButNotTooLoosely( l.back() );
+        if (!argOk)
+            throw RPCError("Invalid unspentOnly argument; expected boolean");
+        unspentOnly = arg;
+    }
+
+    const auto tip = storage->latestTip().first;
+    if (tip < 0) throw InternalError("chain height is negative");
+    static constexpr unsigned MAX_COUNT = 2016; ///< TODO: make this cofigurable. this is the current electrumx limit, for now.
+    count = std::min(std::min(unsigned(tip+1) - height, count), MAX_COUNT);
+
+    generic_do_async(c, m.id, [height, count, prefix, this] {
+        return getReusableHistoryCommon(height, count, *prefix, false);
+    });
+}
+
+void Server::rpc_blockchain_reusable_get_mempool(Client *c, const RPC::Message &m)
+{
+    QVariantList l = m.paramsList();
+    assert(l.size() >= 1);
+    const std::optional<std::string> prefix = decodeReusablePrefixHex( l[0].toString() ); // arg0
+    if (!prefix.has_value())
+        throw RPCError("Invalid prefix argument; expected hex string");
+    if ((*prefix).size() > ReusableBlock::MAX_PREFIX_SIZE)
+        throw RPCError("Invalid prefix argument; too long");
+    bool unspentOnly = false;
+    if (l.size() == 2) { //optional arg3
+        const auto [arg, argOk] = parseBoolSemiLooselyButNotTooLoosely( l.back() );
+        if (!argOk)
+            throw RPCError("Invalid unspentOnly argument; expected boolean");
+        unspentOnly = arg;
+    }
+
+    generic_do_async(c, m.id, [prefix, this] {
+        return getReusableHistoryCommon(0, 0, *prefix, true);
+    });
+}
+
+void Server::rpc_blockchain_reusable_subscribe(Client *c, const RPC::Message &m)
+{
+    QVariantList l = m.paramsList();
+    assert(l.size() >= 1);
+    const std::optional<std::string> prefix = decodeReusablePrefixHex( l[0].toString() ); // arg0
+    if (!prefix.has_value())
+        throw RPCError("Invalid prefix argument; expected hex string");
+    if ((*prefix).size() > ReusableBlock::MAX_PREFIX_SIZE)
+        throw RPCError("Invalid prefix argument; too long");
+
+    // TODO should we refactor the subscribe / subsmgr code to accept ru subscriptions
+}
+
+void Server::rpc_blockchain_reusable_unsubscribe(Client *c, const RPC::Message &m)
+{
+    // TODO
+}
+
 void Server::rpc_mempool_get_fee_histogram(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const auto hist = storage->mempoolHistogram();
