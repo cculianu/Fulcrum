@@ -3118,10 +3118,24 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                         // note this may stall and also will empty out p->db.utxoCache->deferredAdds
                         p->db.utxoCache->waitForPrefetchToComplete();
 
+
+                    // reusable addresses blk data containing prefix lookup
+                    ReusableBlock ruBlk;
+
+                    // limit number of inputs according to spec to reduce dos vector
+                    constexpr size_t REUSABLE_INPUT_IDX_LIMIT = 30;
+                    
                     // add spends (process inputs)
                     unsigned inum = 0;
                     for (auto & in : ppb->inputs) {
                         const TXO txo{in.prevoutHash, in.prevoutN};
+
+                        // add to reusable set skip coinbase as it has no input
+                        if (inum && in.prevoutN < REUSABLE_INPUT_IDX_LIMIT) { // see note above about this limit
+                        // TODO should we send whole prevoutHash here or just prefix??
+                        ruBlk.add(in.ruHash, in.txIdx);
+                        }
+                        
                         if (!inum) {
                             // coinbase.. skip
                         } else if (in.parentTxOutIdx.has_value()) {
