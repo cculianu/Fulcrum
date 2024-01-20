@@ -3416,6 +3416,8 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
             p->blkInfos.pop_back();
             p->blkInfosByTxNum.erase(undo.blkInfo.txNum0);
             GenericDBDelete(p->db.blkinfo.get(), uint32_t(undo.height), "Failed to delete blkInfo in undoLatestBlock");
+            GenericDBDelete(p->db.rublk2trie.get(), uint32_t(undo.height), "Failed to delete rublk2trie in undoLatestBlock"); // TODO correct message / should we move this elsewhere?
+            
             // clear num2hash cache
             p->lruNum2Hash.clear();
             // remove block from txHashes cache
