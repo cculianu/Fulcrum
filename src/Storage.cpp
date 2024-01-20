@@ -24,6 +24,7 @@
 #include "Mempool.h"
 #include "Merkle.h"
 #include "RecordFile.h"
+#include "ReusableBlock.h"
 #include "Span.h"
 #include "Storage.h"
 #include "SubsMgr.h"
@@ -202,6 +203,8 @@ namespace {
     template <> TXO Deserialize(const QByteArray &, bool *);
     template <> QByteArray Serialize(const TXOInfo &);
     template <> TXOInfo Deserialize(const QByteArray &, bool *);
+    template <> QByteArray Serialize(const ReusableBlock &);
+    template <> ReusableBlock Deserialize(const QByteArray &, bool *);
     QByteArray Serialize(const bitcoin::Amount &, const bitcoin::token::OutputData *);
     template <> SHUnspentValue Deserialize(const QByteArray &, bool *);
     // TxNumVec
@@ -1004,6 +1007,7 @@ struct Storage::Pvt
 
         std::unique_ptr<rocksdb::DB> meta, blkinfo, utxoset,
                                      shist, shunspent, // scripthash_history and scripthash_unspent
+                                     rublk2trie,
                                      undo, // undo (reorg rewind)
                                      txhash2txnum; // new: index of txhash -> txNumsFile
         using DBPtrRef = std::tuple<std::unique_ptr<rocksdb::DB> &>;
@@ -1823,6 +1827,7 @@ void Storage::startup()
             { "utxoset", p->db.utxoset, opts, 0.27 },
             { "scripthash_history", p->db.shist, shistOpts, 0.30 },
             { "scripthash_unspent", p->db.shunspent, opts, 0.27 },
+            { "rublk2trie", p->db.rublk2trie, opts, 0.10 },
             { "undo", p->db.undo, opts, 0.0395 },
             { "txhash2txnum", p->db.txhash2txnum, txhash2txnumOpts, 0.1 },
         };
@@ -1899,6 +1904,8 @@ void Storage::startup()
     loadCheckUTXOsInDB();
     // very slow check, only runs if -C -C (specified twice)
     loadCheckShunspentInDB();
+    // load reusable addresses index data
+    loadCheckReusableBlocksInDb();
     // load check earliest undo to populate earliestUndoHeight
     loadCheckEarliestUndo();
     // if user specified --compact-dbs on CLI, run the compaction now before returning
@@ -2059,8 +2066,7 @@ auto Storage::stats() const -> Stats
     {
         // db stats
         QVariantMap m;
-        for (const auto ptr : { &p->db.blkinfo, &p->db.meta, &p->db.shist, &p->db.shunspent, &p->db.undo, &p->db.utxoset,
-                                &p->db.txhash2txnum }) {
+        for (const auto ptr : { &p->db.blkinfo, &p->db.meta, &p->db.shist, &p->db.shunspent, &p->db.undo, &p->db.utxoset, &p->db.rublk2trie, &p->db.txhash2txnum }) { 
             QVariantMap m2;
             const auto & db = *ptr;
             const QString name = QFileInfo(QString::fromStdString(db->GetName())).fileName();
