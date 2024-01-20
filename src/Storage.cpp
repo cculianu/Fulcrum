@@ -2647,6 +2647,46 @@ void Storage::loadCheckShunspentInDB()
           << " in " << t0.secsStr() << " sec";
  }
 
+void Storage::loadCheckReusableBlocksInDb()
+{
+    FatalAssert(!!p->db.rublk2trie, __func__, ": Reusable db is not open");
+
+    if (options->doSlowDbChecks) {
+        Log() << "CheckDB: Verifying Reusable db (this may take some time) ...";
+
+        const auto t0 = Util::getTimeNS();
+        {
+            const int currentHeight = latestTip().first;
+
+            std::unique_ptr<rocksdb::Iterator> iter(p->db.rublk2trie->NewIterator(p->db.defReadOpts));
+            if (!iter) throw DatabaseError("Unable to obtain an iterator to the reusable set db");
+            for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
+                // TODO: the below checks may be too slow. See about removing them and just counting the iter.
+                // const auto ru = Deserialize<ReusableBlock>(FromSlice(iter->key()));
+                // TODO
+                // if (!ru.isValid()) {
+                //     throw DatabaseSerializationError("Read an invalid trie from the rublk2trie database."
+                //                                      " This may be due to a database format mismatch."
+                //                                      "\n\nDelete the datadir and resynch to bitcoind.\n");
+                // }
+            }
+
+            // TODO check amount of rublks the same as amount of block headers
+            // TODO count amount of txs, check the amount of txs the same as stored amount (must save in key like rublk2trie.total_txs or something
+        }
+        const auto elapsed = Util::getTimeNS();
+        Debug() << "CheckDB: Verified reusable tries in " << QString::number((elapsed-t0)/1e6, 'f', 3) << " msec";
+
+    } else {
+        // p->utxoCt = readUtxoCtFromDB();
+    }
+
+    // TODO 
+    // if (const auto ct = utxoSetSize(); ct)
+    //     Log() << "ReusableBlock set: "  << ct << Util::Pluralize(" utxo", ct)
+    //           << ", " << QString::number(utxoSetSizeMB(), 'f', 3) << " MB";
+}
+
 void Storage::loadCheckEarliestUndo()
 {
     FatalAssert(!!p->db.undo,  __func__, ": Undo db is not open");
