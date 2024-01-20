@@ -3741,6 +3741,77 @@ auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf, BlockHeigh
     return ret;
 }
 
+auto Storage::getReusableHistory(const BlockHeight start_height, const size_t count, const std::string & prefix, bool conf, bool unconf) const -> ReusableHistory
+{
+    ReusableHistory ret;
+    const size_t maxReusableHistory = size_t(options->maxReusableHistory);
+    if (prefix.size() > ReusableBlock::MAX_PREFIX_SIZE)
+        return ret;
+    try {
+        SharedLockGuard g(p->blocksLock);  // makes sure history doesn't mutate from underneath our feet
+        auto fastRemoveDuplicates = [](auto& nums) {
+            // fast remove duplicates TODO compare to unordered_set (this should be faster with good sort)
+            std::sort(nums.begin(), nums.end());
+            nums.erase(std::unique(nums.begin(), nums.end()), nums.end());
+        };
+
+        if (conf) {
+            assert(bool(p->db.rublk2trie));
+            static const QString err("Error retrieving reusable history for a prefix");
+
+            for (BlockHeight height = start_height; height < start_height + count; ++height) {
+                auto ruBlk = GenericDBGetFailIfMissing<ReusableBlock>(p->db.rublk2trie.get(), height,
+                    "Failed to read reusuable trie from the rublk2trie db", false, p->db.defReadOpts);
+                // TODO add shortcut here if length is 0, we then quick add all txs in a block here
+                // get properly prepared prefix for searching in trie
+                std::vector<TxNum> nums;
+                { // append all vectors of txnums
+                    auto pRange = ruBlk.prefixSearch(prefix);
+                    for (auto it = pRange.first; it != pRange.second; ++it)
+                        nums.insert(nums.end(), (*it).begin(), (*it).end());
+                }
+                if (UNLIKELY(ret.size()+nums.size() > maxReusableHistory)) {
+                    throw HistoryTooLarge(QString("History for prefix exceeds MaxReusableHistory %1 with %2 items!")
+                                          .arg(maxReusableHistory).arg(ret.size()+nums.size()));
+                }
+                fastRemoveDuplicates(nums);
+                // TODO: Similarly to getHistory the below could use some optimization.  A batched version of hashForTxNum and
+                // is low-hanging fruit for optimization.  Each call to the below takes a shared lock.  /TODO
+                for (auto & num : nums) {
+                    auto hash = hashForTxNum(num).value(); // may throw, but that indicates some database inconsistency. we catch below
+                    ret.emplace_back(ReusableHistoryItem{hash, int(height)});
+                }
+            }
+        }
+        if (unconf) {
+            auto [mempool, lock] = this->mempool();
+
+            std::vector<TxNum> nums;
+            { // append all vectors of txnums
+                auto pRange = mempool.ruBlk.prefixSearch(prefix);
+                for (auto it = pRange.first; it != pRange.second; ++it)
+                    nums.insert(nums.end(), (*it).begin(), (*it).end());
+            }
+            if (UNLIKELY(ret.size()+nums.size() > maxReusableHistory)) {
+                throw HistoryTooLarge(QString("History for prefix exceeds MaxReusableHistory %1 with %2 items!")
+                                      .arg(maxReusableHistory).arg(ret.size()+nums.size()));
+            }
+            fastRemoveDuplicates(nums);
+
+            for (auto & num : nums) {
+                auto it = mempool.ruNum2Hash.find(num);
+                if (it == mempool.ruNum2Hash.end())
+                    throw InternalError("TxNum not found in mempool ruNum2Hash");
+                auto [txNum, hash] = *it;
+                ret.emplace_back(ReusableHistoryItem{hash, int(0)});
+            }
+        }
+    } catch (const std::exception &e) {
+        Warning(Log::Magenta) << __func__ << ": " << e.what();
+    }
+    return ret;
+}
+
 static bool ShouldTokenFilter(const Storage::TokenFilterOption tokenFilter, const bitcoin::token::OutputDataPtr & p)
 {
     switch (tokenFilter) {
