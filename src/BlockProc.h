@@ -72,6 +72,7 @@ struct PreProcessedBlock
         unsigned txIdx = 0; ///< index into the `txInfos` vector above for the tx where this input appears
         TxHash prevoutHash; ///< 32-byte prevoutHash.  In *reversed* memory order (hex-encoding ready!) (May be a shallow copy of a byte array in `txInfos` if the prevout tx was in this block.). May be empty if coinbase
         IONum prevoutN = 0; ///< the index in the prevout tx for this input (again, tx's can't have more than ~111k inputs -- if that changes, fixme!)
+        RuHash ruHash; ///< calculated hash for reusable address indexing (we need access to the bitcoin::CTxIn to produce this, so it's stored here to be inserted later where there is no access)
         std::optional<unsigned> parentTxOutIdx; ///< if the input's prevout was in this block, the index into the `outputs` array declared in BlockProcBase, otherwise undefined.
     };
 
