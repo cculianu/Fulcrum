@@ -355,6 +355,26 @@ namespace {
         return ret;
     }
 
+    /// used internally by reusable RPC methods. Given a prefixHex, ensure it's hex data and nothing else.
+    //  NOTE: hex data is single character for this, not like normal hex i.e. 'b00b5' is a valid prefix (5 characters)
+    /// Returns optional bytes (string) of valid hex decoded data
+    std::optional<std::string> decodeReusablePrefixHex(const QString & prefixHex) {
+        const QByteArray prefixPreProcessed = prefixHex.toUtf8();
+        std::string a(prefixPreProcessed.size(), '\0');
+        for (size_t i=0; i<prefixPreProcessed.size(); ++i) {
+            const char c = prefixPreProcessed.at(i);
+            if (c >= '0' && c <= '9')
+                a[i] = c - '0';
+            else if (c >= 'A' && c <= 'F')
+                a[i] = c - 'A' + 10;
+            else if (c >= 'a' && c <= 'f')
+                a[i] = c - 'a' + 10;
+            else
+                return std::nullopt;
+        }
+        return a;
+    }
+
     QVariantMap tokenDataToVariantMap(const bitcoin::token::OutputData & tok) {
         QVariantMap ret;
         ret.insert(QByteArrayLiteral("category"), QString::fromStdString(tok.GetId().ToString()));
