@@ -144,7 +144,7 @@ public:
     // Max history & max buffer
     static constexpr int defaultMaxBuffer = 8'000'000, maxBufferMin = 64'000, maxBufferMax = 100'000'000;
     static constexpr int defaultMaxHistory = 125'000, maxHistoryMin = 1000, maxHistoryMax = 25'000'000;
-
+    static constexpr int defaultMaxReusableHistory = 125'000, maxReusableHistoryMin = 1000, maxReusableHistoryMax = 100'000'000; // TODO set these to make sense
     static constexpr bool isMaxBufferSettingInBounds(int m) { return m >= maxBufferMin && m <= maxBufferMax; }
     static constexpr int clampMaxBufferSetting(const qint64 m64, const bool noClampMax=false) {
         const int m = std::min(qint64(std::numeric_limits<int>::max()), m64); // clamp high end to int32 always
@@ -153,7 +153,7 @@ public:
 
     std::atomic_int maxBuffer = defaultMaxBuffer; ///< this can be set at runtime by FulcrumAdmin as of Fulcrum 1.0.4, hence why it's an atomic.
     int maxHistory = defaultMaxHistory;
-
+    int maxReusableHistory = defaultMaxReusableHistory;
     // Work queue options as configured by user; these are the saved values from config (if any) and are not
     // necessarily the options used in practice (those can be determined by querying the Util::ThreadPool).
     int workQueue = -1;
