@@ -534,6 +534,9 @@ Mempool::rmTxsInHashXTxs_impl(const SetLike &txids, const ScriptHashesAffectedSe
     std::size_t ct = 0, sortCt = 0;
     qint64 sortTimeNanos = 0;
 
+    // TODO document
+    rmRuTxs(txids, TRACE);
+
     // next, scan hashXs, removing entries for the txids in question
     for (const auto & hashX : scriptHashesAffected) {
         auto it = hashXTxs.find(hashX);
