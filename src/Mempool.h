@@ -19,6 +19,7 @@
 #pragma once
 
 #include "BlockProcTypes.h"
+#include "ReusableBlock.h"
 #include "Common.h"
 #include "DSProof.h"
 #include "TXO.h"
@@ -106,6 +107,10 @@ struct Mempool
     using TxRef = std::shared_ptr<Tx>;
     /// master mapping of TxHash -> TxRef
     using TxMap = std::unordered_map<TxHash, TxRef, HashHasher>;
+    /// TODO describe
+    using RuNumMap = std::unordered_map<TxNum, TxHash, HashHasher>;
+    // TODO describe
+    using RuNum2PrefixSetMap = std::unordered_map<TxNum, std::unordered_set<RuHash, HashHasher>, HashHasher>;
     /// ensures an ordering of TxRefs for the set below that are from fewest ancestors -> most ancestors
     struct TxRefOrdering {
         bool operator()(const TxRef &a, const TxRef &b) const {
@@ -128,6 +133,10 @@ struct Mempool
     // -- Data members of struct Mempool --
     TxMap txs;
     HashXTxMap hashXTxs;
+    RuNumMap ruNum2Hash;
+    RuNum2PrefixSetMap ruNum2PrefixSet;
+    ReusableBlock ruBlk; // Allow for indexing for reusable addresses
+
     DSPs dsps;
 
 
@@ -259,7 +268,9 @@ private:
     /// Convenient alias for above, accepts a TxHashNumMap as first-arg
     std::size_t rmTxsInHashXTxs(const TxHashNumMap &txidMap, const ScriptHashesAffectedSet &scriptHashesAffected,
                                 bool TRACE, const std::optional<ScriptHashesAffectedSet> &hashXsNeedingSort = {});
-
+    
+    std::size_t rmRuTxs(const TxHashSet &txids, bool TRACE); // TODO
+    
     /// Internal: called by dump()
     static QVariantMap dumpTx(const TxRef &tx);
 
