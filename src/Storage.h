@@ -468,6 +468,7 @@ private:
     void loadCheckHeadersInDB(); ///< may throw -- called from startup()
     void loadCheckUTXOsInDB(); ///< may throw -- called from startup()
     void loadCheckShunspentInDB(); ///< may throw -- called from startup()
+    void loadCheckReusableBlocksInDb(); ///< may throw -- called from startup()
     void loadCheckTxNumsFileAndBlkInfo(); ///< may throw -- called from startup()
     void loadCheckTxHash2TxNumMgr(); ///< may throw -- called from startup()
     void loadCheckEarliestUndo(); ///< may throw -- called from startup()
@@ -556,6 +557,12 @@ RocksDB: "txhash2txnum"
     there will be more than 1 VarInt(TxNum) in that particular bucket, and we have to check each txNum in the bucket
     for that key in series versus the txnum flat-file.  The performance penalty for this is extremely small since the
     txnum flat-file is extremely fast to query given a txNum.
+
+RocksDB: "rublk2trie"
+  Purpose: store txnums referenced by prefix in the ReusableBlock structure for allowing for reusable address queries
+  Key: height
+  Value: see struct ReusableBlock
+  TODO document better
 
 A note about ACID: (atomic, consistent, isolated, durable)
 
