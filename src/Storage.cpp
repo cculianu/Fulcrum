@@ -3179,7 +3179,14 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                         }
                         ++inum;
                     }
+                     
+                    Log() << "Saving rublk " << ppb->height << " size " << ruBlk.size() << " " << ruBlk.toBytes().size();
 
+                    // save rublk2trie update to db
+                    // TODO this should also update a counter so we can track some corruption occurring when scanning in loadCheckReusableBlocksInDb
+                    static const QString rublkInfoErrMsg("Error writing ReusableBlock to db");
+                    GenericDBPut(p->db.rublk2trie.get(), ppb->height, ruBlk, rublkInfoErrMsg, p->db.defWriteOpts);
+                    
                     // commit the utxoset updates now.. this issues the writes to the db and also updates
                     // p->utxoCt. This may throw.
                     issueUpdates(utxoBatch);
