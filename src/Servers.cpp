@@ -2302,7 +2302,7 @@ QVariantList Server::getReusableHistoryCommon(const BlockHeight height, const si
     return resp;
 }
 
-void Server::rpc_blockchain_reusable_get_history(Client *c, const RPC::Message &m)
+void Server::rpc_blockchain_reusable_get_history(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     QVariantList l = m.paramsList();
     assert(l.size() >= 3);
@@ -2336,7 +2336,7 @@ void Server::rpc_blockchain_reusable_get_history(Client *c, const RPC::Message &
     });
 }
 
-void Server::rpc_blockchain_reusable_get_mempool(Client *c, const RPC::Message &m)
+void Server::rpc_blockchain_reusable_get_mempool(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     QVariantList l = m.paramsList();
     assert(l.size() >= 1);
@@ -2358,7 +2358,7 @@ void Server::rpc_blockchain_reusable_get_mempool(Client *c, const RPC::Message &
     });
 }
 
-void Server::rpc_blockchain_reusable_subscribe(Client *c, const RPC::Message &m)
+void Server::rpc_blockchain_reusable_subscribe(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     QVariantList l = m.paramsList();
     assert(l.size() >= 1);
@@ -2371,7 +2371,7 @@ void Server::rpc_blockchain_reusable_subscribe(Client *c, const RPC::Message &m)
     // TODO should we refactor the subscribe / subsmgr code to accept ru subscriptions
 }
 
-void Server::rpc_blockchain_reusable_unsubscribe(Client *c, const RPC::Message &m)
+void Server::rpc_blockchain_reusable_unsubscribe(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     // TODO
 }
