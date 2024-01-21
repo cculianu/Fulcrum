@@ -532,9 +532,23 @@ Mempool::rmTxsInHashXTxs_impl(const SetLike &txids, const ScriptHashesAffectedSe
     Tic t0;
     std::size_t ct = 0, sortCt = 0;
     qint64 sortTimeNanos = 0;
+ 
+    // Original RPA code used TxHashSet instead of SetLike, so let's create local
+    // temp variable to handle this...
+    TxHashSet myTxHashSet;
 
-    // TODO document
-    rmRuTxs(txids, TRACE);
+    if constexpr (std::is_same_v<SetLike, std::unordered_map<QByteArray, long unsigned int, BTC::GenericTrivialHashHasher<QByteArray>>>) {
+        // If SetLike is a map, extract the keys and insert into myTxHashSet
+        for (const auto &pair : txids) {
+            myTxHashSet.insert(pair.first);
+        }
+    } else if constexpr (std::is_same_v<SetLike, TxHashSet>) {
+        // If SetLike is already a set (TxHashSet), use it directly
+        myTxHashSet = txids;
+    } else {
+        // Handle other possible types of SetLike if there are any
+    }
+    rmRuTxs(myTxHashSet, TRACE);
 
     // next, scan hashXs, removing entries for the txids in question
     for (const auto & hashX : scriptHashesAffected) {
