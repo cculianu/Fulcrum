@@ -2331,7 +2331,7 @@ void Server::rpc_blockchain_reusable_get_history(Client *c, const RPC::BatchId b
     static constexpr unsigned MAX_COUNT = 2016; ///< TODO: make this cofigurable. this is the current electrumx limit, for now.
     count = std::min(std::min(unsigned(tip+1) - height, count), MAX_COUNT);
 
-    generic_do_async(c, m.id, [height, count, prefix, this] {
+    generic_do_async(c, batchId, m.id, [height, count, prefix, this] {
         return getReusableHistoryCommon(height, count, *prefix, false);
     });
 }
@@ -2353,7 +2353,7 @@ void Server::rpc_blockchain_reusable_get_mempool(Client *c, const RPC::BatchId b
         unspentOnly = arg;
     }
 
-    generic_do_async(c, m.id, [prefix, this] {
+    generic_do_async(c, batchId, m.id, [prefix, this] {
         return getReusableHistoryCommon(0, 0, *prefix, true);
     });
 }
