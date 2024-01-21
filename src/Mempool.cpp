@@ -31,7 +31,6 @@ Mempool::ConsistencyError::~ConsistencyError() {} // for vtable
 void Mempool::clear() {
     txs.clear();
     hashXTxs.clear();
-    txsOrdered.clear();
     ruBlk.clear();
     dsps.clear(); // <-- this always frees capacity
     txs.rehash(0); // this should free previous capacity
