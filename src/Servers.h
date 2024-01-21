@@ -416,10 +416,10 @@ private:
     void rpc_blockchain_transaction_unsubscribe(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
 
     // reusable addresses
-    void rpc_blockchain_reusable_get_history(Client *, const RPC::Message &); // fully implemented 
-    void rpc_blockchain_reusable_get_mempool(Client *, const RPC::Message &); // fully implemented  
-    void rpc_blockchain_reusable_subscribe(Client *, const RPC::Message &); // fully implemented 
-    void rpc_blockchain_reusable_unsubscribe(Client *, const RPC::Message &); // fully implemented  
+    void rpc_blockchain_reusable_get_history(Client *, RPC::BatchId, const RPC::Message &); // fully implemented 
+    void rpc_blockchain_reusable_get_mempool(Client *, RPC::BatchId, const RPC::Message &); // fully implemented  
+    void rpc_blockchain_reusable_subscribe(Client *, RPC::BatchId, const RPC::Message &); // fully implemented 
+    void rpc_blockchain_reusable_unsubscribe(Client *, RPC::BatchId, const RPC::Message &); // fully implemented  
 
     // transaction.dsproof
     void rpc_blockchain_transaction_dsproof_get(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
