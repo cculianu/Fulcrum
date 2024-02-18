@@ -2656,7 +2656,7 @@ void Storage::loadCheckReusableBlocksInDb()
 
         const auto t0 = Util::getTimeNS();
         {
-            const int currentHeight = latestTip().first;
+            //const int currentHeight = latestTip().first;
 
             std::unique_ptr<rocksdb::Iterator> iter(p->db.rublk2trie->NewIterator(p->db.defReadOpts));
             if (!iter) throw DatabaseError("Unable to obtain an iterator to the reusable set db");
