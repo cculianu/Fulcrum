@@ -361,7 +361,7 @@ namespace {
     std::optional<std::string> decodeReusablePrefixHex(const QString & prefixHex) {
         const QByteArray prefixPreProcessed = prefixHex.toUtf8();
         std::string a(prefixPreProcessed.size(), '\0');
-        for (size_t i=0; i<prefixPreProcessed.size(); ++i) {
+        for (QByteArray::size_type i = 0; i < prefixPreProcessed.size(); ++i) {
             const char c = prefixPreProcessed.at(i);
             if (c >= '0' && c <= '9')
                 a[i] = c - '0';
@@ -2316,14 +2316,13 @@ void Server::rpc_blockchain_reusable_get_history(Client *c, const RPC::BatchId b
     const std::optional<std::string> prefix = decodeReusablePrefixHex( l[2].toString() ); // arg2
     if (!prefix.has_value())
         throw RPCError("Invalid prefix argument; expected hex string");
-    if ((*prefix).size() > ReusableBlock::MAX_PREFIX_SIZE)
+    if (prefix->size() > ReusableBlock::MAX_PREFIX_SIZE)
         throw RPCError("Invalid prefix argument; too long");
-    bool unspentOnly = false;
     if (l.size() == 4) { //optional arg3
         const auto [arg, argOk] = parseBoolSemiLooselyButNotTooLoosely( l.back() );
         if (!argOk)
             throw RPCError("Invalid unspentOnly argument; expected boolean");
-        unspentOnly = arg;
+        // TODO: use this arg?
     }
 
     const auto tip = storage->latestTip().first;
@@ -2345,12 +2344,11 @@ void Server::rpc_blockchain_reusable_get_mempool(Client *c, const RPC::BatchId b
         throw RPCError("Invalid prefix argument; expected hex string");
     if ((*prefix).size() > ReusableBlock::MAX_PREFIX_SIZE)
         throw RPCError("Invalid prefix argument; too long");
-    bool unspentOnly = false;
     if (l.size() == 2) { //optional arg3
         const auto [arg, argOk] = parseBoolSemiLooselyButNotTooLoosely( l.back() );
         if (!argOk)
             throw RPCError("Invalid unspentOnly argument; expected boolean");
-        unspentOnly = arg;
+        // TODO: use this arg?
     }
 
     generic_do_async(c, batchId, m.id, [prefix, this] {
@@ -2358,7 +2356,7 @@ void Server::rpc_blockchain_reusable_get_mempool(Client *c, const RPC::BatchId b
     });
 }
 
-void Server::rpc_blockchain_reusable_subscribe(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
+void Server::rpc_blockchain_reusable_subscribe(Client *, const RPC::BatchId, const RPC::Message &m)
 {
     QVariantList l = m.paramsList();
     assert(l.size() >= 1);
@@ -2371,7 +2369,7 @@ void Server::rpc_blockchain_reusable_subscribe(Client *c, const RPC::BatchId bat
     // TODO should we refactor the subscribe / subsmgr code to accept ru subscriptions
 }
 
-void Server::rpc_blockchain_reusable_unsubscribe(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
+void Server::rpc_blockchain_reusable_unsubscribe(Client *, const RPC::BatchId, const RPC::Message &)
 {
     // TODO
 }
