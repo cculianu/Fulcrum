@@ -1101,6 +1101,10 @@ QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const Q
     if (hasCashTokens)
         r["cashtokens"] = true;
 
+    // RPA TODO: in the final release make RPA support configurable and make this true/false based on the config setting
+    // if (opts.rpaEnabled)
+    r["rpa"] = true;
+
     QVariantMap hmap, hmapTor;
     if (opts.publicTcp.has_value())
         hmap["tcp_port"] = unsigned(*opts.publicTcp);
