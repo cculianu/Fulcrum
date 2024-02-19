@@ -325,6 +325,7 @@ SOURCES += \
     Options.cpp \
     PeerMgr.cpp \
     RecordFile.cpp \
+    ReusableBlock.cpp \
     RollingBloomFilter.cpp \
     RPC.cpp \
     RPCMsgId.cpp \
@@ -371,6 +372,7 @@ HEADERS += \
     Options.h \
     PeerMgr.h \
     RecordFile.h \
+    ReusableBlock.h \
     RollingBloomFilter.h \
     RPC.h \
     RPCMsgId.h \

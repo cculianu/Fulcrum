@@ -491,29 +491,24 @@ auto Mempool::dropTxs(ScriptHashesAffectedSet & scriptHashesAffectedOut, TxHashS
     return ret;
 }
 
-std::size_t Mempool::rmRuTxs(const TxHashSet &txids, const bool TRACE)
+std::size_t Mempool::rmRuTxs(const TxHashSet &txids, const bool TRACE [[maybe_unused]])
 {
     std::size_t ct = 0;
     for (const auto & txid : txids) {
         TxNum ruTxNum = HashHasher{}(txid); // TODO document
 
-        {
-            auto it = this->ruNum2PrefixSet.find(ruTxNum);
-            if (it != this->ruNum2PrefixSet.end()) {
-                auto [txNum, prefixSet] = *it;
-                for (auto & ser : prefixSet) {
-                    this->ruBlk.remove(ser);
-                }
 
-                this->ruNum2PrefixSet.erase(it);
+        if (auto it = this->ruNum2PrefixSet.find(ruTxNum); it != this->ruNum2PrefixSet.end()) {
+            const auto & [txNum, prefixSet] = *it;
+            for (const auto & ser : prefixSet) {
+                this->ruBlk.remove(ser);
             }
+
+            this->ruNum2PrefixSet.erase(it);
         }
 
-        {
-            auto it = this->ruNum2Hash.find(ruTxNum);
-            if (it != this->ruNum2Hash.end()) {
-                this->ruNum2Hash.erase(it);
-            }
+        if (auto it = this->ruNum2Hash.find(ruTxNum); it != this->ruNum2Hash.end()) {
+            this->ruNum2Hash.erase(it);
         }
 
         ++ct;
