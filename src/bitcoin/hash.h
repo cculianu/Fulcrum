@@ -11,6 +11,8 @@
 #include "version.h"
 #include "serialize.h"
 
+#include <cstddef> // for std::byte
+#include <type_traits>
 #include <vector>
 
 #ifdef __clang__
@@ -155,8 +157,8 @@ private:
     const int nVersion;
 
 public:
-    CHashWriter(int nTypeIn, int nVersionIn)
-        : nType(nTypeIn), nVersion(nVersionIn) {}
+    CHashWriter(int nTypeIn, int nVersionIn, bool once = false)
+        : ctx(once), nType(nTypeIn), nVersion(nVersionIn) {}
 
     int GetType() const { return nType; }
     int GetVersion() const { return nVersion; }
@@ -171,6 +173,8 @@ public:
         ctx.Finalize(result.data());
         return result;
     }
+
+    void GetHashInPlace(uint8_t buf[CHash256::OUTPUT_SIZE]) { ctx.Finalize(buf); }
 
     template <typename T> CHashWriter &operator<<(const T &obj) {
         // Serialize to this stream
@@ -217,10 +221,20 @@ public:
 
 template <typename T>
 uint256 SerializeHash(const T &obj, int nType = SER_GETHASH,
-                      int nVersion = PROTOCOL_VERSION) {
-    CHashWriter ss(nType, nVersion);
+                      int nVersion = PROTOCOL_VERSION, bool once = false) {
+    CHashWriter ss(nType, nVersion, once);
     ss << obj;
     return ss.GetHash();
+}
+
+/** Added by Calin to support hashing to QByteArray in-place */
+template <typename ByteT, typename T>
+std::enable_if_t<std::is_same_v<ByteT, char> || std::is_same_v<ByteT, uint8_t> || std::is_same_v<ByteT, std::byte>>
+/* void */ SerializeHashInPlace(ByteT hash[CHash256::OUTPUT_SIZE], const T &obj,
+                                int nType = SER_GETHASH, int nVersion = PROTOCOL_VERSION, bool once = false) {
+    CHashWriter ss(nType, nVersion, once);
+    ss << obj;
+    ss.GetHashInPlace(reinterpret_cast<uint8_t *>(hash));
 }
 
 // MurmurHash3: ultra-fast hash suitable for hash tables but not cryptographically secure
