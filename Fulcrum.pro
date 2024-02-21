@@ -323,6 +323,7 @@ SOURCES += \
     Mixins.cpp \
     Mgr.cpp \
     Options.cpp \
+    PackedNumView.cpp \
     PeerMgr.cpp \
     RecordFile.cpp \
     ReusableBlock.cpp \
@@ -370,6 +371,7 @@ HEADERS += \
     Mgr.h \
     Mixins.h \
     Options.h \
+    PackedNumView.h \
     PeerMgr.h \
     RecordFile.h \
     ReusableBlock.h \
