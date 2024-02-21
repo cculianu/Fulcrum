@@ -21,6 +21,7 @@
 #include "Util.h"
 
 #include "bitcoin/block.h"
+#include "bitcoin/hash.h"
 #include "bitcoin/script.h"
 #include "bitcoin/streams.h"
 #include "bitcoin/transaction.h"
@@ -170,6 +171,15 @@ namespace BTC
     inline QByteArray HashOnce(const QByteArray &b) { return Hash(b, true); }
     /// Like the Hash() function above, except does hash160 once. (not reversed).
     extern QByteArray Hash160(const QByteArray &);
+    /// Hash any Bitcoin object in-place and return the hash. If `once` == true, we do single-sha256 hashing. If
+    /// `reversed` == true, we reverse the result (making it big-endian ready for JSON).
+    template <typename BitcoinObject>
+    QByteArray HashInPlace(const BitcoinObject &bo, bool once = false, bool reversed = false) {
+        QByteArray ret(bitcoin::CHash256::OUTPUT_SIZE, Qt::Uninitialized); // allocate without initializing
+        bitcoin::SerializeHashInPlace(ret.data(), bo, bitcoin::SER_GETHASH, bitcoin::PROTOCOL_VERSION, once);
+        if (reversed) std::reverse(ret.begin(), ret.end());
+        return ret;
+    }
 
     /// Takes a hash in bitcoin memory order and returns a deep copy QByteArray of the data, reversed
     /// (this is intended to keep our representation of bitcoin data closer to how we will send it to clients down

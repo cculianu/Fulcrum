@@ -113,6 +113,12 @@ namespace {
         checkRuNotEqualsTable(ru2, prefixTable);
 
         Log() << "Testing ReusableBlock serializeInput...";
+        // perform serialization of a bitcoin input; this is used to verify the faster ReusableBlock::serializeInput()
+        auto serializeInputSlow = [](const bitcoin::CTxIn& input) -> RuHash {
+            const auto serInput = BTC::Serialize(input);
+            RuHash ruHash = BTC::Hash(serInput, false); // double sha2
+            return ruHash;
+        };
         std::vector<QByteArray> txStrs = {{
             "0100000001751ac11802cc3e4efc8aaaee87ca818482be9140dd6623f69db2c3af5c0b0ede01000000644161e02824b2ad3e24b19"
             "67ecd2e1bbcb53ca2b7c990802865b7f0f55e861849f7821daff5e78964346b1f7d16e5ce522d3354ca3cc1f6f4cba4ca0e57725a"
@@ -161,6 +167,8 @@ namespace {
             for (size_t n = 0, sz = tx.vin.size(); n < sz; ++n) {
                 const auto & input = tx.vin[n];
                 const RuHash ruHash = ReusableBlock::serializeInput(input);
+                const RuHash ruHashSlow = serializeInputSlow(input);
+                if (ruHash != ruHashSlow) throw Exception("Fast serializeInput does not match the slow version!");
                 const std::string ruHashPrefix = ReusableBlock::ruHashToPrefix(ruHash);
                 QByteArray prefixHex = Util::ToHexFast(QByteArray::fromStdString(ruHashPrefix));
                 // remove leading 0 from hex to match the format we use otherwise

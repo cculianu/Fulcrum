@@ -131,9 +131,7 @@ struct ReusableBlock {
 
     // perform serialization of a bitcoin input, the prefix of this will be indexed
     static RuHash serializeInput(const bitcoin::CTxIn& input) {
-        const auto serInput = BTC::Serialize(input);
-        RuHash ruHash = BTC::Hash(serInput, false); // double sha2
-        return ruHash;
+        return BTC::HashInPlace(input); // double sha256
     }
 
     // split hash into little nibbles so we can perform prefix queries on 4 bit sections
