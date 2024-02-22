@@ -328,6 +328,7 @@ SOURCES += \
     RecordFile.cpp \
     ReusableBlock.cpp \
     RollingBloomFilter.cpp \
+    Rpa.cpp \
     RPC.cpp \
     RPCMsgId.cpp \
     ServerMisc.cpp \
@@ -376,6 +377,7 @@ HEADERS += \
     RecordFile.h \
     ReusableBlock.h \
     RollingBloomFilter.h \
+    Rpa.h \
     RPC.h \
     RPCMsgId.h \
     ServerMisc.h \
