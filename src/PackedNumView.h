@@ -38,8 +38,8 @@
 /// The backing store ints may also be of any endianness (template arg: `LittleEndian` controls this).
 template<unsigned BITS, bool LittleEndian = true>
 class PackedNumView {
-    static_assert(BITS >= 24u && BITS <= 64u && BITS % 8u == 0u && BITS != 32u && BITS != 64u,
-                  "BITS must be in the range [24, 64), must be a multiple of 8, and cannot be 32 or 64.");
+    static_assert(BITS >= 24u && BITS < 64u && BITS % 8u == 0u,
+                  "BITS must be in the range [24, 64), must be a multiple of 8.");
 
     ByteView buf;
 

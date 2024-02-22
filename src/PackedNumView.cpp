@@ -178,6 +178,8 @@ void test() {
     std::array<const unsigned, 7> foo2 = { 1, 10, 129, 67367, 16700000, 0xff'ff'03, 0xff'ff'ff'ff };
     doTest<48>(Span{foo2});
     doTest<24>(Span{foo2});
+    doTest<32>(Span{foo2});
+    doTest<56>(Span{foo2});
     for (size_t i = 0u; i < 10u; ++i) {
         auto *rng = QRandomGenerator::system();
         CHK(rng != nullptr);
