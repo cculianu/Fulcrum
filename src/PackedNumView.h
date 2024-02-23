@@ -51,10 +51,11 @@ public:
     static constexpr UInt min() { return 0u; }
     static constexpr UInt max() { return static_cast<UInt>((uint64_t{1u} << BITS) - 1u); }
 
+    PackedNumView() = default;
 
     PackedNumView(ByteView packedBuffer, bool throwIfJunkAtEnd = true) : buf(packedBuffer) {
         if (throwIfJunkAtEnd && buf.size() % bytesPerElement != 0u) {
-            throw std::invalid_argument("packedBuffer must have a length that is a multiple bytesPerElement!");
+            throw std::invalid_argument("packedBuffer must have a length that is a multiple of bytesPerElement!");
         }
     }
 

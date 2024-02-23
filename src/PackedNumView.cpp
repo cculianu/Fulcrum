@@ -229,7 +229,7 @@ void test() {
     if (auto it = pnv2.find(11); it != pnv2.end())
         Log() << "Found " << *it << " at position " << it.index();
     else Log() << "11 not found";
-    auto pnv3 = PackedNumView<24>({});
+    auto pnv3 = PackedNumView<24>(ByteView{});
     Log() << "pnv3 size: " << pnv3.size();
     if (auto it = pnv3.find(10); it != pnv3.end())
         Log() << "Found " << *it << " at position " << it.index();

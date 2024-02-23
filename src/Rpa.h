@@ -18,26 +18,30 @@
 //
 #pragma once
 
-#include "BlockProcTypes.h"
 #include "ByteView.h"
+#include "PackedNumView.h"
 
 #include "bitcoin/transaction.h"
 
 #include <QByteArray>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <string>
 #include <vector>
+#include <variant>
 
 namespace Rpa {
 
 static constexpr size_t PrefixBits = 16u; // hard-coded in Fulcrum for now
+static constexpr size_t PrefixBitsMin = 4u; // the smallest prefix is a nybble
 static constexpr size_t PrefixBytes = PrefixBits / 8u;
 
 // Check some current implementation limitations
+static_assert(PrefixBitsMin > 0u && PrefixBitsMin <= PrefixBits);
 static_assert(PrefixBits >= 8u && PrefixBits <= 16u, "PrefixBits may not be less than 8 or greater than 16");
 static_assert(PrefixBytes * 8u == PrefixBits, "PrefixBits must be a multiple of 8");
 
@@ -81,16 +85,16 @@ public:
     // the raw big-endian bytes for this prefix (not truncated according to bits)
     ByteView byteView() const { return bytes; }
 
-    // returns the big-endian ordered bytes for this prefix, optionally truncated to 1 character if bits == 8
+    // returns the big-endian ordered bytes for this prefix, optionally truncated to 1 character if bits <= 8
     std::string toString(bool truncate = false) const {
         auto sv = byteView().toStringView();
-        if (truncate && bits < PrefixBits) sv = sv.substr(0, bits / 8u); // truncate to bits
+        if (truncate && bits <= 8u) sv = sv.substr(0, std::max<unsigned>(bits, 8u) / 8u); // truncate to bits
         return std::string{sv};
     }
-    // return the big-endian ordered bytes for this prefix (may take a deep or shallow copy), truncated to 1 character if bits == 8
+    // return the big-endian ordered bytes for this prefix (may take a deep or shallow copy), truncated to 1 character if bits <= 8
     QByteArray toByteArray(bool deepCopy = true, bool truncate = false) const {
         auto bv = byteView();
-        if (truncate && bits < PrefixBits) bv = bv.substr(0, bits / 8u); // truncate to bits
+        if (truncate && bits <= 8u) bv = bv.substr(0, std::max<unsigned>(bits, 8u) / 8u); // truncate to bits
         return bv.toByteArray(deepCopy);
     }
 
@@ -102,29 +106,75 @@ public:
 };
 
 static constexpr size_t PrefixTableSize = 1u << PrefixBits;
-using PrefixTableBase = std::array<std::vector<TxNum>, PrefixTableSize>;
+static constexpr unsigned SerializedTxIdxBits = 32u;
+using TxIdx = std::conditional_t<SerializedTxIdxBits <= 32u, uint32_t, uint64_t>;
+using PNV = PackedNumView<SerializedTxIdxBits>;
+using VecTxIdx = std::vector<TxIdx>;
 
-struct PrefixTable : PrefixTableBase {
-    using PrefixTableBase::PrefixTableBase;
+class PrefixTable {
+    struct ReadWrite {
+        std::vector<VecTxIdx> rows{PrefixTable::numRows(), VecTxIdx{}};
+        ReadWrite() = default;
+    };
+    struct ReadOnly {
+        QByteArray serializedData;
+        mutable std::vector<PNV> rows{PrefixTable::numRows(), PNV{}};
 
-    void clear() { fill({}); }
+        struct Toc {
+            std::vector<uint64_t> prefix0Offsets;
+            Toc() : prefix0Offsets(size_t(1 << 8), uint64_t{}) {}
+        };
+
+        Toc toc;
+
+        ReadOnly() = default;
+        ReadOnly(const ReadOnly &o) : serializedData(o.serializedData), toc(o.toc) /* intentionally don't copy rows */ {}
+        ReadOnly(ReadOnly &&) = default;
+
+        ReadOnly & operator=(const ReadOnly &o);
+        ReadOnly & operator=(ReadOnly &&) = default;
+    };
+
+    std::variant<ReadWrite, ReadOnly> var;
+
+public:
+    PrefixTable() : var(std::in_place_type<ReadWrite>) {}
+
+    // Construct from serialized data, turns this class into a read-only "view" into the data
+    explicit PrefixTable(const QByteArray &serData);
+
+    static constexpr size_t numRows() { return 0x1u << PrefixBits; }
+
+    void clear() { var.emplace<ReadWrite>(); }
+
+    bool isReadOnly() const { return std::holds_alternative<ReadOnly>(var); }
+    bool isReadWrite() const { return std::holds_alternative<ReadWrite>(var); }
 
     size_t elementCount() const;
     bool empty() const { return elementCount() == 0u; }
 
-    // Adds txNum to all entries matching prefix. If prefix length is 16 bits, then just adds to 1 entry at index prefix.value().
-    void addForPrefix(const Prefix & prefix, TxNum txNum);
+    // Adds txIdx to all entries matching prefix. If prefix length is 16 bits, then just adds to 1 entry at index prefix.value().
+    void addForPrefix(const Prefix & prefix, TxIdx TxIdx);
     // Returns a vector of all txNums matching a particular prefix, optionally sorted and uniqueified.
     // If prefix length is 16 bits, then just returns the entry at index prefix.value().
-    std::vector<TxNum> searchPrefix(const Prefix &prefix, bool sortAndMakeUnique = false) const;
+    VecTxIdx searchPrefix(const Prefix &prefix, bool sortAndMakeUnique = false) const;
     // Removes all entries matching a particular prefix. If prefix length is 16 bits, then just clears the vector at index prefix.value().
-    // Returns the number of TxNums removed.
+    // Returns the number of TxIdxs removed.
     size_t removeForPrefix(const Prefix & prefix);
 
-    static constexpr unsigned SerializedTxNumBits = 48u; // when serializing only the low-order 48 bits end up in the data (6 byte packed TxNums)
+    // Returns a pointer to a row if this instance is ReadWrite, and index <= numRows(), or nullptr otherwise.
+    VecTxIdx * getRowPtr(size_t index);
+    const VecTxIdx * getRowPtr(size_t index) const;
 
-    template <typename Ret /* must be either: QByteArray or std::string */>
-    Ret serializeRow(size_t index) const;
+    QByteArray serializeRow(size_t index, bool deepCopy = true) const;
+
+    QByteArray serialize() const;
+
+    bool operator==(const PrefixTable &o) const;
+    bool operator!=(const PrefixTable &o) const { return ! this->operator==(o); }
+
+private:
+    void ensureRow(size_t) const;
 };
 
 static_assert(PrefixTableSize - 1u == std::numeric_limits<uint16_t>::max());

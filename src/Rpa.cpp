@@ -18,8 +18,11 @@
 //
 #include "Rpa.h"
 
+#include "BlockProcTypes.h"
 #include "BTC.h"
+#include "Common.h"
 #include "PackedNumView.h"
+#include "Span.h"
 #include "Util.h"
 
 #include "bitcoin/crypto/endian.h"
@@ -28,18 +31,17 @@
 #include <cassert>
 #include <cstring> // for std::memcpy
 #include <stdexcept> // for std::invalid_argument
-#include <string>
-#include <type_traits>
 
 namespace Rpa {
 
 Hash::Hash(const bitcoin::CTxIn &txin) : QByteArray(BTC::HashInPlace(txin)) {}
 
 Prefix::Prefix(uint16_t num, uint8_t bits_)
-    : bits{std::clamp<uint8_t>(bits_, 8u, PrefixBits)},
+    : bits{std::clamp<uint8_t>(bits_, PrefixBitsMin, PrefixBits)},
       n{static_cast<uint16_t>(uint32_t{num} & (static_cast<uint32_t>((1u << bits) - 1u) << (PrefixBits - bits)))},
       bytes{static_cast<uint8_t>(n >> 8u), static_cast<uint8_t>(n & 0xffu)} {
-    if (bits_ < 8u || bits_ > 16u) throw std::invalid_argument("Prefix bits may not be <8 or >16!");
+    if (bits_ < PrefixBitsMin || bits_ > PrefixBits)
+        throw std::invalid_argument(QString("Prefix bits may not be <%1 or >%2!").arg(PrefixBitsMin).arg(PrefixBits).toStdString());
 }
 
 Prefix::Prefix(const Hash & h) {
@@ -55,50 +57,169 @@ Prefix::Prefix(const Hash & h) {
 }
 
 auto Prefix::range() const -> Range {
-    assert(bits > 0u && bits <= PrefixBits); // NB: c'tor prevents PrefixBits from being 0 or >16!
+    assert(bits >= PrefixBitsMin && bits <= PrefixBits); // NB: c'tor enforces this anyway
     const uint32_t offset = 1u << (PrefixBits - std::min(bits, uint8_t{PrefixBits}));
     return {n, n + offset};
 }
 
+auto PrefixTable::ReadOnly::operator=(const ReadOnly &o) -> ReadOnly & {
+    serializedData = o.serializedData;
+    // ensure cleared so we deserialize on-demand, and so rows doesn't potentially point to o.serializedData
+    for (auto & row : rows) row = PNV{};
+    toc = o.toc;
+    return *this;
+}
+
 size_t PrefixTable::elementCount() const {
     size_t ct = 0u;
-    for (const auto & v : *this) ct += v.size();
+    std::visit([&](const auto & rw_or_ro){
+        for (size_t i = 0u; i < numRows(); ++i) {
+            ensureRow(i);
+            const auto & v = rw_or_ro.rows.at(i);
+            ct += v.size();
+        }
+    }, var);
     return ct;
 }
 
-template <typename Ret>
-Ret PrefixTable::serializeRow(size_t index) const {
-    const auto & vec = at(index);
-    using PNV = PackedNumView<SerializedTxNumBits>;
-    const typename Ret::size_type bytesNeeded = vec.size() * PNV::bytesPerElement;
-    constexpr auto initialization = [] {
-        if constexpr (std::is_same_v<Ret, QByteArray>) return Qt::Uninitialized;
-        else return '\0';
-    }();
-    Ret ret(bytesNeeded, initialization);
-    PNV::Make(MakeUInt8Span(ret), Span{vec});
+QByteArray PrefixTable::serializeRow(size_t index, bool deepCopy) const {
+    if (auto *rw = std::get_if<ReadWrite>(&var)) {
+        const auto & vec = rw->rows.at(index);
+        const QByteArray::size_type bytesNeeded = vec.size() * PNV::bytesPerElement;
+        QByteArray ret(bytesNeeded, Qt::Uninitialized);
+        PNV::Make(MakeUInt8Span(ret), Span{vec});
+        return ret;
+    } else if (auto *ro = std::get_if<ReadOnly>(&var)) {
+        ensureRow(index);
+        const auto & pnv = ro->rows.at(index);
+        return pnv.rawBytes().toByteArray(deepCopy);
+    } else
+        throw InternalError("Unexpected variant state in PrefixTable::SerializeRow");
+}
+
+QByteArray PrefixTable::serialize() const {
+    QByteArray ret;
+    constexpr size_t numUint8s = 0x1u << 8u; // 256u
+    // minimal size for an empty table: more than ~64KiB
+    const size_t minTableSize =
+        numRows()                      // 0-byte compactsize * 65536
+        + numUint8s * sizeof(uint64_t) // 8-byte uint64_t's * 256
+        + 3u                           // 3-byte compactsize for the number of toc entries (0xfd,0x00,0x01)
+        + 11u;                         // 2-byte header + 9-byte reserved space for offset of toc
+    ret.reserve(minTableSize);
+    bitcoin::GenericVectorWriter vw(0, 0, ret, ret.size());
+    vw << uint8_t{Rpa::PrefixBits}; // byte 0 always a 16
+    vw << uint8_t{Rpa::SerializedTxIdxBits}; // byte 1 always a 32
+    vw << uint8_t{} << uint64_t{}; // reserve 9 bytes at byte offset 2
+    ReadOnly::Toc toc;
+
+    if (toc.prefix0Offsets.size() < numUint8s)
+        throw InternalError(QString("toc should have %1 rows, yet it has %2 rows! FIXME!").arg(numUint8s).arg(toc.prefix0Offsets.size()));
+    for (size_t i = 0u; i < numRows(); ++i) {
+        if ((i & 0xffu) == 0u) { // new prefix0 when prefix1 == 0x0
+            // mark the offset of this new prefix0
+            toc.prefix0Offsets[(i & 0xff00u) >> 8u] = ret.size();
+        }
+
+        const auto rowData = serializeRow(i, false);
+
+        // write compactSize + bytes
+        bitcoin::WriteCompactSize(vw, rowData.size());
+        vw << MakeUInt8Span(rowData);
+    }
+    // mark the offset of the TOC at position 2
+    {
+        bitcoin::GenericVectorWriter vw2(0, 0, ret, /* pos = */ 2); // start writing at position 2 again
+        bitcoin::WriteCompactSize(vw2, ret.size()); // this compact size will always fit into the initial 9 bytes at position 2
+    }
+    // write the TOC
+    bitcoin::WriteCompactSize(vw, toc.prefix0Offsets.size()); // write that there are 256 entries in the toc
+    for (const uint64_t val : toc.prefix0Offsets) {
+        vw << val; // note how we forced this to be 64-bit fixed-sized ints for fast initial lookup
+    }
+
     return ret;
 }
 
-template QByteArray PrefixTable::serializeRow<QByteArray>(size_t index) const;
-template std::string PrefixTable::serializeRow<std::string>(size_t index) const;
+PrefixTable::PrefixTable(const QByteArray &serData) : var(std::in_place_type<ReadOnly>) {
+    auto & ro = std::get<ReadOnly>(var);
+    auto & toc = ro.toc;
+    ro.serializedData = serData;
+    {
+        bitcoin::GenericVectorReader vr(0, 0, serData, 0);
+        uint8_t pbits = 0xff, dbits = 0xff;
+        vr >> pbits >> dbits;
+        if (pbits != Rpa::PrefixBits) throw std::ios_base::failure("Wrong byte value at position 0");
+        if (dbits != Rpa::SerializedTxIdxBits) throw std::ios_base::failure("Wrong byte value at position 1");
+        const uint64_t tocOffset = bitcoin::ReadCompactSize(vr, false);
+        if (tocOffset >= size_t(serData.size())) throw std::ios_base::failure("Bad tocOffset, exceeds buffer size");
+        vr.seek(tocOffset);
+        const uint64_t numTocEntries = bitcoin::ReadCompactSize(vr, false);
+        if (numTocEntries != toc.prefix0Offsets.size()) throw std::ios_base::failure("Bad toc entry count");
+        for (uint64_t & val : toc.prefix0Offsets) {
+            vr >> val;
+            if (val > std::numeric_limits<size_t>::max() || val >= uint64_t(serData.size()))
+                throw std::ios_base::failure("Bad toc entry, out of range");
+        }
+    }
+    // Note: we don't read the rest of the data, instead ensureRow() must be called before accessing a row to
+    // lazy-read the prefix table data on-demand.
+}
 
-void PrefixTable::addForPrefix(const Prefix &p, TxNum n) {
+void PrefixTable::addForPrefix(const Prefix &p, TxIdx n) {
+    auto *rw = std::get_if<ReadWrite>(&var);
+    if (!rw) throw Exception("addForPrefix called on a read-only PrefixTable");
     const auto [b, e] = p.range();
     for (size_t i = b; i < e; ++i) {
-        auto & vec = this->at(i);
+        auto & vec = rw->rows.at(i);
         if (vec.empty() || vec.back() != n) // optiization to avoid obvious dupes
             vec.push_back(n);
     }
 }
 
-std::vector<TxNum> PrefixTable::searchPrefix(const Prefix &prefix, bool sortAndMakeUnique) const {
-    std::vector<TxNum> ret;
-    const auto [b, e] = prefix.range();
-    for (size_t i = b; i < e; ++i) {
-        const auto & vec = this->at(i);
-        ret.insert(ret.end(), vec.begin(), vec.end());
+void PrefixTable::ensureRow(size_t i) const {
+    const auto *ro = std::get_if<ReadOnly>(&var);
+    if (!ro) return; // nothing to do for read-write table, return
+    PNV & row = ro->rows.at(i);
+    if (row.rawBytes().data() != nullptr) return; // if the data point is not nullptr, we already been through here once, and the data is populated already
+    const auto & serData = ro->serializedData;
+    const size_t pfx0 = (i & size_t{0xff00u}) >> 8u;
+    bitcoin::GenericVectorReader vr(0, 0, serData, ro->toc.prefix0Offsets[pfx0]); // start reading at prefix0 offset
+    const size_t pfx1 = i & size_t{0xffu};
+    // read forward until we hit prefix1
+    for (size_t i = 0; i < pfx1; ++i) {
+        const auto sz = bitcoin::ReadCompactSize(vr, false); // read size of this row
+        vr.seek(vr.GetPos() + sz); // skip this row
     }
+    const auto sz = bitcoin::ReadCompactSize(vr, false);
+    const auto pos = vr.GetPos();
+    if (const auto bufsz = size_t(serData.size()); sz > bufsz || pos + sz > bufsz) {
+        throw InternalError("Bad size read from serialized data buffer");
+    }
+    auto * const begin = serData.constData() + pos;
+    auto * const end = begin + sz;
+    row = PNV(Span{begin, end}); // ensure data pointer is valid
+}
+
+VecTxIdx * PrefixTable::getRowPtr(size_t index) {
+    auto *rw = std::get_if<ReadWrite>(&var);
+    if (!rw) return nullptr;
+    if (index >= rw->rows.size()) return nullptr;
+    return &rw->rows[index];
+}
+
+const VecTxIdx * PrefixTable::getRowPtr(size_t index) const { return const_cast<PrefixTable *>(this)->getRowPtr(index); }
+
+VecTxIdx PrefixTable::searchPrefix(const Prefix &prefix, bool sortAndMakeUnique) const {
+    VecTxIdx ret;
+    std::visit([&](const auto & rw_or_ro){
+        const auto [b, e] = prefix.range();
+        for (size_t i = b; i < e; ++i) {
+            ensureRow(i);
+            const auto & cont = rw_or_ro.rows.at(i);
+            ret.insert(ret.end(), cont.begin(), cont.end());
+        }
+    }, var);
     if (sortAndMakeUnique) {
         Util::sortAndUniqueify(ret, false);
     }
@@ -106,15 +227,27 @@ std::vector<TxNum> PrefixTable::searchPrefix(const Prefix &prefix, bool sortAndM
 }
 
 size_t PrefixTable::removeForPrefix(const Prefix & prefix) {
+    auto *rw = std::get_if<ReadWrite>(&var);
+    if (!rw) throw Exception("removeForPrefix called on a read-only PrefixTable");
     size_t ret = 0u;
     const auto [b, e] = prefix.range();
     for (size_t i = b; i < e; ++i) {
-        auto & vec = this->at(i);
+        auto & vec = rw->rows.at(i);
         ret += vec.size();
-        vec = value_type{}; // we clear the vector in this way to ensure memory for it is freed immediately, since vec.clear() won't guarantee this.
+        vec = VecTxIdx{}; // we clear the vector in this way to ensure memory for it is freed immediately, since vec.clear() won't guarantee this.
     }
     return ret;
 }
+
+bool PrefixTable::operator==(const PrefixTable &o) const {
+    // do a row-wise data compare
+    for (size_t i = 0; i < numRows(); ++i) {
+        if (serializeRow(i, false) != o.serializeRow(i, false))
+            return false;
+    }
+    return true;
+}
+
 
 } // namespace Rpa
 
@@ -125,7 +258,6 @@ size_t PrefixTable::removeForPrefix(const Prefix & prefix) {
 
 #include <algorithm>
 #include <map>
-#include <memory>
 #include <vector>
 
 namespace {
@@ -143,42 +275,56 @@ void test()
         return Rpa::Hash(reinterpret_cast<const char *>(std::as_const(randNums).data()), HashLen);
     };
 
-    std::unique_ptr<Rpa::PrefixTable> prefixTable = std::make_unique<Rpa::PrefixTable>(); // put the PrefixTable on the heap since it eats ~1.5MB of memory due to being a huge array
-    using VerifyTable = std::map<uint16_t, std::vector<uint64_t>>;
+    using TxIdx = Rpa::TxIdx;
+    Rpa::PrefixTable prefixTable;
+    using VerifyTable = std::map<uint16_t, std::vector<TxIdx>>;
     VerifyTable verifyTable;
 
     Log() << "Testing PrefixTable add ...";
-    if (! prefixTable->empty() || prefixTable->elementCount() != 0) throw Exception(".empty() and/or .elementCount() are wrong");
+    if (! prefixTable.empty() || prefixTable.elementCount() != 0) throw Exception(".empty() and/or .elementCount() are wrong");
     size_t added = 0;
     for (size_t i = 0u; i < 1'000'000u; ++i) {
         const auto randHash = genRandomRpaHash();
-        const TxNum n = rgen->generate64() & ((uint64_t{1u} << Rpa::PrefixTable::SerializedTxNumBits) - uint64_t{1u});
+        const TxIdx n = rgen->generate64() & ((uint64_t{1u} << Rpa::SerializedTxIdxBits) - uint64_t{1u});
         const Rpa::Prefix prefix(randHash);
-        prefixTable->addForPrefix(prefix, n); // add to prefix table
+        prefixTable.addForPrefix(prefix, n); // add to prefix table
         auto & v = verifyTable[prefix.value()];
         if (v.empty() || v.back() != n) {
             v.push_back(n);
             ++added;
         }
     }
-    if (prefixTable->elementCount() != added) throw Exception("PrefixTable's elementCount() is wrong");
+    if (prefixTable.elementCount() != added) throw Exception("PrefixTable's elementCount() is wrong");
 
     struct CheckFail : Exception { using Exception::Exception; };
     auto checkTableConsistency = [](const Rpa::PrefixTable & pt, const VerifyTable & vt) {
-        if (pt.size() != vt.size())
-            throw CheckFail("Rpa::PrefixTable's size does not equal the check-table's size");
+        if (pt.numRows() != vt.size()) {
+            // If the size is off, it could be because we have empty rows, so account for those
+            long diff = long(pt.numRows()) - long(vt.size());
+            for (size_t i = 0; i < pt.numRows(); ++i) {
+                if (vt.find(i) != vt.end()) continue; // skip
+                if (auto *r = pt.getRowPtr(i)) {
+                    if (r->empty()) --diff;
+                } else {
+                    if (pt.searchPrefix(Rpa::Prefix(i)).empty()) --diff;
+                }
+            }
+            if (diff)
+                throw CheckFail(QString("Rpa::PrefixTable's size (%1) does not equal the check-table's size (%2)")
+                                    .arg(pt.numRows()).arg(vt.size()));
+        }
 
         // check everything in the table is in the prefix map
         for (const auto & [pfxnum, vec] : vt) {
             const Rpa::Prefix pfx(pfxnum);
-            const std::vector<TxNum> & nums = pt.at(pfx.value());
+            const auto * nums = pt.getRowPtr(pfx.value());
             // the vector of txnums now should equal prefixTable
-            if (nums != vec)
+            if (!nums || *nums != vec)
                 throw CheckFail("Rpa::PrefixTable has consistency errors");
         }
     };
     Log() << "Testing PrefixTable consistency ...";
-    checkTableConsistency(*prefixTable, verifyTable);
+    checkTableConsistency(prefixTable, verifyTable);
 
     auto checkTableLookup = [](const Rpa::Prefix &p, const Rpa::PrefixTable & pt, const VerifyTable & vt, bool sort) {
         auto vpt = pt.searchPrefix(p, sort);
@@ -188,65 +334,83 @@ void test()
                 << ", range: [" << b << ", " << e << "), vecSize: " << vpt.size();
         VerifyTable::mapped_type vvt;
         for (size_t i = b; i < e; ++i) {
-            const auto & v = vt.at(i);
-            vvt.insert(vvt.end(), v.begin(), v.end());
+            try {
+                const auto & v = vt.at(i);
+                vvt.insert(vvt.end(), v.begin(), v.end());
+            } catch (const std::out_of_range &) {} // allow for missing keys, since that can happen randomly
         }
         if (sort) Util::sortAndUniqueify(vvt);
         if (vpt != vvt) throw Exception("Rpa::PrefixTable search yielded incorrect results");
     };
     Log() << "Testing PrefixTable search ...";
-    for (size_t i = 0; i < 256u; ++i) {
-        const Rpa::Prefix p(i << 8u, /* bits = */8u);
-        checkTableLookup(p, *prefixTable, verifyTable, false);
-        checkTableLookup(p, *prefixTable, verifyTable, true);
+    for (const auto bits : {4u, 6u, 8u, 12u, /*16u*/}) {
+        for (size_t i = 0; i < (0x1u << bits); ++i) {
+            const Rpa::Prefix p(i << (Rpa::PrefixBits - bits), /* bits = */bits);
+            checkTableLookup(p, prefixTable, verifyTable, false);
+            checkTableLookup(p, prefixTable, verifyTable, true);
+        }
     }
 
-    Log() << "Testing Rpa::PrefixTable serialize / unserialize...";
-    for (size_t i = 0; i < prefixTable->size(); ++i) {
-        const QByteArray serialized = prefixTable->serializeRow<QByteArray>(i);
-        PackedNumView<Rpa::PrefixTable::SerializedTxNumBits> pnv(serialized);
-        typename Rpa::PrefixTable::value_type vec;
+    Log() << "Testing PrefixTable row-level serialize / unserialize ...";
+    for (size_t i = 0; i < prefixTable.numRows(); ++i) {
+        const QByteArray serialized = prefixTable.serializeRow(i);
+        PackedNumView<Rpa::SerializedTxIdxBits> pnv(serialized);
+        Rpa::VecTxIdx vec;
         vec.insert(vec.end(), pnv.begin(), pnv.end());
-        if (vec != prefixTable->at(i)) throw Exception("Rpa::PrefixTable ser/deser cycle yielded inconsistent results");
+        if (auto *ptr = prefixTable.getRowPtr(i); !ptr || vec != *ptr)
+            throw Exception("Rpa::PrefixTable ser/deser cycle yielded inconsistent results");
     }
 
-    Log() << "Testing Rpa::PrefixTable equality ...";
+    Log() << "Testing PrefixTable table-level serialize / unserialize ...";
     {
-        auto pft2 = std::make_unique<Rpa::PrefixTable>(*prefixTable);
-        if (*prefixTable != *pft2)
+        auto data = prefixTable.serialize();
+        Rpa::PrefixTable p2(data);
+        if (!p2.isReadOnly() || p2.isReadWrite()) throw Exception("Expected read-only table");
+        if (p2.elementCount() != prefixTable.elementCount() || p2 != prefixTable) throw Exception("Unser test 1 fail");
+        for (size_t i = 0; i < p2.numRows(); ++i) {
+            const auto v1 = prefixTable.searchPrefix(Rpa::Prefix(i));
+            const auto v2 = p2.searchPrefix(Rpa::Prefix(i));
+            if (v1 != v2) throw Exception("Unser test 2 fail");
+        }
+    }
+
+    Log() << "Testing PrefixTable equality ...";
+    {
+        auto pft2 = prefixTable;
+        if (prefixTable != pft2)
             throw Exception("Rpa::PrefixTable not equal");
-        if ( ! pft2->back().empty()) {
+        if (auto *p = pft2.getRowPtr(pft2.numRows() - 1); p && ! p->empty()) {
             // invert the last element
-            pft2->back().back() = ~pft2->back().back();
+            p->back() = ~p->back();
             // equality should fail
-            if (*prefixTable == *pft2) throw Exception("Failed to break equality");
-            pft2->back().back() = ~pft2->back().back();
+            if (prefixTable == pft2) throw Exception("Failed to break equality");
+            p->back() = ~p->back();
             // restored the last element, equality preserved
-            if (*prefixTable != *pft2) throw Exception("Failed to restore equality");
+            if (prefixTable != pft2) throw Exception("Failed to restore equality");
         } else Warning() << "EMPTY LAST ENTRY -- FIXME!";
-        pft2->clear();
-        if (!pft2->empty()) throw Exception(".clear() failed");
-        if (*prefixTable == *pft2) throw Exception("operator== failed");
+        pft2.clear();
+        if (!pft2.empty()) throw Exception(".clear() failed");
+        if (prefixTable == pft2) throw Exception("operator== failed");
     }
 
-    Log() << "Testing Rpa::PrefixTable remove ...";
+    Log() << "Testing PrefixTable remove ...";
     {
-        auto prefixTable2 = std::make_unique<Rpa::PrefixTable>(*prefixTable);
+        auto prefixTable2 = prefixTable;
         auto verifyTable2 = verifyTable;
         size_t rmct = 0;
         for (size_t i = 0; i < 256u; ++i) {
             const Rpa::Prefix p(i << 8u, /* bits = */8u);
-            rmct += prefixTable->removeForPrefix(p);
+            rmct += prefixTable.removeForPrefix(p);
             const auto [b, e] = p.range();
             for (size_t j = b; j < e; ++j) verifyTable[j].clear();
             if (i > 0u && i % 10u == 0u) {
-                checkTableConsistency(*prefixTable, verifyTable);
-                if (*prefixTable == *prefixTable2) throw Exception("Equality check failed");
-                if (prefixTable->elementCount() + rmct != prefixTable2->elementCount()) throw Exception("Counts check failed");
+                checkTableConsistency(prefixTable, verifyTable);
+                if (prefixTable == prefixTable2) throw Exception("Equality check failed");
+                if (prefixTable.elementCount() + rmct != prefixTable2.elementCount()) throw Exception("Counts check failed");
             }
         }
-        checkTableConsistency(*prefixTable, verifyTable);
-        checkTableConsistency(*prefixTable2, verifyTable2);
+        checkTableConsistency(prefixTable, verifyTable);
+        checkTableConsistency(prefixTable2, verifyTable2);
         auto checkNotEqualsTable = [&](const auto &arg1, const auto &arg2) {
             try {
                 checkTableConsistency(arg1, arg2);
@@ -255,10 +419,9 @@ void test()
             }
             throw CheckFail("Inequality check failed!");
         };
-        checkNotEqualsTable(*prefixTable2, verifyTable);
-        checkNotEqualsTable(*prefixTable, verifyTable2);
+        checkNotEqualsTable(prefixTable2, verifyTable);
+        checkNotEqualsTable(prefixTable, verifyTable2);
     }
-    prefixTable.reset(); // delete the table now to save memory
 
     Log() << "Testing Rpa::Hash (serializeInput) ...";
     // perform serialization of a bitcoin input; this is used to verify the faster Rpa::Hash(const CTxIn &)
