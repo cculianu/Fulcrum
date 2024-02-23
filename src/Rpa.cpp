@@ -149,17 +149,17 @@ PrefixTable::PrefixTable(const QByteArray &serData) : var(std::in_place_type<Rea
         bitcoin::GenericVectorReader vr(0, 0, serData, 0);
         uint8_t pbits = 0xff, dbits = 0xff;
         vr >> pbits >> dbits;
-        if (pbits != Rpa::PrefixBits) throw std::ios_base::failure("Wrong byte value at position 0");
-        if (dbits != Rpa::SerializedTxIdxBits) throw std::ios_base::failure("Wrong byte value at position 1");
+        if (pbits != Rpa::PrefixBits) throw std::ios_base::failure("PrefixTable: Wrong byte value at position 0");
+        if (dbits != Rpa::SerializedTxIdxBits) throw std::ios_base::failure("PrefixTable: Wrong byte value at position 1");
         const uint64_t tocOffset = bitcoin::ReadCompactSize(vr, false);
-        if (tocOffset >= size_t(serData.size())) throw std::ios_base::failure("Bad tocOffset, exceeds buffer size");
+        if (tocOffset >= size_t(serData.size())) throw std::ios_base::failure("PrefixTable: Bad tocOffset, exceeds buffer size");
         vr.seek(tocOffset);
         const uint64_t numTocEntries = bitcoin::ReadCompactSize(vr, false);
-        if (numTocEntries != toc.prefix0Offsets.size()) throw std::ios_base::failure("Bad toc entry count");
+        if (numTocEntries != toc.prefix0Offsets.size()) throw std::ios_base::failure("PrefixTable: Bad toc entry count");
         for (uint64_t & val : toc.prefix0Offsets) {
             vr >> val;
             if (val > std::numeric_limits<size_t>::max() || val >= uint64_t(serData.size()))
-                throw std::ios_base::failure("Bad toc entry, out of range");
+                throw std::ios_base::failure("PrefixTable: Bad toc entry, out of range");
         }
     }
     // Note: we don't read the rest of the data, instead ensureRow() must be called before accessing a row to
@@ -177,24 +177,27 @@ void PrefixTable::addForPrefix(const Prefix &p, TxIdx n) {
     }
 }
 
-void PrefixTable::ensureRow(size_t i) const {
+void PrefixTable::ensureRow(const size_t index) const {
     const auto *ro = std::get_if<ReadOnly>(&var);
     if (!ro) return; // nothing to do for read-write table, return
-    PNV & row = ro->rows.at(i);
+    PNV & row = ro->rows.at(index);
     if (row.rawBytes().data() != nullptr) return; // if the data point is not nullptr, we already been through here once, and the data is populated already
     const auto & serData = ro->serializedData;
-    const size_t pfx0 = (i & size_t{0xff00u}) >> 8u;
+    const size_t pfx0 = (index & size_t{0xff00u}) >> 8u;
+    if (UNLIKELY(pfx0 >= ro->toc.prefix0Offsets.size()))
+        throw InternalError(QString("PrefixTable serialized TOC has bad size, indexing position %1 but TOC size is %2. FIXME!")
+                                .arg(pfx0).arg(ro->toc.prefix0Offsets.size()));
     bitcoin::GenericVectorReader vr(0, 0, serData, ro->toc.prefix0Offsets[pfx0]); // start reading at prefix0 offset
-    const size_t pfx1 = i & size_t{0xffu};
+    const size_t pfx1 = index & size_t{0xffu};
     // read forward until we hit prefix1
     for (size_t i = 0; i < pfx1; ++i) {
         const auto sz = bitcoin::ReadCompactSize(vr, false); // read size of this row
         vr.seek(vr.GetPos() + sz); // skip this row
     }
     const auto sz = bitcoin::ReadCompactSize(vr, false);
-    const auto pos = vr.GetPos();
+    const size_t pos = vr.GetPos();
     if (const auto bufsz = size_t(serData.size()); sz > bufsz || pos + sz > bufsz) {
-        throw InternalError("Bad size read from serialized data buffer");
+        throw std::ios_base::failure("Bad size read from serialized data buffer when attempting to deserialize a PrefixTable row");
     }
     auto * const begin = serData.constData() + pos;
     auto * const end = begin + sz;
