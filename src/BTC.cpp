@@ -23,15 +23,10 @@
 #include "bitcoin/crypto/endian.h"
 #include "bitcoin/crypto/sha256.h"
 #include "bitcoin/hash.h"
-#include "bitcoin/pubkey.h"
-#include "bitcoin/streams.h"
-#include "bitcoin/utilstrencodings.h"
-#include "bitcoin/version.h"
 
 #include <QMap>
 
 #include <algorithm>
-#include <atomic>
 #include <utility>
 
 namespace bitcoin
@@ -236,3 +231,44 @@ namespace BTC
 
 
 } // end namespace BTC
+
+
+#ifdef ENABLE_TESTS
+#include "App.h"
+
+#include "bitcoin/transaction.h"
+#include "bitcoin/uint256.h"
+
+namespace {
+    void test()
+    {
+        // Misc. unit tests for BTC namespace utility functions
+        Log() << "Testing Hash2ByteArrayRev ...";
+        bitcoin::uint256 hash = bitcoin::uint256S("080bb1010c4d32f3cb16c6a7f1ac2a949d0b5b0f0396f183870be7032cfc4da9");
+        if (hash.ToString() != "080bb1010c4d32f3cb16c6a7f1ac2a949d0b5b0f0396f183870be7032cfc4da9") throw Exception("Hash parse fail");
+        const QByteArray qba(reinterpret_cast<const char *>(std::as_const(hash).data()), hash.size());
+        if (ByteView{hash} != ByteView{qba}) throw Exception("2");
+        if (qba.toHex() != "a94dfc2c03e70b8783f196030f5b0b9d942aacf1a7c616cbf3324d0c01b10b08") throw Exception("Hash parse did not yield expected result");
+        auto rhash = BTC::Hash2ByteArrayRev(hash);
+        Debug() << "Expected hash: " << rhash.toHex();
+        if (rhash.toHex() != "080bb1010c4d32f3cb16c6a7f1ac2a949d0b5b0f0396f183870be7032cfc4da9") throw Exception("BTC::Hash2ByteArrayRev is broken");
+
+        Log() << "Testing Deserialize ...";
+        const auto txnhex = "0100000001e7b81293c58fa088412949e485f7a7310c386a267a1825284e79c083d26b55670000000084410b00"
+                            "086668d9c26c3bf44b4f136512d7edae0f01ddd66844e312fa00f54250e93457b5e2c823ca31ab452d22f27181"
+                            "b13ce3560b974130b5e8a9e1b3ab820d0d414104e8806002111e3dfb6944e63a42461832437f2bbd616facc269"
+                            "10becfa388642972aaf555ffcdc2cdc07a248e7881efa7f456634e1bdb11485dbbc9db20cb669dfeffffff01fb"
+                            "0cfe00000000001976a914590888ac04b1f1cf01f08110cca83dd3e3da7f7388accbb90c00";
+        auto tx = BTC::Deserialize<bitcoin::CTransaction>(Util::ParseHexFast(txnhex));
+        if (hash != tx.GetHash()) throw Exception("Txn did not deserialize ok");
+
+        Log() << "Testing HashInPlace ...";
+        if (BTC::HashInPlace(tx) != qba) throw Exception("Txn hash in place failed");
+        if (BTC::HashInPlace(tx, false, /* reversed = */true) != rhash) throw Exception("Txn hash in place reversed failed");
+
+        Log(Log::BrightWhite) << "All btcmisc unit tests passed!";
+    }
+
+    auto t1 = App::registerTest("btcmisc", test);
+} // namespace
+#endif

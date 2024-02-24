@@ -26,6 +26,7 @@
 #include "Util.h"
 
 #include "bitcoin/crypto/endian.h"
+#include "bitcoin/transaction.h"
 
 #include <algorithm>
 #include <cassert>

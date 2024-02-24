@@ -32,9 +32,11 @@
 #include <QMetaType>
 #include <QString>
 
+#include <algorithm>
 #include <cstddef> // for std::byte, etc
 #include <cstring> // for memcpy
 #include <ios>
+#include <iterator>
 #include <type_traits>
 #include <utility> // for pair, etc
 
@@ -187,10 +189,11 @@ namespace BTC
     /// hashes in hex). See BlockProc.cpp for an example of where this is used.
     template <class BitcoinHashT>
     QByteArray Hash2ByteArrayRev(const BitcoinHashT &hash) {
-        QByteArray ret(reinterpret_cast<const char *>(hash.begin()), hash.width()); // deep copy
-        std::reverse(ret.begin(), ret.end()); // reverse it
+        QByteArray ret(hash.width(), Qt::Uninitialized);
+        std::copy(std::reverse_iterator(hash.end()), std::reverse_iterator(hash.begin()),
+                  reinterpret_cast<uint8_t *>(ret.data())); // reversed copy
         return ret;
-    };
+    }
 
     /// returns true iff cscript is OP_RETURN, false otherwise
     inline bool IsOpReturn(const bitcoin::CScript &cs) {

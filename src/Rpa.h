@@ -21,8 +21,6 @@
 #include "ByteView.h"
 #include "PackedNumView.h"
 
-#include "bitcoin/transaction.h"
-
 #include <QByteArray>
 
 #include <algorithm>
@@ -33,6 +31,8 @@
 #include <string>
 #include <vector>
 #include <variant>
+
+namespace bitcoin { class CTxIn; } // forward decl. used below
 
 namespace Rpa {
 
