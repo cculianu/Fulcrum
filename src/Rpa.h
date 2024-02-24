@@ -58,10 +58,14 @@ struct Hash : QByteArray {
     Hash & operator=(const QByteArray & o) noexcept { QByteArray::operator=(o); return *this; }
 };
 
+/// Encapsulates a "prefix" which is used for searching the PrefixTable. A prefix is a 4 to 16 bit value. If it's
+/// 16-bits, it corresponds to a single index in the prefix table. Lower bits means we search the prefix table
+/// within a range of indices.
 class Prefix {
     uint8_t bits; // the number of active bits for this prefix. If == PrefixBits, then this->value() is a single index
     uint16_t n; // host byte order
-    std::array<uint8_t, PrefixBytes> bytes; // big endian
+    using Bytes = std::array<uint8_t, PrefixBytes>;
+    Bytes bytes; // big endian
     static_assert(sizeof(n) == PrefixBytes);
 public:
     explicit Prefix(uint16_t num, uint8_t bits_ = PrefixBits);
@@ -103,6 +107,22 @@ public:
     bool operator<=(const Prefix &o) const { return this->operator==(o) || this->operator<(o); }
     bool operator>(const Prefix &o) const { return ! this->operator<=(o); }
     bool operator>=(const Prefix &o) const { return ! this->operator<(o); }
+
+
+    /* -- Some generic prefix-related utility functions --*/
+
+    /// Returns the number as a big-endian array, with high nybble at position 0 and low nybble at position 1.
+    /// Assumption: num's "bits" are already normalized to 16.
+    static constexpr auto numToBytes(uint16_t num) noexcept -> Bytes { return {pfxN<0>(num), pfxN<1>(num)}; }
+
+    /// Usage: pfxN<0>(val) or pfxN<1>(val) to extract either the hi nybble (position 0) or lo nybble (position 1)
+    /// from any arbitrary number. Assumption: num's "bits" are already normalized to 16.
+    template <unsigned N> static constexpr uint8_t pfxN(uint16_t num) noexcept {
+        constexpr auto MaxN = sizeof(num) - 1u; // == 1
+        static_assert(N <= MaxN); // N must be 0 or 1
+        return static_cast<uint8_t>((num >> (8u * (MaxN - N))) & 0xffu);
+    }
+
 };
 
 static constexpr size_t PrefixTableSize = 1u << PrefixBits;
@@ -111,6 +131,9 @@ using TxIdx = std::conditional_t<SerializedTxIdxBits <= 32u, uint32_t, uint64_t>
 using PNV = PackedNumView<SerializedTxIdxBits>;
 using VecTxIdx = std::vector<TxIdx>;
 
+/// The size of this table is always 65536, and it encapsulates a mapping of a 16-bit "prefix" to a vector of
+/// TxIdx. The table may be ReadWrite (as it is populated during block processing), or ReadOnly (lookup from DB).
+/// ReadOnly tables are lazily read on-demand from a backing byte buffer (which is intended to come from the DB).
 class PrefixTable {
     struct ReadWrite {
         std::vector<VecTxIdx> rows{PrefixTable::numRows(), VecTxIdx{}};
@@ -174,7 +197,9 @@ public:
     bool operator!=(const PrefixTable &o) const { return ! this->operator==(o); }
 
 private:
-    void ensureRow(size_t) const;
+    /// ReadOnly mode only: Lazy-loads row at index, if it has not already been loaded (otherwise is a no-op).
+    /// ReadWrite mode: Is a no-op.
+    void lazyLoadRow(size_t index) const;
 };
 
 static_assert(PrefixTableSize - 1u == std::numeric_limits<uint16_t>::max());

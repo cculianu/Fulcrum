@@ -51,6 +51,7 @@ public:
     static constexpr UInt min() { return 0u; }
     static constexpr UInt max() { return static_cast<UInt>((uint64_t{1u} << BITS) - 1u); }
 
+    /// Default c'tor constructs a PackedNumView for with .isNull() == true
     PackedNumView() = default;
 
     PackedNumView(ByteView packedBuffer, bool throwIfJunkAtEnd = true) : buf(packedBuffer) {
@@ -60,6 +61,8 @@ public:
     }
 
     size_t size() const { return buf.size() / bytesPerElement; }
+
+    bool isNull() const { return buf.data() == nullptr; }
 
     UInt at(size_t i) const {
         if (i >= size()) throw std::out_of_range("Index exceeds size of array");

@@ -30,6 +30,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cstring> // for std::memcpy
+#include <limits>
 #include <stdexcept> // for std::invalid_argument
 
 namespace Rpa {
@@ -39,7 +40,7 @@ Hash::Hash(const bitcoin::CTxIn &txin) : QByteArray(BTC::HashInPlace(txin)) {}
 Prefix::Prefix(uint16_t num, uint8_t bits_)
     : bits{std::clamp<uint8_t>(bits_, PrefixBitsMin, PrefixBits)},
       n{static_cast<uint16_t>(uint32_t{num} & (static_cast<uint32_t>((1u << bits) - 1u) << (PrefixBits - bits)))},
-      bytes{static_cast<uint8_t>(n >> 8u), static_cast<uint8_t>(n & 0xffu)} {
+      bytes{numToBytes(n)} {
     if (bits_ < PrefixBitsMin || bits_ > PrefixBits)
         throw std::invalid_argument(QString("Prefix bits may not be <%1 or >%2!").arg(PrefixBitsMin).arg(PrefixBits).toStdString());
 }
@@ -74,7 +75,7 @@ size_t PrefixTable::elementCount() const {
     size_t ct = 0u;
     std::visit([&](const auto & rw_or_ro){
         for (size_t i = 0u; i < numRows(); ++i) {
-            ensureRow(i);
+            lazyLoadRow(i);
             const auto & v = rw_or_ro.rows.at(i);
             ct += v.size();
         }
@@ -90,12 +91,15 @@ QByteArray PrefixTable::serializeRow(size_t index, bool deepCopy) const {
         PNV::Make(MakeUInt8Span(ret), Span{vec});
         return ret;
     } else if (auto *ro = std::get_if<ReadOnly>(&var)) {
-        ensureRow(index);
+        lazyLoadRow(index);
         const auto & pnv = ro->rows.at(index);
         return pnv.rawBytes().toByteArray(deepCopy);
     } else
         throw InternalError("Unexpected variant state in PrefixTable::SerializeRow");
 }
+
+static_assert(PrefixBits == sizeof(uint16_t) * 8u && PrefixTable::numRows() - 1u == std::numeric_limits<uint16_t>::max(),
+              "PrefixTable::serialize(), PrefixTable::PrefixTable(QByteArray), and PrefixTable::lazyLoadRow() assumptions.");
 
 QByteArray PrefixTable::serialize() const {
     QByteArray ret;
@@ -116,9 +120,9 @@ QByteArray PrefixTable::serialize() const {
     if (toc.prefix0Offsets.size() < numUint8s)
         throw InternalError(QString("toc should have %1 rows, yet it has %2 rows! FIXME!").arg(numUint8s).arg(toc.prefix0Offsets.size()));
     for (size_t i = 0u; i < numRows(); ++i) {
-        if ((i & 0xffu) == 0u) { // new prefix0 when prefix1 == 0x0
+        if (Prefix::pfxN<1>(i) == 0u) { // new prefix0 when prefix1 == 0x0
             // mark the offset of this new prefix0
-            toc.prefix0Offsets[(i & 0xff00u) >> 8u] = ret.size();
+            toc.prefix0Offsets[Prefix::pfxN<0>(i)] = ret.size();
         }
 
         const auto rowData = serializeRow(i, false);
@@ -177,18 +181,21 @@ void PrefixTable::addForPrefix(const Prefix &p, TxIdx n) {
     }
 }
 
-void PrefixTable::ensureRow(const size_t index) const {
+void PrefixTable::lazyLoadRow(const size_t index) const {
     const auto *ro = std::get_if<ReadOnly>(&var);
     if (!ro) return; // nothing to do for read-write table, return
-    PNV & row = ro->rows.at(index);
-    if (row.rawBytes().data() != nullptr) return; // if the data point is not nullptr, we already been through here once, and the data is populated already
+    if (UNLIKELY(ro->rows.size() != numRows())) throw InternalError("Bad size for ro->rows(). FIXME!");
+    PNV & row = ro->rows.at(index); // may throw
+    if (! row.isNull()) return; // if not null, then we already been through here once, and the data is populated already (even if with a 0-sized array .isNull() will be false)
     const auto & serData = ro->serializedData;
-    const size_t pfx0 = (index & size_t{0xff00u}) >> 8u;
+    const auto prefixBytes = Prefix::numToBytes(index);
+    static_assert(prefixBytes.size() == 2u);
+    const size_t pfx0 = prefixBytes[0];
     if (UNLIKELY(pfx0 >= ro->toc.prefix0Offsets.size()))
         throw InternalError(QString("PrefixTable serialized TOC has bad size, indexing position %1 but TOC size is %2. FIXME!")
                                 .arg(pfx0).arg(ro->toc.prefix0Offsets.size()));
     bitcoin::GenericVectorReader vr(0, 0, serData, ro->toc.prefix0Offsets[pfx0]); // start reading at prefix0 offset
-    const size_t pfx1 = index & size_t{0xffu};
+    const size_t pfx1 = prefixBytes[1];
     // read forward until we hit prefix1
     for (size_t i = 0; i < pfx1; ++i) {
         const auto sz = bitcoin::ReadCompactSize(vr, false); // read size of this row
@@ -196,12 +203,12 @@ void PrefixTable::ensureRow(const size_t index) const {
     }
     const auto sz = bitcoin::ReadCompactSize(vr, false);
     const size_t pos = vr.GetPos();
-    if (const auto bufsz = size_t(serData.size()); sz > bufsz || pos + sz > bufsz) {
+    if (const auto bufsz = size_t(serData.size()); UNLIKELY(sz > bufsz || pos + sz > bufsz)) {
         throw std::ios_base::failure("Bad size read from serialized data buffer when attempting to deserialize a PrefixTable row");
     }
     auto * const begin = serData.constData() + pos;
     auto * const end = begin + sz;
-    row = PNV(Span{begin, end}); // ensure data pointer is valid
+    row = PNV(Span{begin, end}); // ensure data pointer is valid, even if length happens to be 0
 }
 
 VecTxIdx * PrefixTable::getRowPtr(size_t index) {
@@ -218,7 +225,7 @@ VecTxIdx PrefixTable::searchPrefix(const Prefix &prefix, bool sortAndMakeUnique)
     std::visit([&](const auto & rw_or_ro){
         const auto [b, e] = prefix.range();
         for (size_t i = b; i < e; ++i) {
-            ensureRow(i);
+            lazyLoadRow(i);
             const auto & cont = rw_or_ro.rows.at(i);
             ret.insert(ret.end(), cont.begin(), cont.end());
         }
