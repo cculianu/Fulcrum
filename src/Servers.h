@@ -23,8 +23,8 @@
 #include "Options.h"
 #include "PeerMgr.h"
 #include "RollingBloomFilter.h"
+#include "Rpa.h"
 #include "RPC.h"
-#include "Util.h"
 #include "Version.h"
 
 #include <QHash>
@@ -416,10 +416,10 @@ private:
     void rpc_blockchain_transaction_unsubscribe(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
 
     // reusable addresses
-    void rpc_blockchain_reusable_get_history(Client *, RPC::BatchId, const RPC::Message &); // fully implemented 
-    void rpc_blockchain_reusable_get_mempool(Client *, RPC::BatchId, const RPC::Message &); // fully implemented  
-    void rpc_blockchain_reusable_subscribe(Client *, RPC::BatchId, const RPC::Message &); // fully implemented 
-    void rpc_blockchain_reusable_unsubscribe(Client *, RPC::BatchId, const RPC::Message &); // fully implemented  
+    void rpc_blockchain_reusable_get_history(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+    void rpc_blockchain_reusable_get_mempool(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+    void rpc_blockchain_reusable_subscribe(Client *, RPC::BatchId, const RPC::Message &); // unimplemented
+    void rpc_blockchain_reusable_unsubscribe(Client *, RPC::BatchId, const RPC::Message &); // unimplemented
 
     // transaction.dsproof
     void rpc_blockchain_transaction_dsproof_get(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
@@ -484,10 +484,10 @@ private:
     using HeadersBranchAndRootPair = std::pair<QVariantList, QVariant>;
     /// Helper for rpc block_header* methods -- returns the 'branch' and 'root' keys ready to be put in the results dictionary
     HeadersBranchAndRootPair getHeadersBranchAndRoot(unsigned height, unsigned cp_height);
-    
-    /// called from reusable.get_mempool and reusable.get_history
+
+    /// Called from reusable.get_mempool and reusable.get_history
     /// TODO document more (especially how height and count can/should be 0 for mempool only search)
-    QVariantList getReusableHistoryCommon(const BlockHeight height, const size_t count, const std::string& prefix, bool mempoolOnly);
+    QVariantList getRpaHistoryCommon(const BlockHeight height, const size_t count, const Rpa::Prefix & prefix, bool mempoolOnly);
 
     double lastSubsWarningPrintTime = 0.; ///< used internally to rate-limit "max subs exceeded" message spam to log
 

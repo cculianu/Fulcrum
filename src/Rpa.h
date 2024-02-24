@@ -36,6 +36,9 @@ namespace bitcoin { class CTxIn; } // forward decl. used below
 
 namespace Rpa {
 
+// Spec limit: number of inputs we index is limited to 30 per txn to reduce DoS vector.
+static constexpr size_t InputIndexLimit = 30u;
+
 static constexpr size_t PrefixBits = 16u; // hard-coded in Fulcrum for now
 static constexpr size_t PrefixBitsMin = 4u; // the smallest prefix is a nybble
 static constexpr size_t PrefixBytes = PrefixBits / 8u;
@@ -126,10 +129,11 @@ public:
 };
 
 static constexpr size_t PrefixTableSize = 1u << PrefixBits;
-static constexpr unsigned SerializedTxIdxBits = 32u;
+static constexpr unsigned SerializedTxIdxBits = 24u; // Allows for up to ~3GB blocks. Consensus limit is 2GB anyway so this is fine for the foreseeable future.
 using TxIdx = std::conditional_t<SerializedTxIdxBits <= 32u, uint32_t, uint64_t>;
 using PNV = PackedNumView<SerializedTxIdxBits>;
 using VecTxIdx = std::vector<TxIdx>;
+static constexpr uint64_t MaxTxIdx = (uint64_t{0x1u} << SerializedTxIdxBits) - uint64_t{1u}; //< Due to SerialixedTxIdxBits limits, we only support entries <= this value.
 
 /// The size of this table is always 65536, and it encapsulates a mapping of a 16-bit "prefix" to a vector of
 /// TxIdx. The table may be ReadWrite (as it is populated during block processing), or ReadOnly (lookup from DB).

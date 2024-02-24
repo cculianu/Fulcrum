@@ -326,7 +326,6 @@ SOURCES += \
     PackedNumView.cpp \
     PeerMgr.cpp \
     RecordFile.cpp \
-    ReusableBlock.cpp \
     RollingBloomFilter.cpp \
     Rpa.cpp \
     RPC.cpp \
@@ -375,7 +374,6 @@ HEADERS += \
     PackedNumView.h \
     PeerMgr.h \
     RecordFile.h \
-    ReusableBlock.h \
     RollingBloomFilter.h \
     Rpa.h \
     RPC.h \
@@ -401,18 +399,12 @@ HEADERS += \
 # Robin Hood unordered_flat_map implememntation (single header and MUCH more efficient than unordered_map!)
 HEADERS += robin_hood/robin_hood.h
 
-# Tessil hat-trie implememntation (header only, supports prefix search and fast serialization/deserialization!)
-HEADERS += \
-    tsl/htrie_set.h \
-    tsl/htrie_map.h \
-    tsl/htrie_hash.h \
-    tsl/array-hash/array_set.h \
-    tsl/array-hash/array_map.h \
-    tsl/array-hash/array_growth_policy.h \
-    tsl/array-hash/array_hash.h
-
 RESOURCES += \
     resources.qrc
+
+contains(DEFINES, ENABLE_TESTS) {
+    RESOURCES += resources/testdata/testdata.qrc
+}
 
 # Bitcoin related sources & headers
 SOURCES += \

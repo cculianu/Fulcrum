@@ -484,6 +484,7 @@ struct DownloadBlocksTask final : public CtlTask
     const bool allowSegWit; ///< initted in c'tor. If true, deserialize blocks using the optional segwit extensons to the tx format.
     const bool allowMimble; ///< like above, but if true we allow mimblewimble (litecoin)
     const bool allowCashTokens; ///< allow special cashtoken deserialization rules (BCH only)
+    const bool allowRpaIndexing; ///< allow special indexing for RPA (reusable payment address) (BCH only)
 
     void do_get(unsigned height);
 
@@ -500,7 +501,8 @@ struct DownloadBlocksTask final : public CtlTask
 DownloadBlocksTask::DownloadBlocksTask(unsigned from, unsigned to, unsigned stride, unsigned nClients, Controller *ctl_)
     : CtlTask(ctl_, QStringLiteral("Task.DL %1 -> %2").arg(from).arg(to)), from(from), to(to), stride(stride),
       expectedCt(unsigned(nToDL(from, to, stride))), max_q(int(nClients)+1),
-      allowSegWit(ctl_->isSegWitCoin()), allowMimble(ctl_->isMimbleWimbleCoin()), allowCashTokens(ctl_->isBCHCoin())
+      allowSegWit(ctl_->isSegWitCoin()), allowMimble(ctl_->isMimbleWimbleCoin()), allowCashTokens(ctl_->isBCHCoin()),
+      allowRpaIndexing(ctl_->isBCHCoin())
 {
     FatalAssert( (to >= from) && (ctl_) && (stride > 0), "Invalid params to DonloadBlocksTask c'tor, FIXME!");
     if (stride > 1 || expectedCt > 1) {
@@ -556,7 +558,10 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
                         PreProcessedBlockPtr ppb;
                         try {
                             const auto cblock = BTC::Deserialize<bitcoin::CBlock>(rawblock, 0, allowSegWit, allowMimble, allowCashTokens, allowMimble /* throw if junk at end if Litecoin (catch deser. bugs) */);
-                            ppb = PreProcessedBlock::makeShared(bnum, size_t(rawblock.size()), cblock);
+                            ppb = PreProcessedBlock::makeShared(bnum, size_t(rawblock.size()), cblock,
+                                                                /* TESTING TODO: Make this come from app-state/config and/or start at a particular block height, etc */
+                                                                allowRpaIndexing /* enable RPA indexing */
+                                                                );
                             if (allowMimble && Debug::isEnabled()) {
                                 // Litecoin only
                                 bool doSerChk{};

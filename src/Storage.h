@@ -30,6 +30,7 @@
 #include "Mgr.h"
 #include "Mixins.h"
 #include "Options.h"
+#include "Span.h"
 #include "TXO.h"
 
 #include "bitcoin/amount.h"
@@ -48,6 +49,7 @@
 #include <vector>
 
 namespace BTC { class HeaderVerifier; } // fwd decl used below. #include "BTC.h" to see this type
+namespace Rpa { class Prefix; } // fwd decl, use "Rpa.h" to see this type
 
 /// Generic database error
 struct DatabaseError : public Exception { using Exception::Exception; ~DatabaseError() override; };
@@ -194,7 +196,17 @@ public:
     /// Given a block height and a position in the block (txIdx), return a TxHash.  Never throws. Returns !has_value if
     /// height/posInBlock pair is not found (or in very unlikely cases, if there was an underlying low-level error).
     /// Thread safe, takes class-level locks.
-    std::optional<TxHash> hashForHeightAndPos(BlockHeight height, unsigned posInBlock) const;
+    /// @param existingBlocksLock - set to non-nullptr if you already took the class-level `blocksLock` from calling code (this param is for internal use only)
+    std::optional<TxHash> hashForHeightAndPos(BlockHeight height, uint32_t posInBlock,
+                                              const SharedLockGuard *existingBlocksLock = nullptr) const;
+
+    /// Given a height and an array of positions in a block, returns a vector of the TxHashes for the positions in question.
+    /// Never throws. Missing or not found positions are marked with an empty optional in the resultant vector.
+    /// Returns an empty vector if height exceeds the chain tip height.
+    /// Thread safe, takes class-level locks.
+    /// @param existingBlocksLock - set to non-nullptr if you already took the class-level `blocksLock` from calling code (this param is for internal use only)
+    std::vector<std::optional<TxHash>> hashesForHeightAndPosVec(BlockHeight height, Span<const uint32_t> positionsInBlock,
+                                                                const SharedLockGuard *existingBlocksLock = nullptr) const;
 
     /// Given a block height, return all of the TxHashes in a block, in bitcoind memory order.
     ///
@@ -244,18 +256,20 @@ public:
         bool operator==(const UnspentItem &o) const noexcept;
     };
     using UnspentItems = std::vector<UnspentItem>;
-    
-    //-- reusable history
-    struct ReusableHistoryItem {
+
+    //-- RPA history
+    struct RpaHistoryItem {
         TxHash hash;
         int height = 0; ///< block height. 0 = unconfirmed
+        RpaHistoryItem() = default;
+        RpaHistoryItem(const TxHash &h, int ht = 0) : hash(h), height(ht) {}
     };
-    using ReusableHistory = std::vector<ReusableHistoryItem>;
+    using RpaHistory = std::vector<RpaHistoryItem>;
 
     /// TODO document better
     /// Thread-safe. Will return an empty vector if the confirmed history size exceeds MaxHistory, or a truncated
     /// vector if the confirmed + unconfirmed history exceeds MaxHistory.
-    ReusableHistory getReusableHistory(const BlockHeight height, const size_t count, const std::string & prefix, bool includeConfirmed, bool includeMempool) const;
+    RpaHistory getRpaHistory(const BlockHeight height, const size_t count, const Rpa::Prefix &prefix, bool includeConfirmed, bool includeMempool) const;
 
     enum class TokenFilterOption { IncludeTokens, ExcludeTokens, OnlyTokens };
 
@@ -468,7 +482,7 @@ private:
     void loadCheckHeadersInDB(); ///< may throw -- called from startup()
     void loadCheckUTXOsInDB(); ///< may throw -- called from startup()
     void loadCheckShunspentInDB(); ///< may throw -- called from startup()
-    void loadCheckReusableBlocksInDb(); ///< may throw -- called from startup()
+    void loadCheckRpaInDb(); ///< may throw -- called from startup()
     void loadCheckTxNumsFileAndBlkInfo(); ///< may throw -- called from startup()
     void loadCheckTxHash2TxNumMgr(); ///< may throw -- called from startup()
     void loadCheckEarliestUndo(); ///< may throw -- called from startup()
@@ -558,11 +572,11 @@ RocksDB: "txhash2txnum"
     for that key in series versus the txnum flat-file.  The performance penalty for this is extremely small since the
     txnum flat-file is extremely fast to query given a txNum.
 
-RocksDB: "rublk2trie"
-  Purpose: store txnums referenced by prefix in the ReusableBlock structure for allowing for reusable address queries
+RocksDB: "rpa"
+  Purpose: store tx indices referenced by prefix in the Rpa::PrefixTable structure for allowing for reusable address queries
   Key: height
-  Value: see struct ReusableBlock
-  TODO document better
+  Value: A single serialized Rpa::PrefixTable for this block height.
+  Commantes: TODO document better
 
 A note about ACID: (atomic, consistent, isolated, durable)
 

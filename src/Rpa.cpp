@@ -103,7 +103,8 @@ static_assert(PrefixBits == sizeof(uint16_t) * 8u && PrefixTable::numRows() - 1u
               "PrefixTable::serialize(), PrefixTable::PrefixTable(QByteArray), and PrefixTable::lazyLoadRow() assumptions.");
 
 QByteArray PrefixTable::serialize() const {
-    QByteArray ret;
+    QByteArray dataBuf;
+    size_t elementCount = 0;
     constexpr size_t numUint8s = 0x1u << 8u; // 256u
     // minimal size for an empty table: more than ~64KiB
     const size_t minTableSize =
@@ -111,8 +112,8 @@ QByteArray PrefixTable::serialize() const {
         + numUint8s * sizeof(uint64_t) // 8-byte uint64_t's * 256
         + 3u                           // 3-byte compactsize for the number of toc entries (0xfd,0x00,0x01)
         + 11u;                         // 2-byte header + 9-byte reserved space for offset of toc
-    ret.reserve(minTableSize);
-    bitcoin::GenericVectorWriter vw(0, 0, ret, ret.size());
+    dataBuf.reserve(minTableSize);
+    bitcoin::GenericVectorWriter vw(0, 0, dataBuf, dataBuf.size());
     vw << uint8_t{Rpa::PrefixBits}; // byte 0 always a 16
     vw << uint8_t{Rpa::SerializedTxIdxBits}; // byte 1 always a 32
     vw << uint8_t{} << uint64_t{}; // reserve 9 bytes at byte offset 2
@@ -123,10 +124,11 @@ QByteArray PrefixTable::serialize() const {
     for (size_t i = 0u; i < numRows(); ++i) {
         if (Prefix::pfxN<1>(i) == 0u) { // new prefix0 when prefix1 == 0x0
             // mark the offset of this new prefix0
-            toc.prefix0Offsets[Prefix::pfxN<0>(i)] = ret.size();
+            toc.prefix0Offsets[Prefix::pfxN<0>(i)] = dataBuf.size();
         }
 
         const auto rowData = serializeRow(i, false);
+        elementCount += rowData.size() / (SerializedTxIdxBits / 8u);
 
         // write compactSize + bytes
         bitcoin::WriteCompactSize(vw, rowData.size());
@@ -134,8 +136,8 @@ QByteArray PrefixTable::serialize() const {
     }
     // mark the offset of the TOC at position 2
     {
-        bitcoin::GenericVectorWriter vw2(0, 0, ret, /* pos = */ 2); // start writing at position 2 again
-        bitcoin::WriteCompactSize(vw2, ret.size()); // this compact size will always fit into the initial 9 bytes at position 2
+        bitcoin::GenericVectorWriter vw2(0, 0, dataBuf, /* pos = */ 2); // start writing at position 2 again
+        bitcoin::WriteCompactSize(vw2, dataBuf.size()); // this compact size will always fit into the initial 9 bytes at position 2
     }
     // write the TOC
     bitcoin::WriteCompactSize(vw, toc.prefix0Offsets.size()); // write that there are 256 entries in the toc
@@ -143,13 +145,36 @@ QByteArray PrefixTable::serialize() const {
         vw << val; // note how we forced this to be 64-bit fixed-sized ints for fast initial lookup
     }
 
-    return ret;
+    // serialized data is compressed to save space, since for small blocks it is mostly 0's!
+    Tic t0;
+    const auto compressed = qCompress(dataBuf);
+    if (Debug::isEnabled() && (elementCount >= 100u || t0.msec() >= 5))
+        // TODO: make this TraceM() instead
+        Debug(Log::BrightGreen).operator()
+            ("PrefixTable: elementCount: ", elementCount,
+             " uncompressedSize: ", dataBuf.size(), ", compressed size: ", compressed.size(),
+             ", ratio: ", QString::asprintf("%1.3f", double(compressed.size())/double(dataBuf.size())),
+             ", B/entry: ", QString::asprintf("%1.2f", elementCount != 0 ? double(compressed.size())/double(elementCount) : 0.0),
+             ", compression took: ", t0.msecStr(4), " msec");
+    return compressed;
 }
 
-PrefixTable::PrefixTable(const QByteArray &serData) : var(std::in_place_type<ReadOnly>) {
+PrefixTable::PrefixTable(const QByteArray &compressedSerializedData) : var(std::in_place_type<ReadOnly>) {
+    Tic t0;
     auto & ro = std::get<ReadOnly>(var);
     auto & toc = ro.toc;
-    ro.serializedData = serData;
+    Tic t1;
+    ro.serializedData = qUncompress(compressedSerializedData);
+    const auto & serData = std::as_const(ro.serializedData);
+    t1.fin();
+    Defer d([&]{
+        // TODO: make this TraceM() instead
+        if (Debug::isEnabled() && (serData.size() > 100'000 || t1.msec() >= 1))
+            Debug(Log::BrightGreen).operator()
+                ("PrefixTable: uncompress of ", serData.size(), " bytes took: ", t1.msecStr(4), " msec, total time: ",
+                 t0.msecStr(), " msec");
+    });
+    if (ro.serializedData.isNull()) throw std::ios_base::failure("PrefixTable: Failed to uncompress serialized data .. is the data corrupt?");
     {
         bitcoin::GenericVectorReader vr(0, 0, serData, 0);
         uint8_t pbits = 0xff, dbits = 0xff;
@@ -265,6 +290,7 @@ bool PrefixTable::operator==(const PrefixTable &o) const {
 #ifdef ENABLE_TESTS
 #include "App.h"
 
+#include <QFile>
 #include <QRandomGenerator>
 
 #include <algorithm>
@@ -272,6 +298,7 @@ bool PrefixTable::operator==(const PrefixTable &o) const {
 #include <vector>
 
 namespace {
+
 void test()
 {
     QRandomGenerator *rgen = QRandomGenerator::global();
@@ -402,6 +429,10 @@ void test()
         pft2.clear();
         if (!pft2.empty()) throw Exception(".clear() failed");
         if (prefixTable == pft2) throw Exception("operator== failed");
+        // test ser/deser of empty table is empty
+        const auto emptySer = pft2.serialize();
+        const Rpa::PrefixTable pftEmpty(emptySer);
+        if (!pftEmpty.empty() || pft2 != pftEmpty) throw Exception("Ser/deser cycle of an empty table failed");
     }
 
     Log() << "Testing PrefixTable remove ...";
@@ -506,9 +537,47 @@ void test()
         }
     }
 
+    []{
+        Log() << "Testing on block 833705 ...";
+        const QString path = ":testdata/bch_block_833705.bin";
+        QFile f(path);
+        if (!f.open(QFile::ReadOnly)) throw Exception("Unable to open resource: " + path);
+        const QByteArray blockData = f.readAll();
+        const auto block = BTC::Deserialize<bitcoin::CBlock>(blockData, 0, false, false, true, true);
+        Rpa::PrefixTable pft;
+
+        size_t elementCount = 0;
+        for (size_t i = 1; i < block.vtx.size(); ++i) {
+            const auto &tx = block.vtx[i];
+            for (const auto & in : tx->vin) {
+                const auto hash = Rpa::Hash(in);
+                const auto prefix = Rpa::Prefix(hash);
+                pft.addForPrefix(prefix, i);
+                ++elementCount;
+            }
+        }
+        const Rpa::VecTxIdx expected_9430{{297, 307}};
+        if (expected_9430 != pft.searchPrefix(Rpa::Prefix(uint16_t(9430)))) throw Exception("Table `pft` not as expected (check 1)");
+        const Rpa::VecTxIdx expected_0x24{{
+            19, 30, 40, 48, 54, 59, 65, 66, 72, 77, 89, 90, 96, 98, 101, 103, 107, 110, 126, 139, 146, 154, 157, 163,
+            173, 181, 189, 200, 211, 224, 235, 241, 254, 260, 263, 282, 292, 293, 297, 307, 308, 309, 319, 329, 333,
+            334, 345, 350,
+        }};
+        // Do prefix search for a short, 4-bit prefix
+        if (expected_0x24 != pft.searchPrefix(Rpa::Prefix(0x24, 4), true)) throw Exception("Table `pft` not as expected (check 2)");
+        Tic t0;
+        const Rpa::PrefixTable pft2(pft.serialize());
+        Log() << "Ser/deser cycle for PrefixTable with " << elementCount << " items took " << t0.msecStr() << " msec";
+        if (!pft2.isReadOnly()) throw Exception("Deserialized table is not ReadOnly as expected");
+        if (pft2 != pft) throw Exception("Ser/deser cycle yielded a different table that is not equal to the original!");
+        if (expected_9430 != pft2.searchPrefix(Rpa::Prefix(uint16_t(9430)))) throw Exception("Table `pft2` not as expected (check 1)");
+        if (expected_0x24 != pft2.searchPrefix(Rpa::Prefix(0x24, 4), true)) throw Exception("Table `pft2` not as expected (check 2)");
+    }();
+
     Log(Log::Color::BrightWhite) << "All Rpa unit tests passed!";
 }
 
 static const auto test_ = App::registerTest("rpa", &test);
+
 }
 #endif

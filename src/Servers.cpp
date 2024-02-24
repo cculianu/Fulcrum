@@ -25,11 +25,13 @@
 #include "Compat.h"
 #include "Merkle.h"
 #include "PeerMgr.h"
+#include "Rpa.h"
 #include "ServerMisc.h"
 #include "SrvMgr.h"
 #include "Storage.h"
 #include "SubsMgr.h"
 #include "ThreadPool.h"
+#include "Util.h"
 #include "WebSocket.h"
 
 #include <QByteArray>
@@ -353,26 +355,6 @@ namespace {
         if (ret.length() != DataLen*2 || (ret = QByteArray::fromHex(ret)).length() != DataLen)
             ret.clear();
         return ret;
-    }
-
-    /// used internally by reusable RPC methods. Given a prefixHex, ensure it's hex data and nothing else.
-    //  NOTE: hex data is single character for this, not like normal hex i.e. 'b00b5' is a valid prefix (5 characters)
-    /// Returns optional bytes (string) of valid hex decoded data
-    std::optional<std::string> decodeReusablePrefixHex(const QString & prefixHex) {
-        const QByteArray prefixPreProcessed = prefixHex.toUtf8();
-        std::string a(prefixPreProcessed.size(), '\0');
-        for (QByteArray::size_type i = 0; i < prefixPreProcessed.size(); ++i) {
-            const char c = prefixPreProcessed.at(i);
-            if (c >= '0' && c <= '9')
-                a[i] = c - '0';
-            else if (c >= 'A' && c <= 'F')
-                a[i] = c - 'A' + 10;
-            else if (c >= 'a' && c <= 'f')
-                a[i] = c - 'a' + 10;
-            else
-                return std::nullopt;
-        }
-        return a;
     }
 
     QVariantMap tokenDataToVariantMap(const bitcoin::token::OutputData & tok) {
@@ -1103,7 +1085,11 @@ QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const Q
 
     // RPA TODO: in the final release make RPA support configurable and make this true/false based on the config setting
     // if (opts.rpaEnabled)
-    r["rpa"] = true;
+    r["rpa"] = QVariantMap{
+        {"prefix_bits_min", unsigned(Rpa::PrefixBitsMin)},
+        {"prefix_bits", unsigned(Rpa::PrefixBits)},
+        {"starting_height", 0u /* RPA TODO: make this come from config and/or storage object */},
+    };
 
     QVariantMap hmap, hmapTor;
     if (opts.publicTcp.has_value())
@@ -2291,14 +2277,43 @@ void Server::rpc_blockchain_utxo_get_info(Client *c, const RPC::BatchId batchId,
     });
 }
 
+/* -- RPA -- */
+namespace {
+    /// Used internally by RPA-related RPC methods. Given a prefixHex, ensure it's hex data and nothing else.
+    /// Decodes the hex 1 nybble at a time and constructs a Rpa::Prefix from it correctly.
+    /// Returns a std::nullopt on decode error or if the hex string is too long.
+    //  NOTE: hex data is single character for this, not like normal hex i.e. 'f00' is a valid prefix (3 characters)
+    std::optional<Rpa::Prefix> decodeRpaPrefixHex(const QString & hexIn) {
+        const QByteArray hex = hexIn.trimmed().toLatin1();
+        uint32_t val = 0;
+        unsigned bits = 0;
+        std::optional<Rpa::Prefix> ret; // default: !has_value(), for error paths below
+        for (const char c : hex) {
+            val <<= 4; // shift left by 1 nybble for each character encountered
+            bits += 4;
+            if (bits > Rpa::PrefixBits) return ret; // fail if it exceeds 4 hex chars (16 bits)
+            if (c >= '0' && c <= '9')
+                val += c - '0';
+            else if (c >= 'A' && c <= 'F')
+                val += 10 + (c - 'A');
+            else if (c >= 'a' && c <= 'f')
+                val += 10 + (c - 'a');
+            else
+                return ret; // fail on non-hex chars
+        }
+        if (bits < Rpa::PrefixBitsMin) return ret; // fail if <4 bits (0 characters)
+        ret.emplace(uint16_t(val), uint8_t(bits));
+        return ret;
+    }
+} // namespace
 
-QVariantList Server::getReusableHistoryCommon(const BlockHeight height, const size_t count, const std::string& prefix, bool mempoolOnly)
+QVariantList Server::getRpaHistoryCommon(const BlockHeight height, const size_t count, const Rpa::Prefix & prefix, bool mempoolOnly)
 {
     QVariantList resp;
-    const auto items = storage->getReusableHistory(height, count, prefix, !mempoolOnly, mempoolOnly);
+    const auto items = storage->getRpaHistory(height, count, prefix, !mempoolOnly, mempoolOnly);
     for (const auto & item : items) {
         QVariantMap m{
-            { "tx_hash" , Util::ToHexFast(item.hash) }, // TODO this should be full tx
+            { "tx_hash" , Util::ToHexFast(item.hash) },
             { "height", int(item.height) },  // confirmed height. Is 0 for mempool tx regardless of unconf. parent status. Note this differs from get_mempool or get_history where -1 is used for unconf. parent.
         };
         resp.push_back(m);
@@ -2314,14 +2329,13 @@ void Server::rpc_blockchain_reusable_get_history(Client *c, const RPC::BatchId b
     const unsigned height = l.front().toUInt(&ok); // arg0
     if (!ok || height >= Storage::MAX_HEADERS)
         throw RPCError("Invalid height argument; expected non-negative numeric value");
+    static constexpr unsigned MAX_COUNT = 2016; ///< TODO: make this cofigureable. this is the current electrumx limit, for now.
     unsigned count = l[1].toUInt(&ok); // arg1
-    if (!ok || count >= Storage::MAX_HEADERS)
-        throw RPCError("Invalid count argument; expected non-negative numeric value");
-    const std::optional<std::string> prefix = decodeReusablePrefixHex( l[2].toString() ); // arg2
-    if (!prefix.has_value())
-        throw RPCError("Invalid prefix argument; expected hex string");
-    if (prefix->size() > ReusableBlock::MAX_PREFIX_SIZE)
-        throw RPCError("Invalid prefix argument; too long");
+    if (!ok || count > MAX_COUNT)
+        throw RPCError(QString("Invalid count argument; expected non-negative numeric value <= %1").arg(MAX_COUNT));
+    const auto optPrefix = decodeRpaPrefixHex( l[2].toString() ); // arg2
+    if (!optPrefix.has_value())
+        throw RPCError("Invalid prefix argument; expected hex string of at least 1 and at most 4 characters");
     if (l.size() == 4) { //optional arg3
         const auto [arg, argOk] = parseBoolSemiLooselyButNotTooLoosely( l.back() );
         if (!argOk)
@@ -2330,12 +2344,11 @@ void Server::rpc_blockchain_reusable_get_history(Client *c, const RPC::BatchId b
     }
 
     const auto tip = storage->latestTip().first;
-    if (tip < 0) throw InternalError("chain height is negative");
-    static constexpr unsigned MAX_COUNT = 2016; ///< TODO: make this cofigurable. this is the current electrumx limit, for now.
-    count = std::min(std::min(unsigned(tip+1) - height, count), MAX_COUNT);
+    if (tip < 0) throw InternalError("Chain height is negative");
+    count = std::min(unsigned(tip+1) - height, count);
 
-    generic_do_async(c, batchId, m.id, [height, count, prefix, this] {
-        return getReusableHistoryCommon(height, count, *prefix, false);
+    generic_do_async(c, batchId, m.id, [height, count, prefix = *optPrefix, this] {
+        return getRpaHistoryCommon(height, count, prefix, false);
     });
 }
 
@@ -2343,11 +2356,9 @@ void Server::rpc_blockchain_reusable_get_mempool(Client *c, const RPC::BatchId b
 {
     QVariantList l = m.paramsList();
     assert(l.size() >= 1);
-    const std::optional<std::string> prefix = decodeReusablePrefixHex( l[0].toString() ); // arg0
-    if (!prefix.has_value())
-        throw RPCError("Invalid prefix argument; expected hex string");
-    if ((*prefix).size() > ReusableBlock::MAX_PREFIX_SIZE)
-        throw RPCError("Invalid prefix argument; too long");
+    const auto optPrefix = decodeRpaPrefixHex( l[0].toString() ); // arg0
+    if (!optPrefix.has_value())
+        throw RPCError("Invalid prefix argument; expected hex string of at least 1 and at most 4 characters");
     if (l.size() == 2) { //optional arg3
         const auto [arg, argOk] = parseBoolSemiLooselyButNotTooLoosely( l.back() );
         if (!argOk)
@@ -2355,8 +2366,8 @@ void Server::rpc_blockchain_reusable_get_mempool(Client *c, const RPC::BatchId b
         // TODO: use this arg?
     }
 
-    generic_do_async(c, batchId, m.id, [prefix, this] {
-        return getReusableHistoryCommon(0, 0, *prefix, true);
+    generic_do_async(c, batchId, m.id, [prefix = *optPrefix, this] {
+        return getRpaHistoryCommon(0, 0, prefix, true);
     });
 }
 
@@ -2364,18 +2375,22 @@ void Server::rpc_blockchain_reusable_subscribe(Client *, const RPC::BatchId, con
 {
     QVariantList l = m.paramsList();
     assert(l.size() >= 1);
-    const std::optional<std::string> prefix = decodeReusablePrefixHex( l[0].toString() ); // arg0
-    if (!prefix.has_value())
-        throw RPCError("Invalid prefix argument; expected hex string");
-    if ((*prefix).size() > ReusableBlock::MAX_PREFIX_SIZE)
-        throw RPCError("Invalid prefix argument; too long");
-
-    // TODO should we refactor the subscribe / subsmgr code to accept ru subscriptions
+    const auto optPrefix = decodeRpaPrefixHex( l[0].toString() ); // arg0
+    if (!optPrefix.has_value())
+        throw RPCError("Invalid prefix argument; expected hex string of at least 1 and at most 4 characters");
+    // TODO: implement
+    throw RPCError("Subscribe is unimplemented", RPC::ErrorCodes::Code_InternalError);
 }
 
-void Server::rpc_blockchain_reusable_unsubscribe(Client *, const RPC::BatchId, const RPC::Message &)
+void Server::rpc_blockchain_reusable_unsubscribe(Client *, const RPC::BatchId, const RPC::Message &m)
 {
-    // TODO
+    QVariantList l = m.paramsList();
+    assert(l.size() >= 1);
+    const auto optPrefix = decodeRpaPrefixHex( l[0].toString() ); // arg0
+    if (!optPrefix.has_value())
+        throw RPCError("Invalid prefix argument; expected hex string of at least 1 and at most 4 characters");
+    // TODO: implement
+    throw RPCError("Unsubscribe is unimplemented", RPC::ErrorCodes::Code_InternalError);
 }
 
 void Server::rpc_mempool_get_fee_histogram(Client *c, const RPC::BatchId batchId, const RPC::Message &m)

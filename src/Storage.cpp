@@ -24,12 +24,13 @@
 #include "Mempool.h"
 #include "Merkle.h"
 #include "RecordFile.h"
-#include "ReusableBlock.h"
+#include "Rpa.h"
 #include "Span.h"
 #include "Storage.h"
 #include "SubsMgr.h"
 #include "VarInt.h"
 
+#include "bitcoin/crypto/endian.h"
 #include "bitcoin/hash.h"
 
 #include "robin_hood/robin_hood.h"
@@ -196,6 +197,30 @@ namespace {
         bitcoin::token::OutputDataPtr tokenDataPtr;
     };
 
+    // Ensures we store RPA db keys in big endian for faster scans of adjacent heights
+    struct RpaDBKey {
+        uint32_t height;
+
+        explicit RpaDBKey(uint32_t h) : height(h) {}
+
+        QByteArray toBytes() const {
+            const uint32_t bigEndian = bitcoin::htobe32(height); // swap to big endian
+            return QByteArray(reinterpret_cast<const char *>(&bigEndian), sizeof(bigEndian));
+        }
+
+        static RpaDBKey fromBytes(const QByteArray &ba, bool *ok = nullptr) {
+            RpaDBKey k{0u};
+            if (size_t(ba.size()) < sizeof(uint32_t)) {
+                if (ok) *ok = false;
+                return k;
+            }
+            uint32_t bigEndian;
+            std::memcpy(&bigEndian, ba.constData(), sizeof(uint32_t));
+            k.height = bitcoin::be32toh(bigEndian); // swap to host order
+            return k;
+        }
+    };
+
     // specializations
     template <> QByteArray Serialize(const Meta &);
     template <> Meta Deserialize(const QByteArray &, bool *);
@@ -203,8 +228,9 @@ namespace {
     template <> TXO Deserialize(const QByteArray &, bool *);
     template <> QByteArray Serialize(const TXOInfo &);
     template <> TXOInfo Deserialize(const QByteArray &, bool *);
-    template <> QByteArray Serialize(const ReusableBlock &);
-    template <> ReusableBlock Deserialize(const QByteArray &, bool *);
+    template <> Rpa::PrefixTable Deserialize(const QByteArray &, bool *);
+    template <> QByteArray Serialize(const RpaDBKey &k) { return k.toBytes(); }
+    template <> RpaDBKey Deserialize(const QByteArray &ba, bool *ok) { return RpaDBKey::fromBytes(ba, ok); }
     QByteArray Serialize(const bitcoin::Amount &, const bitcoin::token::OutputData *);
     template <> SHUnspentValue Deserialize(const QByteArray &, bool *);
     // TxNumVec
@@ -1007,9 +1033,9 @@ struct Storage::Pvt
 
         std::unique_ptr<rocksdb::DB> meta, blkinfo, utxoset,
                                      shist, shunspent, // scripthash_history and scripthash_unspent
-                                     rublk2trie,
                                      undo, // undo (reorg rewind)
-                                     txhash2txnum; // new: index of txhash -> txNumsFile
+                                     txhash2txnum, // new: index of txhash -> txNumsFile
+                                     rpa; // new: height -> Rpa::PrefixTable
         using DBPtrRef = std::tuple<std::unique_ptr<rocksdb::DB> &>;
         std::list<DBPtrRef> openDBs; ///< a bit of introspection to track which dbs are currently open (used by gentlyCloseAllDBs())
 
@@ -1827,9 +1853,9 @@ void Storage::startup()
             { "utxoset", p->db.utxoset, opts, 0.27 },
             { "scripthash_history", p->db.shist, shistOpts, 0.30 },
             { "scripthash_unspent", p->db.shunspent, opts, 0.27 },
-            { "rublk2trie", p->db.rublk2trie, opts, 0.10 },
             { "undo", p->db.undo, opts, 0.0395 },
             { "txhash2txnum", p->db.txhash2txnum, txhash2txnumOpts, 0.1 },
+            { "rpa", p->db.rpa, opts, 0.1 }, // NB: this one makes us exceed the DB memory by 10%, which is ok, since this is an optional DB
         };
         std::size_t memTotal = 0;
         const auto OpenDB = [this, &memTotal](const DBInfoTup &tup) {
@@ -1905,7 +1931,7 @@ void Storage::startup()
     // very slow check, only runs if -C -C (specified twice)
     loadCheckShunspentInDB();
     // load reusable addresses index data
-    loadCheckReusableBlocksInDb();
+    loadCheckRpaInDb();
     // load check earliest undo to populate earliestUndoHeight
     loadCheckEarliestUndo();
     // if user specified --compact-dbs on CLI, run the compaction now before returning
@@ -2066,7 +2092,7 @@ auto Storage::stats() const -> Stats
     {
         // db stats
         QVariantMap m;
-        for (const auto ptr : { &p->db.blkinfo, &p->db.meta, &p->db.shist, &p->db.shunspent, &p->db.undo, &p->db.utxoset, &p->db.rublk2trie, &p->db.txhash2txnum }) { 
+        for (const auto ptr : { &p->db.blkinfo, &p->db.meta, &p->db.shist, &p->db.shunspent, &p->db.undo, &p->db.utxoset, &p->db.txhash2txnum, &p->db.rpa, }) {
             QVariantMap m2;
             const auto & db = *ptr;
             const QString name = QFileInfo(QString::fromStdString(db->GetName())).fileName();
@@ -2647,44 +2673,67 @@ void Storage::loadCheckShunspentInDB()
           << " in " << t0.secsStr() << " sec";
  }
 
-void Storage::loadCheckReusableBlocksInDb()
+void Storage::loadCheckRpaInDb()
 {
-    FatalAssert(!!p->db.rublk2trie, __func__, ": Reusable db is not open");
+    FatalAssert(!!p->db.rpa, __func__, ": RPA db is not open");
 
-    if (options->doSlowDbChecks) {
-        Log() << "CheckDB: Verifying Reusable db (this may take some time) ...";
+    const bool doSlowChecks = options->doSlowDbChecks;
 
-        const auto t0 = Util::getTimeNS();
-        {
-            //const int currentHeight = latestTip().first;
-
-            std::unique_ptr<rocksdb::Iterator> iter(p->db.rublk2trie->NewIterator(p->db.defReadOpts));
-            if (!iter) throw DatabaseError("Unable to obtain an iterator to the reusable set db");
-            for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
-                // TODO: the below checks may be too slow. See about removing them and just counting the iter.
-                // const auto ru = Deserialize<ReusableBlock>(FromSlice(iter->key()));
-                // TODO
-                // if (!ru.isValid()) {
-                //     throw DatabaseSerializationError("Read an invalid trie from the rublk2trie database."
-                //                                      " This may be due to a database format mismatch."
-                //                                      "\n\nDelete the datadir and resynch to bitcoind.\n");
-                // }
-            }
-
-            // TODO check amount of rublks the same as amount of block headers
-            // TODO count amount of txs, check the amount of txs the same as stored amount (must save in key like rublk2trie.total_txs or something
-        }
-        const auto elapsed = Util::getTimeNS();
-        Debug() << "CheckDB: Verified reusable tries in " << QString::number((elapsed-t0)/1e6, 'f', 3) << " msec";
-
+    if (doSlowChecks) {
+        Log() << "CheckDB: Verifying RPA db (this may take some time) ...";
     } else {
-        // p->utxoCt = readUtxoCtFromDB();
+        Log() << "Loading RPA db ...";
     }
 
-    // TODO 
-    // if (const auto ct = utxoSetSize(); ct)
-    //     Log() << "ReusableBlock set: "  << ct << Util::Pluralize(" utxo", ct)
-    //           << ", " << QString::number(utxoSetSizeMB(), 'f', 3) << " MB";
+    Tic t0;
+    {
+        int firstHeight{-1}, lastHeight{-1};
+        const BlockHeight currentHeight = latestTip().first;
+        size_t ctr = 0;
+
+        std::unique_ptr<rocksdb::Iterator> iter(p->db.rpa->NewIterator(p->db.defReadOpts));
+        if (!iter) throw DatabaseError("Unable to obtain an iterator to the RPA db");
+        for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
+            const auto & k = iter->key();
+            if (k.size() == sizeof(uint32_t)) {
+                bool ok;
+                const RpaDBKey rk = Deserialize<RpaDBKey>(FromSlice(k), &ok);
+                if (!ok) throw DatabaseFormatError("Unable to deserialize RPA db key -> height");
+                if (firstHeight < 0 || rk.height < BlockHeight(firstHeight)) firstHeight = rk.height;
+                if (lastHeight < 0 || rk.height > BlockHeight(lastHeight)) lastHeight = rk.height;
+                if (rk.height > currentHeight) {
+                    // TODO here -- error? warn? remember this inconsistency?
+                    Error() << "Found an entry for height " << rk.height << " which is greater than currentHeight ("
+                            << currentHeight << ")";
+                }
+                if (doSlowChecks) {
+                    try {
+                        Rpa::PrefixTable pt = Deserialize<Rpa::PrefixTable>(FromSlice(iter->value()), &ok);
+                    } catch (const std::exception &e) {
+                        // TODO: mark this bad? Throw? what do we do here?
+                        throw DatabaseSerializationError(QString("Error deserializing Rpa::PrefixTable for height %1: %2")
+                                                         .arg(rk.height).arg(e.what()));
+                    }
+                }
+                ++ctr;
+            } else {
+                // TODO: fixme? warn? nothing?
+                Debug() << "Unknown Rpa DB entry (hex): " << QString(FromSlice(k).toHex());
+            }
+        }
+        if (lastHeight > firstHeight && size_t(lastHeight + 1 - firstHeight) != ctr) {
+            // TODO: What to do here?
+            Warning() << "Counted " << ctr << " entries in RPA db, but lastHeight - firstHeight is: " << size_t(lastHeight + 1 - firstHeight);
+        }
+        if (ctr)
+            Log() << ctr << " RPA entries in db covering heights: " << firstHeight << " -> " << lastHeight;
+        else
+            Log() << "RPA db is empty";
+
+        // TODO more checks? check amount of rublks the same as amount of block headers
+        // TODO count amount of txs, check the amount of txs the same as stored amount (must save in key like rublk2trie.total_txs or something
+    }
+    Debug() << (doSlowChecks ? "CheckDB: Verified RPA db in " : "Loaded RPA db in ") << t0.msecStr() << " msec";
 }
 
 void Storage::loadCheckEarliestUndo()
@@ -3118,24 +3167,10 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                         // note this may stall and also will empty out p->db.utxoCache->deferredAdds
                         p->db.utxoCache->waitForPrefetchToComplete();
 
-
-                    // reusable addresses blk data containing prefix lookup
-                    ReusableBlock ruBlk;
-
-                    // limit number of inputs according to spec to reduce dos vector
-                    constexpr size_t REUSABLE_INPUT_IDX_LIMIT = 30;
-                    
                     // add spends (process inputs)
                     unsigned inum = 0;
                     for (auto & in : ppb->inputs) {
                         const TXO txo{in.prevoutHash, in.prevoutN};
-
-                        // add to reusable set skip coinbase as it has no input
-                        if (inum && in.prevoutN < REUSABLE_INPUT_IDX_LIMIT) { // see note above about this limit
-                        // TODO should we send whole prevoutHash here or just prefix??
-                        ruBlk.add(in.ruHash, in.txIdx);
-                        }
-                        
                         if (!inum) {
                             // coinbase.. skip
                         } else if (in.parentTxOutIdx.has_value()) {
@@ -3179,14 +3214,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                         }
                         ++inum;
                     }
-                     
-                    Log() << "Saving rublk " << ppb->height << " size " << ruBlk.size() << " " << ruBlk.toBytes().size();
 
-                    // save rublk2trie update to db
-                    // TODO this should also update a counter so we can track some corruption occurring when scanning in loadCheckReusableBlocksInDb
-                    static const QString rublkInfoErrMsg("Error writing ReusableBlock to db");
-                    GenericDBPut(p->db.rublk2trie.get(), ppb->height, ruBlk, rublkInfoErrMsg, p->db.defWriteOpts);
-                    
                     // commit the utxoset updates now.. this issues the writes to the db and also updates
                     // p->utxoCt. This may throw.
                     issueUpdates(utxoBatch);
@@ -3253,6 +3281,20 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                     // save blkInfo to undo information, if in saveUndo mode
                     undo->blkInfo = p->blkInfos.back();
                 }
+            }
+
+            // Save RPA PrefixTable record (appends a single row to DB), if RPA is enabled for this block
+            if (ppb->serializedRpaPrefixTable) {
+                Tic t0;
+                const QByteArray & ser = *ppb->serializedRpaPrefixTable;
+                Defer d([&]{
+                    if (Debug::isEnabled() && (ser.size() > 100'000 || t0.msec() >= 5))
+                        Debug(Log::BrightGreen) << "Saved RPA " << ppb->height << " size " << ser.size() << " in " << t0.msecStr() << " msec";
+                });
+
+                // TODO this should also update a counter so we can track some corruption occurring when scanning in loadCheckRpaInDb
+                static const QString rpaErrMsg("Error writing Rpa info to db");
+                GenericDBPut(p->db.rpa.get(), RpaDBKey(ppb->height), ser, rpaErrMsg, p->db.defWriteOpts);
             }
 
             // save the last of the undo info, if in saveUndo mode
@@ -3416,8 +3458,8 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
             p->blkInfos.pop_back();
             p->blkInfosByTxNum.erase(undo.blkInfo.txNum0);
             GenericDBDelete(p->db.blkinfo.get(), uint32_t(undo.height), "Failed to delete blkInfo in undoLatestBlock");
-            GenericDBDelete(p->db.rublk2trie.get(), uint32_t(undo.height), "Failed to delete rublk2trie in undoLatestBlock"); // TODO correct message / should we move this elsewhere?
-            
+            GenericDBDelete(p->db.rpa.get(), RpaDBKey(undo.height), "Failed to delete RPA entry in undoLatestBlock");
+
             // clear num2hash cache
             p->lruNum2Hash.clear();
             // remove block from txHashes cache
@@ -3612,23 +3654,57 @@ std::optional<unsigned> Storage::heightForTxNum_nolock(TxNum n) const
     return ret;
 }
 
-std::optional<TxHash> Storage::hashForHeightAndPos(BlockHeight height, unsigned posInBlock) const
+std::optional<TxHash> Storage::hashForHeightAndPos(BlockHeight height, uint32_t posInBlock,
+                                                   const SharedLockGuard *existingBlocksLock) const
 {
     std::optional<TxHash> ret;
-    TxNum txNum = 0;
-    SharedLockGuard(p->blocksLock); // guarantee a consistent view (so that data doesn't mutate from underneath us)
+    Span<const uint32_t> singleItem{&posInBlock, size_t{1u}};
+    auto vec = hashesForHeightAndPosVec(height, singleItem, existingBlocksLock);
+    if (vec.empty()) return ret; // bad height
+    ret = std::move(vec.front());
+    return ret;
+}
+
+std::vector<std::optional<TxHash>> Storage::hashesForHeightAndPosVec(BlockHeight height, Span<const uint32_t> positionsInBlock,
+                                                                     const SharedLockGuard *existingBlocksLock) const
+{
+    std::vector<std::optional<TxHash>> ret;
+    if (positionsInBlock.empty()) return ret; // unlikely fast path
+    ret.reserve(positionsInBlock.size());
+    BlkInfo bi;
+
+    // Below is to implement optionally locking with: SharedLockGuard(p->blocksLock), if existingBlocksLock is nullptr
+    SharedLockGuard maybeLockedByUs;
+    if (existingBlocksLock == nullptr) {
+        maybeLockedByUs = SharedLockGuard(p->blocksLock);
+        existingBlocksLock = &maybeLockedByUs;
+    } else if (UNLIKELY(existingBlocksLock->mutex() != &p->blocksLock)) {
+        Error() << "Internal Error: expected the `existingBlocksLock` to be holding `p->blocksLock` (but it is not) in "
+                << __func__ << ". FIXME!";
+        return ret;
+    }
+
+    // At this point p->blocksLock is held for the rest of the function (either by caller or by us).
+    // We need to hold p->blocksLock here to get a consistent view (so that data doesn't mutate from beneath us).
+
     {
         SharedLockGuard g(p->blkInfoLock);
         if (height >= p->blkInfos.size())
-            return ret;
-        const BlkInfo & bi = p->blkInfos[height];
-        if (posInBlock >= bi.nTx)
-            return ret;
-        txNum = bi.txNum0 + posInBlock;
+            return ret; // empty vector for bad height
+        bi = p->blkInfos[height];
     }
-    ret = hashForTxNum(txNum);
+    for (const uint32_t posInBlock : positionsInBlock) {
+        if (posInBlock >= bi.nTx)
+            ret.emplace_back(std::nullopt); // indicate this position is bad with a nullopt
+        else {
+            const TxNum txNum = bi.txNum0 + posInBlock;
+            ret.push_back(hashForTxNum(txNum));
+        }
+    }
+
     return ret;
 }
+
 
 // NOTE: the returned vector has hashes in bitcoind memory order (little endian -- unlike every other function in this file!)
 std::vector<TxHash> Storage::txHashesForBlockInBitcoindMemoryOrder(BlockHeight height) const
@@ -3741,49 +3817,48 @@ auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf, BlockHeigh
     return ret;
 }
 
-auto Storage::getReusableHistory(const BlockHeight start_height, const size_t count, const std::string & prefix, bool conf, bool unconf) const -> ReusableHistory
+auto Storage::getRpaHistory(const BlockHeight start_height, const size_t count, const Rpa::Prefix & prefix, bool conf, bool unconf) const -> RpaHistory
 {
-    ReusableHistory ret;
-    const size_t maxReusableHistory = size_t(options->maxReusableHistory);
-    if (prefix.size() > ReusableBlock::MAX_PREFIX_SIZE)
-        return ret;
+    RpaHistory ret;
+    const size_t maxHistory = options->maxHistory;
     try {
         SharedLockGuard g(p->blocksLock);  // makes sure history doesn't mutate from underneath our feet
-        auto fastRemoveDuplicates = [](auto& nums) {
-            // fast remove duplicates TODO compare to unordered_set (this should be faster with good sort)
-            std::sort(nums.begin(), nums.end());
-            nums.erase(std::unique(nums.begin(), nums.end()), nums.end());
-        };
 
         if (conf) {
-            assert(bool(p->db.rublk2trie));
-            static const QString err("Error retrieving reusable history for a prefix");
+            static const QString err("Error retrieving RPA history this height");
 
             for (BlockHeight height = start_height; height < start_height + count; ++height) {
-                auto ruBlk = GenericDBGetFailIfMissing<ReusableBlock>(p->db.rublk2trie.get(), height,
-                    "Failed to read reusuable trie from the rublk2trie db", false, p->db.defReadOpts);
-                // TODO add shortcut here if length is 0, we then quick add all txs in a block here
-                // get properly prepared prefix for searching in trie
-                std::vector<TxNum> nums;
-                { // append all vectors of txnums
-                    auto pRange = ruBlk.prefixSearch(prefix);
-                    for (auto it = pRange.first; it != pRange.second; ++it)
-                        nums.insert(nums.end(), (*it).begin(), (*it).end());
+                // Note: This read-only Rpa::PrefixTable is "lazy loaded" and populated only for records we access on-demand
+                const auto optPfxTable = GenericDBGet<Rpa::PrefixTable>(p->db.rpa.get(), RpaDBKey(height), true, err, false,
+                                                                        p->db.defReadOpts);
+                if (UNLIKELY( ! optPfxTable)) {
+                    // This should never happen or happen extremely rarely (like during a reorg) -- warn to console just in case there are bugs.
+                    Warning() << "Missing Rpa PrefixTable for height: " << height
+                              << ". Is a reorg in progress? If not, contact the developers if you see this message frequently.";
+                    continue;
                 }
-                if (UNLIKELY(ret.size()+nums.size() > maxReusableHistory)) {
-                    throw HistoryTooLarge(QString("History for prefix exceeds MaxReusableHistory %1 with %2 items!")
-                                          .arg(maxReusableHistory).arg(ret.size()+nums.size()));
+                auto txIdxVec = optPfxTable->searchPrefix(prefix);
+                if (auto r = prefix.range(); r.end - r.begin > 1) {
+                    // prefix spanned multiple rows of table, sort and uniqueify
+                    Util::sortAndUniqueify(txIdxVec, false);
                 }
-                fastRemoveDuplicates(nums);
-                // TODO: Similarly to getHistory the below could use some optimization.  A batched version of hashForTxNum and
-                // is low-hanging fruit for optimization.  Each call to the below takes a shared lock.  /TODO
-                for (auto & num : nums) {
-                    auto hash = hashForHeightAndPos(height, num).value(); // may throw, but that indicates some database inconsistency. we catch below
-                    ret.emplace_back(ReusableHistoryItem{hash, int(height)});
+                if (txIdxVec.empty()) continue;
+
+                if (const auto hsize = ret.size() + txIdxVec.size(); UNLIKELY(hsize > maxHistory)) {
+                    throw HistoryTooLarge(QString("History for prefix '%5' for height range [%1, %2] exceeds MaxHistory"
+                                                  " (%3) with %4 items!")
+                                          .arg(start_height).arg(height).arg(maxHistory).arg(hsize)
+                                          .arg(QString(prefix.toByteArray(false, true).toHex())));
+                }
+
+                const auto vecOfOptHashes = hashesForHeightAndPosVec(height, txIdxVec, &g /* <-- tell callee not to re-lock blocksLock */);
+                for (const auto & optHash : vecOfOptHashes) {
+                    if (optHash) ret.emplace_back(*optHash, int(height));
                 }
             }
         }
         if (unconf) {
+#if 0
             auto [mempool, lock] = this->mempool();
 
             std::vector<TxNum> nums;
@@ -3805,6 +3880,7 @@ auto Storage::getReusableHistory(const BlockHeight start_height, const size_t co
                 auto [txNum, hash] = *it;
                 ret.emplace_back(ReusableHistoryItem{hash, int(0)});
             }
+#endif
         }
     } catch (const std::exception &e) {
         Warning(Log::Magenta) << __func__ << ": " << e.what();
@@ -4400,10 +4476,9 @@ namespace {
         return ret;
     }
 
-    template <> QByteArray Serialize(const ReusableBlock &ru) { return ru.toBytes(); }
-    template <> ReusableBlock Deserialize(const QByteArray &ba, bool *ok) {
-        ReusableBlock ret = ReusableBlock::fromBytes(ba); // requires exact size, fails if extra bytes at the end
-        if (ok) *ok = ret.isValid();
+    template <> Rpa::PrefixTable Deserialize(const QByteArray &ba, bool *ok) {
+        Rpa::PrefixTable ret(ba); // prefixtable hangs-on to this CoW ba
+        if (ok) *ok = true;
         return ret;
     }
 

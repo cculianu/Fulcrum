@@ -72,7 +72,6 @@ struct PreProcessedBlock
         unsigned txIdx = 0; ///< index into the `txInfos` vector above for the tx where this input appears
         TxHash prevoutHash; ///< 32-byte prevoutHash.  In *reversed* memory order (hex-encoding ready!) (May be a shallow copy of a byte array in `txInfos` if the prevout tx was in this block.). May be empty if coinbase
         IONum prevoutN = 0; ///< the index in the prevout tx for this input (again, tx's can't have more than ~111k inputs -- if that changes, fixme!)
-        RuHash ruHash; ///< calculated hash for reusable address indexing (we need access to the bitcoin::CTxIn to produce this, so it's stored here to be inserted later where there is no access)
         std::optional<unsigned> parentTxOutIdx; ///< if the input's prevout was in this block, the index into the `outputs` array declared in BlockProcBase, otherwise undefined.
     };
 
@@ -114,6 +113,9 @@ struct PreProcessedBlock
     // -- /End Data
 
     unsigned nOpReturns = 0; ///< just keep a count of the number of opreturn outputs encountered in the block (used by sanity checkers)
+
+    /// RPA support: the RPA prefix table, serialized; this is only valid if rpa is enabled otherwise is a no-op
+    std::optional<QByteArray> serializedRpaPrefixTable;
 
     // -- Methods:
 
@@ -162,16 +164,19 @@ struct PreProcessedBlock
 
     // -- Methods:
 
-    // c'tors, etc... note this class is trivially copyable, move constructible, etc etc
+    // c'tors, etc... note this class is fully copyable and moveable
     PreProcessedBlock() = default;
-    PreProcessedBlock(BlockHeight bheight, size_t rawBlockSizeBytes, const bitcoin::CBlock &b) { fill(bheight, rawBlockSizeBytes, b); }
+    PreProcessedBlock(BlockHeight bheight, size_t rawBlockSizeBytes, const bitcoin::CBlock &b, bool enableRpaIndexing) {
+        fill(bheight, rawBlockSizeBytes, b, enableRpaIndexing);
+    }
     /// reset this to empty
     inline void clear() { *this = PreProcessedBlock(); }
     /// fill this block with data from bitcoin's CBlock
-    void fill(BlockHeight blockHeight, size_t rawSizeBytes, const bitcoin::CBlock &b);
+    void fill(BlockHeight blockHeight, size_t rawSizeBytes, const bitcoin::CBlock &b, bool enableRpaIndexing);
 
     /// convenience factory static method: given a block, return a shard_ptr instance of this struct
-    static PreProcessedBlockPtr makeShared(unsigned height, size_t sizeBytes, const bitcoin::CBlock &block);
+    static PreProcessedBlockPtr makeShared(unsigned height, size_t sizeBytes, const bitcoin::CBlock &block,
+                                           bool enableRpaIndexing);
 
     /// debug string
     QString toDebugString() const;
