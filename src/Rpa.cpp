@@ -288,10 +288,11 @@ const VecTxIdx * PrefixTable::getRowPtr(size_t index) const { return const_cast<
 VecTxIdx PrefixTable::searchPrefix(const Prefix &prefix, bool sortAndMakeUnique) const {
     VecTxIdx ret;
     std::visit([&](const auto & rw_or_ro){
-        const auto [b, e] = prefix.range();
+        auto [b, e] = prefix.range();
+        e = std::min<uint32_t>(e, numRows());
         for (size_t i = b; i < e; ++i) {
             lazyLoadRow(i);
-            const auto & cont = rw_or_ro.rows.at(i);
+            const auto & cont = rw_or_ro.rows[i];
             ret.insert(ret.end(), cont.begin(), cont.end());
         }
     }, var);

@@ -3822,28 +3822,30 @@ auto Storage::getRpaHistory(const BlockHeight start_height, const size_t count, 
 {
     RpaHistory ret;
     const size_t maxHistory = options->maxHistory;
-    double tReadDb = 0., tPfxSearch = 0., tResolveTxIdx = 0.;
+    Tic t0;
+    double tReadDb = 0., tPfxSearch = 0., tResolveTxIdx = 0., tWaitForLock = 0., tBuildRes = 0.;
     try {
         SharedLockGuard g(p->blocksLock);  // makes sure history doesn't mutate from underneath our feet
-
+        tWaitForLock += t0.msec<double>();
         if (conf) {
             static const QString err("Error retrieving RPA history this height");
 
             for (BlockHeight height = start_height; height < start_height + count; ++height) {
-                Tic t0;
+                Tic t1;
                 // Note: This read-only Rpa::PrefixTable is "lazy loaded" and populated only for records we access on-demand
                 const auto optPfxTable = GenericDBGet<Rpa::PrefixTable>(p->db.rpa.get(), RpaDBKey(height), true, err, false,
                                                                         p->db.defReadOpts);
+                tReadDb += t1.msec<double>();
                 if (UNLIKELY( ! optPfxTable)) {
                     // This should never happen or happen extremely rarely (like during a reorg) -- warn to console just in case there are bugs.
                     Warning() << "Missing Rpa PrefixTable for height: " << height
                               << ". Is a reorg in progress? If not, contact the developers if you see this message frequently.";
                     continue;
                 }
-                tReadDb += t0.msec<double>();
-                t0 = Tic();
+                t1 = Tic();
                 const bool needSort = prefix.range().size() > 1u; // if prefix spans multiple rows of table, sort and uniqueify
                 auto txIdxVec = optPfxTable->searchPrefix(prefix, needSort);
+                tPfxSearch += t1.msec<double>();
                 if (txIdxVec.empty()) continue;
 
                 if (const auto hsize = ret.size() + txIdxVec.size(); UNLIKELY(hsize > maxHistory)) {
@@ -3852,14 +3854,15 @@ auto Storage::getRpaHistory(const BlockHeight start_height, const size_t count, 
                                           .arg(start_height).arg(height).arg(maxHistory).arg(hsize)
                                           .arg(QString(prefix.toHex())));
                 }
-                tPfxSearch += t0.msec<double>();
 
-                t0 = Tic();
+                t1 = Tic();
                 const auto vecOfOptHashes = hashesForHeightAndPosVec(height, txIdxVec, &g /* <-- tell callee not to re-lock blocksLock */);
-                tResolveTxIdx += t0.msec<double>();
+                tResolveTxIdx += t1.msec<double>();
+                t1 = Tic();
                 for (const auto & optHash : vecOfOptHashes) {
-                    if (optHash) ret.emplace_back(*optHash, int(height));
+                    if (LIKELY(optHash)) ret.emplace_back(*optHash, int(height));
                 }
+                tBuildRes += t1.msec<double>();
             }
         }
         if (unconf) {
@@ -3893,7 +3896,10 @@ auto Storage::getRpaHistory(const BlockHeight start_height, const size_t count, 
     Debug() << "getRpaHistory returned " << ret.size() << " items"
             << ", readDb: " << QString::number(tReadDb, 'f', 3) << " msec"
             << ", pfxSearch: " << QString::number(tPfxSearch, 'f', 3) << " msec"
-            << ", resolveTxIdx: " << QString::number(tResolveTxIdx, 'f', 3) << " msec";
+            << ", resolveTxIdx: " << QString::number(tResolveTxIdx, 'f', 3) << " msec"
+            << ", waitForLock: " << QString::number(tWaitForLock, 'f', 3) << " msec"
+            << ", buildResults: " << QString::number(tBuildRes, 'f', 3) << " msec"
+            << ", total: " << t0.msecStr() << " msec";
     return ret;
 }
 
