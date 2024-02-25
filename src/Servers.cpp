@@ -2296,27 +2296,39 @@ void Server::rpc_blockchain_reusable_get_history(Client *c, const RPC::BatchId b
 {
     QVariantList l = m.paramsList();
     assert(l.size() >= 3);
+    // parse and validate arg0: height
     bool ok;
-    const unsigned height = l.front().toUInt(&ok); // arg0
-    if (!ok || height >= Storage::MAX_HEADERS)
-        throw RPCError("Invalid height argument; expected non-negative numeric value");
-    static constexpr unsigned MAX_COUNT = 2016; ///< TODO: make this cofigureable. this is the current electrumx limit, for now.
-    unsigned count = l[1].toUInt(&ok); // arg1
-    if (!ok || count > MAX_COUNT)
-        throw RPCError(QString("Invalid count argument; expected non-negative numeric value <= %1").arg(MAX_COUNT));
-    const auto optPrefix = Rpa::Prefix::fromHex( l[2].toString() ); // arg2
+    unsigned height = l.front().toUInt(&ok);
+    if (!ok || height > Storage::MAX_HEADERS)
+        throw RPCError(QString("Invalid height argument; expected non-negative numeric value <= %1").arg(Storage::MAX_HEADERS));
+    const unsigned tipHeight = [this]{
+        const auto opt = storage->latestHeight();
+        if (!opt) throw InternalError("No blockchain");
+        return *opt;
+    }();
+    // parse and validate arg1: count
+    unsigned count = l[1].toUInt(&ok);
+    if (!ok) throw RPCError("Invalid count argument; expected non-negative numeric value");
+    constexpr unsigned MAX_COUNT = 2016; ///< TODO: make this cofigurable
+    count = std::min(count, MAX_COUNT); // limit count to 2016
+    if (!count || height > tipHeight) {
+        // they want nothing, return an empty list right away
+        emit c->sendResult(batchId, m.id, QVariantList{});
+        return;
+    }
+    count = std::min(unsigned(tipHeight + 1u) - height, count); // limit count again, to the number of blocks we do have
+
+    // parse and validate arg2: prefix_hex
+    const auto optPrefix = Rpa::Prefix::fromHex( l[2].toString() );
     if (!optPrefix.has_value())
         throw RPCError("Invalid prefix argument; expected hex string of at least 1 and at most 4 characters");
-    if (l.size() == 4) { //optional arg3
+    // optional arg3 (boolean: unspentOnly -- unused, unimplemented!)
+    if (l.size() >= 4) { // optional arg3
         const auto [arg, argOk] = parseBoolSemiLooselyButNotTooLoosely( l.back() );
         if (!argOk)
             throw RPCError("Invalid unspentOnly argument; expected boolean");
         // TODO: use this arg?
     }
-
-    const auto tip = storage->latestTip().first;
-    if (tip < 0) throw InternalError("Chain height is negative");
-    count = std::min(unsigned(tip+1) - height, count);
 
     generic_do_async(c, batchId, m.id, [height, count, prefix = *optPrefix, this] {
         return getRpaHistoryCommon(height, count, prefix, false);
