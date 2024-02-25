@@ -36,6 +36,10 @@
 
 namespace Rpa {
 
+namespace {
+static constexpr bool VERBOSE = false; // set to true to see some perf./compression stats as we process stuff info in Debug() mode.
+} // namespace
+
 Hash::Hash(const bitcoin::CTxIn &txin) : QByteArray(BTC::HashInPlace(txin)) {}
 
 Prefix::Prefix(uint16_t num, uint8_t bits_)
@@ -148,14 +152,15 @@ QByteArray PrefixTable::serialize() const {
     // serialized data is compressed to save space, since for small blocks it is mostly 0's!
     Tic t0;
     const auto compressed = qCompress(dataBuf);
-    if (Debug::isEnabled() && (elementCount >= 100u || t0.msec() >= 5))
-        // TODO: make this TraceM() instead
-        Debug(Log::BrightGreen).operator()
-            ("PrefixTable: elementCount: ", elementCount,
-             " uncompressedSize: ", dataBuf.size(), ", compressed size: ", compressed.size(),
-             ", ratio: ", QString::asprintf("%1.3f", double(compressed.size())/double(dataBuf.size())),
-             ", B/entry: ", QString::asprintf("%1.2f", elementCount != 0 ? double(compressed.size())/double(elementCount) : 0.0),
-             ", compression took: ", t0.msecStr(4), " msec");
+    if constexpr (VERBOSE) {
+        if (Debug::isEnabled() && (elementCount >= 100u || t0.msec() >= 5))
+            Debug(Log::BrightGreen).operator()
+                ("PrefixTable: elementCount: ", elementCount,
+                 " uncompressedSize: ", dataBuf.size(), ", compressed size: ", compressed.size(),
+                 ", ratio: ", QString::asprintf("%1.3f", double(compressed.size())/double(dataBuf.size())),
+                 ", B/entry: ", QString::asprintf("%1.2f", elementCount != 0 ? double(compressed.size())/double(elementCount) : 0.0),
+                 ", compression took: ", t0.msecStr(4), " msec");
+    }
     return compressed;
 }
 
@@ -168,11 +173,12 @@ PrefixTable::PrefixTable(const QByteArray &compressedSerializedData) : var(std::
     const auto & serData = std::as_const(ro.serializedData);
     t1.fin();
     Defer d([&]{
-        // TODO: make this TraceM() instead
-        if (Debug::isEnabled() && (serData.size() > 100'000 || t1.msec() >= 1))
-            Debug(Log::BrightGreen).operator()
-                ("PrefixTable: uncompress of ", serData.size(), " bytes took: ", t1.msecStr(4), " msec, total time: ",
-                 t0.msecStr(), " msec");
+        if constexpr (VERBOSE) {
+            if (Debug::isEnabled() && (serData.size() > 100'000 || t1.msec() >= 1))
+                Debug(Log::BrightGreen).operator()
+                    ("PrefixTable: uncompress of ", serData.size(), " bytes took: ", t1.msecStr(4), " msec, total time: ",
+                     t0.msecStr(), " msec");
+        }
     });
     if (ro.serializedData.isNull()) throw std::ios_base::failure("PrefixTable: Failed to uncompress serialized data .. is the data corrupt?");
     {
@@ -283,7 +289,6 @@ bool PrefixTable::operator==(const PrefixTable &o) const {
     }
     return true;
 }
-
 
 } // namespace Rpa
 
