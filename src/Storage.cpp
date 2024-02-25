@@ -3850,7 +3850,7 @@ auto Storage::getRpaHistory(const BlockHeight start_height, const size_t count, 
                     throw HistoryTooLarge(QString("History for prefix '%5' for height range [%1, %2] exceeds MaxHistory"
                                                   " (%3) with %4 items!")
                                           .arg(start_height).arg(height).arg(maxHistory).arg(hsize)
-                                          .arg(QString(prefix.toByteArray(false, true).toHex())));
+                                          .arg(QString(prefix.toHex())));
                 }
                 tPfxSearch += t0.msec<double>();
 
