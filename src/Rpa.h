@@ -28,7 +28,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <string>
+#include <tuple>
 #include <vector>
 #include <variant>
 
@@ -79,6 +81,10 @@ public:
         uint32_t begin{}, end{};
         Range() = default;
         Range(uint32_t b, uint32_t e) : begin{b}, end{e} {}
+        uint32_t size() const { return end - begin; }
+
+        bool operator==(const Range &o) const { return std::tuple(begin, end) == std::tuple(o.begin, o.end); }
+        bool operator!=(const Range &o) const { return ! this->operator==(o); }
     };
 
     // Returns the [begin, end) range for this prefix. If end - begin == 1 then this->value() is a concrete index
@@ -105,11 +111,14 @@ public:
         return bv.toByteArray(deepCopy);
     }
 
-    bool operator<(const Prefix &o) const { return n < o.n; }
-    bool operator==(const Prefix &o) const { return n == o.n; }
-    bool operator<=(const Prefix &o) const { return this->operator==(o) || this->operator<(o); }
-    bool operator>(const Prefix &o) const { return ! this->operator<=(o); }
-    bool operator>=(const Prefix &o) const { return ! this->operator<(o); }
+    // Returns the truncated hex (respecting bits, so it may return e.g.: 'a' for bits==4, 'ab' for bits=8, 'abc' for bits=12, etc)
+    QByteArray toHex() const;
+
+    // Parses the hex and returns an optional Prefix object. It the optional is empty, it means there was a parse error, or the hex is too long, etc.
+    static std::optional<Prefix> fromHex(const QString &);
+
+    bool operator==(const Prefix &o) const { return std::tuple(bits, n) == std::tuple(o.bits, o.n); }
+    bool operator!=(const Prefix &o) const { return ! this->operator==(o); }
 
 
     /* -- Some generic prefix-related utility functions --*/

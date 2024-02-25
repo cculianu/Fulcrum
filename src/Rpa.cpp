@@ -44,7 +44,7 @@ Hash::Hash(const bitcoin::CTxIn &txin) : QByteArray(BTC::HashInPlace(txin)) {}
 
 Prefix::Prefix(uint16_t num, uint8_t bits_)
     : bits{std::clamp<uint8_t>(bits_, PrefixBitsMin, PrefixBits)},
-      n{static_cast<uint16_t>(uint32_t{num} & (static_cast<uint32_t>((1u << bits) - 1u) << (PrefixBits - bits)))},
+      n{static_cast<uint16_t>((uint32_t{num} & static_cast<uint32_t>((1u << bits) - 1u)) << (PrefixBits - bits))},
       bytes{numToBytes(n)} {
     if (bits_ < PrefixBitsMin || bits_ > PrefixBits)
         throw std::invalid_argument(QString("Prefix bits may not be <%1 or >%2!").arg(PrefixBitsMin).arg(PrefixBits).toStdString());
@@ -54,7 +54,8 @@ Prefix::Prefix(const Hash & h) {
     if (h.isEmpty()) throw std::invalid_argument("Provided Rpa::Hash is empty!");
     bits = h.size() == 1u ? 8u : PrefixBits;
     unsigned i;
-    for (i = 0u; i < std::min(PrefixBytes, size_t(h.size())); ++i)
+    const unsigned nb =  std::min(PrefixBytes, size_t(h.size()));
+    for (i = 0u; i < nb; ++i)
         bytes[i] = static_cast<uint8_t>(h[i]);
     for ( ; i < PrefixBytes; ++i)
         bytes[i] = 0u; // fill rest with 0's
@@ -66,6 +67,38 @@ auto Prefix::range() const -> Range {
     assert(bits >= PrefixBitsMin && bits <= PrefixBits); // NB: c'tor enforces this anyway
     const uint32_t offset = 1u << (PrefixBits - std::min(bits, uint8_t{PrefixBits}));
     return {n, n + offset};
+}
+
+QByteArray Prefix::toHex() const {
+    auto ret = Util::ToHexFast(toByteArray(false, true));
+    const size_t desiredSize = bits / 4u + (bits % 4u ? 1u : 0u); // truncate the hex at the nybble level
+    if (size_t(ret.size()) > desiredSize) ret = ret.left(desiredSize);
+    return ret;
+}
+
+/* static */
+std::optional<Prefix> Prefix::fromHex(const QString &hexIn) {
+    const QByteArray hex = hexIn.trimmed().toLatin1();
+    std::optional<Rpa::Prefix> ret; // default: !has_value(), for error paths below
+    uint32_t val = 0;
+    unsigned bits = 0;
+    for (const char c : hex) {
+        val <<= 4; // shift left by 1 nybble for each character encountered
+        bits += 4;
+        if (bits > Rpa::PrefixBits) return ret; // fail if it exceeds 4 hex chars (16 bits)
+        if (c >= '0' && c <= '9')
+            val += c - '0';
+        else if (c >= 'A' && c <= 'F')
+            val += 10 + (c - 'A');
+        else if (c >= 'a' && c <= 'f')
+            val += 10 + (c - 'a');
+        else
+            return ret; // fail on non-hex chars
+    }
+    if (bits < Rpa::PrefixBitsMin) return ret; // fail if <4 bits (0 characters)
+    ret.emplace(uint16_t(val), uint8_t(bits));
+    //Debug() << "Prefix: '" << hex << "' -> value: " << ret->value() << ", bytes: '" << ret->toHex() << "', bits: " << ret->getBits();
+    return ret;
 }
 
 auto PrefixTable::ReadOnly::operator=(const ReadOnly &o) -> ReadOnly & {
@@ -262,7 +295,7 @@ VecTxIdx PrefixTable::searchPrefix(const Prefix &prefix, bool sortAndMakeUnique)
             ret.insert(ret.end(), cont.begin(), cont.end());
         }
     }, var);
-    if (sortAndMakeUnique) {
+    if (sortAndMakeUnique && ret.size() > 1u) {
         Util::sortAndUniqueify(ret, false);
     }
     return ret;
@@ -304,8 +337,90 @@ bool PrefixTable::operator==(const PrefixTable &o) const {
 
 namespace {
 
+#define CHK(pred) \
+do { \
+        if (!( pred )) throw Exception("Failed predicate: " #pred ); \
+        ++nChecksOk; \
+} while(0)
+
+void testPrefixBasic()
+{
+    Log() << "Testing basic Prefix functionality ...";
+
+    size_t nChecksOk = 0;
+    using Rpa::Prefix, Rpa::Hash;
+
+    // Construction from a number
+    Prefix p(42, 8);
+    CHK(p.toHex() == "2a");
+    CHK(p.value() == 42 << 8);
+    CHK(p.range() == Prefix::Range(0x2a00, 0x2b00));
+    p = Prefix(42, 16);
+    CHK(p.toHex() == "002a");
+    CHK(p.value() == 42);
+    p = Prefix(42, 12);
+    CHK(p.toHex() == "02a");
+    CHK(p.value() == 42 << 4);
+    CHK(p.range() == Prefix::Range(0x02a0, 0x02b0));
+    p = Prefix(42, 6);
+    CHK(p.toHex() == "a8");
+    CHK(p.value() == 42 << 10);
+    p = Prefix(42, 5); // truncated since 42 needs 6 bits
+    CHK(p.toHex() == "50");
+    CHK(p.value() == 10 << 11);
+
+    // Construction from a Hash
+    p = Prefix(Hash(Util::ParseHexFast("abcd")));
+    CHK(p.toHex() == "abcd");
+    CHK(p.getBits() == 16);
+    CHK(p.value() == 0xabcd);
+    p = Prefix(Hash(Util::ParseHexFast("ef")));
+    CHK(p.toHex() == "ef");
+    CHK(p.getBits() == 8);
+    CHK(p.value() == 0xef << 8);
+
+    // Equality takes into account bits
+    CHK(Prefix(0xff, 8) == Prefix(0xff, 8));
+    CHK(Prefix(0xff, 8).value() == Prefix(0xff, 8).value());
+    CHK(Prefix(0xff, 8).value() == Prefix(0xff00, 16).value()); // even though they have the same value, but different bits
+    CHK(Prefix(0xff, 8) != Prefix(0xff00, 16)); // ... they compare !=
+    CHK(Prefix(0xff, 8).value() == Prefix(0xff0, 12).value()); // same value
+    CHK(Prefix(0xff, 8) != Prefix(0xff0, 12)); // different bits makes them !=
+    CHK(Prefix(0xff0, 12).value() == Prefix(0xff00, 16).value());  // same value
+    CHK(Prefix(0xff0, 12) != Prefix(0xff00, 16)); // different bits makes them !=
+    CHK(Prefix(0x1, 4).value() == Prefix(0x10, 8).value()); // same value
+    CHK(Prefix(0x1, 4) != Prefix(0x10, 8)); // different bits makes them !=
+    CHK(Prefix(0b1, 5).value() == Prefix(0b00001000, 8).value()); // same value
+    CHK(Prefix(0b1, 5) != Prefix(0b00001000, 8)); // different bits makes them !=
+
+    // fromHex and toHex
+    p = Prefix::fromHex("abc").value();
+    CHK(p.toHex() == "abc");
+    CHK(p.getBits() == 12);
+    CHK(p.value() == 0xabc << 4);
+
+    // Range
+    Prefix::Range r;
+    r = Prefix(0xabcd, 16).range();
+    CHK(r.size() == 1);
+    CHK(r.begin == 0xabcd);
+    CHK(r.end == 0xabce);
+    r = Prefix(0x42, 8).range();
+    CHK(r.size() == 256);
+    CHK(r.begin == 0x4200);
+    CHK(r.end == 0x4300);
+    r = Prefix(0x123, 12).range();
+    CHK(r.size() == 16);
+    CHK(r.begin == 0x1230);
+    CHK(r.end == 0x1240);
+
+    Log() << nChecksOk << " basic checks ok";
+}
+
 void test()
 {
+    testPrefixBasic();
+
     QRandomGenerator *rgen = QRandomGenerator::global();
     if (rgen == nullptr) throw Exception("Failed to obtain random number generator");
     auto genRandomRpaHash = [rgen] {
@@ -373,7 +488,7 @@ void test()
         auto vpt = pt.searchPrefix(p, sort);
         const auto [b, e] = p.range();
         Debug() << "checkTableLookup(sort=" << int(sort) << ") for prefix: " << p.value()
-                << ", '" << p.toByteArray(false).toHex() << "', bits: " << p.getBits()
+                << ", '" << p.toHex() << "', bits: " << p.getBits()
                 << ", range: [" << b << ", " << e << "), vecSize: " << vpt.size();
         VerifyTable::mapped_type vvt;
         for (size_t i = b; i < e; ++i) {
@@ -386,9 +501,18 @@ void test()
         if (vpt != vvt) throw Exception("Rpa::PrefixTable search yielded incorrect results");
     };
     Log() << "Testing PrefixTable search ...";
-    for (const auto bits : {4u, 6u, 8u, 12u, /*16u*/}) {
+    for (const auto bits : {4u, 5u, 6u, 7u, 8u, 9u, 10u, 12u, /*16u*/}) {
         for (size_t i = 0; i < (0x1u << bits); ++i) {
-            const Rpa::Prefix p(i << (Rpa::PrefixBits - bits), /* bits = */bits);
+            const Rpa::Prefix p(i, /* bits = */bits);
+            if (0 == bits % 4) {
+                // on even nybble boundaries, test toHex()
+                if (auto opt = Rpa::Prefix::fromHex(p.toHex()); !opt || *opt != p)
+                    throw Exception(QString("toHex/fromHex cycle yielded different results for prefix: %1 '%2' (bits = %3)")
+                                        .arg(p.value()).arg(QString(p.toHex())).arg(p.getBits()));
+                if (auto a = p.toHex(), b = QString::asprintf("%0*x", bits / 4, unsigned(i)).toUtf8(); a != b)
+                    throw Exception(QString("Unexpected hex encoding for prefix %3 (%4): '%1' != '%2'").arg(a, b).arg(p.value()).arg(i));
+            }
+
             checkTableLookup(p, prefixTable, verifyTable, false);
             checkTableLookup(p, prefixTable, verifyTable, true);
         }
@@ -562,14 +686,24 @@ void test()
             }
         }
         const Rpa::VecTxIdx expected_9430{{297, 307}};
-        if (expected_9430 != pft.searchPrefix(Rpa::Prefix(uint16_t(9430)))) throw Exception("Table `pft` not as expected (check 1)");
+        if (Rpa::VecTxIdx v; expected_9430 != (v = pft.searchPrefix(Rpa::Prefix(uint16_t(9430))))) {
+            Debug l;
+            l << "Got: ";
+            for (auto i : v) l << i << ", ";
+            throw Exception("Table `pft` not as expected (check 1)");
+        }
         const Rpa::VecTxIdx expected_0x24{{
-            19, 30, 40, 48, 54, 59, 65, 66, 72, 77, 89, 90, 96, 98, 101, 103, 107, 110, 126, 139, 146, 154, 157, 163,
-            173, 181, 189, 200, 211, 224, 235, 241, 254, 260, 263, 282, 292, 293, 297, 307, 308, 309, 319, 329, 333,
-            334, 345, 350,
+            24, 39, 47, 49, 52, 58, 60, 66, 70, 85, 87, 88, 91, 94, 95, 97, 105, 107, 118, 121, 126, 139, 148, 152, 154,
+            161, 172, 175, 183, 205, 235, 254, 258, 267, 269, 273, 274, 276, 283, 288, 293, 297, 305, 306, 307, 310,
+            319, 323, 333, 334, 337, 351, 355,
         }};
         // Do prefix search for a short, 4-bit prefix
-        if (expected_0x24 != pft.searchPrefix(Rpa::Prefix(0x24, 4), true)) throw Exception("Table `pft` not as expected (check 2)");
+        if (Rpa::VecTxIdx v; expected_0x24 != (v = pft.searchPrefix(Rpa::Prefix(0x24, 4), true))) {
+            Debug l;
+            l << "Got: ";
+            for (auto i : v) l << i << ", ";
+            throw Exception("Table `pft` not as expected (check 2)");
+        }
         Tic t0;
         const Rpa::PrefixTable pft2(pft.serialize());
         Log() << "Ser/deser cycle for PrefixTable with " << elementCount << " items took " << t0.msecStr() << " msec";

@@ -42,9 +42,9 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bi
     std::unordered_map<TxHash, unsigned, HashHasher> txHashToIndex; // since we know the size ahead of time here, we can set max_load_factor to 1.0 and avoid over-allocating the hash table
     txHashToIndex.max_load_factor(1.0);
     txHashToIndex.reserve(b.vtx.size());
-    std::unique_ptr<Rpa::PrefixTable> rpaPrefixTable;
+    std::optional<Rpa::PrefixTable> rpaPrefixTable;
     const auto deferred = [&] {
-        if (enableRpa) rpaPrefixTable = std::make_unique<Rpa::PrefixTable>(); // construct empty ReadWrite table
+        if (enableRpa) rpaPrefixTable.emplace(); // construct empty ReadWrite table
         // Ensure we serialize the table at function end
         return Defer([&]{
             if (enableRpa && rpaPrefixTable)

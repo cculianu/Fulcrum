@@ -2278,35 +2278,6 @@ void Server::rpc_blockchain_utxo_get_info(Client *c, const RPC::BatchId batchId,
 }
 
 /* -- RPA -- */
-namespace {
-    /// Used internally by RPA-related RPC methods. Given a prefixHex, ensure it's hex data and nothing else.
-    /// Decodes the hex 1 nybble at a time and constructs a Rpa::Prefix from it correctly.
-    /// Returns a std::nullopt on decode error or if the hex string is too long.
-    //  NOTE: hex data is single character for this, not like normal hex i.e. 'f00' is a valid prefix (3 characters)
-    std::optional<Rpa::Prefix> decodeRpaPrefixHex(const QString & hexIn) {
-        const QByteArray hex = hexIn.trimmed().toLatin1();
-        uint32_t val = 0;
-        unsigned bits = 0;
-        std::optional<Rpa::Prefix> ret; // default: !has_value(), for error paths below
-        for (const char c : hex) {
-            val <<= 4; // shift left by 1 nybble for each character encountered
-            bits += 4;
-            if (bits > Rpa::PrefixBits) return ret; // fail if it exceeds 4 hex chars (16 bits)
-            if (c >= '0' && c <= '9')
-                val += c - '0';
-            else if (c >= 'A' && c <= 'F')
-                val += 10 + (c - 'A');
-            else if (c >= 'a' && c <= 'f')
-                val += 10 + (c - 'a');
-            else
-                return ret; // fail on non-hex chars
-        }
-        if (bits < Rpa::PrefixBitsMin) return ret; // fail if <4 bits (0 characters)
-        ret.emplace(uint16_t(val), uint8_t(bits));
-        return ret;
-    }
-} // namespace
-
 QVariantList Server::getRpaHistoryCommon(const BlockHeight height, const size_t count, const Rpa::Prefix & prefix, bool mempoolOnly)
 {
     QVariantList resp;
@@ -2333,7 +2304,7 @@ void Server::rpc_blockchain_reusable_get_history(Client *c, const RPC::BatchId b
     unsigned count = l[1].toUInt(&ok); // arg1
     if (!ok || count > MAX_COUNT)
         throw RPCError(QString("Invalid count argument; expected non-negative numeric value <= %1").arg(MAX_COUNT));
-    const auto optPrefix = decodeRpaPrefixHex( l[2].toString() ); // arg2
+    const auto optPrefix = Rpa::Prefix::fromHex( l[2].toString() ); // arg2
     if (!optPrefix.has_value())
         throw RPCError("Invalid prefix argument; expected hex string of at least 1 and at most 4 characters");
     if (l.size() == 4) { //optional arg3
@@ -2356,7 +2327,7 @@ void Server::rpc_blockchain_reusable_get_mempool(Client *c, const RPC::BatchId b
 {
     QVariantList l = m.paramsList();
     assert(l.size() >= 1);
-    const auto optPrefix = decodeRpaPrefixHex( l[0].toString() ); // arg0
+    const auto optPrefix = Rpa::Prefix::fromHex( l[0].toString() ); // arg0
     if (!optPrefix.has_value())
         throw RPCError("Invalid prefix argument; expected hex string of at least 1 and at most 4 characters");
     if (l.size() == 2) { //optional arg3
@@ -2375,7 +2346,7 @@ void Server::rpc_blockchain_reusable_subscribe(Client *, const RPC::BatchId, con
 {
     QVariantList l = m.paramsList();
     assert(l.size() >= 1);
-    const auto optPrefix = decodeRpaPrefixHex( l[0].toString() ); // arg0
+    const auto optPrefix = Rpa::Prefix::fromHex( l[0].toString() ); // arg0
     if (!optPrefix.has_value())
         throw RPCError("Invalid prefix argument; expected hex string of at least 1 and at most 4 characters");
     // TODO: implement
@@ -2386,7 +2357,7 @@ void Server::rpc_blockchain_reusable_unsubscribe(Client *, const RPC::BatchId, c
 {
     QVariantList l = m.paramsList();
     assert(l.size() >= 1);
-    const auto optPrefix = decodeRpaPrefixHex( l[0].toString() ); // arg0
+    const auto optPrefix = Rpa::Prefix::fromHex( l[0].toString() ); // arg0
     if (!optPrefix.has_value())
         throw RPCError("Invalid prefix argument; expected hex string of at least 1 and at most 4 characters");
     // TODO: implement
