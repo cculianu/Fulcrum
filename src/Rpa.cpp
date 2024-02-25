@@ -594,7 +594,7 @@ void test()
         checkNotEqualsTable(prefixTable, verifyTable2);
     }
 
-    Log() << "Testing Rpa::Hash (serializeInput) ...";
+    Log() << "Testing Rpa::Hash (from CTxIn) ...";
     // perform serialization of a bitcoin input; this is used to verify the faster Rpa::Hash(const CTxIn &)
     auto serializeInputSlow = [](const bitcoin::CTxIn& input) -> Rpa::Hash {
         const auto serInput = BTC::Serialize(input);
@@ -642,7 +642,7 @@ void test()
         "461832437f2bbd616facc26910becfa388642972aaf555ffcdc2cdc07a248e7881efa7f456634e1bdb11485dbbc9db20cb669dfef"
         "fffff01174d7037000000001976a9147ee7b62fa98a985c5553ff66120a91b8189f658188ac931a0900",
     }};
-    for (const bool shortPrefix : {false, true}) {
+    for (const auto prefixBits : {16, 8}) {
         for (const auto & txStr : txStrs) {
             bitcoin::CMutableTransaction tx;
             BTC::Deserialize(tx, Util::ParseHexFast(txStr), 0, false);
@@ -652,21 +652,22 @@ void test()
                 const Rpa::Hash rHash{input};
                 const Rpa::Hash rHashSlow = serializeInputSlow(input);
                 if (rHash != rHashSlow) throw Exception("Fast serializeInput does not match the slow version!");
-                const auto prefix = Rpa::Prefix(!shortPrefix ? rHash : Rpa::Hash{rHash.mid(0, 1)});
-                const std::string rHashPrefix = prefix.toString(true);
-                QByteArray prefixHex = Util::ToHexFast(QByteArray::fromStdString(rHashPrefix));
+                const auto prefix = Rpa::Prefix(Rpa::Hash{rHash.left(prefixBits / 8u)});
+                const auto prefix2 = Rpa::Prefix::fromHex(rHash.toHex().left(prefixBits / 4u)).value();
+                if (prefix != prefix2 || prefix.toHex() != prefix2.toHex()) throw Exception(QString("Prefix equality error: %1 != %2").arg(prefix.toHex(), prefix2.toHex()));
+                QByteArray prefixHex = prefix.toHex();
                 const auto rHashHex = Util::ToHexFast(rHash);
                 Debug() << "   Txid: " << tx.GetId().ToString() << ":" << n
                         << " Rpa::Hash: " << Util::ToHexFast(rHash)
                         << " Prefix: " << prefixHex
                         << " Prefix bits: " << prefix.getBits();
-                if (prefixHex.size() != 2 + (2 * !shortPrefix) || ! rHashHex.startsWith(prefixHex))
+                if (! rHashHex.startsWith(prefixHex))
                     throw Exception("Prefix is not as expected.");
             }
         }
     }
 
-    []{
+    [&checkTableConsistency]{
         Log() << "Testing on block 833705 ...";
         const QString path = ":testdata/bch_block_833705.bin";
         QFile f(path);
@@ -674,33 +675,47 @@ void test()
         const QByteArray blockData = f.readAll();
         const auto block = BTC::Deserialize<bitcoin::CBlock>(blockData, 0, false, false, true, true);
         Rpa::PrefixTable pft;
+        VerifyTable vt;
 
         size_t elementCount = 0;
-        for (size_t i = 1; i < block.vtx.size(); ++i) {
-            const auto &tx = block.vtx[i];
+        for (size_t txIdx = 1; txIdx < block.vtx.size(); ++txIdx) {
+            const auto &tx = block.vtx[txIdx];
+            unsigned inNum = 0;
             for (const auto & in : tx->vin) {
+                if (inNum >= Rpa::InputIndexLimit) break; // spec limit, up to 30 inputs per tx get indexed
                 const auto hash = Rpa::Hash(in);
                 const auto prefix = Rpa::Prefix(hash);
-                pft.addForPrefix(prefix, i);
-                ++elementCount;
+                pft.addForPrefix(prefix, txIdx);
+                bool ok;
+                const auto verifyPrefix = hash.left(2).toHex().toUInt(&ok, 16 /* base 16 */);
+                if (!ok) throw Exception(QString("Unexpected -- unable to parse %1 as hex").arg(QString(hash.left(2).toHex())));
+                if (auto & r = vt[verifyPrefix]; r.empty() || r.back() != txIdx) {
+                    r.push_back(txIdx);
+                    ++elementCount;
+                }
+                ++inNum;
             }
         }
-        const Rpa::VecTxIdx expected_9430{{297, 307}};
-        if (Rpa::VecTxIdx v; expected_9430 != (v = pft.searchPrefix(Rpa::Prefix(uint16_t(9430))))) {
+        checkTableConsistency(pft, vt); // ensure a table built from a real block checks out
+
+        const Rpa::VecTxIdx expected_9430(1, 297); // single value
+        Rpa::Prefix pfx(uint16_t(9430));
+        if (Rpa::VecTxIdx v; expected_9430 != (v = pft.searchPrefix(pfx))) {
             Debug l;
-            l << "Got: ";
+            l << "For prefix " << pfx.toHex() << ", got: ";
             for (auto i : v) l << i << ", ";
             throw Exception("Table `pft` not as expected (check 1)");
         }
-        const Rpa::VecTxIdx expected_0x24{{
+        const Rpa::VecTxIdx expected_0x04{{
             24, 39, 47, 49, 52, 58, 60, 66, 70, 85, 87, 88, 91, 94, 95, 97, 105, 107, 118, 121, 126, 139, 148, 152, 154,
-            161, 172, 175, 183, 205, 235, 254, 258, 267, 269, 273, 274, 276, 283, 288, 293, 297, 305, 306, 307, 310,
-            319, 323, 333, 334, 337, 351, 355,
+            161, 172, 175, 183, 205, 235, 254, 258, 267, 269, 273, 274, 276, 283, 288, 293, 297, 305, 306, 310, 319, 323,
+            333, 334, 337, 351, 355,
         }};
         // Do prefix search for a short, 4-bit prefix
-        if (Rpa::VecTxIdx v; expected_0x24 != (v = pft.searchPrefix(Rpa::Prefix(0x24, 4), true))) {
+        pfx = Rpa::Prefix(0x4, 4);
+        if (Rpa::VecTxIdx v; expected_0x04 != (v = pft.searchPrefix(pfx, true))) {
             Debug l;
-            l << "Got: ";
+            l << "For prefix " << pfx.toHex() << ", got: ";
             for (auto i : v) l << i << ", ";
             throw Exception("Table `pft` not as expected (check 2)");
         }
@@ -710,7 +725,7 @@ void test()
         if (!pft2.isReadOnly()) throw Exception("Deserialized table is not ReadOnly as expected");
         if (pft2 != pft) throw Exception("Ser/deser cycle yielded a different table that is not equal to the original!");
         if (expected_9430 != pft2.searchPrefix(Rpa::Prefix(uint16_t(9430)))) throw Exception("Table `pft2` not as expected (check 1)");
-        if (expected_0x24 != pft2.searchPrefix(Rpa::Prefix(0x24, 4), true)) throw Exception("Table `pft2` not as expected (check 2)");
+        if (expected_0x04 != pft2.searchPrefix(Rpa::Prefix(0x04, 4), true)) throw Exception("Table `pft2` not as expected (check 2)");
     }();
 
     Log(Log::Color::BrightWhite) << "All Rpa unit tests passed!";

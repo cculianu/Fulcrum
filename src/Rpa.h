@@ -98,12 +98,6 @@ public:
     // the raw big-endian bytes for this prefix (not truncated according to bits)
     ByteView byteView() const { return bytes; }
 
-    // returns the big-endian ordered bytes for this prefix, optionally truncated to 1 character if bits <= 8
-    std::string toString(bool truncate = false) const {
-        auto sv = byteView().toStringView();
-        if (truncate && bits <= 8u) sv = sv.substr(0, std::max<unsigned>(bits, 8u) / 8u); // truncate to bits
-        return std::string{sv};
-    }
     // return the big-endian ordered bytes for this prefix (may take a deep or shallow copy), truncated to 1 character if bits <= 8
     QByteArray toByteArray(bool deepCopy = true, bool truncate = false) const {
         auto bv = byteView();
