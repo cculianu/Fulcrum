@@ -519,7 +519,7 @@ namespace {
     {
         (void)key; (void)logger;
         ++merges;
-        new_value->resize( (existing_value ? existing_value->size() : 0) + value.size() );
+        new_value->resize( (existing_value ? existing_value->size() : size_t{0u}) + value.size() );
         char *cur = new_value->data();
         if (existing_value) {
             std::memcpy(cur, existing_value->data(), existing_value->size());
@@ -1850,12 +1850,13 @@ void Storage::startup()
         const std::list<DBInfoTup> dbs2open = {
             { "meta", p->db.meta, opts, 0.0005 },
             { "blkinfo" , p->db.blkinfo , opts, 0.02 },
-            { "utxoset", p->db.utxoset, opts, 0.27 },
+            { "utxoset", p->db.utxoset, opts, 0.25 },
             { "scripthash_history", p->db.shist, shistOpts, 0.30 },
-            { "scripthash_unspent", p->db.shunspent, opts, 0.27 },
+            { "scripthash_unspent", p->db.shunspent, opts, 0.25 },
             { "undo", p->db.undo, opts, 0.0395 },
             { "txhash2txnum", p->db.txhash2txnum, txhash2txnumOpts, 0.1 },
-            { "rpa", p->db.rpa, opts, 0.1 }, // NB: this one makes us exceed the DB memory by 10%, which is ok, since this is an optional DB
+            // TODO: if on BTC or rpa disabled, give the rpa db's 0.04 back to scripthash_unspent and utxoset!!
+            { "rpa", p->db.rpa, opts, 0.04 }, // this index appears to be < 1/2 the txhash2txnum one on average, so we give it less than half that mem ratio
         };
         std::size_t memTotal = 0;
         const auto OpenDB = [this, &memTotal](const DBInfoTup &tup) {
@@ -2716,6 +2717,8 @@ void Storage::loadCheckRpaInDb()
                     }
                 }
                 ++ctr;
+                if (0u == ctr % 1'000u && app() && app()->signalsCaught())
+                    throw UserInterrupted("User interrupted, aborting check");
             } else {
                 // TODO: fixme? warn? nothing?
                 Debug() << "Unknown Rpa DB entry (hex): " << QString(FromSlice(k).toHex());
@@ -3287,14 +3290,12 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
             if (ppb->serializedRpaPrefixTable) {
                 Tic t0;
                 const QByteArray & ser = *ppb->serializedRpaPrefixTable;
-                Defer d([&]{
-                    if (Debug::isEnabled() && (ser.size() > 100'000 || t0.msec() >= 5))
-                        Debug(Log::BrightGreen) << "Saved RPA " << ppb->height << " size " << ser.size() << " in " << t0.msecStr() << " msec";
-                });
 
                 // TODO this should also update a counter so we can track some corruption occurring when scanning in loadCheckRpaInDb
                 static const QString rpaErrMsg("Error writing Rpa info to db");
                 GenericDBPut(p->db.rpa.get(), RpaDBKey(ppb->height), ser, rpaErrMsg, p->db.defWriteOpts);
+                if (Debug::isEnabled() && (ser.size() > 100'000 || t0.msec() >= 5))
+                    Debug() << "Saved RPA " << ppb->height << " size " << ser.size() << " in " << t0.msecStr() << " msec";
             }
 
             // save the last of the undo info, if in saveUndo mode
