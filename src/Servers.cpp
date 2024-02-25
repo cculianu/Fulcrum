@@ -1065,7 +1065,7 @@ void Server::rpc_server_donation_address(Client *c, const RPC::BatchId batchId, 
     emit c->sendResult(batchId, m.id, transformDefaultDonationAddressToBTCOrBCHOrLTC(*options, isNonBCH(), isLTC()));
 }
 /* static */
-QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const QByteArray &genesisHash, const Options &opts, bool dsproof, bool hasCashTokens)
+QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const QByteArray &genesisHash, const Options &opts, bool dsproof, bool hasCashTokens, int rpaStartingHeight)
 {
     QVariantMap r;
     if (!c) {
@@ -1083,13 +1083,14 @@ QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const Q
     if (hasCashTokens)
         r["cashtokens"] = true;
 
-    // RPA TODO: in the final release make RPA support configurable and make this true/false based on the config setting
-    // if (opts.rpaEnabled)
-    r["rpa"] = QVariantMap{
-        {"prefix_bits_min", unsigned(Rpa::PrefixBitsMin)},
-        {"prefix_bits", unsigned(Rpa::PrefixBits)},
-        {"starting_height", 0u /* RPA TODO: make this come from config and/or storage object */},
-    };
+    if (rpaStartingHeight > -1)
+        r["rpa"] = QVariantMap{
+            {"prefix_bits_min", std::max(int(Rpa::PrefixBitsMin), opts.rpa.prefixBitsMin)},
+            {"prefix_bits", unsigned(Rpa::PrefixBits)},
+            {"starting_height", rpaStartingHeight},
+            {"history_blocks_limit", opts.rpa.historyBlocksLimit},
+            {"max_history", opts.rpa.maxHistory}
+        };
 
     QVariantMap hmap, hmapTor;
     if (opts.publicTcp.has_value())
@@ -1135,7 +1136,12 @@ QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const Q
 }
 void Server::rpc_server_features(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
-    emit c->sendResult(batchId, m.id, makeFeaturesDictForConnection(c, storage->genesisHash(), *options, bitcoindmgr->hasDSProofRPC(), coin == BTC::Coin::BCH));
+    const bool isBCH = coin == BTC::Coin::BCH;
+    emit c->sendResult(batchId, m.id,
+                       makeFeaturesDictForConnection(c, storage->genesisHash(), *options, bitcoindmgr->hasDSProofRPC(),
+                                                     /* cashTokens = */ isBCH,
+                                                     // TODO: make the below be dynamic from storage, etc
+                                                     /* rpaStartHeight = */ isBCH && options->rpa.enabled ? 0 : -1));
 }
 void Server::rpc_server_peers_subscribe(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
@@ -2292,13 +2298,39 @@ QVariantList Server::getRpaHistoryCommon(const BlockHeight height, const size_t 
     return resp;
 }
 
-void Server::rpc_blockchain_reusable_get_history(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
+void Server::rpc_blockchain_reusable_get_history(Client *c, RPC::BatchId batchId, const RPC::Message &m)
 {
+    // This re-orders the args since the legacy function was weird in that the prefix came as the 3rd arg, rather than the 1st.
     QVariantList l = m.paramsList();
-    assert(l.size() >= 3);
-    // parse and validate arg0: height
+    if (l.size() >= 3)
+        l.push_front(l.takeAt(2)); // pop 3rd arg and push it to the front
+    const auto msgOverride = RPC::Message::makeRequest(m.id, m.method, l, m.v1);
+    rpc_blockchain_rpa_get_history(c, batchId, msgOverride); // forward re-written message to other RPC function
+}
+
+Rpa::Prefix Server::parseRpaPrefixParamCommon(const QString &prefixParam) const {
+    const auto optPrefix = Rpa::Prefix::fromHex(prefixParam);
+    const unsigned minBits = std::max(int(Rpa::PrefixBitsMin), options->rpa.prefixBitsMin);
+    if (!optPrefix.has_value() || optPrefix->getBits() < minBits) {
+        const unsigned minLength = minBits / 4, maxLength = Rpa::PrefixBits / 4;
+        throw RPCError(QString("Invalid prefix argument; expected hex string of at least %1 and at most %2 characters")
+                           .arg(minLength).arg(maxLength));
+    }
+    return *optPrefix;
+}
+
+void Server::rpc_blockchain_rpa_get_history(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
+{
+    // TODO: throw RPCError here if not enabled on server (is BTC, LTC, etc)
+
+    QVariantList l = m.paramsList();
+
+    // parse and validate arg0: prefix_hex
+    const auto prefix = parseRpaPrefixParamCommon(l[0].toString());
+
+    // parse and validate arg1: height
     bool ok;
-    unsigned height = l.front().toUInt(&ok);
+    unsigned height = l[1].toUInt(&ok);
     if (!ok || height > Storage::MAX_HEADERS)
         throw RPCError(QString("Invalid height argument; expected non-negative numeric value <= %1").arg(Storage::MAX_HEADERS));
     const unsigned tipHeight = [this]{
@@ -2306,11 +2338,12 @@ void Server::rpc_blockchain_reusable_get_history(Client *c, const RPC::BatchId b
         if (!opt) throw InternalError("No blockchain");
         return *opt;
     }();
-    // parse and validate arg1: count
-    unsigned count = l[1].toUInt(&ok);
+
+    // parse and validate arg2: count
+    unsigned count = l[2].toUInt(&ok);
     if (!ok) throw RPCError("Invalid count argument; expected non-negative numeric value");
-    constexpr unsigned MAX_COUNT = 2016; ///< TODO: make this cofigurable
-    count = std::min(count, MAX_COUNT); // limit count to 2016
+    const unsigned confLimit = std::max(options->rpa.historyBlocksLimit, 1);
+    count = std::min(count, confLimit); // limit count to the configured limit (default: 60)
     if (!count || height > tipHeight) {
         // they want nothing, return an empty list right away
         emit c->sendResult(batchId, m.id, QVariantList{});
@@ -2318,44 +2351,28 @@ void Server::rpc_blockchain_reusable_get_history(Client *c, const RPC::BatchId b
     }
     count = std::min(unsigned(tipHeight + 1u) - height, count); // limit count again, to the number of blocks we do have
 
-    // parse and validate arg2: prefix_hex
-    const auto optPrefix = Rpa::Prefix::fromHex( l[2].toString() );
-    if (!optPrefix.has_value())
-        throw RPCError("Invalid prefix argument; expected hex string of at least 1 and at most 4 characters");
-    // optional arg3 (boolean: unspentOnly -- unused, unimplemented!)
-    if (l.size() >= 4) { // optional arg3
-        const auto [arg, argOk] = parseBoolSemiLooselyButNotTooLoosely( l.back() );
-        if (!argOk)
-            throw RPCError("Invalid unspentOnly argument; expected boolean");
-        // TODO: use this arg?
-    }
-
-    generic_do_async(c, batchId, m.id, [height, count, prefix = *optPrefix, this] {
+    generic_do_async(c, batchId, m.id, [height, count, prefix, this] {
         return getRpaHistoryCommon(height, count, prefix, false);
     });
 }
 
-void Server::rpc_blockchain_reusable_get_mempool(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
+void Server::rpc_blockchain_rpa_get_mempool(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
+    // TODO: throw RPCError here if not enabled on server (is BTC, LTC, etc)
+
     QVariantList l = m.paramsList();
     assert(l.size() >= 1);
-    const auto optPrefix = Rpa::Prefix::fromHex( l[0].toString() ); // arg0
-    if (!optPrefix.has_value())
-        throw RPCError("Invalid prefix argument; expected hex string of at least 1 and at most 4 characters");
-    if (l.size() == 2) { //optional arg3
-        const auto [arg, argOk] = parseBoolSemiLooselyButNotTooLoosely( l.back() );
-        if (!argOk)
-            throw RPCError("Invalid unspentOnly argument; expected boolean");
-        // TODO: use this arg?
-    }
+    const auto prefix = parseRpaPrefixParamCommon(l[0].toString()); // arg0
 
-    generic_do_async(c, batchId, m.id, [prefix = *optPrefix, this] {
+    generic_do_async(c, batchId, m.id, [prefix, this] {
         return getRpaHistoryCommon(0, 0, prefix, true);
     });
 }
 
-void Server::rpc_blockchain_reusable_subscribe(Client *, const RPC::BatchId, const RPC::Message &m)
+void Server::rpc_blockchain_rpa_subscribe(Client *, const RPC::BatchId, const RPC::Message &m)
 {
+    // TODO: throw RPCError here if not enabled on server (is BTC, LTC, etc)
+
     QVariantList l = m.paramsList();
     assert(l.size() >= 1);
     const auto optPrefix = Rpa::Prefix::fromHex( l[0].toString() ); // arg0
@@ -2365,8 +2382,10 @@ void Server::rpc_blockchain_reusable_subscribe(Client *, const RPC::BatchId, con
     throw RPCError("Subscribe is unimplemented", RPC::ErrorCodes::Code_InternalError);
 }
 
-void Server::rpc_blockchain_reusable_unsubscribe(Client *, const RPC::BatchId, const RPC::Message &m)
+void Server::rpc_blockchain_rpa_unsubscribe(Client *, const RPC::BatchId, const RPC::Message &m)
 {
+    // TODO: throw RPCError here if not enabled on server (is BTC, LTC, etc)
+
     QVariantList l = m.paramsList();
     assert(l.size() >= 1);
     const auto optPrefix = Rpa::Prefix::fromHex( l[0].toString() ); // arg0
@@ -2472,10 +2491,16 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
     // /DSPROOF
     { {"blockchain.utxo.get_info",          true,               false,    PR{2,2},                    },          MP(rpc_blockchain_utxo_get_info) },
 
-    { {"blockchain.reusable.get_history",   true,               false,    PR{3,4},                    },          MP(rpc_blockchain_reusable_get_history) },
-    { {"blockchain.reusable.get_mempool",   true,               false,    PR{1,2},                    },          MP(rpc_blockchain_reusable_get_mempool) },
-    { {"blockchain.reusable.subscribe",     true,               false,    PR{1,1},                    },          MP(rpc_blockchain_reusable_subscribe) },
-    { {"blockchain.reusable.unsubscribe",   true,               false,    PR{1,1},                    },          MP(rpc_blockchain_reusable_unsubscribe) },
+    // RPA
+    { {"blockchain.rpa.get_history",        true,               false,    PR{3,3},                    },          MP(rpc_blockchain_rpa_get_history) },
+    { {"blockchain.rpa.get_mempool",        true,               false,    PR{1,1},                    },          MP(rpc_blockchain_rpa_get_mempool) },
+    { {"blockchain.rpa.subscribe",          true,               false,    PR{1,1},                    },          MP(rpc_blockchain_rpa_subscribe) },
+    { {"blockchain.rpa.unsubscribe",        true,               false,    PR{1,1},                    },          MP(rpc_blockchain_rpa_unsubscribe) },
+    // RPA legacy methods, aliased to above; also supported for compat. with existing clients
+    { {"blockchain.reusable.get_history",   true,               false,    PR{3,3},                    },          MP(rpc_blockchain_reusable_get_history) },
+    { {"blockchain.reusable.get_mempool",   true,               false,    PR{1,1},                    },          MP(rpc_blockchain_rpa_get_mempool) },
+    { {"blockchain.reusable.subscribe",     true,               false,    PR{1,1},                    },          MP(rpc_blockchain_rpa_subscribe) },
+    { {"blockchain.reusable.unsubscribe",   true,               false,    PR{1,1},                    },          MP(rpc_blockchain_rpa_unsubscribe) },
 
     { {"daemon.passthrough",                true,               false,    PR{0,0}, RPC::KeySet{{"method"}}, true /* allow unknown kwargs, since "params" is optional */ }, MP(rpc_daemon_passthrough) },
     { {"mempool.get_fee_histogram",         true,               false,    PR{0,0},                    },          MP(rpc_mempool_get_fee_histogram) },

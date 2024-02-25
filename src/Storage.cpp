@@ -2721,7 +2721,7 @@ void Storage::loadCheckRpaInDb()
                     throw UserInterrupted("User interrupted, aborting check");
             } else {
                 // TODO: fixme? warn? nothing?
-                Debug() << "Unknown Rpa DB entry (hex): " << QString(FromSlice(k).toHex());
+                Debug() << "Unknown RPA DB entry (hex): " << QString(FromSlice(k).toHex());
             }
         }
         if (lastHeight > firstHeight && size_t(lastHeight + 1 - firstHeight) != ctr) {
@@ -3292,7 +3292,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                 const QByteArray & ser = *ppb->serializedRpaPrefixTable;
 
                 // TODO this should also update a counter so we can track some corruption occurring when scanning in loadCheckRpaInDb
-                static const QString rpaErrMsg("Error writing Rpa info to db");
+                static const QString rpaErrMsg("Error writing RPA info to db");
                 GenericDBPut(p->db.rpa.get(), RpaDBKey(ppb->height), ser, rpaErrMsg, p->db.defWriteOpts);
                 if (Debug::isEnabled() && (ser.size() > 100'000 || t0.msec() >= 5))
                     Debug() << "Saved RPA " << ppb->height << " size " << ser.size() << " in " << t0.msecStr() << " msec";
@@ -3821,7 +3821,7 @@ auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf, BlockHeigh
 auto Storage::getRpaHistory(const BlockHeight start_height, const size_t count, const Rpa::Prefix & prefix, bool conf, bool unconf) const -> RpaHistory
 {
     RpaHistory ret;
-    const size_t maxHistory = options->maxHistory;
+    const size_t maxHistory = options->rpa.maxHistory;
     Tic t0;
     double tReadDb = 0., tPfxSearch = 0., tResolveTxIdx = 0., tWaitForLock = 0., tBuildRes = 0.;
     try {
@@ -3838,7 +3838,7 @@ auto Storage::getRpaHistory(const BlockHeight start_height, const size_t count, 
                 tReadDb += t1.msec<double>();
                 if (UNLIKELY( ! optPfxTable)) {
                     // This should never happen or happen extremely rarely (like during a reorg) -- warn to console just in case there are bugs.
-                    Warning() << "Missing Rpa PrefixTable for height: " << height
+                    Warning() << "Missing RPA PrefixTable for height: " << height
                               << ". Is a reorg in progress? If not, contact the developers if you see this message frequently.";
                     continue;
                 }

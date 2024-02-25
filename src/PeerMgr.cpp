@@ -65,7 +65,9 @@ PeerMgr::~PeerMgr() { cleanup(); /* noop if already stopped */ DebugM(__func__);
 
 QVariantMap PeerMgr::makeFeaturesDict(PeerClient *c) const
 {
-    return Server::makeFeaturesDictForConnection(c, _genesisHash, *options, srvmgr->hasDSProofRPC(), coin == BTC::Coin::BCH);
+    const bool isBCH = coin == BTC::Coin::BCH;
+    return Server::makeFeaturesDictForConnection(c, _genesisHash, *options, srvmgr->hasDSProofRPC(), isBCH,
+                                                 isBCH && options->rpa.enabled ? 0 : -1 /* TODO: make this come from storage */);
 }
 
 QString PeerMgr::publicHostNameForConnection(PeerClient *c) const

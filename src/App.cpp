@@ -22,6 +22,7 @@
 #include "Controller.h"
 #include "Json/Json.h"
 #include "Logger.h"
+#include "Rpa.h"
 #include "ServerMisc.h"
 #include "Servers.h"
 #include "Storage.h"
@@ -522,6 +523,15 @@ void App::parseArgs()
        QString("MB"),
     },
     {
+        "rpa",
+        QString("Enable the Reusable Payment Address index and offer the associated \"blockchain.rpa.*\" RPC methods to"
+                 " clients. To explicitly disable this facility, use the CLI arg --no-rpa. Default is: %1.\n")
+             .arg(Options::Rpa::defaultEnabled ? "enabled" : "disabled")
+    },
+    {
+        "no-rpa", QString("<hidden>")
+    },
+    {
        "dump-sh",
        QString("*** This is an advanced debugging option ***   Dump script hashes. If specified, after the database"
                " is loaded, all of the script hashes in the database will be written to outputfile as a JSON array.\n"),
@@ -552,6 +562,13 @@ void App::parseArgs()
                     " Available benchmarks: \"%1\"\n").arg(benches.join("\", \"")),
             QString("benchmark")
         });
+    }
+
+    // Hide options that we marked above as hidden by setting the description to: "<hidden>"
+    for (auto & opt : allOptions) {
+        if (opt.description() == "<hidden>") {
+            opt.setFlags(opt.flags() | QCommandLineOption::HiddenFromHelp);
+        }
     }
 
     parser.addOptions(allOptions);
@@ -1378,6 +1395,63 @@ void App::parseArgs()
         Util::AsyncOnObject(this, [this] {
             DebugM("config: pidfile = ", options->pidFileAbsPath, " (size: ", QFileInfo(options->pidFileAbsPath).size(), " bytes)");
         });
+    }
+
+    // CLI: --rpa
+    // conf: rpa
+    if (const bool psetYes = parser.isSet("rpa"), psetNo = parser.isSet("no-rpa"); psetYes || psetNo || conf.hasValue("rpa")) {
+        bool val = options->rpa.defaultEnabled;
+        if (!psetYes && !psetNo) {
+            bool ok{};
+            val = conf.boolValue("rpa", val, &ok);
+            if (!ok) throw BadArgs("rpa: bad value. Specify a boolean value such as 0, 1, true, false, yes, no");
+        }
+        else if (psetYes && psetNo) throw BadArgs("Cannot specify --rpa and --no-rpa at the same time!");
+        else val = psetYes;
+        options->rpa.enabled = val;
+        Util::AsyncOnObject(this, [val] { DebugM("config: rpa = ", val); });
+    }
+
+    // conf: rpa_max_history
+    if (conf.hasValue("rpa_max_history")) {
+        bool ok;
+        int mh = conf.intValue("rpa_max_history", -1, &ok);
+        if (!ok || mh < options->maxHistoryMin || mh > options->maxHistoryMax)
+            throw BadArgs(QString("rpa_max_history: bad value. Specify a value in the range [%1, %2]")
+                              .arg(options->maxHistoryMin).arg(options->maxHistoryMax));
+        options->rpa.maxHistory = mh;
+        // log this later in case we are in syslog mode
+        Util::AsyncOnObject(this, [mh]{ Debug() << "config: rpa_max_history = " << mh; });
+    }
+
+    // conf: rpa_history_blocks_limit
+    if (const auto b1 = conf.hasValue("rpa_history_blocks_limit"), b2 = conf.hasValue("rpa_history_block_limit"); b1 || b2) {
+        // support either: "rpa_history_blocks_limit" or "rpa_history_block_limit", but not both
+        if (b1 && b2) throw BadArgs("Both `rpa_history_blocks_limit` and `rpa_history_block_limit` were found in the config file; this looks like a typo.");
+        const QString confKey(b1 ? "rpa_history_blocks_limit" : "rpa_history_block_limit");
+        bool ok;
+        const int limit = conf.intValue(confKey, -1, &ok);
+        if (!ok || limit < options->rpa.historyBlocksLimitMin || limit > options->rpa.historyBlocksLimitMax)
+            throw BadArgs(QString("%1: bad value. Specify a value in the range [%2, %3]")
+                              .arg(confKey).arg(options->rpa.historyBlocksLimitMin).arg(options->rpa.historyBlocksLimitMax));
+        options->rpa.historyBlocksLimit = limit;
+        // log this later in case we are in syslog mode
+        Util::AsyncOnObject(this, [limit, confKey]{ Debug() << "config: " << confKey << " = " << limit; });
+    }
+
+    // conf: rpa_prefix_bits_min
+    static_assert(Options::Rpa::defaultPrefixBitsMin >= Rpa::PrefixBitsMin && Options::Rpa::defaultPrefixBitsMin <= Rpa::PrefixBits
+                  && !(Options::Rpa::defaultPrefixBitsMin & 0b11));
+    if (conf.hasValue("rpa_prefix_bits_min")) {
+        bool ok;
+        int pbm = conf.intValue("rpa_prefix_bits_min", -1, &ok);
+        if (!ok || pbm < int(Rpa::PrefixBitsMin) || pbm > int(Rpa::PrefixBits) || pbm & 0b11 /* fancy way to check if multiple of 4 */) {
+            throw BadArgs(QString("rpa_prefix_bits_min: bad value. Specify a number that is a multiple of 4 and that is in the range [%1, %2].")
+                              .arg(Rpa::PrefixBitsMin).arg(Rpa::PrefixBits));
+        }
+        options->rpa.prefixBitsMin = pbm;
+        // log this later in case we are in syslog mode
+        Util::AsyncOnObject(this, [pbm]{ Debug() << "config: rpa_prefix_bits_min = " << pbm; });
     }
 }
 

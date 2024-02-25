@@ -285,6 +285,25 @@ public:
     // CLI: --pidfile
     // config: pidfile
     QString pidFileAbsPath; ///< If non-empty, app will write PID to this file and delete this file on shutdown
+
+    // RPA-related (all grouped together in this struct)
+    struct Rpa {
+        // CLI: --rpa
+        // config: rpa - Enable/disable the RPA index
+        static constexpr bool defaultEnabled = false; // default disabled (maybe have it enabled by default in a later release after it matures)
+        bool enabled = defaultEnabled;
+
+        // config: rpa_max_history - Limit result array size for blockchain.rpa.get_history
+        int maxHistory = defaultMaxHistory; // this can be independently of app-level maxHistory set but defaults to maxHistory
+
+        // config: rpa_history_blocks_limit - Limit number of blocks to scan at once for blockchain.rpa.get_history
+        static constexpr int defaultHistoryBlocksLimit = 60, historyBlocksLimitMin = 1, historyBlocksLimitMax = 2016;
+        int historyBlocksLimit = defaultHistoryBlocksLimit;
+
+        // config: rpa_prefix_bits_min - Minimum number of prefix bits for a blockchain.rpa.* query (DoS protection measure)
+        static constexpr int defaultPrefixBitsMin = 8;
+        int prefixBitsMin = defaultPrefixBitsMin; // NB: this value should be bounded by [Rpa::PrefixBitsMin, Rpa::PrefixBitsMax], and be a multiple of 4
+    } rpa;
 };
 
 /// A class encapsulating a simple read-only config file format.  The format is similar to the bitcoin.conf format
