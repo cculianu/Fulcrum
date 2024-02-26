@@ -427,6 +427,7 @@ size_t MempoolPrefixTable::removeForPrefixAndHash(const Prefix & prefix, const T
 
 #include <algorithm>
 #include <map>
+#include <set>
 #include <vector>
 
 namespace {
@@ -743,6 +744,7 @@ void test()
         "e03d3eee63888527d9729ebd7060fdbb1b94e85abdcbfcc8518539237d62371d69ae11893414104e8806002111e3dfb6944e63a42"
         "461832437f2bbd616facc26910becfa388642972aaf555ffcdc2cdc07a248e7881efa7f456634e1bdb11485dbbc9db20cb669dfef"
         "fffff01174d7037000000001976a9147ee7b62fa98a985c5553ff66120a91b8189f658188ac931a0900",
+        // The below txn is from BTC and happens to have 2 inputs that hash to the same 2-byte Prefix!
         "0100000004e0c845704a4201358eb2f6a2173a321c0e9722f252fdd6244d993fffc86f534a010000006b483045022100a3989d8b0"
         "05b5bb55663dfca323f5bc27f1215831da1576cdd75d74c0034acdb022004ee8cf26bdf72c3dcfca6ef911ad74d3e50c423e61f64"
         "254dc33b2671dc5e8a0121021e8499afed086ffeae1679ce16c57b420b8adebce9130e0751523e71fbcf95edffffffff20332b007"
@@ -758,12 +760,21 @@ void test()
         "88ac45413000000000001976a9141ecd8b1242f4a562ad925d8db94243bf9fff68e188ac00000000",
     }};
     const std::unordered_set<size_t> allowSegWitForTheseIndices(std::initializer_list<size_t>{2u});
+    const auto dupeTxIdx= 2u; // this txn has inputs that happen to be dupes
+    Rpa::MempoolPrefixTable mpt;
+    if (!mpt.empty() || mpt.numRows() != Rpa::PrefixTableSize) throw Exception("MempoolPrefixTable default constructed object not as expected");
+    using TxHash2Prefix = std::map<TxHash, std::unordered_set<Rpa::Prefix, Rpa::Prefix::Hasher>>;
+    using Prefix2TxHash = std::unordered_map<Rpa::Prefix, std::set<TxHash>, Rpa::Prefix::Hasher>;
+    TxHash2Prefix txhash2prefix;
+    Prefix2TxHash prefix2txhash;
     for (const auto prefixBits : {16, 8}) {
         for (size_t i = 0; i < txStrs.size(); ++i) {
             const auto & txStr = txStrs[i];
             bitcoin::CMutableTransaction tx;
             BTC::Deserialize(tx, Util::ParseHexFast(txStr), 0, allowSegWitForTheseIndices.count(i));
 
+            const TxHash txHash = BTC::Hash2ByteArrayRev(tx.GetHash());
+            const auto mptSizeBefore = mpt.elementCount();
             for (size_t n = 0, sz = tx.vin.size(); n < sz; ++n) {
                 const auto & input = tx.vin[n];
                 const Rpa::Hash rHash{input};
@@ -780,9 +791,92 @@ void test()
                         << " Prefix bits: " << prefix.getBits();
                 if (! rHashHex.startsWith(prefixHex))
                     throw Exception("Prefix is not as expected.");
+                if (prefixBits == 16) {
+                    // add to mempool table as we would in production with the full 16-bit prefix
+                    mpt.addForPrefix(prefix, txHash);
+                    txhash2prefix[txHash].insert(prefix);
+                    prefix2txhash[prefix].insert(txHash);
+                }
+            }
+            if (prefixBits == 16) {
+                if (mpt.elementCount() != mptSizeBefore + tx.vin.size() - unsigned(i == dupeTxIdx))
+                    throw Exception("MempoolPrefixTable check 1 failed");
             }
         }
     }
+
+    Log() << "Testing MempoolPrefixTable ...";
+    auto checkMPT = [](const Rpa::MempoolPrefixTable &mpt, const Prefix2TxHash & prefix2txhash, const TxHash2Prefix & txhash2prefix) {
+        // check MempoolPrefixTable sanity: by prefix
+        size_t ct = 0;
+        for (const auto & [prefix, hashSet] : prefix2txhash) {
+            ct += hashSet.size();
+            if (Util::toVec(hashSet) != mpt.searchPrefix(prefix, true))
+                throw Exception("MempoolPrefixTable check 2 failed");
+        }
+        if (mpt.elementCount() != ct)
+            throw Exception("MempoolPrefixTable check 3 failed");
+        // check MempoolPrefixTable sanity: by txHash
+        for (const auto & [txHash, prefixSet] : txhash2prefix) {
+            for (const auto & prefix : prefixSet) {
+                const auto vec = mpt.searchPrefix(prefix, true);
+                if (std::find(vec.begin(), vec.end(), txHash) == vec.end())
+                    throw Exception("MempoolPrefixTable check 4 failed");
+            }
+        }
+    };
+    checkMPT(mpt, prefix2txhash, txhash2prefix);
+    // test: remove by individual txHash <-> prefix association
+    const auto mpt_Saved = mpt;
+    const auto prefix2txhash_Saved = prefix2txhash;
+    const auto txhash2prefix_Saved = txhash2prefix;
+    for (auto it = txhash2prefix.begin(); it != txhash2prefix.end(); /**/) {
+        const auto txHash = it->first;
+        auto & prefixSet = it->second;
+        for (auto it2 = prefixSet.begin(); it2 != prefixSet.end(); /**/) {
+            const auto prefix = *it2;
+            const auto sizeBefore = mpt.elementCount();
+            const auto rmct = mpt.removeForPrefixAndHash(prefix, txHash);
+            if (rmct != 1 || sizeBefore != mpt.elementCount() + 1u) throw Exception("MempoolPrefixTable check 5 failed");
+            it2 = prefixSet.erase(it2);
+            auto & txHashSet = prefix2txhash[prefix];
+            txHashSet.erase(txHash);
+            if (txHashSet.empty()) prefix2txhash.erase(prefix);
+            if (!prefixSet.empty())
+                checkMPT(mpt, prefix2txhash, txhash2prefix); // check table again
+        }
+        if (prefixSet.empty()) {
+            it = txhash2prefix.erase(it);
+        } else ++it;
+        checkMPT(mpt, prefix2txhash, txhash2prefix); // check table again
+    }
+    checkMPT(mpt, prefix2txhash, txhash2prefix); // check table again
+    if (!mpt.empty()) throw Exception(QString("MempoolPrefixTable check 6 failed, elementCount: %1").arg(mpt.elementCount()));
+    // test: remove, by prefix
+    mpt = mpt_Saved;
+    prefix2txhash = prefix2txhash_Saved;
+    txhash2prefix = txhash2prefix_Saved;
+    for (auto it = prefix2txhash.begin(); it != prefix2txhash.end(); /**/) {
+        const auto prefix = it->first;
+        const auto txHashSet = it->second;
+        const auto sizeBefore = mpt.elementCount();
+        const size_t rmct = mpt.removeForPrefix(prefix);
+        if (rmct != txHashSet.size() || sizeBefore != mpt.elementCount() + rmct) throw Exception("MempoolPrefixTable check 7 failed");
+        for (const auto & txHash : txHashSet) {
+            txhash2prefix[txHash].erase(prefix);
+            if (txhash2prefix[txHash].empty()) txhash2prefix.erase(txHash);
+        }
+        it = prefix2txhash.erase(it);
+        checkMPT(mpt, prefix2txhash, txhash2prefix);
+    }
+    if (!mpt.empty()) throw Exception(QString("MempoolPrefixTable check 7 failed, elementCount: %1").arg(mpt.elementCount()));
+    // Test: clear() and operator=, operator==, operator!=
+    mpt.clear();
+    if (mpt == mpt_Saved || !mpt.empty()) throw Exception("MempoolPrefixTable check 8 failed");
+    mpt = mpt_Saved;
+    if (mpt != mpt_Saved || mpt.empty() || mpt.elementCount() != mpt_Saved.elementCount()) throw Exception("MempoolPrefixTable check 9 failed");
+    mpt.clear();
+    if (mpt == mpt_Saved || !mpt.empty()) throw Exception("MempoolPrefixTable check 10 failed");
 
     [&checkTableConsistency]{
         Log() << "Testing on block 833705 ...";
