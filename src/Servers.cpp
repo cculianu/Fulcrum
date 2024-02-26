@@ -2287,19 +2287,30 @@ void Server::rpc_blockchain_utxo_get_info(Client *c, const RPC::BatchId batchId,
 QVariantList Server::getRpaHistoryCommon(const BlockHeight height, const size_t count, const Rpa::Prefix & prefix, bool mempoolOnly)
 {
     QVariantList resp;
-    const auto items = storage->getRpaHistory(height, count, prefix, !mempoolOnly, mempoolOnly);
+    // Note: *UNLIKE* regular getHistoryCommon(), we always omit the mempool for: blockchain.rpa.get_history
+    // TODO: Fix this to work exactly like getHistoryCommon() since this API incongruity is annoying.
+    const auto items = storage->getRpaHistory(prefix, height, count, !mempoolOnly, mempoolOnly);
     for (const auto & item : items) {
         QVariantMap m{
             { "tx_hash" , Util::ToHexFast(item.hash) },
-            { "height", int(item.height) },  // confirmed height. Is 0 for mempool tx regardless of unconf. parent status. Note this differs from get_mempool or get_history where -1 is used for unconf. parent.
+            { "height", int(item.height) },  // confirmed height. Is 0 for mempool. -1 is for mempool with unconf parent
         };
+        if (item.fee) m["fee"] = qlonglong(*item.fee / bitcoin::Amount::satoshi());
         resp.push_back(m);
     }
     return resp;
 }
 
+void Server::throwIfRpaDisabled() const {
+    // TODO: match more criteria here ... perhaps query Storage, etc
+    if (isNonBCH() || !options->rpa.enabled)
+        throw RPCError("RPA support is disabled on this server", RPC::ErrorCodes::Code_MethodNotFound);
+}
+
 void Server::rpc_blockchain_reusable_get_history(Client *c, RPC::BatchId batchId, const RPC::Message &m)
 {
+    throwIfRpaDisabled();
+
     // This re-orders the args since the legacy function was weird in that the prefix came as the 3rd arg, rather than the 1st.
     QVariantList l = m.paramsList();
     if (l.size() >= 3)
@@ -2321,7 +2332,7 @@ Rpa::Prefix Server::parseRpaPrefixParamCommon(const QString &prefixParam) const 
 
 void Server::rpc_blockchain_rpa_get_history(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
-    // TODO: throw RPCError here if not enabled on server (is BTC, LTC, etc)
+    throwIfRpaDisabled();
 
     QVariantList l = m.paramsList();
 
@@ -2358,7 +2369,7 @@ void Server::rpc_blockchain_rpa_get_history(Client *c, const RPC::BatchId batchI
 
 void Server::rpc_blockchain_rpa_get_mempool(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
-    // TODO: throw RPCError here if not enabled on server (is BTC, LTC, etc)
+    throwIfRpaDisabled();
 
     QVariantList l = m.paramsList();
     assert(l.size() >= 1);
@@ -2371,7 +2382,7 @@ void Server::rpc_blockchain_rpa_get_mempool(Client *c, const RPC::BatchId batchI
 
 void Server::rpc_blockchain_rpa_subscribe(Client *, const RPC::BatchId, const RPC::Message &m)
 {
-    // TODO: throw RPCError here if not enabled on server (is BTC, LTC, etc)
+    throwIfRpaDisabled();
 
     QVariantList l = m.paramsList();
     assert(l.size() >= 1);
@@ -2384,7 +2395,7 @@ void Server::rpc_blockchain_rpa_subscribe(Client *, const RPC::BatchId, const RP
 
 void Server::rpc_blockchain_rpa_unsubscribe(Client *, const RPC::BatchId, const RPC::Message &m)
 {
-    // TODO: throw RPCError here if not enabled on server (is BTC, LTC, etc)
+    throwIfRpaDisabled();
 
     QVariantList l = m.paramsList();
     assert(l.size() >= 1);

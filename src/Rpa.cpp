@@ -743,11 +743,26 @@ void test()
         "e03d3eee63888527d9729ebd7060fdbb1b94e85abdcbfcc8518539237d62371d69ae11893414104e8806002111e3dfb6944e63a42"
         "461832437f2bbd616facc26910becfa388642972aaf555ffcdc2cdc07a248e7881efa7f456634e1bdb11485dbbc9db20cb669dfef"
         "fffff01174d7037000000001976a9147ee7b62fa98a985c5553ff66120a91b8189f658188ac931a0900",
+        "0100000004e0c845704a4201358eb2f6a2173a321c0e9722f252fdd6244d993fffc86f534a010000006b483045022100a3989d8b0"
+        "05b5bb55663dfca323f5bc27f1215831da1576cdd75d74c0034acdb022004ee8cf26bdf72c3dcfca6ef911ad74d3e50c423e61f64"
+        "254dc33b2671dc5e8a0121021e8499afed086ffeae1679ce16c57b420b8adebce9130e0751523e71fbcf95edffffffff20332b007"
+        "22ffdca13236adf614858780eb8e4845a7a674fe29c385f70d98d70010000006b483045022100faa12bb2f3800b1c40e286bcd59a"
+        "49d47772ce90d95ec211f7a5df00970ce8c102206935fb331b54cb3d394d9c0af5ce6bae31d2ab547446f2e20fb305228b1bcc8d0"
+        "1210208115f44ee63999b51908b5778eac110f5d7d8b46449ec2d2ad647b1b6eeaf20ffffffffe7c85556b64babcf8b5d9f1c8e7e"
+        "fc07c9d9785787866e0d6eeb0b9b9fe3daa2010000006b483045022100c0c8879496f09449171023e1ffcdc0cf5b6cc7710bd86f0"
+        "1b2e7a881e15fcce2022001b1bb33f64f0877907c620e1db2ca6faa4620fcc9dddcf6b64a7353bc831531012102761a0c6e5dff0a"
+        "6249e5e2db56716a5697a21e067f3b4c82a07597d9fd299628fffffffff26cf9fa7c57086264fb567ff0eeeb711d808dff55c4c85"
+        "eda6814c939288ff30a0000006b483045022100c1aed8959296a1c176bbe012deba674fbcc05852083a4fbb8d709db035d4a4eb02"
+        "204d9072cc6b18f1beb1caddf06d9d018e425992bca9a413695fbe43a3dceacfad01210317b950d383d8888ebbd027bb5e0350665"
+        "7768d2b5308cc04c6699e083ab10fb6ffffffff02a8530300000000001976a9141a21eced4e43d1252b5fcec8562e793cfe1daf1f"
+        "88ac45413000000000001976a9141ecd8b1242f4a562ad925d8db94243bf9fff68e188ac00000000",
     }};
+    const std::unordered_set<size_t> allowSegWitForTheseIndices(std::initializer_list<size_t>{2u});
     for (const auto prefixBits : {16, 8}) {
-        for (const auto & txStr : txStrs) {
+        for (size_t i = 0; i < txStrs.size(); ++i) {
+            const auto & txStr = txStrs[i];
             bitcoin::CMutableTransaction tx;
-            BTC::Deserialize(tx, Util::ParseHexFast(txStr), 0, false);
+            BTC::Deserialize(tx, Util::ParseHexFast(txStr), 0, allowSegWitForTheseIndices.count(i));
 
             for (size_t n = 0, sz = tx.vin.size(); n < sz; ++n) {
                 const auto & input = tx.vin[n];

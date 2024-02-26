@@ -191,6 +191,13 @@ QVariantMap Options::toMap() const
     m["anon_logs"] = anonLogs;
     // pidfile
     m["pidfile"] = pidFileAbsPath;
+
+    // RPA-related
+    m["rpa"] = rpa.enabled;
+    m["rpa_max_history"] = rpa.maxHistory;
+    m["rpa_history_blocks_limit"] = rpa.historyBlocksLimit;
+    m["rpa_prefix_bits_min"] = rpa.prefixBitsMin;
+
     return m;
 }
 

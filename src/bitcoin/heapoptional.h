@@ -20,7 +20,6 @@
 
 #include <algorithm>
 #include <memory>
-#include <type_traits>
 #include <utility>
 
 namespace bitcoin {

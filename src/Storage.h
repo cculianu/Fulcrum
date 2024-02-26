@@ -245,6 +245,12 @@ public:
     History getHistory(const HashX &, bool includeConfirmed, bool includeMempool, BlockHeight fromHeight = 0,
                        std::optional<BlockHeight> optToHeight = std::nullopt) const;
 
+    //-- RPA history TODO: document better
+    /// Thread-safe. Will return an empty vector if the confirmed history size exceeds MaxHistory, or a truncated
+    /// vector if the confirmed + unconfirmed history exceeds MaxHistory.
+    History getRpaHistory(const Rpa::Prefix &prefix, const BlockHeight fromHeight, const size_t count, bool includeConfirmed,
+                          bool includeMempool) const;
+
     struct UnspentItem : HistoryItem {
         IONum tx_pos = 0;
         bitcoin::Amount value;
@@ -256,20 +262,6 @@ public:
         bool operator==(const UnspentItem &o) const noexcept;
     };
     using UnspentItems = std::vector<UnspentItem>;
-
-    //-- RPA history
-    struct RpaHistoryItem {
-        TxHash hash;
-        int height = 0; ///< block height. 0 = unconfirmed
-        RpaHistoryItem() = default;
-        RpaHistoryItem(const TxHash &h, int ht = 0) : hash(h), height(ht) {}
-    };
-    using RpaHistory = std::vector<RpaHistoryItem>;
-
-    /// TODO document better
-    /// Thread-safe. Will return an empty vector if the confirmed history size exceeds MaxHistory, or a truncated
-    /// vector if the confirmed + unconfirmed history exceeds MaxHistory.
-    RpaHistory getRpaHistory(const BlockHeight height, const size_t count, const Rpa::Prefix &prefix, bool includeConfirmed, bool includeMempool) const;
 
     enum class TokenFilterOption { IncludeTokens, ExcludeTokens, OnlyTokens };
 

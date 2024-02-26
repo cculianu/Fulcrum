@@ -21,9 +21,11 @@
 #include "BlockProcTypes.h"
 #include "Common.h"
 #include "DSProof.h"
+#include "Rpa.h"
 #include "TXO.h"
 
 #include "bitcoin/amount.h"
+#include "bitcoin/heapoptional.h"
 
 #include <QVariantMap>
 
@@ -86,6 +88,8 @@ struct Mempool
         /// save space vs. robin_hood for immutable maps (which this is, once built)
         std::unordered_map<HashX, IOInfo, HashHasher> hashXs;
 
+        using RpaPrefixSet = std::unordered_set<Rpa::Prefix, Rpa::Prefix::Hasher>;
+        bitcoin::HeapOptional<RpaPrefixSet> optRpaPrefixSet;
 
         bool operator<(const Tx &o) const noexcept {
             // paranoia -- bools may sometimes not always be 1 or 0 in pathological circumstances.
@@ -106,10 +110,6 @@ struct Mempool
     using TxRef = std::shared_ptr<Tx>;
     /// master mapping of TxHash -> TxRef
     using TxMap = std::unordered_map<TxHash, TxRef, HashHasher>;
-    /// TODO describe
-    //using RuNumMap = std::unordered_map<TxNum, TxHash, HashHasher>;
-    // TODO describe
-    //using RuNum2PrefixSetMap = std::unordered_map<TxNum, std::unordered_set<QByteArray, HashHasher>, HashHasher>;
     /// ensures an ordering of TxRefs for the set below that are from fewest ancestors -> most ancestors
     struct TxRefOrdering {
         bool operator()(const TxRef &a, const TxRef &b) const {
@@ -132,10 +132,7 @@ struct Mempool
     // -- Data members of struct Mempool --
     TxMap txs;
     HashXTxMap hashXTxs;
-    //RuNumMap ruNum2Hash;
-    //RuNum2PrefixSetMap ruNum2PrefixSet;
-    //ReusableBlock ruBlk; // Allow for indexing for reusable addresses
-
+    std::optional<Rpa::MempoolPrefixTable> optPrefixTable; ///< only has_value() if RPA is enabled. For mempool RPA queries.
     DSPs dsps;
 
 
@@ -155,6 +152,7 @@ struct Mempool
         std::size_t oldSize = 0, newSize = 0;
         std::size_t oldNumAddresses = 0, newNumAddresses = 0;
         std::size_t dspRmCt = 0, dspTxRmCt = 0; // dsp stats: number of dsproofs removed, number of dsp <-> tx links removed (dropTxs, confirmedInBlock updates these)
+        std::size_t rpaRmCt = 0; ///< the number of tx <-> rpa prefix associations removed
         TxHashSet dspTxsAffected; // populated by addNewTxs(), dropTxs(), & confirmedInBlock() -- used ultimately bu DSProofSubsMgr to notify linked txs.
         double elapsedMsec = 0.;
     };
@@ -268,10 +266,11 @@ private:
     std::size_t rmTxsInHashXTxs(const TxHashNumMap &txidMap, const ScriptHashesAffectedSet &scriptHashesAffected,
                                 bool TRACE, const std::optional<ScriptHashesAffectedSet> &hashXsNeedingSort = {});
 
-    //std::size_t rmRuTxs(const TxHashSet &txids, bool TRACE); // TODO
-
     /// Internal: called by dump()
     static QVariantMap dumpTx(const TxRef &tx);
+
+    /// Internal to do RPA book-keeping for a tx removal, called by confirmedInBlock() and dropTxs()
+    size_t rmTxRpaAssociations(const TxRef &tx);
 
 #ifdef ENABLE_TESTS
 public:

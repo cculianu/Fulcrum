@@ -33,7 +33,6 @@
 #include <limits>
 #include <optional>
 #include <tuple>
-#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 #include <variant>
@@ -253,6 +252,9 @@ public:
 
     // Given a prefix and a hash, removes all associations matching that prefix txHashes matching it. Returns the number of associations removed.
     size_t removeForPrefixAndHash(const Prefix & prefix, const TxHash &txHash);
+
+    bool operator==(const MempoolPrefixTable &o) const { return this == &o || prefixTable == o.prefixTable; }
+    bool operator!=(const MempoolPrefixTable &o) const { return !this->operator==(o); }
 };
 
 } // namespace Rpa

@@ -1931,7 +1931,7 @@ void Storage::startup()
     loadCheckUTXOsInDB();
     // very slow check, only runs if -C -C (specified twice)
     loadCheckShunspentInDB();
-    // load reusable addresses index data
+    // load rpa data
     loadCheckRpaInDb();
     // load check earliest undo to populate earliestUndoHeight
     loadCheckEarliestUndo();
@@ -3060,6 +3060,8 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                   << affected.size() << " addresses";
                 if (res.dspRmCt || res.dspTxRmCt)
                     d << " (also removed dsps: " << res.dspRmCt << ", dspTxs: " << res.dspTxRmCt << ")";
+                if (res.rpaRmCt)
+                    d << " (also removed rpa entries: " << res.rpaRmCt << ")";
                 d << " in " << QString::number(res.elapsedMsec, 'f', 3) << " msec";
             }
             notify->scriptHashesAffected.merge(std::move(affected));
@@ -3291,8 +3293,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                 Tic t0;
                 const QByteArray & ser = *ppb->serializedRpaPrefixTable;
 
-                // TODO this should also update a counter so we can track some corruption occurring when scanning in loadCheckRpaInDb
-                static const QString rpaErrMsg("Error writing RPA info to db");
+                static const QString rpaErrMsg("Error writing block RPA data to db");
                 GenericDBPut(p->db.rpa.get(), RpaDBKey(ppb->height), ser, rpaErrMsg, p->db.defWriteOpts);
                 if (Debug::isEnabled() && (ser.size() > 100'000 || t0.msec() >= 5))
                     Debug() << "Saved RPA " << ppb->height << " size " << ser.size() << " in " << t0.msecStr() << " msec";
@@ -3818,9 +3819,9 @@ auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf, BlockHeigh
     return ret;
 }
 
-auto Storage::getRpaHistory(const BlockHeight start_height, const size_t count, const Rpa::Prefix & prefix, bool conf, bool unconf) const -> RpaHistory
+auto Storage::getRpaHistory(const Rpa::Prefix & prefix, const BlockHeight fromHeight, const size_t count, bool conf, bool unconf) const -> History
 {
-    RpaHistory ret;
+    History ret;
     const size_t maxHistory = options->rpa.maxHistory;
     Tic t0;
     double tReadDb = 0., tPfxSearch = 0., tResolveTxIdx = 0., tWaitForLock = 0., tBuildRes = 0.;
@@ -3830,7 +3831,7 @@ auto Storage::getRpaHistory(const BlockHeight start_height, const size_t count, 
         if (conf) {
             static const QString err("Error retrieving RPA history this height");
 
-            for (BlockHeight height = start_height; height < start_height + count; ++height) {
+            for (BlockHeight height = fromHeight; height < fromHeight + count; ++height) {
                 Tic t1;
                 // Note: This read-only Rpa::PrefixTable is "lazy loaded" and populated only for records we access on-demand
                 const auto optPfxTable = GenericDBGet<Rpa::PrefixTable>(p->db.rpa.get(), RpaDBKey(height), true, err, false,
@@ -3851,7 +3852,7 @@ auto Storage::getRpaHistory(const BlockHeight start_height, const size_t count, 
                 if (const auto hsize = ret.size() + txIdxVec.size(); UNLIKELY(hsize > maxHistory)) {
                     throw HistoryTooLarge(QString("History for prefix '%5' for height range [%1, %2] exceeds MaxHistory"
                                                   " (%3) with %4 items!")
-                                          .arg(start_height).arg(height).arg(maxHistory).arg(hsize)
+                                          .arg(fromHeight).arg(height).arg(maxHistory).arg(hsize)
                                           .arg(QString(prefix.toHex())));
                 }
 
@@ -3866,29 +3867,43 @@ auto Storage::getRpaHistory(const BlockHeight start_height, const size_t count, 
             }
         }
         if (unconf) {
-#if 0
             auto [mempool, lock] = this->mempool();
-
-            std::vector<TxNum> nums;
-            { // append all vectors of txnums
-                auto pRange = mempool.ruBlk.prefixSearch(prefix);
-                for (auto it = pRange.first; it != pRange.second; ++it)
-                    nums.insert(nums.end(), (*it).begin(), (*it).end());
+            if (LIKELY(mempool.optPrefixTable)) {
+                const auto origSize = ret.size();
+                const bool needSort = prefix.range().size() > 1u; // if prefix spans multiple rows of mempool table, sort and uniqueify
+                Tic t1;
+                const auto txHashes = mempool.optPrefixTable->searchPrefix(prefix, needSort /* to get unique hashes */);
+                tPfxSearch += t1.msec<double>();
+                t1 = Tic();
+                for (const auto & txHash : txHashes) {
+                    // add as much as we can until we hit the limit
+                    if (UNLIKELY(ret.size() >= maxHistory)) {
+                        throw HistoryTooLarge(QString("History for prefix '%3' for mempool exceeds MaxHistory (%1) with %2 conf + %3 unconf items!")
+                                              .arg(maxHistory).arg(origSize).arg(txHashes.size()).arg(QString(prefix.toHex())));
+                    }
+                    if (auto it = mempool.txs.find(txHash); LIKELY(it != mempool.txs.end())) {
+                        const int height = it->second->hasUnconfirmedParentTx ? -1 : 0;
+                        ret.emplace_back(txHash, height, it->second->fee);
+                    } else {
+                        Error() << "Tx: " << Util::ToHexFast(txHash) << " for prefix '" << prefix.toHex() << "'"
+                                << " exists in Mempool prefix table but not in Mempool txs! FIXME!";
+                    }
+                }
+                // force unconf parent to sort after conf parent txns
+                std::sort(ret.begin() + origSize, ret.end(), [](const HistoryItem &a, const HistoryItem &b){
+                    int ha = std::max(a.height, -1), hb = std::max(b.height, -1);
+                    if (ha <= 0) ha = 0x7f'ff'ff'fe - ha;  // -1 becomes -> 0x7f'ff'ff'ff, 0 becomes -> 0x7f'ff'ff'fe
+                    if (hb <= 0) hb = 0x7f'ff'ff'fe - hb;
+                    return std::tie(ha, a.hash) < std::tie(hb, b.hash);
+                });
+                // uniqueify
+                auto last = std::unique(ret.begin() + origSize, ret.end());
+                ret.erase(last, ret.end());
+                tBuildRes += t1.msec<double>();
+            } else {
+                // This should never happen for mempool.
+                Warning() << "Missing RPA PrefixTable for mempool. This should never happen. Contact the developers to report this.";
             }
-            if (UNLIKELY(ret.size()+nums.size() > maxReusableHistory)) {
-                throw HistoryTooLarge(QString("History for prefix exceeds MaxReusableHistory %1 with %2 items!")
-                                      .arg(maxReusableHistory).arg(ret.size()+nums.size()));
-            }
-            fastRemoveDuplicates(nums);
-
-            for (auto & num : nums) {
-                auto it = mempool.ruNum2Hash.find(num);
-                if (it == mempool.ruNum2Hash.end())
-                    throw InternalError("TxNum not found in mempool ruNum2Hash");
-                auto [txNum, hash] = *it;
-                ret.emplace_back(ReusableHistoryItem{hash, int(0)});
-            }
-#endif
         }
     } catch (const std::exception &e) {
         Warning(Log::Magenta) << __func__ << ": " << e.what();

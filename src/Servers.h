@@ -469,6 +469,12 @@ private:
 
     /// Helper used by blockchain.rpa.* to parse the prefix arg. Throws RPCError on invalid or unsupported arg.
     Rpa::Prefix parseRpaPrefixParamCommon(const QString &paramHex) const;
+    /// Called from blockchain.rpa.get_mempool and blockchain.rpa.get_history
+    /// Returns a list of QVariantMaps of the form: { "tx_hash": "xxx", "height": n, "fee": sats } (with "fee" appearing only for mempool txns)
+    /// Note: for mempool-only search, height and count are ignored.
+    QVariantList getRpaHistoryCommon(const BlockHeight height, const size_t count, const Rpa::Prefix & prefix, bool mempoolOnly);
+    /// Helper to throw RPCError if RPA is disabled for this server
+    void throwIfRpaDisabled() const;
 
     /// Basically a namespace for our rpc dispatch tables, etc
     struct StaticData {
@@ -489,10 +495,6 @@ private:
     using HeadersBranchAndRootPair = std::pair<QVariantList, QVariant>;
     /// Helper for rpc block_header* methods -- returns the 'branch' and 'root' keys ready to be put in the results dictionary
     HeadersBranchAndRootPair getHeadersBranchAndRoot(unsigned height, unsigned cp_height);
-
-    /// Called from reusable.get_mempool and reusable.get_history
-    /// TODO document more (especially how height and count can/should be 0 for mempool only search)
-    QVariantList getRpaHistoryCommon(const BlockHeight height, const size_t count, const Rpa::Prefix & prefix, bool mempoolOnly);
 
     double lastSubsWarningPrintTime = 0.; ///< used internally to rate-limit "max subs exceeded" message spam to log
 

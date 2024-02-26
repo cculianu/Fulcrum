@@ -372,6 +372,8 @@ void SynchMempoolTask::doGetRawMempool()
                       << " (" << res.newNumAddresses << " addresses)";
                     if (res.dspRmCt || res.dspTxRmCt)
                         d << " (also dropped dsps: " << res.dspRmCt << " dspTxs: " << res.dspTxRmCt << ")";
+                    if (res.rpaRmCt)
+                        d << " (also removed rpa entries: " << res.rpaRmCt << ")";
                 }
                 scriptHashesAffected.merge(std::move(affected)); /* update set here with lock not held */
                 dspTxsAffected.merge(std::move(res.dspTxsAffected)); /* also update this */

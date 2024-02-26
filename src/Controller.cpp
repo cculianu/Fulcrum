@@ -502,7 +502,7 @@ DownloadBlocksTask::DownloadBlocksTask(unsigned from, unsigned to, unsigned stri
     : CtlTask(ctl_, QStringLiteral("Task.DL %1 -> %2").arg(from).arg(to)), from(from), to(to), stride(stride),
       expectedCt(unsigned(nToDL(from, to, stride))), max_q(int(nClients)+1),
       allowSegWit(ctl_->isSegWitCoin()), allowMimble(ctl_->isMimbleWimbleCoin()), allowCashTokens(ctl_->isBCHCoin()),
-      allowRpaIndexing(ctl_->isBCHCoin())
+      allowRpaIndexing(ctl_->isBCHCoin()) // <--- TODO: make this come from more complex logic!
 {
     FatalAssert( (to >= from) && (ctl_) && (stride > 0), "Invalid params to DonloadBlocksTask c'tor, FIXME!");
     if (stride > 1 || expectedCt > 1) {
@@ -1087,6 +1087,18 @@ void Controller::process(bool beSilentIfUpToDate)
         emit synchFailure();
     } else if (sm->state == State::SynchMempool) {
         // ...
+
+        // RPA enabled in mempool check -- TODO: move this elsewhere this is a hack for now
+        if (isBCHCoin() && options->rpa.enabled) {
+            if (auto [mempool, sharedLock] = storage->mempool(); !mempool.optPrefixTable) {
+                // re-lock non-shared
+                sharedLock.unlock();
+                if (auto [mutableMempool, lock] = storage->mutableMempool(); !mutableMempool.optPrefixTable) {
+                    mutableMempool.optPrefixTable.emplace(); // indicate to mempool code to index RPA stuff
+                }
+            }
+        }
+
         auto task = newTask<SynchMempoolTask>(true, this, storage, masterNotifySubsFlag, mempoolIgnoreTxns);
         task->threadObjectDebugLifecycle = Trace::isEnabled(); // suppress verbose lifecycle prints unless trace mode
         connect(task, &CtlTask::success, this, [this, task]{
