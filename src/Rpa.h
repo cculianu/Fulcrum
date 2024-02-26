@@ -18,8 +18,10 @@
 //
 #pragma once
 
+#include "BlockProcTypes.h"
 #include "ByteView.h"
 #include "PackedNumView.h"
+#include "Util.h"
 
 #include <QByteArray>
 
@@ -27,9 +29,12 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring> // for std::memcpy
 #include <limits>
 #include <optional>
 #include <tuple>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <variant>
 
@@ -128,6 +133,17 @@ public:
         return static_cast<uint8_t>((num >> (8u * (MaxN - N))) & 0xffu);
     }
 
+    // Hasher for std::hash-like associative containers
+    struct Hasher {
+        size_t operator()(const Prefix &p) const noexcept {
+            const auto val = p.value();
+            const uint8_t bits = p.getBits();
+            std::array<std::byte, sizeof(val) + sizeof(bits)> buf;
+            std::memcpy(buf.data(), &val, sizeof(val));
+            std::memcpy(buf.data() + sizeof(val), &bits, sizeof(bits));
+            return Util::hashForStd(buf);
+        }
+    };
 };
 
 static constexpr size_t PrefixTableSize = 1u << PrefixBits;
@@ -167,6 +183,9 @@ class PrefixTable {
     std::variant<ReadWrite, ReadOnly> var;
 
 public:
+    using ValueType = TxIdx;
+    using VecType = VecTxIdx;
+
     PrefixTable() : var(std::in_place_type<ReadWrite>) {}
 
     // Construct from serialized data, turns this class into a read-only "view" into the data
@@ -209,5 +228,26 @@ private:
 };
 
 static_assert(PrefixTableSize - 1u == std::numeric_limits<uint16_t>::max());
+
+class MempoolPrefixTable {
+    using TxHashSet = std::unordered_set<TxHash, BTC::QByteArrayHashHasher>;
+    using PrefixSet = std::unordered_set<Prefix, Prefix::Hasher>;
+
+    std::vector<TxHashSet> prefixTable{PrefixTable::numRows(), TxHashSet{}}; // maps a prefix index -> txhashes
+    std::unordered_map<TxHash, PrefixSet> txHashToPrefixSet; // maps a txHash to its set of associated prefixes
+
+public:
+    using VecTxHash = std::vector<TxHash>;
+
+    void clear() { *this = MempoolPrefixTable(); }
+
+    // Adds TxHash to all entries matching prefix. If prefix length is 16 bits, then just adds to 1 entry at index prefix.value().
+    void addForPrefix(const Prefix & prefix, const TxHash & txHash);
+    // Returns a vector of all TxHashes matching a particular prefix, optionally sorted and uniqueified.
+    // If prefix length is 16 bits, then just returns the entry at index prefix.value().
+    VecTxHash searchPrefix(const Prefix & prefix, bool sortAndMakeUnique = false) const;
+    // Given a txHash, removes the association between that prefixes and that hash. Returns the number of associations removed.
+    size_t removeForTxHash(const TxHash & txHash);
+};
 
 } // namespace Rpa

@@ -235,15 +235,46 @@ PrefixTable::PrefixTable(const QByteArray &compressedSerializedData) : var(std::
     // lazy-read the prefix table data on-demand.
 }
 
+namespace {
+    template <typename T>
+    bool is_obvious_dupe(const std::vector<T> &vec, const T &item) { return !vec.empty() && vec.back() == item; }
+    template <typename T, typename U>
+    bool is_obvious_dupe(const std::unordered_set<T, U> &, const T &) { return false; }
+
+    template <typename Container>
+    void addForPrefixGeneric(Container &cont, const Prefix &p, const typename Container::value_type::value_type & item) {
+        auto [b, e] = p.range();
+        e = std::min<uint32_t>(e, cont.size());
+        for (size_t i = b; i < e; ++i) {
+            auto & vecOrSet = cont[i];
+            if (!is_obvious_dupe(vecOrSet, item)) // optimization to avoid obvious dupes
+                Util::CallPushBackOrInsert{}(vecOrSet, item);
+        }
+    }
+
+    template <typename Container, typename Func>
+    std::vector<typename Container::value_type::value_type>
+    searchPrefixGeneric(const Container &cont, const Prefix &prefix, bool sortAndMakeUnique, Func && lazyLoadRow) {
+        std::vector<typename Container::value_type::value_type> ret;
+        auto [b, e] = prefix.range();
+        e = std::min<uint32_t>(e, cont.size());
+        for (size_t i = b; i < e; ++i) {
+            lazyLoadRow(i);
+            const auto & vecOrSet = cont[i];
+            ret.insert(ret.end(), vecOrSet.begin(), vecOrSet.end());
+        }
+        if (sortAndMakeUnique && ret.size() > 1u) {
+            Util::sortAndUniqueify(ret, false);
+        }
+        return ret;
+    }
+
+} // namespace
+
 void PrefixTable::addForPrefix(const Prefix &p, TxIdx n) {
     auto *rw = std::get_if<ReadWrite>(&var);
     if (!rw) throw Exception("addForPrefix called on a read-only PrefixTable");
-    const auto [b, e] = p.range();
-    for (size_t i = b; i < e; ++i) {
-        auto & vec = rw->rows.at(i);
-        if (vec.empty() || vec.back() != n) // optiization to avoid obvious dupes
-            vec.push_back(n);
-    }
+    addForPrefixGeneric(rw->rows, p, n);
 }
 
 void PrefixTable::lazyLoadRow(const size_t index) const {
@@ -287,18 +318,15 @@ const VecTxIdx * PrefixTable::getRowPtr(size_t index) const { return const_cast<
 
 VecTxIdx PrefixTable::searchPrefix(const Prefix &prefix, bool sortAndMakeUnique) const {
     VecTxIdx ret;
-    std::visit([&](const auto & rw_or_ro){
-        auto [b, e] = prefix.range();
-        e = std::min<uint32_t>(e, numRows());
-        for (size_t i = b; i < e; ++i) {
-            lazyLoadRow(i);
-            const auto & cont = rw_or_ro.rows[i];
-            ret.insert(ret.end(), cont.begin(), cont.end());
-        }
-    }, var);
-    if (sortAndMakeUnique && ret.size() > 1u) {
-        Util::sortAndUniqueify(ret, false);
-    }
+    std::visit(
+        Overloaded{
+            [&](const ReadOnly & ro){
+                ret = searchPrefixGeneric(ro.rows, prefix, sortAndMakeUnique, [this](size_t i) { lazyLoadRow(i); });
+            },
+            [&](const ReadWrite & rw){
+                ret = searchPrefixGeneric(rw.rows, prefix, sortAndMakeUnique, [](auto){});
+            }
+        }, var);
     return ret;
 }
 
@@ -322,6 +350,40 @@ bool PrefixTable::operator==(const PrefixTable &o) const {
             return false;
     }
     return true;
+}
+
+void MempoolPrefixTable::addForPrefix(const Prefix & prefix, const TxHash & txHash) {
+    addForPrefixGeneric(prefixTable, prefix, txHash);
+    txHashToPrefixSet[txHash].insert(prefix);
+}
+
+auto MempoolPrefixTable::searchPrefix(const Prefix &prefix, bool sortAndMakeUnique) const -> VecTxHash {
+    return searchPrefixGeneric(prefixTable, prefix, sortAndMakeUnique, [](auto){});
+}
+
+size_t MempoolPrefixTable::removeForTxHash(const TxHash & txHash) {
+    size_t ret = 0;
+    if (auto it = txHashToPrefixSet.find(txHash); it != txHashToPrefixSet.end()) {
+        ret = it->second.size();
+        // search for all prefixes mapped to this txHash
+        for (const auto & prefix : it->second) {
+            auto [b, e] = prefix.range();
+            e = std::min<uint32_t>(e, prefixTable.size());
+            for (size_t i = b; i < e; ++i) {
+                auto & hashSet = prefixTable[i];
+                if (auto it2 = hashSet.find(txHash); it2 != hashSet.end()) {
+                    // erase txHash entry for this prefix
+                    hashSet.erase(it2); // `it2` invalidated here
+                } else {
+                    Warning() << "Internal consistency error: txHash <-> prefix association not found as expected in MempoolPrefixTable"
+                              << " for prefix index: " << i << ", txHash: " << txHash.toHex();
+                }
+            }
+        }
+        // lastly, erase the txHash entry from this table
+        txHashToPrefixSet.erase(it); // NB: `it` invalidated at this point
+    }
+    return ret;
 }
 
 } // namespace Rpa
@@ -476,10 +538,17 @@ void test()
         // check everything in the table is in the prefix map
         for (const auto & [pfxnum, vec] : vt) {
             const Rpa::Prefix pfx(pfxnum);
-            const auto * nums = pt.getRowPtr(pfx.value());
-            // the vector of txnums now should equal prefixTable
-            if (!nums || *nums != vec)
-                throw CheckFail("Rpa::PrefixTable has consistency errors");
+            if (pt.isReadWrite()) {
+                const auto * nums = pt.getRowPtr(pfx.value());
+                // the vector of txnums now should equal prefixTable
+                if (!nums || *nums != vec)
+                    throw CheckFail("Rpa::PrefixTable has consistency errors (1)");
+            } else {
+                // read-only table, do search
+                auto vec2 = pt.searchPrefix(Rpa::Prefix{uint16_t{pfxnum}, 16}, false);
+                if (vec != vec2)
+                    throw CheckFail("Rpa::PrefixTable has consistency errors (2)");
+            }
         }
     };
     Log() << "Testing PrefixTable consistency ...";
@@ -540,6 +609,7 @@ void test()
             const auto v2 = p2.searchPrefix(Rpa::Prefix(i));
             if (v1 != v2) throw Exception("Unser test 2 fail");
         }
+        checkTableConsistency(p2, verifyTable); // run through entire table for belt-and-suspenders check
     }
 
     Log() << "Testing PrefixTable equality ...";
