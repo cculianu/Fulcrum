@@ -109,31 +109,119 @@ auto PrefixTable::ReadOnly::operator=(const ReadOnly &o) -> ReadOnly & {
     return *this;
 }
 
-size_t PrefixTable::elementCount() const {
-    size_t ct = 0u;
-    std::visit([&](const auto & rw_or_ro){
-        for (size_t i = 0u; i < numRows(); ++i) {
-            lazyLoadRow(i);
-            const auto & v = rw_or_ro.rows.at(i);
-            ct += v.size();
+namespace {
+    template <typename T>
+    bool is_obvious_dupe(const std::vector<T> &vec, const T &item) { return !vec.empty() && vec.back() == item; }
+    template <typename T, typename U>
+    bool is_obvious_dupe(const std::unordered_set<T, U> &, const T &) { return false; }
+
+    template <typename Container>
+    void addForPrefixGeneric(Container &cont, const Prefix &p, const typename Container::value_type::value_type & item) {
+        auto [b, e] = p.range();
+        e = std::min<uint32_t>(e, cont.size());
+        for (size_t i = b; i < e; ++i) {
+            auto & vecOrSet = cont[i];
+            if (!is_obvious_dupe(vecOrSet, item)) // optimization to avoid obvious dupes
+                Util::CallPushBackOrInsert{}(vecOrSet, item);
         }
-    }, var);
-    return ct;
+    }
+
+    template <typename Container, typename Func>
+    std::vector<typename Container::value_type::value_type>
+    searchPrefixGeneric(const Container &cont, const Prefix &prefix, bool sortAndMakeUnique, Func && lazyLoadRow) {
+        std::vector<typename Container::value_type::value_type> ret;
+        auto [b, e] = prefix.range();
+        e = std::min<uint32_t>(e, cont.size());
+        for (size_t i = b; i < e; ++i) {
+            lazyLoadRow(i);
+            const auto & vecOrSet = cont[i];
+            ret.insert(ret.end(), vecOrSet.begin(), vecOrSet.end());
+        }
+        if (sortAndMakeUnique && ret.size() > 1u) {
+            Util::sortAndUniqueify(ret, false);
+        }
+        return ret;
+    }
+
+    template <typename Container>
+    size_t removeForPrefixGeneric(Container & cont, const Prefix & prefix,
+                                  const typename Container::value_type::value_type * individualItem = nullptr) {
+        size_t ret = 0u;
+        auto [b, e] = prefix.range();
+        e = std::min<uint32_t>(e, cont.size());
+        for (size_t i = b; i < e; ++i) {
+            using VecOrSet = typename Container::value_type;
+            VecOrSet & vecOrSet = cont[i];
+            if (! individualItem) {
+                ret += vecOrSet.size();
+                vecOrSet = VecOrSet{}; // we clear the vector (or set) in this way to ensure memory for it is freed immediately, since vecOrSet.clear() won't guarantee this.
+            } else {
+                using BareType = std::remove_reference_t<std::remove_cv_t<VecOrSet>>;
+                if constexpr (std::is_same_v<BareType, std::vector<typename BareType::value_type>>) {
+                    // This branch is for vectors and is slow, and only provided here for this code to compile.
+                    // It's O(N).  Don't use this branch in production.
+                    Warning() << "Slow branch taken in removeForPrefixGeneric()! FIXME!";
+                    auto it = vecOrSet.begin();
+                    while (it != vecOrSet.end()) {
+                        it = std::find(it, vecOrSet.end(), *individualItem);
+                        if (it != vecOrSet.end()) {
+                            it = vecOrSet.erase(it);
+                            ++ret;
+                        }
+                    }
+                } else {
+                    // Regular fast set find
+                    auto it = vecOrSet.find(*individualItem);
+                    if (it != vecOrSet.end()) {
+                        it = vecOrSet.erase(it);
+                        ++ret;
+                    }
+                }
+            }
+        }
+        return ret;
+    }
+
+    template <typename Container, typename Func>
+    size_t elementCountGeneric(const Container &cont, Func && lazyLoadRow) {
+        size_t ct = 0u;
+        for (size_t i = 0u; i < cont.size(); ++i) {
+            lazyLoadRow(i);
+            const auto & vecOrSet = cont[i];
+            ct += vecOrSet.size();
+        }
+        return ct;
+    }
+} // namespace
+
+size_t PrefixTable::elementCount() const {
+    return std::visit(
+        Overloaded{
+            [&](const ReadOnly & ro){
+                return elementCountGeneric(ro.rows, [this, &ro](size_t i) { lazyLoadRow(i, &ro); });
+            },
+            [&](const ReadWrite & rw){
+                return elementCountGeneric(rw.rows, [](auto){});
+            }
+        }, var);
 }
 
 QByteArray PrefixTable::serializeRow(size_t index, bool deepCopy) const {
-    if (auto *rw = std::get_if<ReadWrite>(&var)) {
-        const auto & vec = rw->rows.at(index);
-        const QByteArray::size_type bytesNeeded = vec.size() * PNV::bytesPerElement;
-        QByteArray ret(bytesNeeded, Qt::Uninitialized);
-        PNV::Make(MakeUInt8Span(ret), Span{vec});
-        return ret;
-    } else if (auto *ro = std::get_if<ReadOnly>(&var)) {
-        lazyLoadRow(index);
-        const auto & pnv = ro->rows.at(index);
-        return pnv.rawBytes().toByteArray(deepCopy);
-    } else
-        throw InternalError("Unexpected variant state in PrefixTable::SerializeRow");
+    return std::visit(
+        Overloaded{
+            [&](const ReadOnly & ro){
+                lazyLoadRow(index, &ro);
+                const auto & pnv = ro.rows.at(index);
+                return pnv.rawBytes().toByteArray(deepCopy);
+            },
+            [&](const ReadWrite & rw){
+                const auto & vec = rw.rows.at(index);
+                const QByteArray::size_type bytesNeeded = vec.size() * PNV::bytesPerElement;
+                QByteArray ret(bytesNeeded, Qt::Uninitialized);
+                PNV::Make(MakeUInt8Span(ret), Span{vec});
+                return ret;
+            }
+        }, var);
 }
 
 static_assert(PrefixBits == sizeof(uint16_t) * 8u && PrefixTable::numRows() - 1u == std::numeric_limits<uint16_t>::max(),
@@ -235,51 +323,17 @@ PrefixTable::PrefixTable(const QByteArray &compressedSerializedData) : var(std::
     // lazy-read the prefix table data on-demand.
 }
 
-namespace {
-    template <typename T>
-    bool is_obvious_dupe(const std::vector<T> &vec, const T &item) { return !vec.empty() && vec.back() == item; }
-    template <typename T, typename U>
-    bool is_obvious_dupe(const std::unordered_set<T, U> &, const T &) { return false; }
-
-    template <typename Container>
-    void addForPrefixGeneric(Container &cont, const Prefix &p, const typename Container::value_type::value_type & item) {
-        auto [b, e] = p.range();
-        e = std::min<uint32_t>(e, cont.size());
-        for (size_t i = b; i < e; ++i) {
-            auto & vecOrSet = cont[i];
-            if (!is_obvious_dupe(vecOrSet, item)) // optimization to avoid obvious dupes
-                Util::CallPushBackOrInsert{}(vecOrSet, item);
-        }
-    }
-
-    template <typename Container, typename Func>
-    std::vector<typename Container::value_type::value_type>
-    searchPrefixGeneric(const Container &cont, const Prefix &prefix, bool sortAndMakeUnique, Func && lazyLoadRow) {
-        std::vector<typename Container::value_type::value_type> ret;
-        auto [b, e] = prefix.range();
-        e = std::min<uint32_t>(e, cont.size());
-        for (size_t i = b; i < e; ++i) {
-            lazyLoadRow(i);
-            const auto & vecOrSet = cont[i];
-            ret.insert(ret.end(), vecOrSet.begin(), vecOrSet.end());
-        }
-        if (sortAndMakeUnique && ret.size() > 1u) {
-            Util::sortAndUniqueify(ret, false);
-        }
-        return ret;
-    }
-
-} // namespace
-
 void PrefixTable::addForPrefix(const Prefix &p, TxIdx n) {
     auto *rw = std::get_if<ReadWrite>(&var);
     if (!rw) throw Exception("addForPrefix called on a read-only PrefixTable");
     addForPrefixGeneric(rw->rows, p, n);
 }
 
-void PrefixTable::lazyLoadRow(const size_t index) const {
-    const auto *ro = std::get_if<ReadOnly>(&var);
-    if (!ro) return; // nothing to do for read-write table, return
+void PrefixTable::lazyLoadRow(const size_t index, const ReadOnly *ro) const {
+    if (!ro) {
+        ro = std::get_if<ReadOnly>(&var);
+        if (!ro) return; // nothing to do for read-write table, return
+    }
     if (UNLIKELY(ro->rows.size() != numRows())) throw InternalError("Bad size for ro->rows(). FIXME!");
     PNV & row = ro->rows.at(index); // may throw
     if (! row.isNull()) return; // if not null, then we already been through here once, and the data is populated already (even if with a 0-sized array .isNull() will be false)
@@ -317,30 +371,21 @@ VecTxIdx * PrefixTable::getRowPtr(size_t index) {
 const VecTxIdx * PrefixTable::getRowPtr(size_t index) const { return const_cast<PrefixTable *>(this)->getRowPtr(index); }
 
 VecTxIdx PrefixTable::searchPrefix(const Prefix &prefix, bool sortAndMakeUnique) const {
-    VecTxIdx ret;
-    std::visit(
+    return std::visit(
         Overloaded{
             [&](const ReadOnly & ro){
-                ret = searchPrefixGeneric(ro.rows, prefix, sortAndMakeUnique, [this](size_t i) { lazyLoadRow(i); });
+                return searchPrefixGeneric(ro.rows, prefix, sortAndMakeUnique, [this, &ro](size_t i) { lazyLoadRow(i, &ro); });
             },
             [&](const ReadWrite & rw){
-                ret = searchPrefixGeneric(rw.rows, prefix, sortAndMakeUnique, [](auto){});
+                return searchPrefixGeneric(rw.rows, prefix, sortAndMakeUnique, [](auto){});
             }
         }, var);
-    return ret;
 }
 
 size_t PrefixTable::removeForPrefix(const Prefix & prefix) {
     auto *rw = std::get_if<ReadWrite>(&var);
     if (!rw) throw Exception("removeForPrefix called on a read-only PrefixTable");
-    size_t ret = 0u;
-    const auto [b, e] = prefix.range();
-    for (size_t i = b; i < e; ++i) {
-        auto & vec = rw->rows.at(i);
-        ret += vec.size();
-        vec = VecTxIdx{}; // we clear the vector in this way to ensure memory for it is freed immediately, since vec.clear() won't guarantee this.
-    }
-    return ret;
+    return removeForPrefixGeneric(rw->rows, prefix);
 }
 
 bool PrefixTable::operator==(const PrefixTable &o) const {
@@ -354,36 +399,22 @@ bool PrefixTable::operator==(const PrefixTable &o) const {
 
 void MempoolPrefixTable::addForPrefix(const Prefix & prefix, const TxHash & txHash) {
     addForPrefixGeneric(prefixTable, prefix, txHash);
-    txHashToPrefixSet[txHash].insert(prefix);
 }
 
 auto MempoolPrefixTable::searchPrefix(const Prefix &prefix, bool sortAndMakeUnique) const -> VecTxHash {
     return searchPrefixGeneric(prefixTable, prefix, sortAndMakeUnique, [](auto){});
 }
 
-size_t MempoolPrefixTable::removeForTxHash(const TxHash & txHash) {
-    size_t ret = 0;
-    if (auto it = txHashToPrefixSet.find(txHash); it != txHashToPrefixSet.end()) {
-        ret = it->second.size();
-        // search for all prefixes mapped to this txHash
-        for (const auto & prefix : it->second) {
-            auto [b, e] = prefix.range();
-            e = std::min<uint32_t>(e, prefixTable.size());
-            for (size_t i = b; i < e; ++i) {
-                auto & hashSet = prefixTable[i];
-                if (auto it2 = hashSet.find(txHash); it2 != hashSet.end()) {
-                    // erase txHash entry for this prefix
-                    hashSet.erase(it2); // `it2` invalidated here
-                } else {
-                    Warning() << "Internal consistency error: txHash <-> prefix association not found as expected in MempoolPrefixTable"
-                              << " for prefix index: " << i << ", txHash: " << txHash.toHex();
-                }
-            }
-        }
-        // lastly, erase the txHash entry from this table
-        txHashToPrefixSet.erase(it); // NB: `it` invalidated at this point
-    }
-    return ret;
+size_t MempoolPrefixTable::elementCount() const {
+    return elementCountGeneric(prefixTable, [](auto){});
+}
+
+size_t MempoolPrefixTable::removeForPrefix(const Prefix & prefix) {
+    return removeForPrefixGeneric(prefixTable, prefix);
+}
+
+size_t MempoolPrefixTable::removeForPrefixAndHash(const Prefix & prefix, const TxHash &txHash) {
+    return removeForPrefixGeneric(prefixTable, prefix, &txHash);
 }
 
 } // namespace Rpa

@@ -224,30 +224,35 @@ public:
 private:
     /// ReadOnly mode only: Lazy-loads row at index, if it has not already been loaded (otherwise is a no-op).
     /// ReadWrite mode: Is a no-op.
-    void lazyLoadRow(size_t index) const;
+    void lazyLoadRow(size_t index, const ReadOnly *ro = nullptr) const;
 };
 
 static_assert(PrefixTableSize - 1u == std::numeric_limits<uint16_t>::max());
 
 class MempoolPrefixTable {
     using TxHashSet = std::unordered_set<TxHash, BTC::QByteArrayHashHasher>;
-    using PrefixSet = std::unordered_set<Prefix, Prefix::Hasher>;
-
-    std::vector<TxHashSet> prefixTable{PrefixTable::numRows(), TxHashSet{}}; // maps a prefix index -> txhashes
-    std::unordered_map<TxHash, PrefixSet> txHashToPrefixSet; // maps a txHash to its set of associated prefixes
+    std::vector<TxHashSet> prefixTable{numRows(), TxHashSet{}}; // maps a prefix index -> txhashes
 
 public:
     using VecTxHash = std::vector<TxHash>;
 
     void clear() { *this = MempoolPrefixTable(); }
 
+    size_t elementCount() const;
+    bool empty() const { return elementCount() == 0u; }
+
+    static constexpr size_t numRows() { return PrefixTable::numRows(); }
+
     // Adds TxHash to all entries matching prefix. If prefix length is 16 bits, then just adds to 1 entry at index prefix.value().
     void addForPrefix(const Prefix & prefix, const TxHash & txHash);
     // Returns a vector of all TxHashes matching a particular prefix, optionally sorted and uniqueified.
     // If prefix length is 16 bits, then just returns the entry at index prefix.value().
     VecTxHash searchPrefix(const Prefix & prefix, bool sortAndMakeUnique = false) const;
-    // Given a txHash, removes the association between that prefixes and that hash. Returns the number of associations removed.
-    size_t removeForTxHash(const TxHash & txHash);
+    // Given a prefix, removes the association between that prefix and all the txHashes under it. Returns the number of associations removed.
+    size_t removeForPrefix(const Prefix & prefix);
+
+    // Given a prefix and a hash, removes all associations matching that prefix txHashes matching it. Returns the number of associations removed.
+    size_t removeForPrefixAndHash(const Prefix & prefix, const TxHash &txHash);
 };
 
 } // namespace Rpa
