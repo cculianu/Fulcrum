@@ -1422,6 +1422,15 @@ void App::parseArgs()
         options->rpa.maxHistory = mh;
         // log this later in case we are in syslog mode
         Util::AsyncOnObject(this, [mh]{ Debug() << "config: rpa_max_history = " << mh; });
+    } else {
+        // Otherwise, if nothing specified, we have special logic here:
+        // We inherit whatever the user specified for max_history, if anything (may be default)
+        options->rpa.maxHistory = options->maxHistory;
+        if (conf.hasValue("max_history")) {
+            Util::AsyncOnObject(this, [mh = options->maxHistory]{
+                Debug() << "config: rpa_max_history = " << mh << " (inherited from max_history)";
+            });
+        }
     }
 
     // conf: rpa_history_blocks_limit

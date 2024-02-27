@@ -3782,12 +3782,12 @@ std::vector<TxHash> Storage::txHashesForBlockInBitcoindMemoryOrder(BlockHeight h
 
 /// Returns a lambda that can be called to increment the counter. If the counter exceeds maxHistory, lambda will throw.
 /// Used below in getHistory(), listUnspent(), getBalance()
-static auto GetMaxHistoryCtrFunc(const QString &name, const HashX &hashX, size_t maxHistory)
+static auto GetMaxHistoryCtrFunc(const QString &name, const QString &itemName, size_t maxHistory)
 {
-    return [name, hashX, maxHistory, ctr = size_t{0u}](size_t incr = 1u) mutable {
+    return [name, itemName, maxHistory, ctr = size_t{0u}](size_t incr = 1u) mutable {
         if (UNLIKELY((ctr += incr) > maxHistory)) {
-            throw HistoryTooLarge(QString("%1 for scripthash %2 exceeds MaxHistory %3 with %4 items!")
-                                  .arg(name, QString(hashX.toHex())).arg(maxHistory).arg(ctr));
+            throw HistoryTooLarge(QString("%1 for %2 exceeds max history %3 with %4 items!")
+                                  .arg(name, itemName).arg(maxHistory).arg(ctr));
         }
     };
 }
@@ -3798,7 +3798,8 @@ auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf, BlockHeigh
     History ret;
     if (hashX.length() != HashLen)
         return ret;
-    auto IncrementCtrAndThrowIfExceedsMaxHistory = GetMaxHistoryCtrFunc("History", hashX, options->maxHistory);
+    auto IncrementCtrAndThrowIfExceedsMaxHistory = GetMaxHistoryCtrFunc("History", QString("scripthash %1").arg(hashX.toHex()),
+                                                                        options->maxHistory);
     try {
         SharedLockGuard g(p->blocksLock);  // makes sure history doesn't mutate from underneath our feet
         if (conf) {
@@ -3845,7 +3846,8 @@ auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf, BlockHeigh
 auto Storage::getRpaHistory(const Rpa::Prefix & prefix, const BlockHeight fromHeight, const size_t count, bool conf, bool unconf) const -> History
 {
     History ret;
-    const size_t maxHistory = options->rpa.maxHistory;
+    auto IncrementCtrAndThrowIfExceedsMaxHistory = GetMaxHistoryCtrFunc("RPA History", QString("prefix '%1'").arg(prefix.toHex()),
+                                                                        options->rpa.maxHistory);
     Tic t0;
     double tReadDb = 0., tPfxSearch = 0., tResolveTxIdx = 0., tWaitForLock = 0., tBuildRes = 0.;
     try {
@@ -3872,12 +3874,7 @@ auto Storage::getRpaHistory(const Rpa::Prefix & prefix, const BlockHeight fromHe
                 tPfxSearch += t1.msec<double>();
                 if (txIdxVec.empty()) continue;
 
-                if (const auto hsize = ret.size() + txIdxVec.size(); UNLIKELY(hsize > maxHistory)) {
-                    throw HistoryTooLarge(QString("History for prefix '%5' for height range [%1, %2] exceeds MaxHistory"
-                                                  " (%3) with %4 items!")
-                                          .arg(fromHeight).arg(height).arg(maxHistory).arg(hsize)
-                                          .arg(QString(prefix.toHex())));
-                }
+                IncrementCtrAndThrowIfExceedsMaxHistory(txIdxVec.size());
 
                 t1 = Tic();
                 const auto vecOfOptHashes = hashesForHeightAndPosVec(height, txIdxVec, &g /* <-- tell callee not to re-lock blocksLock */);
@@ -3897,13 +3894,11 @@ auto Storage::getRpaHistory(const Rpa::Prefix & prefix, const BlockHeight fromHe
                 Tic t1;
                 const auto txHashes = mempool.optPrefixTable->searchPrefix(prefix, needSort /* to get unique hashes */);
                 tPfxSearch += t1.msec<double>();
+
+                IncrementCtrAndThrowIfExceedsMaxHistory(txHashes.size());
+
                 t1 = Tic();
                 for (const auto & txHash : txHashes) {
-                    // add as much as we can until we hit the limit
-                    if (UNLIKELY(ret.size() >= maxHistory)) {
-                        throw HistoryTooLarge(QString("History for prefix '%3' for mempool exceeds MaxHistory (%1) with %2 conf + %3 unconf items!")
-                                              .arg(maxHistory).arg(origSize).arg(txHashes.size()).arg(QString(prefix.toHex())));
-                    }
                     if (auto it = mempool.txs.find(txHash); LIKELY(it != mempool.txs.end())) {
                         const int height = it->second->hasUnconfirmedParentTx ? -1 : 0;
                         ret.emplace_back(txHash, height, it->second->fee);
@@ -3963,7 +3958,9 @@ auto Storage::listUnspent(const HashX & hashX, const TokenFilterOption tokenFilt
         return ret;
     try {
         auto ShouldFilter = [tokenFilter](const bitcoin::token::OutputDataPtr & p) { return ShouldTokenFilter(tokenFilter, p); };
-        auto IncrementCtrAndThrowIfExceedsMaxHistory = GetMaxHistoryCtrFunc("Unspent UTXOs", hashX, options->maxHistory);
+        auto IncrementCtrAndThrowIfExceedsMaxHistory = GetMaxHistoryCtrFunc("Unspent UTXOs",
+                                                                            QString("scripthash %1").arg(hashX.toHex()),
+                                                                            options->maxHistory);
         constexpr size_t iota = 10; // we initially reserve this many items in the returned array in order to prevent redundant allocations in the common case.
         std::unordered_set<TXO> mempoolConfirmedSpends;
         mempoolConfirmedSpends.reserve(iota);
@@ -4089,7 +4086,9 @@ auto Storage::getBalance(const HashX &hashX, TokenFilterOption tokenFilter) cons
     if (hashX.length() != HashLen)
         return ret;
     auto ShouldFilter = [tokenFilter](const bitcoin::token::OutputDataPtr & p) { return ShouldTokenFilter(tokenFilter, p); };
-    auto IncrementCtrAndThrowIfExceedsMaxHistory = GetMaxHistoryCtrFunc("GetBalance UTXOs", hashX, options->maxHistory);
+    auto IncrementCtrAndThrowIfExceedsMaxHistory = GetMaxHistoryCtrFunc("GetBalance UTXOs",
+                                                                        QString("scripthash %1").arg(hashX.toHex()),
+                                                                        options->maxHistory);
     try {
         // take shared lock (ensure history doesn't mutate from underneath our feet)
         SharedLockGuard g(p->blocksLock);

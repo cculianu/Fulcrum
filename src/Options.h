@@ -294,7 +294,10 @@ public:
         // Note: to see if RPA is enabled, check the Storage object since it makes the final decision based on `enabledSpec` & `coin`
 
         // config: rpa_max_history - Limit result array size for blockchain.rpa.get_history
-        int maxHistory = defaultMaxHistory; // this can be independently of app-level maxHistory set but defaults to maxHistory
+        // This can be set independently of app-level max_history (but defaults to max_history). If user specifies
+        // max_history but leaves rpa_max_history unspecified, then rpa_max_history also gets set to whatever
+        // the user said for max_history at app init (see: App.cpp).
+        int maxHistory = defaultMaxHistory;
 
         // config: rpa_history_blocks_limit - Limit number of blocks to scan at once for blockchain.rpa.get_history
         static constexpr int defaultHistoryBlocksLimit = 60, historyBlocksLimitMin = 1, historyBlocksLimitMax = 2016;
