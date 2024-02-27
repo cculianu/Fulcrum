@@ -225,6 +225,11 @@ private:
     /// Used to update the mempool fee histogram early right after the synchedMempool() signal is emitted
     bool needFeeHistogramUpdate = true;
 
+    /// Latched to true as soon as on_coinDetected is called at least once. This allows us to wait until bitcoind tells
+    /// us what coin we are connected to before we proceed with initial synch. Also latched to true if we already have
+    /// a "coin" defined in storage already.
+    std::atomic_bool didReceiveCoinDetectionFromBitcoinDMgr = false;
+
 private slots:
     /// Stops the zmqHashBlockNotifier; called if we received an empty hashblock endpoint address from BitcoinDMgr or
     /// when all connections to bitcoind are lost

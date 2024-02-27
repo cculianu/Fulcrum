@@ -524,9 +524,9 @@ void App::parseArgs()
     },
     {
         "rpa",
-        QString("Enable the Reusable Payment Address index and offer the associated \"blockchain.rpa.*\" RPC methods to"
-                 " clients. To explicitly disable this facility, use the CLI arg --no-rpa. Default is: %1.\n")
-             .arg(Options::Rpa::defaultEnabled ? "enabled" : "disabled")
+        QString("Explicitly enable the Reusable Payment Address index and offer the associated \"blockchain.rpa.*\" RPC"
+                 " methods to clients. To explicitly disable this facility, use the CLI arg --no-rpa. Default is: %1.\n")
+             .arg(options->rpa.enabledSpecToString())
     },
     {
         "no-rpa", QString("<hidden>")
@@ -1400,15 +1400,15 @@ void App::parseArgs()
     // CLI: --rpa
     // conf: rpa
     if (const bool psetYes = parser.isSet("rpa"), psetNo = parser.isSet("no-rpa"); psetYes || psetNo || conf.hasValue("rpa")) {
-        bool val = options->rpa.defaultEnabled;
+        bool val{};
         if (!psetYes && !psetNo) {
             bool ok{};
-            val = conf.boolValue("rpa", val, &ok);
+            val = conf.boolValue("rpa", false, &ok);
             if (!ok) throw BadArgs("rpa: bad value. Specify a boolean value such as 0, 1, true, false, yes, no");
         }
         else if (psetYes && psetNo) throw BadArgs("Cannot specify --rpa and --no-rpa at the same time!");
-        else val = psetYes;
-        options->rpa.enabled = val;
+        else val = psetYes; // will be false if psetNo here
+        options->rpa.enabledSpec = val ? Options::Rpa::Enabled : Options::Rpa::Disabled;
         Util::AsyncOnObject(this, [val] { DebugM("config: rpa = ", val); });
     }
 

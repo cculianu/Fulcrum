@@ -290,8 +290,11 @@ public:
     struct Rpa {
         // CLI: --rpa
         // config: rpa - Enable/disable the RPA index
-        static constexpr bool defaultEnabled = false; // default disabled (maybe have it enabled by default in a later release after it matures)
-        bool enabled = defaultEnabled;
+        enum EnabledSpec { Disabled, Enabled, Auto /* Auto means ON for BCH, OFF for everything else */ };
+        static constexpr EnabledSpec defaultEnabledSpec = Auto; // default Auto (ON for BCH, OFF for every other chain)
+        EnabledSpec enabledSpec = defaultEnabledSpec;
+        QString enabledSpecToString() const { return enabledSpec == Disabled ? "disabled" : (enabledSpec == Enabled ? "enabled" : "auto (enabled for BCH only)"); }
+        // Note: to see if RPA is enabled, check the Storage object since it makes the final decision based on `enabledSpec` & `coin`
 
         // config: rpa_max_history - Limit result array size for blockchain.rpa.get_history
         int maxHistory = defaultMaxHistory; // this can be independently of app-level maxHistory set but defaults to maxHistory

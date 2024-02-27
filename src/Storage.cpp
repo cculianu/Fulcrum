@@ -1932,7 +1932,7 @@ void Storage::startup()
     // very slow check, only runs if -C -C (specified twice)
     loadCheckShunspentInDB();
     // load rpa data
-    loadCheckRpaInDb();
+    if (isRpaEnabled()) loadCheckRpaInDb();
     // load check earliest undo to populate earliestUndoHeight
     loadCheckEarliestUndo();
     // if user specified --compact-dbs on CLI, run the compaction now before returning
@@ -2192,6 +2192,16 @@ void Storage::setCoin(const QString &coin) {
     if (!coin.isEmpty())
         Log() << "Coin: " << coin;
     save(SaveItem::Meta);
+}
+
+bool Storage::isRpaEnabled() const
+{
+    using ES = Options::Rpa::EnabledSpec;
+    switch(options->rpa.enabledSpec) {
+    case ES::Enabled: return true;
+    case ES::Disabled: return false;
+    case ES::Auto: return BTC::coinFromName(getCoin()) == BTC::Coin::BCH;
+    }
 }
 
 /// returns the "next" TxNum
@@ -4899,7 +4909,7 @@ namespace {
         Debug::forceEnable = true;
         const QString txnumsFile = std::getenv("TFILE") ? std::getenv("TFILE") : "";
         if (txnumsFile.isEmpty() || !QFile::exists(txnumsFile))
-            throw Exception("Please pass the TFILE env var as a path to an existing \"txnum2hash\" data record file");
+            throw Exception("Please pass the TFILE env var as a path to an existing \"txnum2txhash\" data record file");
         std::unique_ptr<RecordFile> rf;
         rf = std::make_unique<RecordFile>(txnumsFile, HashLen, 0x000012e2); // this may throw
         using KeyType = decltype(DeduceSmallestTypeForNumBytes<NB>());

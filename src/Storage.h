@@ -398,6 +398,10 @@ public:
     /// lightweight mechanism intended to be used and "owned" by the Controller object *only*.
     [[nodiscard]] InitialSyncRAII setInitialSync() { return InitialSyncRAII{*this}; }
 
+    /// Thread-safe, lock-free. Returns true if RPA index is enabled, false otherwise. May return false before app is
+    /// fully initted and if the requested RPA mode is "auto" and we haven't yet decided if on or off based on "Coin".
+    bool isRpaEnabled() const;
+
 protected:
     virtual Stats stats() const override; ///< from StatsMixin
 
@@ -568,7 +572,7 @@ RocksDB: "rpa"
   Purpose: store tx indices referenced by prefix in the Rpa::PrefixTable structure for allowing for reusable address queries
   Key: height
   Value: A single serialized Rpa::PrefixTable for this block height.
-  Commantes: TODO document better
+  Comments: TODO document better
 
 A note about ACID: (atomic, consistent, isolated, durable)
 

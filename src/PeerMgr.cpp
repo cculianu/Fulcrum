@@ -67,7 +67,7 @@ QVariantMap PeerMgr::makeFeaturesDict(PeerClient *c) const
 {
     const bool isBCH = coin == BTC::Coin::BCH;
     return Server::makeFeaturesDictForConnection(c, _genesisHash, *options, srvmgr->hasDSProofRPC(), isBCH,
-                                                 isBCH && options->rpa.enabled ? 0 : -1 /* TODO: make this come from storage */);
+                                                 storage->isRpaEnabled() ? 0 : -1 /* TODO: make this exact number come from storage */);
 }
 
 QString PeerMgr::publicHostNameForConnection(PeerClient *c) const

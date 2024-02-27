@@ -1141,7 +1141,7 @@ void Server::rpc_server_features(Client *c, const RPC::BatchId batchId, const RP
                        makeFeaturesDictForConnection(c, storage->genesisHash(), *options, bitcoindmgr->hasDSProofRPC(),
                                                      /* cashTokens = */ isBCH,
                                                      // TODO: make the below be dynamic from storage, etc
-                                                     /* rpaStartHeight = */ isBCH && options->rpa.enabled ? 0 : -1));
+                                                     /* rpaStartHeight = */ storage->isRpaEnabled() ? 0 : -1));
 }
 void Server::rpc_server_peers_subscribe(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
@@ -2302,8 +2302,7 @@ QVariantList Server::getRpaHistoryCommon(const BlockHeight height, const size_t 
 }
 
 void Server::throwIfRpaDisabled() const {
-    // TODO: match more criteria here ... perhaps query Storage, etc
-    if (isNonBCH() || !options->rpa.enabled)
+    if (! storage->isRpaEnabled())
         throw RPCError("RPA support is disabled on this server", RPC::ErrorCodes::Code_MethodNotFound);
 }
 

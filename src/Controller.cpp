@@ -82,9 +82,11 @@ void Controller::startup()
             }
         }
         // set the atomic -- this affects how we parse blocks, etc
-        coinType = ctype;
-        if (ctype != BTC::Coin::Unknown)
+        coinType.store(ctype, std::memory_order_relaxed);
+        if (ctype != BTC::Coin::Unknown) {
             bitcoin::SetCurrencyUnit(coin.toStdString());
+            didReceiveCoinDetectionFromBitcoinDMgr.store(true, std::memory_order_relaxed); // latch this to true now so we don't stall waiting for bitcoind to tell us our "Coin" before we do synching, because we know our coin already!
+        }
     }
 
 
@@ -301,6 +303,9 @@ void Controller::startup()
 
 void Controller::on_coinDetected(const BTC::Coin detectedtype)
 {
+    // NOTE: This runs in the bitcoindmgr thread, and not in our thread. Any operations here should bear that in mind
+    // and not touch any local class variables that are not guarded by a lock and/or are not atomic.
+    didReceiveCoinDetectionFromBitcoinDMgr.store(true, std::memory_order_relaxed);
     const auto ourtype = coinType.load(std::memory_order_relaxed);
     if (ourtype == BTC::Coin::Unknown) {
         // We had no coin set in DB, but we just detected the coin, set it now and return.
@@ -464,7 +469,8 @@ QString ChainInfo::toString() const
 
 struct DownloadBlocksTask final : public CtlTask
 {
-    DownloadBlocksTask(unsigned from, unsigned to, unsigned stride, unsigned numBitcoinDClients, Controller *ctl);
+    DownloadBlocksTask(unsigned from, unsigned to, unsigned stride, unsigned numBitcoinDClients,
+                       int rpaStartHeight/* <0 means disabled*/, Controller *ctl);
     ~DownloadBlocksTask() override { stop(); } // paranoia
     void process() override;
 
@@ -484,7 +490,7 @@ struct DownloadBlocksTask final : public CtlTask
     const bool allowSegWit; ///< initted in c'tor. If true, deserialize blocks using the optional segwit extensons to the tx format.
     const bool allowMimble; ///< like above, but if true we allow mimblewimble (litecoin)
     const bool allowCashTokens; ///< allow special cashtoken deserialization rules (BCH only)
-    const bool allowRpaIndexing; ///< allow special indexing for RPA (reusable payment address) (BCH only)
+    const int rpaStartHeight; ///< if >= 0, rpa data will be indexed in PreProcessedBlock, starting at this height.
 
     void do_get(unsigned height);
 
@@ -498,11 +504,11 @@ struct DownloadBlocksTask final : public CtlTask
     size_t height2Index(size_t h) { return size_t( ((h-from) + stride-1) / stride ); }
 };
 
-DownloadBlocksTask::DownloadBlocksTask(unsigned from, unsigned to, unsigned stride, unsigned nClients, Controller *ctl_)
+DownloadBlocksTask::DownloadBlocksTask(unsigned from, unsigned to, unsigned stride, unsigned nClients, int rpaHeight, Controller *ctl_)
     : CtlTask(ctl_, QStringLiteral("Task.DL %1 -> %2").arg(from).arg(to)), from(from), to(to), stride(stride),
       expectedCt(unsigned(nToDL(from, to, stride))), max_q(int(nClients)+1),
       allowSegWit(ctl_->isSegWitCoin()), allowMimble(ctl_->isMimbleWimbleCoin()), allowCashTokens(ctl_->isBCHCoin()),
-      allowRpaIndexing(ctl_->isBCHCoin()) // <--- TODO: make this come from more complex logic!
+      rpaStartHeight(rpaHeight)
 {
     FatalAssert( (to >= from) && (ctl_) && (stride > 0), "Invalid params to DonloadBlocksTask c'tor, FIXME!");
     if (stride > 1 || expectedCt > 1) {
@@ -560,7 +566,7 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
                             const auto cblock = BTC::Deserialize<bitcoin::CBlock>(rawblock, 0, allowSegWit, allowMimble, allowCashTokens, allowMimble /* throw if junk at end if Litecoin (catch deser. bugs) */);
                             ppb = PreProcessedBlock::makeShared(bnum, size_t(rawblock.size()), cblock,
                                                                 /* TESTING TODO: Make this come from app-state/config and/or start at a particular block height, etc */
-                                                                allowRpaIndexing /* enable RPA indexing */
+                                                                rpaStartHeight >= 0 && bnum >= unsigned(rpaStartHeight) /* if true, enable RPA indexing */
                                                                 );
                             if (allowMimble && Debug::isEnabled()) {
                                 // Litecoin only
@@ -800,7 +806,9 @@ bool Controller::isTaskDeleted(CtlTask *t) const { return tasks.count(t) == 0; }
 
 void Controller::add_DLBlocksTask(unsigned int from, unsigned int to, size_t nTasks)
 {
-    DownloadBlocksTask *t = newTask<DownloadBlocksTask>(false, unsigned(from), unsigned(to), unsigned(nTasks), options->bdNClients, this);
+    const int rpaStartHeight = storage->isRpaEnabled() ? 0 : -1; // TODO: have this be configurable!! Also TODO: ensude no race conditions between isRpaEnabled() finally deciding and this code!
+    DownloadBlocksTask *t = newTask<DownloadBlocksTask>(false, unsigned(from), unsigned(to), unsigned(nTasks),
+                                                        options->bdNClients, rpaStartHeight, this);
     // notify BitcoinDMgr that we are in a block download when the first task starts
     connect(t, &CtlTask::started, this, [this]{
         const auto nTasksExtant = ++nDLBlocksTasks;
@@ -873,6 +881,18 @@ void Controller::process(bool beSilentIfUpToDate)
     }
     using State = StateMachine::State;
     if (sm->state == State::Begin) {
+        if (UNLIKELY(! didReceiveCoinDetectionFromBitcoinDMgr.load(std::memory_order_relaxed))) {
+            // If we never once got told definitively what "Coin" we are on by bitcoind, then a race condition
+            // can exist between our synch and RPA indexing being turned on/off automatically (for BCH). Since it's
+            // generally a bad idea anyway to begin a synch without knowing if we are on BTC and/or LTC (SegWit and/or
+            // MWEB extensions on deser, etc), then it's better to try again later after bitcoind tells us definitively
+            // what coin we are on. Note that this branch is extremely unlikely and is only here for paranoia.
+            Warning() << "This instance has not yet received any information from bitcoind as to what coin we are"
+                         " on, aborting synch task (will retry later) ...";
+            bitcoindmgr->requestBitcoinDInfoRefresh(); // give bitcoind a nudge and issue the RPC again
+            genericTaskErrored();
+            return;
+        }
         auto task = newTask<GetChainInfoTask>(true, this);
         task->threadObjectDebugLifecycle = Trace::isEnabled(); // suppress debug prints here unless we are in trace mode
         sm->mostRecentGetChainInfoTask = task; // reentrancy defense mechanism for ignoring all but the most recent getchaininfo reply from bitcoind
@@ -1089,7 +1109,7 @@ void Controller::process(bool beSilentIfUpToDate)
         // ...
 
         // RPA enabled in mempool check -- TODO: move this elsewhere this is a hack for now
-        if (isBCHCoin() && options->rpa.enabled) {
+        if (storage->isRpaEnabled()) {
             if (auto [mempool, sharedLock] = storage->mempool(); !mempool.optPrefixTable) {
                 // re-lock non-shared
                 sharedLock.unlock();

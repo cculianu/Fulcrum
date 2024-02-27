@@ -193,7 +193,7 @@ QVariantMap Options::toMap() const
     m["pidfile"] = pidFileAbsPath;
 
     // RPA-related
-    m["rpa"] = rpa.enabled;
+    m["rpa"] = rpa.enabledSpecToString();
     m["rpa_max_history"] = rpa.maxHistory;
     m["rpa_history_blocks_limit"] = rpa.historyBlocksLimit;
     m["rpa_prefix_bits_min"] = rpa.prefixBitsMin;

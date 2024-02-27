@@ -510,6 +510,8 @@ BitcoinDInfo BitcoinDMgr::getBitcoinDInfo() const
     return bitcoinDInfo;
 }
 
+void BitcoinDMgr::requestBitcoinDInfoRefresh() { refreshBitcoinDNetworkInfo(); }
+
 bool BitcoinDMgr::isZeroArgEstimateFee() const
 {
     std::shared_lock g(bitcoinDInfoLock);
