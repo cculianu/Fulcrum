@@ -197,6 +197,7 @@ QVariantMap Options::toMap() const
     m["rpa_max_history"] = rpa.maxHistory;
     m["rpa_history_blocks_limit"] = rpa.historyBlocksLimit;
     m["rpa_prefix_bits_min"] = rpa.prefixBitsMin;
+    m["rpa_start_height"] = rpa.requestedStartHeight;
 
     return m;
 }

@@ -564,10 +564,16 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
                         PreProcessedBlockPtr ppb;
                         try {
                             const auto cblock = BTC::Deserialize<bitcoin::CBlock>(rawblock, 0, allowSegWit, allowMimble, allowCashTokens, allowMimble /* throw if junk at end if Litecoin (catch deser. bugs) */);
+                            const bool indexRpaForThisBlock = rpaStartHeight >= 0 && bnum >= unsigned(rpaStartHeight);
                             ppb = PreProcessedBlock::makeShared(bnum, size_t(rawblock.size()), cblock,
-                                                                /* TESTING TODO: Make this come from app-state/config and/or start at a particular block height, etc */
-                                                                rpaStartHeight >= 0 && bnum >= unsigned(rpaStartHeight) /* if true, enable RPA indexing */
-                                                                );
+                                                                indexRpaForThisBlock);
+                            if (UNLIKELY(rpaStartHeight >= 0 && bnum == unsigned(rpaStartHeight))) {
+                                Util::AsyncOnObject(ctl, [height = rpaStartHeight]{
+                                    // We do this in the Controller thread to make the log look pretty, since all other logging
+                                    // user sees at this point is from the Controller thread anyway ...
+                                    Log() << "RPA index enabled at height: " << height;
+                                });
+                            }
                             if (allowMimble && Debug::isEnabled()) {
                                 // Litecoin only
                                 bool doSerChk{};
@@ -806,7 +812,7 @@ bool Controller::isTaskDeleted(CtlTask *t) const { return tasks.count(t) == 0; }
 
 void Controller::add_DLBlocksTask(unsigned int from, unsigned int to, size_t nTasks)
 {
-    const int rpaStartHeight = storage->isRpaEnabled() ? 0 : -1; // TODO: have this be configurable!! Also TODO: ensude no race conditions between isRpaEnabled() finally deciding and this code!
+    const int rpaStartHeight = storage->getConfiguredRpaStartHeight(); // -1 here means "rpa disabled"
     DownloadBlocksTask *t = newTask<DownloadBlocksTask>(false, unsigned(from), unsigned(to), unsigned(nTasks),
                                                         options->bdNClients, rpaStartHeight, this);
     // notify BitcoinDMgr that we are in a block download when the first task starts
@@ -1108,13 +1114,13 @@ void Controller::process(bool beSilentIfUpToDate)
     } else if (sm->state == State::SynchMempool) {
         // ...
 
-        // RPA enabled in mempool check -- TODO: move this elsewhere this is a hack for now
+        // RPA enabled in mempool check -- we put this here because it's the best place for it.
         if (storage->isRpaEnabled()) {
             if (auto [mempool, sharedLock] = storage->mempool(); !mempool.optPrefixTable) {
-                // re-lock non-shared
+                // re-lock exclusively
                 sharedLock.unlock();
                 if (auto [mutableMempool, lock] = storage->mutableMempool(); !mutableMempool.optPrefixTable) {
-                    mutableMempool.optPrefixTable.emplace(); // indicate to mempool code to index RPA stuff
+                    mutableMempool.optPrefixTable.emplace(); // existence of this indicates to mempool code to index RPA stuff
                 }
             }
         }
@@ -1482,6 +1488,12 @@ auto Controller::stats() const -> Stats
 
     // grab simdjson stats, if any
     st["simdjson"] = App::simdJsonStats();
+
+    // RPA - TODO: put some more RPA-specific stats here (index size? counts? etc?)
+    QVariantMap rpa;
+    rpa["enabled"] = storage->isRpaEnabled();
+    rpa["indexing from height"] = storage->getConfiguredRpaStartHeight();
+    st["RPA"] = rpa;
 
     return st;
 }

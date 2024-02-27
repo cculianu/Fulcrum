@@ -2204,6 +2204,19 @@ bool Storage::isRpaEnabled() const
     }
 }
 
+int Storage::getConfiguredRpaStartHeight() const
+{
+    if (!isRpaEnabled()) return -1; // -1 to caller means "rpa not enabled"
+    if (const int reqHt = options->rpa.requestedStartHeight; reqHt >= 0)
+        return reqHt; // user requested a specific start height >= 0
+
+    // otherwise, do "auto", which is 825,000 for mainnet, 0 for all other nets
+    if (BTC::NetFromName(getChain()) == BTC::Net::MainNet)
+        return Options::Rpa::defaultStartHeightForMainnet;
+    return Options::Rpa::defaultStartHeightOtherNets;
+}
+
+
 /// returns the "next" TxNum
 TxNum Storage::getTxNum() const { return p->txNumNext.load(); }
 

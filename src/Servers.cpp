@@ -1140,8 +1140,7 @@ void Server::rpc_server_features(Client *c, const RPC::BatchId batchId, const RP
     emit c->sendResult(batchId, m.id,
                        makeFeaturesDictForConnection(c, storage->genesisHash(), *options, bitcoindmgr->hasDSProofRPC(),
                                                      /* cashTokens = */ isBCH,
-                                                     // TODO: make the below be dynamic from storage, etc
-                                                     /* rpaStartHeight = */ storage->isRpaEnabled() ? 0 : -1));
+                                                     /* rpaStartHeight = */ storage->getConfiguredRpaStartHeight()));
 }
 void Server::rpc_server_peers_subscribe(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {

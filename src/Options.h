@@ -1,6 +1,6 @@
 //
 // Fulcrum - A fast & nimble SPV Server for Bitcoin Cash
-// Copyright (C) 2019-2023 Calin A. Culianu <calin.culianu@gmail.com>
+// Copyright (C) 2019-2024 Calin A. Culianu <calin.culianu@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -34,10 +34,7 @@
 
 #include <algorithm>
 #include <limits>
-#include <mutex>
 #include <optional>
-#include <shared_mutex>
-#include <tuple>
 #include <type_traits>
 
 
@@ -306,6 +303,12 @@ public:
         // config: rpa_prefix_bits_min - Minimum number of prefix bits for a blockchain.rpa.* query (DoS protection measure)
         static constexpr int defaultPrefixBitsMin = 8;
         int prefixBitsMin = defaultPrefixBitsMin; // NB: this value should be bounded by [Rpa::PrefixBitsMin, Rpa::PrefixBitsMax], and be a multiple of 4
+
+        // config: rpa_start_height - From what height to begin indexing RPA data.
+        // -1 means "auto" and is chain-specific --> mainnet: height 825,000, all other nets: height 0 (from 0 for perf. testing)
+        static constexpr int defaultStartHeightForMainnet = 825'000, // BTC & BCH: sometime in January 2024; LTC -> way in the past (LTC unlikely to ever use this facility anyway)
+                             defaultStartHeightOtherNets = 0;
+        int requestedStartHeight = -1;
     } rpa;
 };
 

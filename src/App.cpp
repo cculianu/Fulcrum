@@ -1453,6 +1453,24 @@ void App::parseArgs()
         // log this later in case we are in syslog mode
         Util::AsyncOnObject(this, [pbm]{ Debug() << "config: rpa_prefix_bits_min = " << pbm; });
     }
+
+    // conf: rpa_start_height
+    if (const auto b1 = conf.hasValue("rpa_start_height"), b2 = conf.hasValue("rpa_starting_height"); b1 || b2) {
+        // support either: "rpa_start_height" or "rpa_starting_height", but not both
+        if (b1 && b2) throw BadArgs("Both `rpa_start_height` and `rpa_starting_height` were found in the config file; this looks like a typo.");
+        const QString confKey(b1 ? "rpa_start_height" : "rpa_starting_height");
+        bool ok;
+        int ht = conf.intValue(confKey, -1, &ok);
+        if (!ok || ht < -1 /* -1 ok, -2 not, etc*/ || (ht >= 0 && ht > int(Storage::MAX_HEADERS)))
+            throw BadArgs(QString("%1: bad value. Specify a block height between [0, %2], or use -1 to"
+                                  " auto-configure this setting with a chain-specific default (%3 for mainnet, %4 for"
+                                  " all other nets).")
+                              .arg(confKey).arg(Storage::MAX_HEADERS).arg(Options::Rpa::defaultStartHeightForMainnet)
+                              .arg(Options::Rpa::defaultStartHeightOtherNets));
+        options->rpa.requestedStartHeight = ht;
+        // log this later in case we are in syslog mode
+        Util::AsyncOnObject(this, [ht, confKey]{ Debug() << "config: " << confKey << " = " << ht; });
+    }
 }
 
 namespace {

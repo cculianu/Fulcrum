@@ -398,9 +398,13 @@ public:
     /// lightweight mechanism intended to be used and "owned" by the Controller object *only*.
     [[nodiscard]] InitialSyncRAII setInitialSync() { return InitialSyncRAII{*this}; }
 
-    /// Thread-safe, lock-free. Returns true if RPA index is enabled, false otherwise. May return false before app is
-    /// fully initted and if the requested RPA mode is "auto" and we haven't yet decided if on or off based on "Coin".
+    /// Thread-safe. Returns true if RPA index is enabled, false otherwise. May return false before app is fully
+    /// initted and if the requested RPA mode is "auto" and we haven't yet decided if on or off based on "Coin".
     bool isRpaEnabled() const;
+
+    /// Thread-safe. Returns the height from which user wants to begin indexing RPA data, or -1 if RPA is disabled.
+    /// Note: this doesn't necessarily indicate we *have* this height indexed (yet!); it's just what the user wants.
+    int getConfiguredRpaStartHeight() const;
 
 protected:
     virtual Stats stats() const override; ///< from StatsMixin
