@@ -3707,7 +3707,6 @@ std::vector<std::optional<TxHash>> Storage::hashesForHeightAndPosVec(BlockHeight
     SharedLockGuard maybeLockedByUs;
     if (existingBlocksLock == nullptr) {
         maybeLockedByUs = SharedLockGuard(p->blocksLock);
-        existingBlocksLock = &maybeLockedByUs;
     } else if (UNLIKELY(existingBlocksLock->mutex() != &p->blocksLock)) {
         Error() << "Internal Error: expected the `existingBlocksLock` to be holding `p->blocksLock` (but it is not) in "
                 << __func__ << ". FIXME!";
@@ -3882,8 +3881,6 @@ auto Storage::getRpaHistory(const Rpa::Prefix &prefix, bool includeConfirmed, bo
 
     try {
         if (includeConfirmed) {
-
-            size_t blockScansRemaining = std::max(options->rpa.historyBlocksLimit, 1u); // use configured limit (default: 60)
             // sanitize `fromHeight` and `toHeight`; restrict to range: [rpaStartHeight, tipHeight]
             fromHeight = std::max<unsigned>(rpaStartHeight, fromHeight); // restrict `from` to be >= configured height
             toHeight = std::min(toHeight.value_or(*tipHeight), *tipHeight); // define and restrict `to` to be <= tip height
@@ -3891,20 +3888,24 @@ auto Storage::getRpaHistory(const Rpa::Prefix &prefix, bool includeConfirmed, bo
             // We use an iterator and seek forward each time because this is far faster since our table rows are in order
             // of height (serialized as big endian). Note that the assumption here is that the rpa table contains
             // *only* records of the form: Key = 4-byte big endian height, Value = serialized Rpa::PrefixTable.
-            // If this assumption changes, update this code.
+            // If this assumption changes, update this code to not use this assumption as an optimization.
             std::unique_ptr<rocksdb::Iterator> iter{p->db.rpa->NewIterator(p->db.defReadOpts)};
 
             BlockHeight height = fromHeight;
+            size_t blockScansRemaining = std::max(options->rpa.historyBlocksLimit, 1u); // use configured limit (default: 60)
             for ( /* */; blockScansRemaining && height <= *toHeight; ++height, --blockScansRemaining) {
                 Tic t1;
                 const RpaDBKey dbKey(height);
-                iter->Seek(ToSlice(dbKey));
+                if (height == fromHeight)
+                    iter->Seek(ToSlice(dbKey));
+                else
+                    iter->Next(); // bump iterator one item... this is the secret sauce to make this fast.
                 bool ok{};
                 if (UNLIKELY(!iter->Valid() || RpaDBKey::fromBytes(FromSlice(iter->key()), &ok, true) != dbKey || !ok)) {
                     // This should never happen -- error to console just in case we have bugs and/or missing data.
                     Error() << "Missing RPA PrefixTable for height: " << height << ". This should never happen."
                             << " Report this to situation to the developers.";
-                    continue;
+                    break;
                 }
                 // Note: This read-only Rpa::PrefixTable is "lazy loaded" and populated only for records we access on-demand
                 const auto prefixTable = Deserialize<Rpa::PrefixTable>(FromSlice(iter->value())); // Throws on failure to deserialize.
@@ -3928,8 +3929,8 @@ auto Storage::getRpaHistory(const Rpa::Prefix &prefix, bool includeConfirmed, bo
                 tBuildRes += t1.msec<double>();
             }
 
-            // Special behavior: disable mempool append if we exhausted blockScansRemaining and we didn't reach tipHeight
-            if (includeMempool && !blockScansRemaining && height < *tipHeight)
+            // Special behavior: disable mempool append if we didn't reach tipHeight
+            if (includeMempool && height < *tipHeight)
                 includeMempool = false;
         }
         if (includeMempool) {
