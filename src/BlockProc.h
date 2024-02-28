@@ -1,6 +1,6 @@
 //
 // Fulcrum - A fast & nimble SPV Server for Bitcoin Cash
-// Copyright (C) 2019-2023 Calin A. Culianu <calin.culianu@gmail.com>
+// Copyright (C) 2019-2024 Calin A. Culianu <calin.culianu@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -18,10 +18,7 @@
 //
 #pragma once
 
-#include "BTC.h"
 #include "BlockProcTypes.h"
-#include "Common.h"
-#include "TXO.h"
 
 #include "bitcoin/amount.h"
 #include "bitcoin/block.h"

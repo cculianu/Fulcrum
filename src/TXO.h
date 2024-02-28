@@ -1,6 +1,6 @@
 //
 // Fulcrum - A fast & nimble SPV Server for Bitcoin Cash
-// Copyright (C) 2019-2023 Calin A. Culianu <calin.culianu@gmail.com>
+// Copyright (C) 2019-2024 Calin A. Culianu <calin.culianu@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -24,7 +24,6 @@
 
 #include <QString>
 
-#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -89,7 +88,7 @@ private:
 /// specialization of std::hash to be able to add struct TXO to any unordered_set or unordered_map as a key
 template<> struct std::hash<TXO> {
     std::size_t operator()(const TXO &txo) const noexcept {
-        const auto val1 = BTC::QByteArrayHashHasher{}(txo.txHash);
+        const auto val1 = HashHasher{}(txo.txHash);
         const auto val2 = txo.outN;
         static_assert(std::has_unique_object_representations_v<decltype(val1)>
                       && std::has_unique_object_representations_v<decltype(val2)>);

@@ -229,7 +229,7 @@ private:
 static_assert(PrefixTableSize - 1u == std::numeric_limits<uint16_t>::max());
 
 class MempoolPrefixTable {
-    using TxHashSet = std::unordered_set<TxHash, BTC::QByteArrayHashHasher>;
+    using TxHashSet = std::unordered_set<TxHash, HashHasher>;
     std::vector<TxHashSet> prefixTable{numRows(), TxHashSet{}}; // maps a prefix index -> txhashes
 
 public:
