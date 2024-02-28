@@ -2754,6 +2754,17 @@ void Storage::loadCheckRpaDB()
                   throw DatabaseFormatError(QString("Encountered a height (%1) in the RPA db that is > INT_MAX"
                                                     "; this indicates corruption or an incompatible DB format.").arg(height));
         };
+        auto TryDeserializePFTAndUpdateCounts = [&info = p->rpaInfo](uint32_t height, const rocksdb::Slice &slice) {
+            try {
+                bool ok{};
+                ++info.nReads;
+                info.nBytesRead += sizeof(height) + slice.size();
+                Rpa::PrefixTable pt = Deserialize<Rpa::PrefixTable>(FromSlice(slice), &ok);
+            } catch (const std::exception &e) {
+                throw DatabaseSerializationError(QString("Error deserializing Rpa::PrefixTable for height %1: %2")
+                                                 .arg(height).arg(e.what()));
+            }
+        };
         if (! doSlowChecks) {
             // Normal fast startup -- just try and figure out what height range we actually have in the DB
             iter->SeekToFirst();
@@ -2762,17 +2773,17 @@ void Storage::loadCheckRpaDB()
                 RpaDBKey rk = RpaDBKey::fromBytes(FromSlice(iter->key()), &ok, true);
                 if (!ok) throw DatabaseFormatError("Unable to deserialize RPA db key -> height");
                 ThrowIfNegativeIfCastedToSigned(rk.height);
+                TryDeserializePFTAndUpdateCounts(rk.height, iter->value()); // TODO: this may throw; what to do here? mark this bad? resynch RPA db (after we write the code to accomplish that)?
                 firstHeight = rk.height;
                 iter->SeekToLast();
                 if (UNLIKELY( ! iter->Valid())) throw DatabaseError("Unable to seek to last entry in RPA db. This is unexpected.");
                 rk = RpaDBKey::fromBytes(FromSlice(iter->key()), &ok, true);
                 if (!ok) throw DatabaseFormatError("Unable to deserialize RPA db key -> height");
                 ThrowIfNegativeIfCastedToSigned(rk.height);
+                TryDeserializePFTAndUpdateCounts(rk.height, iter->value()); // TODO: this may throw; what to do here? mark this bad? resynch RPA db (after we write the code to accomplish that)?
                 lastHeight = rk.height;
-                if (lastHeight < firstHeight)
+                if (lastHeight < firstHeight) // this should never happen and indicates some serialization format error
                     throw DatabaseFormatError(QString("The last record has height less than the first record in the RPA db: first = %1, last = %2").arg(firstHeight.load()).arg(lastHeight.load()));
-            } else {
-                Debug() << "RPA db is empty";
             }
         } else {
             // Slower -- iterate through entire table to find gaps as well as verify data by deserializing it row by row
@@ -2785,18 +2796,12 @@ void Storage::loadCheckRpaDB()
                     if (!ok) throw DatabaseFormatError("Unable to deserialize RPA db key -> height");
                     ThrowIfNegativeIfCastedToSigned(rk.height);
                     if (firstHeight < 0) firstHeight = rk.height;
+                    TryDeserializePFTAndUpdateCounts(rk.height, iter->value()); // TODO: this may throw; what to do here? mark this bad? resynch RPA db (after we write the code to accomplish that)?
                     if (lastHeight > -1 && BlockHeight(lastHeight) + 1u != rk.height) { // detect gaps
                         // We handle this situation gracefully below and we will just re-build the index from where the first gap starts
-                        Warning() << QString("Gap in RBA db encountered starting at height %1").arg(lastHeight);
+                        Warning() << QString("Gap in RBA db encountered starting at height %1 to height %2").arg(lastHeight).arg(rk.height);
                         forceDeleteAfterHeight = BlockHeight(lastHeight);
                         break;
-                    }
-                    try {
-                        Rpa::PrefixTable pt = Deserialize<Rpa::PrefixTable>(FromSlice(iter->value()), &ok);
-                    } catch (const std::exception &e) {
-                        // TODO: mark this bad? Throw? what do we do here?
-                        throw DatabaseSerializationError(QString("Error deserializing Rpa::PrefixTable for height %1: %2")
-                                                         .arg(rk.height).arg(e.what()));
                     }
                     lastHeight = rk.height;
                     ++ctr;
@@ -2807,10 +2812,7 @@ void Storage::loadCheckRpaDB()
                                               .arg(sizeof(uint32_t)).arg(FromSlice(k).toHex()));
                 }
             }
-            if (lastHeight > firstHeight && size_t(lastHeight + 1 - firstHeight) != ctr) {
-                // TODO: What to do here? We have holes! Indicate this to Controller via modifying firstHeight & lastHeight appropriately!
-                Warning() << "Counted " << ctr << " entries in RPA db, but lastHeight - firstHeight is: " << size_t(lastHeight + 1 - firstHeight);
-            }
+            Debug () << "RPA db has " << ctr << " entries, " << p->rpaInfo.nBytesRead << " bytes; deserialized ok";
         }
         if (lastHeight < firstHeight || ((lastHeight <= -1 || firstHeight <= -1) && lastHeight != firstHeight)) // defensive programming: enforce invariant here
             throw InternalError(QString("Programming error in %1. FIXME!").arg(__func__));
@@ -2822,21 +2824,20 @@ void Storage::loadCheckRpaDB()
                                                                   : currentHeight;
                 const auto delheightplus1 = static_cast<BlockHeight>(std::max(delheight, -1) + 1);
 
-                // we have a blockchain, but our index is beyond the blockchain. clean up extra index entries since they can only cause problems for us.
-                Log() << "Deleting unneeded or gap entries from RPA db ...";
+                Log() << "Deleting unneeded or gap RPA entries from height " << delheightplus1 << " ...";
                 // on success, updates p->rpaInfo.lastHeight, firstHeight, etc
-                if (!deleteRpaEntriesGreaterThanOrEqualToHeight(delheightplus1, true, true))
+                if (!deleteRpaEntriesFromHeight(delheightplus1, true, true))
                     throw DatabaseError("Failed to delete the required keys from the DB. Please report this situation to the developers.");
             }
         }
         // Print some info -- note firstHeight can mutate above which is why we do this here last
-        if (firstHeight >= 0) Log() << "RPA db data covering heights: " << firstHeight << " -> " << lastHeight;
-        else Log() << "RPA db is empty";
+        if (firstHeight >= 0) Debug() << "RPA db data covers heights: " << firstHeight << " -> " << lastHeight;
+        else Debug() << "RPA db is empty";
     }
     Debug() << (doSlowChecks ? "CheckDB: Verified RPA db in " : "Loaded RPA db in ") << t0.msecStr() << " msec";
 }
 
-bool Storage::deleteRpaEntriesGreaterThanOrEqualToHeight(const BlockHeight height, bool flush, bool force)
+bool Storage::deleteRpaEntriesFromHeight(const BlockHeight height, bool flush, bool force)
 {
     if (!force && p->rpaInfo.firstHeight <= -1) return true; // fast path for disabled or empty index)
     if (height > unsigned(std::numeric_limits<int>::max())) throw InternalError(QString("Bad argument to ") + __func__);
@@ -3600,7 +3601,7 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
             p->blkInfos.pop_back();
             p->blkInfosByTxNum.erase(undo.blkInfo.txNum0);
             GenericDBDelete(p->db.blkinfo.get(), uint32_t(undo.height), "Failed to delete blkInfo in undoLatestBlock");
-            deleteRpaEntriesGreaterThanOrEqualToHeight(undo.height); // delete RPA >= undo.height (iff index is enabled)
+            deleteRpaEntriesFromHeight(undo.height); // delete RPA >= undo.height (iff index is enabled)
 
             // clear num2hash cache
             p->lruNum2Hash.clear();

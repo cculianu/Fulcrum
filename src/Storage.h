@@ -451,7 +451,7 @@ protected:
 
     /// Internally called by LoadCheckRpaDB and undoLatestBlock. Call this with the blocksLock held if in multi-threaded
     /// mode, to ensure DB consistency. Deletes any rpa entries >= height. Returns true on success, false on failure.
-    bool deleteRpaEntriesGreaterThanOrEqualToHeight(BlockHeight height, bool flush = false, bool force = false);
+    bool deleteRpaEntriesFromHeight(BlockHeight height, bool flush = false, bool force = false);
 
 
     /// This is set in addBlock and undoLatestBlock while we do a bunch of updates, then cleared when updates are done,
