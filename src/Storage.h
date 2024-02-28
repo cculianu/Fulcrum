@@ -449,6 +449,11 @@ protected:
     /// Rewinds the headers until the latest header is at the specified height.  May throw on error.
     void deleteHeadersPastHeight(BlockHeight height);
 
+    /// Internally called by LoadCheckRpaDB and undoLatestBlock. Call this with the blocksLock held if in multi-threaded
+    /// mode, to ensure DB consistency. Deletes any rpa entries >= height. Returns true on success, false on failure.
+    bool deleteRpaEntriesGreaterThanOrEqualToHeight(BlockHeight height, bool flush = false, bool force = false);
+
+
     /// This is set in addBlock and undoLatestBlock while we do a bunch of updates, then cleared when updates are done,
     /// for each block. Thread-safe, may throw.
     void setDirty(bool dirtyFlag);
