@@ -110,7 +110,6 @@ public:
     /// Note that outBuffer must be a multiple of `bytesPerElement`, else an exception is thrown.
     template <typename NumT, std::enable_if_t<std::is_integral_v<std::remove_cv_t<NumT>> && std::is_unsigned_v<std::remove_cv_t<NumT>>, void *> = nullptr>
     static PackedNumView Make(Span<uint8_t> outBuffer, const Span<NumT> & srcInts, bool allowLongerOutputBuffer = false) {
-        using Num = std::remove_cv_t<NumT>;
         if (outBuffer.size() % bytesPerElement != 0u)
             throw std::invalid_argument("outBuffer's size must be a multiple of bytesPerElement!");
 
@@ -122,19 +121,30 @@ public:
         size_t i;
         for (i = 0u; i < nIters; ++i) {
             Span<uint8_t> sp = outBuffer.subspan(i * bytesPerElement, bytesPerElement);
-            using Val = std::conditional_t<sizeof(UInt) >= sizeof(Num), UInt, Num>; // `Val` is the larger of the two types
-            const Val val = static_cast<Val>(srcInts[i]);
-            for (size_t bnum = 0u; bnum < bytesPerElement; ++bnum) {
-                if constexpr (LittleEndian) {
-                    // little endian output - store lsb first
-                    const auto shift = bnum * 8u;
-                    sp[bnum] = static_cast<uint8_t>((val >> shift) & 0xffu);
-                } else {
-                    // big endian output - store msb first
-                    const auto shift = (bytesPerElement - (bnum + 1u)) * 8u;
-                    sp[bnum] = static_cast<uint8_t>((val >> shift) & 0xffu);
-                }
+            UInt packed = static_cast<UInt>(srcInts[i]); // read source uint, maybe truncating to our supported range.
+            const std::byte *src_byte = reinterpret_cast<std::byte *>(&packed);
+            // byteswap based on endianness, if necessary
+            static_assert(std::is_same_v<UInt, uint32_t> || std::is_same_v<UInt, uint64_t>,
+                          "The code below assumes UInt is either uint32_t or uint64_t.");
+            if constexpr (LittleEndian) { // destination is little endian
+                if constexpr (std::is_same_v<UInt, uint64_t>)
+                    packed = bitcoin::htole64(packed);
+                else
+                    packed = bitcoin::htole32(packed);
+            } else { // destination is big endian
+                if constexpr (std::is_same_v<UInt, uint64_t>)
+                    packed = bitcoin::htobe64(packed);
+                else
+                    packed = bitcoin::htobe32(packed);
+                // if destination data is big endian, we maybe need to offset where we read from to omit truncated
+                // high-order bytes
+                if constexpr (bytesPerElement < sizeof(UInt))
+                    src_byte += sizeof(UInt) - bytesPerElement;
             }
+            // At this point, `packed` is in destination byte order, not host byte order, and src_byte points
+            // to either byte 0 of `packed` if destination is LittlEndian, or it points to some possibly-offset-from-0
+            // byte of `packed` (iff our packing necessarily omits high order bytes).
+            std::memcpy(sp.data(), src_byte, bytesPerElement);
         }
         // if any bytes remain, fill them with 0's (branch only taken if allowLongerOutputBuffer == true)
         if (i < nOutputElems) {
