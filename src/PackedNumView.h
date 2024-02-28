@@ -21,10 +21,12 @@
 #include "ByteView.h"
 #include "Span.h"
 
+#include "bitcoin/crypto/endian.h"
+
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <cstring> // for std::memset
+#include <cstring> // for std::memset, std::memcpy
 #include <functional> // for std::less, std::greater, etc
 #include <iterator>
 #include <stdexcept>
@@ -75,17 +77,29 @@ public:
     UInt operator[](size_t i) const {
         const ByteView ebytes = viewForElement(i);
         UInt ret{}; // 0-init
-        for (size_t bnum = 0; bnum < bytesPerElement; ++bnum) {
-            const uint8_t byteVal = static_cast<uint8_t>(ebytes[bnum]);
-            if constexpr (LittleEndian) {
-                // backing store is little endian, convert to machine byte order
-                const UInt val = static_cast<UInt>(byteVal & 0xffu) << (8u * bnum);
-                ret += val;
-            } else {
-                // backing store is big endian, convert to machine byte order
-                const UInt val = static_cast<UInt>(byteVal & 0xffu) << ((bytesPerElement - (bnum + 1u)) * 8u);
-                ret += val;
-            }
+        static_assert(sizeof(UInt) >= bytesPerElement);
+        std::byte *cpy_pos = reinterpret_cast<std::byte *>(&ret);
+        if constexpr (!LittleEndian && bytesPerElement < sizeof(UInt)) {
+            // If the backing store is big endian, and if the packing is such that we sacrificed high order byte(s),
+            // then we must offset where we write into `ret` such that we write into the first high-order byte that we
+            // have data for.
+            cpy_pos += sizeof(UInt) - bytesPerElement;
+        }
+        std::memcpy(cpy_pos, ebytes.data(), bytesPerElement);
+        // At this point `ret` is in backing store byte order; convert to machine byte order.
+        // The below optimizes to a no-op if backing store and machine byte order match.
+        static_assert(std::is_same_v<UInt, uint32_t> || std::is_same_v<UInt, uint64_t>,
+                      "The code below assumes UInt is either uint32_t or uint64_t.");
+        if constexpr (LittleEndian) {
+            if constexpr (std::is_same_v<UInt, uint64_t>)
+                ret = bitcoin::le64toh(ret);
+            else
+                ret = bitcoin::le32toh(ret);
+        } else {
+            if constexpr (std::is_same_v<UInt, uint64_t>)
+                ret = bitcoin::be64toh(ret);
+            else
+                ret = bitcoin::be32toh(ret);
         }
         return ret; // value is now in machine byte order
     }
