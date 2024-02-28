@@ -480,7 +480,7 @@ private:
     void loadCheckHeadersInDB(); ///< may throw -- called from startup()
     void loadCheckUTXOsInDB(); ///< may throw -- called from startup()
     void loadCheckShunspentInDB(); ///< may throw -- called from startup()
-    void loadCheckRpaInDb(); ///< may throw -- called from startup()
+    void loadCheckRpaDB(); ///< may throw -- called from startup()
     void loadCheckTxNumsFileAndBlkInfo(); ///< may throw -- called from startup()
     void loadCheckTxHash2TxNumMgr(); ///< may throw -- called from startup()
     void loadCheckEarliestUndo(); ///< may throw -- called from startup()

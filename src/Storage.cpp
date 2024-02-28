@@ -573,6 +573,12 @@ namespace {
             Debug() << "TxHash2TxNumMgr: largestTxNumSeen = " << largestTxNumSeen;
         }
 
+        std::unique_ptr<rocksdb::Iterator> newIterChecked() {
+            std::unique_ptr<rocksdb::Iterator> iter{db->NewIterator(rdOpts)};
+            if (UNLIKELY(!iter)) throw DatabaseError("Unable to obtain an iterator to the txhash2txnum db"); // should never happen
+            return iter;
+        }
+
         unsigned mergeCount() const { return concatOp->merges.load(); }
 
         QString dbName() const { return QString::fromStdString(db->GetName()); }
@@ -834,7 +840,7 @@ namespace {
         void deleteAllEntries() {
             std::string firstKey, endKey;
             {
-                std::unique_ptr<rocksdb::Iterator> iter(db->NewIterator(rdOpts));
+                std::unique_ptr<rocksdb::Iterator> iter = newIterChecked();
                 iter->SeekToFirst();
                 if (iter->Valid())
                     firstKey = iter->key().ToString();
@@ -852,7 +858,7 @@ namespace {
             if (auto st = db->DeleteRange(wrOpts, db->DefaultColumnFamily(), firstKey, endKey);
                     !st.ok() || !(st = db->Flush(fopts)).ok())
                 throw DatabaseError(dbName() + ": failed to delete all keys: " + QString::fromStdString(st.ToString()));
-            std::unique_ptr<rocksdb::Iterator> iter(db->NewIterator(rdOpts));
+            std::unique_ptr<rocksdb::Iterator> iter = newIterChecked();
             iter->SeekToFirst();
             if (iter->Valid())
                 throw InternalError(dbName() + ": delete all keys failed -- iterator still points to a row! FIXME!");
@@ -866,7 +872,7 @@ namespace {
         void consistencyCheck() { // this throws if the checks fail
             const Tic t0;
             Log() << "CheckDB: Verifying txhash index (this may take some time) ...";
-            std::unique_ptr<rocksdb::Iterator> iter(db->NewIterator(rdOpts));
+            std::unique_ptr<rocksdb::Iterator> iter = newIterChecked();
             size_t i = 0, verified = 0;
             QString err;
             constexpr size_t batchSize = 50'000;
@@ -1118,6 +1124,13 @@ struct Storage::Pvt
     Tic lastWarned; ///< to rate-limit potentially spammy warning messages (guarded by blocksLock)
 
     std::unique_ptr<CoTask> blocksWorker; ///< work to be done in parallel can be submitted to this co-task in addBlock and undoLatestBlock
+
+    /// Info specific to the `rpa` index
+    struct RpaInfo {
+        std::atomic_int32_t firstHeight = -1, lastHeight = -1; // inclusive height range that we have in the DB. -1 means undefined/missing.
+        std::atomic_uint64_t nReads{0u}, nWrites{0u}, nDeletions{0u}; // keep track of number of times we read/write/delete from this db
+        std::atomic_uint64_t nBytesWritten{0u}, nBytesRead{0u}; // keep track of number of bytes written and read during Storage object lifetime
+    } rpaInfo;
 };
 
 namespace {
@@ -1937,7 +1950,7 @@ void Storage::startup()
     // very slow check, only runs if -C -C (specified twice)
     loadCheckShunspentInDB();
     // load rpa data
-    if (isRpaEnabled()) loadCheckRpaInDb();
+    if (isRpaEnabled()) loadCheckRpaDB();
     // load check earliest undo to populate earliestUndoHeight
     loadCheckEarliestUndo();
     // if user specified --compact-dbs on CLI, run the compaction now before returning
@@ -2150,6 +2163,19 @@ auto Storage::stats() const -> Stats
                 wmap["memory usage"] = qulonglong(wbm->memory_usage());
             }
             ret["DB Shared Write Buffer Manager"] = wmap;
+        }
+
+        {
+            // RPA-specific stats
+            QVariantMap rm;
+            rm["firstHeight"] = p->rpaInfo.firstHeight.load(std::memory_order_relaxed);
+            rm["lastHeight"] = p->rpaInfo.lastHeight.load(std::memory_order_relaxed);
+            rm["nReads"] = qulonglong(p->rpaInfo.nReads.load(std::memory_order_relaxed));
+            rm["nWrites"] = qulonglong(p->rpaInfo.nWrites.load(std::memory_order_relaxed));
+            rm["nDeletions"] = qulonglong(p->rpaInfo.nDeletions.load(std::memory_order_relaxed));
+            rm["nBytesRead"] = qulonglong(p->rpaInfo.nBytesRead.load(std::memory_order_relaxed));
+            rm["nBytesWritten"] = qulonglong(p->rpaInfo.nBytesWritten.load(std::memory_order_relaxed));
+            ret["RPA Index Info"] = rm;
         }
     }
     return ret;
@@ -2455,6 +2481,7 @@ void Storage::loadCheckTxHash2TxNumMgr()
         } else {
             // sanity check on empty db: if no records, db should also have no rows
             std::unique_ptr<rocksdb::Iterator> it(p->db.txhash2txnum->NewIterator(p->db.defReadOpts));
+            if (!it) throw DatabaseError("Unable to obtain an iterator to the txhash2txnum set db");
             for (it->SeekToFirst(); it->Valid(); it->Next()) {
                 throw DatabaseFormatError(QString("Failed invariant: empty txNum file should mean empty db; ") + errMsg);
             }
@@ -2702,7 +2729,7 @@ void Storage::loadCheckShunspentInDB()
           << " in " << t0.secsStr() << " sec";
  }
 
-void Storage::loadCheckRpaInDb()
+void Storage::loadCheckRpaDB()
 {
     FatalAssert(!!p->db.rpa, __func__, ": RPA db is not open");
 
@@ -2716,26 +2743,51 @@ void Storage::loadCheckRpaInDb()
 
     Tic t0;
     {
-        int firstHeight{-1}, lastHeight{-1};
-        const BlockHeight currentHeight = latestTip().first;
-        size_t ctr = 0;
+        auto & firstHeight = p->rpaInfo.firstHeight, & lastHeight = p->rpaInfo.lastHeight;
+        firstHeight = lastHeight = -1;
 
         std::unique_ptr<rocksdb::Iterator> iter(p->db.rpa->NewIterator(p->db.defReadOpts));
-        if (!iter) throw DatabaseError("Unable to obtain an iterator to the RPA db");
-        for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
-            const auto & k = iter->key();
-            if (k.size() == sizeof(uint32_t)) {
+        if (!iter) throw DatabaseError("Unable to obtain an iterator to the rpa db");
+        if (! doSlowChecks) {
+            // Normal fast startup -- just try and figure out what height range we actually have in the DB
+            iter->SeekToFirst();
+            if (iter->Valid()) {
                 bool ok;
-                const RpaDBKey rk = Deserialize<RpaDBKey>(FromSlice(k), &ok);
+                RpaDBKey rk = RpaDBKey::fromBytes(FromSlice(iter->key()), &ok, true);
                 if (!ok) throw DatabaseFormatError("Unable to deserialize RPA db key -> height");
-                if (firstHeight < 0 || rk.height < BlockHeight(firstHeight)) firstHeight = rk.height;
-                if (lastHeight < 0 || rk.height > BlockHeight(lastHeight)) lastHeight = rk.height;
-                if (rk.height > currentHeight) {
-                    // TODO here -- error? warn? remember this inconsistency?
-                    Error() << "Found an entry for height " << rk.height << " which is greater than currentHeight ("
-                            << currentHeight << ")";
-                }
-                if (doSlowChecks) {
+                firstHeight = rk.height;
+                iter->SeekToLast();
+                if (UNLIKELY( ! iter->Valid())) throw DatabaseError("Unable to seek to last entry in RPA db. This is unexpected.");
+                rk = RpaDBKey::fromBytes(FromSlice(iter->key()), &ok, true);
+                if (!ok) throw DatabaseFormatError("Unable to deserialize RPA db key -> height");
+                lastHeight = rk.height;
+                if (int h; (h=firstHeight) < 0 || (h=lastHeight) < 0)
+                    throw DatabaseFormatError(QString("Found a negative height in the RPA db: %1").arg(h));
+                else if (lastHeight < firstHeight)
+                    throw DatabaseFormatError(QString("The last record has height less than the first record in the RPA db: first = %1, last = %2").arg(firstHeight.load()).arg(lastHeight.load()));
+                Debug() << "RPA db covers heights: " << firstHeight << " -> " << lastHeight;
+            } else {
+                Debug() << "RPA db is empty";
+            }
+            if ((lastHeight == -1 || firstHeight == -1) && lastHeight != firstHeight) // defensive programming: enforce invariant here
+                throw InternalError(QString("Programming error in %1. FIXME!").arg(__func__));
+        } else {
+            // TODO here -- detect holes and mark firstHeight and lastHeight appropriately so that Controller synchs for us properly.
+            size_t ctr = 0;
+            const BlockHeight currentHeight = latestTip().first;
+            for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
+                const auto & k = iter->key();
+                if (k.size() == sizeof(uint32_t)) {
+                    bool ok;
+                    const RpaDBKey rk = Deserialize<RpaDBKey>(FromSlice(k), &ok);
+                    if (!ok) throw DatabaseFormatError("Unable to deserialize RPA db key -> height");
+                    if (firstHeight < 0 || rk.height < BlockHeight(firstHeight)) firstHeight = rk.height;
+                    if (lastHeight < 0 || rk.height > BlockHeight(lastHeight)) lastHeight = rk.height;
+                    if (rk.height > currentHeight) {
+                        // TODO here -- error? warn? remember this inconsistency? Do nothing?
+                        Error() << "Found an entry for height " << rk.height << " which is greater than currentHeight ("
+                                << currentHeight << ")";
+                    }
                     try {
                         Rpa::PrefixTable pt = Deserialize<Rpa::PrefixTable>(FromSlice(iter->value()), &ok);
                     } catch (const std::exception &e) {
@@ -2743,26 +2795,23 @@ void Storage::loadCheckRpaInDb()
                         throw DatabaseSerializationError(QString("Error deserializing Rpa::PrefixTable for height %1: %2")
                                                          .arg(rk.height).arg(e.what()));
                     }
+                    ++ctr;
+                    if (0u == ctr % 1'000u && app() && app()->signalsCaught())
+                        throw UserInterrupted("User interrupted, aborting check");
+                } else {
+                    throw DatabaseFormatError(QString("Encountered a key in the RPA db that is not exactly %1 bytes! Hex for key: %2")
+                                              .arg(sizeof(uint32_t)).arg(FromSlice(k).toHex()));
                 }
-                ++ctr;
-                if (0u == ctr % 1'000u && app() && app()->signalsCaught())
-                    throw UserInterrupted("User interrupted, aborting check");
-            } else {
-                // TODO: fixme? warn? nothing?
-                Debug() << "Unknown RPA DB entry (hex): " << QString(FromSlice(k).toHex());
             }
+            if (lastHeight > firstHeight && size_t(lastHeight + 1 - firstHeight) != ctr) {
+                // TODO: What to do here? We have holes! Indicate this to Controller via modifying firstHeight & lastHeight appropriately!
+                Warning() << "Counted " << ctr << " entries in RPA db, but lastHeight - firstHeight is: " << size_t(lastHeight + 1 - firstHeight);
+            }
+            if (ctr)
+                Log() << ctr << " RPA entries in db covering heights: " << firstHeight << " -> " << lastHeight;
+            else
+                Log() << "RPA db is empty";
         }
-        if (lastHeight > firstHeight && size_t(lastHeight + 1 - firstHeight) != ctr) {
-            // TODO: What to do here?
-            Warning() << "Counted " << ctr << " entries in RPA db, but lastHeight - firstHeight is: " << size_t(lastHeight + 1 - firstHeight);
-        }
-        if (ctr)
-            Log() << ctr << " RPA entries in db covering heights: " << firstHeight << " -> " << lastHeight;
-        else
-            Log() << "RPA db is empty";
-
-        // TODO more checks? check amount of rublks the same as amount of block headers
-        // TODO count amount of txs, check the amount of txs the same as stored amount (must save in key like rublk2trie.total_txs or something
     }
     Debug() << (doSlowChecks ? "CheckDB: Verified RPA db in " : "Loaded RPA db in ") << t0.msecStr() << " msec";
 }
@@ -3323,6 +3372,17 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
 
                 static const QString rpaErrMsg("Error writing block RPA data to db");
                 GenericDBPut(p->db.rpa.get(), RpaDBKey(ppb->height), ser, rpaErrMsg, p->db.defWriteOpts);
+                // Update RpaInfo stats: latest height, etc.
+                if (UNLIKELY(p->rpaInfo.lastHeight != int(ppb->height) - 1)) {
+                    // This should never happen. Warn if this invariant is violated to detect bugs.
+                    Warning() << "Possible bug in " << __func__ << ", rpa index lastHeight (" << p->rpaInfo.lastHeight
+                              << ") not as expected (" << (int(ppb->height) - 1) << "). FIXME!";
+                }
+                p->rpaInfo.lastHeight = ppb->height;
+                if (p->rpaInfo.firstHeight < 0) p->rpaInfo.firstHeight = ppb->height;
+                ++p->rpaInfo.nWrites;
+                p->rpaInfo.nBytesWritten += sizeof(uint32_t) + ser.size();
+
                 if (Debug::isEnabled() && (ser.size() > 100'000 || t0.msec() >= 5))
                     Debug() << "Saved RPA " << ppb->height << " size " << ser.size() << " in " << t0.msecStr() << " msec";
             }
@@ -3489,6 +3549,12 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
             p->blkInfosByTxNum.erase(undo.blkInfo.txNum0);
             GenericDBDelete(p->db.blkinfo.get(), uint32_t(undo.height), "Failed to delete blkInfo in undoLatestBlock");
             GenericDBDelete(p->db.rpa.get(), RpaDBKey(undo.height), "Failed to delete RPA entry in undoLatestBlock");
+            // update stats and start/end height for RPA index
+            p->rpaInfo.nDeletions.fetch_add(1, std::memory_order_relaxed);
+            if (p->rpaInfo.lastHeight >= int(undo.height))
+                p->rpaInfo.lastHeight = undo.height > 0u ? int(undo.height - 1u) : -1;
+            if (p->rpaInfo.firstHeight > p->rpaInfo.lastHeight)
+                p->rpaInfo.firstHeight = p->rpaInfo.lastHeight.load();
 
             // clear num2hash cache
             p->lruNum2Hash.clear();
@@ -3890,6 +3956,7 @@ auto Storage::getRpaHistory(const Rpa::Prefix &prefix, bool includeConfirmed, bo
             // *only* records of the form: Key = 4-byte big endian height, Value = serialized Rpa::PrefixTable.
             // If this assumption changes, update this code to not use this assumption as an optimization.
             std::unique_ptr<rocksdb::Iterator> iter{p->db.rpa->NewIterator(p->db.defReadOpts)};
+            if (UNLIKELY(!iter)) throw DatabaseError("Unable to obtain an iterator to the rpa db");
 
             BlockHeight height = fromHeight;
             size_t blockScansRemaining = std::max(options->rpa.historyBlocksLimit, 1u); // use configured limit (default: 60)
@@ -3908,8 +3975,12 @@ auto Storage::getRpaHistory(const Rpa::Prefix &prefix, bool includeConfirmed, bo
                     break;
                 }
                 // Note: This read-only Rpa::PrefixTable is "lazy loaded" and populated only for records we access on-demand
-                const auto prefixTable = Deserialize<Rpa::PrefixTable>(FromSlice(iter->value())); // Throws on failure to deserialize.
+                const auto valueSlice = iter->value(); // NB: slice is invalidated when iter is modified
+                const auto prefixTable = Deserialize<Rpa::PrefixTable>(FromSlice(valueSlice)); // Throws on failure to deserialize.
                 tReadDb += t1.msec<double>();
+                // Update RpaInfo stats
+                p->rpaInfo.nReads.fetch_add(1, std::memory_order_relaxed);
+                p->rpaInfo.nBytesRead.fetch_add(sizeof(uint32_t) + valueSlice.size(), std::memory_order_relaxed);
 
                 t1 = Tic();
                 const bool needSort = prefix.range().size() > 1u; // if prefix spans multiple rows of table, sort and uniqueify
@@ -4066,6 +4137,7 @@ auto Storage::listUnspent(const HashX & hashX, const TokenFilterOption tokenFilt
             } // release mempool lock
             { // begin confirmed/db search
                 std::unique_ptr<rocksdb::Iterator> iter(p->db.shunspent->NewIterator(p->db.defReadOpts));
+                if (UNLIKELY(!iter)) throw DatabaseError("Unable to obtain an iterator to the shunspent db"); // should never happen
                 const rocksdb::Slice prefix = ToSlice(hashX); // points to data in hashX
 
                 // Search table for all keys that start with hashx's bytes. Note: the loop end-condition is strange.
@@ -4142,6 +4214,7 @@ auto Storage::getBalance(const HashX &hashX, TokenFilterOption tokenFilter) cons
         {
             // confirmed -- read from db using an iterator
             std::unique_ptr<rocksdb::Iterator> iter(p->db.shunspent->NewIterator(p->db.defReadOpts));
+            if (UNLIKELY(!iter)) throw DatabaseError("Unable to obtain an iterator to the shunspent db"); // should never happen
             const rocksdb::Slice prefix = ToSlice(hashX); // points to data in hashX
 
             // Search table for all keys that start with hashx's bytes. Note: the loop end-condition is strange.
