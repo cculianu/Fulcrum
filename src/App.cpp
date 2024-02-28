@@ -1440,10 +1440,10 @@ void App::parseArgs()
         const QString confKey(b1 ? "rpa_history_blocks_limit" : "rpa_history_block_limit");
         bool ok;
         const int limit = conf.intValue(confKey, -1, &ok);
-        if (!ok || limit < options->rpa.historyBlocksLimitMin || limit > options->rpa.historyBlocksLimitMax)
+        if (!ok || limit < 0 || unsigned(limit) < options->rpa.historyBlocksLimitMin || unsigned(limit) > options->rpa.historyBlocksLimitMax)
             throw BadArgs(QString("%1: bad value. Specify a value in the range [%2, %3]")
                               .arg(confKey).arg(options->rpa.historyBlocksLimitMin).arg(options->rpa.historyBlocksLimitMax));
-        options->rpa.historyBlocksLimit = limit;
+        options->rpa.historyBlocksLimit = unsigned(limit);
         // log this later in case we are in syslog mode
         Util::AsyncOnObject(this, [limit, confKey]{ Debug() << "config: " << confKey << " = " << limit; });
     }

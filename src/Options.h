@@ -300,8 +300,8 @@ public:
         int maxHistory = defaultMaxHistory;
 
         // config: rpa_history_blocks_limit - Limit number of blocks to scan at once for blockchain.rpa.get_history
-        static constexpr int defaultHistoryBlocksLimit = 60, historyBlocksLimitMin = 1, historyBlocksLimitMax = 2016;
-        int historyBlocksLimit = defaultHistoryBlocksLimit;
+        static constexpr unsigned defaultHistoryBlocksLimit = 60, historyBlocksLimitMin = 1, historyBlocksLimitMax = 2016;
+        unsigned historyBlocksLimit = defaultHistoryBlocksLimit;
 
         // config: rpa_prefix_bits_min - Minimum number of prefix bits for a blockchain.rpa.* query (DoS protection measure)
         static constexpr int defaultPrefixBitsMin = 8;

@@ -240,16 +240,14 @@ public:
     };
     using History = std::vector<HistoryItem>;
 
-    /// Thread-safe. Will return an empty vector if the confirmed history size exceeds MaxHistory, or a truncated
-    /// vector if the confirmed + unconfirmed history exceeds MaxHistory.
+    /// Thread-safe. Will return an empty vector if the confirmed history size exceeds max_history, or a truncated
+    /// vector if the confirmed + unconfirmed history exceeds max_history.
     History getHistory(const HashX &, bool includeConfirmed, bool includeMempool, BlockHeight fromHeight = 0,
                        std::optional<BlockHeight> optToHeight = std::nullopt) const;
 
-    //-- RPA history TODO: document better
-    /// Thread-safe. Will return an empty vector if the confirmed history size exceeds MaxHistory, or a truncated
-    /// vector if the confirmed + unconfirmed history exceeds MaxHistory.
-    History getRpaHistory(const Rpa::Prefix &prefix, const BlockHeight fromHeight, const size_t count, bool includeConfirmed,
-                          bool includeMempool) const;
+    /// Thread-safe. Will return a truncated vector if the history size exceeds rpa_max_history.
+    History getRpaHistory(const Rpa::Prefix &prefix, bool includeConfirmed, bool includeMempool,
+                          BlockHeight fromHeight = 0, std::optional<BlockHeight> toHeight = std::nullopt) const;
 
     struct UnspentItem : HistoryItem {
         IONum tx_pos = 0;

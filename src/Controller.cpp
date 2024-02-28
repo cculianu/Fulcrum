@@ -1116,11 +1116,21 @@ void Controller::process(bool beSilentIfUpToDate)
 
         // RPA enabled in mempool check -- we put this here because it's the best place for it.
         if (storage->isRpaEnabled()) {
-            if (auto [mempool, sharedLock] = storage->mempool(); !mempool.optPrefixTable) {
-                // re-lock exclusively
-                sharedLock.unlock();
-                if (auto [mutableMempool, lock] = storage->mutableMempool(); !mutableMempool.optPrefixTable) {
-                    mutableMempool.optPrefixTable.emplace(); // existence of this indicates to mempool code to index RPA stuff
+            auto optTipHeight = storage->latestHeight();
+            if (UNLIKELY(! optTipHeight)) {
+                // This should never happen -- is here for defensive programming purposes only.
+                Fatal() << "Controller is in SynchMempool but we don't have a blockchain tip! FIXME!";
+                genericTaskErrored();
+                return;
+            }
+            // Check that mempool prefix table is enabled -- only if we passed the configured block height threshold!
+            if (unsigned(storage->getConfiguredRpaStartHeight()) <= *optTipHeight) {
+                if (auto [mempool, sharedLock] = storage->mempool(); !mempool.optPrefixTable) {
+                    // re-lock exclusively
+                    sharedLock.unlock();
+                    if (auto [mutableMempool, lock] = storage->mutableMempool(); !mutableMempool.optPrefixTable) {
+                        mutableMempool.optPrefixTable.emplace(); // existence of this indicates to mempool code to index RPA stuff
+                    }
                 }
             }
         }

@@ -127,6 +127,7 @@ namespace {
         Type ret{};
         if constexpr (std::is_base_of_v<QByteArray, Type>) {
             ret = ba;
+            if (ok) *ok = true;
         } else {
             QDataStream ds(ba);
             ds >> ret;
@@ -208,17 +209,21 @@ namespace {
             return QByteArray(reinterpret_cast<const char *>(&bigEndian), sizeof(bigEndian));
         }
 
-        static RpaDBKey fromBytes(const QByteArray &ba, bool *ok = nullptr) {
+        static RpaDBKey fromBytes(const QByteArray &ba, bool *ok = nullptr, bool strictSize = false) {
             RpaDBKey k{0u};
-            if (size_t(ba.size()) < sizeof(uint32_t)) {
+            if (size_t(ba.size()) < sizeof(uint32_t) || (strictSize && size_t(ba.size()) != sizeof(uint32_t))) {
                 if (ok) *ok = false;
                 return k;
             }
             uint32_t bigEndian;
             std::memcpy(&bigEndian, ba.constData(), sizeof(uint32_t));
             k.height = bitcoin::be32toh(bigEndian); // swap to host order
+            if (ok) *ok = true;
             return k;
         }
+
+        bool operator==(const RpaDBKey &o) const { return height == o.height; }
+        bool operator!=(const RpaDBKey &o) const { return ! this->operator==(o); }
     };
 
     // specializations
@@ -325,7 +330,7 @@ namespace {
                     throw DatabaseFormatError(QString("%1: Extra bytes at the end of data")
                                               .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : QString("Database format error in db %1").arg(DBName(db))));
                 }
-                bool ok;
+                bool ok{};
                 ret.emplace( DeserializeScalar<RetType>(FromSlice(datum), &ok) );
                 if (!ok) {
                     throw DatabaseSerializationError(
@@ -337,7 +342,7 @@ namespace {
                 if (UNLIKELY(acceptExtraBytesAtEndOfData))
                     Debug() << "Warning:  Caller misuse of function '" << __func__
                             << "'. 'acceptExtraBytesAtEndOfData=true' is ignored when deserializing using QDataStream.";
-                bool ok;
+                bool ok{};
                 ret.emplace( Deserialize<RetType>(FromSlice(datum), &ok) );
                 if (!ok) {
                     throw DatabaseSerializationError(
@@ -3843,36 +3848,73 @@ auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf, BlockHeigh
     return ret;
 }
 
-auto Storage::getRpaHistory(const Rpa::Prefix & prefix, const BlockHeight fromHeight, const size_t count, bool conf, bool unconf) const -> History
+auto Storage::getRpaHistory(const Rpa::Prefix &prefix, bool includeConfirmed, bool includeMempool,
+                            BlockHeight fromHeight, std::optional<BlockHeight> toHeight) const-> History
 {
     History ret;
     auto IncrementCtrAndThrowIfExceedsMaxHistory = GetMaxHistoryCtrFunc("RPA History", QString("prefix '%1'").arg(prefix.toHex()),
                                                                         options->rpa.maxHistory);
-    Tic t0;
     double tReadDb = 0., tPfxSearch = 0., tResolveTxIdx = 0., tWaitForLock = 0., tBuildRes = 0.;
-    try {
-        SharedLockGuard g(p->blocksLock);  // makes sure history doesn't mutate from underneath our feet
-        tWaitForLock += t0.msec<double>();
-        if (conf) {
-            static const QString err("Error retrieving RPA history this height");
 
-            for (BlockHeight height = fromHeight; height < fromHeight + count; ++height) {
+    Tic t0;
+    SharedLockGuard g(p->blocksLock);  // makes sure history doesn't mutate from underneath our feet
+    tWaitForLock += t0.msec<double>();
+
+    const int rpaStartHeight = getConfiguredRpaStartHeight();
+    if (UNLIKELY(rpaStartHeight < 0)) {
+        // This should have been caught by the caller. Warn to log here since we don't want to do this filtering of
+        // requests here in this asynch-called function since it wastes resources to do it this late in the pipeline.
+        Warning() << "getRpaHistory() called but RPA appears to be disabled. FIXME!";
+        throw InternalError("RPA is disabled");
+    }
+
+    const auto tipHeight = latestHeight();
+    if (UNLIKELY( ! tipHeight)) throw InternalError("No blockchain");
+    if (unsigned(rpaStartHeight) > *tipHeight) {
+        // Nothing to do! Index not yet enabled! Warn here since likely the admin has misconfigured his server.
+        Warning() << "getRpaHistory called but rpa_start_height is " << rpaStartHeight << ", which is greater than the"
+                  << " block chain height of " << *tipHeight << ".\n\nIf you wish to enable RPA indexing, set the RPA"
+                  << " start height to below the blockchain height using the `rpa_start_height` configuration"
+                  << " variable. If, on the other hand, you wish to disable RPA indexing, set `rpa = false` in the"
+                  << " configuration file.\n\n";
+        return ret;
+    }
+
+    try {
+        if (includeConfirmed) {
+
+            size_t blockScansRemaining = std::max(options->rpa.historyBlocksLimit, 1u); // use configured limit (default: 60)
+            // sanitize `fromHeight` and `toHeight`; restrict to range: [rpaStartHeight, tipHeight]
+            fromHeight = std::max<unsigned>(rpaStartHeight, fromHeight); // restrict `from` to be >= configured height
+            toHeight = std::min(toHeight.value_or(*tipHeight), *tipHeight); // define and restrict `to` to be <= tip height
+
+            // We use an iterator and seek forward each time because this is far faster since our table rows are in order
+            // of height (serialized as big endian). Note that the assumption here is that the rpa table contains
+            // *only* records of the form: Key = 4-byte big endian height, Value = serialized Rpa::PrefixTable.
+            // If this assumption changes, update this code.
+            std::unique_ptr<rocksdb::Iterator> iter{p->db.rpa->NewIterator(p->db.defReadOpts)};
+
+            BlockHeight height = fromHeight;
+            for ( /* */; blockScansRemaining && height <= *toHeight; ++height, --blockScansRemaining) {
                 Tic t1;
-                // Note: This read-only Rpa::PrefixTable is "lazy loaded" and populated only for records we access on-demand
-                const auto optPfxTable = GenericDBGet<Rpa::PrefixTable>(p->db.rpa.get(), RpaDBKey(height), true, err, false,
-                                                                        p->db.defReadOpts);
-                tReadDb += t1.msec<double>();
-                if (UNLIKELY( ! optPfxTable)) {
-                    // This should never happen or happen extremely rarely (like during a reorg) -- warn to console just in case there are bugs.
-                    Warning() << "Missing RPA PrefixTable for height: " << height
-                              << ". Is a reorg in progress? If not, contact the developers if you see this message frequently.";
+                const RpaDBKey dbKey(height);
+                iter->Seek(ToSlice(dbKey));
+                bool ok{};
+                if (UNLIKELY(!iter->Valid() || RpaDBKey::fromBytes(FromSlice(iter->key()), &ok, true) != dbKey || !ok)) {
+                    // This should never happen -- error to console just in case we have bugs and/or missing data.
+                    Error() << "Missing RPA PrefixTable for height: " << height << ". This should never happen."
+                            << " Report this to situation to the developers.";
                     continue;
                 }
+                // Note: This read-only Rpa::PrefixTable is "lazy loaded" and populated only for records we access on-demand
+                const auto prefixTable = Deserialize<Rpa::PrefixTable>(FromSlice(iter->value())); // Throws on failure to deserialize.
+                tReadDb += t1.msec<double>();
+
                 t1 = Tic();
                 const bool needSort = prefix.range().size() > 1u; // if prefix spans multiple rows of table, sort and uniqueify
-                auto txIdxVec = optPfxTable->searchPrefix(prefix, needSort);
+                auto txIdxVec = prefixTable.searchPrefix(prefix, needSort);
                 tPfxSearch += t1.msec<double>();
-                if (txIdxVec.empty()) continue;
+                if (txIdxVec.empty()) continue; // no match for this prefix at this height, keep going
 
                 IncrementCtrAndThrowIfExceedsMaxHistory(txIdxVec.size());
 
@@ -3885,8 +3927,12 @@ auto Storage::getRpaHistory(const Rpa::Prefix & prefix, const BlockHeight fromHe
                 }
                 tBuildRes += t1.msec<double>();
             }
+
+            // Special behavior: disable mempool append if we exhausted blockScansRemaining and we didn't reach tipHeight
+            if (includeMempool && !blockScansRemaining && height < *tipHeight)
+                includeMempool = false;
         }
-        if (unconf) {
+        if (includeMempool) {
             auto [mempool, lock] = this->mempool();
             if (LIKELY(mempool.optPrefixTable)) {
                 const auto origSize = ret.size();

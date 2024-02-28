@@ -471,8 +471,8 @@ private:
     Rpa::Prefix parseRpaPrefixParamCommon(const QString &paramHex) const;
     /// Called from blockchain.rpa.get_mempool and blockchain.rpa.get_history
     /// Returns a list of QVariantMaps of the form: { "tx_hash": "xxx", "height": n, "fee": sats } (with "fee" appearing only for mempool txns)
-    /// Note: for mempool-only search, height and count are ignored.
-    QVariantList getRpaHistoryCommon(const BlockHeight height, const size_t count, const Rpa::Prefix & prefix, bool mempoolOnly);
+    /// Note: for mempool-only search, `fromTo` is ignored
+    QVariantList getRpaHistoryCommon(const Rpa::Prefix & prefix, bool mempoolOnly, const GetHistory_FromToBH fromTo = default_GetHistory_FromToBH);
     /// Helper to throw RPCError if RPA is disabled for this server
     void throwIfRpaDisabled() const;
 
