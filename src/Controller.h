@@ -87,7 +87,7 @@ public:
     struct RpaOnlyModeData {
         BlockHeight height{};
         QByteArray serializedPrefixTable;
-        size_t nTx{}, nIns{}, nOuts{};
+        size_t nTx{}, nTxsIndexed{}, nIns{}, nInsIndexed{}, nOuts{};
     };
     using RpaOnlyModeDataPtr = std::shared_ptr<RpaOnlyModeData>;
 

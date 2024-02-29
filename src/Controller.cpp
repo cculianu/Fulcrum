@@ -738,8 +738,10 @@ auto DownloadBlocksTask_SynchRpa::process_block_guts(unsigned bnum, const QByteA
         for (size_t inputNum = 0; inputNum < Rpa::InputIndexLimit && inputNum < numIns; ++inputNum) {
             const auto & inp = tx.vin[inputNum];
             pt.addForPrefix(Rpa::Prefix(Rpa::Hash(inp)), txIdx);
+            ++ret->nInsIndexed;
         }
         ret->nOuts += tx.vout.size();
+        ++ret->nTxsIndexed;
     }
     ret->serializedPrefixTable = pt.serialize();
     return ret;
