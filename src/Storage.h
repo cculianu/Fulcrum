@@ -145,7 +145,7 @@ public:
     HeaderHash genesisHash() const;
 
     enum class SaveItem : uint32_t {
-        Meta = 0x1, ///< save meta
+        Meta = 0x1, ///< save Meta object to the meta table
 
         All = 0xffffffff, ///< save everything
         None = 0x00, ///< No-op
@@ -481,6 +481,13 @@ protected:
     /// Internally called to create or destroy the UTXO Cache, if --fast-sync is enabled
     void setInitialSync(bool);
     friend class InitialSyncRAII;
+
+    /// This is set in addBlock and in other places if we find the RPA database may be inconsistent, and should
+    /// be checked (possibly on next app startup). Immediately saves a bool to the DB meta table. Thread-safe, may throw.
+    void setRpaNeedsFullCheck(bool b);
+    /// If this is true on startup, we know the RPA index must be inconsistent and we will run a full health check on
+    /// the rpa table and attempt to fix it. Thread-safe, may throw.
+    bool isRpaNeedsFullCheck();
 
 private:
     const std::shared_ptr<const Options> options;

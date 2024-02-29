@@ -1,6 +1,6 @@
 //
 // Fulcrum - A fast & nimble SPV Server for Bitcoin Cash
-// Copyright (C) 2019-2023 Calin A. Culianu <calin.culianu@gmail.com>
+// Copyright (C) 2019-2024 Calin A. Culianu <calin.culianu@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -34,7 +34,6 @@
 #include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
-#include <vector>
 
 class CtlTask;
 class SSLCertMonitor;
@@ -84,6 +83,14 @@ public:
         return type == BTC::Coin::BCH || type == BTC::Coin::Unknown;
     }
 
+    /// Type used internally by the putRpaIndex signal
+    struct RpaOnlyModeData {
+        BlockHeight height{};
+        QByteArray serializedPrefixTable;
+        size_t nTx{}, nIns{}, nOuts{};
+    };
+    using RpaOnlyModeDataPtr = std::shared_ptr<RpaOnlyModeData>;
+
 signals:
     /// Emitted whenever bitcoind is detected to be up-to-date, and everything (except mempool) is synched up.
     /// note this is not emitted during regular polling, but only after `synchronizing` was emitted previously.
@@ -105,6 +112,10 @@ signals:
     /// *after* signal/slots do.. and they arrive out-of-order with respect to them -- and we want to make sure to
     /// get all the blocks *before* the DownloadBlocksTasks are removed after they finish).
     void putBlock(CtlTask *sender, PreProcessedBlockPtr);
+
+    /// "Private" signal, not intended to be used by outside code. Used internally to send serialized processed prefix
+    /// table data that is ready from any thread to to this object for processing in Controller's thread.
+    void putRpaIndex(CtlTask *sender, Controller::RpaOnlyModeDataPtr);
 
     /// Emitted only iff the user specified --dump-sh on the CLI. This is emitted once the script hash dump has completed.
     void dumpScriptHashesComplete();
@@ -141,6 +152,9 @@ protected slots:
     /// Slot for the BitcoinDMgr::bitcoinCoreDetection. This is compared to this->coinType and if there is a
     /// mismatch there, we may end up aborting the app and logging an error in this slot.
     void on_coinDetected(BTC::Coin); //< NB: Connected via DirectConnection and may run in the BitcoinDMgr thread!
+
+    /// Slot for putRpaIndex signal. Runs in this thread, adds the supplied data to the RPA index.
+    void on_putRpaIndex(CtlTask *, Controller::RpaOnlyModeDataPtr);
 
 private:
     friend class CtlTask;
@@ -293,3 +307,4 @@ protected:
 
 Q_DECLARE_METATYPE(CtlTask *);
 Q_DECLARE_METATYPE(PreProcessedBlockPtr);
+Q_DECLARE_METATYPE(Controller::RpaOnlyModeDataPtr);

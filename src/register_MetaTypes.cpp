@@ -46,6 +46,8 @@ void App::register_MetaTypes()
         qRegisterMetaType<CtlTask *>("CtlTask *");
         // Used by the Controller::putBlock signal
         qRegisterMetaType<PreProcessedBlockPtr>("PreProcessedBlockPtr");
+        // Used by the Controller::putRpaIndex signal
+        qRegisterMetaType<Controller::RpaOnlyModeDataPtr>("Controller::RpaOnlyModeDataPtr");
 
         qRegisterMetaType<QHostAddress>("QHostAddress");
 

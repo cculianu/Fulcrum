@@ -106,7 +106,7 @@ namespace {
 
     // some database keys we use -- todo: if this grows large, move it elsewhere
     static const bool falseMem = false, trueMem = true;
-    static const rocksdb::Slice kMeta{"meta"}, kDirty{"dirty"}, kUtxoCount{"utxo_count"},
+    static const rocksdb::Slice kMeta{"meta"}, kDirty{"dirty"}, kUtxoCount{"utxo_count"}, kRpaNeedsFullCheck{"rpa_needs_full_check"},
                                 kTrue(reinterpret_cast<const char *>(&trueMem), sizeof(trueMem)),
                                 kFalse(reinterpret_cast<const char *>(&falseMem), sizeof(falseMem));
 
@@ -2742,9 +2742,13 @@ void Storage::loadCheckRpaDB()
     FatalAssert(!!p->db.rpa, __func__, ": RPA db is not open");
 
     const bool doSlowChecks = options->doSlowDbChecks;
+    const bool doNeededCheck = isRpaNeedsFullCheck();
+    const bool fullCheck = doSlowChecks || doNeededCheck;
 
     if (doSlowChecks) {
         Log() << "CheckDB: Verifying RPA db (this may take some time) ...";
+    } else if (doNeededCheck) {
+        Log() << "Performing required check on RPA db, please wait ...";
     } else {
         Log() << "Loading RPA db ...";
     }
@@ -2773,7 +2777,7 @@ void Storage::loadCheckRpaDB()
                                                  .arg(height).arg(e.what()));
             }
         };
-        if (! doSlowChecks) {
+        if (! fullCheck) {
             // Normal fast startup -- just try and figure out what height range we actually have in the DB
             iter->SeekToFirst();
             if (iter->Valid()) {
@@ -2842,7 +2846,12 @@ void Storage::loadCheckRpaDB()
         if (firstHeight >= 0) Debug() << "RPA db data covers heights: " << firstHeight << " -> " << lastHeight;
         else Debug() << "RPA db is empty";
     }
-    Debug() << (doSlowChecks ? "CheckDB: Verified RPA db in " : "Loaded RPA db in ") << t0.msecStr() << " msec";
+
+    // Lastly, if we were in check mode, flag the DB as clean now
+    if (fullCheck) setRpaNeedsFullCheck(false);
+
+    Debug() << (doSlowChecks ? "CheckDB: Verified" : (doNeededCheck ? "Checked" : "Loaded"))
+            << " RPA db in " << t0.msecStr() << " msec";
 }
 
 bool Storage::deleteRpaEntriesFromHeight(const BlockHeight height, bool flush, bool force)
@@ -3438,13 +3447,14 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                     // This should never happen. Warn if this invariant is violated to detect bugs.
                     Warning() << "Possible bug in " << __func__ << ", rpa index lastHeight (" << p->rpaInfo.lastHeight
                               << ") not as expected (" << (int(ppb->height) - 1) << "). FIXME!";
+                    setRpaNeedsFullCheck(true); // flag the RPA db for a full check on next run
                 }
                 p->rpaInfo.lastHeight = ppb->height;
                 if (p->rpaInfo.firstHeight < 0) p->rpaInfo.firstHeight = ppb->height;
                 ++p->rpaInfo.nWrites;
                 p->rpaInfo.nBytesWritten += sizeof(uint32_t) + ser.size();
 
-                if (Debug::isEnabled() && (ser.size() > 100'000 || t0.msec() >= 5))
+                if (Debug::isEnabled() && (ser.size() >= 200'000 || t0.msec() >= 10))
                     Debug() << "Saved RPA " << ppb->height << " size " << ser.size() << " in " << t0.msecStr() << " msec";
             }
 
@@ -3743,6 +3753,23 @@ bool Storage::isDirty() const
     static const QString errPrefix("Error reading dirty flag from the meta db");
     return GenericDBGet<bool>(p->db.meta.get(), kDirty, true, errPrefix, false, p->db.defReadOpts).value_or(false);
 }
+
+void Storage::setRpaNeedsFullCheck(const bool val)
+{
+    if (!p->db.meta) return;
+    static const QString errPrefix("Error saving rpa_needs_full_check flag to the meta db");
+    const auto & slice = val ? kTrue : kFalse;
+    GenericDBPut(p->db.meta.get(), kRpaNeedsFullCheck, slice, errPrefix, p->db.defWriteOpts);
+    DebugM("Wrote rpa_needs_full_check = ", val, " to db");
+}
+
+bool Storage::isRpaNeedsFullCheck()
+{
+    if (!p->db.meta) return false;
+    static const QString errPrefix("Error reading rpa_needs_full_check flag from the meta db");
+    return GenericDBGet<bool>(p->db.meta.get(), kRpaNeedsFullCheck, true, errPrefix, false, p->db.defReadOpts).value_or(false);
+}
+
 
 void Storage::saveUtxoCt()
 {
