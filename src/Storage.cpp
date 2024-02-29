@@ -3437,25 +3437,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
 
             // Save RPA PrefixTable record (appends a single row to DB), if RPA is enabled for this block
             if (ppb->serializedRpaPrefixTable) {
-                Tic t0;
-                const QByteArray & ser = *ppb->serializedRpaPrefixTable;
-
-                static const QString rpaErrMsg("Error writing block RPA data to db");
-                GenericDBPut(p->db.rpa.get(), RpaDBKey(ppb->height), ser, rpaErrMsg, p->db.defWriteOpts);
-                // Update RpaInfo stats: latest height, etc.
-                if (UNLIKELY(p->rpaInfo.lastHeight > -1 && p->rpaInfo.lastHeight != int(ppb->height) - 1)) {
-                    // This should never happen. Warn if this invariant is violated to detect bugs.
-                    Warning() << "Possible bug in " << __func__ << ", rpa index lastHeight (" << p->rpaInfo.lastHeight
-                              << ") not as expected (" << (int(ppb->height) - 1) << "). FIXME!";
-                    setRpaNeedsFullCheck(true); // flag the RPA db for a full check on next run
-                }
-                p->rpaInfo.lastHeight = ppb->height;
-                if (p->rpaInfo.firstHeight < 0) p->rpaInfo.firstHeight = ppb->height;
-                ++p->rpaInfo.nWrites;
-                p->rpaInfo.nBytesWritten += sizeof(uint32_t) + ser.size();
-
-                if (Debug::isEnabled() && (ser.size() >= 200'000 || t0.msec() >= 10))
-                    Debug() << "Saved RPA " << ppb->height << " size " << ser.size() << " in " << t0.msecStr() << " msec";
+                addRpaDataForHeight_nolock(ppb->height, *ppb->serializedRpaPrefixTable); // may throw theoretically if GenericDBPut threw
             }
 
             // save the last of the undo info, if in saveUndo mode
@@ -3533,6 +3515,37 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
         if (txsubsmgr && !notify->txidsAffected.empty())
             txsubsmgr->enqueueNotifications(std::move(notify->txidsAffected));
     }
+}
+
+/// NB: Caller should probably hold some locks to avoid consistency issues... even though this function is inherently thread-safe.
+void Storage::addRpaDataForHeight_nolock(const BlockHeight height, const QByteArray &ser)
+{
+    Tic t0;
+
+    static const QString rpaErrMsg("Error writing block RPA data to db");
+    GenericDBPut(p->db.rpa.get(), RpaDBKey(height), ser, rpaErrMsg, p->db.defWriteOpts);
+    // Update RpaInfo stats: latest height, etc.
+    if (const int lh = p->rpaInfo.lastHeight; UNLIKELY(lh > -1 && lh != int(height) - 1)) {
+        // This should never happen. Warn if this invariant is violated to detect bugs.
+        Warning() << "Possible bug in " << __func__ << ", rpa index lastHeight (" << lh
+                  << ") not as expected (" << (int(height) - 1) << "). FIXME!";
+        setRpaNeedsFullCheck(true); // flag the RPA db for a full check on next run
+    }
+    if (const int fh = p->rpaInfo.firstHeight; UNLIKELY(fh > -1 && fh > int(height))) {
+        // This should never happen. Warn if this invariant is violated to detect bugs.
+        Warning() << "Possible bug in " << __func__ << ", rpa index firstHeight (" << fh
+                  << ") not as expected (should be <= " << int(height) << "). FIXME!";
+        int expected = fh;
+        p->rpaInfo.firstHeight.compare_exchange_strong(expected, int(height)); // only overwrite if it didn't change...
+        setRpaNeedsFullCheck(true); // flag the RPA db for a full check on next run
+    }
+    p->rpaInfo.lastHeight = height;
+    if (p->rpaInfo.firstHeight < 0) p->rpaInfo.firstHeight = height;
+    ++p->rpaInfo.nWrites;
+    p->rpaInfo.nBytesWritten += sizeof(uint32_t) + ser.size();
+
+    if (Debug::isEnabled() && (ser.size() >= 200'000 || t0.msec() >= 10))
+        Debug() << "Saved RPA " << height << " size " << ser.size() << " in " << t0.msecStr() << " msec";
 }
 
 BlockHeight Storage::undoLatestBlock(bool notifySubs)

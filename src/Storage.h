@@ -524,6 +524,9 @@ private:
 
     // Called by heightForTxNum which calls this with the blockInfo lock held
     std::optional<unsigned> heightForTxNum_nolock(TxNum) const;
+
+    /// Writes to the RPA table. Called from addBlock()
+    void addRpaDataForHeight_nolock(BlockHeight height, const QByteArray &serializedRpaPrefixTable);
 };
 
 Q_DECLARE_OPERATORS_FOR_FLAGS(Storage::SaveSpec)
