@@ -2247,6 +2247,14 @@ int Storage::getConfiguredRpaStartHeight() const
     return Options::Rpa::defaultStartHeightOtherNets;
 }
 
+auto Storage::getRpaDBHeightRange() const -> std::optional<HeightRange>
+{
+    std::optional<HeightRange> ret;
+    if (isRpaEnabled())
+        if (const int from = p->rpaInfo.firstHeight, to = p->rpaInfo.lastHeight; from >= 0 && to >= 0)
+            ret.emplace(static_cast<BlockHeight>(from), static_cast<BlockHeight>(to));
+    return ret;
+}
 
 /// returns the "next" TxNum
 TxNum Storage::getTxNum() const { return p->txNumNext.load(); }

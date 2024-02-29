@@ -404,6 +404,18 @@ public:
     /// Note: this doesn't necessarily indicate we *have* this height indexed (yet!); it's just what the user wants.
     int getConfiguredRpaStartHeight() const;
 
+    /// Type used only by getRpaDBHeightRange() but maybe useful in the future for other methods, hence the typedef.
+    using HeightRange = std::pair<BlockHeight, BlockHeight>;
+    /// Thread-safe. Returns a pair of {fromHeight, toHeight} which is the current inclusive range of heights that the
+    /// RPA index covers in the DB. Will return a nullopt if either: (1) RPA indexing is disabled, or (2) The index is
+    /// enabled but the index is empty (which can happen if the configured start height > current tip height, for
+    /// instance).  As the DB synchs with RPA enabled the results of this call will be current to reflect the latest DB
+    /// state.
+    ///
+    /// Note: This function is intended only to be called from the Controller thread. Calling it from other code may
+    /// risk a potentially inconsistent view since it just reads 2 atomic ints separately with no locks held.
+    std::optional<HeightRange> getRpaDBHeightRange() const;
+
 protected:
     virtual Stats stats() const override; ///< from StatsMixin
 
