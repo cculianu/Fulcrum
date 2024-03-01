@@ -886,7 +886,7 @@ void Controller::rmTask(CtlTask *t)
 
 bool Controller::isTaskDeleted(CtlTask *t) const { return tasks.count(t) == 0; }
 
-void Controller::add_DLBlocksTask(unsigned int from, unsigned int to, size_t nTasks, bool isRpaOnlyMode)
+CtlTask * Controller::add_DLBlocksTask(unsigned int from, unsigned int to, size_t nTasks, bool isRpaOnlyMode)
 {
     const int rpaStartHeight = storage->getConfiguredRpaStartHeight(); // -1 here means "rpa disabled"
     DownloadBlocksTask *t = [&]() -> DownloadBlocksTask * {
@@ -923,6 +923,8 @@ void Controller::add_DLBlocksTask(unsigned int from, unsigned int to, size_t nTa
         Error() << "Task errored: " << t->objectName() << ", error: " << t->errorMessage;
         genericTaskErrored();
     });
+
+    return t;
 }
 
 void Controller::genericTaskErrored()
@@ -973,6 +975,13 @@ bool Controller::checkRpaIndexNeedsSync(int tipHeight)
     }
     assert(cf >= 0 && tipHeight >= 0 && cf <= tipHeight); // at this point this is true; assertion here for illustrative purposes
 
+    if (storage->runRpaSlowCheckIfDBIsPotentiallyInconsistent(cf, tipHeight)) {
+        // We ran a (slow) health check on the DB due to potential inconsistency. Reset StateMachine and try again.
+        sm->state = StateMachine::State::Retry;
+        AGAIN();
+        return true;
+    }
+
     const auto optRange = storage->getRpaDBHeightRange();
     int f, l;
     if (!optRange) f = l = -1; // no data
@@ -987,16 +996,22 @@ bool Controller::checkRpaIndexNeedsSync(int tipHeight)
         sm->lastProgTs = Util::getTimeSecs();
         sm->dlResultsHtNext = sm->startheight = from;
         sm->endHeight = to;
+        auto errct = std::make_shared<int>(0); // so that all the error callbacks below to share same state..
         for (size_t i = 0; i < nTasks; ++i) {
-            add_DLBlocksTask(from + i, to, nTasks, true);
+            CtlTask *t = add_DLBlocksTask(from + i, to, nTasks, true);
+            // In case DL fails, we need to flag DB as needing a full check, and also retry
+            connect(t, &CtlTask::errored, this, [this, errct] {
+                if ((*errct)++) return; // guard to ensure we do this only once if any tasks fail
+                storage->flagRpaIndexAsPotentiallyInconsistent();
+                if (LIKELY(sm)) sm->state = StateMachine::State::Retry;
+                AGAIN();
+            });
         }
         // advance state now. we will be called back by download task in on_putRpaIndex()
         sm->state = StateMachine::State::DownloadingBlocks_RPA;
         emit synchronizing();
         AGAIN();
 
-        // TODO: in case DL fails, we need to flag DB as needing a full check here?
-        // (Or maybe the hooks we added to Storage to detect inconsitency is enough?)
     };
 
     const bool noData = f < 0 || l < 0;
@@ -1006,7 +1021,7 @@ bool Controller::checkRpaIndexNeedsSync(int tipHeight)
         return true;
     }
     if (cf < f) {
-        // first block of data we have is beyond cf, download what's missing from cf -> min(f, tipHeight) - 1
+        // first block of data we have is beyond cf, download what's missing from cf -> min(f - 1, tipHeight)
         setupDownload(cf, std::min(f - 1, tipHeight));
         return true;
     }
@@ -1228,7 +1243,7 @@ void Controller::process(bool beSilentIfUpToDate)
         AGAIN();
     } else if (sm->state == State::Retry) {
         // normally the result of Rewinding due to reorg, retry right away.
-        DebugM("Retrying download again ...");
+        DebugM("Retrying task again ...");
         {
             std::lock_guard g(smLock);
             sm.reset();

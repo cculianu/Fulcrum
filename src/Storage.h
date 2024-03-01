@@ -423,6 +423,14 @@ public:
     /// deletes all entries < from and all entries > to.
     void clampRpaEntries(BlockHeight from, BlockHeight to);
 
+    /// Called by Controller. Sets the "rpaNeedsFullCheck" flag to true
+    void flagRpaIndexAsPotentiallyInconsistent();
+
+    /// Called by Controller. If the "rpaNeedsFullCheck" flag was somehow set at some point, will do the slow DB health
+    /// checks with a lock held.  Returns true if it did such slow checks, false otherwise. Note: do not call this
+    /// unless the RPA index is definitely enabled in the app (Controller respects this criterion).
+    bool runRpaSlowCheckIfDBIsPotentiallyInconsistent(BlockHeight configuredStartHeight, BlockHeight tipHeight);
+
 protected:
     virtual Stats stats() const override; ///< from StatsMixin
 
@@ -476,6 +484,8 @@ protected:
     /// Deletes any rpa entries <= height. Returns true on success, false on failure.
     bool deleteRpaEntriesToHeight(BlockHeight height, bool flush = false, bool force = false);
 
+    void clampRpaEntries_nolock(BlockHeight from, BlockHeight to);
+
     /// This is set in addBlock and undoLatestBlock while we do a bunch of updates, then cleared when updates are done,
     /// for each block. Thread-safe, may throw.
     void setDirty(bool dirtyFlag);
@@ -497,7 +507,7 @@ protected:
     void setRpaNeedsFullCheck(bool b);
     /// If this is true on startup, we know the RPA index must be inconsistent and we will run a full health check on
     /// the rpa table and attempt to fix it. Thread-safe, may throw.
-    bool isRpaNeedsFullCheck();
+    bool isRpaNeedsFullCheck() const;
 
 private:
     const std::shared_ptr<const Options> options;

@@ -191,7 +191,7 @@ private:
     std::unordered_map<CtlTask *, std::unique_ptr<CtlTask>, Util::PtrHasher> tasks;
     int nDLBlocksTasks = 0;
 
-    void add_DLBlocksTask(unsigned from, unsigned to, size_t nTasks, bool isRpaOnlyMode);
+    CtlTask * add_DLBlocksTask(unsigned from, unsigned to, size_t nTasks, bool isRpaOnlyMode);
     void process_DownloadingBlocks();
     bool process_VerifyAndAddBlock(PreProcessedBlockPtr); ///< helper called from within DownloadingBlocks state -- makes sure block is sane and adds it to db
     void process_PrintProgress(const QString &verb, unsigned height, size_t nTx, size_t nIns, size_t nOuts, size_t nSH,

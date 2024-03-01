@@ -1130,6 +1130,7 @@ struct Storage::Pvt
         std::atomic_int32_t firstHeight = -1, lastHeight = -1; // inclusive height range that we have in the DB. -1 means undefined/missing.
         std::atomic_uint64_t nReads{0u}, nWrites{0u}, nDeletions{0u}; // keep track of number of times we read/write/delete from this db
         std::atomic_uint64_t nBytesWritten{0u}, nBytesRead{0u}; // keep track of number of bytes written and read during Storage object lifetime
+        mutable std::atomic_int rpaNeedsFullCheckCachedVal = -1; // if > -1, the last value written to the DB. If < 0, no cached val, just read from DB when querying isRpaNeedsFullCheck()
     } rpaInfo;
 };
 
@@ -2175,6 +2176,7 @@ auto Storage::stats() const -> Stats
             rm["nDeletions"] = qulonglong(p->rpaInfo.nDeletions.load(std::memory_order_relaxed));
             rm["nBytesRead"] = qulonglong(p->rpaInfo.nBytesRead.load(std::memory_order_relaxed));
             rm["nBytesWritten"] = qulonglong(p->rpaInfo.nBytesWritten.load(std::memory_order_relaxed));
+            rm["rpaNeedsFullCheck"] = p->rpaInfo.rpaNeedsFullCheckCachedVal.load(std::memory_order_relaxed);
             ret["RPA Index Info"] = rm;
         }
     }
@@ -2787,14 +2789,14 @@ void Storage::loadCheckRpaDB()
                 RpaDBKey rk = RpaDBKey::fromBytes(FromSlice(iter->key()), &ok, true);
                 if (!ok) throw DatabaseSerializationError("Unable to deserialize RPA db key -> height");
                 ThrowIfNegativeIfCastedToSigned(rk.height);
-                TryDeserializePFTAndUpdateCounts(rk.height, iter->value()); // TODO: this may throw; what to do here? mark this bad? resynch RPA db (after we write the code to accomplish that)?
+                TryDeserializePFTAndUpdateCounts(rk.height, iter->value()); // this may throw; if it does we will blow away the whole DB below and Controller will do a full resynch of RPA index
                 firstHeight = rk.height;
                 iter->SeekToLast();
                 if (UNLIKELY( ! iter->Valid())) throw DatabaseError("Unable to seek to last entry in RPA db. This is unexpected.");
                 rk = RpaDBKey::fromBytes(FromSlice(iter->key()), &ok, true);
                 if (!ok) throw DatabaseSerializationError("Unable to deserialize RPA db key -> height");
                 ThrowIfNegativeIfCastedToSigned(rk.height);
-                TryDeserializePFTAndUpdateCounts(rk.height, iter->value()); // TODO: this may throw; what to do here? mark this bad? resynch RPA db (after we write the code to accomplish that)?
+                TryDeserializePFTAndUpdateCounts(rk.height, iter->value()); // this may throw; if it does we will blow away the whole DB below and Controller will do a full resynch of RPA index
                 lastHeight = rk.height;
                 if (lastHeight < firstHeight) // this should never happen and indicates some serialization format error
                     throw DatabaseSerializationError(QString("The last record has height less than the first record in the RPA db: first = %1, last = %2").arg(firstHeight.load()).arg(lastHeight.load()));
@@ -2810,7 +2812,7 @@ void Storage::loadCheckRpaDB()
                     if (!ok) throw DatabaseSerializationError("Unable to deserialize RPA db key -> height");
                     ThrowIfNegativeIfCastedToSigned(rk.height);
                     if (firstHeight < 0) firstHeight = rk.height;
-                    TryDeserializePFTAndUpdateCounts(rk.height, iter->value()); // TODO: this may throw; what to do here? mark this bad? resynch RPA db (after we write the code to accomplish that)?
+                    TryDeserializePFTAndUpdateCounts(rk.height, iter->value()); // this may throw; if it does we will blow away the whole DB below and Controller will do a full resynch of RPA index
                     if (lastHeight > -1 && BlockHeight(lastHeight) + 1u != rk.height) { // detect gaps
                         Warning() << QString("Gap in RBA db encountered starting at height %1 to height %2").arg(lastHeight + 1).arg(rk.height);
                         forceDeleteAfterHeight = BlockHeight(lastHeight);
@@ -2932,8 +2934,14 @@ bool Storage::deleteRpaEntriesToHeight(const BlockHeight height, bool flush, boo
 void Storage::clampRpaEntries(BlockHeight from, BlockHeight to)
 {
     ExclusiveLockGuard g(p->blocksLock);
+    clampRpaEntries_nolock(from, to);
+}
+
+void Storage::clampRpaEntries_nolock(BlockHeight from, BlockHeight to)
+{
     if (from > 0u) deleteRpaEntriesToHeight(from - 1u, true);
     if (to < std::numeric_limits<uint32_t>::max()) deleteRpaEntriesFromHeight(to + 1u, true);
+    DebugM("Clamped RPA index to: ", from, " -> ", to);
 }
 
 void Storage::loadCheckEarliestUndo()
@@ -3578,13 +3586,13 @@ void Storage::addRpaDataForHeight_nolock(const BlockHeight height, const QByteAr
     if (const int lh = p->rpaInfo.lastHeight; UNLIKELY(lh > -1 && lh != int(height) - 1)) {
         // This should never happen. Warn if this invariant is violated to detect bugs.
         Warning() << "RPA index lastHeight (" << lh << ") not as expected (" << (int(height) - 1) << ")."
-                  << " Flagging DB as needing a full check at next app startup.";
+                  << " Flagging DB as needing a full check.";
         setRpaNeedsFullCheck(true); // flag the RPA db for a full check on next run
     }
     if (const int fh = p->rpaInfo.firstHeight; UNLIKELY(fh > -1 && fh > int(height))) {
         // This should never happen. Warn if this invariant is violated to detect bugs.
         Warning() << "RPA index firstHeight (" << fh << ") not as expected (should be <= " << int(height) << ")."
-                  << " Flagging DB as needing a full check at next app startup.";
+                  << " Flagging DB as needing a full check.";
         p->rpaInfo.firstHeight = height;
         setRpaNeedsFullCheck(true); // flag the RPA db for a full check on next run
     }
@@ -3828,14 +3836,42 @@ void Storage::setRpaNeedsFullCheck(const bool val)
     static const QString errPrefix("Error saving rpa_needs_full_check flag to the meta db");
     const auto & slice = val ? kTrue : kFalse;
     GenericDBPut(p->db.meta.get(), kRpaNeedsFullCheck, slice, errPrefix, p->db.defWriteOpts);
+    p->rpaInfo.rpaNeedsFullCheckCachedVal = int(val);
     DebugM("Wrote rpa_needs_full_check = ", val, " to db");
 }
 
-bool Storage::isRpaNeedsFullCheck()
+bool Storage::isRpaNeedsFullCheck() const
 {
     if (!p->db.meta) return false;
+    const int cachedVal = p->rpaInfo.rpaNeedsFullCheckCachedVal.load();
+    if (cachedVal > -1) return cachedVal;
     static const QString errPrefix("Error reading rpa_needs_full_check flag from the meta db");
-    return GenericDBGet<bool>(p->db.meta.get(), kRpaNeedsFullCheck, true, errPrefix, false, p->db.defReadOpts).value_or(false);
+    const int dbVal = /* 0 or 1 */ GenericDBGet<bool>(p->db.meta.get(), kRpaNeedsFullCheck, true, errPrefix, false,
+                                                      p->db.defReadOpts).value_or(false);
+    p->rpaInfo.rpaNeedsFullCheckCachedVal = dbVal;
+    return dbVal;
+}
+
+// public version of above, always latches to true
+void Storage::flagRpaIndexAsPotentiallyInconsistent()
+{
+    ExclusiveLockGuard g(p->blocksLock);
+    setRpaNeedsFullCheck(true);
+}
+
+bool Storage::runRpaSlowCheckIfDBIsPotentiallyInconsistent(BlockHeight configuredStartHeight, BlockHeight tipHeight)
+{
+    ExclusiveLockGuard g(p->blocksLock);
+    if (isRpaNeedsFullCheck()) {
+        try {
+            // To avoid infinite consistency-check-loops if there is a gap at the beginning before our configured height
+            // we must clamp the DB to the height range we know we need now, before proceeding.
+            clampRpaEntries_nolock(configuredStartHeight, tipHeight);
+            loadCheckRpaDB();
+        } catch (const std::exception &e) { Fatal() << "Caught exception: " << e.what(); }
+        return true;
+    }
+    return false;
 }
 
 
