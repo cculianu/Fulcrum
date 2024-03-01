@@ -205,7 +205,7 @@ namespace {
         explicit RpaDBKey(uint32_t h) : height(h) {}
 
         QByteArray toBytes() const {
-            const uint32_t bigEndian = bitcoin::htobe32(height); // swap to big endian
+            const uint32_t bigEndian = htobe32(height); // swap to big endian
             return QByteArray(reinterpret_cast<const char *>(&bigEndian), sizeof(bigEndian));
         }
 
@@ -217,7 +217,7 @@ namespace {
             }
             uint32_t bigEndian;
             std::memcpy(&bigEndian, ba.constData(), sizeof(uint32_t));
-            k.height = bitcoin::be32toh(bigEndian); // swap to host order
+            k.height = be32toh(bigEndian); // swap to host order
             if (ok) *ok = true;
             return k;
         }

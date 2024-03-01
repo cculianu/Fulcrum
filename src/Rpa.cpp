@@ -60,7 +60,7 @@ Prefix::Prefix(const Hash & h) {
     for ( ; i < PrefixBytes; ++i)
         bytes[i] = 0u; // fill rest with 0's
     std::memcpy(&n, bytes.data(), PrefixBytes);
-    n = bitcoin::be16toh(n); // swab to host byte order from big endian
+    n = be16toh(n); // swab to host byte order from big endian
 }
 
 auto Prefix::range() const -> Range {

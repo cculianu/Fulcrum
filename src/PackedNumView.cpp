@@ -122,8 +122,8 @@ void doTest(Span<Int> srcInts) {
         ByteView vbe = pnvbe.viewForElement(i), vle = pnv.viewForElement(i);
         std::memcpy(&le, vle.data(), vle.size());
         std::memcpy(reinterpret_cast<char *>(&be) + (sizeof(uint64_t) - vbe.size()), vbe.data(), vbe.size());
-        CHK(bitcoin::le64toh(le) == v);
-        CHK(bitcoin::be64toh(be) == v);
+        CHK(le64toh(le) == v);
+        CHK(be64toh(be) == v);
     }
     CHK(pnv.begin() + pnv.size() == pnv.end());
     // ensure big endian and little endian look different at the low-level

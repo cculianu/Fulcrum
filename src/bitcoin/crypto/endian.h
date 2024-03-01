@@ -18,7 +18,6 @@
 #include <sys/endian.h>
 #endif
 
-namespace bitcoin {
 #if defined(WORDS_BIGENDIAN)
 
 #if HAVE_DECL_HTOBE16 == 0
@@ -168,5 +167,3 @@ inline uint64_t le64toh(uint64_t little_endian_64bits) noexcept {
 #endif // HAVE_DECL_LE64TOH
 
 #endif // WORDS_BIGENDIAN
-
-} // namespace bitcoin

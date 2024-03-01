@@ -92,14 +92,14 @@ public:
                       "The code below assumes UInt is either uint32_t or uint64_t.");
         if constexpr (LittleEndian) {
             if constexpr (std::is_same_v<UInt, uint64_t>)
-                ret = bitcoin::le64toh(ret);
+                ret = le64toh(ret);
             else
-                ret = bitcoin::le32toh(ret);
+                ret = le32toh(ret);
         } else {
             if constexpr (std::is_same_v<UInt, uint64_t>)
-                ret = bitcoin::be64toh(ret);
+                ret = be64toh(ret);
             else
-                ret = bitcoin::be32toh(ret);
+                ret = be32toh(ret);
         }
         return ret; // value is now in machine byte order
     }
@@ -128,14 +128,14 @@ public:
                           "The code below assumes UInt is either uint32_t or uint64_t.");
             if constexpr (LittleEndian) { // destination is little endian
                 if constexpr (std::is_same_v<UInt, uint64_t>)
-                    packed = bitcoin::htole64(packed);
+                    packed = htole64(packed);
                 else
-                    packed = bitcoin::htole32(packed);
+                    packed = htole32(packed);
             } else { // destination is big endian
                 if constexpr (std::is_same_v<UInt, uint64_t>)
-                    packed = bitcoin::htobe64(packed);
+                    packed = htobe64(packed);
                 else
-                    packed = bitcoin::htobe32(packed);
+                    packed = htobe32(packed);
                 // if destination data is big endian, we maybe need to offset where we read from to omit truncated
                 // high-order bytes
                 if constexpr (bytesPerElement < sizeof(UInt))
