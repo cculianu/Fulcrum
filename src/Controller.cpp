@@ -1003,8 +1003,6 @@ bool Controller::checkRpaIndexNeedsSync(int tipHeight)
             connect(t, &CtlTask::errored, this, [this, errct] {
                 if ((*errct)++) return; // guard to ensure we do this only once if any tasks fail
                 storage->flagRpaIndexAsPotentiallyInconsistent();
-                if (LIKELY(sm)) sm->state = StateMachine::State::Retry;
-                AGAIN();
             });
         }
         // advance state now. we will be called back by download task in on_putRpaIndex()
