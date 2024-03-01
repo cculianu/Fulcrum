@@ -4186,8 +4186,8 @@ auto Storage::getRpaHistory(const Rpa::Prefix &prefix, bool includeConfirmed, bo
                 tBuildRes += t1.msec<double>();
             }
 
-            // Special behavior: disable mempool append if we didn't reach tipHeight
-            if (includeMempool && height < *tipHeight)
+            // Special behavior: disable mempool append if we didn't reach past tipHeight
+            if (includeMempool && height <= *tipHeight)
                 includeMempool = false;
         }
         if (includeMempool) {
@@ -4835,7 +4835,7 @@ namespace {
     }
 
     template <> Rpa::PrefixTable Deserialize(const QByteArray &ba, bool *ok) {
-        Rpa::PrefixTable ret(ba); // prefixtable hangs-on to this CoW ba
+        Rpa::PrefixTable ret(ba); // Note: PrefixTable does not keep a copy of `ba`, so it's ok if `ba` is a view into a temporary Slice
         if (ok) *ok = true;
         return ret;
     }
