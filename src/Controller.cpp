@@ -1416,7 +1416,8 @@ void Controller::on_putRpaIndex(CtlTask *task, Controller::RpaOnlyModeDataPtr p)
 
 
 void Controller::process_PrintProgress(const QString &verb, unsigned height, size_t nTx, size_t nIns, size_t nOuts,
-                                       size_t nSH, size_t rawBlockSizeBytes, const bool showRateBytes)
+                                       size_t nSH, size_t rawBlockSizeBytes, const bool showRateBytes,
+                                       std::optional<double> pctOverride)
 {
     if (UNLIKELY(!sm)) return; // paranoia
     sm->nProgBlocks++;
@@ -1461,7 +1462,9 @@ void Controller::process_PrintProgress(const QString &verb, unsigned height, siz
         };
         const double now = Util::getTimeSecs();
         const double elapsed = std::max(now - sm->lastProgTs, 0.00001); // ensure no division by zero
-        QString pctDisplay = QString::number((height*1e2) / std::max(std::max(int(sm->endHeight), sm->nHeaders), 1), 'f', 1) + "%";
+        QString pctDisplay = QString::number(pctOverride ? *pctOverride
+                                                         : (height*1e2) / std::max(std::max(int(sm->endHeight), sm->nHeaders), 1),
+                                             'f', 1) + "%";
         const double rateBlocks = sm->nProgBlocks / elapsed;
         const double rateTx = sm->nProgTx / elapsed;
         const double rateSH = sm->nProgSH / elapsed;
@@ -1509,9 +1512,10 @@ void Controller::process_DownloadingBlocks()
                     Fatal() << "Caught exception after call to addRpaDataForHeight: " << e.what();
                     return false;
                 }
-
+                const double pctOverride = std::min(100.0, ((romd->height - sm->startheight + 1u) * 1e2)
+                                                           / std::max(1u, (sm->endHeight - sm->startheight + 1u)));
                 process_PrintProgress(QStringLiteral("RPA indexed"), romd->height, romd->nTxsIndexed, romd->nInsIndexed,
-                                      0u, 0u, romd->rawBlockSizeBytes, true);
+                                      0u, 0u, romd->rawBlockSizeBytes, true, pctOverride);
                 return true;
             },
         }, varDlResult);

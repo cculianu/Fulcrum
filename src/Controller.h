@@ -195,7 +195,7 @@ private:
     void process_DownloadingBlocks();
     bool process_VerifyAndAddBlock(PreProcessedBlockPtr); ///< helper called from within DownloadingBlocks state -- makes sure block is sane and adds it to db
     void process_PrintProgress(const QString &verb, unsigned height, size_t nTx, size_t nIns, size_t nOuts, size_t nSH,
-                               size_t rawBlockSizeBytes, bool showRateBytes);
+                               size_t rawBlockSizeBytes, bool showRateBytes, std::optional<double> pctOverride = std::nullopt);
     void process_DoUndoAndRetry(); ///< internal -- calls storage->undoLatestBlock() and schedules a task death and retry.
     template <typename T>
     void on_putCommon(CtlTask *, const T &, int expectedState, const QString &expectedStateName); ///< internal. Called by on_putBlock and on_PutRpaIndex.
