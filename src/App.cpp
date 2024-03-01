@@ -525,7 +525,7 @@ void App::parseArgs()
     {
         "rpa",
         QString("Explicitly enable the Reusable Payment Address index and offer the associated \"blockchain.rpa.*\" RPC"
-                 " methods to clients. To explicitly disable this facility, use the CLI arg --no-rpa. Default is: %1.\n")
+                " methods to clients. To explicitly disable this facility, use the CLI arg --no-rpa. Default is: %1.\n")
              .arg(options->rpa.enabledSpecToString())
     },
     {
