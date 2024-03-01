@@ -1393,7 +1393,7 @@ void Controller::on_putCommon(CtlTask *task, const T &p, const int expectedState
         DebugM("Ignoring block ", p->height, " for now-defunct task");
         return;
     } else if (sm->state != expectedState) {
-        DebugM("Ignoring putBlocks request for block ", p->height, " -- state is not \"",
+        DebugM("Ignoring put request for block ", p->height, " -- state is not \"",
                expectedStateName, "\" (", int(expectedState), ") but rather is: \"", sm->stateStr(), "\" (", int(sm->state), ")");
         return;
     }
