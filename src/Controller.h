@@ -87,7 +87,7 @@ public:
     struct RpaOnlyModeData {
         BlockHeight height{};
         QByteArray serializedPrefixTable;
-        size_t nTx{}, nTxsIndexed{}, nIns{}, nInsIndexed{}, nOuts{};
+        size_t nTx{}, nTxsIndexed{}, nIns{}, nInsIndexed{}, nOuts{}, rawBlockSizeBytes{};
     };
     using RpaOnlyModeDataPtr = std::shared_ptr<RpaOnlyModeData>;
 
@@ -191,11 +191,14 @@ private:
     std::unordered_map<CtlTask *, std::unique_ptr<CtlTask>, Util::PtrHasher> tasks;
     int nDLBlocksTasks = 0;
 
-    void add_DLBlocksTask(unsigned from, unsigned to, size_t nTasks);
+    void add_DLBlocksTask(unsigned from, unsigned to, size_t nTasks, bool isRpaOnlyMode);
     void process_DownloadingBlocks();
     bool process_VerifyAndAddBlock(PreProcessedBlockPtr); ///< helper called from within DownloadingBlocks state -- makes sure block is sane and adds it to db
-    void process_PrintProgress(unsigned height, size_t nTx, size_t nIns, size_t nOuts, size_t nSH);
+    void process_PrintProgress(const QString &verb, unsigned height, size_t nTx, size_t nIns, size_t nOuts, size_t nSH,
+                               size_t rawBlockSizeBytes, bool showRateBytes);
     void process_DoUndoAndRetry(); ///< internal -- calls storage->undoLatestBlock() and schedules a task death and retry.
+    template <typename T>
+    void on_putCommon(CtlTask *, const T &, int expectedState, const QString &expectedStateName); ///< internal. Called by on_putBlock and on_PutRpaIndex.
 
     size_t nBlocksDownloadedSoFar() const; ///< not 100% accurate. call this only from this thread
     std::tuple<size_t, size_t, size_t> nTxInOutSoFar() const; ///< not 100% accurate. call this only from this thread
@@ -243,6 +246,14 @@ private:
     /// us what coin we are connected to before we proceed with initial synch. Also latched to true if we already have
     /// a "coin" defined in storage already.
     std::atomic_bool didReceiveCoinDetectionFromBitcoinDMgr = false;
+
+    /// Used internally to decide if we need to skip the RPA is sane check or not
+    bool skipRpaSanityCheck = false;
+
+    /// Called by controller in its state machine processing function -- returns false normally, but if true is returned
+    /// then the state machine has already advanced to GetBlocks_RPA and the controller should return early return from
+    /// its current process() invocation.
+    bool checkRpaIndexNeedsSync(int tipHeight);
 
 private slots:
     /// Stops the zmqHashBlockNotifier; called if we received an empty hashblock endpoint address from BitcoinDMgr or

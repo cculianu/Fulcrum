@@ -416,6 +416,13 @@ public:
     /// risk a potentially inconsistent view since it just reads 2 atomic ints separately with no locks held.
     std::optional<HeightRange> getRpaDBHeightRange() const;
 
+    /// Called by Controller as it does its independent RPA synch. Thread-safe (takes blocksLock).
+    void addRpaDataForHeight(BlockHeight height, const QByteArray &serializedRpaPrefixTable);
+
+    /// Called by Controller. Ensures the RPA db doesn't have entries outside the range [from, to]. In other words,
+    /// deletes all entries < from and all entries > to.
+    void clampRpaEntries(BlockHeight from, BlockHeight to);
+
 protected:
     virtual Stats stats() const override; ///< from StatsMixin
 
@@ -465,6 +472,9 @@ protected:
     /// mode, to ensure DB consistency. Deletes any rpa entries >= height. Returns true on success, false on failure.
     bool deleteRpaEntriesFromHeight(BlockHeight height, bool flush = false, bool force = false);
 
+    /// Internally called. Call this with the blocksLock held if in multi-threaded mode, to ensure DB consistency.
+    /// Deletes any rpa entries <= height. Returns true on success, false on failure.
+    bool deleteRpaEntriesToHeight(BlockHeight height, bool flush = false, bool force = false);
 
     /// This is set in addBlock and undoLatestBlock while we do a bunch of updates, then cleared when updates are done,
     /// for each block. Thread-safe, may throw.
