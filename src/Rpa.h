@@ -185,14 +185,14 @@ public:
     using ValueType = TxIdx;
     using VecType = VecTxIdx;
 
-    PrefixTable() : var(std::in_place_type<ReadWrite>) {}
+    PrefixTable() : var(ReadWrite{} /* Would use std::in_place_type here but older GCC fails to compile */) {}
 
     // Construct from serialized data, turns this class into a read-only "view" into the data
     explicit PrefixTable(const QByteArray &serData);
 
     static constexpr size_t numRows() { return 0x1u << PrefixBits; }
 
-    void clear() { var.emplace<ReadWrite>(); }
+    void clear() { var = ReadWrite{}; /* Would use var.emplace here but older GCC bugs out if we do that */ }
 
     bool isReadOnly() const { return std::holds_alternative<ReadOnly>(var); }
     bool isReadWrite() const { return std::holds_alternative<ReadWrite>(var); }

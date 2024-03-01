@@ -2824,7 +2824,7 @@ void Storage::loadCheckRpaDB()
                         throw UserInterrupted("User interrupted, aborting check");
                 } else {
                     throw DatabaseFormatError(QString("Encountered a key in the RPA db that is not exactly %1 bytes! Hex for key: %2")
-                                              .arg(sizeof(uint32_t)).arg(FromSlice(k).toHex()));
+                                              .arg(sizeof(uint32_t)).arg(QString(FromSlice(k).toHex())));
                 }
             }
             Debug () << "RPA db has " << ctr << " entries, " << p->rpaInfo.nBytesRead << " bytes; deserialized ok";
@@ -4054,7 +4054,7 @@ auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf, BlockHeigh
     History ret;
     if (hashX.length() != HashLen)
         return ret;
-    auto IncrementCtrAndThrowIfExceedsMaxHistory = GetMaxHistoryCtrFunc("History", QString("scripthash %1").arg(hashX.toHex()),
+    auto IncrementCtrAndThrowIfExceedsMaxHistory = GetMaxHistoryCtrFunc("History", QString("scripthash %1").arg(QString(hashX.toHex())),
                                                                         options->maxHistory);
     try {
         SharedLockGuard g(p->blocksLock);  // makes sure history doesn't mutate from underneath our feet
@@ -4103,7 +4103,7 @@ auto Storage::getRpaHistory(const Rpa::Prefix &prefix, bool includeConfirmed, bo
                             BlockHeight fromHeight, std::optional<BlockHeight> toHeight) const-> History
 {
     History ret;
-    auto IncrementCtrAndThrowIfExceedsMaxHistory = GetMaxHistoryCtrFunc("RPA History", QString("prefix '%1'").arg(prefix.toHex()),
+    auto IncrementCtrAndThrowIfExceedsMaxHistory = GetMaxHistoryCtrFunc("RPA History", QString("prefix '%1'").arg(QString(prefix.toHex())),
                                                                         options->rpa.maxHistory);
     double tReadDb = 0., tPfxSearch = 0., tResolveTxIdx = 0., tWaitForLock = 0., tBuildRes = 0.;
 
@@ -4263,7 +4263,7 @@ auto Storage::listUnspent(const HashX & hashX, const TokenFilterOption tokenFilt
     try {
         auto ShouldFilter = [tokenFilter](const bitcoin::token::OutputDataPtr & p) { return ShouldTokenFilter(tokenFilter, p); };
         auto IncrementCtrAndThrowIfExceedsMaxHistory = GetMaxHistoryCtrFunc("Unspent UTXOs",
-                                                                            QString("scripthash %1").arg(hashX.toHex()),
+                                                                            QString("scripthash %1").arg(QString(hashX.toHex())),
                                                                             options->maxHistory);
         constexpr size_t iota = 10; // we initially reserve this many items in the returned array in order to prevent redundant allocations in the common case.
         std::unordered_set<TXO> mempoolConfirmedSpends;
@@ -4392,7 +4392,7 @@ auto Storage::getBalance(const HashX &hashX, TokenFilterOption tokenFilter) cons
         return ret;
     auto ShouldFilter = [tokenFilter](const bitcoin::token::OutputDataPtr & p) { return ShouldTokenFilter(tokenFilter, p); };
     auto IncrementCtrAndThrowIfExceedsMaxHistory = GetMaxHistoryCtrFunc("GetBalance UTXOs",
-                                                                        QString("scripthash %1").arg(hashX.toHex()),
+                                                                        QString("scripthash %1").arg(QString(hashX.toHex())),
                                                                         options->maxHistory);
     try {
         // take shared lock (ensure history doesn't mutate from underneath our feet)
