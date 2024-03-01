@@ -610,6 +610,7 @@ namespace RPC {
     protected:
         void on_readyRead() override;
         QByteArray wrapForSend(QByteArray &&) override;
+        void on_disconnected() override;
 
     private:
         /// These end up verbatim in the HTTP/1.1 POST header.

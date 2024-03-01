@@ -862,6 +862,11 @@ namespace RPC {
         qint64 largeContentT0 = 0;
         void clear() { *this = StateMachine(); }
     };
+    void HttpConnection::on_disconnected()
+    {
+        ConnectionBase::on_disconnected(); // chain to super
+        sm.reset(); // ensure statemachine is dead to prevent potential bugs we saw with bitcoind's going out to lunch due to wrong SM state after reconnect!
+    }
     void HttpConnection::on_readyRead()
     {
         if (!sm)
