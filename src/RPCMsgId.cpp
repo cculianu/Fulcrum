@@ -170,7 +170,11 @@ namespace {
         CHK(RPCMsgId::fromVariant(2.0000000000000001) == RPCMsgId{2}); // impl. quirk: if the fractional part is too small, we map to integer :/
         CHK(RPCMsgId::fromVariant("2.0000000000000001") != RPCMsgId{2});
         CHK(RPCMsgId::fromVariant("2.0000000000000001").toString() ==  "2.0000000000000001");
-        const auto metaTypeForInt64 = Compat::GetVarType(QVariant(int64_t{})); // this varies depending on platform, not always LongLong
+        const auto metaTypeForInt64 = []{
+            QVariant v;
+            v.setValue(int64_t{});
+            return Compat::GetVarType(v); // this varies depending on platform, not always LongLong
+        }();
         CHK(metaTypeForInt64 == QMetaType::Long || metaTypeForInt64 == QMetaType::LongLong);
         CHK(Compat::GetVarType(r.toVariant()) == metaTypeForInt64);
         CHK(Compat::GetVarType(RPCMsgId::fromVariant("123").toVariant()) == QMetaType::QString);
