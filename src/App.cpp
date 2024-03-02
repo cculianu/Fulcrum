@@ -1433,17 +1433,17 @@ void App::parseArgs()
         }
     }
 
-    // conf: rpa_history_blocks_limit
-    if (const auto b1 = conf.hasValue("rpa_history_blocks_limit"), b2 = conf.hasValue("rpa_history_block_limit"); b1 || b2) {
-        // support either: "rpa_history_blocks_limit" or "rpa_history_block_limit", but not both
-        if (b1 && b2) throw BadArgs("Both `rpa_history_blocks_limit` and `rpa_history_block_limit` were found in the config file; this looks like a typo.");
-        const QString confKey(b1 ? "rpa_history_blocks_limit" : "rpa_history_block_limit");
+    // conf: rpa_history_block_limit / rpa_history_blocks
+    if (const bool b1 = conf.hasValue("rpa_history_blocks"), b2 = conf.hasValue("rpa_history_block_limit"); b1 || b2) {
+        // support either: "rpa_history_block_limit" or "rpa_history_blocks", but not both
+        if (b1 && b2) throw BadArgs("Both `rpa_history_blocks` and `rpa_history_block_limit` were found in the config file; this looks like a typo.");
+        const QString confKey(b1 ? "rpa_history_blocks" : "rpa_history_block_limit");
         bool ok;
         const int limit = conf.intValue(confKey, -1, &ok);
-        if (!ok || limit < 0 || unsigned(limit) < options->rpa.historyBlocksLimitMin || unsigned(limit) > options->rpa.historyBlocksLimitMax)
+        if (!ok || limit < 0 || unsigned(limit) < options->rpa.historyBlockLimitMin || unsigned(limit) > options->rpa.historyBlockLimitMax)
             throw BadArgs(QString("%1: bad value. Specify a value in the range [%2, %3]")
-                              .arg(confKey).arg(options->rpa.historyBlocksLimitMin).arg(options->rpa.historyBlocksLimitMax));
-        options->rpa.historyBlocksLimit = unsigned(limit);
+                              .arg(confKey).arg(options->rpa.historyBlockLimitMin).arg(options->rpa.historyBlockLimitMax));
+        options->rpa.historyBlockLimit = unsigned(limit);
         // log this later in case we are in syslog mode
         Util::AsyncOnObject(this, [limit, confKey]{ Debug() << "config: " << confKey << " = " << limit; });
     }

@@ -730,7 +730,7 @@ VarDLTaskResult DownloadBlocksTask_SynchRpa::process_block_guts(unsigned bnum, c
     Controller::RpaOnlyModeDataPtr ret = std::make_shared<Controller::RpaOnlyModeData>();
     ret->height = bnum;
     ret->rawBlockSizeBytes = rawblock.size();
-    const auto & vtxSize = ret->nTx = cblock.vtx.size();
+    const auto vtxSize = ret->nTx = cblock.vtx.size();
     Rpa::PrefixTable pt;
     for (size_t txIdx = 1 /* skip coinbase txn */; txIdx < vtxSize; ++txIdx) {
         const auto & tx = *cblock.vtx[txIdx];

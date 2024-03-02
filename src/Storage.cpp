@@ -4145,7 +4145,7 @@ auto Storage::getRpaHistory(const Rpa::Prefix &prefix, bool includeConfirmed, bo
             if (UNLIKELY(!iter)) throw DatabaseError("Unable to obtain an iterator to the rpa db");
 
             BlockHeight height = fromHeight;
-            size_t blockScansRemaining = std::max(options->rpa.historyBlocksLimit, 1u); // use configured limit (default: 60)
+            size_t blockScansRemaining = std::max(options->rpa.historyBlockLimit, 1u); // use configured limit (default: 60)
             for ( /* */; blockScansRemaining && height <= *toHeight; ++height, --blockScansRemaining) {
                 Tic t1;
                 const RpaDBKey dbKey(height);

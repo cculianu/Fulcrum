@@ -299,9 +299,9 @@ public:
         // the user said for max_history at app init (see: App.cpp).
         int maxHistory = defaultMaxHistory;
 
-        // config: rpa_history_blocks_limit - Limit number of blocks to scan at once for blockchain.rpa.get_history
-        static constexpr unsigned defaultHistoryBlocksLimit = 60, historyBlocksLimitMin = 1, historyBlocksLimitMax = 2016;
-        unsigned historyBlocksLimit = defaultHistoryBlocksLimit;
+        // config: rpa_history_block_limit (aka: rpa_history_blocks) - Limit number of blocks to scan at once for blockchain.rpa.get_history
+        static constexpr unsigned defaultHistoryBlockLimit = 60, historyBlockLimitMin = 1, historyBlockLimitMax = 2016;
+        unsigned historyBlockLimit = defaultHistoryBlockLimit;
 
         // config: rpa_prefix_bits_min - Minimum number of prefix bits for a blockchain.rpa.* query (DoS protection measure)
         static constexpr int defaultPrefixBitsMin = 8;

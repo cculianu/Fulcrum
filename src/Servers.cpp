@@ -1088,7 +1088,7 @@ QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const Q
             {"prefix_bits_min", std::max(int(Rpa::PrefixBitsMin), opts.rpa.prefixBitsMin)},
             {"prefix_bits", unsigned(Rpa::PrefixBits)},
             {"starting_height", rpaStartingHeight},
-            {"history_blocks_limit", opts.rpa.historyBlocksLimit},
+            {"history_block_limit", opts.rpa.historyBlockLimit},
             {"max_history", opts.rpa.maxHistory}
         };
 
