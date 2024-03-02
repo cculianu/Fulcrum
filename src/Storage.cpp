@@ -4100,7 +4100,7 @@ auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf, BlockHeigh
 }
 
 auto Storage::getRpaHistory(const Rpa::Prefix &prefix, bool includeConfirmed, bool includeMempool,
-                            BlockHeight fromHeight, std::optional<BlockHeight> toHeight) const-> History
+                            BlockHeight fromHeight, std::optional<BlockHeight> endHeight) const-> History
 {
     History ret;
     auto IncrementCtrAndThrowIfExceedsMaxHistory = GetMaxHistoryCtrFunc("RPA History", QString("prefix '%1'").arg(QString(prefix.toHex())),
@@ -4133,9 +4133,9 @@ auto Storage::getRpaHistory(const Rpa::Prefix &prefix, bool includeConfirmed, bo
 
     try {
         if (includeConfirmed) {
-            // sanitize `fromHeight` and `toHeight`; restrict to range: [rpaStartHeight, tipHeight]
+            // sanitize `fromHeight` and `endHeight`; restrict to range: [rpaStartHeight, tipHeight + 1)
             fromHeight = std::max<unsigned>(rpaStartHeight, fromHeight); // restrict `from` to be >= configured height
-            toHeight = std::min(toHeight.value_or(*tipHeight), *tipHeight); // define and restrict `to` to be <= tip height
+            endHeight = std::min(endHeight.value_or(*tipHeight + 1u), *tipHeight + 1u); // define and restrict `end` to be <= tip height + 1
 
             // We use an iterator and seek forward each time because this is far faster since our table rows are in order
             // of height (serialized as big endian). Note that the assumption here is that the rpa table contains
@@ -4146,7 +4146,7 @@ auto Storage::getRpaHistory(const Rpa::Prefix &prefix, bool includeConfirmed, bo
 
             BlockHeight height = fromHeight;
             size_t blockScansRemaining = std::max(options->rpa.historyBlockLimit, 1u); // use configured limit (default: 60)
-            for ( /* */; blockScansRemaining && height <= *toHeight; ++height, --blockScansRemaining) {
+            for ( /* */; blockScansRemaining && height < *endHeight; ++height, --blockScansRemaining) {
                 Tic t1;
                 const RpaDBKey dbKey(height);
                 if (height == fromHeight)

@@ -2328,6 +2328,12 @@ void Server::rpc_blockchain_rpa_get_history(Client *c, const RPC::BatchId batchI
     const auto prefix = parseRpaPrefixParamCommon(l[0].toString());
     // parse and validate arg1 & arg2: from_height (required) to_height (optional)
     const auto fromTo = parseFromToBlockHeightCommon(m);
+    if (fromTo.second.has_value() && *fromTo.second <= fromTo.first) {
+        // Special case: Results are guaranteed to be empty because to <= from
+        emit c->sendResult(batchId, m.id, QVariantList{});
+        return;
+    }
+    // process to service the request async
     generic_do_async(c, batchId, m.id, [this, prefix, fromTo] {
         return getRpaHistoryCommon(prefix, false, fromTo);
     });
@@ -2350,15 +2356,7 @@ void Server::rpc_blockchain_reusable_get_history(Client *c, RPC::BatchId batchId
     if (ok && from >= 0) {
         int count = l[2].toInt(&ok);
         if (ok && count >= 0) {
-            if (count == 0) {
-                // Special case, they asked for a 0 count. Just return an empty list. Must do this here to prevent
-                // arithmetic overflow nonsense in the expression below that translatest (from, count) -> (from, to).
-                // We could throw an error for 0 here, but the existing Electrum Protocol API accepts 0 count in other
-                // methods such as blockchain.block.headers, so we should make this method's API congruent with existing.
-                emit c->sendResult(batchId, m.id, QVariantList{});
-                return;
-            }
-            const unsigned to = unsigned(from) + unsigned(count) - 1u;
+            const unsigned to = unsigned(from) + unsigned(count);
             l.replace(2, to);
         } else {
             throw RPCError("Bad count argument", RPC::Code_InvalidParams);

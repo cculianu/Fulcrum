@@ -245,9 +245,9 @@ public:
     History getHistory(const HashX &, bool includeConfirmed, bool includeMempool, BlockHeight fromHeight = 0,
                        std::optional<BlockHeight> optToHeight = std::nullopt) const;
 
-    /// Thread-safe. Will return a truncated vector if the history size exceeds rpa_max_history.
+    /// Thread-safe. Will return a truncated vector if the history size exceeds rpa_max_history. Range is [from, end)
     History getRpaHistory(const Rpa::Prefix &prefix, bool includeConfirmed, bool includeMempool,
-                          BlockHeight fromHeight = 0, std::optional<BlockHeight> toHeight = std::nullopt) const;
+                          BlockHeight fromHeight = 0, std::optional<BlockHeight> endHeight = std::nullopt) const;
 
     struct UnspentItem : HistoryItem {
         IONum tx_pos = 0;
