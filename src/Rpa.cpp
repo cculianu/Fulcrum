@@ -319,7 +319,7 @@ PrefixTable::PrefixTable(const QByteArray &compressedSerializedData) : var(std::
                 throw std::ios_base::failure("PrefixTable: Bad toc entry, out of range");
         }
     }
-    // Note: we don't read the rest of the data, instead ensureRow() must be called before accessing a row to
+    // Note: we don't read the rest of the data, instead lazyLoadRow() must be called before accessing a row to
     // lazy-read the prefix table data on-demand.
 }
 
