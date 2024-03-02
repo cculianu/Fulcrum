@@ -2176,7 +2176,7 @@ auto Storage::stats() const -> Stats
             rm["nDeletions"] = qulonglong(p->rpaInfo.nDeletions.load(std::memory_order_relaxed));
             rm["nBytesRead"] = qulonglong(p->rpaInfo.nBytesRead.load(std::memory_order_relaxed));
             rm["nBytesWritten"] = qulonglong(p->rpaInfo.nBytesWritten.load(std::memory_order_relaxed));
-            rm["rpaNeedsFullCheck"] = p->rpaInfo.rpaNeedsFullCheckCachedVal.load(std::memory_order_relaxed);
+            rm["needsFullCheck"] = p->rpaInfo.rpaNeedsFullCheckCachedVal.load(std::memory_order_relaxed);
             ret["RPA Index Info"] = rm;
         }
     }
