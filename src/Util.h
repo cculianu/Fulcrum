@@ -38,6 +38,7 @@
 #include <shared_mutex>
 #include <set>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -577,6 +578,10 @@ namespace Util {
         }
         return ret;
     }
+
+    /// Returns a pair of {sizeScaled, unitString} where for instance if `bytes` is 1024, `sizeScaled` will be 1.024 and
+    /// `unitString` will be "KB" (note use of KB = 1e3 not KiB = 2^10).
+    std::pair<double, QString> ScaleBytes(uint64_t bytes, std::string_view baseByteUnitLabel = "bytes" /* "B", etc */);
 
     /// -- Fast Hex Parser --
     /// Much faster than either bitcoin-abc's or Qt's hex parsers, especially if checkDigits=false.

@@ -63,6 +63,7 @@
 #include <iostream>
 #include <mutex>
 #include <thread>
+#include <utility>
 
 namespace Util {
     QString basename(const QString &s) {
@@ -536,6 +537,18 @@ namespace Util {
         if (hostStr.isEmpty())
             throw BadArgs(msg1);
         return {hostStr, parsePort(portStr)};
+    }
+
+    std::pair<double, QString> ScaleBytes(uint64_t bytes, std::string_view baseByteUnitLabel)
+    {
+        double dataSize = bytes;
+        if (dataSize > 1e3) { baseByteUnitLabel = "KB"; dataSize /= 1e3; }
+        if (dataSize > 1e3) { baseByteUnitLabel = "MB"; dataSize /= 1e3; }
+        if (dataSize > 1e3) { baseByteUnitLabel = "GB"; dataSize /= 1e3; }
+        if (dataSize > 1e3) { baseByteUnitLabel = "TB"; dataSize /= 1e3; }
+        if (dataSize > 1e3) { baseByteUnitLabel = "PB"; dataSize /= 1e3; }
+        if (dataSize > 1e3) { baseByteUnitLabel = "EB"; dataSize /= 1e3; }
+        return {dataSize, QString::fromUtf8(baseByteUnitLabel.data(), baseByteUnitLabel.size())};
     }
 
 } // end namespace Util

@@ -41,6 +41,7 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <tuple>
 #include <unordered_set>
 
 
@@ -1219,11 +1220,7 @@ void Controller::process(bool beSilentIfUpToDate)
     } else if (sm->state == State::FinishedDL || sm->state == State::FinishedDL_RPA) {
         size_t N = sm->endHeight - sm->startheight + 1;
         if (sm->state == State::FinishedDL_RPA) {
-            double dataSize = sm->nBytes;
-            QString dataUnit = "bytes";
-            if (dataSize > 1e3) { dataUnit = "KB"; dataSize /= 1e3; }
-            if (dataSize > 1e3) { dataUnit = "MB"; dataSize /= 1e3; }
-            if (dataSize > 1e3) { dataUnit = "GB"; dataSize /= 1e3; }
+            const auto & [dataSize, dataUnit] = Util::ScaleBytes(sm->nBytes, "bytes");
             Log() << "Synched RPA index for " << N << " existing " << Util::Pluralize("block", N)
                   << ", " << QString::number(dataSize, 'f', 1) << " " << dataUnit << " downloaded"
                   << ", hashed " << sm->nIns << " " << Util::Pluralize("input", sm->nIns) << " in " << sm->nTx << " "
@@ -1431,21 +1428,11 @@ void Controller::process_PrintProgress(const QString &verb, unsigned height, siz
     sm->nProgSH += nSH;
     sm->nProgBytes += rawBlockSizeBytes;
     if (UNLIKELY(height && !(height % sm->progressIntervalBlocks))) {
+        static const QString bytesUnitString = QStringLiteral("B");
         static const auto formatRate = [](double rate, QString thing, bool addComma = true) {
             QString unit = QStringLiteral("sec");
-            if (thing == "B") { // special case for B, KB, MB, etc
-                if (rate >= 1e3) {
-                    thing = "KB";
-                    rate /= 1e3;
-                }
-                if (rate >= 1e3) {
-                    thing = "MB";
-                    rate /= 1e3;
-                }
-                if (rate >= 1e3) {
-                    thing = "GB";
-                    rate /= 1e3;
-                }
+            if (thing == bytesUnitString) { // special case for B, KB, MB, etc
+                std::tie(rate, thing) = Util::ScaleBytes(rate, bytesUnitString.toStdString());
             }
             if (rate < 1.0 && rate > 0.0) {
                 rate *= 60.0;
@@ -1470,7 +1457,7 @@ void Controller::process_PrintProgress(const QString &verb, unsigned height, siz
         Log() << verb << " height: " << height << ", " << pctDisplay << formatRate(rateBlocks, QStringLiteral("blocks"))
               << formatRate(rateTx, QStringLiteral("txs"))
               << formatRate(rateSH, QStringLiteral("addrs"))
-              << (showRateBytes ? formatRate(rateBytes, QStringLiteral("B")) : QString{});
+              << (showRateBytes ? formatRate(rateBytes, bytesUnitString) : QString{});
         // update/reset ts and counters
         sm->lastProgTs = now;
         sm->nProgBytes = sm->nProgBlocks = sm->nProgTx = sm->nProgIOs = sm->nProgSH = 0;
