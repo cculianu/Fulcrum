@@ -420,8 +420,6 @@ private:
     void rpc_blockchain_rpa_get_history(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     void rpc_blockchain_reusable_get_history(Client *, RPC::BatchId, const RPC::Message &); // fully implemented (alias for above, reorders the args)
     void rpc_blockchain_rpa_get_mempool(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
-    void rpc_blockchain_rpa_subscribe(Client *, RPC::BatchId, const RPC::Message &); // unimplemented
-    void rpc_blockchain_rpa_unsubscribe(Client *, RPC::BatchId, const RPC::Message &); // unimplemented
 
     // transaction.dsproof
     void rpc_blockchain_transaction_dsproof_get(Client *, RPC::BatchId, const RPC::Message &); // fully implemented

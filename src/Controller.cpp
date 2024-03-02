@@ -1746,12 +1746,6 @@ auto Controller::stats() const -> Stats
     // grab simdjson stats, if any
     st["simdjson"] = App::simdJsonStats();
 
-    // RPA - TODO: put some more RPA-specific stats here (index size? counts? etc?)
-    QVariantMap rpa;
-    rpa["enabled"] = storage->isRpaEnabled();
-    rpa["indexing from height"] = storage->getConfiguredRpaStartHeight();
-    st["RPA"] = rpa;
-
     return st;
 }
 

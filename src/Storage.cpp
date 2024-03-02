@@ -1874,7 +1874,7 @@ void Storage::startup()
             { "scripthash_unspent", p->db.shunspent, opts, 0.25 },
             { "undo", p->db.undo, opts, 0.0395 },
             { "txhash2txnum", p->db.txhash2txnum, txhash2txnumOpts, 0.1 },
-            // TODO: if on BTC or rpa disabled, give the rpa db's 0.04 back to scripthash_unspent and utxoset!!
+            // Future work: if on BTC or rpa disabled, give the rpa db's 0.04 back to scripthash_unspent and utxoset!!
             { "rpa", p->db.rpa, opts, 0.04 }, // this index appears to be < 1/2 the txhash2txnum one on average, so we give it less than half that mem ratio
         };
         std::size_t memTotal = 0;

@@ -621,7 +621,8 @@ RocksDB: "rpa"
   Purpose: store tx indices referenced by prefix in the Rpa::PrefixTable structure for allowing for reusable address queries
   Key: height
   Value: A single serialized Rpa::PrefixTable for this block height.
-  Comments: TODO document better
+  Comments: The Rpa::PrefixTable stores 24-bit txIdx values in a table containing 65536 (possibly empty) rows for
+    supporting up to 16-bit integer prefixes. See Rpa.h.
 
 A note about ACID: (atomic, consistent, isolated, durable)
 
