@@ -1,6 +1,6 @@
 //
 // Fulcrum - A fast & nimble SPV Server for Bitcoin Cash
-// Copyright (C) 2019-2023 Calin A. Culianu <calin.culianu@gmail.com>
+// Copyright (C) 2019-2024 Calin A. Culianu <calin.culianu@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -18,10 +18,7 @@
 //
 #pragma once
 
-#include "BTC.h"
 #include "BlockProcTypes.h"
-#include "Common.h"
-#include "TXO.h"
 
 #include "bitcoin/amount.h"
 #include "bitcoin/block.h"
@@ -114,6 +111,9 @@ struct PreProcessedBlock
 
     unsigned nOpReturns = 0; ///< just keep a count of the number of opreturn outputs encountered in the block (used by sanity checkers)
 
+    /// RPA support: the RPA prefix table, serialized; this is only valid if rpa is enabled otherwise is a no-op
+    std::optional<QByteArray> serializedRpaPrefixTable;
+
     // -- Methods:
 
     // misc helpers --
@@ -161,16 +161,19 @@ struct PreProcessedBlock
 
     // -- Methods:
 
-    // c'tors, etc... note this class is trivially copyable, move constructible, etc etc
+    // c'tors, etc... note this class is fully copyable and moveable
     PreProcessedBlock() = default;
-    PreProcessedBlock(BlockHeight bheight, size_t rawBlockSizeBytes, const bitcoin::CBlock &b) { fill(bheight, rawBlockSizeBytes, b); }
+    PreProcessedBlock(BlockHeight bheight, size_t rawBlockSizeBytes, const bitcoin::CBlock &b, bool enableRpaIndexing) {
+        fill(bheight, rawBlockSizeBytes, b, enableRpaIndexing);
+    }
     /// reset this to empty
     inline void clear() { *this = PreProcessedBlock(); }
     /// fill this block with data from bitcoin's CBlock
-    void fill(BlockHeight blockHeight, size_t rawSizeBytes, const bitcoin::CBlock &b);
+    void fill(BlockHeight blockHeight, size_t rawSizeBytes, const bitcoin::CBlock &b, bool enableRpaIndexing);
 
     /// convenience factory static method: given a block, return a shard_ptr instance of this struct
-    static PreProcessedBlockPtr makeShared(unsigned height, size_t sizeBytes, const bitcoin::CBlock &block);
+    static PreProcessedBlockPtr makeShared(unsigned height, size_t sizeBytes, const bitcoin::CBlock &block,
+                                           bool enableRpaIndexing);
 
     /// debug string
     QString toDebugString() const;

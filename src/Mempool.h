@@ -21,9 +21,11 @@
 #include "BlockProcTypes.h"
 #include "Common.h"
 #include "DSProof.h"
+#include "Rpa.h"
 #include "TXO.h"
 
 #include "bitcoin/amount.h"
+#include "bitcoin/heapoptional.h"
 
 #include <QVariantMap>
 
@@ -86,6 +88,8 @@ struct Mempool
         /// save space vs. robin_hood for immutable maps (which this is, once built)
         std::unordered_map<HashX, IOInfo, HashHasher> hashXs;
 
+        using RpaPrefixSet = std::unordered_set<Rpa::Prefix, Rpa::Prefix::Hasher>;
+        bitcoin::HeapOptional<RpaPrefixSet> optRpaPrefixSet;
 
         bool operator<(const Tx &o) const noexcept {
             // paranoia -- bools may sometimes not always be 1 or 0 in pathological circumstances.
@@ -128,6 +132,7 @@ struct Mempool
     // -- Data members of struct Mempool --
     TxMap txs;
     HashXTxMap hashXTxs;
+    std::optional<Rpa::MempoolPrefixTable> optPrefixTable; ///< only has_value() if RPA is enabled. For mempool RPA queries.
     DSPs dsps;
 
 
@@ -147,6 +152,7 @@ struct Mempool
         std::size_t oldSize = 0, newSize = 0;
         std::size_t oldNumAddresses = 0, newNumAddresses = 0;
         std::size_t dspRmCt = 0, dspTxRmCt = 0; // dsp stats: number of dsproofs removed, number of dsp <-> tx links removed (dropTxs, confirmedInBlock updates these)
+        std::size_t rpaRmCt = 0; ///< the number of tx <-> rpa prefix associations removed
         TxHashSet dspTxsAffected; // populated by addNewTxs(), dropTxs(), & confirmedInBlock() -- used ultimately bu DSProofSubsMgr to notify linked txs.
         double elapsedMsec = 0.;
     };
@@ -262,6 +268,9 @@ private:
 
     /// Internal: called by dump()
     static QVariantMap dumpTx(const TxRef &tx);
+
+    /// Internal to do RPA book-keeping for a tx removal, called by confirmedInBlock() and dropTxs()
+    size_t rmTxRpaAssociations(const TxRef &tx);
 
 #ifdef ENABLE_TESTS
 public:

@@ -25,11 +25,13 @@
 #include "Compat.h"
 #include "Merkle.h"
 #include "PeerMgr.h"
+#include "Rpa.h"
 #include "ServerMisc.h"
 #include "SrvMgr.h"
 #include "Storage.h"
 #include "SubsMgr.h"
 #include "ThreadPool.h"
+#include "Util.h"
 #include "WebSocket.h"
 
 #include <QByteArray>
@@ -51,6 +53,7 @@
 #include <limits>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <shared_mutex>
 #include <type_traits>
 #include <utility>
@@ -1062,7 +1065,7 @@ void Server::rpc_server_donation_address(Client *c, const RPC::BatchId batchId, 
     emit c->sendResult(batchId, m.id, transformDefaultDonationAddressToBTCOrBCHOrLTC(*options, isNonBCH(), isLTC()));
 }
 /* static */
-QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const QByteArray &genesisHash, const Options &opts, bool dsproof, bool hasCashTokens)
+QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const QByteArray &genesisHash, const Options &opts, bool dsproof, bool hasCashTokens, int rpaStartingHeight)
 {
     QVariantMap r;
     if (!c) {
@@ -1079,6 +1082,15 @@ QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const Q
     r["dsproof"] = dsproof;
     if (hasCashTokens)
         r["cashtokens"] = true;
+
+    if (rpaStartingHeight > -1)
+        r["rpa"] = QVariantMap{
+            {"prefix_bits_min", std::max(int(Rpa::PrefixBitsMin), opts.rpa.prefixBitsMin)},
+            {"prefix_bits", unsigned(Rpa::PrefixBits)},
+            {"starting_height", rpaStartingHeight},
+            {"history_block_limit", opts.rpa.historyBlockLimit},
+            {"max_history", opts.rpa.maxHistory}
+        };
 
     QVariantMap hmap, hmapTor;
     if (opts.publicTcp.has_value())
@@ -1124,7 +1136,11 @@ QVariantMap Server::makeFeaturesDictForConnection(AbstractConnection *c, const Q
 }
 void Server::rpc_server_features(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
-    emit c->sendResult(batchId, m.id, makeFeaturesDictForConnection(c, storage->genesisHash(), *options, bitcoindmgr->hasDSProofRPC(), coin == BTC::Coin::BCH));
+    const bool isBCH = coin == BTC::Coin::BCH;
+    emit c->sendResult(batchId, m.id,
+                       makeFeaturesDictForConnection(c, storage->genesisHash(), *options, bitcoindmgr->hasDSProofRPC(),
+                                                     /* cashTokens = */ isBCH,
+                                                     /* rpaStartHeight = */ storage->getConfiguredRpaStartHeight()));
 }
 void Server::rpc_server_peers_subscribe(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
@@ -1596,8 +1612,8 @@ auto Server::parseFromToBlockHeightCommon(const RPC::Message &m) const -> GetHis
     if (l.size() > 1) {
         bool ok;
         const int tmp = l[1].toInt(&ok);
-        if (tmp >= 0) ret.first = static_cast<BlockHeight>(tmp);
-        if (!ok || tmp < 0) throw RPCError("Bad from_height argument at position 2", RPC::ErrorCodes::Code_InvalidParams);
+        if (!ok || tmp < 0) throw RPCError("Bad from_height argument", RPC::ErrorCodes::Code_InvalidParams);
+        ret.first = static_cast<BlockHeight>(tmp);
     }
     if (l.size() > 2) {
         bool ok;
@@ -1606,7 +1622,7 @@ auto Server::parseFromToBlockHeightCommon(const RPC::Message &m) const -> GetHis
         if (!ok
             || (ret.second && ret.first > *ret.second) /* iff to_height, then from_height <= to_height invariant must hold */
             || (tmp < 0 && tmp != -1) /* restrict negatives to -1, reject any other negative value */)
-            throw RPCError("Bad to_height argument at position 3", RPC::ErrorCodes::Code_InvalidParams);
+            throw RPCError("Bad to_height argument", RPC::ErrorCodes::Code_InvalidParams);
     }
     return ret;
 }
@@ -2265,6 +2281,104 @@ void Server::rpc_blockchain_utxo_get_info(Client *c, const RPC::BatchId batchId,
         return ret;
     });
 }
+
+/* -- RPA -- */
+QVariantList Server::getRpaHistoryCommon(const Rpa::Prefix & prefix, bool mempoolOnly, const GetHistory_FromToBH fromTo)
+{
+    const bool includeConfirmed = !mempoolOnly;
+    const bool includeMempool = mempoolOnly;
+    QVariantList resp;
+    const auto items = storage->getRpaHistory(prefix, includeConfirmed, includeMempool, fromTo.first, fromTo.second);
+    for (const auto & item : items) {
+        QVariantMap m{
+            { "tx_hash" , Util::ToHexFast(item.hash) },
+            { "height", int(item.height) },  // confirmed height. Is 0 for mempool. -1 is for mempool with unconf parent
+        };
+        if (item.fee) m["fee"] = qlonglong(*item.fee / bitcoin::Amount::satoshi());
+        resp.push_back(m);
+    }
+    return resp;
+}
+
+void Server::throwIfRpaDisabled() const {
+    if (! storage->isRpaEnabled())
+        throw RPCError("RPA support is disabled on this server", RPC::ErrorCodes::Code_MethodNotFound);
+}
+
+Rpa::Prefix Server::parseRpaPrefixParamCommon(const QString &prefixParam) const {
+    const auto optPrefix = Rpa::Prefix::fromHex(prefixParam);
+    const unsigned minBits = std::max(int(Rpa::PrefixBitsMin), options->rpa.prefixBitsMin);
+    if (!optPrefix.has_value() || optPrefix->getBits() < minBits) {
+        const unsigned minLength = minBits / 4, maxLength = Rpa::PrefixBits / 4;
+        throw RPCError(QString("Invalid prefix argument; expected hex string of at least %1 and at most %2 characters")
+                           .arg(minLength).arg(maxLength), RPC::Code_InvalidParams);
+    }
+    return *optPrefix;
+}
+
+// Note: unlike blockchain.scripthash.get_history, this call never appends the mempool, since it makes less sense to do
+// so for the RPA wallet case (since there is no "statushash" for such wallets).
+void Server::rpc_blockchain_rpa_get_history(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
+{
+    throwIfRpaDisabled();
+
+    QVariantList l = m.paramsList();
+
+    // parse and validate arg0: prefix_hex
+    const auto prefix = parseRpaPrefixParamCommon(l[0].toString());
+    // parse and validate arg1 & arg2: from_height (required) to_height (optional)
+    const auto fromTo = parseFromToBlockHeightCommon(m);
+    if (fromTo.second.has_value() && *fromTo.second <= fromTo.first) {
+        // Special case: Results are guaranteed to be empty because to <= from
+        emit c->sendResult(batchId, m.id, QVariantList{});
+        return;
+    }
+    // process to service the request async
+    generic_do_async(c, batchId, m.id, [this, prefix, fromTo] {
+        return getRpaHistoryCommon(prefix, false, fromTo);
+    });
+}
+
+// Legacy function (older EC clients that initially implemented RPA use this)
+void Server::rpc_blockchain_reusable_get_history(Client *c, RPC::BatchId batchId, const RPC::Message &m)
+{
+    throwIfRpaDisabled();
+
+    QVariantList l = m.paramsList();
+
+    // Re-write the args since the legacy function was weird in that the prefix came as the 3rd arg, rather than the 1st.
+    // Also legacy function uses from_height, count but we prefer from_height, to_height.
+    l.push_front(l.takeAt(2)); // pop 3rd arg ("prefix") and push it to the front
+
+    // Mogrify (l[1] from, l[2] count) -> (from, to)
+    bool ok;
+    int from = l[1].toInt(&ok);
+    if (ok && from >= 0) {
+        int count = l[2].toInt(&ok);
+        if (ok && count >= 0) {
+            const unsigned to = unsigned(from) + unsigned(count);
+            l.replace(2, to);
+        } else {
+            throw RPCError("Bad count argument", RPC::Code_InvalidParams);
+        }
+    }
+    // Override the request with the re-written args
+    const auto msgOverride = RPC::Message::makeRequest(m.id, m.method, l, m.v1);
+    rpc_blockchain_rpa_get_history(c, batchId, msgOverride); // forward re-written message to other RPC function
+}
+
+void Server::rpc_blockchain_rpa_get_mempool(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
+{
+    throwIfRpaDisabled();
+
+    QVariantList l = m.paramsList();
+    const auto prefix = parseRpaPrefixParamCommon(l[0].toString()); // arg0: prefix
+
+    generic_do_async(c, batchId, m.id, [this, prefix] {
+        return getRpaHistoryCommon(prefix, true);
+    });
+}
+
 void Server::rpc_mempool_get_fee_histogram(Client *c, const RPC::BatchId batchId, const RPC::Message &m)
 {
     const auto hist = storage->mempoolHistogram();
@@ -2360,6 +2474,14 @@ HEY_COMPILER_PUT_STATIC_HERE(Server::StaticData::registry){
     { {"blockchain.transaction.dsproof.unsubscribe", true,      false,    PR{1,1},                    },          MP(rpc_blockchain_transaction_dsproof_unsubscribe) },
     // /DSPROOF
     { {"blockchain.utxo.get_info",          true,               false,    PR{2,2},                    },          MP(rpc_blockchain_utxo_get_info) },
+
+    // RPA
+    { {"blockchain.rpa.get_history",        true,               false,    PR{2,3},                    },          MP(rpc_blockchain_rpa_get_history) },
+    { {"blockchain.rpa.get_mempool",        true,               false,    PR{1,1},                    },          MP(rpc_blockchain_rpa_get_mempool) },
+    // RPA legacy methods, aliased to above; also supported for compat. with existing clients
+    { {"blockchain.reusable.get_history",   true,               false,    PR{3,3},                    },          MP(rpc_blockchain_reusable_get_history) },
+    { {"blockchain.reusable.get_mempool",   true,               false,    PR{1,1},                    },          MP(rpc_blockchain_rpa_get_mempool) },
+
     { {"daemon.passthrough",                true,               false,    PR{0,0}, RPC::KeySet{{"method"}}, true /* allow unknown kwargs, since "params" is optional */ }, MP(rpc_daemon_passthrough) },
     { {"mempool.get_fee_histogram",         true,               false,    PR{0,0},                    },          MP(rpc_mempool_get_fee_histogram) },
 };

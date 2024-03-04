@@ -22,6 +22,7 @@
 #include "Controller.h"
 #include "Json/Json.h"
 #include "Logger.h"
+#include "Rpa.h"
 #include "ServerMisc.h"
 #include "Servers.h"
 #include "Storage.h"
@@ -522,6 +523,15 @@ void App::parseArgs()
        QString("MB"),
     },
     {
+        "rpa",
+        QString("Explicitly enable the Reusable Payment Address index and offer the associated \"blockchain.rpa.*\" RPC"
+                " methods to clients. To explicitly disable this facility, use the CLI arg --no-rpa. Default is: %1.\n")
+             .arg(options->rpa.enabledSpecToString())
+    },
+    {
+        "no-rpa", QString("<hidden>")
+    },
+    {
        "dump-sh",
        QString("*** This is an advanced debugging option ***   Dump script hashes. If specified, after the database"
                " is loaded, all of the script hashes in the database will be written to outputfile as a JSON array.\n"),
@@ -552,6 +562,13 @@ void App::parseArgs()
                     " Available benchmarks: \"%1\"\n").arg(benches.join("\", \"")),
             QString("benchmark")
         });
+    }
+
+    // Hide options that we marked above as hidden by setting the description to: "<hidden>"
+    for (auto & opt : allOptions) {
+        if (opt.description() == "<hidden>") {
+            opt.setFlags(opt.flags() | QCommandLineOption::HiddenFromHelp);
+        }
     }
 
     parser.addOptions(allOptions);
@@ -1378,6 +1395,90 @@ void App::parseArgs()
         Util::AsyncOnObject(this, [this] {
             DebugM("config: pidfile = ", options->pidFileAbsPath, " (size: ", QFileInfo(options->pidFileAbsPath).size(), " bytes)");
         });
+    }
+
+    // CLI: --rpa
+    // conf: rpa
+    if (const bool psetYes = parser.isSet("rpa"), psetNo = parser.isSet("no-rpa"); psetYes || psetNo || conf.hasValue("rpa")) {
+        bool val{};
+        if (!psetYes && !psetNo) {
+            bool ok{};
+            val = conf.boolValue("rpa", false, &ok);
+            if (!ok) throw BadArgs("rpa: bad value. Specify a boolean value such as 0, 1, true, false, yes, no");
+        }
+        else if (psetYes && psetNo) throw BadArgs("Cannot specify --rpa and --no-rpa at the same time!");
+        else val = psetYes; // will be false if psetNo here
+        options->rpa.enabledSpec = val ? Options::Rpa::Enabled : Options::Rpa::Disabled;
+        Util::AsyncOnObject(this, [val] { DebugM("config: rpa = ", val); });
+    }
+
+    // conf: rpa_max_history
+    if (conf.hasValue("rpa_max_history")) {
+        bool ok;
+        int mh = conf.intValue("rpa_max_history", -1, &ok);
+        if (!ok || mh < options->maxHistoryMin || mh > options->maxHistoryMax)
+            throw BadArgs(QString("rpa_max_history: bad value. Specify a value in the range [%1, %2]")
+                              .arg(options->maxHistoryMin).arg(options->maxHistoryMax));
+        options->rpa.maxHistory = mh;
+        // log this later in case we are in syslog mode
+        Util::AsyncOnObject(this, [mh]{ Debug() << "config: rpa_max_history = " << mh; });
+    } else {
+        // Otherwise, if nothing specified, we have special logic here:
+        // We inherit whatever the user specified for max_history, if anything (may be default)
+        options->rpa.maxHistory = options->maxHistory;
+        if (conf.hasValue("max_history")) {
+            Util::AsyncOnObject(this, [mh = options->maxHistory]{
+                Debug() << "config: rpa_max_history = " << mh << " (inherited from max_history)";
+            });
+        }
+    }
+
+    // conf: rpa_history_block_limit / rpa_history_blocks
+    if (const bool b1 = conf.hasValue("rpa_history_blocks"), b2 = conf.hasValue("rpa_history_block_limit"); b1 || b2) {
+        // support either: "rpa_history_block_limit" or "rpa_history_blocks", but not both
+        if (b1 && b2) throw BadArgs("Both `rpa_history_blocks` and `rpa_history_block_limit` were found in the config file; this looks like a typo.");
+        const QString confKey(b1 ? "rpa_history_blocks" : "rpa_history_block_limit");
+        bool ok;
+        const int limit = conf.intValue(confKey, -1, &ok);
+        if (!ok || limit < 0 || unsigned(limit) < options->rpa.historyBlockLimitMin || unsigned(limit) > options->rpa.historyBlockLimitMax)
+            throw BadArgs(QString("%1: bad value. Specify a value in the range [%2, %3]")
+                              .arg(confKey).arg(options->rpa.historyBlockLimitMin).arg(options->rpa.historyBlockLimitMax));
+        options->rpa.historyBlockLimit = unsigned(limit);
+        // log this later in case we are in syslog mode
+        Util::AsyncOnObject(this, [limit, confKey]{ Debug() << "config: " << confKey << " = " << limit; });
+    }
+
+    // conf: rpa_prefix_bits_min
+    static_assert(Options::Rpa::defaultPrefixBitsMin >= Rpa::PrefixBitsMin && Options::Rpa::defaultPrefixBitsMin <= Rpa::PrefixBits
+                  && !(Options::Rpa::defaultPrefixBitsMin & 0b11));
+    if (conf.hasValue("rpa_prefix_bits_min")) {
+        bool ok;
+        int pbm = conf.intValue("rpa_prefix_bits_min", -1, &ok);
+        if (!ok || pbm < int(Rpa::PrefixBitsMin) || pbm > int(Rpa::PrefixBits) || pbm & 0b11 /* fancy way to check if multiple of 4 */) {
+            throw BadArgs(QString("rpa_prefix_bits_min: bad value. Specify a number that is a multiple of 4 and that is in the range [%1, %2].")
+                              .arg(Rpa::PrefixBitsMin).arg(Rpa::PrefixBits));
+        }
+        options->rpa.prefixBitsMin = pbm;
+        // log this later in case we are in syslog mode
+        Util::AsyncOnObject(this, [pbm]{ Debug() << "config: rpa_prefix_bits_min = " << pbm; });
+    }
+
+    // conf: rpa_start_height
+    if (const auto b1 = conf.hasValue("rpa_start_height"), b2 = conf.hasValue("rpa_starting_height"); b1 || b2) {
+        // support either: "rpa_start_height" or "rpa_starting_height", but not both
+        if (b1 && b2) throw BadArgs("Both `rpa_start_height` and `rpa_starting_height` were found in the config file; this looks like a typo.");
+        const QString confKey(b1 ? "rpa_start_height" : "rpa_starting_height");
+        bool ok;
+        int ht = conf.intValue(confKey, -1, &ok);
+        if (!ok || ht < -1 /* -1 ok, -2 not, etc*/ || (ht >= 0 && ht > int(Storage::MAX_HEADERS)))
+            throw BadArgs(QString("%1: bad value. Specify a block height between [0, %2], or use -1 to"
+                                  " auto-configure this setting with a chain-specific default (%3 for mainnet, %4 for"
+                                  " all other nets).")
+                              .arg(confKey).arg(Storage::MAX_HEADERS).arg(Options::Rpa::defaultStartHeightForMainnet)
+                              .arg(Options::Rpa::defaultStartHeightOtherNets));
+        options->rpa.requestedStartHeight = ht;
+        // log this later in case we are in syslog mode
+        Util::AsyncOnObject(this, [ht, confKey]{ Debug() << "config: " << confKey << " = " << ht; });
     }
 }
 

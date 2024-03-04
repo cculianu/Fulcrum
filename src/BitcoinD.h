@@ -113,6 +113,9 @@ public:
     /// reconnect to BitcoinD.  This is called by ServerBase in various places.
     BitcoinDInfo getBitcoinDInfo() const;
 
+    /// Call this to "nudge" bitcoind and ask it again for network info (used by a paranoia codepath in Controller.cpp)
+    void requestBitcoinDInfoRefresh();
+
     /// Thread-safe.  Returns a copy of the bitcoinDGenesisHash.  This hash is refreshed each time we
     /// reconnect to BitcoinD.  If empty, we haven't yet had a valid and successful bitcoind connection.
     /// This is called by the Controller task to check sanity and bail if it doesn't match the hash stored

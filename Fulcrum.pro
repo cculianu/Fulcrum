@@ -323,9 +323,11 @@ SOURCES += \
     Mixins.cpp \
     Mgr.cpp \
     Options.cpp \
+    PackedNumView.cpp \
     PeerMgr.cpp \
     RecordFile.cpp \
     RollingBloomFilter.cpp \
+    Rpa.cpp \
     RPC.cpp \
     RPCMsgId.cpp \
     ServerMisc.cpp \
@@ -369,9 +371,11 @@ HEADERS += \
     Mgr.h \
     Mixins.h \
     Options.h \
+    PackedNumView.h \
     PeerMgr.h \
     RecordFile.h \
     RollingBloomFilter.h \
+    Rpa.h \
     RPC.h \
     RPCMsgId.h \
     ServerMisc.h \
@@ -397,6 +401,10 @@ HEADERS += robin_hood/robin_hood.h
 
 RESOURCES += \
     resources.qrc
+
+contains(DEFINES, ENABLE_TESTS) {
+    RESOURCES += resources/testdata/testdata.qrc
+}
 
 # Bitcoin related sources & headers
 SOURCES += \

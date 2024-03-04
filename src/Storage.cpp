@@ -24,11 +24,13 @@
 #include "Mempool.h"
 #include "Merkle.h"
 #include "RecordFile.h"
+#include "Rpa.h"
 #include "Span.h"
 #include "Storage.h"
 #include "SubsMgr.h"
 #include "VarInt.h"
 
+#include "bitcoin/crypto/endian.h"
 #include "bitcoin/hash.h"
 
 #include "robin_hood/robin_hood.h"
@@ -104,7 +106,7 @@ namespace {
 
     // some database keys we use -- todo: if this grows large, move it elsewhere
     static const bool falseMem = false, trueMem = true;
-    static const rocksdb::Slice kMeta{"meta"}, kDirty{"dirty"}, kUtxoCount{"utxo_count"},
+    static const rocksdb::Slice kMeta{"meta"}, kDirty{"dirty"}, kUtxoCount{"utxo_count"}, kRpaNeedsFullCheck{"rpa_needs_full_check"},
                                 kTrue(reinterpret_cast<const char *>(&trueMem), sizeof(trueMem)),
                                 kFalse(reinterpret_cast<const char *>(&falseMem), sizeof(falseMem));
 
@@ -125,6 +127,7 @@ namespace {
         Type ret{};
         if constexpr (std::is_base_of_v<QByteArray, Type>) {
             ret = ba;
+            if (ok) *ok = true;
         } else {
             QDataStream ds(ba);
             ds >> ret;
@@ -195,6 +198,34 @@ namespace {
         bitcoin::token::OutputDataPtr tokenDataPtr;
     };
 
+    // Ensures we store RPA db keys in big endian for faster scans of adjacent heights
+    struct RpaDBKey {
+        uint32_t height;
+
+        explicit RpaDBKey(uint32_t h) : height(h) {}
+
+        QByteArray toBytes() const {
+            const uint32_t bigEndian = htobe32(height); // swap to big endian
+            return QByteArray(reinterpret_cast<const char *>(&bigEndian), sizeof(bigEndian));
+        }
+
+        static RpaDBKey fromBytes(const QByteArray &ba, bool *ok = nullptr, bool strictSize = false) {
+            RpaDBKey k{0u};
+            if (size_t(ba.size()) < sizeof(uint32_t) || (strictSize && size_t(ba.size()) != sizeof(uint32_t))) {
+                if (ok) *ok = false;
+                return k;
+            }
+            uint32_t bigEndian;
+            std::memcpy(&bigEndian, ba.constData(), sizeof(uint32_t));
+            k.height = be32toh(bigEndian); // swap to host order
+            if (ok) *ok = true;
+            return k;
+        }
+
+        bool operator==(const RpaDBKey &o) const { return height == o.height; }
+        bool operator!=(const RpaDBKey &o) const { return ! this->operator==(o); }
+    };
+
     // specializations
     template <> QByteArray Serialize(const Meta &);
     template <> Meta Deserialize(const QByteArray &, bool *);
@@ -202,6 +233,9 @@ namespace {
     template <> TXO Deserialize(const QByteArray &, bool *);
     template <> QByteArray Serialize(const TXOInfo &);
     template <> TXOInfo Deserialize(const QByteArray &, bool *);
+    template <> Rpa::PrefixTable Deserialize(const QByteArray &, bool *);
+    template <> QByteArray Serialize(const RpaDBKey &k) { return k.toBytes(); }
+    template <> RpaDBKey Deserialize(const QByteArray &ba, bool *ok) { return RpaDBKey::fromBytes(ba, ok); }
     QByteArray Serialize(const bitcoin::Amount &, const bitcoin::token::OutputData *);
     template <> SHUnspentValue Deserialize(const QByteArray &, bool *);
     // TxNumVec
@@ -296,7 +330,7 @@ namespace {
                     throw DatabaseFormatError(QString("%1: Extra bytes at the end of data")
                                               .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : QString("Database format error in db %1").arg(DBName(db))));
                 }
-                bool ok;
+                bool ok{};
                 ret.emplace( DeserializeScalar<RetType>(FromSlice(datum), &ok) );
                 if (!ok) {
                     throw DatabaseSerializationError(
@@ -308,7 +342,7 @@ namespace {
                 if (UNLIKELY(acceptExtraBytesAtEndOfData))
                     Debug() << "Warning:  Caller misuse of function '" << __func__
                             << "'. 'acceptExtraBytesAtEndOfData=true' is ignored when deserializing using QDataStream.";
-                bool ok;
+                bool ok{};
                 ret.emplace( Deserialize<RetType>(FromSlice(datum), &ok) );
                 if (!ok) {
                     throw DatabaseSerializationError(
@@ -490,7 +524,7 @@ namespace {
     {
         (void)key; (void)logger;
         ++merges;
-        new_value->resize( (existing_value ? existing_value->size() : 0) + value.size() );
+        new_value->resize( (existing_value ? existing_value->size() : size_t{0u}) + value.size() );
         char *cur = new_value->data();
         if (existing_value) {
             std::memcpy(cur, existing_value->data(), existing_value->size());
@@ -537,6 +571,12 @@ namespace {
                 throw BadArgs("This db lacks a merge operator of type `ConcatOperator`");
             loadLargestTxNumSeen();
             Debug() << "TxHash2TxNumMgr: largestTxNumSeen = " << largestTxNumSeen;
+        }
+
+        std::unique_ptr<rocksdb::Iterator> newIterChecked() {
+            std::unique_ptr<rocksdb::Iterator> iter{db->NewIterator(rdOpts)};
+            if (UNLIKELY(!iter)) throw DatabaseError("Unable to obtain an iterator to the txhash2txnum db"); // should never happen
+            return iter;
         }
 
         unsigned mergeCount() const { return concatOp->merges.load(); }
@@ -800,7 +840,7 @@ namespace {
         void deleteAllEntries() {
             std::string firstKey, endKey;
             {
-                std::unique_ptr<rocksdb::Iterator> iter(db->NewIterator(rdOpts));
+                std::unique_ptr<rocksdb::Iterator> iter = newIterChecked();
                 iter->SeekToFirst();
                 if (iter->Valid())
                     firstKey = iter->key().ToString();
@@ -818,7 +858,7 @@ namespace {
             if (auto st = db->DeleteRange(wrOpts, db->DefaultColumnFamily(), firstKey, endKey);
                     !st.ok() || !(st = db->Flush(fopts)).ok())
                 throw DatabaseError(dbName() + ": failed to delete all keys: " + QString::fromStdString(st.ToString()));
-            std::unique_ptr<rocksdb::Iterator> iter(db->NewIterator(rdOpts));
+            std::unique_ptr<rocksdb::Iterator> iter = newIterChecked();
             iter->SeekToFirst();
             if (iter->Valid())
                 throw InternalError(dbName() + ": delete all keys failed -- iterator still points to a row! FIXME!");
@@ -832,7 +872,7 @@ namespace {
         void consistencyCheck() { // this throws if the checks fail
             const Tic t0;
             Log() << "CheckDB: Verifying txhash index (this may take some time) ...";
-            std::unique_ptr<rocksdb::Iterator> iter(db->NewIterator(rdOpts));
+            std::unique_ptr<rocksdb::Iterator> iter = newIterChecked();
             size_t i = 0, verified = 0;
             QString err;
             constexpr size_t batchSize = 50'000;
@@ -1005,7 +1045,8 @@ struct Storage::Pvt
         std::unique_ptr<rocksdb::DB> meta, blkinfo, utxoset,
                                      shist, shunspent, // scripthash_history and scripthash_unspent
                                      undo, // undo (reorg rewind)
-                                     txhash2txnum; // new: index of txhash -> txNumsFile
+                                     txhash2txnum, // new: index of txhash -> txNumsFile
+                                     rpa; // new: height -> Rpa::PrefixTable
         using DBPtrRef = std::tuple<std::unique_ptr<rocksdb::DB> &>;
         std::list<DBPtrRef> openDBs; ///< a bit of introspection to track which dbs are currently open (used by gentlyCloseAllDBs())
 
@@ -1083,6 +1124,14 @@ struct Storage::Pvt
     Tic lastWarned; ///< to rate-limit potentially spammy warning messages (guarded by blocksLock)
 
     std::unique_ptr<CoTask> blocksWorker; ///< work to be done in parallel can be submitted to this co-task in addBlock and undoLatestBlock
+
+    /// Info specific to the `rpa` index
+    struct RpaInfo {
+        std::atomic_int32_t firstHeight = -1, lastHeight = -1; // inclusive height range that we have in the DB. -1 means undefined/missing.
+        std::atomic_uint64_t nReads{0u}, nWrites{0u}, nDeletions{0u}; // keep track of number of times we read/write/delete from this db
+        std::atomic_uint64_t nBytesWritten{0u}, nBytesRead{0u}; // keep track of number of bytes written and read during Storage object lifetime
+        mutable std::atomic_int rpaNeedsFullCheckCachedVal = -1; // if > -1, the last value written to the DB. If < 0, no cached val, just read from DB when querying isRpaNeedsFullCheck()
+    } rpaInfo;
 };
 
 namespace {
@@ -1820,11 +1869,13 @@ void Storage::startup()
         const std::list<DBInfoTup> dbs2open = {
             { "meta", p->db.meta, opts, 0.0005 },
             { "blkinfo" , p->db.blkinfo , opts, 0.02 },
-            { "utxoset", p->db.utxoset, opts, 0.27 },
+            { "utxoset", p->db.utxoset, opts, 0.25 },
             { "scripthash_history", p->db.shist, shistOpts, 0.30 },
-            { "scripthash_unspent", p->db.shunspent, opts, 0.27 },
+            { "scripthash_unspent", p->db.shunspent, opts, 0.25 },
             { "undo", p->db.undo, opts, 0.0395 },
             { "txhash2txnum", p->db.txhash2txnum, txhash2txnumOpts, 0.1 },
+            // Future work: if on BTC or rpa disabled, give the rpa db's 0.04 back to scripthash_unspent and utxoset!!
+            { "rpa", p->db.rpa, opts, 0.04 }, // this index appears to be < 1/2 the txhash2txnum one on average, so we give it less than half that mem ratio
         };
         std::size_t memTotal = 0;
         const auto OpenDB = [this, &memTotal](const DBInfoTup &tup) {
@@ -1901,6 +1952,8 @@ void Storage::startup()
     loadCheckShunspentInDB();
     // load check earliest undo to populate earliestUndoHeight
     loadCheckEarliestUndo();
+    // load rpa data
+    if (isRpaEnabled()) loadCheckRpaDB();
     // if user specified --compact-dbs on CLI, run the compaction now before returning
     compactAllDBs();
 
@@ -2059,8 +2112,7 @@ auto Storage::stats() const -> Stats
     {
         // db stats
         QVariantMap m;
-        for (const auto ptr : { &p->db.blkinfo, &p->db.meta, &p->db.shist, &p->db.shunspent, &p->db.undo, &p->db.utxoset,
-                                &p->db.txhash2txnum }) {
+        for (const auto ptr : { &p->db.blkinfo, &p->db.meta, &p->db.shist, &p->db.shunspent, &p->db.undo, &p->db.utxoset, &p->db.txhash2txnum, &p->db.rpa, }) {
             QVariantMap m2;
             const auto & db = *ptr;
             const QString name = QFileInfo(QString::fromStdString(db->GetName())).fileName();
@@ -2113,6 +2165,20 @@ auto Storage::stats() const -> Stats
             }
             ret["DB Shared Write Buffer Manager"] = wmap;
         }
+
+        {
+            // RPA-specific stats
+            QVariantMap rm;
+            rm["firstHeight"] = p->rpaInfo.firstHeight.load(std::memory_order_relaxed);
+            rm["lastHeight"] = p->rpaInfo.lastHeight.load(std::memory_order_relaxed);
+            rm["nReads"] = qulonglong(p->rpaInfo.nReads.load(std::memory_order_relaxed));
+            rm["nWrites"] = qulonglong(p->rpaInfo.nWrites.load(std::memory_order_relaxed));
+            rm["nDeletions"] = qulonglong(p->rpaInfo.nDeletions.load(std::memory_order_relaxed));
+            rm["nBytesRead"] = qulonglong(p->rpaInfo.nBytesRead.load(std::memory_order_relaxed));
+            rm["nBytesWritten"] = qulonglong(p->rpaInfo.nBytesWritten.load(std::memory_order_relaxed));
+            rm["needsFullCheck"] = p->rpaInfo.rpaNeedsFullCheckCachedVal.load(std::memory_order_relaxed);
+            ret["RPA Index Info"] = rm;
+        }
     }
     return ret;
 }
@@ -2159,6 +2225,37 @@ void Storage::setCoin(const QString &coin) {
     if (!coin.isEmpty())
         Log() << "Coin: " << coin;
     save(SaveItem::Meta);
+}
+
+bool Storage::isRpaEnabled() const
+{
+    using ES = Options::Rpa::EnabledSpec;
+    switch(options->rpa.enabledSpec) {
+    case ES::Enabled: return true;
+    case ES::Disabled: return false;
+    case ES::Auto: return BTC::coinFromName(getCoin()) == BTC::Coin::BCH;
+    }
+}
+
+int Storage::getConfiguredRpaStartHeight() const
+{
+    if (!isRpaEnabled()) return -1; // -1 to caller means "rpa not enabled"
+    if (const int reqHt = options->rpa.requestedStartHeight; reqHt >= 0)
+        return reqHt; // user requested a specific start height >= 0
+
+    // otherwise, do "auto", which is 825,000 for mainnet, 0 for all other nets
+    if (BTC::NetFromName(getChain()) == BTC::Net::MainNet)
+        return Options::Rpa::defaultStartHeightForMainnet;
+    return Options::Rpa::defaultStartHeightOtherNets;
+}
+
+auto Storage::getRpaDBHeightRange() const -> std::optional<HeightRange>
+{
+    std::optional<HeightRange> ret;
+    if (isRpaEnabled())
+        if (const int from = p->rpaInfo.firstHeight, to = p->rpaInfo.lastHeight; from >= 0 && to >= 0)
+            ret.emplace(static_cast<BlockHeight>(from), static_cast<BlockHeight>(to));
+    return ret;
 }
 
 /// returns the "next" TxNum
@@ -2394,6 +2491,7 @@ void Storage::loadCheckTxHash2TxNumMgr()
         } else {
             // sanity check on empty db: if no records, db should also have no rows
             std::unique_ptr<rocksdb::Iterator> it(p->db.txhash2txnum->NewIterator(p->db.defReadOpts));
+            if (!it) throw DatabaseError("Unable to obtain an iterator to the txhash2txnum set db");
             for (it->SeekToFirst(); it->Valid(); it->Next()) {
                 throw DatabaseFormatError(QString("Failed invariant: empty txNum file should mean empty db; ") + errMsg);
             }
@@ -2640,6 +2738,211 @@ void Storage::loadCheckShunspentInDB()
     Log() << "Verified " << ctr << " scripthash_unspent " << Util::Pluralize("entry", ctr)
           << " in " << t0.secsStr() << " sec";
  }
+
+void Storage::loadCheckRpaDB()
+{
+    FatalAssert(!!p->db.rpa, __func__, ": RPA db is not open");
+
+    const bool doSlowChecks = options->doSlowDbChecks;
+    const bool doNeededCheck = isRpaNeedsFullCheck();
+    const bool fullCheck = doSlowChecks || doNeededCheck;
+
+    if (doSlowChecks) {
+        Log() << "CheckDB: Verifying RPA db (this may take some time) ...";
+    } else if (doNeededCheck) {
+        Log() << "Performing required check on RPA db, please wait ...";
+    } else {
+        Log() << "Loading RPA db ...";
+    }
+
+    Tic t0;
+    bool blowAwayWholeDB = false;
+    std::optional<QString> excMessage;
+    try {
+        auto & firstHeight = p->rpaInfo.firstHeight, & lastHeight = p->rpaInfo.lastHeight;
+        firstHeight = lastHeight = -1;
+        int forceDeleteAfterHeight = -1; // if >=0, force a delete after this height
+
+        std::unique_ptr<rocksdb::Iterator> iter(p->db.rpa->NewIterator(p->db.defReadOpts));
+        if (!iter) throw DatabaseError("Unable to obtain an iterator to the rpa db");
+        auto ThrowIfNegativeIfCastedToSigned = [](uint32_t height) {
+              if (height > uint32_t(std::numeric_limits<int>::max()))
+                  throw DatabaseFormatError(QString("Encountered a height (%1) in the RPA db that is > INT_MAX"
+                                                    "; this indicates corruption or an incompatible DB format.").arg(height));
+        };
+        auto TryDeserializePFTAndUpdateCounts = [&info = p->rpaInfo](uint32_t height, const rocksdb::Slice &slice) {
+            try {
+                bool ok{};
+                ++info.nReads;
+                info.nBytesRead += sizeof(height) + slice.size();
+                Rpa::PrefixTable pt = Deserialize<Rpa::PrefixTable>(FromSlice(slice), &ok);
+            } catch (const std::exception &e) {
+                throw DatabaseSerializationError(QString("Error deserializing Rpa::PrefixTable for height %1: %2")
+                                                 .arg(height).arg(e.what()));
+            }
+        };
+        if (! fullCheck) {
+            // Normal fast startup -- just try and figure out what height range we actually have in the DB
+            iter->SeekToFirst();
+            if (iter->Valid()) {
+                bool ok;
+                RpaDBKey rk = RpaDBKey::fromBytes(FromSlice(iter->key()), &ok, true);
+                if (!ok) throw DatabaseSerializationError("Unable to deserialize RPA db key -> height");
+                ThrowIfNegativeIfCastedToSigned(rk.height);
+                TryDeserializePFTAndUpdateCounts(rk.height, iter->value()); // this may throw; if it does we will blow away the whole DB below and Controller will do a full resynch of RPA index
+                firstHeight = rk.height;
+                iter->SeekToLast();
+                if (UNLIKELY( ! iter->Valid())) throw DatabaseError("Unable to seek to last entry in RPA db. This is unexpected.");
+                rk = RpaDBKey::fromBytes(FromSlice(iter->key()), &ok, true);
+                if (!ok) throw DatabaseSerializationError("Unable to deserialize RPA db key -> height");
+                ThrowIfNegativeIfCastedToSigned(rk.height);
+                TryDeserializePFTAndUpdateCounts(rk.height, iter->value()); // this may throw; if it does we will blow away the whole DB below and Controller will do a full resynch of RPA index
+                lastHeight = rk.height;
+                if (lastHeight < firstHeight) // this should never happen and indicates some serialization format error
+                    throw DatabaseSerializationError(QString("The last record has height less than the first record in the RPA db: first = %1, last = %2").arg(firstHeight.load()).arg(lastHeight.load()));
+            }
+        } else {
+            // Slower -- iterate through entire table to find gaps as well as verify data by deserializing it row by row
+            size_t ctr = 0;
+            for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
+                const auto & k = iter->key();
+                if (k.size() == sizeof(uint32_t)) {
+                    bool ok;
+                    const RpaDBKey rk = Deserialize<RpaDBKey>(FromSlice(k), &ok);
+                    if (!ok) throw DatabaseSerializationError("Unable to deserialize RPA db key -> height");
+                    ThrowIfNegativeIfCastedToSigned(rk.height);
+                    if (firstHeight < 0) firstHeight = rk.height;
+                    TryDeserializePFTAndUpdateCounts(rk.height, iter->value()); // this may throw; if it does we will blow away the whole DB below and Controller will do a full resynch of RPA index
+                    if (lastHeight > -1 && BlockHeight(lastHeight) + 1u != rk.height) { // detect gaps
+                        Warning() << QString("Gap in RBA db encountered starting at height %1 to height %2").arg(lastHeight + 1).arg(rk.height);
+                        forceDeleteAfterHeight = BlockHeight(lastHeight);
+                        break;
+                    }
+                    lastHeight = rk.height;
+                    ++ctr;
+                    if (0u == ctr % 1'000u && app() && app()->signalsCaught())
+                        throw UserInterrupted("User interrupted, aborting check");
+                } else {
+                    throw DatabaseFormatError(QString("Encountered a key in the RPA db that is not exactly %1 bytes! Hex for key: %2")
+                                              .arg(sizeof(uint32_t)).arg(QString(FromSlice(k).toHex())));
+                }
+            }
+            Debug () << "RPA db has " << ctr << " entries, " << p->rpaInfo.nBytesRead << " bytes; deserialized ok";
+        }
+        if (lastHeight < firstHeight || ((lastHeight <= -1 || firstHeight <= -1) && lastHeight != firstHeight)) // defensive programming: enforce invariant here
+            throw InternalError(QString("Programming error in %1. FIXME!").arg(__func__));
+        if (firstHeight > -1) {
+            const int currentHeight = latestTip().first;
+            if (currentHeight < lastHeight || forceDeleteAfterHeight > -1) {
+                // delete either form the "forceDeleteAfterHeight" height or the current height, whichever is smaller
+                const int delheight = forceDeleteAfterHeight > -1 ? std::min(forceDeleteAfterHeight, currentHeight)
+                                                                  : currentHeight;
+                const auto delheightplus1 = static_cast<BlockHeight>(std::max(delheight, -1) + 1);
+
+                Log() << "Deleting unneeded or gap RPA entries from height " << delheightplus1 << " ...";
+                // on success, updates p->rpaInfo.lastHeight, firstHeight, etc
+                if (!deleteRpaEntriesFromHeight(delheightplus1, true, true))
+                    throw DatabaseError("Failed to delete the required keys from the DB. Please report this situation to the developers.");
+            }
+        }
+        // Print some info -- note firstHeight can mutate above which is why we do this here last
+        if (firstHeight >= 0) Debug() << "RPA db data covers heights: " << firstHeight << " -> " << lastHeight;
+        else Debug() << "RPA db is empty";
+    } catch (const std::ios_base::failure &e) {
+        excMessage = e.what();
+        blowAwayWholeDB = true;
+    } catch (const DatabaseError &e) {
+        excMessage = e.what();
+        blowAwayWholeDB = true;
+    }
+    if (excMessage) Warning() << *excMessage;
+    if (blowAwayWholeDB) {
+        Log() << "RPA db is inconsistent and will be resynched from bitcoind. Deleting existing entries ...";
+        deleteRpaEntriesFromHeight(0, true, true);
+        p->rpaInfo.firstHeight = p->rpaInfo.lastHeight = -1;
+    }
+
+    // Lastly, if we were in check mode, flag the DB as clean now
+    if (fullCheck) setRpaNeedsFullCheck(false);
+
+    Debug() << (doSlowChecks ? "CheckDB: Verified" : (doNeededCheck ? "Checked" : "Loaded"))
+            << " RPA db in " << t0.msecStr() << " msec";
+}
+
+bool Storage::deleteRpaEntriesFromHeight(const BlockHeight height, bool flush, bool force)
+{
+    if (!force && p->rpaInfo.firstHeight <= -1) return true; // fast path for disabled or empty index)
+    if (height > unsigned(std::numeric_limits<int>::max())) throw InternalError(QString("Bad argument to ") + __func__);
+    constexpr uint32_t u32max = std::numeric_limits<uint32_t>::max();
+    QByteArray endKey = RpaDBKey(u32max).toBytes();
+    endKey.append('\0'); // ensue covers entire remaining uint32 range by appending a single '0' byte to make this endkey longer than the last uint32 possible.
+
+    auto status = p->db.rpa->DeleteRange(p->db.defWriteOpts, p->db.rpa->DefaultColumnFamily(),
+                                         ToSlice(RpaDBKey(height)), ToSlice(endKey));
+
+    if (!status.ok()) {
+        Warning() << __func__ << ": failed in call to db DeleteRange for height (>= " << height << "): "
+                  << QString::fromStdString(status.ToString());
+        return false;
+    }
+    // Update deletion count and firstHeight and lastHeight as necessary
+    p->rpaInfo.nDeletions += 1; // we have no idea how many records were deleted, just increment by 1 since most common case is the undo case, where we delete 1.
+    auto & firstHeight = p->rpaInfo.firstHeight, & lastHeight = p->rpaInfo.lastHeight;
+    if (lastHeight > -1 && BlockHeight(lastHeight) >= height)
+        lastHeight = height > 0u ? int(height - 1u) : -1;
+    if (firstHeight > lastHeight)
+        firstHeight = lastHeight.load();
+    if (flush) {
+        rocksdb::FlushOptions f;
+        f.wait = true;
+        f.allow_write_stall = true;
+        p->db.rpa->Flush(f);
+    }
+    return true;
+}
+
+bool Storage::deleteRpaEntriesToHeight(const BlockHeight height, bool flush, bool force)
+{
+    if (!force && p->rpaInfo.lastHeight <= -1) return true; // fast path for disabled or empty index)
+    if (height > unsigned(std::numeric_limits<int>::max())) throw InternalError(QString("Bad argument to ") + __func__);
+    QByteArray endKey = RpaDBKey(height).toBytes();
+
+    auto status = p->db.rpa->DeleteRange(p->db.defWriteOpts, p->db.rpa->DefaultColumnFamily(),
+                                         ToSlice(RpaDBKey(0u)), ToSlice(RpaDBKey(height + 1u)));
+
+    if (!status.ok()) {
+        Warning() << __func__ << ": failed in call to db DeleteRange for height (<= " << height << "): "
+                  << QString::fromStdString(status.ToString());
+        return false;
+    }
+    // Update deletion count and firstHeight and lastHeight as necessary
+    p->rpaInfo.nDeletions += 1; // we have no idea how many records were deleted, just increment by 1 since most common case is the undo case, where we delete 1.
+    auto & firstHeight = p->rpaInfo.firstHeight, & lastHeight = p->rpaInfo.lastHeight;
+    if (firstHeight > -1 && BlockHeight(firstHeight) <= height)
+        firstHeight = int(height + 1u);
+    if (firstHeight > lastHeight)
+        firstHeight = lastHeight.load();
+    if (flush) {
+        rocksdb::FlushOptions f;
+        f.wait = true;
+        f.allow_write_stall = true;
+        p->db.rpa->Flush(f);
+    }
+    return true;
+}
+
+void Storage::clampRpaEntries(BlockHeight from, BlockHeight to)
+{
+    ExclusiveLockGuard g(p->blocksLock);
+    clampRpaEntries_nolock(from, to);
+}
+
+void Storage::clampRpaEntries_nolock(BlockHeight from, BlockHeight to)
+{
+    if (from > 0u) deleteRpaEntriesToHeight(from - 1u, true);
+    if (to < std::numeric_limits<uint32_t>::max()) deleteRpaEntriesFromHeight(to + 1u, true);
+    DebugM("Clamped RPA index to: ", from, " -> ", to);
+}
 
 void Storage::loadCheckEarliestUndo()
 {
@@ -2962,6 +3265,8 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                   << affected.size() << " addresses";
                 if (res.dspRmCt || res.dspTxRmCt)
                     d << " (also removed dsps: " << res.dspRmCt << ", dspTxs: " << res.dspTxRmCt << ")";
+                if (res.rpaRmCt)
+                    d << " (also removed rpa entries: " << res.rpaRmCt << ")";
                 d << " in " << QString::number(res.elapsedMsec, 'f', 3) << " msec";
             }
             notify->scriptHashesAffected.merge(std::move(affected));
@@ -3188,6 +3493,11 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                 }
             }
 
+            // Save RPA PrefixTable record (appends a single row to DB), if RPA is enabled for this block
+            if (ppb->serializedRpaPrefixTable) {
+                addRpaDataForHeight_nolock(ppb->height, *ppb->serializedRpaPrefixTable); // may throw theoretically if GenericDBPut threw
+            }
+
             // save the last of the undo info, if in saveUndo mode
             if (undo) {
                 const auto t0 = Util::getTimeNS();
@@ -3263,6 +3573,42 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
         if (txsubsmgr && !notify->txidsAffected.empty())
             txsubsmgr->enqueueNotifications(std::move(notify->txidsAffected));
     }
+}
+
+/// NB: Caller should probably hold some locks to avoid consistency issues... even though this function is inherently thread-safe.
+void Storage::addRpaDataForHeight_nolock(const BlockHeight height, const QByteArray &ser)
+{
+    Tic t0;
+
+    static const QString rpaErrMsg("Error writing block RPA data to db");
+    GenericDBPut(p->db.rpa.get(), RpaDBKey(height), ser, rpaErrMsg, p->db.defWriteOpts);
+    // Update RpaInfo stats: latest height, etc.
+    if (const int lh = p->rpaInfo.lastHeight; UNLIKELY(lh > -1 && lh != int(height) - 1)) {
+        // This should never happen. Warn if this invariant is violated to detect bugs.
+        Warning() << "RPA index lastHeight (" << lh << ") not as expected (" << (int(height) - 1) << ")."
+                  << " Flagging DB as needing a full check.";
+        setRpaNeedsFullCheck(true); // flag the RPA db for a full check on next run
+    }
+    if (const int fh = p->rpaInfo.firstHeight; UNLIKELY(fh > -1 && fh > int(height))) {
+        // This should never happen. Warn if this invariant is violated to detect bugs.
+        Warning() << "RPA index firstHeight (" << fh << ") not as expected (should be <= " << int(height) << ")."
+                  << " Flagging DB as needing a full check.";
+        p->rpaInfo.firstHeight = height;
+        setRpaNeedsFullCheck(true); // flag the RPA db for a full check on next run
+    }
+    p->rpaInfo.lastHeight = height;
+    if (p->rpaInfo.firstHeight < 0) p->rpaInfo.firstHeight = height;
+    ++p->rpaInfo.nWrites;
+    p->rpaInfo.nBytesWritten += sizeof(uint32_t) + ser.size();
+
+    if (Debug::isEnabled() && (ser.size() >= 200'000 || t0.msec() >= 20))
+        Debug() << "Saved RPA height: " << height << ", size: " << ser.size() << ", elapsed: " << t0.msecStr() << " msec";
+}
+
+void Storage::addRpaDataForHeight(BlockHeight height, const QByteArray &serializedRpaPrefixTable)
+{
+    ExclusiveLockGuard g(p->blocksLock);
+    addRpaDataForHeight_nolock(height, serializedRpaPrefixTable);
 }
 
 BlockHeight Storage::undoLatestBlock(bool notifySubs)
@@ -3349,6 +3695,8 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
             p->blkInfos.pop_back();
             p->blkInfosByTxNum.erase(undo.blkInfo.txNum0);
             GenericDBDelete(p->db.blkinfo.get(), uint32_t(undo.height), "Failed to delete blkInfo in undoLatestBlock");
+            deleteRpaEntriesFromHeight(undo.height); // delete RPA >= undo.height (iff index is enabled)
+
             // clear num2hash cache
             p->lruNum2Hash.clear();
             // remove block from txHashes cache
@@ -3482,6 +3830,51 @@ bool Storage::isDirty() const
     return GenericDBGet<bool>(p->db.meta.get(), kDirty, true, errPrefix, false, p->db.defReadOpts).value_or(false);
 }
 
+void Storage::setRpaNeedsFullCheck(const bool val)
+{
+    if (!p->db.meta) return;
+    static const QString errPrefix("Error saving rpa_needs_full_check flag to the meta db");
+    const auto & slice = val ? kTrue : kFalse;
+    GenericDBPut(p->db.meta.get(), kRpaNeedsFullCheck, slice, errPrefix, p->db.defWriteOpts);
+    p->rpaInfo.rpaNeedsFullCheckCachedVal = int(val);
+    DebugM("Wrote rpa_needs_full_check = ", val, " to db");
+}
+
+bool Storage::isRpaNeedsFullCheck() const
+{
+    if (!p->db.meta) return false;
+    const int cachedVal = p->rpaInfo.rpaNeedsFullCheckCachedVal.load();
+    if (cachedVal > -1) return cachedVal;
+    static const QString errPrefix("Error reading rpa_needs_full_check flag from the meta db");
+    const int dbVal = /* 0 or 1 */ GenericDBGet<bool>(p->db.meta.get(), kRpaNeedsFullCheck, true, errPrefix, false,
+                                                      p->db.defReadOpts).value_or(false);
+    p->rpaInfo.rpaNeedsFullCheckCachedVal = dbVal;
+    return dbVal;
+}
+
+// public version of above, always latches to true
+void Storage::flagRpaIndexAsPotentiallyInconsistent()
+{
+    ExclusiveLockGuard g(p->blocksLock);
+    setRpaNeedsFullCheck(true);
+}
+
+bool Storage::runRpaSlowCheckIfDBIsPotentiallyInconsistent(BlockHeight configuredStartHeight, BlockHeight tipHeight)
+{
+    ExclusiveLockGuard g(p->blocksLock);
+    if (isRpaNeedsFullCheck()) {
+        try {
+            // To avoid infinite consistency-check-loops if there is a gap at the beginning before our configured height
+            // we must clamp the DB to the height range we know we need now, before proceeding.
+            clampRpaEntries_nolock(configuredStartHeight, tipHeight);
+            loadCheckRpaDB();
+        } catch (const std::exception &e) { Fatal() << "Caught exception: " << e.what(); }
+        return true;
+    }
+    return false;
+}
+
+
 void Storage::saveUtxoCt()
 {
     static const QString errPrefix("Error writing the utxo count to the meta db");
@@ -3543,23 +3936,56 @@ std::optional<unsigned> Storage::heightForTxNum_nolock(TxNum n) const
     return ret;
 }
 
-std::optional<TxHash> Storage::hashForHeightAndPos(BlockHeight height, unsigned posInBlock) const
+std::optional<TxHash> Storage::hashForHeightAndPos(BlockHeight height, uint32_t posInBlock,
+                                                   const SharedLockGuard *existingBlocksLock) const
 {
     std::optional<TxHash> ret;
-    TxNum txNum = 0;
-    SharedLockGuard(p->blocksLock); // guarantee a consistent view (so that data doesn't mutate from underneath us)
+    Span<const uint32_t> singleItem{&posInBlock, size_t{1u}};
+    auto vec = hashesForHeightAndPosVec(height, singleItem, existingBlocksLock);
+    if (vec.empty()) return ret; // bad height
+    ret = std::move(vec.front());
+    return ret;
+}
+
+std::vector<std::optional<TxHash>> Storage::hashesForHeightAndPosVec(BlockHeight height, Span<const uint32_t> positionsInBlock,
+                                                                     const SharedLockGuard *existingBlocksLock) const
+{
+    std::vector<std::optional<TxHash>> ret;
+    if (positionsInBlock.empty()) return ret; // unlikely fast path
+    ret.reserve(positionsInBlock.size());
+    BlkInfo bi;
+
+    // Below is to implement optionally locking with: SharedLockGuard(p->blocksLock), if existingBlocksLock is nullptr
+    SharedLockGuard maybeLockedByUs;
+    if (existingBlocksLock == nullptr) {
+        maybeLockedByUs = SharedLockGuard(p->blocksLock);
+    } else if (UNLIKELY(existingBlocksLock->mutex() != &p->blocksLock)) {
+        Error() << "Internal Error: expected the `existingBlocksLock` to be holding `p->blocksLock` (but it is not) in "
+                << __func__ << ". FIXME!";
+        return ret;
+    }
+
+    // At this point p->blocksLock is held for the rest of the function (either by caller or by us).
+    // We need to hold p->blocksLock here to get a consistent view (so that data doesn't mutate from beneath us).
+
     {
         SharedLockGuard g(p->blkInfoLock);
         if (height >= p->blkInfos.size())
-            return ret;
-        const BlkInfo & bi = p->blkInfos[height];
-        if (posInBlock >= bi.nTx)
-            return ret;
-        txNum = bi.txNum0 + posInBlock;
+            return ret; // empty vector for bad height
+        bi = p->blkInfos[height];
     }
-    ret = hashForTxNum(txNum);
+    for (const uint32_t posInBlock : positionsInBlock) {
+        if (posInBlock >= bi.nTx)
+            ret.emplace_back(std::nullopt); // indicate this position is bad with a nullopt
+        else {
+            const TxNum txNum = bi.txNum0 + posInBlock;
+            ret.push_back(hashForTxNum(txNum));
+        }
+    }
+
     return ret;
 }
+
 
 // NOTE: the returned vector has hashes in bitcoind memory order (little endian -- unlike every other function in this file!)
 std::vector<TxHash> Storage::txHashesForBlockInBitcoindMemoryOrder(BlockHeight height) const
@@ -3612,12 +4038,12 @@ std::vector<TxHash> Storage::txHashesForBlockInBitcoindMemoryOrder(BlockHeight h
 
 /// Returns a lambda that can be called to increment the counter. If the counter exceeds maxHistory, lambda will throw.
 /// Used below in getHistory(), listUnspent(), getBalance()
-static auto GetMaxHistoryCtrFunc(const QString &name, const HashX &hashX, size_t maxHistory)
+static auto GetMaxHistoryCtrFunc(const QString &name, const QString &itemName, size_t maxHistory)
 {
-    return [name, hashX, maxHistory, ctr = size_t{0u}](size_t incr = 1u) mutable {
+    return [name, itemName, maxHistory, ctr = size_t{0u}](size_t incr = 1u) mutable {
         if (UNLIKELY((ctr += incr) > maxHistory)) {
-            throw HistoryTooLarge(QString("%1 for scripthash %2 exceeds MaxHistory %3 with %4 items!")
-                                  .arg(name, QString(hashX.toHex())).arg(maxHistory).arg(ctr));
+            throw HistoryTooLarge(QString("%1 for %2 exceeds max history %3 with %4 items!")
+                                  .arg(name, itemName).arg(maxHistory).arg(ctr));
         }
     };
 }
@@ -3628,7 +4054,8 @@ auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf, BlockHeigh
     History ret;
     if (hashX.length() != HashLen)
         return ret;
-    auto IncrementCtrAndThrowIfExceedsMaxHistory = GetMaxHistoryCtrFunc("History", hashX, options->maxHistory);
+    auto IncrementCtrAndThrowIfExceedsMaxHistory = GetMaxHistoryCtrFunc("History", QString("scripthash %1").arg(QString(hashX.toHex())),
+                                                                        options->maxHistory);
     try {
         SharedLockGuard g(p->blocksLock);  // makes sure history doesn't mutate from underneath our feet
         if (conf) {
@@ -3672,6 +4099,147 @@ auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf, BlockHeigh
     return ret;
 }
 
+auto Storage::getRpaHistory(const Rpa::Prefix &prefix, bool includeConfirmed, bool includeMempool,
+                            BlockHeight fromHeight, std::optional<BlockHeight> endHeight) const-> History
+{
+    History ret;
+    auto IncrementCtrAndThrowIfExceedsMaxHistory = GetMaxHistoryCtrFunc("RPA History", QString("prefix '%1'").arg(QString(prefix.toHex())),
+                                                                        options->rpa.maxHistory);
+    double tReadDb = 0., tPfxSearch = 0., tResolveTxIdx = 0., tWaitForLock = 0., tBuildRes = 0.;
+
+    Tic t0;
+    SharedLockGuard g(p->blocksLock);  // makes sure history doesn't mutate from underneath our feet
+    tWaitForLock += t0.msec<double>();
+
+    const int rpaStartHeight = getConfiguredRpaStartHeight();
+    if (UNLIKELY(rpaStartHeight < 0)) {
+        // This should have been caught by the caller. Warn to log here since we don't want to do this filtering of
+        // requests here in this asynch-called function since it wastes resources to do it this late in the pipeline.
+        Warning() << "getRpaHistory() called but RPA appears to be disabled. FIXME!";
+        throw InternalError("RPA is disabled");
+    }
+
+    const auto tipHeight = latestHeight();
+    if (UNLIKELY( ! tipHeight)) throw InternalError("No blockchain");
+    if (unsigned(rpaStartHeight) > *tipHeight) {
+        // Nothing to do! Index not yet enabled! Warn here since likely the admin has misconfigured his server.
+        Warning() << "getRpaHistory called but rpa_start_height is " << rpaStartHeight << ", which is greater than the"
+                  << " block chain height of " << *tipHeight << ".\n\nIf you wish to enable RPA indexing, set the RPA"
+                  << " start height to below the blockchain height using the `rpa_start_height` configuration"
+                  << " variable. If, on the other hand, you wish to disable RPA indexing, set `rpa = false` in the"
+                  << " configuration file.\n\n";
+        return ret;
+    }
+
+    try {
+        if (includeConfirmed) {
+            // sanitize `fromHeight` and `endHeight`; restrict to range: [rpaStartHeight, tipHeight + 1)
+            fromHeight = std::max<unsigned>(rpaStartHeight, fromHeight); // restrict `from` to be >= configured height
+            endHeight = std::min(endHeight.value_or(*tipHeight + 1u), *tipHeight + 1u); // define and restrict `end` to be <= tip height + 1
+
+            // We use an iterator and seek forward each time because this is far faster since our table rows are in order
+            // of height (serialized as big endian). Note that the assumption here is that the rpa table contains
+            // *only* records of the form: Key = 4-byte big endian height, Value = serialized Rpa::PrefixTable.
+            // If this assumption changes, update this code to not use this assumption as an optimization.
+            std::unique_ptr<rocksdb::Iterator> iter{p->db.rpa->NewIterator(p->db.defReadOpts)};
+            if (UNLIKELY(!iter)) throw DatabaseError("Unable to obtain an iterator to the rpa db");
+
+            BlockHeight height = fromHeight;
+            size_t blockScansRemaining = std::max(options->rpa.historyBlockLimit, 1u); // use configured limit (default: 60)
+            for ( /* */; blockScansRemaining && height < *endHeight; ++height, --blockScansRemaining) {
+                Tic t1;
+                const RpaDBKey dbKey(height);
+                if (height == fromHeight)
+                    iter->Seek(ToSlice(dbKey));
+                else
+                    iter->Next(); // bump iterator one item... this is the secret sauce to make this fast.
+                bool ok{};
+                if (UNLIKELY(!iter->Valid() || RpaDBKey::fromBytes(FromSlice(iter->key()), &ok, true) != dbKey || !ok)) {
+                    // This should never happen -- error to console just in case we have bugs and/or missing data.
+                    Error() << "Missing RPA PrefixTable for height: " << height << ". This should never happen."
+                            << " Report this to situation to the developers.";
+                    break;
+                }
+                // Note: This read-only Rpa::PrefixTable is "lazy loaded" and populated only for records we access on-demand
+                const auto valueSlice = iter->value(); // NB: slice is invalidated when iter is modified
+                const auto prefixTable = Deserialize<Rpa::PrefixTable>(FromSlice(valueSlice)); // Throws on failure to deserialize.
+                tReadDb += t1.msec<double>();
+                // Update RpaInfo stats
+                p->rpaInfo.nReads.fetch_add(1, std::memory_order_relaxed);
+                p->rpaInfo.nBytesRead.fetch_add(sizeof(uint32_t) + valueSlice.size(), std::memory_order_relaxed);
+
+                t1 = Tic();
+                const bool needSort = prefix.range().size() > 1u; // if prefix spans multiple rows of table, sort and uniqueify
+                auto txIdxVec = prefixTable.searchPrefix(prefix, needSort);
+                tPfxSearch += t1.msec<double>();
+                if (txIdxVec.empty()) continue; // no match for this prefix at this height, keep going
+
+                IncrementCtrAndThrowIfExceedsMaxHistory(txIdxVec.size());
+
+                t1 = Tic();
+                const auto vecOfOptHashes = hashesForHeightAndPosVec(height, txIdxVec, &g /* <-- tell callee not to re-lock blocksLock */);
+                tResolveTxIdx += t1.msec<double>();
+                t1 = Tic();
+                for (const auto & optHash : vecOfOptHashes) {
+                    if (LIKELY(optHash)) ret.emplace_back(*optHash, int(height));
+                }
+                tBuildRes += t1.msec<double>();
+            }
+
+            // Special behavior: disable mempool append if we didn't reach past tipHeight
+            if (includeMempool && height <= *tipHeight)
+                includeMempool = false;
+        }
+        if (includeMempool) {
+            auto [mempool, lock] = this->mempool();
+            if (LIKELY(mempool.optPrefixTable)) {
+                const auto origSize = ret.size();
+                const bool needSort = prefix.range().size() > 1u; // if prefix spans multiple rows of mempool table, sort and uniqueify
+                Tic t1;
+                const auto txHashes = mempool.optPrefixTable->searchPrefix(prefix, needSort /* to get unique hashes */);
+                tPfxSearch += t1.msec<double>();
+
+                IncrementCtrAndThrowIfExceedsMaxHistory(txHashes.size());
+
+                t1 = Tic();
+                for (const auto & txHash : txHashes) {
+                    if (auto it = mempool.txs.find(txHash); LIKELY(it != mempool.txs.end())) {
+                        const int height = it->second->hasUnconfirmedParentTx ? -1 : 0;
+                        ret.emplace_back(txHash, height, it->second->fee);
+                    } else {
+                        Error() << "Tx: " << Util::ToHexFast(txHash) << " for prefix '" << prefix.toHex() << "'"
+                                << " exists in Mempool prefix table but not in Mempool txs! FIXME!";
+                    }
+                }
+                // force unconf parent to sort after conf parent txns
+                std::sort(ret.begin() + origSize, ret.end(), [](const HistoryItem &a, const HistoryItem &b){
+                    int ha = std::max(a.height, -1), hb = std::max(b.height, -1);
+                    if (ha <= 0) ha = 0x7f'ff'ff'fe - ha;  // -1 becomes -> 0x7f'ff'ff'ff, 0 becomes -> 0x7f'ff'ff'fe
+                    if (hb <= 0) hb = 0x7f'ff'ff'fe - hb;
+                    return std::tie(ha, a.hash) < std::tie(hb, b.hash);
+                });
+                // uniqueify
+                auto last = std::unique(ret.begin() + origSize, ret.end());
+                ret.erase(last, ret.end());
+                tBuildRes += t1.msec<double>();
+            } else {
+                // This should never happen for mempool.
+                Warning() << "Missing RPA PrefixTable for mempool. This should never happen. Contact the developers to report this.";
+            }
+        }
+    } catch (const std::exception &e) {
+        Warning(Log::Magenta) << __func__ << ": " << e.what();
+    }
+    Debug() << "getRpaHistory returned " << ret.size() << " items"
+            << ", readDb: " << QString::number(tReadDb, 'f', 3) << " msec"
+            << ", pfxSearch: " << QString::number(tPfxSearch, 'f', 3) << " msec"
+            << ", resolveTxIdx: " << QString::number(tResolveTxIdx, 'f', 3) << " msec"
+            << ", waitForLock: " << QString::number(tWaitForLock, 'f', 3) << " msec"
+            << ", buildResults: " << QString::number(tBuildRes, 'f', 3) << " msec"
+            << ", total: " << t0.msecStr() << " msec";
+    return ret;
+}
+
 static bool ShouldTokenFilter(const Storage::TokenFilterOption tokenFilter, const bitcoin::token::OutputDataPtr & p)
 {
     switch (tokenFilter) {
@@ -3694,7 +4262,9 @@ auto Storage::listUnspent(const HashX & hashX, const TokenFilterOption tokenFilt
         return ret;
     try {
         auto ShouldFilter = [tokenFilter](const bitcoin::token::OutputDataPtr & p) { return ShouldTokenFilter(tokenFilter, p); };
-        auto IncrementCtrAndThrowIfExceedsMaxHistory = GetMaxHistoryCtrFunc("Unspent UTXOs", hashX, options->maxHistory);
+        auto IncrementCtrAndThrowIfExceedsMaxHistory = GetMaxHistoryCtrFunc("Unspent UTXOs",
+                                                                            QString("scripthash %1").arg(QString(hashX.toHex())),
+                                                                            options->maxHistory);
         constexpr size_t iota = 10; // we initially reserve this many items in the returned array in order to prevent redundant allocations in the common case.
         std::unordered_set<TXO> mempoolConfirmedSpends;
         mempoolConfirmedSpends.reserve(iota);
@@ -3753,6 +4323,7 @@ auto Storage::listUnspent(const HashX & hashX, const TokenFilterOption tokenFilt
             } // release mempool lock
             { // begin confirmed/db search
                 std::unique_ptr<rocksdb::Iterator> iter(p->db.shunspent->NewIterator(p->db.defReadOpts));
+                if (UNLIKELY(!iter)) throw DatabaseError("Unable to obtain an iterator to the shunspent db"); // should never happen
                 const rocksdb::Slice prefix = ToSlice(hashX); // points to data in hashX
 
                 // Search table for all keys that start with hashx's bytes. Note: the loop end-condition is strange.
@@ -3820,13 +4391,16 @@ auto Storage::getBalance(const HashX &hashX, TokenFilterOption tokenFilter) cons
     if (hashX.length() != HashLen)
         return ret;
     auto ShouldFilter = [tokenFilter](const bitcoin::token::OutputDataPtr & p) { return ShouldTokenFilter(tokenFilter, p); };
-    auto IncrementCtrAndThrowIfExceedsMaxHistory = GetMaxHistoryCtrFunc("GetBalance UTXOs", hashX, options->maxHistory);
+    auto IncrementCtrAndThrowIfExceedsMaxHistory = GetMaxHistoryCtrFunc("GetBalance UTXOs",
+                                                                        QString("scripthash %1").arg(QString(hashX.toHex())),
+                                                                        options->maxHistory);
     try {
         // take shared lock (ensure history doesn't mutate from underneath our feet)
         SharedLockGuard g(p->blocksLock);
         {
             // confirmed -- read from db using an iterator
             std::unique_ptr<rocksdb::Iterator> iter(p->db.shunspent->NewIterator(p->db.defReadOpts));
+            if (UNLIKELY(!iter)) throw DatabaseError("Unable to obtain an iterator to the shunspent db"); // should never happen
             const rocksdb::Slice prefix = ToSlice(hashX); // points to data in hashX
 
             // Search table for all keys that start with hashx's bytes. Note: the loop end-condition is strange.
@@ -4260,6 +4834,12 @@ namespace {
         return ret;
     }
 
+    template <> Rpa::PrefixTable Deserialize(const QByteArray &ba, bool *ok) {
+        Rpa::PrefixTable ret(ba); // Note: PrefixTable does not keep a copy of `ba`, so it's ok if `ba` is a view into a temporary Slice
+        if (ok) *ok = true;
+        return ret;
+    }
+
     // essentially takes a byte copy of the data of BlkInfo; note that we waste some space at the end for legacy compat.
     template <> QByteArray Serialize(const BlkInfo &b) {
         QByteArray ret(QByteArray::size_type(sizeof(b)), Qt::Uninitialized);
@@ -4647,7 +5227,7 @@ namespace {
         Debug::forceEnable = true;
         const QString txnumsFile = std::getenv("TFILE") ? std::getenv("TFILE") : "";
         if (txnumsFile.isEmpty() || !QFile::exists(txnumsFile))
-            throw Exception("Please pass the TFILE env var as a path to an existing \"txnum2hash\" data record file");
+            throw Exception("Please pass the TFILE env var as a path to an existing \"txnum2txhash\" data record file");
         std::unique_ptr<RecordFile> rf;
         rf = std::make_unique<RecordFile>(txnumsFile, HashLen, 0x000012e2); // this may throw
         using KeyType = decltype(DeduceSmallestTypeForNumBytes<NB>());

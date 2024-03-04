@@ -1,6 +1,6 @@
 //
 // Fulcrum - A fast & nimble SPV Server for Bitcoin Cash
-// Copyright (C) 2019-2023 Calin A. Culianu <calin.culianu@gmail.com>
+// Copyright (C) 2019-2024 Calin A. Culianu <calin.culianu@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -34,10 +34,7 @@
 
 #include <algorithm>
 #include <limits>
-#include <mutex>
 #include <optional>
-#include <shared_mutex>
-#include <tuple>
 #include <type_traits>
 
 
@@ -144,7 +141,6 @@ public:
     // Max history & max buffer
     static constexpr int defaultMaxBuffer = 8'000'000, maxBufferMin = 64'000, maxBufferMax = 100'000'000;
     static constexpr int defaultMaxHistory = 125'000, maxHistoryMin = 1000, maxHistoryMax = 25'000'000;
-
     static constexpr bool isMaxBufferSettingInBounds(int m) { return m >= maxBufferMin && m <= maxBufferMax; }
     static constexpr int clampMaxBufferSetting(const qint64 m64, const bool noClampMax=false) {
         const int m = std::min(qint64(std::numeric_limits<int>::max()), m64); // clamp high end to int32 always
@@ -153,7 +149,6 @@ public:
 
     std::atomic_int maxBuffer = defaultMaxBuffer; ///< this can be set at runtime by FulcrumAdmin as of Fulcrum 1.0.4, hence why it's an atomic.
     int maxHistory = defaultMaxHistory;
-
     // Work queue options as configured by user; these are the saved values from config (if any) and are not
     // necessarily the options used in practice (those can be determined by querying the Util::ThreadPool).
     int workQueue = -1;
@@ -287,6 +282,37 @@ public:
     // CLI: --pidfile
     // config: pidfile
     QString pidFileAbsPath; ///< If non-empty, app will write PID to this file and delete this file on shutdown
+
+    // RPA-related (all grouped together in this struct)
+    struct Rpa {
+        // CLI: --rpa
+        // config: rpa - Enable/disable the RPA index
+        enum EnabledSpec { Disabled, Enabled, Auto /* Auto means ON for BCH, OFF for everything else */ };
+        static constexpr EnabledSpec defaultEnabledSpec = Auto; // default Auto (ON for BCH, OFF for every other chain)
+        EnabledSpec enabledSpec = defaultEnabledSpec;
+        QString enabledSpecToString() const { return enabledSpec == Disabled ? "disabled" : (enabledSpec == Enabled ? "enabled" : "auto (enabled for BCH only)"); }
+        // Note: to see if RPA is enabled, check the Storage object since it makes the final decision based on `enabledSpec` & `coin`
+
+        // config: rpa_max_history - Limit result array size for blockchain.rpa.get_history
+        // This can be set independently of app-level max_history (but defaults to max_history). If user specifies
+        // max_history but leaves rpa_max_history unspecified, then rpa_max_history also gets set to whatever
+        // the user said for max_history at app init (see: App.cpp).
+        int maxHistory = defaultMaxHistory;
+
+        // config: rpa_history_block_limit (aka: rpa_history_blocks) - Limit number of blocks to scan at once for blockchain.rpa.get_history
+        static constexpr unsigned defaultHistoryBlockLimit = 60, historyBlockLimitMin = 1, historyBlockLimitMax = 2016;
+        unsigned historyBlockLimit = defaultHistoryBlockLimit;
+
+        // config: rpa_prefix_bits_min - Minimum number of prefix bits for a blockchain.rpa.* query (DoS protection measure)
+        static constexpr int defaultPrefixBitsMin = 8;
+        int prefixBitsMin = defaultPrefixBitsMin; // NB: this value should be bounded by [Rpa::PrefixBitsMin, Rpa::PrefixBitsMax], and be a multiple of 4
+
+        // config: rpa_start_height - From what height to begin indexing RPA data.
+        // -1 means "auto" and is chain-specific --> mainnet: height 825,000, all other nets: height 0 (from 0 for perf. testing)
+        static constexpr int defaultStartHeightForMainnet = 825'000, // BTC & BCH: sometime in January 2024; LTC -> way in the past (LTC unlikely to ever use this facility anyway)
+                             defaultStartHeightOtherNets = 0;
+        int requestedStartHeight = -1;
+    } rpa;
 };
 
 /// A class encapsulating a simple read-only config file format.  The format is similar to the bitcoin.conf format

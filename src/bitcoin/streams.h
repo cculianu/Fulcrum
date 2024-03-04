@@ -199,6 +199,13 @@ public:
         std::memcpy(dst, m_data.data() + m_pos, n);
         m_pos = pos_next;
     }
+
+    size_type GetPos() const { return m_pos; }
+
+    void seek(size_type new_pos) {
+        if (new_pos < 0) throw std::ios_base::failure("Cannot seek to a negative offset");
+        m_pos = new_pos;
+    }
 };
 
 

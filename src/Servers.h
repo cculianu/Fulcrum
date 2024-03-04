@@ -23,8 +23,8 @@
 #include "Options.h"
 #include "PeerMgr.h"
 #include "RollingBloomFilter.h"
+#include "Rpa.h"
 #include "RPC.h"
-#include "Util.h"
 #include "Version.h"
 
 #include <QHash>
@@ -349,7 +349,8 @@ public:
     /// which also needs a features dict when *it* calls add_peer on peer servers.
     /// NOTE: Be sure to only ever call this function from the same thread as the AbstractConnection (first arg) instance!
     static QVariantMap makeFeaturesDictForConnection(AbstractConnection *, const QByteArray &genesisHash,
-                                                     const Options & options, bool hasDSProofRPC, bool hasCashTokens);
+                                                     const Options & options, bool hasDSProofRPC, bool hasCashTokens,
+                                                     int rpaStartingHeight /* <=-1 means no RPA */);
 
     virtual QString prettyName() const override;
 
@@ -414,6 +415,12 @@ private:
     void rpc_blockchain_transaction_id_from_pos(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     void rpc_blockchain_transaction_subscribe(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     void rpc_blockchain_transaction_unsubscribe(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+
+    // reusable addresses
+    void rpc_blockchain_rpa_get_history(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+    void rpc_blockchain_reusable_get_history(Client *, RPC::BatchId, const RPC::Message &); // fully implemented (alias for above, reorders the args)
+    void rpc_blockchain_rpa_get_mempool(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
+
     // transaction.dsproof
     void rpc_blockchain_transaction_dsproof_get(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
     void rpc_blockchain_transaction_dsproof_list(Client *, RPC::BatchId, const RPC::Message &); // fully implemented
@@ -457,6 +464,15 @@ private:
 
     /// Helper used by blockchain.*.get_history to get the from_height and to_height optional params, if any
     GetHistory_FromToBH parseFromToBlockHeightCommon(const RPC::Message &m) const;
+
+    /// Helper used by blockchain.rpa.* to parse the prefix arg. Throws RPCError on invalid or unsupported arg.
+    Rpa::Prefix parseRpaPrefixParamCommon(const QString &paramHex) const;
+    /// Called from blockchain.rpa.get_mempool and blockchain.rpa.get_history
+    /// Returns a list of QVariantMaps of the form: { "tx_hash": "xxx", "height": n, "fee": sats } (with "fee" appearing only for mempool txns)
+    /// Note: for mempool-only search, `fromTo` is ignored
+    QVariantList getRpaHistoryCommon(const Rpa::Prefix & prefix, bool mempoolOnly, const GetHistory_FromToBH fromTo = default_GetHistory_FromToBH);
+    /// Helper to throw RPCError if RPA is disabled for this server
+    void throwIfRpaDisabled() const;
 
     /// Basically a namespace for our rpc dispatch tables, etc
     struct StaticData {

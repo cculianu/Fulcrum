@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/testdata">
+        <file>bch_block_833705.bin</file>
+    </qresource>
+</RCC>

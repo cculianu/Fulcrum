@@ -41,6 +41,7 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <tuple>
 #include <unordered_set>
 
 
@@ -59,6 +60,7 @@ void Controller::startup()
     /// events arrive AFTER the signal/slot events do.  So in order to make sure putBlock arrives BEFORE the
     /// DownloadBlocksTask completes, we have to do this. On Windows and MacOS this was not an issue, just on Linux.
     conns += connect(this, &Controller::putBlock, this, &Controller::on_putBlock);
+    conns += connect(this, &Controller::putRpaIndex, this, &Controller::on_putRpaIndex);
 
     stopFlag = false;
 
@@ -82,9 +84,11 @@ void Controller::startup()
             }
         }
         // set the atomic -- this affects how we parse blocks, etc
-        coinType = ctype;
-        if (ctype != BTC::Coin::Unknown)
+        coinType.store(ctype, std::memory_order_relaxed);
+        if (ctype != BTC::Coin::Unknown) {
             bitcoin::SetCurrencyUnit(coin.toStdString());
+            didReceiveCoinDetectionFromBitcoinDMgr.store(true, std::memory_order_relaxed); // latch this to true now so we don't stall waiting for bitcoind to tell us our "Coin" before we do synching, because we know our coin already!
+        }
     }
 
 
@@ -301,6 +305,9 @@ void Controller::startup()
 
 void Controller::on_coinDetected(const BTC::Coin detectedtype)
 {
+    // NOTE: This runs in the bitcoindmgr thread, and not in our thread. Any operations here should bear that in mind
+    // and not touch any local class variables that are not guarded by a lock and/or are not atomic.
+    didReceiveCoinDetectionFromBitcoinDMgr.store(true, std::memory_order_relaxed);
     const auto ourtype = coinType.load(std::memory_order_relaxed);
     if (ourtype == BTC::Coin::Unknown) {
         // We had no coin set in DB, but we just detected the coin, set it now and return.
@@ -462,11 +469,14 @@ QString ChainInfo::toString() const
     return ret;
 }
 
-struct DownloadBlocksTask final : public CtlTask
+using VarDLTaskResult = std::variant<PreProcessedBlockPtr, Controller::RpaOnlyModeDataPtr>;
+
+struct DownloadBlocksTask : CtlTask
 {
-    DownloadBlocksTask(unsigned from, unsigned to, unsigned stride, unsigned numBitcoinDClients, Controller *ctl);
+    DownloadBlocksTask(unsigned from, unsigned to, unsigned stride, unsigned numBitcoinDClients,
+                       int rpaStartHeight/* <0 means disabled*/, Controller *ctl);
     ~DownloadBlocksTask() override { stop(); } // paranoia
-    void process() override;
+    void process() override final;
 
     const unsigned from = 0, to = 0, stride = 1, expectedCt = 1;
     unsigned next = 0;
@@ -484,6 +494,7 @@ struct DownloadBlocksTask final : public CtlTask
     const bool allowSegWit; ///< initted in c'tor. If true, deserialize blocks using the optional segwit extensons to the tx format.
     const bool allowMimble; ///< like above, but if true we allow mimblewimble (litecoin)
     const bool allowCashTokens; ///< allow special cashtoken deserialization rules (BCH only)
+    const int rpaStartHeight; ///< if >= 0, rpa data will be indexed in PreProcessedBlock, starting at this height.
 
     void do_get(unsigned height);
 
@@ -495,12 +506,15 @@ struct DownloadBlocksTask final : public CtlTask
     size_t index2Height(size_t index) { return size_t( from + (index * stride) ); }
     // given a block height, return the index into our array
     size_t height2Index(size_t h) { return size_t( ((h-from) + stride-1) / stride ); }
+protected:
+    virtual VarDLTaskResult process_block_guts(unsigned bnum, const QByteArray &rawblock, const bitcoin::CBlock &cblock);
 };
 
-DownloadBlocksTask::DownloadBlocksTask(unsigned from, unsigned to, unsigned stride, unsigned nClients, Controller *ctl_)
+DownloadBlocksTask::DownloadBlocksTask(unsigned from, unsigned to, unsigned stride, unsigned nClients, int rpaHeight, Controller *ctl_)
     : CtlTask(ctl_, QStringLiteral("Task.DL %1 -> %2").arg(from).arg(to)), from(from), to(to), stride(stride),
       expectedCt(unsigned(nToDL(from, to, stride))), max_q(int(nClients)+1),
-      allowSegWit(ctl_->isSegWitCoin()), allowMimble(ctl_->isMimbleWimbleCoin()), allowCashTokens(ctl_->isBCHCoin())
+      allowSegWit(ctl_->isSegWitCoin()), allowMimble(ctl_->isMimbleWimbleCoin()), allowCashTokens(ctl_->isBCHCoin()),
+      rpaStartHeight(rpaHeight)
 {
     FatalAssert( (to >= from) && (ctl_) && (stride > 0), "Invalid params to DonloadBlocksTask c'tor, FIXME!");
     if (stride > 1 || expectedCt > 1) {
@@ -553,10 +567,18 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
                     const auto header = rawblock.left(HEADER_SIZE); // we need a deep copy of this anyway so might as well take it now.
                     QByteArray chkHash;
                     if (bool sizeOk = header.length() == HEADER_SIZE; sizeOk && (chkHash = BTC::HashRev(header)) == hash) {
-                        PreProcessedBlockPtr ppb;
+                        PreProcessedBlockPtr maybe_ppb; // either this is filled
+                        Controller::RpaOnlyModeDataPtr maybe_rpaOnlyMode;  // or this is.. but not both!
                         try {
                             const auto cblock = BTC::Deserialize<bitcoin::CBlock>(rawblock, 0, allowSegWit, allowMimble, allowCashTokens, allowMimble /* throw if junk at end if Litecoin (catch deser. bugs) */);
-                            ppb = PreProcessedBlock::makeShared(bnum, size_t(rawblock.size()), cblock);
+                            {
+                                VarDLTaskResult var = process_block_guts(bnum, rawblock, cblock);
+                                std::visit(
+                                    Overloaded{
+                                        [&](PreProcessedBlockPtr & p) { maybe_ppb = std::move(p); },
+                                        [&](Controller::RpaOnlyModeDataPtr & r) { maybe_rpaOnlyMode = std::move(r); }
+                                    }, var);
+                            }
                             if (allowMimble && Debug::isEnabled()) {
                                 // Litecoin only
                                 bool doSerChk{};
@@ -604,18 +626,26 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
                             }
                             throw; // outer catch clause will handle printing the message
                         }
-                        assert(bool(ppb));
+                        assert(bool(maybe_ppb) + bool(maybe_rpaOnlyMode) == 1);
 
-                        if (TRACE) Trace() << "block " << bnum << " size: " << rawblock.size() << " nTx: " << ppb->txInfos.size();
+                        // Grab some stats
+                        const size_t numTxns = maybe_ppb ? maybe_ppb->txInfos.size()
+                                                         : maybe_rpaOnlyMode->nTx,
+                                     numIns  = maybe_ppb ? maybe_ppb->inputs.size()
+                                                         : maybe_rpaOnlyMode->nIns,
+                                     numOuts = maybe_ppb ? maybe_ppb->outputs.size()
+                                                         : maybe_rpaOnlyMode->nOuts;
+
+                        if (TRACE) Trace() << "block " << bnum << " size: " << rawblock.size() << " nTx: " << numTxns;
 
                         rawblock.clear(); // free memory right away (needed for ScaleNet huge blocks)
 
                         // . <--- NOTE: rawblock not to be used beyond this point (it is now empty)
 
                         // update some stats for /stats endpoint
-                        nTx += ppb->txInfos.size();
-                        nOuts += ppb->outputs.size();
-                        nIns += ppb->inputs.size();
+                        nTx += numTxns;
+                        nOuts += numOuts;
+                        nIns += numIns;
 
                         const size_t index = height2Index(bnum);
                         ++goodCt;
@@ -625,7 +655,16 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
                             emit progress(lastProgress);
                         }
                         if (TRACE) Trace() << resp.method << ": header for height: " << bnum << " len: " << header.length();
-                        emit ctl->putBlock(this, ppb); // send the block off to the Controller thread for further processing and for save to db
+
+                        // send the result off to the Controller
+                        if (maybe_ppb) {
+                            // send the block off to the Controller thread for further processing and for save to db
+                            emit ctl->putBlock(this, maybe_ppb);
+                        } else {
+                            // RPA-only indexing mode, send the serialized RPA prefix table data to the Controller thread
+                            emit ctl->putRpaIndex(this, maybe_rpaOnlyMode);
+                        }
+
                         if (goodCt >= expectedCt) {
                             // flag state to maybeDone to do checks when process() called again
                             maybeDone = true;
@@ -659,6 +698,55 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
             emit errored();
         }
     });
+}
+
+// This has been refactored out of do_get() above to offer polymorphic subclasses the ability to also leverage
+// the DownloadBlocksTask to get blocks to synch various things (such as synching the RPA index if it is detected to
+// be out-of-synch due to configuration change, etc).
+VarDLTaskResult DownloadBlocksTask::process_block_guts(unsigned bnum, const QByteArray &rawblock, const bitcoin::CBlock &cblock)
+{
+    const bool indexRpaForThisBlock = rpaStartHeight >= 0 && bnum >= unsigned(rpaStartHeight);
+    auto ppb = PreProcessedBlock::makeShared(bnum, size_t(rawblock.size()), cblock, indexRpaForThisBlock);
+    if (UNLIKELY(rpaStartHeight >= 0 && bnum == unsigned(rpaStartHeight))) {
+        Util::AsyncOnObject(ctl, [height = rpaStartHeight]{
+            // We do this in the Controller thread to make the log look pretty, since all other logging
+            // user sees at this point is from the Controller thread anyway ...
+            Log() << "RPA index enabled at height: " << height;
+        });
+    }
+    return ppb;
+}
+
+// Leverages the DownloadBlocksTask to synch the RPA index, which only needs to read the block's inputs, and is more
+// lightweight than block processing via PreProcessedBlock.
+struct DownloadBlocksTask_SynchRpa : DownloadBlocksTask
+{
+    using DownloadBlocksTask::DownloadBlocksTask;
+protected:
+    VarDLTaskResult process_block_guts(unsigned bnum, const QByteArray &rawblock, const bitcoin::CBlock &cblock) override final;
+};
+
+VarDLTaskResult DownloadBlocksTask_SynchRpa::process_block_guts(unsigned bnum, const QByteArray &rawblock, const bitcoin::CBlock &cblock)
+{
+    Controller::RpaOnlyModeDataPtr ret = std::make_shared<Controller::RpaOnlyModeData>();
+    ret->height = bnum;
+    ret->rawBlockSizeBytes = rawblock.size();
+    const auto vtxSize = ret->nTx = cblock.vtx.size();
+    Rpa::PrefixTable pt;
+    for (size_t txIdx = 1 /* skip coinbase txn */; txIdx < vtxSize; ++txIdx) {
+        const auto & tx = *cblock.vtx[txIdx];
+        const size_t numIns = tx.vin.size();
+        ret->nIns += numIns;
+        for (size_t inputNum = 0; inputNum < Rpa::InputIndexLimit && inputNum < numIns; ++inputNum) {
+            const auto & inp = tx.vin[inputNum];
+            pt.addForPrefix(Rpa::Prefix(Rpa::Hash(inp)), txIdx);
+            ++ret->nInsIndexed;
+        }
+        ret->nOuts += tx.vout.size();
+        ++ret->nTxsIndexed;
+    }
+    ret->serializedPrefixTable = pt.serialize();
+    return ret;
 }
 
 /// takes locks, prints to Log() every 30 seconds if there were changes
@@ -701,7 +789,10 @@ void Controller::printMempoolStatusToLog(size_t newSize, size_t numAddresses, do
 struct Controller::StateMachine
 {
     enum State : uint8_t {
-        Begin=0, WaitingForChainInfo, GetBlocks, DownloadingBlocks, FinishedDL, End, Failure, BitcoinDIsInHeaderDL,
+        Begin=0, WaitingForChainInfo,
+        GetBlocks, DownloadingBlocks, FinishedDL, // regular full synch forward, PreProcessedBlockPtr instances created in dlResults table
+        DownloadingBlocks_RPA, FinishedDL_RPA, // RPA-index-only synch, RpaOnlyModeDataPtr instances created in dlResults table
+        End, Failure, BitcoinDIsInHeaderDL,
         Retry, RetryInIBD,
         SynchMempool, SynchingMempool, SynchMempoolFinished,
         SynchDSPs, SynchingDSPs, SynchDSPsFinished, // happens after synch mempool; only reached if bitcoind has the dsproof rpc
@@ -712,21 +803,23 @@ struct Controller::StateMachine
     int nHeaders = -1; ///< the number of headers our bitcoind has, in the chain we are synching
     BTC::Net net = BTC::Net::Invalid;  ///< This gets set by calls to getblockchaininfo by parsing the "chain" in the resulting dict
 
-    robin_hood::unordered_map<unsigned, PreProcessedBlockPtr> ppBlocks; // mapping of height -> PreProcessedBlock (we use robin_hood because it's faster for frequent updates)
+    robin_hood::unordered_map<unsigned, VarDLTaskResult> dlResults; // mapping of height -> variant[PreProcessedBlock|RpaOnlyModeDataPtr] (we use robin_hood because it's faster for frequent updates)
     unsigned startheight = 0, ///< the height we started at
              endHeight = 0; ///< the final (inclusive) block height we expect to receive to pronounce the synch done
 
-    std::atomic<unsigned> ppBlkHtNext = 0;  ///< the next unprocessed block height we need to process in series
+    std::atomic<unsigned> dlResultsHtNext = 0;  ///< the next unprocessed block height we need to process in series
 
     // todo: tune this
     const size_t DL_CONCURRENCY = qMax(Util::getNPhysicalProcessors()-1, 1U);
 
     size_t nTx = 0, nIns = 0, nOuts = 0, nSH = 0;
+    uint64_t nBytes = 0;
 
     const char * stateStr() const {
-        static constexpr const char *stateStrings[] = { "Begin", "WaitingForChainInfo", "GetBlocks", "DownloadingBlocks",
-                                                        "FinishedDL", "End",
-                                                        "Failure", "BitcoinDIsInHeaderDL", "Retry", "RetryInIBD",
+        static constexpr const char *stateStrings[] = { "Begin", "WaitingForChainInfo",
+                                                        "GetBlocks", "DownloadingBlocks", "FinishedDL",
+                                                        "DownloadingBlocks_RPA", "FinishedDL_RPA",
+                                                        "End", "Failure", "BitcoinDIsInHeaderDL", "Retry", "RetryInIBD",
                                                         "SynchMempool", "SynchingMempool", "SynchMempoolFinished",
                                                         "Unknown" /* this should always be last */ };
         auto idx = qMin(size_t(state), std::size(stateStrings)-1);
@@ -735,6 +828,7 @@ struct Controller::StateMachine
 
     static constexpr unsigned progressIntervalBlocks = 1000;
     size_t nProgBlocks = 0, nProgIOs = 0, nProgTx = 0, nProgSH = 0;
+    uint64_t nProgBytes = 0;
     double lastProgTs = 0., startedTs = 0.;
     static constexpr double simpleTaskTookTooLongSecs = 30.;
 
@@ -771,7 +865,7 @@ unsigned Controller::downloadTaskRecommendedThrottleTimeMsec(unsigned bnum) cons
                 maxBackLog = isSegWitCoin() ? 250 : 100;
         }
 
-        const int diff = int(bnum) - int(sm->ppBlkHtNext.load()); // note: ppBlkHtNext is not guarded by the lock but it is an atomic value, so that's fine.
+        const int diff = int(bnum) - int(sm->dlResultsHtNext.load()); // note: dlResultsHtNext is not guarded by the lock but it is an atomic value, so that's fine.
         if ( diff > maxBackLog ) {
             // Make the backoff time be from 10ms to 50ms, depending on how far in the future this block height is from
             // what we are processing.  The hope is that this enforces some order on future block arrivals and also
@@ -793,9 +887,17 @@ void Controller::rmTask(CtlTask *t)
 
 bool Controller::isTaskDeleted(CtlTask *t) const { return tasks.count(t) == 0; }
 
-void Controller::add_DLBlocksTask(unsigned int from, unsigned int to, size_t nTasks)
+CtlTask * Controller::add_DLBlocksTask(unsigned int from, unsigned int to, size_t nTasks, bool isRpaOnlyMode)
 {
-    DownloadBlocksTask *t = newTask<DownloadBlocksTask>(false, unsigned(from), unsigned(to), unsigned(nTasks), options->bdNClients, this);
+    const int rpaStartHeight = storage->getConfiguredRpaStartHeight(); // -1 here means "rpa disabled"
+    DownloadBlocksTask *t = [&]() -> DownloadBlocksTask * {
+        if (isRpaOnlyMode)
+            return newTask<DownloadBlocksTask_SynchRpa>(false, unsigned(from), unsigned(to), unsigned(nTasks),
+                                                        options->bdNClients, rpaStartHeight, this);
+        else
+            return newTask<DownloadBlocksTask>(false, unsigned(from), unsigned(to), unsigned(nTasks),
+                                               options->bdNClients, rpaStartHeight, this);
+    }();
     // notify BitcoinDMgr that we are in a block download when the first task starts
     connect(t, &CtlTask::started, this, [this]{
         const auto nTasksExtant = ++nDLBlocksTasks;
@@ -822,6 +924,8 @@ void Controller::add_DLBlocksTask(unsigned int from, unsigned int to, size_t nTa
         Error() << "Task errored: " << t->objectName() << ", error: " << t->errorMessage;
         genericTaskErrored();
     });
+
+    return t;
 }
 
 void Controller::genericTaskErrored()
@@ -855,6 +959,88 @@ CtlTaskT *Controller::newTask(bool connectErroredSignal, Args && ...args)
     return task;
 }
 
+bool Controller::checkRpaIndexNeedsSync(int tipHeight)
+{
+    if (UNLIKELY(!sm)) { Warning() << __func__ << " called in unexpected context. FIXME!"; return false; }
+    // check if fast-path early return
+    if (skipRpaSanityCheck /* check disabled by previous calls */ || tipHeight < 0 /* no blockchain */)
+        return false;
+
+    const auto cf = storage->getConfiguredRpaStartHeight(); // returns -1 if Rpa index disabled
+    if (cf < 0 || cf > tipHeight) {
+        // - rpa is disabled if cf < 0, always skip this check from now on
+        // - or rpa index will activate in the future if cf > tipHeight, and data will be populated then properly
+        // In either case, always skip this check from now on
+        skipRpaSanityCheck = true;
+        return false;
+    }
+    assert(cf >= 0 && tipHeight >= 0 && cf <= tipHeight); // at this point this is true; assertion here for illustrative purposes
+
+    if (storage->runRpaSlowCheckIfDBIsPotentiallyInconsistent(cf, tipHeight)) {
+        // We ran a (slow) health check on the DB due to potential inconsistency. Reset StateMachine and try again.
+        sm->state = StateMachine::State::Retry;
+        AGAIN();
+        return true;
+    }
+
+    const auto optRange = storage->getRpaDBHeightRange();
+    int f, l;
+    if (!optRange) f = l = -1; // no data
+    else std::tie(f, l) = *optRange;
+
+    auto setupDownload = [this](BlockHeight from, BlockHeight to) {
+        Log() << "RPA index is missing data, re-indexing blocks " << from << " -> " << to << " ...";
+
+        const size_t num = size_t{to - from} + 1u;
+        if (to < from || num == 0u) throw std::runtime_error("Cannot download <= 0 blocks! FIXME!"); // paranoia
+        const size_t nTasks = qMin(num, sm->DL_CONCURRENCY);
+        sm->lastProgTs = Util::getTimeSecs();
+        sm->dlResultsHtNext = sm->startheight = from;
+        sm->endHeight = to;
+        auto errct = std::make_shared<int>(0); // so that all the error callbacks below to share same state..
+        for (size_t i = 0; i < nTasks; ++i) {
+            CtlTask *t = add_DLBlocksTask(from + i, to, nTasks, true);
+            // In case DL fails, we need to flag DB as needing a full check, and also retry
+            connect(t, &CtlTask::errored, this, [this, errct] {
+                if ((*errct)++) return; // guard to ensure we do this only once if any tasks fail
+                storage->flagRpaIndexAsPotentiallyInconsistent();
+            });
+        }
+        // advance state now. we will be called back by download task in on_putRpaIndex()
+        sm->state = StateMachine::State::DownloadingBlocks_RPA;
+        emit synchronizing();
+        AGAIN();
+
+    };
+
+    const bool noData = f < 0 || l < 0;
+
+    if (noData) {
+        setupDownload(cf, tipHeight);
+        return true;
+    }
+    if (cf < f) {
+        // first block of data we have is beyond cf, download what's missing from cf -> min(f - 1, tipHeight)
+        setupDownload(cf, std::min(f - 1, tipHeight));
+        return true;
+    }
+    if (l < tipHeight) {
+        // last block of data we have is before tip, download what's missing from max(cf, l + 1) -> tip
+        setupDownload(std::max(cf, l + 1), tipHeight);
+        return true;
+    }
+
+    if (f != cf || l != tipHeight) {
+        Log() << "Clamping RPA index to height range " << cf << " -> " << tipHeight << " ...";
+        storage->clampRpaEntries(cf, tipHeight);
+    }
+
+    // if we get here, it means all checks passed at least once, flag to never do checks again to save cycles
+    skipRpaSanityCheck = true;
+
+    return false;
+}
+
 void Controller::process(bool beSilentIfUpToDate)
 {
     if (stopFlag) return;
@@ -868,6 +1054,18 @@ void Controller::process(bool beSilentIfUpToDate)
     }
     using State = StateMachine::State;
     if (sm->state == State::Begin) {
+        if (UNLIKELY(! didReceiveCoinDetectionFromBitcoinDMgr.load(std::memory_order_relaxed))) {
+            // If we never once got told definitively what "Coin" we are on by bitcoind, then a race condition
+            // can exist between our synch and RPA indexing being turned on/off automatically (for BCH). Since it's
+            // generally a bad idea anyway to begin a synch without knowing if we are on BTC and/or LTC (SegWit and/or
+            // MWEB extensions on deser, etc), then it's better to try again later after bitcoind tells us definitively
+            // what coin we are on. Note that this branch is extremely unlikely and is only here for paranoia.
+            Warning() << "This instance has not yet received any information from bitcoind as to what coin we are"
+                         " on, aborting synch task (will retry later) ...";
+            bitcoindmgr->requestBitcoinDInfoRefresh(); // give bitcoind a nudge and issue the RPC again
+            genericTaskErrored();
+            return;
+        }
         auto task = newTask<GetChainInfoTask>(true, this);
         task->threadObjectDebugLifecycle = Trace::isEnabled(); // suppress debug prints here unless we are in trace mode
         sm->mostRecentGetChainInfoTask = task; // reentrancy defense mechanism for ignoring all but the most recent getchaininfo reply from bitcoind
@@ -931,8 +1129,13 @@ void Controller::process(bool beSilentIfUpToDate)
             if (tip == sm->ht) {
                 if (task->info.bestBlockhash == tipHash) { // no reorg
                     if (!task->info.initialBlockDownload) {
-                        // bitcoind is not in IBD -- proceed to next phase of emitting signals, synching
-                        // mempool, turning on the network, etc.
+                        if (checkRpaIndexNeedsSync(tip)) {
+                            // RPA index needs to download some old data from past blocks. It set up the download
+                            // already and advanced the SM state, return early.
+                            return;
+                        }
+                        // bitcoind is not in IBD, and we don't need to synch RPA, so -- proceed to next phase of
+                        // emitting signals, synching mempool, turning on the network, etc.
                         if (!beSilentIfUpToDate) {
                             storage->updateMerkleCache(unsigned(tip));
                             Log() << "Block height " << tip << ", up-to-date";
@@ -957,6 +1160,11 @@ void Controller::process(bool beSilentIfUpToDate)
                 process_DoUndoAndRetry(); // attempt to undo 1 block and try again.
                 return;
             } else {
+                if (checkRpaIndexNeedsSync(tip)) {
+                    // RPA index needs to download some old data from past blocks. It set up the download
+                    // already and advanced the SM state, return early.
+                    return;
+                }
                 Log() << "Block height " << sm->ht << ", downloading new blocks ...";
                 emit synchronizing();
                 sm->state = State::GetBlocks;
@@ -1001,20 +1209,28 @@ void Controller::process(bool beSilentIfUpToDate)
         FatalAssert(num > 0, "Cannot download 0 blocks! FIXME!"); // more paranoia
         const size_t nTasks = qMin(num, sm->DL_CONCURRENCY);
         sm->lastProgTs = Util::getTimeSecs();
-        sm->ppBlkHtNext = sm->startheight = unsigned(base);
+        sm->dlResultsHtNext = sm->startheight = unsigned(base);
         sm->endHeight = unsigned(sm->ht);
         for (size_t i = 0; i < nTasks; ++i) {
-            add_DLBlocksTask(unsigned(base + i), unsigned(sm->ht), nTasks);
+            add_DLBlocksTask(unsigned(base + i), unsigned(sm->ht), nTasks, false);
         }
         sm->state = State::DownloadingBlocks; // advance state now. we will be called back by download task in on_putBlock()
-    } else if (sm->state == State::DownloadingBlocks) {
+    } else if (sm->state == State::DownloadingBlocks || sm->state == State::DownloadingBlocks_RPA) {
         process_DownloadingBlocks();
-    } else if (sm->state == State::FinishedDL) {
+    } else if (sm->state == State::FinishedDL || sm->state == State::FinishedDL_RPA) {
         size_t N = sm->endHeight - sm->startheight + 1;
-        Log() << "Processed " << N << " new " << Util::Pluralize("block", N) << " with " << sm->nTx << " " << Util::Pluralize("tx", sm->nTx)
-              << " (" << sm->nIns << " " << Util::Pluralize("input", sm->nIns) << ", " << sm->nOuts << " " << Util::Pluralize("output", sm->nOuts)
-              << ", " << sm->nSH << Util::Pluralize(" address", sm->nSH) << ")"
-              << ", verified ok.";
+        if (sm->state == State::FinishedDL_RPA) {
+            const auto & [dataSize, dataUnit] = Util::ScaleBytes(sm->nBytes, "bytes");
+            Log() << "Synched RPA index for " << N << " existing " << Util::Pluralize("block", N)
+                  << ", " << QString::number(dataSize, 'f', 1) << " " << dataUnit << " downloaded"
+                  << ", hashed " << sm->nIns << " " << Util::Pluralize("input", sm->nIns) << " in " << sm->nTx << " "
+                  << Util::Pluralize("tx", sm->nTx) << ", added to DB ok.";
+        } else {
+            Log() << "Processed " << N << " new " << Util::Pluralize("block", N) << " with " << sm->nTx << " " << Util::Pluralize("tx", sm->nTx)
+                  << " (" << sm->nIns << " " << Util::Pluralize("input", sm->nIns) << ", " << sm->nOuts << " " << Util::Pluralize("output", sm->nOuts)
+                  << ", " << sm->nSH << Util::Pluralize(" address", sm->nSH) << ")"
+                  << ", verified ok.";
+        }
         {
             std::lock_guard g(smLock);
             sm.reset(); // go back to "Begin" state to check if any new headers arrived in the meantime
@@ -1022,7 +1238,7 @@ void Controller::process(bool beSilentIfUpToDate)
         AGAIN();
     } else if (sm->state == State::Retry) {
         // normally the result of Rewinding due to reorg, retry right away.
-        DebugM("Retrying download again ...");
+        DebugM("Retrying task again ...");
         {
             std::lock_guard g(smLock);
             sm.reset();
@@ -1082,6 +1298,28 @@ void Controller::process(bool beSilentIfUpToDate)
         emit synchFailure();
     } else if (sm->state == State::SynchMempool) {
         // ...
+
+        // RPA enabled in mempool check -- we put this here because it's the best place for it.
+        if (storage->isRpaEnabled()) {
+            auto optTipHeight = storage->latestHeight();
+            if (UNLIKELY(! optTipHeight)) {
+                // This should never happen -- is here for defensive programming purposes only.
+                Fatal() << "Controller is in SynchMempool but we don't have a blockchain tip! FIXME!";
+                genericTaskErrored();
+                return;
+            }
+            // Check that mempool prefix table is enabled -- only if we passed the configured block height threshold!
+            if (unsigned(storage->getConfiguredRpaStartHeight()) <= *optTipHeight) {
+                if (auto [mempool, sharedLock] = storage->mempool(); !mempool.optPrefixTable) {
+                    // re-lock exclusively
+                    sharedLock.unlock();
+                    if (auto [mutableMempool, lock] = storage->mutableMempool(); !mutableMempool.optPrefixTable) {
+                        mutableMempool.optPrefixTable.emplace(); // existence of this indicates to mempool code to index RPA stuff
+                    }
+                }
+            }
+        }
+
         auto task = newTask<SynchMempoolTask>(true, this, storage, masterNotifySubsFlag, mempoolIgnoreTxns);
         task->threadObjectDebugLifecycle = Trace::isEnabled(); // suppress verbose lifecycle prints unless trace mode
         connect(task, &CtlTask::success, this, [this, task]{
@@ -1142,21 +1380,39 @@ void Controller::on_Poll(std::optional<QByteArray> zmqBlockHash)
         sm->mostRecentZmqNotif = std::move(*zmqBlockHash); // deferred processing for when current task completes
 }
 
-// runs in our thread as the slot for putBlock
-void Controller::on_putBlock(CtlTask *task, PreProcessedBlockPtr p)
+// this is called by the 2 below on_putBlock and on_putRpaIndex functions to avoid boilerplate
+template <typename T>
+void Controller::on_putCommon(CtlTask *task, const T &p, const int expectedState, const QString &expectedStateName)
 {
     if (!sm || isTaskDeleted(task) || sm->state == StateMachine::State::Failure || stopFlag) {
         DebugM("Ignoring block ", p->height, " for now-defunct task");
         return;
-    } else if (sm->state != StateMachine::State::DownloadingBlocks) {
-        DebugM("Ignoring putBlocks request for block ", p->height, " -- state is not \"DownloadingBlocks\" but rather is: \"", sm->stateStr(), "\"");
+    } else if (sm->state != expectedState) {
+        DebugM("Ignoring put request for block ", p->height, " -- state is not \"",
+               expectedStateName, "\" (", int(expectedState), ") but rather is: \"", sm->stateStr(), "\" (", int(sm->state), ")");
         return;
     }
-    sm->ppBlocks[p->height] = p;
+    sm->dlResults[p->height] = p;
     process_DownloadingBlocks();
 }
 
-void Controller::process_PrintProgress(unsigned height, size_t nTx, size_t nIns, size_t nOuts, size_t nSH)
+
+// runs in our thread as the slot for putBlock
+void Controller::on_putBlock(CtlTask *task, PreProcessedBlockPtr p)
+{
+    on_putCommon(task, p, StateMachine::State::DownloadingBlocks, QStringLiteral("DownloadingBlocks"));
+}
+
+// runs in our thread as the slot for putRpaIndex
+void Controller::on_putRpaIndex(CtlTask *task, Controller::RpaOnlyModeDataPtr p)
+{
+    on_putCommon(task, p, StateMachine::State::DownloadingBlocks_RPA, QStringLiteral("DownloadingBlocks_RPA"));
+}
+
+
+void Controller::process_PrintProgress(const QString &verb, unsigned height, size_t nTx, size_t nIns, size_t nOuts,
+                                       size_t nSH, size_t rawBlockSizeBytes, const bool showRateBytes,
+                                       std::optional<double> pctOverride)
 {
     if (UNLIKELY(!sm)) return; // paranoia
     sm->nProgBlocks++;
@@ -1165,13 +1421,19 @@ void Controller::process_PrintProgress(unsigned height, size_t nTx, size_t nIns,
     sm->nIns += nIns;
     sm->nOuts += nOuts;
     sm->nSH += nSH;
+    sm->nBytes += rawBlockSizeBytes;
 
     sm->nProgTx += nTx;
     sm->nProgIOs += nIns + nOuts;
     sm->nProgSH += nSH;
+    sm->nProgBytes += rawBlockSizeBytes;
     if (UNLIKELY(height && !(height % sm->progressIntervalBlocks))) {
-        static const auto formatRate = [](double rate, const QString & thing, bool addComma = true) {
+        static const QString bytesUnitString = QStringLiteral("B");
+        static const auto formatRate = [](double rate, QString thing, bool addComma = true) {
             QString unit = QStringLiteral("sec");
+            if (thing == bytesUnitString) { // special case for B, KB, MB, etc
+                std::tie(rate, thing) = Util::ScaleBytes(rate, bytesUnitString.toStdString());
+            }
             if (rate < 1.0 && rate > 0.0) {
                 rate *= 60.0;
                 unit = QStringLiteral("min");
@@ -1185,15 +1447,20 @@ void Controller::process_PrintProgress(unsigned height, size_t nTx, size_t nIns,
         };
         const double now = Util::getTimeSecs();
         const double elapsed = std::max(now - sm->lastProgTs, 0.00001); // ensure no division by zero
-        QString pctDisplay = QString::number((height*1e2) / std::max(std::max(int(sm->endHeight), sm->nHeaders), 1), 'f', 1) + "%";
+        QString pctDisplay = QString::number(pctOverride ? *pctOverride
+                                                         : (height*1e2) / std::max(std::max(int(sm->endHeight), sm->nHeaders), 1),
+                                             'f', 1) + "%";
         const double rateBlocks = sm->nProgBlocks / elapsed;
         const double rateTx = sm->nProgTx / elapsed;
         const double rateSH = sm->nProgSH / elapsed;
-        Log() << "Processed height: " << height << ", " << pctDisplay << formatRate(rateBlocks, QStringLiteral("blocks"))
-              << formatRate(rateTx, QStringLiteral("txs"))  << formatRate(rateSH, QStringLiteral("addrs"));
+        const double rateBytes = sm->nProgBytes / elapsed;
+        Log() << verb << " height: " << height << ", " << pctDisplay << formatRate(rateBlocks, QStringLiteral("blocks"))
+              << formatRate(rateTx, QStringLiteral("txs"))
+              << formatRate(rateSH, QStringLiteral("addrs"))
+              << (showRateBytes ? formatRate(rateBytes, bytesUnitString) : QString{});
         // update/reset ts and counters
         sm->lastProgTs = now;
-        sm->nProgBlocks = sm->nProgTx = sm->nProgIOs = sm->nProgSH = 0;
+        sm->nProgBytes = sm->nProgBlocks = sm->nProgTx = sm->nProgIOs = sm->nProgSH = 0;
     }
 }
 
@@ -1201,23 +1468,47 @@ void Controller::process_DownloadingBlocks()
 {
     unsigned ct [[maybe_unused]] = 0;
 
-    for (auto it = sm->ppBlocks.find(sm->ppBlkHtNext); it != sm->ppBlocks.end() && !stopFlag; it = sm->ppBlocks.find(sm->ppBlkHtNext)) {
-        auto ppb = it->second;
-        assert(ppb->height == sm->ppBlkHtNext); // paranoia -- should never happen
+    bool isRpa = false;
+
+    for (auto it = sm->dlResults.find(sm->dlResultsHtNext); it != sm->dlResults.end() && !stopFlag; it = sm->dlResults.find(sm->dlResultsHtNext)) {
+        auto varDlResult = std::move(it->second);
+        ++sm->dlResultsHtNext;
+        sm->dlResults.erase(it); // remove immediately from q
+        const bool ok =
+        std::visit(Overloaded{
+            [this](const PreProcessedBlockPtr &ppb){
+                assert(ppb->height == sm->dlResultsHtNext); // paranoia -- should never happen
+
+                // process & add it if it's good
+                if ( ! process_VerifyAndAddBlock(ppb) )
+                    // error encountered.. abort!
+                    return false;
+
+                process_PrintProgress(QStringLiteral("Processed"), ppb->height, ppb->txInfos.size(), ppb->inputs.size(),
+                                      ppb->outputs.size(), ppb->hashXAggregated.size(), ppb->sizeBytes, false);
+                return true;
+            },
+            [this, &isRpa](const RpaOnlyModeDataPtr &romd){
+                assert(romd->height == sm->dlResultsHtNext); // paranoia -- should never happen
+                isRpa = true;
+                try {
+                    storage->addRpaDataForHeight(romd->height, romd->serializedPrefixTable);
+                } catch (const std::exception &e) {
+                    Fatal() << "Caught exception after call to addRpaDataForHeight: " << e.what();
+                    return false;
+                }
+                const double pctOverride = std::min(100.0, ((romd->height - sm->startheight + 1u) * 1e2)
+                                                           / std::max(1u, (sm->endHeight - sm->startheight + 1u)));
+                process_PrintProgress(QStringLiteral("RPA indexed"), romd->height, romd->nTxsIndexed, romd->nInsIndexed,
+                                      0u, 0u, romd->rawBlockSizeBytes, true, pctOverride);
+                return true;
+            },
+        }, varDlResult);
+        if (!ok) return;
         ++ct;
 
-        ++sm->ppBlkHtNext;
-        sm->ppBlocks.erase(it); // remove immediately from q
-
-        // process & add it if it's good
-        if ( ! process_VerifyAndAddBlock(ppb) )
-            // error encountered.. abort!
-            return;
-
-        process_PrintProgress(ppb->height, ppb->txInfos.size(), ppb->inputs.size(), ppb->outputs.size(), ppb->hashXAggregated.size());
-
-        if (sm->ppBlkHtNext > sm->endHeight) {
-            sm->state = StateMachine::State::FinishedDL;
+        if (sm->dlResultsHtNext > sm->endHeight) {
+            sm->state = !isRpa ? StateMachine::State::FinishedDL : StateMachine::State::FinishedDL_RPA;
             AGAIN();
             return;
         }
@@ -1225,8 +1516,8 @@ void Controller::process_DownloadingBlocks()
     }
 
     // testing debug
-    //if (auto backlog = sm->ppBlocks.size(); backlog < 100 || ct > 100) {
-    //    DebugM("ppblk - processed: ", ct, ", backlog: ", backlog);
+    //if (auto backlog = sm->dlResults.size(); backlog < 100 || ct > 100) {
+    //    DebugM("dlresults - processed: ", ct, ", backlog: ", backlog);
     //}
 }
 
@@ -1241,7 +1532,7 @@ bool Controller::process_VerifyAndAddBlock(PreProcessedBlockPtr ppb)
     assert(sm);
 
     try {
-        const auto nLeft = qMax(sm->endHeight - (sm->ppBlkHtNext-1), 0U);
+        const auto nLeft = qMax(sm->endHeight - (sm->dlResultsHtNext-1), 0U);
         const bool saveUndoInfo = !sm->suppressSaveUndo && int(ppb->height) > (sm->ht - int(storage->configuredUndoDepth()));
 
         storage->addBlock(ppb, saveUndoInfo, nLeft, masterNotifySubsFlag);
@@ -1380,15 +1671,24 @@ auto Controller::stats() const -> Stats
                 { "nOut", qlonglong(nout) }
             });
         }
-        const size_t backlogBlocks = sm->ppBlocks.size();
+        const size_t backlogBlocks = sm->dlResults.size();
         if (backlogBlocks) {
             QVariantMap m3;
             m3["numBlocks"] = qulonglong(backlogBlocks);
             size_t backlogBytes = 0, backlogTxs = 0, backlogInMemoryBytes = 0;
-            for (const auto & [height, ppb] : sm->ppBlocks) {
-                backlogBytes += ppb->sizeBytes;
-                backlogTxs += ppb->txInfos.size();
-                backlogInMemoryBytes += ppb->estimatedThisSizeBytes;
+            for (const auto & [height, varResult] : sm->dlResults) {
+                std::visit(Overloaded{
+                    [&](const PreProcessedBlockPtr &ppb) {
+                        backlogBytes += ppb->sizeBytes;
+                        backlogTxs += ppb->txInfos.size();
+                        backlogInMemoryBytes += ppb->estimatedThisSizeBytes;
+                    },
+                    [&](const RpaOnlyModeDataPtr &romd) {
+                        backlogBytes += romd->rawBlockSizeBytes;;
+                        backlogTxs += romd->nTx;
+                        backlogInMemoryBytes += romd->serializedPrefixTable.size() + sizeof(*romd);
+                    }
+                }, varResult);
             }
             m3["in-memory (est.)"] = QString("%1 MB").arg(QString::number(double(backlogInMemoryBytes) / 1e6, 'f', 3));
             m3["block bytes"] = QString("%1 MB").arg(QString::number(double(backlogBytes) / 1e6, 'f', 3));

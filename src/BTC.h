@@ -1,6 +1,6 @@
 //
 // Fulcrum - A fast & nimble SPV Server for Bitcoin Cash
-// Copyright (C) 2019-2023 Calin A. Culianu <calin.culianu@gmail.com>
+// Copyright (C) 2019-2024 Calin A. Culianu <calin.culianu@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -21,6 +21,7 @@
 #include "Util.h"
 
 #include "bitcoin/block.h"
+#include "bitcoin/hash.h"
 #include "bitcoin/script.h"
 #include "bitcoin/streams.h"
 #include "bitcoin/transaction.h"
@@ -31,9 +32,11 @@
 #include <QMetaType>
 #include <QString>
 
+#include <algorithm>
 #include <cstddef> // for std::byte, etc
 #include <cstring> // for memcpy
 #include <ios>
+#include <iterator>
 #include <type_traits>
 #include <utility> // for pair, etc
 
@@ -170,6 +173,15 @@ namespace BTC
     inline QByteArray HashOnce(const QByteArray &b) { return Hash(b, true); }
     /// Like the Hash() function above, except does hash160 once. (not reversed).
     extern QByteArray Hash160(const QByteArray &);
+    /// Hash any Bitcoin object in-place and return the hash. If `once` == true, we do single-sha256 hashing. If
+    /// `reversed` == true, we reverse the result (making it big-endian ready for JSON).
+    template <typename BitcoinObject>
+    QByteArray HashInPlace(const BitcoinObject &bo, bool once = false, bool reversed = false) {
+        QByteArray ret(bitcoin::CHash256::OUTPUT_SIZE, Qt::Uninitialized); // allocate without initializing
+        bitcoin::SerializeHashInPlace(ret.data(), bo, bitcoin::SER_GETHASH, bitcoin::PROTOCOL_VERSION, once);
+        if (reversed) std::reverse(ret.begin(), ret.end());
+        return ret;
+    }
 
     /// Takes a hash in bitcoin memory order and returns a deep copy QByteArray of the data, reversed
     /// (this is intended to keep our representation of bitcoin data closer to how we will send it to clients down
@@ -177,10 +189,11 @@ namespace BTC
     /// hashes in hex). See BlockProc.cpp for an example of where this is used.
     template <class BitcoinHashT>
     QByteArray Hash2ByteArrayRev(const BitcoinHashT &hash) {
-        QByteArray ret(reinterpret_cast<const char *>(hash.begin()), hash.width()); // deep copy
-        std::reverse(ret.begin(), ret.end()); // reverse it
+        QByteArray ret(hash.width(), Qt::Uninitialized);
+        std::copy(std::reverse_iterator(hash.end()), std::reverse_iterator(hash.begin()),
+                  reinterpret_cast<uint8_t *>(ret.data())); // reversed copy
         return ret;
-    };
+    }
 
     /// returns true iff cscript is OP_RETURN, false otherwise
     inline bool IsOpReturn(const bitcoin::CScript &cs) {

@@ -1,6 +1,6 @@
 //
 // Fulcrum - A fast & nimble SPV Server for Bitcoin Cash
-// Copyright (C) 2019-2023 Calin A. Culianu <calin.culianu@gmail.com>
+// Copyright (C) 2019-2024 Calin A. Culianu <calin.culianu@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -18,6 +18,8 @@
 //
 #include "BlockProc.h"
 #include "BTC.h"
+#include "Common.h"
+#include "Rpa.h"
 #include "Util.h"
 
 #include "bitcoin/transaction.h"
@@ -25,13 +27,12 @@
 #include <QTextStream>
 
 #include <algorithm>
-#include <set>
 #include <unordered_set>
 
 /* static */ const TxHash PreProcessedBlock::nullhash;
 
 /// fill this struct's data with all the txdata, etc from a bitcoin CBlock. Alternative to using the second c'tor.
-void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bitcoin::CBlock &b) {
+void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bitcoin::CBlock &b, const bool enableRpa) {
     if (!header.IsNull() || !txInfos.empty())
         clear();
     height = blockHeight;
@@ -42,9 +43,20 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bi
     std::unordered_map<TxHash, unsigned, HashHasher> txHashToIndex; // since we know the size ahead of time here, we can set max_load_factor to 1.0 and avoid over-allocating the hash table
     txHashToIndex.max_load_factor(1.0);
     txHashToIndex.reserve(b.vtx.size());
+    std::optional<Rpa::PrefixTable> rpaPrefixTable;
+    const auto deferred = [&] {
+        if (enableRpa) rpaPrefixTable.emplace(); // construct empty ReadWrite table
+        // Ensure we serialize the table at function end
+        return Defer([&]{
+            if (enableRpa && rpaPrefixTable)
+                this->serializedRpaPrefixTable.emplace(rpaPrefixTable->serialize());
+            else
+                this->serializedRpaPrefixTable.reset();
+        });
+    }();
 
     // run through all tx's, build inputs and outputs lists
-    size_t txIdx = 0;
+    size_t txIdx = 0, maxTxIdxSeen = 0;
     for (const auto & tx : b.vtx) {
         // copy tx hash data for the tx
         TxInfo info;
@@ -59,7 +71,7 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bi
             // remember output0 index for this txindex
             info.output0Index.emplace( unsigned(outputs.size()) );
 
-        IONum outN = 0;
+        IONum outN = 0, maxOutNSeen = 0;
         for (const auto & out : tx->vout) {
             // save the outputs seen
             outputs.push_back(
@@ -84,15 +96,15 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bi
                 // OpReturn tracking...
                 opreturns.emplace_back(OpReturn{unsigned(outputIdx), cscript});
             }*/
-            ++outN;
+            maxOutNSeen = outN++;
         }
 
         // Defensive programming -- we only support up to 24-bit IONum due to the database format we use.
-        if (UNLIKELY(outN-1 > IONumMax)) {
+        if (UNLIKELY(maxOutNSeen > IONumMax)) {
             // This should never happen -- outN larger than 16.7 million
             throw InternalError(QString("Block %1 tx %2 has outN larger than %3 (%4). This should never happen."
                                         " Please contact the developers and report this issue.")
-                                .arg(height).arg(QString(info.hash.toHex())).arg(IONumMax).arg(outN));
+                                .arg(height).arg(QString(info.hash.toHex())).arg(IONumMax).arg(maxOutNSeen));
         }
 
         // process inputs
@@ -101,6 +113,7 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bi
             info.input0Index.emplace( unsigned(inputs.size()) );
 
         IONum maxIONumSeen = 0;
+        size_t inputNum = 0u;
         for (const auto & in : tx->vin) {
             // note we do place the coinbase tx here even though we ignore it later on -- we keep it to have accurate indices
             inputs.emplace_back(InputPt{
@@ -110,8 +123,15 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bi
                     {}, // .parentTxOutIdx (start out undefined)
             });
             estimatedThisSizeBytes += sizeof(InputPt);
-            if (txIdx > 0 /* skip check for coinbase tx */ && in.prevout.GetN() > maxIONumSeen)
-                maxIONumSeen = in.prevout.GetN();
+            if (txIdx > 0 /* skip this part for coinbase tx */) {
+                // Update maxIONumSeen for every txn after coinbase (which always has 1 input)
+                if (in.prevout.GetN() > maxIONumSeen) maxIONumSeen = in.prevout.GetN();
+                // If RPA enabled, serialize and hash the input itself, and update the prefix table to point to txIdx
+                // Limit: only the first 30 inputs are processed and indexed in this way, as per the RPA spec.
+                if (rpaPrefixTable && inputNum < Rpa::InputIndexLimit)
+                    rpaPrefixTable->addForPrefix(Rpa::Prefix(Rpa::Hash(in)), txIdx);
+            }
+            ++inputNum;
         }
 
         // Defensive programming -- we only support up to 24-bit IONum due to the database format we use.
@@ -124,8 +144,15 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bi
 
         estimatedThisSizeBytes += sizeof(info) + size_t(info.hash.size());
         txInfos.emplace_back(std::move(info));
-        ++txIdx;
+        maxTxIdxSeen = txIdx++;
     }
+
+    // Defensive programming -- ensure that our prefix table entries didn't overflow past Rpa::MaxTxIdx
+    if (UNLIKELY(rpaPrefixTable && maxTxIdxSeen > Rpa::MaxTxIdx))
+        // This should never happen -- a block with more than 16.7 million txns!
+        throw InternalError(QString("Block %1 too many txs (%2) and has overflowed the maximum txIdx we support for RPA (%3)."
+                                    " Please contact the developers and report this issue.")
+                                .arg(height).arg(maxTxIdxSeen).arg(Rpa::MaxTxIdx));
 
     // shrink inputs/outputs to fit now to conserve memory
     inputs.shrink_to_fit();
@@ -225,9 +252,9 @@ QString PreProcessedBlock::toDebugString() const
 
 /// convenience factory static method: given a block, return a shard_ptr instance of this struct
 /*static*/
-PreProcessedBlockPtr PreProcessedBlock::makeShared(unsigned height_, size_t size, const bitcoin::CBlock &block)
+PreProcessedBlockPtr PreProcessedBlock::makeShared(unsigned height_, size_t size, const bitcoin::CBlock &block, bool enableRpa)
 {
-    return std::make_shared<PreProcessedBlock>(height_, size, block);
+    return std::make_shared<PreProcessedBlock>(height_, size, block, enableRpa);
 }
 
 

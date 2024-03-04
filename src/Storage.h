@@ -30,6 +30,7 @@
 #include "Mgr.h"
 #include "Mixins.h"
 #include "Options.h"
+#include "Span.h"
 #include "TXO.h"
 
 #include "bitcoin/amount.h"
@@ -48,6 +49,7 @@
 #include <vector>
 
 namespace BTC { class HeaderVerifier; } // fwd decl used below. #include "BTC.h" to see this type
+namespace Rpa { class Prefix; } // fwd decl, use "Rpa.h" to see this type
 
 /// Generic database error
 struct DatabaseError : public Exception { using Exception::Exception; ~DatabaseError() override; };
@@ -143,7 +145,7 @@ public:
     HeaderHash genesisHash() const;
 
     enum class SaveItem : uint32_t {
-        Meta = 0x1, ///< save meta
+        Meta = 0x1, ///< save Meta object to the meta table
 
         All = 0xffffffff, ///< save everything
         None = 0x00, ///< No-op
@@ -194,7 +196,17 @@ public:
     /// Given a block height and a position in the block (txIdx), return a TxHash.  Never throws. Returns !has_value if
     /// height/posInBlock pair is not found (or in very unlikely cases, if there was an underlying low-level error).
     /// Thread safe, takes class-level locks.
-    std::optional<TxHash> hashForHeightAndPos(BlockHeight height, unsigned posInBlock) const;
+    /// @param existingBlocksLock - set to non-nullptr if you already took the class-level `blocksLock` from calling code (this param is for internal use only)
+    std::optional<TxHash> hashForHeightAndPos(BlockHeight height, uint32_t posInBlock,
+                                              const SharedLockGuard *existingBlocksLock = nullptr) const;
+
+    /// Given a height and an array of positions in a block, returns a vector of the TxHashes for the positions in question.
+    /// Never throws. Missing or not found positions are marked with an empty optional in the resultant vector.
+    /// Returns an empty vector if height exceeds the chain tip height.
+    /// Thread safe, takes class-level locks.
+    /// @param existingBlocksLock - set to non-nullptr if you already took the class-level `blocksLock` from calling code (this param is for internal use only)
+    std::vector<std::optional<TxHash>> hashesForHeightAndPosVec(BlockHeight height, Span<const uint32_t> positionsInBlock,
+                                                                const SharedLockGuard *existingBlocksLock = nullptr) const;
 
     /// Given a block height, return all of the TxHashes in a block, in bitcoind memory order.
     ///
@@ -228,10 +240,14 @@ public:
     };
     using History = std::vector<HistoryItem>;
 
-    /// Thread-safe. Will return an empty vector if the confirmed history size exceeds MaxHistory, or a truncated
-    /// vector if the confirmed + unconfirmed history exceeds MaxHistory.
+    /// Thread-safe. Will return an empty vector if the confirmed history size exceeds max_history, or a truncated
+    /// vector if the confirmed + unconfirmed history exceeds max_history.
     History getHistory(const HashX &, bool includeConfirmed, bool includeMempool, BlockHeight fromHeight = 0,
                        std::optional<BlockHeight> optToHeight = std::nullopt) const;
+
+    /// Thread-safe. Will return a truncated vector if the history size exceeds rpa_max_history. Range is [from, end)
+    History getRpaHistory(const Rpa::Prefix &prefix, bool includeConfirmed, bool includeMempool,
+                          BlockHeight fromHeight = 0, std::optional<BlockHeight> endHeight = std::nullopt) const;
 
     struct UnspentItem : HistoryItem {
         IONum tx_pos = 0;
@@ -380,6 +396,41 @@ public:
     /// lightweight mechanism intended to be used and "owned" by the Controller object *only*.
     [[nodiscard]] InitialSyncRAII setInitialSync() { return InitialSyncRAII{*this}; }
 
+    /// Thread-safe. Returns true if RPA index is enabled, false otherwise. May return false before app is fully
+    /// initted and if the requested RPA mode is "auto" and we haven't yet decided if on or off based on "Coin".
+    bool isRpaEnabled() const;
+
+    /// Thread-safe. Returns the height from which user wants to begin indexing RPA data, or -1 if RPA is disabled.
+    /// Note: this doesn't necessarily indicate we *have* this height indexed (yet!); it's just what the user wants.
+    int getConfiguredRpaStartHeight() const;
+
+    /// Type used only by getRpaDBHeightRange() but maybe useful in the future for other methods, hence the typedef.
+    using HeightRange = std::pair<BlockHeight, BlockHeight>;
+    /// Thread-safe. Returns a pair of {fromHeight, toHeight} which is the current inclusive range of heights that the
+    /// RPA index covers in the DB. Will return a nullopt if either: (1) RPA indexing is disabled, or (2) The index is
+    /// enabled but the index is empty (which can happen if the configured start height > current tip height, for
+    /// instance).  As the DB synchs with RPA enabled the results of this call will be current to reflect the latest DB
+    /// state.
+    ///
+    /// Note: This function is intended only to be called from the Controller thread. Calling it from other code may
+    /// risk a potentially inconsistent view since it just reads 2 atomic ints separately with no locks held.
+    std::optional<HeightRange> getRpaDBHeightRange() const;
+
+    /// Called by Controller as it does its independent RPA synch. Thread-safe (takes blocksLock).
+    void addRpaDataForHeight(BlockHeight height, const QByteArray &serializedRpaPrefixTable);
+
+    /// Called by Controller. Ensures the RPA db doesn't have entries outside the range [from, to]. In other words,
+    /// deletes all entries < from and all entries > to.
+    void clampRpaEntries(BlockHeight from, BlockHeight to);
+
+    /// Called by Controller. Sets the "rpaNeedsFullCheck" flag to true
+    void flagRpaIndexAsPotentiallyInconsistent();
+
+    /// Called by Controller. If the "rpaNeedsFullCheck" flag was somehow set at some point, will do the slow DB health
+    /// checks with a lock held.  Returns true if it did such slow checks, false otherwise. Note: do not call this
+    /// unless the RPA index is definitely enabled in the app (Controller respects this criterion).
+    bool runRpaSlowCheckIfDBIsPotentiallyInconsistent(BlockHeight configuredStartHeight, BlockHeight tipHeight);
+
 protected:
     virtual Stats stats() const override; ///< from StatsMixin
 
@@ -425,6 +476,16 @@ protected:
     /// Rewinds the headers until the latest header is at the specified height.  May throw on error.
     void deleteHeadersPastHeight(BlockHeight height);
 
+    /// Internally called by LoadCheckRpaDB and undoLatestBlock. Call this with the blocksLock held if in multi-threaded
+    /// mode, to ensure DB consistency. Deletes any rpa entries >= height. Returns true on success, false on failure.
+    bool deleteRpaEntriesFromHeight(BlockHeight height, bool flush = false, bool force = false);
+
+    /// Internally called. Call this with the blocksLock held if in multi-threaded mode, to ensure DB consistency.
+    /// Deletes any rpa entries <= height. Returns true on success, false on failure.
+    bool deleteRpaEntriesToHeight(BlockHeight height, bool flush = false, bool force = false);
+
+    void clampRpaEntries_nolock(BlockHeight from, BlockHeight to);
+
     /// This is set in addBlock and undoLatestBlock while we do a bunch of updates, then cleared when updates are done,
     /// for each block. Thread-safe, may throw.
     void setDirty(bool dirtyFlag);
@@ -441,6 +502,13 @@ protected:
     void setInitialSync(bool);
     friend class InitialSyncRAII;
 
+    /// This is set in addBlock and in other places if we find the RPA database may be inconsistent, and should
+    /// be checked (possibly on next app startup). Immediately saves a bool to the DB meta table. Thread-safe, may throw.
+    void setRpaNeedsFullCheck(bool b);
+    /// If this is true on startup, we know the RPA index must be inconsistent and we will run a full health check on
+    /// the rpa table and attempt to fix it. Thread-safe, may throw.
+    bool isRpaNeedsFullCheck() const;
+
 private:
     const std::shared_ptr<const Options> options;
     const std::unique_ptr<ScriptHashSubsMgr> subsmgr;
@@ -456,6 +524,7 @@ private:
     void loadCheckHeadersInDB(); ///< may throw -- called from startup()
     void loadCheckUTXOsInDB(); ///< may throw -- called from startup()
     void loadCheckShunspentInDB(); ///< may throw -- called from startup()
+    void loadCheckRpaDB(); ///< may throw -- called from startup()
     void loadCheckTxNumsFileAndBlkInfo(); ///< may throw -- called from startup()
     void loadCheckTxHash2TxNumMgr(); ///< may throw -- called from startup()
     void loadCheckEarliestUndo(); ///< may throw -- called from startup()
@@ -475,6 +544,9 @@ private:
 
     // Called by heightForTxNum which calls this with the blockInfo lock held
     std::optional<unsigned> heightForTxNum_nolock(TxNum) const;
+
+    /// Writes to the RPA table. Called from addBlock()
+    void addRpaDataForHeight_nolock(BlockHeight height, const QByteArray &serializedRpaPrefixTable);
 };
 
 Q_DECLARE_OPERATORS_FOR_FLAGS(Storage::SaveSpec)
@@ -544,6 +616,13 @@ RocksDB: "txhash2txnum"
     there will be more than 1 VarInt(TxNum) in that particular bucket, and we have to check each txNum in the bucket
     for that key in series versus the txnum flat-file.  The performance penalty for this is extremely small since the
     txnum flat-file is extremely fast to query given a txNum.
+
+RocksDB: "rpa"
+  Purpose: store tx indices referenced by prefix in the Rpa::PrefixTable structure for allowing for reusable address queries
+  Key: height
+  Value: A single serialized Rpa::PrefixTable for this block height.
+  Comments: The Rpa::PrefixTable stores 24-bit txIdx values in a table containing 65536 (possibly empty) rows for
+    supporting up to 16-bit integer prefixes. See Rpa.h.
 
 A note about ACID: (atomic, consistent, isolated, durable)
 
