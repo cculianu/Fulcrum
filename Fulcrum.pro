@@ -145,6 +145,23 @@ contains(CONFIG, config_endian_big) {
 }
 # /GIT_COMMIT=
 
+# robin-hood-hashing
+!contains(CONFIG, config_without_bundled_robin_hood) {
+    # Robin Hood unordered_flat_map implememntation (single header and MUCH more efficient than unordered_map!)
+    HEADERS += robin_hood/robin_hood.h
+    INCLUDEPATH += src/robin_hood/
+} else {
+    message("robin-hood-hashing: Using CLI override")
+}
+# /robin-hood-hashing
+
+# simdjson
+contains(LIBS, -lsimdjson) {
+    message("simdjson: Using CLI override")
+    DEFINES += SYSTEM_SIMDJSON
+}
+# /simdjson
+
 # ZMQ
 !contains(LIBS, -lzmq) {
     # Test for ZMQ, and if found, add pkg-config which we will rely upon to find libs
@@ -164,6 +181,14 @@ contains(CONFIG, config_endian_big) {
     message("ZMQ not found, install pkg-config and libzmq to enable ZMQ notifications.")
 }
 # /ZMQ
+
+# cppzmq
+!contains(CONFIG, config_without_bundled_cppzmq) {
+    INCLUDEPATH += src/zmq
+} else {
+    message("cppzmq: Using CLI override")
+}
+# /cppzmq
 
 # - Try and detect rocksdb and if not, fall back to the staticlib.
 # - User can suppress this behavior by specifying a "LIBS+=-lrocksdb..." on the
@@ -396,9 +421,6 @@ HEADERS += \
     WebSocket.h \
     ZmqSubNotifier.h
 
-# Robin Hood unordered_flat_map implememntation (single header and MUCH more efficient than unordered_map!)
-HEADERS += robin_hood/robin_hood.h
-
 RESOURCES += \
     resources.qrc
 
@@ -485,7 +507,7 @@ HEADERS += \
 # Enable secp256k1 compilation on x86_64 only -- we don't actually use this lib
 # yet in Fulcrum, so on platforms that aren't x86_64 it's ok to exclude it; it
 # was included in case we wish to someday verify signatures in Fulcrum, etc.
-contains(QT_ARCH, x86_64):!win32-msvc {
+contains(QT_ARCH, x86_64):!contains(CONFIG, config_without_bundled_secp256k1):!win32-msvc {
     message("Including embedded secp256k1")
 
     SOURCES += bitcoin/secp256k1/secp256k1.c
