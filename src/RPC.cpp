@@ -24,6 +24,7 @@
 #include <QSslSocket>
 
 #include <atomic>
+#include <limits>
 #include <memory>
 #include <type_traits>
 #include <utility>
@@ -855,12 +856,16 @@ namespace RPC {
         QString statusMsg;
         QString contentType;
         QByteArray content = "";
-        int contentLength = 0;
+        QByteArray::size_type contentLength = 0;
         bool logBad = false;
         bool gotLength = false;
         static constexpr int kLargeContentThresh = 32'000'000; ///< sizes above this threshold get logged to debug log as to how long they took to download
         qint64 largeContentT0 = 0;
-        void clear() { *this = StateMachine(); }
+        void clear() {
+            // despite the way this looks, below is 100% well defined
+            this->~StateMachine();   // end current lifetime (calling d'tors for all members)
+            new (this) StateMachine; // start a new lifetime at this's memory location (default re-construct this)
+        }
     };
     void HttpConnection::on_disconnected()
     {
@@ -938,7 +943,12 @@ namespace RPC {
                             }
                         } else if (name == s_content_length) {
                             bool ok = false;
-                            sm->contentLength = value.toInt(&ok);
+                            if constexpr (std::numeric_limits<QByteArray::size_type>::max() == std::numeric_limits<int>::max())
+                                // Qt 5
+                                sm->contentLength = value.toInt(&ok);
+                            else
+                                // Qt 6
+                                sm->contentLength = value.toLongLong(&ok);
                             if (!ok || sm->contentLength < 0) {
                                 // ERROR HERE. Expected numeric length, got nonsense
                                 throw Exception(QString("Could not parse content-length: %1").arg(QString(data)));
