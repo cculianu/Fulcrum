@@ -167,11 +167,11 @@ public:
 
 /// This is fast: It only evaluates args if Trace is enabled. Use this in performance-critical code.
 /// Unfortunately, there is no way to do this exact thing with templates, so we opted for a C-style macro
-/// to avoid evaluating the args in the !Trace::isEnabled() case.
-#define TraceM(...)                \
-    do {                           \
-        if (Trace::isEnabled())    \
-            Trace()(__VA_ARGS__);  \
+/// to avoid evaluating the args in the common !Trace::isEnabled() case.
+#define TraceM(...)                        \
+    do {                                   \
+        if (UNLIKELY(Trace::isEnabled()))  \
+            Trace()(__VA_ARGS__);          \
     } while (0)
 
 /** \brief Stream-like class to print an error message to the app's logging facility

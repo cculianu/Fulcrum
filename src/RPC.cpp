@@ -17,9 +17,10 @@
 // <https://www.gnu.org/licenses/>.
 //
 #include "RPC.h"
+#include "Util.h"
 #include "WebSocket.h"
-#include <QtCore>
 
+#include <QtCore>
 #include <QHostAddress>
 #include <QSslSocket>
 
@@ -355,7 +356,7 @@ namespace RPC {
             Error() << __func__ << " method: " << method << "; Notification requires either a QVarantList or a QVariantMap as its argument! FIXME!";
             return;
         }
-        if (json.isEmpty()) {
+        if (UNLIKELY(json.isEmpty())) {
             Error() << __func__ << " method: " << method << "; Unable to generate notification JSON! FIXME!";
             return;
         }
@@ -415,7 +416,7 @@ namespace RPC {
             // otherwise produce some Json right now and send it out to the client
             json = m.toJsonUtf8();
         }
-        if (json.isEmpty()) {
+        if (UNLIKELY(json.isEmpty())) {
             Error() << __func__ << ": Unable to generate result JSON! FIXME!";
             return;
         }
@@ -485,7 +486,7 @@ namespace RPC {
                 return;
             } else {
                 // Note: This branch can only be taken if batchPermitted == true
-                // Handle error immediately. Note that older Fulcrum (or Fulcrum with batchinPermitted = false)
+                // Handle error immediately. Note that older Fulcrum (or Fulcrum with batchPermitted == false)
                 // would throw Json::Error here, which technically isn't quite correct.  As per JSON-RPC 2.0 specs,
                 // the Invalid request error should happen when a request isn't properly formatted or is of the wrong
                 // JSON type.
@@ -946,9 +947,13 @@ namespace RPC {
                             if constexpr (std::numeric_limits<QByteArray::size_type>::max() == std::numeric_limits<int>::max())
                                 // Qt 5
                                 sm->contentLength = value.toInt(&ok);
-                            else
+                            else {
                                 // Qt 6
-                                sm->contentLength = value.toLongLong(&ok);
+                                if constexpr (std::is_same_v<QByteArray::size_type, long long>)
+                                    sm->contentLength = value.toLongLong(&ok);
+                                else
+                                    sm->contentLength = value.toLong(&ok);
+                            }
                             if (!ok || sm->contentLength < 0) {
                                 // ERROR HERE. Expected numeric length, got nonsense
                                 throw Exception(QString("Could not parse content-length: %1").arg(QString(data)));
@@ -990,7 +995,11 @@ namespace RPC {
                 const qint64 n2read = qMin(socket->bytesAvailable(), qint64(sm->contentLength - sm->content.length()));
                 if (QByteArray buf = socket->read(n2read); !buf.isEmpty()) {
                     nReceived += buf.size();
-                    sm->content += buf;
+                    if (sm->content.isEmpty())
+                        // avoid a second allocation and just do shallow move in this case
+                        sm->content = std::move(buf);
+                    else
+                        sm->content += buf;
                     lastGood = Util::getTime(); // we just received data, so update "lastGood" as this is used to determine if stale or not -- and for large downloads we don't want to go stale while downloading.
                 } else {
                     // read 0 bytes, but bytesAvailable was >0, must mean there was some sort of error
@@ -1005,11 +1014,11 @@ namespace RPC {
                 // got a full content packet!
                 {
                     QByteArray json = sm->content;
-                    if (sm->content.length() > sm->contentLength) {
-                        // this shouldn't happen. if we get here, likely below code will fail with nonsense and connection will be killed. this is here
-                        // just as a sanity check.
-                        Error() << "Content buffer has extra stuff at the end. Bug in code. FIXME! Crud was: '"
-                                << sm->content.mid(sm->contentLength) << "'";
+                    if (UNLIKELY(sm->content.length() > sm->contentLength)) {
+                        // This shouldn't happen. If we get here, likely below code will fail with nonsense and
+                        // connection will be killed. This is here just as a sanity check.
+                        Error() << "Content buffer has extra stuff at the end. Bug in code. FIXME! Crud was (hex): '"
+                                << Util::Ellipsify(Util::ToHexFast(sm->content.mid(sm->contentLength)), 256) << "'";
                     }
                     if (bool trace = Trace::isEnabled(); sm->logBad && !trace)
                         Warning() << sm->status << " (content): " << json.trimmed();
