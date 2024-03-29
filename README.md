@@ -3,7 +3,9 @@
 [![Docker Build](https://github.com/cculianu/Fulcrum/actions/workflows/publish.yml/badge.svg)](https://github.com/cculianu/Fulcrum/actions/workflows/publish.yml)
 [![Copr build status](https://copr.fedorainfracloud.org/coprs/jonny/BitcoinCash/package/fulcrum/status_image/last_build.png)](https://copr.fedorainfracloud.org/coprs/jonny/BitcoinCash/package/fulcrum/)
 
-A fast & nimble SPV server for Bitcoin Cash, Bitcoin BTC, and Litecoin.
+A fast & nimble SPV server for Bitcoin Cash, Bitcoin BTC, and Litecoin. 
+
+For more information, visit [The Official Fulcrum Website™️](https://fulcrumserver.org/).
 
 #### Copyright
 (C) 2019-2024 Calin Culianu <calin.culianu@gmail.com>
