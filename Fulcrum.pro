@@ -404,6 +404,10 @@ RESOURCES += \
 
 contains(DEFINES, ENABLE_TESTS) {
     RESOURCES += resources/testdata/testdata.qrc
+    HEADERS += \
+        src/tests/Tests.h
+    SOURCES += \
+        src/tests/ByteView_tests.cpp
 }
 
 # Bitcoin related sources & headers
