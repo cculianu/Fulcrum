@@ -28,22 +28,27 @@ BOOST_AUTO_TEST_CASE(comparison_ops) {
     BOOST_CHECK(a == b); // empty byteviews are equal
 
     // Test a == b
+    auto ChkEq = [&] {
+        BOOST_CHECK(a.compare(b) == 0);
+        BOOST_CHECK(b.compare(a) == 0);
+        BOOST_CHECK(a == b);
+        BOOST_CHECK(b == a);
+        BOOST_CHECK(!(a != b));
+        BOOST_CHECK(!(b != a));
+        BOOST_CHECK(!(a < b));
+        BOOST_CHECK(!(b < a));
+        BOOST_CHECK(!(a > b));
+        BOOST_CHECK(!(b > a));
+        BOOST_CHECK(a >= b);
+        BOOST_CHECK(b >= a);
+        BOOST_CHECK(a <= b);
+        BOOST_CHECK(b <= a);
+    };
     a = "abc"_bv;
     b = "abc"_bv;
-    BOOST_CHECK(a.compare(b) == 0);
-    BOOST_CHECK(b.compare(a) == 0);
-    BOOST_CHECK(a == b);
-    BOOST_CHECK(b == a);
-    BOOST_CHECK(!(a != b));
-    BOOST_CHECK(!(b != a));
-    BOOST_CHECK(!(a < b));
-    BOOST_CHECK(!(b < a));
-    BOOST_CHECK(!(a > b));
-    BOOST_CHECK(!(b > a));
-    BOOST_CHECK(a >= b);
-    BOOST_CHECK(b >= a);
-    BOOST_CHECK(a <= b);
-    BOOST_CHECK(b <= a);
+    ChkEq();
+    b = "abcdefgh"_bv.substr(0, 3);
+    ChkEq();
 
     // Set b to be greater-than a
     b = "abcd"_bv;
@@ -61,6 +66,10 @@ BOOST_AUTO_TEST_CASE(comparison_ops) {
     BOOST_CHECK(b >= a);
     BOOST_CHECK(a <= b);
     BOOST_CHECK(!(b <= a));
+
+    std::string s{"abc"};
+    b = s; // ensure and b pointers differ to really test the non-fast-path of operator==
+    ChkEq();
 
     // Create some random strings and check operators
     for (size_t i = 0; i < 100; ++i) {

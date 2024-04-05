@@ -124,6 +124,7 @@ public:
 
     constexpr int compare(const ByteView &o) const noexcept {
         auto p = begin(), e = end(), op = o.begin(), oe = o.end();
+        if (data() == o.data() && size() == o.size()) return 0; // fast-path for same ptr & size
         while (p != e && op != oe) {
             if (const int diff = static_cast<int>(*p++) - static_cast<int>(*op++); diff != 0)
                 return diff < 0 ? -1 : 1;
@@ -136,6 +137,7 @@ public:
     // Operators
     constexpr bool operator==(const ByteView &o) const noexcept {
         if (size() != o.size()) return false;
+        if (data() == o.data()) return true; // fast-path for same ptr & size
         auto p = begin(), e = end(), op = o.begin();
         while (p != e) {
             if (*p++ != *op++) return false;
