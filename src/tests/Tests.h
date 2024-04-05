@@ -153,13 +153,14 @@ namespace Tests {
 
 #define TEST_SUITE(name) \
     namespace { \
+        void name ## _test_func(); \
+        const auto name ## __COUNTER__ = ::App::registerTest( #name , name ## _test_func ); \
         void name ## _test_func() { \
             using namespace Tests; \
             SETUP_CONTEXT( #name );
-#define TEST_SUITE_END(name) \
+#define TEST_SUITE_END() \
             RUN_CONTEXT(); \
         } /* end name_test_func */ \
-        const auto name ## __COUNTER__ = ::App::registerTest( #name , name ## _test_func ); \
     } // namespace
 
 } // namespace Tests

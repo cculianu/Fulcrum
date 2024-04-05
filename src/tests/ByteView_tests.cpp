@@ -180,4 +180,4 @@ BOOST_AUTO_TEST_CASE(conversion) {
     BOOST_CHECK(bv.toStringView() == "this is a test muahaha"sv);
 };
 
-TEST_SUITE_END(byteview)
+TEST_SUITE_END()

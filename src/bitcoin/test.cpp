@@ -116,7 +116,7 @@ TEST_SUITE(base58)
         const bool res = bitcoin::TestBase58(false, true);
         if (!res) throw Exception("base58 failed");
     };
-TEST_SUITE_END(base58)
+TEST_SUITE_END()
 
 // The below tests are taken from BCHN sources: src/test/uint256_tests.cpp, hence the BOOST workalike macros below...
 TEST_SUITE(uint256)
@@ -466,7 +466,7 @@ TEST_SUITE(uint256)
             }
         }
     };
-TEST_SUITE_END(uint256)
+TEST_SUITE_END()
 
 
 template <typename Hasher, typename In, typename Out>
@@ -1122,8 +1122,7 @@ TEST_SUITE(crypto)
             BOOST_CHECK(std::memcmp(out1, out2, 32 * i) == 0);
         }
     };
-
-TEST_SUITE_END(crypto)
+TEST_SUITE_END()
 
 // -- prevectror_tests utility
 auto InsecureRand256() {
@@ -1739,7 +1738,7 @@ TEST_SUITE(prevector)
         BOOST_CHECK(pv != pv2);
         BOOST_CHECK(pv2 < pv);
     };
-TEST_SUITE_END(prevector)
+TEST_SUITE_END()
 
 TEST_SUITE(heapoptional)
     static const auto RandomData = []() -> std::vector<uint8_t> {
@@ -1824,7 +1823,7 @@ TEST_SUITE(heapoptional)
         BOOST_CHECK(HeapOptional<std::vector<uint8_t>>(100, 0x80) != HeapOptional<std::vector<uint8_t>>(100, 0x81));
         BOOST_CHECK(HeapOptional<std::vector<uint8_t>>(100, 0x80) < HeapOptional<std::vector<uint8_t>>(100, 0x81));
     };
-TEST_SUITE_END(heapoptional)
+TEST_SUITE_END()
 
 TEST_SUITE(token)
     const auto jsondata_valid = R"""(
@@ -2915,7 +2914,7 @@ TEST_SUITE(token)
                         == serTx);
         }
     };
-TEST_SUITE_END(token)
+TEST_SUITE_END()
 
 template <typename VecT>
 static bool test_generic_vector_writer() {
@@ -3713,7 +3712,7 @@ TEST_SUITE(streams)
             }
         }
     };
-TEST_SUITE_END(streams)
+TEST_SUITE_END()
 
 TEST_SUITE(span)
     BOOST_AUTO_TEST_CASE(span_from_vector) {
@@ -3897,7 +3896,7 @@ TEST_SUITE(span)
             BOOST_CHECK(span.empty());
         }
     };
-TEST_SUITE_END(span)
+TEST_SUITE_END()
 
 } // end anonymous namespace
 
