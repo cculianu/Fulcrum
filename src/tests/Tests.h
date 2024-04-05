@@ -38,14 +38,7 @@ static_assert(false, "This header requires preprocessor define: ENABLE_TESTS");
 namespace Tests {
 
     template <typename ByteT, std::enable_if_t<sizeof(ByteT) == 1, int> = 0>
-    void GetRandBytes(ByteT *dest, std::size_t count) {
-        if (const auto sz = count / sizeof(quint32) + bool(count % sizeof(quint32)); sz > 0) {
-            std::vector<quint32> tmp(sz, 0u);
-            assert(tmp.size() * sizeof(quint32) >= count);
-            QRandomGenerator::global()->fillRange(tmp.data(), tmp.size());
-            std::memcpy(dest, tmp.data(), count);
-        }
-    }
+    void GetRandBytes(ByteT *dest, std::size_t count) { Util::getRandomBytes(dest, count); }
 
     /** Generate a random 64-bit integer. */
     inline uint64_t rand64() noexcept { return QRandomGenerator::global()->generate64(); }

@@ -1127,7 +1127,7 @@ TEST_SUITE_END()
 // -- prevectror_tests utility
 auto InsecureRand256() {
     bitcoin::uint256 ret{bitcoin::uint256::Uninitialized};
-    QRandomGenerator::global()->generate(ret.begin(), ret.end());
+    Tests::GetRandBytes(ret.data(), ret.size());
     return ret;
 }
 template <unsigned int N, typename T> class prevector_tester {
