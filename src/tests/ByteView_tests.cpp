@@ -22,27 +22,27 @@
 
 TEST_SUITE(byteview)
 
-BOOST_AUTO_TEST_CASE(comparison_ops) {
+TEST_CASE(comparison_ops) {
     ByteView a, b;
 
-    BOOST_CHECK(a == b); // empty byteviews are equal
+    TEST_CHECK(a == b); // empty byteviews are equal
 
     // Test a == b
     auto ChkEq = [&] {
-        BOOST_CHECK(a.compare(b) == 0);
-        BOOST_CHECK(b.compare(a) == 0);
-        BOOST_CHECK(a == b);
-        BOOST_CHECK(b == a);
-        BOOST_CHECK(!(a != b));
-        BOOST_CHECK(!(b != a));
-        BOOST_CHECK(!(a < b));
-        BOOST_CHECK(!(b < a));
-        BOOST_CHECK(!(a > b));
-        BOOST_CHECK(!(b > a));
-        BOOST_CHECK(a >= b);
-        BOOST_CHECK(b >= a);
-        BOOST_CHECK(a <= b);
-        BOOST_CHECK(b <= a);
+        TEST_CHECK(a.compare(b) == 0);
+        TEST_CHECK(b.compare(a) == 0);
+        TEST_CHECK(a == b);
+        TEST_CHECK(b == a);
+        TEST_CHECK(!(a != b));
+        TEST_CHECK(!(b != a));
+        TEST_CHECK(!(a < b));
+        TEST_CHECK(!(b < a));
+        TEST_CHECK(!(a > b));
+        TEST_CHECK(!(b > a));
+        TEST_CHECK(a >= b);
+        TEST_CHECK(b >= a);
+        TEST_CHECK(a <= b);
+        TEST_CHECK(b <= a);
     };
     a = "abc"_bv;
     b = "abc"_bv;
@@ -52,20 +52,20 @@ BOOST_AUTO_TEST_CASE(comparison_ops) {
 
     // Set b to be greater-than a
     b = "abcd"_bv;
-    BOOST_CHECK(a.compare(b) == -1);
-    BOOST_CHECK(b.compare(a) == 1);
-    BOOST_CHECK(a != b);
-    BOOST_CHECK(b != a);
-    BOOST_CHECK(!(a == b));
-    BOOST_CHECK(!(b == a));
-    BOOST_CHECK(a < b);
-    BOOST_CHECK(!(b < a));
-    BOOST_CHECK(!(a > b));
-    BOOST_CHECK(b > a);
-    BOOST_CHECK(!(a >= b));
-    BOOST_CHECK(b >= a);
-    BOOST_CHECK(a <= b);
-    BOOST_CHECK(!(b <= a));
+    TEST_CHECK(a.compare(b) == -1);
+    TEST_CHECK(b.compare(a) == 1);
+    TEST_CHECK(a != b);
+    TEST_CHECK(b != a);
+    TEST_CHECK(!(a == b));
+    TEST_CHECK(!(b == a));
+    TEST_CHECK(a < b);
+    TEST_CHECK(!(b < a));
+    TEST_CHECK(!(a > b));
+    TEST_CHECK(b > a);
+    TEST_CHECK(!(a >= b));
+    TEST_CHECK(b >= a);
+    TEST_CHECK(a <= b);
+    TEST_CHECK(!(b <= a));
 
     std::string s{"abc"};
     b = s; // ensure and b pointers differ to really test the non-fast-path of operator==
@@ -84,29 +84,29 @@ BOOST_AUTO_TEST_CASE(comparison_ops) {
         a = sa;
         b = sb;
 
-        BOOST_CHECK(a.size() == sa.size());
-        BOOST_CHECK(b.size() == sb.size());
+        TEST_CHECK(a.size() == sa.size());
+        TEST_CHECK(b.size() == sb.size());
 
-        BOOST_CHECK((a == b) == (sa == sb));
-        BOOST_CHECK((a != b) == (sa != sb));
-        BOOST_CHECK((a <= b) == (sa <= sb));
-        BOOST_CHECK((a >= b) == (sa >= sb));
-        BOOST_CHECK((a < b) == (sa < sb));
-        BOOST_CHECK((a > b) == (sa > sb));
+        TEST_CHECK((a == b) == (sa == sb));
+        TEST_CHECK((a != b) == (sa != sb));
+        TEST_CHECK((a <= b) == (sa <= sb));
+        TEST_CHECK((a >= b) == (sa >= sb));
+        TEST_CHECK((a < b) == (sa < sb));
+        TEST_CHECK((a > b) == (sa > sb));
 
         const int compval = sa == sb ? 0 : (sa < sb ? -1 : 1);
-        BOOST_CHECK(a.compare(b) == compval);
+        TEST_CHECK(a.compare(b) == compval);
     }
 };
 
-BOOST_AUTO_TEST_CASE(ctor_pod) {
+TEST_CASE(ctor_pod) {
     auto Chk = [&](auto val) {
         auto bv = ByteView(val);
-        BOOST_CHECK(bv.size() == sizeof(val));
-        BOOST_CHECK(bv.data() == reinterpret_cast<std::byte *>(&val));
+        TEST_CHECK(bv.size() == sizeof(val));
+        TEST_CHECK(bv.data() == reinterpret_cast<std::byte *>(&val));
         decltype(val) val2{};
         std::memcpy(reinterpret_cast<char *>(&val2), bv.charData(), sizeof(val2));
-        BOOST_CHECK(val == val2);
+        TEST_CHECK(val == val2);
     };
     Chk(42);
     Chk(1234ull);
@@ -124,60 +124,60 @@ BOOST_AUTO_TEST_CASE(ctor_pod) {
     Chk(std::array<short, 6>{1, 2, 3, 4, 5, 6});
 };
 
-BOOST_AUTO_TEST_CASE(ctor_container) {
+TEST_CASE(ctor_container) {
     ByteView bv;
     std::string_view sv{"muahahaha"};
 
     bv = sv;
-    BOOST_CHECK(std::string_view{bv.charData()} == sv);
+    TEST_CHECK(std::string_view{bv.charData()} == sv);
 
     QString qs{"the quick brown fox"};
 
     bv = qs;
-    BOOST_CHECK(std::string_view{bv.charData()} != sv);
-    BOOST_CHECK(QString::fromRawData(reinterpret_cast<const QChar *>(bv.data()), bv.size() / sizeof(QChar)) == qs);
-    BOOST_CHECK(reinterpret_cast<const QChar *>(bv.data()) == qs.constData());
-    BOOST_CHECK(bv.size() == qs.size() * sizeof(QChar));
+    TEST_CHECK(std::string_view{bv.charData()} != sv);
+    TEST_CHECK(QString::fromRawData(reinterpret_cast<const QChar *>(bv.data()), bv.size() / sizeof(QChar)) == qs);
+    TEST_CHECK(reinterpret_cast<const QChar *>(bv.data()) == qs.constData());
+    TEST_CHECK(bv.size() == qs.size() * sizeof(QChar));
 
     std::vector<uint8_t> vec(256, uint8_t{});
     GetRandBytes(vec.data(), vec.size());
     bv = vec;
-    BOOST_CHECK(bv.ucharData() == vec.data());
-    BOOST_CHECK(bv.size() == vec.size());
+    TEST_CHECK(bv.ucharData() == vec.data());
+    TEST_CHECK(bv.size() == vec.size());
 };
 
-BOOST_AUTO_TEST_CASE(substr) {
+TEST_CASE(substr) {
     ByteView bv;
     std::string_view sv = "the quick brown fox jumped over the lazy dogs";
 
     bv = sv;
 
-    BOOST_CHECK(bv.charData() == sv.data());
-    BOOST_CHECK(bv.ucharData() == reinterpret_cast<const uint8_t *>(sv.data()));
-    BOOST_CHECK(bv.data() == reinterpret_cast<const std::byte *>(sv.data()));
+    TEST_CHECK(bv.charData() == sv.data());
+    TEST_CHECK(bv.ucharData() == reinterpret_cast<const uint8_t *>(sv.data()));
+    TEST_CHECK(bv.data() == reinterpret_cast<const std::byte *>(sv.data()));
 
     for (size_t i = 0; i < sv.size(); ++i) {
-        BOOST_CHECK(bv.substr(i) == sv.substr(i));
-        BOOST_CHECK(bv.substr(i).data() == bv.data() + i);
+        TEST_CHECK(bv.substr(i) == sv.substr(i));
+        TEST_CHECK(bv.substr(i).data() == bv.data() + i);
         for (size_t j = 0; j < sv.size(); ++j) {
             const auto mid = bv.substr(i, j);
-            BOOST_CHECK(mid.data() == bv.data() + i); // check pointer is where we expect
+            TEST_CHECK(mid.data() == bv.data() + i); // check pointer is where we expect
             const auto svmid = sv.substr(i, j);
-            BOOST_CHECK(mid == svmid); // check correctness versus known-good sv.substr() implementation
-            BOOST_CHECK(std::string(mid.charData(), mid.size()) == std::string{svmid}); // check equality using std::string (paranoia)
+            TEST_CHECK(mid == svmid); // check correctness versus known-good sv.substr() implementation
+            TEST_CHECK(std::string(mid.charData(), mid.size()) == std::string{svmid}); // check equality using std::string (paranoia)
         }
     }
 };
 
-BOOST_AUTO_TEST_CASE(conversion) {
+TEST_CASE(conversion) {
     const auto bv = "this is a test muahaha"_bv;
 
-    BOOST_CHECK(bv.toByteArray() == QByteArray("this is a test muahaha"));
-    BOOST_CHECK(bv.toByteArray(false) == "this is a test muahaha");
-    BOOST_CHECK(bv.toByteArray(false).constData() == bv.charData());
+    TEST_CHECK(bv.toByteArray() == QByteArray("this is a test muahaha"));
+    TEST_CHECK(bv.toByteArray(false) == "this is a test muahaha");
+    TEST_CHECK(bv.toByteArray(false).constData() == bv.charData());
 
     using namespace std::string_view_literals;
-    BOOST_CHECK(bv.toStringView() == "this is a test muahaha"sv);
+    TEST_CHECK(bv.toStringView() == "this is a test muahaha"sv);
 };
 
 TEST_SUITE_END()

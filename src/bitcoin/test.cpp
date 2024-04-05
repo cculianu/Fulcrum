@@ -112,13 +112,13 @@ namespace bitcoin {
 namespace {
 
 TEST_SUITE(base58)
-    BOOST_AUTO_TEST_CASE(TestBase58) {
+    TEST_CASE(TestBase58) {
         const bool res = bitcoin::TestBase58(false, true);
         if (!res) throw Exception("base58 failed");
     };
 TEST_SUITE_END()
 
-// The below tests are taken from BCHN sources: src/test/uint256_tests.cpp, hence the BOOST workalike macros below...
+// The below tests are taken from BCHN sources: src/test/uint256_tests.cpp, hence the Boost-workalike macros below...
 TEST_SUITE(uint256)
     using namespace bitcoin;
     const uint8_t R1Array[] =
@@ -164,62 +164,62 @@ TEST_SUITE(uint256)
     };
 
     // constructors, equality, inequality
-    BOOST_AUTO_TEST_CASE(basics) {
-        BOOST_CHECK(1 == 0 + 1);
+    TEST_CASE(basics) {
+        TEST_CHECK(1 == 0 + 1);
         // constructor uint256(vector<char>):
-        BOOST_CHECK(R1L.ToString() == ArrayToString(R1Array, 32));
-        BOOST_CHECK(R1S.ToString() == ArrayToString(R1Array, 20));
-        BOOST_CHECK(R2L.ToString() == ArrayToString(R2Array, 32));
-        BOOST_CHECK(R2S.ToString() == ArrayToString(R2Array, 20));
-        BOOST_CHECK(ZeroL.ToString() == ArrayToString(ZeroArray, 32));
-        BOOST_CHECK(ZeroS.ToString() == ArrayToString(ZeroArray, 20));
-        BOOST_CHECK(OneL.ToString() == ArrayToString(OneArray, 32));
-        BOOST_CHECK(OneS.ToString() == ArrayToString(OneArray, 20));
-        BOOST_CHECK(MaxL.ToString() == ArrayToString(MaxArray, 32));
-        BOOST_CHECK(MaxS.ToString() == ArrayToString(MaxArray, 20));
-        BOOST_CHECK(OneL.ToString() != ArrayToString(ZeroArray, 32));
-        BOOST_CHECK(OneS.ToString() != ArrayToString(ZeroArray, 20));
+        TEST_CHECK(R1L.ToString() == ArrayToString(R1Array, 32));
+        TEST_CHECK(R1S.ToString() == ArrayToString(R1Array, 20));
+        TEST_CHECK(R2L.ToString() == ArrayToString(R2Array, 32));
+        TEST_CHECK(R2S.ToString() == ArrayToString(R2Array, 20));
+        TEST_CHECK(ZeroL.ToString() == ArrayToString(ZeroArray, 32));
+        TEST_CHECK(ZeroS.ToString() == ArrayToString(ZeroArray, 20));
+        TEST_CHECK(OneL.ToString() == ArrayToString(OneArray, 32));
+        TEST_CHECK(OneS.ToString() == ArrayToString(OneArray, 20));
+        TEST_CHECK(MaxL.ToString() == ArrayToString(MaxArray, 32));
+        TEST_CHECK(MaxS.ToString() == ArrayToString(MaxArray, 20));
+        TEST_CHECK(OneL.ToString() != ArrayToString(ZeroArray, 32));
+        TEST_CHECK(OneS.ToString() != ArrayToString(ZeroArray, 20));
 
         // .GetUint64
         for (int i = 0; i < 4; ++i) {
-            if (i < 2) BOOST_CHECK(R1L.GetUint64(i) == R1S.GetUint64(i));
+            if (i < 2) TEST_CHECK(R1L.GetUint64(i) == R1S.GetUint64(i));
             const uint64_t val = ReadLE64(R1Array + i*8);
-            BOOST_CHECK_EQUAL(R1L.GetUint64(i), val);
+            TEST_CHECK_EQUAL(R1L.GetUint64(i), val);
         }
 
         // == and !=
-        BOOST_CHECK(R1L != R2L && R1S != R2S);
-        BOOST_CHECK(ZeroL != OneL && ZeroS != OneS);
-        BOOST_CHECK(OneL != ZeroL && OneS != ZeroS);
-        BOOST_CHECK(MaxL != ZeroL && MaxS != ZeroS);
+        TEST_CHECK(R1L != R2L && R1S != R2S);
+        TEST_CHECK(ZeroL != OneL && ZeroS != OneS);
+        TEST_CHECK(OneL != ZeroL && OneS != ZeroS);
+        TEST_CHECK(MaxL != ZeroL && MaxS != ZeroS);
 
         // String Constructor and Copy Constructor
-        BOOST_CHECK(uint256S("0x" + R1L.ToString()) == R1L);
-        BOOST_CHECK(uint256S("0x" + R2L.ToString()) == R2L);
-        BOOST_CHECK(uint256S("0x" + ZeroL.ToString()) == ZeroL);
-        BOOST_CHECK(uint256S("0x" + OneL.ToString()) == OneL);
-        BOOST_CHECK(uint256S("0x" + MaxL.ToString()) == MaxL);
-        BOOST_CHECK(uint256S(R1L.ToString()) == R1L);
-        BOOST_CHECK(uint256S("   0x" + R1L.ToString() + "   ") == R1L);
-        BOOST_CHECK(uint256S("") == ZeroL);
-        BOOST_CHECK(R1L == uint256S(R1ArrayHex));
-        BOOST_CHECK(uint256(R1L) == R1L);
-        BOOST_CHECK(uint256(ZeroL) == ZeroL);
-        BOOST_CHECK(uint256(OneL) == OneL);
+        TEST_CHECK(uint256S("0x" + R1L.ToString()) == R1L);
+        TEST_CHECK(uint256S("0x" + R2L.ToString()) == R2L);
+        TEST_CHECK(uint256S("0x" + ZeroL.ToString()) == ZeroL);
+        TEST_CHECK(uint256S("0x" + OneL.ToString()) == OneL);
+        TEST_CHECK(uint256S("0x" + MaxL.ToString()) == MaxL);
+        TEST_CHECK(uint256S(R1L.ToString()) == R1L);
+        TEST_CHECK(uint256S("   0x" + R1L.ToString() + "   ") == R1L);
+        TEST_CHECK(uint256S("") == ZeroL);
+        TEST_CHECK(R1L == uint256S(R1ArrayHex));
+        TEST_CHECK(uint256(R1L) == R1L);
+        TEST_CHECK(uint256(ZeroL) == ZeroL);
+        TEST_CHECK(uint256(OneL) == OneL);
 
-        BOOST_CHECK(uint160S("0x" + R1S.ToString()) == R1S);
-        BOOST_CHECK(uint160S("0x" + R2S.ToString()) == R2S);
-        BOOST_CHECK(uint160S("0x" + ZeroS.ToString()) == ZeroS);
-        BOOST_CHECK(uint160S("0x" + OneS.ToString()) == OneS);
-        BOOST_CHECK(uint160S("0x" + MaxS.ToString()) == MaxS);
-        BOOST_CHECK(uint160S(R1S.ToString()) == R1S);
-        BOOST_CHECK(uint160S("   0x" + R1S.ToString() + "   ") == R1S);
-        BOOST_CHECK(uint160S("") == ZeroS);
-        BOOST_CHECK(R1S == uint160S(R1ArrayHex));
+        TEST_CHECK(uint160S("0x" + R1S.ToString()) == R1S);
+        TEST_CHECK(uint160S("0x" + R2S.ToString()) == R2S);
+        TEST_CHECK(uint160S("0x" + ZeroS.ToString()) == ZeroS);
+        TEST_CHECK(uint160S("0x" + OneS.ToString()) == OneS);
+        TEST_CHECK(uint160S("0x" + MaxS.ToString()) == MaxS);
+        TEST_CHECK(uint160S(R1S.ToString()) == R1S);
+        TEST_CHECK(uint160S("   0x" + R1S.ToString() + "   ") == R1S);
+        TEST_CHECK(uint160S("") == ZeroS);
+        TEST_CHECK(R1S == uint160S(R1ArrayHex));
 
-        BOOST_CHECK(uint160(R1S) == R1S);
-        BOOST_CHECK(uint160(ZeroS) == ZeroS);
-        BOOST_CHECK(uint160(OneS) == OneS);
+        TEST_CHECK(uint160(R1S) == R1S);
+        TEST_CHECK(uint160(ZeroS) == ZeroS);
+        TEST_CHECK(uint160(OneS) == OneS);
 
         // ensure a string with a short, odd number of hex digits parses ok, and clears remaining bytes ok
         const std::string oddHex = "12a4507c9";
@@ -229,33 +229,33 @@ TEST_SUITE(uint256)
         GetRandBytes(oddHexS.begin(), 20);
         oddHexL.SetHex(oddHex);
         oddHexS.SetHex(oddHex);
-        BOOST_CHECK_EQUAL(oddHexL.ToString(), std::string(64 - oddHex.size(), '0') + oddHex);
-        BOOST_CHECK_EQUAL(oddHexS.ToString(), std::string(40 - oddHex.size(), '0') + oddHex);
+        TEST_CHECK_EQUAL(oddHexL.ToString(), std::string(64 - oddHex.size(), '0') + oddHex);
+        TEST_CHECK_EQUAL(oddHexS.ToString(), std::string(40 - oddHex.size(), '0') + oddHex);
         // also test GetUint64
-        BOOST_CHECK_EQUAL(oddHexL.GetUint64(0), 5004134345ull);
-        BOOST_CHECK_EQUAL(oddHexS.GetUint64(0), 5004134345ull);
+        TEST_CHECK_EQUAL(oddHexL.GetUint64(0), 5004134345ull);
+        TEST_CHECK_EQUAL(oddHexS.GetUint64(0), 5004134345ull);
     };
 
     auto CheckComparison = [&](const auto &a, const auto &b) {
         static_assert (std::is_same_v<decltype(a), decltype(b)>);
         using T = std::decay_t<decltype(a)>;
         static_assert (std::is_same_v<T, uint256> || std::is_same_v<T, uint160>);
-        BOOST_CHECK(a < b);
-        BOOST_CHECK(a <= b);
-        BOOST_CHECK(b > a);
-        BOOST_CHECK(b >= a);
+        TEST_CHECK(a < b);
+        TEST_CHECK(a <= b);
+        TEST_CHECK(b > a);
+        TEST_CHECK(b >= a);
     };
 
     // <= >= < >
-    BOOST_AUTO_TEST_CASE(comparison) {
+    TEST_CASE(comparison) {
         uint256 LastL;
         for (int i = 0; i < 256; i++) {
             uint256 TmpL;
             *(TmpL.begin() + (i >> 3)) |= 1 << (i & 7);
             CheckComparison(LastL, TmpL);
             LastL = TmpL;
-            BOOST_CHECK(LastL <= LastL);
-            BOOST_CHECK(LastL >= LastL);
+            TEST_CHECK(LastL <= LastL);
+            TEST_CHECK(LastL >= LastL);
         }
 
         CheckComparison(ZeroL, R1L);
@@ -271,8 +271,8 @@ TEST_SUITE(uint256)
             *(TmpS.begin() + (i >> 3)) |= 1 << (i & 7);
             CheckComparison(LastS, TmpS);
             LastS = TmpS;
-            BOOST_CHECK(LastS <= LastS);
-            BOOST_CHECK(LastS >= LastS);
+            TEST_CHECK(LastS <= LastS);
+            TEST_CHECK(LastS >= LastS);
         }
 
         CheckComparison(ZeroS, R1S);
@@ -285,100 +285,100 @@ TEST_SUITE(uint256)
 
     // GetHex SetHex begin() end() size() GetLow64 GetSerializeSize, Serialize,
     // Unserialize
-    BOOST_AUTO_TEST_CASE(methods) {
-        BOOST_CHECK(R1L.GetHex() == R1L.ToString());
-        BOOST_CHECK(R2L.GetHex() == R2L.ToString());
-        BOOST_CHECK(OneL.GetHex() == OneL.ToString());
-        BOOST_CHECK(MaxL.GetHex() == MaxL.ToString());
+    TEST_CASE(methods) {
+        TEST_CHECK(R1L.GetHex() == R1L.ToString());
+        TEST_CHECK(R2L.GetHex() == R2L.ToString());
+        TEST_CHECK(OneL.GetHex() == OneL.ToString());
+        TEST_CHECK(MaxL.GetHex() == MaxL.ToString());
         uint256 TmpL(R1L);
-        BOOST_CHECK(TmpL == R1L);
+        TEST_CHECK(TmpL == R1L);
         TmpL.SetHex(R2L.ToString());
-        BOOST_CHECK(TmpL == R2L);
+        TEST_CHECK(TmpL == R2L);
         TmpL.SetHex(ZeroL.ToString());
-        BOOST_CHECK(TmpL == uint256());
+        TEST_CHECK(TmpL == uint256());
 
         TmpL.SetHex(R1L.ToString());
-        BOOST_CHECK(std::memcmp(R1L.begin(), R1Array, 32) == 0);
-        BOOST_CHECK(std::memcmp(TmpL.begin(), R1Array, 32) == 0);
-        BOOST_CHECK(std::memcmp(R2L.begin(), R2Array, 32) == 0);
-        BOOST_CHECK(std::memcmp(ZeroL.begin(), ZeroArray, 32) == 0);
-        BOOST_CHECK(std::memcmp(OneL.begin(), OneArray, 32) == 0);
-        BOOST_CHECK(R1L.size() == sizeof(R1L));
-        BOOST_CHECK(sizeof(R1L) == 32);
-        BOOST_CHECK(R1L.size() == 32);
-        BOOST_CHECK(R2L.size() == 32);
-        BOOST_CHECK(ZeroL.size() == 32);
-        BOOST_CHECK(MaxL.size() == 32);
-        BOOST_CHECK(R1L.begin() + 32 == R1L.end());
-        BOOST_CHECK(R2L.begin() + 32 == R2L.end());
-        BOOST_CHECK(OneL.begin() + 32 == OneL.end());
-        BOOST_CHECK(MaxL.begin() + 32 == MaxL.end());
-        BOOST_CHECK(TmpL.begin() + 32 == TmpL.end());
-        BOOST_CHECK(GetSerializeSize(R1L, PROTOCOL_VERSION) == 32);
-        BOOST_CHECK(GetSerializeSize(ZeroL, PROTOCOL_VERSION) == 32);
+        TEST_CHECK(std::memcmp(R1L.begin(), R1Array, 32) == 0);
+        TEST_CHECK(std::memcmp(TmpL.begin(), R1Array, 32) == 0);
+        TEST_CHECK(std::memcmp(R2L.begin(), R2Array, 32) == 0);
+        TEST_CHECK(std::memcmp(ZeroL.begin(), ZeroArray, 32) == 0);
+        TEST_CHECK(std::memcmp(OneL.begin(), OneArray, 32) == 0);
+        TEST_CHECK(R1L.size() == sizeof(R1L));
+        TEST_CHECK(sizeof(R1L) == 32);
+        TEST_CHECK(R1L.size() == 32);
+        TEST_CHECK(R2L.size() == 32);
+        TEST_CHECK(ZeroL.size() == 32);
+        TEST_CHECK(MaxL.size() == 32);
+        TEST_CHECK(R1L.begin() + 32 == R1L.end());
+        TEST_CHECK(R2L.begin() + 32 == R2L.end());
+        TEST_CHECK(OneL.begin() + 32 == OneL.end());
+        TEST_CHECK(MaxL.begin() + 32 == MaxL.end());
+        TEST_CHECK(TmpL.begin() + 32 == TmpL.end());
+        TEST_CHECK(GetSerializeSize(R1L, PROTOCOL_VERSION) == 32);
+        TEST_CHECK(GetSerializeSize(ZeroL, PROTOCOL_VERSION) == 32);
 
         CDataStream ss(0, PROTOCOL_VERSION);
         ss << R1L;
-        BOOST_CHECK(ss.str() == std::string(R1Array, R1Array + 32));
+        TEST_CHECK(ss.str() == std::string(R1Array, R1Array + 32));
         ss >> TmpL;
-        BOOST_CHECK(R1L == TmpL);
+        TEST_CHECK(R1L == TmpL);
         ss.clear();
         ss << ZeroL;
-        BOOST_CHECK(ss.str() == std::string(ZeroArray, ZeroArray + 32));
+        TEST_CHECK(ss.str() == std::string(ZeroArray, ZeroArray + 32));
         ss >> TmpL;
-        BOOST_CHECK(ZeroL == TmpL);
+        TEST_CHECK(ZeroL == TmpL);
         ss.clear();
         ss << MaxL;
-        BOOST_CHECK(ss.str() == std::string(MaxArray, MaxArray + 32));
+        TEST_CHECK(ss.str() == std::string(MaxArray, MaxArray + 32));
         ss >> TmpL;
-        BOOST_CHECK(MaxL == TmpL);
+        TEST_CHECK(MaxL == TmpL);
         ss.clear();
 
-        BOOST_CHECK(R1S.GetHex() == R1S.ToString());
-        BOOST_CHECK(R2S.GetHex() == R2S.ToString());
-        BOOST_CHECK(OneS.GetHex() == OneS.ToString());
-        BOOST_CHECK(MaxS.GetHex() == MaxS.ToString());
+        TEST_CHECK(R1S.GetHex() == R1S.ToString());
+        TEST_CHECK(R2S.GetHex() == R2S.ToString());
+        TEST_CHECK(OneS.GetHex() == OneS.ToString());
+        TEST_CHECK(MaxS.GetHex() == MaxS.ToString());
         uint160 TmpS(R1S);
-        BOOST_CHECK(TmpS == R1S);
+        TEST_CHECK(TmpS == R1S);
         TmpS.SetHex(R2S.ToString());
-        BOOST_CHECK(TmpS == R2S);
+        TEST_CHECK(TmpS == R2S);
         TmpS.SetHex(ZeroS.ToString());
-        BOOST_CHECK(TmpS == uint160());
+        TEST_CHECK(TmpS == uint160());
 
         TmpS.SetHex(R1S.ToString());
-        BOOST_CHECK(std::memcmp(R1S.begin(), R1Array, 20) == 0);
-        BOOST_CHECK(std::memcmp(TmpS.begin(), R1Array, 20) == 0);
-        BOOST_CHECK(std::memcmp(R2S.begin(), R2Array, 20) == 0);
-        BOOST_CHECK(std::memcmp(ZeroS.begin(), ZeroArray, 20) == 0);
-        BOOST_CHECK(std::memcmp(OneS.begin(), OneArray, 20) == 0);
-        BOOST_CHECK(R1S.size() == sizeof(R1S));
-        BOOST_CHECK(sizeof(R1S) == 20);
-        BOOST_CHECK(R1S.size() == 20);
-        BOOST_CHECK(R2S.size() == 20);
-        BOOST_CHECK(ZeroS.size() == 20);
-        BOOST_CHECK(MaxS.size() == 20);
-        BOOST_CHECK(R1S.begin() + 20 == R1S.end());
-        BOOST_CHECK(R2S.begin() + 20 == R2S.end());
-        BOOST_CHECK(OneS.begin() + 20 == OneS.end());
-        BOOST_CHECK(MaxS.begin() + 20 == MaxS.end());
-        BOOST_CHECK(TmpS.begin() + 20 == TmpS.end());
-        BOOST_CHECK(GetSerializeSize(R1S, PROTOCOL_VERSION) == 20);
-        BOOST_CHECK(GetSerializeSize(ZeroS, PROTOCOL_VERSION) == 20);
+        TEST_CHECK(std::memcmp(R1S.begin(), R1Array, 20) == 0);
+        TEST_CHECK(std::memcmp(TmpS.begin(), R1Array, 20) == 0);
+        TEST_CHECK(std::memcmp(R2S.begin(), R2Array, 20) == 0);
+        TEST_CHECK(std::memcmp(ZeroS.begin(), ZeroArray, 20) == 0);
+        TEST_CHECK(std::memcmp(OneS.begin(), OneArray, 20) == 0);
+        TEST_CHECK(R1S.size() == sizeof(R1S));
+        TEST_CHECK(sizeof(R1S) == 20);
+        TEST_CHECK(R1S.size() == 20);
+        TEST_CHECK(R2S.size() == 20);
+        TEST_CHECK(ZeroS.size() == 20);
+        TEST_CHECK(MaxS.size() == 20);
+        TEST_CHECK(R1S.begin() + 20 == R1S.end());
+        TEST_CHECK(R2S.begin() + 20 == R2S.end());
+        TEST_CHECK(OneS.begin() + 20 == OneS.end());
+        TEST_CHECK(MaxS.begin() + 20 == MaxS.end());
+        TEST_CHECK(TmpS.begin() + 20 == TmpS.end());
+        TEST_CHECK(GetSerializeSize(R1S, PROTOCOL_VERSION) == 20);
+        TEST_CHECK(GetSerializeSize(ZeroS, PROTOCOL_VERSION) == 20);
 
         ss << R1S;
-        BOOST_CHECK(ss.str() == std::string(R1Array, R1Array + 20));
+        TEST_CHECK(ss.str() == std::string(R1Array, R1Array + 20));
         ss >> TmpS;
-        BOOST_CHECK(R1S == TmpS);
+        TEST_CHECK(R1S == TmpS);
         ss.clear();
         ss << ZeroS;
-        BOOST_CHECK(ss.str() == std::string(ZeroArray, ZeroArray + 20));
+        TEST_CHECK(ss.str() == std::string(ZeroArray, ZeroArray + 20));
         ss >> TmpS;
-        BOOST_CHECK(ZeroS == TmpS);
+        TEST_CHECK(ZeroS == TmpS);
         ss.clear();
         ss << MaxS;
-        BOOST_CHECK(ss.str() == std::string(MaxArray, MaxArray + 20));
+        TEST_CHECK(ss.str() == std::string(MaxArray, MaxArray + 20));
         ss >> TmpS;
-        BOOST_CHECK(MaxS == TmpS);
+        TEST_CHECK(MaxS == TmpS);
         ss.clear();
 
         // Check that '0x' or '0X', and leading spaces are correctly skipped in
@@ -390,22 +390,22 @@ TEST_SUITE(uint256)
         const auto wrongHexstringWithCharactersToSkip{uint256S(
             " 0X7d1de5eaf9b156d53208f033b5aa8122d2d2355d5e12292b121156cfdb4a529d")};
 
-        BOOST_CHECK(baseHexstring.GetHex() == "7d1de5eaf9b156d53208f033b5aa8122d2d2355d5e12292b121156cfdb4a529c");
-        BOOST_CHECK(baseHexstring == hexstringWithCharactersToSkip);
-        BOOST_CHECK(baseHexstring != wrongHexstringWithCharactersToSkip);
+        TEST_CHECK(baseHexstring.GetHex() == "7d1de5eaf9b156d53208f033b5aa8122d2d2355d5e12292b121156cfdb4a529c");
+        TEST_CHECK(baseHexstring == hexstringWithCharactersToSkip);
+        TEST_CHECK(baseHexstring != wrongHexstringWithCharactersToSkip);
 
         // Test IsNull, SetNull, operator==, operator!=, and size()
         auto hexCpy = baseHexstring;
-        BOOST_CHECK(hexCpy != ZeroL);
-        BOOST_CHECK(ZeroL.IsNull());
-        BOOST_CHECK(!hexCpy.IsNull());
+        TEST_CHECK(hexCpy != ZeroL);
+        TEST_CHECK(ZeroL.IsNull());
+        TEST_CHECK(!hexCpy.IsNull());
         hexCpy.SetNull();
-        BOOST_CHECK(hexCpy.IsNull());
-        BOOST_CHECK(hexCpy == ZeroL);
-        BOOST_CHECK(0 == std::memcmp(hexCpy.begin(), ZeroL.begin(), hexCpy.size()));
-        BOOST_CHECK(0 == std::memcmp(hexCpy.begin(), ZeroArray, hexCpy.size()));
-        BOOST_CHECK(hexCpy.size() == 32);
-        BOOST_CHECK(uint160::size() == 20);
+        TEST_CHECK(hexCpy.IsNull());
+        TEST_CHECK(hexCpy == ZeroL);
+        TEST_CHECK(0 == std::memcmp(hexCpy.begin(), ZeroL.begin(), hexCpy.size()));
+        TEST_CHECK(0 == std::memcmp(hexCpy.begin(), ZeroArray, hexCpy.size()));
+        TEST_CHECK(hexCpy.size() == 32);
+        TEST_CHECK(uint160::size() == 20);
 
         // check the uninitilized vs initialized constructor
         constexpr size_t wordSize = sizeof(void *);
@@ -422,14 +422,14 @@ TEST_SUITE(uint256)
         const bool alignedOk = std::size_t(alignedPtr) % wordSize == 0
                                && rawBuf.end() - alignedPtr >= std::ptrdiff_t(sizeof(uint256))
                                && alignedPtr >= rawBuf.begin();
-        BOOST_CHECK(alignedOk);
+        TEST_CHECK(alignedOk);
         if (alignedOk) {
             constexpr uint8_t uninitializedByte = 0xfa;
             const auto end = alignedPtr + sizeof(uint256);
             // 1. check that the Uninitialized constructor in fact does not initialize memory
             std::fill(alignedPtr, end, uninitializedByte); // set memory area to clearly uninitialized data
             // the below line prevents the above std::fill from being optimized away
-            BOOST_CHECK(end > alignedPtr && *alignedPtr == uninitializedByte && end[-1] == uninitializedByte);
+            TEST_CHECK(end > alignedPtr && *alignedPtr == uninitializedByte && end[-1] == uninitializedByte);
     /* GCC 8.3.x warns here if compiling with -O3 -- but the warning is a false positive. We intentionally
      * are testing the uninitialized case here.  So we suppress the warning.
      * Note that clang doesn't know about -Wmaybe-uninitialized so we limit this pragma to GNUC only. */
@@ -445,7 +445,7 @@ TEST_SUITE(uint256)
                 for (const auto ch : *uninitialized) {
                     uninitializedCtr += unsigned(ch == uninitializedByte); // false = 0, true = 1
                 }
-                BOOST_CHECK(uninitializedCtr == uint256::size());
+                TEST_CHECK(uninitializedCtr == uint256::size());
             }
 #       if defined(__GNUC__) && !defined(__clang__)
 #           pragma GCC diagnostic pop
@@ -453,7 +453,7 @@ TEST_SUITE(uint256)
             // 2. while we are here, check the default constructor zeroes out data
             std::fill(alignedPtr, end, uninitializedByte); // set memory area to clearly uninitialized data
             // the below line prevents the above std::fill from being optimized away
-            BOOST_CHECK(end > alignedPtr && *alignedPtr == uninitializedByte && end[-1] == uninitializedByte);
+            TEST_CHECK(end > alignedPtr && *alignedPtr == uninitializedByte && end[-1] == uninitializedByte);
             {
                 // Note: this pointer is to data on the stack and should not be freed!
                 uint256 *initialized = new (alignedPtr) uint256(); // implicitly zero-initializes the data
@@ -462,7 +462,7 @@ TEST_SUITE(uint256)
                 for (const auto ch : *initialized) {
                     initializedCtr += unsigned(ch == 0x0); // false = 0, true = 1
                 }
-                BOOST_CHECK(initializedCtr == uint256::size());
+                TEST_CHECK(initializedCtr == uint256::size());
             }
         }
     };
@@ -473,12 +473,12 @@ template <typename Hasher, typename In, typename Out>
 void TestVector(const Hasher &h, const In &in, const Out &out) {
     using namespace bitcoin;
     Out hash;
-    BOOST_CHECK(out.size() == h.OUTPUT_SIZE);
+    TEST_CHECK(out.size() == h.OUTPUT_SIZE);
     hash.resize(out.size());
     {
         // Test that writing the whole input string at once works.
         Hasher(h).Write((uint8_t *)&in[0], in.size()).Finalize(&hash[0]);
-        BOOST_CHECK(hash == out);
+        TEST_CHECK(hash == out);
     }
     for (int i = 0; i < 32; ++i) {
         // Test that writing the string broken up in random pieces works.
@@ -495,11 +495,11 @@ void TestVector(const Hasher &h, const In &in, const Out &out) {
                 Hasher(hasher)
                     .Write((uint8_t *)&in[pos], in.size() - pos)
                     .Finalize(&hash[0]);
-                BOOST_CHECK(hash == out);
+                TEST_CHECK(hash == out);
             }
         }
         hasher.Finalize(&hash[0]);
-        BOOST_CHECK(hash == out);
+        TEST_CHECK(hash == out);
     }
 }
 
@@ -539,10 +539,10 @@ TEST_SUITE(crypto)
         buf.resize(correctout.size());
         buf2.resize(correctout.size());
         enc.Encrypt(buf.data(), in.data());
-        BOOST_CHECK_EQUAL(HexStr(buf), HexStr(correctout));
+        TEST_CHECK_EQUAL(HexStr(buf), HexStr(correctout));
         AES128Decrypt dec(key.data());
         dec.Decrypt(buf2.data(), buf.data());
-        BOOST_CHECK_EQUAL(HexStr(buf2), HexStr(in));
+        TEST_CHECK_EQUAL(HexStr(buf2), HexStr(in));
     };
     auto TestAES256 = [](const std::string &hexkey, const std::string &hexin, const std::string &hexout) {
         std::vector<uint8_t> key = ParseHex(hexkey);
@@ -556,10 +556,10 @@ TEST_SUITE(crypto)
         AES256Encrypt enc(key.data());
         buf.resize(correctout.size());
         enc.Encrypt(buf.data(), in.data());
-        BOOST_CHECK(buf == correctout);
+        TEST_CHECK(buf == correctout);
         AES256Decrypt dec(key.data());
         dec.Decrypt(buf.data(), buf.data());
-        BOOST_CHECK(buf == in);
+        TEST_CHECK(buf == in);
     };
     auto TestAES128CBC = [](const std::string &hexkey, const std::string &hexiv, bool pad, const std::string &hexin,
                             const std::string &hexout) {
@@ -573,8 +573,8 @@ TEST_SUITE(crypto)
         AES128CBCEncrypt enc(key.data(), iv.data(), pad);
         int size = enc.Encrypt(in.data(), in.size(), realout.data());
         realout.resize(size);
-        BOOST_CHECK(realout.size() == correctout.size());
-        BOOST_CHECK_MESSAGE(realout == correctout,
+        TEST_CHECK(realout.size() == correctout.size());
+        TEST_CHECK_MESSAGE(realout == correctout,
                             HexStr(realout) + std::string(" != ") + hexout);
 
         // Decrypt the cipher and verify that it equals the plaintext
@@ -582,8 +582,8 @@ TEST_SUITE(crypto)
         AES128CBCDecrypt dec(key.data(), iv.data(), pad);
         size = dec.Decrypt(correctout.data(), correctout.size(), decrypted.data());
         decrypted.resize(size);
-        BOOST_CHECK(decrypted.size() == in.size());
-        BOOST_CHECK_MESSAGE(decrypted == in,
+        TEST_CHECK(decrypted.size() == in.size());
+        TEST_CHECK_MESSAGE(decrypted == in,
                             HexStr(decrypted) + std::string(" != ") + hexin);
 
         // Encrypt and re-decrypt substrings of the plaintext and verify that they
@@ -597,8 +597,8 @@ TEST_SUITE(crypto)
                 std::vector<uint8_t> subdecrypted(subout.size());
                 size_ = dec.Decrypt(subout.data(), subout.size(), subdecrypted.data());
                 subdecrypted.resize(size_);
-                BOOST_CHECK(decrypted.size() == in.size());
-                BOOST_CHECK_MESSAGE(subdecrypted == sub,
+                TEST_CHECK(decrypted.size() == in.size());
+                TEST_CHECK_MESSAGE(subdecrypted == sub,
                                     HexStr(subdecrypted) + std::string(" != ") + HexStr(sub));
             }
         }
@@ -615,8 +615,8 @@ TEST_SUITE(crypto)
         AES256CBCEncrypt enc(key.data(), iv.data(), pad);
         int size = enc.Encrypt(in.data(), in.size(), realout.data());
         realout.resize(size);
-        BOOST_CHECK(realout.size() == correctout.size());
-        BOOST_CHECK_MESSAGE(realout == correctout,
+        TEST_CHECK(realout.size() == correctout.size());
+        TEST_CHECK_MESSAGE(realout == correctout,
                             HexStr(realout) + std::string(" != ") + hexout);
 
         // Decrypt the cipher and verify that it equals the plaintext
@@ -624,8 +624,8 @@ TEST_SUITE(crypto)
         AES256CBCDecrypt dec(key.data(), iv.data(), pad);
         size = dec.Decrypt(correctout.data(), correctout.size(), decrypted.data());
         decrypted.resize(size);
-        BOOST_CHECK(decrypted.size() == in.size());
-        BOOST_CHECK_MESSAGE(decrypted == in,
+        TEST_CHECK(decrypted.size() == in.size());
+        TEST_CHECK_MESSAGE(decrypted == in,
                             HexStr(decrypted) + std::string(" != ") + hexin);
 
         // Encrypt and re-decrypt substrings of the plaintext and verify that they
@@ -639,8 +639,8 @@ TEST_SUITE(crypto)
                 std::vector<uint8_t> subdecrypted(subout.size());
                 size_ = dec.Decrypt(subout.data(), subout.size(), subdecrypted.data());
                 subdecrypted.resize(size_);
-                BOOST_CHECK(decrypted.size() == in.size());
-                BOOST_CHECK_MESSAGE(subdecrypted == sub,
+                TEST_CHECK(decrypted.size() == in.size());
+                TEST_CHECK_MESSAGE(subdecrypted == sub,
                                     HexStr(subdecrypted) + std::string(" != ") + HexStr(sub));
             }
         }
@@ -654,7 +654,7 @@ TEST_SUITE(crypto)
         std::vector<uint8_t> outres;
         outres.resize(out.size());
         rng.Output(outres.data(), outres.size());
-        BOOST_CHECK(out == outres);
+        TEST_CHECK(out == outres);
     };
 
     auto LongTestString = []() -> std::string {
@@ -671,7 +671,7 @@ TEST_SUITE(crypto)
 
     const std::string test1 = LongTestString();
 
-    BOOST_AUTO_TEST_CASE(ripemd160_testvectors) {
+    TEST_CASE(ripemd160_testvectors) {
         TestRIPEMD160("", "9c1185a5c5e9fc54612808977ee8f548b2258d31");
         TestRIPEMD160("abc", "8eb208f7e05d987a9b044a8e98c6b087f15a0bfc");
         TestRIPEMD160("message digest", "5d0689ef49d2fae572b881b123a85ffa21595f36");
@@ -692,7 +692,7 @@ TEST_SUITE(crypto)
         TestRIPEMD160(test1, "464243587bd146ea835cdf57bdae582f25ec45f1");
     };
 
-    BOOST_AUTO_TEST_CASE(sha1_testvectors) {
+    TEST_CASE(sha1_testvectors) {
         TestSHA1("", "da39a3ee5e6b4b0d3255bfef95601890afd80709");
         TestSHA1("abc", "a9993e364706816aba3e25717850c26c9cd0d89d");
         TestSHA1("message digest", "c12252ceda8be8994d5fa0290a47231c1d16aae3");
@@ -711,7 +711,7 @@ TEST_SUITE(crypto)
         TestSHA1(test1, "b7755760681cbfd971451668f32af5774f4656b5");
     };
 
-    BOOST_AUTO_TEST_CASE(sha256_testvectors) {
+    TEST_CASE(sha256_testvectors) {
         TestSHA256(
             "", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
         TestSHA256(
@@ -747,7 +747,7 @@ TEST_SUITE(crypto)
             "a316d55510b49662420f49d145d42fb83f31ef8dc016aa4e32df049991a91e26");
     };
 
-    BOOST_AUTO_TEST_CASE(sha512_testvectors) {
+    TEST_CASE(sha512_testvectors) {
         TestSHA512(
             "", "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce"
                 "47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e");
@@ -794,7 +794,7 @@ TEST_SUITE(crypto)
             "37de8c3ef5459d76a52cedc02dc499a3c9ed9dedbfb3281afd9653b8a112fafc");
     };
 
-    BOOST_AUTO_TEST_CASE(hmac_sha256_testvectors) {
+    TEST_CASE(hmac_sha256_testvectors) {
         // test cases 1, 2, 3, 4, 6 and 7 of RFC 4231
         TestHMACSHA256(
             "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b", "4869205468657265",
@@ -854,7 +854,7 @@ TEST_SUITE(crypto)
             "d06af337f359a2330deffb8e3cbe4b5b7aa8ca1f208528cdbd245d5dc63c4483");
     };
 
-    BOOST_AUTO_TEST_CASE(hmac_sha512_testvectors) {
+    TEST_CASE(hmac_sha512_testvectors) {
         // test cases 1, 2, 3, 4, 6 and 7 of RFC 4231
         TestHMACSHA512(
             "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b", "4869205468657265",
@@ -929,7 +929,7 @@ TEST_SUITE(crypto)
             "fb29795e79f2ef27f68cb1e16d76178c307a67beaad9456fac5fdffeadb16e2c");
     };
 
-    BOOST_AUTO_TEST_CASE(aes_testvectors) {
+    TEST_CASE(aes_testvectors) {
         // AES test vectors from FIPS 197.
         TestAES128("000102030405060708090a0b0c0d0e0f",
                    "00112233445566778899aabbccddeeff",
@@ -965,7 +965,7 @@ TEST_SUITE(crypto)
             "f69f2445df4f9b17ad2b417be66c3710", "23304b7a39f9f3ff067d8d8f9e24ecc7");
     };
 
-    BOOST_AUTO_TEST_CASE(aes_cbc_testvectors) {
+    TEST_CASE(aes_cbc_testvectors) {
         // NIST AES CBC 128-bit encryption test-vectors
         TestAES128CBC("2b7e151628aed2a6abf7158809cf4f3c",
                       "000102030405060708090A0B0C0D0E0F", false,
@@ -1043,7 +1043,7 @@ TEST_SUITE(crypto)
             "b2eb05e2c39be9fcda6c19078c6a9d1b3f461796d6b0d6b2e0c2a72b4d80e644");
     };
 
-    BOOST_AUTO_TEST_CASE(chacha20_testvector) {
+    TEST_CASE(chacha20_testvector) {
         // Test vector from RFC 7539
         TestChaCha20(
             "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
@@ -1088,27 +1088,27 @@ TEST_SUITE(crypto)
             "38407a6deb3ab78fab78c9");
     };
 
-    BOOST_AUTO_TEST_CASE(countbits_tests) {
+    TEST_CASE(countbits_tests) {
         for (unsigned int i = 0; i <= 64; ++i) {
             if (i == 0) {
                 // Check handling of zero.
-                BOOST_CHECK_EQUAL(CountBits(0), 0U);
+                TEST_CHECK_EQUAL(CountBits(0), 0U);
             } else if (i < 10) {
                 for (uint64_t j = 1 << (i - 1); (j >> i) == 0; ++j) {
                     // Exhaustively test up to 10 bits
-                    BOOST_CHECK_EQUAL(CountBits(j), i);
+                    TEST_CHECK_EQUAL(CountBits(j), i);
                 }
             } else {
                 for (int k = 0; k < 1000; ++k) {
                     // Randomly test 1000 samples of each length above 10 bits.
                     uint64_t j = uint64_t(1) << (i - 1) | InsecureRandBits(i - 1);
-                    BOOST_CHECK_EQUAL(CountBits(j), i);
+                    TEST_CHECK_EQUAL(CountBits(j), i);
                 }
             }
         }
     };
 
-    BOOST_AUTO_TEST_CASE(sha256d64) {
+    TEST_CASE(sha256d64) {
         for (int i = 0; i <= 32; ++i) {
             uint8_t in[64 * 32];
             uint8_t out1[32 * 32], out2[32 * 32];
@@ -1119,7 +1119,7 @@ TEST_SUITE(crypto)
                 CHash256().Write(in + 64 * j, 64).Finalize(out1 + 32 * j);
             }
             SHA256D64(out2, in, i);
-            BOOST_CHECK(std::memcmp(out1, out2, 32 * i) == 0);
+            TEST_CHECK(std::memcmp(out1, out2, 32 * i) == 0);
         }
     };
 TEST_SUITE_END()
@@ -1297,7 +1297,7 @@ public:
     }
 
     ~prevector_tester() {
-        BOOST_CHECK_MESSAGE(passed, "insecure_rand: " + rand_seed.ToString());
+        TEST_CHECK_MESSAGE(passed, "insecure_rand: " + rand_seed.ToString());
     }
 
     prevector_tester() {
@@ -1308,7 +1308,7 @@ public:
 TEST_SUITE(prevector)
     using namespace bitcoin;
 
-    BOOST_AUTO_TEST_CASE(PrevectorTestInt) {
+    TEST_CASE(PrevectorTestInt) {
         for (int j = 0; j < 64; j++) {
             prevector_tester<8, int> test;
             for (int i = 0; i < 2048; i++) {
@@ -1382,7 +1382,7 @@ TEST_SUITE(prevector)
         }
     };
 
-    BOOST_AUTO_TEST_CASE(PrevectorTestShort) {
+    TEST_CASE(PrevectorTestShort) {
         for (int j = 0; j < 64; j++) {
             prevector_tester<18, short> test;
             for (int i = 0; i < 2048; i++) {
@@ -1456,7 +1456,7 @@ TEST_SUITE(prevector)
         }
     };
 
-    BOOST_AUTO_TEST_CASE(PrevectorTestUInt8) {
+    TEST_CASE(PrevectorTestUInt8) {
         for (int j = 0; j < 64; j++) {
             prevector_tester<28, uint8_t> test;
             for (int i = 0; i < 2048; i++) {
@@ -1530,7 +1530,7 @@ TEST_SUITE(prevector)
         }
     };
 
-    BOOST_AUTO_TEST_CASE(PrevectorTestInt64) {
+    TEST_CASE(PrevectorTestInt64) {
         for (int j = 0; j < 64; j++) {
             prevector_tester<99, std::int64_t> test;
             for (int i = 0; i < 2048; i++) {
@@ -1604,7 +1604,7 @@ TEST_SUITE(prevector)
         }
     };
 
-    BOOST_AUTO_TEST_CASE(PrevectorTestChar) {
+    TEST_CASE(PrevectorTestChar) {
         for (int j = 0; j < 64; j++) {
             prevector_tester<17, char> test;
             for (int i = 0; i < 2048; i++) {
@@ -1678,7 +1678,7 @@ TEST_SUITE(prevector)
         }
     };
 
-    BOOST_AUTO_TEST_CASE(ThrowsBadAllocPlusComparisons) {
+    TEST_CASE(ThrowsBadAllocPlusComparisons) {
         auto LogBadAlloc = [](const std::bad_alloc &e) {
             Debug() << "Caught bad_alloc as expected: " << e.what();
             return true;
@@ -1686,22 +1686,22 @@ TEST_SUITE(prevector)
         using PV = prevector<28, uint8_t, std::size_t, std::ptrdiff_t>;
         PV pv;
         pv.assign(100u, uint8_t(0x2f));
-        BOOST_CHECK(pv == PV(100u, uint8_t(0x2f)));
+        TEST_CHECK(pv == PV(100u, uint8_t(0x2f)));
 
         const auto *origptr = pv.data();
-        BOOST_CHECK_EXCEPTION(pv.assign(std::numeric_limits<std::size_t>::max()-29, uint8_t(0)), std::bad_alloc,
-                              LogBadAlloc);
+        TEST_CHECK_EXCEPTION(pv.assign(std::numeric_limits<std::size_t>::max()-29, uint8_t(0)), std::bad_alloc,
+                             LogBadAlloc);
         // ensure that catching the bad_alloc didn't leak the old pointer
-        BOOST_CHECK(pv.data() == origptr);
-        BOOST_CHECK(pv.size() == 0); // but it should have set size to 0
-        BOOST_CHECK(pv != PV(100u, uint8_t(0x2f))); // ensure !=
-        BOOST_CHECK(pv != PV(100u, uint8_t(0))); // also not cleared
-        BOOST_CHECK(pv == PV(0u, uint8_t(0))); // also should == empty vector
-        BOOST_CHECK(std::memcmp(pv.data(), PV(100u, uint8_t(0x2f)).data(), 100) == 0);
+        TEST_CHECK(pv.data() == origptr);
+        TEST_CHECK(pv.size() == 0); // but it should have set size to 0
+        TEST_CHECK(pv != PV(100u, uint8_t(0x2f))); // ensure !=
+        TEST_CHECK(pv != PV(100u, uint8_t(0))); // also not cleared
+        TEST_CHECK(pv == PV(0u, uint8_t(0))); // also should == empty vector
+        TEST_CHECK(std::memcmp(pv.data(), PV(100u, uint8_t(0x2f)).data(), 100) == 0);
 
         // check throws in c'tor
-        BOOST_CHECK_EXCEPTION(PV(std::numeric_limits<std::size_t>::max()-29, uint8_t(0)), std::bad_alloc,
-                              LogBadAlloc);
+        TEST_CHECK_EXCEPTION(PV(std::numeric_limits<std::size_t>::max()-29, uint8_t(0)), std::bad_alloc,
+                             LogBadAlloc);
 
         // check that our new handler was called on alloc failure
         static unsigned newHandlerCtr;
@@ -1713,30 +1713,30 @@ TEST_SUITE(prevector)
         };
         newHandlerCtr = 0;
         auto *oldHandler = std::set_new_handler(myNewHandler);
-        BOOST_CHECK_EXCEPTION(PV(std::numeric_limits<std::size_t>::max()-29, uint8_t(0)), std::bad_alloc,
-                              LogBadAlloc);
-        BOOST_CHECK(newHandlerCtr == 5);
+        TEST_CHECK_EXCEPTION(PV(std::numeric_limits<std::size_t>::max()-29, uint8_t(0)), std::bad_alloc,
+                             LogBadAlloc);
+        TEST_CHECK(newHandlerCtr == 5);
         newHandlerCtr = 0;
         std::set_new_handler(oldHandler);
 
         pv = PV(40u, uint8_t(1));
         PV pv2(40u, uint8_t(1));
 
-        BOOST_CHECK(pv == pv2);
-        BOOST_CHECK(!(pv < pv2));
+        TEST_CHECK(pv == pv2);
+        TEST_CHECK(!(pv < pv2));
         pv2[39] = 2;
-        BOOST_CHECK(pv != pv2);
-        BOOST_CHECK(pv < pv2);
+        TEST_CHECK(pv != pv2);
+        TEST_CHECK(pv < pv2);
         pv[39] = 2;
-        BOOST_CHECK(pv == pv2);
-        BOOST_CHECK(!(pv < pv2));
+        TEST_CHECK(pv == pv2);
+        TEST_CHECK(!(pv < pv2));
         pv[38] = 0;
-        BOOST_CHECK(pv != pv2);
-        BOOST_CHECK(pv < pv2);
+        TEST_CHECK(pv != pv2);
+        TEST_CHECK(pv < pv2);
 
         pv2.resize(35);
-        BOOST_CHECK(pv != pv2);
-        BOOST_CHECK(pv2 < pv);
+        TEST_CHECK(pv != pv2);
+        TEST_CHECK(pv2 < pv);
     };
 TEST_SUITE_END()
 
@@ -1745,83 +1745,83 @@ TEST_SUITE(heapoptional)
         bitcoin::uint256 r = InsecureRand256();
         return {r.begin(), r.end()};
     };
-    BOOST_AUTO_TEST_CASE(basic_test) {
+    TEST_CASE(basic_test) {
         using bitcoin::HeapOptional;
         // Test basic operation
         HeapOptional<std::vector<uint8_t>> p, p2;
         // default constructed value should have nothing in it
-        BOOST_CHECK(!p);
-        BOOST_CHECK(p.get() == nullptr);
-        BOOST_CHECK(p == p2); // nulls compare equal
-        BOOST_CHECK(!(p != p2)); // nulls are never not equal (test operator!=)
-        BOOST_CHECK(!(p < p2)); // nulls are not less than
+        TEST_CHECK(!p);
+        TEST_CHECK(p.get() == nullptr);
+        TEST_CHECK(p == p2); // nulls compare equal
+        TEST_CHECK(!(p != p2)); // nulls are never not equal (test operator!=)
+        TEST_CHECK(!(p < p2)); // nulls are not less than
 
         // assign a real value to p but not to p2
         const std::vector<uint8_t> data1 = RandomData();
-        BOOST_CHECK(!p);
+        TEST_CHECK(!p);
         p = data1;
-        BOOST_CHECK(bool(p));
+        TEST_CHECK(bool(p));
         // Test comparison ops ==, !=, and <
-        BOOST_CHECK(*p == data1);
-        BOOST_CHECK(p == data1);
-        BOOST_CHECK(!(p < data1)); // operator< should return false
-        BOOST_CHECK(!(p != data1));
-        BOOST_CHECK(p.get() != &data1);
-        BOOST_CHECK(p2 < data1); // nullptr p2 is always less than data1
-        BOOST_CHECK(p2 != data1); // nullptr p2 is always not equal to data1
-        BOOST_CHECK(!(p2 == data1)); // nullptr p2 is always not equal to data1 (test opeerator==)
+        TEST_CHECK(*p == data1);
+        TEST_CHECK(p == data1);
+        TEST_CHECK(!(p < data1)); // operator< should return false
+        TEST_CHECK(!(p != data1));
+        TEST_CHECK(p.get() != &data1);
+        TEST_CHECK(p2 < data1); // nullptr p2 is always less than data1
+        TEST_CHECK(p2 != data1); // nullptr p2 is always not equal to data1
+        TEST_CHECK(!(p2 == data1)); // nullptr p2 is always not equal to data1 (test opeerator==)
         // decrement the last byte(s) of *p
-        BOOST_CHECK(!p->empty());
+        TEST_CHECK(!p->empty());
         for (auto rit = p->rbegin(); rit != p->rend(); ++rit)
             if ((*rit)-- != 0) break;
         // p should now compare less
-        BOOST_CHECK(p < data1);
-        BOOST_CHECK(p != data1);
-        BOOST_CHECK(!(p == data1)); // operator==
-        BOOST_CHECK(data1 > *p);
+        TEST_CHECK(p < data1);
+        TEST_CHECK(p != data1);
+        TEST_CHECK(!(p == data1)); // operator==
+        TEST_CHECK(data1 > *p);
 
         // assign p2 from p
-        BOOST_CHECK(!p2);
+        TEST_CHECK(!p2);
         p2 = p;
-        BOOST_CHECK(bool(p2));
-        BOOST_CHECK(p.get() != p2.get());
-        BOOST_CHECK(p == p2);
-        BOOST_CHECK(!(p != p2));
-        BOOST_CHECK(!(p < p2));
+        TEST_CHECK(bool(p2));
+        TEST_CHECK(p.get() != p2.get());
+        TEST_CHECK(p == p2);
+        TEST_CHECK(!(p != p2));
+        TEST_CHECK(!(p < p2));
 
         // assign data1 to p2
         p2 = data1;
-        BOOST_CHECK(bool(p2));
-        BOOST_CHECK(p.get() != p2.get());
-        BOOST_CHECK(!(p == p2));
-        BOOST_CHECK(p != p2);
-        BOOST_CHECK(p < p2);
+        TEST_CHECK(bool(p2));
+        TEST_CHECK(p.get() != p2.get());
+        TEST_CHECK(!(p == p2));
+        TEST_CHECK(p != p2);
+        TEST_CHECK(p < p2);
 
         // check reset and emplace
         p.reset();
         const void *oldp2_ptr = p2.get();
         p2.emplace(data1.size(), 0x0); // assign all 0's to p2 using the emplace() method
-        BOOST_CHECK(p2.get() != oldp2_ptr); // emplacing should have created a new object in a different heap location (and deleted the old)
-        BOOST_CHECK(!p);
-        BOOST_CHECK(!p.get());
-        BOOST_CHECK(p2);
-        BOOST_CHECK(p2.get());
-        BOOST_CHECK(p != p2);
-        BOOST_CHECK(p < p2); // p is null, should always be less than p2
-        BOOST_CHECK(!(p == p2)); // operator== where p is nullptr
-        BOOST_CHECK((p2 == std::vector<uint8_t>(data1.size(), 0x0)));
-        BOOST_CHECK((p2 != std::vector<uint8_t>(data1.size(), 0x1)));
-        BOOST_CHECK((p2 < std::vector<uint8_t>(data1.size(), 0x1)));
+        TEST_CHECK(p2.get() != oldp2_ptr); // emplacing should have created a new object in a different heap location (and deleted the old)
+        TEST_CHECK(!p);
+        TEST_CHECK(!p.get());
+        TEST_CHECK(p2);
+        TEST_CHECK(p2.get());
+        TEST_CHECK(p != p2);
+        TEST_CHECK(p < p2); // p is null, should always be less than p2
+        TEST_CHECK(!(p == p2)); // operator== where p is nullptr
+        TEST_CHECK((p2 == std::vector<uint8_t>(data1.size(), 0x0)));
+        TEST_CHECK((p2 != std::vector<uint8_t>(data1.size(), 0x1)));
+        TEST_CHECK((p2 < std::vector<uint8_t>(data1.size(), 0x1)));
 
         p2.reset();
-        BOOST_CHECK(!p2);
-        BOOST_CHECK(p == p2);
-        BOOST_CHECK(p.get() == nullptr && p2.get() == nullptr);
+        TEST_CHECK(!p2);
+        TEST_CHECK(p == p2);
+        TEST_CHECK(p.get() == nullptr && p2.get() == nullptr);
 
         // test construction in-place
-        BOOST_CHECK(HeapOptional<std::vector<uint8_t>>(100, 0x80) == HeapOptional<std::vector<uint8_t>>(100, 0x80));
-        BOOST_CHECK(HeapOptional<std::vector<uint8_t>>(100, 0x80) != HeapOptional<std::vector<uint8_t>>(100, 0x81));
-        BOOST_CHECK(HeapOptional<std::vector<uint8_t>>(100, 0x80) < HeapOptional<std::vector<uint8_t>>(100, 0x81));
+        TEST_CHECK(HeapOptional<std::vector<uint8_t>>(100, 0x80) == HeapOptional<std::vector<uint8_t>>(100, 0x80));
+        TEST_CHECK(HeapOptional<std::vector<uint8_t>>(100, 0x80) != HeapOptional<std::vector<uint8_t>>(100, 0x81));
+        TEST_CHECK(HeapOptional<std::vector<uint8_t>>(100, 0x80) < HeapOptional<std::vector<uint8_t>>(100, 0x81));
     };
 TEST_SUITE_END()
 
@@ -2749,15 +2749,15 @@ TEST_SUITE(token)
          std::setlocale(LC_ALL, origLocale.c_str());
     });
 
-    BOOST_AUTO_TEST_CASE(prefix_token_encoding_json_test_vectors_valid) {
+    TEST_CASE(prefix_token_encoding_json_test_vectors_valid) {
         using namespace bitcoin;
         // load json
         auto tests = Json::parseUtf8(jsondata_valid, Json::ParseOption::RequireArray).toList();
-        BOOST_CHECK( ! tests.empty());
+        TEST_CHECK( ! tests.empty());
         unsigned ctr = 0;
         for (const QVariant &var : tests) {
             const QVariantMap &tv = var.toMap();
-            BOOST_CHECK( ! tv.empty());
+            TEST_CHECK( ! tv.empty());
             Log() << "Checking 'valid' test vector " << ctr++ << " ...";
             token::OutputDataPtr pdata;
             {
@@ -2767,12 +2767,12 @@ TEST_SUITE(token)
                 CScript spk;
                 wspk.insert(wspk.end(), serializedPrefix.begin(), serializedPrefix.end());
                 token::UnwrapScriptPubKey(wspk, pdata, spk, INIT_PROTO_VERSION, true /* throw if unparseable */);
-                BOOST_CHECK(bool(pdata));
-                BOOST_CHECK(spk.empty()); // all of the JSON test vectors omit the scriptPubKey data that would follow
+                TEST_CHECK(bool(pdata));
+                TEST_CHECK(spk.empty()); // all of the JSON test vectors omit the scriptPubKey data that would follow
                 // check that re-serialization produces identical serialized data
                 wspk.clear();
                 token::WrapScriptPubKey(wspk, pdata, spk, INIT_PROTO_VERSION);
-                BOOST_CHECK_EQUAL(HexStr(wspk), HexStr(serializedPrefix));
+                TEST_CHECK_EQUAL(HexStr(wspk), HexStr(serializedPrefix));
             }
 
             // Next, check the deserialized token data matches what is expected from the test vector
@@ -2781,7 +2781,7 @@ TEST_SUITE(token)
             // -- Note that the hex representation in the JSON is big endian but our memory order for
             // -- hashes is little endian.  However uint256::GetHex() returns a big endian hex string.
             // -- See: https://github.com/bitjson/cashtokens/issues/53
-            BOOST_CHECK_EQUAL(pdata->GetId().GetHex(), d["category"].toString().toStdString());
+            TEST_CHECK_EQUAL(pdata->GetId().GetHex(), d["category"].toString().toStdString());
             // Check amount
             {
                 int64_t amt = 0;
@@ -2789,30 +2789,30 @@ TEST_SUITE(token)
                     if (vamt.canConvert<qint64>()) {
                         bool ok{};
                         amt = vamt.toLongLong(&ok);
-                        BOOST_CHECK(ok);
+                        TEST_CHECK(ok);
                     } else {
                         // parse amount
                         const auto amountString = vamt.toString().toStdString();
                         amt = std::atoll(amountString.c_str());
                         const auto verifyStr = strprintf("%d", amt);
                         // paranoia to ensure there are no "surprises" in the test vectors with amounts we cannot parse
-                        BOOST_CHECK_EQUAL(verifyStr, amountString);
+                        TEST_CHECK_EQUAL(verifyStr, amountString);
                     }
                 }
-                BOOST_CHECK_EQUAL(pdata->HasAmount(), amt != 0LL);
-                BOOST_CHECK_EQUAL(pdata->GetAmount().getint64(), amt);
+                TEST_CHECK_EQUAL(pdata->HasAmount(), amt != 0LL);
+                TEST_CHECK_EQUAL(pdata->GetAmount().getint64(), amt);
             }
             // Check NFT (if any)
             if (d.contains("nft")) {
                 const QVariantMap vnft = d["nft"].toMap();
-                BOOST_CHECK( ! vnft.empty());
+                TEST_CHECK( ! vnft.empty());
                 // Check commitment
                 std::string commitment = "";
                 if (vnft.contains("commitment")) {
                     commitment = vnft["commitment"].toString().toStdString();
                 }
-                BOOST_CHECK_EQUAL(HexStr(pdata->GetCommitment()), commitment);
-                BOOST_CHECK(pdata->HasCommitmentLength() == !commitment.empty());
+                TEST_CHECK_EQUAL(HexStr(pdata->GetCommitment()), commitment);
+                TEST_CHECK(pdata->HasCommitmentLength() == !commitment.empty());
 
                 // Check capability
                 std::string cap;
@@ -2822,12 +2822,12 @@ TEST_SUITE(token)
                 case token::Capability::Minting: cap = "minting"; break;
                 }
                 const auto &expectedCap = vnft["capability"].toString().toStdString();
-                BOOST_CHECK_EQUAL(cap, expectedCap);
+                TEST_CHECK_EQUAL(cap, expectedCap);
             }
         }
     };
 
-    BOOST_AUTO_TEST_CASE(prefix_token_encoding_json_test_vectors_invalid) {
+    TEST_CASE(prefix_token_encoding_json_test_vectors_invalid) {
         using namespace bitcoin;
         // returns a lambda that is the predicate which returns true if the exception message contains `txt` (case insensitive)
         static auto ExcMessageContains = [](const std::string &txt) {
@@ -2840,27 +2840,27 @@ TEST_SUITE(token)
         };
         // load json
         auto tests = Json::parseUtf8(jsondata_invalid, Json::ParseOption::RequireArray).toList();
-        BOOST_CHECK( ! tests.empty());
+        TEST_CHECK( ! tests.empty());
         unsigned ctr = 0;
         for (const QVariant &var : tests) {
             const auto tv = var.toMap();
-            BOOST_CHECK( ! tv.empty());
+            TEST_CHECK( ! tv.empty());
             Log() << "Checking 'invalid' test vector " << ctr++ << " ...";
             const auto serializedPrefix = ParseHex(tv["prefix"].toString().toStdString());
             const auto expectedExcMsg = TrimString(tv["bchn_exception_message"].toString().toStdString());
-            BOOST_CHECK( ! expectedExcMsg.empty()); // ensure the JSON entry specifies a non-empty exception message
+            TEST_CHECK( ! expectedExcMsg.empty()); // ensure the JSON entry specifies a non-empty exception message
             token::WrappedScriptPubKey wspk;
             wspk.insert(wspk.end(), serializedPrefix.begin(), serializedPrefix.end());
             token::OutputDataPtr pdata;
             CScript spk;
             // All of the "invalid" tests should throw here, and the exception message we expect comes from the
             // JSON "bchn_exception_message" key
-            BOOST_CHECK_EXCEPTION(token::UnwrapScriptPubKey(wspk, pdata, spk, INIT_PROTO_VERSION, true /* throws */),
-                                  std::ios_base::failure, ExcMessageContains(expectedExcMsg));
+            TEST_CHECK_EXCEPTION(token::UnwrapScriptPubKey(wspk, pdata, spk, INIT_PROTO_VERSION, true /* throws */),
+                                 std::ios_base::failure, ExcMessageContains(expectedExcMsg));
         }
     };
 
-    BOOST_AUTO_TEST_CASE(cashtoken_flag_ser_deser_block) {
+    TEST_CASE(cashtoken_flag_ser_deser_block) {
         using namespace bitcoin;
         const auto blockData = Util::ParseHexFast("000000209e244b25ff3e7462bbe0c12c14b7178b7f55675bf03748a095c2c61500000000810763ba26b56c8a5bb66e9729466a1647e0a0dc8e35cff3071305b5a6074b687bd31d636982361c6a4b564d0301000000010000000000000000000000000000000000000000000000000000000000000000ffffffff2703d9b7012f7434666f726b2e63332d736f66742e636f6d202d2d2043617368546f6b656e73212fffffffff03106462b8000000001976a9140a373caf0ab3c2b46cd05625b8d545c295b93d7a88ac1091a371000000001976a91472b46a63afc9917fbf4942b762591ca4a33d454f88ac0000000000000000166a143dd51c630000000000000000d32f7c3c190a0000000000000100000001957be2ec5ed5d97602f028d358cf22e16a3722b3e8d1fd7aaa9344f36fa246d5010000006441dfbb337849cad772ac7ddb1e8f6f5d4d0c5ce458ed9e342b35206725364cb66d93be0754bad34d53ac9ffb7be3bd9c6ee9c60a5c13cdc2ac1a2f46264f12cf404121022eebf1895d911e62c184a47c775ce8fe11fb42e38fd9c8d5f055a60620a25738feffffff01ac8401000000000044ef43c1044127e1274181e7458c70b02d5c75b49b31a337d85703d56480345cd2cc6208596f596f596f212176a91468ad9ed17ffe22b6a2cebb6eb8332add388e1ab288ac0000000001000000010b58cc128cff64cc45ea0d4a23020f511bcea24993b440666452882735218041000000006441c74c1ca636f349daabed8aa266f3af2ad69b7388f6c8fdc117ed6d9e4d085c68645e1ec230709f4354d564697b6da2e58fa96439ebfc1133010d93abe844a08e412103f1b17617586ccd70f742c7071518b8871907c6a115a4a4c044c2fcc6e672ae8bfeffffff0234e21600000000001976a914c793cf3f739c4cee16476abe1d1a5d10585446e688ac00e1f505000000001976a914a46bc981bfd309b4b50616030a8ebe24511d5e6688acd8b70100");
         const auto nCtTxn = 1u;
@@ -2872,45 +2872,45 @@ TEST_SUITE(token)
         // First, deserialize without CashTokens
         {
             const CBlock block = BTC::Deserialize<CBlock>(blockData, 0, false, false, false, true);
-            BOOST_CHECK_EQUAL(block.GetHash().ToString(), hashBlock);
+            TEST_CHECK_EQUAL(block.GetHash().ToString(), hashBlock);
             const auto &tx = block.vtx.at(nCtTxn);
-            BOOST_CHECK_EQUAL(tx->GetHash().ToString(), hashCtTxn);
-            BOOST_CHECK(std::all_of(tx->vout.begin(), tx->vout.end(), [](const auto &out){
+            TEST_CHECK_EQUAL(tx->GetHash().ToString(), hashCtTxn);
+            TEST_CHECK(std::all_of(tx->vout.begin(), tx->vout.end(), [](const auto &out){
                 return !out.tokenDataPtr;
             }));
             const auto &txout = tx->vout.at(outN);
-            BOOST_CHECK(std::equal(tokenBlob.begin(), tokenBlob.end(),
+            TEST_CHECK(std::equal(tokenBlob.begin(), tokenBlob.end(),
                                    txout.scriptPubKey.begin(), txout.scriptPubKey.end()));
             // ensure re-serialization works
-            BOOST_CHECK(BTC::Serialize(block, false, false) == blockData);
+            TEST_CHECK(BTC::Serialize(block, false, false) == blockData);
             // ensure ser-reser is the same with or without cashtokens flag
             const auto serTx = BTC::Serialize(*tx, false, false);
-            BOOST_CHECK(BTC::Serialize(BTC::Deserialize<CTransaction>(serTx, 0, false, false, true), false, false)
+            TEST_CHECK(BTC::Serialize(BTC::Deserialize<CTransaction>(serTx, 0, false, false, true), false, false)
                         == serTx);
         }
 
         // Next, deserialize *with* CashTokens
         {
             const CBlock block = BTC::Deserialize<CBlock>(blockData, 0, false, false, true, true);
-            BOOST_CHECK_EQUAL(block.GetHash().ToString(), hashBlock);
+            TEST_CHECK_EQUAL(block.GetHash().ToString(), hashBlock);
             const auto &tx = block.vtx.at(nCtTxn);
-            BOOST_CHECK_EQUAL(tx->GetHash().ToString(), hashCtTxn);
+            TEST_CHECK_EQUAL(tx->GetHash().ToString(), hashCtTxn);
             const auto &txout = tx->vout.at(outN);
-            BOOST_CHECK(bool(txout.tokenDataPtr));
+            TEST_CHECK(bool(txout.tokenDataPtr));
             token::WrappedScriptPubKey wspk;
             token::WrapScriptPubKey(wspk, txout.tokenDataPtr, txout.scriptPubKey, PROTOCOL_VERSION);
-            BOOST_CHECK(std::equal(tokenBlob.begin(), tokenBlob.end(),
+            TEST_CHECK(std::equal(tokenBlob.begin(), tokenBlob.end(),
                                    wspk.begin(), wspk.end()));
             token::WrapScriptPubKey(wspk, txout.tokenDataPtr, txout.scriptPubKey, PROTOCOL_VERSION | SERIALIZE_TRANSACTION_USE_CASHTOKENS);
-            BOOST_CHECK(std::equal(tokenBlob.begin(), tokenBlob.end(),
+            TEST_CHECK(std::equal(tokenBlob.begin(), tokenBlob.end(),
                                    wspk.begin(), wspk.end()));
-            BOOST_CHECK(!std::equal(tokenBlob.begin(), tokenBlob.end(),
+            TEST_CHECK(!std::equal(tokenBlob.begin(), tokenBlob.end(),
                                     txout.scriptPubKey.begin(), txout.scriptPubKey.end()));
             // ensure re-serialization works
-            BOOST_CHECK(BTC::Serialize(block, false, false) == blockData);
+            TEST_CHECK(BTC::Serialize(block, false, false) == blockData);
             // ensure ser-reser is the same with or without cashtokens flag
             const auto serTx = BTC::Serialize(*tx, false, false);
-            BOOST_CHECK(BTC::Serialize(BTC::Deserialize<CTransaction>(serTx, 0, false, false, false), false, false)
+            TEST_CHECK(BTC::Serialize(BTC::Deserialize<CTransaction>(serTx, 0, false, false, false), false, false)
                         == serTx);
         }
     };
@@ -2936,49 +2936,49 @@ static bool test_generic_vector_writer() {
     // vector.
 
     GenericVectorWriter(SER_NETWORK, INIT_PROTO_VERSION, vch, 0, a, b);
-    BOOST_CHECK((ToUInt8Vec(vch) == std::vector<uint8_t>{{1, 2}}));
+    TEST_CHECK((ToUInt8Vec(vch) == std::vector<uint8_t>{{1, 2}}));
     GenericVectorWriter(SER_NETWORK, INIT_PROTO_VERSION, vch, 0, a, b);
-    BOOST_CHECK((ToUInt8Vec(vch) == std::vector<uint8_t>{{1, 2}}));
+    TEST_CHECK((ToUInt8Vec(vch) == std::vector<uint8_t>{{1, 2}}));
     vch.clear();
 
     GenericVectorWriter(SER_NETWORK, INIT_PROTO_VERSION, vch, 2, a, b);
-    BOOST_CHECK((ToUInt8Vec(vch) == std::vector<uint8_t>{{0, 0, 1, 2}}));
+    TEST_CHECK((ToUInt8Vec(vch) == std::vector<uint8_t>{{0, 0, 1, 2}}));
     GenericVectorWriter(SER_NETWORK, INIT_PROTO_VERSION, vch, 2, a, b);
-    BOOST_CHECK((ToUInt8Vec(vch) == std::vector<uint8_t>{{0, 0, 1, 2}}));
+    TEST_CHECK((ToUInt8Vec(vch) == std::vector<uint8_t>{{0, 0, 1, 2}}));
     vch.clear();
 
     vch = VecT(typename VecT::size_type(5), T(0));
     GenericVectorWriter(SER_NETWORK, INIT_PROTO_VERSION, vch, 2, a, b);
-    BOOST_CHECK((ToUInt8Vec(vch) == std::vector<uint8_t>{{0, 0, 1, 2, 0}}));
+    TEST_CHECK((ToUInt8Vec(vch) == std::vector<uint8_t>{{0, 0, 1, 2, 0}}));
     GenericVectorWriter(SER_NETWORK, INIT_PROTO_VERSION, vch, 2, a, b);
-    BOOST_CHECK((ToUInt8Vec(vch) == std::vector<uint8_t>{{0, 0, 1, 2, 0}}));
+    TEST_CHECK((ToUInt8Vec(vch) == std::vector<uint8_t>{{0, 0, 1, 2, 0}}));
     vch.clear();
 
     vch = VecT(typename VecT::size_type(4), T(0));
     GenericVectorWriter(SER_NETWORK, INIT_PROTO_VERSION, vch, 3, a, b);
-    BOOST_CHECK((ToUInt8Vec(vch) == std::vector<uint8_t>{{0, 0, 0, 1, 2}}));
+    TEST_CHECK((ToUInt8Vec(vch) == std::vector<uint8_t>{{0, 0, 0, 1, 2}}));
     GenericVectorWriter(SER_NETWORK, INIT_PROTO_VERSION, vch, 3, a, b);
-    BOOST_CHECK((ToUInt8Vec(vch) == std::vector<uint8_t>{{0, 0, 0, 1, 2}}));
+    TEST_CHECK((ToUInt8Vec(vch) == std::vector<uint8_t>{{0, 0, 0, 1, 2}}));
     vch.clear();
 
     vch = VecT(typename VecT::size_type(4), T(0));
     GenericVectorWriter(SER_NETWORK, INIT_PROTO_VERSION, vch, 4, a, b);
-    BOOST_CHECK((ToUInt8Vec(vch) == std::vector<uint8_t>{{0, 0, 0, 0, 1, 2}}));
+    TEST_CHECK((ToUInt8Vec(vch) == std::vector<uint8_t>{{0, 0, 0, 0, 1, 2}}));
     GenericVectorWriter(SER_NETWORK, INIT_PROTO_VERSION, vch, 4, a, b);
-    BOOST_CHECK((ToUInt8Vec(vch) == std::vector<uint8_t>{{0, 0, 0, 0, 1, 2}}));
+    TEST_CHECK((ToUInt8Vec(vch) == std::vector<uint8_t>{{0, 0, 0, 0, 1, 2}}));
     vch.clear();
 
     GenericVectorWriter(SER_NETWORK, INIT_PROTO_VERSION, vch, 0, bytes);
-    BOOST_CHECK((ToUInt8Vec(vch) == std::vector<uint8_t>{{3, 4, 5, 6}}));
+    TEST_CHECK((ToUInt8Vec(vch) == std::vector<uint8_t>{{3, 4, 5, 6}}));
     GenericVectorWriter(SER_NETWORK, INIT_PROTO_VERSION, vch, 0, bytes);
-    BOOST_CHECK((ToUInt8Vec(vch) == std::vector<uint8_t>{{3, 4, 5, 6}}));
+    TEST_CHECK((ToUInt8Vec(vch) == std::vector<uint8_t>{{3, 4, 5, 6}}));
     vch.clear();
 
     vch = VecT(typename VecT::size_type(4), T(8));
     GenericVectorWriter(SER_NETWORK, INIT_PROTO_VERSION, vch, 2, a, bytes, b);
-    BOOST_CHECK((ToUInt8Vec(vch) == std::vector<uint8_t>{{8, 8, 1, 3, 4, 5, 6, 2}}));
+    TEST_CHECK((ToUInt8Vec(vch) == std::vector<uint8_t>{{8, 8, 1, 3, 4, 5, 6, 2}}));
     GenericVectorWriter(SER_NETWORK, INIT_PROTO_VERSION, vch, 2, a, bytes, b);
-    BOOST_CHECK((ToUInt8Vec(vch) == std::vector<uint8_t>{{8, 8, 1, 3, 4, 5, 6, 2}}));
+    TEST_CHECK((ToUInt8Vec(vch) == std::vector<uint8_t>{{8, 8, 1, 3, 4, 5, 6, 2}}));
     vch.clear();
 
     return true;
@@ -2991,46 +2991,46 @@ static bool test_generic_vector_reader() {
     for (auto val : {1, 255, 3, 4, 5, 6}) vch.push_back(typename VecT::value_type(val));
 
     GenericVectorReader reader(SER_NETWORK, INIT_PROTO_VERSION, vch, 0);
-    BOOST_CHECK_EQUAL(reader.size(), 6);
-    BOOST_CHECK(!reader.empty());
+    TEST_CHECK_EQUAL(reader.size(), 6);
+    TEST_CHECK(!reader.empty());
 
     // Read a single byte as an uint8_t.
     uint8_t a;
     reader >> a;
-    BOOST_CHECK_EQUAL(a, 1);
-    BOOST_CHECK_EQUAL(reader.size(), 5);
-    BOOST_CHECK(!reader.empty());
+    TEST_CHECK_EQUAL(a, 1);
+    TEST_CHECK_EQUAL(reader.size(), 5);
+    TEST_CHECK(!reader.empty());
 
     // Read a single byte as a (signed) int8_t.
     int8_t b;
     reader >> b;
-    BOOST_CHECK_EQUAL(b, -1);
-    BOOST_CHECK_EQUAL(reader.size(), 4);
-    BOOST_CHECK(!reader.empty());
+    TEST_CHECK_EQUAL(b, -1);
+    TEST_CHECK_EQUAL(reader.size(), 4);
+    TEST_CHECK(!reader.empty());
 
     // Read a 4 bytes as an unsigned uint32_t.
     uint32_t c;
     reader >> c;
     // 100992003 = 3,4,5,6 in little-endian base-256
-    BOOST_CHECK_EQUAL(c, htole32(100992003));
-    BOOST_CHECK_EQUAL(reader.size(), 0);
-    BOOST_CHECK(reader.empty());
+    TEST_CHECK_EQUAL(c, htole32(100992003));
+    TEST_CHECK_EQUAL(reader.size(), 0);
+    TEST_CHECK(reader.empty());
 
     // Reading after end of byte vector throws an error.
     int32_t d;
-    BOOST_CHECK_THROW(reader >> d, std::ios_base::failure);
+    TEST_CHECK_THROW(reader >> d, std::ios_base::failure);
 
     // Read a 4 bytes as a (signed) int32_t from the beginning of the buffer.
     GenericVectorReader new_reader(SER_NETWORK, INIT_PROTO_VERSION, vch, 0);
     new_reader >> d;
     // 67370753 = 1,255,3,4 in little-endian base-256
-    BOOST_CHECK_EQUAL(uint32_t(d), htole32(67370753));
-    BOOST_CHECK_EQUAL(new_reader.size(), 2);
-    BOOST_CHECK(!new_reader.empty());
+    TEST_CHECK_EQUAL(uint32_t(d), htole32(67370753));
+    TEST_CHECK_EQUAL(new_reader.size(), 2);
+    TEST_CHECK(!new_reader.empty());
 
     // Reading after end of byte vector throws an error even if the reader is
     // not totally empty.
-    BOOST_CHECK_THROW(new_reader >> d, std::ios_base::failure);
+    TEST_CHECK_THROW(new_reader >> d, std::ios_base::failure);
 
     return true;
 }
@@ -3087,19 +3087,19 @@ public:
 TEST_SUITE(streams)
     using namespace bitcoin;
 
-    BOOST_AUTO_TEST_CASE(streams_vector_writer) {
-        BOOST_CHECK(test_generic_vector_writer<std::vector<uint8_t>>());
-        BOOST_CHECK(test_generic_vector_writer<std::vector<char>>());
-        BOOST_CHECK((test_generic_vector_writer<prevector<28, uint8_t>>()));
+    TEST_CASE(streams_vector_writer) {
+        TEST_CHECK(test_generic_vector_writer<std::vector<uint8_t>>());
+        TEST_CHECK(test_generic_vector_writer<std::vector<char>>());
+        TEST_CHECK((test_generic_vector_writer<prevector<28, uint8_t>>()));
     };
 
-    BOOST_AUTO_TEST_CASE(streams_vector_reader) {
-        BOOST_CHECK(test_generic_vector_reader<std::vector<uint8_t>>());
-        BOOST_CHECK(test_generic_vector_reader<std::vector<char>>());
-        BOOST_CHECK((test_generic_vector_reader<prevector<28, uint8_t>>()));
+    TEST_CASE(streams_vector_reader) {
+        TEST_CHECK(test_generic_vector_reader<std::vector<uint8_t>>());
+        TEST_CHECK(test_generic_vector_reader<std::vector<char>>());
+        TEST_CHECK((test_generic_vector_reader<prevector<28, uint8_t>>()));
     };
 
-    BOOST_AUTO_TEST_CASE(bitstream_reader_writer) {
+    TEST_CASE(bitstream_reader_writer) {
         CDataStream data(SER_NETWORK, INIT_PROTO_VERSION);
 
         BitStreamWriter<CDataStream> bit_writer(data);
@@ -3117,25 +3117,25 @@ TEST_SUITE(streams)
         uint32_t serialized_int1;
         data >> serialized_int1;
         // NOTE: Serialized as LE
-        BOOST_CHECK_EQUAL(serialized_int1, (uint32_t)0x7700C35A);
+        TEST_CHECK_EQUAL(serialized_int1, (uint32_t)0x7700C35A);
         uint16_t serialized_int2;
         data >> serialized_int2;
         // NOTE: Serialized as LE
-        BOOST_CHECK_EQUAL(serialized_int2, (uint16_t)0x1072);
+        TEST_CHECK_EQUAL(serialized_int2, (uint16_t)0x1072);
 
         BitStreamReader<CDataStream> bit_reader(data_copy);
-        BOOST_CHECK_EQUAL(bit_reader.Read(1), 0);
-        BOOST_CHECK_EQUAL(bit_reader.Read(2), 2);
-        BOOST_CHECK_EQUAL(bit_reader.Read(3), 6);
-        BOOST_CHECK_EQUAL(bit_reader.Read(4), 11);
-        BOOST_CHECK_EQUAL(bit_reader.Read(5), 1);
-        BOOST_CHECK_EQUAL(bit_reader.Read(6), 32);
-        BOOST_CHECK_EQUAL(bit_reader.Read(7), 7);
-        BOOST_CHECK_EQUAL(bit_reader.Read(16), 30497);
-        BOOST_CHECK_THROW(bit_reader.Read(8), std::ios_base::failure);
+        TEST_CHECK_EQUAL(bit_reader.Read(1), 0);
+        TEST_CHECK_EQUAL(bit_reader.Read(2), 2);
+        TEST_CHECK_EQUAL(bit_reader.Read(3), 6);
+        TEST_CHECK_EQUAL(bit_reader.Read(4), 11);
+        TEST_CHECK_EQUAL(bit_reader.Read(5), 1);
+        TEST_CHECK_EQUAL(bit_reader.Read(6), 32);
+        TEST_CHECK_EQUAL(bit_reader.Read(7), 7);
+        TEST_CHECK_EQUAL(bit_reader.Read(16), 30497);
+        TEST_CHECK_THROW(bit_reader.Read(8), std::ios_base::failure);
     };
 
-    BOOST_AUTO_TEST_CASE(streams_serializedata_xor) {
+    TEST_CASE(streams_serializedata_xor) {
         std::vector<char> in;
         std::vector<char> expected_xor;
         std::vector<uint8_t> key;
@@ -3146,7 +3146,7 @@ TEST_SUITE(streams)
         key.push_back('\x00');
         key.push_back('\x00');
         ds.Xor(key);
-        BOOST_CHECK_EQUAL(std::string(expected_xor.begin(), expected_xor.end()),
+        TEST_CHECK_EQUAL(std::string(expected_xor.begin(), expected_xor.end()),
                           std::string(ds.begin(), ds.end()));
 
         in.push_back('\x0f');
@@ -3162,7 +3162,7 @@ TEST_SUITE(streams)
 
         key.push_back('\xff');
         ds.Xor(key);
-        BOOST_CHECK_EQUAL(std::string(expected_xor.begin(), expected_xor.end()),
+        TEST_CHECK_EQUAL(std::string(expected_xor.begin(), expected_xor.end()),
                           std::string(ds.begin(), ds.end()));
 
         // Multi character key
@@ -3182,93 +3182,93 @@ TEST_SUITE(streams)
         key.push_back('\x0f');
 
         ds.Xor(key);
-        BOOST_CHECK_EQUAL(std::string(expected_xor.begin(), expected_xor.end()),
+        TEST_CHECK_EQUAL(std::string(expected_xor.begin(), expected_xor.end()),
                           std::string(ds.begin(), ds.end()));
     };
 
-    BOOST_AUTO_TEST_CASE(streams_empty_vector) {
+    TEST_CASE(streams_empty_vector) {
         std::vector<char> in;
         CDataStream ds(in, 0, 0);
 
         // read 0 bytes used to cause a segfault on some older systems.
-        BOOST_CHECK_NO_THROW(ds.read(nullptr, 0));
+        TEST_CHECK_NO_THROW(ds.read(nullptr, 0));
 
         // Same goes for writing 0 bytes from a vector ...
         const std::vector<char> vdata{'f', 'o', 'o', 'b', 'a', 'r'};
-        BOOST_CHECK_NO_THROW(ds.insert(ds.begin(), vdata.begin(), vdata.begin()));
-        BOOST_CHECK_NO_THROW(ds.insert(ds.begin(), vdata.begin(), vdata.end()));
+        TEST_CHECK_NO_THROW(ds.insert(ds.begin(), vdata.begin(), vdata.begin()));
+        TEST_CHECK_NO_THROW(ds.insert(ds.begin(), vdata.begin(), vdata.end()));
 
         // ... or an array.
         const char adata[6] = {'f', 'o', 'o', 'b', 'a', 'r'};
-        BOOST_CHECK_NO_THROW(ds.insert(ds.begin(), &adata[0], &adata[0]));
-        BOOST_CHECK_NO_THROW(ds.insert(ds.begin(), &adata[0], &adata[6]));
+        TEST_CHECK_NO_THROW(ds.insert(ds.begin(), &adata[0], &adata[0]));
+        TEST_CHECK_NO_THROW(ds.insert(ds.begin(), &adata[0], &adata[6]));
     };
 
-    BOOST_AUTO_TEST_CASE(sizes) {
-        BOOST_CHECK_EQUAL(sizeof(char), GetSerializeSize(char(0)));
-        BOOST_CHECK_EQUAL(sizeof(int8_t), GetSerializeSize(int8_t(0)));
-        BOOST_CHECK_EQUAL(sizeof(uint8_t), GetSerializeSize(uint8_t(0)));
-        BOOST_CHECK_EQUAL(sizeof(int16_t), GetSerializeSize(int16_t(0)));
-        BOOST_CHECK_EQUAL(sizeof(uint16_t), GetSerializeSize(uint16_t(0)));
-        BOOST_CHECK_EQUAL(sizeof(int32_t), GetSerializeSize(int32_t(0)));
-        BOOST_CHECK_EQUAL(sizeof(uint32_t), GetSerializeSize(uint32_t(0)));
-        BOOST_CHECK_EQUAL(sizeof(int64_t), GetSerializeSize(int64_t(0)));
-        BOOST_CHECK_EQUAL(sizeof(uint64_t), GetSerializeSize(uint64_t(0)));
-        BOOST_CHECK_EQUAL(sizeof(float), GetSerializeSize(float(0)));
-        BOOST_CHECK_EQUAL(sizeof(double), GetSerializeSize(double(0)));
+    TEST_CASE(sizes) {
+        TEST_CHECK_EQUAL(sizeof(char), GetSerializeSize(char(0)));
+        TEST_CHECK_EQUAL(sizeof(int8_t), GetSerializeSize(int8_t(0)));
+        TEST_CHECK_EQUAL(sizeof(uint8_t), GetSerializeSize(uint8_t(0)));
+        TEST_CHECK_EQUAL(sizeof(int16_t), GetSerializeSize(int16_t(0)));
+        TEST_CHECK_EQUAL(sizeof(uint16_t), GetSerializeSize(uint16_t(0)));
+        TEST_CHECK_EQUAL(sizeof(int32_t), GetSerializeSize(int32_t(0)));
+        TEST_CHECK_EQUAL(sizeof(uint32_t), GetSerializeSize(uint32_t(0)));
+        TEST_CHECK_EQUAL(sizeof(int64_t), GetSerializeSize(int64_t(0)));
+        TEST_CHECK_EQUAL(sizeof(uint64_t), GetSerializeSize(uint64_t(0)));
+        TEST_CHECK_EQUAL(sizeof(float), GetSerializeSize(float(0)));
+        TEST_CHECK_EQUAL(sizeof(double), GetSerializeSize(double(0)));
         // Bool is serialized as char
-        BOOST_CHECK_EQUAL(sizeof(char), GetSerializeSize(bool(0)));
+        TEST_CHECK_EQUAL(sizeof(char), GetSerializeSize(bool(0)));
 
         // Sanity-check GetSerializeSize and c++ type matching
-        BOOST_CHECK_EQUAL(GetSerializeSize(char(0)), 1U);
-        BOOST_CHECK_EQUAL(GetSerializeSize(int8_t(0)), 1U);
-        BOOST_CHECK_EQUAL(GetSerializeSize(uint8_t(0)), 1U);
-        BOOST_CHECK_EQUAL(GetSerializeSize(int16_t(0)), 2U);
-        BOOST_CHECK_EQUAL(GetSerializeSize(uint16_t(0)), 2U);
-        BOOST_CHECK_EQUAL(GetSerializeSize(int32_t(0)), 4U);
-        BOOST_CHECK_EQUAL(GetSerializeSize(uint32_t(0)), 4U);
-        BOOST_CHECK_EQUAL(GetSerializeSize(int64_t(0)), 8U);
-        BOOST_CHECK_EQUAL(GetSerializeSize(uint64_t(0)), 8U);
-        BOOST_CHECK_EQUAL(GetSerializeSize(float(0)), 4U);
-        BOOST_CHECK_EQUAL(GetSerializeSize(double(0)), 8U);
-        BOOST_CHECK_EQUAL(GetSerializeSize(bool(0)), 1U);
+        TEST_CHECK_EQUAL(GetSerializeSize(char(0)), 1U);
+        TEST_CHECK_EQUAL(GetSerializeSize(int8_t(0)), 1U);
+        TEST_CHECK_EQUAL(GetSerializeSize(uint8_t(0)), 1U);
+        TEST_CHECK_EQUAL(GetSerializeSize(int16_t(0)), 2U);
+        TEST_CHECK_EQUAL(GetSerializeSize(uint16_t(0)), 2U);
+        TEST_CHECK_EQUAL(GetSerializeSize(int32_t(0)), 4U);
+        TEST_CHECK_EQUAL(GetSerializeSize(uint32_t(0)), 4U);
+        TEST_CHECK_EQUAL(GetSerializeSize(int64_t(0)), 8U);
+        TEST_CHECK_EQUAL(GetSerializeSize(uint64_t(0)), 8U);
+        TEST_CHECK_EQUAL(GetSerializeSize(float(0)), 4U);
+        TEST_CHECK_EQUAL(GetSerializeSize(double(0)), 8U);
+        TEST_CHECK_EQUAL(GetSerializeSize(bool(0)), 1U);
     };
 
-    BOOST_AUTO_TEST_CASE(floats_conversion) {
+    TEST_CASE(floats_conversion) {
         // Choose values that map unambiguously to binary floating point to avoid
         // rounding issues at the compiler side.
-        BOOST_CHECK_EQUAL(ser_uint32_to_float(0x00000000), 0.0F);
-        BOOST_CHECK_EQUAL(ser_uint32_to_float(0x3f000000), 0.5F);
-        BOOST_CHECK_EQUAL(ser_uint32_to_float(0x3f800000), 1.0F);
-        BOOST_CHECK_EQUAL(ser_uint32_to_float(0x40000000), 2.0F);
-        BOOST_CHECK_EQUAL(ser_uint32_to_float(0x40800000), 4.0F);
-        BOOST_CHECK_EQUAL(ser_uint32_to_float(0x44444444), 785.066650390625F);
+        TEST_CHECK_EQUAL(ser_uint32_to_float(0x00000000), 0.0F);
+        TEST_CHECK_EQUAL(ser_uint32_to_float(0x3f000000), 0.5F);
+        TEST_CHECK_EQUAL(ser_uint32_to_float(0x3f800000), 1.0F);
+        TEST_CHECK_EQUAL(ser_uint32_to_float(0x40000000), 2.0F);
+        TEST_CHECK_EQUAL(ser_uint32_to_float(0x40800000), 4.0F);
+        TEST_CHECK_EQUAL(ser_uint32_to_float(0x44444444), 785.066650390625F);
 
-        BOOST_CHECK_EQUAL(ser_float_to_uint32(0.0F), 0x00000000U);
-        BOOST_CHECK_EQUAL(ser_float_to_uint32(0.5F), 0x3f000000U);
-        BOOST_CHECK_EQUAL(ser_float_to_uint32(1.0F), 0x3f800000U);
-        BOOST_CHECK_EQUAL(ser_float_to_uint32(2.0F), 0x40000000U);
-        BOOST_CHECK_EQUAL(ser_float_to_uint32(4.0F), 0x40800000U);
-        BOOST_CHECK_EQUAL(ser_float_to_uint32(785.066650390625F), 0x44444444U);
+        TEST_CHECK_EQUAL(ser_float_to_uint32(0.0F), 0x00000000U);
+        TEST_CHECK_EQUAL(ser_float_to_uint32(0.5F), 0x3f000000U);
+        TEST_CHECK_EQUAL(ser_float_to_uint32(1.0F), 0x3f800000U);
+        TEST_CHECK_EQUAL(ser_float_to_uint32(2.0F), 0x40000000U);
+        TEST_CHECK_EQUAL(ser_float_to_uint32(4.0F), 0x40800000U);
+        TEST_CHECK_EQUAL(ser_float_to_uint32(785.066650390625F), 0x44444444U);
     };
 
-    BOOST_AUTO_TEST_CASE(doubles_conversion) {
+    TEST_CASE(doubles_conversion) {
         // Choose values that map unambiguously to binary floating point to avoid
         // rounding issues at the compiler side.
-        BOOST_CHECK_EQUAL(ser_uint64_to_double(0x0000000000000000ULL), 0.0);
-        BOOST_CHECK_EQUAL(ser_uint64_to_double(0x3fe0000000000000ULL), 0.5);
-        BOOST_CHECK_EQUAL(ser_uint64_to_double(0x3ff0000000000000ULL), 1.0);
-        BOOST_CHECK_EQUAL(ser_uint64_to_double(0x4000000000000000ULL), 2.0);
-        BOOST_CHECK_EQUAL(ser_uint64_to_double(0x4010000000000000ULL), 4.0);
-        BOOST_CHECK_EQUAL(ser_uint64_to_double(0x4088888880000000ULL),
+        TEST_CHECK_EQUAL(ser_uint64_to_double(0x0000000000000000ULL), 0.0);
+        TEST_CHECK_EQUAL(ser_uint64_to_double(0x3fe0000000000000ULL), 0.5);
+        TEST_CHECK_EQUAL(ser_uint64_to_double(0x3ff0000000000000ULL), 1.0);
+        TEST_CHECK_EQUAL(ser_uint64_to_double(0x4000000000000000ULL), 2.0);
+        TEST_CHECK_EQUAL(ser_uint64_to_double(0x4010000000000000ULL), 4.0);
+        TEST_CHECK_EQUAL(ser_uint64_to_double(0x4088888880000000ULL),
                           785.066650390625);
 
-        BOOST_CHECK_EQUAL(ser_double_to_uint64(0.0), 0x0000000000000000ULL);
-        BOOST_CHECK_EQUAL(ser_double_to_uint64(0.5), 0x3fe0000000000000ULL);
-        BOOST_CHECK_EQUAL(ser_double_to_uint64(1.0), 0x3ff0000000000000ULL);
-        BOOST_CHECK_EQUAL(ser_double_to_uint64(2.0), 0x4000000000000000ULL);
-        BOOST_CHECK_EQUAL(ser_double_to_uint64(4.0), 0x4010000000000000ULL);
-        BOOST_CHECK_EQUAL(ser_double_to_uint64(785.066650390625),
+        TEST_CHECK_EQUAL(ser_double_to_uint64(0.0), 0x0000000000000000ULL);
+        TEST_CHECK_EQUAL(ser_double_to_uint64(0.5), 0x3fe0000000000000ULL);
+        TEST_CHECK_EQUAL(ser_double_to_uint64(1.0), 0x3ff0000000000000ULL);
+        TEST_CHECK_EQUAL(ser_double_to_uint64(2.0), 0x4000000000000000ULL);
+        TEST_CHECK_EQUAL(ser_double_to_uint64(4.0), 0x4010000000000000ULL);
+        TEST_CHECK_EQUAL(ser_double_to_uint64(785.066650390625),
                           0x4088888880000000ULL);
     };
     /*
@@ -3284,41 +3284,41 @@ TEST_SUITE(streams)
         reversed_hex(dsha256(''.join(struct.pack('<d', x) for x in range(0,1000))))
     == '43d0c82591953c4eafe114590d392676a01585d25b25d433557f0d7878b23f96'
     */
-    BOOST_AUTO_TEST_CASE(floats) {
+    TEST_CASE(floats) {
         CDataStream ss(SER_DISK, 0);
         // encode
         for (int i = 0; i < 1000; i++) {
             ss << float(i);
         }
-        BOOST_CHECK(Hash(MakeUInt8Span(ss)) == uint256S("8e8b4cf3e4df8b332057e3e23af42ebc663b61e0495d5e7e32d85099d7f3fe0c"));
+        TEST_CHECK(Hash(MakeUInt8Span(ss)) == uint256S("8e8b4cf3e4df8b332057e3e23af42ebc663b61e0495d5e7e32d85099d7f3fe0c"));
 
         // decode
         for (int i = 0; i < 1000; i++) {
             float j;
             ss >> j;
             const auto msg = strprintf("decoded: %f expected: %f", j, i);
-            BOOST_CHECK_MESSAGE(i == j, msg);
+            TEST_CHECK_MESSAGE(i == j, msg);
         }
     };
 
-    BOOST_AUTO_TEST_CASE(doubles) {
+    TEST_CASE(doubles) {
         CDataStream ss(SER_DISK, 0);
         // encode
         for (int i = 0; i < 1000; i++) {
             ss << double(i);
         }
-        BOOST_CHECK(Hash(MakeUInt8Span(ss)) == uint256S("43d0c82591953c4eafe114590d392676a01585d25b25d433557f0d7878b23f96"));
+        TEST_CHECK(Hash(MakeUInt8Span(ss)) == uint256S("43d0c82591953c4eafe114590d392676a01585d25b25d433557f0d7878b23f96"));
 
         // decode
         for (int i = 0; i < 1000; i++) {
             double j;
             ss >> j;
             const auto msg = strprintf("decoded: %f expected: %f", j, i);
-            BOOST_CHECK_MESSAGE(i == j, msg);
+            TEST_CHECK_MESSAGE(i == j, msg);
         }
     };
 
-    BOOST_AUTO_TEST_CASE(varints) {
+    TEST_CASE(varints) {
         // encode
 
         CDataStream ss(SER_DISK, 0);
@@ -3326,13 +3326,13 @@ TEST_SUITE(streams)
         for (int i = 0; i < 100000; i++) {
             ss << VARINT_MODE(i, VarIntMode::NONNEGATIVE_SIGNED);
             size += bitcoin::GetSerializeSize(VARINT_MODE(i, VarIntMode::NONNEGATIVE_SIGNED));
-            BOOST_CHECK(size == ss.size());
+            TEST_CHECK(size == ss.size());
         }
 
         for (uint64_t i = 0; i < 100000000000ULL; i += 999999937) {
             ss << VARINT(i);
             size += bitcoin::GetSerializeSize(VARINT(i));
-            BOOST_CHECK(size == ss.size());
+            TEST_CHECK(size == ss.size());
         }
 
         // decode
@@ -3340,66 +3340,66 @@ TEST_SUITE(streams)
             int j = -1;
             ss >> VARINT_MODE(j, VarIntMode::NONNEGATIVE_SIGNED);
             const auto msg = strprintf("decoded: %d expected: %d", j, i);
-            BOOST_CHECK_MESSAGE(i == j, msg);
+            TEST_CHECK_MESSAGE(i == j, msg);
         }
 
         for (uint64_t i = 0; i < 100000000000ULL; i += 999999937) {
             uint64_t j = std::numeric_limits<uint64_t>::max();
             ss >> VARINT(j);
             const auto msg = strprintf("decoded: %u expected: %u", j, i);
-            BOOST_CHECK_MESSAGE(i == j, msg);
+            TEST_CHECK_MESSAGE(i == j, msg);
         }
     };
 
-    BOOST_AUTO_TEST_CASE(varints_bitpatterns) {
+    TEST_CASE(varints_bitpatterns) {
         CDataStream ss(SER_DISK, 0);
         ss << VARINT_MODE(0, VarIntMode::NONNEGATIVE_SIGNED);
-        BOOST_CHECK_EQUAL(HexStr(ss), "00");
+        TEST_CHECK_EQUAL(HexStr(ss), "00");
         ss.clear();
         ss << VARINT_MODE(0x7f, VarIntMode::NONNEGATIVE_SIGNED);
-        BOOST_CHECK_EQUAL(HexStr(ss), "7f");
+        TEST_CHECK_EQUAL(HexStr(ss), "7f");
         ss.clear();
         ss << VARINT_MODE((int8_t)0x7f, VarIntMode::NONNEGATIVE_SIGNED);
-        BOOST_CHECK_EQUAL(HexStr(ss), "7f");
+        TEST_CHECK_EQUAL(HexStr(ss), "7f");
         ss.clear();
         ss << VARINT_MODE(0x80, VarIntMode::NONNEGATIVE_SIGNED);
-        BOOST_CHECK_EQUAL(HexStr(ss), "8000");
+        TEST_CHECK_EQUAL(HexStr(ss), "8000");
         ss.clear();
         ss << VARINT((uint8_t)0x80);
-        BOOST_CHECK_EQUAL(HexStr(ss), "8000");
+        TEST_CHECK_EQUAL(HexStr(ss), "8000");
         ss.clear();
         ss << VARINT_MODE(0x1234, VarIntMode::NONNEGATIVE_SIGNED);
-        BOOST_CHECK_EQUAL(HexStr(ss), "a334");
+        TEST_CHECK_EQUAL(HexStr(ss), "a334");
         ss.clear();
         ss << VARINT_MODE((int16_t)0x1234, VarIntMode::NONNEGATIVE_SIGNED);
-        BOOST_CHECK_EQUAL(HexStr(ss), "a334");
+        TEST_CHECK_EQUAL(HexStr(ss), "a334");
         ss.clear();
         ss << VARINT_MODE(0xffff, VarIntMode::NONNEGATIVE_SIGNED);
-        BOOST_CHECK_EQUAL(HexStr(ss), "82fe7f");
+        TEST_CHECK_EQUAL(HexStr(ss), "82fe7f");
         ss.clear();
         ss << VARINT((uint16_t)0xffff);
-        BOOST_CHECK_EQUAL(HexStr(ss), "82fe7f");
+        TEST_CHECK_EQUAL(HexStr(ss), "82fe7f");
         ss.clear();
         ss << VARINT_MODE(0x123456, VarIntMode::NONNEGATIVE_SIGNED);
-        BOOST_CHECK_EQUAL(HexStr(ss), "c7e756");
+        TEST_CHECK_EQUAL(HexStr(ss), "c7e756");
         ss.clear();
         ss << VARINT_MODE((int32_t)0x123456, VarIntMode::NONNEGATIVE_SIGNED);
-        BOOST_CHECK_EQUAL(HexStr(ss), "c7e756");
+        TEST_CHECK_EQUAL(HexStr(ss), "c7e756");
         ss.clear();
         ss << VARINT(0x80123456U);
-        BOOST_CHECK_EQUAL(HexStr(ss), "86ffc7e756");
+        TEST_CHECK_EQUAL(HexStr(ss), "86ffc7e756");
         ss.clear();
         ss << VARINT((uint32_t)0x80123456U);
-        BOOST_CHECK_EQUAL(HexStr(ss), "86ffc7e756");
+        TEST_CHECK_EQUAL(HexStr(ss), "86ffc7e756");
         ss.clear();
         ss << VARINT(0xffffffff);
-        BOOST_CHECK_EQUAL(HexStr(ss), "8efefefe7f");
+        TEST_CHECK_EQUAL(HexStr(ss), "8efefefe7f");
         ss.clear();
         ss << VARINT_MODE(0x7fffffffffffffffLL, VarIntMode::NONNEGATIVE_SIGNED);
-        BOOST_CHECK_EQUAL(HexStr(ss), "fefefefefefefefe7f");
+        TEST_CHECK_EQUAL(HexStr(ss), "fefefefefefefefe7f");
         ss.clear();
         ss << VARINT(0xffffffffffffffffULL);
-        BOOST_CHECK_EQUAL(HexStr(ss), "80fefefefefefefefe7f");
+        TEST_CHECK_EQUAL(HexStr(ss), "80fefefefefefefefe7f");
         ss.clear();
     };
 
@@ -3414,7 +3414,7 @@ TEST_SUITE(streams)
         return strcmp(expectedException.what(), ex.what()) == 0;
     };
 
-    BOOST_AUTO_TEST_CASE(compactsize) {
+    TEST_CASE(compactsize) {
         CDataStream ss(SER_DISK, 0);
         std::vector<char>::size_type i, j;
 
@@ -3425,26 +3425,26 @@ TEST_SUITE(streams)
         for (i = 1; i <= MAX_SIZE; i *= 2) {
             j = ReadCompactSize(ss);
             auto msg = strprintf("decoded: %i expected: %i", j, i - 1);
-            BOOST_CHECK_MESSAGE((i - 1) == j, msg);
+            TEST_CHECK_MESSAGE((i - 1) == j, msg);
             j = ReadCompactSize(ss);
             msg = strprintf("decoded: %i expected: %i", j, i);
-            BOOST_CHECK_MESSAGE(i == j, msg);
+            TEST_CHECK_MESSAGE(i == j, msg);
         }
 
         WriteCompactSize(ss, MAX_SIZE);
-        BOOST_CHECK_EQUAL(ReadCompactSize(ss), MAX_SIZE);
+        TEST_CHECK_EQUAL(ReadCompactSize(ss), MAX_SIZE);
 
         WriteCompactSize(ss, MAX_SIZE + 1);
-        BOOST_CHECK_EXCEPTION(ReadCompactSize(ss), std::ios_base::failure,
-                              isTooLargeException);
+        TEST_CHECK_EXCEPTION(ReadCompactSize(ss), std::ios_base::failure,
+                             isTooLargeException);
 
         WriteCompactSize(ss, std::numeric_limits<int64_t>::max());
-        BOOST_CHECK_EXCEPTION(ReadCompactSize(ss), std::ios_base::failure,
-                              isTooLargeException);
+        TEST_CHECK_EXCEPTION(ReadCompactSize(ss), std::ios_base::failure,
+                             isTooLargeException);
 
         WriteCompactSize(ss, std::numeric_limits<uint64_t>::max());
-        BOOST_CHECK_EXCEPTION(ReadCompactSize(ss), std::ios_base::failure,
-                              isTooLargeException);
+        TEST_CHECK_EXCEPTION(ReadCompactSize(ss), std::ios_base::failure,
+                             isTooLargeException);
     };
 
     const auto isCanonicalException = [](const std::ios_base::failure &ex) {
@@ -3457,15 +3457,15 @@ TEST_SUITE(streams)
         return strcmp(expectedException.what(), ex.what()) == 0;
     };
 
-    BOOST_AUTO_TEST_CASE(vector_bool) {
+    TEST_CASE(vector_bool) {
         std::vector<uint8_t> vec1{1, 0, 0, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 1, 1, 1, 1, 0, 1, 0, 0, 1};
         std::vector<bool> vec2{1, 0, 0, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 0, 1, 1, 1, 1, 0, 1, 0, 0, 1};
 
-        BOOST_CHECK(vec1 == std::vector<uint8_t>(vec2.begin(), vec2.end()));
-        BOOST_CHECK(SerializeHash(vec1) == SerializeHash(vec2));
+        TEST_CHECK(vec1 == std::vector<uint8_t>(vec2.begin(), vec2.end()));
+        TEST_CHECK(SerializeHash(vec1) == SerializeHash(vec2));
     };
 
-    BOOST_AUTO_TEST_CASE(noncanonical) {
+    TEST_CASE(noncanonical) {
         // Write some non-canonical CompactSize encodings, and make sure an
         // exception is thrown when read back.
         CDataStream ss(SER_DISK, 0);
@@ -3473,88 +3473,88 @@ TEST_SUITE(streams)
 
         // zero encoded with three bytes:
         ss.write("\xfd\x00\x00", 3);
-        BOOST_CHECK_EXCEPTION(ReadCompactSize(ss), std::ios_base::failure,
-                              isCanonicalException);
+        TEST_CHECK_EXCEPTION(ReadCompactSize(ss), std::ios_base::failure,
+                             isCanonicalException);
 
         // 0xfc encoded with three bytes:
         ss.write("\xfd\xfc\x00", 3);
-        BOOST_CHECK_EXCEPTION(ReadCompactSize(ss), std::ios_base::failure,
-                              isCanonicalException);
+        TEST_CHECK_EXCEPTION(ReadCompactSize(ss), std::ios_base::failure,
+                             isCanonicalException);
 
         // 0xfd encoded with three bytes is OK:
         ss.write("\xfd\xfd\x00", 3);
         n = ReadCompactSize(ss);
-        BOOST_CHECK(n == 0xfd);
+        TEST_CHECK(n == 0xfd);
 
         // zero encoded with five bytes:
         ss.write("\xfe\x00\x00\x00\x00", 5);
-        BOOST_CHECK_EXCEPTION(ReadCompactSize(ss), std::ios_base::failure,
-                              isCanonicalException);
+        TEST_CHECK_EXCEPTION(ReadCompactSize(ss), std::ios_base::failure,
+                             isCanonicalException);
 
         // 0xffff encoded with five bytes:
         ss.write("\xfe\xff\xff\x00\x00", 5);
-        BOOST_CHECK_EXCEPTION(ReadCompactSize(ss), std::ios_base::failure,
-                              isCanonicalException);
+        TEST_CHECK_EXCEPTION(ReadCompactSize(ss), std::ios_base::failure,
+                             isCanonicalException);
 
         // zero encoded with nine bytes:
         ss.write("\xff\x00\x00\x00\x00\x00\x00\x00\x00", 9);
-        BOOST_CHECK_EXCEPTION(ReadCompactSize(ss), std::ios_base::failure,
-                              isCanonicalException);
+        TEST_CHECK_EXCEPTION(ReadCompactSize(ss), std::ios_base::failure,
+                             isCanonicalException);
 
         // 0x01ffffff encoded with nine bytes:
         ss.write("\xff\xff\xff\xff\x01\x00\x00\x00\x00", 9);
-        BOOST_CHECK_EXCEPTION(ReadCompactSize(ss), std::ios_base::failure,
-                              isCanonicalException);
+        TEST_CHECK_EXCEPTION(ReadCompactSize(ss), std::ios_base::failure,
+                             isCanonicalException);
     };
 
-    BOOST_AUTO_TEST_CASE(insert_delete) {
+    TEST_CASE(insert_delete) {
         // Test inserting/deleting bytes.
         CDataStream ss(SER_DISK, 0);
-        BOOST_CHECK_EQUAL(ss.size(), 0U);
+        TEST_CHECK_EQUAL(ss.size(), 0U);
 
         ss.write("\x00\x01\x02\xff", 4);
-        BOOST_CHECK_EQUAL(ss.size(), 4U);
+        TEST_CHECK_EQUAL(ss.size(), 4U);
 
         char c = (char)11;
 
         // Inserting at beginning/end/middle:
         ss.insert(ss.begin(), c);
-        BOOST_CHECK_EQUAL(ss.size(), 5U);
-        BOOST_CHECK_EQUAL(ss[0], c);
-        BOOST_CHECK_EQUAL(ss[1], 0);
+        TEST_CHECK_EQUAL(ss.size(), 5U);
+        TEST_CHECK_EQUAL(ss[0], c);
+        TEST_CHECK_EQUAL(ss[1], 0);
 
         ss.insert(ss.end(), c);
-        BOOST_CHECK_EQUAL(ss.size(), 6U);
-        BOOST_CHECK_EQUAL(ss[4], (char)0xff);
-        BOOST_CHECK_EQUAL(ss[5], c);
+        TEST_CHECK_EQUAL(ss.size(), 6U);
+        TEST_CHECK_EQUAL(ss[4], (char)0xff);
+        TEST_CHECK_EQUAL(ss[5], c);
 
         ss.insert(ss.begin() + 2, c);
-        BOOST_CHECK_EQUAL(ss.size(), 7U);
-        BOOST_CHECK_EQUAL(ss[2], c);
+        TEST_CHECK_EQUAL(ss.size(), 7U);
+        TEST_CHECK_EQUAL(ss[2], c);
 
         // Delete at beginning/end/middle
         ss.erase(ss.begin());
-        BOOST_CHECK_EQUAL(ss.size(), 6U);
-        BOOST_CHECK_EQUAL(ss[0], 0);
+        TEST_CHECK_EQUAL(ss.size(), 6U);
+        TEST_CHECK_EQUAL(ss[0], 0);
 
         ss.erase(ss.begin() + ss.size() - 1);
-        BOOST_CHECK_EQUAL(ss.size(), 5U);
-        BOOST_CHECK_EQUAL(ss[4], (char)0xff);
+        TEST_CHECK_EQUAL(ss.size(), 5U);
+        TEST_CHECK_EQUAL(ss[4], (char)0xff);
 
         ss.erase(ss.begin() + 1);
-        BOOST_CHECK_EQUAL(ss.size(), 4U);
-        BOOST_CHECK_EQUAL(ss[0], 0);
-        BOOST_CHECK_EQUAL(ss[1], 1);
-        BOOST_CHECK_EQUAL(ss[2], 2);
-        BOOST_CHECK_EQUAL(ss[3], (char)0xff);
+        TEST_CHECK_EQUAL(ss.size(), 4U);
+        TEST_CHECK_EQUAL(ss[0], 0);
+        TEST_CHECK_EQUAL(ss[1], 1);
+        TEST_CHECK_EQUAL(ss[2], 2);
+        TEST_CHECK_EQUAL(ss[3], (char)0xff);
 
         // Make sure GetAndClear does the right thing:
         CSerializeData d;
         ss.GetAndClear(d);
-        BOOST_CHECK_EQUAL(ss.size(), 0U);
+        TEST_CHECK_EQUAL(ss.size(), 0U);
     };
 
-    BOOST_AUTO_TEST_CASE(class_methods) {
+    TEST_CASE(class_methods) {
         int intval(100);
         bool boolval(true);
         std::string stringval("testing");
@@ -3568,22 +3568,22 @@ TEST_SUITE(streams)
         CSerializeMethodsTestSingle methodtest3;
         CSerializeMethodsTestMany methodtest4;
         CDataStream ss(SER_DISK, PROTOCOL_VERSION);
-        BOOST_CHECK(methodtest1 == methodtest2);
+        TEST_CHECK(methodtest1 == methodtest2);
         ss << methodtest1;
         ss >> methodtest4;
         ss << methodtest2;
         ss >> methodtest3;
-        BOOST_CHECK(methodtest1 == methodtest2);
-        BOOST_CHECK(methodtest2 == methodtest3);
-        BOOST_CHECK(methodtest3 == methodtest4);
+        TEST_CHECK(methodtest1 == methodtest2);
+        TEST_CHECK(methodtest2 == methodtest3);
+        TEST_CHECK(methodtest3 == methodtest4);
 
         CDataStream ss2(SER_DISK, PROTOCOL_VERSION, intval, boolval, stringval,
                         charstrval, txval);
         ss2 >> methodtest3;
-        BOOST_CHECK(methodtest3 == methodtest4);
+        TEST_CHECK(methodtest3 == methodtest4);
     };
 
-    BOOST_AUTO_TEST_CASE(txn_ser_deser) {
+    TEST_CASE(txn_ser_deser) {
         using TestTup = std::tuple<const char *, const char *, bool, bool, size_t>;
         auto tests = {
             // Bitcoin Cash & Bitcoin Legacy txn
@@ -3684,96 +3684,96 @@ TEST_SUITE(streams)
             VectorReader(SER_DISK, version, txndata, 0) >> tx;
             VectorReader vr(SER_DISK, version, txndata, 0);
             CTransaction ctx(deserialize, vr);
-            BOOST_CHECK(tx.GetId().ToString() == txid);
-            BOOST_CHECK(tx.GetHash().ToString() == txid);
-            BOOST_CHECK(tx.HasMimble() == mweb);
-            BOOST_CHECK(tx.HasWitness() == segwit);
-            BOOST_CHECK(ctx.GetId().ToString() == txid);
-            BOOST_CHECK(ctx.GetHash().ToString() == txid);
-            BOOST_CHECK(ctx.HasMimble() == mweb);
-            BOOST_CHECK(ctx.HasWitness() == segwit);
-            BOOST_CHECK(tx == ctx); // this does a check vs the hash
-            BOOST_CHECK(tx.GetWitnessHash() == ctx.GetWitnessHash());
+            TEST_CHECK(tx.GetId().ToString() == txid);
+            TEST_CHECK(tx.GetHash().ToString() == txid);
+            TEST_CHECK(tx.HasMimble() == mweb);
+            TEST_CHECK(tx.HasWitness() == segwit);
+            TEST_CHECK(ctx.GetId().ToString() == txid);
+            TEST_CHECK(ctx.GetHash().ToString() == txid);
+            TEST_CHECK(ctx.HasMimble() == mweb);
+            TEST_CHECK(ctx.HasWitness() == segwit);
+            TEST_CHECK(tx == ctx); // this does a check vs the hash
+            TEST_CHECK(tx.GetWitnessHash() == ctx.GetWitnessHash());
             VectorWriter(SER_DISK, version, data, 0) << tx; // ser mutable tx
-            BOOST_CHECK(txndata == data);
+            TEST_CHECK(txndata == data);
             data.clear();
             VectorWriter(SER_DISK, version, data, 0) << ctx; // ser constant tx
-            BOOST_CHECK(txndata == data);
+            TEST_CHECK(txndata == data);
             const size_t rawSize = txndata.size(), vsize = tx.GetVirtualSize(), strippedSize = tx.GetTotalSize(false, false);
             //DebugM("Tx rawSize: ", rawSize, ", vsize: ", vsize, " stripped size: ", strippedSize);
-            BOOST_CHECK(vsize == expected_vsize);
-            BOOST_CHECK(tx.GetTotalSize(segwit, mweb) == rawSize);
+            TEST_CHECK(vsize == expected_vsize);
+            TEST_CHECK(tx.GetTotalSize(segwit, mweb) == rawSize);
             if (segwit || mweb) {
-                BOOST_CHECK(vsize != rawSize && rawSize > strippedSize);
-                BOOST_CHECK(tx.GetHash() != tx.GetWitnessHash());
+                TEST_CHECK(vsize != rawSize && rawSize > strippedSize);
+                TEST_CHECK(tx.GetHash() != tx.GetWitnessHash());
             } else {
-                BOOST_CHECK(vsize == rawSize && rawSize == strippedSize);
-                BOOST_CHECK(tx.GetHash() == tx.GetWitnessHash());
+                TEST_CHECK(vsize == rawSize && rawSize == strippedSize);
+                TEST_CHECK(tx.GetHash() == tx.GetWitnessHash());
             }
         }
     };
 TEST_SUITE_END()
 
 TEST_SUITE(span)
-    BOOST_AUTO_TEST_CASE(span_from_vector) {
+    TEST_CASE(span_from_vector) {
         const std::vector<uint8_t> vec{2, 3, 1};
 
         auto span = Span(vec);
-        BOOST_CHECK_EQUAL(span.size(), 3);
-        BOOST_CHECK_EQUAL(span.front(), 2);
-        BOOST_CHECK_EQUAL(span.back(), 1);
-        BOOST_CHECK_EQUAL(span[1], 3);
+        TEST_CHECK_EQUAL(span.size(), 3);
+        TEST_CHECK_EQUAL(span.front(), 2);
+        TEST_CHECK_EQUAL(span.back(), 1);
+        TEST_CHECK_EQUAL(span[1], 3);
 
-        BOOST_CHECK_EQUAL(&vec[1], &span[1]);
+        TEST_CHECK_EQUAL(&vec[1], &span[1]);
     };
 
-    BOOST_AUTO_TEST_CASE(span_from_c_array) {
+    TEST_CASE(span_from_c_array) {
         uint8_t array[]{5, 6, 4};
 
         auto span = Span(array);
-        BOOST_CHECK_EQUAL(span.size(), 3);
-        BOOST_CHECK_EQUAL(span.front(), 5);
-        BOOST_CHECK_EQUAL(span.back(), 4);
-        BOOST_CHECK_EQUAL(span[1], 6);
+        TEST_CHECK_EQUAL(span.size(), 3);
+        TEST_CHECK_EQUAL(span.front(), 5);
+        TEST_CHECK_EQUAL(span.back(), 4);
+        TEST_CHECK_EQUAL(span[1], 6);
 
-        BOOST_CHECK_EQUAL(&array[1], &span[1]);
+        TEST_CHECK_EQUAL(&array[1], &span[1]);
     };
 
-    BOOST_AUTO_TEST_CASE(span_pop) {
+    TEST_CASE(span_pop) {
         const std::vector<uint8_t> vec{7, 6, 5, 4, 3, 2, 1};
 
         auto span = Span(vec);
 
-        BOOST_CHECK_EQUAL(span.pop_front(), 7);
-        BOOST_CHECK_EQUAL(span.size(), 6);
-        BOOST_CHECK_EQUAL(span.front(), 6);
-        BOOST_CHECK_EQUAL(span.back(), 1);
+        TEST_CHECK_EQUAL(span.pop_front(), 7);
+        TEST_CHECK_EQUAL(span.size(), 6);
+        TEST_CHECK_EQUAL(span.front(), 6);
+        TEST_CHECK_EQUAL(span.back(), 1);
 
-        BOOST_CHECK_EQUAL(span.pop_back(), 1);
-        BOOST_CHECK_EQUAL(span.size(), 5);
-        BOOST_CHECK_EQUAL(span.front(), 6);
-        BOOST_CHECK_EQUAL(span.back(), 2);
+        TEST_CHECK_EQUAL(span.pop_back(), 1);
+        TEST_CHECK_EQUAL(span.size(), 5);
+        TEST_CHECK_EQUAL(span.front(), 6);
+        TEST_CHECK_EQUAL(span.back(), 2);
 
-        BOOST_CHECK_EQUAL(span.pop_back(), 2);
-        BOOST_CHECK_EQUAL(span.size(), 4);
+        TEST_CHECK_EQUAL(span.pop_back(), 2);
+        TEST_CHECK_EQUAL(span.size(), 4);
 
-        BOOST_CHECK_EQUAL(span.pop_back(), 3);
-        BOOST_CHECK_EQUAL(span.size(), 3);
+        TEST_CHECK_EQUAL(span.pop_back(), 3);
+        TEST_CHECK_EQUAL(span.size(), 3);
 
-        BOOST_CHECK_EQUAL(span.pop_front(), 6);
-        BOOST_CHECK_EQUAL(span.size(), 2);
+        TEST_CHECK_EQUAL(span.pop_front(), 6);
+        TEST_CHECK_EQUAL(span.size(), 2);
 
-        BOOST_CHECK_EQUAL(span.pop_back(), 4);
-        BOOST_CHECK_EQUAL(span.size(), 1);
-        BOOST_CHECK_EQUAL(span.front(), 5);
-        BOOST_CHECK_EQUAL(span.front(), span.back());
+        TEST_CHECK_EQUAL(span.pop_back(), 4);
+        TEST_CHECK_EQUAL(span.size(), 1);
+        TEST_CHECK_EQUAL(span.front(), 5);
+        TEST_CHECK_EQUAL(span.front(), span.back());
 
-        BOOST_CHECK_EQUAL(span.pop_back(), 5);
-        BOOST_CHECK_EQUAL(span.size(), 0);
-        BOOST_CHECK(span.empty());
+        TEST_CHECK_EQUAL(span.pop_back(), 5);
+        TEST_CHECK_EQUAL(span.size(), 0);
+        TEST_CHECK(span.empty());
     };
 
-    BOOST_AUTO_TEST_CASE(span_compare) {
+    TEST_CASE(span_compare) {
         {
             // test equality operators
             std::vector<uint8_t> vec{3, 2, 1};
@@ -3782,16 +3782,16 @@ TEST_SUITE(span)
             auto span1 = Span(vec);
             auto span2 = Span(array);
 
-            BOOST_CHECK(span1 == span2);
-            BOOST_CHECK_EQUAL(span1 != span2, false);
+            TEST_CHECK(span1 == span2);
+            TEST_CHECK_EQUAL(span1 != span2, false);
 
             span1[1] = 123;
-            BOOST_CHECK(span1 != span2);
-            BOOST_CHECK_EQUAL(span1 == span2, false);
+            TEST_CHECK(span1 != span2);
+            TEST_CHECK_EQUAL(span1 == span2, false);
 
             span2[1] = 123;
-            BOOST_CHECK(span1 == span2);
-            BOOST_CHECK_EQUAL(span1 != span2, false);
+            TEST_CHECK(span1 == span2);
+            TEST_CHECK_EQUAL(span1 != span2, false);
         }
         {
             // test comparison operators
@@ -3801,30 +3801,30 @@ TEST_SUITE(span)
             auto span1 = Span(vec1);
             auto span2 = Span(vec2);
 
-            BOOST_CHECK(span1 < span2);
-            BOOST_CHECK(!(span1 > span2));
-            BOOST_CHECK(span1 <= span2);
-            BOOST_CHECK(!(span1 >= span2));
+            TEST_CHECK(span1 < span2);
+            TEST_CHECK(!(span1 > span2));
+            TEST_CHECK(span1 <= span2);
+            TEST_CHECK(!(span1 >= span2));
 
             vec2 = {0, 0, 0, 0, 0, 1};
             span2 = Span(vec2);
 
-            BOOST_CHECK(!(span1 < span2));
-            BOOST_CHECK(span1 > span2);
-            BOOST_CHECK(!(span1 <= span2));
-            BOOST_CHECK(span1 >= span2);
+            TEST_CHECK(!(span1 < span2));
+            TEST_CHECK(span1 > span2);
+            TEST_CHECK(!(span1 <= span2));
+            TEST_CHECK(span1 >= span2);
 
             vec2 = {6, 5, 4, 3, 2, 1};
             span2 = Span(vec2);
 
-            BOOST_CHECK(span1 < span2);
-            BOOST_CHECK(!(span1 > span2));
-            BOOST_CHECK(span1 <= span2);
-            BOOST_CHECK(!(span1 >= span2));
+            TEST_CHECK(span1 < span2);
+            TEST_CHECK(!(span1 > span2));
+            TEST_CHECK(span1 <= span2);
+            TEST_CHECK(!(span1 >= span2));
         }
     };
 
-    BOOST_AUTO_TEST_CASE(span_subspan) {
+    TEST_CASE(span_subspan) {
         const std::vector<uint8_t> vec1{7, 6, 5, 4, 3, 2, 1};
         const std::vector<uint8_t> vec2{   6, 5, 4, 3      };
 
@@ -3832,46 +3832,46 @@ TEST_SUITE(span)
         auto span2 = Span(vec2);
         auto span3 = span1.subspan(1, 4);
 
-        BOOST_CHECK_EQUAL(span1.size(), 7);
-        BOOST_CHECK_EQUAL(span2.size(), 4);
-        BOOST_CHECK_EQUAL(span3.size(), 4);
+        TEST_CHECK_EQUAL(span1.size(), 7);
+        TEST_CHECK_EQUAL(span2.size(), 4);
+        TEST_CHECK_EQUAL(span3.size(), 4);
 
-        BOOST_CHECK(span1 != span2);
-        BOOST_CHECK(span1 != span3);
-        BOOST_CHECK(span3 == span1.subspan(1, 4));
-        BOOST_CHECK(span3 == span2);
+        TEST_CHECK(span1 != span2);
+        TEST_CHECK(span1 != span3);
+        TEST_CHECK(span3 == span1.subspan(1, 4));
+        TEST_CHECK(span3 == span2);
 
-        BOOST_CHECK(span1.subspan(0, 0).empty());
+        TEST_CHECK(span1.subspan(0, 0).empty());
 
-        BOOST_CHECK_EQUAL(span1.pop_front(), 7);
-        BOOST_CHECK(span1.first(4) == span2);
-        BOOST_CHECK(span1.first(4).last(3) == span2.last(3));
-        BOOST_CHECK_EQUAL(span1.pop_back(), 1);
-        BOOST_CHECK_EQUAL(span1.pop_back(), 2);
-        BOOST_CHECK(span1 == span2);
-        BOOST_CHECK(span1 == span3);
+        TEST_CHECK_EQUAL(span1.pop_front(), 7);
+        TEST_CHECK(span1.first(4) == span2);
+        TEST_CHECK(span1.first(4).last(3) == span2.last(3));
+        TEST_CHECK_EQUAL(span1.pop_back(), 1);
+        TEST_CHECK_EQUAL(span1.pop_back(), 2);
+        TEST_CHECK(span1 == span2);
+        TEST_CHECK(span1 == span3);
 
         // subspan out of bounds is UB as per std::span, so we don't test for that
     };
 
-    BOOST_AUTO_TEST_CASE(span_iteration) {
+    TEST_CASE(span_iteration) {
         const std::vector<uint8_t> vec{7, 6, 5, 4, 3, 2, 1};
         auto span = Span(vec);
 
         uint8_t val = 7;
         for (auto const &it : span) {
-            BOOST_CHECK_EQUAL(it, val--);
+            TEST_CHECK_EQUAL(it, val--);
         }
     };
 
-    BOOST_AUTO_TEST_CASE(span_corner_cases) {
+    TEST_CASE(span_corner_cases) {
         {
             // test empty span
             const std::vector<uint8_t> vec;
 
             auto span = Span(vec);
-            BOOST_CHECK_EQUAL(span.size(), 0);
-            BOOST_CHECK(span.empty());
+            TEST_CHECK_EQUAL(span.size(), 0);
+            TEST_CHECK(span.empty());
         }
 
         {
@@ -3883,17 +3883,17 @@ TEST_SUITE(span)
             std::shuffle(vec.begin(), vec.end(), g);
 
             Span span(std::as_const(vec));
-            BOOST_CHECK(!span.empty());
-            BOOST_CHECK_EQUAL(span.size(), 1024 * 1024);
-            BOOST_CHECK_EQUAL(span[1023], vec[1023]);
+            TEST_CHECK(!span.empty());
+            TEST_CHECK_EQUAL(span.size(), 1024 * 1024);
+            TEST_CHECK_EQUAL(span[1023], vec[1023]);
 
             // Test popping off the ends in a loop
             const uint8_t *first = &vec.front(), *last = &vec.back();
             while (first < last) {
-                BOOST_CHECK_EQUAL(*first++, span.pop_front());
-                if (!span.empty()) BOOST_CHECK_EQUAL(*last--, span.pop_back());
+                TEST_CHECK_EQUAL(*first++, span.pop_front());
+                if (!span.empty()) TEST_CHECK_EQUAL(*last--, span.pop_back());
             }
-            BOOST_CHECK(span.empty());
+            TEST_CHECK(span.empty());
         }
     };
 TEST_SUITE_END()

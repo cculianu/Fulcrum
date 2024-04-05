@@ -19,7 +19,7 @@
 #pragma once
 
 #ifndef ENABLE_TESTS
-static_assert(false, "This header requires ENABLE_TESTS be defined");
+static_assert(false, "This header requires preprocessor define: ENABLE_TESTS");
 #endif
 
 #include "App.h"
@@ -115,18 +115,18 @@ namespace Tests {
     };
 
     // Some macros used below so we can just copy-paste unit tests from BCHN without changing them
-#define RUN_CONTEXT() Tests::Context::cur().runAll()
+#define TEST_RUN_CONTEXT() Tests::Context::cur().runAll()
 #if defined(__LINE__) && defined(__FILE__)
-#    define SETUP_CONTEXT(name) Tests::Context testContext ## __LINE__(name)
-#    define BOOST_CHECK(expr) Tests::Context::cur().checkExpr(#expr, (expr), __LINE__, __FILE__)
-#    define BOOST_CHECK_MESSAGE(expr, msg) Tests::Context::cur().checkExpr(#expr, (expr), __LINE__, __FILE__, msg)
+#    define TEST_SETUP_CONTEXT(name) Tests::Context testContext ## __LINE__(name)
+#    define TEST_CHECK(expr) Tests::Context::cur().checkExpr(#expr, (expr), __LINE__, __FILE__)
+#    define TEST_CHECK_MESSAGE(expr, msg) Tests::Context::cur().checkExpr(#expr, (expr), __LINE__, __FILE__, msg)
 #else
-#    define SETUP_CONTEXT(name) Tests::Context testContext(name)
-#    define BOOST_CHECK(expr) Tests::Context::cur().checkExpr(#expr, (expr), 0, "???")
-#    define BOOST_CHECK_MESSAGE(expr, msg) Tests::Context::cur().checkExpr(#expr, (expr), 0, "???", msg)
+#    define TEST_SETUP_CONTEXT(name) Tests::Context testContext(name)
+#    define TEST_CHECK(expr) Tests::Context::cur().checkExpr(#expr, (expr), 0, "???")
+#    define TEST_CHECK_MESSAGE(expr, msg) Tests::Context::cur().checkExpr(#expr, (expr), 0, "???", msg)
 #endif
-#define BOOST_CHECK_EQUAL(a, b) BOOST_CHECK((a) == (b))
-#define BOOST_CHECK_EXCEPTION(expr, exc, pred) \
+#define TEST_CHECK_EQUAL(a, b) TEST_CHECK((a) == (b))
+#define TEST_CHECK_EXCEPTION(expr, exc, pred) \
     do { \
             bool is_ok_ = false; \
         try { \
@@ -134,10 +134,10 @@ namespace Tests {
         } catch (const exc &e) { \
                 is_ok_ = pred(e); \
         } \
-            BOOST_CHECK_MESSAGE(is_ok_, "Expression: \"" #expr "\" should throw \"" #exc "\" and satisfy pred"); \
+            TEST_CHECK_MESSAGE(is_ok_, "Expression: \"" #expr "\" should throw \"" #exc "\" and satisfy pred"); \
     } while (0)
-#define BOOST_CHECK_THROW(expr, exc) BOOST_CHECK_EXCEPTION(expr, exc, [](auto &&){ return true; })
-#define BOOST_CHECK_NO_THROW(expr) \
+#define TEST_CHECK_THROW(expr, exc) TEST_CHECK_EXCEPTION(expr, exc, [](auto &&){ return true; })
+#define TEST_CHECK_NO_THROW(expr) \
         do { \
             bool is_ok_ = true; \
         try { \
@@ -145,9 +145,9 @@ namespace Tests {
         } catch (...) { \
                 is_ok_ = false; \
         } \
-            BOOST_CHECK_MESSAGE(is_ok_, "Expression: \"" #expr "\" should not throw"); \
+            TEST_CHECK_MESSAGE(is_ok_, "Expression: \"" #expr "\" should not throw"); \
     } while (0)
-#define BOOST_AUTO_TEST_CASE(name) \
+#define TEST_CASE(name) \
         Tests::Context::cur().tests.emplace_back( #name, Tests::Context::VoidFunc{} ); \
         Tests::Context::cur().tests.back().second = [&]
 
@@ -157,9 +157,9 @@ namespace Tests {
         const auto name ## __COUNTER__ = ::App::registerTest( #name , name ## _test_func ); \
         void name ## _test_func() { \
             using namespace Tests; \
-            SETUP_CONTEXT( #name );
+            TEST_SETUP_CONTEXT( #name );
 #define TEST_SUITE_END() \
-            RUN_CONTEXT(); \
+            TEST_RUN_CONTEXT(); \
         } /* end name_test_func */ \
     } // namespace
 
