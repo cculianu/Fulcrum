@@ -309,14 +309,14 @@ auto AbstractConnection::stats() const -> Stats
     m["readBytesAvailable"] = socket ? socket->bytesAvailable() : 0;
     m["activeTimers"] = activeTimerMapForStats();
     m["remote"] = [this]() -> QVariant {
-        if (QString addr; socket && !(addr=socket->peerAddress().toString()).isNull()) {
-            return QString("%1:%2").arg(addr).arg(socket->peerPort());
+        if (QString hostPort; socket && !(hostPort=Util::RenderHostPortPair(socket->peerAddress(), socket->peerPort())).isNull()) {
+            return hostPort;
         }
         return QVariant(); // null
     }();
     m["local"] = [this]() -> QVariant {
-        if (QString addr; socket && !(addr=socket->localAddress().toString()).isNull()) {
-            return QString("%1:%2").arg(addr).arg(socket->localPort());
+        if (QString hostPort; socket && !(hostPort=Util::RenderHostPortPair(socket->localAddress(), socket->localPort())).isNull()) {
+            return hostPort;
         }
         return QVariant(); // null
     }();

@@ -57,6 +57,7 @@
 #endif
 
 #include <QRegularExpression>
+#include <QHostAddress>
 
 #include <cctype>
 #include <cstring>             // for strerror
@@ -536,6 +537,8 @@ namespace Util {
         QString hostStr = toks.join(':'); // rejoin on ':' in case it was IPv6 which is full of colons
         if (hostStr.isEmpty())
             throw BadArgs(msg1);
+        if (toks.length() > 1 && hostStr.length() > 2 && hostStr.front() == QChar('[') && hostStr.back() == QChar(']'))
+            hostStr = hostStr.mid(1, hostStr.length()-2); // pop off leading and trailing [] for ipv6, if present
         return {hostStr, parsePort(portStr)};
     }
 
@@ -550,6 +553,20 @@ namespace Util {
         if (dataSize > 1e3) { baseByteUnitLabel = "EB"; dataSize /= 1e3; }
         return {dataSize, QString::fromUtf8(baseByteUnitLabel.data(), baseByteUnitLabel.size())};
     }
+
+    QString RenderHostPortPair(const QHostAddress &addr, quint16 port)
+    {
+        QString ret = addr.toString();
+        if (!ret.isNull()) {
+            if (addr.protocol() == QAbstractSocket::IPv6Protocol && ret.front() != QChar('[') && ret.back() != QChar(']')) {
+                ret.insert(0, QChar('['));
+                ret.append(QChar(']'));
+            }
+            ret.append(QStringLiteral(":%1").arg(port));
+        }
+        return ret;
+    }
+
 
 } // end namespace Util
 

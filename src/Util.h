@@ -47,6 +47,7 @@
 #define Q2C(qstr) ((qstr).toUtf8().constData())
 
 class App;
+class QHostAddress;
 
 #if !defined(_MSC_VER) && (defined(__clang__) || defined(__GNUC__))
 #define ATTR_PRINTF(fmt, arg) __attribute__((format(printf, fmt, arg)))
@@ -965,6 +966,11 @@ namespace Util {
     ///
     /// If allowImplicitLoopback=true then "<port>" by itself is interpreted as "127.0.0.1:<port>"
     QPair<QString, quint16> ParseHostPortPair(const QString &hostColonPort, bool allowImplicitLoopback = false);
+
+    /// Renders a host:port pair to a UI-displayable string. Calls addr.toString(). If the result is not null, will
+    /// return "host:port" for IPv4 and "[host]:port" for IPv6 (that is, host will be wrapped in brackets). Will return
+    /// an empty string if addr is null or addr.toString() returned an empty string.
+    QString RenderHostPortPair(const QHostAddress &addr, quint16 port);
 
     /// Tells you the size of a QByteArray::QArrayData object which each QByteArray that is not null has a pointer to.
     /// This function basically tells you how much extra space a QByteArray takes up just by existing, beyond its base
