@@ -10,6 +10,7 @@
 #include "Span.h"
 
 #include <algorithm>
+#include <cassert>
 #include <variant>
 #ifdef USE_QT_IN_BITCOIN
 #include <QtCore>
