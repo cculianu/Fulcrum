@@ -557,7 +557,7 @@ namespace Util {
     QString RenderHostPortPair(const QHostAddress &addr, quint16 port)
     {
         QString ret = addr.toString();
-        if (!ret.isNull()) {
+        if (!ret.isEmpty()) {
             if (addr.protocol() == QAbstractSocket::IPv6Protocol && ret.front() != QChar('[') && ret.back() != QChar(']')) {
                 ret.insert(0, QChar('['));
                 ret.append(QChar(']'));
