@@ -1,4 +1,4 @@
-# Fulcrum
+# ![Image FulcrumLogo](https://raw.githubusercontent.com/cculianu/Fulcrum-art/master/F-circle2_grn_64.png) Fulcrum
 
 [![Docker Build](https://github.com/cculianu/Fulcrum/actions/workflows/publish.yml/badge.svg)](https://github.com/cculianu/Fulcrum/actions/workflows/publish.yml)
 [![Copr build status](https://copr.fedorainfracloud.org/coprs/jonny/BitcoinCash/package/fulcrum/status_image/last_build.png)](https://copr.fedorainfracloud.org/coprs/jonny/BitcoinCash/package/fulcrum/)
@@ -13,7 +13,7 @@ For more information, visit [The Official Fulcrum Website™️](https://fulcrum
 #### License:
 GPLv3. See the included `LICENSE.txt` file or [visit gnu.org and read the license](https://www.gnu.org/licenses/gpl-3.0.html).
 
-![Image Fulcrum](https://c3-soft.com/downloads/BitcoinCash/Fulcrum/Fulcrum.png)
+![Image Fulcrum](https://raw.githubusercontent.com/cculianu/Fulcrum-art/master/F_bal_stylized_1_256.png)
 
 ### Highlights:
 
