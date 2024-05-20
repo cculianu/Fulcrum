@@ -450,18 +450,18 @@ void ServerBase::on_newConnection(QTcpSocket *sock) {
     }
 }
 
-// -- Client :: PerIPDataHolder_Temp
-Client::PerIPDataHolder_Temp::PerIPDataHolder_Temp(std::shared_ptr<Client::PerIPData> && ref, QTcpSocket *socket)
+// -- detail :: PerIPDataHolder_Temp
+detail::PerIPDataHolder_Temp::PerIPDataHolder_Temp(std::shared_ptr<Client::PerIPData> && ref, QTcpSocket *socket)
     : QObject(socket), perIPData(std::move(ref))
 {
     setObjectName(kName);
     if (perIPData) ++perIPData->nClients;
 }
-Client::PerIPDataHolder_Temp::~PerIPDataHolder_Temp() { if (perIPData) --perIPData->nClients; }
+detail::PerIPDataHolder_Temp::~PerIPDataHolder_Temp() { if (perIPData) --perIPData->nClients; }
 /*static*/
-std::shared_ptr<Client::PerIPData> Client::PerIPDataHolder_Temp::take(QTcpSocket *s)
+std::shared_ptr<Client::PerIPData> detail::PerIPDataHolder_Temp::take(QTcpSocket *s)
 {
-    std::shared_ptr<PerIPData> ret;
+    std::shared_ptr<Client::PerIPData> ret;
     /* We use a recursive search for the PerIPData because in the WebSocket::Wrapper case, it may live in
      * the nested wrapped QTcpSocket child of `s` */
     auto holder = s->findChild<PerIPDataHolder_Temp *>(kName, Qt::FindChildrenRecursively);
@@ -478,7 +478,7 @@ bool ServerBase::attachPerIPDataAndCheckLimits(QTcpSocket *socket)
 {
     bool ok = true;
     if (const auto addr = socket->peerAddress(); LIKELY(!addr.isNull())) {
-        auto holder = new Client::PerIPDataHolder_Temp(srvmgr->getOrCreatePerIPData(addr), socket); // `new` ok; owned by `socket` (parent QObject)
+        auto holder = new detail::PerIPDataHolder_Temp(srvmgr->getOrCreatePerIPData(addr), socket); // `new` ok; owned by `socket` (parent QObject)
         const auto maxPerIP = options->maxClientsPerIP;
         // check connection limit immediately
         if (const auto & perIPData = holder->perIPData;
@@ -583,7 +583,7 @@ ServerBase::newClient(QTcpSocket *sock)
     auto ret = clientsById[clientId] = new Client(&rpcMethods(), clientId, sock, *options);
     const auto addr = ret->peerAddress();
 
-    ret->perIPData = Client::PerIPDataHolder_Temp::take(sock); // take ownership of the PerIPData ref, implicitly delete the temp holder attached to the socket
+    ret->perIPData = detail::PerIPDataHolder_Temp::take(sock); // take ownership of the PerIPData ref, implicitly delete the temp holder attached to the socket
     if (UNLIKELY(!ret->perIPData)) {
         // This branch should never happen.  But we left it in for defensive programming.
         Error() << "INTERNAL ERROR: Tcp Socket " << sock->peerAddress().toString() << ":" << sock->peerPort() << " had no PerIPData! FIXME!";

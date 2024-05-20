@@ -25,7 +25,6 @@
 #include "Mixins.h"
 #include "PeerMgr.h"
 #include "RPC.h"
-#include "SrvMgr.h"
 #include "SubStatus.h"
 
 #include <QMetaType>
