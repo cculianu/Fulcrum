@@ -1477,7 +1477,7 @@ void Controller::process_DownloadingBlocks()
         const bool ok =
         std::visit(Overloaded{
             [this](const PreProcessedBlockPtr &ppb){
-                assert(ppb->height+1 == sm->dlResultsHtNext); // paranoia -- should never happen
+                assert(ppb->height+1u == sm->dlResultsHtNext); // paranoia -- should never happen
 
                 // process & add it if it's good
                 if ( ! process_VerifyAndAddBlock(ppb) )
@@ -1489,7 +1489,7 @@ void Controller::process_DownloadingBlocks()
                 return true;
             },
             [this, &isRpa](const RpaOnlyModeDataPtr &romd){
-                assert(romd->height+1 == sm->dlResultsHtNext); // paranoia -- should never happen
+                assert(romd->height+1u == sm->dlResultsHtNext); // paranoia -- should never happen
                 isRpa = true;
                 try {
                     storage->addRpaDataForHeight(romd->height, romd->serializedPrefixTable);
