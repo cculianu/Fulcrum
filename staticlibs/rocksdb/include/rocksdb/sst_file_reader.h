@@ -5,7 +5,6 @@
 
 #pragma once
 
-#ifndef ROCKSDB_LITE
 
 #include "rocksdb/iterator.h"
 #include "rocksdb/options.h"
@@ -33,9 +32,16 @@ class SstFileReader {
   std::shared_ptr<const TableProperties> GetTableProperties() const;
 
   // Verifies whether there is corruption in this table.
+  // For the default BlockBasedTable, this will verify the block
+  // checksum of each block.
   Status VerifyChecksum(const ReadOptions& /*read_options*/);
 
+  // TODO: plumb Env::IOActivity, Env::IOPriority
   Status VerifyChecksum() { return VerifyChecksum(ReadOptions()); }
+
+  // Verify that the number of entries in the table matches table property.
+  // A Corruption status is returned if they do not match.
+  Status VerifyNumEntries(const ReadOptions& /*read_options*/);
 
  private:
   struct Rep;
@@ -43,5 +49,3 @@ class SstFileReader {
 };
 
 }  // namespace ROCKSDB_NAMESPACE
-
-#endif  // !ROCKSDB_LITE

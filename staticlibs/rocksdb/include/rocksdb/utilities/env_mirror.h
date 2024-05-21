@@ -18,11 +18,11 @@
 
 #pragma once
 
-#ifndef ROCKSDB_LITE
 
 #include <algorithm>
 #include <iostream>
 #include <vector>
+
 #include "rocksdb/env.h"
 
 namespace ROCKSDB_NAMESPACE {
@@ -55,8 +55,8 @@ class EnvMirror : public EnvWrapper {
                            const std::string& old_fname,
                            std::unique_ptr<WritableFile>* r,
                            const EnvOptions& options) override;
-  virtual Status NewDirectory(const std::string& name,
-                              std::unique_ptr<Directory>* result) override {
+  Status NewDirectory(const std::string& name,
+                      std::unique_ptr<Directory>* result) override {
     std::unique_ptr<Directory> br;
     Status as = a_->NewDirectory(name, result);
     Status bs = b_->NewDirectory(name, &br);
@@ -177,4 +177,3 @@ class EnvMirror : public EnvWrapper {
 
 }  // namespace ROCKSDB_NAMESPACE
 
-#endif  // ROCKSDB_LITE
