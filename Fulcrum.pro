@@ -31,11 +31,17 @@ load(configure)
 QT -= gui
 QT += network
 
-CONFIG += c++20 console warn_on
+versionAtLeast(QT_VERSION, 6.5.0) {
+    CONFIG += c++20
+} else {
+    # Old alias for C++20 was "c++2a"
+    CONFIG += c++2a
+}
+CONFIG += console warn_on
 CONFIG -= app_bundle
 
-versionAtMost(QT_VERSION, 5.12.4) {
-    error("Fulcrum requires Qt 5.12.5 (or later) or Qt 5.13.1 (or later) to be successfully built without errors.  Please use Qt 5.12.5+ or Qt 5.13.1+ to build this codebase.")
+versionAtMost(QT_VERSION, 5.15.1) {
+    error("Fulcrum requires Qt 5.15.2 (or later) to be successfully built without errors.  Please use Qt 5.15.2+ to build this codebase.")
 }
 
 QMAKE_CXXFLAGS_RELEASE += -DNDEBUG
