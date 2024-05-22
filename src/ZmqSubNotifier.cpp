@@ -91,7 +91,7 @@ bool ZmqSubNotifier::start(const QString &addr, const QString &topic, long retry
                     { socket, 0, ZMQ_POLLIN|ZMQ_POLLERR, 0 },
                     { p->interruptSock, 0, ZMQ_POLLIN, 0 },
                 };
-                const int nready = zmq::poll(pitems, std::size(pitems), promise ? 0L : retryMsec);
+                const int nready = zmq::poll(pitems, std::size(pitems), std::chrono::milliseconds(promise ? 0L : retryMsec));
                 if (promise) {
                     if (nready < 0)
                         // we throw here to break out of this code and tell client code that first poll failed

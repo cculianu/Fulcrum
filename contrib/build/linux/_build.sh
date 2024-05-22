@@ -20,7 +20,7 @@ cd "$top" || fail "Could not cd $top"
 
 # libzmq
 pushd /tmp
-LIBZMQ_COMMIT=c89390f0f5a17370627d0e856f906e8e9c7984e4  # Note: match the commit used on Windows build
+LIBZMQ_COMMIT=622fc6dde99ee172ebaa9c8628d85a7a1995a21d  # v4.3.5 release
 info "Cloning libzmq ..."
 git clone https://github.com/zeromq/libzmq.git || fail "Could not clone libzmq"
 cd libzmq && git checkout ${LIBZMQ_COMMIT} && cd .. || fail "Coult not checkout commit hash: ${LIBZMQ_COMMIT}"
@@ -83,8 +83,15 @@ fi
 
 info "Building Fulcrum ..."
 mkdir build && cd build || fail "Could not create/change-to build/"
+if [ -n "${LDFLAGS}" ]; then
+    # For things like -static-libstdc++, etc
+    extra_libs="LIBS+=${LDFLAGS}"
+else
+    extra_libs=""
+fi
 qmake ../Fulcrum.pro "CONFIG-=debug" \
                      "CONFIG+=release" \
+                     "${extra_libs}" \
                      "LIBS+=-L${ROCKSDB_LIBDIR} -lrocksdb" \
                      "LIBS+=-lz -lbz2" \
                      "INCLUDEPATH+=${ROCKSDB_INCDIR}" \
