@@ -50,7 +50,7 @@ case "$plat" in
         docker_cont_name="fulcrum_cont_qt_windows_$$"
         ;;
     "linux"|"lin")
-        [ -z "$arch_arg" ] || fail "Cannot use platform \"$plat\" with \"$arch\"; please use \"linux_ub22\" instead"
+        [ -z "$arch_arg" ] || fail "Cannot use platform \"$plat\" with \"$arch\"; please use \"linux_ub20\" instead"
         plat=linux
         docker_img_name="fulcrum-builder/qt:linux"
         docker_cont_name="fulcrum_cont_qt_linux_$$"
