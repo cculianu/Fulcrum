@@ -14,7 +14,7 @@ apt -y install build-essential iputils-ping nano \
     autoconf automake autopoint bash bison bzip2 flex gettext \
     git g++ gperf intltool libffi-dev libgdk-pixbuf2.0-dev \
     libtool-bin libltdl-dev libssl-dev libxml-parser-perl lzip make \
-    openssl p7zip-full patch perl pkg-config python python3-mako python3-setuptools ruby scons \
+    openssl p7zip-full patch perl pkg-config python python3-mako python3-setuptools python3-packaging ruby scons \
     sed unzip wget xz-utils \
     g++-multilib libc6-dev-i386 && \
 apt -y autoremove && \
@@ -24,10 +24,10 @@ apt -y clean
 RUN \
     cd /opt && \
     echo "💬  \033[1;36mCloning MXE repository ...\033[0m" && \
-    git clone https://github.com/mxe/mxe.git && cd mxe && git checkout 96ad2aef9380b203824fce71881ecd0947a69f0d && cd .. && \
+    git clone https://github.com/mxe/mxe.git && cd mxe && git checkout 56145fe67338e5b5bb39dd84ec3f4155b3751d2b && cd .. && \
     echo "💬  \033[1;36mBuilding dependencies for static linking ...\033[0m" && \
     cd /opt/mxe && \
-    echo 'override MXE_PLUGIN_DIRS += plugins/gcc12' >> settings.mk && \
+    echo 'override MXE_PLUGIN_DIRS += plugins/gcc13' >> settings.mk && \
     NPROC=$(($(nproc))) && \
     make --jobs=$NPROC JOBS=$NPROC MXE_TARGETS='x86_64-w64-mingw32.static' qtbase && \
     ln -s /opt/mxe/usr/bin/x86_64-w64-mingw32.static-qmake-qt5 /usr/bin/qmake
