@@ -1136,6 +1136,7 @@ namespace RPC {
             return avail;
         }
         }
+        return false; // not normally reached; suppress compiler warnings
     }
 
     bool setFastJson(bool b) {

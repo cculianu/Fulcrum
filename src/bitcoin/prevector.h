@@ -36,7 +36,7 @@ namespace bitcoin {
  */
 template <unsigned int N, typename T, typename Size = uint32_t, typename Diff = int32_t>
 class prevector {
-    static_assert (std::is_pod_v<T> && std::is_trivially_destructible_v<T> && std::is_trivial_v<T>
+    static_assert (std::is_standard_layout_v<T> && std::is_trivially_destructible_v<T> && std::is_trivial_v<T>
                    && sizeof(Size) == sizeof(Diff) && std::is_integral_v<Size>
                    && std::is_integral_v<Diff> && std::is_unsigned_v<Size> && std::is_signed_v<Diff>
                    && sizeof(Size) >= 4);

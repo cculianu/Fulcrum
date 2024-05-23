@@ -263,7 +263,7 @@ namespace Util {
         std::shuffle(begin, end, std::default_random_engine(seed));
     }
 
-    template <typename T, typename std::enable_if_t<std::is_pod_v<T> && sizeof(T) == 1, int> = 0>
+    template <typename T, typename std::enable_if_t<std::is_standard_layout_v<T> && std::is_trivial_v<T> && sizeof(T) == 1, int> = 0>
     void getRandomBytes(T *buf, std::size_t n) {
         int ctr = 0;
         quint64 bits = 0;
@@ -854,7 +854,7 @@ namespace Util {
                 if (slen + len > MaxLen)
                     slen = long(MaxLen) - len;
                 if (slen <= 0) return *this;
-                std::strncpy(strBuf.data() + len, s, slen);
+                std::memcpy(strBuf.data() + len, s, slen);
                 len += slen;
                 strBuf[len] = 0;
                 return *this;

@@ -2235,6 +2235,7 @@ bool Storage::isRpaEnabled() const
     case ES::Disabled: return false;
     case ES::Auto: return BTC::coinFromName(getCoin()) == BTC::Coin::BCH;
     }
+    return false; // not normally reached; suppress compiler warnings
 }
 
 int Storage::getConfiguredRpaStartHeight() const
@@ -5214,7 +5215,7 @@ namespace {
     template <size_t NB, MyPos where = MyPos::End, typename KeyType = decltype(DeduceSmallestTypeForNumBytes<NB>())>
     KeyType MakeTxHashNumericKey(const ByteView &bv) {
         static_assert(NB <= sizeof(KeyType));
-        static_assert(std::is_pod_v<KeyType> && !std::is_floating_point_v<KeyType>);
+        static_assert(std::is_standard_layout_v<KeyType> && std::is_trivial_v<KeyType> && !std::is_floating_point_v<KeyType>);
         KeyType ret{};
         std::memcpy(reinterpret_cast<std::byte *>(&ret), MakeTxHashByteKey<NB, where>(bv).data(), NB);
         return ret;

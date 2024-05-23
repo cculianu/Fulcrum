@@ -43,7 +43,8 @@ constexpr std::uint64_t bmax() {
     static_assert (bits <= 64);
     if constexpr (bits == 64)
         return std::numeric_limits<std::uint64_t>::max();
-    return (std::uint64_t(0x1) << bits) - 1;
+    else
+        return (std::uint64_t(0x1) << bits) - 1L;
 }
 
 #define EXCPECT_EXCEPTION(exc, statement) \
@@ -71,7 +72,7 @@ void doTest(int n = 200)
                             ? quint64(std::numeric_limits<Int>::max()) + 1
                             : quint64(std::numeric_limits<Int>::max());
     Log() << "Iterating " << n << " times for type: " << typeid(Int).name();
-    Int val;
+    Int val{};
     QString hex;
     QByteArray byteBlob;
     std::vector<Int> vals;

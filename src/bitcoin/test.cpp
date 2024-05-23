@@ -22,6 +22,7 @@
 #include <QByteArray>
 
 #include <cstring>
+#include <new>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -442,7 +443,7 @@ TEST_SUITE(uint256)
                 uint256 *uninitialized = new (alignedPtr) uint256(uint256::Uninitialized); // explicitly does not initialize the data
                 unsigned uninitializedCtr = 0;
                 // ensure the uninitialized c'tor left the data buffer unmolested
-                for (const auto ch : *uninitialized) {
+                for (const auto ch : *std::launder(uninitialized)) {
                     uninitializedCtr += unsigned(ch == uninitializedByte); // false = 0, true = 1
                 }
                 TEST_CHECK(uninitializedCtr == uint256::size());
@@ -1687,9 +1688,12 @@ TEST_SUITE(prevector)
         PV pv;
         pv.assign(100u, uint8_t(0x2f));
         TEST_CHECK(pv == PV(100u, uint8_t(0x2f)));
-
         const auto *origptr = pv.data();
-        TEST_CHECK_EXCEPTION(pv.assign(std::numeric_limits<std::size_t>::max()-29, uint8_t(0)), std::bad_alloc,
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Walloc-size-larger-than="
+#endif
+        TEST_CHECK_EXCEPTION(pv.assign(std::numeric_limits<std::size_t>::max()-29u, uint8_t(0)), std::bad_alloc,
                              LogBadAlloc);
         // ensure that catching the bad_alloc didn't leak the old pointer
         TEST_CHECK(pv.data() == origptr);
@@ -1700,7 +1704,7 @@ TEST_SUITE(prevector)
         TEST_CHECK(std::memcmp(pv.data(), PV(100u, uint8_t(0x2f)).data(), 100) == 0);
 
         // check throws in c'tor
-        TEST_CHECK_EXCEPTION(PV(std::numeric_limits<std::size_t>::max()-29, uint8_t(0)), std::bad_alloc,
+        TEST_CHECK_EXCEPTION(PV(std::numeric_limits<std::size_t>::max()-29u, uint8_t(0)), std::bad_alloc,
                              LogBadAlloc);
 
         // check that our new handler was called on alloc failure
@@ -1718,6 +1722,9 @@ TEST_SUITE(prevector)
         TEST_CHECK(newHandlerCtr == 5);
         newHandlerCtr = 0;
         std::set_new_handler(oldHandler);
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 
         pv = PV(40u, uint8_t(1));
         PV pv2(40u, uint8_t(1));

@@ -97,9 +97,9 @@ linux {
                HAVE_DECL_HTOLE32 HAVE_DECL_BE32TOH HAVE_DECL_LE32TOH HAVE_DECL_HTOBE64 HAVE_DECL_HTOLE64 HAVE_DECL_BE64TOH \
                HAVE_DECL_LE64TOH
 }
-linux-g++ {
-    # Linux g++ has too many warnings due to bitcoin sources, so just disable warnings
-    CONFIG += warn_off
+gcc {
+    # gcc has too many unused parameter warnings due to bitcoin sources, so just disable this warning
+    QMAKE_CXXFLAGS += -Wno-unused-parameter
 }
 freebsd {
     DEFINES += HAVE_SYS_ENDIAN_H HAVE_DECL_HTOBE16 HAVE_DECL_HTOLE16 HAVE_DECL_BE16TOH HAVE_DECL_LE16TOH HAVE_DECL_HTOBE32 \
@@ -536,6 +536,11 @@ contains(QT_ARCH, x86_64):!win32-msvc {
         bitcoin/secp256k1/secp256k1_recovery.h \
         bitcoin/secp256k1/secp256k1_schnorr.h \
         bitcoin/secp256k1/util.h
+
+    gcc {
+        # Suppress some warnings on gcc for libsecp256k1
+        QMAKE_CFLAGS += -Wno-unused-function -Wno-nonnull-compare
+    }
 } else {
     message("Not including embedded secp256k1")
     DEFINES += DISABLE_SECP256K1

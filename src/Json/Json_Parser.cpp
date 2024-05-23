@@ -651,6 +651,7 @@ bool isParserAvailable(ParserBackend backend) {
     case ParserBackend::Default: return true;
     case ParserBackend::SimdJson: return bool(HAVE_SIMDJSON);
     }
+    return false; // not normally reached; suppress compiler warnings
 }
 
 namespace detail {

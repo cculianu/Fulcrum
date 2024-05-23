@@ -54,6 +54,7 @@ class ByteView
     template<typename T> struct is_std_array : std::false_type {};
     template<typename T, std::size_t N> struct is_std_array<std::array<T,N>> : std::true_type {};
     template<typename T> static constexpr bool is_std_array_v = is_std_array<T>::value;
+    template<typename T> static constexpr bool is_pod_v = std::is_standard_layout_v<T> && std::is_trivial_v<T>; // C++20 deprecated std::is_pod_v so we must do this
 
 public:
     using value_type = const std::byte;
@@ -84,7 +85,7 @@ public:
     }
 
     /// Construct a ByteView from any POD data item or C array (but not a std::array)
-    template<typename T, std::enable_if_t<std::is_pod_v<T> && !std::is_pointer_v<T> && !is_std_array_v<T>
+    template<typename T, std::enable_if_t<is_pod_v<T> && !std::is_pointer_v<T> && !is_std_array_v<T>
                                           && std::has_unique_object_representations_v<T>
                                           && (!std::is_array_v<T> || !std::is_pointer_v<std::remove_all_extents_t<T>>), int> = 0>
     ByteView(const T &t) noexcept
@@ -96,7 +97,7 @@ public:
              std::enable_if_t<std::is_same_v<QString, T> /* special case for QString */ ||
                               (std::is_pointer_v<decltype(std::declval<const T>().data())>
                                && std::is_integral_v<decltype(std::declval<const T>().size())>
-                               && std::is_pod_v<std::remove_pointer_t<decltype(std::declval<const T>().data())>>
+                               && is_pod_v<std::remove_pointer_t<decltype(std::declval<const T>().data())>>
                                && std::has_unique_object_representations_v<std::remove_pointer_t<decltype(std::declval<const T>().data())>>
                                && !std::is_pointer_v<std::remove_pointer_t<decltype(std::declval<const T>().data())>>), int> = 0>
     ByteView(const T &t) noexcept

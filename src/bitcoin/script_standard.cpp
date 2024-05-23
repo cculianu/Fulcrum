@@ -31,7 +31,7 @@ using valtype = std::vector<uint8_t>;
 
 bool fAcceptDatacarrier = DEFAULT_ACCEPT_DATACARRIER;
 
-ScriptID::ScriptID(const CScript &in, bool is32) : var{uint160{uint160::Uninitialized}} {
+ScriptID::ScriptID(const CScript &in, bool is32) : var{std::in_place_type<uint160>, uint160::Uninitialized} {
     if (is32) {
         var = Hash(in);
     } else {

@@ -212,6 +212,7 @@ QString Options::logTimestampModeString() const
     case LogTimestampMode::Uptime: return "uptime";
     case LogTimestampMode::UTC: return "utc";
     }
+    return ""; // not reached; suppress compiler warnings
 }
 
 bool Options::BdReqThrottleParams::isValid() const noexcept
