@@ -86,10 +86,11 @@ DEFINES += USE_QT_IN_BITCOIN
 #DEFINES += ENABLE_TESTS
 
 win32-msvc {
-    error("MSVC is not supported for this project. Please compile with MinGW G++ 7.3.0 or above.")
+    error("MSVC is not supported for this project. Please compile with MinGW G++ 11 or above.")
 }
 win32 {
     # Windows MSVC & mingw-g++ both have too many warnings due to bitcoin sources, so just disable warnings.
+    CONFIG -= warn_on
     CONFIG += warn_off
 }
 linux {
