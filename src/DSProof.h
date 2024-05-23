@@ -63,7 +63,6 @@ struct DSProof {
     using TxHashSet = std::unordered_set<TxHash, HashHasher>;
     TxHashSet descendants; ///< all tx's affected by this dsproof (includes txHash)
 
-    DSProof() = default;
     bool operator==(const DSProof &o) const {
         return     std::tie(  hash,   serializedProof,   txo,   txHash,   descendants)
                 == std::tie(o.hash, o.serializedProof, o.txo, o.txHash, o.descendants);

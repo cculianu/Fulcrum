@@ -19,17 +19,17 @@ namespace ROCKSDB_NAMESPACE {
 class Env;
 class Logger;
 
-// SstFileManager is used to track SST files in the DB and control their
-// deletion rate.
-// All SstFileManager public functions are thread-safe.
-// SstFileManager is not extensible.
+// SstFileManager is used to track SST and blob files in the DB and control
+// their deletion rate. All SstFileManager public functions are thread-safe.
+// SstFileManager is NOT an extensible interface but a public interface for
+// result of NewSstFileManager. Any derived classes must be RocksDB internal.
 class SstFileManager {
  public:
   virtual ~SstFileManager() {}
 
   // Update the maximum allowed space that should be used by RocksDB, if
-  // the total size of the SST files exceeds max_allowed_space, writes to
-  // RocksDB will fail.
+  // the total size of the SST and blob files exceeds max_allowed_space, writes
+  // to RocksDB will fail.
   //
   // Setting max_allowed_space to 0 will disable this feature; maximum allowed
   // space will be infinite (Default value).
@@ -43,14 +43,14 @@ class SstFileManager {
   // other background functions may continue, such as logging and flushing.
   virtual void SetCompactionBufferSize(uint64_t compaction_buffer_size) = 0;
 
-  // Return true if the total size of SST files exceeded the maximum allowed
-  // space usage.
+  // Return true if the total size of SST  and blob files exceeded the maximum
+  // allowed space usage.
   //
   // thread-safe.
   virtual bool IsMaxAllowedSpaceReached() = 0;
 
-  // Returns true if the total size of SST files as well as estimated size
-  // of ongoing compactions exceeds the maximums allowed space usage.
+  // Returns true if the total size of SST and blob files as well as estimated
+  // size of ongoing compactions exceeds the maximums allowed space usage.
   virtual bool IsMaxAllowedSpaceReachedIncludingCompactions() = 0;
 
   // Return the total size of all tracked files.
@@ -87,13 +87,14 @@ class SstFileManager {
 };
 
 // Create a new SstFileManager that can be shared among multiple RocksDB
-// instances to track SST file and control there deletion rate.
+// instances to track SST and blob files and control there deletion rate.
 // Even though SstFileManager don't track WAL files but it still control
 // there deletion rate.
 //
 // @param env: Pointer to Env object, please see "rocksdb/env.h".
 // @param fs: Pointer to FileSystem object (rocksdb/file_system.h"
-// @param info_log: If not nullptr, info_log will be used to log errors.
+// @param info_log: If not nullptr, info_log will be used to log messages of
+// INFO, WARN or ERROR level with respect to info_log's info level.
 //
 // == Deletion rate limiting specific arguments ==
 // @param trash_dir: Deprecated, this argument have no effect
@@ -116,17 +117,19 @@ class SstFileManager {
 //    `rate_bytes_per_sec` will be appreciated. NOTE that with this option,
 //    files already renamed as a trash may be partial, so users should not
 //    directly recover them without checking.
-extern SstFileManager* NewSstFileManager(
-    Env* env, std::shared_ptr<FileSystem> fs,
-    std::shared_ptr<Logger> info_log = nullptr,
-    const std::string& trash_dir = "", int64_t rate_bytes_per_sec = 0,
-    bool delete_existing_trash = true, Status* status = nullptr,
-    double max_trash_db_ratio = 0.25,
-    uint64_t bytes_max_delete_chunk = 64 * 1024 * 1024);
+SstFileManager* NewSstFileManager(Env* env, std::shared_ptr<FileSystem> fs,
+                                  std::shared_ptr<Logger> info_log = nullptr,
+                                  const std::string& trash_dir = "",
+                                  int64_t rate_bytes_per_sec = 0,
+                                  bool delete_existing_trash = true,
+                                  Status* status = nullptr,
+                                  double max_trash_db_ratio = 0.25,
+                                  uint64_t bytes_max_delete_chunk = 64 * 1024 *
+                                                                    1024);
 
 // Same as above, but takes a pointer to a legacy Env object, instead of
 // Env and FileSystem objects
-extern SstFileManager* NewSstFileManager(
+SstFileManager* NewSstFileManager(
     Env* env, std::shared_ptr<Logger> info_log = nullptr,
     std::string trash_dir = "", int64_t rate_bytes_per_sec = 0,
     bool delete_existing_trash = true, Status* status = nullptr,

@@ -13,11 +13,22 @@ RUN \
     apt -qy upgrade && \
     apt -qy install build-essential cmake gdb git iputils-ping nano perl python valgrind wget autoconf && \
     apt -qy install libbz2-dev zlib1g-dev libssl-dev libnss3-dev libxslt-dev libxml2-dev  && \
-    apt -qy install gcc-8 g++-8 && \
-    update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-8 60 \
-                        --slave /usr/bin/g++ g++ /usr/bin/g++-8 && \
     apt -qy autoremove && \
     apt -qy autoclean
+
+RUN \
+    apt -qy install software-properties-common && \
+    add-apt-repository -y ppa:ubuntu-toolchain-r/test && \
+    apt -qy update && \
+    apt -qy install gcc-13 g++-13 cpp-13 && \
+    update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 131 \
+                        --slave /usr/bin/g++ g++ /usr/bin/g++-13 \
+                        --slave /usr/bin/gcov gcov /usr/bin/gcov-13 && \
+    apt -qy autoremove && \
+    apt -qy autoclean
+
+# Ensure we statically link libstdc++ otherwise produced binaries won't be compatible with stock systems
+ENV LDFLAGS="-static-libstdc++"
 
 RUN \
     mkdir -p /opt/local/qt && \

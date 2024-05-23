@@ -5,8 +5,8 @@
 
 #pragma once
 
-#ifndef ROCKSDB_LITE
 
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -24,6 +24,88 @@ using TransactionName = std::string;
 
 using TransactionID = uint64_t;
 
+using TxnTimestamp = uint64_t;
+
+constexpr TxnTimestamp kMaxTxnTimestamp =
+    std::numeric_limits<TxnTimestamp>::max();
+
+/*
+  class Endpoint allows to define prefix ranges.
+
+  Prefix ranges are introduced below.
+
+  == Basic Ranges ==
+  Let's start from basic ranges. Key Comparator defines ordering of rowkeys.
+  Then, one can specify finite closed ranges by just providing rowkeys of their
+  endpoints:
+
+    lower_endpoint <= X <= upper_endpoint
+
+  However our goal is to provide a richer set of endpoints. Read on.
+
+  == Lexicographic ordering ==
+  A lexicographic (or dictionary) ordering satisfies these criteria: If there
+  are two keys in form
+    key_a = {prefix_a, suffix_a}
+    key_b = {prefix_b, suffix_b}
+  and
+    prefix_a < prefix_b
+  then
+    key_a < key_b.
+
+  == Prefix ranges ==
+  With lexicographic ordering, one may want to define ranges in form
+
+     "prefix is $PREFIX"
+
+  which translates to a range in form
+
+    {$PREFIX, -infinity} < X < {$PREFIX, +infinity}
+
+  where -infinity will compare less than any possible suffix, and +infinity
+  will compare as greater than any possible suffix.
+
+  class Endpoint allows to define these kind of rangtes.
+
+  == Notes ==
+  BytewiseComparator and ReverseBytewiseComparator produce lexicographic
+  ordering.
+
+  The row comparison function is able to compare key prefixes. If the data
+  domain includes keys A and B, then the comparison function is able to compare
+  equal-length prefixes:
+
+    min_len= min(byte_length(A), byte_length(B));
+    cmp(Slice(A, min_len), Slice(B, min_len));  // this call is valid
+
+  == Other options ==
+  As far as MyRocks is concerned, the alternative to prefix ranges would be to
+  support both open (non-inclusive) and closed (inclusive) range endpoints.
+*/
+
+class Endpoint {
+ public:
+  Slice slice;
+
+  /*
+    true  : the key has a "+infinity" suffix. A suffix that would compare as
+            greater than any other suffix
+    false : otherwise
+  */
+  bool inf_suffix;
+
+  explicit Endpoint(const Slice& slice_arg, bool inf_suffix_arg = false)
+      : slice(slice_arg), inf_suffix(inf_suffix_arg) {}
+
+  explicit Endpoint(const char* s, bool inf_suffix_arg = false)
+      : slice(s), inf_suffix(inf_suffix_arg) {}
+
+  Endpoint(const char* s, size_t size, bool inf_suffix_arg = false)
+      : slice(s, size), inf_suffix(inf_suffix_arg) {}
+
+  Endpoint() : inf_suffix(false) {}
+};
+
 // Provides notification to the caller of SetSnapshotOnNextOperation when
 // the actual snapshot gets created
 class TransactionNotifier {
@@ -32,6 +114,8 @@ class TransactionNotifier {
 
   // Implement this method to receive notification when a snapshot is
   // requested via SetSnapshotOnNextOperation.
+  // Do not take exclusive ownership of `newSnapshot` because it is shared with
+  // the underlying transaction.
   virtual void SnapshotCreated(const Snapshot* newSnapshot) = 0;
 };
 
@@ -100,6 +184,10 @@ class Transaction {
   //                             txn2->Put("A", ...);
   //                             txn2->Commit();
   //   txn1->GetForUpdate(opts, "A", ...);  // FAIL!
+  //
+  // WriteCommittedTxn only: a new snapshot will be taken upon next operation,
+  // and next operation can be a Commit.
+  // TODO(yanqin) remove the "write-committed only" limitation.
   virtual void SetSnapshotOnNextOperation(
       std::shared_ptr<TransactionNotifier> notifier = nullptr) = 0;
 
@@ -109,6 +197,10 @@ class Transaction {
   // SetSnapshot()/SetSnapshotOnNextSavePoint() is called, ClearSnapshot()
   // is called, or the Transaction is deleted.
   virtual const Snapshot* GetSnapshot() const = 0;
+
+  // Returns the Snapshot created by the last call to SetSnapshot().
+  // The returned snapshot can outlive the transaction.
+  virtual std::shared_ptr<const Snapshot> GetTimestampedSnapshot() const = 0;
 
   // Clears the current snapshot (i.e. no snapshot will be 'set')
   //
@@ -135,7 +227,8 @@ class Transaction {
   // Status::Busy() may be returned if the transaction could not guarantee
   // that there are no write conflicts.  Status::TryAgain() may be returned
   // if the memtable history size is not large enough
-  //  (See max_write_buffer_size_to_maintain).
+  // (see max_write_buffer_size_to_maintain). In either case, a Rollback()
+  // or new transaction is required to expect a different result.
   //
   // If this transaction was created by a TransactionDB(), Status::Expired()
   // may be returned if this transaction has lived for longer than
@@ -144,7 +237,30 @@ class Transaction {
   // transaction before Commit.
   virtual Status Commit() = 0;
 
+  // In addition to Commit(), also creates a snapshot of the db after all
+  // writes by this txn are visible to other readers.
+  // Caller is responsible for ensuring that
+  // snapshot1.seq < snapshot2.seq iff. snapshot1.ts < snapshot2.ts
+  // in which snapshot1 and snapshot2 are created by this API.
+  //
+  // Currently only supported by WriteCommittedTxn. Calling this method on
+  // other types of transactions will return non-ok Status resulting from
+  // Commit() or a `NotSupported` error.
+  // This method returns OK if and only if the transaction successfully
+  // commits. It is possible that transaction commits successfully but fails to
+  // create a timestamped snapshot. Therefore, the caller should check that the
+  // snapshot is created.
+  // notifier will be notified upon next snapshot creation. Nullable.
+  // ret non-null output argument storing a shared_ptr to the newly created
+  // snapshot.
+  Status CommitAndTryCreateSnapshot(
+      std::shared_ptr<TransactionNotifier> notifier =
+          std::shared_ptr<TransactionNotifier>(),
+      TxnTimestamp ts = kMaxTxnTimestamp,
+      std::shared_ptr<const Snapshot>* snapshot = nullptr);
+
   // Discard all batched writes in this transaction.
+  // FIXME: what happens if this isn't called before destruction?
   virtual Status Rollback() = 0;
 
   // Records the state of the transaction for future calls to
@@ -219,8 +335,22 @@ class Transaction {
                         const size_t num_keys, const Slice* keys,
                         PinnableSlice* values, Status* statuses,
                         const bool /*sorted_input*/ = false) {
+    if (options.io_activity != Env::IOActivity::kUnknown &&
+        options.io_activity != Env::IOActivity::kMultiGet) {
+      Status s = Status::InvalidArgument(
+          "Can only call MultiGet with `ReadOptions::io_activity` is "
+          "`Env::IOActivity::kUnknown` or `Env::IOActivity::kMultiGet`");
+
+      for (size_t i = 0; i < num_keys; ++i) {
+        if (statuses[i].ok()) {
+          statuses[i] = s;
+        }
+      }
+      return;
+    }
+
     for (size_t i = 0; i < num_keys; ++i) {
-      statuses[i] = Get(options, column_family, keys[i], &values[i]);
+      statuses[i] = GetImpl(options, column_family, keys[i], &values[i]);
     }
   }
 
@@ -277,9 +407,32 @@ class Transaction {
     }
   }
 
+  // Get a range lock on [start_endpoint; end_endpoint].
+  virtual Status GetRangeLock(ColumnFamilyHandle*, const Endpoint&,
+                              const Endpoint&) {
+    return Status::NotSupported();
+  }
+
   virtual Status GetForUpdate(const ReadOptions& options, const Slice& key,
                               std::string* value, bool exclusive = true,
                               const bool do_validate = true) = 0;
+
+  // An overload of the above method that receives a PinnableSlice
+  // For backward compatibility a default implementation is provided
+  virtual Status GetForUpdate(const ReadOptions& options, const Slice& key,
+                              PinnableSlice* pinnable_val,
+                              bool exclusive = true,
+                              const bool do_validate = true) {
+    if (pinnable_val == nullptr) {
+      std::string* null_str = nullptr;
+      return GetForUpdate(options, key, null_str, exclusive, do_validate);
+    } else {
+      auto s = GetForUpdate(options, key, pinnable_val->GetSelf(), exclusive,
+                            do_validate);
+      pinnable_val->PinSelf();
+      return s;
+    }
+  }
 
   virtual std::vector<Status> MultiGetForUpdate(
       const ReadOptions& options,
@@ -391,6 +544,15 @@ class Transaction {
 
   virtual Status SingleDeleteUntracked(const Slice& key) = 0;
 
+  // Collpase the merge chain for the given key. This is can be used by the
+  // application to trigger an on-demand collpase to a key that has a long
+  // merge chain to reduce read amplification, without waiting for compaction
+  // to kick in.
+  virtual Status CollapseKey(const ReadOptions&, const Slice&,
+                             ColumnFamilyHandle* = nullptr) {
+    return Status::NotSupported("collpase not supported");
+  }
+
   // Similar to WriteBatch::PutLogData
   virtual void PutLogData(const Slice& blob) = 0;
 
@@ -468,6 +630,18 @@ class Transaction {
 
   virtual Status RebuildFromWriteBatch(WriteBatch* src_batch) = 0;
 
+  // Note: data in the commit-time-write-batch bypasses concurrency control,
+  // thus should be used with great caution.
+  // For write-prepared/write-unprepared transactions,
+  // GetCommitTimeWriteBatch() can be used only if the transaction is started
+  // with
+  // `TransactionOptions::use_only_the_last_commit_time_batch_for_recovery` set
+  // to true. Otherwise, it is possible that two uncommitted versions of the
+  // same key exist in the database due to the current implementation (see the
+  // explanation in WritePreparedTxn::CommitInternal).
+  // During bottommost compaction, RocksDB may
+  // set the sequence numbers of both to zero once becoming committed, causing
+  // output SST file to have two identical internal keys.
   virtual WriteBatch* GetCommitTimeWriteBatch() = 0;
 
   virtual void SetLogNumber(uint64_t log) { log_number_ = log; }
@@ -494,7 +668,7 @@ class Transaction {
     PREPARED = 2,
     AWAITING_COMMIT = 3,
     COMMITTED = 4,
-    COMMITED = COMMITTED, // old misspelled name
+    COMMITED = COMMITTED,  // old misspelled name
     AWAITING_ROLLBACK = 5,
     ROLLEDBACK = 6,
     LOCKS_STOLEN = 7,
@@ -510,6 +684,16 @@ class Transaction {
   // assigns the id. Although currently it is the case, the id is not guaranteed
   // to remain the same across restarts.
   uint64_t GetId() { return id_; }
+
+  virtual Status SetReadTimestampForValidation(TxnTimestamp /*ts*/) {
+    return Status::NotSupported("timestamp not supported");
+  }
+
+  virtual Status SetCommitTimestamp(TxnTimestamp /*ts*/) {
+    return Status::NotSupported("timestamp not supported");
+  }
+
+  virtual TxnTimestamp GetCommitTimestamp() const { return kMaxTxnTimestamp; }
 
  protected:
   explicit Transaction(const TransactionDB* /*db*/) {}
@@ -529,6 +713,21 @@ class Transaction {
     id_ = id;
   }
 
+  virtual Status GetImpl(const ReadOptions& /* options */,
+                         ColumnFamilyHandle* /* column_family */,
+                         const Slice& /* key */, std::string* /* value */) {
+    return Status::NotSupported("Not implemented");
+  }
+
+  virtual Status GetImpl(const ReadOptions& options,
+                         ColumnFamilyHandle* column_family, const Slice& key,
+                         PinnableSlice* pinnable_val) {
+    assert(pinnable_val != nullptr);
+    auto s = GetImpl(options, column_family, key, pinnable_val->GetSelf());
+    pinnable_val->PinSelf();
+    return s;
+  }
+
   virtual uint64_t GetLastLogNumber() const { return log_number_; }
 
  private:
@@ -539,5 +738,3 @@ class Transaction {
 };
 
 }  // namespace ROCKSDB_NAMESPACE
-
-#endif  // ROCKSDB_LITE

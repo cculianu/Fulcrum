@@ -31,11 +31,17 @@ load(configure)
 QT -= gui
 QT += network
 
-CONFIG += c++17 console warn_on
+versionAtLeast(QT_VERSION, 6.5.0) {
+    CONFIG += c++20
+} else {
+    # Old alias for C++20 was "c++2a"
+    CONFIG += c++2a
+}
+CONFIG += console warn_on
 CONFIG -= app_bundle
 
-versionAtMost(QT_VERSION, 5.12.4) {
-    error("Fulcrum requires Qt 5.12.5 (or later) or Qt 5.13.1 (or later) to be successfully built without errors.  Please use Qt 5.12.5+ or Qt 5.13.1+ to build this codebase.")
+versionAtMost(QT_VERSION, 5.15.1) {
+    error("Fulcrum requires Qt 5.15.2 (or later) to be successfully built without errors.  Please use Qt 5.15.2+ to build this codebase.")
 }
 
 QMAKE_CXXFLAGS_RELEASE += -DNDEBUG
@@ -87,7 +93,6 @@ win32 {
     CONFIG += warn_off
 }
 linux {
-    QMAKE_CXXFLAGS += -std=c++1z
     DEFINES += HAVE_ENDIAN_H HAVE_DECL_HTOBE16 HAVE_DECL_HTOLE16 HAVE_DECL_BE16TOH HAVE_DECL_LE16TOH HAVE_DECL_HTOBE32 \
                HAVE_DECL_HTOLE32 HAVE_DECL_BE32TOH HAVE_DECL_LE32TOH HAVE_DECL_HTOBE64 HAVE_DECL_HTOLE64 HAVE_DECL_BE64TOH \
                HAVE_DECL_LE64TOH
@@ -97,7 +102,6 @@ linux-g++ {
     CONFIG += warn_off
 }
 freebsd {
-    QMAKE_CXXFLAGS += -std=c++1z
     DEFINES += HAVE_SYS_ENDIAN_H HAVE_DECL_HTOBE16 HAVE_DECL_HTOLE16 HAVE_DECL_BE16TOH HAVE_DECL_LE16TOH HAVE_DECL_HTOBE32 \
                HAVE_DECL_HTOLE32 HAVE_DECL_BE32TOH HAVE_DECL_LE32TOH HAVE_DECL_HTOBE64 HAVE_DECL_HTOLE64 HAVE_DECL_BE64TOH \
                HAVE_DECL_LE64TOH
@@ -182,42 +186,40 @@ contains(CONFIG, config_endian_big) {
         #
         # Currently this was built from github sources of the v6.14.6 rocksdb release:
         #     https://github.com/facebook/rocksdb.git
-        # Commit tag v6.14.6, commit hash (from Tue Dec 1 15:05:35 2020 -0800):
-        #     ed4316166f67ec892603014634840d29f460f611
+        # Commit tag v9.1.1, commit hash (from Mon Apr 22 11:35:44 2024 -0700):
+        #     6f7cabeac80a3a6150be2c8a8369fcecb107bf43
         #
         # OSX:
-        #   Built on Apple clang version 11.0.0 (clang-1100.0.33.17), from Xcode 113.1.
-        #   command: USE_RTTI=1 PORTABLE=1 DEBUG_LEVEL=0 make static_lib -j4 V=1
-        #   Annoyingly, the produced .a file has debug symbols which we strip with: strip -S.
+        #   Built on Apple clang version 15.0.0 (clang-1500.3.9.4), from Xcode 15.4.
+        #   x86_64 (native build) command:
+        #       USE_RTTI=1 PORTABLE=1 DEBUG_LEVEL=0 make static_lib -j8 V=1
+        #   arm64 (cross-compile) command:
+        #       ARCHFLAG="-arch arm64" EXTRA_LDFLAGS="-target arm64-apple-darwin" USE_RTTI=1 PORTABLE=1 DEBUG_LEVEL=0 make static_lib -j8 V=1
+        #   Annoyingly, the produced .a file has debug symbols which we strip with:
+        #       strip -S librocksdb.a
+        #   For each of the platforms above, the produced `librocksdb.a` is saved and then `lipo` is used to create a
+        #   "universal" fat binary:
+        #       lipo -create librocksdb.a.x86 librocksdb.a.arm64 -output librocksdb.a
         #
-        # Linux:
-        #   Built on Ubuntu 18.10, g++ (Ubuntu 8.2.0-7ubuntu1) 8.2.0.
-        #   command: USE_RTTI=1 PORTABLE=1 DEBUG_LEVEL=0 make static_lib -j4 V=1
+        # Linux (x86_64):
+        #   Built on Ubuntu 18.04.6 LTS, g++ (8.4.0-1ubuntu1~18.04) 8.4.0.
+        #   command: USE_RTTI=1 PORTABLE=1 DEBUG_LEVEL=0 make static_lib -j8 V=1
+        #   Annoyingly, the produced .a file has debug symbols which we strip with: strip -g.
+        #
+        # Linux (aarch64):
+        #   Built on Ubuntu 20.04.6 LTS, g++ (9.4.0-1ubuntu1~20.04.2) 9.4.0.
+        #   command: USE_RTTI=1 PORTABLE=1 DEBUG_LEVEL=0 make static_lib -j8 V=1
         #   Annoyingly, the produced .a file has debug symbols which we strip with: strip -g.
         #
         # Windows:
-        #   Built using the MinGW G++ 8.1.0 (compiler that ships with Qt 5.15+), from a cmd.exe prompt, via cmake.exe by
+        #   Built using the MinGW G++ 14.1.0 from MSYS2 using a MINGW shell.
         #   following these steps:
-        #   - Install a recent cmake into eg c:\cmake
-        #   - Open up a Qt cmd.exe prompt that points to MinGW G++ 8.1.0 in the path (using the Start menu shortcut
-        #     installed by Qt 5.15+ is easiest).
-        #   - Put installed 'c:\cmake\bin' in the path so that 'cmake.exe' works from the cmd prompt, eg:
-        #         set PATH=c:\cmake\bin;%PATH%
         #   - Checkout rocksdb (commit hash above), cd rocksdb
-        #   - Now you will need to edit CMakeLists.txt:
-        #     1. Open CMakeLists.txt in a text editor
-        #     2. Search for '-fno-asynchronous-unwind-tables' and remove that compile option since it
-        #        breaks building on MinGW against Qt, and replace it with -O3 for maximal speed.
-        #     3. In that same MINGW section where you removed the above, add: '-Wno-cast-function-type -Wno-error=cast-function-type'
-        #        since MinGW 8.1 seems to not like the function pointer casts in port/win/env_win.cc.
-        #     4. Look for a section that contains 'if(NOT MINGW' and rename MINGW to XX_MINGW:
-        #             if(NOT XX_MINGW)
-        #        This ensures that port/win/win_thread.cc does get compiled and linked into the lib.
         #   - mkdir build, cd build
         #   - Run this command from within the rocksdb/build dir that you just created:
-        #         cmake .. -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_SYSTEM_NAME=Windows -G"MinGW Makefiles" -DWITH_GFLAGS=0 -DWITH_JNI=0  -DCMAKE_BUILD_TYPE=Release -DUSE_RTTI=1 -DPORTABLE=1
+        #         cmake .. -GNinja -DWITH_GFLAGS=0 -DWITH_JNI=0  -DCMAKE_BUILD_TYPE=Release -DUSE_RTTI=1 -DPORTABLE=1 -DROCKSDB_BUILD_SHARED=OFF -DWITH_LIBURING=OFF
         #   - Build with this command:
-        #         mingw32-make -j4 V=1 rocksdb  <-- will build static lib only
+        #         ninja rocksdb  <-- will build static lib only
         #   The generated librocksdb.a will be in the build/ directory you are currently in, ready to be put into the
         #   Fulcrum directory staticlibs/rocksdb/bin/win64.
         macx {

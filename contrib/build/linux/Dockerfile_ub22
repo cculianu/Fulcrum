@@ -17,6 +17,20 @@ RUN \
     apt -qy autoclean
 
 RUN \
+    apt -qy install software-properties-common && \
+    add-apt-repository -y ppa:ubuntu-toolchain-r/test && \
+    apt -qy update && \
+    apt -qy install gcc-13 g++-13 cpp-13 && \
+    update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 131 \
+                        --slave /usr/bin/g++ g++ /usr/bin/g++-13 \
+                        --slave /usr/bin/gcov gcov /usr/bin/gcov-13 && \
+    apt -qy autoremove && \
+    apt -qy autoclean
+
+# Ensure we statically link libstdc++ otherwise produced binaries won't be compatible with stock systems
+ENV LDFLAGS="-static-libstdc++"
+
+RUN \
     mkdir -p /opt/local/qt && \
     cd /opt && \
     echo "💬  \033[1;36mDownloading Qt sources ...\033[0m" && \
