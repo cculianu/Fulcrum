@@ -1,4 +1,4 @@
-FROM debian:bullseye as builder
+FROM debian:trixie as builder
 
 LABEL maintainer="Axel Gembe <derago@gmail.com>"
 
@@ -14,7 +14,7 @@ COPY . .
 RUN qmake -makefile PREFIX=/usr Fulcrum.pro && \
     make $MAKEFLAGS install
 
-FROM debian:bullseye-slim
+FROM debian:trixie-slim
 
 RUN apt update && \
     apt install -y openssl libqt5network5 zlib1g libbz2-1.0 libjemalloc2 libzmq5 && \
