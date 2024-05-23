@@ -17,8 +17,8 @@ GPLv3. See the included `LICENSE.txt` file or [visit gnu.org and read the licens
 
 ### Highlights:
 
-- *Fast:* Written in 100% modern `C++17` using multi-threaded and asynchronous programming techniques.
-- *A drop-in replacement for ElectronX/ElectrumX:* Fulcrum is 100% protocol-level compatible with the [Electrum Cash 1.5.1 protocol](https://electrum-cash-protocol.readthedocs.io/en/latest/). Existing server admins should feel right at home with this software since installation and management of it is nearly identical to ElectronX/ElectrumX server.
+- *Fast:* Written in 100% modern `C++20` using multi-threaded and asynchronous programming techniques.
+- *A drop-in replacement for ElectronX/ElectrumX:* Fulcrum is 100% protocol-level compatible with the [Electrum Cash 1.5.3 protocol](https://electrum-cash-protocol.readthedocs.io/en/latest/). Existing server admins should feel right at home with this software since installation and management of it is nearly identical to ElectronX/ElectrumX server.
 - *Cross-platform:* While this codebase was mainly developed and tested on MacOS, Windows and Linux, it should theoretically work on any modern OS (such as *BSD) that has Qt5 Core and Qt5 Networking available.
 - ***NEW!*** *Triple-coin:* Supports BCH, BTC and LTC.
 
@@ -35,9 +35,9 @@ GPLv3. See the included `LICENSE.txt` file or [visit gnu.org and read the licens
     - *Optional*: For best results, enable zmq for the "hasblock" topic using e.g. `zmqpubhashblock=tcp://0.0.0.0:8433` in your `bitcoin.conf` file (zmq is only available on: Core, BCHN, BU 1.9.1+, or Litecoin Core).
   - *Recommended hardware*: Minimum 1GB RAM, 64-bit CPU, ~40GB disk space for mainnet BCH, 133GB for BTC (as of Aug 2023). For best results, use an SSD rather than an HDD.
 - *For compiling*: 
-  - `Qt Core` & `Qt Networking` libraries `5.12.5` or above (I use `5.15.2` myself).  Qt `5.12.4` (or earlier) is not supported.
+  - `Qt Core` & `Qt Networking` libraries `5.15.2` or above (I use `5.15.2` myself).  Qt `5.15.1` (or earlier) is not supported.
   - *Optional but recommended*: `libzmq 4.x` development headers and library (also known as `libzmq3-dev` on Debian/Ubuntu and `zeromq-devel` on Fedora). Fulcrum will run just fine without linking against `libzmq`, but it will run better if you do link against `libzmq` and also turn on `zmqpubhashblock` notifications in `bitcoind` (zmq is only available on: Core, BCHN, or BU 1.9.1+).
-  - A modern, 64-bit `C++17` compiler.  `clang` is recommended but `G++` also works. MSVC on Windows is not supported (please use `MinGW G++` instead, which ships with Qt Open Source Edition for Windows).
+  - A modern, 64-bit `C++20` compiler.  `clang-17` or `g++-13` are recommended. MSVC on Windows is not supported (please use `MinGW G++` instead, which ships with Qt Open Source Edition for Windows).
 
 ### Quickstart
 
@@ -62,10 +62,10 @@ You may also build from the CLI (on Linux and MacOS):
 
 **A note for Linux users**: You may have to install the Qt5 networking package separately such as `libqt5network5` (depending on your distribution). You also need `libbz2-dev` otherwise compilation will fail. If you are having trouble finding the required Qt versions, you can try this link: https://launchpad.net/~beineri (for Ubuntu/Debian ppas). For best results, you may wish to also ensure you have `pkg-config` and `libzmq` installed (aka `libzmq3-dev` on Debian/Ubuntu, `zeromq-devel` on Fedora).
 
-**A note for Windows users**: `Qt 5.13.2` (or above) with `MinGW G++ 7.x.x` is the compiler/Qt kit you should be using.  MSVC is not supported by this codebase at the present time.
+**A note for Windows users**: `Qt 5.15.2` (or above) with `MinGW G++ 11.x.x` (or above) is the compiler/Qt kit you should be using.  MSVC is not supported by this codebase at the present time.
 
 #### What to do if compiling fails
-If you have problems compiling, the most likely culprit would be your compiler not being `C++17` compliant (please use a recent version of `GCC` or `clang` on Linux, Apple's `Xcode` on Mac, or `MinGW G++ 7.x` on Windows).
+If you have problems compiling, the most likely culprit would be your compiler not being `C++20` compliant (please use a recent version of `gcc` or `clang` on Linux, Apple's `Xcode` on Mac, or `MinGW G++ 11.x` or above on Windows).
 
 The other likely culprit is the fact that at the present time I have included a statically-built `librocksdb` in the codebase. There are versions of this library for Windows, Mac, and Linux included right in the source tree, and `Fulcrum.pro` looks for them and links to them. Instructions are included within the `Fulcrum.pro` project file about how to build your own static `librocksdb` if the bundled one does not work on your system.
 
@@ -119,7 +119,7 @@ which will appear in `dist/win` after the build process completes.
 
 **New!** I recently added a mechanism using Docker to build a statically-linked
 Linux executable. This build is 100% compatible with most stock 64-bit Linux
-systems with a new enough glibc and libstdc++. So on a relatively modern Linux system, you
+systems with a new enough glibc. So on a relatively modern Linux system, you
 don't have to install anything -- it *just works*. You can download the
 pre-built binary yourself here from the [releases page](https://github.com/cculianu/Fulcrum/releases).
 
@@ -200,7 +200,7 @@ This codebase will not compile correctly (or at all) using MSVC. Please use the 
 
 #### Linux
 
-If you have `clang` on your system, configure the project to use it as the compiler preferentially over `g++`.  `g++` works great too, but `clang` is preferred.
+Be sure you have a recent gcc that support C++20. I am using gcc-13 in my docker builders, but gcc-11 *should* work too.
 
 #### MacOS
 
