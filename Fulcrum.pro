@@ -185,7 +185,7 @@ contains(CONFIG, config_endian_big) {
         #
         # Build information --
         #
-        # Currently this was built from github sources of the v6.14.6 rocksdb release:
+        # Currently this was built from github sources of the v9.1.1 rocksdb release:
         #     https://github.com/facebook/rocksdb.git
         # Commit tag v9.1.1, commit hash (from Mon Apr 22 11:35:44 2024 -0700):
         #     6f7cabeac80a3a6150be2c8a8369fcecb107bf43
@@ -227,8 +227,8 @@ contains(CONFIG, config_endian_big) {
             LIBS += -L$$PWD/staticlibs/rocksdb/bin/osx
         }
         linux {
-            # We support aarch64 (for RPis, etc) but the user needs to run a shell script to compile librocksdb.a
-            # themselves: contrib/build/rocksdb-staticlib.sh
+            # We support aarch64 (for RPis, etc). Check for the supplied lib otherwise the user needs to run a shell
+            # script to compile librocksdb.a themselves: contrib/build/rocksdb-staticlib.sh
             contains(QMAKE_HOST.arch, aarch64) {
                 aarch64_rocksdb = staticlibs/rocksdb/bin/linux/aarch64
                 aarch64_rocksdb_path = $$PWD/$$aarch64_rocksdb
