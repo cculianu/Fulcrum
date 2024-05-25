@@ -65,18 +65,6 @@
         "t": "50001",
         "version": "1.4.3"
     },
-    "electrumx-cash.1209k.com": {
-        "pruning": "-",
-        "s": "50002",
-        "t": "50001",
-        "version": "1.4.2"
-    },
-    "7nshufncf3nmp7pa42oqhnj6whsjgo2eok4jveex62tczuhvqur5ciad.onion": {
-        "pruning": "-",
-        "t": "50001",
-        "version": "1.4.1",
-        "display": "electrum.imaginary.cash"
-    },
     "kisternet5tgeekwidrj7r7yd3n2l5j7y72b74y6xu3q2b6xdjrte6id.onion": {
         "pruning": "-",
         "t": "50001",
@@ -106,12 +94,6 @@
         "version": "1.4",
         "display": "electroncash.de"
     },
-    "fulcrum.fountainhead.cash": {
-        "pruning": "-",
-        "s": "50002",
-        "t": "50001",
-        "version": "1.4"
-    },
     "electrs.bitcoinunlimited.info": {
         "pruning": "-",
         "s": "50002",
@@ -127,12 +109,6 @@
         "s": "50002",
         "version": "1.4.1"
     },
-    "electrumx-bch.cryptonermal.net": {
-        "pruning": "-",
-        "s": "50002",
-        "t": "50001",
-        "version": "1.4.2"
-    },
     "electrum.bitcoinverde.org": {
         "pruning": "-",
         "s": "50002",
@@ -143,18 +119,27 @@
         "pruning": "-",
         "s": "50002",
         "t": "50001",
-        "version": "1.4.4"
-    },
-    "fulcrum.apecs.dev": {
-        "pruning": "-",
-        "s": "50002",
-        "t": "50001",
-        "version": "1.5.0"
+        "version": "1.5.1"
     },
     "fulcrum.criptolayer.net": {
         "pruning": "-",
         "s": "50002",
         "t": "50001",
         "version": "1.5.0"
+    },
+    "fulcrum.jettscythe.xyz": {
+        "pruning": "-",
+        "s": "50002",
+        "version": "1.5.0"
+    },
+    "fulcrum.aglauck.com": {
+        "pruning": "-",
+        "s": "50002",
+        "version": "1.5.0"
+    },
+      "node.minisatoshi.cash": {
+        "pruning": "-",
+        "s": "50002",
+        "version": "1.5.3"
     }
 }

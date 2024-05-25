@@ -11,8 +11,21 @@
         "t": "50001",
         "s": "50002"
     },
-    "ryzen.electroncash.de": {
+    "electroncash.de": {
+        "t": "55003",
+        "s": "55004"
+    },
+    "jktsologn7uprtwn7gsgmwuddj6rxsqmwc2vaug7jwcwzm2bxqnfpwad.onion": {
+        "s": "55004",
+        "t": "55003",
+        "display": "electroncash.de"
+    },
+    "chipnet.bch.ninja": {
         "t": "50001",
         "s": "50002"
+    },
+    "cbch.loping.net": {
+        "t": "62101",
+        "s": "62102"
     }
 }
