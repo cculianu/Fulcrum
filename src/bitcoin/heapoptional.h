@@ -18,12 +18,11 @@
 //
 #pragma once
 
-#include <algorithm>
+#include <functional> // for std::equal_to, etc
 #include <memory>
 #include <utility>
 
 namespace bitcoin {
-
     /// An optional that stores its value on the heap, rather than in-line, in
     /// order to save memory. This is implemented using a std::unique_ptr. This
     /// optional is intended to be a drop-in replacement for a std::optional
@@ -117,5 +116,4 @@ namespace bitcoin {
             return std::less{}(*p, t); // compare to the pointed-to value
         }
     };
-
 } // namespace bitcoin
