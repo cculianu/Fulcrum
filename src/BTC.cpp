@@ -174,7 +174,8 @@ namespace BTC
             {"testnet4", TestNet4},    // possible future bchd
             {"regtest",  RegTestNet},  // BCHN, BU, ABC, bchd, Core, LitecoinCore
             {"signet",   TestNet},     // Core only
-            {"chip",     ChipNet},     // BCH only
+            {"chip",     ChipNet},     // BCH only; BCHN
+            {"chipnet",  ChipNet},     // BCH only; BU
         }};
         const QString invalidNetName = "invalid";
     };
