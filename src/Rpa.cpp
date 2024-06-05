@@ -32,6 +32,8 @@
 #include <cassert>
 #include <cstring> // for std::memcpy
 #include <limits>
+#include <mutex>
+#include <shared_mutex>
 #include <stdexcept> // for std::invalid_argument
 
 namespace Rpa {
@@ -201,6 +203,7 @@ size_t PrefixTable::elementCount() const {
                 return elementCountGeneric(ro.rows, [this, &ro](size_t i) { lazyLoadRow(i, &ro); });
             },
             [&](const ReadWrite & rw){
+                if (rw.isDefinitelyEmpty) return size_t{0};
                 return elementCountGeneric(rw.rows, [](auto){});
             }
         }, var);
@@ -227,12 +230,31 @@ QByteArray PrefixTable::serializeRow(size_t index, bool deepCopy) const {
 static_assert(PrefixBits == sizeof(uint16_t) * 8u && PrefixTable::numRows() - 1u == std::numeric_limits<uint16_t>::max(),
               "PrefixTable::serialize(), PrefixTable::PrefixTable(QByteArray), and PrefixTable::lazyLoadRow() assumptions.");
 
+namespace {
+std::optional<const QByteArray> emptySerialization;
+std::shared_mutex emptySerializationMut;
+} // namespace
+
 QByteArray PrefixTable::serialize() const {
+    // Fast-path check for "empty" serializations. This is so that testnet synching is fast since many blocks have no
+    // inputs and thus an "empty" Rpa PrefixTable. In that case we don't bother with the below code and just return the
+    // cached serialization for an empty prefix table.
+    bool isDefEmpty = false, needToCacheEmptySer = false;
+    if (auto *rw = std::get_if<ReadWrite>(&var); rw && (isDefEmpty = rw->isDefinitelyEmpty)) {
+        std::shared_lock l(emptySerializationMut);
+        if (emptySerialization) {
+            return *emptySerialization;
+        } else {
+            needToCacheEmptySer = true;
+        }
+    }
+    // /Fast-path
+
     QByteArray dataBuf;
     size_t elementCount = 0;
     constexpr size_t numUint8s = 0x1u << 8u; // 256u
     // minimal size for an empty table: more than ~64KiB
-    const size_t minTableSize =
+    constexpr size_t minTableSize =
         numRows()                      // 0-byte compactsize * 65536
         + numUint8s * sizeof(uint64_t) // 8-byte uint64_t's * 256
         + 3u                           // 3-byte compactsize for the number of toc entries (0xfd,0x00,0x01)
@@ -282,6 +304,15 @@ QByteArray PrefixTable::serialize() const {
                  ", B/entry: ", QString::asprintf("%1.2f", elementCount != 0 ? double(compressed.size())/double(elementCount) : 0.0),
                  ", compression took: ", t0.msecStr(4), " msec");
     }
+
+    // Cache "empty serialization" to static var if flagged that we need to cache it and the returned value *is* the compressed "empty serialization".
+    if (isDefEmpty && needToCacheEmptySer) {
+        std::unique_lock l(emptySerializationMut);
+        if (!emptySerialization) { // check again with lock held, and if still !has_value, cache the empty serialization.
+            emptySerialization.emplace(compressed);
+        }
+    }
+
     return compressed;
 }
 
@@ -327,6 +358,7 @@ void PrefixTable::addForPrefix(const Prefix &p, TxIdx n) {
     auto *rw = std::get_if<ReadWrite>(&var);
     if (!rw) throw Exception("addForPrefix called on a read-only PrefixTable");
     addForPrefixGeneric(rw->rows, p, n);
+    rw->isDefinitelyEmpty = false;
 }
 
 void PrefixTable::lazyLoadRow(const size_t index, const ReadOnly *ro) const {
@@ -361,14 +393,12 @@ void PrefixTable::lazyLoadRow(const size_t index, const ReadOnly *ro) const {
     row = PNV(Span{begin, end}); // ensure data pointer is valid, even if length happens to be 0
 }
 
-VecTxIdx * PrefixTable::getRowPtr(size_t index) {
-    auto *rw = std::get_if<ReadWrite>(&var);
+const VecTxIdx * PrefixTable::getRowPtr(size_t index) const {
+    auto const *rw = std::get_if<ReadWrite>(&var);
     if (!rw) return nullptr;
     if (index >= rw->rows.size()) return nullptr;
     return &rw->rows[index];
 }
-
-const VecTxIdx * PrefixTable::getRowPtr(size_t index) const { return const_cast<PrefixTable *>(this)->getRowPtr(index); }
 
 VecTxIdx PrefixTable::searchPrefix(const Prefix &prefix, bool sortAndMakeUnique) const {
     return std::visit(
@@ -649,7 +679,7 @@ void test()
         auto pft2 = prefixTable;
         if (prefixTable != pft2)
             throw Exception("Rpa::PrefixTable not equal");
-        if (auto *p = pft2.getRowPtr(pft2.numRows() - 1); p && ! p->empty()) {
+        if (auto *p = const_cast</* HACK */ Rpa::VecTxIdx *>(pft2.getRowPtr(pft2.numRows() - 1)); p && ! p->empty()) {
             // invert the last element
             p->back() = ~p->back();
             // equality should fail

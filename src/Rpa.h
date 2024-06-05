@@ -158,6 +158,7 @@ static constexpr uint64_t MaxTxIdx = (uint64_t{0x1u} << SerializedTxIdxBits) - u
 class PrefixTable {
     struct ReadWrite {
         std::vector<VecTxIdx> rows{PrefixTable::numRows(), VecTxIdx{}};
+        bool isDefinitelyEmpty = true;
         ReadWrite() = default;
     };
     struct ReadOnly {
@@ -209,16 +210,15 @@ public:
     // Returns the number of TxIdxs removed.
     size_t removeForPrefix(const Prefix & prefix);
 
-    // Returns a pointer to a row if this instance is ReadWrite, and index <= numRows(), or nullptr otherwise.
-    VecTxIdx * getRowPtr(size_t index);
-    const VecTxIdx * getRowPtr(size_t index) const;
-
     QByteArray serializeRow(size_t index, bool deepCopy = true) const;
 
     QByteArray serialize() const;
 
     bool operator==(const PrefixTable &o) const;
     bool operator!=(const PrefixTable &o) const { return ! this->operator==(o); }
+
+    // Returns a pointer to a row if this instance is ReadWrite, and index <= numRows(), or nullptr otherwise. Used by tests.
+    const VecTxIdx * getRowPtr(size_t index) const;
 
 private:
     /// ReadOnly mode only: Lazy-loads row at index, if it has not already been loaded (otherwise is a no-op).
