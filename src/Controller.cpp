@@ -810,7 +810,7 @@ struct Controller::StateMachine
     std::atomic<unsigned> dlResultsHtNext = 0;  ///< the next unprocessed block height we need to process in series
 
     // todo: tune this
-    const size_t DL_CONCURRENCY = qMax(Util::getNPhysicalProcessors()-1, 1U);
+    const size_t DL_CONCURRENCY = std::max<size_t>(Util::getNPhysicalProcessors(), 1u);
 
     size_t nTx = 0, nIns = 0, nOuts = 0, nSH = 0;
     uint64_t nBytes = 0;
