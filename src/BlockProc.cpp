@@ -19,12 +19,14 @@
 #include "BlockProc.h"
 #include "BTC.h"
 #include "Common.h"
+#include "CoTask.h"
 #include "Rpa.h"
 #include "Util.h"
 
 #include "bitcoin/transaction.h"
 
 #include <QTextStream>
+#include <QThread>
 
 #include <algorithm>
 #include <unordered_set>
@@ -43,20 +45,58 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bi
     std::unordered_map<TxHash, unsigned, HashHasher> txHashToIndex; // since we know the size ahead of time here, we can set max_load_factor to 1.0 and avoid over-allocating the hash table
     txHashToIndex.max_load_factor(1.0);
     txHashToIndex.reserve(b.vtx.size());
-    std::optional<Rpa::PrefixTable> rpaPrefixTable;
-    const auto deferred = [&] {
-        if (enableRpa) rpaPrefixTable.emplace(); // construct empty ReadWrite table
-        // Ensure we serialize the table at function end
-        return Defer([&]{
-            if (enableRpa && rpaPrefixTable)
-                this->serializedRpaPrefixTable.emplace(rpaPrefixTable->serialize());
-            else
-                this->serializedRpaPrefixTable.reset();
+    static thread_local std::optional<CoTask> rpaTask;
+    std::optional<CoTask::Future> rpaFut; // NB: rpaFut will auto-wait for work (if any) to complete as part of its d'tor
+    if (enableRpa) {
+        if (!rpaTask) {
+            QString threadName;
+            if (QThread *curr = QThread::currentThread(); LIKELY(curr != nullptr)) threadName = curr->objectName();
+            else threadName = "???"; // this should never happen, but is here for defensive programming
+            // Create a new CoTask into TLS. It will be destructed when the current thread exits.
+            // The assumption here is that the DownloadBlocksTask is calling us and its threads stick around for a while
+            // as blocks are downloaded.
+            rpaTask.emplace(QString("RPA CoTask[%1]").arg(threadName));
+        }
+        // Do RPA-related hashing and processing in the rpaTask's thread in parallel (really pays off for 1-off blocks)
+        rpaFut = rpaTask->submitWork([&b, this]{
+            // Process the first 30 inputs for each non-coinbase block txn
+            Tic t0;
+            Rpa::PrefixTable pft;
+            size_t nProcessed = 0;
+            const size_t nTx = b.vtx.size();
+            size_t maxTxIdxSeen = 0;
+            for (size_t txIdx = 1 /* skip coinbase */; txIdx < nTx; maxTxIdxSeen = txIdx++) {
+                // If RPA enabled, serialize and hash the input itself, and update the prefix table to point to txIdx
+                // Limit: only the first 30 inputs are processed and indexed in this way, as per the RPA spec.
+                const auto &tx = *b.vtx[txIdx];
+                const size_t inMax = std::min<size_t>(tx.vin.size(), Rpa::InputIndexLimit);
+                for (size_t inpIdx = 0; inpIdx < inMax; ++inpIdx) {
+                    const auto &in = tx.vin[inpIdx];
+                    pft.addForPrefix(Rpa::Prefix(Rpa::Hash(in)), txIdx);
+                    ++nProcessed;
+                }
+            }
+            // Defensive programming -- ensure that our prefix table entries didn't overflow past Rpa::MaxTxIdx
+            if (UNLIKELY(maxTxIdxSeen > Rpa::MaxTxIdx))
+                // This should never happen -- a block with more than 16.7 million txns!
+                throw InternalError(QString("Block %1 too many txs (%2) and has overflowed the maximum txIdx we support"
+                                            " for RPA (%3). Please contact the developers and report this issue.")
+                                        .arg(height).arg(maxTxIdxSeen).arg(Rpa::MaxTxIdx));
+
+            // Aaand.. serialize the table; ready to be put into DB. This call may take a few msec for large tables.
+            this->serializedRpaPrefixTable.emplace(pft.serialize());
+
+            if constexpr (false) { // this is spammy, but set to `true` to get an idea of how expensive this processing is, per block
+                if (nProcessed >= 100)
+                    DebugM("Prefix table for block ", height, " processed ", nProcessed, " inputs in ", t0.msecStr(), " msec");
+            }
         });
-    }();
+    } else {
+        this->serializedRpaPrefixTable.reset();
+    }
 
     // run through all tx's, build inputs and outputs lists
-    size_t txIdx = 0, maxTxIdxSeen = 0;
+    size_t txIdx = 0;
     for (const auto & tx : b.vtx) {
         // copy tx hash data for the tx
         TxInfo info;
@@ -113,7 +153,6 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bi
             info.input0Index.emplace( unsigned(inputs.size()) );
 
         IONum maxIONumSeen = 0;
-        size_t inputNum = 0u;
         for (const auto & in : tx->vin) {
             // note we do place the coinbase tx here even though we ignore it later on -- we keep it to have accurate indices
             inputs.emplace_back(InputPt{
@@ -126,12 +165,7 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bi
             if (txIdx > 0 /* skip this part for coinbase tx */) {
                 // Update maxIONumSeen for every txn after coinbase (which always has 1 input)
                 if (in.prevout.GetN() > maxIONumSeen) maxIONumSeen = in.prevout.GetN();
-                // If RPA enabled, serialize and hash the input itself, and update the prefix table to point to txIdx
-                // Limit: only the first 30 inputs are processed and indexed in this way, as per the RPA spec.
-                if (rpaPrefixTable && inputNum < Rpa::InputIndexLimit)
-                    rpaPrefixTable->addForPrefix(Rpa::Prefix(Rpa::Hash(in)), txIdx);
             }
-            ++inputNum;
         }
 
         // Defensive programming -- we only support up to 24-bit IONum due to the database format we use.
@@ -144,15 +178,8 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bi
 
         estimatedThisSizeBytes += sizeof(info) + size_t(info.hash.size());
         txInfos.emplace_back(std::move(info));
-        maxTxIdxSeen = txIdx++;
+        ++txIdx;
     }
-
-    // Defensive programming -- ensure that our prefix table entries didn't overflow past Rpa::MaxTxIdx
-    if (UNLIKELY(rpaPrefixTable && maxTxIdxSeen > Rpa::MaxTxIdx))
-        // This should never happen -- a block with more than 16.7 million txns!
-        throw InternalError(QString("Block %1 too many txs (%2) and has overflowed the maximum txIdx we support for RPA (%3)."
-                                    " Please contact the developers and report this issue.")
-                                .arg(height).arg(maxTxIdxSeen).arg(Rpa::MaxTxIdx));
 
     // shrink inputs/outputs to fit now to conserve memory
     inputs.shrink_to_fit();

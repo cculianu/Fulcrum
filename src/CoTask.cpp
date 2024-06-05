@@ -48,10 +48,11 @@ void CoTask::thrFunc()
 {
     DebugM("CoTask thread started");
     const Tic t0;
+    qint64 nsecsProcessing = 0;
     unsigned ctr = 0;
-    Defer d([&t0, &ctr] {
-        DebugM("CoTask thread exited, ran ", ctr, Util::Pluralize(" job", ctr), ", elapsed total: ",
-               t0.secsStr(1), " secs");
+    Defer d([&t0, &ctr, &nsecsProcessing] {
+        DebugM("CoTask thread exited, ran ", ctr, Util::Pluralize(" job", ctr), ", processing time: ",
+               QString::number(nsecsProcessing / 1e9, 'f', 3), " secs, elapsed total: ", t0.secsStr(1), " secs");
     });
     std::unique_lock lock(mut);
     for (;;) {
@@ -66,7 +67,9 @@ void CoTask::thrFunc()
             std::promise<void> myprom;
             myprom.swap(prom);
             try {
+                Tic tStart;
                 mywork();
+                nsecsProcessing += tStart.nsec();
                 myprom.set_value();
             } catch (...) {
                 myprom.set_exception(std::current_exception());
