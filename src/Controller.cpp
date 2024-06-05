@@ -857,8 +857,8 @@ unsigned Controller::downloadTaskRecommendedThrottleTimeMsec(unsigned bnum) cons
         } else if (sm->net == BTC::ScaleNet) {
             if (bnum > 10'000)
                 maxBackLog = 10; // on ScaleNet, after block 10,000 -- we may start to hit big blocks.
-        } else if (sm->net == BTC::TestNet4) {
-            // nothing, use 1000 always, testnet4 has has 2MB blocks.
+        } else if (sm->net == BTC::TestNet4 || sm->net == BTC::ChipNet) {
+            // nothing, use 1000 always, testnet4 & chipnet have 2MB blocks.
         } else {
             // testnet
             if (bnum > 1'300'000) // beyond this height 32MB blocks may be common, esp. in the future
