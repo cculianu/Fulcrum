@@ -34,6 +34,7 @@
 #include <optional>
 #include <tuple>
 #include <unordered_set>
+#include <utility> // for std::move
 #include <vector>
 #include <variant>
 
@@ -53,17 +54,24 @@ static_assert(PrefixBitsMin > 0u && PrefixBitsMin <= PrefixBits);
 static_assert(PrefixBits >= 8u && PrefixBits <= 16u, "PrefixBits may not be less than 8 or greater than 16");
 static_assert(PrefixBytes * 8u == PrefixBits, "PrefixBits must be a multiple of 8");
 
+// We use a prevector here to avoid excessive allocations
+using HashBase = bitcoin::prevector<HashLen, std::byte>;
+
 /// An Rpa hash is a double sha256 hash of a serialized bitcoin::CTxIn
 /// Note that it may also be a short hash (<2 bytes) if being used to construct a sub-16-bit prefix.
-struct Hash : QByteArray {
-    using QByteArray::QByteArray;
+struct Hash : HashBase {
+    using HashBase::HashBase;
 
-    Hash(const Hash &o) : QByteArray(o) {}
-    explicit Hash(const QByteArray &o) : QByteArray(o) {}
+    explicit Hash(const QByteArray &o) { this->operator=(o); }
     // Serialize a CTxIn and take its hash
     explicit Hash(const bitcoin::CTxIn &in);
 
-    Hash & operator=(const QByteArray & o) noexcept { QByteArray::operator=(o); return *this; }
+    Hash & operator=(const QByteArray & o);
+    Hash & operator=(const HashBase &o) { HashBase::operator=(o); return *this; }
+    Hash & operator=(HashBase &&o) { HashBase::operator=(std::move(o)); return *this; }
+
+    QByteArray toHex() const;
+    QByteArray toByteArray() const;
 };
 
 /// Encapsulates a "prefix" which is used for searching the PrefixTable. A prefix is a 4 to 16 bit value. If it's

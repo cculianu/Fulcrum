@@ -19,7 +19,6 @@
 #include "Rpa.h"
 
 #include "BlockProcTypes.h"
-#include "BTC.h"
 #include "Common.h"
 #include "PackedNumView.h"
 #include "Span.h"
@@ -42,7 +41,23 @@ namespace {
 static constexpr bool VERBOSE = false; // set to true to see some perf./compression stats as we process stuff info in Debug() mode.
 } // namespace
 
-Hash::Hash(const bitcoin::CTxIn &txin) : QByteArray(BTC::HashInPlace(txin)) {}
+Hash & Hash::operator=(const QByteArray & o) {
+    resize_uninitialized(o.size());
+    std::memcpy(data(), o.data(), o.size());
+    return *this;
+}
+
+Hash::Hash(const bitcoin::CTxIn &txin) {
+    static_assert(bitcoin::CHash256::OUTPUT_SIZE == static_capacity());
+    resize_uninitialized(static_capacity());
+    bitcoin::SerializeHashInPlace(data(), txin);
+}
+
+QByteArray Hash::toHex() const {
+    return Util::ToHexFast(QByteArray::fromRawData(reinterpret_cast<const char *>(data()), size()));
+}
+
+QByteArray Hash::toByteArray() const { return QByteArray(reinterpret_cast<const char *>(data()), size()); }
 
 Prefix::Prefix(uint16_t num, uint8_t bits_)
     : bits{std::clamp<uint8_t>(bits_, PrefixBitsMin, PrefixBits)},
@@ -53,7 +68,7 @@ Prefix::Prefix(uint16_t num, uint8_t bits_)
 }
 
 Prefix::Prefix(const Hash & h) {
-    if (h.isEmpty()) throw std::invalid_argument("Provided Rpa::Hash is empty!");
+    if (h.empty()) throw std::invalid_argument("Provided Rpa::Hash is empty!");
     bits = h.size() == 1u ? 8u : PrefixBits;
     unsigned i;
     const unsigned nb =  std::min(PrefixBytes, size_t(h.size()));
@@ -268,6 +283,7 @@ QByteArray PrefixTable::serialize() const {
 
     if (toc.prefix0Offsets.size() < numUint8s)
         throw InternalError(QString("toc should have %1 rows, yet it has %2 rows! FIXME!").arg(numUint8s).arg(toc.prefix0Offsets.size()));
+
     for (size_t i = 0u; i < numRows(); ++i) {
         if (Prefix::pfxN<1>(i) == 0u) { // new prefix0 when prefix1 == 0x0
             // mark the offset of this new prefix0
@@ -281,6 +297,7 @@ QByteArray PrefixTable::serialize() const {
         bitcoin::WriteCompactSize(vw, rowData.size());
         vw << MakeUInt8Span(rowData);
     }
+
     // mark the offset of the TOC at position 2
     {
         bitcoin::GenericVectorWriter vw2(0, 0, dataBuf, /* pos = */ 2); // start writing at position 2 again
@@ -555,7 +572,7 @@ void test()
         // hash.
         Arr randNums;
         rgen->generate(randNums.begin(), randNums.end());
-        return Rpa::Hash(reinterpret_cast<const char *>(std::as_const(randNums).data()), HashLen);
+        return Rpa::Hash(reinterpret_cast<const std::byte *>(std::as_const(randNums).data()), reinterpret_cast<const std::byte *>(std::as_const(randNums).data()) + HashLen);
     };
 
     using TxIdx = Rpa::TxIdx;
@@ -810,13 +827,13 @@ void test()
                 const Rpa::Hash rHash{input};
                 const Rpa::Hash rHashSlow = serializeInputSlow(input);
                 if (rHash != rHashSlow) throw Exception("Fast serializeInput does not match the slow version!");
-                const auto prefix = Rpa::Prefix(Rpa::Hash{rHash.left(prefixBits / 8u)});
+                const auto prefix = Rpa::Prefix(Rpa::Hash{rHash.toByteArray().left(prefixBits / 8u)});
                 const auto prefix2 = Rpa::Prefix::fromHex(rHash.toHex().left(prefixBits / 4u)).value();
                 if (prefix != prefix2 || prefix.toHex() != prefix2.toHex()) throw Exception(QString("Prefix equality error: %1 != %2").arg(prefix.toHex(), prefix2.toHex()));
                 QByteArray prefixHex = prefix.toHex();
-                const auto rHashHex = Util::ToHexFast(rHash);
+                const auto rHashHex = rHash.toHex();
                 Debug() << "   Txid: " << tx.GetId().ToString() << ":" << n
-                        << " Rpa::Hash: " << Util::ToHexFast(rHash)
+                        << " Rpa::Hash: " << rHash.toHex()
                         << " Prefix: " << prefixHex
                         << " Prefix bits: " << prefix.getBits();
                 if (! rHashHex.startsWith(prefixHex))
@@ -928,8 +945,8 @@ void test()
                 const auto prefix = Rpa::Prefix(hash);
                 pft.addForPrefix(prefix, txIdx);
                 bool ok;
-                const auto verifyPrefix = hash.left(2).toHex().toUInt(&ok, 16 /* base 16 */);
-                if (!ok) throw Exception(QString("Unexpected -- unable to parse %1 as hex").arg(QString(hash.left(2).toHex())));
+                const auto verifyPrefix = hash.toByteArray().left(2).toHex().toUInt(&ok, 16 /* base 16 */);
+                if (!ok) throw Exception(QString("Unexpected -- unable to parse %1 as hex").arg(QString(hash.toByteArray().left(2).toHex())));
                 if (auto & r = vt[verifyPrefix]; r.empty() || r.back() != txIdx) {
                     r.push_back(txIdx);
                     ++elementCount;
