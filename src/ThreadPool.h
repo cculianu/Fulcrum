@@ -99,7 +99,7 @@ public:
     int extantJobs() const noexcept;
     /// Returns the maximal value ExtantJobs() has ever reached during the lifetime of this application.
     int extantJobsMaxSeen() const noexcept;
-    /// Returns the maximum number of extant jobs before failure is unconditionally asserted on SubmitWork (currently the default is 1000)
+    /// Returns the maximum number of extant jobs before failure is unconditionally asserted on SubmitWork (currently the default is 15000)
     int extantJobLimit() const noexcept;
     /// Sets the extant job limit.  This number cannot be set below 10, doing so returns false.
     bool setExtantJobLimit(int limit) noexcept;
