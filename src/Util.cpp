@@ -60,6 +60,7 @@
 #include <QHostAddress>
 
 #include <cctype>
+#include <cstddef>             // for std::byte, offsetof()
 #include <cstring>             // for strerror
 #include <iostream>
 #include <mutex>
@@ -191,6 +192,52 @@ namespace Util {
             nProcs = unsigned(sysconf(_SC_NPROCESSORS_ONLN));
         }
         return nProcs.load() ? nProcs.load() : 1;
+    }
+#elif defined(Q_OS_WINDOWS)
+    unsigned getNVirtualProcessors()
+    {
+        static std::atomic_uint nProcs = 0;
+        if (auto val = nProcs.load()) return val;
+
+        SYSTEM_INFO system_info = {};
+        GetSystemInfo(&system_info);
+        const auto nVirtProc = static_cast<unsigned>(system_info.dwNumberOfProcessors);
+        return nProcs = std::max(nVirtProc, 1u);
+    }
+    unsigned getNPhysicalProcessors()
+    {
+        static std::atomic_uint nProcs = 0;
+        if (auto val = nProcs.load()) return val;
+
+        // from: https://stackoverflow.com/questions/150355/programmatically-find-the-number-of-cores-on-a-machine
+        DWORD length = 0;
+        auto res = GetLogicalProcessorInformationEx(RelationProcessorCore, nullptr, &length);
+        if (res || GetLastError() != ERROR_INSUFFICIENT_BUFFER)
+            return getNVirtualProcessors(); // fallback
+
+        const std::size_t align = alignof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX);
+        auto buffer = std::make_unique_for_overwrite<std::byte[]>(size_t(length) + align);
+        uintptr_t ptrval = reinterpret_cast<uintptr_t>(buffer.get());
+        if (const auto rem = ptrval % align; rem) ptrval += align - rem; // ensure alignment
+        PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX info =
+            reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(reinterpret_cast<std::byte *>(ptrval));
+
+        res = GetLogicalProcessorInformationEx(RelationProcessorCore, info, &length);
+        if (!res)
+            return getNVirtualProcessors(); // fallback
+
+        unsigned nPhysProc = 0;
+        DWORD offset = 0;
+        const std::byte *buf = reinterpret_cast<std::byte *>(info);
+        while (offset < length) {
+            const std::byte *punaligned = buf + offset + offsetof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX, Size);
+            decltype(std::declval<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>().Size) len{};
+            std::memcpy(&len, punaligned, sizeof(len));
+            if (!len) break; // prevent infinite loops
+            offset += len;
+            ++nPhysProc;
+        }
+        return nProcs = std::max(nPhysProc, 1u);
     }
 #else
     unsigned getNVirtualProcessors() { return std::thread::hardware_concurrency(); }
