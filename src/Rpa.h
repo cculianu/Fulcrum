@@ -23,6 +23,8 @@
 #include "PackedNumView.h"
 #include "Util.h"
 
+#include "bitcoin/prevector.h"
+
 #include <QByteArray>
 
 #include <algorithm>

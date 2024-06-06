@@ -54,10 +54,12 @@ Hash::Hash(const bitcoin::CTxIn &txin) {
 }
 
 QByteArray Hash::toHex() const {
-    return Util::ToHexFast(QByteArray::fromRawData(reinterpret_cast<const char *>(data()), size()));
+    return Util::ToHexFast(QByteArray::fromRawData(reinterpret_cast<const char *>(data()), static_cast<QByteArray::size_type>(size())));
 }
 
-QByteArray Hash::toByteArray() const { return QByteArray(reinterpret_cast<const char *>(data()), size()); }
+QByteArray Hash::toByteArray() const {
+    return QByteArray(reinterpret_cast<const char *>(data()), static_cast<QByteArray::size_type>(size()));
+}
 
 Prefix::Prefix(uint16_t num, uint8_t bits_)
     : bits{std::clamp<uint8_t>(bits_, PrefixBitsMin, PrefixBits)},

@@ -146,7 +146,7 @@ namespace {
     template <typename Object,
               std::enable_if_t<!std::is_pointer_v<std::remove_cv_t<Object>>, int> = 0>
     QByteArray ShallowTmp(const Object *mem, size_t size = sizeof(Object)) {
-        return QByteArray::fromRawData(reinterpret_cast<const char *>(mem), int(size));
+        return QByteArray::fromRawData(reinterpret_cast<const char *>(mem), static_cast<QByteArray::size_type>(size));
     }
 
     /// Construct a QByteArray from a deep copy of any object's memory area. Slower than ShallowTmp above but 100% safe
@@ -155,7 +155,7 @@ namespace {
     template <typename Object,
               std::enable_if_t<!std::is_pointer_v<std::remove_cv_t<Object>>, int> = 0>
     QByteArray DeepCpy(const Object *mem, size_t size = sizeof(Object)) {
-        return QByteArray(reinterpret_cast<const char *>(mem), int(size));
+        return QByteArray(reinterpret_cast<const char *>(mem), static_cast<QByteArray::size_type>(size));
     }
 
     /// Serialize a simple value such as an int directly, without using the space overhead that QDataStream imposes.
