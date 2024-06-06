@@ -341,7 +341,7 @@ namespace Util {
                     seed = uint64_t(gen->generate64());
                 }
             }
-            template <typename IntType, typename = std::enable_if_t<std::is_integral_v<IntType>>>
+            template <std::integral IntType>
             IntType get() const { return static_cast<IntType>(seed); }
         };
 

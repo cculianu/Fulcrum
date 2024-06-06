@@ -26,6 +26,7 @@
 #include <atomic>
 #include <cassert>
 #include <chrono>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -263,7 +264,10 @@ namespace Util {
         std::shuffle(begin, end, std::default_random_engine(seed));
     }
 
-    template <typename T, typename std::enable_if_t<std::is_standard_layout_v<T> && std::is_trivial_v<T> && sizeof(T) == 1, int> = 0>
+    template<typename T>
+    concept ByteLike = std::is_standard_layout_v<T> && std::is_trivial_v<T> && sizeof(T) == 1 && !std::is_same_v<std::remove_cv_t<T>, bool>;
+
+    template <ByteLike T>
     void getRandomBytes(T *buf, std::size_t n) {
         int ctr = 0;
         quint64 bits = 0;
@@ -555,8 +559,10 @@ namespace Util {
         return s.length() > limit ? s.left(limit) + "..." : s;
     }
 
-    template <typename Numeric,
-              std::enable_if_t<std::is_arithmetic_v<Numeric>, int> = 0>
+    template <typename T>
+    concept Arithmetic = std::is_arithmetic_v<T>;
+
+    template <Arithmetic Numeric>
     QString Pluralize(const QString &wordIn, Numeric n) {
         QString ret;
         {
@@ -612,15 +618,16 @@ namespace Util {
     /// - the string has an even number of characters (or is empty)
     bool IsValidHex(const QByteArray &maybeHexStr);
 
+    /// A concept for any container of QByteArray
+    template <typename Container>
+    concept QBAContainer = std::is_base_of_v<QByteArray, typename Container::value_type>;
+
     /// For each item in a QByteArray Container, hex encode each item using Util::ToHexFast().
-    template <typename Container,
-              std::enable_if_t<std::is_base_of_v<QByteArray, typename Container::value_type>, int> = 0>
+    template <QBAContainer Container>
     void hexEncodeEachItem(Container &c) { for (auto & item : c) item = Util::ToHexFast(item); }
     /// For each item in a QByteArray Container, hex decode each item using Util::ParseHexFast().
-    template <typename Container,
-              std::enable_if_t<std::is_base_of_v<QByteArray, typename Container::value_type>, int> = 0>
+    template <QBAContainer Container>
     void hexDecodeEachItem(Container &c) { for (auto & item : c) item = Util::ParseHexFast(item); }
-
 
     /// Call lambda() in the thread context of obj's thread. Will block until completed.
     /// If timeout_ms is not specified or negative, will block forever until lambda returns,
@@ -672,8 +679,7 @@ namespace Util {
     /// Convenience for just setting up a QTimer::singleShot on an object, calling a lambda as the timeout.
     /// By default if when_ms is 0, the object will have the lambda invoked in its thread as soon as it
     /// returns to the event loop.  Always returns immediately.
-    template <typename VoidFuncT,
-    std::enable_if_t<std::is_invocable_v<VoidFuncT>, int> = 0>
+    template <std::invocable VoidFuncT>
     void AsyncOnObject(const QObject *obj, const VoidFuncT & lambda, unsigned when_ms=0, Qt::TimerType ttype = Qt::TimerType::CoarseTimer) {
         QTimer::singleShot(int(when_ms), ttype, const_cast<QObject *>(obj), lambda);
     }
@@ -708,10 +714,9 @@ namespace Util {
     ///    TimeoutException -- The method did not return a result in the timeout period specified.
     ///    ThreadNotRunning -- The target object's thred is not running.
     template <typename RET=void, typename QOBJ, typename METHOD, typename ... Args>
-    RET CallOnObjectWithTimeout(int timeout_ms, QOBJ obj, METHOD method, Args && ...args) {
+    requires (std::is_base_of_v<QObject, QOBJ> && std::is_member_function_pointer_v<METHOD>)
+    RET CallOnObjectWithTimeout(int timeout_ms, QOBJ *obj, METHOD method, Args && ...args) {
         assert(obj);
-        static_assert(std::is_base_of<QObject, typename std::remove_pointer<QOBJ>::type>::value, "Not a QObject subclass");
-        static_assert(std::is_member_function_pointer<METHOD>::value, "Not a member function pointer");
         if (QThread::currentThread() == obj->thread()) {
             // direct call to save on a copy c'tor
             return (obj->*method)(std::forward<Args>(args)...);
@@ -726,7 +731,7 @@ namespace Util {
     /// Convenience method -- Identical CallOnObjectWithTimeout above except doesn't ever throw, instead returns an
     /// optional with no value on failure/timeout. Does not work if the RET type is void (optional<void> is disallowed).
     template <typename RET, typename QOBJ, typename METHOD, typename ... Args>
-    std::optional<RET> CallOnObjectWithTimeoutNoThrow(int timeout_ms, QOBJ obj, METHOD method, Args && ...args) {
+    std::optional<RET> CallOnObjectWithTimeoutNoThrow(int timeout_ms, QOBJ *obj, METHOD *method, Args && ...args) {
         std::optional<RET> ret;
         try {
             ret.emplace( CallOnObjectWithTimeout<RET>(timeout_ms, obj, method, std::forward<Args>(args)...) );
@@ -739,14 +744,14 @@ namespace Util {
     /// Convenience method -- Identical CallOnObjectWithTimeout  except uses an infinite timeout, so a valid result is always returned.
     /// Note: May still throw ThreadNotRunning (if thread for target object is not running).
     template <typename RET=void, typename QOBJ, typename METHOD, typename ... Args>
-    RET CallOnObject(QOBJ obj, METHOD method, Args && ...args) {
+    RET CallOnObject(QOBJ *obj, METHOD *method, Args && ...args) {
         return CallOnObjectWithTimeout<RET>(-1, obj, method, std::forward<Args>(args)...);
     }
 
     /// Convenience method -- Identical CallOnObject above except doesn't ever throw, instead returns an optional with
     /// no value on failure/timeout.  Does not work if the RET type is void (optional<void> is disallowed).
     template <typename RET, typename QOBJ, typename METHOD, typename ... Args>
-    std::optional<RET> CallOnObjectNoThrow(QOBJ obj, METHOD method, Args && ...args) {
+    std::optional<RET> CallOnObjectNoThrow(QOBJ *obj, METHOD *method, Args && ...args) {
         std::optional<RET> ret;
         try {
             ret.emplace( CallOnObject<RET>(obj, method, std::forward<Args>(args)...) );
@@ -785,7 +790,11 @@ namespace Util {
     /// Returns a tuple of: [number_of_collisions_total, largest_single_bucket, median_bucket_size, median_nonzero_bucket_size]
     /// Note: this is slow-ish so it should be used for debug purposes only and not in a critical path.
     template<typename UnorderedSetOrMap>
-    auto bucketStats(const UnorderedSetOrMap &m) -> std::tuple<decltype(std::declval<UnorderedSetOrMap>().bucket_size(0)), std::size_t, std::size_t, std::size_t> /* rely on SFINAE here */ {
+    requires requires (UnorderedSetOrMap t) {
+        {t.bucket_size(0)} -> std::convertible_to<std::size_t>;
+        {t.bucket_count()} -> std::convertible_to<std::size_t>;
+    }
+    auto bucketStats(const UnorderedSetOrMap &m) -> std::tuple<std::size_t, std::size_t, std::size_t, std::size_t> {
         std::size_t collisions{}, max{};
         std::vector<std::size_t> sizes;
         sizes.reserve(m.bucket_count());
@@ -869,7 +878,7 @@ namespace Util {
             }
             // Append an integer converted to decimal string. If there is no room for the full decimal representation
             // of the integer, including possible minus sign, the decimal number will be truncated at the end.
-            template <typename T, typename std::enable_if_t<std::is_integral_v<T>, int> = 0>
+            template <std::integral T>
             SBuf & append(T n) noexcept {
                 /* Note: ideally we'd just use C++17 std::to_chars here -- however on some compilers we target, the
                  * implementation is missing from libstdc++!  So.. we must roll our own here... */
@@ -996,8 +1005,7 @@ namespace Util {
 /// This is a tiny performance optimization as it avoids a std::function wrapper. You can, however, also use a
 /// std::function, with this class -- just be sure it's valid (operator bool() == true), since we don't check for
 /// validity on std::function before invoking.
-template <typename VoidFuncT = Util::VoidFunc,
-          std::enable_if_t<std::is_invocable_v<VoidFuncT>, int> = 0>
+template <std::invocable VoidFuncT = Util::VoidFunc>
 struct Defer
 {
     using VoidFunc = VoidFuncT;
@@ -1039,42 +1047,36 @@ struct RAII : public Defer<> {
     RAII(const VoidFunc & initFunc, VoidFunc && cleanupFunc) : Defer(std::move(cleanupFunc)) { if (initFunc) initFunc(); valid = bool(cleanupFunc); }
 };
 
-
 /// Used to time code. Takes a timestamp (via getTimeNS) when it is constructed. Provides various utility
 /// methods to read back the elapsed time since construction.
 class Tic {
     static constexpr auto Invalid = std::numeric_limits<qint64>::min();
     qint64 t0 = Util::getTimeNS(), tf = Invalid;
     static qint64 now() noexcept { return Util::getTimeNS(); }
-    template <typename T>
-    using T_if_is_arithmetic = std::enable_if_t<std::is_arithmetic_v<T>, T>; // SFINAE evaluates to T if T is an arithmetic type
-    template <typename T>
-    T_if_is_arithmetic<T> el(T factor) const noexcept {
+    template <Util::Arithmetic T>
+    T el(T factor) const noexcept {
         return T((when() - t0) / factor);
     }
     qint64 when() const { return tf != Invalid ? tf : now(); }
 
 public:
     /// Return the time since construction in seconds (note the default return type here is double)
-    template <typename T = double>
-    T_if_is_arithmetic<T>
-    /* T */ secs() const noexcept { return el(T(1e9)); }
+    template <Util::Arithmetic T = double>
+    T  secs() const noexcept { return el(T(1e9)); }
 
     /// Return the number of seconds formatted as a floating point string
     QString secsStr(int precision = 3) const { return QString::number(secs(), 'f', precision); }
 
     /// " milliseconds (note the default return type here is qint64)
-    template <typename T = qint64>
-    T_if_is_arithmetic<T>
-    /* T */ msec() const noexcept { return el(T(1e6)); }
+    template <Util::Arithmetic T = qint64>
+    T msec() const noexcept { return el(T(1e6)); }
 
     /// Return the number of milliseconds formatted as a floating point string
     QString msecStr(int precision = 3) const { return QString::number(msec<double>(), 'f', precision); }
 
     /// " microseconds (note the default return type here is qint64)
-    template <typename T = qint64>
-    T_if_is_arithmetic<T>
-    /* T */ usec() const noexcept { return el(T(1e3)); }
+    template <Util::Arithmetic T = qint64>
+    T usec() const noexcept { return el(T(1e3)); }
 
     /// Return the number of microseconds formatted as a floating point string
     QString usecStr(int precision = 3) const { return QString::number(usec<double>(), 'f', precision); }

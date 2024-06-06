@@ -391,7 +391,7 @@ public:
 
 private:
     /// Generic helper for parsing arithmetic values (reduces boilerplate code)
-    template <typename Numeric, std::enable_if_t<std::is_arithmetic_v<Numeric>, int> = 0>
+    template <Util::Arithmetic Numeric>
     Numeric genericParseArithmeticValue(const QString &name, Numeric def, bool *parsedOk, Qt::CaseSensitivity) const;
 
     QMultiHash<QString, QString> map; ///< name/value pairs read/parsed

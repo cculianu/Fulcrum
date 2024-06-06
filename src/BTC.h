@@ -88,10 +88,10 @@ namespace BTC
     }
     /// Deserialize to a pre-allocated bitcoin object such as bitcoin::CBlock, bitcoin::CBlockHeader,
     /// bitcoin::CMutableTransaction, etc
-    template <typename BitcoinObject,
-              /// NB: This in-place Deserialization does *NOT* work with CTransaction because if has const-fields.
-              /// (use the non-in-place specialization instead)
-              std::enable_if_t<!std::is_same_v<BitcoinObject, bitcoin::CTransaction>, int> = 0 >
+    template <typename BitcoinObject>
+    /// NB: This in-place Deserialization does *NOT* work with CTransaction because if has const-fields.
+    /// (use the non-in-place specialization instead)
+    requires (!std::is_same_v<std::remove_cvref_t<BitcoinObject>, bitcoin::CTransaction>)
     void Deserialize(BitcoinObject &thing, const QByteArray &bytes, int pos = 0, bool allowSegWit = false,
                      bool allowMW = false, bool allowCashTokens = true, bool throwIfJunkAtEnd = false)
     {
@@ -114,16 +114,10 @@ namespace BTC
         return ret;
     }
 
-    template <typename BitcoinObject>
-    struct is_block_or_tx {
-        using BO = std::decay_t<BitcoinObject>;
-        static constexpr bool value = std::is_base_of_v<bitcoin::CBlock, BO>
-                                      || std::is_same_v<bitcoin::CTransaction, BO>
-                                      || std::is_same_v<bitcoin::CMutableTransaction, BO>;
-    };
-
-    template <typename BitcoinObject>
-    inline constexpr bool is_block_or_tx_v = is_block_or_tx<BitcoinObject>::value;
+    template <typename BO>
+    concept BlockOrTx = std::is_base_of_v<bitcoin::CBlock, std::decay_t<BO>>
+                        || std::is_same_v<bitcoin::CTransaction, std::decay_t<BO>>
+                        || std::is_same_v<bitcoin::CMutableTransaction, std::decay_t<BO>>;
 
     /// Template specialization for CTransaction which has const fields and works a little differently
     template <> inline bitcoin::CTransaction Deserialize(const QByteArray &ba, int pos, bool allowSegWit, bool allowMW,
@@ -135,16 +129,14 @@ namespace BTC
     }
 
     /// Convenience to deserialize segwit object (block or tx) (Core only)
-    template <typename BitcoinObject>
-    std::enable_if_t<is_block_or_tx_v<BitcoinObject>, BitcoinObject>
-    /* BitcoinObject */ DeserializeSegWit(const QByteArray &ba, int pos = 0) {
+    template <BlockOrTx BitcoinObject>
+    BitcoinObject DeserializeSegWit(const QByteArray &ba, int pos = 0) {
         return Deserialize<BitcoinObject>(ba, pos, /* segwit= */ true, /* mw= */ false, /* cashtokens= */false);
     }
 
     /// Convenience to serialize segwit object (block or tx) (Core only)
-    template <typename BitcoinObject>
-    std::enable_if_t<is_block_or_tx_v<BitcoinObject>, QByteArray>
-    /* QByteArray */ SerializeSegWit(const BitcoinObject &bo, int pos = -1) {
+    template <BlockOrTx BitcoinObject>
+    QByteArray SerializeSegWit(const BitcoinObject &bo, int pos = -1) {
         return Serialize<BitcoinObject>(bo, pos, true, false);
     }
 
@@ -229,10 +221,8 @@ namespace BTC
     /// Trivial hasher for sha256, rmd160, etc hashed byte arrays (for use with std::unordered_map,
     /// std::unordered_set, etc) -- just returns the middle 8 bytes reinterpreted as size_t since hashed data is
     /// already randomized.
-    template <typename BytesT>
+    template <std::convertible_to<ByteView> BytesT>
     struct GenericTrivialHashHasher {
-        static_assert(std::is_convertible_v<BytesT, ByteView>, "Assumption here is that BytesT has an implicit conversion to ByteView");
-
         std::size_t operator()(const ByteView &bv) const noexcept {
             if (const auto bvsz = bv.size(); LIKELY(bvsz >= sizeof(std::size_t))) {
                 // common case, just return the middle 8 bytes reinterpreted as size_t since this is already

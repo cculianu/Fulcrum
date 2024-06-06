@@ -360,7 +360,7 @@ double ConfigFile::doubleValue(const QString & name, double def, bool *parsedOk,
     return genericParseArithmeticValue(name, def, parsedOk, cs);
 }
 
-template <typename Numeric, std::enable_if_t<std::is_arithmetic_v<Numeric>, int> >
+template <Util::Arithmetic Numeric>
 Numeric ConfigFile::genericParseArithmeticValue(const QString &name, Numeric def, bool *parsedOk, Qt::CaseSensitivity cs) const
 {
     auto Convert = [](QString val, bool *parsedOk) -> auto {
