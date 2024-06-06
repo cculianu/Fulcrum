@@ -24,12 +24,12 @@
 
 #include <algorithm>
 #include <array>
+#include <concepts> // for std::integral
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
 #include <string_view>
 #include <type_traits>
-#include <utility>
 
 /// A pointer & size pair... intended to be used to encapsulate arguments to
 /// functions that accept generic byte blobs (such as a hasher, bloom filter,
@@ -45,7 +45,7 @@
 /// the ByteView instance.
 class ByteView
 {
-    template <typename CharT, typename T, typename = std::enable_if_t<sizeof(CharT) == 1>>
+    template <typename CharT, typename T> requires (sizeof(CharT) == 1 && !std::is_same_v<CharT, bool>)
     static const CharT *ptr_cast(const T *t) noexcept {
         // This single line of code here prevents all the methods of this class from being constexpr :/
         return reinterpret_cast<const CharT *>(t);
@@ -85,21 +85,21 @@ public:
     }
 
     /// Construct a ByteView from any POD data item or C array (but not a std::array)
-    template<typename T, std::enable_if_t<is_pod_v<T> && !std::is_pointer_v<T> && !is_std_array_v<T>
-                                          && std::has_unique_object_representations_v<T>
-                                          && (!std::is_array_v<T> || !std::is_pointer_v<std::remove_all_extents_t<T>>), int> = 0>
+    template<typename T> requires (is_pod_v<T> && !std::is_pointer_v<T> && !is_std_array_v<T>
+                                   && std::has_unique_object_representations_v<T>
+                                   && (!std::is_array_v<T> || !std::is_pointer_v<std::remove_all_extents_t<T>>))
     ByteView(const T &t) noexcept
         : ByteView(ptr_cast<std::byte>(&t), sizeof(t)) {}
 
     /// Construct a ByteView from any container that offers a .data() method that is a pointer to POD data,
     /// and a .size() method -- such as QByteArray, std::vector, QString, std::array, etc.
-    template<typename T,
-             std::enable_if_t<std::is_same_v<QString, T> /* special case for QString */ ||
-                              (std::is_pointer_v<decltype(std::declval<const T>().data())>
-                               && std::is_integral_v<decltype(std::declval<const T>().size())>
-                               && is_pod_v<std::remove_pointer_t<decltype(std::declval<const T>().data())>>
-                               && std::has_unique_object_representations_v<std::remove_pointer_t<decltype(std::declval<const T>().data())>>
-                               && !std::is_pointer_v<std::remove_pointer_t<decltype(std::declval<const T>().data())>>), int> = 0>
+    template<typename T>
+        requires std::is_same_v<QString, T> /* special case for QString */ ||
+        requires(T t) { requires std::is_pointer_v<decltype(t.data())>;
+                        { t.size() } -> std::integral;
+                        requires is_pod_v<std::remove_pointer_t<decltype(t.data())>>;
+                        requires std::has_unique_object_representations_v<std::remove_pointer_t<decltype(t.data())>>;
+                        requires !std::is_pointer_v<std::remove_pointer_t<decltype(t.data())>>; }
     ByteView(const T &t) noexcept
         : ByteView(ptr_cast<std::byte>(t.data()), t.size() * sizeof(*t.data())) {
         static_assert (!std::is_same_v<T, QString>
@@ -125,7 +125,11 @@ public:
 
     constexpr int compare(const ByteView &o) const noexcept {
         auto p = begin(), e = end(), op = o.begin(), oe = o.end();
-        if (data() == o.data() && size() == o.size()) return 0; // fast-path for same ptr & size
+        if (data() == o.data()) { // fast-path for same ptr
+            if (size() == o.size()) return 0;
+            else if (size() < o.size()) return -1;
+            return 1;
+        }
         while (p != e && op != oe) {
             if (const int diff = static_cast<int>(*p++) - static_cast<int>(*op++); diff != 0)
                 return diff < 0 ? -1 : 1;
@@ -138,7 +142,7 @@ public:
     // Operators
     constexpr bool operator==(const ByteView &o) const noexcept {
         if (size() != o.size()) return false;
-        if (data() == o.data()) return true; // fast-path for same ptr & size
+        if (data() == o.data()) return true; // fast-path for same ptr
         auto p = begin(), e = end(), op = o.begin();
         while (p != e) {
             if (*p++ != *op++) return false;
@@ -146,7 +150,7 @@ public:
         return true;
     }
 
-    constexpr bool operator!=(const ByteView &o) const noexcept { return !(*this == o); }
+    constexpr bool operator!=(const ByteView &o) const noexcept { return ! this->operator==(o); }
 
     constexpr bool operator<(const ByteView &o) const noexcept { return compare(o) < 0; }
     constexpr bool operator<=(const ByteView &o) const noexcept { return compare(o) <= 0; }
