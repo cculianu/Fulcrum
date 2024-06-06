@@ -509,18 +509,20 @@ void App::parseArgs()
         QString("filename")
     },
     {
-       "fast-sync",
+       "utxo-cache",
        QString("If specified, " APPNAME " will use a UTXO Cache that consumes extra memory but syncs up to to 2X"
                " faster. To use this feature, you must specify a memory value in MB to allocate to the cache. It is"
-               " recommended that you give this facility at least 2000 MB for it to really pay off, although any amount"
-               " of memory given (minimum 200 MB) should be beneficial. Note that this feature is currently"
+               " recommended that you give this facility at least 500 MB for it to really pay off, although any amount"
+               " of memory given (minimum 64 MB) should be beneficial. Note that this feature is currently"
                " experimental and the tradeoffs are: it is faster because it avoids redundant disk I/O, however, this"
                " comes at the price of considerable memory consumption as well as a sync that is less resilient to"
                " crashes mid-sync. If the process is killed mid-sync, the database may become corrupt and lose UTXO"
-               " data. Use this feature only if you are 100% sure that won't happen during a sync. Specify as much"
-               " memory as you can, in MB, here, e.g.: 3000 to allocate 3000 MB (3 GB). The default is off (0). This"
-               " option only takes effect on initial sync, otherwise this option has no effect.\n"),
+               " data. Use this feature only if you are 100% sure that won't happen during a sync. The default is off"
+               " (0). This option only takes effect on initial sync, otherwise this option has no effect.\n"),
        QString("MB"),
+    },
+    {
+       "fast-sync", QString("<hidden>"), QString("MB")
     },
     {
         "rpa",
@@ -814,10 +816,10 @@ void App::parseArgs()
     // parse bitcoind - conf.value is always unset if parser.value is set, hence this strange constrcution below (parser.value takes precedence)
     options->bdRPCInfo.hostPort = Util::ParseHostPortPair(conf.value("bitcoind", parser.value("b")));
     // --bitcoind-tls
-    if ((options->bdRPCInfo.tls = parser.isSet("bitcoind-tls") || conf.boolValue("bitcoind-tls"))) {
+    if ((options->bdRPCInfo.tls = parser.isSet("bitcoind-tls") || conf.boolValue("bitcoind_tls", conf.boolValue("bitcoind-tls")))) {
         // check that Qt actually supports SSL since we now know that we require it to proceed
         checkSupportsSsl();
-        Util::AsyncOnObject(this, []{ Debug() << "config: bitcoind-tls = true"; });
+        Util::AsyncOnObject(this, []{ Debug() << "config: bitcoind_tls = true"; });
     }
     if (specifiedRpcCookie) {
         options->bdRPCInfo.setCookieFile(conf.value("rpccookie", parser.value("K")));
@@ -871,8 +873,8 @@ void App::parseArgs()
         checkSupportsSsl();
         QString cert    = conf.value("cert",     parser.value("c")),
                 key     = conf.value("key",      parser.value("k")),
-                wssCert = conf.value("wss-cert", parser.value("wss-cert")),
-                wssKey  = conf.value("wss-key",  parser.value("wss-key"));
+                wssCert = conf.value("wss_cert", conf.value("wss-cert", parser.value("wss-cert"))),
+                wssKey  = conf.value("wss_key",  conf.value("wss-key", parser.value("wss-key")));
         // ensure --cert/--key and --wss-cert/--wss-key pairs are both specified together (or not specified at all)
         for (const auto & [c, k, txt] : { std::tuple(cert, key, static_cast<const char *>("`cert` and `key`")),
                                           std::tuple(wssCert, wssKey, static_cast<const char *>("`wss-cert` and `wss-key`")) }) {
@@ -1239,9 +1241,9 @@ void App::parseArgs()
         });
     }
 
-    // parse --ts-format or ts-format= from conf (ts_format also supported from conf)
+    // parse --ts-format or ts_format= from conf (ts-format also supported from conf)
     if (auto fmt = parser.value("ts-format");
-            !fmt.isEmpty() || !(fmt = conf.value("ts-format")).isEmpty() || !(fmt = conf.value("ts_format")).isEmpty()) {
+            !fmt.isEmpty() || !(fmt = conf.value("ts_format", conf.value("ts-format"))).isEmpty()) {
         fmt = fmt.toLower().trimmed();
         if (fmt == "uptime" || fmt == "abs" || fmt == "abstime")
             options->logTimestampMode = Options::LogTimestampMode::Uptime;
@@ -1252,8 +1254,8 @@ void App::parseArgs()
         else if (fmt == "none")
             options->logTimestampMode = Options::LogTimestampMode::None;
         else
-            throw BadArgs(QString("ts-format: unrecognized value \"%1\"").arg(fmt));
-        Util::AsyncOnObject(this, [this]{ DebugM("config: ts-format = ", options->logTimestampModeString()); });
+            throw BadArgs(QString("ts_format: unrecognized value \"%1\"").arg(fmt));
+        Util::AsyncOnObject(this, [this]{ DebugM("config: ts_format = ", options->logTimestampModeString()); });
     }
 #ifdef Q_OS_UNIX
     else if (options->syslogMode) {
@@ -1262,8 +1264,8 @@ void App::parseArgs()
     }
 #endif
 
-    // --tls-disallow-deprecated from CLI and/or tls-disallow-deprecated from conf
-    if (parser.isSet("tls-disallow-deprecated") || conf.boolValue("tls-disallow-deprecated")) {
+    // --tls-disallow-deprecated from CLI and/or tls_disallow_deprecated from conf (tls-disallow-deprecated also supported from conf)
+    if (parser.isSet("tls-disallow-deprecated") || conf.boolValue("tls_disallow_deprecated", conf.boolValue("tls-disallow-deprecated"))) {
         options->tlsDisallowDeprecated = true;
         Util::AsyncOnObject(this, []{ Log() << "TLS restricted to non-deprecated versions (version 1.2 or above)"; });
     }
@@ -1352,22 +1354,37 @@ void App::parseArgs()
         options->dumpScriptHashes = outFile; // we do no checking here, but Controller::startup will throw BadArgs if it cannot open this file for writing.
     }
 
-    // CLI: --fast-sync (experimental)
-    // conf: fast-sync
-    if (const bool pset = parser.isSet("fast-sync"); pset || conf.hasValue("fast-sync")) {
+    // CLI: --utxo-cache (experimental) (deprecated name: --fast-sync)
+    // conf: utxo_cache/utxo-cache (or fast-sync, which is the deprecated name)
+    if (const auto & [key, strVal, isCLI] = [&conf, &parser]() -> std::tuple<QString, QString, bool> {
+            for (const QString k : {"utxo-cache", "utxo_cache", "fast-sync"}) {
+                if (!k.contains(QChar('_')) && parser.isSet(k)) return {k, parser.value(k), true};
+                else if (conf.hasValue(k)) return {k, conf.value(k), false};
+            }
+            return {};
+        }(); !key.isEmpty())
+    {
+        if (key == "fast-sync") {
+            // Warn about deprecated --fast-sync option
+            if (isCLI)
+                Warning() << "The CLI argument --fast-sync has been renamed to --utxo-cache. The old argument"
+                             " --fast-sync is deprecated. In the future, please use --utxo-cache instead.";
+            else
+                Warning() << "The conf file option `fast-sync` has been renamed to `utxo_cache`. The old option"
+                             " `fast-sync` is deprecated. Please edit your conf file and use `utxo_cache` instead.";
+        }
         bool ok{};
-        const QString strVal = pset ? parser.value("fast-sync") : conf.value("fast-sync");
         const double val = strVal.toDouble(&ok);
         if (!ok || val < 0.)
-            throw BadArgs(QString("fast-sync: Please specify a positive numeric value in MB, or 0 to disable"));
+            throw BadArgs(QString("%1: Please specify a positive numeric value in MB, or 0 to disable").arg(key));
         const uint64_t bytes = static_cast<uint64_t>(val * 1e6);
         if (constexpr auto limit = uint64_t(std::numeric_limits<size_t>::max()); bytes > limit)
             // Check for 32-bit archs: in case we ever decide to support them (this branch is never taken in current codebase)
-            throw BadArgs(QString("fast-sync: Specified value (%1 bytes) is too large to be addressed by this machine"
-                                  " (limit is: %2 bytes)").arg(bytes).arg(qulonglong(limit)));
+            throw BadArgs(QString("%3: Specified value (%1 bytes) is too large to be addressed by this machine"
+                                  " (limit is: %2 bytes)").arg(bytes).arg(qulonglong(limit)).arg(key));
         else if (bytes > 0 && bytes < Options::minUtxoCache)
-            throw BadArgs(QString("fast-sync: Specified value %1 is too small (minimum: %2 MB)")
-                          .arg(strVal, QString::number(Options::minUtxoCache / 1e6, 'f', 1)));
+            throw BadArgs(QString("%3: Specified value %1 is too small (minimum: %2 MB)")
+                              .arg(strVal, QString::number(Options::minUtxoCache / 1e6, 'f', 1), key));
         options->utxoCache = static_cast<size_t>(bytes);
     }
 

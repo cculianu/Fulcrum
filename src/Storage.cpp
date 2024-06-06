@@ -1052,7 +1052,7 @@ struct Storage::Pvt
 
         std::unique_ptr<TxHash2TxNumMgr> txhash2txnumMgr; ///< provides a bit of a higher-level interface into the db
 
-        /// One of these is alive if we are in an initial sync and user specified --fast-sync
+        /// One of these is alive if we are in an initial sync and user specified --utxo-cache
         /// It caches UTXOs in memory and delays UTXO writes to DB so we don't have to do so much back-and-forth to
         /// rocksdb.
         std::unique_ptr<UTXOCache> utxoCache;
@@ -3071,17 +3071,17 @@ void Storage::setInitialSync(bool b) {
             uint64_t bytes = options->utxoCache;
             const uint64_t limit = std::min<uint64_t>(Util::getAvailablePhysicalRAM(), std::numeric_limits<size_t>::max());
             if (bytes > limit) {
-                Warning() << "fast-sync: Requested UTXO cache size of " << bytes << " bytes exceeds available"
+                Warning() << "utxo-cache: Requested UTXO cache size of " << bytes << " bytes exceeds available"
                           << " physical memory; will limit the UTXO cache size to not exceed physical RAM.";
                 bytes = limit;
             }
-            Log() << "fast-sync: Enabled; UTXO cache size set to " << bytes << " bytes (available physical RAM: " << limit << " bytes)";
+            Log() << "utxo-cache: Enabled; UTXO cache size set to " << bytes << " bytes (available physical RAM: " << limit << " bytes)";
             p->db.utxoCache.reset(new UTXOCache("Storage UTXO Cache", p->db.utxoset, p->db.shunspent, p->db.defReadOpts, p->db.defWriteOpts));
             // Reserve about 3.6 million entries per GB of utxoCache memory given to us
             // We need to do this, despite the extra memory bloat, because it turns out rehashing is very painful.
             p->db.utxoCache->autoReserve(bytes);
         } else {
-            Log() << "fast-sync: Not enabled";
+            Log() << "utxo-cache: Not enabled";
         }
     } else if (!b && p->db.utxoCache) {
         Log() << "Initial sync ended, flushing and deleting UTXO Cache ...";

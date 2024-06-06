@@ -271,8 +271,8 @@ public:
     static constexpr bool isMaxBatchInRange(unsigned n) { return n >= maxBatchMin && n <= maxBatchMax; }
     unsigned maxBatch = defaultMaxBatch;
 
-    // CLI: --fast-sync (experimental)
-    static constexpr size_t defaultUtxoCache = 0, minUtxoCache = 200ull * 1000ull * 1000ull; // 0 is off, otherwise 200 MB min
+    // CLI: --utxo-cache (experimental)
+    static constexpr size_t defaultUtxoCache = 0, minUtxoCache = 64ull * 1000ull * 1000ull; // 0 is off, otherwise 64 MB min
     size_t utxoCache = defaultUtxoCache;
 
     // config: anon_logs
