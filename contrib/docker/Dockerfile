@@ -17,11 +17,12 @@ RUN qmake -makefile PREFIX=/usr Fulcrum.pro && \
 FROM debian:trixie-slim
 
 RUN apt update && \
-    apt install -y openssl libqt5network5 zlib1g libbz2-1.0 libjemalloc2 libzmq5 && \
+    apt install -y openssl libqt5network5 zlib1g libbz2-1.0 libjemalloc2 libzmq5 python3 && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
 COPY --from=builder /src/Fulcrum /usr/bin/Fulcrum
+COPY --from=builder /src/FulcrumAdmin /usr/bin/FulcrumAdmin
 
 VOLUME ["/data"]
 ENV DATA_DIR /data
