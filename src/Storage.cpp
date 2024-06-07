@@ -141,6 +141,9 @@ namespace {
     concept NonPointer = !std::is_pointer_v<std::remove_cv_t<T>>;
 
     template <typename T>
+    concept TrivCopObj = std::is_trivially_copyable_v<T> && NonPointer<T>;
+
+    template <typename T>
     concept Scalar = std::is_scalar_v<T> && NonPointer<T>;
 
     /// Return a shallow, temporary copy of the memory of an object as a QByteArray. This reduces typing of
@@ -149,7 +152,7 @@ namespace {
     /// object as a QByteArray for temporary purposes. The original object must live at least as long as this returned
     /// QByteArray.  Note that even copy-constructing a new QByteArray from this returned QByteArray will lead to
     /// dangling pointers. See: https://doc.qt.io/qt-5/qbytearray.html#fromRawData.
-    template <NonPointer Object>
+    template <TrivCopObj Object>
     QByteArray ShallowTmp(const Object *mem, size_t size = sizeof(Object)) {
         return QByteArray::fromRawData(reinterpret_cast<const char *>(mem), static_cast<QByteArray::size_type>(size));
     }
@@ -157,7 +160,7 @@ namespace {
     /// Construct a QByteArray from a deep copy of any object's memory area. Slower than ShallowTmp above but 100% safe
     /// to use after the original object expires since the returned QByteArray takes ownership of its private copy of
     /// the memory it allocated.
-    template <NonPointer Object>
+    template <TrivCopObj Object>
     QByteArray DeepCpy(const Object *mem, size_t size = sizeof(Object)) {
         return QByteArray(reinterpret_cast<const char *>(mem), static_cast<QByteArray::size_type>(size));
     }
@@ -427,10 +430,10 @@ namespace {
     /// a block.  The table is keyed off of block_height(uint32_t) -> serialized BlkInfo (raw bytes)
     struct BlkInfo {
         TxNum txNum0 = 0;
-        unsigned nTx = 0;
+        uint32_t nTx = 0;
         BlkInfo() = default;
         BlkInfo(const BlkInfo &) = default;
-        [[maybe_unused]] BlkInfo (TxNum txn, unsigned ntx) : txNum0(txn), nTx(ntx) {}
+        [[maybe_unused]] BlkInfo (TxNum txn, uint32_t ntx) : txNum0(txn), nTx(ntx) {}
         bool operator==(const BlkInfo &o) const { return txNum0 == o.txNum0 && nTx == o.nTx; }
         bool operator!=(const BlkInfo &o) const { return !(*this == o); }
         [[maybe_unused]] bool operator<(const BlkInfo &o) const { return txNum0 == o.txNum0 ? nTx < o.nTx : txNum0 < o.txNum0; }
@@ -2588,7 +2591,6 @@ void Storage::loadCheckUTXOsInDB()
                     if (seenExceptions.insert(txo).second)
                         Debug() << "Seen exception: " << txo.toString();
                 }
-
                 // this is a deep test: only happens if -C / --checkdb is specified on CLI or in conf.
                 const CompactTXO ctxo = CompactTXO(info.txNum, txo.outN);
                 const QByteArray shuKey = mkShunspentKey(info.hashX, ctxo);
@@ -4842,6 +4844,8 @@ namespace {
 
     // essentially takes a byte copy of the data of BlkInfo; note that we waste some space at the end for legacy compat.
     template <> QByteArray Serialize(const BlkInfo &b) {
+        static_assert(sizeof(BlkInfo) >= 12 && sizeof(b.txNum0) == 8 && sizeof(b.nTx) == 4,
+                      "Serialization of BlkInfo assumes 64-bit txNum0 and 32-bit nTx members");
         QByteArray ret(QByteArray::size_type(sizeof(b)), Qt::Uninitialized);
         auto *cur = ret.data();
         std::memcpy(cur, &b.txNum0, sizeof(b.txNum0));

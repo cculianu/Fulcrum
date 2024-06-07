@@ -29,6 +29,7 @@
 #include <cstdint>
 #include <cstring> // for std::memcpy
 #include <functional> // for std::hash
+#include <limits>
 #include <optional>
 #include <tuple> // for std::tie
 #include <type_traits> // for std::has_unique_object_representations_v
@@ -108,7 +109,7 @@ template<> struct std::hash<TXO> {
 struct TXOInfo {
     bitcoin::Amount amount;
     HashX hashX; ///< the scripthash this output is sent to.  Note in most cases this can be compactified to be a shallow-copy of existing data (such that dupes point to the same underlying data in eg UTXOSet).
-    std::optional<unsigned> confirmedHeight; ///< if unset, is mempool tx
+    std::optional<BlockHeight> confirmedHeight; ///< if unset, is mempool tx
     TxNum txNum = 0; ///< the globally mapped txNum (one for each TxHash). This is used to be able to delete the CompactTXO from the hashX's scripthash_unspent table
     bitcoin::token::OutputDataPtr tokenDataPtr; ///< may be null, if not-null, output has token data on it
 
@@ -121,11 +122,17 @@ struct TXOInfo {
     }
     bool operator!=(const TXOInfo &o) const { return !(*this == o); }
 
+private:
+    static inline constexpr BlockHeight kNoBlockHeight = -1; // 0xffffffff; prevous code used int32_t(-1) to indicate no conf height
+    static_assert(std::numeric_limits<BlockHeight>::max() == std::numeric_limits<uint32_t>::max()
+                  && kNoBlockHeight == std::numeric_limits<BlockHeight>::max(), "Ser/Deser assumes this");
+
+public:
     QByteArray toBytes() const {
         QByteArray ret;
         if (!isValid()) return ret;
         const int64_t amt_sats = amount / bitcoin::Amount::satoshi();
-        const int32_t cheight = confirmedHeight.has_value() ? int(*confirmedHeight) : -1;
+        const uint32_t cheight = confirmedHeight.value_or(kNoBlockHeight); // NB: earlier version of this code used int32_t(-1) here to indicate no cheight.
         const int minSize = int(minSerSize());
         const int rsvSize = minSize + (tokenDataPtr ? 1 + int(tokenDataPtr->EstimatedSerialSize()) : 0);
         ret.reserve(rsvSize);
@@ -150,7 +157,7 @@ struct TXOInfo {
             return ret;
         }
         int64_t amt;
-        int32_t cheight;
+        uint32_t cheight;
         const char *cur = ba.constData();
         std::memcpy(&amt, cur, sizeof(amt));
         cur += sizeof(amt);
@@ -161,8 +168,8 @@ struct TXOInfo {
         ret.hashX = QByteArray(cur, HashLen);
         cur += HashLen;
         ret.amount = amt * bitcoin::Amount::satoshi();
-        if (cheight > -1)
-            ret.confirmedHeight.emplace(unsigned(cheight));
+        if (cheight != kNoBlockHeight) // NB: earlier version of this code used int32_t(-1) here to indicate no cheight.
+            ret.confirmedHeight.emplace(cheight);
         try {
             ret.tokenDataPtr = BTC::DeserializeTokenDataWithPrefix(ba, cur - ba.constData());
             if constexpr (false) // Left-in for debugging purposes
@@ -175,5 +182,5 @@ struct TXOInfo {
         return ret;
     }
 
-    static constexpr size_t minSerSize() noexcept { return sizeof(int64_t) + sizeof(int32_t) + CompactTXO::compactTxNumSize() + HashLen; }
+    static constexpr size_t minSerSize() noexcept { return sizeof(int64_t) + sizeof(uint32_t) + CompactTXO::compactTxNumSize() + HashLen; }
 };
