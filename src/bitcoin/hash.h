@@ -25,6 +25,10 @@ namespace bitcoin {
 
 using ChainCode = uint256;
 
+// Added by Calin to make some of the bitcoin code below more generic
+template <typename T>
+concept ByteLike = std::is_same_v<T, char> || std::is_same_v<T, uint8_t> || std::is_same_v<T, std::byte>;
+
 /** A hasher class for Bitcoin's 256-bit hash (double SHA-256). */
 class CHash256 {
 private:
@@ -34,18 +38,21 @@ public:
     CHash256(bool once = false) : once(once) {}
     static constexpr size_t OUTPUT_SIZE = CSHA256::OUTPUT_SIZE;
 
-    void Finalize(uint8_t hash[OUTPUT_SIZE]) {
+    template <ByteLike ByteT>
+    void Finalize(ByteT hash[OUTPUT_SIZE]) {
+        auto *hashu8 = reinterpret_cast<uint8_t *>(hash);
         if (!once) {
             uint8_t buf[CSHA256::OUTPUT_SIZE];
             sha.Finalize(buf);
-            sha.Reset().Write(buf, CSHA256::OUTPUT_SIZE).Finalize(hash);
+            sha.Reset().Write(buf, CSHA256::OUTPUT_SIZE).Finalize(hashu8);
         } else {
-            sha.Finalize(hash);
+            sha.Finalize(hashu8);
         }
     }
 
-    CHash256 &Write(const uint8_t *data, size_t len) {
-        sha.Write(data, len);
+    template <ByteLike ByteT>
+    CHash256 &Write(const ByteT *data, size_t len) {
+        sha.Write(reinterpret_cast<const uint8_t *>(data), len);
         return *this;
     }
 
@@ -63,14 +70,16 @@ private:
 public:
     static constexpr size_t OUTPUT_SIZE = CRIPEMD160::OUTPUT_SIZE;
 
-    void Finalize(uint8_t hash[OUTPUT_SIZE]) {
+    template <ByteLike ByteT>
+    void Finalize(ByteT hash[OUTPUT_SIZE]) {
         uint8_t buf[CSHA256::OUTPUT_SIZE];
         sha.Finalize(buf);
-        CRIPEMD160().Write(buf, CSHA256::OUTPUT_SIZE).Finalize(hash);
+        CRIPEMD160().Write(buf, CSHA256::OUTPUT_SIZE).Finalize(reinterpret_cast<uint8_t *>(hash));
     }
 
-    CHash160 &Write(const uint8_t *data, size_t len) {
-        sha.Write(data, len);
+    template <ByteLike ByteT>
+    CHash160 &Write(const ByteT *data, size_t len) {
+        sha.Write(reinterpret_cast<const uint8_t *>(data), len);
         return *this;
     }
 
@@ -163,8 +172,9 @@ public:
     int GetType() const { return nType; }
     int GetVersion() const { return nVersion; }
 
-    void write(const char *pch, size_t size) {
-        ctx.Write((const uint8_t *)pch, size);
+    template <ByteLike ByteT>
+    void write(const ByteT *pch, size_t size) {
+        ctx.Write(pch, size);
     }
 
     // invalidates the object
@@ -174,7 +184,8 @@ public:
         return result;
     }
 
-    void GetHashInPlace(uint8_t buf[CHash256::OUTPUT_SIZE]) { ctx.Finalize(buf); }
+    template <ByteLike ByteT>
+    void GetHashInPlace(ByteT buf[CHash256::OUTPUT_SIZE]) { ctx.Finalize(buf); }
 
     template <typename T> CHashWriter &operator<<(const T &obj) {
         // Serialize to this stream
@@ -196,8 +207,9 @@ public:
         : CHashWriter(source_->GetType(), source_->GetVersion()),
           source(source_) {}
 
-    void read(char *pch, size_t nSize) {
-        source->read(pch, nSize);
+    template <ByteLike ByteT>
+    void read(ByteT *pch, size_t nSize) {
+        source->read(reinterpret_cast<char *>(pch), nSize);
         this->write(pch, nSize);
     }
 
@@ -228,13 +240,12 @@ uint256 SerializeHash(const T &obj, int nType = SER_GETHASH,
 }
 
 /** Added by Calin to support hashing to QByteArray in-place */
-template <typename ByteT, typename T>
-std::enable_if_t<std::is_same_v<ByteT, char> || std::is_same_v<ByteT, uint8_t> || std::is_same_v<ByteT, std::byte>>
-/* void */ SerializeHashInPlace(ByteT hash[CHash256::OUTPUT_SIZE], const T &obj,
-                                int nType = SER_GETHASH, int nVersion = PROTOCOL_VERSION, bool once = false) {
+template <ByteLike ByteT, typename T>
+void SerializeHashInPlace(ByteT hash[CHash256::OUTPUT_SIZE], const T &obj,
+                          int nType = SER_GETHASH, int nVersion = PROTOCOL_VERSION, bool once = false) {
     CHashWriter ss(nType, nVersion, once);
     ss << obj;
-    ss.GetHashInPlace(reinterpret_cast<uint8_t *>(hash));
+    ss.GetHashInPlace(hash);
 }
 
 // MurmurHash3: ultra-fast hash suitable for hash tables but not cryptographically secure

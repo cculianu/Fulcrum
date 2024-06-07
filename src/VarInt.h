@@ -26,6 +26,7 @@
 
 #include <algorithm>
 #include <array>
+#include <concepts> // for std::integral
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -80,7 +81,7 @@ private:
     }
 
 public:
-    template <typename Int, std::enable_if_t<std::is_integral_v<Int> && !std::is_same_v<std::remove_cv_t<Int>, bool>, int> = 0>
+    template <std::integral Int> requires (!std::is_same_v<std::remove_cv_t<Int>, bool>)
     constexpr VarInt(const Int val) {
         using UInt = std::make_unsigned_t<Int>;
         static_assert (sizeof(UInt) <= maxBytes);
@@ -123,7 +124,7 @@ public:
     /// Deserialize a byte sequence. May throw std::invalid_argument if b is of the wrong format or is empty.
     /// Note: Unlike fromBytes(), the specified byte sequence may contain extra data at the end.
     /// On success, Span b is updated to point after the consumed byte(s).
-    template<typename Byte, std::enable_if_t<sizeof(Byte) == 1 && !std::is_same_v<std::remove_cv_t<Byte>, bool>, int> = 0>
+    template<typename Byte> requires (sizeof(Byte) == 1 && !std::is_same_v<std::remove_cv_t<Byte>, bool>)
     static VarInt deserialize(Span<Byte> &b) {
         const std::size_t byteLen = validate<std::invalid_argument>(b, true) + 1;
         // accepted construct (takes a deep copy of bytes in span)
@@ -161,9 +162,8 @@ public:
     /// Note that this may throw std::overflow_error if the specified type would overflow
     /// and cannot hold the data in question.
     /// (NB: may throw std::logic_error if there are bugs in this code).
-    template <typename Int>
-    constexpr std::enable_if_t<std::is_integral_v<Int> && !std::is_same_v<std::remove_cv_t<Int>, bool>, Int>
-    /* constexpr Int */ value() const {
+    template <std::integral Int> requires (!std::is_same_v<std::remove_cv_t<Int>, bool>)
+    constexpr Int value() const {
         const std::size_t payloadLen = validate<std::logic_error>(byteView());
         const std::byte * const payload = arr.data() + 1;
         if (payloadLen == 0) {

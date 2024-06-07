@@ -936,7 +936,7 @@ void Controller::genericTaskErrored()
     }
 }
 
-template <typename CtlTaskT, typename ...Args, typename /* enable_if... */>
+template <std::derived_from<CtlTask> CtlTaskT, typename ...Args>
 CtlTaskT *Controller::newTask(bool connectErroredSignal, Args && ...args)
 {
     CtlTaskT *task{};

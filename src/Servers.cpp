@@ -512,7 +512,7 @@ bool ServerBase::attachPerIPDataAndCheckLimits(QTcpSocket *socket)
 
 /// Used internally by both this incomingConnection implementation and ServerSSL's implementation.
 /// SockType must be QTcpSocket or QSslSocket.
-template <typename SockType, typename /* enable if .. */>
+template <typename SockType> requires std::is_same_v<QTcpSocket, SockType> || std::is_same_v<QSslSocket, SockType>
 SockType *ServerBase::createSocketFromDescriptorAndCheckLimits(qintptr socketDescriptor)
 {
     auto socket = new SockType(this);

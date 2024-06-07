@@ -34,6 +34,7 @@
 #include <limits>
 #include <stdexcept>
 #include <type_traits>
+#include <typeinfo>
 #include <vector>
 
 namespace {

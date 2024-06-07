@@ -37,7 +37,7 @@ static_assert(false, "This header requires preprocessor define: ENABLE_TESTS");
 
 namespace Tests {
 
-    template <typename ByteT, std::enable_if_t<sizeof(ByteT) == 1, int> = 0>
+    template <Util::ByteLike ByteT>
     void GetRandBytes(ByteT *dest, std::size_t count) { Util::getRandomBytes(dest, count); }
 
     /** Generate a random 64-bit integer. */

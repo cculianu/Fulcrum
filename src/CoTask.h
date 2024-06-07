@@ -69,7 +69,7 @@ public:
     /// active when this is called, this will block. Not designed to submit more than 1 piece of work
     /// at a time.  Intended operation: Submit work, go do something else, then wait for the future, then submit again
     /// later after it's done, etc.
-    template <typename Function, typename = std::enable_if_t<std::is_invocable_r_v<void, Function>>>
+    template <typename Function> requires std::is_invocable_r_v<void, Function>
     [[nodiscard]] Future submitWork(Function && func) {
         std::unique_lock g(mut);
         if (work) throw std::domain_error("Attempt to submit work while work is already pending");

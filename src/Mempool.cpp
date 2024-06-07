@@ -533,11 +533,9 @@ size_t Mempool::rmTxRpaAssociations(const TxRef &tx)
     return rmct;
 }
 
-template <typename SetLike>
-std::enable_if_t<std::is_same_v<SetLike, Mempool::TxHashSet> || std::is_same_v<SetLike, Mempool::TxHashNumMap>, std::size_t>
-/*std::size_t*/
-Mempool::rmTxsInHashXTxs_impl(const SetLike &txids, const ScriptHashesAffectedSet &scriptHashesAffected,
-                              bool TRACE, const std::optional<ScriptHashesAffectedSet> &hashXsNeedingSort)
+template <typename SetLike> requires std::is_same_v<SetLike, Mempool::TxHashSet> || std::is_same_v<SetLike, Mempool::TxHashNumMap>
+std::size_t Mempool::rmTxsInHashXTxs_impl(const SetLike &txids, const ScriptHashesAffectedSet &scriptHashesAffected,
+                                          bool TRACE, const std::optional<ScriptHashesAffectedSet> &hashXsNeedingSort)
 {
     Tic t0;
     std::size_t ct = 0, sortCt = 0;

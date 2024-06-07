@@ -253,10 +253,9 @@ private:
     std::size_t growTxHashSetToIncludeDescendants(const char *const logprefix, TxHashSet &txids, bool TRACE) const;
 
     /// Internal use; called by dropTxs and confirmedInBlock to do some book-keeping; returns number of txs removed.
-    template <typename SetLike>
-    std::enable_if_t<std::is_same_v<SetLike, TxHashSet> || std::is_same_v<SetLike, TxHashNumMap>, std::size_t>
-    /*std::size_t*/ rmTxsInHashXTxs_impl(const SetLike &txids, const ScriptHashesAffectedSet &scriptHashesAffected,
-                                         bool TRACE, const std::optional<ScriptHashesAffectedSet> &hashXsNeedingSort);
+    template <typename SetLike> requires std::is_same_v<SetLike, TxHashSet> || std::is_same_v<SetLike, TxHashNumMap>
+    std::size_t rmTxsInHashXTxs_impl(const SetLike &txids, const ScriptHashesAffectedSet &scriptHashesAffected,
+                                     bool TRACE, const std::optional<ScriptHashesAffectedSet> &hashXsNeedingSort);
 
     /// Convenient alias for above, accepts a TxHashSet as first-arg
     std::size_t rmTxsInHashXTxs(const TxHashSet &txids, const ScriptHashesAffectedSet &scriptHashesAffected, bool TRACE,

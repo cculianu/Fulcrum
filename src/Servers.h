@@ -234,8 +234,8 @@ protected:
     bool attachPerIPDataAndCheckLimits(QTcpSocket *);
     /// Used internally by both this incomingConnection implementation and ServerSSL's implementation.
     /// SockType must be QTcpSocket or QSslSocket.
-    template <typename SockType,
-              typename = std::enable_if_t< std::is_same_v<QTcpSocket, SockType> || std::is_same_v<QSslSocket, SockType> > >
+    template <typename SockType>
+    requires std::is_same_v<QTcpSocket, SockType> || std::is_same_v<QSslSocket, SockType>
     SockType *createSocketFromDescriptorAndCheckLimits(qintptr socketDescriptor);
     /// Initiates the WebSocket handshake.  If false is returned, the passed-in socket has already been queued for
     /// deletion. If true is returned, some time later after handshake success, addPendingConnection() will get called

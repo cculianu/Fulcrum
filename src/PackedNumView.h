@@ -24,6 +24,7 @@
 #include "bitcoin/crypto/endian.h"
 
 #include <algorithm>
+#include <concepts> // for std::integral
 #include <cstddef>
 #include <cstdint>
 #include <cstring> // for std::memset, std::memcpy
@@ -108,7 +109,7 @@ public:
 
     /// Fills outBuffer with the ints from srcInts, and returns the read-only view into the resulting buffer.
     /// Note that outBuffer must be a multiple of `bytesPerElement`, else an exception is thrown.
-    template <typename NumT, std::enable_if_t<std::is_integral_v<std::remove_cv_t<NumT>> && std::is_unsigned_v<std::remove_cv_t<NumT>>, void *> = nullptr>
+    template <std::integral NumT> requires std::is_unsigned_v<std::remove_cv_t<NumT>>
     static PackedNumView Make(Span<uint8_t> outBuffer, const Span<NumT> & srcInts, bool allowLongerOutputBuffer = false) {
         if (outBuffer.size() % bytesPerElement != 0u)
             throw std::invalid_argument("outBuffer's size must be a multiple of bytesPerElement!");

@@ -137,14 +137,19 @@ namespace {
         return ret;
     }
 
+    template <typename T>
+    concept NonPointer = !std::is_pointer_v<std::remove_cv_t<T>>;
+
+    template <typename T>
+    concept Scalar = std::is_scalar_v<T> && NonPointer<T>;
+
     /// Return a shallow, temporary copy of the memory of an object as a QByteArray. This reduces typing of
     /// the boilerplate: "QByteArray::fromRawData(reinterpret_cast...." etc everywhere in this file.
     /// Note: It is unsafe to use this function for anything other than obtaining a weak reference to the memory of an
     /// object as a QByteArray for temporary purposes. The original object must live at least as long as this returned
     /// QByteArray.  Note that even copy-constructing a new QByteArray from this returned QByteArray will lead to
     /// dangling pointers. See: https://doc.qt.io/qt-5/qbytearray.html#fromRawData.
-    template <typename Object,
-              std::enable_if_t<!std::is_pointer_v<std::remove_cv_t<Object>>, int> = 0>
+    template <NonPointer Object>
     QByteArray ShallowTmp(const Object *mem, size_t size = sizeof(Object)) {
         return QByteArray::fromRawData(reinterpret_cast<const char *>(mem), static_cast<QByteArray::size_type>(size));
     }
@@ -152,8 +157,7 @@ namespace {
     /// Construct a QByteArray from a deep copy of any object's memory area. Slower than ShallowTmp above but 100% safe
     /// to use after the original object expires since the returned QByteArray takes ownership of its private copy of
     /// the memory it allocated.
-    template <typename Object,
-              std::enable_if_t<!std::is_pointer_v<std::remove_cv_t<Object>>, int> = 0>
+    template <NonPointer Object>
     QByteArray DeepCpy(const Object *mem, size_t size = sizeof(Object)) {
         return QByteArray(reinterpret_cast<const char *>(mem), static_cast<QByteArray::size_type>(size));
     }
@@ -163,22 +167,17 @@ namespace {
     /// returned QByteArray, without any encapsulation.  Note that use of this mechanism makes all data in the database
     /// no longer platform-neutral, which is ok. The presumption is users can re-synch their DB if switching
     /// architectures.
-    template <typename Scalar,
-              std::enable_if_t<std::is_scalar_v<Scalar> && !std::is_pointer_v<Scalar>, int> = 0>
-    QByteArray SerializeScalar (const Scalar & s) { return DeepCpy(&s); }
-    template <typename Scalar,
-              std::enable_if_t<std::is_scalar_v<Scalar> && !std::is_pointer_v<Scalar>, int> = 0>
-    QByteArray SerializeScalarNoCopy (const Scalar &s) { return ShallowTmp(&s);  }
+    template <Scalar S> QByteArray SerializeScalar (const S & s) { return DeepCpy(&s); }
+    template <Scalar S> QByteArray SerializeScalarNoCopy (const S &s) { return ShallowTmp(&s);  }
     /// Inverse of above.  Pass in an optional 'pos' pointer if you wish to continue reading raw scalars from the same
     /// QByteArray during subsequent calls to this template function.  *ok, if specified, is set to false if we ran off
     /// the QByteArray's bounds, and a default-constructed value of 'Scalar' is returned.  No other safety checking is
     /// done.  On successful deserialization of the scalar, *pos (if specified) is updated to point just past the
     /// last byte of the successuflly converted item.  On failure, *pos is always set to point past the end of the
     /// QByteArray.
-    template <typename Scalar,
-              std::enable_if_t<std::is_scalar_v<Scalar> && !std::is_pointer_v<Scalar>, int> = 0>
-    Scalar DeserializeScalar(const QByteArray &ba, bool *ok = nullptr, int *pos_out = nullptr) {
-        Scalar ret{};
+    template <Scalar S>
+    S DeserializeScalar(const QByteArray &ba, bool *ok = nullptr, int *pos_out = nullptr) {
+        S ret{};
         int dummy = 0;
         int & pos = pos_out ? *pos_out : dummy;
         if (pos >= 0 && pos + int(sizeof(ret)) <= ba.size()) {

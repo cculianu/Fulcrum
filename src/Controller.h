@@ -27,11 +27,11 @@
 #include "SrvMgr.h"
 
 #include <atomic>
+#include <concepts> // for std::derived_from
 #include <memory>
 #include <optional>
 #include <tuple>
 #include <shared_mutex>
-#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -166,8 +166,7 @@ private:
     /// \return Returns the newly constructed CtrlTask* subclass. Note the task will start as soon as control returns
     ///         to this thread's event loop, and the task is already emplaced into the `tasks` map when this function
     ///         returns.
-    template <typename CtlTaskT, typename ...Args,
-              typename = std::enable_if_t<std::is_base_of_v<CtlTask, CtlTaskT>> >
+    template <std::derived_from<CtlTask> CtlTaskT, typename ...Args>
     CtlTaskT *newTask(bool connectErroredSignal, Args && ...args);
     /// remove and stop a task (called after task finished() signal fires)
     void rmTask(CtlTask *);
