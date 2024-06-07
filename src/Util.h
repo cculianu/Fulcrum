@@ -618,17 +618,6 @@ namespace Util {
     /// - the string has an even number of characters (or is empty)
     bool IsValidHex(const QByteArray &maybeHexStr);
 
-    /// A concept for any container of QByteArray
-    template <typename Container>
-    concept QBAContainer = std::is_base_of_v<QByteArray, typename Container::value_type>;
-
-    /// For each item in a QByteArray Container, hex encode each item using Util::ToHexFast().
-    template <QBAContainer Container>
-    void hexEncodeEachItem(Container &c) { for (auto & item : c) item = Util::ToHexFast(item); }
-    /// For each item in a QByteArray Container, hex decode each item using Util::ParseHexFast().
-    template <QBAContainer Container>
-    void hexDecodeEachItem(Container &c) { for (auto & item : c) item = Util::ParseHexFast(item); }
-
     /// Call lambda() in the thread context of obj's thread. Will block until completed.
     /// If timeout_ms is not specified or negative, will block forever until lambda returns,
     /// otherwise will block for timeout_ms ms.  Will throw TimeoutException if the timeout
