@@ -1060,7 +1060,8 @@ namespace RPC {
         const QByteArray &suffix = !data.endsWith(SLASHN) ? NL : EMPTY;
         const bool addHost = !header.host.isEmpty(),
                    addAuth = !header.authCookie.isEmpty();
-        const int clen = data.size() + suffix.size();
+        using qbasize_t = QByteArray::size_type;
+        const qbasize_t clen = data.size() + suffix.size();
         const QByteArray clenStr = QByteArray::number(clen);
         // Pre-alloc all space we will need as an optimization. We do this to reduce excess
         // copies and mallocs() because this function is potentially called often, especially
@@ -1068,7 +1069,7 @@ namespace RPC {
         // to update this calculation as well otherwise we will potentially suffer from
         // extra mallocs.
         QByteArray payload;
-        const int reserveSize =
+        const qbasize_t reserveSize =
               POST.size() + NL.size()
             + (addHost ? HOST.size() + header.host.size() + NL.size() : 0)
             + CONTENT_TYPE.size() + NL.size()
