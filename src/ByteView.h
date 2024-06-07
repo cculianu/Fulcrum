@@ -95,11 +95,11 @@ public:
     /// and a .size() method -- such as QByteArray, std::vector, QString, std::array, etc.
     template<typename T>
         requires std::is_same_v<QString, T> /* special case for QString */ ||
-        requires(T t) { requires std::is_pointer_v<decltype(t.data())>;
-                        { t.size() } -> std::integral;
-                        requires is_pod_v<std::remove_pointer_t<decltype(t.data())>>;
-                        requires std::has_unique_object_representations_v<std::remove_pointer_t<decltype(t.data())>>;
-                        requires !std::is_pointer_v<std::remove_pointer_t<decltype(t.data())>>; }
+        requires(const T t) { requires std::is_pointer_v<decltype(t.data())>;
+                              { t.size() } -> std::integral;
+                              requires is_pod_v<std::remove_pointer_t<decltype(t.data())>>;
+                              requires std::has_unique_object_representations_v<std::remove_pointer_t<decltype(t.data())>>;
+                              requires !std::is_pointer_v<std::remove_pointer_t<decltype(t.data())>>; }
     ByteView(const T &t) noexcept
         : ByteView(ptr_cast<std::byte>(t.data()), t.size() * sizeof(*t.data())) {
         static_assert (!std::is_same_v<T, QString>
