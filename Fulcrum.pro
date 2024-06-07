@@ -538,7 +538,7 @@ contains(QT_ARCH, x86_64):!win32-msvc {
         bitcoin/secp256k1/secp256k1_schnorr.h \
         bitcoin/secp256k1/util.h
 
-    gcc {
+    gcc:!clang {
         # Suppress some warnings on gcc for libsecp256k1
         QMAKE_CFLAGS += -Wno-unused-function -Wno-nonnull-compare
     }
