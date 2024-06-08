@@ -2563,7 +2563,7 @@ void Storage::loadCheckUTXOsInDB()
 
         const Tic t0;
         {
-            const int currentHeight = latestTip().first;
+            const qint64 currentHeight = latestTip().first;
 
             std::unique_ptr<rocksdb::Iterator> iter(p->db.utxoset->NewIterator(p->db.defReadOpts));
             if (!iter) throw DatabaseError("Unable to obtain an iterator to the utxo set db");
@@ -2598,7 +2598,7 @@ void Storage::loadCheckUTXOsInDB()
                 QByteArray tmpBa;
                 SHUnspentValue shval;
                 if (bool fail1 = false, fail2 = false, fail3 = false, fail4 = false, fail5 = false;
-                        (fail1 = (info.confirmedHeight.has_value() && int(*info.confirmedHeight) > currentHeight))
+                        (fail1 = (!info.confirmedHeight.has_value() || qint64(*info.confirmedHeight) > currentHeight))
                         || (fail2 = info.txNum >= p->txNumNext)
                         || (fail3 = (tmpBa = GenericDBGet<QByteArray>(p->db.shunspent.get(), shuKey, true, errPrefix, false, p->db.defReadOpts).value_or("")).isEmpty())
                         || (fail4 = (!(shval = Deserialize<SHUnspentValue>(tmpBa)).valid || info.amount != shval.amount))
@@ -2607,10 +2607,11 @@ void Storage::loadCheckUTXOsInDB()
                     QString msg;
                     {
                         QTextStream ts(&msg);
-                        ts << "Inconsistent database: txo " << txo.toString() << " at height: "
-                           << info.confirmedHeight.value();
+                        ts << "Inconsistent database: txo " << txo.toString();
+                        if (info.confirmedHeight) ts << " (height: " << *info.confirmedHeight << ")";
+                        else ts << " (missing height)";
                         if (fail1) {
-                            ts << " > current height: " << currentHeight << ".";
+                            ts << " has unexpected height; current height: " << currentHeight << ".";
                         } else if (fail2) {
                             ts << ". TxNum: " << info.txNum << " >= " << p->txNumNext << ".";
                         } else if (fail3) {
