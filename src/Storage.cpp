@@ -1797,18 +1797,30 @@ Storage::Storage(const std::shared_ptr<const Options> & options_)
 Storage::~Storage() { Debug() << __func__; cleanup(); }
 
 #if ((ROCKSDB_MAJOR << 16)|(ROCKSDB_MINOR << 8)|(ROCKSDB_PATCH)) > ((6 << 16)|(17 << 8)|(3)) // 6.17.3
-static const char* rocksdb_build_git_sha = "unk"; // this doesn't exist on rocksdb > 6.17.3
+#define HAS_ROCKSDB_NEW_VERSION_API 1
 #else
+#define HAS_ROCKSDB_NEW_VERSION_API 0
 extern const char* rocksdb_build_git_sha; // internal to rocksdb lib -- if this breaks remove me
 #endif
 /* static */
 QString Storage::rocksdbVersion()
 {
+#if !HAS_ROCKSDB_NEW_VERSION_API
     QString sha(rocksdb_build_git_sha);
     // rocksdb git commit sha: try and pop off the front part, and keep the rest and take the first 7 characters of that
     if (auto l = sha.split(':'); l.size() == 2) // must match what we expect otherwise don't truncate
         sha = l.back().left(7);
     return QString("%1.%2.%3-%4").arg(ROCKSDB_MAJOR).arg(ROCKSDB_MINOR).arg(ROCKSDB_PATCH).arg(sha);
+#else
+    const auto dbversion = QString::fromStdString(rocksdb::GetRocksVersionAsString(true));
+    const auto sha = []{
+        const auto &props = rocksdb::GetRocksBuildProperties();
+        if (auto it = props.find("rocksdb_build_git_sha"); it != props.end())
+            return QString::fromStdString(it->second).left(7);
+        return QString("unk");
+    }();
+    return QString("%1-%2").arg(dbversion, sha);
+#endif
 }
 
 void Storage::startup()
