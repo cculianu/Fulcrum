@@ -52,6 +52,7 @@
 #include <QByteArray>
 #include <QDir>
 #include <QFileInfo>
+#include <QSysInfo>
 #include <QVector> // we use this for the Height2Hash cache to save on memcopies since it's implicitly shared.
 
 #include <algorithm>
@@ -85,13 +86,19 @@ HistoryTooLarge::~HistoryTooLarge() {} // weak vtable warning suppression
 namespace {
     /// Encapsulates the 'meta' db table
     struct Meta {
-        static constexpr uint32_t kCurrentVersion = 0x2u;
+        static constexpr uint32_t kCurrentVersion = 0x3u;
         static constexpr uint32_t kMinSupportedVersion = 0x1u;
         static constexpr uint32_t kMinBCHUpgrade9Version = 0x2u;
+        static constexpr uint32_t kMinHasExtraPlatformInfoVersion = 0x3u;
 
-        uint32_t magic = 0xf33db33fu, version = kCurrentVersion;
+        static constexpr uint32_t kMagic = 0xf33db33fu;
+        static constexpr uint16_t kPlatformBits = sizeof(void *)*8U;
+
+        uint32_t magic = kMagic, version = kCurrentVersion;
         QString chain; ///< "test", "main", etc
-        uint16_t platformBits = sizeof(long)*8U; ///< we save the platform wordsize to the db
+        /// We save the platform pointer size to the db. Previous to v3 (kMinHasExtraPlatformInfoVersion), this field
+        /// was unreliable between Windows & Linux and should be ignored for versions < kMinHasExtraPlatformInfoVersion.
+        uint16_t platformBits = kPlatformBits;
 
         // -- New in 1.3.0 (this field is not in older db's)
         /// "BCH", "BTC", or "".  May be missing in DB data for older db's, in which case we take the default ("BCH")
@@ -101,8 +108,44 @@ namespace {
         /// to auto-detect the Coin in question in Controller.
         QString coin = QString();
 
+        /// -- New in 1.11.0
+        /// These fields only are valid in v3 or above (.version >= kMinHasExtraPlatformInfoVersion)
+        /// These fields get re-saved to the DB from the current program's info each time (along with `platformBits`
+        /// above) in function: Storage::checkUpgradeDBVersion().
+        QString appName; // "Fulcrum"
+        QString appVersion; // e.g. "1.11.0 (Release d884cb4)"
+        QString rocksDBVersion; // e.g. "9.2.1-08f9322"
+        QString buildABI; // ABI used at build-time, e.g. "x86_64-little_endian-lp64"
+        QString osName; // OS name e.g. "macOS 14.5"
+        QString cpuArch; // CPU arch e.g. "x86_64"
+
+        // C'tor used *not for deser*; object constructed with good values
+        Meta() { makePlatformInfoCurrent(); }
+
+        // C'tor used for deser; a cleared object is constructed
+        struct ClearedForUnser_t {};
+        static inline constexpr ClearedForUnser_t ClearedForUnser{};
+        explicit Meta(ClearedForUnser_t) : magic{0}, version{0}, platformBits{0} {}
+
         bool isVersionSupported() const { return version >= kMinSupportedVersion && version <= kCurrentVersion; }
+        bool isMagicOk() const { return magic == kMagic; }
+        bool isMinimumExtraPlatformInfoVersion() const { return version >= kMinHasExtraPlatformInfoVersion; }
+
+        // Set this instance's platform info to correspond to the current process's valid info.
+        void makePlatformInfoCurrent();
     };
+
+    void Meta::makePlatformInfoCurrent() {
+        platformBits = kPlatformBits;
+        if (const auto *app = App::globalInstance()) {
+            appName = app->applicationName();
+            appVersion = app->applicationVersion();
+        }
+        rocksDBVersion = Storage::rocksdbVersion();
+        buildABI = QSysInfo::buildAbi();
+        osName = QSysInfo::prettyProductName();
+        cpuArch = QSysInfo::currentCpuArchitecture();
+    }
 
     // some database keys we use -- todo: if this grows large, move it elsewhere
     static const bool falseMem = false, trueMem = true;
@@ -1933,7 +1976,8 @@ void Storage::startup()
                 opt.has_value())
         {
             const Meta &m_db = *opt;
-            if (m_db.magic != p->meta.magic || !m_db.isVersionSupported() || m_db.platformBits != p->meta.platformBits) {
+            if (!m_db.isMagicOk() || !m_db.isVersionSupported()
+                    || (m_db.isMinimumExtraPlatformInfoVersion() && m_db.platformBits != p->meta.platformBits)) {
                 throw DatabaseFormatError(errMsg1);
             }
             p->meta = m_db;
@@ -1982,13 +2026,21 @@ void Storage::startup()
 
 void Storage::checkUpgradeDBVersion()
 {
-    // Note: a precondition for this function is that database, headers, etc are already loaded.
+    // Note: A precondition for this function is that database, headers, etc are already loaded.
 
-    // Original Fulcrum db version before 1.9.0 was v1, and now we are on v2 which has CashToken data for BCH.
-    // Going from v1 on BTC/LTC -> v2 is ok without caveats. For BCH, we must warn the user if their db is v1
+    // Original Fulcrum DB version before 1.9.0 was v1, then there was v2 which added CashToken data for BCH.
+    // Now we are on v3 as of 1.11.0+, whose only difference vs v2 is additional platform info saved to `Meta`.
+    //
+    // Going from v1 on BTC/LTC -> v2+ is ok without caveats. For BCH, we must warn the user if their DB is v1
     // and it's after the upgrade9 activation time, because then the DB will be missing token data and may have
     // token-containing UTXOs indexed to the wrong script hash.
     Log() << "DB version: v" << p->meta.version;
+    if (p->meta.isMinimumExtraPlatformInfoVersion()) {
+        Debug() << "DB last written-to by: " << p->meta.appName << " " << p->meta.appVersion
+                << " using rocksdb: " << p->meta.rocksDBVersion;
+        Debug() << "DB last written-to OS: " << p->meta.osName << ", CPU: " << p->meta.cpuArch << ", ABI: " << p->meta.buildABI
+                << ", bits: " << p->meta.platformBits;
+    }
     if (p->meta.version < Meta::kCurrentVersion) {
         if (BTC::coinFromName(p->meta.coin) == BTC::Coin::BCH && p->meta.version < Meta::kMinBCHUpgrade9Version) {
             // Get the latest header to detect if we are after the activation time
@@ -2017,8 +2069,10 @@ void Storage::checkUpgradeDBVersion()
 
         Log() << "DB version is older but compatible, updating version to v" << Meta::kCurrentVersion << " ...";
         p->meta.version = Meta::kCurrentVersion;
-        saveMeta_impl();
     }
+    // Set the platform info from the current process, and re-save to DB
+    p->meta.makePlatformInfoCurrent();
+    saveMeta_impl();
 }
 
 void Storage::compactAllDBs()
@@ -4791,6 +4845,9 @@ namespace {
             QDataStream ds(&ba, QIODevice::WriteOnly|QIODevice::Truncate);
             // we serialize the 'magic' value as a simple scalar as a sort of endian check for the DB
             ds << SerializeScalarNoCopy(m.magic) << m.version << m.chain << m.platformBits << m.coin;
+            if (m.isMinimumExtraPlatformInfoVersion()) {
+                ds << m.appName << m.appVersion << m.rocksDBVersion << m.buildABI << m.osName << m.cpuArch;
+            }
         }
         return ba;
     }
@@ -4799,7 +4856,7 @@ namespace {
         bool dummy;
         bool &ok (ok_ptr ? *ok_ptr : dummy);
         ok = false;
-        Meta m{0, 0, {}};
+        Meta m(Meta::ClearedForUnser);
         {
             QDataStream ds(ba);
             QByteArray magicBytes;
@@ -4820,6 +4877,13 @@ namespace {
                             // Newer db's will always either have an empty string "", "BCH", or "BTC" here.
                             // Read the db value now. Client code gets this value via Storage::getCoin().
                             ds >> m.coin;
+
+                            // If version >= 3, and magic ok, and no errors, proceed to read the extra platform info
+                            // which is new in db's with version 3 or above.
+                            ok = ds.status() == QDataStream::Status::Ok;
+                            if (ok && m.isMagicOk() && m.isMinimumExtraPlatformInfoVersion()) {
+                                ds >> m.appName >> m.appVersion >> m.rocksDBVersion >> m.buildABI >> m.osName >> m.cpuArch;
+                            }
                         } else {
                             // Older db's pre-1.3.0 lacked this field -- but now we interpret missing data here as
                             // "BCH" (since all older db's were always BCH only).
