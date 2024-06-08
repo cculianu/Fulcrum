@@ -161,6 +161,7 @@ void App::startup_Sighandlers()
             }
         }
         void run() override {
+            Util::ThreadName::Set("ExitThr");
             startedSem.release();
             setTerminationEnabled(true); // applies to currently running thread
             DebugM("started with stack size: ", stackSize() ? QString::number(stackSize()) : QString("default"));

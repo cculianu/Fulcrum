@@ -986,6 +986,14 @@ namespace Util {
 #endif
     }
 
+    namespace ThreadName {
+        /// Get the current thread's name. This is an internal name used in the app for logging purposes only and
+        /// is unrelated to Qt thread object names or to any system thread names.
+        const QString & Get();
+        /// Set the current thread's name (used mainly for logging).
+        void Set(const QString &name);
+    } // namespace ThreadName
+
 } // end namespace Util
 
 /// Kind of like Go's "defer" statement. Call a lambda (for clean-up code) at scope end.

@@ -183,6 +183,7 @@ void PeerMgr::parseServersDotJson(const QString &fnIn)
 
 void PeerMgr::on_started()
 {
+    ThreadObjectMixin::on_started();
     Debug() << objectName() << ": started ok";
     conns += connect(this, &PeerMgr::needUpdateSoon, this, &PeerMgr::updateSoon);
     chan.put("ok");

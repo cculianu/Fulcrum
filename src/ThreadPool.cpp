@@ -50,6 +50,8 @@ Job::Job(QObject *context, ThreadPool *pool, const VoidFunc & work, const VoidFu
 Job::~Job() {}
 
 void Job::run() {
+    if (Util::ThreadName::Get().isEmpty())
+        Util::ThreadName::Set(QStringLiteral("Thread (pooled)")); // set thread name for logging
     emit started();
     if (UNLIKELY(pool->isShuttingDown())) {
         Debug() << objectName() << ": blockNewWork = true, exiting early without doing any work";

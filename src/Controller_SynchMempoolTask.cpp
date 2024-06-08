@@ -165,14 +165,8 @@ void SynchMempoolTask::Precache::submitWork(const bitcoin::CTransactionRef &tx)
 
 void SynchMempoolTask::Precache::threadFunc(const size_t reserve, const Mempool::TxHashSet tentativeMempoolTxHashes)
 {
+    Util::ThreadName::Set("SyncMempoolPreCache");
     static auto constexpr funcName = "SynchMempoolTask::Precache::threadFunc";
-    if (QThread *t = QThread::currentThread(); t && t != parent.thread() && t != qApp->thread()) {
-        t->setObjectName("SyncMempoolPreCache");
-    } else {
-        Fatal() << funcName << ": Expected this function to run in its own thread!";
-        didErrorOut = true;
-        return;
-    }
     didErrorOut = false;
     DebugM("Thread started");
     size_t tot = 0u, ctr = 0u;

@@ -614,6 +614,16 @@ namespace Util {
         return ret;
     }
 
+    namespace ThreadName {
+        namespace {
+            QString & GetMutable() {
+                static thread_local QString threadName;
+                return threadName;
+            }
+        } // namespace
+        const QString & Get() { return GetMutable(); }
+        void Set(const QString &name) { GetMutable() = name; }
+    } // namespace ThreadName
 
 } // end namespace Util
 
@@ -668,7 +678,7 @@ Log::~Log()
         // /[timestamp]
         QString thrdStr;
         if (QThread *th = QThread::currentThread(); th && ourApp && th != ourApp->thread()) {
-            QString thrdName = th->objectName();
+            QString thrdName = Util::ThreadName::Get(); /* We must use an internal name. THIS IS UNSAFE --> th->objectName(); */
             if (thrdName.trimmed().isEmpty()) thrdName = QString::asprintf("%p", reinterpret_cast<void *>(QThread::currentThreadId()));
             thrdStr = QStringLiteral("<%1> ").arg(thrdName);
         }

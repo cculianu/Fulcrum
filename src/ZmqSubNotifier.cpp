@@ -59,16 +59,7 @@ bool ZmqSubNotifier::start(const QString &addr, const QString &topic, long retry
     auto fut = promise->get_future();
     retryMsec = retryMsec <= 0 ? -1 /* forever */ : retryMsec;
     p->thr = std::thread([this, addr = addr.toLatin1(), topic = topic.toLatin1(), retryMsec, oname = objectName()](auto promise) {
-        if (auto *qthr = QThread::currentThread(); qthr) {
-            const QString name = oname.isEmpty() ? "ZMQ" : oname;
-            // set thread name for debug print
-            if (UNLIKELY(qthr->thread() != qthr)) {
-                // this should never happen, but we guard against thread-unsafe access here...
-                Warning() << name << " subordinate thread does not \"live\" in itself, applying workaround to set thread name ...";
-                Util::AsyncOnObject(qthr, [name, qthr] { qthr->setObjectName(name); });
-            } else
-                qthr->setObjectName(name);
-        }
+        Util::ThreadName::Set(oname.isEmpty() ? "ZMQ" : oname); // set thread name for debug print
         std::size_t nMsgs = 0, nBytes = 0;
         Debug() << "thread started for addr: " << addr << " topic: " << topic << " (procaddress: " << p->procAddress() << ")";
         try {

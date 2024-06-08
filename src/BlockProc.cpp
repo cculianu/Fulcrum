@@ -49,9 +49,8 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bi
     std::optional<CoTask::Future> rpaFut; // NB: rpaFut will auto-wait for work (if any) to complete as part of its d'tor
     if (enableRpa) {
         if (!rpaTask) {
-            QString threadName;
-            if (QThread *curr = QThread::currentThread(); LIKELY(curr != nullptr)) threadName = curr->objectName();
-            else threadName = "???"; // this should never happen, but is here for defensive programming
+            QString threadName = Util::ThreadName::Get();
+            if (threadName.isEmpty()) threadName = "???"; // this should ideally not happen, but is here for defensive programming
             // Create a new CoTask into TLS. It will be destructed when the current thread exits.
             // The assumption here is that the DownloadBlocksTask is calling us and its threads stick around for a while
             // as blocks are downloaded.

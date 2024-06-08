@@ -70,8 +70,9 @@ AbstractTcpServer::AbstractTcpServer(const QHostAddress &a, quint16 p)
 
 void AbstractTcpServer::resetName()
 {
-    _thread.setObjectName(prettyName());
-    setObjectName(prettyName());
+    const auto name = prettyName();
+    _thread.setObjectName(name);
+    setObjectName(name);
 }
 
 AbstractTcpServer::~AbstractTcpServer()
@@ -107,6 +108,7 @@ void AbstractTcpServer::tryStart(ulong timeout_ms)
 
 void AbstractTcpServer::on_started()
 {
+    ThreadObjectMixin::on_started();
     QString result = "ok";
     conns.push_back(connect(this, SIGNAL(newConnection()), this,SLOT(pvt_on_newConnection())));
     conns.push_back(connect(this, &QTcpServer::acceptError, this, [this](QAbstractSocket::SocketError e){ on_acceptError(e);}));

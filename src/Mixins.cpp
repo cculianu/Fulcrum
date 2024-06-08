@@ -60,7 +60,10 @@ void ThreadObjectMixin::start()
         QObject::disconnect(conns.takeAt(which));
     });
     qobj()->moveToThread(&_thread);
-    conns += QObject::connect(&_thread, &QThread::started, qobj(), [this]{on_started();});
+    conns += QObject::connect(&_thread, &QThread::started, qobj(), [this]{
+        Util::ThreadName::Set(qobj()->objectName()); // Set thread name for logger
+        on_started();
+    });
     conns += QObject::connect(&_thread, &QThread::finished, qobj(), [this]{on_finished();});
     _thread.start();
 }
