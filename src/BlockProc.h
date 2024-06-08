@@ -33,6 +33,7 @@
 #include <unordered_set>
 #include <vector>
 
+class CoTask;
 
 struct PreProcessedBlock;
 using PreProcessedBlockPtr = std::shared_ptr<PreProcessedBlock>;  ///< For clarity/convenience
@@ -163,17 +164,17 @@ struct PreProcessedBlock
 
     // c'tors, etc... note this class is fully copyable and moveable
     PreProcessedBlock() = default;
-    PreProcessedBlock(BlockHeight bheight, size_t rawBlockSizeBytes, const bitcoin::CBlock &b, bool enableRpaIndexing) {
-        fill(bheight, rawBlockSizeBytes, b, enableRpaIndexing);
+    PreProcessedBlock(BlockHeight bheight, size_t rawBlockSizeBytes, const bitcoin::CBlock &b, CoTask *rpaTask /* nullable */) {
+        fill(bheight, rawBlockSizeBytes, b, rpaTask);
     }
     /// reset this to empty
     inline void clear() { *this = PreProcessedBlock(); }
     /// fill this block with data from bitcoin's CBlock
-    void fill(BlockHeight blockHeight, size_t rawSizeBytes, const bitcoin::CBlock &b, bool enableRpaIndexing);
+    void fill(BlockHeight blockHeight, size_t rawSizeBytes, const bitcoin::CBlock &b, CoTask *rpaTask /* nullable */);
 
     /// convenience factory static method: given a block, return a shard_ptr instance of this struct
     static PreProcessedBlockPtr makeShared(unsigned height, size_t sizeBytes, const bitcoin::CBlock &block,
-                                           bool enableRpaIndexing);
+                                           CoTask *rpaTask /* nullable */);
 
     /// debug string
     QString toDebugString() const;

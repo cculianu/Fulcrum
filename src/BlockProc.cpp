@@ -34,7 +34,7 @@
 /* static */ const TxHash PreProcessedBlock::nullhash;
 
 /// fill this struct's data with all the txdata, etc from a bitcoin CBlock. Alternative to using the second c'tor.
-void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bitcoin::CBlock &b, const bool enableRpa) {
+void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bitcoin::CBlock &b, CoTask *rpaTask) {
     if (!header.IsNull() || !txInfos.empty())
         clear();
     height = blockHeight;
@@ -45,17 +45,8 @@ void PreProcessedBlock::fill(BlockHeight blockHeight, size_t blockSize, const bi
     std::unordered_map<TxHash, unsigned, HashHasher> txHashToIndex; // since we know the size ahead of time here, we can set max_load_factor to 1.0 and avoid over-allocating the hash table
     txHashToIndex.max_load_factor(1.0);
     txHashToIndex.reserve(b.vtx.size());
-    static thread_local std::optional<CoTask> rpaTask;
     std::optional<CoTask::Future> rpaFut; // NB: rpaFut will auto-wait for work (if any) to complete as part of its d'tor
-    if (enableRpa) {
-        if (!rpaTask) {
-            QString threadName = Util::ThreadName::Get();
-            if (threadName.isEmpty()) threadName = "???"; // this should ideally not happen, but is here for defensive programming
-            // Create a new CoTask into TLS. It will be destructed when the current thread exits.
-            // The assumption here is that the DownloadBlocksTask is calling us and its threads stick around for a while
-            // as blocks are downloaded.
-            rpaTask.emplace(QString("RPA CoTask[%1]").arg(threadName));
-        }
+    if (rpaTask) {
         // Do RPA-related hashing and processing in the rpaTask's thread in parallel (really pays off for 1-off blocks)
         rpaFut = rpaTask->submitWork([&b, this]{
             // Process the first 30 inputs for each non-coinbase block txn
@@ -278,9 +269,9 @@ QString PreProcessedBlock::toDebugString() const
 
 /// convenience factory static method: given a block, return a shard_ptr instance of this struct
 /*static*/
-PreProcessedBlockPtr PreProcessedBlock::makeShared(unsigned height_, size_t size, const bitcoin::CBlock &block, bool enableRpa)
+PreProcessedBlockPtr PreProcessedBlock::makeShared(unsigned height_, size_t size, const bitcoin::CBlock &block, CoTask *rpaTask)
 {
-    return std::make_shared<PreProcessedBlock>(height_, size, block, enableRpa);
+    return std::make_shared<PreProcessedBlock>(height_, size, block, rpaTask);
 }
 
 

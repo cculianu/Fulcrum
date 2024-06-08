@@ -22,6 +22,7 @@
 #include "Controller.h"
 #include "Controller_SynchDSPsTask.h"
 #include "Controller_SynchMempoolTask.h"
+#include "CoTask.h"
 #include "Mempool.h"
 #include "SubsMgr.h"
 #include "ThreadPool.h"
@@ -495,6 +496,7 @@ struct DownloadBlocksTask : CtlTask
     const bool allowMimble; ///< like above, but if true we allow mimblewimble (litecoin)
     const bool allowCashTokens; ///< allow special cashtoken deserialization rules (BCH only)
     const int rpaStartHeight; ///< if >= 0, rpa data will be indexed in PreProcessedBlock, starting at this height.
+    std::optional<CoTask> rpaTask; ///< this gets created only at the point where current block height >= rpaStartHeight && rpaStartHeight > -1
 
     void do_get(unsigned height);
 
@@ -705,9 +707,18 @@ void DownloadBlocksTask::do_get(unsigned int bnum)
 // be out-of-synch due to configuration change, etc).
 VarDLTaskResult DownloadBlocksTask::process_block_guts(unsigned bnum, const QByteArray &rawblock, const bitcoin::CBlock &cblock)
 {
-    const bool indexRpaForThisBlock = rpaStartHeight >= 0 && bnum >= unsigned(rpaStartHeight);
-    auto ppb = PreProcessedBlock::makeShared(bnum, size_t(rawblock.size()), cblock, indexRpaForThisBlock);
-    if (UNLIKELY(rpaStartHeight >= 0 && bnum == unsigned(rpaStartHeight))) {
+    CoTask * rpaTaskIfEnabledForThisBlock = nullptr;
+    // Determine if RPA indexing is enabled for this block, and if so, ensure this->rpaTask is created and pass down a
+    // pointer to it. The non-null ptr then tells PreProcessedBlock to index RPA data for this block.
+    const bool rpaIsEnabledForThisBlock = rpaStartHeight >= 0 && bnum >= unsigned(rpaStartHeight);
+    if (rpaIsEnabledForThisBlock) {
+        if (!rpaTask) rpaTask.emplace(QString("RPA CoTask[%1]").arg(objectName()));
+        rpaTaskIfEnabledForThisBlock = &*rpaTask;
+    }
+
+    auto ppb = PreProcessedBlock::makeShared(bnum, size_t(rawblock.size()), cblock, rpaTaskIfEnabledForThisBlock);
+
+    if (UNLIKELY(rpaIsEnabledForThisBlock && bnum == unsigned(rpaStartHeight))) {
         Util::AsyncOnObject(ctl, [height = rpaStartHeight]{
             // We do this in the Controller thread to make the log look pretty, since all other logging
             // user sees at this point is from the Controller thread anyway ...
