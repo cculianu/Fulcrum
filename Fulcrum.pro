@@ -185,10 +185,10 @@ contains(CONFIG, config_endian_big) {
         #
         # Build information --
         #
-        # Currently this was built from github sources of the v9.1.1 rocksdb release:
+        # Currently this was built from github sources of the v9.2.1 rocksdb release:
         #     https://github.com/facebook/rocksdb.git
-        # Commit tag v9.1.1, commit hash (from Mon Apr 22 11:35:44 2024 -0700):
-        #     6f7cabeac80a3a6150be2c8a8369fcecb107bf43
+        # Commit tag v9.2.1, commit hash (from Wed May 8 15:51:38 2024 -0700):
+        #     08f93221f50700f19f11555fb46abfe708a716d1
         #
         # OSX:
         #   Built on Apple clang version 15.0.0 (clang-1500.3.9.4), from Xcode 15.4.
@@ -205,12 +205,14 @@ contains(CONFIG, config_endian_big) {
         # Linux (x86_64):
         #   Built on Ubuntu 18.04.6 LTS, g++ (8.4.0-1ubuntu1~18.04) 8.4.0.
         #   command: USE_RTTI=1 PORTABLE=1 DEBUG_LEVEL=0 make static_lib -j8 V=1
-        #   Annoyingly, the produced .a file has debug symbols which we strip with: strip -g.
+        #   Annoyingly, the produced .a file has debug symbols which we strip with: strip -g. Copy this file to
+        #   staticlibs/rocksdb/bin/linux/.
         #
         # Linux (aarch64):
         #   Built on Ubuntu 20.04.6 LTS, g++ (9.4.0-1ubuntu1~20.04.2) 9.4.0.
         #   command: USE_RTTI=1 PORTABLE=1 DEBUG_LEVEL=0 make static_lib -j8 V=1
-        #   Annoyingly, the produced .a file has debug symbols which we strip with: strip -g.
+        #   Annoyingly, the produced .a file has debug symbols which we strip with: strip -g. Copy this file to
+        #   staticlibs/rocksdb/bin/linux/aarch64/.
         #
         # Windows:
         #   Built using the MinGW G++ 14.1.0 from MSYS2 using a MINGW shell.
