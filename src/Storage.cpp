@@ -1663,9 +1663,9 @@ class Storage::UTXOCache
         prefetcherFut = prefetcher.submitWork([this, ppb]{
             const Tic t0;
             size_t num_ok = 0;
-            Defer d([&t0, &num_ok]{
+            Defer d([&t0, &num_ok, &ppb]{
                 if (t0.msec<int>() >= 50)
-                    DebugM("Fetched ", num_ok, " UTXOs from DB in ", t0.msecStr(3), " msec");
+                    DebugM("Fetched ", num_ok, "/", ppb->inputs.size(), " UTXOs from DB in ", t0.msecStr(3), " msec");
             });
 
             std::vector<rocksdb::Slice> & keys = pf.keys;
