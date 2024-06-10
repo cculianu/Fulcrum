@@ -1654,7 +1654,7 @@ class Storage::UTXOCache
         std::vector<QByteArray> keyData;
         std::vector<rocksdb::PinnableSlice> values;
         std::vector<rocksdb::Status> statuses;
-        robin_hood::unordered_flat_map<unsigned, TXO> index2TXO;
+        std::vector<TXO> txos;
     } pf;
 
     void do_prefetch(PreProcessedBlockPtr ppb) {
@@ -1672,54 +1672,45 @@ class Storage::UTXOCache
             std::vector<QByteArray> & keyData = pf.keyData;
             std::vector<rocksdb::PinnableSlice> & values = pf.values;
             std::vector<rocksdb::Status> & statuses = pf.statuses;
-            robin_hood::unordered_flat_map<unsigned, TXO> & index2TXO = pf.index2TXO;
+            std::vector<TXO> & txos = pf.txos;
             Defer d2([&]{
-                index2TXO.clear();
+                txos.clear();
                 keys.clear();
                 keyData.clear();
                 values.clear();
                 statuses.clear();
             });
-            {
-                unsigned inum = 0;
-                for (const auto & in : std::as_const(ppb->inputs)) {
-                    if (!inum) { /* coinbase, skip */ }
-                    else if (in.parentTxOutIdx.has_value()) { /* spent in this block, skip */ }
-                    else if (TXO t{in.prevoutHash, in.prevoutN}; !contains(t)) {
-                        ++cacheMisses;
-                        const unsigned index = keys.size();
-                        const TXO & txo = index2TXO.try_emplace(index, std::move(t)).first->second;
-                        keyData.push_back(Serialize(txo));
-                        const auto & ser = keyData.back();
-                        keys.emplace_back(ser.constData(), size_t(ser.size()));
-                        values.emplace_back();
-                        statuses.emplace_back();
-                    } else
-                        ++cacheHits;
-                    ++inum;
-                }
+            for (size_t inum = 1 /* coinbase, skip */, nIns = ppb->inputs.size(); inum < nIns; ++inum) {
+                const auto & in = std::as_const(ppb->inputs)[inum];
+                if (in.parentTxOutIdx.has_value()) { /* spent in this block, skip */ }
+                else if (TXO t{in.prevoutHash, in.prevoutN}; !contains(t)) {
+                    ++cacheMisses;
+                    const TXO & txo = txos.emplace_back(std::move(t));
+                    const auto & ser = keyData.emplace_back(Serialize(txo));
+                    keys.emplace_back(ser.constData(), size_t(ser.size()));
+                    values.emplace_back();
+                    statuses.emplace_back();
+                } else
+                    ++cacheHits;
             }
             if (keys.empty()) return; // nothing to do!
             auto * const colfam = db->DefaultColumnFamily();
             db->MultiGet(readOpts, colfam, keys.size(), keys.data(), values.data(), statuses.data());
-            {
-                unsigned index = 0;
-                for (const auto & s : statuses) {
-                    TXO & txo = index2TXO[index];
-                    if (s.ok()) {
-                        bool ok;
-                        TXOInfo info = Deserialize<TXOInfo>(FromSlice(values[index]), &ok);
-                        if (!ok) throw DatabaseSerializationError(QString("%1: Failed to deserialize TXOInfo for TXO \"%2\"")
-                                                                  .arg(name, txo.toString()));
-                        else {
-                            add(false, std::move(txo), std::move(info));
-                            ++num_ok;
-                        }
-                    } else {
-                        throw DatabaseError(QString("%1: Error reading TXO \"%2\" from %3 db: %4")
-                                            .arg(name, txo.toString(), DBName(db.get()), StatusString(s)));
+            for (size_t index = 0, nIndices = statuses.size(); index < nIndices; ++index) {
+                const auto & s = statuses[index];
+                TXO & txo = txos[index];
+                if (s.ok()) {
+                    bool ok;
+                    TXOInfo info = Deserialize<TXOInfo>(FromSlice(values[index]), &ok);
+                    if (!ok) throw DatabaseSerializationError(QString("%1: Failed to deserialize TXOInfo for TXO \"%2\"")
+                                                              .arg(name, txo.toString()));
+                    else {
+                        add(false, std::move(txo), std::move(info));
+                        ++num_ok;
                     }
-                    ++index;
+                } else {
+                    throw DatabaseError(QString("%1: Error reading TXO \"%2\" from %3 db: %4")
+                                        .arg(name, txo.toString(), DBName(db.get()), StatusString(s)));
                 }
             }
         });
