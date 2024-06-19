@@ -1317,12 +1317,12 @@ class Storage::UTXOCache
             const auto ct = batchCount;
             DebugM("batch write of ", ct, " ", DBName(db), Util::Pluralize(" item", ct), " took ", t.msecStr(), " msec");
         }
-        batchCount = 0;
+        batchCount = 0u;
     }
     void do_parallel_flush(bool doAdds, bool doShunspentAdds, const size_t memUsageTarget,
                            std::vector<NodeList::const_iterator> * const optAddsOrder) {
         const Tic t0;
-        size_t addCt = 0, rmCt = 0;
+        size_t addCt = 0u, rmCt = 0u;
         rocksdb::WriteBatch batch;
 
         const size_t utxosSize = utxos.size();
@@ -1358,9 +1358,9 @@ class Storage::UTXOCache
         if ((doAdds && !adds.empty()) || !rms.empty()) {
             static const QString errMsgBatchWrite("Error issuing batch write to utxoset db for a utxo update");
             if (!db) throw InternalError("utxoset db is nullptr! FIXME!");
-            size_t batchCount = 0;
+            size_t batchCount = 0u;
             // rms first (loop in reverse to shrink vector as we loop)
-            for (size_t i = rms.size(); i-- > 0; /**/) {
+            for (size_t i = rms.size(); i-- > 0u; /**/) {
                 if (memUsageTarget && threadSafeMemUsage() <= memUsageTarget)
                     break; // abort loop early
                 // enqueue delete from utxoset db -- may throw.
@@ -1432,15 +1432,15 @@ class Storage::UTXOCache
                             std::atomic_size_t * shunspentRmsSize = nullptr,
                             std::atomic_size_t * shunspentAddsSize = nullptr) {
         const Tic t0;
-        size_t shunspentAddCt = 0, shunspentRmCt = 0;
+        size_t shunspentAddCt = 0u, shunspentRmCt = 0u;
         rocksdb::WriteBatch shunspentBatch;
 
         static const QString errMsgBatchWrite("Error issuing batch write to scripthash_unspent db for a shunspent update");
         if (!shunspentdb) throw InternalError("scripthash_unspent db is nullptr! FIXME!");
-        size_t batchCount = 0;
+        size_t batchCount = 0u;
 
         // shunspentRms first (loop in reverse so we can shrink vector as we loop)
-        for (size_t i = shunspentRms.size(); i-- > 0; /**/) {
+        for (size_t i = shunspentRms.size(); i-- > 0u; /**/) {
             if (memUsageTarget && getMemUsage() <= memUsageTarget)
                 break; // abort loop early
             const auto & dbKey = shunspentRms[i];
