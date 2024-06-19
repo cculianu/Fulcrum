@@ -1228,11 +1228,11 @@ class Storage::UTXOCache
         bool operator()(const TXO &a, const TXO &b) const noexcept { return a == b; }
         size_t operator()(const TXO &t) const noexcept { return std::hash<TXO>{}(t); }
     };
-    using Table = robin_hood::unordered_flat_map<TXORef, NodeList::iterator, TableHasherAndEq, TableHasherAndEq>;
+    using Table = robin_hood::unordered_flat_map<TXORef, NodeList::const_iterator, TableHasherAndEq, TableHasherAndEq>;
     struct ItSetHasher {
-        size_t operator()(NodeList::iterator it) const noexcept { return std::hash<TXO>{}(it->first); }
+        size_t operator()(const NodeList::const_iterator &it) const noexcept { return std::hash<TXO>{}(it->first); }
     };
-    using ItSet = robin_hood::unordered_flat_set<NodeList::iterator, ItSetHasher>;
+    using ItSet = robin_hood::unordered_flat_set<NodeList::const_iterator, ItSetHasher>;
     using RmVec = std::vector<TXO>;
 
     NodeList ordering;
@@ -1277,7 +1277,7 @@ class Storage::UTXOCache
     /// happen when the prefetcher is done. This is a NodeList so it can be quickly spliced into the `ordering` list.
     NodeList deferredAdds;
 
-    void do_flush(const size_t memUsageTarget = 0, std::vector<NodeList::iterator> * const optAddsOrder = nullptr) {
+    void do_flush(const size_t memUsageTarget = 0, std::vector<NodeList::const_iterator> * const optAddsOrder = nullptr) {
         if (UNLIKELY(prefetcherFut.future.valid())) {
             // paranoia: wait for prefetcher to end if it was running
             // this branch can only be taken in stack-unwinding and/or "exception"-al circumstances
@@ -1320,7 +1320,7 @@ class Storage::UTXOCache
         batchCount = 0;
     }
     void do_parallel_flush(bool doAdds, bool doShunspentAdds, const size_t memUsageTarget,
-                           std::vector<NodeList::iterator> * const optAddsOrder) {
+                           std::vector<NodeList::const_iterator> * const optAddsOrder) {
         const Tic t0;
         size_t addCt = 0, rmCt = 0;
         rocksdb::WriteBatch batch;
@@ -1487,10 +1487,10 @@ class Storage::UTXOCache
         const Tic t0;
         DebugM(name, ": limiting size to ", bytes, ", current size: ", m);
         size_t iters = 0, deletions = 0;
-        std::vector<NodeList::iterator> addsOrder;
+        std::vector<NodeList::const_iterator> addsOrder;
         addsOrder.reserve(adds.size());
         const bool definitelyNotInAdds = adds.empty(), definitelyInAdds = ordering.size() == adds.size();
-        for (auto oit = ordering.begin(); m > bytes && oit != ordering.end(); ++iters) {
+        for (auto oit = ordering.cbegin(); m > bytes && oit != ordering.cend(); ++iters) {
             if (!definitelyInAdds && (definitelyNotInAdds || adds.count(oit) == 0)) {
                 // only erase cached UTXOs that exist in DB and are not in "add" set
                 utxos.erase(oit->first);
@@ -1530,7 +1530,7 @@ class Storage::UTXOCache
         const Tic t0;
         const size_t n = deferredAdds.size();
         ordering.splice(ordering.end(), deferredAdds);
-        auto it = ordering.end();
+        auto it = ordering.cend();
         for (size_t i = 0; i < n; ++i)
             link_node(--it, true /* isNotInDbYet - always `true` otherwise we wouldn't be here! */);
         if (t0.msec<int>() >= 50 || n >= 20000)
@@ -1543,13 +1543,13 @@ class Storage::UTXOCache
         // 1. add to `ordering` list first
         // 2. then add to `utxos` and possibly `adds`
         ordering.emplace_back(std::forward<Args>(args)...);
-        auto it = ordering.end();
+        auto it = ordering.cend();
         link_node(--it, isNotInDBYet);
     }
 
     /// Associates a freshly created `ordering` item with the `utxos` table and possibly the `adds` set.
     /// Precondition: `it` must be a valid iterator in the `ordering` NodeList
-    void link_node(const NodeList::iterator it, bool isNotInDBYet) {
+    void link_node(const NodeList::const_iterator &it, bool isNotInDBYet) {
         const auto & txo = it->first; // `txo` here must be a reference to the above-inserted node
         {
             const auto & [tit, inserted] = utxos.try_emplace(txo /* txoref to Node in `ordering` */, it);
