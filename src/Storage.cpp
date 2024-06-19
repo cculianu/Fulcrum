@@ -1662,10 +1662,11 @@ class Storage::UTXOCache
         // active ... which is what we want here, because it indicates a programming error.
         prefetcherFut = prefetcher.submitWork([this, ppb]{
             const Tic t0;
-            size_t num_ok = 0;
-            Defer d([&t0, &num_ok, &ppb]{
+            const size_t nIns = ppb->inputs.size();
+            size_t num_ok = 0u, skipped = nIns > 0u /* count coinbase as skipped */;
+            Defer d([&t0, &num_ok, &skipped, nIns]{
                 if (t0.msec<int>() >= 50)
-                    DebugM("Fetched ", num_ok, "/", ppb->inputs.size(), " UTXOs from DB in ", t0.msecStr(3), " msec");
+                    DebugM("Fetched ", num_ok, "/", nIns - skipped, " UTXOs from DB in ", t0.msecStr(3), " msec");
             });
 
             std::vector<rocksdb::Slice> & keys = pf.keys;
@@ -1680,9 +1681,9 @@ class Storage::UTXOCache
                 values.clear();
                 statuses.clear();
             });
-            for (size_t inum = 1 /* coinbase, skip */, nIns = ppb->inputs.size(); inum < nIns; ++inum) {
+            for (size_t inum = 1 /* coinbase, skip */; inum < nIns; ++inum) {
                 const auto & in = std::as_const(ppb->inputs)[inum];
-                if (in.parentTxOutIdx.has_value()) { /* spent in this block, skip */ }
+                if (in.parentTxOutIdx.has_value()) { ++skipped; /* spent in this block, skip */ }
                 else if (TXO t{in.prevoutHash, in.prevoutN}; !contains(t)) {
                     ++cacheMisses;
                     const TXO & txo = txos.emplace_back(std::move(t));
