@@ -98,6 +98,7 @@ namespace bitcoin {
 #include <array>
 #include <cassert>
 #include <clocale>
+#include <cstdint>
 #include <cstring>
 #include <iomanip>
 #include <iostream>
@@ -414,15 +415,16 @@ TEST_SUITE(uint256)
         std::array<uint8_t, dataSize> rawBuf;
         uint8_t *alignedPtr = rawBuf.data();
         // ensure aligned data pointer
-        if (std::size_t(alignedPtr) % wordSize) {
-            // not aligned, move forward by wordSize bytes, then back by the unaligned bytes
-            const auto unaligned = std::size_t(alignedPtr) + wordSize;
-            alignedPtr = reinterpret_cast<uint8_t *>(unaligned - unaligned % wordSize);
+        if (auto val = reinterpret_cast<std::uintptr_t>(alignedPtr); val % wordSize) {
+            // not aligned, move forward by the number of bytes required to align
+            val += wordSize - (val % wordSize);
+            alignedPtr = reinterpret_cast<uint8_t *>(val);
         }
         // check sanity of align code above
-        const bool alignedOk = std::size_t(alignedPtr) % wordSize == 0
-                               && rawBuf.end() - alignedPtr >= std::ptrdiff_t(sizeof(uint256))
-                               && alignedPtr >= rawBuf.begin();
+        const bool alignedOk = std::uintptr_t(alignedPtr) % wordSize == 0u
+                               && alignedPtr >= rawBuf.data()
+                               && alignedPtr <= rawBuf.data() + rawBuf.size()
+                               && (rawBuf.data() + rawBuf.size()) - alignedPtr >= std::ptrdiff_t(sizeof(uint256));
         TEST_CHECK(alignedOk);
         if (alignedOk) {
             constexpr uint8_t uninitializedByte = 0xfa;
@@ -442,11 +444,13 @@ TEST_SUITE(uint256)
                 // Note: this pointer is to data on the stack and should not be freed!
                 uint256 *uninitialized = new (alignedPtr) uint256(uint256::Uninitialized); // explicitly does not initialize the data
                 unsigned uninitializedCtr = 0;
-                // ensure the uninitialized c'tor left the data buffer unmolested
+                // Ensure the uninitialized c'tor left the data buffer unmolested;
+                // std::launder is necessary here to prevent uninitialized warnings on some compilers.
                 for (const auto ch : *std::launder(uninitialized)) {
                     uninitializedCtr += unsigned(ch == uninitializedByte); // false = 0, true = 1
                 }
                 TEST_CHECK(uninitializedCtr == uint256::size());
+                uninitialized->~uint256(); // end lifetime (here for correctness)
             }
 #       if defined(__GNUC__) && !defined(__clang__)
 #           pragma GCC diagnostic pop
@@ -464,6 +468,7 @@ TEST_SUITE(uint256)
                     initializedCtr += unsigned(ch == 0x0); // false = 0, true = 1
                 }
                 TEST_CHECK(initializedCtr == uint256::size());
+                initialized->~uint256(); // end lifetime
             }
         }
     };
