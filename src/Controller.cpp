@@ -31,7 +31,7 @@
 #include "bitcoin/amount.h"
 #include "bitcoin/crypto/common.h"  // ReadLE32
 #include "bitcoin/transaction.h"
-#include "robin_hood/robin_hood.h"
+#include <robin_hood.h>
 
 #include <algorithm>
 #include <cassert>
