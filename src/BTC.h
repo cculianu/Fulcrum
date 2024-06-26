@@ -102,7 +102,8 @@ namespace BTC
         bitcoin::GenericVectorReader<QByteArray> vr(bitcoin::SER_NETWORK, version, bytes, pos);
         thing.Unserialize(vr);
         if (throwIfJunkAtEnd && !vr.empty())
-            throw std::ios_base::failure("Got unprocessed bytes at the end when deserializeing a bitcoin object");
+            throw std::ios_base::failure(strprintf("Got %u unprocessed bytes at the end when deserializeing a bitcoin object",
+                                                   vr.size()));
     }
     /// Convenience for above.  Create an instance of object and deserialize to it
     template <typename BitcoinObject>

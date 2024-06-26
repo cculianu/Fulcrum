@@ -109,7 +109,7 @@ public:
         return block;
     }
 
-    std::string ToString() const;
+    std::string ToString(bool fVerbose = false) const;
 };
 
 /**
