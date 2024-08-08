@@ -96,7 +96,7 @@ void PeerMgr::startup()
     else if (net == BTC::Net::TestNet)
         parseServersDotJson(pathPrefix + "servers_testnet.json");
     else if (net == BTC::Net::TestNet4)
-        parseServersDotJson(pathPrefix + "servers_testnet4.json"); // BCH only -- will implicitly throw if somehow the coin is BTC (should never happen)
+        parseServersDotJson(pathPrefix + "servers_testnet4.json"); // BCH & BTC only -- will implicitly throw if somehow the coin is LTC (should never happen)
     else if (net == BTC::Net::ScaleNet)
         parseServersDotJson(pathPrefix + "servers_scalenet.json"); // BCH only -- will implicitly throw if somehow the coin is BTC (should never happen)
     else if (net == BTC::Net::ChipNet)

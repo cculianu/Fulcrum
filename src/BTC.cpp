@@ -171,7 +171,7 @@ namespace BTC
             {"test4",    TestNet4},    // BCHN, BU
             {"scale",    ScaleNet},    // BCHN, BU
             {"testnet3", TestNet},     // bchd
-            {"testnet4", TestNet4},    // possible future bchd
+            {"testnet4", TestNet4},    // Core, possible future bchd
             {"regtest",  RegTestNet},  // BCHN, BU, ABC, bchd, Core, LitecoinCore
             {"signet",   TestNet},     // Core only
             {"chip",     ChipNet},     // BCH only; BCHN
