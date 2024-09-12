@@ -4,5 +4,11 @@
         "s": "57010",
         "t": "57009",
         "version": "1.4"
+    },
+    "testnet4-electrumx.wakiyamap.dev": {
+        "pruning": "-",
+        "s": "51001",
+        "t": "51002",
+        "version": "1.4"
     }
 }
