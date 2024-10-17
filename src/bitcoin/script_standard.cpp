@@ -263,7 +263,7 @@ bool ExtractDestinations(const CScript &scriptPubKey, txnouttype &typeRet,
 }
 
 namespace {
-class CScriptVisitor /*: public boost::static_visitor<bool>*/ {
+class CScriptVisitor {
 private:
     CScript *script;
 
@@ -296,8 +296,6 @@ public:
 CScript GetScriptForDestination(const CTxDestination &dest) {
     CScript script;
 
-    //boost::apply_visitor(CScriptVisitor(&script), dest);
-    // code below added by Calin to not use boost but rather use C++17
     try {
         std::visit(CScriptVisitor(&script), dest);
     } catch (const std::bad_variant_access &e) {

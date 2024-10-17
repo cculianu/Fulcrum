@@ -67,7 +67,7 @@ public:
     const TxId &GetTxId() const { return txid; }
     uint32_t GetN() const { return n; }
 
-    friend bool operator<=>(const COutPoint &a, const COutPoint &b) = default;
+    friend auto operator<=>(const COutPoint &a, const COutPoint &b) noexcept = default;
 
     std::string ToString(bool fVerbose = false) const;
 };

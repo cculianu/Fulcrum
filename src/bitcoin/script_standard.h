@@ -44,8 +44,7 @@ public:
     ScriptID & operator=(const uint160 &in) noexcept { var = in; return *this; }
     ScriptID & operator=(const uint256 &in) noexcept { var = in; return *this; }
 
-    bool operator==(const ScriptID &o) const { return var == o.var; }
-    bool operator<(const ScriptID &o) const { return var < o.var; }
+    auto operator<=>(const ScriptID &) const noexcept = default;
     bool operator==(const uint160 &o) const { return IsP2SH_20() && std::get<uint160>(var) == o; }
     bool operator==(const uint256 &o) const { return IsP2SH_32() && std::get<uint256>(var) == o; }
 
@@ -61,7 +60,7 @@ public:
     const uint8_t & operator[](size_t i) const { return data()[i]; }
 
     bool IsP2SH_20() const { return std::holds_alternative<uint160>(var); }
-    bool IsP2SH_32() const { return  std::holds_alternative<uint256>(var); }
+    bool IsP2SH_32() const { return std::holds_alternative<uint256>(var); }
 };
 
 //!< bytes (+1 for OP_RETURN, +2 for the pushdata opcodes)
@@ -91,15 +90,11 @@ enum txnouttype {
     TX_NULL_DATA,
 };
 
-class CNoDestination {
-public:
-    friend bool operator==(const CNoDestination &a, const CNoDestination &b) {
-        return true;
-    }
-    friend bool operator<(const CNoDestination &a, const CNoDestination &b) {
-        return true;
-    }
+struct CNoDestination {
+    friend constexpr auto operator<=>(const CNoDestination &a, const CNoDestination &b) noexcept = default;
 };
+
+static_assert(CNoDestination{} <=> CNoDestination{} == 0);
 
 /**
  * A txout script template with a specific destination. It is either:
