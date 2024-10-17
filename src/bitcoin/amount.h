@@ -47,7 +47,7 @@ public:
     /**
      * Comparison and equality
      */
-    friend constexpr auto operator<=>(const Amount &a, const Amount &b) = default;
+    friend constexpr auto operator<=>(const Amount &a, const Amount &b) noexcept = default;
 
     /**
      * Unary minus
