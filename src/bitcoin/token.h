@@ -12,6 +12,7 @@
 #include "uint256.h"
 
 #include <algorithm>
+#include <compare>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -101,7 +102,7 @@ struct SafeAmount : ScriptIntBase<SafeAmount> {
     using Base = ScriptIntBase<SafeAmount>;
     friend Base;
 
-    SafeAmount() noexcept : SafeAmount(0) {}
+    constexpr SafeAmount() noexcept : SafeAmount(0) {}
     SafeAmount(const SafeAmount &) noexcept = default;
     SafeAmount & operator=(const SafeAmount &) noexcept = default;
 
@@ -121,13 +122,15 @@ struct SafeAmount : ScriptIntBase<SafeAmount> {
     // overrides base class, does additonal checks to disallow negative values
     static constexpr std::optional<SafeAmount> fromInt(int64_t x) noexcept {
         auto ret = Base::fromInt(x);
-        if (ret && *ret < 0LL) ret.reset(); // all negative values are disallowed with this factory method
+        if (ret && *ret < int64_t{}) ret.reset(); // all negative values are disallowed with this factory method
         return ret;
     }
 
 private:
     explicit constexpr SafeAmount(int64_t x) noexcept : Base(x) {}
 };
+
+static_assert(std::three_way_comparable<SafeAmount, std::strong_ordering>, "Required for OutputData::operator<=>");
 
 /// Data that gets serialized/deserialized to/from a scriptPubKey in a transaction output prefixed with PREFIX_BYTE
 class OutputData {
@@ -138,7 +141,7 @@ class OutputData {
     NFTCommitment commitment; ///< may be empty
 
 public:
-    OutputData() noexcept = default;
+    constexpr OutputData() noexcept = default;
     OutputData(const Id &id_in, SafeAmount amt, const NFTCommitment &comm = {}, bool hasNFT = false,
                bool isMutableNFT = false, bool isMintingNFT = false, bool uncheckedNFT = false)
         : id(id_in) {
@@ -279,8 +282,6 @@ void WrapScriptPubKey(WrappedScriptPubKey &wspkOut, const OutputDataPtr &tokenDa
 /// @throw if `throwIfUnparseableTokenData` is true, std::ios_base::failure, or one of its subclasses.
 void UnwrapScriptPubKey(const WrappedScriptPubKey &wspk, OutputDataPtr &tokenDataOut, CScript &scriptPubKeyOut,
                         int nVersion, bool throwIfUnparseableTokenData = false /* set to true for (some) tests */);
-
-extern thread_local std::optional<std::ios_base::failure> last_unwrap_exception; ///< used by tests
 
 #undef TOKEN_DECLARE_SER_EXC
 

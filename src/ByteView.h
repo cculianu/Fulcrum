@@ -125,22 +125,27 @@ public:
     }
 
     constexpr int compare(const ByteView &o) const noexcept {
-        auto p = begin(), e = end(), op = o.begin(), oe = o.end();
-        if (data() == o.data()) { // fast-path for same ptr
-            if (size() == o.size()) return 0;
-            else if (size() < o.size()) return -1;
-            return 1;
-        }
-        while (p != e && op != oe) {
-            if (const int diff = static_cast<int>(*p++) - static_cast<int>(*op++); diff != 0)
-                return diff < 0 ? -1 : 1;
-        }
-        if (p == e && op != oe) return -1;
-        if (p != e && op == oe) return 1;
+        const auto r = this->operator<=>(o);
+        if (r < 0) return -1;
+        if (r > 0) return 1;
         return 0;
     }
 
-    // Relational operators -- we customize operator== for faster compare, C++20 auto-gens != for us based on this.
+    // Define spaceship operator for the 4 unequality comparison operators
+    constexpr std::strong_ordering operator<=>(const ByteView &o) const noexcept {
+        if (this == &o) [[unlikely]]
+            return std::strong_ordering::equal;
+        else if (data() == o.data()) [[unlikely]] { // if the two regions share the same data pointer...
+            // ... then result is based on size
+            const auto sz = size(), osz = o.size();
+            if (sz < osz) return std::strong_ordering::less;
+            if (sz > osz) return std::strong_ordering::greater;
+            return std::strong_ordering::equal;
+        } else [[likely]]
+            return std::lexicographical_compare_three_way(begin(), end(), o.begin(), o.end());
+    }
+
+    // We customize operator== with slight optimizations. C++20 auto-gens operator!= for us based on this.
     constexpr bool operator==(const ByteView &o) const noexcept {
         if (size() != o.size()) return false;
         if (data() == o.data()) return true; // fast-path for same ptr
@@ -149,13 +154,6 @@ public:
             if (*p++ != *op++) return false;
         }
         return true;
-    }
-
-    // Define spaceship operator for the other 4 relational operator
-    constexpr std::strong_ordering operator<=>(const ByteView &o) const noexcept {
-        if (const int cmp = compare(o); cmp == 0) return std::strong_ordering::equal;
-        else if (cmp < 0) return std::strong_ordering::less;
-        return std::strong_ordering::greater;
     }
 
 private:

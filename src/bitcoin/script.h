@@ -10,7 +10,6 @@
 #include "serialize.h"
 
 #include <cassert>
-#include <climits>
 #include <cstdint>
 #include <cstring>
 #include <limits>
@@ -289,10 +288,11 @@ struct ScriptIntBase {
         return Derived(x);
     }
 
-    constexpr auto operator<=>(int64_t x) const noexcept { return value_ <=> x; }
-    constexpr bool operator==(int64_t x) const noexcept { return this->operator<=>(x) == 0; }
-
     friend constexpr auto operator<=>(const ScriptIntBase &a, const ScriptIntBase &b) noexcept = default;
+    friend bool operator==(const ScriptIntBase &a, const ScriptIntBase &b) noexcept = default;
+
+    constexpr auto operator<=>(int64_t x) const noexcept { return value_ <=> x; }
+    constexpr bool operator==(int64_t x) noexcept { return this->operator<=>(x) == 0; }
 
     // Arithmetic operations
     std::optional<Derived> safeAdd(int64_t x) const noexcept {

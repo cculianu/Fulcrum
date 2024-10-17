@@ -20,11 +20,13 @@
 
 #include "BlockProcTypes.h"
 #include "BTC.h"
+#include "Compat.h"  // for QByteArray operator<=>
 #include "TXO_Compact.h"
 
 #include <QString>
 
 #include <array>
+#include <compare>
 #include <cstddef>
 #include <cstdint>
 #include <cstring> // for std::memcpy
@@ -44,7 +46,6 @@ struct TXO {
 
     bool operator==(const TXO &o) const noexcept { return std::tie(outN, txHash) == std::tie(o.outN, o.txHash); /* cheaper to compare the outNs first */ }
     auto operator<=>(const TXO &o) const noexcept { return std::tie(txHash, outN) <=> std::tie(o.txHash, o.outN); }
-
 
     // Serialization. Note that the resulting buffer may be 34 or 35 bytes, depending on whether IONum's value > 65535.
     // If wide == true, then resulting buffer is always maxSize() bytes (35).
@@ -85,6 +86,7 @@ private:
     size_t serializedSize(bool wide) const noexcept { return wide || outN > IONum16Max ? maxSize() : minSize(); }
 };
 
+static_assert(std::three_way_comparable<TXO, std::strong_ordering>);
 
 /// specialization of std::hash to be able to add struct TXO to any unordered_set or unordered_map as a key
 template<> struct std::hash<TXO> {

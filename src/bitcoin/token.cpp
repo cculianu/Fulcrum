@@ -67,7 +67,6 @@ void UnwrapScriptPubKey(const WrappedScriptPubKey &wspk, OutputDataPtr &tokenDat
             token_data_size = static_cast<ssize_t>(wspk.size()) - static_cast<ssize_t>(vr.size());
             assert(token_data_size > 0 && token_data_size <= static_cast<ssize_t>(wspk.size())); // sanity check
         } catch (const std::ios_base::failure &e) {
-            last_unwrap_exception = e; // save this value for (some) tests
             if (throwIfUnparseableTokenData) {
                 // for other tests, bubble exception out
                 throw;
@@ -88,8 +87,6 @@ void UnwrapScriptPubKey(const WrappedScriptPubKey &wspk, OutputDataPtr &tokenDat
     // grab the real script which is all the leftover bytes
     scriptPubKeyOut.assign(wspk.begin() + token_data_size, wspk.end());
 }
-
-thread_local std::optional<std::ios_base::failure> last_unwrap_exception;
 
 } // namespace token
 } // namespace bitcoin
