@@ -30,7 +30,7 @@ public:
     uint32_t nBits;
     uint32_t nNonce;
 
-    CBlockHeader() { SetNull(); }
+    CBlockHeader() noexcept { SetNull(); }
 
     SERIALIZE_METHODS(CBlockHeader, obj) {
         READWRITE(obj.nVersion);
@@ -41,20 +41,20 @@ public:
         READWRITE(obj.nNonce);
     }
 
-    void SetNull() {
+    void SetNull() noexcept {
         nVersion = 0;
         hashPrevBlock.SetNull();
         hashMerkleRoot.SetNull();
-        nTime = 0;
-        nBits = 0;
-        nNonce = 0;
+        nTime = 0u;
+        nBits = 0u;
+        nNonce = 0u;
     }
 
-    bool IsNull() const { return (nBits == 0); }
+    bool IsNull() const noexcept { return nBits == 0; }
 
     uint256 GetHash() const;
 
-    int64_t GetBlockTime() const { return int64_t(nTime); }
+    int64_t GetBlockTime() const noexcept { return int64_t(nTime); }
 };
 
 class CBlock : public CBlockHeader {
@@ -68,7 +68,7 @@ public:
     // memory only
     mutable bool fChecked;
 
-    CBlock() { SetNull(); }
+    CBlock() noexcept { SetNull(); }
 
     CBlock(const CBlockHeader &header) {
         SetNull();
@@ -98,16 +98,7 @@ public:
         fChecked = false;
     }
 
-    CBlockHeader GetBlockHeader() const {
-        CBlockHeader block;
-        block.nVersion = nVersion;
-        block.hashPrevBlock = hashPrevBlock;
-        block.hashMerkleRoot = hashMerkleRoot;
-        block.nTime = nTime;
-        block.nBits = nBits;
-        block.nNonce = nNonce;
-        return block;
-    }
+    CBlockHeader GetBlockHeader() const { return *this; }
 
     std::string ToString(bool fVerbose = false) const;
 };
@@ -120,7 +111,7 @@ public:
 struct CBlockLocator {
     std::vector<uint256> vHave;
 
-    CBlockLocator() {}
+    constexpr CBlockLocator() noexcept {}
 
     explicit CBlockLocator(const std::vector<uint256> &vHaveIn)
         : vHave(vHaveIn) {}

@@ -18,8 +18,8 @@ namespace bitcoin {
  *   (list initialization always copies).
  */
 template <typename... Args>
-inline std::vector<typename std::common_type<Args...>::type> Vector(Args &&...args) {
-    std::vector<typename std::common_type<Args...>::type> ret;
+inline auto Vector(Args &&...args) {
+    std::vector<std::common_type_t<Args...>> ret;
     ret.reserve(sizeof...(args));
     (ret.push_back(std::forward<Args>(args)), ...);
     return ret;

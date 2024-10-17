@@ -57,8 +57,8 @@ private:
 public:
     static constexpr uint32_t NULL_INDEX = std::numeric_limits<uint32_t>::max();
 
-    COutPoint() : txid(), n(NULL_INDEX) {}
-    COutPoint(TxId txidIn, uint32_t nIn) : txid(txidIn), n(nIn) {}
+    constexpr COutPoint() noexcept : txid{}, n{NULL_INDEX} {}
+    constexpr COutPoint(const TxId &txidIn, uint32_t nIn) noexcept : txid(txidIn), n(nIn) {}
 
     SERIALIZE_METHODS(COutPoint, obj) { READWRITE(obj.txid, obj.n); }
 
@@ -121,14 +121,12 @@ public:
      */
     static constexpr int SEQUENCE_LOCKTIME_GRANULARITY = 9;
 
-    CTxIn() { nSequence = SEQUENCE_FINAL; }
+    constexpr CTxIn() noexcept : nSequence{SEQUENCE_FINAL} {}
 
-    explicit CTxIn(COutPoint prevoutIn, CScript scriptSigIn = CScript(),
-                   uint32_t nSequenceIn = SEQUENCE_FINAL)
-        : prevout(prevoutIn), scriptSig(scriptSigIn), nSequence(nSequenceIn) {}
-    CTxIn(TxId prevTxId, uint32_t nOut, CScript scriptSigIn = CScript(),
-          uint32_t nSequenceIn = SEQUENCE_FINAL)
-        : CTxIn(COutPoint(prevTxId, nOut), scriptSigIn, nSequenceIn) {}
+    explicit CTxIn(const COutPoint &prevoutIn, const CScript &scriptSigIn = {}, uint32_t nSequenceIn = SEQUENCE_FINAL)
+        : prevout{prevoutIn}, scriptSig{scriptSigIn}, nSequence{nSequenceIn} {}
+    CTxIn(const TxId &prevTxId, uint32_t nOut, const CScript &scriptSigIn = {}, uint32_t nSequenceIn = SEQUENCE_FINAL)
+        : prevout(prevTxId, nOut), scriptSig{scriptSigIn}, nSequence{nSequenceIn} {}
 
     SERIALIZE_METHODS(CTxIn, obj) { READWRITE(obj.prevout, obj.scriptSig, obj.nSequence); }
 
@@ -147,7 +145,7 @@ public:
     CScript scriptPubKey;
     token::OutputDataPtr tokenDataPtr; ///< may be null (indicates no token data for this output)
 
-    CTxOut() { SetNull(); }
+    CTxOut() noexcept { SetNull(); }
 
     CTxOut(Amount nValueIn, const CScript &scriptPubKeyIn, const token::OutputDataPtr &tokenDataIn = {})
         : nValue(nValueIn), scriptPubKey(scriptPubKeyIn), tokenDataPtr(tokenDataIn) {}
@@ -396,7 +394,7 @@ private:
 
 public:
     /** Construct a CTransaction that qualifies as IsNull() */
-    CTransaction();
+    CTransaction() noexcept;
 
     /** Convert a CMutableTransaction into a CTransaction. */
     explicit CTransaction(const CMutableTransaction &tx);

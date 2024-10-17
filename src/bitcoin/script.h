@@ -625,7 +625,7 @@ protected:
     }
 
 public:
-    CScript() {}
+    constexpr CScript() noexcept = default;
     CScript(const_iterator pbegin, const_iterator pend)
         : CScriptBase(pbegin, pend) {}
     CScript(std::vector<uint8_t>::const_iterator pbegin,
@@ -879,9 +879,9 @@ struct CScriptWitness
     std::vector<std::vector<unsigned char> > stack;
 
     // Some compilers complain without a default constructor
-    CScriptWitness() = default;
+    constexpr CScriptWitness() noexcept = default;
 
-    bool IsNull() const { return stack.empty(); }
+    constexpr bool IsNull() const noexcept { return stack.empty(); }
 
     void SetNull() { stack.clear(); stack.shrink_to_fit(); }
 
