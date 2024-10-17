@@ -1,6 +1,6 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2016 The Bitcoin Core developers
-// Copyright (c) 2017-2018 The Bitcoin developers
+// Copyright (c) 2017-2024 The Bitcoin developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -11,7 +11,6 @@
 #include <cstdlib>
 #include <ostream>
 #include <string>
-#include <type_traits>
 
 namespace bitcoin {
 
@@ -46,30 +45,9 @@ public:
     }
 
     /**
-     * Equality
+     * Comparison and equality
      */
-    friend constexpr bool operator==(const Amount a, const Amount b) {
-        return a.amount == b.amount;
-    }
-    friend constexpr bool operator!=(const Amount a, const Amount b) {
-        return !(a == b);
-    }
-
-    /**
-     * Comparison
-     */
-    friend constexpr bool operator<(const Amount a, const Amount b) {
-        return a.amount < b.amount;
-    }
-    friend constexpr bool operator>(const Amount a, const Amount b) {
-        return b < a;
-    }
-    friend constexpr bool operator<=(const Amount a, const Amount b) {
-        return !(a > b);
-    }
-    friend constexpr bool operator>=(const Amount a, const Amount b) {
-        return !(a < b);
-    }
+    friend constexpr auto operator<=>(const Amount &a, const Amount &b) = default;
 
     /**
      * Unary minus
@@ -77,7 +55,7 @@ public:
     constexpr Amount operator-() const { return Amount(-amount); }
 
     /**
-     * Addition and subtraction.
+     * Addition and subtraction
      */
     friend constexpr Amount operator+(const Amount a, const Amount b) {
         return Amount(a.amount + b.amount);

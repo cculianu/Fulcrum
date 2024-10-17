@@ -28,10 +28,11 @@
 #include <QMetaType>
 #include <QString>
 
-#include <algorithm>
 #include <array>
+#include <compare>
 #include <cstring>
 #include <optional>
+#include <tuple>
 #include <vector>
 
 namespace BTC {
@@ -109,30 +110,24 @@ namespace BTC {
         Address & operator=(const char *legacyOrCash) { return (*this = QString(legacyOrCash)); }
         Address & operator=(const QByteArray &legacyOrCash) { return (*this = QString(legacyOrCash)); }
 
-        bool operator==(const Address & o) const noexcept {
-            if (isValid() != o.isValid()) return false;
-            else if (!isValid() && !o.isValid()) return true;
-            else return _net == o._net && verByte == o.verByte && _kind == o._kind && _hash == o._hash;
-        }
-        bool operator!=(const Address & o) const noexcept { return !(*this == o); }
-        /// less operator: for map support and also so that it sorts like the text address would.
+        /// Comparison operator: for map support and also so that it sorts like the text address would.
         /// All invalid addresses sort before valid ones.
-        bool operator<(const Address & o) const noexcept {
+        auto operator<=>(const Address & o) const noexcept {
             if (isValid() && o.isValid()) {
-                // sort based on concatenation of: net + verbyte + kind bytes, and if that is equal, lex compare
-                // the _hash.
-                const std::array<Byte, 3> a = { _net, verByte, _kind },
-                                          b = { o._net, o.verByte, o._kind };
-                const int cmp = std::memcmp(a.data(), b.data(), 3);
-                if (cmp == 0) return std::lexicographical_compare(_hash.begin(), _hash.end(),
-                                                                  o._hash.begin(), o._hash.end());
-                return cmp < 0;
+                // lex-compare using 3-way tuple compare
+                return std::tie(_net, verByte, _kind, _hash) <=> std::tie(o._net, o.verByte, o._kind, o._hash);
+            } else if (const int vdiff = int(isValid()) - int(o.isValid()); vdiff < 0) {
+                // invalid always sorts before valid
+                return std::strong_ordering::less;
+            } else if (vdiff > 0) {
+                // we are valid, other is not, so we are greater
+                return std::strong_ordering::greater;
             }
-            return int(isValid()) < int(o.isValid()); // invalid always sorts before valid
+            // both invalid, all invalids are equal
+            return std::strong_ordering::equal;
         }
-        bool operator<=(const Address & o) const noexcept { return *this < o || *this == o; }
-        bool operator>(const Address & o) const noexcept { return !(*this <= o); }
-        bool operator>=(const Address & o) const noexcept { return *this > o || *this == o; }
+
+        bool operator==(const Address & o) const noexcept { return this->operator<=>(o) == 0; }
 
     private:
         Net _net = BTC::Invalid;
