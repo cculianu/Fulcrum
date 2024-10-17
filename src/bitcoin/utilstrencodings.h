@@ -12,12 +12,6 @@
 #include <string>
 #include <vector>
 
-#define BEGIN(a) ((char *)&(a))
-#define END(a) ((char *)&((&(a))[1]))
-#define UBEGIN(a) ((uint8_t *)&(a))
-#define UEND(a) ((uint8_t *)&((&(a))[1]))
-#define ARRAYLEN(array) (sizeof(array) / sizeof((array)[0]))
-
 namespace bitcoin  {
 
 /** Used by SanitizeString() */
@@ -132,7 +126,7 @@ std::string HexStr(const T itbegin, const T itend, bool fSpaces = false) {
         uint8_t val = uint8_t(*it);
         if (fSpaces && it != itbegin) rv.push_back(' ');
         rv.push_back(hexmap[val >> 4]);
-        rv.push_back(hexmap[val & 15]);
+        rv.push_back(hexmap[val & 0xfu]);
     }
 
     return rv;
