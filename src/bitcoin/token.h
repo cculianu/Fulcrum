@@ -11,6 +11,7 @@
 #include "tinyformat.h"
 #include "uint256.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -78,11 +79,12 @@ using NFTCommitmentBase = prevector<MAX_CONSENSUS_COMMITMENT_LENGTH, uint8_t>;
 struct NFTCommitment : NFTCommitmentBase {
     using NFTCommitmentBase::NFTCommitmentBase;
 
-    // We override prevector::operator< which does *not* do lexicographical comparison in favor of lex compare so that
-    // the implementation of token::OutputData::operator< later in this file is easier on the eyes.
-    bool operator<(const NFTCommitment &o) const {
-        return std::lexicographical_compare(begin(), end(), o.begin(), o.end());
+    // We override prevector::operator<=> which does *not* do lexicographical comparison in favor of lex compare so that
+    // the implementation of token::OutputData::operator<=> later in this file is easier on the eyes.
+    auto operator<=>(const NFTCommitment &o) const noexcept {
+        return std::lexicographical_compare_three_way(begin(), end(), o.begin(), o.end());
     }
+    bool operator==(const NFTCommitment &o) const noexcept { return this->operator<=>(o) == 0; }
 
     SERIALIZE_METHODS(NFTCommitment, obj) {
         // Read/write commitment as a standard prevector (CompactSize limited to 32MiB, followed by byte data)
@@ -234,15 +236,15 @@ public:
         }
     }
 
-    bool operator==(const OutputData &o) const {
-        return amount == o.amount && bitfield == o.bitfield && id == o.id && commitment == o.commitment;
-    }
-    bool operator!=(const OutputData &o) const { return !this->operator==(o); }
-    bool operator<(const OutputData &o) const {
+    auto operator<=>(const OutputData &o) const {
         // Note this ordering is used for BIP69 sorting. See: https://github.com/bitjson/cashtokens
-        return   std::tuple(  amount,   HasNFT(),   GetCapability(),   commitment,   id)
-               < std::tuple(o.amount, o.HasNFT(), o.GetCapability(), o.commitment, o.id);
+        const bool nft = HasNFT(), onft = o.HasNFT();
+        const uint8_t cap = static_cast<uint8_t>(GetCapability()), ocap = static_cast<uint8_t>(o.GetCapability());
+        return     std::tie(  amount,  nft,  cap,   commitment,   id)
+               <=> std::tie(o.amount, onft, ocap, o.commitment, o.id);
     }
+
+    bool operator==(const OutputData &o) const { return this->operator<=>(o) == 0; }
 
     /// If fVerbose is true, print the full token id hex and commitment hex, otherwise print only the first
     /// 30 characters of each.

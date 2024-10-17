@@ -20,13 +20,14 @@
 
 #include "BlockProcTypes.h"
 #include "BTC.h"
+#include "Compat.h" /* for QByteArray operator<=> */
 #include "TXO.h"
 #include "Util.h"
 
 #include <QByteArray>
 #include <QVariantMap>
 
-#include <cstdint>
+#include <cstddef>
 #include <tuple> // for std::tie
 #include <unordered_set>
 #include <unordered_map>
@@ -47,8 +48,7 @@ struct DspHash {
     bool isValid() const { return bytes.size() == HashLen; }
     QByteArray toHex() const { return Util::ToHexFast(bytes); } // conveneience, faster than bytes.toHex()
 
-    bool operator==(const DspHash &o) const { return bytes == o.bytes; }
-    bool operator!=(const DspHash &o) const { return bytes != o.bytes; }
+    auto operator<=>(const DspHash &) const noexcept = default;
 
     struct Hasher { std::size_t operator()(const DspHash &d) const noexcept { return !d.bytes.isEmpty() ? HashHasher{}(d.bytes) : 0; } };
 };
@@ -63,11 +63,10 @@ struct DSProof {
     using TxHashSet = std::unordered_set<TxHash, HashHasher>;
     TxHashSet descendants; ///< all tx's affected by this dsproof (includes txHash)
 
-    bool operator==(const DSProof &o) const {
+    bool operator==(const DSProof &o) const noexcept {
         return     std::tie(  hash,   serializedProof,   txo,   txHash,   descendants)
                 == std::tie(o.hash, o.serializedProof, o.txo, o.txHash, o.descendants);
     }
-    bool operator!=(const DSProof &o) const { return !(*this == o); }
 
     bool isComplete() const {
         return hash.isValid() && txo.isValid() && !serializedProof.isEmpty() && !descendants.empty() && txHash.length() == HashLen;
@@ -106,7 +105,6 @@ public:
     std::size_t numTxDspLinks() const;
 
     bool operator==(const DSPs &o) const { return std::tie(txDspsMap, dsproofs) == std::tie(o.txDspsMap, o.dsproofs); }
-    bool operator!=(const DSPs &o) const { return !(*this == o); }
 
     /// Adds a dsp by move construction. All of the descendants in its descendant set are also added to the txDspsMap.
     /// The dsp is expected to be valid, have a dspHash, a txHash, and a valid descendants set.

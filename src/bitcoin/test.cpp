@@ -3795,14 +3795,17 @@ TEST_SUITE(span)
             auto span2 = Span(array);
 
             TEST_CHECK(span1 == span2);
+            TEST_CHECK(span1 <=> span2 == std::strong_ordering::equal);
             TEST_CHECK_EQUAL(span1 != span2, false);
 
             span1[1] = 123;
             TEST_CHECK(span1 != span2);
+            TEST_CHECK(span1 <=> span2 != std::strong_ordering::equal);
             TEST_CHECK_EQUAL(span1 == span2, false);
 
             span2[1] = 123;
             TEST_CHECK(span1 == span2);
+            TEST_CHECK(span1 <=> span2 == std::strong_ordering::equal);
             TEST_CHECK_EQUAL(span1 != span2, false);
         }
         {
@@ -3817,6 +3820,7 @@ TEST_SUITE(span)
             TEST_CHECK(!(span1 > span2));
             TEST_CHECK(span1 <= span2);
             TEST_CHECK(!(span1 >= span2));
+            TEST_CHECK(span1 <=> span2 == std::strong_ordering::less);
 
             vec2 = {0, 0, 0, 0, 0, 1};
             span2 = Span(vec2);
@@ -3825,6 +3829,7 @@ TEST_SUITE(span)
             TEST_CHECK(span1 > span2);
             TEST_CHECK(!(span1 <= span2));
             TEST_CHECK(span1 >= span2);
+            TEST_CHECK(span1 <=> span2 == std::strong_ordering::greater);
 
             vec2 = {6, 5, 4, 3, 2, 1};
             span2 = Span(vec2);
@@ -3833,6 +3838,18 @@ TEST_SUITE(span)
             TEST_CHECK(!(span1 > span2));
             TEST_CHECK(span1 <= span2);
             TEST_CHECK(!(span1 >= span2));
+            TEST_CHECK(span1 <=> span2 == std::strong_ordering::less);
+
+            vec2 = {1, 2, 3, 4, 5};
+            span2 = vec2;
+
+            TEST_CHECK(!(span1 < span2));
+            TEST_CHECK(span1 > span2);
+            TEST_CHECK(!(span1 <= span2));
+            TEST_CHECK(span1 >= span2);
+            TEST_CHECK(!(span1 == span2));
+            TEST_CHECK(span1 != span2);
+            TEST_CHECK(span1 <=> span2 == std::strong_ordering::greater);
         }
     };
 

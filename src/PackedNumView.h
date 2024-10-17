@@ -247,5 +247,4 @@ public:
     }
 
     bool operator==(const PackedNumView &o) const { return buf == o.buf; }
-    bool operator!=(const PackedNumView &o) const { return buf != o.buf; }
 };

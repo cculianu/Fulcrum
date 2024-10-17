@@ -81,7 +81,6 @@ struct Mempool
                 return     std::tie(  confirmedSpends,   unconfirmedSpends,   utxo)
                         == std::tie(o.confirmedSpends, o.unconfirmedSpends, o.utxo);
             }
-            bool operator!=(const IOInfo &o) const noexcept { return !(*this == o); }
         };
 
         /// This should always contain all the HashX's involved in this tx. Note the use of unordered_map which can
@@ -103,7 +102,6 @@ struct Mempool
             return     std::tie(  hash,   sizeBytes,   fee,   hasUnconfirmedParentTx,   txos,   hashXs)
                     == std::tie(o.hash, o.sizeBytes, o.fee, o.hasUnconfirmedParentTx, o.txos, o.hashXs);
         }
-        bool operator!=(const Tx &o) const noexcept { return !(*this == o); }
 
     };
 

@@ -8,7 +8,6 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <stdexcept>
 #include <type_traits>
 
 /** A Span is an object that can refer to a contiguous sequence of objects.
@@ -160,20 +159,8 @@ public:
     friend bool operator==(const Span &a, const Span &b) noexcept {
         return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin());
     }
-    friend bool operator!=(const Span &a, const Span &b) noexcept {
-        return !(a == b);
-    }
-    friend bool operator<(const Span &a, const Span &b) noexcept {
-        return std::lexicographical_compare(a.begin(), a.end(), b.begin(), b.end());
-    }
-    friend bool operator<=(const Span &a, const Span &b) noexcept {
-        return !(b < a);
-    }
-    friend bool operator>(const Span &a, const Span &b) noexcept {
-        return b < a;
-    }
-    friend bool operator>=(const Span &a, const Span &b) noexcept {
-        return !(a < b);
+    friend auto operator<=>(const Span &a, const Span &b) noexcept {
+        return std::lexicographical_compare_three_way(a.begin(), a.end(), b.begin(), b.end());
     }
 
     /** Ensures the convertible-to constructor works */

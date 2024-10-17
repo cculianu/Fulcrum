@@ -67,18 +67,7 @@ public:
     const TxId &GetTxId() const { return txid; }
     uint32_t GetN() const { return n; }
 
-    friend bool operator<(const COutPoint &a, const COutPoint &b) {
-        int cmp = a.txid.Compare(b.txid);
-        return cmp < 0 || (cmp == 0 && a.n < b.n);
-    }
-
-    friend bool operator==(const COutPoint &a, const COutPoint &b) {
-        return (a.txid == b.txid && a.n == b.n);
-    }
-
-    friend bool operator!=(const COutPoint &a, const COutPoint &b) {
-        return !(a == b);
-    }
+    friend bool operator<=>(const COutPoint &a, const COutPoint &b) = default;
 
     std::string ToString(bool fVerbose = false) const;
 };
@@ -143,12 +132,7 @@ public:
 
     SERIALIZE_METHODS(CTxIn, obj) { READWRITE(obj.prevout, obj.scriptSig, obj.nSequence); }
 
-    friend bool operator==(const CTxIn &a, const CTxIn &b) {
-        return (a.prevout == b.prevout && a.scriptSig == b.scriptSig &&
-                a.nSequence == b.nSequence);
-    }
-
-    friend bool operator!=(const CTxIn &a, const CTxIn &b) { return !(a == b); }
+    friend bool operator==(const CTxIn &a, const CTxIn &b) = default;
 
     std::string ToString(bool fVerbose = false) const;
 };
@@ -206,13 +190,7 @@ public:
         return !tokenDataPtr && !scriptPubKey.empty() && scriptPubKey[0] == token::PREFIX_BYTE;
     }
 
-    friend bool operator==(const CTxOut &a, const CTxOut &b) {
-        return a.nValue == b.nValue && a.scriptPubKey == b.scriptPubKey && a.tokenDataPtr == b.tokenDataPtr;
-    }
-
-    friend bool operator!=(const CTxOut &a, const CTxOut &b) {
-        return !(a == b);
-    }
+    friend bool operator==(const CTxOut &a, const CTxOut &b) noexcept = default;
 
     std::string ToString(bool fVerbose = false) const;
 };
@@ -359,7 +337,6 @@ public:
     size_t GetVirtualSize(std::optional<size_t> unstrippedSizeIfKnown = std::nullopt) const;
 
     friend bool operator==(const Derived &a, const Derived &b) { return a.GetId() == b.GetId(); }
-    friend bool operator!=(const Derived &a, const Derived &b) { return !(a == b); }
 
     bool IsNull() const { return tx().vin.empty() && tx().vout.empty(); }
     bool IsCoinBase() const { return tx().vin.size() == 1 && tx().vin[0].prevout.IsNull(); }

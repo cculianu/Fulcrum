@@ -268,7 +268,6 @@ public:
  */
 template <typename Derived>
 struct ScriptIntBase {
-public:
     /**
      * Factory method to safely construct an instance from a raw int64_t.
      *
@@ -290,53 +289,10 @@ public:
         return Derived(x);
     }
 
-    constexpr
-    bool operator==(int64_t x) const noexcept { return value_ == x; }
+    constexpr auto operator<=>(int64_t x) const noexcept { return value_ <=> x; }
+    constexpr bool operator==(int64_t x) const noexcept { return this->operator<=>(x) == 0; }
 
-    constexpr
-    bool operator!=(int64_t x) const noexcept { return value_ != x; }
-
-    constexpr
-    bool operator<=(int64_t x) const noexcept { return value_ <= x; }
-
-    constexpr
-    bool operator<(int64_t x) const noexcept { return value_ < x; }
-
-    constexpr
-    bool operator>=(int64_t x) const noexcept { return value_ >= x; }
-
-    constexpr
-    bool operator>(int64_t x) const noexcept { return value_ > x; }
-
-    constexpr
-    bool operator==(Derived const& x) const noexcept {
-        return operator==(x.value_);
-    }
-
-    constexpr
-    bool operator!=(Derived const& x) const noexcept {
-        return operator!=(x.value_);
-    }
-
-    constexpr
-    bool operator<=(Derived const& x) const noexcept {
-        return operator<=(x.value_);
-    }
-
-    constexpr
-    bool operator<(Derived const& x) const noexcept {
-        return operator<(x.value_);
-    }
-
-    constexpr
-    bool operator>=(Derived const& x) const noexcept {
-        return operator>=(x.value_);
-    }
-
-    constexpr
-    bool operator>(Derived const& x) const noexcept {
-        return operator>(x.value_);
-    }
+    friend constexpr auto operator<=>(const ScriptIntBase &a, const ScriptIntBase &b) noexcept = default;
 
     // Arithmetic operations
     std::optional<Derived> safeAdd(int64_t x) const noexcept {
@@ -930,6 +886,8 @@ struct CScriptWitness
     void SetNull() { stack.clear(); stack.shrink_to_fit(); }
 
     std::string ToString() const;
+
+    bool operator==(const CScriptWitness &) const noexcept = default;
 };
 
 } // end namespace bitcoin
