@@ -5,7 +5,9 @@
 
 #pragma once
 
+static_assert(__cplusplus >= 202000L, "C++20 is required to compile this file");
 #include <algorithm>
+#include <compare>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -92,12 +94,8 @@ public:
             ptr -= n;
             return *this;
         }
-        bool operator==(iterator x) const { return ptr == x.ptr; }
-        bool operator!=(iterator x) const { return ptr != x.ptr; }
-        bool operator>=(iterator x) const { return ptr >= x.ptr; }
-        bool operator<=(iterator x) const { return ptr <= x.ptr; }
-        bool operator>(iterator x) const { return ptr > x.ptr; }
-        bool operator<(iterator x) const { return ptr < x.ptr; }
+
+        auto operator<=>(const iterator &) const = default;
     };
 
     class reverse_iterator {
@@ -130,7 +128,6 @@ public:
             return reverse_iterator(ptr++);
         }
         bool operator==(reverse_iterator x) const { return ptr == x.ptr; }
-        bool operator!=(reverse_iterator x) const { return ptr != x.ptr; }
     };
 
     class const_iterator {
@@ -179,12 +176,7 @@ public:
             ptr -= n;
             return *this;
         }
-        bool operator==(const_iterator x) const { return ptr == x.ptr; }
-        bool operator!=(const_iterator x) const { return ptr != x.ptr; }
-        bool operator>=(const_iterator x) const { return ptr >= x.ptr; }
-        bool operator<=(const_iterator x) const { return ptr <= x.ptr; }
-        bool operator>(const_iterator x) const { return ptr > x.ptr; }
-        bool operator<(const_iterator x) const { return ptr < x.ptr; }
+        auto operator<=>(const const_iterator &) const = default;
     };
 
     class const_reverse_iterator {
@@ -216,7 +208,6 @@ public:
             return const_reverse_iterator(ptr++);
         }
         bool operator==(const_reverse_iterator x) const { return ptr == x.ptr; }
-        bool operator!=(const_reverse_iterator x) const { return ptr != x.ptr; }
     };
 
 private:
@@ -529,24 +520,16 @@ public:
         }
     }
 
-    bool operator==(const prevector &other) const {
-        if (other.size() != size())
-            return false;
-        return std::equal(begin(), end(), other.begin());
+    // This is not exactly a lex compare. It is a size-wise compare and only if sizes are equal do we do a deep compare.
+    auto operator<=>(const prevector &o) const {
+        if (this == &o) return std::strong_ordering::equal; // short-circuit for same instance
+        const auto sz = size(), osz = o.size();
+        if (sz < osz) return std::strong_ordering::less;
+        else if (sz > osz) return std::strong_ordering::greater;
+        return std::lexicographical_compare_three_way(begin(), end(), o.begin(), o.end());
     }
 
-    bool operator!=(const prevector &other) const {
-        return !(*this == other);
-    }
-
-    bool operator<(const prevector &other) const {
-        if (size() < other.size())
-            return true;
-        if (size() > other.size())
-            return false;
-        auto [it, oit] = std::mismatch(begin(), end(), other.begin());
-        return it != end() && *it < *oit;
-    }
+    bool operator==(const prevector &other) const { return this->operator<=>(other) == 0; }
 
     size_t allocated_memory() const {
         if (is_direct()) {

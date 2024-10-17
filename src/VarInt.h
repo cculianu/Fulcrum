@@ -141,12 +141,8 @@ public:
     constexpr VarInt &operator=(VarInt &&) noexcept = default;
 
     // lexicographical comparison based on raw bytes
+    constexpr auto operator<=>(const VarInt &o) const noexcept { return byteView() <=> o.byteView(); }
     constexpr bool operator==(const VarInt &o) const noexcept { return byteView() == o.byteView(); }
-    constexpr bool operator!=(const VarInt &o) const noexcept { return byteView() != o.byteView(); }
-    constexpr bool operator< (const VarInt &o) const noexcept { return byteView() <  o.byteView(); }
-    constexpr bool operator>=(const VarInt &o) const noexcept { return byteView() >= o.byteView(); }
-    constexpr bool operator<=(const VarInt &o) const noexcept { return byteView() <= o.byteView(); }
-    constexpr bool operator> (const VarInt &o) const noexcept { return byteView() >  o.byteView(); }
 
     constexpr const std::byte *data() const noexcept { return arr.data(); }
     constexpr std::size_t size() const noexcept { return sz; }

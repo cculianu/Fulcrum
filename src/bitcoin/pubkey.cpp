@@ -180,7 +180,7 @@ static int ecdsa_signature_parse_der_lax(const secp256k1_context *ctx,
     if (rlen > 32) {
         overflow = 1;
     } else {
-        memcpy(tmpsig + 32 - rlen, input + rpos, rlen);
+        std::memcpy(tmpsig + 32 - rlen, input + rpos, rlen);
     }
 
     /* Ignore leading zeroes in S */
@@ -192,7 +192,7 @@ static int ecdsa_signature_parse_der_lax(const secp256k1_context *ctx,
     if (slen > 32) {
         overflow = 1;
     } else {
-        memcpy(tmpsig + 64 - slen, input + spos, slen);
+        std::memcpy(tmpsig + 64 - slen, input + spos, slen);
     }
 
     if (!overflow) {
@@ -312,7 +312,7 @@ bool CPubKey::Derive(CPubKey &pubkeyChild, ChainCode &ccChild,
     assert(size() == COMPRESSED_PUBLIC_KEY_SIZE);
     uint8_t out[64];
     BIP32Hash(cc, nChild, *begin(), begin() + 1, out);
-    memcpy(ccChild.begin(), out + 32, 32);
+    std::memcpy(ccChild.data(), out + 32, 32);
     secp256k1_pubkey pubkey;
     if (!secp256k1_ec_pubkey_parse(secp256k1_context_verify, &pubkey, vch,
                                    size())) {
@@ -332,28 +332,28 @@ bool CPubKey::Derive(CPubKey &pubkeyChild, ChainCode &ccChild,
 
 void CExtPubKey::Encode(uint8_t code[BIP32_EXTKEY_SIZE]) const {
     code[0] = nDepth;
-    memcpy(code + 1, vchFingerprint, 4);
+    std::memcpy(code + 1, vchFingerprint, 4);
     code[5] = (nChild >> 24) & 0xFF;
     code[6] = (nChild >> 16) & 0xFF;
     code[7] = (nChild >> 8) & 0xFF;
     code[8] = (nChild >> 0) & 0xFF;
-    memcpy(code + 9, chaincode.begin(), 32);
+    std::memcpy(code + 9, chaincode.data(), 32);
     assert(pubkey.size() == CPubKey::COMPRESSED_PUBLIC_KEY_SIZE);
-    memcpy(code + 41, pubkey.begin(), CPubKey::COMPRESSED_PUBLIC_KEY_SIZE);
+    std::memcpy(code + 41, pubkey.data(), CPubKey::COMPRESSED_PUBLIC_KEY_SIZE);
 }
 
 void CExtPubKey::Decode(const uint8_t code[BIP32_EXTKEY_SIZE]) {
     nDepth = code[0];
-    memcpy(vchFingerprint, code + 1, 4);
+    std::memcpy(vchFingerprint, code + 1, 4);
     nChild = (code[5] << 24) | (code[6] << 16) | (code[7] << 8) | code[8];
-    memcpy(chaincode.begin(), code + 9, 32);
+    std::memcpy(chaincode.data(), code + 9, 32);
     pubkey.Set(code + 41, code + BIP32_EXTKEY_SIZE);
 }
 
 bool CExtPubKey::Derive(CExtPubKey &out, unsigned int _nChild) const {
     out.nDepth = nDepth + 1;
     CKeyID id = pubkey.GetID();
-    memcpy(&out.vchFingerprint[0], &id, 4);
+    std::memcpy(&out.vchFingerprint[0], &id, 4);
     out.nChild = _nChild;
     return pubkey.Derive(out.pubkey, out.chaincode, _nChild, chaincode);
 }

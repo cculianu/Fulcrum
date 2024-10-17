@@ -10,6 +10,9 @@
 #include "Span.h"
 #include "uint256.h"
 
+static_assert(__cplusplus >= 202000L, "C++20 is required to compile this file");
+#include <compare>
+#include <cstring>
 #include <stdexcept>
 #include <vector>
 
@@ -108,16 +111,16 @@ public:
     const uint8_t &operator[](unsigned int pos) const { return vch[pos]; }
 
     //! Comparator implementation.
-    friend bool operator==(const CPubKey &a, const CPubKey &b) {
-        return a.vch[0] == b.vch[0] && memcmp(a.vch, b.vch, a.size()) == 0;
+    friend std::strong_ordering operator<=>(const CPubKey &a, const CPubKey &b) noexcept {
+        if (a.vch[0] != b.vch[0]) {
+            if (a.vch[0] < b.vch[0]) return std::strong_ordering::less;
+            return std::strong_ordering::greater;
+        }
+        if (const int r = std::memcmp(a.vch, b.vch, a.size()); r == 0) return std::strong_ordering::equal;
+        else if (r < 0) return std::strong_ordering::less;
+        else return std::strong_ordering::greater;
     }
-    friend bool operator!=(const CPubKey &a, const CPubKey &b) {
-        return !(a == b);
-    }
-    friend bool operator<(const CPubKey &a, const CPubKey &b) {
-        return a.vch[0] < b.vch[0] ||
-               (a.vch[0] == b.vch[0] && memcmp(a.vch, b.vch, a.size()) < 0);
-    }
+    friend bool operator==(const CPubKey &a, const CPubKey &b) noexcept { return operator<=>(a, b) == 0; }
 
     //! Implement serialization, as if this was a byte vector.
     template <typename Stream> void Serialize(Stream &s) const {
@@ -197,13 +200,7 @@ struct CExtPubKey {
     ChainCode chaincode;
     CPubKey pubkey;
 
-    friend bool operator==(const CExtPubKey &a, const CExtPubKey &b) {
-        return a.nDepth == b.nDepth &&
-               memcmp(&a.vchFingerprint[0], &b.vchFingerprint[0],
-                      sizeof(vchFingerprint)) == 0 &&
-               a.nChild == b.nChild && a.chaincode == b.chaincode &&
-               a.pubkey == b.pubkey;
-    }
+    friend bool operator==(const CExtPubKey &a, const CExtPubKey &b) = default;
 
     void Encode(uint8_t code[BIP32_EXTKEY_SIZE]) const;
     void Decode(const uint8_t code[BIP32_EXTKEY_SIZE]);

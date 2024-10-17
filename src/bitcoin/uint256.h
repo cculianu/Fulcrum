@@ -7,6 +7,8 @@
 
 #include "crypto/common.h"
 
+static_assert(__cplusplus >= 202000L, "C++20 is required to compile this file");
+#include <compare>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -67,11 +69,11 @@ public:
     }
 
     friend inline constexpr bool operator== (const base_blob &a, const base_blob &b) noexcept { return a.Compare(b) == 0; }
-    friend inline constexpr bool operator!= (const base_blob &a, const base_blob &b) noexcept { return a.Compare(b) != 0; }
-    friend inline constexpr bool operator<  (const base_blob &a, const base_blob &b) noexcept { return a.Compare(b) <  0; }
-    friend inline constexpr bool operator<= (const base_blob &a, const base_blob &b) noexcept { return a.Compare(b) <= 0; }
-    friend inline constexpr bool operator>  (const base_blob &a, const base_blob &b) noexcept { return a.Compare(b) >  0; }
-    friend inline constexpr bool operator>= (const base_blob &a, const base_blob &b) noexcept { return a.Compare(b) >= 0; }
+    friend inline constexpr auto operator<=>(const base_blob &a, const base_blob &b) noexcept {
+        if (const int c = a.Compare(b); c == 0) return std::strong_ordering::equal;
+        else if (c < 0) return std::strong_ordering::less;
+        else return std::strong_ordering::greater;
+    }
 
     std::string GetHex() const;
     void SetHex(const char *psz) noexcept;

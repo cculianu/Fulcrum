@@ -22,6 +22,8 @@
 #include "Util.h"
 #include "VarInt.h"
 
+#include "bitcoin/tinyformat.h"
+
 #include <QByteArray>
 #include <QRandomGenerator>
 #include <QString>
@@ -32,6 +34,7 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <type_traits>
 #include <typeinfo>
@@ -80,6 +83,18 @@ void doTest(int n = 200)
     const int checkEvery = std::min(n/10, 1'000);
     vals.reserve(checkEvery);
     try {
+        auto CheckCompOps = [](const VarInt &a, const VarInt &b) {
+            const auto ha = a.hex().toStdString(), hb = b.hex().toStdString();
+            const bool ok =    (a == b) == (ha == hb)
+                            && (a != b) == (ha != hb)
+                            && (a <  b) == (ha <  hb)
+                            && (a <= b) == (ha <= hb)
+                            && (a >  b) == (ha >  hb)
+                            && (a >= b) == (ha >= hb)
+                            && (a <=> b) == (ha <=> hb);
+            if (!ok) throw std::runtime_error(strprintf("Ops check failed for: %s (hex) and %s (hex)", ha, hb));
+        };
+        std::optional<VarInt> viPrev;
         for (int i = 0; i < n; ++i) {
             val = Int(rgen->generate64() % max);
             if constexpr (std::is_signed_v<Int>) {
@@ -94,6 +109,8 @@ void doTest(int n = 200)
             Trace() << "Value: " << val <<  " hex: " << vi.hex() << " deserialized: " << val2 << " byteLen: " << vi.byteView().size();
             if (val != val2)
                 throw std::runtime_error("Ser/deser mistmatch!");
+            CheckCompOps(vi, viPrev.value_or(VarInt{}));
+            viPrev = vi;
             int expectedLen = 1;
             std::uint64_t u64val = std::uint64_t(std::make_unsigned_t<Int>(val));
             if (u64val > 247 && u64val <= bmax<8>())
