@@ -28,6 +28,7 @@
 #include <cstdint>
 #include <cstring> // for std::memcpy
 #include <functional> // for std::hash
+#include <tuple> // for std::tuple
 
 // -------------------------------------------------------------------------------------------------------------------
 // ----- Some storage helper classes below.. (safe to ignore in rest of codebase outside of Storage.h / Storage.cpp)
@@ -53,9 +54,10 @@ struct CompactTXO {
     CompactTXO & operator=(const CompactTXO & o) noexcept { compact.txNum = o.compact.txNum; compact.n = o.compact.n; return *this; }
     /// for most container types
     bool operator==(const CompactTXO &o) const noexcept { return compact.txNum == o.compact.txNum && compact.n == o.compact.n; }
-    bool operator!=(const CompactTXO &o) const noexcept { return !(*this == o); }
     /// for ordered sets
-    bool operator<(const CompactTXO &o) const noexcept  { return compact.txNum == o.compact.txNum ? compact.n < o.compact.n : compact.txNum < o.compact.txNum;  }
+    auto operator<=>(const CompactTXO &o) const noexcept  {
+        return std::tuple(compact.txNum, compact.n) <=> std::tuple(o.compact.txNum, o.compact.n);
+    }
     // convenience
     TxNum txNum() const noexcept { return TxNum(compact.txNum); }
     // convenience

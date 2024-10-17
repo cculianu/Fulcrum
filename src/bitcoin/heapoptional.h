@@ -93,6 +93,7 @@ namespace bitcoin {
             return std::equal_to{}(*p, t); // compare by pointed-to value if we not null
         }
 
+#if __cplusplus < 202000L /* C++20 auto-gens these so we don't need to bother to compile them in */
         auto operator!=(const HeapOptional & o) const -> decltype(std::declval<std::not_equal_to<T>>()(std::declval<T>(),
                                                                                                        std::declval<T>())) {
             if (p && o.p) return std::not_equal_to{}(*p, *o.p); // compare by pointed-to value if both are not null
@@ -104,6 +105,7 @@ namespace bitcoin {
             if (!p) return true; // we are not equal to t if we are nullptr
             return std::not_equal_to{}(*p, t); // compare by pointed-to value
         }
+#endif
 
         auto operator<(const HeapOptional & o) const -> decltype(std::declval<std::less<T>>()(std::declval<T>(),
                                                                                               std::declval<T>())) {

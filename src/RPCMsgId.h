@@ -55,12 +55,7 @@ public:
     bool isInt() const { return std::holds_alternative<int64_t>(var); }
     bool isString() const { return std::holds_alternative<QString>(var); }
 
-    bool operator<(const RPCMsgId & o) const { return var < o.var; }
-    bool operator>(const RPCMsgId & o) const { return var > o.var; }
-    bool operator<=(const RPCMsgId & o) const { return var <= o.var; }
-    bool operator>=(const RPCMsgId & o) const { return var >= o.var; }
-    bool operator==(const RPCMsgId & o) const { return var == o.var; }
-    bool operator!=(const RPCMsgId & o) const { return var != o.var; }
+    auto operator<=>(const RPCMsgId & o) const = default;
 
     // assign from compatible type
     RPCMsgId &operator=(const QString &s) { var = s; return *this; }

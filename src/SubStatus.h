@@ -92,7 +92,6 @@ public:
     }
 
     bool operator==(const SubStatus &o) const { return var == o.var; }
-    bool operator!=(const SubStatus &o) const { return var != o.var; }
 
     explicit operator bool() const noexcept { return has_value(); }
 

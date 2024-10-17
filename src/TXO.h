@@ -43,7 +43,7 @@ struct TXO {
     QString toString() const;
 
     bool operator==(const TXO &o) const noexcept { return std::tie(outN, txHash) == std::tie(o.outN, o.txHash); /* cheaper to compare the outNs first */ }
-    bool operator<(const TXO &o) const noexcept { return std::tie(txHash, outN) < std::tie(o.txHash, o.outN); }
+    auto operator<=>(const TXO &o) const noexcept { return std::tie(txHash, outN) <=> std::tie(o.txHash, o.outN); }
 
 
     // Serialization. Note that the resulting buffer may be 34 or 35 bytes, depending on whether IONum's value > 65535.
@@ -120,7 +120,6 @@ struct TXOInfo {
         return     std::tie(  amount,   hashX,   confirmedHeight,   txNum,   tokenDataPtr)
                 == std::tie(o.amount, o.hashX, o.confirmedHeight, o.txNum, o.tokenDataPtr);
     }
-    bool operator!=(const TXOInfo &o) const { return !(*this == o); }
 
 private:
     static inline constexpr BlockHeight kNoBlockHeight = -1; // 0xffffffff; prevous code used int32_t(-1) to indicate no conf height

@@ -71,10 +71,5 @@ struct Version
     QString toString(bool alwaysIncludeRevEvenIfZero = false) const;
 
     constexpr bool isValid() const noexcept { return major || minor || revision; }
-    constexpr bool operator==(const Version & o) const noexcept { return std::tie(major, minor, revision) == std::tie(o.major, o.minor, o.revision); }
-    constexpr bool operator<(const Version & o) const noexcept { return std::tie(major, minor, revision) < std::tie(o.major, o.minor, o.revision); }
-    constexpr bool operator!=(const Version & o) const noexcept { return !(*this == o); }
-    constexpr bool operator<=(const Version & o) const noexcept { return *this < o || *this == o; }
-    constexpr bool operator>(const Version & o) const noexcept { return !(*this <= o); }
-    constexpr bool operator>=(const Version & o) const noexcept { return !(*this < o); }
+    constexpr auto operator<=>(const Version & o) const noexcept = default;
 };

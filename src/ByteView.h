@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <array>
+#include <compare>
 #include <concepts> // for std::integral
 #include <cstddef>
 #include <cstdint>
@@ -139,7 +140,7 @@ public:
         return 0;
     }
 
-    // Operators
+    // Relational operators -- we customize operator== for faster compare, C++20 auto-gens != for us based on this.
     constexpr bool operator==(const ByteView &o) const noexcept {
         if (size() != o.size()) return false;
         if (data() == o.data()) return true; // fast-path for same ptr
@@ -150,12 +151,12 @@ public:
         return true;
     }
 
-    constexpr bool operator!=(const ByteView &o) const noexcept { return ! this->operator==(o); }
-
-    constexpr bool operator<(const ByteView &o) const noexcept { return compare(o) < 0; }
-    constexpr bool operator<=(const ByteView &o) const noexcept { return compare(o) <= 0; }
-    constexpr bool operator>=(const ByteView &o) const noexcept { return compare(o) >= 0; }
-    constexpr bool operator>(const ByteView &o) const noexcept { return compare(o) > 0; }
+    // Define spaceship operator for the other 4 relational operator
+    constexpr std::strong_ordering operator<=>(const ByteView &o) const noexcept {
+        if (const int cmp = compare(o); cmp == 0) return std::strong_ordering::equal;
+        else if (cmp < 0) return std::strong_ordering::less;
+        return std::strong_ordering::greater;
+    }
 
 private:
     pointer m_data{};

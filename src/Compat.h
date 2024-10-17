@@ -21,6 +21,7 @@
 #include <QMetaType>
 #include <QtCore>
 
+#include <compare>
 #include <type_traits>
 #include <utility>
 
@@ -82,4 +83,17 @@ namespace Compat {
         return GetVarType(var) == type;
     }
 
+    template <typename T>
+    concept QStrOrQBA = std::is_same_v<T, QString> || std::is_same_v<T, QByteArray>;
+
 } // end namespace Compat
+
+// Implement operator<=> for QString and QByteArray, so that we can get synthesized operator<=> for types containing
+// these types. Note: We do this as a template so that we don't get compile errors in the future should Qt later
+// implement operator<=> overloads for these types.
+template <Compat::QStrOrQBA T>
+std::strong_ordering operator<=>(const T & a, const T & b) noexcept {
+    if (const int r = a.compare(b); r == 0) return std::strong_ordering::equal;
+    else if (r < 0) return std::strong_ordering::less;
+    return std::strong_ordering::greater;
+}
