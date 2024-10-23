@@ -1320,7 +1320,7 @@ void Controller::process(bool beSilentIfUpToDate)
                 // lack in mempool. Just to be sure, schedule us to run again in 500 msec.
                 polltimeout = int(Options::minPollTimeSecs * 1e3);
                 DebugM("zmq hashtx received with a (possibly) new txn while we were synching, re-scheduling"
-                       " another bitcoind update immediately ...");
+                       " another bitcoind update in ", polltimeout, " msec ...");
             } else
                 DebugM("zmq hashtx received while we were synching, however we have the txn already in mempool, ignoring ...");
         }
@@ -1414,19 +1414,20 @@ void Controller::process(bool beSilentIfUpToDate)
         callOnTimerSoonNoRepeat(polltimeout, pollTimerName, [this]{ on_Poll(); });
 }
 
-void Controller::on_Poll(std::optional<std::pair<ZmqTopic, QByteArray>> zmqNotifHash)
+void Controller::on_Poll(std::optional<std::pair<ZmqTopic, QByteArray>> zmqNotifOpt)
 {
     if (!sm)
         process(true); // process immediately
-    else if (zmqNotifHash) {
+    else if (zmqNotifOpt) {
         // deferred processing for when current task completes
-        using T = ZmqTopic::Tag;
-        switch (zmqNotifHash->first.tag) {
-        case T::HashBlock:
-            sm->mostRecentZmqHashBlockNotif = std::move(zmqNotifHash->second);
+        auto & [topic, hash] = *zmqNotifOpt;
+        using enum ZmqTopic::Tag;
+        switch (topic.tag) {
+        case HashBlock:
+            sm->mostRecentZmqHashBlockNotif = std::move(hash);
             break;
-        case T::HashTx:
-            sm->mostRecentZmqHashTxNotif = std::move(zmqNotifHash->second);
+        case HashTx:
+            sm->mostRecentZmqHashTxNotif = std::move(hash);
             break;
         }
     }
@@ -1979,8 +1980,8 @@ void Controller::zmqTopicStop(ZmqTopic t)
 const char *Controller::ZmqPvt::Topic::str() const noexcept
 {
     switch (tag) {
-    case Tag::HashBlock: return "hashblock";
-    case Tag::HashTx: return "hashtx";
+    case HashBlock: return "hashblock";
+    case HashTx: return "hashtx";
     }
     return "unknown";
 }

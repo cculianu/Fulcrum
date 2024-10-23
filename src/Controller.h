@@ -26,10 +26,10 @@
 #include "Storage.h"
 #include "SrvMgr.h"
 
-#include <array>
 #include <atomic>
 #include <concepts> // for std::derived_from
 #include <functional> // for std::hash
+#include <iterator> // for std::size
 #include <memory>
 #include <optional>
 #include <tuple>
@@ -226,8 +226,9 @@ private:
             const char *str() const noexcept;
             constexpr auto operator<=>(const Topic &) const noexcept = default;
         };
-        static inline constexpr const std::array<Topic, 2u> allTopics = {Topic{.tag = Topic::Tag::HashBlock}, {Topic::Tag::HashTx}};
-        static inline constexpr size_t nTopics() noexcept { return allTopics.size(); }
+        using enum Topic::Tag;
+        static constexpr const Topic allTopics[] = { {HashBlock}, /* {HashTx} <-- disabled because too spammy */ };
+        static constexpr size_t nTopics() noexcept { return std::size(allTopics); }
         struct TopicHasher {
             std::hash<int> hasher;
             inline size_t operator()(Topic t) const noexcept { return hasher(static_cast<int>(t.tag)); }
@@ -287,7 +288,7 @@ protected:
     /// Called from the poll timer to restart the state machine and get latest blocks and mempool (process());
     /// Also called if we received a zmq hashblock or hashtx notification (in which case it will be called with the valid
     /// header or tx hash, already in big endian byte order).
-    void on_Poll(std::optional<std::pair<ZmqTopic, QByteArray>> zmqNotifHash = std::nullopt);
+    void on_Poll(std::optional<std::pair<ZmqTopic, QByteArray>> zmqNotifOpt = std::nullopt);
 
 private slots:
     /// Stops the ZmqNotifier for this topic; called if we received an empty address for this topic from BitcoinDMgr or
