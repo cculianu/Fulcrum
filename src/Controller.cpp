@@ -128,12 +128,8 @@ void Controller::startup()
 
                 // also (re)start the zmq notifier(s) if we had any before and bitcoind came back (but only if we are
                 // "ready" and able to serve connections)
-                if (srvmgr) {
-                    for (const auto & [topic, state] : zmqs.map) {
-                        if (!state.lastKnownAddr.isEmpty())
-                            zmqTopicStart(topic);
-                    }
-                }
+                if (srvmgr)
+                    zmqStartAllKnown();
             }
         });
 
@@ -207,11 +203,9 @@ void Controller::startup()
             // connect the header subscribe signal
             conns += connect(this, &Controller::newHeader, srvmgr.get(), &SrvMgr::newHeader);
 
-            // If BitcoinDMgr told us about a ZMQ hashblock notification address, start the ZMQ notifier
+            // If BitcoinDMgr told us about a ZMQ notification address for a topic we care about, start the ZMQ notifier
             // (this does not happen if no ZMQ enabled at compile-time)
-            for (const auto & [topic, state] : zmqs.map)
-                if (!state.lastKnownAddr.isEmpty())
-                    zmqTopicStart(topic);
+            zmqStartAllKnown();
         }
     }, Qt::QueuedConnection);
 
@@ -366,7 +360,7 @@ void Controller::cleanup()
     stopFlag = true;
     stop();
     tasks.clear(); // deletes all tasks asap
-    for (auto & [t, state] : zmqs.map) { // Stop ZMQ notifiers
+    for (auto & [t, state] : zmqs) { // Stop ZMQ notifiers
         if (state.notifier) {
             Log() << "Stopping " << state.notifier->objectName() << " ...";
             state.notifier.reset();
@@ -1767,7 +1761,7 @@ auto Controller::stats() const -> Stats
     }
     { // ZMQ
         QVariantMap m2;
-        for (const auto & [topic, state] : zmqs.map) {
+        for (const auto & [topic, state] : zmqs) {
             if (state.notifier && state.notifier->isRunning()) {
                 QVariantMap m3;
                 m3["address"] = state.lastKnownAddr;
@@ -1975,6 +1969,13 @@ void Controller::zmqTopicStop(ZmqTopic t)
     if (auto *state = zmqs.find(t); state && state->notifier && state->notifier->isRunning()) {
         state->notifier->stop();
     }
+}
+
+void Controller::zmqStartAllKnown()
+{
+    for (const auto & [topic, state] : zmqs)
+        if (!state.lastKnownAddr.isEmpty())
+            zmqTopicStart(topic);
 }
 
 const char *Controller::ZmqPvt::Topic::str() const noexcept

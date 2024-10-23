@@ -254,6 +254,11 @@ private:
         TopicState & operator[](Topic t); // must define in Controller.cpp translation unit due to incomplete ZmqSubNotifier type
         TopicState *find(Topic t) noexcept { if (auto it = map.find(t); it != map.end()) return &it->second; return nullptr; }
 
+        auto begin() { return map.begin(); }
+        auto begin() const { return map.begin(); }
+        auto end() { return map.end(); }
+        auto end() const { return map.end(); }
+
         ~ZmqPvt(); // must define d'tor in Controller.cpp translation unit due to incomplete ZmqSubNotifier type
     } zmqs;
 
@@ -262,6 +267,9 @@ private:
     /// (re)starts listening for notifications from the ZmqNotifier for this topic; called if we received a valid zmq
     /// address for this topic from BitcoinDMgr, after servers are started.
     void zmqTopicStart(ZmqTopic topic);
+
+    /// (re)starts all zmq notifiers that have a non-empty lastKnownAddr
+    void zmqStartAllKnown();
 
     /// Litecoin only: Ignore these txhashes from mempool (don't download them). This gets cleared each time
     /// before the first SynchMempool after we receive a new block, then is persisted for all the SynchMempools
