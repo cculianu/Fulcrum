@@ -295,6 +295,9 @@ public:
     /// Caller must hold the returned ExclusiveLockGuard for as long as they use the reference otherwise bad things happen!
     std::pair<Mempool &, ExclusiveLockGuard> mutableMempool();
 
+    /// Returns true if txhash is in the mempool, false otherwise. Thread-safe (takes mempool shared lock internally).
+    bool isTxInMempool(const TxHash &txhash) const;
+
     /// Thread-safe. Query db (but not mempool) for a UTXO, and return its info if found.  May throw on database error.
     /// (Does not take the blocks lock)
     std::optional<TXOInfo> utxoGetFromDB(const TXO &, bool throwIfMissing = false);

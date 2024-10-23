@@ -26,14 +26,17 @@
 #include "Storage.h"
 #include "SrvMgr.h"
 
+#include <array>
 #include <atomic>
 #include <concepts> // for std::derived_from
+#include <functional> // for std::hash
 #include <memory>
 #include <optional>
 #include <tuple>
 #include <shared_mutex>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility> // for std::pair
 
 class CtlTask;
 class SSLCertMonitor;
@@ -136,11 +139,6 @@ protected:
     Stats stats() const override; // from StatsMixin
     Stats debug(const StatsParams &) const override; // from StatsMixin
 
-    /// Called from the poll timer to restart the state machine and get latest blocks and mempool (process());
-    /// Also called if we received a zmq hashblock notification (in which case it will be called with the valid
-    /// header hash, already in big endian byte order).
-    void on_Poll(std::optional<QByteArray> zmqBlockHash = std::nullopt);
-
 protected slots:
     void process(bool beSilentIfUpToDate); ///< generic callback to advance state
     void process() override { process(false); } ///< from ProcessAgainMixin
@@ -219,19 +217,50 @@ private:
     /// If --dump-sh was specified on CLI, this will execute at startup() time right after storage has been loaded. May throw.
     void dumpScriptHashes(const QString &fileName);
 
-    /// Will be nullptr if zmq disabled or bitcoind lacks a "hashblock" endpoint
-    std::unique_ptr<ZmqSubNotifier> zmqHashBlockNotifier;
-    /// Populated from bitcoindmgr's zmqNotificationsChanged signal. If empty, remote has no hashblock notifications
-    /// advertised in `getzmqnotifications`
-    QString lastKnownZmqHashBlockAddr;
-    /// Permanently latched to true after the first time we start the ZMQ notifier (to suppress logging for subsequent re-starts)
-    bool zmqHashBlockDidLogStartup = false;
-    /// The number of notifications received from bitcoind via ZMQ total since app start.
-    unsigned zmqHashBlockNotifCt = 0;
+    /// Stores ZMQ notification state for "hashblock" and "hashtx" ZMQ topics from remote bitcoind.
+    struct ZmqPvt {
+        struct Topic {
+            enum class Tag : uint8_t { HashBlock, HashTx };
+            const Tag tag;
+            // returns: "hashblock" or "hashtx"
+            const char *str() const noexcept;
+            constexpr auto operator<=>(const Topic &) const noexcept = default;
+        };
+        static inline constexpr const std::array<Topic, 2u> allTopics = {Topic{.tag = Topic::Tag::HashBlock}, {Topic::Tag::HashTx}};
+        static inline constexpr size_t nTopics() noexcept { return allTopics.size(); }
+        struct TopicHasher {
+            std::hash<int> hasher;
+            inline size_t operator()(Topic t) const noexcept { return hasher(static_cast<int>(t.tag)); }
+        };
 
-    /// (re)starts listening for notifications from the zmqHashBlockNotifier; called if we received a valid zmq address
-    /// from BitcoinDMgr, after servers are started.
-    void zmqHashBlockStart();
+        struct TopicState {
+            using SubNotifierPtr = std::unique_ptr<ZmqSubNotifier>;
+            /// Will be nullptr if zmq disabled or bitcoind lacks this topic endpoint
+            SubNotifierPtr notifier;
+            /// Populated from bitcoindmgr's zmqNotificationsChanged signal. If empty, remote has no notifications
+            /// advertised in `getzmqnotifications` for this topic.
+            QString lastKnownAddr;
+            /// Permanently latched to true after the first time we start this ZMQ notifier (to suppress logging for subsequent re-starts)
+            bool didLogStartup = false;
+            /// The number of notifications received from bitcoind via ZMQ for this topic since app start.
+            size_t notifCt = 0u;
+            ~TopicState(); // must define d'tor in Controller.cpp translation unit due to incomplete ZmqSubNotifier type
+        };
+
+        using TopicNotifierMap = std::unordered_map<Topic, TopicState, TopicHasher>;
+        TopicNotifierMap map{nTopics()};
+
+        TopicState & operator[](Topic t); // must define in Controller.cpp translation unit due to incomplete ZmqSubNotifier type
+        TopicState *find(Topic t) noexcept { if (auto it = map.find(t); it != map.end()) return &it->second; return nullptr; }
+
+        ~ZmqPvt(); // must define d'tor in Controller.cpp translation unit due to incomplete ZmqSubNotifier type
+    } zmqs;
+
+    using ZmqTopic = ZmqPvt::Topic;
+
+    /// (re)starts listening for notifications from the ZmqNotifier for this topic; called if we received a valid zmq
+    /// address for this topic from BitcoinDMgr, after servers are started.
+    void zmqTopicStart(ZmqTopic topic);
 
     /// Litecoin only: Ignore these txhashes from mempool (don't download them). This gets cleared each time
     /// before the first SynchMempool after we receive a new block, then is persisted for all the SynchMempools
@@ -254,10 +283,16 @@ private:
     /// its current process() invocation.
     bool checkRpaIndexNeedsSync(int tipHeight);
 
+protected:
+    /// Called from the poll timer to restart the state machine and get latest blocks and mempool (process());
+    /// Also called if we received a zmq hashblock or hashtx notification (in which case it will be called with the valid
+    /// header or tx hash, already in big endian byte order).
+    void on_Poll(std::optional<std::pair<ZmqTopic, QByteArray>> zmqNotifHash = std::nullopt);
+
 private slots:
-    /// Stops the zmqHashBlockNotifier; called if we received an empty hashblock endpoint address from BitcoinDMgr or
+    /// Stops the ZmqNotifier for this topic; called if we received an empty address for this topic from BitcoinDMgr or
     /// when all connections to bitcoind are lost
-    void zmqHashBlockStop();
+    void zmqTopicStop(ZmqTopic topic);
 };
 
 /// Abstract base class for our private internal tasks. Concrete implementations are in Controller.cpp.

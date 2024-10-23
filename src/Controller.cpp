@@ -114,7 +114,10 @@ void Controller::startup()
         conns += connect(bitcoindmgr.get(), &BitcoinDMgr::coinDetected, this, &Controller::on_coinDetected,
                          /* NOTE --> */ Qt::DirectConnection);
         conns += connect(bitcoindmgr.get(), &BitcoinDMgr::allConnectionsLost, this, waitForBitcoinD);
-        conns += connect(bitcoindmgr.get(), &BitcoinDMgr::allConnectionsLost, this, &Controller::zmqHashBlockStop); // stop zmq unconditionally
+        conns += connect(bitcoindmgr.get(), &BitcoinDMgr::allConnectionsLost, this, [this]{
+            // stop all zmq unconditionally
+            for (const auto topic : zmqs.allTopics) zmqTopicStop(topic);
+        });
         conns += connect(bitcoindmgr.get(), &BitcoinDMgr::gotFirstGoodConnection, this, [this](quint64 id) {
             // connection to kick off our 'process' method once the first auth is received
             if (lostConn) {
@@ -123,29 +126,38 @@ void Controller::startup()
                 DebugM("Auth recvd from bicoind with id: ", id, ", proceeding with processing ...");
                 callOnTimerSoonNoRepeat(smallDelay, callProcessTimer, [this]{process();}, true);
 
-                // also (re)start the zmq notifier if we had one before and bitcoind came back (but only if we are
+                // also (re)start the zmq notifier(s) if we had any before and bitcoind came back (but only if we are
                 // "ready" and able to serve connections)
-                if (!lastKnownZmqHashBlockAddr.isEmpty() && srvmgr)
-                    zmqHashBlockStart();
+                if (srvmgr) {
+                    for (const auto & [topic, state] : zmqs.map) {
+                        if (!state.lastKnownAddr.isEmpty())
+                            zmqTopicStart(topic);
+                    }
+                }
             }
         });
 
-        conns += connect(bitcoindmgr.get(), &BitcoinDMgr::zmqNotificationsChanged, this, [this](BitcoinDZmqNotifications zmqs) {
+        conns += connect(bitcoindmgr.get(), &BitcoinDMgr::zmqNotificationsChanged, this, [this](BitcoinDZmqNotifications bdzmqs) {
             // NB: this only fires if ZmqSubNotifier::isAvailable() == true
-            if (!(lastKnownZmqHashBlockAddr = zmqs.value("hashblock")).isEmpty()) {
-                DebugM("\"hashblock\" topic address: ", lastKnownZmqHashBlockAddr);
-                // We only start the ZMQ notifier once we are "ready" and the servers are started
-                // (see also one of the upToDate triggered slots below)
-                if (srvmgr) {
-                    // maybe restart if it was running (to apply new address)
-                    if (zmqHashBlockNotifier && zmqHashBlockNotifier->isRunning()) {
-                        DebugM("applying new hashblock address to already-running zmq notifier");
+            for (const auto topic : zmqs.allTopics) {
+                if (const auto & topicAddr = bdzmqs.value(topic.str()); !topicAddr.isEmpty()) {
+                    auto & state = zmqs[topic];
+                    state.lastKnownAddr = topicAddr;
+                    DebugM("\"", topic.str(), "\" topic address: ", state.lastKnownAddr);
+                    // We only start the ZMQ notifier once we are "ready" and the servers are started
+                    // (see also one of the upToDate triggered slots below)
+                    if (srvmgr) {
+                        // maybe restart if it was running (to apply new address)
+                        if (state.notifier && state.notifier->isRunning()) {
+                            DebugM("applying new ", topic.str(), " address to already-running zmq notifier");
+                        }
+                        zmqTopicStart(topic); // may re-start existing notifier, or create a new one if none exists
                     }
-                    zmqHashBlockStart(); // may re-start existing notifier, or create a new one if none exists
+                } else {
+                    // bitcoind lacks this topicName endpoint (e.g. lacks "hashblock" or "hashtx") -- stop existing
+                    // notifier, if it exists
+                    zmqTopicStop(topic);
                 }
-            } else {
-                // bitcoind lacks the "hashblock" endpoint -- stop existing hashblock notifier, if it exists
-                zmqHashBlockStop();
             }
         });
 
@@ -197,8 +209,9 @@ void Controller::startup()
 
             // If BitcoinDMgr told us about a ZMQ hashblock notification address, start the ZMQ notifier
             // (this does not happen if no ZMQ enabled at compile-time)
-            if (!lastKnownZmqHashBlockAddr.isEmpty())
-                zmqHashBlockStart();
+            for (const auto & [topic, state] : zmqs.map)
+                if (!state.lastKnownAddr.isEmpty())
+                    zmqTopicStart(topic);
         }
     }, Qt::QueuedConnection);
 
@@ -353,7 +366,13 @@ void Controller::cleanup()
     stopFlag = true;
     stop();
     tasks.clear(); // deletes all tasks asap
-    if (zmqHashBlockNotifier) { Log("Stopping ZMQ notifier ..."); zmqHashBlockNotifier.reset(); }
+    for (auto & [t, state] : zmqs.map) { // Stop ZMQ notifiers
+        if (state.notifier) {
+            Log() << "Stopping " << state.notifier->objectName() << " ...";
+            state.notifier.reset();
+        }
+
+    }
     if (srvmgr) { Log("Stopping SrvMgr ... "); srvmgr->cleanup(); srvmgr.reset(); }
     if (bitcoindmgr) { Log("Stopping BitcoinDMgr ... "); bitcoindmgr->cleanup(); bitcoindmgr.reset(); }
     if (storage) { Log("Closing storage ..."); storage->cleanup(); storage.reset(); }
@@ -848,7 +867,10 @@ struct Controller::StateMachine
     void * mostRecentGetChainInfoTask = nullptr;
 
     /// will be valid and not empty only if a zmq hashblock notification happened while we were running the block & mempool synch task
-    QByteArray mostRecentZmqNotif;
+    QByteArray mostRecentZmqHashBlockNotif;
+
+    /// will be valid and not empty only if a zmq hashtx notification happened while we were running the block & mempool synch task
+    QByteArray mostRecentZmqHashTxNotif;
 
     /// This is valid only if we are in an initial sync
     std::optional<Storage::InitialSyncRAII> initialSyncRaii;
@@ -1283,8 +1305,8 @@ void Controller::process(bool beSilentIfUpToDate)
         enablePollTimer = true;
         emit synchFailure();
     } else if (sm->state == State::End) {
-        if (!sm->mostRecentZmqNotif.isEmpty()) {
-            if (sm->mostRecentZmqNotif != storage->latestTip().second) {
+        if (!sm->mostRecentZmqHashBlockNotif.isEmpty()) {
+            if (sm->mostRecentZmqHashBlockNotif != storage->latestTip().second) {
                 // While we were synching -- a zmq notification happened -- and it told us about a block header that is
                 // not our latest tip. Just to be sure, schedule us to run again immediately.
                 polltimeout = 0;
@@ -1292,6 +1314,15 @@ void Controller::process(bool beSilentIfUpToDate)
                        " another bitcoind update immediately ...");
             } else
                 DebugM("zmq hashblock received while we were synching, however it matches our latest tip, ignoring ...");
+        } else if (!sm->mostRecentZmqHashTxNotif.isEmpty()) {
+            if (!storage->isTxInMempool(sm->mostRecentZmqHashTxNotif)) {
+                // While we were synching -- a zmq notification happened -- and it told us about a txhash that we
+                // lack in mempool. Just to be sure, schedule us to run again in 500 msec.
+                polltimeout = int(Options::minPollTimeSecs * 1e3);
+                DebugM("zmq hashtx received with a (possibly) new txn while we were synching, re-scheduling"
+                       " another bitcoind update immediately ...");
+            } else
+                DebugM("zmq hashtx received while we were synching, however we have the txn already in mempool, ignoring ...");
         }
         {
             std::lock_guard g(smLock);
@@ -1383,12 +1414,22 @@ void Controller::process(bool beSilentIfUpToDate)
         callOnTimerSoonNoRepeat(polltimeout, pollTimerName, [this]{ on_Poll(); });
 }
 
-void Controller::on_Poll(std::optional<QByteArray> zmqBlockHash)
+void Controller::on_Poll(std::optional<std::pair<ZmqTopic, QByteArray>> zmqNotifHash)
 {
     if (!sm)
         process(true); // process immediately
-    else if (zmqBlockHash)
-        sm->mostRecentZmqNotif = std::move(*zmqBlockHash); // deferred processing for when current task completes
+    else if (zmqNotifHash) {
+        // deferred processing for when current task completes
+        using T = ZmqTopic::Tag;
+        switch (zmqNotifHash->first.tag) {
+        case T::HashBlock:
+            sm->mostRecentZmqHashBlockNotif = std::move(zmqNotifHash->second);
+            break;
+        case T::HashTx:
+            sm->mostRecentZmqHashTxNotif = std::move(zmqNotifHash->second);
+            break;
+        }
+    }
 }
 
 // this is called by the 2 below on_putBlock and on_putRpaIndex functions to avoid boilerplate
@@ -1725,11 +1766,13 @@ auto Controller::stats() const -> Stats
     }
     { // ZMQ
         QVariantMap m2;
-        if (zmqHashBlockNotifier && zmqHashBlockNotifier->isRunning()) {
-            QVariantMap m3;
-            m3["address"] = lastKnownZmqHashBlockAddr;
-            m3["notifications"] = zmqHashBlockNotifCt;
-            m2["hashblock"] = m3;
+        for (const auto & [topic, state] : zmqs.map) {
+            if (state.notifier && state.notifier->isRunning()) {
+                QVariantMap m3;
+                m3["address"] = state.lastKnownAddr;
+                m3["notifications"] = static_cast<qulonglong>(state.notifCt);
+                m2[topic.str()] = m3;
+            }
         }
         m["ZMQ Notifiers (active)"] = m2;
     }
@@ -1857,23 +1900,27 @@ std::tuple<size_t, size_t, size_t> Controller::nTxInOutSoFar() const
     return {nTx, nIn, nOut};
 }
 
-void Controller::zmqHashBlockStart()
+void Controller::zmqTopicStart(ZmqTopic t)
 {
     if (!ZmqSubNotifier::isAvailable()) {
         DebugM(__func__, ": zmq unavailable, ignoring start request");
-        zmqHashBlockNotifier.reset(); // ensure it's dead -- should never be alive in this case (indicates a bug).
+        if (auto *state = zmqs.find(t)) {
+            state->notifier.reset(); // ensure it's dead -- should never be alive in this case (indicates a bug).
+            zmqs.map.erase(t);
+        }
         return;
     }
-    if (!zmqHashBlockNotifier) {
+    auto &state = zmqs[t];
+    if (!state.notifier) {
         // first time through, create a new notifier
-        zmqHashBlockNotifier = std::make_unique<ZmqSubNotifier>(this);
-        zmqHashBlockNotifier->setObjectName("ZMQ Notifier (hashblock)");
+        state.notifier = std::make_unique<ZmqSubNotifier>(this);
+        state.notifier->setObjectName(QString("ZMQ Notifier (%1)").arg(t.str()));
         // connect signals
-        conns += connect(zmqHashBlockNotifier.get(), &ZmqSubNotifier::errored, this, [](const QString &errMsg){
-            Warning() << "zmqHashBlockNotifier: " << errMsg;
+        conns += connect(state.notifier.get(), &ZmqSubNotifier::errored, this, [t](const QString &errMsg){
+            Warning() << "zmqNotifier \"" << t.str() << "\": " << errMsg;
         });
-        conns += connect(zmqHashBlockNotifier.get(), &ZmqSubNotifier::gotMessage, this, [this](const QString &topic, const QByteArrayList &parts) {
-            std::optional<QByteArray> optHash;
+        conns += connect(state.notifier.get(), &ZmqSubNotifier::gotMessage, this, [this, t](const QString &topic, const QByteArrayList &parts) {
+            std::optional<std::pair<ZmqTopic, QByteArray>> optPair;
             if (Debug::isEnabled()) {
                 Debug d;
                 d << "got zmq " << topic << " notification: ";
@@ -1884,46 +1931,63 @@ void Controller::zmqHashBlockStart()
                         d << QString(part);
                     else if (i == 3) // sequence number (little endian)
                         d << bitcoin::ReadLE32(reinterpret_cast<const uint8_t *>(part.constData()));
-                    else { // block hash (binary, big endian byte order)
-                        optHash = part;
+                    else { // block or tx hash (binary, big endian byte order)
+                        optPair.emplace(t, part);
                         d << QString(Util::ToHexFast(part));
                     }
                  }
             }
-            if (!optHash && parts.size() >= 2) {
-                const auto &part = parts[1]; // blockhash is second element
+            if (!optPair && parts.size() >= 2) {
+                const auto &part = parts[1]; // blockhash or txhash is second element
                 if (part.size() == 32) // ensure proper format
-                    optHash = part; // this is already in big endian order (which is how we also store them)
+                    optPair.emplace(t, part); // this is already in big endian order (which is how we also store them)
             }
-            if (UNLIKELY(!optHash))
-                Error() << "Unexpected format: got zmq hashblock notification but it is missing the block hash!";
-            else
-                ++zmqHashBlockNotifCt;
+            if (UNLIKELY(!optPair))
+                Error() << "Unexpected format: got zmq " << topic << " notification but it is missing the hash!";
+            else {
+                if (auto *state = zmqs.find(t)) [[likely]]
+                    ++state->notifCt; // this branch should always be taken
+                else
+                    Error() << "INTERNAL ERROR: Missing ZmqPvt::TopicState object for \"" << topic << "\"!. FIXME!";
+            }
             // notify (may end up calling this->process())
-            on_Poll(std::move(optHash));
+            on_Poll(std::move(optPair));
         });
     }
-    if (zmqHashBlockNotifier->isRunning())
-        zmqHashBlockNotifier->stop();
-    if (lastKnownZmqHashBlockAddr.isEmpty()) {
-        DebugM(__func__, ": zmq hashblock address is empty, ignoring start request");
+    if (state.notifier->isRunning())
+        state.notifier->stop();
+    if (state.lastKnownAddr.isEmpty()) {
+        DebugM(__func__, ": zmq ", t.str(), " address is empty, ignoring start request");
         return;
     }
-    if (!zmqHashBlockDidLogStartup) {
-        zmqHashBlockDidLogStartup = true;
-        Log() << "Starting " << zmqHashBlockNotifier->objectName() << " ...";
+    if (!state.didLogStartup) {
+        state.didLogStartup = true;
+        Log() << "Starting " << state.notifier->objectName() << " ...";
     }
-    if (!zmqHashBlockNotifier->start(lastKnownZmqHashBlockAddr, "hashblock", 30 * 60 * 1000 /* idle timeout: 30 mins in msecs */)) {
+    if (!state.notifier->start(state.lastKnownAddr, t.str(), 30 * 60 * 1000 /* idle timeout: 30 mins in msecs */)) {
         Warning() << __func__ << ": start failed";
     }
 }
 
-void Controller::zmqHashBlockStop()
+void Controller::zmqTopicStop(ZmqTopic t)
 {
-    if (!zmqHashBlockNotifier || !zmqHashBlockNotifier->isRunning())
-        return;
-    zmqHashBlockNotifier->stop();
+    if (auto *state = zmqs.find(t); state && state->notifier && state->notifier->isRunning()) {
+        state->notifier->stop();
+    }
 }
+
+const char *Controller::ZmqPvt::Topic::str() const noexcept
+{
+    switch (tag) {
+    case Tag::HashBlock: return "hashblock";
+    case Tag::HashTx: return "hashtx";
+    }
+    return "unknown";
+}
+
+Controller::ZmqPvt::TopicState::~TopicState() {}
+Controller::ZmqPvt::~ZmqPvt() {}
+auto Controller::ZmqPvt::operator[](Topic t) -> TopicState & { return map[t]; }
 
 // --- Debug dump support
 void Controller::dumpScriptHashes(const QString &fileName)

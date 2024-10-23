@@ -4624,6 +4624,11 @@ auto Storage::mutableMempool() -> std::pair<Mempool &, ExclusiveLockGuard>
     return {p->mempool, ExclusiveLockGuard{p->mempoolLock}};
 }
 
+bool Storage::isTxInMempool(const TxHash &txhash) const
+{
+    return mempool().first.txs.contains(txhash);
+}
+
 void Storage::refreshMempoolHistogram()
 {
     Tic t0;
