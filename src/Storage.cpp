@@ -1177,6 +1177,10 @@ struct Storage::Pvt
         std::atomic_uint64_t nBytesWritten{0u}, nBytesRead{0u}; // keep track of number of bytes written and read during Storage object lifetime
         mutable std::atomic_int rpaNeedsFullCheckCachedVal = -1; // if > -1, the last value written to the DB. If < 0, no cached val, just read from DB when querying isRpaNeedsFullCheck()
     } rpaInfo;
+
+    /// Set of recent block txids seen, only valid if "notify" is enabled and if app-wide zmq "hashtx" notifs are enabled.
+    /// Guarded by `blocksLock`.
+    std::unordered_set<TxHash, HashHasher> recentBlockTxHashes;
 };
 
 namespace {
@@ -3271,7 +3275,7 @@ std::optional<TXOInfo> Storage::utxoGet(const TXO &txo)
     return ret;
 }
 
-void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserve, bool notifySubs)
+void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserve, bool notifySubs, const bool trackRecentBlockTxHashes)
 {
     assert(bool(ppb) && bool(p));
 
@@ -3302,6 +3306,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
 
         const auto blockTxNum0 = p->txNumNext.load();
 
+        p->recentBlockTxHashes.clear();
         if (notify) {
             // Txs in block can never be in mempool. Ensure they are gone from mempool right away so that notifications
             // to clients are as accurate as possible (notifications may happen after this function returns).
@@ -3309,10 +3314,18 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
             const auto rsvsz = static_cast<Mempool::TxHashNumMap::size_type>(sz > 0 ? sz-1 : 0);
             Mempool::TxHashNumMap txidMap(/* bucket_count: */ rsvsz);
             notify->txidsAffected.reserve(rsvsz);
+            if (trackRecentBlockTxHashes) {
+                p->recentBlockTxHashes.reserve(sz);
+                if (sz > 0u) [[likely]]
+                    p->recentBlockTxHashes.insert(ppb->txInfos[0].hash); // add coinbase txhash to recent set
+            }
             for (std::size_t i = 1 /* skip coinbase */; i < sz; ++i) {
                 const auto & txHash = ppb->txInfos[i].hash;
                 txidMap.emplace(txHash, blockTxNum0 + i);
                 notify->txidsAffected.insert(txHash); // add to notify set for txSubsMgr
+                if (trackRecentBlockTxHashes)
+                    // add to "recently seen" set for the hashtx zmq notifier spam suppressor
+                    p->recentBlockTxHashes.insert(txHash);
             }
             Mempool::ScriptHashesAffectedSet affected;
             // Pre-reserve some capacity for the tmp affected set to avoid much rehashing.
@@ -3720,6 +3733,7 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
             notify->txidsAffected.merge(Util::keySet<NotifySet>(p->mempool.txs)); // for txSubsMgr
         }
         p->mempool.clear(); // make sure mempool is clean (see note above as to why)
+        p->recentBlockTxHashes.clear(); // these are no longer relevant if undoing
 
         const auto [tip, header] = p->headerVerifier.lastHeaderProcessed();
         if (tip <= 0 || header.length() != p->blockHeaderSize()) throw UndoInfoMissing("No header to undo");
@@ -4622,6 +4636,13 @@ auto Storage::mempool() const -> std::pair<const Mempool &, SharedLockGuard>
 auto Storage::mutableMempool() -> std::pair<Mempool &, ExclusiveLockGuard>
 {
     return {p->mempool, ExclusiveLockGuard{p->mempoolLock}};
+}
+
+bool Storage::isMaybeRecentlySeenTx(const TxHash &txhash) const
+{
+    if (mempool().first.txs.contains(txhash)) return true;
+    SharedLockGuard g{p->blocksLock};
+    return p->recentBlockTxHashes.contains(txhash);
 }
 
 void Storage::refreshMempoolHistogram()

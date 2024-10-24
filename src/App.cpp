@@ -1498,6 +1498,16 @@ void App::parseArgs()
         // log this later in case we are in syslog mode
         Util::AsyncOnObject(this, [ht, confKey]{ Debug() << "config: " << confKey << " = " << ht; });
     }
+
+    // conf: zmq_allow_hashtx
+    if (conf.hasValue("zmq_allow_hashtx")) {
+        bool ok{};
+        const bool val = conf.boolValue("zmq_allow_hashtx", Options::defaultZmqAllowHashTx, &ok);
+        if (!ok)
+            throw BadArgs("zmq_allow_hashtx: bad value. Specify a boolean value such as 0, 1, true, false, yes, no");
+        options->zmqAllowHashTx = val;
+        Util::AsyncOnObject(this, [val]{ DebugM("config: zmq_allow_hashtx = ", val); });
+    }
 }
 
 namespace {
