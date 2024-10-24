@@ -5,15 +5,14 @@
 
 #pragma once
 
+#include "Span.h"
+
+#include "concepts.h"
 #include "crypto/ripemd160.h"
 #include "crypto/sha256.h"
 #include "uint256.h"
 #include "version.h"
 #include "serialize.h"
-
-#include <cstddef> // for std::byte
-#include <type_traits>
-#include <vector>
 
 #ifdef __clang__
 #pragma clang diagnostic push
@@ -24,10 +23,6 @@
 namespace bitcoin {
 
 using ChainCode = uint256;
-
-// Added by Calin to make some of the bitcoin code below more generic
-template <typename T>
-concept ByteLike = std::is_same_v<T, char> || std::is_same_v<T, uint8_t> || std::is_same_v<T, std::byte>;
 
 /** A hasher class for Bitcoin's 256-bit hash (double SHA-256). */
 class CHash256 {
@@ -90,7 +85,8 @@ public:
 };
 
 /** Compute the 256-bit hash of an object. */
-template <typename T1> inline uint256 Hash(const T1 pbegin, const T1 pend, bool once = false) {
+template <std::random_access_iterator T1>
+inline uint256 Hash(const T1 pbegin, const T1 pend, bool once = false) {
     const uint8_t pblank[1] = {};
     uint256 result{uint256::Uninitialized};
     CHash256(once)
@@ -101,7 +97,8 @@ template <typename T1> inline uint256 Hash(const T1 pbegin, const T1 pend, bool 
 }
 
 /** Compute the 256-bit SINGLE hash of an object. This was added by Calin to work with ElectrumX */
-template <typename T1> inline uint256 HashOnce(const T1 pbegin, const T1 pend) {
+template <std::random_access_iterator T1>
+inline uint256 HashOnce(const T1 pbegin, const T1 pend) {
     return Hash(pbegin, pend, true);
 }
 
@@ -109,9 +106,8 @@ inline uint256 Hash(Span<const uint8_t> sp) { return Hash(sp.begin(), sp.end());
 inline uint256 HashOnce(Span<const uint8_t> sp) { return Hash(sp.begin(), sp.end(), true); }
 
 /** Compute the 256-bit hash of the concatenation of two objects. */
-template <typename T1, typename T2>
-inline uint256 Hash(const T1 p1begin, const T1 p1end, const T2 p2begin,
-                    const T2 p2end) {
+template <std::random_access_iterator T1, std::random_access_iterator T2>
+inline uint256 Hash(const T1 p1begin, const T1 p1end, const T2 p2begin, const T2 p2end) {
     const uint8_t pblank[1] = {};
     uint256 result{uint256::Uninitialized};
     CHash256()
@@ -124,9 +120,8 @@ inline uint256 Hash(const T1 p1begin, const T1 p1end, const T2 p2begin,
 }
 
 /** Compute the 256-bit hash of the concatenation of three objects. */
-template <typename T1, typename T2, typename T3>
-inline uint256 Hash(const T1 p1begin, const T1 p1end, const T2 p2begin,
-                    const T2 p2end, const T3 p3begin, const T3 p3end) {
+template <std::random_access_iterator T1, std::random_access_iterator T2, std::random_access_iterator T3>
+inline uint256 Hash(const T1 p1begin, const T1 p1end, const T2 p2begin, const T2 p2end, const T3 p3begin, const T3 p3end) {
     const uint8_t pblank[1] = {};
     uint256 result{uint256::Uninitialized};
     CHash256()
@@ -141,7 +136,8 @@ inline uint256 Hash(const T1 p1begin, const T1 p1end, const T2 p2begin,
 }
 
 /** Compute the 160-bit hash an object. */
-template <typename T1> inline uint160 Hash160(const T1 pbegin, const T1 pend) {
+template <std::random_access_iterator T1>
+inline uint160 Hash160(const T1 pbegin, const T1 pend) {
     const uint8_t pblank[1] = {};
     uint160 result{uint160::Uninitialized};
     CHash160()
@@ -187,7 +183,8 @@ public:
     template <ByteLike ByteT>
     void GetHashInPlace(ByteT buf[CHash256::OUTPUT_SIZE]) { ctx.Finalize(buf); }
 
-    template <typename T> CHashWriter &operator<<(const T &obj) {
+    template <typename T>
+    CHashWriter &operator<<(const T &obj) {
         // Serialize to this stream
         bitcoin::Serialize(*this, obj);
         return *this;
@@ -198,14 +195,14 @@ public:
  * Reads data from an underlying stream, while hashing the read data.
  */
 
-template <typename Source> class CHashVerifier : public CHashWriter {
+template <typename Source>
+class CHashVerifier : public CHashWriter {
 private:
     Source *source;
 
 public:
     explicit CHashVerifier(Source *source_)
-        : CHashWriter(source_->GetType(), source_->GetVersion()),
-          source(source_) {}
+        : CHashWriter(source_->GetType(), source_->GetVersion()), source(source_) {}
 
     template <ByteLike ByteT>
     void read(ByteT *pch, size_t nSize) {
@@ -232,8 +229,7 @@ public:
 /** Compute the 256-bit hash of an object's serialization. */
 
 template <typename T>
-uint256 SerializeHash(const T &obj, int nType = SER_GETHASH,
-                      int nVersion = PROTOCOL_VERSION, bool once = false) {
+uint256 SerializeHash(const T &obj, int nType = SER_GETHASH, int nVersion = PROTOCOL_VERSION, bool once = false) {
     CHashWriter ss(nType, nVersion, once);
     ss << obj;
     return ss.GetHash();
@@ -249,10 +245,9 @@ void SerializeHashInPlace(ByteT hash[CHash256::OUTPUT_SIZE], const T &obj,
 }
 
 // MurmurHash3: ultra-fast hash suitable for hash tables but not cryptographically secure
-uint32_t MurmurHash3(uint32_t nHashSeed,
-                     const uint8_t *pDataToHash, size_t nDataLen /* bytes */);
-inline uint32_t MurmurHash3(uint32_t nHashSeed,
-                            const std::vector<uint8_t> &vDataToHash) {
+uint32_t MurmurHash3(uint32_t nHashSeed, const uint8_t *pDataToHash, size_t nDataLen /* bytes */);
+
+inline uint32_t MurmurHash3(uint32_t nHashSeed, Span<const uint8_t> vDataToHash) {
     return MurmurHash3(nHashSeed, vDataToHash.data(), vDataToHash.size());
 }
 

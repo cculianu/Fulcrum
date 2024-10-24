@@ -82,15 +82,16 @@ public:
             return iterator(ptr--);
         }
         difference_type friend operator-(iterator a, iterator b) {
-            return &*a - &*b;
+            return a.ptr - b.ptr;
         }
-        iterator operator+(size_type n) { return iterator(ptr + n); }
-        iterator &operator+=(size_type n) {
+        iterator operator+(difference_type n) const { return iterator(ptr + n); }
+        friend iterator operator+(difference_type n, iterator b) { return iterator(b.ptr + n); }
+        iterator &operator+=(difference_type n) {
             ptr += n;
             return *this;
         }
-        iterator operator-(size_type n) { return iterator(ptr - n); }
-        iterator &operator-=(size_type n) {
+        iterator operator-(difference_type n) const { return iterator(ptr - n); }
+        iterator &operator-=(difference_type n) {
             ptr -= n;
             return *this;
         }
@@ -144,7 +145,7 @@ public:
         const_iterator(iterator x) : ptr(&(*x)) {}
         const T &operator*() const { return *ptr; }
         const T *operator->() const { return ptr; }
-        const T &operator[](size_type pos) const { return ptr[pos]; }
+        const T &operator[](difference_type pos) const { return ptr[pos]; }
         const_iterator &operator++() {
             ++ptr;
             return *this;
@@ -160,19 +161,22 @@ public:
             return const_iterator(ptr--);
         }
         difference_type friend operator-(const_iterator a, const_iterator b) {
-            return &*a - &*b;
+            return a.ptr - b.ptr;
         }
-        const_iterator operator+(size_type n) {
+        const_iterator operator+(difference_type n) const {
             return const_iterator(ptr + n);
         }
-        const_iterator &operator+=(size_type n) {
+        friend const_iterator operator+(difference_type n, const_iterator b) {
+            return const_iterator(b.ptr + n);
+        }
+        const_iterator &operator+=(difference_type n) {
             ptr += n;
             return *this;
         }
-        const_iterator operator-(size_type n) {
+        const_iterator operator-(difference_type n) const {
             return const_iterator(ptr - n);
         }
-        const_iterator &operator-=(size_type n) {
+        const_iterator &operator-=(difference_type n) {
             ptr -= n;
             return *this;
         }

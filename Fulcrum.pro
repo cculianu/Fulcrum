@@ -452,6 +452,7 @@ HEADERS += \
     bitcoin/block.h \
     bitcoin/cashaddr.h \
     bitcoin/cashaddrenc.h \
+    bitcoin/concepts.h \
     bitcoin/compat.h \
     bitcoin/crypto/byteswap.h \
     bitcoin/crypto/endian.h \
