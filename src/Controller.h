@@ -271,6 +271,8 @@ private:
 
     /// (re)starts all zmq notifiers that have a non-empty lastKnownAddr
     void zmqStartAllKnown();
+    /// Stops all notifiers that are running. If cleanup==true also deletes all notifier instances.
+    void zmqStopAll(bool cleanup = false);
 
     /// Litecoin only: Ignore these txhashes from mempool (don't download them). This gets cleared each time
     /// before the first SynchMempool after we receive a new block, then is persisted for all the SynchMempools

@@ -114,10 +114,7 @@ void Controller::startup()
         conns += connect(bitcoindmgr.get(), &BitcoinDMgr::coinDetected, this, &Controller::on_coinDetected,
                          /* NOTE --> */ Qt::DirectConnection);
         conns += connect(bitcoindmgr.get(), &BitcoinDMgr::allConnectionsLost, this, waitForBitcoinD);
-        conns += connect(bitcoindmgr.get(), &BitcoinDMgr::allConnectionsLost, this, [this]{
-            // stop all zmq unconditionally
-            for (const auto topic : zmqs.allTopics) zmqTopicStop(topic);
-        });
+        conns += connect(bitcoindmgr.get(), &BitcoinDMgr::allConnectionsLost, this, [this]{ zmqStopAll(); });
         conns += connect(bitcoindmgr.get(), &BitcoinDMgr::gotFirstGoodConnection, this, [this](quint64 id) {
             // connection to kick off our 'process' method once the first auth is received
             if (lostConn) {
@@ -153,6 +150,8 @@ void Controller::startup()
                     // bitcoind lacks this topicName endpoint (e.g. lacks "hashblock" or "hashtx") -- stop existing
                     // notifier, if it exists
                     zmqTopicStop(topic);
+                    if (auto *state = zmqs.find(topic))
+                        state->lastKnownAddr.clear(); // mark that the "last known" address is empty so we don't attempt to re-connect to it.
                 }
             }
         });
@@ -360,13 +359,7 @@ void Controller::cleanup()
     stopFlag = true;
     stop();
     tasks.clear(); // deletes all tasks asap
-    for (auto & [t, state] : zmqs) { // Stop ZMQ notifiers
-        if (state.notifier) {
-            Log() << "Stopping " << state.notifier->objectName() << " ...";
-            state.notifier.reset();
-        }
-
-    }
+    zmqStopAll(true); // Stop ZMQ notifiers
     if (srvmgr) { Log("Stopping SrvMgr ... "); srvmgr->cleanup(); srvmgr.reset(); }
     if (bitcoindmgr) { Log("Stopping BitcoinDMgr ... "); bitcoindmgr->cleanup(); bitcoindmgr.reset(); }
     if (storage) { Log("Closing storage ..."); storage->cleanup(); storage.reset(); }
@@ -1410,19 +1403,19 @@ void Controller::process(bool beSilentIfUpToDate)
 
 void Controller::on_Poll(std::optional<std::pair<ZmqTopic, QByteArray>> zmqNotifOpt)
 {
+    using enum ZmqTopic::Tag;
     if (!sm) {
-        if (!zmqNotifOpt) {
-            process(true); // process immediately
+        if (!zmqNotifOpt || zmqNotifOpt->first.tag == HashBlock) {
+            process(true); // process immediately if non-zmq or if zmq hashblock
         } else if (timerInterval(pollTimerName) == polltimeMS) {
             // Got a zmq notif, enqueue the call to process().
-            // To avoid bad interactions with the Controller, we *only* pay attention to zmq notifs if we were
-            // in regular "polltimeMS" polling mode.
+            // To avoid bad interactions with the Controller, we *only* pay attention to non-hashblock zmq notifs if we
+            // were in regular "polltimeMS" polling mode.
             DebugM("on_Poll: got \"", zmqNotifOpt->first.str(), "\", enqueueing process() call ...");
             callOnTimerSoonNoRepeat(0, pollTimerName, [this] { on_Poll(); }, true);
         }
     } else if (zmqNotifOpt) {
         // deferred processing for when current task completes
-        using enum ZmqTopic::Tag;
         auto & [topic, hash] = *zmqNotifOpt;
         switch (topic.tag) {
         case HashBlock:
@@ -1984,6 +1977,17 @@ void Controller::zmqStartAllKnown()
     for (const auto & [topic, state] : zmqs)
         if (!state.lastKnownAddr.isEmpty())
             zmqTopicStart(topic);
+}
+
+void Controller::zmqStopAll(bool cleanup)
+{
+    for (auto & [topic, state] : zmqs) {
+        zmqTopicStop(topic);
+        if (cleanup && state.notifier) {
+            Log() << "Stopping " << state.notifier->objectName() << " ...";
+            state.notifier.reset();
+        }
+    }
 }
 
 const char *Controller::ZmqPvt::Topic::str() const noexcept
