@@ -1177,6 +1177,9 @@ struct Storage::Pvt
         std::atomic_uint64_t nBytesWritten{0u}, nBytesRead{0u}; // keep track of number of bytes written and read during Storage object lifetime
         mutable std::atomic_int rpaNeedsFullCheckCachedVal = -1; // if > -1, the last value written to the DB. If < 0, no cached val, just read from DB when querying isRpaNeedsFullCheck()
     } rpaInfo;
+
+    /// Set of recent block txids seen, only valid if "notify" is enabled. Guarded by `blocksLock`.
+    std::unordered_set<TxHash, HashHasher> recentBlockTxHashes;
 };
 
 namespace {
@@ -3302,6 +3305,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
 
         const auto blockTxNum0 = p->txNumNext.load();
 
+        p->recentBlockTxHashes.clear();
         if (notify) {
             // Txs in block can never be in mempool. Ensure they are gone from mempool right away so that notifications
             // to clients are as accurate as possible (notifications may happen after this function returns).
@@ -3309,10 +3313,13 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
             const auto rsvsz = static_cast<Mempool::TxHashNumMap::size_type>(sz > 0 ? sz-1 : 0);
             Mempool::TxHashNumMap txidMap(/* bucket_count: */ rsvsz);
             notify->txidsAffected.reserve(rsvsz);
+            p->recentBlockTxHashes.reserve(sz);
+            if (sz > 0u) [[likely]] p->recentBlockTxHashes.insert(ppb->txInfos[0].hash); // add coinbase txhash to recent set
             for (std::size_t i = 1 /* skip coinbase */; i < sz; ++i) {
                 const auto & txHash = ppb->txInfos[i].hash;
                 txidMap.emplace(txHash, blockTxNum0 + i);
                 notify->txidsAffected.insert(txHash); // add to notify set for txSubsMgr
+                p->recentBlockTxHashes.insert(txHash); // add to "recently seen" set for the hashtx zmq notifier spam suppressor
             }
             Mempool::ScriptHashesAffectedSet affected;
             // Pre-reserve some capacity for the tmp affected set to avoid much rehashing.
@@ -4624,9 +4631,11 @@ auto Storage::mutableMempool() -> std::pair<Mempool &, ExclusiveLockGuard>
     return {p->mempool, ExclusiveLockGuard{p->mempoolLock}};
 }
 
-bool Storage::isTxInMempool(const TxHash &txhash) const
+bool Storage::isRecentlySeenTx(const TxHash &txhash) const
 {
-    return mempool().first.txs.contains(txhash);
+    if (mempool().first.txs.contains(txhash)) return true;
+    SharedLockGuard g{p->blocksLock};
+    return p->recentBlockTxHashes.contains(txhash);
 }
 
 void Storage::refreshMempoolHistogram()

@@ -1037,7 +1037,7 @@ protected:
 ///     Defer d1( [&]{ someUniqPtr.reset(); } );
 ///
 /// But the RAII version above is more explicit about what code goes with what cleanup.
-struct RAII : public Defer<> {
+struct RAII : Defer<> {
     /// initFunc called immediately, cleanupFunc called in this instance's destructor
     RAII(const VoidFunc & initFunc, const VoidFunc &cleanupFunc) : Defer(cleanupFunc) { if (initFunc) initFunc(); valid = bool(cleanupFunc); }
     /// initFunc called immediately, cleanupFunc called in this instance's destructor

@@ -173,7 +173,7 @@ private:
 
     /// The default 'errored' handler used if a task was created with connectErroredSignal=true in newTask above.
     void genericTaskErrored();
-    static constexpr auto pollTimerName = "pollForNewHeaders";
+    static constexpr auto pollTimerName = "pollForBlockchainChanges";
 
     const std::shared_ptr<const Options> options;
     const SSLCertMonitor * const sslCertMonitor;
@@ -227,7 +227,7 @@ private:
             constexpr auto operator<=>(const Topic &) const noexcept = default;
         };
         using enum Topic::Tag;
-        static constexpr const Topic allTopics[] = { {HashBlock}, /* {HashTx} <-- disabled because too spammy */ };
+        static constexpr const Topic allTopics[] = { {HashBlock}, {HashTx} /* <-- very spammy */ };
         static constexpr size_t nTopics() noexcept { return std::size(allTopics); }
         struct TopicHasher {
             std::hash<int> hasher;
@@ -258,6 +258,7 @@ private:
         auto begin() const { return map.begin(); }
         auto end() { return map.end(); }
         auto end() const { return map.end(); }
+        size_t erase(Topic t);
 
         ~ZmqPvt(); // must define d'tor in Controller.cpp translation unit due to incomplete ZmqSubNotifier type
     } zmqs;

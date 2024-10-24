@@ -1309,14 +1309,14 @@ void Controller::process(bool beSilentIfUpToDate)
             } else
                 DebugM("zmq hashblock received while we were synching, however it matches our latest tip, ignoring ...");
         } else if (!sm->mostRecentZmqHashTxNotif.isEmpty()) {
-            if (!storage->isTxInMempool(sm->mostRecentZmqHashTxNotif)) {
+            if (!storage->isRecentlySeenTx(sm->mostRecentZmqHashTxNotif)) {
                 // While we were synching -- a zmq notification happened -- and it told us about a txhash that we
-                // lack in mempool. Just to be sure, schedule us to run again in 500 msec.
-                polltimeout = int(Options::minPollTimeSecs * 1e3);
+                // maybe have not yet seen. Just to be sure, schedule us to run again immediately.
+                polltimeout = 0;
                 DebugM("zmq hashtx received with a (possibly) new txn while we were synching, re-scheduling"
-                       " another bitcoind update in ", polltimeout, " msec ...");
+                       " another bitcoind update immediately ...");
             } else
-                DebugM("zmq hashtx received while we were synching, however we have the txn already in mempool, ignoring ...");
+                DebugM("zmq hashtx received while we were synching, however we have seen the txn already recently, ignoring ...");
         }
         {
             std::lock_guard g(smLock);
@@ -1410,12 +1410,20 @@ void Controller::process(bool beSilentIfUpToDate)
 
 void Controller::on_Poll(std::optional<std::pair<ZmqTopic, QByteArray>> zmqNotifOpt)
 {
-    if (!sm)
-        process(true); // process immediately
-    else if (zmqNotifOpt) {
+    if (!sm) {
+        if (!zmqNotifOpt) {
+            process(true); // process immediately
+        } else if (timerInterval(pollTimerName) == polltimeMS) {
+            // Got a zmq notif, enqueue the call to process().
+            // To avoid bad interactions with the Controller, we *only* pay attention to zmq notifs if we were
+            // in regular "polltimeMS" polling mode.
+            DebugM("on_Poll: got \"", zmqNotifOpt->first.str(), "\", enqueueing process() call ...");
+            callOnTimerSoonNoRepeat(0, pollTimerName, [this] { on_Poll(); }, true);
+        }
+    } else if (zmqNotifOpt) {
         // deferred processing for when current task completes
-        auto & [topic, hash] = *zmqNotifOpt;
         using enum ZmqTopic::Tag;
+        auto & [topic, hash] = *zmqNotifOpt;
         switch (topic.tag) {
         case HashBlock:
             sm->mostRecentZmqHashBlockNotif = std::move(hash);
@@ -1901,7 +1909,7 @@ void Controller::zmqTopicStart(ZmqTopic t)
         DebugM(__func__, ": zmq unavailable, ignoring start request");
         if (auto *state = zmqs.find(t)) {
             state->notifier.reset(); // ensure it's dead -- should never be alive in this case (indicates a bug).
-            zmqs.map.erase(t);
+            zmqs.erase(t);
         }
         return;
     }
@@ -1990,6 +1998,7 @@ const char *Controller::ZmqPvt::Topic::str() const noexcept
 Controller::ZmqPvt::TopicState::~TopicState() {}
 Controller::ZmqPvt::~ZmqPvt() {}
 auto Controller::ZmqPvt::operator[](Topic t) -> TopicState & { return map[t]; }
+size_t Controller::ZmqPvt::erase(Topic t) { return map.erase(t); }
 
 // --- Debug dump support
 void Controller::dumpScriptHashes(const QString &fileName)
