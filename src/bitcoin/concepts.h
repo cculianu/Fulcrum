@@ -26,8 +26,7 @@ namespace bitcoin {
 
 // Added by Calin to make some of the bitcoin code more generic
 template <typename T>
-concept ByteLike = std::is_same_v<T, char> || std::is_same_v<T, uint8_t>
-                   || std::is_same_v<T, std::byte> || std::is_same_v<T, int8_t>
-                   || std::is_same_v<T, signed char> || std::is_same_v<T, unsigned char>;
+concept ByteLike = std::is_same_v<T, char> || std::is_same_v<T, uint8_t> || std::is_same_v<T, std::byte>
+                   || std::is_same_v<T, int8_t> || std::is_same_v<T, signed char> || std::is_same_v<T, unsigned char>;
 
 } // namespace bitcoin
