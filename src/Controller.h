@@ -227,7 +227,7 @@ private:
             constexpr auto operator<=>(const Topic &) const noexcept = default;
         };
         using enum Topic::Tag;
-        static constexpr const Topic allTopics[] = { {HashBlock}, {HashTx} /* <-- very spammy */ };
+        static constexpr const Topic allTopics[] = { {HashBlock}, /* {HashTx} <-- very spammy, disabled for now */ };
         static constexpr size_t nTopics() noexcept { return std::size(allTopics); }
         struct TopicHasher {
             std::hash<int> hasher;
