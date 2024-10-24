@@ -235,9 +235,8 @@ private:
         };
 
         struct TopicState {
-            using SubNotifierPtr = std::unique_ptr<ZmqSubNotifier>;
             /// Will be nullptr if zmq disabled or bitcoind lacks this topic endpoint
-            SubNotifierPtr notifier;
+            std::unique_ptr<ZmqSubNotifier> notifier;
             /// Populated from bitcoindmgr's zmqNotificationsChanged signal. If empty, remote has no notifications
             /// advertised in `getzmqnotifications` for this topic.
             QString lastKnownAddr;
@@ -248,8 +247,7 @@ private:
             ~TopicState(); // must define d'tor in Controller.cpp translation unit due to incomplete ZmqSubNotifier type
         };
 
-        using TopicNotifierMap = std::unordered_map<Topic, TopicState, TopicHasher>;
-        TopicNotifierMap map{nTopics()};
+        std::unordered_map<Topic, TopicState, TopicHasher> map{nTopics()};
 
         TopicState & operator[](Topic t); // must define in Controller.cpp translation unit due to incomplete ZmqSubNotifier type
         TopicState *find(Topic t) noexcept { if (auto it = map.find(t); it != map.end()) return &it->second; return nullptr; }
