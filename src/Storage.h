@@ -172,7 +172,8 @@ public:
     /// the block is accepted.  A successful return from this function without throwing indicates success.
     ///
     /// Note: you can only add blocks in serial sequence from 0 -> latest.
-    void addBlock(PreProcessedBlockPtr ppb, bool alsoSaveUnfoInfo, unsigned num2ReserveAfter = 0, bool notifySubs = false);
+    void addBlock(PreProcessedBlockPtr ppb, bool alsoSaveUnfoInfo, unsigned num2ReserveAfter = 0, bool notifySubs = false,
+                  bool trackRecentBlockTxHashes = false);
 
     /// Thread-safe.  Will attempt to undo the latest block that was previously added via a successfully completed call
     /// to addBlock().  This should be called if addBlock throws HeaderVerificationFailure. This function may throw
@@ -295,9 +296,10 @@ public:
     /// Caller must hold the returned ExclusiveLockGuard for as long as they use the reference otherwise bad things happen!
     std::pair<Mempool &, ExclusiveLockGuard> mutableMempool();
 
-    /// Returns true if txhash is in the mempool or in a recent block, false otherwise.
+    /// Returns true if txhash is in the mempool or in a recent block, false otherwise. Note that "recent block"
+    /// tracking is not always enabled, so a false result may not necessarily mean the txn is not in the latest block.
     /// Thread-safe (takes mempool shared lock and/or blocks lock internally).
-    bool isRecentlySeenTx(const TxHash &txhash) const;
+    bool isMaybeRecentlySeenTx(const TxHash &txhash) const;
 
     /// Thread-safe. Query db (but not mempool) for a UTXO, and return its info if found.  May throw on database error.
     /// (Does not take the blocks lock)

@@ -1304,7 +1304,7 @@ void Controller::process(bool beSilentIfUpToDate)
             } else
                 DebugM("zmq hashblock received while we were synching, however it matches our latest tip, ignoring ...");
         } else if (!sm->mostRecentZmqHashTxNotif.isEmpty()) {
-            if (!storage->isRecentlySeenTx(sm->mostRecentZmqHashTxNotif)) {
+            if (!storage->isMaybeRecentlySeenTx(sm->mostRecentZmqHashTxNotif)) {
                 // While we were synching -- a zmq notification happened -- and it told us about a txhash that we
                 // maybe have not yet seen. Just to be sure, schedule us to run again immediately.
                 polltimeout = 0;
@@ -1585,7 +1585,7 @@ bool Controller::process_VerifyAndAddBlock(PreProcessedBlockPtr ppb)
         const auto nLeft = qMax(sm->endHeight - (sm->dlResultsHtNext-1), 0U);
         const bool saveUndoInfo = !sm->suppressSaveUndo && int(ppb->height) > (sm->ht - int(storage->configuredUndoDepth()));
 
-        storage->addBlock(ppb, saveUndoInfo, nLeft, masterNotifySubsFlag);
+        storage->addBlock(ppb, saveUndoInfo, nLeft, masterNotifySubsFlag, options->zmqAllowHashTx);
 
     } catch (const HeaderVerificationFailure & e) {
         DebugM("addBlock exception: ", e.what());
