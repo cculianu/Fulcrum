@@ -267,8 +267,13 @@ private:
     /// address for this topic from BitcoinDMgr, after servers are started.
     void zmqTopicStart(ZmqTopic topic);
 
+    /// Stops the ZmqNotifier for this topic; called if we received an empty address for this topic from BitcoinDMgr or
+    /// when all connections to bitcoind are lost
+    void zmqTopicStop(ZmqTopic topic);
+
     /// (re)starts all zmq notifiers that have a non-empty lastKnownAddr
     void zmqStartAllKnown();
+
     /// Stops all notifiers that are running. If cleanup==true also deletes all notifier instances.
     void zmqStopAll(bool cleanup = false);
 
@@ -298,11 +303,6 @@ protected:
     /// Also called if we received a zmq hashblock or hashtx notification (in which case it will be called with the valid
     /// header or tx hash, already in big endian byte order).
     void on_Poll(std::optional<std::pair<ZmqTopic, QByteArray>> zmqNotifOpt = std::nullopt);
-
-private slots:
-    /// Stops the ZmqNotifier for this topic; called if we received an empty address for this topic from BitcoinDMgr or
-    /// when all connections to bitcoind are lost
-    void zmqTopicStop(ZmqTopic topic);
 };
 
 /// Abstract base class for our private internal tasks. Concrete implementations are in Controller.cpp.
