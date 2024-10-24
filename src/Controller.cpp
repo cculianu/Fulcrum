@@ -132,8 +132,10 @@ void Controller::startup()
 
         conns += connect(bitcoindmgr.get(), &BitcoinDMgr::zmqNotificationsChanged, this, [this](BitcoinDZmqNotifications bdzmqs) {
             // NB: this only fires if ZmqSubNotifier::isAvailable() == true
+            using enum ZmqTopic::Tag;
             for (const auto topic : zmqs.allTopics) {
-                if (const auto & topicAddr = bdzmqs.value(topic.str()); !topicAddr.isEmpty()) {
+                if (const auto & topicAddr = bdzmqs.value(topic.str());
+                        !topicAddr.isEmpty() && /* if hashtx allowed: */ (topic.tag != HashTx || options->zmqAllowHashTx)) {
                     auto & state = zmqs[topic];
                     state.lastKnownAddr = topicAddr;
                     DebugM("\"", topic.str(), "\" topic address: ", state.lastKnownAddr);

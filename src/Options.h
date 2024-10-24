@@ -313,6 +313,10 @@ public:
                              defaultStartHeightOtherNets = 0;
         int requestedStartHeight = -1;
     } rpa;
+
+    // config: zmq_allow_hashtx
+    static constexpr bool defaultZmqAllowHashTx = false;
+    bool zmqAllowHashTx = defaultZmqAllowHashTx;
 };
 
 /// A class encapsulating a simple read-only config file format.  The format is similar to the bitcoin.conf format
