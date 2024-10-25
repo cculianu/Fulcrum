@@ -59,14 +59,18 @@ public:
         using difference_type = Diff;
         using value_type = T;
         using pointer = T *;
+        using const_pointer = const T *;
         using reference = T &;
+        using const_reference = const T &;
         using iterator_category = std::random_access_iterator_tag;
         iterator() : ptr(nullptr) {}
-        iterator(T *ptr_) : ptr(ptr_) {}
-        T &operator*() const { return *ptr; }
-        T *operator->() const { return ptr; }
-        T &operator[](size_type pos) { return ptr[pos]; }
-        const T &operator[](size_type pos) const { return ptr[pos]; }
+        iterator(pointer ptr_) : ptr(ptr_) {}
+        reference operator*() { return *ptr; }
+        const_reference operator*() const { return *ptr; }
+        pointer operator->() { return ptr; }
+        const_pointer operator->() const { return ptr; }
+        reference operator[](difference_type pos) { return ptr[pos]; }
+        const_reference operator[](difference_type pos) const { return ptr[pos]; }
         iterator &operator++() {
             ++ptr;
             return *this;
@@ -75,15 +79,9 @@ public:
             --ptr;
             return *this;
         }
-        iterator operator++(int) {
-            return iterator(ptr++);
-        }
-        iterator operator--(int) {
-            return iterator(ptr--);
-        }
-        difference_type friend operator-(iterator a, iterator b) {
-            return a.ptr - b.ptr;
-        }
+        iterator operator++(int) { return iterator(ptr++); }
+        iterator operator--(int) { return iterator(ptr--); }
+        difference_type friend operator-(iterator a, iterator b) { return a.ptr - b.ptr;  }
         iterator operator+(difference_type n) const { return iterator(ptr + n); }
         friend iterator operator+(difference_type n, iterator b) { return iterator(b.ptr + n); }
         iterator &operator+=(difference_type n) {
@@ -95,7 +93,6 @@ public:
             ptr -= n;
             return *this;
         }
-
         auto operator<=>(const iterator &) const = default;
     };
 
@@ -106,14 +103,16 @@ public:
         using difference_type = Diff;
         using value_type = T;
         using pointer = T *;
+        using const_pointer = const T *;
         using reference = T &;
+        using const_reference = const T &;
         using iterator_category = std::bidirectional_iterator_tag;
         reverse_iterator() : ptr(nullptr) {}
-        reverse_iterator(T *ptr_) : ptr(ptr_) {}
-        T &operator*() { return *ptr; }
-        const T &operator*() const { return *ptr; }
-        T *operator->() { return ptr; }
-        const T *operator->() const { return ptr; }
+        reverse_iterator(pointer ptr_) : ptr(ptr_) {}
+        reference operator*() { return *ptr; }
+        const_reference operator*() const { return *ptr; }
+        pointer operator->() { return ptr; }
+        const_pointer operator->() const { return ptr; }
         reverse_iterator &operator--() {
             ++ptr;
             return *this;
@@ -122,12 +121,8 @@ public:
             --ptr;
             return *this;
         }
-        reverse_iterator operator++(int) {
-            return reverse_iterator(ptr--);
-        }
-        reverse_iterator operator--(int) {
-            return reverse_iterator(ptr++);
-        }
+        reverse_iterator operator++(int) { return reverse_iterator(ptr--); }
+        reverse_iterator operator--(int) { return reverse_iterator(ptr++); }
         bool operator==(reverse_iterator x) const { return ptr == x.ptr; }
     };
 
@@ -141,11 +136,11 @@ public:
         using reference = const T &;
         using iterator_category = std::random_access_iterator_tag;
         const_iterator() : ptr(nullptr) {}
-        const_iterator(const T *ptr_) : ptr(ptr_) {}
+        const_iterator(pointer ptr_) : ptr(ptr_) {}
         const_iterator(iterator x) : ptr(&(*x)) {}
-        const T &operator*() const { return *ptr; }
-        const T *operator->() const { return ptr; }
-        const T &operator[](difference_type pos) const { return ptr[pos]; }
+        reference operator*() const { return *ptr; }
+        pointer operator->() const { return ptr; }
+        reference operator[](difference_type pos) const { return ptr[pos]; }
         const_iterator &operator++() {
             ++ptr;
             return *this;
@@ -154,28 +149,16 @@ public:
             --ptr;
             return *this;
         }
-        const_iterator operator++(int) {
-            return const_iterator(ptr++);
-        }
-        const_iterator operator--(int) {
-            return const_iterator(ptr--);
-        }
-        difference_type friend operator-(const_iterator a, const_iterator b) {
-            return a.ptr - b.ptr;
-        }
-        const_iterator operator+(difference_type n) const {
-            return const_iterator(ptr + n);
-        }
-        friend const_iterator operator+(difference_type n, const_iterator b) {
-            return const_iterator(b.ptr + n);
-        }
+        const_iterator operator++(int) { return const_iterator(ptr++); }
+        const_iterator operator--(int) { return const_iterator(ptr--); }
+        difference_type friend operator-(const_iterator a, const_iterator b) { return a.ptr - b.ptr; }
+        const_iterator operator+(difference_type n) const { return const_iterator(ptr + n); }
+        friend const_iterator operator+(difference_type n, const_iterator b) { return const_iterator(b.ptr + n); }
         const_iterator &operator+=(difference_type n) {
             ptr += n;
             return *this;
         }
-        const_iterator operator-(difference_type n) const {
-            return const_iterator(ptr - n);
-        }
+        const_iterator operator-(difference_type n) const { return const_iterator(ptr - n); }
         const_iterator &operator-=(difference_type n) {
             ptr -= n;
             return *this;
@@ -193,10 +176,10 @@ public:
         using reference = const T &;
         using iterator_category = std::bidirectional_iterator_tag;
         const_reverse_iterator() : ptr(nullptr) {}
-        const_reverse_iterator(const T *ptr_) : ptr(ptr_) {}
+        const_reverse_iterator(pointer ptr_) : ptr(ptr_) {}
         const_reverse_iterator(reverse_iterator x) : ptr(&(*x)) {}
-        const T &operator*() const { return *ptr; }
-        const T *operator->() const { return ptr; }
+        reference operator*() const { return *ptr; }
+        pointer operator->() const { return ptr; }
         const_reverse_iterator &operator--() {
             ++ptr;
             return *this;
@@ -205,12 +188,8 @@ public:
             --ptr;
             return *this;
         }
-        const_reverse_iterator operator++(int) {
-            return const_reverse_iterator(ptr--);
-        }
-        const_reverse_iterator operator--(int) {
-            return const_reverse_iterator(ptr++);
-        }
+        const_reverse_iterator operator++(int) { return const_reverse_iterator(ptr--); }
+        const_reverse_iterator operator--(int) { return const_reverse_iterator(ptr++); }
         bool operator==(const_reverse_iterator x) const { return ptr == x.ptr; }
     };
 
