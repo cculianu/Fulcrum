@@ -4165,7 +4165,7 @@ auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf, BlockHeigh
                 IncrementCtrAndThrowIfExceedsMaxHistory(txvec.size());
                 ret.reserve(ret.size() + txvec.size());
                 for (const auto & tx : txvec)
-                    ret.emplace_back(/* HistoryItem: */ tx->hash, tx->hasUnconfirmedParentTx ? -1 : 0, tx->fee);
+                    ret.emplace_back(/* HistoryItem: */ tx->hash, tx->hasUnconfirmedParents() ? -1 : 0, tx->fee);
             }
         }
     } catch (const std::exception &e) {
@@ -4279,7 +4279,7 @@ auto Storage::getRpaHistory(const Rpa::Prefix &prefix, bool includeConfirmed, bo
                 t1 = Tic();
                 for (const auto & txHash : txHashes) {
                     if (auto it = mempool.txs.find(txHash); LIKELY(it != mempool.txs.end())) {
-                        const int height = it->second->hasUnconfirmedParentTx ? -1 : 0;
+                        const int height = it->second->hasUnconfirmedParents() ? -1 : 0;
                         ret.emplace_back(txHash, height, it->second->fee);
                     } else {
                         Error() << "Tx: " << Util::ToHexFast(txHash) << " for prefix '" << prefix.toHex() << "'"
@@ -4380,7 +4380,7 @@ auto Storage::listUnspent(const HashX & hashX, const TokenFilterOption tokenFilt
                                         { tx->hash, 0 /* always put 0 for height here */, tx->fee }, // base HistoryItem
                                         ionum, // .tx_pos
                                         it3->amount,  // .value
-                                        TxNum(1) + veryHighTxNum + TxNum(tx->hasUnconfirmedParentTx ? 1 : 0), // .txNum (this is fudged for sorting at the end properly)
+                                        TxNum(1) + veryHighTxNum + TxNum(tx->hasUnconfirmedParents() ? 1 : 0), // .txNum (this is fudged for sorting at the end properly)
                                         it3->tokenDataPtr, // .token_data
                                     });
                                 } else {
@@ -4566,7 +4566,7 @@ auto Storage::getFirstUse(const HashX & hashX) const -> std::optional<FirstUse>
                         if (txoinfo.hashX == hashX) {
                             // found a mempool tx that sends an output to `hashX`
                             static const QByteArray zeroes32(QByteArray::size_type(HashLen), char(0));
-                            return FirstUse(tx->hash, tx->hasUnconfirmedParentTx ? -1 : 0, zeroes32);
+                            return FirstUse(tx->hash, tx->hasUnconfirmedParents() ? -1 : 0, zeroes32);
                         }
                     }
                 }

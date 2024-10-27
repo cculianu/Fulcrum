@@ -43,6 +43,9 @@
 /// Models the mempool
 struct Mempool
 {
+    struct Tx;
+    using TxRef = std::shared_ptr<Tx>;
+    using TxWeakRef = std::weak_ptr<Tx>;
 
     /// This info, with the exception of `hashXs` comes from bitcoind via the "getrawmempool false" RPC call.
     struct Tx
@@ -52,7 +55,6 @@ struct Mempool
         bitcoin::Amount fee{bitcoin::Amount::zero()}; ///< we calculate this fee ourselves since in the past I noticed we get a funny value sometimes that's off by 1 or 2 sats --  which I suspect is due limitations of doubles, perhaps?
         unsigned sizeBytes = 0; // the actual serialized size
         unsigned vsizeBytes = 0; // for segwit coins, the virtual size, for non-segwit, identical to sizeBytes
-        bool hasUnconfirmedParentTx = false; ///< If true, this tx depends on another tx in the mempool. This is not always fixed (confirmedInBlock may change this)
 
         /// These are all the txos in this tx. Once set-up, this doesn't change (unlike IOInfo.utxo).
         /// Note that this vector is always sized to the number of txouts in the tx. It may, however, contain !isValid
@@ -90,22 +92,36 @@ struct Mempool
         using RpaPrefixSet = std::unordered_set<Rpa::Prefix, Rpa::Prefix::Hasher>;
         bitcoin::HeapOptional<RpaPrefixSet> optRpaPrefixSet;
 
+        /// in-mempool parent/child transactions
+        std::unordered_map<TxHash, TxWeakRef, HashHasher> parents, children;
+
         bool operator<(const Tx &o) const noexcept {
             // paranoia -- bools may sometimes not always be 1 or 0 in pathological circumstances.
-            const uint8_t nParentMe    =   hasUnconfirmedParentTx ? 1 : 0,
-                          nParentOther = o.hasUnconfirmedParentTx ? 1 : 0;
+            const uint8_t nParentMe    =   !parents.empty() ? 1u : 0u,
+                          nParentOther = !o.parents.empty() ? 1u : 0u;
             // always sort the unconf. parent tx's *after* the regular (confirmed parent-only) tx's.
             return std::tie(nParentMe, hash) < std::tie(nParentOther, o.hash);
         }
 
+        // fast equality test (used in production)
         bool operator==(const Tx &o) const noexcept {
+            const bool hasUnconfirmedParentTx = !parents.empty(), o_hasUnconfirmedParentTx = !o.parents.empty();
             return     std::tie(  hash,   sizeBytes,   fee,   hasUnconfirmedParentTx,   txos,   hashXs)
-                    == std::tie(o.hash, o.sizeBytes, o.fee, o.hasUnconfirmedParentTx, o.txos, o.hashXs);
+                    == std::tie(o.hash, o.sizeBytes, o.fee, o_hasUnconfirmedParentTx, o.txos, o.hashXs);
         }
 
+        // deep equality test (used in tests)
+        bool deepEqual(const Tx &o) const noexcept;
+
+        /// "unlink" this txn from its parents and children. This remove this txn from all its parents' .children table
+        /// and also removes it from all its childrens' .parents table.
+        void unlinkFromParentsAndChildren();
+        /// "link" a `child` to its `parent` txn. We add `parent` to `child` 's table of parents and add `child`
+        /// to `parent` 's table of children.
+        static void linkChild(const TxRef &parent, const TxRef &child);
+        inline bool hasUnconfirmedParents() const { return !parents.empty(); }
     };
 
-    using TxRef = std::shared_ptr<Tx>;
     /// master mapping of TxHash -> TxRef
     using TxMap = std::unordered_map<TxHash, TxRef, HashHasher>;
     /// ensures an ordering of TxRefs for the set below that are from fewest ancestors -> most ancestors
