@@ -613,173 +613,27 @@ std::size_t Mempool::rmTxsInHashXTxs(const TxHashNumMap &txidMap, const ScriptHa
     return rmTxsInHashXTxs_impl(txidMap, scriptHashesAffected, TRACE, hashXsNeedingSort);
 }
 
-#if 0
 auto Mempool::confirmedInBlock(ScriptHashesAffectedSet & scriptHashesAffectedOut,
                                const TxHashNumMap & txidMap, const BlockHeight confirmedHeight,
                                bool TRACE, std::optional<float> rehashMaxLoadFactor) -> Stats
 {
     const auto t0 = Tic();
 
-    Stats ret;
     ScriptHashesAffectedSet scriptHashesAffected;
     std::optional<ScriptHashesAffectedSet> hashXTxsEntriesNeedingSort;
     hashXTxsEntriesNeedingSort.emplace();
-    ret.oldSize = this->txs.size();
-    ret.oldNumAddresses = this->hashXTxs.size();
-    const std::size_t dspCtBefore = dsps.size();
-    const std::size_t dspTxCtBefore = dsps.numTxDspLinks();
-    TxHashSet dspTxids;
-    TxHashSet affectedChildren;
-
-    // iterate through all txs in mempool
-    for (auto itTxs = txs.begin(); itTxs != txs.end(); /* may delete during iteration, see below */) {
-        const auto & [txid, tx] = *itTxs; // take refs for convenience (note they are invalidated after if erase(itTxs) )
-        const bool inRmSet = txidMap.contains(txid);
-        if (inRmSet) {
-            // this txid is to be removed from mempool, tally its scripthashes as affected by the removal
-            for (const auto & [sh, xx] : tx->hashXs)
-                scriptHashesAffected.insert(sh);
-            if (dsps.dspHashesForTx(txid)) { // <-- this is O(1) fast lookup by txid
-                // add to dspTxids so we can call dsps.rmTx() on this txid after this loop finishes -- we must do that
-                // at the end after this loop is done, so that we can get an aggregate set of dspTxsAffected
-                // from the list of dspTxids we plan on removing, before we remove them.
-                dspTxids.insert(txid);
-            }
-            ret.rpaRmCt += rmTxRpaAssociations(tx);
-
-            // remember children so we can recategorize unconfirmedSpends for them in the `else` branch below
-            for (const auto & [childtxid, _] : tx->children)
-                affectedChildren.insert(childtxid);
-            // unlink parent/child relationships
-            tx->unlinkFromParentsAndChildren();
-            // and erase NOW!
-            itTxs = txs.erase(itTxs); // in this branch: removed, take next it and continue
-            continue;
-        } else if (affectedChildren.contains(txid)
-                   || std::any_of(tx->parents.begin(), tx->parents.end(),
-                                  [&txidMap](const auto &entry){ return txidMap.contains(entry.first);})) {
-            // This txid is *not* to be removed, but MAY possibly be spending from a tx we are going to remove.
-            // Scan all of its unconfirmed spends to see if they spend from a tx in the removal set, and if so,
-            // recategorize those spends as confirmed spends.
-            std::size_t nUnconfs = 0;
-            for (auto & [sh, ioinfo] : tx->hashXs) {
-                int ctr = 0;
-                for (auto itUS = ioinfo.unconfirmedSpends.begin(); itUS != ioinfo.unconfirmedSpends.end(); /* see below */) {
-                    const auto & [txo, xx] = *itUS; // take ref for readability (pointers/refs are not invalidated, even after extract)
-                    if (const auto itTxMap = txidMap.find(txo.txHash); itTxMap != txidMap.end()) {
-                        // and voila! This tx spends from one of the tx's we are going to remove. Recategorize unconf -> conf.
-                        auto it2move = itUS++;  // first make `it` point to `it` + 1, making `it2move` be previous value `it`
-                        // transfer node from unconfirmed spends -> confirmed spends
-                        auto res = ioinfo.confirmedSpends.insert(ioinfo.unconfirmedSpends.extract(it2move)); // does not invalidate refs
-                        if (LIKELY(res.inserted)) {
-                            // update node data -- (confirmedHeight and txNum need to be updated for confirmed spend)
-                            auto & txoinfo = res.position->second;
-                            txoinfo.confirmedHeight = confirmedHeight;
-                            txoinfo.txNum = itTxMap->second;
-                            ++ctr;
-                            if (TRACE)
-                                DebugM("confirmedInBlock: TXO ", txo.toString(), " now recategorized under ",
-                                       "\"confirmedSpends\" for txid ", tx->hash.toHex());
-                        } else {
-                            // this should never happen
-                            Error() << "confirmedInBlock: TXO " << txo.toString() << " could not be inserted into "
-                                    << "\"confirmedSpends\" for txid: " << tx->hash.toHex() << ". This should never "
-                                    << "happen! FIXME!";
-                        }
-                    } else
-                        // prevout txid not in rm set, keep moving
-                        ++itUS;
-                }
-                // sum up final size, so we can detect when there are no more unconf spends for this tx
-                // (this unconf spends map for this sh may have gone from N -> N-1, or N -> N-2, etc, or may now be empty)
-                nUnconfs += ioinfo.unconfirmedSpends.size();
-                if (ctr && TRACE)
-                    DebugM("confirmedInBlock: txid ", tx->hash.toHex(), ", scripthash ", sh.toHex(), " removed ", ctr,
-                           " unconf spends (unconf map size for this txid+sh now: ", ioinfo.unconfirmedSpends.size(), ")");
-            }
-            // check if no more unconf spends now for this tx; if so, reset flag & notify all sh's for this tx
-            if (!nUnconfs) {
-                for (const auto & [sh, xx] : tx->hashXs) {
-                    // We also need to add to affected set since clients use the "height" info for status -- and this
-                    // tx went from height == -1 -> height == 0 now.
-                    //
-                    // Note: this casts a slightly wide net because it informs all the scripthashes in child txs of this
-                    // tx -- which is what we want.  But it also means the debug log will show a larger address count
-                    // for this operation than the address count of the block itself.
-                    scriptHashesAffected.insert(sh);
-                    // We also flag it as needing sort because its sorting criteria changed.
-                    hashXTxsEntriesNeedingSort->insert(sh);
-                }
-                if (TRACE)
-                    DebugM("confirmedInBlock: txid ", tx->hash.toHex(), " now recategorized as not spending any unconfirmed parents");
-            }
-        }
-        ++itTxs; // in this branch: nothing removed, keep iterating
-    }
-
-    // now, update hashXTxs as well
-    rmTxsInHashXTxs(txidMap, scriptHashesAffected, TRACE, hashXTxsEntriesNeedingSort);
-
-    // now, do dsps.rmTx for any txids that we removed that happened to have dsps associated (BCH only)
-    if (!dspTxids.empty()) {
-        ret.dspTxsAffected = dsps.txsLinkedToTxs(dspTxids);
-        for (const auto &txid : dspTxids)
-            dsps.rmTx(txid); // may end up deleting dspHashes as well if the primary txid goes away
-    }
-
-    // finally, update scriptHashesAffectedOut
-    scriptHashesAffectedOut.merge(std::move(scriptHashesAffected));
-
-    // update returned stats
-    ret.newSize = this->txs.size();
-    ret.newNumAddresses = this->hashXTxs.size();
-
-    if (rehashMaxLoadFactor) {
-        if (txs.load_factor() <= *rehashMaxLoadFactor)
-            txs.rehash(0); // shrink to fit
-        if (hashXTxs.load_factor() <= *rehashMaxLoadFactor)
-            hashXTxs.rehash(0);  // shrink to fit
-        if (dsps.load_factor() <= *rehashMaxLoadFactor)
-            dsps.shrink_to_fit();
-    }
-    if (const auto dspCtAfter = dsps.size(); dspCtBefore > dspCtAfter)
-        ret.dspRmCt = dspCtBefore - dspCtAfter;
-    if (const auto dspTxCtAfter = dsps.numTxDspLinks(); dspTxCtBefore > dspTxCtAfter)
-        ret.dspTxRmCt = dspTxCtBefore - dspTxCtAfter;
-    ret.elapsedMsec = t0.msec<decltype(ret.elapsedMsec)>();
-    return ret;
-}
-#else
-auto Mempool::confirmedInBlock(ScriptHashesAffectedSet & scriptHashesAffectedOut,
-                               const TxHashNumMap & txidMap, const BlockHeight confirmedHeight,
-                               bool TRACE, std::optional<float> rehashMaxLoadFactor) -> Stats
-{
-    const auto t0 = Tic();
-
-    Stats ret;
-    ScriptHashesAffectedSet scriptHashesAffected;
-    std::optional<ScriptHashesAffectedSet> hashXTxsEntriesNeedingSort;
-    hashXTxsEntriesNeedingSort.emplace();
-    ret.oldSize = this->txs.size();
-    ret.oldNumAddresses = this->hashXTxs.size();
-    const std::size_t dspCtBefore = dsps.size();
-    const std::size_t dspTxCtBefore = dsps.numTxDspLinks();
-    TxHashSet dspTxids;
-    TxHashSet affectedChildren;
-
-    size_t unknownTxidCt{};
 
     auto recategorizeSpendsForChild = [&scriptHashesAffected, &hashXTxsEntriesNeedingSort, &confirmedHeight, &TRACE,
                                        &txidMap] (TxRef &child) {
-        // This txid is *not* to be removed, but IS spending from a tx we are going to remove.
-        // Scan all of its unconfirmed spends to recategorize spends from parent as confirmed spends.
+        // Scan all the unconfirmned spends for this child tx and find the ones spending from txids in `txidMap`,
+        // and recategorize them as "confirmed spends".
         std::size_t nUnconfs = 0;
         for (auto & [sh, ioinfo] : child->hashXs) {
             int ctr = 0;
             for (auto itUS = ioinfo.unconfirmedSpends.begin(); itUS != ioinfo.unconfirmedSpends.end(); /* see below */) {
                 const auto &txo = itUS->first; // take ref for readability (pointers/refs are not invalidated, even after extract)
-                if (const auto itTxMap = txidMap.find(txo.txHash); itTxMap != txidMap.end()) {
-                    // and voila! This tx spends from the parent we are going to remove. Recategorize unconf -> conf.
+                if (auto itTxIdMap = txidMap.find(txo.txHash); itTxIdMap != txidMap.end()) {
+                    // and voila! This tx spends from a confirmed parent we are going to remove. Recategorize unconf -> conf.
                     auto it2move = itUS++;  // first make `it` point to `it` + 1, making `it2move` be previous value `it`
                     // transfer node from unconfirmed spends -> confirmed spends
                     auto res = ioinfo.confirmedSpends.insert(ioinfo.unconfirmedSpends.extract(it2move)); // does not invalidate refs
@@ -787,7 +641,7 @@ auto Mempool::confirmedInBlock(ScriptHashesAffectedSet & scriptHashesAffectedOut
                         // update node data -- (confirmedHeight and txNum need to be updated for confirmed spend)
                         auto & txoinfo = res.position->second;
                         txoinfo.confirmedHeight = confirmedHeight;
-                        txoinfo.txNum = itTxMap->second;
+                        txoinfo.txNum = itTxIdMap->second; /* confirmed parent txNum */
                         ++ctr;
                         if (TRACE)
                             DebugM("confirmedInBlock: TXO ", txo.toString(), " now recategorized under ",
@@ -799,7 +653,7 @@ auto Mempool::confirmedInBlock(ScriptHashesAffectedSet & scriptHashesAffectedOut
                                 << "happen! FIXME!";
                     }
                 } else
-                    // prevout txid not in rm set, keep moving
+                    // prevout txid is not in the confirmed map, keep moving
                     ++itUS;
             }
             // sum up final size, so we can detect when there are no more unconf spends for this tx
@@ -825,10 +679,22 @@ auto Mempool::confirmedInBlock(ScriptHashesAffectedSet & scriptHashesAffectedOut
             if (TRACE)
                 DebugM("confirmedInBlock: txid ", child->hash.toHex(), " now recategorized as not spending any unconfirmed parents");
         }
-
     };
 
-    // remove all txids in txidMap from this->txs, recategorizing child txns still in mempool as having "confirmed spends"
+    Stats ret;
+    ret.oldSize = this->txs.size();
+    ret.oldNumAddresses = this->hashXTxs.size();
+    const std::size_t dspCtBefore = dsps.size();
+    const std::size_t dspTxCtBefore = dsps.numTxDspLinks();
+    TxHashSet dspTxids;
+    TxHashSet childrenThatWeRecategorized;
+    size_t unknownTxidCt{};
+
+    // - Remove all txids in txidMap from this->txs, recategorizing child txns still in mempool as having "confirmed spends"
+    // - Tag any DSPs to be removed for confirmed txs
+    // - Remove tx<->rpa associations for each confirmed tx
+    // - Unlink each confirmed tx from its parent(s)/child(ren)
+    // - Lastly, erase each confirmed tx altogether from `txs`
     for (const auto & [txid, txnum] : txidMap) {
         auto it = txs.find(txid);
         if (it == txs.end()) { ++unknownTxidCt; continue; }
@@ -847,9 +713,10 @@ auto Mempool::confirmedInBlock(ScriptHashesAffectedSet & scriptHashesAffectedOut
         // handle children
         for (const auto &[ctxid, cwtx] : it->second->children) {
             if (!txidMap.contains(ctxid)) { // only re-categorize if this child is not to be removed
-                if (auto ctx = cwtx.lock())
-                    recategorizeSpendsForChild(ctx);
-                else
+                if (auto ctx = cwtx.lock()) {
+                    if (childrenThatWeRecategorized.insert(ctxid).second) // guard against processing same child tx more than once
+                        recategorizeSpendsForChild(ctx);
+                } else
                     // This should never happen
                     Error() << "confirmedInBlock: child txid " << ctxid.toHex() << " has a NULL weakptr in the child table for " << tx->hash.toHex() << ". FIXME!";
             } else if (TRACE) {
@@ -899,7 +766,6 @@ auto Mempool::confirmedInBlock(ScriptHashesAffectedSet & scriptHashesAffectedOut
     ret.elapsedMsec = t0.msec<decltype(ret.elapsedMsec)>();
     return ret;
 }
-#endif
 
 /* static */
 QVariantMap Mempool::dumpTx(const TxRef &tx)
