@@ -624,12 +624,12 @@ auto Mempool::confirmedInBlock(ScriptHashesAffectedSet & scriptHashesAffectedOut
     hashXTxsEntriesNeedingSort.emplace();
 
     auto recategorizeSpendsForChild = [&scriptHashesAffected, &hashXTxsEntriesNeedingSort, &confirmedHeight, &TRACE,
-                                       &txidMap] (TxRef &child) {
+                                       &txidMap] (TxRef &child, size_t &spendsRecategorizedCount) {
         // Scan all the unconfirmned spends for this child tx and find the ones spending from txids in `txidMap`,
         // and recategorize them as "confirmed spends".
         std::size_t nUnconfs = 0;
         for (auto & [sh, ioinfo] : child->hashXs) {
-            int ctr = 0;
+            unsigned ctr = 0u;
             for (auto itUS = ioinfo.unconfirmedSpends.begin(); itUS != ioinfo.unconfirmedSpends.end(); /* see below */) {
                 const auto &txo = itUS->first; // take ref for readability (pointers/refs are not invalidated, even after extract)
                 if (auto itTxIdMap = txidMap.find(txo.txHash); itTxIdMap != txidMap.end()) {
@@ -643,6 +643,7 @@ auto Mempool::confirmedInBlock(ScriptHashesAffectedSet & scriptHashesAffectedOut
                         txoinfo.confirmedHeight = confirmedHeight;
                         txoinfo.txNum = itTxIdMap->second; /* confirmed parent txNum */
                         ++ctr;
+                        ++spendsRecategorizedCount;
                         if (TRACE)
                             DebugM("confirmedInBlock: TXO ", txo.toString(), " now recategorized under ",
                                    "\"confirmedSpends\" for txid ", child->hash.toHex());
@@ -688,7 +689,7 @@ auto Mempool::confirmedInBlock(ScriptHashesAffectedSet & scriptHashesAffectedOut
     const std::size_t dspTxCtBefore = dsps.numTxDspLinks();
     TxHashSet dspTxids;
     TxHashSet childrenThatWeRecategorized;
-    size_t unknownTxidCt{};
+    size_t unknownTxidCt{}, spendsRecategorizedCt{};
 
     // - Remove all txids in txidMap from this->txs, recategorizing child txns still in mempool as having "confirmed spends"
     // - Tag any DSPs to be removed for confirmed txs
@@ -715,7 +716,7 @@ auto Mempool::confirmedInBlock(ScriptHashesAffectedSet & scriptHashesAffectedOut
             if (!txidMap.contains(ctxid)) { // only re-categorize if this child is not to be removed
                 if (auto ctx = cwtx.lock()) {
                     if (childrenThatWeRecategorized.insert(ctxid).second) // guard against processing same child tx more than once
-                        recategorizeSpendsForChild(ctx);
+                        recategorizeSpendsForChild(ctx, spendsRecategorizedCt);
                 } else
                     // This should never happen
                     Error() << "confirmedInBlock: child txid " << ctxid.toHex() << " has a NULL weakptr in the child table for " << tx->hash.toHex() << ". FIXME!";
@@ -733,6 +734,9 @@ auto Mempool::confirmedInBlock(ScriptHashesAffectedSet & scriptHashesAffectedOut
 
     if (unknownTxidCt)
         DebugM("confirmedInBlock: Skipped ", unknownTxidCt, " \"unknown\" txids that were not in mempool but were in a block");
+    if (!childrenThatWeRecategorized.empty() || spendsRecategorizedCt > 0u)
+        DebugM("confirmedInBlock: Recategorized ", spendsRecategorizedCt, " unconf -> conf spends in ",
+               childrenThatWeRecategorized.size(), " child txns (elapsed so far: ", t0.msecStr(), " msec)");
 
     // now, update hashXTxs as well
     rmTxsInHashXTxs(txidMap, scriptHashesAffected, TRACE, hashXTxsEntriesNeedingSort);
