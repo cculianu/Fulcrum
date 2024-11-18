@@ -735,8 +735,10 @@ auto Mempool::confirmedInBlock(ScriptHashesAffectedSet & scriptHashesAffectedOut
     if (unknownTxidCt)
         DebugM("confirmedInBlock: Skipped ", unknownTxidCt, " \"unknown\" txids that were not in mempool but were in a block");
     if (!childrenThatWeRecategorized.empty() || spendsRecategorizedCt > 0u)
-        DebugM("confirmedInBlock: Recategorized ", spendsRecategorizedCt, " unconf -> conf spends in ",
-               childrenThatWeRecategorized.size(), " child txns (elapsed so far: ", t0.msecStr(), " msec)");
+        DebugM("confirmedInBlock: Recategorized ", spendsRecategorizedCt, " unconf -> conf ",
+               Util::Pluralize("spend", spendsRecategorizedCt), " in ",
+               childrenThatWeRecategorized.size(), Util::Pluralize(" child tx", childrenThatWeRecategorized.size()),
+               " (elapsed so far: ", t0.msecStr(), " msec)");
 
     // now, update hashXTxs as well
     rmTxsInHashXTxs(txidMap, scriptHashesAffected, TRACE, hashXTxsEntriesNeedingSort);
