@@ -10,6 +10,7 @@
 #include "Span.h"
 
 #include <algorithm>
+#include <cstddef> // for std::byte
 #include <cstdint>
 #include <cstring>
 #include <ios>
@@ -865,7 +866,7 @@ namespace ser_detail {
 template <typename Stream, typename Vector>
 inline void Serialize_vector(Stream &os, const Vector &v) {
     using ValT = std::remove_cv_t<typename Vector::value_type>;
-    if constexpr (std::is_same_v<ValT, uint8_t>) {
+    if constexpr (std::is_same_v<ValT, uint8_t> || std::is_same_v<ValT, std::byte>) {
         // uint8_t is done in blocks as a performance optimization
         WriteCompactSize(os, v.size());
         if (!v.empty()) {
@@ -902,7 +903,7 @@ static_assert(!has_resize_uninitialized_v<std::vector<uint8_t>>);
 template <typename Stream, typename Vector>
 inline void Unserialize_vector(Stream &is, Vector &v) {
     using ValT = std::remove_cv_t<typename Vector::value_type>;
-    if constexpr (std::is_same_v<ValT, uint8_t>) {
+    if constexpr (std::is_same_v<ValT, uint8_t> || std::is_same_v<ValT, std::byte>) {
         // uint8_t is done in blocks as a performance optimization
         v.clear();
         const size_t nSize = ReadCompactSize(is);

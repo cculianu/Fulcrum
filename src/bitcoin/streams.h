@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstddef> // std::byte
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -591,6 +592,23 @@ public:
     }
 };
 
+namespace util {
+inline void Xor(Span<std::byte> write, const Span<const std::byte> key, size_t key_offset) {
+    if (key.empty()) return;
+    key_offset %= key.size();
+
+    while (!write.empty()) {
+        write.pop_front() ^= key[key_offset++];
+
+        // This potentially acts on very many bytes of data, so it's
+        // important that we calculate `j`, i.e. the `key` index in this
+        // way instead of doing a %, which would effectively be a division
+        // for each byte Xor'd -- much slower than need be.
+        if (key_offset == key.size()) key_offset = 0u;
+    }
+}
+} // namespace util
+
 /**
  * Non-refcounted RAII wrapper for FILE*
  *
@@ -603,10 +621,12 @@ private:
     const int nType;
     const int nVersion;
 
-    FILE *file;
+    std::FILE *file;
+    std::vector<std::byte> xor_key;
+    size_t xor_offset = 0u;
 
 public:
-    CAutoFile(FILE *filenew, int nTypeIn, int nVersionIn)
+    CAutoFile(std::FILE *filenew, int nTypeIn, int nVersionIn)
         : nType(nTypeIn), nVersion(nVersionIn) {
         file = filenew;
     }
@@ -619,7 +639,7 @@ public:
 
     void fclose() {
         if (file) {
-            ::fclose(file);
+            std::fclose(file);
             file = nullptr;
         }
     }
@@ -630,8 +650,8 @@ public:
      * responsibility of the caller of this function to clean up the returned
      * FILE*.
      */
-    FILE *release() {
-        FILE *ret = file;
+    std::FILE *release() {
+        std::FILE *ret = file;
         file = nullptr;
         return ret;
     }
@@ -641,10 +661,13 @@ public:
      * @note Ownership of the FILE* will remain with this class. Use this only
      * if the scope of the CAutoFile outlives use of the passed pointer.
      */
-    FILE *Get() const { return file; }
+    std::FILE *Get() const { return file; }
 
     /** Return true if the wrapped FILE* is nullptr, false otherwise. */
-    bool IsNull() const { return (file == nullptr); }
+    bool IsNull() const { return file == nullptr; }
+
+    /** Continue with a different XOR key */
+    void SetXor(std::vector<std::byte> data_xor) { xor_key = std::move(data_xor); }
 
     //
     // Stream subset
@@ -652,196 +675,70 @@ public:
     int GetType() const { return nType; }
     int GetVersion() const { return nVersion; }
 
-    void read(char *pch, size_t nSize) {
+    void read(char * const pch, const size_t nSize) {
         if (!file)
-            throw std::ios_base::failure(
-                "CAutoFile::read: file handle is nullptr");
-        if (fread(pch, 1, nSize, file) != nSize)
-            throw std::ios_base::failure(feof(file)
-                                             ? "CAutoFile::read: end of file"
-                                             : "CAutoFile::read: fread failed");
+            throw std::ios_base::failure("CAutoFile::read: file handle is nullptr");
+        if (std::fread(pch, 1, nSize, file) != nSize)
+            throw std::ios_base::failure(std::feof(file) ? "CAutoFile::read: end of file"
+                                                         : "CAutoFile::read: fread failed");
+        if (!xor_key.empty())
+            util::Xor({reinterpret_cast<std::byte *>(pch), nSize}, xor_key, xor_offset);
+        xor_offset += nSize; // maintain accurate xor_offset
     }
 
     void ignore(size_t nSize) {
         if (!file)
-            throw std::ios_base::failure(
-                "CAutoFile::ignore: file handle is nullptr");
+            throw std::ios_base::failure("CAutoFile::ignore: file handle is nullptr");
         uint8_t data[4096];
         while (nSize > 0) {
             size_t nNow = std::min<size_t>(nSize, sizeof(data));
-            if (fread(data, 1, nNow, file) != nNow)
-                throw std::ios_base::failure(
-                    feof(file) ? "CAutoFile::ignore: end of file"
-                               : "CAutoFile::read: fread failed");
+            if (std::fread(data, 1, nNow, file) != nNow)
+                throw std::ios_base::failure(std::feof(file) ? "CAutoFile::ignore: end of file"
+                                                             : "CAutoFile::read: fread failed");
             nSize -= nNow;
+            xor_offset += nNow; // maintain accurate xor_offset
         }
     }
 
-    void write(const char *pch, size_t nSize) {
+    void write(const char * const pch, const size_t nSize) {
         if (!file)
-            throw std::ios_base::failure(
-                "CAutoFile::write: file handle is nullptr");
-        if (fwrite(pch, 1, nSize, file) != nSize)
-            throw std::ios_base::failure("CAutoFile::write: write failed");
+            throw std::ios_base::failure("CAutoFile::write: file handle is nullptr");
+        if (xor_key.empty()) {
+            // normal write
+            if (std::fwrite(pch, 1, nSize, file) != nSize)
+                throw std::ios_base::failure("CAutoFile::write: write failed");
+            xor_offset += nSize; // maintain accurate xor_offset just in case xor_key is later enabled
+        } else {
+            // Write using xor_key
+            std::array<std::byte, 4096> buf;
+            Span<const std::byte> src{reinterpret_cast<const std::byte *>(pch), nSize};
+            while (!src.empty()) {
+                auto buf_now = Span{buf}.first(std::min<size_t>(src.size(), buf.size()));
+                std::copy(src.begin(), src.begin() + buf_now.size(), buf_now.begin());
+                util::Xor(buf_now, xor_key, xor_offset);
+                if (std::fwrite(buf_now.data(), 1, buf_now.size(), file) != buf_now.size()) {
+                    throw std::ios_base::failure{"CAutoFile::write: XorFile::write: failed"};
+                }
+                xor_offset += buf_now.size();
+                src = src.subspan(buf_now.size());
+            }
+        }
     }
 
     template <typename T> CAutoFile &operator<<(const T &obj) {
         // Serialize to this stream
         if (!file)
-            throw std::ios_base::failure(
-                "CAutoFile::operator<<: file handle is nullptr");
+            throw std::ios_base::failure("CAutoFile::operator<<: file handle is nullptr");
         bitcoin::Serialize(*this, obj);
-        return (*this);
+        return *this;
     }
 
     template <typename T> CAutoFile &operator>>(T &&obj) {
         // Unserialize from this stream
         if (!file)
-            throw std::ios_base::failure(
-                "CAutoFile::operator>>: file handle is nullptr");
+            throw std::ios_base::failure("CAutoFile::operator>>: file handle is nullptr");
         bitcoin::Unserialize(*this, obj);
-        return (*this);
-    }
-};
-
-/**
- * Non-refcounted RAII wrapper around a FILE* that implements a ring buffer to
- * deserialize from. It guarantees the ability to rewind a given number of
- * bytes.
- *
- * Will automatically close the file when it goes out of scope if not null. If
- * you need to close the file early, use file.fclose() instead of fclose(file).
- */
-class CBufferedFile {
-private:
-    const int nType;
-    const int nVersion;
-
-    // source file
-    FILE *src;
-    // how many bytes have been read from source
-    uint64_t nSrcPos;
-    // how many bytes have been read from this
-    uint64_t nReadPos;
-    // up to which position we're allowed to read
-    uint64_t nReadLimit;
-    // how many bytes we guarantee to rewind
-    uint64_t nRewind;
-    // the buffer
-    std::vector<char> vchBuf;
-
-protected:
-    // read data from the source to fill the buffer
-    bool Fill() {
-        unsigned int pos = nSrcPos % vchBuf.size();
-        unsigned int readNow = vchBuf.size() - pos;
-        unsigned int nAvail = vchBuf.size() - (nSrcPos - nReadPos) - nRewind;
-        if (nAvail < readNow) readNow = nAvail;
-        if (readNow == 0) return false;
-        size_t nBytes = fread((void *)&vchBuf[pos], 1, readNow, src);
-        if (nBytes == 0) {
-            throw std::ios_base::failure(
-                feof(src) ? "CBufferedFile::Fill: end of file"
-                          : "CBufferedFile::Fill: fread failed");
-        } else {
-            nSrcPos += nBytes;
-            return true;
-        }
-    }
-
-public:
-    CBufferedFile(FILE *fileIn, uint64_t nBufSize, uint64_t nRewindIn,
-                  int nTypeIn, int nVersionIn)
-        : nType(nTypeIn), nVersion(nVersionIn), nSrcPos(0), nReadPos(0),
-          nReadLimit((uint64_t)(-1)), nRewind(nRewindIn), vchBuf(nBufSize, 0) {
-        src = fileIn;
-    }
-
-    ~CBufferedFile() { fclose(); }
-
-    // Disallow copies
-    CBufferedFile(const CBufferedFile &) = delete;
-    CBufferedFile &operator=(const CBufferedFile &) = delete;
-
-    int GetVersion() const { return nVersion; }
-    int GetType() const { return nType; }
-
-    void fclose() {
-        if (src) {
-            ::fclose(src);
-            src = nullptr;
-        }
-    }
-
-    // check whether we're at the end of the source file
-    bool eof() const { return nReadPos == nSrcPos && feof(src); }
-
-    // read a number of bytes
-    void read(char *pch, size_t nSize) {
-        if (nSize + nReadPos > nReadLimit)
-            throw std::ios_base::failure("Read attempted past buffer limit");
-        if (nSize + nRewind > vchBuf.size())
-            throw std::ios_base::failure("Read larger than buffer size");
-        while (nSize > 0) {
-            if (nReadPos == nSrcPos) Fill();
-            unsigned int pos = nReadPos % vchBuf.size();
-            size_t nNow = nSize;
-            if (nNow + pos > vchBuf.size()) nNow = vchBuf.size() - pos;
-            if (nNow + nReadPos > nSrcPos) nNow = nSrcPos - nReadPos;
-            std::memcpy(pch, &vchBuf[pos], nNow);
-            nReadPos += nNow;
-            pch += nNow;
-            nSize -= nNow;
-        }
-    }
-
-    // return the current reading position
-    uint64_t GetPos() const { return nReadPos; }
-
-    // rewind to a given reading position
-    bool SetPos(uint64_t nPos) {
-        nReadPos = nPos;
-        if (nReadPos + nRewind < nSrcPos) {
-            nReadPos = nSrcPos - nRewind;
-            return false;
-        } else if (nReadPos > nSrcPos) {
-            nReadPos = nSrcPos;
-            return false;
-        } else {
-            return true;
-        }
-    }
-
-    bool Seek(uint64_t nPos) {
-        long nLongPos = nPos;
-        if (nPos != (uint64_t)nLongPos) return false;
-        if (fseek(src, nLongPos, SEEK_SET)) return false;
-        nLongPos = ftell(src);
-        nSrcPos = nLongPos;
-        nReadPos = nLongPos;
-        return true;
-    }
-
-    // Prevent reading beyond a certain position. No argument removes the limit.
-    bool SetLimit(uint64_t nPos = (uint64_t)(-1)) {
-        if (nPos < nReadPos) return false;
-        nReadLimit = nPos;
-        return true;
-    }
-
-    template <typename T> CBufferedFile &operator>>(T &&obj) {
-        // Unserialize from this stream
-        bitcoin::Unserialize(*this, obj);
-        return (*this);
-    }
-
-    // search for a given byte in the stream, and remain positioned on it
-    void FindByte(char ch) {
-        while (true) {
-            if (nReadPos == nSrcPos) Fill();
-            if (vchBuf[nReadPos % vchBuf.size()] == ch) break;
-            nReadPos++;
-        }
+        return *this;
     }
 };
 
