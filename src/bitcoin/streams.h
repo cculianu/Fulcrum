@@ -30,6 +30,24 @@
 #endif
 
 namespace bitcoin {
+
+namespace util {
+inline void Xor(Span<std::byte> write, const Span<const std::byte> key, size_t key_offset) {
+    if (key.empty()) return;
+    key_offset %= key.size();
+
+    while (!write.empty()) {
+        write.pop_front() ^= key[key_offset++];
+
+        // This potentially acts on very many bytes of data, so it's
+        // important that we calculate the `key` index in this way instead
+        // of doing a %, which would effectively be a division for each
+        // byte Xor'd -- much slower than need be.
+        if (key_offset == key.size()) key_offset = 0u;
+    }
+}
+} // namespace util
+
 template <typename Stream> class OverrideStream {
     Stream *stream;
 
@@ -480,19 +498,7 @@ public:
      * @param[in] key    The key used to XOR the data in this stream.
      */
     void Xor(const std::vector<uint8_t> &key) {
-        if (key.size() == 0) {
-            return;
-        }
-
-        for (size_type i = 0, j = 0; i != size(); i++) {
-            vch[i] ^= key[j++];
-
-            // This potentially acts on very many bytes of data, so it's
-            // important that we calculate `j`, i.e. the `key` index in this way
-            // instead of doing a %, which would effectively be a division for
-            // each byte Xor'd -- much slower than need be.
-            if (j == key.size()) j = 0;
-        }
+        util::Xor(MakeWritableByteSpan(vch), MakeByteSpan(key), 0u);
     }
 };
 
@@ -592,23 +598,6 @@ public:
     }
 };
 
-namespace util {
-inline void Xor(Span<std::byte> write, const Span<const std::byte> key, size_t key_offset) {
-    if (key.empty()) return;
-    key_offset %= key.size();
-
-    while (!write.empty()) {
-        write.pop_front() ^= key[key_offset++];
-
-        // This potentially acts on very many bytes of data, so it's
-        // important that we calculate `j`, i.e. the `key` index in this
-        // way instead of doing a %, which would effectively be a division
-        // for each byte Xor'd -- much slower than need be.
-        if (key_offset == key.size()) key_offset = 0u;
-    }
-}
-} // namespace util
-
 /**
  * Non-refcounted RAII wrapper for FILE*
  *
@@ -682,7 +671,7 @@ public:
             throw std::ios_base::failure(std::feof(file) ? "CAutoFile::read: end of file"
                                                          : "CAutoFile::read: fread failed");
         if (!xor_key.empty())
-            util::Xor({reinterpret_cast<std::byte *>(pch), nSize}, xor_key, xor_offset);
+            util::Xor(MakeWritableByteSpan(Span{pch, nSize}), xor_key, xor_offset);
         xor_offset += nSize; // maintain accurate xor_offset
     }
 
@@ -711,7 +700,7 @@ public:
         } else {
             // Write using xor_key
             std::array<std::byte, 4096> buf;
-            Span<const std::byte> src{reinterpret_cast<const std::byte *>(pch), nSize};
+            Span<const std::byte> src = MakeByteSpan(Span{pch, nSize});
             while (!src.empty()) {
                 auto buf_now = Span{buf}.first(std::min<size_t>(src.size(), buf.size()));
                 std::copy(src.begin(), src.begin() + buf_now.size(), buf_now.begin());

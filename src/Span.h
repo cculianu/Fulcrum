@@ -5,6 +5,8 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 #pragma once
 
+#include "bitcoin/concepts.h"
+
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -203,4 +205,23 @@ namespace Span_detail {
 template <typename V>
 auto MakeUInt8Span(V &&v) -> decltype(Span_detail::UInt8SpanCast(Span{std::forward<V>(v)})) {
     return Span_detail::UInt8SpanCast(Span{std::forward<V>(v)});
+}
+
+// From C++20 as_bytes and as_writeable_bytes
+template <typename T>
+requires bitcoin::ByteLike<std::remove_const_t<T>>
+Span<const std::byte> AsBytes(Span<T> s) noexcept {
+    return {reinterpret_cast<const std::byte *>(const_cast<const T *>(s.data())), s.size()};
+}
+template <bitcoin::ByteLike T>
+Span<std::byte> AsWritableBytes(Span<T> s) noexcept {
+    return {reinterpret_cast<std::byte *>(s.data()), s.size()};
+}
+template <typename V>
+Span<const std::byte> MakeByteSpan(V&& v) noexcept {
+    return AsBytes(Span{std::forward<V>(v)});
+}
+template <typename V>
+Span<std::byte> MakeWritableByteSpan(V&& v) noexcept {
+    return AsWritableBytes(Span{std::forward<V>(v)});
 }
