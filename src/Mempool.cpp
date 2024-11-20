@@ -172,8 +172,8 @@ auto Mempool::addNewTxs(ScriptHashesAffectedSet & scriptHashesAffected,
                 Tx::linkChild(prevTxRef, tx);
 
                 // DSP handling (BCH only)
-                if (!dsps.empty() && !seenParents.count(prevTxId)) {
-                    if (!txsNew.count(prevTxId)) { // parent was an old in-mempool tx, check if it had dsps and assign them to this child
+                if (!dsps.empty() && !seenParents.contains(prevTxId)) {
+                    if (!txsNew.contains(prevTxId)) { // parent was an old in-mempool tx, check if it had dsps and assign them to this child
                         if (const auto *dspHashes = dsps.dspHashesForTx(prevTxId)) {
                             for (const auto &dspHash : *dspHashes) {
                                 if (dsps.addTx(dspHash, hash)) {
@@ -1055,12 +1055,19 @@ namespace {
         try {
             uint64_t version;
             file >> version;
-            constexpr uint64_t BCHN_BTC_VERSION = 1, BU_VERSION = 1541030400;
-            if (!std::set<uint64_t>({BCHN_BTC_VERSION, BU_VERSION}).count(version))
+            constexpr uint64_t BCHN_BTC_VERSION = 1, BU_VERSION = 1541030400, BTC_VERSION_XOR_KEY = 2;
+            if (!std::set<uint64_t>({BCHN_BTC_VERSION, BU_VERSION, BTC_VERSION_XOR_KEY}).contains(version))
                 throw Exception(QString("Unknown mempool.dat version: %1").arg(qulonglong(version)));
+            if (version == BTC_VERSION_XOR_KEY) {
+                std::vector<std::byte> xor_key;
+                file >> xor_key;
+                file.SetXor(std::move(xor_key));
+            }
 
             uint64_t num;
             file >> num;
+            Log("Loading %llu mempool transactions from file...", static_cast<unsigned long long>(num));
+
             while (num--) {
                 if (interrupted) throw Exception("Interrupted");
                 bitcoin::CTransactionRef ctx;
@@ -1213,7 +1220,7 @@ namespace {
                 TXO txo;
                 const auto &prevoutTxId = in.prevout.GetTxId();
                 txo.txHash = BTC::Hash2ByteArrayRev(prevoutTxId);
-                if (mpd.count(txo.txHash) != 0) continue; // mempool txn, no need to retrieve anything
+                if (mpd.contains(txo.txHash)) continue; // mempool txn, no need to retrieve anything
                 txo.outN = in.prevout.GetN();
                 bitcoin::CTransactionRef prevTx;
                 {
@@ -1523,7 +1530,7 @@ namespace {
                                     if (it == mempool.txs.end())
                                         throw Exception(QString("Could not find prev out %1 for unconfirmed spend for txid %2")
                                                         .arg(txo.toString(), QString(txid.toHex())));
-                                    if (it->second->hashXs.count(txoinfo.hashX) == 0)
+                                    if ( ! it->second->hashXs.contains(txoinfo.hashX))
                                         throw Exception(QString("Coult not find prev out %1 hashx %2 for unfonfirmed spend for txid %3")
                                                         .arg(txo.toString(), QString(txoinfo.hashX.toHex()), QString(txid.toHex())));
                                     expected.affected.insert(txoinfo.hashX);
@@ -1579,7 +1586,7 @@ namespace {
                             if (iterMode == ConfirmPackages) {
                                 for (const auto & [sh, ioinfo] : tx->hashXs) {
                                     for (const auto & [txo, txoinfo] : ioinfo.unconfirmedSpends) {
-                                        if (!txidMap.count(txo.txHash))
+                                        if (!txidMap.contains(txo.txHash))
                                             throw Exception(QString("Unexpected: txid %1 spends unconfirmed parent txo "
                                                                     "%2 which is not in the confirm set!")
                                                             .arg(QString(txid.toHex()), txo.toString()));
@@ -1635,7 +1642,7 @@ namespace {
                             for (const auto & [sh, ioinfo] : tx->hashXs) {
                                 nUnconf += ioinfo.unconfirmedSpends.size();
                                 for (const auto & [txo, txoinfo] : ioinfo.unconfirmedSpends) {
-                                    if (!mempool.txs.count(txo.txHash))
+                                    if (!mempool.txs.contains(txo.txHash))
                                         throw Exception("A scripthash now refers to an unconfirmed spend that no longer exists");
                                     if (txoinfo.confirmedHeight)
                                         throw Exception("An unconfirmed spend has a confirmedHeight");
@@ -1644,11 +1651,11 @@ namespace {
                                 }
                                 // check sanity of confirmedSpends
                                 for (const auto & [txo, txoinfo] : ioinfo.confirmedSpends) {
-                                    if (mempool.txs.count(txo.txHash))
+                                    if (mempool.txs.contains(txo.txHash))
                                         throw Exception("A scripthash now refers to a \"confirmed spend\" that is still in mempool");
                                     if (!txoinfo.confirmedHeight.has_value())
                                         throw Exception("A \"confirmed spend\" has no confirmedHeight");
-                                    if (!okConfHeights.count(*txoinfo.confirmedHeight))
+                                    if (!okConfHeights.contains(*txoinfo.confirmedHeight))
                                         throw Exception("A \"confirmed spend\" has unexpected/junk confirmedHeight");
                                     if (auto optNum = getTxNum(txo.txHash, false); !optNum || *optNum != txoinfo.txNum)
                                         throw Exception("A \"confirmed spend\" has invalid txNum");
@@ -1674,7 +1681,7 @@ namespace {
                                 if (pprev && *pprev == tx)
                                     throw Exception("Encountered dupe tx entry in a txvec!");
                                 pprev = &tx;
-                                if (!mempool.txs.count(tx->hash))
+                                if (!mempool.txs.contains(tx->hash))
                                     throw Exception("Encountered a txvec entry pointing to a tx not in mempool!");
                                 if (!setInVecsThisSh.insert(tx->hash).second)
                                     throw Exception("Dupe txhash in a txvec encountered");
