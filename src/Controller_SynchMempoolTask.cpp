@@ -195,7 +195,7 @@ void SynchMempoolTask::Precache::threadFunc(const size_t reserve, const Mempool:
             for (const auto & in : tx->vin) {
                 const TXO txo{BTC::Hash2ByteArrayRev(in.prevout.GetTxId()), IONum(in.prevout.GetN())};
                 ++tot;
-                if (tentativeMempoolTxHashes.find(txo.txHash) != tentativeMempoolTxHashes.end())
+                if (tentativeMempoolTxHashes.contains(txo.txHash))
                     continue; // unconfirmed spend, we don't pre-cache this, continue
                 // if doesn't appear to be in mempool, look it up in the db and cache the resulting answer
                 // may throw on very low level db error; returns nullopt if not found (may be not found for mempool txn)
@@ -318,7 +318,7 @@ void SynchMempoolTask::doGetRawMempool()
                 droppedTxs.erase(it); // mark this tx as "not dropped" since it was in the mempool before and is in the mempool now.
                 if (TRACE) Debug() << "Existing mempool tx: " << hash.toHex();
             } else {
-                if (txnIgnoreSet.find(hash) != txnIgnoreSet.end()) {
+                if (txnIgnoreSet.contains(hash)) {
                     // suppressed txn (in ignore set)
                     if (TRACE) Debug() << "Ignored mempool tx: " << hash.toHex();
                     ++ignoredCt;
