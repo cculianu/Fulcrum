@@ -427,6 +427,27 @@ void BitcoinDMgr::refreshBitcoinDZmqNotifications()
                         badFormat = true;
                         continue; // skip this one -- it will likely confuse libzmq
                     }
+                } else if (addr.startsWith("ipc://") || addr.startsWith("unix:")) {
+                    DebugM("getzmqnotifications: Unix domain socket address: ", addr);
+
+                    const QString socketPath = addr.startsWith("ipc://")
+                        ? addr.mid(6)
+                        : addr.mid(5);
+
+                    try {
+                        if (socketPath.isEmpty()) {
+                            throw std::runtime_error("Socket path is empty.");
+                        }
+                        // Check if the socket exists
+                        QFileInfo socketInfo(socketPath);
+                        if (!socketInfo.exists()) {
+                            throw std::runtime_error("Socket does not exist: " + socketPath.toStdString());
+                        }
+                    } catch (const std::exception &e) {
+                        Error() << "failed to parse zmq notification address: " << addr << " (" << e.what() << ")";
+                        badFormat = true;
+                        continue; // skip this one -- it will likely confuse libzmq
+                    }
                 } else {
                     Warning() << "getzmqnotifications: unknown endpoint protocol " << addr << " for type " << type;
                     badFormat = true;
