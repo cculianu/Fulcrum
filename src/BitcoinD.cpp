@@ -431,8 +431,12 @@ void BitcoinDMgr::refreshBitcoinDZmqNotifications()
                 } else if (addr.startsWith("ipc://")) {
                     transport = "unix domain";
 
-                    const QString socketPath = addr.mid(6);
+                    QString socketPath = addr.mid(6);
                     QString errMsg;
+
+                    // Core and/or Knots may have left extra slashes at the front of the string. Trim and leave only 1.
+                    for (QString left2; (left2 = socketPath.left(2)) == "//" || left2 == R"(/\)"; /* */)
+                        socketPath = socketPath.mid(1); // pop first slash and keep looping
 
                     if (socketPath.isEmpty())
                         errMsg = "Socket path is empty";
@@ -444,6 +448,8 @@ void BitcoinDMgr::refreshBitcoinDZmqNotifications()
                         badFormat = true;
                         continue; // skip this one -- it will likely confuse libzmq
                     }
+                    // rewrite it to normalized form (trimmed of any extra slashes at front)
+                    addr = "ipc://" + socketPath;
                 } else {
                     Warning() << "getzmqnotifications: unknown endpoint protocol " << addr << " for type " << type;
                     badFormat = true;
