@@ -396,7 +396,7 @@ void BitcoinDMgr::refreshBitcoinDZmqNotifications()
             bool badFormat = !reply.result().canConvert<QVariantList>();
             for (const auto &var : reply.result().toList()) {
                 const auto obj = var.toMap();
-                QString type, addr;
+                QString type, addr, transport;
                 if (obj.isEmpty() || (type = obj.value("type").toString()).isEmpty() || (addr = obj.value("address").toString()).isEmpty()) {
                     badFormat = true;
                     continue;
@@ -410,6 +410,7 @@ void BitcoinDMgr::refreshBitcoinDZmqNotifications()
                 } else
                     Warning() << "getzmqnotifications: unknown zmq notification type \"" << type << "\"";
                 if (addr.startsWith("tcp://")) {
+                    transport = "TCP";
                     const QString hostPortPart = addr.mid(6).split("/").front(); // in case there are trailing slashes?
                     try {
                         auto [host, port] = Util::ParseHostPortPair(hostPortPart);
@@ -427,24 +428,19 @@ void BitcoinDMgr::refreshBitcoinDZmqNotifications()
                         badFormat = true;
                         continue; // skip this one -- it will likely confuse libzmq
                     }
-                } else if (addr.startsWith("ipc://") || addr.startsWith("unix:")) {
-                    DebugM("getzmqnotifications: Unix domain socket address: ", addr);
+                } else if (addr.startsWith("ipc://")) {
+                    transport = "unix domain";
 
-                    const QString socketPath = addr.startsWith("ipc://")
-                        ? addr.mid(6)
-                        : addr.mid(5);
+                    const QString socketPath = addr.mid(6);
+                    QString errMsg;
 
-                    try {
-                        if (socketPath.isEmpty()) {
-                            throw std::runtime_error("Socket path is empty.");
-                        }
-                        // Check if the socket exists
-                        QFileInfo socketInfo(socketPath);
-                        if (!socketInfo.exists()) {
-                            throw std::runtime_error("Socket does not exist: " + socketPath.toStdString());
-                        }
-                    } catch (const std::exception &e) {
-                        Error() << "failed to parse zmq notification address: " << addr << " (" << e.what() << ")";
+                    if (socketPath.isEmpty())
+                        errMsg = "Socket path is empty";
+                    else if (!QFileInfo::exists(socketPath))
+                        errMsg = "Socket does not exist: " + socketPath;
+
+                    if (!errMsg.isEmpty()) {
+                        Error() << "failed to validate zmq notification address: " << addr << " (" << errMsg << ")";
                         badFormat = true;
                         continue; // skip this one -- it will likely confuse libzmq
                     }
@@ -456,6 +452,7 @@ void BitcoinDMgr::refreshBitcoinDZmqNotifications()
 
                 // if we get here, safe to add to our map
                 zmqs.insert(type, addr);
+                DebugM("getzmqnotifications: added ", transport, " socket address: ", addr);
             }
             if (badFormat)
                 Error() << "getzmqnotifications: query to bitcoind returned a result in an unexpected format";

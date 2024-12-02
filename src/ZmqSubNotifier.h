@@ -44,7 +44,8 @@ public:
     static QString versionString();
 
     /// Starts the listener thread, and subscribes to a topic on an address.
-    /// @param address is typically of the form "tcp://11.22.33.44:1234" for ip:port or "ipc:///path/to/socket" or "unix:/path/to/socket" for Unix domain sockets
+    /// @param address is typically of the form "tcp://11.22.33.44:1234" for ip:port or "ipc:///path/to/socket"
+    ///        for Unix domain sockets.
     /// @param topic is the topic, set to "" for all topics.
     /// @param retryInterval is the number of milliseconds to wait before re-creating the socket. That is, we assume a
     /// stale zmq socket if no data is received in retryInterval msec. Set to <= 0 to never re-create the socket.
