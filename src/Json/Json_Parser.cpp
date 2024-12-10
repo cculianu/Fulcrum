@@ -534,7 +534,7 @@ struct Container {
     QByteArray data; // only for Num, Str -- may be a shallow copy pointing into the `bytes` QByteArray passed to Json::detail::parse()
     std::vector<Container> values; // only for Arr
     // Note that the below pair.first QByteArray may be a shallow copy pointing into the `bytes` QByteArray
-    std::vector<std::pair<QByteArray, Container>> entries; // only for Obj
+    std::vector<std::pair<QByteArray, std::unique_ptr<Container>>> entries; // only for Obj
     void clear() { data.clear(); values.clear(); entries.clear(); typ = Null; }
     void setArr() { clear(); typ = Arr; }
     void setObj() { clear(); typ = Obj; }
@@ -543,104 +543,102 @@ struct Container {
     /// Recursively scours this container and its sub-containers and builds the proper QVariant / nesting.
     /// Unlike this intermediate object, the resultant QVariant's string data (if any) will always be deep
     /// copies of the original string data that came in.
-    QVariant toVariant() const;
+    QVariant toVariant() const {
+        QVariant ret;
+        switch(typ) {
+        case Null:
+            // no further processing needed
+            break;
+        case Num: {
+            // NB: for `Num` type, `data` is always a shallow copy of the data in the original `bytes` arg
+            if (UNLIKELY(data.isEmpty())) {
+                // this should never happen
+                throw Json::ParseError("Data is empty for a nested item of type Num");
+            }
+            // NOTE .toDouble() is unsafe on raw shallow QByteArray - see QT-BUG 85580 and 86681.
+            // Also note that .toLongLong() and .toULongLong() make an implicit deep copy of the data.
+            // Since we want to avoid excess mallocs, we take a copy ourselves on the stack of the C-string
+            // data to ensure NUL termination, and then we call into the C functions for parsing ourselves.
+            // - 47 chars are more than enough for doubles; we won't support excessively long notations.
+            //   See: https://stackoverflow.com/questions/1701055/what-is-the-maximum-length-in-chars-needed-to-represent-any-double-value
+            // - int64's need about ~22 bytes, so 47 is plenty
+            std::array<char, 48> dcopy;
+            const QByteArray::size_type len = std::min<QByteArray::size_type>(dcopy.size()-1, data.size());
+            std::memcpy(dcopy.data(), data.constData(), len);
+            dcopy[len] = 0; // ensure nul termination
+            const char * const begin = dcopy.data(); char *parseEnd = nullptr;
+            const auto HasChar = [begin, len](char c) { return std::memchr(begin, c, len) != nullptr; };
+            bool ok;
+            if (HasChar('.') || HasChar('e') || HasChar('E')) {
+                errno = 0; // NB: errno lives in thread-local storage so this is fine
+                const double d = std::strtod(begin, &parseEnd);
+                ok = !errno && parseEnd != begin; /* accept junk at end, just in case? */
+                ret = d;
+            } else if (*begin == '-') {
+                errno = 0; // NB: errno lives in thread-local storage so this is fine
+                const auto ll = std::strtoll(begin, &parseEnd, 10);
+                ok = !errno && parseEnd == begin + len; /* do not accept junk at end */
+                // the below is just in case qlonglong differs from long long
+                constexpr auto MIN = std::numeric_limits<qlonglong>::min(), MAX = std::numeric_limits<qlonglong>::max();
+                if constexpr (MIN != std::numeric_limits<decltype(ll)>::min() || MAX != std::numeric_limits<decltype(ll)>::max())
+                    ok = ok && ll >= MIN && ll <= MAX;
+                ret = qlonglong(ll);
+            } else {
+                errno = 0; // NB: errno lives in thread-local storage so this is fine
+                const auto ull = std::strtoull(begin, &parseEnd, 10);
+                ok = !errno && parseEnd == begin + len; /* do not accept junk at end */
+                // the below is just in case qulonglong differs from unsigned long long
+                constexpr auto MIN = std::numeric_limits<qulonglong>::min(), MAX = std::numeric_limits<qulonglong>::max();
+                if constexpr (MIN != std::numeric_limits<decltype(ull)>::min() || MAX != std::numeric_limits<decltype(ull)>::max())
+                    ok = ok && ull >= MIN && ull <= MAX;
+                ret = qulonglong(ull);
+            }
+            if (UNLIKELY(!ok)) {
+                // this should never happen
+                throw Json::ParseError(QString("Failed to parse number from string: %1 (original: %2)")
+                                       .arg(begin, QString::fromUtf8(data.constData(), data.size())));
+            }
+            break;
+        }
+        case BoolTrue:
+            ret = true;
+            break;
+        case BoolFalse:
+            ret = false;
+            break;
+        case Str:
+            // NB: data may be a shallow or deep copy of the original data in `bytes`
+            // We use this C string syntax because it's faster, as well as more correct.
+            // Also note that round1.json test fails (because it contains the 0 codepoint)
+            // unless we do this C-string syntax to construct the QString.
+            // QString quirks, see:  https://github.com/qt/qtbase/blob/ba3b53cb501a77144aa6259e48a8e0edc3d1481d/src/corelib/text/qstring.h#L701
+            //              versus:  https://github.com/qt/qtbase/blob/ba3b53cb501a77144aa6259e48a8e0edc3d1481d/src/corelib/text/qstring.h#L709
+            ret = QString::fromUtf8(data.constData(), data.size());
+            break;
+        case Arr: {
+            QVariantList vl;
+            vl.reserve(values.size());
+            for (const auto & cont : values) {
+                vl.push_back(cont.toVariant());
+            }
+            ret = vl;
+            break;
+        }
+        case Obj: {
+            // NB: pair.first in entries may be a deep or shallow copy of the data in `bytes`
+            QVariantMap vm;
+            for (const auto & [key, cont] : entries) {
+                // We use this C string syntax because it's faster & more accurate. (QString quirks)
+                vm[QString::fromUtf8(key.constData(), key.size())] = cont->toVariant();
+            }
+            ret = vm;
+            break;
+        }
+        }
+        return ret;
+    }
 };
 
-/// recursively scours this container and its sub-containers and builds the proper QVariant / nesting
-QVariant Container::toVariant() const {
-    QVariant ret;
-    switch(typ) {
-    case Null:
-        // no further processing needed
-        break;
-    case Num: {
-        // NB: for `Num` type, `data` is always a shallow copy of the data in the original `bytes` arg
-        if (UNLIKELY(data.isEmpty())) {
-            // this should never happen
-            throw Json::ParseError("Data is empty for a nested item of type Num");
-        }
-        // NOTE .toDouble() is unsafe on raw shallow QByteArray - see QT-BUG 85580 and 86681.
-        // Also note that .toLongLong() and .toULongLong() make an implicit deep copy of the data.
-        // Since we want to avoid excess mallocs, we take a copy ourselves on the stack of the C-string
-        // data to ensure NUL termination, and then we call into the C functions for parsing ourselves.
-        // - 47 chars are more than enough for doubles; we won't support excessively long notations.
-        //   See: https://stackoverflow.com/questions/1701055/what-is-the-maximum-length-in-chars-needed-to-represent-any-double-value
-        // - int64's need about ~22 bytes, so 47 is plenty
-        std::array<char, 48> dcopy;
-        const QByteArray::size_type len = std::min<QByteArray::size_type>(dcopy.size()-1, data.size());
-        std::memcpy(dcopy.data(), data.constData(), len);
-        dcopy[len] = 0; // ensure nul termination
-        const char * const begin = dcopy.data(); char *parseEnd = nullptr;
-        const auto HasChar = [begin, len](char c) { return std::memchr(begin, c, len) != nullptr; };
-        bool ok;
-        if (HasChar('.') || HasChar('e') || HasChar('E')) {
-            errno = 0; // NB: errno lives in thread-local storage so this is fine
-            const double d = std::strtod(begin, &parseEnd);
-            ok = !errno && parseEnd != begin; /* accept junk at end, just in case? */
-            ret = d;
-        } else if (*begin == '-') {
-            errno = 0; // NB: errno lives in thread-local storage so this is fine
-            const auto ll = std::strtoll(begin, &parseEnd, 10);
-            ok = !errno && parseEnd == begin + len; /* do not accept junk at end */
-            // the below is just in case qlonglong differs from long long
-            constexpr auto MIN = std::numeric_limits<qlonglong>::min(), MAX = std::numeric_limits<qlonglong>::max();
-            if constexpr (MIN != std::numeric_limits<decltype(ll)>::min() || MAX != std::numeric_limits<decltype(ll)>::max())
-                ok = ok && ll >= MIN && ll <= MAX;
-            ret = qlonglong(ll);
-        } else {
-            errno = 0; // NB: errno lives in thread-local storage so this is fine
-            const auto ull = std::strtoull(begin, &parseEnd, 10);
-            ok = !errno && parseEnd == begin + len; /* do not accept junk at end */
-            // the below is just in case qulonglong differs from unsigned long long
-            constexpr auto MIN = std::numeric_limits<qulonglong>::min(), MAX = std::numeric_limits<qulonglong>::max();
-            if constexpr (MIN != std::numeric_limits<decltype(ull)>::min() || MAX != std::numeric_limits<decltype(ull)>::max())
-                ok = ok && ull >= MIN && ull <= MAX;
-            ret = qulonglong(ull);
-        }
-        if (UNLIKELY(!ok)) {
-            // this should never happen
-            throw Json::ParseError(QString("Failed to parse number from string: %1 (original: %2)")
-                                   .arg(begin, QString::fromUtf8(data.constData(), data.size())));
-        }
-        break;
-    }
-    case BoolTrue:
-        ret = true;
-        break;
-    case BoolFalse:
-        ret = false;
-        break;
-    case Str:
-        // NB: data may be a shallow or deep copy of the original data in `bytes`
-        // We use this C string syntax because it's faster, as well as more correct.
-        // Also note that round1.json test fails (because it contains the 0 codepoint)
-        // unless we do this C-string syntax to construct the QString.
-        // QString quirks, see:  https://github.com/qt/qtbase/blob/ba3b53cb501a77144aa6259e48a8e0edc3d1481d/src/corelib/text/qstring.h#L701
-        //              versus:  https://github.com/qt/qtbase/blob/ba3b53cb501a77144aa6259e48a8e0edc3d1481d/src/corelib/text/qstring.h#L709
-        ret = QString::fromUtf8(data.constData(), data.size());
-        break;
-    case Arr: {
-        QVariantList vl;
-        vl.reserve(values.size());
-        for (const auto & cont : values) {
-            vl.push_back(cont.toVariant());
-        }
-        ret = vl;
-        break;
-    }
-    case Obj: {
-        // NB: pair.first in entries may be a deep or shallow copy of the data in `bytes`
-        QVariantMap vm;
-        for (const auto & [key, cont] : entries) {
-            // We use this C string syntax because it's faster & more accurate. (QString quirks)
-            vm[QString::fromUtf8(key.constData(), key.size())] = cont.toVariant();
-        }
-        ret = vm;
-        break;
-    }
-    }
-    return ret;
-}
 } // end anonymous namespace
 
 namespace Json {
@@ -761,10 +759,10 @@ bool parse(QVariant &out, const QByteArray &bytes, ParserBackend backend)
                     // /paranoia
                     auto& entry = top->entries.back();
                     if (utyp == VType::Obj)
-                        entry.second.setObj();
+                        entry.second->setObj();
                     else
-                        entry.second.setArr();
-                    stack.push_back(&entry.second);
+                        entry.second->setArr();
+                    stack.push_back(entry.second.get());
                 } else {
                     top->values.emplace_back(Container{utyp, {}, {}, {}});
                     stack.push_back(&top->values.back());
@@ -851,7 +849,7 @@ bool parse(QVariant &out, const QByteArray &bytes, ParserBackend backend)
                     return false;
                 }
                 // /paranoia
-                top->entries.back().second = std::move(tmpVal);
+                top->entries.back().second = std::make_unique<Container>(std::move(tmpVal));
             } else {
                 top->values.emplace_back(std::move(tmpVal));
             }
@@ -875,7 +873,7 @@ bool parse(QVariant &out, const QByteArray &bytes, ParserBackend backend)
                     return false;
                 }
                 // /paranoia
-                top->entries.back().second = std::move(tmpVal);
+                top->entries.back().second = std::make_unique<Container>(std::move(tmpVal));
             } else {
                 top->values.emplace_back(std::move(tmpVal));
             }
@@ -889,7 +887,7 @@ bool parse(QVariant &out, const QByteArray &bytes, ParserBackend backend)
                 Container *top = stack.back();
                 top->entries.emplace_back(std::piecewise_construct,
                                           std::forward_as_tuple(std::move(tokenVal)),
-                                          std::forward_as_tuple());
+                                          std::forward_as_tuple(std::make_unique<Container>()));
                 clearExpect(OBJ_NAME);
                 setExpect(COLON);
             } else {
@@ -906,7 +904,7 @@ bool parse(QVariant &out, const QByteArray &bytes, ParserBackend backend)
                         return false;
                     }
                     // /paranoia
-                    top->entries.back().second = std::move(tmpVal);
+                    top->entries.back().second = std::make_unique<Container>(std::move(tmpVal));
                 } else {
                     top->values.emplace_back(std::move(tmpVal));
                 }
