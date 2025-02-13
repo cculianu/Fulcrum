@@ -704,7 +704,7 @@ namespace WebSocket
                         if (expectingStatusLine) {
                             // parse status line
                             QString reasonPhrase;
-                            int major, minor, code;
+                            int major{}, minor{}, code{};
                             if (!parseStatusLine(line, &major, &minor, &code, &reasonPhrase)
                                     || major < 1 || minor < 1 || code != 101)
                                 Fail(QString(kBadHttpLine).arg(QString(line)));
@@ -802,7 +802,7 @@ namespace WebSocket
                         if (expectingReqLine) {
                             // parse status line
                             QString method;
-                            int major, minor;
+                            int major{}, minor{};
                             if (!parseReqLine(line, &major, &minor, &method, &reqResource)
                                     || major < 1 || minor < 1 || method != "GET")
                                 Fail(QString(kBadHttpLine).arg(QString(line)));
