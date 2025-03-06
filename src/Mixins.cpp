@@ -116,7 +116,7 @@ void TimersByNameMixin::callOnTimerSoon(int ms, const QString &name, const std::
         // return right away in either case
         return;
     }
-    std::shared_ptr<QTimer> timer(new QTimer(qobj()), [](QTimer *t){ t->deleteLater(); });
+    std::shared_ptr<QTimer> timer(new QTimer(qobj()), [](QTimer *t){ delete t; });
     timer->setSingleShot(false);
     timer->setTimerType(ttype);
     QObject::connect(timer.get(), &QTimer::timeout, qobj(), [this, func, name]{
@@ -125,7 +125,7 @@ void TimersByNameMixin::callOnTimerSoon(int ms, const QString &name, const std::
             auto timer =  _timerMap.take(name);
             if (timer)
                 timer->stop();
-            // timer will go out of scope here and deleteLater() will be called.
+            // timer will go out of scope here and deleter will be called.
         }
     });
     _timerMap[name] = timer;

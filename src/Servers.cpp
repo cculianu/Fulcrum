@@ -2619,7 +2619,7 @@ void ServerSSL::incomingConnection(qintptr socketDescriptor)
     *tmpConnections += connect(socket, &QSslSocket::encrypted, this, [this, timer, tmpConnections, socket, peerName] {
         TraceM(peerName, " SSL ready");
         timer->stop();
-        timer->deleteLater();
+        Defer d([timer]{ delete timer; });
         if (tmpConnections) {
             // tmpConnections will get auto-deleted after this lambda returns because the QObject connection holding
             // it alive will be disconnected.
