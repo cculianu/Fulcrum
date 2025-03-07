@@ -24,6 +24,7 @@
 #include <QObject>
 #include <QThread>
 #include <QTimer>
+
 #include <functional>
 #include <memory>
 

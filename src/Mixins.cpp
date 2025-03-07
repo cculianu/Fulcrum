@@ -107,25 +107,20 @@ TimersByNameMixin::~TimersByNameMixin() {}
 void TimersByNameMixin::callOnTimerSoon(int ms, const QString &name, const std::function<bool()> &func, bool force, Qt::TimerType ttype)
 {
     if (auto it = _timerMap.find(name); it != _timerMap.end()) {
-        if (force) {
-            it.value()->stop(); // immediately stop timer
-            it = _timerMap.erase(it); // shared_ptr refs will go away immediately, which ends up calling deleteLater on timer
-            callOnTimerSoon(ms, name, func, false, ttype); // immediately call self recursively once to re-enqueue timer
-        }
-        // timer was already active with force=false.. or was just re-enqueued with force=true.
-        // return right away in either case
-        return;
+        if (!force)
+            // timer exists, and force=false; bail
+            return;
+        // kill existing timer, create new one below.
+        it.value()->stop();
+        it = _timerMap.erase(it); // shared_ptr refs will go away immediately, which ends up deleting this instance
     }
     auto timer = std::make_shared<QTimer>(qobj());
     timer->setSingleShot(false);
     timer->setTimerType(ttype);
     QObject::connect(timer.get(), &QTimer::timeout, qobj(), [this, func, name]{
         const bool keepGoing = func();
-        if (!keepGoing) {
-            if (auto timer =  _timerMap.take(name))
-                timer->stop();
-            // timer will go out of scope here and deleter will be called.
-        }
+        if (!keepGoing)
+            stopTimer(name);
     });
     _timerMap[name] = timer;
     timer->setObjectName(name);
@@ -140,11 +135,10 @@ void TimersByNameMixin::callOnTimerSoonNoRepeat(int ms, const QString &name, con
 }
 
 bool TimersByNameMixin::stopTimer(const QString &name) {
-    if (auto timer = _timerMap.take(name); timer) {
-        // immediately stop since we do deleteLater in shared_ptr deleter, and it's not clear from Qt docs if timer
-        // may fire between now and when deletion is done on the QTimer.
+    if (auto timer = _timerMap.take(name)) {
+        // immediately stop for belt-and-suspenders
         timer->stop();
-        return true;
+        return true;  // timer will go out of scope here and deleter will be called.
     }
     return false;
 }

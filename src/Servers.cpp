@@ -52,6 +52,7 @@
 #include <iostream>
 #include <limits>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <shared_mutex>
@@ -2617,9 +2618,9 @@ void ServerSSL::incomingConnection(qintptr socketDescriptor)
         socket->deleteLater();
     });
     *tmpConnections += connect(socket, &QSslSocket::encrypted, this, [this, timer, tmpConnections, socket, peerName] {
+        std::unique_ptr<QTimer> timerDeleter(timer);
         TraceM(peerName, " SSL ready");
         timer->stop();
-        Defer d([timer]{ delete timer; });
         if (tmpConnections) {
             // tmpConnections will get auto-deleted after this lambda returns because the QObject connection holding
             // it alive will be disconnected.
