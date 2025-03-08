@@ -599,22 +599,22 @@ inline namespace literals {
 inline namespace string_view_literals {
 
 
-constexpr std::string_view operator "" _sv( const char* str, size_t len ) noexcept  // (1)
+constexpr std::string_view operator ""_sv( const char* str, size_t len ) noexcept  // (1)
 {
     return std::string_view{ str, len };
 }
 
-constexpr std::u16string_view operator "" _sv( const char16_t* str, size_t len ) noexcept  // (2)
+constexpr std::u16string_view operator ""_sv( const char16_t* str, size_t len ) noexcept  // (2)
 {
     return std::u16string_view{ str, len };
 }
 
-constexpr std::u32string_view operator "" _sv( const char32_t* str, size_t len ) noexcept  // (3)
+constexpr std::u32string_view operator ""_sv( const char32_t* str, size_t len ) noexcept  // (3)
 {
     return std::u32string_view{ str, len };
 }
 
-constexpr std::wstring_view operator "" _sv( const wchar_t* str, size_t len ) noexcept  // (4)
+constexpr std::wstring_view operator ""_sv( const wchar_t* str, size_t len ) noexcept  // (4)
 {
     return std::wstring_view{ str, len };
 }
@@ -1791,22 +1791,22 @@ nssv_inline_ns namespace string_view_literals {
 
 #if nssv_CONFIG_STD_SV_OPERATOR && nssv_HAVE_STD_DEFINED_LITERALS
 
-nssv_constexpr nonstd::sv_lite::string_view operator "" sv( const char* str, size_t len ) nssv_noexcept  // (1)
+nssv_constexpr nonstd::sv_lite::string_view operator ""sv( const char* str, size_t len ) nssv_noexcept  // (1)
 {
     return nonstd::sv_lite::string_view{ str, len };
 }
 
-nssv_constexpr nonstd::sv_lite::u16string_view operator "" sv( const char16_t* str, size_t len ) nssv_noexcept  // (2)
+nssv_constexpr nonstd::sv_lite::u16string_view operator ""sv( const char16_t* str, size_t len ) nssv_noexcept  // (2)
 {
     return nonstd::sv_lite::u16string_view{ str, len };
 }
 
-nssv_constexpr nonstd::sv_lite::u32string_view operator "" sv( const char32_t* str, size_t len ) nssv_noexcept  // (3)
+nssv_constexpr nonstd::sv_lite::u32string_view operator ""sv( const char32_t* str, size_t len ) nssv_noexcept  // (3)
 {
     return nonstd::sv_lite::u32string_view{ str, len };
 }
 
-nssv_constexpr nonstd::sv_lite::wstring_view operator "" sv( const wchar_t* str, size_t len ) nssv_noexcept  // (4)
+nssv_constexpr nonstd::sv_lite::wstring_view operator ""sv( const wchar_t* str, size_t len ) nssv_noexcept  // (4)
 {
     return nonstd::sv_lite::wstring_view{ str, len };
 }
@@ -1815,22 +1815,22 @@ nssv_constexpr nonstd::sv_lite::wstring_view operator "" sv( const wchar_t* str,
 
 #if nssv_CONFIG_USR_SV_OPERATOR
 
-nssv_constexpr nonstd::sv_lite::string_view operator "" _sv( const char* str, size_t len ) nssv_noexcept  // (1)
+nssv_constexpr nonstd::sv_lite::string_view operator ""_sv( const char* str, size_t len ) nssv_noexcept  // (1)
 {
     return nonstd::sv_lite::string_view{ str, len };
 }
 
-nssv_constexpr nonstd::sv_lite::u16string_view operator "" _sv( const char16_t* str, size_t len ) nssv_noexcept  // (2)
+nssv_constexpr nonstd::sv_lite::u16string_view operator ""_sv( const char16_t* str, size_t len ) nssv_noexcept  // (2)
 {
     return nonstd::sv_lite::u16string_view{ str, len };
 }
 
-nssv_constexpr nonstd::sv_lite::u32string_view operator "" _sv( const char32_t* str, size_t len ) nssv_noexcept  // (3)
+nssv_constexpr nonstd::sv_lite::u32string_view operator ""_sv( const char32_t* str, size_t len ) nssv_noexcept  // (3)
 {
     return nonstd::sv_lite::u32string_view{ str, len };
 }
 
-nssv_constexpr nonstd::sv_lite::wstring_view operator "" _sv( const wchar_t* str, size_t len ) nssv_noexcept  // (4)
+nssv_constexpr nonstd::sv_lite::wstring_view operator ""_sv( const wchar_t* str, size_t len ) nssv_noexcept  // (4)
 {
     return nonstd::sv_lite::wstring_view{ str, len };
 }
@@ -2442,7 +2442,7 @@ inline std::ostream& operator<<(std::ostream& out, simdjson_result<padded_string
 } // namespace simdjson
 
 // This is deliberately outside of simdjson so that people get it without having to use the namespace
-inline simdjson::padded_string operator "" _padded(const char *str, size_t len) {
+inline simdjson::padded_string operator ""_padded(const char *str, size_t len) {
   return simdjson::padded_string(str, len);
 }
 

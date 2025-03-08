@@ -162,6 +162,6 @@ private:
 };
 
 /// String literal -> ByteView e.g.: "foo"_bv or "\x01\xff\x07\xab"_bv
-inline ByteView operator "" _bv(const char *str, std::size_t len) noexcept {
+inline ByteView operator ""_bv(const char *str, std::size_t len) noexcept {
     return std::string_view{str, len}; // goes through template c'tor above..
 }
