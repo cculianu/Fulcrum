@@ -170,6 +170,26 @@ contains(CONFIG, config_endian_big) {
 }
 # /ZMQ
 
+# miniupnpc
+!contains(LIBS, -lminiupnpc) {
+    # Test for miniupnpc, and if found, add pkg-config which we will rely upon to find libs
+    qtCompileTest(miniupnpc)
+    contains(CONFIG, config_miniupnpc) {
+        QT_CONFIG -= no-pkg-config
+        CONFIG += link_pkgconfig
+        PKGCONFIG += miniupnpc
+        DEFINES += ENABLE_UPNP
+        message("miniupnpc version: $$system($$pkgConfigExecutable() --modversion miniupnpc)")
+    }
+} else {
+    DEFINES += ENABLE_UPNP
+    message("miniupnpc: using CLI override")
+}
+!contains(DEFINES, ENABLE_UPNP) {
+    message("miniupnpc not found, install pkg-config and miniupnpc to enable UPnP support.")
+}
+# /miniupnpc
+
 # - Try and detect rocksdb and if not, fall back to the staticlib.
 # - User can suppress this behavior by specifying a "LIBS+=-lrocksdb..." on the
 #   CLI when they invoked qmake. In that case, they must set-up the LIBS+= and
@@ -344,6 +364,7 @@ SOURCES += \
     SubStatus.cpp \
     ThreadPool.cpp \
     TXO.cpp \
+    UPnP.cpp \
     Util.cpp \
     VarInt.cpp \
     Version.cpp \
@@ -395,6 +416,7 @@ HEADERS += \
     ThreadSafeHashTable.h \
     TXO.h \
     TXO_Compact.h \
+    UPnP.h \
     Util.h \
     VarInt.h \
     Version.h \

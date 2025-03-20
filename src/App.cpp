@@ -28,6 +28,7 @@
 #include "Storage.h"
 #include "SSLCertMonitor.h"
 #include "ThreadPool.h"
+#include "UPnP.h"
 #include "Util.h"
 #include "ZmqSubNotifier.h"
 
@@ -533,6 +534,15 @@ void App::parseArgs()
     },
     {
         "no-rpa", QString("<hidden>")
+    },
+    {
+        "upnp",
+         QString("Use UPnP to tell your router to automatically allow incoming connections for all all TCP, SSL,"
+                 " WS, and WSS ports. To explicitly disable UPnP, use the CLI arg --no-upnp. Default is: %1.\n")
+             .arg(options->defaultUpnp ? "enabled" : "disabled")
+    },
+    {
+        "no-upnp", QString("<hidden>")
     },
     {
        "dump-sh",
@@ -1508,6 +1518,31 @@ void App::parseArgs()
         options->zmqAllowHashTx = val;
         Util::AsyncOnObject(this, [val]{ DebugM("config: zmq_allow_hashtx = ", val); });
     }
+
+    // CLI: --upnp (--no-upnp)
+    // conf: upnp
+    if (const bool psetYes = parser.isSet("upnp"), psetNo = parser.isSet("no-upnp"); psetYes || psetNo || conf.hasValue("upnp")) {
+        bool val{};
+        if (!psetYes && !psetNo) {
+            bool ok{};
+            val = conf.boolValue("upnp", false, &ok);
+            if (!ok) throw BadArgs("upnp: bad value. Specify a boolean value such as 0, 1, true, false, yes, no");
+        }
+        else if (psetYes && psetNo) throw BadArgs("Cannot specify --upnp and --no-upnp at the same time!");
+        else val = psetYes; // will be false if psetNo here
+        options->upnp = val;
+        if (UPnP::isSupported())
+            Util::AsyncOnObject(this, [val] { DebugM("config: upnp = ", val); });
+        else if (options->upnp) {
+            options->upnp = false;
+            if (!options->defaultUpnp)
+                Util::AsyncOnObject(this, []{
+                    Warning() << "UPnP support was requested but this " << APPNAME << " binary is not compiled with"
+                              << " UPnP support!";
+                });
+        }
+    }
+
 }
 
 namespace {
@@ -1831,6 +1866,13 @@ QString App::extendedVersionString(bool justLibs)
 
     ts << "zmq: ";
     if (auto v = ZmqSubNotifier::versionString(); !v.isEmpty())
+        ts << v;
+    else
+        ts << kUnavailable;
+    ts << "\n";
+
+    ts << "UPnP: ";
+    if (auto v = UPnP::versionString(); UPnP::isSupported() && !v.isEmpty())
         ts << v;
     else
         ts << kUnavailable;

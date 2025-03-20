@@ -34,6 +34,7 @@ class BitcoinDMgr;
 class PeerMgr;
 class SSLCertMonitor;
 class Storage;
+class UPnP;
 
 class SrvMgr : public Mgr, public TimersByNameMixin
 {
@@ -177,6 +178,7 @@ private:
     std::list<std::unique_ptr<Server>> servers;
     std::list<std::unique_ptr<AdminServer>> adminServers;
     std::shared_ptr<PeerMgr> peermgr; ///< will be nullptr if options->peerDiscovery is false
+    std::unique_ptr<UPnP> upnp;
 
     QMultiHash<QHostAddress, IdMixin::Id> addrIdMap;
 

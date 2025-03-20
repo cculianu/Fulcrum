@@ -27,6 +27,7 @@
 #include "SSLCertMonitor.h"
 #include "Storage.h"
 #include "SubsMgr.h"
+#include "UPnP.h"
 #include "Util.h"
 
 #include <mutex>
@@ -78,6 +79,7 @@ void SrvMgr::cleanup()
     adminServers.clear(); // unique_ptrs, kill all admin servers first (these hold weak_ptrs to peermgr and also naked ptrs to this, so must be killed first)
     peermgr.reset(); // shared_ptr, kill peermgr (if any)
     servers.clear(); // unique_ptrs auto-delete all servers
+    upnp.reset(); // undoes any upnp port mappings
 }
 
 namespace {
@@ -101,6 +103,11 @@ namespace {
 void SrvMgr::startServers()
 {
     _net = BTC::NetFromName(storage->getChain()); // set this now since server instances may need this information
+
+    if (options->upnp && UPnP::isSupported())
+        upnp = std::make_unique<UPnP>(this);
+    else
+        upnp.reset();
 
     if (options->peerDiscovery) {
         Log() << "SrvMgr: starting PeerMgr ...";
@@ -129,6 +136,7 @@ void SrvMgr::startServers()
         }
     } else peermgr.reset();
 
+    UPnP::MapSpecSet upnpPorts;
     const auto num =   options->interfaces.length() + options->sslInterfaces.length()
                      + options->wsInterfaces.length() + options->wssInterfaces.length()
                      + options->adminInterfaces.length();
@@ -138,23 +146,38 @@ void SrvMgr::startServers()
                firstWss = options->interfaces.size() + options->sslInterfaces.size() + options->wsInterfaces.size();
     int i = 0;
     for (const auto & iface : options->interfaces + options->sslInterfaces + options->wsInterfaces + options->wssInterfaces) {
+        UPnP::MapSpec uspec{};
+        auto ChkUPnPIntExtMappingsDiffer = [&](const int publicServerIdx, const std::optional<uint16_t> & publicPort) {
+            if (upnp && i == publicServerIdx && publicPort && *publicPort != iface.second)
+                uspec.extPort = *publicPort;
+        };
         if (i < firstSsl) {
             // TCP
             servers.emplace_back(std::make_unique<Server>(this, iface.first, iface.second, options, storage, bitcoindmgr));
+            ChkUPnPIntExtMappingsDiffer(0, options->publicTcp);
         } else if (i < firstWs) {
             // SSL
             servers.emplace_back(std::make_unique<ServerSSL>(this, iface.first, iface.second, options, storage, bitcoindmgr));
+            ChkUPnPIntExtMappingsDiffer(firstSsl, options->publicSsl);
         } else if (i < firstWss) {
             // WS
             servers.emplace_back(std::make_unique<Server>(this, iface.first, iface.second, options, storage, bitcoindmgr));
             servers.back()->setUsesWebSockets(true);
+            ChkUPnPIntExtMappingsDiffer(firstWs, options->publicWs);
         } else {
             // WSS
             servers.emplace_back(std::make_unique<ServerSSL>(this, iface.first, iface.second, options, storage, bitcoindmgr));
             servers.back()->setUsesWebSockets(true);
+            ChkUPnPIntExtMappingsDiffer(firstWss, options->publicWss);
         }
         Server *srv = servers.back().get();
         ServerSSL *srvSSL = dynamic_cast<ServerSSL *>(srv);
+
+        if (upnp && iface.second != 0) {
+            uspec.inPort = iface.second;
+            if (!uspec.extPort) uspec.extPort = uspec.inPort;
+            upnpPorts.emplace(std::move(uspec));
+        }
 
         // connect blockchain.headers.subscribe signal
         connect(this, &SrvMgr::newHeader, srv, &Server::newHeader);
@@ -200,6 +223,11 @@ void SrvMgr::startServers()
             connect(peermgr.get(), &PeerMgr::updated, asrv, &ServerBase::onPeersUpdated);
         }
         asrv->tryStart();
+    }
+    // lastly, start the upnp manager (if enabled), and wait for it synchronously
+    if (upnp && !upnpPorts.empty()) {
+        Log() << "Mapping ports using UPnP ...";
+        upnp->startSync(std::move(upnpPorts));
     }
 
     emit allServersStarted();

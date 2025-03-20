@@ -22,8 +22,8 @@
 #include <QCoreApplication>
 #include <QTimer>
 
+#include <cstdio>
 #include <cstdlib>
-#include <iostream>
 
 #ifdef Q_OS_UNIX
 #  include <stdio.h>   // fileno

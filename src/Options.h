@@ -317,6 +317,11 @@ public:
     // config: zmq_allow_hashtx
     static constexpr bool defaultZmqAllowHashTx = false;
     bool zmqAllowHashTx = defaultZmqAllowHashTx;
+
+    // CLI: --upnp
+    // config: upnp
+    static constexpr bool defaultUpnp = false;
+    bool upnp = defaultUpnp;
 };
 
 /// A class encapsulating a simple read-only config file format.  The format is similar to the bitcoin.conf format
