@@ -447,6 +447,22 @@ auto SrvMgr::stats() const -> Stats
     m["number of clients (max lifetime)"] = qulonglong(Client::numClientsMax.load());
     m["number of clients (total lifetime connections)"] = qulonglong(Client::numClientsCtr.load());
     m["bans"] = adminRPC_banInfo_threadSafe();
+    if (upnp) {
+        QVariantMap u;
+        if (auto optInfo = upnp->getInfo()) {
+            u["active"] = true;
+            u["external IP"] = optInfo->externalIP;
+            u["internal IP"] = optInfo->internalIP;
+            QVariantList l;
+            l.reserve(optInfo->activeMappings.size());
+            for (const auto [extPort, intPort] : optInfo->activeMappings)
+                l.push_back(QVariantList{{int(extPort), int(intPort)}});
+            u["mapped ports (ext -> int)"] = std::move(l);
+        } else {
+            u["active"] = false;
+        }
+        m["upnp"] = std::move(u);
+    }
     return m;
 }
 

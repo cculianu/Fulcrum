@@ -199,6 +199,12 @@ QVariantMap Options::toMap() const
     m["rpa_prefix_bits_min"] = rpa.prefixBitsMin;
     m["rpa_start_height"] = rpa.requestedStartHeight;
 
+    // zmqAllowHashTx
+    m["zmq_allow_hashtx"] = zmqAllowHashTx;
+
+    // upnp
+    m["upnp"] = upnp;
+
     return m;
 }
 

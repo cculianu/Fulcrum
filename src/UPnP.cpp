@@ -46,6 +46,7 @@
 #endif
 
 #include <cstring>
+#include <shared_mutex>
 
 /* static */
 bool UPnP::isSupported() { return true; }
@@ -61,16 +62,19 @@ struct UPnP::Context {
     struct UPNPDev *devlist = nullptr;
     UPNPUrls urls = {};
     IGDdatas data = {};
+    int delayMsec = kDefaultTimeoutMsec;
+    mutable std::shared_mutex rwlock;
+    // The below 3 members are all guarded by `rwlock`
     char externalIPAddress[80] = {0};
     char lanaddr[64] = {};
     MapSpecSet activeMappings;
-    int delayMsec = kDefaultTimeoutMsec;
 
     Context() = default;
 
     void cleanup() {
+        std::shared_lock sg(rwlock);
         if (urls.controlURL) {
-            for (const auto [eprt, iprt] : activeMappings) {
+            for (const auto [eprt, iprt] : std::as_const(activeMappings)) {
                 const std::string eport = QString::number(static_cast<int>(eprt)).toStdString();
                 const std::string iport = QString::number(static_cast<int>(iprt)).toStdString();
                 DebugM("UPnP: Unmapping ", eport, " -> ", iport, " ...");
@@ -85,6 +89,8 @@ struct UPnP::Context {
                 }
             }
         }
+        sg.unlock();
+        std::unique_lock g(rwlock);
         activeMappings.clear();
         FreeUPNPUrls(&urls);
         if (devlist) { freeUPNPDevlist(devlist); devlist = nullptr; }
@@ -115,6 +121,8 @@ struct UPnP::Context {
             DebugM("Found UPnP Dev ", i, ": ", d->descURL);
             ++i;
         }
+
+        std::unique_lock g(rwlock);
 
         /* Get valid IGD */
 #if MINIUPNPC_API_VERSION <= 17
@@ -198,17 +206,21 @@ void UPnP::run(const std::string name)
                 const std::string inPort = QString::number(static_cast<int>(inPrt)).toStdString();
                 DebugM("Mapping ", extPort, " (external) -> ", inPort, " (internal) ...");
                 int r;
+                {
+                    std::shared_lock sg(ctx->rwlock);
 #ifndef UPNPDISCOVER_SUCCESS
-                /* miniupnpc 1.5 */
-                r = UPNP_AddPortMapping(ctx->urls.controlURL, ctx->data.first.servicetype,
-                                        extPort.c_str(), inPort.c_str(), ctx->lanaddr,
-                                        name.c_str(), "TCP", 0);
+                    /* miniupnpc 1.5 */
+                    r = UPNP_AddPortMapping(ctx->urls.controlURL, ctx->data.first.servicetype,
+                                            extPort.c_str(), inPort.c_str(), ctx->lanaddr,
+                                            name.c_str(), "TCP", 0);
 #else
-                /* miniupnpc 1.6 */
-                r = UPNP_AddPortMapping(ctx->urls.controlURL, ctx->data.first.servicetype,
-                                        extPort.c_str(), inPort.c_str(), ctx->lanaddr,
-                                        name.c_str(), "TCP", 0, "0");
+                    /* miniupnpc 1.6 */
+                    r = UPNP_AddPortMapping(ctx->urls.controlURL, ctx->data.first.servicetype,
+                                            extPort.c_str(), inPort.c_str(), ctx->lanaddr,
+                                            name.c_str(), "TCP", 0, "0");
 #endif
+                }
+                std::unique_lock g(ctx->rwlock);
 
                 if (r != UPNPCOMMAND_SUCCESS) {
                     Warning("AddPortMapping(%s, %s, %s) failed with code %d (%s)",
@@ -239,12 +251,26 @@ void UPnP::stop()
     interrupt.reset();
     ctx = std::make_unique<Context>(); // clear state
 }
+
+std::optional<UPnP::Info> UPnP::getInfo() const
+{
+    std::optional<UPnP::Info> ret;
+    if (ctx && thread.joinable()) {
+        ret.emplace();
+        std::shared_lock rg(ctx->rwlock);
+        ret->externalIP = ctx->externalIPAddress;
+        ret->internalIP = ctx->lanaddr;
+        ret->activeMappings = ctx->activeMappings;
+    }
+    return ret;
+}
 #else /* !defined(ENABLE_UPNP) */
 /* static */ bool UPnP::isSupported() { return false; }
 /* static */ QString UPnP::versionString() { return QString{}; }
 void UPnP::start(MapSpecSet, int) { Error("UPnP support is not compiled-in to this program"); emit error(); }
 void UPnP::stop() {}
 void UPnP::run(std::string) {}
+std::optional<UPnP::Info> UPnP::getInfo() const { return std::nullopt; }
 struct UPnP::Context {};
 #endif /* ENABLE_UPNP */
 

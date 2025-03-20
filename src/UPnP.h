@@ -64,6 +64,13 @@ public:
 
     struct Context;
 
+    struct Info {
+        QString externalIP, internalIP;
+        MapSpecSet activeMappings;
+    };
+
+    std::optional<Info> getInfo() const;
+
 signals:
     /// Emitted on low-level miniupnpc error (such as no IGD found within the timeout period specified)
     void error();
