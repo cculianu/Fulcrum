@@ -107,6 +107,8 @@ rocksdb_commit=$(cat contrib/build/${plat}/rocksdb-commit-hash) \
 jemalloc_commit=$(cat contrib/build/${plat}/jemalloc-commit-hash) \
     || fail "Could not find the proper jemalloc commit hash in [$tag]."
 
+miniupnpc_commit=$(cat contrib/build/${plat}/miniupnpc-commit-hash) \
+    || fail "Could not find the proper miniupnpc commit hash in [$tag]."
 
 cd ..
 
@@ -129,7 +131,27 @@ if [ -n "$pp" ]; then
     done
     printok "${i} patch(es) applied"
 fi
+cd ..  # back up, proceed to miniupnpc checkout
 
+# Checkout miniupnpc @ $tag
+MINIUPNPC_REPO=${MINIUPNPC_REPO:-https://github.com/transmission/miniupnpc.git}
+MINIUPNPC_PACKAGE=$(basename $MINIUPNPC_REPO .git)
+info "Checking out $MINIUPNPC_PACKAGE: $MINIUPNPC_REPO [$miniupnpc_commit] ..."
+git clone "$MINIUPNPC_REPO" "$MINIUPNPC_PACKAGE" || fail "Failed to clone $MINIUPNPC_PACKAGE"
+cd "$MINIUPNPC_PACKAGE"
+miniupnpcdir=`pwd`
+git checkout "$miniupnpc_commit" || fail "Failed to checkout $MINIUPNPC_PACKAGE [$miniupnpc_commit]"
+pp=$(ls "$pkgdir"/contrib/build/${plat}/miniupnpc*.patch 2> /dev/null || true)
+if [ -n "$pp" ]; then
+    info "Applying patches ..."
+    let i=0 || true
+    for a in $pp; do
+        info "Applying ${a} ..."
+        patch -p1 < "$a" || fail "Could not apply patch: $a"
+        let i++ || true
+    done
+    printok "${i} patch(es) applied"
+fi
 cd ..  # back up, proceed to rocksdb checkout
 
 # Checkout rocksdb @ $tag
@@ -167,7 +189,7 @@ cd "$workdir/.." || fail "Could not chdir"
 info "Building inside docker container: $docker_cont_name ($docker_img_name) ..."
 docker run $arch_arg --rm -it -v "$workdir":/work${osxfs_option} \
     --name "$docker_cont_name" \
-    "$docker_img_name" /work/"$PACKAGE"/contrib/build/${plat}/_build.sh "$PACKAGE" "$ROCKSDB_PACKAGE" "$JEMALLOC_PACKAGE" "$DEBUG_BUILD"
+    "$docker_img_name" /work/"$PACKAGE"/contrib/build/${plat}/_build.sh "$PACKAGE" "$ROCKSDB_PACKAGE" "$JEMALLOC_PACKAGE" "$MINIUPNPC_PACKAGE" "$DEBUG_BUILD"
 
 (mkdir -p "$outdir" && cp -fpva "$workdir"/built/* "$outdir"/. && rm -fr "$workdir") \
     || fail "Could not clean up and move build products"

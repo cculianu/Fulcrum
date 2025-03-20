@@ -114,7 +114,7 @@ struct UPnP::Context {
         devlist = upnpDiscover(delayMsec, nullptr, nullptr, 0, 0, 2, &error);
 #endif
         if (!devlist) {
-            Error("upnpDiscover returned a null dev list");
+            Error() << "upnpDiscover returned a null dev list";
             return false;
         }
         for (UPNPDev *d = devlist; d; d = d->pNext) {
@@ -315,7 +315,7 @@ bool UPnP::startSync(MapSpecSet spec, int timeoutMsec)
 
     switch (res) {
     case std::future_status::timeout:
-        Warning("UPnP: startSync timed out");
+        Warning() << "UPnP: startSync timed out";
         return false;
     case std::future_status::ready:
         return f.get();
@@ -323,4 +323,6 @@ bool UPnP::startSync(MapSpecSet spec, int timeoutMsec)
         // Should never happen.
         throw Exception("Future returned \"deferred\" status -- this is unexpected!");
     }
+    // Not reached (here to suppress false GCC warnings)
+    return false;
 }
