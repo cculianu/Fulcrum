@@ -30,6 +30,7 @@
 #include "UPnP.h"
 #include "Util.h"
 
+#include <initializer_list>
 #include <mutex>
 #include <utility>
 
@@ -146,38 +147,26 @@ void SrvMgr::startServers()
                firstWss = options->interfaces.size() + options->sslInterfaces.size() + options->wsInterfaces.size();
     int i = 0;
     for (const auto & iface : options->interfaces + options->sslInterfaces + options->wsInterfaces + options->wssInterfaces) {
-        UPnP::MapSpec uspec{};
-        auto ChkUPnPIntExtMappingsDiffer = [&](const int publicServerIdx, const std::optional<uint16_t> & publicPort) {
-            if (upnp && i == publicServerIdx && publicPort && *publicPort != iface.second)
-                uspec.extPort = *publicPort;
-        };
         if (i < firstSsl) {
             // TCP
             servers.emplace_back(std::make_unique<Server>(this, iface.first, iface.second, options, storage, bitcoindmgr));
-            ChkUPnPIntExtMappingsDiffer(0, options->publicTcp);
         } else if (i < firstWs) {
             // SSL
             servers.emplace_back(std::make_unique<ServerSSL>(this, iface.first, iface.second, options, storage, bitcoindmgr));
-            ChkUPnPIntExtMappingsDiffer(firstSsl, options->publicSsl);
         } else if (i < firstWss) {
             // WS
             servers.emplace_back(std::make_unique<Server>(this, iface.first, iface.second, options, storage, bitcoindmgr));
             servers.back()->setUsesWebSockets(true);
-            ChkUPnPIntExtMappingsDiffer(firstWs, options->publicWs);
         } else {
             // WSS
             servers.emplace_back(std::make_unique<ServerSSL>(this, iface.first, iface.second, options, storage, bitcoindmgr));
             servers.back()->setUsesWebSockets(true);
-            ChkUPnPIntExtMappingsDiffer(firstWss, options->publicWss);
+        }
+        if (upnp && iface.isValidAndNonLocalLoopback()) {
+            upnpPorts.emplace(UPnP::MapSpec{.extPort = iface.second, .inPort = iface.second});
         }
         Server *srv = servers.back().get();
         ServerSSL *srvSSL = dynamic_cast<ServerSSL *>(srv);
-
-        if (upnp && iface.second != 0) {
-            uspec.inPort = iface.second;
-            if (!uspec.extPort) uspec.extPort = uspec.inPort;
-            upnpPorts.emplace(std::move(uspec));
-        }
 
         // connect blockchain.headers.subscribe signal
         connect(this, &SrvMgr::newHeader, srv, &Server::newHeader);
@@ -224,8 +213,35 @@ void SrvMgr::startServers()
         }
         asrv->tryStart();
     }
-    // lastly, start the upnp manager (if enabled), and wait for it synchronously
+    // Lastly, start the upnp manager (if enabled), and wait for it synchronously
     if (upnp && !upnpPorts.empty()) {
+        // The below algorithm figures out if they specified public{Tcp|Ssl|Ws|Wss} ports that don't match any inferface
+        // internal ports, and if so, replace UPnP external port with the specified public{Tcp|Ssl|Ws|Wss} port.
+        using ContForLoop = std::initializer_list<std::pair<const std::optional<quint16> &, const QList<Options::Interface> &>>;
+        for (const auto & [optPort, ifaces] : ContForLoop{{options->publicTcp, options->interfaces},
+                                                          {options->publicSsl, options->sslInterfaces},
+                                                          {options->publicWs, options->wsInterfaces},
+                                                          {options->publicWss, options->wssInterfaces}}) {
+            if (!optPort) continue;
+            const uint16_t extPort = *optPort;
+            UPnP::MapSpecSet::iterator it = upnpPorts.lower_bound({.extPort = extPort, .inPort = 0});
+            if (it == upnpPorts.end() || it->extPort != extPort) {
+                for (const auto &iface : ifaces) {
+                    if (iface.isValidAndNonLocalLoopback()
+                            && (it = upnpPorts.find({iface.second, iface.second})) != upnpPorts.end()) {
+                        // found first TCP/SSL/WS/WSS server for which to replace ext port with (publicTcp, publicSsl, etc)
+                        // .. replace it!
+                        UPnP::MapSpec spec = *it;
+                        spec.extPort = extPort;
+                        upnpPorts.erase(it);
+                        upnpPorts.insert(spec);
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Finally, after the above is done, start the UPnP port mapper thread (we wait for it to map before proceeding)
         Log() << "Mapping ports using UPnP ...";
         upnp->startSync(std::move(upnpPorts));
     }

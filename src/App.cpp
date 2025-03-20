@@ -846,37 +846,53 @@ void App::parseArgs()
     if (auto l = conf.hasValue("tcp") ? conf.values("tcp") : parser.values("t");  !l.isEmpty()) {
         parseInterfaces(options->interfaces, l);
         tcpIsDefault = false;
-        if (!options->interfaces.isEmpty())
-            // save default publicTcp we will report now -- note this may get reset() to !has_value() later in
-            // this function if user explicitly specified public_tcp_port=0 in the config file.
-            options->publicTcp = options->interfaces.front().second;
+        // save default publicTcp we will report now -- note this may get reset() to !has_value() later in
+        // this function if user explicitly specified public_tcp_port=0 in the config file.
+        for (const auto & iface : std::as_const(options->interfaces)) {
+            if (iface.isValidAndNonLocalLoopback()) {
+                options->publicTcp = iface.second;
+                break;
+            }
+        }
     }
     // grab bind (listen) interfaces for WS -- this hard-to-read code here looks at both conf.value and parser, but conf.value only has values if parser does not (CLI parser takes precedence).
     if (auto l = conf.hasValue("ws") ? conf.values("ws") : parser.values("w");  !l.isEmpty()) {
         parseInterfaces(options->wsInterfaces, l);
         if (tcpIsDefault) options->interfaces.clear(); // they had default tcp setup, clear the default since they did end up specifying at least 1 real interface to bind to
-        if (!options->wsInterfaces.isEmpty())
-            // save default publicWs we will report now -- note this may get reset() to !has_value() later in
-            // this function if user explicitly specified public_ws_port=0 in the config file.
-            options->publicWs = options->wsInterfaces.front().second;
+        // save default publicWs we will report now -- note this may get reset() to !has_value() later in
+        // this function if user explicitly specified public_ws_port=0 in the config file.
+        for (const auto & iface : std::as_const(options->wsInterfaces)) {
+            if (iface.isValidAndNonLocalLoopback()) {
+                options->publicWs = iface.second;
+                break;
+            }
+        }
     }
     // grab bind (listen) interfaces for WSS -- this hard-to-read code here looks at both conf.value and parser, but conf.value only has values if parser does not (CLI parser takes precedence).
     if (auto l = conf.hasValue("wss") ? conf.values("wss") : parser.values("W");  !l.isEmpty()) {
         parseInterfaces(options->wssInterfaces, l);
         if (tcpIsDefault) options->interfaces.clear(); // they had default tcp setup, clear the default since they did end up specifying at least 1 real interface to bind to
-        if (!options->wssInterfaces.isEmpty())
-            // save default publicWss we will report now -- note this may get reset() to !has_value() later in
-            // this function if user explicitly specified public_wss_port=0 in the config file.
-            options->publicWss = options->wssInterfaces.front().second;
+        // save default publicWss we will report now -- note this may get reset() to !has_value() later in
+        // this function if user explicitly specified public_wss_port=0 in the config file.
+        for (const auto & iface : std::as_const(options->wssInterfaces)) {
+            if (iface.isValidAndNonLocalLoopback()) {
+                options->publicWss = iface.second;
+                break;
+            }
+        }
     }
     // grab bind (listen) interfaces for SSL (again, apologies for this hard to read expression below -- same comments as above apply here)
     if (auto l = conf.hasValue("ssl") ? conf.values("ssl") : parser.values("s"); !l.isEmpty()) {
         parseInterfaces(options->sslInterfaces, l);
         if (tcpIsDefault) options->interfaces.clear(); // they had default tcp setup, clear the default since they did end up specifying at least 1 real interface to bind to
-        if (!options->sslInterfaces.isEmpty())
-            // save default publicSsl we will report now -- note this may get reset() to !has_value() later in
-            // this function if user explicitly specified public_ssl_port=0 in the config file.
-            options->publicSsl = options->sslInterfaces.front().second;
+        // save default publicSsl we will report now -- note this may get reset() to !has_value() later in
+        // this function if user explicitly specified public_ssl_port=0 in the config file.
+        for (const auto & iface : std::as_const(options->sslInterfaces)) {
+            if (iface.isValidAndNonLocalLoopback()) {
+                options->publicSsl = iface.second;
+                break;
+            }
+        }
     }
     // if they had either SSL or WSS, grab and validate the cert & key
     if (const bool hasSSL = !options->sslInterfaces.isEmpty(), hasWSS = !options->wssInterfaces.isEmpty(); hasSSL || hasWSS) {
@@ -921,7 +937,7 @@ void App::parseArgs()
                                               ? conf.values("admin")
                                               : parser.values("a"), true);
     // warn user if any of the admin rpc services are on non-loopback
-    for (const auto &iface : options->adminInterfaces) {
+    for (const auto &iface : std::as_const(options->adminInterfaces)) {
         if (!iface.first.isLoopback()) {
             // print the warning later when logger is up
             Util::AsyncOnObject(this, [iface]{

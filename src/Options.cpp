@@ -246,6 +246,12 @@ bool Options::setSimdJson(const bool b, const bool forceLog) {
     return true;
 }
 
+bool Options::Interface::isValidAndNonLocalLoopback() const
+{
+    const auto & [addr, port] = *this;
+    return !addr.isNull() && !addr.isLinkLocal() && !addr.isLoopback() && port != 0;
+}
+
 
 // -- ConfigFile
 

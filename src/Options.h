@@ -35,7 +35,6 @@
 #include <algorithm>
 #include <limits>
 #include <optional>
-#include <type_traits>
 
 
 struct Options {
@@ -59,7 +58,10 @@ public:
 
     bool hasIPv6Listener = false; ///< used internally -- set to true by argParser if at least one of the specified listening interfaces is IPv6, false otherwise
 
-    using Interface = QPair<QHostAddress, quint16>;
+    struct Interface : QPair<QHostAddress, quint16> {
+        using QPair<QHostAddress, quint16>::QPair;
+        bool isValidAndNonLocalLoopback() const;
+    };
     QList<Interface> interfaces, ///< TCP interfaces to use for binding, defaults to 0.0.0.0 DEFAULT_PORT_TCP
                      sslInterfaces,  ///< SSL interfaces to use for binding SSL ports. Defaults to nothing.
                      wsInterfaces,   ///< Web Socket (WS) interfaces. Defaults to nothing.
