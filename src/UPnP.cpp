@@ -45,8 +45,11 @@
 #pragma GCC diagnostic pop
 #endif
 
+#include <chrono>
 #include <cstring>
 #include <shared_mutex>
+
+using namespace std::chrono_literals;
 
 /* static */
 bool UPnP::isSupported() { return true; }
@@ -238,7 +241,7 @@ void UPnP::run(const std::string name)
                 if (interrupt) break;
             }
         }
-        wait_time = !ok || ctx->activeMappings.empty() ? std::chrono::minutes{1} : std::chrono::minutes{20};
+        wait_time = !ok || ctx->activeMappings.empty() ? 1min : 20min;
     } while (!interrupt.wait(wait_time));
 }
 
@@ -310,8 +313,7 @@ bool UPnP::startSync(MapSpecSet spec, int timeoutMsec)
 
     start(std::move(spec), timeoutMsec);
 
-    const std::future_status res = f.wait_for(std::chrono::milliseconds(timeoutMsec)
-                                              + (std::chrono::milliseconds{200} * (expectedResults + 1)));
+    const std::future_status res = f.wait_for(std::chrono::milliseconds(timeoutMsec) + (200ms * (expectedResults + 1)));
 
     switch (res) {
     case std::future_status::timeout:
