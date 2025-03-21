@@ -21,6 +21,7 @@ cd "$top" || fail "Could not cd $top"
 
 # miniupnpc
 info "Building miniupnpc ..."
+git config --global --add safe.directory "$top"/"$MINIUPNPC_PACKAGE"  # Needed for some versions of git to not complain
 pushd "$top/$MINIUPNPC_PACKAGE" || fail "Coult not change dir to $MINIUPNPC_PACKAGE"
 INSTALLPREFIX=/tmp make -j`nproc` || fail "Could not build miniupnpc"
 INSTALLPREFIX=/tmp make install || fail "Could not install miniupnpc"
@@ -55,6 +56,7 @@ printok "libzmq built and installed in /tmp"
 
 # jemalloc
 info "Running configure for jemalloc ..."
+git config --global --add safe.directory "$top"/"$JEMALLOC_PACKAGE"  # Needed for some versions of git to not complain
 cd "$top/$JEMALLOC_PACKAGE" || fail "Could not change dir to $JEMALLOC_PACKAGE"
 ./autogen.sh --with-jemalloc-prefix= --disable-shared --enable-static \
     || fail "Configure of jemalloc failed"
@@ -76,6 +78,7 @@ printok "jemalloc static library built and installed in $JEMALLOC_LIBDIR"
 
 # RocksDB
 info "Building RocksDB ..."
+git config --global --add safe.directory "$top"/"$ROCKSDB_PACKAGE"  # Needed for some versions of git to not complain
 cd "$top/$ROCKSDB_PACKAGE" || fail "Could not cd tp $ROCKSDB_PACKAGE"
 USE_RTTI=1 PORTABLE=1 DEBUG_LEVEL=0 make static_lib -j`nproc` V=1 \
     || fail "Could not build RocksDB"
@@ -103,6 +106,7 @@ if [ -n "$FORCE_STATIC_SSL" ]; then
 fi
 
 info "Building Fulcrum ..."
+git config --global --add safe.directory "$top"/"$PACKAGE"  # Needed for some versions of git to not complain
 mkdir build && cd build || fail "Could not create/change-to build/"
 if [ -n "${LDFLAGS}" ]; then
     # For things like -static-libstdc++, etc

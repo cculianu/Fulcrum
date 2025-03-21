@@ -27,6 +27,7 @@ cd "$top" || fail "Could not cd $top"
 
 # miniupnpc
 info "Building miniupnpc ..."
+git config --global --add safe.directory "$top"/"$MINIUPNPC_PACKAGE"  # Needed for some versions of git to not complain
 mkdir -p /tmp/include || fail "Could not create /tmp/include"
 mkdir -p /tmp/lib || fail "Could not create /tmp/lib"
 mkdir -p /tmp/man || fail "Could not create /tmp/man"
@@ -52,6 +53,7 @@ printok "miniupnpc built and installed in /tmp/"
 # /miniupnpc
 
 info "Running configure for jemalloc ..."
+git config --global --add safe.directory "$top"/"$JEMALLOC_PACKAGE"  # Needed for some versions of git to not complain
 cd "$JEMALLOC_PACKAGE" || fail "Could not change dir to $JEMALLOC_PACKAGE"
 CXX=x86_64-w64-mingw32.static-g++ LD=x86_64-w64-mingw32.static-ld CC=x86_64-w64-mingw32.static-gcc \
     ./autogen.sh --host x86_64-w64-mingw32 --with-jemalloc-prefix= --disable-shared --enable-static \
@@ -76,6 +78,7 @@ printok "jemalloc static library built and installed in $JEMALLOC_LIBDIR"
 cd "$top" || fail "Could not cd $top"  # back to top to proceed to rocksdb build
 
 info "Running CMake for RocksDB ..."
+git config --global --add safe.directory "$top"/"$ROCKSDB_PACKAGE"  # Needed for some versions of git to not complain
 cd "$ROCKSDB_PACKAGE" && mkdir build/ && cd build || fail "Could not change to build dir"
 /opt/mxe/usr/x86_64-pc-linux-gnu/bin/cmake  .. -DCMAKE_C_COMPILER=x86_64-w64-mingw32.static-gcc \
     -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32.static-g++ -DCMAKE_SYSTEM_NAME=Windows \
@@ -113,6 +116,7 @@ else
 fi
 
 info "Building Fulcrum ${dbg_blurb} ..."
+git config --global --add safe.directory "$top"/"$PACKAGE"  # Needed for some versions of git to not complain
 mkdir build && cd build || fail "Could not create/change-to build/"
 
 # Hack/workaround for Qt6 qmake which, if it's a symlink, ends up
