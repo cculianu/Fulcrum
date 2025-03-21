@@ -96,18 +96,18 @@ struct Mempool
         std::unordered_map<TxHash, TxWeakRef, HashHasher> parents, children;
 
         bool operator<(const Tx &o) const noexcept {
-            // paranoia -- bools may sometimes not always be 1 or 0 in pathological circumstances.
-            const uint8_t nParentMe    =   !parents.empty() ? 1u : 0u,
-                          nParentOther = !o.parents.empty() ? 1u : 0u;
+            const uint8_t nParentMe    =   hasUnconfirmedParents() ? 1u : 0u,
+                          nParentOther = o.hasUnconfirmedParents() ? 1u : 0u;
             // always sort the unconf. parent tx's *after* the regular (confirmed parent-only) tx's.
             return std::tie(nParentMe, hash) < std::tie(nParentOther, o.hash);
         }
 
-        // fast equality test (used in production)
+        // fast equality test (used in tests)
         bool operator==(const Tx &o) const noexcept {
-            const bool hasUnconfirmedParentTx = !parents.empty(), o_hasUnconfirmedParentTx = !o.parents.empty();
-            return     std::tie(  hash,   sizeBytes,   fee,   hasUnconfirmedParentTx,   txos,   hashXs)
-                    == std::tie(o.hash, o.sizeBytes, o.fee, o_hasUnconfirmedParentTx, o.txos, o.hashXs);
+            const bool hasUnconfPar = hasUnconfirmedParents(), o_hasUnconfPar = o.hasUnconfirmedParents();
+            // we order the equality comparison from cheapest to compare to most expensive
+            return     std::tie(  hasUnconfPar,   sizeBytes,   vsizeBytes,   fee,   hash,   txos,   hashXs)
+                    == std::tie(o_hasUnconfPar, o.sizeBytes, o.vsizeBytes, o.fee, o.hash, o.txos, o.hashXs);
         }
 
         // deep equality test (used in tests)
@@ -119,16 +119,16 @@ struct Mempool
         /// "link" a `child` to its `parent` txn. We add `parent` to `child` 's table of parents and add `child`
         /// to `parent` 's table of children.
         static void linkChild(const TxRef &parent, const TxRef &child);
-        inline bool hasUnconfirmedParents() const { return !parents.empty(); }
+        inline bool hasUnconfirmedParents() const noexcept { return !parents.empty(); }
     };
 
     /// master mapping of TxHash -> TxRef
     using TxMap = std::unordered_map<TxHash, TxRef, HashHasher>;
     /// ensures an ordering of TxRefs for the set below that are from fewest ancestors -> most ancestors
     struct TxRefOrdering {
-        bool operator()(const TxRef &a, const TxRef &b) const {
-            if (LIKELY(a && b)) {
-                if (UNLIKELY(a == b))
+        bool operator()(const TxRef &a, const TxRef &b) const noexcept {
+            if (a && b) [[likely]] {
+                if (a == b) [[unlikely]]
                     return false;
                 return *a < *b;
             }
