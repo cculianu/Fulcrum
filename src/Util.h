@@ -1,6 +1,6 @@
 //
 // Fulcrum - A fast & nimble SPV Server for Bitcoin Cash
-// Copyright (C) 2019-2024 Calin A. Culianu <calin.culianu@gmail.com>
+// Copyright (C) 2019-2025 Calin A. Culianu <calin.culianu@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -27,6 +27,7 @@
 #include <cassert>
 #include <chrono>
 #include <concepts>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -992,7 +993,39 @@ namespace Util {
         const QString & Get();
         /// Set the current thread's name (used mainly for logging).
         void Set(const QString &name);
+
+        /// Use this as a std::thread target to auto-set a thread's name and then invoke the run function f().
+        template <typename Func, typename ...Args>
+        void Trace(const QString &threadName, Func f, Args && ...args) {
+            ThreadName::Set(threadName);
+            Debug() << "Thread start";
+            f(std::forward<Args>(args)...);
+            Debug() << "Thread exit";
+        }
+
     } // namespace ThreadName
+
+    /**
+     * A helper class for interruptible sleeps. Calling operator() will interrupt
+     * any current sleep, and after that point operator bool() will return true
+     * until reset.
+     */
+    class ThreadInterrupt {
+        mutable std::condition_variable cond;
+        mutable std::mutex mut;
+        std::atomic<bool> flag = false;
+    public:
+        // If true, interrupt flag is set
+        explicit operator bool() const;
+        // Set the interrupt flag
+        void operator()();
+        // Unset the interrupt flag
+        void reset();
+        // Sleep until either the interrupt flag is set, or the specified time elapses. Use std::nullopt to sleep
+        // indefinitely.
+        // @return `true` if the interrupt flag was set, `false` otherwise.
+        bool wait(std::optional<std::chrono::milliseconds> timeout = std::nullopt) const;
+    };
 
 } // end namespace Util
 

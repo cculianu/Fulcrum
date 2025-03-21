@@ -1,6 +1,6 @@
 //
 // Fulcrum - A fast & nimble SPV Server for Bitcoin Cash
-// Copyright (C) 2019-2024 Calin A. Culianu <calin.culianu@gmail.com>
+// Copyright (C) 2019-2025 Calin A. Culianu <calin.culianu@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -28,6 +28,7 @@
 #include "Storage.h"
 #include "SSLCertMonitor.h"
 #include "ThreadPool.h"
+#include "UPnP.h"
 #include "Util.h"
 #include "ZmqSubNotifier.h"
 
@@ -535,6 +536,15 @@ void App::parseArgs()
         "no-rpa", QString("<hidden>")
     },
     {
+        "upnp",
+         QString("Use UPnP to tell your router to automatically allow incoming connections for all all TCP, SSL,"
+                 " WS, and WSS ports. To explicitly disable UPnP, use the CLI arg --no-upnp. Default is: %1.\n")
+             .arg(options->defaultUpnp ? "enabled" : "disabled")
+    },
+    {
+        "no-upnp", QString("<hidden>")
+    },
+    {
        "dump-sh",
        QString("*** This is an advanced debugging option ***   Dump script hashes. If specified, after the database"
                " is loaded, all of the script hashes in the database will be written to outputfile as a JSON array.\n"),
@@ -836,37 +846,53 @@ void App::parseArgs()
     if (auto l = conf.hasValue("tcp") ? conf.values("tcp") : parser.values("t");  !l.isEmpty()) {
         parseInterfaces(options->interfaces, l);
         tcpIsDefault = false;
-        if (!options->interfaces.isEmpty())
-            // save default publicTcp we will report now -- note this may get reset() to !has_value() later in
-            // this function if user explicitly specified public_tcp_port=0 in the config file.
-            options->publicTcp = options->interfaces.front().second;
+        // save default publicTcp we will report now -- note this may get reset() to !has_value() later in
+        // this function if user explicitly specified public_tcp_port=0 in the config file.
+        for (const auto & iface : std::as_const(options->interfaces)) {
+            if (iface.isValidAndNonLocalLoopback()) {
+                options->publicTcp = iface.second;
+                break;
+            }
+        }
     }
     // grab bind (listen) interfaces for WS -- this hard-to-read code here looks at both conf.value and parser, but conf.value only has values if parser does not (CLI parser takes precedence).
     if (auto l = conf.hasValue("ws") ? conf.values("ws") : parser.values("w");  !l.isEmpty()) {
         parseInterfaces(options->wsInterfaces, l);
         if (tcpIsDefault) options->interfaces.clear(); // they had default tcp setup, clear the default since they did end up specifying at least 1 real interface to bind to
-        if (!options->wsInterfaces.isEmpty())
-            // save default publicWs we will report now -- note this may get reset() to !has_value() later in
-            // this function if user explicitly specified public_ws_port=0 in the config file.
-            options->publicWs = options->wsInterfaces.front().second;
+        // save default publicWs we will report now -- note this may get reset() to !has_value() later in
+        // this function if user explicitly specified public_ws_port=0 in the config file.
+        for (const auto & iface : std::as_const(options->wsInterfaces)) {
+            if (iface.isValidAndNonLocalLoopback()) {
+                options->publicWs = iface.second;
+                break;
+            }
+        }
     }
     // grab bind (listen) interfaces for WSS -- this hard-to-read code here looks at both conf.value and parser, but conf.value only has values if parser does not (CLI parser takes precedence).
     if (auto l = conf.hasValue("wss") ? conf.values("wss") : parser.values("W");  !l.isEmpty()) {
         parseInterfaces(options->wssInterfaces, l);
         if (tcpIsDefault) options->interfaces.clear(); // they had default tcp setup, clear the default since they did end up specifying at least 1 real interface to bind to
-        if (!options->wssInterfaces.isEmpty())
-            // save default publicWss we will report now -- note this may get reset() to !has_value() later in
-            // this function if user explicitly specified public_wss_port=0 in the config file.
-            options->publicWss = options->wssInterfaces.front().second;
+        // save default publicWss we will report now -- note this may get reset() to !has_value() later in
+        // this function if user explicitly specified public_wss_port=0 in the config file.
+        for (const auto & iface : std::as_const(options->wssInterfaces)) {
+            if (iface.isValidAndNonLocalLoopback()) {
+                options->publicWss = iface.second;
+                break;
+            }
+        }
     }
     // grab bind (listen) interfaces for SSL (again, apologies for this hard to read expression below -- same comments as above apply here)
     if (auto l = conf.hasValue("ssl") ? conf.values("ssl") : parser.values("s"); !l.isEmpty()) {
         parseInterfaces(options->sslInterfaces, l);
         if (tcpIsDefault) options->interfaces.clear(); // they had default tcp setup, clear the default since they did end up specifying at least 1 real interface to bind to
-        if (!options->sslInterfaces.isEmpty())
-            // save default publicSsl we will report now -- note this may get reset() to !has_value() later in
-            // this function if user explicitly specified public_ssl_port=0 in the config file.
-            options->publicSsl = options->sslInterfaces.front().second;
+        // save default publicSsl we will report now -- note this may get reset() to !has_value() later in
+        // this function if user explicitly specified public_ssl_port=0 in the config file.
+        for (const auto & iface : std::as_const(options->sslInterfaces)) {
+            if (iface.isValidAndNonLocalLoopback()) {
+                options->publicSsl = iface.second;
+                break;
+            }
+        }
     }
     // if they had either SSL or WSS, grab and validate the cert & key
     if (const bool hasSSL = !options->sslInterfaces.isEmpty(), hasWSS = !options->wssInterfaces.isEmpty(); hasSSL || hasWSS) {
@@ -911,7 +937,7 @@ void App::parseArgs()
                                               ? conf.values("admin")
                                               : parser.values("a"), true);
     // warn user if any of the admin rpc services are on non-loopback
-    for (const auto &iface : options->adminInterfaces) {
+    for (const auto &iface : std::as_const(options->adminInterfaces)) {
         if (!iface.first.isLoopback()) {
             // print the warning later when logger is up
             Util::AsyncOnObject(this, [iface]{
@@ -1508,6 +1534,31 @@ void App::parseArgs()
         options->zmqAllowHashTx = val;
         Util::AsyncOnObject(this, [val]{ DebugM("config: zmq_allow_hashtx = ", val); });
     }
+
+    // CLI: --upnp (--no-upnp)
+    // conf: upnp
+    if (const bool psetYes = parser.isSet("upnp"), psetNo = parser.isSet("no-upnp"); psetYes || psetNo || conf.hasValue("upnp")) {
+        bool val{};
+        if (!psetYes && !psetNo) {
+            bool ok{};
+            val = conf.boolValue("upnp", false, &ok);
+            if (!ok) throw BadArgs("upnp: bad value. Specify a boolean value such as 0, 1, true, false, yes, no");
+        }
+        else if (psetYes && psetNo) throw BadArgs("Cannot specify --upnp and --no-upnp at the same time!");
+        else val = psetYes; // will be false if psetNo here
+        options->upnp = val;
+        if (UPnP::isSupported())
+            Util::AsyncOnObject(this, [val] { DebugM("config: upnp = ", val); });
+        else if (options->upnp) {
+            options->upnp = false;
+            if (!options->defaultUpnp)
+                Util::AsyncOnObject(this, []{
+                    Warning() << "UPnP support was requested but this " << APPNAME << " binary is not compiled with"
+                              << " UPnP support!";
+                });
+        }
+    }
+
 }
 
 namespace {
@@ -1831,6 +1882,13 @@ QString App::extendedVersionString(bool justLibs)
 
     ts << "zmq: ";
     if (auto v = ZmqSubNotifier::versionString(); !v.isEmpty())
+        ts << v;
+    else
+        ts << kUnavailable;
+    ts << "\n";
+
+    ts << "UPnP: ";
+    if (auto v = UPnP::versionString(); UPnP::isSupported() && !v.isEmpty())
         ts << v;
     else
         ts << kUnavailable;

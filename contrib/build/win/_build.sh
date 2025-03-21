@@ -4,18 +4,19 @@
 
 set -e  # Exit on error
 
-if [ -z "$1" ] || [ -z "$2" ] || [ -z "$3" ]; then
-    echo "Please pass Fulcrum, rocksdb, and jemalloc dirnames as the three args"
+if [ -z "$1" ] || [ -z "$2" ] || [ -z "$3" ] || [ -z "$4" ]; then
+    echo "Please pass Fulcrum, rocksdb, jemalloc, and miniupnpc dirnames as the four args"
     exit 1
 fi
 
 PACKAGE="$1"
 ROCKSDB_PACKAGE="$2"
 JEMALLOC_PACKAGE="$3"
+MINIUPNPC_PACKAGE="$4"
 TARGET_BINARY=Fulcrum.exe
 TARGET_ADMIN_SCRIPT=FulcrumAdmin
-if [ -n "$4" ]; then
-    DEBUG_BUILD=1  # optional 4th arg, if not empty, is debug
+if [ -n "$5" ]; then
+    DEBUG_BUILD=1  # optional 5th arg, if not empty, is debug
 else
     DEBUG_BUILD=0
 fi
@@ -23,6 +24,32 @@ fi
 top=/work
 cd "$top" || fail "Could not cd $top"
 . "$top/$PACKAGE/contrib/build/common/common.sh" || (echo "Cannot source common.h" && exit 1)
+
+# miniupnpc
+info "Building miniupnpc ..."
+mkdir -p /tmp/include || fail "Could not create /tmp/include"
+mkdir -p /tmp/lib || fail "Could not create /tmp/lib"
+mkdir -p /tmp/man || fail "Could not create /tmp/man"
+pushd "$top/$MINIUPNPC_PACKAGE" || fail "Coult not change dir to $MINIUPNPC_PACKAGE"
+mkdir -p build
+cd build
+/opt/mxe/usr/x86_64-pc-linux-gnu/bin/cmake  .. -DCMAKE_C_COMPILER=x86_64-w64-mingw32.static-gcc \
+    -DCMAKE_SYSTEM_NAME=Windows -DCMAKE_HOST_SYSTEM_NAME=Linux -G"Unix Makefiles" -DCMAKE_BUILD_TYPE="Release" \
+    -DCMAKE_INSTALL_INCLUDEDIR=/tmp/include -DCMAKE_INSTALL_LIBDIR=/tmp/lib -DCMAKE_INSTALL_MANDIR=/tmp/man \
+    -DUPNPC_BUILD_STATIC=TRUE  -DUPNPC_BUILD_SHARED=FALSE -DUPNPC_BUILD_TESTS=FALSE -DUPNPC_BUILD_SAMPLE=FALSE \
+|| fail "Could not run CMake"
+make -j`nproc` || fail "Could not build miniupnpc"
+make install || fail "Could not install miniupnpc"
+rm -vf /tmp/lib/libminiupnpc*.dll* /tmp/lib/libminiupnpc*.so*
+rm -fr /tmp/man/*
+for a in /tmp/lib/libminiupnpc*.a; do
+    bn=`basename $a`
+    info "Stripping $bn ..."
+    x86_64-w64-mingw32.static-strip -g "$a" || fail "Failed to strip $a"
+done
+popd > /dev/null
+printok "miniupnpc built and installed in /tmp/"
+# /miniupnpc
 
 info "Running configure for jemalloc ..."
 cd "$JEMALLOC_PACKAGE" || fail "Could not change dir to $JEMALLOC_PACKAGE"
@@ -108,6 +135,8 @@ ${ACTUAL_QMAKE} -makefile ../Fulcrum.pro ${dbg_opts} \
                      LIBS+="-L${JEMALLOC_LIBDIR}" LIBS+="-ljemalloc" \
                      INCLUDEPATH+="${JEMALLOC_INCDIR}" \
                      LIBS+="-L/opt/mxe/usr/x86_64-w64-mingw32.static/lib" LIBS+="-lzmq" LIBS+="-lsodium" \
+                     INCLUDEPATH+="/tmp/include" LIBS+="-L/tmp/lib -lminiupnpc -liphlpapi" \
+                     DEFINES+="MINIUPNP_STATICLIB" \
                      INCLUDEPATH+="/opt/mxe/usr/x86_64-w64-mingw32.static/include" \
                      DEFINES+="ZMQ_STATIC" \
                      DEFINES+='GIT_COMMIT="\\\"'${GIT_COMMIT}'\\\""' \

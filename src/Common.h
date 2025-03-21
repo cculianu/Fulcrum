@@ -1,6 +1,6 @@
 //
 // Fulcrum - A fast & nimble SPV Server for Bitcoin Cash
-// Copyright (C) 2019-2024 Calin A. Culianu <calin.culianu@gmail.com>
+// Copyright (C) 2019-2025 Calin A. Culianu <calin.culianu@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -39,7 +39,7 @@ struct InternalError : Exception { using Exception::Exception; ~InternalError() 
 struct BadArgs : Exception { using Exception::Exception; ~BadArgs() override; };
 
 #define APPNAME "Fulcrum"
-#define VERSION "1.11.1"
+#define VERSION "1.12.0"
 #ifdef QT_DEBUG
 inline constexpr bool isReleaseBuild() { return false; }
 #else

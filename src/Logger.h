@@ -1,6 +1,6 @@
 //
 // Fulcrum - A fast & nimble SPV Server for Bitcoin Cash
-// Copyright (C) 2019-2024 Calin A. Culianu <calin.culianu@gmail.com>
+// Copyright (C) 2019-2025 Calin A. Culianu <calin.culianu@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -39,7 +39,7 @@ public:
 signals:
     void log(int level, const QString & line); ///< call this or emit it to log a line
 
-public slots:
+protected:
     virtual void gotLine(int level, const QString &) = 0;
 };
 
@@ -49,6 +49,8 @@ public:
     explicit ConsoleLogger(QObject *parent = nullptr, bool stdOut = true);
 
     bool isaTTY() const override { return isATty; }
+
+protected:
     void gotLine(int level, const QString &) override;
 
 private:
@@ -63,8 +65,11 @@ class SysLogger : public ConsoleLogger
 #ifdef Q_OS_UNIX
 public:
     SysLogger(QObject *parent = nullptr);
-    void gotLine(int level, const QString &) override;
     bool isaTTY() const override { return !opened && ConsoleLogger::isaTTY(); }
+
+protected:
+    void gotLine(int level, const QString &) override;
+
 private:
     static bool opened;
 #else

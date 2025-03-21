@@ -1,6 +1,6 @@
-% FULCRUM(1) Version 1.11.1 | Fulcrum Manual
+% FULCRUM(1) Version 1.12.0 | Fulcrum Manual
 % Fulcrum is written by Calin Culianu (cculianu)
-% August 08, 2024
+% March 21, 2025
 
 # NAME
 
@@ -125,10 +125,13 @@ Once the server finishes synching it will behave like an ElectronX/ElectrumX ser
 :   If specified, Fulcrum will use a UTXO Cache that consumes extra memory but syncs up to to 2X faster. To use this feature, you must specify a memory value in MB to allocate to the cache. It is recommended that you give this facility at least 500 MB for it to really pay off, although any amount of memory given (minimum 64 MB) should be beneficial. Note that this feature is currently experimental and the tradeoffs are: it is faster because it avoids redundant disk I/O, however, this comes at the price of considerable memory consumption as well as a sync that is less resilient to crashes mid-sync. If the process is killed mid-sync, the database may become corrupt and lose UTXO data. Use this feature only if you are 100% sure that won't happen during a sync. The default is off (0). This option only takes effect on initial sync, otherwise this option has no effect.
 
 --rpa
-:    Explicitly enable the Reusable Payment Address index and offer the associated "blockchain.rpa.*" RPC methods to clients. To explicitly disable this facility, use the CLI arg --no-rpa. Default is: auto (enabled for BCH only).
+:   Explicitly enable the Reusable Payment Address index and offer the associated "blockchain.rpa.*" RPC methods to clients. To explicitly disable this facility, use the CLI arg --no-rpa. Default is: auto (enabled for BCH only).
+
+--upnp
+:   Use UPnP to tell your router to automatically allow incoming connections for all all TCP, SSL, WS, and WSS ports. To explicitly disable UPnP, use the CLI arg --no-upnp. Default is: disabled.
 
 --dump-sh <outputfile>
-:    *This is an advanced debugging option*. Dump script hashes. If specified, after the database is loaded, all of the script hashes in the database will be written to outputfile as a JSON array.
+:   *This is an advanced debugging option*. Dump script hashes. If specified, after the database is loaded, all of the script hashes in the database will be written to outputfile as a JSON array.
 
 [config]
 :   Configuration file (optional). To read configuration variables from the environment instead, specify `_ENV_` for this argument.

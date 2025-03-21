@@ -1,6 +1,6 @@
 //
 // Fulcrum - A fast & nimble SPV Server for Bitcoin Cash
-// Copyright (C) 2019-2024 Calin A. Culianu <calin.culianu@gmail.com>
+// Copyright (C) 2019-2025 Calin A. Culianu <calin.culianu@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -27,8 +27,10 @@
 #include "SSLCertMonitor.h"
 #include "Storage.h"
 #include "SubsMgr.h"
+#include "UPnP.h"
 #include "Util.h"
 
+#include <initializer_list>
 #include <mutex>
 #include <utility>
 
@@ -78,6 +80,7 @@ void SrvMgr::cleanup()
     adminServers.clear(); // unique_ptrs, kill all admin servers first (these hold weak_ptrs to peermgr and also naked ptrs to this, so must be killed first)
     peermgr.reset(); // shared_ptr, kill peermgr (if any)
     servers.clear(); // unique_ptrs auto-delete all servers
+    upnp.reset(); // undoes any upnp port mappings
 }
 
 namespace {
@@ -101,6 +104,11 @@ namespace {
 void SrvMgr::startServers()
 {
     _net = BTC::NetFromName(storage->getChain()); // set this now since server instances may need this information
+
+    if (options->upnp && UPnP::isSupported())
+        upnp = std::make_unique<UPnP>(this);
+    else
+        upnp.reset();
 
     if (options->peerDiscovery) {
         Log() << "SrvMgr: starting PeerMgr ...";
@@ -129,6 +137,7 @@ void SrvMgr::startServers()
         }
     } else peermgr.reset();
 
+    UPnP::MapSpecSet upnpPorts;
     const auto num =   options->interfaces.length() + options->sslInterfaces.length()
                      + options->wsInterfaces.length() + options->wssInterfaces.length()
                      + options->adminInterfaces.length();
@@ -152,6 +161,9 @@ void SrvMgr::startServers()
             // WSS
             servers.emplace_back(std::make_unique<ServerSSL>(this, iface.first, iface.second, options, storage, bitcoindmgr));
             servers.back()->setUsesWebSockets(true);
+        }
+        if (upnp && iface.isValidAndNonLocalLoopback()) {
+            upnpPorts.emplace(UPnP::MapSpec{.extPort = iface.second, .inPort = iface.second});
         }
         Server *srv = servers.back().get();
         ServerSSL *srvSSL = dynamic_cast<ServerSSL *>(srv);
@@ -200,6 +212,38 @@ void SrvMgr::startServers()
             connect(peermgr.get(), &PeerMgr::updated, asrv, &ServerBase::onPeersUpdated);
         }
         asrv->tryStart();
+    }
+    // Lastly, start the upnp manager (if enabled), and wait for it synchronously
+    if (upnp && !upnpPorts.empty()) {
+        // The below algorithm figures out if they specified public{Tcp|Ssl|Ws|Wss} ports that don't match any inferface
+        // internal ports, and if so, replace UPnP external port with the specified public{Tcp|Ssl|Ws|Wss} port.
+        using ContForLoop = std::initializer_list<std::pair<const std::optional<quint16> &, const QList<Options::Interface> &>>;
+        for (const auto & [optPort, ifaces] : ContForLoop{{options->publicTcp, options->interfaces},
+                                                          {options->publicSsl, options->sslInterfaces},
+                                                          {options->publicWs, options->wsInterfaces},
+                                                          {options->publicWss, options->wssInterfaces}}) {
+            if (!optPort) continue;
+            const uint16_t extPort = *optPort;
+            UPnP::MapSpecSet::iterator it = upnpPorts.lower_bound({.extPort = extPort, .inPort = 0});
+            if (it == upnpPorts.end() || it->extPort != extPort) {
+                for (const auto &iface : ifaces) {
+                    if (iface.isValidAndNonLocalLoopback()
+                            && (it = upnpPorts.find({iface.second, iface.second})) != upnpPorts.end()) {
+                        // found first TCP/SSL/WS/WSS server for which to replace ext port with (publicTcp, publicSsl, etc)
+                        // .. replace it!
+                        UPnP::MapSpec spec = *it;
+                        spec.extPort = extPort;
+                        upnpPorts.erase(it);
+                        upnpPorts.insert(spec);
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Finally, after the above is done, start the UPnP port mapper thread (we wait for it to map before proceeding)
+        Log() << "Mapping ports using UPnP ...";
+        upnp->startSync(std::move(upnpPorts));
     }
 
     emit allServersStarted();
@@ -419,6 +463,22 @@ auto SrvMgr::stats() const -> Stats
     m["number of clients (max lifetime)"] = qulonglong(Client::numClientsMax.load());
     m["number of clients (total lifetime connections)"] = qulonglong(Client::numClientsCtr.load());
     m["bans"] = adminRPC_banInfo_threadSafe();
+    if (upnp) {
+        QVariantMap u;
+        if (auto optInfo = upnp->getInfo()) {
+            u["active"] = true;
+            u["external IP"] = optInfo->externalIP;
+            u["internal IP"] = optInfo->internalIP;
+            QVariantList l;
+            l.reserve(optInfo->activeMappings.size());
+            for (const auto [extPort, intPort] : optInfo->activeMappings)
+                l.push_back(QVariantList{{int(extPort), int(intPort)}});
+            u["mapped ports (ext -> int)"] = std::move(l);
+        } else {
+            u["active"] = false;
+        }
+        m["upnp"] = std::move(u);
+    }
     return m;
 }
 

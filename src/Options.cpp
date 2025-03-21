@@ -1,6 +1,6 @@
 //
 // Fulcrum - A fast & nimble SPV Server for Bitcoin Cash
-// Copyright (C) 2019-2024 Calin A. Culianu <calin.culianu@gmail.com>
+// Copyright (C) 2019-2025 Calin A. Culianu <calin.culianu@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -199,6 +199,12 @@ QVariantMap Options::toMap() const
     m["rpa_prefix_bits_min"] = rpa.prefixBitsMin;
     m["rpa_start_height"] = rpa.requestedStartHeight;
 
+    // zmqAllowHashTx
+    m["zmq_allow_hashtx"] = zmqAllowHashTx;
+
+    // upnp
+    m["upnp"] = upnp;
+
     return m;
 }
 
@@ -238,6 +244,12 @@ bool Options::setSimdJson(const bool b, const bool forceLog) {
         return res;
     }
     return true;
+}
+
+bool Options::Interface::isValidAndNonLocalLoopback() const
+{
+    const auto & [addr, port] = *this;
+    return !addr.isNull() && !addr.isLinkLocal() && !addr.isLoopback() && port != 0;
 }
 
 

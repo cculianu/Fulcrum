@@ -4,19 +4,35 @@
 
 set -e  # Exit on error
 
-if [ -z "$1" ] || [ -z "$2" ] || [ -z "$3" ]; then
-    echo "Please pass Fulcrum, rocksdb, and jemalloc dirnames as the three args"
+if [ -z "$1" ] || [ -z "$2" ] || [ -z "$3" ] || [ -z "$4" ]; then
+    echo "Please pass Fulcrum, rocksdb, jemalloc, and miniupnpc dirnames as the four args"
     exit 1
 fi
 
 PACKAGE="$1"
 ROCKSDB_PACKAGE="$2"
 JEMALLOC_PACKAGE="$3"
+MINIUPNPC_PACKAGE="$4"
 TARGET_BINARY=Fulcrum
 
 top=/work
 cd "$top" || fail "Could not cd $top"
 . "$top/$PACKAGE/contrib/build/common/common.sh" || (echo "Cannot source common.h" && exit 1)
+
+# miniupnpc
+info "Building miniupnpc ..."
+pushd "$top/$MINIUPNPC_PACKAGE" || fail "Coult not change dir to $MINIUPNPC_PACKAGE"
+INSTALLPREFIX=/tmp make -j`nproc` || fail "Could not build miniupnpc"
+INSTALLPREFIX=/tmp make install || fail "Could not install miniupnpc"
+rm -vf /tmp/lib/libminiupnpc*.so*
+for a in /tmp/lib/libminiupnpc*.a; do
+    bn=`basename $a`
+    info "Stripping $bn ..."
+    strip -g "$a" || fail "Failed to strip $a"
+done
+popd > /dev/null
+printok "miniupnpc built and installed in /tmp"
+# /miniupnpc
 
 # libzmq
 pushd /tmp
@@ -33,11 +49,13 @@ info "Stripping libzmq.a ..."
 strip -g /tmp/lib/libzmq.a  || fail "failed to strip libzmq.a"
 info "Copying headers to /tmp/include ..."
 mkdir -p /tmp/include && cp -fpvra ../libzmq/include/* /tmp/include/. || fail "failed to copy headers"
-popd
+popd > /dev/null
+printok "libzmq built and installed in /tmp"
 # /libzmq
 
+# jemalloc
 info "Running configure for jemalloc ..."
-cd "$JEMALLOC_PACKAGE" || fail "Could not change dir to $JEMALLOC_PACKAGE"
+cd "$top/$JEMALLOC_PACKAGE" || fail "Could not change dir to $JEMALLOC_PACKAGE"
 ./autogen.sh --with-jemalloc-prefix= --disable-shared --enable-static \
     || fail "Configure of jemalloc failed"
 
@@ -54,7 +72,9 @@ for a in "$JEMALLOC_LIBDIR"/libjemalloc*; do
     strip -g "$a" || fail "Failed to strip $a"
 done
 printok "jemalloc static library built and installed in $JEMALLOC_LIBDIR"
+# /jemalloc
 
+# RocksDB
 info "Building RocksDB ..."
 cd "$top/$ROCKSDB_PACKAGE" || fail "Could not cd tp $ROCKSDB_PACKAGE"
 USE_RTTI=1 PORTABLE=1 DEBUG_LEVEL=0 make static_lib -j`nproc` V=1 \
@@ -69,6 +89,7 @@ ROCKSDB_INCDIR="$top"/"$PACKAGE"/staticlibs/rocksdb/include
 mkdir -p "${ROCKSDB_LIBDIR}" || fail "Could not create directory ${ROCKSDB_LIBDIR}"
 cp -fpva librocksdb.a "${ROCKSDB_LIBDIR}" || fail "Could not copy librocksdb.a"
 printok "RocksDB built and moved to Fulcrum staticlibs directory"
+# /RocksDB
 
 cd "$top"/"$PACKAGE" || fail "Could not chdir to Fulcrum dir"
 
@@ -97,7 +118,7 @@ qmake ../Fulcrum.pro "CONFIG-=debug" \
                      "INCLUDEPATH+=${ROCKSDB_INCDIR}" \
                      "LIBS+=-L${JEMALLOC_LIBDIR} -ljemalloc" \
                      "INCLUDEPATH+=${JEMALLOC_INCDIR}" \
-                     "LIBS+=-L/tmp/lib -lzmq" \
+                     "LIBS+=-L/tmp/lib -lzmq -lminiupnpc" \
                      "INCLUDEPATH+=/tmp/include" \
     || fail "Could not run qmake"
 make -j`nproc` || fail "Could not run make"

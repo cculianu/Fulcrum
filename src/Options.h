@@ -1,6 +1,6 @@
 //
 // Fulcrum - A fast & nimble SPV Server for Bitcoin Cash
-// Copyright (C) 2019-2024 Calin A. Culianu <calin.culianu@gmail.com>
+// Copyright (C) 2019-2025 Calin A. Culianu <calin.culianu@gmail.com>
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
@@ -35,7 +35,6 @@
 #include <algorithm>
 #include <limits>
 #include <optional>
-#include <type_traits>
 
 
 struct Options {
@@ -59,7 +58,10 @@ public:
 
     bool hasIPv6Listener = false; ///< used internally -- set to true by argParser if at least one of the specified listening interfaces is IPv6, false otherwise
 
-    using Interface = QPair<QHostAddress, quint16>;
+    struct Interface : QPair<QHostAddress, quint16> {
+        using QPair<QHostAddress, quint16>::QPair;
+        bool isValidAndNonLocalLoopback() const;
+    };
     QList<Interface> interfaces, ///< TCP interfaces to use for binding, defaults to 0.0.0.0 DEFAULT_PORT_TCP
                      sslInterfaces,  ///< SSL interfaces to use for binding SSL ports. Defaults to nothing.
                      wsInterfaces,   ///< Web Socket (WS) interfaces. Defaults to nothing.
@@ -317,6 +319,11 @@ public:
     // config: zmq_allow_hashtx
     static constexpr bool defaultZmqAllowHashTx = false;
     bool zmqAllowHashTx = defaultZmqAllowHashTx;
+
+    // CLI: --upnp
+    // config: upnp
+    static constexpr bool defaultUpnp = false;
+    bool upnp = defaultUpnp;
 };
 
 /// A class encapsulating a simple read-only config file format.  The format is similar to the bitcoin.conf format

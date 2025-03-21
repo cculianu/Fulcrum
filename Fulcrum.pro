@@ -1,6 +1,6 @@
 #
 # Fulcrum - A fast & nimble SPV Server for Bitcoin Cash
-# Copyright (C) 2019-2024 Calin A. Culianu <calin.culianu@gmail.com>
+# Copyright (C) 2019-2025 Calin A. Culianu <calin.culianu@gmail.com>
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -169,6 +169,26 @@ contains(CONFIG, config_endian_big) {
     message("ZMQ not found, install pkg-config and libzmq to enable ZMQ notifications.")
 }
 # /ZMQ
+
+# miniupnpc
+!contains(LIBS, -lminiupnpc) {
+    # Test for miniupnpc, and if found, add pkg-config which we will rely upon to find libs
+    qtCompileTest(miniupnpc)
+    contains(CONFIG, config_miniupnpc) {
+        QT_CONFIG -= no-pkg-config
+        CONFIG += link_pkgconfig
+        PKGCONFIG += miniupnpc
+        DEFINES += ENABLE_UPNP
+        message("miniupnpc version: $$system($$pkgConfigExecutable() --modversion miniupnpc)")
+    }
+} else {
+    DEFINES += ENABLE_UPNP
+    message("miniupnpc: using CLI override")
+}
+!contains(DEFINES, ENABLE_UPNP) {
+    message("miniupnpc not found, install pkg-config and miniupnpc to enable UPnP support.")
+}
+# /miniupnpc
 
 # - Try and detect rocksdb and if not, fall back to the staticlib.
 # - User can suppress this behavior by specifying a "LIBS+=-lrocksdb..." on the
@@ -344,6 +364,7 @@ SOURCES += \
     SubStatus.cpp \
     ThreadPool.cpp \
     TXO.cpp \
+    UPnP.cpp \
     Util.cpp \
     VarInt.cpp \
     Version.cpp \
@@ -395,6 +416,7 @@ HEADERS += \
     ThreadSafeHashTable.h \
     TXO.h \
     TXO_Compact.h \
+    UPnP.h \
     Util.h \
     VarInt.h \
     Version.h \
