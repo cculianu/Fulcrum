@@ -88,7 +88,7 @@ Ensure that `libzmq3` (Debian/Ubuntu) and/or `zeromq-devel` (Fedora/Redhat) is i
 
 #### Making sure `libminiupnpc` is detected and used (optional)
 
-Ensure that `libminiupnpc` (Debian/Ubuntu) and/or `miniupnpc-devel` (Fedora/Redhat) is installed, and that `pkg-config` is also installed.  If on Unix (macOS, Linux, or Windows MinGW), then ideally the `qmake` step will find `libminiupnpc` on your system and automatically use it. If that is not the case, you may try passing flags to `qmake` such as `LIBS+="-L/path/to/dir_containing_libminiupnpc -lminiupnpc"` and `INCLUDEPATH+="/path/to/dir_containing_miniupnpc_dir"` as arguments when you invoke `qmake`.  Using `libminiupnpc` is optional but necessary if you want UPnP support in Fulcrum. If you have trouble getting Fulcrum to compile against your `libminiupnpc`, [open a new issue](https://github.com/cculianu/Fulcrum/issues) and maybe I can help.
+Ensure that `libminiupnpc` (Debian/Ubuntu) and/or `miniupnpc-devel` (Fedora/Redhat) is installed, and that `pkg-config` is also installed.  If on Unix (macOS, Linux, or Windows MinGW), then ideally the `qmake` step will find `libminiupnpc` on your system and automatically use it. If that is not the case, you may try passing flags to `qmake` such as `LIBS+="-L/path/to/dir_containing_libminiupnpc -lminiupnpc"` and `INCLUDEPATH+="/path/to/dir_containing_miniupnpc_headers_dir"` as arguments when you invoke `qmake`.  Using `libminiupnpc` is optional but necessary if you want UPnP support in Fulcrum. If you have trouble getting Fulcrum to compile against your `libminiupnpc`, [open a new issue](https://github.com/cculianu/Fulcrum/issues) and maybe I can help.
 
 ### Building the Windows static `Fulcrum.exe`
 
