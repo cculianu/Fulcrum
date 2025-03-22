@@ -22,8 +22,11 @@
 #include <QMetaObject>
 
 #include <atomic>
+#include <chrono>
 #include <future>
 #include <utility>
+
+using namespace std::chrono_literals;
 
 #ifdef ENABLE_UPNP
 #ifdef __clang__
@@ -44,11 +47,8 @@
 #pragma GCC diagnostic pop
 #endif
 
-#include <chrono>
 #include <cstring>
 #include <shared_mutex>
-
-using namespace std::chrono_literals;
 
 /* static */
 bool UPnP::isSupported() { return true; }
