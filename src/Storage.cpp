@@ -541,7 +541,7 @@ namespace {
     public:
         ~ConcatOperator() override;
 
-        mutable std::atomic<unsigned> merges = 0;
+        mutable std::atomic_size_t merges = 0;
 
         // Gives the client a way to express the read -> modify -> write semantics
         // key:           (IN) The key that's associated with this merge operation.
@@ -564,18 +564,19 @@ namespace {
 
     ConcatOperator::~ConcatOperator() {} // weak vtable warning prevention
 
-    bool ConcatOperator::Merge(const rocksdb::Slice& key, const rocksdb::Slice* existing_value,
-                               const rocksdb::Slice& value, std::string* new_value, rocksdb::Logger* logger) const
+    bool ConcatOperator::Merge(const rocksdb::Slice &key [[maybe_unused]], const rocksdb::Slice *existing_value,
+                               const rocksdb::Slice &value, std::string *new_value, rocksdb::Logger *) const
     {
-        (void)key; (void)logger;
         ++merges;
-        new_value->resize( (existing_value ? existing_value->size() : size_t{0u}) + value.size() );
-        char *cur = new_value->data();
-        if (existing_value) {
-            std::memcpy(cur, existing_value->data(), existing_value->size());
-            cur += existing_value->size();
+        if (!existing_value) {
+            new_value->assign(value.data(), value.size());
+        } else {
+            new_value->clear();
+            const size_t evsz{existing_value->size()}, vsz{value.size()};
+            new_value->reserve(evsz + vsz);
+            new_value->append(existing_value->data(), evsz);
+            new_value->append(value.data(), vsz);
         }
-        std::memcpy(cur, value.data(), value.size());
         return true;
     }
 
@@ -624,7 +625,7 @@ namespace {
             return iter;
         }
 
-        unsigned mergeCount() const { return concatOp->merges.load(); }
+        size_t mergeCount() const { return concatOp->merges.load(); }
 
         QString dbName() const { return QString::fromStdString(db->GetName()); }
 
@@ -2142,8 +2143,8 @@ auto Storage::stats() const -> Stats
     // TODO ... more stuff here, perhaps
     QVariantMap ret;
     auto & c = p->db.concatOperator, & c2 = p->db.concatOperatorTxHash2TxNum;
-    ret["merge calls"] = c ? c->merges.load() : QVariant();
-    ret["merge calls (txhash2txnum)"] = c2 ? c2->merges.load() : QVariant();
+    ret["merge calls"] = c ? static_cast<quint64>(c->merges.load()) : QVariant();
+    ret["merge calls (txhash2txnum)"] = c2 ? static_cast<quint64>(c2->merges.load()) : QVariant();
     QVariantMap caches;
     {
         QVariantMap m;
