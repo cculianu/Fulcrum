@@ -269,7 +269,7 @@ std::optional<UPnP::Info> UPnP::getInfo() const
 #else /* !defined(ENABLE_UPNP) */
 /* static */ bool UPnP::isSupported() { return false; }
 /* static */ QString UPnP::versionString() { return QString{}; }
-void UPnP::start(MapSpecSet, int) { Error("UPnP support is not compiled-in to this program"); emit error(); }
+void UPnP::start(MapSpecSet, int) { Error() << "UPnP support is not compiled-in to this program"; emit error(); }
 void UPnP::stop() {}
 void UPnP::run(std::string) {}
 std::optional<UPnP::Info> UPnP::getInfo() const { return std::nullopt; }

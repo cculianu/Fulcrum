@@ -15,6 +15,7 @@ BuildRequires: zlib-devel
 BuildRequires: rocksdb-devel
 BuildRequires: jemalloc-devel
 BuildRequires: zeromq-devel
+BuildRequires: miniupnpc-devel
 
 BuildRequires: pandoc
 
