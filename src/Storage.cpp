@@ -645,9 +645,66 @@ namespace {
         /// Returns the largest tx num we have ever inserted into the db, or -1 if no txnums were inserted
         int64_t maxTxNumSeenInDB() const { return largestTxNumSeen; }
 
-        void insertForBlock(TxNum blockTxNum0, const std::vector<PreProcessedBlock::TxInfo> &txInfos) {
+        class InsertPhases {
+            friend class ::TxHash2TxNumMgr;
+            std::function<void()> asyncPhase1, syncPhase2;
+            using KeysAndValues = std::vector<std::pair<ByteView, VarInt>>;
+            std::unique_ptr<KeysAndValues> kv;
+        public:
+            InsertPhases() = default;
+
+            InsertPhases & doAsyncPhase1() {
+                if (asyncPhase1) {
+                    asyncPhase1();
+                    asyncPhase1 = nullptr; // clear lambda
+                }
+                return *this;
+            }
+            InsertPhases & doSyncPhase2() {
+                if (syncPhase2) {
+                    syncPhase2();
+                    syncPhase2 = nullptr; // clear lambda
+                }
+                return *this;
+            }
+        };
+
+        [[nodiscard]]
+        InsertPhases insertForBlockPhased(rocksdb::WriteBatch &batch, TxNum blockTxNum0, const std::vector<PreProcessedBlock::TxInfo> &txInfos) {
             const Tic t0;
-            rocksdb::WriteBatch batch;
+            InsertPhases ret;
+            ret.kv = std::make_unique<InsertPhases::KeysAndValues>();
+            ret.asyncPhase1 = [this, kv = ret.kv.get(), &txInfos, blockTxNum0] {
+                kv->reserve(txInfos.size());
+                for (TxNum i = 0; i < txInfos.size(); ++i) {
+                    kv->emplace_back(makeKeyFromHash(txInfos[i].hash), blockTxNum0 + i);
+                }
+            };
+            ret.syncPhase2 = [this, kv = ret.kv.get(), t0, &batch, blockTxNum0, &txInfos] {
+                // save by appending VarInt. Note that this uses the 'ConcatOperator' class we defined in this file,
+                // which requires rocksdb be compiled with RTTI.
+                size_t i{};
+                for (const auto & [key, val] : *kv) {
+                    if (auto st = batch.Merge(cf, ToSlice(key), ToSlice(val.byteView())); !st.ok()) [[unlikely]]
+                        throw DatabaseError(QString("%1: batch merge fail for txHash %2: %3")
+                                                .arg(dbName(), QString(txInfos[i].hash.toHex()), QString::fromStdString(st.ToString())));
+                    ++i;
+                }
+                if (!txInfos.empty()) {
+                    largestTxNumSeen = blockTxNum0 + txInfos.size() - 1;
+                    saveLargestTxNumSeen(batch);
+                }
+                if (t0.msec() >= 50)
+                    DebugM("insertForBlock", ": inserted ", txInfos.size(), Util::Pluralize(" hash", txInfos.size()),
+                           " in ", t0.msecStr(), " msec");
+            };
+            return ret;
+        }
+
+        void insertForBlock(rocksdb::WriteBatch &batch, TxNum blockTxNum0, const std::vector<PreProcessedBlock::TxInfo> &txInfos) {
+            // insertForBlockPhased(batch, blockTxNum0, txInfos).doAsyncPhase1().doSyncPhase2();
+            // Ideally we do the above, bit for performance we duplicate the code :( ...
+            const Tic t0;
             for (TxNum i = 0; i < txInfos.size(); ++i) {
                 const ByteView key = makeKeyFromHash(txInfos[i].hash);
                 const VarInt val(blockTxNum0 + i);
@@ -655,22 +712,29 @@ namespace {
                 // which requires rocksdb be compiled with RTTI.
                 if (auto st = batch.Merge(cf, ToSlice(key), ToSlice(val.byteView())); !st.ok())
                     throw DatabaseError(QString("%1: batch merge fail for txHash %2: %3")
-                                        .arg(dbName(), QString(txInfos[i].hash.toHex()), QString::fromStdString(st.ToString())));
+                                            .arg(dbName(), QString(txInfos[i].hash.toHex()), QString::fromStdString(st.ToString())));
             }
-            if (auto st = db->Write(wrOpts, &batch) ; !st.ok())
-                throw DatabaseError(QString("%1: batch merge fail: %2").arg(dbName(), QString::fromStdString(st.ToString())));
             if (!txInfos.empty()) {
                 largestTxNumSeen = blockTxNum0 + txInfos.size() - 1;
-                saveLargestTxNumSeen();
+                saveLargestTxNumSeen(batch);
             }
             if (t0.msec() >= 50)
                 DebugM(__func__, ": inserted ", txInfos.size(), Util::Pluralize(" hash", txInfos.size()),
                        " in ", t0.msecStr(), " msec");
+
+        }
+
+        void insertForBlockNoBatch(TxNum blockTxNum0, const std::vector<PreProcessedBlock::TxInfo> &txInfos) {
+            rocksdb::WriteBatch batch;
+            insertForBlock(batch, blockTxNum0, txInfos);
+            if (auto st = db->Write(wrOpts, &batch) ; !st.ok())
+                throw DatabaseError(QString("%1: batch merge fail: %2").arg(dbName(), QString::fromStdString(st.ToString())));
         }
 
         /// This is called during blockundo. Deletes records from the db having their TxNum >= `txNum`. Requires that
         /// rf not yet be truncated. This is slow so don't call it with huge numbers of records beyond what fits into a block.
-        void truncateForUndo(const TxNum txNum) {
+        /// TODO: Make this phased!!
+        void truncateForUndo(rocksdb::WriteBatch &batch, const TxNum txNum) {
             const auto rfNR = rf->numRecords();
             if (rfNR < txNum) throw DatabaseError(dbName() + ": RecordFile does not have the hashes required for the specified truncation");
             else if (rfNR == txNum) {
@@ -703,7 +767,6 @@ namespace {
 
             // next filter out all VarInts >= txNum, deleting records that have no more VarInts left and writing
             // back records that still have VarInts in them
-            rocksdb::WriteBatch batch;
             int dels{}, keeps{}, filts{}; // for DEBUG print
             for (size_t i = 0; i < dbValues.size(); ++i) {
                 if (!statuses[i].ok()) {
@@ -750,14 +813,10 @@ namespace {
                 }
             }
 
-            // and, finally, commit the updates to the DB
-            if (auto st = db->Write(wrOpts, &batch) ; !st.ok())
-                throw DatabaseError(dbName() + ": batch write fail: " + QString::fromStdString(st.ToString()));
-
             const int64_t txNumI = int64_t(txNum);
              // we always add at the end and truncare at the end; this invariant should always hold
             largestTxNumSeen = std::max(txNumI - 1, int64_t{-1});
-            saveLargestTxNumSeen();
+            saveLargestTxNumSeen(batch);
 
             DebugM(__func__, ": txNum: ", txNum, ", nrecs: ", recs.size(), ", dels: ", dels, ", keeps: ", keeps, ", filts: ", filts,
                    ", elapsed: ", t0.msecStr(), " msec");
@@ -894,12 +953,12 @@ namespace {
             if (opt && *opt >= 0) largestTxNumSeen = *opt;
             else largestTxNumSeen = -1;
         }
-        void saveLargestTxNumSeen() const {
+        void saveLargestTxNumSeen(rocksdb::WriteBatch &batch) const {
             const auto key = makeLargestTxNumSeenKey();
             if (largestTxNumSeen > -1)
-                GenericDBPut(db, cf, key, largestTxNumSeen, QString{}, wrOpts);
+                GenericBatchPut(batch, cf, key, largestTxNumSeen, QString{});
             else
-                GenericDBDelete(db, cf, key, QString{}, wrOpts);
+                GenericBatchDelete(batch, cf, key, QString{});
         }
         // Deletes *all* keys from db! May throw.
         void deleteAllEntries() {
@@ -918,17 +977,23 @@ namespace {
                 Debug() << "Deleting keys in the range [" << Util::ToHexFast(QByteArray::fromStdString(firstKey)) << ", "
                         << Util::ToHexFast(QByteArray::fromStdString(endKey)) << "] ...";
             }
+            rocksdb::WriteBatch batch;
             rocksdb::FlushOptions fopts;
+            rocksdb::Status st;
             fopts.wait = true; fopts.allow_write_stall = true;
-            if (auto st = db->DeleteRange(wrOpts, cf, firstKey, endKey);
-                    !st.ok() || !(st = db->Flush(fopts, cf)).ok())
+            if (!(st = batch.DeleteRange(cf, firstKey, endKey)).ok())
                 throw DatabaseError(dbName() + ": failed to delete all keys: " + QString::fromStdString(st.ToString()));
+            largestTxNumSeen = -1;
+            saveLargestTxNumSeen(batch);
+            if (!(st = db->Write(wrOpts, &batch)).ok())
+                throw DatabaseError(dbName() + ": failed to write batch when deleting all keys: " + QString::fromStdString(st.ToString()));
+            if (!(st = db->Flush(fopts, cf)).ok())
+                throw DatabaseError(dbName() + ": failed to flush when deleting all keys: " + QString::fromStdString(st.ToString()));
+
             std::unique_ptr<rocksdb::Iterator> iter = newIterChecked();
             iter->SeekToFirst();
             if (iter->Valid())
                 throw InternalError(dbName() + ": delete all keys failed -- iterator still points to a row! FIXME!");
-            largestTxNumSeen = -1;
-            saveLargestTxNumSeen();
         }
 
     public:
@@ -1024,7 +1089,7 @@ namespace {
                 fakeInfos.resize(recs.size());
                 for (size_t j = 0; j < recs.size(); ++j)
                     fakeInfos[j].hash = recs[j];
-                insertForBlock(i, fakeInfos); // this throws on error
+                insertForBlockNoBatch(i, fakeInfos); // this throws on error
                 i += fakeInfos.size();
             }
             fakeInfos.clear();
@@ -3059,7 +3124,7 @@ void Storage::loadCheckRpaDB()
 
                 Log() << "Deleting unneeded or gap RPA entries from height " << delheightplus1 << " ...";
                 // on success, updates p->rpaInfo.lastHeight, firstHeight, etc
-                if (!deleteRpaEntriesFromHeight(delheightplus1, true, true))
+                if (!deleteRpaEntriesFromHeight(nullptr, delheightplus1, true, true))
                     throw DatabaseError("Failed to delete the required keys from the DB. Please report this situation to the developers.");
             }
         }
@@ -3087,7 +3152,7 @@ void Storage::loadCheckRpaDB()
             << " RPA db in " << t0.msecStr() << " msec";
 }
 
-bool Storage::deleteRpaEntriesFromHeight(const BlockHeight height, bool flush, bool force)
+bool Storage::deleteRpaEntriesFromHeight(rocksdb::WriteBatch *batch, const BlockHeight height, bool flush, bool force)
 {
     if (!force && p->rpaInfo.firstHeight <= -1) return true; // fast path for disabled or empty index)
     if (height > unsigned(std::numeric_limits<int>::max())) throw InternalError(QString("Bad argument to ") + __func__);
@@ -3095,7 +3160,12 @@ bool Storage::deleteRpaEntriesFromHeight(const BlockHeight height, bool flush, b
     QByteArray endKey = RpaDBKey(u32max).toBytes();
     endKey.append('\0'); // ensue covers entire remaining uint32 range by appending a single '0' byte to make this endkey longer than the last uint32 possible.
 
-    auto status = p->db->DeleteRange(p->db.defWriteOpts, p->db.rpa, ToSlice(RpaDBKey(height)), ToSlice(endKey));
+    rocksdb::Status status;
+
+    if (batch)
+        status = batch->DeleteRange(p->db.rpa, ToSlice(RpaDBKey(height)), ToSlice(endKey));
+    else
+        status = p->db->DeleteRange(p->db.defWriteOpts, p->db.rpa, ToSlice(RpaDBKey(height)), ToSlice(endKey));
 
     if (!status.ok()) {
         Warning() << __func__ << ": failed in call to db DeleteRange for height (>= " << height << "): "
@@ -3109,7 +3179,7 @@ bool Storage::deleteRpaEntriesFromHeight(const BlockHeight height, bool flush, b
         lastHeight = height > 0u ? int(height - 1u) : -1;
     if (firstHeight > lastHeight)
         firstHeight = lastHeight.load();
-    if (flush) {
+    if (flush && !batch) {
         rocksdb::FlushOptions f;
         f.wait = true;
         f.allow_write_stall = true;
@@ -3118,13 +3188,17 @@ bool Storage::deleteRpaEntriesFromHeight(const BlockHeight height, bool flush, b
     return true;
 }
 
-bool Storage::deleteRpaEntriesToHeight(const BlockHeight height, bool flush, bool force)
+bool Storage::deleteRpaEntriesToHeight(rocksdb::WriteBatch *batch, const BlockHeight height, bool flush, bool force)
 {
     if (!force && p->rpaInfo.lastHeight <= -1) return true; // fast path for disabled or empty index)
     if (height > unsigned(std::numeric_limits<int>::max())) throw InternalError(QString("Bad argument to ") + __func__);
     QByteArray endKey = RpaDBKey(height).toBytes();
 
-    auto status = p->db->DeleteRange(p->db.defWriteOpts, p->db.rpa, ToSlice(RpaDBKey(0u)), ToSlice(RpaDBKey(height + 1u)));
+    rocksdb::Status status;
+    if (batch)
+        status = batch->DeleteRange(p->db.rpa, ToSlice(RpaDBKey(0u)), ToSlice(RpaDBKey(height + 1u)));
+    else
+        status = p->db->DeleteRange(p->db.defWriteOpts, p->db.rpa, ToSlice(RpaDBKey(0u)), ToSlice(RpaDBKey(height + 1u)));
 
     if (!status.ok()) {
         Warning() << __func__ << ": failed in call to db DeleteRange for height (<= " << height << "): "
@@ -3138,7 +3212,7 @@ bool Storage::deleteRpaEntriesToHeight(const BlockHeight height, bool flush, boo
         firstHeight = int(height + 1u);
     if (firstHeight > lastHeight)
         firstHeight = lastHeight.load();
-    if (flush) {
+    if (flush && !batch) {
         rocksdb::FlushOptions f;
         f.wait = true;
         f.allow_write_stall = true;
@@ -3150,13 +3224,16 @@ bool Storage::deleteRpaEntriesToHeight(const BlockHeight height, bool flush, boo
 void Storage::clampRpaEntries(BlockHeight from, BlockHeight to)
 {
     ExclusiveLockGuard g(p->blocksLock);
-    clampRpaEntries_nolock(from, to);
+    rocksdb::WriteBatch batch;
+    clampRpaEntries_nolock(&batch, from, to);
+    auto s = p->db->Write(p->db.defWriteOpts, &batch);
+    if (!s.ok()) Warning() << __func__ << ": failed in batch write for (" << from << ", " << to << "): " << StatusString(s);
 }
 
-void Storage::clampRpaEntries_nolock(BlockHeight from, BlockHeight to)
+void Storage::clampRpaEntries_nolock(rocksdb::WriteBatch *batch, BlockHeight from, BlockHeight to)
 {
-    if (from > 0u) deleteRpaEntriesToHeight(from - 1u, true);
-    if (to < std::numeric_limits<uint32_t>::max()) deleteRpaEntriesFromHeight(to + 1u, true);
+    if (from > 0u) deleteRpaEntriesToHeight(batch, from - 1u, true);
+    if (to < std::numeric_limits<uint32_t>::max()) deleteRpaEntriesFromHeight(batch, to + 1u, true);
     DebugM("Clamped RPA index to: ", from, " -> ", to);
 }
 
@@ -3251,32 +3328,26 @@ bool Storage::hasUndo() const {
 }
 
 struct Storage::UTXOBatch::P {
-    rocksdb::ColumnFamilyHandle *utxoset{}, *shunspent{};
-    rocksdb::WriteBatch batch; ///< batch writes/deletes end up in the utxoset and shunspent column families
+    rocksdb::WriteBatch &batch; ///< batch writes/deletes end up in the utxoset and shunspent column families
+    rocksdb::ColumnFamilyHandle &utxoset, &shunspent;
     int addCt = 0, rmCt = 0;
     bool defunct = false;
     UTXOCache *cache{}; ///< if not nullptr, there is a UTXOCache active and we should give it the batch writes.
+
+    P(rocksdb::WriteBatch &b, rocksdb::ColumnFamilyHandle &u, rocksdb::ColumnFamilyHandle &s, UTXOCache *c)
+        : batch(b), utxoset(u), shunspent(s), cache{c} {}
 };
 
-Storage::UTXOBatch::UTXOBatch(rocksdb::ColumnFamilyHandle *u, rocksdb::ColumnFamilyHandle *s, UTXOCache *cache)
-    : p(new P) {
-    p->utxoset = u;
-    p->shunspent = s;
-    if (!p->utxoset || !p->shunspent) [[unlikely]]
-        throw InternalError("Required argument to UTXOBatch is nullptr! FIXME!");
-    p->cache = cache;
-}
+Storage::UTXOBatch::UTXOBatch(rocksdb::WriteBatch &b, rocksdb::ColumnFamilyHandle &u, rocksdb::ColumnFamilyHandle &s, UTXOCache *c)
+    : p{std::make_unique<P>(b, u, s, c)} {}
 Storage::UTXOBatch::UTXOBatch(UTXOBatch &&o) { p.swap(o.p); }
 
 void Storage::issueUpdates(UTXOBatch &b)
 {
     static const QString errMsg("Error issuing batch write to db for a utxo or scripthash_unspent update");
-    if (UNLIKELY(b.p->defunct))
+    if (b.p->defunct) [[unlikely]]
         throw InternalError("Misuse of Storage::issueUpdates. Cannot issue the same updates using the same context more than once. FIXME!");
     assert(bool(p->db.utxoset) && bool(p->db.shunspent));
-    if (!b.p->cache) {
-        GenericBatchWrite(p->db, b.p->batch, errMsg, p->db.defWriteOpts); // may throw
-    }
     p->utxoCt += b.p->addCt - b.p->rmCt; // tally up adds and deletes
     b.p->defunct = true;
 }
@@ -3316,14 +3387,14 @@ void Storage::UTXOBatch::add(const TXO &txo, const TXOInfo &info, const CompactT
     if (!p->cache) {
         // Update db utxoset, keyed off txo -> txoinfo
         static const QString errMsgPrefix("Failed to add a utxo to the utxo batch");
-        GenericBatchPut(p->batch, p->utxoset, txo, info, errMsgPrefix); // may throw on failure
+        GenericBatchPut(p->batch, &p->utxoset, txo, info, errMsgPrefix); // may throw on failure
 
         // Update the scripthash unspent. This is a very simple table which we scan by hashX prefix using
         // an iterator in listUnspent.  Each entry's key is prefixed with the HashX bytes (32) but suffixed with the
         // serialized CompactTXO bytes (8 or 9). Each entry's data is a 8-byte int64_t of the amount of the utxo to save
         // on lookup cost for getBalance().
         static const QString errMsgPrefix2("Failed to add an entry to the scripthash_unspent batch");
-        GenericBatchPut(p->batch, p->shunspent, shukey, shuval, errMsgPrefix2); // may throw, which is what we want
+        GenericBatchPut(p->batch, &p->shunspent, shukey, shuval, errMsgPrefix2); // may throw, which is what we want
     } else {
         // put in cache (in case these get deleted later on, it's a win to do this rather than hit the DB, if using cache)
         p->cache->put(txo, info);
@@ -3338,11 +3409,11 @@ void Storage::UTXOBatch::remove(const TXO &txo, const HashX &hashX, const Compac
     if (!p->cache) {
         // enqueue delete from utxoset db -- may throw.
         static const QString errMsgPrefix("Failed to issue a batch delete for a utxo");
-        GenericBatchDelete(p->batch, p->utxoset, txo, errMsgPrefix);
+        GenericBatchDelete(p->batch, &p->utxoset, txo, errMsgPrefix);
 
         // enqueue delete from scripthash_unspent db
         static const QString errMsgPrefix2("Failed to issue a batch delete for a utxo to the scripthash_unspent db");
-        GenericBatchDelete(p->batch, p->shunspent, mkShunspentKey(hashX, ctxo), errMsgPrefix2);
+        GenericBatchDelete(p->batch, &p->shunspent, mkShunspentKey(hashX, ctxo), errMsgPrefix2);
     } else {
         // use cache which may end up doing no actual work if the utxo & shunspent was in cache and not yet committed to db
         p->cache->remove(txo);
@@ -3456,6 +3527,8 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
         // take all locks now.. since this is a Big Deal. TODO: add more locks here?
         std::scoped_lock guard(p->blocksLock, p->headerVerifierLock, p->blkInfoLock, p->mempoolLock);
 
+        rocksdb::WriteBatch batch; // all writes to DB go through this batch in order to ensure atomicity
+
         if (p->db.utxoCache && p->db.utxoCache->cacheMisses) {
             p->db.utxoCache->prefetch(ppb); // will prefetch inputs in a thread
         }
@@ -3524,16 +3597,16 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                 rawHeader = p->headerVerifier.lastHeaderProcessed().second;
             }
 
-            setDirty(true); // <--  no turning back. if the app crashes unexpectedly while this is set, on next restart it will refuse to run and insist on a clean resynch.
+            setDirty(batch, true); // <--  no turning back. we set it dirty in case rocksdb atomicity fails here; if the app crashes unexpectedly while this is set, on next restart it will refuse to run and insist on a clean resynch if this is true.
 
-            {  // add txnum -> txhash association to the TxNumsFile...
-                auto batch = p->txNumsFile->beginBatchAppend(); // may throw if io error in c'tor here.
+            {  // add txnum -> txhash association to the TxNumsFile... TODO: make atomic with `batch`
+                auto batch2 = p->txNumsFile->beginBatchAppend(); // may throw if io error in c'tor here.
                 QString errStr;
                 for (const auto & txInfo : ppb->txInfos) {
-                    if (!batch.append(txInfo.hash, &errStr)) // does not throw here, but we do.
+                    if (!batch2.append(txInfo.hash, &errStr)) // does not throw here, but we do.
                         throw InternalError(QString("Batch append for txNums failed: %1.").arg(errStr));
                 }
-                // <-- The batch d'tor may close the app on error here with Fatal() if a low-level file error occurs now
+                // <-- The batch2 d'tor may close the app on error here with Fatal() if a low-level file error occurs now
                 //     on header update (see: RecordFile.cpp, ~BatchAppendContext()).
             }
 
@@ -3546,14 +3619,16 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
             // NOTE: The assumption here is that ppb->txInfos is ok to share amongst threads -- that is, the assumption
             // is that nothing mutates it.  If that changes, please re-examine this code.
             CoTask::Future fut; // if valid, will auto-wait for us on scope end
+            TxHash2TxNumMgr::InsertPhases txhash2txnumPhases;
             if (ppb->txInfos.size() > 1000) {
                 // submit this to the co-task for blocks with enough txs
                 fut = p->blocksWorker->submitWork([&]{
-                    p->db.txhash2txnumMgr->insertForBlock(blockTxNum0, ppb->txInfos);
+                    txhash2txnumPhases = p->db.txhash2txnumMgr->insertForBlockPhased(batch, blockTxNum0, ppb->txInfos);
+                    txhash2txnumPhases.doAsyncPhase1(); // do this CPU-bound part on another core
                 });
             } else {
                 // otherwise just do the work ourselves immediately here since this is likely faster (less overhead)
-                p->db.txhash2txnumMgr->insertForBlock(blockTxNum0, ppb->txInfos);
+                p->db.txhash2txnumMgr->insertForBlock(batch, blockTxNum0, ppb->txInfos);
             }
 
             constexpr bool debugPrt = false;
@@ -3565,7 +3640,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
 
                 {
                     // utxo batch block (updtes utxoset & scripthash_unspent tables)
-                    UTXOBatch utxoBatch{p->db.utxoset, p->db.shunspent, p->db.utxoCache.get()};
+                    UTXOBatch utxoBatch{batch, *p->db.utxoset, *p->db.shunspent, p->db.utxoCache.get()};
 
                     // reserve space in undo, if in saveUndo mode
                     if (undo) {
@@ -3655,8 +3730,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                         ++inum;
                     }
 
-                    // commit the utxoset updates now.. this issues the writes to the db and also updates
-                    // p->utxoCt. This may throw.
+                    // this updates p->utxoCt, but doesn't touch the DB. This may throw.
                     issueUpdates(utxoBatch);
                 }
 
@@ -3681,7 +3755,6 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                 if (notify)
                     // first, reserve space for notifications
                     notify->scriptHashesAffected.reserve(notify->scriptHashesAffected.size() + ppb->hashXAggregated.size());
-                rocksdb::WriteBatch batch;
                 for (auto & [hashX, ag] : ppb->hashXAggregated) {
                     if (notify) notify->scriptHashesAffected.insert(hashX); // fast O(1) insertion because we reserved the right size above.
                     for (auto & txNum : ag.txNumsInvolvingHashX) {
@@ -3693,9 +3766,6 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                         throw DatabaseError(QString("batch merge fail for hashX %1, block height %2: %3")
                                             .arg(QString(hashX.toHex())).arg(ppb->height).arg(StatusString(st)));
                 }
-                if (auto st = p->db->Write(p->db.defWriteOpts, &batch) ; !st.ok())
-                    throw DatabaseError(QString("batch merge fail for block height %1: %2")
-                                        .arg(ppb->height).arg(StatusString(st)));
             }
 
 
@@ -3715,7 +3785,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
 
                 // save BlkInfo to db
                 static const QString blkInfoErrMsg("Error writing BlkInfo to db");
-                GenericDBPut(p->db, p->db.blkinfo, uint32_t(ppb->height), blkInfo, blkInfoErrMsg, p->db.defWriteOpts);
+                GenericBatchPut(batch, p->db.blkinfo, uint32_t(ppb->height), blkInfo, blkInfoErrMsg);
 
                 if (undo) {
                     // save blkInfo to undo information, if in saveUndo mode
@@ -3725,7 +3795,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
 
             // Save RPA PrefixTable record (appends a single row to DB), if RPA is enabled for this block
             if (ppb->serializedRpaPrefixTable) {
-                addRpaDataForHeight_nolock(ppb->height, *ppb->serializedRpaPrefixTable); // may throw theoretically if GenericDBPut threw
+                addRpaDataForHeight_nolock(batch, ppb->height, *ppb->serializedRpaPrefixTable); // may throw theoretically if GenericDBPut threw
             }
 
             // save the last of the undo info, if in saveUndo mode
@@ -3735,7 +3805,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                 undo->scriptHashes = Util::keySet<decltype (undo->scriptHashes)>(ppb->hashXAggregated);
                 static const QString errPrefix("Error saving undo info to undo db");
 
-                GenericDBPut(p->db, p->db.undo, uint32_t(ppb->height), *undo, errPrefix, p->db.defWriteOpts); // save undo to db
+                GenericBatchPut(batch, p->db.undo, uint32_t(ppb->height), *undo, errPrefix); // save undo to db
                 if (ppb->height < p->earliestUndoHeight) {
                     // remember earliest for delete clause below...
                     p->earliestUndoHeight = ppb->height;
@@ -3772,7 +3842,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                 // keys as we catch up.  It's not the end of the world, as each call here is on the order of microseconds..
                 // but perhaps we need to see about fixing this to not do that.
                 static const QString errPrefix("Error deleting old/stale undo info from undo db");
-                GenericDBDelete(p->db, p->db.undo, uint32_t(expireUndoHeight), errPrefix, p->db.defWriteOpts);
+                GenericBatchDelete(batch, p->db.undo, uint32_t(expireUndoHeight), errPrefix);
                 p->earliestUndoHeight = unsigned(expireUndoHeight + 1);
                 if constexpr (debugPrt) DebugM("Deleted undo for block ", expireUndoHeight, ", earliest now ", p->earliestUndoHeight.load());
             }
@@ -3787,8 +3857,18 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
             if (size_t limit; p->db.utxoCache && (limit = options->utxoCache) && p->db.utxoCache->memUsage() > limit)
                 p->db.utxoCache->limitSize(static_cast<size_t>(limit * 0.75) /* chop down to 3/4 size */);
 
-            saveUtxoCt();
-            setDirty(false);
+            saveUtxoCt(batch);
+            setDirty(batch, false);
+
+            // Wait for the txhash2txnum asyncPhase1 to finish before we proceed.
+            if (fut.future.valid()) {
+                fut.future.get(); // wait for completion; this may throw if task threw
+                txhash2txnumPhases.doSyncPhase2(); // issue write batch; may throw
+            }
+
+            if (auto st = p->db->Write(p->db.defWriteOpts, &batch) ; !st.ok())
+                throw DatabaseError(QString("Batch write fail for block height %1: %2")
+                                        .arg(ppb->height).arg(StatusString(st)));
 
             undoVerifierOnScopeEnd.disable(); // indicate to the "Defer" object declared at the top of this function that it shouldn't undo anything anymore as we are happy now with the db state now.
         }
@@ -3806,12 +3886,12 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
 }
 
 /// NB: Caller should probably hold some locks to avoid consistency issues... even though this function is inherently thread-safe.
-void Storage::addRpaDataForHeight_nolock(const BlockHeight height, const QByteArray &ser)
+void Storage::addRpaDataForHeight_nolock(rocksdb::WriteBatch &batch, const BlockHeight height, const QByteArray &ser)
 {
     Tic t0;
 
     static const QString rpaErrMsg("Error writing block RPA data to db");
-    GenericDBPut(p->db, p->db.rpa, RpaDBKey(height), ser, rpaErrMsg, p->db.defWriteOpts);
+    GenericBatchPut(batch, p->db.rpa, RpaDBKey(height), ser, rpaErrMsg);
     // Update RpaInfo stats: latest height, etc.
     if (const int lh = p->rpaInfo.lastHeight; UNLIKELY(lh > -1 && lh != int(height) - 1)) {
         // This should never happen. Warn if this invariant is violated to detect bugs.
@@ -3838,7 +3918,10 @@ void Storage::addRpaDataForHeight_nolock(const BlockHeight height, const QByteAr
 void Storage::addRpaDataForHeight(BlockHeight height, const QByteArray &serializedRpaPrefixTable)
 {
     ExclusiveLockGuard g(p->blocksLock);
-    addRpaDataForHeight_nolock(height, serializedRpaPrefixTable);
+    rocksdb::WriteBatch batch;
+    addRpaDataForHeight_nolock(batch, height, serializedRpaPrefixTable);
+    auto s = p->db->Write(p->db.defWriteOpts, &batch);
+    if (!s.ok()) Warning() << __func__ << ": failed in batch write for height " << height << ": " << StatusString(s);
 }
 
 BlockHeight Storage::undoLatestBlock(bool notifySubs)
@@ -3916,17 +3999,19 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
         {
             // all sanity check passed. Now, undo things in reverse order of what we did in addBlock above, rougly speaking
 
+            rocksdb::WriteBatch batch; // all writes to DB go through this batch in order to ensure atomicity
+
             // first, undo the header
             p->headerVerifier.reset(prevHeight+1, prevHeader);
-            setDirty(true); // <-- no turning back. we clear this flag at the end
-            deleteHeadersPastHeight(prevHeight); // commit change to db
+            setDirty(batch, true); // <-- no turning back. we clear this flag at the end
+            deleteHeadersPastHeight(prevHeight); // commit change to db -- TODO: atomicity with batch!!
             p->merkleCache->truncate(prevHeight+1); // this takes a length, not a height, which is always +1 the height
 
             // undo the blkInfo from the back
             p->blkInfos.pop_back();
             p->blkInfosByTxNum.erase(undo.blkInfo.txNum0);
-            GenericDBDelete(p->db, p->db.blkinfo, uint32_t(undo.height), "Failed to delete blkInfo in undoLatestBlock");
-            deleteRpaEntriesFromHeight(undo.height); // delete RPA >= undo.height (iff index is enabled)
+            GenericBatchDelete(batch, p->db.blkinfo, uint32_t(undo.height), "Failed to delete blkInfo in undoLatestBlock");
+            deleteRpaEntriesFromHeight(&batch, undo.height); // delete RPA >= undo.height (iff index is enabled)
 
             // clear num2hash cache
             p->lruNum2Hash.clear();
@@ -3938,7 +4023,9 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
             // Asynch task -- the future will automatically be awaited on scope end (even if we throw here!)
             // Note: we await the result later down in this function before we truncate the txNumsFile. (Assumption
             // here is that the txNumsFile has all the hashes we want to delete until the below operation is done).
-            CoTask::Future fut = p->blocksWorker->submitWork([&]{ p->db.txhash2txnumMgr->truncateForUndo(txNum0);});
+            //
+            // TODO: FIXME! This crashes due to the addition of `batch`. MAKE THIS WORK in a phased manner like insert?
+            CoTask::Future fut = p->blocksWorker->submitWork([&]{ p->db.txhash2txnumMgr->truncateForUndo(batch, txNum0);});
 
             // undo the scripthash histories
             for (const auto & sh : undo.scriptHashes) {
@@ -3973,7 +4060,7 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
 
             {
                 // UTXO set update
-                UTXOBatch utxoBatch{p->db.utxoset, p->db.shunspent};
+                UTXOBatch utxoBatch{batch, *p->db.utxoset, *p->db.shunspent};
 
                 // now, undo the utxo deletions by re-adding them
                 for (const auto & [txo, info] : undo.delUndos) {
@@ -3987,7 +4074,7 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
                     utxoBatch.remove(txo, hashx, ctxo); // may throw
                 }
 
-                issueUpdates(utxoBatch); // may throw, updates p->utxoCt and issues write to db.
+                issueUpdates(utxoBatch); // may throw, simply updates p->utxoCt; does not issue updates to DB
             }
 
             if (p->earliestUndoHeight >= undo.height)
@@ -4009,12 +4096,16 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
             // lastly, truncate the tx num file and re-set txNumNext to point to this block's txNum0 (thereby recycling it)
             assert(long(p->txNumNext) - long(txNum0) == long(undo.blkInfo.nTx));
             p->txNumNext = txNum0;
-            if (QString err; p->txNumsFile->truncate(txNum0, &err) != txNum0 || !err.isEmpty()) {
+            if (QString err; p->txNumsFile->truncate(txNum0, &err) != txNum0 || !err.isEmpty()) { // TODO: make ATOMIC with batch
                 throw InternalError(QString("Failed to truncate txNumsFile to %1: %2").arg(txNum0).arg(err));
             }
 
-            saveUtxoCt();
-            setDirty(false); // phew. done.
+            saveUtxoCt(batch);
+            setDirty(batch, false); // phew. done.
+
+            if (auto st = p->db->Write(p->db.defWriteOpts, &batch) ; !st.ok())
+                throw DatabaseError(QString("Batch write fail for undo of block height %1: %2")
+                                        .arg(tip).arg(StatusString(st)));
 
             nSH = undo.scriptHashes.size();
 
@@ -4048,11 +4139,11 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
 }
 
 
-void Storage::setDirty(bool dirtyFlag)
+void Storage::setDirty(rocksdb::WriteBatch &batch, bool dirtyFlag)
 {
     static const QString errPrefix("Error saving dirty flag to the meta db");
     const auto & val = dirtyFlag ? kTrue : kFalse;
-    GenericDBPut(p->db, p->db.meta, kDirty, val, errPrefix, p->db.defWriteOpts);
+    GenericBatchPut(batch, p->db.meta, kDirty, val, errPrefix);
 }
 
 bool Storage::isDirty() const
@@ -4097,7 +4188,7 @@ bool Storage::runRpaSlowCheckIfDBIsPotentiallyInconsistent(BlockHeight configure
         try {
             // To avoid infinite consistency-check-loops if there is a gap at the beginning before our configured height
             // we must clamp the DB to the height range we know we need now, before proceeding.
-            clampRpaEntries_nolock(configuredStartHeight, tipHeight);
+            clampRpaEntries_nolock(nullptr, configuredStartHeight, tipHeight);
             loadCheckRpaDB();
         } catch (const std::exception &e) { Fatal() << "Caught exception: " << e.what(); }
         return true;
@@ -4106,11 +4197,11 @@ bool Storage::runRpaSlowCheckIfDBIsPotentiallyInconsistent(BlockHeight configure
 }
 
 
-void Storage::saveUtxoCt()
+void Storage::saveUtxoCt(rocksdb::WriteBatch &batch)
 {
     static const QString errPrefix("Error writing the utxo count to the meta db");
     const int64_t ct = p->utxoCt.load();
-    GenericDBPut(p->db, p->db.meta, kUtxoCount, ct, errPrefix, p->db.defWriteOpts);
+    GenericBatchPut(batch, p->db.meta, kUtxoCount, ct, errPrefix);
 }
 int64_t Storage::readUtxoCtFromDB() const
 {
