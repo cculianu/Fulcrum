@@ -324,8 +324,15 @@ namespace {
         }
     };
 
+    /// Helper to get a column family name. `cf` may be nullptr
+    QString CFName(const rocksdb::ColumnFamilyHandle *cf) { return QString::fromStdString(cf ? cf->GetName() : std::string{"unk"}); }
+
     /// Helper to get db name (basename of path)
-    QString DBName(const rocksdb::DB *db) { return QFileInfo(QString::fromStdString(db->GetName())).baseName(); }
+    QString DBName(const rocksdb::DB *db, const rocksdb::ColumnFamilyHandle *cf = nullptr) {
+        const auto dbname = QFileInfo(QString::fromStdString(db ? db->GetName() : "???")).baseName();
+        if (!cf) return dbname;
+        return QString("%1 (cf: %2)").arg(dbname, CFName(cf));
+    }
     /// Helper to just get the status error string as a QString
     QString StatusString(const rocksdb::Status & status) { return QString::fromStdString(status.ToString()); }
 
@@ -339,24 +346,25 @@ namespace {
     /// DeserializeScalar<> fast function for scalars such as ints. It's important to read from the DB in the same
     /// 'safeScalar' mode as was written!
     template <typename RetType, bool safeScalar = false, typename KeyType>
-    std::optional<RetType> GenericDBGet(rocksdb::DB *db, const KeyType & keyIn, bool missingOk = false,
+    std::optional<RetType> GenericDBGet(rocksdb::DB *db, rocksdb::ColumnFamilyHandle *cf,
+                                        const KeyType & keyIn, bool missingOk = false,
                                         const QString & errorMsgPrefix = QString(),  ///< used to specify a custom error message in the thrown exception
                                         bool acceptExtraBytesAtEndOfData = false,
                                         const rocksdb::ReadOptions & ropts = rocksdb::ReadOptions()) ///< if true, we are ok with extra unparsed bytes in data. otherwise we throw. (this check is only done for !safeScalar mode on basic types)
     {
         rocksdb::PinnableSlice datum;
         std::optional<RetType> ret;
-        if (UNLIKELY(!db)) throw InternalError("GenericDBGet was passed a null pointer!");
-        const auto status = db->Get(ropts, db->DefaultColumnFamily(), ToSlice<safeScalar>(keyIn), &datum);
+        if (!db || !cf) [[unlikely]] throw InternalError("GenericDBGet was passed a null pointer!");
+        const auto status = db->Get(ropts, cf, ToSlice<safeScalar>(keyIn), &datum);
         if (status.IsNotFound()) {
             if (missingOk)
                 return ret; // optional will not has_value() to indicate missing key
             throw DatabaseKeyNotFound(QString("%1: %2")
-                                      .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : QString("Key not found in db %1").arg(DBName(db)))
+                                      .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : QString("Key not found in db %1").arg(DBName(db, cf)))
                                       .arg(StatusString(status)));
         } else if (!status.ok()) {
             throw DatabaseError(QString("%1: %2")
-                                .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : QString("Error reading a key from db %1").arg(DBName(db)))
+                                .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : QString("Error reading a key from db %1").arg(DBName(db, cf)))
                                 .arg(StatusString(status)));
         } else {
             // ok status
@@ -373,14 +381,14 @@ namespace {
                 if (!acceptExtraBytesAtEndOfData && datum.size() > sizeof(RetType)) {
                     // reject extra stuff at end of data stream
                     throw DatabaseFormatError(QString("%1: Extra bytes at the end of data")
-                                              .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : QString("Database format error in db %1").arg(DBName(db))));
+                                              .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : QString("Database format error in db %1").arg(DBName(db, cf))));
                 }
                 bool ok{};
                 ret.emplace( DeserializeScalar<RetType>(FromSlice(datum), &ok) );
                 if (!ok) {
                     throw DatabaseSerializationError(
                                 QString("%1: Key was retrieved ok, but data could not be deserialized as a scalar '%2'")
-                                .arg((!errorMsgPrefix.isEmpty() ? errorMsgPrefix : QString("Error deserializing a scalar from db %1").arg(DBName(db))),
+                                .arg((!errorMsgPrefix.isEmpty() ? errorMsgPrefix : QString("Error deserializing a scalar from db %1").arg(DBName(db, cf))),
                                      QString(typeid (RetType).name())));
                 }
             } else {
@@ -392,7 +400,7 @@ namespace {
                 if (!ok) {
                     throw DatabaseSerializationError(
                                 QString("%1: Key was retrieved ok, but data could not be deserialized")
-                                .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : QString("Error deserializing an object from db %1").arg(DBName(db))));
+                                .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : QString("Error deserializing an object from db %1").arg(DBName(db, cf))));
                 }
             }
         }
@@ -401,48 +409,49 @@ namespace {
 
     /// Conveneience for above with the missingOk flag set to false. Will always throw or return a real value.
     template <typename RetType, bool safeScalar = false, typename KeyType>
-    RetType GenericDBGetFailIfMissing(rocksdb::DB * db, const KeyType &k, const QString &errMsgPrefix = QString(), bool extraDataOk = false,
+    RetType GenericDBGetFailIfMissing(rocksdb::DB * db, rocksdb::ColumnFamilyHandle * cf,
+                                      const KeyType &k, const QString &errMsgPrefix = QString(), bool extraDataOk = false,
                                       const rocksdb::ReadOptions & ropts = rocksdb::ReadOptions())
     {
-        return GenericDBGet<RetType, safeScalar>(db, k, false, errMsgPrefix, extraDataOk, ropts).value();
+        return GenericDBGet<RetType, safeScalar>(db, cf, k, false, errMsgPrefix, extraDataOk, ropts).value();
     }
 
     /// Throws on all errors. Otherwise writes to db.
     template <bool safeScalar = false, typename KeyType, typename ValueType>
     void GenericDBPut
-                (rocksdb::DB *db, const KeyType & key, const ValueType & value,
+                (rocksdb::DB *db, rocksdb::ColumnFamilyHandle *cf, const KeyType & key, const ValueType & value,
                  const QString & errorMsgPrefix = QString(),  ///< used to specify a custom error message in the thrown exception
                  const rocksdb::WriteOptions & opts = rocksdb::WriteOptions())
     {
-        auto st = db->Put(opts, ToSlice<safeScalar>(key), ToSlice<safeScalar>(value));
+        auto st = db->Put(opts, cf, ToSlice<safeScalar>(key), ToSlice<safeScalar>(value));
         if (!st.ok())
-            throw DatabaseError(QString("%1: %2")
-                                .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : QString("Error writing to db %1").arg(DBName(db)))
-                                .arg(StatusString(st)));
+            throw DatabaseError(QString("%1: %2").arg(
+                                    (!errorMsgPrefix.isEmpty() ? errorMsgPrefix : QString("Error writing to db %1").arg(DBName(db, cf))),
+                                    StatusString(st)));
     }
     /// Throws on all errors. Otherwise enqueues a write to the batch.
     template <bool safeScalar = false, typename KeyType, typename ValueType>
     void GenericBatchPut
-                (rocksdb::WriteBatch & batch, const KeyType & key, const ValueType & value,
+                (rocksdb::WriteBatch & batch, rocksdb::ColumnFamilyHandle *cf, const KeyType & key, const ValueType & value,
                  const QString & errorMsgPrefix = QString())  ///< used to specify a custom error message in the thrown exception
     {
-        auto st = batch.Put(ToSlice<safeScalar>(key), ToSlice<safeScalar>(value));
+        auto st = batch.Put(cf, ToSlice<safeScalar>(key), ToSlice<safeScalar>(value));
         if (!st.ok())
-            throw DatabaseError(QString("%1: %2")
-                                .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : "Error from WriteBatch::Put")
-                                .arg(StatusString(st)));
+            throw DatabaseError(QString("%1 (cf: %3): %2")
+                                    .arg((!errorMsgPrefix.isEmpty() ? errorMsgPrefix : "Error from WriteBatch::Put"),
+                                         StatusString(st), CFName(cf)));
     }
     /// Throws on all errors. Otherwise enqueues a delete to the batch.
     template <bool safeScalar = false, typename KeyType>
     void GenericBatchDelete
-                (rocksdb::WriteBatch & batch, const KeyType & key,
+                (rocksdb::WriteBatch & batch, rocksdb::ColumnFamilyHandle *cf, const KeyType & key,
                  const QString & errorMsgPrefix = QString())  ///< used to specify a custom error message in the thrown exception
     {
-        auto st = batch.Delete(ToSlice<safeScalar>(key));
+        auto st = batch.Delete(cf, ToSlice<safeScalar>(key));
         if (!st.ok())
-            throw DatabaseError(QString("%1: %2")
-                                .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : "Error from WriteBatch::Delete")
-                                .arg(StatusString(st)));
+            throw DatabaseError(QString("%1 (cf: %3): %2")
+                                    .arg((!errorMsgPrefix.isEmpty() ? errorMsgPrefix : "Error from WriteBatch::Delete"),
+                                         StatusString(st), CFName(cf)));
     }
     /// A convenient wrapper to db->Write(batch...) which throws on all errors.
     void GenericBatchWrite(rocksdb::DB *db, rocksdb::WriteBatch & batch,
@@ -452,21 +461,23 @@ namespace {
         auto st = db->Write(opts, &batch);
         if (!st.ok())
             throw DatabaseError(QString("%1: %2")
-                                .arg((!errorMsgPrefix.isEmpty() ? errorMsgPrefix : QString("Error writing batch to db %1").arg(DBName(db))),
-                                     StatusString(st)));
+                                    .arg((!errorMsgPrefix.isEmpty() ? errorMsgPrefix
+                                                                    : QString("Error writing batch to db %1").arg(DBName(db, nullptr))),
+                                         StatusString(st)));
     }
     /// Throws on all errors. Otherwise deletes a key from db. It is not an error to delete a non-existing key.
     template <bool safeScalar = false, typename KeyType>
     void GenericDBDelete
-                (rocksdb::DB *db, const KeyType & key,
+                (rocksdb::DB *db, rocksdb::ColumnFamilyHandle *cf, const KeyType & key,
                  const QString & errorMsgPrefix = QString(),  ///< used to specify a custom error message in the thrown exception
                  const rocksdb::WriteOptions & opts = rocksdb::WriteOptions())
     {
-        auto st = db->Delete(opts, ToSlice<safeScalar>(key));
+        auto st = db->Delete(opts, cf, ToSlice<safeScalar>(key));
         if (!st.ok())
             throw DatabaseError(QString("%1: %2")
-                                .arg(!errorMsgPrefix.isEmpty() ? errorMsgPrefix : QString("Error deleting a key from db %1").arg(DBName(db)))
-                                .arg(StatusString(st)));
+                                    .arg((!errorMsgPrefix.isEmpty() ? errorMsgPrefix
+                                                                    : QString("Error deleting a key from db %1").arg(DBName(db, cf))),
+                                         StatusString(st)));
     }
 
     //// A helper data struct -- written to the blkinfo table. This helps localize a txnum to a specific position in
@@ -593,6 +604,7 @@ namespace {
     /// thread-safe and reentrant. It takes no locks itself.
     class TxHash2TxNumMgr {
         rocksdb::DB * const db;
+        rocksdb::ColumnFamilyHandle * const cf;
         const rocksdb::ReadOptions & rdOpts; // references into Storage::Pvt
         const rocksdb::WriteOptions & wrOpts;
         RecordFile * const rf;
@@ -606,13 +618,14 @@ namespace {
         enum KeyPos : uint8_t { Beginning=0, Middle=1, End=2, KP_Invalid=3 };
         const KeyPos keyPos;
 
-        TxHash2TxNumMgr(rocksdb::DB *db, const rocksdb::ReadOptions & rdOpts, const rocksdb::WriteOptions &wrOpts,
-                     RecordFile *txnum2txhash, size_t keyBytes /*= 6*/, KeyPos keyPos /*= End*/)
-            : db(db), rdOpts(rdOpts), wrOpts(wrOpts), rf(txnum2txhash), keyBytes(keyBytes), keyPos(keyPos)
+        TxHash2TxNumMgr(rocksdb::DB *db, rocksdb::ColumnFamilyHandle *cf,
+                        const rocksdb::ReadOptions & rdOpts, const rocksdb::WriteOptions &wrOpts,
+                        RecordFile *txnum2txhash, size_t keyBytes /*= 6*/, KeyPos keyPos /*= End*/)
+            : db(db), cf(cf), rdOpts(rdOpts), wrOpts(wrOpts), rf(txnum2txhash), keyBytes(keyBytes), keyPos(keyPos)
         {
-            if (!this->db || !rf || !this->keyBytes || this->keyBytes > HashLen || this->keyPos >= KP_Invalid)
+            if (!this->db || !this->cf || !rf || !this->keyBytes || this->keyBytes > HashLen || this->keyPos >= KP_Invalid)
                 throw BadArgs("Bad argumnets supplied to TxHash2TxNumMgr constructor");
-            mergeOp = db->GetOptions().merge_operator;
+            mergeOp = db->GetOptions(cf).merge_operator;
             if (!mergeOp || ! (concatOp = dynamic_cast<ConcatOperator *>(mergeOp.get())))
                 throw BadArgs("This db lacks a merge operator of type `ConcatOperator`");
             loadLargestTxNumSeen();
@@ -620,14 +633,14 @@ namespace {
         }
 
         std::unique_ptr<rocksdb::Iterator> newIterChecked() {
-            std::unique_ptr<rocksdb::Iterator> iter{db->NewIterator(rdOpts)};
+            std::unique_ptr<rocksdb::Iterator> iter{db->NewIterator(rdOpts, cf)};
             if (UNLIKELY(!iter)) throw DatabaseError("Unable to obtain an iterator to the txhash2txnum db"); // should never happen
             return iter;
         }
 
         size_t mergeCount() const { return concatOp->merges.load(); }
 
-        QString dbName() const { return QString::fromStdString(db->GetName()); }
+        QString dbName() const { return QString::fromStdString(cf->GetName()); }
 
         /// Returns the largest tx num we have ever inserted into the db, or -1 if no txnums were inserted
         int64_t maxTxNumSeenInDB() const { return largestTxNumSeen; }
@@ -640,7 +653,7 @@ namespace {
                 const VarInt val(blockTxNum0 + i);
                 // save by appending VarInt. Note that this uses the 'ConcatOperator' class we defined in this file,
                 // which requires rocksdb be compiled with RTTI.
-                if (auto st = batch.Merge(ToSlice(key), ToSlice(val.byteView())); !st.ok())
+                if (auto st = batch.Merge(cf, ToSlice(key), ToSlice(val.byteView())); !st.ok())
                     throw DatabaseError(QString("%1: batch merge fail for txHash %2: %3")
                                         .arg(dbName(), QString(txInfos[i].hash.toHex()), QString::fromStdString(st.ToString())));
             }
@@ -676,12 +689,14 @@ namespace {
             // first read all existing entries from the db -- we must delete the VarInts in their data blobs that
             // have TxNums > txNum
             std::vector<rocksdb::Slice> keySlices; keySlices.reserve(recs.size());
-            std::vector<std::string> dbValues;
+            std::vector<rocksdb::PinnableSlice> dbValues; dbValues.reserve(recs.size());
             for (size_t i = 0; i < recs.size(); ++i) {
                 const auto bv = makeKeyFromHash(recs[i]);
                 keySlices.emplace_back(bv.charData(), bv.size());
+                dbValues.emplace_back();
             }
-            std::vector<rocksdb::Status> statuses = db->MultiGet(rdOpts, keySlices, &dbValues);
+            std::vector<rocksdb::Status> statuses(keySlices.size());
+            db->MultiGet(rdOpts, cf, keySlices.size(), keySlices.data(), dbValues.data(), statuses.data());
             DebugM(__func__, ": MultiGet on ", statuses.size(), " key(s), elapsed: ", t0.msecStr(), " msec");
             if (statuses.size() != recs.size() || dbValues.size() != recs.size())
                 throw DatabaseError(dbName() + ": RocksDB MultiGet did not return the proper number of records");
@@ -720,7 +735,7 @@ namespace {
                 }
                 if (valBackToDb.empty()) {
                     // delete, key now has no VarInts
-                    if (auto st = batch.Delete(keySlices[i]); !st.ok()) {
+                    if (auto st = batch.Delete(cf, keySlices[i]); !st.ok()) {
                         if (lastWarnTime.secs() >= 1.0) {
                             lastWarnTime = Tic();
                             Warning() << __func__ << ": " << dbName() << " failed to delete a key from db: "
@@ -730,7 +745,7 @@ namespace {
                     ++dels;
                 } else {
                     // keep key, key has some VarInts left
-                    if (auto st = batch.Put(keySlices[i], valBackToDb); !st.ok())
+                    if (auto st = batch.Put(cf, keySlices[i], valBackToDb); !st.ok())
                         throw DatabaseError(dbName() + ": failed to write back a key to the db: " + QString::fromStdString(st.ToString()));
                 }
             }
@@ -753,7 +768,7 @@ namespace {
         std::optional<TxNum> find(const TxHash &txHash) const {
             std::optional<TxNum> ret;
             const auto key = makeKeyFromHash(txHash);
-            auto optBytes = GenericDBGet<QByteArray>(db, key, true, dbName(), true, rdOpts);
+            auto optBytes = GenericDBGet<QByteArray>(db, cf, key, true, dbName(), true, rdOpts);
             if (!optBytes) return ret; // missing
             auto span = Span<const char>{*optBytes};
             std::vector<uint64_t> txNums;
@@ -792,12 +807,16 @@ namespace {
             const Tic t0;
             ret.resize(hashes.size());
             std::vector<rocksdb::Slice> keySlices;
-            std::vector<std::string> dbResults;
+            std::vector<rocksdb::PinnableSlice> dbResults;
             keySlices.reserve(hashes.size());
+            dbResults.reserve(hashes.size());
             // build keys
-            for (const auto & hash : hashes)
+            for (const auto & hash : hashes) {
                 keySlices.push_back(ToSlice(makeKeyFromHash(hash))); // shallow view into bytes in hashes
-            auto statuses = db->MultiGet(rdOpts, keySlices, &dbResults); // this should be faster than single gets..?
+                dbResults.emplace_back();
+            }
+            std::vector<rocksdb::Status> statuses(keySlices.size());
+            db->MultiGet(rdOpts, cf, keySlices.size(), keySlices.data(), dbResults.data(), statuses.data()); // this should be faster than single gets..?
             //DebugM(__func__, ": MultiGet of ", keySlices.size(), " items took ", t0.msecStr(), " msec");
             if (statuses.size() != hashes.size() || dbResults.size() != hashes.size())
                 throw DatabaseError(dbName() + ": db returned an unexpected number of results"); // should never happen
@@ -871,16 +890,16 @@ namespace {
             return ret;
         }
         void loadLargestTxNumSeen() {
-            auto opt = GenericDBGet<int64_t>(db, makeLargestTxNumSeenKey(), true, QString{}, false, rdOpts);
+            auto opt = GenericDBGet<int64_t>(db, cf, makeLargestTxNumSeenKey(), true, QString{}, false, rdOpts);
             if (opt && *opt >= 0) largestTxNumSeen = *opt;
             else largestTxNumSeen = -1;
         }
         void saveLargestTxNumSeen() const {
             const auto key = makeLargestTxNumSeenKey();
             if (largestTxNumSeen > -1)
-                GenericDBPut(db, key, largestTxNumSeen, QString{}, wrOpts);
+                GenericDBPut(db, cf, key, largestTxNumSeen, QString{}, wrOpts);
             else
-                GenericDBDelete(db, key, QString{}, wrOpts);
+                GenericDBDelete(db, cf, key, QString{}, wrOpts);
         }
         // Deletes *all* keys from db! May throw.
         void deleteAllEntries() {
@@ -901,8 +920,8 @@ namespace {
             }
             rocksdb::FlushOptions fopts;
             fopts.wait = true; fopts.allow_write_stall = true;
-            if (auto st = db->DeleteRange(wrOpts, db->DefaultColumnFamily(), firstKey, endKey);
-                    !st.ok() || !(st = db->Flush(fopts)).ok())
+            if (auto st = db->DeleteRange(wrOpts, cf, firstKey, endKey);
+                    !st.ok() || !(st = db->Flush(fopts, cf)).ok())
                 throw DatabaseError(dbName() + ": failed to delete all keys: " + QString::fromStdString(st.ToString()));
             std::unique_ptr<rocksdb::Iterator> iter = newIterChecked();
             iter->SeekToFirst();
@@ -1011,7 +1030,7 @@ namespace {
             fakeInfos.clear();
             rocksdb::FlushOptions fopts;
             fopts.wait = true; fopts.allow_write_stall = true;
-            if (auto st = db->Flush(fopts); !st.ok())
+            if (auto st = db->Flush(fopts, cf); !st.ok())
                 Warning() << "DB Flush error: " << QString::fromStdString(st.ToString());
             Log() << "Indexed " << nrec << " txhash entries, elapsed: " << t0.secsStr(2) << " sec";
         }
@@ -1078,23 +1097,41 @@ struct Storage::Pvt
 
     std::atomic<std::underlying_type_t<SaveItem>> pendingSaves{0};
 
-    struct RocksDBs {
+    struct RocksDBHandlesEtc {
         const rocksdb::ReadOptions defReadOpts; ///< avoid creating this each time
         const rocksdb::WriteOptions defWriteOpts; ///< avoid creating this each time
 
-        rocksdb::Options opts, shistOpts, txhash2txnumOpts;
+        rocksdb::Options opts;
+        rocksdb::ColumnFamilyOptions shistOpts, txhash2txnumOpts;
         std::weak_ptr<rocksdb::Cache> blockCache; ///< shared across all dbs, caps total block cache size across all db instances
         std::weak_ptr<rocksdb::WriteBufferManager> writeBufferManager; ///< shared across all dbs, caps total memtable buffer size across all db instances
 
         std::shared_ptr<ConcatOperator> concatOperator, concatOperatorTxHash2TxNum;
 
-        std::unique_ptr<rocksdb::DB> meta, blkinfo, utxoset,
-                                     shist, shunspent, // scripthash_history and scripthash_unspent
-                                     undo, // undo (reorg rewind)
-                                     txhash2txnum, // new: index of txhash -> txNumsFile
-                                     rpa; // new: height -> Rpa::PrefixTable
-        using DBPtrRef = std::tuple<std::unique_ptr<rocksdb::DB> &>;
-        std::list<DBPtrRef> openDBs; ///< a bit of introspection to track which dbs are currently open (used by gentlyCloseAllDBs())
+        std::unique_ptr<rocksdb::DB> db; // the single database we open.
+        std::vector<rocksdb::ColumnFamilyHandle *> columnFamilies;
+
+        // These are all either nullptr or pointers for handles that are also contained in the above `columnFamilies` vector
+        rocksdb::ColumnFamilyHandle *meta{}, *blkinfo{}, *utxoset{},
+                                    *shist{}, *shunspent{}, // scripthash_history and scripthash_unspent
+                                    *undo{}, // undo (reorg rewind)
+                                    *txhash2txnum{}, // new: index of txhash -> txNumsFile
+                                    *rpa{}; // new: height -> Rpa::PrefixTable
+
+        using ColInfoTup = std::tuple<rocksdb::ColumnFamilyHandle *&, const rocksdb::ColumnFamilyOptions &, double>;
+        // Some introspection here.. these tuples point to some of the above members
+        const std::map<std::string, ColInfoTup> colFamsTable = {
+            { "meta", {meta, opts, 0.0005} },
+            { "blkinfo", {blkinfo , opts, 0.02} },
+            { "utxoset", {utxoset, opts, 0.25} },
+            { "scripthash_history", {shist, shistOpts, 0.30} },
+            { "scripthash_unspent", {shunspent, opts, 0.25} },
+            { "undo", {undo, opts, 0.0395} },
+            { "txhash2txnum", {txhash2txnum, txhash2txnumOpts, 0.1} },
+            // Future work: if on BTC or rpa disabled, give the rpa db's 0.04 back to scripthash_unspent and utxoset!!
+            { "rpa", {rpa, opts, 0.04} }, // this index appears to be < 1/2 the txhash2txnum one on average, so we give it less than half that mem ratio
+        };
+
 
         std::unique_ptr<TxHash2TxNumMgr> txhash2txnumMgr; ///< provides a bit of a higher-level interface into the db
 
@@ -1102,8 +1139,15 @@ struct Storage::Pvt
         /// It caches UTXOs in memory and delays UTXO writes to DB so we don't have to do so much back-and-forth to
         /// rocksdb.
         std::unique_ptr<UTXOCache> utxoCache;
+
+        rocksdb::DB *get() { return db.get(); }
+        const rocksdb::DB *get() const { return db.get(); }
+        operator rocksdb::DB *() { return get(); }
+        operator const rocksdb::DB *() const { return get(); }
+        rocksdb::DB * operator->() { return get(); }
+        const rocksdb::DB * operator->() const { return get(); }
     };
-    RocksDBs db;
+    RocksDBHandlesEtc db;
 
     std::unique_ptr<RecordFile> txNumsFile;
     std::unique_ptr<RecordFile> headersFile;
@@ -1313,14 +1357,14 @@ class Storage::UTXOCache
         }
     }
     static constexpr size_t batchSize = 100'000;  // to limit the memory used for batching, we limit the batch size
-    static void commitBatch(rocksdb::DB *db, rocksdb::WriteBatch &batch, const QString &errMsg,
-                            const rocksdb::WriteOptions &writeOpts, size_t &batchCount) {
+    void commitBatch(rocksdb::ColumnFamilyHandle *cf, rocksdb::WriteBatch &batch,
+                     const QString &errMsg, const rocksdb::WriteOptions &writeOpts, size_t &batchCount) {
         const Tic t;
-        GenericBatchWrite(db, batch, errMsg, writeOpts); // may throw
+        GenericBatchWrite(m_db, batch, errMsg, writeOpts); // may throw
         batch.Clear();
         if (t.msec<int>() >= 200) {
             const auto ct = batchCount;
-            DebugM("batch write of ", ct, " ", DBName(db), Util::Pluralize(" item", ct), " took ", t.msecStr(), " msec");
+            DebugM("batch write of ", ct, " ", CFName(cf), Util::Pluralize(" item", ct), " took ", t.msecStr(), " msec");
         }
         batchCount = 0u;
     }
@@ -1362,7 +1406,7 @@ class Storage::UTXOCache
         // do utxos in this thread since it's otherwise going to block anyway
         if ((doAdds && !adds.empty()) || !rms.empty()) {
             static const QString errMsgBatchWrite("Error issuing batch write to utxoset db for a utxo update");
-            if (!db) throw InternalError("utxoset db is nullptr! FIXME!");
+            if (!m_db || !cf_utxo) throw InternalError("utxoset db/colfam is nullptr! FIXME!");
             size_t batchCount = 0u;
             // rms first (loop in reverse to shrink vector as we loop)
             for (size_t i = rms.size(); i-- > 0u; /**/) {
@@ -1371,12 +1415,12 @@ class Storage::UTXOCache
                 // enqueue delete from utxoset db -- may throw.
                 static const QString errMsgPrefix("Failed to issue a batch delete for a utxo");
                 const auto & txo = rms[i];
-                GenericBatchDelete(batch, txo, errMsgPrefix); // may throw on failure
+                GenericBatchDelete(batch, cf_utxo, txo, errMsgPrefix); // may throw on failure
                 rms.resize(i);
                 --rmsSize;
                 ++rmCt;
                 if (++batchCount >= batchSize)
-                    commitBatch(db.get(), batch, errMsgBatchWrite, writeOpts, batchCount);
+                    commitBatch(cf_utxo, batch, errMsgBatchWrite, writeOpts, batchCount);
             }
 
             // next, adds
@@ -1392,13 +1436,13 @@ class Storage::UTXOCache
                             {
                                 static const QString errMsgPrefix("Failed to add a utxo to the utxo batch");
                                 const auto & [txo, info] = **it;
-                                GenericBatchPut(batch, txo, info, errMsgPrefix); // may throw on failure
+                                GenericBatchPut(batch, cf_utxo, txo, info, errMsgPrefix); // may throw on failure
                             }
                             it = adds.erase(it);
                             --addsSize;
                             ++addCt;
                             if (++batchCount >= batchSize)
-                                commitBatch(db.get(), batch, errMsgBatchWrite, writeOpts, batchCount);
+                                commitBatch(cf_utxo, batch, errMsgBatchWrite, writeOpts, batchCount);
                         }
                     }
                     order.clear(); order.shrink_to_fit();
@@ -1411,17 +1455,17 @@ class Storage::UTXOCache
                         {
                             static const QString errMsgPrefix("Failed to add a utxo to the utxo batch");
                             const auto & [txo, info] = **it;
-                            GenericBatchPut(batch, txo, info, errMsgPrefix); // may throw on failure
+                            GenericBatchPut(batch, cf_utxo, txo, info, errMsgPrefix); // may throw on failure
                         }
                         it = adds.erase(it);
                         --addsSize;
                         ++addCt;
                         if (++batchCount >= batchSize)
-                            commitBatch(db.get(), batch, errMsgBatchWrite, writeOpts, batchCount);
+                            commitBatch(cf_utxo, batch, errMsgBatchWrite, writeOpts, batchCount);
                     }
                 }
             }
-            if (batchCount) commitBatch(db.get(), batch, errMsgBatchWrite, writeOpts, batchCount);
+            if (batchCount) commitBatch(cf_utxo, batch, errMsgBatchWrite, writeOpts, batchCount);
         } else {
             if (optAddsOrder) { optAddsOrder->clear(); optAddsOrder->shrink_to_fit(); }
         }
@@ -1441,7 +1485,7 @@ class Storage::UTXOCache
         rocksdb::WriteBatch shunspentBatch;
 
         static const QString errMsgBatchWrite("Error issuing batch write to scripthash_unspent db for a shunspent update");
-        if (!shunspentdb) throw InternalError("scripthash_unspent db is nullptr! FIXME!");
+        if (!cf_shunspent || !m_db) throw InternalError("scripthash_unspent db/colfam is nullptr! FIXME!");
         size_t batchCount = 0u;
 
         // shunspentRms first (loop in reverse so we can shrink vector as we loop)
@@ -1451,12 +1495,12 @@ class Storage::UTXOCache
             const auto & dbKey = shunspentRms[i];
             // enqueue delete from scripthash_unspent db -- may throw.
             static const QString errMsgPrefix("Failed to issue a batch delete for a shunspent item");
-            GenericBatchDelete(shunspentBatch, dbKey, errMsgPrefix);
+            GenericBatchDelete(shunspentBatch, cf_shunspent, dbKey, errMsgPrefix);
             shunspentRms.resize(i);
             ++shunspentRmCt;
             if (shunspentRmsSize) --*shunspentRmsSize;
             if (++batchCount >= batchSize)
-                commitBatch(shunspentdb.get(), shunspentBatch, errMsgBatchWrite, writeOpts, batchCount);
+                commitBatch(cf_shunspent, shunspentBatch, errMsgBatchWrite, writeOpts, batchCount);
         }
 
         // next, shunspentAdds
@@ -1468,17 +1512,17 @@ class Storage::UTXOCache
                 {
                     static const QString errMsgPrefix("Failed to add an item to the shunspent batch");
                     const auto & [dbkey, dbvalue] = *it;
-                    GenericBatchPut(shunspentBatch, dbkey, dbvalue, errMsgPrefix); // may throw on failure
+                    GenericBatchPut(shunspentBatch, cf_shunspent, dbkey, dbvalue, errMsgPrefix); // may throw on failure
                 }
                 it = shunspentAdds.erase(it);
                 ++shunspentAddCt;
                 if (shunspentAddsSize) --*shunspentAddsSize;
                 if (++batchCount >= batchSize)
-                    commitBatch(shunspentdb.get(), shunspentBatch, errMsgBatchWrite, writeOpts, batchCount);
+                    commitBatch(cf_shunspent, shunspentBatch, errMsgBatchWrite, writeOpts, batchCount);
             }
         }
 
-        if (batchCount) commitBatch(shunspentdb.get(), shunspentBatch, errMsgBatchWrite, writeOpts, batchCount);
+        if (batchCount) commitBatch(cf_shunspent, shunspentBatch, errMsgBatchWrite, writeOpts, batchCount);
         if (t0.msec<int>() >= 50)
             DebugM(__func__, ": added ", shunspentAddCt, " and deleted ", shunspentRmCt,
                    Util::Pluralize(" shunspent", shunspentAddCt + shunspentRmCt), " in ", t0.msecStr(3), " msec");
@@ -1649,7 +1693,8 @@ class Storage::UTXOCache
     CoTask prefetcher, flusherShunspent;
     CoTask::Future prefetcherFut, flusherShunspentFut;
 
-    const std::unique_ptr<rocksdb::DB> & db, & shunspentdb;
+    rocksdb::DB * const m_db;
+    rocksdb::ColumnFamilyHandle * const cf_utxo, * const cf_shunspent;
     const rocksdb::ReadOptions & readOpts;
     const rocksdb::WriteOptions & writeOpts;
 
@@ -1700,8 +1745,7 @@ class Storage::UTXOCache
                     ++cacheHits;
             }
             if (keys.empty()) return; // nothing to do!
-            auto * const colfam = db->DefaultColumnFamily();
-            db->MultiGet(readOpts, colfam, keys.size(), keys.data(), values.data(), statuses.data());
+            m_db->MultiGet(readOpts, cf_utxo, keys.size(), keys.data(), values.data(), statuses.data());
             for (size_t index = 0, nIndices = statuses.size(); index < nIndices; ++index) {
                 const auto & s = statuses[index];
                 TXO & txo = txos[index];
@@ -1715,19 +1759,19 @@ class Storage::UTXOCache
                         ++num_ok;
                     }
                 } else {
-                    throw DatabaseError(QString("%1: Error reading TXO \"%2\" from %3 db: %4")
-                                        .arg(name, txo.toString(), DBName(db.get()), StatusString(s)));
+                    throw DatabaseError(QString("%1: Error reading TXO \"%2\" from colfam %3: %4")
+                                        .arg(name, txo.toString(), CFName(cf_utxo), StatusString(s)));
                 }
             }
         });
     }
 
 public:
-    UTXOCache(const QString &name, const std::unique_ptr<rocksdb::DB> & pdb,
-              const std::unique_ptr<rocksdb::DB> & pshunspentdb, const rocksdb::ReadOptions & readOpts,
+    UTXOCache(const QString &name, rocksdb::DB *pdb, rocksdb::ColumnFamilyHandle *putxocf,
+              rocksdb::ColumnFamilyHandle *pshunspentcf, const rocksdb::ReadOptions & readOpts,
               const rocksdb::WriteOptions & writeOpts)
         : name{name}, prefetcher{name + ".Prefetcher"}, flusherShunspent{name + ".ShunspentFlusher"},
-          db{pdb}, shunspentdb{pshunspentdb}, readOpts{readOpts}, writeOpts{writeOpts} {
+          m_db{pdb}, cf_utxo{putxocf}, cf_shunspent{pshunspentcf}, readOpts{readOpts}, writeOpts{writeOpts} {
         DebugM(name, ": created");
     }
 
@@ -1880,11 +1924,12 @@ void Storage::startup()
         p->merkleCache = std::make_unique<Merkle::Cache>(std::bind(&Storage::merkleCacheHelperFunc, this, _1, _2, _3));
     }
 
-    {   // open all db's ...
+    {   // open DB and all column families ...
         p->db.utxoCache.reset(); // this should already be nullptr, but this reset() is just here to be defensive.
 
         // Optimize RocksDB. This is the easiest way to get RocksDB to perform well
-        rocksdb::Options & opts(p->db.opts), &shistOpts(p->db.shistOpts), &txhash2txnumOpts(p->db.txhash2txnumOpts);
+        rocksdb::Options & opts(p->db.opts);
+        rocksdb::ColumnFamilyOptions &shistOpts(p->db.shistOpts), &txhash2txnumOpts(p->db.txhash2txnumOpts);
         opts.IncreaseParallelism(int(Util::getNPhysicalProcessors()));
         opts.OptimizeLevelStyleCompaction();
 
@@ -1918,19 +1963,108 @@ void Storage::startup()
         txhash2txnumOpts = opts;
         txhash2txnumOpts.merge_operator = p->db.concatOperatorTxHash2TxNum = std::make_shared<ConcatOperator>();
 
+        const auto &colFamsTable = p->db.colFamsTable;
+        auto colFamsNeeded = colFamsTable;
 
-        using DBInfoTup = std::tuple<QString, std::unique_ptr<rocksdb::DB> &, const rocksdb::Options &, double>;
-        const std::list<DBInfoTup> dbs2open = {
-            { "meta", p->db.meta, opts, 0.0005 },
-            { "blkinfo" , p->db.blkinfo , opts, 0.02 },
-            { "utxoset", p->db.utxoset, opts, 0.25 },
-            { "scripthash_history", p->db.shist, shistOpts, 0.30 },
-            { "scripthash_unspent", p->db.shunspent, opts, 0.25 },
-            { "undo", p->db.undo, opts, 0.0395 },
-            { "txhash2txnum", p->db.txhash2txnum, txhash2txnumOpts, 0.1 },
-            // Future work: if on BTC or rpa disabled, give the rpa db's 0.04 back to scripthash_unspent and utxoset!!
-            { "rpa", p->db.rpa, opts, 0.04 }, // this index appears to be < 1/2 the txhash2txnum one on average, so we give it less than half that mem ratio
-        };
+        // First, open the DB, and then determine which column families it has, and open them all.
+        {
+            const QString mainDBName = "db_main";
+            const QString path = options->datadir + QDir::separator() + mainDBName;
+            rocksdb::Status s;
+
+            std::vector<rocksdb::ColumnFamilyDescriptor> colFamDescs;
+            {
+                std::vector<std::string> haveColFams;
+                s = rocksdb::DB::ListColumnFamilies(opts, path.toStdString(), &haveColFams);
+                if (s.ok()) {
+                    colFamDescs.reserve(haveColFams.size());
+                    for (const auto &colName : haveColFams) {
+                        QString extra;
+                        // determine option for this column family
+                        std::optional<rocksdb::ColumnFamilyOptions> optOptions;
+                        if (auto it = colFamsNeeded.find(colName); it != colFamsNeeded.end()) {
+                            optOptions = std::move(std::get<1>(it->second));
+                            // mark db cols that the db has that we want as "no longer needed"
+                            colFamsNeeded.erase(it);
+                        } else if (colName == rocksdb::kDefaultColumnFamilyName) {
+                            extra = " (ignored)";
+                        } else {
+                            extra = " (UNKNOWN)";
+                        }
+                        Debug() << "Found DB column family '" << QString::fromStdString(colName) << "'" << extra;
+                        colFamDescs.emplace_back(colName, optOptions.value_or(opts));
+                    }
+                } else {
+                    QString sstr;
+                    if (s.IsIOError() && !QFileInfo::exists(path))
+                        sstr = " (new db)";
+                    else
+                        sstr = ": " + StatusString(s);
+                    Debug() << "Failed to list column families for DB '" << mainDBName << "'" << sstr;
+                    // Might as well specify that we want to open the "default" column family here
+                    colFamDescs.emplace_back(rocksdb::kDefaultColumnFamilyName, opts);
+                }
+            }
+
+            rocksdb::DB *db = nullptr;
+            s = rocksdb::DB::Open(opts, path.toStdString(), colFamDescs, &p->db.columnFamilies, &db);
+            p->db.db.reset(db);
+            if (!s.ok() || !db)
+                throw DatabaseError(QString("Error opening %1 database: %2 (path: %3)")
+                                        .arg(mainDBName, StatusString(s), path));
+        }
+
+        rocksdb::DB * const db = p->db;
+        assert(db != nullptr);
+
+        // Next, for all the colFamsNeeded that weren't in the DB already (new DB, etc), create them!
+        {
+            std::vector<rocksdb::ColumnFamilyDescriptor> colFamDescs;
+            for (const auto & [name, tup] : colFamsNeeded) {
+                colFamDescs.emplace_back(name, std::get<1>(tup));
+            }
+            if (!colFamDescs.empty()) {
+                std::vector<rocksdb::ColumnFamilyHandle *> handles;
+                auto s = db->CreateColumnFamilies(colFamDescs, &handles);
+                // "save" the successfully opened handles so we can close them later even on erro
+                for (auto *h : handles) {
+                    p->db.columnFamilies.push_back(h);
+                    colFamsNeeded.erase(h->GetName());
+                }
+                // error out if there was a problem
+                if (!s.ok()) {
+                    throw DatabaseError(QString("Error opening %1 column families: %2").arg(quint64(colFamDescs.size()))
+                                            .arg(StatusString(s)));
+                }
+            }
+        }
+
+        // Lastly, assign the ColumnFamilyHandle pointers ...
+        for (rocksdb::ColumnFamilyHandle *h : p->db.columnFamilies) {
+            const auto &name = h->GetName();
+            if (auto it = colFamsTable.find(name); it != colFamsTable.end()) [[likely]] {
+                // assign ptr; this modifies members: p.db.meta, p.db.blkinfo, etc..
+                std::get<0>(it->second) = h;
+            } else if (name != rocksdb::kDefaultColumnFamilyName) [[unlikely]] {
+                throw DatabaseError(QString("Encountered an unknown column family in DB: %1"
+                                            " -- incompatible or newer than expected database, perhaps?")
+                                        .arg(QString::fromStdString(name)));
+            }
+        }
+
+        if (!colFamsNeeded.empty()) [[unlikely]] {
+            QStringList names;
+            for (const auto & [name, _] : colFamsNeeded) names.append(QString::fromStdString(name));
+            throw InternalError("Missing column families: " + names.join(", "));
+        }
+
+        if (!p->db.blkinfo || !p->db.meta || !p->db.rpa || !p->db.shist || !p->db.shunspent || !p->db.txhash2txnum
+            || !p->db.utxoset || !p->db.undo) [[unlikely]]
+            throw InternalError("A required column family handle is still nullptr! FIXME!");
+
+
+        // TODO: similar stuff to below for setting mem limits
+#if 0
         std::size_t memTotal = 0;
         const auto OpenDB = [this, &memTotal](const DBInfoTup &tup) {
             auto & [name, uptr, opts_in, memFactor] = tup;
@@ -1963,13 +2097,13 @@ void Storage::startup()
             OpenDB(tup);
 
         Log() << "DB memory: " << QString::number(memTotal / 1024. / 1024., 'f', 2) << " MiB";
+#endif
     }  // /open db's
-
     // load/check meta
     {
         const QString errMsg1{"Incompatible database format -- delete the datadir and resynch."};
         const QString errMsg2{errMsg1 + " RocksDB error"};
-        if (const auto opt = GenericDBGet<Meta>(p->db.meta.get(), kMeta, true, errMsg2);
+        if (const auto opt = GenericDBGet<Meta>(p->db, p->db.meta, kMeta, true, errMsg2);
                 opt.has_value())
         {
             const Meta &m_db = *opt;
@@ -2076,54 +2210,70 @@ void Storage::compactAllDBs()
 {
     if (!options->compactDBs)
         return;
+    auto *db = p->db.get();
+    if (!db) return;
     size_t ctr = 0;
     App *ourApp = app();
     Tic t0;
-    Log() << "Compacting DBs, please wait ...";
-    for (const auto & [db] : p->db.openDBs) {
+    Log() << "Compacting DB column families, please wait ...";
+    for (const auto &cf : p->db.columnFamilies) {
         if (ourApp->signalsCaught())
             break;
-        if (!db) continue;
-        const auto name = DBName(db.get());
+        if (!cf) continue;
+        const auto name = CFName(cf);
         Log() << "Compacting " << name << " ...";
         rocksdb::CompactRangeOptions opts;
         opts.allow_write_stall = true;
         opts.exclusive_manual_compaction = true;
         opts.change_level = true;
-        auto s = db->CompactRange(opts, nullptr, nullptr);
+        auto s = db->CompactRange(opts, cf, nullptr, nullptr);
         if (!s.ok()) {
-            throw DatabaseError(QString("Error compacting %1 database: %2")
+            throw DatabaseError(QString("Error compacting column family %1: %2")
                                 .arg(name, StatusString(s)));
         }
         ++ctr;
     }
-    Log() << "Compacted " << ctr << " databases in " << t0.secsStr(1) << " seconds";
+    Log() << "Compacted " << ctr << " column families in " << t0.secsStr(1) << " seconds";
 }
 
-void Storage::gentlyCloseAllDBs()
+void Storage::gentlyCloseDB()
 {
     p->db.utxoCache.reset(); // if was valid, implicitly flushes UTXO Cache pending writes to DB...
 
-    // do FlushWAL() and Close() to gently close the dbs
-    for (auto & [db] : p->db.openDBs) {
-        if (!db) continue;
-        const auto name = DBName(db.get());
-        Debug() << "Flushing and closing " << name << " ...";
+    // do Flush of each column family, and close the handles
+    auto *db = p->db.get();
+    if (!db) return;
+    for (auto & cf : p->db.columnFamilies) {
+        if (!cf) continue;
+        const auto name = CFName(cf);
+        Debug() << "Flushing column family: " << name << " ...";
         rocksdb::Status status;
         rocksdb::FlushOptions fopts;
         fopts.wait = true; fopts.allow_write_stall = true;
-        status = db->Flush(fopts);
+        status = db->Flush(fopts, cf);
         if (!status.ok())
             Warning() << "Flush of " << name << ": " << QString::fromStdString(status.ToString());
-        status = db->FlushWAL(true);
+        status = db->DestroyColumnFamilyHandle(cf);
         if (!status.ok())
-            Warning() << "FlushWAL of " << name << ": " << QString::fromStdString(status.ToString());
-        status = db->Close();
-        if (!status.ok())
-            Warning() << "Close of " << name << ": " << QString::fromStdString(status.ToString());
-        db.reset();
+            Warning() << "Release of " << name << ": " << QString::fromStdString(status.ToString());
+        cf = nullptr;
     }
-    p->db.openDBs.clear();
+    p->db.columnFamilies.clear();
+    // Clear members (they were all pointers owned by the p->db.columnFamilies array)
+    p->db.blkinfo = p->db.meta = p->db.shist = p->db.shunspent = p->db.rpa = p->db.txhash2txnum = p->db.undo = p->db.utxoset = nullptr;
+
+    // do FlushWAL() and Close() to gently close the DB
+    auto name = DBName(p->db);
+    Debug() << "Flushing DB: " << name << " ...";
+    auto status = db->FlushWAL(true);
+    if (!status.ok())
+        Warning() << "FlushWAL of " << name << ": " << QString::fromStdString(status.ToString());
+    Debug() << "Closing DB: " << name << " ...";
+    status = db->Close();
+    if (!status.ok())
+        Warning() << "Close of " << name << ": " << QString::fromStdString(status.ToString());
+    // delete db
+    p->db.db.reset(db = nullptr);
 }
 
 void Storage::cleanup()
@@ -2133,7 +2283,7 @@ void Storage::cleanup()
     if (txsubsmgr) txsubsmgr->cleanup();
     if (dspsubsmgr) dspsubsmgr->cleanup();
     if (subsmgr) subsmgr->cleanup();
-    gentlyCloseAllDBs();
+    gentlyCloseDB();
     // TODO: unsaved/"dirty state" detection here -- and forced save, if needed.
 }
 
@@ -2174,6 +2324,7 @@ auto Storage::stats() const -> Stats
         caches["merkleHeaders_SizeBytes"] = qulonglong(bytes);
     }
     ret["caches"] = caches;
+#if 0 // TODO FIXME XXX
     {
         // db stats
         QVariantMap m;
@@ -2245,6 +2396,7 @@ auto Storage::stats() const -> Stats
             ret["RPA Index Info"] = rm;
         }
     }
+#endif
     return ret;
 }
 
@@ -2379,7 +2531,7 @@ void Storage::save_impl(SaveSpec override)
 void Storage::saveMeta_impl()
 {
     if (!p->db.meta) return;
-    if (auto status = p->db.meta->Put(p->db.defWriteOpts, kMeta, ToSlice(Serialize(p->meta))); !status.ok()) {
+    if (auto status = p->db->Put(p->db.defWriteOpts, p->db.meta, kMeta, ToSlice(Serialize(p->meta))); !status.ok()) {
         throw DatabaseError("Failed to write meta to db");
     }
 
@@ -2520,7 +2672,7 @@ void Storage::loadCheckTxNumsFileAndBlkInfo()
         Log() << "Checking tx counts ...";
         for (int i = 0; i <= height; ++i) {
             static const QString errMsg("Failed to read a blkInfo from db, the database may be corrupted");
-            const auto blkInfo = GenericDBGetFailIfMissing<BlkInfo>(p->db.blkinfo.get(), uint32_t(i), errMsg, false, p->db.defReadOpts);
+            const auto blkInfo = GenericDBGetFailIfMissing<BlkInfo>(p->db, p->db.blkinfo, uint32_t(i), errMsg, false, p->db.defReadOpts);
             if (blkInfo.txNum0 != ct)
                 throw DatabaseFormatError(QString("BlkInfo for height %1 does not match computed txNum of %2."
                                                   "\n\nThe database may be corrupted. Delete the datadir and resynch it.\n")
@@ -2542,7 +2694,7 @@ void Storage::loadCheckTxNumsFileAndBlkInfo()
 void Storage::loadCheckTxHash2TxNumMgr()
 {
     // the below may throw
-    p->db.txhash2txnumMgr = std::make_unique<TxHash2TxNumMgr>(p->db.txhash2txnum.get(), p->db.defReadOpts, p->db.defWriteOpts,
+    p->db.txhash2txnumMgr = std::make_unique<TxHash2TxNumMgr>(p->db.get(), p->db.txhash2txnum, p->db.defReadOpts, p->db.defWriteOpts,
                                                               p->txNumsFile.get(), 6, TxHash2TxNumMgr::KeyPos::End);
     try {
         // basic sanity checks -- ensure we can read the first, middle, and last hash in the txNumsFile,
@@ -2556,7 +2708,7 @@ void Storage::loadCheckTxHash2TxNumMgr()
             }
         } else {
             // sanity check on empty db: if no records, db should also have no rows
-            std::unique_ptr<rocksdb::Iterator> it(p->db.txhash2txnum->NewIterator(p->db.defReadOpts));
+            std::unique_ptr<rocksdb::Iterator> it(p->db->NewIterator(p->db.defReadOpts, p->db.txhash2txnum));
             if (!it) throw DatabaseError("Unable to obtain an iterator to the txhash2txnum set db");
             for (it->SeekToFirst(); it->Valid(); it->Next()) {
                 throw DatabaseFormatError(QString("Failed invariant: empty txNum file should mean empty db; ") + errMsg);
@@ -2616,7 +2768,7 @@ void Storage::loadCheckUTXOsInDB()
                     continue;
                 const TxNum txNum = p->blkInfos[height].txNum0;
                 const CompactTXO ctxo(txNum, txo.outN);
-                auto opt = GenericDBGet<QByteArray>(p->db.shunspent.get(), mkShunspentKey(hashx, ctxo), true, "", false, p->db.defReadOpts);
+                auto opt = GenericDBGet<QByteArray>(p->db, p->db.shunspent, mkShunspentKey(hashx, ctxo), true, "", false, p->db.defReadOpts);
                 if (opt.has_value()) {
                     if (seenExceptions.insert(txo).second)
                         Debug() << "Seen exception: " << txo.toString() << ", height: " << height;
@@ -2628,7 +2780,7 @@ void Storage::loadCheckUTXOsInDB()
         {
             const qint64 currentHeight = latestTip().first;
 
-            std::unique_ptr<rocksdb::Iterator> iter(p->db.utxoset->NewIterator(p->db.defReadOpts));
+            std::unique_ptr<rocksdb::Iterator> iter(p->db->NewIterator(p->db.defReadOpts, p->db.utxoset));
             if (!iter) throw DatabaseError("Unable to obtain an iterator to the utxo set db");
             p->utxoCt = 0;
             for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
@@ -2663,7 +2815,7 @@ void Storage::loadCheckUTXOsInDB()
                 if (bool fail1 = false, fail2 = false, fail3 = false, fail4 = false, fail5 = false;
                         (fail1 = (!info.confirmedHeight.has_value() || qint64(*info.confirmedHeight) > currentHeight))
                         || (fail2 = info.txNum >= p->txNumNext)
-                        || (fail3 = (tmpBa = GenericDBGet<QByteArray>(p->db.shunspent.get(), shuKey, true, errPrefix, false, p->db.defReadOpts).value_or("")).isEmpty())
+                        || (fail3 = (tmpBa = GenericDBGet<QByteArray>(p->db, p->db.shunspent, shuKey, true, errPrefix, false, p->db.defReadOpts).value_or("")).isEmpty())
                         || (fail4 = (!(shval = Deserialize<SHUnspentValue>(tmpBa)).valid || info.amount != shval.amount))
                         || (fail5 = (info.tokenDataPtr != shval.tokenDataPtr))) {
                     // TODO: reorg? Inconsisent db?  FIXME
@@ -2728,7 +2880,7 @@ void Storage::loadCheckShunspentInDB()
 
     const Tic t0;
 
-    std::unique_ptr<rocksdb::Iterator> iter(p->db.shunspent->NewIterator(p->db.defReadOpts));
+    std::unique_ptr<rocksdb::Iterator> iter(p->db->NewIterator(p->db.defReadOpts, p->db.shunspent));
     if (!iter) throw DatabaseError("Unable to obtain an iterator to the scripthash unspent db");
 
     // Note: Before the BIP that imposed uniqueness on coinbase tx's,
@@ -2767,7 +2919,7 @@ void Storage::loadCheckShunspentInDB()
         const TxHash txHash = hashForTxNum(ctxo.txNum(), true, nullptr, true).value_or(QByteArray()); // throws if missing
         const TXO txo{txHash, ctxo.N()};
         // look for this in the UTXO db
-        const auto optInfo = GenericDBGet<TXOInfo>(p->db.utxoset.get(), ToSlice(Serialize(txo)), true, "", false, p->db.defReadOpts);
+        const auto optInfo = GenericDBGet<TXOInfo>(p->db, p->db.utxoset, ToSlice(Serialize(txo)), true, "", false, p->db.defReadOpts);
         if (!optInfo) {
             // we permit the buggy utxos above to be off -- those are due to collisions in historical blockchain
             if (!exceptionsDueToBitcoinBugs.count(txo))
@@ -2829,7 +2981,7 @@ void Storage::loadCheckRpaDB()
         firstHeight = lastHeight = -1;
         int forceDeleteAfterHeight = -1; // if >=0, force a delete after this height
 
-        std::unique_ptr<rocksdb::Iterator> iter(p->db.rpa->NewIterator(p->db.defReadOpts));
+        std::unique_ptr<rocksdb::Iterator> iter(p->db->NewIterator(p->db.defReadOpts, p->db.rpa));
         if (!iter) throw DatabaseError("Unable to obtain an iterator to the rpa db");
         auto ThrowIfNegativeIfCastedToSigned = [](uint32_t height) {
               if (height > uint32_t(std::numeric_limits<int>::max()))
@@ -2943,8 +3095,7 @@ bool Storage::deleteRpaEntriesFromHeight(const BlockHeight height, bool flush, b
     QByteArray endKey = RpaDBKey(u32max).toBytes();
     endKey.append('\0'); // ensue covers entire remaining uint32 range by appending a single '0' byte to make this endkey longer than the last uint32 possible.
 
-    auto status = p->db.rpa->DeleteRange(p->db.defWriteOpts, p->db.rpa->DefaultColumnFamily(),
-                                         ToSlice(RpaDBKey(height)), ToSlice(endKey));
+    auto status = p->db->DeleteRange(p->db.defWriteOpts, p->db.rpa, ToSlice(RpaDBKey(height)), ToSlice(endKey));
 
     if (!status.ok()) {
         Warning() << __func__ << ": failed in call to db DeleteRange for height (>= " << height << "): "
@@ -2962,7 +3113,7 @@ bool Storage::deleteRpaEntriesFromHeight(const BlockHeight height, bool flush, b
         rocksdb::FlushOptions f;
         f.wait = true;
         f.allow_write_stall = true;
-        p->db.rpa->Flush(f);
+        p->db->Flush(f, p->db.rpa);
     }
     return true;
 }
@@ -2973,8 +3124,7 @@ bool Storage::deleteRpaEntriesToHeight(const BlockHeight height, bool flush, boo
     if (height > unsigned(std::numeric_limits<int>::max())) throw InternalError(QString("Bad argument to ") + __func__);
     QByteArray endKey = RpaDBKey(height).toBytes();
 
-    auto status = p->db.rpa->DeleteRange(p->db.defWriteOpts, p->db.rpa->DefaultColumnFamily(),
-                                         ToSlice(RpaDBKey(0u)), ToSlice(RpaDBKey(height + 1u)));
+    auto status = p->db->DeleteRange(p->db.defWriteOpts, p->db.rpa, ToSlice(RpaDBKey(0u)), ToSlice(RpaDBKey(height + 1u)));
 
     if (!status.ok()) {
         Warning() << __func__ << ": failed in call to db DeleteRange for height (<= " << height << "): "
@@ -2992,7 +3142,7 @@ bool Storage::deleteRpaEntriesToHeight(const BlockHeight height, bool flush, boo
         rocksdb::FlushOptions f;
         f.wait = true;
         f.allow_write_stall = true;
-        p->db.rpa->Flush(f);
+        p->db->Flush(f, p->db.rpa);
     }
     return true;
 }
@@ -3012,14 +3162,14 @@ void Storage::clampRpaEntries_nolock(BlockHeight from, BlockHeight to)
 
 void Storage::loadCheckEarliestUndo()
 {
-    FatalAssert(!!p->db.undo,  __func__, ": Undo db is not open");
+    FatalAssert(p->db.undo && p->db,  __func__, ": Undo column family is not open");
 
     const Tic t0;
     unsigned ctr = 0;
     using UIntSet = std::set<uint32_t>;
     UIntSet swissCheeseDetector;
     {
-        std::unique_ptr<rocksdb::Iterator> iter(p->db.undo->NewIterator(p->db.defReadOpts));
+        std::unique_ptr<rocksdb::Iterator> iter(p->db->NewIterator(p->db.defReadOpts, p->db.undo));
         if (!iter) throw DatabaseError("Unable to obtain an iterator to the undo db");
         for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
             const auto keySlice = iter->key();
@@ -3054,7 +3204,7 @@ void Storage::loadCheckEarliestUndo()
         // delete everything up until the first contiguous height we saw
         int delctr = 0;
         for (auto it = swissCheeseDetector.begin(); it != eraseUntil; ++delctr) {
-            GenericDBDelete(p->db.undo.get(), uint32_t(*it));
+            GenericDBDelete(p->db, p->db.undo, uint32_t(*it));
             it = swissCheeseDetector.erase(it);
         }
         p->earliestUndoHeight = !swissCheeseDetector.empty() ? *swissCheeseDetector.begin() : p->InvalidUndoHeight;
@@ -3075,7 +3225,7 @@ void Storage::loadCheckEarliestUndo()
     if (!swissCheeseDetector.empty()) {
         const uint32_t height = *swissCheeseDetector.rbegin();
         const QString errMsg(QString("Unable to read undo data for height %1").arg(height));
-        const UndoInfo undoInfo = GenericDBGetFailIfMissing<UndoInfo>(p->db.undo.get(), height, errMsg);
+        const UndoInfo undoInfo = GenericDBGetFailIfMissing<UndoInfo>(p->db, p->db.undo, height, errMsg);
         if (!undoInfo.isValid()) throw DatabaseFormatError(errMsg);
         Debug() << "Latest undo verified ok: " << undoInfo.toDebugString();
     }
@@ -3091,7 +3241,7 @@ void Storage::loadCheckEarliestUndo()
                   << "deleting " << n2del << Util::Pluralize(" oldest entry", n2del) << " ...";
         const Tic t1;
         for (unsigned i = 0; i < n2del; ++i)
-            GenericDBDelete(p->db.undo.get(), uint32_t(p->earliestUndoHeight++));
+            GenericDBDelete(p->db, p->db.undo, uint32_t(p->earliestUndoHeight++));
         Warning() << n2del << Util::Pluralize(" undo entry", n2del) << " deleted from db in " << t1.msecStr() << " msec";
     }
 }
@@ -3101,26 +3251,31 @@ bool Storage::hasUndo() const {
 }
 
 struct Storage::UTXOBatch::P {
-    rocksdb::WriteBatch utxosetBatch; ///< batch writes/deletes end up in the utxoset db (keyed off TXO)
-    rocksdb::WriteBatch shunspentBatch; ///< batch writes/deletes end up in the shunspent db (keyed off HashX+CompactTXO)
+    rocksdb::ColumnFamilyHandle *utxoset{}, *shunspent{};
+    rocksdb::WriteBatch batch; ///< batch writes/deletes end up in the utxoset and shunspent column families
     int addCt = 0, rmCt = 0;
     bool defunct = false;
     UTXOCache *cache{}; ///< if not nullptr, there is a UTXOCache active and we should give it the batch writes.
 };
 
-Storage::UTXOBatch::UTXOBatch(UTXOCache *cache) : p(new P) { p->cache = cache; }
+Storage::UTXOBatch::UTXOBatch(rocksdb::ColumnFamilyHandle *u, rocksdb::ColumnFamilyHandle *s, UTXOCache *cache)
+    : p(new P) {
+    p->utxoset = u;
+    p->shunspent = s;
+    if (!p->utxoset || !p->shunspent) [[unlikely]]
+        throw InternalError("Required argument to UTXOBatch is nullptr! FIXME!");
+    p->cache = cache;
+}
 Storage::UTXOBatch::UTXOBatch(UTXOBatch &&o) { p.swap(o.p); }
 
 void Storage::issueUpdates(UTXOBatch &b)
 {
-    static const QString errMsg1("Error issuing batch write to utxoset db for a utxo update"),
-                         errMsg2("Error issuing batch write to scripthash_unspent db for a utxo update");
+    static const QString errMsg("Error issuing batch write to db for a utxo or scripthash_unspent update");
     if (UNLIKELY(b.p->defunct))
         throw InternalError("Misuse of Storage::issueUpdates. Cannot issue the same updates using the same context more than once. FIXME!");
     assert(bool(p->db.utxoset) && bool(p->db.shunspent));
     if (!b.p->cache) {
-        GenericBatchWrite(p->db.utxoset.get(), b.p->utxosetBatch, errMsg1, p->db.defWriteOpts); // may throw
-        GenericBatchWrite(p->db.shunspent.get(), b.p->shunspentBatch, errMsg2, p->db.defWriteOpts); // may throw
+        GenericBatchWrite(p->db, b.p->batch, errMsg, p->db.defWriteOpts); // may throw
     }
     p->utxoCt += b.p->addCt - b.p->rmCt; // tally up adds and deletes
     b.p->defunct = true;
@@ -3141,7 +3296,7 @@ void Storage::setInitialSync(bool b) {
                 bytes = limit;
             }
             Log() << "utxo-cache: Enabled; UTXO cache size set to " << bytes << " bytes (available physical RAM: " << limit << " bytes)";
-            p->db.utxoCache.reset(new UTXOCache("Storage UTXO Cache", p->db.utxoset, p->db.shunspent, p->db.defReadOpts, p->db.defWriteOpts));
+            p->db.utxoCache = std::make_unique<UTXOCache>("Storage UTXO Cache", p->db.get(), p->db.utxoset, p->db.shunspent, p->db.defReadOpts, p->db.defWriteOpts);
             // Reserve about 3.6 million entries per GB of utxoCache memory given to us
             // We need to do this, despite the extra memory bloat, because it turns out rehashing is very painful.
             p->db.utxoCache->autoReserve(bytes);
@@ -3161,14 +3316,14 @@ void Storage::UTXOBatch::add(const TXO &txo, const TXOInfo &info, const CompactT
     if (!p->cache) {
         // Update db utxoset, keyed off txo -> txoinfo
         static const QString errMsgPrefix("Failed to add a utxo to the utxo batch");
-        GenericBatchPut(p->utxosetBatch, txo, info, errMsgPrefix); // may throw on failure
+        GenericBatchPut(p->batch, p->utxoset, txo, info, errMsgPrefix); // may throw on failure
 
         // Update the scripthash unspent. This is a very simple table which we scan by hashX prefix using
         // an iterator in listUnspent.  Each entry's key is prefixed with the HashX bytes (32) but suffixed with the
         // serialized CompactTXO bytes (8 or 9). Each entry's data is a 8-byte int64_t of the amount of the utxo to save
         // on lookup cost for getBalance().
         static const QString errMsgPrefix2("Failed to add an entry to the scripthash_unspent batch");
-        GenericBatchPut(p->shunspentBatch, shukey, shuval, errMsgPrefix2); // may throw, which is what we want
+        GenericBatchPut(p->batch, p->shunspent, shukey, shuval, errMsgPrefix2); // may throw, which is what we want
     } else {
         // put in cache (in case these get deleted later on, it's a win to do this rather than hit the DB, if using cache)
         p->cache->put(txo, info);
@@ -3183,11 +3338,11 @@ void Storage::UTXOBatch::remove(const TXO &txo, const HashX &hashX, const Compac
     if (!p->cache) {
         // enqueue delete from utxoset db -- may throw.
         static const QString errMsgPrefix("Failed to issue a batch delete for a utxo");
-        GenericBatchDelete(p->utxosetBatch, txo, errMsgPrefix);
+        GenericBatchDelete(p->batch, p->utxoset, txo, errMsgPrefix);
 
         // enqueue delete from scripthash_unspent db
         static const QString errMsgPrefix2("Failed to issue a batch delete for a utxo to the scripthash_unspent db");
-        GenericBatchDelete(p->shunspentBatch, mkShunspentKey(hashX, ctxo), errMsgPrefix2);
+        GenericBatchDelete(p->batch, p->shunspent, mkShunspentKey(hashX, ctxo), errMsgPrefix2);
     } else {
         // use cache which may end up doing no actual work if the utxo & shunspent was in cache and not yet committed to db
         p->cache->remove(txo);
@@ -3202,7 +3357,7 @@ std::optional<TXOInfo> Storage::utxoGetFromDB(const TXO &txo, bool throwIfMissin
 {
     assert(bool(p->db.utxoset));
     static const QString errMsgPrefix("Failed to read a utxo from the utxo db");
-    return GenericDBGet<TXOInfo>(p->db.utxoset.get(), txo, !throwIfMissing, errMsgPrefix, false, p->db.defReadOpts);
+    return GenericDBGet<TXOInfo>(p->db, p->db.utxoset, txo, !throwIfMissing, errMsgPrefix, false, p->db.defReadOpts);
 }
 
 int64_t Storage::utxoSetSize() const { return p->utxoCt; }
@@ -3410,7 +3565,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
 
                 {
                     // utxo batch block (updtes utxoset & scripthash_unspent tables)
-                    UTXOBatch utxoBatch{p->db.utxoCache.get()};
+                    UTXOBatch utxoBatch{p->db.utxoset, p->db.shunspent, p->db.utxoCache.get()};
 
                     // reserve space in undo, if in saveUndo mode
                     if (undo) {
@@ -3534,11 +3689,11 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                     }
                     // save scripthash history for this hashX, by appending to existing history. Note that this uses
                     // the 'ConcatOperator' class we defined in this file, which requires rocksdb be compiled with RTTI.
-                    if (auto st = batch.Merge(ToSlice(hashX), ToSlice(Serialize(ag.txNumsInvolvingHashX))); !st.ok())
+                    if (auto st = batch.Merge(p->db.shist, ToSlice(hashX), ToSlice(Serialize(ag.txNumsInvolvingHashX))); !st.ok())
                         throw DatabaseError(QString("batch merge fail for hashX %1, block height %2: %3")
                                             .arg(QString(hashX.toHex())).arg(ppb->height).arg(StatusString(st)));
                 }
-                if (auto st = p->db.shist->Write(p->db.defWriteOpts, &batch) ; !st.ok())
+                if (auto st = p->db->Write(p->db.defWriteOpts, &batch) ; !st.ok())
                     throw DatabaseError(QString("batch merge fail for block height %1: %2")
                                         .arg(ppb->height).arg(StatusString(st)));
             }
@@ -3560,7 +3715,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
 
                 // save BlkInfo to db
                 static const QString blkInfoErrMsg("Error writing BlkInfo to db");
-                GenericDBPut(p->db.blkinfo.get(), uint32_t(ppb->height), blkInfo, blkInfoErrMsg, p->db.defWriteOpts);
+                GenericDBPut(p->db, p->db.blkinfo, uint32_t(ppb->height), blkInfo, blkInfoErrMsg, p->db.defWriteOpts);
 
                 if (undo) {
                     // save blkInfo to undo information, if in saveUndo mode
@@ -3580,7 +3735,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                 undo->scriptHashes = Util::keySet<decltype (undo->scriptHashes)>(ppb->hashXAggregated);
                 static const QString errPrefix("Error saving undo info to undo db");
 
-                GenericDBPut(p->db.undo.get(), uint32_t(ppb->height), *undo, errPrefix, p->db.defWriteOpts); // save undo to db
+                GenericDBPut(p->db, p->db.undo, uint32_t(ppb->height), *undo, errPrefix, p->db.defWriteOpts); // save undo to db
                 if (ppb->height < p->earliestUndoHeight) {
                     // remember earliest for delete clause below...
                     p->earliestUndoHeight = ppb->height;
@@ -3617,7 +3772,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                 // keys as we catch up.  It's not the end of the world, as each call here is on the order of microseconds..
                 // but perhaps we need to see about fixing this to not do that.
                 static const QString errPrefix("Error deleting old/stale undo info from undo db");
-                GenericDBDelete(p->db.undo.get(), uint32_t(expireUndoHeight), errPrefix, p->db.defWriteOpts);
+                GenericDBDelete(p->db, p->db.undo, uint32_t(expireUndoHeight), errPrefix, p->db.defWriteOpts);
                 p->earliestUndoHeight = unsigned(expireUndoHeight + 1);
                 if constexpr (debugPrt) DebugM("Deleted undo for block ", expireUndoHeight, ", earliest now ", p->earliestUndoHeight.load());
             }
@@ -3656,7 +3811,7 @@ void Storage::addRpaDataForHeight_nolock(const BlockHeight height, const QByteAr
     Tic t0;
 
     static const QString rpaErrMsg("Error writing block RPA data to db");
-    GenericDBPut(p->db.rpa.get(), RpaDBKey(height), ser, rpaErrMsg, p->db.defWriteOpts);
+    GenericDBPut(p->db, p->db.rpa, RpaDBKey(height), ser, rpaErrMsg, p->db.defWriteOpts);
     // Update RpaInfo stats: latest height, etc.
     if (const int lh = p->rpaInfo.lastHeight; UNLIKELY(lh > -1 && lh != int(height) - 1)) {
         // This should never happen. Warn if this invariant is violated to detect bugs.
@@ -3748,7 +3903,7 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
             prevHeader = *opt;
         }
         const QString errMsg1 = QStringLiteral("Unable to retrieve undo info for %1").arg(tip);
-        auto undoOpt = GenericDBGet<UndoInfo>(p->db.undo.get(), uint32_t(tip), true, errMsg1, false, p->db.defReadOpts);
+        auto undoOpt = GenericDBGet<UndoInfo>(p->db, p->db.undo, uint32_t(tip), true, errMsg1, false, p->db.defReadOpts);
         if (!undoOpt.has_value())
             throw UndoInfoMissing(errMsg1);
         auto & undo = *undoOpt; // non-const because we swap out its scripthashes potentially below if notifySubs == true
@@ -3770,7 +3925,7 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
             // undo the blkInfo from the back
             p->blkInfos.pop_back();
             p->blkInfosByTxNum.erase(undo.blkInfo.txNum0);
-            GenericDBDelete(p->db.blkinfo.get(), uint32_t(undo.height), "Failed to delete blkInfo in undoLatestBlock");
+            GenericDBDelete(p->db, p->db.blkinfo, uint32_t(undo.height), "Failed to delete blkInfo in undoLatestBlock");
             deleteRpaEntriesFromHeight(undo.height); // delete RPA >= undo.height (iff index is enabled)
 
             // clear num2hash cache
@@ -3788,7 +3943,7 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
             // undo the scripthash histories
             for (const auto & sh : undo.scriptHashes) {
                 const QString shHex = Util::ToHexFast(sh);
-                const auto vec = GenericDBGetFailIfMissing<TxNumVec>(p->db.shist.get(), sh, QStringLiteral("Undo failed because we failed to retrieve the scripthash history for %1").arg(shHex), false, p->db.defReadOpts);
+                const auto vec = GenericDBGetFailIfMissing<TxNumVec>(p->db, p->db.shist, sh, QStringLiteral("Undo failed because we failed to retrieve the scripthash history for %1").arg(shHex), false, p->db.defReadOpts);
                 TxNumVec newVec;
                 newVec.reserve(vec.size());
                 for (const auto txNum : vec) {
@@ -3809,16 +3964,16 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
                 }
                 if (!newVec.empty()) {
                     // the sh still has some history, write it to db
-                    GenericDBPut(p->db.shist.get(), sh, newVec, errMsg, p->db.defWriteOpts);
+                    GenericDBPut(p->db, p->db.shist, sh, newVec, errMsg, p->db.defWriteOpts);
                 } else {
                     // the sh in question lost all its history as a result of undo, just delete it from db to save space
-                    GenericDBDelete(p->db.shist.get(), sh, errMsg, p->db.defWriteOpts);
+                    GenericDBDelete(p->db, p->db.shist, sh, errMsg, p->db.defWriteOpts);
                 }
             }
 
             {
                 // UTXO set update
-                UTXOBatch utxoBatch;
+                UTXOBatch utxoBatch{p->db.utxoset, p->db.shunspent};
 
                 // now, undo the utxo deletions by re-adding them
                 for (const auto & [txo, info] : undo.delUndos) {
@@ -3838,7 +3993,7 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
             if (p->earliestUndoHeight >= undo.height)
                 // oops, we're out of undos now!
                 p->earliestUndoHeight = p->InvalidUndoHeight;
-            GenericDBDelete(p->db.undo.get(), uint32_t(undo.height)); // make sure to delete this undo info since it was just applied.
+            GenericDBDelete(p->db, p->db.undo, uint32_t(undo.height)); // make sure to delete this undo info since it was just applied.
 
             // add all tx hashes that we are rolling back to the notify set for the txSubsMgr
             if (notify) {
@@ -3897,13 +4052,13 @@ void Storage::setDirty(bool dirtyFlag)
 {
     static const QString errPrefix("Error saving dirty flag to the meta db");
     const auto & val = dirtyFlag ? kTrue : kFalse;
-    GenericDBPut(p->db.meta.get(), kDirty, val, errPrefix, p->db.defWriteOpts);
+    GenericDBPut(p->db, p->db.meta, kDirty, val, errPrefix, p->db.defWriteOpts);
 }
 
 bool Storage::isDirty() const
 {
     static const QString errPrefix("Error reading dirty flag from the meta db");
-    return GenericDBGet<bool>(p->db.meta.get(), kDirty, true, errPrefix, false, p->db.defReadOpts).value_or(false);
+    return GenericDBGet<bool>(p->db, p->db.meta, kDirty, true, errPrefix, false, p->db.defReadOpts).value_or(false);
 }
 
 void Storage::setRpaNeedsFullCheck(const bool val)
@@ -3911,7 +4066,7 @@ void Storage::setRpaNeedsFullCheck(const bool val)
     if (!p->db.meta) return;
     static const QString errPrefix("Error saving rpa_needs_full_check flag to the meta db");
     const auto & slice = val ? kTrue : kFalse;
-    GenericDBPut(p->db.meta.get(), kRpaNeedsFullCheck, slice, errPrefix, p->db.defWriteOpts);
+    GenericDBPut(p->db, p->db.meta, kRpaNeedsFullCheck, slice, errPrefix, p->db.defWriteOpts);
     p->rpaInfo.rpaNeedsFullCheckCachedVal = int(val);
     DebugM("Wrote rpa_needs_full_check = ", val, " to db");
 }
@@ -3922,7 +4077,7 @@ bool Storage::isRpaNeedsFullCheck() const
     const int cachedVal = p->rpaInfo.rpaNeedsFullCheckCachedVal.load();
     if (cachedVal > -1) return cachedVal;
     static const QString errPrefix("Error reading rpa_needs_full_check flag from the meta db");
-    const int dbVal = /* 0 or 1 */ GenericDBGet<bool>(p->db.meta.get(), kRpaNeedsFullCheck, true, errPrefix, false,
+    const int dbVal = /* 0 or 1 */ GenericDBGet<bool>(p->db, p->db.meta, kRpaNeedsFullCheck, true, errPrefix, false,
                                                       p->db.defReadOpts).value_or(false);
     p->rpaInfo.rpaNeedsFullCheckCachedVal = dbVal;
     return dbVal;
@@ -3955,12 +4110,12 @@ void Storage::saveUtxoCt()
 {
     static const QString errPrefix("Error writing the utxo count to the meta db");
     const int64_t ct = p->utxoCt.load();
-    GenericDBPut(p->db.meta.get(), kUtxoCount, ct, errPrefix, p->db.defWriteOpts);
+    GenericDBPut(p->db, p->db.meta, kUtxoCount, ct, errPrefix, p->db.defWriteOpts);
 }
 int64_t Storage::readUtxoCtFromDB() const
 {
     static const QString errPrefix("Error reading the utxo count from the meta db");
-    return GenericDBGet<int64_t>(p->db.meta.get(), kUtxoCount, true, errPrefix, false, p->db.defReadOpts).value_or(0LL);
+    return GenericDBGet<int64_t>(p->db, p->db.meta, kUtxoCount, true, errPrefix, false, p->db.defReadOpts).value_or(0LL);
 }
 
 
@@ -4136,7 +4291,7 @@ auto Storage::getHistory(const HashX & hashX, bool conf, bool unconf, BlockHeigh
         SharedLockGuard g(p->blocksLock);  // makes sure history doesn't mutate from underneath our feet
         if (conf) {
             static const QString err("Error retrieving history for a script hash");
-            auto nums_opt = GenericDBGet<TxNumVec>(p->db.shist.get(), hashX, true, err, false, p->db.defReadOpts);
+            auto nums_opt = GenericDBGet<TxNumVec>(p->db, p->db.shist, hashX, true, err, false, p->db.defReadOpts);
             if (nums_opt.has_value()) {
                 const auto & nums = *nums_opt;
                 IncrementCtrAndThrowIfExceedsMaxHistory(nums.size());
@@ -4217,7 +4372,7 @@ auto Storage::getRpaHistory(const Rpa::Prefix &prefix, bool includeConfirmed, bo
             // of height (serialized as big endian). Note that the assumption here is that the rpa table contains
             // *only* records of the form: Key = 4-byte big endian height, Value = serialized Rpa::PrefixTable.
             // If this assumption changes, update this code to not use this assumption as an optimization.
-            std::unique_ptr<rocksdb::Iterator> iter{p->db.rpa->NewIterator(p->db.defReadOpts)};
+            std::unique_ptr<rocksdb::Iterator> iter{p->db->NewIterator(p->db.defReadOpts, p->db.rpa)};
             if (UNLIKELY(!iter)) throw DatabaseError("Unable to obtain an iterator to the rpa db");
 
             BlockHeight height = fromHeight;
@@ -4398,7 +4553,7 @@ auto Storage::listUnspent(const HashX & hashX, const TokenFilterOption tokenFilt
                 }
             } // release mempool lock
             { // begin confirmed/db search
-                std::unique_ptr<rocksdb::Iterator> iter(p->db.shunspent->NewIterator(p->db.defReadOpts));
+                std::unique_ptr<rocksdb::Iterator> iter(p->db->NewIterator(p->db.defReadOpts, p->db.shunspent));
                 if (UNLIKELY(!iter)) throw DatabaseError("Unable to obtain an iterator to the shunspent db"); // should never happen
                 const rocksdb::Slice prefix = ToSlice(hashX); // points to data in hashX
 
@@ -4475,7 +4630,7 @@ auto Storage::getBalance(const HashX &hashX, TokenFilterOption tokenFilter) cons
         SharedLockGuard g(p->blocksLock);
         {
             // confirmed -- read from db using an iterator
-            std::unique_ptr<rocksdb::Iterator> iter(p->db.shunspent->NewIterator(p->db.defReadOpts));
+            std::unique_ptr<rocksdb::Iterator> iter(p->db->NewIterator(p->db.defReadOpts, p->db.shunspent));
             if (UNLIKELY(!iter)) throw DatabaseError("Unable to obtain an iterator to the shunspent db"); // should never happen
             const rocksdb::Slice prefix = ToSlice(hashX); // points to data in hashX
 
@@ -4546,7 +4701,7 @@ auto Storage::getFirstUse(const HashX & hashX) const -> std::optional<FirstUse>
         SharedLockGuard g(p->blocksLock);  // makes sure history doesn't mutate from underneath our feet
 
         // try confirmed txns from db
-        if (const auto optba = GenericDBGet<QByteArray>(p->db.shist.get(), hashX, true, err, true, p->db.defReadOpts)) {
+        if (const auto optba = GenericDBGet<QByteArray>(p->db, p->db.shist, hashX, true, err, true, p->db.defReadOpts)) {
             // the history is a bunch of CompactTXO TxNums concatenated, grab the first one
             if (size_t(optba->size()) < CompactTXO::compactTxNumSize()) {
                 throw DatabaseSerializationError(QString("Scripthash %1 has a db entry in scripthash_history that is too short: %2")
@@ -4738,7 +4893,7 @@ size_t Storage::dumpAllScriptHashes(QIODevice *outDev, unsigned int indent, unsi
     if (!outDev || !outDev->isWritable())
         return 0;
     SharedLockGuard g{p->blocksLock};
-    std::unique_ptr<rocksdb::Iterator> it {p->db.shist->NewIterator(p->db.defReadOpts)};
+    std::unique_ptr<rocksdb::Iterator> it {p->db->NewIterator(p->db.defReadOpts, p->db.shist)};
     if (!it) return 0;
 
     const auto INDENT = [outDev, &ilvl, spaces = QByteArray(int(indent), ' ')] {
@@ -4785,22 +4940,17 @@ auto Storage::calcUTXOSetStats(const DumpProgressFunc & progFunc, size_t progInt
 {
     UTXOSetStats ret;
     if (!p->db.utxoset || !p->db.shunspent) return ret;
-    auto readOpts_utxo = p->db.defReadOpts;
-    auto readOpts_shunspent = p->db.defReadOpts;
-    const auto [ss_utxo, ss_shunspent, bheight, bhash] = [&] {
+    auto readOpts = p->db.defReadOpts;
+    const auto [ss, bheight, bhash] = [&] {
         SharedLockGuard g{p->blocksLock};
         using CSnapshot = const rocksdb::Snapshot;
-        auto s1 = std::shared_ptr<CSnapshot>(p->db.utxoset->GetSnapshot(),
-                                             [this](CSnapshot *ss){ p->db.utxoset->ReleaseSnapshot(ss); });
-        auto s2 = std::shared_ptr<CSnapshot>(p->db.utxoset->GetSnapshot(),
-                                             [this](CSnapshot *ss){ p->db.shunspent->ReleaseSnapshot(ss); });
+        auto snap = std::shared_ptr<CSnapshot>(p->db->GetSnapshot(), [this](CSnapshot *ss){ p->db->ReleaseSnapshot(ss); });
         const auto & [height, hash] = latestTip(); // takes a subordinate lock to blocksLock
-        return std::tuple(s1, s2, height, hash);
+        return std::tuple(snap, height, hash);
     }();
-    readOpts_utxo.snapshot = ss_utxo.get();
-    readOpts_shunspent.snapshot = ss_shunspent.get();
-    std::unique_ptr<rocksdb::Iterator> it_utxo {p->db.utxoset->NewIterator(readOpts_utxo)};
-    std::unique_ptr<rocksdb::Iterator> it_shu {p->db.shunspent->NewIterator(readOpts_shunspent)};
+    readOpts.snapshot = ss.get();
+    std::unique_ptr<rocksdb::Iterator> it_utxo {p->db->NewIterator(readOpts, p->db.utxoset)};
+    std::unique_ptr<rocksdb::Iterator> it_shu {p->db->NewIterator(readOpts, p->db.shunspent)};
     if (!it_utxo || !it_shu) return ret;
 
     ret.block_height = bheight >= 0 ? BlockHeight(bheight) : 0;
