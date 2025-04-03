@@ -49,7 +49,10 @@
 #include <vector>
 
 // fwd decls used by Storage private(s)
-namespace rocksdb { class ColumnFamilyHandle; }
+namespace rocksdb {
+class ColumnFamilyHandle;
+class WriteBatch;
+}
 
 namespace BTC { class HeaderVerifier; } // fwd decl used below. #include "BTC.h" to see this type
 namespace Rpa { class Prefix; } // fwd decl, use "Rpa.h" to see this type
@@ -454,14 +457,17 @@ protected:
     // -- the below are used inside addBlock (and undoLatestBlock) to maintain the UTXO set & Headers
     class UTXOCache;
 
-    /// Used to store (in an opaque fashion) the rocksdb::WriteBatch objects used for updating the db.
-    /// Called internally from addBlock and undoLatestBlock().
+    /// Used to manage updates to a rocksdb::WriteBatch; used for updating the db in an abstracted fashion so as to support
+    /// UTXOCache. Called internally from addBlock and undoLatestBlock().
     struct UTXOBatch {
-        UTXOBatch(rocksdb::ColumnFamilyHandle *utxoset, rocksdb::ColumnFamilyHandle *shunspent, UTXOCache *cache = nullptr);
+        UTXOBatch(rocksdb::WriteBatch &batch, rocksdb::ColumnFamilyHandle &utxoset, rocksdb::ColumnFamilyHandle &shunspent,
+                  UTXOCache *cache = nullptr);
         UTXOBatch(UTXOBatch &&);
-        /// Enqueue an add of a utxo -- does not take effect in db until Storage::issueUpdates() is called -- may throw.
+        /// Enqueue an add of a utxo -- does not take effect in db until p->batch is written to db (for non-UTXOCache mode),
+        /// or until the cache is written to db if in UTXOCache mode -- may throw.
         void add(const TXO &, const TXOInfo &, const CompactTXO &);
-        /// Enqueue a removal -- does not take effect in db until Storage::issueUpdates() is called -- may throw.
+        /// Enqueue a removal -- does not take effect in db until p->batch is committed to db (for non-UTXOCache mode),
+        /// or until the cache is written to db if in UTXOCache mode -- may throw.
         void remove(const TXO &, const HashX &, const CompactTXO &);
 
     private:
@@ -475,7 +481,6 @@ protected:
     /// Call this when finished to issue the updates queued up in the batch context to the db.
     void issueUpdates(UTXOBatch &);
 
-
     /// Internally called by addBlock. Call this with the heaverVerifier lock held.
     /// Appends header h to the database at height. Note that it is undefined to call this function
     /// if height already exists in the database or if height is more than 1+ latestTip().first. For internal use
@@ -487,23 +492,23 @@ protected:
 
     /// Internally called by LoadCheckRpaDB and undoLatestBlock. Call this with the blocksLock held if in multi-threaded
     /// mode, to ensure DB consistency. Deletes any rpa entries >= height. Returns true on success, false on failure.
-    bool deleteRpaEntriesFromHeight(BlockHeight height, bool flush = false, bool force = false);
+    bool deleteRpaEntriesFromHeight(rocksdb::WriteBatch *batch, BlockHeight height, bool flush = false, bool force = false);
 
     /// Internally called. Call this with the blocksLock held if in multi-threaded mode, to ensure DB consistency.
     /// Deletes any rpa entries <= height. Returns true on success, false on failure.
-    bool deleteRpaEntriesToHeight(BlockHeight height, bool flush = false, bool force = false);
+    bool deleteRpaEntriesToHeight(rocksdb::WriteBatch *batch, BlockHeight height, bool flush = false, bool force = false);
 
-    void clampRpaEntries_nolock(BlockHeight from, BlockHeight to);
+    void clampRpaEntries_nolock(rocksdb::WriteBatch *batch, BlockHeight from, BlockHeight to);
 
     /// This is set in addBlock and undoLatestBlock while we do a bunch of updates, then cleared when updates are done,
     /// for each block. Thread-safe, may throw.
-    void setDirty(bool dirtyFlag);
+    void setDirty(rocksdb::WriteBatch &batch, bool dirtyFlag);
     /// If this is true on startup, we know the db must be inconsistent and we refuse to continue, exiting with an
     /// error. Thread-safe, may throw.
     bool isDirty() const;
 
     /// Called by addBlock and undoLatestBlock to update the utxo_count in the Meta db. Thread-safe, may throw.
-    void saveUtxoCt();
+    void saveUtxoCt(rocksdb::WriteBatch &batch);
     /// Reads the UtxoCt from the meta db. If they key is missing it will return 0.  May throw on low-level db error.
     int64_t readUtxoCtFromDB() const;
 
@@ -555,7 +560,7 @@ private:
     std::optional<unsigned> heightForTxNum_nolock(TxNum) const;
 
     /// Writes to the RPA table. Called from addBlock()
-    void addRpaDataForHeight_nolock(BlockHeight height, const QByteArray &serializedRpaPrefixTable);
+    void addRpaDataForHeight_nolock(rocksdb::WriteBatch &batch, BlockHeight height, const QByteArray &serializedRpaPrefixTable);
 };
 
 Q_DECLARE_OPERATORS_FOR_FLAGS(Storage::SaveSpec)
