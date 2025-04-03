@@ -48,6 +48,9 @@
 #include <utility>
 #include <vector>
 
+// fwd decls used by Storage private(s)
+namespace rocksdb { class ColumnFamilyHandle; }
+
 namespace BTC { class HeaderVerifier; } // fwd decl used below. #include "BTC.h" to see this type
 namespace Rpa { class Prefix; } // fwd decl, use "Rpa.h" to see this type
 
@@ -454,7 +457,7 @@ protected:
     /// Used to store (in an opaque fashion) the rocksdb::WriteBatch objects used for updating the db.
     /// Called internally from addBlock and undoLatestBlock().
     struct UTXOBatch {
-        UTXOBatch(UTXOCache *cache = nullptr);
+        UTXOBatch(rocksdb::ColumnFamilyHandle *utxoset, rocksdb::ColumnFamilyHandle *shunspent, UTXOCache *cache = nullptr);
         UTXOBatch(UTXOBatch &&);
         /// Enqueue an add of a utxo -- does not take effect in db until Storage::issueUpdates() is called -- may throw.
         void add(const TXO &, const TXOInfo &, const CompactTXO &);
@@ -542,8 +545,8 @@ private:
     /// thread-safe helper that returns hashed headers starting from start up until count (hashes are in bitcoin memory order)
     std::vector<QByteArray> merkleCacheHelperFunc(unsigned start, unsigned count, QString *err);
 
-    /// Called from cleanup. Does some flushing and gently closes all open DBs.
-    void gentlyCloseAllDBs();
+    /// Called from cleanup. Does some flushing and gently closes all open column families and closes the DB.
+    void gentlyCloseDB();
 
     /// Only does something if options->compactDBs is true (iff --compact-dbs specified on CLI)
     void compactAllDBs();
