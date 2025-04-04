@@ -566,24 +566,23 @@ namespace Util {
     template <Arithmetic Numeric>
     QString Pluralize(const QString &wordIn, Numeric n) {
         QString ret;
-        {
-            if (qAbs(n) != Numeric(1)) {
-                QString word(wordIn);
-                QString ending = QStringLiteral("s"); // default to 's' ending
-                const auto wordend = word.right(2);
-                // 's' or "sh" sound in English are pluralized with "es" rather than simple "s"
-                // 'y' endings have the 'y' truncated and 'ies' appended in its stead for plurals as well.
-                // TODO: suppored ALL CAPS? Not needed for now in this app, so we don't bother...
-                if (wordend.endsWith('s') || wordend == QStringLiteral("sh"))
-                    ending = QStringLiteral("es");
-                else if (wordend.endsWith('y')) {
-                    word.truncate(word.length()-1);  // remove training 'y'
-                    ending = QStringLiteral("ies");  // .. append 'ies' eg entry -> entries
-                }
-                ret = QStringLiteral("%1%2").arg(word, ending);
-            } else
-                ret = wordIn; // constant time copy (implicitly shared)
-        }
+        constexpr auto IsVowel = [](const QChar c) { return c == 'a' || c == 'e' || c == 'i' || c == 'o' || c == 'u' || c == 'y'; };
+        if (qAbs(n) != Numeric(1)) {
+            QString word(wordIn);
+            QString ending = QStringLiteral("s"); // default to 's' ending
+            const auto wordend = word.right(2);
+            // 's' or "sh" sound in English are pluralized with "es" rather than simple "s"
+            // 'y' endings have the 'y' truncated and 'ies' appended for plurals as well (but only if the preceding letter is not a vowel).
+            // TODO: suppored ALL CAPS? Not needed for now in this app, so we don't bother...
+            if (wordend.endsWith('s') || wordend == QStringLiteral("sh"))
+                ending = QStringLiteral("es");
+            else if (wordend.endsWith('y') && wordend.size() > 1 && !IsVowel(wordend[0])) {
+                word.truncate(word.length()-1);  // remove trailing 'y'
+                ending = QStringLiteral("ies");  // .. append 'ies' eg entry -> entries
+            }
+            ret = QStringLiteral("%1%2").arg(word, ending);
+        } else
+            ret = wordIn; // constant time copy (implicitly shared)
         return ret;
     }
 
