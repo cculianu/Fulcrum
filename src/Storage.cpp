@@ -645,83 +645,89 @@ namespace {
         /// Returns the largest tx num we have ever inserted into the db, or -1 if no txnums were inserted
         int64_t maxTxNumSeenInDB() const { return largestTxNumSeen; }
 
-        class InsertPhases {
+        /// Return value from insertForBlockPhased(). Intended to be an opaque type to capture some state information
+        /// for the async and then sync phase.  Caller should call doAsyncPhase1() from a worker thread and then
+        /// when that completes, should call doSyncPhase2() from the calling thread.
+        class InsertPhasesCtx {
             friend class ::TxHash2TxNumMgr;
+            Tic t0;
             std::function<void()> asyncPhase1, syncPhase2;
-            using KeysAndValues = std::vector<std::pair<ByteView, VarInt>>;
-            std::unique_ptr<KeysAndValues> kv;
+            std::vector<std::pair<ByteView, VarInt>> kv;
+            InsertPhasesCtx() = default;
         public:
-            InsertPhases() = default;
+            InsertPhasesCtx(InsertPhasesCtx &&) = delete;
+            InsertPhasesCtx(const InsertPhasesCtx &) = delete;
 
-            InsertPhases & doAsyncPhase1() {
+            InsertPhasesCtx * doAsyncPhase1() {
                 if (asyncPhase1) {
                     asyncPhase1();
                     asyncPhase1 = nullptr; // clear lambda
                 }
-                return *this;
+                return this;
             }
-            InsertPhases & doSyncPhase2() {
+            InsertPhasesCtx * doSyncPhase2() {
                 if (syncPhase2) {
                     syncPhase2();
                     syncPhase2 = nullptr; // clear lambda
                 }
-                return *this;
+                return this;
             }
         };
 
+        using InsertPhases = std::unique_ptr<InsertPhasesCtx>;
+
+    private:
+        inline void insertForBlockInner1(const size_t i, rocksdb::WriteBatch &batch, const ByteView &key, const VarInt &val,
+                                         const std::vector<PreProcessedBlock::TxInfo> &txInfos) {
+            // Save by appending VarInt. Note that this uses the 'ConcatOperator' class we defined in this file,
+            // which requires rocksdb be compiled with RTTI.
+            if (auto st = batch.Merge(cf, ToSlice(key), ToSlice(val.byteView())); !st.ok()) [[unlikely]]
+                throw DatabaseError(QString("%1: batch merge fail for txHash %2: %3")
+                                        .arg(dbName(), QString(txInfos[i].hash.toHex()), StatusString(st)));
+        }
+        inline void insertForBlockInner2(rocksdb::WriteBatch &batch, const TxNum blockTxNum0, const qint64 elapsedNanos,
+                                         const std::vector<PreProcessedBlock::TxInfo> &txInfos) {
+            const Tic t2;
+            if (!txInfos.empty()) {
+                largestTxNumSeen = blockTxNum0 + txInfos.size() - 1;
+                saveLargestTxNumSeen(batch);
+            }
+            if (auto elapsed = elapsedNanos + t2.nsec(); elapsed >= /* 50msec */ 50'000'000)
+                DebugM("insertForBlock", ": inserted ", txInfos.size(), Util::Pluralize(" hash", txInfos.size()),
+                       " in ", QString::asprintf("%1.3f msec", elapsed / 1e6));
+        }
+
+    public:
         [[nodiscard]]
         InsertPhases insertForBlockPhased(rocksdb::WriteBatch &batch, TxNum blockTxNum0, const std::vector<PreProcessedBlock::TxInfo> &txInfos) {
-            const Tic t0;
-            InsertPhases ret;
-            ret.kv = std::make_unique<InsertPhases::KeysAndValues>();
-            ret.asyncPhase1 = [this, kv = ret.kv.get(), &txInfos, blockTxNum0] {
-                kv->reserve(txInfos.size());
-                for (TxNum i = 0; i < txInfos.size(); ++i) {
-                    kv->emplace_back(makeKeyFromHash(txInfos[i].hash), blockTxNum0 + i);
-                }
+            InsertPhases ret{new InsertPhasesCtx}; // we use `new` here due to private c'tor
+            ret->asyncPhase1 = [this, ctx = ret.get(), &txInfos, blockTxNum0] {
+                ctx->kv.reserve(txInfos.size());
+                for (TxNum i = 0; i < txInfos.size(); ++i)
+                    ctx->kv.emplace_back(makeKeyFromHash(txInfos[i].hash), blockTxNum0 + i);
+                ctx->t0.fin();
             };
-            ret.syncPhase2 = [this, kv = ret.kv.get(), t0, &batch, blockTxNum0, &txInfos] {
-                // save by appending VarInt. Note that this uses the 'ConcatOperator' class we defined in this file,
-                // which requires rocksdb be compiled with RTTI.
+            ret->syncPhase2 = [this, ctx = ret.get(), &batch, blockTxNum0, &txInfos] {
+                const Tic t1;
                 size_t i{};
-                for (const auto & [key, val] : *kv) {
-                    if (auto st = batch.Merge(cf, ToSlice(key), ToSlice(val.byteView())); !st.ok()) [[unlikely]]
-                        throw DatabaseError(QString("%1: batch merge fail for txHash %2: %3")
-                                                .arg(dbName(), QString(txInfos[i].hash.toHex()), QString::fromStdString(st.ToString())));
-                    ++i;
-                }
-                if (!txInfos.empty()) {
-                    largestTxNumSeen = blockTxNum0 + txInfos.size() - 1;
-                    saveLargestTxNumSeen(batch);
-                }
-                if (t0.msec() >= 50)
-                    DebugM("insertForBlock", ": inserted ", txInfos.size(), Util::Pluralize(" hash", txInfos.size()),
-                           " in ", t0.msecStr(), " msec");
+                for (const auto & [key, val] : ctx->kv)
+                    insertForBlockInner1(i++, batch, key, val, txInfos); // may throw on error
+                insertForBlockInner2(batch, blockTxNum0, ctx->t0.nsec() + t1.nsec(), txInfos);
             };
             return ret;
         }
 
         void insertForBlock(rocksdb::WriteBatch &batch, TxNum blockTxNum0, const std::vector<PreProcessedBlock::TxInfo> &txInfos) {
-            // insertForBlockPhased(batch, blockTxNum0, txInfos).doAsyncPhase1().doSyncPhase2();
-            // Ideally we do the above, bit for performance we duplicate the code :( ...
+            // insertForBlockPhased(batch, blockTxNum0, txInfos)->doAsyncPhase1()->doSyncPhase2();
+            // Ideally we do the above, but the above would do some extra allocations which we want to avoid, so
+            // for performance we duplicate the code somewhat below ...
             const Tic t0;
             for (TxNum i = 0; i < txInfos.size(); ++i) {
                 const ByteView key = makeKeyFromHash(txInfos[i].hash);
                 const VarInt val(blockTxNum0 + i);
-                // save by appending VarInt. Note that this uses the 'ConcatOperator' class we defined in this file,
-                // which requires rocksdb be compiled with RTTI.
-                if (auto st = batch.Merge(cf, ToSlice(key), ToSlice(val.byteView())); !st.ok())
-                    throw DatabaseError(QString("%1: batch merge fail for txHash %2: %3")
-                                            .arg(dbName(), QString(txInfos[i].hash.toHex()), QString::fromStdString(st.ToString())));
+                insertForBlockInner1(i, batch, key, val, txInfos); // may throw on error
             }
-            if (!txInfos.empty()) {
-                largestTxNumSeen = blockTxNum0 + txInfos.size() - 1;
-                saveLargestTxNumSeen(batch);
-            }
-            if (t0.msec() >= 50)
-                DebugM(__func__, ": inserted ", txInfos.size(), Util::Pluralize(" hash", txInfos.size()),
-                       " in ", t0.msecStr(), " msec");
-
+            insertForBlockInner2(batch, blockTxNum0, t0.nsec(), txInfos);
         }
 
         void insertForBlockNoBatch(TxNum blockTxNum0, const std::vector<PreProcessedBlock::TxInfo> &txInfos) {
@@ -3624,7 +3630,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                 // submit this to the co-task for blocks with enough txs
                 fut = p->blocksWorker->submitWork([&]{
                     txhash2txnumPhases = p->db.txhash2txnumMgr->insertForBlockPhased(batch, blockTxNum0, ppb->txInfos);
-                    txhash2txnumPhases.doAsyncPhase1(); // do this CPU-bound part on another core
+                    txhash2txnumPhases->doAsyncPhase1(); // do this CPU-bound part on another core
                 });
             } else {
                 // otherwise just do the work ourselves immediately here since this is likely faster (less overhead)
@@ -3863,7 +3869,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
             // Wait for the txhash2txnum asyncPhase1 to finish before we proceed.
             if (fut.future.valid()) {
                 fut.future.get(); // wait for completion; this may throw if task threw
-                txhash2txnumPhases.doSyncPhase2(); // issue write batch; may throw
+                if (txhash2txnumPhases) txhash2txnumPhases->doSyncPhase2(); // issue write batch; may throw
             }
 
             if (auto st = p->db->Write(p->db.defWriteOpts, &batch) ; !st.ok())
