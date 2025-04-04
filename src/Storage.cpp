@@ -645,33 +645,41 @@ namespace {
         /// Returns the largest tx num we have ever inserted into the db, or -1 if no txnums were inserted
         int64_t maxTxNumSeenInDB() const { return largestTxNumSeen; }
 
-        /// Return value from insertForBlockPhased(). Intended to be an opaque type to capture some state information
-        /// for the async and then sync phase.  Caller should call doAsyncPhase1() from a worker thread and then
-        /// when that completes, should call doSyncPhase2() from the calling thread.
-        class InsertPhasesCtx {
+        class PhasesMixin {
             friend class ::TxHash2TxNumMgr;
-            Tic t0;
+        protected:
+            const Tic t0;
             std::function<void()> asyncPhase1, syncPhase2;
-            std::vector<std::pair<ByteView, VarInt>> kv;
-            InsertPhasesCtx() = default;
+            PhasesMixin() = default;
         public:
-            InsertPhasesCtx(InsertPhasesCtx &&) = delete;
-            InsertPhasesCtx(const InsertPhasesCtx &) = delete;
+            PhasesMixin(PhasesMixin &&) = delete;
+            PhasesMixin(const PhasesMixin &) = delete;
 
-            InsertPhasesCtx * doAsyncPhase1() {
+            PhasesMixin * doAsyncPhase1() {
                 if (asyncPhase1) {
                     asyncPhase1();
                     asyncPhase1 = nullptr; // clear lambda
                 }
                 return this;
             }
-            InsertPhasesCtx * doSyncPhase2() {
+            PhasesMixin * doSyncPhase2() {
                 if (syncPhase2) {
                     syncPhase2();
                     syncPhase2 = nullptr; // clear lambda
                 }
                 return this;
             }
+        };
+
+        /// Return value from insertForBlockPhased(). Intended to be an opaque type to capture some state information
+        /// for the async and then sync phase.  Caller should call doAsyncPhase1() from a worker thread and then
+        /// when that completes, should call doSyncPhase2() from the calling thread.
+        class InsertPhasesCtx : public PhasesMixin {
+            friend class ::TxHash2TxNumMgr;
+            Tic t0;
+            std::function<void()> asyncPhase1, syncPhase2;
+            std::vector<std::pair<ByteView, VarInt>> kv;
+            InsertPhasesCtx() = default;
         };
 
         using InsertPhases = std::unique_ptr<InsertPhasesCtx>;
@@ -734,98 +742,141 @@ namespace {
             rocksdb::WriteBatch batch;
             insertForBlock(batch, blockTxNum0, txInfos);
             if (auto st = db->Write(wrOpts, &batch) ; !st.ok())
-                throw DatabaseError(QString("%1: batch merge fail: %2").arg(dbName(), QString::fromStdString(st.ToString())));
+                throw DatabaseError(QString("%1: batch merge fail: %2").arg(dbName(), StatusString(st)));
         }
 
-        /// This is called during blockundo. Deletes records from the db having their TxNum >= `txNum`. Requires that
-        /// rf not yet be truncated. This is slow so don't call it with huge numbers of records beyond what fits into a block.
-        /// TODO: Make this phased!!
-        void truncateForUndo(rocksdb::WriteBatch &batch, const TxNum txNum) {
-            const auto rfNR = rf->numRecords();
-            if (rfNR < txNum) throw DatabaseError(dbName() + ": RecordFile does not have the hashes required for the specified truncation");
-            else if (rfNR == txNum) {
-                // defensive programming warning -- this should never happen
-                Warning() << __func__ << ": called with txNum == RecordFile->numRecords -- FIXME!";
-                return;
-            }
+        // Return value from truncateForUndoPhased. Intended to be an opaque type to capture some state information
+        /// for the async and then sync phase. Caller should call doAsyncPhase1() from a worker thread and then
+        /// when that completes, should call doSyncPhase2() from the calling thread.
+        class UndoPhasesCtx : public PhasesMixin {
+            friend class ::TxHash2TxNumMgr;
             const Tic t0;
-            QString err;
-            const auto recs = rf->readRecords(txNum, rfNR - txNum, &err);
-            if (recs.size() != rfNR - txNum || !err.isEmpty())
-                throw DatabaseError(QString("%1: short read count or error reading record file: %2").arg(dbName(), err));
-
-            DebugM(__func__, ": read ", recs.size(), " record(s) from txNums file, elapsed: ", t0.msecStr(), " msec");
-
-            // first read all existing entries from the db -- we must delete the VarInts in their data blobs that
-            // have TxNums > txNum
-            std::vector<rocksdb::Slice> keySlices; keySlices.reserve(recs.size());
-            std::vector<rocksdb::PinnableSlice> dbValues; dbValues.reserve(recs.size());
-            for (size_t i = 0; i < recs.size(); ++i) {
-                const auto bv = makeKeyFromHash(recs[i]);
-                keySlices.emplace_back(bv.charData(), bv.size());
-                dbValues.emplace_back();
-            }
-            std::vector<rocksdb::Status> statuses(keySlices.size());
-            db->MultiGet(rdOpts, cf, keySlices.size(), keySlices.data(), dbValues.data(), statuses.data());
-            DebugM(__func__, ": MultiGet on ", statuses.size(), " key(s), elapsed: ", t0.msecStr(), " msec");
-            if (statuses.size() != recs.size() || dbValues.size() != recs.size())
-                throw DatabaseError(dbName() + ": RocksDB MultiGet did not return the proper number of records");
-
-            // next filter out all VarInts >= txNum, deleting records that have no more VarInts left and writing
-            // back records that still have VarInts in them
+            std::vector<QByteArray> recs;
+            std::vector<rocksdb::Slice> keySlices; ///< slices are views into above `recs`
+            std::vector<std::string> valsBackToDb;
+            std::vector<bool> ok;
             int dels{}, keeps{}, filts{}; // for DEBUG print
-            for (size_t i = 0; i < dbValues.size(); ++i) {
-                if (!statuses[i].ok()) {
-                    if (lastWarnTime.secs() >= 1.0) {
-                        lastWarnTime = Tic();
-                        // not sure what to do here... this should never happen. But warn anyway.
-                        Warning() << __func__ << ": " << dbName() << ", got a non-ok status when reading a key for txhash "
-                                  << recs[i].toHex() << ". Proceeding anyway but there may be DB corruption. "
-                                  << "Start " << APPNAME << " again with -C -C to check the database for consistency.";
-                    }
-                    continue;
+
+            UndoPhasesCtx() = default;
+        };
+
+        using UndoPhases = std::unique_ptr<UndoPhasesCtx>;
+
+        /// This is called during blockundo. Returns immediately with 2 lambdas to be invoked later.
+        ///
+        /// The lambdas delete records from the db having their TxNum >= `txNum`. The async almbda requires that
+        /// rf not yet be truncated. The second sync lambda commits the changes to the db.
+        ///
+        /// This is slow so don't call it with huge numbers of records beyond what fits into a block.
+        [[nodiscard]]
+        UndoPhases truncateForUndoPhased(rocksdb::WriteBatch &batch, const TxNum txNum) {
+            UndoPhases ret{new UndoPhasesCtx}; // `new` required due to private c'tor
+            ret->asyncPhase1 = [this, ctx = ret.get(), txNum] {
+                const auto rfNR = rf->numRecords();
+                if (rfNR < txNum) [[unlikely]]
+                    throw DatabaseError(dbName() + ": RecordFile does not have the hashes required for the specified truncation");
+                else if (rfNR == txNum) [[unlikely]] {
+                    // defensive programming warning -- this should never happen
+                    Warning() << "truncateForUndo: called with txNum == RecordFile->numRecords -- FIXME!";
+                    return;
                 }
-                auto span = Span<const char>{dbValues[i]};
-                std::string valBackToDb;
-                while (!span.empty()) {
-                    try {
-                        const VarInt val = VarInt::deserialize(span); // this may throw
-                        if (val.value<TxNum>() >= txNum) {
-                            // skip, filter out...
-                            ++filts;
-                        } else {
-                            // was a collision, keep
-                            valBackToDb.append(val.byteView().charData(), val.size());
-                            ++keeps;
-                        }
-                    } catch (const std::exception &e) {
-                        throw DatabaseFormatError(QString("%1: caught exception in %2: %3").arg(dbName(), __func__, e.what()));
-                    }
+                QString err;
+                auto &recs = ctx->recs = rf->readRecords(txNum, rfNR - txNum, &err);
+                if (recs.size() != rfNR - txNum || !err.isEmpty()) [[unlikely]]
+                    throw DatabaseError(QString("%1: short read count or error reading record file: %2").arg(dbName(), err));
+
+                DebugM("truncateForUndo: read ", recs.size(), Util::Pluralize(" record", recs.size()),
+                       " from txNums file, elapsed: ", ctx->t0.msecStr(), " msec");
+
+                // first read all existing entries from the db -- we must delete the VarInts in their data blobs that
+                // have TxNums > txNum
+                auto &keySlices = ctx->keySlices;
+                keySlices.clear();
+                keySlices.reserve(recs.size());
+                for (const auto &rec : recs) {
+                    const auto bv = makeKeyFromHash(rec);
+                    keySlices.emplace_back(bv.charData(), bv.size());
                 }
-                if (valBackToDb.empty()) {
-                    // delete, key now has no VarInts
-                    if (auto st = batch.Delete(cf, keySlices[i]); !st.ok()) {
+                std::vector<rocksdb::PinnableSlice> dbValues(keySlices.size());
+                std::vector<rocksdb::Status> statuses(keySlices.size());
+                db->MultiGet(rdOpts, cf, keySlices.size(), keySlices.data(), dbValues.data(), statuses.data());
+                DebugM("truncateForUndo: MultiGet for ", statuses.size(), Util::Pluralize(" key", statuses.size()),
+                       " elapsed: ", ctx->t0.msecStr(), " msec");
+
+                // next filter out all VarInts >= txNum, deleting records that have no more VarInts left and writing
+                // back records that still have VarInts in them
+                auto &valsBackToDb = ctx->valsBackToDb;
+                valsBackToDb.resize(dbValues.size());
+                ctx->ok.resize(dbValues.size(), true);
+                for (size_t i = 0; i < dbValues.size(); ++i) {
+                    if (!statuses[i].ok()) [[unlikely]] {
                         if (lastWarnTime.secs() >= 1.0) {
                             lastWarnTime = Tic();
-                            Warning() << __func__ << ": " << dbName() << " failed to delete a key from db: "
-                                      << QString::fromStdString(st.ToString()) << ". Continuing anyway ...";
+                            // not sure what to do here... this should never happen. But warn anyway.
+                            Warning() << "truncateForUndo: " << dbName() << ", got a non-ok status (" << StatusString(statuses[i])
+                                      << ") when reading a key for txhash " << recs[i].toHex() << ". Proceeding anyway "
+                                      << "but there may be DB corruption. Start " << APPNAME
+                                      << " again with -C -C to check the database for consistency.";
+                        }
+                        ctx->ok[i] = false; // mark as to-be-skipped in sync lambda loop (should never happen!)
+                        continue;
+                    }
+                    auto span = Span<const char>{dbValues[i]};
+                    std::string &valBackToDb = valsBackToDb[i];
+                    while (!span.empty()) {
+                        try {
+                            const VarInt val = VarInt::deserialize(span); // this may throw
+                            if (val.value<TxNum>() >= txNum) {
+                                // skip, filter out...
+                                ++ctx->filts;
+                            } else {
+                                // was a collision, keep
+                                valBackToDb.append(val.byteView().charData(), val.size());
+                                ++ctx->keeps;
+                            }
+                        } catch (const std::exception &e) {
+                            throw DatabaseFormatError(QString("%1: caught exception in truncateForUndo: %2").arg(dbName(),e.what()));
                         }
                     }
-                    ++dels;
-                } else {
-                    // keep key, key has some VarInts left
-                    if (auto st = batch.Put(cf, keySlices[i], valBackToDb); !st.ok())
-                        throw DatabaseError(dbName() + ": failed to write back a key to the db: " + QString::fromStdString(st.ToString()));
                 }
-            }
+            };
+            ret->syncPhase2 = [this, ctx = ret.get(), &batch, txNum] {
+                const Tic t1;
+                const size_t N = std::min(std::min(ctx->keySlices.size(), ctx->valsBackToDb.size()), ctx->ok.size());
+                if (!N) [[unlikely]] return; // nothing to do!
+                for (size_t i = 0; i < N; ++i) {
+                    if (!ctx->ok[i]) [[unlikely]]
+                        continue; // error reading from DB, already warned above in asyncPhase1, just continue (should never happen)
+                    const rocksdb::Slice &keySlice = ctx->keySlices[i];
+                    const std::string &valBackToDb = ctx->valsBackToDb[i];
+                    if (valBackToDb.empty()) {
+                        // delete, key now has no VarInts
+                        if (auto st = batch.Delete(cf, keySlice); !st.ok()) [[unlikely]] {
+                            if (lastWarnTime.secs() >= 1.0) {
+                                lastWarnTime = Tic();
+                                Warning() << "truncateForUndo: " << dbName() << " failed to delete a key from db: "
+                                          << StatusString(st) << ". Continuing anyway ...";
+                            }
+                        }
+                        ++ctx->dels;
+                    } else {
+                        // keep key, key has some VarInts left
+                        if (auto st = batch.Put(cf, keySlice, valBackToDb); !st.ok()) [[unlikely]]
+                            throw DatabaseError(dbName() + ": failed to write back a key to the db: " + StatusString(st));
+                    }
+                }
 
-            const int64_t txNumI = int64_t(txNum);
-             // we always add at the end and truncare at the end; this invariant should always hold
-            largestTxNumSeen = std::max(txNumI - 1, int64_t{-1});
-            saveLargestTxNumSeen(batch);
+                const int64_t txNumI = int64_t(txNum);
+                 // we always add at the end and truncare at the end; this invariant should always hold
+                largestTxNumSeen = std::max(txNumI - 1, int64_t{-1});
+                saveLargestTxNumSeen(batch);
 
-            DebugM(__func__, ": txNum: ", txNum, ", nrecs: ", recs.size(), ", dels: ", dels, ", keeps: ", keeps, ", filts: ", filts,
-                   ", elapsed: ", t0.msecStr(), " msec");
+                DebugM("truncateForUndo: txNum: ", txNum, ", nrecs: ", ctx->recs.size(), ", dels: ", ctx->dels,
+                       ", keeps: ", ctx->keeps, ", filts: ", ctx->filts, ", elapsed: ",
+                       QString::asprintf("%1.3f", (ctx->t0.usec() + t1.usec()) / 1e3), " msec");
+            };
+
+            return ret;
         }
 
         /// Returns a valid optional containing the TxNum of txHash if txHash is found in the db. A nullopt otherwise.
@@ -892,8 +943,7 @@ namespace {
             for (size_t i = 0; i < statuses.size(); ++i) {
                 auto & st = statuses[i];
                 if (st.IsNotFound()) continue; // skip NotFound
-                if (!st.ok()) throw DatabaseError(dbName() + ": got a status that is not ok in findMany: "
-                                                  + QString::fromStdString(st.ToString()));
+                if (!st.ok()) throw DatabaseError(dbName() + ": got a status that is not ok in findMany: " + StatusString(st));
                 auto & dataBlob = dbResults[i];
                 if (dataBlob.empty()) {
                     Warning() << dbName() << ": Empty record for " << hashes[i].toHex() << ". FIXME!";
@@ -988,13 +1038,13 @@ namespace {
             rocksdb::Status st;
             fopts.wait = true; fopts.allow_write_stall = true;
             if (!(st = batch.DeleteRange(cf, firstKey, endKey)).ok())
-                throw DatabaseError(dbName() + ": failed to delete all keys: " + QString::fromStdString(st.ToString()));
+                throw DatabaseError(dbName() + ": failed to delete all keys: " + StatusString(st));
             largestTxNumSeen = -1;
             saveLargestTxNumSeen(batch);
             if (!(st = db->Write(wrOpts, &batch)).ok())
-                throw DatabaseError(dbName() + ": failed to write batch when deleting all keys: " + QString::fromStdString(st.ToString()));
+                throw DatabaseError(dbName() + ": failed to write batch when deleting all keys: " + StatusString(st));
             if (!(st = db->Flush(fopts, cf)).ok())
-                throw DatabaseError(dbName() + ": failed to flush when deleting all keys: " + QString::fromStdString(st.ToString()));
+                throw DatabaseError(dbName() + ": failed to flush when deleting all keys: " + StatusString(st));
 
             std::unique_ptr<rocksdb::Iterator> iter = newIterChecked();
             iter->SeekToFirst();
@@ -1102,7 +1152,7 @@ namespace {
             rocksdb::FlushOptions fopts;
             fopts.wait = true; fopts.allow_write_stall = true;
             if (auto st = db->Flush(fopts, cf); !st.ok())
-                Warning() << "DB Flush error: " << QString::fromStdString(st.ToString());
+                Warning() << "DB Flush error: " << StatusString(st);
             Log() << "Indexed " << nrec << " txhash entries, elapsed: " << t0.secsStr(2) << " sec";
         }
 
@@ -2323,10 +2373,10 @@ void Storage::gentlyCloseDB()
         fopts.wait = true; fopts.allow_write_stall = true;
         status = db->Flush(fopts, cf);
         if (!status.ok())
-            Warning() << "Flush of " << name << ": " << QString::fromStdString(status.ToString());
+            Warning() << "Flush of " << name << ": " << StatusString(status);
         status = db->DestroyColumnFamilyHandle(cf);
         if (!status.ok())
-            Warning() << "Release of " << name << ": " << QString::fromStdString(status.ToString());
+            Warning() << "Release of " << name << ": " << StatusString(status);
         cf = nullptr;
     }
     p->db.columnFamilies.clear();
@@ -2338,11 +2388,11 @@ void Storage::gentlyCloseDB()
     Debug() << "Flushing DB: " << name << " ...";
     auto status = db->FlushWAL(true);
     if (!status.ok())
-        Warning() << "FlushWAL of " << name << ": " << QString::fromStdString(status.ToString());
+        Warning() << "FlushWAL of " << name << ": " << StatusString(status);
     Debug() << "Closing DB: " << name << " ...";
     status = db->Close();
     if (!status.ok())
-        Warning() << "Close of " << name << ": " << QString::fromStdString(status.ToString());
+        Warning() << "Close of " << name << ": " << StatusString(status);
     // delete db
     p->db.db.reset(db = nullptr);
 }
@@ -3175,7 +3225,7 @@ bool Storage::deleteRpaEntriesFromHeight(rocksdb::WriteBatch *batch, const Block
 
     if (!status.ok()) {
         Warning() << __func__ << ": failed in call to db DeleteRange for height (>= " << height << "): "
-                  << QString::fromStdString(status.ToString());
+                  << StatusString(status);
         return false;
     }
     // Update deletion count and firstHeight and lastHeight as necessary
@@ -3208,7 +3258,7 @@ bool Storage::deleteRpaEntriesToHeight(rocksdb::WriteBatch *batch, const BlockHe
 
     if (!status.ok()) {
         Warning() << __func__ << ": failed in call to db DeleteRange for height (<= " << height << "): "
-                  << QString::fromStdString(status.ToString());
+                  << StatusString(status);
         return false;
     }
     // Update deletion count and firstHeight and lastHeight as necessary
@@ -4029,9 +4079,11 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
             // Asynch task -- the future will automatically be awaited on scope end (even if we throw here!)
             // Note: we await the result later down in this function before we truncate the txNumsFile. (Assumption
             // here is that the txNumsFile has all the hashes we want to delete until the below operation is done).
-            //
-            // TODO: FIXME! This crashes due to the addition of `batch`. MAKE THIS WORK in a phased manner like insert?
-            CoTask::Future fut = p->blocksWorker->submitWork([&]{ p->db.txhash2txnumMgr->truncateForUndo(batch, txNum0);});
+            TxHash2TxNumMgr::UndoPhases txhash2txnumPhases;
+            CoTask::Future fut = p->blocksWorker->submitWork([&]{
+                txhash2txnumPhases = p->db.txhash2txnumMgr->truncateForUndoPhased(batch, txNum0);
+                txhash2txnumPhases->doAsyncPhase1();
+            });
 
             // undo the scripthash histories
             for (const auto & sh : undo.scriptHashes) {
@@ -4096,8 +4148,10 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
 
             // Wait for the txhash2txnum truncate to finish before we proceed, since that co-task assumes the txNumsFile
             // won't change.
-            if (fut.future.valid())
+            if (fut.future.valid()) {
                 fut.future.get(); // this may throw if task threw
+                if (txhash2txnumPhases) txhash2txnumPhases->doSyncPhase2(); // may throw (unlikely)
+            }
 
             // lastly, truncate the tx num file and re-set txNumNext to point to this block's txNum0 (thereby recycling it)
             assert(long(p->txNumNext) - long(txNum0) == long(undo.blkInfo.nTx));
