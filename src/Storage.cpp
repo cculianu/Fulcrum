@@ -645,44 +645,42 @@ namespace {
         /// Returns the largest tx num we have ever inserted into the db, or -1 if no txnums were inserted
         int64_t maxTxNumSeenInDB() const { return largestTxNumSeen; }
 
-        class PhasesMixin {
+        /// Returned from insertForBlockPhased and/or truncateForUndoPhased. Intended to be an opaque type to capture
+        /// some state information for the async and then sync phase. Caller should call doAsyncPhase1() from a worker
+        /// thread and then when that completes, should call doSyncPhase2() from the caller's thread.
+        class PhasedOpBase {
             friend class ::TxHash2TxNumMgr;
         protected:
-            const Tic t0;
+            Tic t0;
             std::function<void()> asyncPhase1, syncPhase2;
-            PhasesMixin() = default;
+            PhasedOpBase() = default;
         public:
-            PhasesMixin(PhasesMixin &&) = delete;
-            PhasesMixin(const PhasesMixin &) = delete;
+            virtual ~PhasedOpBase() {
+                if (asyncPhase1 || syncPhase2) [[unlikely]]
+                    Warning() << __func__ << " destructor called but the lambdas are still alive. FIXME!"; // should never happen
+            }
+            PhasedOpBase(PhasedOpBase &&) = delete;
+            PhasedOpBase(const PhasedOpBase &) = delete;
 
-            PhasesMixin * doAsyncPhase1() {
+            PhasedOpBase * doAsyncPhase1() {
                 if (asyncPhase1) {
                     asyncPhase1();
                     asyncPhase1 = nullptr; // clear lambda
-                }
+                } else [[unlikely]]
+                    Warning() << __func__ << " called but asyncPhase1 is null!"; // defensive programming, should never happen
                 return this;
             }
-            PhasesMixin * doSyncPhase2() {
+            PhasedOpBase * doSyncPhase2() {
                 if (syncPhase2) {
                     syncPhase2();
                     syncPhase2 = nullptr; // clear lambda
-                }
+                } else [[unlikely]]
+                    Warning() << __func__ << " called but syncPhase2 is null!"; // defensive programming, should never happen
                 return this;
             }
         };
 
-        /// Return value from insertForBlockPhased(). Intended to be an opaque type to capture some state information
-        /// for the async and then sync phase.  Caller should call doAsyncPhase1() from a worker thread and then
-        /// when that completes, should call doSyncPhase2() from the calling thread.
-        class InsertPhasesCtx : public PhasesMixin {
-            friend class ::TxHash2TxNumMgr;
-            Tic t0;
-            std::function<void()> asyncPhase1, syncPhase2;
-            std::vector<std::pair<ByteView, VarInt>> kv;
-            InsertPhasesCtx() = default;
-        };
-
-        using InsertPhases = std::unique_ptr<InsertPhasesCtx>;
+        using PhasedOp = std::unique_ptr<PhasedOpBase>;
 
     private:
         inline void insertForBlockInner1(const size_t i, rocksdb::WriteBatch &batch, const ByteView &key, const VarInt &val,
@@ -707,20 +705,25 @@ namespace {
 
     public:
         [[nodiscard]]
-        InsertPhases insertForBlockPhased(rocksdb::WriteBatch &batch, TxNum blockTxNum0, const std::vector<PreProcessedBlock::TxInfo> &txInfos) {
-            InsertPhases ret{new InsertPhasesCtx}; // we use `new` here due to private c'tor
-            ret->asyncPhase1 = [this, ctx = ret.get(), &txInfos, blockTxNum0] {
-                ctx->kv.reserve(txInfos.size());
-                for (TxNum i = 0; i < txInfos.size(); ++i)
-                    ctx->kv.emplace_back(makeKeyFromHash(txInfos[i].hash), blockTxNum0 + i);
-                ctx->t0.fin();
+        PhasedOp insertForBlockPhased(rocksdb::WriteBatch &batch, TxNum blockTxNum0, const std::vector<PreProcessedBlock::TxInfo> &txInfos) {
+            struct InsertPhased : PhasedOpBase {
+                std::vector<std::pair<ByteView, VarInt>> kv;
+                InsertPhased() = default;
+                ~InsertPhased() override {}
             };
-            ret->syncPhase2 = [this, ctx = ret.get(), &batch, blockTxNum0, &txInfos] {
+            auto ret = std::make_unique<InsertPhased>();
+            ret->asyncPhase1 = [this, self = ret.get(), &txInfos, blockTxNum0] {
+                self->kv.reserve(txInfos.size());
+                for (TxNum i = 0; i < txInfos.size(); ++i)
+                    self->kv.emplace_back(makeKeyFromHash(txInfos[i].hash), blockTxNum0 + i);
+                self->t0.fin();
+            };
+            ret->syncPhase2 = [this, self = ret.get(), &batch, blockTxNum0, &txInfos] {
                 const Tic t1;
                 size_t i{};
-                for (const auto & [key, val] : ctx->kv)
+                for (const auto & [key, val] : self->kv)
                     insertForBlockInner1(i++, batch, key, val, txInfos); // may throw on error
-                insertForBlockInner2(batch, blockTxNum0, ctx->t0.nsec() + t1.nsec(), txInfos);
+                insertForBlockInner2(batch, blockTxNum0, self->t0.nsec() + t1.nsec(), txInfos);
             };
             return ret;
         }
@@ -745,23 +748,6 @@ namespace {
                 throw DatabaseError(QString("%1: batch merge fail: %2").arg(dbName(), StatusString(st)));
         }
 
-        // Return value from truncateForUndoPhased. Intended to be an opaque type to capture some state information
-        /// for the async and then sync phase. Caller should call doAsyncPhase1() from a worker thread and then
-        /// when that completes, should call doSyncPhase2() from the calling thread.
-        class UndoPhasesCtx : public PhasesMixin {
-            friend class ::TxHash2TxNumMgr;
-            const Tic t0;
-            std::vector<QByteArray> recs;
-            std::vector<rocksdb::Slice> keySlices; ///< slices are views into above `recs`
-            std::vector<std::string> valsBackToDb;
-            std::vector<bool> ok;
-            int dels{}, keeps{}, filts{}; // for DEBUG print
-
-            UndoPhasesCtx() = default;
-        };
-
-        using UndoPhases = std::unique_ptr<UndoPhasesCtx>;
-
         /// This is called during blockundo. Returns immediately with 2 lambdas to be invoked later.
         ///
         /// The lambdas delete records from the db having their TxNum >= `txNum`. The async almbda requires that
@@ -769,9 +755,18 @@ namespace {
         ///
         /// This is slow so don't call it with huge numbers of records beyond what fits into a block.
         [[nodiscard]]
-        UndoPhases truncateForUndoPhased(rocksdb::WriteBatch &batch, const TxNum txNum) {
-            UndoPhases ret{new UndoPhasesCtx}; // `new` required due to private c'tor
-            ret->asyncPhase1 = [this, ctx = ret.get(), txNum] {
+        PhasedOp truncateForUndoPhased(rocksdb::WriteBatch &batch, const TxNum txNum) {
+            struct UndoPhased : PhasedOpBase {
+                std::vector<QByteArray> recs;
+                std::vector<rocksdb::Slice> keySlices; ///< slices are views into above `recs`
+                std::vector<std::string> valsBackToDb;
+                std::vector<bool> ok;
+                unsigned dels{}, keeps{}, filts{}; // for DEBUG print
+                UndoPhased() = default;
+                ~UndoPhased() override {}
+            };
+            auto ret = std::make_unique<UndoPhased>();
+            ret->asyncPhase1 = [this, self = ret.get(), txNum] {
                 const auto rfNR = rf->numRecords();
                 if (rfNR < txNum) [[unlikely]]
                     throw DatabaseError(dbName() + ": RecordFile does not have the hashes required for the specified truncation");
@@ -781,16 +776,16 @@ namespace {
                     return;
                 }
                 QString err;
-                auto &recs = ctx->recs = rf->readRecords(txNum, rfNR - txNum, &err);
+                auto &recs = self->recs = rf->readRecords(txNum, rfNR - txNum, &err);
                 if (recs.size() != rfNR - txNum || !err.isEmpty()) [[unlikely]]
                     throw DatabaseError(QString("%1: short read count or error reading record file: %2").arg(dbName(), err));
 
                 DebugM("truncateForUndo: read ", recs.size(), Util::Pluralize(" record", recs.size()),
-                       " from txNums file, elapsed: ", ctx->t0.msecStr(), " msec");
+                       " from txNums file, elapsed: ", self->t0.msecStr(), " msec");
 
                 // first read all existing entries from the db -- we must delete the VarInts in their data blobs that
                 // have TxNums > txNum
-                auto &keySlices = ctx->keySlices;
+                auto &keySlices = self->keySlices;
                 keySlices.clear();
                 keySlices.reserve(recs.size());
                 for (const auto &rec : recs) {
@@ -801,13 +796,13 @@ namespace {
                 std::vector<rocksdb::Status> statuses(keySlices.size());
                 db->MultiGet(rdOpts, cf, keySlices.size(), keySlices.data(), dbValues.data(), statuses.data());
                 DebugM("truncateForUndo: MultiGet for ", statuses.size(), Util::Pluralize(" key", statuses.size()),
-                       " elapsed: ", ctx->t0.msecStr(), " msec");
+                       " elapsed: ", self->t0.msecStr(), " msec");
 
                 // next filter out all VarInts >= txNum, deleting records that have no more VarInts left and writing
                 // back records that still have VarInts in them
-                auto &valsBackToDb = ctx->valsBackToDb;
+                auto &valsBackToDb = self->valsBackToDb;
                 valsBackToDb.resize(dbValues.size());
-                ctx->ok.resize(dbValues.size(), true);
+                self->ok.resize(dbValues.size(), true);
                 for (size_t i = 0; i < dbValues.size(); ++i) {
                     if (!statuses[i].ok()) [[unlikely]] {
                         if (lastWarnTime.secs() >= 1.0) {
@@ -818,7 +813,7 @@ namespace {
                                       << "but there may be DB corruption. Start " << APPNAME
                                       << " again with -C -C to check the database for consistency.";
                         }
-                        ctx->ok[i] = false; // mark as to-be-skipped in sync lambda loop (should never happen!)
+                        self->ok[i] = false; // mark as to-be-skipped in sync lambda loop (should never happen!)
                         continue;
                     }
                     auto span = Span<const char>{dbValues[i]};
@@ -828,11 +823,11 @@ namespace {
                             const VarInt val = VarInt::deserialize(span); // this may throw
                             if (val.value<TxNum>() >= txNum) {
                                 // skip, filter out...
-                                ++ctx->filts;
+                                ++self->filts;
                             } else {
                                 // was a collision, keep
                                 valBackToDb.append(val.byteView().charData(), val.size());
-                                ++ctx->keeps;
+                                ++self->keeps;
                             }
                         } catch (const std::exception &e) {
                             throw DatabaseFormatError(QString("%1: caught exception in truncateForUndo: %2").arg(dbName(),e.what()));
@@ -840,15 +835,15 @@ namespace {
                     }
                 }
             };
-            ret->syncPhase2 = [this, ctx = ret.get(), &batch, txNum] {
+            ret->syncPhase2 = [this, self = ret.get(), &batch, txNum] {
                 const Tic t1;
-                const size_t N = std::min(std::min(ctx->keySlices.size(), ctx->valsBackToDb.size()), ctx->ok.size());
+                const size_t N = std::min(std::min(self->keySlices.size(), self->valsBackToDb.size()), self->ok.size());
                 if (!N) [[unlikely]] return; // nothing to do!
                 for (size_t i = 0; i < N; ++i) {
-                    if (!ctx->ok[i]) [[unlikely]]
+                    if (!self->ok[i]) [[unlikely]]
                         continue; // error reading from DB, already warned above in asyncPhase1, just continue (should never happen)
-                    const rocksdb::Slice &keySlice = ctx->keySlices[i];
-                    const std::string &valBackToDb = ctx->valsBackToDb[i];
+                    const rocksdb::Slice &keySlice = self->keySlices[i];
+                    const std::string &valBackToDb = self->valsBackToDb[i];
                     if (valBackToDb.empty()) {
                         // delete, key now has no VarInts
                         if (auto st = batch.Delete(cf, keySlice); !st.ok()) [[unlikely]] {
@@ -858,7 +853,7 @@ namespace {
                                           << StatusString(st) << ". Continuing anyway ...";
                             }
                         }
-                        ++ctx->dels;
+                        ++self->dels;
                     } else {
                         // keep key, key has some VarInts left
                         if (auto st = batch.Put(cf, keySlice, valBackToDb); !st.ok()) [[unlikely]]
@@ -871,9 +866,9 @@ namespace {
                 largestTxNumSeen = std::max(txNumI - 1, int64_t{-1});
                 saveLargestTxNumSeen(batch);
 
-                DebugM("truncateForUndo: txNum: ", txNum, ", nrecs: ", ctx->recs.size(), ", dels: ", ctx->dels,
-                       ", keeps: ", ctx->keeps, ", filts: ", ctx->filts, ", elapsed: ",
-                       QString::asprintf("%1.3f", (ctx->t0.usec() + t1.usec()) / 1e3), " msec");
+                DebugM("truncateForUndo: txNum: ", txNum, ", nrecs: ", self->recs.size(), ", dels: ", self->dels,
+                       ", keeps: ", self->keeps, ", filts: ", self->filts, ", elapsed: ",
+                       QString::asprintf("%1.3f", (self->t0.usec() + t1.usec()) / 1e3), " msec");
             };
 
             return ret;
@@ -3675,7 +3670,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
             // NOTE: The assumption here is that ppb->txInfos is ok to share amongst threads -- that is, the assumption
             // is that nothing mutates it.  If that changes, please re-examine this code.
             CoTask::Future fut; // if valid, will auto-wait for us on scope end
-            TxHash2TxNumMgr::InsertPhases txhash2txnumPhases;
+            TxHash2TxNumMgr::PhasedOp txhash2txnumPhases;
             if (ppb->txInfos.size() > 1000) {
                 // submit this to the co-task for blocks with enough txs
                 fut = p->blocksWorker->submitWork([&]{
@@ -4079,7 +4074,7 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
             // Asynch task -- the future will automatically be awaited on scope end (even if we throw here!)
             // Note: we await the result later down in this function before we truncate the txNumsFile. (Assumption
             // here is that the txNumsFile has all the hashes we want to delete until the below operation is done).
-            TxHash2TxNumMgr::UndoPhases txhash2txnumPhases;
+            TxHash2TxNumMgr::PhasedOp txhash2txnumPhases;
             CoTask::Future fut = p->blocksWorker->submitWork([&]{
                 txhash2txnumPhases = p->db.txhash2txnumMgr->truncateForUndoPhased(batch, txNum0);
                 txhash2txnumPhases->doAsyncPhase1();
