@@ -230,15 +230,22 @@ Everything should just work (I use MacOS as my dev machine).
 
 ### Donations
 
-Sure!  Send **BCH** here:
+#### Sure!  Send **BCH** here:
 
-[bitcoincash:qphax4s4n9h60jxj2fkrjs35w2tvgd4wzvf52cgtzc](bitcoincash:qphax4s4n9h60jxj2fkrjs35w2tvgd4wzvf52cgtzc)
+**`bitcoincash:qphax4s4n9h60jxj2fkrjs35w2tvgd4wzvf52cgtzc`**
 
 [![bitcoincash:qphax4s4n9h60jxj2fkrjs35w2tvgd4wzvf52cgtzc](https://raw.githubusercontent.com/cculianu/DonateSpareChange/master/donate.png)](bitcoincash:qphax4s4n9h60jxj2fkrjs35w2tvgd4wzvf52cgtzc)
 
-Or, for anonymity you can donate to this **BCH RPA address**: **`paycode:qygqyce24f7n6q2u36r8t332z5426ul78v7z0ynl6v9wlmk9tt28adksqgc0fzge8fk6ux8cj9tjvp8mkakvfzkgwqzj5h4n9tnfcpscsn7wxqqqqqqqzzmxze04`**
+### Or, for anonymity you can donate to this **BCH RPA address**: 
 
-You may also send **BTC** to the BTC-equivalent of the above BCH address, which is: **`1BCHBCH6TXBaXyc5HReLBm1sNytBF2kkPD`**
+**`paycode:qygqyce24f7n6q2u36r8t332z5426ul78v7z0ynl6v9wlmk9tt28adksqgc0fzge8fk6ux8cj9tjvp8mkakvfzkgwqzj5h4n9tnfcpscsn7wxqqqqqqqzzmxze04`**
+
+### You may also send **BTC**:
+
+This is the BTC-equivalent of the above BCH address, which is: **`1BCHBCH6TXBaXyc5HReLBm1sNytBF2kkPD`**
+[![1BCHBCH6TXBaXyc5HReLBm1sNytBF2kkPD](https://c3-soft.com/downloads/Bitcoin/imgs/btc_address_qrcode_1.png )](1BCHBCH6TXBaXyc5HReLBm1sNytBF2kkPD)
+
+
 
 ---
 
