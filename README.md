@@ -240,12 +240,12 @@ Everything should just work (I use MacOS as my dev machine).
 
 **`paycode:qygqyce24f7n6q2u36r8t332z5426ul78v7z0ynl6v9wlmk9tt28adksqgc0fzge8fk6ux8cj9tjvp8mkakvfzkgwqzj5h4n9tnfcpscsn7wxqqqqqqqzzmxze04`**
 
+[![paycode:qygqyce24f7n6q2u36r8t332z5426ul78v7z0ynl6v9wlmk9tt28adksqgc0fzge8fk6ux8cj9tjvp8mkakvfzkgwqzj5h4n9tnfcpscsn7wxqqqqqqqzzmxze04](https://c3-soft.com/downloads/Bitcoin/imgs/fulcrum_donation_paycode_1.png)](paycode:qygqyce24f7n6q2u36r8t332z5426ul78v7z0ynl6v9wlmk9tt28adksqgc0fzge8fk6ux8cj9tjvp8mkakvfzkgwqzj5h4n9tnfcpscsn7wxqqqqqqqzzmxze04)
+
 ### You may also send **BTC**:
 
 This is the BTC-equivalent of the above BCH address, which is: **`1BCHBCH6TXBaXyc5HReLBm1sNytBF2kkPD`**
 [![1BCHBCH6TXBaXyc5HReLBm1sNytBF2kkPD](https://c3-soft.com/downloads/Bitcoin/imgs/btc_address_qrcode_1.png )](1BCHBCH6TXBaXyc5HReLBm1sNytBF2kkPD)
-
-
 
 ---
 
