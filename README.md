@@ -245,7 +245,7 @@ Everything should just work (I use MacOS as my dev machine).
 ### You may also send **BTC**:
 
 This is the BTC-equivalent of the above BCH address, which is: **`1BCHBCH6TXBaXyc5HReLBm1sNytBF2kkPD`**
-[![1BCHBCH6TXBaXyc5HReLBm1sNytBF2kkPD](https://c3-soft.com/downloads/Bitcoin/imgs/btc_address_qrcode_2.png)](1BCHBCH6TXBaXyc5HReLBm1sNytBF2kkPD)
+[![1BCHBCH6TXBaXyc5HReLBm1sNytBF2kkPD](https://c3-soft.com/downloads/Bitcoin/imgs/btc_address_qrcode_1.png)](1BCHBCH6TXBaXyc5HReLBm1sNytBF2kkPD)
 
 ---
 
