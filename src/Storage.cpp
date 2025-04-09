@@ -281,7 +281,7 @@ namespace {
     template <> Rpa::PrefixTable Deserialize(const QByteArray &, bool *);
     template <> QByteArray Serialize(const RpaDBKey &k) { return k.toBytes(); }
     template <> RpaDBKey Deserialize(const QByteArray &ba, bool *ok) { return RpaDBKey::fromBytes(ba, ok); }
-    QByteArray Serialize(const bitcoin::Amount &, const bitcoin::token::OutputData *);
+    QByteArray Serialize2(const bitcoin::Amount &, const bitcoin::token::OutputData *);
     template <> SHUnspentValue Deserialize(const QByteArray &, bool *);
     // TxNumVec
     using TxNumVec = std::vector<TxNum>;
@@ -452,18 +452,6 @@ namespace {
             throw DatabaseError(QString("%1 (cf: %3): %2")
                                     .arg((!errorMsgPrefix.isEmpty() ? errorMsgPrefix : "Error from WriteBatch::Delete"),
                                          StatusString(st), CFName(cf)));
-    }
-    /// A convenient wrapper to db->Write(batch...) which throws on all errors.
-    void GenericBatchWrite(rocksdb::DB *db, rocksdb::WriteBatch & batch,
-                        const QString & errorMsgPrefix = QString(),
-                        const rocksdb::WriteOptions & opts = rocksdb::WriteOptions())
-    {
-        auto st = db->Write(opts, &batch);
-        if (!st.ok())
-            throw DatabaseError(QString("%1: %2")
-                                    .arg((!errorMsgPrefix.isEmpty() ? errorMsgPrefix
-                                                                    : QString("Error writing batch to db %1").arg(DBName(db, nullptr))),
-                                         StatusString(st)));
     }
     /// Throws on all errors. Otherwise deletes a key from db. It is not an error to delete a non-existing key.
     template <bool safeScalar = false, typename KeyType>
@@ -1284,7 +1272,7 @@ struct Storage::Pvt
     std::map<TxNum, unsigned> blkInfosByTxNum; ///< ordered map of TxNum0 for a block -> index into above blkInfo array
     RWLock blkInfoLock; ///< locks blkInfos and blkInfosByTxNum
 
-    std::atomic<int64_t> utxoCt = 0;
+    std::atomic_int64_t utxoCt = 0;
 
     static constexpr uint32_t InvalidUndoHeight = std::numeric_limits<uint32_t>::max();
 
@@ -1384,443 +1372,80 @@ namespace {
     }
 } // namespace
 
+// Just a glorified hash table to cache recently-seen UTXOs to avoid database lookups. In previous versions of Fulcrum
+// this class was more elaborate (it tried to avoid redundant DB writes for short-lived UTXOs that only were active
+// for a few blocks).  But it has been simplified in the interests of preserving database integrity across addBlock()
+// calls. Additionally, all those elaborate techniques didn't improve performance much (and sometimes hampered it).
+// This class is only used during initial sync and even then only if --utxo-cache is specified.
 class Storage::UTXOCache
 {
-    using Node = std::pair<TXO, TXOInfo>;
-    using NodeList = std::list<Node>;
-    using TXORef = std::reference_wrapper<const TXO>; /* ref always to a Node in NodeList */
     struct TableHasherAndEq {
         bool operator()(const TXO &a, const TXO &b) const noexcept { return a == b; }
         size_t operator()(const TXO &t) const noexcept { return std::hash<TXO>{}(t); }
     };
-    using Table = robin_hood::unordered_flat_map<TXORef, NodeList::const_iterator, TableHasherAndEq, TableHasherAndEq>;
-    struct ItSetHasher {
-        size_t operator()(const NodeList::const_iterator &it) const noexcept { return std::hash<TXO>{}(it->first); }
+    struct TableEntry {
+        TXOInfo txoInfo;
+        size_t entrySize; ///< memory usage for this entry in bytes
+        TableEntry(TXOInfo &&info, size_t s) : txoInfo{std::move(info)}, entrySize{s} {}
     };
-    using ItSet = robin_hood::unordered_flat_set<NodeList::const_iterator, ItSetHasher>;
-    using RmVec = std::vector<TXO>;
-
-    NodeList ordering;
-    Table utxos; //< points to Nodes in `ordering`
-    ItSet adds; ///< entries in above NodeList that are new and are not in the DB yet
-    RmVec rms; ///< queued deletions, not yet deleted from DB
+    using Table = robin_hood::unordered_flat_map<TXO, TableEntry, TableHasherAndEq, TableHasherAndEq>;
+    Table utxos;
+    std::vector<std::pair<TXO, TXOInfo>> deferredAdds;
+    size_t memUsed = 0u; ///< cumulative sum of all TableEntry::entrySize in the Table (excludes hash table size itself)
 
     static_assert (std::is_same_v<decltype(std::declval<TXO>().txHash), QByteArray>
                    && std::is_same_v<decltype(std::declval<TXOInfo>().hashX), QByteArray>,
                    "Below assumes we are using QByteArray");
-    static constexpr size_t EntrySize = sizeof(NodeList::value_type) + sizeof(Table::value_type)
-                                        + (HashLen + Util::qByteArrayPvtDataSize()) * size_t{2U} // account for txHash and hashX
-                                        + sizeof(void *) * size_t{2U} /* account for list node next/prev ptrs */;
-    static constexpr size_t ItSetItemSize = sizeof(ItSet::value_type);
-    static constexpr size_t RmVecItemSize = sizeof(RmVec::value_type) + HashLen + Util::qByteArrayPvtDataSize();
+    static constexpr size_t BaseEntrySize = sizeof(Table::value_type)
+                                            + (HashLen + Util::qByteArrayPvtDataSize()) * size_t{2U}; // account for txHash and hashX
 
-    using ShunspentKey = QByteArray;
-    using ShunspentValue = QByteArray;
-    struct ShunspentKeyHasher {
-        size_t operator()(const ShunspentKey & k) const noexcept { return Util::hashForStd(static_cast<ByteView>(k)); }
-    };
-    using ShunspentTable = robin_hood::unordered_flat_map<ShunspentKey, ShunspentValue, ShunspentKeyHasher>;
-    using ShunspentRmVec = std::vector<ShunspentKey>;
-
-    ShunspentTable shunspentAdds; ///< queued additions, not yet added to DB
-    ShunspentRmVec shunspentRms; ///< queued deletions, not yet deleted from DB
-
-    static constexpr size_t ShunspentTableNodeSize = sizeof(ShunspentTable::value_type) + HashLen + CompactTXO::minSize()
-                                                     + Util::qByteArrayPvtDataSize()*size_t{2u} + sizeof(int64_t); // not guaranteed accurate: doesn't take possible tokenData serialization into account
-    static constexpr size_t ShunspentRmVecNodeSize = sizeof(ShunspentRmVec::value_type) + HashLen + CompactTXO::minSize()
-                                                     + Util::qByteArrayPvtDataSize();
-
-    static constexpr size_t memUsageForSizes(size_t utxosSize, size_t addsSize, size_t rmsSize,
-                                             size_t shunspentAddsSize,size_t  shunspentRmsSize) noexcept {
-        return utxosSize * EntrySize + addsSize * ItSetItemSize + rmsSize * RmVecItemSize
-                + shunspentAddsSize * ShunspentTableNodeSize + shunspentRmsSize * ShunspentRmVecNodeSize;
-    }
-
-    static constexpr bool CHECK_SANITY = false; ///< enable this for extra sanity checks (slightly slows down the cache)
-
-    /// When put() is called but the prefetcher is active, the put() calls are deferred here and the actual add()s will
-    /// happen when the prefetcher is done. This is a NodeList so it can be quickly spliced into the `ordering` list.
-    NodeList deferredAdds;
-
-    void do_flush(const size_t memUsageTarget = 0, std::vector<NodeList::const_iterator> * const optAddsOrder = nullptr) {
-        if (UNLIKELY(prefetcherFut.future.valid())) {
-            // paranoia: wait for prefetcher to end if it was running
-            // this branch can only be taken in stack-unwinding and/or "exception"-al circumstances
-            Warning() << name << ": Prefetcher was active when " << __func__ << " was called. Waiting for prefetch to complete ...";
-            prefetcherFut.future.wait();
-        }
-        const size_t us = utxos.size(), as = adds.size(), rs = rms.size(), sas = shunspentAdds.size(), srs = shunspentRms.size();
-        if (memUsageForSizes(us, as, rs, sas, srs) < memUsageTarget)
-             return;  // nothing to do!
-        Log() << name <<  ": Flushing to DB ...";
-        if (as + rs == 0u || (memUsageTarget && memUsageForSizes(us, as, rs, 0, 0) <= memUsageTarget)) {
-            // flush to the shunspents since we prefer to evict those over the utxos
-            const bool doAdds = !memUsageTarget || memUsageForSizes(us, as, rs, sas, 0) > memUsageTarget; // we prefer rms over adds
-            do_shunspent_flush(doAdds, memUsageTarget, [this]{ return memUsage(); });
-        } else {
-            bool doAdds = true, doShAdds = true;
-            // we prefer rms over adds, so try to optimize to do rms only if we can
-            if (memUsageTarget) {
-                if (memUsageForSizes(us, as, 0, sas, 0) <= memUsageTarget) {
-                    doAdds = doShAdds = false;
-                } else if (memUsageForSizes(us, 0, 0, sas, 0) <= memUsageTarget) {
-                    doShAdds = false;
-                } else if (memUsageForSizes(us, as, 0, 0, 0) <= memUsageTarget) {
-                    doAdds = false;
-                }
-            }
-            do_parallel_flush(doAdds, doShAdds, memUsageTarget, optAddsOrder);
-        }
-    }
-    static constexpr size_t batchSize = 100'000;  // to limit the memory used for batching, we limit the batch size
-    void commitBatch(rocksdb::ColumnFamilyHandle *cf, rocksdb::WriteBatch &batch,
-                     const QString &errMsg, const rocksdb::WriteOptions &writeOpts, size_t &batchCount) {
-        const Tic t;
-        GenericBatchWrite(m_db, batch, errMsg, writeOpts); // may throw
-        batch.Clear();
-        if (t.msec<int>() >= 200) {
-            const auto ct = batchCount;
-            DebugM("batch write of ", ct, " ", CFName(cf), Util::Pluralize(" item", ct), " took ", t.msecStr(), " msec");
-        }
-        batchCount = 0u;
-    }
-    void do_parallel_flush(bool doAdds, bool doShunspentAdds, const size_t memUsageTarget,
-                           std::vector<NodeList::const_iterator> * const optAddsOrder) {
+    void do_limitSize(const size_t bytes) {
+        if (memUsed <= bytes || utxos.empty()) return;
+        const size_t limitTo = static_cast<size_t>(bytes * 0.95); // limit to 95% of size to avoid ping-ponging through here for every call
         const Tic t0;
-        size_t addCt = 0u, rmCt = 0u;
-        rocksdb::WriteBatch batch;
-
-        const size_t utxosSize = utxos.size();
-        std::atomic_size_t addsSize = adds.size(), rmsSize = rms.size(),
-                           shunspentAddsSize = shunspentAdds.size(), shunspentRmsSize = shunspentRms.size();
-        auto threadSafeMemUsage = [&] {
-            return memUsageForSizes(utxosSize, addsSize, rmsSize, shunspentAddsSize, shunspentRmsSize);
-        };
-
-        // do scripthash_unspent first in a CoTask thread, since those are "cheaper" and don't require us to read them
-        // back from DB, so they can be evicted first
-        std::optional<Defer<>> d1;
-        if ((doShunspentAdds && !shunspentAdds.empty()) || !shunspentRms.empty()) {
-            flusherShunspentFut = flusherShunspent.submitWork([&]{
-                do_shunspent_flush(doShunspentAdds, memUsageTarget, threadSafeMemUsage, &shunspentRmsSize, &shunspentAddsSize);
-            });
-            // This is here if an exception was thrown, to properly clean up the parallel task that is pointing
-            // to variables on the stack frame.
-            d1.emplace([this]{
-                if (flusherShunspentFut.future.valid()) {
-                    // Catch all exceptions here to avoid double-exceptions on stack unwinding
-                    QString what;
-                    try {
-                        flusherShunspentFut.future.get();
-                        return;
-                    } catch (const std::exception & e) { what = e.what(); } catch (...) { what = "Unknown exception"; }
-                    Error() << "Exception caught waiting for future for task: " << flusherShunspent.name << ": " << what;
-                }
-            });
+        DebugM(name, ": limiting size to ", limitTo, ", current size: ", memUsed);
+        size_t deletions = 0;
+        for (auto it = utxos.begin(); memUsed > limitTo && it != utxos.end(); /*-->see loop body<--*/) {
+            it = rm(it);
+            ++deletions;
         }
-
-        // do utxos in this thread since it's otherwise going to block anyway
-        if ((doAdds && !adds.empty()) || !rms.empty()) {
-            static const QString errMsgBatchWrite("Error issuing batch write to utxoset db for a utxo update");
-            if (!m_db || !cf_utxo) throw InternalError("utxoset db/colfam is nullptr! FIXME!");
-            size_t batchCount = 0u;
-            // rms first (loop in reverse to shrink vector as we loop)
-            for (size_t i = rms.size(); i-- > 0u; /**/) {
-                if (memUsageTarget && threadSafeMemUsage() <= memUsageTarget)
-                    break; // abort loop early
-                // enqueue delete from utxoset db -- may throw.
-                static const QString errMsgPrefix("Failed to issue a batch delete for a utxo");
-                const auto & txo = rms[i];
-                GenericBatchDelete(batch, cf_utxo, txo, errMsgPrefix); // may throw on failure
-                rms.resize(i);
-                --rmsSize;
-                ++rmCt;
-                if (++batchCount >= batchSize)
-                    commitBatch(cf_utxo, batch, errMsgBatchWrite, writeOpts, batchCount);
-            }
-
-            // next, adds
-            if (doAdds) {
-                if (optAddsOrder) {
-                    // caller specified an order for adds that they prefer for deletion
-                    auto & order = *optAddsOrder;
-                    for (const auto oit : order) {
-                        if (memUsageTarget && threadSafeMemUsage() <= memUsageTarget)
-                            break; // abort loop early
-                        if (auto it = adds.find(oit); it != adds.end()) {
-                            // Update db utxoset, keyed off txo -> txoinfo
-                            {
-                                static const QString errMsgPrefix("Failed to add a utxo to the utxo batch");
-                                const auto & [txo, info] = **it;
-                                GenericBatchPut(batch, cf_utxo, txo, info, errMsgPrefix); // may throw on failure
-                            }
-                            it = adds.erase(it);
-                            --addsSize;
-                            ++addCt;
-                            if (++batchCount >= batchSize)
-                                commitBatch(cf_utxo, batch, errMsgBatchWrite, writeOpts, batchCount);
-                        }
-                    }
-                    order.clear(); order.shrink_to_fit();
-                } else {
-                    // no order specified, just iterate in "random" order of the hash set
-                    for (auto it = adds.begin(); it != adds.end(); /**/) {
-                        if (memUsageTarget && threadSafeMemUsage() <= memUsageTarget)
-                            break; // abort loop early
-                        // Update db utxoset, keyed off txo -> txoinfo
-                        {
-                            static const QString errMsgPrefix("Failed to add a utxo to the utxo batch");
-                            const auto & [txo, info] = **it;
-                            GenericBatchPut(batch, cf_utxo, txo, info, errMsgPrefix); // may throw on failure
-                        }
-                        it = adds.erase(it);
-                        --addsSize;
-                        ++addCt;
-                        if (++batchCount >= batchSize)
-                            commitBatch(cf_utxo, batch, errMsgBatchWrite, writeOpts, batchCount);
-                    }
-                }
-            }
-            if (batchCount) commitBatch(cf_utxo, batch, errMsgBatchWrite, writeOpts, batchCount);
-        } else {
-            if (optAddsOrder) { optAddsOrder->clear(); optAddsOrder->shrink_to_fit(); }
-        }
-
-        if (flusherShunspentFut.future.valid()) flusherShunspentFut.future.get(); // may throw it task threw
-
-        if (t0.msec<int>() >= 50)
-            DebugM(__func__, ": added ", addCt, " and deleted ", rmCt, Util::Pluralize(" utxo", addCt + rmCt),
-                   " in ", t0.msecStr(3), " msec");
-    }
-    template <typename Func>
-    void do_shunspent_flush(bool doAdds, const size_t memUsageTarget, const Func &getMemUsage,
-                            std::atomic_size_t * shunspentRmsSize = nullptr,
-                            std::atomic_size_t * shunspentAddsSize = nullptr) {
-        const Tic t0;
-        size_t shunspentAddCt = 0u, shunspentRmCt = 0u;
-        rocksdb::WriteBatch shunspentBatch;
-
-        static const QString errMsgBatchWrite("Error issuing batch write to scripthash_unspent db for a shunspent update");
-        if (!cf_shunspent || !m_db) throw InternalError("scripthash_unspent db/colfam is nullptr! FIXME!");
-        size_t batchCount = 0u;
-
-        // shunspentRms first (loop in reverse so we can shrink vector as we loop)
-        for (size_t i = shunspentRms.size(); i-- > 0u; /**/) {
-            if (memUsageTarget && getMemUsage() <= memUsageTarget)
-                break; // abort loop early
-            const auto & dbKey = shunspentRms[i];
-            // enqueue delete from scripthash_unspent db -- may throw.
-            static const QString errMsgPrefix("Failed to issue a batch delete for a shunspent item");
-            GenericBatchDelete(shunspentBatch, cf_shunspent, dbKey, errMsgPrefix);
-            shunspentRms.resize(i);
-            ++shunspentRmCt;
-            if (shunspentRmsSize) --*shunspentRmsSize;
-            if (++batchCount >= batchSize)
-                commitBatch(cf_shunspent, shunspentBatch, errMsgBatchWrite, writeOpts, batchCount);
-        }
-
-        // next, shunspentAdds
-        if (doAdds) {
-            for (auto it = shunspentAdds.begin(); it != shunspentAdds.end(); /**/) {
-                if (memUsageTarget && getMemUsage() <= memUsageTarget)
-                    break; // abort loop early
-                // Update db scripthash_unspent, keyed off hashX|ctxo
-                {
-                    static const QString errMsgPrefix("Failed to add an item to the shunspent batch");
-                    const auto & [dbkey, dbvalue] = *it;
-                    GenericBatchPut(shunspentBatch, cf_shunspent, dbkey, dbvalue, errMsgPrefix); // may throw on failure
-                }
-                it = shunspentAdds.erase(it);
-                ++shunspentAddCt;
-                if (shunspentAddsSize) --*shunspentAddsSize;
-                if (++batchCount >= batchSize)
-                    commitBatch(cf_shunspent, shunspentBatch, errMsgBatchWrite, writeOpts, batchCount);
-            }
-        }
-
-        if (batchCount) commitBatch(cf_shunspent, shunspentBatch, errMsgBatchWrite, writeOpts, batchCount);
-        if (t0.msec<int>() >= 50)
-            DebugM(__func__, ": added ", shunspentAddCt, " and deleted ", shunspentRmCt,
-                   Util::Pluralize(" shunspent", shunspentAddCt + shunspentRmCt), " in ", t0.msecStr(3), " msec");
+        DebugM(name, ": deletions: ", deletions, ", utxos left: ", utxos.size(), ", elapsed: ", t0.msecStr(), " msec",
+               "; memUsage: ", QString::number(memUsed/1000.0/1000.0, 'f', 3), " MB");
     }
 
-    void do_limitSize(const size_t bytes, const unsigned tryCt = 0) {
-        // prune oldest first that are not in `adds`, then flush if still over limit
-        // hopefully this reduces disk I/O for recent short-lived UTXOs over the above approach.
-        size_t m = memUsage();
-        if (m <= bytes) return;
-        const Tic t0;
-        DebugM(name, ": limiting size to ", bytes, ", current size: ", m);
-        size_t iters = 0, deletions = 0;
-        std::vector<NodeList::const_iterator> addsOrder;
-        addsOrder.reserve(adds.size());
-        const bool definitelyNotInAdds = adds.empty(), definitelyInAdds = ordering.size() == adds.size();
-        for (auto oit = ordering.cbegin(); m > bytes && oit != ordering.cend(); ++iters) {
-            if (!definitelyInAdds && (definitelyNotInAdds || adds.count(oit) == 0)) {
-                // only erase cached UTXOs that exist in DB and are not in "add" set
-                utxos.erase(oit->first);
-                oit = ordering.erase(oit);
-                ++deletions;
-                m = memUsage();
-            } else {
-                // remember the ordering encountered since do_flush will use this information to save "oldest first" to DB
-                addsOrder.push_back(oit++);
-            }
-        }
-        auto PrintStats = [&] {
-            DebugM(name, ": (", tryCt , ") iters: ", iters, ", deletions: ", deletions, ", utxos left: ", utxos.size(),
-                   ", elapsed: ", t0.msecStr(), " msec",
-                   "; sizes - adds: ", adds.size(), ", rms: ", rms.size(), ", shunspentAdds: ", shunspentAdds.size(),
-                   ", shunspentRms: ", shunspentRms.size(), ", memUsage: ", QString::number(memUsage()/1000.0/1000.0, 'f', 3), " MB");
-        };
-        if (m > bytes) {
-            DebugM(name, ": after ", iters, " iters and ", deletions, " deletions, size is still over limit (",
-                   m, " > ", bytes, "), doing limited flush now ...");
-            do_flush(bytes, &addsOrder);
-            m = memUsage();
-            if (m > bytes) {
-                // memusage still high, try again, this time do_flush should reap more
-                DebugM(name, ": memUsage (", m, ") is still above threshold, calling ", __func__, " again ...");
-                PrintStats();
-                do_limitSize(bytes, tryCt + 1U);
-                return;
-            }
-        }
-        PrintStats();
-    }
-
-    /// Used to splice in the previously-populated `deferredAdds`, called by `waitForPrefetchToComplete()`
-    void addAllDeferred() {
-        if (deferredAdds.empty()) return;
-        const Tic t0;
-        const size_t n = deferredAdds.size();
-        ordering.splice(ordering.end(), deferredAdds);
-        auto it = ordering.cend();
-        for (size_t i = 0; i < n; ++i)
-            link_node(--it, true /* isNotInDbYet - always `true` otherwise we wouldn't be here! */);
-        if (t0.msec<int>() >= 50 || n >= 20000)
-            DebugM(__func__, ": added ", n, Util::Pluralize(" UTXO", n), " to hashmap in ", t0.msecStr(), " msec");
-    }
-
-    template<typename ...Args>
-    void add(bool isNotInDBYet, Args && ...args) {
-        // to prevent UB, should add in this order
-        // 1. add to `ordering` list first
-        // 2. then add to `utxos` and possibly `adds`
-        ordering.emplace_back(std::forward<Args>(args)...);
-        auto it = ordering.cend();
-        link_node(--it, isNotInDBYet);
-    }
-
-    /// Associates a freshly created `ordering` item with the `utxos` table and possibly the `adds` set.
-    /// Precondition: `it` must be a valid iterator in the `ordering` NodeList
-    void link_node(const NodeList::const_iterator &it, bool isNotInDBYet) {
-        const auto & txo = it->first; // `txo` here must be a reference to the above-inserted node
-        {
-            const auto & [tit, inserted] = utxos.try_emplace(txo /* txoref to Node in `ordering` */, it);
-            if (UNLIKELY(!inserted)) {
-                // already there! this can happen on mainnet due to dupe txos pre-BIP34 (two txos are like this on mainnet only)
-                DebugM(__func__, ": WARNING dupe txo encountered: [", it->first.toString(), ", ", it->second.confirmedHeight.value_or(0),
-                       "] vs [", tit->second->first.toString(), ", ", tit->second->second.confirmedHeight.value_or(0), "]");
-                // we must emulate the behavior of previous code (before UTXOCache) which would overwrite existing
-                const auto oit = tit->second;
-                adds.erase(oit);
-                utxos.erase(tit);
-                ordering.erase(oit);
-                const auto & [tit2, inserted2] = utxos.try_emplace(txo, it);
-                if (UNLIKELY(!inserted2)) /* paranoia */
-                    throw InternalError("Tried overwriting existing TXO in cache but failed! THIS SHOULD NEVER HAPPEN!");
-            }
-        }
-        // NOTE: Assumption is that this txo was not in `rms`.  On mainnet the dupe txos are unspent
-        //       between the 2 times they appear, so this assumption holds, and since BIP34 has been
-        //       activated, it will always hold, since only 1 of them can ever be spent in the future.
-
-        if (isNotInDBYet) {
-            adds.insert(it);
-        } else {
-            // This branch may be taken on prefetch or on cache miss, which can happen if the UTXOCache is too small on
-            // a small memory system).
-            // Note: It was determined this check is not needed.  Re-enable this check if we modify the code
-            //       significantly, as a sanity/testing check.
-            if constexpr (CHECK_SANITY) {
-                if (const auto ait = adds.find(it); ait != adds.end()) {
-                    Warning() << __func__ << ": WARNING added txo " << txo.toString() << " as \"isNotInDbYet = false\","
-                              << " but it was already in `adds` (which presumes \"isNotInDbYet = true\"!"
-                              << " INVARIANT VIOLATED! FIXME!";
-                    adds.erase(ait);
-                }
-            }
-        }
-    }
-
-    void addShunspent(const ShunspentKey &k, const ShunspentValue &v) {
-        const auto & [it, inserted] = shunspentAdds.emplace(k, v);
-        if (UNLIKELY(!inserted)) {
-            // Already there! Paranoia check here ... it turns out even in pre-BIP34 txns, this cannot happen
-            // because we uniquely identify txns by unique id number, so dupe tx-hash's (as was possible pre-BIP34)
-            // cannot trigger this branch.  This branch is here strictly for paranoia.
-            Warning() << __func__ << ": WARNING dupe txo encountered with key: \"" << it->first.toHex() << "\" [val1: "
-                      << it->second.toHex() << " val2: " << v.toHex() << "], overwriting existing with val2.";
-            it->second = v; // overwrite existing to preserve behavior of pre-UTXOCache code.
-        }
-        // NOTE: Assumption is that an add will never add a shunspent key that is in the shunspentRms vector.
-        // (this is not checked for performance.)
-    }
-
-    bool rm(const TXO &txo) {
-        bool ret = false;
-        bool wasInAdds = false;
-        if (auto it = utxos.find(txo); it != utxos.end()) {
-            if (auto ait = adds.find(it->second); ait != adds.end()) {
-                wasInAdds = true;
-                utxoDbOpsSaved += 3; // we saved an add, a read, and a delete here!
-                adds.erase(ait);
-            }
-            // to prevent UB, should erase in this order (with `ordering` entries always being erased last!)
-            const auto oit = it->second;
-            utxos.erase(it);
-            ordering.erase(oit);
-            ret = true;
-        }
-        if (!wasInAdds) rms.push_back(txo);
-        return ret;
-    }
-
-    bool rmShunspent(ShunspentKey && k) {
-        if (auto it = shunspentAdds.find(k); it != shunspentAdds.end()) {
-            shunspentAdds.erase(it);
-            shunspentDbOpsSaved += 2; // we saved an add then a delete here!
+    bool add(TXO &&txo, TXOInfo &&info) {
+        const size_t entrySize = BaseEntrySize + (info.tokenDataPtr ? info.tokenDataPtr->GetMemSize() : 0u);
+        if (const auto & [it, inserted] = utxos.try_emplace(std::move(txo), std::move(info), entrySize); inserted) {
+            memUsed += entrySize;
             return true;
-        } else
-            shunspentRms.push_back(std::move(k));
+        }
         return false;
     }
 
-    bool contains(const TXO & t) const { return utxos.find(t) != utxos.end(); }
-
-    std::optional<TXOInfo> get_from_cache(const TXO & t) const {
-        if (const auto it = utxos.find(t); it != utxos.end())
-            return it->second->second;
-        return std::nullopt;
+    // Precondition: `it` must be a valid iterator.
+    // Returns the "next" iterator after erasing `it`, and after accounting for `it`'s memusage.
+    template <typename It>
+    It rm(const It &it) {
+        memUsed -= it->second.entrySize;
+        return utxos.erase(it);
     }
 
+    bool contains(const TXO & t) const { return utxos.contains(t); }
+
     const QString name;
-    CoTask prefetcher, flusherShunspent;
-    CoTask::Future prefetcherFut, flusherShunspentFut;
+    CoTask prefetcher;
+    CoTask::Future prefetcherFut;
 
     rocksdb::DB * const m_db;
-    rocksdb::ColumnFamilyHandle * const cf_utxo, * const cf_shunspent;
+    rocksdb::ColumnFamilyHandle * const cf_utxo;
     const rocksdb::ReadOptions & readOpts;
-    const rocksdb::WriteOptions & writeOpts;
 
     // persistent data structures we use in order to avoid having to continually re-reserve memory
     struct PFData {
+        std::vector<std::pair<QByteArray, TXO>> keyData;
         std::vector<rocksdb::Slice> keys;
-        std::vector<QByteArray> keyData;
         std::vector<rocksdb::PinnableSlice> values;
         std::vector<rocksdb::Status> statuses;
-        std::vector<TXO> txos;
     } pf;
 
     void do_prefetch(PreProcessedBlockPtr ppb) {
@@ -1835,95 +1460,81 @@ class Storage::UTXOCache
                     DebugM("Fetched ", num_ok, "/", nIns - skipped, " UTXOs from DB in ", t0.msecStr(3), " msec");
             });
 
+            std::vector<std::pair<QByteArray, TXO>> & keyData = pf.keyData;
             std::vector<rocksdb::Slice> & keys = pf.keys;
-            std::vector<QByteArray> & keyData = pf.keyData;
             std::vector<rocksdb::PinnableSlice> & values = pf.values;
             std::vector<rocksdb::Status> & statuses = pf.statuses;
-            std::vector<TXO> & txos = pf.txos;
             Defer d2([&]{
-                txos.clear();
+                statuses.clear();
+                values.clear();
                 keys.clear();
                 keyData.clear();
-                values.clear();
-                statuses.clear();
             });
             for (size_t inum = 1 /* coinbase, skip */; inum < nIns; ++inum) {
                 const auto & in = std::as_const(ppb->inputs)[inum];
                 if (in.parentTxOutIdx.has_value()) { ++skipped; /* spent in this block, skip */ }
-                else if (TXO t{in.prevoutHash, in.prevoutN}; !contains(t)) {
+                else if (TXO txo{.txHash = in.prevoutHash, .outN = in.prevoutN}; !contains(txo)) {
                     ++cacheMisses;
-                    const TXO & txo = txos.emplace_back(std::move(t));
-                    const auto & ser = keyData.emplace_back(Serialize(txo));
-                    keys.emplace_back(ser.constData(), size_t(ser.size()));
-                    values.emplace_back();
-                    statuses.emplace_back();
+                    keyData.emplace_back(Serialize(txo), std::move(txo));
                 } else
                     ++cacheHits;
             }
-            if (keys.empty()) return; // nothing to do!
-            m_db->MultiGet(readOpts, cf_utxo, keys.size(), keys.data(), values.data(), statuses.data());
+            if (keyData.empty()) return; // nothing to do!
+            // sort the key data (for faster rocksdb MultiGet)
+            std::sort(keyData.begin(), keyData.end());
+            // populate the key slices, etc
+            for (const auto & [key, txo] : keyData)
+                keys.emplace_back(key.constData(), static_cast<size_t>(key.size()));
+            values.resize(keys.size());
+            statuses.resize(keys.size());
+            m_db->MultiGet(readOpts, cf_utxo, keys.size(), keys.data(), values.data(), statuses.data(),
+                           /* sorted_input = */ true);
             for (size_t index = 0, nIndices = statuses.size(); index < nIndices; ++index) {
                 const auto & s = statuses[index];
-                TXO & txo = txos[index];
-                if (s.ok()) {
+                TXO &txo = keyData[index].second;
+                if (s.ok()) [[likely]] {
                     bool ok;
                     TXOInfo info = Deserialize<TXOInfo>(FromSlice(values[index]), &ok);
-                    if (!ok) throw DatabaseSerializationError(QString("%1: Failed to deserialize TXOInfo for TXO \"%2\"")
-                                                              .arg(name, txo.toString()));
+                    if (!ok) [[unlikely]]
+                        throw DatabaseSerializationError(QString("%1: Failed to deserialize TXOInfo for TXO \"%2\"")
+                                                             .arg(name, txo.toString()));
                     else {
-                        add(false, std::move(txo), std::move(info));
+                        add(std::move(txo), std::move(info));
                         ++num_ok;
                     }
                 } else {
                     throw DatabaseError(QString("%1: Error reading TXO \"%2\" from colfam %3: %4")
-                                        .arg(name, txo.toString(), CFName(cf_utxo), StatusString(s)));
+                                            .arg(name, txo.toString(), CFName(cf_utxo), StatusString(s)));
                 }
             }
         });
     }
 
+
+    void addAllDeferred() {
+        for (auto & [txo, txoinfo] : deferredAdds)
+            add(std::move(txo), std::move(txoinfo));
+        deferredAdds.clear();
+    }
+
 public:
     UTXOCache(const QString &name, rocksdb::DB *pdb, rocksdb::ColumnFamilyHandle *putxocf,
-              rocksdb::ColumnFamilyHandle *pshunspentcf, const rocksdb::ReadOptions & readOpts,
-              const rocksdb::WriteOptions & writeOpts)
-        : name{name}, prefetcher{name + ".Prefetcher"}, flusherShunspent{name + ".ShunspentFlusher"},
-          m_db{pdb}, cf_utxo{putxocf}, cf_shunspent{pshunspentcf}, readOpts{readOpts}, writeOpts{writeOpts} {
+              const rocksdb::ReadOptions & readOpts)
+        : name{name}, prefetcher{name + ".Prefetcher"}, m_db{pdb}, cf_utxo{putxocf}, readOpts{readOpts} {
         DebugM(name, ": created");
     }
 
     ~UTXOCache() {
-        DebugM(name, ": ", __func__, " - stats - cache hits: ", cacheHits, ", cache misses: ", cacheMisses,
-               ", utxoDbOpsSaved: ", utxoDbOpsSaved, ", shunspentDbOpsSaved: ", shunspentDbOpsSaved);
-        do_flush();
+        DebugM(name, ": ", __func__, " - stats - cache hits: ", cacheHits, ", cache misses: ", cacheMisses);
     }
 
-    void reserve(size_t hashMaps, size_t vectors) {
-        utxos.reserve(hashMaps);
-        adds.reserve(hashMaps);
-        rms.reserve(vectors);
-        shunspentAdds.reserve(hashMaps);
-        shunspentRms.reserve(vectors);
-    }
+    void reserve(size_t hashMaps) { utxos.reserve(hashMaps); }
 
     /// Figures out the best capacity to reserve based on a desired memory size.
     void autoReserve(size_t memoryBytes) {
-        constexpr auto perEntryEstimatedCost = EntrySize + ShunspentTableNodeSize + ItSetItemSize; // ~280 on 64 bit
+        constexpr auto perEntryEstimatedCost = BaseEntrySize;
         static_assert (perEntryEstimatedCost > 0);
-        reserve(memoryBytes / perEntryEstimatedCost, // about 3.6 million per GB of memory
-                1u << 15 /* ~32,000 reserve for vectors */);
-    }
-
-    void shrink_to_fit() {
-        utxos.rehash(0);
-        adds.rehash(0);
-        rms.shrink_to_fit();
-        shunspentAdds.rehash(0);
-        shunspentRms.shrink_to_fit();
-    }
-
-    /// Returns the estimated dynamic memory usage, in bytes
-    size_t memUsage() const {
-        return memUsageForSizes(utxos.size(), adds.size(), rms.size(), shunspentAdds.size(), shunspentRms.size());
+        reserve(memoryBytes / perEntryEstimatedCost); // ~5.6 million per GB of memory
     }
 
     /// NB: no locks on ppb are used for now. While this is alive ppb->inputs must not be mutated
@@ -1941,44 +1552,45 @@ public:
         addAllDeferred();
     }
 
-    size_t cacheMisses = 0, cacheHits = 0, utxoDbOpsSaved = 0, shunspentDbOpsSaved = 0;
+    size_t cacheMisses = 0, cacheHits = 0;
 
-    /// Get a UTXO from the cache. Will return a null optional if the requested TXO was not in the cache.
+    /// Get a UTXO from the cache. Will return a nullptr if the requested TXO was not in the cache. The returned
+    /// pointer, if not nullptr, points directly into the cache and is no longer valid if the cache later is mutated in
+    /// any way!
+    ///
     /// Does not fall-back to looking in the DB. Caller should explicitly call utxoGetFromDB() themselves
     /// for that purpose. Note: this currently takes no locks. Assumption is calling code is locking
-    /// things correctly. (This function is currently called only inside Storage::addBlock.)
-    /// Precondition: prefetcher must not be running.
-    std::optional<TXOInfo> get(const TXO & txo) {
-        std::optional<TXOInfo> ret = get_from_cache(txo);
-        if (!ret)
-            ++cacheMisses;
-        else
+    /// things correctly (this function is currently called only inside Storage::addBlock).
+    /// Precondition: prefetcher must not be running (this is not checked).
+    const TXOInfo * get(const TXO & txo) {
+        if (const auto it = utxos.find(txo); it != utxos.end()) {
             ++cacheHits;
-        return ret;
+            return &it->second.txoInfo;
+        }
+        ++cacheMisses;
+        return nullptr;
     }
 
-    /// Add a TXO <-> TXOInfo pair to the cache and enqueue it for writing to DB.  It will be written to the DB the
-    /// next time we flush.
-    /// Precondition: TXO is not yet in the DB and should be added to the DB.
-    bool put(const TXO & txo, const TXOInfo & info) {
+    /// Add a TXO,TXOInfo pair to the cache. If the prefetcher is running, defers the add until
+    /// `waitForPrefetchToComplete()` is called.
+    bool put(TXO && txo, TXOInfo && info) {
         if (prefetcherFut.future.valid()) {
             // Prefetcher is busy, can't touch the data structures it is modifying now. Defer this until later.
-            deferredAdds.emplace_back(txo, info);
+            deferredAdds.emplace_back(std::move(txo), std::move(info));
             return false;
         }
-        add(true, txo, info);
-        return true;
+        return add(std::move(txo), std::move(info));
     }
 
-    bool remove(const TXO & txo) { return rm(txo); }
+    bool remove(const TXO & txo) {
+        if (auto it = utxos.find(txo); it != utxos.end()) {
+            rm(it);
+            return true;
+        }
+        return false;
+    }
 
-    void putShunspent(const ShunspentKey &key, const ShunspentValue &val) { addShunspent(key, val); }
-    bool removeShunspent(const HashX & hashX, const CompactTXO & ctxo) { return rmShunspent(mkShunspentKey(hashX, ctxo)); }
-
-    void flush() { do_flush(); }
-
-    /// Limit dynamic memory usage to `bytes`. May implicitly write to DB to flush.
-    /// Precondition: Prefetcher must not be running (this is not checked)
+    /// Limit dynamic memory usage to `bytes`. Precondition: Prefetcher must not be running (this is not checked)
     void limitSize(size_t bytes) { do_limitSize(bytes); }
 }; // class Storage::UTXOCache
 
@@ -2181,7 +1793,7 @@ void Storage::startup()
 
         // TODO: similar stuff to below for setting mem limits
 #if 0
-        std::size_t memTotal = 0;
+        size_t memTotal = 0;
         const auto OpenDB = [this, &memTotal](const DBInfoTup &tup) {
             auto & [name, uptr, opts_in, memFactor] = tup;
             rocksdb::Options opts = opts_in;
@@ -2211,9 +1823,10 @@ void Storage::startup()
         // open all db's defined above
         for (auto & tup : dbs2open)
             OpenDB(tup);
-
-        Log() << "DB memory: " << QString::number(memTotal / 1024. / 1024., 'f', 2) << " MiB";
+#else
+        const size_t memTotal{options->db.maxMem};
 #endif
+        Log() << "DB memory: " << QString::number(memTotal / 1024. / 1024., 'f', 2) << " MiB";
     }  // /open db's
     // load/check meta
     {
@@ -2354,7 +1967,7 @@ void Storage::compactAllDBs()
 
 void Storage::gentlyCloseDB()
 {
-    p->db.utxoCache.reset(); // if was valid, implicitly flushes UTXO Cache pending writes to DB...
+    p->db.utxoCache.reset();
 
     // do Flush of each column family, and close the handles
     auto *db = p->db.get();
@@ -3381,27 +2994,17 @@ bool Storage::hasUndo() const {
 struct Storage::UTXOBatch::P {
     rocksdb::WriteBatch &batch; ///< batch writes/deletes end up in the utxoset and shunspent column families
     rocksdb::ColumnFamilyHandle &utxoset, &shunspent;
-    int addCt = 0, rmCt = 0;
-    bool defunct = false;
-    UTXOCache *cache{}; ///< if not nullptr, there is a UTXOCache active and we should give it the batch writes.
+    std::atomic_int64_t &utxoCtr;
+    UTXOCache * const cache{}; ///< if not nullptr, there is a UTXOCache active and we should give it the batch writes.
 
-    P(rocksdb::WriteBatch &b, rocksdb::ColumnFamilyHandle &u, rocksdb::ColumnFamilyHandle &s, UTXOCache *c)
-        : batch(b), utxoset(u), shunspent(s), cache{c} {}
+    P(rocksdb::WriteBatch &b, rocksdb::ColumnFamilyHandle &u, rocksdb::ColumnFamilyHandle &s, std::atomic_int64_t &uc, UTXOCache *c)
+        : batch(b), utxoset(u), shunspent(s), utxoCtr{uc}, cache{c} {}
 };
 
-Storage::UTXOBatch::UTXOBatch(rocksdb::WriteBatch &b, rocksdb::ColumnFamilyHandle &u, rocksdb::ColumnFamilyHandle &s, UTXOCache *c)
-    : p{std::make_unique<P>(b, u, s, c)} {}
+Storage::UTXOBatch::UTXOBatch(rocksdb::WriteBatch &b, rocksdb::ColumnFamilyHandle &u, rocksdb::ColumnFamilyHandle &s,
+                              std::atomic_int64_t &uc, UTXOCache *c)
+    : p{std::make_unique<P>(b, u, s, uc, c)} {}
 Storage::UTXOBatch::UTXOBatch(UTXOBatch &&o) { p.swap(o.p); }
-
-void Storage::issueUpdates(UTXOBatch &b)
-{
-    static const QString errMsg("Error issuing batch write to db for a utxo or scripthash_unspent update");
-    if (b.p->defunct) [[unlikely]]
-        throw InternalError("Misuse of Storage::issueUpdates. Cannot issue the same updates using the same context more than once. FIXME!");
-    assert(bool(p->db.utxoset) && bool(p->db.shunspent));
-    p->utxoCt += b.p->addCt - b.p->rmCt; // tally up adds and deletes
-    b.p->defunct = true;
-}
 
 void Storage::setInitialSync(bool b) {
     // take all locks now.. since this is a Big Deal.
@@ -3418,59 +3021,54 @@ void Storage::setInitialSync(bool b) {
                 bytes = limit;
             }
             Log() << "utxo-cache: Enabled; UTXO cache size set to " << bytes << " bytes (available physical RAM: " << limit << " bytes)";
-            p->db.utxoCache = std::make_unique<UTXOCache>("Storage UTXO Cache", p->db.get(), p->db.utxoset, p->db.shunspent, p->db.defReadOpts, p->db.defWriteOpts);
+            p->db.utxoCache = std::make_unique<UTXOCache>("Storage UTXO Cache", p->db.get(), p->db.utxoset, p->db.defReadOpts);
             // Reserve about 3.6 million entries per GB of utxoCache memory given to us
-            // We need to do this, despite the extra memory bloat, because it turns out rehashing is very painful.
+            // We need to do this, despite the extra memory bloat, because it turns out rehashing is very costly.
             p->db.utxoCache->autoReserve(bytes);
         } else {
             Log() << "utxo-cache: Not enabled";
         }
     } else if (!b && p->db.utxoCache) {
-        Log() << "Initial sync ended, flushing and deleting UTXO Cache ...";
-        p->db.utxoCache.reset(); // implicitly flushes
+        Log() << "Initial sync ended, deleting UTXO Cache ...";
+        p->db.utxoCache.reset();
     }
 }
 
-void Storage::UTXOBatch::add(const TXO &txo, const TXOInfo &info, const CompactTXO &ctxo)
+void Storage::UTXOBatch::add(TXO &&txo, TXOInfo &&info, const CompactTXO &ctxo)
 {
     const QByteArray shukey = mkShunspentKey(info.hashX, ctxo),
-                     shuval = Serialize(info.amount, info.tokenDataPtr.get());
-    if (!p->cache) {
-        // Update db utxoset, keyed off txo -> txoinfo
-        static const QString errMsgPrefix("Failed to add a utxo to the utxo batch");
-        GenericBatchPut(p->batch, &p->utxoset, txo, info, errMsgPrefix); // may throw on failure
+                     shuval = Serialize2(info.amount, info.tokenDataPtr.get());
+    // Update db utxoset, keyed off txo -> txoinfo
+    static const QString errMsgPrefix("Failed to add a utxo to the utxo batch");
+    GenericBatchPut(p->batch, &p->utxoset, txo, info, errMsgPrefix); // may throw on failure
 
-        // Update the scripthash unspent. This is a very simple table which we scan by hashX prefix using
-        // an iterator in listUnspent.  Each entry's key is prefixed with the HashX bytes (32) but suffixed with the
-        // serialized CompactTXO bytes (8 or 9). Each entry's data is a 8-byte int64_t of the amount of the utxo to save
-        // on lookup cost for getBalance().
-        static const QString errMsgPrefix2("Failed to add an entry to the scripthash_unspent batch");
-        GenericBatchPut(p->batch, &p->shunspent, shukey, shuval, errMsgPrefix2); // may throw, which is what we want
-    } else {
-        // put in cache (in case these get deleted later on, it's a win to do this rather than hit the DB, if using cache)
-        p->cache->put(txo, info);
-        p->cache->putShunspent(shukey, shuval);
-    }
+    // Update the scripthash unspent. This is a very simple table which we scan by hashX prefix using
+    // an iterator in listUnspent.  Each entry's key is prefixed with the HashX bytes (32) but suffixed with the
+    // serialized CompactTXO bytes (8 or 9). Each entry's data is a 8-byte int64_t of the amount of the utxo to save
+    // on lookup cost for getBalance().
+    static const QString errMsgPrefix2("Failed to add an entry to the scripthash_unspent batch");
+    GenericBatchPut(p->batch, &p->shunspent, shukey, shuval, errMsgPrefix2); // may throw, which is what we want
 
-    ++p->addCt;
+    // handle cache (if any)
+    if (p->cache) p->cache->put(std::move(txo), std::move(info));
+
+    ++p->utxoCtr; // tally utxo counts
 }
 
 void Storage::UTXOBatch::remove(const TXO &txo, const HashX &hashX, const CompactTXO &ctxo)
 {
-    if (!p->cache) {
-        // enqueue delete from utxoset db -- may throw.
-        static const QString errMsgPrefix("Failed to issue a batch delete for a utxo");
-        GenericBatchDelete(p->batch, &p->utxoset, txo, errMsgPrefix);
+    // enqueue delete from utxoset db -- may throw.
+    static const QString errMsgPrefix("Failed to issue a batch delete for a utxo");
+    GenericBatchDelete(p->batch, &p->utxoset, txo, errMsgPrefix);
 
-        // enqueue delete from scripthash_unspent db
-        static const QString errMsgPrefix2("Failed to issue a batch delete for a utxo to the scripthash_unspent db");
-        GenericBatchDelete(p->batch, &p->shunspent, mkShunspentKey(hashX, ctxo), errMsgPrefix2);
-    } else {
-        // use cache which may end up doing no actual work if the utxo & shunspent was in cache and not yet committed to db
-        p->cache->remove(txo);
-        p->cache->removeShunspent(hashX, ctxo);
-    }
-    ++p->rmCt;
+    // enqueue delete from scripthash_unspent db
+    static const QString errMsgPrefix2("Failed to issue a batch delete for a utxo to the scripthash_unspent db");
+    GenericBatchDelete(p->batch, &p->shunspent, mkShunspentKey(hashX, ctxo), errMsgPrefix2);
+
+    // handle cache (if any)
+    if (p->cache) p->cache->remove(txo);
+
+    --p->utxoCtr; // tally utxo counts
 }
 
 
@@ -3691,7 +3289,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
 
                 {
                     // utxo batch block (updtes utxoset & scripthash_unspent tables)
-                    UTXOBatch utxoBatch{batch, *p->db.utxoset, *p->db.shunspent, p->db.utxoCache.get()};
+                    UTXOBatch utxoBatch{batch, *p->db.utxoset, *p->db.shunspent, p->utxoCt, p->db.utxoCache.get()};
 
                     // reserve space in undo, if in saveUndo mode
                     if (undo) {
@@ -3709,15 +3307,15 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                                 continue;
                             }
                             const TxHash & hash = ppb->txInfos[out.txIdx].hash;
-                            TXOInfo info;
-                            info.hashX = hashX;
-                            info.amount = out.amount;
-                            info.confirmedHeight = ppb->height;
-                            info.txNum = blockTxNum0 + out.txIdx;
-                            info.tokenDataPtr = out.tokenDataPtr;
-                            const TXO txo{ hash, out.outN };
+                            TXO txo{.txHash = hash, .outN = out.outN};
+                            TXOInfo info{
+                                .amount = out.amount,
+                                .hashX = hashX,
+                                .confirmedHeight = ppb->height,
+                                .txNum = blockTxNum0 + out.txIdx,
+                                .tokenDataPtr = out.tokenDataPtr,
+                            };
                             const CompactTXO ctxo(info.txNum, txo.outN);
-                            utxoBatch.add(txo, info, ctxo); // add to db
                             if (undo) { // save undo info if we are in saveUndo mode
                                 undo->addUndos.emplace_back(txo, info.hashX, ctxo);
                             }
@@ -3725,6 +3323,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                                 Debug() << "Added txo: " << txo.toString()
                                         << " (txid: " << hash.toHex() << " height: " << ppb->height << ") "
                                         << " amount: " << info.amount.ToString() << " for HashX: " << info.hashX.toHex();
+                            utxoBatch.add(std::move(txo), std::move(info), ctxo); // add to db
                         }
                     }
 
@@ -3736,16 +3335,19 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                     // add spends (process inputs)
                     unsigned inum = 0;
                     for (auto & in : ppb->inputs) {
-                        const TXO txo{in.prevoutHash, in.prevoutN};
+                        const TXO txo{.txHash = in.prevoutHash, .outN = in.prevoutN};
+                        const TXOInfo *pinfo{};
                         if (!inum) {
                             // coinbase.. skip
                         } else if (in.parentTxOutIdx.has_value()) {
                             // was an input that was spent in this block so it's ok to skip.. we never added it to utxo set
                             if constexpr (debugPrt)
                                 Debug() << "Skipping input " << txo.toString() << ", spent in this block (output # " << *in.parentTxOutIdx << ")";
-                        } else if (std::optional<TXOInfo> opt;
-                                   (p->db.utxoCache && (opt = p->db.utxoCache->get(txo))) || (opt = utxoGetFromDB(txo))) {
-                            const auto & info = *opt;
+                        } else if (std::optional<TXOInfo> opt; (p->db.utxoCache && (pinfo = p->db.utxoCache->get(txo)))
+                                                               || ((opt = utxoGetFromDB(txo)) && (pinfo = &*opt)) ) {
+                            // CAUTION: `pinfo` might be pointing into the UTXOCache, as such, removing from the
+                            // UTXOCache should be the last action involving `info` and/or `pinfo`.
+                            const TXOInfo & info = *pinfo;
                             if (info.confirmedHeight.has_value() && *info.confirmedHeight != ppb->height) {
                                 // was a prevout from a previos block.. so the ppb didn't have it in the 'involving hashx' set..
                                 // mark the spend as having involved this hashX for this ppb now.
@@ -3764,11 +3366,12 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                                         << " input number: " << ppb->numForInputIdx(inum).value_or(0xffff)
                                         << " HashX: " << info.hashX.toHex();
                             }
-                            // delete from db
-                            utxoBatch.remove(txo, info.hashX, CompactTXO(info.txNum, txo.outN)); // delete from db
                             if (undo) { // save undo info, if we are in saveUndo mode
                                 undo->delUndos.emplace_back(txo, info);
                             }
+                            // Enqueue deletion from db and/or immediate removal from UTXOCache -- note this must be
+                            // called last as it may invalidate `pinfo` and/or `info`!
+                            utxoBatch.remove(txo, info.hashX, CompactTXO(info.txNum, txo.outN)); // enqueue deletion
                         } else {
                             QString s;
                             {
@@ -3780,9 +3383,6 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                         }
                         ++inum;
                     }
-
-                    // this updates p->utxoCt, but doesn't touch the DB. This may throw.
-                    issueUpdates(utxoBatch);
                 }
 
                 // sort and shrink_to_fit new hashX inputs added
@@ -3900,13 +3500,10 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
 
             appendHeader(rawHeader, ppb->height);
 
-            if (UNLIKELY(ppb->height == 0)) {
+            if (ppb->height == 0) [[unlikely]] {
                 // update genesis hash now if block 0 -- this info is used by rpc method server.features
                 p->genesisHash = BTC::HashRev(rawHeader); // this variable is guarded by p->headerVerifierLock
             }
-
-            if (size_t limit; p->db.utxoCache && (limit = options->utxoCache) && p->db.utxoCache->memUsage() > limit)
-                p->db.utxoCache->limitSize(static_cast<size_t>(limit * 0.75) /* chop down to 3/4 size */);
 
             saveUtxoCt(batch);
             setDirty(batch, false);
@@ -3923,6 +3520,11 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
 
             undoVerifierOnScopeEnd.disable(); // indicate to the "Defer" object declared at the top of this function that it shouldn't undo anything anymore as we are happy now with the db state now.
         }
+
+        /* If UTXO cache is enabled, enforce size limit */
+        if (size_t limit; p->db.utxoCache && (limit = options->utxoCache) > 0u)
+            p->db.utxoCache->limitSize(limit);
+
     } /// release locks
 
     // now, do notifications with locks NOT held (we are being defensive: in the future we may modify below to take e.g. mempool lock)
@@ -3996,10 +3598,10 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
 
         const auto t0 = Util::getTimeNS();
 
-        // First, disable the UTXO Cache, if it happened to be enabled (implicitly causes it to flush to DB).
-        // We must do this because the way the UTXO Cache works is fundamentally at odds with assumption we have
+        // First, disable the UTXO Cache, if it happened to be enabled.
+        // We must do this because the way the UTXO Cache works is fundamentally at odds with assumptions we have
         // while we undo.
-        p->db.utxoCache.reset(); // if valid, delete causes implicit flush to DB
+        p->db.utxoCache.reset();
 
         // NOTE: For very full mempools, this clear has the potential to stall the app after the reorg
         // completes since the app will have to re-download the whole mempool state again.
@@ -4113,12 +3715,12 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
 
             {
                 // UTXO set update
-                UTXOBatch utxoBatch{batch, *p->db.utxoset, *p->db.shunspent};
+                UTXOBatch utxoBatch{batch, *p->db.utxoset, *p->db.shunspent, p->utxoCt};
 
                 // now, undo the utxo deletions by re-adding them
-                for (const auto & [txo, info] : undo.delUndos) {
+                for (auto & [txo, info] : undo.delUndos) {
                     // note that deletions may have an info with a txnum before this block, for obvious reasons
-                    utxoBatch.add(txo, info, CompactTXO(info.txNum, txo.outN)); // may throw
+                    utxoBatch.add(std::move(txo), std::move(info), CompactTXO(info.txNum, txo.outN)); // may throw
                 }
 
                 // now, undo the utxo additions by deleting them
@@ -4126,8 +3728,6 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
                     assert(ctxo.txNum() >= txNum0); // all of the additions must have been in this block or newer
                     utxoBatch.remove(txo, hashx, ctxo); // may throw
                 }
-
-                issueUpdates(utxoBatch); // may throw, simply updates p->utxoCt; does not issue updates to DB
             }
 
             if (p->earliestUndoHeight >= undo.height)
@@ -5543,7 +5143,7 @@ namespace {
         return ret;
     }
 
-    QByteArray Serialize(const bitcoin::Amount &a, const bitcoin::token::OutputData *ptok) {
+    QByteArray Serialize2(const bitcoin::Amount &a, const bitcoin::token::OutputData *ptok) {
         QByteArray ret = SerializeScalar(a / a.satoshi());
         BTC::SerializeTokenDataWithPrefix(ret, ptok); // may be no-op if ptok is nullptr
         return ret;

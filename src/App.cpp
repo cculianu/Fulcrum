@@ -512,15 +512,12 @@ void App::parseArgs()
     },
     {
        "utxo-cache",
-       QString("If specified, " APPNAME " will use a UTXO Cache that consumes extra memory but syncs up to to 2X"
-               " faster. To use this feature, you must specify a memory value in MB to allocate to the cache. It is"
+       QString("If specified, " APPNAME " will use a UTXO Cache that consumes extra memory but may sync faster."
+               " To use this feature, you must specify a memory value in MB to allocate to the cache. It is"
                " recommended that you give this facility at least 500 MB for it to really pay off, although any amount"
-               " of memory given (minimum 64 MB) should be beneficial. Note that this feature is currently"
-               " experimental and the tradeoffs are: it is faster because it avoids redundant disk I/O, however, this"
-               " comes at the price of considerable memory consumption as well as a sync that is less resilient to"
-               " crashes mid-sync. If the process is killed mid-sync, the database may become corrupt and lose UTXO"
-               " data. Use this feature only if you are 100% sure that won't happen during a sync. The default is off"
-               " (0). This option only takes effect on initial sync, otherwise this option has no effect.\n"),
+               " of memory given (minimum 64 MB) should be beneficial. Note that this feature is currently experimental."
+               " The default is off (0). This option only takes effect on initial sync, otherwise this option has no"
+               " effect.\n"),
        QString("MB"),
     },
     {
