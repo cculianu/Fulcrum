@@ -461,11 +461,11 @@ protected:
     /// UTXOCache. Called internally from addBlock and undoLatestBlock().
     struct UTXOBatch {
         UTXOBatch(rocksdb::WriteBatch &batch, rocksdb::ColumnFamilyHandle &utxoset, rocksdb::ColumnFamilyHandle &shunspent,
-                  UTXOCache *cache = nullptr);
+                  std::atomic_int64_t &utxoCtr, UTXOCache *cache = nullptr);
         UTXOBatch(UTXOBatch &&);
         /// Enqueue an add of a utxo -- does not take effect in db until p->batch is written to db (for non-UTXOCache mode),
         /// or until the cache is written to db if in UTXOCache mode -- may throw.
-        void add(const TXO &, const TXOInfo &, const CompactTXO &);
+        void add(TXO &&, TXOInfo &&, const CompactTXO &);
         /// Enqueue a removal -- does not take effect in db until p->batch is committed to db (for non-UTXOCache mode),
         /// or until the cache is written to db if in UTXOCache mode -- may throw.
         void remove(const TXO &, const HashX &, const CompactTXO &);
@@ -477,9 +477,6 @@ protected:
         struct P;
         std::unique_ptr<P> p;
     };
-
-    /// Call this when finished to issue the updates queued up in the batch context to the db.
-    void issueUpdates(UTXOBatch &);
 
     /// Internally called by addBlock. Call this with the heaverVerifier lock held.
     /// Appends header h to the database at height. Note that it is undefined to call this function
