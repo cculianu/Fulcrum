@@ -491,7 +491,7 @@ namespace Util {
             }
             QMutexLocker ml(&mut);
             if (UNLIKELY(sizeLimit > 0 && ct >= sizeLimit))
-                throw ChannelFull(QString("The channel is full (size = %1)").arg(ct));
+                throw ChannelFull(QString("The channel is full (size = %1)").arg(ct.load()));
             data.push_back(t);
             ++ct;
             cond.wakeOne();

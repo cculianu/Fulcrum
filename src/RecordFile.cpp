@@ -150,7 +150,7 @@ std::vector<QByteArray> RecordFile::readRandomRecords(const std::vector<uint64_t
             // in this branch, caller wants us to abort right away on error
             for (const auto recNum : recNums) {
                 if (recNum >= nrecs) {
-                    if (errStr) *errStr = QString("%1 is outside the record file, which only contains %2 records").arg(recNum).arg(nrecs);
+                    if (errStr) *errStr = QString("%1 is outside the record file, which only contains %2 records").arg(recNum).arg(nrecs.load());
                     break;
                 }
                 ret.emplace_back(readRandomCommon(f, recNum, errStr));
@@ -163,7 +163,7 @@ std::vector<QByteArray> RecordFile::readRandomRecords(const std::vector<uint64_t
             // in this branch we simply keep values on error and insert them as empty QByteArrays
             for (const auto recNum : recNums) {
                 if (recNum >= nrecs) {
-                    if (errStr) *errStr = QString("%1 is outside the record file, which only contains %2 records").arg(recNum).arg(nrecs);
+                    if (errStr) *errStr = QString("%1 is outside the record file, which only contains %2 records").arg(recNum).arg(nrecs.load());
                     ret.emplace_back(); // empty QByteArray
                     continue;
                 }
