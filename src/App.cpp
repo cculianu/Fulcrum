@@ -1246,6 +1246,13 @@ void App::parseArgs()
             // log this later in case we are in syslog mode
             Util::AsyncOnObject(this, [mb]{ Debug() << "config: db_mem = " << mb; });
         }
+    } else {
+        // User didn't specify db_mem, attempt to use default (1GiB), or 25% of total physical RAM, whichever is
+        // smaller. Also apply a lower bound of 512MiB (which was the older Fulcrum default db_mem).
+        static_assert(Options::DBOpts::isMaxMemInBounds(Options::DBOpts::defaultMaxMem)
+                      && Options::DBOpts::isMaxMemInBounds(Options::DBOpts::oldDefaultMaxMem));
+        const size_t memBytes = Util::getTotalPhysicalRAM() / 4u;
+        options->db.maxMem = std::max(std::min(options->db.defaultMaxMem, memBytes), options->db.oldDefaultMaxMem);
     }
     if (conf.hasValue("db_use_fsync")) {
         bool ok;
