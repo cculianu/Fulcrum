@@ -816,6 +816,9 @@ namespace Util {
     /// If unknown platform, or as a fallback on error, will return 2GiB.
     uint64_t getAvailablePhysicalRAM();
 
+    /// On OSX, Linux, Windows, this will be accurate. If unknown platform, or as a fallback on error, will return 2GiB.
+    uint64_t getTotalPhysicalRAM();
+
     /// A namespace for a bunch of functionality that can be used from an async POSIX signal handler.
     ///
     /// We can't really use any functions in a signal handler besides the ones in this table --
