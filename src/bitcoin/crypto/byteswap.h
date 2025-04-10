@@ -1,4 +1,5 @@
 // Copyright (c) 2014-2016 The Bitcoin Core developers
+// Copyright (C) 2019-2025 Calin A. Culianu <calin.culianu@gmail.com>
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -10,7 +11,7 @@
 
 #include <cstdint>
 
-#if defined(HAVE_BYTESWAP_H)
+#if __has_include(<byteswap.h>)
 #include <byteswap.h>
 #endif
 

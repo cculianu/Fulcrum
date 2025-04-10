@@ -93,19 +93,9 @@ win32 {
     CONFIG -= warn_on
     CONFIG += warn_off
 }
-linux {
-    DEFINES += HAVE_ENDIAN_H HAVE_DECL_HTOBE16 HAVE_DECL_HTOLE16 HAVE_DECL_BE16TOH HAVE_DECL_LE16TOH HAVE_DECL_HTOBE32 \
-               HAVE_DECL_HTOLE32 HAVE_DECL_BE32TOH HAVE_DECL_LE32TOH HAVE_DECL_HTOBE64 HAVE_DECL_HTOLE64 HAVE_DECL_BE64TOH \
-               HAVE_DECL_LE64TOH
-}
 gcc {
     # gcc has too many unused parameter warnings due to bitcoin sources, so just disable this warning
     QMAKE_CXXFLAGS += -Wno-unused-parameter
-}
-freebsd {
-    DEFINES += HAVE_SYS_ENDIAN_H HAVE_DECL_HTOBE16 HAVE_DECL_HTOLE16 HAVE_DECL_BE16TOH HAVE_DECL_LE16TOH HAVE_DECL_HTOBE32 \
-               HAVE_DECL_HTOLE32 HAVE_DECL_BE32TOH HAVE_DECL_LE32TOH HAVE_DECL_HTOBE64 HAVE_DECL_HTOLE64 HAVE_DECL_BE64TOH \
-               HAVE_DECL_LE64TOH
 }
 
 # define HAVE_DECL___BUILTIN_CLZL and HAVE_DECL___BUILTIN_CLZLL used by embedded bitcoin/ sources
@@ -132,6 +122,28 @@ contains(CONFIG, config_endian_big) {
     } else {
         error("Failed to detect either BIG or LITTLE endian. Unknown compiler? FIXME!")
     }
+}
+
+# bswap_16,32,64
+qtCompileTest(bswap_16)
+contains(CONFIG, config_bswap_16) {
+    DEFINES += HAVE_DECL_BSWAP_16
+}
+qtCompileTest(bswap_32)
+contains(CONFIG, config_bswap_32) {
+    DEFINES += HAVE_DECL_BSWAP_32
+}
+qtCompileTest(bswap_64)
+contains(CONFIG, config_bswap_64) {
+    DEFINES += HAVE_DECL_BSWAP_64
+}
+
+# htole32_and_friends
+qtCompileTest(htole32_and_friends)
+contains(CONFIG, config_htole32_and_friends) {
+DEFINES += HAVE_DECL_HTOBE16 HAVE_DECL_HTOLE16 HAVE_DECL_BE16TOH HAVE_DECL_LE16TOH \
+           HAVE_DECL_HTOBE32 HAVE_DECL_HTOLE32 HAVE_DECL_BE32TOH HAVE_DECL_LE32TOH \
+           HAVE_DECL_HTOBE64 HAVE_DECL_HTOLE64 HAVE_DECL_BE64TOH HAVE_DECL_LE64TOH
 }
 
 # Handle or add GIT_COMMIT=

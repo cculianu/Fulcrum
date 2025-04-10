@@ -1,4 +1,5 @@
 // Copyright (c) 2014-2016 The Bitcoin Core developers
+// Copyright (C) 2019-2025 Calin A. Culianu <calin.culianu@gmail.com>
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -10,15 +11,18 @@
 
 #include "byteswap.h"
 
+#include <bit>
 #include <cstdint>
 
-#if defined(HAVE_ENDIAN_H)
+#if __has_include(<endian.h>)
 #include <endian.h>
-#elif defined(HAVE_SYS_ENDIAN_H)
+#elif __has_include(<sys/endian.h>)
 #include <sys/endian.h>
 #endif
 
 #if defined(WORDS_BIGENDIAN)
+
+static_assert(std::endian::native == std::endian::big, "Sanity check for WORDS_BIGENDIAN macro");
 
 #if HAVE_DECL_HTOBE16 == 0
 inline uint16_t htobe16(uint16_t host_16bits) noexcept {
@@ -93,6 +97,8 @@ inline uint64_t le64toh(uint64_t little_endian_64bits) noexcept {
 #endif // HAVE_DECL_LE64TOH
 
 #else // WORDS_BIGENDIAN
+
+static_assert(std::endian::native == std::endian::little, "Sanity check for WORDS_BIGENDIAN macro");
 
 #if HAVE_DECL_HTOBE16 == 0
 inline uint16_t htobe16(uint16_t host_16bits) noexcept {
