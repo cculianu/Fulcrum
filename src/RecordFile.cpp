@@ -19,18 +19,17 @@
 #include "RecordFile.h"
 #include "Util.h"
 
+#include <bit>
 #include <cstdint>
 
 namespace {
-// Note we intentionally didn't include "bitcoin/crypto/endian.h" here in order to not depend on the bitcoin lib in
-// this class.
-    inline bool constexpr isBigEndian() noexcept {
-#ifdef WORDS_BIGENDIAN
-        return true;
-#else
-        return false;
-#endif
-    }
+    // Note we intentionally didn't include "bitcoin/crypto/endian.h" here in order to not depend on the bitcoin lib in
+    // this class.
+    inline bool constexpr isBigEndian() noexcept { return std::endian::native == std::endian::big; }
+    inline bool constexpr isLittleEndian() noexcept { return std::endian::native == std::endian::little; }
+
+    static_assert(isBigEndian() + isLittleEndian() == 1, "Assumption: Endianness must be one of these two");
+
     [[maybe_unused]] [[nodiscard]] inline constexpr uint32_t bswap_32(uint32_t x) noexcept {
         return   ((x & uint32_t{0xff000000u}) >> 24u)
                | ((x & uint32_t{0x00ff0000u}) >>  8u)

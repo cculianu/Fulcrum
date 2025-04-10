@@ -50,13 +50,13 @@ struct TXO {
     // Serialization. Note that the resulting buffer may be 34 or 35 bytes, depending on whether IONum's value > 65535.
     // If wide == true, then resulting buffer is always maxSize() bytes (35).
     QByteArray toBytes(bool wide) const {
-        QByteArray ret(int(serializedSize(wide)), Qt::Uninitialized);
+        QByteArray ret(static_cast<QByteArray::size_type>(serializedSize(wide)), Qt::Uninitialized);
         if (UNLIKELY(!isValid())) { ret.clear(); return ret; }
         std::memcpy(ret.data(), txHash.constData(), HashLen);
         std::byte * const buf = reinterpret_cast<std::byte *>(ret.data() + HashLen);
         buf[0] = std::byte(outN >> 0u & 0xff);
         buf[1] = std::byte(outN >> 8u & 0xff);
-        if (ret.size() == int(maxSize()))
+        if (ret.size() == static_cast<QByteArray::size_type>(maxSize()))
             buf[2] = std::byte(outN >> 16u & 0xff); // may be 0 if serializing wide==true
         return ret;
     }
@@ -131,11 +131,12 @@ private:
 public:
     QByteArray toBytes() const {
         QByteArray ret;
+        using QBASz = QByteArray::size_type;
         if (!isValid()) return ret;
         const int64_t amt_sats = amount / bitcoin::Amount::satoshi();
         const uint32_t cheight = confirmedHeight.value_or(kNoBlockHeight); // NB: earlier version of this code used int32_t(-1) here to indicate no cheight.
-        const int minSize = int(minSerSize());
-        const int rsvSize = minSize + (tokenDataPtr ? 1 + int(tokenDataPtr->EstimatedSerialSize()) : 0);
+        const QBASz minSize = static_cast<QBASz>(minSerSize());
+        const QBASz rsvSize = minSize + (tokenDataPtr ? 1 + static_cast<QBASz>(tokenDataPtr->EstimatedSerialSize()) : 0);
         ret.reserve(rsvSize);
         ret.resize(minSize);
         char *cur = ret.data();
