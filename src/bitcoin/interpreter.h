@@ -7,12 +7,10 @@
 #pragma once
 
 #include "transaction.h"
-#include "script_error.h"
 #include "script_flags.h"
 #include "sighashtype.h"
 
 #include <cstdint>
-#include <string>
 #include <vector>
 
 #ifdef __clang__
@@ -102,12 +100,7 @@ public:
         : TransactionSignatureChecker(&txTo, nInIn, amountIn), txTo(*txToIn) {}
 };
 
-bool EvalScript(std::vector<std::vector<uint8_t>> &stack, const CScript &script,
-                uint32_t flags, const BaseSignatureChecker &checker,
-                ScriptError *error = nullptr);
-bool VerifyScript(const CScript &scriptSig, const CScript &scriptPubKey,
-                  uint32_t flags, const BaseSignatureChecker &checker,
-                  ScriptError *serror = nullptr);
+// Note: EvalScript() and VerifyScript() were declared here but they have been removed intentionally.
 
 } // end namespace bitcoin
 
