@@ -23,10 +23,10 @@
 #include "CoTask.h"
 #include "Mempool.h"
 #include "Merkle.h"
-#include "RecordFile.h"
 #include "Rpa.h"
 #include "Span.h"
 #include "Storage.h"
+#include "Storage/RecordFile.h"
 #include "SubsMgr.h"
 #include "VarInt.h"
 

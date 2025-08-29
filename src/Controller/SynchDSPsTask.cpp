@@ -16,7 +16,7 @@
 // along with this program (see LICENSE.txt).  If not, see
 // <https://www.gnu.org/licenses/>.
 //
-#include "Controller_SynchDSPsTask.h"
+#include "Controller/SynchDSPsTask.h"
 #include "SubsMgr.h"
 #include "Util.h"
 
