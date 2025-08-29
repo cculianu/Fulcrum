@@ -33,8 +33,6 @@
 #include <functional>
 #include <memory>
 #include <mutex>
-#include <optional>
-#include <type_traits>
 #include <unordered_set>
 #include <utility> // for pair
 

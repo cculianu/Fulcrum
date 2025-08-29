@@ -346,8 +346,8 @@ SOURCES += \
     CityHash.cpp \
     Common.cpp \
     Controller.cpp \
-    Controller_SynchDSPsTask.cpp \
-    Controller_SynchMempoolTask.cpp \
+    Controller/SynchDSPsTask.cpp \
+    Controller/SynchMempoolTask.cpp \
     CoTask.cpp \
     DSProof.cpp \
     Json/Json.cpp \
@@ -362,7 +362,6 @@ SOURCES += \
     Options.cpp \
     PackedNumView.cpp \
     PeerMgr.cpp \
-    RecordFile.cpp \
     RollingBloomFilter.cpp \
     Rpa.cpp \
     RPC.cpp \
@@ -371,6 +370,7 @@ SOURCES += \
     Servers.cpp \
     SrvMgr.cpp \
     Storage.cpp \
+    Storage/RecordFile.cpp \
     SSLCertMonitor.cpp \
     SubsMgr.cpp \
     SubStatus.cpp \
@@ -398,7 +398,8 @@ HEADERS += \
     Common.h \
     Compat.h \
     Controller.h \
-    Controller_SynchDSPsTask.h \
+    Controller/SynchDSPsTask.h \
+    Controller/SynchMempoolTask.h \
     CostCache.h \
     CoTask.h \
     DSProof.h \
@@ -411,7 +412,6 @@ HEADERS += \
     Options.h \
     PackedNumView.h \
     PeerMgr.h \
-    RecordFile.h \
     RollingBloomFilter.h \
     Rpa.h \
     RPC.h \
@@ -421,6 +421,7 @@ HEADERS += \
     Span.h \
     SrvMgr.h \
     Storage.h \
+    Storage/RecordFile.h \
     SSLCertMonitor.h \
     SubsMgr.h \
     SubStatus.h \

@@ -26,7 +26,6 @@
 
 #include <atomic>
 #include <cstdint>
-#include <memory>
 #include <mutex>
 #include <optional>
 #include <shared_mutex>

@@ -16,7 +16,7 @@
 // along with this program (see LICENSE.txt).  If not, see
 // <https://www.gnu.org/licenses/>.
 //
-#include "Controller_SynchMempoolTask.h"
+#include "Controller/SynchMempoolTask.h"
 
 #include "BTC.h"
 #include "Storage.h"
