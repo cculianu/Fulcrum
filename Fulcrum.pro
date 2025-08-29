@@ -370,6 +370,7 @@ SOURCES += \
     Servers.cpp \
     SrvMgr.cpp \
     Storage.cpp \
+    Storage/ConcatOperator.cpp \
     Storage/RecordFile.cpp \
     SSLCertMonitor.cpp \
     SubsMgr.cpp \
@@ -421,6 +422,7 @@ HEADERS += \
     Span.h \
     SrvMgr.h \
     Storage.h \
+    Storage/ConcatOperator.h \
     Storage/RecordFile.h \
     SSLCertMonitor.h \
     SubsMgr.h \
