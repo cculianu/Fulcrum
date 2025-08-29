@@ -1222,9 +1222,13 @@ struct Storage::Pvt
                                     *txhash2txnum{}, // new: index of txhash -> txNumsFile
                                     *rpa{}; // new: height -> Rpa::PrefixTable
 
-        using ColInfoTup = std::tuple<rocksdb::ColumnFamilyHandle *&, const rocksdb::ColumnFamilyOptions &, double>;
+        struct ColFamParams {
+            rocksdb::ColumnFamilyHandle *& handle;
+            const rocksdb::ColumnFamilyOptions & options;
+            double memFactor = 0.;
+        };
         // Some introspection here.. these tuples point to some of the above members
-        const std::map<std::string, ColInfoTup> colFamsTable = {
+        const std::map<std::string, ColFamParams> colFamsTable = {
             { "meta", {meta, opts, 0.0005} },
             { "blkinfo", {blkinfo , opts, 0.02} },
             { "utxoset", {utxoset, opts, 0.25} },
@@ -1711,7 +1715,7 @@ void Storage::startup()
                         // determine option for this column family
                         std::optional<rocksdb::ColumnFamilyOptions> optOptions;
                         if (auto it = colFamsNeeded.find(colName); it != colFamsNeeded.end()) {
-                            optOptions = std::move(std::get<1>(it->second));
+                            optOptions = std::move(it->second.options);
                             // mark db cols that the db has that we want as "no longer needed"
                             colFamsNeeded.erase(it);
                         } else if (colName == rocksdb::kDefaultColumnFamilyName) {
@@ -1748,8 +1752,8 @@ void Storage::startup()
         // Next, for all the colFamsNeeded that weren't in the DB already (new DB, etc), create them!
         {
             std::vector<rocksdb::ColumnFamilyDescriptor> colFamDescs;
-            for (const auto & [name, tup] : colFamsNeeded) {
-                colFamDescs.emplace_back(name, std::get<1>(tup));
+            for (const auto & [name, params] : colFamsNeeded) {
+                colFamDescs.emplace_back(name, params.options);
             }
             if (!colFamDescs.empty()) {
                 std::vector<rocksdb::ColumnFamilyHandle *> handles;
@@ -1772,7 +1776,7 @@ void Storage::startup()
             const auto &name = h->GetName();
             if (auto it = colFamsTable.find(name); it != colFamsTable.end()) [[likely]] {
                 // assign ptr; this modifies members: p.db.meta, p.db.blkinfo, etc..
-                std::get<0>(it->second) = h;
+                it->second.handle = h;
             } else if (name != rocksdb::kDefaultColumnFamilyName) [[unlikely]] {
                 throw DatabaseError(QString("Encountered an unknown column family in DB: %1"
                                             " -- incompatible or newer than expected database, perhaps?")
