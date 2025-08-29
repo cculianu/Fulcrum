@@ -26,6 +26,7 @@
 #include "Rpa.h"
 #include "Span.h"
 #include "Storage.h"
+#include "Storage/ConcatOperator.h"
 #include "Storage/RecordFile.h"
 #include "SubsMgr.h"
 #include "VarInt.h"
@@ -63,13 +64,11 @@
 #include <cstring> // for memcpy
 #include <functional>
 #include <limits>
-#include <list>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <set>
-#include <shared_mutex>
 #include <string>
-#include <thread>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -532,53 +531,6 @@ namespace {
     // serialize from raw bytes mostly (no QDataStream)
     template <> UndoInfo Deserialize(const QByteArray &, bool *);
 
-
-    /// Associative merge operator used for scripthash history concatenation
-    /// TODO: this needs to be made more efficient by implementing the real MergeOperator interface and combining
-    /// appends efficiently to reduce allocations.  Right now it's called for each append.
-    class ConcatOperator : public rocksdb::AssociativeMergeOperator {
-    public:
-        ~ConcatOperator() override;
-
-        mutable std::atomic_size_t merges = 0;
-
-        // Gives the client a way to express the read -> modify -> write semantics
-        // key:           (IN) The key that's associated with this merge operation.
-        // existing_value:(IN) null indicates the key does not exist before this op
-        // value:         (IN) the value to update/merge the existing_value with
-        // new_value:    (OUT) Client is responsible for filling the merge result
-        // here. The string that new_value is pointing to will be empty.
-        // logger:        (IN) Client could use this to log errors during merge.
-        //
-        // Return true on success.
-        // All values passed in will be client-specific values. So if this method
-        // returns false, it is because client specified bad data or there was
-        // internal corruption. The client should assume that this will be treated
-        // as an error by the library.
-        bool Merge(const rocksdb::Slice& key, const rocksdb::Slice* existing_value,
-                   const rocksdb::Slice& value, std::string* new_value,
-                   rocksdb::Logger* logger) const override;
-        const char* Name() const override { return "ConcatOperator"; /* NOTE: this must be the same for the same db each time it is opened! */ }
-    };
-
-    ConcatOperator::~ConcatOperator() {} // weak vtable warning prevention
-
-    bool ConcatOperator::Merge(const rocksdb::Slice &key [[maybe_unused]], const rocksdb::Slice *existing_value,
-                               const rocksdb::Slice &value, std::string *new_value, rocksdb::Logger *) const
-    {
-        ++merges;
-        if (!existing_value) {
-            new_value->assign(value.data(), value.size());
-        } else {
-            new_value->clear();
-            const size_t evsz{existing_value->size()}, vsz{value.size()};
-            new_value->reserve(evsz + vsz);
-            new_value->append(existing_value->data(), evsz);
-            new_value->append(value.data(), vsz);
-        }
-        return true;
-    }
-
     /// Thrown if user hits Ctrl-C / app gets a signal while we run the slow db checks
     struct UserInterrupted : public Exception { using Exception::Exception; ~UserInterrupted() override; };
     UserInterrupted::~UserInterrupted() {} // weak vtable warning suppression
@@ -597,7 +549,7 @@ namespace {
         const rocksdb::WriteOptions & wrOpts;
         RecordFile * const rf;
         std::shared_ptr<rocksdb::MergeOperator> mergeOp;
-        ConcatOperator * concatOp;  // this is a "weak" pointer into above, dynamic casted down. always valid.
+        StorageDetail::ConcatOperator * concatOp;  // this is a "weak" pointer into above, dynamic casted down. always valid.
         Tic lastWarnTime; ///< this is not guarded by any locks. Assumption is calling code always holds an exclusive lock when calling truncateForUndo()
         int64_t largestTxNumSeen = -1;
     public:
@@ -614,7 +566,7 @@ namespace {
             if (!this->db || !this->cf || !rf || !this->keyBytes || this->keyBytes > HashLen || this->keyPos >= KP_Invalid)
                 throw BadArgs("Bad argumnets supplied to TxHash2TxNumMgr constructor");
             mergeOp = db->GetOptions(cf).merge_operator;
-            if (!mergeOp || ! (concatOp = dynamic_cast<ConcatOperator *>(mergeOp.get())))
+            if (!mergeOp || ! (concatOp = dynamic_cast<StorageDetail::ConcatOperator *>(mergeOp.get())))
                 throw BadArgs("This db lacks a merge operator of type `ConcatOperator`");
             loadLargestTxNumSeen();
             Debug() << "TxHash2TxNumMgr: largestTxNumSeen = " << largestTxNumSeen;
@@ -1210,7 +1162,7 @@ struct Storage::Pvt
         std::weak_ptr<rocksdb::Cache> blockCache; ///< shared across all dbs, caps total block cache size across all db instances
         std::weak_ptr<rocksdb::WriteBufferManager> writeBufferManager; ///< shared across all dbs, caps total memtable buffer size across all db instances
 
-        std::shared_ptr<ConcatOperator> concatOperator, concatOperatorTxHash2TxNum;
+        std::shared_ptr<StorageDetail::ConcatOperator> concatOperator, concatOperatorTxHash2TxNum;
 
         std::unique_ptr<rocksdb::DB> db; // the single database we open.
         std::vector<rocksdb::ColumnFamilyHandle *> columnFamilies;
@@ -1690,10 +1642,10 @@ void Storage::startup()
         opts.use_fsync = options->db.useFsync; // the false default is perfectly safe, but Jt asked for this as an option, so here it is.
 
         shistOpts = opts; // copy what we just did (will implicitly copy over the shared table_factory and write_buffer_manager)
-        shistOpts.merge_operator = p->db.concatOperator = std::make_shared<ConcatOperator>(); // this set of options uses the concat merge operator (we use this to append to history entries in the db)
+        shistOpts.merge_operator = p->db.concatOperator = std::make_shared<StorageDetail::ConcatOperator>(); // this set of options uses the concat merge operator (we use this to append to history entries in the db)
 
         txhash2txnumOpts = opts;
-        txhash2txnumOpts.merge_operator = p->db.concatOperatorTxHash2TxNum = std::make_shared<ConcatOperator>();
+        txhash2txnumOpts.merge_operator = p->db.concatOperatorTxHash2TxNum = std::make_shared<StorageDetail::ConcatOperator>();
 
         const auto &colFamsTable = p->db.colFamsTable;
         auto colFamsNeeded = colFamsTable;
