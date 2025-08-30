@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <cassert>
 #include <chrono>
 #include <concepts>
@@ -1028,6 +1029,51 @@ namespace Util {
         // @return `true` if the interrupt flag was set, `false` otherwise.
         bool wait(std::optional<std::chrono::milliseconds> timeout = std::nullopt) const;
     };
+
+    /* ---- Endian swap ops ----
+     *
+     * Note we reproduce functionality from "bitcoin/crypto/endian.h" here in order to not depend on the bitcoin lib
+     * everywhere in this codebase.
+     */
+    inline bool constexpr isBigEndian() noexcept { return std::endian::native == std::endian::big; }
+    inline bool constexpr isLittleEndian() noexcept { return std::endian::native == std::endian::little; }
+
+    static_assert(isBigEndian() + isLittleEndian() == 1, "Assumption: Endianness must be one of these two");
+
+    [[nodiscard]] inline constexpr uint16_t byteSwap16(uint16_t const x) noexcept {
+        uint32_t const x32 = static_cast<uint32_t>(x); // to keep everything within an unsigned int and prevent promotion to `int`
+        return static_cast<uint16_t>(  ((x32 & uint32_t{0xff00u}) >> 8u)
+                                     | ((x32 & uint32_t{0x00ffu}) << 8u));
+    }
+    [[nodiscard]] inline constexpr uint32_t byteSwap32(uint32_t const x) noexcept {
+        return   ((x & uint32_t{0xff000000u}) >> 24u)
+               | ((x & uint32_t{0x00ff0000u}) >>  8u)
+               | ((x & uint32_t{0x0000ff00u}) <<  8u)
+               | ((x & uint32_t{0x000000ffu}) << 24u);
+    }
+    [[nodiscard]] inline constexpr uint64_t byteSwap64(uint64_t const x) noexcept {
+        return   ((x & uint64_t{0xff00000000000000ull}) >> 56ull)
+               | ((x & uint64_t{0x00ff000000000000ull}) >> 40ull)
+               | ((x & uint64_t{0x0000ff0000000000ull}) >> 24ull)
+               | ((x & uint64_t{0x000000ff00000000ull}) >>  8ull)
+               | ((x & uint64_t{0x00000000ff000000ull}) <<  8ull)
+               | ((x & uint64_t{0x0000000000ff0000ull}) << 24ull)
+               | ((x & uint64_t{0x000000000000ff00ull}) << 40ull)
+               | ((x & uint64_t{0x00000000000000ffull}) << 56ull);
+    }
+    [[nodiscard]] inline constexpr uint16_t hToLe16(uint16_t x) noexcept { if constexpr (isBigEndian()) return byteSwap16(x); else return x; }
+    [[nodiscard]] inline constexpr uint16_t le16ToH(uint16_t x) noexcept { if constexpr (isBigEndian()) return byteSwap16(x); else return x; }
+    [[nodiscard]] inline constexpr uint32_t hToLe32(uint32_t x) noexcept { if constexpr (isBigEndian()) return byteSwap32(x); else return x; }
+    [[nodiscard]] inline constexpr uint32_t le32ToH(uint32_t x) noexcept { if constexpr (isBigEndian()) return byteSwap32(x); else return x; }
+    [[nodiscard]] inline constexpr uint64_t hToLe64(uint64_t x) noexcept { if constexpr (isBigEndian()) return byteSwap64(x); else return x; }
+    [[nodiscard]] inline constexpr uint64_t le64ToH(uint64_t x) noexcept { if constexpr (isBigEndian()) return byteSwap64(x); else return x; }
+    [[nodiscard]] inline constexpr uint16_t hToBe16(uint16_t x) noexcept { if constexpr (isLittleEndian()) return byteSwap16(x); else return x; }
+    [[nodiscard]] inline constexpr uint16_t be16ToH(uint16_t x) noexcept { if constexpr (isLittleEndian()) return byteSwap16(x); else return x; }
+    [[nodiscard]] inline constexpr uint32_t hToBe32(uint32_t x) noexcept { if constexpr (isLittleEndian()) return byteSwap32(x); else return x; }
+    [[nodiscard]] inline constexpr uint32_t be32ToH(uint32_t x) noexcept { if constexpr (isLittleEndian()) return byteSwap32(x); else return x; }
+    [[nodiscard]] inline constexpr uint64_t hToBe64(uint64_t x) noexcept { if constexpr (isLittleEndian()) return byteSwap64(x); else return x; }
+    [[nodiscard]] inline constexpr uint64_t be64ToH(uint64_t x) noexcept { if constexpr (isLittleEndian()) return byteSwap64(x); else return x; }
+    // End: ---- Endian swap ops ----
 
 } // end namespace Util
 

@@ -29,11 +29,11 @@ static_assert(false, "This header requires preprocessor define: ENABLE_TESTS");
 #include <QRandomGenerator>
 #include <QString>
 
+#include <algorithm>
 #include <cassert>
 #include <cstring>
 #include <functional>
 #include <list>
-#include <vector>
 
 namespace Tests {
 
@@ -43,20 +43,19 @@ namespace Tests {
     /** Generate a random 64-bit integer. */
     inline uint64_t rand64() noexcept { return QRandomGenerator::global()->generate64(); }
     inline uint64_t InsecureRandRange(uint64_t range) { return rand64() % range; }
-    inline uint64_t InsecureRandBits(int bits) {
-        if (bits == 0)
-            return 0;
-        else if (bits > 32)
-            return rand64() >> (64 - bits);
-        else
-            return rand64() & (~uint64_t(0) >> (64 - bits));
+    inline uint64_t InsecureRandBits(unsigned bits) {
+        if (bits == 0) return 0;
+        return rand64() >> (64u - std::min(bits, 64u));
     }
-    inline std::uint32_t InsecureRand32() { return QRandomGenerator::global()->generate(); }
+    inline uint32_t InsecureRand32() { return QRandomGenerator::global()->generate(); }
     inline bool InsecureRandBool() { return QRandomGenerator::global()->generate() & 0x1; }
+
+    enum Type { Test, Bench };
 
     /// BCHN Unit Test work-alike support ...
     struct Context {
         const QString name;
+        const Type type;
         unsigned  nChecks = 0, nChecksFailed = 0, nChecksOk = 0;
         using VoidFunc = std::function<void()>;
         std::list<std::pair<QString, VoidFunc>> tests;
@@ -68,7 +67,7 @@ namespace Tests {
 
         static Context & cur() { throwIfStackEmpty(); return *stack.back(); }
 
-        explicit Context(const QString &name) : name(name) { stack.push_back(this); }
+        Context(const QString &name, const Type t) : name(name), type{t} { stack.push_back(this); }
         ~Context() { throwIfStackEmpty(); stack.pop_front(); }
 
         void checkExpr(const char * const estr, const bool expr, unsigned line, const char * const file, const std::string &msg = {}) {
@@ -85,6 +84,13 @@ namespace Tests {
             }
         }
 
+        QString typeName(bool plural = false) const {
+            switch(type) {
+            case Bench: return plural ? "benches" : "bench"; break;
+            case Test: return plural ? "tests" : "test"; break;
+            }
+        }
+
         void runAll() {
             unsigned nTests = 0;
             std::tie(nChecks, nChecksOk, nChecksFailed) = std::tuple(0u, 0u, 0u); // stats
@@ -92,25 +98,34 @@ namespace Tests {
             for (const auto & [tname, func] : tests) {
                 Tic t1;
                 ++nTests;
-                Log() << "Running " << name << " test: " << tname << " ...";
+                if (tests.size() > 1 || tname != name)
+                    // Only print the "running" like if we have more than 1 test or bench to run
+                    Log() << "Running " << name << " " << typeName() << ": " << tname << " ...";
                 const auto [b4checks, b4ok, b4failed] = std::tuple(nChecks, nChecksOk, nChecksFailed);
                 func();
                 const auto [checks, ok, failed] = std::tuple(nChecks, nChecksOk, nChecksFailed);
                 if (failed > b4failed)
-                    throw Exception(QString::number(failed - b4failed) + " checks failed for test: " + tname);
-                Log() << (ok - b4ok) << "/" << (checks - b4checks) << " checks ok for " << tname << " in "
-                      << t1.msecStr() << " msec";
+                    throw Exception(QString::number(failed - b4failed) + " checks failed for " + typeName() + ": " + tname);
+                if (type == Test || checks - b4checks) {
+                    Log() << (ok - b4ok) << "/" << (checks - b4checks) << " checks ok for " << tname << " in "
+                          << t1.msecStr() << " msec";
+                } else {
+                    Log() << typeName() << " " << tname << " elapsed: " << t1.msecStr() << " msec";
+                }
             }
-            Log() << name << ": ran " << nTests << " tests total."
-                  << " Checks: " << nChecksOk << " passed, " << nChecksFailed << " failed."
-                  << " Elapsed: " << t0.msecStr() << " msec.";
+            Log() << name << ": ran " << nTests << " " << typeName(nTests > 1) << " total."
+                  << [&]{
+                         if (type == Test || nChecksOk || nChecksFailed)
+                             return QString(" Checks: %1 passed, %2 failed.").arg(nChecksOk).arg(nChecksFailed);
+                        return QString("");
+                     }() << " Elapsed: " << t0.msecStr() << " msec.";
         }
     };
 
-    // Some macros used below so we can just copy-paste unit tests from BCHN without changing them
+// Some macros used below so we can just copy-paste unit tests from BCHN without changing them
 #define TEST_RUN_CONTEXT() Tests::Context::cur().runAll()
 #if defined(__LINE__) && defined(__FILE__)
-#    define TEST_SETUP_CONTEXT(name) Tests::Context testContext ## __LINE__(name)
+#    define TEST_SETUP_CONTEXT(name, typ) Tests::Context testContext ## __LINE__(name, typ)
 #    define TEST_CHECK(expr) Tests::Context::cur().checkExpr(#expr, (expr), __LINE__, __FILE__)
 #    define TEST_CHECK_MESSAGE(expr, msg) Tests::Context::cur().checkExpr(#expr, (expr), __LINE__, __FILE__, msg)
 #else
@@ -144,16 +159,21 @@ namespace Tests {
         Tests::Context::cur().tests.emplace_back( #name, Tests::Context::VoidFunc{} ); \
         Tests::Context::cur().tests.back().second = [&]
 
-#define TEST_SUITE(name) \
+#define TEST_OR_BENCH_SUITE(NAME, RFUNC, TYPE) \
     namespace { \
-        void name ## _test_func(); \
-        const auto name ## __COUNTER__ = ::App::registerTest( #name , name ## _test_func ); \
-        void name ## _test_func() { \
+        void NAME ## _test_func(); \
+        const auto NAME ## __COUNTER__ = ::App:: RFUNC ( #NAME , NAME ## _test_func ); \
+        void NAME ## _test_func() { \
             using namespace Tests; \
-            TEST_SETUP_CONTEXT( #name );
+            TEST_SETUP_CONTEXT( #NAME , TYPE );
+#define TEST_SUITE(name) TEST_OR_BENCH_SUITE(name, registerTest, Test)
 #define TEST_SUITE_END() \
             TEST_RUN_CONTEXT(); \
         } /* end name_test_func */ \
     } // namespace
+
+#define BENCH_SUITE(name) TEST_OR_BENCH_SUITE(name, registerBench, Bench)
+#define BENCHMARK(name) TEST_CASE(name)
+#define BENCH_SUITE_END() TEST_SUITE_END()
 
 } // namespace Tests

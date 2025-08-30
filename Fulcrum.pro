@@ -449,7 +449,8 @@ contains(DEFINES, ENABLE_TESTS) {
     HEADERS += \
         src/tests/Tests.h
     SOURCES += \
-        src/tests/ByteView_tests.cpp
+        src/tests/ByteView_tests.cpp \
+        src/tests/Util_tests.cpp
 }
 
 # Bitcoin related sources & headers

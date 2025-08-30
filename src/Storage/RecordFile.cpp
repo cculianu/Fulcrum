@@ -19,38 +19,7 @@
 #include "RecordFile.h"
 #include "Util.h"
 
-#include <bit>
 #include <cstdint>
-
-namespace {
-    // Note we intentionally didn't include "bitcoin/crypto/endian.h" here in order to not depend on the bitcoin lib in
-    // this class.
-    inline bool constexpr isBigEndian() noexcept { return std::endian::native == std::endian::big; }
-    inline bool constexpr isLittleEndian() noexcept { return std::endian::native == std::endian::little; }
-
-    static_assert(isBigEndian() + isLittleEndian() == 1, "Assumption: Endianness must be one of these two");
-
-    [[maybe_unused]] [[nodiscard]] inline constexpr uint32_t bswap_32(uint32_t x) noexcept {
-        return   ((x & uint32_t{0xff000000u}) >> 24u)
-               | ((x & uint32_t{0x00ff0000u}) >>  8u)
-               | ((x & uint32_t{0x0000ff00u}) <<  8u)
-               | ((x & uint32_t{0x000000ffu}) << 24u);
-    }
-    [[maybe_unused]] [[nodiscard]] inline constexpr uint64_t bswap_64(uint64_t x) noexcept {
-        return   ((x & uint64_t{0xff00000000000000ull}) >> 56ull)
-               | ((x & uint64_t{0x00ff000000000000ull}) >> 40ull)
-               | ((x & uint64_t{0x0000ff0000000000ull}) >> 24ull)
-               | ((x & uint64_t{0x000000ff00000000ull}) >>  8ull)
-               | ((x & uint64_t{0x00000000ff000000ull}) <<  8ull)
-               | ((x & uint64_t{0x0000000000ff0000ull}) << 24ull)
-               | ((x & uint64_t{0x000000000000ff00ull}) << 40ull)
-               | ((x & uint64_t{0x00000000000000ffull}) << 56ull);
-    }
-    [[nodiscard]] inline constexpr uint32_t hToLe32(uint32_t x) noexcept { if constexpr (isBigEndian()) return bswap_32(x); else return x; }
-    [[nodiscard]] inline constexpr uint32_t le32ToH(uint32_t x) noexcept { if constexpr (isBigEndian()) return bswap_32(x); else return x; }
-    [[nodiscard]] inline constexpr uint64_t hToLe64(uint64_t x) noexcept { if constexpr (isBigEndian()) return bswap_64(x); else return x; }
-    [[nodiscard]] inline constexpr uint64_t le64ToH(uint64_t x) noexcept { if constexpr (isBigEndian()) return bswap_64(x); else return x; }
-} // namespace
 
 RecordFile::FileError::~FileError() {} // prevent weak vtable warning
 RecordFile::FileFormatError::~FileFormatError() {} // prevent weak vtable warning
@@ -80,13 +49,13 @@ RecordFile::RecordFile(const QString &fileName_, size_t recordSize_, uint32_t ma
                 || file.read(reinterpret_cast<char *>(&tmpNRecs), sizeof(tmpNRecs)) != sizeof(tmpNRecs)) {
             throw FileFormatError(QString("Failed to read header: %1").arg(file.errorString()));
         }
-        tmpMagic = le32ToH(tmpMagic); // swab from little-endian to host order
-        tmpNRecs = le64ToH(tmpNRecs);
-        if constexpr (isBigEndian()) {
+        tmpMagic = Util::le32ToH(tmpMagic); // swab from little-endian to host order
+        tmpNRecs = Util::le64ToH(tmpNRecs);
+        if constexpr (Util::isBigEndian()) {
             if (tmpMagic != magic) {
                 // Big endian (compatibility with previous file format). Re-swab to detect and fix.
-                const uint32_t beTmpMagic = bswap_32(tmpMagic);
-                const uint64_t beTmpNRecs = bswap_64(tmpNRecs);
+                const uint32_t beTmpMagic = Util::byteSwap32(tmpMagic);
+                const uint64_t beTmpNRecs = Util::byteSwap64(tmpNRecs);
                 if (beTmpMagic == magic && qint64(beTmpNRecs*recsz + hdrsz) == file.size()) {
                     // Header was encoded in big endian, convert it. This branch can happen if on a Big Endian system,
                     // where older code just encoded in host byte order, but now we impose little endian byte order on
@@ -270,10 +239,10 @@ bool RecordFile::writeNewSizeToHeader(QString *errStr, bool flush)
         if (errStr) *errStr = "File not open";
     } else if (!file.seek(offsetOfNRecs())) {
         if (errStr) *errStr = QString("Cannot seek to write header for %1").arg(file.fileName());
-    } else if (const uint64_t leNewNRecs = hToLe64(nrecs.load());
+    } else if (const uint64_t leNewNRecs = Util::hToLe64(nrecs.load());
                 file.write(reinterpret_cast<const char *>(&leNewNRecs), sizeof(leNewNRecs)) != sizeof(leNewNRecs)) {
         if (errStr) *errStr = QString("Cannot write header for %1: %2").arg(file.fileName(), file.errorString());
-    } else if (size_t(file.size()) != hdrsz + recsz*le64ToH(leNewNRecs)) {
+    } else if (size_t(file.size()) != hdrsz + recsz*Util::le64ToH(leNewNRecs)) {
         if (errStr)
             *errStr = QString("File size mistmatch for %1, %2 is not a multiple of %3 (+ %4 header). File is now likely corrupted.")
                       .arg(file.fileName()).arg(file.size()).arg(recsz).arg(hdrsz);
@@ -289,8 +258,8 @@ bool RecordFile::writeNewSizeToHeader(QString *errStr, bool flush)
 void RecordFile::writeFullHeader(QFile &f, const uint32_t magic, const uint64_t nRecs)
 {
     if (UNLIKELY(!f.seek(0))) throw FileError(QString("Failed to seek to position 0: %1").arg(f.errorString()));
-    const uint32_t leMagic = hToLe32(magic); // swab to le byte order
-    const uint64_t leN = hToLe64(nRecs); // swab to le byte order
+    const uint32_t leMagic = Util::hToLe32(magic); // swab to le byte order
+    const uint64_t leN = Util::hToLe64(nRecs); // swab to le byte order
     if (f.write(reinterpret_cast<const char *>(&leMagic), sizeof(leMagic)) != sizeof(leMagic)
             || f.write(reinterpret_cast<const char *>(&leN), sizeof(leN)) != sizeof(leN)) {
         throw FileError(QString("Failed to write header: %1").arg(f.errorString()));

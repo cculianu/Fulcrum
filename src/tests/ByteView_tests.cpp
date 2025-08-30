@@ -16,9 +16,12 @@
 // along with this program (see LICENSE.txt).  If not, see
 // <https://www.gnu.org/licenses/>.
 //
+#include "ByteView.h"
 #include "Tests.h"
 
+#include <cstdint>
 #include <string>
+#include <vector>
 
 TEST_SUITE(byteview)
 
