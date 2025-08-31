@@ -373,7 +373,6 @@ namespace {
             std::vector<std::thread> thrds;
             RecordFile f(fileName, HashLen);
             if (f.numRecords() != N) throw Exception("RecordFile has wrong number of records!");
-            QString fail;
             std::atomic_size_t ctr{0};
             QString fail_shared;
             std::mutex fail_shared_mut;
@@ -405,7 +404,7 @@ namespace {
                 });
             }
             for (auto & t : thrds) t.join();
-            if (!fail.isEmpty()) throw Exception(fail);
+            if (!fail_shared.isEmpty()) throw Exception(fail_shared);
             Log() << "Read " << ctr.load() << " batched records randomly using " << thrds.size() << " concurrent threads in "
                   << t0.msecStr() << " msec";
             ++nChecksOK;

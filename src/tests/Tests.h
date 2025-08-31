@@ -30,6 +30,7 @@ static_assert(false, "This header requires preprocessor define: ENABLE_TESTS");
 #include <QString>
 
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <cstring>
 #include <functional>
@@ -56,7 +57,7 @@ namespace Tests {
     struct Context {
         const QString name;
         const Type type;
-        unsigned  nChecks = 0, nChecksFailed = 0, nChecksOk = 0;
+        std::atomic_uint  nChecks = 0, nChecksFailed = 0, nChecksOk = 0;
         using VoidFunc = std::function<void()>;
         std::list<std::pair<QString, VoidFunc>> tests;
         inline static std::list<Context *> stack;
@@ -100,10 +101,10 @@ namespace Tests {
                 ++nTests;
                 if (tests.size() > 1 || tname != name)
                     // Only print the "running" like if we have more than 1 test or bench to run
-                    Log() << "Running " << name << " " << typeName() << ": " << tname << " ...";
-                const auto [b4checks, b4ok, b4failed] = std::tuple(nChecks, nChecksOk, nChecksFailed);
+                    Log(Log::BrightCyan) << "Running " << name << " " << typeName() << ": " << tname << " ...";
+                const auto [b4checks, b4ok, b4failed] = std::tuple(nChecks.load(), nChecksOk.load(), nChecksFailed.load());
                 func();
-                const auto [checks, ok, failed] = std::tuple(nChecks, nChecksOk, nChecksFailed);
+                const auto [checks, ok, failed] = std::tuple(nChecks.load(), nChecksOk.load(), nChecksFailed.load());
                 if (failed > b4failed)
                     throw Exception(QString::number(failed - b4failed) + " checks failed for " + typeName() + ": " + tname);
                 if (type == Test || checks - b4checks) {
@@ -113,10 +114,10 @@ namespace Tests {
                     Log() << typeName() << " " << tname << " elapsed: " << t1.msecStr() << " msec";
                 }
             }
-            Log() << name << ": ran " << nTests << " " << typeName(nTests > 1) << " total."
+            Log(!nChecksFailed ? Log::BrightCyan : Log::BrightRed) << name << ": ran " << nTests << " " << typeName(nTests > 1) << " total."
                   << [&]{
                          if (type == Test || nChecksOk || nChecksFailed)
-                             return QString(" Checks: %1 passed, %2 failed.").arg(nChecksOk).arg(nChecksFailed);
+                             return QString(" Checks: %1 passed, %2 failed.").arg(nChecksOk.load()).arg(nChecksFailed.load());
                         return QString("");
                      }() << " Elapsed: " << t0.msecStr() << " msec.";
         }

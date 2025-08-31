@@ -371,6 +371,7 @@ SOURCES += \
     SrvMgr.cpp \
     Storage.cpp \
     Storage/ConcatOperator.cpp \
+    Storage/DBRecordArray.cpp \
     Storage/RecordFile.cpp \
     SSLCertMonitor.cpp \
     SubsMgr.cpp \
@@ -423,6 +424,7 @@ HEADERS += \
     SrvMgr.h \
     Storage.h \
     Storage/ConcatOperator.h \
+    Storage/DBRecordArray.h \
     Storage/RecordFile.h \
     SSLCertMonitor.h \
     SubsMgr.h \

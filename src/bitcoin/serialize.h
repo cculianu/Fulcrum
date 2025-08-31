@@ -209,9 +209,9 @@ template <typename X> const X &ReadWriteAsHelper(const X &x) {
  */
 #define FORMATTER_METHODS(cls, obj) \
     template<typename Stream> \
-    static void Ser(Stream& s, const cls& obj) { SerializationOps(obj, s, CSerActionSerialize()); } \
+    static void Ser(Stream& s, const cls& obj) { SerializationOps(obj, s, bitcoin::CSerActionSerialize()); } \
     template<typename Stream> \
-    static void Unser(Stream& s, cls& obj) { SerializationOps(obj, s, CSerActionUnserialize()); } \
+    static void Unser(Stream& s, cls& obj) { SerializationOps(obj, s, bitcoin::CSerActionUnserialize()); } \
     template<typename Stream, typename Type, typename Operation> \
     static inline void SerializationOps(Type& obj, Stream& s, Operation ser_action) \
 
