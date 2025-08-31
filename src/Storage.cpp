@@ -27,7 +27,7 @@
 #include "Span.h"
 #include "Storage.h"
 #include "Storage/ConcatOperator.h"
-#include "Storage/RecordFile.h"
+#include "Storage/DBRecordArray.h"
 #include "SubsMgr.h"
 #include "VarInt.h"
 
@@ -538,16 +538,16 @@ namespace {
     /// Manages the txhash2txnum rocksdb table.  The schema is:
     /// Key: N bytes from POS position from the big-endian ordered (JSON ordered) txhash (default 6 from the End)
     /// Value: One or more serialized VarInts. Each VarInt represents a "TxNum" (which tells us where the actual hash
-    ///     lives in the txnum2txhash flat file).
+    ///     lives in the txnum2txhash DBRecordArray).
     ///
-    /// This class is mainly a thin wrapper around the rocksdb and RecordFile facilities and they are both
+    /// This class is mainly a thin wrapper around the rocksdb and DBRecordArray facilities and they are both
     /// thread-safe and reentrant. It takes no locks itself.
     class TxHash2TxNumMgr {
         rocksdb::DB * const db;
         rocksdb::ColumnFamilyHandle * const cf;
         const rocksdb::ReadOptions & rdOpts; // references into Storage::Pvt
         const rocksdb::WriteOptions & wrOpts;
-        RecordFile * const rf;
+        DBRecordArray * const dra;
         std::shared_ptr<rocksdb::MergeOperator> mergeOp;
         StorageDetail::ConcatOperator * concatOp;  // this is a "weak" pointer into above, dynamic casted down. always valid.
         Tic lastWarnTime; ///< this is not guarded by any locks. Assumption is calling code always holds an exclusive lock when calling truncateForUndo()
@@ -560,10 +560,10 @@ namespace {
 
         TxHash2TxNumMgr(rocksdb::DB *db, rocksdb::ColumnFamilyHandle *cf,
                         const rocksdb::ReadOptions & rdOpts, const rocksdb::WriteOptions &wrOpts,
-                        RecordFile *txnum2txhash, size_t keyBytes /*= 6*/, KeyPos keyPos /*= End*/)
-            : db(db), cf(cf), rdOpts(rdOpts), wrOpts(wrOpts), rf(txnum2txhash), keyBytes(keyBytes), keyPos(keyPos)
+                        DBRecordArray *txnum2txhash, size_t keyBytes /*= 6*/, KeyPos keyPos /*= End*/)
+            : db(db), cf(cf), rdOpts(rdOpts), wrOpts(wrOpts), dra(txnum2txhash), keyBytes(keyBytes), keyPos(keyPos)
         {
-            if (!this->db || !this->cf || !rf || !this->keyBytes || this->keyBytes > HashLen || this->keyPos >= KP_Invalid)
+            if (!this->db || !this->cf || !dra || !this->keyBytes || this->keyBytes > HashLen || this->keyPos >= KP_Invalid)
                 throw BadArgs("Bad argumnets supplied to TxHash2TxNumMgr constructor");
             mergeOp = db->GetOptions(cf).merge_operator;
             if (!mergeOp || ! (concatOp = dynamic_cast<StorageDetail::ConcatOperator *>(mergeOp.get())))
@@ -707,18 +707,18 @@ namespace {
             };
             auto ret = std::make_unique<UndoPhased>();
             ret->asyncPhase1 = [this, self = ret.get(), txNum] {
-                const auto rfNR = rf->numRecords();
+                const auto rfNR = dra->numRecords();
                 if (rfNR < txNum) [[unlikely]]
-                    throw DatabaseError(dbName() + ": RecordFile does not have the hashes required for the specified truncation");
+                    throw DatabaseError(dbName() + ": DBRecordArray does not have the hashes required for the specified truncation");
                 else if (rfNR == txNum) [[unlikely]] {
                     // defensive programming warning -- this should never happen
-                    Warning() << "truncateForUndo: called with txNum == RecordFile->numRecords -- FIXME!";
+                    Warning() << "truncateForUndo: called with txNum == DBRecordArray->numRecords -- FIXME!";
                     return;
                 }
                 QString err;
-                auto &recs = self->recs = rf->readRecords(txNum, rfNR - txNum, &err);
+                auto &recs = self->recs = dra->readRecords(txNum, rfNR - txNum, &err);
                 if (recs.size() != rfNR - txNum || !err.isEmpty()) [[unlikely]]
-                    throw DatabaseError(QString("%1: short read count or error reading record file: %2").arg(dbName(), err));
+                    throw DatabaseError(QString("%1: short read count or error reading DBRecordArray: %2").arg(dbName(), err));
 
                 DebugM("truncateForUndo: read ", recs.size(), Util::Pluralize(" record", recs.size()),
                        " from txNums file, elapsed: ", self->t0.msecStr(), " msec");
@@ -827,11 +827,11 @@ namespace {
             try {
                 while (!span.empty())
                     txNums.push_back(VarInt::deserialize(span).value<uint64_t>()); // this may throw
-                if (UNLIKELY(txNums.empty())) throw DatabaseFormatError(QString("Missing data for txHash: ") + QString(txHash.toHex()));
+                if (txNums.empty()) [[unlikely]] throw DatabaseFormatError(QString("Missing data for txHash: ") + QString(txHash.toHex()));
                 QString errStr;
                 // we may get more than 1 txNum for a particular key, so examine them all
-                const auto recs = rf->readRandomRecords(txNums, &errStr, true);
-                if (UNLIKELY(recs.size() != txNums.size())) throw DatabaseError("Expected recs.size() == txNums.size()!");
+                const auto recs = dra->readRandomRecords(txNums, &errStr, true);
+                if (recs.size() != txNums.size()) [[unlikely]] throw DatabaseError("Expected recs.size() == txNums.size()!");
                 size_t i = 0;
                 for (const auto & rec : recs) {
                     if (rec == txHash) {
@@ -898,9 +898,8 @@ namespace {
                     idx2RecNums[i] = p;
             }
             QString errStr;
-            const auto recs = rf->readRandomRecords(recNums, &errStr, true);
-            if (!errStr.isEmpty()) DebugM(__func__, ": ", errStr); // DEBUG TODO: Remove me
-            if (UNLIKELY(recs.size() != recNums.size())) throw DatabaseError("Expected recs.size() == recNums.size()!");
+            const auto recs = dra->readRandomRecords(recNums, &errStr, true);
+            if (recs.size() != recNums.size()) [[unlikely]] throw DatabaseError(QString("Expected recs.size() == recNums.size()! Error: %1").arg(errStr));
             assert(ret.size() == hashes.size() && ret.size() == idx2RecNums.size());
             for (size_t i = 0; i < ret.size(); ++i) {
                 auto & optRange = idx2RecNums[i];
@@ -1006,7 +1005,7 @@ namespace {
                     return a.second < b.second;
                 });
                 std::sort(batchNums.begin(), batchNums.end());
-                const auto recs = rf->readRandomRecords(batchNums, &err);
+                const auto recs = dra->readRandomRecords(batchNums, &err);
                 if (recs.size() != batchNums.size()) throw InternalError(QString("short read of records: ") + err);
                 for (size_t i = 0; i < recs.size(); ++i) {
                     const auto &hash = recs[i];
@@ -1025,7 +1024,7 @@ namespace {
                 batchNums.resize(0);
             };
             App *ourApp = app();
-            const auto nrec = rf->numRecords();
+            const auto nrec = dra->numRecords();
             for (iter->SeekToFirst(); iter->Valid(); iter->Next()) {
                 if (UNLIKELY(0 == i % 100 && ourApp && ourApp->signalsCaught()))
                     throw UserInterrupted("User interrupted, aborting check"); // if the user hits Ctrl-C, stop the operation
@@ -1064,7 +1063,7 @@ namespace {
             Debug() << "Using key bytes: " << keyBytes << ", batchSize: " << batchSize;
             const Tic t0;
             App *ourApp = app();
-            const auto nrec = rf->numRecords();
+            const auto nrec = dra->numRecords();
             std::vector<PreProcessedBlock::TxInfo> fakeInfos;
             for (size_t i = 0; i < nrec; /*i += batchSize*/) {
                 if (UNLIKELY(0 == i % 100 && ourApp && ourApp->signalsCaught()))
@@ -1074,8 +1073,8 @@ namespace {
                     Log() << "Progress: " << QString::number(pct, 'f', 1) << "%, merge ops so far: " << mergeCount();
                 }
                 QString err;
-                const auto recs = rf->readRecords(i, std::min<size_t>(batchSize, rf->numRecords() - i), &err);
-                if (!err.isEmpty()) throw InternalError(QString("Got error from RecordFile: ") + err);
+                const auto recs = dra->readRecords(i, std::min<size_t>(batchSize, dra->numRecords() - i), &err);
+                if (!err.isEmpty()) throw InternalError(QString("Got error from DBRecordArray: ") + err);
                 // fake it
                 fakeInfos.resize(recs.size());
                 for (size_t j = 0; j < recs.size(); ++j)
@@ -1095,14 +1094,14 @@ namespace {
             Log() << "CheckDB: Verifying txhash index using the thorough reverse-check (this may take a long time) ...";
             const Tic t0;
             size_t i = 0, verified = 0;
-            const auto nrec = rf->numRecords();
+            const auto nrec = dra->numRecords();
             constexpr size_t batchSize = 50'000;
             App *ourApp = app();
             for (i = 0; i < nrec; /*i += batchSize*/) {
                 if (i && 0 == i % 100'000)
                     Log() << "Verified: " << verified << "/" << nrec << ", merge ops so far: " << mergeCount() << " ...";
                 QString err;
-                auto recs = rf->readRecords(i, batchSize, &err);
+                auto recs = dra->readRecords(i, batchSize, &err);
                 recs.emplace_back(HashLen, char(0)); // add a dummy at the end
                 Util::getRandomBytes(recs.back().data(), HashLen); // put a random hash at the end
                 auto results = findMany(recs);
@@ -1158,11 +1157,12 @@ struct Storage::Pvt
         const rocksdb::WriteOptions defWriteOpts; ///< avoid creating this each time
 
         rocksdb::Options opts;
-        rocksdb::ColumnFamilyOptions shistOpts, txhash2txnumOpts;
+        rocksdb::ColumnFamilyOptions shistOpts, txhash2txnumOpts,txnum2txhashOpts, headersOpts;
         std::weak_ptr<rocksdb::Cache> blockCache; ///< shared across all dbs, caps total block cache size across all db instances
         std::weak_ptr<rocksdb::WriteBufferManager> writeBufferManager; ///< shared across all dbs, caps total memtable buffer size across all db instances
 
-        std::shared_ptr<StorageDetail::ConcatOperator> concatOperator, concatOperatorTxHash2TxNum;
+        std::shared_ptr<StorageDetail::ConcatOperator> concatOperator, concatOperatorTxHash2TxNum,
+                                                       concatOperatorTxNum2TxHash, concatOperatorHeaders;
 
         std::unique_ptr<rocksdb::DB> db; // the single database we open.
         std::vector<rocksdb::ColumnFamilyHandle *> columnFamilies;
@@ -1171,6 +1171,8 @@ struct Storage::Pvt
         rocksdb::ColumnFamilyHandle *meta{}, *blkinfo{}, *utxoset{},
                                     *shist{}, *shunspent{}, // scripthash_history and scripthash_unspent
                                     *undo{}, // undo (reorg rewind)
+                                    *txnum2txhash{}, // mapping of txNum -> 32-byte hashes
+                                    *headers{}, // all blockchain headers
                                     *txhash2txnum{}, // new: index of txhash -> txNumsFile
                                     *rpa{}; // new: height -> Rpa::PrefixTable
 
@@ -1182,11 +1184,13 @@ struct Storage::Pvt
         // Some introspection here.. these tuples point to some of the above members
         const std::map<std::string, ColFamParams> colFamsTable = {
             { "meta", {meta, opts, 0.0005} },
-            { "blkinfo", {blkinfo , opts, 0.02} },
-            { "utxoset", {utxoset, opts, 0.25} },
-            { "scripthash_history", {shist, shistOpts, 0.30} },
-            { "scripthash_unspent", {shunspent, opts, 0.25} },
-            { "undo", {undo, opts, 0.0395} },
+            { "blkinfo", {blkinfo , opts, 0.015} },
+            { "utxoset", {utxoset, opts, 0.20} },
+            { "scripthash_history", {shist, shistOpts, 0.20} },
+            { "scripthash_unspent", {shunspent, opts, 0.20} },
+            { "undo", {undo, opts, 0.0345} },
+            { "txnum2txhash", {txnum2txhash, txnum2txhashOpts, 0.20} },
+            { "headers", {headers, headersOpts, 0.02} },
             { "txhash2txnum", {txhash2txnum, txhash2txnumOpts, 0.1} },
             // Future work: if on BTC or rpa disabled, give the rpa db's 0.04 back to scripthash_unspent and utxoset!!
             { "rpa", {rpa, opts, 0.04} }, // this index appears to be < 1/2 the txhash2txnum one on average, so we give it less than half that mem ratio
@@ -1209,8 +1213,8 @@ struct Storage::Pvt
     };
     RocksDBHandlesEtc db;
 
-    std::unique_ptr<RecordFile> txNumsFile;
-    std::unique_ptr<RecordFile> headersFile;
+    std::unique_ptr<DBRecordArray> txNumsDRA;
+    std::unique_ptr<DBRecordArray> headersDRA;
 
     /// Big lock used for block/history updates. Public methods that read the history such as getHistory and listUnspent
     /// take this as read-only (shared), and addBlock and undoLatestBlock take this as read/write (exclusively).
@@ -1613,7 +1617,8 @@ void Storage::startup()
 
         // Optimize RocksDB. This is the easiest way to get RocksDB to perform well
         rocksdb::Options & opts(p->db.opts);
-        rocksdb::ColumnFamilyOptions &shistOpts(p->db.shistOpts), &txhash2txnumOpts(p->db.txhash2txnumOpts);
+        rocksdb::ColumnFamilyOptions &shistOpts(p->db.shistOpts), &txhash2txnumOpts(p->db.txhash2txnumOpts),
+                                     &txnum2txhashOpts(p->db.txnum2txhashOpts), &headersOpts(p->db.headersOpts);
         opts.IncreaseParallelism(int(Util::getNPhysicalProcessors()));
         opts.OptimizeLevelStyleCompaction();
 
@@ -1646,6 +1651,12 @@ void Storage::startup()
 
         txhash2txnumOpts = opts;
         txhash2txnumOpts.merge_operator = p->db.concatOperatorTxHash2TxNum = std::make_shared<StorageDetail::ConcatOperator>();
+
+        txnum2txhashOpts = opts;
+        txnum2txhashOpts.merge_operator = p->db.concatOperatorTxNum2TxHash = std::make_shared<StorageDetail::ConcatOperator>();
+
+        headersOpts = opts;
+        headersOpts.merge_operator = p->db.concatOperatorHeaders = std::make_shared<StorageDetail::ConcatOperator>();
 
         const auto &colFamsTable = p->db.colFamsTable;
         auto colFamsNeeded = colFamsTable;
@@ -1743,7 +1754,7 @@ void Storage::startup()
         }
 
         if (!p->db.blkinfo || !p->db.meta || !p->db.rpa || !p->db.shist || !p->db.shunspent || !p->db.txhash2txnum
-            || !p->db.utxoset || !p->db.undo) [[unlikely]]
+            || !p->db.utxoset || !p->db.undo || !p->db.txnum2txhash || !p->db.headers) [[unlikely]]
             throw InternalError("A required column family handle is still nullptr! FIXME!");
 
 
@@ -1817,10 +1828,10 @@ void Storage::startup()
     // load headers -- may throw.. this must come first
     loadCheckHeadersInDB();
     // check txnums
-    loadCheckTxNumsFileAndBlkInfo();
+    loadCheckTxNumsDRAAndBlkInfo();
     // construct the TxHash2TxNum manager -- depends on the above function having constructed the txNumFile
     loadCheckTxHash2TxNumMgr();
-    // count utxos -- note this depends on "blkInfos" being filled in so it much be called after loadCheckTxNumsFileAndBlkInfo()
+    // count utxos -- note this depends on "blkInfos" being filled in so it much be called after loadCheckTxNumsDRAAndBlkInfo()
     loadCheckUTXOsInDB();
     // very slow check, only runs if -C -C (specified twice)
     loadCheckShunspentInDB();
@@ -1950,9 +1961,9 @@ void Storage::gentlyCloseDB()
     // do FlushWAL() and Close() to gently close the DB
     auto name = DBName(p->db);
     Debug() << "Flushing DB: " << name << " ...";
-    auto status = db->FlushWAL(true);
+    auto status = db->SyncWAL();
     if (!status.ok())
-        Warning() << "FlushWAL of " << name << ": " << StatusString(status);
+        Warning() << "SyncWAL of " << name << ": " << StatusString(status);
     Debug() << "Closing DB: " << name << " ...";
     status = db->Close();
     if (!status.ok())
@@ -1977,9 +1988,12 @@ auto Storage::stats() const -> Stats
 {
     // TODO ... more stuff here, perhaps
     QVariantMap ret;
-    auto & c = p->db.concatOperator, & c2 = p->db.concatOperatorTxHash2TxNum;
+    auto & c = p->db.concatOperator, & c2 = p->db.concatOperatorTxHash2TxNum, & c3 = p->db.concatOperatorTxNum2TxHash,
+         & c4 = p->db.concatOperatorHeaders;
     ret["merge calls"] = c ? static_cast<quint64>(c->merges.load()) : QVariant();
     ret["merge calls (txhash2txnum)"] = c2 ? static_cast<quint64>(c2->merges.load()) : QVariant();
+    ret["merge calls (txnum2txhash)"] = c3 ? static_cast<quint64>(c3->merges.load()) : QVariant();
+    ret["merge calls (headers)"] = c4 ? static_cast<quint64>(c4->merges.load()) : QVariant();
     QVariantMap caches;
     {
         QVariantMap m;
@@ -2223,27 +2237,29 @@ void Storage::saveMeta_impl()
     DebugM("Wrote new metadata to db");
 }
 
-void Storage::appendHeader(const Header &h, BlockHeight height)
+void Storage::appendHeader(rocksdb::WriteBatch &batch, const Header &h, BlockHeight height)
 {
-    const auto targetHeight = p->headersFile->numRecords();
-    if (UNLIKELY(height != targetHeight))
+    auto ctx = p->headersDRA->beginBatchWrite(batch);
+    const auto targetHeight = p->headersDRA->numRecords();
+    if (height != targetHeight) [[unlikely]]
         throw InternalError(QString("Bad use of appendHeader -- expected height %1, got height %2").arg(targetHeight).arg(height));
     QString err;
-    const auto res = p->headersFile->appendRecord(h, true, &err);
-    if (UNLIKELY(!err.isEmpty()))
+    const auto res = ctx.append(h, &err);
+    if (!err.isEmpty()) [[unlikely]]
         throw DatabaseError(QString("Failed to append header %1: %2").arg(height).arg(err));
-    else if (UNLIKELY(!res.has_value() || *res != height))
-        throw DatabaseError(QString("Failed to append header %1: returned count is bad").arg(height));
+    else if (!res || p->headersDRA->numRecords() != height + 1u) [[unlikely]]
+        throw DatabaseError(QString("Failed to append header %1: result is bad").arg(height));
 }
 
-void Storage::deleteHeadersPastHeight(BlockHeight height)
+void Storage::deleteHeadersPastHeight(rocksdb::WriteBatch &batch, BlockHeight height)
 {
     QString err;
-    const auto res = p->headersFile->truncate(height + 1, &err);
+    auto ctx = p->headersDRA->beginBatchWrite(batch);
+    const auto res = ctx.truncate(height + 1u, &err);
     if (!err.isEmpty())
         throw DatabaseError(QString("Failed to truncate headers past height %1: %2").arg(height).arg(err));
-    else if (res != height + 1)
-        throw InternalError("header truncate returned an unexepected value");
+    else if (!res || p->headersDRA->numRecords() != height + 1u)
+        throw InternalError("header truncate resulted in an unexepected value");
 }
 
 auto Storage::headerForHeight(BlockHeight height, QString *err) const -> std::optional<Header>
@@ -2260,7 +2276,7 @@ auto Storage::headerForHeight_nolock(BlockHeight height, QString *err) const -> 
     std::optional<Header> ret;
     try {
         QString err1;
-        ret.emplace( p->headersFile->readRecord(height, &err1) );
+        ret.emplace( p->headersDRA->readRecord(height, &err1) );
         if (!err1.isEmpty()) {
             ret.reset();
             throw DatabaseError(QString("failed to read header %1: %2").arg(height).arg(err1));
@@ -2274,7 +2290,7 @@ auto Storage::headerForHeight_nolock(BlockHeight height, QString *err) const -> 
 auto Storage::headersFromHeight_nolock_nocheck(BlockHeight height, unsigned num, QString *err) const -> std::vector<Header>
 {
     if (err) err->clear();
-    std::vector<Header> ret = p->headersFile->readRecords(height, num, err);
+    std::vector<Header> ret = p->headersDRA->readRecords(height, num, err);
 
     if (ret.size() != num && err && err->isEmpty())
         *err = "short header count returned from headers file";
@@ -2300,10 +2316,11 @@ auto Storage::headersFromHeight(BlockHeight height, unsigned count, QString *err
 void Storage::loadCheckHeadersInDB()
 {
     assert(p->blockHeaderSize() > 0);
-    p->headersFile = std::make_unique<RecordFile>(options->datadir + QDir::separator() + "headers", size_t(p->blockHeaderSize()), 0x00f026a1); // may throw
+    p->headersDRA = std::make_unique<DBRecordArray>(*p->db, *p->db.headers, /* recSz = */ size_t(p->blockHeaderSize()),
+                                                    /* bucketNItems = */ 8, /* magic = */ 0x00f026a1); // may throw
 
     Log() << "Verifying headers ...";
-    uint32_t num = unsigned(p->headersFile->numRecords());
+    uint32_t num = static_cast<uint32_t>(p->headersDRA->numRecords());
     std::vector<QByteArray> hVec;
     const auto t0 = Util::getTimeNS();
     {
@@ -2344,11 +2361,12 @@ void Storage::loadCheckHeadersInDB()
 
 }
 
-void Storage::loadCheckTxNumsFileAndBlkInfo()
+void Storage::loadCheckTxNumsDRAAndBlkInfo()
 {
     // may throw.
-    p->txNumsFile = std::make_unique<RecordFile>(options->datadir + QDir::separator() + "txnum2txhash", HashLen, 0x000012e2);
-    p->txNumNext = p->txNumsFile->numRecords();
+    p->txNumsDRA = std::make_unique<DBRecordArray>(*p->db, *p->db.txnum2txhash,
+                                                   /* recSize = */ HashLen, /* bucketNItems = */ 16, /* magic = */ 0x000012e2);
+    p->txNumNext = p->txNumsDRA->numRecords();
     Debug() << "Read TxNumNext from file: " << p->txNumNext.load();
     TxNum ct = 0;
     if (const int height = latestTip().first; height >= 0)
@@ -2380,15 +2398,15 @@ void Storage::loadCheckTxHash2TxNumMgr()
 {
     // the below may throw
     p->db.txhash2txnumMgr = std::make_unique<TxHash2TxNumMgr>(p->db.get(), p->db.txhash2txnum, p->db.defReadOpts, p->db.defWriteOpts,
-                                                              p->txNumsFile.get(), 6, TxHash2TxNumMgr::KeyPos::End);
+                                                              p->txNumsDRA.get(), 6, TxHash2TxNumMgr::KeyPos::End);
     try {
         // basic sanity checks -- ensure we can read the first, middle, and last hash in the txNumsFile,
         // and that those hashes exist in the txhash2txnum db
         const QString errMsg = "The txhash index failed basic sanity checks -- it is missing some records.";
-        const auto nrecs = p->txNumsFile->numRecords();
+        const auto nrecs = p->txNumsDRA->numRecords();
         if (nrecs) {
             for (auto recNum : {uint64_t(0), uint64_t(nrecs/2), uint64_t(nrecs-1)}) {
-                if (!p->db.txhash2txnumMgr->exists(p->txNumsFile->readRecord(recNum)))
+                if (!p->db.txhash2txnumMgr->exists(p->txNumsDRA->readRecord(recNum)))
                     throw DatabaseError(errMsg);
             }
         } else {
@@ -3205,19 +3223,18 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
             setDirty(batch, true); // <--  no turning back. we set it dirty in case rocksdb atomicity fails here; if the app crashes unexpectedly while this is set, on next restart it will refuse to run and insist on a clean resynch if this is true.
 
             {  // add txnum -> txhash association to the TxNumsFile... TODO: make atomic with `batch`
-                auto batch2 = p->txNumsFile->beginBatchAppend(); // may throw if io error in c'tor here.
+                auto ctx = p->txNumsDRA->beginBatchWrite(batch); // may throw if io error in c'tor here.
                 QString errStr;
                 for (const auto & txInfo : ppb->txInfos) {
-                    if (!batch2.append(txInfo.hash, &errStr)) // does not throw here, but we do.
+                    if (!ctx.append(txInfo.hash, &errStr)) // does not throw here, but we do.
                         throw InternalError(QString("Batch append for txNums failed: %1.").arg(errStr));
                 }
-                // <-- The batch2 d'tor may close the app on error here with Fatal() if a low-level file error occurs now
-                //     on header update (see: RecordFile.cpp, ~BatchAppendContext()).
+                // <-- The `ctx` d'tor may throw here if a low-level DB error occurs (see: DBRecordArray.cpp, ~BatchWriteContext()).
             }
 
             p->txNumNext += ppb->txInfos.size(); // update internal counter
 
-            if (p->txNumNext != p->txNumsFile->numRecords())
+            if (p->txNumNext != p->txNumsDRA->numRecords())
                 throw InternalError("TxNum file and internal txNumNext counter disagree! FIXME!");
 
             // Asynch task -- the future will automatically be awaited on scope end (even if we throw here!)
@@ -3402,7 +3419,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
 
             // Save RPA PrefixTable record (appends a single row to DB), if RPA is enabled for this block
             if (ppb->serializedRpaPrefixTable) {
-                addRpaDataForHeight_nolock(batch, ppb->height, *ppb->serializedRpaPrefixTable); // may throw theoretically if GenericDBPut threw
+                addRpaDataForHeight_nolock(batch, ppb->height, *ppb->serializedRpaPrefixTable); // may throw theoretically if GenericBatchPut threw
             }
 
             // save the last of the undo info, if in saveUndo mode
@@ -3454,7 +3471,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                 if constexpr (debugPrt) DebugM("Deleted undo for block ", expireUndoHeight, ", earliest now ", p->earliestUndoHeight.load());
             }
 
-            appendHeader(rawHeader, ppb->height);
+            appendHeader(batch, rawHeader, ppb->height);
 
             if (ppb->height == 0) [[unlikely]] {
                 // update genesis hash now if block 0 -- this info is used by rpc method server.features
@@ -3462,7 +3479,6 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
             }
 
             saveUtxoCt(batch);
-            setDirty(batch, false);
 
             // Wait for the txhash2txnum asyncPhase1 to finish before we proceed.
             if (fut.future.valid()) {
@@ -3470,9 +3486,10 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                 if (txhash2txnumPhases) txhash2txnumPhases->doSyncPhase2(); // issue write batch; may throw
             }
 
+            setDirty(batch, false);
+
             if (auto st = p->db->Write(p->db.defWriteOpts, &batch) ; !st.ok())
-                throw DatabaseError(QString("Batch write fail for block height %1: %2")
-                                        .arg(ppb->height).arg(StatusString(st)));
+                throw DatabaseError(QString("Batch write fail for block height %1: %2").arg(ppb->height).arg(StatusString(st)));
 
             undoVerifierOnScopeEnd.disable(); // indicate to the "Defer" object declared at the top of this function that it shouldn't undo anything anymore as we are happy now with the db state now.
         }
@@ -3613,7 +3630,7 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
             // first, undo the header
             p->headerVerifier.reset(prevHeight+1, prevHeader);
             setDirty(batch, true); // <-- no turning back. we clear this flag at the end
-            deleteHeadersPastHeight(prevHeight); // commit change to db -- TODO: atomicity with batch!!
+            deleteHeadersPastHeight(batch, prevHeight);
             p->merkleCache->truncate(prevHeight+1); // this takes a length, not a height, which is always +1 the height
 
             // undo the blkInfo from the back
@@ -3662,10 +3679,10 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
                 }
                 if (!newVec.empty()) {
                     // the sh still has some history, write it to db
-                    GenericDBPut(p->db, p->db.shist, sh, newVec, errMsg, p->db.defWriteOpts);
+                    GenericBatchPut(batch, p->db.shist, sh, newVec, errMsg);
                 } else {
                     // the sh in question lost all its history as a result of undo, just delete it from db to save space
-                    GenericDBDelete(p->db, p->db.shist, sh, errMsg, p->db.defWriteOpts);
+                    GenericBatchDelete(batch, p->db.shist, sh, errMsg);
                 }
             }
 
@@ -3689,11 +3706,11 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
             if (p->earliestUndoHeight >= undo.height)
                 // oops, we're out of undos now!
                 p->earliestUndoHeight = p->InvalidUndoHeight;
-            GenericDBDelete(p->db, p->db.undo, uint32_t(undo.height)); // make sure to delete this undo info since it was just applied.
+            GenericBatchDelete(batch, p->db.undo, uint32_t(undo.height)); // make sure to delete this undo info since it was just applied.
 
             // add all tx hashes that we are rolling back to the notify set for the txSubsMgr
             if (notify) {
-                const auto txHashes = p->txNumsFile->readRecords(txNum0, undo.blkInfo.nTx);
+                const auto txHashes = p->txNumsDRA->readRecords(txNum0, undo.blkInfo.nTx);
                 notify->txidsAffected.insert(txHashes.begin(), txHashes.end());
             }
 
@@ -3707,8 +3724,12 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
             // lastly, truncate the tx num file and re-set txNumNext to point to this block's txNum0 (thereby recycling it)
             assert(long(p->txNumNext) - long(txNum0) == long(undo.blkInfo.nTx));
             p->txNumNext = txNum0;
-            if (QString err; p->txNumsFile->truncate(txNum0, &err) != txNum0 || !err.isEmpty()) { // TODO: make ATOMIC with batch
-                throw InternalError(QString("Failed to truncate txNumsFile to %1: %2").arg(txNum0).arg(err));
+            {
+                auto ctx = p->txNumsDRA->beginBatchWrite(batch);
+                QString err;
+                if (ctx.truncate(txNum0, &err) != txNum0 || !err.isEmpty()) {
+                    throw InternalError(QString("Failed to truncate txNumsFile to %1: %2").arg(txNum0).arg(err));
+                }
             }
 
             saveUtxoCt(batch);
@@ -3717,6 +3738,8 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
             if (auto st = p->db->Write(p->db.defWriteOpts, &batch) ; !st.ok())
                 throw DatabaseError(QString("Batch write fail for undo of block height %1: %2")
                                         .arg(tip).arg(StatusString(st)));
+
+            p->db->SyncWAL(); // TODO verify this is needed, for now we can be paranoid and use this
 
             nSH = undo.scriptHashes.size();
 
@@ -3834,7 +3857,7 @@ std::optional<TxHash> Storage::hashForTxNum(TxNum n, bool throwIfMissing, bool *
 
     static const QString kErrMsg ("Error reading TxHash for TxNum %1: %2");
     QString errStr;
-    const auto bytes = p->txNumsFile->readRecord(n, &errStr);
+    const auto bytes = p->txNumsDRA->readRecord(n, &errStr);
     if (bytes.isEmpty()) {
         errStr = kErrMsg.arg(n).arg(errStr);
         if (throwIfMissing)
@@ -3949,7 +3972,7 @@ std::vector<TxHash> Storage::txHashesForBlockInBitcoindMemoryOrder(BlockHeight h
         startCount = { bi.txNum0, bi.nTx };
     }
     QString err;
-    auto vec = p->txNumsFile->readRecords(startCount.first, startCount.second, &err);
+    auto vec = p->txNumsDRA->readRecords(startCount.first, startCount.second, &err);
     if (vec.size() != startCount.second || !err.isEmpty()) {
         Warning() << "Failed to read " << startCount.second << " txNums for height " << height << ". " << err;
         return ret;
@@ -5127,6 +5150,7 @@ namespace {
 } // end anon namespace
 
 #ifdef ENABLE_TESTS
+#include "Storage/RecordFile.h"
 #include "robin_hood/robin_hood.h"
 namespace {
 

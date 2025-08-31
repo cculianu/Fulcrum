@@ -482,10 +482,10 @@ protected:
     /// Appends header h to the database at height. Note that it is undefined to call this function
     /// if height already exists in the database or if height is more than 1+ latestTip().first. For internal use
     /// in addBlock, basically.
-    void appendHeader(const Header &h, BlockHeight height);
+    void appendHeader(rocksdb::WriteBatch &batch, const Header &h, BlockHeight height);
     /// Internally called by undoLatestBlock. Call this with the headerVerifier lock held.
     /// Rewinds the headers until the latest header is at the specified height.  May throw on error.
-    void deleteHeadersPastHeight(BlockHeight height);
+    void deleteHeadersPastHeight(rocksdb::WriteBatch &batch, BlockHeight height);
 
     /// Internally called by LoadCheckRpaDB and undoLatestBlock. Call this with the blocksLock held if in multi-threaded
     /// mode, to ensure DB consistency. Deletes any rpa entries >= height. Returns true on success, false on failure.
@@ -536,7 +536,7 @@ private:
     void loadCheckUTXOsInDB(); ///< may throw -- called from startup()
     void loadCheckShunspentInDB(); ///< may throw -- called from startup()
     void loadCheckRpaDB(); ///< may throw -- called from startup()
-    void loadCheckTxNumsFileAndBlkInfo(); ///< may throw -- called from startup()
+    void loadCheckTxNumsDRAAndBlkInfo(); ///< may throw -- called from startup()
     void loadCheckTxHash2TxNumMgr(); ///< may throw -- called from startup()
     void loadCheckEarliestUndo(); ///< may throw -- called from startup()
     void checkUpgradeDBVersion(); ///< may throw -- called from startup() as the last thing
@@ -569,15 +569,14 @@ Data model for Fulcrum:  (120 column editor width recommended here)
 RocksDB: "meta"
   Purpose:  metadata and sanity checks (see Storage.cpp)
 
-RecordFile: "headers"
+RocksDB: "headers"
   Purpose:  Data store for headers.
-  Data layout:  Each header is 80 bytes and they are laid out 1 after the other in what is conceptually a huge
-  file-backed array. See RecordFile.cpp for how this file format works.
+  Data layout:  Each header is 80 bytes and they are laid out 1 after the other in buckets of size 8. See
+  DBRecordArray.cpp for how this data layout works.
 
-RecordFile: "txnum2txhash"
+RocksDB: "txnum2txhash"
   Purpose:  Mapping of TxNum -> TxId(hash)
-  Data layout: Each TxHash is 32 bytes and the hashes are laid out one after another in what is conceptually a huge
-  file-backed array. See RecordFile.cpp.
+  Data layout: Each TxHash is 32 bytes and the hashes are laid out one after another in buckets of size 16. See DBRecordArray.cpp.
   Key: record number -> txid_raw_bytes  ; maps a "txnum" to its 32-byte txid. Each tx on the blockchain has a
   monotonically increasing txnum based on where it appeared on the blockchain. Block 0, tx 0 has "txnum" 0, up until
   the last tx N in block 0, which has "txnum" N. Tx 0 in block 1 then follows with "txnum" N+1, and so on.
@@ -637,16 +636,8 @@ RocksDB: "rpa"
 
 A note about ACID: (atomic, consistent, isolated, durable)
 
-The above isn't 100% ACID. Abrupt program termination is ok (becasue rocksdb uses journaling internally), so long as
-we weren't in the middle of adding a block or applying a block undo which involves writing to more than 1 rocksdb
-database at once.  If abrupt termination occurs during these aforementioned critical times (unlikely, but possible),
-then the program will consider itself as having a "corrupt" database, and it will refuse to run the next time it is
-started and it will require the user to delete the datadir and resynch to bitcoind.  In practice this approach is less
-problematic than it sounds since a program crash or power outage would have to occur precisely within a specific ~20ms
-timespan (which happens once every ~10 minutes) when the program is busy committing a new block to the db.  There is a
-probability of 1 in 30,000 for a random power outage to occur during this time.  Given how rare power outages are, and
-how most servers use a battery backup anyway -- this is acceptable.  And what's more: the database is 100% rebuildable
-from bitcoind's data store anyway; so even in the unlikely event of database corruption, the user will be able to
-recover.
+Abrupt program termination is ok (becasue rocksdb uses journaling internally), so long as we didn't experience a
+complete OS crash. In order to guard against OS crashes, one would have to enable rocksdb synch flushing on writes,
+which degrades performance
 
 */
