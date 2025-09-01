@@ -1176,24 +1176,22 @@ struct Storage::Pvt
                                     *txhash2txnum{}, // new: index of txhash -> txNumsFile
                                     *rpa{}; // new: height -> Rpa::PrefixTable
 
-        struct ColFamParams {
+        struct ColFamHandleAndOptsRefs {
             rocksdb::ColumnFamilyHandle *& handle;
             const rocksdb::ColumnFamilyOptions & options;
-            double memFactor = 0.;
         };
         // Some introspection here.. these tuples point to some of the above members
-        const std::map<std::string, ColFamParams> colFamsTable = {
-            { "meta", {meta, opts, 0.0005} },
-            { "blkinfo", {blkinfo , opts, 0.015} },
-            { "utxoset", {utxoset, opts, 0.20} },
-            { "scripthash_history", {shist, shistOpts, 0.20} },
-            { "scripthash_unspent", {shunspent, opts, 0.20} },
-            { "undo", {undo, opts, 0.0345} },
-            { "txnum2txhash", {txnum2txhash, txnum2txhashOpts, 0.20} },
-            { "headers", {headers, headersOpts, 0.02} },
-            { "txhash2txnum", {txhash2txnum, txhash2txnumOpts, 0.1} },
-            // Future work: if on BTC or rpa disabled, give the rpa db's 0.04 back to scripthash_unspent and utxoset!!
-            { "rpa", {rpa, opts, 0.04} }, // this index appears to be < 1/2 the txhash2txnum one on average, so we give it less than half that mem ratio
+        const std::map<std::string, ColFamHandleAndOptsRefs> colFamsTable = {
+            { "meta",               {.handle = meta,         .options = opts} },
+            { "blkinfo",            {.handle = blkinfo,      .options = opts} },
+            { "utxoset",            {.handle = utxoset,      .options = opts} },
+            { "scripthash_history", {.handle = shist,        .options = shistOpts} },
+            { "scripthash_unspent", {.handle = shunspent,    .options = opts} },
+            { "undo",               {.handle = undo,         .options = opts} },
+            { "txnum2txhash",       {.handle = txnum2txhash, .options = txnum2txhashOpts} },
+            { "headers",            {.handle = headers,      .options = headersOpts} },
+            { "txhash2txnum",       {.handle = txhash2txnum, .options = txhash2txnumOpts} },
+            { "rpa",                {.handle = rpa,          .options = opts} },
         };
 
 
@@ -1757,43 +1755,7 @@ void Storage::startup()
             || !p->db.utxoset || !p->db.undo || !p->db.txnum2txhash || !p->db.headers) [[unlikely]]
             throw InternalError("A required column family handle is still nullptr! FIXME!");
 
-
-        // TODO: similar stuff to below for setting mem limits
-#if 0
-        size_t memTotal = 0;
-        const auto OpenDB = [this, &memTotal](const DBInfoTup &tup) {
-            auto & [name, uptr, opts_in, memFactor] = tup;
-            rocksdb::Options opts = opts_in;
-            const size_t mem = std::max(size_t(options->db.maxMem * memFactor), size_t(64*1024));
-            Debug() << "DB \"" << name << "\" mem: " << QString::number(mem / 1024. / 1024., 'f', 2) << " MiB";
-            opts.OptimizeLevelStyleCompaction(mem);
-            for (auto & comp : opts.compression_per_level)
-                comp = rocksdb::CompressionType::kNoCompression; // paranoia -- enforce no compression since our data compresses so poorly
-            memTotal += mem;
-            rocksdb::Status s;
-            // try and open database
-            const QString path = options->datadir + QDir::separator() + name;
-            std::unique_ptr<rocksdb::DB> tmpPtr;
-            {
-                // open db, immediately placing the new'd pointer (if any) into a unique_ptr
-                rocksdb::DB *db = nullptr;
-                s = rocksdb::DB::Open( opts, path.toStdString(), &db);
-                tmpPtr.reset(db);
-            }
-            if (!s.ok() || !tmpPtr)
-                throw DatabaseError(QString("Error opening %1 database: %2 (path: %3)")
-                                    .arg(name, StatusString(s), path));
-            uptr = std::move(tmpPtr); // everything ok, move tmpPtr
-            p->db.openDBs.emplace_back(uptr); // mark db as open
-        };
-
-        // open all db's defined above
-        for (auto & tup : dbs2open)
-            OpenDB(tup);
-#else
-        const size_t memTotal{options->db.maxMem};
-#endif
-        Log() << "DB memory: " << QString::number(memTotal / 1024. / 1024., 'f', 2) << " MiB";
+        Log() << "DB memory: " << QString::number(options->db.maxMem / 1024. / 1024., 'f', 2) << " MiB";
     }  // /open db's
     // load/check meta
     {
