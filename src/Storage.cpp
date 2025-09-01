@@ -1663,7 +1663,7 @@ void Storage::startup()
 
         // First, open the DB, and then determine which column families it has, and open them all.
         {
-            const QString mainDBName = "db_main";
+            const QString mainDBName = "fulcrum_db";
             const QString path = options->datadir + QDir::separator() + mainDBName;
             rocksdb::Status s;
 
