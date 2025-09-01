@@ -13,6 +13,7 @@
 static_assert(__cplusplus >= 202000L, "C++20 is required to compile this file");
 #include <compare>
 #include <cstring>
+#include <iterator>
 #include <stdexcept>
 #include <vector>
 
@@ -112,13 +113,7 @@ public:
 
     //! Comparator implementation.
     friend std::strong_ordering operator<=>(const CPubKey &a, const CPubKey &b) noexcept {
-        if (a.vch[0] != b.vch[0]) {
-            if (a.vch[0] < b.vch[0]) return std::strong_ordering::less;
-            return std::strong_ordering::greater;
-        }
-        if (const int r = std::memcmp(a.vch, b.vch, a.size()); r == 0) return std::strong_ordering::equal;
-        else if (r < 0) return std::strong_ordering::less;
-        else return std::strong_ordering::greater;
+        return std::lexicographical_compare_three_way(std::begin(a.vch), std::end(a.vch), std::begin(b.vch), std::end(b.vch));
     }
     friend bool operator==(const CPubKey &a, const CPubKey &b) noexcept { return operator<=>(a, b) == 0; }
 

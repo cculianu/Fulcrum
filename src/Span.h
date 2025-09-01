@@ -159,7 +159,7 @@ public:
     constexpr C & pop_front() noexcept { --m_size; return *m_data++; }
 
     friend bool operator==(const Span &a, const Span &b) noexcept {
-        return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin());
+        return a.size() == b.size() && (a.data() == b.data() || std::equal(a.begin(), a.end(), b.begin()));
     }
     friend auto operator<=>(const Span &a, const Span &b) noexcept {
         return std::lexicographical_compare_three_way(a.begin(), a.end(), b.begin(), b.end());

@@ -28,7 +28,6 @@
 #include <QMetaType>
 #include <QString>
 
-#include <array>
 #include <compare>
 #include <cstring>
 #include <optional>
@@ -112,19 +111,13 @@ namespace BTC {
 
         /// Comparison operator: for map support and also so that it sorts like the text address would.
         /// All invalid addresses sort before valid ones.
-        auto operator<=>(const Address & o) const noexcept {
-            if (isValid() && o.isValid()) {
+        std::strong_ordering operator<=>(const Address & o) const noexcept {
+            if (isValid() && o.isValid())
                 // lex-compare using 3-way tuple compare
                 return std::tie(_net, verByte, _kind, _hash) <=> std::tie(o._net, o.verByte, o._kind, o._hash);
-            } else if (const int vdiff = int(isValid()) - int(o.isValid()); vdiff < 0) {
-                // invalid always sorts before valid
-                return std::strong_ordering::less;
-            } else if (vdiff > 0) {
-                // we are valid, other is not, so we are greater
-                return std::strong_ordering::greater;
-            }
-            // both invalid, all invalids are equal
-            return std::strong_ordering::equal;
+            else
+                // invalid always sorts before valid; both invalid are equal
+                return isValid() - o.isValid() <=> 0;
         }
 
         bool operator==(const Address & o) const noexcept { return this->operator<=>(o) == 0; }

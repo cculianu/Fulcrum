@@ -135,25 +135,16 @@ public:
     constexpr std::strong_ordering operator<=>(const ByteView &o) const noexcept {
         if (this == &o) [[unlikely]]
             return std::strong_ordering::equal;
-        else if (data() == o.data()) [[unlikely]] { // if the two regions share the same data pointer...
+        else if (data() == o.data()) // if the two regions share the same data pointer...
             // ... then result is based on size
-            const auto sz = size(), osz = o.size();
-            if (sz < osz) return std::strong_ordering::less;
-            if (sz > osz) return std::strong_ordering::greater;
-            return std::strong_ordering::equal;
-        } else [[likely]]
+            return size() <=> o.size();
+        else
             return std::lexicographical_compare_three_way(begin(), end(), o.begin(), o.end());
     }
 
     // We customize operator== with slight optimizations. C++20 auto-gens operator!= for us based on this.
     constexpr bool operator==(const ByteView &o) const noexcept {
-        if (size() != o.size()) return false;
-        if (data() == o.data()) return true; // fast-path for same ptr
-        auto p = begin(), e = end(), op = o.begin();
-        while (p != e) {
-            if (*p++ != *op++) return false;
-        }
-        return true;
+        return size() == o.size() && (data() == o.data() || std::equal(begin(), end(), o.begin()));
     }
 
 private:

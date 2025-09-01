@@ -92,8 +92,4 @@ namespace Compat {
 // these types. Note: We do this as a template so that we don't get compile errors in the future should Qt later
 // implement operator<=> overloads for these types.
 template <Compat::QStrOrQBA T>
-std::strong_ordering operator<=>(const T & a, const T & b) noexcept {
-    if (const int r = a.compare(b); r == 0) return std::strong_ordering::equal;
-    else if (r < 0) return std::strong_ordering::less;
-    return std::strong_ordering::greater;
-}
+std::strong_ordering operator<=>(const T & a, const T & b) noexcept { return a.compare(b) <=> 0; }

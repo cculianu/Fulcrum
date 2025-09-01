@@ -24,6 +24,7 @@
 #include <QByteArray>
 #include <QString>
 
+#include <compare>
 #include <cstddef>
 #include <cstdint>
 #include <cstring> // for std::memcpy
@@ -52,12 +53,12 @@ struct CompactTXO {
     CompactTXO(TxNum txNum, IONum n) noexcept : compact{txNum, n} {}
     CompactTXO(const CompactTXO & o) noexcept : compact{o.compact} {}
     CompactTXO & operator=(const CompactTXO & o) noexcept { compact.txNum = o.compact.txNum; compact.n = o.compact.n; return *this; }
-    /// for most container types
-    bool operator==(const CompactTXO &o) const noexcept { return compact.txNum == o.compact.txNum && compact.n == o.compact.n; }
     /// for ordered sets
-    auto operator<=>(const CompactTXO &o) const noexcept  {
+    std::strong_ordering operator<=>(const CompactTXO &o) const noexcept  {
         return std::tuple(compact.txNum, compact.n) <=> std::tuple(o.compact.txNum, o.compact.n);
     }
+    /// for most container types
+    bool operator==(const CompactTXO &o) const noexcept { return 0 == (*this <=> o); }
     // convenience
     TxNum txNum() const noexcept { return TxNum(compact.txNum); }
     // convenience
