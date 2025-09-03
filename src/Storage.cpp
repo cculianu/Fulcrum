@@ -1985,44 +1985,41 @@ auto Storage::stats() const -> Stats
         caches["merkleHeaders_SizeBytes"] = qulonglong(bytes);
     }
     ret["caches"] = caches;
-#if 0 // TODO FIXME XXX
     {
+        const auto &db = p->db.db;
         // db stats
         QVariantMap m;
-        for (const auto ptr : { &p->db.blkinfo, &p->db.meta, &p->db.shist, &p->db.shunspent, &p->db.undo, &p->db.utxoset, &p->db.txhash2txnum, &p->db.rpa, }) {
-            QVariantMap m2;
-            const auto & db = *ptr;
-            const QString name = QFileInfo(QString::fromStdString(db->GetName())).fileName();
-            for (const auto prop : { "rocksdb.estimate-table-readers-mem", "rocksdb.cur-size-all-mem-tables"}) {
-                if (std::string s; LIKELY(db->GetProperty(prop, &s)) )
-                    m2[prop] = QString::fromStdString(s);
-            }
-            if (auto fact = db->GetOptions().table_factory; LIKELY(fact) ) {
-                // parse the table factory options string, which is of the form "     opt1: val1\n     opt2: val2\n  ... "
-                QVariantMap m3;
-                QString rocksdbOptionsString;
-#if __has_include(<rocksdb/configurable.h>)
-                // Newer rocksdb API uses GetPrintableOptions
-                rocksdbOptionsString = QString::fromStdString( fact->GetPrintableOptions() );
-#else
-                // Older rocksdb API used GetPrintableTableOptions
-                rocksdbOptionsString = QString::fromStdString( fact->GetPrintableTableOptions() );
-#endif
-                for (const auto & line : rocksdbOptionsString.split("\n")) {
-                    const auto nvp = line.split(":");
-                    if (nvp.size() < 2)
-                        continue;
-                    auto n = nvp.first().trimmed().simplified();
-                    auto v = nvp.mid(1).join(":").trimmed().simplified();
-                    m3[n] = v;
-                }
-                m2["table factory options"] = m3;
-            } else
-                m2["table factory options"] = QVariant(); // explicitly state it was null (this branch should not normally happen)
-            m2["max_open_files"] = db->GetOptions().max_open_files;
-            m2["keep_log_file_num"] = qulonglong(db->GetOptions().keep_log_file_num);
-            m[name] = m2;
+        QVariantMap m2;
+        const QString name = QFileInfo(QString::fromStdString(db->GetName())).fileName();
+        for (const auto prop : { "rocksdb.estimate-table-readers-mem", "rocksdb.cur-size-all-mem-tables"}) {
+            if (std::string s; LIKELY(db->GetProperty(prop, &s)) )
+                m2[prop] = QString::fromStdString(s);
         }
+        if (auto fact = db->GetOptions().table_factory; fact) [[likely]] {
+            // parse the table factory options string, which is of the form "     opt1: val1\n     opt2: val2\n  ... "
+            QVariantMap m3;
+            QString rocksdbOptionsString;
+#if __has_include(<rocksdb/configurable.h>)
+            // Newer rocksdb API uses GetPrintableOptions
+            rocksdbOptionsString = QString::fromStdString( fact->GetPrintableOptions() );
+#else
+            // Older rocksdb API used GetPrintableTableOptions
+            rocksdbOptionsString = QString::fromStdString( fact->GetPrintableTableOptions() );
+#endif
+            for (const auto & line : rocksdbOptionsString.split("\n")) {
+                const auto nvp = line.split(":");
+                if (nvp.size() < 2)
+                    continue;
+                auto n = nvp.first().trimmed().simplified();
+                auto v = nvp.mid(1).join(":").trimmed().simplified();
+                m3[n] = v;
+            }
+            m2["table factory options"] = m3;
+        } else
+            m2["table factory options"] = QVariant(); // explicitly state it was null (this branch should not normally happen)
+        m2["max_open_files"] = db->GetOptions().max_open_files;
+        m2["keep_log_file_num"] = qulonglong(db->GetOptions().keep_log_file_num);
+        m[name] = m2;
         ret["DB Stats"] = m;
         if (const auto cache = p->db.blockCache.lock(); cache) {
             QVariantMap cmap;
@@ -2057,7 +2054,6 @@ auto Storage::stats() const -> Stats
             ret["RPA Index Info"] = rm;
         }
     }
-#endif
     return ret;
 }
 
@@ -3184,7 +3180,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
 
             setDirty(batch, true); // <--  no turning back. we set it dirty in case rocksdb atomicity fails here; if the app crashes unexpectedly while this is set, on next restart it will refuse to run and insist on a clean resynch if this is true.
 
-            {  // add txnum -> txhash association to the TxNumsFile... TODO: make atomic with `batch`
+            {  // add txnum -> txhash association to the TxNumsFile...
                 auto ctx = p->txNumsDRA->beginBatchWrite(batch); // may throw if io error in c'tor here.
                 QString errStr;
                 for (const auto & txInfo : ppb->txInfos) {
