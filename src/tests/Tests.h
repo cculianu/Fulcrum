@@ -90,6 +90,8 @@ namespace Tests {
             case Bench: return plural ? "benches" : "bench"; break;
             case Test: return plural ? "tests" : "test"; break;
             }
+            // Should never happen -- indicates some mis-use of class. Here to prevent compiler warnings.
+            throw InternalError(QString("Unknown Tests::Type (%1) for context %2. FIXME!").arg(static_cast<int>(type)).arg(name));
         }
 
         void runAll() {
