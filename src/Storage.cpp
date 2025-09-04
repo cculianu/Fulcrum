@@ -1195,6 +1195,9 @@ struct Storage::Pvt
         };
 
 
+        std::unique_ptr<DBRecordArray> txNumsDRA;
+        std::unique_ptr<DBRecordArray> headersDRA;
+
         std::unique_ptr<TxHash2TxNumMgr> txhash2txnumMgr; ///< provides a bit of a higher-level interface into the db
 
         /// One of these is alive if we are in an initial sync and user specified --utxo-cache
@@ -1210,9 +1213,6 @@ struct Storage::Pvt
         const rocksdb::DB * operator->() const { return get(); }
     };
     RocksDBHandlesEtc db;
-
-    std::unique_ptr<DBRecordArray> txNumsDRA;
-    std::unique_ptr<DBRecordArray> headersDRA;
 
     /// Big lock used for block/history updates. Public methods that read the history such as getHistory and listUnspent
     /// take this as read-only (shared), and addBlock and undoLatestBlock take this as read/write (exclusively).
@@ -1610,153 +1610,9 @@ void Storage::startup()
         p->merkleCache = std::make_unique<Merkle::Cache>(std::bind(&Storage::merkleCacheHelperFunc, this, _1, _2, _3));
     }
 
-    {   // open DB and all column families ...
-        p->db.utxoCache.reset(); // this should already be nullptr, but this reset() is just here to be defensive.
+    // open DB and all column families ...
+    openOrCreateDB();
 
-        // Optimize RocksDB. This is the easiest way to get RocksDB to perform well
-        rocksdb::Options & opts(p->db.opts);
-        rocksdb::ColumnFamilyOptions &shistOpts(p->db.shistOpts), &txhash2txnumOpts(p->db.txhash2txnumOpts),
-                                     &txnum2txhashOpts(p->db.txnum2txhashOpts), &headersOpts(p->db.headersOpts);
-        opts.IncreaseParallelism(int(Util::getNPhysicalProcessors()));
-        opts.OptimizeLevelStyleCompaction();
-
-        // setup shared block cache
-        rocksdb::BlockBasedTableOptions tableOptions;
-        tableOptions.block_cache = rocksdb::NewLRUCache(options->db.maxMem /* capacity limit */, -1, false /* strict capacity limit=off, turning it on made db writes sometimes fail */);
-        p->db.blockCache = tableOptions.block_cache; // save shared_ptr to weak_ptr
-        tableOptions.cache_index_and_filter_blocks = true; // from the docs: this may be a large consumer of memory, cost & cap its memory usage to the cache
-        std::shared_ptr<rocksdb::TableFactory> tableFactory{rocksdb::NewBlockBasedTableFactory(tableOptions)};
-        // shared TableFactory for all db instances
-        opts.table_factory = tableFactory;
-
-        // setup shared write buffer manager (for memtables memory budgeting)
-        // - TODO cost this to the cache here? Or not? make sure both together don't exceed db.maxMem?!
-        // - TODO right now we fix the cap of the write buffer manager's buffer size at db.maxMem / 2; tweak this.
-        auto writeBufferManager = std::make_shared<rocksdb::WriteBufferManager>(options->db.maxMem / 2, tableOptions.block_cache /* cost to block cache: hopefully this caps memory better? it appears to use locks though so many this will be slow?! TODO: experiment with and without this!! */);
-        p->db.writeBufferManager = writeBufferManager; // save shared_ptr to weak_ptr
-        opts.write_buffer_manager = writeBufferManager; // will be shared across all DB instances
-
-        // create the DB if it's not already present
-        opts.create_if_missing = true;
-        opts.error_if_exists = false;
-        opts.max_open_files = options->db.maxOpenFiles <= 0 ? -1 : options->db.maxOpenFiles; ///< this affects memory usage see: https://github.com/facebook/rocksdb/issues/4112
-        opts.keep_log_file_num = options->db.keepLogFileNum;
-        opts.compression = rocksdb::CompressionType::kNoCompression; // for now we test without compression. TODO: characterize what is fastest and best..
-        opts.use_fsync = options->db.useFsync; // the false default is perfectly safe, but Jt asked for this as an option, so here it is.
-
-        shistOpts = opts; // copy what we just did (will implicitly copy over the shared table_factory and write_buffer_manager)
-        shistOpts.merge_operator = p->db.concatOperator = std::make_shared<StorageDetail::ConcatOperator>(); // this set of options uses the concat merge operator (we use this to append to history entries in the db)
-
-        txhash2txnumOpts = opts;
-        txhash2txnumOpts.merge_operator = p->db.concatOperatorTxHash2TxNum = std::make_shared<StorageDetail::ConcatOperator>();
-
-        txnum2txhashOpts = opts;
-        txnum2txhashOpts.merge_operator = p->db.concatOperatorTxNum2TxHash = std::make_shared<StorageDetail::ConcatOperator>();
-
-        headersOpts = opts;
-        headersOpts.merge_operator = p->db.concatOperatorHeaders = std::make_shared<StorageDetail::ConcatOperator>();
-
-        const auto &colFamsTable = p->db.colFamsTable;
-        auto colFamsNeeded = colFamsTable;
-
-        // First, open the DB, and then determine which column families it has, and open them all.
-        {
-            const QString mainDBName = "fulcrum_db";
-            const QString path = options->datadir + QDir::separator() + mainDBName;
-            rocksdb::Status s;
-
-            std::vector<rocksdb::ColumnFamilyDescriptor> colFamDescs;
-            {
-                std::vector<std::string> haveColFams;
-                s = rocksdb::DB::ListColumnFamilies(opts, path.toStdString(), &haveColFams);
-                if (s.ok()) {
-                    colFamDescs.reserve(haveColFams.size());
-                    for (const auto &colName : haveColFams) {
-                        QString extra;
-                        // determine option for this column family
-                        std::optional<rocksdb::ColumnFamilyOptions> optOptions;
-                        if (auto it = colFamsNeeded.find(colName); it != colFamsNeeded.end()) {
-                            optOptions = std::move(it->second.options);
-                            // mark db cols that the db has that we want as "no longer needed"
-                            colFamsNeeded.erase(it);
-                        } else if (colName == rocksdb::kDefaultColumnFamilyName) {
-                            extra = " (ignored)";
-                        } else {
-                            extra = " (UNKNOWN)";
-                        }
-                        Debug() << "Found DB column family '" << QString::fromStdString(colName) << "'" << extra;
-                        colFamDescs.emplace_back(colName, optOptions.value_or(opts));
-                    }
-                } else {
-                    QString sstr;
-                    if (s.IsIOError() && !QFileInfo::exists(path))
-                        sstr = " (new db)";
-                    else
-                        sstr = ": " + StatusString(s);
-                    Debug() << "Failed to list column families for DB '" << mainDBName << "'" << sstr;
-                    // Might as well specify that we want to open the "default" column family here
-                    colFamDescs.emplace_back(rocksdb::kDefaultColumnFamilyName, opts);
-                }
-            }
-
-            rocksdb::DB *db = nullptr;
-            s = rocksdb::DB::Open(opts, path.toStdString(), colFamDescs, &p->db.columnFamilies, &db);
-            p->db.db.reset(db);
-            if (!s.ok() || !db)
-                throw DatabaseError(QString("Error opening %1 database: %2 (path: %3)")
-                                        .arg(mainDBName, StatusString(s), path));
-        }
-
-        rocksdb::DB * const db = p->db;
-        assert(db != nullptr);
-
-        // Next, for all the colFamsNeeded that weren't in the DB already (new DB, etc), create them!
-        {
-            std::vector<rocksdb::ColumnFamilyDescriptor> colFamDescs;
-            for (const auto & [name, params] : colFamsNeeded) {
-                colFamDescs.emplace_back(name, params.options);
-            }
-            if (!colFamDescs.empty()) {
-                std::vector<rocksdb::ColumnFamilyHandle *> handles;
-                auto s = db->CreateColumnFamilies(colFamDescs, &handles);
-                // "save" the successfully opened handles so we can close them later even on erro
-                for (auto *h : handles) {
-                    p->db.columnFamilies.push_back(h);
-                    colFamsNeeded.erase(h->GetName());
-                }
-                // error out if there was a problem
-                if (!s.ok()) {
-                    throw DatabaseError(QString("Error opening %1 column families: %2").arg(quint64(colFamDescs.size()))
-                                            .arg(StatusString(s)));
-                }
-            }
-        }
-
-        // Lastly, assign the ColumnFamilyHandle pointers ...
-        for (rocksdb::ColumnFamilyHandle *h : p->db.columnFamilies) {
-            const auto &name = h->GetName();
-            if (auto it = colFamsTable.find(name); it != colFamsTable.end()) [[likely]] {
-                // assign ptr; this modifies members: p.db.meta, p.db.blkinfo, etc..
-                it->second.handle = h;
-            } else if (name != rocksdb::kDefaultColumnFamilyName) [[unlikely]] {
-                throw DatabaseError(QString("Encountered an unknown column family in DB: %1"
-                                            " -- incompatible or newer than expected database, perhaps?")
-                                        .arg(QString::fromStdString(name)));
-            }
-        }
-
-        if (!colFamsNeeded.empty()) [[unlikely]] {
-            QStringList names;
-            for (const auto & [name, _] : colFamsNeeded) names.append(QString::fromStdString(name));
-            throw InternalError("Missing column families: " + names.join(", "));
-        }
-
-        if (!p->db.blkinfo || !p->db.meta || !p->db.rpa || !p->db.shist || !p->db.shunspent || !p->db.txhash2txnum
-            || !p->db.utxoset || !p->db.undo || !p->db.txnum2txhash || !p->db.headers) [[unlikely]]
-            throw InternalError("A required column family handle is still nullptr! FIXME!");
-
-        Log() << "DB memory: " << QString::number(options->db.maxMem / 1024. / 1024., 'f', 2) << " MiB";
-    }  // /open db's
     // load/check meta
     {
         const QString errMsg1{"Incompatible database format -- delete the datadir and resynch."};
@@ -1811,6 +1667,154 @@ void Storage::startup()
     checkUpgradeDBVersion();
 
     start(); // starts our thread
+}
+
+void Storage::openOrCreateDB()
+{
+    gentlyCloseDB(); // Ensure we start from a clean slate (in case this function is ever called to hot-reopen the DB)
+
+    // Optimize RocksDB. This is the easiest way to get RocksDB to perform well
+    rocksdb::Options & opts(p->db.opts);
+    rocksdb::ColumnFamilyOptions &shistOpts(p->db.shistOpts), &txhash2txnumOpts(p->db.txhash2txnumOpts),
+                                 &txnum2txhashOpts(p->db.txnum2txhashOpts), &headersOpts(p->db.headersOpts);
+    opts.IncreaseParallelism(int(Util::getNPhysicalProcessors()));
+    opts.OptimizeLevelStyleCompaction();
+
+    // setup shared block cache
+    rocksdb::BlockBasedTableOptions tableOptions;
+    tableOptions.block_cache = rocksdb::NewLRUCache(options->db.maxMem /* capacity limit */, -1, false /* strict capacity limit=off, turning it on made db writes sometimes fail */);
+    p->db.blockCache = tableOptions.block_cache; // save shared_ptr to weak_ptr
+    tableOptions.cache_index_and_filter_blocks = true; // from the docs: this may be a large consumer of memory, cost & cap its memory usage to the cache
+    std::shared_ptr<rocksdb::TableFactory> tableFactory{rocksdb::NewBlockBasedTableFactory(tableOptions)};
+    // shared TableFactory for all db instances
+    opts.table_factory = tableFactory;
+
+    // setup shared write buffer manager (for memtables memory budgeting)
+    // - TODO right now we fix the cap of the write buffer manager's buffer size at db.maxMem / 2; tweak this.
+    auto writeBufferManager = std::make_shared<rocksdb::WriteBufferManager>(options->db.maxMem / 2, tableOptions.block_cache /* cost to block cache: hopefully this caps memory better? it appears to use locks though so many this will be slow?! TODO: experiment with and without this!! */);
+    p->db.writeBufferManager = writeBufferManager; // save shared_ptr to weak_ptr
+    opts.write_buffer_manager = writeBufferManager; // will be shared across all DB instances
+
+    // create the DB if it's not already present
+    opts.create_if_missing = true;
+    opts.error_if_exists = false;
+    opts.max_open_files = options->db.maxOpenFiles <= 0 ? -1 : options->db.maxOpenFiles; ///< this affects memory usage see: https://github.com/facebook/rocksdb/issues/4112
+    opts.keep_log_file_num = options->db.keepLogFileNum;
+    opts.compression = rocksdb::CompressionType::kNoCompression; // for now we test without compression. TODO: characterize what is fastest and best..
+    opts.use_fsync = options->db.useFsync; // the false default is perfectly safe, but Jt asked for this as an option, so here it is.
+
+    shistOpts = opts; // copy what we just did (will implicitly copy over the shared table_factory and write_buffer_manager)
+    shistOpts.merge_operator = p->db.concatOperator = std::make_shared<StorageDetail::ConcatOperator>(); // this set of options uses the concat merge operator (we use this to append to history entries in the db)
+
+    txhash2txnumOpts = opts;
+    txhash2txnumOpts.merge_operator = p->db.concatOperatorTxHash2TxNum = std::make_shared<StorageDetail::ConcatOperator>();
+
+    txnum2txhashOpts = opts;
+    txnum2txhashOpts.merge_operator = p->db.concatOperatorTxNum2TxHash = std::make_shared<StorageDetail::ConcatOperator>();
+
+    headersOpts = opts;
+    headersOpts.merge_operator = p->db.concatOperatorHeaders = std::make_shared<StorageDetail::ConcatOperator>();
+
+    const auto &colFamsTable = p->db.colFamsTable;
+    auto colFamsNeeded = colFamsTable;
+
+    // First, open the DB, and then determine which column families it has, and open them all.
+    {
+        const QString mainDBName = "fulcrum_db";
+        const QString path = options->datadir + QDir::separator() + mainDBName;
+        rocksdb::Status s;
+
+        std::vector<rocksdb::ColumnFamilyDescriptor> colFamDescs;
+        {
+            std::vector<std::string> haveColFams;
+            s = rocksdb::DB::ListColumnFamilies(opts, path.toStdString(), &haveColFams);
+            if (s.ok()) {
+                colFamDescs.reserve(haveColFams.size());
+                for (const auto &colName : haveColFams) {
+                    QString extra;
+                    // determine option for this column family
+                    std::optional<rocksdb::ColumnFamilyOptions> optOptions;
+                    if (auto it = colFamsNeeded.find(colName); it != colFamsNeeded.end()) {
+                        optOptions = std::move(it->second.options);
+                        // mark db cols that the db has that we want as "no longer needed"
+                        colFamsNeeded.erase(it);
+                    } else if (colName == rocksdb::kDefaultColumnFamilyName) {
+                        extra = " (ignored)";
+                    } else {
+                        extra = " (UNKNOWN)";
+                    }
+                    Debug() << "Found DB column family '" << QString::fromStdString(colName) << "'" << extra;
+                    colFamDescs.emplace_back(colName, optOptions.value_or(opts));
+                }
+            } else {
+                QString sstr;
+                if (s.IsIOError() && !QFileInfo::exists(path))
+                    sstr = " (new db)";
+                else
+                    sstr = ": " + StatusString(s);
+                Debug() << "Failed to list column families for DB '" << mainDBName << "'" << sstr;
+                // Might as well specify that we want to open the "default" column family here
+                colFamDescs.emplace_back(rocksdb::kDefaultColumnFamilyName, opts);
+            }
+        }
+
+        rocksdb::DB *db = nullptr;
+        s = rocksdb::DB::Open(opts, path.toStdString(), colFamDescs, &p->db.columnFamilies, &db);
+        p->db.db.reset(db);
+        if (!s.ok() || !db)
+            throw DatabaseError(QString("Error opening %1 database: %2 (path: %3)")
+                                    .arg(mainDBName, StatusString(s), path));
+    }
+
+    rocksdb::DB * const db = p->db;
+    assert(db != nullptr);
+
+    // Next, for all the colFamsNeeded that weren't in the DB already (new DB, etc), create them!
+    {
+        std::vector<rocksdb::ColumnFamilyDescriptor> colFamDescs;
+        for (const auto & [name, params] : colFamsNeeded) {
+            colFamDescs.emplace_back(name, params.options);
+        }
+        if (!colFamDescs.empty()) {
+            std::vector<rocksdb::ColumnFamilyHandle *> handles;
+            auto s = db->CreateColumnFamilies(colFamDescs, &handles);
+            // "save" the successfully opened handles so we can close them later even on erro
+            for (auto *h : handles) {
+                p->db.columnFamilies.push_back(h);
+                colFamsNeeded.erase(h->GetName());
+            }
+            // error out if there was a problem
+            if (!s.ok()) {
+                throw DatabaseError(QString("Error opening %1 column families: %2").arg(quint64(colFamDescs.size()))
+                                        .arg(StatusString(s)));
+            }
+        }
+    }
+
+    // Lastly, assign the ColumnFamilyHandle pointers ...
+    for (rocksdb::ColumnFamilyHandle *h : p->db.columnFamilies) {
+        const auto &name = h->GetName();
+        if (auto it = colFamsTable.find(name); it != colFamsTable.end()) [[likely]] {
+            // assign ptr; this modifies members: p.db.meta, p.db.blkinfo, etc..
+            it->second.handle = h;
+        } else if (name != rocksdb::kDefaultColumnFamilyName) [[unlikely]] {
+            throw DatabaseError(QString("Encountered an unknown column family in DB: %1"
+                                        " -- incompatible or newer than expected database, perhaps?")
+                                    .arg(QString::fromStdString(name)));
+        }
+    }
+
+    if (!colFamsNeeded.empty()) [[unlikely]] {
+        QStringList names;
+        for (const auto & [name, _] : colFamsNeeded) names.append(QString::fromStdString(name));
+        throw InternalError("Missing column families: " + names.join(", "));
+    }
+
+    if (!p->db.blkinfo || !p->db.meta || !p->db.rpa || !p->db.shist || !p->db.shunspent || !p->db.txhash2txnum
+        || !p->db.utxoset || !p->db.undo || !p->db.txnum2txhash || !p->db.headers) [[unlikely]]
+        throw InternalError("A required column family handle is still nullptr! FIXME!");
+
+    Log() << "DB memory: " << QString::number(options->db.maxMem / 1024. / 1024., 'f', 2) << " MiB";
 }
 
 void Storage::checkUpgradeDBVersion()
@@ -1897,6 +1901,9 @@ void Storage::compactAllDBs()
 void Storage::gentlyCloseDB()
 {
     p->db.utxoCache.reset();
+    p->db.txhash2txnumMgr.reset();
+    p->db.txNumsDRA.reset();
+    p->db.headersDRA.reset();
 
     // do Flush of each column family, and close the handles
     auto *db = p->db.get();
@@ -1918,11 +1925,11 @@ void Storage::gentlyCloseDB()
     }
     p->db.columnFamilies.clear();
     // Clear members (they were all pointers owned by the p->db.columnFamilies array)
-    p->db.blkinfo = p->db.meta = p->db.shist = p->db.shunspent = p->db.rpa = p->db.txhash2txnum = p->db.undo = p->db.utxoset = nullptr;
+    p->db.blkinfo = p->db.meta = p->db.shist = p->db.shunspent = p->db.rpa = p->db.txhash2txnum = p->db.undo = p->db.utxoset = p->db.txnum2txhash = p->db.headers = nullptr;
 
-    // do FlushWAL() and Close() to gently close the DB
+    // do SyncWAL() and Close() to gently close the DB
     auto name = DBName(p->db);
-    Debug() << "Flushing DB: " << name << " ...";
+    Debug() << "Synching WAL: " << name << " ...";
     auto status = db->SyncWAL();
     if (!status.ok())
         Warning() << "SyncWAL of " << name << ": " << StatusString(status);
@@ -1930,6 +1937,8 @@ void Storage::gentlyCloseDB()
     status = db->Close();
     if (!status.ok())
         Warning() << "Close of " << name << ": " << StatusString(status);
+    // kill the concat operators we used
+    p->db.concatOperator = p->db.concatOperatorTxHash2TxNum = p->db.concatOperatorTxNum2TxHash = p->db.concatOperatorHeaders = nullptr;
     // delete db
     p->db.db.reset(db = nullptr);
 }
@@ -1942,7 +1951,6 @@ void Storage::cleanup()
     if (dspsubsmgr) dspsubsmgr->cleanup();
     if (subsmgr) subsmgr->cleanup();
     gentlyCloseDB();
-    // TODO: unsaved/"dirty state" detection here -- and forced save, if needed.
 }
 
 
@@ -2197,26 +2205,26 @@ void Storage::saveMeta_impl()
 
 void Storage::appendHeader(rocksdb::WriteBatch &batch, const Header &h, BlockHeight height)
 {
-    auto ctx = p->headersDRA->beginBatchWrite(batch);
-    const auto targetHeight = p->headersDRA->numRecords();
+    auto ctx = p->db.headersDRA->beginBatchWrite(batch);
+    const auto targetHeight = p->db.headersDRA->numRecords();
     if (height != targetHeight) [[unlikely]]
         throw InternalError(QString("Bad use of appendHeader -- expected height %1, got height %2").arg(targetHeight).arg(height));
     QString err;
     const auto res = ctx.append(h, &err);
     if (!err.isEmpty()) [[unlikely]]
         throw DatabaseError(QString("Failed to append header %1: %2").arg(height).arg(err));
-    else if (!res || p->headersDRA->numRecords() != height + 1u) [[unlikely]]
+    else if (!res || p->db.headersDRA->numRecords() != height + 1u) [[unlikely]]
         throw DatabaseError(QString("Failed to append header %1: result is bad").arg(height));
 }
 
 void Storage::deleteHeadersPastHeight(rocksdb::WriteBatch &batch, BlockHeight height)
 {
     QString err;
-    auto ctx = p->headersDRA->beginBatchWrite(batch);
+    auto ctx = p->db.headersDRA->beginBatchWrite(batch);
     const auto res = ctx.truncate(height + 1u, &err);
     if (!err.isEmpty())
         throw DatabaseError(QString("Failed to truncate headers past height %1: %2").arg(height).arg(err));
-    else if (!res || p->headersDRA->numRecords() != height + 1u)
+    else if (!res || p->db.headersDRA->numRecords() != height + 1u)
         throw InternalError("header truncate resulted in an unexepected value");
 }
 
@@ -2234,7 +2242,7 @@ auto Storage::headerForHeight_nolock(BlockHeight height, QString *err) const -> 
     std::optional<Header> ret;
     try {
         QString err1;
-        ret.emplace( p->headersDRA->readRecord(height, &err1) );
+        ret.emplace( p->db.headersDRA->readRecord(height, &err1) );
         if (!err1.isEmpty()) {
             ret.reset();
             throw DatabaseError(QString("failed to read header %1: %2").arg(height).arg(err1));
@@ -2248,7 +2256,7 @@ auto Storage::headerForHeight_nolock(BlockHeight height, QString *err) const -> 
 auto Storage::headersFromHeight_nolock_nocheck(BlockHeight height, unsigned num, QString *err) const -> std::vector<Header>
 {
     if (err) err->clear();
-    std::vector<Header> ret = p->headersDRA->readRecords(height, num, err);
+    std::vector<Header> ret = p->db.headersDRA->readRecords(height, num, err);
 
     if (ret.size() != num && err && err->isEmpty())
         *err = "short header count returned from headers file";
@@ -2274,11 +2282,11 @@ auto Storage::headersFromHeight(BlockHeight height, unsigned count, QString *err
 void Storage::loadCheckHeadersInDB()
 {
     assert(p->blockHeaderSize() > 0);
-    p->headersDRA = std::make_unique<DBRecordArray>(*p->db, *p->db.headers, /* recSz = */ size_t(p->blockHeaderSize()),
-                                                    /* bucketNItems = */ 8, /* magic = */ 0x00f026a1); // may throw
+    p->db.headersDRA = std::make_unique<DBRecordArray>(*p->db, *p->db.headers, /* recSz = */ size_t(p->blockHeaderSize()),
+                                                       /* bucketNItems = */ 8, /* magic = */ 0x00f026a1); // may throw
 
     Log() << "Verifying headers ...";
-    uint32_t num = static_cast<uint32_t>(p->headersDRA->numRecords());
+    uint32_t num = static_cast<uint32_t>(p->db.headersDRA->numRecords());
     std::vector<QByteArray> hVec;
     const auto t0 = Util::getTimeNS();
     {
@@ -2322,9 +2330,9 @@ void Storage::loadCheckHeadersInDB()
 void Storage::loadCheckTxNumsDRAAndBlkInfo()
 {
     // may throw.
-    p->txNumsDRA = std::make_unique<DBRecordArray>(*p->db, *p->db.txnum2txhash,
-                                                   /* recSize = */ HashLen, /* bucketNItems = */ 16, /* magic = */ 0x000012e2);
-    p->txNumNext = p->txNumsDRA->numRecords();
+    p->db.txNumsDRA = std::make_unique<DBRecordArray>(*p->db, *p->db.txnum2txhash,
+                                                      /* recSize = */ HashLen, /* bucketNItems = */ 16, /* magic = */ 0x000012e2);
+    p->txNumNext = p->db.txNumsDRA->numRecords();
     Debug() << "Read TxNumNext from file: " << p->txNumNext.load();
     TxNum ct = 0;
     if (const int height = latestTip().first; height >= 0)
@@ -2356,15 +2364,15 @@ void Storage::loadCheckTxHash2TxNumMgr()
 {
     // the below may throw
     p->db.txhash2txnumMgr = std::make_unique<TxHash2TxNumMgr>(p->db.get(), p->db.txhash2txnum, p->db.defReadOpts, p->db.defWriteOpts,
-                                                              p->txNumsDRA.get(), 6, TxHash2TxNumMgr::KeyPos::End);
+                                                              p->db.txNumsDRA.get(), 6, TxHash2TxNumMgr::KeyPos::End);
     try {
         // basic sanity checks -- ensure we can read the first, middle, and last hash in the txNumsFile,
         // and that those hashes exist in the txhash2txnum db
         const QString errMsg = "The txhash index failed basic sanity checks -- it is missing some records.";
-        const auto nrecs = p->txNumsDRA->numRecords();
+        const auto nrecs = p->db.txNumsDRA->numRecords();
         if (nrecs) {
             for (auto recNum : {uint64_t(0), uint64_t(nrecs/2), uint64_t(nrecs-1)}) {
-                if (!p->db.txhash2txnumMgr->exists(p->txNumsDRA->readRecord(recNum)))
+                if (!p->db.txhash2txnumMgr->exists(p->db.txNumsDRA->readRecord(recNum)))
                     throw DatabaseError(errMsg);
             }
         } else {
@@ -3181,7 +3189,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
             setDirty(batch, true); // <--  no turning back. we set it dirty in case rocksdb atomicity fails here; if the app crashes unexpectedly while this is set, on next restart it will refuse to run and insist on a clean resynch if this is true.
 
             {  // add txnum -> txhash association to the TxNumsFile...
-                auto ctx = p->txNumsDRA->beginBatchWrite(batch); // may throw if io error in c'tor here.
+                auto ctx = p->db.txNumsDRA->beginBatchWrite(batch); // may throw if io error in c'tor here.
                 QString errStr;
                 for (const auto & txInfo : ppb->txInfos) {
                     if (!ctx.append(txInfo.hash, &errStr)) // does not throw here, but we do.
@@ -3192,7 +3200,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
 
             p->txNumNext += ppb->txInfos.size(); // update internal counter
 
-            if (p->txNumNext != p->txNumsDRA->numRecords())
+            if (p->txNumNext != p->db.txNumsDRA->numRecords())
                 throw InternalError("TxNum file and internal txNumNext counter disagree! FIXME!");
 
             // Asynch task -- the future will automatically be awaited on scope end (even if we throw here!)
@@ -3668,7 +3676,7 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
 
             // add all tx hashes that we are rolling back to the notify set for the txSubsMgr
             if (notify) {
-                const auto txHashes = p->txNumsDRA->readRecords(txNum0, undo.blkInfo.nTx);
+                const auto txHashes = p->db.txNumsDRA->readRecords(txNum0, undo.blkInfo.nTx);
                 notify->txidsAffected.insert(txHashes.begin(), txHashes.end());
             }
 
@@ -3683,7 +3691,7 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
             assert(long(p->txNumNext) - long(txNum0) == long(undo.blkInfo.nTx));
             p->txNumNext = txNum0;
             {
-                auto ctx = p->txNumsDRA->beginBatchWrite(batch);
+                auto ctx = p->db.txNumsDRA->beginBatchWrite(batch);
                 QString err;
                 if (ctx.truncate(txNum0, &err) != txNum0 || !err.isEmpty()) {
                     throw InternalError(QString("Failed to truncate txNumsFile to %1: %2").arg(txNum0).arg(err));
@@ -3815,7 +3823,7 @@ std::optional<TxHash> Storage::hashForTxNum(TxNum n, bool throwIfMissing, bool *
 
     static const QString kErrMsg ("Error reading TxHash for TxNum %1: %2");
     QString errStr;
-    const auto bytes = p->txNumsDRA->readRecord(n, &errStr);
+    const auto bytes = p->db.txNumsDRA->readRecord(n, &errStr);
     if (bytes.isEmpty()) {
         errStr = kErrMsg.arg(n).arg(errStr);
         if (throwIfMissing)
@@ -3930,7 +3938,7 @@ std::vector<TxHash> Storage::txHashesForBlockInBitcoindMemoryOrder(BlockHeight h
         startCount = { bi.txNum0, bi.nTx };
     }
     QString err;
-    auto vec = p->txNumsDRA->readRecords(startCount.first, startCount.second, &err);
+    auto vec = p->db.txNumsDRA->readRecords(startCount.first, startCount.second, &err);
     if (vec.size() != startCount.second || !err.isEmpty()) {
         Warning() << "Failed to read " << startCount.second << " txNums for height " << height << ". " << err;
         return ret;
