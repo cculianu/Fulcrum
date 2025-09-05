@@ -37,7 +37,7 @@
 
 namespace {
 
-const std::string kMetaDataKey{0, char{0}}; // the metadata row is a single empty string. It must be the first row!
+const std::string kMetaDataKey; // the metadata row is a single empty string. It must be the first row!
 
 } // end namespace
 
@@ -149,7 +149,8 @@ void DBRecordArray::readOrInitMeta()
         if (meta.nRecs > 0u) {
             // we have records, check the last row is what we expect
             const uint64_t lastRecNum = meta.nRecs - 1u;
-            const std::string lastKey = makeKey(recordNumToBucketNum(lastRecNum));
+            const VarIntBE lastKeyVarInt = makeKey(recordNumToBucketNum(lastRecNum));
+            const rocksdb::Slice lastKey = lastKeyVarInt.byteView().toStringView();
             if (const auto &k = iter->key(); k.compare(lastKey) != 0)
                 throw Error(QString("%1: Database corruption possible for DB %2 -- last row's key is not as expected. Expected: %3, got: %4").arg(__func__, dbName)
                                 .arg(QString::fromLatin1(QByteArray(lastKey.data(), lastKey.size()).toHex()))
@@ -184,13 +185,6 @@ void DBRecordArray::readOrInitMeta()
             << ", magic: " << meta.magic << ", recordSize: " << meta.recSz << ", bucketNRecs: " << meta.bucketNRecs;
 }
 
-/* static */
-std::string DBRecordArray::makeKey(uint64_t bucketNum)
-{
-    bucketNum = Util::hToBe64(bucketNum); // bucket numbers are big endian bytes always so that the table is sorted
-    return std::string(reinterpret_cast<const char *>(&bucketNum), sizeof(bucketNum));
-}
-
 void DBRecordArray::writeMeta(rocksdb::WriteBatch &batch, MetaData *metaOut) const
 {
     MetaData meta(*this);
@@ -209,7 +203,7 @@ bool DBRecordArray::BatchWriteContext::append(const ByteView &data, QString *err
     const uint64_t recNum = d.nRecs++;
     const uint64_t bucketNum = d.recordNumToBucketNum(recNum);
     if (!lastWrite || lastWrite->bucketNum != bucketNum) {
-        lastWrite.emplace(bucketNum, makeKey(bucketNum));
+        lastWrite.emplace(bucketNum, std::string{makeKey(bucketNum).byteView().toStringView()});
     }
     const auto st = batch.Merge(&d.cf, lastWrite->bucketKey, data.toStringView());
     if (!st.ok()) [[unlikely]] {
@@ -228,7 +222,8 @@ uint64_t DBRecordArray::BatchWriteContext::truncate(uint64_t newNumRecords, QStr
         if (const uint64_t endOffset = d.recordNumOffsetFromBucketBase(newNumRecords); endOffset > 0u) {
             // We read-modify-write because newNumRecords fell inside a bucket
             std::string val;
-            const std::string key = d.makeKey(firstBucketNum);
+            const VarIntBE varIntKey = d.makeKey(firstBucketNum);
+            const rocksdb::Slice key{varIntKey.byteView().toStringView()};
             if (auto st = d.db.Get(d.ropts, &d.cf, key, &val); !st.ok()) { // read in the current bucket
                 if (errStr) *errStr = QString("DB error for %1. Get returned error: %2").arg(d.name(), QString::fromStdString(st.ToString()));
                 hadError = true;
@@ -251,8 +246,9 @@ uint64_t DBRecordArray::BatchWriteContext::truncate(uint64_t newNumRecords, QStr
             ++firstBucketNum; // we delete everything forward of the *NEXT* bucket.
         }
         if (!hadError) {
-            const std::string firstBucketKey = d.makeKey(firstBucketNum);
-            const std::string pastTheEndKey = std::string(sizeof(uint64_t) + 1u, '\xff'); // 9 * 0xff should be larger than any key in the DB
+            const VarIntBE firstVarIntKey = d.makeKey(firstBucketNum);
+            const rocksdb::Slice firstBucketKey{firstVarIntKey.byteView().toStringView()};
+            const std::string pastTheEndKey = std::string(sizeof(uint64_t) + 2u, '\xff'); // 10 * 0xff should be larger than any key in the DB
             const auto st = batch.DeleteRange(&d.cf, firstBucketKey, pastTheEndKey);
             if (!st.ok()) {
                 if (errStr) *errStr = QString("DB error for %1. batch.DeleteRange() error: %2").arg(d.name(), QString::fromStdString(st.ToString()));
@@ -281,7 +277,8 @@ QByteArray DBRecordArray::readRandomCommon(const uint64_t recNum, std::optional<
         const bool useCached = lastRead && *lastRead && (*lastRead)->bucketNum == bucketNum;
         if (!useCached) {
             // no cached value, read bucket from db
-            std::string key = makeKey(bucketNum);
+            const VarIntBE varIntKey = makeKey(bucketNum);
+            const std::string_view key{varIntKey.byteView().toStringView()};
             std::string value;
             const auto st = db.Get(ropts, &cf, key, &value);
             if (st.ok()) {
@@ -289,7 +286,7 @@ QByteArray DBRecordArray::readRandomCommon(const uint64_t recNum, std::optional<
                     // read ok, set ret
                     ret = QByteArray(value.data() + offset, static_cast<QByteArray::size_type>(recSz));
                     // cache DB read for subsequent calls to the same bucket
-                    if (lastRead)  lastRead->emplace(bucketNum, std::move(key), std::move(value));
+                    if (lastRead)  lastRead->emplace(bucketNum, std::string{key}, std::move(value));
                 } else if (errStr)
                     *errStr = QString("DB error for %1. Record number %2 is missing from the DB data blob!").arg(name()).arg(recNum);
             } else if (errStr)
@@ -392,6 +389,26 @@ std::vector<QByteArray> DBRecordArray::readRandomRecords(const std::vector<uint6
         }
     }
     return ret;
+}
+
+std::unique_ptr<rocksdb::Iterator> DBRecordArray::seekToFirstBucket() const
+{
+    std::unique_ptr<rocksdb::Iterator> iter(db.NewIterator(ropts, &cf));
+    if (!iter) [[unlikely]] throw Error(QString("%1: rocksdb returned a nullptr iterator").arg(__func__));
+    iter->Seek(makeKey(0).byteView().toStringView());
+    return iter;
+}
+
+/* static */
+uint64_t DBRecordArray::bucketNumFromDbKey(const ByteView &key)
+{
+    try {
+        const VarIntBE v = VarIntBE::fromBytes(key);
+        return v.value<uint64_t>();
+    } catch (const std::exception &e) {
+        throw Error(QString("%1: error in parsing db key (%2): %3")
+                        .arg(__func__, QString::fromLatin1(ByteView{key}.toByteArray(false).toHex()), e.what()));
+    }
 }
 
 #ifdef ENABLE_TESTS

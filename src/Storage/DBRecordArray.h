@@ -20,6 +20,7 @@
 
 #include "ByteView.h"
 #include "Common.h"
+#include "VarInt.h"
 
 #include <rocksdb/db.h>
 #include <rocksdb/options.h>
@@ -28,6 +29,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <shared_mutex>
@@ -53,7 +55,7 @@ class DBRecordArray
     void readOrInitMeta();
     void writeMeta(rocksdb::WriteBatch &batch, MetaData *metaOut = nullptr) const;
 
-    static std::string makeKey(uint64_t bucketNum);
+    static inline VarIntBE makeKey(uint64_t bucketNum) { return VarIntBE(bucketNum); }
 
     inline uint64_t recordNumToBucketNum(uint64_t recNum) const { return recNum >> bucketShiftAmt; }
     inline uint64_t recordNumBucketBase(uint64_t recNum) const { return recordNumToBucketNum(recNum) << bucketShiftAmt; }
@@ -145,4 +147,8 @@ public:
     BatchWriteContext beginBatchWrite(rocksdb::WriteBatch &batch) { return BatchWriteContext(*this, batch); }
 
     friend class DBRecordArray::BatchWriteContext;
+
+    // These methods violate encapsulation a little bit but they are used by Storage.cpp to check DB is sane.
+    std::unique_ptr<rocksdb::Iterator> seekToFirstBucket() const;
+    static uint64_t bucketNumFromDbKey(const ByteView &key);
 };

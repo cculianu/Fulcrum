@@ -2357,6 +2357,49 @@ void Storage::loadCheckTxNumsDRAAndBlkInfo()
                                           "\n\nThe database may be corrupted. Delete the datadir and resynch it.\n")
                                   .arg(ct).arg(p->txNumNext.load()));
     }
+    // Check that the buckets in the txNumsDRA are monotonically increasing and they have the expected format.
+    if (options->doSlowDbChecks >= 2) { // only for -C -C or above
+        Tic t0;
+        auto name = p->db.txNumsDRA->name().split("/").back();
+        Log() << "CheckDB: Verifying " << name << " DB format ...";
+        auto iter = p->db.txNumsDRA->seekToFirstBucket();
+        uint64_t txNumsSeen = 0, bucketNum = 0;
+        const uint64_t expectedNBuckets = p->txNumNext.load() ? (p->txNumNext.load() + p->db.txNumsDRA->bucketNumRecords() - 1)
+                                                                / p->db.txNumsDRA->bucketNumRecords()
+                                                              : 0;
+        Debug() << "CheckDB: Verifying " << expectedNBuckets << " " << name << " buckets ...";
+        while (iter->Valid()) {
+            if (p->db.txNumsDRA->bucketNumFromDbKey(iter->key()) != bucketNum) [[unlikely]] {
+                throw DatabaseFormatError(QString("%1 DBRecordArray has an invalid key for bucket num %2 (key=%3)."
+                                                  "\n\nThe database may be corrupted. Delete the datadir and resynch it.\n")
+                                          .arg(name).arg(bucketNum).arg(QString::fromLatin1(ByteView{iter->key()}.toByteArray(false).toHex())));
+            }
+            const auto bucketData = iter->value();
+            const size_t nrecs = bucketData.size() / HashLen;
+            const size_t mod = bucketData.size() % HashLen;
+            if (!nrecs || mod || (nrecs != p->db.txNumsDRA->bucketNumRecords() && txNumsSeen + nrecs != ct)) [[unlikely]] {
+                throw DatabaseFormatError(QString("%1 DBRecordArray has invalid data of length %2 in bucket number %3."
+                                                  "\n\nThe database may be corrupted. Delete the datadir and resynch it.\n")
+                                          .arg(name).arg(bucketData.size()).arg(bucketNum));
+            }
+            txNumsSeen += nrecs;
+            ++bucketNum;
+            if (bucketNum % 1'000'000 == 0) [[unlikely]] {
+                Log() << "CheckDB: Verified " << bucketNum << "/" << expectedNBuckets << " " << name
+                      << Util::Pluralize(" bucket", bucketNum) << " ...";
+            }
+            if (bucketNum % 10'000 == 0 && app()->signalsCaught()) [[unlikely]]
+                throw UserInterrupted("User interrupted, aborting check");
+            iter->Next();
+        }
+        if (txNumsSeen != ct || expectedNBuckets != bucketNum) {
+            throw DatabaseFormatError(QString("%1 DBRecordArray appears to be missing data."
+                                              "\n\nThe database may be corrupted. Delete the datadir and resynch it.\n")
+                                      .arg(name));
+        }
+        Log() << "CheckDB: Verified " << bucketNum << " " << name << Util::Pluralize(" bucket", bucketNum)
+              << " in " << t0.secsStr() << " secs";
+    }
 }
 
 // this depends on the above function having been run already
