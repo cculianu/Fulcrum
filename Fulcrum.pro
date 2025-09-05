@@ -386,7 +386,6 @@ SOURCES += \
     TXO.cpp \
     UPnP.cpp \
     Util.cpp \
-    VarInt.cpp \
     Version.cpp \
     WebSocket.cpp \
     ZmqSubNotifier.cpp \
@@ -455,10 +454,11 @@ RESOURCES += \
 contains(DEFINES, ENABLE_TESTS) {
     RESOURCES += resources/testdata/testdata.qrc
     HEADERS += \
-        src/tests/Tests.h
+        tests/Tests.h
     SOURCES += \
-        src/tests/ByteView_tests.cpp \
-        src/tests/Util_tests.cpp
+        tests/ByteView_tests.cpp \
+        tests/Util_tests.cpp \
+        tests/VarInt_tests.cpp
 }
 
 # Bitcoin related sources & headers
