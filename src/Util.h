@@ -1033,13 +1033,18 @@ namespace Util {
     /* ---- Endian swap ops ----
      *
      * Note we reproduce functionality from "bitcoin/crypto/endian.h" here in order to not depend on the bitcoin lib
-     * everywhere in this codebase.
+     * everywhere in this codebase. Also we add a templatized set of hToBe, beToH, etc.
      */
     inline bool constexpr isBigEndian() noexcept { return std::endian::native == std::endian::big; }
     inline bool constexpr isLittleEndian() noexcept { return std::endian::native == std::endian::little; }
 
     static_assert(isBigEndian() + isLittleEndian() == 1, "Assumption: Endianness must be one of these two");
 
+#if HAVE_BUILTIN_BSWAP
+    [[nodiscard]] inline constexpr uint16_t byteSwap16(uint16_t const x) noexcept { return __builtin_bswap16(x); }
+    [[nodiscard]] inline constexpr uint32_t byteSwap32(uint32_t const x) noexcept { return __builtin_bswap32(x); }
+    [[nodiscard]] inline constexpr uint64_t byteSwap64(uint64_t const x) noexcept { return __builtin_bswap64(x); }
+#else
     [[nodiscard]] inline constexpr uint16_t byteSwap16(uint16_t const x) noexcept {
         uint32_t const x32 = static_cast<uint32_t>(x); // to keep everything within an unsigned int and prevent promotion to `int`
         return static_cast<uint16_t>(  ((x32 & uint32_t{0xff00u}) >> 8u)
@@ -1061,6 +1066,7 @@ namespace Util {
                | ((x & uint64_t{0x000000000000ff00ull}) << 40ull)
                | ((x & uint64_t{0x00000000000000ffull}) << 56ull);
     }
+#endif // HAVE_BUILTIN_BSWAP
     [[nodiscard]] inline constexpr uint16_t hToLe16(uint16_t x) noexcept { if constexpr (isBigEndian()) return byteSwap16(x); else return x; }
     [[nodiscard]] inline constexpr uint16_t le16ToH(uint16_t x) noexcept { if constexpr (isBigEndian()) return byteSwap16(x); else return x; }
     [[nodiscard]] inline constexpr uint32_t hToLe32(uint32_t x) noexcept { if constexpr (isBigEndian()) return byteSwap32(x); else return x; }
@@ -1073,6 +1079,46 @@ namespace Util {
     [[nodiscard]] inline constexpr uint32_t be32ToH(uint32_t x) noexcept { if constexpr (isLittleEndian()) return byteSwap32(x); else return x; }
     [[nodiscard]] inline constexpr uint64_t hToBe64(uint64_t x) noexcept { if constexpr (isLittleEndian()) return byteSwap64(x); else return x; }
     [[nodiscard]] inline constexpr uint64_t be64ToH(uint64_t x) noexcept { if constexpr (isLittleEndian()) return byteSwap64(x); else return x; }
+
+    template<typename T>
+    concept U16_or_32_or_64 = std::is_same_v<uint64_t, T> || std::is_same_v<uint32_t, T> || std::is_same_v<uint16_t, T>;
+
+    template <U16_or_32_or_64 U> [[nodiscard]] inline constexpr U beToH(U x) noexcept {
+        if constexpr (std::is_same_v<U, uint16_t>) return be16ToH(x);
+        else if constexpr (std::is_same_v<U, uint32_t>) return be32ToH(x);
+        else if constexpr (std::is_same_v<U, uint64_t>) return be64ToH(x);
+        else throw std::domain_error("Impossible state in beToH<U>");
+    }
+
+    template <U16_or_32_or_64 U> [[nodiscard]] inline constexpr U leToH(U x) noexcept {
+        if constexpr (std::is_same_v<U, uint16_t>) return le16ToH(x);
+        else if constexpr (std::is_same_v<U, uint32_t>) return le32ToH(x);
+        else if constexpr (std::is_same_v<U, uint64_t>) return le64ToH(x);
+        else throw std::domain_error("Impossible state in leToH<U>");
+    }
+
+    template <U16_or_32_or_64 U> [[nodiscard]] inline constexpr U hToBe(U x) noexcept { return beToH(x); }
+    template <U16_or_32_or_64 U> [[nodiscard]] inline constexpr U hToLe(U x) noexcept { return leToH(x); }
+
+    // Some static assertions to sanity check the above templates
+    static_assert(beToH(hToBe(static_cast<uint16_t>(0x1))) == 0x1u);
+    static_assert(beToH(hToBe(static_cast<uint32_t>(0x1))) == 0x1u);
+    static_assert(beToH(hToBe(static_cast<uint64_t>(0x1))) == 0x1u);
+    static_assert(leToH(hToLe(static_cast<uint16_t>(0x1))) == 0x1u);
+    static_assert(leToH(hToLe(static_cast<uint32_t>(0x1))) == 0x1u);
+    static_assert(leToH(hToLe(static_cast<uint64_t>(0x1))) == 0x1u);
+    static_assert(hToBe(static_cast<uint16_t>(0x1)) == (isLittleEndian() ? 0x100u : 0x1u));
+    static_assert(hToBe(static_cast<uint32_t>(0x1)) == (isLittleEndian() ? 0x1000000u : 0x1u));
+    static_assert(hToBe(static_cast<uint64_t>(0x1)) == (isLittleEndian() ? 0x100000000000000ull : 0x1ull));
+    static_assert(hToLe(static_cast<uint16_t>(0x1)) == (isBigEndian() ? 0x100u : 0x1u));
+    static_assert(hToLe(static_cast<uint32_t>(0x1)) == (isBigEndian() ? 0x1000000u : 0x1u));
+    static_assert(hToLe(static_cast<uint64_t>(0x1)) == (isBigEndian() ? 0x100000000000000ull : 0x1ull));
+    static_assert(beToH(static_cast<uint16_t>(0x1)) == (isLittleEndian() ? 0x100u : 0x1u));
+    static_assert(beToH(static_cast<uint32_t>(0x1)) == (isLittleEndian() ? 0x1000000u : 0x1u));
+    static_assert(beToH(static_cast<uint64_t>(0x1)) == (isLittleEndian() ? 0x100000000000000ull : 0x1ull));
+    static_assert(leToH(static_cast<uint16_t>(0x1)) == (isBigEndian() ? 0x100u : 0x1u));
+    static_assert(leToH(static_cast<uint32_t>(0x1)) == (isBigEndian() ? 0x1000000u : 0x1u));
+    static_assert(leToH(static_cast<uint64_t>(0x1)) == (isBigEndian() ? 0x100000000000000ull : 0x1ull));
     // End: ---- Endian swap ops ----
 
 } // end namespace Util
