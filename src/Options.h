@@ -276,10 +276,6 @@ public:
     static constexpr bool isMaxBatchInRange(unsigned n) { return n >= maxBatchMin && n <= maxBatchMax; }
     unsigned maxBatch = defaultMaxBatch;
 
-    // CLI: --utxo-cache (experimental)
-    static constexpr size_t defaultUtxoCache = 0, minUtxoCache = 64ull * 1000ull * 1000ull; // 0 is off, otherwise 64 MB min
-    size_t utxoCache = defaultUtxoCache;
-
     // config: anon_logs
     static constexpr bool defaultAnonLogs = false;
     bool anonLogs = defaultAnonLogs; ///< if true, we hide IP addresses, Bitcoin addresses, and txid's from the Log()

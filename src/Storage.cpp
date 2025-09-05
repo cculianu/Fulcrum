@@ -34,8 +34,6 @@
 #include "bitcoin/crypto/endian.h"
 #include "bitcoin/hash.h"
 
-#include "robin_hood/robin_hood.h"
-
 #if __has_include(<rocksdb/advanced_cache.h>)
 // Newer rocksdb 8.1 defines the `Cache` class in this header. :/
 #include <rocksdb/advanced_cache.h>
@@ -85,7 +83,7 @@ HistoryTooLarge::~HistoryTooLarge() {} // weak vtable warning suppression
 namespace {
     /// Encapsulates the 'meta' db table
     struct Meta {
-        static constexpr uint32_t kCurrentVersion = 0x3u;
+        static constexpr uint32_t kCurrentVersion = 0x4u;
         static constexpr uint32_t kMinSupportedVersion = 0x1u;
         static constexpr uint32_t kMinBCHUpgrade9Version = 0x2u;
         static constexpr uint32_t kMinHasExtraPlatformInfoVersion = 0x3u;
@@ -1200,11 +1198,6 @@ struct Storage::Pvt
 
         std::unique_ptr<TxHash2TxNumMgr> txhash2txnumMgr; ///< provides a bit of a higher-level interface into the db
 
-        /// One of these is alive if we are in an initial sync and user specified --utxo-cache
-        /// It caches UTXOs in memory and delays UTXO writes to DB so we don't have to do so much back-and-forth to
-        /// rocksdb.
-        std::unique_ptr<UTXOCache> utxoCache;
-
         rocksdb::DB *get() { return db.get(); }
         const rocksdb::DB *get() const { return db.get(); }
         operator rocksdb::DB *() { return get(); }
@@ -1329,228 +1322,6 @@ namespace {
         return {DeepCpy(key.data(), HashLen), ctxo}; // if we get here size ok, can extract HashX
     }
 } // namespace
-
-// Just a glorified hash table to cache recently-seen UTXOs to avoid database lookups. In previous versions of Fulcrum
-// this class was more elaborate (it tried to avoid redundant DB writes for short-lived UTXOs that only were active
-// for a few blocks).  But it has been simplified in the interests of preserving database integrity across addBlock()
-// calls. Additionally, all those elaborate techniques didn't improve performance much (and sometimes hampered it).
-// This class is only used during initial sync and even then only if --utxo-cache is specified.
-class Storage::UTXOCache
-{
-    struct TableHasherAndEq {
-        bool operator()(const TXO &a, const TXO &b) const noexcept { return a == b; }
-        size_t operator()(const TXO &t) const noexcept { return std::hash<TXO>{}(t); }
-    };
-    struct TableEntry {
-        TXOInfo txoInfo;
-        size_t entrySize; ///< memory usage for this entry in bytes
-        TableEntry(TXOInfo &&info, size_t s) : txoInfo{std::move(info)}, entrySize{s} {}
-    };
-    using Table = robin_hood::unordered_flat_map<TXO, TableEntry, TableHasherAndEq, TableHasherAndEq>;
-    Table utxos;
-    std::vector<std::pair<TXO, TXOInfo>> deferredAdds;
-    size_t memUsed = 0u; ///< cumulative sum of all TableEntry::entrySize in the Table (excludes hash table size itself)
-
-    static_assert (std::is_same_v<decltype(std::declval<TXO>().txHash), QByteArray>
-                   && std::is_same_v<decltype(std::declval<TXOInfo>().hashX), QByteArray>,
-                   "Below assumes we are using QByteArray");
-    static constexpr size_t BaseEntrySize = sizeof(Table::value_type)
-                                            + (HashLen + Util::qByteArrayPvtDataSize()) * size_t{2U}; // account for txHash and hashX
-
-    void do_limitSize(const size_t bytes) {
-        if (memUsed <= bytes || utxos.empty()) return;
-        const size_t limitTo = static_cast<size_t>(bytes * 0.95); // limit to 95% of size to avoid ping-ponging through here for every call
-        const Tic t0;
-        DebugM(name, ": limiting size to ", limitTo, ", current size: ", memUsed);
-        size_t deletions = 0;
-        for (auto it = utxos.begin(); memUsed > limitTo && it != utxos.end(); /*-->see loop body<--*/) {
-            it = rm(it);
-            ++deletions;
-        }
-        DebugM(name, ": deletions: ", deletions, ", utxos left: ", utxos.size(), ", elapsed: ", t0.msecStr(), " msec",
-               "; memUsage: ", QString::number(memUsed/1000.0/1000.0, 'f', 3), " MB");
-    }
-
-    bool add(TXO &&txo, TXOInfo &&info) {
-        const size_t entrySize = BaseEntrySize + (info.tokenDataPtr ? info.tokenDataPtr->GetMemSize() : 0u);
-        if (const auto & [it, inserted] = utxos.try_emplace(std::move(txo), std::move(info), entrySize); inserted) {
-            memUsed += entrySize;
-            return true;
-        }
-        return false;
-    }
-
-    // Precondition: `it` must be a valid iterator.
-    // Returns the "next" iterator after erasing `it`, and after accounting for `it`'s memusage.
-    template <typename It>
-    It rm(const It &it) {
-        memUsed -= it->second.entrySize;
-        return utxos.erase(it);
-    }
-
-    bool contains(const TXO & t) const { return utxos.contains(t); }
-
-    const QString name;
-    CoTask prefetcher;
-    CoTask::Future prefetcherFut;
-
-    rocksdb::DB * const m_db;
-    rocksdb::ColumnFamilyHandle * const cf_utxo;
-    const rocksdb::ReadOptions & readOpts;
-
-    // persistent data structures we use in order to avoid having to continually re-reserve memory
-    struct PFData {
-        std::vector<std::pair<QByteArray, TXO>> keyData;
-        std::vector<rocksdb::Slice> keys;
-        std::vector<rocksdb::PinnableSlice> values;
-        std::vector<rocksdb::Status> statuses;
-    } pf;
-
-    void do_prefetch(PreProcessedBlockPtr ppb) {
-        // Below call to subitWork will throw std::domain_error if we are being called while the prefetcher is still
-        // active ... which is what we want here, because it indicates a programming error.
-        prefetcherFut = prefetcher.submitWork([this, ppb]{
-            const Tic t0;
-            const size_t nIns = ppb->inputs.size();
-            size_t num_ok = 0u, skipped = nIns > 0u /* count coinbase as skipped */;
-            Defer d([&t0, &num_ok, &skipped, nIns]{
-                if (t0.msec<int>() >= 50)
-                    DebugM("Fetched ", num_ok, "/", nIns - skipped, " UTXOs from DB in ", t0.msecStr(3), " msec");
-            });
-
-            std::vector<std::pair<QByteArray, TXO>> & keyData = pf.keyData;
-            std::vector<rocksdb::Slice> & keys = pf.keys;
-            std::vector<rocksdb::PinnableSlice> & values = pf.values;
-            std::vector<rocksdb::Status> & statuses = pf.statuses;
-            Defer d2([&]{
-                statuses.clear();
-                values.clear();
-                keys.clear();
-                keyData.clear();
-            });
-            for (size_t inum = 1 /* coinbase, skip */; inum < nIns; ++inum) {
-                const auto & in = std::as_const(ppb->inputs)[inum];
-                if (in.parentTxOutIdx.has_value()) { ++skipped; /* spent in this block, skip */ }
-                else if (TXO txo{.txHash = in.prevoutHash, .outN = in.prevoutN}; !contains(txo)) {
-                    ++cacheMisses;
-                    keyData.emplace_back(Serialize(txo), std::move(txo));
-                } else
-                    ++cacheHits;
-            }
-            if (keyData.empty()) return; // nothing to do!
-            // sort the key data (for faster rocksdb MultiGet)
-            std::sort(keyData.begin(), keyData.end());
-            // populate the key slices, etc
-            for (const auto & [key, txo] : keyData)
-                keys.emplace_back(key.constData(), static_cast<size_t>(key.size()));
-            values.resize(keys.size());
-            statuses.resize(keys.size());
-            m_db->MultiGet(readOpts, cf_utxo, keys.size(), keys.data(), values.data(), statuses.data(),
-                           /* sorted_input = */ true);
-            for (size_t index = 0, nIndices = statuses.size(); index < nIndices; ++index) {
-                const auto & s = statuses[index];
-                TXO &txo = keyData[index].second;
-                if (s.ok()) [[likely]] {
-                    bool ok;
-                    TXOInfo info = Deserialize<TXOInfo>(FromSlice(values[index]), &ok);
-                    if (!ok) [[unlikely]]
-                        throw DatabaseSerializationError(QString("%1: Failed to deserialize TXOInfo for TXO \"%2\"")
-                                                             .arg(name, txo.toString()));
-                    else {
-                        add(std::move(txo), std::move(info));
-                        ++num_ok;
-                    }
-                } else {
-                    throw DatabaseError(QString("%1: Error reading TXO \"%2\" from colfam %3: %4")
-                                            .arg(name, txo.toString(), CFName(cf_utxo), StatusString(s)));
-                }
-            }
-        });
-    }
-
-
-    void addAllDeferred() {
-        for (auto & [txo, txoinfo] : deferredAdds)
-            add(std::move(txo), std::move(txoinfo));
-        deferredAdds.clear();
-    }
-
-public:
-    UTXOCache(const QString &name, rocksdb::DB *pdb, rocksdb::ColumnFamilyHandle *putxocf,
-              const rocksdb::ReadOptions & readOpts)
-        : name{name}, prefetcher{name + ".Prefetcher"}, m_db{pdb}, cf_utxo{putxocf}, readOpts{readOpts} {
-        DebugM(name, ": created");
-    }
-
-    ~UTXOCache() {
-        DebugM(name, ": ", __func__, " - stats - cache hits: ", cacheHits, ", cache misses: ", cacheMisses);
-    }
-
-    void reserve(size_t hashMaps) { utxos.reserve(hashMaps); }
-
-    /// Figures out the best capacity to reserve based on a desired memory size.
-    void autoReserve(size_t memoryBytes) {
-        constexpr auto perEntryEstimatedCost = BaseEntrySize;
-        static_assert (perEntryEstimatedCost > 0);
-        reserve(memoryBytes / perEntryEstimatedCost); // ~5.6 million per GB of memory
-    }
-
-    /// NB: no locks on ppb are used for now. While this is alive ppb->inputs must not be mutated
-    /// NB2: call waitForPrefetchToComplete() after this is called sometime later.
-    /// Precondition: prefetcher must *not* already be running. If it is, this will throw std::domain_error.
-    void prefetch(const PreProcessedBlockPtr & ppb) { do_prefetch(ppb); }
-
-    /// May throw if the underlying CoTask work unit threw.
-    /// This is called by Storage::addBlock before we need to get and/or add UTXOs to the cache.
-    void waitForPrefetchToComplete() {
-        if (prefetcherFut.future.valid())
-            prefetcherFut.future.get();
-
-        // do any deferred adds now that the prefetcher is done/inactive
-        addAllDeferred();
-    }
-
-    size_t cacheMisses = 0, cacheHits = 0;
-
-    /// Get a UTXO from the cache. Will return a nullptr if the requested TXO was not in the cache. The returned
-    /// pointer, if not nullptr, points directly into the cache and is no longer valid if the cache later is mutated in
-    /// any way!
-    ///
-    /// Does not fall-back to looking in the DB. Caller should explicitly call utxoGetFromDB() themselves
-    /// for that purpose. Note: this currently takes no locks. Assumption is calling code is locking
-    /// things correctly (this function is currently called only inside Storage::addBlock).
-    /// Precondition: prefetcher must not be running (this is not checked).
-    const TXOInfo * get(const TXO & txo) {
-        if (const auto it = utxos.find(txo); it != utxos.end()) {
-            ++cacheHits;
-            return &it->second.txoInfo;
-        }
-        ++cacheMisses;
-        return nullptr;
-    }
-
-    /// Add a TXO,TXOInfo pair to the cache. If the prefetcher is running, defers the add until
-    /// `waitForPrefetchToComplete()` is called.
-    bool put(TXO && txo, TXOInfo && info) {
-        if (prefetcherFut.future.valid()) {
-            // Prefetcher is busy, can't touch the data structures it is modifying now. Defer this until later.
-            deferredAdds.emplace_back(std::move(txo), std::move(info));
-            return false;
-        }
-        return add(std::move(txo), std::move(info));
-    }
-
-    bool remove(const TXO & txo) {
-        if (auto it = utxos.find(txo); it != utxos.end()) {
-            rm(it);
-            return true;
-        }
-        return false;
-    }
-
-    /// Limit dynamic memory usage to `bytes`. Precondition: Prefetcher must not be running (this is not checked)
-    void limitSize(size_t bytes) { do_limitSize(bytes); }
-}; // class Storage::UTXOCache
 
 
 Storage::Storage(const std::shared_ptr<const Options> & options_)
@@ -1900,7 +1671,6 @@ void Storage::compactAllDBs()
 
 void Storage::gentlyCloseDB()
 {
-    p->db.utxoCache.reset();
     p->db.txhash2txnumMgr.reset();
     p->db.txNumsDRA.reset();
     p->db.headersDRA.reset();
@@ -2978,43 +2748,19 @@ struct Storage::UTXOBatch::P {
     rocksdb::WriteBatch &batch; ///< batch writes/deletes end up in the utxoset and shunspent column families
     rocksdb::ColumnFamilyHandle &utxoset, &shunspent;
     std::atomic_int64_t &utxoCtr;
-    UTXOCache * const cache{}; ///< if not nullptr, there is a UTXOCache active and we should give it the batch writes.
 
-    P(rocksdb::WriteBatch &b, rocksdb::ColumnFamilyHandle &u, rocksdb::ColumnFamilyHandle &s, std::atomic_int64_t &uc, UTXOCache *c)
-        : batch(b), utxoset(u), shunspent(s), utxoCtr{uc}, cache{c} {}
+    P(rocksdb::WriteBatch &b, rocksdb::ColumnFamilyHandle &u, rocksdb::ColumnFamilyHandle &s, std::atomic_int64_t &uc)
+        : batch(b), utxoset(u), shunspent(s), utxoCtr{uc} {}
 };
 
 Storage::UTXOBatch::UTXOBatch(rocksdb::WriteBatch &b, rocksdb::ColumnFamilyHandle &u, rocksdb::ColumnFamilyHandle &s,
-                              std::atomic_int64_t &uc, UTXOCache *c)
-    : p{std::make_unique<P>(b, u, s, uc, c)} {}
+                              std::atomic_int64_t &uc)
+    : p{std::make_unique<P>(b, u, s, uc)} {}
 Storage::UTXOBatch::UTXOBatch(UTXOBatch &&o) { p.swap(o.p); }
 
-void Storage::setInitialSync(bool b) {
-    // take all locks now.. since this is a Big Deal.
-    std::scoped_lock guard(p->blocksLock, p->headerVerifierLock, p->blkInfoLock, p->mempoolLock);
-    assert(bool(p->db.utxoset) && bool(p->db.shunspent));
-    if (b && !p->db.utxoCache) {
-        if (options->utxoCache > 0) {
-            // enforce that the limit should be the lesser of max size_t and the amount of physical RAM available
-            uint64_t bytes = options->utxoCache;
-            const uint64_t limit = std::min<uint64_t>(Util::getAvailablePhysicalRAM(), std::numeric_limits<size_t>::max());
-            if (bytes > limit) {
-                Warning() << "utxo-cache: Requested UTXO cache size of " << bytes << " bytes exceeds available"
-                          << " physical memory; will limit the UTXO cache size to not exceed physical RAM.";
-                bytes = limit;
-            }
-            Log() << "utxo-cache: Enabled; UTXO cache size set to " << bytes << " bytes (available physical RAM: " << limit << " bytes)";
-            p->db.utxoCache = std::make_unique<UTXOCache>("Storage UTXO Cache", p->db.get(), p->db.utxoset, p->db.defReadOpts);
-            // Reserve about 3.6 million entries per GB of utxoCache memory given to us
-            // We need to do this, despite the extra memory bloat, because it turns out rehashing is very costly.
-            p->db.utxoCache->autoReserve(bytes);
-        } else {
-            Log() << "utxo-cache: Not enabled";
-        }
-    } else if (!b && p->db.utxoCache) {
-        Log() << "Initial sync ended, deleting UTXO Cache ...";
-        p->db.utxoCache.reset();
-    }
+void Storage::setInitialSync(bool)
+{
+    // this method used to do something (manage the UTXOCache), but is currently a no-op
 }
 
 void Storage::UTXOBatch::add(TXO &&txo, TXOInfo &&info, const CompactTXO &ctxo)
@@ -3032,9 +2778,6 @@ void Storage::UTXOBatch::add(TXO &&txo, TXOInfo &&info, const CompactTXO &ctxo)
     static const QString errMsgPrefix2("Failed to add an entry to the scripthash_unspent batch");
     GenericBatchPut(p->batch, &p->shunspent, shukey, shuval, errMsgPrefix2); // may throw, which is what we want
 
-    // handle cache (if any)
-    if (p->cache) p->cache->put(std::move(txo), std::move(info));
-
     ++p->utxoCtr; // tally utxo counts
 }
 
@@ -3047,9 +2790,6 @@ void Storage::UTXOBatch::remove(const TXO &txo, const HashX &hashX, const Compac
     // enqueue delete from scripthash_unspent db
     static const QString errMsgPrefix2("Failed to issue a batch delete for a utxo to the scripthash_unspent db");
     GenericBatchDelete(p->batch, &p->shunspent, mkShunspentKey(hashX, ctxo), errMsgPrefix2);
-
-    // handle cache (if any)
-    if (p->cache) p->cache->remove(txo);
 
     --p->utxoCtr; // tally utxo counts
 }
@@ -3161,10 +2901,6 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
 
         rocksdb::WriteBatch batch; // all writes to DB go through this batch in order to ensure atomicity
 
-        if (p->db.utxoCache && p->db.utxoCache->cacheMisses) {
-            p->db.utxoCache->prefetch(ppb); // will prefetch inputs in a thread
-        }
-
         const auto blockTxNum0 = p->txNumNext.load();
 
         p->recentBlockTxHashes.clear();
@@ -3271,7 +3007,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
 
                 {
                     // utxo batch block (updtes utxoset & scripthash_unspent tables)
-                    UTXOBatch utxoBatch{batch, *p->db.utxoset, *p->db.shunspent, p->utxoCt, p->db.utxoCache.get()};
+                    UTXOBatch utxoBatch{batch, *p->db.utxoset, *p->db.shunspent, p->utxoCt};
 
                     // reserve space in undo, if in saveUndo mode
                     if (undo) {
@@ -3309,27 +3045,18 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                         }
                     }
 
-                    if (p->db.utxoCache)
-                        // we need the inputs resolved now, so end the prefetch
-                        // note this may stall and also will empty out p->db.utxoCache->deferredAdds
-                        p->db.utxoCache->waitForPrefetchToComplete();
-
                     // add spends (process inputs)
                     unsigned inum = 0;
                     for (auto & in : ppb->inputs) {
                         const TXO txo{.txHash = in.prevoutHash, .outN = in.prevoutN};
-                        const TXOInfo *pinfo{};
                         if (!inum) {
                             // coinbase.. skip
                         } else if (in.parentTxOutIdx.has_value()) {
                             // was an input that was spent in this block so it's ok to skip.. we never added it to utxo set
                             if constexpr (debugPrt)
                                 Debug() << "Skipping input " << txo.toString() << ", spent in this block (output # " << *in.parentTxOutIdx << ")";
-                        } else if (std::optional<TXOInfo> opt; (p->db.utxoCache && (pinfo = p->db.utxoCache->get(txo)))
-                                                               || ((opt = utxoGetFromDB(txo)) && (pinfo = &*opt)) ) {
-                            // CAUTION: `pinfo` might be pointing into the UTXOCache, as such, removing from the
-                            // UTXOCache should be the last action involving `info` and/or `pinfo`.
-                            const TXOInfo & info = *pinfo;
+                        } else if (std::optional<TXOInfo> opt = utxoGetFromDB(txo)) {
+                            const TXOInfo & info = *opt;
                             if (info.confirmedHeight.has_value() && *info.confirmedHeight != ppb->height) {
                                 // was a prevout from a previos block.. so the ppb didn't have it in the 'involving hashx' set..
                                 // mark the spend as having involved this hashX for this ppb now.
@@ -3351,8 +3078,7 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
                             if (undo) { // save undo info, if we are in saveUndo mode
                                 undo->delUndos.emplace_back(txo, info);
                             }
-                            // Enqueue deletion from db and/or immediate removal from UTXOCache -- note this must be
-                            // called last as it may invalidate `pinfo` and/or `info`!
+                            // Enqueue deletion from db
                             utxoBatch.remove(txo, info.hashX, CompactTXO(info.txNum, txo.outN)); // enqueue deletion
                         } else {
                             QString s;
@@ -3503,10 +3229,6 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
             undoVerifierOnScopeEnd.disable(); // indicate to the "Defer" object declared at the top of this function that it shouldn't undo anything anymore as we are happy now with the db state now.
         }
 
-        /* If UTXO cache is enabled, enforce size limit */
-        if (size_t limit; p->db.utxoCache && (limit = options->utxoCache) > 0u)
-            p->db.utxoCache->limitSize(limit);
-
     } /// release locks
 
     // now, do notifications with locks NOT held (we are being defensive: in the future we may modify below to take e.g. mempool lock)
@@ -3579,11 +3301,6 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
         std::scoped_lock guard(p->blocksLock, p->headerVerifierLock, p->blkInfoLock, p->mempoolLock);
 
         const auto t0 = Util::getTimeNS();
-
-        // First, disable the UTXO Cache, if it happened to be enabled.
-        // We must do this because the way the UTXO Cache works is fundamentally at odds with assumptions we have
-        // while we undo.
-        p->db.utxoCache.reset();
 
         // NOTE: For very full mempools, this clear has the potential to stall the app after the reorg
         // completes since the app will have to re-download the whole mempool state again.

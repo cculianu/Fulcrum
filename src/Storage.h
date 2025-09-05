@@ -461,7 +461,7 @@ protected:
     /// UTXOCache. Called internally from addBlock and undoLatestBlock().
     struct UTXOBatch {
         UTXOBatch(rocksdb::WriteBatch &batch, rocksdb::ColumnFamilyHandle &utxoset, rocksdb::ColumnFamilyHandle &shunspent,
-                  std::atomic_int64_t &utxoCtr, UTXOCache *cache = nullptr);
+                  std::atomic_int64_t &utxoCtr);
         UTXOBatch(UTXOBatch &&);
         /// Enqueue an add of a utxo -- does not take effect in db until p->batch is written to db (for non-UTXOCache mode),
         /// or until the cache is written to db if in UTXOCache mode -- may throw.

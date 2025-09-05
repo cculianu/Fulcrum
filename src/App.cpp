@@ -511,17 +511,10 @@ void App::parseArgs()
         QString("filename")
     },
     {
-       "utxo-cache",
-       QString("If specified, " APPNAME " will use a UTXO Cache that consumes extra memory but may sync faster."
-               " To use this feature, you must specify a memory value in MB to allocate to the cache. It is"
-               " recommended that you give this facility at least 500 MB for it to really pay off, although any amount"
-               " of memory given (minimum 64 MB) should be beneficial. Note that this feature is currently experimental."
-               " The default is off (0). This option only takes effect on initial sync, otherwise this option has no"
-               " effect.\n"),
-       QString("MB"),
+       "utxo-cache", QString("<hidden>"), QString("MB") // no longer supported in Fulcrum 2.0; error to user it's gone now and to use db_mem
     },
     {
-       "fast-sync", QString("<hidden>"), QString("MB")
+       "fast-sync", QString("<hidden>"), QString("MB") // no longer supported in Fulcrum 2.0; error to user it's gone now and to use db_mem
     },
     {
         "rpa",
@@ -540,6 +533,13 @@ void App::parseArgs()
     },
     {
         "no-upnp", QString("<hidden>")
+    },
+    {
+        "db_mem",
+         QString("Specify roughly the maximum amount of memory to give to rocksb. Larger values offer better performance,"
+                 " at the expense of memory consumption. Specify a floating-point or integer value in MiB (1 MiB = 1048576 bytes)."
+                 " Default is: %1.\n").arg(options->db.defaultMaxMem / 1024.0 / 1024.0, 0, 'f', 1),
+         QString("MB")
     },
     {
        "dump-sh",
@@ -1235,9 +1235,9 @@ void App::parseArgs()
         // log this later in case we are in syslog mode
         Util::AsyncOnObject(this, [klfn]{ Debug() << "config: db_keep_log_file_num = " << klfn; });
     }
-    if (conf.hasValue("db_mem")) {
+    if (const bool pset = parser.isSet("db_mem"); pset || conf.hasValue("db_mem")) {
         bool ok;
-        const double mb = conf.doubleValue("db_mem", options->db.defaultMaxMem, &ok);
+        const double mb = pset ? parser.value("db_mem").toDouble(&ok) : conf.doubleValue("db_mem", options->db.defaultMaxMem, &ok);
         if (const size_t bytes = mb*size_t(1024*1024); !ok || mb < 0. || !options->db.isMaxMemInBounds(bytes))
             throw BadArgs(QString("db_mem: bad value. Specify a value in the range [%1, %2]")
                           .arg(options->db.maxMemMin / 1024. / 1024., 0, 'f', 1).arg(options->db.maxMemMax / 1024. / 1024., 0, 'f', 1));
@@ -1385,8 +1385,9 @@ void App::parseArgs()
         options->dumpScriptHashes = outFile; // we do no checking here, but Controller::startup will throw BadArgs if it cannot open this file for writing.
     }
 
-    // CLI: --utxo-cache (experimental) (deprecated name: --fast-sync)
-    // conf: utxo_cache/utxo-cache (or fast-sync, which is the deprecated name)
+    // Error out and inform the user to use db_mem if user asked for utxo-cache/utxo_cache/fast-sync
+    // CLI: --utxo-cache or --fast-sync
+    // conf: utxo_cache/utxo-cache/fast-sync
     if (const auto & [key, strVal, isCLI] = [&conf, &parser]() -> std::tuple<QString, QString, bool> {
             for (const QString k : {"utxo-cache", "utxo_cache", "fast-sync"}) {
                 if (!k.contains(QChar('_')) && parser.isSet(k)) return {k, parser.value(k), true};
@@ -1395,28 +1396,19 @@ void App::parseArgs()
             return {};
         }(); !key.isEmpty())
     {
-        if (key == "fast-sync") {
-            // Warn about deprecated --fast-sync option
-            if (isCLI)
-                Warning() << "The CLI argument --fast-sync has been renamed to --utxo-cache. The old argument"
-                             " --fast-sync is deprecated. In the future, please use --utxo-cache instead.";
-            else
-                Warning() << "The conf file option `fast-sync` has been renamed to `utxo_cache`. The old option"
-                             " `fast-sync` is deprecated. Please edit your conf file and use `utxo_cache` instead.";
-        }
-        bool ok{};
-        const double val = strVal.toDouble(&ok);
-        if (!ok || val < 0.)
-            throw BadArgs(QString("%1: Please specify a positive numeric value in MB, or 0 to disable").arg(key));
-        const uint64_t bytes = static_cast<uint64_t>(val * 1e6);
-        if (constexpr auto limit = uint64_t(std::numeric_limits<size_t>::max()); bytes > limit)
-            // Check for 32-bit archs: in case we ever decide to support them (this branch is never taken in current codebase)
-            throw BadArgs(QString("%3: Specified value (%1 bytes) is too large to be addressed by this machine"
-                                  " (limit is: %2 bytes)").arg(bytes).arg(qulonglong(limit)).arg(key));
-        else if (bytes > 0 && bytes < Options::minUtxoCache)
-            throw BadArgs(QString("%3: Specified value %1 is too small (minimum: %2 MB)")
-                              .arg(strVal, QString::number(Options::minUtxoCache / 1e6, 'f', 1), key));
-        options->utxoCache = static_cast<size_t>(bytes);
+        // Error-out since this option is no longer supported and turns out to slow things down and eat memory.
+        QString pre, keyDecorated;
+        if (isCLI)
+            pre = "The CLI argument " + (keyDecorated = "--" + key);
+        else
+            pre = "The conf file option " + (keyDecorated = "`" + key + "`");
+
+        throw BadArgs("The UTXO cache facility has been removed, use `db_mem` instead!\n\n"
+                      + pre + " has been removed from " + APPNAME + " since it is incompatible with the"
+                      "\nimproved database consistency guarantees of " APPNAME ". If you wish to leverage system memory to"
+                      "\nmaximize initial sync speed, then please set the `db_mem` conf file option and/or the --db_mem"
+                      "\nCLI option and provide additional memory there, to the DB itsef, which is a better use of"
+                      "\nsystem resources than the old " + keyDecorated + " option ever was.\n");
     }
 
     // conf: anon_logs

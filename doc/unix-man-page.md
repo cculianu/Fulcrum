@@ -1,6 +1,6 @@
 % FULCRUM(1) Version 2.0 | Fulcrum Manual
 % Fulcrum is written by Calin Culianu (cculianu)
-% September 01, 2025
+% September 05, 2025
 
 # NAME
 
@@ -121,14 +121,14 @@ Once the server finishes synching it will behave like an ElectronX/ElectrumX ser
 --pidfile
 :   If specified, Fulcrum will write its process ID to this file on startup. Useful for integration with monitoring software.
 
---utxo-cache
-:   If specified, Fulcrum will use a UTXO Cache that consumes extra memory but may sync up faster. To use this feature, you must specify a memory value in MB to allocate to the cache. It is recommended that you give this facility at least 500 MB for it to really pay off, although any amount of memory given (minimum 64 MB) should be beneficial. Note that this feature is currently experimental. The default is off (0). This option only takes effect on initial sync, otherwise this option has no effect.
-
 --rpa
 :   Explicitly enable the Reusable Payment Address index and offer the associated "blockchain.rpa.*" RPC methods to clients. To explicitly disable this facility, use the CLI arg --no-rpa. Default is: auto (enabled for BCH only).
 
 --upnp
 :   Use UPnP to tell your router to automatically allow incoming connections for all all TCP, SSL, WS, and WSS ports. To explicitly disable UPnP, use the CLI arg --no-upnp. Default is: disabled.
+
+--db_mem <MB>
+:   Specify roughly the maximum amount of memory to give to rocksb. Larger values offer better performance, at the expense of memory consumption. Specify a floating-point or integer value in MiB (1 MiB = 1048576 bytes). Default is: 1024.0.
 
 --dump-sh <outputfile>
 :   *This is an advanced debugging option*. Dump script hashes. If specified, after the database is loaded, all of the script hashes in the database will be written to outputfile as a JSON array.
