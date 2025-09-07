@@ -1715,9 +1715,25 @@ void Storage::checkFulc1xUpgradeDB()
 
     const rocksdb::Options & opts = p->db.opts;
 
-    // Do RecordFile import first
+    // Note: We use this extreme batchSize because smaller batches get exponentially slower for bulk loads!!
+    const size_t batchSize = []{
+        uint64_t const ram = Util::getTotalPhysicalRAM(), GiB = 1024u * 1024u * 1024u;
+        // Allow about 2.5 million per GiB of RAM, 1 million minimum. We don't want to overdo it to avoid OOM.
+        return std::max<size_t>(1'000'000ull, ram / GiB * 2'500'000ull);
+    }();
+    Debug() << "Using batch size: " << batchSize;
+
+    auto performFlush = [&](const auto &name, const auto &info) {
+        Debug() << "Flushing column family: " << name << " ...";
+
+        rocksdb::FlushOptions fopts;
+        fopts.wait = true; fopts.allow_write_stall = true;
+        if (auto st = db->Flush(fopts, info.handle); !st.ok())
+            Warning() << "Flush of " << name << ": " << StatusString(st);
+        db->SyncWAL();
+    };
+
     for (const auto & [sname, info] : p->db.colFamsTable) {
-        constexpr size_t batchSize = 1'000'000;
         const auto name = QString::fromStdString(sname);
         const auto fname = dataDirPrefix + name;
         if (!info.dra) {
@@ -1822,16 +1838,9 @@ void Storage::checkFulc1xUpgradeDB()
                 Debug() << "Processed " << batchCt << " rows in " << t1.msecStr() << " msec";
                 ++totalBatchCt;
             }
-            // perform flush
-            {
-                Debug() << "Flushing column family: " << name << " ...";
 
-                rocksdb::FlushOptions fopts;
-                fopts.wait = true; fopts.allow_write_stall = true;
-                if (auto st = db->Flush(fopts, info.handle); !st.ok())
-                    Warning() << "Flush of " << name << ": " << StatusString(st);
-                db->SyncWAL();
-            }
+            // perform flush
+            performFlush(name, info);
 
             const auto mb = QString("%1").arg(byteCt / 1e6, 0, 'f', 1);
             Log() << "Imported " << totalCt << " rows, " << mb << " MB, in " << t0.secsStr() << " secs";
@@ -1844,52 +1853,55 @@ void Storage::checkFulc1xUpgradeDB()
             if (!QDir(fname).removeRecursively()) Warning() << "Error removing directory: " << fname;
         } else {
             // RecordFile -> DBRecordArray import
+            const size_t rfBatchSize = batchSize / 10u;
             DBRecordArray *dra = info.dra->get();
             auto rf = std::make_unique<RecordFile>(fname, dra->recordSize(), dra->magicBytes());
             const size_t numRecs = rf->numRecords();
             Log() << "Importing " << numRecs << " records from RecordFile `" << name << "` ...";
-            Tic t0;
+            Tic t0, t1;
             long lastPrt = 0;
-            uint64_t totalCt{}, byteCt{};
-            for (size_t recNum = 0, lastBatchSize = 0; recNum < numRecs; recNum += lastBatchSize) {
-                Tic t1;
-                QString err;
-                auto records = rf->readRecords(recNum, batchSize, &err);
-                lastBatchSize = records.size();
-                if (!lastBatchSize) [[unlikely]] throw DatabaseError("Error reading RecordFile: " + err);
-                rocksdb::WriteBatch batch;
-                {
-                    auto ctx = dra->beginBatchWrite(batch);
-                    if (!recNum) [[unlikely]] ctx.truncate(0); // first pass through, truncate DBRecordArray to 0.
-                    for (const auto & rec : records) {
-                        if (rec.isEmpty()) [[unlikely]] throw DatabaseError("Empty record found in recordfile!");
-                        if (!ctx.append(rec, &err)) [[unlikely]] throw DatabaseError("Error writing to DBRecordArray: " + err);
-                        byteCt += static_cast<size_t>(rec.size());
-                        totalByteCt += static_cast<size_t>(rec.size());
-                        ++totalCt;
-                        ++totalRowCt;
-                    }
-                    ++totalBatchCt;
-                }
+            uint64_t totalCt{}, byteCt{}, writeBatchCt{};
+            rocksdb::WriteBatch batch;
+            auto doDBWrite = [&] {
                 if (auto st = db->Write(p->db.defWriteOpts, &batch); !st.ok())
                     throw DatabaseError("Error writing batch: " + StatusString(st));
-                Debug() << "Processed " << lastBatchSize << " records in " << t1.msecStr() << " msec";
+                Debug() << "Processed " << writeBatchCt << " records in " << t1.msecStr() << " msec";
                 if (auto now = t0.secs<long>(); now >= lastPrt + 10) {
                     lastPrt = now;
                     const auto mb = QString("%1").arg(byteCt / 1e6, 0, 'f', 1);
                     Log() << "Progress: " << totalCt << " records, " << mb << " MB, in " << t0.secsStr() << " secs";
                 }
-            }
-            // perform flush
-            {
-                Debug() << "Flushing column family: " << sname << " ...";
+                writeBatchCt = 0;
+                t1 = Tic();
+            };
+            for (size_t recNum = 0, lastBatchSize = 0; recNum < numRecs; recNum += lastBatchSize) {
+                QString err;
+                auto records = rf->readRecords(recNum, rfBatchSize, &err);
+                lastBatchSize = records.size();
+                if (!lastBatchSize) [[unlikely]]
+                    throw DatabaseError("Error reading RecordFile: " + err);
 
-                rocksdb::FlushOptions fopts;
-                fopts.wait = true; fopts.allow_write_stall = true;
-                if (auto st = db->Flush(fopts, info.handle); !st.ok())
-                    Warning() << "Flush of " << name << ": " << StatusString(st);
-                db->SyncWAL();
+                auto ctx = dra->beginBatchWrite(batch);
+                if (!recNum) [[unlikely]] ctx.truncate(0); // first pass through, truncate DBRecordArray to 0.
+                for (const auto & rec : records) {
+                    if (rec.isEmpty()) [[unlikely]] throw DatabaseError("Empty record found in recordfile!");
+                    if (!ctx.append(rec, &err)) [[unlikely]] throw DatabaseError("Error writing to DBRecordArray: " + err);
+                    byteCt += static_cast<size_t>(rec.size());
+                    totalByteCt += static_cast<size_t>(rec.size());
+                    ++totalCt;
+                    ++totalRowCt;
+                    ++writeBatchCt;
+                }
+                ++totalBatchCt;
+
+                if (writeBatchCt >= batchSize)
+                    doDBWrite();
             }
+            if (writeBatchCt)
+                doDBWrite();
+
+            // perform flush
+            performFlush(name, info);
 
             const auto mb = QString("%1").arg(byteCt / 1e6, 0, 'f', 1);
             Log() << "Imported " << totalCt << " records, " << mb << " MB, in " << t0.secsStr() << " secs";
