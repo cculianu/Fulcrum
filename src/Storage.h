@@ -50,6 +50,7 @@
 
 // fwd decls used by Storage private(s)
 namespace rocksdb {
+class DB;
 class ColumnFamilyHandle;
 class WriteBatch;
 }
@@ -532,6 +533,9 @@ private:
     void save_impl(SaveSpec override = SaveItem::None); ///< may abort app on database failure (unlikely).
     void saveMeta_impl(); ///< This may throw if db error. Caller should hold locks or be in single-threaded mode.
 
+    bool isDirty_impl(rocksdb::DB *db, rocksdb::ColumnFamilyHandle *cf) const;
+
+    void checkFulc1xUpgradeDB(); ///< may throw -- must be called from startup() before the below...
     void loadCheckHeadersInDB(); ///< may throw -- called from startup()
     void loadCheckUTXOsInDB(); ///< may throw -- called from startup()
     void loadCheckShunspentInDB(); ///< may throw -- called from startup()

@@ -61,7 +61,7 @@
 #include <tuple>
 #include <utility>
 
-App::AtomicInstanceT App::_globalInstance = nullptr;
+App::AtomicInstanceT App::s_globalInstance = nullptr;
 
 App::App(int argc, char *argv[])
     : QCoreApplication (argc, argv), tpool(std::make_unique<ThreadPool>(this))
@@ -71,8 +71,8 @@ App::App(int argc, char *argv[])
     // formatting & parsing.
     RAII localeParanoia([]{setCLocale();}, []{setCLocale();});
 
-    assert(!_globalInstance);
-    _globalInstance = this;
+    assert(!s_globalInstance);
+    s_globalInstance = this;
     register_MetaTypes();
 
     options = std::make_shared<Options>();
@@ -112,15 +112,21 @@ App::~App()
     }
     Debug() << "App d'tor";
     Log() << "Shutdown complete";
-    _globalInstance = nullptr;
+    s_globalInstance = nullptr;
     /// child objects will be auto-deleted, however most are already gone in cleanup() at this point.
 }
 
 void App::signalHandler(int sig)
 {
     // We must use writeStdErr() below since it is async signal safe (fprintf, std::cerr, etc are not).
-    constexpr int thresh = 5;
     using Util::AsyncSignalSafe::writeStdErr, Util::AsyncSignalSafe::SBuf;
+
+    if (static_cast<int>(ignoreSigs)) { // signals ignored; DB upgrade from Fulcrum 1.x -> 2.0 (see Storage.cpp)
+        writeStdErr(SBuf{" -- Ignoring signal ", sig, " (app is temporarily uninterruptible)"});
+        return;
+    }
+
+    constexpr int thresh = 5;
     if (const auto ct = ++sigCtr; ct == 1) {
         writeStdErr(SBuf{" -- Caught signal ", sig, ", exiting ..."});
     } else if (ct < thresh) {
@@ -133,6 +139,12 @@ void App::signalHandler(int sig)
     if (const auto optError = exitSem.release()) { // wake exitThr
         writeStdErr(*optError); // unlikely to occur, but there was an error here!
     }
+}
+
+void App::setSignalsIgnored(bool ignore)
+{
+    ignoreSigs = static_cast<int>(ignore);
+    Debug() << "setSignalsIgnored: " << int(ignore);
 }
 
 void App::startup_Sighandlers()
@@ -540,6 +552,10 @@ void App::parseArgs()
                  " at the expense of memory consumption. Specify a floating-point or integer value in MiB (1 MiB = 1048576 bytes)."
                  " Default is: %1.\n").arg(options->db.defaultMaxMem / 1024.0 / 1024.0, 0, 'f', 1),
          QString("MB")
+    },
+    {
+        "db-upgrade", "Enable " APPNAME " 1.x -> 2.x DB upgrade. Use this option the first time you install " APPNAME
+                       " 2.x if you wish to upgrade the already-synched 1.x datadir to the new 2.x format.\n"
     },
     {
        "dump-sh",
@@ -1553,6 +1569,11 @@ void App::parseArgs()
                               << " UPnP support!";
                 });
         }
+    }
+
+    // CLI: --db-upgrade
+    if (parser.isSet("db-upgrade")) {
+        options->db.doUpgrade = true;
     }
 
 }

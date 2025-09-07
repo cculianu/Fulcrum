@@ -28,6 +28,7 @@
 #include "Storage.h"
 #include "Storage/ConcatOperator.h"
 #include "Storage/DBRecordArray.h"
+#include "Storage/RecordFile.h"
 #include "SubsMgr.h"
 #include "VarInt.h"
 
@@ -51,22 +52,28 @@
 #include <QByteArray>
 #include <QDir>
 #include <QFileInfo>
+#include <QStorageInfo> // used to check disk size when upgrading db from Fulcrum 1.x -> 2.x
 #include <QSysInfo>
 #include <QVector> // we use this for the Height2Hash cache to save on memcopies since it's implicitly shared.
 
 #include <algorithm>
 #include <atomic>
 #include <cassert>
+#include <chrono>
+#include <cmath>
 #include <cstddef> // for std::byte, offsetof, ptrdiff_t
 #include <cstdlib>
 #include <cstring> // for memcpy
 #include <functional>
+#include <future>
 #include <limits>
 #include <map>
 #include <mutex>
 #include <optional>
 #include <set>
 #include <string>
+#include <string_view>
+#include <thread>
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -1141,7 +1148,7 @@ struct Storage::Pvt
 
     Pvt(const Pvt &) = delete;
 
-    constexpr int blockHeaderSize() { return BTC::GetBlockHeaderSize(); }
+    static constexpr int blockHeaderSize() noexcept { return BTC::GetBlockHeaderSize(); }
 
     /* NOTE: If taking multiple locks, all locks should be taken in the order they are declared, to avoid deadlocks. */
 
@@ -1174,27 +1181,33 @@ struct Storage::Pvt
                                     *txhash2txnum{}, // new: index of txhash -> txNumsFile
                                     *rpa{}; // new: height -> Rpa::PrefixTable
 
-        struct ColFamHandleAndOptsRefs {
+        // DBRecordArrays (formerly RecordFiles), these rely on the `db` and ColumnFamilyHandles above being properly opened.
+        std::unique_ptr<DBRecordArray> txNumsDRA;
+        std::unique_ptr<DBRecordArray> headersDRA;
+
+        struct ColFamSpecificRefs {
             rocksdb::ColumnFamilyHandle *& handle;
             const rocksdb::ColumnFamilyOptions & options;
+            std::unique_ptr<DBRecordArray> *const dra = nullptr; // points to null or txNumsDRA or headersDRA above.
         };
-        // Some introspection here.. these tuples point to some of the above members
-        const std::map<std::string, ColFamHandleAndOptsRefs> colFamsTable = {
-            { "meta",               {.handle = meta,         .options = opts} },
+        // Some introspection here: the ColFamSpecificRefs point to some of the above members.
+        // Note: The order here is important since it influences the order of checkFulc1xUpgradeDB() import!
+        const std::vector<std::pair<std::string, ColFamSpecificRefs>> colFamsTable = {
+            { "meta",               {.handle = meta,         .options = opts} }, // NB: this *must* be first
             { "blkinfo",            {.handle = blkinfo,      .options = opts} },
             { "utxoset",            {.handle = utxoset,      .options = opts} },
             { "scripthash_history", {.handle = shist,        .options = shistOpts} },
             { "scripthash_unspent", {.handle = shunspent,    .options = opts} },
             { "undo",               {.handle = undo,         .options = opts} },
-            { "txnum2txhash",       {.handle = txnum2txhash, .options = txnum2txhashOpts} },
-            { "headers",            {.handle = headers,      .options = headersOpts} },
+            { "txnum2txhash",       {.handle = txnum2txhash, .options = txnum2txhashOpts, .dra = &txNumsDRA} },
+            { "headers",            {.handle = headers,      .options = headersOpts,      .dra = &headersDRA} },
             { "txhash2txnum",       {.handle = txhash2txnum, .options = txhash2txnumOpts} },
             { "rpa",                {.handle = rpa,          .options = opts} },
         };
-
-
-        std::unique_ptr<DBRecordArray> txNumsDRA;
-        std::unique_ptr<DBRecordArray> headersDRA;
+        auto colFamsTableFind(std::string_view name) {
+            return std::find_if(colFamsTable.begin(), colFamsTable.end(),
+                                [name](const auto &pair){ return pair.first == name; });
+        }
 
         std::unique_ptr<TxHash2TxNumMgr> txhash2txnumMgr; ///< provides a bit of a higher-level interface into the db
 
@@ -1384,13 +1397,14 @@ void Storage::startup()
     // open DB and all column families ...
     openOrCreateDB();
 
+    // check and/or do Fulcrum 1.x -> 2.x DB upgrade (this is different than the internal "checkUpgradeDBVersion" done later
+    checkFulc1xUpgradeDB();
+
     // load/check meta
     {
         const QString errMsg1{"Incompatible database format -- delete the datadir and resynch."};
         const QString errMsg2{errMsg1 + " RocksDB error"};
-        if (const auto opt = GenericDBGet<Meta>(p->db, p->db.meta, kMeta, true, errMsg2);
-                opt.has_value())
-        {
+        if (const auto opt = GenericDBGet<Meta>(p->db, p->db.meta, kMeta, true, errMsg2)) {
             const Meta &m_db = *opt;
             if (!m_db.isMagicOk() || !m_db.isVersionSupported()
                     || (m_db.isMinimumExtraPlatformInfoVersion() && m_db.platformBits != p->meta.platformBits)) {
@@ -1486,12 +1500,16 @@ void Storage::openOrCreateDB()
     headersOpts = opts;
     headersOpts.merge_operator = p->db.concatOperatorHeaders = std::make_shared<StorageDetail::ConcatOperator>();
 
-    const auto &colFamsTable = p->db.colFamsTable;
-    auto colFamsNeeded = colFamsTable;
+    using ColFamsTableRow = decltype(p->db.colFamsTable)::value_type;
+    std::map<ColFamsTableRow::first_type, ColFamsTableRow::second_type> colFamsNeeded;
+    for (const auto & pair : p->db.colFamsTable)
+        if ( ! colFamsNeeded.emplace(pair).second) [[unlikely]]
+            throw InternalError(QString("INTERNAL ERROR! Duplicate colFamsTable key %1 in %2. FIXME!")
+                                    .arg(QString::fromStdString(pair.first), __func__));
 
     // First, open the DB, and then determine which column families it has, and open them all.
     {
-        const QString mainDBName = "fulcrum_db";
+        const QString mainDBName = "fulc2_db";
         const QString path = options->datadir + QDir::separator() + mainDBName;
         rocksdb::Status s;
 
@@ -1565,7 +1583,7 @@ void Storage::openOrCreateDB()
     // Lastly, assign the ColumnFamilyHandle pointers ...
     for (rocksdb::ColumnFamilyHandle *h : p->db.columnFamilies) {
         const auto &name = h->GetName();
-        if (auto it = colFamsTable.find(name); it != colFamsTable.end()) [[likely]] {
+        if (auto it = p->db.colFamsTableFind(name); it != p->db.colFamsTable.end()) [[likely]] {
             // assign ptr; this modifies members: p.db.meta, p.db.blkinfo, etc..
             it->second.handle = h;
         } else if (name != rocksdb::kDefaultColumnFamilyName) [[unlikely]] {
@@ -1585,7 +1603,320 @@ void Storage::openOrCreateDB()
         || !p->db.utxoset || !p->db.undo || !p->db.txnum2txhash || !p->db.headers) [[unlikely]]
         throw InternalError("A required column family handle is still nullptr! FIXME!");
 
+    // Open the two DBRecordArrays now. Note: Changing the recordSize, bucketNItems, and magic params *WILL* produce a
+    // database incompatibility!
+    p->db.txNumsDRA =  std::make_unique<DBRecordArray>(*p->db, *p->db.txnum2txhash,
+                                                       /* recSize = */ HashLen,
+                                                       /* bucketNItems = */ 16,
+                                                       /* magic = */ 0x000012e2); // may throw
+    p->db.headersDRA = std::make_unique<DBRecordArray>(*p->db, *p->db.headers,
+                                                       /* recSz = */ size_t(p->blockHeaderSize()),
+                                                       /* bucketNItems = */ 8,
+                                                       /* magic = */ 0x00f026a1); // may throw
+
+
     Log() << "DB memory: " << QString::number(options->db.maxMem / 1024. / 1024., 'f', 2) << " MiB";
+}
+
+void Storage::checkFulc1xUpgradeDB()
+{
+    // ---- Fulcrum 1.x DB upgrade test code ----
+    // TODO REFACTOR XXX This is here for testing (for now)
+
+    // Ensure "meta" column family is first (below code relies on this invariant)
+    if (p->db.colFamsTableFind("meta") != p->db.colFamsTable.begin())
+        throw InternalError("The `meta` column family MUST be listed first in `colFamsTable`! FIXME!");
+
+    rocksdb::DB * const db = p->db;
+    assert(db);
+    const rocksdb::Options & opts = p->db.opts;
+
+    const QString dataDirPrefix = options->datadir + QDir::separator();
+    qint64 largestElementSeenByteSize{};
+    const bool hasAllFulcrum1DBElements = [&] {
+        // check if all of the recordfiles and db dirs exist
+        for (const auto & [name, params] : p->db.colFamsTable) {
+            if (params.dra) { // old 1.x format for this item is a RecordFile, check the file exists
+                QFileInfo info(dataDirPrefix + QString::fromStdString(name));
+                if (!info.exists() || !info.isFile())
+                    return false;
+                largestElementSeenByteSize = std::max(info.size(), largestElementSeenByteSize);
+            } else { // old 1.x format is a separate database dir
+                QDir dir(dataDirPrefix + QString::fromStdString(name));
+                if (! dir.exists())
+                    return false;
+                qint64 totalSize = 0;
+                for (const auto & info : dir.entryInfoList(QDir::Filter::Files | QDir::Filter::NoSymLinks))
+                    totalSize += info.size();
+                largestElementSeenByteSize = std::max(totalSize, largestElementSeenByteSize);
+            }
+        }
+        return true;
+    }();
+
+    if (!hasAllFulcrum1DBElements) {
+        if (options->db.doUpgrade)
+            Warning() << "CLI argument --db-upgrade requested but no " << APPNAME << " 1.x database found in "
+                      << options->datadir;
+        return;
+    } // else ...
+    // hasAllFulcrum1DBElements == true below..
+    if (!options->db.doUpgrade)
+        throw BadArgs(QString("\nThe data directory \"%1\" contains an older %2 1.x database. It can be upgraded"
+                              "\nto the latest format, but you need to explicitly request this to occur, since"
+                              "\nthe upgrade process is destructive and irreversible.\n\n"
+                              "Please specify CLI argument --db-upgrade to upgrade the database to the latest"
+                              "\nformat.").arg(options->datadir, APPNAME));
+
+    // Ok, upgrade DB
+
+    constexpr int timeoutSecs = 10;
+    auto PrintCountdownMessage = [&] {
+        Log() << "\n\n************************\n"
+                 "*** Database Upgrade ***\n"
+                 "************************\n"
+                 "This will take some time and is irreversible and uninterruptible. If unsure, hit CTRL-C"
+                 "\nnow and either take a backup of the database directory or do a full resynch to bitcoind."
+                 "\nOtherwise, wait for the timeout to occur and the upgrade process will commence.\n";
+        for (int i = 0; i < timeoutSecs && !app()->signalsCaught(); ++i) {
+            const auto secs = (timeoutSecs - i);
+            Log() << "Upgrade will begin in " << secs << Util::Pluralize(" second", secs) << ", hit CTRL-C now to abort ...";
+            using namespace std::chrono_literals;
+            std::this_thread::sleep_for(1s);
+        };
+    };
+    if (QThread::currentThread() != app()->thread()) {
+        std::promise<void> promise;
+        auto future = promise.get_future();
+        Util::AsyncOnObject(app(), [&]{
+            PrintCountdownMessage();
+            promise.set_value();
+        });
+        future.get(); // wait for above to complete
+    } else {
+        PrintCountdownMessage();
+    }
+    if (app()->signalsCaught()) throw UserInterrupted("User interrupted, aborting upgrade");
+
+    // Size sanity check -- we need enough space for each old DB table and/or record file to be copied and then
+    // deleted item by item...paranoia: require largest element seen size + 1GB
+    if (qint64 req = largestElementSeenByteSize + 1'000'000'000u, avail = QStorageInfo(options->datadir).bytesAvailable(); avail < req)
+        throw Exception(QString("Not enough disk space for \"%1\" to proceed. Free up at least %2 MB of space.")
+                            .arg(options->datadir).arg(static_cast<qint64>(std::ceil((req - avail) / 1024.0 / 1024.0))));
+
+    // Commence the upgrade....!
+    Tic totalElapsed;
+    uint64_t totalRowCt{}, totalByteCt{}, totalBatchCt{};
+    size_t totalTableCt{};
+
+    // We disable signals since it would be *unsafe* to close the app during this process!
+    app()->setSignalsIgnored(true);
+    Defer d([]{ app()->setSignalsIgnored(false); }); // restore signals on scope end
+
+    // Do RecordFile import first
+    for (const auto & [sname, info] : p->db.colFamsTable) {
+        constexpr size_t batchSize = 1'000'000;
+        const auto name = QString::fromStdString(sname);
+        const auto fname = dataDirPrefix + name;
+        if (!info.dra) {
+            // DB table -> DB column family import (full db table copy for each Fulcrum 1.x table)
+            Tic t0;
+            Log() << "Importing table `" << name << "` ...";
+            rocksdb::Options dbopts;
+            dbopts.IncreaseParallelism(int(Util::getNPhysicalProcessors()));
+            dbopts.OptimizeLevelStyleCompaction();
+            dbopts.create_if_missing = false;
+            dbopts.error_if_exists = false;
+            dbopts.max_open_files = opts.max_open_files;
+            dbopts.keep_log_file_num = opts.keep_log_file_num;
+            dbopts.compression = opts.compression;
+            dbopts.use_fsync = opts.use_fsync;
+            if (info.options.merge_operator) dbopts.merge_operator = info.options.merge_operator;
+            dbopts.comparator = info.options.comparator; // should always be default BytewiseComparator, but defensively we ensure that is the case
+
+            rocksdb::DB *dbin_raw{};
+            if (auto st = rocksdb::DB::Open(dbopts, fname.toStdString(), &dbin_raw); !st.ok()) {
+                throw DatabaseError("rocksdb::DB::Open returned error for " + name + ": " + StatusString(st));
+            }
+            std::unique_ptr<rocksdb::DB> dbin(dbin_raw);
+            const bool isMetaTable = info.handle == p->db.meta;
+
+            // If encountering the "meta" table (which is always first!), check that Fulcrum 1.x did not have the DB
+            // flaged as "dirty"!
+            if (isMetaTable && isDirty_impl(dbin.get(), dbin->DefaultColumnFamily())) {
+                throw DatabaseError(QString("It appears that the database in \"%1\" from %2 1.x is corrupt. Cannot"
+                                            " proceed with DB upgrade. Sorry!"
+                                            "\n\nPlease delete the datadir and resynch to bitcoind.\n")
+                                        .arg(fname, APPNAME));
+            }
+
+            // Everything so far ok, create an iterator over the input DB table
+            std::unique_ptr<rocksdb::Iterator> iterin(dbin->NewIterator(p->db.defReadOpts));
+
+            // Clear existing table from our DB
+            {
+                std::unique_ptr<rocksdb::Iterator> iter(db->NewIterator(p->db.defReadOpts, info.handle));
+                iter->SeekToLast();
+                std::optional<rocksdb::WriteBatch> optBatch;
+                if (iter->Valid()) {
+                    Debug() << "Clearing all rows in column family " << name << " ...";
+                    std::string pastEndKey;
+                    {
+                        const rocksdb::Slice lastKey = iter->key();
+                        pastEndKey.reserve(1u + lastKey.size());
+                        pastEndKey.insert(pastEndKey.end(), static_cast<char>(0xffu));
+                        pastEndKey.insert(pastEndKey.end(), lastKey.data(), lastKey.data() + lastKey.size());
+                        iter.reset(); // kill the iterator now to free "snapshot" resources before doing the delete
+                    }
+                    if (auto st = optBatch.emplace().DeleteRange(info.handle, {}, pastEndKey); !st.ok())
+                        throw DatabaseError("rocksdb::WriteBatch::DeleteRange returned error: " + StatusString(st));
+                }
+                if (isMetaTable) {
+                    // we just encountered the `meta` table, which is always first -- set the dirty flag now!
+                    if (!optBatch) optBatch.emplace();
+                    setDirty(*optBatch, true);
+                    Debug() << "Set DB 'dirty' flag";
+                }
+                if (optBatch) {
+                    if (auto st = p->db->Write(p->db.defWriteOpts, &*optBatch); !st.ok())
+                        throw DatabaseError("rocksdb::DB::Write returned error: " + StatusString(st));
+                }
+            }
+
+            // Copy each row in dbin to the correct column family
+            rocksdb::WriteBatch batch;
+            uint64_t byteCt{}, totalCt{};
+            size_t batchCt{};
+            long lastPrt = 0;
+            Tic t1;
+            for (iterin->SeekToFirst(); iterin->Valid(); iterin->Next()) {
+                if (isMetaTable && iterin->key() == kDirty) [[unlikely]]
+                    // do *not* copy the dirty flag for the meta table so as to not clear the fact that we are "dirty" now...
+                    continue;
+                const auto byteSz = iterin->key().size() + iterin->value().size();
+                byteCt += byteSz;
+                totalByteCt += byteSz;
+                if (auto st = batch.Put(info.handle, iterin->key(), iterin->value()); !st.ok())
+                    throw DatabaseError("rocksdb batch.Put returned error: " + StatusString(st));
+                ++totalCt; ++totalRowCt;
+                if (++batchCt >= batchSize) [[unlikely]] {
+                    if (auto st = db->Write(p->db.defWriteOpts, &batch); !st.ok())
+                        throw DatabaseError("Error writing batch: " + StatusString(st));
+                    Debug() << "Processed " << batchCt << " rows in " << t1.msecStr() << " msec";
+                    if (auto now = t0.secs<long>(); now >= lastPrt + 10) {
+                        lastPrt = now;
+                        const auto mb = QString("%1").arg(byteCt / 1e6, 0, 'f', 1);
+                        Log() << "Progress: " << totalCt << " rows, " << mb << " MB, in " << t0.secsStr() << " secs";
+                    }
+                    ++totalBatchCt;
+                    batchCt = 0;
+                    t1 = Tic();
+                }
+            }
+            if (batchCt) { // write final batch, if any
+                if (auto st = db->Write(p->db.defWriteOpts, &batch); !st.ok())
+                    throw DatabaseError("Error writing batch: " + StatusString(st));
+                Debug() << "Processed " << batchCt << " rows in " << t1.msecStr() << " msec";
+                ++totalBatchCt;
+            }
+            // perform flush
+            {
+                Debug() << "Flushing column family: " << name << " ...";
+
+                rocksdb::FlushOptions fopts;
+                fopts.wait = true; fopts.allow_write_stall = true;
+                if (auto st = db->Flush(fopts, info.handle); !st.ok())
+                    Warning() << "Flush of " << name << ": " << StatusString(st);
+                db->SyncWAL();
+            }
+
+            const auto mb = QString("%1").arg(byteCt / 1e6, 0, 'f', 1);
+            Log() << "Imported " << totalCt << " rows, " << mb << " MB, in " << t0.secsStr() << " secs";
+            iterin.reset();
+            if (auto st = dbin->Close(); !st.ok())
+                Warning() << "rocksdb::DB::Close returned error: " << st.ToString();
+            dbin.reset();
+            // Delete directory for old DB
+            Log() << "Deleting directory \"" << fname << "\" ...";
+            if (!QDir(fname).removeRecursively()) Warning() << "Error removing directory: " << fname;
+        } else {
+            // RecordFile -> DBRecordArray import
+            DBRecordArray *dra = info.dra->get();
+            auto rf = std::make_unique<RecordFile>(fname, dra->recordSize(), dra->magicBytes());
+            const size_t numRecs = rf->numRecords();
+            Log() << "Importing " << numRecs << " records from RecordFile `" << name << "` ...";
+            Tic t0;
+            long lastPrt = 0;
+            uint64_t totalCt{}, byteCt{};
+            for (size_t recNum = 0, lastBatchSize = 0; recNum < numRecs; recNum += lastBatchSize) {
+                Tic t1;
+                QString err;
+                auto records = rf->readRecords(recNum, batchSize, &err);
+                lastBatchSize = records.size();
+                if (!lastBatchSize) [[unlikely]] throw DatabaseError("Error reading RecordFile: " + err);
+                rocksdb::WriteBatch batch;
+                {
+                    auto ctx = dra->beginBatchWrite(batch);
+                    if (!recNum) [[unlikely]] ctx.truncate(0); // first pass through, truncate DBRecordArray to 0.
+                    for (const auto & rec : records) {
+                        if (rec.isEmpty()) [[unlikely]] throw DatabaseError("Empty record found in recordfile!");
+                        if (!ctx.append(rec, &err)) [[unlikely]] throw DatabaseError("Error writing to DBRecordArray: " + err);
+                        byteCt += static_cast<size_t>(rec.size());
+                        totalByteCt += static_cast<size_t>(rec.size());
+                        ++totalCt;
+                        ++totalRowCt;
+                    }
+                    ++totalBatchCt;
+                }
+                if (auto st = db->Write(p->db.defWriteOpts, &batch); !st.ok())
+                    throw DatabaseError("Error writing batch: " + StatusString(st));
+                Debug() << "Processed " << lastBatchSize << " records in " << t1.msecStr() << " msec";
+                if (auto now = t0.secs<long>(); now >= lastPrt + 10) {
+                    lastPrt = now;
+                    const auto mb = QString("%1").arg(byteCt / 1e6, 0, 'f', 1);
+                    Log() << "Progress: " << totalCt << " records, " << mb << " MB, in " << t0.secsStr() << " secs";
+                }
+            }
+            // perform flush
+            {
+                Debug() << "Flushing column family: " << sname << " ...";
+
+                rocksdb::FlushOptions fopts;
+                fopts.wait = true; fopts.allow_write_stall = true;
+                if (auto st = db->Flush(fopts, info.handle); !st.ok())
+                    Warning() << "Flush of " << name << ": " << StatusString(st);
+                db->SyncWAL();
+            }
+
+            const auto mb = QString("%1").arg(byteCt / 1e6, 0, 'f', 1);
+            Log() << "Imported " << totalCt << " records, " << mb << " MB, in " << t0.secsStr() << " secs";
+
+                   // Delete the RecordFile we just imported
+            rf.reset();
+            Log() << "Deleting file \"" << fname << "\" (size: " << QFileInfo(fname).size() << ") ...";
+            if (!QFile::remove(fname)) Warning() << "Error deleting: " << fname;
+        }
+        ++totalTableCt;
+    }
+
+    // Everything is done, clear the "dirty" flag and print some stats
+    {
+        rocksdb::WriteBatch batch;
+        setDirty(batch, false);
+        if (auto st = p->db->Write(p->db.defWriteOpts, &batch); !st.ok())
+            throw DatabaseError("Error writing batch: " + StatusString(st));
+        {
+            rocksdb::FlushOptions fopts;
+            fopts.wait = true; fopts.allow_write_stall = true;
+            if (auto st = db->Flush(fopts, p->db.meta); !st.ok())
+                Warning() << "Flush of meta: " << StatusString(st);
+            db->SyncWAL();
+        }
+        Debug() << "Cleared DB 'dirty' flag";
+        Log() << "Completed DB upgrade. Imported " << totalTableCt << " tables, " << totalRowCt << " rows, "
+              << totalBatchCt << " write batches, " << QString::number(totalByteCt / 1e6, 'f', 1) << " MB in "
+              << totalElapsed.secsStr(1) << " seconds.";
+    }
 }
 
 void Storage::checkUpgradeDBVersion()
@@ -2052,8 +2383,7 @@ auto Storage::headersFromHeight(BlockHeight height, unsigned count, QString *err
 void Storage::loadCheckHeadersInDB()
 {
     assert(p->blockHeaderSize() > 0);
-    p->db.headersDRA = std::make_unique<DBRecordArray>(*p->db, *p->db.headers, /* recSz = */ size_t(p->blockHeaderSize()),
-                                                       /* bucketNItems = */ 8, /* magic = */ 0x00f026a1); // may throw
+    assert(bool(p->db.headersDRA));
 
     Log() << "Verifying headers ...";
     uint32_t num = static_cast<uint32_t>(p->db.headersDRA->numRecords());
@@ -2100,8 +2430,7 @@ void Storage::loadCheckHeadersInDB()
 void Storage::loadCheckTxNumsDRAAndBlkInfo()
 {
     // may throw.
-    p->db.txNumsDRA = std::make_unique<DBRecordArray>(*p->db, *p->db.txnum2txhash,
-                                                      /* recSize = */ HashLen, /* bucketNItems = */ 16, /* magic = */ 0x000012e2);
+    assert(bool(p->db.txNumsDRA));
     p->txNumNext = p->db.txNumsDRA->numRecords();
     Debug() << "Read TxNumNext from file: " << p->txNumNext.load();
     TxNum ct = 0;
@@ -3506,11 +3835,13 @@ void Storage::setDirty(rocksdb::WriteBatch &batch, bool dirtyFlag)
     GenericBatchPut(batch, p->db.meta, kDirty, val, errPrefix);
 }
 
-bool Storage::isDirty() const
+bool Storage::isDirty_impl(rocksdb::DB *db, rocksdb::ColumnFamilyHandle *cf) const
 {
     static const QString errPrefix("Error reading dirty flag from the meta db");
-    return GenericDBGet<bool>(p->db, p->db.meta, kDirty, true, errPrefix, false, p->db.defReadOpts).value_or(false);
+    return GenericDBGet<bool>(db, cf, kDirty, true, errPrefix, false, p->db.defReadOpts).value_or(false);
 }
+
+bool Storage::isDirty() const { return isDirty_impl(p->db, p->db.meta); }
 
 void Storage::setRpaNeedsFullCheck(const bool val)
 {

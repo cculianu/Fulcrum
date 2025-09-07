@@ -46,7 +46,7 @@ class App final : public QCoreApplication, public TimersByNameMixin
 {
     Q_OBJECT
     using AtomicInstanceT = std::conditional_t<std::atomic<App *>::is_always_lock_free, std::atomic<App *>, App * volatile>;
-    static AtomicInstanceT _globalInstance;
+    static AtomicInstanceT s_globalInstance;
 public:
     explicit App(int argc, char *argv[]);
     ~App() override;
@@ -67,11 +67,14 @@ public:
     /// 0, the app is about to exit. This is provided in case long-running tasks may wish to check this value
     /// periodically.
     int signalsCaught() const { return int(sigCtr); }
+    /// Thread safe. Call this with "true" to suppress SIGINT, etc signal handling completely (signals will be ignored).
+    /// Call it with false to re-enable quit signals. This is used by the Fulcrum 1.x -> 2.x DB upgrade code in Storage.cpp.
+    void setSignalsIgnored(bool ignore);
 
     ThreadPool *threadPool() const { return tpool.get(); }
 
     /// Performance optimization to avoid dynamic_cast<App *>(qApp) in ::app() below.
-    static App * globalInstance() { return _globalInstance; }
+    static App * globalInstance() { return s_globalInstance; }
 
     /// Convenience to obtain our singleton ThreadPool instance that goes with this singleton App instance.
     static ThreadPool *globalThreadPool() { App * a = globalInstance(); return a ? a->threadPool() : nullptr; }
@@ -178,7 +181,7 @@ private:
     Util::AsyncSignalSafe::Sem exitSem;
     std::unique_ptr<QThread> exitThr;
     using SigCtr = std::conditional_t<std::atomic_int::is_always_lock_free, std::atomic_int, volatile int>;
-    SigCtr sigCtr = 0;
+    SigCtr sigCtr = 0, ignoreSigs = 0;
     /// Registered for SIGINT, SIGHUP, etc. Sets the condition variable exitSem
     void signalHandler(int sig);
     friend void ::signal_trampoline(int sig); // The extern "C" function declared at the top of this file.

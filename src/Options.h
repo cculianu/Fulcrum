@@ -207,6 +207,9 @@ public:
         /// db_use_fsync in conf file -- default false
         static constexpr bool defaultUseFsync = false;
         bool useFsync = defaultUseFsync;
+
+        // --upgrade-db: If true user requested Fulcrum 1.x -> 2.x db upgrade
+        bool doUpgrade = false;
     };
     DBOpts db;
 

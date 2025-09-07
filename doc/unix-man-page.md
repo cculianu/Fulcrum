@@ -130,6 +130,9 @@ Once the server finishes synching it will behave like an ElectronX/ElectrumX ser
 --db_mem <MB>
 :   Specify roughly the maximum amount of memory to give to rocksb. Larger values offer better performance, at the expense of memory consumption. Specify a floating-point or integer value in MiB (1 MiB = 1048576 bytes). Default is: 1024.0.
 
+--db-upgrade
+:   Enable Fulcrum 1.x -> 2.x DB upgrade. Use this option the first time you install Fulcrum 2.x if you wish to upgrade the already-synched 1.x datadir to the new 2.x format.
+
 --dump-sh <outputfile>
 :   *This is an advanced debugging option*. Dump script hashes. If specified, after the database is loaded, all of the script hashes in the database will be written to outputfile as a JSON array.
 
