@@ -1629,7 +1629,6 @@ void Storage::checkFulc1xUpgradeDB()
 
     rocksdb::DB * const db = p->db;
     assert(db);
-    const rocksdb::Options & opts = p->db.opts;
 
     const QString dataDirPrefix = options->datadir + QDir::separator();
     qint64 largestElementSeenByteSize{};
@@ -1712,6 +1711,8 @@ void Storage::checkFulc1xUpgradeDB()
     // We disable signals since it would be *unsafe* to close the app during this process!
     app()->setSignalsIgnored(true);
     Defer d([]{ app()->setSignalsIgnored(false); }); // restore signals on scope end
+
+    const rocksdb::Options & opts = p->db.opts;
 
     // Do RecordFile import first
     for (const auto & [sname, info] : p->db.colFamsTable) {
