@@ -1701,7 +1701,7 @@ void Storage::checkFulc1xUpgradeDB()
     // Size sanity check -- we need enough space for each old DB table and/or record file to be copied and then
     // deleted item by item...paranoia: require largest element seen size + 1GB
     if (qint64 req = largestElementSeenByteSize + 1'000'000'000u, avail = QStorageInfo(options->datadir).bytesAvailable(); avail < req)
-        throw Exception(QString("Not enough disk space for \"%1\" to proceed. Free up at least %2 MB of space.")
+        throw Exception(QString("Not enough disk space in directory \"%1\" to proceed with upgrade. Free up at least %2 MB of space.")
                             .arg(options->datadir).arg(static_cast<qint64>(std::ceil((req - avail) / 1024.0 / 1024.0))));
 
     // Commence the upgrade....!
