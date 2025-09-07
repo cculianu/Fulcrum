@@ -1464,6 +1464,7 @@ void Storage::openOrCreateDB()
                                  &txnum2txhashOpts(p->db.txnum2txhashOpts), &headersOpts(p->db.headersOpts);
     opts.IncreaseParallelism(int(Util::getNPhysicalProcessors()));
     opts.OptimizeLevelStyleCompaction();
+    opts.compression_per_level.clear(); // force default "no compression" on all levels
 
     // setup shared block cache
     rocksdb::BlockBasedTableOptions tableOptions;
