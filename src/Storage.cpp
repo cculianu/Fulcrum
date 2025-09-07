@@ -1464,7 +1464,7 @@ void Storage::openOrCreateDB()
                                  &txnum2txhashOpts(p->db.txnum2txhashOpts), &headersOpts(p->db.headersOpts);
     opts.IncreaseParallelism(int(Util::getNPhysicalProcessors()));
     opts.OptimizeLevelStyleCompaction();
-    opts.compression_per_level.clear(); // force default "no compression" on all levels
+    for (auto & cmp: opts.compression_per_level) cmp = rocksdb::kNoCompression; // force default "no compression" on all levels
 
     // setup shared block cache
     rocksdb::BlockBasedTableOptions tableOptions;
@@ -1727,6 +1727,7 @@ void Storage::checkFulc1xUpgradeDB()
             rocksdb::Options dbopts;
             dbopts.IncreaseParallelism(int(Util::getNPhysicalProcessors()));
             dbopts.OptimizeLevelStyleCompaction();
+            for (auto & cmp: dbopts.compression_per_level) cmp = rocksdb::kNoCompression;
             dbopts.create_if_missing = false;
             dbopts.error_if_exists = false;
             dbopts.max_open_files = opts.max_open_files;
