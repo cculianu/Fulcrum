@@ -1644,9 +1644,6 @@ void Storage::checkFulc1xUpgradeDB()
     if (p->db.colFamsTableFind("meta") != p->db.colFamsTable.begin())
         throw InternalError("The `meta` column family MUST be listed first in `colFamsTable`! FIXME!");
 
-    rocksdb::DB * const db = p->db;
-    assert(db);
-
     const QString dataDirPrefix = options->datadir + QDir::separator();
     qint64 largestElementSeenByteSize{};
     const bool hasAllFulcrum1DBElements = [&] {
@@ -1716,6 +1713,9 @@ void Storage::checkFulc1xUpgradeDB()
 
     // Reopen the DB in "bulk load" mode (no auto-compaction)
     openOrCreateDB(true);
+
+    rocksdb::DB * const db = p->db;
+    assert(db);
 
     // Size sanity check -- we need enough space for each old DB table and/or record file to be copied and then
     // deleted item by item...paranoia: require largest element seen size + 1GB
