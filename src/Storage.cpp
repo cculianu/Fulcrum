@@ -68,6 +68,7 @@
 #include <future>
 #include <limits>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -1218,6 +1219,7 @@ struct Storage::Pvt
         rocksdb::DB * operator->() { return get(); }
         const rocksdb::DB * operator->() const { return get(); }
     };
+    unsigned dbReopenCt = 0; ///< The number of times openOrCreateDB() was called
     RocksDBHandlesEtc db;
 
     /// Big lock used for block/history updates. Public methods that read the history such as getHistory and listUnspent
@@ -1454,9 +1456,14 @@ void Storage::startup()
     start(); // starts our thread
 }
 
-void Storage::openOrCreateDB()
+void Storage::openOrCreateDB(bool bulkLoad)
 {
     gentlyCloseDB(); // Ensure we start from a clean slate (in case this function is ever called to hot-reopen the DB)
+
+    if (p->dbReopenCt++ > 0) {
+        // We must do this to properly reset things to a clean slate
+        Util::reconstructAt(&p->db);
+    }
 
     // Optimize RocksDB. This is the easiest way to get RocksDB to perform well
     rocksdb::Options & opts(p->db.opts);
@@ -1464,6 +1471,10 @@ void Storage::openOrCreateDB()
                                  &txnum2txhashOpts(p->db.txnum2txhashOpts), &headersOpts(p->db.headersOpts);
     opts.IncreaseParallelism(int(Util::getNPhysicalProcessors()));
     opts.OptimizeLevelStyleCompaction();
+    if (bulkLoad) {
+        opts.PrepareForBulkLoad();
+        opts.disable_auto_compactions = true;
+    }
     for (auto & cmp: opts.compression_per_level) cmp = rocksdb::kNoCompression; // force default "no compression" on all levels
 
     // setup shared block cache
@@ -1484,10 +1495,12 @@ void Storage::openOrCreateDB()
     // create the DB if it's not already present
     opts.create_if_missing = true;
     opts.error_if_exists = false;
-    opts.max_open_files = options->db.maxOpenFiles <= 0 ? -1 : options->db.maxOpenFiles; ///< this affects memory usage see: https://github.com/facebook/rocksdb/issues/4112
-    opts.keep_log_file_num = options->db.keepLogFileNum;
     opts.compression = rocksdb::CompressionType::kNoCompression; // for now we test without compression. TODO: characterize what is fastest and best..
-    opts.use_fsync = options->db.useFsync; // the false default is perfectly safe, but Jt asked for this as an option, so here it is.
+    if (!bulkLoad) {
+        opts.max_open_files = options->db.maxOpenFiles <= 0 ? -1 : options->db.maxOpenFiles; ///< this affects memory usage see: https://github.com/facebook/rocksdb/issues/4112
+        opts.keep_log_file_num = options->db.keepLogFileNum;
+        opts.use_fsync = options->db.useFsync; // the false default is perfectly safe, but Jt asked for this as an option, so here it is.
+    }
 
     shistOpts = opts; // copy what we just did (will implicitly copy over the shared table_factory and write_buffer_manager)
     shistOpts.merge_operator = p->db.concatOperator = std::make_shared<StorageDetail::ConcatOperator>(); // this set of options uses the concat merge operator (we use this to append to history entries in the db)
@@ -1616,7 +1629,10 @@ void Storage::openOrCreateDB()
                                                        /* magic = */ 0x00f026a1); // may throw
 
 
-    Log() << "DB memory: " << QString::number(options->db.maxMem / 1024. / 1024., 'f', 2) << " MiB";
+    Debug() << "DB opened in " << (!bulkLoad ? "non-" : "") << "\"bulkLoad\" mode";
+
+    if (p->dbReopenCt == 1)
+        Log() << "DB memory: " << QString::number(options->db.maxMem / 1024. / 1024., 'f', 2) << " MiB";
 }
 
 void Storage::checkFulc1xUpgradeDB()
@@ -1698,6 +1714,9 @@ void Storage::checkFulc1xUpgradeDB()
     }
     if (app()->signalsCaught()) throw UserInterrupted("User interrupted, aborting upgrade");
 
+    // Reopen the DB in "bulk load" mode (no auto-compaction)
+    openOrCreateDB(true);
+
     // Size sanity check -- we need enough space for each old DB table and/or record file to be copied and then
     // deleted item by item...paranoia: require largest element seen size + 1GB
     if (qint64 req = largestElementSeenByteSize + 1'000'000'000u, avail = QStorageInfo(options->datadir).bytesAvailable(); avail < req)
@@ -1713,23 +1732,26 @@ void Storage::checkFulc1xUpgradeDB()
     app()->setSignalsIgnored(true);
     Defer d([]{ app()->setSignalsIgnored(false); }); // restore signals on scope end
 
-    const rocksdb::Options & opts = p->db.opts;
-
-    // Note: We use this extreme batchSize because smaller batches get exponentially slower for bulk loads!!
-    const size_t batchSize = []{
-        uint64_t const ram = Util::getTotalPhysicalRAM(), GiB = 1024u * 1024u * 1024u;
-        // Allow about 2.5 million per GiB of RAM, 1 million minimum. We don't want to overdo it to avoid OOM.
-        return std::max<size_t>(1'000'000ull, ram / GiB * 2'500'000ull);
-    }();
+    constexpr size_t batchSize = 2'000'000u;
     Debug() << "Using batch size: " << batchSize;
 
-    auto performFlush = [&](const auto &name, const auto &info) {
-        Debug() << "Flushing column family: " << name << " ...";
+    auto doCompaction = [&](const auto &name, const auto &info) {
+        Log() << "Compacting: " << name << " ...";
+        rocksdb::CompactRangeOptions copts;
+        copts.exclusive_manual_compaction = true;
+        copts.allow_write_stall = true;
+        if (auto st = p->db->CompactRange(copts, info.handle, nullptr, nullptr); !st.ok())
+            Warning() << "CompactRange of " << name << " returned error status: " << StatusString(st);
+    };
 
+    auto performFlush = [&](const auto &name, const auto &info) {
+        doCompaction(name, info);
+        Debug() << "Flushing column family: " << name << " ...";
         rocksdb::FlushOptions fopts;
         fopts.wait = true; fopts.allow_write_stall = true;
         if (auto st = db->Flush(fopts, info.handle); !st.ok())
-            Warning() << "Flush of " << name << ": " << StatusString(st);
+            Warning() << "Flush of " << name << " returned error status: " << StatusString(st);
+        Debug() << "Synching WAL ...";
         db->SyncWAL();
     };
 
@@ -1741,15 +1763,13 @@ void Storage::checkFulc1xUpgradeDB()
             Tic t0;
             Log() << "Importing table `" << name << "` ...";
             rocksdb::Options dbopts;
+            // NB: the below should match original DB, in particular the num_levels must match otherwise Open() errors out.
             dbopts.IncreaseParallelism(int(Util::getNPhysicalProcessors()));
             dbopts.OptimizeLevelStyleCompaction();
-            for (auto & cmp: dbopts.compression_per_level) cmp = rocksdb::kNoCompression;
+            dbopts.disable_auto_compactions = true;
             dbopts.create_if_missing = false;
             dbopts.error_if_exists = false;
-            dbopts.max_open_files = opts.max_open_files;
-            dbopts.keep_log_file_num = opts.keep_log_file_num;
-            dbopts.compression = opts.compression;
-            dbopts.use_fsync = opts.use_fsync;
+            dbopts.compression = rocksdb::kNoCompression;
             if (info.options.merge_operator) dbopts.merge_operator = info.options.merge_operator;
             dbopts.comparator = info.options.comparator; // should always be default BytewiseComparator, but defensively we ensure that is the case
 
@@ -1770,7 +1790,13 @@ void Storage::checkFulc1xUpgradeDB()
             }
 
             // Everything so far ok, create an iterator over the input DB table
-            std::unique_ptr<rocksdb::Iterator> iterin(dbin->NewIterator(p->db.defReadOpts));
+            auto rdOpts = p->db.defReadOpts;
+            rdOpts.auto_readahead_size = false;
+            rdOpts.adaptive_readahead = false;
+            rdOpts.readahead_size = 128 * 1024 * 1024;
+            rdOpts.async_io = true;
+            rdOpts.fill_cache = false;
+            std::unique_ptr<rocksdb::Iterator> iterin(dbin->NewIterator(rdOpts));
 
             // Clear existing table from our DB
             {
@@ -1821,6 +1847,7 @@ void Storage::checkFulc1xUpgradeDB()
                 if (++batchCt >= batchSize) [[unlikely]] {
                     if (auto st = db->Write(p->db.defWriteOpts, &batch); !st.ok())
                         throw DatabaseError("Error writing batch: " + StatusString(st));
+                    Util::reconstructAt(&batch); // NB: We must do this because the WriteBatch object appears to leak and/or eat enormous memory if it keeps getting re-used
                     Debug() << "Processed " << batchCt << " rows in " << t1.msecStr() << " msec";
                     if (auto now = t0.secs<long>(); now >= lastPrt + 10) {
                         lastPrt = now;
@@ -1865,6 +1892,7 @@ void Storage::checkFulc1xUpgradeDB()
             auto doDBWrite = [&] {
                 if (auto st = db->Write(p->db.defWriteOpts, &batch); !st.ok())
                     throw DatabaseError("Error writing batch: " + StatusString(st));
+                Util::reconstructAt(&batch); // NB: We must do this because the WriteBatch object appears to leak and/or eat enormous memory if it keeps getting re-used
                 Debug() << "Processed " << writeBatchCt << " records in " << t1.msecStr() << " msec";
                 if (auto now = t0.secs<long>(); now >= lastPrt + 10) {
                     lastPrt = now;
@@ -1932,6 +1960,9 @@ void Storage::checkFulc1xUpgradeDB()
               << totalBatchCt << " write batches, " << QString::number(totalByteCt / 1e6, 'f', 1) << " MB in "
               << totalElapsed.secsStr(1) << " seconds.";
     }
+
+    // Finally, re-open in non-bulk mode (auto compaction enabled)
+    openOrCreateDB(false);
 }
 
 void Storage::checkUpgradeDBVersion()

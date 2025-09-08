@@ -552,7 +552,7 @@ private:
     std::vector<QByteArray> merkleCacheHelperFunc(unsigned start, unsigned count, QString *err);
 
     /// Called from startup. Opens and/or creates the DB and sets up all column families, etc.
-    void openOrCreateDB();
+    void openOrCreateDB(bool bulkLoad = false);
     /// Called from cleanup. Does some flushing and gently closes all open column families and closes the DB.
     void gentlyCloseDB();
 

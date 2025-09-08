@@ -35,6 +35,7 @@
 #include <functional>
 #include <future>
 #include <list>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <random>
@@ -1120,6 +1121,12 @@ namespace Util {
     static_assert(leToH(static_cast<uint32_t>(0x1)) == (isBigEndian() ? 0x1000000u : 0x1u));
     static_assert(leToH(static_cast<uint64_t>(0x1)) == (isBigEndian() ? 0x100000000000000ull : 0x1ull));
     // End: ---- Endian swap ops ----
+
+    template <typename T, typename ...Args>
+    T *reconstructAt(T *obj, Args && ...args) {
+        std::destroy_at(obj);
+        return std::construct_at(obj, std::forward<Args>(args)...);
+    }
 
 } // end namespace Util
 
