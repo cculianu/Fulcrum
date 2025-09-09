@@ -1471,6 +1471,7 @@ void Storage::openOrCreateDB(bool bulkLoad)
                                  &txnum2txhashOpts(p->db.txnum2txhashOpts), &headersOpts(p->db.headersOpts);
     opts.IncreaseParallelism(int(Util::getNPhysicalProcessors()));
     opts.OptimizeLevelStyleCompaction();
+    opts.atomic_flush = true; // flush atomically across all column families
     if (bulkLoad) {
         opts.PrepareForBulkLoad();
         opts.disable_auto_compactions = true;
@@ -2063,19 +2064,28 @@ void Storage::gentlyCloseDB()
     // do Flush of each column family, and close the handles
     auto *db = p->db.get();
     if (!db) return;
-    for (auto & cf : p->db.columnFamilies) {
-        if (!cf) continue;
-        const auto name = CFName(cf);
-        Debug() << "Flushing column family: " << name << " ...";
-        rocksdb::Status status;
+    // flush all column families at once (in case atomic flush is enabled and supported)
+    {
+        std::vector<rocksdb::ColumnFamilyHandle *> cfsToFlush; cfsToFlush.reserve(p->db.columnFamilies.size());
+        QStringList cfsToFlushNames; cfsToFlushNames.reserve(cfsToFlush.capacity());
+        for (auto * cf : p->db.columnFamilies) {
+            if (!cf) continue;
+            cfsToFlush.push_back(cf);
+            cfsToFlushNames.push_back(CFName(cf));
+        }
+        Debug() << "Flushing column families: " << cfsToFlushNames.join(", ") << " ...";
         rocksdb::FlushOptions fopts;
         fopts.wait = true; fopts.allow_write_stall = true;
-        status = db->Flush(fopts, cf);
+        auto status = db->Flush(fopts, cfsToFlush);
         if (!status.ok())
-            Warning() << "Flush of " << name << ": " << StatusString(status);
-        status = db->DestroyColumnFamilyHandle(cf);
+            Warning() << "Flush of all column families returned: " << StatusString(status);
+    }
+    // gracefully close column family handles
+    for (auto & cf : p->db.columnFamilies) {
+        if (!cf) continue;
+        auto status = db->DestroyColumnFamilyHandle(cf);
         if (!status.ok())
-            Warning() << "Release of " << name << ": " << StatusString(status);
+            Warning() << "Release of " << CFName(cf) << ": " << StatusString(status);
         cf = nullptr;
     }
     p->db.columnFamilies.clear();
