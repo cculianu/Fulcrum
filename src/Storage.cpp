@@ -3617,6 +3617,10 @@ void Storage::addBlock(PreProcessedBlockPtr ppb, bool saveUndo, unsigned nReserv
             undoVerifierOnScopeEnd.disable(); // indicate to the "Defer" object declared at the top of this function that it shouldn't undo anything anymore as we are happy now with the db state now.
         }
 
+        // If we are in "notify" mode then it's after initial synch, so be cautious and do SyncWAL for each block for
+        // safety despite the potential tiny performance hit here.
+        if (notify) p->db->SyncWAL();
+
     } /// release locks
 
     // now, do notifications with locks NOT held (we are being defensive: in the future we may modify below to take e.g. mempool lock)
@@ -3871,6 +3875,11 @@ BlockHeight Storage::undoLatestBlock(bool notifySubs)
               << nTx << " " << Util::Pluralize("transaction", nTx)
               << " involving " << nSH << " " << Util::Pluralize("scripthash", nSH)
               << ", in " << QString::number(elapsedms, 'f', 2) << " msec, new height now: " << prevHeight;
+
+        // If we are in "notify" mode then it's after initial synch, so be cautious and do SyncWAL for each block undo
+        // for safety despite the potential tiny performance hit here.
+        if (notify) p->db->SyncWAL();
+
     } // release locks
 
     // now, do notifications
