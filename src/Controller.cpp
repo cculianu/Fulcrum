@@ -860,9 +860,6 @@ struct Controller::StateMachine
 
     /// will be valid and not empty only if a zmq hashtx notification happened while we were running the block & mempool synch task
     QByteArray mostRecentZmqHashTxNotif;
-
-    /// This is valid only if we are in an initial sync
-    std::optional<Storage::InitialSyncRAII> initialSyncRaii;
 };
 
 unsigned Controller::downloadTaskRecommendedThrottleTimeMsec(unsigned bnum) const
@@ -1204,14 +1201,6 @@ void Controller::process(bool beSilentIfUpToDate)
                     sm->suppressSaveUndo = sm->nHeaders > 0 && sm->ht > 0 && sm->nHeaders >= sm->ht
                                            && unsigned(sm->nHeaders - sm->ht) > storage->configuredUndoDepth();
                 }
-
-                // Set initial sync flag, if we are in initial sync (heuristic is: initial sync == we have no undo data)
-                // Note: This may not be the best place for this. Also, if assumptions change, this will not
-                // work as before. TODO: revisit the placement of where this logic goes.
-                if (!hasUndo && !sm->initialSyncRaii)
-                    sm->initialSyncRaii.emplace( storage->setInitialSync() );
-                else if (sm->initialSyncRaii && hasUndo)
-                    sm->initialSyncRaii.reset();
             }
             AGAIN();
         });

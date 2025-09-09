@@ -3151,11 +3151,6 @@ Storage::UTXOBatch::UTXOBatch(rocksdb::WriteBatch &b, rocksdb::ColumnFamilyHandl
     : p{std::make_unique<P>(b, u, s, uc)} {}
 Storage::UTXOBatch::UTXOBatch(UTXOBatch &&o) { p.swap(o.p); }
 
-void Storage::setInitialSync(bool)
-{
-    // this method used to do something (manage the UTXOCache), but is currently a no-op
-}
-
 void Storage::UTXOBatch::add(TXO &&txo, TXOInfo &&info, const CompactTXO &ctxo)
 {
     const QByteArray shukey = mkShunspentKey(info.hashX, ctxo),

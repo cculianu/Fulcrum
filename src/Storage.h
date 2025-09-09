@@ -378,37 +378,6 @@ public:
     /// the /debug HTTP endpoint.
     UTXOSetStats calcUTXOSetStats(const DumpProgressFunc & = {}, size_t progInterval = 100000) const;
 
-    // --- Initial synch support ---
-
-    /// Leverages RAII to have the Storage class auto-notified when initial sync has started & ended.
-    class InitialSyncRAII {
-        QPointer<Storage> storage;
-        static inline std::atomic_int instanceCtr{0};
-        void constructed() { if (++instanceCtr == 1) storage->setInitialSync(true); }
-    protected:
-        friend class Storage;
-        InitialSyncRAII(Storage &storage_) : storage{&storage_} { constructed(); }
-    public:
-        InitialSyncRAII(const InitialSyncRAII & o) : storage(o.storage) { constructed(); }
-        InitialSyncRAII(InitialSyncRAII && o) : InitialSyncRAII(std::as_const(o)) {}
-        ~InitialSyncRAII() { if (--instanceCtr == 0 && storage) storage->setInitialSync(false); }
-
-        InitialSyncRAII &operator=(const InitialSyncRAII &) = default;
-        InitialSyncRAII &operator=(InitialSyncRAII && o) { return this->operator=(std::as_const(o)); }
-    };
-
-    /// Called by Controller, if it thinks it's in an intitial sync. Controller keeps an instance of the returned value
-    /// until initial sync has ended. (In other words, callers are expected to end the lifetime of the returned value
-    /// when they wish to assert that "InitialSync" has ended).
-    ///
-    /// Note: If multiple threads in the application attempt to manage the high-level concept of "InitialSync" at the
-    /// same time, there may be race conditions as to whether "InitialSync" is really actually still asserted after
-    /// this call has returned, or whether it really is false after the lifetime of the returned `InitialSyncRAII`
-    /// value has ended. This is because execution may be interleaved in any order, including ones in which another
-    /// thread may swoop in and change things around from underneath out feet. Long story short: this is a quick and
-    /// lightweight mechanism intended to be used and "owned" by the Controller object *only*.
-    [[nodiscard]] InitialSyncRAII setInitialSync() { return InitialSyncRAII{*this}; }
-
     /// Thread-safe. Returns true if RPA index is enabled, false otherwise. May return false before app is fully
     /// initted and if the requested RPA mode is "auto" and we haven't yet decided if on or off based on "Coin".
     bool isRpaEnabled() const;
@@ -509,10 +478,6 @@ protected:
     void saveUtxoCt(rocksdb::WriteBatch &batch);
     /// Reads the UtxoCt from the meta db. If they key is missing it will return 0.  May throw on low-level db error.
     int64_t readUtxoCtFromDB() const;
-
-    /// Internally called to create or destroy the UTXO Cache, if --utxo-cache is enabled
-    void setInitialSync(bool);
-    friend class InitialSyncRAII;
 
     /// This is set in addBlock and in other places if we find the RPA database may be inconsistent, and should
     /// be checked (possibly on next app startup). Immediately saves a bool to the DB meta table. Thread-safe, may throw.
