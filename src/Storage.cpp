@@ -1714,9 +1714,6 @@ void Storage::checkFulc1xUpgradeDB()
     // Reopen the DB in "bulk load" mode (no auto-compaction)
     openOrCreateDB(true);
 
-    rocksdb::DB * const db = p->db;
-    assert(db);
-
     // Size sanity check -- we need enough space for each old DB table and/or record file to be copied and then
     // deleted item by item...paranoia: require largest element seen size + 1GB
     if (qint64 req = largestElementSeenByteSize + 1'000'000'000u, avail = QStorageInfo(options->datadir).bytesAvailable(); avail < req)
@@ -1735,12 +1732,18 @@ void Storage::checkFulc1xUpgradeDB()
     constexpr size_t batchSize = 2'000'000u;
     Debug() << "Using batch size: " << batchSize;
 
+    rocksdb::DB * const db = p->db;
+    assert(db);
+    rocksdb::WriteOptions fastButLessSafeWrOpts;
+    // this option leads to faster writes at the expense of potential database corruption on hard crash :/
+    fastButLessSafeWrOpts.disableWAL = true;
+
     auto doCompaction = [&](const auto &name, const auto &info) {
         Log() << "Compacting: " << name << " ...";
         rocksdb::CompactRangeOptions copts;
         copts.exclusive_manual_compaction = true;
         copts.allow_write_stall = true;
-        if (auto st = p->db->CompactRange(copts, info.handle, nullptr, nullptr); !st.ok())
+        if (auto st = db->CompactRange(copts, info.handle, nullptr, nullptr); !st.ok())
             Warning() << "CompactRange of " << name << " returned error status: " << StatusString(st);
     };
 
@@ -1754,6 +1757,34 @@ void Storage::checkFulc1xUpgradeDB()
         Debug() << "Synching WAL ...";
         db->SyncWAL();
     };
+
+    auto deleteAllRowsInColumnFamily = [&](const auto &name, const auto &info, const bool isMetaTable) {
+        std::unique_ptr<rocksdb::Iterator> iter(db->NewIterator(p->db.defReadOpts, info.handle));
+        iter->SeekToLast();
+        std::optional<rocksdb::WriteBatch> optBatch;
+        if (iter->Valid()) {
+            Debug() << "Clearing all rows in column family " << name << " ...";
+            std::string pastEndKey;
+            const rocksdb::Slice lastKey = iter->key();
+            pastEndKey.reserve(1u + lastKey.size());
+            pastEndKey.insert(pastEndKey.end(), static_cast<char>(0xffu));
+            pastEndKey.insert(pastEndKey.end(), lastKey.data(), lastKey.data() + lastKey.size());
+            iter.reset(); // kill the iterator now to free "snapshot" resources before doing the delete
+            if (auto st = optBatch.emplace().DeleteRange(info.handle, {}, pastEndKey); !st.ok())
+                throw DatabaseError("rocksdb::WriteBatch::DeleteRange returned error: " + StatusString(st));
+        }
+        if (isMetaTable) {
+            // we just encountered the `meta` table, which is always first -- set the dirty flag now!
+            if (!optBatch) optBatch.emplace();
+            setDirty(*optBatch, true);
+            Debug() << "Set DB 'dirty' flag";
+        }
+        if (optBatch) {
+            if (auto st = p->db->Write(p->db.defWriteOpts, &*optBatch); !st.ok())
+                throw DatabaseError("rocksdb::DB::Write returned error: " + StatusString(st));
+        }
+    };
+
 
     for (const auto & [sname, info] : p->db.colFamsTable) {
         const auto name = QString::fromStdString(sname);
@@ -1799,34 +1830,7 @@ void Storage::checkFulc1xUpgradeDB()
             std::unique_ptr<rocksdb::Iterator> iterin(dbin->NewIterator(rdOpts));
 
             // Clear existing table from our DB
-            {
-                std::unique_ptr<rocksdb::Iterator> iter(db->NewIterator(p->db.defReadOpts, info.handle));
-                iter->SeekToLast();
-                std::optional<rocksdb::WriteBatch> optBatch;
-                if (iter->Valid()) {
-                    Debug() << "Clearing all rows in column family " << name << " ...";
-                    std::string pastEndKey;
-                    {
-                        const rocksdb::Slice lastKey = iter->key();
-                        pastEndKey.reserve(1u + lastKey.size());
-                        pastEndKey.insert(pastEndKey.end(), static_cast<char>(0xffu));
-                        pastEndKey.insert(pastEndKey.end(), lastKey.data(), lastKey.data() + lastKey.size());
-                        iter.reset(); // kill the iterator now to free "snapshot" resources before doing the delete
-                    }
-                    if (auto st = optBatch.emplace().DeleteRange(info.handle, {}, pastEndKey); !st.ok())
-                        throw DatabaseError("rocksdb::WriteBatch::DeleteRange returned error: " + StatusString(st));
-                }
-                if (isMetaTable) {
-                    // we just encountered the `meta` table, which is always first -- set the dirty flag now!
-                    if (!optBatch) optBatch.emplace();
-                    setDirty(*optBatch, true);
-                    Debug() << "Set DB 'dirty' flag";
-                }
-                if (optBatch) {
-                    if (auto st = p->db->Write(p->db.defWriteOpts, &*optBatch); !st.ok())
-                        throw DatabaseError("rocksdb::DB::Write returned error: " + StatusString(st));
-                }
-            }
+            deleteAllRowsInColumnFamily(name, info, isMetaTable);
 
             // Copy each row in dbin to the correct column family
             rocksdb::WriteBatch batch;
@@ -1834,6 +1838,20 @@ void Storage::checkFulc1xUpgradeDB()
             size_t batchCt{};
             long lastPrt = 0;
             Tic t1;
+            auto doDBWrite = [&] {
+                if (auto st = db->Write(fastButLessSafeWrOpts, &batch); !st.ok())
+                    throw DatabaseError("Error writing batch: " + StatusString(st));
+                Util::reconstructAt(&batch); // NB: We must do this because the WriteBatch object appears to leak and/or eat enormous memory if it keeps getting re-used
+                Debug() << "Processed " << batchCt << " rows in " << t1.msecStr() << " msec";
+                if (auto now = t0.secs<long>(); now >= lastPrt + 10) {
+                    lastPrt = now;
+                    const auto mb = QString("%1").arg(byteCt / 1e6, 0, 'f', 1);
+                    Log() << "Progress: " << totalCt << " rows, " << mb << " MB, in " << t0.secsStr() << " secs";
+                }
+                ++totalBatchCt;
+                batchCt = 0;
+                t1 = Tic();
+            };
             for (iterin->SeekToFirst(); iterin->Valid(); iterin->Next()) {
                 if (isMetaTable && iterin->key() == kDirty) [[unlikely]]
                     // do *not* copy the dirty flag for the meta table so as to not clear the fact that we are "dirty" now...
@@ -1844,27 +1862,11 @@ void Storage::checkFulc1xUpgradeDB()
                 if (auto st = batch.Put(info.handle, iterin->key(), iterin->value()); !st.ok())
                     throw DatabaseError("rocksdb batch.Put returned error: " + StatusString(st));
                 ++totalCt; ++totalRowCt;
-                if (++batchCt >= batchSize) [[unlikely]] {
-                    if (auto st = db->Write(p->db.defWriteOpts, &batch); !st.ok())
-                        throw DatabaseError("Error writing batch: " + StatusString(st));
-                    Util::reconstructAt(&batch); // NB: We must do this because the WriteBatch object appears to leak and/or eat enormous memory if it keeps getting re-used
-                    Debug() << "Processed " << batchCt << " rows in " << t1.msecStr() << " msec";
-                    if (auto now = t0.secs<long>(); now >= lastPrt + 10) {
-                        lastPrt = now;
-                        const auto mb = QString("%1").arg(byteCt / 1e6, 0, 'f', 1);
-                        Log() << "Progress: " << totalCt << " rows, " << mb << " MB, in " << t0.secsStr() << " secs";
-                    }
-                    ++totalBatchCt;
-                    batchCt = 0;
-                    t1 = Tic();
-                }
+                if (++batchCt >= batchSize) [[unlikely]]
+                    doDBWrite();
             }
-            if (batchCt) { // write final batch, if any
-                if (auto st = db->Write(p->db.defWriteOpts, &batch); !st.ok())
-                    throw DatabaseError("Error writing batch: " + StatusString(st));
-                Debug() << "Processed " << batchCt << " rows in " << t1.msecStr() << " msec";
-                ++totalBatchCt;
-            }
+            if (batchCt) // write final batch, if any
+                doDBWrite();
 
             // perform flush
             performFlush(name, info);
@@ -1884,13 +1886,19 @@ void Storage::checkFulc1xUpgradeDB()
             DBRecordArray *dra = info.dra->get();
             auto rf = std::make_unique<RecordFile>(fname, dra->recordSize(), dra->magicBytes());
             const size_t numRecs = rf->numRecords();
+            Tic t0;
             Log() << "Importing " << numRecs << " records from RecordFile `" << name << "` ...";
-            Tic t0, t1;
+
+            // Clear existing table from our DB
+            deleteAllRowsInColumnFamily(name, info, false);
+
+            Tic t1;
             long lastPrt = 0;
-            uint64_t totalCt{}, byteCt{}, writeBatchCt{};
+            uint64_t totalCt{}, byteCt{};
+            size_t writeBatchCt{};
             rocksdb::WriteBatch batch;
             auto doDBWrite = [&] {
-                if (auto st = db->Write(p->db.defWriteOpts, &batch); !st.ok())
+                if (auto st = db->Write(fastButLessSafeWrOpts, &batch); !st.ok())
                     throw DatabaseError("Error writing batch: " + StatusString(st));
                 Util::reconstructAt(&batch); // NB: We must do this because the WriteBatch object appears to leak and/or eat enormous memory if it keeps getting re-used
                 Debug() << "Processed " << writeBatchCt << " records in " << t1.msecStr() << " msec";
@@ -1946,7 +1954,7 @@ void Storage::checkFulc1xUpgradeDB()
     {
         rocksdb::WriteBatch batch;
         setDirty(batch, false);
-        if (auto st = p->db->Write(p->db.defWriteOpts, &batch); !st.ok())
+        if (auto st = p->db->Write(fastButLessSafeWrOpts, &batch); !st.ok())
             throw DatabaseError("Error writing batch: " + StatusString(st));
         {
             rocksdb::FlushOptions fopts;
