@@ -1629,7 +1629,7 @@ void Storage::openOrCreateDB(bool bulkLoad)
                                                        /* magic = */ 0x00f026a1); // may throw
 
 
-    Debug() << "DB opened in " << (!bulkLoad ? "non-" : "") << "\"bulkLoad\" mode";
+    Debug() << "DB opened in " << (!bulkLoad ? "normal" : "\"bulk load\"") << " mode";
 
     if (p->dbReopenCt == 1)
         Log() << "DB memory: " << QString::number(options->db.maxMem / 1024. / 1024., 'f', 2) << " MiB";
