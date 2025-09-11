@@ -41,6 +41,7 @@
 #endif
 #include <rocksdb/cache.h>
 #include <rocksdb/db.h>
+#include <rocksdb/filter_policy.h>
 #include <rocksdb/iterator.h>
 #include <rocksdb/merge_operator.h>
 #include <rocksdb/options.h>
@@ -1163,7 +1164,7 @@ struct Storage::Pvt
         const rocksdb::WriteOptions defWriteOpts; ///< avoid creating this each time
 
         rocksdb::Options opts;
-        rocksdb::ColumnFamilyOptions shistOpts, txhash2txnumOpts,txnum2txhashOpts, headersOpts;
+        rocksdb::ColumnFamilyOptions shistOpts, txhash2txnumOpts,txnum2txhashOpts, headersOpts, utxosetOpts;
         std::weak_ptr<rocksdb::Cache> blockCache; ///< shared across all dbs, caps total block cache size across all db instances
         std::weak_ptr<rocksdb::WriteBufferManager> writeBufferManager; ///< shared across all dbs, caps total memtable buffer size across all db instances
 
@@ -1196,7 +1197,7 @@ struct Storage::Pvt
         const std::vector<std::pair<std::string, ColFamSpecificRefs>> colFamsTable = {
             { "meta",               {.handle = meta,         .options = opts} }, // NB: this *must* be first
             { "blkinfo",            {.handle = blkinfo,      .options = opts} },
-            { "utxoset",            {.handle = utxoset,      .options = opts} },
+            { "utxoset",            {.handle = utxoset,      .options = utxosetOpts} },
             { "scripthash_history", {.handle = shist,        .options = shistOpts} },
             { "scripthash_unspent", {.handle = shunspent,    .options = opts} },
             { "undo",               {.handle = undo,         .options = opts} },
@@ -1336,6 +1337,12 @@ namespace {
         const CompactTXO ctxo = extractCompactTXOFromShunspentKey(key); // throws if wrong size
         return {DeepCpy(key.data(), HashLen), ctxo}; // if we get here size ok, can extract HashX
     }
+
+    // Used in openOrCreateDB() and checkFulc1xUpgradeDB(). Turning this on turned out to have terrible consequences for
+    // BTC mainnet. Better to allow compaction to continue as we load the data, even if it's slower to load, the DB is
+    // faster later on first use.
+    constexpr bool BULKLOAD_DISABLES_AUTOCOMPACTION = false;
+
 } // namespace
 
 
@@ -1468,13 +1475,16 @@ void Storage::openOrCreateDB(bool bulkLoad)
     // Optimize RocksDB. This is the easiest way to get RocksDB to perform well
     rocksdb::Options & opts(p->db.opts);
     rocksdb::ColumnFamilyOptions &shistOpts(p->db.shistOpts), &txhash2txnumOpts(p->db.txhash2txnumOpts),
-                                 &txnum2txhashOpts(p->db.txnum2txhashOpts), &headersOpts(p->db.headersOpts);
-    opts.IncreaseParallelism(int(Util::getNPhysicalProcessors()));
+                                 &txnum2txhashOpts(p->db.txnum2txhashOpts), &headersOpts(p->db.headersOpts),
+                                 &utxosetOpts(p->db.utxosetOpts);
+    opts.IncreaseParallelism(std::min<int>(16, Util::getNPhysicalProcessors()));
     opts.OptimizeLevelStyleCompaction();
     opts.atomic_flush = true; // flush atomically across all column families
-    if (bulkLoad) {
-        opts.PrepareForBulkLoad();
-        opts.disable_auto_compactions = true;
+    if constexpr (BULKLOAD_DISABLES_AUTOCOMPACTION)  {
+        if (bulkLoad) {
+            opts.PrepareForBulkLoad();
+            opts.disable_auto_compactions = true;
+        }
     }
     for (auto & cmp: opts.compression_per_level) cmp = rocksdb::kNoCompression; // force default "no compression" on all levels
 
@@ -1484,14 +1494,14 @@ void Storage::openOrCreateDB(bool bulkLoad)
     p->db.blockCache = tableOptions.block_cache; // save shared_ptr to weak_ptr
     tableOptions.cache_index_and_filter_blocks = true; // from the docs: this may be a large consumer of memory, cost & cap its memory usage to the cache
     std::shared_ptr<rocksdb::TableFactory> tableFactory{rocksdb::NewBlockBasedTableFactory(tableOptions)};
-    // shared TableFactory for all db instances
+    // shared TableFactory for all column families
     opts.table_factory = tableFactory;
 
     // setup shared write buffer manager (for memtables memory budgeting)
     // - TODO right now we fix the cap of the write buffer manager's buffer size at db.maxMem / 2; tweak this.
-    auto writeBufferManager = std::make_shared<rocksdb::WriteBufferManager>(options->db.maxMem / 2, tableOptions.block_cache /* cost to block cache: hopefully this caps memory better? it appears to use locks though so many this will be slow?! TODO: experiment with and without this!! */);
+    auto writeBufferManager = std::make_shared<rocksdb::WriteBufferManager>(options->db.maxMem / 2/* Disabled to reduce lock contention: , tableOptions.block_cache*/ /* cost to block cache: hopefully this caps memory better? it appears to use locks though so many this will be slow?! TODO: experiment with and without this!! */);
     p->db.writeBufferManager = writeBufferManager; // save shared_ptr to weak_ptr
-    opts.write_buffer_manager = writeBufferManager; // will be shared across all DB instances
+    opts.write_buffer_manager = writeBufferManager; // will be shared across all column families
 
     // create the DB if it's not already present
     opts.create_if_missing = true;
@@ -1503,17 +1513,34 @@ void Storage::openOrCreateDB(bool bulkLoad)
         opts.use_fsync = options->db.useFsync; // the false default is perfectly safe, but Jt asked for this as an option, so here it is.
     }
 
+    auto OptimizeForPointLookup = [this](rocksdb::ColumnFamilyOptions &cfopts) {
+        rocksdb::BlockBasedTableOptions block_based_options;
+        block_based_options.data_block_index_type = rocksdb::BlockBasedTableOptions::kDataBlockBinaryAndHash;
+        block_based_options.data_block_hash_table_util_ratio = 0.75;
+        block_based_options.filter_policy.reset(rocksdb::NewBloomFilterPolicy(10));
+        block_based_options.block_cache = p->db.blockCache.lock();
+        block_based_options.cache_index_and_filter_blocks = true;
+        cfopts.table_factory.reset(rocksdb::NewBlockBasedTableFactory(block_based_options));
+        cfopts.memtable_prefix_bloom_size_ratio = 0.02;
+        cfopts.memtable_whole_key_filtering = true;
+    };
+
     shistOpts = opts; // copy what we just did (will implicitly copy over the shared table_factory and write_buffer_manager)
     shistOpts.merge_operator = p->db.concatOperator = std::make_shared<StorageDetail::ConcatOperator>(); // this set of options uses the concat merge operator (we use this to append to history entries in the db)
+    OptimizeForPointLookup(shistOpts);
 
     txhash2txnumOpts = opts;
     txhash2txnumOpts.merge_operator = p->db.concatOperatorTxHash2TxNum = std::make_shared<StorageDetail::ConcatOperator>();
+    OptimizeForPointLookup(txhash2txnumOpts);
 
     txnum2txhashOpts = opts;
     txnum2txhashOpts.merge_operator = p->db.concatOperatorTxNum2TxHash = std::make_shared<StorageDetail::ConcatOperator>();
 
     headersOpts = opts;
     headersOpts.merge_operator = p->db.concatOperatorHeaders = std::make_shared<StorageDetail::ConcatOperator>();
+
+    utxosetOpts = opts;
+    OptimizeForPointLookup(utxosetOpts);
 
     using ColFamsTableRow = decltype(p->db.colFamsTable)::value_type;
     std::map<ColFamsTableRow::first_type, ColFamsTableRow::second_type> colFamsNeeded;
@@ -1712,7 +1739,7 @@ void Storage::checkFulc1xUpgradeDB()
     }
     if (app()->signalsCaught()) throw UserInterrupted("User interrupted, aborting upgrade");
 
-    // Reopen the DB in "bulk load" mode (no auto-compaction)
+    // Reopen the DB in "bulk load" mode
     openOrCreateDB(true);
 
     // Size sanity check -- we need enough space for each old DB table and/or record file to be copied and then
@@ -1749,7 +1776,6 @@ void Storage::checkFulc1xUpgradeDB()
     };
 
     auto performFlush = [&](const auto &name, const auto &info) {
-        doCompaction(name, info);
         Debug() << "Flushing column family: " << name << " ...";
         rocksdb::FlushOptions fopts;
         fopts.wait = true; fopts.allow_write_stall = true;
@@ -1796,7 +1822,7 @@ void Storage::checkFulc1xUpgradeDB()
             Log() << "Importing table `" << name << "` ...";
             rocksdb::Options dbopts;
             // NB: the below should match original DB, in particular the num_levels must match otherwise Open() errors out.
-            dbopts.IncreaseParallelism(int(Util::getNPhysicalProcessors()));
+            dbopts.IncreaseParallelism(std::min<int>(16, Util::getNPhysicalProcessors()));
             dbopts.OptimizeLevelStyleCompaction();
             dbopts.disable_auto_compactions = true;
             dbopts.create_if_missing = false;
@@ -1965,13 +1991,22 @@ void Storage::checkFulc1xUpgradeDB()
             db->SyncWAL();
         }
         Debug() << "Cleared DB 'dirty' flag";
-        Log() << "Completed DB upgrade. Imported " << totalTableCt << " tables, " << totalRowCt << " rows, "
-              << totalBatchCt << " write batches, " << QString::number(totalByteCt / 1e6, 'f', 1) << " MB in "
-              << totalElapsed.secsStr(1) << " seconds.";
     }
 
-    // Finally, re-open in non-bulk mode (auto compaction enabled)
+    // Finally, re-open in non-bulk mode
     openOrCreateDB(false);
+
+    if constexpr (BULKLOAD_DISABLES_AUTOCOMPACTION) {
+        // Now, compact everything with the compaction settings of "non bulk load" mode
+        Log() << "Compacting DB ...";
+        for (const auto & [name, info] : p->db.colFamsTable)
+            doCompaction(name, info);
+    }
+
+    Log() << "Completed DB upgrade. Imported " << totalTableCt << " tables, " << totalRowCt << " rows, "
+          << totalBatchCt << " write batches, " << QString::number(totalByteCt / 1e6, 'f', 1) << " MB in "
+          << totalElapsed.secsStr(1) << " seconds.";
+
 }
 
 void Storage::checkUpgradeDBVersion()
