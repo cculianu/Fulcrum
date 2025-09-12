@@ -1338,10 +1338,8 @@ namespace {
         return {DeepCpy(key.data(), HashLen), ctxo}; // if we get here size ok, can extract HashX
     }
 
-    // Used in openOrCreateDB() and checkFulc1xUpgradeDB(). Turning this on turned out to have terrible consequences for
-    // BTC mainnet. Better to allow compaction to continue as we load the data, even if it's slower to load, the DB is
-    // faster later on first use.
-    constexpr bool BULKLOAD_DISABLES_AUTOCOMPACTION = false;
+    // Used in openOrCreateDB() and checkFulc1xUpgradeDB().
+    constexpr bool BULKLOAD_DISABLES_AUTOCOMPACTION = true;
 
 } // namespace
 
@@ -1776,6 +1774,8 @@ void Storage::checkFulc1xUpgradeDB()
     };
 
     auto performFlush = [&](const auto &name, const auto &info) {
+        if constexpr (BULKLOAD_DISABLES_AUTOCOMPACTION)
+            doCompaction(name, info);
         Debug() << "Flushing column family: " << name << " ...";
         rocksdb::FlushOptions fopts;
         fopts.wait = true; fopts.allow_write_stall = true;
@@ -1969,7 +1969,7 @@ void Storage::checkFulc1xUpgradeDB()
             const auto mb = QString("%1").arg(byteCt / 1e6, 0, 'f', 1);
             Log() << "Imported " << totalCt << " records, " << mb << " MB, in " << t0.secsStr() << " secs";
 
-                   // Delete the RecordFile we just imported
+            // Delete the RecordFile we just imported
             rf.reset();
             Log() << "Deleting file \"" << fname << "\" (size: " << QFileInfo(fname).size() << ") ...";
             if (!QFile::remove(fname)) Warning() << "Error deleting: " << fname;
@@ -1996,17 +1996,9 @@ void Storage::checkFulc1xUpgradeDB()
     // Finally, re-open in non-bulk mode
     openOrCreateDB(false);
 
-    if constexpr (BULKLOAD_DISABLES_AUTOCOMPACTION) {
-        // Now, compact everything with the compaction settings of "non bulk load" mode
-        Log() << "Compacting DB ...";
-        for (const auto & [name, info] : p->db.colFamsTable)
-            doCompaction(name, info);
-    }
-
     Log() << "Completed DB upgrade. Imported " << totalTableCt << " tables, " << totalRowCt << " rows, "
           << totalBatchCt << " write batches, " << QString::number(totalByteCt / 1e6, 'f', 1) << " MB in "
           << totalElapsed.secsStr(1) << " seconds.";
-
 }
 
 void Storage::checkUpgradeDBVersion()
