@@ -159,7 +159,7 @@ namespace {
         cpuArch = QSysInfo::currentCpuArchitecture();
     }
 
-    // some database keys we use -- todo: if this grows large, move it elsewhere
+    // Some database keys we use in the `Meta` table; if this grows large, move it elsewhere.
     static const bool falseMem = false, trueMem = true;
     static const rocksdb::Slice kMeta{"meta"}, kDirty{"dirty"}, kUtxoCount{"utxo_count"}, kRpaNeedsFullCheck{"rpa_needs_full_check"},
                                 kTrue(reinterpret_cast<const char *>(&trueMem), sizeof(trueMem)),
@@ -1206,6 +1206,8 @@ struct Storage::Pvt
     unsigned dbReopenCt = 0; ///< The number of times openOrCreateDB() was called
     RocksDBHandlesEtc db;
 
+    bool openOrCreateDBCanNoLongerBeCalled = false; ///< Latched to true after we begin to populate the below data structures from DB.
+
     /// Big lock used for block/history updates. Public methods that read the history such as getHistory and listUnspent
     /// take this as read-only (shared), and addBlock and undoLatestBlock take this as read/write (exclusively).
     /// This is intended to be a coarse lock.  Currently the update code takes this along with headerVerifierLock and
@@ -1416,6 +1418,9 @@ void Storage::startup()
     // check and/or do Fulcrum 1.x -> 2.x DB upgrade (this is different than the internal "checkUpgradeDBVersion" done later
     checkFulc1xUpgradeDB();
 
+    // latch this flag to true to prohibit future calls to openOrCreateDB()
+    p->openOrCreateDBCanNoLongerBeCalled = true;
+
     // load/check meta
     {
         if (const auto opt = getMetaFromDBAndDoBasicCompatibilityCheck(p->db, p->db.meta, false)) {
@@ -1466,6 +1471,9 @@ void Storage::startup()
 
 void Storage::openOrCreateDB(bool bulkLoad)
 {
+    if (p->openOrCreateDBCanNoLongerBeCalled) [[unlikely]] // defensive programming
+        throw InternalError(QString("Storage::%1 called after startup has progressed past the point where it can no longer be called! FIXME!").arg(__func__));
+
     gentlyCloseDB(); // Ensure we start from a clean slate (in case this function is ever called to hot-reopen the DB)
 
     if (p->dbReopenCt++ > 0) {

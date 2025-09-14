@@ -517,6 +517,9 @@ private:
     std::vector<QByteArray> merkleCacheHelperFunc(unsigned start, unsigned count, QString *err);
 
     /// Called from startup. Opens and/or creates the DB and sets up all column families, etc.
+    /// Safe to call multiple times at the very beginning of startup but not entirely safe to call
+    /// after startup has commenced to phases where it starts to populate some Storage::Pvt structures.
+    /// Will throw if it's called in such a context (defensive programming).
     void openOrCreateDB(bool bulkLoad = false);
     /// Called from cleanup. Does some flushing and gently closes all open column families and closes the DB.
     void gentlyCloseDB();
